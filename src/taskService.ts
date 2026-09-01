@@ -3084,10 +3084,26 @@ export class TaskService {
       for (const item of rawNodes) {
         urlCounts.set(item.url, (urlCounts.get(item.url) ?? 0) + 1);
       }
+      // 拆分前每个仓只有一个节点(建单初始图),它身上带着下单时填的
+      // 责任人。同仓拆出多单元后新节点 id 对不上、url 兜底又因多节点
+      // 关闭,责任人会整个丢掉——确认卡只读展示时全员回落主责任人
+      // (2026-09-01 用户指出)。这里按"旧图该 url 唯一节点"继承责任人
+      // 作为**默认值**;单号不继承(逐单元填是拍板过的设计,同号还会
+      // 撞分支),task_id 绝不继承(会把别的单元的任务错认成自己)。
+      const previousNodes = task.summary.requirement_graph?.repositories ?? [];
+      const previousUrlCounts = new Map<string, number>();
+      for (const node of previousNodes) {
+        previousUrlCounts.set(node.url,
+          (previousUrlCounts.get(node.url) ?? 0) + 1);
+      }
       const repositories = rawNodes.map((item) => {
         const known = task.summary.requirement_graph?.repositories
           .find((candidate) => candidate.id === item.id
             || (urlCounts.get(item.url) === 1 && candidate.url === item.url));
+        const inheritedAssignee = known?.assignee
+          ?? (previousUrlCounts.get(item.url) === 1
+            ? previousNodes.find((node) => node.url === item.url)?.assignee
+            : undefined);
         // scope 只认干净形状:名字非空、路径为相对前缀(不吞绝对路径/
         // 越级),不合格整个丢弃退回"整仓一个单元"语义,不猜。
         const scopeName = String(item.scope?.name ?? "").trim();
@@ -3101,7 +3117,7 @@ export class TaskService {
           ...(scopeName && scopePaths.length
             ? { scope: { name: scopeName, paths: scopePaths } }
             : { scope: undefined }),
-          assignee: known?.assignee,
+          assignee: inheritedAssignee,
           ticket: known?.ticket,
           task_id: known?.task_id,
         };

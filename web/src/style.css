@@ -1613,6 +1613,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-readonly small, .repository-ticket-readonly small { color: var(--muted); font-size: 10px; }
 .repository-assignee-readonly strong, .repository-ticket-readonly strong { overflow: hidden; font: 700 12px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .repository-ticket-editable { min-width: 0; display: grid !important; gap: 3px !important; }
+.repository-assignee-editable { min-width: 0; display: grid !important; gap: 3px !important; }
+.repository-assignee-editable small { color: var(--muted); font-size: 10px; }
+.repository-assignee-editable select {
+  min-width: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text-strong); background: var(--surface); font: 700 12px var(--font-mono);
+}
+.repository-assignee-editable select:focus { border-color: var(--accent); outline: none; }
 .repository-ticket-editable small { color: var(--muted); font-size: 10px; }
 .repository-ticket-editable input { width: 100%; min-height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-strong); background: var(--surface); font: 650 12px var(--font-mono); }
 .repository-ticket-editable input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); }

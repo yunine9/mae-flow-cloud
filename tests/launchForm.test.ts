@@ -904,12 +904,14 @@ test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号"
   assert.match(style, /\.repo-analysis-toggle\.selected/);
   assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
-  assert.match(picker, /每个交付单元一个 AR 单号；确认前在这里填齐/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
-  // 同仓多单元、或节点根本没有可继承的单号(下单免了单号),都要给
-  // 输入框;只读展示会把人永远卡在"缺少 AR 单号"上。
-  assert.match(picker, /hasDeliveryUnits \|\| !ticket\.trim\(\)/);
-  assert.doesNotMatch(picker, /<select/);
+  // 同仓多单元的行(单元是拆出来才存在的,下单不可能填过)责任人和
+  // 单号都要逐行可编;单单元行保持只读——下单已定的事实不设第二处
+  // 真相。缺单号的行(下单免了单号)同样给输入框。
+  assert.match(picker, /isUnitRow\(repository\) \? <span className="repository-assignee-editable">/);
+  assert.match(picker, /该单元的责任人/);
+  assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
+  assert.match(picker, /chooseAssignee/);
 });
 
 test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {

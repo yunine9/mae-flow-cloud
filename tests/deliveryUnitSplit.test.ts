@@ -547,3 +547,53 @@ test("越界打回先让内核退出 external_verify;退不动则裁决原样失
     await model.stop();
   }
 });
+
+test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不继承", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-unit-inherit-"));
+  const repoA = join(dataDir, "svc-a");
+  const repoB = join(dataDir, "svc-b");
+  for (const repo of [repoA, repoB]) {
+    execFileSync("git", ["init", "-q", "-b", "master", repo]);
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty",
+      "-m", "init"], { env: GIT_ENV });
+  }
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  const parent = service.create("多仓需求,A 仓要拆", {
+    account: "owner", ticket: "REQ2026090301",
+    repos: [repoA, repoB],
+    repositoryAssignees: { [repoA]: "alice", [repoB]: "bob" },
+    repositoryTickets: {
+      [repoA]: "REQ2026090301", [repoB]: "REQ2026090302",
+    },
+  });
+  const state = (service as any).tasks.get(parent.id);
+  // 模拟分析会话现场:A 仓拆成两个单元,B 仓保持一个节点。
+  const cwd = join(dataDir, "analysis-cwd");
+  const artifactDir = join(cwd, ".mae-flow-work", "REQ2026090301");
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(join(artifactDir, "requirement-graph.json"), JSON.stringify({
+    repositories: [
+      { id: "unit-a1", name: "svc-a", url: repoA, responsibility: "契约",
+        scope: { name: "契约骨架", paths: ["src/contract/"] } },
+      { id: "unit-a2", name: "svc-a", url: repoA, responsibility: "实现",
+        scope: { name: "过滤实现", paths: ["src/filter/"] } },
+      { id: "unit-b", name: "svc-b", url: repoB, responsibility: "消费接口" },
+    ],
+    dependencies: [],
+  }));
+  state.cwd = cwd;
+  (service as any).refreshRequirementGraph(state);
+  const nodes = state.summary.requirement_graph.repositories;
+  assert.deepEqual(nodes.map((node: { assignee?: string }) => node.assignee),
+    ["alice", "alice", "bob"],
+    "拆分后单元默认继承该仓下单责任人,不得回落主责任人");
+  assert.deepEqual(nodes.map((node: { ticket?: string }) => node.ticket),
+    [undefined, undefined, "REQ2026090302"],
+    "同仓单元的单号不继承(逐单元填,继承同号会撞分支);单节点仓照旧");
+  assert.equal(nodes[2].assignee, "bob",
+    "未拆分的仓经 url 兜底完整保留下单事实");
+});
