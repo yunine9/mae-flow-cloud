@@ -831,20 +831,25 @@ export interface PushReviewPresentation {
   verification?: string;
 }
 
-/** 持续检视反馈明细(持续检视闭环,main 侧交付单元拆分一线带来)。
- * 后端账本尚在演进:字段可选,任务摘要没有 feedback 时面板整体不渲染。 */
-export type FeedbackSource = "workspace" | "mr_discussion" | "build_fix"
-  | "pipeline" | "conflict" | "scope" | "push_confirmation";
+export type FeedbackSource = "workspace" | "build_fix" | "pipeline"
+  | "mr_discussion" | "conflict" | "scope" | "push_confirmation";
 export type FeedbackStatus = "open" | "repairing" | "addressed"
   | "awaiting_verification" | "closed" | "needs_human";
 export interface FeedbackRecord {
   id: string;
+  batch_id: string;
   source: FeedbackSource;
-  status: FeedbackStatus;
+  source_id: string;
+  source_revision: number;
+  observed_sha: string;
   summary: string;
+  material?: string;
   file?: string;
   line?: number;
+  verification: string;
+  status: FeedbackStatus;
   resolution?: string;
+  updated_at: string;
 }
 
 export interface TaskSummary {
@@ -918,6 +923,8 @@ export interface TaskSummary {
   }>;
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
+  /** 持续检视明细；原始材料仍按来源留在各自账本。 */
+  feedback?: FeedbackRecord[];
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
   /** 新任务复用时沿用的交付方式与修复预算。 */
@@ -1192,7 +1199,7 @@ export interface LaunchBlocker {
 export interface LaunchOptions {
   /** 当前生效的模型(展示用;模型不给选,管理员统一配一个)。 */
   model?: { provider: string; model: string };
-  /** 数字=手刹上限;缺席=不限轮(默认形态,靠收敛刹车兜底)。 */
+  /** 数字=手刹上限；平台缺省为 20，0 表示关闭。 */
   repair_rounds?: number;
   /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
    * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
@@ -3317,6 +3324,8 @@ export interface IssueSummary {
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
   }>;
+  /** 建 MR 后与需求交付共用的持续检视索引。 */
+  feedback?: FeedbackRecord[];
   converted_from?: string;
   converted_to?: string;
   /** 转正继承的交付账引用(#31 只读引用):指向转正前的旧会话,仓卡

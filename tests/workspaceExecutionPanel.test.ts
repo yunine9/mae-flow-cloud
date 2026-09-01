@@ -19,7 +19,7 @@ test("进入独立执行现场页签后直接展开，不要求用户再点一�
 test("批注与检视是常驻按钮，点击弹出且不替换主工作面", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<div className={`ws-body'),
+    workspace.indexOf('<div ref={workspaceBody'),
   );
   assert.match(navigation, /ws-review-launch/);
   assert.match(navigation, /批注与检视/);
@@ -179,7 +179,8 @@ test("最终代码审阅统计只计算将推送文件，不混入仅留本地�
 test("已完成任务的进度展示收口到完成，不沿用合入前最后一步", () => {
   assert.match(taskCard, /const completed = status === "completed"/);
   assert.match(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
-  assert.match(taskCard, /const currentLabel = completed \? "完成"/);
+  assert.match(taskCard,
+    /const currentLabel = completed\s*\? \(phases\.at\(-1\) \?\? "完成"\)/);
   assert.match(taskCard, /status=\{task\.status\}/,
     "列表卡和工作台都要把任务终态交给同一进度组件");
   assert.match(workspace, /showDetailedStep status=\{task\.status\}/);

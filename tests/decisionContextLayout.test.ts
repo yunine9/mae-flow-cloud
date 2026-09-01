@@ -72,3 +72,22 @@ test("批注弹层关闭后回到原工作位置", () => {
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
     "打开弹层不能改掉交付材料、开发协作或执行现场的当前页签");
 });
+
+test("持续检视固定高层进度并按来源展示每条反馈", () => {
+  assert.match(workspace,
+    /\["配置与需求", "方案", "开发", "持续检视", "已合入"\]/);
+  assert.match(workspace, /function FeedbackPanel/);
+  assert.match(workspace, /FEEDBACK_SOURCE_LABEL/);
+  assert.match(workspace, /item\.summary/,
+    "界面必须展示反馈正文，不能只给数量");
+  assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
+  assert.match(css, /\.feedback-groups\s*\{/);
+  assert.match(css, /overflow-x:\s*auto/,
+    "来源多时应横向收纳，不把页面纵向铺成卡片墙");
+});
+
+test("执行中的任务默认打开执行现场", () => {
+  assert.match(workspace,
+    /\["queued", "running", "pausing", "verifying", "await_merge"\]/);
+  assert.match(workspace, /\.includes\(task\.status\)\) return "execution"/);
+});
