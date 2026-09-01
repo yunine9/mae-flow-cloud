@@ -44,8 +44,8 @@ const WIP_STATUSES = [
 const DELIVERED_STATUSES = ["completed"];
 const WEEK_MS = 7 * 86_400_000;
 const DELIVERY_STATUS_ORDER = [
-  "waiting_for_human", "failed", "paused", "await_merge", "verifying",
-  "running", "pausing", "queued", "coordinating",
+  "queued", "running", "pausing", "waiting_for_human", "paused",
+  "verifying", "await_merge", "coordinating", "failed",
 ];
 
 export interface TeamDeliveryBreakdown {
@@ -88,13 +88,11 @@ export function teamDeliveryBreakdown(
   }));
   if (untracked) stages.push({ key: "尚未进入阶段", count: untracked });
 
-  const statusKeys = [...new Set(delivering.map((task) => task.status))];
-  statusKeys.sort((a, b) => {
-    const ai = DELIVERY_STATUS_ORDER.indexOf(a);
-    const bi = DELIVERY_STATUS_ORDER.indexOf(b);
-    return (ai < 0 ? DELIVERY_STATUS_ORDER.length : ai)
-      - (bi < 0 ? DELIVERY_STATUS_ORDER.length : bi);
-  });
+  const actualStatusKeys = [...new Set(delivering.map((task) => task.status))];
+  const statusKeys = [
+    ...DELIVERY_STATUS_ORDER,
+    ...actualStatusKeys.filter((key) => !DELIVERY_STATUS_ORDER.includes(key)),
+  ];
   return {
     total: delivered.length + delivering.length,
     delivered: delivered.length,
