@@ -6,7 +6,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
-  type AuthUser, type TaskStatus, type TaskSummary,
+  STATUS_TEXT, type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import { TaskCard } from "./TaskCard";
@@ -29,6 +29,8 @@ import {
   isCurrentTeamTask,
   matchesTeamScope,
   responsibleOf,
+  teamDeliveryBreakdown,
+  type TeamDeliveryBreakdown,
   type TeamScope,
 } from "./teamOps";
 import { formatLocalDateTime } from "./time";
@@ -1447,22 +1449,15 @@ function TeamDashboard({
   const [scope, setScope] = useState<TeamScope>("all");
   const [responsible, setResponsible] = useState("");
   const [phase, setPhase] = useState("");
+  const [taskStatus, setTaskStatus] = useState("");
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
   const currentTasks = useMemo(() => tasks.filter(isCurrentTeamTask), [tasks]);
+  const deliveryStats = useMemo(() => teamDeliveryBreakdown(tasks), [tasks]);
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
     if (related) onOpenArtifacts(related);
   };
-  const actionable = currentTasks.filter((task) =>
-    matchesTeamScope(task, "action", now));
-  const stale = currentTasks.filter((task) =>
-    matchesTeamScope(task, "stale", now));
-  const inProgress = currentTasks.filter((task) =>
-    matchesTeamScope(task, "wip", now));
-  const waiting = currentTasks.filter((task) =>
-    matchesTeamScope(task, "waiting", now));
-
   const visible = useMemo(() => currentTasks.filter((task) => {
     const words = `${task.id} ${task.title ?? ""} ${task.requirement} ${responsibleOf(task) ?? ""}`
       .toLowerCase();
@@ -1471,42 +1466,43 @@ function TeamDashboard({
     if (responsible && responsible !== "__unassigned"
         && responsibleOf(task) !== responsible) return false;
     if (!matchesTeamScope(task, scope, now)) return false;
-    if (phase && task.progress?.current_phase !== phase) return false;
+    if (phase === "尚未进入阶段" && task.progress?.current_phase) return false;
+    if (phase && phase !== "尚未进入阶段"
+        && task.progress?.current_phase !== phase) return false;
+    if (taskStatus && task.status !== taskStatus) return false;
     return true;
-  }).sort(byTeamAttention), [currentTasks, query, scope, responsible, phase]);
+  }).sort(byTeamAttention), [
+    currentTasks, query, scope, responsible, phase, taskStatus,
+  ]);
 
-  function openMetric(next: "action" | "stale" | "wip" | "waiting") {
-    setScope((current) => current === next ? "all" : next);
+  function selectPhase(next: string) {
+    setPhase((current) => current === next ? "" : next);
+    setTaskStatus("");
     requestAnimationFrame(() => queueRef.current?.scrollIntoView({
       behavior: "smooth", block: "start",
     }));
   }
 
-  function selectPhase(next: string) {
-    setPhase((current) => current === next ? "" : next);
+  function selectTaskStatus(next: string) {
+    setTaskStatus((current) => current === next ? "" : next);
+    setPhase("");
     requestAnimationFrame(() => queueRef.current?.scrollIntoView({
       behavior: "smooth", block: "start",
     }));
   }
 
   return <>
-    <section className="team-overview" aria-label="当前现场概览">
-      <div className="team-overview-metrics" aria-label="团队关键指标">
-        <button type="button" className={`overview-metric attention${scope === "action" ? " selected" : ""}`} aria-pressed={scope === "action"} aria-controls="team-queue" onClick={() => openMetric("action")}><span><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败、暂停</small></button>
-        <button type="button" className={`overview-metric danger${scope === "stale" ? " selected" : ""}`} aria-pressed={scope === "stale"} aria-controls="team-queue" onClick={() => openMetric("stale")}><span><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>超过 2 小时未推进</small></button>
-        <button type="button" className={`overview-metric active${scope === "wip" ? " selected" : ""}`} aria-pressed={scope === "wip"} aria-controls="team-queue" onClick={() => openMetric("wip")}><span><i aria-hidden />正在推进</span><strong>{inProgress.length}</strong><small>排队、执行或验证中</small></button>
-        <button type="button" className={`overview-metric neutral${scope === "waiting" ? " selected" : ""}`} aria-pressed={scope === "waiting"} aria-controls="team-queue" onClick={() => openMetric("waiting")}><span><i aria-hidden />等待决策</span><strong>{waiting.length}</strong><small>需要责任人确认</small></button>
-      </div>
-      <PhaseFunnel tasks={currentTasks} selected={phase} onSelect={selectPhase} />
-    </section>
+    <TeamDeliveryOverview stats={deliveryStats} selectedPhase={phase}
+      selectedStatus={taskStatus} onSelectPhase={selectPhase}
+      onSelectStatus={selectTaskStatus} />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}阶段现场` : "当前现场"}</h2></div><span className={`section-count${phase ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
+      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
         <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{userLabel(user)}</option>)}</select>
-        {(query || scope !== "all" || responsible || phase) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); }}>清除筛选</button>}
+        {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
       <div className="task-list">{orderTaskHierarchy(visible).map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(task)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />)}</div>
@@ -1543,66 +1539,68 @@ function TaskGroup({
   </section>;
 }
 
-/** 阶段漏斗:状态计数答不了"队伍卡在哪个环节"。阶段与阶段顺序
- * 都来自任务卡同源的 progress(内核现场看板),Web 不复刻阶段表。 */
-function PhaseFunnel({
-  tasks,
-  selected,
-  onSelect,
+/** 总览先讲清规模公式；交付中再用两种互补视角拆同一批任务。
+ * 两行的合计都来自 teamDeliveryBreakdown，不会出现口径漂移。 */
+function TeamDeliveryOverview({
+  stats,
+  selectedPhase,
+  selectedStatus,
+  onSelectPhase,
+  onSelectStatus,
 }: {
-  tasks: TaskSummary[];
-  selected: string;
-  onSelect: (phase: string) => void;
+  stats: TeamDeliveryBreakdown;
+  selectedPhase: string;
+  selectedStatus: string;
+  onSelectPhase: (phase: string) => void;
+  onSelectStatus: (status: string) => void;
 }) {
-  const tracked = tasks.filter((task) => task.progress
-    && !["completed", "canceled", "failed"].includes(task.status));
-  if (tracked.length === 0) return <div className="phase-funnel empty">
-    <div><strong>暂无流程中任务</strong><small>新任务进入流程后，可按阶段直接筛选。</small></div>
-  </div>;
-  // 阶段顺序取最长的一份(不同任务可能停在不同修订的看板上)。
-  const longest = tracked.reduce<string[]>(
-    (best, task) => (task.progress!.phases.length > best.length
-      ? task.progress!.phases : best), []);
-  const phases = [...new Set([
-    ...longest,
-    ...tracked.map((task) => task.progress!.current_phase),
-  ])];
-  const counts = phases.map((phase) => ({
-    phase,
-    count: tracked.filter((task) => task.progress!.current_phase === phase).length,
-    waiting: tracked.filter((task) =>
-      task.progress!.current_phase === phase
-      && task.status === "waiting_for_human").length,
-  }));
-  return (
-    <div className="phase-funnel" aria-labelledby="funnel-title">
-      <div className="phase-funnel-head">
-        <div><strong id="funnel-title">按阶段筛选</strong>
-          <small>查看团队当前卡在哪一段</small></div>
-        <span>{tracked.length} 项在流程中{selected ? ` · 已选“${selected}”` : ""}</span>
-      </div>
-      <div className="funnel-row">
-        {counts.map((entry) => (
-          <button type="button"
-            className={"funnel-cell"
-              + (entry.count > 0 ? " filled" : "")
-              + (entry.waiting > 0 ? " attention" : "")
-              + (selected === entry.phase ? " selected" : "")}
-            key={entry.phase}
-            disabled={entry.count === 0}
-            aria-pressed={selected === entry.phase}
-            aria-controls="team-queue"
-            aria-label={`筛选${entry.phase}阶段，${entry.count} 项任务`}
-            onClick={() => onSelect(entry.phase)}
-          >
-            <strong>{entry.count}</strong>
-            <span>{entry.phase}</span>
-            {entry.waiting > 0 && <i className="funnel-flag">{entry.waiting} 待决策</i>}
-          </button>
-        ))}
-      </div>
+  return <section className="team-delivery-overview" aria-label="团队任务统计">
+    <header className="team-delivery-overview-head">
+      <div><span className="section-kicker">DELIVERY OVERVIEW</span>
+        <h2>总览</h2></div>
+      <small>已取消任务保留在交付档案，不计入交付规模</small>
+    </header>
+    <div className="team-delivery-equation" aria-label={`任务总计 ${stats.total}，等于已交付 ${stats.delivered} 加交付中 ${stats.delivering}`}>
+      <div className="delivery-total"><span>任务总计</span>
+        <strong>{stats.total}</strong><small>{stats.delivered} + {stats.delivering}</small></div>
+      <b aria-hidden>=</b>
+      <div><span>已交付</span><strong>{stats.delivered}</strong><small>已经完成交付</small></div>
+      <b aria-hidden>+</b>
+      <div className="is-delivering"><span>交付中</span>
+        <strong>{stats.delivering}</strong><small>仍需推进或处理</small></div>
     </div>
-  );
+    <div className="team-delivery-breakdown">
+      <header><div><span>DELIVERING TASKS</span><strong>交付中任务</strong></div>
+        <em>{stats.delivering} 项</em></header>
+      <section aria-labelledby="delivery-stage-title">
+        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">按阶段</strong>
+          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-cells">
+          {stats.stages.map((entry) => <button type="button" key={entry.key}
+            className={selectedPhase === entry.key ? "selected" : ""}
+            disabled={entry.count === 0} aria-pressed={selectedPhase === entry.key}
+            aria-controls="team-queue" onClick={() => onSelectPhase(entry.key)}>
+            <span>{entry.key}</span><strong>{entry.count}</strong>
+          </button>)}
+          {!stats.stages.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+        </div>
+      </section>
+      <section aria-labelledby="delivery-status-title">
+        <div className="delivery-breakdown-title"><strong id="delivery-status-title">按任务状态</strong>
+          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-cells status-cells">
+          {stats.statuses.map((entry) => <button type="button" key={entry.key}
+            className={selectedStatus === entry.key ? "selected" : ""}
+            aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
+            onClick={() => onSelectStatus(entry.key)}>
+            <span>{STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
+            <strong>{entry.count}</strong>
+          </button>)}
+          {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+        </div>
+      </section>
+    </div>
+  </section>;
 }
 
 function TaskEmpty({ personal }: { personal: boolean }) {

@@ -10,6 +10,7 @@ import {
   matchesTeamScope,
   needsAction,
   responsibleOf,
+  teamDeliveryBreakdown,
   type TeamTask,
 } from "../web/src/teamOps.ts";
 
@@ -49,6 +50,35 @@ test("团队现场保留待合入任务：MR 合入或用户停止才离场", ()
   assert.equal(isCurrentTeamTask(task({ status: "coordinating" })), true,
     "子任务进行中的主任务必须留在当前现场");
   assert.equal(isCurrentTeamTask(task({ status: "canceled" })), false);
+});
+
+test("团队交付统计的总览、阶段和状态使用同一批任务", () => {
+  const rows = [
+    task({ id: "done", status: "completed" }),
+    task({ id: "coding", status: "running", progress: {
+      current_phase: "开发", phases: ["方案", "开发", "验证与交付"],
+    } }),
+    task({ id: "verify", status: "verifying", progress: {
+      current_phase: "验证与交付", phases: ["方案", "开发", "验证与交付"],
+    } }),
+    task({ id: "failed", status: "failed" }),
+    task({ id: "canceled", status: "canceled" }),
+  ];
+  const result = teamDeliveryBreakdown(rows);
+
+  assert.deepEqual({
+    total: result.total,
+    delivered: result.delivered,
+    delivering: result.delivering,
+  }, { total: 4, delivered: 1, delivering: 3 });
+  assert.equal(result.stages.reduce((sum, item) => sum + item.count, 0), 3);
+  assert.equal(result.statuses.reduce((sum, item) => sum + item.count, 0), 3);
+  assert.deepEqual(result.stages, [
+    { key: "方案", count: 0 },
+    { key: "开发", count: 1 },
+    { key: "验证与交付", count: 1 },
+    { key: "尚未进入阶段", count: 1 },
+  ]);
 });
 
 test("团队排序先行动项,再看停滞时长;交付周期中位数可解释", () => {

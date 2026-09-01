@@ -11,6 +11,10 @@ export interface TeamTask {
   last_progress_at?: string;
   completed_at?: string;
   luban_account?: string;
+  progress?: {
+    current_phase: string;
+    phases: string[];
+  };
   focus?: {
     kind: string;
     headline: string;
@@ -39,11 +43,68 @@ const WIP_STATUSES = [
 ];
 const DELIVERED_STATUSES = ["completed"];
 const WEEK_MS = 7 * 86_400_000;
+const DELIVERY_STATUS_ORDER = [
+  "waiting_for_human", "failed", "paused", "await_merge", "verifying",
+  "running", "pausing", "queued", "coordinating",
+];
+
+export interface TeamDeliveryBreakdown {
+  total: number;
+  delivered: number;
+  delivering: number;
+  stages: Array<{ key: string; count: number }>;
+  statuses: Array<{ key: string; count: number }>;
+}
 
 /** 团队现场只回答“任务是否还活着”。待合入仍会监听流水线和接收
  * 批注，所以继续留在现场；只有已合入和用户取消离开现场。 */
 export function isCurrentTeamTask(task: TeamTask): boolean {
   return ![...DELIVERED_STATUSES, "canceled"].includes(task.status);
+}
+
+/** 团队统计只计算仍有交付意义的任务：已取消留在档案，但不伪装成
+ * “交付中”。阶段和状态都必须覆盖同一批交付中任务，各自加总严格
+ * 等于 delivering，避免一组算 8 条、另一组只算有 progress 的 6 条。 */
+export function teamDeliveryBreakdown(
+  tasks: readonly TeamTask[],
+): TeamDeliveryBreakdown {
+  const delivered = tasks.filter((task) =>
+    DELIVERED_STATUSES.includes(task.status));
+  const delivering = tasks.filter(isCurrentTeamTask);
+  const longestPhases = delivering.reduce<string[]>((longest, task) =>
+    (task.progress?.phases.length ?? 0) > longest.length
+      ? task.progress!.phases : longest, []);
+  const phaseOrder = [...new Set([
+    ...longestPhases,
+    ...delivering.map((task) => task.progress?.current_phase)
+      .filter((phase): phase is string => Boolean(phase)),
+  ])];
+  const untracked = delivering.filter((task) =>
+    !task.progress?.current_phase).length;
+  const stages = phaseOrder.map((key) => ({
+    key,
+    count: delivering.filter((task) =>
+      task.progress?.current_phase === key).length,
+  }));
+  if (untracked) stages.push({ key: "尚未进入阶段", count: untracked });
+
+  const statusKeys = [...new Set(delivering.map((task) => task.status))];
+  statusKeys.sort((a, b) => {
+    const ai = DELIVERY_STATUS_ORDER.indexOf(a);
+    const bi = DELIVERY_STATUS_ORDER.indexOf(b);
+    return (ai < 0 ? DELIVERY_STATUS_ORDER.length : ai)
+      - (bi < 0 ? DELIVERY_STATUS_ORDER.length : bi);
+  });
+  return {
+    total: delivered.length + delivering.length,
+    delivered: delivered.length,
+    delivering: delivering.length,
+    stages,
+    statuses: statusKeys.map((key) => ({
+      key,
+      count: delivering.filter((task) => task.status === key).length,
+    })),
+  };
 }
 
 function repairStopped(task: TeamTask): boolean {
