@@ -369,3 +369,17 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   assert.match(service, /unanchoredRequirementChanges\(before, after, annotations\)/,
     "回执之外还要逐段比对");
 });
+
+test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;退回方案时提示先批注", () => {
+  // 用户 2026-09-02 实测三处:依赖图全屏后仍卡 900px、需求原文全屏仍卡
+  // 860px、分析阶段看起来提不了检视意见(图圈不了,入口没露出)。
+  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  assert.match(css,
+    /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
+  const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /className="chain-review-entry" role="note"/);
+  assert.match(workspace, /CHAIN-\[\^\/\]\*\\\.md\$/, "入口指向内核产出的方案文档");
+  assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
+  const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
+  assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
+});

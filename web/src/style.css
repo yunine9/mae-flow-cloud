@@ -7211,6 +7211,16 @@ pre {
 .workspace-overlay.materials-fullscreen .ws-doc .md {
   width: min(1600px, 100%);
 }
+/* 全屏是给"看不下"的材料用的,需求原文和仓间依赖图也得跟着铺开:原来
+   只放宽了 .md,需求原文仍卡在 860px、依赖图仍卡在 900px,点了全屏两边
+   还是大片空白(用户 2026-09-02 实测)。 */
+.workspace-overlay.materials-fullscreen .requirement-source,
+.workspace-overlay.materials-fullscreen .ws-doc > .requirement-graph,
+.workspace-overlay.materials-fullscreen .ws-doc > .requirement-team-picker,
+.workspace-overlay.materials-fullscreen .ws-doc > .repository-assignees,
+.workspace-overlay.materials-fullscreen .ws-doc > .chain-review-entry {
+  width: min(1600px, 100%);
+}
 .workspace-overlay.materials-fullscreen .plantuml-figure,
 .workspace-overlay.materials-fullscreen .mermaid-figure {
   overflow-x: hidden;
@@ -7295,6 +7305,25 @@ pre {
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
 .ws-doc > .requirement-graph + .requirement-team-picker,
 .ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
+/* 仓间依赖图是结构化的,圈不了批注;对方案的意见要落在方案文档上。
+   原来这一页没有任何入口,人以为这个阶段不能提检视意见(用户实测)。 */
+.ws-doc > .chain-review-entry {
+  width: min(900px, 100%); margin: 0 auto 12px;
+  padding: 10px 14px; display: flex; align-items: center; gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.chain-review-entry > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.chain-review-entry strong { color: var(--text-strong); font-size: 13.5px; }
+.chain-review-entry small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
+.chain-review-entry > button {
+  flex: none; padding: 7px 12px; border: 1px solid var(--accent); border-radius: 8px;
+  color: var(--accent); background: transparent; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.chain-review-entry > button:hover:not(:disabled) { color: #fff; background: var(--accent); }
+.chain-review-entry > button:disabled { opacity: .55; cursor: default; }
+.chain-decision-facts .chain-rework-hint { color: var(--attention); }
 .push-review-scope {
   width: min(980px, 100%);
   margin: 0 auto 15px;

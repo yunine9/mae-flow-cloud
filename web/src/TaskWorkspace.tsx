@@ -1581,6 +1581,31 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               <>
+                {/* 图是结构化的圈不了批注,对方案的意见落在方案文档上;这里
+                    给个直达入口,不然人以为分析阶段不能提检视意见。 */}
+                {canCreateAnnotation && task.requirement_graph?.stage === "analysis"
+                  && (() => {
+                    const chainDoc = documents.find((item) =>
+                      /(^|\/)CHAIN-[^/]*\.md$/.test(item.name));
+                    return (
+                      <div className="chain-review-entry" role="note">
+                        <div>
+                          <strong>对拆分方案有意见？</strong>
+                          <small>{chainDoc
+                            ? "在方案文档上圈选要改的地方并写意见；提交决定时选「需要修改」，意见会随决定一起交给 Agent。"
+                            : "方案文档还没生成，生成后可在过程文档里圈选批注。"}</small>
+                        </div>
+                        <button type="button" disabled={!chainDoc}
+                          onClick={() => {
+                            if (!chainDoc) return;
+                            setMaterialView("doc");
+                            setActive(chainDoc.name);
+                          }}>
+                          打开方案文档批注
+                        </button>
+                      </div>
+                    );
+                  })()}
                 {/* 讨论参与人是澄清期的事,不是确认拆分时要定的:原来到了
                     方案确认卡它整块搬进右栏,和"拆分后怎么执行"摞成 730px,
                     卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。

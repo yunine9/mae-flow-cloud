@@ -789,6 +789,11 @@ export function WaitingCard({
           <span><b>{chainStages(task.requirement_graph).length}</b>个阶段串行</span>
           <span><b>{task.requirement_graph.dependencies.length}</b>条依赖</span>
           <small>单元职责、负责面和先后顺序见左侧「仓间依赖」；这张卡只定每个单元由谁执行、用哪个单号。</small>
+          {reworksChainChoice && (
+            <small className="chain-rework-hint">
+              退回前先在左侧「过程文档」的方案文档上圈出要改的地方并写意见；这些批注会随这次决定一起交给 Agent，没有批注的退回 Agent 只能猜。
+            </small>
+          )}
         </div>
       )}
 
