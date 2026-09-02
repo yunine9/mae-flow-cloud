@@ -14,12 +14,13 @@
  *   同出阶段注册表 stageRegistry.ts,不会各说各话)。例外是
  *   工读类——fetch_logs 全程开放,dts_get_ticket 任意阶段可重查
  *   (2026-08-28 拍板:作业自由,门只守流程出口与出厂动作);
- * - 阶段推进(2026-08-28 目标驱动自报):五个阶段(拉单/拉仓/修改/
- *   UT/提交MR)的出口是 complete_stage 自报收口,平台不核实 AI 的
+ * - 阶段推进(2026-08-28 目标驱动自报):四个阶段(拉单/拉仓/修改/
+ *   提交MR)的出口是 complete_stage 自报收口,平台不核实 AI 的
  *   工作事实,只在提交 MR 阶段程序化验 MR 验绿门(清单=台账+流水线
  *   全绿);三个举卡阶段卡工具即出口,人工闸(报告确认/结论/环境
  *   验证)由工具举闸——raiseGate 写进 issue.json,Agent 对它只读,
- *   推不动。report_ut 降级为事实上报(只记账)。
+ *   推不动。UT 属于问题修复阶段(TDD:先写复现单测再改码转绿),
+ *   report_ut 是修复过程中的事实上报(只记账)。
  *
  * 自由探索模式保持原有工具集(report_stage + 五工具)零改动。
  */
@@ -893,17 +894,19 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       },
     }));
 
-    // UT 事实上报(2026-08-28 降级):只记账(台账+事件流+现场记录),
-    // 不推进阶段、不设建 MR 门禁——出口是 complete_stage,硬验证在
-    // 提交 MR 阶段的流水线验绿。
+    // UT 事实上报(2026-09-02 并入问题修复:TDD 先写复现单测再改码,
+    // 没有独立 UT 阶段)。只记账(台账+事件流+现场记录),不推进阶段、
+    // 不设建 MR 门禁——出口是 complete_stage,硬验证在提交 MR 阶段的
+    // 流水线验绿。
     tools.push(defineTool({
       name: "report_ut",
       label: "Report UT Result",
       description:
         "上报 UT 验证结果(在代码仓里实际跑的单测)。这是事实上报:平台只"
-        + "记账留痕,不推进阶段、不设任何门禁。summary 带通过率与关键失败"
-        + "(如有),log_path 指向工作区内的测试报告/日志。上报后本阶段出口"
-        + "仍是 complete_stage——测试结果可接受就调它收口。",
+        + "记账留痕,不推进阶段、不设任何门禁。UT 属于问题修复阶段的一部分"
+        + "(TDD:先写复现单测再改码转绿),修复过程中每轮都可上报。summary "
+        + "带通过率与关键失败(如有),log_path 指向工作区内的测试报告/日志。"
+        + "测试结果可接受后调 complete_stage 收口本阶段。",
       parameters: Type.Object({
         passed: Type.Boolean({ description: "本轮单测是否全部通过" }),
         summary: Type.String({ description: "一段话结果:跑了什么/通过率/关键失败" }),
@@ -929,9 +932,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ctx.persist();
         return ok(params.passed === true
           ? `UT 结果已记账(第 ${round} 轮:通过)。report_ut 只记账不推进——`
-            + "本阶段出口是 complete_stage,测试结果可接受就调它收口,"
+            + "本阶段出口是 complete_stage,自检与测试可接受就调它收口,"
             + "进入「提交 MR·跑绿」。"
-          : `UT 未通过已记账(第 ${round} 轮)——继续留在 UT 验证阶段:`
+          : `UT 未通过已记账(第 ${round} 轮)——继续留在问题修复阶段:`
             + "请修复后重跑重报;测试结果可接受后调 complete_stage 收口。");
       },
     }));
@@ -1049,19 +1052,19 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + "可结束本回合停等。");
     };
 
-    // 阶段自报出口(2026-08-28 目标驱动拍板):五个阶段(拉单/拉仓/
-    // 修改/UT/提交MR)的唯一出口动作。前四段只自报收口推进;提交MR
+    // 阶段自报出口(2026-08-28 目标驱动拍板):四个阶段(拉单/拉仓/
+    // 修改/提交MR)的唯一出口。前三段只自报收口推进;提交MR
     // 段是 MR 验绿门(唯一带平台核验的出口)。
     tools.push(defineTool({
       name: "complete_stage",
       label: "Complete Current Stage",
       description:
-        "宣布当前阶段目标已达成并收口——拉单/拉仓/修改/UT/提交MR 五个"
+        "宣布当前阶段目标已达成并收口——拉单/拉仓/修改/提交MR 四个"
         + "阶段的唯一出口。「获取单据信息」通读单据后调;「拉取代码仓」"
         + "把要用的仓拉齐后调(包括「本单无需代码仓」的跳过:研究结论不"
-        + "涉及代码改动时,不拉任何仓直接调它过关);「问题修改」改完自检"
-        + "通过后调;「UT 验证」测试结果可接受后调(report_ut 只是事实"
-        + "记账,不是出口);「提交 MR·跑绿」建齐 MR 后调,必带 mrs 参数"
+        + "涉及代码改动时,不拉任何仓直接调它过关);「问题修复」按 TDD "
+        + "先写复现单测再改码转绿,自检与测试可接受后调(report_ut 只是"
+        + "事实记账,不是出口);「提交 MR·跑绿」建齐 MR 后调,必带 mrs 参数"
         + "申报 MR 清单(每项是 MR 链接或对应仓地址)——平台按台账与流水"
         + "线验绿放行:全绿当场进下一阶段,有红当场打回,在跑受理等绿。"
         + "活干完再调,没干完不要调。",
@@ -1079,17 +1082,16 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           return settleMrGate(
             ((params.mrs as string[] | undefined) ?? []).map(String), firstLine);
         }
-        // 前四段:纯自报推进,下一阶段指引全部由注册表生成。
+        // 前三段:纯自报推进,下一阶段指引全部由注册表生成。
         const to: FixedStage = state.stage === "dts_info" ? "prep_repo"
           : state.stage === "prep_repo" ? "analyze"
-          : state.stage === "fix" ? "ut" : "mr_green";
+          : "mr_green";
         const note = state.stage === "prep_repo"
           ? ((state.repo_urls?.length ?? 0) > 0
             ? `拉取代码仓完成:${firstLine}`
             : `跳过拉取代码仓:${firstLine}`)
           : state.stage === "dts_info" ? `单据已通读:${firstLine}`
-          : state.stage === "fix" ? `问题修改完成:${firstLine}`
-          : `UT 验证完成:${firstLine}`;
+          : `问题修复完成:${firstLine}`;
         fixedAdvance(ctx.state, to, note);
         // analyze 入口(ADR-0011/0012):先定格业务知识资产(不分介入
         // 档,缺席静默;重走时台账已在,重复定格被台账判据挡住),再

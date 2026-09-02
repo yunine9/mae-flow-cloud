@@ -10,7 +10,7 @@
  *
  * 现在一张表定规矩:每个阶段一行,声明显示名(label)、目标(goal)、
  * 出口(exit)、出口动作(exitAction)、开放工具(tools)与出口闸
- * (gate);无单三节点与有单七阶段共用同一机制(prep_repo/analyze
+ * (gate);无单三节点与有单六阶段共用同一机制(prep_repo/analyze
  * 两场景同格,conclude 只属无单路线)。阶段简报、门禁白名单、裁决
  * 阶段分支全部由本表生成——简报与门禁读同一列 tools,引导层说能用
  * 的与权威层放行的永远一致;工具回执的交接文案也走本表的
@@ -25,13 +25,12 @@ import type { AnyIssueStage, IssueGateKind, IssueScenario } from "./state.ts";
 
 // ---- 阶段词表与路线 ----
 
-/** 有单场景七阶段。 */
+/** 有单场景六阶段。 */
 export const FIXED_TICKET_STAGES = [
   "dts_info",      // 获取 DTS 单信息(通读单据后 complete_stage 自报收口)
   "prep_repo",     // 拉取代码仓+创建分支(拉齐后 complete_stage 自报收口,无需代码仓也由它跳过)
   "analyze",       // 问题分析:证据链定位,产出四要素分析报告(submit_analysis 触发人工闸)
-  "fix",           // 问题修改(complete_stage 自报完成)
-  "ut",            // UT 验证(report_ut 事实上报;结果可接受后 complete_stage 收口)
+  "fix",           // 问题修改:TDD 节奏,先写复现单测再改码转绿,UT 属于本阶段(report_ut 事实上报)
   "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿放行)
   "deploy_verify", // 换库环境验证(build_deploy 部署后平台闸等用户真实验证)
 ] as const;
@@ -88,7 +87,7 @@ export interface IssueStageSpec {
   goal: string;
   /** 出口——"到什么程度算完"的白纸黑字,停机合法性只认出口动作。 */
   exit: string;
-  /** 出口动作(见 StageExitAction):五阶段=complete_stage 自报;
+  /** 出口动作(见 StageExitAction):四阶段=complete_stage 自报;
    * 三个举卡阶段=卡工具本身。 */
   exitAction: StageExitAction;
   /** 本阶段开放的平台工具。引导层(简报的"可用工具")与权威层
@@ -171,10 +170,12 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   gate: { kind: "analysis_confirm", confirmTo: "fix" },
 },
   fix: {
-    label: "问题修改",
-    goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改,"
-      + "用 bash 直接改码);改完自检通过后 complete_stage 自报完成",
-    exit: "所有涉及的仓改完且自检通过 → complete_stage 自报完成",
+    label: "问题修复",
+    goal: "按 TDD 节奏实施修复:先写(或改)能复现问题的单测,再改码让它"
+      + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);每轮 UT "
+      + "结果用 report_ut 如实上报(平台只记账),改完自检且测试可接受后 "
+      + "complete_stage 自报完成",
+    exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 自报完成",
     exitAction: "complete_stage",
     tools: [
       { name: "fetch_logs", note: "补证据" },
@@ -183,23 +184,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "pull_repo", note: "补仓" },
       { name: "bind_module" },
       { name: "push_branch" },
-      { name: "complete_stage" },
-    ],
-  },
-  ut: {
-    label: "UT 验证",
-    goal: "在改过的代码仓里用 bash 跑单元测试;每轮结果用 report_ut 如实上报"
-      + "(事实上报:平台只记账,不推进、不设门)",
-    exit: "测试结果可接受(通常全绿)→ complete_stage 收口(report_ut 只是记账,不是出口)",
-    exitAction: "complete_stage",
-    tools: [
-      { name: "fetch_logs" },
-      { name: "get_issue_meta" },
-      { name: "dts_get_ticket" },
-      { name: "pull_repo" },
-      { name: "bind_module" },
-      { name: "push_branch" },
-      { name: "report_ut" },
+      { name: "report_ut", note: "UT 记账" },
       { name: "complete_stage" },
     ],
   },

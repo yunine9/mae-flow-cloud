@@ -20,15 +20,15 @@
 
 一个连续会话贯穿到底,但**阶段真相在宿主**(固定模式不注册
 report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶段
-声明目标与唯一出口,拉单/拉仓/修改/UT/提交MR 五个阶段由 AI 判断达成后
+声明目标与唯一出口,拉单/拉仓/修复/提交MR 四个阶段由 AI 判断达成后
 调 `complete_stage` 自报收口(平台不核实工作事实),问题分析/无单结论/
 换库验证三阶段的出口是卡工具本身(卡即出口,没有 complete_stage 可绕)。
 平台只守两道核验:人工闸(用户确认)与 MR 验绿门。工具按阶段开放,
 越权调用在 execute 入口被拒(提示词的工具清单只是引导层,工具门禁才是
 权威层,两者同源于阶段注册表的 tools 列)。
 
-**有单七阶段**:`dts_info 获取DTS单信息 → prep_repo 拉取代码仓·建分支
-→ analyze 问题分析 → fix 问题修改 → ut UT验证 → mr_green 提交MR·跑绿
+**有单六阶段**:`dts_info 获取DTS单信息 → prep_repo 拉取代码仓·建分支
+→ analyze 问题分析 → fix 问题修复(TDD,UT 并入本阶段) → mr_green 提交MR·跑绿
 → deploy_verify 换库环境验证`。已有单从 DTS 列表独立发起，登记页不再
 预填仓、模块或环境；工作台随后按问题单事实触发模块识别、拉仓和环境闸。
 分支 `master_工号_单号` 由**宿主**在阶段2创建(不交给 AI 起名)。
@@ -48,9 +48,9 @@ report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶�
   用户**真实验证**;通过→待手动归档,有问题→**一律回退 analyze**
   (轮次+1,fix 起各阶段标 redo,分支/MR 延用同分支追加,UT 上报/流水线
   监看/MR 申报账作废重来)。
-- UT 事实上报(2026-08-28 降级):AI 跑完测试**自愿**调 `report_ut`
+- UT 事实上报(2026-09-02 并入修复阶段,TDD;2026-08-28 降级):AI 跑完测试**自愿**调 `report_ut`
   如实上报,平台只记账(台账+事件流+现场记录)——不再是出口、不再是
-  建 MR 前置;UT 阶段出口= `complete_stage` 自报(硬验证在流水线,
+  建 MR 前置;修复阶段出口= `complete_stage` 自报(硬验证在流水线,
   UT 本身也在流水线里跑)。
 - MR 验绿门(mr_green 阶段的 complete_stage):AI 建齐 MR(create_mr
   自动记账进台账)后调 complete_stage **申报 MR 清单**(mrs 参数,MR
@@ -164,12 +164,12 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 
 固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
 结论,以报告在场且四章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
-只记账——不是出口、不是建 MR 前置)/ `complete_stage`(拉单/拉仓/
-修改/UT/提交MR 五个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
+只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
+修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿放行)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
 的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),
 create_mr 仅 mr_green,push_branch 自 fix 起,build_deploy 仅
-deploy_verify,submit_analysis 仅 analyze,report_ut 仅 ut。
+deploy_verify,submit_analysis 仅 analyze,report_ut 仅 fix。
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
 图)、issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证

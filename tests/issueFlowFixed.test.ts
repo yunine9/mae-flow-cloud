@@ -233,13 +233,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
     { text: "分析报告已提交,等待用户确认。" },
-    // 第 2 回合(用户确认报告):提交修复 → 自报修改完成 → UT 上报
-    // (只记账)→ 自报 UT 完成 → 推送 → 建 MR → complete_stage 申报
-    // MR 清单(在跑→受理等绿)。
+    // 第 2 回合(用户确认报告):提交修复 → UT 上报(只记账,仍在
+    // 修复段)→ 自报修复完成(UT 并入本阶段)→ 推送 → 建 MR →
+    // complete_stage 申报 MR 清单(在跑→受理等绿)。
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
-    { tool: { name: "complete_stage", input: { note: "连接池超时回收已实现" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
-    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "连接池超时回收已实现,UT 12/12 通过" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
@@ -260,10 +259,9 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "submit_analysis",
       input: { summary: "二轮:回收策略缺竞态保护" } } },
     { text: "第二轮分析已提交。" },
-    // 第 6 回合(二轮确认):改完 → UT 上报+自报收口 → 推 → MR → 申报。
-    { tool: { name: "complete_stage", input: { note: "竞态保护补丁" } } },
+    // 第 6 回合(二轮确认):改完 → UT 上报 → 自报修复完成 → 推 → MR → 申报。
     { tool: { name: "report_ut", input: { passed: true, summary: "15/15 通过" } } },
-    { tool: { name: "complete_stage", input: { note: "二轮 UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "竞态保护补丁,二轮 UT 15/15 通过" } } },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 回收竞态保护`) } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
@@ -347,9 +345,8 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       return issue.stage === "mr_green" && issue.status === "idle" ? issue : undefined;
     }, "修改+UT+推送+MR 回合收口");
     const fixing = service.get(created.id);
-    assert.equal(fixing.stage_states?.[3], "done", "问题修改完成");
-    assert.equal(fixing.stage_states?.[4], "done", "UT 通过记账");
-    assert.equal(fixing.stage_states?.[5], "in_progress", "MR 跑绿进行中");
+    assert.equal(fixing.stage_states?.[3], "done", "问题修复完成(UT 并入)");
+    assert.equal(fixing.stage_states?.[4], "in_progress", "MR 跑绿进行中");
     assert.equal(fixing.pushes?.length, 1, "修复分支已推送(按仓记账)");
     assert.equal(fixing.pushes?.[0]?.repo, origin);
     assert.equal(fixing.mrs?.length, 1, "MR 已创建(按仓记账)");
@@ -406,7 +403,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(gate3.stage, "analyze", "验证不通过一律回问题分析");
     assert.equal(gate3.ut, undefined, "回退作废 UT 上报");
     assert.equal(gate3.stage_states?.[3], "redo", "修改阶段标待重做");
-    assert.equal(gate3.stage_states?.[5], "redo", "MR 阶段标待重做");
+    assert.equal(gate3.stage_states?.[4], "redo", "MR 阶段标待重做");
     assert.equal(gate3.pushes![0].sha, shaBefore, "分支与 MR 延用(不另开)");
 
     // ⑤ 二轮走完至验证通过:末阶段完成,待手动归档。
@@ -427,7 +424,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const passed = await until(() => {
       const issue = service.get(created.id);
       return issue.status === "idle"
-        && issue.stage_states?.[6] === "done" ? issue : undefined;
+        && issue.stage_states?.[5] === "done" ? issue : undefined;
     }, "验证通过收尾");
     assert.equal(passed.stage, "deploy_verify", "固定流程留在自己的词表里");
     assert.equal(passed.pipelines?.[origin]?.status, "success");
@@ -799,15 +796,15 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
   }
 });
 
-test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 降级不再挡建 MR", async () => {
+test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修复不挡建 MR", async () => {
   const base: IssueSessionState = {
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "T1",
     repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
     mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "done", "done", "in_progress", "pending", "pending"],
-    status: "idle", stage: "ut", stage_note: "", stage_at: new Date().toISOString(),
+    stage_states: ["done", "done", "done", "in_progress", "pending", "pending"],
+    status: "idle", stage: "fix", stage_note: "", stage_at: new Date().toISOString(),
     pushes: [{ repo: "/tmp/x.git", branch: "master_dev_T1",
       sha: "a".repeat(40), at: new Date().toISOString() }],
   };
@@ -833,9 +830,9 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 降级不�
   // 固定流程不注册 report_stage(阶段真相在宿主)。
   assert.equal(tools.some((tool) => tool.name === "report_stage"), false);
   assert.equal(tools.some((tool) => tool.name === "submit_analysis"), true);
-  // UT 阶段:建 MR 仍被阶段门禁拒;complete_stage 已是本阶段出口。
+  // fix 阶段:建 MR 仍被阶段门禁拒;report_ut 在本阶段开放,complete_stage 是出口。
   await assert.rejects(() => byName("create_mr").execute("x", {}),
-    /阶段门禁/, "ut 阶段建 MR 必须被拒");
+    /阶段门禁/, "fix 阶段建 MR 必须被拒");
   // mr_green 阶段:没有 UT 记录不再挡建 MR(UT 降级为事实上报)——
   // 门禁放行,卡在机械前置(平台未配置),而不是任何 UT/阶段闸。
   base.stage = "mr_green";
@@ -862,7 +859,7 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1001",
     repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending", "pending"],
+    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending"],
     status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
   };
   const ctx: IssueToolContext = {
@@ -890,10 +887,10 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     () => byName("fetch_logs").execute("x", { services: ["TranFmaWebsite"] }),
     (error: Error) => !/阶段门禁/.test(error.message),
     "fetch_logs 应全程开放;此处缺席的是运维工具,不是阶段许可");
-  // dts_get_ticket 在 ut 阶段重查:内容照回,阶段不倒转,转移账留痕。
-  base.stage = "ut";
+  // dts_get_ticket 在 fix 阶段重查:内容照回,阶段不倒转,转移账留痕。
+  base.stage = "fix";
   await byName("dts_get_ticket").execute("x", { ticket: "DTS-2026-1001" });
-  assert.equal(base.stage, "ut", "重查单据不得把阶段倒回 prep_repo");
+  assert.equal(base.stage, "fix", "重查单据不得把阶段倒回 prep_repo");
   assert.ok(base.transitions?.some((entry) =>
     /详情已获取/.test(entry.note)), "重查要留转移账");
 });
@@ -1888,9 +1885,8 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
     { text: "分析报告已提交,等待用户确认。" },
     { tool: { name: "bash", input: { command:
       `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复'` } } },
-    { tool: { name: "complete_stage", input: { note: "修复完成" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "3/3" } } },
-    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "修复完成(UT 3/3)" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
