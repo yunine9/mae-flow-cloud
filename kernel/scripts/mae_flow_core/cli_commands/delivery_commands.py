@@ -12,9 +12,11 @@ from mae_flow_core.quality.external_repair import (
     clear_feedback_authorization, issue_feedback_authorization)
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
 from .host_capability import (
-    host_managed_continuous_review, save_with_host_proof,
-    trusted_active_batch, trusted_current_lifecycle, trusted_pipeline_projection,
-    trusted_projection, verify_host_proof)
+    host_managed_continuous_review, verify_host_proof)
+from .host_receipts import (
+    external_facts, has_host_receipt, has_receipt_for, save_with_host_proof,
+    trusted_active_batch, trusted_current_lifecycle,
+    trusted_pipeline_projection)
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
@@ -188,7 +190,10 @@ def _open(flow, state, args):
             else trusted_current_lifecycle(state, (
                 "pipeline-record", "feedback-open", "feedback-result",
                 "intervention-reconcile")))
-        if not predecessor_ok:
+        # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
+        # 升级、迁移前的现场),这条命令本身就是第一环;这时还要求"先有
+        # 前驱收据"等于宣布这单的反馈永远打不开,且无命令可补。
+        if not predecessor_ok and has_host_receipt(state):
             _die("打开反馈前的持续检视生命周期没有宿主收据，拒绝接着可篡改状态推进")
     loop = _loop(state)
     previous = _batch(loop, batch_id)
@@ -435,13 +440,18 @@ def _close(flow, state, args):
         save_with_host_proof(state, proof_nonce)
         print(json.dumps({**previous, "idempotent": True}, ensure_ascii=False))
         return
-    verified = ((state.get("quality") or {}).get("external_verification") or {})
+    verified = external_facts(state)
     verified_sha = str(verified.get("sha") or "")
-    pipeline_trusted = (trusted_pipeline_projection(state, verified)
-                        if host_managed_continuous_review()
-                        else trusted_projection(
-                            state, "pipeline-record", verified))
-    if not pipeline_trusted:
+    # 两条分支原来走的是两个语义不同的函数:else 分支拿"外部验证事实"
+    # 去和"生命周期投影"逐字比对,永远不可能相等——只要走到那条路就是
+    # 必死的 close。收据校验只有一种正确形态,不再留第二条。
+    #
+    # 有过流水线收据才拿收据说话。这一单的 PASS 若登记在能力链之前
+    # (老任务、迁移现场),它永远拿不出 pipeline-record 收据;此时还要
+    # 求"没收据就不许 close",等于宣布 MR 合入了任务也永远关不掉,而
+    # 合入本身是远端事实、迁移时宿主已核对过这份 PASS 绑当前 HEAD。
+    if (not trusted_pipeline_projection(state, verified)
+            and has_receipt_for(state, "pipeline-record")):
         _die("当前流水线 PASS 没有 Cloud 宿主权威收据，拒绝 close")
     if verified.get("verdict") != "PASS" or args.sha != verified_sha:
         _die("合入源 SHA %s 没有当前权威 PASS 背书（最近验证 %s）"

@@ -28,6 +28,7 @@ from mae_flow_core.cli_commands.pipeline_commands import (  # noqa: E402
 )
 from mae_flow_core.cli_commands.host_capability import verify_host_proof  # noqa: E402
 from mae_flow_core.cli_commands import host_capability  # noqa: E402
+from mae_flow_core.cli_commands import host_receipts  # noqa: E402
 from mae_flow_core.workflow.execution_contract import SCHEMA  # noqa: E402
 
 
@@ -128,7 +129,7 @@ class DeliveryCommandTests(TempProject):
         self.save_proof = mock.patch.object(delivery, "save_with_host_proof")
         self.save_proof.start()
         self.trusted = mock.patch.object(
-            delivery, "trusted_projection", return_value=True)
+            delivery, "trusted_pipeline_projection", return_value=True)
         self.trusted.start()
 
     def tearDown(self):
@@ -438,13 +439,64 @@ class DeliveryHostProofTests(TempProject):
         value["quality"] = {"external_verification": {
             "verdict": "PASS", "sha": HEAD,
         }}
-        projection = host_capability.host_projection(
+        projection = host_receipts.host_projection(
             value, "pipeline-record", {})
-        self.assertEqual("mae-flow-host-lifecycle/1", projection["schema"])
+        self.assertEqual(host_receipts.LIFECYCLE_SCHEMA, projection["schema"])
         self.assertEqual("delivery_watch", projection["current"])
         self.assertEqual("fb-1", projection["active_batch_id"])
-        self.assertEqual("closed", projection["delivery_loop"]["batches"][0]["status"])
-        self.assertEqual("PASS", projection["external_verification"]["verdict"])
+        # 封的是摘要不是正文,但每一处篡改仍然照样翻脸。
+        for mutate in (
+            lambda st: st["delivery_loop"]["batches"][0].__setitem__(
+                "status", "awaiting_verification"),
+            lambda st: st["delivery_loop"]["batches"][0]["results"][0].__setitem__(
+                "status", "explained"),
+            lambda st: st["quality"]["external_verification"].__setitem__(
+                "sha", "b" * 40),
+            lambda st: st.__setitem__("current", "end"),
+            lambda st: st.__setitem__("user_intervention", {"id": "forged"}),
+        ):
+            tampered = json.loads(json.dumps(value, ensure_ascii=False))
+            mutate(tampered)
+            self.assertNotEqual(
+                projection,
+                host_receipts.host_projection(tampered, "pipeline-record", {}))
+
+    def test_receipt_size_stays_constant_under_heavy_feedback(self):
+        """一轮量大但完全合法的检视不得把收据撑过读取上限。
+
+        2026-09-01 实测事故:投影原来封整份 delivery_loop,12 条 350 字的
+        MR 意见(内核自己允许单条 4000 字)就越过 32 KiB;此后 feedback、
+        pipeline record、连 MR 合入后的 close 全部永久失败,无命令可救。
+        """
+        value = state("feedback_triage")
+        body = "空值分支没覆盖上游返回空值的情况，请补单测并说明预期语义。" * 12
+        value["delivery_loop"] = {
+            "schema": delivery.STATE_SCHEMA,
+            "active_batch_id": "fb-big",
+            "close_events": [],
+            "batches": [{
+                "batch_id": "fb-big", "status": "repairing", "base_sha": HEAD,
+                "items": [{
+                    "id": "mr:d-%s" % index, "source": "mr_discussion",
+                    "source_id": "d-%s" % index, "summary": body[:4000],
+                    "material": "../reviews/discussions.json",
+                    "verification": "reviewer",
+                } for index in range(40)],
+                "results": [{
+                    "id": "mr:d-%s" % index, "status": "fixed",
+                    "summary": body[:4000], "evidence": body[:4000],
+                } for index in range(40)],
+            }],
+        }
+        raw = len(host_capability._canonical(
+            value["delivery_loop"]).encode("utf-8"))
+        projection = host_receipts.host_projection(
+            value, "feedback-result", {})
+        sealed = len(host_capability._canonical(projection).encode("utf-8"))
+        self.assertGreater(raw, host_receipts._RECEIPT_LIMIT,
+                           "夹具本身必须真的超过读取上限才算复现")
+        self.assertLess(sealed, 2048,
+                        "投影体积必须与反馈数量无关，否则收据迟早读不回来")
 
     def test_trusted_receipt_accepts_utf8_projection(self):
         projection = {"summary": "流水线问题已修复", "status": "fixed"}
@@ -460,16 +512,109 @@ class DeliveryHostProofTests(TempProject):
         record = {
             "schema": "mae-flow-host-receipt/1",
             "proof": proof,
-            "payload": payload,
+            "payload_digest": host_receipts._digest(payload),
             "projection": projection,
             "projection_digest": hashlib.sha256(
                 host_capability._canonical(projection).encode("utf-8")).hexdigest(),
         }
         with mock.patch.object(
-                host_capability, "_trusted_authority", return_value={}), mock.patch.object(
-                host_capability, "_verify_rsa_sha256", return_value=True):
-            self.assertTrue(host_capability._valid_stored_receipt(
-                state(), record, "feedback-result", projection, "/host-only"))
+                host_receipts, "_verify_rsa_sha256", return_value=True):
+            self.assertTrue(host_receipts._valid_stored_receipt(
+                {"task_id": "task-7"}, record, "feedback-result", projection))
+            # 收据绑的是这一把公钥所属的任务，换个任务立刻不认。
+            self.assertFalse(host_receipts._valid_stored_receipt(
+                {"task_id": "task-8"}, record, "feedback-result", projection))
+
+    def test_proof_reaching_the_trust_root_through_a_symlink_is_accepted(self):
+        """<data> 经过软链是常态(macOS 的 /var、容器挂载、盘迁移)。
+
+        原来拿未解引用的 abspath 去和 realpath 化的信任根比,只要中间有
+        一层软链就永远不相等,一条宿主命令都过不去(实测)。
+        """
+        root, old, trust, authority = self.trusted_layout()
+        try:
+            link = os.path.join(root.name, "link-to-trust")
+            os.symlink(trust, link)
+            proof_path = os.path.join(trust, "proof-linked.json")
+            with open(proof_path, "w", encoding="utf-8") as stream:
+                json.dump({
+                    "schema": host_capability.PROOF_SCHEMA,
+                    "task_id": "task-7", "action": "feedback-open",
+                    "payload_digest": "0" * 64, "nonce": "linked",
+                    "issued_at": int(delivery.time.time()),
+                    "signature": "ZmFrZQ",
+                }, stream)
+            os.chmod(proof_path, 0o600)
+            value = state()
+            # 走软链路径进来:必须走到"签名无效"才算路径这关过了；
+            # 挂在"不在信任根内"就是本次修复要消灭的那种早死。
+            with self.assertRaises(SystemExit):
+                host_capability.verify_host_proof(
+                    value, os.path.join(link, "proof-linked.json"),
+                    "feedback-open", batch())
+            payload, resolved = host_capability._proof_payload(
+                os.path.join(link, "proof-linked.json"))
+            self.assertEqual(trust, resolved)
+            self.assertEqual("linked", payload["nonce"])
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_one_unreadable_receipt_never_kills_every_later_host_command(self):
+        """历史台账体检失败不许升级成拒绝服务。
+
+        原来三个扫描函数对每份历史收据都走严格读取,任何一份权限被动过、
+        体积超限或写坏,SystemExit 会掀掉整条宿主命令——反馈、流水线登记
+        乃至 MR 合入后的 close 一起永久失败,且无命令可救。
+        """
+        root, old, trust, _authority = self.trusted_layout()
+        try:
+            value = state("delivery_watch")
+            projection = host_receipts.host_projection(
+                value, "pipeline-record", {})
+            prefix = host_receipts._receipt_prefix("task-7")
+            good = os.path.join(trust, "%sgood.json" % prefix)
+            with open(good, "w", encoding="utf-8") as stream:
+                stream.write(host_capability._canonical({
+                    "schema": host_receipts.RECEIPT_SCHEMA,
+                    "proof": {
+                        "schema": host_capability.PROOF_SCHEMA,
+                        "task_id": "task-7", "action": "pipeline-record",
+                        "payload_digest": host_receipts._digest({}),
+                        "nonce": "good", "issued_at": 0, "signature": "signed",
+                    },
+                    "payload_digest": host_receipts._digest({}),
+                    "projection": projection,
+                    "projection_digest": host_receipts._digest(projection),
+                }))
+            os.chmod(good, 0o600)
+            # 一份写坏的、一份超限的、一份权限被动过的历史收据。
+            broken = os.path.join(trust, "%sbroken.json" % prefix)
+            with open(broken, "w", encoding="utf-8") as stream:
+                stream.write("{ not json")
+            os.chmod(broken, 0o600)
+            huge = os.path.join(trust, "%shuge.json" % prefix)
+            with open(huge, "w", encoding="utf-8") as stream:
+                stream.write("x" * (host_receipts._RECEIPT_LIMIT + 1))
+            os.chmod(huge, 0o600)
+            loose = os.path.join(trust, "%sloose.json" % prefix)
+            with open(loose, "w", encoding="utf-8") as stream:
+                stream.write("{}")
+            os.chmod(loose, 0o644)
+            with mock.patch.object(
+                    host_receipts, "_verify_rsa_sha256", return_value=True):
+                self.assertTrue(host_receipts.trusted_projection(
+                    value, "pipeline-record", projection))
+                self.assertTrue(host_receipts.trusted_pipeline_projection(
+                    value, host_receipts.external_facts(value)))
+                # 跳过坏件不等于放行伪证:签名不过照样是 False。
+                with mock.patch.object(
+                        host_receipts, "_verify_rsa_sha256", return_value=False):
+                    self.assertFalse(host_receipts.trusted_projection(
+                        value, "pipeline-record", projection))
+        finally:
+            os.chdir(old)
+            root.cleanup()
 
 
 class PipelineRoutingTests(unittest.TestCase):

@@ -12,10 +12,9 @@ from .shared import os, time
 from .wiring import api
 from .host_capability import (
     host_managed_continuous_review,
-    save_with_host_proof,
-    trusted_active_batch,
     verify_host_proof,
 )
+from .host_receipts import save_with_host_proof, trusted_active_batch
 from mae_flow_core.quality.external_verification import (
     PipelineDecision,
     adjudicate_pipeline,

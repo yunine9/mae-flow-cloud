@@ -452,6 +452,19 @@ function secureReceipt(path: string): Record<string, any> | undefined {
   } catch { return undefined; }
 }
 
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/** 收据归属 = 任务号 + realpath(代码仓),必须与内核 _receipt_prefix 同式。
+ *
+ * mae-flow@702379c 起收据不再只按任务号哈希:信任根是按部署共享的目录,
+ * 同一任务号换一份代码仓会读到不属于它的陈账。这里若还按旧前缀扫,
+ * 新内核写的收据一张都看不见,所有 trusted* 门恒假、fail-closed 全灭。 */
+function receiptPrefix(taskId: string, cwd: string): string {
+  return `${sha256Hex(`${taskId}\0${realpathSync(cwd)}`)}.receipt-`;
+}
+
 /** Verify a protected state projection against a receipt outside Agent mounts. */
 export function trustedKernelHostProjection(input: {
   cwd: string;
@@ -463,7 +476,7 @@ export function trustedKernelHostProjection(input: {
   try {
     const authority = ensureKernelHostCapability(input);
     const root = capabilityRoot(input.workspace);
-    const prefix = `${createHash("sha256").update(input.taskId).digest("hex")}.receipt-`;
+    const prefix = receiptPrefix(input.taskId, input.cwd);
     const publicKey = createPublicKey({
       key: { kty: "RSA", n: authority.n, e: authority.e },
       format: "jwk",
@@ -484,11 +497,12 @@ export function trustedKernelHostProjection(input: {
         nonce: proof.nonce,
         issued_at: proof.issued_at,
       };
-      const payloadDigest = createHash("sha256")
-        .update(canonical(receipt.payload)).digest("hex");
+      // mae-flow@092fad5 起收据只存载荷摘要,不再逐字存 payload(逐字存
+      // 是收据体积失控、32 KiB 读取上限下全链锁死的漏口之一)。摘要以
+      // **被签名的那份**为准,收据里的副本必须逐字一致。
       const projectionDigest = createHash("sha256")
         .update(canonical(input.projection)).digest("hex");
-      if (payloadDigest !== proof.payload_digest
+      if (String(receipt.payload_digest ?? "") !== String(proof.payload_digest ?? "")
           || projectionDigest !== receipt.projection_digest) continue;
       if (verifySignature("RSA-SHA256", Buffer.from(canonical(unsigned)),
         publicKey, Buffer.from(String(proof.signature ?? ""), "base64url"))) {
@@ -500,23 +514,41 @@ export function trustedKernelHostProjection(input: {
 }
 
 /**
- * 与内核 host_projection 完全同形。收据不只封一条 PASS 或 results，
- * 还封住这次宿主动作落定后的 current、活动批次、完整 delivery_loop
- * 与质量事实，避免 Agent 把几张真的收据和手写生命周期拼成假现场。
+ * 与内核 host_projection 完全同形(mae-flow@092fad5,schema /2)。收据
+ * 不只封一条 PASS 或 results,还封住这次宿主动作落定后的 current、活动
+ * 批次与完整生命周期,避免 Agent 把几张真的收据和手写生命周期拼成假现场。
+ *
+ * /1 逐字封整份 delivery_loop 与意见正文——一轮 12 条 350 字的检视就把
+ * 收据撑过内核 32 KiB 读取上限,之后反馈、流水线登记、连 MR 合入后的
+ * close 全部永久失败(内核侧实测)。/2 改封摘要:防篡改一个字节没松
+ * (任何字段变了摘要就变),体积与反馈数量彻底解耦。字段逐个对齐
+ * kernel/scripts/mae_flow_core/cli_commands/host_receipts.py 的
+ * host_projection,一边改动另一边必须同步,否则 trusted* 门恒假。
  */
 export function kernelHostLifecycleProjection(
   state: Record<string, any>,
   action: KernelHostAction,
 ): Record<string, unknown> {
-  const loop = state?.delivery_loop;
+  const rawLoop = state?.delivery_loop;
+  const loop = rawLoop && typeof rawLoop === "object" && !Array.isArray(rawLoop)
+    ? rawLoop : null;
+  const activeId = loop ? String(loop.active_batch_id ?? "") : "";
+  const active = (activeId && Array.isArray(loop?.batches)
+    ? loop.batches.find((item: any) => item && typeof item === "object"
+        && String(item.batch_id ?? "") === activeId)
+    : undefined) ?? null;
+  const digest = (value: unknown) => sha256Hex(canonical(value ?? null));
   return {
-    schema: "mae-flow-host-lifecycle/1",
+    schema: "mae-flow-host-lifecycle/2",
     action,
     current: state?.current ?? null,
-    active_batch_id: loop?.active_batch_id ?? null,
-    delivery_loop: loop ?? null,
-    external_verification: state?.quality?.external_verification ?? null,
-    user_intervention: state?.user_intervention ?? null,
+    active_batch_id: loop ? loop.active_batch_id ?? null : null,
+    delivery_loop_digest: digest(loop),
+    active_batch_digest: digest(active),
+    // 内核 external_facts():缺失时归一成 {} 再取摘要。
+    external_verification_digest: digest(
+      state?.quality?.external_verification ?? {}),
+    user_intervention_digest: digest(state?.user_intervention ?? null),
   };
 }
 
@@ -567,20 +599,18 @@ export function trustedKernelHostActiveBatch(input: {
       : undefined;
     if (!activeId || !active) return false;
     const root = capabilityRoot(input.workspace);
-    const prefix = `${createHash("sha256").update(input.taskId).digest("hex")}.receipt-`;
+    const prefix = receiptPrefix(input.taskId, input.cwd);
+    // /2 投影里活动批次只剩摘要;比对摘要与比对逐字正文防篡改等价,
+    // 且不再把整份批次正文抄进每张收据。
+    const wanted = sha256Hex(canonical(active ?? null));
     for (const name of readdirSync(root).sort().reverse()) {
       if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
       const receipt = secureReceipt(join(root, name));
       const action = String(receipt?.proof?.action ?? "") as KernelHostAction;
       const projection = receipt?.projection;
-      const storedLoop = projection?.delivery_loop;
-      const storedActive = Array.isArray(storedLoop?.batches)
-        ? storedLoop.batches.find(
-            (item: any) => String(item?.batch_id ?? "") === activeId)
-        : undefined;
       if (!input.actions.includes(action)
           || String(projection?.active_batch_id ?? "") !== activeId
-          || canonical(storedActive) !== canonical(active)) continue;
+          || String(projection?.active_batch_digest ?? "") !== wanted) continue;
       if (trustedKernelHostProjection({
         cwd: input.cwd,
         workspace: input.workspace,

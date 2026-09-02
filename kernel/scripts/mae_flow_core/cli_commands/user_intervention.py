@@ -8,7 +8,8 @@ workflow; it never advances a step or marks quality evidence as passed.
 from .shared import STATE_PATH, json, os, time
 from .wiring import api
 from .host_capability import (
-    host_managed_continuous_review, save_with_host_proof, verify_host_proof)
+    host_managed_continuous_review, verify_host_proof)
+from .host_receipts import save_with_host_proof
 from .lightcheck import _is_test_file
 from .state_config import _is_source_path
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
