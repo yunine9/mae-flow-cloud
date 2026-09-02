@@ -36,7 +36,11 @@ import {
   IssueEnvironmentVault,
   type IssueEnvironmentInput as VaultEnvironmentInput,
 } from "../issueEnvironment.ts";
-import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
+import {
+  TaskContainer,
+  taskContainerInstance,
+  type TaskContainerLimits,
+} from "../containerRuntime.ts";
 import { touchBuildCache } from "../buildCache.ts";
 import {
   prepareContainerHostPaths,
@@ -372,6 +376,26 @@ export interface IssueIsolation {
   /** 向容器注入的额外环境变量(与 taskService isolation.environment 同款);
    *  ensureContainer 先继承这里,再追加缓存相关变量(MAVEN_OPTS 等)。 */
   environment?: NodeJS.ProcessEnv;
+  /** 窄测试注入口(与 taskService isolation.containerFactory 同款意图):
+   *  生产缺席时始终 new TaskContainer;测试注入它,无 daemon 环境也能
+   *  证明容器生命周期契约(回合收口不停、终态必停)。 */
+  containerFactory?: (build: IssueContainerBuild) => TaskContainer;
+}
+
+/** ensureContainer 组装容器时的全部入参(与 TaskContainer 构造同形),
+ *  抽成对象是为了上面的 containerFactory 注入口。 */
+export interface IssueContainerBuild {
+  image: string;
+  workspace: string;
+  name: string;
+  log?: (message: string) => void;
+  volumes: string[];
+  limits: TaskContainerLimits;
+  options: {
+    network: string;
+    environment?: NodeJS.ProcessEnv;
+    labels: Record<string, string>;
+  };
 }
 
 export interface IssueFlowOptions {
@@ -1115,7 +1139,17 @@ export class IssueFlowService {
     };
   }
 
-  /** 单回合执行骨架:统一失败收口,绝不把异常闷成悬挂状态。 */
+  /** 单回合执行骨架:统一失败收口,绝不把异常闷成悬挂状态。
+   *
+   *  容器生命周期(2026-09-01 拍板,对齐需求流"随任务起、随收口停"):
+   *  回合收口**不停容器**——容器随会话存活到终态,回合间隙(idle/
+   *  waiting_user)保持原实例,续聊/作答直接复用,消掉两件事:跨回合
+   *  "容器已停止"的重建开销与失败面;催办/补发插话同回合接力时
+   *  "收口停"与续跑 ensureContainer 的重建竞态。容器自身故障有自愈
+   *  闭环:exec 超时/中止由 TaskContainer 销毁自身,外部死亡(OOM)被
+   *  exec 前的 assertRunning 探活标 failed——下回合 ensureContainer
+   *  检 isAlive 重建。真正的停点只在终态:取消/归档(control)、非问题
+   *  归档、挂起、转正收口、服务关停。 */
   private async runTurn(
     live: LiveIssue,
     body: () => Promise<Outcome>,
@@ -1140,13 +1174,6 @@ export class IssueFlowService {
       }
       saveState(live.root, live.state);
       this.log(`[issue-flow] ${live.id} 回合失败: ${detail}`);
-    } finally {
-      // waiting_user 的回合还没真正结束(AskUserQuestion 挂起中,作答后
-      // 还会在同一回合里继续用 bash)——容器必须留着。
-      if (live.controlEpoch === epoch
-          && live.state.status !== "waiting_user") {
-        this.stopContainerInBackground(live, "回合收口");
-      }
     }
   }
 
@@ -1573,22 +1600,22 @@ export class IssueFlowService {
         CCACHE_MAXSIZE: "20G",
       };
     }
-    const container = new TaskContainer(
-      isolation.image,
-      live.root,
-      `mfc-${instance.namePrefix}-${live.id}`,
-      (message) => this.log(`[issue-container] ${message}`),
+    const build: IssueContainerBuild = {
+      image: isolation.image,
+      workspace: live.root,
+      name: `mfc-${instance.namePrefix}-${live.id}`,
+      log: (message) => this.log(`[issue-container] ${message}`),
       volumes,
       // user 必须随 limits 传到 docker run(2026-08-29 真实环境实测:
       // 漏传使容器落回镜像默认用户,安全自检"Config.User 为空或为
       // root/0"拒绝运行——需求侧同环境能跑正是它传了)。
-      {
+      limits: {
         memory: isolation.memory,
         cpus: isolation.cpus,
         pidsLimit: isolation.pidsLimit,
         user: isolation.user,
       },
-      {
+      options: {
         network: isolation.network,
         ...(Object.keys(environment).length > 0 ? { environment } : {}),
         // ownership 标签与需求侧 createTaskContainer 同一套。少了它们,
@@ -1601,7 +1628,11 @@ export class IssueFlowService {
           "com.mae-flow-cloud.task": live.id,
         },
       },
-    );
+    };
+    const container = isolation.containerFactory
+      ? isolation.containerFactory(build)
+      : new TaskContainer(build.image, build.workspace, build.name,
+          build.log, build.volumes, build.limits, build.options);
     // root 守护进程 + 非 root 容器用户时,把工作区属主在 docker run
     // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。
     const prepared = prepareContainerHostPaths({
