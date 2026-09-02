@@ -1527,25 +1527,19 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               <>
-                <RequirementGraph task={task} onOpenTask={onOpenTask} />
                 {/* 讨论参与人是澄清期的事,不是确认拆分时要定的:原来到了
                     方案确认卡它整块搬进右栏,和"拆分后怎么执行"摞成 730px,
                     卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。
-                    现在一直留在图下面;确认前照旧摊开,举了确认卡就折起来。 */}
-                {canOperate && task.requirement_graph?.stage === "analysis" && (
-                  <details className="chain-team-invite" open={!chainReview}>
-                    <summary>
-                      邀请更多人参与讨论
-                      <small>参与人可送批注、补材料，不代替主责任人拍板</small>
-                    </summary>
-                    <RequirementTeamPicker
-                      taskId={task.id}
-                      owner={task.luban_account}
-                      collaborators={task.collaborators}
-                      onSaved={onChanged}
-                    />
-                  </details>
-                )}
+                    现在长在图里"主任务团队"那一块的按钮后面,想拉人就点开。 */}
+                <RequirementGraph task={task} onOpenTask={onOpenTask}
+                  teamInvite={canOperate && task.requirement_graph?.stage === "analysis"
+                    ? <RequirementTeamPicker
+                        taskId={task.id}
+                        owner={task.luban_account}
+                        collaborators={task.collaborators}
+                        onSaved={onChanged}
+                      />
+                    : undefined} />
                 {!chainReview && canOperate
                   && task.requirement_graph?.stage === "analysis" && (
                     <RepositoryAssigneePicker

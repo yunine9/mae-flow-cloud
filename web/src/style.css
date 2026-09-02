@@ -10090,30 +10090,22 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   white-space: normal;
   line-height: 1.45;
 }
-/* 讨论参与人放回左侧图下面:确认前摊开,举了确认卡折起,想拉人照样能点开。 */
-.chain-team-invite {
-  flex: none;
-  margin: 10px 14px 0;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--surface);
-}
-.chain-team-invite > summary {
-  min-height: 46px;
-  padding: 8px 13px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 700;
+/* 邀请讨论参与人的入口长在图里"主任务团队"那一块:按钮在标题行右侧,
+   点开表单就落在药丸下面。单独挂在图下面成一条细条,看着像掉出来的页脚。 */
+.requirement-team-invite {
+  margin-left: auto;
+  padding: 4px 10px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  font-weight: 750;
   cursor: pointer;
-  list-style: none;
 }
-.chain-team-invite > summary::-webkit-details-marker { display: none; }
-.chain-team-invite > summary small { color: var(--muted); font-size: 12.5px; font-weight: 500; }
-.chain-team-invite > .requirement-team-picker { margin: 0 12px 12px; }
+.requirement-team-invite:hover { border-color: var(--accent); }
+.requirement-team-invite-body { margin-top: 4px; }
+.requirement-team-invite-body > .requirement-team-picker { margin: 0; }
 .ws-usage-summary {
   min-height: 38px;
   padding: 8px 11px;

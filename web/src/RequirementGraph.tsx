@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { TaskSummary } from "./api";
 
 function repoName(id: string, task: TaskSummary): string {
@@ -39,12 +39,17 @@ export function chainStages<T extends { id: string }>(graph: {
 export function RequirementGraph({
   task,
   onOpenTask,
+  teamInvite,
 }: {
   task: TaskSummary;
   onOpenTask?: (taskId: string) => void;
+  /** 邀请讨论参与人的表单。它属于"主任务团队"那一块,就长在药丸旁边的
+   * 按钮后面——单独挂在图下面成一条细条,看着像掉出来的页脚(用户实测)。 */
+  teamInvite?: ReactNode;
 }) {
   const graph = task.requirement_graph;
   const [expanded, setExpanded] = useState(true);
+  const [inviteOpen, setInviteOpen] = useState(false);
   // 单仓分析单拆分前只有一个节点,也要露出概览让人看到"待拆分"。
   if (!graph) return null;
   if (graph.repositories.length < 2 && task.requirement_analysis_requested !== true) return null;
@@ -83,7 +88,13 @@ export function RequirementGraph({
       </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>
-          <small>1 位主责任人 · {participantNames.length} 位参与成员</small></div>
+          <small>1 位主责任人 · {participantNames.length} 位参与成员</small>
+          {teamInvite && <button type="button" className="requirement-team-invite"
+            aria-expanded={inviteOpen}
+            onClick={() => setInviteOpen((value) => !value)}>
+            {inviteOpen ? "收起邀请" : "邀请参与人"}
+          </button>}
+        </div>
         <div className="requirement-team-pills">
           <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
           {participantNames.map((account) => <span key={account}>{account}
@@ -91,6 +102,9 @@ export function RequirementGraph({
           </span>)}
           {participantNames.length === 0 && <em>尚未邀请讨论参与人</em>}
         </div>
+        {teamInvite && inviteOpen && <div className="requirement-team-invite-body">
+          {teamInvite}
+        </div>}
       </div>
       <div className="requirement-stages" aria-labelledby="requirement-graph-title">
         {stages.map((repositories, stage) => <div className="requirement-stage"

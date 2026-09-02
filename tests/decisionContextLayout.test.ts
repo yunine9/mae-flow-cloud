@@ -176,8 +176,10 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
   assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
     "讨论参与人不进确认卡");
-  assert.match(workspace, /<details className="chain-team-invite" open=\{!chainReview\}>/,
-    "参与人留在左侧图下,确认卡举起后折叠");
+  assert.match(workspace, /teamInvite=\{canOperate && task\.requirement_graph\?\.stage === "analysis"/,
+    "参与人入口长在图里'主任务团队'那一块,不另起一条");
+  const graph = readFileSync(join(process.cwd(), "web/src/RequirementGraph.tsx"), "utf8");
+  assert.match(graph, /className="requirement-team-invite"/);
 
   const picker = readFileSync(
     join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
