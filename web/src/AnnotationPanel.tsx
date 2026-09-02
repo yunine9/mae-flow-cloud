@@ -21,6 +21,7 @@ import {
   dropAnnotation,
   editAnnotation,
   judgeAnnotation,
+  replyToAnnotation,
   sendAnnotations,
   TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
@@ -36,6 +37,18 @@ const ANCHOR_TEXT: Record<AnchorCheck["state"], string> = {
   moved: "原文仍在,行号有漂移(定位已跟随)",
   gone: "原位置内容已删除",
   ambiguous: "存在多个匹配位置",
+};
+
+type AnnotationRoute = NonNullable<Annotation["route"]>;
+
+function routeOf(item: Annotation): AnnotationRoute {
+  return item.route ?? "agent";
+}
+
+const ROUTE_LABEL: Record<AnnotationRoute, string> = {
+  agent: "Agent 处理",
+  owner_reply: "责任人答复",
+  owner_decision: "决策后处理",
 };
 
 export interface AdminOverrideAccess {
@@ -104,9 +117,13 @@ export function authorVerdictReady(
   taskStatus: TaskStatus,
   workspaceReviewReady: boolean,
 ): boolean {
-  if (taskStatus !== "waiting_for_human" || item.status !== "sent") {
+  if (item.status !== "sent") {
     return false;
   }
+  // 问责任人的意见不需要等 Agent 或任务阶段：责任人留下原话后，
+  // 提出人即可判断是否解答。决策后处理仍必须等 Agent 真正执行。
+  if (routeOf(item) === "owner_reply") return Boolean(item.owner_reply);
+  if (taskStatus !== "waiting_for_human") return false;
   // 这类意见只是趁“等决定”窗口先登记为团队事实，尚未随决定真正
   // 送给 Agent；不能刚提交就让作者自称已经验收。
   if (item.sent_via === "queued_decision") return false;
@@ -184,6 +201,35 @@ function progressOf(
           hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
       : { tone: "draft", text: "待提交" };
   }
+  const route = routeOf(item);
+  if (route !== "agent" && !item.owner_reply) {
+    return {
+      tone: "waiting",
+      text: route === "owner_reply" ? "等待责任人答复" : "等待责任人决策",
+      hint: `已指派给 ${item.assignee ?? "任务责任人"}，Agent 不会代答。`,
+    };
+  }
+  if (route === "owner_reply" && item.owner_reply) {
+    return {
+      tone: "review",
+      text: "等待提出人确认",
+      hint: "责任人已经答复，请由意见提出人确认是否解决问题。",
+    };
+  }
+  if (route === "owner_decision" && item.owner_reply && !verdictReady) {
+    return {
+      tone: "waiting",
+      text: item.sent_via === "owner_pending"
+        ? "决策已记录·等待继续"
+        : item.sent_via === "queued_decision"
+          ? "决策已记录·等待执行" : "Agent 正在按决策处理",
+      hint: item.sent_via === "owner_pending"
+        ? "责任人结论已经保存；当前流程暂时不能接收，恢复后可继续交给 Agent。"
+        : item.sent_via === "queued_decision"
+        ? "当前还有任务决定卡；提交决定后，这份责任人结论会一并交给 Agent。"
+        : "责任人已经给出结论，正在等待 Agent 完成修改。",
+    };
+  }
   if (verdictReady) {
     return {
       tone: "review",
@@ -206,6 +252,9 @@ function deliveryText(item: Annotation, archival = false): string {
       : "意见作者已确认";
   }
   if (item.status !== "sent") return archival ? "交付后记录" : "尚未提交";
+  if (item.sent_via === "owner_pending") {
+    return routeOf(item) === "owner_reply" ? "已交给责任人答复" : "已交给责任人决策";
+  }
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
   if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
@@ -263,6 +312,8 @@ export function AnnotationPanel({
   const [editingId, setEditingId] = useState("");
   const [editingNote, setEditingNote] = useState("");
   const [mutationBusy, setMutationBusy] = useState("");
+  const [replyingId, setReplyingId] = useState("");
+  const [ownerReply, setOwnerReply] = useState("");
   const [error, setError] = useState("");
   const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
   // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
@@ -279,7 +330,12 @@ export function AnnotationPanel({
   const ordinaryReviewCount = items.filter((item) =>
     item.author === viewerUsername
     && authorVerdictReady(item, taskStatus, reviewReady)
+    && routeOf(item) !== "owner_reply"
     && item.sent_via !== "review_repair").length;
+  const ownerReplyReviewCount = items.filter((item) =>
+    item.author === viewerUsername
+    && routeOf(item) === "owner_reply"
+    && authorVerdictReady(item, taskStatus, reviewReady)).length;
   const authorActionable = (item: Annotation) => item.author === viewerUsername
     && authorVerdictReady(item, taskStatus, reviewReady);
   const overrideActionable = (item: Annotation) => adminOverrideAccess({
@@ -413,6 +469,26 @@ export function AnnotationPanel({
       : () => judgeAnnotation(taskId, item.id, "verify"));
   }
 
+  async function submitOwnerReply(item: Annotation, retryText?: string) {
+    const text = (retryText ?? ownerReply).trim();
+    if (!text || mutationBusy) return;
+    setMutationBusy(item.id);
+    setError("");
+    try {
+      const result = await replyToAnnotation(taskId, item.id, text);
+      if (result.error) setError(result.error);
+      else {
+        setReplyingId("");
+        setOwnerReply("");
+      }
+      onChanged();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setMutationBusy("");
+    }
+  }
+
   return (
     <details className="annot-panel" aria-label="批注" open={open}
              onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -451,6 +527,12 @@ export function AnnotationPanel({
           “确认已修复”或“仍需调整”；没有全部闭环前不会继续。
         </div>
       )}
+      {ownerReplyReviewCount > 0 && (
+        <div className="annot-panel-note review-ready" role="status">
+          责任人已答复你提出的 {ownerReplyReviewCount} 条意见。
+          请核对原文和答复，逐条选择“确认已解答”或“仍有疑问”。
+        </div>
+      )}
       {overrideReviewCount > 0 && (
         <div className="annot-panel-note admin-override" role="note">
           当前复检有 {overrideReviewCount} 条他人意见仍待作者闭环。
@@ -468,7 +550,13 @@ export function AnnotationPanel({
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
                   onClick={() => void send()}>
-            {busy ? "提交中…" : reviewSendable
+            {busy ? "提交中…" : drafts.every((item) => routeOf(item) === "owner_reply")
+              ? `提交 ${drafts.length} 条给责任人答复`
+              : drafts.every((item) => routeOf(item) === "owner_decision")
+                ? `提交 ${drafts.length} 条给责任人决策`
+              : drafts.some((item) => routeOf(item) !== "agent")
+                ? `提交 ${drafts.length} 条检视意见`
+              : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
                 : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
@@ -561,6 +649,11 @@ export function AnnotationPanel({
                   {progress.text}
                 </span>
               </div>
+              <div className={`annot-route-badge ${routeOf(item)}`}>
+                {ROUTE_LABEL[routeOf(item)]}
+                {routeOf(item) !== "agent" && item.assignee
+                  ? ` · ${item.assignee}` : ""}
+              </div>
               {editing ? (
                 <div className="annot-inline-editor">
                   <textarea value={editingNote} autoFocus rows={5}
@@ -612,6 +705,58 @@ export function AnnotationPanel({
                     <small>对应提交：{item.response.fixed_sha.slice(0, 12)}</small>
                   )}
                 </div>
+              )}
+              {item.owner_reply && (
+                <div className="annot-owner-reply">
+                  <strong>责任人答复</strong>
+                  <p>{item.owner_reply.text}</p>
+                  <small>{item.owner_reply.author} · {relativeTime(item.owner_reply.replied_at)}</small>
+                </div>
+              )}
+              {item.status === "sent" && routeOf(item) === "owner_decision"
+                && item.owner_reply && item.sent_via === "owner_pending"
+                && item.assignee === viewerUsername && (
+                <div className="annot-owner-reply-action">
+                  <button type="button" className="primary"
+                    disabled={!!mutationBusy}
+                    onClick={() => {
+                      void submitOwnerReply(item, item.owner_reply?.text);
+                    }}>
+                    {mutationBusy === item.id ? "继续中…" : "继续交给 Agent"}
+                  </button>
+                </div>
+              )}
+              {item.status === "sent" && routeOf(item) !== "agent"
+                && !item.owner_reply && item.assignee === viewerUsername && (
+                replyingId === item.id ? (
+                  <div className="annot-owner-reply-editor">
+                    <textarea rows={3} autoFocus value={ownerReply}
+                      placeholder={routeOf(item) === "owner_decision"
+                        ? "写下明确决定；提交后系统会交给 Agent 执行"
+                        : "直接回答检视人的问题"}
+                      onChange={(event) => setOwnerReply(event.target.value)} />
+                    <div>
+                      <button type="button" className="ghost"
+                        onClick={() => { setReplyingId(""); setOwnerReply(""); }}>
+                        取消
+                      </button>
+                      <button type="button" className="primary"
+                        disabled={!ownerReply.trim() || !!mutationBusy}
+                        onClick={() => void submitOwnerReply(item)}>
+                        {mutationBusy === item.id ? "提交中…"
+                          : routeOf(item) === "owner_decision"
+                            ? "提交决定并交给 Agent" : "提交答复"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="annot-owner-reply-action">
+                    <button type="button" className="primary"
+                      onClick={() => { setReplyingId(item.id); setOwnerReply(""); }}>
+                      {routeOf(item) === "owner_decision" ? "作出决定" : "回答这条意见"}
+                    </button>
+                  </div>
+                )
               )}
               <div className="annot-item-foot">
                 <small>
@@ -679,14 +824,14 @@ export function AnnotationPanel({
                             disabled={!!mutationBusy}
                             onClick={() => void mutateAnnotation(item.id,
                               () => judgeAnnotation(taskId, item.id, "reopen"))}>
-                      仍需调整
+                      {routeOf(item) === "owner_reply" ? "仍有疑问" : "仍需调整"}
                     </button>}
                     {isAuthor ? (
                       <button type="button" className="approve"
                               disabled={!!mutationBusy}
                               onClick={() => void mutateAnnotation(item.id,
                                 () => judgeAnnotation(taskId, item.id, "verify"))}>
-                        确认已修复
+                        {routeOf(item) === "owner_reply" ? "确认已解答" : "确认已修复"}
                       </button>
                     ) : (
                       <>
