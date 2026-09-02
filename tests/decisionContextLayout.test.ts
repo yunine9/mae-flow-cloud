@@ -298,3 +298,9 @@ test("执行中的任务默认打开执行现场", () => {
     /\["queued", "running", "pausing", "verifying", "await_merge"\]/);
   assert.match(workspace, /\.includes\(task\.status\)\) return "execution"/);
 });
+
+test("仓间依赖图里的负责面路径是块级元素,超宽省略而不是横穿卡片", () => {
+  // 行内元素不吃 overflow/text-overflow:nowrap 的路径从卡片里直接穿出去,
+  // 压过阶段箭头压到下一张卡(实测溢出 274px/890px,用户截图实锤)。
+  assert.match(css, /\.repo-scope-paths \{\s*display: block; min-width: 0; overflow: hidden;/);
+});

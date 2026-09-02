@@ -2182,8 +2182,11 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-list em.ready { color: #16885d; }
 .repository-assignee-list em.missing { color: var(--attention); }
 .repo-ticket { color: var(--muted); font: 650 11px var(--font-mono); }
+/* 必须是块:行内元素不吃 overflow/text-overflow,nowrap 的路径就从卡片里
+   直接横穿出去,压过箭头压到下一张卡(实测溢出 274px 和 890px,用户
+   截图实锤)。 */
 .repo-scope-paths {
-  overflow: hidden; margin-top: 4px; color: var(--muted);
+  display: block; min-width: 0; overflow: hidden; margin-top: 4px; color: var(--muted);
   font: 600 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap;
 }
 .repository-assignee-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
