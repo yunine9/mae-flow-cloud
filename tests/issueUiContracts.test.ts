@@ -337,3 +337,34 @@ test("团队看板问题卡片入口行为不变:点击即进,不含归属判断
   // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
   assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
 });
+
+test("单号处处可选中复制:DTS 行单号独立于勾选 label,user-select 强制放开", () => {
+  // 单号是绑单/推送分支名的关键操作对象,复制是高频动作;button(会话
+  // 卡片)与 label(DTS 行)内的拖选被浏览器默认禁掉,CSS 强制放开。
+  assert.match(css,
+    /\.task-ticket,\s*\.issue-dts-ticket,\s*\.issue-ticket\s*\{[^}]*user-select:\s*text/);
+  // DTS 行:单号(含远程徽标)是 row-control 的直接子元素,排在勾选
+  // label 之前——拖选单号不会误勾选。
+  const rowSlice = registration.slice(
+    registration.indexOf('className="issue-dts-row-control"'),
+    registration.indexOf("issue-dts-expand"));
+  assert.ok(rowSlice.includes("issue-dts-identity"),
+    "DTS 行模板应包含单号容器");
+  assert.ok(
+    rowSlice.indexOf("issue-dts-identity") < rowSlice.indexOf("issue-dts-row-main"),
+    "单号容器必须在勾选 label 之前(独立可拖选)");
+  const labelSlice = rowSlice.slice(rowSlice.indexOf("issue-dts-row-main"));
+  assert.equal(labelSlice.includes("issue-dts-identity"), false,
+    "勾选 label 内不得再含单号容器");
+});
+
+test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻判定", () => {
+  const events = readFileSync(resolve("web/src/issues/EventsPane.tsx"), "utf-8");
+  const sticky = readFileSync(resolve("web/src/stickyBottom.ts"), "utf-8");
+  // 挂载/激活即无条件回底(用户第一眼看最新);人上翻才撒手是既有语义。
+  assert.match(events, /if \(active\) follow\.resync\(\)/);
+  // 回声守卫:位置停在程序滚动落点上的 scroll 事件不能松开跟随——
+  // 没有它,历史分批装载期间贴底会被竞态打成「已暂停跟随」。
+  assert.match(sticky, /Math\.abs\(node\.scrollTop - setTop\.current\) < 2/);
+  assert.match(sticky, /setTop\.current = node\.scrollHeight/);
+});

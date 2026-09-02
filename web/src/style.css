@@ -2499,13 +2499,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
     grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px;
   }
   .issue-dts-row .issue-dts-row-main > input {
-    grid-column: 1; grid-row: 1 / span 3;
+    grid-column: 1; grid-row: 1 / span 2;
   }
-  .issue-dts-row .issue-dts-identity { grid-column: 2; grid-row: 1; }
   .issue-dts-row .issue-dts-title {
-    grid-column: 2; grid-row: 2; white-space: normal; overflow-wrap: anywhere;
+    grid-column: 2; grid-row: 1; white-space: normal; overflow-wrap: anywhere;
   }
-  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 3; }
+  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 2; }
 }
 .issue-dts-search-count.remote { color: #b7791f; }
 .issue-dts-remote {
@@ -2546,15 +2545,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-row.on { border-color: var(--accent); }
 .issue-dts-row.expanded { border-color: var(--accent); }
 .issue-dts-row-control {
-  display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: stretch;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) 44px; align-items: stretch;
 }
 .issue-dts-row-main {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center; gap: 10px;
-  min-width: 0; padding: 8px 6px 8px 12px; cursor: pointer;
+  min-width: 0; padding: 8px 6px 8px 10px; cursor: pointer;
+}
+.issue-dts-row-control > .issue-dts-identity {
+  align-self: center; padding: 8px 0 8px 12px;
 }
 .issue-dts-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .issue-dts-ticket { color: var(--accent); font: 700 var(--font-size-assist) var(--font-mono); }
+/* 单号是同事间要抄的关键对象(绑单、推送分支名都以它为键):所有出现
+   单号的地方放开文本选中。button(会话卡片 summary)与 label(DTS 行)
+   内的拖选被浏览器默认禁掉,这里强制开启——DTS 行单号已挪出勾选
+   label,拖选不会误勾;卡片内拖选可能顺带展开卡片,属可接受代价。 */
+.task-ticket, .issue-dts-ticket, .issue-ticket {
+  user-select: text; -webkit-user-select: text;
+}
 .issue-dts-title { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .issue-dts-status { color: var(--faint); }
 .issue-dts-expand {

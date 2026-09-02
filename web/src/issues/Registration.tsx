@@ -1027,15 +1027,17 @@ function DtsRegister({
             return <div key={ticket.ticket}
               className={`issue-dts-row${selected.includes(ticket.ticket) ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
               <div className="issue-dts-row-control">
+                {/* 单号在勾选 label 之外:拖选复制单号不会误勾选——单号
+                    是绑单/推送分支名的关键操作对象,复制是高频动作。 */}
+                <span className="issue-dts-identity">
+                  <span className="issue-dts-ticket">{ticket.ticket}</span>
+                  {isRemote && <span className="issue-dts-remote">远程</span>}
+                </span>
                 <label className="issue-dts-row-main">
                   <input type="checkbox" checked={selected.includes(ticket.ticket)}
                     onChange={(event) => setSelected((current) => event.target.checked
                       ? [...current, ticket.ticket]
                       : current.filter((item) => item !== ticket.ticket))} />
-                  <span className="issue-dts-identity">
-                    <span className="issue-dts-ticket">{ticket.ticket}</span>
-                    {isRemote && <span className="issue-dts-remote">远程</span>}
-                  </span>
                   <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
                   {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
                 </label>
