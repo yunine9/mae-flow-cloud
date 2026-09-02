@@ -25,6 +25,9 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 
 export type AnnotationKind = "doc" | "code";
+/** 一条检视意见首先是在找谁做下一步，不是天然都在命令 Agent。旧账
+ * 没有 route，读侧一律按 agent 解释，避免升级后改变历史任务语义。 */
+export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
@@ -34,6 +37,8 @@ export type SentVia =
   | "pipeline_evidence"
   /** MR 已创建后的本地检视：进入当前 MR 的持续修复环。 */
   | "review_repair"
+  /** “责任人答复 / 决策后处理”已送到责任人，尚未交给 Agent。 */
+  | "owner_pending"
   /** 任务正等人决定时提交:先成为团队事实(阻塞放行),正文随下一次
    * 决定的 continuation 送达 Agent。检视人不必等任务恰好 running
    * (MFC-022:曾经这窗口里没有任何合法提交路径)。 */
@@ -55,6 +60,14 @@ export interface AnnotationResponse {
   responded_at: string;
 }
 
+/** 责任人的原话单独记账。它不是 Agent 回执，也不能被页面混写成
+ * “Agent 已处理”；decision 类型会把这段原话作为后续实现依据送给 Agent。 */
+export interface AnnotationOwnerReply {
+  author: string;
+  text: string;
+  replied_at: string;
+}
+
 export interface Annotation {
   id: string;
   author: string;
@@ -71,11 +84,16 @@ export interface Annotation {
   /** 最近一次修改意见的时间。修改留在 append-only 台账里，不覆盖旧记录。 */
   edited_at?: string;
   kind: AnnotationKind;
+  /** 缺省 = agent，用于兼容上线前的 annotations.jsonl。 */
+  route?: AnnotationRoute;
+  /** 非 agent 意见的责任人账号，由任务服务端按当前任务责任人固定。 */
+  assignee?: string;
   status: AnnotationStatus;
   sent_at?: string;
   sent_via?: SentVia;
   /** Agent 对当前 rework revision 的逐条回应。 */
   response?: AnnotationResponse;
+  owner_reply?: AnnotationOwnerReply;
   verified_at?: string;
   /** 非作者(管理员)代确认时记谁点的;作者本人裁决不填。 */
   verified_by?: string;
@@ -93,6 +111,8 @@ export interface AnnotationInput {
   anchor: string;
   note: string;
   kind: AnnotationKind;
+  route?: AnnotationRoute;
+  assignee?: string;
 }
 
 type Operation =
@@ -102,6 +122,7 @@ type Operation =
   | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string }
   | { op: "respond"; id: string; response: AnnotationResponse }
+  | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply }
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string };
@@ -163,6 +184,7 @@ export class AnnotationStore {
           found.sent_at = undefined;
           found.sent_via = undefined;
           found.response = undefined;
+          found.owner_reply = undefined;
           found.verified_at = undefined;
         }
         continue;
@@ -188,6 +210,12 @@ export class AnnotationStore {
         }
         continue;
       }
+      if (operation.op === "owner_reply") {
+        const found = byId.get(operation.id);
+        if (!found || found.status !== "sent") continue;
+        found.owner_reply = operation.reply;
+        continue;
+      }
       if (operation.op === "verify") {
         const found = byId.get(operation.id);
         if (found) {
@@ -205,6 +233,7 @@ export class AnnotationStore {
         found.sent_at = undefined;
         found.sent_via = undefined;
         found.response = undefined;
+        found.owner_reply = undefined;
         found.verified_at = undefined;
         if (operation.anchor && operation.anchor !== found.anchor) {
           found.anchor_was = found.anchor;
@@ -245,6 +274,8 @@ export class AnnotationStore {
       anchor,
       note,
       kind: input.kind === "code" ? "code" : "doc",
+      ...(input.route && input.route !== "agent" ? { route: input.route } : {}),
+      ...(input.assignee?.trim() ? { assignee: input.assignee.trim() } : {}),
       status: "draft",
     };
     this.append({ op: "add", record });
@@ -330,6 +361,41 @@ export class AnnotationStore {
       responded_at: input.responded_at ?? new Date().toISOString(),
     };
     this.append({ op: "respond", id, response });
+    return this.list().find((item) => item.id === id)!;
+  }
+
+  /** 责任人回答一条“问责任人 / 决策后处理”意见。只有指派对象可以答；
+   * 管理员代答也应由上层显式传 override，并在 author 中留下真实操作者。 */
+  replyAsOwner(
+    id: string,
+    by: string,
+    text: string,
+    override = false,
+  ): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if ((found.route ?? "agent") === "agent") {
+      throw new AnnotationError("这条意见是交给 Agent 处理的，不需要责任人答复");
+    }
+    if (found.status !== "sent") {
+      throw new AnnotationError("这条意见尚未提交，暂时不能答复");
+    }
+    if (found.owner_reply) {
+      throw new AnnotationError("责任人已经答复；如需改变结论，请由提出人重新发起一轮");
+    }
+    if (found.assignee && found.assignee !== by && !override) {
+      throw new AnnotationPermissionError(
+        `这条意见指派给 ${found.assignee}，只能由他答复`,
+      );
+    }
+    const normalized = String(text ?? "").trim();
+    if (!normalized) throw new AnnotationError("责任人答复不能为空");
+    const reply: AnnotationOwnerReply = {
+      author: by,
+      text: normalized,
+      replied_at: new Date().toISOString(),
+    };
+    this.append({ op: "owner_reply", id, reply });
     return this.list().find((item) => item.id === id)!;
   }
 

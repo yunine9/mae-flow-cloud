@@ -425,6 +425,60 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
   "MR 修复缺逐条回执时不能误开放通过");
 });
 
+test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处理", () => {
+  const common = {
+    taskId: "task-routing",
+    checks: [],
+    canOperate: true,
+    canOverride: false,
+    taskStatus: "running",
+    reviewReady: false,
+    reviewAnnotationIds: [],
+    mergeRequestOpen: false,
+    onChanged: () => undefined,
+  };
+  const waitingOwner = annotation({
+    id: "owner-question", author: "reviewer", route: "owner_reply",
+    assignee: "owner", sent_via: "owner_pending", response: undefined,
+  });
+  const ownerHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, viewerUsername: "owner", items: [waitingOwner] },
+  ));
+  assert.match(ownerHtml, /责任人答复 · owner/);
+  assert.match(ownerHtml, /等待责任人答复/);
+  assert.match(ownerHtml, />回答这条意见<\/button>/);
+  assert.doesNotMatch(ownerHtml, /Agent：已处理/);
+
+  const answered = annotation({
+    ...waitingOwner,
+    owner_reply: {
+      author: "owner", text: "旧接口不支持多通道",
+      replied_at: "2026-08-30T00:02:00.000Z",
+    },
+  });
+  assert.equal(annotationPanel.authorVerdictReady(
+    answered, "running", false), true,
+  "责任人已经答复时，提出人不必等任务进入人工阶段即可确认");
+  const reviewerHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, viewerUsername: "reviewer", items: [answered] },
+  ));
+  assert.match(reviewerHtml, /旧接口不支持多通道/);
+  assert.match(reviewerHtml, />仍有疑问<\/button>/);
+  assert.match(reviewerHtml, />确认已解答<\/button>/);
+
+  const decisionHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, viewerUsername: "owner", items: [annotation({
+      id: "owner-decision", author: "reviewer", route: "owner_decision",
+      assignee: "owner", sent_via: "owner_pending", response: undefined,
+    })] },
+  ));
+  assert.match(decisionHtml, /决策后处理 · owner/);
+  assert.match(decisionHtml, />作出决定<\/button>/);
+});
+
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {
   const actionable = annotation({
     id: "review-actionable",
