@@ -3176,13 +3176,25 @@ export type IssueGateKind =
   | "env_needed"
   // 推送前过目闸(ADR-0009):push_branch 的交付轴硬闸,不绑阶段;
   // 卡带服务端生成的变更摘要(context 字段),确认产一次性令牌。
-  | "push_confirm";
+  | "push_confirm"
+  // skill 圈选闸(ADR-0011):分析入口的多选闸,月光关档举起;
+  // 勾选清单走 selection 专用口,码表只有「都不用」单码。
+  | "skill_select";
 
 /** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
  * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */
 export interface IssueGateOption {
   code: string;
   label: string;
+}
+
+/** skill 圈选清单项(服务端 IssueSkillChoice 镜像):path 是会话工作区
+ * 相对路径,多仓同名 skill 靠仓段天然唯一;repo 是仓地址(分组展示)。 */
+export interface IssueSkillChoice {
+  path: string;
+  repo: string;
+  name: string;
+  description: string;
 }
 
 export interface IssueGateCard {
@@ -3199,6 +3211,8 @@ export interface IssueGateCard {
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: "logs" | "deploy";
+  /** 仅 skill_select:扫描所得的圈选清单,作答 selection 必须是其子集。 */
+  skills?: IssueSkillChoice[];
   proposal?: {
     conclusion?: "issue" | "non_issue";
     summary?: string;
@@ -3242,6 +3256,9 @@ export interface IssueSummary {
   /** 检视回合进行中(ADR-0007):意见已提交、整体回退到分析重跑,
    * 期间检视入口置灰;新一轮 submit_analysis 时清除。 */
   review_active?: boolean;
+  /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合;字段在场
+   * =已作答(skills 空=明确跳过)。工作台据此展示当前必读集合。 */
+  skill_selection?: { at: string; skills: IssueSkillChoice[] };
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
   /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */
@@ -3305,9 +3322,12 @@ export interface IssueWaitingCard {
   context?: string;
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
-   * env_needed 据此渲染专用环境表单,其余闸仍走通用选项卡。 */
+   * env_needed 据此渲染专用环境表单,skill_select 据此渲染多选圈选卡,
+   * 其余闸仍走通用选项卡。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
+  /** 仅 skill_select:圈选清单(会话视图从 detail.gate.skills 带过来)。 */
+  gate_skills?: IssueSkillChoice[];
   /** 以下为服务端 humanGate 记录随线携带的内部账(卡片只渲染上面的
    * 子集):契约测试(issueFlowContract)钉整卡形状,服务端加字段先
    * 来这里补镜再让测试转绿。 */
@@ -3432,6 +3452,8 @@ export function answerIssue(id: string, input: {
   decision: string;
   code?: string;
   answers?: Record<string, string>;
+  /** skill 圈选闸(ADR-0011)的勾选清单;空数组=「都不用」。 */
+  selection?: string[];
   notes?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/decision`, {

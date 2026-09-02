@@ -653,12 +653,18 @@ export async function handleIssueRoutes(
         ? Object.fromEntries(Object.entries(body.answers)
           .map(([key, value]) => [key, String(value)]))
         : undefined;
+      // skill 圈选闸(ADR-0011)的勾选清单:字符串数组,服务端按闸上
+      // 清单核子集——浏览器自报路径在裁决层被拒。
+      const selection = Array.isArray(body.selection)
+        ? body.selection.map((item: unknown) => String(item))
+        : undefined;
       return done(200, issueFlow.answer(id, {
         state_version: Number(body.state_version),
         decision: String(body.decision ?? ""),
         // 决策码(平台闸的裁决协议):与 decision 并行携带,文案不是匹配键。
         ...(body.code !== undefined ? { code: String(body.code) } : {}),
         ...(answers ? { answers } : {}),
+        ...(selection ? { selection } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
       }));
     }

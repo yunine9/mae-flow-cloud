@@ -110,7 +110,8 @@ export function IssueSessionView({
 
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
   // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
-  // gate_kind/scope 随卡带给决策卡:env_needed 在那里换专用环境表单。
+  // gate_kind/scope 随卡带给决策卡:env_needed 换专用环境表单,
+  // skill_select 换多选圈选卡(ADR-0011)。
   const gateCard = detail.status === "waiting_user" && detail.gate
     ? {
         waiting_id: detail.gate.id,
@@ -120,6 +121,7 @@ export function IssueSessionView({
         created_at: detail.gate.created_at,
         gate_kind: detail.gate.kind,
         gate_scope: detail.gate.scope,
+        gate_skills: detail.gate.skills,
       }
     : undefined;
   const waiting = gateCard
@@ -129,12 +131,14 @@ export function IssueSessionView({
   const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
 
   /** 问题卡作答:decision=人话文本;code=平台闸决策码(裁决协议);
-   * answers=Agent 卡逐题作答(码或自由文本)。统一经 answerIssue 提交。 */
+   * answers=Agent 卡逐题作答(码或自由文本);selection=skill 圈选闸
+   * 的勾选清单(ADR-0011)。统一经 answerIssue 提交。 */
   async function answer(
     decision: string,
     code?: string,
     answers?: Record<string, string>,
     notes?: string,
+    selection?: string[],
   ): Promise<boolean> {
     if (!waiting) return false;
     return perform(() => answerIssue(detail.id, {
@@ -143,6 +147,7 @@ export function IssueSessionView({
       ...(code ? { code } : {}),
       ...(answers ? { answers } : {}),
       ...(notes ? { notes } : {}),
+      ...(selection ? { selection } : {}),
     }));
   }
   /** env_needed 闸的专用提交口(POST /issues/:id/environment):密码只在

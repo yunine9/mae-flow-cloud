@@ -183,9 +183,9 @@ function initialView(user: AuthUser): View {
  * 待办的既有流程;push 默认开,只落显式的关。 */
 const INTERVENTION_PRESETS = [
   { key: "full", moonlight: false, push: true, title: "全程把关",
-    hint: "过程节点等你拍板,验证后确认最终交付范围（默认）" },
+    hint: "过程节点等你拍板,分析前先圈选仓内排障知识;验证后确认最终交付范围（默认）" },
   { key: "process", moonlight: false, push: false, title: "逐步确认",
-    hint: "过程节点等你拍板,交付信任三道门禁" },
+    hint: "过程节点等你拍板,分析前先圈选仓内排障知识;交付信任三道门禁" },
   { key: "delivery", moonlight: true, push: true, title: "只看交付",
     hint: "过程自动放行,验证后确认最终交付范围" },
   { key: "auto", moonlight: true, push: false, title: "全自动",

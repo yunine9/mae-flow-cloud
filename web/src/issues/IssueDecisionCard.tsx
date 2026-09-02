@@ -20,9 +20,14 @@
  * 保存;配置后会按 ADR-0003 进入本问题会话的 AI 上下文供工具消费,
  * 但不出现在会话列表、状态摘要或事件流)。闸只收 地址+后台密码:现场补配的流程(拉日志/换库)
  * 碰不到网管页面,没有页面凭据的位置。
+ *
+ * 另一例外是 skill_select 闸(ADR-0011):多选圈选卡——清单来自服务端
+ * 扫描已拉仓的 .cac/skills,按仓分组;提交走 answer 的 selection 专用
+ * 口(必须是清单子集,自报路径服务端拒收),空选=「都不用,AI 自主」。
+ * 卡上没有「AI 推荐」:本卡只在月光关时举起、永远人答,推荐没有下游。
  */
 import { useRef, useState } from "react";
-import type { IssueEnvironmentForm, IssueWaitingCard } from "../api";
+import type { IssueEnvironmentForm, IssueSkillChoice, IssueWaitingCard } from "../api";
 import { Markdown } from "../markdown";
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
@@ -35,7 +40,8 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   busy: boolean;
   /** 组装好的答复。返回 true 表示提交成功(此时父级会带着新详情回来)。 */
   onAnswer: (decision: string, code?: string,
-    answers?: Record<string, string>, notes?: string) => Promise<boolean>;
+    answers?: Record<string, string>, notes?: string,
+    selection?: string[]) => Promise<boolean>;
   /** env_needed 闸的专用提交口(会话视图接到 /issues/:id/environment)。 */
   onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
@@ -52,6 +58,23 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
         <Markdown text={waiting.context} />
       </div>}
       <EnvNeededForm busy={busy} onSubmit={onEnvironment} />
+    </section>;
+  }
+  if (waiting.gate_kind === "skill_select") {
+    return <section className="issue-decision" aria-label="圈选必读知识">
+      <header className="issue-decision-head">
+        <span className="decision-kicker">圈选必读知识</span>
+        <span className="issue-decision-count">
+          {(waiting.gate_skills ?? []).length} 个可选
+        </span>
+      </header>
+      {waiting.context && <div className="issue-decision-context">
+        <div className="context-label">决策背景</div>
+        <Markdown text={waiting.context} />
+      </div>}
+      <SkillSelectForm busy={busy} skills={waiting.gate_skills ?? []}
+        onSubmit={(selection, decision) =>
+          onAnswer(decision, undefined, undefined, undefined, selection)} />
     </section>;
   }
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
@@ -118,6 +141,80 @@ function EnvNeededForm({ busy, onSubmit }: {
     <div className="issue-decision-submit">
       <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
         {busy ? "提交中…" : "保存并继续"}
+      </button>
+    </div>
+  </div>;
+}
+
+/** skill 圈选表单(ADR-0011):按仓分组的多选清单,path 是提交身份
+ * (仓段天然区分同名 skill)。「确认勾选」至少勾一项才可点;「都不用」
+ * 提交空选,AI 按方法论取用次序自主——两条路的裁决在服务端同口。 */
+function SkillSelectForm({ busy, skills, onSubmit }: {
+  busy: boolean;
+  skills: IssueSkillChoice[];
+  onSubmit: (selection: string[], decision: string) => Promise<boolean>;
+}) {
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = useState("");
+  // 按仓分组,组内保持扫描顺序;同名 skill 靠仓段区分,不拼假名字。
+  const groups: Array<{ repo: string; items: IssueSkillChoice[] }> = [];
+  for (const skill of skills) {
+    const group = groups.find((candidate) => candidate.repo === skill.repo);
+    if (group) group.items.push(skill);
+    else groups.push({ repo: skill.repo, items: [skill] });
+  }
+
+  function toggle(path: string) {
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  async function submit(selection: string[]) {
+    if (busy) return;
+    const chosen = skills.filter((skill) => selection.includes(skill.path));
+    const ok = await onSubmit(
+      selection,
+      chosen.length
+        ? `圈选必读 skill:${chosen.map((skill) => skill.name).join("、")}`
+        : "都不用,AI 按取用次序自主");
+    setError(ok ? "" : "提交未成功,请稍后重试");
+  }
+
+  return <div className="issue-decision-env">
+    {groups.map((group) => <fieldset className="question" key={group.repo}>
+      <legend><span className="question-text">{group.repo}</span></legend>
+      <div className="options cards">
+        {group.items.map((skill) => {
+          const chosen = picked.has(skill.path);
+          return <button type="button" key={skill.path} role="checkbox"
+            aria-checked={chosen}
+            className={`option${chosen ? " picked" : ""}`}
+            onClick={() => toggle(skill.path)}>
+            <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
+            <span className="option-body"><span className="option-title">
+              {skill.name}
+            </span>
+            {skill.description && <span className="option-hint">
+              {skill.description}
+            </span>}
+            </span>
+          </button>;
+        })}
+      </div>
+    </fieldset>)}
+    {error && <p className="issue-decision-note" role="alert">{error}</p>}
+    <div className="issue-decision-submit">
+      <button type="button" disabled={!picked.size || busy}
+        onClick={() => void submit([...picked])}>
+        {busy ? "提交中…" : `确认勾选(${picked.size})`}
+      </button>
+      <button type="button" className="skill-skip" disabled={busy}
+        onClick={() => void submit([])}>
+        都不用,AI 按取用次序自主
       </button>
     </div>
   </div>;
