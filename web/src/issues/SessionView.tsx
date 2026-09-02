@@ -128,7 +128,9 @@ export function IssueSessionView({
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
   // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
   // gate_kind/scope 随卡带给决策卡:env_needed 换专用环境表单,
-  // skill_select 换多选圈选卡(ADR-0011)。
+  // skill_select 换多选圈选卡(ADR-0011),pipeline_unfixable/
+  // pipeline_evidence 换流水线红灯人工卡(票 03),gate_pipeline 带
+  // 闸归属的仓与提交。
   const gateCard = detail.status === "waiting_user" && detail.gate
     ? {
         waiting_id: detail.gate.id,
@@ -139,6 +141,7 @@ export function IssueSessionView({
         gate_kind: detail.gate.kind,
         gate_scope: detail.gate.scope,
         gate_skills: detail.gate.skills,
+        gate_pipeline: detail.gate.pipeline,
       }
     : undefined;
   const waiting = gateCard

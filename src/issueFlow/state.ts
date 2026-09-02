@@ -203,9 +203,16 @@ export type IssueGateKind =
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
   | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
                        // 确认产一次性令牌放行一次推送;不绑阶段(两模式同过)。
-  | "skill_select";    // skill 圈选(ADR-0011):analyze 入口的多选闸,
+  | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
                        // 月光关档由归属人圈定业务仓 skill 必读集合;
                        // 作答走 selection 专用口(与 env_needed 表单同款)。
+  | "pipeline_unfixable" // 流水线不可修告警(2026-09-01,票 03):红灯失败项
+                         // 全是不可自动修复的工具告警——人在交付平台处理/
+                         // 豁免后于卡上作答,平台重置监看账重看同一 SHA;
+                         // 问的是人工处理事实,月光永不代答。
+  | "pipeline_evidence"; // 流水线证据回灌(同票):红灯但没有一条可定位的
+                         // 具体报错,为免猜改停机——请人把报错原文粘贴进
+                         // 作答(自由文本),作答即证据回灌+续跑修复回合。
 
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
@@ -274,6 +281,10 @@ export interface IssueGate {
    * 仍在 GATE_OPTIONS)。作答的 selection 必须是这里 path 的子集,
    * 浏览器自报路径一律拒绝(与需求侧仓内能力发现同一纪律)。 */
   skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸属于哪个仓的哪次提交
+   * (作答后续跑按它重置监看账/注入证据——同 SHA 重新监看或带着人工
+   * 原文开修复回合)。卡面(卡面与作答协议)见 stageRegistry 码表。 */
+  pipeline?: { repo: string; sha: string };
   /** 机器可读提案(结论闸带 AI 的结论与摘要,用户过目后确认)。 */
   proposal?: {
     conclusion?: "issue" | "non_issue";
@@ -612,6 +623,8 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   env_needed: "网管环境配置",
   push_confirm: "推送确认",
   skill_select: "skill 圈选",
+  pipeline_unfixable: "流水线不可修告警",
+  pipeline_evidence: "流水线报错回灌",
 };
 
 export function raiseGate(
@@ -624,6 +637,9 @@ export function raiseGate(
   /** 仅 skill_select:扫描所得的圈选清单(动态数据,非文案——选项
    * 码表照旧出自 GATE_OPTIONS)。其余闸不传,在场即阶段配置错误。 */
   skills?: IssueSkillChoice[],
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交
+   * (作答续跑的重新监看/证据注入按它定位)。 */
+  pipeline?: IssueGate["pipeline"],
 ): void {
   const recommended = gateRecommendedCode(kind, proposal);
   state.gate = {
@@ -641,6 +657,7 @@ export function raiseGate(
     ...(context ? { context } : {}),
     ...(scope ? { scope } : {}),
     ...(skills ? { skills } : {}),
+    ...(pipeline ? { pipeline } : {}),
     created_at: new Date().toISOString(),
   };
   recordTransition(state, {

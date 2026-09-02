@@ -25,6 +25,14 @@
  * 扫描已拉仓的 .cac/skills,按仓分组;提交走 answer 的 selection 专用
  * 口(必须是清单子集,自报路径服务端拒收),空选=「都不用,AI 自主」。
  * 卡上没有「AI 推荐」:本卡只在月光关时举起、永远人答,推荐没有下游。
+ *
+ * 再一类例外是流水线红灯人工闸(2026-09-01,票 03):pipeline_unfixable
+ * (不可修告警)与 pipeline_evidence(证据回灌)同卡形态、两种作答面。
+ * 卡面(context)是服务端组装的失败摘要/逐维度明细/产物位置/处置指引,
+ * markdown 直出;gate_pipeline 带闸归属的仓与提交。不可修卡就一个出口
+ * ——「已在平台处理/豁免,重新监看」(code=resume),可附补充说明;
+ * 证据卡是自由文本主通道(粘贴报错原文,空文本不可提交,code=supply)。
+ * 两张卡问的都是人工事实,没有「AI 推荐」。
  */
 import { useRef, useState } from "react";
 import type { IssueEnvironmentForm, IssueSkillChoice, IssueWaitingCard } from "../api";
@@ -76,6 +84,10 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
         onSubmit={(selection, decision) =>
           onAnswer(decision, undefined, undefined, undefined, selection)} />
     </section>;
+  }
+  if (waiting.gate_kind === "pipeline_unfixable"
+      || waiting.gate_kind === "pipeline_evidence") {
+    return <PipelineGateCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
   }
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
 }
@@ -224,6 +236,88 @@ function SkillSelectForm({ busy, skills, onSubmit }: {
     </div>
   </div>;
 }
+
+/** 流水线红灯人工闸卡(2026-09-01,票 03):不可修告警与证据回灌同卡
+ * 形态、两种作答面。卡面(context,服务端组装的失败摘要/逐维度明细/
+ * 产物位置/处置指引)markdown 直出;仓与提交按 gate_pipeline 陈列。
+ * - pipeline_unfixable:单出口作答「已在平台处理/豁免,重新监看」
+ *   (code=resume),可附补充说明(随答复入账);
+ * - pipeline_evidence:自由文本主通道——粘贴报错原文提交(code=supply),
+ *   原文作为人工证据注入下一修复回合;空文本不可提交(服务端同尺打回)。 */
+function PipelineGateCard({ waiting, busy, onAnswer }: {
+  waiting: IssueWaitingCard;
+  busy: boolean;
+  onAnswer: (decision: string, code?: string,
+    answers?: Record<string, string>, notes?: string) => Promise<boolean>;
+}) {
+  const evidence = waiting.gate_kind === "pipeline_evidence";
+  const [text, setText] = useState("");
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+  const ready = evidence ? !!text.trim() : true;
+  // 码与文案来自服务端下发的 options 镜像(前端不推断状态);单码闸,
+  // 缺 options 时回退本地字面量仅为极端旧现场的兜底显示。
+  const option = waiting.question?.questions?.[0]?.options?.[0];
+  const code = option?.code ?? (evidence ? "supply" : "resume");
+  const actionLabel = option?.label
+    ?? (evidence ? "已粘贴报错原文,继续修复" : "已在平台处理/豁免,重新监看");
+
+  async function submit() {
+    if (!ready || busy) return;
+    const decision = evidence ? text.trim() : actionLabel;
+    const ok = await onAnswer(
+      decision,
+      code,
+      undefined,
+      evidence ? undefined : (notes.trim() || undefined));
+    setError(ok ? "" : "提交未成功,请稍后重试");
+  }
+
+  return <section className="issue-decision"
+    aria-label={evidence ? "回灌流水线报错原文" : "流水线红灯人工处理"}>
+    <header className="issue-decision-head">
+      <span className="decision-kicker">
+        {evidence ? "流水线红灯·回灌报错原文" : "流水线红灯·需要人工处理"}
+      </span>
+      <span className="issue-decision-count">
+        {evidence ? "粘贴原文后继续修复" : "交付平台处理/豁免"}
+      </span>
+    </header>
+    {waiting.gate_pipeline && <p className="issue-decision-note">
+      仓 {waiting.gate_pipeline.repo} · 提交 {waiting.gate_pipeline.sha.slice(0, 12)}
+    </p>}
+    {waiting.context && <div className="issue-decision-context">
+      <div className="context-label">{evidence ? "缺口详情" : "失败详情"}</div>
+      <Markdown text={waiting.context} />
+    </div>}
+    {evidence
+      ? <div className="issue-decision-env">
+          <label className="issue-field wide">
+            <span>报错原文(带文件/行号/堆栈)</span>
+            <textarea rows={8} className="custom-input"
+              placeholder="把交付平台上失败项的报错原文粘贴到这里——它会作为人工证据注入下一修复回合…"
+              value={text}
+              onChange={(event) => setText(event.target.value)} />
+          </label>
+        </div>
+      : <div className="issue-decision-env">
+          <label className="issue-field wide">
+            <span>补充说明(可选):在平台做了什么处理</span>
+            <textarea rows={3} className="custom-input"
+              placeholder="如:已豁免规则 R1 / 已处理 SuperChecker 告警…"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)} />
+          </label>
+        </div>}
+    {error && <p className="issue-decision-note" role="alert">{error}</p>}
+    <div className="issue-decision-submit">
+      <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+        {busy ? "提交中…" : actionLabel}
+      </button>
+    </div>
+  </section>;
+}
+
 
 export function areIssueQuestionsComplete(
   questions: Array<{ options: ReadonlyArray<unknown> }>,

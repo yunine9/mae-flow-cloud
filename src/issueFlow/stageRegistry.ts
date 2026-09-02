@@ -415,6 +415,23 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
       { code: "skip", label: "都不用,AI 按取用次序自主" },
     ],
   },
+  pipeline_unfixable: {
+    // 流水线不可修告警(2026-09-01,票 03):红灯失败项全是不可自动
+    // 修复的工具告警,问的是"人是否已在交付平台处理/豁免"这一人工
+    // 事实——宿主无从核验,月光永不代答(与 env_verify 同类),故无
+    // 推荐码。作答即开跑:重置该仓监看账,重新监看同一 SHA。
+    options: [
+      { code: "resume", label: "已在平台处理/豁免,重新监看" },
+    ],
+  },
+  pipeline_evidence: {
+    // 流水线证据回灌(同票):主通道是卡上的自由文本(粘贴报错原文),
+    // 码只是提交凭据(只贴文本不带码也认,见 service 的归码);无推荐
+    // ——原文只有人拿得到,机器不代写(月光代答同此守卫)。
+    options: [
+      { code: "supply", label: "已粘贴报错原文,继续修复" },
+    ],
+  },
 };
 
 /** 闸卡的推荐码(questions[].recommended 与 Agent 卡同一键)。分析
@@ -445,6 +462,8 @@ export type GateVerdict =
   | "fail"          // env_verify+fail:验证不通过回退
   | "grant_push"    // push_confirm+push:写一次性令牌,原阶段续跑
   | "hold_push"     // push_confirm 其余答复:不产令牌,决策入账续跑
+  | "resume_watch"  // pipeline_unfixable+resume:重置监看账重看同一 SHA
+  | "human_evidence" // pipeline_evidence+supply:原文入账,开修复回合
   | "unrecognized"; // 认不得的答复(仅 env_verify 打回,其余按补充意见)
 
 /** 决策码分派单点。语义钉死:
@@ -479,6 +498,15 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
       return "unrecognized";
     case "push_confirm":
       return code === "push" ? "grant_push" : "hold_push";
+    case "pipeline_unfixable":
+      // 不可修告警闸只有"已在平台处理/豁免"一个出口:答了就重置监看
+      // 账重看同一 SHA;认不得的答复原样打回(人工事实不猜)。
+      return code === "resume" ? "resume_watch" : "unrecognized";
+    case "pipeline_evidence":
+      // 证据回灌闸:码(或从粘贴文本归码,见 service)即提交,文本本体
+      // 才是证据;空文本在 service 的专用检查里打回,这里认不得的码
+      // 同样原样打回。
+      return code === "supply" ? "human_evidence" : "unrecognized";
   }
 }
 

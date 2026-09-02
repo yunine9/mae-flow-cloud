@@ -139,6 +139,49 @@ test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼�
   assert.match(issueFlowDoc, /push_confirm|推送前过目/);
 });
 
+test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、作答协议与查看模式收闸", () => {
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const stageRegistry = readFileSync(
+    resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  // 前端闸种镜像:两种新闸都要进 IssueGateKind,pipeline 定位字段随卡
+  // 上线(镜像不同步=契约对账当场红的同一教训)。
+  assert.match(apiTypes, /\|\s*"pipeline_unfixable"/,
+    "web/src/api.ts 的 IssueGateKind 缺 pipeline_unfixable 镜像");
+  assert.match(apiTypes, /\|\s*"pipeline_evidence"/,
+    "web/src/api.ts 的 IssueGateKind 缺 pipeline_evidence 镜像");
+  assert.match(apiTypes, /pipeline\?: \{ repo: string; sha: string \}/);
+  assert.match(apiTypes, /gate_pipeline\?: \{ repo: string; sha: string \}/);
+  // 码表:服务端注册表的作答码(release=重新监看 / supply=回灌原文),
+  // 两卡都无推荐码(人工事实,月光永不代答的同一理由)。
+  assert.match(stageRegistry,
+    /pipeline_unfixable:\s*\{[\s\S]*?code:\s*"resume",\s*label:\s*"已在平台处理\/豁免,重新监看"/);
+  assert.match(stageRegistry,
+    /pipeline_evidence:\s*\{[\s\S]*?code:\s*"supply",\s*label:\s*"已粘贴报错原文,继续修复"/);
+  // 月光守卫落在月光判定之前(与 push_confirm 同款守卫位)。
+  assert.match(issueService,
+    /if \(gate\.kind === "push_confirm"\) return;[\s\S]*?if \(gate\.kind === "skill_select"\) return;[\s\S]*?if \(gate\.kind === "pipeline_unfixable"\) return;[\s\S]*?if \(gate\.kind === "pipeline_evidence"\) return;/);
+  // 决策卡:两种新闸各有一条卡面分支(共用 PipelineGateCard 组件),
+  // 证据卡是自由文本主通道(空文本不可提交),作答提交按码走协议。
+  assert.match(decisions, /gate_kind === "pipeline_unfixable"/);
+  assert.match(decisions, /gate_kind === "pipeline_evidence"/);
+  assert.match(decisions, /evidence \? "supply" : "resume"/);
+  assert.match(decisions, /const ready = evidence \? !!text\.trim\(\) : true;/);
+  assert.match(decisions, /报错原文粘贴到这里/);
+  // 会话视图:闸的 pipeline 定位随卡下传(卡面陈列仓与提交)。
+  assert.match(sessionView, /gate_pipeline: detail\.gate\.pipeline/);
+  // 查看模式:作答卡只在归属分支,新闸与所有等待卡走同一个
+  // canOperate 分派(事实卡照看题面,零作答控件)——既有收闸语义
+  // 对新闸天然成立,这里钉住分派没被绕开。
+  assert.match(rail,
+    /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
+  // 事实卡按闸种点名"等归属人做什么"(不可修=平台处理,证据=回灌原文)。
+  assert.match(rail, /等归属人在交付平台处理\/豁免流水线告警/);
+  assert.match(rail, /等归属人回灌流水线报错原文/);
+});
+
 test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档纪律在位", () => {
   const confirmDialog = readFileSync(
     resolve("web/src/ConfirmDialog.tsx"), "utf-8");

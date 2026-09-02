@@ -32,6 +32,8 @@ export interface IssueWaitingSnapshot {
   /** 平台闸专用:env_needed 闸在决策卡上渲染专用环境表单。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交。 */
+  gate_pipeline?: { repo: string; sha: string };
 }
 
 export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
@@ -162,13 +164,19 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
 }
 
 /** 查看模式的等待卡事实面:决策背景、题面与选项照常陈列(替归属人
- * 判断卡在哪、值不值得催),作答控件一个不渲染。 */
+ * 判断卡在哪、值不值得催),作答控件一个不渲染。流水线红灯人工闸
+ * (票 03)如实点名"等归属人处理",其余闸沿用通用文案。 */
 function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingSnapshot }) {
   const questions = waiting.question?.questions ?? [];
+  const head = waiting.gate_kind === "pipeline_unfixable"
+    ? "等归属人在交付平台处理/豁免流水线告警"
+    : waiting.gate_kind === "pipeline_evidence"
+      ? "等归属人回灌流水线报错原文"
+      : waiting.gate_kind === "env_needed"
+        ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
+        : "等归属人答复";
   return <div className="issue-rail-card is-waiting">
-    <strong>{waiting.gate_kind === "env_needed"
-      ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
-      : "等归属人答复"}</strong>
+    <strong>{head}</strong>
     {waiting.context && <div className="issue-waiting-context">
       <Markdown text={waiting.context} />
     </div>}

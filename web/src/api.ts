@@ -3307,7 +3307,12 @@ export type IssueGateKind =
   | "push_confirm"
   // skill 圈选闸(ADR-0011):分析入口的多选闸,月光关档举起;
   // 勾选清单走 selection 专用口,码表只有「都不用」单码。
-  | "skill_select";
+  | "skill_select"
+  // 流水线红灯人工闸(2026-09-01,票 03):不可修告警闸(人在交付平台
+  // 处理/豁免后作答,平台重置监看账重看同一 SHA)与证据回灌闸(把报错
+  // 原文粘贴进作答=回灌证据续跑修复)。问的是人工事实,月光永不代答。
+  | "pipeline_unfixable"
+  | "pipeline_evidence";
 
 /** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
  * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */
@@ -3341,6 +3346,9 @@ export interface IssueGateCard {
   scope?: "logs" | "deploy";
   /** 仅 skill_select:扫描所得的圈选清单,作答 selection 必须是其子集。 */
   skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交(卡面
+   * 展示用;作答续跑按它在服务端重置监看账/注入证据)。 */
+  pipeline?: { repo: string; sha: string };
   proposal?: {
     conclusion?: "issue" | "non_issue";
     summary?: string;
@@ -3472,11 +3480,15 @@ export interface IssueWaitingCard {
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
    * env_needed 据此渲染专用环境表单,skill_select 据此渲染多选圈选卡,
-   * 其余闸仍走通用选项卡。 */
+   * pipeline_unfixable/pipeline_evidence 渲染流水线红灯人工卡,其余闸
+   * 仍走通用选项卡。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
   /** 仅 skill_select:圈选清单(会话视图从 detail.gate.skills 带过来)。 */
   gate_skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交(会话
+   * 视图从 detail.gate.pipeline 带过来,卡面展示定位用)。 */
+  gate_pipeline?: { repo: string; sha: string };
   /** 以下为服务端 humanGate 记录随线携带的内部账(卡片只渲染上面的
    * 子集):契约测试(issueFlowContract)钉整卡形状,服务端加字段先
    * 来这里补镜再让测试转绿。 */
