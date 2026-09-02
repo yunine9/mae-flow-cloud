@@ -189,7 +189,9 @@ async function reproduceTerminalRollover(): Promise<{
     baseline: "master",
     sourceBranch: archived.config?.["分支名"],
     reviewRepair: true,
-  }), /内核持续检视命令失败/);
+    // python 起不来是基础设施故障:三次预算重试用尽后以"内核暂时不可用"
+    // 抛出,和内核明确拒收("内核持续检视命令失败")分开。
+  }), /内核暂时不可用/);
   assert.equal(readState(cwd).current, "config_confirm",
     "adopt 失败必须原子回滚事故现场，下一次 recover 才能重试");
   migrateContinuousReviewTask({

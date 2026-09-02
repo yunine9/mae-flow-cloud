@@ -73,6 +73,15 @@ export interface KernelFeedbackResultItem {
 
 export class KernelDeliveryError extends Error {}
 
+/** 内核**根本没答**(起不来、超时、被信号打死,预算内重试用尽)。与
+ * "内核答了不"(KernelDeliveryError)必须分开:前者是基础设施故障,
+ * 调用方按挂起+带预算重试处理;后者是裁决,一次都不重试。 */
+export class KernelUnavailableError extends KernelDeliveryError {}
+
+/** 所有"内核暂时不可用"的原因文案都以它开头;taskService 靠这个前缀
+ * 区分"该自愈重试"与"该停下叫人"。 */
+export const KERNEL_UNAVAILABLE = "内核暂时不可用";
+
 export interface KernelHostAuthority {
   schema: "mae-flow-host-authority/1";
   alg: "RS256";
@@ -99,12 +108,29 @@ interface StoredKernelHostBinding {
 export type KernelHostAction = "feedback-open" | "feedback-result" | "close"
   | "pipeline-record" | "intervention-reconcile";
 
+/**
+ * 与内核 `_canonical`(json.dumps sort_keys、无空格、不转义 UTF-8)逐字节
+ * 同形——凭据签的是它的摘要,内核拿事实文件重算,差一个字节就是
+ * "载荷摘要不匹配"。
+ *
+ * 2026-09-02 实测踩坑:值为 undefined 的键原来会被拼成 `"evidence":undefined`,
+ * 而事实文件是 JSON.stringify 写的、根本没有这个键。于是**凡是没带
+ * evidence 的逐条回执**(流水线告警、工作台批注不填证据是常态)内核一律
+ * 拒收,Agent 被叫回来"补回执"再拒一次,最后 halted 停摆——整个"修流水线
+ * 告警"来源在生产里走不通。这里按 JSON.stringify 的语义办:对象里
+ * undefined 的键不存在,数组里的 undefined 是 null。
+ */
 function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonical(item === undefined ? null : item))
+      .join(",")}]`;
+  }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) =>
-      `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -423,8 +449,8 @@ function spawnKernelDelivery(input: {
       prepared.cleanup();
     }
   }
-  throw new KernelDeliveryError(
-    `内核持续检视命令失败：\n${infraFailure}`
+  throw new KernelUnavailableError(
+    `${KERNEL_UNAVAILABLE}：${infraFailure}`
     + `（基础设施故障，已重试 ${INFRA_ATTEMPTS} 次仍不可用）`);
 }
 
@@ -476,9 +502,13 @@ function invoke(input: {
  * 的逻辑。
  *
  * 快照走 stdin:核对的必须是调用方**刚读到的那份**状态,而不是内核此刻
- * 再读一次的现场——两次读之间 Agent 可以改文件。任何拿不到内核裁决的
- * 情形(内核起不来且重试用尽、拒收、输出不成形)一律 false:这是门,
- * 不是旁路。
+ * 再读一次的现场——两次读之间 Agent 可以改文件。
+ *
+ * 两种"没拿到 true"必须分开:内核**答了不**(拒收、输出不成形、状态文件
+ * 读不了)是裁决,返回 false,这是门不是旁路;内核**根本没答**(起不来
+ * 且三次重试用尽)抛 KernelUnavailableError,调用方按基础设施故障挂起
+ * 重试——否则一次抖动会被当成"收据缺失/索引损坏"停摆叫人(main 上实测
+ * 过同类误诊)。
  */
 export function attestKernelHost(input: {
   host: KernelDeliveryHost;
@@ -488,31 +518,32 @@ export function attestKernelHost(input: {
   activeBatch?: KernelHostAction[];
 }): { lifecycle: boolean; activeBatch: boolean } {
   const denied = { lifecycle: false, activeBatch: false };
+  let state: unknown;
   try {
-    const state = input.state ?? JSON.parse(readFileSync(
+    state = input.state ?? JSON.parse(readFileSync(
       join(input.cwd, ".mae-flow.json"), "utf-8"));
-    const args = ["attest", "--snapshot-stdin"];
-    if (input.lifecycle?.length) args.push("--lifecycle", input.lifecycle.join(","));
-    if (input.activeBatch?.length) {
-      args.push("--active-batch", input.activeBatch.join(","));
-    }
-    const result = spawnKernelDelivery({
-      host: input.host,
-      cwd: input.cwd,
-      stdin: JSON.stringify(state),
-      attempt: () => ({ args, cleanup: () => {} }),
-    });
-    const record = lastJsonLine(result.stdout);
-    if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1") {
-      return denied;
-    }
-    return {
-      lifecycle: record.lifecycle === true,
-      activeBatch: record.active_batch === true,
-    };
   } catch {
     return denied;
   }
+  const args = ["attest", "--snapshot-stdin"];
+  if (input.lifecycle?.length) args.push("--lifecycle", input.lifecycle.join(","));
+  if (input.activeBatch?.length) {
+    args.push("--active-batch", input.activeBatch.join(","));
+  }
+  const result = spawnKernelDelivery({
+    host: input.host,
+    cwd: input.cwd,
+    stdin: JSON.stringify(state),
+    attempt: () => ({ args, cleanup: () => {} }),
+  });
+  const record = lastJsonLine(result.stdout);
+  if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1") {
+    return denied;
+  }
+  return {
+    lifecycle: record.lifecycle === true,
+    activeBatch: record.active_batch === true,
+  };
 }
 
 function hasKernelErrorCode(error: unknown, expected: string): boolean {

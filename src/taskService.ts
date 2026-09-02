@@ -226,6 +226,8 @@ import {
   createKernelHostProof,
   ensureKernelHostCapability,
   kernelHostCapabilityPresent,
+  KERNEL_UNAVAILABLE,
+  KernelUnavailableError,
   openKernelFeedback,
   recordKernelFeedbackResult,
   trustedKernelHostActiveBatch,
@@ -10309,6 +10311,10 @@ export class TaskService {
         this.persist(task);
       }
     } catch (error) {
+      // 内核根本没答(起不来且重试用尽)不是索引损坏:交给调用方按
+      // 基础设施故障挂起重试。原来这里一把抓,一次抖动就被判成"索引
+      // 损坏"停摆叫人,而且下面 pipelineVerdict 的对账兜底永远跑不到。
+      if (error instanceof KernelUnavailableError) throw error;
       const detail = `持续检视索引损坏或不可写，已停止自动闭环，不能静默隐藏反馈：${
         String(error).slice(0, 800)}`;
       this.options.log?.(`任务 ${task.summary.id} ${detail}`);
@@ -11432,6 +11438,22 @@ export class TaskService {
         await this.tryDeliver(task, epoch);
       }
       return;
+    }
+    // 因"内核暂时不可用"挂起的,先把没登记成的逐条回执补上再交付:回执
+    // 材料在工作区文件里,登记按结果摘要幂等,不需要再叫 Agent。仍不可用
+    // 就在预算内续等;换成别的原因(回执本身不合格)才如实停下叫人。
+    if (task.summary.delivery?.waiting_on?.startsWith(KERNEL_UNAVAILABLE)) {
+      const failure = this.recordActiveFeedbackResult(task);
+      if (failure) {
+        if (failure.startsWith(KERNEL_UNAVAILABLE)
+            && Date.now() < this.verificationDeadline(task)) {
+          this.holdExternalVerification(task, failure);
+          this.scheduleDeliveryRecovery(task, epoch);
+        } else {
+          this.markVerificationStalled(task, failure);
+        }
+        return;
+      }
     }
     await this.tryDeliver(task, epoch);
     if (!this.recoveryStillNeeded(task, epoch)) return;
@@ -14642,33 +14664,42 @@ export class TaskService {
       ? loop.batches.find((item: any) => item?.batch_id === batchId) : undefined;
     if (!batchId || !batch) return undefined;
     const host = this.options.host;
-    if (!(batch.result_digest ? trustedKernelHostLifecycle({
-      host,
-      cwd: task.cwd,
-      actions: ["feedback-result", "pipeline-record"],
-      state,
-    }) : trustedKernelHostActiveBatch({
-      host,
-      cwd: task.cwd,
-      actions: ["feedback-open", "pipeline-record"],
-      state,
-    }))) {
-      return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
-    }
-    if (batch.result_digest) {
-      if (!trustedKernelHostLifecycle({
+    // 内核暂时不可用 ≠ 收据缺失:前者返回以 KERNEL_UNAVAILABLE 开头的
+    // 原因,调用方据此挂起自愈、不叫 Agent 补回执也不停摆。
+    try {
+      if (!(batch.result_digest ? trustedKernelHostLifecycle({
         host,
         cwd: task.cwd,
         actions: ["feedback-result", "pipeline-record"],
         state,
-      })) {
-        return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;
+      }) : trustedKernelHostActiveBatch({
+        host,
+        cwd: task.cwd,
+        actions: ["feedback-open", "pipeline-record"],
+        state,
+      }))) {
+        return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
       }
-      // 内核可能已成功落 result，但进程死在 Cloud 索引 resolve 之前。
-      // 幂等重试必须先从内核补齐投影，不能因 result_digest 早退而永久
-      // 留下一批 repairing/open 的假现场。
-      this.syncFeedbackStoreFromKernel(task);
-      return undefined;
+      if (batch.result_digest) {
+        if (!trustedKernelHostLifecycle({
+          host,
+          cwd: task.cwd,
+          actions: ["feedback-result", "pipeline-record"],
+          state,
+        })) {
+          return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;
+        }
+        // 内核可能已成功落 result，但进程死在 Cloud 索引 resolve 之前。
+        // 幂等重试必须先从内核补齐投影，不能因 result_digest 早退而永久
+        // 留下一批 repairing/open 的假现场。
+        this.syncFeedbackStoreFromKernel(task);
+        return undefined;
+      }
+    } catch (error) {
+      if (error instanceof KernelUnavailableError) {
+        return `${error.message}；反馈批次 ${batchId} 的回执登记尚未确认，将自动重试`;
+      }
+      throw error;
     }
     const head = this.feedbackBaseSha(task);
     const changed = head !== String(batch.base_sha ?? "");
@@ -14779,6 +14810,9 @@ export class TaskService {
       return results.some((item) => item.status === "needs_human")
         ? "反馈中仍有需要人工判断的条目" : undefined;
     } catch (error) {
+      if (error instanceof KernelUnavailableError) {
+        return `${error.message}；反馈批次 ${batchId} 的回执登记尚未确认，将自动重试`;
+      }
       return `内核拒绝逐条反馈回执：${String(error)}`;
     }
   }
@@ -17082,6 +17116,7 @@ export class TaskService {
         const feedbackResultFailure = this.recordActiveFeedbackResult(task);
         const activeFeedback = this.activeKernelFeedback(task);
         if (feedbackResultFailure && task.driver && activeFeedback && workspaceLoop
+            && !feedbackResultFailure.startsWith(KERNEL_UNAVAILABLE)
             && workspaceLoop.review_source !== "workspace"
             && workspaceLoop.feedback_receipt_retry_for !== activeFeedback.batchId) {
           workspaceLoop.feedback_receipt_retry_for = activeFeedback.batchId;
@@ -17122,6 +17157,14 @@ export class TaskService {
           task.summary.delivery!.stalled = task.summary.detail;
           this.persist(task);
           this.notifyRepairStopped(task);
+          break;
+        }
+        // 回执材料 Agent 已经留在工作区文件里,只是内核这一下没答。这不是
+        // Agent 的错也不是人的事:挂起带预算自愈,runDeliveryRecovery 会先
+        // 补登记回执再交付(登记按结果摘要幂等)。原来一律 halted+stalled
+        // 叫人,一次内核抖动就把整轮修复成果晾在那。
+        if (feedbackResultFailure?.startsWith(KERNEL_UNAVAILABLE)) {
+          this.holdWithRecovery(task, feedbackResultFailure, epoch);
           break;
         }
         if (feedbackResultFailure) {

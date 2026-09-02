@@ -293,6 +293,28 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   不在轮询里。回归:`tests/kernelHostAttest.test.ts`(真内核真收据下
   快照匹配为真、改一字段为假、批次正文一字不差才算;并静态断言本仓
   源码不再出现投影 schema / 收据前缀 / 摘要字段)。
+  ⑥**"内核根本没答"与"内核答了不"分开**(用户追问"是不是完美了"时
+  再核出来的):`syncFeedbackStoreFromKernel` 自己内部 catch 一切并标成
+  「持续检视索引损坏，需要你介入」——收据核对改问内核后,内核起不来三次
+  也会被判成索引损坏,人被叫起来一次假警报;③里 pipelineVerdict 的"对账
+  失败只挂起重试"兜底因此是死代码。回执登记那条路更糟:一次抖动先烧
+  一轮 Agent 去"补回执",再 halted 停摆。现在 spawn 层对预算内重试用尽
+  抛专门的 `KernelUnavailableError`(文案以「内核暂时不可用」开头),三处
+  调用各自处理:索引对账把它抛给 pipelineVerdict 走挂起+证据重试;回执
+  登记返回该前缀的原因,完成路径不叫 Agent、`holdWithRecovery` 挂起,
+  自愈 tick 先用工作区里现成的回执材料补登记(按结果摘要幂等)再交付;
+  终态证明把理由如实写成"内核暂时不可用",调用方同样挂起重试。内核
+  **答了不**(拒收、退非 0)仍是 false / 停下叫人,一次不重试。回归:
+  `tests/kernelUnavailableRecovery.test.ts`(包装脚本只在 `attest` 时
+  `kill -9`,写命令交真 python——精确复现"写得进、答不了")。
+  ⑦**顺手撞出一条生产级 bug**:Cloud `canonical()` 把 undefined 的键拼成
+  `"evidence":undefined` 去签摘要,而事实文件是 JSON.stringify 写的、没有
+  这个键,内核重算摘要对不上,一律「宿主凭据绑定的载荷摘要不匹配」拒收。
+  流水线告警、工作台批注的回执不填证据是常态——**这两种来源的反馈在生产
+  里根本闭不了环**:Agent 被叫回来补回执再拒一次,最后 halted 停摆。现按
+  JSON.stringify 语义办(对象里 undefined 的键不存在、数组里是 null)。
+  回归:`tests/feedbackResultPayloadDigest.test.ts`(未修复树上实测红在
+  "载荷摘要不匹配")。
   **已验**:真内核+真 git+真 RSA 端到端回归(量大检视整轮走通并在合入后
   收口、软链信任根下可用、绑定由宿主写在工作区之外、流水线登记无凭据
   被拒/摘要不符被拒/配套凭据放行)、Cloud 全量、双 TypeScript、Web 生产

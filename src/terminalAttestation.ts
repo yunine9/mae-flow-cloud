@@ -9,7 +9,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
-import { trustedKernelHostLifecycle } from "./kernelDelivery.ts";
+import {
+  KERNEL_UNAVAILABLE,
+  KernelUnavailableError,
+  trustedKernelHostLifecycle,
+} from "./kernelDelivery.ts";
 
 const PIPELINE_DIMENSIONS = {
   compile: "COMPILE",
@@ -145,14 +149,24 @@ function inspectKernelState(
     ? closeSha : head;
   const record = state?.quality?.external_verification;
   const authorityAction = expected === "terminal" ? "close" : "pipeline-record";
-  // 收据核对不在本地做:问内核 `delivery attest`,Cloud 只问不判。
-  const lifecycleTrusted = !continuousReview || Boolean(trust && kernelRoot
-    && trustedKernelHostLifecycle({
-      host: { kernelRoot, python: trust.python },
-      cwd,
-      actions: [authorityAction],
-      state,
-    }));
+  // 收据核对不在本地做:问内核 `delivery attest`,Cloud 只问不判。内核
+  // 根本没答(起不来且重试用尽)不是"收据缺失":理由要如实写成"内核
+  // 暂时不可用",调用方据此挂起带预算重试而不是停摆叫人。
+  let lifecycleTrusted = !continuousReview;
+  let kernelUnavailable = "";
+  if (!lifecycleTrusted && trust && kernelRoot) {
+    try {
+      lifecycleTrusted = trustedKernelHostLifecycle({
+        host: { kernelRoot, python: trust.python },
+        cwd,
+        actions: [authorityAction],
+        state,
+      });
+    } catch (error) {
+      if (!(error instanceof KernelUnavailableError)) throw error;
+      kernelUnavailable = error.message;
+    }
+  }
   const recordedRequired = new Set(
     Array.isArray(record?.required)
       ? record.required.map((value: unknown) => String(value).toUpperCase())
@@ -181,9 +195,11 @@ function inspectKernelState(
   const lifecycleReached = expected === "terminal"
     ? terminal && closeReached : current === "delivery_watch";
   let reason: string;
+  const unavailable = kernelUnavailable
+    ? `${kernelUnavailable}；无法核对宿主收据` : "";
   if (!lifecycleReached) {
     reason = terminal && expected === "terminal" && continuousReview
-      ? "内核已到 end，但缺少 Cloud 宿主收据背书的 merged close 事件"
+      ? unavailable || "内核已到 end，但缺少 Cloud 宿主收据背书的 merged close 事件"
       : current
       ? expected === "terminal"
         ? `内核当前步骤是 ${current}，尚未到 terminal`
@@ -192,9 +208,9 @@ function inspectKernelState(
           expected === "terminal" ? "终态" : "交付就绪态"}`;
   } else if (!externalPassed) {
     reason = continuousReview && !lifecycleTrusted
-      ? expected === "terminal"
+      ? unavailable || (expected === "terminal"
         ? "任务终态缺少 Cloud 宿主权威收据（必须覆盖完整 merged close 生命周期）"
-        : "交付就绪态缺少 Cloud 宿主权威收据（必须覆盖完整流水线生命周期）"
+        : "交付就绪态缺少 Cloud 宿主权威收据（必须覆盖完整流水线生命周期）")
       : !attestedSha
       ? expected === "terminal"
         ? "merged close 没有绑定可核对的源提交"

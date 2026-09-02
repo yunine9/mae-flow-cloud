@@ -12,10 +12,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  KERNEL_UNAVAILABLE,
+  KernelUnavailableError,
   openKernelFeedback,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
@@ -113,12 +115,26 @@ test("活动批次:批次正文一字不差才算,current 合法移动不影响"
   }), false, "批次正文被改:不再背书");
 });
 
-test("拿不到内核裁决(内核不存在)一律 false,不抛、不放行", () => {
+test("内核答了不(脚本不存在、退非 0):false,不抛、不放行", () => {
   const { cwd } = watchingTask("dead");
   assert.equal(trustedKernelHostLifecycle({
     host: { kernelRoot: join(process.cwd(), "kernel-not-exists") },
     cwd, actions: ["pipeline-record"],
   }), false);
+});
+
+test("内核根本没答(起不来且三次重试用尽):抛 KernelUnavailableError,不是 false", () => {
+  const { cwd } = watchingTask("unavailable");
+  const dir = join(cwd, "..");
+  const script = join(dir, "always-dies.sh");
+  writeFileSync(script, "#!/bin/sh\nkill -KILL $$\n");
+  chmodSync(script, 0o755);
+  assert.throws(() => trustedKernelHostLifecycle({
+    host: { kernelRoot: KERNEL_ROOT, python: script },
+    cwd, actions: ["pipeline-record"],
+  }), (error: unknown) => error instanceof KernelUnavailableError
+    && error.message.startsWith(KERNEL_UNAVAILABLE)
+    && /已重试 3 次仍不可用/.test(error.message));
 });
 
 test("Cloud 源码里不再有一行收据核对逻辑", () => {
