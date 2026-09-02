@@ -301,15 +301,16 @@ export function LaunchWorkspace({
   // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
-  // 勾了"先分析拆分":下单不填单号,单号在拆分确认卡上逐单元收
-  // (拆完才知道有几个交付,每个交付一个单号)。
-  const analysisEligible = repoFieldsEnabled
-    && repos.map((item) => item.trim()).filter(Boolean).length === 1;
-  const ticketsDeferred = requirementAnalysis && analysisEligible;
   const repositoriesToProbe = useMemo(() => [...new Set(
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
   const multiRepository = repositoriesToProbe.length > 1;
+  // “大需求拆分”是需求颗粒度选择，不是仓库数量选择。第二个仓填入
+  // 后入口仍要稳定留在原位，并保留用户已经做出的选择。
+  const analysisEligible = repoFieldsEnabled && repositoriesToProbe.length > 0;
+  // 只要明确选择大需求，就还不知道最终交付单元数量；无论单仓多仓，
+  // AR 单号都延后到拆分确认时逐单元收。
+  const ticketsDeferred = requirementAnalysis && analysisEligible;
   const expectedRepositoryProbeKey = JSON.stringify(repositoriesToProbe);
   const repositoryProbeByUrl = useMemo(() => new Map(
     repositoryProbeResults.map((item) => [item.repository, item]),
@@ -322,6 +323,7 @@ export function LaunchWorkspace({
       || !!repositoryProbeError
       || repositoryProbeResults.some((item) => !item.reachable));
   const repositoryTicketBlocked = Boolean(options?.ticket.enabled)
+    && !ticketsDeferred
     && (repoFieldsEnabled
       ? repos.some((repo, index) => {
           if (!repo.trim()) return false;
@@ -768,9 +770,10 @@ export function LaunchWorkspace({
               && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
-          // 只在单仓时传:多仓本来就走分析拆分,重复传会误导服务端语义。
+          // 显式的大需求模式与仓数无关：多仓虽天然先分析，也需要这个
+          // 事实决定下单时免单号、拆分确认时再逐单元补齐。
           requirementAnalysis: requirementAnalysis && repoFieldsEnabled
-              && repos.map((item) => item.trim()).filter(Boolean).length === 1
+              && repositoriesToProbe.length > 0
             ? true : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
           requirementBundle: requirementBundle
