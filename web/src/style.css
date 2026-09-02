@@ -2694,17 +2694,29 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-dts-toolbar-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .issue-dts-toolbar button {
+  display: inline-flex; align-items: center; gap: 6px;
   min-height: 32px; padding: 0 14px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--surface-muted); color: var(--text-strong);
   font-size: var(--font-size-assist); cursor: pointer;
 }
 .issue-dts-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
 .issue-dts-toolbar .issue-dts-refresh { color: var(--muted); }
+.issue-dts-toolbar .issue-dts-refresh svg {
+  width: 13px; height: 13px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
 .issue-dts-toolbar .issue-dts-refresh:hover:not(:disabled) {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
-.issue-dts-note { color: #d64545; font-size: var(--font-size-assist); }
+/* 模块列开关升格为与刷新钮同规格的按压 chip(原裸 checkbox 浮在工具
+   条上,与 32px 幽灵钮并排不成一家);on 态与版本过滤触发钮同拍 accent。 */
+.issue-dts-toolbar .issue-dts-module-toggle { color: var(--muted); }
+.issue-dts-toolbar .issue-dts-module-toggle.on {
+  color: var(--accent); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.issue-dts-note { color: var(--danger); font-size: var(--font-size-assist); }
 /* 问题列表卡(骨架复用 task-card 全局类):状态轨补问题域状态色,
  * 任务侧没有的 waiting_user/suspended 在这里定义,不碰任务侧规则。 */
 .status-waiting_user .task-status-rail { background: var(--attention); }
@@ -2764,12 +2776,20 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--accent); border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
-.issue-dts-version-trigger i { font-style: normal; color: var(--faint); }
+.issue-dts-version-trigger i { font-style: normal; color: var(--faint); display: grid; place-items: center; }
+.issue-dts-version-trigger i svg {
+  width: 12px; height: 12px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+  transition: transform var(--ease);
+}
+.issue-dts-version-trigger i.open svg { transform: rotate(180deg); }
+/* 清除类动作:次级中的次级,裸文字链形态保留,但色从硬编码琥珀改为
+   muted(清除不是警告),hover 危险红——破坏性微动作的通用语气。 */
 .issue-dts-version-clear {
   min-height: 32px; padding: 0 10px; border: 0; background: none;
-  color: #b7791f; font-size: var(--font-size-assist); cursor: pointer;
+  color: var(--muted); font-size: var(--font-size-assist); cursor: pointer;
 }
-.issue-dts-version-clear:hover { text-decoration: underline; }
+.issue-dts-version-clear:hover { color: var(--danger); text-decoration: underline; }
 .issue-dts-version-menu {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
   min-width: 320px; max-width: min(420px, calc(100vw - 32px));
@@ -2788,10 +2808,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-version-option.on { color: var(--accent); }
 .issue-dts-version-clear-all {
   margin-top: 4px; padding: 6px 8px; border: 0; border-radius: 7px;
-  background: none; color: #b7791f; font-size: var(--font-size-assist);
+  background: none; color: var(--muted); font-size: var(--font-size-assist);
   cursor: pointer; text-align: left;
 }
-.issue-dts-version-clear-all:hover { text-decoration: underline; }
+.issue-dts-version-clear-all:hover { color: var(--danger); text-decoration: underline; }
 @media (max-width: 680px) {
   .issue-dts-versions {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
@@ -2823,7 +2843,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   }
   .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 2; }
 }
-.issue-dts-search-count.remote { color: #b7791f; }
+.issue-dts-search-count.remote { color: var(--attention); }
 .issue-dts-remote {
   padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
   background: color-mix(in srgb, #3b83d5 12%, transparent); color: #3b83d5;
@@ -2886,8 +2906,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-expand {
   display: grid; place-items: center; min-width: 44px; min-height: 44px;
   background: none; border: 0; border-left: 1px solid var(--line); color: var(--muted);
-  cursor: pointer; padding: 0; font-size: 12px; line-height: 1;
+  cursor: pointer; padding: 0; line-height: 1;
 }
+.issue-dts-expand svg {
+  width: 14px; height: 14px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+  transition: transform var(--ease);
+}
+.issue-dts-expand svg.open { transform: rotate(90deg); }
 .issue-dts-expand:hover { background: var(--surface); color: var(--accent); }
 .issue-dts-expand:focus-visible {
   outline: 2px solid var(--accent); outline-offset: -3px;
@@ -11848,11 +11874,7 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 @keyframes confirmFade { from { opacity: 0; } }
 @keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
 /* ---- DTS 列表「所属模块」人工预绑列(spec #57):行右侧一列下拉,
-   选即存;可用工具栏开关整体隐藏。 ---- */
-.issue-dts-module-toggle {
-  display: inline-flex; align-items: center; gap: 5px;
-  color: var(--muted); font-size: 12px; cursor: pointer; user-select: none;
-}
+   选即存;可用工具栏开关整体隐藏(开关本体样式在工具条段,按压 chip)。 ---- */
 .issue-dts-row:has(> .issue-dts-module-cell) {
   grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
 }
@@ -11862,11 +11884,16 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   padding: 8px 12px 8px 0; min-width: 0;
 }
 .issue-dts-module-cell select {
-  width: 100%; min-width: 0; padding: 6px 8px;
-  border: 1px solid var(--line-strong); border-radius: 7px;
-  background: var(--surface); color: var(--text); font: inherit;
+  appearance: none; -webkit-appearance: none;
+  width: 100%; min-width: 0; min-height: 30px; padding: 0 24px 0 10px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center;
+  color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
 }
-.issue-dts-module-cell select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.issue-dts-module-cell select:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .issue-dts-module-cell select:disabled { opacity: .6; }
 .issue-dts-module-fail { color: var(--danger); font-size: 11px; line-height: 1.4; }
 .issue-dts-row.issue-dts-selectall { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
