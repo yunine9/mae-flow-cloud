@@ -36,6 +36,31 @@ export interface LubanApprovalService {
   }): Promise<TaskSummary>;
 }
 
+/** 决定被域规则打回(不是过期、不是故障):消息人话直出给手机端,
+ * 409——与页面作答收到域 409 同语义。过期/状态漂移仍走普通 Error
+ * (消息命中 stale 词表),由网关统一回"审批码已过期"。 */
+export class ApprovalRejection extends Error {}
+
+/** 多来源审批(需求任务 + 问题会话)的合并视图:决策路由到持有这张
+ * 卡的来源。卡 id 两个域天然不撞(需求 T-* / 问题 issue-*),现查
+ * 现路由,不缓存归属。 */
+export class CompositeLubanApproval implements LubanApprovalService {
+  constructor(private readonly sources: LubanApprovalService[]) {}
+
+  list(): TaskSummary[] {
+    return this.sources.flatMap((source) => source.list());
+  }
+
+  async decide(id: string, input: Parameters<LubanApprovalService["decide"]>[1]): Promise<TaskSummary> {
+    const owner = this.sources.find((source) =>
+      source.list().some((task) => task.id === id));
+    if (!owner) {
+      throw new Error(`审批事项 ${id} 不存在或已不在等待`);
+    }
+    return owner.decide(id, input);
+  }
+}
+
 export interface LubanPluginEnvelope {
   message_id: string;
   sender: string;
@@ -162,6 +187,7 @@ function sameToken(actual: string | undefined, expected: string): boolean {
 }
 
 export class LubanApprovalGateway {
+  private readonly service: LubanApprovalService;
   private readonly replies = new Map<string, CachedReply>();
   private readonly inflight = new Map<string, InflightReply>();
   /**
@@ -171,9 +197,10 @@ export class LubanApprovalGateway {
   private readonly cursors = new Map<string, ConversationCursor>();
 
   constructor(
-    private readonly service: LubanApprovalService,
+    service: LubanApprovalService | LubanApprovalService[],
     private readonly options: LubanApprovalGatewayOptions,
   ) {
+    this.service = Array.isArray(service) ? new CompositeLubanApproval(service) : service;
     if (Buffer.byteLength(options.token, "utf-8") < 32) {
       throw new Error("小鲁班插件 Token 至少需要 32 字节");
     }
@@ -809,7 +836,10 @@ export class LubanApprovalGateway {
       };
     } catch (error) {
       const message = String(error);
-      if (/状态已变化|没有待人工决定|不存在|版本不匹配/.test(message)) {
+      if (error instanceof ApprovalRejection) {
+        return { status: 409, text: message.replace(/^\w*Error:\s*/, "") };
+      }
+      if (/状态已变化|没有待人工决定|不存在|版本不匹配|没有等待中的问题卡/.test(message)) {
         return this.stale(task.luban_account);
       }
       if (/检视意见未闭环|必须选择卡片中的结构化选项|自由说明/.test(message)) {

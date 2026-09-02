@@ -16,6 +16,16 @@
  * 导致 PluginContainerException。现在 ops 工具优先走容器内执行
  * (containerExec),与 AI bash 同一条路,环境天然一致。无 isolation
  * 的旧部署/测试回退到宿主执行。
+ *
+ * 2026-09-02:容器内超时的第一响应改为 coreutils timeout(把命令放进
+ * 独立进程组,到点 TERM 整组、kill-after 后 KILL)——只了结工具进程,
+ * 容器不动。此前沿用 TaskContainer.exec 的"超时=销毁容器"语义,对
+ * 已知耗时的换库构建过于连坐:一次合法的长构建就会把会话容器掀掉。
+ * docker exec 的客户端超时杀不到容器内进程,销毁容器降级为进程组都
+ * 杀不干净时的兜底(TaskContainer.exec 的超时加了余量,必须赛输
+ * 容器内 timeout),宿主回退路径(execFile 直接杀子进程)不变。
+ * 诚实边界:已验 = 命令形状/兜底时序/124 转译(假件契约测试);未验 =
+ * 真容器内的 TERM→KILL 链(真 Docker 用例待补)。
  */
 
 import { execFile } from "node:child_process";
@@ -110,7 +120,47 @@ function run(
   });
 }
 
-/** 容器内执行:通过 docker exec 在容器内跑 ops 二进制,收集 stdout/stderr。 */
+function tail(text: string, limit = 2_500): string {
+  return text.length > limit ? `…${text.slice(-limit)}` : text;
+}
+
+/** 容器内 timeout 发出 TERM 后等 KILL 的宽限(秒)。 */
+const IN_CONTAINER_KILL_AFTER_S = 30;
+/** TaskContainer.exec 兜底超时的追加余量:常规超时必须先在容器内
+ * 了结工具进程,销毁容器只是 timeout 自身失效时的保险——兜底必须
+ * 赛输容器内 timeout,否则就退化回"超时连坐容器"。 */
+const BACKSTOP_MARGIN_MS = 60_000;
+/** GNU coreutils timeout 的约定超时退出码:到点 TERM 与 kill-after 后
+ * KILL 两种了结方式都落在这个码上。 */
+const TIMEOUT_EXIT_CODE = 124;
+/** 成功哨兵:退出码之外,以工具自己的输出作"活真干完了"的唯一证据。
+ * 2026-09-02 拍板把哨兵收拢到这一处——调用方的成功判定和 runInContainer
+ * 的超时守卫共用同一份真相,免得两处正则各写一份、日后各自漂移。 */
+export const FETCH_LOGS_SENTINEL = /解压完成/;
+export const BUILD_DEPLOY_SENTINEL = /\[INFO\].*部署完成/;
+
+/** 失败报错统一拼输出尾部(stdout\nstderr 合并取尾):超时与业务失败
+ * 共用同一拼装,模型能看到的现场就只有报错里的这段尾部。suffix 供
+ * buildDeploy 追加诊断段。 */
+function failureWithTail(
+  prefix: string,
+  // 结构化收窄:容器 exec 的原始结果(exitCode)与 RunResult(code)都要能进来。
+  output: { stdout: string; stderr: string },
+  suffix = "",
+): IssueOpsError {
+  return new IssueOpsError(
+    prefix + tail(`${output.stdout}\n${output.stderr}`.trim()) + suffix);
+}
+
+/**
+ * 容器内执行:通过 docker exec 在容器内跑 ops 二进制,收集 stdout/stderr。
+ * 超时的第一响应在容器内:coreutils timeout(基座镜像 Ubuntu/Debian,
+ * coreutils 必有)把命令放进独立进程组,到点 TERM 整组、kill-after 后
+ * KILL——只了结工具进程,容器不动。工具被 timeout 了结时退出码固定
+ * 124(TIMEOUT_EXIT_CODE),这里转成带输出尾部的明确报错;但若成功
+ * 哨兵已出现在输出里,说明活其实干完了,124 另有端倪,此时不冒充
+ * 超时,原样交还调用方的常规失败路径去报。
+ */
 async function runInContainer(
   containerExec: ContainerExec,
   binary: string,
@@ -118,26 +168,34 @@ async function runInContainer(
   privilegedEnv: NodeJS.ProcessEnv,
   timeoutMs: number,
   workspace: string,
+  sentinel: RegExp,
 ): Promise<RunResult> {
   // shell-escape:二进制路径和参数都用单引号包,内部单引号转义。
   const safeQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-  const command = [safeQuote(binary), ...args.map(safeQuote)].join(" ");
-  // cwd 用 workspace 而非 ".":resolve(".") 解析为宿主进程 CWD(服务
-  // 启动目录),不在 workspace 内,会被 containerRuntime 的安全检查拒绝。
-  // workspace 是同路径挂载进容器的,容器内同名目录真实存在。
+  const command = [
+    "timeout", `--kill-after=${IN_CONTAINER_KILL_AFTER_S}`,
+    String(Math.ceil(timeoutMs / 1000)),
+    safeQuote(binary), ...args.map(safeQuote),
+  ].join(" ");
   const result = await containerExec.exec(command, workspace, {
-    timeout: Math.floor(timeoutMs / 1000),
+    timeout: Math.floor((timeoutMs + BACKSTOP_MARGIN_MS) / 1000),
     privilegedEnv,
   });
+  if (result.exitCode === TIMEOUT_EXIT_CODE
+    && !sentinel.test(`${result.stdout}\n${result.stderr}`)
+  ) {
+    throw failureWithTail(
+      `命令超过 ${Math.round(timeoutMs / 60_000)} 分钟预算,已由容器内 `
+        + `timeout 终止——只终止了工具进程,容器与工作区不受影响,`
+        + `排查后可重试。输出尾部: `,
+      result,
+    );
+  }
   return {
     code: result.exitCode ?? -1,
     stdout: result.stdout,
     stderr: result.stderr,
   };
-}
-
-function tail(text: string, limit = 2_500): string {
-  return text.length > limit ? `…${text.slice(-limit)}` : text;
 }
 
 export function createGoOpsTools(options: {
@@ -166,17 +224,15 @@ export function createGoOpsTools(options: {
       const result = containerExec
         ? await runInContainer(
           containerExec, containerBinary("fetch-logs"), args,
-          privilegedEnv, 15 * 60_000, workspace!,
+          privilegedEnv, 15 * 60_000, workspace!, FETCH_LOGS_SENTINEL,
         )
         : await run(
           platformBinary(toolsDir, "fetch-logs"), args,
           { ...process.env, FETCH_LOGS_PASSWORD: request.password },
           15 * 60_000,
         );
-      if (result.code !== 0 || !/解压完成/.test(result.stdout)) {
-        throw new IssueOpsError(
-          `拉取日志失败(退出码 ${result.code}): `
-          + tail(`${result.stdout}\n${result.stderr}`.trim()));
+      if (result.code !== 0 || !FETCH_LOGS_SENTINEL.test(result.stdout)) {
+        throw failureWithTail(`拉取日志失败(退出码 ${result.code}): `, result);
       }
       return { summary: `日志已拉取到 ${request.localDir}:\n${tail(result.stdout)}` };
     },
@@ -199,14 +255,14 @@ export function createGoOpsTools(options: {
       const result = containerExec
         ? await runInContainer(
           containerExec, containerBinary("build-deploy"), args,
-          privilegedEnv, 20 * 60_000, workspace!,
+          privilegedEnv, 20 * 60_000, workspace!, BUILD_DEPLOY_SENTINEL,
         )
         : await run(
           platformBinary(toolsDir, "build-deploy"), args,
           { ...process.env, BUILD_DEPLOY_PASSWORD: request.password },
           20 * 60_000,
         );
-      if (result.code !== 0 || !/\[INFO\].*部署完成/.test(result.stdout)) {
+      if (result.code !== 0 || !BUILD_DEPLOY_SENTINEL.test(result.stdout)) {
         // 构建失败时输出诊断上下文:Maven settings 是否可读、本地仓库状态。
         // 常见根因:settings.xml 权限不对(640 root:root)→ Maven 找不到
         // 内部仓库 → parent POM 不可解析。
@@ -223,10 +279,8 @@ export function createGoOpsTools(options: {
             diag = `\n[诊断] ${check.stdout.trim()}`;
           } catch { /* best-effort */ }
         }
-        throw new IssueOpsError(
-          `构建部署失败(退出码 ${result.code}): `
-          + tail(`${result.stdout}\n${result.stderr}`.trim())
-          + diag);
+        throw failureWithTail(
+          `构建部署失败(退出码 ${result.code}): `, result, diag);
       }
       return { summary: `部署输出:\n${tail(result.stdout)}` };
     },
