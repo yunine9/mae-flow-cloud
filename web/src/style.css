@@ -2511,14 +2511,21 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* ---- 问题处理页(与我的需求隔离的独立会话域) ---- */
 .issue-board { display: grid; gap: 18px; }
 .issue-board-loading { padding: 40px; color: var(--muted); }
-/* 我的问题的状态筛选:紧凑胶囊 select,与右侧计数徽章同排同语气。 */
+/* 我的问题的状态筛选:胶囊 select,与右侧计数徽章同排同语气——
+ * appearance:none 摘掉系统原生箭头,自绘 chevron(中灰,明暗两主题
+ * 都成立),hover/focus 走 accent 环,与全站交互语言一致。 */
 .issue-list-filter { display: inline-flex; align-items: center; gap: 6px; }
 .issue-list-filter > span { color: var(--muted); font-size: 13px; font-weight: 700; }
 .issue-list-filter select {
-  min-height: 30px; padding: 0 26px 0 10px; border: 1px solid var(--line);
-  border-radius: 999px; color: var(--text-strong); background: var(--surface);
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 28px; padding: 0 26px 0 12px;
+  border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text-strong); background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
   font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: border-color var(--ease), box-shadow var(--ease);
 }
+.issue-list-filter select:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .issue-list-filter select:focus {
   border-color: var(--accent); outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -2702,7 +2709,48 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
  * 任务侧没有的 waiting_user/suspended 在这里定义,不碰任务侧规则。 */
 .status-waiting_user .task-status-rail { background: var(--attention); }
 .status-suspended .task-status-rail { background: #3b83d5; }
+.status-idle .task-status-rail { background: var(--accent); }
 .issue-card-large .task-focus strong { font-weight: 600; }
+/* 「等你答复/等你继续」要在列表里一眼可辨(2026-09-02 用户反馈)。
+ * 动效=紧迫度,只给阻塞在用户手里的 waiting_user:呼吸光环(缓慢
+ * 扩散收敛,不是报警式闪烁);idle 用静态 accent 高亮区分"也等你、
+ * 但不急"。色全部走变量,color-mix 在暗色主题下自动适配。 */
+.issue-card-large.status-waiting_user {
+  border-color: color-mix(in srgb, var(--attention) 38%, var(--line));
+  background: color-mix(in srgb, var(--attention) 4%, var(--surface));
+  animation: issueWaitBreath 2.6s ease-in-out infinite;
+}
+@keyframes issueWaitBreath {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--attention) 14%, transparent); }
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--attention) 4%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .issue-card-large.status-waiting_user {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 9%, transparent), var(--shadow-xs);
+  }
+}
+.issue-card-large.status-idle {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent) 3.5%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent), var(--shadow-xs);
+}
+/* 问题域状态胶囊配色:词表是问题流自己的(waiting_user/idle/…),
+ * 任务侧 pill 色板没覆盖,缺了它们状态标签就是裸文本。点动画沿用
+ * 任务侧 statusBlink——只有 running(在跑)与 waiting_user(卡在你)
+ * 闪点,其余静态。 */
+.issue-card-large .pill.waiting_user { color: var(--attention); background: var(--attention-soft); }
+.issue-card-large .pill.waiting_user i { animation: statusBlink 1.35s ease-in-out infinite; }
+.issue-card-large .pill.idle { color: var(--accent); background: var(--accent-soft); }
+.issue-card-large .pill.running, .issue-card-large .pill.queued { color: var(--active); background: var(--active-soft); }
+.issue-card-large .pill.running i, .issue-card-large .pill.queued i { animation: statusBlink 1.35s ease-in-out infinite; }
+.issue-card-large .pill.suspended { color: #3b83d5; background: color-mix(in srgb, #3b83d5 12%, var(--surface)); }
+.issue-card-large .pill.failed { color: var(--danger); background: var(--danger-soft); }
+.issue-card-large .pill.archived { color: var(--success); background: var(--success-soft); }
+.issue-card-large .pill.canceled { color: var(--faint); background: var(--surface-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .issue-card-large .pill.waiting_user i, .issue-card-large .pill.running i, .issue-card-large .pill.queued i { animation: none; }
+}
 /* 版本下拉多选框:触发钮 + 复选面板(面板锚定在 wrapper 上) */
 .issue-dts-versions { position: relative; display: inline-flex; margin-top: 10px; }
 .issue-dts-version-trigger {
