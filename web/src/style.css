@@ -2964,8 +2964,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-ticket { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font: 700 var(--font-size-dense) var(--font-mono); }
 .issue-ticket.empty { background: none; color: var(--faint); border: 1px dashed var(--line); }
 /* 全屏会话工作台(workspace-overlay 同款壳):头部钉顶,现场体独占
-   滚动——横屏信息面积优先,少一层页面级干扰。 */
-.issue-workspace { padding: 0 16px 16px; }
+   滚动——横屏信息面积优先,少一层页面级干扰。底部不留 padding:两栏
+   滚到底要贴住页面底,不留空白条(2026-09-03)。 */
+.issue-workspace { padding: 0 16px; }
 .issue-workspace > .issue-session-head {
   padding: 14px 4px 10px;
   border-bottom: 1px solid var(--line);
@@ -2974,6 +2975,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 滚动条出现/消失不再挤压两栏宽度(高度跳变的帮凶之一) */
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -3317,6 +3320,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   grid-template-columns: minmax(0, 1.75fr) minmax(340px, .9fr);
   gap: 12px;
   align-items: stretch;
+  /* 吃满工作台余量:头部内容短时两栏正好贴底;头部内容长时限高
+     (限宽屏),滚到底两栏底=页面底(2026-09-03 底部空白/高度跳变)。 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@media (min-width: 1101px) {
+  .issue-main-pane { max-height: calc(100dvh - 150px); }
 }
 .issue-main-pane {
   display: flex;
@@ -3326,6 +3336,35 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 /* 消息流/文档在左栏内吃满余量(自身仍是滚动容器) */
 .issue-main-pane > .issue-thread { flex: 1; }
+/* 现场面板体在左栏吃满余量:直播流撑到栏底(撑破 540px 帽),
+   进场自动贴底才看得到意义;任务侧卡片里的同款面板无此上下文,
+   仍是 540px 帽,不受影响(2026-09-03)。 */
+.issue-main-pane > .event-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.issue-main-pane > .event-panel-body > .event-stream {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+/* 跟随横幅改浮层胶囊,压在流底边上:出现/消失不再推挤容器高度——
+   贴底临界处 paused 翻转引发的整栏高度跳变,元凶就是它(2026-09-03)。
+   只作用于问题会话工作台;任务侧卡片的横幅仍在文档流内。 */
+.issue-main-pane .event-follow {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, .14));
+}
 /* 右栏 NEXT ACTION 常驻栏:flex 列让 body 吃满余量、footer 钉底 */
 .issue-rail {
   display: flex;
@@ -3362,6 +3401,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .issue-two-pane { grid-template-columns: 1fr; }
   /* 单列时右栏不再吃视口高度,自然展开不内滚 */
   .issue-rail { order: -1; max-height: none; }
+  /* 单列下左栏不吃视口高,现场流恢复帽子保住内滚(贴底跟随依赖它) */
+  .issue-main-pane > .event-panel-body > .event-stream { max-height: 62vh; }
 }
 
 /* 栏内状态卡:五态共用一张素卡,绿/脉冲只用语义 token 点缀 */
