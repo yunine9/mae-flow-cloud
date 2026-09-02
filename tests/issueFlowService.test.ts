@@ -835,6 +835,33 @@ test("正式启动可延后恢复；取消必须等容器确认删除，失败�
   }
 });
 
+test("failed 会话的唯一出路是取消:归档被明确拒绝,取消清理成 canceled", async () => {
+  // 2026-09-02 用户实锤:failed 曾是死胡同终态——不能续聊、按钮全灰,
+  // 出错的会话永远占着"进行中"列表。出口定为取消(归档需要结论,结论
+  // 词表里没有"失败"语义)。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-failed-exit-"));
+  seedRecoverableIssue(dataDir, "issue-1", { status: "failed" });
+  seedRecoverableIssue(dataDir, "issue-2", { status: "failed" });
+  const service = new IssueFlowService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+    deferRecovery: true,
+  });
+  try {
+    service.start();
+    assert.equal(service.list().length, 2,
+      "failed 是终态,重启恢复不重新入队,但 live 句柄必须在(否则连取消都够不着)");
+    await assert.rejects(
+      service.control("issue-1", { action: "archive" }),
+      /已失败的会话没有结论可归档,只能取消清理/);
+    assert.equal(service.get("issue-1").status, "failed",
+      "拒绝归档不得翻转状态");
+    assert.equal((await service.control("issue-2", { action: "cancel" })).status,
+      "canceled", "failed 必须能取消——无路可走的终态就是列表里的永久噪音");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));
   // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版

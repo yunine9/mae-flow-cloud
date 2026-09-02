@@ -2761,8 +2761,17 @@ export class IssueFlowService {
     summary?: string;
   }): Promise<IssueSummary> {
     const live = this.require(id);
-    if (isTerminal(live.state.status)) {
+    if (isTerminal(live.state.status)
+      && live.state.status !== "failed") {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
+    }
+    if (live.state.status === "failed" && input.action !== "cancel") {
+      // failed 曾是"死胡同终态":不能续聊、不能归档、不能取消,出错
+      // 的会话永远占着列表(2026-09-02 用户实锤难受)。出口定为取消——
+      // 归档需要结论,结论词表里没有"失败"语义,强归档只能落到
+      // "非问题",那是撒谎;取消=放弃这单,错误信息与账目都还在。
+      throw new IssueControlError(
+        "已失败的会话没有结论可归档,只能取消清理");
     }
     if (this.turning.has(live.id) && input.action !== "cancel") {
       throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
