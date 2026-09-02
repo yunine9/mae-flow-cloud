@@ -1416,19 +1416,41 @@ svg {
    后任何宽度行为一致:左侧露出的材料照常可点可圈选,窄屏占满整屏。 */
 .workspace-review-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  /* 让开任务头:top:0 时抽屉正好盖住"暂停/取消"和责任人一行(实测 1512
+     宽下按钮在 x1152-1258、y18-50),要暂停任务得先关面板。头高随标题
+     换行变,写死会重新盖回去——由 TaskWorkspace 实测写进 --ws-head-h。 */
+  top: calc(var(--ws-head-h, 70px) + 10px);
+  right: 10px;
+  bottom: 10px;
   z-index: 950;
-  width: min(760px, 100vw);
+  width: min(760px, calc(100vw - 20px));
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text);
-  border-left: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 14px;
   background: var(--surface);
-  box-shadow: -18px 0 44px rgba(0, 0, 0, .18);
+  box-shadow: -14px 0 40px rgba(0, 0, 0, .16), 0 18px 44px rgba(0, 0, 0, .14);
+}
+/* 内容远比一屏长(实测 10 条意见 ≈ 2887px,一屏 886px)。macOS 悬浮滚动条
+   不滚不出现,面板又四边贴死视口,看到的就是"内容被截断"而不是"还能往下
+   滚"——常驻滚动槽 + 底部渐隐,把"下面还有"画出来。 */
+.workspace-review-drawer > .workspace-review-content {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.workspace-review-drawer::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 26px;
+  border-radius: 0 0 13px 13px;
+  background: linear-gradient(to top, var(--page), transparent);
+  pointer-events: none;
 }
 .workspace-review-drawer > header {
   position: relative;
@@ -1452,23 +1474,30 @@ svg {
   letter-spacing: .12em;
 }
 .workspace-review-drawer > header strong { color: var(--text-strong); font-size: 18px; }
+/* 这句是在说"面板不挡事,左边照样能圈选"——被省略号切掉就等于没写。
+   标题栏腾出计数徽标的位置后放它换行,顶多占两行。 */
 .workspace-review-drawer > header p {
   margin: 0;
   color: var(--muted);
   font-size: var(--font-size-assist);
   line-height: 1.45;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .workspace-review-drawer > header .workspace-review-dialog-actions em {
   white-space: nowrap;
 }
-/* 底部多留一段:右下角"提问题"浮钮盖在抽屉上,最后一条不能被它压住。 */
-.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 84px; }
+.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 18px; }
 .workspace-review-drawer .workspace-review-notes { width: 100%; }
 @media (max-width: 900px) {
-  .workspace-review-drawer { width: 100vw; border-left: 0; }
+  /* 窄屏没有"左边还看得见材料"这回事,抽屉占满头以下整块,不留边距。 */
+  .workspace-review-drawer {
+    top: var(--ws-head-h, 70px);
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    border: 0;
+    border-radius: 0;
+  }
+  .workspace-review-drawer::after { left: 0; right: 0; bottom: 0; border-radius: 0; }
 }
 /* 抽屉顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
 .review-filter {
@@ -1793,6 +1822,11 @@ svg {
 .wish-quick-dialog > p { margin: 0; color: var(--accent); font-size: 13px; }
 .wish-quick-dialog footer button { padding: 9px 13px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
 .wish-quick-dialog footer .primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+/* 右下角"提问题"浮钮挂在 .workspace-overlay(z-index 120)之外,自己 650,
+   于是压在 z-index 950 的抽屉上——同一个栈里比不了,抽屉调多高都没用。
+   原先靠内容底部留 84px 空白躲它:空白照样在浮钮底下,最后一条还是点不
+   到,只是白白少了一屏内容。检视期间直接收起,关掉面板就回来。 */
+body:has(.workspace-review-drawer) .wish-quick-trigger { display: none; }
 
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }

@@ -40,11 +40,15 @@ test("交付材料提供统一全屏入口且 Escape 先退出全屏", () => {
 });
 
 test("待闭环检视通过常驻按钮提示，但不自动接管当前工作面", () => {
-  // 入口卡与抽屉头部的数字统一走筛选条的"等我确认"口径(annotationCategory
-  // + 反馈 needs_human),不再另算一套"待处理"。
+  // 入口卡与筛选条的数字统一走"等我确认"口径(annotationCategory + 反馈
+  // needs_human),不再另算一套"待处理"。
+  // 2026-09-02 二改:抽屉标题栏原来还挂第三份同一个数,它下面 40px 就是
+  // 筛选条的"等我确认 N",打开前入口按钮上也有——同一屏三份,眼睛先去数
+  // 数字。计数只留在能点的地方(入口按钮和筛选条),标题栏只留关闭。
   assert.match(workspace, /className=\{`ws-review-launch/);
   assert.match(workspace, /\$\{reviewCounts\.mine\} 等我确认/);
-  assert.match(workspace, /\$\{reviewCounts\.mine\} 项等我确认/);
+  assert.doesNotMatch(workspace, /\$\{reviewCounts\.mine\} 项等我确认/,
+    "抽屉标题栏不再重复计数");
   assert.match(workspace, /onClick=\{\(\) => setReviewPanelOpen\(true\)\}/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
     "批注出现时只亮入口，不应自动弹出并抢走当前任务");
@@ -83,12 +87,38 @@ test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位
   assert.match(workspace,
     /if \(window\.matchMedia\("\(max-width: 900px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
     "只有窄屏(抽屉占满整屏)定位时才关抽屉");
+  // 2026-09-02 二改:抽屉原来 top/right/bottom 全是 0,四边贴死视口——
+  // 用户实测截图"上下都顶到头了,都没显示全"。它还正好盖住任务头右侧的
+  // "暂停/取消"(1512 宽下按钮在 x1152-1258),要暂停任务得先关面板。现在
+  // 从任务头下面起步并留出边距,面板看得见边界,任务头照常能点。
   assert.match(css,
-    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*right:\s*0[^}]*width:\s*min\(760px, 100vw\)/s);
+    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*top:\s*calc\(var\(--ws-head-h[^}]*right:\s*10px[^}]*bottom:\s*10px[^}]*width:\s*min\(760px, calc\(100vw - 20px\)\)/s);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*border-radius:\s*14px/s,
+    "四边不再贴死视口,要有可见的面板边界");
+  assert.match(workspace, /--ws-head-h/,
+    "任务头高度由页面实测下发,不能在 CSS 里写死");
   assert.doesNotMatch(css, /\.ws-body\.has-review/);
-  assert.match(css, /@media \(max-width: 900px\) \{\s*\.workspace-review-drawer \{ width: 100vw/);
+  assert.match(css,
+    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer \{[^}]*width:\s*100vw/s,
+    "窄屏仍占满任务头以下整块");
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
     "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
+});
+
+test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
+  // 浮钮挂在 .workspace-overlay(z-index 120)之外、自己 650,和抽屉的 950
+  // 不在同一个栈里比,所以照样压在抽屉右下角。原先靠内容底部留 84px 空白
+  // 躲开:空白本身就在浮钮底下,最后一条的操作还是点不到,只白白少一屏。
+  assert.match(css,
+    /body:has\(\.workspace-review-drawer\) \.wish-quick-trigger \{ display: none; \}/);
+  assert.doesNotMatch(css,
+    /\.workspace-review-drawer > \.workspace-review-content \{ padding: 12px 12px 84px; \}/,
+    "浮钮已经收起,底部不该再留那段躲避用的死白");
+  // macOS 悬浮滚动条不滚不出现,面板又比一屏长得多(实测 10 条 ≈ 2887px),
+  // 不给常驻滚动槽和底部渐隐,看到的就是"内容被截断"。
+  assert.match(css,
+    /\.workspace-review-drawer > \.workspace-review-content \{[^}]*scrollbar-gutter:\s*stable/s);
+  assert.match(css, /\.workspace-review-drawer::after \{[^}]*linear-gradient\(to top, var\(--page\)/s);
 });
 
 test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {

@@ -605,6 +605,7 @@ export function TaskWorkspace({
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
+  const headRef = useRef<HTMLElement>(null);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -759,6 +760,31 @@ export function TaskWorkspace({
       { runOnStart: false },
     );
   }, [task.status]);
+
+  // 批注抽屉要从任务头下面起步,否则"暂停/取消"被盖住,想暂停得先关面板。
+  // 头高不是常量:标题换行、窄屏都会撑高,写死 70px 迟早再盖回去。量一次
+  // 写进 CSS 变量,布局只认这一个真值。ResizeObserver 缺席就退回默认值,
+  // 面板照常能开——旁路不该让人卡住。
+  useEffect(() => {
+    const head = headRef.current;
+    const root = workspaceRoot.current;
+    if (!head || !root) return;
+    const publish = () => root.style.setProperty(
+      "--ws-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
+    publish();
+    // 窄屏那档任务头是 66px 不是 70px(min-height 被媒体查询改小),差 4px
+    // 就是抽屉和头之间一道背景缝。ResizeObserver 管标题换行这种"窗口没动
+    // 头却变高"的情况,window.resize 兜住它不投递回调的场合(页面不渲染时
+    // 观察器回调随帧一起停,实测过)——两条都只是重算一个数,重复无害。
+    window.addEventListener("resize", publish);
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined : new ResizeObserver(publish);
+    observer?.observe(head);
+    return () => {
+      window.removeEventListener("resize", publish);
+      observer?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -1228,7 +1254,7 @@ export function TaskWorkspace({
       aria-modal="true"
       aria-labelledby="task-workspace-title"
     >
-      <header className="ws-head">
+      <header className="ws-head" ref={headRef}>
         <button type="button" className="ws-back" aria-label="返回列表"
           onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
@@ -1906,12 +1932,11 @@ export function TaskWorkspace({
               <strong id="workspace-review-title">批注与检视</strong>
               <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
             </div>
+            {/* 这里原来还挂一枚"N 项等我确认"。它下面 40px 就是筛选条的
+                "等我确认 N",打开前入口按钮上也有同一个数——同一屏三份,
+                眼睛先去数数字而不是看意见。计数留在能点的地方(入口和
+                筛选条),标题栏只留关闭。 */}
             <div className="workspace-review-dialog-actions">
-              {/* 和筛选条"等我确认"同一口径,别一处说 1 项一处说 3 条。 */}
-              {(reviewCounts.mine > 0 || reviewRecordCount > 0) && <em>
-                {reviewCounts.mine > 0
-                  ? `${reviewCounts.mine} 项等我确认` : `${reviewRecordCount} 条记录`}
-              </em>}
               <button type="button" aria-label="关闭批注与检视"
                 autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
             </div>
