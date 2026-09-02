@@ -314,7 +314,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   里根本闭不了环**:Agent 被叫回来补回执再拒一次,最后 halted 停摆。现按
   JSON.stringify 语义办(对象里 undefined 的键不存在、数组里是 null)。
   回归:`tests/feedbackResultPayloadDigest.test.ts`(未修复树上实测红在
-  "载荷摘要不匹配")。
+  "载荷摘要不匹配");另以 `tests/feedbackSourcesReceipt.test.ts` 让
+  taskService 真实的回执拼装路径对着真内核把**三种来源**各走一遍——
+  工作台批注(annotations.jsonl 的 response,含不带证据的条目)、MR 检视
+  人意见(review_replies.md)、流水线告警(结果文件)——都登记成功。
   **已验**:真内核+真 git+真 RSA 端到端回归(量大检视整轮走通并在合入后
   收口、软链信任根下可用、绑定由宿主写在工作区之外、流水线登记无凭据
   被拒/摘要不符被拒/配套凭据放行)、Cloud 全量、双 TypeScript、Web 生产
