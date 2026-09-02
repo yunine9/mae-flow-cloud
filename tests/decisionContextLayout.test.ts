@@ -119,6 +119,8 @@ test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
     "锚定原文应在 annot-item-head 里、排在状态之前");
   assert.match(panel, /className="annot-anchor"\s*\n?\s*title=\{item\.anchor\}/,
     "截断后整段必须还在 title 里,不能丢");
+  assert.doesNotMatch(panel, /<span>针对<\/span>/,
+    "锚定原文接在位置后面,不需要引导词");
 
   const annotate = readFileSync(
     join(process.cwd(), "web/src/annotate.css"), "utf8");
@@ -130,6 +132,26 @@ test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
   // 于是落在页脚下面(实测 foot 底 940px、徽标 948px)。
   assert.match(annotate, /\.annot-route-badge \{\s*grid-area: route/,
     "归属徽标必须有明确区域,否则会被排到页脚后面");
+});
+
+test("检视意见原文和 Agent 回应是对称的两块,不是正文配卡片", () => {
+  // 左边原来是一段裸文字,右边是带标题的绿色块,读起来像"正文旁边配了张
+  // 卡片"而不是一问一答;而且没有一处说明左边那段到底是什么。
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(panel,
+    /<div className="annot-note">\s*<strong>检视意见原文<\/strong>/,
+    "意见块要明说自己是检视意见原文");
+  const annotate = readFileSync(
+    join(process.cwd(), "web/src/annotate.css"), "utf8");
+  const note = annotate.slice(annotate.indexOf(".annot-note {"),
+    annotate.indexOf(".annot-note > strong"));
+  assert.match(note, /border-left:\s*3px solid var\(--accent\)/);
+  assert.match(note, /background:\s*color-mix\(in srgb, var\(--accent\) 7%/);
+  const response = annotate.slice(annotate.indexOf(".annot-response {"),
+    annotate.indexOf(".annot-response.not_fixed"));
+  assert.match(response, /border-left:\s*3px solid var\(--success\)/,
+    "两块共用同一套块形,只靠颜色区分人和 Agent");
 });
 
 test("抽屉标题栏按自己的高度占位,副标题不被裁", () => {

@@ -650,7 +650,7 @@ export function AnnotationPanel({
                     357)。整段仍在 title 里,点位置也能直接回到那一行。 */}
                 {item.anchor && <blockquote className="annot-anchor"
                                             title={item.anchor}>
-                  <span>针对</span>{item.anchor}
+                  {item.anchor}
                 </blockquote>}
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
@@ -696,7 +696,15 @@ export function AnnotationPanel({
                     </button>
                   </div>
                 </div>
-              ) : <p className="annot-note">{item.note}</p>}
+              ) : (
+                // 左边这块原来是一段裸文字,右边 Agent 回应却是带标题的
+                // 色块,看上去像"正文 vs 卡片"而不是"一问一答"。给它同样
+                // 的块形和标题,明说这是检视意见原文,两边才对得起来。
+                <div className="annot-note">
+                  <strong>检视意见原文</strong>
+                  <p>{item.note}</p>
+                </div>
+              )}
               {item.response && (
                 <div className={`annot-response ${item.response.outcome}`}>
                   <strong>{item.response.outcome === "fixed"
