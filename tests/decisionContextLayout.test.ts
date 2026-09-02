@@ -356,3 +356,16 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
   // 借活会话的 emit 记账,不另开实例撞编号。
   assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred, \.\.\.receipt \}\)/);
 });
+
+test("需求修订失败原因上页面;开发助手接管前列明边界", () => {
+  const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /task\.requirement_revision\?\.state === "failed" && \(/);
+  assert.match(workspace, /className="requirement-revision-error" role="alert"/);
+  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  assert.match(box, /className="assistant-bounds"/);
+  assert.match(box, /Git 只读/);
+  assert.match(box, /交还后由主任务接手/);
+  const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
+  assert.match(service, /unanchoredRequirementChanges\(before, after, annotations\)/,
+    "回执之外还要逐段比对");
+});

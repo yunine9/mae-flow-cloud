@@ -7387,6 +7387,17 @@ pre {
 }
 .requirement-revision-bar > button.on { color: #fff; background: var(--accent); border-color: var(--accent); }
 .requirement-revision-missing { margin: 0; color: var(--muted); font-size: 13px; }
+.requirement-revision-error {
+  display: flex; flex-direction: column; gap: 3px;
+  margin: 0 0 10px; padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-left: 3px solid var(--danger); border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  font-size: 13px; line-height: 1.5;
+}
+.requirement-revision-error > strong { color: var(--danger); font-size: 13.5px; }
+.requirement-revision-error > span { color: var(--text); word-break: break-word; }
+.requirement-revision-error > small { color: var(--muted); }
 /* 一个文件、几十行的需求对比,直接摊开:删的一行、加的一行、上下文。 */
 .requirement-diff {
   overflow: hidden;

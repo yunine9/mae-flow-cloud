@@ -543,6 +543,13 @@ export function SteerBox({
             这是一个持续的开发 CLI：接管一次后可多轮排查、修改和运行命令。
             主任务在后台保持暂停；只有你点击“交还主任务”才退出本次接管。
           </p>
+          {/* 边界要在接管前说清:它不是本地那种想 commit 就 commit 的 CLI,
+              第一次撞上"不能 git commit"的人会以为坏了(用户 2026-09-02 讨论定的)。 */}
+          <ul className="assistant-bounds" aria-label="开发助手的边界">
+            <li><strong>Git 只读</strong>：不能 commit、push、切分支或 reset，改动只留在工作树。</li>
+            <li><strong>不推进流程</strong>：不调用 Mae-Flow 命令，不生成审批卡。</li>
+            <li><strong>交还后由主任务接手</strong>：改动作为现场修改交给主 Agent，在当前步骤检视、提交、交付。</li>
+          </ul>
 
           {assistant.handoff && assistant.handoff.state !== "running" && (
             <div className={`assistant-handoff ${assistant.handoff.state === "blocked"

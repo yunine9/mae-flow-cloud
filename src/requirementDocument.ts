@@ -156,3 +156,48 @@ export function requirementContext(
     imageInstruction,
   ].join("\n\n");
 }
+
+/** 一段 = 空行隔开的一块;行号范围用来兜"锚点原文已经被改过"的情况。 */
+function requirementParagraphs(text: string): Array<{ text: string; from: number; to: number }> {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: Array<{ text: string; from: number; to: number }> = [];
+  let start = -1;
+  const flush = (end: number) => {
+    if (start < 0) return;
+    const body = lines.slice(start, end).join("\n").trim();
+    if (body) blocks.push({ text: body, from: start + 1, to: end });
+    start = -1;
+  };
+  lines.forEach((line, index) => {
+    if (line.trim()) { if (start < 0) start = index; }
+    else flush(index);
+  });
+  flush(lines.length);
+  return blocks;
+}
+
+/** 文档编辑 Agent 只许动意见指向的段落;其余段落必须逐字保留。
+ *
+ * 回执只能证明"每条意见都有交代",证明不了"没被指向的地方没动"——模型
+ * 顺手润色两段、删掉一句它觉得多余的话,回执照样合格,复检的人对着
+ * diff 才发现(需求确认阶段实测的口子)。判据是机械的:改前每个没有
+ * 意见落在上面的段落,改后都得原样还在(允许挪位置、允许在中间插新段)。
+ * 一段被算作"有意见落在上面"的条件是锚点原文在这段里,或者意见行号落在
+ * 这段的行号范围内——后者兜锚点原文已经被上一轮改掉的情况。
+ * 返回被动了的未指向段落(截短),空数组 = 通过。 */
+export function unanchoredRequirementChanges(
+  before: string,
+  after: string,
+  annotations: ReadonlyArray<{ anchor: string; line: number }>,
+): string[] {
+  const kept = new Set(requirementParagraphs(after).map((block) => block.text));
+  const anchored = (block: { text: string; from: number; to: number }) =>
+    annotations.some((item) => {
+      const anchor = item.anchor.trim();
+      return (anchor && (block.text.includes(anchor) || anchor.includes(block.text)))
+        || (item.line >= block.from && item.line <= block.to);
+    });
+  return requirementParagraphs(before)
+    .filter((block) => !anchored(block) && !kept.has(block.text))
+    .map((block) => block.text.replace(/\s+/g, " ").slice(0, 40));
+}

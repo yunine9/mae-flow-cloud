@@ -1525,6 +1525,15 @@ export function TaskWorkspace({
                         && <em>Agent 分段读取</em>}</span>
                     <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                   </div>
+                  {/* 上一轮修改被拒收或失败时,原来只有 API 里有原因,页面上人
+                      只看到"文档没变"——这里把原因摆在正文上方。 */}
+                  {task.requirement_revision?.state === "failed" && (
+                    <div className="requirement-revision-error" role="alert">
+                      <strong>上一轮修改没有生效</strong>
+                      <span>{task.requirement_revision.error ?? "Agent 没有给出原因"}</span>
+                      <small>意见仍在待提交，修正后可以重新提交</small>
+                    </div>
+                  )}
                   {/* Agent 每改一轮都留了改前全文和 diff。复检的人原来只能靠
                       锚点猜"改了什么",要真核对得把整篇重读——这里直接给对比。 */}
                   {(task.requirement_revisions?.length ?? 0) > 0 && (() => {

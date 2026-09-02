@@ -155,6 +155,7 @@ import {
   type RequirementDocumentMeta,
   readRequirementRevision,
   storeRequirementRevision,
+  unanchoredRequirementChanges,
 } from "./requirementDocument.ts";
 import {
   loadRequirementAssets,
@@ -2979,6 +2980,7 @@ export class TaskService {
         system: [
           "你是需求文档编辑 Agent。你只负责把人工检视意见准确落实到当前需求文档。",
           "保持没有被意见要求改变的内容、结构与语气；不要开始技术分析、Story 或实现设计。",
+          "只修改意见指向的段落（以每条意见附带的原文定位）；其他段落必须逐字保留，服务端会逐段比对，动了未被指向的段落整轮拒收。需要新增内容时另起新段落。",
           "意见明确时直接修改；不同意或确实存在歧义时，保留相关原文，不要猜测。",
           "每条意见都必须有一条回执，用意见前面方括号里的 id 指回去：",
           "outcome 取 fixed（已按意见修改）、not_fixed（没有修改，说明理由）、",
@@ -3017,6 +3019,12 @@ export class TaskService {
       }
       const before = task.summary.requirement;
       const after = matched[2].trim();
+      // 回执合格只说明"每条都有交代",挡不住顺手改别处;逐段比对才挡得住。
+      const drifted = unanchoredRequirementChanges(before, after, annotations);
+      if (drifted.length) {
+        throw new TaskControlError(
+          `Agent 改动了没有意见指向的段落（${drifted.length} 处，如「${drifted[0]}」），本轮拒收，文档未变；意见仍在待提交`);
+      }
       // 改前全文和 diff 先落盘再覆盖正文:页面靠它给人看"这一轮改了什么",
       // 没有它,人只能把整篇重读一遍。
       const diff = requirementDiff(before, after);
