@@ -3234,6 +3234,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-decision-env .issue-decision-note[role="alert"] { color: #a8541f; }
 .issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
 
+/* skill_select 圈选卡(ADR-0011):多选清单复用 option 卡样式;
+   「都不用」是次要出路,压灰不与主确认抢视觉。 */
+.issue-decision-submit > button.skill-skip {
+  background: var(--surface-soft);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
 /* AI 推荐标注(ADR-0004:只标注不预选):琥珀描边+徽标与卡头的
    decision-kicker/计数 pill 同色系;:not(.picked) 让已选态(accent 蓝)
    永远压过推荐描边——用户拍板后卡片只呈现"已选",两色不打架。徽标
