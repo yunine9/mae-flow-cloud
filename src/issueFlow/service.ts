@@ -65,6 +65,8 @@ import {
   shouldNudgeFixed,
   summarize,
   type FixedStage,
+  type IssueBusinessKnowledge,
+  type IssueBusinessKnowledgeEntry,
   type IssueConclusionKind,
   type IssueEnvironmentConfig,
   type IssueFlowMode,
@@ -77,6 +79,11 @@ import {
   type IssueSummary,
   type IssueSessionState,
 } from "./state.ts";
+import { businessKnowledgeLines } from "./businessKnowledge.ts";
+import {
+  materializeBusinessModuleKnowledge,
+  snapshotBusinessModules,
+} from "../businessModuleRuntime.ts";
 import {
   buildWorksiteRecord,
   type WorksiteRecord,
@@ -1080,7 +1087,7 @@ export class IssueFlowService {
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
       this.environmentCredentials(live),
-      { moonlight: this.moonlightOn(live) }));
+      { moonlight: this.moonlightOn(live), workspace: live.root }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
@@ -1105,7 +1112,7 @@ export class IssueFlowService {
         return driver.start(live.state.mode === "fixed"
           ? issueFixedOpeningPrompt(live.state,
             this.environmentCredentials(live),
-            { moonlight: this.moonlightOn(live) })
+            { moonlight: this.moonlightOn(live), workspace: live.root })
           : issueOpeningPrompt(live.state,
             this.environmentCredentials(live)));
       });
@@ -1419,6 +1426,62 @@ export class IssueFlowService {
       }
     }
     return choices;
+  }
+
+  /** 业务知识资产定格(ADR-0012):进入 analyze 时按**当时**的绑定
+   * 模块从发布库选取并只读投影(.mae-flow-work/business-modules/),
+   * 清单落台账——重启/续聊按台账渲染地图,版本不随发布库中途更新
+   * 漂移(与需求侧"按任务固定版本"同一纪律)。与 skill 圈选闸同一
+   * 扫描点但**不分介入档**:它不举卡、不等人,月光开档照常定格。
+   * 没绑模块=静默缺席;模块库故障 fail-open(知识旁路不能卡会话),
+   * 留一行转移账。返回是否定格到了资产。 */
+  private freezeBusinessKnowledge(live: LiveIssue): boolean {
+    const { state } = live;
+    if (state.mode !== "fixed" || !state.scenario) return false;
+    if (state.stage !== "analyze") return false;
+    if (state.business_knowledge) return false;
+    const repositories = state.repo_urls?.length
+      ? [...state.repo_urls]
+      : state.repo_url ? [state.repo_url] : [];
+    try {
+      const selected = snapshotBusinessModules({
+        dataDir: this.options.dataDir,
+        taskWorkspace: live.root,
+        moduleIds: state.module_id ? [state.module_id] : [],
+        repositories,
+      });
+      const materialized = materializeBusinessModuleKnowledge({
+        selected,
+        taskWorkspace: live.root,
+        runtimeWorkspace: live.root,
+      });
+      const entries: IssueBusinessKnowledgeEntry[] = materialized.entries
+        .map(({ path: _path, ...rest }) => rest);
+      state.business_knowledge = {
+        at: new Date().toISOString(),
+        entries,
+      };
+      if (entries.length) {
+        recordTransition(state, {
+          source: "platform",
+          note: `进入问题分析:业务知识资产已定格(${entries.length} 项,`
+            + `绑定模块 ${selected.map((module) => module.name).join("、")})`,
+        });
+      }
+      for (const warning of materialized.warnings) {
+        this.log(`[issue-flow] ${live.id} 业务知识投影告警: ${warning}`);
+      }
+      return entries.length > 0;
+    } catch (error) {
+      recordTransition(state, {
+        source: "platform",
+        note: `业务知识资产定格失败(旁路,不挡分析): ${
+          error instanceof Error ? error.message : String(error)}`,
+      });
+      this.log(`[issue-flow] ${live.id} 业务知识定格失败: `
+        + String(error instanceof Error ? error.message : error));
+      return false;
+    }
   }
 
   /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
@@ -1869,6 +1932,13 @@ export class IssueFlowService {
       // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
       // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。
       raiseSkillSelection: () => this.raiseSkillSelectionGate(live),
+      // 业务知识资产定格(ADR-0012):进 analyze 时按绑定模块定格资产
+      // 库知识并落台账;不分介入档,缺席静默(见 freezeBusinessKnowledge)。
+      freezeBusinessKnowledge: () => this.freezeBusinessKnowledge(live),
+      // 业务知识地图(ADR-0012):analyze 回执注入段——台账资产 + 仓内
+      // docs/ 现扫,两源皆空为空串。
+      businessKnowledgeBrief: () =>
+        businessKnowledgeLines(live.state, live.root).join("\n"),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
@@ -1908,11 +1978,13 @@ export class IssueFlowService {
         // 宿主账本规则拒写;问题域追加自己的账本与技能目录——
         // issue.json 是推送门禁的依据,skills/ 是行为契约,都不能
         // 让 Agent 自己改;货架 skill 快照(.mae-flow-work/host-skills)
+        // 与业务知识投影(.mae-flow-work/business-modules,ADR-0012)
         // 同罪:只读投影,Agent 没有写它的理由。
         workspace: live.root,
         cwd: live.root,
         extraLedgerFiles: ["issue.json", "issue.json.tmp"],
-        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills"],
+        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills",
+          ".mae-flow-work/business-modules"],
         failClosed: false,
         log: (message) => this.log(`[issue-gate] ${message}`),
       }),
@@ -2001,7 +2073,7 @@ export class IssueFlowService {
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
         this.environmentCredentials(live),
-        { moonlight: this.moonlightOn(live) }));
+        { moonlight: this.moonlightOn(live), workspace: live.root }));
     });
     return summarize(live.state);
   }

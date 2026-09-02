@@ -153,6 +153,51 @@
   border-color: var(--accent);
 }
 
+.annot-route-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
+  justify-content: start;
+  gap: 6px;
+}
+
+.annot-route-picker button {
+  min-height: 30px;
+  padding: 4px 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.annot-route-picker button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+
+.annot-route-picker small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .annot-route-picker {
+    grid-template-columns: 1fr;
+  }
+  .annot-route-picker button {
+    width: 100%;
+    text-align: left;
+  }
+  .annot-editor-actions > span {
+    display: none;
+  }
+}
+
 .annot-editor-actions {
   display: flex;
   align-items: center;
@@ -395,6 +440,28 @@
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
+.annot-route-badge {
+  width: fit-content;
+  margin: 7px 0 0;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.annot-route-badge.owner_reply {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 11%, var(--surface));
+}
+
+.annot-route-badge.owner_decision {
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 12%, var(--surface));
+}
+
 /* 裁决按钮:通过是收口动作给实色,返工是退回动作给描边。 */
 .annot-verdict {
   display: inline-flex;
@@ -517,6 +584,53 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+
+.annot-owner-reply {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 9px 10px;
+  border-left: 2px solid var(--success);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--success) 7%, var(--surface));
+}
+
+.annot-owner-reply strong,
+.annot-owner-reply p,
+.annot-owner-reply small { margin: 0; }
+.annot-owner-reply p { color: var(--text); line-height: 1.55; }
+.annot-owner-reply small { color: var(--muted); }
+
+.annot-owner-reply-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid var(--attention);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.annot-owner-reply-editor textarea {
+  width: 100%;
+  padding: 8px 9px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.annot-owner-reply-editor > div,
+.annot-owner-reply-action {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.annot-owner-reply-action { margin-top: 9px; }
 
 .annot-inline-editor {
   margin: 2px 0 8px;

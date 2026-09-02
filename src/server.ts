@@ -2477,6 +2477,8 @@ export function createTaskServer(
               anchor: String(body.anchor ?? ""),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",
+              route: body.route === "owner_reply" || body.route === "owner_decision"
+                ? body.route : "agent",
             }));
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
@@ -2496,6 +2498,28 @@ export function createTaskServer(
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,
               { text: service.previewAnnotations(id) });
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[4] === "reply") {
+            const annotationId = decodeURIComponent(parts[3]);
+            const body = await readBody(request);
+            const annotation = service.listAnnotations(id).items.find((item) =>
+              item.id === annotationId);
+            if (!annotation) {
+              return json(response, 404, { error: `批注 ${annotationId} 不存在` });
+            }
+            const isOwner = annotation.assignee
+              ? annotation.assignee === author
+              : target.luban_account === author;
+            if (!isOwner && viewer?.role !== "admin") {
+              return json(response, 403, {
+                error: `这条意见需要任务责任人 ${annotation.assignee
+                  ?? target.luban_account ?? "（未配置）"} 答复`,
+              });
+            }
+            return json(response, 200, await service.replyToAnnotation(
+              id, annotationId, author, String(body.text ?? ""),
+              viewer?.role === "admin"));
           }
           // 批注归作者本人管理，与任务责任人 / Committer 身份无关。
           if (request.method === "PATCH" && parts.length === 4) {

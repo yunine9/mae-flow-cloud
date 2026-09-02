@@ -227,6 +227,30 @@ export interface IssueSkillSelection {
   skills: IssueSkillChoice[];
 }
 
+/** 业务知识台账的单项(ADR-0012):团队资产库按绑定模块定格的已发布
+ * 知识资产,只读投影在 .mae-flow-work/business-modules/ 下。 */
+export interface IssueBusinessKnowledgeEntry {
+  id: string;
+  module_id: string;
+  module_name: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  form: string;
+  version: number;
+  /** 会话工作区相对路径(渲染业务知识地图直接用)。 */
+  relative_path: string;
+}
+
+/** 业务知识台账(ADR-0012):字段在场=进入 analyze 时已按当时的绑定
+ * 模块定格过;重启/续聊按它渲染地图,版本不随发布库中途更新漂移
+ * (与需求侧"按任务固定版本"同一纪律)。entries 空=绑定的模块没有
+ * 已发布资产(或会话没绑模块——整个字段缺席)。 */
+export interface IssueBusinessKnowledge {
+  at: string;
+  entries: IssueBusinessKnowledgeEntry[];
+}
+
 export interface IssueGate {
   id: string;
   kind: IssueGateKind;
@@ -339,6 +363,10 @@ export interface IssueSessionState {
   /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合。字段在场
    * =已作答(skills 空=明确跳过,AI 自主);重走不重举的判据。 */
   skill_selection?: IssueSkillSelection;
+  /** 业务知识台账(ADR-0012):进入 analyze 时按绑定模块定格的资产库
+   * 知识,只读投影在 .mae-flow-work/business-modules/。字段在场=已
+   * 定格,不随发布库中途更新漂移。 */
+  business_knowledge?: IssueBusinessKnowledge;
   /** 平台问题卡在场即 waiting_user 由闸门挂起(与 humanGate 并行)。 */
   gate?: IssueGate;
   ut?: IssueUtRecord;

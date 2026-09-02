@@ -2601,10 +2601,13 @@ export interface Annotation {
   note: string;
   edited_at?: string;
   kind: "doc" | "code";
+  /** 缺省值兼容旧任务：一律按交给 Agent 处理。 */
+  route?: "agent" | "owner_reply" | "owner_decision";
+  assignee?: string;
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
-    | "queued_decision";
+    | "queued_decision" | "owner_pending";
   response?: {
     revision: number;
     outcome: "fixed" | "not_fixed" | "needs_clarification";
@@ -2612,6 +2615,11 @@ export interface Annotation {
     evidence: string[];
     fixed_sha?: string;
     responded_at: string;
+  };
+  owner_reply?: {
+    author: string;
+    text: string;
+    replied_at: string;
   };
   verified_at?: string;
   /** 非作者代确认时的实际操作者；缺席表示由意见作者本人确认。 */
@@ -2720,6 +2728,25 @@ export async function sendAnnotations(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return await response.json();
+}
+
+export async function replyToAnnotation(
+  taskId: string,
+  annotationId: string,
+  text: string,
+): Promise<{ annotation?: Annotation; error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}/reply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { annotation: await response.json() };
 }
 
 /** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
@@ -3356,6 +3383,22 @@ export interface IssueSummary {
   /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合;字段在场
    * =已作答(skills 空=明确跳过)。工作台据此展示当前必读集合。 */
   skill_selection?: { at: string; skills: IssueSkillChoice[] };
+  /** 业务知识台账(ADR-0012):进入 analyze 时按绑定模块定格的资产库
+   * 知识清单(只读投影在 .mae-flow-work/business-modules/)。 */
+  business_knowledge?: {
+    at: string;
+    entries: Array<{
+      id: string;
+      module_id: string;
+      module_name: string;
+      title: string;
+      summary: string;
+      when_to_use: string;
+      form: string;
+      version: number;
+      relative_path: string;
+    }>;
+  };
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
   /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */

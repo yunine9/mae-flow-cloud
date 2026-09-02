@@ -4339,7 +4339,53 @@ export class TaskService {
     if (task.summary.status === "canceled") {
       throw new TaskControlError("任务已由用户停止，不能再新增批注");
     }
-    return this.annotations(task).add(input);
+    const route = input.route ?? "agent";
+    const assignee = route === "agent" ? undefined : task.summary.luban_account;
+    if (route !== "agent" && !assignee) {
+      throw new TaskControlError("当前任务没有责任人，暂时不能创建需要责任人答复的意见");
+    }
+    return this.annotations(task).add({ ...input, route, assignee });
+  }
+
+  /** 责任人回答检视意见。普通问答停在提出人确认；“决策后处理”把
+   * 责任人的原话继续交给 Agent，遇到现有人工决定卡则排进该卡，不
+   * 越过任务本身的审批边界。 */
+  async replyToAnnotation(
+    id: string,
+    annotationId: string,
+    by: string,
+    text: string,
+    override = false,
+  ): Promise<Annotation> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const store = this.annotations(task);
+    const before = store.list().find((item) => item.id === annotationId);
+    if (!before) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    const adminOverride = override && before.assignee !== by;
+    let replied: Annotation;
+    if (before.owner_reply) {
+      if (before.route !== "owner_decision") {
+        throw new TaskControlError("责任人已经答复，请由意见提出人确认或重新发起");
+      }
+      if (before.assignee && before.assignee !== by && !adminOverride) {
+        throw new AnnotationPermissionError(
+          `这条意见指派给 ${before.assignee}，只能由他继续处理`);
+      }
+      replied = before;
+    } else {
+      replied = store.replyAsOwner(annotationId, by, text, adminOverride);
+      this.persist(task);
+    }
+    if (replied.route === "owner_decision") {
+      if (replied.sent_via !== "owner_pending") return replied;
+      await this.deliverAgentAnnotations(task, [replied], [
+        "[责任人已作出明确决策]",
+        `责任人 ${replied.owner_reply?.author ?? by} 的决定：${replied.owner_reply?.text ?? text}`,
+        "请以这份决定为准处理对应检视意见；不要再向 Agent 猜测责任人的意图。",
+      ].join("\n"), true);
+    }
+    return this.annotations(task).list().find((item) => item.id === annotationId)!;
   }
 
   dropAnnotation(
@@ -4496,8 +4542,49 @@ export class TaskService {
         ? "MR 已合入，任务已经结束，不能再提交批注"
         : "任务已由用户停止，不能再提交批注");
     }
-    const picked = this.pickDrafts(task, ids, actor);
+    const allPicked = this.pickDrafts(task, ids, actor);
+    const ownerPicked = allPicked.filter((item) =>
+      (item.route ?? "agent") !== "agent");
+    const picked = allPicked.filter((item) =>
+      (item.route ?? "agent") === "agent");
+    if (ownerPicked.length) {
+      this.annotations(task).markSent(
+        ownerPicked.map((item) => item.id), "owner_pending");
+      this.persist(task);
+      const notifier = this.options.notifier;
+      const owner = task.summary.luban_account;
+      if (notifier && owner) {
+        this.bypass(task, "检视意见等待责任人", notifier.notifyOutcome({
+          taskId: task.summary.id,
+          account: owner,
+          status: `annotation-owner-pending:${ownerPicked.map((item) => item.id).join(",")}`,
+          summary: `${ownerPicked.length} 条检视意见需要你答复或决策，请打开任务处理。`,
+          link: personalTaskLink(
+            this.notificationLinkBase(), owner, task.summary.id),
+        }));
+      }
+    }
+    if (!picked.length) {
+      return {
+        sent: ownerPicked.map((item) => item.id),
+        text: `已提交 ${ownerPicked.length} 条意见给任务责任人`,
+      };
+    }
+    const delivered = await this.deliverAgentAnnotations(task, picked);
+    return {
+      sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
+      text: delivered.text,
+    };
+  }
+
+  private async deliverAgentAnnotations(
+    task: TaskState,
+    picked: Annotation[],
+    ownerDecisionContext?: string,
+    queueAtHumanGate = false,
+  ): Promise<{ sent: string[]; text: string }> {
     const text = [
+      ownerDecisionContext,
       renderAnnotations(picked, this.ticketOf(task)),
       this.requirementAnnotationInstructions(task, picked),
     ].filter(Boolean).join("\n\n");
@@ -4550,10 +4637,16 @@ export class TaskService {
           this.dispatchCiRepair(task, sha, log, max, task.controlEpoch)));
       } else {
         throw new NotFoundError(
-          `任务 ${id} 当前是 ${task.summary.status}，不能恢复流水线修复`);
+          `任务 ${task.summary.id} 当前是 ${task.summary.status}，不能恢复流水线修复`);
       }
       this.annotations(task).markSent(
         picked.map((item) => item.id), "pipeline_evidence");
+      this.persist(task);
+      return { sent: picked.map((item) => item.id), text };
+    }
+    if (queueAtHumanGate && task.summary.status === "waiting_for_human") {
+      this.annotations(task).markSent(
+        picked.map((item) => item.id), "queued_decision");
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
@@ -4570,7 +4663,7 @@ export class TaskService {
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
-    await this.interrupt(id, text);
+    await this.interrupt(task.summary.id, text);
     this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
     return { sent: picked.map((item) => item.id), text };
   }
@@ -9110,10 +9203,17 @@ export class TaskService {
     // 原单用户兼容语义。
     const draftAuthor = input.actor ?? task.summary.luban_account;
     const allDrafts = this.annotations(task).drafts();
-    const drafts = draftAuthor
+    const ownDrafts = draftAuthor
       ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
+    const ownerDrafts = ownDrafts.filter((item) =>
+      (item.route ?? "agent") !== "agent");
+    const drafts = ownDrafts.filter((item) =>
+      (item.route ?? "agent") === "agent");
     const deliverableUnresolved = unresolved.filter((item) =>
-      item.status !== "draft" || !draftAuthor || item.author === draftAuthor);
+      ((item.route ?? "agent") === "agent"
+        || (item.route === "owner_decision"
+          && item.sent_via === "queued_decision"))
+      && (item.status !== "draft" || !draftAuthor || item.author === draftAuthor));
     // 等待期间经 queued_decision 提交的意见:状态是 sent,但正文还没
     // 送到过任何 Agent——随这次决定一并送达,送完转正常 decision 账。
     const queued = this.annotations(task).list().filter((item) =>
@@ -9170,6 +9270,13 @@ export class TaskService {
     }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     this.markResolvedDecisionAnnotations(task, resolved);
+    // “问责任人 / 决策后处理”不能因为恰好随任务决定一并提交，就被
+    // 混进 Agent 修改清单。它们独立进入责任人待办；旧 agent 草稿仍
+    // 沿用 waiting continuation 的崩溃恢复合同。
+    if (ownerDrafts.length) {
+      this.annotations(task).markSent(
+        ownerDrafts.map((item) => item.id), "owner_pending");
+    }
     // 等待期入队的意见随这次决定完成送达:账目从 queued_decision 转
     // "decision",下一张卡不再重复携带同一份正文。
     const queuedDelivered = picked
