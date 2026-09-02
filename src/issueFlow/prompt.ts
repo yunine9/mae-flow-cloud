@@ -252,7 +252,7 @@ export function issueFixedOpeningPrompt(
     ...environmentLines(meta),
     inheritedNote,
     "",
-    `## 阶段路线(${scenario === "ticket" ? "有单七阶段" : "无单三节点"})`,
+    `## 阶段路线(${scenario === "ticket" ? "有单六阶段" : "无单三节点"})`,
     stages,
     "",
     "## 阶段机契约(平台机械执行,说了算)",
@@ -272,8 +272,9 @@ export function issueFixedOpeningPrompt(
     "5. 平台闸:skill 圈选(进入分析时,过程把关档)、分析报告确认(有单)/"
       + "结论确认(无单)、网管环境配置(拉日志/换库缺环境时)、换库后环境验证"
       + "——平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
-    "6. UT 跑完可自愿调 report_ut 如实上报——平台只记账,它不是出口、也不是"
-      + "建 MR 的前置,UT 阶段出口仍是 complete_stage。提交 MR 阶段:每个改过的"
+    "6. 问题修复按 TDD 走:先写(或改)能复现问题的单测,再改码让它转绿,"
+      + "UT 属于修复阶段的一部分;每轮结果可自愿调 report_ut 如实上报——"
+      + "平台只记账,出口仍是 complete_stage。提交 MR 阶段:每个改过的"
       + "仓 push_branch + create_mr 后,调 complete_stage 申报 MR 清单(mrs 参数),"
       + "平台验绿(清单=台账、流水线全绿)才放行进换库验证——有红当场打回带"
       + "失败项:修复后同分支再推、重建 MR、重新申报;在跑则受理,你可停等,"

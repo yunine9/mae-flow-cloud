@@ -925,7 +925,7 @@ export class IssueFlowService {
     if (mode === "fixed" && scenario) {
       recordTransition(state, {
         source: "platform", stage: firstStage,
-        note: `固定流程会话已登记(${scenario === "ticket" ? "有单七阶段" : "无单三节点"})`,
+        note: `固定流程会话已登记(${scenario === "ticket" ? "有单六阶段" : "无单三节点"})`,
       });
     }
     saveState(root, state);

@@ -66,7 +66,7 @@ export type IssueStatus =
  * 影响新会话,这是"一键切换回来"承诺的底座。缺省视为 free(旧会话)。 */
 export type IssueFlowMode = "fixed" | "free";
 
-/** 固定流程的两大场景:有单走七阶段,无单走三节点(结论后可挂起)。 */
+/** 固定流程的两大场景:有单走六阶段,无单走三节点(结论后可挂起)。 */
 export type IssueScenario = "ticket" | "no_ticket";
 
 /** Agent 上报的处理阶段(2026-08-27 用户拍板的词表)。流程动态:阶段

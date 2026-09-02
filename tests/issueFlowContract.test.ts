@@ -284,9 +284,8 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
     { text: "分析报告已提交,等待用户确认。" },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
-    { tool: { name: "complete_stage", input: { note: "超时回收已实现" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
-    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "超时回收已实现,UT 12/12 通过" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
@@ -322,7 +321,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         backendPassword: "env-shared-secret",
       },
     });
-    // 中途闸照实走:报告确认后平台才继续修→UT→推→MR→绿→部署举闸。
+    // 中途闸照实走:报告确认后平台才继续修(UT 在修复段)→推→MR→绿→部署举闸。
     const analysisGate = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");

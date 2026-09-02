@@ -1,7 +1,7 @@
 /**
  * 目标驱动阶段机(2026-08-28 拍板,issue #14)的出口回归:
  * - 拉单/拉仓不再机械推进,回执带注册表生成的阶段简报;
- * - 五阶段出口 = complete_stage 自报;三个举卡阶段没有它可绕;
+ * - 四阶段出口 = complete_stage 自报;三个举卡阶段没有它可绕;
  * - report_ut 降级为事实上报(不推进、不再是建 MR 前置);
  * - MR 验绿门三态(全绿当场放行 / 有红当场打回 / 在跑受理由监看器
  *   等绿放行)与"清单=台账"(少报/多报打回,空=空合法)。
@@ -136,7 +136,7 @@ class GatePlatform {
 
 const TICKET = "DTS-2026-1002";
 
-/** 走到 mr_green 的最小剧本:确认前七幕 + 确认后的 修改→自报→自报→
+/** 走到 mr_green 的最小剧本:确认前六幕 + 确认后的 修复(UT 并入)→自报→
  * 推送→建MR(刻意不跑 report_ut:没有 UT 记录也能建 MR)→逐次申报
  * (declarations 即每次 complete_stage 带的 mrs 清单,可含错报演出)。 */
 function chainScenes(origin: string, declarations: string[][]): Scene[] {
@@ -152,8 +152,7 @@ function chainScenes(origin: string, declarations: string[][]): Scene[] {
     { tool: { name: "submit_analysis", input: { summary: "根因=演示" } } },
     { text: "分析报告已提交,等待确认。" },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复`) } } },
-    { tool: { name: "complete_stage", input: { note: "修改完成" } } },
-    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "修复完成(UT 已跑绿)" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     ...declarations.map((mrs): Scene => ({
@@ -352,19 +351,19 @@ test("出口回归(免模型):三个举卡阶段调 complete_stage 被门禁拒�
 
 test("出口回归(免模型):report_ut 降级为事实上报——只记账不推进", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-ut-"));
-  const state = directState(dataDir, "ticket", "ut");
+  const state = directState(dataDir, "ticket", "fix");
   const { byName, textOf } = directTools(state, dataDir);
   const receipt = textOf(await byName("report_ut").execute("x", {
     passed: true, summary: "12/12 通过",
   }));
-  assert.equal(state.stage, "ut", "report_ut 不再推进阶段");
+  assert.equal(state.stage, "fix", "report_ut 不推进阶段,UT 属修复段");
   assert.equal(state.ut?.passed, true, "结果照常记账(现场记录可查)");
   assert.match(receipt, /只记账不推进/);
   assert.match(receipt, /complete_stage/);
   const failReceipt = textOf(await byName("report_ut").execute("x", {
     passed: false, summary: "2 个用例失败",
   }));
-  assert.equal(state.stage, "ut", "未通过同样原地不动");
+  assert.equal(state.stage, "fix", "未通过同样原地不动");
   assert.match(failReceipt, /已记账/);
 });
 
@@ -381,8 +380,8 @@ test("MR 验绿门·全绿当场放行:申报即核验,全绿当场进换库验�
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.stage === "deploy_verify" ? issue : undefined;
     }, "全绿当场放行进换库验证");
-    assert.equal(done.stage_states?.[5], "done", "mr_green 随申报收口");
-    assert.equal(done.stage_states?.[6], "in_progress", "换库验证进行中");
+    assert.equal(done.stage_states?.[4], "done", "mr_green 随申报收口");
+    assert.equal(done.stage_states?.[5], "in_progress", "换库验证进行中");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
     // 当场放行没有停等:受理账不在场。
@@ -415,7 +414,7 @@ test("MR 验绿门·有红当场打回:fail 带失败项详情与处置指引", 
       chain.service.get(chain.id).status === "idle" ? 1 : undefined, "回合收口");
     const issue = chain.service.get(chain.id);
     assert.equal(issue.stage, "mr_green", "有红打回,阶段不动");
-    assert.equal(issue.stage_states?.[5], "in_progress");
+    assert.equal(issue.stage_states?.[4], "in_progress");
     assert.equal(chain.saved().mr_gate, undefined, "打回不记申报账");
   } finally {
     await stopChain(chain);
@@ -444,7 +443,7 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.stage === "deploy_verify" ? issue : undefined;
     }, "监看器等绿后放行");
-    assert.equal(done.stage_states?.[6], "in_progress");
+    assert.equal(done.stage_states?.[5], "in_progress");
     assert.equal(chain.saved().mr_gate, undefined, "放行即清申报账");
   } finally {
     await stopChain(chain);
@@ -560,7 +559,7 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
         ? issue : undefined;
     }, "空=空放行进换库验证");
     assert.equal(done.mrs, undefined, "零 MR 交付");
-    assert.equal(done.stage_states?.[5], "done", "mr_green 收口(空=空)");
+    assert.equal(done.stage_states?.[4], "done", "mr_green 收口(空=空)");
     const saved = loadState(join(dataDir, "issues", created.id))!;
     const trail = (saved.transitions ?? []).map((entry) => entry.note).join("\n");
     assert.match(trail, /空清单=空台账/);
@@ -593,7 +592,7 @@ test("MR 验绿门·未申报不放行:监看器全绿只提醒申报,阶段原�
     assert.equal(issue.stage, "mr_green", "未申报不推进");
     assert.equal(issue.pipelines?.[chain.origin]?.status, "success",
       "流水线确实全绿");
-    assert.equal(issue.stage_states?.[5], "in_progress");
+    assert.equal(issue.stage_states?.[4], "in_progress");
     assert.equal(chain.saved().mr_gate, undefined);
   } finally {
     await stopChain(chain);
