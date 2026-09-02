@@ -25,7 +25,7 @@ test("团队任务统计以紧凑摘要展示规模，并用轻量筛选拆分�
     "阶段和状态应共用可自适应的紧凑筛选网格");
   assert.match(css,
     /\.delivery-breakdown-cells button\s*\{[^}]*min-height:\s*38px[^}]*border-radius:\s*8px/s);
-  assert.match(app, /teamDeliveryStatusGroup\(task\.status\)/);
+  assert.match(app, /teamDeliveryStatusGroup\(item\.task\.status\)/);
   assert.match(css,
     /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*\.56/s,
     "零状态要保留口径，但应从视觉层级中退后");
