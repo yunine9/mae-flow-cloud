@@ -966,6 +966,16 @@ test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号"
   assert.match(launch, /requirementAnalysis \? "selected"/);
   assert.match(launch, /repo-analysis-switch/);
   assert.match(launch, /先分析，再拆分/);
+  // 第二个仓填入后不能把入口卸载；大需求模式是颗粒度选择，不是仓数
+  // 选择。选中后无论单仓多仓都延后到拆分确认时逐单元收 AR。
+  assert.match(launch,
+    /const analysisEligible = repoFieldsEnabled && repositoriesToProbe\.length > 0/);
+  assert.match(launch,
+    /const ticketsDeferred = requirementAnalysis && analysisEligible/);
+  assert.match(launch,
+    /const repositoryTicketBlocked = Boolean\(options\?\.ticket\.enabled\)[\s\S]*?&& !ticketsDeferred/);
+  assert.match(launch,
+    /requirementAnalysis: requirementAnalysis && repoFieldsEnabled[\s\S]*?&& repositoriesToProbe\.length > 0/);
   assert.match(style, /\.repo-analysis-toggle\.selected/);
   assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
