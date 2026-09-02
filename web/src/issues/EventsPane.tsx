@@ -125,6 +125,13 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
   const counts = eventFilterCounts(events);
   const follow = useStickyBottom<HTMLDivElement>(filtered.length);
 
+  // 挂载与切回现场页签时无条件回到最新:用户第一眼要看的是最新的消息,
+  // 历史分批装载期间也钉住底部(人上翻才撒手,见 useStickyBottom)。
+  useEffect(() => {
+    if (active) follow.resync();
+    // resync 闭包随渲染更新;这里只随面板挂载/激活触发。
+  }, [active]);
+
   useEffect(() => {
     setEvents([]);
     setConnection("connecting");

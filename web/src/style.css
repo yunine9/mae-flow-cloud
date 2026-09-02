@@ -2570,6 +2570,20 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   outline: none; background: var(--surface-muted); color: var(--text-strong);
 }
 .issue-password-option.on { color: var(--accent); }
+.issue-image-bar {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 6px;
+}
+.issue-image-uploading {
+  font-size: var(--font-size-meta); color: var(--muted);
+  padding: 4px 8px;
+}
+.issue-image-thumb {
+  width: 72px; height: 72px; object-fit: cover;
+  border-radius: 6px; border: 1px solid var(--line);
+  cursor: default; user-select: none;
+}
 .issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
 .issue-form-actions .primary, .issue-dts-toolbar .primary {
   min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
@@ -2694,13 +2708,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
     grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px;
   }
   .issue-dts-row .issue-dts-row-main > input {
-    grid-column: 1; grid-row: 1 / span 3;
+    grid-column: 1; grid-row: 1 / span 2;
   }
-  .issue-dts-row .issue-dts-identity { grid-column: 2; grid-row: 1; }
   .issue-dts-row .issue-dts-title {
-    grid-column: 2; grid-row: 2; white-space: normal; overflow-wrap: anywhere;
+    grid-column: 2; grid-row: 1; white-space: normal; overflow-wrap: anywhere;
   }
-  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 3; }
+  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 2; }
 }
 .issue-dts-search-count.remote { color: #b7791f; }
 .issue-dts-remote {
@@ -2741,15 +2754,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-row.on { border-color: var(--accent); }
 .issue-dts-row.expanded { border-color: var(--accent); }
 .issue-dts-row-control {
-  display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: stretch;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) 44px; align-items: stretch;
 }
 .issue-dts-row-main {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center; gap: 10px;
-  min-width: 0; padding: 8px 6px 8px 12px; cursor: pointer;
+  min-width: 0; padding: 8px 6px 8px 10px; cursor: pointer;
+}
+.issue-dts-row-control > .issue-dts-identity {
+  align-self: center; padding: 8px 0 8px 12px;
 }
 .issue-dts-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .issue-dts-ticket { color: var(--accent); font: 700 var(--font-size-assist) var(--font-mono); }
+/* 单号是同事间要抄的关键对象(绑单、推送分支名都以它为键):所有出现
+   单号的地方放开文本选中。button(会话卡片 summary)与 label(DTS 行)
+   内的拖选被浏览器默认禁掉,这里强制开启——DTS 行单号已挪出勾选
+   label,拖选不会误勾;卡片内拖选可能顺带展开卡片,属可接受代价。 */
+.task-ticket, .issue-dts-ticket, .issue-ticket {
+  user-select: text; -webkit-user-select: text;
+}
 .issue-dts-title { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .issue-dts-status { color: var(--faint); }
 .issue-dts-expand {
@@ -3115,6 +3138,16 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface-muted);
   border: 1px solid var(--line);
 }
+/* 查看模式标识(非归属人围观问题会话):会话头部的身份徽标,同一
+   issue-mode 的徽标语言,色调用门禁条同款的中性琥珀(只提示不告警);
+   操作控件由 canOperate 在 JSX 侧收闸,这里只管标明「在看别人的现场」。 */
+.issue-view-mode {
+  padding: 2px 8px; border-radius: 7px; font-size: var(--font-size-dense);
+  font-weight: 600;
+  color: #8a5a1f;
+  background: color-mix(in srgb, #d49b37 14%, transparent);
+  border: 1px solid color-mix(in srgb, #d49b37 45%, transparent);
+}
 /* 发起前置门禁条(个人凭据缺项):黄底警示 + 一键跳个人设置 */
 .issue-credential-gate {
   grid-column: 1 / -1;
@@ -3222,6 +3255,18 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* 挂起(固定流程无单场景结论为"是问题"):关联转正卡 */
 .issue-rail-card.is-suspended {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+/* 查看模式的等待卡事实面:题面/选项/背景只读陈列(替归属人判断卡在
+   哪、值不值得催),作答口只在归属人的作答卡里 */
+.issue-rail-card.is-waiting {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.issue-waiting-context { width: 100%; color: var(--muted); font-size: var(--font-size-assist); }
+.issue-waiting-question { width: 100%; }
+.issue-waiting-question p { color: var(--text-strong); }
+.issue-waiting-options {
+  margin: 4px 0 0; padding-left: 18px;
+  color: var(--muted); line-height: 1.55;
 }
 .issue-associate-input {
   display: flex; gap: 8px; width: 100%;
@@ -4666,6 +4711,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .custom-answer > span { display: block; margin-top: 5px; color: var(--muted); font-size: var(--font-size-assist); }
+.issue-decision-manual-input { margin: 8px 0 0; min-height: 64px; }
+.option.manual .option-title { color: var(--muted); font-style: italic; }
 .decision-footer {
   min-height: 68px;
   padding: 13px 20px;
@@ -11418,6 +11465,15 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   .code-review-head { flex-wrap: wrap; gap: 8px; }
 }
 
+.sidebar-build-hash {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim, #999);
+  font-family: var(--mono-font, monospace);
+  padding: 2px 0 4px;
+  user-select: text;
+}
+
 /* ---- 页内确认弹框(spec #52):window.confirm 的全站替代。卡片语言
   与 wf-dialog 同观感;z-index 压过全屏工作区弹层(workspace-overlay
   120),问题流会话视图里也能正常叠上来。 ---- */
@@ -11466,7 +11522,6 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .confirm-dialog footer button.danger:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
 @keyframes confirmFade { from { opacity: 0; } }
 @keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
-
 /* ---- DTS 列表「所属模块」人工预绑列(spec #57):行右侧一列下拉,
    选即存;可用工具栏开关整体隐藏。 ---- */
 .issue-dts-module-toggle {

@@ -556,7 +556,7 @@ export class TaskContainer {
   private containerId = "";
   private lifecycle: Lifecycle = "idle";
   private stopPromise?: Promise<void>;
-  private metadataValue?: TaskContainerMetadata;
+  private metadataValue?: TaskContainerMetadata | undefined;
   private readonly runner: DockerRunner;
   private readonly runtime: Required<Pick<
     TaskContainerOptions,
@@ -566,6 +566,11 @@ export class TaskContainer {
   private readonly baseEnvironment: Record<string, string>;
   private readonly forwardedEnvironment: Set<string>;
   private readonly activeProcesses = new Set<DockerStreamProcess>();
+
+  /** 当前生命周期状态(供宿主检查容器是否还在场)。 */
+  get isAlive(): boolean {
+    return this.lifecycle === "running";
+  }
 
   constructor(
     readonly image: string,
@@ -724,6 +729,12 @@ export class TaskContainer {
       signal?: AbortSignal;
       timeout?: number;
       env?: NodeJS.ProcessEnv;
+      /**
+       * 特例凭据环境变量:仅限宿主侧 ops 工具(build-deploy/fetch-logs)
+       * 传递运维密码。不放宽 SECRET_ENV 正则也不改 forwardedEnvironment
+       * 默认白名单——只放这两个精确键名,其他仍走标准透传校验。
+       */
+      privilegedEnv?: NodeJS.ProcessEnv;
     },
   ): Promise<{ exitCode: number | null }> {
     if (this.lifecycle !== "running" || !this.containerId) {
@@ -758,10 +769,22 @@ export class TaskContainer {
       throw new Error("aborted");
     }
 
+    // 宿主侧 ops 工具的运维密码走特例通道:精确键名白名单,不放宽
+    // SECRET_ENV 正则也不改 forwardedEnvironment 默认白名单。
+    const OPS_PRIVILEGED_KEYS = new Set([
+      "BUILD_DEPLOY_PASSWORD", "FETCH_LOGS_PASSWORD",
+    ]);
     const execEnvironment: Record<string, string> = {};
     for (const [key, value] of envEntries(options.env ?? {})) {
       if (!this.forwardedEnvironment.has(key)) continue;
       validateEnvKey(key);
+      if (value.includes("\0")) throw new Error(`运行时环境变量 ${key} 含 NUL`);
+      execEnvironment[key] = value;
+    }
+    for (const [key, value] of envEntries(options.privilegedEnv ?? {})) {
+      if (!OPS_PRIVILEGED_KEYS.has(key)) {
+        throw new Error(`privilegedEnv 拒绝非白名单键: ${key}`);
+      }
       if (value.includes("\0")) throw new Error(`运行时环境变量 ${key} 含 NUL`);
       execEnvironment[key] = value;
     }

@@ -14,3 +14,16 @@ web/*.tsbuildinfo
 openspec/config.yaml
 .zcode/
 __pycache__/
+
+# codegraph index cache
+.codegraph/
+
+# CodeAgentCLI 本地配置/缓存
+.cac/
+
+# 嵌套的外部仓库(不应导出)
+repo/
+
+# 变更导出包
+changes-*.zip
+changes-*/

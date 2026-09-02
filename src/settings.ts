@@ -32,6 +32,9 @@ import {
 
 export interface RuntimeKnobs {
   max_concurrent?: number;
+  /** 问题流回合并发额度:同时推进的问题会话回合上限(等待用户/闲置/
+   * 挂起的会话不占额度)。泵每次点火现读,改完即生效,无需重启。 */
+  issue_max_turns?: number;
   repair_rounds?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
@@ -155,6 +158,9 @@ export class RuntimeSettings {
       ...this.runtime(),
       max_concurrent: knob(patch.max_concurrent, "并发数", 1)
         ?? (("max_concurrent" in patch) ? undefined : this.runtime().max_concurrent),
+      issue_max_turns: knob(patch.issue_max_turns, "问题单并发", 1)
+        ?? (("issue_max_turns" in patch)
+          ? undefined : this.runtime().issue_max_turns),
       repair_rounds: knob(patch.repair_rounds, "修复轮预算")
         ?? (("repair_rounds" in patch) ? undefined : this.runtime().repair_rounds),
       poll_interval_s: knob(patch.poll_interval_s, "轮询间隔", 1)

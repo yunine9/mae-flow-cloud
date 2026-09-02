@@ -1666,6 +1666,17 @@ export async function getLaunchOptions(): Promise<LaunchOptions> {
   return response.json();
 }
 
+export interface BuildInfo {
+  /** 部署时间(服务启动时间);null 表示服务端未返回。 */
+  build_hash: string | null;
+}
+
+export async function getBuildInfo(): Promise<BuildInfo> {
+  const response = await fetch("/build-info");
+  if (!response.ok) return { build_hash: null };
+  return response.json();
+}
+
 /** 业务仓自带的、可由本任务显式启用的 Skill。扫描只建立目录，真正
  * 读取哪个 Skill、何时读取由 Agent 按任务语义决定。 */
 export interface RepositorySkill {
@@ -2913,6 +2924,8 @@ export async function listArtifacts(
 export interface SettingsView {
   runtime: {
     max_concurrent?: number;
+    /** 问题流回合并发额度(问题会话同时推进的回合上限)。 */
+    issue_max_turns?: number;
     repair_rounds?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
@@ -2948,6 +2961,7 @@ export interface SettingsView {
   defaults: {
     runtime: {
       max_concurrent: number;
+      issue_max_turns: number;
       repair_rounds: number | null;
       poll_interval_s: number;
       poll_timeout_s: number;
@@ -3369,6 +3383,22 @@ export interface IssueSummary {
   /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合;字段在场
    * =已作答(skills 空=明确跳过)。工作台据此展示当前必读集合。 */
   skill_selection?: { at: string; skills: IssueSkillChoice[] };
+  /** 业务知识台账(ADR-0012):进入 analyze 时按绑定模块定格的资产库
+   * 知识清单(只读投影在 .mae-flow-work/business-modules/)。 */
+  business_knowledge?: {
+    at: string;
+    entries: Array<{
+      id: string;
+      module_id: string;
+      module_name: string;
+      title: string;
+      summary: string;
+      when_to_use: string;
+      form: string;
+      version: number;
+      relative_path: string;
+    }>;
+  };
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
   /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */
@@ -3511,6 +3541,12 @@ export function listIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues").then((body) => body.issues ?? []);
 }
 
+/** 团队看板视角:拉所有人的问题会话(?scope=all)。列表只读,
+ * 详情仍按归属校验——只看标题/状态/处理人/阶段,不碰决策与材料。 */
+export function listAllIssues(): Promise<IssueSummary[]> {
+  return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
+}
+
 export function getIssue(id: string): Promise<IssueDetail> {
   return issueFetch(`/issues/${encodeURIComponent(id)}`);
 }
@@ -3546,6 +3582,24 @@ export function createIssue(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+/** 现象描述内嵌截图:粘贴/拖拽上传图片,返回工作区相对路径引用
+ * (issue-images/<hash>.<ext>),前端把它插入 description。 */
+export async function uploadIssueImage(
+  blob: Blob,
+): Promise<{ path: string; bytes: number }> {
+  return issueFetch("/issues/issue-image", {
+    method: "POST",
+    headers: { "content-type": blob.type || "application/octet-stream" },
+    body: blob,
+  });
+}
+
+/** 已上传截图的预览 URL(从 staging 回显二进制)。path 是 uploadIssueImage
+ * 返回的相对路径引用(issue-images/<hash>.<ext>)。 */
+export function issueImageUrl(path: string): string {
+  return `/issues/issue-image?path=${encodeURIComponent(path)}`;
 }
 
 export function replyIssue(id: string, text: string): Promise<IssueSummary> {

@@ -146,6 +146,11 @@ function EnvNeededForm({ busy, onSubmit }: {
   </div>;
 }
 
+/** 手动输入选项的虚拟 code(不会与真实选项 code 冲突)。选了它
+ * 后该问题不再要求选其他选项——用户可能对所有给定选项都不满意,
+ * 需要自行手写答案。提交时手写文本作为该题答案(与开放题同通道)。 */
+const MANUAL_CODE = "__manual_input__";
+
 /** skill 圈选表单(ADR-0011):按仓分组的多选清单,path 是提交身份
  * (仓段天然区分同名 skill)。「确认勾选」至少勾一项才可点;「都不用」
  * 提交空选,AI 按方法论取用次序自主——两条路的裁决在服务端同口。 */
@@ -225,8 +230,16 @@ export function areIssueQuestionsComplete(
   picked: Record<number, string>,
   custom: Record<number, string>,
 ): boolean {
-  return questions.length > 0 && questions.every((item, index) =>
-    item.options.length > 0 ? !!picked[index] : !!custom[index]?.trim());
+  return questions.length > 0 && questions.every((item, index) => {
+    if (item.options.length > 0) {
+      const pick = picked[index];
+      if (!pick) return false;
+      // 选了手动输入:要求填了自定义文本才算答完。
+      if (pick === MANUAL_CODE) return !!custom[index]?.trim();
+      return true;
+    }
+    return !!custom[index]?.trim();
+  });
 }
 
 function GenericDecisionCard({ waiting, busy, onAnswer }: {
@@ -285,11 +298,19 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
       if (item.options.length) {
         const pickedCode = picked[index];
         if (!pickedCode) return;
-        const option = item.options.find((candidate) =>
-          candidate.code === pickedCode);
-        if (option) labels.push(option.label);
-        answers[String(index)] = pickedCode;
-        code ??= pickedCode;
+        if (pickedCode === MANUAL_CODE) {
+          // 手动输入:自定义文本作为该题答案(与开放题同通道)。
+          const own = custom[index]?.trim();
+          if (!own) return;
+          answers[String(index)] = own;
+          labels.push(own);
+        } else {
+          const option = item.options.find((candidate) =>
+            candidate.code === pickedCode);
+          if (option) labels.push(option.label);
+          answers[String(index)] = pickedCode;
+          code ??= pickedCode;
+        }
       } else {
         const own = custom[index]?.trim();
         if (!own) return;
@@ -351,6 +372,34 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
                 </span></span>
               </button>;
             })}
+            {/* 手动输入:每个问题都可以不选给定选项,自行手写答案。
+              选了它后该问题不再要求选其他选项——用户可能对所有
+              给定选项都不满意,需要自行手写。提交时手写文本作为
+              该题答案(与开放题同通道)。 */}
+            {(() => {
+              const manualChosen = picked[index] === MANUAL_CODE;
+              const manualIndex = item.options.length;
+              return <button type="button" key={MANUAL_CODE} role="radio"
+                ref={(node) => {
+                  (radioRefs.current[index] ??= [])[manualIndex] = node;
+                }}
+                aria-checked={manualChosen}
+                tabIndex={manualChosen ? 0 : -1}
+                className={`option manual${manualChosen ? " picked" : ""}`}
+                onClick={() => setPicked((current) =>
+                  ({ ...current, [index]: MANUAL_CODE }))}>
+                <span className={`radio${manualChosen ? " on" : ""}`} aria-hidden />
+                <span className="option-body"><span className="option-title">
+                  手动输入
+                </span></span>
+              </button>;
+            })()}
+            {picked[index] === MANUAL_CODE && (
+              <textarea className="custom-input issue-decision-manual-input"
+                placeholder="写下你对这道题的答案…"
+                value={custom[index] ?? ""}
+                onChange={(event) => setCustom({ ...custom, [index]: event.target.value })} />
+            )}
           </div>
         : <textarea className="custom-input issue-decision-free"
             placeholder="这道题没有给定选项——写下你的具体答案…"

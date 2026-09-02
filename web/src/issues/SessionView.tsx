@@ -6,6 +6,11 @@
  * 旅程线(IssueJourneyTrail);右栏 NEXT ACTION 在 IssueRail(独立
  * 文件),左栏材料页签在 MaterialsPane.tsx、现场页签在 EventsPane.tsx。
  * 耗时卡点(IssueCostPanel)同时被列表卡的展开态复用,也从这里出。
+ *
+ * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
+ * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
+ * 耗时卡点)完整保留,全部操作控件不渲染(不是点了报错),顶部一条
+ * 「查看模式」标识。归属人打开自己的会话零行为变化。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -46,6 +51,7 @@ import { FeedbackPanel } from "../TaskWorkspace";
 
 export function IssueSessionView({
   detail,
+  viewerUsername,
   onBack,
   onChanged,
   onListRefresh,
@@ -54,6 +60,9 @@ export function IssueSessionView({
   onOpenIssue,
 }: {
   detail: IssueDetail;
+  /** 当前登录用户名:与会话归属人(detail.account)比对出查看模式。
+   * 缺席(auth 关闭的演示形态)按可操作处理,保持既有行为。 */
+  viewerUsername?: string;
   onBack: () => void;
   onChanged: (detail: IssueDetail) => void;
   onListRefresh: () => void;
@@ -91,6 +100,13 @@ export function IssueSessionView({
       window.removeEventListener("keydown", onKey);
     };
   }, [onBack]);
+
+  // 查看模式判定:登录用户 ≠ 会话归属人即只读围观。口径是问题域自己的
+  // 「人人可看、归属人操作」(CONTEXT.md「查看模式」),管理员不例外——
+  // 「管理员不处理问题单」的边界不因可见性放开而变(与任务侧 canOperate
+  // 的差异:那边管理员可操作,这边明说不写)。viewer 缺席(auth 关闭的
+  // 演示形态)按可操作处理,保持既有行为。
+  const canOperate = !viewerUsername || viewerUsername === detail.account;
 
   async function perform(action: () => Promise<unknown>): Promise<boolean> {
     if (busy) return false;
@@ -212,6 +228,12 @@ export function IssueSessionView({
       </button>
       <div className="issue-session-title">
         <strong>{detail.title}</strong>
+        {/* 查看模式标识(非归属人围观):徽标样式沿用 issue-mode 的
+            身份徽标语言,文本即 aria 信息(读屏直读 span 文本)。 */}
+        {!canOperate && <span className="issue-view-mode" role="status"
+          title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
+          查看模式:归属人 {detail.account} 的会话
+        </span>}
         <span className={`issue-status status-${detail.status}`}>
           {ISSUE_STATUS_TEXT[detail.status]}
         </span>
@@ -241,8 +263,11 @@ export function IssueSessionView({
           ? <span className="issue-ticket">{detail.ticket}</span>
           : detail.mode === "fixed"
             // 固定流程没有"中途绑单":无单会话走结论→挂起→关联转正。
+            // 「无单场景」是状态说明不是控件,查看模式照常示人。
             ? <span className="issue-ticket empty">无单场景</span>
-            : <span className="issue-bind">
+            // 绑单输入是写操作:查看模式整块不渲染(单号本身仍会
+            // 在绑定后如实陈列)。
+            : canOperate && <span className="issue-bind">
                 <input value={ticket} placeholder="绑定 DTS 单号"
                   onChange={(event) => setTicket(event.target.value)} />
                 <button type="button" disabled={!ticket.trim() || busy}
@@ -283,8 +308,9 @@ export function IssueSessionView({
     {detail.error && <div className="issue-session-error" role="alert">
       <span>{detail.error}</span>
       {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
-          镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。 */}
-      {onNavigateProfile && detail.error.includes(GIT_AUTH_ERROR_TAG)
+          镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。
+          跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
+      {canOperate && onNavigateProfile && detail.error.includes(GIT_AUTH_ERROR_TAG)
         && <button type="button" className="issue-error-action"
           onClick={onNavigateProfile}>去个人设置配置令牌</button>}
     </div>}
@@ -303,12 +329,14 @@ export function IssueSessionView({
         <IssuePaneTabs tab={tab} onPick={setTab} />
         {tab === "materials"
           ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
-              onView={setMaterialsView} onNotifyAI={notifyAI} />
+              onView={setMaterialsView} onNotifyAI={notifyAI}
+              canOperate={canOperate} />
           : <IssueEventsPane id={detail.id} active />}
       </section>
       <IssueRail
         detail={detail}
         busy={busy}
+        canOperate={canOperate}
         waiting={waiting}
         onAnswer={answer}
         onReply={sendReply}

@@ -12,8 +12,10 @@ import {
   getBusinessModules,
   getDtsModuleBindings,
   getDtsTicketDetail,
+  issueImageUrl,
   listDtsTickets,
   putDtsModuleBinding,
+  uploadIssueImage,
   type AuthUser,
   type BusinessModule,
   type DtsModuleBindingEntry,
@@ -246,6 +248,8 @@ function ManualRegister({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [imageUploading, setImageUploading] = useState(false);
+  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -305,6 +309,88 @@ function ManualRegister({
     }, 400);
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId, envHosts, envPageAccount]);
+
+  // 现象描述内嵌截图:粘贴/拖拽图片 → 上传落 staging → 在光标处插入
+  // ![截图](issue-images/<hash>.<ext>) 引用。图片本体不进 description,
+  // 进的只有工作区相对路径引用(与 ticketImages 同款架构红线)。
+  const ISSUE_IMAGE_PATTERN =
+    /issue-images\/[0-9a-f]{16}\.[a-z]+/gi;
+
+  function insertImageRef(ref: string) {
+    const textarea = descriptionRef.current;
+    const markdown = `![截图](${ref})`;
+    if (!textarea) {
+      setDescription((prev) => `${prev}${prev ? "\n" : ""}${markdown}`);
+      return;
+    }
+    const start = textarea.selectionStart ?? description.length;
+    const end = textarea.selectionEnd ?? description.length;
+    const before = description.slice(0, start);
+    const after = description.slice(end);
+    const needPrefix = before.length > 0 && !before.endsWith("\n");
+    const insert = `${needPrefix ? "\n" : ""}${markdown}${after.startsWith("\n") || after.length === 0 ? "" : "\n"}`;
+    setDescription(before + insert + after);
+    window.requestAnimationFrame(() => {
+      const pos = (before + insert).length;
+      textarea.focus();
+      textarea.setSelectionRange(pos, pos);
+    });
+  }
+
+  async function uploadAndInsert(file: File) {
+    if (!file.type.startsWith("image/")) return;
+    setImageUploading(true);
+    try {
+      const result = await uploadIssueImage(file);
+      insertImageRef(result.path);
+    } catch (reason) {
+      onError(`图片上传失败:${String(reason instanceof Error ? reason.message : reason)}`);
+    } finally {
+      setImageUploading(false);
+    }
+  }
+
+  function handleDescriptionPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          event.preventDefault();
+          void uploadAndInsert(file);
+          return;
+        }
+      }
+    }
+  }
+
+  function handleDescriptionDrop(event: React.DragEvent<HTMLTextAreaElement>) {
+    const files = event.dataTransfer?.files;
+    if (!files || !files.length) return;
+    const image = Array.from(files).find((file) => file.type.startsWith("image/"));
+    if (image) {
+      event.preventDefault();
+      void uploadAndInsert(image);
+    }
+  }
+
+  // description 里的图片引用(缩略图条预览用)。
+  const descriptionImages = useMemo(() => {
+    if (!description) return [];
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    let match: RegExpExecArray | null;
+    const pattern = new RegExp(ISSUE_IMAGE_PATTERN.source, "gi");
+    while ((match = pattern.exec(description)) !== null) {
+      const path = match[0];
+      if (!seen.has(path)) {
+        seen.add(path);
+        paths.push(path);
+      }
+    }
+    return paths;
+  }, [description]);
 
   // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
   // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
@@ -388,9 +474,21 @@ function ManualRegister({
         </label>
         <label className="issue-field wide">
           <span>现象描述 <i className="req">*</i></span>
-          <textarea rows={3} value={description}
-            placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
+          <textarea rows={3} value={description} ref={descriptionRef}
+            placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来,粘贴或拖拽图片自动上传"
+            onPaste={handleDescriptionPaste}
+            onDrop={handleDescriptionDrop}
             onChange={(event) => setDescription(event.target.value)} />
+          {(imageUploading || descriptionImages.length > 0) && (
+            <div className="issue-image-bar">
+              {imageUploading && <span className="issue-image-uploading">上传中…</span>}
+              {descriptionImages.map((path) => (
+                <img key={path} className="issue-image-thumb"
+                  src={issueImageUrl(path)} alt="现象截图"
+                  draggable={false} />
+              ))}
+            </div>
+          )}
         </label>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
             收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
@@ -929,15 +1027,17 @@ function DtsRegister({
             return <div key={ticket.ticket}
               className={`issue-dts-row${selected.includes(ticket.ticket) ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
               <div className="issue-dts-row-control">
+                {/* 单号在勾选 label 之外:拖选复制单号不会误勾选——单号
+                    是绑单/推送分支名的关键操作对象,复制是高频动作。 */}
+                <span className="issue-dts-identity">
+                  <span className="issue-dts-ticket">{ticket.ticket}</span>
+                  {isRemote && <span className="issue-dts-remote">远程</span>}
+                </span>
                 <label className="issue-dts-row-main">
                   <input type="checkbox" checked={selected.includes(ticket.ticket)}
                     onChange={(event) => setSelected((current) => event.target.checked
                       ? [...current, ticket.ticket]
                       : current.filter((item) => item !== ticket.ticket))} />
-                  <span className="issue-dts-identity">
-                    <span className="issue-dts-ticket">{ticket.ticket}</span>
-                    {isRemote && <span className="issue-dts-remote">远程</span>}
-                  </span>
                   <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
                   {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
                 </label>

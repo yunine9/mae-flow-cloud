@@ -1,5 +1,11 @@
 import { instantMs } from "./time";
 
+/** 问题会话摘要的"自包含投影":只取适配所需的稳定字符串字段,与
+ * api.ts 的 IssueSummary 结构兼容(超出这些字段的传入对象照常通过)。
+ * 刻意不 import api.ts——那会把整个浏览器 fetch 客户端拖进根级
+ * typecheck 的 Node 类型域,全局 fetch/Response 合并后 json() 推断
+ * 翻成 unknown,契约编译全线红(2026-09-01 同步实测)。 */
+
 /** 团队运营只依赖这些稳定字段。保持为自包含结构，根级 typecheck
  * 在测试该纯函数时不必把整个浏览器 API 客户端一并拖进 Node 类型域。 */
 export interface TeamTask {
@@ -206,4 +212,57 @@ export function median(values: number[]): number | undefined {
   return ordered.length % 2
     ? ordered[middle]
     : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
+function mapIssueStatus(status: string): string {
+  switch (status) {
+    case "waiting_user": return "waiting_for_human";
+    case "idle": return "running";
+    case "suspended": return "paused";
+    case "archived": return "completed";
+    default: return status;
+  }
+}
+
+/** 把 IssueSummary 适配成 TeamTask,让团队看板的过滤/排序/渲染纯函数
+ * 直接复用。只填 TeamTask 的稳定字段——看板扫描态只关心 id/状态/处理人/
+ * 阶段线/更新时间,不需要 IssueSummary 的决策卡/检视/流水线等重字段。 */
+export function issueToTeamTask(issue: {
+  id: string;
+  title: string;
+  status: string;
+  account: string;
+  created_at: string;
+  updated_at: string;
+  stage?: string;
+  stage_note?: string;
+  stage_at?: string;
+}): TeamTask {
+  const status = mapIssueStatus(issue.status);
+  const needsAttention = issue.status === "waiting_user"
+    || issue.status === "failed";
+  const kind = issue.status === "failed" ? "blocked"
+    : issue.status === "waiting_user" ? "waiting"
+    : "progress";
+  const nextAction = issue.status === "waiting_user" ? "需要答复"
+    : issue.status === "failed" ? "需要介入"
+    : issue.status === "idle" ? "等待续聊"
+    : issue.status === "suspended" ? "已挂起"
+    : "AI 推进中";
+  return {
+    id: issue.id,
+    requirement: issue.title,
+    status,
+    created_at: issue.created_at,
+    updated_at: issue.updated_at,
+    last_progress_at: issue.stage_at || issue.updated_at,
+    luban_account: issue.account,
+    focus: {
+      kind,
+      headline: issue.stage_note || issue.stage || "",
+      next_action: nextAction,
+      needs_attention: needsAttention,
+      priority: needsAttention ? 1 : 0,
+    },
+  };
 }

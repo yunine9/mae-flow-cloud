@@ -341,6 +341,8 @@ export function createTaskServer(
     dts?: import("./issueFlow/gateways.ts").DtsGateway;
     /** 问题路由的台账日志(人工修改留痕,与问题服务同一口径)。 */
     log?: (message: string) => void;
+    /** 部署版本号(服务启动时间):页面侧边栏显示,部署后确认代码生效。 */
+    buildHash?: string;
   } = {},
 ): Server {
   // TaskService 也可由测试、pilot 或嵌入式调用方直接构造。只要 HTTP
@@ -725,6 +727,11 @@ export function createTaskServer(
             defaults: {
               runtime: {
                 max_concurrent: service.options.maxConcurrent ?? 2,
+                // 问题流回合并发缺省(--issue-max-turns);实际生效值
+                // 还可能被管理页运行时旋钮 issue_max_turns 覆盖,
+                // 与 max_concurrent 同一展示口径:这里只给部署层缺省。
+                issue_max_turns: options.issueFlow?.options.maxConcurrentTurns
+                  ?? 5,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
@@ -865,6 +872,11 @@ export function createTaskServer(
           });
           if (handled) return;
         }
+      }
+
+      // 部署版本号:任何页面加载时可查(无需登录),用于确认部署生效。
+      if (request.method === "GET" && url.pathname === "/build-info") {
+        return json(response, 200, { build_hash: options.buildHash ?? null });
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,

@@ -19,8 +19,11 @@ const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
 
 test("混合问题卡必须逐题完整作答", () => {
+  // 手动输入选项:选了它后要求填了自定义文本才算答完(不再强制选给定选项)。
   assert.match(decisions,
-    /return questions\.length > 0 && questions\.every\(\(item, index\) =>[\s\S]*item\.options\.length > 0 \? !!picked\[index\] : !!custom\[index\]\?\.trim\(\)\)/);
+    /return questions\.length > 0 && questions\.every\(\(item, index\) => \{/);
+  assert.match(decisions,
+    /if \(pick === MANUAL_CODE\) return !!custom\[index\]\?\.trim\(\)/);
   assert.match(decisions,
     /const ready = areIssueQuestionsComplete\(questions, picked, custom\)/);
   assert.doesNotMatch(decisions, /optionsAllPicked\s*\|\|\s*freeAnswered/);
@@ -253,4 +256,115 @@ test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(
   // 模块目录与登记页同尺:active 且有仓。
   assert.match(registration,
     /module\.status === "active"\s*&&\s*module\.repositories\.length > 0/);
+});
+
+// ---- 问题会话查看模式(docs/issue-session-view-mode.md):非归属人只读
+// ---- 围观(四信息面完整、零操作控件),归属人照常操作;团队看板入口
+// ---- 行为不变。
+
+test("问题会话查看模式:标识上屏可读,判定按登录用户与会话归属人比对", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  // viewer 下传链:App(登录用户)→ IssueBoard → 会话视图,断链即红。
+  assert.match(app, /<IssueBoard viewer=\{session\}/);
+  assert.match(board, /viewerUsername=\{viewer\.username\}/);
+  // 判定口径:viewer 缺席(auth 关闭的演示形态)按可操作处理;
+  // 非归属人一律查看模式(管理员不例外——管理员不处理问题单)。
+  assert.match(sessionView,
+    /const canOperate = !viewerUsername \|\| viewerUsername === detail\.account;/);
+  // 标识:文案用词表词「查看模式」、归属人名上屏,只在非归属人分支
+  // 渲染;role 保证读屏能听到这条状态。
+  assert.match(sessionView,
+    /\{!canOperate && <span className="issue-view-mode" role="status"/);
+  assert.match(sessionView, /查看模式:归属人 \{detail\.account\} 的会话/);
+  assert.match(css, /\.issue-view-mode \{/);
+});
+
+test("问题会话查看模式:操作控件逐处收进归属分支,信息面不收", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  // 工作台头部:绑单输入是写操作,三元链最末分支必须直接挂在 canOperate
+  // 上——把控件挪出该分支(渲染后靠报错兜底)= 回归,当场红;
+  // 「无单场景」是状态说明不是控件,查看模式照常示人。
+  assert.match(sessionView,
+    /\? <span className="issue-ticket empty">无单场景<\/span>[\s\S]*?: canOperate && <span className="issue-bind">/);
+  // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
+  assert.match(sessionView,
+    /\{canOperate && onNavigateProfile && detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
+  // 双栏下传:右栏 NEXT ACTION 与材料页签都必须拿到 canOperate,
+  // 面板内部的写控件由各自文件的断言钉住。
+  assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
+  assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
+  // 信息面不收:现场直播(SSE)与耗时卡点不带任何归属条件。
+  assert.match(sessionView, /: <IssueEventsPane id=\{detail\.id\} active \/>/);
+  assert.match(sessionView, /<IssueCostPanel id=\{detail\.id\} \/>/);
+  // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
+  // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
+  assert.match(rail,
+    /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
+  // 转正卡只在归属分支;挂起的等待说明对围观者保留。
+  assert.match(rail,
+    /detail\.status === "suspended" && \(canOperate\s*\?\s*<IssueAssociateCard[\s\S]*?:\s*<div className="issue-rail-card is-suspended">/);
+  // 三处输入行(收口追问/运行中插话/空闲续聊)逐处收进归属分支。
+  assert.equal((rail.match(/canOperate && <RailInput/g) ?? []).length, 3,
+    "右栏的续聊/插话输入必须逐处挂在 canOperate 分支下");
+  // done 卡的归档按钮与底部归档/取消按钮组整组不渲染。
+  assert.match(rail,
+    /\{canOperate && <button type="button" className="issue-rail-primary"/);
+  assert.match(rail, /\{canOperate && <div className="issue-rail-actions">/);
+  // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
+  // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
+  assert.match(materials, /\{canOperate && <div className="issue-materials-editor">/);
+  assert.match(materials,
+    /\{canOperate && node\.archive && <button type="button" className="issue-log-extract"/);
+  assert.match(materials,
+    /canOperate && detail\.mode === "fixed"\s*\?\s*\[\{ key: REVIEW_TAB/);
+  assert.match(materials,
+    /active === ANALYSIS_DOC && reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+});
+
+test("团队看板问题卡片入口行为不变:点击即进,不含归属判断", () => {
+  const teamCard = readFileSync(
+    resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
+  // 入口语义(spec 拍板):纯 onOpen 回调,文案与行为不因身份变化;
+  // 非归属人点开即达,查看模式在会话工作台内部呈现,卡片不做归属裁剪。
+  assert.match(teamCard, /onOpen: \(\) => void/);
+  assert.match(teamCard, /onClick=\{onOpen\}/);
+  assert.match(teamCard, /进入问题工作台/);
+  // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
+  assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
+});
+
+test("单号处处可选中复制:DTS 行单号独立于勾选 label,user-select 强制放开", () => {
+  // 单号是绑单/推送分支名的关键操作对象,复制是高频动作;button(会话
+  // 卡片)与 label(DTS 行)内的拖选被浏览器默认禁掉,CSS 强制放开。
+  assert.match(css,
+    /\.task-ticket,\s*\.issue-dts-ticket,\s*\.issue-ticket\s*\{[^}]*user-select:\s*text/);
+  // DTS 行:单号(含远程徽标)是 row-control 的直接子元素,排在勾选
+  // label 之前——拖选单号不会误勾选。
+  const rowSlice = registration.slice(
+    registration.indexOf('className="issue-dts-row-control"'),
+    registration.indexOf("issue-dts-expand"));
+  assert.ok(rowSlice.includes("issue-dts-identity"),
+    "DTS 行模板应包含单号容器");
+  assert.ok(
+    rowSlice.indexOf("issue-dts-identity") < rowSlice.indexOf("issue-dts-row-main"),
+    "单号容器必须在勾选 label 之前(独立可拖选)");
+  const labelSlice = rowSlice.slice(rowSlice.indexOf("issue-dts-row-main"));
+  assert.equal(labelSlice.includes("issue-dts-identity"), false,
+    "勾选 label 内不得再含单号容器");
+});
+
+test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻判定", () => {
+  const events = readFileSync(resolve("web/src/issues/EventsPane.tsx"), "utf-8");
+  const sticky = readFileSync(resolve("web/src/stickyBottom.ts"), "utf-8");
+  // 挂载/激活即无条件回底(用户第一眼看最新);人上翻才撒手是既有语义。
+  assert.match(events, /if \(active\) follow\.resync\(\)/);
+  // 回声守卫:位置停在程序滚动落点上的 scroll 事件不能松开跟随——
+  // 没有它,历史分批装载期间贴底会被竞态打成「已暂停跟随」。
+  assert.match(sticky, /Math\.abs\(node\.scrollTop - setTop\.current\) < 2/);
+  assert.match(sticky, /setTop\.current = node\.scrollHeight/);
 });

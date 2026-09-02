@@ -40,7 +40,6 @@ import {
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
-import { createGoOpsTools } from "./issueFlow/opsTools.ts";
 import {
   McpGateway,
   McpDtsGateway,
@@ -61,6 +60,16 @@ import {
 import { inspectDeploymentRuntime } from "./deploymentPreflight.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
+
+/** 部署版本号:服务启动时间 vYYYY.MM.DD.HHMM(本地时区),每次重启即变。
+ *  用来确认部署生效(页面侧边栏底部显示)。不依赖 git,远端 rsync
+ *  部署(无 .git)也能显示。用 toLocaleString 取服务器本地时区,不硬编码 UTC。 */
+const buildHash = (() => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `v${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`
+    + `.${pad(d.getHours())}${pad(d.getMinutes())}`;
+})();
 
 // 断管免疫要装在**第一行输出之前**(下面 CONFIG 的模块级初始化就会
 // console.log):装晚一步,启动期的日志就有机会成为死因。
@@ -806,12 +815,9 @@ async function main(): Promise<void> {
     // 等过目,确认产一次性令牌放行一次推送;真人缺省即开,显式关才关。
     pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     gitCredential: (account) => auth.gitCredential(account),
-    opsTools: existsSync(join(goToolsDir, process.platform === "win32"
+    opsToolsDir: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
-      ? createGoOpsTools({
-          toolsDir: goToolsDir,
-          log: (message) => console.log(`  ${message}`),
-        })
+      ? goToolsDir
       : undefined,
     dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
@@ -820,12 +826,15 @@ async function main(): Promise<void> {
     // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
-    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
+    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "5"),
     ...(isolateImage
       ? {
           isolation: {
             image: isolateImage,
             volumes: flags("--isolate-volume"),
+            // 与 taskService 同一 cacheRoot(2026-09-01):issueFlow 容器内
+            // build_deploy 要跑 mvn,没缓存挂载就找不到 parent POM。
+            cacheRoot: isolateCacheRoot,
             memory: isolateMemory,
             cpus: isolateCpus,
             ...(containerUser.user ? { user: containerUser.user } : {}),
@@ -1016,6 +1025,7 @@ async function main(): Promise<void> {
     // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
     dts: issueDtsGateway,
     log: issueLog,
+    buildHash,
   });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
