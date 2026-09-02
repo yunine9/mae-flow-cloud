@@ -1,30 +1,35 @@
 """Trusted Cloud host commands for the continuous delivery review loop."""
-
 import hashlib
 import json
-
 from .shared import os, time
 from .wiring import api
+from .delivery_support import (
+    render_delivery_feedback,
+    unpushed_commits as collect_unpushed_commits,
+)
 from .user_intervention import clear_stale_evidence
 from mae_flow_core.quality.external_repair import (
-    clear_feedback_authorization,
-    issue_feedback_authorization,
-)
+    clear_feedback_authorization, issue_feedback_authorization)
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
-
-
+from .host_capability import (
+    host_managed_continuous_review, verify_host_proof)
+from .host_receipts import (
+    attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
+    save_with_host_proof, trusted_active_batch, trusted_current_lifecycle,
+    trusted_pipeline_projection)
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
 _RESULTS = frozenset(("fixed", "explained", "needs_human", "not_applicable"))
 _WAITING = frozenset(("external_verify", "delivery_watch"))
-_WRITER = frozenset((
-    "feedback_triage", "build", "domain_archive", "delivery_review", "push",
-))
-
-
+_WRITER = frozenset(("feedback_triage", "build", "domain_archive",
+                     "delivery_review", "push"))
 def _die(message):
     api.die("delivery: " + message, 2)
+
+
+def _verify_host_proof(state, args, action, payload):
+    return verify_host_proof(state, args.host_proof, action, payload)
 
 
 def _payload(path, schema):
@@ -78,7 +83,8 @@ def _batch(loop, batch_id):
 
 
 def _capability(state):
-    if not continuous_review_enabled(state):
+    if not (host_managed_continuous_review()
+            or continuous_review_enabled(state)):
         _die("当前任务没有启用 Cloud continuous_review 执行契约，拒绝静默降级")
 
 
@@ -123,14 +129,83 @@ def _history(state, step, result, note):
     })
 
 
+def _adopt_watch(state, payload, proof_nonce):
+    """One-way adoption for pre-contract Cloud tasks already awaiting merge."""
+    migration_id = _text(payload.get("batch_id"), "batch_id", 200)
+    contract = state.get("execution_contract") or {}
+    if contract.get("host") != "cloud":
+        _die("只有旧 Cloud 任务可以迁移到持续检视")
+    loop = _loop(state)
+    migrations = loop.setdefault("migrations", [])
+    previous = next((
+        item for item in migrations
+        if isinstance(item, dict) and item.get("migration_id") == migration_id
+    ), None)
+    if previous is not None:
+        save_with_host_proof(state, proof_nonce)
+        print(json.dumps({
+            "schema": STATE_SCHEMA, "idempotent": True,
+            "migration_id": migration_id, "current": state.get("current"),
+        }, ensure_ascii=False))
+        return
+    if state.get("current") != "end":
+        _die("adopt-watch 只接受旧终态 end，当前是 %s"
+             % str(state.get("current") or "?"))
+    head = _head()
+    external = ((state.get("quality") or {}).get("external_verification") or {})
+    if external.get("verdict") != "PASS" or external.get("sha") != head:
+        _die("旧终态没有绑定当前 HEAD 的权威 PASS，不能安全迁移")
+    contract["continuous_review"] = True
+    state["execution_contract"] = contract
+    state["current"] = "delivery_watch"
+    state.setdefault("step_heads", {})["delivery_watch"] = head
+    migrations.append({
+        "migration_id": migration_id,
+        "kind": "terminal-to-delivery-watch",
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "head": head,
+    })
+    save_with_host_proof(state, proof_nonce)
+    print(json.dumps({
+        "schema": STATE_SCHEMA, "idempotent": False,
+        "migration_id": migration_id, "current": "delivery_watch",
+    }, ensure_ascii=False))
+
+
 def _open(flow, state, args):
     del flow
-    _capability(state)
     payload = _payload(args.file, BATCH_SCHEMA)
+    proof_nonce = _verify_host_proof(state, args, "feedback-open", payload)
+    if payload.get("mode") == "adopt-watch":
+        return _adopt_watch(state, payload, proof_nonce)
+    _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
+    if host_managed_continuous_review():
+        existing_loop = state.get("delivery_loop")
+        active_id = (str(existing_loop.get("active_batch_id") or "")
+                     if isinstance(existing_loop, dict) else "")
+        predecessor_ok = (trusted_active_batch(state, (
+            "feedback-open", "feedback-result", "pipeline-record"))
+            if active_id
+            else trusted_current_lifecycle(state, (
+                "pipeline-record", "feedback-open", "feedback-result",
+                "intervention-reconcile")))
+        # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
+        # 升级、迁移前的现场),这条命令本身就是第一环;这时还要求"先有
+        # 前驱收据"等于宣布这单的反馈永远打不开,且无命令可补。
+        if not predecessor_ok and has_host_receipt(state):
+            _die("打开反馈前的持续检视生命周期没有宿主收据，拒绝接着可篡改状态推进")
     loop = _loop(state)
     previous = _batch(loop, batch_id)
     if previous is not None:
+        incoming_digest = _result_digest({
+            "task_id": payload.get("task_id"),
+            "base_sha": payload.get("base_sha"),
+            "items": payload.get("items"),
+        })
+        if previous.get("payload_digest") != incoming_digest:
+            _die("批次 %s 的载荷与首次登记不一致，拒绝当作幂等重放" % batch_id)
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA,
             "idempotent": True,
@@ -161,7 +236,19 @@ def _open(flow, state, args):
     if len(ids) != len(set(ids)):
         _die("同一批次 items.id 不得重复")
     loop["delivery_round"] = int(loop.get("delivery_round") or 0) + 1
-    active = bool(loop.get("active_batch_id"))
+    active_batch = _batch(loop, str(loop.get("active_batch_id") or ""))
+    # A RED result for the code produced by the previous batch is itself new
+    # feedback. The previous receipts stay immutable/auditable, but it no
+    # longer owns the writer; otherwise the RED batch would queue behind a
+    # PASS that can never happen and Cloud would livelock on external_verify.
+    if active_batch and active_batch.get("status") == "awaiting_verification":
+        active_batch["status"] = "addressed"
+        active_batch["verification_failed_at"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S")
+        loop["active_batch_id"] = ""
+        clear_feedback_authorization(state)
+        active_batch = None
+    active = bool(active_batch)
     status = "queued" if active else "repairing"
     record = {
         "batch_id": batch_id,
@@ -172,6 +259,11 @@ def _open(flow, state, args):
         "from_step": str(state.get("current") or ""),
         "status": status,
         "items": items,
+        "payload_digest": _result_digest({
+            "task_id": payload.get("task_id"),
+            "base_sha": payload.get("base_sha"),
+            "items": payload.get("items"),
+        }),
     }
     loop["batches"].append(record)
     old = str(state.get("current") or "")
@@ -179,13 +271,14 @@ def _open(flow, state, args):
         loop["active_batch_id"] = batch_id
         issue_feedback_authorization(
             state, batch_id=batch_id, base_sha=base_sha,
-            at=record["opened_at"], dirty_paths=api._dirty_paths())
+            at=record["opened_at"], dirty_paths=api._dirty_paths(),
+            allowed_paths=(item.get("file", "") for item in items))
         if old in _WAITING:
             state["current"] = "feedback_triage"
             state.setdefault("step_heads", {})["feedback_triage"] = head
     _history(state, old, "feedback-open:" + batch_id,
              "收到 %s 条反馈；%s" % (len(items), status))
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps({
         "schema": STATE_SCHEMA,
         "idempotent": False,
@@ -215,7 +308,9 @@ def _promote(state, loop):
     loop["active_batch_id"] = queued["batch_id"]
     issue_feedback_authorization(
         state, batch_id=queued["batch_id"], base_sha=queued["base_sha"],
-        at=queued.get("opened_at", ""), dirty_paths=api._dirty_paths())
+        at=queued.get("opened_at", ""), dirty_paths=api._dirty_paths(),
+        allowed_paths=(item.get("file", "")
+                       for item in queued.get("items", [])))
     return queued
 
 
@@ -228,6 +323,11 @@ def complete_verified_feedback(state, verified_sha):
     batch["status"] = "closed"
     batch["verified_sha"] = str(verified_sha or "")
     batch["closed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    for previous in loop.get("batches", []):
+        if isinstance(previous, dict) and previous.get("status") == "addressed":
+            previous["status"] = "closed"
+            previous["verified_sha"] = str(verified_sha or "")
+            previous["closed_at"] = batch["closed_at"]
     _history(state, state.get("current", ""),
              "feedback-verified:" + batch["batch_id"],
              "权威验证通过 %s" % str(verified_sha or "")[:12])
@@ -236,8 +336,13 @@ def complete_verified_feedback(state, verified_sha):
 
 def _result(flow, state, args):
     del flow
-    _capability(state)
     payload = _payload(args.file, RESULT_SCHEMA)
+    proof_nonce = _verify_host_proof(state, args, "feedback-result", payload)
+    _capability(state)
+    if (host_managed_continuous_review()
+            and not trusted_active_batch(state, (
+                "feedback-open", "pipeline-record", "feedback-result"))):
+        _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     batch = _batch(loop, batch_id)
@@ -270,12 +375,16 @@ def _result(flow, state, args):
     if batch.get("result_digest"):
         if batch.get("result_digest") != digest:
             _die("批次 %s 已登记不同结果，拒绝覆盖" % batch_id)
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA, "idempotent": True,
             "batch_id": batch_id, "status": batch.get("status"),
             "current": state.get("current"),
         }, ensure_ascii=False))
         return
+    if batch_id != str(loop.get("active_batch_id") or ""):
+        _die("反馈批次 %s 尚未取得唯一 writer，不能提前登记处理结果"
+             % batch_id)
     head = _head()
     declared_changed = bool(payload.get("changed"))
     changed = declared_changed or head != batch.get("base_sha")
@@ -300,7 +409,7 @@ def _result(flow, state, args):
     _history(state, str(batch.get("from_step") or ""),
              "feedback-result:" + batch_id,
              "%s；HEAD %s" % (batch["status"], head[:12]))
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps({
         "schema": STATE_SCHEMA,
         "idempotent": False,
@@ -312,6 +421,12 @@ def _result(flow, state, args):
 
 
 def _close(flow, state, args):
+    proof_payload = {
+        "reason": args.reason,
+        "sha": args.sha,
+        "event_id": args.event_id,
+    }
+    proof_nonce = _verify_host_proof(state, args, "close", proof_payload)
     _capability(state)
     if args.reason != "merged":
         _die("close 当前只接受 --reason merged")
@@ -322,22 +437,38 @@ def _close(flow, state, args):
         if isinstance(item, dict) and item.get("event_id") == event_id
     ), None)
     if previous is not None:
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({**previous, "idempotent": True}, ensure_ascii=False))
         return
-    verified = ((state.get("quality") or {}).get("external_verification") or {})
+    verified = external_facts(state)
     verified_sha = str(verified.get("sha") or "")
+    # 两条分支原来走的是两个语义不同的函数:else 分支拿"外部验证事实"
+    # 去和"生命周期投影"逐字比对,永远不可能相等——只要走到那条路就是
+    # 必死的 close。收据校验只有一种正确形态,不再留第二条。
+    #
+    # 有过流水线收据才拿收据说话。这一单的 PASS 若登记在能力链之前
+    # (老任务、迁移现场),它永远拿不出 pipeline-record 收据;此时还要
+    # 求"没收据就不许 close",等于宣布 MR 合入了任务也永远关不掉,而
+    # 合入本身是远端事实、迁移时宿主已核对过这份 PASS 绑当前 HEAD。
+    if (not trusted_pipeline_projection(state, verified)
+            and has_receipt_for(state, "pipeline-record")):
+        _die("当前流水线 PASS 没有 Cloud 宿主权威收据，拒绝 close")
     if verified.get("verdict") != "PASS" or args.sha != verified_sha:
         _die("合入源 SHA %s 没有当前权威 PASS 背书（最近验证 %s）"
              % (str(args.sha)[:12], verified_sha[:12] or "无"))
     if not flow.get("steps", {}).get("end", {}).get("terminal"):
         _die("内核流程缺少终态 end")
     dirty = list(api._dirty_paths())
+    local_head = _head()
+    unpushed_commits = collect_unpushed_commits(verified_sha, local_head, _die)
     old = str(state.get("current") or "")
     event = {
         "schema": STATE_SCHEMA,
         "event_id": event_id,
         "reason": "merged",
         "sha": str(args.sha),
+        "local_head": local_head,
+        "unpushed_local_commits": unpushed_commits,
         "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "unpushed_local_paths": dirty,
         "idempotent": False,
@@ -351,7 +482,7 @@ def _close(flow, state, args):
     state.pop("external_repair_authorization", None)
     state["current"] = "end"
     _history(state, old, "delivery-close:merged", "MR 已合入 %s" % args.sha[:12])
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps(event, ensure_ascii=False))
 
 
@@ -362,22 +493,6 @@ def cmd_delivery(flow, state, args):
         return _result(flow, state, args)
     if args.delivery_action == "close":
         return _close(flow, state, args)
+    if args.delivery_action == "attest":
+        return attest_host_receipts(state, args)
     _die("未知动作")
-
-
-def render_delivery_feedback(state):
-    loop = (state or {}).get("delivery_loop") or {}
-    batch = _batch(loop, str(loop.get("active_batch_id") or ""))
-    if not batch:
-        return ""
-    lines = [
-        "──── 持续检视第 %s 轮（%s） ────" % (
-            batch.get("round", "?"), batch.get("status", "open")),
-    ]
-    for item in batch.get("items", []):
-        lines.append("- [%s] %s：%s%s" % (
-            item.get("source", "反馈"), item.get("id", "?"),
-            item.get("summary", ""),
-            ("（材料：%s）" % item.get("material"))
-            if item.get("material") else ""))
-    return "\n".join(lines)

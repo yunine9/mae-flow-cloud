@@ -87,8 +87,20 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
       method: "POST",
       body: JSON.stringify({ requirement: "交付 API-1:编译并检视" }),
     }).then((r) => readJson(r));
-    // 并发额度未满时队列泵在 create 返回前就已起跑,两种都合法。
-    assert.ok(["queued", "running"].includes(created.status));
+    assert.equal(created.status, "waiting_for_human");
+    assert.equal(created.waiting.step, "cloud_requirement_analysis_confirm");
+    const entryQuestion = created.waiting.question.questions[0].question;
+    const entered = await fetch(`${base}/tasks/${created.id}/decision`, {
+      method: "POST",
+      body: JSON.stringify({
+        waiting_id: created.waiting.waiting_id,
+        state_version: created.waiting.state_version,
+        selected_options: {
+          [entryQuestion]: "需求已确认，进入需求分析",
+        },
+      }),
+    });
+    assert.equal(entered.status, 200);
 
     const waiting = await until(async () => {
       const task = await fetch(`${base}/tasks/${created.id}`)
@@ -278,6 +290,8 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
       '<span class="phase-node current">澄清需求</span>',
       '<span class="phase-node future">定规格</span>',
     ].join(""));
+    // 阶段顺序不再从 panel.html 抠,而是读内核 flow/phases.json 同一份词表;
+    // 脉冲里的阶段名由内核按同一份文件算出。
     writeFileSync(join(workDir, "panel-pulse.js"),
       'window.__panelPulse={"phase":"澄清需求",'
       + '"step_title":"需求澄清(逐题拍板)","revision":8};');
@@ -285,7 +299,8 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
     assert.equal(page.status, 200);
     assert.match(await page.text(), /现场面板/);
     const progress = service.get(created.id)!.progress!;
-    assert.deepEqual(progress.phases, ["启动", "澄清需求", "定规格"]);
+    assert.deepEqual(progress.phases,
+      ["启动", "澄清需求", "定规格", "写设计", "写代码", "检视与验证", "已合入"]);
     assert.equal(progress.current_index, 1);
     assert.equal(progress.step, "需求澄清(逐题拍板)");
     // build 里程碑是内核 append-only 旁路，只补充“正在做哪块”，不改
@@ -296,7 +311,7 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
         reason: "等待上游字段", at: "2026-08-20 10:00:00",
       }] }));
     writeFileSync(join(workDir, "panel-pulse.js"),
-      'window.__panelPulse={"phase":"澄清需求","step":"build",'
+      'window.__panelPulse={"phase":"写代码","step":"build",'
       + '"step_title":"编码实现","revision":9};');
     const buildProgress = service.get(created.id)!.progress!;
     assert.deepEqual(buildProgress.milestone, {

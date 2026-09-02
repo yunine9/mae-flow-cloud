@@ -132,11 +132,15 @@
   color: var(--text);
 }
 
+/* 编辑框要能拉大(用户实锤):默认四行起步,竖向可拖到大半屏;横向跟着
+   编辑框容器走,不单独拖(拖宽会顶出定位容器)。 */
 .annot-editor textarea {
   font: inherit;
   font-size: 15px;
   line-height: 1.6;
   padding: 8px 10px;
+  min-height: 108px;
+  max-height: 70vh;
   resize: vertical;
   color: var(--text);
   background: var(--surface-soft);
@@ -147,6 +151,51 @@
 .annot-editor textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.annot-route-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
+  justify-content: start;
+  gap: 6px;
+}
+
+.annot-route-picker button {
+  min-height: 30px;
+  padding: 4px 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.annot-route-picker button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+
+.annot-route-picker small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .annot-route-picker {
+    grid-template-columns: 1fr;
+  }
+  .annot-route-picker button {
+    width: 100%;
+    text-align: left;
+  }
+  .annot-editor-actions > span {
+    display: none;
+  }
 }
 
 .annot-editor-actions {
@@ -285,6 +334,36 @@
   border-left: 3px solid var(--accent);
 }
 
+.annot-panel-note.receipt-pending {
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention-soft) 76%, var(--surface));
+  border-left: 3px solid var(--attention);
+}
+
+.annot-review-queue {
+  padding: 11px 14px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.annot-review-queue > div { min-width: 0; display: grid; gap: 2px; }
+.annot-review-queue strong { color: var(--text-strong); font-size: 15px; }
+.annot-review-queue span { color: var(--muted); font-size: 13px; }
+.annot-review-queue em {
+  flex: none;
+  padding: 3px 8px;
+  color: var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .annot-list {
   margin: 0;
   padding: 0;
@@ -297,7 +376,21 @@
   border-left: 3px solid var(--line-strong);
 }
 
+.annot-item.actionable {
+  margin: 0 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 22%, var(--surface));
+  box-shadow: var(--shadow-xs);
+}
+
+.annot-item.actionable + .annot-item.actionable { margin-top: 0; }
+
 .annot-item:last-child { border-bottom: 0; }
+.annot-item.actionable:last-child {
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+}
 .annot-item.draft { border-left-color: var(--accent); }
 .annot-item.waiting { border-left-color: var(--attention); }
 .annot-item.review { border-left-color: var(--attention); }
@@ -347,10 +440,39 @@
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
+.annot-route-badge {
+  width: fit-content;
+  margin: 7px 0 0;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.annot-route-badge.owner_reply {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 11%, var(--surface));
+}
+
+.annot-route-badge.owner_decision {
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 12%, var(--surface));
+}
+
 /* 裁决按钮:通过是收口动作给实色,返工是退回动作给描边。 */
 .annot-verdict {
   display: inline-flex;
   gap: 6px;
+}
+
+.annot-item.actionable .annot-verdict {
+  width: 100%;
+  padding-top: 9px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
 }
 
 .annot-verdict button.approve {
@@ -449,13 +571,66 @@
 .annot-response p,
 .annot-response small { margin: 0; }
 
-.annot-response p { line-height: 1.55; }
+/* Agent 的回应常是多行(逐点说明、贴改动位置),换行要保住,不然整段
+   糊成一行长文(用户实锤"AI 回复只显示一行")。 */
+.annot-response p {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .annot-response small {
   display: block;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+
+.annot-owner-reply {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 9px 10px;
+  border-left: 2px solid var(--success);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--success) 7%, var(--surface));
+}
+
+.annot-owner-reply strong,
+.annot-owner-reply p,
+.annot-owner-reply small { margin: 0; }
+.annot-owner-reply p { color: var(--text); line-height: 1.55; }
+.annot-owner-reply small { color: var(--muted); }
+
+.annot-owner-reply-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid var(--attention);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.annot-owner-reply-editor textarea {
+  width: 100%;
+  padding: 8px 9px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.annot-owner-reply-editor > div,
+.annot-owner-reply-action {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.annot-owner-reply-action { margin-top: 9px; }
 
 .annot-inline-editor {
   margin: 2px 0 8px;
@@ -469,6 +644,8 @@
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
+  min-height: 132px;
+  max-height: 70vh;
   resize: vertical;
   font: inherit;
   font-size: 15px;
@@ -539,6 +716,47 @@
   color: var(--attention);
   background: var(--attention-soft);
   border-radius: 8px;
+}
+
+/* 宽检视工作面把“人的意见”和“Agent 回应”横向对应起来；没有逐条
+   回应的历史意见仍保持自然单列，避免为了对称制造大片空白。 */
+@media (min-width: 860px) {
+  .workspace-review-notes .annot-item:has(.annot-response) {
+    display: grid;
+    grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+    grid-template-areas:
+      "head head"
+      "note response"
+      "anchor response"
+      "foot foot"
+      "stale stale";
+    column-gap: 18px;
+    align-items: start;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-item-head {
+    grid-area: head;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-note,
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-inline-editor {
+    grid-area: note;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-anchor {
+    grid-area: anchor;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-response {
+    grid-area: response;
+    margin: 0;
+    align-self: stretch;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-item-foot {
+    grid-area: foot;
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-stale {
+    grid-area: stale;
+  }
 }
 
 /* 决定卡上的那一行提示:圈过的会自动作为理由带上。 */

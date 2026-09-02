@@ -16,6 +16,23 @@ import {
 } from "./annotateTargets";
 import "./annotate.css";
 
+type AnnotationRoute = "agent" | "owner_reply" | "owner_decision";
+
+const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string }> = {
+  agent: {
+    label: "Agent 处理",
+    hint: "Agent 直接修改并提供处理结果。",
+  },
+  owner_reply: {
+    label: "责任人答复",
+    hint: "由任务责任人回答，Agent 不会代替责任人表态。",
+  },
+  owner_decision: {
+    label: "决策后处理",
+    hint: "责任人先给结论，系统再把结论交给 Agent 执行。",
+  },
+};
+
 interface Draft {
   file: string;
   line: number;
@@ -59,6 +76,7 @@ export function Annotatable({
   const host = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Draft>();
   const [note, setNote] = useState("");
+  const [route, setRoute] = useState<AnnotationRoute>("agent");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 点了但没开成框时的一句人话:功能"点不了"的投诉里,多数其实是
@@ -99,6 +117,7 @@ export function Annotatable({
     setError("");
     setHint("");
     setNote("");
+    setRoute("agent");
     setDraft({
       file: row.closest<HTMLElement>("[data-file]")?.dataset.file
         ?? fallbackFile,
@@ -176,6 +195,7 @@ export function Annotatable({
           anchor: draft.anchor,
           note: text,
           kind: draft.kind,
+          route,
         });
       if (result.error) {
         setError(result.error);
@@ -235,7 +255,7 @@ export function Annotatable({
           </div>
           <textarea
             autoFocus
-            rows={2}
+            rows={4}
             value={note}
             placeholder="这里要改什么？例如：这个重试应该只对网关失败生效"
             onChange={(event) => setNote(event.target.value)}
@@ -247,6 +267,20 @@ export function Annotatable({
               }
             }}
           />
+          {!addDraft && (
+            <div className="annot-route-picker" role="radiogroup"
+                 aria-label="这条意见交给谁">
+              {(Object.keys(ROUTE_COPY) as AnnotationRoute[]).map((value) => (
+                <button key={value} type="button" role="radio"
+                        aria-checked={route === value}
+                        className={route === value ? "active" : ""}
+                        onClick={() => setRoute(value)}>
+                  {ROUTE_COPY[value].label}
+                </button>
+              ))}
+              <small>{ROUTE_COPY[route].hint}</small>
+            </div>
+          )}
           {error && <div className="alert">{error}</div>}
           <div className="annot-editor-actions">
             <span>⌘/Ctrl + Enter 记下 · Esc 取消</span>
@@ -307,7 +341,7 @@ function editorPosition(
       position: "fixed",
       zIndex: 270,
       width,
-      top: Math.min(rowBox.bottom + 5, window.innerHeight - 190),
+      top: Math.max(16, Math.min(rowBox.bottom + 5, window.innerHeight - 270)),
       left: Math.max(16, Math.min(rowBox.left, window.innerWidth - width - 16)),
     };
   }

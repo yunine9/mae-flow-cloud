@@ -49,12 +49,17 @@ def build_pulse(state, flow):
     }
 
 
-def write_pulse(state_path, flow=None, root=None):
-    """写一次脉冲;两秒内已写过就跳过。失败一律静默——它绝不能影响流程。"""
+def write_pulse(state_path, flow=None, root=None, force=False):
+    """写一次脉冲;两秒内已写过就跳过。失败一律静默——它绝不能影响流程。
+
+    force:宿主命令(流水线登记、反馈开批/落结果、MR 合入收口)推进的是
+    Agent 不在场的阶段跃迁,没有 Hook 事件会来补写脉冲;两秒节流在这里
+    等于"合入后进度条永远停在上一段",所以它们必须强制写。
+    """
     try:
         root = root or os.getcwd()
         target = pulse_path(root)
-        if _recent(target):
+        if not force and _recent(target):
             return False
         with open(state_path, encoding="utf-8") as stream:
             state = json.load(stream)

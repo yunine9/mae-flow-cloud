@@ -65,11 +65,26 @@ function deliveryScenes(breakTransport = false, authoritativeRepo?: string): Sce
   ];
 }
 
+/** 模拟修复 Agent 按持续检视契约为本批每条反馈留下精确回执。 */
+function feedbackReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\"),c=require(\"crypto\");"
+    + "const d=\"../kernel-delivery\";const ps=fs.readdirSync(d)"
+    + ".filter(x=>x.startsWith(\"feedback-open-\"));"
+    + "fs.mkdirSync(\"../feedback\",{recursive:true});"
+    + `const summary=${safeSummary};`
+    + "for(const p of ps){const b=JSON.parse(fs.readFileSync(d+\"/\"+p,\"utf8\"));"
+    + "const id=b.batch_id;const name=\"result-\"+c.createHash(\"sha256\")"
+    + ".update(id).digest(\"hex\").slice(0,24)+\".json\";"
+    + "fs.writeFileSync(\"../feedback/\"+name,JSON.stringify({schema:"
+    + "\"mae-flow-feedback-results/1\",batch_id:id,results:b.items.map(x=>({"
+    + "id:x.id,status:\"fixed\",summary,evidence:\"feature.txt\"}))}));}'";
+}
+
 function repairScenes(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-      "echo repaired >> feature.txt && git add feature.txt && "
-      + 'git commit --quiet -m "fix: pipeline repair"' } } },
+      `echo repaired >> feature.txt; ${feedbackReceiptCommand("流水线问题已修复")}` } } },
     { text: "修复已提交。" },
   ];
 }
@@ -91,17 +106,20 @@ function serviceWithRunner(
   model: ScriptedModelServer,
   runner: PrePushRunner,
   dataDir: string,
-  timing: { pollIntervalMs?: number; pollTimeoutMs?: number } = {},
+  timing: { pollIntervalMs?: number; pollTimeoutMs?: number;
+            continuousReview?: boolean } = {},
 ): TaskService {
   return new TaskService({
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    log: process.env.DEBUG_CONTINUOUS_REVIEW ? console.error : undefined,
     host: {
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: timing.continuousReview ?? false,
     },
     delivery: {
       platformUrl: platform.baseUrl,
@@ -123,6 +141,7 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
       linear: true,
       beforeScene: managedFlowFixture(dataDir, {
         branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+        continuousReview: true,
       }),
     });
   await model.start();
@@ -134,7 +153,7 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
       sha: request.sha,
       message: "fixture compile and unit tests passed",
     };
-  }, dataDir);
+  }, dataDir, { continuousReview: true });
   try {
     const id = service.create("REQ_PREPUSH：两版代码都要预检", {
       ticket: "REQ_PREPUSH",

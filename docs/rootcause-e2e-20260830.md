@@ -1156,3 +1156,48 @@ task-1 的三个串行单元、task-6 的两个并行仓子任务都进入 `comp
   产品提交。
 - 最终全量回归：1082 项，1073 通过、0 失败、9 项按环境显式跳过；主/contract
   TypeScript 检查、Web 生产构建与 `git diff --check` 全绿。
+
+## 第六轮：持续检视闭环落地（2026-09-01）
+
+### MFC-064 · P0 · MR 后检视返工把任务重新开回配置阶段（已根治）
+
+- **事故现象**：MR 已创建后收到检视意见，Cloud 启动修复会话，内核进度却回到
+  `config_confirm/workflow_select`，再次询问配置和交付方式；用户看到像是新任务。
+- **根因**：Cloud 的产品终点是 MR 合入，旧内核终点却是 push/流水线 PASS 后的
+  `end`。Cloud 为了让 terminal 内核再次允许修改，只能执行 `init`；内核因此把
+  原状态归档成 `.mae-flow.json.last` 并新建配置流程。旧
+  `reopenKernelForRework` 一类局部回退只能修某个入口，无法统一来自工作台、
+  Build-Fix、流水线、MR 检视、冲突、负责面和 push 确认卡的反馈。
+- **根治**：Mae-Flow Cloud 专属执行契约新增非终态 `delivery_watch` 和
+  `feedback_triage`，以及宿主专用 feedback-open/result/close；Cloud 建立追加式
+  FeedbackStore 和单 writer 编排，ready 与 completion 证明拆开。push、MR 创建和
+  绿灯只表示当前 HEAD 就绪，只有 MR merged（或用户主动停止）才终止任务。
+- **兼容恢复**：旧 `await_merge + end` 幂等迁到 `delivery_watch`；错误重开现场
+  只有在 `.last` 的任务号、基线、分支和已验证 SHA 都可机械证明时才恢复，否则
+  明确停下，不猜着覆盖代码现场。
+- **防回归**：同一 MR 经工作台意见与流水线 RED 两轮后合入；工作台/MR 人工核验
+  不被内核总体回执代替；steer 与派单、Build-Fix 中断、重启恢复、MR 合入四类
+  single-writer 竞态均有测试。后续返工页面固定显示“持续检视”，不得再出现配置
+  确认、交付方式、新任务号、新分支或新 MR。
+- **终审加固**：宿主 delivery 命令改用工作区外 RSA 私钥签发的一次性凭据，Hook
+  只做友好提示、不再被当作安全边界；机器来源反馈必须交精确结构化回执，禁止用
+  总体回复或 HEAD 变化代填；MR 评论编辑按 revision/稳定内容指纹形成新反馈；反馈
+  索引末尾半行可恢复、中段坏账明确停摆、缺记录从内核账重建。MR 合入时若本地已有
+  未推送提交，close 绑定实际合入 SHA 完成并把未推送提交/路径留痕，不再死锁，也不
+  冒充已经交付。
+- **终审二次加固**：Agent 可写状态不再是任何宿主事实的信任根；反馈登记/结果、
+  流水线裁决、用户介入与 merged close 都由工作区外持久收据背书。迁移失败会回滚，
+  close 后 Cloud 未落盘可在重启时恢复；反馈索引做完整语义校验、逐任务隔离和可信
+  重建，内核结果成功后的索引写入中断可幂等补齐。MR discussion 拉取失败不再当成
+  空列表，页面明确显示自动重试。以上均有真实内核命令或故障注入回归。
+- **终审信任根封口**：持续检视能力另有工作区外、绑定任务与真实仓库路径的宿主文件，
+  Agent 不能靠删字段或写 `continuous_review=false` 降级；宿主收据签完整生命周期，
+  feedback-result 只对处理期间允许变化的 `current` 放宽，而活动批次本身仍精确验签。
+  MR 合入与末尾 pipeline record 同时写内核时，只对明确的 revision 冲突做有界
+  幂等重试，避免已合入任务被误停在 `verifying`；任何其他失败仍 fail-closed。
+  最后一行即使没有换行，只要 JSON 已完整写成就必须继续做语义校验，非法账不能再被
+  当作崩溃半行静默跳过。
+- **诚实边界**：仓库中没有线上事故的原始 `.last` 文件，当前测试由真实旧内核
+  命令链生成相同事故形态，不是手写状态；Issue Flow 没有 Mae-Flow 内核，本批
+  复用统一反馈索引与单 writer，但未伪造 delivery 命令。详见
+  `docs/continuous-review-loop-design.md` §16。

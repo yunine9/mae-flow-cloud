@@ -8,6 +8,7 @@ from comet_compat import BEGIN as COMET_COMPAT_BEGIN, comet_guard_paths, ensure_
 from mae_flow_core import (
     CapabilityError,
     RuntimeMode,
+    StateConflictError,
     StateStoreError,
     action_work_dir as core_action_work_dir,
     archive_action as core_archive_action,

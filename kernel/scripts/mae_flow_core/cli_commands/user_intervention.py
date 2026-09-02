@@ -7,8 +7,12 @@ workflow; it never advances a step or marks quality evidence as passed.
 
 from .shared import STATE_PATH, json, os, time
 from .wiring import api
+from .host_capability import (
+    host_managed_continuous_review, verify_host_proof)
+from .host_receipts import save_with_host_proof
 from .lightcheck import _is_test_file
 from .state_config import _is_source_path
+from mae_flow_core.workflow.execution_contract import continuous_review_enabled
 
 
 SCHEMA = "mae-flow-user-intervention/1"
@@ -140,10 +144,19 @@ def cmd_user_intervention(flow, state, args):
     if args.intervention_action != "reconcile":
         api.die("未知用户介入动作", 2)
     payload = _load_payload(args.file)
+    continuous = host_managed_continuous_review() or continuous_review_enabled(state)
+    proof = None
+    if continuous:
+        if not getattr(args, "host_proof", None):
+            api.die("intervention reconcile 在 continuous_review 下必须携带 Cloud 宿主凭据", 2)
+        proof = verify_host_proof(
+            state, args.host_proof, "intervention-reconcile", payload)
     intervention_id = _text(payload.get("intervention_id"), 120)
     previous = state.get("user_intervention") or {}
     if (intervention_id and isinstance(previous, dict)
             and previous.get("id") == intervention_id):
+        if continuous:
+            save_with_host_proof(state, proof)
         print(json.dumps({
             "schema": SCHEMA,
             "changed": bool(previous.get("changed")),
@@ -191,7 +204,10 @@ def cmd_user_intervention(flow, state, args):
     if target and target != old:
         state.setdefault("step_heads", {})[target] = api.sh(
             "git rev-parse --verify HEAD")
-    api.save_state(state)
+    if continuous:
+        save_with_host_proof(state, proof)
+    else:
+        api.save_state(state)
     print(json.dumps({
         "schema": SCHEMA,
         "changed": changed,

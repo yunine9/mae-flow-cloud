@@ -51,8 +51,52 @@ function seed(
     anchor: over.anchor ?? "手机号按后四位掩码",
     note,
     kind: over.kind ?? "doc",
+    route: over.route,
+    assignee: over.assignee,
   });
 }
+
+test("批注接收对象：旧账默认 Agent，责任人答复独立留痕且只有指派人可答", () => {
+  const target = store();
+  const legacy = seed(target, "按旧逻辑交给 Agent");
+  assert.equal(legacy.route, undefined, "旧账不补写字段也必须保持可读");
+
+  const question = seed(target, "为什么不用旧接口？", {
+    route: "owner_reply", assignee: "owner",
+  });
+  target.markSent([question.id], "owner_pending");
+  assert.throws(() => target.replyAsOwner(question.id, "visitor", "我猜是历史原因"),
+    AnnotationPermissionError);
+  const answered = target.replyAsOwner(question.id, "owner", "旧接口不支持多通道");
+  assert.equal(answered.owner_reply?.author, "owner");
+  assert.equal(answered.owner_reply?.text, "旧接口不支持多通道");
+  assert.equal(answered.response, undefined, "责任人答复不能冒充 Agent 回执");
+});
+
+test("决策后处理：先等责任人，责任人落结论后排进当前人工决定再交 Agent", async () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-owner-route-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const id = service.create("高风险失败需要明确策略", { account: "owner" }).id;
+  const note = service.addAnnotation(id, {
+    author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "高风险失败需要明确策略",
+    note: "请责任人决定是否停止交付", kind: "doc",
+    route: "owner_decision",
+  });
+  assert.equal(note.assignee, "owner", "指派对象由任务责任人事实固定");
+  await service.sendAnnotations(id, [note.id], "reviewer");
+  assert.equal(service.listAnnotations(id).items[0].sent_via, "owner_pending");
+
+  const internal = (service as any).tasks.get(id);
+  internal.summary.status = "waiting_for_human";
+  const replied = await service.replyToAnnotation(
+    id, note.id, "owner", "重试耗尽后停止交付，不允许自动降级");
+  assert.equal(replied.owner_reply?.text, "重试耗尽后停止交付，不允许自动降级");
+  assert.equal(replied.sent_via, "queued_decision",
+    "已有人工卡时不越权跳过审批，而是把责任人结论排入当前决定");
+});
 
 test("批注清单:那四条护栏一字不能少", () => {
   const target = store();
@@ -379,12 +423,16 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
       body: JSON.stringify({ requirement: "检视作者权限" }),
     }).then((response) => readJson(response)) as { id: string };
 
-    async function add(cookie: string, note: string): Promise<Annotation> {
+    async function add(
+      cookie: string,
+      note: string,
+      route: Annotation["route"] = "agent",
+    ): Promise<Annotation> {
       const response = await fetch(`${base}/tasks/${created.id}/annotations`, {
         method: "POST", headers: { cookie },
         body: JSON.stringify({
           artifact: "spec.md", file: "spec.md", line: 1,
-          anchor: "原始内容", note, kind: "doc",
+          anchor: "原始内容", note, kind: "doc", route,
         }),
       });
       assert.equal(response.status, 201);
@@ -393,6 +441,31 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
 
     const committerNote = await add(committer, "Committer 的意见");
     const developerNote = await add(developer, "开发的意见");
+
+    const ownerQuestion = await add(
+      developer, "请任务责任人解释接口取舍", "owner_reply");
+    const ownerQuestionSent = await fetch(
+      `${base}/tasks/${created.id}/annotations/send`, {
+        method: "POST", headers: { cookie: developer },
+        body: JSON.stringify({ ids: [ownerQuestion.id] }),
+      });
+    assert.equal(ownerQuestionSent.status, 200);
+    const visitorCannotReply = await fetch(
+      `${base}/tasks/${created.id}/annotations/${ownerQuestion.id}/reply`, {
+        method: "POST", headers: { cookie: committer },
+        body: JSON.stringify({ text: "我替责任人回答" }),
+      });
+    assert.equal(visitorCannotReply.status, 403);
+    assert.match((await readJson(visitorCannotReply) as { error: string }).error,
+      /需要任务责任人 developer 答复/);
+    const ownerReplies = await fetch(
+      `${base}/tasks/${created.id}/annotations/${ownerQuestion.id}/reply`, {
+        method: "POST", headers: { cookie: developer },
+        body: JSON.stringify({ text: "旧接口无法支持多通道" }),
+      });
+    assert.equal(ownerReplies.status, 200);
+    assert.equal((await readJson(ownerReplies) as Annotation).owner_reply?.text,
+      "旧接口无法支持多通道");
 
     const committerCannotSend = await fetch(
       `${base}/tasks/${created.id}/annotations/send`, {
@@ -751,6 +824,16 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
       method: "POST", body: JSON.stringify({ requirement: "给手机号打码" }),
     }).then((response) => readJson(response));
     const id: string = created.id;
+    const confirmation = service.get(id)!.waiting!;
+    const confirmationQuestion = (confirmation.question.questions as
+      Array<{ question: string }>)[0].question;
+    await service.decide(id, {
+      waiting_id: confirmation.waiting_id,
+      state_version: confirmation.state_version,
+      selected_options: {
+        [confirmationQuestion]: "需求已确认，进入需求分析",
+      },
+    });
     await until(() => model.requests.length >= 1, "模型开跑");
 
     const made = await fetch(`${base}/tasks/${id}/annotations`, {

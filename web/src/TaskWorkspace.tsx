@@ -3,20 +3,21 @@
  *
  * 用户实测的摩擦:审批卡问"本地 Spec 确认",spec.md 却只在内核
  * 现场面板(另一套 UI 的 iframe)里能看——读材料要跳出决策上下文。
- * 这里把两半合成一屏:主画布一次只承载材料、开发协作、执行现场或
- * 分析检视中的一种；右侧只保留此刻必须处理的决定。
+ * 这里把两半合成一屏:主画布一次只承载材料、开发协作或执行现场；
+ * 批注与检视由常驻入口打开完整工作面，右侧只保留此刻必须处理的决定。
  *
  * 内核面板不再暴露给业务用户：它是内核为“人坐在终端旁”生成的
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
-import { AnnotationPanel } from "./AnnotationPanel";
+import {
+  AnnotationPanel, annotationCategory, type ReviewFilter,
+} from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
@@ -37,6 +38,7 @@ import {
 import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import { UserPicker, userLabel } from "./UserPicker";
 import {
+  addAnnotation,
   completeReview,
   controlTask,
   decideScopeViolation,
@@ -70,34 +72,9 @@ import {
   WaitingCard,
 } from "./TaskCard";
 
-type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
-type ExecutionView = "events" | "knowledge";
+type WorkspaceView = "materials" | "collaboration" | "execution";
+type ExecutionView = "events" | "knowledge" | "tokens";
 type MaterialView = "source" | "doc" | "chain" | "diff";
-
-const DEFAULT_REVIEW_PANEL_WIDTH = 640;
-const MIN_REVIEW_PANEL_WIDTH = 420;
-const MIN_MATERIAL_PANEL_WIDTH = 420;
-
-/** 拖拽只改变右栏，始终给左右两边保留可工作的最小宽度。 */
-export function clampReviewPanelWidth(
-  requested: number,
-  containerWidth: number,
-): number {
-  const available = Math.max(0, containerWidth);
-  const minimum = Math.min(MIN_REVIEW_PANEL_WIDTH, available / 2);
-  const maximum = Math.max(minimum, available - MIN_MATERIAL_PANEL_WIDTH);
-  return Math.round(Math.min(maximum, Math.max(minimum, requested)));
-}
-
-function storedReviewPanelWidth(): number | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const value = Number(localStorage.getItem("mae-flow:review-panel-width"));
-    return Number.isFinite(value) && value > 0 ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
 export function canCreateWorkspaceAnnotation(
@@ -388,11 +365,110 @@ const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
   needs_human: "需要你决定",
 };
 
-function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
+/** 状态文案按来源说人话:同一个 awaiting_verification,对 CodeHub 意见
+ * 是"Agent 已回复、等检视人在 MR 里确认",对工作台批注是"等批注作者
+ * 确认"。状态本身仍来自任务 API,这里只挑措辞,不推断。 */
+function feedbackStatusLabel(item: FeedbackRecord): string {
+  if (item.source === "mr_discussion") {
+    if (item.status === "awaiting_verification") return "已回复，等检视人确认";
+    if (item.status === "closed") return "检视人已确认";
+  }
+  if (item.source === "workspace" && item.status === "awaiting_verification") {
+    return "等批注作者确认";
+  }
+  return FEEDBACK_STATUS_LABEL[item.status];
+}
+
+function groupFeedback(feedback: FeedbackRecord[]) {
   const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
   for (const item of feedback) {
     grouped.set(item.source, [...(grouped.get(item.source) ?? []), item]);
   }
+  return [...grouped];
+}
+
+/** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
+ * 和批注卡片同一套版式,放进「批注与检视」里不违和。 */
+export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
+  kicker: string;
+  title: string;
+  hint?: string;
+  items: FeedbackRecord[];
+  /** CodeHub 意见给一个回到 MR 的入口;讨论级链接平台不给,只到 MR。 */
+  mrUrl?: string;
+  /** 把一条外部意见转成工作台批注草稿(走现有批注链路补充给 Agent)。
+   * 返回错误文案;成功返回 undefined。 */
+  onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
+}) {
+  const active = items.filter((item) => item.status !== "closed").length;
+  const [converting, setConverting] = useState("");
+  const [notices, setNotices] = useState<Record<string, string>>({});
+  async function convert(item: FeedbackRecord) {
+    if (!onConvert || converting) return;
+    setConverting(item.id);
+    try {
+      const error = await onConvert(item);
+      setNotices((current) => ({
+        ...current,
+        [item.id]: error ?? "已生成工作台批注草稿，在上方「来自 Cloud 工作台的检视意见」里补充后提交。",
+      }));
+    } finally {
+      setConverting("");
+    }
+  }
+  return <section className="feedback-list" aria-label={title}>
+    <header>
+      <div>
+        <span>{kicker}</span>
+        <strong>{title}</strong>
+        {hint && <p>{hint}</p>}
+      </div>
+      <div className="feedback-list-side">
+        <i>{items.length} 条</i>
+        {active > 0 && <em>{active} 进行中</em>}
+        {mrUrl && <a href={mrUrl} target="_blank" rel="noreferrer">打开 MR</a>}
+      </div>
+    </header>
+    <ol>
+      {items.map((item) => <li key={item.id} className={`feedback-item ${item.status}`}>
+        <div className="feedback-item-head">
+          {item.file
+            ? <code>{item.file}{item.line !== undefined ? `:${item.line}` : ""}</code>
+            : <code className="feedback-item-nofile">未指向具体文件</code>}
+          <span className={`feedback-state ${item.status}`}>
+            {feedbackStatusLabel(item)}
+          </span>
+        </div>
+        <p className="feedback-body">{item.summary}</p>
+        {item.resolution && <div className="feedback-response">
+          <strong>{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
+          <p>{item.resolution}</p>
+        </div>}
+        <div className="feedback-item-foot">
+          <small>
+            {FEEDBACK_SOURCE_LABEL[item.source]}
+            {item.author && ` · 检视人 ${item.author}`}
+            {` · ${relativeTime(item.updated_at) || item.updated_at}`}
+          </small>
+          {onConvert && item.status !== "closed" && !notices[item.id] && (
+            <button type="button" className="feedback-convert"
+              disabled={converting === item.id}
+              title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
+              onClick={() => void convert(item)}>
+              {converting === item.id ? "生成中…" : "转成工作台批注"}
+            </button>
+          )}
+        </div>
+        {notices[item.id] && <p className="feedback-convert-notice" role="status">
+          {notices[item.id]}
+        </p>}
+      </li>)}
+    </ol>
+  </section>;
+}
+
+/** 缺陷单等没有「批注与检视」弹层的页面用:按来源分节的完整列表。 */
+export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
   const active = feedback.filter((item) => item.status !== "closed").length;
   return <section className="feedback-panel" aria-label="持续检视反馈明细">
     <header>
@@ -401,56 +477,20 @@ function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
         {active ? `${active} 条进行中` : "全部已闭环"}
       </em>
     </header>
-    <div className="feedback-groups">
-      {[...grouped].map(([source, items]) => (
-        <div className="feedback-group" key={source}>
-          <strong>{FEEDBACK_SOURCE_LABEL[source]}<i>{items.length}</i></strong>
-          <ul>
-            {items.map((item) => <li key={item.id}>
-              <span className={`feedback-state ${item.status}`}>
-                {FEEDBACK_STATUS_LABEL[item.status]}
-              </span>
-              <span className="feedback-copy" title={item.summary}>
-                <b>{item.summary}</b>
-                {(item.file || item.resolution) && <small>
-                  {item.file && <code>{item.file}{item.line !== undefined
-                    ? `:${item.line}` : ""}</code>}
-                  {item.resolution && <span>{item.resolution}</span>}
-                </small>}
-              </span>
-            </li>)}
-          </ul>
-        </div>
-      ))}
-    </div>
+    {groupFeedback(feedback).map(([source, items]) => (
+      <FeedbackList key={source} kicker="CONTINUOUS REVIEW"
+        title={FEEDBACK_SOURCE_LABEL[source]} items={items} />
+    ))}
   </section>;
 }
 
-/** 内核现场始终优先；旧任务、分析任务或纯会话模式没有 panel 文件时，
- * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
- * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
+/** 进度只有一个来源:任务 API 的 progress(服务端按内核 flow/phases.json
+ * 一份词表给出,没有内核脉冲时也由服务端按状态占位)。前端不再自带任何
+ * 阶段名——原来这里有三套(协调中五段、持续检视五段、无内核七段),和内核
+ * 看板各说各话,老任务停在哪套显示哪套,点阶段名去内核方案词表里按名字
+ * 找也必然落空(2026-09-02 用户实锤)。服务端也没给时只画一个"尚未进入
+ * 阶段"的空轨道,绝不自造名字。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
-  if (task.status === "coordinating") {
-    const phases = ["已受理", "需求理解", "方案确认", "子任务交付", "完成"];
-    return {
-      phases,
-      current_index: 3,
-      current_phase: "子任务交付",
-      step: task.focus?.headline ?? "子任务正在推进",
-    };
-  }
-  if ((task.delivery?.mr_url || task.feedback?.length)
-      && task.status !== "canceled") {
-    const phases = ["配置与需求", "方案", "开发", "持续检视", "已合入"];
-    const merged = task.status === "completed";
-    return {
-      phases,
-      current_index: merged ? 4 : 3,
-      current_phase: merged ? "已合入" : "持续检视",
-      step: merged ? "MR 已合入，任务完成"
-        : task.focus?.headline ?? task.detail ?? "持续接收、修复并核验反馈",
-    };
-  }
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
     // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
@@ -460,20 +500,10 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
           step: task.focus?.headline ?? task.waiting?.step ?? "等待你的决定" }
       : task.progress;
   }
-  const phases = [
-    "已受理", "需求理解", "开发实现", "人工确认", "交付验证", "等待合入", "完成",
-  ];
-  const inAnalysis = task.requirement_graph?.stage === "analysis";
-  const currentIndex = task.status === "queued" ? 0
-    : task.status === "waiting_for_human" ? (inAnalysis ? 1 : 3)
-    : task.status === "verifying" ? 4
-    : task.status === "await_merge" ? 5
-    : task.status === "completed" ? 6
-    : inAnalysis ? 1 : 2;
   return {
-    phases,
-    current_index: currentIndex,
-    current_phase: phases[currentIndex],
+    phases: [],
+    current_index: -1,
+    current_phase: "尚未进入阶段",
     step: task.focus?.headline ?? statusText(task),
   };
 }
@@ -545,6 +575,7 @@ export function TaskWorkspace({
   const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
   const [completeBusy, setCompleteBusy] = useState(false);
   const [completeError, setCompleteError] = useState("");
+  const [locationNotice, setLocationNotice] = useState("");
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "delete" | "">("");
   const [controlError, setControlError] = useState("");
@@ -566,16 +597,14 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
-  const [reviewPanelWidth, setReviewPanelWidth] =
-    useState<number | undefined>(storedReviewPanelWidth);
+  const [documentsDownloading, setDocumentsDownloading] = useState(false);
+  const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
-  const workspaceBody = useRef<HTMLDivElement>(null);
-  const reviewResizerDragged = useRef(false);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -601,8 +630,9 @@ export function TaskWorkspace({
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
+    setDocumentsDownloading(false);
+    setDocumentsDownloadError("");
     setReviewPanelOpen(false);
-    setReviewInviteOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
@@ -734,6 +764,7 @@ export function TaskWorkspace({
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (reviewInviteOpen) setReviewInviteOpen(false);
+      else if (reviewPanelOpen) setReviewPanelOpen(false);
       else if (materialsFullscreen) setMaterialsFullscreen(false);
       else onClose();
     };
@@ -744,40 +775,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialsFullscreen, reviewInviteOpen, onClose]);
-
-  useEffect(() => {
-    if (reviewPanelWidth === undefined || typeof window === "undefined") return;
-    try {
-      localStorage.setItem("mae-flow:review-panel-width",
-        String(reviewPanelWidth));
-    } catch {
-      // 阅读布局偏好无法落盘不影响检视。
-    }
-  }, [reviewPanelWidth]);
-
-  function resizeReviewPanel(clientX: number) {
-    const box = workspaceBody.current?.getBoundingClientRect();
-    if (!box) return;
-    setReviewPanelWidth(clampReviewPanelWidth(box.right - clientX, box.width));
-  }
-
-  function nudgeReviewPanel(delta: number) {
-    const box = workspaceBody.current?.getBoundingClientRect();
-    if (!box) return;
-    const current = reviewPanelWidth
-      ?? clampReviewPanelWidth(DEFAULT_REVIEW_PANEL_WIDTH, box.width);
-    setReviewPanelWidth(clampReviewPanelWidth(current + delta, box.width));
-  }
-
-  function resetReviewPanelWidth() {
-    setReviewPanelWidth(undefined);
-    try {
-      localStorage.removeItem("mae-flow:review-panel-width");
-    } catch {
-      // 同上：偏好存储失败不影响界面恢复默认布局。
-    }
-  }
+  }, [materialsFullscreen, reviewInviteOpen, reviewPanelOpen, onClose]);
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -866,13 +864,15 @@ export function TaskWorkspace({
     return () => { alive = false; };
   }, [task.id, task.status, notesPulse, livePulse]);
 
-  const drafts = notes.filter((item) => item.status === "draft");
-  const myDrafts = drafts.filter((item) => item.author === viewerUsername);
+  const requirementAnalysisConfirmation = task.status === "waiting_for_human"
+    && task.waiting?.step === "cloud_requirement_analysis_confirm";
   // 决定卡只展示会阻塞团队流转的事实：已送达意见，以及责任人自己的
-  // 未送达草稿。旁观者草稿仍可在批注页管理，但不能暗中进入 Agent。
+  // 未送达草稿。需求确认是多人共同检视，已经留下的任何草稿都必须先
+  // 处理，不能被主责任人的确认按钮越过。
   const unresolvedNotes = notes.filter((item) =>
     item.status === "sent" || (item.status === "draft"
-      && (!task.luban_account || item.author === task.luban_account)));
+      && (requirementAnalysisConfirmation
+        || !task.luban_account || item.author === task.luban_account)));
   // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
   // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
@@ -886,14 +886,30 @@ export function TaskWorkspace({
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     if (!source && item.artifact !== active) setActive(item.artifact);
     setMaterialView(materialViewForAnnotation(item.artifact, items));
-    const currentLine = checks.find((check) => check.id === item.id)?.line
-      ?? item.line;
+    const check = checks.find((candidate) => candidate.id === item.id);
+    const currentLine = check?.line ?? item.line;
+    if (check?.state === "gone") {
+      setLocationNotice(
+        `“${item.anchor.slice(0, 46)}${item.anchor.length > 46 ? "…" : ""}”`
+        + " 已不在当前版本；左侧已打开最新材料，请结合差异和 Agent 回应核对。",
+      );
+    } else if (check?.state === "ambiguous") {
+      setLocationNotice("这段原文在当前材料中出现多次，已打开对应材料，请结合文件路径核对。");
+    } else {
+      setLocationNotice("");
+    }
     let tries = 0;
     const seek = () => {
       const node = document.querySelector<HTMLElement>(
         `.ws-doc [data-l="${currentLine}"]`);
       if (!node) {
-        if (tries++ < 20) window.setTimeout(seek, 100);
+        if (tries++ < 20) {
+          window.setTimeout(seek, 100);
+        } else if (check?.state !== "gone") {
+          setLocationNotice(
+            `已打开 ${item.file}，但原第 ${item.line} 行已无法直接定位；请在当前材料中核对。`,
+          );
+        }
         return;
       }
       node.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -908,6 +924,35 @@ export function TaskWorkspace({
   const evidenceGapArtifact = documents.find((item) =>
     item.purpose === "pipeline_evidence_gap");
   const evidenceGapActionable = pipelineEvidenceNeedsHuman(task);
+
+  async function downloadDocuments() {
+    if (!documents.length || documentsDownloading) return;
+    setDocumentsDownloading(true);
+    setDocumentsDownloadError("");
+    try {
+      const response = await fetch(
+        `/tasks/${encodeURIComponent(task.id)}/artifacts/archive`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: unknown };
+        throw new Error(String(body.error ?? `打包下载失败(${response.status})`));
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${task.id}-过程文档-`
+        + `${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    } catch (reason) {
+      setDocumentsDownloadError(
+        String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setDocumentsDownloading(false);
+    }
+  }
+
   // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
   // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
   // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
@@ -935,28 +980,69 @@ export function TaskWorkspace({
   const workspaceReviewAnnotationIds = workspaceReviewReady
     ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
     : [];
-  const pendingWorkspaceReviewIds = workspaceReviewAnnotationIds.filter((id) =>
-    notes.some((item) => item.id === id && item.status === "sent"));
-  const reviewActionCount = myDrafts.length + pendingWorkspaceReviewIds.length
-    + (reviewAssignment ? 1 : 0);
-  const reviewAttentionKey = [
-    ...myDrafts.map((item) => `draft:${item.id}`),
-    ...pendingWorkspaceReviewIds.map((id) => `recheck:${id}`),
-    ...(reviewAssignment ? [`assignment:${reviewAssignment.id}`] : []),
-  ].join("|");
-  const openedReviewAttention = useRef("");
-  const previousReviewActionCount = useRef(reviewActionCount);
-  useEffect(() => {
-    if (!reviewAttentionKey || openedReviewAttention.current === reviewAttentionKey) return;
-    openedReviewAttention.current = reviewAttentionKey;
-    setReviewPanelOpen(true);
-  }, [reviewAttentionKey]);
-  useEffect(() => {
-    if (previousReviewActionCount.current > 0 && reviewActionCount === 0) {
-      setReviewPanelOpen(false);
-    }
-    previousReviewActionCount.current = reviewActionCount;
-  }, [reviewActionCount]);
+  // 批注与检视里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
+  // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
+  const codehubFeedback = (task.feedback ?? [])
+    .filter((item) => item.source === "mr_discussion");
+  const machineFeedback = (task.feedback ?? [])
+    .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
+  const reviewRecordCount = notes.length + codehubFeedback.length
+    + machineFeedback.length;
+  const activeFeedback = (task.feedback ?? [])
+    .filter((item) => item.status !== "closed");
+  const feedbackDigest = activeFeedback.length
+    ? `${activeFeedback.length} 条检视意见进行中 · ${
+      groupFeedback(activeFeedback)
+        .map(([source, items]) => `${FEEDBACK_SOURCE_LABEL[source]} ${items.length}`)
+        .join(" · ")}`
+    : "";
+  // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
+  // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
+    item.status === "closed" ? "closed"
+      : item.status === "needs_human" ? "mine" : "agent";
+  const noteCategory = (item: Annotation) => annotationCategory(item, {
+    viewerUsername,
+    taskStatus: task.status,
+    reviewReady: workspaceReviewReady,
+    canOverride,
+    reviewAnnotationIds: workspaceReviewAnnotationIds,
+  });
+  const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
+  for (const item of notes) reviewCounts[noteCategory(item)] += 1;
+  for (const item of [...codehubFeedback, ...machineFeedback]) {
+    reviewCounts[feedbackCategory(item)] += 1;
+  }
+  const filteredCodehub = reviewFilter === "all" ? codehubFeedback
+    : codehubFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
+  const filteredMachine = reviewFilter === "all" ? machineFeedback
+    : machineFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
+  /** CodeHub 意见转成工作台批注草稿:锚点用意见编号(平台不给原文快照),
+   * 定位靠文件行号;正文带上出处,人可以再补一句自己的话。 */
+  async function convertFeedbackToAnnotation(
+    item: FeedbackRecord,
+  ): Promise<string | undefined> {
+    const materials = items ?? [];
+    const diffArtifact = materials.find((artifact) => artifact.kind === "diff")?.name;
+    const artifact = materials.find((artifact) => artifact.name === item.file)?.name
+      ?? diffArtifact ?? item.file ?? materials[0]?.name;
+    if (!artifact) return "当前任务还没有可批注的材料，暂时转不成批注。";
+    const origin = `CodeHub 检视意见 #${item.source_id}${
+      item.author ? `（${item.author}）` : ""}`;
+    const result = await addAnnotation(task.id, {
+      artifact,
+      file: item.file ?? artifact,
+      line: item.line ?? 0,
+      anchor: origin,
+      note: `【转自 ${origin}】\n${item.summary}`,
+      kind: "code",
+    });
+    if (result.error) return `转成批注失败：${result.error}`;
+    setNotesPulse((tick) => tick + 1);
+    onChanged();
+    return undefined;
+  }
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
     Boolean(pushReview),
@@ -1043,6 +1129,95 @@ export function TaskWorkspace({
       setControlBusy("");
     }
   }
+
+  const reviewWorkspaceContent = (
+    <div className="workspace-review-notes">
+      <div className="review-filter" role="tablist" aria-label="按处理归属筛选">
+        {([
+          ["all", "全部"],
+          ["mine", "等我确认"],
+          ["agent", "Agent 处理中"],
+          ["closed", "已闭环"],
+        ] as const).map(([key, label]) => (
+          <button type="button" key={key} role="tab"
+            className={`${reviewFilter === key ? "active" : ""}${
+              key === "mine" && reviewCounts.mine > 0 ? " attention" : ""}`}
+            aria-selected={reviewFilter === key}
+            onClick={() => setReviewFilter(key)}>
+            {label}<i>{reviewCounts[key]}</i>
+          </button>
+        ))}
+      </div>
+      {reviewAssignment && (
+        <section className="review-assignment" aria-labelledby="review-assignment-title">
+          <div className="review-assignment-mark" aria-hidden>审</div>
+          <div>
+            <span>COMMITTER REVIEW</span>
+            <strong id="review-assignment-title">
+              {reviewAssignment.requester} 邀请你检视
+            </strong>
+            <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
+            {completeError && <small className="review-assignment-error">
+              {completeError}
+            </small>}
+          </div>
+          <button type="button" disabled={completeBusy}
+            onClick={() => void finishReview()}>
+            {completeBusy ? "正在完成…" : "完成检视"}
+          </button>
+        </section>
+      )}
+      <section className="workspace-review-opinions" aria-label="检视意见">
+        <AnnotationPanel
+          taskId={task.id}
+          viewerUsername={viewerUsername}
+          canOverride={canOverride}
+          items={notes}
+          checks={checks}
+          reply={reply}
+          canOperate={canContributeReview}
+          taskStatus={task.status}
+          reviewReady={workspaceReviewReady}
+          reviewAnnotationIds={workspaceReviewAnnotationIds}
+          requirementReview={requirementAnalysisConfirmation}
+          requirementRevisionRunning={task.requirement_revision?.state === "running"}
+          mergeRequestOpen={Boolean(task.delivery?.mr_url)
+            && !["completed", "canceled"].includes(task.status)
+            && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
+            && task.delivery?.mr_state !== "已关闭"}
+          evidenceAwaiting={Boolean(
+            task.delivery?.evidence_gap?.missing_dimensions.length)}
+          filter={reviewFilter}
+          onLocate={(item) => {
+            // 抽屉只占右侧,定位不用关;窄屏抽屉占满整屏,关掉才看得见那一行。
+            if (window.matchMedia("(max-width: 900px)").matches) {
+              setReviewPanelOpen(false);
+            }
+            locate(item);
+          }}
+          onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+        />
+        {!notes.length && (
+          <div className="ws-insight-empty">
+            在“交付材料”中圈选原文或代码，即可创建批注。
+          </div>
+        )}
+        {filteredCodehub.length > 0 && <FeedbackList
+          kicker="CODEHUB REVIEW"
+          title="来自 CodeHub 的检视意见"
+          hint="MR 检视人在 CodeHub 留下的讨论。Agent 逐条修改或说明后把回复发回 MR，由检视人在 MR 里确认闭环。"
+          items={filteredCodehub}
+          mrUrl={task.delivery?.mr_url}
+          onConvert={canContributeReview && canCreateAnnotation
+            ? convertFeedbackToAnnotation : undefined} />}
+        {filteredMachine.length > 0 && <FeedbackList
+          kicker="AUTOMATED GATES"
+          title="来自流水线与机器门禁的告警"
+          hint="流水线红灯、Build-Fix、合并冲突、推送前复检等不是人提的意见，由对应机器门禁核验；内核判定通过即闭环。"
+          items={filteredMachine} />}
+      </section>
+    </div>
+  );
 
   return (
     <section
@@ -1158,7 +1333,12 @@ export function TaskWorkspace({
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}
       </div>
-      {!!task.feedback?.length && <FeedbackPanel feedback={task.feedback} />}
+      {task.feedback_error && (
+        <section className="feedback-panel feedback-panel-error" role="alert">
+          <h3>持续检视明细暂不可用</h3>
+          <p>{task.feedback_error}</p>
+        </section>
+      )}
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
           {pauseFeedback && (
@@ -1184,30 +1364,39 @@ export function TaskWorkspace({
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
-            className={`${workspaceView === view ? "active" : ""}`
-              + `${view === "insights" && myDrafts.length
-                && task.status !== "completed" ? " attention" : ""}`}
+            className={workspaceView === view ? "active" : ""}
             onClick={() => selectWorkspaceView(view)}>
             <strong>
               {label}
-              {view === "insights" && notes.length > 0 && (
-                <em>{(task.status === "completed" ? drafts.length : myDrafts.length) > 0
-                  ? task.status === "completed"
-                    ? `${drafts.length} 记录` : `${myDrafts.length} 待提交`
-                  : notes.length}</em>
-              )}
             </strong>
             <small>{hint}</small>
           </button>
         ))}
+        <button type="button" className={`ws-review-launch${
+          reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
+          aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+          onClick={() => setReviewPanelOpen(true)}>
+          <strong>批注与检视
+            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+              <em>{reviewCounts.mine > 0
+                ? `${reviewCounts.mine} 等我确认` : reviewRecordCount}</em>
+            )}
+          </strong>
+          {/* 进行中的检视意见按来源报数写在副标题里。原来进度条下单独一条
+              摘要带一排"MR 检视 3 2 进行中"胶囊和一个重复的入口按钮,用户
+              实锤"数字好丑、和这张卡重叠",整条撤掉。 */}
+          <small>{feedbackDigest || "批注、CodeHub 检视意见与机器检视"}</small>
+        </button>
+        {canRequestReview && <button type="button"
+          className="ws-review-invite-launch"
+          aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
+          onClick={() => setReviewInviteOpen(true)}>
+          <strong><span aria-hidden>＋</span>邀请检视</strong>
+          <small>选择 Committer 参与代码检视</small>
+        </button>}
       </nav>
 
-      <div ref={workspaceBody}
-        className={`ws-body${waiting ? " has-decision" : ""}`
-          + `${reviewPanelOpen ? " has-review" : ""}`}
-        style={reviewPanelWidth === undefined ? undefined : {
-          "--review-panel-width": `${reviewPanelWidth}px`,
-        } as CSSProperties}>
+      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -1246,7 +1435,7 @@ export function TaskWorkspace({
               <div>
                 <span>流水线需要补充原文</span>
                 <strong>打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
-                <p>保存批注后会自动进入“批注与检视”，点击“回灌报错”即可让 Agent 继续。</p>
+                <p>保存批注后会自动记入待处理反馈，点击“回灌报错”即可让 Agent 继续。</p>
               </div>
               <button type="button"
                 className={active === evidenceGapArtifact.name
@@ -1260,16 +1449,33 @@ export function TaskWorkspace({
               </button>
             </section>
           )}
-          {materialView === "doc" && documents.length > 1 && (
-            <div className="ws-tabs">
+          {materialView === "doc" && documents.length > 0 && (
+            <div className="ws-tabs ws-document-tabs">
               {documents.map((item) => (
                 <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
                   <span>{item.label}</span><i>{sizeText(item.bytes)}</i>
                 </button>
               ))}
+              <button type="button" className="ws-document-download"
+                disabled={documentsDownloading}
+                title={`下载全部 ${documents.length} 份过程文档(完整原文件)`}
+                onClick={() => void downloadDocuments()}>
+                <span aria-hidden>⇩</span>
+                {documentsDownloading ? "打包中…" : "打包下载"}
+              </button>
             </div>
           )}
+          {documentsDownloadError && <div className="utility-note" role="alert">
+            打包下载失败：{documentsDownloadError}
+          </div>}
           <div className="ws-doc">
+            {locationNotice && (
+              <div className="annotation-location-notice" role="status">
+                <div><strong>批注位置已变化</strong><span>{locationNotice}</span></div>
+                <button type="button" aria-label="关闭定位提示"
+                  onClick={() => setLocationNotice("")}>×</button>
+              </div>
+            )}
             {materialView === "source" ? (
               <Annotatable
                 taskId={task.id}
@@ -1385,10 +1591,7 @@ export function TaskWorkspace({
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
                 enabled={canCreateAnnotation}
-                onAdded={() => {
-                  setNotesPulse((tick) => tick + 1);
-                  setReviewPanelOpen(true);
-                }}
+                onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
@@ -1427,16 +1630,16 @@ export function TaskWorkspace({
             <div className="ws-primary-scroll ws-collaboration-view">
               {collaborationVisible ? (
                 <>
-                  {task.parent_task_id && <CrossRepositorySync
-                    taskId={task.id}
-                    updates={task.cross_repository_updates}
-                    onChanged={onChanged} />}
                   <SteerBox task={task}
                     steerOnly={task.requirement_graph?.stage === "analysis"}
                     onChanged={() => {
                     setLivePulse((value) => value + 1);
                     onChanged();
                   }} />
+                  {task.parent_task_id && <CrossRepositorySync
+                    taskId={task.id}
+                    updates={task.cross_repository_updates}
+                    onChanged={onChanged} />}
                 </>
               ) : (
                 <section className="ws-view-empty" aria-label="开发助手状态">
@@ -1446,7 +1649,7 @@ export function TaskWorkspace({
                 </section>
               )}
             </div>
-          </> : workspaceView === "execution" ? <>
+          </> : <>
             <div className="ws-pane-head">
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
               <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
@@ -1469,6 +1672,15 @@ export function TaskWorkspace({
                 </strong>
                 <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
                   {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+              </button>
+              <button type="button" role="tab"
+                aria-selected={executionView === "tokens"}
+                className={executionView === "tokens" ? "active" : ""}
+                onClick={() => setExecutionView("tokens")}>
+                <strong>Token 使用</strong>
+                <small>{task.token_usage
+                  ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
+                  : "模型用量与实时速率"}</small>
               </button>
             </nav>
             <div className="ws-primary-scroll ws-execution-view">
@@ -1495,10 +1707,6 @@ export function TaskWorkspace({
                 {task.workflow_profile && <WorkflowProfileCard
                   profile={task.workflow_profile}
                   warning={task.workflow_profile_warning} />}
-                {task.token_usage ? <TokenUsage usage={task.token_usage}
-                  placement="detail" /> : <div className="ws-insight-empty">
-                  模型提供方暂未返回 Token 用量。
-                </div>}
                 <TaskTimeline taskId={task.id} />
               </div>
               <div className="ws-execution-subview is-knowledge"
@@ -1514,212 +1722,24 @@ export function TaskWorkspace({
                     id: module.id, name: module.name,
                   }))} />
               </div>
-            </div>
-          </> : <>
-            <div className="ws-pane-head">
-              <div><span>REVIEW NOTES</span><strong>批注与检视</strong></div>
-              <small>管理批注意见、检视协作与处理进展</small>
-            </div>
-            <div className="ws-primary-scroll ws-insights-view">
-              <div className="ws-insights-grid">
-                <section className="ws-insight-column">
-                  <header><span>ANNOTATIONS</span><strong>批注意见</strong></header>
-                  <AnnotationPanel
-                    taskId={task.id}
-                    viewerUsername={viewerUsername}
-                    canOverride={canOverride}
-                    items={notes}
-                    checks={checks}
-                    reply={reply}
-                    canOperate={canContributeReview}
-                    taskStatus={task.status}
-                    reviewReady={workspaceReviewReady}
-                    reviewAnnotationIds={workspaceReviewAnnotationIds}
-                    mergeRequestOpen={Boolean(task.delivery?.mr_url)
-                      && !["completed", "canceled"].includes(task.status)
-                      && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-                      && task.delivery?.mr_state !== "已关闭"}
-                    evidenceAwaiting={Boolean(
-                      task.delivery?.evidence_gap?.missing_dimensions.length)}
-                    onLocate={locate}
-                    onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-                  />
-                  {!notes.length && (
-                    <div className="ws-insight-empty">
-                      在“交付材料”中圈选原文或代码，即可创建批注。
-                    </div>
-                  )}
-                </section>
-                <section className="ws-insight-column">
-                  <header><span>REVIEW & OPERATIONS</span><strong>检视协作与进展</strong></header>
-                  {reviewAssignment && (
-                    <section className="review-assignment" aria-labelledby="review-assignment-title">
-                      <div className="review-assignment-mark" aria-hidden>审</div>
-                      <div>
-                        <span>COMMITTER REVIEW</span>
-                        <strong id="review-assignment-title">{reviewAssignment.requester} 邀请你检视</strong>
-                        <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
-                        {completeError && <small className="review-assignment-error">{completeError}</small>}
-                      </div>
-                      <button type="button" disabled={completeBusy} onClick={() => void finishReview()}>{completeBusy ? "正在完成…" : "完成检视"}</button>
-                    </section>
-                  )}
-                  {canRequestReview && (
-                    <section className="committer-review" aria-labelledby="committer-review-title">
-                      <div>
-                        <span>OPTIONAL REVIEW</span>
-                        <strong id="committer-review-title">邀请 Committer 检视</strong>
-                        <p>仅在你主动邀请后通知，不影响任务责任人的最终决定。</p>
-                      </div>
-                      {committers.length > 0 ? <div className="committer-review-action">
-                        <UserPicker ariaLabel="选择 Committer" value={reviewer}
-                          options={committers}
-                          onChange={setReviewer} />
-                        <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
-                      </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
-                      {reviewResult && <small className="committer-result">{reviewResult}</small>}
-                      {taskReviews.length > 0 && <div className="committer-review-history">
-                        {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-                          <i className={review.status} aria-hidden />
-                          <strong>{userLabel(committers.find((user) =>
-                            user.username === review.committer)
-                            ?? { username: review.committer })}</strong>
-                          <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
-                        </span>)}
-                      </div>}
-                    </section>
-                  )}
-                  {!reviewAssignment && !canRequestReview && (
-                    <div className="ws-insight-empty">当前没有 Committer 检视事项。</div>
-                  )}
-                  {task.token_usage ? (
-                    <TokenUsage usage={task.token_usage} placement="detail" />
-                  ) : <div className="ws-insight-empty">模型提供方暂未返回 Token 用量。</div>}
-                  <TaskTimeline taskId={task.id} />
-                </section>
+              <div className="ws-execution-subview is-tokens"
+                hidden={executionView !== "tokens"}>
+                {task.token_usage ? <TokenUsage usage={task.token_usage}
+                  placement="detail" /> : <div className="ws-insight-empty">
+                  模型提供方暂未返回 Token 用量。
+                </div>}
               </div>
             </div>
           </>}
         </section>
 
-        {reviewPanelOpen && <div className="ws-review-resizer"
-          role="separator" aria-label="调整检视栏宽度" tabIndex={0}
-          aria-orientation="vertical"
-          aria-valuenow={reviewPanelWidth ?? DEFAULT_REVIEW_PANEL_WIDTH}
-          title="左右拖动调整宽度；双击恢复默认"
-          onDoubleClick={resetReviewPanelWidth}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") {
-              event.preventDefault(); nudgeReviewPanel(24);
-            } else if (event.key === "ArrowRight") {
-              event.preventDefault(); nudgeReviewPanel(-24);
-            } else if (event.key === "Home") {
-              event.preventDefault(); resetReviewPanelWidth();
-            }
-          }}
-          onPointerDown={(event) => {
-            reviewResizerDragged.current = false;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            resizeReviewPanel(event.clientX);
-          }}
-          onPointerMove={(event) => {
-            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-            reviewResizerDragged.current = true;
-            resizeReviewPanel(event.clientX);
-          }}
-          onPointerUp={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            }
-            reviewResizerDragged.current = false;
-          }}>
-          <span aria-hidden>⋮</span>
-        </div>}
-        <aside className={`ws-decision${reviewPanelOpen ? " review-mode" : ""}`}
-          aria-label="当前决策与关键操作">
+        <aside className="ws-decision" aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            {reviewPanelOpen ? <>
-              <div><span>REVIEW IN CONTEXT</span><strong>边看材料，边处理意见</strong></div>
-              <div className="ws-review-head-actions">
-                <small>{reviewActionCount > 0
-                  ? `还有 ${reviewActionCount} 项待处理；完成后收起清单继续最终决定`
-                  : "检视记录集中在这里；左侧材料保持不动"}</small>
-                {canRequestReview && <button type="button"
-                  className="review-invite-trigger"
-                  onClick={() => { setReviewResult(""); setReviewInviteOpen(true); }}>
-                  ＋ 邀请检视
-                </button>}
-              </div>
-            </> : <>
-              <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
-              <small>{nextAction.detail}</small>
-            </>}
+            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+            <small>{nextAction.detail}</small>
           </div>
-          <section className={`ws-review-drawer${reviewPanelOpen ? " open" : ""}`}
-            aria-label="本轮检视清单">
-            {reviewActionCount > 0 ? (
-              <div className="ws-review-drawer-toggle is-locked" role="status">
-                <span><i aria-hidden>审</i><strong>本轮检视清单</strong></span>
-                <em>{reviewActionCount} 项待处理</em>
-              </div>
-            ) : (
-              <button type="button" className="ws-review-drawer-toggle"
-                aria-expanded={reviewPanelOpen}
-                onClick={() => setReviewPanelOpen((current) => !current)}>
-                <span><i aria-hidden>审</i><strong>检视记录</strong></span>
-                <em>{reviewPanelOpen ? "收起并继续最终决定"
-                  : notes.length ? `${notes.length} 条记录` : "随材料批注"}</em>
-              </button>
-            )}
-            {reviewPanelOpen && <div className="ws-review-drawer-body">
-              {reviewAssignment && (
-                <section className="review-assignment compact"
-                  aria-labelledby="review-drawer-assignment-title">
-                  <div className="review-assignment-mark" aria-hidden>审</div>
-                  <div><span>COMMITTER REVIEW</span>
-                    <strong id="review-drawer-assignment-title">
-                      {reviewAssignment.requester} 邀请你检视
-                    </strong>
-                    <p>在左侧核对材料、留下批注，完成后直接在这里交还。</p>
-                    {completeError && <small className="review-assignment-error">
-                      {completeError}
-                    </small>}
-                  </div>
-                  <button type="button" disabled={completeBusy}
-                    onClick={() => void finishReview()}>
-                    {completeBusy ? "正在完成…" : "完成检视"}
-                  </button>
-                </section>
-              )}
-              <AnnotationPanel
-                taskId={task.id}
-                viewerUsername={viewerUsername}
-                canOverride={canOverride}
-                items={notes}
-                checks={checks}
-                reply={reply}
-                canOperate={canContributeReview}
-                taskStatus={task.status}
-                reviewReady={workspaceReviewReady}
-                reviewAnnotationIds={workspaceReviewAnnotationIds}
-                mergeRequestOpen={Boolean(task.delivery?.mr_url)
-                  && !["completed", "canceled"].includes(task.status)
-                  && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-                  && task.delivery?.mr_state !== "已关闭"}
-                evidenceAwaiting={Boolean(
-                  task.delivery?.evidence_gap?.missing_dimensions.length)}
-                onLocate={locate}
-                onChanged={() => {
-                  setNotesPulse((tick) => tick + 1); onChanged();
-                }}
-              />
-              {!notes.length && <div className="ws-insight-empty">
-                在左侧需求、文档或代码中圈选内容，即可把意见加入这里。
-              </div>}
-            </div>}
-          </section>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
@@ -1728,7 +1748,7 @@ export function TaskWorkspace({
             <WaitingCard
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-              annotationIds={draftIds}
+              annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
               repositoryAssigneeSelection={chainReview
                 ? repositoryAssignees : undefined}
@@ -1756,7 +1776,7 @@ export function TaskWorkspace({
               activeDeliveryScope={task.waiting?.recommended_view === "diff"
                 && workspaceView === "materials" && materialView === "diff"
                 ? diffScope : undefined}
-              attachment={
+              attachment={requirementAnalysisConfirmation ? undefined :
                 <>
                   {chainReview && (
                     <>
@@ -1875,42 +1895,77 @@ export function TaskWorkspace({
           )}
         </aside>
       </div>
-      {reviewInviteOpen && <div className="review-invite-backdrop"
+      {/* 批注与检视是固定在右侧的侧滑抽屉,不是遮罩弹层:看意见时左边露出
+          的材料照常可点、可圈选新批注,"回到那一行"不用先关窗(用户定调:
+          这块是核心竞争力,易用性优先)。不进 .ws-body 栅格——第一版挤进
+          栅格,在中等宽度下被当普通块塞到最下面(用户截图实锤)。 */}
+      {reviewPanelOpen && <section className="workspace-review-drawer"
+          role="complementary" aria-labelledby="workspace-review-title">
+          <header>
+            <div><span>REVIEW NOTES</span>
+              <strong id="workspace-review-title">批注与检视</strong>
+              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
+            </div>
+            <div className="workspace-review-dialog-actions">
+              {/* 和筛选条"等我确认"同一口径,别一处说 1 项一处说 3 条。 */}
+              {(reviewCounts.mine > 0 || reviewRecordCount > 0) && <em>
+                {reviewCounts.mine > 0
+                  ? `${reviewCounts.mine} 项等我确认` : `${reviewRecordCount} 条记录`}
+              </em>}
+              <button type="button" aria-label="关闭批注与检视"
+                autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
+            </div>
+          </header>
+          <div className="workspace-review-content ws-insights-view">
+            {reviewWorkspaceContent}
+          </div>
+        </section>}
+      {reviewInviteOpen && <div className="workspace-review-backdrop"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setReviewInviteOpen(false);
         }}>
-        <section className="review-invite-dialog" role="dialog" aria-modal="true"
-          aria-labelledby="review-invite-title">
+        <section className="workspace-invite-dialog" role="dialog" aria-modal="true"
+          aria-labelledby="workspace-invite-title">
           <header>
-            <div><span>OPTIONAL REVIEW</span>
-              <strong id="review-invite-title">邀请 Committer 检视</strong>
-              <p>通知一位 Committer 协助检视，不影响你的最终决定。</p>
+            <div><span>COLLABORATIVE REVIEW</span>
+              <strong id="workspace-invite-title">邀请 Committer 检视</strong>
+              <p>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</p>
             </div>
-            <button type="button" aria-label="关闭邀请检视窗口"
-              autoFocus
-              onClick={() => setReviewInviteOpen(false)}>×</button>
+            <button type="button" aria-label="关闭邀请检视"
+              autoFocus onClick={() => setReviewInviteOpen(false)}>×</button>
           </header>
-          {committers.length > 0 ? <div className="committer-review-action">
-            <UserPicker ariaLabel="选择 Committer" value={reviewer}
-              options={committers} onChange={setReviewer} />
-            <button type="button" disabled={!reviewer || reviewBusy}
-              onClick={() => void inviteReview()}>
-              {reviewBusy ? "发送中…" : "发送邀请"}
-            </button>
-          </div> : <div className="committer-empty">
-            管理员尚未配置 Committer 名单
-          </div>}
-          {reviewResult && <small className="committer-result">{reviewResult}</small>}
-          {taskReviews.length > 0 && <div className="committer-review-history">
-            {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-              <i className={review.status} aria-hidden />
-              <strong>{userLabel(committers.find((user) =>
-                user.username === review.committer)
-                ?? { username: review.committer })}</strong>
-              <small>{review.status === "completed" ? "已完成检视"
-                : review.delivered ? "等待检视" : "通知未送达"}</small>
-            </span>)}
-          </div>}
+          <div className="workspace-invite-content">
+            {committers.length > 0 ? (
+              <div className="workspace-review-invite-action">
+                <UserPicker ariaLabel="选择 Committer" value={reviewer}
+                  emptyLabel="请选择 Committer"
+                  options={committers} onChange={setReviewer} />
+                <button type="button" disabled={!reviewer || reviewBusy}
+                  onClick={() => void inviteReview()}>
+                  {reviewBusy ? "发送中…" : "发送邀请"}
+                </button>
+              </div>
+            ) : <div className="committer-empty">
+              管理员尚未配置 Committer 名单
+            </div>}
+            {reviewResult && <small className="committer-result">
+              {reviewResult}
+            </small>}
+            {taskReviews.length > 0 && (
+              <div className="workspace-review-invite-history">
+                {taskReviews.slice(0, 3).map((review) => (
+                  <span key={review.id}>
+                    <i className={review.status} aria-hidden />
+                    <strong>{userLabel(committers.find((user) =>
+                      user.username === review.committer)
+                      ?? { username: review.committer })}</strong>
+                    <small>{review.status === "completed" ? "已完成检视"
+                      : review.delivered ? "等待检视" : "通知未送达"}</small>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
       </div>}
     </section>

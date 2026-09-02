@@ -443,16 +443,17 @@ export function TaskProgress({
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
 }) {
-  // completed 是任务 API 的终态事实。内核 progress 记录的是最后执行到的
-  // 工作步骤，合入后通常仍停在“等待权威流水线”；直接照抄会让完成页像
-  // 还有事没跑完。终态展示追加一个“完成”节点，不改写内核现场。
+  // 阶段名与顺序原样来自任务 API(内核 flow/phases.json 一份词表),这里
+  // 不追加、不改名。原来终态会自己补一个"完成"、把"交付"显示成"验证与
+  // 交付"——都是前端私造的第二套词表,和内核方案词表对不上就点不动。
+  // 终态(completed)由服务端把当前段指到末段,前端只画。
   const completed = status === "completed";
-  const phases = completed && progress.phases.at(-1) !== "完成"
-    ? [...progress.phases, "完成"] : progress.phases;
+  const phases = progress.phases;
   const currentIndex = completed ? phases.length - 1 : progress.current_index;
-  const currentLabel = completed ? "完成" : showDetailedStep
+  const currentLabel = completed
+    ? (phases.at(-1) ?? progress.current_phase) : showDetailedStep
     ? progress.step ?? progress.current_phase : progress.current_phase;
-  const displayedCurrentLabel = currentLabel === "交付" ? "验证与交付" : currentLabel;
+  const displayedCurrentLabel = currentLabel;
   const milestone = progress.milestone;
   const milestoneEvent = milestone
     ? ({
@@ -503,7 +504,7 @@ export function TaskProgress({
             },
           } : {})}>
           <i aria-hidden />
-          <span>{phase === "交付" ? "验证与交付" : phase}</span>
+          <span>{phase}</span>
         </span>;
       })}
     </span>
@@ -514,6 +515,9 @@ export function TaskProgress({
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
+  if (step === "cloud_requirement_analysis_confirm") {
+    return "确认需求";
+  }
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (task.waiting?.recommended_view === "diff") return "代码检视";
   return undefined;
@@ -579,6 +583,8 @@ export function WaitingCard({
     setConflict("");
   }, [task.waiting?.waiting_id]);
   const questions = task.waiting?.question?.questions ?? [];
+  const requirementAnalysisConfirmation = task.waiting?.step
+    === "cloud_requirement_analysis_confirm";
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const feedbackAnswers = new Set(choiceEffects
     .filter((effect) => effect.handles_feedback)
@@ -648,50 +654,23 @@ export function WaitingCard({
   const deliveryReady = !requiresDeliverySelection
     || selectedHandlesFeedback
     || Boolean(deliverySelection?.selectedPaths.length);
-  const ready = questions.every((item) => {
+  const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
       ? picked[item.question] || custom[item.question]?.trim()
       : custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
-  }) && deliveryReady
+  })) && deliveryReady
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
     && (!confirmsChainChoice || !repositoryAssigneeSelection
       || repositoryAssigneeSelection.ready)
+    && (!requirementAnalysisConfirmation
+      || (attachmentCount === 0
+        && task.requirement_revision?.state !== "running"))
     && !reviewChoiceConflict
     && !submitting;
-
-  const annotationKey = annotationIds?.join("\0") ?? "";
-  const choiceKey = [...feedbackAnswers, ...closingAnswers].join("\0");
-  useEffect(() => {
-    // 只有未闭环批注才把默认选项扳向"需要调整";纯勾选差异不劫持
-    // 用户的选择(它已经能一键"通过"机械整理直推)。
-    if (!attachmentCount
-        || !choiceEffects.some((effect) =>
-      effect.closes_feedback)) return;
-    setPicked((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const item of questions) {
-        if (current[item.question]) continue;
-        const options = item.options ?? [];
-        if (!options.some((option) => allChoiceAnswers.has(option))) continue;
-        const revision = options.find((option) => feedbackAnswers.has(option))
-          ?? options.find((option) =>
-            !closingAnswers.has(option)
-            && /需要.*(?:调整|修改)|返工|补充/.test(option))
-          ?? options.find((option) => !closingAnswers.has(option));
-        if (revision) {
-          next[item.question] = revision;
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [task.waiting?.waiting_id, annotationKey, choiceKey,
-    deliverySelectionChanged, attachmentCount]);
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -707,8 +686,10 @@ export function WaitingCard({
     const freeResponses: Record<string, string> = {};
     for (const item of questions) {
       const options = item.options ?? [];
-      if (options.length && picked[item.question]) {
-        selectedOptions[item.question] = picked[item.question];
+      const selected = picked[item.question]
+        || (requirementAnalysisConfirmation ? options[0] : "");
+      if (options.length && selected) {
+        selectedOptions[item.question] = selected;
       }
       const explanation = custom[item.question]?.trim();
       if (explanation) freeResponses[item.question] = explanation;
@@ -750,6 +731,7 @@ export function WaitingCard({
   }
 
   const submitLabel = submitting ? "正在提交…"
+    : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
@@ -907,7 +889,7 @@ export function WaitingCard({
         </section>
       )}
 
-      <div className="question-list">
+      {!requirementAnalysisConfirmation && <div className="question-list">
         {questions.map((item, index) => {
           const options = item.options ?? [];
           const compact = options.length <= 4
@@ -953,7 +935,17 @@ export function WaitingCard({
                       className={`option${chosen ? " picked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
-                      onClick={() => pickOption(item.question, option)}
+                      onClick={(event) => {
+                        // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
+                        // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
+                        const selection = window.getSelection();
+                        if (selection && !selection.isCollapsed
+                            && selection.anchorNode
+                            && event.currentTarget.contains(selection.anchorNode)) {
+                          return;
+                        }
+                        pickOption(item.question, option);
+                      }}
                     >
                       <span className={`radio${chosen ? " on" : ""}`} />
                       <span className="option-body">
@@ -1011,7 +1003,7 @@ export function WaitingCard({
             </fieldset>
           );
         })}
-      </div>
+      </div>}
 
       {attachment && (
         <fieldset className="decision-attachment" disabled={submitting}>
@@ -1034,8 +1026,25 @@ export function WaitingCard({
         </div>
       )}
 
+      {requirementAnalysisConfirmation
+        && task.requirement_revision?.state === "running" && (
+        <div className="review-decision-guidance" role="status">
+          <strong>Agent 正在修改需求文档</strong>
+          <span>正在落实已提交的检视意见。修改完成并逐条复检后，才能确认进入需求分析。</span>
+        </div>
+      )}
+
+      {requirementAnalysisConfirmation
+        && task.requirement_revision?.state !== "running"
+        && attachmentCount > 0 && (
+        <div className="review-decision-guidance conflict" role="alert">
+          <strong>还有 {attachmentCount} 条需求检视意见未闭环</strong>
+          <span>请由意见提出人核对 Agent 修改结果并逐条确认，全部闭环后即可通过。</span>
+        </div>
+      )}
+
       <footer className="decision-footer">
-        <div className="decision-notes">
+        {!requirementAnalysisConfirmation && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>
               {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
@@ -1056,7 +1065,7 @@ export function WaitingCard({
               />
             </label>
           )}
-        </div>
+        </div>}
         {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
             最底沿,长卡时落在视口外,人以为点了没反应。 */}
         {conflict && <div className="alert" role="alert">{conflict}</div>}

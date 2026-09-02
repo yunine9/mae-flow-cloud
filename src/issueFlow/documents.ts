@@ -26,6 +26,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
+import { createZipArchive } from "../zipArchive.ts";
 
 /** 分析报告:prompt 契约与 submit_analysis 门票的既定落点,过程文档
  * 里的固定首页。文件名是行为契约的一部分(技能/闸门/转正都认它),
@@ -84,6 +85,61 @@ export interface IssueDocContent {
   content: string;
   /** 触顶截断时为 true:页面要如实告诉用户"这不是全文"。 */
   truncated: boolean;
+}
+
+/** 打包下载在内存里生成 ZIP，给会话现场留一个明确上限，避免 Agent
+ * 意外落下超大 .md 时一次下载把 serve 的堆占满。页面阅读的 512 KB
+ * 截断不影响这里：只要总量不过线，包内始终是完整原文件。 */
+const DOC_ARCHIVE_MAX_FILES = 1000;
+const DOC_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+
+export class IssueDocumentsArchiveTooLargeError extends Error {}
+
+export interface IssueDocumentsArchive {
+  data: Buffer;
+  files: number;
+  sourceBytes: number;
+}
+
+/** 将清单里的全部 Markdown 打成 ZIP。仍以 listSessionDocuments 的白
+ * 名单为唯一边界；扫描后消失的文件跳过，全部消失则返回 undefined。 */
+export function bundleSessionDocuments(
+  root: string,
+): IssueDocumentsArchive | undefined {
+  const docs = listSessionDocuments(root);
+  if (!docs.length) return undefined;
+  if (docs.length > DOC_ARCHIVE_MAX_FILES) {
+    throw new IssueDocumentsArchiveTooLargeError(
+      `过程文档超过 ${DOC_ARCHIVE_MAX_FILES} 份,请先整理后再打包`);
+  }
+
+  const boundary = resolve(root);
+  const entries: Array<{ name: string; content: Buffer; modifiedAt: Date }> = [];
+  let sourceBytes = 0;
+  for (const doc of docs) {
+    const path = join(root, doc.name);
+    if (!resolve(path).startsWith(boundary + sep)) continue;
+    try {
+      const info = statSync(path);
+      if (!info.isFile()) continue;
+      const content = readFileSync(path);
+      sourceBytes += content.length;
+      if (sourceBytes > DOC_ARCHIVE_MAX_BYTES) {
+        throw new IssueDocumentsArchiveTooLargeError(
+          "过程文档合计超过 64 MiB,请先整理后再打包");
+      }
+      entries.push({ name: doc.name, content, modifiedAt: info.mtime });
+    } catch (reason) {
+      if (reason instanceof IssueDocumentsArchiveTooLargeError) throw reason;
+      // 文件在扫描后消失或暂时不可读：与清单/单篇读取同口径，跳过。
+    }
+  }
+  if (!entries.length) return undefined;
+  return {
+    data: createZipArchive(entries),
+    files: entries.length,
+    sourceBytes,
+  };
 }
 
 /** 读一份过程文档。name 必须出现在清单里(零路径拼接),读取前再核对

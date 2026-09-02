@@ -56,10 +56,10 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
   const rows = [
     task({ id: "done", status: "completed" }),
     task({ id: "coding", status: "running", progress: {
-      current_phase: "开发", phases: ["方案", "开发", "验证与交付"],
+      current_phase: "开发", phases: ["方案", "开发", "检视与验证"],
     } }),
     task({ id: "verify", status: "verifying", progress: {
-      current_phase: "验证与交付", phases: ["方案", "开发", "验证与交付"],
+      current_phase: "检视与验证", phases: ["方案", "开发", "检视与验证"],
     } }),
     task({ id: "failed", status: "failed" }),
     task({ id: "canceled", status: "canceled" }),
@@ -73,10 +73,17 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
   }, { total: 4, delivered: 1, delivering: 3 });
   assert.equal(result.stages.reduce((sum, item) => sum + item.count, 0), 3);
   assert.equal(result.statuses.reduce((sum, item) => sum + item.count, 0), 3);
+  assert.equal(result.statuses.length, 6,
+    "原始技术状态应收敛成团队真正关心的业务状态");
+  assert.deepEqual(result.statuses.filter((item) => item.count > 0), [
+    { key: "progressing", label: "推进中", count: 1 },
+    { key: "action_required", label: "需要处理", count: 1 },
+    { key: "verifying", label: "验证中", count: 1 },
+  ]);
   assert.deepEqual(result.stages, [
     { key: "方案", count: 0 },
     { key: "开发", count: 1 },
-    { key: "验证与交付", count: 1 },
+    { key: "检视与验证", count: 1 },
     { key: "尚未进入阶段", count: 1 },
   ]);
 });

@@ -246,7 +246,10 @@ export async function checkModelGateway(
       },
       body: JSON.stringify({
         model: target.model,
-        max_tokens: 32,
+        // 推理模型会先返回 thinking block。32 token 可能刚好全耗在
+        // thinking 上，网关明明正常却被判成“没有文本”；健康检查给
+        // 足够的小预算容纳思考+两个字正文，仍远小于业务请求。
+        max_tokens: 256,
         messages: [{
           role: "user",
           content: "连通性测试:请只回复两个字:正常",

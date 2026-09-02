@@ -75,9 +75,9 @@ export function RequirementGraph({
         <div className="requirement-team-pills">
           <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
           {participantNames.map((account) => <span key={account}>{account}
-            <i>{task.collaborators?.includes(account) ? "共同开发" : "逐仓负责"}</i>
+            <i>{task.collaborators?.includes(account) ? "参与讨论" : "单元执行"}</i>
           </span>)}
-          {participantNames.length === 0 && <em>尚未邀请共同开发者</em>}
+          {participantNames.length === 0 && <em>尚未邀请讨论参与人</em>}
         </div>
       </div>
       <div className="requirement-stages" aria-labelledby="requirement-graph-title">

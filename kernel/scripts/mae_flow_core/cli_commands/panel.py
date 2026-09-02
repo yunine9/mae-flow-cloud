@@ -63,6 +63,14 @@ def cmd_panel(st, args):
     except OSError as exc:
         print("[mae-flow] 面板写入失败(不影响流程): %s" % exc)
         return None
+    # 面板重生成时把脉冲也按当前词表重写:老任务(阶段词表升级前留下的
+    # 脉冲)靠宿主跑一次 panel 就能自愈,不用等下一个 Hook 事件。旁路,
+    # 失败静默。
+    try:
+        from mae_flow_core.panel import pulse
+        pulse.write_pulse(STATE_PATH, root=root, force=True)
+    except Exception:                      # noqa: BLE001
+        pass
     print("[mae-flow] 交付现场面板已生成: %s (%.1f KB)"
           % (os.path.abspath(target), size / 1024.0))
     if host_env.user_on_this_machine():

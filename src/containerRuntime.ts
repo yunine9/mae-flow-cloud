@@ -410,7 +410,9 @@ export interface ManagedContainerSweepResult {
   removed: string[];
 }
 
-const MANAGED_ROLES = new Set(["coding", "prepush", "system-check", "issue"]);
+const MANAGED_ROLES = new Set([
+  "coding", "prepush", "system-check", "issue", "knowledge-extract",
+]);
 
 /**
  * 清理上一次进程崩溃遗留的本实例容器。
