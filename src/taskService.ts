@@ -10181,10 +10181,9 @@ export class TaskService {
       const batch = (state?.delivery_loop?.batches ?? []).find(
         (item: any) => String(item?.batch_id ?? "") === batchId);
       if (!batchId || !batch || !Array.isArray(batch.items)) return undefined;
-      if (!trustedKernelHostLifecycle({
+      if (!this.options.host || !trustedKernelHostLifecycle({
+        host: this.options.host,
         cwd: task.cwd,
-        workspace: task.summary.workspace,
-        taskId: task.summary.id,
         actions: ["feedback-open", "pipeline-record"],
         state,
       })) return undefined;
@@ -10206,16 +10205,15 @@ export class TaskService {
     // Legacy/local-plugin tasks never opted into the Cloud delivery-loop
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
     // shared pipeline path must preserve their original terminal semantics.
-    if (!task.cwd || !this.continuousReviewTask(task)) return;
+    if (!task.cwd || !this.options.host || !this.continuousReviewTask(task)) return;
     try {
       const state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
       if (!trustedKernelHostLifecycle({
+        host: this.options.host,
         cwd: task.cwd,
-        workspace: task.summary.workspace,
-        taskId: task.summary.id,
         actions: ["feedback-open", "feedback-result", "pipeline-record", "close"],
         state,
       })) {
@@ -10368,7 +10366,8 @@ export class TaskService {
     return this.continuousReviewTask(task)
       ? inspectKernelDeliveryReady(
           task.cwd, this.options.host.kernelRoot, true,
-          { workspace: task.summary.workspace, taskId: task.summary.id })
+          { workspace: task.summary.workspace, taskId: task.summary.id,
+          python: this.options.host.python })
       : inspectKernelTaskCompletion(
           task.cwd, this.options.host.kernelRoot, true);
   }
@@ -10393,7 +10392,8 @@ export class TaskService {
       this.options.host.kernelRoot,
       true,
       this.continuousReviewTask(task)
-        ? { workspace: task.summary.workspace, taskId: task.summary.id }
+        ? { workspace: task.summary.workspace, taskId: task.summary.id,
+          python: this.options.host.python }
         : undefined,
     );
   }
@@ -14641,16 +14641,15 @@ export class TaskService {
     const batch = Array.isArray(loop?.batches)
       ? loop.batches.find((item: any) => item?.batch_id === batchId) : undefined;
     if (!batchId || !batch) return undefined;
+    const host = this.options.host;
     if (!(batch.result_digest ? trustedKernelHostLifecycle({
+      host,
       cwd: task.cwd,
-      workspace: task.summary.workspace,
-      taskId: task.summary.id,
       actions: ["feedback-result", "pipeline-record"],
       state,
     }) : trustedKernelHostActiveBatch({
+      host,
       cwd: task.cwd,
-      workspace: task.summary.workspace,
-      taskId: task.summary.id,
       actions: ["feedback-open", "pipeline-record"],
       state,
     }))) {
@@ -14658,9 +14657,8 @@ export class TaskService {
     }
     if (batch.result_digest) {
       if (!trustedKernelHostLifecycle({
+        host,
         cwd: task.cwd,
-        workspace: task.summary.workspace,
-        taskId: task.summary.id,
         actions: ["feedback-result", "pipeline-record"],
         state,
       })) {

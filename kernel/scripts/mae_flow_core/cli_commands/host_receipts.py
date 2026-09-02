@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import stat
+import sys
 
 from .shared import os, time
 from .wiring import api
@@ -20,6 +21,9 @@ from .host_capability import (
 
 LIFECYCLE_SCHEMA = "mae-flow-host-lifecycle/2"
 RECEIPT_SCHEMA = "mae-flow-host-receipt/1"
+ATTEST_SCHEMA = "mae-flow-host-attest/1"
+# 与 delivery 事实文件同一上限;状态快照就是一份 .mae-flow.json。
+_SNAPSHOT_LIMIT = 512 * 1024
 # 收据现在只封摘要,恒定几百字节;上限留给"写坏了/被人塞了别的东西"。
 _RECEIPT_LIMIT = 32 * 1024
 
@@ -288,6 +292,50 @@ def trusted_active_batch(state, actions):
                 and _valid_stored_receipt(authority, record, action, stored)):
             return True
     return False
+
+
+def _snapshot_from_stdin():
+    raw = sys.stdin.read(_SNAPSHOT_LIMIT + 1)
+    if len(raw) > _SNAPSHOT_LIMIT:
+        _die("状态快照超过 512 KiB")
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        _die("状态快照不是合法 JSON: %s" % exc)
+    if not isinstance(value, dict):
+        _die("状态快照必须是一个对象")
+    return value
+
+
+def _actions(raw):
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def attest_host_receipts(state, args):
+    """Read-only: is this lifecycle backed by a real host receipt?
+
+    Cloud 原来把这段核对(收据归属、签名、投影形状、活动批次摘要)抄了
+    一份 TypeScript 镜像。2026-09-02 内核一改投影契约,镜像没跟上,Cloud
+    三个 fail-closed 门当场恒假、整条持续检视链静默锁死——"同一契约两份
+    实现"的实锤。现在裁决只在这里:Cloud 只问,不判。
+
+    快照走 stdin:Cloud 核对的必须是**它自己刚读到的那份**状态,而不是
+    内核此刻再读一次的现场——两次读之间 Agent 可以改文件。本命令不落盘、
+    不消费 nonce、不存状态;读的信任根本来就在 Agent 够不着的地方,所以
+    它不需要宿主凭据。
+    """
+    snapshot = _snapshot_from_stdin() if args.snapshot_stdin else state
+    lifecycle = _actions(args.lifecycle)
+    active = _actions(args.active_batch)
+    record = {
+        "schema": ATTEST_SCHEMA,
+        "lifecycle": (trusted_current_lifecycle(snapshot, lifecycle)
+                      if lifecycle else None),
+        "active_batch": (trusted_active_batch(snapshot, active)
+                         if active else None),
+    }
+    print(json.dumps(record, ensure_ascii=False))
+    return record
 
 
 def save_with_host_proof(state, context):

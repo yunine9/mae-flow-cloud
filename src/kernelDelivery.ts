@@ -6,7 +6,6 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -19,7 +18,6 @@ import {
   generateKeyPairSync,
   randomUUID,
   sign,
-  verify as verifySignature,
 } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -384,6 +382,60 @@ function pauseSync(ms: number): void {
  * 原样重放会被判"拒绝重放";命令本身按 batch_id / 结果摘要 / event_id
  * 幂等,拿新凭据走幂等路径才是正确结局。
  */
+function spawnKernelDelivery(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  stdin?: string;
+  /** 每次尝试重新准备参数——凭据是一次性 nonce,重试必须换新。 */
+  attempt: () => { args: string[]; cleanup(): void };
+}): { status: number; stdout: string; stderr: string } {
+  let infraFailure = "";
+  for (let attempt = 1; attempt <= INFRA_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) pauseSync(200 * (attempt - 1));
+    const prepared = input.attempt();
+    const gitView = createSafeGitView(input.cwd);
+    try {
+      const result = spawnSync(
+        input.host.python ?? "python3",
+        [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
+         "delivery", ...prepared.args],
+        {
+          cwd: input.cwd,
+          encoding: "utf-8",
+          env: gitView.environment(),
+          timeout: 30_000,
+          maxBuffer: 2 * 1024 * 1024,
+          ...(input.stdin === undefined ? {} : { input: input.stdin }),
+        },
+      );
+      if (result.error || result.status === null) {
+        infraFailure = result.error?.message
+          ?? `内核进程被信号 ${String(result.signal ?? "?")} 终止`;
+        continue;
+      }
+      return {
+        status: result.status,
+        stdout: String(result.stdout ?? ""),
+        stderr: String(result.stderr ?? ""),
+      };
+    } finally {
+      gitView.cleanup();
+      prepared.cleanup();
+    }
+  }
+  throw new KernelDeliveryError(
+    `内核持续检视命令失败：\n${infraFailure}`
+    + `（基础设施故障，已重试 ${INFRA_ATTEMPTS} 次仍不可用）`);
+}
+
+function lastJsonLine(stdout: string): Record<string, any> | undefined {
+  const line = stdout.trim().split("\n").filter(Boolean).at(-1) ?? "";
+  try {
+    const value = JSON.parse(line);
+    return value && typeof value === "object" ? value : undefined;
+  } catch { return undefined; }
+}
+
 function invoke(input: {
   host: KernelDeliveryHost;
   cwd: string;
@@ -393,48 +445,74 @@ function invoke(input: {
   payload: unknown;
   args: string[];
 }): KernelDeliveryRecord {
-  let infraFailure = "";
-  for (let attempt = 1; attempt <= INFRA_ATTEMPTS; attempt += 1) {
-    if (attempt > 1) pauseSync(200 * (attempt - 1));
-    const proof = createKernelHostProof(input);
-    const gitView = createSafeGitView(input.cwd);
-    try {
-      const result = spawnSync(
-        input.host.python ?? "python3",
-        [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
-         "delivery", ...input.args, "--host-proof", proof.path],
-        {
-          cwd: input.cwd,
-          encoding: "utf-8",
-          env: gitView.environment(),
-          timeout: 30_000,
-          maxBuffer: 2 * 1024 * 1024,
-        },
-      );
-      if (result.error || result.status === null) {
-        infraFailure = result.error?.message
-          ?? `内核进程被信号 ${String(result.signal ?? "?")} 终止`;
-        continue;
-      }
-      const stdout = String(result.stdout ?? "");
-      const stderr = String(result.stderr ?? "");
-      const line = stdout.trim().split("\n").filter(Boolean).at(-1) ?? "";
-      let record: KernelDeliveryRecord | undefined;
-      try { record = JSON.parse(line) as KernelDeliveryRecord; } catch { /* below */ }
-      if (result.status !== 0 || record?.schema !== "mae-flow-delivery-loop/1") {
-        const detail = [stderr, stdout].filter(Boolean).join("\n").trim();
-        throw new KernelDeliveryError(
-          `内核持续检视命令失败：\n${detail || "没有返回结构化结果"}`);
-      }
-      return record;
-    } finally {
-      gitView.cleanup();
-      proof.cleanup();
-    }
+  const result = spawnKernelDelivery({
+    host: input.host,
+    cwd: input.cwd,
+    attempt: () => {
+      const proof = createKernelHostProof(input);
+      return {
+        args: [...input.args, "--host-proof", proof.path],
+        cleanup: () => proof.cleanup(),
+      };
+    },
+  });
+  const record = lastJsonLine(result.stdout) as KernelDeliveryRecord | undefined;
+  if (result.status !== 0 || record?.schema !== "mae-flow-delivery-loop/1") {
+    const detail = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    throw new KernelDeliveryError(
+      `内核持续检视命令失败：\n${detail || "没有返回结构化结果"}`);
   }
-  throw new KernelDeliveryError(
-    `内核持续检视命令失败：\n${infraFailure}`
-    + `（基础设施故障，已重试 ${INFRA_ATTEMPTS} 次仍不可用）`);
+  return record;
+}
+
+/**
+ * 问内核:这份状态有没有真实宿主收据背书?Cloud 只问,不判。
+ *
+ * 这里原来是一份 TypeScript 镜像——收据归属前缀、签名校验、投影形状、
+ * 活动批次摘要,逐字段抄自内核 host_receipts.py。2026-09-02 内核一改投影
+ * 契约(/1→/2),镜像没跟上,三个 fail-closed 门当场恒假、整条持续检视
+ * 链静默锁死。"本仓一行判定逻辑都不复刻"不是口号:两份实现迟早再分叉。
+ * 现在裁决只在内核 `delivery attest`,Cloud 侧再没有一行可以和它不一致
+ * 的逻辑。
+ *
+ * 快照走 stdin:核对的必须是调用方**刚读到的那份**状态,而不是内核此刻
+ * 再读一次的现场——两次读之间 Agent 可以改文件。任何拿不到内核裁决的
+ * 情形(内核起不来且重试用尽、拒收、输出不成形)一律 false:这是门,
+ * 不是旁路。
+ */
+export function attestKernelHost(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  state?: Record<string, any>;
+  lifecycle?: KernelHostAction[];
+  activeBatch?: KernelHostAction[];
+}): { lifecycle: boolean; activeBatch: boolean } {
+  const denied = { lifecycle: false, activeBatch: false };
+  try {
+    const state = input.state ?? JSON.parse(readFileSync(
+      join(input.cwd, ".mae-flow.json"), "utf-8"));
+    const args = ["attest", "--snapshot-stdin"];
+    if (input.lifecycle?.length) args.push("--lifecycle", input.lifecycle.join(","));
+    if (input.activeBatch?.length) {
+      args.push("--active-batch", input.activeBatch.join(","));
+    }
+    const result = spawnKernelDelivery({
+      host: input.host,
+      cwd: input.cwd,
+      stdin: JSON.stringify(state),
+      attempt: () => ({ args, cleanup: () => {} }),
+    });
+    const record = lastJsonLine(result.stdout);
+    if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1") {
+      return denied;
+    }
+    return {
+      lifecycle: record.lifecycle === true,
+      activeBatch: record.active_batch === true,
+    };
+  } catch {
+    return denied;
+  }
 }
 
 function hasKernelErrorCode(error: unknown, expected: string): boolean {
@@ -471,142 +549,20 @@ function invokeAfterRevisionConflict(input: Parameters<typeof invoke>[0]):
   throw lastError;
 }
 
-function secureReceipt(path: string): Record<string, any> | undefined {
-  try {
-    const info = lstatSync(path);
-    if (!info.isFile() || info.isSymbolicLink()
-        || realpathSync(path) !== path
-        || (info.mode & 0o777) !== 0o600
-        || (typeof process.getuid === "function" && info.uid !== process.getuid())) {
-      return undefined;
-    }
-    const value = JSON.parse(readFileSync(path, "utf-8"));
-    return value && typeof value === "object" ? value : undefined;
-  } catch { return undefined; }
-}
-
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-/** 收据归属 = 任务号 + realpath(代码仓),必须与内核 _receipt_prefix 同式。
- *
- * mae-flow@702379c 起收据不再只按任务号哈希:信任根是按部署共享的目录,
- * 同一任务号换一份代码仓会读到不属于它的陈账。这里若还按旧前缀扫,
- * 新内核写的收据一张都看不见,所有 trusted* 门恒假、fail-closed 全灭。 */
-function receiptPrefix(taskId: string, cwd: string): string {
-  return `${sha256Hex(`${taskId}\0${realpathSync(cwd)}`)}.receipt-`;
-}
-
-/** Verify a protected state projection against a receipt outside Agent mounts. */
-export function trustedKernelHostProjection(input: {
-  cwd: string;
-  workspace: string;
-  taskId: string;
-  action: KernelHostAction;
-  projection: unknown;
-}): boolean {
-  try {
-    const authority = ensureKernelHostCapability(input);
-    const root = capabilityRoot(input.workspace);
-    const prefix = receiptPrefix(input.taskId, input.cwd);
-    const publicKey = createPublicKey({
-      key: { kty: "RSA", n: authority.n, e: authority.e },
-      format: "jwk",
-    });
-    for (const name of readdirSync(root).sort().reverse()) {
-      if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
-      const receipt = secureReceipt(join(root, name));
-      const proof = receipt?.proof;
-      if (receipt?.schema !== "mae-flow-host-receipt/1"
-          || proof?.schema !== "mae-flow-host-proof/1"
-          || proof?.task_id !== input.taskId || proof?.action !== input.action
-          || canonical(receipt.projection) !== canonical(input.projection)) continue;
-      const unsigned = {
-        schema: proof.schema,
-        task_id: proof.task_id,
-        action: proof.action,
-        payload_digest: proof.payload_digest,
-        nonce: proof.nonce,
-        issued_at: proof.issued_at,
-      };
-      // mae-flow@092fad5 起收据只存载荷摘要,不再逐字存 payload(逐字存
-      // 是收据体积失控、32 KiB 读取上限下全链锁死的漏口之一)。摘要以
-      // **被签名的那份**为准,收据里的副本必须逐字一致。
-      const projectionDigest = createHash("sha256")
-        .update(canonical(input.projection)).digest("hex");
-      if (String(receipt.payload_digest ?? "") !== String(proof.payload_digest ?? "")
-          || projectionDigest !== receipt.projection_digest) continue;
-      if (verifySignature("RSA-SHA256", Buffer.from(canonical(unsigned)),
-        publicKey, Buffer.from(String(proof.signature ?? ""), "base64url"))) {
-        return true;
-      }
-    }
-  } catch { /* fail closed */ }
-  return false;
-}
-
-/**
- * 与内核 host_projection 完全同形(mae-flow@092fad5,schema /2)。收据
- * 不只封一条 PASS 或 results,还封住这次宿主动作落定后的 current、活动
- * 批次与完整生命周期,避免 Agent 把几张真的收据和手写生命周期拼成假现场。
- *
- * /1 逐字封整份 delivery_loop 与意见正文——一轮 12 条 350 字的检视就把
- * 收据撑过内核 32 KiB 读取上限,之后反馈、流水线登记、连 MR 合入后的
- * close 全部永久失败(内核侧实测)。/2 改封摘要:防篡改一个字节没松
- * (任何字段变了摘要就变),体积与反馈数量彻底解耦。字段逐个对齐
- * kernel/scripts/mae_flow_core/cli_commands/host_receipts.py 的
- * host_projection,一边改动另一边必须同步,否则 trusted* 门恒假。
- */
-export function kernelHostLifecycleProjection(
-  state: Record<string, any>,
-  action: KernelHostAction,
-): Record<string, unknown> {
-  const rawLoop = state?.delivery_loop;
-  const loop = rawLoop && typeof rawLoop === "object" && !Array.isArray(rawLoop)
-    ? rawLoop : null;
-  const activeId = loop ? String(loop.active_batch_id ?? "") : "";
-  const active = (activeId && Array.isArray(loop?.batches)
-    ? loop.batches.find((item: any) => item && typeof item === "object"
-        && String(item.batch_id ?? "") === activeId)
-    : undefined) ?? null;
-  const digest = (value: unknown) => sha256Hex(canonical(value ?? null));
-  return {
-    schema: "mae-flow-host-lifecycle/2",
-    action,
-    current: state?.current ?? null,
-    active_batch_id: loop ? loop.active_batch_id ?? null : null,
-    delivery_loop_digest: digest(loop),
-    active_batch_digest: digest(active),
-    // 内核 external_facts():缺失时归一成 {} 再取摘要。
-    external_verification_digest: digest(
-      state?.quality?.external_verification ?? {}),
-    user_intervention_digest: digest(state?.user_intervention ?? null),
-  };
-}
-
-/** Verify the current lifecycle as one indivisible host-authenticated fact. */
+/** 整份生命周期(current、活动批次、流水线事实、接管记录)必须与某张
+ * 真实宿主收据精确一致——用于宣布 ready/completed 与重建反馈索引。 */
 export function trustedKernelHostLifecycle(input: {
+  host: KernelDeliveryHost;
   cwd: string;
-  workspace: string;
-  taskId: string;
   actions: KernelHostAction[];
   state?: Record<string, any>;
 }): boolean {
-  let state = input.state;
-  try {
-    state ??= JSON.parse(readFileSync(
-      join(input.cwd, ".mae-flow.json"), "utf-8"));
-  } catch {
-    return false;
-  }
-  return input.actions.some((action) => trustedKernelHostProjection({
+  return attestKernelHost({
+    host: input.host,
     cwd: input.cwd,
-    workspace: input.workspace,
-    taskId: input.taskId,
-    action,
-    projection: kernelHostLifecycleProjection(state!, action),
-  }));
+    state: input.state,
+    lifecycle: input.actions,
+  }).lifecycle;
 }
 
 /**
@@ -615,45 +571,17 @@ export function trustedKernelHostLifecycle(input: {
  * ready/completed；后两者仍要求整份生命周期精确匹配。
  */
 export function trustedKernelHostActiveBatch(input: {
+  host: KernelDeliveryHost;
   cwd: string;
-  workspace: string;
-  taskId: string;
   actions: KernelHostAction[];
   state?: Record<string, any>;
 }): boolean {
-  let state = input.state;
-  try {
-    state ??= JSON.parse(readFileSync(
-      join(input.cwd, ".mae-flow.json"), "utf-8"));
-    const loop = state?.delivery_loop;
-    const activeId = String(loop?.active_batch_id ?? "");
-    const active = Array.isArray(loop?.batches)
-      ? loop.batches.find((item: any) => String(item?.batch_id ?? "") === activeId)
-      : undefined;
-    if (!activeId || !active) return false;
-    const root = capabilityRoot(input.workspace);
-    const prefix = receiptPrefix(input.taskId, input.cwd);
-    // /2 投影里活动批次只剩摘要;比对摘要与比对逐字正文防篡改等价,
-    // 且不再把整份批次正文抄进每张收据。
-    const wanted = sha256Hex(canonical(active ?? null));
-    for (const name of readdirSync(root).sort().reverse()) {
-      if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
-      const receipt = secureReceipt(join(root, name));
-      const action = String(receipt?.proof?.action ?? "") as KernelHostAction;
-      const projection = receipt?.projection;
-      if (!input.actions.includes(action)
-          || String(projection?.active_batch_id ?? "") !== activeId
-          || String(projection?.active_batch_digest ?? "") !== wanted) continue;
-      if (trustedKernelHostProjection({
-        cwd: input.cwd,
-        workspace: input.workspace,
-        taskId: input.taskId,
-        action,
-        projection,
-      })) return true;
-    }
-  } catch { /* fail closed */ }
-  return false;
+  return attestKernelHost({
+    host: input.host,
+    cwd: input.cwd,
+    state: input.state,
+    activeBatch: input.actions,
+  }).activeBatch;
 }
 
 export function openKernelFeedback(input: {

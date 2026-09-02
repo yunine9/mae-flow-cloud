@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Cloud continuous-review is opt-in, durable and never a fresh workflow."""
 
+import contextlib
 import hashlib
 import base64
+import io
 import json
 import os
 import subprocess
@@ -612,6 +614,108 @@ class DeliveryHostProofTests(TempProject):
                         host_receipts, "_verify_rsa_sha256", return_value=False):
                     self.assertFalse(host_receipts.trusted_projection(
                         value, "pipeline-record", projection))
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def _receipt(self, trust, action, projection):
+        path = os.path.join(trust, "%s%s.json" % (
+            host_receipts._receipt_prefix("task-7"), action))
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(host_capability._canonical({
+                "schema": host_receipts.RECEIPT_SCHEMA,
+                "proof": {
+                    "schema": host_capability.PROOF_SCHEMA,
+                    "task_id": "task-7", "action": action,
+                    "payload_digest": host_receipts._digest({}),
+                    "nonce": action, "issued_at": 0, "signature": "signed",
+                },
+                "payload_digest": host_receipts._digest({}),
+                "projection": projection,
+                "projection_digest": host_receipts._digest(projection),
+            }))
+        os.chmod(path, 0o600)
+
+    def _attest(self, snapshot, lifecycle="", active_batch=""):
+        args = SimpleNamespace(
+            delivery_action="attest", lifecycle=lifecycle,
+            active_batch=active_batch, snapshot_stdin=True)
+        live = {"current": "end"}  # 现场文件故意与快照不同:裁决只看快照。
+        with mock.patch.object(host_receipts, "_verify_rsa_sha256",
+                               return_value=True), \
+                mock.patch("sys.stdin", io.StringIO(json.dumps(snapshot))), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            delivery.cmd_delivery({"steps": {}}, live, args)
+        self.assertEqual({"current": "end"}, live, "只读:不动状态")
+        return json.loads(out.getvalue())
+
+    def test_attest_judges_the_snapshot_cloud_sends_and_writes_nothing(self):
+        """Cloud 不再自己核对收据,只把刚读到的状态送来问内核。
+
+        同一契约原来有 Python 与 TypeScript 两份实现,内核一改投影形状,
+        Cloud 镜像没跟上,三个 fail-closed 门恒假、整条链静默锁死(2026-09-02
+        实锤)。裁决收回内核后,Cloud 侧再没有一行可以和这里不一致的逻辑。
+        """
+        root, old, trust, _authority = self.trusted_layout()
+        try:
+            value = state("delivery_watch")
+            self._receipt(trust, "pipeline-record",
+                          host_receipts.host_projection(value, "pipeline-record", {}))
+            before = sorted(os.listdir(trust))
+            verdict = self._attest(value, lifecycle="pipeline-record,close")
+            self.assertEqual({
+                "schema": host_receipts.ATTEST_SCHEMA,
+                "lifecycle": True, "active_batch": None,
+            }, verdict)
+            # 快照被改一个字段:同一张收据不再背书。
+            tampered = json.loads(json.dumps(value))
+            tampered["current"] = "end"
+            self.assertFalse(
+                self._attest(tampered, lifecycle="pipeline-record")["lifecycle"])
+            # 问的动作没有收据:False,而不是拿别的动作的收据充数。
+            self.assertFalse(
+                self._attest(value, lifecycle="close")["lifecycle"])
+            # 活动批次:批次正文一字不差才算;current 后来合法移动不影响。
+            opened = json.loads(json.dumps(value))
+            opened["current"] = "feedback_triage"
+            opened["delivery_loop"] = {
+                "active_batch_id": "fb-1",
+                "batches": [{"batch_id": "fb-1", "status": "repairing",
+                             "items": [{"id": "mr:1", "summary": "补空值分支"}]}],
+            }
+            self._receipt(trust, "feedback-open",
+                          host_receipts.host_projection(opened, "feedback-open", {}))
+            before = sorted(os.listdir(trust))
+            moved = json.loads(json.dumps(opened))
+            moved["current"] = "build"
+            self.assertTrue(self._attest(
+                moved, active_batch="feedback-open")["active_batch"])
+            self.assertFalse(self._attest(
+                moved, lifecycle="feedback-open")["lifecycle"],
+                "current 动过,整份生命周期就不再精确匹配")
+            rewritten = json.loads(json.dumps(moved))
+            rewritten["delivery_loop"]["batches"][0]["items"][0]["summary"] = "改了"
+            self.assertFalse(self._attest(
+                rewritten, active_batch="feedback-open")["active_batch"])
+            self.assertEqual(before, sorted(os.listdir(trust)), "attest 不落任何文件")
+            self.assertFalse(os.path.exists(".mae-flow.json"))
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_attest_refuses_oversized_or_malformed_snapshots(self):
+        root, old, _trust, _authority = self.trusted_layout()
+        try:
+            args = SimpleNamespace(
+                delivery_action="attest", lifecycle="close",
+                active_batch="", snapshot_stdin=True)
+            for raw in ("[1, 2]", "{ not json",
+                        "{\"pad\": \"%s\"}" % ("x" * host_receipts._SNAPSHOT_LIMIT)):
+                with mock.patch("sys.stdin", io.StringIO(raw)), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        delivery.cmd_delivery({"steps": {}}, {}, args)
         finally:
             os.chdir(old)
             root.cleanup()

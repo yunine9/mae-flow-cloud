@@ -14,8 +14,8 @@ from mae_flow_core.workflow.execution_contract import continuous_review_enabled
 from .host_capability import (
     host_managed_continuous_review, verify_host_proof)
 from .host_receipts import (
-    external_facts, has_host_receipt, has_receipt_for, save_with_host_proof,
-    trusted_active_batch, trusted_current_lifecycle,
+    attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
+    save_with_host_proof, trusted_active_batch, trusted_current_lifecycle,
     trusted_pipeline_projection)
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
@@ -493,4 +493,6 @@ def cmd_delivery(flow, state, args):
         return _result(flow, state, args)
     if args.delivery_action == "close":
         return _close(flow, state, args)
+    if args.delivery_action == "attest":
+        return attest_host_receipts(state, args)
     _die("未知动作")

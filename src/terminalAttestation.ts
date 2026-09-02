@@ -9,10 +9,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
-import {
-  kernelHostLifecycleProjection,
-  trustedKernelHostProjection,
-} from "./kernelDelivery.ts";
+import { trustedKernelHostLifecycle } from "./kernelDelivery.ts";
 
 const PIPELINE_DIMENSIONS = {
   compile: "COMPILE",
@@ -91,7 +88,7 @@ function inspectKernelState(
   kernelRoot: string | undefined,
   pipelineByDefault = true,
   expected: "terminal" | "delivery_watch" = "terminal",
-  trust?: { workspace: string; taskId: string },
+  trust?: { workspace: string; taskId: string; python?: string },
 ): KernelCompletionAttestation {
   if (!cwd) {
     return {
@@ -148,13 +145,13 @@ function inspectKernelState(
     ? closeSha : head;
   const record = state?.quality?.external_verification;
   const authorityAction = expected === "terminal" ? "close" : "pipeline-record";
-  const lifecycleTrusted = !continuousReview || Boolean(trust
-    && trustedKernelHostProjection({
+  // 收据核对不在本地做:问内核 `delivery attest`,Cloud 只问不判。
+  const lifecycleTrusted = !continuousReview || Boolean(trust && kernelRoot
+    && trustedKernelHostLifecycle({
+      host: { kernelRoot, python: trust.python },
       cwd,
-      workspace: trust.workspace,
-      taskId: trust.taskId,
-      action: authorityAction,
-      projection: kernelHostLifecycleProjection(state, authorityAction),
+      actions: [authorityAction],
+      state,
     }));
   const recordedRequired = new Set(
     Array.isArray(record?.required)
@@ -228,7 +225,7 @@ export function inspectKernelDeliveryReady(
   cwd: string | undefined,
   kernelRoot: string | undefined,
   pipelineByDefault = true,
-  trust?: { workspace: string; taskId: string },
+  trust?: { workspace: string; taskId: string; python?: string },
 ): KernelCompletionAttestation {
   return inspectKernelState(
     cwd, kernelRoot, pipelineByDefault, "delivery_watch", trust);
@@ -239,7 +236,7 @@ export function inspectKernelTaskCompletion(
   cwd: string | undefined,
   kernelRoot: string | undefined,
   pipelineByDefault = true,
-  trust?: { workspace: string; taskId: string },
+  trust?: { workspace: string; taskId: string; python?: string },
 ): KernelCompletionAttestation {
   return inspectKernelState(cwd, kernelRoot, pipelineByDefault, "terminal", trust);
 }

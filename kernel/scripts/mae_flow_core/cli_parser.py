@@ -80,6 +80,13 @@ def build_parser():
     delivery_close.add_argument("--sha", required=True)
     delivery_close.add_argument("--event-id", required=True)
     delivery_close.add_argument("--host-proof", required=True)
+    # 只读核对:Cloud 问"这份状态有没有宿主收据背书",裁决留在内核,
+    # Cloud 侧不再抄一份核对逻辑。不需要 --host-proof:它不动状态、
+    # 不消费 nonce,只读 Agent 够不着的信任根。
+    delivery_attest = delivery_actions.add_parser("attest")
+    delivery_attest.add_argument("--lifecycle", default="")
+    delivery_attest.add_argument("--active-batch", default="")
+    delivery_attest.add_argument("--snapshot-stdin", action="store_true")
     migrate = sub.add_parser(
         "migrate-flow",
         help="恢复命令：把 Lean v3 在途状态安全恢复到稳定流程")

@@ -258,10 +258,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   存法、收据文件名归属、活动批次比对方式四处都对不上新内核,直接换快照
   会让三个 fail-closed 门恒假(`syncFeedbackStoreFromKernel` 直接 throw、
   终态证明永远不成立)。本次把镜像逐字段对齐到 `host_receipts.py` 的
-  `host_projection`(schema /2)。**这份契约现在有两份实现,一边改另一边
+  `host_projection`(schema /2)。**这份契约当时有两份实现,一边改另一边
   必须同步,否则整条持续检视链静默锁死——这是长期隐患,该收敛成单一
-  来源。** Cloud 侧的宿主绑定与凭据签发已由持续检视终审独立落地,本次
-  未改。③**站在 main 上又实测出一条**:每一轮改码修复都以 Agent 停在
+  来源**(当天已收敛,见 ⑤;镜像已不存在)。Cloud 侧的宿主绑定与凭据
+  签发已由持续检视终审独立落地,本次未改。③**站在 main 上又实测出一条**:每一轮改码修复都以 Agent 停在
   `external_verify`、生命周期暂无收据背书结尾,靠随后的 `pipeline record`
   重新封印;它若失败一次(30 秒预算、内核拒收),`pipelineVerdict` 里
   无条件的 `syncFeedbackStoreFromKernel` 找不到匹配收据,被自己的 catch
@@ -280,7 +280,19 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   原样重放必被拒,命令按 batch_id/结果摘要/event_id 幂等,新凭据走幂等
   路径才是正确结局。回归:`tests/kernelDeliveryInfraRetry.test.ts`
   (包装脚本真 `kill -9` 自己两次再交真 python;未修复树上两条重试用例红、
-  拒收用例本来就对)。
+  拒收用例本来就对)。⑤**②里的长期隐患当天收敛**:内核(mae-flow@97b7752)
+  新增只读 `delivery attest`,复用它既有的 `trusted_current_lifecycle` /
+  `trusted_active_batch` 谓词;Cloud 把刚读到的状态快照经 stdin 送去问,
+  拿回 `{lifecycle, active_batch}` 布尔裁决。`kernelDelivery.ts` 里约 150 行
+  镜像(收据归属前缀、签名校验、投影形状、活动批次摘要)整段删除,
+  `trustedKernelHostLifecycle` / `trustedKernelHostActiveBatch` 只剩转发,
+  终态证明同样改问内核。快照走 stdin 而不让内核再读现场,是为了核对的
+  就是调用方刚读到的那份(两次读之间 Agent 可以改文件)。任何拿不到
+  裁决的情形(内核起不来且三次重试用尽、拒收、输出不成形)一律 false:
+  这是门不是旁路。冷启实测 0.14 秒,调用点全在事件驱动的状态转换里,
+  不在轮询里。回归:`tests/kernelHostAttest.test.ts`(真内核真收据下
+  快照匹配为真、改一字段为假、批次正文一字不差才算;并静态断言本仓
+  源码不再出现投影 schema / 收据前缀 / 摘要字段)。
   **已验**:真内核+真 git+真 RSA 端到端回归(量大检视整轮走通并在合入后
   收口、软链信任根下可用、绑定由宿主写在工作区之外、流水线登记无凭据
   被拒/摘要不符被拒/配套凭据放行)、Cloud 全量、双 TypeScript、Web 生产
