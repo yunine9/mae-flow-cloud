@@ -7734,47 +7734,24 @@ export class TaskService {
     if (!artifact?.content.trim()) {
       throw new NotFoundError("跨仓方案正文尚未生成，请先让 Agent 补齐 Chain 文档");
     }
-    // 同仓拆成多个单元时，负责面必须是互不包含的路径段集合。
-    // 只靠 prompt 不够：模型一旦给契约单元一个 src/ 宽目录、再给后续
-    // 单元 src/filter/，前者会合法吞掉后者，推送门禁也无法分辨归属。
-    // 在人工确认前机械拒绝，逼分析会话先把共享文件明确归到唯一单元。
+    // 同仓拆成多个单元时，每个单元都必须声明允许改动范围。范围是
+    // allowlist，不是文件所有权：骨架→实现、实现→补测这种串行接力
+    // 本来就会反复修改同一批文件。下方会给同仓单元补隐式前置边，
+    // 上游只有 MR 合入才算 completed；下游真正 launch 时重新从远端
+    // 基准分支 clone，因此无需用“范围不得重叠”重复表达调度纪律。
     const unitsByUrl = new Map<string, RequirementRepository[]>();
     for (const repository of graph.repositories) {
       const units = unitsByUrl.get(repository.url) ?? [];
       units.push(repository);
       unitsByUrl.set(repository.url, units);
     }
-    const cleanScopePath = (path: string) => path.replace(/\\/g, "/")
-      .replace(/^\.\//, "").replace(/\/+$/, "");
     for (const units of unitsByUrl.values()) {
       if (units.length < 2) continue;
       for (const unit of units) {
         if (!unit.scope?.paths.length) {
           throw new TaskControlError(
             `同仓拆分单元「${unit.scope?.name ?? unit.name}」缺少负责文件面;`
-            + "请先为每个单元填写互不重叠的 scope.paths 再确认");
-        }
-      }
-      for (let leftIndex = 0; leftIndex < units.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1;
-          rightIndex < units.length; rightIndex += 1) {
-          const left = units[leftIndex];
-          const right = units[rightIndex];
-          for (const leftRaw of left.scope!.paths) {
-            const leftPath = cleanScopePath(leftRaw);
-            for (const rightRaw of right.scope!.paths) {
-              const rightPath = cleanScopePath(rightRaw);
-              if (!leftPath || !rightPath) continue;
-              const overlap = leftPath === rightPath
-                || leftPath.startsWith(`${rightPath}/`)
-                || rightPath.startsWith(`${leftPath}/`);
-              if (!overlap) continue;
-              throw new TaskControlError(
-                `交付单元「${left.scope!.name}」的负责面 ${leftRaw} 与「${
-                  right.scope!.name}」的 ${rightRaw} 重叠;同仓文件必须只归`
-                + "一个单元，请缩小负责面或把共享文件明确归入契约单元后再确认");
-            }
-          }
+            + "请先为每个单元填写 scope.paths 再确认");
         }
       }
     }
@@ -7841,6 +7818,53 @@ export class TaskService {
         if (!current.includes(previous)) current.push(previous);
       }
       lastUnitByUrl.set(repository.url, unitId);
+    }
+    // 重叠范围本身不是错，关键是能不能同时开工。按最终有效依赖图
+    // （显式边 + 同仓隐式串行边）检查传递可达关系：有先后就允许；
+    // 若将来开放同仓并行而两个重叠单元仍无顺序，则在确认前提示补
+    // 依赖/确认并行风险，不能悄悄把它们一起放出去。
+    const dependsOn = (dependent: string, prerequisite: string): boolean => {
+      const pending = [...(prerequisites.get(dependent) ?? [])];
+      const seen = new Set<string>();
+      while (pending.length) {
+        const current = pending.pop()!;
+        if (current === prerequisite) return true;
+        if (seen.has(current)) continue;
+        seen.add(current);
+        pending.push(...(prerequisites.get(current) ?? []));
+      }
+      return false;
+    };
+    const cleanScopePath = (path: string) => path.replace(/\\/g, "/")
+      .replace(/^\.\//, "").replace(/\/+$/, "");
+    const scopesOverlap = (left: RequirementRepository,
+      right: RequirementRepository): boolean =>
+      left.scope!.paths.some((leftRaw) => {
+        const leftPath = cleanScopePath(leftRaw);
+        return Boolean(leftPath) && right.scope!.paths.some((rightRaw) => {
+          const rightPath = cleanScopePath(rightRaw);
+          return Boolean(rightPath) && (leftPath === rightPath
+            || leftPath.startsWith(`${rightPath}/`)
+            || rightPath.startsWith(`${leftPath}/`));
+        });
+      });
+    for (const units of unitsByUrl.values()) {
+      if (units.length < 2) continue;
+      for (let leftIndex = 0; leftIndex < units.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1;
+          rightIndex < units.length; rightIndex += 1) {
+          const left = units[leftIndex];
+          const right = units[rightIndex];
+          if (!scopesOverlap(left, right)) continue;
+          if (dependsOn(left.id, right.id) || dependsOn(right.id, left.id)) {
+            continue;
+          }
+          throw new TaskControlError(
+            `交付单元「${left.scope!.name}」与「${right.scope!.name}」的`
+            + "允许改动范围重叠，但两者没有明确先后顺序；请增加依赖，"
+            + "或在支持并行风险确认后明确放行，不能直接并行启动");
+        }
+      }
     }
     return { graph, order, incoming: prerequisites };
   }
@@ -17077,11 +17101,13 @@ export class TaskService {
         + "就写多个节点(id 互不相同);scope.paths 是该单元负责的仓内"
         + "相对路径前缀,允许指向尚不存在的目录(新增模块);整仓一个"
         + "单元时 scope 可省略。上方每个仓库至少要有一个节点。"
-        + "同仓多单元的 scope 默认不得相互包含或重叠;确实共享的文件"
-        + "必须只归一个单元,其他单元通过依赖使用,不要用上层宽目录吞掉"
-        + "后续单元的负责面。写文件前做一次机械自查:改动面盘点中的"
-        + "每个路径恰好有一个 owner,每个单元任务书提及的修改路径都被"
-        + "本单元 scope 覆盖;发现遗漏或重叠先修方案,不得交付。"
+        + "scope.paths 表示各单元允许修改的范围,不是文件永久所有权。"
+        + "同仓单元由平台串行执行,骨架→实现→补测可以声明相同或包含的"
+        + "路径;不要为了消除重叠而把同一阶段会一起改的文件生硬拆散。"
+        + "若任务计划并行执行,重叠范围必须增加明确的先后依赖,或由人"
+        + "确认并行修改风险;不得把无序重叠任务直接放行。"
+        + "写文件前做一次机械自查:每个单元任务书提及的修改路径都被"
+        + "本单元 scope 覆盖;发现遗漏先修方案,不得交付。"
         + "dependencies 的语义必须是 dependent 依赖 prerequisite，"
         + "也就是 prerequisite 先开发、dependent 后开发；"
         + "只有确实不能并行的硬依赖才写，禁止循环依赖"
