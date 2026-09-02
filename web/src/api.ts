@@ -846,6 +846,8 @@ export interface FeedbackRecord {
   material?: string;
   file?: string;
   line?: number;
+  /** CodeHub 检视人显示名;机器来源没有。 */
+  author?: string;
   verification: string;
   status: FeedbackStatus;
   resolution?: string;

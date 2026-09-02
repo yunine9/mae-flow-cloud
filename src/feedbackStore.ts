@@ -37,6 +37,9 @@ export interface FeedbackRecord {
   material?: string;
   file?: string;
   line?: number;
+  /** 意见出自谁(CodeHub 检视人的显示名)。只进 Cloud 索引、不进内核批次
+   * ——内核只裁"改没改好",谁提的意见是给人看的排版事实。 */
+  author?: string;
   verification: string;
   status: FeedbackStatus;
   resolution?: string;
@@ -88,7 +91,7 @@ function validRecord(value: unknown): value is FeedbackRecord {
     throw new Error("record.source_revision 必须是非负安全整数");
   }
   instant(record.updated_at, "record.updated_at");
-  for (const key of ["material", "file", "resolution"] as const) {
+  for (const key of ["material", "file", "resolution", "author"] as const) {
     if (record[key] !== undefined && typeof record[key] !== "string") {
       throw new Error(`record.${key} 必须是字符串`);
     }

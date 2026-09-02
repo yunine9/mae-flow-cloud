@@ -500,7 +500,13 @@
 .annot-response p,
 .annot-response small { margin: 0; }
 
-.annot-response p { line-height: 1.55; }
+/* Agent 的回应常是多行(逐点说明、贴改动位置),换行要保住,不然整段
+   糊成一行长文(用户实锤"AI 回复只显示一行")。 */
+.annot-response p {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .annot-response small {
   display: block;

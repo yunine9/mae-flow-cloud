@@ -85,9 +85,46 @@ test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源
   assert.match(workspace, /item\.summary/,
     "界面必须展示反馈正文，不能只给数量");
   assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
-  assert.match(css, /\.feedback-groups\s*\{/);
-  assert.match(css, /overflow-x:\s*auto/,
-    "来源多时应横向收纳，不把页面纵向铺成卡片墙");
+});
+
+test("持续检视意见:进度条下只报数,正文按来源竖排列进批注与检视", () => {
+  // 原来所有意见塞在进度条下横向滚动的小卡片里(9–11px、单行省略),MR
+  // 检视人一段话被压成一行,用户实锤"排版太丑",并要求在批注与检视里
+  // 给 CodeHub 检视意见一个列表。摘要只报数;列表和批注卡片同版式。
+  assert.match(workspace, /function FeedbackSummary/);
+  assert.match(workspace, /<FeedbackSummary feedback=\{task\.feedback\}/);
+  assert.match(workspace, /onOpenReview=\{\(\) => setReviewPanelOpen\(true\)\}/,
+    "摘要要能直接打开批注与检视");
+  assert.match(workspace, /function FeedbackList/);
+  assert.match(workspace, /title="来自 CodeHub 的检视意见"/);
+  assert.match(workspace, /item\.source === "mr_discussion"\)/);
+  assert.match(workspace, /mrUrl=\{task\.delivery\?\.mr_url\}/,
+    "CodeHub 意见列表要给回到 MR 的入口");
+  assert.match(workspace, /title="流水线与机器检视"/);
+  assert.match(workspace, /item\.source !== "mr_discussion" && item\.source !== "workspace"/,
+    "工作台批注已由批注卡片承载,不重复列");
+  assert.match(workspace, /已回复，等检视人确认/);
+  assert.match(workspace, /检视人 \$\{item\.author\}/);
+  assert.match(workspace, /className="feedback-body"/);
+  assert.match(css, /\.feedback-summary\s*\{/);
+  assert.match(css, /\.feedback-list\s*\{/);
+  assert.match(css, /\.feedback-body\s*\{[^}]*white-space:\s*pre-wrap/,
+    "意见正文原样换行,不再单行省略");
+  assert.doesNotMatch(css, /\.feedback-groups\s*\{/,
+    "横向卡片墙已删,不许悄悄回来");
+});
+
+test("批注与检视弹层里的批注面板默认展开", () => {
+  // 弹层是人主动点开的,正文再折叠一层等于让人点两次(用户实锤)。
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(panel, /const \[open, setOpen\] = useState\(true\)/);
+  assert.doesNotMatch(panel, /useState\(drafts\.length > 0/);
+  // Agent 对批注的回应也是多行正文,换行要保住(用户实锤"只显示一行")。
+  const annotateCss = readFileSync(
+    join(process.cwd(), "web/src/annotate.css"), "utf8");
+  assert.match(annotateCss,
+    /\.annot-response p \{[^}]*white-space:\s*pre-wrap/);
 });
 
 test("执行中的任务默认打开执行现场", () => {

@@ -10697,13 +10697,14 @@ export class TaskService {
     task: TaskState,
     matches: (record: FeedbackRecord) => boolean,
     status: FeedbackRecord["status"],
-    resolution: string,
+    resolution: string | ((record: FeedbackRecord) => string),
   ): void {
     const store = new FeedbackStore(
       join(task.summary.workspace, "feedback", "index.jsonl"));
     for (const record of store.list()) {
       if (record.status !== "closed" && matches(record)) {
-        store.resolve(record.id, status, resolution);
+        store.resolve(record.id, status,
+          typeof resolution === "function" ? resolution(record) : resolution);
       }
     }
   }
@@ -14786,9 +14787,12 @@ export class TaskService {
         const sorted = classifyGates(view.gates);
         if (view.gates.some((gate) =>
           gate.name === "resolve_discussion_passed" && gate.passed)) {
+          // 关闭时别把 Agent 的逐条回复冲掉:批注与检视里的 CodeHub 意见
+          // 列表要一直能看到"回了什么",平台确认只是状态变了。
           this.resolveFeedbackRecords(task,
             (record) => record.source === "mr_discussion",
-            "closed", "MR 检视门禁已由平台确认通过");
+            "closed", (record) => record.resolution
+              || "MR 检视门禁已由平台确认通过");
         }
         if (sorted.repairs.length) {
           // 绿灯后门禁又亮红:检视/冲突照常派;CI 红说明平台侧又跑了
@@ -14893,7 +14897,7 @@ export class TaskService {
   private openFeedbackBatch(
     task: TaskState,
     source: FeedbackSource,
-    items: KernelFeedbackBatch["items"],
+    items: Array<KernelFeedbackBatch["items"][number] & { author?: string }>,
   ): KernelFeedbackBatch {
     if (!this.options.host || !task.cwd) {
       throw new TaskControlError("当前部署没有持续检视内核，反馈未派单");
@@ -14902,15 +14906,19 @@ export class TaskService {
     // 生产身份固定为来源+来源对象+来源版本+观察 HEAD。调用方传入的
     // 可读 id 只用于构造 source_id；不能再让 MR 编辑或跨 HEAD 复用时
     // 覆盖旧反馈、也不能让相同 batch_id 吞掉变化后的正文。
-    const normalizedItems = items.map((item) => ({
-      ...item,
-      id: feedbackIdentity({
+    // author 只留在 Cloud 索引给人看(批注与检视里的 CodeHub 意见列表),
+    // 不进内核批次:内核契约不认这个字段,批次摘要也不该因排版事实变化。
+    const authors = new Map<string, string>();
+    const normalizedItems = items.map(({ author, ...item }) => {
+      const id = feedbackIdentity({
         source,
         source_id: item.source_id,
         source_revision: item.source_revision,
         observed_sha: baseSha,
-      }),
-    }));
+      });
+      if (author) authors.set(id, author);
+      return { ...item, id };
+    });
     const batch: KernelFeedbackBatch = {
       schema: "mae-flow-feedback-batch/1",
       batch_id: feedbackBatchId(task.summary.id, baseSha, normalizedItems),
@@ -14944,6 +14952,7 @@ export class TaskService {
         ...(item.material ? { material: item.material } : {}),
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
+        ...(authors.has(item.id) ? { author: authors.get(item.id)! } : {}),
         verification: item.verification,
         status: opened.status === "queued" ? "open" : "repairing",
         updated_at: now,
@@ -15234,6 +15243,7 @@ export class TaskService {
         verification: "reviewer",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
+        ...(item.author ? { author: String(item.author).slice(0, 120) } : {}),
       })));
   }
 
@@ -15339,6 +15349,7 @@ export class TaskService {
         verification: "reviewer",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
+        ...(item.author ? { author: String(item.author).slice(0, 120) } : {}),
       })));
     } catch (error) {
       this.markVerificationStalled(task,

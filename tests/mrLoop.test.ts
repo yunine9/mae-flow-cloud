@@ -229,6 +229,13 @@ EOF` } } },
     await until(() => service.get(id)!.feedback?.some((item) =>
       item.source === "mr_discussion" && item.status === "closed") ?? false,
     "平台检视门禁权威关闭反馈");
+    // 批注与检视里的 CodeHub 意见列表靠这几个字段排版:检视人是谁、
+    // Agent 回了什么。author 只进 Cloud 索引,不进内核批次。
+    const codehub = service.get(id)!.feedback!
+      .find((item) => item.source === "mr_discussion")!;
+    assert.equal(codehub.author, "张三", "检视人名字要进任务 API 镜像");
+    assert.match(codehub.resolution ?? "", /已在本轮/,
+      "Agent 的逐条回复要作为处理结果镜像给前端");
     // 检视清了轮到 CI:round 1,失败材料落盘且使命里给了路径
     await until(() =>
       (service.get(id)!.delivery?.loop?.kind ?? "") === "ci", "CI 接棒");

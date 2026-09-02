@@ -279,8 +279,10 @@ export function AnnotationPanel({
       if (leftCurrent !== rightCurrent) return rightCurrent ? 1 : -1;
       return left.index - right.index;
     }).map(({ item }) => item);
-  const [open, setOpen] = useState(drafts.length > 0
-    || actionableReviewCount > 0 || missingReceiptCount > 0);
+  // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
+  // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
+  // 多点一下标题才见内容,用户实锤"为啥默认折叠"。
+  const [open, setOpen] = useState(true);
   const running = taskStatus === "running";
   const reviewSendable = mergeRequestOpen && [
     "queued", "running", "verifying", "await_merge", "failed",
