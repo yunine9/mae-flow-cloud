@@ -21,6 +21,10 @@ export interface PipelineEvidenceAssessment {
   missingDimensions: PipelineDimension[];
   sources: Partial<Record<PipelineDimension, string[]>>;
   reasons: Partial<Record<PipelineDimension, string[]>>;
+  /** 跨维度兜底背书的来源(带"归类错配"标注,维度前缀:来源)。
+   *  执行层把它带进回合/使命文案,让修复侧知道这段日志与失败维度
+   *  的归属关系存疑,以日志原文为准定位。 */
+  fallbackSources: string[];
 }
 
 export const PIPELINE_DIMENSION_TEXT: Record<PipelineDimension, string> = {
@@ -31,8 +35,14 @@ export const PIPELINE_DIMENSION_TEXT: Record<PipelineDimension, string> = {
 
 const NO_DATA = /^(?:no data(?: found)?|not found|empty|null|undefined)$/i;
 const COMPILE_ERROR = /(?:fatal error|\berror:|undefined reference|collect2:|ld(?:\.lld)?: error|make(?:\[\d+\])?: \*\*\*|\[ERROR\]|killed signal|compilation failure|build failure)/i;
-const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b)/i;
+// 既有 C/C++/Maven 分支保持向后兼容;后半段是前端 runner(Jest/Mocha/
+// Vitest)的失败特征。JS 正则没有扩展模式,写成纯 alternation。
+// 旧尺子对 Jest 输出全部不中:"Tests: 1 failed" 的 fail 不紧跟 tests、
+// "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。汇总行的冒号可选:
+// Jest 是 "Tests: 1 failed",Vitest 是 "Test Files 1 failed"。
+const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
+const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
 
 const TOOL_DIMENSIONS: Array<[RegExp, PipelineDimension]> = [
   [/^(?:cloudbuild2\.0|build2\.0)$/i, "COMPILE"],
@@ -61,6 +71,25 @@ function parseJson(text: string): unknown {
 function dimensionOfTool(tool: unknown): PipelineDimension | undefined {
   const name = String(tool ?? "").trim();
   return TOOL_DIMENSIONS.find(([pattern]) => pattern.test(name))?.[1];
+}
+
+/** 按日志内容嗅探它能背书的维度(可命中多个)。record-id 的 toolName
+ * 归类只是弱提示:build2.0 这类复合构建工具靠名字分不清这次是编译挂
+ * 还是 UT 挂(真实案例:CodeCCP2.0 下 build2.0 跑 JS UT,通过率不达标,
+ * record 却全被归到编译维),日志真实维度由内容决定。 */
+function sniffDimensions(text: string): PipelineDimension[] {
+  const dims = new Set<PipelineDimension>();
+  if (UT_ERROR.test(text)) dims.add("UT");
+  if (COMPILE_ERROR.test(text)) dims.add("COMPILE");
+  // 堆栈行(路径:行号)逐行归维:部分 runner 的失败堆栈未必带 FAIL/
+  // 汇总关键字,但 path:line 就够定位;测试文件堆栈归 UT,其余归编译
+  // ——同一份日志可能两种堆栈都有,整份二选一会丢掉其中一维。
+  for (const line of text.split(/\r?\n/)) {
+    if (PATH_WITH_LINE.test(line)) {
+      dims.add(TEST_FILE_PATH.test(line) ? "UT" : "COMPILE");
+    }
+  }
+  return [...dims];
 }
 
 /** 找 JSON 里真正可定位的一条缺陷，而不是“defectCount=3”这类汇总。 */
@@ -93,6 +122,23 @@ function actionableCodecheck(text: string): boolean {
   return PATH_WITH_LINE.test(text)
     && /(?:rule|codecheck|checker|severity|缺陷|[A-Z](?:\.[A-Z0-9_-]+){2,})/i
       .test(text);
+}
+
+// 指标型质量门缺陷的指标名关键词。word 表保持克制:说明文/规则描述
+// 里出现"覆盖率""用例"不算数,只认指标名字段(见下)。
+const UT_INDICATOR_WORDS = /(?:pass rate|通过率|\bdt\b|coverage|覆盖率)/i;
+
+/** 指标型缺陷(通过率/DT/覆盖率)没有 file:line,过不了 hasLocatedDefect
+ * 的三要素,但它是 UT 失败的明确信号(真实案例:"js pass rate 99.78<100"
+ * +DT 缺陷,构建 record 本身 SUCCESS)。关键词只认 indicatorName 类
+ * 字段,不扫全 JSON——规则描述、策略说明里出现同词不是指标型缺陷。 */
+function indicatorDefectSignalsUt(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(indicatorDefectSignalsUt);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(([key, current]) =>
+    /^indicator_?name$/i.test(key)
+      ? typeof current === "string" && UT_INDICATOR_WORDS.test(current)
+      : indicatorDefectSignalsUt(current));
 }
 
 function actionableStructuredError(text: string): boolean {
@@ -206,8 +252,15 @@ export function assessPipelineRepairEvidence(input: {
 
   for (const artifact of input.artifacts) {
     const { name, text } = artifact;
-    if (name === "codecheck_detail.json" && actionableCodecheck(text)) {
-      addSource(sources, "CODECHECK", name);
+    if (name === "codecheck_detail.json") {
+      if (actionableCodecheck(text)) {
+        addSource(sources, "CODECHECK", name);
+      } else if (indicatorDefectSignalsUt(parseJson(text))) {
+        // 指标型缺陷不是可定位报错本身,它只指认"UT 在红"——定位仍要
+        // 看对应构建日志的失败用例;故只作 UT 信号,不冒充 CodeCheck 证据。
+        addSource(sources, "UT",
+          `${name}(指标型质量门缺陷:通过率/DT 类指标红)`);
+      }
       continue;
     }
     if (/^coverage_diff_.+\.json$/i.test(name)
@@ -221,13 +274,24 @@ export function assessPipelineRepairEvidence(input: {
     const recordId = build[1];
     const mapped = [...recordDimensions.entries()].find(([id]) =>
       recordId === id || name.includes(id))?.[1];
+    if (name.startsWith("build_log_")) {
+      // 全量日志:内容嗅探为主、record-id 归类为弱提示。并集的前提是
+      // 内容有强特征——零特征的日志连映射维度也不背书(旧基线如此):
+      // 日志里没有可定位报错时,派修只会照着一份没有内容的日志猜改。
+      const candidate = new Set(sniffDimensions(text));
+      if (mapped && candidate.size) candidate.add(mapped);
+      for (const dimension of candidate) {
+        addSource(sources, dimension, name);
+      }
+      continue;
+    }
+    // 结构化错误 JSON 与平台摘要抽取的短文本没有"按内容重新归维"的
+    // 空间:仍按 record 映射维度判定(缺省编译),尺子不变。
     const dimension = mapped ?? "COMPILE";
     const actionable = name.startsWith("build_error_excerpt_")
       ? (dimension === "UT" ? UT_ERROR.test(text)
         : actionableStructuredError(text))
-      : name.startsWith("build_errors_")
-        ? actionableStructuredError(text)
-        : dimension === "UT" ? UT_ERROR.test(text) : COMPILE_ERROR.test(text);
+      : actionableStructuredError(text);
     if (actionable) addSource(sources, dimension, name);
   }
 
@@ -235,6 +299,31 @@ export function assessPipelineRepairEvidence(input: {
       && meaningful(input.humanEvidence.text)) {
     for (const dimension of input.humanEvidence.dimensions) {
       addSource(sources, dimension, "工作台人工批注回灌");
+    }
+  }
+
+  // 跨维度兜底:平台对失败维度的归类可能错(真实案例 issue-28:报
+  // CodeCheck 红,缺陷挂在 build2.0 的 record 上,errorInfo 拒答,
+  // 镜像日志内容却是 Jest UT 失败)。若某失败维度手里一张证据都没有,
+  // 而镜像里存在"有可定位内容、且未被任何失败维度认领"的构建日志,
+  // 把它作为该维度的弱证据并明示错配——修复回合本来就能读到日志
+  // 全文,背书宽松的代价远低于漏判举卡把人拉进来贴原文。"未被失败
+  // 维度认领"是硬条件:日志已给某个失败维度背过书,说明内容就归那
+  // 一维,拿去替别的维度背书是误导(编译堆栈救不了 UT 缺口)。
+  const fallbackSources: string[] = [];
+  const unclaimedLocatedLogs = input.artifacts.filter((artifact) =>
+    /^build_log_/.test(artifact.name)
+    && sniffDimensions(artifact.text).length > 0
+    && !failedDimensions.some((dimension) =>
+      (sources[dimension] ?? []).includes(artifact.name)));
+  if (unclaimedLocatedLogs.length) {
+    for (const dimension of failedDimensions) {
+      if ((sources[dimension]?.length ?? 0) === 0) {
+        const source = `${unclaimedLocatedLogs[0].name}`
+          + "(跨维度兜底:内容含可定位报错,record-id 归类与失败维度不一致)";
+        addSource(sources, dimension, source);
+        fallbackSources.push(`${PIPELINE_DIMENSION_TEXT[dimension]}: ${source}`);
+      }
     }
   }
 
@@ -258,5 +347,6 @@ export function assessPipelineRepairEvidence(input: {
     missingDimensions,
     sources,
     reasons,
+    fallbackSources,
   };
 }

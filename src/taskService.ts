@@ -14801,6 +14801,11 @@ export class TaskService {
         ...this.evidenceGapReasons(assessment)
           .map((reason) => `  - ${reason}`),
       ] : []),
+      ...(assessment.fallbackSources.length ? [
+        `- 维度归类错配的兜底采信(平台把失败归到别的维度名下,下面日志`
+        + `的**内容**才是权威,按内容定位,别被维度标签带偏):`,
+        ...assessment.fallbackSources.map((item) => `  - ${item}`),
+      ] : []),
       ...(humanEvidence?.text ? [
         "- 人工从工作台回灌的流水线报错原文（按人的原话定位，不扩大解释）：",
         humanEvidence.text.slice(0, 12_000),
