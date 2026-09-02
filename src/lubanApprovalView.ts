@@ -28,6 +28,9 @@ function capReply(text: string): string {
 }
 
 function taskLabel(task: TaskSummary): string {
+  if (task.origin === "issue") {
+    return task.ticket ? `问题 ${task.ticket} · ${task.id}` : `问题 ${task.id}`;
+  }
   return task.ticket ? `需求 ${task.ticket} · ${task.id}` : task.id;
 }
 
