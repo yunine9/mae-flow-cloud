@@ -13,12 +13,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { KernelHost } from "../src/kernelHost.ts";
 import { migrateContinuousReviewTask } from "../src/continuousReviewMigration.ts";
@@ -77,8 +78,16 @@ function messageId(cwd: string, contains: string): string {
   return id;
 }
 
+/** 按生产布局铺现场:<data>/<task>/<repo>。宿主信任根落在 <data>/,由
+ * Cloud 端建;内核从 repo 往上两级找它,永远先看这一级。原来仓直接建在
+ * tmp 根下,内核的"上两级"就变成整台机器共享的 /var/folders/<hash>/——
+ * 任何一次旧代码或别的会话在那留下 .host-capabilities,内核就优先信它,
+ * 而本测试写的是 tmp 根下那份,十二条契约整齐报"凭据不在信任根内"
+ * (2026-09-02 全量实锤;单跑主库旧副本反而是绿的,更有迷惑性)。 */
 function repository(): string {
-  const cwd = mkdtempSync(join(tmpdir(), "mfc-continuous-review-"));
+  const cwd = join(mkdtempSync(join(tmpdir(), "mfc-continuous-review-")),
+    "task", "repo");
+  mkdirSync(cwd, { recursive: true });
   git(cwd, "init", "--quiet", "-b", "master");
   git(cwd, "config", "user.email", "contract@test");
   git(cwd, "config", "user.name", "contract-test");
@@ -182,7 +191,7 @@ async function reproduceTerminalRollover(): Promise<{
   assert.throws(() => migrateContinuousReviewTask({
     host: { kernelRoot: KERNEL_ROOT!, python: "mae-flow-python-missing" },
     cwd,
-    workspace: cwd,
+    workspace: dirname(cwd),
     taskId: "task-real-last",
     status: "queued",
     ticket: TICKET,
@@ -197,7 +206,7 @@ async function reproduceTerminalRollover(): Promise<{
   migrateContinuousReviewTask({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd,
-    workspace: cwd,
+    workspace: dirname(cwd),
     taskId: "task-real-last",
     status: "queued",
     ticket: TICKET,
@@ -211,7 +220,7 @@ async function reproduceTerminalRollover(): Promise<{
   const migratedFacts = JSON.parse(readFileSync(facts, "utf-8"));
   const pipelineProof = createKernelHostProof({
     cwd,
-    workspace: cwd,
+    workspace: dirname(cwd),
     taskId: "task-real-last",
     action: "pipeline-record",
     payload: migratedFacts,
@@ -238,7 +247,7 @@ async function reproduceTerminalRollover(): Promise<{
   };
   openKernelFeedback({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
-    cwd, workspace: cwd, batch,
+    cwd, workspace: dirname(cwd), batch,
   });
   return {
     cwd,
@@ -324,7 +333,7 @@ test("契约：同一 HEAD 的反馈重放幂等，新 HEAD 让旧质量证据�
   const before = readState(scene.cwd).delivery_loop.batches.length;
   const replay = openKernelFeedback({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
-    cwd: scene.cwd, workspace: scene.cwd, batch: scene.batch,
+    cwd: scene.cwd, workspace: dirname(scene.cwd), batch: scene.batch,
   });
   assert.equal(replay.idempotent, true);
   assert.equal(readState(scene.cwd).delivery_loop.batches.length, before);
@@ -343,7 +352,7 @@ test("契约：同一任务最多一个代码 writer，后到反馈进入队列"
   };
   const opened = openKernelFeedback({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
-    cwd: scene.cwd, workspace: scene.cwd, batch: second,
+    cwd: scene.cwd, workspace: dirname(scene.cwd), batch: second,
   });
   const state = readState(scene.cwd);
   assert.equal(opened.status, "queued");
@@ -357,7 +366,7 @@ test("契约：每条反馈都有来源和精确回执，总体回复不能冒�
   assert.throws(() => recordKernelFeedbackResult({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
-    workspace: scene.cwd,
+    workspace: dirname(scene.cwd),
     taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: false,
@@ -376,7 +385,7 @@ test("契约：新 HEAD 清掉旧绿灯，同一处理结果重放幂等", async
   const input = {
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
-    workspace: scene.cwd,
+    workspace: dirname(scene.cwd),
     taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: true,
@@ -402,7 +411,7 @@ test("契约：模糊或无法处理时明确停点，不猜、不糊弄、不�
   recordKernelFeedbackResult({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
-    workspace: scene.cwd,
+    workspace: dirname(scene.cwd),
     taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: false,
@@ -422,7 +431,7 @@ test("契约：只有 MR 合入或用户主动停止，Cloud 与内核才一起�
   closeKernelDelivery({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
-    workspace: scene.cwd,
+    workspace: dirname(scene.cwd),
     taskId: scene.batch.task_id,
     sha,
     eventId: `mr-merged:${sha}`,
