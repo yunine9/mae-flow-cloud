@@ -254,7 +254,18 @@
 
 .steer-log li.done .steer-log-state {
   color: var(--success);
-  background: #e6f5ef;
+  background: var(--success-soft);   /* 写死的浅绿在深色主题里是块亮斑 */
+}
+
+/* 引用名药丸:只给名字和固定下来的版本号,正文进模型不进页面。 */
+.steer-log-refs {
+  flex-basis: 100%;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.steer-log-refs > span {
+  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--muted);
+  font-size: var(--font-size-assist); font-weight: 600;
 }
 
 .steer-log li.waiting .steer-log-state {

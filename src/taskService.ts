@@ -4422,9 +4422,12 @@ export class TaskService {
    * 我们没法证明哪句是答你的(steer 在回合间隙送达,模型可能先把手头
    * 那段话说完),所以只按时间切片给到下一条插话为止,标签也这么写。 */
   listInterrupts(id: string): Array<{
+    /** 人写的附言原文;引用的知识正文不在这里,只给名字。 */
     text: string; at: string; delivered: boolean;
     /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
     deferred?: "decision" | "mission";
+    /** @ 引用的知识名(发送时固定的版本号一起给)。 */
+    references?: string[];
     said: Array<{ text: string; at: string }>;
   }> {
     const task = this.tasks.get(id);
@@ -4443,6 +4446,7 @@ export class TaskService {
       const rows: Array<{
         text: string; at: string; delivered: boolean;
         deferred?: "decision" | "mission";
+        references?: string[];
         said: Array<{ text: string; at: string }>;
       }> = [];
       for (const event of new EventLog(
@@ -4450,17 +4454,23 @@ export class TaskService {
       ).replay()) {
         if (event.kind === "user_message"
             && event.payload?.via === "interrupt") {
+          // 送达判定必须拿送达用的整段正文去比队列;展示另给。
           const text = String(event.payload?.text ?? "");
+          const display = typeof event.payload?.display === "string"
+            ? event.payload.display : text;
+          const references = Array.isArray(event.payload?.references)
+            ? (event.payload.references as unknown[]).map(String) : undefined;
           const deferred = event.payload?.deferred === "decision"
             || event.payload?.deferred === "mission"
             ? event.payload.deferred as "decision" | "mission" : undefined;
           rows.push({
-            text, at: String(event.ts ?? ""),
+            text: display, at: String(event.ts ?? ""),
             delivered: deferred === "decision" ? !awaitingDecision.has(text)
               : deferred === "mission"
                 ? missionDelivered && !pending.has(text)
               : !pending.has(text),
             ...(deferred ? { deferred } : {}),
+            ...(references?.length ? { references } : {}),
             said: [],
           });
           continue;
@@ -9642,6 +9652,12 @@ export class TaskService {
           ? `[责任人 ${actor} 插话] ${combined}`
           : `[协作者 ${actor} 插话] ${combined}`)
       : combined;
+    // 「捎过去的话」只摆附言和引用名:送达用的正文里整份知识都注进去了,
+    // 原样列出来是几万字的墙(用户 2026-09-02 拍板"只显示引用名")。
+    const receipt = {
+      display: message || "（只引用了知识，没有附言）",
+      ...(resolved ? { references: resolved.labels } : {}),
+    };
     if (task.summary.status === "waiting_for_human") {
       if (!resolved) {
         throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
@@ -9652,7 +9668,7 @@ export class TaskService {
         ...(task.pendingDecisionKnowledge ?? []), delivered];
       this.recordSteerKnowledge(task, resolved.footprints);
       this.persist(task);
-      this.recordDeferredInterrupt(task, delivered, "decision");
+      this.recordDeferredInterrupt(task, delivered, "decision", receipt);
       this.options.log?.(`任务 ${id} 引用了 ${resolved.labels.join("、")}`
         + ",将随下一次决定送达");
       return { ...task.summary };
@@ -9672,14 +9688,14 @@ export class TaskService {
       }
       this.recordSteerKnowledge(task, resolved.footprints);
       this.persist(task);
-      this.recordDeferredInterrupt(task, delivered, "mission");
+      this.recordDeferredInterrupt(task, delivered, "mission", receipt);
       return { ...task.summary };
     }
     if (task.summary.status !== "running" || !task.driver) {
       throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
     }
-    await task.driver.steer(delivered);
+    await task.driver.steer(delivered, receipt);
     if (resolved) this.recordSteerKnowledge(task, resolved.footprints);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
@@ -9695,10 +9711,11 @@ export class TaskService {
     task: TaskState,
     text: string,
     deferred: "decision" | "mission",
+    receipt: { display: string; references?: string[] },
   ): void {
     try {
       if (task.driver) {
-        task.driver.noteUserMessage(text, { deferred });
+        task.driver.noteUserMessage(text, { deferred, ...receipt });
         return;
       }
       const log = new EventLog(
@@ -9711,7 +9728,7 @@ export class TaskService {
         sessionId: "host",
         ts: new Date().toISOString(),
         kind: "user_message",
-        payload: { text, via: "interrupt", deferred },
+        payload: { text, via: "interrupt", deferred, ...receipt },
       });
     } catch (error) {
       this.options.log?.(

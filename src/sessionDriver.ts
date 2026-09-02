@@ -626,11 +626,13 @@ export class CloudSession {
    * 这不绕过任何门禁:插话只改变模型下一步干什么,该过的证据一样得过。
    * 登记在 steer 成功之后——先记后发,发失败就会留下一条从未送达的假账。
    */
-  async steer(text: string): Promise<void> {
+  async steer(text: string, extra: Record<string, unknown> = {}): Promise<void> {
     await (this.session as any).steer(text);
     // via 标记让重启后认得出"这条是插话":它可能还压在 pi 的内存队列里
     // 没送到,而队列随进程一起死。事件日志是唯一跨进程活下来的账。
-    this.emit("user_message", this.sessionId, { text, via: "interrupt" });
+    // extra 是给页面看的展示字段(附言原文、引用名):text 里带着整份
+    // 注入正文,直接摆出来是几万字的墙。
+    this.emit("user_message", this.sessionId, { text, via: "interrupt", ...extra });
   }
 
   /** 取走"发出去却没送到"的插话。

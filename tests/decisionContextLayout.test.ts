@@ -351,8 +351,8 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
   assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
   assert.match(box, /item\.deferred === "decision" \? "随下一次决定送达"/);
   const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
-  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision"\)/);
-  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission"\)/);
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision", receipt\)/);
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission", receipt\)/);
   // 借活会话的 emit 记账,不另开实例撞编号。
-  assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred \}\)/);
+  assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred, \.\.\.receipt \}\)/);
 });

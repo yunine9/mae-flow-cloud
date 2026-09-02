@@ -491,6 +491,13 @@ export function SteerBox({
                       : "待读取"}
                   </span>
                   <span className="steer-log-text">{item.text}</span>
+                  {!!item.references?.length && (
+                    <span className="steer-log-refs" aria-label="引用的知识">
+                      {item.references.map((label) => (
+                        <span key={label}>@ {label}</span>
+                      ))}
+                    </span>
+                  )}
                   {item.said.length > 0 && (
                     <span className="steer-said">
                       <em>你说完之后它说的</em>

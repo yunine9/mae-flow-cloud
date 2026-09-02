@@ -141,6 +141,10 @@ test("running:引用正文随插话直送模型;足迹落账", async () => {
     assert.match(seen, /中途引用知识/);
     assert.match(seen, /掩码必须保留后四位——这是铁律/,
       "引用的不是名字,是正文本身");
+    // 「捎过去的话」只摆附言和引用名:正文进模型,不进页面(用户拍板)。
+    const receipt = service.listInterrupts(id)[0];
+    assert.equal(receipt.text, "参考这份团队规范");
+    assert.match(receipt.references?.[0] ?? "", /^mask-rules@[0-9a-f]{8}$/);
     // 足迹:中途引用是可观察事实,要进 knowledge-events.jsonl。
     const events = readFileSync(
       join(dataDir, id, "knowledge-events.jsonl"), "utf-8");
@@ -193,7 +197,10 @@ test("等人决定:纯文字仍拒;引用压进决定 continuation 并持久化"
     assert.equal(queued.length, 1, "等待期引用发出即记账");
     assert.equal(queued[0].deferred, "decision");
     assert.equal(queued[0].delivered, false, "决定没提交就不许报已读取");
-    assert.match(queued[0].text, /决定前先看这两份/);
+    assert.equal(queued[0].text, "决定前先看这两份", "附言原文,不带注入正文");
+    assert.deepEqual(queued[0].references?.map((label) =>
+      label.replace(/@[0-9a-f]{8}$/, "@<digest>")),
+      ["review-rules@<digest>", "退款流程@v1"]);
 
     const waiting = service.get(id)!.waiting!;
     await service.decide(id, {
