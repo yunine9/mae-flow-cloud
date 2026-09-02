@@ -329,7 +329,7 @@ export function IssueSessionView({
         右栏靠 order 提到内容之上,见 style.css 的 1100px 断点。 */}
     <div className="issue-two-pane">
       <section className="issue-main-pane" aria-label="会话内容">
-        <IssuePaneTabs tab={tab} onPick={setTab} />
+        <IssuePaneTabs tab={tab} onPick={setTab} hasAnalysis={detail.has_analysis} />
         {tab === "materials"
           ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
               onView={setMaterialsView} onNotifyAI={notifyAI}
@@ -551,9 +551,13 @@ function IssueJourneyTrail({ trail }: {
 function IssuePaneTabs({
   tab,
   onPick,
+  hasAnalysis,
 }: {
   tab: "materials" | "events";
   onPick: (tab: "materials" | "events") => void;
+  /** 分析报告在库:材料页签挂脉冲点——报告是主交付物,入口要找得到
+   * (2026-09-02 用户反馈页脚小字没人注意)。 */
+  hasAnalysis?: boolean;
 }) {
   const views = [
     ["materials", "材料", "DTS 单据、过程文档、工作区变更与拉取日志"],
@@ -565,7 +569,8 @@ function IssuePaneTabs({
         aria-selected={tab === value}
         className={tab === value ? "active" : ""}
         onClick={() => onPick(value)}>
-        <strong>{label}</strong>
+        <strong>{label}{value === "materials" && hasAnalysis
+          && <i className="ws-tab-dot" aria-hidden />}</strong>
         <small>{hint}</small>
       </button>
     ))}

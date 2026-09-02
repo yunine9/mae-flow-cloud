@@ -3402,7 +3402,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
-.issue-rail-foot .issue-analysis-flag { margin-left: 0; }
 .issue-rail-actions { display: flex; gap: 8px; }
 .issue-rail-actions button {
   flex: 1;
@@ -3534,15 +3533,43 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 
-.issue-analysis-flag {
-  margin-left: auto;
-  border: 0;
-  background: none;
-  color: #16856a;
-  font-size: var(--font-size-dense);
+/* 分析报告置顶 CTA(2026-09-02):页脚小字没人看得见,升为右栏首卡——
+   accent 描边+浅底+脉冲点(issue-rail-pulse 同款), hover 提亮;
+   材料页签同拍挂脉冲点,双入口同一事实源 has_analysis。 */
+.issue-analysis-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 10px;
+  background: var(--accent-soft);
   cursor: pointer;
+  text-align: left;
 }
-.issue-analysis-flag:hover { text-decoration: underline; }
+.issue-analysis-cta:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: var(--accent);
+}
+.issue-analysis-cta-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.issue-analysis-cta-text strong { color: var(--text-strong); font-size: 13px; }
+.issue-analysis-cta-text small { color: var(--muted); font-size: var(--font-size-assist); }
+.issue-analysis-cta > svg {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+/* 材料/现场页签栏上的"有分析报告"脉冲点,随标签文字走。 */
+.ws-tab-dot {
+  display: inline-block;
+  width: 7px; height: 7px; margin-left: 6px; vertical-align: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: issueRailPulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-tab-dot { animation: none; }
+}
 
 /* ---- 问题会话的视图旁路:耗时与卡点(issue-tl-*)----
    与任务侧 utility-panel/cost 同一精神,视觉分量压得更低:
