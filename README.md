@@ -21,6 +21,15 @@ every-skill 的两个 Go 工具(`assets/ops-tools/`):宿主以**环境变量**
 供 Agent grep，build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟在
 `tests/issueFlowService.test.ts`。
 
+ops 工具超时语义 2026-09-02 收窄:命令包进容器内 coreutils
+`timeout --kill-after=30`(独立进程组,到点 TERM 整组、宽限后 KILL),
+超时只了结工具进程、会话容器不动;`TaskContainer.exec` 的「超时=销毁
+容器」退为预算+60s 兜底(拉日志 15 分钟/换库 20 分钟),仅 timeout
+自身失效才触发;退出码 124 且成功哨兵缺席即报「工具已终止、容器
+未动」。诚实清单:已验命令形态/兜底先后/124 翻译(`tests/
+issueFlowService.test.ts` 的 fake-exec 契约测试),未验真容器内
+TERM→KILL 链(真容器用例未写)。
+
 ## 三条铁的边界
 
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在
@@ -237,6 +246,13 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-02 ops 工具超时语义收窄为"只了结工具,不连坐容器"**:命令
+  包进容器内 coreutils `timeout`(独立进程组,TERM→KILL),会话容器不动;
+  exec 的"超时=销毁容器"退为预算+60s 兜底(拉日志 15 分钟/换库 20 分钟)。
+  已验:命令形状/兜底时序/124 转译(fake-exec 契约测试,`tests/
+  issueFlowService.test.ts`);**未验:真容器内的 TERM→KILL 链**——真
+  Docker 用例未写,当前信任 coreutils timeout 语义,补上前真容器行为
+  按文档语义推定。
 - **2026-09-02 批注与检视改成右侧抽屉+筛选条+CodeHub 意见转批注**(用户
   定调:"批注与检视是我们的核心竞争力,易用性是重中之重",三点一并做)。
   ①**抽屉不是弹层**:固定在视口右侧的侧滑面板(`position: fixed`,宽

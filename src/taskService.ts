@@ -804,6 +804,9 @@ export interface TaskSummary {
   workspace_reclaimed_at?: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
+  /** 待办来源域(小鲁班手机审批展示用):需求任务缺省 requirement;
+   * 问题会话等待卡的投影标 issue(卡面称呼「问题 单号 · 会话」)。 */
+  origin?: "requirement" | "issue";
   /** 跨仓主任务的共同开发者。主责任人仍由 luban_account 唯一确定；
    * 协作者可参与分析讨论与送出批注，但不能提交最终决定或控制任务。 */
   collaborators?: string[];
