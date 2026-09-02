@@ -12,6 +12,9 @@
  * 侧 ws-tabs)只有材料页签渲染,随本文件走。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
+ * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
+ * 修改编辑器、压缩包解压、检视(圈注意见/提交/移除的页签与圈注写口);
+ * 文件/diff/日志/文档的只读浏览完整保留。
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -122,13 +125,16 @@ function expandWithAncestors(prev: ReadonlySet<string>, path: string): Set<strin
 }
 
 /** 树行渲染:目录行点击收/展,文件行点击进查看器,压缩包行多一枚解压
- * 按钮。缩进按深度手排(树是自绘的,不引第三方依赖)。 */
-function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, onToggle, onOpen, onExtract }: {
+ * 按钮(解压是写操作,查看模式下不渲染)。缩进按深度手排(树是自绘的,
+ * 不引第三方依赖)。 */
+function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate, onToggle, onOpen, onExtract }: {
   nodes: LogTreeNode[];
   depth: number;
   expanded: ReadonlySet<string>;
   activeLog?: string;
   extracting: string;
+  /** 归属操作权(查看模式=false):解压按钮不渲染,看日志不受影响。 */
+  canOperate: boolean;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
   onExtract: (path: string) => void;
@@ -146,6 +152,7 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, onToggle, 
           {expanded.has(node.path) && <LogTreeRows
             nodes={node.children} depth={depth + 1} expanded={expanded}
             activeLog={activeLog} extracting={extracting}
+            canOperate={canOperate}
             onToggle={onToggle} onOpen={onOpen} onExtract={onExtract} />}
         </Fragment>
       : <div key={node.path} className="issue-log-row"
@@ -156,7 +163,7 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, onToggle, 
             <span className="p">{node.name}</span>
             <span className="num">{sizeText(node.size)}</span>
           </button>
-          {node.archive && <button type="button" className="issue-log-extract"
+          {canOperate && node.archive && <button type="button" className="issue-log-extract"
             disabled={extracting !== ""}
             title={`解压到同目录 ${node.name
               .replace(/\.(tar\.gz|tar\.bz2|tgz|tar|zip)$/i, "")}-extracted/`}
@@ -246,8 +253,12 @@ function IssueDialogueTurnView({ turn }: { turn: IssueDialogueTurn }) {
  * Agent 落的其他 .md)。激活页签才取内容;状态一动(updated_at 变化)
  * 自动重读,让 AI 续写的内容能贴着节奏刷新。
  * 检视(ADR-0007):分析报告按块悬停圈注意见(交互与需求流批注同一套),
- * 「检视」页签攒草稿、一次提交触发整体回退重跑。 */
-function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
+ * 「检视」页签攒草稿、一次提交触发整体回退重跑——都是写操作,查看
+ * 模式(canOperate=false)下整条页签与圈注写口都不渲染,文档照读。 */
+function IssueProcessDocs({ detail, canOperate }: {
+  detail: IssueDetail;
+  canOperate: boolean;
+}) {
   const id = detail.id;
   const [docs, setDocs] = useState<IssueDocMeta[]>([]);
   const [active, setActive] = useState(ANALYSIS_DOC);
@@ -370,7 +381,7 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
       hint: analysisMeta ? sizeText(analysisMeta.bytes) : "未生成" },
     { key: DIALOGUE_TAB, label: "过程问答",
       hint: turns.length ? `${turns.length} 回合` : "" },
-    ...(detail.mode === "fixed"
+    ...(canOperate && detail.mode === "fixed"
       ? [{ key: REVIEW_TAB, label: "检视",
         hint: draftCount ? `${draftCount} 条待提交` : "" }]
       : []),
@@ -413,7 +424,9 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
         <button type="button" onClick={() => void loadActive()}>刷新</button>
       </div>
       <article className="issue-doc-body">
-        {active === ANALYSIS_DOC && reviewEnabled
+        {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
+            不给行尾 ✎。 */}
+        {active === ANALYSIS_DOC && reviewEnabled && canOperate
           ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
               fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
               onAdded={() => void loadReviews()}
@@ -570,13 +583,17 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
 
 /** 会话材料(材料页签):DTS 单据 / 过程文档 / 工作区变更 / 拉取日志。
  * 数据全部旁路:任何一块失败给空态。
- * 子视图状态在会话层(右栏"分析报告已产出"要能一步跳进来)。 */
-export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
+ * 子视图状态在会话层(右栏"分析报告已产出"要能一步跳进来)。
+ * 查看模式(canOperate=false):快速修改编辑器与解压写口不渲染,
+ * diff/日志/单据/文档的只读浏览完整保留。 */
+export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI, canOperate }: {
   detail: IssueDetail;
   busy: boolean;
   view: "dts" | "changes" | "logs" | "doc";
   onView: (view: "dts" | "changes" | "logs" | "doc") => void;
   onNotifyAI: (text: string) => Promise<boolean>;
+  /** 归属操作权(查看模式=false):材料页签只留只读浏览。 */
+  canOperate: boolean;
 }) {
   const [data, setData] = useState<IssueMaterials>();
   const [note, setNote] = useState("");
@@ -765,7 +782,8 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
     </div>
     {note && <div className="utility-note">{note}</div>}
       {view === "changes" && <>
-        {detail.status === "running" && <div className="utility-note">
+        {/* 编辑时机提醒只跟编辑器走:查看模式没有编辑器,也就不需要。 */}
+        {canOperate && detail.status === "running" && <div className="utility-note">
           AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
         </div>}
         {diffRepos.length > 1 && <div className="issue-diff-repo-switch" role="group"
@@ -789,34 +807,36 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
                   : "工作区当前没有改动。"}
               </div>}
         </div>
-      <div className="issue-materials-editor">
-        <div className="issue-materials-editor-bar">
-          <strong>快速修改</strong>
-          <select value={activeFile ?? ""}
-            onChange={(event) => {
-              const path = event.target.value;
-              if (path) void editFile(path);
-            }}>
-            <option value="">选择要修改的文件…</option>
-            {changes.map((change) => <option key={change.path}
-              value={change.path}>{change.path}</option>)}
-          </select>
-          <button type="button" className="primary" disabled={saving
-            || !activeFile || content === undefined} onClick={save}>
-            {saving ? "保存中…" : "保存修改"}
-          </button>
-          <button type="button" disabled={busy || saving || !activeFile}
-            title="把这次人工改动告知 AI,请它复核后继续"
-            onClick={() => activeFile && onNotifyAI(
-              `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
-            请 AI 复核
-          </button>
-        </div>
-        {activeFile && (content !== undefined
-          ? <textarea value={content} spellCheck={false}
-              onChange={(event) => setContent(event.target.value)} />
-          : <p className="issue-materials-empty">读取中…</p>)}
-      </div>
+        {/* 快速修改(问题流唯一的人工写口):查看模式整块不渲染——
+            选文件/保存/请 AI 复核都是写路径。人工修改记录(账)照常示人。 */}
+        {canOperate && <div className="issue-materials-editor">
+          <div className="issue-materials-editor-bar">
+            <strong>快速修改</strong>
+            <select value={activeFile ?? ""}
+              onChange={(event) => {
+                const path = event.target.value;
+                if (path) void editFile(path);
+              }}>
+              <option value="">选择要修改的文件…</option>
+              {changes.map((change) => <option key={change.path}
+                value={change.path}>{change.path}</option>)}
+            </select>
+            <button type="button" className="primary" disabled={saving
+              || !activeFile || content === undefined} onClick={save}>
+              {saving ? "保存中…" : "保存修改"}
+            </button>
+            <button type="button" disabled={busy || saving || !activeFile}
+              title="把这次人工改动告知 AI,请它复核后继续"
+              onClick={() => activeFile && onNotifyAI(
+                `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
+              请 AI 复核
+            </button>
+          </div>
+          {activeFile && (content !== undefined
+            ? <textarea value={content} spellCheck={false}
+                onChange={(event) => setContent(event.target.value)} />
+            : <p className="issue-materials-empty">读取中…</p>)}
+        </div>}
       <section className="issue-materials-block">
         <h4>人工修改记录({data?.manual_edits.length ?? 0})</h4>
         {data?.manual_edits.length === 0 && <p className="issue-materials-empty">
@@ -851,7 +871,7 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
     {view === "doc" && <>
       {/* 过程文档(分析报告 + 过程问答 + 检视 + 动态文档)按 updated_at
           缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-      <IssueProcessDocs detail={detail} />
+      <IssueProcessDocs detail={detail} canOperate={canOperate} />
     </>}
     {view === "logs" && <div className="ws-doc">
       {data && data.logs.entries.length === 0 && <div className="utility-note">
@@ -863,6 +883,7 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       <div className="issue-materials-files" role="list">
         <LogTreeRows nodes={logTree} depth={0} expanded={expandedDirs}
           activeLog={logView?.path} extracting={extracting}
+          canOperate={canOperate}
           onToggle={(path) => setExpandedDirs((prev) => {
             const next = new Set(prev);
             if (next.has(path)) next.delete(path); else next.add(path);

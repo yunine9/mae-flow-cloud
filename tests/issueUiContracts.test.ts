@@ -257,3 +257,83 @@ test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(
   assert.match(registration,
     /module\.status === "active"\s*&&\s*module\.repositories\.length > 0/);
 });
+
+// ---- 问题会话查看模式(docs/issue-session-view-mode.md):非归属人只读
+// ---- 围观(四信息面完整、零操作控件),归属人照常操作;团队看板入口
+// ---- 行为不变。
+
+test("问题会话查看模式:标识上屏可读,判定按登录用户与会话归属人比对", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  // viewer 下传链:App(登录用户)→ IssueBoard → 会话视图,断链即红。
+  assert.match(app, /<IssueBoard viewer=\{session\}/);
+  assert.match(board, /viewerUsername=\{viewer\.username\}/);
+  // 判定口径:viewer 缺席(auth 关闭的演示形态)按可操作处理;
+  // 非归属人一律查看模式(管理员不例外——管理员不处理问题单)。
+  assert.match(sessionView,
+    /const canOperate = !viewerUsername \|\| viewerUsername === detail\.account;/);
+  // 标识:文案用词表词「查看模式」、归属人名上屏,只在非归属人分支
+  // 渲染;role 保证读屏能听到这条状态。
+  assert.match(sessionView,
+    /\{!canOperate && <span className="issue-view-mode" role="status"/);
+  assert.match(sessionView, /查看模式:归属人 \{detail\.account\} 的会话/);
+  assert.match(css, /\.issue-view-mode \{/);
+});
+
+test("问题会话查看模式:操作控件逐处收进归属分支,信息面不收", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  // 工作台头部:绑单输入是写操作,三元链最末分支必须直接挂在 canOperate
+  // 上——把控件挪出该分支(渲染后靠报错兜底)= 回归,当场红;
+  // 「无单场景」是状态说明不是控件,查看模式照常示人。
+  assert.match(sessionView,
+    /\? <span className="issue-ticket empty">无单场景<\/span>[\s\S]*?: canOperate && <span className="issue-bind">/);
+  // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
+  assert.match(sessionView,
+    /\{canOperate && onNavigateProfile && detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
+  // 双栏下传:右栏 NEXT ACTION 与材料页签都必须拿到 canOperate,
+  // 面板内部的写控件由各自文件的断言钉住。
+  assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
+  assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
+  // 信息面不收:现场直播(SSE)与耗时卡点不带任何归属条件。
+  assert.match(sessionView, /: <IssueEventsPane id=\{detail\.id\} active \/>/);
+  assert.match(sessionView, /<IssueCostPanel id=\{detail\.id\} \/>/);
+  // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
+  // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
+  assert.match(rail,
+    /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
+  // 转正卡只在归属分支;挂起的等待说明对围观者保留。
+  assert.match(rail,
+    /detail\.status === "suspended" && \(canOperate\s*\?\s*<IssueAssociateCard[\s\S]*?:\s*<div className="issue-rail-card is-suspended">/);
+  // 三处输入行(收口追问/运行中插话/空闲续聊)逐处收进归属分支。
+  assert.equal((rail.match(/canOperate && <RailInput/g) ?? []).length, 3,
+    "右栏的续聊/插话输入必须逐处挂在 canOperate 分支下");
+  // done 卡的归档按钮与底部归档/取消按钮组整组不渲染。
+  assert.match(rail,
+    /\{canOperate && <button type="button" className="issue-rail-primary"/);
+  assert.match(rail, /\{canOperate && <div className="issue-rail-actions">/);
+  // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
+  // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
+  assert.match(materials, /\{canOperate && <div className="issue-materials-editor">/);
+  assert.match(materials,
+    /\{canOperate && node\.archive && <button type="button" className="issue-log-extract"/);
+  assert.match(materials,
+    /canOperate && detail\.mode === "fixed"\s*\?\s*\[\{ key: REVIEW_TAB/);
+  assert.match(materials,
+    /active === ANALYSIS_DOC && reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+});
+
+test("团队看板问题卡片入口行为不变:点击即进,不含归属判断", () => {
+  const teamCard = readFileSync(
+    resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
+  // 入口语义(spec 拍板):纯 onOpen 回调,文案与行为不因身份变化;
+  // 非归属人点开即达,查看模式在会话工作台内部呈现,卡片不做归属裁剪。
+  assert.match(teamCard, /onOpen: \(\) => void/);
+  assert.match(teamCard, /onClick=\{onOpen\}/);
+  assert.match(teamCard, /进入问题工作台/);
+  // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
+  assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
+});

@@ -110,6 +110,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   if (openId && detail) {
     return <IssueSessionView
       detail={detail}
+      viewerUsername={viewer.username}
       onBack={backToList}
       onChanged={(next) => setDetail(next)}
       onListRefresh={refreshList}
