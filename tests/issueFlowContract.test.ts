@@ -19,13 +19,14 @@
  *
  * 覆盖:IssueSummary(闸卡/逐仓账/流水线账/环境)、IssueDetail、
  * IssueGateCard(env_verify 与 conclude 两种)、IssueWaitingCard
- * (Agent 卡+机械派码)、DtsTicketBrief/DtsTicketDetail 与列表包装。
+ * (Agent 卡+机械派码)、pipeline_unfixable 闸卡(票 03:带 pipeline
+ * 定位字段的新形状)、DtsTicketBrief/DtsTicketDetail 与列表包装。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
@@ -391,6 +392,10 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         }] },
         context: "[INFO] 部署完成(测试假件)",
         scope: undefined,
+        skills: undefined,
+        // 流水线定位字段(票 03)只属 pipeline_unfixable/pipeline_evidence,
+        // 其余闸不携带——样例显式 undefined 把"可选"钉进镜像。
+        pipeline: undefined,
         proposal: undefined,
         created_at: "2026-08-28T00:00:00Z",
       },
@@ -513,6 +518,8 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
       }] },
       context: undefined,
       scope: undefined,
+      skills: undefined,
+      pipeline: undefined,
       proposal: {
         conclusion: "issue",
         summary: "是问题:索引缺失",
@@ -524,6 +531,138 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
+  }
+});
+
+test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定位字段)", async () => {
+  /** 红灯假件:状态查询首轮即终态 failed(带不可修工具的 checks 明细),
+   * 产物端点回空清单——走最短路径触达分诊停机路的举闸。 */
+  class RedPlatform {
+    private server: ReturnType<typeof createServer> | undefined;
+    baseUrl = "";
+    async start(): Promise<void> {
+      this.server = createServer((request, response) => {
+        const send = (payload: unknown) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(payload));
+        };
+        if (request.method === "POST" && request.url === "/pipeline/trigger") {
+          send({ status: "running" });
+          return;
+        }
+        if (request.method === "GET"
+            && request.url?.startsWith("/pipeline/artifacts")) {
+          send({ files: [] });
+          return;
+        }
+        if (request.method === "GET"
+            && request.url?.startsWith("/pipeline/status")) {
+          send({ runs: [{
+            status: "failed",
+            log: "CodeCheck 阶段失败",
+            checks: [{
+              dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+              details: [{ tool: "SuperChecker", file: "src/A.java", line: 0,
+                message: "规则 R1 命中" }],
+            }],
+          }] });
+          return;
+        }
+        response.writeHead(404);
+        response.end("{}");
+      });
+      await new Promise<void>((resolve) =>
+        this.server!.listen(0, "127.0.0.1", resolve));
+      this.baseUrl =
+        `http://127.0.0.1:${(this.server!.address() as { port: number }).port}`;
+    }
+    async stop(): Promise<void> {
+      if (this.server) {
+        await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+      }
+    }
+  }
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract-gate-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new RedPlatform();
+  await platform.start();
+  // 「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,监看器重挂
+  // 表直奔红灯结算的不可修分诊举闸(与 issueFlowFixed 的夹具同款)。
+  const repo = origin;
+  const sha = "c".repeat(40);
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "不可修闸卡契约夹具", description: "", source: "dts",
+    ticket: "DTS-2026-1003",
+    repo_url: repo, repo_urls: [repo],
+    mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "done", "done", "pending"],
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+    pushes: [{ repo, branch: "master_dev_DTS-2026-1003", sha, at: now }],
+    mrs: [{ repo, branch: "master_dev_DTS-2026-1003",
+      title: "[DTS-2026-1003] 不可修闸卡契约夹具",
+      url: "http://loop.test/mr/1", at: now }],
+    pipelines: {
+      [repo]: {
+        sha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+      },
+    },
+  }));
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    unfixableTools: ["SuperChecker"],
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_unfixable"
+        ? issue : undefined;
+    }, "不可修闸举卡");
+    const detail = await issueGet(["issues", "issue-1"], service);
+    assert.equal(detail.status, 200);
+
+    const gateSample: IssueGateCard = {
+      id: gated.gate!.id,
+      kind: "pipeline_unfixable",
+      state_version: gated.gate!.state_version,
+      question: { questions: [{
+        question: "流水线红灯(CodeCheck)全部来自不可自动修复的工具告警"
+          + "(SuperChecker)——请在交付平台处理/豁免后作答,平台会重新监看同一提交",
+        options: [{ code: "resume", label: "已在平台处理/豁免,重新监看" }],
+        // 人工事实卡不派推荐:宿主核验不了平台侧是否真的处理过。
+        recommended: undefined,
+      }] },
+      context: "失败摘要/逐维度明细/镜像产物位置/处置指引(人话全文)",
+      scope: undefined,
+      skills: undefined,
+      // 票 03 新形状:闸归属的仓与提交(作答续跑按它重置监看账)。
+      pipeline: { repo: origin, sha },
+      proposal: undefined,
+      created_at: gated.gate!.created_at,
+    };
+    assertWireShape(gateSample, detail.body.gate, "pipeline_unfixable 闸 .gate");
+    assert.equal(detail.body.gate.pipeline.repo, origin);
+    assert.equal(detail.body.gate.pipeline.sha, sha);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
   }
 });
 

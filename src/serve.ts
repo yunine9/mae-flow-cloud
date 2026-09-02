@@ -822,6 +822,10 @@ async function main(): Promise<void> {
     dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
     ...(platformUrl ? { platformUrl } : {}),
+    // 不可修工具名单(--unfixable-tools,需求交付同一面旗同一语义):
+    // 问题流红灯分诊用——失败项全部落在名单内时不派修复回合,停表
+    // 请人在交付平台处理/豁免。缺席=不分诊,行为照旧。
+    ...(unfixableTools.length ? { unfixableTools } : {}),
     // 视觉旁路与需求侧共用同一对旗标(--vision-provider/--vision-model):
     // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
     ...(visionProvider && visionModel

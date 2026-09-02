@@ -165,6 +165,10 @@ import {
   type RequirementAsset,
 } from "./requirementBundle.ts";
 import { readJson } from "./jsonBody.ts";
+import {
+  isBlindPipelineInput,
+  mirrorPipelineArtifacts as mirrorPipelineArtifactsShared,
+} from "./pipelineMirror.ts";
 import type {
   Notifier,
   NotifyQuestion,
@@ -14746,11 +14750,11 @@ export class TaskService {
     // 报告逮住)。改判"把链接抠掉之后还剩多少诊断内容":剩下的只有
     // stage/job 标签 = 链接在替内容站岗。没有链接则不论长短都是平台
     // 给的真内容(如 "BUILD FAILURE: 模块 x 编译失败"),不算无证据。
-    const withoutLinks = loop.failure.replace(/https?:\/\/\S+/g, "").trim();
-    const blindInput = !artifacts.length
-      && (loop.failure === "(平台未提供失败详情)"
-        || (withoutLinks.length < loop.failure.trim().length
-          && withoutLinks.length < 120));
+    // 判据本体收口在公共 pipelineMirror.isBlindPipelineInput(问题流
+    // 也能复用同一杆秤),语义逐字保持:占位符算盲;抠链接后变短且
+    // 剩余 <120 字算盲;有镜像产物不算盲。
+    const blindInput = isBlindPipelineInput(
+      loop.failure, artifacts.length > 0);
     const roundText = loop.max !== undefined
       ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
     delivery.pipeline = `failed(${roundText}修复中)`;
@@ -16454,52 +16458,25 @@ export class TaskService {
    * 每轮先清空内容再重下(给 agent 的必须是最新一轮),但绝不删除
    * pipeline 根目录——它是运行中 Coding 容器的只读 bind 源；替换根
    * 目录会让容器继续看到旧 inode。平台不支持(404)或失败回空数组,
-   * 修复照走摘要通道。 */
+   * 修复照走摘要通道。实现收口在公共 pipelineMirror(与问题流同一
+   * 份),这里只补需求侧的取参、身份头与失败日志。 */
   private async mirrorPipelineArtifacts(task: TaskState): Promise<string[]> {
     const platformUrl = this.effectivePlatformUrl();
     const sha = task.summary.delivery?.sha;
     if (!platformUrl || !sha) return [];
     try {
-      const repo = encodeURIComponent(
-        task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
-      // artifacts 编排器是 MR-first，第四参契约是完整 MR URL（SSE 的
-      // query_mr_info 直接消费它），不是 status 主路使用的 MR iid。
-      const mrUrl = task.summary.delivery?.mr_url;
-      const response = await fetch(
-        `${platformUrl}/pipeline/artifacts?sha=${sha}&repo=${repo}`
-        + (mrUrl
-          ? `&mr=${encodeURIComponent(mrUrl)}` : ""),
-        { headers: this.platformIdentity(task) });
-      if (response.status === 404) return [];
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await readJson(response);
-      const files = (Array.isArray(body.files) ? body.files : [])
-        .filter((file: any) => typeof file?.name === "string"
-          && typeof file?.text === "string");
-      const dir = join(task.summary.workspace, "pipeline");
-      mkdirSync(dir, { recursive: true });
-      for (const entry of readdirSync(dir)) {
-        rmSync(join(dir, entry), { recursive: true, force: true });
-      }
-      // 成功查询但本轮没有材料，也必须把上一轮清空；否则修复会话会
-      // 在稳定挂载里读到旧 SHA 的日志，按错误现场继续改代码。
-      if (!files.length) return [];
-      const written: string[] = [];
-      for (const file of files) {
-        // 路径穿越防线:文件名只留基名,别让平台字段写出目录外。
-        const name = basename(String(file.name));
-        if (!name || name === "." || name === "..") continue;
-        const target = join(dir, name);
-        const temporary = join(
-          dir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
-        writeFileSync(temporary, String(file.text).slice(0, 512 * 1024), {
-          mode: 0o444,
-          flag: "wx",
-        });
-        renameSync(temporary, target);
-        written.push(name);
-      }
-      return written;
+      return await mirrorPipelineArtifactsShared({
+        platformUrl,
+        sha,
+        repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+        // artifacts 编排器是 MR-first，第四参契约是完整 MR URL（SSE 的
+        // query_mr_info 直接消费它），不是 status 主路使用的 MR iid。
+        mrUrl: task.summary.delivery?.mr_url,
+        dir: join(task.summary.workspace, "pipeline"),
+        headers: this.platformIdentity(task),
+        log: (message) =>
+          this.options.log?.(`[pipeline-mirror] 任务 ${task.summary.id}: ${message}`),
+      });
     } catch (error) {
       this.options.log?.(
         `任务 ${task.summary.id} 流水线材料镜像失败(走摘要通道): `
