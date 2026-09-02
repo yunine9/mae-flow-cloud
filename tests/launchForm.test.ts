@@ -1022,6 +1022,25 @@ test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文�
   assert.match(source, /requirementBundle && <div className="requirement-bundle-preview">/);
 });
 
+test("下单草稿在关闭、刷新和 ZIP 材料场景都不会丢失", () => {
+  const source = readFileSync(
+    join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  assert.match(source, /requirementAnalysis\?: boolean/,
+    "大需求选择本身也必须进入草稿");
+  assert.match(source, /requirementBundleName\?: string/,
+    "ZIP 只延后图片恢复，不能删除整张表单草稿");
+  assert.match(source, /latestDraft\.current = \{/,
+    "卸载时应能取得最后一次渲染的完整值");
+  assert.match(source, /window\.addEventListener\("pagehide", flushDraft\)/,
+    "刷新和关闭标签页必须同步落盘");
+  assert.match(source, /也覆盖父页面切栏目、快捷入口把发起弹层直接卸载/);
+  assert.match(source, /className="launch-close" onClick=\{\(\) => \{[\s\S]*?persistDraft\(\);[\s\S]*?onClose\(\);/,
+    "主动退出不能等防抖计时器碰运气");
+  assert.doesNotMatch(source,
+    /if \(requirementBundle\) \{[\s\S]{0,180}localStorage\.removeItem/,
+    "ZIP 材料不能再触发整份草稿删除");
+});
+
 test("修复轮手刹只恢复当前草稿，不会从上一张任务偷偷带入", () => {
   const source = readFileSync(
     join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");

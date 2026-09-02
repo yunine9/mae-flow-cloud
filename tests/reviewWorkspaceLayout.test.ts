@@ -6,6 +6,8 @@ import test from "node:test";
 const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
+const userPicker = readFileSync(
+  join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
 test("长批注在独立检视弹层内滚动", () => {
   assert.match(workspace, /className="workspace-review-dialog" role="dialog"/);
@@ -51,7 +53,7 @@ test("邀请 Committer 是批注与检视旁的常驻协作入口", () => {
   assert.match(workspace, /<UserPicker ariaLabel="选择 Committer"/);
   assert.match(workspace, /reviewBusy \? "发送中…" : "发送邀请"/);
   assert.match(css, /\.ws-workspace-nav \.ws-review-invite-launch\s*\{/);
-  assert.match(css, /\.workspace-invite-dialog\s*\{[^}]*width:\s*min\(520px, 100%\)/s);
+  assert.match(css, /\.workspace-invite-dialog\s*\{[^}]*width:\s*min\(460px, 100%\)/s);
 
   const reviewDialog = workspace.slice(
     workspace.indexOf('className="workspace-review-dialog"'),
@@ -59,6 +61,19 @@ test("邀请 Committer 是批注与检视旁的常驻协作入口", () => {
   );
   assert.doesNotMatch(reviewDialog, /选择 Committer|发送邀请/,
     "邀请动作不能继续占据检视意见弹层");
+});
+
+test("人员下拉保持紧凑并原位展开，不遮住邀请和交付信息", () => {
+  assert.match(userPicker, /const searchable = options\.length > 6/,
+    "成员很少时不应再用搜索框占掉一整行");
+  assert.match(css,
+    /\.user-picker-options\s*\{[^}]*max-height:\s*min\(176px, 32vh\)/s);
+  assert.match(css,
+    /\.workspace-review-invite-action \.user-picker-popover,[\s\S]*?\.repository-assignee-editable \.user-picker-popover\s*\{[^}]*position:\s*static/s,
+    "当前选人场景应由名单撑开当前区域，而不是悬浮遮挡下面的信息");
+  assert.match(css,
+    /\.workspace-review-invite-action\s*\{[^}]*grid-template-columns:\s*minmax\(180px, 260px\) auto/s,
+    "Committer 选择框不应横向吞满整个邀请弹层");
 });
 
 test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对应", () => {
