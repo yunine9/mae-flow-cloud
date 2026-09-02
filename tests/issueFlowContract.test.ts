@@ -409,6 +409,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
           checks: [{ dimension: "UT", status: "success", job: undefined, url: undefined }],
           last_error: undefined,
           round: 1,
+          reds: 1,
         },
       },
       feedback: undefined,

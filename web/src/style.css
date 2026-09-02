@@ -2463,6 +2463,18 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* ---- 问题处理页(与我的需求隔离的独立会话域) ---- */
 .issue-board { display: grid; gap: 18px; }
 .issue-board-loading { padding: 40px; color: var(--muted); }
+/* 我的问题的状态筛选:紧凑胶囊 select,与右侧计数徽章同排同语气。 */
+.issue-list-filter { display: inline-flex; align-items: center; gap: 6px; }
+.issue-list-filter > span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.issue-list-filter select {
+  min-height: 30px; padding: 0 26px 0 10px; border: 1px solid var(--line);
+  border-radius: 999px; color: var(--text-strong); background: var(--surface);
+  font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.issue-list-filter select:focus {
+  border-color: var(--accent); outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .issue-section {
   padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px;
   background: var(--surface);

@@ -286,7 +286,7 @@ export interface IssueGate {
   created_at: string;
 }
 
-/** UT 验证上报(阶段5,事实上报):平台只记账留痕,不推进、不设门——
+/** UT 验证上报(修复阶段内,事实上报):平台只记账留痕,不推进、不设门——
  * 真正的硬验证在阶段6流水线(UT 本身也在流水线里跑),阶段出口是
  * complete_stage 自报。 */
 export interface IssueUtRecord {
@@ -309,6 +309,9 @@ export interface IssuePipelineWatch {
   checks?: import("../pipelineContract.ts").PipelineCheck[];
   last_error?: string;
   round: number;
+  /** 本仓累计红灯次数(绿了清零):与需求侧修复轮预算同语义——超过
+   *  repair_rounds 就停止自动回灌修复,留痕请人工。 */
+  reds?: number;
 }
 
 /** MR 验绿门的申报账(阶段6受理路):AI 调 complete_stage 申报清单时

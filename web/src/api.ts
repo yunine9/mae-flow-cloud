@@ -3236,7 +3236,6 @@ export type FixedIssueStage =
   | "prep_repo"
   | "analyze"
   | "fix"
-  | "ut"
   | "mr_green"
   | "deploy_verify"
   | "conclude";
@@ -3244,7 +3243,7 @@ export type FixedIssueStage =
 export type AnyIssueStage = IssueStage | FixedIssueStage;
 
 export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
-  "dts_info", "prep_repo", "analyze", "fix", "ut", "mr_green", "deploy_verify",
+  "dts_info", "prep_repo", "analyze", "fix", "mr_green", "deploy_verify",
 ];
 export const FIXED_NO_TICKET_STAGES: FixedIssueStage[] = [
   "prep_repo", "analyze", "conclude",
@@ -3254,11 +3253,15 @@ const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
   dts_info: "获取 DTS 单信息",
   prep_repo: "拉取代码仓",
   analyze: "问题分析",
-  fix: "问题修改",
-  ut: "单元测试验证",
+  fix: "问题修复",
   mr_green: "提交 MR·跑绿",
   deploy_verify: "换库环境验证",
   conclude: "确定结论",
+};
+
+/** 旧现场词表:已移除的阶段(ut 并入 fix)原样示人,前端不猜。 */
+const LEGACY_STAGE_TEXT: Record<string, string> = {
+  ut: "单元测试验证",
 };
 
 /** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
@@ -3269,6 +3272,7 @@ export function issueStageText(issue: {
   stage: AnyIssueStage;
 }): string {
   return FIXED_STAGE_TEXT[issue.stage as FixedIssueStage]
+    ?? LEGACY_STAGE_TEXT[issue.stage]
     ?? ISSUE_STAGE_TEXT[issue.stage as IssueStage]
     ?? String(issue.stage);
 }
@@ -3410,6 +3414,9 @@ export interface IssueSummary {
     deadline: string;
     last_error?: string;
     round: number;
+    /** 本仓累计红灯次数(绿了清零):修复轮预算(repair_rounds)的计数,
+     *  超限停表请人工。 */
+    reds?: number;
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
   }>;

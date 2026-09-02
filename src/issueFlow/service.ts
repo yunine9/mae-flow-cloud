@@ -41,6 +41,10 @@ import {
   taskContainerInstance,
   type TaskContainerLimits,
 } from "../containerRuntime.ts";
+import {
+  mirrorPipelineArtifacts,
+  repairBudget,
+} from "./pipelineRepair.ts";
 import { touchBuildCache } from "../buildCache.ts";
 import {
   prepareContainerHostPaths,
@@ -422,6 +426,8 @@ export interface IssueFlowOptions {
     runtime?(): {
       poll_interval_s?: number; poll_timeout_s?: number;
       issue_max_turns?: number;
+      /** 红灯修复轮预算(与需求侧同一旋钮,缺省 20;0=关掉自动修复)。 */
+      repair_rounds?: number;
     };
   };
   /** 探索方式烙印(个人设置,缺省固定流程)。回调缺席按自由模式——
@@ -2680,6 +2686,9 @@ export class IssueFlowService {
       started_at: new Date(now).toISOString(),
       deadline: new Date(now + budgetMs).toISOString(),
       round: state.round ?? 1,
+      // 红灯计数跨 SHA 累计(绿了才清零):修复轮预算是每仓总量,
+      // 换 SHA 不重置——与需求侧修复环"同任务总量"同一口径。
+      ...(watching?.reds ? { reds: watching.reds } : {}),
     };
     recordTransition(state, {
       source: "platform",
@@ -2712,7 +2721,7 @@ export class IssueFlowService {
     try {
       const first = await triggerPipeline(call());
       if (first.status !== "running") {
-        this.settlePipeline(live, repo, sha, first);
+        await this.settlePipeline(live, repo, sha, first);
         return;
       }
     } catch (error) {
@@ -2737,7 +2746,7 @@ export class IssueFlowService {
         // 越过后触发且仍在 running 的新 run，让监看器提前收口。
         const latest = status.runs.at(-1);
         if (latest && latest.status !== "running") {
-          this.settlePipeline(live, repo, sha, latest);
+          await this.settlePipeline(live, repo, sha, latest);
           return;
         }
       } catch (error) {
@@ -2755,12 +2764,12 @@ export class IssueFlowService {
     }
   }
 
-  private settlePipeline(
+  private async settlePipeline(
     live: LiveIssue,
     repo: string,
     sha: string,
     run: PipelineRun,
-  ): void {
+  ): Promise<void> {
     const { state } = live;
     const watch = state.pipelines?.[repo];
     if (watch?.sha !== sha) return;
@@ -2768,6 +2777,7 @@ export class IssueFlowService {
     watch.watching = false;
     if (run.checks) watch.checks = run.checks;
     if (run.status === "success") {
+      watch.reds = 0;
       this.resolveIssuePipelineFeedback(live, repo, "closed",
         `新提交 ${sha.slice(0, 12)} 的权威流水线已通过`);
       recordTransition(state, {
@@ -2815,6 +2825,18 @@ export class IssueFlowService {
     });
     // 红=申报打回:清掉申报账,修复后要重新申报再过验绿门。
     delete state.mr_gate;
+    // 取证增强:平台失败产物全文镜像进会话工作区 pipeline/,AI 用
+    // Bash 读全文再修,而不是只看状态响应里截断 1500 字的摘要。
+    // 镜像失败不拦主链路——按摘要修复,文案如实说明没有产物。
+    const mrUrl = state.mrs?.find((item) => item.repo === repo)?.url;
+    const artifacts = this.options.platformUrl
+      ? await mirrorPipelineArtifacts({
+          platformUrl: this.options.platformUrl,
+          sha, repo, mrUrl,
+          dir: join(live.root, "pipeline"),
+          headers: this.platformHeaders(state.account),
+        }).catch(() => [] as string[])
+      : [];
     const feedbackId = `issue-pipeline:${repo}:${sha}`;
     this.feedbackStore(live).upsert([{
       id: feedbackId,
@@ -2828,12 +2850,46 @@ export class IssueFlowService {
       status: "repairing",
       updated_at: new Date().toISOString(),
     }]);
+    // 修复轮预算(与需求侧同一管理页旋钮 repair_rounds,缺省 20):
+    // 每次红灯记一轮,绿了清零;超限停止自动回灌修复——留痕(上面的
+    // 反馈账)照记,但不再开回合让 AI 空转,请人工处理后发消息继续
+    // (与需求侧"红灯即留痕请人工"同一诚实语义)。
+    const max = repairBudget(this.options.settings);
+    const reds = (watch.reds ?? 0) + 1;
+    watch.reds = reds;
+    if (reds > max) {
+      watch.last_error =
+        `流水线红灯修复轮预算耗尽(${max} 轮),请人工查看流水线`;
+      state.stage_note = `流水线连续 ${reds} 次红灯,修复轮预算(${max} 轮)`
+        + "已耗尽——请人工查看 MR/流水线;处理后发消息继续";
+      saveState(live.root, state);
+      this.log(`[issue-flow] ${live.id} 流水线修复轮预算耗尽(${repo},`
+        + `${reds}/${max}) @ ${sha.slice(0, 12)}`);
+      return;
+    }
     saveState(live.root, state);
     this.startPlatformTurn(live,
-      `平台通知: 流水线未通过(仓 ${repo},仍在「提交 MR·跑绿」阶段)。\n`
+      `平台通知: 流水线未通过(仓 ${repo},第 ${reds}/${max} 次红灯,`
+        + "仍在「提交 MR·跑绿」阶段)。\n"
         + `${describePipelineRun(run)}\n`
+        + (artifacts.length
+          ? `失败产物全文已镜像到会话工作区 pipeline/ 目录`
+            + `(${artifacts.join("、")}),先用 Bash 读全文定位,再修。\n`
+          : "平台未返回本次失败产物,请按上方摘要与各维度链接定位。\n")
         + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),"
         + "平台会重新监看。");
+  }
+
+  /** 平台身份头(与 pipelineClient 的 pipelineHeaders 完全同形):
+   *  产物端点与状态端点同一鉴权形态,凭据止步宿主。 */
+  private platformHeaders(account: string): Record<string, string> {
+    const credential = this.options.gitCredential?.(account);
+    return credential
+      ? {
+          "x-mfc-git-user": encodeURIComponent(credential.username),
+          "x-mfc-git-token": encodeURIComponent(credential.password),
+        }
+      : {};
   }
 
   /** 平台侧开回合(闸门裁决/流水线结果的交接词)。会话正忙(等用户/

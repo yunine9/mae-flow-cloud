@@ -18,6 +18,7 @@ import {
   listIssues,
   type AuthUser,
   type IssueDetail,
+  type IssueStatus,
   type IssueSummary,
 } from "../api";
 import { startVisiblePolling } from "../visiblePolling";
@@ -26,6 +27,26 @@ import { repoName } from "./perRepo";
 import { IssueRegistration } from "./Registration";
 import { IssueCostPanel, IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { IssueEventsPane } from "./EventsPane";
+
+/** 列表状态筛选:默认"进行中"(只藏已归档/已取消两个收口终态——failed
+ * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。 */
+type IssueListFilter = "active" | IssueStatus | "all";
+const ISSUE_FILTER_STORAGE_KEY = "mae-flow:issue-list-filter";
+const ISSUE_FILTER_STATUSES: IssueStatus[] = [
+  "waiting_user", "running", "idle", "queued", "suspended", "failed",
+  "archived", "canceled",
+];
+
+function readIssueListFilter(): IssueListFilter {
+  try {
+    const saved = localStorage.getItem(ISSUE_FILTER_STORAGE_KEY);
+    if (saved === "active" || saved === "all") return saved;
+    if (saved && ISSUE_FILTER_STATUSES.includes(saved as IssueStatus)) {
+      return saved as IssueStatus;
+    }
+  } catch { /* localStorage 不可用(隐私模式等)就回默认,不拦列表 */ }
+  return "active";
+}
 
 export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   viewer: AuthUser;
@@ -39,12 +60,29 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   const [openId, setOpenId] = useState(initialOpenId);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState<IssueListFilter>(readIssueListFilter);
+
+  const changeStatusFilter = (next: IssueListFilter) => {
+    setStatusFilter(next);
+    try { localStorage.setItem(ISSUE_FILTER_STORAGE_KEY, next); } catch { /* 同上,存不进就算了 */ }
+  };
 
   // 聚合徽章(与任务侧"当前任务"同款语义):待答复置前,需介入报警。
+  // 按全量算,不跟着筛选走——告警不该因为翻历史就消失。
   const waitingCount = issues.filter((issue) =>
     issue.status === "waiting_user").length;
   const interventionCount = issues.filter((issue) =>
     issue.status === "failed").length;
+
+  const statusCounts = new Map<IssueStatus, number>();
+  for (const issue of issues) {
+    statusCounts.set(issue.status, (statusCounts.get(issue.status) ?? 0) + 1);
+  }
+  const visibleIssues = statusFilter === "all" ? issues
+    : statusFilter === "active"
+      ? issues.filter((issue) =>
+          issue.status !== "archived" && issue.status !== "canceled")
+      : issues.filter((issue) => issue.status === statusFilter);
 
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
@@ -147,11 +185,32 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
         <span className="current-work-counts">
+          <label className="issue-list-filter">
+            <span>状态</span>
+            <select value={statusFilter} aria-label="按状态筛选问题会话"
+              onChange={(event) =>
+                changeStatusFilter(event.target.value as IssueListFilter)}>
+              <option value="active">
+                进行中({issues.length - (statusCounts.get("archived") ?? 0)
+                  - (statusCounts.get("canceled") ?? 0)})
+              </option>
+              {ISSUE_FILTER_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {ISSUE_STATUS_TEXT[status]}({statusCounts.get(status) ?? 0})
+                </option>
+              ))}
+              <option value="all">全部({issues.length})</option>
+            </select>
+          </label>
           {waitingCount > 0 && <span className="section-count attention">
             {waitingCount} 项待答复</span>}
           {interventionCount > 0 && <span className="section-count danger">
             {interventionCount} 项需介入</span>}
-          <span className="section-count">共 {issues.length} 个</span>
+          <span className="section-count">共 {visibleIssues.length} 个</span>
+          {statusFilter === "active" && issues.length > visibleIssues.length
+            && <span className="section-count"
+              title="已归档/已取消默认收起,把状态切到对应标签或「全部」可查看">
+              已收起 {issues.length - visibleIssues.length} 个</span>}
         </span>
       </div>
       {issues.length === 0
@@ -160,8 +219,16 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
             <p>从上方登记一个"我的问题",或从 DTS 拉取问题单发起处理;
             研究结论是非问题也可以直接归档收口。</p>
           </div></div>
-        : <div className="task-list">
-            {issues.map((issue) => <IssueCard
+        : visibleIssues.length === 0
+          ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
+              <strong>{statusFilter === "active"
+                ? "没有进行中的问题会话" : "这个状态下没有问题会话"}</strong>
+              <p>{statusFilter === "active"
+                ? "已归档与已取消默认收起;要翻历史,把上方状态切到对应标签或「全部」。"
+                : "可以切回「全部」继续查看,会话没有丢。"}</p>
+            </div></div>
+          : <div className="task-list">
+            {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
               issue={issue}
               active={openId === issue.id}
