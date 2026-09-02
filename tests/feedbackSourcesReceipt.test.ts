@@ -118,7 +118,9 @@ test("工作台批注来源:Agent 逐条回应(不带证据)登记进真内核",
         source_revision: 0, kind: "code", summary: second.note, verification: "author" },
     ]);
     // 一条给了证据,一条没给——不给证据是常态,不能因此拒收。
-    store.respond(first.id, { outcome: "explained", summary: "该路径不可达，已在文档说明" });
+    store.respond(first.id, {
+      outcome: "not_fixed", summary: "该路径不可达，已在文档说明", evidence: [],
+    });
     store.respond(second.id, {
       outcome: "needs_clarification", summary: "两种命名都合理，需要作者定",
       evidence: ["main.ts:1"],
