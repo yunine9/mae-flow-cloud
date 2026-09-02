@@ -15,6 +15,27 @@ const childStatusText: Record<string, string> = {
   failed: "失败", canceled: "已取消",
 };
 
+/** 按依赖把交付单元排成串行阶段:能先行的一批、等它们的下一批……
+ * Agent 产物若暂时成环,先如实放同一阶段(确认时服务端会阻止落单)。
+ * 图和右栏确认卡共用,两处报的"几个阶段"才不会打架。 */
+export function chainStages<T extends { id: string }>(graph: {
+  repositories: readonly T[];
+  dependencies: ReadonlyArray<{ from: string; to: string }>;
+}): T[][] {
+  const remaining = new Set(graph.repositories.map((repository) => repository.id));
+  const stages: T[][] = [];
+  while (remaining.size) {
+    const ready = graph.repositories.filter((repository) => remaining.has(repository.id)
+      && graph.dependencies.filter((edge) => edge.from === repository.id)
+        .every((edge) => !remaining.has(edge.to)));
+    const current = ready.length ? ready
+      : graph.repositories.filter((repository) => remaining.has(repository.id));
+    stages.push(current);
+    current.forEach((repository) => remaining.delete(repository.id));
+  }
+  return stages;
+}
+
 export function RequirementGraph({
   task,
   onOpenTask,
@@ -35,18 +56,9 @@ export function RequirementGraph({
   const generated = graph.repositories.filter((repository) => repository.task_id).length;
   const completed = graph.repositories.filter((repository) =>
     repository.task_status === "completed").length;
-  const remaining = new Set(graph.repositories.map((repository) => repository.id));
-  const stages: typeof graph.repositories[] = [];
-  while (remaining.size) {
-    const ready = graph.repositories.filter((repository) => remaining.has(repository.id)
-      && graph.dependencies.filter((edge) => edge.from === repository.id)
-        .every((edge) => !remaining.has(edge.to)));
-    // Agent 产物若暂时成环，先如实放在同一阶段；确认时服务端会阻止落单。
-    const current = ready.length ? ready
-      : graph.repositories.filter((repository) => remaining.has(repository.id));
-    stages.push(current);
-    current.forEach((repository) => remaining.delete(repository.id));
-  }
+  const stages = chainStages(graph);
+  const splitUrls = new Set(graph.repositories.map((item) => item.url)
+    .filter((url, index, urls) => urls.indexOf(url) !== index));
   return <details className="requirement-graph" open={expanded}
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
     <summary>
@@ -106,7 +118,10 @@ export function RequirementGraph({
                   {repository.assignee ? `负责人 · ${repository.assignee}` : "负责人待确认"}
                 </span>
                 <span className="repo-ticket">
-                  AR 单号 · {repository.ticket ?? task.ticket ?? "待确认"}
+                  {/* 一仓拆多单元时单号逐单元填,父任务单号不是任何一块的
+                      单号;原来这里回落到它,和右栏留空等人填的输入框打架。 */}
+                  AR 单号 · {repository.ticket
+                    ?? (splitUrls.has(repository.url) ? "待填" : task.ticket ?? "待确认")}
                 </span>
                 {repository.scope && repository.scope.paths.length > 0 &&
                   <span className="repo-scope-paths" title={repository.scope.paths.join("\n")}>

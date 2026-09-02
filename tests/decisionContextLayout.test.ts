@@ -154,6 +154,44 @@ test("检视意见原文和 Agent 回应是对称的两块,不是正文配卡片
     "两块共用同一套块形,只靠颜色区分人和 Agent");
 });
 
+test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填执行人与单号", () => {
+  // 用户实测截图"右侧很丑":两个泛称标题摞在一起(当前需要处理/需要你
+  // 的决策)、300px 散文背景复述左边已经画出来的图、讨论参与人整块搬进
+  // 卡里带着第二个主按钮、单元行四列挤在 635px 里职责被截成省略号,
+  // 提交按钮在 1400px 之下还被"提问题"浮钮压着。
+  const card = readFileSync(join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
+  assert.match(card, /export function isChainReviewWaiting\(task: TaskSummary\)/);
+  assert.match(card, /if \(isChainReviewWaiting\(task\)\) return "确认拆分方案";/);
+  assert.match(card, /className="chain-decision-facts"/);
+  assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
+    "阶段数和左侧图共用同一个拓扑函数");
+  assert.match(card, /确认并生成 \$\{task\.requirement_graph\?\.repositories\.length \?\? 0\} 个子任务/,
+    "按钮要说清楚会生成几个子任务");
+  assert.match(card, /<details className="waiting-context-details">/);
+
+  assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
+    "判据只有一份");
+  const attachmentStart = workspace.indexOf("attachment={requirementAnalysisConfirmation ? undefined :");
+  const attachmentEnd = workspace.indexOf("<AttachedNotes", attachmentStart);
+  assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
+  assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
+    "讨论参与人不进确认卡");
+  assert.match(workspace, /<details className="chain-team-invite" open=\{!chainReview\}>/,
+    "参与人留在左侧图下,确认卡举起后折叠");
+
+  const picker = readFileSync(
+    join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
+  assert.match(picker, /duplicateTicketOf\(repository, tickets, assignments\)/,
+    "同仓同执行人同号在填的时候就要标出来,不能等服务端拒");
+  assert.match(picker, /单号与「\$\{unitLabel\(duplicate\)\}」重复/);
+
+  assert.match(css, /\.ws-decision \{ padding-bottom: 84px; \}/,
+    "右栏底部让开提问题浮钮");
+  assert.match(css, /\.options\.compact \.custom-entry \{ grid-column: 1 \/ -1;/,
+    "逃生口选项降成通栏一行");
+  assert.match(css, /\.ws-decision \.repository-assignee-list > label \{[^}]*grid-template-areas: "name name" "who ticket" "state state"/s);
+});
+
 test("抽屉标题栏按自己的高度占位,副标题不被裁", () => {
   // 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:420px 宽下
   // 它要 85px 只拿到 64px,副标题有半行被裁在边框外。

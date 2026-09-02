@@ -10016,6 +10016,101 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ws-decision .utility-panel { box-shadow: var(--shadow-xs); }
 .ws-decision .execution-panel .event-stream { max-height: min(360px, 40vh); }
 .ws-decision .event-workspace.has-detail { height: min(360px, 40vh); }
+/* 右栏底部让出"提问题"浮钮那一截:它固定在视口右下,正好压住决定卡的
+   提交按钮(1512×950 实测浮钮和"提交决定"并排重叠)。 */
+.ws-decision { padding-bottom: 84px; }
+
+/* ── 拆分方案确认卡 ── */
+/* 方案本体在左侧仓间依赖图里,卡上只放三个数和一句"去哪看"。 */
+.chain-decision-facts {
+  margin: 14px 20px 0;
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+.chain-decision-facts > span { color: var(--text); font-size: 13.5px; font-weight: 650; }
+.chain-decision-facts > span b { margin-right: 4px; color: var(--accent); font-size: 19px; font-weight: 800; }
+.chain-decision-facts > small { flex-basis: 100%; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+/* Agent 对方案的复述默认收起:结构已在左边成图,原话想看再展开。 */
+.waiting-context-details {
+  margin: 10px 20px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.waiting-context-details > summary {
+  padding: 9px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.waiting-context-details > summary::-webkit-details-marker { display: none; }
+.waiting-context-details > summary::after { content: "展开"; color: var(--accent); font-size: 12.5px; }
+.waiting-context-details[open] > summary::after { content: "收起"; }
+.waiting-context-details > .waiting-context {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+}
+/* "以上都不合适,直接回答"是逃生口不是并列选项:紧凑网格里它带着三行
+   提示挤成第三列,整行被撑得又高又参差。降成通栏一行,提示等点开再说。 */
+.options.compact .custom-entry { grid-column: 1 / -1; min-height: 40px; padding: 8px 12px; align-items: center; }
+.options.compact .custom-entry .option-hint { display: none; }
+/* 右栏 635px 塞不下"名字|执行人|单号|状态"四列:职责被截成一行省略号,
+   偏偏那是判断"这块该给谁"要看的话。改成上下排:单元名与职责(最多两
+   行)、执行人和单号并排、状态靠右。 */
+.ws-decision .repository-assignee-list > label {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: "name name" "who ticket" "state state";
+  row-gap: 8px;
+}
+.ws-decision .repository-assignee-list > label > span:first-child { grid-area: name; }
+.ws-decision .repository-assignee-list > label > .repository-assignee-editable { grid-area: who; }
+.ws-decision .repository-assignee-list > label > .repository-ticket-editable,
+.ws-decision .repository-assignee-list > label > .repository-ticket-readonly { grid-area: ticket; }
+.ws-decision .repository-assignee-list > label > em { grid-area: state; justify-self: end; }
+.ws-decision .repository-assignee-list > label > span:first-child small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  line-height: 1.45;
+}
+/* 讨论参与人放回左侧图下面:确认前摊开,举了确认卡折起,想拉人照样能点开。 */
+.chain-team-invite {
+  flex: none;
+  margin: 10px 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.chain-team-invite > summary {
+  min-height: 46px;
+  padding: 8px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.chain-team-invite > summary::-webkit-details-marker { display: none; }
+.chain-team-invite > summary small { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.chain-team-invite > .requirement-team-picker { margin: 0 12px 12px; }
 .ws-usage-summary {
   min-height: 38px;
   padding: 8px 11px;

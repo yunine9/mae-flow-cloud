@@ -34,6 +34,7 @@ import {
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
+import { chainStages } from "./RequirementGraph";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
@@ -513,11 +514,25 @@ export function TaskProgress({
 
 /** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
+/** 这张卡是不是 Chain 的"拆分方案确认"。内核没给它专门的 step id,
+ * 只能认选项文案——多仓分析中途的普通澄清也处于 analysis,但只有最终
+ * 方案卡带"确认并生成任务"。工作台和卡片都用这一个判据,别各抄一份。 */
+export function isChainReviewWaiting(task: TaskSummary): boolean {
+  const graph = task.requirement_graph;
+  return graph?.stage === "analysis"
+    && graph.repositories.length > 1
+    && (task.waiting?.question?.questions?.some((question) =>
+      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+}
+
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
   if (step === "cloud_requirement_analysis_confirm") {
     return "确认需求";
   }
+  // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
+  // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
+  if (isChainReviewWaiting(task)) return "确认拆分方案";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (task.waiting?.recommended_view === "diff") return "代码检视";
   return undefined;
@@ -585,6 +600,7 @@ export function WaitingCard({
   const questions = task.waiting?.question?.questions ?? [];
   const requirementAnalysisConfirmation = task.waiting?.step
     === "cloud_requirement_analysis_confirm";
+  const chainReview = isChainReviewWaiting(task);
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const feedbackAnswers = new Set(choiceEffects
     .filter((effect) => effect.handles_feedback)
@@ -617,6 +633,8 @@ export function WaitingCard({
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const confirmsChainChoice = Object.values(picked).some((answer) =>
     answer.includes("确认并生成任务"));
+  const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
+    answer.includes("需要修改"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
   // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
   // 仍然拦"通过"——那是真有意见没处理。
@@ -732,6 +750,10 @@ export function WaitingCard({
 
   const submitLabel = submitting ? "正在提交…"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
+    // 按钮说清楚按下去会发生什么:生成几个子任务、还是把方案退回去改。
+    : chainReview && confirmsChainChoice
+      ? `确认并生成 ${task.requirement_graph?.repositories.length ?? 0} 个子任务`
+    : reworksChainChoice ? "退回修改方案"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
@@ -757,6 +779,18 @@ export function WaitingCard({
           <span className="decision-count">{questions.length} 个问题</span>
         )}
       </header>
+
+      {chainReview && task.requirement_graph && (
+        /* 方案本体(单元职责、负责面、依赖顺序)在左侧仓间依赖图里,是结构
+           化的;卡上只放三个数和一句"去哪看"。原来这里是 300px 的一段散文
+           背景,把左边已经画出来的东西再讲一遍。 */
+        <div className="chain-decision-facts" role="note">
+          <span><b>{task.requirement_graph.repositories.length}</b>个交付单元</span>
+          <span><b>{chainStages(task.requirement_graph).length}</b>个阶段串行</span>
+          <span><b>{task.requirement_graph.dependencies.length}</b>条依赖</span>
+          <small>单元职责、负责面和先后顺序见左侧「仓间依赖」；这张卡只定每个单元由谁执行、用哪个单号。</small>
+        </div>
+      )}
 
       {pushReview && (
         <section className="push-review-overview" aria-label="本次代码检视摘要">
@@ -839,7 +873,7 @@ export function WaitingCard({
           + rewritePanelPath(task.waiting.context, task.id);
         const contextLines = contextText.split("\n").length;
         const collapsible = contextLines > 16;
-        return (
+        const block = (
           <div className="waiting-context">
             <div className="context-label">决策背景</div>
             <div className={`waiting-context-body${
@@ -854,6 +888,14 @@ export function WaitingCard({
             )}
           </div>
         );
+        // 拆分确认卡的背景是 Agent 对方案的复述,方案本身已在左侧成图;
+        // 默认收起,想看原话再展开。其它卡照旧摊开(推送确认那类"上述
+        // 配置是否正确"的卡,上述必须就在眼前——MFC-028 盲签)。
+        return chainReview
+          ? <details className="waiting-context-details">
+              <summary>Agent 对方案的说明</summary>{block}
+            </details>
+          : block;
       })()}
 
       {requiresDeliverySelection && (

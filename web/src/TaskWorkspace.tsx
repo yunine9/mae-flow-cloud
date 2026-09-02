@@ -65,6 +65,7 @@ import {
 } from "./api";
 import {
   ExecutionPanel,
+  isChainReviewWaiting,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -1080,13 +1081,9 @@ export function TaskWorkspace({
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
-  const chainReview = !!waiting
-    && task.requirement_graph?.stage === "analysis"
-    && (task.requirement_graph.repositories.length ?? 0) > 1
-    // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终
-    // Chain 方案检视卡出现，避免尚未定案时就让人误以为即将下发。
-    && (waiting.question?.questions?.some((question) =>
-      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+  // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
+  // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
+  const chainReview = !!waiting && isChainReviewWaiting(task);
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -1531,14 +1528,26 @@ export function TaskWorkspace({
             ) : materialView === "chain" ? (
               <>
                 <RequirementGraph task={task} onOpenTask={onOpenTask} />
-                {!chainReview && canOperate
-                  && task.requirement_graph?.stage === "analysis" && <>
+                {/* 讨论参与人是澄清期的事,不是确认拆分时要定的:原来到了
+                    方案确认卡它整块搬进右栏,和"拆分后怎么执行"摞成 730px,
+                    卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。
+                    现在一直留在图下面;确认前照旧摊开,举了确认卡就折起来。 */}
+                {canOperate && task.requirement_graph?.stage === "analysis" && (
+                  <details className="chain-team-invite" open={!chainReview}>
+                    <summary>
+                      邀请更多人参与讨论
+                      <small>参与人可送批注、补材料，不代替主责任人拍板</small>
+                    </summary>
                     <RequirementTeamPicker
                       taskId={task.id}
                       owner={task.luban_account}
                       collaborators={task.collaborators}
                       onSaved={onChanged}
                     />
+                  </details>
+                )}
+                {!chainReview && canOperate
+                  && task.requirement_graph?.stage === "analysis" && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph.repositories}
@@ -1547,7 +1556,7 @@ export function TaskWorkspace({
                       selection={repositoryAssignees}
                       onSelectionChange={setRepositoryAssignees}
                     />
-                  </>}
+                )}
               </>
             ) : <>
               {materialView === "diff" && pushReview && (
@@ -1804,23 +1813,17 @@ export function TaskWorkspace({
                 ? diffScope : undefined}
               attachment={requirementAnalysisConfirmation ? undefined :
                 <>
+                  {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
+                      单号。讨论参与人留在左侧图下面。 */}
                   {chainReview && (
-                    <>
-                      <RequirementTeamPicker
-                        taskId={task.id}
-                        owner={task.luban_account}
-                        collaborators={task.collaborators}
-                        onSaved={onChanged}
-                      />
-                      <RepositoryAssigneePicker
-                        taskId={task.id}
-                        repositories={task.requirement_graph!.repositories}
-                        defaultAssignee={task.luban_account}
-                        defaultTicket={task.ticket}
-                        selection={repositoryAssignees}
-                        onSelectionChange={setRepositoryAssignees}
-                      />
-                    </>
+                    <RepositoryAssigneePicker
+                      taskId={task.id}
+                      repositories={task.requirement_graph!.repositories}
+                      defaultAssignee={task.luban_account}
+                      defaultTicket={task.ticket}
+                      selection={repositoryAssignees}
+                      onSelectionChange={setRepositoryAssignees}
+                    />
                   )}
                   <AttachedNotes items={unresolvedNotes} onLocate={locate} />
                 </>
