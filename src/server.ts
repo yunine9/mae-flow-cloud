@@ -1933,6 +1933,8 @@ export function createTaskServer(
               body.repository_assignees as Record<string, unknown>,
             ).map(([repository, value]) => [repository, String(value ?? "")]))
           : undefined;
+        const collaborators = Array.isArray(body.collaborators)
+          ? body.collaborators.map(String) : undefined;
         const baseline = body.baseline === undefined
           ? undefined : String(body.baseline);
         const model = body.model
@@ -2094,6 +2096,7 @@ export function createTaskServer(
               requirementBundleName: requirementBundle?.bundle_name,
               requirementAssets: requirementBundle?.assets,
               lane, ticket, repositoryTickets, repositoryAssignees,
+              collaborators,
               baseline, model,
               repairRounds, taskInstructions,
               workflowDefinition, workflowSource,

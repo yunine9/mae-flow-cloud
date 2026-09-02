@@ -2167,10 +2167,12 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
-    /** 以仓库地址为键的逐仓 AR 单号；多仓发起时和仓库同一行填写。 */
+    /** 普通单仓或旧客户端可在发起时提交；分析主任务延后到拆分确认。 */
     repositoryTickets?: Record<string, string>;
-    /** 以仓库地址为键的逐仓责任人；单仓默认当前下单人。 */
+    /** 旧客户端的逐仓执行人；新入口在拆分确认时按交付单元收集。 */
     repositoryAssignees?: Record<string, string>;
+    /** 需求分析主任务的讨论参与人；不与仓库或交付单元绑定。 */
+    collaborators?: string[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -2210,6 +2212,7 @@ export async function createTask(
       repos: extras?.repos?.length ? extras.repos : undefined,
       repository_tickets: extras?.repositoryTickets,
       repository_assignees: extras?.repositoryAssignees,
+      collaborators: extras?.collaborators,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,

@@ -3,7 +3,7 @@ import {
   listCollaborationAssignees,
   type CollaborationAssignee,
 } from "./api";
-import { UserPicker, userLabel } from "./UserPicker";
+import { UserPicker } from "./UserPicker";
 
 export interface RepositoryAssigneeSelection {
   assignments: Record<string, string>;
@@ -86,9 +86,8 @@ export function RepositoryAssigneePicker({
   }, [taskId, initialAssignments, initialTickets]);
 
   const peopleByName = new Map(people.map((person) => [person.username, person]));
-  // 同一个 url 出现多行 = 该仓拆成了多个交付单元。这些行的责任人和
-  // 单号在下单时都不可能填过(单元是拆出来才存在的),必须逐行可编;
-  // 单单元行照旧只读——下单已定的事实不设第二处真相。
+  // 同一个 url 出现多行 = 该仓拆成了多个交付单元。这用于判断旧任务
+  // 的单号是否也必须逐行补录；执行人无论几仓都只在最终单元形成后选。
   const urlRowCounts = new Map<string, number>();
   for (const repository of repositories) {
     urlRowCounts.set(repository.url,
@@ -118,14 +117,12 @@ export function RepositoryAssigneePicker({
     onSelectionChange({ ...selection, tickets: nextTickets, ready });
   }
 
-  return <section className="repository-assignees" aria-label="逐仓交付信息">
+  return <section className="repository-assignees" aria-label="交付单元安排">
     <header>
-      <div><span>跨仓协作</span><strong>逐仓分工</strong></div>
-      <small>{hasDeliveryUnits
-        ? "同仓拆分的单元在这里逐个定责任人与 AR 单号"
-        : needsTicketEntry
-          ? "每个交付单元一个 AR 单号；确认前在这里填齐"
-          : "责任人与 AR 单号均已在发起任务时确定"}</small>
+      <div><span>DELIVERY UNITS</span><strong>拆分后怎么执行</strong></div>
+      <small>{needsTicketEntry
+        ? "按最终交付单元选择执行人并补齐 AR 单号"
+        : "按最终交付单元选择执行人；AR 单号沿用已有信息"}</small>
     </header>
     <div className="repository-assignee-list">
       {repositories.map((repository) => {
@@ -139,10 +136,10 @@ export function RepositoryAssigneePicker({
         return <label key={repository.id}>
           <span><strong>{rowLabel}</strong>
             <small>{repository.responsibility ?? repository.url}</small></span>
-          {isUnitRow(repository) ? <span className="repository-assignee-editable">
-            <small>该单元的责任人</small>
+          <span className="repository-assignee-editable">
+            <small>该单元的执行人</small>
             <UserPicker value={selected}
-              ariaLabel={`${rowLabel}的责任人`}
+              ariaLabel={`${rowLabel}的执行人`}
               onChange={(username) => chooseAssignee(repository.id, username)}
               options={[...new Set([selected,
                 ...people.map((person) => person.username)])]
@@ -156,9 +153,7 @@ export function RepositoryAssigneePicker({
                       ? `未就绪：${candidate.missing.join("、")}` : undefined,
                   };
                 })} />
-          </span> : <span className="repository-assignee-readonly">
-            <small>责任人</small><strong>{person ? userLabel(person) : selected || "未指定"}</strong>
-          </span>}
+          </span>
           {(isUnitRow(repository) || !ticket.trim())
             ? <span className="repository-ticket-editable">
             <small>该单元的 AR 单号</small>
@@ -182,10 +177,10 @@ export function RepositoryAssigneePicker({
     </p>}
     <footer>
       <p>{hasDeliveryUnits
-        ? "为每个单元选定责任人并填写 AR 单号（同仓同责任人的单元不能同号）；确认后将按依赖顺序生成子任务。"
+        ? "为每个单元选定执行人并填写 AR 单号（同仓同执行人的单元不能同号）；确认后将按依赖顺序生成子任务。"
         : needsTicketEntry
-          ? "为每个单元填写各自的 AR 单号；确认后将按依赖顺序生成子任务。"
-          : "确认方案后，系统会按上面的责任人、单号和依赖关系直接生成各仓子任务。"}</p>
+          ? "为每个单元选定执行人并填写各自的 AR 单号；确认后将按依赖顺序生成子任务。"
+          : "确认方案后，系统会按上面的执行人、单号和依赖关系生成交付任务。"}</p>
     </footer>
   </section>;
 }

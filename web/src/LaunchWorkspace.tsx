@@ -23,7 +23,7 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
-import { UserPicker } from "./UserPicker";
+import { userLabel } from "./UserPicker";
 import {
   knowledgeAssetPath,
   type KnowledgeAssetFocus,
@@ -49,7 +49,7 @@ type LaunchDraft = {
   requirementDocumentName: string;
   repos: string[];
   repositoryTickets?: string[];
-  repositoryAssignees?: string[];
+  collaborators?: string[];
   ticket: string;
   baseline: string;
   lane: string;
@@ -178,6 +178,67 @@ function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
   </a>;
 }
 
+function LaunchRequirementTeam({
+  owner,
+  people,
+  selected,
+  loaded,
+  error,
+  onChange,
+}: {
+  owner: AuthUser;
+  people: CollaborationAssignee[];
+  selected: string[];
+  loaded: boolean;
+  error: string;
+  onChange: (accounts: string[]) => void;
+}) {
+  const choices = people.filter((person) => person.username !== owner.username);
+  const known = new Set(choices.map((person) => person.username));
+  for (const username of selected) {
+    if (!known.has(username) && username !== owner.username) {
+      choices.push({ username, ready: false, missing: ["账号已不可用"] });
+    }
+  }
+  const toggle = (username: string) => onChange(selected.includes(username)
+    ? selected.filter((account) => account !== username)
+    : selected.length < 20 ? [...selected, username] : selected);
+
+  return <section className="requirement-team-picker launch-requirement-team"
+    aria-label="主任务讨论参与人">
+    <header>
+      <div><span>MAIN TASK TEAM</span><strong>谁一起把需求聊清楚</strong></div>
+      <small>可多选；只邀请，不在这里按仓分工</small>
+    </header>
+    <div className="requirement-team-owner">
+      <i aria-hidden>主</i>
+      <span><strong>{userLabel(owner)}</strong>
+        <small>主责任人 · 最终确认、拆分和任务控制</small></span>
+    </div>
+    <div className="requirement-team-members">
+      {!loaded && <p>正在读取可邀请成员…</p>}
+      {loaded && choices.length === 0 && <p>当前没有其他可邀请的成员。</p>}
+      {choices.map((person) => {
+        const checked = selected.includes(person.username);
+        return <label key={person.username}
+          className={`${checked ? "selected" : ""}${person.ready ? "" : " unready"}`}>
+          <input type="checkbox" checked={checked}
+            disabled={(!person.ready || selected.length >= 20) && !checked}
+            onChange={() => toggle(person.username)} />
+          <span><strong>{userLabel(person)}</strong>
+            <small>{person.ready ? "个人设置已就绪，可参与讨论"
+              : `暂不可邀请 · 缺 ${person.missing.join("、")}`}</small></span>
+        </label>;
+      })}
+    </div>
+    {error && <p className="requirement-team-error" role="status">{error}</p>}
+    <footer>
+      <p>参与人可以补充材料、送批注并和 AI 讨论；最终决定仍由主责任人提交。</p>
+      <strong>{selected.length ? `已邀请 ${selected.length} 人` : "暂不邀请其他人"}</strong>
+    </footer>
+  </section>;
+}
+
 export function LaunchWorkspace({
   session,
   onCreated,
@@ -224,13 +285,16 @@ export function LaunchWorkspace({
   const [repositoryTickets, setRepositoryTickets] = useState(() =>
     initialRepos.map((_, index) => validDraft?.repositoryTickets?.[index]
       ?? validDraft?.ticket ?? ""));
-  const [repositoryAssignees, setRepositoryAssignees] = useState(() =>
-    initialRepos.map((_, index) => validDraft?.repositoryAssignees?.[index]
-      ?? session.username));
+  const [collaborators, setCollaborators] = useState(() => [...new Set(
+    (validDraft?.collaborators ?? []).filter((account) =>
+      account && account !== session.username),
+  )].slice(0, 20));
   const [collaborationAssignees, setCollaborationAssignees] =
     useState<CollaborationAssignee[]>([]);
   const [collaborationAssigneesLoaded, setCollaborationAssigneesLoaded] =
     useState(false);
+  const [collaborationAssigneesError, setCollaborationAssigneesError] =
+    useState("");
   const [repositoryProbeResults, setRepositoryProbeResults] =
     useState<RepositoryProbeResult[]>([]);
   const [repositoryProbeKey, setRepositoryProbeKey] = useState("");
@@ -308,9 +372,13 @@ export function LaunchWorkspace({
   // “大需求拆分”是需求颗粒度选择，不是仓库数量选择。第二个仓填入
   // 后入口仍要稳定留在原位，并保留用户已经做出的选择。
   const analysisEligible = repoFieldsEnabled && repositoriesToProbe.length > 0;
-  // 只要明确选择大需求，就还不知道最终交付单元数量；无论单仓多仓，
-  // AR 单号都延后到拆分确认时逐单元收。
-  const ticketsDeferred = requirementAnalysis && analysisEligible;
+  // 多仓天然会先形成主任务；单仓则只有显式选择“大需求”才需要先
+  // 一起澄清。参与人属于主任务，不与任何一个仓库预绑定。
+  const analysisTeamVisible = analysisEligible
+    && (multiRepository || requirementAnalysis);
+  // 只要要先分析，最终交付单元就还没有形成；单号此时既无法准确
+  // 归属，也不该让人填两遍，统一延后到拆分确认时逐单元收。
+  const ticketsDeferred = analysisTeamVisible;
   const expectedRepositoryProbeKey = JSON.stringify(repositoriesToProbe);
   const repositoryProbeByUrl = useMemo(() => new Map(
     repositoryProbeResults.map((item) => [item.repository, item]),
@@ -331,14 +399,10 @@ export function LaunchWorkspace({
           return (options?.ticket.required && !value) || /\s/.test(value);
         })
       : (options?.ticket.required && !ticket.trim()) || /\s/.test(ticket.trim()));
-  const repositoryAssigneeBlocked = repoFieldsEnabled
-    && repos.some((repo, index) => {
-      if (!repo.trim()) return false;
-      const account = repositoryAssignees[index]?.trim() ?? "";
-      const known = collaborationAssignees.find((item) =>
-        item.username === account);
-      return !account || !collaborationAssigneesLoaded || known?.ready !== true;
-    });
+  const collaboratorBlocked = analysisTeamVisible && collaborators.some(
+    (account) => !collaborationAssigneesLoaded
+      || collaborationAssignees.find((item) => item.username === account)
+        ?.ready !== true);
   const previewInput = useMemo(() => ({
     repos: repoFieldsEnabled
       ? repos.map((item) => item.trim()).filter(Boolean) : [],
@@ -387,7 +451,7 @@ export function LaunchWorkspace({
   const blocked = optionsLoading || documentLoading
     || blockers.length > 0 || !!optionsError
     || knowledgeBlocked || repositoryProbeBlocked || repositoryTicketBlocked
-    || repositoryAssigneeBlocked;
+    || collaboratorBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -401,7 +465,6 @@ export function LaunchWorkspace({
       if (!result.repo.enabled) {
         setRepos([""]);
         setRepositoryTickets([""]);
-        setRepositoryAssignees([session.username]);
         setRepositoryTechnologies([]);
       }
       setBaseline((current) => current.trim()
@@ -416,18 +479,16 @@ export function LaunchWorkspace({
   }, []);
 
   useEffect(() => {
-    if (multiRepository) return;
-    setRepositoryAssignees((current) => current.map((account, index) =>
-      repos[index]?.trim() ? session.username : account));
-  }, [multiRepository, repos, session.username]);
-
-  useEffect(() => {
     let alive = true;
     void listCollaborationAssignees().then((items) => {
-      if (alive) setCollaborationAssignees(items);
+      if (!alive) return;
+      setCollaborationAssignees(items);
+      setCollaborationAssigneesError("");
     }).catch(() => {
-      // 无法核对责任人存在性/个人接入时宁可阻止创建；草稿仍保留。
-      if (alive) setCollaborationAssignees([]);
+      if (!alive) return;
+      setCollaborationAssignees([]);
+      setCollaborationAssigneesError(
+        "暂时读不到可邀请成员；可以先只由自己发起，稍后在主任务里再邀请。");
     }).finally(() => {
       if (alive) setCollaborationAssigneesLoaded(true);
     });
@@ -546,7 +607,7 @@ export function LaunchWorkspace({
       requirementDocumentName,
       repos,
       repositoryTickets,
-      repositoryAssignees,
+      collaborators,
       ticket,
       baseline,
       lane,
@@ -572,7 +633,7 @@ export function LaunchWorkspace({
     const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
-    repositoryAssignees, ticket,
+    collaborators, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
@@ -636,7 +697,6 @@ export function LaunchWorkspace({
   function addRepository() {
     setRepos((current) => [...current, ""]);
     setRepositoryTickets((current) => [...current, ""]);
-    setRepositoryAssignees((current) => [...current, session.username]);
   }
 
   function removeRepository(index: number) {
@@ -644,17 +704,10 @@ export function LaunchWorkspace({
       (_, itemIndex) => itemIndex !== index));
     setRepositoryTickets((current) => current.filter(
       (_, itemIndex) => itemIndex !== index));
-    setRepositoryAssignees((current) => current.filter(
-      (_, itemIndex) => itemIndex !== index));
   }
 
   function changeRepositoryTicket(index: number, value: string) {
     setRepositoryTickets((current) => current.map(
-      (item, itemIndex) => itemIndex === index ? value : item));
-  }
-
-  function changeRepositoryAssignee(index: number, value: string) {
-    setRepositoryAssignees((current) => current.map(
       (item, itemIndex) => itemIndex === index ? value : item));
   }
 
@@ -741,13 +794,9 @@ export function LaunchWorkspace({
                 return normalized
                   ? [[normalized, repositoryTickets[index]?.trim() ?? ""]] : [];
               })) : undefined,
-          repositoryAssignees: repoFieldsEnabled
-            ? Object.fromEntries(repos.flatMap((repo, index) => {
-                const normalized = repo.trim();
-                return normalized
-                  ? [[normalized, repositoryAssignees[index]?.trim()
-                    || session.username]] : [];
-              })) : undefined,
+          // 主任务参与人只参与澄清和讨论，不与仓库绑定；最终交付单元
+          // 的执行人在拆分确认时再选择。
+          collaborators: analysisTeamVisible ? collaborators : undefined,
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
@@ -857,7 +906,8 @@ export function LaunchWorkspace({
                   setRequirementDocumentName("");
                   setRepos([""]);
                   setRepositoryTickets([""]);
-                  setRepositoryAssignees([session.username]);
+                  setCollaborators([]);
+                  setRequirementAnalysis(false);
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
@@ -993,12 +1043,15 @@ export function LaunchWorkspace({
                   {options.repo.enabled && (
                     <div className="repo-field">
                       <div className="repo-field-title">
-                        <span>代码仓与对应 AR 单号{options.repo.required ? "（至少一个）" : ""}</span>
-                        <small>一个仓一行，单号和责任人随该仓进入后续交付</small>
+                        <span>{ticketsDeferred ? "待分析的代码仓" : "代码仓与对应 AR 单号"}
+                          {options.repo.required ? "（至少一个）" : ""}</span>
+                        <small>{ticketsDeferred
+                          ? "给 AI 查看代码的候选范围；不代表已经拆分或分工"
+                          : "一个仓一行；需要共同讨论的人在下方统一邀请"}</small>
                       </div>
                       <div className="repo-list">
                         {repos.map((value, index) => (
-                          <div className={`repo-row with-assignee ${
+                          <div className={`repo-row ${
                             options.ticket.enabled && !ticketsDeferred
                               ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
@@ -1024,25 +1077,6 @@ export function LaunchWorkspace({
                                 && /\s/.test((repositoryTickets[index] ?? "").trim()))}
                               spellCheck={false}
                               required={options.ticket.required && Boolean(value.trim())} />}
-                            <UserPicker
-                              value={repositoryAssignees[index] ?? session.username}
-                              ariaLabel={`第 ${index + 1} 个仓库的责任人`}
-                              disabled={!multiRepository}
-                              onChange={(username) => changeRepositoryAssignee(index, username)}
-                              options={(collaborationAssignees.length
-                                ? collaborationAssignees : [{
-                                  username: session.username,
-                                  display_name: session.display_name,
-                                  ready: true,
-                                  missing: [],
-                                }]).map((person) => ({
-                                  username: person.username,
-                                  display_name: person.display_name,
-                                  disabled: !person.ready,
-                                  detail: person.username === session.username
-                                    ? "自己" : person.ready ? undefined : "个人设置未就绪",
-                                }))}
-                            />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}
@@ -1067,9 +1101,10 @@ export function LaunchWorkspace({
                         onClick={addRepository}>
                         <span>＋</span> 添加代码仓
                       </button>
-                      <small className="repo-field-note">
+                      {options.ticket.enabled && !ticketsDeferred
+                        && <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
-                      </small>
+                      </small>}
                       {analysisEligible && (
                         <label className={`repo-analysis-toggle ${
                           requirementAnalysis ? "selected" : ""}`}>
@@ -1083,11 +1118,19 @@ export function LaunchWorkspace({
                               <strong>先分析，再拆分</strong>
                             </span>
                             <small>先确认改动面与拆分方案，再逐单元创建任务；
-                              AR 单号在拆分确认时填写。</small>
+                              执行人与 AR 单号在拆分确认时填写。</small>
                           </span>
                           <span className="repo-analysis-switch" aria-hidden="true" />
                         </label>
                       )}
+                      {analysisTeamVisible && <LaunchRequirementTeam
+                        owner={session}
+                        people={collaborationAssignees}
+                        selected={collaborators}
+                        loaded={collaborationAssigneesLoaded}
+                        error={collaborationAssigneesError}
+                        onChange={setCollaborators}
+                      />}
                       <datalist id="launch-recent-repositories">
                         {(savedPreferences?.recentRepos ?? []).map((repo) => (
                           <option key={repo} value={repo} />
@@ -1500,8 +1543,8 @@ export function LaunchWorkspace({
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? repositoryAssigneeBlocked
-                    ? "逐仓责任人尚未就绪"
+                  ? collaboratorBlocked
+                    ? "参与人尚未就绪"
                   : repositoryTicketBlocked
                     ? "请补齐逐仓 AR 单号"
                   : repositoryProbeBlocked
@@ -1514,8 +1557,8 @@ export function LaunchWorkspace({
                       ? "知识清单尚未核对完整"
                       : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? repositoryAssigneeBlocked
-                    ? "请为每个代码仓选择已完成个人接入的责任人"
+                  ? collaboratorBlocked
+                    ? "请移除个人设置未就绪的参与人，再发起主任务"
                   : repositoryTicketBlocked
                     ? "每个已填写的代码仓都需要自己的 AR 单号，且单号不能含空格"
                   : repositoryProbeBlocked
@@ -1533,8 +1576,8 @@ export function LaunchWorkspace({
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
-                    : repositoryAssigneeBlocked
-                      ? "逐仓责任人未完成"
+                    : collaboratorBlocked
+                      ? "参与人未就绪"
                     : repositoryTicketBlocked
                       ? "逐仓单号未完成"
                     : repositoryProbeBlocked

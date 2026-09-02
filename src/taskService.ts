@@ -5237,8 +5237,11 @@ export class TaskService {
       /** 多仓发起时按仓库地址绑定的 AR 单号。缺席时兼容旧客户端：
        * 所有仓沿用 ticket；一旦提交则每个仓都必须有且只能有一个。 */
       repositoryTickets?: Record<string, string>;
-      /** 多仓发起时按仓库地址绑定的责任人。缺席时兼容为下单人。 */
+      /** 旧客户端可在多仓发起时按仓库地址预填执行人；新入口统一在
+       * 最终交付单元形成后再分配。普通单仓缺席时仍默认为下单人。 */
       repositoryAssignees?: Record<string, string>;
+      /** 分析主任务的讨论参与人；不与仓库或交付单元绑定。 */
+      collaborators?: string[];
       /** 基线分支,默认 master(同一次拍板)。 */
       baseline?: string;
       model?: { provider: string; model: string };
@@ -5366,6 +5369,8 @@ export class TaskService {
       ? options.repos : options.repo ? [options.repo] : [])
       .map((item) => String(item).trim()).filter(Boolean)
       .filter((item, index, all) => all.indexOf(item) === index);
+    const analysisParent = !options.parentTaskId
+      && (repositories.length > 1 || options.requirementAnalysis === true);
     const repositoryTickets = new Map<string, string>();
     if (options.repositoryTickets !== undefined) {
       for (const [rawRepository, rawTicket] of Object.entries(
@@ -5395,11 +5400,10 @@ export class TaskService {
     const ticket = repositories.length
       ? repositoryTickets.get(repositories[0]) ?? legacyTicket
       : legacyTicket;
-    // 勾了"先分析拆分"的主任务不跑内核交付(只读分析,无分支无 MR),
-    // 单号在拆分确认卡上逐单元收——那时才知道有几个交付。见
+    // 多仓或显式勾选"先分析拆分"的主任务不跑内核交付(只读分析,
+    // 无分支无 MR),单号在拆分确认卡上逐单元收——那时才知道有几个交付。见
     // requirementGraphPlan 的对称校验:确认时每个单元必须有真单号。
-    const ticketDeferredToSplit = options.requirementAnalysis === true
-      && !options.parentTaskId;
+    const ticketDeferredToSplit = analysisParent;
     if (!ticket && this.options.host && !this.options.host.repoPath
         && !ticketDeferredToSplit) {
       throw new Error("请填写每个代码仓对应的 AR 单号——分支名和提交信息都要用它");
@@ -5425,13 +5429,31 @@ export class TaskService {
       const missing = repositories.find((repository) =>
         !repositoryAssignees.has(repository));
       if (missing) throw new Error(`请为代码仓 ${missing} 选择责任人`);
-    } else if (options.account) {
+    } else if (options.account && !analysisParent) {
       repositories.forEach((repository) =>
         repositoryAssignees.set(repository, options.account!));
     }
     if (repositories.length === 1 && options.account
+        && options.repositoryAssignees !== undefined
         && repositoryAssignees.get(repositories[0]) !== options.account) {
       throw new Error("单仓任务责任人必须是当前下单人；多仓任务才支持逐仓分工");
+    }
+    const collaborators = [...new Set((options.collaborators ?? [])
+      .map((account) => String(account).trim())
+      .filter((account) => account && account !== options.account))];
+    if (collaborators.length && !analysisParent) {
+      throw new Error("只有先分析再拆分的主任务可以邀请讨论参与人");
+    }
+    if (collaborators.length > 20) {
+      throw new Error("一个主任务最多邀请 20 位讨论参与人");
+    }
+    for (const account of collaborators) {
+      const readiness = this.options.collaborationAssigneeReadiness?.(account);
+      if (readiness && !readiness.ready) {
+        throw new Error(
+          `${account} 的个人设置尚未就绪：${readiness.missing.join("、")}`,
+        );
+      }
     }
     // 同(单号,归属人,仓)重复下单会派生出**同名分支**:第二单非快进
     // 推送失败烧完预算 stalled,报错还是裸 git stderr;同分支对的 MR
@@ -5808,6 +5830,7 @@ export class TaskService {
       last_progress_at: new Date().toISOString(),
       workspace,
       luban_account: options.account || undefined,
+      collaborators: collaborators.length ? collaborators : undefined,
       repo_url: repo,
       repositories: repositories.length ? repositories : undefined,
       repository_profiles: repositories.length
@@ -5823,16 +5846,13 @@ export class TaskService {
         ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
         ? {
-            stage: repositories.length > 1
-                || (options.requirementAnalysis === true
-                  && !options.parentTaskId)
-              ? "analysis" : "confirmed",
+            stage: analysisParent ? "analysis" : "confirmed",
             repositories: repositories.map((url, index) => ({
               id: `repo-${index + 1}`,
               name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
               url,
               ticket: repositoryTickets.get(url) ?? ticket,
-              assignee: repositoryAssignees.get(url) ?? options.account,
+              assignee: repositoryAssignees.get(url),
             })),
             dependencies: [],
           }
@@ -5912,6 +5932,7 @@ export class TaskService {
           value: options.repairRounds ?? null,
         },
         requirement_analysis: options.requirementAnalysis === true,
+        collaborators: collaborators.length ? collaborators : null,
         task_instructions: taskInstructions ? {
           bytes: Buffer.byteLength(taskInstructions, "utf-8"),
           sha256: createHash("sha256").update(taskInstructions).digest("hex"),
@@ -7081,6 +7102,8 @@ export class TaskService {
       account: source.luban_account,
       repo: source.repo_url,
       repos: source.repositories ? [...source.repositories] : undefined,
+      collaborators: source.collaborators ? [...source.collaborators] : undefined,
+      requirementAnalysis: source.requirement_analysis_requested === true,
       lane: source.lane,
       ticket: source.ticket,
       baseline: source.baseline,
