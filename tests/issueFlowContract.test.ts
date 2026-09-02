@@ -373,6 +373,10 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       stage_states: ["pending"],
       round: 1,
       review_active: undefined,
+      // 圈选闸未举未答(skill 圈选缺席);业务知识在进 analyze 时定格,
+      // 本会话没绑模块 → 空台账(字段在场=已定格,entries 空=无资产)。
+      skill_selection: undefined,
+      business_knowledge: { at: "2026-08-28T00:00:00Z", entries: [] },
       gate: {
         id: "gate-x",
         kind: "env_verify",

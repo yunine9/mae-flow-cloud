@@ -3273,6 +3273,22 @@ export interface IssueSummary {
   /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合;字段在场
    * =已作答(skills 空=明确跳过)。工作台据此展示当前必读集合。 */
   skill_selection?: { at: string; skills: IssueSkillChoice[] };
+  /** 业务知识台账(ADR-0012):进入 analyze 时按绑定模块定格的资产库
+   * 知识清单(只读投影在 .mae-flow-work/business-modules/)。 */
+  business_knowledge?: {
+    at: string;
+    entries: Array<{
+      id: string;
+      module_id: string;
+      module_name: string;
+      title: string;
+      summary: string;
+      when_to_use: string;
+      form: string;
+      version: number;
+      relative_path: string;
+    }>;
+  };
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
   /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */

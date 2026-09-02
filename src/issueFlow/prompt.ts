@@ -31,6 +31,7 @@ import {
   type IssueScenario,
 } from "./state.ts";
 import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.ts";
+import { businessKnowledgeLines } from "./businessKnowledge.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -218,8 +219,9 @@ export function issueFixedOpeningPrompt(
   state: IssueSessionState,
   credentials: IssueEnvCredentials = {},
   /** 月光免审批档的节奏渲染(现读现判):开=少问、不中间简报、
-   * 报告会被自动确认;关=高把关,主动问与对齐(ADR-0006)。 */
-  options: { moonlight?: boolean } = {},
+   * 报告会被自动确认;关=高把关,主动问与对齐(ADR-0006)。
+   * workspace 供业务知识地图现扫仓内 docs/(ADR-0012);缺席不注入。 */
+  options: { moonlight?: boolean; workspace?: string } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
@@ -258,6 +260,9 @@ export function issueFixedOpeningPrompt(
     `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
       + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     ...skillSelectionLines(state),
+    ...(options.workspace
+      ? businessKnowledgeLines(state, options.workspace)
+      : []),
     "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
       + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
       + "②出口动作已调用、平台交接词已到位(含 MR 清单申报受理后停等流水线);"
@@ -371,7 +376,7 @@ export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
   credentials: IssueEnvCredentials = {},
-  options: { moonlight?: boolean } = {},
+  options: { moonlight?: boolean; workspace?: string } = {},
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
@@ -383,6 +388,9 @@ export function issueResumePrompt(
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
     ...skillSelectionLines(state),
+    ...(options.workspace
+      ? businessKnowledgeLines(state, options.workspace)
+      : []),
     ...(state.mode === "fixed"
       ? [options.moonlight
         ? "介入节奏:月光免审批(开)——少问、不做中间简报,分析报告会被平台自动确认。"

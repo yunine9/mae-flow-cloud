@@ -103,6 +103,13 @@ export interface IssueToolContext {
    * 调用;service 现读现判(固定流程/月光关/台账未圈选/扫描非空),
    * 满足才举卡。返回是否真举了(回执据此叫 Agent 停回合)。 */
   raiseSkillSelection?: () => boolean;
+  /** 业务知识资产定格(ADR-0012):推进进 analyze 时调用,按绑定模块
+   * 从资产库定格并落台账;不分介入档,缺席/失败静默。返回是否定格到
+   * 了资产。 */
+  freezeBusinessKnowledge?: () => boolean;
+  /** 业务知识地图(ADR-0012):analyze 简报的注入段(台账资产+仓内
+   * docs/ 现扫);两源皆空为空串。 */
+  businessKnowledgeBrief?: () => string;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
    * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
@@ -1084,14 +1091,24 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           : state.stage === "fix" ? `问题修改完成:${firstLine}`
           : `UT 验证完成:${firstLine}`;
         fixedAdvance(ctx.state, to, note);
+        // analyze 入口(ADR-0011/0012):先定格业务知识资产(不分介入
+        // 档,缺席静默;重走时台账已在,重复定格被台账判据挡住),再
+        // 渲染地图(台账资产+仓内 docs/ 现扫,两源皆空为空),最后现读
+        // 现判举不举 skill 圈选闸(月光关才举)。
+        const enteredAnalyze = to === "analyze";
+        const knowledgeBrief = enteredAnalyze
+          ? (void ctx.freezeBusinessKnowledge?.(),
+            ctx.businessKnowledgeBrief?.() ?? "")
+          : "";
         // analyze 入口闸(ADR-0011):推进进问题分析时由 service 现读
         // 现判(月光关/未圈选过/扫描非空)决定举不举 skill 圈选卡。
-        const skillGateRaised = to === "analyze"
+        const skillGateRaised = enteredAnalyze
           ? (ctx.raiseSkillSelection?.() ?? false)
           : false;
         ctx.persist();
         return ok(`已收口,平台推进到下一阶段——\n`
           + stageBriefLines(scenario, to).join("\n")
+          + (knowledgeBrief ? `\n\n${knowledgeBrief}` : "")
           + (skillGateRaised
             ? "\n\n平台已举「skill 圈选」卡:用户圈选必读的仓内排障知识"
               + "后才会开下一轮。请立即结束本回合等待,不要继续调工具。"
