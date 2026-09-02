@@ -2088,7 +2088,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-root-task > div strong { overflow: hidden; color: var(--text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .requirement-root-task > div small { color: var(--muted); font-size: 11px; }
 .requirement-root-task > em, .repo-task-status { color: var(--accent); font-size: 11px; font-style: normal; font-weight: 750; }
-.requirement-root-task > em.completed, .repo-task-status.completed { color: #16885d; }
+.requirement-root-task > em.completed, .repo-task-status.completed { color: var(--success); }
 .requirement-root-task > em.failed, .requirement-root-task > em.stalled,
 .repo-task-status.failed, .repo-task-status.stalled { color: var(--danger); }
 .requirement-split-label { height: 30px; display: grid; place-items: center; color: var(--muted); font-size: 11px; font-weight: 700; }
@@ -2110,14 +2110,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-stage > div { display: grid; gap: 6px; }
 .requirement-stage article { min-width: 170px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
 .repo-node-head { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 7px; }
-.repo-node-head > i { width: 7px; height: 7px; border-radius: 50%; background: #39b980; box-shadow: 0 0 0 3px rgba(57, 185, 128, .1); }
-.has-prerequisite .repo-node-head > i { background: #e3a74b; box-shadow: 0 0 0 3px rgba(227, 167, 75, .1); }
+.repo-node-head > i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.has-prerequisite .repo-node-head > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
 .repo-node-head strong { overflow: hidden; color: var(--text-strong); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
 .repo-node-head button { padding: 3px 5px; color: var(--accent); border: 0; border-radius: 5px; background: var(--accent-soft); font-size: var(--font-size-assist); cursor: pointer; }
 .repo-assignee { display: inline-flex; width: fit-content; margin-top: 7px; padding: 3px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11.5px; font-weight: 750; }
 .repo-task-status { display: block; margin-top: 7px; }
 .requirement-stage article > p { margin: 6px 0 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.45; }
-.repo-prerequisite { display: block; margin-top: 5px; color: #c28a35; font-size: var(--font-size-assist); }
+.repo-prerequisite { display: block; margin-top: 5px; color: var(--attention); font-size: var(--font-size-assist); }
 .requirement-edges { margin-top: 9px; display: grid; gap: 7px; }
 .requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
 .requirement-edges > div > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-assist); }
@@ -2126,10 +2126,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 
-.requirement-team-picker { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, #2e9b77 32%, var(--line)); border-radius: 11px; background: var(--surface); }
-.requirement-team-picker > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #d9f4e9 45%, var(--surface)); }
+/* 这一段原来全是写死的十六进制绿(#16885d/#2e9b77/#d9f4e9):浅色下没事,
+   深色下表单头部糊成一块浅绿(用户实测)。换成 --success 一族,两套主题各
+   有各的值。 */
+.requirement-team-picker { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--success) 32%, var(--line)); border-radius: 11px; background: var(--surface); }
+.requirement-team-picker > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--success-soft) 70%, var(--surface)); }
 .requirement-team-picker > header > div { display: grid; gap: 2px; }
-.requirement-team-picker > header span { color: #16885d; font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
+.requirement-team-picker > header span { color: var(--success); font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
 .requirement-team-picker > header strong { color: var(--text-strong); font-size: 15px; }
 .requirement-team-picker > header small { color: var(--muted); font-size: 12px; }
 .requirement-team-owner { margin: 10px 12px 0; padding: 9px 10px; display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: center; gap: 9px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 8px; background: var(--accent-soft); }
@@ -2140,17 +2143,17 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-team-members { max-height: 250px; padding: 9px 12px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; overflow-y: auto; }
 .requirement-team-members > p { grid-column: 1 / -1; margin: 4px 0; color: var(--muted); font-size: 12px; }
 .requirement-team-members > label { min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); cursor: pointer; }
-.requirement-team-members > label.selected { border-color: color-mix(in srgb, #2e9b77 45%, var(--line)); background: color-mix(in srgb, #d9f4e9 34%, var(--surface)); box-shadow: inset 3px 0 #2e9b77; }
+.requirement-team-members > label.selected { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); background: color-mix(in srgb, var(--success-soft) 60%, var(--surface)); box-shadow: inset 3px 0 var(--success); }
 .requirement-team-members > label.unready:not(.selected) { opacity: .62; cursor: not-allowed; }
-.requirement-team-members input { accent-color: #16885d; }
+.requirement-team-members input { accent-color: var(--success); }
 .requirement-team-members label > span { min-width: 0; display: grid; gap: 2px; }
 .requirement-team-members strong { color: var(--text-strong); font-size: 12.5px; }
 .requirement-team-members small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .requirement-team-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
 .requirement-team-picker > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
 .requirement-team-picker > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.requirement-team-picker > footer > strong { flex: none; color: #16885d; font-size: 12px; }
-.requirement-team-picker > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: #16885d; font-weight: 750; cursor: pointer; }
+.requirement-team-picker > footer > strong { flex: none; color: var(--success); font-size: 12px; }
+.requirement-team-picker > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: var(--success); font-weight: 750; cursor: pointer; }
 .requirement-team-picker > footer button:disabled { opacity: .45; cursor: not-allowed; }
 .launch-requirement-team { margin: 12px 0 0; }
 .repository-assignees { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 11px; background: var(--surface); }
@@ -2179,7 +2182,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-ticket-editable input { width: 100%; min-height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-strong); background: var(--surface); font: 650 12px var(--font-mono); }
 .repository-ticket-editable input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .repository-assignee-list em { color: var(--muted); font-size: 11.5px; font-style: normal; font-weight: 700; }
-.repository-assignee-list em.ready { color: #16885d; }
+.repository-assignee-list em.ready { color: var(--success); }
 .repository-assignee-list em.missing { color: var(--attention); }
 .repo-ticket { color: var(--muted); font: 650 11px var(--font-mono); }
 /* 必须是块:行内元素不吃 overflow/text-overflow,nowrap 的路径就从卡片里
