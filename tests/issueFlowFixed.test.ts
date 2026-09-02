@@ -129,6 +129,9 @@ class LoopPlatform {
    *  给出 failed run 的 log 与 checks。缺省 undefined 维持原演出
    *  (log=BUILD FAILURE,无 checks——盲修复路径的回归锚)。 */
   firstFailure: { log?: string; checks?: unknown } | undefined;
+  /** /pipeline/artifacts 的剧本覆盖(证据评估测试用):红灯修复链会
+   *  把它镜像进会话工作区 pipeline/。缺省演一份编译失败的 build.log。 */
+  firstFailureArtifacts: Array<{ name: string; text: string }> | undefined;
 
   constructor(
     private readonly firstTerminal: "failed" | "success" = "failed",
@@ -169,7 +172,7 @@ class LoopPlatform {
         }
         if (request.method === "GET" && request.url?.startsWith("/pipeline/artifacts")) {
           // 失败产物假件:红灯修复链会把它镜像进会话工作区 pipeline/。
-          send({ files: [{
+          send({ files: this.firstFailureArtifacts ?? [{
             name: "build.log",
             text: "BUILD FAILURE: 模块 notify-service 编译失败(全文堆栈省略)",
           }] });
@@ -2309,6 +2312,67 @@ test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
       "回灌后的修复回合消耗修复轮预算(reds+1)");
     assert.equal(settled.feedback?.at(-1)?.status, "repairing");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派修点名维度,不举卡", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-ut-jest-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "UT", status: "failed", tool: "build2.0" }],
+  };
+  // 镜像产物是前端测试失败原文:内容嗅探把它背书给 UT 维,证据评估
+  // 全有→照常派修(修复回合能读到全文),不再举卡要人贴报错。
+  platform.firstFailureArtifacts = [{
+    name: "build_log_ut-1.txt",
+    text: [
+      "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
+      "  ● KpiTaskList › detail dialog header labels use consistent colon style",
+      "    expect(received).toBeTruthy()",
+      "    Received: undefined",
+      "Test Suites: 1 failed, 34 passed, 35 total",
+      "Tests: 1 failed, 449 passed, 450 total",
+    ].join("\n"),
+  }];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按 UT 原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "UT 红灯修复回合派出");
+    assert.match(requestText, /第 1\/20 次红灯/);
+    assert.match(requestText, /本次红灯维度\(UT\/覆盖率\)/,
+      "UT 维有证据,点名维度照常修");
+    assert.match(requestText, /都有可定位的具体报错/);
+    assert.doesNotMatch(requestText, /不许猜改/,
+      "证据全有时不出现猜改警告");
+    assert.equal(service.get("issue-1").gate, undefined,
+      "可修的红灯不得举卡");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "实际派出修复回合才 reds+1");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

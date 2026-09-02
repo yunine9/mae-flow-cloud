@@ -290,3 +290,41 @@ test("服务重启后从同一 SHA 继续取证，不误走 prepush 或主任务
     await platform.stop();
   }
 });
+
+test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺口", async () => {
+  const platform = new FakeGitPlatform();
+  await platform.start();
+  platform.artifacts.push({
+    name: "build_log_ut-1.txt",
+    text: [
+      "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
+      "  ● KpiTaskList › detail dialog header labels use consistent colon style",
+      "    expect(received).toBeTruthy()",
+      "    Received: undefined",
+      "Test Suites: 1 failed, 34 passed, 35 total",
+      "Tests: 1 failed, 449 passed, 450 total",
+    ].join("\n"),
+  });
+  const service: any = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-evidence-ut-jest-")),
+    provider: "fixture", model: "fixture", modelsJson: {}, maxConcurrent: 0,
+    delivery: { platformUrl: platform.baseUrl, pollTimeoutMs: 0 },
+  });
+  try {
+    const { task, sha } = prepareFailedTask(service, [
+      { dimension: "UT", status: "failed", tool: "build2.0" },
+    ]);
+    await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
+    assert.equal(task.summary.status, "queued",
+      "UT 维有可定位原文,照常派修");
+    assert.equal(task.summary.delivery.loop.round, 1);
+    assert.equal(task.summary.delivery.evidence_gap, undefined,
+      "证据全有时不得生成证据缺口求助");
+    assert.match(task.mission, /build_log_ut-1\.txt/,
+      "修复使命点名镜像日志,让会话读原文定位");
+    assert.doesNotMatch(task.mission, /证据缺口/);
+  } finally {
+    await service.shutdown();
+    await platform.stop();
+  }
+});

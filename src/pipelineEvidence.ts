@@ -21,6 +21,10 @@ export interface PipelineEvidenceAssessment {
   missingDimensions: PipelineDimension[];
   sources: Partial<Record<PipelineDimension, string[]>>;
   reasons: Partial<Record<PipelineDimension, string[]>>;
+  /** 跨维度兜底背书的来源(带"归类错配"标注,维度前缀:来源)。
+   *  执行层把它带进回合/使命文案,让修复侧知道这段日志与失败维度
+   *  的归属关系存疑,以日志原文为准定位。 */
+  fallbackSources: string[];
 }
 
 export const PIPELINE_DIMENSION_TEXT: Record<PipelineDimension, string> = {
@@ -31,8 +35,13 @@ export const PIPELINE_DIMENSION_TEXT: Record<PipelineDimension, string> = {
 
 const NO_DATA = /^(?:no data(?: found)?|not found|empty|null|undefined)$/i;
 const COMPILE_ERROR = /(?:fatal error|\berror:|undefined reference|collect2:|ld(?:\.lld)?: error|make(?:\[\d+\])?: \*\*\*|\[ERROR\]|killed signal|compilation failure|build failure)/i;
-const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b)/i;
+// 既有 C/C++/Maven 分支保持向后兼容;后半段是前端 runner(Jest/Mocha/
+// Vitest)的失败特征。JS 正则没有扩展模式,写成纯 alternation。
+// 旧尺子对 Jest 输出全部不中:"Tests: 1 failed" 的 fail 不紧跟 tests、
+// "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。
+const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest Suites:\s*[1-9]\d*\s+failed|\bTests:\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
+const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
 
 const TOOL_DIMENSIONS: Array<[RegExp, PipelineDimension]> = [
   [/^(?:cloudbuild2\.0|build2\.0)$/i, "COMPILE"],
@@ -61,6 +70,23 @@ function parseJson(text: string): unknown {
 function dimensionOfTool(tool: unknown): PipelineDimension | undefined {
   const name = String(tool ?? "").trim();
   return TOOL_DIMENSIONS.find(([pattern]) => pattern.test(name))?.[1];
+}
+
+/** 按日志内容嗅探它能背书的维度(可命中多个)。record-id 的 toolName
+ * 归类只是弱提示:build2.0 这类复合构建工具靠名字分不清这次是编译挂
+ * 还是 UT 挂(真实案例:CodeCCP2.0 下 build2.0 跑 JS UT,通过率不达标,
+ * record 却全被归到编译维),日志真实维度由内容决定。 */
+function sniffDimensions(text: string): PipelineDimension[] {
+  const dims = new Set<PipelineDimension>();
+  if (UT_ERROR.test(text)) dims.add("UT");
+  if (COMPILE_ERROR.test(text)) dims.add("COMPILE");
+  // 堆栈行(路径:行号)单独探一次:部分 runner 的失败堆栈未必带
+  // FAIL/汇总关键字,但 path:line 就够定位;测试文件堆栈归 UT,
+  // 其余归编译。
+  if (PATH_WITH_LINE.test(text)) {
+    dims.add(TEST_FILE_PATH.test(text) ? "UT" : "COMPILE");
+  }
+  return [...dims];
 }
 
 /** 找 JSON 里真正可定位的一条缺陷，而不是“defectCount=3”这类汇总。 */
@@ -221,13 +247,24 @@ export function assessPipelineRepairEvidence(input: {
     const recordId = build[1];
     const mapped = [...recordDimensions.entries()].find(([id]) =>
       recordId === id || name.includes(id))?.[1];
+    if (name.startsWith("build_log_")) {
+      // 全量日志:内容嗅探为主、record-id 归类为弱提示,两者并集背书
+      // ——一份日志可能同时含编译报错与 UT 堆栈,而复合工具的 record
+      // 归类会把 UT 日志错挂到编译维(或反之),只信归类会整份丢弃。
+      const candidate = new Set(sniffDimensions(text));
+      if (mapped) candidate.add(mapped);
+      for (const dimension of candidate) {
+        addSource(sources, dimension, name);
+      }
+      continue;
+    }
+    // 结构化错误 JSON 与平台摘要抽取的短文本没有"按内容重新归维"的
+    // 空间:仍按 record 映射维度判定(缺省编译),尺子不变。
     const dimension = mapped ?? "COMPILE";
     const actionable = name.startsWith("build_error_excerpt_")
       ? (dimension === "UT" ? UT_ERROR.test(text)
         : actionableStructuredError(text))
-      : name.startsWith("build_errors_")
-        ? actionableStructuredError(text)
-        : dimension === "UT" ? UT_ERROR.test(text) : COMPILE_ERROR.test(text);
+      : actionableStructuredError(text);
     if (actionable) addSource(sources, dimension, name);
   }
 
@@ -258,5 +295,6 @@ export function assessPipelineRepairEvidence(input: {
     missingDimensions,
     sources,
     reasons,
+    fallbackSources: [],
   };
 }
