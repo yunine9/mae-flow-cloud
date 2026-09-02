@@ -121,6 +121,30 @@ function actionableCodecheck(text: string): boolean {
       .test(text);
 }
 
+const UT_INDICATOR_WORDS =
+  /(?:pass rate|通过率|\bdt\b|coverage|覆盖率|用例)/i;
+
+function hasUtIndicatorWord(value: unknown): boolean {
+  if (typeof value === "string") return UT_INDICATOR_WORDS.test(value);
+  if (Array.isArray(value)) return value.some(hasUtIndicatorWord);
+  if (value && typeof value === "object") {
+    return Object.values(value).some(hasUtIndicatorWord);
+  }
+  return false;
+}
+
+/** 指标型质量门缺陷(通过率/DT/覆盖率)没有 file:line,过不了
+ * hasLocatedDefect 的三要素,但它是 UT 失败的明确信号(真实案例:
+ * "js pass rate 99.78<100"+DT 缺陷,构建 record 本身 SUCCESS)。
+ * 只在 codecheck_detail 上做关键词识别,不对全产物扫描,防误伤。 */
+function indicatorDefectSignalsUt(text: string): boolean {
+  const parsed = parseJson(text);
+  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
+    return false;
+  }
+  return hasUtIndicatorWord(parsed);
+}
+
 function actionableStructuredError(text: string): boolean {
   if (!meaningful(text)) return false;
   const parsed = parseJson(text);
@@ -232,8 +256,15 @@ export function assessPipelineRepairEvidence(input: {
 
   for (const artifact of input.artifacts) {
     const { name, text } = artifact;
-    if (name === "codecheck_detail.json" && actionableCodecheck(text)) {
-      addSource(sources, "CODECHECK", name);
+    if (name === "codecheck_detail.json") {
+      if (actionableCodecheck(text)) {
+        addSource(sources, "CODECHECK", name);
+      } else if (indicatorDefectSignalsUt(text)) {
+        // 指标型缺陷不是可定位报错本身,它只指认"UT 在红"——定位仍要
+        // 看对应构建日志的失败用例;故只作 UT 信号,不冒充 CodeCheck 证据。
+        addSource(sources, "UT",
+          `${name}(指标型质量门缺陷:通过率/DT 类指标红)`);
+      }
       continue;
     }
     if (/^coverage_diff_.+\.json$/i.test(name)
@@ -275,6 +306,31 @@ export function assessPipelineRepairEvidence(input: {
     }
   }
 
+  // 跨维度兜底:平台对失败维度的归类可能错(真实案例 issue-28:报
+  // CodeCheck 红,缺陷挂在 build2.0 的 record 上,errorInfo 拒答,
+  // 镜像日志内容却是 Jest UT 失败)。若某失败维度手里一张证据都没有,
+  // 而镜像里存在"有可定位内容、且未被任何失败维度认领"的构建日志,
+  // 把它作为该维度的弱证据并明示错配——修复回合本来就能读到日志
+  // 全文,背书宽松的代价远低于漏判举卡把人拉进来贴原文。"未被失败
+  // 维度认领"是硬条件:日志已给某个失败维度背过书,说明内容就归那
+  // 一维,拿去替别的维度背书是误导(编译堆栈救不了 UT 缺口)。
+  const fallbackSources: string[] = [];
+  const unclaimedLocatedLogs = input.artifacts.filter((artifact) =>
+    /^build_log_/.test(artifact.name)
+    && sniffDimensions(artifact.text).length > 0
+    && !failedDimensions.some((dimension) =>
+      (sources[dimension] ?? []).includes(artifact.name)));
+  if (unclaimedLocatedLogs.length) {
+    for (const dimension of failedDimensions) {
+      if ((sources[dimension]?.length ?? 0) === 0) {
+        const source = `${unclaimedLocatedLogs[0].name}`
+          + "(跨维度兜底:内容含可定位报错,record-id 归类与失败维度不一致)";
+        addSource(sources, dimension, source);
+        fallbackSources.push(`${PIPELINE_DIMENSION_TEXT[dimension]}: ${source}`);
+      }
+    }
+  }
+
   for (const dimension of Object.keys(sources) as PipelineDimension[]) {
     sources[dimension] = unique(sources[dimension] ?? []);
   }
@@ -295,6 +351,6 @@ export function assessPipelineRepairEvidence(input: {
     missingDimensions,
     sources,
     reasons,
-    fallbackSources: [],
+    fallbackSources,
   };
 }

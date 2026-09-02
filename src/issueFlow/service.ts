@@ -3160,6 +3160,12 @@ export class IssueFlowService {
         + "同时请人工把平台上对应失败项的报错原文(带文件/行号/堆栈)"
         + "直接粘贴到会话,下一轮修复会作为证据使用。\n";
     }
+    // 维度归类错配的兜底(见 pipelineEvidence 跨维度兜底):明示按内容
+    // 采信了哪份日志,修复侧以日志原文为准定位,别被维度标签带偏。
+    const mismatch = assessment.fallbackSources.length
+      ? `证据备注: 平台维度归类与日志内容不一致,已按内容采信——`
+        + `${assessment.fallbackSources.join(";")}。以日志原文为准定位。\n`
+      : "";
     saveState(live.root, state);
     this.startPlatformTurn(live,
       `平台通知: 流水线未通过(仓 ${repo},第 ${reds}/${max} 次红灯,`
@@ -3170,6 +3176,7 @@ export class IssueFlowService {
             + `(${artifacts.join("、")}),先用 Bash 读全文定位,再修。\n`
           : "平台未返回本次失败产物,请按上方摘要与各维度链接定位。\n")
         + graded
+        + mismatch
         + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),"
         + "平台会重新监看。");
   }

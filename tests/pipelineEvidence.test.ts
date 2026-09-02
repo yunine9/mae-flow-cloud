@@ -264,3 +264,108 @@ test("CodeCheck lineNum=0 表示整文件或 MR 级规则，不误判成无报�
   assert.deepEqual(structured.availableDimensions, ["CODECHECK"]);
   assert.deepEqual(structured.missingDimensions, []);
 });
+
+/** issue-28 脱敏样例:构建 record 全 SUCCESS(errorInfo 接口拒答,
+ * "cannot get errorInfo with status: SUCCESS"),红的是质量门指标
+ * (js pass rate 99.78%<100、DT 缺陷 1),真正的 Jest 失败原文在
+ * build_log 里;平台把失败维度报成 CODECHECK,缺陷归属工具是
+ * build2.0(被 record-id 归类硬映射成编译维)。 */
+const ISSUE28_RECORD = "3BW2BKXV-0W28-J680-0000-9PJBDYEG6Dzu";
+const ISSUE28_ARTIFACTS = [
+  {
+    name: "pipeline_info.json",
+    text: JSON.stringify({ defects: [{
+      toolName: "build2.0", record_ids: [ISSUE28_RECORD],
+      indicatorInfos: [
+        { indicatorName: "js pass rate(%)", actualValue: 99.7778,
+          expectValue: 100 },
+        { indicatorName: "DT", real: 1, expect: 0 },
+      ],
+    }] }),
+  },
+  {
+    name: `build_errors_${ISSUE28_RECORD}.json`,
+    text: JSON.stringify({ message:
+      "Failed to get record error info: {'success': False, 'message': "
+      + "'Illegal state, cannot get errorInfo with status: SUCCESS', "
+      + "'errCode': 'CB.0001001.450'}" }),
+  },
+  { name: `build_log_${ISSUE28_RECORD}.txt`, text: JEST_LOG },
+  {
+    name: "codecheck_detail.json",
+    text: JSON.stringify({ defectInfos: [
+      { fileName: null, lineNum: 0, indicatorName: "js pass rate(%)",
+        realValue: 99.7778, threshold: 100 },
+      { fileName: null, lineNum: 0, indicatorName: "DT",
+        realValue: 1, threshold: 0 },
+    ] }),
+  },
+];
+
+test("issue-28 形态:维度错配的质量门红灯由跨维度兜底救回", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{ dimension: "CODECHECK", status: "failed",
+      tool: "CodeCCP2.0" }],
+    artifacts: ISSUE28_ARTIFACTS,
+  });
+  assert.deepEqual(result.availableDimensions, ["CODECHECK"],
+    "CodeCheck 维零证据,由含可定位内容的构建日志兜底背书");
+  assert.deepEqual(result.missingDimensions, []);
+  assert.match(result.sources.CODECHECK?.join(" ") ?? "", /跨维度兜底/,
+    "兜底来源必须带归类错配标注,不静默混入");
+  assert.match(result.sources.UT?.join(" ") ?? "", /指标型质量门缺陷/,
+    "指标型缺陷(通过率/DT)作为 UT 失败信号在场");
+  assert.deepEqual(result.fallbackSources.length, 1);
+  assert.match(result.fallbackSources[0], /^CodeCheck: build_log_/,
+    "兜底出口带维度前缀,供执行层写进回合文案");
+});
+
+test("兜底红线:镜像日志无可定位内容时不兜底，仍按全缺处理", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{ dimension: "CODECHECK", status: "failed",
+      tool: "CodeCCP2.0" }],
+    artifacts: ISSUE28_ARTIFACTS.map((artifact) =>
+      artifact.name === `build_log_${ISSUE28_RECORD}.txt`
+        ? { name: artifact.name,
+            text: "构建完成,质量门指标未达标,详情见平台页面" }
+        : artifact),
+  });
+  assert.deepEqual(result.availableDimensions, [],
+    "空日志借不到兜底:没有任何可定位内容就该举卡找人工");
+  assert.deepEqual(result.missingDimensions, ["CODECHECK"]);
+  assert.deepEqual(result.fallbackSources, []);
+});
+
+test("指标型缺陷关键词只在 CodeCheck 明细产物上生效", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{ dimension: "UT", status: "failed" }],
+    artifacts: [{
+      name: "quality_summary.json",
+      text: JSON.stringify({ indicatorName: "js pass rate(%)",
+        actualValue: 99.7 }),
+    }],
+  });
+  assert.deepEqual(result.availableDimensions, [],
+    "其他产物带指标词不触发 UT 信号,防止关键词误伤");
+});
+
+test("失败维度已有证据时不跨维度兜底", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{ dimension: "CODECHECK", status: "failed",
+      tool: "CodeCheck",
+      details: [{ file: "src/TextUtil.java", line: 22,
+        rule: "ARCH-UTIL-02", message: "命中架构约束" }] }],
+    artifacts: [
+      { name: "pipeline_info.json", text: JSON.stringify({ defects: [
+        { toolName: "build2.0", record_ids: ["r9"] },
+      ] }) },
+      { name: "build_log_r9.txt", text: JEST_LOG },
+    ],
+  });
+  assert.deepEqual(result.availableDimensions, ["CODECHECK"]);
+  assert.deepEqual(result.missingDimensions, []);
+  assert.deepEqual(result.fallbackSources, [],
+    "CodeCheck 自己有 checks 明细,不需要兜底");
+  assert.ok(result.sources.CODECHECK?.every((source) =>
+    !source.includes("跨维度兜底")));
+});

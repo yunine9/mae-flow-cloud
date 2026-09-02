@@ -2380,6 +2380,103 @@ test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派
   }
 });
 
+test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派修,兜底备注回合可见", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-issue28-"));
+  const origin = bareOrigin(dataDir);
+  // 真实脱敏样例:构建 record 全 SUCCESS(errorInfo 拒答),红的是质量门
+  // 指标(js pass rate 99.78%<100、DT 缺陷 1),Jest 原文在 build_log 里;
+  // 平台把失败维度报成 CODECHECK,缺陷归属工具 build2.0 被归类到编译维。
+  const record = "3BW2BKXV-0W28-J680-0000-9PJBDYEG6Dzu";
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "CodeCCP2.0 质量门未达标: js pass rate 99.7778 < 100, DT 缺陷 1",
+    checks: [{ dimension: "CODECHECK", status: "failed",
+      tool: "CodeCCP2.0" }],
+  };
+  platform.firstFailureArtifacts = [
+    {
+      name: "pipeline_info.json",
+      text: JSON.stringify({ defects: [{
+        toolName: "build2.0", record_ids: [record],
+        indicatorInfos: [
+          { indicatorName: "js pass rate(%)", actualValue: 99.7778,
+            expectValue: 100 },
+          { indicatorName: "DT", real: 1, expect: 0 },
+        ],
+      }] }),
+    },
+    {
+      name: `build_errors_${record}.json`,
+      text: JSON.stringify({ message:
+        "Failed to get record error info: {'success': False, 'message': "
+        + "'Illegal state, cannot get errorInfo with status: SUCCESS', "
+        + "'errCode': 'CB.0001001.450'}" }),
+    },
+    {
+      name: `build_log_${record}.txt`,
+      text: [
+        "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
+        "  ● KpiTaskList › detail dialog header labels use consistent colon style",
+        "    expect(received).toBeTruthy()",
+        "    Received: undefined",
+        "      602 |   expect(detailBtn).toBeTruthy();",
+        "    at Object.<anonymous> "
+          + "(src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx:602:27)",
+        "Test Suites: 1 failed, 34 passed, 35 total",
+        "Tests: 1 failed, 449 passed, 450 total",
+      ].join("\n"),
+    },
+    {
+      name: "codecheck_detail.json",
+      text: JSON.stringify({ defectInfos: [
+        { fileName: null, lineNum: 0, indicatorName: "js pass rate(%)",
+          realValue: 99.7778, threshold: 100 },
+        { fileName: null, lineNum: 0, indicatorName: "DT",
+          realValue: 1, threshold: 0 },
+      ] }),
+    },
+  ];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按 Jest 原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // 旧行为:CodeCheck 维零证据→举 pipeline_evidence 卡要人贴原文。
+    // 兜底后:镜像日志内容含可定位报错,自动派修并把错配说清。
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "维度错配红灯自动派修(不再举卡)");
+    assert.match(requestText, /本次红灯维度\(CodeCheck\)/);
+    assert.match(requestText, /都有可定位的具体报错/);
+    assert.match(requestText, /跨维度兜底/,
+      "兜底备注回合可见,修复侧按日志原文定位");
+    assert.match(requestText, /build_log_/);
+    assert.equal(service.get("issue-1").gate, undefined,
+      "有可修原文的质量门红灯不得举卡");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "兜底派出的修复回合照常计预算");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空名单恒 false 同口径)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-none-"));
   const origin = bareOrigin(dataDir);

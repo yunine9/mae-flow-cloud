@@ -328,3 +328,73 @@ test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺�
     await platform.stop();
   }
 });
+
+test("issue-28 形态：维度错配的质量门红灯从等人工变派修", async () => {
+  const platform = new FakeGitPlatform();
+  const record = "3BW2BKXV-0W28-J680-0000-9PJBDYEG6Dzu";
+  await platform.start();
+  for (const artifact of [
+    {
+      name: "pipeline_info.json",
+      text: JSON.stringify({ defects: [{
+        toolName: "build2.0", record_ids: [record],
+        indicatorInfos: [
+          { indicatorName: "js pass rate(%)", actualValue: 99.7778,
+            expectValue: 100 },
+          { indicatorName: "DT", real: 1, expect: 0 },
+        ],
+      }] }),
+    },
+    {
+      name: `build_errors_${record}.json`,
+      text: JSON.stringify({ message:
+        "Failed to get record error info: {'success': False, 'message': "
+        + "'Illegal state, cannot get errorInfo with status: SUCCESS', "
+        + "'errCode': 'CB.0001001.450'}" }),
+    },
+    {
+      name: `build_log_${record}.txt`,
+      text: [
+        "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
+        "  ● KpiTaskList › detail dialog header labels use consistent colon style",
+        "    expect(received).toBeTruthy()",
+        "    Received: undefined",
+        "Test Suites: 1 failed, 34 passed, 35 total",
+        "Tests: 1 failed, 449 passed, 450 total",
+      ].join("\n"),
+    },
+    {
+      name: "codecheck_detail.json",
+      text: JSON.stringify({ defectInfos: [
+        { fileName: null, lineNum: 0, indicatorName: "js pass rate(%)",
+          realValue: 99.7778, threshold: 100 },
+        { fileName: null, lineNum: 0, indicatorName: "DT",
+          realValue: 1, threshold: 0 },
+      ] }),
+    },
+  ]) {
+    platform.artifacts.push(artifact);
+  }
+  const service: any = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-evidence-issue28-")),
+    provider: "fixture", model: "fixture", modelsJson: {}, maxConcurrent: 0,
+    delivery: { platformUrl: platform.baseUrl, pollTimeoutMs: 0 },
+  });
+  try {
+    const { task, sha } = prepareFailedTask(service, [
+      { dimension: "CODECHECK", status: "failed", tool: "CodeCCP2.0" },
+    ]);
+    await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
+    assert.equal(task.summary.status, "queued",
+      "维度错配由跨维度兜底救回,自动派修");
+    assert.equal(task.summary.delivery.loop.round, 1);
+    assert.equal(task.summary.delivery.evidence_gap, undefined,
+      "不再生成证据缺口求助");
+    assert.match(task.mission, /维度归类错配的兜底采信/);
+    assert.match(task.mission, /build_log_.*跨维度兜底/,
+      "兜底来源带错配标注,修复会话按日志原文定位");
+  } finally {
+    await service.shutdown();
+    await platform.stop();
+  }
+});
