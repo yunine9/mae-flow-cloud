@@ -2150,7 +2150,7 @@ export class IssueFlowService {
   }
 
   /** 检视面板的数据面:意见清单 + 锚点检测(原文还在/已被改动)+
-   * 回合标记。读类,与管理员只读边界一致。 */
+   * 回合标记。读类,查看模式下登录即可读(写仍仅归属人)。 */
   listReviews(id: string): {
     reviews: Annotation[];
     checks: AnchorCheck[];

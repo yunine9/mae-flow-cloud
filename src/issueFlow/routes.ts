@@ -2,9 +2,10 @@
  * 问题流 HTTP 路由(/issues/*)。
  *
  * 与任务 API(/tasks/*)平行的独立命名空间:鉴权沿用会话 cookie,
- * 归属校验"只有本人(或管理员只读)能碰自己的问题会话"。SSE 事件
- * 尾随与任务侧同款(300ms 轮询 + 字节偏移增量),只是终态判定换成
- * 问题域的状态集。
+ * 权限语义(查看模式):读(概要/时间线/材料/事件/SSE 事件流)登录
+ * 即可,写(一切改变会话现场的动作)仅会话归属人——管理员也不写
+ * ("管理员不处理问题单"同一角色边界)。SSE 事件尾随与任务侧同款
+ * (300ms 轮询 + 字节偏移增量),只是终态判定换成问题域的状态集。
  *
  *   GET  /issues                      → 我的会话列表
  *   POST /issues                      → 登记(201 摘要)
@@ -311,18 +312,18 @@ export async function handleIssueRoutes(
     json(response, status, body);
     return true;
   };
-  /** 归属:开发者只能碰自己的会话;管理员只读(问题处理是开发者的活,
-   * 与"管理员不发起任务"同一角色边界)。 */
-  const guard = (account: string): boolean =>
-    viewer ? (viewer.username === account
-      || viewer.role === "admin") : true;
+  /** 归属(写闸):写操作的唯一拒绝口——每条写路由自带这道仅归属人
+   * 校验,管理员也不写(问题处理是开发者的活,与"管理员不发起任务"
+   * 同一角色边界)。读没有闸:查看模式(spec: issue-session-view-mode)
+   * 对登录用户全开放,不再有"本人或管理员"的整体闸盖住读写。 */
   const own = (account: string): boolean =>
     viewer ? viewer.username === account : true;
 
   try {
     if (method === "GET" && parts.length === 1) {
-      // ?scope=all:团队看板视角看所有人的问题会话(列表只读,详情仍按
-      // 归属校验);缺省只看本人——"我的问题" tab 的既有行为不变。
+      // ?scope=all:团队看板视角看所有人的问题会话(详情读同样开放——
+      // 查看模式,写仍仅归属人);缺省只看本人——"我的问题" tab 的
+      // 既有行为不变。
       const scopeAll = new URL(request.url ?? "", "http://x")
         .searchParams.get("scope") === "all";
       const mine = issueFlow.list(
@@ -516,10 +517,10 @@ export async function handleIssueRoutes(
 
     const id = parts[1];
     if (!id) return done(404, { error: "未知问题接口" });
+    // 查看模式:这里不再有整体归属闸——GET(概要/时间线/材料/事件/
+    // SSE 事件流)登录即可;非 GET 的拒绝完全靠每条写路由自己的 own()
+    // 闸(403 文案指明动作与归属限制)。brief 只供各写闸取归属账号。
     const brief = issueFlow.list().find((item) => item.id === id);
-    if (brief && !guard(brief.account)) {
-      return done(403, { error: "只能访问自己的问题会话" });
-    }
 
     if (method === "GET" && parts.length === 2) {
       return done(200, issueFlow.get(id));
@@ -527,7 +528,7 @@ export async function handleIssueRoutes(
 
     // ---- 会话材料(交付材料页签):路由直连 materials.ts,服务不再
     // 转手(收窄票 #7);issueFlow.session 只负责"哪个会话、现场在哪"。
-    // 读:本人或管理员;写(快速修改):仅会话归属者。路径防穿越在
+    // 读:登录即可(查看模式);写(快速修改):仅会话归属者。路径防穿越在
     // materials 层双保险,这里只做归属与参数兜底。fail-open 语义:读类
     // 故障以 400 带人话返回,页面给空态,不拖垮会话。
     if (parts[2] === "materials" && parts.length === 3) {
@@ -657,8 +658,8 @@ export async function handleIssueRoutes(
       });
     }
 
-    // 检视(ADR-0007):意见账本 + 提交重跑。读:本人或管理员;记/
-    // 删/提交:仅归属人。提交是"整体回退"这一有后果动作的人工触发
+    // 检视(ADR-0007):意见账本 + 提交重跑。读:登录即可(查看模式);
+    // 记/删/提交:仅归属人。提交是"整体回退"这一有后果动作的人工触发
     // 源,服务层把门(固定流程/未终态/非转正继承/不可叠加/状态在
     // 等或闲置);这里的轻量确认在页面层,服务端只认状态守卫。
     if (method === "GET" && parts[2] === "reviews" && parts.length === 3) {
@@ -785,7 +786,7 @@ export async function handleIssueRoutes(
 
     if (method === "POST" && parts[2] === "control" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能操作会话" });
+        return done(403, { error: "只有归属人能归档或取消会话" });
       }
       const body = await readBody(request);
       const kind = ["non_issue", "fixed", "delivered", "issue", "converted"]
