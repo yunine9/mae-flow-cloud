@@ -218,3 +218,18 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
   assert.match(workspace, /const currentLine = check\?\.line \?\? item\.line/,
     "定位应优先使用重锚定后的当前行号");
 });
+
+test("需求确认复用标准决定卡，并收成一个明确的通过按钮", () => {
+  assert.match(taskCard,
+    /requirementAnalysisConfirmation[^]*<section className="decision-card"/,
+    "需求确认应沿用现有决定卡，不另造一套布局");
+  assert.match(taskCard, /需求已确认，进入需求分析/);
+  assert.match(taskCard,
+    /requirementAnalysisConfirmation[^]*attachmentCount === 0[^]*requirement_revision\?\.state !== "running"/,
+    "Agent 修改中或检视意见未闭环时不能放行");
+  assert.match(workspace,
+    /requirementAnalysisConfirmation \? undefined : draftIds/,
+    "确认按钮不应再次夹带批注，批注要先独立交给文档 Agent 闭环");
+  assert.doesNotMatch(workspace, /编辑需求原文|保存修改/,
+    "人工只提检视意见，不与 Agent 同时编辑需求正本");
+});

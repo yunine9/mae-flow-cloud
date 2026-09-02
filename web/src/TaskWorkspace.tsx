@@ -782,11 +782,15 @@ export function TaskWorkspace({
 
   const drafts = notes.filter((item) => item.status === "draft");
   const myDrafts = drafts.filter((item) => item.author === viewerUsername);
+  const requirementAnalysisConfirmation = task.status === "waiting_for_human"
+    && task.waiting?.step === "cloud_requirement_analysis_confirm";
   // 决定卡只展示会阻塞团队流转的事实：已送达意见，以及责任人自己的
-  // 未送达草稿。旁观者草稿仍可在批注页管理，但不能暗中进入 Agent。
+  // 未送达草稿。需求确认是多人共同检视，已经留下的任何草稿都必须先
+  // 处理，不能被主责任人的确认按钮越过。
   const unresolvedNotes = notes.filter((item) =>
     item.status === "sent" || (item.status === "draft"
-      && (!task.luban_account || item.author === task.luban_account)));
+      && (requirementAnalysisConfirmation
+        || !task.luban_account || item.author === task.luban_account)));
   // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
   // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
@@ -866,6 +870,7 @@ export function TaskWorkspace({
       setDocumentsDownloading(false);
     }
   }
+
   // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
   // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
   // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
@@ -1017,6 +1022,8 @@ export function TaskWorkspace({
           taskStatus={task.status}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
+          requirementReview={requirementAnalysisConfirmation}
+          requirementRevisionRunning={task.requirement_revision?.state === "running"}
           mergeRequestOpen={Boolean(task.delivery?.mr_url)
             && !["completed", "canceled"].includes(task.status)
             && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
@@ -1565,7 +1572,7 @@ export function TaskWorkspace({
             <WaitingCard
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-              annotationIds={draftIds}
+              annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
               repositoryAssigneeSelection={chainReview
                 ? repositoryAssignees : undefined}
@@ -1593,7 +1600,7 @@ export function TaskWorkspace({
               activeDeliveryScope={task.waiting?.recommended_view === "diff"
                 && workspaceView === "materials" && materialView === "diff"
                 ? diffScope : undefined}
-              attachment={
+              attachment={requirementAnalysisConfirmation ? undefined :
                 <>
                   {chainReview && (
                     <>

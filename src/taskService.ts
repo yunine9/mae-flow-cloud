@@ -713,6 +713,21 @@ export interface TaskSummary {
    * 从需求首行生成,不要求迁移现场文件。 */
   title?: string;
   requirement: string;
+  /** 新下单是否必须经人工确认才进入需求分析。旧任务缺席时不补卡，
+   * 避免升级后把已在途任务突然挂起。 */
+  requirement_analysis_confirmation_required?: boolean;
+  /** 人工明确点击“进入需求分析”的时刻；从这一刻起需求正本锁定。 */
+  requirement_analysis_confirmed_at?: string;
+  /** 需求确认阶段由 Agent 串行落实检视意见。人始终只读文档，因此
+   * 不需要编辑锁/版本合并；running 时整体确认按钮必须禁用。 */
+  requirement_revision?: {
+    id: string;
+    state: "running" | "failed";
+    annotation_ids: string[];
+    started_at: string;
+    finished_at?: string;
+    error?: string;
+  };
   /** 用户上传或因过长而转为按段读取的 Markdown 原文。requirement 仍
    * 完整保留用于界面查看；这个字段决定 Agent 是否直接内联全文。 */
   requirement_document?: RequirementDocumentMeta;
@@ -1704,6 +1719,13 @@ function decisionRequestDigest(
 const CLOUD_PUSH_CONFIRM_STEP = "cloud_push_confirm";
 const PUSH_CONFIRM_ACCEPT = "确认按清单推送";
 const PUSH_CONFIRM_REWORK = "需要调整代码（按清单返工）";
+/** 新下单进入需求分析前的显式人工边界。它是 Cloud 入口闸门，不属于
+ * 内核步骤：确认前只由文档 Agent 按意见改正本，不启动正式执行会话；
+ * 确认后才入队。 */
+const CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP =
+  "cloud_requirement_analysis_confirm";
+const REQUIREMENT_ANALYSIS_ACCEPT =
+  "需求已确认，进入需求分析";
 
 function deliverySelectionNote(
   paths: string[],
@@ -2833,6 +2855,145 @@ export class TaskService {
       : undefined;
   }
 
+  /** 任务始终只有一份当前需求文档。需求确认阶段只允许专用 Agent
+   * 根据已提交批注更新，避免人与 Agent 双写。 */
+  private applyRequirementContent(
+    task: TaskState,
+    content: string,
+  ): boolean {
+    if (!content.trim()) throw new TaskControlError("需求原文不能为空");
+    if (content === task.summary.requirement) return false;
+    const previous = task.summary.requirement_document;
+    const maxBytes = Buffer.byteLength(task.summary.requirement, "utf-8")
+        > MAX_REQUIREMENT_DOCUMENT_BYTES
+      ? MAX_REQUIREMENT_DOCUMENT_BYTES * 2
+      : MAX_REQUIREMENT_DOCUMENT_BYTES;
+    let next: RequirementDocumentMeta | undefined;
+    try {
+      next = requirementDocumentMeta(content, previous?.name, maxBytes);
+    } catch (error) {
+      throw new TaskControlError(String(
+        error instanceof Error ? error.message : error));
+    }
+    if (next && previous) {
+      next = {
+        ...next,
+        ...(previous.bundle_name ? { bundle_name: previous.bundle_name } : {}),
+        ...(previous.assets?.length ? { assets: previous.assets } : {}),
+      };
+    }
+    task.summary.requirement = content;
+    task.summary.requirement_document = next;
+    storeRequirementDocument(task.summary.workspace, content, next);
+    return true;
+  }
+
+  /** 需求确认阶段只有 Agent 写文档，人只通过批注表达修改意见。单发
+   * 无工具模型调用返回完整新正文；没有第二份草稿、没有人工/Agent
+   * 合并，也不会提前启动内核需求分析。 */
+  private async reviseRequirementFromAnnotations(
+    task: TaskState,
+    annotations: Annotation[],
+  ): Promise<void> {
+    if (task.summary.requirement_revision?.state === "running") {
+      throw new TaskControlError("Agent 正在修改需求文档，请完成后再提交新意见");
+    }
+    if (!annotations.length || annotations.some((item) =>
+      item.artifact !== TASK_REQUIREMENT_ARTIFACT)) {
+      throw new TaskControlError("需求确认阶段只能提交需求文档上的检视意见");
+    }
+    const waiting = task.summary.waiting;
+    if (task.summary.status !== "waiting_for_human"
+        || waiting?.step !== CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+      throw new TaskControlError("当前已经不在需求确认阶段");
+    }
+    const model = task.summary.model_choice ?? this.activeModelChoice();
+    if (!model) throw new TaskControlError("模型网关未配置，Agent 暂时无法修改需求文档");
+    const revisionId = randomUUID();
+    task.summary.requirement_revision = {
+      id: revisionId,
+      state: "running",
+      annotation_ids: annotations.map((item) => item.id),
+      started_at: new Date().toISOString(),
+    };
+    task.summary.detail = `Agent 正在落实 ${annotations.length} 条需求检视意见`;
+    this.persist(task);
+    try {
+      const raw = await draftWithModel({
+        modelsJson: this.activeModelsJson(),
+        provider: model.provider,
+        model: model.model,
+        timeoutMs: 120_000,
+        system: [
+          "你是需求文档编辑 Agent。你只负责把人工检视意见准确落实到当前需求文档。",
+          "保持没有被意见要求改变的内容、结构与语气；不要开始技术分析、Story 或实现设计。",
+          "意见明确时直接修改；不同意或确实存在歧义时，保留相关原文，不要猜测。",
+          "只输出以下格式，不要代码围栏、解释或其他文字：",
+          "===REQUIREMENT===",
+          "<修改后的完整需求文档>",
+          "===END_REQUIREMENT===",
+        ].join("\n"),
+        user: [
+          "## 当前需求文档",
+          task.summary.requirement,
+          "",
+          "## 本轮人工检视意见",
+          renderAnnotations(annotations, this.ticketOf(task)),
+        ].join("\n"),
+      });
+      const matched = raw.match(
+        /^\s*===REQUIREMENT===\s*\n([\s\S]*?)\n===END_REQUIREMENT===\s*$/,
+      );
+      if (!matched?.[1]?.trim()) {
+        throw new TaskControlError(
+          "Agent 返回的需求文档格式不完整，本轮没有覆盖当前文档");
+      }
+      const current = task.summary.requirement_revision;
+      if (current?.id !== revisionId
+          || task.summary.status !== "waiting_for_human"
+          || task.summary.waiting?.waiting_id !== waiting.waiting_id) {
+        throw new StateConflictError("Agent 修改完成前任务状态已经变化，本轮结果未写入");
+      }
+      this.applyRequirementContent(task, matched[1].trim());
+      // 先把新正文落袋，再把意见标成已送达。即使进程在两者之间中断，
+      // 恢复后也只会要求重提，不会拿半份文档冒充已经闭环。
+      this.persist(task);
+      this.annotations(task).markSent(
+        annotations.map((item) => item.id), "interrupt");
+      task.summary.requirement_revision = undefined;
+      task.summary.detail = "Agent 已修改需求文档，等待检视意见闭环后确认进入分析";
+      this.persist(task);
+    } catch (error) {
+      const current = task.summary.requirement_revision;
+      if (current?.id === revisionId
+          && task.summary.status === "waiting_for_human") {
+        const message = String(error instanceof Error ? error.message : error)
+          .slice(0, 500);
+        task.summary.requirement_revision = {
+          ...current,
+          state: "failed",
+          finished_at: new Date().toISOString(),
+          error: message,
+        };
+        task.summary.detail = `Agent 修改需求文档失败：${message}`;
+        this.persist(task);
+      }
+      throw error;
+    }
+  }
+
+  /** 需求分析开始后原文是输入基线；圈在原文上的意见仍然送给 Agent，
+   * 但落实位置是当前分析产物/方案/实现，不再反向覆盖输入。 */
+  private requirementAnnotationInstructions(
+    task: TaskState,
+    annotations: Annotation[],
+  ): string | undefined {
+    if (!annotations.some((item) =>
+      item.artifact === TASK_REQUIREMENT_ARTIFACT)) return undefined;
+    return "需求文档已经确认并锁定。不要修改需求文档；请把这条检视意见"
+      + "落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。";
+  }
+
   historyMutationInProgress(id: string): boolean {
     return this.historyMutationActive.has(id);
   }
@@ -3311,7 +3472,9 @@ export class TaskService {
             contractStep,
           );
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
-      this.isRequirementAnalysis(task)
+      summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+        ? "source"
+      : this.isRequirementAnalysis(task)
       ? "chain"
       // 云端原生步骤的检视面由云端自己钉死,不搭内核映射的兜底便车。
       : summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
@@ -3407,6 +3570,51 @@ export class TaskService {
     return ((task.summary.repositories?.length ?? 0) > 1
         || task.summary.requirement_analysis_requested === true)
       && !task.summary.parent_task_id;
+  }
+
+  /** 新下单先停在工作台的需求原文检视：人只提批注，专用 Agent
+   * 修改当前正本；只有主责任人明确确认才启动正式需求分析。 */
+  private openRequirementAnalysisConfirmation(task: TaskState): WaitingRecord {
+    const waiting = task.humanGate.createWaiting({
+      taskId: task.summary.id,
+      step: CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP,
+      callId: `requirement-analysis-${randomUUID()}`,
+      questionInput: { questions: [{
+        question: "需求原文是否已经确认？",
+        options: [REQUIREMENT_ANALYSIS_ACCEPT],
+      }] },
+      context: "请在左侧需求原文上圈选内容并填写检视意见，提交后由 Agent 修改。所有意见闭环后，确认当前文档并启动需求分析。",
+    });
+    task.summary.waiting = waiting;
+    task.summary.status = "waiting_for_human";
+    task.summary.detail = "正在工作台检视需求文档，确认后进入需求分析";
+    return waiting;
+  }
+
+  private requirementAnalysisEntryAccepted(waiting: WaitingRecord): boolean {
+    return [...Object.values(waiting.answers ?? {}), waiting.decision]
+      .some((answer) => answer === REQUIREMENT_ANALYSIS_ACCEPT);
+  }
+
+  private finishRequirementAnalysisEntryDecision(
+    task: TaskState,
+    waiting: WaitingRecord,
+  ): void {
+    if (this.requirementAnalysisEntryAccepted(waiting)) {
+      task.summary.requirement_analysis_confirmed_at = waiting.resolved_at
+        || new Date().toISOString();
+      task.summary.requirement_revision = undefined;
+      task.summary.waiting = undefined;
+      task.summary.status = "queued";
+      task.summary.detail = "已确认进入需求分析，需求文档已锁定，等待启动";
+      this.persist(task);
+      if (!this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
+      this.bypass(undefined, "任务泵", this.pump());
+      return;
+    }
+    this.openRequirementAnalysisConfirmation(task);
+    this.persist(task);
+    this.notifyWaiting(task);
   }
 
   private taskProgress(task: TaskState): TaskProgress | undefined {
@@ -4289,7 +4497,16 @@ export class TaskService {
         : "任务已由用户停止，不能再提交批注");
     }
     const picked = this.pickDrafts(task, ids, actor);
-    const text = renderAnnotations(picked, this.ticketOf(task));
+    const text = [
+      renderAnnotations(picked, this.ticketOf(task)),
+      this.requirementAnnotationInstructions(task, picked),
+    ].filter(Boolean).join("\n\n");
+    if (task.summary.status === "waiting_for_human"
+        && task.summary.waiting?.step
+          === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+      await this.reviseRequirementFromAnnotations(task, picked);
+      return { sent: picked.map((item) => item.id), text };
+    }
     const gap = task.summary.delivery?.evidence_gap;
     // 有证据缺口时不能把任何批注都武断地解释成“流水线日志”。用户也
     // 可能正在代码 diff 上提功能意见；那一类必须走 MR 检视修复，不能
@@ -5327,6 +5544,9 @@ export class TaskService {
       /** 单仓大需求显式要求先走分析拆分(设计:docs/
        * delivery-unit-split-design.md)。多仓下单天然走分析,无需设置。 */
       requirementAnalysis?: boolean;
+      /** 普通新下单进入工作台后先检视需求原文；人工确认后才正式
+       * 进入需求分析。重跑和跨仓拆出的内部任务不重复举卡。 */
+      requirementAnalysisConfirmation?: boolean;
       /** Chain 确认后生成的仓库交付任务使用；不暴露给普通 API。 */
       parentTaskId?: string;
       blockedBy?: string[];
@@ -5915,6 +6135,10 @@ export class TaskService {
       parent_task_id: options.parentTaskId,
       ...(options.requirementAnalysis === true && !options.parentTaskId
         ? { requirement_analysis_requested: true } : {}),
+      ...(options.requirementAnalysisConfirmation === true
+          && !options.parentTaskId && !options.internalRequirement
+          && !options.reuseTaskId
+        ? { requirement_analysis_confirmation_required: true } : {}),
       blocked_by: options.blockedBy?.length ? [...options.blockedBy] : undefined,
       ...(options.deliveryScope?.paths.length
         ? { delivery_scope: {
@@ -6063,6 +6287,9 @@ export class TaskService {
       controlEpoch: 0,
     };
     this.tasks.set(id, task);
+    if (summary.requirement_analysis_confirmation_required) {
+      this.openRequirementAnalysisConfirmation(task);
+    }
     try {
       this.persist(task);
       this.recordTaskCreationAudit(task, creationAudit);
@@ -6075,7 +6302,9 @@ export class TaskService {
       removeTaskTree(workspace);
       throw error;
     }
-    if (!options.deferQueue) {
+    if (summary.requirement_analysis_confirmation_required) {
+      this.notifyWaiting(task);
+    } else if (!options.deferQueue) {
       this.queue.push(id);
       this.bypass(undefined, "任务泵", this.pump());
     }
@@ -6378,6 +6607,24 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        if (summary.requirement_revision?.state === "running") {
+          const interruptedIds = new Set(
+            summary.requirement_revision.annotation_ids ?? []);
+          const store = this.annotations(task);
+          for (const item of store.list()) {
+            if (interruptedIds.has(item.id) && item.status === "sent") {
+              store.reopen(item.id, item.author);
+            }
+          }
+          summary.requirement_revision = {
+            ...summary.requirement_revision,
+            state: "failed",
+            finished_at: new Date().toISOString(),
+            error: "服务重启中断了本轮修改，请重新提交这些检视意见",
+          };
+          summary.detail = "需求文档修改被服务重启中断，请重新提交检视意见";
+          this.persist(task);
+        }
         // 先迁移内核事实，再让任何恢复队列/对账逻辑观察它。这样旧的
         // await_merge end 不会被当伪终态重跑，真实事故留下的 config
         // 重开现场也不会先启动第二只 Agent。completed/canceled 原样跳过。
@@ -8571,6 +8818,10 @@ export class TaskService {
     // markSent 的窗口。恢复动作首先对账，不能只让 Agent 收到正文却在
     // 页面继续显示“待提交”。失败会由 helper 记日志并保持流程可继续。
     this.markResolvedDecisionAnnotations(task, waiting);
+    if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+      this.finishRequirementAnalysisEntryDecision(task, waiting);
+      return;
+    }
     if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) {
       try {
         const selection = await this.resolvedPushSelection(task, waiting);
@@ -8708,6 +8959,43 @@ export class TaskService {
     }
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
+    if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+      if (input.actor && task.summary.luban_account
+          && input.actor !== task.summary.luban_account) {
+        throw new TaskControlError(
+          `只有主责任人 ${task.summary.luban_account} 可以确认进入需求分析`);
+      }
+      if (task.summary.requirement_revision?.state === "running") {
+        throw new TaskControlError("Agent 正在修改需求文档，请完成后再确认");
+      }
+      // 普通交付不让路人草稿暗中锁单；需求确认则是已建立的多人共同
+      // 检视现场，任何可见草稿或已提交意见都不能被责任人越过。
+      const unresolved = this.annotations(task).visible().filter((item) =>
+        item.status === "draft" || item.status === "sent");
+      if (unresolved.length) {
+        const drafts = unresolved.filter((item) => item.status === "draft").length;
+        const submitted = unresolved.length - drafts;
+        throw new TaskControlError([
+          drafts ? `${drafts} 条意见尚未提交给 Agent` : "",
+          submitted ? `${submitted} 条意见仍待提出人确认` : "",
+          "请先完成检视闭环，再进入需求分析",
+        ].filter(Boolean).join("；"));
+      }
+      const submitted = [...Object.values(answers), decision];
+      if (!submitted.includes(REQUIREMENT_ANALYSIS_ACCEPT)) {
+        throw new TaskControlError("请使用“需求已确认，进入需求分析”按钮确认");
+      }
+      const resolved = task.humanGate.resolve(waiting.waiting_id, {
+        stateVersion: input.state_version,
+        decision,
+        answers: Object.keys(answers).length ? answers : undefined,
+        notes: normalized.notes,
+        requestDigest,
+        decidedBy: input.actor,
+      });
+      this.finishRequirementAnalysisEntryDecision(task, resolved);
+      return { ...task.summary };
+    }
     // 多仓确认的顺序纪律:图的体检放在决定落袋**之前**(图不完整就报
     // 错,决定不消费,agent 继续等,用户看得到原因);建任务放在落袋
     // **之后**(乐观锁 409 时不许先把子任务生出来)。字符串匹配只是
@@ -8856,6 +9144,8 @@ export class TaskService {
         : undefined,
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
+      picked.length
+        ? this.requirementAnnotationInstructions(task, picked) : undefined,
       // 等待期间 @ 引用的知识随本次决定送达(版本在引用时已固定)。
       ...(task.pendingDecisionKnowledge ?? []),
     ].filter(Boolean).join("\n\n") || undefined;
@@ -15931,7 +16221,10 @@ export class TaskService {
     if (!waiting || questions.length === 0) return undefined;
     // push 前确认卡是用户**显式开启**的"我要亲自看一眼",月光免审批
     // 不得代答它——两者都是用户意志,更具体的那个赢。
-    if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) return undefined;
+    if (waiting.step === CLOUD_PUSH_CONFIRM_STEP
+        || waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+      return undefined;
+    }
     // 分析单已确认拆单完毕,父会话再举的任何卡都不该到人(内网实锤:
     // task-5 确认后模型"好心"又举卡让人检视 task-6 的事——子任务有
     // 自己的检视闸,父单的活到确认就结束了)。整卡代答,催它收尾。

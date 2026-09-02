@@ -192,6 +192,8 @@ export function AnnotationPanel({
   taskStatus,
   reviewReady = false,
   reviewAnnotationIds = [],
+  requirementReview = false,
+  requirementRevisionRunning = false,
   mergeRequestOpen,
   evidenceAwaiting = false,
   onChanged,
@@ -213,6 +215,10 @@ export function AnnotationPanel({
   reviewReady?: boolean;
   /** 当前工作区复检仍待闭环的意见 ID；缺席时管理员旁路按关闭处理。 */
   reviewAnnotationIds?: readonly string[];
+  /** 需求确认卡中的批注会立即驱动 Agent 修改当前需求正本。 */
+  requirementReview?: boolean;
+  /** Agent 正在修改需求时禁止重复提交同一批草稿。 */
+  requirementRevisionRunning?: boolean;
   /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
   mergeRequestOpen: boolean;
   /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
@@ -283,7 +289,8 @@ export function AnnotationPanel({
   // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
   // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
   const queueable = taskStatus === "waiting_for_human";
-  const canSend = running || evidenceAwaiting || reviewSendable || queueable;
+  const canSend = !requirementRevisionRunning
+    && (running || evidenceAwaiting || reviewSendable || queueable);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
 
@@ -421,6 +428,7 @@ export function AnnotationPanel({
             {busy ? "提交中…" : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+                : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
                 : queueable ? `提交 ${drafts.length} 条（随决定送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
@@ -428,7 +436,9 @@ export function AnnotationPanel({
             <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
           )}
           {queueable && !reviewSendable && (
-            <p>任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。</p>
+            <p>{requirementReview
+              ? "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
+              : "任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。"}</p>
           )}
         </div>
       )}
@@ -454,7 +464,9 @@ export function AnnotationPanel({
       {canOperate && drafts.length > 0 && !canSend
         && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
-          {taskStatus === "paused" || taskStatus === "pausing"
+          {requirementRevisionRunning
+            ? "Agent 正在根据上一批检视意见修改需求文档；完成后即可继续提交。"
+            : taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
               : mergeRequestOpen === false && taskStatus === "await_merge"
                     ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"

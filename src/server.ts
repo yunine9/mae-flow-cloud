@@ -2108,6 +2108,8 @@ export function createTaskServer(
               knowledgePreviewDigest,
               // 单仓大需求显式要求先分析拆分(交付单元拆分入口)。
               requirementAnalysis: body.requirement_analysis === true,
+              // 下单后先在工作台检视需求原文；主责任人确认才入队。
+              requirementAnalysisConfirmation: true,
             }));
         } catch (error) {
           return json(response, 400, { error: humanError(error) });

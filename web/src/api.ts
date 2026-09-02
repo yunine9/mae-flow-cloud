@@ -856,6 +856,16 @@ export interface TaskSummary {
   id: string;
   title?: string;
   requirement: string;
+  requirement_analysis_confirmation_required?: boolean;
+  requirement_analysis_confirmed_at?: string;
+  requirement_revision?: {
+    id: string;
+    state: "running" | "failed";
+    annotation_ids: string[];
+    started_at: string;
+    finished_at?: string;
+    error?: string;
+  };
   requirement_document?: {
     name: string;
     bytes: number;

@@ -751,6 +751,16 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
       method: "POST", body: JSON.stringify({ requirement: "给手机号打码" }),
     }).then((response) => readJson(response));
     const id: string = created.id;
+    const confirmation = service.get(id)!.waiting!;
+    const confirmationQuestion = (confirmation.question.questions as
+      Array<{ question: string }>)[0].question;
+    await service.decide(id, {
+      waiting_id: confirmation.waiting_id,
+      state_version: confirmation.state_version,
+      selected_options: {
+        [confirmationQuestion]: "需求已确认，进入需求分析",
+      },
+    });
     await until(() => model.requests.length >= 1, "模型开跑");
 
     const made = await fetch(`${base}/tasks/${id}/annotations`, {
