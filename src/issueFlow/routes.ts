@@ -54,6 +54,14 @@ import {
   toHttpError,
 } from "./errors.ts";
 import {
+  BusinessModuleError,
+} from "../businessModuleLibrary.ts";
+import {
+  DtsModuleBindingError,
+  readDtsModuleBindings,
+  setDtsModuleBinding,
+} from "../dtsModuleBindings.ts";
+import {
   extractLog,
   listMaterials,
   readSessionWorkspaceFile,
@@ -330,7 +338,10 @@ export async function handleIssueRoutes(
           ? { repoUrls: body.repo_urls.map(String) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
-        ...(body.module_id ? { moduleId: String(body.module_id) } : {}),
+        // 人工显式选的模块(DTS 预绑/登记页)带锁;服务端 matchDtsToModule
+        // 的自动匹配是机器猜测,不带锁(其命中只在人工未选时生效)。
+        ...(body.module_id
+          ? { moduleId: String(body.module_id), moduleLocked: true } : {}),
         ...(autoModuleId ? { moduleId: autoModuleId } : {}),
         ...(body.environment ? {
           environment: {
@@ -370,6 +381,44 @@ export async function handleIssueRoutes(
       if (!ticket) return done(400, { error: "缺少问题单号" });
       const detail = await requireDts(routeOptions.dts).detail(ticket);
       return done(200, detail);
+    }
+
+    // 单号→模块人工预绑(spec #57):团队共享事实,登录即可读写——
+    // 管理员也在内(维护数据不算"处理问题单",与上方按人拉单的 403
+    // 边界不同)。
+    if (method === "GET" && parts[1] === "dts-bindings"
+        && parts.length === 2) {
+      return done(200, {
+        bindings: readDtsModuleBindings(issueFlow.dataDir),
+      });
+    }
+    if (method === "PUT" && parts[1] === "dts-bindings"
+        && parts.length === 3) {
+      const ticket = decodeURIComponent(parts[2]);
+      const body = await readBody(request);
+      // 空串/缺席 = 解绑(幂等);有值 = 绑定(校验模块存在且 active)。
+      const moduleId = body.module_id === undefined
+        || body.module_id === null
+        || String(body.module_id).trim() === ""
+        ? null : String(body.module_id).trim();
+      try {
+        const { previous } = setDtsModuleBinding(
+          issueFlow.dataDir, ticket, moduleId,
+          String(viewer?.username ?? ""));
+        return done(200, {
+          ticket,
+          ...(moduleId ? { module_id: moduleId } : { cleared: true }),
+          ...(previous ? { previous } : {}),
+        });
+      } catch (error) {
+        // 绑定的域校验(单号格式/模块不存在或已归档)是人话打回;
+        // 其余照旧走尾部单点映射。
+        if (error instanceof DtsModuleBindingError
+            || error instanceof BusinessModuleError) {
+          return done(409, { error: error.message });
+        }
+        throw error;
+      }
     }
 
     // DTS 文件代理(GET /issues/dts-file?path=/v1/nfs/...):描述内嵌
@@ -634,12 +683,18 @@ export async function handleIssueRoutes(
         ? Object.fromEntries(Object.entries(body.answers)
           .map(([key, value]) => [key, String(value)]))
         : undefined;
+      // skill 圈选闸(ADR-0011)的勾选清单:字符串数组,服务端按闸上
+      // 清单核子集——浏览器自报路径在裁决层被拒。
+      const selection = Array.isArray(body.selection)
+        ? body.selection.map((item: unknown) => String(item))
+        : undefined;
       return done(200, issueFlow.answer(id, {
         state_version: Number(body.state_version),
         decision: String(body.decision ?? ""),
         // 决策码(平台闸的裁决协议):与 decision 并行携带,文案不是匹配键。
         ...(body.code !== undefined ? { code: String(body.code) } : {}),
         ...(answers ? { answers } : {}),
+        ...(selection ? { selection } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
       }));
     }

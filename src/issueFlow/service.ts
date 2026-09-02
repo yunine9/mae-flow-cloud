@@ -61,7 +61,9 @@ import {
   type IssueConclusionKind,
   type IssueEnvironmentConfig,
   type IssueFlowMode,
+  type IssueGate,
   type IssueScenario,
+  type IssueSkillChoice,
   type IssueSource,
   type IssueStage,
   type IssueStatus,
@@ -120,6 +122,7 @@ import {
   fixedStageLabel,
   gateOptionLabel,
   gateVerdict,
+  stageEntryGate,
   stageGateRoute,
 } from "./stageRegistry.ts";
 import {
@@ -344,6 +347,10 @@ export interface IssueCreateInput {
   module?: string;
   /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。 */
   moduleId?: string;
+  /** 人工预绑锁(spec #57):路由层只在模块 id 来自人的显式选择时
+   * 置真(DTS 预绑/登记页手工选;服务端 matchDtsToModule 自动匹配
+   * 不算,那仍是机器猜测,不锁)。 */
+  moduleLocked?: boolean;
   /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
   mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
@@ -450,6 +457,20 @@ const NUDGE_BUDGET = 2;
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
 const RESTART_RESUME_NOTICE =
   "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
+
+/** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
+ * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
+ * 描述只是展示,真相始终在文件本体,Agent 圈选后要读的也是本体。 */
+function skillDescription(path: string): string {
+  try {
+    const head = readFileSync(path, "utf-8").split("---", 3);
+    if (head.length < 3 || head[0].trim() !== "") return "";
+    const match = head[1].match(/^description:\s*(.+)$/m);
+    return match?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export class IssueFlowService {
   private readonly options: IssueFlowOptions;
@@ -804,6 +825,7 @@ export class IssueFlowService {
       ...(input.baseline?.trim() ? { baseline: input.baseline.trim() } : {}),
       ...(moduleName ? { module: moduleName } : {}),
       ...(moduleId ? { module_id: moduleId } : {}),
+      ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       // 模式一律烙印落盘(free 也记):审计要看"当时是什么模式",
       // 旧现场缺字段读作自由(兼容),不等于新会话不记。
@@ -1257,6 +1279,74 @@ export class IssueFlowService {
       + `/issues/${encodeURIComponent(issueId)}`;
   }
 
+  /** skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时由
+   * 工具层调用。现读现判五条件:固定流程 + 注册表声明本阶段有入口闸
+   * + 月光关 + 台账未圈选过 + 盘上无其他闸;再扫描已拉仓的
+   * `.cac/skills/`,非空才真举。扫描为空留一行转移账(现场可查),
+   * 不举卡——浪费用户一次点击的卡不是好卡。返回是否举了(工具回执
+   * 据此叫 Agent 停回合)。 */
+  private raiseSkillSelectionGate(live: LiveIssue): boolean {
+    const { state } = live;
+    if (state.mode !== "fixed" || !state.scenario) return false;
+    if (stageEntryGate(state.stage as FixedStage) !== "skill_select") {
+      return false;
+    }
+    if (this.moonlightOn(live)) return false;
+    if (state.skill_selection) return false;
+    if (state.gate) return false;
+    const skills = this.scanBusinessSkills(live);
+    if (!skills.length) {
+      recordTransition(state, {
+        source: "platform",
+        note: "进入问题分析:已拉仓内未发现业务 skill(.cac/skills),"
+          + "AI 按取用次序自主定位",
+      });
+      return false;
+    }
+    raiseGate(
+      state,
+      "skill_select",
+      "进入问题分析:勾选要 AI 必读的仓内排障知识(可多选)",
+      undefined,
+      "以下是从已拉取的仓里扫描到的业务 skill(.cac/skills)。勾选的会"
+        + "成为 AI 的必读材料;一个都不选则 AI 按方法论取用次序自主决定。",
+      undefined,
+      skills,
+    );
+    this.log(`[issue-flow] ${live.id} 举 skill 圈选闸:`
+      + ` ${skills.map((skill) => skill.name).join("、")}`);
+    return true;
+  }
+
+  /** 扫描已拉仓工作区里的业务 skill(ADR-0011):repo/<仓名>/.cac/
+   * skills/<名>/SKILL.md 标准一层目录。本地文件系统扫描,零新增网络
+   * 路径——仓已落地,这就是 Agent 视角的同一份事实(需求侧走网络
+   * 发现是因为下单时仓还没 clone,威胁模型不同)。 */
+  private scanBusinessSkills(live: LiveIssue): IssueSkillChoice[] {
+    const choices: IssueSkillChoice[] = [];
+    for (const repo of issueRepoWorkspaces(live.state, live.root)) {
+      const skillsRoot = join(repo.dir, ".cac", "skills");
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = readdirSync(skillsRoot, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillFile = join(skillsRoot, entry.name, "SKILL.md");
+        if (!existsSync(skillFile)) continue;
+        choices.push({
+          path: relative(live.root, skillFile).split("\\").join("/"),
+          repo: repo.url,
+          name: entry.name,
+          description: skillDescription(skillFile),
+        });
+      }
+    }
+    return choices;
+  }
+
   /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
    * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
    * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
@@ -1273,6 +1363,10 @@ export class IssueFlowService {
     // 流 push 前确认同一裁定。守卫放在月光判定之前:这条路径连"读
     // 设置"都不必,过目卡在任何介入档位都只等真人。
     if (gate.kind === "push_confirm") return;
+    // skill_select 永不代答(ADR-0011):多选圈选卡只在月光关时举起,
+    // 推荐项代答只认单选选项题(ADR-0006 整卡纪律)——这里显式守卫,
+    // 防月光中途打开时把已挂起的圈选卡追溯代答掉。
+    if (gate.kind === "skill_select") return;
     if (!this.moonlightOn(live)) return;
     // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
     // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
@@ -1521,6 +1615,11 @@ export class IssueFlowService {
       // 设置即刻生效(与月光同一纪律)。
       pushConfirmation: () =>
         this.options.pushConfirmation?.(live.state.account) === true,
+      // 月光现值(过程轴,现读现判):skill 圈选入口闸的举卡条件之一。
+      moonlight: () => this.moonlightOn(live),
+      // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
+      // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。
+      raiseSkillSelection: () => this.raiseSkillSelectionGate(live),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
@@ -1606,6 +1705,9 @@ export class IssueFlowService {
     code?: string;
     /** Agent 问题卡逐题作答:键=题号,值=决策码或自由作答文本。 */
     answers?: Record<string, string>;
+    /** skill 圈选闸(ADR-0011)的勾选清单:必须是闸上 skills path 的
+     * 子集;缺席/空=「都不用」,AI 按取用次序自主。 */
+    selection?: string[];
     notes?: string;
   }): IssueSummary {
     const live = this.require(id);
@@ -1622,6 +1724,7 @@ export class IssueFlowService {
         // 闸卡恒为单题:code 缺席时兼容逐题通道(同一提交协议)。
         code: input.code?.trim()
           || Object.values(input.answers ?? {}).find((value) => value.trim()),
+        ...(input.selection !== undefined ? { selection: input.selection } : {}),
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
       });
     }
@@ -1689,6 +1792,7 @@ export class IssueFlowService {
     stateVersion: number;
     decision: string;
     code?: string;
+    selection?: string[];
     notes?: string;
   }): IssueSummary {
     const { state } = live;
@@ -1704,6 +1808,11 @@ export class IssueFlowService {
       // 表单),不是选项卡:走错口不动状态,如实指路。
       throw new IssueControlError(
         "网管环境请在问题卡的配置表单里填写服务器地址与网管后台密码后提交");
+    }
+    if (gate.kind === "skill_select") {
+      // skill 圈选闸的作答口是 selection 专用口(ADR-0011,与 env_needed
+      // 表单同款的多选协议),不走单码分派。
+      return this.resolveSkillSelection(live, gate, input);
     }
     const route = stageGateRoute(gate.kind);
     const stageName = (stage: FixedStage): string =>
@@ -1877,6 +1986,80 @@ export class IssueFlowService {
     this.continueTurn(live,
       `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
         + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
+    return summarize(state);
+  }
+
+  /** skill 圈选闸的裁决(ADR-0011):selection 必须是闸上 skills path
+   * 的子集(浏览器自报路径一律拒绝,与需求侧仓内能力发现同一纪律);
+   * 空选=「都不用」,AI 按取用次序自主。选定集合写台账(skill_selection
+   * 字段在场=已作答,重走 analyze 不重举的判据),续跑消息带必读清单
+   * 与 analyze 阶段简报。留痕与真人作答同形:human_decision 事件带
+   * 问句快照与勾选结果,转移账记人话。 */
+  private resolveSkillSelection(
+    live: LiveIssue,
+    gate: IssueGate,
+    input: { decision: string; code?: string; selection?: string[]; notes?: string },
+  ): IssueSummary {
+    const { state } = live;
+    const offered = new Map((gate.skills ?? []).map((skill) =>
+      [skill.path, skill]));
+    const selection = [...new Set((input.selection ?? [])
+      .map((path) => String(path).trim()).filter(Boolean))];
+    const unknown = selection.filter((path) => !offered.has(path));
+    if (unknown.length) {
+      throw new IssueControlError(
+        `勾选了清单之外的 skill 路径:${unknown.join("、")}`
+          + "——只能勾选问题卡上列出的项");
+    }
+    const skills = selection.map((path) => offered.get(path)!);
+    const decision = input.decision?.trim()
+      || (skills.length
+        ? `圈选必读 skill:${skills.map((skill) => skill.name).join("、")}`
+        : gateOptionLabel("skill_select", "skip"));
+    const notes = input.notes?.trim() ?? "";
+    state.skill_selection = { at: new Date().toISOString(), skills };
+    delete state.gate;
+    recordTransition(state, {
+      source: "platform",
+      note: `用户作答(skill_select): ${decision.split("\n")[0]}`
+        + `${notes ? `;补充: ${notes.split("\n")[0]}` : ""}`,
+    });
+    this.appendSessionEvent(live, "human_decision", {
+      waiting_id: gate.id,
+      state_version: gate.state_version,
+      decision,
+      ...(notes ? { notes } : { notes: "" }),
+      gate: {
+        kind: gate.kind,
+        questions: gate.question.questions.map((item) => ({
+          question: item.question,
+          options: item.options.map((option) => option.label),
+        })),
+        ...(gate.skills ? {
+          offered: gate.skills.map((skill) => `${skill.repo} → ${skill.name}`),
+        } : {}),
+      },
+      ...(skills.length ? {
+        selection: skills.map((skill) => skill.path),
+      } : {}),
+    });
+    saveState(live.root, state);
+    const lines = skills.length
+      ? ["用户已圈选以下业务 skill 为**必读**(分析前先读;"
+          + "路径相对会话工作区):",
+        ...skills.map((skill) =>
+          `- ${skill.path}${skill.description ? ` — ${skill.description}` : ""}`),
+        "读完它们再继续问题分析;读完仍可按方法论取用次序补充其他材料。"]
+      : ["用户未圈选任何业务 skill——按方法论取用次序自主定位"
+          + "(业务仓 .cac/skills、货架通用 skill、issue-research、自行取证)。"];
+    this.continueTurn(live, [
+      ...lines,
+      "",
+      fixedAdvanceNotice(state,
+        `用户已完成 skill 圈选,继续「${fixedStageLabel(
+          state.scenario ?? "ticket", state.stage as FixedStage)}」阶段。`
+        + (notes ? `\n用户补充说明: ${notes}` : "")),
+    ].join("\n"));
     return summarize(state);
   }
 
@@ -2458,6 +2641,8 @@ export class IssueFlowService {
       ...(state.baseline ? { baseline: state.baseline } : {}),
       ...(state.module ? { module: state.module } : {}),
       ...(state.module_id ? { module_id: state.module_id } : {}),
+      // 锁随模块走:老会话的模块是人工选的,转正后仍是人工的意志(spec #57)。
+      ...(state.module_locked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       mode: "fixed",
       scenario: "ticket",

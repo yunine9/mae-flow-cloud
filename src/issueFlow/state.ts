@@ -201,11 +201,31 @@ export type IssueGateKind =
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
   | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
-  | "push_confirm";    // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
+  | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
                        // 确认产一次性令牌放行一次推送;不绑阶段(两模式同过)。
+  | "skill_select";    // skill 圈选(ADR-0011):analyze 入口的多选闸,
+                       // 月光关档由归属人圈定业务仓 skill 必读集合;
+                       // 作答走 selection 专用口(与 env_needed 表单同款)。
 
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
+
+/** skill 圈选清单里的一项(ADR-0011):扫描已拉仓 `.cac/skills/` 所得。
+ * path 是会话工作区相对路径(repo/<仓名>/.cac/skills/<名>/SKILL.md),
+ * 天然唯一——多仓同名 skill 靠仓段区分;repo 是仓地址(分组展示用)。 */
+export interface IssueSkillChoice {
+  path: string;
+  repo: string;
+  name: string;
+  description: string;
+}
+
+/** 圈选台账(ADR-0011):字段在场=归属人已作答(skills 空=明确"都不用",
+ * AI 按取用次序自主)。重走 analyze 不重举的判据就是它在不在。 */
+export interface IssueSkillSelection {
+  at: string;
+  skills: IssueSkillChoice[];
+}
 
 export interface IssueGate {
   id: string;
@@ -226,6 +246,10 @@ export interface IssueGate {
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: IssueGateScope;
+  /** 仅 skill_select:扫描所得的圈选清单(动态数据,不是文案——文案
+   * 仍在 GATE_OPTIONS)。作答的 selection 必须是这里 path 的子集,
+   * 浏览器自报路径一律拒绝(与需求侧仓内能力发现同一纪律)。 */
+  skills?: IssueSkillChoice[];
   /** 机器可读提案(结论闸带 AI 的结论与摘要,用户过目后确认)。 */
   proposal?: {
     conclusion?: "issue" | "non_issue";
@@ -295,6 +319,11 @@ export interface IssueSessionState {
    * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。 */
   module_id?: string;
   module?: string;
+  /** 人工预绑锁(spec #57):模块来自人在发起时的显式选择(DTS 列表
+   * 预绑或登记页手工选)即烙印,AI 的 bind_module 对此拒绝改绑——
+   * 模块绑定权在人,AI 发现不符只能 AskUserQuestion。缺省=未锁
+   * (AI 运行时自己绑的可改绑,维持现状)。 */
+  module_locked?: true;
   environment?: IssueEnvironmentConfig;
   /** 探索方式:创建时烙印,会话中途不换。缺省视为 free(兼容旧会话)。 */
   mode?: IssueFlowMode;
@@ -307,6 +336,9 @@ export interface IssueSessionState {
   /** 检视回合进行中(ADR-0007):检视意见已提交、整体回退到分析重跑,
    * 期间不可再叠加检视;submit_analysis 重新举确认卡时清除。 */
   review_active?: boolean;
+  /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合。字段在场
+   * =已作答(skills 空=明确跳过,AI 自主);重走不重举的判据。 */
+  skill_selection?: IssueSkillSelection;
   /** 平台问题卡在场即 waiting_user 由闸门挂起(与 humanGate 并行)。 */
   gate?: IssueGate;
   ut?: IssueUtRecord;
@@ -548,6 +580,7 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   env_verify: "环境验证",
   env_needed: "网管环境配置",
   push_confirm: "推送确认",
+  skill_select: "skill 圈选",
 };
 
 export function raiseGate(
@@ -557,6 +590,9 @@ export function raiseGate(
   proposal?: IssueGate["proposal"],
   context?: string,
   scope?: IssueGateScope,
+  /** 仅 skill_select:扫描所得的圈选清单(动态数据,非文案——选项
+   * 码表照旧出自 GATE_OPTIONS)。其余闸不传,在场即阶段配置错误。 */
+  skills?: IssueSkillChoice[],
 ): void {
   const recommended = gateRecommendedCode(kind, proposal);
   state.gate = {
@@ -573,6 +609,7 @@ export function raiseGate(
     ...(proposal ? { proposal } : {}),
     ...(context ? { context } : {}),
     ...(scope ? { scope } : {}),
+    ...(skills ? { skills } : {}),
     created_at: new Date().toISOString(),
   };
   recordTransition(state, {

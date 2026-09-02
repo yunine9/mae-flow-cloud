@@ -96,6 +96,13 @@ export interface IssueToolContext {
    * 缺席=直推(裸构造兼容缺省,与 moonlight「回调缺席按关闭」同一
    * 纪律;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
   pushConfirmation?: () => boolean;
+  /** 月光现值(个人设置的过程轴,ADR-0006/0011,现读现判):回调
+   * 缺席按关闭。消费方是 skill 圈选入口闸——月光开不举卡。 */
+  moonlight?: () => boolean;
+  /** skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
+   * 调用;service 现读现判(固定流程/月光关/台账未圈选/扫描非空),
+   * 满足才举卡。返回是否真举了(回执据此叫 Agent 停回合)。 */
+  raiseSkillSelection?: () => boolean;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
    * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
@@ -200,6 +207,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
 
   const gateStage = (tool: string): void => {
     if (!fixed || !scenario) return;
+    // skill 圈选入口闸在场(ADR-0011):先等用户圈完必读集合再干活。
+    // 守卫放在所有阶段门禁之前——闸举起后回执已叫 Agent 停回合,它
+    // 若继续调平台工具,这里机械拦下并重申停机位置。
+    if (state.gate?.kind === "skill_select") {
+      fail("skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。"
+        + "请立即结束本回合,用户圈选后平台会带着必读集合开新一轮");
+    }
     if (stageAllowsTool(scenario, state.stage as FixedStage, tool)) return;
     const allowed = stagesAllowingTool(scenario, tool)
       .map((stage) => FIXED_STAGE_LABELS[scenario][stage]);
@@ -745,6 +759,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }),
       async execute(_toolCallId: string, params: any) {
         gateStage("bind_module");
+        // 人工预绑锁(spec #57):模块是人在发起时显式选定的,绑定权
+        // 在人——AI 不得改绑,发现不符只能 AskUserQuestion 报告给人。
+        if (state.module_locked) {
+          fail("该会话的业务模块由人工预绑锁定,不能调用 bind_module 改绑。"
+            + "如你判断模块与单据明显不符,请用 AskUserQuestion 告知用户,"
+            + "由人在 DTS 列表改绑或提供代码仓地址;当前直接对已登记仓"
+            + "逐个 pull_repo 即可");
+        }
         const moduleId = String(params.module_id ?? "").trim();
         if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
         let module;
@@ -1062,9 +1084,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           : state.stage === "fix" ? `问题修改完成:${firstLine}`
           : `UT 验证完成:${firstLine}`;
         fixedAdvance(ctx.state, to, note);
+        // analyze 入口闸(ADR-0011):推进进问题分析时由 service 现读
+        // 现判(月光关/未圈选过/扫描非空)决定举不举 skill 圈选卡。
+        const skillGateRaised = to === "analyze"
+          ? (ctx.raiseSkillSelection?.() ?? false)
+          : false;
         ctx.persist();
         return ok(`已收口,平台推进到下一阶段——\n`
-          + stageBriefLines(scenario, to).join("\n"));
+          + stageBriefLines(scenario, to).join("\n")
+          + (skillGateRaised
+            ? "\n\n平台已举「skill 圈选」卡:用户圈选必读的仓内排障知识"
+              + "后才会开下一轮。请立即结束本回合等待,不要继续调工具。"
+            : ""));
       },
     }));
 

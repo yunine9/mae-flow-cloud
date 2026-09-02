@@ -3271,6 +3271,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-decision-env .issue-decision-note[role="alert"] { color: #a8541f; }
 .issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
 
+/* skill_select 圈选卡(ADR-0011):多选清单复用 option 卡样式;
+   「都不用」是次要出路,压灰不与主确认抢视觉。 */
+.issue-decision-submit > button.skill-skip {
+  background: var(--surface-soft);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
 /* AI 推荐标注(ADR-0004:只标注不预选):琥珀描边+徽标与卡头的
    decision-kicker/计数 pill 同色系;:not(.picked) 让已选态(accent 蓝)
    永远压过推荐描边——用户拍板后卡片只呈现"已选",两色不打架。徽标
@@ -11347,3 +11355,40 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .confirm-dialog footer button.danger:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
 @keyframes confirmFade { from { opacity: 0; } }
 @keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
+
+/* ---- DTS 列表「所属模块」人工预绑列(spec #57):行右侧一列下拉,
+   选即存;可用工具栏开关整体隐藏。 ---- */
+.issue-dts-module-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); font-size: 12px; cursor: pointer; user-select: none;
+}
+.issue-dts-row:has(> .issue-dts-module-cell) {
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
+}
+.issue-dts-module-cell {
+  grid-column: 2; grid-row: 1;
+  display: grid; gap: 3px; align-content: center;
+  padding: 8px 12px 8px 0; min-width: 0;
+}
+.issue-dts-module-cell select {
+  width: 100%; min-width: 0; padding: 6px 8px;
+  border: 1px solid var(--line-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.issue-dts-module-cell select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.issue-dts-module-cell select:disabled { opacity: .6; }
+.issue-dts-module-fail { color: var(--danger); font-size: 11px; line-height: 1.4; }
+.issue-dts-row.issue-dts-selectall { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.issue-dts-row.issue-dts-selectall > .issue-dts-module-head {
+  display: block; padding: 8px 12px 8px 0; color: var(--muted);
+  font-size: 12px; font-weight: 600; text-align: right;
+}
+.issue-dts-selectall:has(> .issue-dts-module-head) .issue-dts-selectall-count {
+  margin-left: 0;
+}
+.issue-dts-row > .issue-dts-detail { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .issue-dts-row:has(> .issue-dts-module-cell) { grid-template-columns: minmax(0, 1fr); }
+  .issue-dts-module-cell { grid-column: 1; grid-row: auto; padding: 0 12px 10px; }
+  .issue-dts-row > .issue-dts-detail { grid-column: 1; }
+}

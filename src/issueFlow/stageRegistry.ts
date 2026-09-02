@@ -99,6 +99,11 @@ export interface IssueStageSpec {
   requiredResources?: readonly string[];
   /** 出口闸(仅出口举闸的阶段声明;env_needed 不绑阶段,不在此列)。 */
   gate?: IssueStageGate;
+  /** 入口闸(ADR-0011):平台在阶段转移**进**本阶段时机械举,与出口闸
+   * 相对。裁决不走 gateVerdict 的单码分派(作答是 selection 专用口,
+   * 与 env_needed 表单同款),也不表达 confirmTo/reworkTo——它不清场
+   * 推进,只在阶段开始前收一道人为圈选。 */
+  entryGate?: { kind: IssueGateKind };
 }
 
 /**
@@ -123,10 +128,12 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   prep_repo: {
     label: "拉取代码仓·建分支",
     noTicketLabel: "拉取代码仓",
-    goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
-      + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
-      + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
-      + "仓地址再 pull_repo。本单无需代码改动则直接 complete_stage 跳过",
+    goal: "把代码仓拉齐:模块已在发起时人工预绑锁定(见元信息,调 bind_module "
+      + "会被拒)就直接对已登记仓逐个 pull_repo;没绑才 lookup_modules 按单据"
+      + "里的业务关键词检索模块,命中就 bind_module 登记它的仓,再逐个 "
+      + "pull_repo 拉取(有单场景平台会顺带切好修复分支);检索不到就 "
+      + "AskUserQuestion 问用户要仓地址再 pull_repo。本单无需代码改动则"
+      + "直接 complete_stage 跳过",
     exit: "要用的仓都 pull_repo 落地 → complete_stage 收口;无需代码仓则直接 complete_stage 跳过",
     exitAction: "complete_stage",
     tools: [
@@ -145,19 +152,24 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "产出 issue-analysis.md(结论/证据链/置信度/下一步建议),"
       + "然后 submit_analysis 提交(无单场景需带结论 issue/non_issue)。"
       + "中途发现还缺仓,pull_repo 随时可补",
-    exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
-    exitAction: "submit_analysis",
-    tools: [
-      { name: "fetch_logs" },
-      { name: "get_issue_meta" },
-      { name: "dts_get_ticket", note: "重查" },
-      { name: "lookup_modules" },
-      { name: "bind_module" },
-      { name: "pull_repo", note: "补仓" },
-      { name: "submit_analysis" },
-    ],
-    gate: { kind: "analysis_confirm", confirmTo: "fix" },
-  },
+  exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
+  exitAction: "submit_analysis",
+  // 入口闸(ADR-0011):月光关档进入本阶段时举 skill 圈选卡——归属人
+  // 从已拉仓的 .cac/skills 里多选必读集合;月光开/自由模式不举,空扫描
+  // 也不举。是否真的举由 service 现读现判,注册表只声明"本阶段有这道
+  // 入口闸"。
+  entryGate: { kind: "skill_select" },
+  tools: [
+    { name: "fetch_logs" },
+    { name: "get_issue_meta" },
+    { name: "dts_get_ticket", note: "重查" },
+    { name: "lookup_modules" },
+    { name: "bind_module" },
+    { name: "pull_repo", note: "补仓" },
+    { name: "submit_analysis" },
+  ],
+  gate: { kind: "analysis_confirm", confirmTo: "fix" },
+},
   fix: {
     label: "问题修改",
     goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改,"
@@ -409,6 +421,15 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
     ],
     recommended: "push",
   },
+  skill_select: {
+    // skill 圈选(ADR-0011)是多选闸:勾选清单走 answer 的 selection
+    // 专用口(与 env_needed 表单同款),这里的码表只是"都不用"的
+    // 单码通道——空选=AI 按取用次序自主,不算异常。无推荐:推荐的
+    // 唯一消费方是月光代答,而本卡只在月光关时举起,永远人答。
+    options: [
+      { code: "skip", label: "都不用,AI 按取用次序自主" },
+    ],
+  },
 };
 
 /** 闸卡的推荐码(questions[].recommended 与 Agent 卡同一键)。分析
@@ -466,6 +487,11 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
     case "env_needed":
       // 作答口是配置表单;走到选项裁决即调用方违约,一律打回。
       return "unrecognized";
+    case "skill_select":
+      // 作答口是 selection 专用口(勾选清单)加 skip 单码,都在 service
+      // 的专用分支里裁决(env_needed 同款);到不了选项分派——真到了
+      // 就是调用方违约,打回。
+      return "unrecognized";
     case "push_confirm":
       return code === "push" ? "grant_push" : "hold_push";
   }
@@ -495,4 +521,11 @@ export function stageGateRoute(
     }
   }
   return undefined;
+}
+
+/** 入口闸反查(ADR-0011):这个阶段的转移入口要不要举闸。没有入口
+ * 闸的阶段返回 undefined——调用方(service)再叠现读现判条件
+ * (月光现值/台账已圈选/扫描非空)。 */
+export function stageEntryGate(stage: FixedStage): IssueGateKind | undefined {
+  return FIXED_STAGE_SPECS[stage]?.entryGate?.kind;
 }

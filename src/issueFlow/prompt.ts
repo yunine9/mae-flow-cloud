@@ -87,7 +87,7 @@ export interface IssueEnvCredentials {
 export interface IssueRegistrationMeta {
   title: string;
   description: string;
-  module?: { id: string; name: string };
+  module?: { id: string; name: string; locked?: boolean };
   repos: string[];
   environment?: {
     name: string;
@@ -112,6 +112,7 @@ export function issueRegistrationMeta(
       ? { module: {
         id: state.module_id,
         name: state.module || state.module_id,
+        ...(state.module_locked ? { locked: true } : {}),
       } }
       : {}),
     repos: state.repo_urls?.length
@@ -148,11 +149,17 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
   ];
 }
 
-/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。 */
+/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。
+ * 人工预绑锁(spec #57):锁定时明确"不得改绑、直接拉仓",AI 的唯一
+ * 出路是把不符报告给人。 */
 function moduleLine(meta: IssueRegistrationMeta): string {
-  return meta.module
-    ? `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`
-    : "";
+  if (!meta.module) return "";
+  const base = `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`;
+  return meta.module.locked
+    ? base + "\n  - 该模块由人工在发起时预绑并锁定:不要调用 bind_module,"
+      + "直接对已登记仓逐个 pull_repo;若你判断模块与单据明显不符,"
+      + "用 AskUserQuestion 告知用户,由人改绑或提供仓地址"
+    : base;
 }
 
 /** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。
@@ -194,6 +201,18 @@ export function stageLabelOf(state: IssueSessionState): string {
 // 一行声明,与工具门禁(权威层)同源——这里不再手工复写工具清单,
 // 引导层说能用的与权威层放行的不会漂移。渲染函数 stageBriefLines 也
 // 住在注册表:开场词/交接词/催办词/工具回执共用同一份三行简报。
+
+/** 必读 skill 清单行(ADR-0011):analyze 阶段且台账有圈选时随简报
+ * 注入——开场词与续聊词共用,重启重建的上下文同样看得见圈选结果。 */
+export function skillSelectionLines(state: IssueSessionState): string[] {
+  const skills = state.skill_selection?.skills ?? [];
+  if (state.stage !== "analyze" || !skills.length) return [];
+  return [
+    "必读 skill(用户圈选,分析前先读;路径相对会话工作区):",
+    ...skills.map((skill) =>
+      `- ${skill.path}${skill.description ? ` — ${skill.description}` : ""}`),
+  ];
+}
 
 export function issueFixedOpeningPrompt(
   state: IssueSessionState,
@@ -238,15 +257,16 @@ export function issueFixedOpeningPrompt(
     "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
     `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
       + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
+    ...skillSelectionLines(state),
     "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
-    + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
-    + "②出口动作已调用、平台交接词已到位(含 MR 清单申报受理后停等流水线);"
-    + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
+      + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
+      + "②出口动作已调用、平台交接词已到位(含 MR 清单申报受理后停等流水线);"
+      + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
     "4. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
       + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
-    "5. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
-      + "(拉日志/换库缺环境时)、换库后环境验证——平台举卡等用户,你不要替"
-      + "用户猜结果,举卡后立即结束回合。",
+    "5. 平台闸:skill 圈选(进入分析时,过程把关档)、分析报告确认(有单)/"
+      + "结论确认(无单)、网管环境配置(拉日志/换库缺环境时)、换库后环境验证"
+      + "——平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
     "6. UT 跑完可自愿调 report_ut 如实上报——平台只记账,它不是出口、也不是"
       + "建 MR 的前置,UT 阶段出口仍是 complete_stage。提交 MR 阶段:每个改过的"
       + "仓 push_branch + create_mr 后,调 complete_stage 申报 MR 清单(mrs 参数),"
@@ -362,6 +382,7 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
+    ...skillSelectionLines(state),
     ...(state.mode === "fixed"
       ? [options.moonlight
         ? "介入节奏:月光免审批(开)——少问、不做中间简报,分析报告会被平台自动确认。"
