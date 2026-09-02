@@ -380,8 +380,11 @@ export function AnnotationPanel({
              onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="annot-panel-head">
         <div>
-          <span>REVIEW NOTES</span>
-          <strong>批注</strong>
+          {/* 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与
+              机器门禁。原来只叫"批注",和第二节并排时读不出它就是"Cloud
+              平台上的检视意见"(用户实锤)。 */}
+          <span>CLOUD WORKSPACE REVIEW</span>
+          <strong>来自 Cloud 工作台的检视意见</strong>
         </div>
         <div className="annot-panel-summary-side">
           <div className="annot-panel-counts">

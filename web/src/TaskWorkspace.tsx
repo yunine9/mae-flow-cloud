@@ -1137,9 +1137,9 @@ export function TaskWorkspace({
           items={codehubFeedback}
           mrUrl={task.delivery?.mr_url} />}
         {machineFeedback.length > 0 && <FeedbackList
-          kicker="AUTOMATED REVIEW"
-          title="流水线与机器检视"
-          hint="流水线告警、Build-Fix、合并冲突等由机器门禁核验；内核判定通过即闭环。"
+          kicker="AUTOMATED GATES"
+          title="来自流水线与机器门禁的告警"
+          hint="流水线红灯、Build-Fix、合并冲突、推送前复检等不是人提的意见，由对应机器门禁核验；内核判定通过即闭环。"
           items={machineFeedback} />}
       </section>
     </div>

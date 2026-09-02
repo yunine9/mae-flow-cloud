@@ -100,7 +100,12 @@ test("持续检视意见:进度条下只报数,正文按来源竖排列进批注
   assert.match(workspace, /item\.source === "mr_discussion"\)/);
   assert.match(workspace, /mrUrl=\{task\.delivery\?\.mr_url\}/,
     "CodeHub 意见列表要给回到 MR 的入口");
-  assert.match(workspace, /title="流水线与机器检视"/);
+  assert.match(workspace, /title="来自流水线与机器门禁的告警"/);
+  // 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与机器门禁
+  // (用户实锤:第一节只叫"批注"时读不出它就是 Cloud 平台上的检视意见)。
+  const panelSource = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(panelSource, /<strong>来自 Cloud 工作台的检视意见<\/strong>/);
   assert.match(workspace, /item\.source !== "mr_discussion" && item\.source !== "workspace"/,
     "工作台批注已由批注卡片承载,不重复列");
   assert.match(workspace, /已回复，等检视人确认/);
