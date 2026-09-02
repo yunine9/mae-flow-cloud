@@ -361,6 +361,29 @@ export function createKernelHostProof(input: {
   return { path, cleanup: () => rmSync(path, { force: true }) };
 }
 
+/** 与 KernelHost.INFRA_ATTEMPTS 同一口径:基础设施故障先带预算重试。 */
+const INFRA_ATTEMPTS = 3;
+
+/** spawnSync 是同步的,退避只能同步等;Atomics.wait 不烧 CPU。 */
+function pauseSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * 内核**答了**(退 0 或明确拒收)就是它的裁决,一次都不重试;只有起不来、
+ * 超时、被信号打死这类基础设施故障才重试。
+ *
+ * 为什么必须有这一层:delivery 命令原来一次 spawnSync 完事,所有失败一律
+ * throw,而调用方(pipeline 红灯、冲突、Build-Fix、push 返工)全是
+ * catch → markVerificationStalled。持续检视本来就是"反馈不断进环、直到
+ * 合入"的长跑,一次 30 秒抖动就把整条环停下来找人,和"Agent 不能因
+ * harness 卡死"是同一个红线;KernelHost 对 dispatch 早已是三次预算重试,
+ * 这里不该是例外。
+ *
+ * 每次重试**换新凭据**:上一次若是内核落盘之后才超时,旧 nonce 已被消费,
+ * 原样重放会被判"拒绝重放";命令本身按 batch_id / 结果摘要 / event_id
+ * 幂等,拿新凭据走幂等路径才是正确结局。
+ */
 function invoke(input: {
   host: KernelDeliveryHost;
   cwd: string;
@@ -370,38 +393,48 @@ function invoke(input: {
   payload: unknown;
   args: string[];
 }): KernelDeliveryRecord {
-  const proof = createKernelHostProof(input);
-  const gitView = createSafeGitView(input.cwd);
-  try {
-    const result = spawnSync(
-      input.host.python ?? "python3",
-      [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
-       "delivery", ...input.args, "--host-proof", proof.path],
-      {
-        cwd: input.cwd,
-        encoding: "utf-8",
-        env: gitView.environment(),
-        timeout: 30_000,
-        maxBuffer: 2 * 1024 * 1024,
-      },
-    );
-    const stdout = String(result.stdout ?? "");
-    const stderr = String(result.stderr ?? "");
-    const line = stdout.trim().split("\n").filter(Boolean).at(-1) ?? "";
-    let record: KernelDeliveryRecord | undefined;
-    try { record = JSON.parse(line) as KernelDeliveryRecord; } catch { /* below */ }
-    if (result.error || result.status !== 0
-        || record?.schema !== "mae-flow-delivery-loop/1") {
-      const detail = [result.error?.message, stderr, stdout]
-        .filter(Boolean).join("\n").trim();
-      throw new KernelDeliveryError(
-        `内核持续检视命令失败：\n${detail || "没有返回结构化结果"}`);
+  let infraFailure = "";
+  for (let attempt = 1; attempt <= INFRA_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) pauseSync(200 * (attempt - 1));
+    const proof = createKernelHostProof(input);
+    const gitView = createSafeGitView(input.cwd);
+    try {
+      const result = spawnSync(
+        input.host.python ?? "python3",
+        [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
+         "delivery", ...input.args, "--host-proof", proof.path],
+        {
+          cwd: input.cwd,
+          encoding: "utf-8",
+          env: gitView.environment(),
+          timeout: 30_000,
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      );
+      if (result.error || result.status === null) {
+        infraFailure = result.error?.message
+          ?? `内核进程被信号 ${String(result.signal ?? "?")} 终止`;
+        continue;
+      }
+      const stdout = String(result.stdout ?? "");
+      const stderr = String(result.stderr ?? "");
+      const line = stdout.trim().split("\n").filter(Boolean).at(-1) ?? "";
+      let record: KernelDeliveryRecord | undefined;
+      try { record = JSON.parse(line) as KernelDeliveryRecord; } catch { /* below */ }
+      if (result.status !== 0 || record?.schema !== "mae-flow-delivery-loop/1") {
+        const detail = [stderr, stdout].filter(Boolean).join("\n").trim();
+        throw new KernelDeliveryError(
+          `内核持续检视命令失败：\n${detail || "没有返回结构化结果"}`);
+      }
+      return record;
+    } finally {
+      gitView.cleanup();
+      proof.cleanup();
     }
-    return record;
-  } finally {
-    gitView.cleanup();
-    proof.cleanup();
   }
+  throw new KernelDeliveryError(
+    `内核持续检视命令失败：\n${infraFailure}`
+    + `（基础设施故障，已重试 ${INFRA_ATTEMPTS} 次仍不可用）`);
 }
 
 function hasKernelErrorCode(error: unknown, expected: string): boolean {
