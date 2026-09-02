@@ -868,6 +868,14 @@ export interface TaskSummary {
     finished_at?: string;
     error?: string;
   };
+  /** 已完成的每一轮需求修改;对比按 id 另取。 */
+  requirement_revisions?: Array<{
+    id: string;
+    at: string;
+    annotation_ids: string[];
+    additions: number;
+    deletions: number;
+  }>;
   requirement_document?: {
     name: string;
     bytes: number;
@@ -3125,6 +3133,20 @@ export async function testVisionCapability(): Promise<VisionProbeResult> {
   const response = await fetch("/settings/vision/test", { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
+}
+
+export async function readRequirementRevision(
+  taskId: string,
+  revisionId: string,
+): Promise<{ before?: string; diff?: string; unavailable?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/requirement-revisions/${encodeURIComponent(revisionId)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return { before: String(body.before ?? ""), diff: String(body.diff ?? "") };
 }
 
 export async function readArtifact(

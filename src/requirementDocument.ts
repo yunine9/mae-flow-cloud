@@ -9,6 +9,7 @@ import {
   constants,
   mkdirSync,
   openSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +19,9 @@ export const MAX_REQUIREMENT_DOCUMENT_BYTES = 512 * 1024;
 export const INLINE_REQUIREMENT_DOCUMENT_BYTES = 32 * 1024;
 export const STORED_REQUIREMENT_DOCUMENT = "requirement-input.md";
 export const AGENT_REQUIREMENT_DOCUMENT = ".mae-flow-requirement.md";
+/** 需求确认阶段每一轮 Agent 修改都留底:改前全文 + 统一 diff。没有这份
+ * 底,复检的人只能靠锚点猜"改了什么",要真核对得把整篇重读一遍。 */
+export const REQUIREMENT_HISTORY_DIR = "requirement-history";
 
 export interface RequirementDocumentMeta {
   name: string;
@@ -89,6 +93,34 @@ export function materializeRequirementDocument(
   if (meta?.context_mode !== "file") return undefined;
   writeNoFollow(join(workspace, AGENT_REQUIREMENT_DOCUMENT), content);
   return AGENT_REQUIREMENT_DOCUMENT;
+}
+
+export function storeRequirementRevision(
+  workspace: string,
+  revisionId: string,
+  before: string,
+  diff: string,
+): void {
+  const dir = join(workspace, REQUIREMENT_HISTORY_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeNoFollow(join(dir, `${revisionId}.before.md`), before);
+  writeNoFollow(join(dir, `${revisionId}.diff`), diff);
+}
+
+export function readRequirementRevision(
+  workspace: string,
+  revisionId: string,
+): { before: string; diff: string } | undefined {
+  if (!/^[A-Za-z0-9-]+$/.test(revisionId)) return undefined;
+  const dir = join(workspace, REQUIREMENT_HISTORY_DIR);
+  try {
+    return {
+      before: readFileSync(join(dir, `${revisionId}.before.md`), "utf-8"),
+      diff: readFileSync(join(dir, `${revisionId}.diff`), "utf-8"),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function headings(content: string): string[] {

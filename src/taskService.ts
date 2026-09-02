@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
@@ -45,6 +46,7 @@ import {
   parseWorkspaceReviewReceipts,
   unansweredAnnotations,
   workspaceReviewReceiptInstructions,
+  type WorkspaceReviewReceipt,
 } from "./feedbackPolicy.ts";
 import {
   pushReviewCallId,
@@ -151,6 +153,8 @@ import {
   requirementDocumentMeta,
   storeRequirementDocument,
   type RequirementDocumentMeta,
+  readRequirementRevision,
+  storeRequirementRevision,
 } from "./requirementDocument.ts";
 import {
   loadRequirementAssets,
@@ -728,6 +732,15 @@ export interface TaskSummary {
     finished_at?: string;
     error?: string;
   };
+  /** 已完成的每一轮需求修改:改前全文和 diff 落在工作区
+   * requirement-history/,这里只放账目,页面按 id 取对比。 */
+  requirement_revisions?: Array<{
+    id: string;
+    at: string;
+    annotation_ids: string[];
+    additions: number;
+    deletions: number;
+  }>;
   /** 用户上传或因过长而转为按段读取的 Markdown 原文。requirement 仍
    * 完整保留用于界面查看；这个字段决定 Agent 是否直接内联全文。 */
   requirement_document?: RequirementDocumentMeta;
@@ -1726,6 +1739,45 @@ const CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP =
   "cloud_requirement_analysis_confirm";
 const REQUIREMENT_ANALYSIS_ACCEPT =
   "需求已确认，进入需求分析";
+
+/** 需求文档两版之间的统一 diff。走 git diff --no-index:本仓处处依赖 git,
+ * 不为一个 diff 再背一个依赖。改前改后写进临时目录,头两行换成稳定的
+ * 文件名,前端 GitDiff 才认得出这是一个文件。 */
+function requirementDiff(
+  before: string,
+  after: string,
+): { text: string; additions: number; deletions: number } {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-requirement-diff-"));
+  try {
+    const left = join(dir, "before.md");
+    const right = join(dir, "after.md");
+    writeFileSync(left, before.endsWith("\n") ? before : `${before}\n`);
+    writeFileSync(right, after.endsWith("\n") ? after : `${after}\n`);
+    const run = spawnSync("git", [
+      "diff", "--no-index", "--no-color", "--unified=3", "--", left, right,
+    ], { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+    // --no-index 有差异时退出码是 1,不是错;2 才是 git 自己出错。
+    if (run.status !== 0 && run.status !== 1) {
+      throw new TaskControlError(`生成需求文档对比失败：${run.stderr?.trim() || run.status}`);
+    }
+    const text = String(run.stdout ?? "")
+      .split("\n")
+      .map((line) => line
+        .replace(/^diff --git a\S+ b\S+$/, "diff --git a/需求原文.md b/需求原文.md")
+        .replace(/^--- a\S+$/, "--- a/需求原文.md")
+        .replace(/^\+\+\+ b\S+$/, "+++ b/需求原文.md"))
+      .join("\n");
+    let additions = 0;
+    let deletions = 0;
+    for (const line of text.split("\n")) {
+      if (/^\+(?!\+\+ )/.test(line)) additions += 1;
+      else if (/^-(?!-- )/.test(line)) deletions += 1;
+    }
+    return { text, additions, deletions };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 function deliverySelectionNote(
   paths: string[],
@@ -2928,7 +2980,12 @@ export class TaskService {
           "你是需求文档编辑 Agent。你只负责把人工检视意见准确落实到当前需求文档。",
           "保持没有被意见要求改变的内容、结构与语气；不要开始技术分析、Story 或实现设计。",
           "意见明确时直接修改；不同意或确实存在歧义时，保留相关原文，不要猜测。",
+          "每条意见都必须有一条回执，用意见前面方括号里的 id 指回去：",
+          "outcome 取 fixed（已按意见修改）、not_fixed（没有修改，说明理由）、",
+          "needs_clarification（意见有歧义，说明需要提出人补充什么）；summary 用一两句话说清改了什么或为什么没改。",
           "只输出以下格式，不要代码围栏、解释或其他文字：",
+          "===RECEIPTS===",
+          '[{"annotation_id":"<id>","outcome":"fixed","summary":"<说明>"}]',
           "===REQUIREMENT===",
           "<修改后的完整需求文档>",
           "===END_REQUIREMENT===",
@@ -2942,24 +2999,52 @@ export class TaskService {
         ].join("\n"),
       });
       const matched = raw.match(
-        /^\s*===REQUIREMENT===\s*\n([\s\S]*?)\n===END_REQUIREMENT===\s*$/,
+        /^\s*===RECEIPTS===\s*\n([\s\S]*?)\n===REQUIREMENT===\s*\n([\s\S]*?)\n===END_REQUIREMENT===\s*$/,
       );
-      if (!matched?.[1]?.trim()) {
+      if (!matched?.[2]?.trim()) {
         throw new TaskControlError(
           "Agent 返回的需求文档格式不完整，本轮没有覆盖当前文档");
       }
+      // 回执和 MR 检视一样按 id 逐条对拍,少一条、多一条、说不清都不收:
+      // 没有回执的修改就是"改了但不告诉你哪条改了、哪条没采纳",复检的人
+      // 只能猜。回执不合格整轮拒收,意见留在草稿,文档一个字不动。
+      const receipts = this.parseRequirementReceipts(matched[1], annotations);
       const current = task.summary.requirement_revision;
       if (current?.id !== revisionId
           || task.summary.status !== "waiting_for_human"
           || task.summary.waiting?.waiting_id !== waiting.waiting_id) {
         throw new StateConflictError("Agent 修改完成前任务状态已经变化，本轮结果未写入");
       }
-      this.applyRequirementContent(task, matched[1].trim());
+      const before = task.summary.requirement;
+      const after = matched[2].trim();
+      // 改前全文和 diff 先落盘再覆盖正文:页面靠它给人看"这一轮改了什么",
+      // 没有它,人只能把整篇重读一遍。
+      const diff = requirementDiff(before, after);
+      storeRequirementRevision(task.summary.workspace, revisionId, before, diff.text);
+      this.applyRequirementContent(task, after);
+      task.summary.requirement_revisions = [
+        ...(task.summary.requirement_revisions ?? []),
+        {
+          id: revisionId,
+          at: new Date().toISOString(),
+          annotation_ids: annotations.map((item) => item.id),
+          additions: diff.additions,
+          deletions: diff.deletions,
+        },
+      ];
       // 先把新正文落袋，再把意见标成已送达。即使进程在两者之间中断，
       // 恢复后也只会要求重提，不会拿半份文档冒充已经闭环。
       this.persist(task);
-      this.annotations(task).markSent(
-        annotations.map((item) => item.id), "interrupt");
+      const store = this.annotations(task);
+      store.markSent(annotations.map((item) => item.id), "interrupt");
+      for (const receipt of receipts) {
+        store.respond(receipt.annotation_id, {
+          revision: receipt.revision,
+          outcome: receipt.outcome,
+          summary: receipt.summary,
+          evidence: receipt.evidence ?? [],
+        });
+      }
       task.summary.requirement_revision = undefined;
       task.summary.detail = "Agent 已修改需求文档，等待检视意见闭环后确认进入分析";
       this.persist(task);
@@ -2980,6 +3065,53 @@ export class TaskService {
       }
       throw error;
     }
+  }
+
+  /** 文档编辑 Agent 的逐条回执。格式校验复用 MR 检视那套(id 对拍、去重、
+   * outcome 合法、说明非空);它没有 rework 概念,revision 缺席时按当前轮补。 */
+  private parseRequirementReceipts(
+    raw: string,
+    annotations: Annotation[],
+  ): WorkspaceReviewReceipt[] {
+    let rows: unknown;
+    try {
+      rows = JSON.parse(raw.trim());
+    } catch {
+      throw new TaskControlError("Agent 的逐条回执不是合法 JSON，本轮拒收");
+    }
+    const byId = new Map(annotations.map((item) => [item.id, item]));
+    const withRevision = (Array.isArray(rows) ? rows : []).map((row) => {
+      if (!row || typeof row !== "object") return row;
+      const item = row as Record<string, unknown>;
+      const target = byId.get(String(item.annotation_id ?? ""));
+      return item.revision === undefined && target
+        ? { ...item, revision: target.rework ?? 0 } : item;
+    });
+    const parsed = parseWorkspaceReviewReceipts(withRevision, annotations);
+    const facts = [
+      parsed.missing_ids.length ? `缺少 ${parsed.missing_ids.join("、")}` : "",
+      parsed.unexpected_ids.length ? `多出 ${parsed.unexpected_ids.join("、")}` : "",
+      ...parsed.errors,
+    ].filter(Boolean);
+    if (facts.length) {
+      throw new TaskControlError(`Agent 的逐条回执不完整：${facts.join("；")}。本轮拒收，意见仍在待提交`);
+    }
+    return parsed.receipts;
+  }
+
+  /** 页面按 id 取某一轮修改的对比:改前全文 + 统一 diff。 */
+  requirementRevision(
+    id: string,
+    revisionId: string,
+  ): { before: string; diff: string; entry?: NonNullable<TaskSummary["requirement_revisions"]>[number] } | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const stored = readRequirementRevision(task.summary.workspace, revisionId);
+    if (!stored) return undefined;
+    return {
+      ...stored,
+      entry: task.summary.requirement_revisions?.find((item) => item.id === revisionId),
+    };
   }
 
   /** 需求分析开始后原文是输入基线；圈在原文上的意见仍然送给 Agent，

@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
+import { RequirementDiff } from "./RequirementDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
 import {
@@ -49,6 +50,7 @@ import {
   listTaskReviews,
   readArtifact,
   readPushReviewDiff,
+  readRequirementRevision,
   repairStopped,
   requestCommitterReview,
   statusText,
@@ -602,6 +604,10 @@ export function TaskWorkspace({
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
+  /** 需求原文页签上"这一轮改了什么"的对比;null = 看全文。 */
+  const [revisionDiff, setRevisionDiff] = useState<{
+    id: string; text: string; unavailable?: string;
+  } | null>(null);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
@@ -637,6 +643,7 @@ export function TaskWorkspace({
     setReviewPanelOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
+    setRevisionDiff(null);
     setDeliverySelection(undefined);
     setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
@@ -1518,11 +1525,49 @@ export function TaskWorkspace({
                         && <em>Agent 分段读取</em>}</span>
                     <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                   </div>
-                  <Markdown text={task.requirement} resolveImage={(path) =>
-                    task.requirement_document?.assets?.some(
-                      (asset) => asset.path === path)
-                      ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
-                      : undefined} />
+                  {/* Agent 每改一轮都留了改前全文和 diff。复检的人原来只能靠
+                      锚点猜"改了什么",要真核对得把整篇重读——这里直接给对比。 */}
+                  {(task.requirement_revisions?.length ?? 0) > 0 && (() => {
+                    const revisions = task.requirement_revisions!;
+                    const latest = revisions[revisions.length - 1];
+                    const showing = revisionDiff?.id === latest.id;
+                    return (
+                      <div className="requirement-revision-bar" role="status">
+                        <span>
+                          Agent 已修改 {revisions.length} 轮 · 最近一轮
+                          <b className="added">+{latest.additions}</b>
+                          <b className="deleted">-{latest.deletions}</b>
+                          <small>{relativeTime(latest.at)}</small>
+                        </span>
+                        <button type="button" className={showing ? "on" : ""}
+                          onClick={() => {
+                            if (showing) { setRevisionDiff(null); return; }
+                            setRevisionDiff({ id: latest.id, text: "" });
+                            void readRequirementRevision(task.id, latest.id)
+                              .then((result) => setRevisionDiff({
+                                id: latest.id,
+                                text: result.diff ?? "",
+                                unavailable: result.unavailable,
+                              }));
+                          }}>
+                          {showing ? "回到全文" : "看这一轮改了什么"}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                  {revisionDiff ? (
+                    revisionDiff.unavailable
+                      ? <p className="requirement-revision-missing">{revisionDiff.unavailable}</p>
+                      : revisionDiff.text
+                        ? <RequirementDiff text={revisionDiff.text} />
+                        : <p className="requirement-revision-missing">正在读取对比…</p>
+                  ) : (
+                    <Markdown text={task.requirement} resolveImage={(path) =>
+                      task.requirement_document?.assets?.some(
+                        (asset) => asset.path === path)
+                        ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                        : undefined} />
+                  )}
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (

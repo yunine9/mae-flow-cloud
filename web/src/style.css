@@ -7356,6 +7356,65 @@ pre {
 }
 .requirement-source-label span { color: var(--text-strong); font-weight: 700; }
 .requirement-source-label small { color: var(--faint); }
+/* 需求确认阶段 Agent 改过几轮、最近一轮加减了多少行,以及切到对比的开关。 */
+.requirement-revision-bar {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  font-size: 13px;
+}
+.requirement-revision-bar > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.requirement-revision-bar b { font: 700 12.5px var(--font-mono); }
+.requirement-revision-bar b.added { color: var(--success); }
+.requirement-revision-bar b.deleted { color: var(--danger); }
+.requirement-revision-bar small { color: var(--muted); }
+.requirement-revision-bar > button {
+  flex: none;
+  padding: 6px 11px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.requirement-revision-bar > button.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+.requirement-revision-missing { margin: 0; color: var(--muted); font-size: 13px; }
+/* 一个文件、几十行的需求对比,直接摊开:删的一行、加的一行、上下文。 */
+.requirement-diff {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font: 13.5px/1.7 var(--font-ui);
+}
+.requirement-diff-row {
+  display: grid;
+  grid-template-columns: 22px 44px minmax(0, 1fr);
+  align-items: start;
+}
+.requirement-diff-row.hunk {
+  padding: 4px 10px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font: 600 11.5px/1.6 var(--font-mono);
+  grid-template-columns: 1fr;
+}
+.requirement-diff-row.add { background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
+.requirement-diff-row.del { background: color-mix(in srgb, var(--danger) 9%, var(--surface)); }
+.requirement-diff-row.del .requirement-diff-text { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.requirement-diff-mark { padding: 2px 0 2px 8px; color: var(--muted); font: 700 13px/1.7 var(--font-mono); }
+.requirement-diff-row.add .requirement-diff-mark { color: var(--success); }
+.requirement-diff-row.del .requirement-diff-mark { color: var(--danger); }
+.requirement-diff-line { padding: 2px 6px 2px 0; color: var(--faint); text-align: right; font: 11.5px/1.9 var(--font-mono); }
+.requirement-diff-text { padding: 2px 12px 2px 6px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .ws-primary-scroll {
   flex: 1;
   min-height: 0;

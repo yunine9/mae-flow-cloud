@@ -2156,6 +2156,14 @@ export function createTaskServer(
           });
           return response.end(asset.content);
         }
+        // 需求确认阶段某一轮 Agent 修改的对比:改前全文 + diff。看得见任务
+        // 就看得见对比,它和需求原文本身一样是任务事实。
+        if (request.method === "GET" && parts.length === 4
+            && parts[2] === "requirement-revisions") {
+          const revision = service.requirementRevision(id, parts[3]);
+          if (!revision) return json(response, 404, { error: "这一轮修改的记录不存在" });
+          return json(response, 200, revision);
+        }
         if (request.method === "POST" && parts.length === 3
             && parts[2] === "knowledge-candidates") {
           const target = service.get(id);
