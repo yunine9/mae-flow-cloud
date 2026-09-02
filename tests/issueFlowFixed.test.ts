@@ -125,7 +125,11 @@ class LoopPlatform {
   private server: ReturnType<typeof createServer> | undefined;
   baseUrl = "";
 
-  constructor(private readonly firstTerminal: "failed" | "success" = "failed") {}
+  constructor(
+    private readonly firstTerminal: "failed" | "success" = "failed",
+    /** firstTerminal 之后的终态:缺省 success(红一轮修好再绿);
+     *  "failed" = 红到底(修复轮预算耗尽类测试用)。 */
+    private readonly subsequentTerminal: "failed" | "success" = "success") {}
 
   async start(): Promise<void> {
     this.server = createServer((request, response) => {
@@ -158,6 +162,14 @@ class LoopPlatform {
           send({ status: "running" });
           return;
         }
+        if (request.method === "GET" && request.url?.startsWith("/pipeline/artifacts")) {
+          // 失败产物假件:红灯修复链会把它镜像进会话工作区 pipeline/。
+          send({ files: [{
+            name: "build.log",
+            text: "BUILD FAILURE: 模块 notify-service 编译失败(全文堆栈省略)",
+          }] });
+          return;
+        }
         if (request.method === "GET" && request.url?.startsWith("/pipeline/status")) {
           const sha = new URL(request.url, "http://loop").searchParams.get("sha") ?? "";
           const calls = (this.statusCalls.get(sha) ?? 0) + 1;
@@ -168,7 +180,7 @@ class LoopPlatform {
           }
           this.terminalRound += 1;
           const status = this.terminalRound === 1
-            ? this.firstTerminal : "success";
+            ? this.firstTerminal : this.subsequentTerminal;
           send({
             runs: [{ status: "running" }, {
               status,
@@ -371,6 +383,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const failedRound = platform.seen.filter((entry) =>
       entry.method === "POST" && entry.url === "/pipeline/trigger").length;
     assert.ok(failedRound >= 2, "红过一轮就要有第二轮触发(同 MR 修复再推)");
+    // 红灯取证:平台失败产物已镜像进会话工作区 pipeline/,修复回合的
+    // 指令里点名了它——AI 读全文修,不是只啃 1500 字摘要。
+    assert.ok(existsSync(join(dataDir, "issues", created.id,
+      "pipeline", "build.log")), "红灯产物应镜像到会话工作区");
+    assert.match(JSON.stringify(model.requests), /失败产物全文已镜像/,
+      "修复回合指令应指引 AI 读镜像产物");
 
     // ④ 验证不通过:一律回退问题分析,轮次+1,UT/监看作废,分支 MR 延用。
     const shaBefore = service.get(created.id).pushes![0].sha;
@@ -1850,5 +1868,101 @@ test("登记元信息进开场上下文(service 接线):vault 解出的四件套
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
+  }
+});
+
+test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开回合", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget0-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  await platform.start();
+  const script: Scene[] = [
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 问题分析\\n\\n## 结论\\n连接池耗尽。\\n## 证据链\\n日志。\\n## 置信度\\n高。\\n## 下一步建议\\n超时回收。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { summary: "根因=连接池耗尽" } } },
+    { text: "分析报告已提交,等待用户确认。" },
+    { tool: { name: "bash", input: { command:
+      `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复'` } } },
+    { tool: { name: "complete_stage", input: { note: "修复完成" } } },
+    { tool: { name: "report_ut", input: { passed: true, summary: "3/3" } } },
+    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "MR 已创建并申报,等待流水线。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: {
+      models: () => ({}),
+      // 预算 0 = 关掉自动修复:第一次红灯就留痕请人工(需求侧同语义)。
+      runtime: () => ({ poll_interval_s: 1, poll_timeout_s: 120, repair_rounds: 0 }),
+    },
+    dts: new MockDtsGateway(),
+    opsTools: fakeOps,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev",
+      title: "预算关断验收",
+      ticket: TICKET,
+      source: "dts",
+      repoUrl: origin,
+    });
+    // ① 分析确认闸放行 → 走到 MR 提交,回合收口(idle 等流水线)。
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
+        ? issue : undefined;
+    }, "分析确认闸");
+    service.answer(created.id, {
+      state_version: service.get(created.id).gate!.state_version,
+      code: "confirm",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      return issue.stage === "mr_green" && issue.status === "idle" ? issue : undefined;
+    }, "MR 提交回合收口");
+    const requestsAfterMr = model.requests.length;
+
+    // ② 流水线红结算:预算 0 → 不开修复回合,留痕请人工。
+    await until(() => {
+      const issue = service.get(created.id);
+      return issue.pipelines?.[origin]?.last_error?.includes("修复轮预算耗尽")
+        ? issue : undefined;
+    }, "红灯预算耗尽停表");
+    const exhausted = service.get(created.id);
+    assert.equal(exhausted.status, "idle", "不开回合,会话停机等人");
+    assert.match(exhausted.stage_note ?? "", /修复轮预算/);
+    assert.equal(exhausted.pipelines?.[origin]?.watching, false);
+    assert.equal(exhausted.pipelines?.[origin]?.reds, 1, "红灯计数入账");
+    assert.equal(exhausted.feedback?.at(-1)?.status, "repairing",
+      "红灯仍要留痕(反馈账本 repairing),人工处理后可闭环");
+    // 取证照做:产物镜像不因预算关断而缺席。
+    assert.ok(existsSync(join(dataDir, "issues", created.id,
+      "pipeline", "build.log")), "预算关断不影响取证镜像");
+    assert.equal(model.requests.length, requestsAfterMr,
+      "预算耗尽后不得再有平台回合");
+    // ③ 用户人工介入后发消息仍能继续(闸门不锁死会话)。
+    await service.reply(created.id, "我已在平台豁免告警,请重跑确认");
+    assert.equal(service.get(created.id).status, "running");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
   }
 });
