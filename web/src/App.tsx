@@ -23,7 +23,7 @@ import {
   putPersonalPushConfirmation,
   putIssueFlowMode,
 } from "./api";
-import { byUrgency } from "./taskTime";
+import { byNewest, byUrgency } from "./taskTime";
 import {
   byTeamAttention,
   isBlocked,
@@ -553,6 +553,20 @@ export function App() {
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
+  // 任务列表顺序:默认最新在上(用户实锤);切换记在本机,下次进来沿用。
+  const [taskOrder, setTaskOrderState] = useState<"newest" | "attention">(() => {
+    try {
+      return localStorage.getItem("mae-flow-task-order") === "attention"
+        ? "attention" : "newest";
+    } catch { return "newest"; }
+  });
+  const setTaskOrder = (
+    update: (current: "newest" | "attention") => "newest" | "attention",
+  ) => setTaskOrderState((current) => {
+    const next = update(current);
+    try { localStorage.setItem("mae-flow-task-order", next); } catch { /* 仍保留本次选择 */ }
+    return next;
+  });
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
@@ -892,7 +906,12 @@ export function App() {
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
         : mineScope === "delivered" ? myDelivered : myCurrent;
-  const visibleMyWork = scopedMyWork;
+  // 列表顺序是个开关:默认最新在最上面(用户实锤);切到"待核对在前"时
+  // 沿用各分组原有的关注度排序。只动展示顺序,分组与计数不受影响。
+  const visibleMyWork = taskOrder === "newest"
+    ? [...scopedMyWork].sort(byNewest) : scopedMyWork;
+  const visibleMyDelivered = taskOrder === "newest"
+    ? [...myDelivered].sort(byNewest) : myDelivered;
   const myWorkTitle = mineScope === "waiting" ? "待我核对"
     : mineScope === "intervention" ? "需要介入 / 已暂停"
       : mineScope === "active" ? "自动推进中"
@@ -1128,11 +1147,11 @@ export function App() {
             onOpen={openArtifacts}
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
-            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
+            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
             <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
-          {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
+          {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
         {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onNavigateProfile={() => setView("profile")} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage

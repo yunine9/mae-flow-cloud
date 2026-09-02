@@ -132,11 +132,15 @@
   color: var(--text);
 }
 
+/* 编辑框要能拉大(用户实锤):默认四行起步,竖向可拖到大半屏;横向跟着
+   编辑框容器走,不单独拖(拖宽会顶出定位容器)。 */
 .annot-editor textarea {
   font: inherit;
   font-size: 15px;
   line-height: 1.6;
   padding: 8px 10px;
+  min-height: 108px;
+  max-height: 70vh;
   resize: vertical;
   color: var(--text);
   background: var(--surface-soft);
@@ -526,6 +530,8 @@
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
+  min-height: 132px;
+  max-height: 70vh;
   resize: vertical;
   font: inherit;
   font-size: 15px;

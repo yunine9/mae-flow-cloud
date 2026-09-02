@@ -15,7 +15,9 @@ import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
-import { AnnotationPanel } from "./AnnotationPanel";
+import {
+  AnnotationPanel, annotationCategory, type ReviewFilter,
+} from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
@@ -36,6 +38,7 @@ import {
 import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import { UserPicker, userLabel } from "./UserPicker";
 import {
+  addAnnotation,
   completeReview,
   controlTask,
   decideScopeViolation,
@@ -417,15 +420,33 @@ export function FeedbackSummary({ feedback, onOpenReview }: {
 
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
  * 和批注卡片同一套版式,放进「批注与检视」里不违和。 */
-export function FeedbackList({ kicker, title, hint, items, mrUrl }: {
+export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
   kicker: string;
   title: string;
   hint?: string;
   items: FeedbackRecord[];
   /** CodeHub 意见给一个回到 MR 的入口;讨论级链接平台不给,只到 MR。 */
   mrUrl?: string;
+  /** 把一条外部意见转成工作台批注草稿(走现有批注链路补充给 Agent)。
+   * 返回错误文案;成功返回 undefined。 */
+  onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
 }) {
   const active = items.filter((item) => item.status !== "closed").length;
+  const [converting, setConverting] = useState("");
+  const [notices, setNotices] = useState<Record<string, string>>({});
+  async function convert(item: FeedbackRecord) {
+    if (!onConvert || converting) return;
+    setConverting(item.id);
+    try {
+      const error = await onConvert(item);
+      setNotices((current) => ({
+        ...current,
+        [item.id]: error ?? "已生成工作台批注草稿，在上方「来自 Cloud 工作台的检视意见」里补充后提交。",
+      }));
+    } finally {
+      setConverting("");
+    }
+  }
   return <section className="feedback-list" aria-label={title}>
     <header>
       <div>
@@ -454,11 +475,24 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl }: {
           <strong>{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
           <p>{item.resolution}</p>
         </div>}
-        <small className="feedback-item-foot">
-          {FEEDBACK_SOURCE_LABEL[item.source]}
-          {item.author && ` · 检视人 ${item.author}`}
-          {` · ${relativeTime(item.updated_at) || item.updated_at}`}
-        </small>
+        <div className="feedback-item-foot">
+          <small>
+            {FEEDBACK_SOURCE_LABEL[item.source]}
+            {item.author && ` · 检视人 ${item.author}`}
+            {` · ${relativeTime(item.updated_at) || item.updated_at}`}
+          </small>
+          {onConvert && item.status !== "closed" && !notices[item.id] && (
+            <button type="button" className="feedback-convert"
+              disabled={converting === item.id}
+              title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
+              onClick={() => void convert(item)}>
+              {converting === item.id ? "生成中…" : "转成工作台批注"}
+            </button>
+          )}
+        </div>
+        {notices[item.id] && <p className="feedback-convert-notice" role="status">
+          {notices[item.id]}
+        </p>}
       </li>)}
     </ol>
   </section>;
@@ -861,8 +895,6 @@ export function TaskWorkspace({
     return () => { alive = false; };
   }, [task.id, task.status, notesPulse, livePulse]);
 
-  const drafts = notes.filter((item) => item.status === "draft");
-  const myDrafts = drafts.filter((item) => item.author === viewerUsername);
   const requirementAnalysisConfirmation = task.status === "waiting_for_human"
     && task.waiting?.step === "cloud_requirement_analysis_confirm";
   // 决定卡只展示会阻塞团队流转的事实：已送达意见，以及责任人自己的
@@ -979,10 +1011,6 @@ export function TaskWorkspace({
   const workspaceReviewAnnotationIds = workspaceReviewReady
     ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
     : [];
-  const pendingWorkspaceReviewIds = workspaceReviewAnnotationIds.filter((id) =>
-    notes.some((item) => item.id === id && item.status === "sent"));
-  const reviewActionCount = myDrafts.length + pendingWorkspaceReviewIds.length
-    + (reviewAssignment ? 1 : 0);
   // 批注与检视里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
   // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
   const codehubFeedback = (task.feedback ?? [])
@@ -991,6 +1019,53 @@ export function TaskWorkspace({
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
   const reviewRecordCount = notes.length + codehubFeedback.length
     + machineFeedback.length;
+  // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
+  // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
+    item.status === "closed" ? "closed"
+      : item.status === "needs_human" ? "mine" : "agent";
+  const noteCategory = (item: Annotation) => annotationCategory(item, {
+    viewerUsername,
+    taskStatus: task.status,
+    reviewReady: workspaceReviewReady,
+    canOverride,
+    reviewAnnotationIds: workspaceReviewAnnotationIds,
+  });
+  const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
+  for (const item of notes) reviewCounts[noteCategory(item)] += 1;
+  for (const item of [...codehubFeedback, ...machineFeedback]) {
+    reviewCounts[feedbackCategory(item)] += 1;
+  }
+  const filteredCodehub = reviewFilter === "all" ? codehubFeedback
+    : codehubFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
+  const filteredMachine = reviewFilter === "all" ? machineFeedback
+    : machineFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
+  /** CodeHub 意见转成工作台批注草稿:锚点用意见编号(平台不给原文快照),
+   * 定位靠文件行号;正文带上出处,人可以再补一句自己的话。 */
+  async function convertFeedbackToAnnotation(
+    item: FeedbackRecord,
+  ): Promise<string | undefined> {
+    const materials = items ?? [];
+    const diffArtifact = materials.find((artifact) => artifact.kind === "diff")?.name;
+    const artifact = materials.find((artifact) => artifact.name === item.file)?.name
+      ?? diffArtifact ?? item.file ?? materials[0]?.name;
+    if (!artifact) return "当前任务还没有可批注的材料，暂时转不成批注。";
+    const origin = `CodeHub 检视意见 #${item.source_id}${
+      item.author ? `（${item.author}）` : ""}`;
+    const result = await addAnnotation(task.id, {
+      artifact,
+      file: item.file ?? artifact,
+      line: item.line ?? 0,
+      anchor: origin,
+      note: `【转自 ${origin}】\n${item.summary}`,
+      kind: "code",
+    });
+    if (result.error) return `转成批注失败：${result.error}`;
+    setNotesPulse((tick) => tick + 1);
+    onChanged();
+    return undefined;
+  }
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
     Boolean(pushReview),
@@ -1080,6 +1155,22 @@ export function TaskWorkspace({
 
   const reviewWorkspaceContent = (
     <div className="workspace-review-notes">
+      <div className="review-filter" role="tablist" aria-label="按处理归属筛选">
+        {([
+          ["all", "全部"],
+          ["mine", "等我确认"],
+          ["agent", "Agent 处理中"],
+          ["closed", "已闭环"],
+        ] as const).map(([key, label]) => (
+          <button type="button" key={key} role="tab"
+            className={`${reviewFilter === key ? "active" : ""}${
+              key === "mine" && reviewCounts.mine > 0 ? " attention" : ""}`}
+            aria-selected={reviewFilter === key}
+            onClick={() => setReviewFilter(key)}>
+            {label}<i>{reviewCounts[key]}</i>
+          </button>
+        ))}
+      </div>
       {reviewAssignment && (
         <section className="review-assignment" aria-labelledby="review-assignment-title">
           <div className="review-assignment-mark" aria-hidden>审</div>
@@ -1119,8 +1210,13 @@ export function TaskWorkspace({
             && task.delivery?.mr_state !== "已关闭"}
           evidenceAwaiting={Boolean(
             task.delivery?.evidence_gap?.missing_dimensions.length)}
+          filter={reviewFilter}
           onLocate={(item) => {
-            setReviewPanelOpen(false);
+            // 宽屏下抽屉和材料并排,定位不用关抽屉;窄屏抽屉盖住材料,
+            // 关掉才看得见那一行。
+            if (window.matchMedia("(max-width: 1100px)").matches) {
+              setReviewPanelOpen(false);
+            }
             locate(item);
           }}
           onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
@@ -1130,17 +1226,19 @@ export function TaskWorkspace({
             在“交付材料”中圈选原文或代码，即可创建批注。
           </div>
         )}
-        {codehubFeedback.length > 0 && <FeedbackList
+        {filteredCodehub.length > 0 && <FeedbackList
           kicker="CODEHUB REVIEW"
           title="来自 CodeHub 的检视意见"
           hint="MR 检视人在 CodeHub 留下的讨论。Agent 逐条修改或说明后把回复发回 MR，由检视人在 MR 里确认闭环。"
-          items={codehubFeedback}
-          mrUrl={task.delivery?.mr_url} />}
-        {machineFeedback.length > 0 && <FeedbackList
+          items={filteredCodehub}
+          mrUrl={task.delivery?.mr_url}
+          onConvert={canContributeReview && canCreateAnnotation
+            ? convertFeedbackToAnnotation : undefined} />}
+        {filteredMachine.length > 0 && <FeedbackList
           kicker="AUTOMATED GATES"
           title="来自流水线与机器门禁的告警"
           hint="流水线红灯、Build-Fix、合并冲突、推送前复检等不是人提的意见，由对应机器门禁核验；内核判定通过即闭环。"
-          items={machineFeedback} />}
+          items={filteredMachine} />}
       </section>
     </div>
   );
@@ -1300,14 +1398,14 @@ export function TaskWorkspace({
             <small>{hint}</small>
           </button>
         ))}
-        <button type="button" className={`ws-review-launch${reviewActionCount
-          ? " attention" : ""}`}
+        <button type="button" className={`ws-review-launch${
+          reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
           aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
           onClick={() => setReviewPanelOpen(true)}>
           <strong>批注与检视
-            {(reviewActionCount > 0 || reviewRecordCount > 0) && (
-              <em>{reviewActionCount > 0
-                ? `${reviewActionCount} 待处理` : reviewRecordCount}</em>
+            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+              <em>{reviewCounts.mine > 0
+                ? `${reviewCounts.mine} 等我确认` : reviewRecordCount}</em>
             )}
           </strong>
           <small>批注、CodeHub 检视意见与机器检视</small>
@@ -1321,7 +1419,8 @@ export function TaskWorkspace({
         </button>}
       </nav>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
+      <div className={`ws-body${waiting ? " has-decision" : ""}${
+        reviewPanelOpen ? " has-review" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -1819,22 +1918,22 @@ export function TaskWorkspace({
             )
           )}
         </aside>
-      </div>
-      {reviewPanelOpen && <div className="workspace-review-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setReviewPanelOpen(false);
-        }}>
-        <section className="workspace-review-dialog" role="dialog" aria-modal="true"
-          aria-labelledby="workspace-review-title">
+        {/* 批注与检视是右侧抽屉,不是遮罩弹层:看意见时左边材料照常可点、
+            可圈选新批注,"回到那一行"不用先关窗(用户定调:这块是核心
+            竞争力,易用性优先)。宽屏时挤进正文栅格顶替决策侧栏;窄屏
+            (≤1100px)退化成全屏覆盖,由 style.css 断点接管。 */}
+        {reviewPanelOpen && <section className="workspace-review-drawer"
+          role="complementary" aria-labelledby="workspace-review-title">
           <header>
             <div><span>REVIEW NOTES</span>
               <strong id="workspace-review-title">批注与检视</strong>
-              <p>查看批注、CodeHub 检视意见、机器检视与 Agent 回应；关闭后回到原工作位置。</p>
+              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
             </div>
             <div className="workspace-review-dialog-actions">
-              {(reviewActionCount > 0 || reviewRecordCount > 0) && <em>
-                {reviewActionCount > 0
-                  ? `${reviewActionCount} 项待处理` : `${reviewRecordCount} 条记录`}
+              {/* 和筛选条"等我确认"同一口径,别一处说 1 项一处说 3 条。 */}
+              {(reviewCounts.mine > 0 || reviewRecordCount > 0) && <em>
+                {reviewCounts.mine > 0
+                  ? `${reviewCounts.mine} 项等我确认` : `${reviewRecordCount} 条记录`}
               </em>}
               <button type="button" aria-label="关闭批注与检视"
                 autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
@@ -1843,8 +1942,8 @@ export function TaskWorkspace({
           <div className="workspace-review-content ws-insights-view">
             {reviewWorkspaceContent}
           </div>
-        </section>
-      </div>}
+        </section>}
+      </div>
       {reviewInviteOpen && <div className="workspace-review-backdrop"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setReviewInviteOpen(false);

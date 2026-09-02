@@ -21,10 +21,11 @@ test("决策背景展开后由外层真实占位，不能与后续问题重叠",
   assert.match(overrideBody, /overflow:\s*visible/);
 });
 
-test("长检视内容在独立弹层内滚动，不挤压材料和决定栏", () => {
-  assert.match(workspace, /className="workspace-review-dialog" role="dialog"/);
-  assert.match(css, /\.workspace-review-dialog\s*\{[^}]*max-height:/s);
-  assert.match(css, /\.workspace-review-dialog\s*\{[^}]*overflow:\s*hidden/s);
+test("长检视内容在抽屉内自己滚动，不把整页撑高", () => {
+  assert.match(workspace,
+    /className="workspace-review-drawer"\s+role="complementary"/);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*min-height:\s*0/s);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*overflow:\s*hidden/s);
   assert.match(css, /\.workspace-review-content\s*\{[^}]*overflow:\s*auto/s);
 });
 
@@ -39,9 +40,11 @@ test("交付材料提供统一全屏入口且 Escape 先退出全屏", () => {
 });
 
 test("待闭环检视通过常驻按钮提示，但不自动接管当前工作面", () => {
-  assert.match(workspace, /pendingWorkspaceReviewIds/);
+  // 入口卡与抽屉头部的数字统一走筛选条的"等我确认"口径(annotationCategory
+  // + 反馈 needs_human),不再另算一套"待处理"。
   assert.match(workspace, /className=\{`ws-review-launch/);
-  assert.match(workspace, /\$\{reviewActionCount\} 待处理/);
+  assert.match(workspace, /\$\{reviewCounts\.mine\} 等我确认/);
+  assert.match(workspace, /\$\{reviewCounts\.mine\} 项等我确认/);
   assert.match(workspace, /onClick=\{\(\) => setReviewPanelOpen\(true\)\}/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
     "批注出现时只亮入口，不应自动弹出并抢走当前任务");
@@ -66,11 +69,40 @@ test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(css, /\.annotation-location-notice\s*\{/);
 });
 
-test("批注弹层关闭后回到原工作位置", () => {
-  assert.match(workspace, /关闭后回到原工作位置/);
-  assert.match(workspace, /if \(event\.target === event\.currentTarget\) setReviewPanelOpen\(false\)/);
+test("批注与检视是右侧抽屉:材料并排可点,定位不必先关窗", () => {
+  // 原来是遮罩弹层,看意见时看不到材料,"回到那一行"要先关窗(用户定调
+  // 这块是核心竞争力、易用性优先后改成抽屉)。宽屏挤进正文栅格右栏,
+  // 窄屏退化成全屏覆盖。
+  assert.match(workspace, /reviewPanelOpen \? " has-review" : ""/);
+  assert.match(workspace, /className="workspace-review-drawer"/);
+  assert.doesNotMatch(workspace,
+    /reviewPanelOpen && <div className="workspace-review-backdrop"/,
+    "批注与检视不再是遮罩弹层");
+  assert.match(workspace,
+    /if \(window\.matchMedia\("\(max-width: 1100px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
+    "只有窄屏(抽屉盖住材料)定位时才关抽屉");
+  assert.match(css, /\.ws-body\.has-review\s*\{/);
+  assert.match(css, /\.ws-body\.has-review > aside \{ display: none; \}/);
+  assert.match(css, /@media \(max-width: 1100px\) \{\s*\.ws-body\.has-review/);
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
-    "打开弹层不能改掉交付材料、开发协作或执行现场的当前页签");
+    "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
+});
+
+test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
+  assert.match(workspace, /className="review-filter" role="tablist"/);
+  assert.match(workspace, /\["mine", "等我确认"\]/);
+  assert.match(workspace, /\["agent", "Agent 处理中"\]/);
+  assert.match(workspace, /\["closed", "已闭环"\]/);
+  assert.match(workspace, /filter=\{reviewFilter\}/, "批注面板吃同一个筛选档");
+  assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
+    "转批注沿用批注创建权限");
+  assert.match(workspace, /【转自 \$\{origin\}】/);
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(panel, /export function annotationCategory/);
+  assert.match(panel, /const visibleItems = filter === "all" \? orderedItems/);
+  assert.match(css, /\.review-filter\s*\{/);
+  assert.match(css, /\.feedback-convert\s*\{/);
 });
 
 test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源逐条展示", () => {

@@ -1410,6 +1410,135 @@ svg {
   overflow: auto;
   background: var(--page);
 }
+/* 批注与检视抽屉:宽屏挤进 .ws-body 栅格右栏顶替决策侧栏,左侧材料照常
+   可点可圈选;窄屏退化成全屏覆盖。原来是遮罩弹层,看意见时看不到材料,
+   "回到那一行"要先关窗(用户定调易用性优先后改)。 */
+.ws-body.has-review {
+  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 820px);
+}
+.ws-body.has-review > aside { display: none; }
+.workspace-review-drawer {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text);
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .08);
+}
+.workspace-review-drawer > header {
+  position: relative;
+  min-height: 64px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.workspace-review-drawer > header > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.workspace-review-drawer > header span {
+  color: var(--accent);
+  font: 750 11px var(--font-mono);
+  letter-spacing: .12em;
+}
+.workspace-review-drawer > header strong { color: var(--text-strong); font-size: 18px; }
+.workspace-review-drawer > header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-review-drawer > header .workspace-review-dialog-actions em {
+  white-space: nowrap;
+}
+.workspace-review-drawer > .workspace-review-content { padding: 12px; }
+.workspace-review-drawer .workspace-review-notes { width: 100%; }
+@media (max-width: 1100px) {
+  .ws-body.has-review { grid-template-columns: minmax(0, 1fr); }
+  .workspace-review-drawer {
+    position: fixed;
+    z-index: 950;
+    inset: 0;
+    border-left: 0;
+  }
+}
+/* 抽屉顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
+.review-filter {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  margin: -12px -12px 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: var(--page);
+  border-bottom: 1px solid var(--line);
+}
+.review-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.review-filter button i {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 700;
+  text-align: center;
+}
+.review-filter button.attention { border-color: var(--attention); }
+.review-filter button.attention i { color: var(--attention); background: var(--attention-soft); }
+.review-filter button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.review-filter button.active i { color: var(--accent); background: var(--surface); }
+.feedback-convert {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.feedback-convert:hover { border-color: var(--accent); color: var(--accent); }
+.feedback-convert:disabled { opacity: .6; cursor: default; }
+.feedback-convert-notice {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 .workspace-review-notes {
   width: min(1220px, 100%);
   min-height: 0;
@@ -4485,7 +4614,27 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-radius: 50%;
   background: var(--accent);
 }
-.option-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* 选项文本可拖选复制(用户实锤:能选中就行,不要按钮)。浏览器默认不让
+   选 button 里的字;拖选松手不选中选项由 TaskCard 的 onClick 判断。 */
+.option-body {
+  min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px;
+  user-select: text; cursor: text;
+}
+.task-order-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.task-order-toggle i { font-style: normal; color: var(--muted); }
+.task-order-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .option-title {
   color: var(--text-strong);
   font-size: 14.5px;
@@ -6608,7 +6757,11 @@ pre {
   margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.6;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.feedback-item-foot { color: var(--muted); font-size: 12px; }
+.feedback-item-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.feedback-item-foot small { color: var(--muted); font-size: 12px; }
 .issue-workspace-body > .feedback-panel {
   padding: 9px 14px 11px;
   border: 1px solid var(--line);

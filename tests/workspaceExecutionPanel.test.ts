@@ -16,7 +16,7 @@ test("进入独立执行现场页签后直接展开，不要求用户再点一�
   assert.match(workspace, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
-test("批注与检视是常驻按钮，点击弹出且不替换主工作面", () => {
+test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主工作面", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
     workspace.indexOf('<div ref={workspaceBody'),
@@ -24,11 +24,13 @@ test("批注与检视是常驻按钮，点击弹出且不替换主工作面", ()
   assert.match(navigation, /ws-review-launch/);
   assert.match(navigation, /批注与检视/);
   assert.match(navigation, /aria-haspopup="dialog"/);
-  assert.match(workspace, /className="workspace-review-dialog" role="dialog"/);
+  // 2026-09-02 弹层改抽屉:挤进正文右栏,主工作面(材料/协作/执行)不动。
+  assert.match(workspace,
+    /className="workspace-review-drawer"\s+role="complementary"/);
   assert.match(workspace, /\{reviewWorkspaceContent\}/,
-    "弹层应恢复完整批注、回应和 Committer 检视工作面");
+    "抽屉应承载完整批注、回应和 Committer 检视工作面");
   assert.doesNotMatch(workspace, /aria-label="本轮检视清单"/,
-    "批注不应再作为右栏抽屉接管 Agent 当前问题");
+    "批注不应以旧的'本轮检视清单'形态接管 Agent 当前问题");
 });
 
 test("Token 用量是执行现场独立页签，不混入实时事件或批注检视", () => {

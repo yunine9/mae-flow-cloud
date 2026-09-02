@@ -22,6 +22,7 @@ import {
   editAnnotation,
   judgeAnnotation,
   sendAnnotations,
+  TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
   type AnchorCheck,
   type TaskStatus,
@@ -122,6 +123,36 @@ export function authorVerdictReady(
   return true;
 }
 
+/** 批注与检视抽屉顶部筛选条的三档:等我确认 / Agent 处理中 / 已闭环。
+ * 批注、CodeHub 意见、机器告警三节共用,人一眼看到"此刻压在我这的有几条"。 */
+export type ReviewFilter = "all" | "mine" | "agent" | "closed";
+
+/** 一条批注归筛选条的哪一档。只用现成事实(状态、作者、裁决就绪),不猜。 */
+export function annotationCategory(
+  item: Annotation,
+  context: {
+    viewerUsername: string;
+    taskStatus: TaskStatus;
+    reviewReady: boolean;
+    canOverride: boolean;
+    reviewAnnotationIds: readonly string[];
+  },
+): Exclude<ReviewFilter, "all"> {
+  if (item.status === "verified" || item.status === "dropped") return "closed";
+  const isAuthor = item.author === context.viewerUsername;
+  if (item.status === "draft") return isAuthor ? "mine" : "agent";
+  if (isAuthor && authorVerdictReady(item, context.taskStatus, context.reviewReady)) {
+    return "mine";
+  }
+  return adminOverrideAccess({
+    item,
+    viewerUsername: context.viewerUsername,
+    canOverride: context.canOverride,
+    reviewReady: context.reviewReady,
+    reviewAnnotationIds: context.reviewAnnotationIds,
+  }).canVerify ? "mine" : "agent";
+}
+
 /** 一条批注此刻处在哪。检视闭环的五站:
  * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
 function progressOf(
@@ -196,9 +227,12 @@ export function AnnotationPanel({
   requirementRevisionRunning = false,
   mergeRequestOpen,
   evidenceAwaiting = false,
+  filter = "all",
   onChanged,
   onLocate,
 }: {
+  /** 抽屉顶部筛选条选中的档;非 all 时只列该档的批注。 */
+  filter?: ReviewFilter;
   taskId: string;
   viewerUsername: string;
   items: Annotation[];
@@ -279,6 +313,10 @@ export function AnnotationPanel({
       if (leftCurrent !== rightCurrent) return rightCurrent ? 1 : -1;
       return left.index - right.index;
     }).map(({ item }) => item);
+  const visibleItems = filter === "all" ? orderedItems : orderedItems.filter(
+    (item) => annotationCategory(item, {
+      viewerUsername, taskStatus, reviewReady, canOverride, reviewAnnotationIds,
+    }) === filter);
   // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
   // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
   // 多点一下标题才见内容,用户实锤"为啥默认折叠"。
@@ -480,8 +518,11 @@ export function AnnotationPanel({
       )}
       {error && <div className="alert">{error}</div>}
 
+      {filter !== "all" && !visibleItems.length && items.length > 0 && (
+        <p className="annot-panel-note">这一档下没有批注；切回“全部”看完整清单。</p>
+      )}
       <ol className="annot-list">
-        {orderedItems.map((item) => {
+        {visibleItems.map((item) => {
           const check = checkOf(item.id);
           const archival = taskStatus === "completed"
             && item.status === "draft";
@@ -510,7 +551,10 @@ export function AnnotationPanel({
                 <button type="button" className="annot-where"
                         onClick={() => onLocate?.(item)}
                         title={`回到 ${item.file}:${check?.line ?? item.line}`}>
-                  <code>{shortPath(item.file)}:{check?.line ?? item.line}</code>
+                  {/* 需求原文是虚拟产物,内部名 __task_requirement__ 不该露给人
+                      (2026-09-02 演示截图逮住)。 */}
+                  <code>{item.file === TASK_REQUIREMENT_ARTIFACT
+                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}</code>
                 </button>
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
@@ -519,7 +563,7 @@ export function AnnotationPanel({
               </div>
               {editing ? (
                 <div className="annot-inline-editor">
-                  <textarea value={editingNote} autoFocus rows={3}
+                  <textarea value={editingNote} autoFocus rows={5}
                             aria-label="修改批注意见"
                             onChange={(event) => setEditingNote(event.target.value)} />
                   <div>

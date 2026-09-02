@@ -9,12 +9,14 @@ const workspace = readFileSync(
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
-test("长批注在独立检视弹层内滚动", () => {
-  assert.match(workspace, /className="workspace-review-dialog" role="dialog"/);
-  assert.match(css, /\.workspace-review-dialog\s*\{[^}]*max-height:/s);
-  assert.match(css, /\.workspace-review-dialog\s*\{[^}]*overflow:\s*hidden/s);
+test("长批注在右侧抽屉内滚动,不挤压主工作台", () => {
+  // 2026-09-02 弹层改抽屉(用户定调易用性优先):滚动仍由抽屉内容区兜住。
+  assert.match(workspace,
+    /className="workspace-review-drawer"\s+role="complementary"/);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*min-height:\s*0/s);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*overflow:\s*hidden/s);
   assert.match(css, /\.workspace-review-content\s*\{[^}]*overflow:\s*auto/s,
-    "长批注应由弹层内容区统一滚动，不能挤压主工作台");
+    "长批注应由抽屉内容区统一滚动，不能挤压主工作台");
 });
 
 test("Markdown 全屏使用宽画布且图表优先缩放到一屏", () => {

@@ -935,7 +935,17 @@ export function WaitingCard({
                       className={`option${chosen ? " picked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
-                      onClick={() => pickOption(item.question, option)}
+                      onClick={(event) => {
+                        // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
+                        // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
+                        const selection = window.getSelection();
+                        if (selection && !selection.isCollapsed
+                            && selection.anchorNode
+                            && event.currentTarget.contains(selection.anchorNode)) {
+                          return;
+                        }
+                        pickOption(item.question, option);
+                      }}
                     >
                       <span className={`radio${chosen ? " on" : ""}`} />
                       <span className="option-body">
