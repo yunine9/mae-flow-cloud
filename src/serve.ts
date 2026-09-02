@@ -40,6 +40,7 @@ import {
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
+import { IssueFlowLubanApproval } from "./issueFlow/lubanApproval.ts";
 import {
   McpGateway,
   McpDtsGateway,
@@ -967,7 +968,13 @@ async function main(): Promise<void> {
       + `(重新入队 ${recovered.requeued} 个)`);
   }
   const lubanApproval = lubanPluginToken
-    ? new LubanApprovalGateway(service, {
+    ? new LubanApprovalGateway([
+        // 需求任务与问题会话的等待卡同一部手机都能答:问题会话经
+        // 适配层投影(list 现查、decide 转 answer),审批真相各自
+        // 只在自家一处,网关不认识两个域的差别。
+        service,
+        new IssueFlowLubanApproval(issueFlow),
+      ], {
         token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
         ...(notifier ? {
