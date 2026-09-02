@@ -648,6 +648,15 @@ export class CloudSession {
    * pi 在真正开始那条用户消息时才把它移出队列,所以"不在队列里"就是
    * "模型已经读到了"——这是可观测的事实,不是推断。页面据此如实告诉人
    * "送达没有",省得他发完一句就石沉大海。 */
+  /** 只记账不送达:等人决定/排队时的 @ 引用不走 steer,而是随决定或
+   * 使命送达,但页面的「捎过去的话」只认事件账里的 via=interrupt。没这条
+   * 账,人点完发送就石沉大海(用户 2026-09-02 实测)。必须走本会话的
+   * emit——另开一个 EventLog 实例追加会让这里缓存的 lastEventId 落后,
+   * 下一条真事件撞号被当重放 no-op 静默丢掉。 */
+  noteUserMessage(text: string, extra: Record<string, unknown>): void {
+    this.emit("user_message", this.sessionId, { text, via: "interrupt", ...extra });
+  }
+
   pendingSteers(): string[] {
     try {
       const queue = (this.session as any).getSteeringMessages?.();

@@ -2580,6 +2580,8 @@ export interface InterruptRecord {
   text: string;
   at: string;
   delivered: boolean;
+  /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
+  deferred?: "decision" | "mission";
   /** 你说完之后它说的话(按时间切到下一条插话为止)。
    * 刻意不叫 reply:宿主没法证明哪一段是在答你,只能给时间顺序。 */
   said: Array<{ text: string; at: string }>;

@@ -4423,6 +4423,8 @@ export class TaskService {
    * 那段话说完),所以只按时间切片给到下一条插话为止,标签也这么写。 */
   listInterrupts(id: string): Array<{
     text: string; at: string; delivered: boolean;
+    /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
+    deferred?: "decision" | "mission";
     said: Array<{ text: string; at: string }>;
   }> {
     const task = this.tasks.get(id);
@@ -4431,9 +4433,16 @@ export class TaskService {
       ...(task.driver?.pendingSteers() ?? []),
       ...(task.pendingMainSteers ?? []),
     ]);
+    // 延后送达的判据同样是事实:随决定送达的,决定提交时清 pendingDecision
+    // Knowledge 就是送达;排队期的,任务离开排队(且没被取消)、并且不再
+    // 压在 pendingMainSteers 里,才是随首条 prompt 进了模型。
+    const awaitingDecision = new Set(task.pendingDecisionKnowledge ?? []);
+    const missionDelivered = !["queued", "canceled"]
+      .includes(task.summary.status);
     try {
       const rows: Array<{
         text: string; at: string; delivered: boolean;
+        deferred?: "decision" | "mission";
         said: Array<{ text: string; at: string }>;
       }> = [];
       for (const event of new EventLog(
@@ -4442,9 +4451,17 @@ export class TaskService {
         if (event.kind === "user_message"
             && event.payload?.via === "interrupt") {
           const text = String(event.payload?.text ?? "");
+          const deferred = event.payload?.deferred === "decision"
+            || event.payload?.deferred === "mission"
+            ? event.payload.deferred as "decision" | "mission" : undefined;
           rows.push({
             text, at: String(event.ts ?? ""),
-            delivered: !pending.has(text), said: [],
+            delivered: deferred === "decision" ? !awaitingDecision.has(text)
+              : deferred === "mission"
+                ? missionDelivered && !pending.has(text)
+              : !pending.has(text),
+            ...(deferred ? { deferred } : {}),
+            said: [],
           });
           continue;
         }
@@ -9635,15 +9652,27 @@ export class TaskService {
         ...(task.pendingDecisionKnowledge ?? []), delivered];
       this.recordSteerKnowledge(task, resolved.footprints);
       this.persist(task);
+      this.recordDeferredInterrupt(task, delivered, "decision");
       this.options.log?.(`任务 ${id} 引用了 ${resolved.labels.join("、")}`
         + ",将随下一次决定送达");
       return { ...task.summary };
     }
-    if (task.summary.status === "queued" && task.mission && resolved) {
-      // 还没拿到并发槽:引用并进同一份持久使命,不多起会话。
-      task.mission += `\n\n${delivered}`;
+    if (task.summary.status === "queued" && resolved) {
+      // 还没拿到并发槽:有专项使命(修复环)就并进同一份使命;普通新单
+      // 没有使命,压进 pendingMainSteers 由 launch 随首条 prompt 送达。
+      // 原来只认有使命的排队单,普通排队单的引用被"没有在跑的会话可插话"
+      // 拒掉——README 写的"queued 并入使命"在最常见的新单上根本不成立
+      // (2026-09-02 写排队用例时实锤)。两条路都不多起会话。
+      if (task.mission) {
+        task.mission += `\n\n${delivered}`;
+      } else {
+        task.pendingMainSteers = [...new Set([
+          ...(task.pendingMainSteers ?? []), delivered,
+        ])];
+      }
       this.recordSteerKnowledge(task, resolved.footprints);
       this.persist(task);
+      this.recordDeferredInterrupt(task, delivered, "mission");
       return { ...task.summary };
     }
     if (task.summary.status !== "running" || !task.driver) {
@@ -9654,6 +9683,40 @@ export class TaskService {
     if (resolved) this.recordSteerKnowledge(task, resolved.footprints);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
+  }
+
+  /** 延后送达的插话也要立刻落一条账。等人决定/排队时的 @ 引用不经
+   * steer 队列,而「捎过去的话」只重放事件账里的 via=interrupt——不落账,
+   * 页面就永远停在"已捎过去,待读取状态会在下方更新"(用户 2026-09-02
+   * 实测)。等人决定时主会话通常还活着(卡在人工闸里),必须借它的
+   * emit 记账共用编号;没有会话(排队)才另开实例。记账是旁路,
+   * 失败只记日志,不能挡住引用本身的送达。 */
+  private recordDeferredInterrupt(
+    task: TaskState,
+    text: string,
+    deferred: "decision" | "mission",
+  ): void {
+    try {
+      if (task.driver) {
+        task.driver.noteUserMessage(text, { deferred });
+        return;
+      }
+      const log = new EventLog(
+        join(task.summary.workspace, "events.jsonl"),
+        (event) => this.bypass(
+          task, "投影事件", this.options.projection?.appendEvent(event)));
+      log.append({
+        eventId: log.lastEventId() + 1,
+        taskId: task.summary.id,
+        sessionId: "host",
+        ts: new Date().toISOString(),
+        kind: "user_message",
+        payload: { text, via: "interrupt", deferred },
+      });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 延后插话记账失败: ${String(error)}`);
+    }
   }
 
   /** 旁路开发助手的读侧：回复来自助手快照，命令/文件工具结果来自
@@ -11796,7 +11859,7 @@ export class TaskService {
       }
       if (task.pendingMainSteers?.length) {
         promptSteerCount = task.pendingMainSteers.length;
-        prompt = `${prompt}\n\n主任务在暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
+        prompt = `${prompt}\n\n主任务启动前或暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
           + task.pendingMainSteers.map((text) => `- ${text}`).join("\n");
       }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——

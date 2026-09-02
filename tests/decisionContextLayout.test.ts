@@ -335,3 +335,24 @@ test("列表收起卡保留只有节点的阶段轨道——去词签不去进�
   assert.match(css,
     /\.task-card:not\(\.expanded\) \.task-summary \.token-usage \{ display: none; \}/);
 });
+
+test("开发协作:默认标签跟可用性走,占位文案与原因框一致,延后插话有回执", () => {
+  // 用户 2026-09-02 实测三处:任务不在运行就默认落到不可用的开发助手;
+  // 等人决定时占位写"主任务暂停时…"与原因框打架;等待/排队期 @ 引用发出
+  // 后「捎过去的话」永远不更新。
+  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(box,
+    /useState<CollaborationMode>\(\s*steerOnly \|\| task\.status === "running" \? "steer" : "assistant"/,
+    "默认标签不许按状态硬猜");
+  assert.match(box,
+    /task\.status !== "running" && assistant\.availability\.available\s*\? "assistant" : "steer"/);
+  assert.match(box, /modePicked\.current = true/, "人点过标签后不再替他换");
+  assert.doesNotMatch(box, /: "主任务暂停时，请切到“开发助手”直接处理代码现场"\}/);
+  assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
+  assert.match(box, /item\.deferred === "decision" \? "随下一次决定送达"/);
+  const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision"\)/);
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission"\)/);
+  // 借活会话的 emit 记账,不另开实例撞编号。
+  assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred \}\)/);
+});

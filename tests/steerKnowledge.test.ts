@@ -187,6 +187,13 @@ test("等人决定:纯文字仍拒;引用压进决定 continuation 并持久化"
       "等待期引用必须持久化,重启不能吞掉人说过的话");
     assert.match(String(saved.pending_decision_knowledge[0]),
       /边界条件|对账幂等表/);
+    // 回执:延后送达也得当场在「捎过去的话」里有一行,并如实标"还没送"。
+    // 原来这条路不落事件账,页面永远停在"待读取状态会在下方更新"。
+    const queued = service.listInterrupts(id);
+    assert.equal(queued.length, 1, "等待期引用发出即记账");
+    assert.equal(queued[0].deferred, "decision");
+    assert.equal(queued[0].delivered, false, "决定没提交就不许报已读取");
+    assert.match(queued[0].text, /决定前先看这两份/);
 
     const waiting = service.get(id)!.waiting!;
     await service.decide(id, {
@@ -202,6 +209,43 @@ test("等人决定:纯文字仍拒;引用压进决定 continuation 并持久化"
       join(dataDir, id, "task.json"), "utf-8"));
     assert.ok(!after.pending_decision_knowledge?.length,
       "已送达的引用不许在下一张决定卡重复注入");
+    const delivered = service.listInterrupts(id);
+    assert.equal(delivered.length, 1, "记账不重复:决定送达不再补一条");
+    assert.equal(delivered[0].delivered, true, "随决定送达后回执翻成已读取");
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
+});
+
+test("排队:引用并入使命并当场记账;任务启动后回执翻成已读取", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-atref-queued-"));
+  await seedSkill(dataDir, "mask-rules", "手机号掩码必须保留后四位——这是铁律");
+  // 剧本按各自对话里的工具结果数选场景,两单共用同一份剧本互不串台。
+  const model = new ScriptedModelServer(SLOW_SCRIPT);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), maxConcurrent: 1,
+  });
+  try {
+    const first = service.create("先占住唯一并发槽").id;
+    await until(() => model.requests.length >= 1, "首单开跑");
+    const id = service.create("给手机号打码").id;
+    assert.equal(service.get(id)?.status, "queued", "第二单必须还在排队");
+    await service.interrupt(id, "开工前先读这份", "alice",
+      [{ kind: "skill", directory: "mask-rules" }]);
+    const rows = service.listInterrupts(id);
+    assert.equal(rows.length, 1, "排队期引用发出即记账,没有会话也不例外");
+    assert.equal(rows[0].deferred, "mission");
+    assert.equal(rows[0].delivered, false, "还没启动就不许报已读取");
+    await until(() => service.get(first)?.status === "completed", "首单收口");
+    await until(() => service.get(id)?.status === "completed", "第二单收口",
+      30_000);
+    assert.equal(service.listInterrupts(id)[0]?.delivered, true,
+      "使命进了首条 prompt 才算送达");
+    assert.match(userTexts(model), /掩码必须保留后四位——这是铁律/,
+      "引用正文随使命进了模型");
   } finally {
     await service.shutdown();
     await model.stop();
