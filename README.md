@@ -261,7 +261,15 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   `host_projection`(schema /2)。**这份契约现在有两份实现,一边改另一边
   必须同步,否则整条持续检视链静默锁死——这是长期隐患,该收敛成单一
   来源。** Cloud 侧的宿主绑定与凭据签发已由持续检视终审独立落地,本次
-  未改。
+  未改。③**站在 main 上又实测出一条**:每一轮改码修复都以 Agent 停在
+  `external_verify`、生命周期暂无收据背书结尾,靠随后的 `pipeline record`
+  重新封印;它若失败一次(30 秒预算、内核拒收),`pipelineVerdict` 里
+  无条件的 `syncFeedbackStoreFromKernel` 找不到匹配收据,被自己的 catch
+  误诊成「持续检视索引损坏或不可写」直接 stalled 找人,而重试调度看到
+  stalled 就退出——一次瞬时抖动 = 停摆,重试预算形同虚设。现改为登记
+  成功才对账,登记失败走原有"如实挂起 + 带预算重试"分支;对账本身失败
+  也只准挂起重试。回归:`tests/pipelineVerdictSyncGuard.test.ts`(未修复
+  树上实测红在"误诊索引损坏"那一步)。
   **已验**:真内核+真 git+真 RSA 端到端回归(量大检视整轮走通并在合入后
   收口、软链信任根下可用、绑定由宿主写在工作区之外、流水线登记无凭据
   被拒/摘要不符被拒/配套凭据放行)、Cloud 全量、双 TypeScript、Web 生产

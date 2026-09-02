@@ -13551,7 +13551,25 @@ export class TaskService {
       const attestation = await this.recordPipelineEvidence(
         task, sha, status, checks);
       if (!this.current(task, epoch)) return;
-      this.syncFeedbackStoreFromKernel(task);
+      // 只有登记成功才有新收据可对账。持续检视里每一轮改码修复都以
+      // Agent 停在 external_verify、生命周期暂无收据背书结尾——正是这条
+      // pipeline record 重新封印。它若失败一次(30 秒预算、内核拒收),
+      // 无条件 sync 必然找不到匹配收据,被它自己的 catch 误诊成"持续检视
+      // 索引损坏或不可写"直接 stalled 找人;而 schedulePipelineEvidenceRetry
+      // 看到 stalled 就退出——一次抖动等于停摆,重试预算形同虚设,原来
+      // "如实标 verifying + 带预算重试"那条诚实分支永远跑不到(main 上
+      // 实测)。登记失败走诚实分支;登记成功但对账仍失败,也只准如实
+      // 挂起并带预算重试。
+      if (attestation) {
+        try {
+          this.syncFeedbackStoreFromKernel(task);
+        } catch (error) {
+          this.holdExternalVerification(
+            task, `反馈索引与内核收据对账失败：${String(error)}`);
+          this.schedulePipelineEvidenceRetry(task, sha, epoch, false);
+          return;
+        }
+      }
       if (attestation?.verdict === "RED") {
         // overall 与逐项结果矛盾时，裁决权仍在内核。typed RED 进入与
         // 常规红灯完全相同的轻量修复环，不挂一张人工 Diff 卡。
