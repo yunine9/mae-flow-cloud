@@ -47,6 +47,7 @@ type LaunchDraft = {
   title: string;
   requirement: string;
   requirementDocumentName: string;
+  requirementBundleName?: string;
   repos: string[];
   repositoryTickets?: string[];
   collaborators?: string[];
@@ -59,6 +60,7 @@ type LaunchDraft = {
   moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
   repositoryTechnologies?: RepositoryTechnologyDraft[];
+  requirementAnalysis?: boolean;
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -264,7 +266,12 @@ export function LaunchWorkspace({
     validDraft?.requirement ?? "");
   const [requirementDocumentName, setRequirementDocumentName] = useState(
     validDraft?.requirementDocumentName ?? "");
-  const [documentError, setDocumentError] = useState("");
+  const [documentError, setDocumentError] = useState(
+    validDraft?.requirementBundleName
+      ? `上次使用了 ${validDraft.requirementBundleName}；文字草稿已恢复，图片材料请重新上传 ZIP。`
+      : "");
+  const [requirementBundleDraftName, setRequirementBundleDraftName] = useState(
+    validDraft?.requirementBundleName ?? "");
   const [requirementBundle, setRequirementBundle] =
     useState<RequirementBundleDraft>();
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -320,7 +327,8 @@ export function LaunchWorkspace({
     validDraft?.taskInstructions ?? "");
   // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
   // 小需求照旧直干;勾了走多仓同款的 Chain 分析,把一个仓拆成多个交付单元。
-  const [requirementAnalysis, setRequirementAnalysis] = useState(false);
+  const [requirementAnalysis, setRequirementAnalysis] = useState(
+    validDraft?.requirementAnalysis === true);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -341,6 +349,8 @@ export function LaunchWorkspace({
     || validDraft?.taskInstructions?.trim()
     || validDraft?.repairRounds?.trim(),
   ));
+  const latestDraft = useRef<LaunchDraft | undefined>(undefined);
+  const discardDraftOnClose = useRef(false);
   const [knowledgePreview, setKnowledgePreview] =
     useState<LaunchKnowledgePreview>();
   const [knowledgePreviewLoading, setKnowledgePreviewLoading] = useState(true);
@@ -591,39 +601,40 @@ export function LaunchWorkspace({
     return () => { alive = false; };
   }, []);
 
-  const persistDraft = () => {
-    // ZIP 图片不塞进 localStorage。刷新后让用户重新选择材料包，避免只
-    // 恢复 Markdown 却把图片静默丢掉。
-    if (requirementBundle) {
-      try { localStorage.removeItem(storageKey("draft", session.username)); }
-      catch { /* 草稿旁路不影响当前材料包 */ }
-      return;
-    }
-    const draft: LaunchDraft = {
-      version: LAUNCH_DRAFT_VERSION,
-      updatedAt: new Date().toISOString(),
-      title,
-      requirement,
-      requirementDocumentName,
-      repos,
-      repositoryTickets,
-      collaborators,
-      ticket,
-      baseline,
-      lane,
-      repairRounds,
-      taskInstructions,
-      selectedBusinessModuleIds,
-      moduleSelectionTouched,
-      workflowSelection,
-      repositoryTechnologies: repositoryTechnologies.map((item) => ({
-        ...item, technologies: [...item.technologies],
-      })),
-    };
+  // 始终保留当前渲染对应的完整快照。关闭弹层时组件会立刻卸载，不能
+  // 再依赖 300ms 防抖回调读取状态；ref 让卸载/pagehide 都能同步落盘。
+  latestDraft.current = {
+    version: LAUNCH_DRAFT_VERSION,
+    updatedAt: new Date().toISOString(),
+    title,
+    requirement,
+    requirementDocumentName,
+    requirementBundleName: requirementBundle?.name
+      || requirementBundleDraftName || undefined,
+    repos,
+    repositoryTickets,
+    collaborators,
+    ticket,
+    baseline,
+    lane,
+    repairRounds,
+    taskInstructions,
+    selectedBusinessModuleIds,
+    moduleSelectionTouched,
+    workflowSelection,
+    requirementAnalysis,
+    repositoryTechnologies: repositoryTechnologies.map((item) => ({
+      ...item, technologies: [...item.technologies],
+    })),
+  };
+
+  const persistDraft = (showSaved = true) => {
+    const draft = latestDraft.current;
+    if (!draft || discardDraftOnClose.current) return;
     try {
       localStorage.setItem(storageKey("draft", session.username),
         JSON.stringify(draft));
-      setDraftSavedAt(draft.updatedAt);
+      if (showSaved) setDraftSavedAt(draft.updatedAt);
     } catch {
       // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
     }
@@ -637,7 +648,19 @@ export function LaunchWorkspace({
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
+    requirementBundleDraftName,
+    requirementAnalysis,
     session.username]);
+
+  useEffect(() => {
+    const flushDraft = () => persistDraft(false);
+    window.addEventListener("pagehide", flushDraft);
+    return () => {
+      window.removeEventListener("pagehide", flushDraft);
+      // 也覆盖父页面切栏目、快捷入口把发起弹层直接卸载的情况。
+      flushDraft();
+    };
+  }, [session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -680,7 +703,10 @@ export function LaunchWorkspace({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !submitting) onClose();
+      if (event.key === "Escape" && !submitting) {
+        persistDraft();
+        onClose();
+      }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => {
@@ -739,6 +765,7 @@ export function LaunchWorkspace({
       setRequirement(content);
       setRequirementDocumentName(file.name);
       setRequirementBundle(undefined);
+      setRequirementBundleDraftName("");
     } catch {
       setDocumentError("文件读取失败，请确认文件可访问后重试");
     }
@@ -757,6 +784,7 @@ export function LaunchWorkspace({
       setRequirement(preview.requirement);
       setRequirementDocumentName(preview.document_name);
       setRequirementBundle({ name: file.name, contentBase64, preview });
+      setRequirementBundleDraftName(file.name);
     } catch (cause) {
       setDocumentError(cause instanceof Error ? cause.message : "材料包解析失败");
     } finally {
@@ -838,6 +866,7 @@ export function LaunchWorkspace({
         ...usedRepos,
         ...(savedPreferences?.recentRepos ?? []),
       ])].slice(0, 5);
+      discardDraftOnClose.current = true;
       try {
         localStorage.setItem(storageKey("preferences", session.username),
           JSON.stringify({
@@ -873,8 +902,10 @@ export function LaunchWorkspace({
       aria-labelledby="launch-workspace-title"
     >
       <header className="ws-head launch-head">
-        <button type="button" className="launch-close" onClick={onClose}
-          disabled={submitting} aria-label="取消创建任务">
+        <button type="button" className="launch-close" onClick={() => {
+          persistDraft();
+          onClose();
+        }} disabled={submitting} aria-label="取消创建任务">
           <svg viewBox="0 0 20 20" aria-hidden><path d="m6 6 8 8M14 6l-8 8" /></svg>
           <span>取消</span>
         </button>
@@ -904,6 +935,9 @@ export function LaunchWorkspace({
                   setTitle("");
                   setRequirement("");
                   setRequirementDocumentName("");
+                  setRequirementBundle(undefined);
+                  setRequirementBundleDraftName("");
+                  setDocumentError("");
                   setRepos([""]);
                   setRepositoryTickets([""]);
                   setCollaborators([]);
@@ -993,6 +1027,7 @@ export function LaunchWorkspace({
                     onChange={(event) => {
                       setRequirement(event.target.value);
                       setDocumentError("");
+                      setRequirementBundleDraftName("");
                       if (!event.target.value) setRequirementDocumentName("");
                     }}
                     placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
@@ -1012,6 +1047,7 @@ export function LaunchWorkspace({
                     <button type="button" onClick={() => {
                       setRequirement(""); setRequirementDocumentName("");
                       setRequirementBundle(undefined);
+                      setRequirementBundleDraftName("");
                       setDocumentError("");
                     }}>移除</button>
                   </div>}

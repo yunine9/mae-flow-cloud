@@ -1783,6 +1783,7 @@ export function TaskWorkspace({
             {committers.length > 0 ? (
               <div className="workspace-review-invite-action">
                 <UserPicker ariaLabel="选择 Committer" value={reviewer}
+                  emptyLabel="请选择 Committer"
                   options={committers} onChange={setReviewer} />
                 <button type="button" disabled={!reviewer || reviewBusy}
                   onClick={() => void inviteReview()}>

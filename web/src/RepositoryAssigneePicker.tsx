@@ -140,6 +140,7 @@ export function RepositoryAssigneePicker({
             <small>该单元的执行人</small>
             <UserPicker value={selected}
               ariaLabel={`${rowLabel}的执行人`}
+              emptyLabel="请选择执行人"
               onChange={(username) => chooseAssignee(repository.id, username)}
               options={[...new Set([selected,
                 ...people.map((person) => person.username)])]

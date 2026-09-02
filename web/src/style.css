@@ -1420,7 +1420,7 @@ svg {
 .workspace-review-opinions { min-width: 0; }
 .workspace-review-opinions .annot-panel { margin-top: 0; }
 .workspace-invite-dialog {
-  width: min(520px, 100%);
+  width: min(460px, 100%);
   max-height: min(680px, calc(100vh - 56px));
   overflow: hidden;
   color: var(--text);
@@ -1470,9 +1470,12 @@ svg {
 }
 .workspace-review-invite-action {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(180px, 260px) auto;
+  align-items: start;
+  justify-content: start;
   gap: 8px;
 }
+.workspace-review-invite-action .user-picker { width: 260px; max-width: 100%; }
 .workspace-review-invite-action > button {
   min-height: 36px;
   padding: 0 13px;
@@ -1559,10 +1562,10 @@ svg {
 /* ── 人员选择：姓名用于阅读，工号仍是身份；几十人时直接搜索。 ── */
 .user-picker { position: relative; min-width: 0; }
 .user-picker-value {
-  width: 100%; min-height: 38px; padding: 8px 10px;
+  width: 100%; min-height: 34px; padding: 6px 9px;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   color: var(--text-strong); background: var(--surface); border: 1px solid var(--line);
-  border-radius: 8px; text-align: left;
+  border-radius: 8px; font-size: 12.5px; text-align: left;
 }
 .user-picker-value span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-picker-value i { color: var(--faint); font-style: normal; }
@@ -1570,26 +1573,39 @@ svg {
 .user-picker.open .user-picker-value { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .user-picker-popover {
   position: absolute; z-index: 80; top: calc(100% + 5px); left: 0;
-  width: 300px; max-width: calc(100vw - 48px); padding: 8px;
+  width: 260px; max-width: calc(100vw - 32px); padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 10px; background: var(--surface);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .24);
+  border-radius: 9px; background: var(--surface);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .2);
 }
 .user-picker-popover > input {
-  box-sizing: border-box; width: 100%; padding: 9px 10px; color: var(--text);
+  box-sizing: border-box; width: 100%; min-height: 32px; padding: 7px 8px; color: var(--text);
   background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px;
 }
-.user-picker-options { max-height: 250px; margin-top: 7px; overflow: auto; display: grid; gap: 3px; }
+.user-picker-options { max-height: min(176px, 32vh); margin-top: 6px; overflow: auto; display: grid; gap: 2px; }
+.user-picker-popover > .user-picker-options:first-child { margin-top: 0; }
 .user-picker-options > button {
-  min-height: 42px; padding: 7px 9px; display: flex; align-items: center;
+  min-height: 34px; padding: 6px 8px; display: flex; align-items: center;
   justify-content: space-between; gap: 10px; color: var(--text); background: transparent;
   border: 0; border-radius: 7px; text-align: left;
 }
 .user-picker-options > button:hover, .user-picker-options > button[aria-selected="true"] { background: var(--accent-soft); }
 .user-picker-options > button:disabled { opacity: .48; cursor: not-allowed; }
-.user-picker-options span { display: grid; gap: 2px; }
+.user-picker-options span { min-width: 0; display: grid; gap: 1px; }
+.user-picker-options strong { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .user-picker-options small, .user-picker-options em { color: var(--faint); font-size: 11px; font-style: normal; }
+.user-picker-options em { overflow: hidden; max-width: 104px; text-overflow: ellipsis; white-space: nowrap; }
 .user-picker-options > p { margin: 10px; color: var(--faint); text-align: center; }
+/* 当前两个选人场景都要保留周边上下文：打开后让名单在原位撑开，
+   不再用绝对定位盖住邀请记录或相邻交付单元。 */
+.workspace-review-invite-action .user-picker-popover,
+.repository-assignee-editable .user-picker-popover {
+  position: static;
+  width: 100%;
+  max-width: none;
+  margin-top: 5px;
+}
+.repository-assignee-list > label:has(.user-picker.open) { align-items: start; }
 .requirement-team-search { display: grid; grid-template-columns: auto minmax(150px, 260px); gap: 10px; align-items: center; margin: 10px 0; }
 .requirement-team-search > span { color: var(--faint); font-size: 12px; }
 .requirement-team-search input { padding: 8px 10px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
@@ -1654,7 +1670,9 @@ svg {
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
   .wish-quick-trigger { right: 12px; top: auto; bottom: 76px; }
-  .user-picker-popover { width: min(300px, calc(100vw - 48px)); }
+  .user-picker-popover { width: min(260px, calc(100vw - 32px)); }
+  .workspace-review-invite-action { grid-template-columns: 1fr; }
+  .workspace-review-invite-action .user-picker { width: 100%; }
 }
 .repo-probe-state::before {
   width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor;
