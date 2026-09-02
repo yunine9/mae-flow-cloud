@@ -857,10 +857,12 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 本票钉"恢复受额度约束",与缺省值(现为 5)解耦:显式给部署额度 2。
+    maxConcurrentTurns: 2,
     log: (message) => logs.push(message),
   });
   try {
-    // 构造即恢复:重排队的在默认额度(2)内点火,剩下的坐额度队列;
+    // 构造即恢复:重排队的在部署额度(2)内点火,剩下的坐额度队列;
     // 等家人与挂起的原样不动。目录遍历序不定,按集合断言。
     const active = ["issue-1", "issue-2", "issue-3"]
       .map((id) => service.get(id).status).sort();
@@ -1363,4 +1365,42 @@ test("现场记录导出·路由:markdown 直出、坏行跳过、未知问题 4
       await service.shutdown().catch(() => undefined);
     }
   })();
+});
+
+test("问题单并发数走管理页旋钮:额度现读,排队会话在额度腾出后补位", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget-"));
+  // 纯文本剧本(非 linear 按工具回执数取幕):两个会话各自一轮收口。
+  const model = new ScriptedModelServer([{ text: "收到,先做初步分析。" }]);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: {
+      models: () => ({}),
+      runtime: () => ({ issue_max_turns: 1 }),
+    },
+  });
+  try {
+    const first = service.create({
+      account: "dev", title: "并发额度一", ticket: "DTS-B1",
+    });
+    const second = service.create({
+      account: "dev", title: "并发额度二", ticket: "DTS-B2",
+    });
+    assert.equal(first.status, "running");
+    assert.equal(second.status, "queued",
+      "额度 1(管理页旋钮):第二个会话必须排队启动");
+    await until(() =>
+      service.get(first.id).status === "idle" ? first : undefined,
+      "首个会话收口");
+    // 收口腾出额度,泵自动补位排队的会话并跑到收口。
+    await until(() =>
+      service.get(second.id).status === "idle" ? second : undefined,
+      "排队会话补位并收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
 });

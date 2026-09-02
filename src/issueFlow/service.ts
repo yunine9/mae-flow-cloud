@@ -405,8 +405,13 @@ export interface IssueFlowOptions {
   modelsJson: Record<string, unknown>;
   settings?: {
     models(): ModelsSettings;
-    /** 流水线监看的轮询节奏(与需求侧同一份运行参数)。 */
-    runtime?(): { poll_interval_s?: number; poll_timeout_s?: number };
+    /** 流水线监看的轮询节奏(与需求侧同一份运行参数);其中的
+     *  issue_max_turns 是问题流回合并发额度(管理页「问题单并发数」,
+     *  泵现读现判,优先于 maxConcurrentTurns 部署旗)。 */
+    runtime?(): {
+      poll_interval_s?: number; poll_timeout_s?: number;
+      issue_max_turns?: number;
+    };
   };
   /** 探索方式烙印(个人设置,缺省固定流程)。回调缺席按自由模式——
    * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
@@ -436,6 +441,8 @@ export interface IssueFlowOptions {
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
   vault?: IssueEnvironmentVault;
+  /** 回合并发额度的部署缺省(--issue-max-turns):泵先读管理页运行时
+   *  旋钮 issue_max_turns,缺席才用这里;两边都缺省时是 5。 */
   maxConcurrentTurns?: number;
   /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
    * 组装会话时按同款逻辑变成 VisionCapabilityConfig,主会话由此获得
@@ -494,7 +501,9 @@ const RESTART_RESUME_NOTICE =
   "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
 
 export class IssueFlowService {
-  private readonly options: IssueFlowOptions;
+  /** 公开只读:管理页服务设置的 defaults 要展示部署层并发缺省
+   *  (与 TaskService.options 公开同一理由)。 */
+  readonly options: IssueFlowOptions;
   private readonly vault: IssueEnvironmentVault;
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
@@ -1026,10 +1035,14 @@ export class IssueFlowService {
       { moonlight: this.moonlightOn(live) }));
   }
 
-  /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
+  /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
+   *  现读现判:管理页「问题单并发数」旋钮(issue_max_turns)每次点火
+   *  都读,改完即生效;缺席退回部署旗 --issue-max-turns,再退缺省 5。 */
   private async pump(): Promise<void> {
+    const budget = this.options.settings?.runtime?.().issue_max_turns
+      ?? this.options.maxConcurrentTurns ?? 5;
     for (const live of this.live.values()) {
-      if (this.turning.size >= (this.options.maxConcurrentTurns ?? 2)) break;
+      if (this.turning.size >= budget) break;
       if (live.state.status !== "queued" || this.turning.has(live.id)) continue;
       // 重启续跑与首轮开跑共用同一份额度:带待递话的(恢复路径重新
       // 入队的)走续聊回合体,开场是平台通知;纯排队的是登记首轮,

@@ -109,6 +109,7 @@ function RuntimeCard({ view, onSaved }: {
   const defaults = view.defaults.runtime;
   const text = (value?: number) => value === undefined ? "" : String(value);
   const [concurrent, setConcurrent] = useState(text(runtime.max_concurrent));
+  const [issueTurns, setIssueTurns] = useState(text(runtime.issue_max_turns));
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
@@ -127,6 +128,7 @@ function RuntimeCard({ view, onSaved }: {
     try {
       onSaved(await putRuntimeSettings({
         max_concurrent: concurrent.trim(),
+        issue_max_turns: issueTurns.trim(),
         repair_rounds: repair.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
@@ -149,6 +151,9 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="并发任务数" defaultText={`${defaults.max_concurrent} 个`}
         note="生效于下一次调度决策"
         value={concurrent} onChange={setConcurrent} />
+      <KnobField label="问题单并发数" defaultText={`${defaults.issue_max_turns} 个`}
+        note="同时推进的问题会话回合上限，改完即生效"
+        value={issueTurns} onChange={setIssueTurns} />
       <KnobField label="自动修复轮数上限"
         defaultText={defaults.repair_rounds === null ? "不限轮" : `${defaults.repair_rounds} 轮`}
         note="0 表示关闭自动修复；生效于下一次流水线失败"

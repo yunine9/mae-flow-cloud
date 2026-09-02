@@ -826,7 +826,7 @@ async function main(): Promise<void> {
     // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
-    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
+    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "5"),
     ...(isolateImage
       ? {
           isolation: {

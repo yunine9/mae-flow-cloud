@@ -2814,6 +2814,8 @@ export async function listArtifacts(
 export interface SettingsView {
   runtime: {
     max_concurrent?: number;
+    /** 问题流回合并发额度(问题会话同时推进的回合上限)。 */
+    issue_max_turns?: number;
     repair_rounds?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
@@ -2849,6 +2851,7 @@ export interface SettingsView {
   defaults: {
     runtime: {
       max_concurrent: number;
+      issue_max_turns: number;
       repair_rounds: number | null;
       poll_interval_s: number;
       poll_timeout_s: number;
