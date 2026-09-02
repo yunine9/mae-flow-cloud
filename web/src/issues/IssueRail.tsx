@@ -140,7 +140,9 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
           {detail.conclusion?.kind === "converted"
             ? <p>本会话已关联单号 {detail.ticket ?? ""} 转正为
               {detail.converted_to ?? "新会话"}——后续在那里继续。</p>
-            : <p>没有待办动作;结论与账单见左侧页签。</p>}
+            : detail.status === "failed"
+              ? <p>失败的会话不能再续跑;要把它从列表清掉,用下方「取消」。</p>
+              : <p>没有待办动作;结论与账单见左侧页签。</p>}
         </div>}
     </div>
     <footer className="issue-rail-foot">
@@ -151,12 +153,16 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
         分析报告已产出,进入过程文档 →
       </button>}
       {/* 同控制/确认/禁用条件与旧 composer-actions 完全一致;归档与
-          取消都是写操作,查看模式整组不渲染。 */}
+          取消都是写操作,查看模式整组不渲染。failed 例外:归档需要
+          结论而失败没有结论语义,只能取消清理(2026-09-02 拍板)。 */}
       {canOperate && <div className="issue-rail-actions">
         <button type="button" disabled={busy || ["archived", "canceled", "failed"]
-          .includes(detail.status)} onClick={onArchive}>归档收口</button>
+          .includes(detail.status)}
+          title={detail.status === "failed"
+            ? "失败的会话没有结论可归档——用「取消」清理" : undefined}
+          onClick={onArchive}>归档收口</button>
         <button type="button" className="danger" disabled={busy
-          || ["archived", "canceled", "failed"].includes(detail.status)}
+          || ["archived", "canceled"].includes(detail.status)}
           onClick={onCancel}>取消</button>
       </div>}
     </footer>
