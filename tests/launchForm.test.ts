@@ -490,16 +490,30 @@ test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分
       "https://codehub/team/api.git",
       "https://codehub/team/web.git",
       "https://codehub/team/api.git", // 重复输入只保留一个节点
-    ], ticket: "REQ-G2",
+    ],
+    account: "owner",
+    collaborators: ["alice", "bob", "alice", "owner"],
   });
   assert.deepEqual(many.repositories, [
     "https://codehub/team/api.git", "https://codehub/team/web.git",
   ]);
   assert.equal(many.requirement_graph?.stage, "analysis");
+  assert.equal(many.ticket, undefined,
+    "跨仓主任务尚未形成最终交付单元，下单时不应强收 AR 单号");
+  assert.deepEqual(many.requirement_graph?.repositories.map((item) => item.ticket),
+    [undefined, undefined]);
+  assert.deepEqual(many.requirement_graph?.repositories.map((item) => item.assignee),
+    [undefined, undefined], "讨论参与人不能被误写成逐仓执行人");
+  assert.deepEqual(many.collaborators, ["alice", "bob"],
+    "主责任人之外的多人可在创建主任务时直接受邀参与讨论");
   assert.deepEqual(many.requirement_graph?.repositories.map((item) => item.name),
     ["api", "web"]);
   assert.equal(many.parent_task_id, undefined,
     "多仓需求仍是一张普通需求单，不是第二套任务类型");
+  assert.throws(() => service.create("普通单仓不创建讨论组", {
+    repo: "https://codehub/team/api.git", ticket: "REQ-G2-SINGLE",
+    account: "owner", collaborators: ["alice"],
+  }), /只有先分析再拆分的主任务可以邀请讨论参与人/);
 });
 
 test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", async () => {
@@ -542,6 +556,11 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     account: "owner",
   }), /web\.git.*ghost.*不可委派.*CodeHub Token/,
   "任一责任人不存在或未就绪都必须让整张跨仓任务创建失败");
+  assert.throws(() => service.create("讨论参与人未就绪时整单拒绝", {
+    repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
+    account: "owner", collaborators: ["charlie"],
+  }), /charlie.*个人设置尚未就绪.*CodeHub Token/,
+  "下单时邀请的讨论参与人也必须已完成个人设置");
   assert.equal(service.list().length, 0, "失败创建不能留下半张主任务");
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
@@ -555,7 +574,8 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
       "https://codehub/team/api.git": "alice",
       "https://codehub/team/web.git": "bob",
     },
-    account: "owner", repairRounds: 0, repositorySkills: [repositorySkill],
+    account: "owner", collaborators: ["alice"], repairRounds: 0,
+    repositorySkills: [repositorySkill],
     workflowDefinition: {
       schema: "mae-flow-workflow-definition/1",
       base: { standard_id: standard.standard_id,
@@ -575,6 +595,8 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
             relative_path: repositorySkill.relative_path } } }],
     },
   });
+  assert.deepEqual(parent.collaborators, ["alice"],
+    "讨论参与人应在主任务创建时就进入协作现场");
   const state = (service as any).tasks.get(parent.id);
   const root = join(dataDir, parent.id, "repositories");
   const artifacts = join(root, ".mae-flow-work", "REQ-G3-API");
@@ -947,18 +969,21 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
   assert.match(source, /两者格式相同，系统无法自动识别/);
 });
 
-test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号", () => {
+test("分析主任务先选讨论参与人，拆分后再逐单元填写执行人和 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
   const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
-  assert.match(launch, /代码仓与对应 AR 单号/);
+  const api = readFileSync(join(process.cwd(), "web/src/api.ts"), "utf-8");
   assert.match(launch, /第 \$\{index \+ 1\} 个仓库的 AR 单号/);
-  assert.match(launch, /第 \$\{index \+ 1\} 个仓库的责任人/);
-  assert.match(launch, /disabled=\{!multiRepository\}/);
   assert.match(launch, /repositoryTickets: repoFieldsEnabled/);
-  assert.match(launch, /repositoryAssignees: repoFieldsEnabled/);
-  // 勾了"先分析拆分"的单仓下单不收单号:输入框隐藏,提交也不带。
+  assert.doesNotMatch(launch, /repositoryAssignees: repoFieldsEnabled/);
+  assert.doesNotMatch(launch, /第 \$\{index \+ 1\} 个仓库的责任人/);
+  assert.match(launch, /谁一起把需求聊清楚/);
+  assert.match(launch, /可多选；只邀请，不在这里按仓分工/);
+  assert.match(launch, /collaborators: analysisTeamVisible \? collaborators : undefined/);
+  assert.match(api, /collaborators: extras\?\.collaborators/);
+  // 单仓大需求和跨仓主任务都先讨论：下单不收单号，提交也不带。
   assert.match(launch, /options\.ticket\.enabled && !ticketsDeferred/);
   assert.match(launch, /ticket: ticketsDeferred \? undefined/);
   // 单仓大需求入口是一条紧凑方案开关，不退回原生 checkbox + 长段虚线框。
@@ -967,24 +992,25 @@ test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号"
   assert.match(launch, /repo-analysis-switch/);
   assert.match(launch, /先分析，再拆分/);
   // 第二个仓填入后不能把入口卸载；大需求模式是颗粒度选择，不是仓数
-  // 选择。选中后无论单仓多仓都延后到拆分确认时逐单元收 AR。
+  // 选择。单仓选中或出现多仓都会进入主任务讨论，并延后收 AR。
   assert.match(launch,
     /const analysisEligible = repoFieldsEnabled && repositoriesToProbe\.length > 0/);
   assert.match(launch,
-    /const ticketsDeferred = requirementAnalysis && analysisEligible/);
+    /const analysisTeamVisible = analysisEligible[\s\S]*?multiRepository \|\| requirementAnalysis/);
+  assert.match(launch, /const ticketsDeferred = analysisTeamVisible/);
   assert.match(launch,
     /const repositoryTicketBlocked = Boolean\(options\?\.ticket\.enabled\)[\s\S]*?&& !ticketsDeferred/);
   assert.match(launch,
     /requirementAnalysis: requirementAnalysis && repoFieldsEnabled[\s\S]*?&& repositoriesToProbe\.length > 0/);
   assert.match(style, /\.repo-analysis-toggle\.selected/);
   assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
-  assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
+  assert.match(picker, /拆分后怎么执行/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
-  // 同仓多单元的行(单元是拆出来才存在的,下单不可能填过)责任人和
-  // 单号都要逐行可编;单单元行保持只读——下单已定的事实不设第二处
-  // 真相。缺单号的行(下单免了单号)同样给输入框。
-  assert.match(picker, /isUnitRow\(repository\) \? <span className="repository-assignee-editable">/);
-  assert.match(picker, /该单元的责任人/);
+  // 执行人与 AR 都属于最终交付单元；执行人始终可选，免单号的分析
+  // 主任务在同一确认区补齐 AR。
+  assert.match(picker, /<span className="repository-assignee-editable">/);
+  assert.match(picker, /该单元的执行人/);
+  assert.doesNotMatch(picker, /repository-assignee-readonly/);
   assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
   assert.match(picker, /chooseAssignee/);
 });
