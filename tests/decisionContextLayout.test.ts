@@ -323,3 +323,15 @@ test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意
     "需求对比直接摊开,不套代码检视的并排画布");
   assert.match(css, /\.requirement-diff-row\.del \.requirement-diff-text \{ text-decoration: line-through/);
 });
+
+test("列表收起卡保留只有节点的阶段轨道——去词签不去进度条", () => {
+  // 7f8ebb1 把收起卡的轨道整条隐藏,用户实测"当前进度"下面空了一截,
+  // 以为进度条丢了。契约:收起时只藏词签与 Token 遥测,轨道本身必须留着。
+  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.task-phase-track,?\s*[^{]*\{ display: none; \}/);
+  assert.match(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.task-phase > span \{ display: none; \}/);
+  assert.match(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.token-usage \{ display: none; \}/);
+});

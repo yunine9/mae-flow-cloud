@@ -11154,10 +11154,14 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 }
 .ws-merge-line.is-closed strong { color: var(--text-strong); font-size: 14px; }
 
-/* 列表页收起卡只保留主线:阶段轨道与 Token 遥测是详情级信息,
-   收起时隐藏——扫 20 张卡的场景里,它们把 focus 行淹了。 */
-.task-card:not(.expanded) .task-summary .task-phase-track,
+/* 列表页收起卡只保留主线:Token 遥测是详情级信息,收起时隐藏——扫 20 张
+   卡的场景里,七个阶段词签也把 focus 行淹了。但整条轨道砍掉后,"当前进度"
+   只剩一行文字,用户实测第一反应是"少了个进度条"。折中:收起卡留节点与
+   连线、去词签,一眼能看到走到第几段;展开才给全轨道。 */
 .task-card:not(.expanded) .task-summary .token-usage { display: none; }
+.task-card:not(.expanded) .task-summary .task-phase-track { margin-top: 6px; }
+.task-card:not(.expanded) .task-summary .task-phase { min-height: 10px; }
+.task-card:not(.expanded) .task-summary .task-phase > span { display: none; }
 
 /* 收起卡的一行真话:失败原因/正在等什么。单行截断,点开看全文。 */
 .task-key-line {
