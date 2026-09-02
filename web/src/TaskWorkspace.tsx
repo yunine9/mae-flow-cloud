@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
+import { RequirementDiff } from "./RequirementDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
 import {
@@ -49,6 +50,7 @@ import {
   listTaskReviews,
   readArtifact,
   readPushReviewDiff,
+  readRequirementRevision,
   repairStopped,
   requestCommitterReview,
   statusText,
@@ -65,6 +67,7 @@ import {
 } from "./api";
 import {
   ExecutionPanel,
+  isChainReviewWaiting,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -601,10 +604,15 @@ export function TaskWorkspace({
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
+  /** 需求原文页签上"这一轮改了什么"的对比;null = 看全文。 */
+  const [revisionDiff, setRevisionDiff] = useState<{
+    id: string; text: string; unavailable?: string;
+  } | null>(null);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
+  const headRef = useRef<HTMLElement>(null);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -635,6 +643,7 @@ export function TaskWorkspace({
     setReviewPanelOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
+    setRevisionDiff(null);
     setDeliverySelection(undefined);
     setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
@@ -759,6 +768,31 @@ export function TaskWorkspace({
       { runOnStart: false },
     );
   }, [task.status]);
+
+  // 批注抽屉要从任务头下面起步,否则"暂停/取消"被盖住,想暂停得先关面板。
+  // 头高不是常量:标题换行、窄屏都会撑高,写死 70px 迟早再盖回去。量一次
+  // 写进 CSS 变量,布局只认这一个真值。ResizeObserver 缺席就退回默认值,
+  // 面板照常能开——旁路不该让人卡住。
+  useEffect(() => {
+    const head = headRef.current;
+    const root = workspaceRoot.current;
+    if (!head || !root) return;
+    const publish = () => root.style.setProperty(
+      "--ws-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
+    publish();
+    // 窄屏那档任务头是 66px 不是 70px(min-height 被媒体查询改小),差 4px
+    // 就是抽屉和头之间一道背景缝。ResizeObserver 管标题换行这种"窗口没动
+    // 头却变高"的情况,window.resize 兜住它不投递回调的场合(页面不渲染时
+    // 观察器回调随帧一起停,实测过)——两条都只是重算一个数,重复无害。
+    window.addEventListener("resize", publish);
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined : new ResizeObserver(publish);
+    observer?.observe(head);
+    return () => {
+      window.removeEventListener("resize", publish);
+      observer?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -1054,13 +1088,9 @@ export function TaskWorkspace({
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
-  const chainReview = !!waiting
-    && task.requirement_graph?.stage === "analysis"
-    && (task.requirement_graph.repositories.length ?? 0) > 1
-    // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终
-    // Chain 方案检视卡出现，避免尚未定案时就让人误以为即将下发。
-    && (waiting.question?.questions?.some((question) =>
-      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+  // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
+  // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
+  const chainReview = !!waiting && isChainReviewWaiting(task);
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -1228,7 +1258,7 @@ export function TaskWorkspace({
       aria-modal="true"
       aria-labelledby="task-workspace-title"
     >
-      <header className="ws-head">
+      <header className="ws-head" ref={headRef}>
         <button type="button" className="ws-back" aria-label="返回列表"
           onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
@@ -1495,24 +1525,102 @@ export function TaskWorkspace({
                         && <em>Agent 分段读取</em>}</span>
                     <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                   </div>
-                  <Markdown text={task.requirement} resolveImage={(path) =>
-                    task.requirement_document?.assets?.some(
-                      (asset) => asset.path === path)
-                      ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
-                      : undefined} />
+                  {/* 上一轮修改被拒收或失败时,原来只有 API 里有原因,页面上人
+                      只看到"文档没变"——这里把原因摆在正文上方。 */}
+                  {task.requirement_revision?.state === "failed" && (
+                    <div className="requirement-revision-error" role="alert">
+                      <strong>上一轮修改没有生效</strong>
+                      <span>{task.requirement_revision.error ?? "Agent 没有给出原因"}</span>
+                      <small>意见仍在待提交，修正后可以重新提交</small>
+                    </div>
+                  )}
+                  {/* Agent 每改一轮都留了改前全文和 diff。复检的人原来只能靠
+                      锚点猜"改了什么",要真核对得把整篇重读——这里直接给对比。 */}
+                  {(task.requirement_revisions?.length ?? 0) > 0 && (() => {
+                    const revisions = task.requirement_revisions!;
+                    const latest = revisions[revisions.length - 1];
+                    const showing = revisionDiff?.id === latest.id;
+                    return (
+                      <div className="requirement-revision-bar" role="status">
+                        <span>
+                          Agent 已修改 {revisions.length} 轮 · 最近一轮
+                          <b className="added">+{latest.additions}</b>
+                          <b className="deleted">-{latest.deletions}</b>
+                          <small>{relativeTime(latest.at)}</small>
+                        </span>
+                        <button type="button" className={showing ? "on" : ""}
+                          onClick={() => {
+                            if (showing) { setRevisionDiff(null); return; }
+                            setRevisionDiff({ id: latest.id, text: "" });
+                            void readRequirementRevision(task.id, latest.id)
+                              .then((result) => setRevisionDiff({
+                                id: latest.id,
+                                text: result.diff ?? "",
+                                unavailable: result.unavailable,
+                              }));
+                          }}>
+                          {showing ? "回到全文" : "看这一轮改了什么"}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                  {revisionDiff ? (
+                    revisionDiff.unavailable
+                      ? <p className="requirement-revision-missing">{revisionDiff.unavailable}</p>
+                      : revisionDiff.text
+                        ? <RequirementDiff text={revisionDiff.text} />
+                        : <p className="requirement-revision-missing">正在读取对比…</p>
+                  ) : (
+                    <Markdown text={task.requirement} resolveImage={(path) =>
+                      task.requirement_document?.assets?.some(
+                        (asset) => asset.path === path)
+                        ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                        : undefined} />
+                  )}
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
               <>
-                <RequirementGraph task={task} onOpenTask={onOpenTask} />
+                {/* 图是结构化的圈不了批注,对方案的意见落在方案文档上;这里
+                    给个直达入口,不然人以为分析阶段不能提检视意见。 */}
+                {canCreateAnnotation && task.requirement_graph?.stage === "analysis"
+                  && (() => {
+                    const chainDoc = documents.find((item) =>
+                      /(^|\/)CHAIN-[^/]*\.md$/.test(item.name));
+                    return (
+                      <div className="chain-review-entry" role="note">
+                        <div>
+                          <strong>对拆分方案有意见？</strong>
+                          <small>{chainDoc
+                            ? "在方案文档上圈选要改的地方并写意见；提交决定时选「需要修改」，意见会随决定一起交给 Agent。"
+                            : "方案文档还没生成，生成后可在过程文档里圈选批注。"}</small>
+                        </div>
+                        <button type="button" disabled={!chainDoc}
+                          onClick={() => {
+                            if (!chainDoc) return;
+                            setMaterialView("doc");
+                            setActive(chainDoc.name);
+                          }}>
+                          打开方案文档批注
+                        </button>
+                      </div>
+                    );
+                  })()}
+                {/* 讨论参与人是澄清期的事,不是确认拆分时要定的:原来到了
+                    方案确认卡它整块搬进右栏,和"拆分后怎么执行"摞成 730px,
+                    卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。
+                    现在长在图里"主任务团队"那一块的按钮后面,想拉人就点开。 */}
+                <RequirementGraph task={task} onOpenTask={onOpenTask}
+                  teamInvite={canOperate && task.requirement_graph?.stage === "analysis"
+                    ? <RequirementTeamPicker
+                        taskId={task.id}
+                        owner={task.luban_account}
+                        collaborators={task.collaborators}
+                        onSaved={onChanged}
+                      />
+                    : undefined} />
                 {!chainReview && canOperate
-                  && task.requirement_graph?.stage === "analysis" && <>
-                    <RequirementTeamPicker
-                      taskId={task.id}
-                      owner={task.luban_account}
-                      collaborators={task.collaborators}
-                      onSaved={onChanged}
-                    />
+                  && task.requirement_graph?.stage === "analysis" && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph.repositories}
@@ -1521,7 +1629,7 @@ export function TaskWorkspace({
                       selection={repositoryAssignees}
                       onSelectionChange={setRepositoryAssignees}
                     />
-                  </>}
+                )}
               </>
             ) : <>
               {materialView === "diff" && pushReview && (
@@ -1778,23 +1886,17 @@ export function TaskWorkspace({
                 ? diffScope : undefined}
               attachment={requirementAnalysisConfirmation ? undefined :
                 <>
+                  {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
+                      单号。讨论参与人留在左侧图下面。 */}
                   {chainReview && (
-                    <>
-                      <RequirementTeamPicker
-                        taskId={task.id}
-                        owner={task.luban_account}
-                        collaborators={task.collaborators}
-                        onSaved={onChanged}
-                      />
-                      <RepositoryAssigneePicker
-                        taskId={task.id}
-                        repositories={task.requirement_graph!.repositories}
-                        defaultAssignee={task.luban_account}
-                        defaultTicket={task.ticket}
-                        selection={repositoryAssignees}
-                        onSelectionChange={setRepositoryAssignees}
-                      />
-                    </>
+                    <RepositoryAssigneePicker
+                      taskId={task.id}
+                      repositories={task.requirement_graph!.repositories}
+                      defaultAssignee={task.luban_account}
+                      defaultTicket={task.ticket}
+                      selection={repositoryAssignees}
+                      onSelectionChange={setRepositoryAssignees}
+                    />
                   )}
                   <AttachedNotes items={unresolvedNotes} onLocate={locate} />
                 </>
@@ -1906,12 +2008,11 @@ export function TaskWorkspace({
               <strong id="workspace-review-title">批注与检视</strong>
               <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
             </div>
+            {/* 这里原来还挂一枚"N 项等我确认"。它下面 40px 就是筛选条的
+                "等我确认 N",打开前入口按钮上也有同一个数——同一屏三份,
+                眼睛先去数数字而不是看意见。计数留在能点的地方(入口和
+                筛选条),标题栏只留关闭。 */}
             <div className="workspace-review-dialog-actions">
-              {/* 和筛选条"等我确认"同一口径,别一处说 1 项一处说 3 条。 */}
-              {(reviewCounts.mine > 0 || reviewRecordCount > 0) && <em>
-                {reviewCounts.mine > 0
-                  ? `${reviewCounts.mine} 项等我确认` : `${reviewRecordCount} 条记录`}
-              </em>}
               <button type="button" aria-label="关闭批注与检视"
                 autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
             </div>

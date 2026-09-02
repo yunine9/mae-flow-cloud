@@ -45,17 +45,45 @@ export function RepositoryAssigneePicker({
       repository.assignee ?? defaultAssignee ?? "",
     ]),
   ), [taskId, assignmentKey, defaultAssignee]);
+  // 一仓拆成多单元时,单号是"一个交付分支一个单号",在这张卡上逐单元
+  // 填(设计文档拍板)。原来把父任务单号预填给每一行:三行同号,要么被
+  // 服务端拒,要么(现在)三行一起标红——都不如留空让人逐个填。只有一仓
+  // 一单元的老路才沿用下单时填的单号。
+  const splitUrls = new Set(repositories.map((item) => item.url)
+    .filter((url, index, urls) => urls.indexOf(url) !== index));
   const initialTickets = useMemo(() => Object.fromEntries(
     repositories.map((repository) => [
       repository.id,
-      repository.ticket ?? defaultTicket ?? "",
+      repository.ticket ?? (splitUrls.has(repository.url) ? "" : defaultTicket ?? ""),
     ]),
   ), [taskId, assignmentKey, defaultTicket]);
 
-  const ticketsReady = (tickets: Record<string, string>) =>
-    repositories.every((repository) => {
+  type Unit = typeof repositories[number];
+  const unitLabel = (unit: Unit) => unit.scope?.name
+    ? `${unit.name} · ${unit.scope.name}` : unit.name;
+  /** 同仓同执行人的两个单元不能同号:内核按 {基线}_{工号}_{单号} 派生
+   * 分支,同号就是同名分支互相覆盖(设计文档拍板)。服务端会拒,但那是
+   * 人已经点了"确认"之后;而默认值恰恰把父任务单号填给每一行,不在填
+   * 的时候标出来,页面会一路显示"可委派"骗到提交。 */
+  const duplicateTicketOf = (
+    repository: Unit,
+    tickets: Record<string, string>,
+    assignments: Record<string, string>,
+  ): Unit | undefined => {
+    const value = (tickets[repository.id] ?? "").trim();
+    if (!value) return undefined;
+    return repositories.find((other) => other.id !== repository.id
+      && other.url === repository.url
+      && (assignments[other.id] ?? "") === (assignments[repository.id] ?? "")
+      && (tickets[other.id] ?? "").trim() === value);
+  };
+  const ticketsReady = (
+    tickets: Record<string, string>,
+    assignments: Record<string, string>,
+  ) => repositories.every((repository) => {
       const value = tickets[repository.id]?.trim() ?? "";
-      return Boolean(value) && !/\s/.test(value);
+      return Boolean(value) && !/\s/.test(value)
+        && !duplicateTicketOf(repository, tickets, assignments);
     });
 
   useEffect(() => {
@@ -69,7 +97,7 @@ export function RepositoryAssigneePicker({
         [candidate.username, candidate]));
       const ready = repositories.every((repository) =>
         byName.get(initialAssignments[repository.id])?.ready === true)
-        && ticketsReady(initialTickets);
+        && ticketsReady(initialTickets, initialAssignments);
       onSelectionChange({ assignments: initialAssignments, tickets: initialTickets,
         ready, loading: false });
     }).catch((cause) => {
@@ -105,7 +133,7 @@ export function RepositoryAssigneePicker({
     const nextAssignments = { ...selection.assignments, [repositoryId]: value };
     const ready = repositories.every((repository) =>
       peopleByName.get(nextAssignments[repository.id])?.ready === true)
-      && ticketsReady(selection.tickets);
+      && ticketsReady(selection.tickets, nextAssignments);
     onSelectionChange({ ...selection, assignments: nextAssignments, ready });
   }
 
@@ -113,7 +141,7 @@ export function RepositoryAssigneePicker({
     const nextTickets = { ...selection.tickets, [repositoryId]: value };
     const ready = repositories.every((repository) =>
       peopleByName.get(selection.assignments[repository.id])?.ready === true)
-      && ticketsReady(nextTickets);
+      && ticketsReady(nextTickets, selection.assignments);
     onSelectionChange({ ...selection, tickets: nextTickets, ready });
   }
 
@@ -129,10 +157,12 @@ export function RepositoryAssigneePicker({
         const selected = selection.assignments[repository.id] ?? "";
         const person = peopleByName.get(selected);
         const ticket = selection.tickets[repository.id] ?? "";
+        const duplicate = duplicateTicketOf(
+          repository, selection.tickets, selection.assignments);
         const ticketProblem = !ticket.trim() ? "缺少 AR 单号"
-          : /\s/.test(ticket.trim()) ? "AR 单号无效" : "";
-        const rowLabel = repository.scope?.name
-          ? `${repository.name} · ${repository.scope.name}` : repository.name;
+          : /\s/.test(ticket.trim()) ? "AR 单号无效"
+          : duplicate ? `单号与「${unitLabel(duplicate)}」重复` : "";
+        const rowLabel = unitLabel(repository);
         return <label key={repository.id}>
           <span><strong>{rowLabel}</strong>
             <small>{repository.responsibility ?? repository.url}</small></span>

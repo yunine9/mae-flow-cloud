@@ -868,6 +868,14 @@ export interface TaskSummary {
     finished_at?: string;
     error?: string;
   };
+  /** 已完成的每一轮需求修改;对比按 id 另取。 */
+  requirement_revisions?: Array<{
+    id: string;
+    at: string;
+    annotation_ids: string[];
+    additions: number;
+    deletions: number;
+  }>;
   requirement_document?: {
     name: string;
     bytes: number;
@@ -2572,6 +2580,10 @@ export interface InterruptRecord {
   text: string;
   at: string;
   delivered: boolean;
+  /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
+  deferred?: "decision" | "mission";
+  /** @ 引用的知识名(带发送时固定的版本号);正文不回传。 */
+  references?: string[];
   /** 你说完之后它说的话(按时间切到下一条插话为止)。
    * 刻意不叫 reply:宿主没法证明哪一段是在答你,只能给时间顺序。 */
   said: Array<{ text: string; at: string }>;
@@ -3125,6 +3137,20 @@ export async function testVisionCapability(): Promise<VisionProbeResult> {
   const response = await fetch("/settings/vision/test", { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
+}
+
+export async function readRequirementRevision(
+  taskId: string,
+  revisionId: string,
+): Promise<{ before?: string; diff?: string; unavailable?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/requirement-revisions/${encodeURIComponent(revisionId)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return { before: String(body.before ?? ""), diff: String(body.diff ?? "") };
 }
 
 export async function readArtifact(

@@ -644,6 +644,14 @@ export function AnnotationPanel({
                   <code>{item.file === TASK_REQUIREMENT_ARTIFACT
                     ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}</code>
                 </button>
+                {/* 锚定原文接在位置后面收一行:它是"这条批注指着哪儿"的补充,
+                    不是内容本身。原来它单占左栏一整块,把批注正文和 Agent
+                    回应挤成两条窄柱(用户实测:760px 抽屉里两栏只剩 304 和
+                    357)。整段仍在 title 里,点位置也能直接回到那一行。 */}
+                {item.anchor && <blockquote className="annot-anchor"
+                                            title={item.anchor}>
+                  {item.anchor}
+                </blockquote>}
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
                   {progress.text}
@@ -688,8 +696,15 @@ export function AnnotationPanel({
                     </button>
                   </div>
                 </div>
-              ) : <p className="annot-note">{item.note}</p>}
-              <blockquote className="annot-anchor"><span>针对</span>{item.anchor}</blockquote>
+              ) : (
+                // 左边这块原来是一段裸文字,右边 Agent 回应却是带标题的
+                // 色块,看上去像"正文 vs 卡片"而不是"一问一答"。给它同样
+                // 的块形和标题,明说这是检视意见原文,两边才对得起来。
+                <div className="annot-note">
+                  <strong>检视意见原文</strong>
+                  <p>{item.note}</p>
+                </div>
+              )}
               {item.response && (
                 <div className={`annot-response ${item.response.outcome}`}>
                   <strong>{item.response.outcome === "fixed"

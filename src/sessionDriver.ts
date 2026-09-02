@@ -626,11 +626,13 @@ export class CloudSession {
    * 这不绕过任何门禁:插话只改变模型下一步干什么,该过的证据一样得过。
    * 登记在 steer 成功之后——先记后发,发失败就会留下一条从未送达的假账。
    */
-  async steer(text: string): Promise<void> {
+  async steer(text: string, extra: Record<string, unknown> = {}): Promise<void> {
     await (this.session as any).steer(text);
     // via 标记让重启后认得出"这条是插话":它可能还压在 pi 的内存队列里
     // 没送到,而队列随进程一起死。事件日志是唯一跨进程活下来的账。
-    this.emit("user_message", this.sessionId, { text, via: "interrupt" });
+    // extra 是给页面看的展示字段(附言原文、引用名):text 里带着整份
+    // 注入正文,直接摆出来是几万字的墙。
+    this.emit("user_message", this.sessionId, { text, via: "interrupt", ...extra });
   }
 
   /** 取走"发出去却没送到"的插话。
@@ -648,6 +650,15 @@ export class CloudSession {
    * pi 在真正开始那条用户消息时才把它移出队列,所以"不在队列里"就是
    * "模型已经读到了"——这是可观测的事实,不是推断。页面据此如实告诉人
    * "送达没有",省得他发完一句就石沉大海。 */
+  /** 只记账不送达:等人决定/排队时的 @ 引用不走 steer,而是随决定或
+   * 使命送达,但页面的「捎过去的话」只认事件账里的 via=interrupt。没这条
+   * 账,人点完发送就石沉大海(用户 2026-09-02 实测)。必须走本会话的
+   * emit——另开一个 EventLog 实例追加会让这里缓存的 lastEventId 落后,
+   * 下一条真事件撞号被当重放 no-op 静默丢掉。 */
+  noteUserMessage(text: string, extra: Record<string, unknown>): void {
+    this.emit("user_message", this.sessionId, { text, via: "interrupt", ...extra });
+  }
+
   pendingSteers(): string[] {
     try {
       const queue = (this.session as any).getSteeringMessages?.();

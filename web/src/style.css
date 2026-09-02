@@ -1416,22 +1416,48 @@ svg {
    后任何宽度行为一致:左侧露出的材料照常可点可圈选,窄屏占满整屏。 */
 .workspace-review-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  /* 让开任务头:top:0 时抽屉正好盖住"暂停/取消"和责任人一行(实测 1512
+     宽下按钮在 x1152-1258、y18-50),要暂停任务得先关面板。头高随标题
+     换行变,写死会重新盖回去——由 TaskWorkspace 实测写进 --ws-head-h。 */
+  top: calc(var(--ws-head-h, 70px) + 10px);
+  right: 10px;
+  bottom: 10px;
   z-index: 950;
-  width: min(760px, 100vw);
+  width: min(760px, calc(100vw - 20px));
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text);
-  border-left: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 14px;
   background: var(--surface);
-  box-shadow: -18px 0 44px rgba(0, 0, 0, .18);
+  box-shadow: -14px 0 40px rgba(0, 0, 0, .16), 0 18px 44px rgba(0, 0, 0, .14);
+}
+/* 内容远比一屏长(实测 10 条意见 ≈ 2887px,一屏 886px)。macOS 悬浮滚动条
+   不滚不出现,面板又四边贴死视口,看到的就是"内容被截断"而不是"还能往下
+   滚"——常驻滚动槽 + 底部渐隐,把"下面还有"画出来。 */
+.workspace-review-drawer > .workspace-review-content {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.workspace-review-drawer::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 26px;
+  border-radius: 0 0 13px 13px;
+  background: linear-gradient(to top, var(--page), transparent);
+  pointer-events: none;
 }
 .workspace-review-drawer > header {
   position: relative;
+  /* 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:副标题一换行
+     就有半行被裁在边框外(420px 宽实测:需要 85px 只给了 64px)。标题栏
+     按自己的高度占位,压缩留给能滚的内容区。 */
+  flex: none;
   min-height: 64px;
   padding: 12px 16px;
   display: flex;
@@ -1448,27 +1474,38 @@ svg {
 }
 .workspace-review-drawer > header span {
   color: var(--accent);
-  font: 750 11px var(--font-mono);
+  /* 11px 的眉标按默认 1.6 行高白占 7px;标题栏不再被压缩后这点直接算在
+     内容区头上。 */
+  font: 750 11px/1.25 var(--font-mono);
   letter-spacing: .12em;
 }
 .workspace-review-drawer > header strong { color: var(--text-strong); font-size: 18px; }
+/* 这句是在说"面板不挡事,左边照样能圈选"——被省略号切掉就等于没写。
+   标题栏腾出计数徽标的位置后放它换行,顶多占两行。 */
 .workspace-review-drawer > header p {
   margin: 0;
   color: var(--muted);
   font-size: var(--font-size-assist);
   line-height: 1.45;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .workspace-review-drawer > header .workspace-review-dialog-actions em {
   white-space: nowrap;
 }
-/* 底部多留一段:右下角"提问题"浮钮盖在抽屉上,最后一条不能被它压住。 */
-.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 84px; }
+.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 18px; }
 .workspace-review-drawer .workspace-review-notes { width: 100%; }
 @media (max-width: 900px) {
-  .workspace-review-drawer { width: 100vw; border-left: 0; }
+  /* 窄屏没有"左边还看得见材料"这回事,抽屉占满头以下整块,不留边距。
+     副标题最后半句正是在承诺这件事,这里不成立,索性不说。 */
+  .workspace-review-drawer > header p { display: none; }
+  .workspace-review-drawer {
+    top: var(--ws-head-h, 70px);
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    border: 0;
+    border-radius: 0;
+  }
+  .workspace-review-drawer::after { left: 0; right: 0; bottom: 0; border-radius: 0; }
 }
 /* 抽屉顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
 .review-filter {
@@ -1793,6 +1830,11 @@ svg {
 .wish-quick-dialog > p { margin: 0; color: var(--accent); font-size: 13px; }
 .wish-quick-dialog footer button { padding: 9px 13px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
 .wish-quick-dialog footer .primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+/* 右下角"提问题"浮钮挂在 .workspace-overlay(z-index 120)之外,自己 650,
+   于是压在 z-index 950 的抽屉上——同一个栈里比不了,抽屉调多高都没用。
+   原先靠内容底部留 84px 空白躲它:空白照样在浮钮底下,最后一条还是点不
+   到,只是白白少了一屏内容。检视期间直接收起,关掉面板就回来。 */
+body:has(.workspace-review-drawer) .wish-quick-trigger { display: none; }
 
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
@@ -2046,7 +2088,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-root-task > div strong { overflow: hidden; color: var(--text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .requirement-root-task > div small { color: var(--muted); font-size: 11px; }
 .requirement-root-task > em, .repo-task-status { color: var(--accent); font-size: 11px; font-style: normal; font-weight: 750; }
-.requirement-root-task > em.completed, .repo-task-status.completed { color: #16885d; }
+.requirement-root-task > em.completed, .repo-task-status.completed { color: var(--success); }
 .requirement-root-task > em.failed, .requirement-root-task > em.stalled,
 .repo-task-status.failed, .repo-task-status.stalled { color: var(--danger); }
 .requirement-split-label { height: 30px; display: grid; place-items: center; color: var(--muted); font-size: 11px; font-weight: 700; }
@@ -2068,14 +2110,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-stage > div { display: grid; gap: 6px; }
 .requirement-stage article { min-width: 170px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
 .repo-node-head { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 7px; }
-.repo-node-head > i { width: 7px; height: 7px; border-radius: 50%; background: #39b980; box-shadow: 0 0 0 3px rgba(57, 185, 128, .1); }
-.has-prerequisite .repo-node-head > i { background: #e3a74b; box-shadow: 0 0 0 3px rgba(227, 167, 75, .1); }
+.repo-node-head > i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.has-prerequisite .repo-node-head > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
 .repo-node-head strong { overflow: hidden; color: var(--text-strong); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
 .repo-node-head button { padding: 3px 5px; color: var(--accent); border: 0; border-radius: 5px; background: var(--accent-soft); font-size: var(--font-size-assist); cursor: pointer; }
 .repo-assignee { display: inline-flex; width: fit-content; margin-top: 7px; padding: 3px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11.5px; font-weight: 750; }
 .repo-task-status { display: block; margin-top: 7px; }
 .requirement-stage article > p { margin: 6px 0 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.45; }
-.repo-prerequisite { display: block; margin-top: 5px; color: #c28a35; font-size: var(--font-size-assist); }
+.repo-prerequisite { display: block; margin-top: 5px; color: var(--attention); font-size: var(--font-size-assist); }
 .requirement-edges { margin-top: 9px; display: grid; gap: 7px; }
 .requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
 .requirement-edges > div > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-assist); }
@@ -2084,10 +2126,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 
-.requirement-team-picker { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, #2e9b77 32%, var(--line)); border-radius: 11px; background: var(--surface); }
-.requirement-team-picker > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #d9f4e9 45%, var(--surface)); }
+/* 这一段原来全是写死的十六进制绿(#16885d/#2e9b77/#d9f4e9):浅色下没事,
+   深色下表单头部糊成一块浅绿(用户实测)。换成 --success 一族,两套主题各
+   有各的值。 */
+.requirement-team-picker { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--success) 32%, var(--line)); border-radius: 11px; background: var(--surface); }
+.requirement-team-picker > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--success-soft) 70%, var(--surface)); }
 .requirement-team-picker > header > div { display: grid; gap: 2px; }
-.requirement-team-picker > header span { color: #16885d; font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
+.requirement-team-picker > header span { color: var(--success); font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
 .requirement-team-picker > header strong { color: var(--text-strong); font-size: 15px; }
 .requirement-team-picker > header small { color: var(--muted); font-size: 12px; }
 .requirement-team-owner { margin: 10px 12px 0; padding: 9px 10px; display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: center; gap: 9px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 8px; background: var(--accent-soft); }
@@ -2098,17 +2143,17 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-team-members { max-height: 250px; padding: 9px 12px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; overflow-y: auto; }
 .requirement-team-members > p { grid-column: 1 / -1; margin: 4px 0; color: var(--muted); font-size: 12px; }
 .requirement-team-members > label { min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); cursor: pointer; }
-.requirement-team-members > label.selected { border-color: color-mix(in srgb, #2e9b77 45%, var(--line)); background: color-mix(in srgb, #d9f4e9 34%, var(--surface)); box-shadow: inset 3px 0 #2e9b77; }
+.requirement-team-members > label.selected { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); background: color-mix(in srgb, var(--success-soft) 60%, var(--surface)); box-shadow: inset 3px 0 var(--success); }
 .requirement-team-members > label.unready:not(.selected) { opacity: .62; cursor: not-allowed; }
-.requirement-team-members input { accent-color: #16885d; }
+.requirement-team-members input { accent-color: var(--success); }
 .requirement-team-members label > span { min-width: 0; display: grid; gap: 2px; }
 .requirement-team-members strong { color: var(--text-strong); font-size: 12.5px; }
 .requirement-team-members small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .requirement-team-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
 .requirement-team-picker > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
 .requirement-team-picker > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.requirement-team-picker > footer > strong { flex: none; color: #16885d; font-size: 12px; }
-.requirement-team-picker > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: #16885d; font-weight: 750; cursor: pointer; }
+.requirement-team-picker > footer > strong { flex: none; color: var(--success); font-size: 12px; }
+.requirement-team-picker > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: var(--success); font-weight: 750; cursor: pointer; }
 .requirement-team-picker > footer button:disabled { opacity: .45; cursor: not-allowed; }
 .launch-requirement-team { margin: 12px 0 0; }
 .repository-assignees { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 11px; background: var(--surface); }
@@ -2137,11 +2182,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-ticket-editable input { width: 100%; min-height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-strong); background: var(--surface); font: 650 12px var(--font-mono); }
 .repository-ticket-editable input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .repository-assignee-list em { color: var(--muted); font-size: 11.5px; font-style: normal; font-weight: 700; }
-.repository-assignee-list em.ready { color: #16885d; }
+.repository-assignee-list em.ready { color: var(--success); }
 .repository-assignee-list em.missing { color: var(--attention); }
 .repo-ticket { color: var(--muted); font: 650 11px var(--font-mono); }
+/* 必须是块:行内元素不吃 overflow/text-overflow,nowrap 的路径就从卡片里
+   直接横穿出去,压过箭头压到下一张卡(实测溢出 274px 和 890px,用户
+   截图实锤)。 */
 .repo-scope-paths {
-  overflow: hidden; margin-top: 4px; color: var(--muted);
+  display: block; min-width: 0; overflow: hidden; margin-top: 4px; color: var(--muted);
   font: 600 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap;
 }
 .repository-assignee-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
@@ -7163,6 +7211,16 @@ pre {
 .workspace-overlay.materials-fullscreen .ws-doc .md {
   width: min(1600px, 100%);
 }
+/* 全屏是给"看不下"的材料用的,需求原文和仓间依赖图也得跟着铺开:原来
+   只放宽了 .md,需求原文仍卡在 860px、依赖图仍卡在 900px,点了全屏两边
+   还是大片空白(用户 2026-09-02 实测)。 */
+.workspace-overlay.materials-fullscreen .requirement-source,
+.workspace-overlay.materials-fullscreen .ws-doc > .requirement-graph,
+.workspace-overlay.materials-fullscreen .ws-doc > .requirement-team-picker,
+.workspace-overlay.materials-fullscreen .ws-doc > .repository-assignees,
+.workspace-overlay.materials-fullscreen .ws-doc > .chain-review-entry {
+  width: min(1600px, 100%);
+}
 .workspace-overlay.materials-fullscreen .plantuml-figure,
 .workspace-overlay.materials-fullscreen .mermaid-figure {
   overflow-x: hidden;
@@ -7247,6 +7305,25 @@ pre {
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
 .ws-doc > .requirement-graph + .requirement-team-picker,
 .ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
+/* 仓间依赖图是结构化的,圈不了批注;对方案的意见要落在方案文档上。
+   原来这一页没有任何入口,人以为这个阶段不能提检视意见(用户实测)。 */
+.ws-doc > .chain-review-entry {
+  width: min(900px, 100%); margin: 0 auto 12px;
+  padding: 10px 14px; display: flex; align-items: center; gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.chain-review-entry > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.chain-review-entry strong { color: var(--text-strong); font-size: 13.5px; }
+.chain-review-entry small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
+.chain-review-entry > button {
+  flex: none; padding: 7px 12px; border: 1px solid var(--accent); border-radius: 8px;
+  color: var(--accent); background: transparent; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.chain-review-entry > button:hover:not(:disabled) { color: #fff; background: var(--accent); }
+.chain-review-entry > button:disabled { opacity: .55; cursor: default; }
+.chain-decision-facts .chain-rework-hint { color: var(--attention); }
 .push-review-scope {
   width: min(980px, 100%);
   margin: 0 auto 15px;
@@ -7308,6 +7385,76 @@ pre {
 }
 .requirement-source-label span { color: var(--text-strong); font-weight: 700; }
 .requirement-source-label small { color: var(--faint); }
+/* 需求确认阶段 Agent 改过几轮、最近一轮加减了多少行,以及切到对比的开关。 */
+.requirement-revision-bar {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  font-size: 13px;
+}
+.requirement-revision-bar > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.requirement-revision-bar b { font: 700 12.5px var(--font-mono); }
+.requirement-revision-bar b.added { color: var(--success); }
+.requirement-revision-bar b.deleted { color: var(--danger); }
+.requirement-revision-bar small { color: var(--muted); }
+.requirement-revision-bar > button {
+  flex: none;
+  padding: 6px 11px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.requirement-revision-bar > button.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+.requirement-revision-missing { margin: 0; color: var(--muted); font-size: 13px; }
+.requirement-revision-error {
+  display: flex; flex-direction: column; gap: 3px;
+  margin: 0 0 10px; padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-left: 3px solid var(--danger); border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  font-size: 13px; line-height: 1.5;
+}
+.requirement-revision-error > strong { color: var(--danger); font-size: 13.5px; }
+.requirement-revision-error > span { color: var(--text); word-break: break-word; }
+.requirement-revision-error > small { color: var(--muted); }
+/* 一个文件、几十行的需求对比,直接摊开:删的一行、加的一行、上下文。 */
+.requirement-diff {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font: 13.5px/1.7 var(--font-ui);
+}
+.requirement-diff-row {
+  display: grid;
+  grid-template-columns: 22px 44px minmax(0, 1fr);
+  align-items: start;
+}
+.requirement-diff-row.hunk {
+  padding: 4px 10px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font: 600 11.5px/1.6 var(--font-mono);
+  grid-template-columns: 1fr;
+}
+.requirement-diff-row.add { background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
+.requirement-diff-row.del { background: color-mix(in srgb, var(--danger) 9%, var(--surface)); }
+.requirement-diff-row.del .requirement-diff-text { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.requirement-diff-mark { padding: 2px 0 2px 8px; color: var(--muted); font: 700 13px/1.7 var(--font-mono); }
+.requirement-diff-row.add .requirement-diff-mark { color: var(--success); }
+.requirement-diff-row.del .requirement-diff-mark { color: var(--danger); }
+.requirement-diff-line { padding: 2px 6px 2px 0; color: var(--faint); text-align: right; font: 11.5px/1.9 var(--font-mono); }
+.requirement-diff-text { padding: 2px 12px 2px 6px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .ws-primary-scroll {
   flex: 1;
   min-height: 0;
@@ -9974,6 +10121,93 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ws-decision .utility-panel { box-shadow: var(--shadow-xs); }
 .ws-decision .execution-panel .event-stream { max-height: min(360px, 40vh); }
 .ws-decision .event-workspace.has-detail { height: min(360px, 40vh); }
+/* 右栏底部让出"提问题"浮钮那一截:它固定在视口右下,正好压住决定卡的
+   提交按钮(1512×950 实测浮钮和"提交决定"并排重叠)。 */
+.ws-decision { padding-bottom: 84px; }
+
+/* ── 拆分方案确认卡 ── */
+/* 方案本体在左侧仓间依赖图里,卡上只放三个数和一句"去哪看"。 */
+.chain-decision-facts {
+  margin: 14px 20px 0;
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+.chain-decision-facts > span { color: var(--text); font-size: 13.5px; font-weight: 650; }
+.chain-decision-facts > span b { margin-right: 4px; color: var(--accent); font-size: 19px; font-weight: 800; }
+.chain-decision-facts > small { flex-basis: 100%; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+/* Agent 对方案的复述默认收起:结构已在左边成图,原话想看再展开。 */
+.waiting-context-details {
+  margin: 10px 20px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.waiting-context-details > summary {
+  padding: 9px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.waiting-context-details > summary::-webkit-details-marker { display: none; }
+.waiting-context-details > summary::after { content: "展开"; color: var(--accent); font-size: 12.5px; }
+.waiting-context-details[open] > summary::after { content: "收起"; }
+.waiting-context-details > .waiting-context {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+}
+/* "以上都不合适,直接回答"是逃生口不是并列选项:紧凑网格里它带着三行
+   提示挤成第三列,整行被撑得又高又参差。降成通栏一行,提示等点开再说。 */
+.options.compact .custom-entry { grid-column: 1 / -1; min-height: 40px; padding: 8px 12px; align-items: center; }
+.options.compact .custom-entry .option-hint { display: none; }
+/* 右栏 635px 塞不下"名字|执行人|单号|状态"四列:职责被截成一行省略号,
+   偏偏那是判断"这块该给谁"要看的话。改成上下排:单元名与职责(最多两
+   行)、执行人和单号并排、状态靠右。 */
+.ws-decision .repository-assignee-list > label {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: "name name" "who ticket" "state state";
+  row-gap: 8px;
+}
+.ws-decision .repository-assignee-list > label > span:first-child { grid-area: name; }
+.ws-decision .repository-assignee-list > label > .repository-assignee-editable { grid-area: who; }
+.ws-decision .repository-assignee-list > label > .repository-ticket-editable,
+.ws-decision .repository-assignee-list > label > .repository-ticket-readonly { grid-area: ticket; }
+.ws-decision .repository-assignee-list > label > em { grid-area: state; justify-self: end; }
+.ws-decision .repository-assignee-list > label > span:first-child small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  line-height: 1.45;
+}
+/* 邀请讨论参与人的入口长在图里"主任务团队"那一块:按钮在标题行右侧,
+   点开表单就落在药丸下面。单独挂在图下面成一条细条,看着像掉出来的页脚。 */
+.requirement-team-invite {
+  margin-left: auto;
+  padding: 4px 10px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.requirement-team-invite:hover { border-color: var(--accent); }
+.requirement-team-invite-body { margin-top: 4px; }
+.requirement-team-invite-body > .requirement-team-picker { margin: 0; }
 .ws-usage-summary {
   min-height: 38px;
   padding: 8px 11px;
@@ -10960,10 +11194,14 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 }
 .ws-merge-line.is-closed strong { color: var(--text-strong); font-size: 14px; }
 
-/* 列表页收起卡只保留主线:阶段轨道与 Token 遥测是详情级信息,
-   收起时隐藏——扫 20 张卡的场景里,它们把 focus 行淹了。 */
-.task-card:not(.expanded) .task-summary .task-phase-track,
+/* 列表页收起卡只保留主线:Token 遥测是详情级信息,收起时隐藏——扫 20 张
+   卡的场景里,七个阶段词签也把 focus 行淹了。但整条轨道砍掉后,"当前进度"
+   只剩一行文字,用户实测第一反应是"少了个进度条"。折中:收起卡留节点与
+   连线、去词签,一眼能看到走到第几段;展开才给全轨道。 */
 .task-card:not(.expanded) .task-summary .token-usage { display: none; }
+.task-card:not(.expanded) .task-summary .task-phase-track { margin-top: 6px; }
+.task-card:not(.expanded) .task-summary .task-phase { min-height: 10px; }
+.task-card:not(.expanded) .task-summary .task-phase > span { display: none; }
 
 /* 收起卡的一行真话:失败原因/正在等什么。单行截断,点开看全文。 */
 .task-key-line {

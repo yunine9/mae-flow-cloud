@@ -254,7 +254,18 @@
 
 .steer-log li.done .steer-log-state {
   color: var(--success);
-  background: #e6f5ef;
+  background: var(--success-soft);   /* 写死的浅绿在深色主题里是块亮斑 */
+}
+
+/* 引用名药丸:只给名字和固定下来的版本号,正文进模型不进页面。 */
+.steer-log-refs {
+  flex-basis: 100%;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.steer-log-refs > span {
+  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--muted);
+  font-size: var(--font-size-assist); font-weight: 600;
 }
 
 .steer-log li.waiting .steer-log-state {
@@ -671,3 +682,12 @@
 .steer-ref-group > button { display: grid; text-align: left; gap: 1px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--ink); }
 .steer-ref-group > button:hover { background: var(--hover, rgba(127,127,127,.12)); }
 .steer-ref-group > button > small { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 接管前的三条边界:用列表不用段落,人扫一眼就知道它不是本地 CLI。 */
+.assistant-bounds {
+  margin: 0 0 12px; padding: 10px 12px 10px 26px;
+  border: 1px dashed var(--line); border-radius: 9px;
+  color: var(--muted); font-size: var(--font-size-assist); line-height: 1.6;
+}
+.assistant-bounds li + li { margin-top: 2px; }
+.assistant-bounds strong { color: var(--text); font-weight: 700; }

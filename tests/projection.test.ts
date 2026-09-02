@@ -12,7 +12,7 @@
 
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,12 @@ const PORT = 54_000 + (process.pid % 1000);
 let clusterDir = "";
 let conn = "";
 
+// macOS 上带着系统区域设置起 postmaster 会当场死掉:"在启动期间 postmaster
+// 变成多线程的"(CoreFoundation 初始化区域时起了线程,PG 拒绝在多线程状态
+// 下 fork)。日志里的提示就是"设定 LC_ALL"。这不是没有 PG,是 PG 起不来——
+// 之前六条用例整整齐齐红了一片,被当成"环境没条件"放着(2026-09-02 实锤)。
+const PG_ENV = { ...process.env, LC_ALL: "C" };
+
 before(() => {
   if (SKIP) return;
   clusterDir = mkdtempSync(join(tmpdir(), "pg-projection-"));
@@ -49,15 +55,18 @@ before(() => {
   const init = spawnSync(
     join(PG_BIN!, "initdb"),
     ["-D", dataDir, "-U", "postgres", "-A", "trust", "--no-sync"],
-    { encoding: "utf-8" });
+    { encoding: "utf-8", env: PG_ENV });
   assert.equal(init.status, 0, `initdb 失败: ${init.stderr}`);
   const start = spawnSync(
     join(PG_BIN!, "pg_ctl"),
     ["-D", dataDir, "-l", join(clusterDir, "pg.log"), "-w",
      "-o", `-p ${PORT} -k ${clusterDir} -c listen_addresses=''`,
      "start"],
-    { encoding: "utf-8" });
-  assert.equal(start.status, 0, `pg_ctl start 失败: ${start.stderr}`);
+    { encoding: "utf-8", env: PG_ENV });
+  const log = existsSync(join(clusterDir, "pg.log"))
+    ? readFileSync(join(clusterDir, "pg.log"), "utf-8").trim().split("\n").slice(-4).join("\n")
+    : "";
+  assert.equal(start.status, 0, `pg_ctl start 失败: ${start.stderr}\n${log}`);
   conn = `postgresql://postgres@localhost/postgres`
     + `?host=${encodeURIComponent(clusterDir)}&port=${PORT}`;
 });
@@ -65,7 +74,7 @@ before(() => {
 after(() => {
   if (!clusterDir) return;
   spawnSync(join(PG_BIN!, "pg_ctl"),
-    ["-D", join(clusterDir, "data"), "-m", "immediate", "stop"]);
+    ["-D", join(clusterDir, "data"), "-m", "immediate", "stop"], { env: PG_ENV });
   rmSync(clusterDir, { recursive: true, force: true });
 });
 
