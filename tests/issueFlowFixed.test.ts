@@ -28,6 +28,7 @@ import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
+import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
 import {
   FIXED_TICKET_STAGES,
   shouldNudgeFixed,
@@ -2331,14 +2332,7 @@ test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派
   // 全有→照常派修(修复回合能读到全文),不再举卡要人贴报错。
   platform.firstFailureArtifacts = [{
     name: "build_log_ut-1.txt",
-    text: [
-      "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
-      "  ● KpiTaskList › detail dialog header labels use consistent colon style",
-      "    expect(received).toBeTruthy()",
-      "    Received: undefined",
-      "Test Suites: 1 failed, 34 passed, 35 total",
-      "Tests: 1 failed, 449 passed, 450 total",
-    ].join("\n"),
+    text: JEST_LOG,
   }];
   await platform.start();
   seedMrGreenWatch(dataDir, origin);
@@ -2386,56 +2380,13 @@ test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派
   // 真实脱敏样例:构建 record 全 SUCCESS(errorInfo 拒答),红的是质量门
   // 指标(js pass rate 99.78%<100、DT 缺陷 1),Jest 原文在 build_log 里;
   // 平台把失败维度报成 CODECHECK,缺陷归属工具 build2.0 被归类到编译维。
-  const record = "3BW2BKXV-0W28-J680-0000-9PJBDYEG6Dzu";
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
     log: "CodeCCP2.0 质量门未达标: js pass rate 99.7778 < 100, DT 缺陷 1",
     checks: [{ dimension: "CODECHECK", status: "failed",
       tool: "CodeCCP2.0" }],
   };
-  platform.firstFailureArtifacts = [
-    {
-      name: "pipeline_info.json",
-      text: JSON.stringify({ defects: [{
-        toolName: "build2.0", record_ids: [record],
-        indicatorInfos: [
-          { indicatorName: "js pass rate(%)", actualValue: 99.7778,
-            expectValue: 100 },
-          { indicatorName: "DT", real: 1, expect: 0 },
-        ],
-      }] }),
-    },
-    {
-      name: `build_errors_${record}.json`,
-      text: JSON.stringify({ message:
-        "Failed to get record error info: {'success': False, 'message': "
-        + "'Illegal state, cannot get errorInfo with status: SUCCESS', "
-        + "'errCode': 'CB.0001001.450'}" }),
-    },
-    {
-      name: `build_log_${record}.txt`,
-      text: [
-        "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
-        "  ● KpiTaskList › detail dialog header labels use consistent colon style",
-        "    expect(received).toBeTruthy()",
-        "    Received: undefined",
-        "      602 |   expect(detailBtn).toBeTruthy();",
-        "    at Object.<anonymous> "
-          + "(src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx:602:27)",
-        "Test Suites: 1 failed, 34 passed, 35 total",
-        "Tests: 1 failed, 449 passed, 450 total",
-      ].join("\n"),
-    },
-    {
-      name: "codecheck_detail.json",
-      text: JSON.stringify({ defectInfos: [
-        { fileName: null, lineNum: 0, indicatorName: "js pass rate(%)",
-          realValue: 99.7778, threshold: 100 },
-        { fileName: null, lineNum: 0, indicatorName: "DT",
-          realValue: 1, threshold: 0 },
-      ] }),
-    },
-  ];
+  platform.firstFailureArtifacts = issue28Artifacts();
   await platform.start();
   seedMrGreenWatch(dataDir, origin);
   const model = new ScriptedModelServer([

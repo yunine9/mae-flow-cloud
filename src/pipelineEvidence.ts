@@ -38,8 +38,9 @@ const COMPILE_ERROR = /(?:fatal error|\berror:|undefined reference|collect2:|ld(
 // 既有 C/C++/Maven 分支保持向后兼容;后半段是前端 runner(Jest/Mocha/
 // Vitest)的失败特征。JS 正则没有扩展模式,写成纯 alternation。
 // 旧尺子对 Jest 输出全部不中:"Tests: 1 failed" 的 fail 不紧跟 tests、
-// "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。
-const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest Suites:\s*[1-9]\d*\s+failed|\bTests:\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
+// "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。汇总行的冒号可选:
+// Jest 是 "Tests: 1 failed",Vitest 是 "Test Files 1 failed"。
+const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
 const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
 
@@ -80,11 +81,13 @@ function sniffDimensions(text: string): PipelineDimension[] {
   const dims = new Set<PipelineDimension>();
   if (UT_ERROR.test(text)) dims.add("UT");
   if (COMPILE_ERROR.test(text)) dims.add("COMPILE");
-  // 堆栈行(路径:行号)单独探一次:部分 runner 的失败堆栈未必带
-  // FAIL/汇总关键字,但 path:line 就够定位;测试文件堆栈归 UT,
-  // 其余归编译。
-  if (PATH_WITH_LINE.test(text)) {
-    dims.add(TEST_FILE_PATH.test(text) ? "UT" : "COMPILE");
+  // 堆栈行(路径:行号)逐行归维:部分 runner 的失败堆栈未必带 FAIL/
+  // 汇总关键字,但 path:line 就够定位;测试文件堆栈归 UT,其余归编译
+  // ——同一份日志可能两种堆栈都有,整份二选一会丢掉其中一维。
+  for (const line of text.split(/\r?\n/)) {
+    if (PATH_WITH_LINE.test(line)) {
+      dims.add(TEST_FILE_PATH.test(line) ? "UT" : "COMPILE");
+    }
   }
   return [...dims];
 }
@@ -121,28 +124,21 @@ function actionableCodecheck(text: string): boolean {
       .test(text);
 }
 
-const UT_INDICATOR_WORDS =
-  /(?:pass rate|通过率|\bdt\b|coverage|覆盖率|用例)/i;
+// 指标型质量门缺陷的指标名关键词。word 表保持克制:说明文/规则描述
+// 里出现"覆盖率""用例"不算数,只认指标名字段(见下)。
+const UT_INDICATOR_WORDS = /(?:pass rate|通过率|\bdt\b|coverage|覆盖率)/i;
 
-function hasUtIndicatorWord(value: unknown): boolean {
-  if (typeof value === "string") return UT_INDICATOR_WORDS.test(value);
-  if (Array.isArray(value)) return value.some(hasUtIndicatorWord);
-  if (value && typeof value === "object") {
-    return Object.values(value).some(hasUtIndicatorWord);
-  }
-  return false;
-}
-
-/** 指标型质量门缺陷(通过率/DT/覆盖率)没有 file:line,过不了
- * hasLocatedDefect 的三要素,但它是 UT 失败的明确信号(真实案例:
- * "js pass rate 99.78<100"+DT 缺陷,构建 record 本身 SUCCESS)。
- * 只在 codecheck_detail 上做关键词识别,不对全产物扫描,防误伤。 */
-function indicatorDefectSignalsUt(text: string): boolean {
-  const parsed = parseJson(text);
-  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
-    return false;
-  }
-  return hasUtIndicatorWord(parsed);
+/** 指标型缺陷(通过率/DT/覆盖率)没有 file:line,过不了 hasLocatedDefect
+ * 的三要素,但它是 UT 失败的明确信号(真实案例:"js pass rate 99.78<100"
+ * +DT 缺陷,构建 record 本身 SUCCESS)。关键词只认 indicatorName 类
+ * 字段,不扫全 JSON——规则描述、策略说明里出现同词不是指标型缺陷。 */
+function indicatorDefectSignalsUt(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(indicatorDefectSignalsUt);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(([key, current]) =>
+    /^indicator_?name$/i.test(key)
+      ? typeof current === "string" && UT_INDICATOR_WORDS.test(current)
+      : indicatorDefectSignalsUt(current));
 }
 
 function actionableStructuredError(text: string): boolean {
@@ -259,7 +255,7 @@ export function assessPipelineRepairEvidence(input: {
     if (name === "codecheck_detail.json") {
       if (actionableCodecheck(text)) {
         addSource(sources, "CODECHECK", name);
-      } else if (indicatorDefectSignalsUt(text)) {
+      } else if (indicatorDefectSignalsUt(parseJson(text))) {
         // 指标型缺陷不是可定位报错本身,它只指认"UT 在红"——定位仍要
         // 看对应构建日志的失败用例;故只作 UT 信号,不冒充 CodeCheck 证据。
         addSource(sources, "UT",
@@ -279,11 +275,11 @@ export function assessPipelineRepairEvidence(input: {
     const mapped = [...recordDimensions.entries()].find(([id]) =>
       recordId === id || name.includes(id))?.[1];
     if (name.startsWith("build_log_")) {
-      // 全量日志:内容嗅探为主、record-id 归类为弱提示,两者并集背书
-      // ——一份日志可能同时含编译报错与 UT 堆栈,而复合工具的 record
-      // 归类会把 UT 日志错挂到编译维(或反之),只信归类会整份丢弃。
+      // 全量日志:内容嗅探为主、record-id 归类为弱提示。并集的前提是
+      // 内容有强特征——零特征的日志连映射维度也不背书(旧基线如此):
+      // 日志里没有可定位报错时,派修只会照着一份没有内容的日志猜改。
       const candidate = new Set(sniffDimensions(text));
-      if (mapped) candidate.add(mapped);
+      if (mapped && candidate.size) candidate.add(mapped);
       for (const dimension of candidate) {
         addSource(sources, dimension, name);
       }

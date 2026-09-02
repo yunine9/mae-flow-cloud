@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assessPipelineRepairEvidence } from "../src/pipelineEvidence.ts";
+import { ISSUE28_RECORD, JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
 
 const checks = [
   { dimension: "COMPILE" as const, status: "failed" as const,
@@ -130,22 +131,7 @@ test("识别内网 CodeCheck 真实 fileName/lineNum/indicatorName 字段", () =
   assert.deepEqual(result.missingDimensions, []);
 });
 
-/** 前端测试 runner(Jest)真实输出形态(脱敏自 issue-28 的构建日志):
- * 旧 UT 尺子按 C/C++/Maven 写,这三类特征行一个都不中。 */
-const JEST_LOG = [
-  "FAIL  src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx (5.426 s)",
-  "  ● KpiTaskList › detail dialog header labels use consistent colon style",
-  "    expect(received).toBeTruthy()",
-  "    Received: undefined",
-  "",
-  "      602 |   expect(detailBtn).toBeTruthy();",
-  "    at Object.<anonymous> "
-    + "(src/_tests_/containers/CrossRatCollection/KpiTaskList.test.jsx:602:27)",
-  "Test Suites: 1 failed, 34 passed, 35 total",
-  "Tests: 1 failed, 449 passed, 450 total",
-].join("\n");
-
-test("前端 runner(Jest/Mocha)失败特征让 UT 维度从构建日志拿到证据", () => {
+test("前端 runner(Jest/Mocha/Vitest)失败特征让 UT 维度从构建日志拿到证据", () => {
   const utFailed = [{ dimension: "UT" as const, status: "failed" as const }];
   const assess = (text: string) => assessPipelineRepairEvidence({
     checks: utFailed,
@@ -156,6 +142,8 @@ test("前端 runner(Jest/Mocha)失败特征让 UT 维度从构建日志拿到证
     ["Test Suites 汇总", "Test Suites: 1 failed, 34 passed, 35 total"],
     ["Tests 汇总", "Tests: 1 failed, 449 passed, 450 total"],
     ["Mocha failing 计数", "  2 failing\n  1) KpiTaskList detail dialog"],
+    ["Vitest 汇总(无冒号)", "Test Files  1 failed (35)\n"
+      + "Tests  1 failed | 448 passed (450)"],
   ] as const) {
     const result = assess(sample);
     assert.deepEqual(result.availableDimensions, ["UT"],
@@ -195,16 +183,29 @@ test("复合构建工具的 record 被归到编译维时，日志内容仍按 UT
 });
 
 test("无强特征的日志不因嗅探放宽而冒充证据", () => {
+  // record-id 映射在场也不行:并集的前提是内容有强特征,零特征日志
+  // 连映射维度也不背书(旧基线),否则派修只会照着一份没有内容的日志猜改。
   const result = assessPipelineRepairEvidence({
-    checks: [{ dimension: "UT", status: "failed" }],
-    artifacts: [{
-      name: "build_log_plain.txt",
-      text: "build finished with warnings; quality gate not met",
-    }],
+    checks: [
+      { dimension: "UT", status: "failed" },
+      { dimension: "COMPILE", status: "failed", tool: "build2.0" },
+    ],
+    artifacts: [
+      {
+        name: "pipeline_info.json",
+        text: JSON.stringify({ defects: [
+          { toolName: "build2.0", record_ids: ["plain-rid"] },
+        ] }),
+      },
+      {
+        name: "build_log_plain-rid.txt",
+        text: "build finished with warnings; quality gate not met",
+      },
+    ],
   });
   assert.deepEqual(result.availableDimensions, [],
-    "没有失败特征/堆栈的日志什么维度都不背书");
-  assert.deepEqual(result.missingDimensions, ["UT"]);
+    "没有失败特征/堆栈的日志什么维度都不背书,映射也不行");
+  assert.deepEqual(result.missingDimensions.sort(), ["COMPILE", "UT"]);
   assert.deepEqual(result.fallbackSources, [],
     "没有可定位内容的日志也不进跨维度兜底");
 });
@@ -231,6 +232,15 @@ test("堆栈行参与全量日志判定：测试文件堆栈归 UT，业务文�
   assert.deepEqual(compileStack.missingDimensions, ["UT"]);
   assert.deepEqual(compileStack.fallbackSources, [],
     "日志已被失败维度(编译)认领,不再跨维度兜底给 UT");
+
+  // 逐行归维:同一份日志两种堆栈都有时两维都背书,整份二选一会丢一维。
+  const mixedStack = assess([
+    "    at Object.<anonymous> (src/_tests_/KpiTaskList.spec.tsx:88:11)",
+    "    at create (src/service/Order.java:88)",
+  ].join("\n"), [{ dimension: "UT" }, { dimension: "COMPILE" }]);
+  assert.deepEqual(mixedStack.availableDimensions.sort(), ["COMPILE", "UT"],
+    "混合堆栈逐行归维,两维都拿到证据");
+  assert.deepEqual(mixedStack.missingDimensions, []);
 });
 
 test("CodeCheck lineNum=0 表示整文件或 MR 级规则，不误判成无报错", () => {
@@ -265,42 +275,8 @@ test("CodeCheck lineNum=0 表示整文件或 MR 级规则，不误判成无报�
   assert.deepEqual(structured.missingDimensions, []);
 });
 
-/** issue-28 脱敏样例:构建 record 全 SUCCESS(errorInfo 接口拒答,
- * "cannot get errorInfo with status: SUCCESS"),红的是质量门指标
- * (js pass rate 99.78%<100、DT 缺陷 1),真正的 Jest 失败原文在
- * build_log 里;平台把失败维度报成 CODECHECK,缺陷归属工具是
- * build2.0(被 record-id 归类硬映射成编译维)。 */
-const ISSUE28_RECORD = "3BW2BKXV-0W28-J680-0000-9PJBDYEG6Dzu";
-const ISSUE28_ARTIFACTS = [
-  {
-    name: "pipeline_info.json",
-    text: JSON.stringify({ defects: [{
-      toolName: "build2.0", record_ids: [ISSUE28_RECORD],
-      indicatorInfos: [
-        { indicatorName: "js pass rate(%)", actualValue: 99.7778,
-          expectValue: 100 },
-        { indicatorName: "DT", real: 1, expect: 0 },
-      ],
-    }] }),
-  },
-  {
-    name: `build_errors_${ISSUE28_RECORD}.json`,
-    text: JSON.stringify({ message:
-      "Failed to get record error info: {'success': False, 'message': "
-      + "'Illegal state, cannot get errorInfo with status: SUCCESS', "
-      + "'errCode': 'CB.0001001.450'}" }),
-  },
-  { name: `build_log_${ISSUE28_RECORD}.txt`, text: JEST_LOG },
-  {
-    name: "codecheck_detail.json",
-    text: JSON.stringify({ defectInfos: [
-      { fileName: null, lineNum: 0, indicatorName: "js pass rate(%)",
-        realValue: 99.7778, threshold: 100 },
-      { fileName: null, lineNum: 0, indicatorName: "DT",
-        realValue: 1, threshold: 0 },
-    ] }),
-  },
-];
+/** issue-28 四件套产物来自共享样例模块(单一来源,防样例漂移)。 */
+const ISSUE28_ARTIFACTS = issue28Artifacts();
 
 test("issue-28 形态:维度错配的质量门红灯由跨维度兜底救回", () => {
   const result = assessPipelineRepairEvidence({
@@ -336,8 +312,8 @@ test("兜底红线:镜像日志无可定位内容时不兜底，仍按全缺处�
   assert.deepEqual(result.fallbackSources, []);
 });
 
-test("指标型缺陷关键词只在 CodeCheck 明细产物上生效", () => {
-  const result = assessPipelineRepairEvidence({
+test("指标型缺陷关键词只在 CodeCheck 明细产物的 indicatorName 字段生效", () => {
+  const otherProduct = assessPipelineRepairEvidence({
     checks: [{ dimension: "UT", status: "failed" }],
     artifacts: [{
       name: "quality_summary.json",
@@ -345,8 +321,21 @@ test("指标型缺陷关键词只在 CodeCheck 明细产物上生效", () => {
         actualValue: 99.7 }),
     }],
   });
-  assert.deepEqual(result.availableDimensions, [],
+  assert.deepEqual(otherProduct.availableDimensions, [],
     "其他产物带指标词不触发 UT 信号,防止关键词误伤");
+
+  const otherField = assessPipelineRepairEvidence({
+    checks: [{ dimension: "UT", status: "failed" }],
+    artifacts: [{
+      name: "codecheck_detail.json",
+      text: JSON.stringify({ strategy: {
+        description: "统计 UT 覆盖率与通过率",
+        defectCount: 2,
+      } }),
+    }],
+  });
+  assert.deepEqual(otherField.availableDimensions, [],
+    "说明文/策略描述里出现同词不算指标型缺陷,只认 indicatorName 字段");
 });
 
 test("失败维度已有证据时不跨维度兜底", () => {
