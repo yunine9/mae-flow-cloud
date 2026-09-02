@@ -90,19 +90,49 @@ test("断管之后:登录、下单、答卡、收口,一路 HTTP 正常应答", 
     assert.equal(created.status, 201);
     const id = created.body.id;
 
-    // 演示剧本会举一张审批卡:等它,然后在断管状态下答卡。
+    // 新下单先经需求确认，再由演示剧本举审批卡。两张卡都必须在
+    // stdout/stderr 已断开的状态下正常应答。
     const deadline = Date.now() + 30_000;
-    let task: { status: string; waiting?: { state_version: number } };
+    let task: { status: string; waiting?: {
+      waiting_id: string;
+      state_version: number;
+      step: string;
+      question: { questions: Array<{ question: string }> };
+    } };
     for (;;) {
       task = (await api<typeof task>(base, `/tasks/${id}`, { headers })).body;
-      if (task.status === "waiting_for_human") break;
-      assert.ok(Date.now() < deadline, `等卡超时,当前状态 ${task.status}`);
+      if (task.status === "waiting_for_human"
+          && task.waiting?.step === "cloud_requirement_analysis_confirm") break;
+      assert.ok(Date.now() < deadline, `等需求确认卡超时,当前状态 ${task.status}`);
+      await new Promise((tick) => setTimeout(tick, 150));
+    }
+    const confirmation = task.waiting!;
+    const entered = await api(base, `/tasks/${id}/decision`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        waiting_id: confirmation.waiting_id,
+        state_version: confirmation.state_version,
+        selected_options: {
+          [confirmation.question.questions[0].question]:
+            "需求已确认，进入需求分析",
+        },
+      }),
+    });
+    assert.equal(entered.status, 200, "断管后确认需求不许超时");
+
+    for (;;) {
+      task = (await api<typeof task>(base, `/tasks/${id}`, { headers })).body;
+      if (task.status === "waiting_for_human"
+          && task.waiting?.step !== "cloud_requirement_analysis_confirm") break;
+      assert.ok(Date.now() < deadline, `等流程卡超时,当前状态 ${task.status}`);
       await new Promise((tick) => setTimeout(tick, 150));
     }
     const decided = await api(base, `/tasks/${id}/decision`, {
       method: "POST", headers,
       body: JSON.stringify({
-        state_version: task.waiting!.state_version, decision: "通过",
+        waiting_id: task.waiting!.waiting_id,
+        state_version: task.waiting!.state_version,
+        decision: "通过",
       }),
     });
     assert.equal(decided.status, 200, "断管后答卡不许超时");

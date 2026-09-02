@@ -574,8 +574,8 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
       body: JSON.stringify({ requirement: "实现订单检索" }),
     });
     const created = await createdResponse.json() as { id: string };
-    assert.equal(luban.messages.length, 0,
-      "配置 Committer 后创建任务仍不会自动通知他");
+    assert.equal(luban.messages.filter((message) => message.account === "bob").length, 0,
+      "配置 Committer 后创建任务仍不会自动通知他；需求确认只通知责任人");
 
     const adminCannotInvite = await fetch(
       `${base}/tasks/${created.id}/review-request`, {
@@ -597,7 +597,7 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
         body: JSON.stringify({ committer: "admin" }),
       });
     assert.equal(invalid.status, 400, "只能选择管理员配置的 Committer");
-    assert.equal(luban.messages.length, 0);
+    assert.equal(luban.messages.filter((message) => message.account === "bob").length, 0);
 
     const invited = await fetch(
       `${base}/tasks/${created.id}/review-request`, {
@@ -616,15 +616,17 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     };
     assert.equal(review.delivered, true);
     assert.equal(review.status, "pending");
-    assert.equal(luban.messages.length, 1);
-    assert.equal(luban.messages[0].account, "bob");
-    assert.deepEqual(tokenLookups, ["alice"],
+    const reviewMessages = luban.messages.filter((message) =>
+      message.account === "bob");
+    assert.equal(reviewMessages.length, 1);
+    const reviewMessage = reviewMessages[0];
+    assert.deepEqual([...new Set(tokenLookups)], ["alice"],
       "用责任人的发送 Token 投给 Committer 工号，收件人无需配置 Token");
-    assert.equal(luban.messages[0].text,
+    assert.equal(reviewMessage.text,
       `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索\n`
       + "手机端操作：先输入“/mfc”激活 Mae-Flow 插件；"
       + "未激活时，直接回复本消息不会进入 Mae-Flow。");
-    assert.equal(luban.messages[0].link,
+    assert.equal(reviewMessage.link,
       `http://mae-flow.intra:8787/work/${created.id}/review/${review.id}`,
       "未配置 public-url 时按浏览器实际访问的内网 Origin 生成链接");
 
@@ -640,7 +642,9 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
         body: JSON.stringify({ committer: "bob" }),
       });
     assert.equal(reinvited.status, 200);
-    assert.match(String(luban.messages[1].link),
+    const latestReviewMessage = luban.messages.filter((message) =>
+      message.account === "bob").at(-1)!;
+    assert.match(String(latestReviewMessage.link),
       /^http:\/\/mae-flow\.intra:8787\//,
       "回环访问之后,通知链接仍是此前学到的内网地址");
 

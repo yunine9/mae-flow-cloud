@@ -175,6 +175,16 @@ test("路由 GET /tasks/:id/activity:真任务收口后能拿到折叠摘要;不
         method: "POST",
         body: JSON.stringify({ requirement: "演练:行为摘要路由" }),
       }).then((response) => readJson(response));
+      const confirmation = service.get(created.id)!.waiting!;
+      const confirmationQuestion = (confirmation.question.questions as
+        Array<{ question: string }>)[0].question;
+      await service.decide(created.id, {
+        waiting_id: confirmation.waiting_id,
+        state_version: confirmation.state_version,
+        selected_options: {
+          [confirmationQuestion]: "需求已确认，进入需求分析",
+        },
+      });
       const deadline = Date.now() + 30_000;
       while (service.get(created.id)!.status !== "completed") {
         if (Date.now() > deadline) throw new Error("任务未收口");

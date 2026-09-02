@@ -87,8 +87,20 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
       method: "POST",
       body: JSON.stringify({ requirement: "交付 API-1:编译并检视" }),
     }).then((r) => readJson(r));
-    // 并发额度未满时队列泵在 create 返回前就已起跑,两种都合法。
-    assert.ok(["queued", "running"].includes(created.status));
+    assert.equal(created.status, "waiting_for_human");
+    assert.equal(created.waiting.step, "cloud_requirement_analysis_confirm");
+    const entryQuestion = created.waiting.question.questions[0].question;
+    const entered = await fetch(`${base}/tasks/${created.id}/decision`, {
+      method: "POST",
+      body: JSON.stringify({
+        waiting_id: created.waiting.waiting_id,
+        state_version: created.waiting.state_version,
+        selected_options: {
+          [entryQuestion]: "需求已确认，进入需求分析",
+        },
+      }),
+    });
+    assert.equal(entered.status, 200);
 
     const waiting = await until(async () => {
       const task = await fetch(`${base}/tasks/${created.id}`)
