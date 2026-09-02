@@ -146,6 +146,24 @@ class DeliveryCommandTests(TempProject):
         value["quality"]["external_verification"]["sha"] = self.head
         return value
 
+    def test_panel_command_rewrites_pulse_with_current_phase_vocabulary(self):
+        """阶段词表升级后,老任务的脉冲还是旧名字;宿主跑一次 panel 就该
+        按当前词表重写脉冲(Cloud 靠它自愈),不用等下一个 Hook 事件。"""
+        from mae_flow_core.cli_commands import panel as panel_cmd
+        value = self.live_state()
+        self.write_json(".mae-flow.json", value)
+        os.makedirs(".mae-flow-work", exist_ok=True)
+        pulse_path = os.path.join(".mae-flow-work", "panel-pulse.js")
+        with open(pulse_path, "w", encoding="utf-8") as stream:
+            stream.write('window.__panelPulse={"phase":"交付","step":"delivery_watch"};\n')
+        args = SimpleNamespace(json=False, out=os.path.join(".mae-flow-work", "panel.html"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            panel_cmd.cmd_panel(value, args)
+        with open(pulse_path, encoding="utf-8") as stream:
+            pulse = stream.read().replace(" ", "")
+        self.assertIn('"phase":"检视与验证"', pulse)
+        self.assertIn('"step":"delivery_watch"', pulse)
+
     def test_feedback_open_preserves_identity_and_is_idempotent(self):
         value = self.live_state()
         before_config = json.loads(json.dumps(value["config"], ensure_ascii=False))

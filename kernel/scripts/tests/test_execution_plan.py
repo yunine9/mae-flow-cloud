@@ -64,7 +64,7 @@ def structural_profile(items=None):
          "locked": False, "editable": True, "source": "platform"},
     ]
     stage = {"id": "platform.construction", "title": "完整实现与自查",
-             "phase": "开发", "steps": ["build"], "slots": [],
+             "phase": "写代码", "steps": ["build"], "slots": [],
              "items": copy.deepcopy(base_items)}
     final_stage = copy.deepcopy(stage)
     final_stage["items"] = copy.deepcopy(items if items is not None else [

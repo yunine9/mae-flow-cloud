@@ -230,11 +230,12 @@ import {
   KernelUnavailableError,
   openKernelFeedback,
   recordKernelFeedbackResult,
+  refreshKernelPanel,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
   type KernelFeedbackBatch,
 } from "./kernelDelivery.ts";
-import { kernelPhases } from "./kernelPhases.ts";
+import { kernelPhases, type KernelPhaseVocabulary } from "./kernelPhases.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import {
   ContinuousReviewMigrationError,
@@ -1524,6 +1525,9 @@ interface TaskState {
   /** 避免列表轮询反复解析未变化的现场面板。 */
   progressPulse?: string;
   progressCache?: TaskProgress;
+  /** 老任务旧词表脉冲只让内核重写一次;成不成都不再重试,避免每次
+   * 轮询都拉一个内核子进程。 */
+  pulseRefreshAttempted?: boolean;
   /** persist 用来识别真正的状态推进,避免普通元数据更新冒充进展。 */
   lastPersistedStatus?: TaskStatus;
   /** 每次取消/即时暂停/恢复都会换代。异步回调只允许修改启动时那一代，
@@ -3422,27 +3426,28 @@ export class TaskService {
     return this.taskProgress(task)?.step_id ?? waiting?.step;
   }
 
-  /** 内核没给脉冲时按任务状态占一段。索引是 flow/phases.json 的顺序契约
-   * (0=受理未开工,1=大需求分析中,2=拆分后子任务开发中,末段=终态),
-   * 名字一律来自那份文件,这里不写任何阶段字面量。取消/失败保留最近一次
-   * 内核脉冲的位置(有的话),没有就停在受理段。 */
+  /** 内核没给脉冲时按任务状态占一段。占哪一段由 flow/phases.json 的
+   * placeholders 按角色指定(受理未开工 / 大需求分析中 / 拆分后子任务
+   * 开发中 / 终态),名字一律来自那份文件,这里不写任何阶段字面量。 */
   private placeholderProgress(
     task: TaskState,
     raw?: TaskProgress,
   ): TaskProgress | undefined {
-    const phases = this.phaseVocabulary();
-    if (!phases) return undefined;
+    const vocabulary = this.phaseVocabulary();
+    if (!vocabulary) return undefined;
+    const { names: phases, placeholders } = vocabulary;
     const summary = task.summary;
-    const last = phases.length - 1;
     const analysis = this.isRequirementAnalysis(task);
-    const index = summary.status === "completed" ? last
+    const phase = summary.status === "completed" ? placeholders.terminal
       : analysis
-        ? (summary.requirement_graph?.stage === "analysis" ? 1 : 2)
-        : 0;
+        ? (summary.requirement_graph?.stage === "analysis"
+          ? placeholders.analysis : placeholders.delivering)
+        : placeholders.queued;
+    const index = phases.indexOf(phase);
     return {
       phases,
       current_index: index,
-      current_phase: phases[index],
+      current_phase: phase,
       // 脉冲里的步骤事实(step_id/标题/里程碑)是契约,轨道占位不吞掉它们。
       ...(raw?.step_id ? { step_id: raw.step_id } : {}),
       ...(raw?.revision !== undefined ? { revision: raw.revision } : {}),
@@ -3554,7 +3559,7 @@ export class TaskService {
 
   /** 进度条的阶段词表:内核 flow/phases.json,随 kernel/ 快照发布;
    * 没配 host 时用本仓随发布的快照(serve 的内核发现规则同源)。 */
-  private phaseVocabulary(): string[] | undefined {
+  private phaseVocabulary(): KernelPhaseVocabulary | undefined {
     return kernelPhases(this.options.host?.kernelRoot
       ?? discoverKernelRoot(resolve(process.cwd())));
   }
@@ -3575,7 +3580,7 @@ export class TaskService {
     // 词表缺失或脉冲里的阶段名不在词表里(老任务、旧内核、测试夹具的
     // 假内核):阶段轨道留空,但 step_id / 步骤标题 / 里程碑照常给——
     // 检视面、流程契约都靠脉冲里的 step_id,不能因为画不了轨道就丢掉。
-    const phases = this.phaseVocabulary() ?? [];
+    const phases = this.phaseVocabulary()?.names ?? [];
     try {
       const pulseText = readFileSync(pulsePath, "utf-8");
       const milestonePath = join(task.cwd, ".mae-flow.json.build-milestones");
@@ -3589,6 +3594,16 @@ export class TaskService {
       const pulse = JSON.parse(pulseText.slice(first, last + 1));
       const currentPhase = String(pulse.phase ?? "").trim();
       const currentIndex = phases.indexOf(currentPhase);
+      // 脉冲带着旧词表的阶段名(阶段词表升级前的老任务):让内核按当前
+      // 词表重写一次,写完缓存自然失效、下次投影就对了。只试一次,旁路。
+      if (currentIndex < 0 && currentPhase && phases.length
+          && this.options.host && !task.pulseRefreshAttempted) {
+        task.pulseRefreshAttempted = true;
+        const cwd = task.cwd;
+        this.bypass(task, "按当前阶段词表重写内核脉冲",
+          refreshKernelPanel({ host: this.options.host, cwd })
+            .then(() => { task.progressPulse = undefined; }));
+      }
       const milestone = String(pulse.step ?? "") === "build"
         ? latestBuildMilestone(milestoneText) : undefined;
       const progress: TaskProgress = {

@@ -19,7 +19,7 @@ import {
   randomUUID,
   sign,
 } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { createSafeGitView } from "./safeGit.ts";
 
@@ -383,6 +383,47 @@ export function createKernelHostProof(input: {
     encoding: "utf-8", mode: 0o600, flag: "wx",
   });
   return { path, cleanup: () => rmSync(path, { force: true }) };
+}
+
+/**
+ * 让内核按当前阶段词表重写一次看板与脉冲(`mae-flow.py panel`)。
+ *
+ * 用途只有一个:阶段词表升级前留下的老任务,脉冲里的阶段名不在当前词表里,
+ * Cloud 画不了轨道;跑一次 panel 就自愈,不用等下一个 Hook 事件。纯旁路:
+ * 异步、30 秒预算、失败只返回 false,绝不影响任务。
+ */
+export function refreshKernelPanel(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const gitView = createSafeGitView(input.cwd);
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      gitView.cleanup();
+      resolve(ok);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        input.host.python ?? "python3",
+        [join(input.host.kernelRoot, "scripts", "mae-flow.py"), "panel"],
+        { cwd: input.cwd, env: gitView.environment(), stdio: "ignore" },
+      );
+    } catch {
+      finish(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(false);
+    }, 30_000);
+    child.on("error", () => finish(false));
+    child.on("exit", (code) => finish(code === 0));
+  });
 }
 
 /** 与 KernelHost.INFRA_ATTEMPTS 同一口径:基础设施故障先带预算重试。 */

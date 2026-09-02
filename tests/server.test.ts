@@ -281,14 +281,14 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
     // 阶段顺序不再从 panel.html 抠,而是读内核 flow/phases.json 同一份词表;
     // 脉冲里的阶段名由内核按同一份文件算出。
     writeFileSync(join(workDir, "panel-pulse.js"),
-      'window.__panelPulse={"phase":"方案",'
+      'window.__panelPulse={"phase":"澄清需求",'
       + '"step_title":"需求澄清(逐题拍板)","revision":8};');
     const page = await fetch(`${base}/tasks/${created.id}/panel`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /现场面板/);
     const progress = service.get(created.id)!.progress!;
     assert.deepEqual(progress.phases,
-      ["配置与需求", "方案", "开发", "持续检视", "已合入"]);
+      ["启动", "澄清需求", "定规格", "写设计", "写代码", "检视与验证", "已合入"]);
     assert.equal(progress.current_index, 1);
     assert.equal(progress.step, "需求澄清(逐题拍板)");
     // build 里程碑是内核 append-only 旁路，只补充“正在做哪块”，不改
@@ -299,7 +299,7 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
         reason: "等待上游字段", at: "2026-08-20 10:00:00",
       }] }));
     writeFileSync(join(workDir, "panel-pulse.js"),
-      'window.__panelPulse={"phase":"开发","step":"build",'
+      'window.__panelPulse={"phase":"写代码","step":"build",'
       + '"step_title":"编码实现","revision":9};');
     const buildProgress = service.get(created.id)!.progress!;
     assert.deepEqual(buildProgress.milestone, {

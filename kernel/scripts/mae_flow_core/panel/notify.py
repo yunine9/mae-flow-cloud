@@ -32,7 +32,8 @@ ENV_OFF = "MAE_FLOW_NO_NOTIFY"
 # 占位进度和"点阶段弹方案"都要同一份词表,而 Cloud 按宪法一行映射都不许
 # 在 TS 侧抄——那就让它读同一个文件。此前 Cloud 自带两套阶段词表(进入
 # 持续检视后强行换成五段,没内核进度时又是七段),老任务停在哪套显示哪套,
-# 点阶段名因为名字对不上内核方案词表退底版告警。
+# 点阶段名因为名字对不上内核方案词表退底版告警。环节不减:只把「交付」
+# 改叫「检视与验证」,加一段终态「已合入」(用户拍板)。
 # playbooks.json 的 phase 与这里必须同一词表,由 test_execution_plan 钉死。
 _PHASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "..", "..", "flow", "phases.json")
