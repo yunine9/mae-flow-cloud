@@ -25,6 +25,7 @@ import {
   putIssueFlowMode,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
+import { orderHierarchyBy, orderTaskHierarchy } from "./taskHierarchy";
 import {
   byTeamAttention,
   isBlocked,
@@ -441,30 +442,6 @@ function NavIcon({ name }: { name: View }) {
 // MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视，
 // 但在“我的工作”里与已完成任务共用交付接力区，不混进自动推进列表。
 const DELIVERY_HANDOFF_STATUSES: TaskStatus[] = ["await_merge", "completed"];
-
-/** 只调整同一列表内的顺序：主任务在前，紧跟它的直接子任务。
- * 父任务被筛掉时子任务仍保留，并由卡片上的“隶属于主任务”说明来源。 */
-export function orderTaskHierarchy<T extends { id: string; parent_task_id?: string }>(
-  tasks: T[],
-): T[] {
-  const ids = new Set(tasks.map((task) => task.id));
-  const children = new Map<string, T[]>();
-  for (const task of tasks) {
-    if (!task.parent_task_id || !ids.has(task.parent_task_id)) continue;
-    children.set(task.parent_task_id, [
-      ...(children.get(task.parent_task_id) ?? []), task,
-    ]);
-  }
-  const ordered: T[] = [];
-  const append = (task: T) => {
-    ordered.push(task);
-    for (const child of children.get(task.id) ?? []) append(child);
-  };
-  for (const task of tasks) {
-    if (!task.parent_task_id || !ids.has(task.parent_task_id)) append(task);
-  }
-  return ordered;
-}
 
 export interface PersonalActionItem {
   key: string;
@@ -1593,7 +1570,10 @@ function TeamDashboard({
         {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{visible.map((item) => item.issue
+      <div className="task-list">{orderHierarchyBy(visible,
+        (item) => item.teamTask.id,
+        (item) => item.task?.parent_task_id,
+      ).map((item) => item.issue
         ? <TeamIssueCard key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
         : item.task ? <TaskCard key={item.teamTask.id} task={item.task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />
         : null)}</div>
