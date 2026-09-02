@@ -36,23 +36,23 @@ export function useStickyBottom<T extends HTMLElement>(count: number) {
     }
   }, [count]);
 
-  const followBottom = (node: T, smooth = false) => {
+  const followBottom = (node: T) => {
     setTop.current = node.scrollHeight;
-    node.scrollTo({
-      top: node.scrollHeight,
-      ...(smooth ? { behavior: "smooth" as ScrollBehavior } : {}),
-    });
+    node.scrollTo({ top: node.scrollHeight });
   };
 
   /** 无条件回到底部并恢复跟随:面板挂载/切回时用——用户第一眼要看的
-   *  是最新消息,历史分批装载期间也钉在底部,人上翻才撒手。 */
+   *  是最新消息,历史分批装载期间也钉在底部,人上翻才撒手。
+   *  必须瞬时滚动:smooth 的中途 scroll 事件偏离最终落点,会被回声
+   *  守卫误判成「人上翻」,pinned 在飞行途中就被掐灭——进现场停不在
+   *  底部、"已暂停跟随"横幅反复闪烁,都是它(2026-09-03)。 */
   const resync = () => {
     const node = ref.current;
     if (!node) return;
     pinned.current = true;
     mark.current = count;
     setBehind(0);
-    followBottom(node, true);
+    followBottom(node);
   };
 
   const onScroll = () => {
@@ -73,7 +73,7 @@ export function useStickyBottom<T extends HTMLElement>(count: number) {
     pinned.current = true;
     mark.current = count;
     setBehind(0);
-    followBottom(node, true);
+    followBottom(node);
   };
 
   return { ref, behind, paused: !pinned.current, onScroll, toBottom, resync };
