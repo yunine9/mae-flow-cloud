@@ -1454,6 +1454,10 @@ svg {
 }
 .workspace-review-drawer > header {
   position: relative;
+  /* 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:副标题一换行
+     就有半行被裁在边框外(420px 宽实测:需要 85px 只给了 64px)。标题栏
+     按自己的高度占位,压缩留给能滚的内容区。 */
+  flex: none;
   min-height: 64px;
   padding: 12px 16px;
   display: flex;
@@ -1470,7 +1474,9 @@ svg {
 }
 .workspace-review-drawer > header span {
   color: var(--accent);
-  font: 750 11px var(--font-mono);
+  /* 11px 的眉标按默认 1.6 行高白占 7px;标题栏不再被压缩后这点直接算在
+     内容区头上。 */
+  font: 750 11px/1.25 var(--font-mono);
   letter-spacing: .12em;
 }
 .workspace-review-drawer > header strong { color: var(--text-strong); font-size: 18px; }
@@ -1488,7 +1494,9 @@ svg {
 .workspace-review-drawer > .workspace-review-content { padding: 12px 12px 18px; }
 .workspace-review-drawer .workspace-review-notes { width: 100%; }
 @media (max-width: 900px) {
-  /* 窄屏没有"左边还看得见材料"这回事,抽屉占满头以下整块,不留边距。 */
+  /* 窄屏没有"左边还看得见材料"这回事,抽屉占满头以下整块,不留边距。
+     副标题最后半句正是在承诺这件事,这里不成立,索性不说。 */
+  .workspace-review-drawer > header p { display: none; }
   .workspace-review-drawer {
     top: var(--ws-head-h, 70px);
     right: 0;

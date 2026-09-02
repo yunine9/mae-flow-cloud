@@ -105,6 +105,42 @@ test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位
     "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
 });
 
+test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
+  // 用户实测:"针对 1. 缺失变量输出空串并记录 warn 日志;"这行完全没必要
+  // 在左边。它原来是整块引言、单占左栏一行,760px 抽屉里两栏本就只有
+  // 304 和 357,正文和 Agent 回应被挤成两条窄柱。它只是"指着哪儿"的补充,
+  // 接在位置后面收一行即可,整段留在 title 里、点位置也能回到那一行。
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  const head = panel.indexOf('className="annot-item-head"');
+  const anchorAt = panel.indexOf("annot-anchor", head);
+  const progressAt = panel.indexOf("annot-progress", head);
+  assert.ok(head >= 0 && anchorAt > head && anchorAt < progressAt,
+    "锚定原文应在 annot-item-head 里、排在状态之前");
+  assert.match(panel, /className="annot-anchor"\s*\n?\s*title=\{item\.anchor\}/,
+    "截断后整段必须还在 title 里,不能丢");
+
+  const annotate = readFileSync(
+    join(process.cwd(), "web/src/annotate.css"), "utf8");
+  assert.match(annotate,
+    /grid-template-areas:\s*"head head"\s*"route route"\s*"note response"\s*"foot foot"/s);
+  assert.doesNotMatch(annotate, /grid-area:\s*anchor/,
+    "anchor 那一行已经没有了");
+  // 归属徽标原来没给区域,自动排版把它丢进末尾空着的 stale 行,"Agent 处理"
+  // 于是落在页脚下面(实测 foot 底 940px、徽标 948px)。
+  assert.match(annotate, /\.annot-route-badge \{\s*grid-area: route/,
+    "归属徽标必须有明确区域,否则会被排到页脚后面");
+});
+
+test("抽屉标题栏按自己的高度占位,副标题不被裁", () => {
+  // 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:420px 宽下
+  // 它要 85px 只拿到 64px,副标题有半行被裁在边框外。
+  assert.match(css, /\.workspace-review-drawer > header \{[^}]*flex:\s*none/s);
+  assert.match(css,
+    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer > header p \{ display: none; \}/s,
+    "窄屏抽屉占满整屏,副标题那句'左侧材料仍可圈选'不成立就别说");
+});
+
 test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
   // 浮钮挂在 .workspace-overlay(z-index 120)之外、自己 650,和抽屉的 950
   // 不在同一个栈里比,所以照样压在抽屉右下角。原先靠内容底部留 84px 空白

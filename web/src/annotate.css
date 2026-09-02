@@ -397,14 +397,18 @@
 .annot-item.done { border-left-color: var(--success); }
 
 .annot-item-head {
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 6px;
 }
 
+/* 位置是这条批注的身份,窄屏优先保它完整:先按内容占位,顶到 60% 才截。
+   剩下的宽度归锚定原文,它截掉还有 title 和"回到那一行"两条退路。 */
 .annot-where {
+  flex: 0 0 auto;
+  max-width: 60%;
   font-size: 14px;
   color: var(--text);
   overflow: hidden;
@@ -519,24 +523,33 @@
   border-radius: 6px;
 }
 
+/* 锚定原文接在位置后面收一行。原来它是整块引言,单占左栏,把批注正文和
+   Agent 回应挤成两条窄柱;它只是"指着哪儿"的补充,不该和内容抢篇幅。
+   整段留在 title 里,位置按钮也能直接回到那一行,截断不丢信息。 */
 .annot-anchor {
-  margin: 7px 0 6px;
-  padding: 7px 9px;
-  font-size: 13.5px;
-  line-height: 1.55;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--muted);
   background: var(--surface-muted);
   border-left: 0;
   border-radius: 6px;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .annot-anchor span {
-  margin-right: 7px;
+  margin-right: 6px;
   color: var(--faint);
   font-size: 11.5px;
   font-weight: 700;
 }
+
+.annot-progress { margin-left: auto; }
 
 .annot-note {
   margin: 0;
@@ -724,24 +737,32 @@
   .workspace-review-notes .annot-item:has(.annot-response) {
     display: grid;
     grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+    /* anchor 那一行去掉了:锚定原文已经收进 head。左栏原先被"正文 + 锚定
+       原文"两段瓜分,正文只剩一小截;现在整列都归批注正文,和右边的 Agent
+       回应从同一行起。 */
     grid-template-areas:
       "head head"
+      "route route"
       "note response"
-      "anchor response"
       "foot foot"
       "stale stale";
     column-gap: 18px;
+    row-gap: 8px;
     align-items: start;
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-item-head {
     grid-area: head;
+    margin-bottom: 0;
+  }
+  /* 归属徽标原来没给区域,自动排版把它丢进末尾那个空的 stale 行,于是
+     "Agent 处理"落在页脚下面(实测 foot 底 940px、徽标 948px)。 */
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-route-badge {
+    grid-area: route;
+    margin: 0;
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-note,
   .workspace-review-notes .annot-item:has(.annot-response) .annot-inline-editor {
     grid-area: note;
-  }
-  .workspace-review-notes .annot-item:has(.annot-response) .annot-anchor {
-    grid-area: anchor;
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-response {
     grid-area: response;
@@ -750,7 +771,7 @@
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-item-foot {
     grid-area: foot;
-    margin-top: 4px;
+    margin-top: 0;
     padding-top: 10px;
     border-top: 1px solid var(--line);
   }
