@@ -72,6 +72,20 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
   return <aside className="issue-rail">
     <div className="issue-rail-head"><span>下一步</span></div>
     <div className="issue-rail-body">
+      {/* 分析报告是 AI 的主交付物(分析闸的门票、检视与转正的继承对象):
+          置顶醒目卡而非页脚小字——2026-09-02 用户反馈"几乎没人注意到"。
+          只读导航,查看模式保留;等待卡才是第一优先,排在其后。 */}
+      {detail.has_analysis && <button type="button"
+        className="issue-analysis-cta" onClick={onOpenDoc}>
+        <i className="issue-rail-pulse" aria-hidden />
+        <span className="issue-analysis-cta-text">
+          <strong>分析报告已产出</strong>
+          <small>过程文档可读可圈注——圈注意见提交后整体打回重跑分析</small>
+        </span>
+        <svg viewBox="0 0 16 16" aria-hidden>
+          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+        </svg>
+      </button>}
       {/* 等待中:归属人发作答卡,查看模式只给题面事实卡(卡与等待说明
           照看,作答控件一个不出)。 */}
       {waiting && (canOperate
@@ -146,12 +160,6 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
         </div>}
     </div>
     <footer className="issue-rail-foot">
-      {/* 过程文档入口是只读导航(跳材料页签),查看模式保留。 */}
-      {detail.has_analysis && <button type="button" className="issue-analysis-flag"
-        title="查看过程文档(分析报告 / 过程问答)"
-        onClick={onOpenDoc}>
-        分析报告已产出,进入过程文档 →
-      </button>}
       {/* 同控制/确认/禁用条件与旧 composer-actions 完全一致;归档与
           取消都是写操作,查看模式整组不渲染。failed 例外:归档需要
           结论而失败没有结论语义,只能取消清理(2026-09-02 拍板)。 */}
