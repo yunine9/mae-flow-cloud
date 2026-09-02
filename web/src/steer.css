@@ -653,3 +653,21 @@
   .assistant-actions { align-items: stretch; flex-direction: column; }
   .assistant-buttons { justify-content: flex-end; }
 }
+
+/* @ 知识引用(中途注入):按钮+芯片同排,选择器悬浮成一块列表。 */
+.steer-refs { margin-top: 6px; }
+.steer-refs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.steer-ref-add { padding: 3px 10px; border: 1px dashed var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; }
+.steer-ref-add[aria-expanded="true"], .steer-ref-add:hover { color: var(--ink); border-color: var(--ink); }
+.steer-ref-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--font-size-assist); }
+.steer-ref-chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
+.steer-ref-chip button:hover { color: var(--ink); }
+.steer-ref-hint { color: var(--faint); }
+.steer-ref-picker { margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); max-height: 260px; overflow-y: auto; display: grid; gap: 8px; }
+.steer-ref-picker > input { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: var(--font-size-assist); }
+.steer-ref-picker small { color: var(--faint); }
+.steer-ref-group { display: grid; gap: 2px; }
+.steer-ref-group > strong { font-size: var(--font-size-assist); color: var(--muted); margin-bottom: 2px; }
+.steer-ref-group > button { display: grid; text-align: left; gap: 1px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--ink); }
+.steer-ref-group > button:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.steer-ref-group > button > small { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

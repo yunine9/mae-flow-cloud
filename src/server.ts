@@ -19,6 +19,8 @@
  *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
  *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
  *   GET  /skills/:dir/candidates[/:id]                  → 修订候选列表/详情
+ *   POST /knowledge/skill-extract {repo,intent,path_hint?} → 定向提取起草(登录即可)
+ *   GET  /knowledge/skill-extract/:id                   → 提取任务状态/草稿
  *   POST /skills/:dir/candidates/:id/adopt              → 采纳候选,走上架闸(管理员)
  *   DELETE /skills/:dir/candidates/:id                  → 丢弃候选(管理员)
  *   GET  /tasks/:id                                     → 详情(含待办)
@@ -72,10 +74,13 @@ import {
   NotFoundError,
   TaskControlError,
   type RequirementGraph,
+  type SteerKnowledgeReference,
   type TaskService,
 } from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
+  ArtifactArchiveTooLargeError,
+  bundleArtifactDocuments,
   listArtifactsAsync,
   readArtifactAsync,
   resolveArtifactRoot,
@@ -1426,6 +1431,42 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知业务模块接口" });
       }
+      // 定向知识提取(登录即可发起):从参考仓读出一份 SKILL.md 草稿,
+      // 回填提交表单由人编辑;上架仍走 /skills 的提交/审核闸,这里只是
+      // 起草。克隆用发起人自己的 git 凭据——他没权限看的仓,平台也不
+      // 替他看。GET 需先于静态托管兜底。
+      if (parts[0] === "knowledge" && parts[1] === "skill-extract") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        const operator = viewer?.username ?? "本地部署";
+        try {
+          if (request.method === "POST" && parts.length === 2) {
+            const body = await readBody(request);
+            return json(response, 200, service.startSkillExtraction({
+              repo: String(body.repo ?? ""),
+              intent: String(body.intent ?? ""),
+              pathHint: typeof body.path_hint === "string"
+                ? body.path_hint : undefined,
+              operator,
+            }));
+          }
+          if (request.method === "GET" && parts.length === 3) {
+            const job = service.skillExtractionJob(
+              decodeURIComponent(parts[2]));
+            if (!job) {
+              return json(response, 404, { error: "提取任务不存在" });
+            }
+            return json(response, 200, job);
+          }
+        } catch (error) {
+          if (error instanceof TaskControlError) {
+            return json(response, 409, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知知识提取接口" });
+      }
       // 团队 Skill 资产库(货架的写半边):读与货架同口径(登录即可),
       // 写只归管理员,操作人逐条进留痕。写进数据目录即对下一单生效,
       // 快照器每任务从源重造——这里不用通知任何运行时组件。
@@ -1904,6 +1945,8 @@ export function createTaskServer(
               body.repository_assignees as Record<string, unknown>,
             ).map(([repository, value]) => [repository, String(value ?? "")]))
           : undefined;
+        const collaborators = Array.isArray(body.collaborators)
+          ? body.collaborators.map(String) : undefined;
         const baseline = body.baseline === undefined
           ? undefined : String(body.baseline);
         const model = body.model
@@ -2065,6 +2108,7 @@ export function createTaskServer(
               requirementBundleName: requirementBundle?.bundle_name,
               requirementAssets: requirementBundle?.assets,
               lane, ticket, repositoryTickets, repositoryAssignees,
+              collaborators,
               baseline, model,
               repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
@@ -2076,6 +2120,8 @@ export function createTaskServer(
               knowledgePreviewDigest,
               // 单仓大需求显式要求先分析拆分(交付单元拆分入口)。
               requirementAnalysis: body.requirement_analysis === true,
+              // 下单后先在工作台检视需求原文；主责任人确认才入队。
+              requirementAnalysisConfirmation: true,
             }));
         } catch (error) {
           return json(response, 400, { error: humanError(error) });
@@ -2491,8 +2537,23 @@ export function createTaskServer(
             return json(response, 403, { error: "只有任务责任人或受邀协作者可以参与讨论" });
           }
           const body = await readBody(request);
+          // @ 知识引用:前端只传结构化标识,正文由服务端解析并在发送时
+          // 固定版本——客户端拼正文会绕过注入预算与足迹。
+          const references = Array.isArray(body.references)
+            ? (body.references as Array<Record<string, unknown>>)
+              .map((item) => ({
+                kind: String(item?.kind ?? "") as
+                  SteerKnowledgeReference["kind"],
+                directory: item?.directory === undefined
+                  ? undefined : String(item.directory),
+                module_id: item?.module_id === undefined
+                  ? undefined : String(item.module_id),
+                asset_id: item?.asset_id === undefined
+                  ? undefined : String(item.asset_id),
+              }))
+            : undefined;
           const task = await service.interrupt(
-            id, String(body.text ?? ""), viewer?.username);
+            id, String(body.text ?? ""), viewer?.username, references);
           return json(response, 200, task);
         }
         if (request.method === "POST" && parts[2] === "cross-repository-update") {
@@ -2680,6 +2741,32 @@ export function createTaskServer(
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。
             return json(response, 200,
               await listArtifactsAsync(root, sources));
+          }
+          if (parts.length === 4 && parts[3] === "archive") {
+            let archive;
+            try {
+              archive = bundleArtifactDocuments(root, sources);
+            } catch (reason) {
+              if (reason instanceof ArtifactArchiveTooLargeError) {
+                return json(response, 413, { error: reason.message });
+              }
+              throw reason;
+            }
+            if (!archive) {
+              return json(response, 409, { error: "暂无可打包的过程文档" });
+            }
+            const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+            const safeId = id.replace(/[^A-Za-z0-9._-]/g, "_");
+            const filename = `${id}-过程文档-${day}.zip`;
+            const filenameAscii = `${safeId}-process-documents-${day}.zip`;
+            response.writeHead(200, {
+              "content-type": "application/zip",
+              "content-length": String(archive.data.length),
+              "content-disposition": `attachment; filename="${filenameAscii}"`
+                + `; filename*=UTF-8''${encodeURIComponent(filename)}`,
+              "cache-control": "no-store",
+            });
+            return response.end(archive.data);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));

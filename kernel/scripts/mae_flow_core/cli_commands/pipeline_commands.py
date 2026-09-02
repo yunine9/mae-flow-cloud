@@ -10,6 +10,11 @@ import json
 
 from .shared import os, time
 from .wiring import api
+from .host_capability import (
+    host_managed_continuous_review,
+    verify_host_proof,
+)
+from .host_receipts import save_with_host_proof, trusted_active_batch
 from mae_flow_core.quality.external_verification import (
     PipelineDecision,
     adjudicate_pipeline,
@@ -75,7 +80,7 @@ def _route_external_verification(flow, st, record):
         return
     verdict = record.get("verdict")
     if verdict == "PASS":
-        if continuous_review_enabled(st):
+        if host_managed_continuous_review() or continuous_review_enabled(st):
             queued = api.complete_verified_feedback(
                 st, str(record.get("sha") or record.get("head") or ""))
             target = "feedback_triage" if queued else "delivery_watch"
@@ -99,6 +104,23 @@ def cmd_pipeline(flow, st, args):
         return
 
     facts = _read_facts(os.path.abspath(args.file))
+    # 强制模式来自 Agent 工作区外的 capability；状态里的 false 不能降级。
+    continuous = host_managed_continuous_review() or continuous_review_enabled(st)
+    proof = None
+    if continuous:
+        if not getattr(args, "host_proof", None):
+            api.die("pipeline record 在 continuous_review 下必须携带 Cloud 宿主凭据", 2)
+        proof = verify_host_proof(
+            st, args.host_proof, "pipeline-record", facts)
+        loop = st.get("delivery_loop") or {}
+        active_id = str(loop.get("active_batch_id") or "")
+        active = next((item for item in loop.get("batches", [])
+                       if isinstance(item, dict)
+                       and str(item.get("batch_id") or "") == active_id), None)
+        if active and active.get("status") == "awaiting_verification":
+            if not trusted_active_batch(
+                    st, ("feedback-result", "pipeline-record")):
+                api.die("pipeline record 拒绝核销未经宿主收据背书的反馈结果", 2)
     head = api.sh("git rev-parse --verify HEAD")
     at = time.strftime("%Y-%m-%d %H:%M:%S")
     required = required_dimensions(st)
@@ -135,8 +157,11 @@ def cmd_pipeline(flow, st, args):
         record = _legacy_record(st, facts, head, at)
         quality["pipeline"] = record
 
-    api.save_state(st)
     _route_external_verification(flow, st, record)
+    if continuous:
+        save_with_host_proof(st, proof)
+    else:
+        api.save_state(st)
     print("[mae-flow] 流水线裁决 %s: %s" % (
         record["verdict"], record["reason"]))
     # Machine-readable final line. Cloud consumes this record and may not

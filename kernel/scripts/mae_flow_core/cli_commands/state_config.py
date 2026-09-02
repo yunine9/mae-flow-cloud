@@ -1,7 +1,8 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    DEFAULTS_PATH, FLOW_PATH, REQ_SHA_MARKER, STATE_PATH, StateStoreError,
+    DEFAULTS_PATH, FLOW_PATH, REQ_SHA_MARKER, STATE_PATH, StateConflictError,
+    StateStoreError,
     _BINARY_PREFIXES, _shared_path_fingerprint, _shared_review_path_fingerprint,
     core_find_project_root, hashlib, load_json, moonlight_can_hard_block,
     moonlight_data, moonlight_enabled, moonlight_resolve_kind, moonlight_step_kind,
@@ -74,6 +75,13 @@ def save_state(st):
     # 共享 StateStore 同时提供原子写、revision/CAS 和跨 Hook 进程锁。
     try:
         save_versioned_json(STATE_PATH, st, "flow")
+    except StateConflictError as exc:
+        # Stable machine-readable line for a trusted host. Human diagnostics
+        # remain separate so callers never infer retryability from prose.
+        print('[mae-flow:error] {"code":"FLOW_REVISION_CONFLICT",'
+              '"schema":"mae-flow-error/1"}', file=sys.stderr)
+        die("流程状态存在并发更新，已拒绝覆盖：" + str(exc)
+            + "。重新执行 current 获取最新状态；若仍失败可直接 `/mae-flow:mae-flow exit` 保存现场并退出。", 2)
     except StateStoreError as exc:
         die("流程状态存在并发更新或不可读，已拒绝覆盖：" + str(exc)
             + "。重新执行 current 获取最新状态；若仍失败可直接 `/mae-flow:mae-flow exit` 保存现场并退出。", 2)

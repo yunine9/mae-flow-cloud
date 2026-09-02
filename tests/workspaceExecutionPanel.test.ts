@@ -9,29 +9,63 @@ const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
 const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
+const crossRepositorySync = readFileSync(
+  resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
-  const executionView = workspace.slice(
-    workspace.indexOf('workspaceView === "execution"'),
-    workspace.indexOf('ws-insights-view'),
-  );
-  assert.match(executionView, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
+  assert.match(workspace, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
-test("材料与检视组成同一工作面，一级栏目不再要求来回切换", () => {
+test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主工作面", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    // 结束锚与现状对齐(体区 div 现在带 ref):旧串匹配不到会让切片
-    // 失控吞掉体区正文,误捕"批注与检视"文案(main 侧已红)。
-    workspace.indexOf("<div ref={workspaceBody}"),
+    workspace.indexOf('<div ref={workspaceBody'),
   );
-  assert.doesNotMatch(navigation, /批注与检视/);
-  assert.match(workspace, /aria-label="本轮检视清单"/);
-  assert.match(workspace, /setReviewPanelOpen\(true\)/,
-    "新增意见后应留在材料并自动展开检视清单");
-  assert.match(workspace, /<AnnotationPanel[\s\S]*onLocate=\{locate\}/);
-  assert.match(workspace, /<TaskTimeline taskId=\{task\.id\} \/>/,
-    "时间线应回到执行现场而不是占据检视工作面");
+  assert.match(navigation, /ws-review-launch/);
+  assert.match(navigation, /批注与检视/);
+  assert.match(navigation, /aria-haspopup="dialog"/);
+  // 2026-09-02 弹层改抽屉:挤进正文右栏,主工作面(材料/协作/执行)不动。
+  assert.match(workspace,
+    /className="workspace-review-drawer"\s+role="complementary"/);
+  assert.match(workspace, /\{reviewWorkspaceContent\}/,
+    "抽屉应承载完整批注、回应和 Committer 检视工作面");
+  assert.doesNotMatch(workspace, /aria-label="本轮检视清单"/,
+    "批注不应以旧的'本轮检视清单'形态接管 Agent 当前问题");
+});
+
+test("Token 用量是执行现场独立页签，不混入实时事件或批注检视", () => {
+  assert.match(workspace, /type ExecutionView = "events" \| "knowledge" \| "tokens"/);
+  assert.match(workspace, /onClick=\{\(\) => setExecutionView\("tokens"\)\}/);
+  assert.match(workspace, /<strong>Token 使用<\/strong>/);
+  assert.match(workspace, /hidden=\{executionView !== "tokens"\}/);
+
+  const reviewContent = workspace.slice(
+    workspace.indexOf("const reviewWorkspaceContent"),
+    workspace.indexOf("return (", workspace.indexOf("const reviewWorkspaceContent")),
+  );
+  assert.doesNotMatch(reviewContent, /<TokenUsage|<TaskTimeline/,
+    "检视弹层只应承载意见和检视动作");
+
+  const eventContent = workspace.slice(
+    workspace.indexOf('hidden={executionView !== "events"}'),
+    workspace.indexOf('hidden={executionView !== "knowledge"}'),
+  );
+  assert.doesNotMatch(eventContent, /<TokenUsage/,
+    "实时事件页不应继续重复显示 Token 卡");
+});
+
+test("低频跨仓同步下沉到开发协作底部并默认折叠", () => {
+  const collaboration = workspace.slice(
+    workspace.indexOf('workspaceView === "collaboration"'),
+    workspace.indexOf('</> : <>', workspace.indexOf('workspaceView === "collaboration"')),
+  );
+  assert.ok(collaboration.indexOf("<SteerBox")
+    < collaboration.indexOf("<CrossRepositorySync"),
+  "主协作操作必须在前，低频跨仓工具放在底部");
+  assert.match(crossRepositorySync,
+    /return <details className="cross-repository-sync">/,
+    "跨仓同步默认折叠，不能继续占据整块首屏");
+  assert.match(crossRepositorySync, /OPTIONAL TOOL/);
 });
 
 test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
@@ -144,10 +178,15 @@ test("最终代码审阅统计只计算将推送文件，不混入仅留本地�
   assert.match(gitDiff, /const deletions = countedFiles\.reduce/);
 });
 
-test("已完成任务的进度展示收口到完成，不沿用合入前最后一步", () => {
+test("已完成任务的进度展示收口到末段，不沿用合入前最后一步", () => {
   assert.match(taskCard, /const completed = status === "completed"/);
-  assert.match(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
-  assert.match(taskCard, /const currentLabel = completed \? "完成"/);
+  // 末段的名字来自任务 API(内核 flow/phases.json),前端不再自己追加
+  // "完成"、也不把"交付"改写成"验证与交付"——那是第二套词表,和内核
+  // 方案词表对不上就点不动(2026-09-02 用户实锤)。
+  assert.doesNotMatch(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
+  assert.doesNotMatch(taskCard, /验证与交付/);
+  assert.match(taskCard,
+    /const currentLabel = completed\s*\? \(phases\.at\(-1\) \?\? progress\.current_phase\)/);
   assert.match(taskCard, /status=\{task\.status\}/,
     "列表卡和工作台都要把任务终态交给同一进度组件");
   assert.match(workspace, /showDetailedStep status=\{task\.status\}/);
@@ -175,6 +214,24 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
     "只有任务元数据登记过的图片才能渲染，不能开放任意地址");
   assert.match(workspace, /return status !== "canceled"/,
     "已交付任务可归档批注，只有明确停止后才关闭新增入口");
-  assert.match(workspace, /checks\.find\(\(check\) => check\.id === item\.id\)\?\.line/,
-    "定位应使用重锚定后的当前行号");
+  assert.match(workspace,
+    /const check = checks\.find\(\(candidate\) => candidate\.id === item\.id\)/,
+    "定位应读取当前批注的重锚定结果");
+  assert.match(workspace, /const currentLine = check\?\.line \?\? item\.line/,
+    "定位应优先使用重锚定后的当前行号");
+});
+
+test("需求确认复用标准决定卡，并收成一个明确的通过按钮", () => {
+  assert.match(taskCard,
+    /requirementAnalysisConfirmation[^]*<section className="decision-card"/,
+    "需求确认应沿用现有决定卡，不另造一套布局");
+  assert.match(taskCard, /需求已确认，进入需求分析/);
+  assert.match(taskCard,
+    /requirementAnalysisConfirmation[^]*attachmentCount === 0[^]*requirement_revision\?\.state !== "running"/,
+    "Agent 修改中或检视意见未闭环时不能放行");
+  assert.match(workspace,
+    /requirementAnalysisConfirmation \? undefined : draftIds/,
+    "确认按钮不应再次夹带批注，批注要先独立交给文档 Agent 闭环");
+  assert.doesNotMatch(workspace, /编辑需求原文|保存修改/,
+    "人工只提检视意见，不与 Agent 同时编辑需求正本");
 });

@@ -150,8 +150,8 @@ export function StagePlanDialog({
             正在读取方案目录…</p>}
           {catalog?.length === 0 && (
             <p className="execution-plan-warning">
-              该阶段没有对应的内核执行方案——这个视图的阶段词表可能
-              不属于内核六阶段,不存在可预告的标准做法。
+              该阶段没有对应的内核执行方案——阶段名与内核 flow/phases.json
+              的词表对不上,不存在可预告的标准做法。
             </p>
           )}
           {catalog?.map((playbook) => (

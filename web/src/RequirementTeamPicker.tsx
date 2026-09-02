@@ -50,7 +50,7 @@ export function RequirementTeamPicker({
       setLoading(false);
     }).catch((cause) => {
       if (!alive) return;
-      setError(cause instanceof Error ? cause.message : "协作成员读取失败");
+      setError(cause instanceof Error ? cause.message : "讨论参与人读取失败");
       setLoading(false);
     });
     return () => { alive = false; };
@@ -82,16 +82,16 @@ export function RequirementTeamPicker({
       setSaved(true);
       onSaved?.();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "协作成员保存失败");
+      setError(cause instanceof Error ? cause.message : "讨论参与人保存失败");
     } finally {
       setSaving(false);
     }
   }
 
-  return <section className="requirement-team-picker" aria-label="主任务协作成员">
+  return <section className="requirement-team-picker" aria-label="主任务讨论参与人">
     <header>
-      <div><span>MAIN TASK TEAM</span><strong>谁一起参与主任务</strong></div>
-      <small>一位主责任人拍板，多位开发者共同澄清</small>
+      <div><span>MAIN TASK TEAM</span><strong>谁一起把需求聊清楚</strong></div>
+      <small>一位主责任人拍板，多位参与人一起讨论</small>
     </header>
     <div className="requirement-team-owner">
       <i aria-hidden>主</i>
@@ -121,10 +121,10 @@ export function RequirementTeamPicker({
     </div>
     {error && <p className="requirement-team-error" role="alert">{error}</p>}
     <footer>
-      <p>共同开发者可送批注、补充材料并和 AI 讨论，但不能代替主责任人拍板。</p>
+      <p>参与人可送批注、补充材料并和 AI 讨论，但不能代替主责任人拍板。</p>
       <button type="button" disabled={loading || saving || !allReady}
         onClick={() => void save()}>
-        {saving ? "正在保存…" : saved ? "协作成员已保存" : "保存并邀请参与"}
+        {saving ? "正在保存…" : saved ? "参与人已保存" : "保存并邀请参与"}
       </button>
     </footer>
   </section>;

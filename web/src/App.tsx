@@ -24,7 +24,7 @@ import {
   putPersonalPushConfirmation,
   putIssueFlowMode,
 } from "./api";
-import { byUrgency } from "./taskTime";
+import { byNewest, byUrgency } from "./taskTime";
 import {
   byTeamAttention,
   isBlocked,
@@ -45,7 +45,8 @@ import {
   type LaunchGateState,
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
-import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
+import { KnowledgeInsightsBoard } from "./KnowledgeFlywheel";
+import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { QuickWishButton } from "./WishQuickCreate";
 import { userLabel } from "./UserPicker";
@@ -74,14 +75,14 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "knowledge" | "modules" | "workflows";
+type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights";
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
   "wishes", "help",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
-  "knowledge", "modules", "workflows",
+  "knowledge", "modules", "workflows", "insights",
 ]);
 
 function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
@@ -556,6 +557,20 @@ export function App() {
   const [buildHash, setBuildHash] = useState<string | null>(null);
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
+  // 任务列表顺序:默认最新在上(用户实锤);切换记在本机,下次进来沿用。
+  const [taskOrder, setTaskOrderState] = useState<"newest" | "attention">(() => {
+    try {
+      return localStorage.getItem("mae-flow-task-order") === "attention"
+        ? "attention" : "newest";
+    } catch { return "newest"; }
+  });
+  const setTaskOrder = (
+    update: (current: "newest" | "attention") => "newest" | "attention",
+  ) => setTaskOrderState((current) => {
+    const next = update(current);
+    try { localStorage.setItem("mae-flow-task-order", next); } catch { /* 仍保留本次选择 */ }
+    return next;
+  });
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
@@ -749,7 +764,7 @@ export function App() {
   // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
   // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
   useEffect(() => {
-    if (!session || view !== "knowledge" || teamAssetTab !== "knowledge") return;
+    if (!session || view !== "knowledge" || teamAssetTab !== "insights") return;
     refreshKnowledgeInsights();
     const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
     return () => window.clearInterval(timer);
@@ -904,7 +919,12 @@ export function App() {
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
         : mineScope === "delivered" ? myDelivered : myCurrent;
-  const visibleMyWork = scopedMyWork;
+  // 列表顺序是个开关:默认最新在最上面(用户实锤);切到"待核对在前"时
+  // 沿用各分组原有的关注度排序。只动展示顺序,分组与计数不受影响。
+  const visibleMyWork = taskOrder === "newest"
+    ? [...scopedMyWork].sort(byNewest) : scopedMyWork;
+  const visibleMyDelivered = taskOrder === "newest"
+    ? [...myDelivered].sort(byNewest) : myDelivered;
   const myWorkTitle = mineScope === "waiting" ? "待我核对"
     : mineScope === "intervention" ? "需要介入 / 已暂停"
       : mineScope === "active" ? "自动推进中"
@@ -1084,7 +1104,7 @@ export function App() {
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
               onClick={() => selectTeamAssetTab("knowledge")}>
-              <strong>知识资产</strong><small>团队通用知识及全部资产的真实使用效果</small>
+              <strong>知识资产</strong><small>上架、审核并维护团队通用知识</small>
             </button>
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
@@ -1096,10 +1116,20 @@ export function App() {
               onClick={() => selectTeamAssetTab("workflows")}>
               <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
             </button>
+            <button type="button" className={teamAssetTab === "insights" ? "active" : ""}
+              aria-pressed={teamAssetTab === "insights"}
+              onClick={() => selectTeamAssetTab("insights")}>
+              <strong>使用效能</strong><small>谁真被读、谁选而未用，以及下一步改哪里</small>
+            </button>
           </nav>
-          {teamAssetTab === "knowledge" ? <KnowledgeFlywheel
+          {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
             initialAsset={knowledgeFocus}
+            onOpenTask={(taskId) => {
+              const target = tasks.find((task) => task.id === taskId);
+              if (target) openArtifacts(target);
+            }}
+          /> : teamAssetTab === "insights" ? <KnowledgeInsightsBoard
             insights={knowledgeInsights}
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}
@@ -1142,11 +1172,11 @@ export function App() {
             onOpen={openArtifacts}
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
-            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
+            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
             <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
-          {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
+          {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
         {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onNavigateProfile={() => setView("profile")} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage

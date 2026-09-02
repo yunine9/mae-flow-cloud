@@ -17,6 +17,8 @@ import {
 
 export interface ReviewReplyPayload {
   discussion_id: string;
+  /** 评论版本；老 outbox 没有该字段时按 0 兼容。 */
+  source_revision?: number;
   body: string;
   repo: string;
   mr?: string | number;
@@ -85,6 +87,8 @@ export function parseReviewReplies(
 function replyId(payload: ReviewReplyPayload): string {
   const digest = createHash("sha256").update(JSON.stringify({
     discussion_id: payload.discussion_id,
+    ...(payload.source_revision !== undefined
+      ? { source_revision: payload.source_revision } : {}),
     body: payload.body,
     repo: payload.repo,
     mr: payload.mr,
@@ -119,6 +123,9 @@ function storedItem(
   const expectedSha = typeof payload?.expected_sha === "string"
     ? payload.expected_sha.trim() : "";
   const mr = payload?.mr;
+  const sourceRevision = payload?.source_revision;
+  const validRevision = sourceRevision === undefined
+    || (Number.isSafeInteger(sourceRevision) && Number(sourceRevision) >= 0);
   const validMr = mr === undefined || typeof mr === "string"
     || (typeof mr === "number" && Number.isFinite(mr));
   if (!item || item.kind !== "review_reply"
@@ -129,11 +136,13 @@ function storedItem(
       || !payload || !discussionId || !body || !repo.trim() || !expectedSha
       || payload.discussion_id !== discussionId || payload.body !== body
       || payload.expected_sha !== expectedSha
-      || typeof payload.resolve !== "boolean" || !validMr) {
+      || typeof payload.resolve !== "boolean" || !validMr || !validRevision) {
     throw new Error(`delivery outbox 第 ${line} 行入队项无效`);
   }
   const normalized: ReviewReplyPayload = {
     discussion_id: discussionId,
+    ...(sourceRevision !== undefined
+      ? { source_revision: Number(sourceRevision) } : {}),
     body,
     repo,
     ...(mr !== undefined ? { mr: mr as string | number } : {}),

@@ -151,7 +151,7 @@
       "version": "1.1.0",
       "title": "业务知识增量归档",
       "summary": "只沉淀本次交付真正新增或修正的领域事实，没有知识变化时明确记录 unchanged。",
-      "phase": "交付",
+      "phase": "检视与验证",
       "steps": ["domain_archive", "archive_confirm", "archive"],
       "activities": [
         {"id": "identify-knowledge-delta", "title": "识别知识增量", "description": "区分可复用领域事实和只属于本次实现的过程信息。", "required": true},
@@ -169,8 +169,8 @@
       "version": "1.1.0",
       "title": "受控交付与出口验证",
       "summary": "以精确交付清单、推送前真实验证、绑定 SHA 的权威流水线和人工检视完成交付。",
-      "phase": "交付",
-      "steps": ["delivery_review", "push", "external_verify", "delivery_watch", "feedback_triage", "moonlight_review", "end"],
+      "phase": "检视与验证",
+      "steps": ["delivery_review", "push", "external_verify", "delivery_watch", "feedback_triage", "moonlight_review"],
       "activities": [
         {"id": "exact-delivery-scope", "title": "确认精确交付范围", "description": "只提交本单真实增量，不夹带过程文件和平台注入目录。", "required": true},
         {"id": "real-prepush-verification", "title": "推送前真实验证", "description": "在构建环境执行编译、UT 和必要修复，结果必须可追溯。", "required": true},
@@ -185,6 +185,21 @@
         {"id": "pipeline-and-mr", "kind": "platform", "name": "权威流水线与 MR", "usage": "required", "locked": true}
       ],
       "outputs": ["精确交付清单", "推送前验证收据", "远端 SHA", "流水线与 MR 状态"]
+    },
+    {
+      "id": "platform.merged",
+      "version": "1.0.0",
+      "title": "合入收口",
+      "summary": "MR 合入是持续检视环的唯一出口：宿主以远端真实合入事实收口，任务终态与内核 end 同步。",
+      "phase": "已合入",
+      "steps": ["end"],
+      "activities": [
+        {"id": "merged-close", "title": "以合入事实收口", "description": "只认远端 MR 的真实合入状态，不信任务自述；收口后不再接收新反馈。", "required": true}
+      ],
+      "resources": [
+        {"id": "pipeline-and-mr", "kind": "platform", "name": "权威流水线与 MR", "usage": "required", "locked": true}
+      ],
+      "outputs": ["合入事实与终态"]
     }
   ]
 }

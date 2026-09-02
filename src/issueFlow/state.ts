@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { FeedbackRecord } from "../feedbackStore.ts";
 import { IssueControlError } from "./errors.ts";
 import { validateRepoUrl } from "./issueGit.ts";
 import {
@@ -387,6 +388,8 @@ export interface IssueSessionState {
 
 export interface IssueSummary extends IssueSessionState {
   has_environment: boolean;
+  /** 进入代码交付后的持续检视投影；原始流水线/MR 账仍各自权威。 */
+  feedback?: FeedbackRecord[];
 }
 
 // ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----

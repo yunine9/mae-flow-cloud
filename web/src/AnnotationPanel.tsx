@@ -22,6 +22,7 @@ import {
   editAnnotation,
   judgeAnnotation,
   sendAnnotations,
+  TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
   type AnchorCheck,
   type TaskStatus,
@@ -122,12 +123,43 @@ export function authorVerdictReady(
   return true;
 }
 
+/** 批注与检视抽屉顶部筛选条的三档:等我确认 / Agent 处理中 / 已闭环。
+ * 批注、CodeHub 意见、机器告警三节共用,人一眼看到"此刻压在我这的有几条"。 */
+export type ReviewFilter = "all" | "mine" | "agent" | "closed";
+
+/** 一条批注归筛选条的哪一档。只用现成事实(状态、作者、裁决就绪),不猜。 */
+export function annotationCategory(
+  item: Annotation,
+  context: {
+    viewerUsername: string;
+    taskStatus: TaskStatus;
+    reviewReady: boolean;
+    canOverride: boolean;
+    reviewAnnotationIds: readonly string[];
+  },
+): Exclude<ReviewFilter, "all"> {
+  if (item.status === "verified" || item.status === "dropped") return "closed";
+  const isAuthor = item.author === context.viewerUsername;
+  if (item.status === "draft") return isAuthor ? "mine" : "agent";
+  if (isAuthor && authorVerdictReady(item, context.taskStatus, context.reviewReady)) {
+    return "mine";
+  }
+  return adminOverrideAccess({
+    item,
+    viewerUsername: context.viewerUsername,
+    canOverride: context.canOverride,
+    reviewReady: context.reviewReady,
+    reviewAnnotationIds: context.reviewAnnotationIds,
+  }).canVerify ? "mine" : "agent";
+}
+
 /** 一条批注此刻处在哪。检视闭环的五站:
  * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
 function progressOf(
   item: Annotation,
   check?: AnchorCheck,
   archival = false,
+  verdictReady = false,
 ): {
   tone: "draft" | "waiting" | "review" | "done";
   text: string;
@@ -151,6 +183,13 @@ function progressOf(
       ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
           hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
       : { tone: "draft", text: "待提交" };
+  }
+  if (verdictReady) {
+    return {
+      tone: "review",
+      text: "待你确认",
+      hint: "Agent 已留下当前轮逐条回应，请核对最新材料后确认或退回。",
+    };
   }
   // "被改动"只认一个判据:锚定的原文消失了。行号漂移(moved)不算——
   // 原文还在就说明它还没改这处,只是别处的改动把行挤动了。
@@ -184,11 +223,16 @@ export function AnnotationPanel({
   taskStatus,
   reviewReady = false,
   reviewAnnotationIds = [],
+  requirementReview = false,
+  requirementRevisionRunning = false,
   mergeRequestOpen,
   evidenceAwaiting = false,
+  filter = "all",
   onChanged,
   onLocate,
 }: {
+  /** 抽屉顶部筛选条选中的档;非 all 时只列该档的批注。 */
+  filter?: ReviewFilter;
   taskId: string;
   viewerUsername: string;
   items: Annotation[];
@@ -205,6 +249,10 @@ export function AnnotationPanel({
   reviewReady?: boolean;
   /** 当前工作区复检仍待闭环的意见 ID；缺席时管理员旁路按关闭处理。 */
   reviewAnnotationIds?: readonly string[];
+  /** 需求确认卡中的批注会立即驱动 Agent 修改当前需求正本。 */
+  requirementReview?: boolean;
+  /** Agent 正在修改需求时禁止重复提交同一批草稿。 */
+  requirementRevisionRunning?: boolean;
   /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
   mergeRequestOpen: boolean;
   /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
@@ -221,8 +269,6 @@ export function AnnotationPanel({
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
     item.status === "draft" && item.author === viewerUsername);
-  const myReviewCount = items.filter((item) =>
-    item.status === "sent" && item.author === viewerUsername).length;
   const overrideReviewCount = items.filter((item) => adminOverrideAccess({
     item,
     viewerUsername,
@@ -234,8 +280,47 @@ export function AnnotationPanel({
     item.author === viewerUsername
     && authorVerdictReady(item, taskStatus, reviewReady)
     && item.sent_via !== "review_repair").length;
-  const [open, setOpen] = useState(drafts.length > 0
-    || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0)));
+  const authorActionable = (item: Annotation) => item.author === viewerUsername
+    && authorVerdictReady(item, taskStatus, reviewReady);
+  const overrideActionable = (item: Annotation) => adminOverrideAccess({
+    item,
+    viewerUsername,
+    canOverride,
+    reviewReady,
+    reviewAnnotationIds,
+  }).canVerify;
+  const authorActionableCount = items.filter(authorActionable).length;
+  const overrideActionableCount = items.filter((item) =>
+    !authorActionable(item) && overrideActionable(item)).length;
+  const actionableReviewCount = authorActionableCount + overrideActionableCount;
+  const currentReviewIds = new Set(reviewAnnotationIds);
+  const missingReceiptCount = reviewReady ? items.filter((item) =>
+    currentReviewIds.has(item.id)
+    && item.status === "sent"
+    && item.author === viewerUsername
+    && item.response?.revision !== (item.rework ?? 0)).length : 0;
+  // 真正要人操作的卡永远置顶；保留原始顺序作为同优先级内的稳定顺序。
+  // 过去提示在顶端、按钮却埋在历史记录中，用户会合理地认为按钮丢了。
+  const orderedItems = items.map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftActionable = authorActionable(left.item)
+        || overrideActionable(left.item);
+      const rightActionable = authorActionable(right.item)
+        || overrideActionable(right.item);
+      if (leftActionable !== rightActionable) return rightActionable ? 1 : -1;
+      const leftCurrent = currentReviewIds.has(left.item.id);
+      const rightCurrent = currentReviewIds.has(right.item.id);
+      if (leftCurrent !== rightCurrent) return rightCurrent ? 1 : -1;
+      return left.index - right.index;
+    }).map(({ item }) => item);
+  const visibleItems = filter === "all" ? orderedItems : orderedItems.filter(
+    (item) => annotationCategory(item, {
+      viewerUsername, taskStatus, reviewReady, canOverride, reviewAnnotationIds,
+    }) === filter);
+  // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
+  // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
+  // 多点一下标题才见内容,用户实锤"为啥默认折叠"。
+  const [open, setOpen] = useState(true);
   const running = taskStatus === "running";
   const reviewSendable = mergeRequestOpen && [
     "queued", "running", "verifying", "await_merge", "failed",
@@ -244,16 +329,17 @@ export function AnnotationPanel({
   // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
   // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
   const queueable = taskStatus === "waiting_for_human";
-  const canSend = running || evidenceAwaiting || reviewSendable || queueable;
+  const canSend = !requirementRevisionRunning
+    && (running || evidenceAwaiting || reviewSendable || queueable);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
 
   useEffect(() => {
-    if (drafts.length > 0
-        || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0))) {
+    if (drafts.length > 0 || actionableReviewCount > 0
+        || missingReceiptCount > 0) {
       setOpen(true);
     }
-  }, [drafts.length, myReviewCount, overrideReviewCount, reviewReady]);
+  }, [drafts.length, actionableReviewCount, missingReceiptCount]);
 
   useEffect(() => {
     setOverrideArm(undefined);
@@ -332,8 +418,11 @@ export function AnnotationPanel({
              onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="annot-panel-head">
         <div>
-          <span>REVIEW NOTES</span>
-          <strong>批注</strong>
+          {/* 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与
+              机器门禁。原来只叫"批注",和第二节并排时读不出它就是"Cloud
+              平台上的检视意见"(用户实锤)。 */}
+          <span>CLOUD WORKSPACE REVIEW</span>
+          <strong>来自 Cloud 工作台的检视意见</strong>
         </div>
         <div className="annot-panel-summary-side">
           <div className="annot-panel-counts">
@@ -344,10 +433,16 @@ export function AnnotationPanel({
           <i className="annot-panel-chevron" aria-hidden />
         </div>
       </summary>
-      {reviewReady && myReviewCount > 0 && (
+      {reviewReady && authorActionableCount > 0 && (
         <div className="annot-panel-note review-ready" role="status">
-          Agent 已处理你提出的 {myReviewCount} 条意见，Build-Fix 也已通过。
+          Agent 已处理你提出的 {authorActionableCount} 条意见，Build-Fix 也已通过。
           请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
+        </div>
+      )}
+      {reviewReady && missingReceiptCount > 0 && (
+        <div className="annot-panel-note receipt-pending" role="alert">
+          另有 {missingReceiptCount} 条意见的当前轮逐条回执尚未就绪，暂不能确认。
+          系统会保留这些意见并阻止推送；刷新后仍未恢复时，请查看执行现场中的回执诊断。
         </div>
       )}
       {ordinaryReviewCount > 0 && (
@@ -363,6 +458,12 @@ export function AnnotationPanel({
           必须再次点击才会执行，结果会显示实际管理员。
         </div>
       )}
+      {actionableReviewCount > 0 && (
+        <div className="annot-review-queue" role="heading" aria-level={3}>
+          <div><strong>待我确认</strong><span>先逐条核对，再做整体交付决定</span></div>
+          <em>{actionableReviewCount} 项</em>
+        </div>
+      )}
       {canOperate && drafts.length > 0 && canSend && (
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
@@ -370,6 +471,7 @@ export function AnnotationPanel({
             {busy ? "提交中…" : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+                : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
                 : queueable ? `提交 ${drafts.length} 条（随决定送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
@@ -377,7 +479,9 @@ export function AnnotationPanel({
             <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
           )}
           {queueable && !reviewSendable && (
-            <p>任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。</p>
+            <p>{requirementReview
+              ? "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
+              : "任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。"}</p>
           )}
         </div>
       )}
@@ -403,7 +507,9 @@ export function AnnotationPanel({
       {canOperate && drafts.length > 0 && !canSend
         && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
-          {taskStatus === "paused" || taskStatus === "pausing"
+          {requirementRevisionRunning
+            ? "Agent 正在根据上一批检视意见修改需求文档；完成后即可继续提交。"
+            : taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
               : mergeRequestOpen === false && taskStatus === "await_merge"
                     ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"
@@ -412,12 +518,14 @@ export function AnnotationPanel({
       )}
       {error && <div className="alert">{error}</div>}
 
+      {filter !== "all" && !visibleItems.length && items.length > 0 && (
+        <p className="annot-panel-note">这一档下没有批注；切回“全部”看完整清单。</p>
+      )}
       <ol className="annot-list">
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const check = checkOf(item.id);
           const archival = taskStatus === "completed"
             && item.status === "draft";
-          const progress = progressOf(item, check, archival);
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
           const overrideAccess = adminOverrideAccess({
@@ -433,13 +541,20 @@ export function AnnotationPanel({
             && overrideArm.action === "verify";
           const authorCanJudge = isAuthor
             && authorVerdictReady(item, taskStatus, reviewReady);
+          const actionable = authorCanJudge || overrideAccess.canVerify;
+          const progress = progressOf(item, check, archival, actionable);
           return (
-            <li key={item.id} className={`annot-item ${progress.tone}`}>
+            <li key={item.id}
+                className={`annot-item ${progress.tone}${actionable
+                  ? " actionable" : ""}`}>
               <div className="annot-item-head">
                 <button type="button" className="annot-where"
                         onClick={() => onLocate?.(item)}
                         title={`回到 ${item.file}:${check?.line ?? item.line}`}>
-                  <code>{shortPath(item.file)}:{check?.line ?? item.line}</code>
+                  {/* 需求原文是虚拟产物,内部名 __task_requirement__ 不该露给人
+                      (2026-09-02 演示截图逮住)。 */}
+                  <code>{item.file === TASK_REQUIREMENT_ARTIFACT
+                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}</code>
                 </button>
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
@@ -448,7 +563,7 @@ export function AnnotationPanel({
               </div>
               {editing ? (
                 <div className="annot-inline-editor">
-                  <textarea value={editingNote} autoFocus rows={3}
+                  <textarea value={editingNote} autoFocus rows={5}
                             aria-label="修改批注意见"
                             onChange={(event) => setEditingNote(event.target.value)} />
                   <div>

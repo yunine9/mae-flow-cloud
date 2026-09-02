@@ -149,6 +149,7 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
         ut_run: "pipeline",
         codecheck: "pipeline",
         git_push: "host",
+        continuous_review: false,
       },
       "UT生成方式": "java-autout",
       "单号": ticket, "基线分支": "master",

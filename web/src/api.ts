@@ -831,26 +831,43 @@ export interface PushReviewPresentation {
   verification?: string;
 }
 
-/** 持续检视反馈明细(持续检视闭环,main 侧交付单元拆分一线带来)。
- * 后端账本尚在演进:字段可选,任务摘要没有 feedback 时面板整体不渲染。 */
-export type FeedbackSource = "workspace" | "mr_discussion" | "build_fix"
-  | "pipeline" | "conflict" | "scope" | "push_confirmation";
+export type FeedbackSource = "workspace" | "build_fix" | "pipeline"
+  | "mr_discussion" | "conflict" | "scope" | "push_confirmation";
 export type FeedbackStatus = "open" | "repairing" | "addressed"
   | "awaiting_verification" | "closed" | "needs_human";
 export interface FeedbackRecord {
   id: string;
+  batch_id: string;
   source: FeedbackSource;
-  status: FeedbackStatus;
+  source_id: string;
+  source_revision: number;
+  observed_sha: string;
   summary: string;
+  material?: string;
   file?: string;
   line?: number;
+  /** CodeHub 检视人显示名;机器来源没有。 */
+  author?: string;
+  verification: string;
+  status: FeedbackStatus;
   resolution?: string;
+  updated_at: string;
 }
 
 export interface TaskSummary {
   id: string;
   title?: string;
   requirement: string;
+  requirement_analysis_confirmation_required?: boolean;
+  requirement_analysis_confirmed_at?: string;
+  requirement_revision?: {
+    id: string;
+    state: "running" | "failed";
+    annotation_ids: string[];
+    started_at: string;
+    finished_at?: string;
+    error?: string;
+  };
   requirement_document?: {
     name: string;
     bytes: number;
@@ -918,6 +935,10 @@ export interface TaskSummary {
   }>;
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
+  /** 持续检视明细；原始材料仍按来源留在各自账本。 */
+  feedback?: FeedbackRecord[];
+  /** 当前任务的反馈索引不可读；服务端会隔离坏账并从内核恢复。 */
+  feedback_error?: string;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
   /** 新任务复用时沿用的交付方式与修复预算。 */
@@ -1036,8 +1057,6 @@ export interface TaskSummary {
   progress?: TaskProgress;
   /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
   execution_plan?: ExecutionPlan;
-  /** 持续检视反馈明细:服务端账本就绪后面板自动点亮,缺席=不渲染。 */
-  feedback?: FeedbackRecord[];
   /** 活方案对拍告警:定制链任何一环退化(定格文件损坏、阶段失配、
    * 活方案没吃到定格)都在这里,有值必须标红——不许界面展示定格副本
    * 而 Agent 实际跑平台默认。 */
@@ -1192,7 +1211,7 @@ export interface LaunchBlocker {
 export interface LaunchOptions {
   /** 当前生效的模型(展示用;模型不给选,管理员统一配一个)。 */
   model?: { provider: string; model: string };
-  /** 数字=手刹上限;缺席=不限轮(默认形态,靠收敛刹车兜底)。 */
+  /** 数字=手刹上限；平台缺省为 20，0 表示关闭。 */
   repair_rounds?: number;
   /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
    * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
@@ -1903,6 +1922,47 @@ export async function uploadSkill(
 }
 
 /** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
+export interface SkillExtractionJob {
+  id: string;
+  status: "running" | "done" | "failed";
+  repo: string;
+  intent: string;
+  path_hint?: string;
+  operator: string;
+  started_at: string;
+  finished_at?: string;
+  draft?: string;
+  notes?: string;
+  error?: string;
+}
+
+/** 定向知识提取:从参考仓起草 SKILL.md。起草是异步的,拿 id 轮询。 */
+export async function startSkillExtraction(input: {
+  repo: string;
+  intent: string;
+  pathHint?: string;
+}): Promise<SkillExtractionJob> {
+  const response = await fetch("/knowledge/skill-extract", {
+    method: "POST",
+    body: JSON.stringify({
+      repo: input.repo,
+      intent: input.intent,
+      ...(input.pathHint ? { path_hint: input.pathHint } : {}),
+    }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getSkillExtraction(
+  id: string,
+): Promise<SkillExtractionJob> {
+  const response = await fetch(
+    `/knowledge/skill-extract/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function submitSkill(
   directory: string,
   files: SkillUploadFile[],
@@ -2130,10 +2190,12 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
-    /** 以仓库地址为键的逐仓 AR 单号；多仓发起时和仓库同一行填写。 */
+    /** 普通单仓或旧客户端可在发起时提交；分析主任务延后到拆分确认。 */
     repositoryTickets?: Record<string, string>;
-    /** 以仓库地址为键的逐仓责任人；单仓默认当前下单人。 */
+    /** 旧客户端的逐仓执行人；新入口在拆分确认时按交付单元收集。 */
     repositoryAssignees?: Record<string, string>;
+    /** 需求分析主任务的讨论参与人；不与仓库或交付单元绑定。 */
+    collaborators?: string[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -2173,6 +2235,7 @@ export async function createTask(
       repos: extras?.repos?.length ? extras.repos : undefined,
       repository_tickets: extras?.repositoryTickets,
       repository_assignees: extras?.repositoryAssignees,
+      collaborators: extras?.collaborators,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,
@@ -2341,14 +2404,34 @@ export async function deleteHistoryTask(
 /** 跑动中插话:发送即打断,模型把手头这一轮做完就收到。
  * 服务端拒绝的理由(正等你决定 / 没有在跑的会话)原样带回,前端不改写
  * ——它比我们更清楚这一单此刻处在什么状态。 */
+/** 插话里的 @ 知识引用:只传结构化标识,正文由服务端解析并在发送时
+ * 固定版本(客户端拼正文会绕过注入预算与足迹)。 */
+export interface SteerReference {
+  kind: "skill" | "business";
+  directory?: string;
+  module_id?: string;
+  asset_id?: string;
+}
+
 export async function interruptTask(
   taskId: string,
   text: string,
+  references?: SteerReference[],
 ): Promise<{ error?: string }> {
   const response = await fetch(`/tasks/${taskId}/interrupt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      text,
+      ...(references?.length
+        ? { references: references.map((item) => ({
+            kind: item.kind,
+            directory: item.directory,
+            module_id: item.module_id,
+            asset_id: item.asset_id,
+          })) }
+        : {}),
+    }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -3287,6 +3370,8 @@ export interface IssueSummary {
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
   }>;
+  /** 建 MR 后与需求交付共用的持续检视索引。 */
+  feedback?: FeedbackRecord[];
   converted_from?: string;
   converted_to?: string;
   /** 转正继承的交付账引用(#31 只读引用):指向转正前的旧会话,仓卡

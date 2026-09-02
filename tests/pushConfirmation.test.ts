@@ -17,6 +17,7 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 
 async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 20_000;
@@ -28,8 +29,9 @@ async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   }
 }
 
-function repository() {
-  const cwd = mkdtempSync(join(tmpdir(), "mfc-push-confirm-"));
+function repository(target?: string) {
+  const cwd = target ?? mkdtempSync(join(tmpdir(), "mfc-push-confirm-"));
+  mkdirSync(cwd, { recursive: true });
   const git = (...args: string[]) => execFileSync(
     "git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
   git("init", "--quiet", "-b", "master");
@@ -50,6 +52,30 @@ function repository() {
   return { cwd, git };
 }
 
+function continuousReviewState(repo: ReturnType<typeof repository>) {
+  const head = repo.git("rev-parse", "HEAD");
+  return {
+    current: "delivery_watch",
+    revision: 9,
+    execution_contract: {
+      schema: "mae-flow-execution/1",
+      host: "cloud",
+      compile: "pipeline",
+      ut_write: "agent",
+      ut_run: "pipeline",
+      codecheck: "pipeline",
+      git_push: "host",
+      continuous_review: true,
+      source: "order",
+    },
+    config: { "分支名": "feature", "基线分支": "master" },
+    step_heads: { delivery_watch: head, branch_create: repo.git("rev-parse", "HEAD~1") },
+    quality: { external_verification: { verdict: "PASS", sha: head } },
+    history: [],
+    initial_dirty: [],
+  };
+}
+
 async function verifyingTask() {
   const model = new ScriptedModelServer([
     { text: "编码完成。" }, { text: "返工完成。" }, { text: "备用。" },
@@ -64,10 +90,19 @@ async function verifyingTask() {
   const id = service.create("push 前确认演练").id;
   await until(() => service.get(id)?.status === "completed"
     ? true : undefined, "首轮会话收口");
-  const repo = repository();
   const internal = (service as any).tasks.get(id);
+  // 真实部署的仓库位于任务 workspace 下；宿主信任根据此位于任务目录
+  // 外。不要再用脱离任务目录的临时仓绕开生产布局。
+  const repo = repository(join(internal.summary.workspace, "repo-fixture"));
   internal.cwd = repo.cwd;
   internal.summary.status = "verifying";
+  // 大多数用例只验证 Cloud 卡片本身，不重复覆盖内核契约；给嵌入式
+  // 测试一个显式 legacy host，避免把“没配 host”误当成可降级环境。
+  (service as any).options.host = {
+    kernelRoot: join(process.cwd(), "kernel"),
+    python: "python3",
+    continuousReview: false,
+  };
   return { service, model, id, internal, repo };
 }
 
@@ -545,6 +580,11 @@ test("最终确认恢复:waiting 已决但任务概要仍在等待时自动返�
     const recovered = new TaskService({
       dataDir: service.options.dataDir,
       provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+      host: {
+        kernelRoot: join(process.cwd(), "kernel"),
+        python: "python3",
+        continuousReview: false,
+      },
     });
     const result = recovered.recover();
     assert.equal(result.requeued, 1);
@@ -965,22 +1005,25 @@ test("返工轮复检卡仍有「这次修改」:基点是人上次看过的 HEA
   }
 });
 
-test("push 检视返工先让内核退出 external_verify，再启动修改会话", async () => {
+test("push 检视返工用 feedback-open 进入持续检视，不倒退到开发阶段", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
-    // 真实主链在宿主举 push 卡时，内核已经走到这个等待点。过去只重排
-    // Cloud 队列，Agent current 后仍被禁止改码，最终拿同一 HEAD 假闭环。
-    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({
-      current: "external_verify",
-      revision: 9,
-      config: { "分支名": "feature", "基线分支": "master" },
-      step_heads: { branch_create: repo.git("rev-parse", "HEAD~1") },
-    }));
+    // 返工不再把内核倒回 build。Cloud 通过宿主专用 feedback-open
+    // 打开同一交付生命周期里的新批次，内核只进入 feedback_triage。
+    writeFileSync(join(repo.cwd, ".mae-flow.json"),
+      JSON.stringify(continuousReviewState(repo)));
     (service as any).options.host = {
       kernelRoot: join(process.cwd(), "kernel"),
       python: "python3",
+      continuousReview: true,
     };
-    // 不让队列真的拉起模型；本用例只验证宿主在派单前完成机械回退。
+    sealPipelineLifecycle({
+      cwd: repo.cwd,
+      workspace: internal.summary.workspace,
+      taskId: id,
+      kernelRoot: join(process.cwd(), "kernel"),
+    });
+    // 不让队列真的拉起模型；本用例只验证宿主在派单前完成批次登记。
     (service as any).runningCount = 99;
     internal.summary.push_confirmation = true;
     internal.summary.delivery = {
@@ -1003,8 +1046,10 @@ test("push 检视返工先让内核退出 external_verify，再启动修改会�
     });
     const core = JSON.parse(readFileSync(
       join(repo.cwd, ".mae-flow.json"), "utf-8"));
-    assert.equal(core.current, "build",
-      "源码返工必须在 Agent 入场前退出 external_verify");
+    assert.equal(core.current, "feedback_triage",
+      "源码返工必须打开持续检视批次，不能倒退到 build");
+    assert.equal(core.delivery_loop?.batches?.length, 1);
+    assert.equal(core.delivery_loop?.batches?.[0]?.status, "repairing");
     assert.equal(internal.summary.status, "queued");
     assert.equal(internal.summary.delivery?.prepush, undefined,
       "旧 Build-Fix 收据必须随返工决定失效");
@@ -1016,20 +1061,23 @@ test("push 检视返工先让内核退出 external_verify，再启动修改会�
   }
 });
 
-test("内核退不回时返工决定原样失败:卡还在、证据未动,修好后同一提交重试成功", async () => {
+test("feedback-open 失败时决定原样保留，修好内核后同一提交可重试", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
-    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({
-      current: "external_verify",
-      revision: 9,
-      config: { "分支名": "feature", "基线分支": "master" },
-      step_heads: { branch_create: repo.git("rev-parse", "HEAD~1") },
-    }));
-    // 先给一个死内核:回退必然失败。这是这道兜底防御的真实故障形态,
+    writeFileSync(join(repo.cwd, ".mae-flow.json"),
+      JSON.stringify(continuousReviewState(repo)));
+    sealPipelineLifecycle({
+      cwd: repo.cwd,
+      workspace: internal.summary.workspace,
+      taskId: id,
+      kernelRoot: join(process.cwd(), "kernel"),
+    });
+    // 先给一个死内核:feedback-open 必然失败。这是这道兜底防御的真实故障形态,
     // 必须在它下面被测(不是只测 happy path)。
     (service as any).options.host = {
       kernelRoot: join(repo.cwd, "kernel-not-exists"),
       python: "python3",
+      continuousReview: true,
     };
     (service as any).runningCount = 99;
     internal.summary.push_confirmation = true;
@@ -1052,7 +1100,7 @@ test("内核退不回时返工决定原样失败:卡还在、证据未动,修好
       delivery_paths: ["src/feature.ts"],
     };
     await assert.rejects(() => service.decide(id, submission),
-      /内核暂未退回可修改步骤/);
+      /内核持续检视命令失败/);
     // 失败必须停在消费卡之前:卡还挂着,旧证据一根手指都没动,
     // 内核也仍在原地——没有任何"半返工"状态。
     const after = service.get(id)!;
@@ -1062,17 +1110,18 @@ test("内核退不回时返工决定原样失败:卡还在、证据未动,修好
       "回退失败不得作废旧证据");
     assert.equal(after.delivery?.pipeline, "passed");
     assert.equal(JSON.parse(readFileSync(
-      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "external_verify");
+      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "delivery_watch");
     // 修好内核(换成真件快照),用户用同一份提交重试:decide 的
     // resolved 分叉必须把这份已落袋的决定重新执行到位。
     (service as any).options.host = {
       kernelRoot: join(process.cwd(), "kernel"),
       python: "python3",
+      continuousReview: true,
     };
     await service.decide(id, submission);
     assert.equal(JSON.parse(readFileSync(
-      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "build",
-      "重试后内核必须真实退回可编辑步骤");
+      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "feedback_triage",
+      "重试后内核必须真实进入持续检视分诊步骤");
     assert.equal(internal.summary.status, "queued");
     assert.equal(internal.summary.delivery?.prepush, undefined,
       "重试成功后旧 Build-Fix 收据才随之作废");

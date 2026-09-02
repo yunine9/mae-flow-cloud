@@ -28,6 +28,7 @@ import {
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
+import { closeKernelDelivery } from "../src/kernelDelivery.ts";
 
 // bootstrap 会真跑内核(INACTIVE 全放行),所以内核必须真找得到——
 // worktree 里 cwd()/../mae-flow 不存在,手写路径曾让整批用例超时。
@@ -64,6 +65,22 @@ function git(cwd: string, ...args: string[]): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/** 模拟修复 Agent 按持续检视契约为本批每条反馈留下精确回执。 */
+function feedbackReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\"),c=require(\"crypto\");"
+    + "const d=\"../kernel-delivery\";const ps=fs.readdirSync(d)"
+    + ".filter(x=>x.startsWith(\"feedback-open-\"));"
+    + "fs.mkdirSync(\"../feedback\",{recursive:true});"
+    + `const summary=${safeSummary};`
+    + "for(const p of ps){const b=JSON.parse(fs.readFileSync(d+\"/\"+p,\"utf8\"));"
+    + "const id=b.batch_id;const name=\"result-\"+c.createHash(\"sha256\")"
+    + ".update(id).digest(\"hex\").slice(0,24)+\".json\";"
+    + "fs.writeFileSync(\"../feedback/\"+name,JSON.stringify({schema:"
+    + "\"mae-flow-feedback-results/1\",batch_id:id,results:b.items.map(x=>({"
+    + "id:x.id,status:\"fixed\",summary,evidence:\"a.txt\"}))}));}'";
 }
 
 function makeSourceRepo(): string {
@@ -110,6 +127,7 @@ function buildService(
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson,
+    log: process.env.DEBUG_CONTINUOUS_REVIEW ? console.error : undefined,
     settings,
     // host 指向裸仓:克隆即从"服务端"取码。kernelRoot 不参与本测
     // (bootstrap 会跑,INACTIVE 全放行;状态文件由剧本伪造)。
@@ -117,6 +135,7 @@ function buildService(
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: true,
     },
     delivery: { platformUrl: platform.baseUrl, ...poll },
   });
@@ -131,6 +150,7 @@ function deliveryModel(
     linear: options.linear,
     beforeScene: managedFlowFixture(dataDir, {
       terminalStep: options.terminalStep,
+      continuousReview: true,
     }),
   });
 }
@@ -163,6 +183,7 @@ async function runTask(
     "scripted-v1", {
       linear,
       beforeScene: managedFlowFixture(dataDir, {
+        continuousReview: true,
         ...(!push ? { takeRepositoryOffline: platform.barePath } : {}),
       }),
     });
@@ -255,7 +276,9 @@ test("宿主 Git 边界:不执行 Agent hook,不信 origin/ext 改道", async ()
   ];
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
   const model = new ScriptedModelServer(hostile, "scripted-v1", {
-    beforeScene: managedFlowFixture(dataDir, { terminalStep: "external_verify" }),
+    beforeScene: managedFlowFixture(dataDir, {
+      terminalStep: "external_verify", continuousReview: true,
+    }),
   });
   await model.start();
   try {
@@ -372,7 +395,9 @@ test("external_verify 是宿主等待点：不催办 Agent，直接触发并核�
   await platform.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
   const model = new ScriptedModelServer(externalWaitScript(), "scripted-v1", {
-    beforeScene: managedFlowFixture(dataDir, { terminalStep: "external_verify" }),
+    beforeScene: managedFlowFixture(dataDir, {
+      terminalStep: "external_verify", continuousReview: true,
+    }),
   });
   await model.start();
   try {
@@ -584,6 +609,40 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
   }
 });
 
+test("内核 close 成功但 Cloud 完成投影未落盘：重启从可信收据恢复 completed", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const { task, service, dataDir } = await runTask(platform, true,
+      { pollIntervalMs: 100_000 });
+    assert.equal(task.status, "await_merge");
+    await service.shutdown();
+    const saved = JSON.parse(readFileSync(
+      join(dataDir, task.id, "task.json"), "utf-8"));
+    closeKernelDelivery({
+      host: { kernelRoot: KERNEL_ROOT, python: "python3" },
+      cwd: saved.cwd,
+      workspace: task.workspace,
+      taskId: task.id,
+      sha: task.delivery!.sha!,
+      eventId: `mr-merged:${task.id}:${task.delivery!.sha}`,
+    });
+    assert.equal(JSON.parse(readFileSync(
+      join(dataDir, task.id, "task.json"), "utf-8")).summary.status,
+    "await_merge", "模拟进程死在内核 close 后、Cloud persist 前");
+
+    const revived = buildService(platform, dataDir, {}, { pollIntervalMs: 100 });
+    assert.equal(revived.recover().restored, 1);
+    const recovered = revived.get(task.id)!;
+    assert.equal(recovered.status, "completed", JSON.stringify(recovered));
+    assert.match(recovered.detail ?? "", /可信.*close.*恢复完成/);
+    await revived.shutdown();
+  } finally {
+    await platform.stop();
+  }
+});
+
 test("预算耗尽注记不挡续轮:重启只继续盯同 SHA,不重建 MR 不重触发", async () => {
   // 2026-08-29 部署审计实锤:轮询预算耗尽把 pipeline 写成
   // "running(轮询预算耗尽,请人工查看流水线)",recover 的全等匹配认不出
@@ -724,8 +783,7 @@ test("现场回收过的单封存台账,不再重新裁决——更不许重新�
 /** 修复环剧本:一幕修复提交(可选)+一幕收口；传输始终归宿主。 */
 function repairScenes(commit: boolean): Scene[] {
   const command = commit
-    ? "echo fixed >> a.txt && git add . && "
-      + 'git commit --quiet -m "fix: 流水线修复"'
+    ? `echo fixed >> a.txt; ${feedbackReceiptCommand("流水线问题已修复")}`
     : "git status --short";
   return [
     { text: "流水线红了,我来修。",
@@ -750,6 +808,7 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
     host: {
       kernelRoot: KERNEL_ROOT,
       python: "python3",
+      continuousReview: true,
       // 刻意不给 repoPath:代码仓由本单明确填写
     },
     delivery: { platformUrl: platform.baseUrl },
@@ -793,6 +852,7 @@ test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: true,
     },
     delivery: { platformUrl: platform.baseUrl },
     gitCredential: (account) => account === "zhang"
@@ -939,16 +999,15 @@ test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口
       "重跑后绿灯收口");
     const task = service.get(id)!;
     assert.equal(task.delivery?.pipeline, "success");
-    assert.equal(task.delivery?.loop, undefined, "停机账本已清");
+    assert.equal(task.delivery?.loop?.state, "green",
+      "停机态已清，但修复轮历史要保留给持续检视审计");
   } finally {
     await model.stop();
     await platform.stop();
   }
 });
 
-test("修复环默认不限轮:三连红一路修到绿,没有人为断头", async () => {
-  // 用户拍板"不应该有最大轮数限制,都该尽力修好"。老默认 2 轮在
-  // 第三轮红时就 exhausted 了;现在不配就是不限,修到绿为止。
+test("修复环默认 20 轮兜底:三连红仍一路修到绿", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "failed", "failed");
@@ -962,12 +1021,12 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
   await model.start();
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
-    const id = service.create("交付 REQ9:不限轮修复").id;
+    const id = service.create("交付 REQ9:默认预算修复").id;
     await until(() => service.get(id)!.status === "await_merge",
       "三轮修复后全绿", 120_000);
     const task = service.get(id)!;
     assert.equal(task.delivery?.loop?.round, 3, "第三轮才绿,老默认早断头了");
-    assert.equal(task.delivery?.loop?.max, undefined, "不限轮不记假上限");
+    assert.equal(task.delivery?.loop?.max, 20, "默认预算必须真实进入修复账");
     assert.equal(task.delivery?.loop?.state, "green");
     // 使命升级在场:分诊、专职分派、诊断出口;第 2 轮起带上一轮失败对比
     const seen = model.requests
@@ -1032,6 +1091,7 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: true,
     },
     delivery: { platformUrl: platform.baseUrl, repairRounds: 2 },
   });

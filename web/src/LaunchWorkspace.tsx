@@ -23,7 +23,7 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
-import { UserPicker } from "./UserPicker";
+import { userLabel } from "./UserPicker";
 import {
   knowledgeAssetPath,
   type KnowledgeAssetFocus,
@@ -47,9 +47,10 @@ type LaunchDraft = {
   title: string;
   requirement: string;
   requirementDocumentName: string;
+  requirementBundleName?: string;
   repos: string[];
   repositoryTickets?: string[];
-  repositoryAssignees?: string[];
+  collaborators?: string[];
   ticket: string;
   baseline: string;
   lane: string;
@@ -59,6 +60,7 @@ type LaunchDraft = {
   moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
   repositoryTechnologies?: RepositoryTechnologyDraft[];
+  requirementAnalysis?: boolean;
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -178,6 +180,67 @@ function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
   </a>;
 }
 
+function LaunchRequirementTeam({
+  owner,
+  people,
+  selected,
+  loaded,
+  error,
+  onChange,
+}: {
+  owner: AuthUser;
+  people: CollaborationAssignee[];
+  selected: string[];
+  loaded: boolean;
+  error: string;
+  onChange: (accounts: string[]) => void;
+}) {
+  const choices = people.filter((person) => person.username !== owner.username);
+  const known = new Set(choices.map((person) => person.username));
+  for (const username of selected) {
+    if (!known.has(username) && username !== owner.username) {
+      choices.push({ username, ready: false, missing: ["账号已不可用"] });
+    }
+  }
+  const toggle = (username: string) => onChange(selected.includes(username)
+    ? selected.filter((account) => account !== username)
+    : selected.length < 20 ? [...selected, username] : selected);
+
+  return <section className="requirement-team-picker launch-requirement-team"
+    aria-label="主任务讨论参与人">
+    <header>
+      <div><span>MAIN TASK TEAM</span><strong>谁一起把需求聊清楚</strong></div>
+      <small>可多选；只邀请，不在这里按仓分工</small>
+    </header>
+    <div className="requirement-team-owner">
+      <i aria-hidden>主</i>
+      <span><strong>{userLabel(owner)}</strong>
+        <small>主责任人 · 最终确认、拆分和任务控制</small></span>
+    </div>
+    <div className="requirement-team-members">
+      {!loaded && <p>正在读取可邀请成员…</p>}
+      {loaded && choices.length === 0 && <p>当前没有其他可邀请的成员。</p>}
+      {choices.map((person) => {
+        const checked = selected.includes(person.username);
+        return <label key={person.username}
+          className={`${checked ? "selected" : ""}${person.ready ? "" : " unready"}`}>
+          <input type="checkbox" checked={checked}
+            disabled={(!person.ready || selected.length >= 20) && !checked}
+            onChange={() => toggle(person.username)} />
+          <span><strong>{userLabel(person)}</strong>
+            <small>{person.ready ? "个人设置已就绪，可参与讨论"
+              : `暂不可邀请 · 缺 ${person.missing.join("、")}`}</small></span>
+        </label>;
+      })}
+    </div>
+    {error && <p className="requirement-team-error" role="status">{error}</p>}
+    <footer>
+      <p>参与人可以补充材料、送批注并和 AI 讨论；最终决定仍由主责任人提交。</p>
+      <strong>{selected.length ? `已邀请 ${selected.length} 人` : "暂不邀请其他人"}</strong>
+    </footer>
+  </section>;
+}
+
 export function LaunchWorkspace({
   session,
   onCreated,
@@ -203,7 +266,12 @@ export function LaunchWorkspace({
     validDraft?.requirement ?? "");
   const [requirementDocumentName, setRequirementDocumentName] = useState(
     validDraft?.requirementDocumentName ?? "");
-  const [documentError, setDocumentError] = useState("");
+  const [documentError, setDocumentError] = useState(
+    validDraft?.requirementBundleName
+      ? `上次使用了 ${validDraft.requirementBundleName}；文字草稿已恢复，图片材料请重新上传 ZIP。`
+      : "");
+  const [requirementBundleDraftName, setRequirementBundleDraftName] = useState(
+    validDraft?.requirementBundleName ?? "");
   const [requirementBundle, setRequirementBundle] =
     useState<RequirementBundleDraft>();
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -224,13 +292,16 @@ export function LaunchWorkspace({
   const [repositoryTickets, setRepositoryTickets] = useState(() =>
     initialRepos.map((_, index) => validDraft?.repositoryTickets?.[index]
       ?? validDraft?.ticket ?? ""));
-  const [repositoryAssignees, setRepositoryAssignees] = useState(() =>
-    initialRepos.map((_, index) => validDraft?.repositoryAssignees?.[index]
-      ?? session.username));
+  const [collaborators, setCollaborators] = useState(() => [...new Set(
+    (validDraft?.collaborators ?? []).filter((account) =>
+      account && account !== session.username),
+  )].slice(0, 20));
   const [collaborationAssignees, setCollaborationAssignees] =
     useState<CollaborationAssignee[]>([]);
   const [collaborationAssigneesLoaded, setCollaborationAssigneesLoaded] =
     useState(false);
+  const [collaborationAssigneesError, setCollaborationAssigneesError] =
+    useState("");
   const [repositoryProbeResults, setRepositoryProbeResults] =
     useState<RepositoryProbeResult[]>([]);
   const [repositoryProbeKey, setRepositoryProbeKey] = useState("");
@@ -256,7 +327,8 @@ export function LaunchWorkspace({
     validDraft?.taskInstructions ?? "");
   // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
   // 小需求照旧直干;勾了走多仓同款的 Chain 分析,把一个仓拆成多个交付单元。
-  const [requirementAnalysis, setRequirementAnalysis] = useState(false);
+  const [requirementAnalysis, setRequirementAnalysis] = useState(
+    validDraft?.requirementAnalysis === true);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -277,6 +349,8 @@ export function LaunchWorkspace({
     || validDraft?.taskInstructions?.trim()
     || validDraft?.repairRounds?.trim(),
   ));
+  const latestDraft = useRef<LaunchDraft | undefined>(undefined);
+  const discardDraftOnClose = useRef(false);
   const [knowledgePreview, setKnowledgePreview] =
     useState<LaunchKnowledgePreview>();
   const [knowledgePreviewLoading, setKnowledgePreviewLoading] = useState(true);
@@ -301,15 +375,20 @@ export function LaunchWorkspace({
   // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
-  // 勾了"先分析拆分":下单不填单号,单号在拆分确认卡上逐单元收
-  // (拆完才知道有几个交付,每个交付一个单号)。
-  const analysisEligible = repoFieldsEnabled
-    && repos.map((item) => item.trim()).filter(Boolean).length === 1;
-  const ticketsDeferred = requirementAnalysis && analysisEligible;
   const repositoriesToProbe = useMemo(() => [...new Set(
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
   const multiRepository = repositoriesToProbe.length > 1;
+  // “大需求拆分”是需求颗粒度选择，不是仓库数量选择。第二个仓填入
+  // 后入口仍要稳定留在原位，并保留用户已经做出的选择。
+  const analysisEligible = repoFieldsEnabled && repositoriesToProbe.length > 0;
+  // 多仓天然会先形成主任务；单仓则只有显式选择“大需求”才需要先
+  // 一起澄清。参与人属于主任务，不与任何一个仓库预绑定。
+  const analysisTeamVisible = analysisEligible
+    && (multiRepository || requirementAnalysis);
+  // 只要要先分析，最终交付单元就还没有形成；单号此时既无法准确
+  // 归属，也不该让人填两遍，统一延后到拆分确认时逐单元收。
+  const ticketsDeferred = analysisTeamVisible;
   const expectedRepositoryProbeKey = JSON.stringify(repositoriesToProbe);
   const repositoryProbeByUrl = useMemo(() => new Map(
     repositoryProbeResults.map((item) => [item.repository, item]),
@@ -322,6 +401,7 @@ export function LaunchWorkspace({
       || !!repositoryProbeError
       || repositoryProbeResults.some((item) => !item.reachable));
   const repositoryTicketBlocked = Boolean(options?.ticket.enabled)
+    && !ticketsDeferred
     && (repoFieldsEnabled
       ? repos.some((repo, index) => {
           if (!repo.trim()) return false;
@@ -329,14 +409,10 @@ export function LaunchWorkspace({
           return (options?.ticket.required && !value) || /\s/.test(value);
         })
       : (options?.ticket.required && !ticket.trim()) || /\s/.test(ticket.trim()));
-  const repositoryAssigneeBlocked = repoFieldsEnabled
-    && repos.some((repo, index) => {
-      if (!repo.trim()) return false;
-      const account = repositoryAssignees[index]?.trim() ?? "";
-      const known = collaborationAssignees.find((item) =>
-        item.username === account);
-      return !account || !collaborationAssigneesLoaded || known?.ready !== true;
-    });
+  const collaboratorBlocked = analysisTeamVisible && collaborators.some(
+    (account) => !collaborationAssigneesLoaded
+      || collaborationAssignees.find((item) => item.username === account)
+        ?.ready !== true);
   const previewInput = useMemo(() => ({
     repos: repoFieldsEnabled
       ? repos.map((item) => item.trim()).filter(Boolean) : [],
@@ -385,7 +461,7 @@ export function LaunchWorkspace({
   const blocked = optionsLoading || documentLoading
     || blockers.length > 0 || !!optionsError
     || knowledgeBlocked || repositoryProbeBlocked || repositoryTicketBlocked
-    || repositoryAssigneeBlocked;
+    || collaboratorBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -399,7 +475,6 @@ export function LaunchWorkspace({
       if (!result.repo.enabled) {
         setRepos([""]);
         setRepositoryTickets([""]);
-        setRepositoryAssignees([session.username]);
         setRepositoryTechnologies([]);
       }
       setBaseline((current) => current.trim()
@@ -414,18 +489,20 @@ export function LaunchWorkspace({
   }, []);
 
   useEffect(() => {
-    if (multiRepository) return;
-    setRepositoryAssignees((current) => current.map((account, index) =>
-      repos[index]?.trim() ? session.username : account));
-  }, [multiRepository, repos, session.username]);
-
-  useEffect(() => {
     let alive = true;
     void listCollaborationAssignees().then((items) => {
-      if (alive) setCollaborationAssignees(items);
+      if (!alive) return;
+      setCollaborationAssignees(items);
+      setCollaborationAssigneesError("");
     }).catch(() => {
-      // 无法核对责任人存在性/个人接入时宁可阻止创建；草稿仍保留。
-      if (alive) setCollaborationAssignees([]);
+      if (!alive) return;
+      setCollaborationAssignees([]);
+      // 名单读不到就没法核对就绪;与其把草稿里的参与人当"未就绪"卡住
+      // 发起、再让人手动逐个取消,不如如实说清并直接清空——文案和动作
+      // 要一致(2026-09-02 检视)。
+      setCollaborators([]);
+      setCollaborationAssigneesError(
+        "暂时读不到可邀请成员，本次发起不邀请其他人；发起后可在主任务里再邀请。");
     }).finally(() => {
       if (alive) setCollaborationAssigneesLoaded(true);
     });
@@ -528,39 +605,40 @@ export function LaunchWorkspace({
     return () => { alive = false; };
   }, []);
 
-  const persistDraft = () => {
-    // ZIP 图片不塞进 localStorage。刷新后让用户重新选择材料包，避免只
-    // 恢复 Markdown 却把图片静默丢掉。
-    if (requirementBundle) {
-      try { localStorage.removeItem(storageKey("draft", session.username)); }
-      catch { /* 草稿旁路不影响当前材料包 */ }
-      return;
-    }
-    const draft: LaunchDraft = {
-      version: LAUNCH_DRAFT_VERSION,
-      updatedAt: new Date().toISOString(),
-      title,
-      requirement,
-      requirementDocumentName,
-      repos,
-      repositoryTickets,
-      repositoryAssignees,
-      ticket,
-      baseline,
-      lane,
-      repairRounds,
-      taskInstructions,
-      selectedBusinessModuleIds,
-      moduleSelectionTouched,
-      workflowSelection,
-      repositoryTechnologies: repositoryTechnologies.map((item) => ({
-        ...item, technologies: [...item.technologies],
-      })),
-    };
+  // 始终保留当前渲染对应的完整快照。关闭弹层时组件会立刻卸载，不能
+  // 再依赖 300ms 防抖回调读取状态；ref 让卸载/pagehide 都能同步落盘。
+  latestDraft.current = {
+    version: LAUNCH_DRAFT_VERSION,
+    updatedAt: new Date().toISOString(),
+    title,
+    requirement,
+    requirementDocumentName,
+    requirementBundleName: requirementBundle?.name
+      || requirementBundleDraftName || undefined,
+    repos,
+    repositoryTickets,
+    collaborators,
+    ticket,
+    baseline,
+    lane,
+    repairRounds,
+    taskInstructions,
+    selectedBusinessModuleIds,
+    moduleSelectionTouched,
+    workflowSelection,
+    requirementAnalysis,
+    repositoryTechnologies: repositoryTechnologies.map((item) => ({
+      ...item, technologies: [...item.technologies],
+    })),
+  };
+
+  const persistDraft = (showSaved = true) => {
+    const draft = latestDraft.current;
+    if (!draft || discardDraftOnClose.current) return;
     try {
       localStorage.setItem(storageKey("draft", session.username),
         JSON.stringify(draft));
-      setDraftSavedAt(draft.updatedAt);
+      if (showSaved) setDraftSavedAt(draft.updatedAt);
     } catch {
       // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
     }
@@ -570,11 +648,23 @@ export function LaunchWorkspace({
     const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
-    repositoryAssignees, ticket,
+    collaborators, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
+    requirementBundleDraftName,
+    requirementAnalysis,
     session.username]);
+
+  useEffect(() => {
+    const flushDraft = () => persistDraft(false);
+    window.addEventListener("pagehide", flushDraft);
+    return () => {
+      window.removeEventListener("pagehide", flushDraft);
+      // 也覆盖父页面切栏目、快捷入口把发起弹层直接卸载的情况。
+      flushDraft();
+    };
+  }, [session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -617,7 +707,10 @@ export function LaunchWorkspace({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !submitting) onClose();
+      if (event.key === "Escape" && !submitting) {
+        persistDraft();
+        onClose();
+      }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => {
@@ -634,7 +727,6 @@ export function LaunchWorkspace({
   function addRepository() {
     setRepos((current) => [...current, ""]);
     setRepositoryTickets((current) => [...current, ""]);
-    setRepositoryAssignees((current) => [...current, session.username]);
   }
 
   function removeRepository(index: number) {
@@ -642,17 +734,10 @@ export function LaunchWorkspace({
       (_, itemIndex) => itemIndex !== index));
     setRepositoryTickets((current) => current.filter(
       (_, itemIndex) => itemIndex !== index));
-    setRepositoryAssignees((current) => current.filter(
-      (_, itemIndex) => itemIndex !== index));
   }
 
   function changeRepositoryTicket(index: number, value: string) {
     setRepositoryTickets((current) => current.map(
-      (item, itemIndex) => itemIndex === index ? value : item));
-  }
-
-  function changeRepositoryAssignee(index: number, value: string) {
-    setRepositoryAssignees((current) => current.map(
       (item, itemIndex) => itemIndex === index ? value : item));
   }
 
@@ -684,6 +769,7 @@ export function LaunchWorkspace({
       setRequirement(content);
       setRequirementDocumentName(file.name);
       setRequirementBundle(undefined);
+      setRequirementBundleDraftName("");
     } catch {
       setDocumentError("文件读取失败，请确认文件可访问后重试");
     }
@@ -702,6 +788,7 @@ export function LaunchWorkspace({
       setRequirement(preview.requirement);
       setRequirementDocumentName(preview.document_name);
       setRequirementBundle({ name: file.name, contentBase64, preview });
+      setRequirementBundleDraftName(file.name);
     } catch (cause) {
       setDocumentError(cause instanceof Error ? cause.message : "材料包解析失败");
     } finally {
@@ -739,13 +826,9 @@ export function LaunchWorkspace({
                 return normalized
                   ? [[normalized, repositoryTickets[index]?.trim() ?? ""]] : [];
               })) : undefined,
-          repositoryAssignees: repoFieldsEnabled
-            ? Object.fromEntries(repos.flatMap((repo, index) => {
-                const normalized = repo.trim();
-                return normalized
-                  ? [[normalized, repositoryAssignees[index]?.trim()
-                    || session.username]] : [];
-              })) : undefined,
+          // 主任务参与人只参与澄清和讨论，不与仓库绑定；最终交付单元
+          // 的执行人在拆分确认时再选择。
+          collaborators: analysisTeamVisible ? collaborators : undefined,
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
@@ -768,9 +851,10 @@ export function LaunchWorkspace({
               && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
-          // 只在单仓时传:多仓本来就走分析拆分,重复传会误导服务端语义。
+          // 显式的大需求模式与仓数无关：多仓虽天然先分析，也需要这个
+          // 事实决定下单时免单号、拆分确认时再逐单元补齐。
           requirementAnalysis: requirementAnalysis && repoFieldsEnabled
-              && repos.map((item) => item.trim()).filter(Boolean).length === 1
+              && repositoriesToProbe.length > 0
             ? true : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
           requirementBundle: requirementBundle
@@ -786,6 +870,7 @@ export function LaunchWorkspace({
         ...usedRepos,
         ...(savedPreferences?.recentRepos ?? []),
       ])].slice(0, 5);
+      discardDraftOnClose.current = true;
       try {
         localStorage.setItem(storageKey("preferences", session.username),
           JSON.stringify({
@@ -821,8 +906,10 @@ export function LaunchWorkspace({
       aria-labelledby="launch-workspace-title"
     >
       <header className="ws-head launch-head">
-        <button type="button" className="launch-close" onClick={onClose}
-          disabled={submitting} aria-label="取消创建任务">
+        <button type="button" className="launch-close" onClick={() => {
+          persistDraft();
+          onClose();
+        }} disabled={submitting} aria-label="取消创建任务">
           <svg viewBox="0 0 20 20" aria-hidden><path d="m6 6 8 8M14 6l-8 8" /></svg>
           <span>取消</span>
         </button>
@@ -852,9 +939,13 @@ export function LaunchWorkspace({
                   setTitle("");
                   setRequirement("");
                   setRequirementDocumentName("");
+                  setRequirementBundle(undefined);
+                  setRequirementBundleDraftName("");
+                  setDocumentError("");
                   setRepos([""]);
                   setRepositoryTickets([""]);
-                  setRepositoryAssignees([session.username]);
+                  setCollaborators([]);
+                  setRequirementAnalysis(false);
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
@@ -940,6 +1031,7 @@ export function LaunchWorkspace({
                     onChange={(event) => {
                       setRequirement(event.target.value);
                       setDocumentError("");
+                      setRequirementBundleDraftName("");
                       if (!event.target.value) setRequirementDocumentName("");
                     }}
                     placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
@@ -959,6 +1051,7 @@ export function LaunchWorkspace({
                     <button type="button" onClick={() => {
                       setRequirement(""); setRequirementDocumentName("");
                       setRequirementBundle(undefined);
+                      setRequirementBundleDraftName("");
                       setDocumentError("");
                     }}>移除</button>
                   </div>}
@@ -990,12 +1083,15 @@ export function LaunchWorkspace({
                   {options.repo.enabled && (
                     <div className="repo-field">
                       <div className="repo-field-title">
-                        <span>代码仓与对应 AR 单号{options.repo.required ? "（至少一个）" : ""}</span>
-                        <small>一个仓一行，单号和责任人随该仓进入后续交付</small>
+                        <span>{ticketsDeferred ? "待分析的代码仓" : "代码仓与对应 AR 单号"}
+                          {options.repo.required ? "（至少一个）" : ""}</span>
+                        <small>{ticketsDeferred
+                          ? "给 AI 查看代码的候选范围；不代表已经拆分或分工"
+                          : "一个仓一行；需要共同讨论的人在下方统一邀请"}</small>
                       </div>
                       <div className="repo-list">
                         {repos.map((value, index) => (
-                          <div className={`repo-row with-assignee ${
+                          <div className={`repo-row ${
                             options.ticket.enabled && !ticketsDeferred
                               ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
@@ -1021,25 +1117,6 @@ export function LaunchWorkspace({
                                 && /\s/.test((repositoryTickets[index] ?? "").trim()))}
                               spellCheck={false}
                               required={options.ticket.required && Boolean(value.trim())} />}
-                            <UserPicker
-                              value={repositoryAssignees[index] ?? session.username}
-                              ariaLabel={`第 ${index + 1} 个仓库的责任人`}
-                              disabled={!multiRepository}
-                              onChange={(username) => changeRepositoryAssignee(index, username)}
-                              options={(collaborationAssignees.length
-                                ? collaborationAssignees : [{
-                                  username: session.username,
-                                  display_name: session.display_name,
-                                  ready: true,
-                                  missing: [],
-                                }]).map((person) => ({
-                                  username: person.username,
-                                  display_name: person.display_name,
-                                  disabled: !person.ready,
-                                  detail: person.username === session.username
-                                    ? "自己" : person.ready ? undefined : "个人设置未就绪",
-                                }))}
-                            />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}
@@ -1064,10 +1141,18 @@ export function LaunchWorkspace({
                         onClick={addRepository}>
                         <span>＋</span> 添加代码仓
                       </button>
-                      <small className="repo-field-note">
+                      {options.ticket.enabled && !ticketsDeferred
+                        && <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
-                      </small>
-                      {analysisEligible && (
+                      </small>}
+                      {/* 多仓天然先形成主任务共同分析,开关开不开结果一样;
+                          留着它只会让人以为还有得选(2026-09-02 检视)。 */}
+                      {analysisEligible && multiRepository && (
+                        <small className="repo-field-note">
+                          多个代码仓会先形成主任务共同分析，拆分后再逐单元填写执行人与 AR 单号。
+                        </small>
+                      )}
+                      {analysisEligible && !multiRepository && (
                         <label className={`repo-analysis-toggle ${
                           requirementAnalysis ? "selected" : ""}`}>
                           <input type="checkbox" checked={requirementAnalysis}
@@ -1080,11 +1165,19 @@ export function LaunchWorkspace({
                               <strong>先分析，再拆分</strong>
                             </span>
                             <small>先确认改动面与拆分方案，再逐单元创建任务；
-                              AR 单号在拆分确认时填写。</small>
+                              执行人与 AR 单号在拆分确认时填写。</small>
                           </span>
                           <span className="repo-analysis-switch" aria-hidden="true" />
                         </label>
                       )}
+                      {analysisTeamVisible && <LaunchRequirementTeam
+                        owner={session}
+                        people={collaborationAssignees}
+                        selected={collaborators}
+                        loaded={collaborationAssigneesLoaded}
+                        error={collaborationAssigneesError}
+                        onChange={setCollaborators}
+                      />}
                       <datalist id="launch-recent-repositories">
                         {(savedPreferences?.recentRepos ?? []).map((repo) => (
                           <option key={repo} value={repo} />
@@ -1344,7 +1437,7 @@ export function LaunchWorkspace({
                           }}
                           placeholder={options.repair_rounds !== undefined
                             ? `留空=团队默认 ${options.repair_rounds} 轮；填 0=关闭`
-                            : "留空=不限轮（自动修复开启）；填 0=关闭"} />
+                            : "留空=平台默认 20 轮；填 0=关闭"} />
                         <small className={repairRounds === "0" ? "field-warning" : undefined}>
                           {repairRounds === "0"
                             ? "本任务已关闭自动修复；检视、冲突或流水线失败将等人处理。"
@@ -1497,8 +1590,8 @@ export function LaunchWorkspace({
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? repositoryAssigneeBlocked
-                    ? "逐仓责任人尚未就绪"
+                  ? collaboratorBlocked
+                    ? "参与人尚未就绪"
                   : repositoryTicketBlocked
                     ? "请补齐逐仓 AR 单号"
                   : repositoryProbeBlocked
@@ -1511,8 +1604,8 @@ export function LaunchWorkspace({
                       ? "知识清单尚未核对完整"
                       : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? repositoryAssigneeBlocked
-                    ? "请为每个代码仓选择已完成个人接入的责任人"
+                  ? collaboratorBlocked
+                    ? "请移除个人设置未就绪的参与人，再发起主任务"
                   : repositoryTicketBlocked
                     ? "每个已填写的代码仓都需要自己的 AR 单号，且单号不能含空格"
                   : repositoryProbeBlocked
@@ -1530,8 +1623,8 @@ export function LaunchWorkspace({
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
-                    : repositoryAssigneeBlocked
-                      ? "逐仓责任人未完成"
+                    : collaboratorBlocked
+                      ? "参与人未就绪"
                     : repositoryTicketBlocked
                       ? "逐仓单号未完成"
                     : repositoryProbeBlocked

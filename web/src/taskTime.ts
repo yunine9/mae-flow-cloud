@@ -42,6 +42,12 @@ export function formatWait(ms: number): string {
   return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
 }
 
+/** 排序:纯按创建时间倒序,最新的任务在最上面。用户实锤要"新任务放最
+ * 上面";"待我核对"仍靠摘要卡与徽标提示,不靠位置。 */
+export function byNewest(a: WaitableTask, b: WaitableTask): number {
+  return instantMs(b.created_at) - instantMs(a.created_at);
+}
+
 /** 排序:等人的排最前(等最久的第一),其余按创建时间倒序。
  * "谁在等我、等了多久"是这块屏幕最该先回答的问题。 */
 export function byUrgency(a: WaitableTask, b: WaitableTask): number {

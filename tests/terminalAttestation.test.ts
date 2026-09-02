@@ -1,11 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectKernelCompletion } from "../src/terminalAttestation.ts";
+import {
+  inspectKernelCompletion,
+  inspectKernelDeliveryReady,
+  inspectKernelTaskCompletion,
+} from "../src/terminalAttestation.ts";
 import { TaskService } from "../src/taskService.ts";
+import { createKernelHostProof } from "../src/kernelDelivery.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 function fixture(current: string, external = false): {
   root: string; cwd: string; kernelRoot: string; head: string;
@@ -20,6 +26,7 @@ function fixture(current: string, external = false): {
       grill: { terminal: false },
       build: { terminal: false },
       external_verify: { terminal: false },
+      delivery_watch: { terminal: false },
       end: { terminal: true },
     },
   }));
@@ -124,6 +131,84 @@ test("流水线契约:总体 end 也必须逐项 PASS 且绑定当前 HEAD", () 
   execFileSync("git", ["commit", "--allow-empty", "-qm", "new head"], { cwd });
   result = inspectKernelCompletion(cwd, kernelRoot);
   assert.equal(result.complete, false, "旧 SHA 的绿灯不能背书新 HEAD");
+});
+
+test("持续检视就绪与任务完成均拒绝仅靠 Agent 可写状态伪造", () => {
+  const { cwd, kernelRoot, head } = fixture("delivery_watch", true);
+  const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+  const checks = Object.fromEntries(["COMPILE", "UT", "CODECHECK"].map(
+    (dimension) => [dimension, { status: "passed", sha: head }],
+  ));
+  state.execution_contract.continuous_review = true;
+  state.quality = { external_verification: {
+    verdict: "PASS", sha: head,
+    required: ["COMPILE", "UT", "CODECHECK"], checks,
+  } };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  let result = inspectKernelDeliveryReady(cwd, kernelRoot);
+  assert.equal(result.complete, false,
+    "即使状态自称流水线 PASS，没有 Cloud 宿主收据也不能等待合入");
+  assert.match(result.reason, /宿主权威收据/);
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "MR 未合入、内核未 close 时绝不能 completed");
+  state.current = "end";
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot).complete, false);
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "持续检视任务不能拿旧 end 冒充 MR 已合入");
+  state.delivery_loop = { close_events: [{
+    event_id: "merge-1", reason: "merged", sha: head, local_head: head,
+  }] };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  result = inspectKernelTaskCompletion(cwd, kernelRoot);
+  assert.equal(result.complete, false,
+    "Agent 在状态里手写 merged close 不能把任务伪造成已完成");
+  assert.match(result.reason, /宿主收据/);
+
+  execFileSync("git", ["commit", "--allow-empty", "-qm", "local after merge"], { cwd });
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "改变本地 HEAD 也不能让伪造的 close 获得宿主背书");
+});
+
+test("宿主外绑定不可被 false 降级，真 PASS 收据也不能拼接假 delivery_watch", () => {
+  const { cwd, kernelRoot, head } = fixture("build", true);
+  const commandKernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(commandKernelRoot, "测试必须找到同步后的真实内核");
+  const taskId = "task-bound-attack";
+  const facts = {
+    sha: head,
+    status: "success",
+    source: "attack-regression",
+    git_push: { sha: head, ref: "refs/heads/test", remote: "origin" },
+  };
+  const factsPath = join(cwd, "pipeline-facts.json");
+  writeFileSync(factsPath, JSON.stringify(facts));
+  const proof = createKernelHostProof({
+    cwd, workspace: cwd, taskId, action: "pipeline-record", payload: facts,
+  });
+  try {
+    execFileSync("python3", [
+      join(commandKernelRoot, "scripts", "mae-flow.py"),
+      "pipeline", "record", "--file", factsPath,
+      "--host-proof", proof.path,
+    ], { cwd, encoding: "utf-8" });
+  } finally {
+    proof.cleanup();
+  }
+
+  const statePath = join(cwd, ".mae-flow.json");
+  const tampered = JSON.parse(readFileSync(statePath, "utf-8"));
+  tampered.current = "delivery_watch";
+  tampered.execution_contract.continuous_review = false;
+  delete tampered.execution_contract.host_authority;
+  writeFileSync(statePath, JSON.stringify(tampered));
+
+  const result = inspectKernelDeliveryReady(cwd, kernelRoot, true, {
+    workspace: cwd, taskId,
+  });
+  assert.equal(result.complete, false,
+    "外置 capability 仍应强制验签，且 build 时的真 PASS 不能拼成假就绪态");
+  assert.match(result.reason, /宿主权威收据/);
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

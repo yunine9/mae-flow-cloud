@@ -235,7 +235,7 @@ export function Annotatable({
           </div>
           <textarea
             autoFocus
-            rows={2}
+            rows={4}
             value={note}
             placeholder="这里要改什么？例如：这个重试应该只对网关失败生效"
             onChange={(event) => setNote(event.target.value)}

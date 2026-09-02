@@ -13,6 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { inflateRawSync } from "node:zlib";
 import { readJson } from "../src/jsonBody.ts";
 import {
   mkdirSync,
@@ -26,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
+  bundleArtifactDocuments,
   compareDeliveryRevisions,
   deliveryChangeSnapshot,
   DIFF_NAME,
@@ -80,6 +82,24 @@ function makeSite(options: {
 
 const names = (items: ArtifactMeta[]) => items.map((item) => item.name);
 
+function unzipEntries(zip: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 30 <= zip.length && zip.readUInt32LE(offset) === 0x04034b50) {
+    const method = zip.readUInt16LE(offset + 8);
+    const packedSize = zip.readUInt32LE(offset + 18);
+    const nameSize = zip.readUInt16LE(offset + 26);
+    const extraSize = zip.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameSize + extraSize;
+    const packed = zip.subarray(dataStart, dataStart + packedSize);
+    entries.set(zip.subarray(nameStart, nameStart + nameSize).toString("utf-8"),
+      method === 8 ? inflateRawSync(packed) : Buffer.from(packed));
+    offset = dataStart + packedSize;
+  }
+  return entries;
+}
+
 test("列表按最近修改倒序;单号目录之外的噪声不混进来", () => {
   const cwd = makeSite({
     docs: {
@@ -103,6 +123,24 @@ test("列表按最近修改倒序;单号目录之外的噪声不混进来", () =
   const spec = readArtifact(cwd, "REQ2026081405/spec.md");
   assert.match(String(spec?.content), /最后写的/);
   assert.equal(spec?.truncated, false);
+});
+
+test("过程文档打包:保留单号目录层级并下载完整原文件,不混入虚拟 diff", () => {
+  const large = `# 完整规格\n\n${"不能截断。".repeat(120_000)}`;
+  const cwd = makeSite({
+    docs: { "spec.md": large, "survey.md": "# 现场勘察\n" },
+    git: true,
+  });
+  writeFileSync(join(cwd, "tracked.txt"), "形成虚拟 diff,但不能进文档包\n");
+
+  const archive = bundleArtifactDocuments(cwd);
+  assert.ok(archive);
+  const entries = unzipEntries(archive.data);
+  assert.deepEqual([...entries.keys()].sort(),
+    ["REQ2026081405/spec.md", "REQ2026081405/survey.md"].sort());
+  assert.equal(entries.get("REQ2026081405/spec.md")?.toString("utf-8"), large,
+    "打包下载不能复用页面的 512 KB 截断稿");
+  assert.equal(entries.has(DIFF_NAME), false);
 });
 
 test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
@@ -467,6 +505,16 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
       method: "POST",
       body: JSON.stringify({ requirement: "演练:检视产物路由" }),
     }).then((response) => readJson(response));
+    const confirmation = service.get(created.id)!.waiting!;
+    const confirmationQuestion = (confirmation.question.questions as
+      Array<{ question: string }>)[0].question;
+    await service.decide(created.id, {
+      waiting_id: confirmation.waiting_id,
+      state_version: confirmation.state_version,
+      selected_options: {
+        [confirmationQuestion]: "需求已确认，进入需求分析",
+      },
+    });
     const deadline = Date.now() + 30_000;
     while (service.get(created.id)!.status !== "completed") {
       if (Date.now() > deadline) throw new Error("任务未收口");
@@ -477,6 +525,11 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     const list = await fetch(`${base}/tasks/${created.id}/artifacts`);
     assert.equal(list.status, 200);
     assert.deepEqual(await readJson(list), []);
+    const emptyArchive = await fetch(
+      `${base}/tasks/${created.id}/artifacts/archive`);
+    assert.equal(emptyArchive.status, 409);
+    assert.deepEqual(await readJson(emptyArchive),
+      { error: "暂无可打包的过程文档" });
 
     // 任务级补证材料不依赖代码现场，也必须先能列出来、读出来。
     const workspace = service.get(created.id)!.workspace;
@@ -502,6 +555,19 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     assert.deepEqual(new Set(names(listed)), new Set([
       "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT,
     ]));
+
+    const archiveResponse = await fetch(
+      `${base}/tasks/${created.id}/artifacts/archive`);
+    assert.equal(archiveResponse.status, 200);
+    assert.equal(archiveResponse.headers.get("content-type"), "application/zip");
+    assert.match(String(archiveResponse.headers.get("content-disposition")),
+      /filename\*=UTF-8''/);
+    const archiveEntries = unzipEntries(
+      Buffer.from(await archiveResponse.arrayBuffer()));
+    assert.deepEqual(new Set(archiveEntries.keys()), new Set([
+      "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT,
+    ]));
+    assert.match(String(archiveEntries.get("REQ7/spec.md")), /决策与证据同屏/);
 
     const encoded = encodeURIComponent("REQ7/spec.md");
     const read = await fetch(`${base}/tasks/${created.id}/artifacts/${encoded}`);

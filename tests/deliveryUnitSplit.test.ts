@@ -22,6 +22,7 @@ import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 import { readJson } from "../src/jsonBody.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
+import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import {
   type RequirementGraph, TaskControlError, TaskService,
 } from "../src/taskService.ts";
@@ -221,8 +222,9 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
 /** 负责面门禁的真仓现场:baseline 一笔,面内一笔,越界一笔。
  * src/filterX 专门用来验前缀按路径段闭合——裸 startsWith 会把它
  * 误认成 src/filter 面内。 */
-function scopedRepository() {
-  const cwd = mkdtempSync(join(tmpdir(), "mfc-scope-gate-"));
+function scopedRepository(target?: string) {
+  const cwd = target ?? mkdtempSync(join(tmpdir(), "mfc-scope-gate-"));
+  mkdirSync(cwd, { recursive: true });
   const git = (...args: string[]) => execFileSync(
     "git", ["-C", cwd, ...args], { encoding: "utf-8", env: GIT_ENV }).trim();
   git("init", "--quiet", "-b", "master");
@@ -238,9 +240,20 @@ function scopedRepository() {
   writeFileSync(join(cwd, "src", "contract", "api.ts"), "export const c = 1;\n");
   git("add", "src");
   git("commit", "--quiet", "-m", "unit work");
+  const head = git("rev-parse", "HEAD");
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    current: "delivery_watch",
+    revision: 3,
+    execution_contract: {
+      schema: "mae-flow-execution/1", host: "cloud",
+      compile: "pipeline", ut_write: "agent", ut_run: "pipeline",
+      codecheck: "pipeline", git_push: "host",
+      continuous_review: true, source: "order",
+    },
     config: { "分支名": "feature", "基线分支": "master" },
-    step_heads: { branch_create: baseline },
+    step_heads: { branch_create: baseline, delivery_watch: head },
+    quality: { external_verification: { verdict: "PASS", sha: head } },
+    history: [], initial_dirty: [],
   }));
   return cwd;
 }
@@ -260,9 +273,23 @@ async function scopedTask() {
   await until(() => service.get(id)?.status === "completed"
     ? true : undefined, "首轮会话收口", 20_000);
   const internal = (service as any).tasks.get(id);
-  internal.cwd = scopedRepository();
+  // 与生产一致：代码仓必须在任务 workspace 之内，宿主 capability 根
+  // 才能由不可伪造的目录关系确定。
+  internal.cwd = scopedRepository(
+    join(internal.summary.workspace, "scope-repo-fixture"));
   internal.summary.status = "verifying";
   internal.summary.delivery_scope = { name: "过滤实现", paths: ["src/filter/"] };
+  (service as any).options.host = {
+    kernelRoot: join(process.cwd(), "kernel"),
+    python: "python3",
+    continuousReview: true,
+  };
+  sealPipelineLifecycle({
+    cwd: internal.cwd,
+    workspace: internal.summary.workspace,
+    taskId: id,
+    kernelRoot: join(process.cwd(), "kernel"),
+  });
   return { service, model, id, internal };
 }
 
@@ -281,7 +308,9 @@ test("负责面门禁:越界停摆举卡,放行记豁免续推,邻居目录不�
       "停摆原因要点名是哪个单元");
 
     // 没有待裁决的越界时不许裁决(误触/重放要诚实拒绝)。
-    const fresh = service.create("无越界对照", { account: "worker" }).id;
+    const fresh = service.create("无越界对照", {
+      account: "worker", ticket: "REQ-SCOPE-CONTROL", repo: internal.cwd,
+    }).id;
     assert.throws(() => service.decideScopeViolation(fresh, "allow", "boss"),
       /当前没有待裁决的越界改动/);
 
@@ -294,7 +323,10 @@ test("负责面门禁:越界停摆举卡,放行记豁免续推,邻居目录不�
     assert.match(allowed.detail ?? "", /boss 放行/);
     assert.equal(await gate(), true, "豁免后同一批提交必须放行");
     await service.cancel(id, "tester");
-    // fresh 是对照单,剧本一句话就自然完成了,不用也不能再取消。
+    if (!["completed", "failed", "canceled"].includes(
+      service.get(fresh)?.status ?? "")) {
+      await service.cancel(fresh, "tester");
+    }
   } finally {
     await model.stop();
   }
@@ -488,21 +520,11 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
   }
 });
 
-test("越界打回先让内核退出 external_verify;退不动则裁决原样失败可重试", async () => {
+test("越界打回先登记持续检视批次；登记失败则裁决原样保留可重试", async () => {
   const { service, model, id, internal } = await scopedTask();
   try {
-    // 真实主链现场:单元会话已收口,内核停在 external_verify 等宿主
-    // 验证,负责面门禁在推送前拦下越界——此刻并没有流水线 RED,内核
-    // 不会发修复授权,不退回可编辑步骤的撤出令就是假裁决。
-    const baseline = execFileSync("git",
-      ["-C", internal.cwd, "rev-parse", "HEAD~1"],
-      { encoding: "utf-8", env: GIT_ENV }).trim();
-    writeFileSync(join(internal.cwd, ".mae-flow.json"), JSON.stringify({
-      current: "external_verify",
-      revision: 3,
-      config: { "分支名": "feature", "基线分支": "master" },
-      step_heads: { branch_create: baseline },
-    }));
+    // 真实主链现场:内核停在 delivery_watch，负责面门禁在推送前拦下
+    // 越界。打回必须先由 feedback-open 建立精确授权，不能另开旧修复路。
     internal.summary.delivery = {
       ...(internal.summary.delivery ?? {}),
       pipeline: "passed",
@@ -515,9 +537,10 @@ test("越界打回先让内核退出 external_verify;退不动则裁决原样失
     (service as any).options.host = {
       kernelRoot: join(internal.cwd, "kernel-not-exists"),
       python: "python3",
+      continuousReview: true,
     };
     assert.throws(() => service.decideScopeViolation(id, "revert", "boss"),
-      /内核暂未退回可修改步骤/);
+      /内核持续检视命令失败/);
     assert.ok(internal.summary.delivery?.scope_violation,
       "退不动时越界卡必须还在,主责任人才能重试");
     assert.ok(internal.summary.delivery?.stalled);
@@ -525,18 +548,19 @@ test("越界打回先让内核退出 external_verify;退不动则裁决原样失
       "裁决失败不得作废旧证据");
     assert.equal(JSON.parse(readFileSync(
       join(internal.cwd, ".mae-flow.json"), "utf-8")).current,
-      "external_verify");
-    // 换真件内核重试同一裁决:内核真实退回 build,撤出使命才派发,
+      "delivery_watch");
+    // 换真件内核重试同一裁决:内核进入 feedback_triage,撤出使命才派发,
     // 旧 SHA 证据此刻一并作废。
     (service as any).options.host = {
       kernelRoot: join(process.cwd(), "kernel"),
       python: "python3",
+      continuousReview: true,
     };
     (service as any).runningCount = 99;
     const reverted = service.decideScopeViolation(id, "revert", "boss");
     assert.equal(JSON.parse(readFileSync(
-      join(internal.cwd, ".mae-flow.json"), "utf-8")).current, "build",
-      "打回必须让内核真实退回可编辑步骤,撤出令才不是空话");
+      join(internal.cwd, ".mae-flow.json"), "utf-8")).current, "feedback_triage",
+      "打回必须让内核真实打开反馈批次,撤出令才不是空话");
     assert.equal(reverted.status, "queued");
     assert.equal(reverted.delivery?.scope_violation, undefined);
     assert.equal(reverted.delivery?.prepush, undefined,
