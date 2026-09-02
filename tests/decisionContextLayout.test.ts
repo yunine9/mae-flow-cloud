@@ -69,21 +69,24 @@ test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(css, /\.annotation-location-notice\s*\{/);
 });
 
-test("批注与检视是右侧抽屉:材料并排可点,定位不必先关窗", () => {
+test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位不必先关窗", () => {
   // 原来是遮罩弹层,看意见时看不到材料,"回到那一行"要先关窗(用户定调
-  // 这块是核心竞争力、易用性优先后改成抽屉)。宽屏挤进正文栅格右栏,
-  // 窄屏退化成全屏覆盖。
-  assert.match(workspace, /reviewPanelOpen \? " has-review" : ""/);
+  // 这块是核心竞争力、易用性优先后改成抽屉)。第一版把抽屉挤进 .ws-body
+  // 栅格右栏,中等宽度下正文切成上下堆叠时抽屉被当普通块塞到最下面、
+  // 材料区头部被裁(用户截图实锤"看着都像 bug"),改成固定定位侧滑面板,
+  // 任何宽度行为一致。
   assert.match(workspace, /className="workspace-review-drawer"/);
+  assert.doesNotMatch(workspace, /has-review/, "抽屉不再进正文栅格");
   assert.doesNotMatch(workspace,
     /reviewPanelOpen && <div className="workspace-review-backdrop"/,
     "批注与检视不再是遮罩弹层");
   assert.match(workspace,
-    /if \(window\.matchMedia\("\(max-width: 1100px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
-    "只有窄屏(抽屉盖住材料)定位时才关抽屉");
-  assert.match(css, /\.ws-body\.has-review\s*\{/);
-  assert.match(css, /\.ws-body\.has-review > aside \{ display: none; \}/);
-  assert.match(css, /@media \(max-width: 1100px\) \{\s*\.ws-body\.has-review/);
+    /if \(window\.matchMedia\("\(max-width: 900px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
+    "只有窄屏(抽屉占满整屏)定位时才关抽屉");
+  assert.match(css,
+    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*right:\s*0[^}]*width:\s*min\(760px, 100vw\)/s);
+  assert.doesNotMatch(css, /\.ws-body\.has-review/);
+  assert.match(css, /@media \(max-width: 900px\) \{\s*\.workspace-review-drawer \{ width: 100vw/);
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
     "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
 });
@@ -119,14 +122,15 @@ test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源
   assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
 });
 
-test("持续检视意见:进度条下只报数,正文按来源竖排列进批注与检视", () => {
+test("持续检视意见:进度条下不再有摘要条,进行中数写进入口卡,正文按来源列进批注与检视", () => {
   // 原来所有意见塞在进度条下横向滚动的小卡片里(9–11px、单行省略),MR
-  // 检视人一段话被压成一行,用户实锤"排版太丑",并要求在批注与检视里
-  // 给 CodeHub 检视意见一个列表。摘要只报数;列表和批注卡片同版式。
-  assert.match(workspace, /function FeedbackSummary/);
-  assert.match(workspace, /<FeedbackSummary feedback=\{task\.feedback\}/);
-  assert.match(workspace, /onOpenReview=\{\(\) => setReviewPanelOpen\(true\)\}/,
-    "摘要要能直接打开批注与检视");
+  // 检视人一段话被压成一行,用户实锤"排版太丑"。第二版换成一条摘要
+  // (一排"MR 检视 3 2 进行中"胶囊 + 重复的入口按钮),用户再实锤"数字
+  // 好丑、和批注与检视卡重叠"——整条撤掉,几条进行中并进入口卡副标题。
+  assert.doesNotMatch(workspace, /FeedbackSummary|feedback-summary/);
+  assert.doesNotMatch(css, /\.feedback-summary/);
+  assert.match(workspace, /条检视意见进行中/);
+  assert.match(workspace, /<small>\{feedbackDigest \|\| "批注、CodeHub 检视意见与机器检视"\}<\/small>/);
   assert.match(workspace, /function FeedbackList/);
   assert.match(workspace, /title="来自 CodeHub 的检视意见"/);
   assert.match(workspace, /item\.source === "mr_discussion"\)/);
@@ -143,7 +147,6 @@ test("持续检视意见:进度条下只报数,正文按来源竖排列进批注
   assert.match(workspace, /已回复，等检视人确认/);
   assert.match(workspace, /检视人 \$\{item\.author\}/);
   assert.match(workspace, /className="feedback-body"/);
-  assert.match(css, /\.feedback-summary\s*\{/);
   assert.match(css, /\.feedback-list\s*\{/);
   assert.match(css, /\.feedback-body\s*\{[^}]*white-space:\s*pre-wrap/,
     "意见正文原样换行,不再单行省略");

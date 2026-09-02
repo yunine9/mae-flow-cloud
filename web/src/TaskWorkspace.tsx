@@ -387,37 +387,6 @@ function groupFeedback(feedback: FeedbackRecord[]) {
   return [...grouped];
 }
 
-/** 进度条下面的持续检视摘要:只报每个来源几条、几条进行中,正文一律去
- * 「批注与检视」里读。原来这里把所有意见塞进横向滚动的小卡片(9–11px、
- * 单行省略),MR 检视人一段话被压成一行,用户实锤"排版太丑"。 */
-export function FeedbackSummary({ feedback, onOpenReview }: {
-  feedback: FeedbackRecord[];
-  onOpenReview?: () => void;
-}) {
-  const active = feedback.filter((item) => item.status !== "closed").length;
-  return <section className="feedback-summary" aria-label="持续检视摘要">
-    <span className="feedback-summary-title">
-      <strong>持续检视</strong><small>同一个任务、分支和 MR</small>
-    </span>
-    <ul>
-      {groupFeedback(feedback).map(([source, items]) => {
-        const open = items.filter((item) => item.status !== "closed").length;
-        return <li key={source} className={open ? "active" : "done"}>
-          <b>{FEEDBACK_SOURCE_LABEL[source]}</b>
-          <i>{items.length}</i>
-          {open > 0 && <em>{open} 进行中</em>}
-        </li>;
-      })}
-    </ul>
-    <em className={`feedback-summary-state ${active ? "active" : "done"}`}>
-      {active ? `${active} 条进行中` : "全部已闭环"}
-    </em>
-    {onOpenReview && <button type="button" onClick={onOpenReview}>
-      在批注与检视里查看
-    </button>}
-  </section>;
-}
-
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
  * 和批注卡片同一套版式,放进「批注与检视」里不违和。 */
 export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
@@ -1019,6 +988,14 @@ export function TaskWorkspace({
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
   const reviewRecordCount = notes.length + codehubFeedback.length
     + machineFeedback.length;
+  const activeFeedback = (task.feedback ?? [])
+    .filter((item) => item.status !== "closed");
+  const feedbackDigest = activeFeedback.length
+    ? `${activeFeedback.length} 条检视意见进行中 · ${
+      groupFeedback(activeFeedback)
+        .map(([source, items]) => `${FEEDBACK_SOURCE_LABEL[source]} ${items.length}`)
+        .join(" · ")}`
+    : "";
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -1212,9 +1189,8 @@ export function TaskWorkspace({
             task.delivery?.evidence_gap?.missing_dimensions.length)}
           filter={reviewFilter}
           onLocate={(item) => {
-            // 宽屏下抽屉和材料并排,定位不用关抽屉;窄屏抽屉盖住材料,
-            // 关掉才看得见那一行。
-            if (window.matchMedia("(max-width: 1100px)").matches) {
+            // 抽屉只占右侧,定位不用关;窄屏抽屉占满整屏,关掉才看得见那一行。
+            if (window.matchMedia("(max-width: 900px)").matches) {
               setReviewPanelOpen(false);
             }
             locate(item);
@@ -1363,8 +1339,6 @@ export function TaskWorkspace({
           <p>{task.feedback_error}</p>
         </section>
       )}
-      {!!task.feedback?.length && <FeedbackSummary feedback={task.feedback}
-        onOpenReview={() => setReviewPanelOpen(true)} />}
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
           {pauseFeedback && (
@@ -1408,7 +1382,10 @@ export function TaskWorkspace({
                 ? `${reviewCounts.mine} 等我确认` : reviewRecordCount}</em>
             )}
           </strong>
-          <small>批注、CodeHub 检视意见与机器检视</small>
+          {/* 进行中的检视意见按来源报数写在副标题里。原来进度条下单独一条
+              摘要带一排"MR 检视 3 2 进行中"胶囊和一个重复的入口按钮,用户
+              实锤"数字好丑、和这张卡重叠",整条撤掉。 */}
+          <small>{feedbackDigest || "批注、CodeHub 检视意见与机器检视"}</small>
         </button>
         {canRequestReview && <button type="button"
           className="ws-review-invite-launch"
@@ -1419,8 +1396,7 @@ export function TaskWorkspace({
         </button>}
       </nav>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}${
-        reviewPanelOpen ? " has-review" : ""}`}>
+      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -1918,11 +1894,12 @@ export function TaskWorkspace({
             )
           )}
         </aside>
-        {/* 批注与检视是右侧抽屉,不是遮罩弹层:看意见时左边材料照常可点、
-            可圈选新批注,"回到那一行"不用先关窗(用户定调:这块是核心
-            竞争力,易用性优先)。宽屏时挤进正文栅格顶替决策侧栏;窄屏
-            (≤1100px)退化成全屏覆盖,由 style.css 断点接管。 */}
-        {reviewPanelOpen && <section className="workspace-review-drawer"
+      </div>
+      {/* 批注与检视是固定在右侧的侧滑抽屉,不是遮罩弹层:看意见时左边露出
+          的材料照常可点、可圈选新批注,"回到那一行"不用先关窗(用户定调:
+          这块是核心竞争力,易用性优先)。不进 .ws-body 栅格——第一版挤进
+          栅格,在中等宽度下被当普通块塞到最下面(用户截图实锤)。 */}
+      {reviewPanelOpen && <section className="workspace-review-drawer"
           role="complementary" aria-labelledby="workspace-review-title">
           <header>
             <div><span>REVIEW NOTES</span>
@@ -1943,7 +1920,6 @@ export function TaskWorkspace({
             {reviewWorkspaceContent}
           </div>
         </section>}
-      </div>
       {reviewInviteOpen && <div className="workspace-review-backdrop"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setReviewInviteOpen(false);

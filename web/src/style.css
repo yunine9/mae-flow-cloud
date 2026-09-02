@@ -1410,14 +1410,17 @@ svg {
   overflow: auto;
   background: var(--page);
 }
-/* 批注与检视抽屉:宽屏挤进 .ws-body 栅格右栏顶替决策侧栏,左侧材料照常
-   可点可圈选;窄屏退化成全屏覆盖。原来是遮罩弹层,看意见时看不到材料,
-   "回到那一行"要先关窗(用户定调易用性优先后改)。 */
-.ws-body.has-review {
-  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 820px);
-}
-.ws-body.has-review > aside { display: none; }
+/* 批注与检视抽屉:固定在视口右侧的侧滑面板,不参与 .ws-body 栅格——
+   第一版挤进栅格右栏,在中等宽度下正文栅格切成上下堆叠,抽屉被当普通块
+   塞到最下面、材料区头部被裁(用户截图实锤"看着都像 bug")。固定定位
+   后任何宽度行为一致:左侧露出的材料照常可点可圈选,窄屏占满整屏。 */
 .workspace-review-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 950;
+  width: min(760px, 100vw);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1425,7 +1428,7 @@ svg {
   color: var(--text);
   border-left: 1px solid var(--line);
   background: var(--surface);
-  box-shadow: -12px 0 32px rgba(0, 0, 0, .08);
+  box-shadow: -18px 0 44px rgba(0, 0, 0, .18);
 }
 .workspace-review-drawer > header {
   position: relative;
@@ -1461,16 +1464,11 @@ svg {
 .workspace-review-drawer > header .workspace-review-dialog-actions em {
   white-space: nowrap;
 }
-.workspace-review-drawer > .workspace-review-content { padding: 12px; }
+/* 底部多留一段:右下角"提问题"浮钮盖在抽屉上,最后一条不能被它压住。 */
+.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 84px; }
 .workspace-review-drawer .workspace-review-notes { width: 100%; }
-@media (max-width: 1100px) {
-  .ws-body.has-review { grid-template-columns: minmax(0, 1fr); }
-  .workspace-review-drawer {
-    position: fixed;
-    z-index: 950;
-    inset: 0;
-    border-left: 0;
-  }
+@media (max-width: 900px) {
+  .workspace-review-drawer { width: 100vw; border-left: 0; }
 }
 /* 抽屉顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
 .review-filter {
@@ -6641,46 +6639,6 @@ pre {
 .feedback-panel > header em.active { color: #91620c; background: #fff1c8; }
 .feedback-panel > header em.done { color: #16795e; background: #dff6ed; }
 .feedback-panel > .feedback-list { border-radius: 10px; }
-/* 进度条下的持续检视摘要:一行,只报数,正文去「批注与检视」里读。
-   原来的横向小卡片墙(9–11px、单行省略)被用户实锤"排版太丑",已删。 */
-.feedback-summary {
-  flex: none; padding: 8px 24px; display: flex; align-items: center;
-  flex-wrap: wrap; gap: 8px 14px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
-}
-.feedback-summary-title { display: flex; align-items: baseline; gap: 9px; }
-.feedback-summary-title strong { color: var(--text-strong); font-size: 13px; }
-.feedback-summary-title small { color: var(--muted); font-size: 11px; }
-.feedback-summary > ul {
-  min-width: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
-  gap: 6px; list-style: none;
-}
-.feedback-summary > ul li {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); font-size: 12px; color: var(--text);
-}
-.feedback-summary > ul li.active { border-color: #e9cf7a; }
-.feedback-summary > ul li i {
-  color: var(--muted); font-style: normal; font-weight: 700;
-}
-.feedback-summary > ul li em {
-  color: #91620c; font-style: normal; font-weight: 700; font-size: 11px;
-}
-.feedback-summary-state {
-  margin-left: auto; padding: 3px 8px; border-radius: 999px;
-  font-size: 10px; font-style: normal; font-weight: 800;
-}
-.feedback-summary-state.active { color: #91620c; background: #fff1c8; }
-.feedback-summary-state.done { color: #16795e; background: #dff6ed; }
-.feedback-summary > button {
-  padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong);
-  font-size: 12px; font-weight: 700; cursor: pointer;
-}
-.feedback-summary > button:hover { border-color: var(--accent); color: var(--accent); }
-
 /* 来源列表:和批注卡片(annotate.css 的 .annot-panel/.annot-item)同一套
    版式——竖排、正文原样换行、回复单独成块,放进「批注与检视」里不违和。 */
 .feedback-list {
