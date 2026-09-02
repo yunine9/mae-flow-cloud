@@ -443,18 +443,17 @@ export function TaskProgress({
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
 }) {
-  // completed 是任务 API 的终态事实。内核 progress 记录的是最后执行到的
-  // 工作步骤，合入后通常仍停在“等待权威流水线”；直接照抄会让完成页像
-  // 还有事没跑完。终态展示追加一个“完成”节点，不改写内核现场。
+  // 阶段名与顺序原样来自任务 API(内核 flow/phases.json 一份词表),这里
+  // 不追加、不改名。原来终态会自己补一个"完成"、把"交付"显示成"验证与
+  // 交付"——都是前端私造的第二套词表,和内核方案词表对不上就点不动。
+  // 终态(completed)由服务端把当前段指到末段,前端只画。
   const completed = status === "completed";
-  const phases = completed
-      && !["完成", "已合入"].includes(progress.phases.at(-1) ?? "")
-    ? [...progress.phases, "完成"] : progress.phases;
+  const phases = progress.phases;
   const currentIndex = completed ? phases.length - 1 : progress.current_index;
   const currentLabel = completed
-    ? (phases.at(-1) ?? "完成") : showDetailedStep
+    ? (phases.at(-1) ?? progress.current_phase) : showDetailedStep
     ? progress.step ?? progress.current_phase : progress.current_phase;
-  const displayedCurrentLabel = currentLabel === "交付" ? "验证与交付" : currentLabel;
+  const displayedCurrentLabel = currentLabel;
   const milestone = progress.milestone;
   const milestoneEvent = milestone
     ? ({
@@ -505,7 +504,7 @@ export function TaskProgress({
             },
           } : {})}>
           <i aria-hidden />
-          <span>{phase === "交付" ? "验证与交付" : phase}</span>
+          <span>{phase}</span>
         </span>;
       })}
     </span>

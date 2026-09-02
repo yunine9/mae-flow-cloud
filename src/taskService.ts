@@ -234,6 +234,8 @@ import {
   trustedKernelHostLifecycle,
   type KernelFeedbackBatch,
 } from "./kernelDelivery.ts";
+import { kernelPhases } from "./kernelPhases.ts";
+import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import {
   ContinuousReviewMigrationError,
   migrateContinuousReviewTask,
@@ -3225,21 +3227,15 @@ export class TaskService {
       feedbackError = `这张任务的持续检视索引损坏，已隔离该任务并等待从内核恢复：${
         String(error).slice(0, 500)}`;
     }
+    // 进度条只有一套词表(内核 flow/phases.json)。有内核脉冲就照它;没有
+    // (还没开工、分析主任务不跑内核、老任务旧词表)才按任务状态占一段。
+    // 原来这里在进入持续检视后强行换成本仓自己写的五段——和内核看板、
+    // 前端兜底各说各话,老任务停在哪套显示哪套,点阶段名去内核方案词表里
+    // 按名字找也必然落空(用户实锤:黄字"不匹配")。
     const rawProgress = this.taskProgress(task);
-    const inContinuousReview = Boolean(
-      summary.delivery?.mr_url || summary.delivery?.loop || feedback.length);
-    const progress: TaskProgress | undefined = inContinuousReview
-        && summary.status !== "canceled"
-      ? {
-          phases: ["配置与需求", "方案", "开发", "持续检视", "已合入"],
-          current_index: summary.status === "completed" ? 4 : 3,
-          current_phase: summary.status === "completed" ? "已合入" : "持续检视",
-          step: summary.status === "completed"
-            ? "MR 已合入，任务完成"
-            : summary.detail ?? rawProgress?.step ?? "持续接收、修复并核验反馈",
-          ...(rawProgress?.milestone ? { milestone: rawProgress.milestone } : {}),
-        }
-      : rawProgress;
+    const progress: TaskProgress | undefined = rawProgress?.phases.length
+      ? rawProgress
+      : this.placeholderProgress(task, rawProgress) ?? rawProgress;
     const requirementGraph = summary.requirement_graph
       ? {
           ...summary.requirement_graph,
@@ -3426,6 +3422,37 @@ export class TaskService {
     return this.taskProgress(task)?.step_id ?? waiting?.step;
   }
 
+  /** 内核没给脉冲时按任务状态占一段。索引是 flow/phases.json 的顺序契约
+   * (0=受理未开工,1=大需求分析中,2=拆分后子任务开发中,末段=终态),
+   * 名字一律来自那份文件,这里不写任何阶段字面量。取消/失败保留最近一次
+   * 内核脉冲的位置(有的话),没有就停在受理段。 */
+  private placeholderProgress(
+    task: TaskState,
+    raw?: TaskProgress,
+  ): TaskProgress | undefined {
+    const phases = this.phaseVocabulary();
+    if (!phases) return undefined;
+    const summary = task.summary;
+    const last = phases.length - 1;
+    const analysis = this.isRequirementAnalysis(task);
+    const index = summary.status === "completed" ? last
+      : analysis
+        ? (summary.requirement_graph?.stage === "analysis" ? 1 : 2)
+        : 0;
+    return {
+      phases,
+      current_index: index,
+      current_phase: phases[index],
+      // 脉冲里的步骤事实(step_id/标题/里程碑)是契约,轨道占位不吞掉它们。
+      ...(raw?.step_id ? { step_id: raw.step_id } : {}),
+      ...(raw?.revision !== undefined ? { revision: raw.revision } : {}),
+      ...(raw?.milestone ? { milestone: raw.milestone } : {}),
+      step: summary.status === "completed"
+        ? (summary.delivery?.mr_url ? "MR 已合入，任务完成" : "任务完成")
+        : raw?.step ?? summary.detail,
+    };
+  }
+
   /** Agent 写结构化投影，Markdown 仍是给人检视的正文。读失败只是不展示图。 */
   private refreshRequirementGraph(task: TaskState): void {
     if (!this.isRequirementAnalysis(task) || !task.cwd) return;
@@ -3525,40 +3552,49 @@ export class TaskService {
     }
   }
 
+  /** 进度条的阶段词表:内核 flow/phases.json,随 kernel/ 快照发布;
+   * 没配 host 时用本仓随发布的快照(serve 的内核发现规则同源)。 */
+  private phaseVocabulary(): string[] | undefined {
+    return kernelPhases(this.options.host?.kernelRoot
+      ?? discoverKernelRoot(resolve(process.cwd())));
+  }
+
   /** 列表里的阶段轨道必须与现场看板同源，不能在 Web 复刻状态机。
-   * pulse 给当前阶段/步骤，panel.html 给阶段顺序；pulse 未变化就复用缓存。 */
+   * pulse 给当前阶段/步骤(内核按 flow/phases.json 算好),阶段顺序读同一份
+   * phases.json;pulse 未变化就复用缓存。
+   *
+   * 2026-09-02 起不再解析 panel.html 拿阶段顺序:panel.html 只在 Agent 的
+   * Hook 事件里重生成,宿主推进的阶段(登记 PASS、合入收口)它跟不上;
+   * 而且老任务的 panel.html 还是旧词表。脉冲里的阶段名不在当前词表里
+   * (老任务、旧内核)就当没有内核进度,交给占位进度按状态给一段,
+   * 绝不把旧词表原样端出来——那正是"每个任务进度条都不一样"的来源。 */
   private readProgress(task: TaskState): TaskProgress | undefined {
     if (!task.cwd) return undefined;
     const pulsePath = join(task.cwd, ".mae-flow-work", "panel-pulse.js");
-    const panelPath = join(task.cwd, ".mae-flow-work", "panel.html");
-    if (!existsSync(pulsePath) || !existsSync(panelPath)) return undefined;
+    if (!existsSync(pulsePath)) return undefined;
+    // 词表缺失或脉冲里的阶段名不在词表里(老任务、旧内核、测试夹具的
+    // 假内核):阶段轨道留空,但 step_id / 步骤标题 / 里程碑照常给——
+    // 检视面、流程契约都靠脉冲里的 step_id,不能因为画不了轨道就丢掉。
+    const phases = this.phaseVocabulary() ?? [];
     try {
       const pulseText = readFileSync(pulsePath, "utf-8");
       const milestonePath = join(task.cwd, ".mae-flow.json.build-milestones");
       const milestoneText = existsSync(milestonePath)
         ? readFileSync(milestonePath, "utf-8") : "";
-      const progressSource = `${pulseText}\0${milestoneText}`;
+      const progressSource = `${phases.join("\0")}\0${pulseText}\0${milestoneText}`;
       if (progressSource === task.progressPulse) return task.progressCache;
       const first = pulseText.indexOf("{");
       const last = pulseText.lastIndexOf("}");
       if (first < 0 || last <= first) return undefined;
       const pulse = JSON.parse(pulseText.slice(first, last + 1));
-      const html = readFileSync(panelPath, "utf-8");
-      const nodes = [...html.matchAll(
-        /<span class="phase-node\s+(past|current|future)">([^<]+)<\/span>/g,
-      )];
-      const phases = nodes.map((match) => match[2].trim());
-      const currentByClass = nodes.findIndex((match) => match[1] === "current");
       const currentPhase = String(pulse.phase ?? "").trim();
-      const currentIndex = currentByClass >= 0
-        ? currentByClass : phases.indexOf(currentPhase);
-      if (phases.length === 0 || currentIndex < 0) return undefined;
+      const currentIndex = phases.indexOf(currentPhase);
       const milestone = String(pulse.step ?? "") === "build"
         ? latestBuildMilestone(milestoneText) : undefined;
       const progress: TaskProgress = {
-        phases,
+        phases: currentIndex >= 0 ? phases : [],
         current_index: currentIndex,
-        current_phase: currentPhase || phases[currentIndex],
+        current_phase: currentIndex >= 0 ? currentPhase : "",
         step_id: pulse.step ? String(pulse.step) : undefined,
         step: pulse.step_title ? String(pulse.step_title) : undefined,
         revision: Number.isFinite(Number(pulse.revision))
@@ -5242,6 +5278,10 @@ export class TaskService {
       repositoryAssignees?: Record<string, string>;
       /** 分析主任务的讨论参与人；不与仓库或交付单元绑定。 */
       collaborators?: string[];
+      /** 原位重跑沿用主任务已受邀的参与人:他们在受邀时已核过就绪,
+       * 之后个人设置过期与否在他们自己行动时再查;不让别人的令牌过期
+       * 挡住主责任人重跑。 */
+      collaboratorsTrusted?: boolean;
       /** 基线分支,默认 master(同一次拍板)。 */
       baseline?: string;
       model?: { provider: string; model: string };
@@ -5447,7 +5487,7 @@ export class TaskService {
     if (collaborators.length > 20) {
       throw new Error("一个主任务最多邀请 20 位讨论参与人");
     }
-    for (const account of collaborators) {
+    for (const account of options.collaboratorsTrusted ? [] : collaborators) {
       const readiness = this.options.collaborationAssigneeReadiness?.(account);
       if (readiness && !readiness.ready) {
         throw new Error(
@@ -7103,6 +7143,7 @@ export class TaskService {
       repo: source.repo_url,
       repos: source.repositories ? [...source.repositories] : undefined,
       collaborators: source.collaborators ? [...source.collaborators] : undefined,
+      collaboratorsTrusted: true,
       requirementAnalysis: source.requirement_analysis_requested === true,
       lane: source.lane,
       ticket: source.ticket,

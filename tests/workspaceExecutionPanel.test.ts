@@ -176,11 +176,15 @@ test("最终代码审阅统计只计算将推送文件，不混入仅留本地�
   assert.match(gitDiff, /const deletions = countedFiles\.reduce/);
 });
 
-test("已完成任务的进度展示收口到完成，不沿用合入前最后一步", () => {
+test("已完成任务的进度展示收口到末段，不沿用合入前最后一步", () => {
   assert.match(taskCard, /const completed = status === "completed"/);
-  assert.match(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
+  // 末段的名字来自任务 API(内核 flow/phases.json),前端不再自己追加
+  // "完成"、也不把"交付"改写成"验证与交付"——那是第二套词表,和内核
+  // 方案词表对不上就点不动(2026-09-02 用户实锤)。
+  assert.doesNotMatch(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
+  assert.doesNotMatch(taskCard, /验证与交付/);
   assert.match(taskCard,
-    /const currentLabel = completed\s*\? \(phases\.at\(-1\) \?\? "完成"\)/);
+    /const currentLabel = completed\s*\? \(phases\.at\(-1\) \?\? progress\.current_phase\)/);
   assert.match(taskCard, /status=\{task\.status\}/,
     "列表卡和工作台都要把任务终态交给同一进度组件");
   assert.match(workspace, /showDetailedStep status=\{task\.status\}/);

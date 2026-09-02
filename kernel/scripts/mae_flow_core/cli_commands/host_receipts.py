@@ -13,7 +13,7 @@ import json
 import stat
 import sys
 
-from .shared import os, time
+from .shared import STATE_PATH, os, time
 from .wiring import api
 from .host_capability import (
     PROOF_SCHEMA, _bound_task_id, _canonical, _capability_root, _die,
@@ -363,3 +363,15 @@ def save_with_host_proof(state, context):
         os.rename(staged, path)
     except OSError as exc:
         _die("无法落盘宿主权威收据: %s" % exc)
+    _refresh_pulse()
+
+
+def _refresh_pulse():
+    """宿主推进了阶段(登记 PASS → 持续检视、合入收口 → 已合入),看板脉冲
+    要跟上——Agent 不在场,没有 Hook 事件替它写。Cloud 的进度条只读脉冲。
+    纯旁路:失败静默,绝不影响已落盘的状态与收据。"""
+    try:
+        from mae_flow_core.panel import pulse
+        pulse.write_pulse(STATE_PATH, root=os.getcwd(), force=True)
+    except Exception:                      # noqa: BLE001 —— 旁路软失败
+        pass

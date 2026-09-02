@@ -87,8 +87,22 @@ class NotifyTests(unittest.TestCase):
 
     def test_phase_change_rings_once(self):
         lines, printed = announce("grill", "build")
-        self.assertEqual(["🔔 进入「写代码」阶段"], lines)
-        self.assertIn("写代码", printed)
+        self.assertEqual(["🔔 进入「开发」阶段"], lines)
+        self.assertIn("开发", printed)
+
+    def test_phases_come_from_flow_phases_json_and_end_is_merged(self):
+        """词表唯一来源是 flow/phases.json:Cloud 读同一份文件画进度条,
+        内核这边不许再有第二份字面量。「已合入」独占 end——从最终检视/
+        推送到合入之间全是「持续检视」,MR 创建只是其中微不足道的一步。"""
+        with open(notify._PHASES_PATH, encoding="utf-8") as stream:
+            document = json.load(stream)
+        self.assertEqual([entry["name"] for entry in document["phases"]],
+                         list(notify.PHASES))
+        self.assertEqual("已合入", notify.phase_of("end"))
+        self.assertEqual(("end",), notify.PHASES["已合入"])
+        for step in ("delivery_review", "push", "external_verify",
+                     "delivery_watch", "feedback_triage"):
+            self.assertEqual("持续检视", notify.phase_of(step))
 
     def test_same_phase_movement_stays_silent(self):
         """同阶段内推进不响——噪声化的通知等于没有通知。"""
@@ -368,7 +382,7 @@ class NotifyTests(unittest.TestCase):
             inside = notify.announce(flow, "verify_ponytail",
                                      "verify_codecheck")
         self.assertTrue(any("需要你选择" in line for line in first))
-        self.assertEqual(["🔔 进入「写代码」阶段"], crossing)
+        self.assertEqual(["🔔 进入「开发」阶段"], crossing)
         self.assertEqual([], inside)       # 质量阶段内部推进保持安静
 
 

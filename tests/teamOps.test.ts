@@ -56,10 +56,10 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
   const rows = [
     task({ id: "done", status: "completed" }),
     task({ id: "coding", status: "running", progress: {
-      current_phase: "开发", phases: ["方案", "开发", "验证与交付"],
+      current_phase: "开发", phases: ["方案", "开发", "持续检视"],
     } }),
     task({ id: "verify", status: "verifying", progress: {
-      current_phase: "验证与交付", phases: ["方案", "开发", "验证与交付"],
+      current_phase: "持续检视", phases: ["方案", "开发", "持续检视"],
     } }),
     task({ id: "failed", status: "failed" }),
     task({ id: "canceled", status: "canceled" }),
@@ -83,7 +83,7 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
   assert.deepEqual(result.stages, [
     { key: "方案", count: 0 },
     { key: "开发", count: 1 },
-    { key: "验证与交付", count: 1 },
+    { key: "持续检视", count: 1 },
     { key: "尚未进入阶段", count: 1 },
   ]);
 });

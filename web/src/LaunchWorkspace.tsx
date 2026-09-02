@@ -497,8 +497,12 @@ export function LaunchWorkspace({
     }).catch(() => {
       if (!alive) return;
       setCollaborationAssignees([]);
+      // 名单读不到就没法核对就绪;与其把草稿里的参与人当"未就绪"卡住
+      // 发起、再让人手动逐个取消,不如如实说清并直接清空——文案和动作
+      // 要一致(2026-09-02 检视)。
+      setCollaborators([]);
       setCollaborationAssigneesError(
-        "暂时读不到可邀请成员；可以先只由自己发起，稍后在主任务里再邀请。");
+        "暂时读不到可邀请成员，本次发起不邀请其他人；发起后可在主任务里再邀请。");
     }).finally(() => {
       if (alive) setCollaborationAssigneesLoaded(true);
     });
@@ -1141,7 +1145,14 @@ export function LaunchWorkspace({
                         && <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>}
-                      {analysisEligible && (
+                      {/* 多仓天然先形成主任务共同分析,开关开不开结果一样;
+                          留着它只会让人以为还有得选(2026-09-02 检视)。 */}
+                      {analysisEligible && multiRepository && (
+                        <small className="repo-field-note">
+                          多个代码仓会先形成主任务共同分析，拆分后再逐单元填写执行人与 AR 单号。
+                        </small>
+                      )}
+                      {analysisEligible && !multiRepository && (
                         <label className={`repo-analysis-toggle ${
                           requirementAnalysis ? "selected" : ""}`}>
                           <input type="checkbox" checked={requirementAnalysis}

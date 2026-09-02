@@ -13,6 +13,7 @@
   不问自取地弹系统通知是打扰,不是服务。
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -23,26 +24,36 @@ DEFAULTS_PATH = ".mae-flow-defaults.json"
 FIELD = "桌面通知"
 ENV_OFF = "MAE_FLOW_NO_NOTIFY"
 
-# 步骤 → 阶段。flow.json 里没有阶段字段,这里是唯一来源;
+# 步骤 → 阶段。flow.json 里没有阶段字段,flow/phases.json 是唯一来源;
 # 漏掉任何步骤都会被 test_panel_notify 的覆盖断言拦下,不会静默错标。
-# 阶段名是给人看的,说人话:描述这一段在干什么,不用流程内部代号
-# ("质量"对用户是黑话,"验证"才是这一段实际发生的事)。
-PHASES = {
-    "启动": ("config_confirm", "workflow_select", "branch_create"),
-    "澄清需求": ("grill", "grill_ask", "rf_triage"),
-    # archive/archive_confirm 归"交付":与 playbooks.json 的
-    # knowledge-archive(phase=交付)保持同一词表——两处曾各说各话,
-    # 进度条点"定规格"弹不出活方案、点"交付"反而弹出(2026-08-30
-    # 审计实锤);一致性由 test_execution_plan 的词表断言钉死。
-    "定规格": ("open", "hf_open", "tw_open", "design"),
-    "写设计": ("story", "story_ask"),
-    # 2026-08-25 编排瘦身:实现/精简/规范/测试/规格自查全部发生在宽 build
-    # 步里,验证从独立阶段变成 build 的一部分+出口(流水线)的职责。
-    "写代码": ("build",),
-    "交付": ("archive", "archive_confirm", "domain_archive",
-             "delivery_review", "push", "external_verify",
-             "delivery_watch", "feedback_triage", "moonlight_review", "end"),
-}
+# 阶段名是给人看的,说人话:描述这一段在干什么,不用流程内部代号。
+#
+# 2026-09-02 从本文件的字面量搬进 flow/phases.json:Cloud 的进度条、
+# 占位进度和"点阶段弹方案"都要同一份词表,而 Cloud 按宪法一行映射都不许
+# 在 TS 侧抄——那就让它读同一个文件。此前 Cloud 自带两套阶段词表(进入
+# 持续检视后强行换成五段,没内核进度时又是七段),老任务停在哪套显示哪套,
+# 点阶段名因为名字对不上内核方案词表退底版告警。
+# playbooks.json 的 phase 与这里必须同一词表,由 test_execution_plan 钉死。
+_PHASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "..", "flow", "phases.json")
+
+
+def _load_phases(path=_PHASES_PATH):
+    with open(path, encoding="utf-8") as stream:
+        document = json.load(stream)
+    if document.get("schema") != "mae-flow-phases/1":
+        raise ValueError("flow/phases.json schema 不是 mae-flow-phases/1")
+    phases = {}
+    for entry in document.get("phases") or ():
+        name = str(entry.get("name") or "").strip()
+        steps = tuple(str(step) for step in entry.get("steps") or ())
+        if not name or not steps or name in phases:
+            raise ValueError("flow/phases.json 阶段名缺失、重复或没有步骤: %r" % name)
+        phases[name] = steps
+    return phases
+
+
+PHASES = _load_phases()
 _STEP_PHASE = {step: phase for phase, steps in PHASES.items()
                for step in steps}
 

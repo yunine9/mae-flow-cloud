@@ -400,31 +400,13 @@ export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
   </section>;
 }
 
-/** 内核现场始终优先；旧任务、分析任务或纯会话模式没有 panel 文件时，
- * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
- * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
+/** 进度只有一个来源:任务 API 的 progress(服务端按内核 flow/phases.json
+ * 一份词表给出,没有内核脉冲时也由服务端按状态占位)。前端不再自带任何
+ * 阶段名——原来这里有三套(协调中五段、持续检视五段、无内核七段),和内核
+ * 看板各说各话,老任务停在哪套显示哪套,点阶段名去内核方案词表里按名字
+ * 找也必然落空(2026-09-02 用户实锤)。服务端也没给时只画一个"尚未进入
+ * 阶段"的空轨道,绝不自造名字。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
-  if (task.status === "coordinating") {
-    const phases = ["已受理", "需求理解", "方案确认", "子任务交付", "完成"];
-    return {
-      phases,
-      current_index: 3,
-      current_phase: "子任务交付",
-      step: task.focus?.headline ?? "子任务正在推进",
-    };
-  }
-  if ((task.delivery?.mr_url || task.feedback?.length)
-      && task.status !== "canceled") {
-    const phases = ["配置与需求", "方案", "开发", "持续检视", "已合入"];
-    const merged = task.status === "completed";
-    return {
-      phases,
-      current_index: merged ? 4 : 3,
-      current_phase: merged ? "已合入" : "持续检视",
-      step: merged ? "MR 已合入，任务完成"
-        : task.focus?.headline ?? task.detail ?? "持续接收、修复并核验反馈",
-    };
-  }
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
     // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
@@ -434,20 +416,10 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
           step: task.focus?.headline ?? task.waiting?.step ?? "等待你的决定" }
       : task.progress;
   }
-  const phases = [
-    "已受理", "需求理解", "开发实现", "人工确认", "交付验证", "等待合入", "完成",
-  ];
-  const inAnalysis = task.requirement_graph?.stage === "analysis";
-  const currentIndex = task.status === "queued" ? 0
-    : task.status === "waiting_for_human" ? (inAnalysis ? 1 : 3)
-    : task.status === "verifying" ? 4
-    : task.status === "await_merge" ? 5
-    : task.status === "completed" ? 6
-    : inAnalysis ? 1 : 2;
   return {
-    phases,
-    current_index: currentIndex,
-    current_phase: phases[currentIndex],
+    phases: [],
+    current_index: -1,
+    current_phase: "尚未进入阶段",
     step: task.focus?.headline ?? statusText(task),
   };
 }

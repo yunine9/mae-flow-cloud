@@ -73,9 +73,13 @@ test("批注弹层关闭后回到原工作位置", () => {
     "打开弹层不能改掉交付材料、开发协作或执行现场的当前页签");
 });
 
-test("持续检视固定高层进度并按来源展示每条反馈", () => {
-  assert.match(workspace,
+test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源逐条展示", () => {
+  // 原来前端有三套阶段字面量(协调中、持续检视、无内核兜底),与内核看板
+  // 各说各话,老任务停在哪套显示哪套。现在一律吃任务 API 的 progress。
+  assert.doesNotMatch(workspace,
     /\["配置与需求", "方案", "开发", "持续检视", "已合入"\]/);
+  assert.doesNotMatch(workspace, /"已受理", "需求理解"/);
+  assert.match(workspace, /current_phase: "尚未进入阶段"/);
   assert.match(workspace, /function FeedbackPanel/);
   assert.match(workspace, /FEEDBACK_SOURCE_LABEL/);
   assert.match(workspace, /item\.summary/,
