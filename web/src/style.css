@@ -3592,8 +3592,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
 
 /* skill_select 圈选卡(ADR-0011):多选清单复用 option 卡样式;
-   「都不用」是次要出路,压灰不与主确认抢视觉。 */
-.issue-decision-submit > button.skill-skip {
+   「都不用」是次要出路,压灰不与主确认抢视觉。env_needed 卡的拒绝钮
+   (票 93:「无需拉日志/换库部署,继续」)同规格——次要出路压灰。 */
+.issue-decision-submit > button.skill-skip,
+.issue-decision-submit > button.issue-decline {
   background: var(--surface-soft);
   color: var(--muted);
   border: 1px solid var(--line);

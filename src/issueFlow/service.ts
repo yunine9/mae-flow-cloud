@@ -76,6 +76,7 @@ import {
   type IssueEnvironmentConfig,
   type IssueFlowMode,
   type IssueGate,
+  type IssueGateScope,
   type IssueScenario,
   type IssueSkillChoice,
   type IssueSource,
@@ -83,6 +84,7 @@ import {
   type IssueStatus,
   type IssueSummary,
   type IssueSessionState,
+  ENV_SCOPE_LABELS,
 } from "./state.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
 import {
@@ -309,6 +311,9 @@ function normalizeEnvironmentInput(
     backendPassword,
   };
 }
+
+/** env_needed 闸用途面的人话:单一来源在 state.ts(ENV_SCOPE_LABELS,
+ *  与 tools 共用),转移账与平台通知按它分叉。 */
 
 /** 问题域知识上下文(ADR-0005):货架 skill 匹配问题会话用的画像=
  * 登记的关联仓 + 绑定的业务模块。纯函数单源,openDriver 装配与测试
@@ -1160,6 +1165,9 @@ export class IssueFlowService {
     const { state } = live;
     const environment = this.storeEnvironment(id, input, false);
     state.environment = environment;
+    // 解锢(票 93):配置成功即整册清除拒绝台账——用户对环境的新裁定
+    // 覆盖旧裁定,fetch_logs/build_deploy 恢复正常举闸路径。
+    delete state.env_declined;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
       // waiting_user 的理由消失,状态回落 idle,由平台回合接管。
@@ -1176,6 +1184,44 @@ export class IssueFlowService {
       "平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查"
         + "登记元信息全量)。请重试刚才的操作——拉日志用 fetch_logs,"
         + "换库部署用 build_deploy。");
+    return summarize(state);
+  }
+
+  /** 网管环境拒绝(问题卡 env_needed 闸的拒绝口,POST
+   * /issues/:id/environment 的 decline 分支,票 93):拉日志/换库举闸
+   * 后,用户认定这一动作不需要网管环境——按闸上的 scope 记入拒绝台账
+   * (硬拒绝:同 scope 工具再调不再举闸,防纠缠),清闸回落 idle,
+   * 开平台回合通知 AI 基于现有证据继续。配置环境成功即整册清除
+   * (解锢,见 attachEnvironment)。闸不在场如实打回:没有卡就无所谓
+   * 拒绝。理由是人的原话,只随通知与转移账转给 AI,永不代答环境闸。 */
+  declineEnvironment(id: string, input?: { note?: string }): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    if (state.gate?.kind !== "env_needed") {
+      throw new IssueControlError("当前没有网管环境配置卡在等作答,无需拒绝");
+    }
+    const scope = state.gate.scope ?? "logs";
+    const note = input?.note?.trim();
+    state.env_declined = {
+      scopes: [...new Set([...(state.env_declined?.scopes ?? []), scope])],
+      at: new Date().toISOString(),
+    };
+    // 闸清在 issue.json(与 attachEnvironment 的清闸同一纪律)。拒绝后
+    // waiting_user 的理由消失,状态回落 idle,由平台回合接管。
+    delete state.gate;
+    if (state.status === "waiting_user") state.status = "idle";
+    recordTransition(state, {
+      source: "platform",
+      note: `网管环境配置被用户拒绝(无需${ENV_SCOPE_LABELS[scope]})`
+        + (note ? `:${note}` : ",未说明理由"),
+    });
+    saveState(live.root, state);
+    this.log(`[issue-flow] ${id} 网管环境配置被用户拒绝(${scope})`);
+    this.startPlatformTurn(live,
+      `平台通知: 用户已确认无需${ENV_SCOPE_LABELS[scope]}(拒绝了网管环境`
+        + "配置请求)。请基于现有证据继续,不要再次请求网管环境;"
+        + "如证据不足,在分析报告里如实说明证据局限。"
+        + (note ? `\n用户理由: ${note}` : ""));
     return summarize(state);
   }
 

@@ -20,6 +20,11 @@
  * 保存;配置后会按 ADR-0003 进入本问题会话的 AI 上下文供工具消费,
  * 但不出现在会话列表、状态摘要或事件流)。闸只收 地址+后台密码:现场补配的流程(拉日志/换库)
  * 碰不到网管页面,没有页面凭据的位置。
+ * 拒绝是同一提交口的另一条路(票 93):AI 误判要日志/要部署时,用户
+ * 可按闸的 scope 拒绝(硬拒绝:同 scope 工具再调不再举卡)并留一句
+ * 选填理由随平台通知转给 AI;配置环境成功即自动解除拒绝(解锢)。
+ * 拒绝 wire 复用 /environment 请求体(decline:true + note),hosts/
+ * backend_password 在拒绝路径上服务端不读,占位只为过表单类型。
  *
  * 另一例外是 skill_select 闸(ADR-0011):多选圈选卡——清单来自服务端
  * 扫描已拉仓的 .cac/skills,按仓分组;提交走 answer 的 selection 专用
@@ -41,6 +46,23 @@ import { Markdown } from "../markdown";
 const ENV_SCOPE_TEXT: Record<string, string> = {
   logs: "拉取日志",
   deploy: "换库部署",
+};
+
+/** 拒绝钮的拍板文案(票 93,按闸 scope 分叉;缺省按 logs——服务端
+ * 对缺 scope 的旧卡也按 logs 处理,两端同一缺省)。 */
+const ENV_DECLINE_TEXT: Record<string, string> = {
+  logs: "无需拉日志,继续分析",
+  deploy: "无需换库部署,继续",
+};
+
+/** 拒绝分支的 wire 形(票 93):复用 POST /issues/:id/environment
+ * 请求体,decline:true 走服务端拒绝路;note 是选填理由。api.ts 的
+ * 表单镜像暂未带这两个键(扩展收敛在本卡,不波及登记侧复用点),
+ * 交叉类型在这里补齐——结构上仍是 IssueEnvironmentForm 的子型,
+ * onEnvironment 管线原样透传。 */
+type IssueEnvironmentDeclineForm = IssueEnvironmentForm & {
+  decline: true;
+  note?: string;
 };
 
 export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
@@ -65,7 +87,8 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
         <div className="context-label">决策背景</div>
         <Markdown text={waiting.context} />
       </div>}
-      <EnvNeededForm busy={busy} onSubmit={onEnvironment} />
+      <EnvNeededForm busy={busy} scope={waiting.gate_scope}
+        onSubmit={onEnvironment} />
     </section>;
   }
   if (waiting.gate_kind === "skill_select") {
@@ -95,14 +118,19 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
 /** 网管环境表单:网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)
  * + 网管后台密码。密码经 POST 进服务端 vault
  * (AES-GCM 加密文件),前端不存草稿;之后会进入本问题会话的 AI 上下文,
- * 让拉日志/换库工具能够消费,但不出现在会话列表、状态摘要或事件流。 */
-function EnvNeededForm({ busy, onSubmit }: {
+ * 让拉日志/换库工具能够消费,但不出现在会话列表、状态摘要或事件流。
+ * 次要出路是拒绝(票 93):AI 误判要日志/要部署时,人可以不填环境
+ * 直接拒绝——按闸 scope 显示拍板文案,选填一句理由随平台通知转给 AI。 */
+function EnvNeededForm({ busy, scope, onSubmit }: {
   busy: boolean;
+  /** 闸的用途面(logs=拉日志 / deploy=换库部署),拒绝文案按它分叉。 */
+  scope?: string;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   const [hosts, setHosts] = useState("");
   const [port, setPort] = useState("22");
   const [backendPassword, setBackendPassword] = useState("");
+  const [declineNote, setDeclineNote] = useState("");
   const [error, setError] = useState("");
   const host = hosts.trim();
   const invalidHost = host !== "" && /[\s,，、]/.test(host);
@@ -123,6 +151,20 @@ function EnvNeededForm({ busy, onSubmit }: {
     } else {
       setError("提交未成功,请稍后重试");
     }
+  }
+
+  /** 拒绝(票 93):不填环境也能推进——硬拒绝后同 scope 工具不再举卡,
+   * 配置环境成功即自动解除。提交走 /environment 的 decline 分支。 */
+  async function decline() {
+    if (busy || !onSubmit) return;
+    const wire: IssueEnvironmentDeclineForm = {
+      hosts: [],
+      backend_password: "",
+      decline: true,
+      ...(declineNote.trim() ? { note: declineNote.trim() } : {}),
+    };
+    const ok = await onSubmit(wire);
+    setError(ok ? "" : "提交未成功,请稍后重试");
   }
 
   return <div className="issue-decision-env">
@@ -149,10 +191,21 @@ function EnvNeededForm({ busy, onSubmit }: {
       口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
       但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
     </p>
+    <label className="issue-field wide">
+      <span>确定不需要?留一句理由帮 AI 调整方向(可选)</span>
+      <textarea rows={2} className="custom-input"
+        placeholder="如:问题在页面侧即可复现,与后台日志无关…"
+        value={declineNote}
+        onChange={(event) => setDeclineNote(event.target.value)} />
+    </label>
     {error && <p className="issue-decision-note" role="alert">{error}</p>}
     <div className="issue-decision-submit">
       <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
         {busy ? "提交中…" : "保存并继续"}
+      </button>
+      <button type="button" className="issue-decline" disabled={busy}
+        onClick={() => void decline()}>
+        {ENV_DECLINE_TEXT[scope ?? "logs"] ?? ENV_DECLINE_TEXT.logs}
       </button>
     </div>
   </div>;
