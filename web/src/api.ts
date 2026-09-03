@@ -17,6 +17,8 @@ export type TaskStatus =
   | "canceled"
   | "failed";
 
+export type DeliveryCompileAction = "rerun" | "skip";
+
 export const STATUS_TEXT: Record<TaskStatus, string> = {
   queued: "排队中",
   running: "进行中",
@@ -2321,6 +2323,8 @@ export async function decide(
   deliveryPaths?: string[],
   /** 当前卡的稳定身份；用于把成功请求的网络重放识别为幂等成功。 */
   waitingId?: string,
+  /** 调整最终文件后，是重新编译还是把新提交直接交给权威流水线。 */
+  deliveryCompileAction?: DeliveryCompileAction,
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -2336,6 +2340,7 @@ export async function decide(
       repository_assignees: repositoryAssignees,
       repository_tickets: repositoryTickets,
       delivery_paths: deliveryPaths,
+      delivery_compile_action: deliveryCompileAction,
     }),
   });
   if (response.status === 409) {

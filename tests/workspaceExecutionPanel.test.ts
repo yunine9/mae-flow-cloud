@@ -149,6 +149,8 @@ test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达�
   assert.match(taskCard, /文件去留在左侧代码差异中调整/);
   assert.match(taskCard, /打开代码差异并调整文件/);
   assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
+  assert.match(taskCard, /重新编译后提交/);
+  assert.match(taskCard, /不再编译，直接提交/);
   assert.match(taskCard, /提交返工意见/);
   assert.match(taskCard,
     /const deliveryReady = !requiresDeliverySelection\s*\|\| selectedHandlesFeedback/,

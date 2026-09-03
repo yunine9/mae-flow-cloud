@@ -627,9 +627,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   台账 op.by 与 verified_by 留痕;"谁的意见谁裁决"仍是默认规则。
   ④决策与跳闸记操作人:decide 落 waiting.json 的 decided_by,
   prepush skip/stop/retry 与任务 retry 带 actor,user_skipped 收据
-  含 skipped_by。⑤编译失败后人工跳过的交付,MR 标题机械打
-  「未经本地编译验证,X跳过」——判据是 skipped_by,清单整理的
-  user_skipped 不打标(那是 prepush 通过后的机械调整)。⑥月光模式
+  含 skipped_by 和 skip_reason。⑤编译失败后人工跳过的交付,MR 标题
+  机械打「未经本地编译验证,X跳过」；最终清单调整后用户可在“重新编译
+  后提交 / 不再编译，直接提交”间选择，后者只在任务台账留痕，不把
+  MR 误标成整份代码从未编译。⑥月光模式
   认不出明确"通过"类选项时整卡退回等人,不再兜底选第一项(选项
   顺序一变就可能替人选中反向分支)。⑦push 确认卡指引改用界面真实
   名称「交付材料 → 工作区变更」(原文案指向不存在的入口名)。

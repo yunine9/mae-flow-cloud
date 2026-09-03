@@ -4953,6 +4953,27 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--text);
 }
 .submit-decision { flex: none; }
+.decision-submit-choices {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.decision-footer.has-submit-choices { flex-wrap: wrap; }
+.decision-footer.has-submit-choices .decision-notes { flex-basis: 100%; }
+.decision-footer.has-submit-choices > .alert { flex-basis: 100%; }
+.decision-submit-choices .submit-decision { flex: 1; }
+.submit-decision.secondary {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: none;
+}
+.submit-decision.secondary:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
 
 /* Alerts and developer utilities */
 .alert {
@@ -6276,6 +6297,7 @@ pre {
   .decision-footer { align-items: stretch; flex-direction: column; }
   .decision-notes label { grid-template-columns: 1fr; gap: 4px; }
   .submit-decision { width: 100%; }
+  .decision-submit-choices { width: 100%; flex-direction: column; }
   .history-intro { padding: 18px; align-items: flex-start; }
   .history-intro p { max-width: 360px; }
   .history-table-head { display: none; }

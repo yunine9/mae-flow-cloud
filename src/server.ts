@@ -76,6 +76,7 @@ import {
   DEFAULT_BUILD_CACHE_MAX_GB,
   DEFAULT_BUILD_CACHE_RETENTION_DAYS,
   DEFAULT_WORKSPACE_RETENTION_DAYS,
+  type DeliveryCompileAction,
   NotFoundError,
   TaskControlError,
   type RequirementGraph,
@@ -2295,6 +2296,10 @@ export function createTaskServer(
               : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
+            delivery_compile_action:
+              typeof body.delivery_compile_action === "string"
+                ? body.delivery_compile_action as DeliveryCompileAction
+                : undefined,
           });
           return json(response, 200, task);
         }

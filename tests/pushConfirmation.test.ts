@@ -218,6 +218,102 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
   }
 });
 
+test("调整交付文件后可不再编译：决定绑定新 HEAD 并直接放行给权威流水线", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    writeFileSync(join(repo.cwd, "src", "optional.ts"),
+      "export const optional = true;\n");
+    repo.git("add", "src/optional.ts");
+    repo.git("commit", "--quiet", "-m", "optional file");
+    const before = repo.git("rev-parse", "HEAD");
+    internal.summary.push_confirmation = true;
+    (service as any).options.prepush = { enabled: true };
+    // 本用例只观察决定的原子结果，不让后台续推碰外部平台。
+    (service as any).tryDeliver = async () => undefined;
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+
+    await service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+      delivery_paths: ["src/feature.ts"],
+      delivery_compile_action: "skip",
+      actor: "owner.liao",
+    });
+
+    const after = repo.git("rev-parse", "HEAD");
+    assert.notEqual(after, before, "按清单整理应产生新提交");
+    const summary = service.get(id)!;
+    assert.equal(summary.delivery_selection?.status, "confirmed");
+    assert.equal(summary.delivery_selection?.head, after);
+    assert.deepEqual(summary.delivery_selection?.paths, ["src/feature.ts"]);
+    assert.equal(summary.delivery?.prepush?.state, "user_skipped");
+    assert.equal(summary.delivery?.prepush?.sha, after);
+    assert.equal(summary.delivery?.prepush?.skipped_by, "owner.liao");
+    assert.equal(summary.delivery?.prepush?.skip_reason, "delivery_selection");
+    assert.match(summary.delivery?.prepush?.message ?? "", /不再编译/);
+    assert.equal(await (service as any).preparePush(
+      internal, "master_bot_REQ1", "master", internal.controlEpoch), true,
+    "当前 SHA 的明确跳过决定不得被编译门禁再次拦截");
+    assert.equal(await (service as any).deliverySelectionAllowsPush(
+      internal, "master_bot_REQ1"), true,
+    "同一 SHA 的已确认清单应直接放行");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("调整交付文件后选择重新编译：未改代码直接提交，改了代码才再次检视", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    writeFileSync(join(repo.cwd, "src", "optional.ts"),
+      "export const optional = true;\n");
+    repo.git("add", "src/optional.ts");
+    repo.git("commit", "--quiet", "-m", "optional file");
+    internal.summary.push_confirmation = true;
+    (service as any).tryDeliver = async () => undefined;
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+
+    await service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+      delivery_paths: ["src/feature.ts"],
+      delivery_compile_action: "rerun",
+      actor: "owner.liao",
+    });
+    const selectedHead = repo.git("rev-parse", "HEAD");
+    const summary = service.get(id)!;
+    assert.equal(summary.delivery_selection?.status, "confirmed",
+      "选择重新编译也已经授权当前清单，不应编译后再问一遍");
+    assert.equal(summary.delivery_selection?.head, selectedHead);
+    assert.equal(summary.delivery?.prepush?.state, "preparing");
+    assert.match(summary.delivery?.prepush?.message ?? "", /等待重新编译/);
+
+    // 编译没有修改代码时，原确认仍精确覆盖当前 HEAD。
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), true);
+
+    // Build-Fix 真改了代码才让人重新看新版本。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "build fix changes code");
+    internal.summary.status = "verifying";
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    assert.equal(service.get(id)!.waiting?.step, "cloud_push_confirm");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求刷新", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   const server = createTaskServer(service);

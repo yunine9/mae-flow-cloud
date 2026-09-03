@@ -135,9 +135,9 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
   }
 });
 
-test("勾选与 commit 不同:宿主机械整理但新 HEAD 必须重新 Build-Fix", async () => {
-  // 清单调整是机械活,不打回 Agent；但机械提交同样是新 HEAD，不能拿
-  // 用户选文件冒充跳过编译。且剔除≠销毁——退出提交,内容原样保留。
+test("非 push 检视调整清单:宿主机械整理并等待重新编译", async () => {
+  // 普通内核检视卡没有“直接提交”的明确选择，仍按兼容默认重新编译。
+  // 且剔除≠销毁——退出提交,内容原样保留。
   const repo = repository({ commitArtifact: true });
   const { service, model, id, internal } = await waitingService(repo);
   try {
@@ -184,11 +184,11 @@ test("勾选与 commit 不同:宿主机械整理但新 HEAD 必须重新 Build-F
       && !dirty.includes("target/classes/Feature.class"),
       `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
 
-    // 新 HEAD 明确回到 Build-Fix preparing，下一次交付统一重验。
+    // 新 HEAD 明确回到 preparing，下一次交付统一重新编译。
     const prepush = service.get(id)?.delivery?.prepush;
     assert.equal(prepush?.state, "preparing");
     assert.equal(prepush?.sha, after);
-    assert.match(prepush?.message ?? "", /重新执行 Build-Fix/);
+    assert.match(prepush?.message ?? "", /重新编译/);
   } finally {
     await model.stop();
   }

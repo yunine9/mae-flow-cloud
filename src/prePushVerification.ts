@@ -134,11 +134,12 @@ export interface PrePushVerificationState {
   state: PrePushStateName;
   round: number;
   message: string;
-  /** user_skipped 的拍板人。跳过是三道质量闸里最重的一次人工决定,
-   * 现场必须答得出"谁点的"(2026-08-30 审计:四个控制入口都不记人)。
-   * 只有"编译失败后人工跳过"这条路落它;清单整理的 user_skipped 刻意
-   * 不落——它同时是 MR 标题打"未经本地编译验证"标记的判据。 */
+  /** user_skipped 的拍板人。现场必须答得出“谁点的”；是否需要给 MR
+   * 加风险标记由 skip_reason 决定，不能再拿“有没有人名”混作原因。 */
   skipped_by?: string;
+  /** failed_build_fix=本地编译/UT 已失败后人工放行；delivery_selection=
+   * 用户调整最终文件后选择不再编译。旧记录缺席时按前者兼容。 */
+  skip_reason?: "failed_build_fix" | "delivery_selection";
   sha: string;
   workspace_fingerprint: string;
   updated_at: string;

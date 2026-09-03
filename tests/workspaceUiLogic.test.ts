@@ -340,6 +340,8 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
   assert.match(html, /本次交付范围/);
   assert.match(html, /1 \/ 2 个文件将推送/);
   assert.match(html, /文件去留在左侧代码差异中调整/);
+  assert.match(html, /重新编译后提交/);
+  assert.match(html, /不再编译，直接提交/);
   assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
   assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
   assert.match(html, /当前有 3 条检视意见未闭环/);

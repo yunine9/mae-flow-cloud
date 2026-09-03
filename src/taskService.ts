@@ -1724,6 +1724,8 @@ export interface RepositoryProbeResponse {
  * selected_options 只承载内核选项原文；free_responses 承载开放题答案或
  * 选择题的补充说明，永远不参与流程分支匹配。decision/answers/notes 仅
  * 保留给旧调用方兼容，进入 HumanGate 前仍会执行同样的菜单校验。 */
+export type DeliveryCompileAction = "rerun" | "skip";
+
 export interface DecisionSubmission {
   /** 页面看到的待办身份。只靠 state_version=1 无法区分两张先后生成的
    * 卡，也无法在任务概要已推进后识别同一次网络重试。 */
@@ -1745,6 +1747,9 @@ export interface DecisionSubmission {
   /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
    * 清单；空数组有业务含义，不能折叠成 undefined。 */
   delivery_paths?: string[];
+  /** 最终交付清单发生变化时，用户对整理后新提交的编译选择。旧客户端
+   * 缺席时仍按 rerun 处理；skip 只跳过本地编译，不跳过权威流水线。 */
+  delivery_compile_action?: DeliveryCompileAction;
   /** 操作人(HTTP 层从登录会话注入,自动交卷不填)。只入审计账,
    * 不参与请求指纹——同内容的网络重试无论谁发都幂等。 */
   actor?: string;
@@ -1809,6 +1814,7 @@ function decisionRequestDigest(
     repository_tickets: orderedRecord(input.repository_tickets),
     delivery_paths: input.delivery_paths
       ? [...new Set(input.delivery_paths.map(String))].sort() : undefined,
+    delivery_compile_action: input.delivery_compile_action,
   };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
@@ -8008,10 +8014,10 @@ export class TaskService {
     this.setPrePushState(task, {
       ...prepush,
       state: "user_skipped",
-      // 恒填(无鉴权部署记"用户"):它同时是 MR 标记的判据——只有
-      // "编译失败后人工跳过"这条路打标,清单整理的 user_skipped 不打
-      // (那是 prepush 已通过后的机械调整,恐吓性标记会误伤常规流)。
+      // 恒填(无鉴权部署记"用户")，并用 reason 区分“失败后放行”和
+      // “清单调整后不重编”。只有前者需要给 MR 加风险标记。
       skipped_by: actor ?? "用户",
+      skip_reason: "failed_build_fix",
       sha: revision.sha,
       workspace_fingerprint: revision.workspace_fingerprint,
       message: `${actor ?? "用户"}选择跳过本地验证,`
@@ -9409,13 +9415,17 @@ export class TaskService {
     const excluded = snapshot.workspace_paths.filter((path) =>
       !paths.includes(path));
     if (closesFeedback && !samePaths(paths, committed)) {
-      // 清单调整仍是宿主机械活，不打回 Agent 猜。但它会产生新 HEAD，
-      // 所以旧 Build-Fix 收据必须作废；调整后重新验证，再让人看最终
-      // HEAD。绝不能把“人选了文件”偷换成“用户同意跳过编译”。
+      // 清单调整仍是宿主机械活，不打回 Agent 猜。push 确认卡同时让
+      // 用户选择“重新编译”或“直接提交”；旧客户端缺字段时保守重编。
+      // 两个选择都已经确认这份清单，只有后续编译真的改了代码才再检视。
+      const compileAction: DeliveryCompileAction =
+        waiting.step === CLOUD_PUSH_CONFIRM_STEP
+          ? input.delivery_compile_action ?? "rerun" : "rerun";
       const mustRemove = committed.filter((path) => !paths.includes(path));
       const mustAdd = paths.filter((path) => !committed.includes(path));
       await this.applyDeliverySelectionAdjustment(
-        task, contribution.base_sha, mustRemove, mustAdd);
+        task, contribution.base_sha, mustRemove, mustAdd,
+        compileAction, input.actor);
       const adjusted = await deliveryChangeSnapshot(task.cwd);
       if (!adjusted?.baseline) {
         throw new TaskControlError("清单整理提交后读取现场失败,请重试");
@@ -9427,20 +9437,31 @@ export class TaskService {
         mustAdd.length ? `补入 ${describeDirtyPaths(mustAdd)}` : "",
       ].filter(Boolean).join(";");
       this.registerAgentPlatformLocalExcludes(task.cwd, adjustedExcluded);
+      const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
       return {
         record: {
           paths,
           observed_paths: adjusted.workspace_paths,
           excluded_paths: adjustedExcluded,
-          status: "requested",
+          status: confirmed ? "confirmed" : "requested",
           waiting_id: waiting.waiting_id,
           head: adjusted.head,
           baseline: adjusted.baseline,
+          ...(confirmed ? {
+            confirmation_mode: "human" as const,
+            confirmation_reason: compileAction === "skip"
+              ? `${input.actor ?? task.summary.luban_account ?? "用户"}`
+                + "确认交付清单并选择不再编译，直接提交"
+              : "用户确认交付清单并选择重新编译后提交",
+          } : {}),
           updated_at: new Date().toISOString(),
         },
         note: `${deliverySelectionNote(paths, adjustedExcluded)}\n`
-          + `(宿主已按清单机械整理提交:${actions};新 HEAD 将重新执行`
-          + ` Build-Fix，并在通过后展示最终检视卡)${vanishedNote}`,
+          + (compileAction === "skip"
+            ? `(宿主已按清单机械整理提交:${actions};用户选择不再编译，`
+              + `将直接提交并由权威流水线裁决)${vanishedNote}`
+            : `(宿主已按清单机械整理提交:${actions};新 HEAD 将重新编译；`
+              + `编译过程未改代码就直接提交，产生新代码才再次检视)${vanishedNote}`),
       };
     }
     if (closesFeedback) {
@@ -9466,13 +9487,15 @@ export class TaskService {
    * 只把改动请出提交与索引,工作区内容原样保留——基线里有的先按
    * 基线版本入索引、提交后再把原内容写回工作区(变成未暂存改动);
    * 基线里没有的 git rm --cached,文件原地变回未跟踪。补入=git add
-   * 工作区已有改动。整理产生新 HEAD 后，旧 Build-Fix 收据立即作废，
-   * 下一次 tryDeliver 会对新现场重新验证。 */
+   * 工作区已有改动。整理产生新 HEAD 后，旧编译收据立即作废；用户可
+   * 选择重新编译，也可明确把新 HEAD 交给权威流水线。 */
   private async applyDeliverySelectionAdjustment(
     task: TaskState,
     baseline: string,
     remove: string[],
     add: string[],
+    compileAction: DeliveryCompileAction,
+    actor?: string,
   ): Promise<void> {
     const cwd = task.cwd!;
     const run = async (args: string[], what: string) => {
@@ -9522,8 +9545,19 @@ export class TaskService {
     const at = new Date().toISOString();
     const revision = await this.prePushRevision(task);
     const pending = createPrePushVerification(revision, at);
-    pending.message = "交付清单已机械整理为新 HEAD，等待重新执行 Build-Fix";
-    this.setPrePushState(task, pending);
+    if (compileAction === "skip") {
+      this.setPrePushState(task, {
+        ...pending,
+        state: "user_skipped",
+        skipped_by: actor ?? task.summary.luban_account ?? "用户",
+        skip_reason: "delivery_selection",
+        message: `${actor ?? task.summary.luban_account ?? "用户"}`
+          + "确认清单调整后不再编译，直接提交并由权威流水线裁决",
+      });
+    } else {
+      pending.message = "交付清单已机械整理为新 HEAD，等待重新编译";
+      this.setPrePushState(task, pending);
+    }
     this.persist(task);
   }
 
@@ -10020,6 +10054,14 @@ export class TaskService {
     const pushConfirmCard = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
     const confirmingPush = pushConfirmCard
       && submitted.some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+    if (input.delivery_compile_action
+        && !["rerun", "skip"].includes(input.delivery_compile_action)) {
+      throw new TaskControlError("清单调整后的编译选择无效，请刷新后重试");
+    }
+    if (input.delivery_compile_action && (!pushConfirmCard || !confirmingPush)) {
+      throw new TaskControlError(
+        "只有确认最终交付清单时才能选择重新编译或直接提交");
+    }
     const handlesFeedback = effects.some((effect) => effect.handlesFeedback
       && submitted.some((answer) => matchesStepChoice(effect, answer)))
       // 云端 push 卡不在内核 effect 契约里；除明确确认外都意味着进入
@@ -15074,6 +15116,12 @@ export class TaskService {
       const ledger = (action: Omit<ExternalAction, "taskId">) =>
         this.bypass(task, "投影动作", this.options.projection?.recordAction(
           { taskId: task.summary.id, ...action }));
+      const prePushState = task.summary.delivery?.prepush;
+      const skippedAfterBuildFailure = prePushState?.state === "user_skipped"
+        && Boolean(prePushState.skipped_by)
+        // 兼容旧收据：修复前没有 skip_reason，但 skipped_by 只会在失败
+        // 后跳过时出现，因此仍按风险放行处理。
+        && prePushState.skip_reason !== "delivery_selection";
       const mrRequest = {
         // 任务级仓进了场,适配层必须知道这单落在哪个仓——
         // repo 字段随 MR/流水线请求走,假件(单仓)忽略它无害。
@@ -15083,15 +15131,14 @@ export class TaskService {
         // 编译失败后人工跳过的交付,标记必须跟着 MR 走到平台上:检视
         // 人在 CodeHub 里看不见云端工作台,不标就是让他在不知情下背书
         // 一份从未编译过的代码(云端契约里编译全托给流水线,2026-08-30
-        // 审计)。判据是 skipped_by(只有失败跳过路落它)——清单整理的
-        // user_skipped 是 prepush 通过后的机械调整,不打标。MR 幂等复用
-        // 时旧标题不更新,尽力而为。
+        // 审计)。清单调整后不重编是已经看过旧编译结果的普通取舍，任务
+        // 台账留痕即可，不用在 MR 标题制造“整份代码从未编译”的误解。
+        // MR 幂等复用时旧标题不更新,尽力而为。
         title: `${state?.config?.["单号"] ?? branch}: ${
           task.summary.title ?? taskTitle(task.summary.requirement)}${
-          task.summary.delivery?.prepush?.state === "user_skipped"
-            && task.summary.delivery.prepush.skipped_by
+          skippedAfterBuildFailure
             ? `【未经本地编译验证,${
-              task.summary.delivery.prepush.skipped_by}跳过】`
+              prePushState.skipped_by}跳过】`
             : ""}`,
         // E2E 单号关联(内网诉求 2026-08-19):单号只拼进 title 平台看
         // 不见,要走 codehub-cli 的 --e2e-issues 才可追踪。取值优先

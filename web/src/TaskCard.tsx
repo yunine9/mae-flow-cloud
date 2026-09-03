@@ -16,6 +16,7 @@ import {
   statusText,
   tailEvents,
   type ExternalAction,
+  type DeliveryCompileAction,
   type SemanticEvent,
   type SseConnectionState,
   type TaskSummary,
@@ -636,8 +637,8 @@ export function WaitingCard({
   const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
     answer.includes("需要修改"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
-  // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
-  // 仍然拦"通过"——那是真有意见没处理。
+  // 会按勾选机械整理提交，用户在同一张卡选择重新编译或直接提交。
+  // 只有未闭环批注仍然拦“通过”——那是真有意见没处理。
   const reviewChoiceConflict = attachmentCount > 0
     && questions.some((item) => {
     const options = item.options ?? [];
@@ -698,7 +699,7 @@ export function WaitingCard({
     setCustomOpen({ ...customOpen, [question]: true });
   }
 
-  async function submit() {
+  async function submit(deliveryCompileAction?: DeliveryCompileAction) {
     if (!ready || submitting) return;
     const selectedOptions: Record<string, string> = {};
     const freeResponses: Record<string, string> = {};
@@ -738,6 +739,7 @@ export function WaitingCard({
         confirmsChain ? repositoryAssigneeSelection?.tickets : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
         task.waiting!.waiting_id,
+        deliveryCompileAction,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();
@@ -763,6 +765,10 @@ export function WaitingCard({
             : requiresDeliverySelection
               ? "先检视并选择交付文件"
               : "提交决定";
+  const showDeliveryCompileActions = requiresDeliverySelection
+    && deliverySelectionChanged
+    && !selectedHandlesFeedback
+    && !hasCustomPrimaryAnswer;
 
   return (
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
@@ -925,7 +931,7 @@ export function WaitingCard({
                 : deliverySelection.selectedPaths.length === 0
                   ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
                   : deliverySelectionChanged
-                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。`
+                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。提交时可选择是否重新编译。`
                     : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
             </div>
           )}
@@ -1090,7 +1096,8 @@ export function WaitingCard({
         </div>
       )}
 
-      <footer className="decision-footer">
+      <footer className={`decision-footer${
+        showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {!requirementAnalysisConfirmation && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>
@@ -1116,17 +1123,33 @@ export function WaitingCard({
         {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
             最底沿,长卡时落在视口外,人以为点了没反应。 */}
         {conflict && <div className="alert" role="alert">{conflict}</div>}
-        <button
-          type="button"
-          className="submit-decision"
-          disabled={!ready}
-          onClick={submit}
-        >
-          {submitLabel}
-          <svg viewBox="0 0 20 20" aria-hidden>
-            <path d="m4 10 3.2 3.2L16 5.5" />
-          </svg>
-        </button>
+        {showDeliveryCompileActions ? (
+          <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
+            <button type="button" className="submit-decision secondary"
+              disabled={!ready} onClick={() => submit("rerun")}>
+              {submitting ? "正在提交…" : "重新编译后提交"}
+            </button>
+            <button type="button" className="submit-decision"
+              disabled={!ready} onClick={() => submit("skip")}>
+              {submitting ? "正在提交…" : "不再编译，直接提交"}
+              <svg viewBox="0 0 20 20" aria-hidden>
+                <path d="m4 10 3.2 3.2L16 5.5" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="submit-decision"
+            disabled={!ready}
+            onClick={() => submit()}
+          >
+            {submitLabel}
+            <svg viewBox="0 0 20 20" aria-hidden>
+              <path d="m4 10 3.2 3.2L16 5.5" />
+            </svg>
+          </button>
+        )}
       </footer>
     </section>
   );

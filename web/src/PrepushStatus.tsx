@@ -93,7 +93,7 @@ export function prepushViewOf(state: string): PrepushView {
       return {
         phase: "environment",
         label: "已跳过·流水线裁决",
-        detail: "用户选择跳过本地验证；编译与单元测试由权威流水线裁决。",
+        detail: "用户选择不再本地编译；编译与单元测试由权威流水线裁决。",
         tone: "neutral",
       };
     default:
