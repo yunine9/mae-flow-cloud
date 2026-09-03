@@ -72,11 +72,11 @@ const BUILTINS = new Set([
   "bash", "AskUserQuestion", "inspect_image", "read", "read_file",
 ]);
 
-test("技能正文不指向封存工具与已删机制(ADR-0013/五章节)", () => {
+test("技能正文不指向封存工具与已删机制(ADR-0013/五章节/#96 自由探索移除)", () => {
   const files = skillFiles();
-  assert.ok(files.length >= 5, `技能目录异常: ${files.length} 份`);
+  assert.ok(files.length >= 4, `技能目录异常: ${files.length} 份`);
   for (const { name, text } of files) {
-    for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify"]) {
+    for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify", "report_stage", "自由探索"]) {
       assert.ok(!text.includes(banned),
         `技能 ${name} 含禁词「${banned}」——封存/已删机制的活表面,改技能正文`);
     }
@@ -87,10 +87,6 @@ test("技能正文引用的工具名全部真实存在(固定∪内建)", () => 
   const real = new Set([
     ...registeredToolNames(),
     ...BUILTINS,
-    // report_stage 已随自由引擎删除(#99):存量技能正文(issue-playbook
-    // /issue-delivery)还提到它,文案清理归 assets 票处理——这里先挂
-    // 已删名册,免得工具名对账假红;skills 清完即删。
-    ...["report_stage"],
   ]);
   for (const { name, text } of skillFiles()) {
     for (const token of backtickedSnakeTokens(text)) {
