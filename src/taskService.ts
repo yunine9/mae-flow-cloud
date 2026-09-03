@@ -301,6 +301,7 @@ import {
   type SelectedBusinessModule,
 } from "./businessModuleRuntime.ts";
 import {
+  requireRepositoryProfiles,
   resolveRepositoryProfiles,
   type RepositoryProfile,
 } from "./repositoryProfiles.ts";
@@ -690,14 +691,10 @@ function taskHostSkillsDir(dataDir: string, summary: TaskSummary): string {
     : join(dataDir, "skills");
 }
 
-function availableUtGenerationMethod(
-  dataDir: string,
-  loadedRepositorySkillNames: string[] = [],
+export function availableUtGenerationMethod(
+  loadedSkillNames: string[] = [],
 ): string {
-  const unique = [...new Set([
-    ...hostSkillNames(dataDir),
-    ...loadedRepositorySkillNames,
-  ].filter((name) =>
+  const unique = [...new Set(loadedSkillNames.filter((name) =>
     /(?:^|[-_])(?:java[-_])?(?:auto)?ut(?:$|[-_])/i.test(name)
       || /ut[-_]generator/i.test(name)))];
   const rank = (name: string): number => {
@@ -6809,6 +6806,9 @@ export class TaskService {
       selectedBusinessModuleIds?: string[];
       /** 前端首次人工确认并由服务端验过的技术画像；知识旁路字段。 */
       repositoryProfiles?: RepositoryProfile[];
+      /** 普通新下单开启：每个仓必须有非空技术画像。内部拆单/
+       * 重跑和历史调用不开启，避免倒查老任务。 */
+      requireRepositoryProfiles?: boolean;
       /** 内部复制/旧客户端兼容；普通下单缺席并由服务端自动匹配。 */
       selectedEngineeringKnowledgeIds?: string[];
       /** 发起页服务端预览的有序清单指纹；不一致时拒绝静默换名单。 */
@@ -7087,6 +7087,30 @@ export class TaskService {
     if ((repositorySkills?.length ?? 0) > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
+    // 画像必须在知识预览和 task id 分配前定格：同一份输入同时决定
+    // 工程知识、团队 Skill 和任务台账；被拒的新单也不应留下空现场。
+    let repositoryProfiles = options.repositoryProfiles ?? [];
+    if (options.repositoryProfiles === undefined && repositories.length) {
+      try {
+        repositoryProfiles = resolveRepositoryProfiles(
+          this.options.dataDir, repositories)
+          .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+      } catch (error) {
+        if (options.requireRepositoryProfiles) {
+          throw new Error(
+            "仓库技术画像暂时无法读取，请在发起页重新选择：" + String(error));
+        }
+        this.options.log?.(
+          "[repository-profiles] 读取失败，已退化为按仓库匹配"
+          + "（不影响旧流程）：" + String(error));
+      }
+    }
+    if (options.requireRepositoryProfiles && repositories.length) {
+      repositoryProfiles = requireRepositoryProfiles(
+        repositories, repositoryProfiles);
+    }
+    const profileTechnologies = [...new Set(repositoryProfiles
+      .flatMap((profile) => profile.technologies))];
     const effectiveKnowledgeSelections = effectiveLaunchKnowledgeSelections({
       selectedBusinessModuleIds: options.selectedBusinessModuleIds,
       selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
@@ -7106,7 +7130,7 @@ export class TaskService {
         selectedBusinessModuleIds: options.selectedBusinessModuleIds,
         selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
         selectedHostSkillPaths: options.selectedHostSkillPaths,
-        repositoryProfiles: options.repositoryProfiles,
+        repositoryProfiles,
         workflowDefinition: !options.workflowProfile
           ? options.workflowDefinition : undefined,
       });
@@ -7131,19 +7155,6 @@ export class TaskService {
     if (options.requirementAssets?.length) {
       storeRequirementAssets(workspace, options.requirementAssets);
     }
-    let repositoryProfiles = options.repositoryProfiles ?? [];
-    if (options.repositoryProfiles === undefined && repositories.length) {
-      try {
-        repositoryProfiles = resolveRepositoryProfiles(
-          this.options.dataDir, repositories)
-          .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
-      } catch (error) {
-        this.options.log?.(
-          `[repository-profiles] 任务 ${id} 读取失败，已退化为按仓库匹配（不影响下单）：${String(error)}`);
-      }
-    }
-    const profileTechnologies = [...new Set(repositoryProfiles
-      .flatMap((profile) => profile.technologies))];
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
     let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
@@ -7178,6 +7189,9 @@ export class TaskService {
             sourceTaskWorkspace: options.engineeringKnowledgeSourceWorkspace,
             targetTaskWorkspace: workspace,
             repository: repositories.length === 1 ? repositories[0] : undefined,
+            technologies: profileTechnologies.length
+              ? profileTechnologies : undefined,
+            businessModuleIds: businessModules.map((module) => module.id),
           });
         } else {
           engineeringKnowledge = snapshotEngineeringKnowledge({
@@ -7227,12 +7241,14 @@ export class TaskService {
         snapshotRoot: hostSkillSnapshotRoot,
         selectedSourcePaths: options.hostSkillSnapshotSourceWorkspace
           ? undefined : selectedHostSkillPaths,
-        // 新任务在这里自动匹配一次并固定版本；重跑/拆单复制的已经是
-        // 父任务快照，不能因画像字段迁移或后续治理变化再次筛掉。
-        context: options.hostSkillSnapshotSourceWorkspace ? undefined : {
+        // 新任务自动匹配并固定版本。新跨仓子任务复制父快照时仍按该
+        // 子仓画像收窄，避免 C++ 单元带入 Java Skill；无画像的旧任务
+        // 保留原来的整份复制语义。
+        context: !options.hostSkillSnapshotSourceWorkspace
+            || profileTechnologies.length > 0 ? {
           repositories, technologies: profileTechnologies,
           businessModuleIds: businessModules.map((module) => module.id),
-        },
+        } : undefined,
       });
       hostSkillSnapshotWarnings = hostSkillSnapshot.warnings;
       try {
@@ -12618,18 +12634,20 @@ export class TaskService {
         // summary,幂等;fail-open——写不进去只记日志,流程退回转述
         // 老路,绝不拦启动。
         try {
-          const utGenerationMethod = availableUtGenerationMethod(
-            this.options.dataDir, loadedRepositorySkillNames);
+          const loadedSkillNames = [
+            ...(task.summary.team_skills ?? []).map((skill) => skill.name),
+            ...loadedRepositorySkillNames,
+          ];
+          const utGenerationMethod = availableUtGenerationMethod(loadedSkillNames);
           // 镜像到任务台账:让"UT skill 有没有被指向"在界面可查,
           // 不用翻工作区内核文件。回退仓内写法且货架非空时点名说破
           // ——skill 上架了但命名没命中 UT 模式,是最隐蔽的一种失配。
           task.summary.ut_generation_method = utGenerationMethod;
           if (utGenerationMethod === "仓内既有写法") {
-            const shelf = hostSkillNames(this.options.dataDir);
-            if (shelf.length) {
+            if (loadedSkillNames.length) {
               this.options.log?.(
-                `[ut-skill] 任务 ${task.summary.id}:货架有 Skill`
-                + `(${shelf.join("、")})但没有命中 UT 命名模式,`
+                `[ut-skill] 任务 ${task.summary.id}:本任务已装载 Skill`
+                + `(${loadedSkillNames.join("、")})但没有命中 UT 命名模式,`
                 + "「UT生成方式」回退为仓内既有写法;若这里面有 UT skill,"
                 + "请改名为形如 java-autout/autout/xx-ut 的名字再上架");
             }
@@ -12840,8 +12858,10 @@ export class TaskService {
       // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
       // MR 检视),这个口径必须开场钉死,防模型拿自测结果顶账。
       if (this.options.host && !analysisOnly) {
-        const utGenerationMethod = availableUtGenerationMethod(
-          this.options.dataDir, loadedRepositorySkillNames);
+        const utGenerationMethod = availableUtGenerationMethod([
+          ...(task.summary.team_skills ?? []).map((skill) => skill.name),
+          ...loadedRepositorySkillNames,
+        ]);
         task.summary.ut_generation_method = utGenerationMethod;
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):你的 Bash 在隔离容器中执行,`
           + `容器里可以自由编译、运行单测来验证自己的改动——有构建链就`

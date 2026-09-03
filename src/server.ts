@@ -162,10 +162,10 @@ import {
 } from "./knowledgeAssetModel.ts";
 import {
   normalizeRepositoryProfile,
+  requireRepositoryProfiles,
   RepositoryProfileError,
   resolveRepositoryProfiles,
   saveRepositoryProfile,
-  type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import {
   KnowledgeCandidateError,
@@ -2005,31 +2005,50 @@ export function createTaskServer(
             && !/^[a-f0-9]{64}$/.test(knowledgePreviewDigest ?? "")) {
           return json(response, 400, { error: "知识清单指纹不合法" });
         }
-        const repositoryProfiles = Array.isArray(body.repository_profiles)
+        const providedRepositoryProfiles = Array.isArray(body.repository_profiles)
           ? body.repository_profiles.flatMap((item: Record<string, unknown>) => {
-              let current: RepositoryProfile;
               try {
-                current = normalizeRepositoryProfile({
+                return [normalizeRepositoryProfile({
                   repository: String(item.repository ?? ""),
                   technologies: Array.isArray(item.technologies)
                     ? item.technologies.map(String) : [],
                   confirmed: item.confirmed !== false,
-                }, account ?? "本地部署");
+                }, account ?? "本地部署")];
               } catch (error) {
                 service.options.log?.(
                   `仓库技术画像无效(本单不采用): ${String(error)}`);
                 return [];
               }
-              try {
-                return [saveRepositoryProfile(service.options.dataDir, current,
-                  account ?? "本地部署")];
-              } catch (error) {
-                // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
-                service.options.log?.(
-                  `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
-                return [current];
-              }
             }) : undefined;
+        const requestedRepositories = repos?.length
+          ? repos : repo ? [repo] : [];
+        let repositoryProfiles = providedRepositoryProfiles;
+        if (requestedRepositories.length) {
+          try {
+            if (repositoryProfiles === undefined) {
+              repositoryProfiles = resolveRepositoryProfiles(
+                service.options.dataDir, requestedRepositories)
+                .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+            }
+            repositoryProfiles = requireRepositoryProfiles(
+              requestedRepositories, repositoryProfiles);
+            if (providedRepositoryProfiles !== undefined) {
+              repositoryProfiles = repositoryProfiles.map((current) => {
+                try {
+                  return saveRepositoryProfile(
+                    service.options.dataDir, current, account ?? "本地部署");
+                } catch (error) {
+                  // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
+                  service.options.log?.(
+                    `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
+                  return current;
+                }
+              });
+            }
+          } catch (error) {
+            return json(response, 400, { error: humanError(error) });
+          }
+        }
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -2102,8 +2121,6 @@ export function createTaskServer(
           // 旧页面、脚本或竞态都不能绕过这道闸。固定仓部署没有逐单地址，
           // 由启动自检负责，不在这里重复探测。知识清单契约先判，保持旧
           // 客户端拿到“先核对清单”的 409 后能按原流程自愈。
-          const requestedRepositories = repos?.length
-            ? repos : repo ? [repo] : [];
           if (service.launchOptions().repo.enabled
               && requestedRepositories.length > 0) {
             const probed = await service.probeRepositories({
@@ -2135,6 +2152,7 @@ export function createTaskServer(
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
+              requireRepositoryProfiles: requestedRepositories.length > 0,
               knowledgePreviewDigest,
               // 下单后先在工作台检视需求原文；主责任人确认才入队。
               requirementAnalysisConfirmation: true,

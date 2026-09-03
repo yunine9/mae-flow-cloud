@@ -287,8 +287,9 @@ export function materializeHostSkills(options: {
   sourceRoot?: string;
   workspaceRoot: string;
   snapshotRoot: string;
-  /** 缺席=按范围自动选择全部；空数组=明确不选。路径相对 sourceRoot，
-   * 只服务任务创建时的资源清单，复制父任务快照时不再重复筛选。 */
+  /** 缺席=按范围自动选择全部；空数组=明确不选。路径相对 sourceRoot。
+   * 新任务用它固定资源清单；跨仓子任务可再用 context 将父快照收窄到
+   * 自己的仓库画像，但不会回到团队货架选择新版本。 */
   selectedSourcePaths?: string[];
   context?: {
     repositories: string[];

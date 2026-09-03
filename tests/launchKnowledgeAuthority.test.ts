@@ -22,7 +22,10 @@ import {
   decideKnowledgeCandidate,
 } from "../src/knowledgeCandidates.ts";
 import { createTaskServer } from "../src/server.ts";
-import { TaskService } from "../src/taskService.ts";
+import {
+  availableUtGenerationMethod,
+  TaskService,
+} from "../src/taskService.ts";
 import { WorkflowAssetLibrary } from "../src/workflowAssetLibrary.ts";
 
 function service(dataDir: string): TaskService {
@@ -59,6 +62,51 @@ function publishEngineering(
   return decideKnowledgeCandidate(
     dataDir, pending.id, "published", "admin");
 }
+
+test("UT 生成方式只看本任务实际装载的 Skill，不受全局货架干扰", () => {
+  assert.equal(availableUtGenerationMethod(["AutoUT"]), "AutoUT");
+  assert.equal(availableUtGenerationMethod(["java-autout", "AutoUT"]),
+    "java-autout");
+  assert.equal(availableUtGenerationMethod(["unrelated-build"]), "仓内既有写法");
+});
+
+test("新任务每个代码仓都必须有非空技术画像，拒绝时不产生任务现场",
+  async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-profile-required-"));
+    const repository = mkdtempSync(join(tmpdir(), "mfc-profile-required-repo-"));
+    execFileSync("git", ["init", "--quiet", "--bare", repository]);
+    const taskService = service(dataDir);
+    const server = createTaskServer(taskService);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${
+      (server.address() as AddressInfo).port}`;
+    try {
+      const missing = await fetch(`${base}/tasks`, {
+        method: "POST",
+        body: JSON.stringify({ requirement: "C++ 仓新任务", repos: [repository] }),
+      });
+      assert.equal(missing.status, 400);
+      assert.match(await missing.text(), /还没有选择技术栈/);
+
+      const empty = await fetch(`${base}/tasks`, {
+        method: "POST",
+        body: JSON.stringify({
+          requirement: "不能用空画像绕过",
+          repos: [repository],
+          repository_profiles: [{
+            repository, technologies: [], confirmed: true,
+          }],
+        }),
+      });
+      assert.equal(empty.status, 400);
+      assert.match(await empty.text(), /还没有选择技术栈/);
+      assert.deepEqual(taskService.list(), []);
+      assert.equal(existsSync(join(dataDir, "task-1")), false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) =>
+        error ? reject(error) : resolve()));
+    }
+  });
 
 function workflowDefinition(moduleId: string, asset: {
   id: string; version: number; digest: string;

@@ -101,6 +101,18 @@ test("查看全文前保存技术画像草稿，返回根路径恢复来源视�
     "从帮助页进入根视图也必须记录目标，前进不能掉回角色默认页");
 });
 
+test("仓库技术栈是新任务必填项，直接跟随交付仓且不能藏在按需配置里", () => {
+  const picker = source.indexOf("<RepositoryTechnologyPicker");
+  const advanced = source.indexOf('<details className="launch-advanced"');
+  assert.ok(picker >= 0 && advanced > picker,
+    "技术栈选择应在交付定位中先出现，不能藏进按需配置");
+  assert.match(source, /repositoryTechnologyBlocked/);
+  assert.match(source, /每个代码仓至少选择一种技术栈/);
+  assert.match(pickerSource, /必须确认/);
+  assert.doesNotMatch(pickerSource, /暂不确定，也继续/);
+  assert.match(pickerSource, /本单仍采用你刚选的结果/);
+});
+
 test("历史全文使用响应版本元数据，帮助返回保留团队资产页签", () => {
   assert.match(businessSource,
     /title: value\.asset\.title, content: value\.content/,

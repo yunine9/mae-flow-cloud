@@ -548,6 +548,9 @@ test("HTTP 显式选择保持兼容；未选择时等待 Git 现场原生发现"
         repo,
         ticket: "REQ20260005",
         baseline: "master",
+        repository_profiles: [{
+          repository: repo, technologies: ["javascript"], confirmed: true,
+        }],
         repository_skill_catalog_token: catalog.catalog_token,
         selected_repository_skill_ids: [catalog.repositories[0].skills[0].id],
       }),

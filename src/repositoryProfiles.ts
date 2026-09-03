@@ -24,10 +24,37 @@ export class RepositoryProfileError extends Error {}
 export interface RepositoryProfile {
   repository: string;
   technologies: string[];
-  /** true + [] = 用户明确选择“暂不确定”，不是系统漏采。 */
+  /** 历史数据可能存在 true + []；新任务不再把它视为已确认。 */
   confirmed: boolean;
   updated_at: string;
   updated_by: string;
+}
+
+type RepositoryProfileSelection = Pick<RepositoryProfile,
+  "repository" | "technologies" | "confirmed">;
+
+/** 新任务的硬契约：每个代码仓都要有用户确认的非空技术栈。
+ * 只在创建新任务时调用，不倒查、不迁移历史任务。 */
+export function requireRepositoryProfiles<T extends RepositoryProfileSelection>(
+  repositories: string[],
+  profiles: T[],
+): T[] {
+  const uniqueRepositories = [...new Set(repositories.map(validateRepository))];
+  const byIdentity = new Map(profiles.map((profile) =>
+    [repositoryIdentity(validateRepository(profile.repository)), profile]));
+  return uniqueRepositories.map((repository) => {
+    const profile = byIdentity.get(repositoryIdentity(repository));
+    if (!profile || profile.confirmed !== true
+        || !Array.isArray(profile.technologies)
+        || profile.technologies.length === 0) {
+      const name = repository.replace(/\/+$/, "").split("/").at(-1)
+        ?.replace(/\.git$/i, "") || repository;
+      throw new RepositoryProfileError(
+        "代码仓 " + name + " 还没有选择技术栈，请先在发起页确认",
+      );
+    }
+    return profile;
+  });
 }
 
 export interface RepositoryProfileResolution {
@@ -48,6 +75,9 @@ export function normalizeRepositoryProfile(
   } catch (error) {
     throw new RepositoryProfileError(
       error instanceof Error ? error.message : String(error));
+  }
+  if (!technologies.length) {
+    throw new RepositoryProfileError("请至少选择一种仓库技术栈");
   }
   return {
     repository,

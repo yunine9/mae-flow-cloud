@@ -10137,6 +10137,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .repository-technology-head strong { color: var(--text-strong); font-size: 13px; }
 .repository-technology-head small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 .repository-technology-head > em { padding: 3px 7px; color: var(--success); border-radius: 999px; background: var(--success-soft); font-size: 11px; font-style: normal; white-space: nowrap; }
+.repository-technology-head > em.required { color: var(--attention); background: var(--attention-soft); }
 .repository-technology-list { display: grid; gap: 8px; }
 .repository-technology-list > article { padding: 10px; display: grid; gap: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .repository-technology-list article > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -10146,6 +10147,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .repository-technology-list article > header em { color: var(--success); font-size: 11px; font-style: normal; }
 .repository-technology-list article > header em.first { color: var(--attention); }
 .repository-technology-state, .repository-technology-first > div { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.repository-technology-first > div > small { color: var(--attention); font-size: var(--font-size-assist); }
 .repository-technology-state button, .repository-technology-first button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .repository-technology-first { display: grid; gap: 9px; }
 .repository-technology-warning, .repository-technology-note { margin: 0; color: var(--attention); font-size: var(--font-size-assist); line-height: 1.5; }
