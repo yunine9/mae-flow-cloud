@@ -131,6 +131,22 @@ export function decisionAnnotationIds(
     && item.author === viewerUsername).map((item) => item.id);
 }
 
+/** 当前材料搜索只认正文行，不搜索页签、按钮等界面文案。 */
+export function matchingMaterialRowIndexes(
+  rows: ReadonlyArray<{ textContent: string | null }>,
+  query: string,
+): number[] {
+  const needle = query.trim().toLocaleLowerCase("zh-CN");
+  if (!needle) return [];
+  const matches: number[] = [];
+  rows.forEach((row, index) => {
+    if ((row.textContent ?? "").toLocaleLowerCase("zh-CN").includes(needle)) {
+      matches.push(index);
+    }
+  });
+  return matches;
+}
+
 export interface WorkspaceNextActionCopy {
   title: string;
   detail: string;
@@ -600,6 +616,10 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
+  const [materialSearchOpen, setMaterialSearchOpen] = useState(false);
+  const [materialSearchQuery, setMaterialSearchQuery] = useState("");
+  const [materialSearchCount, setMaterialSearchCount] = useState(0);
+  const [materialSearchIndex, setMaterialSearchIndex] = useState(-1);
   const [documentsDownloading, setDocumentsDownloading] = useState(false);
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
@@ -613,6 +633,8 @@ export function TaskWorkspace({
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
+  const materialSearchInput = useRef<HTMLInputElement>(null);
+  const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -638,6 +660,10 @@ export function TaskWorkspace({
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
+    setMaterialSearchOpen(false);
+    setMaterialSearchQuery("");
+    setMaterialSearchCount(0);
+    setMaterialSearchIndex(-1);
     setDocumentsDownloading(false);
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
@@ -797,7 +823,10 @@ export function TaskWorkspace({
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (reviewInviteOpen) setReviewInviteOpen(false);
+      if (materialSearchOpen) {
+        setMaterialSearchOpen(false);
+        setMaterialSearchQuery("");
+      } else if (reviewInviteOpen) setReviewInviteOpen(false);
       else if (reviewPanelOpen) setReviewPanelOpen(false);
       else if (materialsFullscreen) setMaterialsFullscreen(false);
       else onClose();
@@ -809,7 +838,64 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialsFullscreen, reviewInviteOpen, reviewPanelOpen, onClose]);
+  }, [materialSearchOpen, materialsFullscreen, reviewInviteOpen,
+    reviewPanelOpen, onClose]);
+
+  // 搜索范围就是当前渲染出来的这一份材料。普通文档取带 data-l 的最深
+  // 正文行；两种差异视图取各自的真实内容行，删除行没有新行号也能搜到。
+  useEffect(() => {
+    for (const row of materialSearchRows.current) {
+      row.classList.remove("material-search-hit", "material-search-current");
+    }
+    materialSearchRows.current = [];
+    setMaterialSearchCount(0);
+    setMaterialSearchIndex(-1);
+    if (!materialSearchOpen || !materialSearchQuery.trim()
+        || workspaceView !== "materials" || materialView === "chain"
+        || loading) return;
+    const timer = window.setTimeout(() => {
+      const root = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
+      if (!root) return;
+      const diffRows = root.querySelectorAll<HTMLElement>(
+        ".diff-review-row, .requirement-diff-row");
+      const rows = diffRows.length
+        ? [...diffRows]
+        : [...root.querySelectorAll<HTMLElement>("[data-l]")]
+          .filter((row) => !row.querySelector("[data-l]"));
+      const matches = matchingMaterialRowIndexes(rows, materialSearchQuery)
+        .map((index) => rows[index]);
+      materialSearchRows.current = matches;
+      for (const row of matches) row.classList.add("material-search-hit");
+      setMaterialSearchCount(matches.length);
+      if (!matches.length) return;
+      matches[0].classList.add("material-search-current");
+      setMaterialSearchIndex(0);
+      matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [active, content, loading, materialSearchOpen, materialSearchQuery,
+    materialView, revisionDiff, task.requirement, workspaceView]);
+
+  function moveMaterialSearch(step: -1 | 1) {
+    const rows = materialSearchRows.current;
+    if (!rows.length) return;
+    rows[materialSearchIndex]?.classList.remove("material-search-current");
+    const next = materialSearchIndex < 0
+      ? 0 : (materialSearchIndex + step + rows.length) % rows.length;
+    rows[next].classList.add("material-search-current");
+    rows[next].scrollIntoView({ block: "center", behavior: "smooth" });
+    setMaterialSearchIndex(next);
+  }
+
+  function toggleMaterialSearch() {
+    if (materialSearchOpen) {
+      setMaterialSearchOpen(false);
+      setMaterialSearchQuery("");
+      return;
+    }
+    setMaterialSearchOpen(true);
+    window.requestAnimationFrame(() => materialSearchInput.current?.focus());
+  }
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -1460,8 +1546,51 @@ export function TaskWorkspace({
                 <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
                 {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>
+              {materialView !== "chain" && <button type="button"
+                className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
+                aria-expanded={materialSearchOpen}
+                title="只搜索当前打开的这份内容"
+                onClick={toggleMaterialSearch}>
+                <span aria-hidden>⌕</span>搜索
+              </button>}
             </div>
           </div>
+          {materialSearchOpen && materialView !== "chain" && (
+            <div className="material-search-bar" role="search">
+              <span className="material-search-icon" aria-hidden>⌕</span>
+              <input ref={materialSearchInput}
+                value={materialSearchQuery}
+                aria-label="搜索当前内容"
+                placeholder={materialView === "diff"
+                  ? "搜索当前代码变更"
+                  : materialView === "source"
+                    ? "搜索当前需求原文"
+                    : `搜索 ${activeMeta?.label ?? "当前文档"}`}
+                onChange={(event) => setMaterialSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    moveMaterialSearch(event.shiftKey ? -1 : 1);
+                  }
+                }} />
+              <span className={`material-search-count${materialSearchQuery.trim()
+                  && !materialSearchCount ? " empty" : ""}`}
+                aria-live="polite">
+                {!materialSearchQuery.trim() ? "输入关键词"
+                  : materialSearchCount
+                    ? `${materialSearchIndex + 1} / ${materialSearchCount}`
+                    : "没有找到"}
+              </span>
+              <button type="button" title="上一处（Shift + Enter）"
+                aria-label="上一个搜索结果" disabled={!materialSearchCount}
+                onClick={() => moveMaterialSearch(-1)}>↑</button>
+              <button type="button" title="下一处（Enter）"
+                aria-label="下一个搜索结果" disabled={!materialSearchCount}
+                onClick={() => moveMaterialSearch(1)}>↓</button>
+              <button type="button" className="material-search-close"
+                aria-label="关闭搜索" onClick={toggleMaterialSearch}>×</button>
+            </div>
+          )}
           {evidenceGapActionable && evidenceGapArtifact && (
             <section className="ws-evidence-gap-callout" role="status">
               <div>

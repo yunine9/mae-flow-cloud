@@ -118,6 +118,20 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
   "决定只能携带当前操作者自己的未送达草稿");
 });
 
+test("材料搜索只匹配当前正文行，兼容中文和英文大小写", () => {
+  const rows = [
+    { textContent: "配置确认：启用自动修复" },
+    { textContent: "const BuildResult = await compile();" },
+    { textContent: null },
+    { textContent: "自动修复完成" },
+  ];
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "自动修复"),
+    [0, 3]);
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "buildresult"),
+    [1]);
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "  "), []);
+});
+
 test("流水线证据缺口直接打开补证材料，用户切走后不被轮询抢回", () => {
   const gap = {
     name: "pipeline/流水线证据缺口.md",
