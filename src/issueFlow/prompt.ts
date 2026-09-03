@@ -203,8 +203,9 @@ export function stageLabelOf(state: IssueSessionState): string {
 // 引导层说能用的与权威层放行的不会漂移。渲染函数 stageBriefLines 也
 // 住在注册表:开场词/交接词/催办词/工具回执共用同一份三行简报。
 
-/** 必读 skill 清单行(ADR-0011):analyze 阶段且台账有圈选时随简报
- * 注入——开场词与续聊词共用,重启重建的上下文同样看得见圈选结果。 */
+/** 必读 skill 清单行(ADR-0011,已封存——ADR-0014 起不再产生新台账):
+ * 仅存量会话的 skill_selection 在场时随 analyze 简报注入,开场词与
+ * 续聊词共用,重启重建的上下文同样看得见历史圈选结果。 */
 export function skillSelectionLines(state: IssueSessionState): string[] {
   const skills = state.skill_selection?.skills ?? [];
   if (state.stage !== "analyze" || !skills.length) return [];
@@ -269,9 +270,9 @@ export function issueFixedOpeningPrompt(
       + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
     "4. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
       + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
-    "5. 平台闸:skill 圈选(进入分析时,过程把关档)、分析报告确认(有单)/"
-      + "结论确认(无单)、网管环境配置(拉日志缺环境时)"
-      + "——平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
+    "5. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
+      + "(拉日志缺环境时)——平台举卡等用户,你不要替用户猜结果,"
+      + "举卡后立即结束回合。",
     "6. 问题修复按 TDD 走:先写(或改)能复现问题的单测,再改码让它转绿,"
       + "UT 属于修复阶段的一部分;每轮结果可自愿调 report_ut 如实上报——"
       + "平台只记账,出口仍是 complete_stage。推送前 UT 纪律:调 push_branch"
