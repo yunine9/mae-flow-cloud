@@ -323,6 +323,25 @@ export interface IssuePipelineWatch {
   /** 本仓累计红灯次数(绿了清零):与需求侧修复轮预算同语义——超过
    *  repair_rounds 就停止自动回灌修复,留痕请人工。 */
   reds?: number;
+  /** 证据重试窗(票 82):红灯证据全缺/盲输入时不立即举卡,先记下
+   *  取证截止时间,定时器每隔一段重拉镜像重新评估——产物晚到在窗内
+   *  自愈(自动派修,人无感),到点仍缺才举 pipeline_evidence 卡。
+   *  字段在场=重试窗在途;随 issue.json 落盘,重启凭它续算(不重置
+   *  截止、不白等),新流水线重挂表时不随迁(旧窗随旧提交作废)。 */
+  evidence_retry_deadline?: string;
+  /** 重试窗内已做的重评次数(留痕/排障用,不作收手判据)。 */
+  evidence_retry_attempts?: number;
+  /** 进窗那次红灯的失败摘要原文(截断防膨胀):重启续算时重评的
+   *  failureSummary 输入——结算现场的 run 不跨进程,落盘才评得动。 */
+  evidence_failure_log?: string;
+  /** 上次派修的提交(票 82 同提交刹车):红灯 SHA===它=修了没出新
+   *  提交,停机不派(reds 不变),会话最后发言作诊断。派修时写入,
+   *  跨重挂表保留(刹车判据必须跨 push/re-arm 存活),绿了清账。 */
+  last_repair_sha?: string;
+  /** 上轮报错摘要(维度点名+报错节选,截断防膨胀):下轮派修拼进
+   *  回合提示词,附"同一处必须换思路"纪律(需求流 loop.failure 同
+   *  语义);与 last_repair_sha 同拍写入、同拍清理。 */
+  last_failure_summary?: string;
 }
 
 /** MR 验绿门的申报账(阶段6受理路):AI 调 complete_stage 申报清单时
