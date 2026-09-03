@@ -21,7 +21,7 @@
  * state.ts,它们查本表的路线;本表只声明规则,不做任何状态变更。
  */
 
-import type { AnyIssueStage, IssueGateKind, IssueScenario } from "./state.ts";
+import type { IssueGateKind, IssueScenario } from "./state.ts";
 
 // ---- 阶段词表与路线 ----
 
@@ -42,8 +42,7 @@ export const FIXED_NO_TICKET_STAGES = [
   "conclude",      // 确定结论(平台闸:是问题→挂起 / 非问题→闭环)
 ] as const;
 
-/** 固定流程的阶段键。与自由词表刻意不同名:两套语义并存,UI 按
- * 会话模式选词表渲染,不互相污染。 */
+/** 固定流程的阶段键(问题域唯一的阶段词表)。 */
 export type FixedStage =
   | (typeof FIXED_TICKET_STAGES)[number]
   | (typeof FIXED_NO_TICKET_STAGES)[number];
@@ -234,9 +233,9 @@ export function fixedStages(scenario: IssueScenario): readonly FixedStage[] {
   return STAGE_ROUTES[scenario];
 }
 
-/** 固定流程路线里的位次(自由词表的值不在任何路线里,一律 -1)。 */
+/** 固定流程路线里的位次(不在本场景路线里的阶段一律 -1)。 */
 export function fixedStageIndex(
-  scenario: IssueScenario, stage: AnyIssueStage,
+  scenario: IssueScenario, stage: FixedStage,
 ): number {
   return STAGE_ROUTES[scenario].indexOf(stage as FixedStage);
 }

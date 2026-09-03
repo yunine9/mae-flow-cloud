@@ -69,7 +69,7 @@ function toolHarness(workspace: string, dts: DtsGateway) {
     id: "issue-img", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "DTS-IMG-1",
-    repo_url: "", mode: "fixed", scenario: "ticket", round: 1,
+    repo_url: "", scenario: "ticket", round: 1,
     stage_states: ["pending", "pending", "pending", "pending", "pending", "pending", "pending"],
     status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
   };

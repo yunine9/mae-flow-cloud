@@ -8,7 +8,7 @@
 
 | 文件 | 放什么 | 典型锚点 |
 |------|--------|----------|
-| `opening.md` | 会话入口词:固定/自由开场契约、转正继承注、开场收尾、续聊词的固定段 | `fixed.contract`、`free.kickoff` |
+| `opening.md` | 会话入口词:固定流程开场契约、转正继承注、开场收尾、续聊词 | `fixed.contract`、`resume.header` |
 | `notices.md` | 平台主动通知:催办、闸门裁决后的交接词、流水线结果、环境通知 | `nudge.body`、`pipeline.green.remind` |
 | `receipts.md` | 工具回执与门禁拒绝的返回人话 | `push.no_ticket`、`mrgate.awaiting` |
 

@@ -215,7 +215,7 @@ test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分�
   writeFileSync(join(repoDir, "docs", "总览.md"), "# 总览\n");
   writeFileSync(join(repoDir, "docs", "手册", "细节.md"), "# 细节\n");
   const state = {
-    mode: "fixed", scenario: "no_ticket", stage: "analyze",
+    scenario: "no_ticket", stage: "analyze",
     repo_urls: ["http://example.com/origin.git"],
   } as unknown as IssueSessionState;
   const lines = businessKnowledgeLines(state, workspace);
@@ -251,7 +251,7 @@ test("提示层:开场词只在 analyze 阶段注入业务知识地图", () => {
   mkdirSync(repoDir, { recursive: true });
   writeFileSync(join(repoDir, "对账流程.md"), "# 对账流程\n");
   const base = {
-    id: "issue-1", mode: "fixed", scenario: "no_ticket", stage: "analyze",
+    id: "issue-1", scenario: "no_ticket", stage: "analyze",
     title: "对账差异", description: "", account: "dev",
     repo_urls: ["http://example.com/origin.git"],
   } as unknown as IssueSessionState;

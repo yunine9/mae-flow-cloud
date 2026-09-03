@@ -367,7 +367,6 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
         page_account: "admin",
         page_credential_ref: "vault-page-ref",
       },
-      mode: "fixed",
       scenario: "ticket",
       stage_states: ["done", "done", "done", "done", "done"],
       round: 1,
@@ -574,7 +573,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     title: "不可修闸卡契约夹具", description: "", source: "dts",
     ticket: "DTS-2026-1003",
     repo_url: repo, repo_urls: [repo],
-    mode: "fixed", scenario: "ticket", round: 1,
+    scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "done", "pending"],
     status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
     pushes: [{ repo, branch: "master_dev_DTS-2026-1003", sha, at: now }],
@@ -707,8 +706,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     };
     assertWireShape(waitingSample, detail.body.waiting, "Agent 卡 .waiting");
 
-    // 固定流程(无单三节点)的 summary 形状:模式恒烙 fixed(#97 下线
-    // 自由探索入口),登记转移账带首阶段。
+    // 固定流程(无单三节点)的 summary 形状,登记转移账带首阶段。
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
@@ -724,7 +722,6 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       module_id: undefined,
       baseline: undefined,
       environment: undefined,
-      mode: "fixed",
       scenario: "no_ticket",
       stage_states: ["in_progress", "pending", "pending"],
       round: 1,

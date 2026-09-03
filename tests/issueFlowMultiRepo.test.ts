@@ -133,7 +133,7 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeli
   assert.equal((ledger as { push?: unknown }).push, undefined, "单数字段退役");
 });
 
-test("登记校验:无单必须带模块与环境(两模式同等);模块存在/在架/非零仓;四件套缺一打回;有单不拦", () => {
+test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;四件套缺一打回;有单不拦", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-"));
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({

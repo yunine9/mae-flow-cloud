@@ -29,7 +29,6 @@ import type { IssueSessionState } from "./state.ts";
 import { issueRepoWorkspaces } from "./state.ts";
 import {
   FIXED_STAGE_LABELS,
-  STAGE_LABELS,
   fixedStages,
   type FixedStage,
   type IssueScenario,
@@ -191,14 +190,12 @@ function repoLines(state: IssueSessionState): string {
     + `相对路径):\n${lines.join("\n")}`;
 }
 
-/** 阶段名(自由/固定两套词表都认)。 */
+/** 阶段名(固定流程词表;无场景的存量现场按原始键兜底显示)。 */
 export function stageLabelOf(state: IssueSessionState): string {
-  if (state.mode === "fixed" && state.scenario) {
-    return FIXED_STAGE_LABELS[state.scenario][state.stage as FixedStage]
-      ?? String(state.stage);
-  }
-  return STAGE_LABELS[state.stage as keyof typeof STAGE_LABELS]
-    ?? String(state.stage);
+  return state.scenario
+    ? FIXED_STAGE_LABELS[state.scenario][state.stage as FixedStage]
+      ?? String(state.stage)
+    : String(state.stage);
 }
 
 // ---- 固定流程(2026-08-27 拍板:宿主权威阶段机,Agent 只在阶段内干活) ----
@@ -312,32 +309,6 @@ export function fixedNudgeNotice(
   });
 }
 
-export function issueOpeningPrompt(
-  state: IssueSessionState,
-  credentials: IssueEnvCredentials = {},
-): string {
-  const meta = issueRegistrationMeta(state, credentials);
-  return [
-    promptCopy("opening", "free.header"),
-    "",
-    "## 问题事实",
-    `- 标题: ${meta.title}`,
-    `- 描述: ${meta.description || "(无补充描述)"}`,
-    moduleLine(meta),
-    `- 单号: ${state.ticket ?? "(尚未绑定——先研究后补单是正常形态;推送/提MR前必须请用户在页面绑定)"}`,
-    `- 工号: ${state.account}`,
-    repoLines(state)
-      || "- 代码仓: (未登记——可 lookup_modules 按业务关键词检索模块带出仓,"
-      + "或问用户要地址;要用的仓自己 pull_repo 拉取,拉过才在场)",
-    ...environmentLines(meta),
-    "",
-    "## 行为契约",
-    promptCopy("opening", "free.contract"),
-    "",
-    promptCopy("opening", "free.kickoff"),
-  ].join("\n");
-}
-
 /** 续聊提示词(重启/归档前的下一轮):锚定已有现场,不从头推翻。
  * 登记元信息随现场一并重给(服务重启后模型上下文是重建的,元信息
  * 不随对话流失——含网管环境明文,与开场词同一事实源)。 */
@@ -359,11 +330,9 @@ export function issueResumePrompt(
     ...(options.workspace
       ? businessKnowledgeLines(state, options.workspace)
       : []),
-    ...(state.mode === "fixed"
-      ? [promptCopy("opening", options.moonlight
-        ? "resume.intervention.moonlight"
-        : "resume.intervention.guard")]
-      : []),
+    promptCopy("opening", options.moonlight
+      ? "resume.intervention.moonlight"
+      : "resume.intervention.guard"),
     state.pushes?.length
       ? `- 已推送: ${state.pushes.map((push) =>
           `${push.branch} @ ${push.sha.slice(0, 12)}`).join(";")}` : "",

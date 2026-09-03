@@ -236,7 +236,7 @@ test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律
 
 test("提示层:开场词与续聊词按月光现值渲染介入节奏", () => {
   const state = {
-    id: "issue-1", mode: "fixed", scenario: "ticket", stage: "analyze",
+    id: "issue-1", scenario: "ticket", stage: "analyze",
     title: "登录超时", description: "", account: "dev", ticket: TICKET,
   } as unknown as IssueSessionState;
   const on = issueFixedOpeningPrompt(state, {}, { moonlight: true });

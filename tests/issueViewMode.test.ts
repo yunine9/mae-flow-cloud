@@ -150,7 +150,7 @@ function makeFixture(): { dataDir: string; service: IssueFlowService } {
   };
   writeSession(dataDir, {
     ...base, id: LIVE, status: "idle", stage: "analyze",
-    mode: "fixed", scenario: "no_ticket", round: 1,
+    scenario: "no_ticket", round: 1,
   });
   writeSession(dataDir, {
     ...base, id: ARCHIVED, status: "archived", stage: "done",
@@ -161,7 +161,7 @@ function makeFixture(): { dataDir: string; service: IssueFlowService } {
   });
   writeSession(dataDir, {
     ...base, id: SUSPENDED, status: "suspended", stage: "analyze",
-    mode: "fixed", scenario: "no_ticket",
+    scenario: "no_ticket",
   });
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},

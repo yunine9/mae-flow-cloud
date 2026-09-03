@@ -303,7 +303,7 @@ function directState(
     id: "issue-exit", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
-    mode: "fixed", scenario, round: 1,
+    scenario, round: 1,
     stage_states: fixedStages(scenario).map(() => "pending"),
     status: "idle", stage, stage_note: "", stage_at: now,
   };
