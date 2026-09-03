@@ -34,6 +34,7 @@
  *   DELETE /tasks/:id                                   → 200;责任人/管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/memories                            → 本单落下的记忆(只读)
+ *   GET  /tasks/:id/memories/usage                      → 这单用到的记忆(推送/检索足迹)
  *   POST /tasks/:id/memories/:mid/withdraw              → 撤回自己圈的记忆
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
@@ -2475,6 +2476,10 @@ export function createTaskServer(
           if (!service.get(id)) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET" && parts.length === 3) {
             return json(response, 200, service.listTaskMemories(id));
+          }
+          // 这单用到的:宿主三次推送 + Agent 自己查/展开的足迹。
+          if (request.method === "GET" && parts.length === 4 && parts[3] === "usage") {
+            return json(response, 200, service.listTaskMemoryUsage(id));
           }
           if (request.method === "GET" && parts.length === 4) {
             const found = service.readTaskMemory(id, decodeURIComponent(parts[3]));

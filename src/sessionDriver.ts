@@ -229,6 +229,9 @@ export interface CloudSessionOptions {
   /** root 宿主 + 非 root 容器时，内建 Write/Edit 成功落盘后立刻修正
    * bind 文件属主。回调失败会让本次工具调用失败，不把隐患拖到编译时。 */
   afterFileMutation?: (absolutePath: string) => void | Promise<void>;
+  /** 门禁放行之后、文件真被改之前的一个观察点(任务记忆 §8-3:首次改某
+   * 目录时提醒历史语料)。纯旁路:回调自己兜错,不影响放行。 */
+  onFileMutationIntent?: (path: string, tool: string) => void;
   /** 宿主级 skill 源目录(部署时放一次,每个任务自动带)。运行时先把
    * 每个通过校验的完整 Skill 包只读投影到当前任务 .mae-flow-work，
    * 再把任务内路径交给 Pi，不能向 Agent 暴露部署数据目录的绝对路径。
@@ -1144,6 +1147,18 @@ export class CloudSession {
     const decision = this.options.gate.decide(semantic);
     if (decision.action === "deny") {
       return { block: true, reason: decision.reason ?? "被 mae-flow 门禁打回" };
+    }
+    if (this.options.onFileMutationIntent
+        && (name === "Edit" || name === "Write" || name === "MultiEdit")) {
+      const input = (event.input ?? {}) as Record<string, unknown>;
+      const path = String(input.path ?? input.file_path ?? "").trim();
+      if (path) {
+        try {
+          this.options.onFileMutationIntent(path, name);
+        } catch {
+          // 旁路:提醒挂了不影响这次编辑。
+        }
+      }
     }
     return undefined;
   }

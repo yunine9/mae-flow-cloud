@@ -465,8 +465,26 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   宿主执行、Edit 直接改了部署仓三个文件(靠 git checkout 恢复)——演示形态是给
   剧本假模型的,真模型验证必须走内核模式 + 容器,或至少一次性 --repo。
   **未验**:内核模式 + 容器下的 Build-Fix 入库钩子(只有合成
-  状态的单测);memsearch sidecar/`corpus_search`/阶段切换与首次改目录推送
-  (二期);阶段字段只在有内核进度镜像时才有,session-only 任务为空。
+  状态的单测);阶段字段只在有内核进度镜像时才有,session-only 任务为空。
+- **2026-09-03 任务记忆第二期:检索旁路与三时刻推送**(同一设计稿 §7/§8):
+  `harness/memsearch-sidecar.py` 常驻 Python 进程(stdio JSON lines,四个动作
+  health/ingest/search/expand,单条出错不退),宿主侧 `src/memorySidecar.ts`
+  按 id 配对、每次调用带预算(search 1.5s/ingest 5s/boot 60s)、超时返回空、
+  进程死了按需重拉(上限 5 次)、起不来就 unavailable 任务照跑。serve 加
+  `--memsearch <venv python>` 才起;不给则只有索引级开局推送。Agent 拿到
+  `corpus_search`/`corpus_expand`(主会话与开发助手;repo 由宿主固定,结果
+  封顶 8 条,触发写成动作锚定的准则),推送三时刻:开局(语义命中 + 索引
+  候选并进使命)、进入新阶段(插话两行,同阶段不重复)、首次改某目录(插话
+  一句,每目录一次);推送 `via: memory_push`,不算人的插话。失锚的(路径在
+  现场已不存在)不推。「这单用到的」足迹在任务面板只读展示。**已验**:假
+  sidecar(同协议 stub)承载预算超时/自杀重拉/起不来/工具语义/三时刻推送与
+  足迹;真 memsearch sidecar 用例(venv 缺席显式 skip):health/ingest/换说法
+  search 首位命中/expand;演示服务开 `--memsearch` 起真 sidecar,新任务开局
+  使命里出现语义命中的记忆且足迹落账。**未验**:真模型 + sidecar(演示形态
+  跑真模型会改部署仓,见上一条,要等内核模式 + 容器的试跑);阶段切换与首改
+  目录推送只在假会话上验过 steer 文案,没在真 pi 会话里看过送达时序;
+  sidecar 常驻 RSS 与并发只有单机实测(内网 Linux 1.2 GB;本机 macOS/Python 3.13
+  preflight 4.7 实测 2.0 GB,部署预留按 2.5 GB 起算),没做多任务并发压测。
 - **2026-09-01 定向知识提取 + 插话 @ 引用首版**(用户拍板:"自己造
   skill 知识并且支持随时引用,防止开局忘选了"):
   ①提取:Skill 提交面板新增「从参考代码仓提取草稿」——填参考仓+一句话

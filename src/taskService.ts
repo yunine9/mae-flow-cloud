@@ -11,15 +11,16 @@
 
 import {
   accessSync,
+  appendFileSync,
   chmodSync,
   constants,
   cpSync,
   existsSync,
   lstatSync,
-  mkdtempSync,
   mkdirSync,
-  readdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -48,6 +49,9 @@ import {
   type MemoryInput,
   type MemoryRecord,
 } from "./taskMemory.ts";
+import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
+import { createMemoryTools, renderMemoryHits } from "./memoryTools.ts";
+import { dirname as pathDirname, relative as pathRelative } from "node:path";
 import {
   blockingAnnotations,
   parseWorkspaceReviewReceipts,
@@ -1074,6 +1078,16 @@ export interface TaskServiceOptions {
    * 平台/prepush 不加载,create() 直接拒绝,launchOptions 摆出明面
    * 的 blocker。历史任务台账仍可读(管理/兜底不受影响)。 */
   requirementDisabled?: boolean;
+  /** 任务记忆检索旁路(docs/knowledge-memory-design.md §7)。缺席=没有
+   * sidecar:开局推送退回索引级、Agent 没有 corpus_search 工具,任务照跑。 */
+  memory?: {
+    python: string;
+    script: string;
+    milvusPath: string;
+    provider?: string;
+    model?: string;
+    env?: NodeJS.ProcessEnv;
+  };
   /** 可选的专用视觉模型角色。模型定义位于同一份 models.json，主 Agent
    * 仅通过 InspectImage Tool 调用它，不切换主会话模型。 */
   vision?: VisionModelChoice;
@@ -1591,8 +1605,12 @@ interface TaskState {
   /** 暂停边界从 Pi 内存队列取回的主任务补充。恢复主会话前一直保留，
    * listInterrupts 也据此如实维持“待读取”。 */
   pendingMainSteers?: string[];
-  /** 开局推送过哪些记忆(本次会话);第二期接"这单用到的"。 */
+  /** 开局推送过哪些记忆(本次会话)。 */
   memoryBriefingIds?: string[];
+  /** 阶段切换推送的去重:上一次看到的阶段名。 */
+  memoryPhaseSeen?: string;
+  /** 首次改目录提醒的去重:本会话已提醒过的目录。 */
+  memoryDirsReminded?: Set<string>;
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
@@ -1947,6 +1965,21 @@ export class TaskService {
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
+    if (options.memory) {
+      // 旁路:起不来只记日志,任务照跑;首次真用时再等 ready。
+      this.memorySidecar = new MemorySidecar({
+        python: options.memory.python,
+        script: options.memory.script,
+        corpusDir: join(options.dataDir, "corpus"),
+        milvusPath: options.memory.milvusPath,
+        provider: options.memory.provider,
+        model: options.memory.model,
+        env: options.memory.env,
+        log: options.log,
+      });
+      void this.memorySidecar.start().then((ok) => options.log?.(
+        ok ? "任务记忆检索旁路已就绪" : "任务记忆检索旁路未就绪,开局推送退回索引级"));
+    }
     // 被彻底删除的最高编号不能在重启后复用；否则旧通知/浏览器收藏会
     // 悄悄指向一张毫不相关的新任务。水位单独留在 dataDir，不属于任
     // 何任务历史，因此硬删除不会碰它。
@@ -2280,6 +2313,7 @@ export class TaskService {
    * 业务状态；下次启动仍由 recover 按原来的 task.json 续跑。
    */
   async shutdown(): Promise<void> {
+    this.memorySidecar?.stop();
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     this.shutdownPromise = (async () => {
@@ -3935,6 +3969,7 @@ export class TaskService {
       };
       task.progressPulse = progressSource;
       task.progressCache = progress;
+      this.maybePushPhaseMemories(task, progress.current_phase);
       const now = new Date().toISOString();
       task.summary.last_progress_at = now;
       task.summary.updated_at = now;
@@ -4253,6 +4288,7 @@ export class TaskService {
   }
 
   private memoryStore?: MemoryStore;
+  private memorySidecar?: MemorySidecar;
 
   private memories(): MemoryStore {
     return this.memoryStore ??= new MemoryStore(this.options.dataDir);
@@ -4575,17 +4611,26 @@ export class TaskService {
   /** 开局推送的记忆:同仓、未撤回未覆盖,人判的排前、新的排前,最多 8 条。
    * 措辞是线索不是命令——"有人在这里要求过",判断仍在 Agent 和门禁。
    * 旁路:索引读不动就不推,绝不挡启动。 */
-  private memoryBriefing(task: TaskState): string | undefined {
+  private async memoryBriefing(task: TaskState): Promise<string | undefined> {
     try {
-      const repo = repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
+      const repo = this.memoryRepo(task);
       const weight = (row: MemoryRecord) => row.judged_by === "human" ? 1 : 0;
-      const rows = this.memories().list()
-        .filter((row) => row.repo === repo && !row.withdrawn && !row.superseded_by
-          && row.scope !== "one_off" && row.task !== task.summary.id)
-        .sort((a, b) => weight(b) - weight(a) || b.at.localeCompare(a.at))
-        .slice(0, 8);
+      const candidates = this.memoryCandidates(task);
+      // sidecar 在场就按需求语义再捞一把:换说法的老坑靠索引键捞不到。
+      const hits = await this.memorySearch(task, {
+        query: task.summary.requirement.slice(0, 300), limit: 8,
+      });
+      const byId = new Map(candidates.map((row) => [row.id, row] as const));
+      const semantic = (hits ?? []).map((hit) => byId.get(hit.id))
+        .filter((row): row is MemoryRecord => !!row);
+      const rest = candidates
+        .filter((row) => !semantic.some((hit) => hit.id === row.id))
+        .sort((a, b) => weight(b) - weight(a) || b.at.localeCompare(a.at));
+      const rows = [...semantic, ...rest].slice(0, 8);
       if (!rows.length) return undefined;
       task.memoryBriefingIds = rows.map((row) => row.id);
+      this.logMemoryUsage(task, { moment: "launch", ids: task.memoryBriefingIds });
+      void repo;
       const lines = rows.map((row) => {
         const who = row.judged_by === "human" ? "人确认" : "流水线";
         const where = row.paths[0]
@@ -4603,8 +4648,128 @@ export class TaskService {
     }
   }
 
+  private memoryRepo(task: TaskState): string {
+    return repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
+  }
+
+  /** 可推送的记忆:同仓、未撤回未覆盖、非一次性、非本单;带路径的还要
+   * 路径在现场里还存在(失锚的不推,只留全文检索——§6)。 */
+  private memoryCandidates(task: TaskState): MemoryRecord[] {
+    const repo = this.memoryRepo(task);
+    return this.memories().list().filter((row) => row.repo === repo
+      && !row.withdrawn && !row.superseded_by && row.scope !== "one_off"
+      && row.task !== task.summary.id
+      && (!task.cwd || !row.paths[0] || existsSync(join(task.cwd, row.paths[0]))));
+  }
+
+  private async memorySearch(
+    task: TaskState,
+    input: { query: string; pathPrefix?: string; limit?: number },
+  ): Promise<MemorySearchHit[] | undefined> {
+    if (!this.memorySidecar) return undefined;
+    return this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
+  }
+
+  /** 给 Agent 的检索工具;没有 sidecar 就不给(索引级没法回答自然语言)。 */
+  private memoryTools(task: TaskState): unknown[] | undefined {
+    if (!this.memorySidecar) return undefined;
+    return createMemoryTools({
+      repo: this.memoryRepo(task),
+      search: (input) => this.memorySearch(task, input),
+      expand: (id) => this.memorySidecar!.expand(id),
+      onUse: (event) => this.logMemoryUsage(task, event),
+    });
+  }
+
+  /** 这单用到的记忆足迹:旁路,写失败只记日志。 */
+  private logMemoryUsage(task: TaskState, event: {
+    moment: "launch" | "phase" | "edit" | "search" | "expand";
+    ids: string[]; query?: string; phase?: string; dir?: string;
+  }): void {
+    try {
+      appendFileSync(join(task.summary.workspace, "memory-usage.jsonl"),
+        JSON.stringify({ ts: new Date().toISOString(), ...event }) + "\n", "utf-8");
+    } catch (error) {
+      this.options.log?.(`任务 ${task.summary.id} 记忆足迹写入失败: ${String(error)}`);
+    }
+  }
+
+  listTaskMemoryUsage(id: string): Array<Record<string, unknown>> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const path = join(task.summary.workspace, "memory-usage.jsonl");
+    if (!existsSync(path)) return [];
+    return readFileSync(path, "utf-8").split("\n").filter((line) => line.trim())
+      .flatMap((line) => {
+        try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+      });
+  }
+
+  /** §8-3 首次改某目录:该目录有记忆且本会话没提过,插一句。每目录一次。 */
+  private onMemoryFileIntent(task: TaskState, path: string): void {
+    if (!task.driver || !task.cwd) return;
+    const absolute = path.startsWith("/") ? path : join(task.cwd, path);
+    const rel = pathRelative(task.cwd, absolute);
+    if (!rel || rel.startsWith("..")) return;
+    const dir = pathDirname(rel) === "." ? "" : pathDirname(rel);
+    task.memoryDirsReminded ??= new Set();
+    if (task.memoryDirsReminded.has(dir)) return;
+    task.memoryDirsReminded.add(dir);
+    const rows = this.memoryCandidates(task)
+      .filter((row) => row.paths.some((item) =>
+        dir ? item.startsWith(`${dir}/`) : !item.includes("/")))
+      .sort((a, b) => (b.judged_by === "human" ? 1 : 0) - (a.judged_by === "human" ? 1 : 0)
+        || b.at.localeCompare(a.at));
+    if (!rows.length) return;
+    const top = rows[0];
+    const text = `【任务记忆】你正要改 ${dir || "仓库根"} 目录,这里有 ${rows.length} 条`
+      + `历史记忆,最重的一条:${top.trigger}:${top.conclusion.slice(0, 160)}`
+      + `(${top.id})。是线索不是规则;想看全文用 corpus_expand。`;
+    this.logMemoryUsage(task, { moment: "edit", ids: rows.map((row) => row.id), dir });
+    void task.driver.steer(text, { via: "memory_push", memory_ids: rows.map((r) => r.id) })
+      .catch((error) => this.options.log?.(
+        `任务 ${task.summary.id} 首改目录记忆提醒未送达: ${String(error)}`));
+  }
+
+  /** §8-2 阶段切换:进入新阶段时按范围再捞一把。第一次看到阶段不推
+   * (开局推送已覆盖),同阶段不重复。旁路、带预算(sidecar 自己的)。 */
+  private maybePushPhaseMemories(task: TaskState, phase: string): void {
+    if (!phase) return;
+    const previous = task.memoryPhaseSeen;
+    if (previous === phase) return;
+    task.memoryPhaseSeen = phase;
+    if (previous === undefined || !task.driver || task.summary.status !== "running") return;
+    void (async () => {
+      const candidates = this.memoryCandidates(task);
+      if (!candidates.length) return;
+      const hits = await this.memorySearch(task, {
+        query: `${phase}:${task.summary.requirement.slice(0, 200)}`, limit: 5,
+      });
+      const byId = new Map(candidates.map((row) => [row.id, row] as const));
+      let rows = (hits ?? []).map((hit) => byId.get(hit.id))
+        .filter((row): row is MemoryRecord => !!row);
+      if (!rows.length) {
+        rows = candidates.filter((row) => row.phase === phase).slice(0, 5);
+      }
+      if (!rows.length) return;
+      const driver = task.driver;
+      if (!driver) return;
+      const text = `【任务记忆】进入「${phase}」。本仓有 ${rows.length} 条相关记忆,先看一眼:\n`
+        + renderMemoryHits(rows.map((row) => ({
+          id: row.id, score: 0, judged_by: row.judged_by, at: row.at,
+          paths: row.paths, line: row.line,
+          snippet: `${row.trigger}:${row.conclusion}`,
+        })));
+      this.logMemoryUsage(task, { moment: "phase", ids: rows.map((row) => row.id), phase });
+      await driver.steer(text, { via: "memory_push", memory_ids: rows.map((r) => r.id) });
+    })().catch((error) => this.options.log?.(
+      `任务 ${task.summary.id} 阶段记忆推送未送达: ${String(error)}`));
+  }
+
   private recordMemory(task: TaskState, input: MemoryInput): MemoryRecord {
     const record = this.memories().record(input);
+    // 索引是旁路:失败只记日志,正本已在 md 里,删索引重建也不丢。
+    void this.memorySidecar?.ingest(join(this.memories().root, record.file));
     task.summary.memories_recorded = (task.summary.memories_recorded ?? 0) + 1;
     this.persist(task);
     this.options.log?.(
@@ -10262,6 +10427,9 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: task.cwd,
         agentDir,
+        // 开发助手也能查记忆(§8:所有会话同有);不挂首改目录提醒——
+        // 人在接管,提醒是给自动跑的主 Agent 的。
+        extraTools: this.memoryTools(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
@@ -12069,7 +12237,7 @@ export class TaskService {
       }
       // 记忆开局推送(docs/knowledge-memory-design.md §8-1):Agent 不会自己
       // 想起来查,宿主替它查。第一期按仓从索引挑,不经 sidecar。
-      const briefing = this.memoryBriefing(task);
+      const briefing = await this.memoryBriefing(task);
       if (briefing) prompt = `${prompt}\n\n${briefing}`;
       if (task.pendingMainSteers?.length) {
         promptSteerCount = task.pendingMainSteers.length;
@@ -12097,6 +12265,9 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: cwd,
         agentDir,
+        // 任务记忆(§8):检索工具 + 首次改目录提醒。没有 sidecar 就都不挂。
+        extraTools: this.memoryTools(task),
+        onFileMutationIntent: (path) => this.onMemoryFileIntent(task, path),
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),

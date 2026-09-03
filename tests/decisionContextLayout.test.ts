@@ -414,3 +414,26 @@ test("任务记忆第一期契约:记为记忆去向、面板只读列表、导�
   assert.match(memory, /MEMORY_BODY_LIMIT = 2000/);
   assert.match(memory, /appendFileSync\(this\.indexPath/, "索引只追加");
 });
+
+test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
+  const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
+  assert.match(service, /extraTools: this\.memoryTools\(task\),\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
+    "主会话同时挂检索工具与首改目录提醒");
+  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 2,
+    "主会话 + 开发助手各挂一次;Build-Fix 不挂(它不是跟人协作的会话)");
+  assert.match(service, /this\.maybePushPhaseMemories\(task, progress\.current_phase\)/,
+    "阶段切换推送挂在进度读取处");
+  assert.match(service, /via: "memory_push"/, "推送不算人的插话");
+  const driver = readFileSync(join(process.cwd(), "src/sessionDriver.ts"), "utf-8");
+  assert.match(driver, /onFileMutationIntent\?: \(path: string, tool: string\) => void/);
+  const tools = readFileSync(join(process.cwd(), "src/memoryTools.ts"), "utf-8");
+  assert.match(tools, /name: "corpus_search"/);
+  assert.doesNotMatch(tools, /repo: Type\./, "repo 由宿主固定,Agent 传不了");
+  const serve = readFileSync(join(process.cwd(), "src/serve.ts"), "utf-8");
+  assert.match(serve, /flag\("--memsearch"\)/);
+  const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
+  assert.match(footprint, /这单用到的/);
+  assert.match(footprint, /listTaskMemoryUsage\(taskId\)/);
+  const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
+  assert.match(server, /parts\[3\] === "usage"/);
+});

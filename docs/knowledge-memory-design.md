@@ -214,13 +214,21 @@ Skill 和团队文档进 memsearch 做索引在技术上没有障碍,能补「�
 
 ## 13. 分期
 
-1. **第一期(现在)**:记录契约与写入;`annotation`、`prepush_fix`、`user_note`
-   三个来源;「记为记忆」批注去向;任务面板「这单记下的」;`index.jsonl`。
-   不含 sidecar——先让记忆攒起来、看得见。
-2. **第二期**:sidecar、`corpus_search`、三时刻推送、「这单用到的」、时间线
-   事件、模型起草 trigger/scope、失锚检查。
-3. **第三期**:其余来源、目录摘要层(单目录超 15 条)、效果账、沉底归档、
-   效能页只读页签。
+1. **第一期(2026-09-03 已落)**:记录契约与写入;`annotation`、`prepush_fix`、
+   `user_note` 三个来源;「记为记忆」批注去向;任务面板「这单记下的」;
+   `index.jsonl`;索引级开局推送。
+2. **第二期(2026-09-03 已落)**:`harness/memsearch-sidecar.py` + 宿主客户端
+   (`src/memorySidecar.ts`,预算/重拉/fail-open);`corpus_search`/`corpus_expand`
+   挂主会话与开发助手;三时刻推送(开局并进使命、阶段切换插话、首次改目录
+   插话,`via: memory_push` 不算人的插话);「这单用到的」足迹;失锚过滤;
+   serve `--memsearch <venv python>`。**延后到三期**:模型起草 trigger/scope
+   (第一期起草用确定性模板,只追加纪律下事后起草要另开覆盖记录,先不做)、
+   时间线事件(推送已在足迹里可见)。
+3. **第三期**:其余来源、模型起草 trigger/scope、目录摘要层(单目录超 15 条)、
+   效果账、沉底归档、效能页只读页签、preflight 的 sidecar 演练项。
+
+**部署文档**:内网 memsearch 部署(pip 源、根盘空间、HF 离线缓存结构、软链
+两级上级四个坑)记录在内网主机的 `docs/memsearch-deploy.md`,尚未回灌到本仓。
 
 ## 14. 已拍板
 

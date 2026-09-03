@@ -1824,14 +1824,7 @@ export function TaskWorkspace({
                 hidden={executionView !== "knowledge"}>
                 <KnowledgeFootprint usage={task.knowledge_usage}
                   utMethod={task.ut_generation_method}
-                  taskId={task.id} taskStatus={task.status}
-                  repositories={task.repositories ?? []}
-                  repositoryTechnologies={[...new Set(
-                    (task.repository_profiles ?? []).flatMap((item) =>
-                      item.technologies))]}
-                  businessModules={(task.business_modules ?? []).map((module) => ({
-                    id: module.id, name: module.name,
-                  }))} />
+                  taskId={task.id} taskStatus={task.status} />
               </div>
               <div className="ws-execution-subview is-tokens"
                 hidden={executionView !== "tokens"}>

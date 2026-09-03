@@ -540,6 +540,13 @@ async function main(): Promise<void> {
   // 统一任务执行面:普通编码/修复/子 Agent/Build-Fix 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
+  // 任务记忆检索旁路(docs/knowledge-memory-design.md §7):给 venv 的
+  // python 就起常驻 sidecar;不给则只有索引级的开局推送,任务照跑。
+  const memsearchPython = flag("--memsearch");
+  if (memsearchPython && !existsSync(memsearchPython)) {
+    console.error(`[serve] --memsearch 指向的 python 不存在: ${memsearchPython}`);
+    process.exit(2);
+  }
   const isolateMemory = flag("--isolate-memory") ?? "8g";
   const isolateCpus = flag("--isolate-cpus") ?? "8";
   const hostAvailableCpus = availableParallelism();
@@ -898,6 +905,11 @@ async function main(): Promise<void> {
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     deploymentRuntime,
+    ...(memsearchPython ? { memory: {
+      python: memsearchPython,
+      script: join(REPO_ROOT, "harness", "memsearch-sidecar.py"),
+      milvusPath: join(dataDir, "memsearch", "milvus.db"),
+    } } : {}),
     ...(issueOnly ? { requirementDisabled: true } : {}),
     vision: visionProvider && visionModel
       ? { provider: visionProvider, model: visionModel } : undefined,

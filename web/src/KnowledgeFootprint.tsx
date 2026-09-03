@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
 import { OverlayDialog } from "./WarmupPanel";
 import {
-  createKnowledgeCandidate,
   listTaskMemories,
+  listTaskMemoryUsage,
   readTaskMemory,
+  type MemoryUsageRow,
   withdrawTaskMemory,
   type MemoryRecord,
   interruptTask,
   type KnowledgeAction,
-  type KnowledgeForm,
   type TaskKnowledgeUsage,
 } from "./api";
-import { KnowledgeLanguagePicker } from "./KnowledgeLanguages";
 
 const KIND = { rules: "规则", document: "文档", skill: "Skill" } as const;
 const ACTION: Record<KnowledgeAction, string> = {
@@ -21,17 +20,6 @@ const ACTION: Record<KnowledgeAction, string> = {
 const ROLE = { main: "主 Agent", subagent: "子 Agent", prepush: "Build-Fix",
   warmup: "预热编译", "developer-assistant": "开发助手" } as const;
 
-type KnowledgeCandidateDraft = {
-  nature?: "business" | "engineering";
-  form: KnowledgeForm;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  content: string;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-};
 
 function time(value: string): string {
   const date = new Date(value);
@@ -41,34 +29,26 @@ function time(value: string): string {
   });
 }
 
-function shortRepository(value: string): string {
-  return value.replace(/\/+$/, "").split("/").at(-1)?.replace(/\.git$/i, "")
-    || value;
-}
-
-export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
-  repositories = [], repositoryTechnologies = [], businessModules = [] }: {
+export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
   usage?: TaskKnowledgeUsage;
   utMethod?: string;
   taskId: string;
   taskStatus: string;
-  repositories?: string[];
-  repositoryTechnologies?: string[];
-  businessModules?: Array<{ id: string; name: string }>;
 }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
-  const [captureOpen, setCaptureOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   // 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表 + 撤回。
   // 不逐条在文档上打标——文档太多,标满了反而看不见(用户拍板)。
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [memoryUsage, setMemoryUsage] = useState<MemoryUsageRow[]>([]);
   const [memoryOpen, setMemoryOpen] = useState<{ id: string; content: string }>();
   const [memoryBusy, setMemoryBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    const load = () => void listTaskMemories(taskId).then((rows) => {
-      if (alive) setMemories(rows);
-    });
+    const load = () => {
+      void listTaskMemories(taskId).then((rows) => { if (alive) setMemories(rows); });
+      void listTaskMemoryUsage(taskId).then((rows) => { if (alive) setMemoryUsage(rows); });
+    };
     load();
     const timer = setInterval(load, 15_000);
     return () => { alive = false; clearInterval(timer); };
@@ -88,12 +68,6 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
     setMemories(await listTaskMemories(taskId));
   }
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState<KnowledgeCandidateDraft>({
-    form: "document" as KnowledgeForm,
-    title: "", summary: "", when_to_use: "", content: "",
-    business_module_ids: [] as string[], repositories: [...repositories],
-    technologies: [...repositoryTechnologies],
-  });
   const consumed = usage?.resources.filter((item) =>
     item.loaded_count > 0 || item.read_count > 0) ?? [];
   const resources = usage?.resources ?? [];
@@ -120,36 +94,6 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
     } finally { setBusy(false); }
   }
 
-  async function submitCandidate(event: React.FormEvent) {
-    event.preventDefault();
-    const nature = draft.nature;
-    if (!nature) {
-      setFeedback("请先明确选择：这项内容是业务知识，还是工程知识。");
-      return;
-    }
-    if (nature === "business" && !draft.business_module_ids.length) {
-      setFeedback("业务知识必须至少选择一个归属业务模块。");
-      return;
-    }
-    if (nature === "engineering" && !draft.technologies.length) {
-      setFeedback("工程知识必须至少选择一种适用语言。");
-      return;
-    }
-    setBusy(true); setFeedback("");
-    try {
-      const candidate = await createKnowledgeCandidate(taskId, {
-        ...draft, nature,
-        technologies: nature === "engineering" ? draft.technologies : [],
-      });
-      setFeedback(`已提交知识候选 ${candidate.id}，等待${nature === "business"
-        ? "模块维护者" : "管理员"}审核；不会阻塞本任务。`);
-      setDraft((current) => ({ ...current, nature: undefined,
-        business_module_ids: [], technologies: [], title: "", summary: "",
-        when_to_use: "", content: "" }));
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "知识候选提交失败");
-    } finally { setBusy(false); }
-  }
 
   return <section className="knowledge-footprint"
     aria-labelledby="knowledge-footprint-title">
@@ -157,15 +101,12 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
       <div className="knowledge-footprint-mark" aria-hidden>知</div>
       <div><span>TASK KNOWLEDGE</span><strong id="knowledge-footprint-title">
         本任务知识</strong>
-        <p>看见本任务可用与实际消费的知识，也可中途补充或沉淀；知识旁路不参与流程门禁。</p></div>
+        <p>看见本任务可用与实际消费的知识，可中途提醒 Agent 用某一条；沉淀不在这里做——闭环的意见和修复会自动记成下面的记忆。</p></div>
       <div className="knowledge-footprint-stats" aria-label="知识消费摘要">
         <span><strong>{usage?.summary.used ?? 0}</strong><small>已消费</small></span>
         <span><strong>{resources.length}</strong><small>本任务可用</small></span>
         <button type="button" className="knowledge-catalog-badge"
-          onClick={() => setCatalogOpen(true)}>补充已有知识</button>
-        <button type="button" className="knowledge-catalog-badge capture"
-          onClick={() => { setCaptureOpen(true); setFeedback(""); }}>
-          沉淀新知识</button>
+          onClick={() => { setCatalogOpen(true); setFeedback(""); }}>提醒 Agent 用这条</button>
       </div>
     </header>
 
@@ -195,87 +136,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
           </article>)}
         </div>)}
         {!catalog.length && <div className="knowledge-footprint-empty">
-          本任务还没有可补充的平台知识；可直接沉淀新知识，或在下次发起时关联业务模块并确认技术画像。</div>}
+          本任务还没有可提醒的平台知识；下次发起时关联业务模块并确认技术画像即可。</div>}
       </div>
-    </OverlayDialog>}
-
-    {captureOpen && <OverlayDialog ariaLabel="沉淀新知识"
-      title="从本任务沉淀知识" onClose={() => setCaptureOpen(false)}>
-      <form className="knowledge-candidate-form" onSubmit={submitCandidate}>
-        <p>先判断正文性质，再选择呈现形态。提交后进入待审；审核发布成功才会推荐给后续任务，不会自动污染团队知识库。</p>
-        <div className="skill-kind-picker two">
-          <button type="button" aria-pressed={draft.nature === "business"}
-            onClick={() => setDraft({ ...draft, nature: "business",
-              technologies: [] })}><strong>业务知识</strong>
-            <small>领域概念、规则、流程与业务边界</small></button>
-          <button type="button" aria-pressed={draft.nature === "engineering"}
-            onClick={() => setDraft({ ...draft, nature: "engineering" })}>
-            <strong>工程知识</strong><small>编码、构建、测试与排障方法</small></button>
-        </div>
-        {!draft.nature && <p className="skill-classification-prompt">
-          必须先明确知识性质；Skill、文档、规则和示例只是呈现形态。</p>}
-        <label><span>呈现形态</span><select value={draft.form}
-          onChange={(event) => setDraft({ ...draft,
-            form: event.target.value as KnowledgeForm })}>
-          <option value="document">文档</option><option value="skill">Skill</option>
-          <option value="rule">规则</option><option value="example">示例</option>
-        </select></label>
-        <div className="business-module-form-grid">
-          <label><span>标题</span><input required value={draft.title}
-            onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label><span>什么时候应该使用</span><input required
-            value={draft.when_to_use} onChange={(event) => setDraft({
-              ...draft, when_to_use: event.target.value })} /></label>
-        </div>
-        <label><span>一句话摘要</span><textarea required rows={2}
-          value={draft.summary} onChange={(event) => setDraft({
-            ...draft, summary: event.target.value })} /></label>
-        <div className="knowledge-candidate-scope">
-          <span><strong>{draft.nature === "business" ? "归属业务模块（必选，可多选）"
-            : "业务模块上下文（可选）"}</strong></span>
-          <div className="skill-module-picker">{businessModules.map((module) =>
-            <button type="button" key={module.id}
-              aria-pressed={draft.business_module_ids.includes(module.id)}
-              onClick={() => setDraft({ ...draft, business_module_ids:
-                draft.business_module_ids.includes(module.id)
-                  ? draft.business_module_ids.filter((id) => id !== module.id)
-                  : [...draft.business_module_ids, module.id] })}>
-              {module.name}</button>)}</div>
-        </div>
-        {!!repositories.length && <div className="knowledge-candidate-scope">
-          <span><strong>适用仓库（可多选）</strong><small>不选表示不限仓库</small></span>
-          <div className="skill-module-picker">{repositories.map((repository) =>
-            <button type="button" key={repository}
-              aria-pressed={draft.repositories.includes(repository)}
-              onClick={() => setDraft({ ...draft, repositories:
-                draft.repositories.includes(repository)
-                  ? draft.repositories.filter((item) => item !== repository)
-                  : [...draft.repositories, repository] })}>
-              {shortRepository(repository)}</button>)}</div>
-        </div>}
-        {draft.nature === "engineering" && <div className="knowledge-candidate-scope">
-          <span><strong>适用语言（必选，可多选）</strong><small>
-            匹配不上时由知识治理者修正标签</small></span>
-          <KnowledgeLanguagePicker value={draft.technologies}
-            includeAgnostic={false}
-            onChange={(technologies) => setDraft({ ...draft, technologies })} />
-          {!draft.technologies.length && <p className="skill-classification-prompt">
-            请选择至少一种适用语言。</p>}
-        </div>}
-        <label><span>知识正文（Markdown）</span><textarea required rows={12}
-          value={draft.content} onChange={(event) => setDraft({
-            ...draft, content: event.target.value })} /></label>
-        {feedback && <p className="knowledge-workbench-feedback" role="status">
-          {feedback}</p>}
-        <div className="business-module-form-actions">
-          <span>模糊内容请在正文中标明边界，审核人会明确接纳或驳回原因。</span>
-          <button className="primary" type="submit" disabled={busy
-            || !draft.nature
-            || (draft.nature === "business" && !draft.business_module_ids.length)
-            || (draft.nature === "engineering" && !draft.technologies.length)}>
-            {busy ? "提交中…" : "提交待审"}</button>
-        </div>
-      </form>
     </OverlayDialog>}
 
     <section className="knowledge-memories" aria-labelledby="knowledge-memories-title">
@@ -312,6 +174,31 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
         })}
       </ol> : <div className="knowledge-footprint-empty">
         还没有记下任何东西。检视意见闭环、Build-Fix 修好失败，或在材料上圈选「记为记忆」后会出现在这里。</div>}
+    </section>
+    <section className="knowledge-memories knowledge-memories-used" aria-labelledby="knowledge-memory-usage-title">
+      <header>
+        <div><strong id="knowledge-memory-usage-title">这单用到的</strong>
+          <small>宿主在开局、进入新阶段、首次改某目录时替 Agent 查过并推送的记忆，以及 Agent 自己查过、展开过的。</small></div>
+        <span>{memoryUsage.length} 次</span>
+      </header>
+      {memoryUsage.length ? <ol>
+        {memoryUsage.slice(-12).reverse().map((row, index) => <li key={`${row.ts}-${index}`} className={`moment-${row.moment}`}>
+          <div className="knowledge-memory-row is-static">
+            <i aria-hidden>{row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
+              : row.moment === "edit" ? "改" : row.moment === "search" ? "查" : "展"}</i>
+            <span>
+              <strong>{row.moment === "launch" ? "开局推送"
+                : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
+                  : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时提醒`
+                    : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`
+                      : "Agent 展开记忆"}</strong>
+              <em>{row.ids.length ? row.ids.join("、") : "没有命中"}</em>
+              <small>{time(row.ts)}</small>
+            </span>
+          </div>
+        </li>)}
+      </ol> : <div className="knowledge-footprint-empty">
+        还没有推送或检索。任务启动时会按仓推送历史记忆；Agent 也可以自己用 corpus_search 查。</div>}
     </section>
     {utMethod && <p className={`knowledge-ut-method${
       utMethod === "仓内既有写法" ? " is-fallback" : ""}`}>

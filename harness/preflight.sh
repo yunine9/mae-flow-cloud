@@ -7,6 +7,7 @@
 # 用法(在 mae-flow-cloud 仓根执行):
 #   harness/preflight.sh                      # 只跑本机可判的项
 #   harness/preflight.sh --models <json> --provider <名>
+#   harness/preflight.sh --memsearch <venv 的 python>   # 记忆检索旁路体检
 #                                             # 加:网关连通(1 token 探针)
 #
 # 清单项 5(真需求走到 await_merge)与 6(杀进程重启恢复)是人工/
@@ -20,13 +21,14 @@ ok()   { echo "✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "❌ $1"; FAIL=$((FAIL+1)); }
 skip() { echo "⏭️  $1"; SKIP=$((SKIP+1)); }
 
-MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""; ADAPTER=""
+MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""; ADAPTER=""; MEMSEARCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --models)        MODELS=$2;        shift 2 ;;
     --provider)      PROVIDER=$2;      shift 2 ;;
     --isolate-image) ISOLATE_IMAGE=$2; shift 2 ;;
     --adapter)       ADAPTER=$2;       shift 2 ;;
+    --memsearch)     MEMSEARCH=$2;     shift 2 ;;
     *) echo "未知参数: $1"; exit 2 ;;
   esac
 done
@@ -157,6 +159,64 @@ if [ -n "$ADAPTER" ]; then
   fi
 else
   skip "4.5 适配层可达:给 --adapter <url> 后执行(内网进场项)"
+fi
+
+# 4.7 记忆检索旁路(docs/knowledge-memory-design.md §7/§11):给 venv 的
+# python 就真起一次 sidecar——ready 要在 60s 内(模型冷加载),一次 search
+# 要在预算 1.5s 内,并报常驻 RSS(部署要预留 2GB)。索引在临时目录,不碰真语料。
+if [ -n "$MEMSEARCH" ]; then
+  if [ ! -x "$MEMSEARCH" ]; then
+    bad "4.7 --memsearch 指向的 python 不可执行($MEMSEARCH)"
+  else
+    PF_MEM=$(mktemp -d /tmp/preflight-memsearch.XXXXXX)
+    mkdir -p "$PF_MEM/corpus/_probe/2026-09"
+    cat > "$PF_MEM/corpus/_probe/2026-09/c-preflight-000001.md" <<'MD'
+---
+id: "c-preflight-000001"
+source: user_note
+judged_by: human
+scope: general
+repo: "_probe"
+paths: ["src/Probe.java"]
+task: "preflight"
+evidence: "preflight"
+at: "2026-09-03T00:00:00.000Z"
+---
+# 上线自查探针
+
+## 结论
+黑名单判断必须在渠道开关之前。
+MD
+    if "$MEMSEARCH" - "$MEMSEARCH" "$PF_MEM" > /tmp/preflight-memsearch.log 2>&1 <<'PY'
+import json, os, subprocess, sys, time
+python, root = sys.argv[1], sys.argv[2]
+p = subprocess.Popen([python, "harness/memsearch-sidecar.py", "--corpus", f"{root}/corpus",
+                      "--milvus", f"{root}/milvus.db"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+t0 = time.time(); boot = json.loads(p.stdout.readline() or "{}"); boot_s = time.time() - t0
+assert boot.get("ready") is True, f"sidecar 没 ready: {boot}"
+assert boot_s < 60, f"ready 用了 {boot_s:.1f}s,超过 60s 预算"
+def ask(req):
+    t = time.time(); p.stdin.write(json.dumps(req) + "\n"); p.stdin.flush()
+    line = p.stdout.readline(); return json.loads(line), time.time() - t
+health, _ = ask({"id": 1, "op": "health"}); assert health.get("ok") is True, health
+idx, _ = ask({"id": 2, "op": "reindex"}); assert idx.get("ok") is True, idx
+hits, search_s = ask({"id": 3, "op": "search", "query": "被关掉的渠道为什么还跑黑名单", "repo": "_probe", "limit": 3})
+assert hits.get("hits") and hits["hits"][0]["id"] == "c-preflight-000001", hits
+assert search_s < 1.5, f"search 用了 {search_s:.2f}s,超过 1.5s 预算"
+rss_kb = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(p.pid)]).strip() or 0)
+print(f"ready {boot_s:.1f}s, search {search_s:.2f}s, rss {rss_kb // 1024} MB")
+p.stdin.close(); p.wait(timeout=10)
+PY
+    then
+      ok "4.7 记忆检索旁路可用($(tail -1 /tmp/preflight-memsearch.log))"
+    else
+      bad "4.7 记忆检索旁路体检失败(日志 /tmp/preflight-memsearch.log)"
+    fi
+    rm -rf "$PF_MEM"
+  fi
+else
+  skip "4.7 记忆检索旁路:给 --memsearch <venv python> 后执行"
 fi
 
 echo

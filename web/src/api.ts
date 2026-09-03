@@ -2709,6 +2709,22 @@ export interface MemoryRecord {
   superseded_by?: string;
 }
 
+/** 这单用到的记忆:宿主三个时刻的推送 + Agent 自己的检索/展开。 */
+export interface MemoryUsageRow {
+  ts: string;
+  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  ids: string[];
+  query?: string;
+  phase?: string;
+  dir?: string;
+}
+
+export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRow[]> {
+  const response = await fetch(`/tasks/${taskId}/memories/usage`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
 export async function listTaskMemories(taskId: string): Promise<MemoryRecord[]> {
   const response = await fetch(`/tasks/${taskId}/memories`);
   if (!response.ok) return [];

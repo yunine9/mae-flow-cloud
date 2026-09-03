@@ -245,7 +245,7 @@ test("开局推送:同仓、未撤回、非本单的记忆按人判优先挑最�
     const id = svc.create("给手机号打码").id;
     const internal = (svc as any).tasks.get(id);
     internal.summary.repo_url = "git@example.com:demo/notify-service.git";
-    const briefing = String((svc as any).memoryBriefing(internal));
+    const briefing = String(await (svc as any).memoryBriefing(internal));
     assert.match(briefing, /^本仓的任务记忆/);
     assert.match(briefing, /是线索不是规则/);
     const lines = briefing.split("\n").slice(1);
@@ -260,7 +260,7 @@ test("开局推送:同仓、未撤回、非本单的记忆按人判优先挑最�
       anchor: "x", note: "本单刚记的", kind: "code", route: "memory",
     });
     assert.ok(own.id);
-    assert.equal(String((svc as any).memoryBriefing(internal)).split("\n").length, 3);
+    assert.equal(String(await (svc as any).memoryBriefing(internal)).split("\n").length, 3);
   } finally {
     await svc.shutdown();
   }
