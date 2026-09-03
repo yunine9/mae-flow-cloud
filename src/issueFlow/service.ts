@@ -692,6 +692,12 @@ export class IssueFlowService {
     return account ? rows.filter((row) => row.account === account) : rows;
   }
 
+  /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
+   *  是否在运行。终态会话容器应已停,此探活是 belt-and-suspenders。 */
+  hasRunningContainer(id: string): boolean {
+    return !!this.live.get(id)?.container?.isAlive;
+  }
+
   private require(id: string): LiveIssue {
     const live = this.live.get(id);
     if (!live) throw new IssueNotFoundError(id);
