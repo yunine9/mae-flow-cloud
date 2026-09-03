@@ -41,7 +41,10 @@ import {
   taskContainerInstance,
   type TaskContainerLimits,
 } from "../containerRuntime.ts";
-import { mirrorPipelineArtifacts } from "../pipelineMirror.ts";
+import {
+  isBlindPipelineInput,
+  mirrorPipelineArtifacts,
+} from "../pipelineMirror.ts";
 import { repairBudget } from "./pipelineRepair.ts";
 import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
 import {
@@ -1408,8 +1411,7 @@ export class IssueFlowService {
       waitingId: gate ? gate.id : record!.waiting_id,
       stateVersion: gate ? gate.state_version : record!.state_version,
       taskId: live.id,
-      subject: state.ticket
-        ? `${state.title}(单号 ${state.ticket})` : state.title,
+      subject: this.issueSubject(live),
       account: state.account,
       step: state.stage_note || state.stage,
       context: gate ? gate.context : record?.context,
@@ -2902,6 +2904,14 @@ export class IssueFlowService {
       saveState(live.root, state);
       this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽(${repo})`
         + ` @ ${sha.slice(0, 12)}`);
+      // 放弃点通知(票 81):机器等不起了就是需要人的时刻,主动喊人,
+      // 不让用户靠刷网页发现停机。幂等见 notifyPipelineStopped。
+      this.notifyPipelineStopped(live,
+        `pipeline_watch_timeout:${repo}:${sha}`,
+        `${this.issueSubject(live)}:仓 ${repo} 流水线轮询预算耗尽`
+          + `(第 ${state.pipelines[repo].round ?? 1} 轮验证,`
+          + `提交 ${sha.slice(0, 12)}),流水线在预算内迟迟未出结果,`
+          + "自动监看已停止。请人工查看 MR/流水线,处理后发消息继续");
     }
   }
 
@@ -3090,6 +3100,48 @@ export class IssueFlowService {
         + `${dims})@ ${sha.slice(0, 12)},${raised ? "举卡请人贴原文" : "已有闸,留痕停机"}`);
       return;
     }
+    // ③′ 盲输入闸(票 81):平台没给 checks(failedDimensions 为空,
+    // 上面的全缺分支够不着)、失败摘要抠掉链接后没有诊断内容、镜像产物
+    // 又是零——公共判据 isBlindPipelineInput 三条件同时成立才拦(触发
+    // 面收窄:产物在场/摘要真实内容/checks 结构化明细一律放行)。此时
+    // 修复会话手里没有任何可信失败证据,派修只会猜改:并入"证据全缺"
+    // 同一条 pipeline_evidence 举卡路,请人把报错原文粘贴进卡上作答。
+    // 与全缺同纪律:不派回合、不耗预算(reds 只在真派回合时 +1)。
+    if (assessment.failedDimensions.length === 0
+        && isBlindPipelineInput(run.log ?? "", artifacts.length > 0)) {
+      const note = "流水线红灯但平台失败摘要只有链接(无 checks 明细)且无镜像"
+        + "产物——已举卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
+      watch.last_error = note;
+      state.stage_note = note;
+      const raised = this.raisePipelineGate(live, repo, sha,
+        "pipeline_evidence",
+        "流水线红灯,但平台摘要只有链接且无产物——请把平台上失败项的"
+          + "报错原文粘贴进本卡作答,平台会带着证据继续修复",
+        [
+          "**盲输入原因**",
+          "",
+          "平台摘要只有链接且无产物:平台没有给出 checks 结构化明细,"
+            + "失败摘要抠掉链接后没有可定位的报错,失败产物也没有镜像"
+            + "下来——修复会话手里没有任何可信失败证据,派修只会猜改。",
+          "",
+          "**镜像产物**",
+          "",
+          artifacts.length
+            ? `失败产物全文已镜像到会话工作区 pipeline/ 目录(${artifacts.join("、")})。`
+            : "平台未返回本次失败产物,可到交付平台的 MR/流水线页面查看详情。",
+          "",
+          "**怎么办**",
+          "",
+          "把平台上失败项的报错原文(带文件/行号/堆栈)直接粘贴进本卡的"
+            + "输入框提交。平台会把原文作为人工证据注入下一修复回合(该轮"
+            + "会消耗修复轮预算),AI 按原文定位修复后同分支再推,流水线"
+            + "重新监看。空答复无法作为修复证据。",
+        ].join("\n"));
+      if (!raised) saveState(live.root, state);
+      this.log(`[issue-flow] ${live.id} 流水线红灯盲输入(${repo})`
+        + ` @ ${sha.slice(0, 12)},${raised ? "举卡请人贴原文" : "已有闸,留痕停机"}`);
+      return;
+    }
     // 修复轮预算(与需求侧同一管理页旋钮 repair_rounds,缺省 20):
     // 走到这里都是"可修"的红灯(不可修/证据全缺已在上面停表),派
     // 修复回合前才记一轮,绿了清零;超限停止自动回灌修复——留痕(上面的
@@ -3107,6 +3159,14 @@ export class IssueFlowService {
       saveState(live.root, state);
       this.log(`[issue-flow] ${live.id} 流水线修复轮预算耗尽(${repo},`
         + `${reds}/${max}) @ ${sha.slice(0, 12)}`);
+      // 放弃点通知(票 81,需求侧 notifyRepairStopped 同语义):预算烧完
+      // 就是"机器放弃、该人接手"的时刻,主动喊人。同因(同仓同提交)
+      // 再停机凭 outcome 通道幂等不重发。
+      this.notifyPipelineStopped(live,
+        `pipeline_repair_exhausted:${repo}:${sha}`,
+        `${this.issueSubject(live)}:流水线连续 ${reds} 次红灯,修复轮预算`
+          + `(${max} 轮)已耗尽,自动修复已放弃。请人工查看 MR/流水线,`
+          + "处理后发消息继续");
       return;
     }
     // ④ 分级回合指令:全部维度有证据=照常派修并点名维度;部分缺=
@@ -3167,6 +3227,39 @@ export class IssueFlowService {
       }
     }
     return texts;
+  }
+
+  /** 问题的人话称呼(通知共用的展示形态):绑了单号就带单号,没绑
+   *  就裸标题。 */
+  private issueSubject(live: LiveIssue): string {
+    const { state } = live;
+    return state.ticket
+      ? `${state.title}(单号 ${state.ticket})` : state.title;
+  }
+
+  /** 放弃点 → 小鲁班(票 81,需求侧 notifyRepairStopped 同语义):
+   * 预算烧完/轮询超时这类"机器放弃、需要人接手"的时刻必须主动喊人,
+   * 不能等人自己刷网页。两条纪律:
+   * - 幂等靠 outcome 通道既有机制(键=会话:原因:仓:提交,taskId 已含
+   *   会话 id),同因重复停机/恢复重放只发一条,不自造去重;
+   * - 旁路 fail-open:投递失败只记日志,停机留痕一字不动。
+   * 只在放弃点调用——开始派修/修复进行中不通知(2026-09-03 拍板)。 */
+  private notifyPipelineStopped(
+    live: LiveIssue,
+    status: string,
+    summary: string,
+  ): void {
+    const { notifier } = this.options;
+    if (!notifier) return;
+    void notifier.notifyOutcome({
+      taskId: live.id,
+      account: live.state.account,
+      status,
+      summary,
+      link: this.issueLink(live.id),
+    }).catch((error) =>
+      this.log(`[issue-flow] ${live.id} 停机通知失败(旁路,留痕照旧): `
+        + String(error)));
   }
 
   /** 红灯停机升级为平台闸(票 03):把"stage_note 停机请人"升级成可
