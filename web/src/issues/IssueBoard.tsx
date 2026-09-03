@@ -281,7 +281,6 @@ function IssueCard({ issue, active, onOpen }: {
   onOpen: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const doneIdle = issue.status === "idle" && issue.stage === "done";
   const stageLine = [
     issueStageText(issue),
     issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
@@ -360,10 +359,6 @@ function IssueCard({ issue, active, onOpen }: {
           <span>{issue.error}</span>
         </div>
       )}
-      {doneIdle && <div className="verify-waiting">
-        <strong>收口提醒</strong>
-        <span>结论已出——确认 MR 合入后在会话内归档收口。</span>
-      </div>}
       {issue.status === "waiting_user" && <div className="verify-waiting">
         <strong>等你处理</strong>
         <span>进入问题工作台答复问题卡 / 平台闸,会话才会继续跑。</span>

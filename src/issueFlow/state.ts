@@ -58,7 +58,7 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
-/** 固定流程的两大场景:有单走六阶段,无单走三节点(结论后可挂起)。 */
+/** 固定流程的两大场景:有单走五阶段,无单走三节点(结论后可挂起)。 */
 export type IssueScenario = "ticket" | "no_ticket";
 
 /** 固定流程单个阶段的执行状态(inherited=转正继承,redo=回退待重做)。 */

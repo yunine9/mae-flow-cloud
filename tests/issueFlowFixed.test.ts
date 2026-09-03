@@ -804,7 +804,7 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
     title: "t", description: "", source: "dts", ticket: "T1",
     repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
     scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "done", "in_progress", "pending", "pending"],
+    stage_states: ["done", "done", "done", "in_progress", "pending"],
     status: "idle", stage: "fix", stage_note: "", stage_at: new Date().toISOString(),
     pushes: [{ repo: "/tmp/x.git", branch: "master_dev_T1",
       sha: "a".repeat(40), at: new Date().toISOString() }],
@@ -873,7 +873,7 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1001",
     repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
-    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending"],
+    stage_states: ["pending", "pending", "done", "done", "in_progress"],
     status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
   };
   const ctx: IssueToolContext = {
@@ -1410,7 +1410,7 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: TICKET,
     repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    stage_states: ["done", "done", "in_progress", "pending", "pending"],
     status: "running", stage: "analyze", stage_note: "", stage_at: new Date().toISOString(),
   };
   const directCtx: IssueToolContext = {
@@ -1580,7 +1580,7 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
     repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    stage_states: ["done", "done", "in_progress", "pending", "pending"],
     status: "running", stage: "analyze", stage_note: "", stage_at: now,
     env_declined: { scopes: ["logs"], at: now },
   };

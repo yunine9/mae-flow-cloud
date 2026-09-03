@@ -1032,7 +1032,7 @@ export class IssueFlowService {
     };
     recordTransition(state, {
       source: "platform", stage: firstStage,
-      note: `固定流程会话已登记(${scenario === "ticket" ? "有单六阶段" : "无单三节点"})`,
+      note: `固定流程会话已登记(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})`,
     });
     saveState(root, state);
     this.live.set(id, {
