@@ -1781,7 +1781,8 @@ export function TaskWorkspace({
                   <em>{task.knowledge_usage?.resources.length ?? 0}</em>
                 </strong>
                 <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
-                  {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+                  {task.knowledge_usage?.resources.length ?? 0} 项可用
+                  {task.memories_recorded ? ` · 记下 ${task.memories_recorded} 条` : ""}</small>
               </button>
               <button type="button" role="tab"
                 aria-selected={executionView === "tokens"}

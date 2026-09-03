@@ -27,7 +27,11 @@ export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 export type AnnotationKind = "doc" | "code";
 /** 一条检视意见首先是在找谁做下一步，不是天然都在命令 Agent。旧账
  * 没有 route，读侧一律按 agent 解释，避免升级后改变历史任务语义。 */
-export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision";
+export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision"
+  /** 记为记忆:不发给任何人、不进决定卡,圈选即闭环,直接落一条任务记忆
+   * (docs/knowledge-memory-design.md §4.1)。空口一句缺的就是引文和位置,
+   * 圈选把这两样自动补齐。 */
+  | "memory";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
@@ -294,7 +298,10 @@ export class AnnotationStore {
       kind: input.kind === "code" ? "code" : "doc",
       ...(input.route && input.route !== "agent" ? { route: input.route } : {}),
       ...(input.assignee?.trim() ? { assignee: input.assignee.trim() } : {}),
-      status: "draft",
+      // 记忆条目没有"送出/回执/确认"这几站:人圈的那一下就是闭环。
+      ...(input.route === "memory"
+        ? { status: "verified" as const, verified_at: new Date().toISOString() }
+        : { status: "draft" as const }),
     };
     this.append({ op: "add", record });
     return record;

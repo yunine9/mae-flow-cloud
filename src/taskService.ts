@@ -42,6 +42,13 @@ import {
   type SentVia,
 } from "./annotations.ts";
 import {
+  MemoryError,
+  MemoryStore,
+  repoSlug,
+  type MemoryInput,
+  type MemoryRecord,
+} from "./taskMemory.ts";
+import {
   blockingAnnotations,
   parseWorkspaceReviewReceipts,
   unansweredAnnotations,
@@ -727,6 +734,9 @@ export interface TaskSummary {
   requirement_analysis_confirmation_required?: boolean;
   /** 人工明确点击“进入需求分析”的时刻；从这一刻起需求正本锁定。 */
   requirement_analysis_confirmed_at?: string;
+  /** 本单落下的记忆条数(含已撤回)。只是个数,让人一眼看到"这单记了
+   * 东西";明细走 /tasks/:id/memories。 */
+  memories_recorded?: number;
   /** 需求确认阶段由 Agent 串行落实检视意见。人始终只读文档，因此
    * 不需要编辑锁/版本合并；running 时整体确认按钮必须禁用。 */
   requirement_revision?: {
@@ -1581,6 +1591,8 @@ interface TaskState {
   /** 暂停边界从 Pi 内存队列取回的主任务补充。恢复主会话前一直保留，
    * listInterrupts 也据此如实维持“待读取”。 */
   pendingMainSteers?: string[];
+  /** 开局推送过哪些记忆(本次会话);第二期接"这单用到的"。 */
+  memoryBriefingIds?: string[];
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
@@ -4240,6 +4252,12 @@ export class TaskService {
     return compareDeliveryRevisions(task.cwd, review.base_sha, review.head_sha);
   }
 
+  private memoryStore?: MemoryStore;
+
+  private memories(): MemoryStore {
+    return this.memoryStore ??= new MemoryStore(this.options.dataDir);
+  }
+
   private annotations(task: TaskState): AnnotationStore {
     return new AnnotationStore(
       join(task.summary.workspace, "annotations.jsonl"));
@@ -4464,11 +4482,165 @@ export class TaskService {
       throw new TaskControlError("任务已由用户停止，不能再新增批注");
     }
     const route = input.route ?? "agent";
-    const assignee = route === "agent" ? undefined : task.summary.luban_account;
-    if (route !== "agent" && !assignee) {
+    const needsOwner = route !== "agent" && route !== "memory";
+    const assignee = needsOwner ? task.summary.luban_account : undefined;
+    if (needsOwner && !assignee) {
       throw new TaskControlError("当前任务没有责任人，暂时不能创建需要责任人答复的意见");
     }
-    return this.annotations(task).add({ ...input, route, assignee });
+    const record = this.annotations(task).add({ ...input, route, assignee });
+    if (route === "memory") {
+      // 圈选即闭环:人主动说"记下来",不经 Agent、不进决定卡。写不进语料
+      // 就不留半截批注——人以为记了其实没记,比当场报错糟得多。
+      try {
+        this.recordMemory(task, this.memoryFromAnnotation(task, record, "user_note"));
+      } catch (error) {
+        this.annotations(task).drop(record.id, record.author);
+        throw error instanceof MemoryError
+          ? new TaskControlError(error.message) : error;
+      }
+    }
+    return record;
+  }
+
+  /** 记忆来源之一:批注。人圈的(user_note)结论就是那句话;闭环的
+   * (annotation)意见是问题、Agent 回执是结论。位置从锚点来:代码是
+   * 文件+行,过程文档是文档名,需求原文是任务级。 */
+  private memoryFromAnnotation(
+    task: TaskState,
+    item: Annotation,
+    source: "annotation" | "user_note",
+  ): MemoryInput {
+    const code = item.kind === "code";
+    const where = item.artifact === TASK_REQUIREMENT_ARTIFACT ? "需求原文"
+      : item.file || item.artifact;
+    const trigger = code
+      ? `改 ${item.file}${item.line ? ` 第 ${item.line} 行附近` : ""}时`
+      : `${where}里「${item.anchor.replace(/\s+/g, " ").slice(0, 40)}」这一段`;
+    const phase = task.summary.progress?.current_phase;
+    return {
+      source,
+      judged_by: "human",
+      scope: source === "user_note" ? "general" : "local",
+      repo: repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]),
+      paths: code && item.file ? [item.file] : [],
+      ...(code && item.line ? { line: item.line } : {}),
+      ...(phase ? { phase } : {}),
+      task: task.summary.id,
+      evidence: `annotation:${item.id}`,
+      author: item.author,
+      trigger,
+      quote: item.anchor,
+      ...(source === "annotation"
+        ? { problem: item.note, conclusion: item.response?.summary || item.note }
+        : { conclusion: item.note }),
+    };
+  }
+
+  /** 记忆来源之一:Build-Fix 失败过又修好了。报错是问题,Agent 的收口
+   * 总结是结论,改动文件从两次 HEAD 的差异来(拿不到就空着,不猜)。 */
+  private prePushFixMemory(
+    task: TaskState,
+    prior: PrePushVerificationState,
+    result: PrePushRunResult,
+    sha: string,
+  ): MemoryInput {
+    const repo = repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
+    let paths: string[] = [];
+    if (task.cwd && prior.sha && prior.sha !== sha) {
+      const diff = runSafeWorktreeGit(task.cwd,
+        ["diff", "--name-only", prior.sha, sha], { timeoutMs: 10_000 });
+      if (diff.status === 0) {
+        paths = String(diff.stdout ?? "").split("\n")
+          .map((line) => line.trim()).filter(Boolean).slice(0, 20);
+      }
+    }
+    const problem = (prior.issue?.message || prior.message || "").trim();
+    return {
+      source: "prepush_fix",
+      judged_by: "pipeline",
+      scope: "local",
+      repo,
+      paths,
+      // 阶段名只从内核镜像来(词表唯一来源纪律),没有就空着。
+      ...(task.summary.progress?.current_phase
+        ? { phase: task.summary.progress.current_phase } : {}),
+      task: task.summary.id,
+      evidence: `prepush:${sha}`,
+      trigger: `在 ${repo} 推送前构建与 UT 修复时`,
+      problem: problem.slice(0, 800),
+      conclusion: (result.report?.summary || result.message || "").trim().slice(0, 800),
+    };
+  }
+
+  /** 开局推送的记忆:同仓、未撤回未覆盖,人判的排前、新的排前,最多 8 条。
+   * 措辞是线索不是命令——"有人在这里要求过",判断仍在 Agent 和门禁。
+   * 旁路:索引读不动就不推,绝不挡启动。 */
+  private memoryBriefing(task: TaskState): string | undefined {
+    try {
+      const repo = repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
+      const weight = (row: MemoryRecord) => row.judged_by === "human" ? 1 : 0;
+      const rows = this.memories().list()
+        .filter((row) => row.repo === repo && !row.withdrawn && !row.superseded_by
+          && row.scope !== "one_off" && row.task !== task.summary.id)
+        .sort((a, b) => weight(b) - weight(a) || b.at.localeCompare(a.at))
+        .slice(0, 8);
+      if (!rows.length) return undefined;
+      task.memoryBriefingIds = rows.map((row) => row.id);
+      const lines = rows.map((row) => {
+        const who = row.judged_by === "human" ? "人确认" : "流水线";
+        const where = row.paths[0]
+          ? `${row.paths[0]}${row.line ? `:${row.line}` : ""}` : "本仓";
+        return `- [${who} · ${row.at.slice(0, 10)} · ${where}] ${row.trigger}:`
+          + `${row.conclusion.replace(/\s+/g, " ").slice(0, 200)}`;
+      });
+      return `本仓的任务记忆(过去的单子里被人或流水线关掉的环;是线索不是规则,`
+        + `改到对应位置时先看一眼,与现状冲突以现状和内核指令为准):\n`
+        + lines.join("\n");
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 记忆推送失败(忽略): ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  private recordMemory(task: TaskState, input: MemoryInput): MemoryRecord {
+    const record = this.memories().record(input);
+    task.summary.memories_recorded = (task.summary.memories_recorded ?? 0) + 1;
+    this.persist(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} 记忆入库 ${record.id}(${record.source})`);
+    return record;
+  }
+
+  listTaskMemories(id: string): MemoryRecord[] {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.memories().list({ task: id });
+  }
+
+  readTaskMemory(
+    id: string,
+    memoryId: string,
+  ): { record: MemoryRecord; content: string } | undefined {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const record = this.memories().find(memoryId);
+    if (!record || record.task !== id) return undefined;
+    const content = this.memories().read(memoryId);
+    return content === undefined ? undefined : { record, content };
+  }
+
+  withdrawTaskMemory(id: string, memoryId: string, by: string): MemoryRecord {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const found = this.memories().find(memoryId);
+    if (!found || found.task !== id) throw new NotFoundError(`记忆 ${memoryId} 不存在`);
+    try {
+      return this.memories().withdraw(memoryId, by);
+    } catch (error) {
+      throw error instanceof MemoryError
+        ? new TaskControlError(error.message) : error;
+    }
   }
 
   /** 责任人回答检视意见。普通问答停在提出人确认；“决策后处理”把
@@ -4612,6 +4784,15 @@ export class TaskService {
       }
     }
     const verified = annotations.verify(annotationId, by, adminOverride);
+    if ((verified.route ?? "agent") === "agent"
+        && verified.response?.outcome === "fixed") {
+      // 闭环即入库:人圈、Agent 改、人确认三件套齐。旁路,写失败只记日志。
+      try {
+        this.recordMemory(task, this.memoryFromAnnotation(task, verified, "annotation"));
+      } catch (error) {
+        this.options.log?.(`任务 ${id} 记忆入库失败: ${String(error)}`);
+      }
+    }
     this.resolveFeedbackRecords(task, (record) =>
       record.source === "workspace" && record.source_id === verified.id
         && record.source_revision === (verified.rework ?? 0),
@@ -11886,6 +12067,10 @@ export class TaskService {
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
       }
+      // 记忆开局推送(docs/knowledge-memory-design.md §8-1):Agent 不会自己
+      // 想起来查,宿主替它查。第一期按仓从索引挑,不经 sidecar。
+      const briefing = this.memoryBriefing(task);
+      if (briefing) prompt = `${prompt}\n\n${briefing}`;
       if (task.pendingMainSteers?.length) {
         promptSteerCount = task.pendingMainSteers.length;
         prompt = `${prompt}\n\n主任务启动前或暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
@@ -12967,6 +13152,9 @@ export class TaskService {
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
     }
+    // 记忆用:这轮之前的持久化状态。失败过(有 issue 或正在修)又通过了,
+    // 才是"踩过坑并爬出来",值得记;一次过的不记(§4:没人判过它对)。
+    const priorPrePush = task.summary.delivery?.prepush;
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
       new Date().toISOString());
@@ -12975,6 +13163,16 @@ export class TaskService {
     }
     this.setPrePushState(task, state);
     const passed = Boolean(getReusablePushReceipt(state, finalRevision));
+    if (passed && priorPrePush
+        && (priorPrePush.issue || priorPrePush.state === "repairing")) {
+      try {
+        this.recordMemory(task,
+          this.prePushFixMemory(task, priorPrePush, result, finalRevision.sha));
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} Build-Fix 记忆入库失败: ${String(error)}`);
+      }
+    }
     if (passed) {
       task.summary.status = previousStatus;
       task.summary.detail = "Build-Fix 已通过，等待最终人工检视";

@@ -49,6 +49,7 @@ const ROUTE_LABEL: Record<AnnotationRoute, string> = {
   agent: "Agent 处理",
   owner_reply: "责任人答复",
   owner_decision: "决策后处理",
+  memory: "记忆",
 };
 
 export interface AdminOverrideAccess {
@@ -188,6 +189,10 @@ function progressOf(
   text: string;
   hint?: string;
 } {
+  if (routeOf(item) === "memory") {
+    return { tone: "done", text: "已记为记忆",
+      hint: "没有发给任何人。以后有人改到这段附近时，平台会把它提醒给 Agent。" };
+  }
   if (item.status === "verified") {
     const proxyVerifier = item.verified_by && item.verified_by !== item.author
       ? item.verified_by : undefined;
@@ -252,6 +257,7 @@ function progressOf(
 }
 
 function deliveryText(item: Annotation, archival = false): string {
+  if (routeOf(item) === "memory") return "已记为记忆，不发给任何人";
   if (item.status === "verified") {
     return item.verified_by && item.verified_by !== item.author
       ? `管理员 ${item.verified_by} 代确认`
@@ -816,10 +822,14 @@ export function AnnotationPanel({
                   {item.sent_by && item.sent_by !== item.author
                     && ` · 由 ${item.sent_by} 原样转交`}
                   {item.edited_at && " · 已编辑"}
-                  {check && check.state !== "hit"
+                  {/* 记忆条目是快照,不参与重锚定:原文以后变了也不追。 */}
+                  {check && check.state !== "hit" && routeOf(item) !== "memory"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
-                {(isAuthor || overrideAccess.canDrop) && !editing && (
+                {/* 记忆没有编辑面:改就是再圈一次;撤回在「本任务知识」里。
+                    这里的编辑/删除只改批注台账,记忆不会跟着变,露出来就是骗人。 */}
+                {routeOf(item) !== "memory"
+                  && (isAuthor || overrideAccess.canDrop) && !editing && (
                   <span className="annot-owner-actions">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}

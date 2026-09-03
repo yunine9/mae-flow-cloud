@@ -33,6 +33,8 @@
  *   POST /tasks/:id/rerun                               → 200;原位清空并从头重跑
  *   DELETE /tasks/:id                                   → 200;责任人/管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
+ *   GET  /tasks/:id/memories                            → 本单落下的记忆(只读)
+ *   POST /tasks/:id/memories/:mid/withdraw              → 撤回自己圈的记忆
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
  *   PATCH /tasks/:id/annotations/:annId {note}        → 修改(只能改自己的)
@@ -2468,6 +2470,23 @@ export function createTaskServer(
         // 检视批注:圈注权和送达权分开——谁都能圈。作者可提交自己的
         // 意见；任务责任人还可以原样转交他人的意见，但不能改写或替他
         // 闭环。这样路过成员留下的有效意见不会成为无人能接的草稿。
+        // 任务记忆:只读列表、原文、撤回。没有编辑——改就是再圈一次。
+        if (parts[2] === "memories") {
+          if (!service.get(id)) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (request.method === "GET" && parts.length === 3) {
+            return json(response, 200, service.listTaskMemories(id));
+          }
+          if (request.method === "GET" && parts.length === 4) {
+            const found = service.readTaskMemory(id, decodeURIComponent(parts[3]));
+            return found ? json(response, 200, found)
+              : json(response, 404, { error: "这条记忆不存在" });
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[4] === "withdraw") {
+            return json(response, 200, service.withdrawTaskMemory(
+              id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户"));
+          }
+        }
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2486,7 +2505,7 @@ export function createTaskServer(
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",
               route: body.route === "owner_reply" || body.route === "owner_decision"
-                ? body.route : "agent",
+                || body.route === "memory" ? body.route : "agent",
             }));
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。

@@ -383,3 +383,34 @@ test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
 });
+
+test("任务记忆第一期契约:记为记忆去向、面板只读列表、导航计数、服务端只读路由", () => {
+  // docs/knowledge-memory-design.md §4.1/§9:圈选是唯一的人工入口;可见但不可管。
+  const annotatable = readFileSync(join(process.cwd(), "web/src/Annotatable.tsx"), "utf-8");
+  assert.match(annotatable, /memory: \{\s*label: "记为记忆"/,
+    "批注框第四个去向:记为记忆");
+  assert.match(annotatable, /不发给任何人/);
+  const panel = readFileSync(join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf-8");
+  assert.match(panel, /memory: "记忆"/);
+  assert.match(panel, /routeOf\(item\) === "memory"\) \{\s*return \{ tone: "done", text: "已记为记忆"/,
+    "面板上记忆条目直接是闭环态,没有送出/回执/确认三站");
+  assert.match(panel, /routeOf\(item\) !== "memory"\s*&& \(isAuthor \|\| overrideAccess\.canDrop\)/,
+    "记忆条目不露编辑/删除:改就是再圈一次,撤回在本任务知识里");
+  assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
+    "记忆是快照,不参与重锚定提示");
+  const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
+  assert.match(footprint, /className="knowledge-memories"/);
+  assert.match(footprint, /这单记下的/);
+  assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
+  assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");
+  const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
+  assert.match(workspace, /记下 \$\{task\.memories_recorded\} 条/, "导航入口带条数");
+  const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
+  assert.match(server, /parts\[2\] === "memories"/);
+  assert.match(server, /parts\[4\] === "withdraw"/);
+  assert.doesNotMatch(server, /parts\[2\] === "memories"[\s\S]{0,1200}method === "(PATCH|PUT|DELETE)"/,
+    "服务端没有改写或删除记忆的路由");
+  const memory = readFileSync(join(process.cwd(), "src/taskMemory.ts"), "utf-8");
+  assert.match(memory, /MEMORY_BODY_LIMIT = 2000/);
+  assert.match(memory, /appendFileSync\(this\.indexPath/, "索引只追加");
+});

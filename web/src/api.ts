@@ -860,6 +860,8 @@ export interface TaskSummary {
   requirement: string;
   requirement_analysis_confirmation_required?: boolean;
   requirement_analysis_confirmed_at?: string;
+  /** 本单落下的记忆条数;明细走 listTaskMemories。 */
+  memories_recorded?: number;
   requirement_revision?: {
     id: string;
     state: "running" | "failed";
@@ -2615,8 +2617,9 @@ export interface Annotation {
   note: string;
   edited_at?: string;
   kind: "doc" | "code";
-  /** 缺省值兼容旧任务：一律按交给 Agent 处理。 */
-  route?: "agent" | "owner_reply" | "owner_decision";
+  /** 缺省值兼容旧任务：一律按交给 Agent 处理。memory = 记为记忆:不发给
+   * 任何人,圈选即闭环。 */
+  route?: "agent" | "owner_reply" | "owner_decision" | "memory";
   assignee?: string;
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
@@ -2678,6 +2681,62 @@ export async function addAnnotation(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return { annotation: await response.json() };
+}
+
+/* ---------------- 任务记忆 ---------------- */
+
+/** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
+export interface MemoryRecord {
+  id: string;
+  source: "annotation" | "prepush_fix" | "user_note";
+  judged_by: "human" | "pipeline";
+  scope: "one_off" | "local" | "general";
+  repo: string;
+  paths: string[];
+  line?: number;
+  phase?: string;
+  task: string;
+  evidence: string;
+  author?: string;
+  trigger: string;
+  quote?: string;
+  problem?: string;
+  conclusion: string;
+  supersedes?: string;
+  at: string;
+  file: string;
+  withdrawn?: boolean;
+  superseded_by?: string;
+}
+
+export async function listTaskMemories(taskId: string): Promise<MemoryRecord[]> {
+  const response = await fetch(`/tasks/${taskId}/memories`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+export async function readTaskMemory(
+  taskId: string,
+  memoryId: string,
+): Promise<{ record: MemoryRecord; content: string } | undefined> {
+  const response = await fetch(
+    `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}`);
+  if (!response.ok) return undefined;
+  return response.json();
+}
+
+export async function withdrawTaskMemory(
+  taskId: string,
+  memoryId: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}/withdraw`,
+    { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
 }
 
 export async function dropAnnotation(

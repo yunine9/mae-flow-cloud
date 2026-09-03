@@ -11951,3 +11951,26 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   .issue-dts-module-cell { grid-column: 1; grid-row: auto; padding: 0 12px 10px; }
   .issue-dts-row > .issue-dts-detail { grid-column: 1; }
 }
+
+/* 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表,一行一条,
+   点开看 md 原文;人圈的可撤回。不做编辑——改就是再圈一次。 */
+.knowledge-memories { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.knowledge-memories > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.knowledge-memories > header > div { display: grid; gap: 3px; }
+.knowledge-memories > header strong { color: var(--text-strong); font-size: 14px; }
+.knowledge-memories > header small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
+.knowledge-memories > header > span { flex: none; padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--font-size-assist); font-weight: 700; }
+.knowledge-memories > ol { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.knowledge-memories > ol > li { position: relative; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.knowledge-memories > ol > li.is-gone { opacity: .55; }
+.knowledge-memory-row { width: 100%; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; padding: 9px 11px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.knowledge-memory-row > i { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-style: normal; font-weight: 800; }
+.source-prepush_fix .knowledge-memory-row > i { background: var(--attention-soft); color: var(--attention); }
+.source-user_note .knowledge-memory-row > i { background: var(--success-soft); color: var(--success); }
+.knowledge-memory-row > span { min-width: 0; display: grid; gap: 2px; }
+.knowledge-memory-row strong { color: var(--text-strong); font-size: 13.5px; }
+.knowledge-memory-row em { color: var(--text); font-size: 13px; font-style: normal; line-height: 1.45; }
+.knowledge-memory-row small { color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-memory-source { margin: 0; padding: 10px 12px 12px 47px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.knowledge-memory-withdraw { position: absolute; top: 9px; right: 10px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; }
+.knowledge-memory-withdraw:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }

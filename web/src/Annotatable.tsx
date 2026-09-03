@@ -16,7 +16,7 @@ import {
 } from "./annotateTargets";
 import "./annotate.css";
 
-type AnnotationRoute = "agent" | "owner_reply" | "owner_decision";
+type AnnotationRoute = "agent" | "owner_reply" | "owner_decision" | "memory";
 
 const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string }> = {
   agent: {
@@ -30,6 +30,12 @@ const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string }> = {
   owner_decision: {
     label: "决策后处理",
     hint: "责任人先给结论，系统再把结论交给 Agent 执行。",
+  },
+  // 第四个去向不是"交给谁",是"记住":不发给任何人、不进决定卡。圈选
+  // 让记忆自带原文和位置,比空口一句"记下来"有用得多(用户拍板)。
+  memory: {
+    label: "记为记忆",
+    hint: "不发给任何人，只记住这段原文和你的一句话；以后有人改到这里时提醒 Agent。",
   },
 };
 

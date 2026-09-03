@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { OverlayDialog } from "./WarmupPanel";
 import {
   createKnowledgeCandidate,
+  listTaskMemories,
+  readTaskMemory,
+  withdrawTaskMemory,
+  type MemoryRecord,
   interruptTask,
   type KnowledgeAction,
   type KnowledgeForm,
@@ -55,6 +59,34 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  // 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表 + 撤回。
+  // 不逐条在文档上打标——文档太多,标满了反而看不见(用户拍板)。
+  const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [memoryOpen, setMemoryOpen] = useState<{ id: string; content: string }>();
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () => void listTaskMemories(taskId).then((rows) => {
+      if (alive) setMemories(rows);
+    });
+    load();
+    const timer = setInterval(load, 15_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [taskId]);
+  async function openMemory(record: MemoryRecord) {
+    if (memoryOpen?.id === record.id) { setMemoryOpen(undefined); return; }
+    const found = await readTaskMemory(taskId, record.id);
+    if (found) setMemoryOpen({ id: record.id, content: found.content });
+  }
+  async function withdrawMemory(record: MemoryRecord) {
+    if (memoryBusy) return;
+    setMemoryBusy(true);
+    setFeedback("");
+    const result = await withdrawTaskMemory(taskId, record.id);
+    setMemoryBusy(false);
+    if (result.error) { setFeedback(result.error); return; }
+    setMemories(await listTaskMemories(taskId));
+  }
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<KnowledgeCandidateDraft>({
     form: "document" as KnowledgeForm,
@@ -246,6 +278,41 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
       </form>
     </OverlayDialog>}
 
+    <section className="knowledge-memories" aria-labelledby="knowledge-memories-title">
+      <header>
+        <div><strong id="knowledge-memories-title">这单记下的</strong>
+          <small>闭环的检视意见、修好的构建失败、你圈选记下的，都会自动落在这里；只读，圈错了可撤回。</small></div>
+        <span>{memories.filter((item) => !item.withdrawn && !item.superseded_by).length} 条</span>
+      </header>
+      {feedback && <p className="knowledge-workbench-feedback" role="status">{feedback}</p>}
+      {memories.length ? <ol>
+        {memories.filter((item) => !item.withdrawn).map((item) => {
+          const gone = !!item.superseded_by;
+          return <li key={item.id} className={`source-${item.source}${gone ? " is-gone" : ""}`}>
+            <button type="button" className="knowledge-memory-row"
+              aria-expanded={memoryOpen?.id === item.id}
+              onClick={() => void openMemory(item)}>
+              <i aria-hidden>{item.source === "user_note" ? "记"
+                : item.source === "prepush_fix" ? "修" : "议"}</i>
+              <span>
+                <strong>{item.trigger}</strong>
+                <em>{gone ? "已撤回" : item.conclusion}</em>
+                <small>{item.source === "user_note" ? `${item.author ?? "有人"} 圈选记下`
+                  : item.source === "prepush_fix" ? "Build-Fix 失败后修好"
+                    : "检视意见闭环"}
+                  {item.paths[0] ? ` · ${item.paths[0]}${item.line ? `:${item.line}` : ""}` : ""}
+                  {` · ${time(item.at)}`}</small>
+              </span>
+            </button>
+            {memoryOpen?.id === item.id && <pre className="knowledge-memory-source">{memoryOpen.content}</pre>}
+            {item.source === "user_note" && !gone && <button type="button"
+              className="knowledge-memory-withdraw" disabled={memoryBusy}
+              onClick={() => void withdrawMemory(item)}>撤回</button>}
+          </li>;
+        })}
+      </ol> : <div className="knowledge-footprint-empty">
+        还没有记下任何东西。检视意见闭环、Build-Fix 修好失败，或在材料上圈选「记为记忆」后会出现在这里。</div>}
+    </section>
     {utMethod && <p className={`knowledge-ut-method${
       utMethod === "仓内既有写法" ? " is-fallback" : ""}`}>
       UT 生成方式:<strong>「{utMethod}」</strong>
