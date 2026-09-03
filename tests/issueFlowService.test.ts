@@ -1399,6 +1399,59 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
   }
 });
 
+test("网管环境拒绝路由(票 93):POST /issues/:id/environment 的 decline 分支清闸回落;闸不在场 409 如实打回", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-route-"));
+  const now = "2026-09-03T00:00:00Z";
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "manual", mode: "fixed",
+    scenario: "no_ticket", status: "waiting_user", stage: "analyze",
+    stage_note: "", stage_at: now,
+    gate: {
+      id: "gate-1", kind: "env_needed", state_version: 0,
+      question: { questions: [{
+        question: "获取日志/换库需要网管服务器地址与密码",
+        options: [{ code: "fill", label: "填写并继续" }],
+      }] },
+      scope: "logs",
+      created_at: now,
+    },
+  }));
+  const script: Scene[] = [{ text: "收到,基于现有证据继续。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    // 拒绝(带理由):同一提交口,decline:true 走拒绝路——清闸、开平台
+    // 回合;理由与「无需」事实进转移账。
+    const declined = await issuePost(["issues", "issue-1", "environment"],
+      { decline: true, note: "与后台日志无关" }, service);
+    assert.equal(declined.status, 200);
+    assert.equal(declined.body.gate, undefined, "拒绝即清闸");
+    const persisted = loadState(join(dataDir, "issues", "issue-1"))!;
+    assert.ok(persisted.transitions?.some((entry) =>
+      /网管环境配置被用户拒绝/.test(entry.note)
+      && entry.note.includes("与后台日志无关")), "转移账带拒绝与理由");
+    await until(() => service.get("issue-1").status === "idle" ? 1 : undefined,
+      "拒绝后的平台回合收口");
+    assert.match(JSON.stringify(model.requests[0]), /用户已确认无需拉日志/);
+
+    // 闸不在场如实打回:没有卡就无所谓拒绝。
+    const again = await issuePost(["issues", "issue-1", "environment"],
+      { decline: true }, service);
+    assert.equal(again.status, 409);
+    assert.match(again.body.error, /当前没有网管环境配置卡/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("现场记录导出·纯构建器:工具命令/结果/决策逐字保真,未知事件兜底", () => {
   const state = {
     id: "issue-9", account: "dev",

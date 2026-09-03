@@ -217,6 +217,18 @@ export type IssueGateKind =
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
 
+/** 环境拒绝台账(2026-09-03,票 93):归属人在 env_needed 卡上拒绝
+ * 拉日志/换库——这是人的硬裁定。字段在场=清单里的 scope 已被拒:
+ * 同 scope 工具再调不再举闸(防纠缠),配置环境成功即整册清除
+ * (解锢,见 attachEnvironment)。不上 wire(与 mr_gate 同为流程机制
+ * 状态,前端镜像没有这个字段)。 */
+export interface IssueEnvDeclined {
+  /** 已拒的用途面。 */
+  scopes: IssueGateScope[];
+  /** 最近一次拒绝的时刻(同 scope 重复拒绝刷新清单与时刻)。 */
+  at: string;
+}
+
 /** skill 圈选清单里的一项(ADR-0011):扫描已拉仓 `.cac/skills/` 所得。
  * path 是会话工作区相对路径(repo/<仓名>/.cac/skills/<名>/SKILL.md),
  * 天然唯一——多仓同名 skill 靠仓段区分;repo 是仓地址(分组展示用)。 */
@@ -402,6 +414,10 @@ export interface IssueSessionState {
   business_knowledge?: IssueBusinessKnowledge;
   /** 平台问题卡在场即 waiting_user 由闸门挂起(与 humanGate 并行)。 */
   gate?: IssueGate;
+  /** 环境拒绝台账(票 93):env_needed 卡上「拒绝」的硬裁定——同
+   * scope 工具再调不再举闸(防纠缠);attachEnvironment 成功即整册
+   * 清除(解锢)。不上 wire,与 mr_gate 同罪同罚。 */
+  env_declined?: IssueEnvDeclined;
   ut?: IssueUtRecord;
   /** 流水线监看账(按仓,键=仓地址;一仓一 MR 一流水线)。重启后
    * watching=true 的要逐仓重新挂表。 */
@@ -512,8 +528,11 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // 先补 web/src/api.ts 镜像与样例。push_token(推送过目的一次性
   // 令牌)与 push_review_head(举闸时记的过目对象 tip)同罪同罚:
   // 它们的效力只在服务端 push_branch 消费口,不是前端要渲染的状态。
+  // env_declined(环境拒绝台账,票 93)同理:效力只在服务端工具层
+  // (同 scope 不再举闸),前端镜像没有这个字段。
   const { mr_gate: _gate, push_token: _pushToken,
-    push_review_head: _pushReviewHead, ...rest } = state;
+    push_review_head: _pushReviewHead, env_declined: _envDeclined,
+    ...rest } = state;
   return {
     ...rest,
     has_environment: Boolean(state.environment),

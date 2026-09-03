@@ -40,7 +40,8 @@
  *   GET  /issues/:id/events           → SSE:事件流尾随
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
- *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口)
+ *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口;
+ *                                      decline:true=拒绝,票 93)
  *   POST /issues/:id/interrupt        → 补充(运行中送达 AI)
  *   POST /issues/:id/ticket           → 绑定单号
  *   POST /issues/:id/control          → 归档/取消
@@ -777,11 +778,18 @@ export async function handleIssueRoutes(
     // 登记同一条存储路径),状态/事件里永远只有引用——成功即清闸并开
     // 平台回合让 Agent 重试。闸只收地址+后台密码:页面凭据是登记侧的
     // 四件套,现场补配的流程(抓日志/换库)碰不到网管页面。
+    // decline 分支(票 93)是同一提交口上的拒绝路:归属人认定这一动作
+    // 不需要网管环境,硬拒绝+可解锢(配置成功自动解除);闸不在场由
+    // 服务层如实打回。
     if (method === "POST" && parts[2] === "environment" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能配置网管环境" });
       }
       const body = await readBody(request);
+      if (body.decline === true) {
+        return done(200, issueFlow.declineEnvironment(id,
+          body.note !== undefined ? { note: String(body.note) } : undefined));
+      }
       return done(200, issueFlow.attachEnvironment(id, {
         hosts: Array.isArray(body.hosts) ? body.hosts.map(String) : [],
         ...(body.port !== undefined ? { port: Number(body.port) } : {}),

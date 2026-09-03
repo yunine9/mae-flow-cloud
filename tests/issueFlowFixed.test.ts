@@ -31,6 +31,7 @@ import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
 import {
   FIXED_TICKET_STAGES,
+  loadState,
   shouldNudgeFixed,
   type IssuePipelineWatch,
   type IssueSessionState,
@@ -1497,6 +1498,265 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回合告知「用户已确认」,拒绝台账入册不上 wire", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-"));
+  const origin = bareOrigin(dataDir);
+  // 剧本:第 1 回合 fetch_logs 举闸停机;拒绝后的平台回合里 AI 再调
+  // fetch_logs(防纠缠:不举闸、如实失败),然后基于现有证据收嘴。
+  const script: Scene[] = [
+    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { text: "等用户配环境或拒绝。" },
+    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { text: "用户已裁定,基于现有证据继续。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    opsTools: fakeOps,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "查服务日志", repoUrl: origin,
+      ticket: TICKET, source: "dts",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_needed"
+        ? issue : undefined;
+    }, "env_needed 闸");
+
+    // 拒绝(带理由):闸当场清掉,状态交给平台回合。
+    const declined = service.declineEnvironment(created.id, {
+      note: "问题在页面侧即可复现",
+    });
+    assert.equal(declined.gate, undefined, "拒绝即清闸");
+    // 拒绝台账落盘(wire 不投影——与 mr_gate 同罪同罚,前端镜像无此字段)。
+    const persisted = loadState(
+      join(dataDir, "issues", created.id))!;
+    assert.deepEqual(persisted.env_declined?.scopes, ["logs"]);
+    // 转移账:拒绝事实 + 人的理由逐字入账。
+    assert.ok(persisted.transitions?.some((entry) =>
+      /网管环境配置被用户拒绝/.test(entry.note)
+      && /无需拉日志/.test(entry.note)
+      && entry.note.includes("问题在页面侧即可复现")), "转移账要带拒绝与理由");
+
+    // 拒绝后的平台回合:文案告知 AI「用户已确认」+理由+证据局限要求。
+    // (请求 3=拒绝通知开的回合;固定流程的催办续跑可能在其后追加
+    // 尾随回合——既有 env 闸用例同款,不在此数。)
+    await until(() => service.get(created.id).status === "idle" ? 1 : undefined,
+      "拒绝后的平台回合收口");
+    assert.ok(model.requests.length >= 4, "拒绝通知要开一个新回合");
+    const declineTurn = JSON.stringify(model.requests[2]);
+    assert.match(declineTurn, /用户已确认无需拉日志/);
+    assert.match(declineTurn, /不要再次请求网管环境/);
+    assert.match(declineTurn, /如实说明证据局限/);
+    assert.match(declineTurn, /问题在页面侧即可复现/, "理由要随通知转给 AI");
+    // 防纠缠的端到端面:被拒后 fetch_logs 如实失败,闸保持清空。
+    const events = readFileSync(
+      join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
+    const fetches = events.split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, any>)
+      .filter((event) => event.kind === "tool_finished"
+        && event.payload?.name === "fetch_logs");
+    assert.equal(fetches.length, 2);
+    assert.equal(fetches[1].payload.is_error, true, "拒绝后再调如实失败");
+    assert.equal(service.get(created.id).gate, undefined,
+      "拒绝后不重复举卡");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不举闸,工具失败文案含「用户已确认」", async () => {
+  const now = new Date().toISOString();
+  const state: IssueSessionState = {
+    id: "issue-decline", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    status: "running", stage: "analyze", stage_note: "", stage_at: now,
+    env_declined: { scopes: ["logs"], at: now },
+  };
+  const ctx: IssueToolContext = {
+    state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    ops: fakeOps,
+    environmentPassword: () => undefined,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const fetchLogs = tools.find((tool) => tool.name === "fetch_logs")!;
+  assert.ok(fetchLogs);
+  const before = state.transitions?.length ?? 0;
+  await assert.rejects(
+    () => fetchLogs.execute("x", { services: ["TranFmaWebsite"] }),
+    /用户已确认无需此操作.*拉日志[\s\S]*证据局限[\s\S]*不要再次请求环境/);
+  assert.equal(state.gate, undefined, "硬拒绝:不再举闸");
+  assert.equal(state.transitions?.length ?? 0, before,
+    "举闸会记转移账——不举闸就不该有任何新增");
+});
+
+test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_logs 恢复正常路径", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envunlock-"));
+  const origin = bareOrigin(dataDir);
+  // 剧本只负责举起 env_needed 闸(固定流程的催办续跑会在其后追加尾随
+  // 回合,剧本耗尽后重复末幕文本——不依赖回合时序,解锢后的工具路径
+  // 用直调缝按盘上真实状态验证)。
+  const script: Scene[] = [
+    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { text: "等用户配环境或拒绝。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    opsTools: fakeOps,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "查服务日志", repoUrl: origin,
+      ticket: TICKET, source: "dts",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_needed"
+        ? issue : undefined;
+    }, "env_needed 闸");
+    // 先拒绝(不带理由):转移账按「未说明理由」留痕。
+    service.declineEnvironment(created.id);
+    let persisted = loadState(join(dataDir, "issues", created.id))!;
+    assert.deepEqual(persisted.env_declined?.scopes, ["logs"]);
+    assert.ok(persisted.transitions?.some((entry) =>
+      /未说明理由/.test(entry.note)), "无理由的拒绝也要留痕");
+    await until(() => service.get(created.id).status === "idle" ? 1 : undefined,
+      "拒绝后的平台回合收口");
+
+    // 解锢:配置环境成功即整册清除拒绝台账(闸已不在场,配置照常生效)。
+    const configured = service.attachEnvironment(created.id, {
+      hosts: ["10.0.0.8"], port: 22, backendPassword: "env-shared-secret",
+    });
+    assert.equal(configured.gate, undefined);
+    await until(() => service.get(created.id).status === "idle" ? 1 : undefined,
+      "配置后的平台回合收口");
+    persisted = loadState(join(dataDir, "issues", created.id))!;
+    assert.equal(persisted.env_declined, undefined,
+      "配置成功即解锢:拒绝台账整册清除");
+
+    // fetch_logs 恢复正常路径:按盘上真实状态(拒绝台账已清+环境已在)
+    // 直调工具——密码门前放行,不再是「用户已确认」的硬拒绝。
+    const tools = createIssueTools({
+      state: persisted,
+      workspace: "/tmp/ws", dataRoot: dataDir,
+      persist: () => undefined,
+      ops: fakeOps,
+      environmentPassword: () => "env-shared-secret",
+      pullRepo: async (url) => ({
+        dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+      }),
+    }) as Array<{ name: string; execute: (id: string, params: any) => Promise<unknown> }>;
+    const fetchLogs = tools.find((tool) => tool.name === "fetch_logs")!;
+    assert.ok(fetchLogs);
+    const receipt = await fetchLogs.execute("x", { services: ["TranFmaWebsite"] });
+    assert.match(String((receipt as any)?.content?.[0]?.text ?? ""), /日志已拉取/,
+      "解锢后 fetch_logs 走正常执行路");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("环境拒绝 deploy 对称(票 93):deploy 闸拒绝按「换库部署」记账与通知;闸不在场如实打回;工具侧同文案不举闸", async () => {
+  // 服务侧:盘上预置一张 deploy scope 的 env_needed 等答卡(build_deploy
+  // 被阶段门禁封存 ADR-0013,现实里举不出来——重启换库时本路即生效)。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-deploy-"));
+  const now = "2026-09-03T00:00:00Z";
+  mkdirSync(join(dataDir, "issues", "issue-d"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-d", "issue.json"), JSON.stringify({
+    id: "issue-d", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "manual", mode: "fixed",
+    scenario: "no_ticket", status: "waiting_user", stage: "analyze",
+    stage_note: "", stage_at: now,
+    gate: {
+      id: "gate-d", kind: "env_needed", state_version: 0,
+      question: { questions: [{
+        question: "获取日志/换库需要网管服务器地址与密码",
+        options: [{ code: "fill", label: "填写并继续" }],
+      }] },
+      scope: "deploy",
+      created_at: now,
+    },
+  }));
+  const model = new ScriptedModelServer(
+    [{ text: "收到,不换库部署。" }], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const declined = service.declineEnvironment("issue-d");
+    assert.equal(declined.gate, undefined, "拒绝即清闸");
+    const persisted = loadState(join(dataDir, "issues", "issue-d"))!;
+    assert.deepEqual(persisted.env_declined?.scopes, ["deploy"]);
+    assert.ok(persisted.transitions?.some((entry) =>
+      /无需换库部署/.test(entry.note)), "转移账按 deploy 用途面留痕");
+    await until(() => service.get("issue-d").status === "idle" ? 1 : undefined,
+      "拒绝后的平台回合收口");
+    assert.match(JSON.stringify(model.requests[0]), /用户已确认无需换库部署/);
+    // 闸不在场如实打回:没有卡就无所谓拒绝。
+    assert.throws(() => service.declineEnvironment("issue-d"),
+      /当前没有网管环境配置卡/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+
+  // 工具侧(自由模式绕开阶段门禁——ADR-0013 封存的是固定流程的
+  // build_deploy):deploy scope 已拒 → 同款失败文案,不举闸。
+  const freeState: IssueSessionState = {
+    id: "issue-deploy", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", round: 1,
+    status: "running", stage: "locate_root", stage_note: "", stage_at: now,
+    env_declined: { scopes: ["deploy"], at: now },
+  };
+  const ctx: IssueToolContext = {
+    state: freeState, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    ops: fakeOps,
+    environmentPassword: () => undefined,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const buildDeploy = tools.find((tool) => tool.name === "build_deploy")!;
+  assert.ok(buildDeploy);
+  await assert.rejects(
+    () => buildDeploy.execute("x", { include_lib: false }),
+    /用户已确认无需此操作\(换库部署\)/);
+  assert.equal(freeState.gate, undefined, "deploy 同样不再举闸");
 });
 
 // ---- 催办续跑(2026-08-28 拍板 A+B):提前收嘴被推回阶段 ----

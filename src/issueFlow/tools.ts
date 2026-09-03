@@ -146,11 +146,19 @@ export function expectedBranch(state: IssueSessionState): string {
 
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后
  * 工具如实失败,让模型结束回合——不再让 AI 空口向用户要密码
- * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。 */
+ * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。
+ * 硬拒绝在先(票 93):用户已在 env_needed 卡上裁定这一用途不需要
+ * 环境,则不再举闸纠缠——工具如实失败收口,把"用户已裁定"原样递给
+ * 模型;配置环境成功即整册解锢(attachEnvironment)。 */
 function raiseEnvNeededGate(
   ctx: IssueToolContext,
   scope: IssueGateScope,
 ): never {
+  if (ctx.state.env_declined?.scopes.includes(scope)) {
+    fail(`用户已确认无需此操作(${scope === "deploy" ? "换库部署" : "拉日志"}),`
+      + "请基于现有证据继续;确有必要可在结论中说明证据局限,"
+      + "不要再次请求环境");
+  }
   raiseGate(
     ctx.state,
     "env_needed",
