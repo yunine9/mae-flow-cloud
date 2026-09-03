@@ -9,6 +9,7 @@ import {
   prePushSecurityDecision,
   verifyPrePushEvidence,
   type PrePushAgentReport,
+  isPlatformWorkPath,
 } from "../src/prepushAgent.ts";
 
 test("Build-Fix 提交范围自检只在文件多或疑似产物时提示，不做硬拦截", () => {
@@ -166,10 +167,29 @@ test("prepush evidence: 编译和 UT 必须在最后一次修改后真实成功"
     }),
     ...events.slice(3).map((row) => ({ ...row, eventId: row.eventId + 4 })),
   ];
-  assert.match(
-    verifyPrePushEvidence(modifiedAfterCompile, PASSED),
-    /mvn -q -DskipTests package/,
-  );
+  const staleVerdict = verifyPrePushEvidence(modifiedAfterCompile, PASSED);
+  assert.match(staleVerdict, /mvn -q -DskipTests package/);
+  assert.match(staleVerdict, /最后一次代码修改\(src\/a\.ts,事件 6\)/,
+    "哪个文件让证据失效要写进措辞,人一眼能看出是不是冤枉");
+
+  // 内网 task-31 实锤:编译绿了之后只写了一笔构建笔记,不算代码修改,
+  // 不许因此判"改动之后没有重跑"。
+  const notesAfterCompile = [
+    ...events,
+    event(6, "tool_requested", {
+      call_id: "notes", name: "Edit",
+      input: { path: "/work/repo/.mae-flow-work/build-notes.md" },
+    }),
+    event(7, "tool_requested", {
+      call_id: "state", name: "Write", input: { file_path: ".mae-flow.json" },
+    }),
+  ];
+  assert.equal(verifyPrePushEvidence(notesAfterCompile, PASSED), "",
+    "平台笔记与状态文件的写入不算代码修改");
+  assert.equal(isPlatformWorkPath(".mae-flow-work/bash-logs/1.log"), true);
+  assert.equal(isPlatformWorkPath("src/.mae-flow-workshop/a.ts"), false,
+    "只认 .mae-flow-work 目录本身,不吞名字相近的业务目录");
+  assert.equal(isPlatformWorkPath("src/main/App.java"), false);
 });
 
 test("prepush evidence: 失败、伪造或不匹配的 Bash 结果不能充当证据", () => {

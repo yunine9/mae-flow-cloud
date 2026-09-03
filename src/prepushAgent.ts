@@ -420,10 +420,29 @@ export function parsePrePushAgentReport(text: string): PrePushAgentReport | unde
   }
 }
 
+/** 平台现场文件:.mae-flow-work/ 下的笔记与日志、.mae-flow* 状态文件。
+ * 它们由宿主登记进 .git/info/exclude,push 只传 HEAD,永远进不了交付,
+ * 所以改它们不是"代码修改"。 */
+export function isPlatformWorkPath(path: string): boolean {
+  const segments = String(path ?? "").split(/[\\/]+/).filter(Boolean);
+  if (segments.some((segment) => segment === ".mae-flow-work")) return true;
+  const base = segments.at(-1) ?? "";
+  // 状态文件按名单认(与 .git/info/exclude 登记的同一批),不吞
+  // .mae-flow-workshop 这种名字相近的业务目录。
+  return /^\.mae-flow\.json(?:\.exited)?$/.test(base)
+    || /^\.mae-flow-(?:order\.json|chain\.md|dependencies\.md|issue\.md|history\.jsonl)$/.test(base);
+}
+
 /**
  * PASS 不能只认模型自述：报告中的编译与 UT 命令必须在本会话真实执行成功，
- * 且发生在最后一次文件 Edit/Write 之后。最终流水线仍是交付权威，这里只为
+ * 且发生在最后一次**代码**修改之后。最终流水线仍是交付权威，这里只为
  * 避免把一眼可见的红灯推上去烧慢流水线。
+ *
+ * "代码修改"只算能进交付的文件:.mae-flow-work/build-notes.md 这类平台
+ * 笔记不算(内网 task-31 实锤:Agent 编译绿了、最后写了一笔构建笔记,被判
+ * "改动之后没有重跑",白白多跑一轮甚至判 code_failure——而使命同时又
+ * 要求它别在同一份代码上重复重型编译,两头夹)。哪个文件让证据失效要写进
+ * 措辞,人一眼能看出是不是冤枉。
  */
 export function verifyPrePushEvidence(
   events: SemanticEvent[],
@@ -435,12 +454,18 @@ export function verifyPrePushEvidence(
   }
   const requested = new Map<string, { command: string; eventId: number }>();
   let lastWrite = 0;
+  let lastWritePath = "";
   for (const event of events) {
     if (event.kind !== "tool_requested") continue;
     const payload = event.payload as Record<string, any>;
     const name = String(payload.name ?? "");
     if (["Edit", "Write", "MultiEdit"].includes(name)) {
-      lastWrite = Math.max(lastWrite, event.eventId);
+      const path = String(payload.input?.path ?? payload.input?.file_path ?? "");
+      if (isPlatformWorkPath(path)) continue;
+      if (event.eventId > lastWrite) {
+        lastWrite = event.eventId;
+        lastWritePath = path;
+      }
     }
     if (name === "Bash") {
       const command = String(payload.input?.command ?? "").trim();
@@ -477,7 +502,8 @@ export function verifyPrePushEvidence(
   // 错误,却被判"没有真实成功执行",人只能去翻 bash 日志才看得出冤枉)。
   const stale = missing.filter((command) => covers(ranBeforeLastWrite, command));
   if (stale.length === missing.length) {
-    return "报告中的命令只在最后一次代码修改之前成功过，改动之后没有重跑: "
+    return `报告中的命令只在最后一次代码修改(${lastWritePath || "未知文件"}`
+      + `,事件 ${lastWrite})之前成功过，改动之后没有重跑: `
       + missing.join("；");
   }
   return "报告中的命令没有在最后一次代码修改后真实成功执行"
@@ -594,6 +620,8 @@ export function prePushMission(
     "",
     buildGuidance,
     budgetGuidance,
+    "写 .mae-flow-work/build-notes.md 这类平台笔记不算代码修改：写完不需要因此重跑编译或 UT；"
+      + "只有改了会进交付的文件(源码、测试、构建配置)才要在改完后重跑。",
     "同一份代码内容不要原样重复执行同一条重型编译/测试命令：首次失败后先读日志、"
       + "修代码或运行更小范围的定向检查；只有代码改变或确认属于短暂环境抖动时才重试。"
       + "Cloud 会复用同一代码内容上已经成功的相同命令，并在连续失败且代码未变化时阻止第三次空跑。",
