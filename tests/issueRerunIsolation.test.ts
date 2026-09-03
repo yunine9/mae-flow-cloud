@@ -78,7 +78,7 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
       "cd repo/origin && git -c user.name=test -c user.email=t@e commit -q"
       + " --allow-empty -m halfway" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n## 结论\\n根因:演示。\\n## 证据链\\n日志:演示报错。\\n## 置信度\\n高。\\n## 下一步建议\\n修复演示路径。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n根因:演示。\\n## 证据链\\n日志:演示报错。\\n## 置信度\\n高。\\n## 修改方案\\n修复演示路径。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=演示" } } },
     { text: "分析已提交,等待确认。" },
     // ---- 会话 B(重跑):拉单 → 拉仓必须拿到遗留警报,照常举闸收口。
@@ -87,7 +87,7 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n## 结论\\n根因:演示(重跑)。\\n## 证据链\\n日志:演示报错。\\n## 置信度\\n高。\\n## 下一步建议\\n修复演示路径。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n根因:演示(重跑)。\\n## 证据链\\n日志:演示报错。\\n## 置信度\\n高。\\n## 修改方案\\n修复演示路径。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=演示(重跑)" } } },
     { text: "重跑分析已提交。" },
   ], "scripted-v1", { linear: true });

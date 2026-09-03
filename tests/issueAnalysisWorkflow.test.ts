@@ -1,6 +1,6 @@
 /**
  * 问题分析工作流(ADR-0005)的机械面单测:
- * - submit_analysis 的报告四要素门票(missingAnalysisSections);
+ * - submit_analysis 的报告五章节门票(missingAnalysisSections);
  * - 货架 skill 的问题会话匹配口径(knowledgeMatchesIssueSession,
  *   materializeHostSkills 的 knowledgeScope="issue");
  * - 问题域知识上下文(issueKnowledgeContext)与编排层技能源
@@ -25,21 +25,23 @@ import {
 } from "../src/knowledgeAssetModel.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 
-test("分析报告四要素门票:缺章节点名打回,齐全放行,标题级别宽容", () => {
+test("分析报告五章节门票:缺章节点名打回,齐全放行,标题级别宽容", () => {
   const full = [
-    "# 问题分析:登录超时", "## 现象", "超时",
-    "## 结论", "连接池耗尽", "## 证据链", "日志:pool exhausted",
-    "### 置信度", "高", "## 下一步建议", "超时回收", "",
+    "# 问题分析:登录超时", "连接池耗尽致登录超时,方案:超时回收。",
+    "## 问题现象", "压测环境登录超时",
+    "## 问题根因", "连接池耗尽", "## 修改方案", "超时回收",
+    "## 证据链", "日志:pool exhausted",
+    "### 置信度", "高", "",
   ].join("\n");
   assert.deepEqual(missingAnalysisSections(full), [],
-    "四章节齐全(标题级别不限)必须放行");
+    "五章节齐全(标题级别不限)必须放行");
   assert.deepEqual(
     missingAnalysisSections("# 分析\n\n根因:连接池耗尽,但没分章节。\n"),
     [...ANALYSIS_REPORT_SECTIONS],
-    "旧三段式(章节淹没在正文里)必须整单打回");
+    "章节淹没在正文里必须整单打回");
   assert.deepEqual(
-    missingAnalysisSections("# 分析\n## 结论\nx\n## 证据链\ny\n"),
-    ["置信度", "下一步建议"],
+    missingAnalysisSections("# 分析\n## 问题根因\nx\n## 证据链\ny\n"),
+    ["问题现象", "修改方案", "置信度"],
     "缺哪几章点名哪几章");
   assert.deepEqual(
     missingAnalysisSections("# 分析\n正文提到结论、证据链与置信度。\n"),
@@ -159,7 +161,7 @@ test("问题域知识上下文:关联仓清单+绑定模块,无模块不造空�
   });
 });
 
-test("编排层技能源:issue-analysis 在源目录,报告模板含四章节标题", () => {
+test("编排层技能源:issue-analysis 在源目录,报告模板含五章节标题", () => {
   const body = readFileSync(
     join(SKILL_SOURCE_DIR, "issue-analysis", "SKILL.md"), "utf-8");
   assert.match(body, /^---\nname: issue-analysis\ndescription: [^\n]+\n/,
@@ -172,18 +174,19 @@ test("编排层技能源:issue-analysis 在源目录,报告模板含四章节标
     "必须有知识边界节——外部 skill 只供领域知识,不定流程/格式/节奏");
   assert.match(body, /报告确认即本工作流完成/,
     "生命周期钉死:报告提交即完成,交付纪律归 issue-delivery");
-  // 报告可读性三原则(2026-09-02):结论先行/证据指针化/提交前收敛。
-  assert.ok(body.indexOf("## 结论") < body.indexOf("## 现象"),
-    "结论必须先于现象——决策材料在报告顶部,读者一眼看到");
-  assert.match(body, /一句话根因/,
-    "结论首行=一句话根因——只读第一行就能拍板");
+  // 报告可读性纪律(2026-09-03):一句话总结先行/节名即问题/证据指针化/提交前收敛。
+  assert.ok(body.indexOf("一句话总结") < body.indexOf("## 问题现象"),
+    "一句话总结在所有章节之前——只读首行就能拍板");
+  assert.ok(body.indexOf("## 问题根因") < body.indexOf("## 修改方案")
+    && body.indexOf("## 修改方案") < body.indexOf("## 证据链"),
+    "节序=现象→根因→方案→证据链,节名即问题");
   assert.match(body, /原文不进报告|原文不贴/,
     "证据指针化:日志与代码原文不进报告,出处可核即可");
   assert.match(body, /结论版/,
     "提交前收敛:submit_analysis 交的是结论版,不是过程回放");
 });
 
-test("货架通用定位 skill 源(dts-diagnose):engineering 不限作用域,报告对齐四要素", () => {
+test("货架通用定位 skill 源(dts-diagnose):engineering 不限作用域,报告对齐五章节", () => {
   const path = join(SKILL_SOURCE_DIR, "..", "host-skills",
     "dts-diagnose", "SKILL.md");
   const body = readFileSync(path, "utf-8");
@@ -214,11 +217,13 @@ test("货架通用定位 skill 源(dts-diagnose):engineering 不限作用域,报
     "质量检查必须标适用范围——轻量路径免穷举类检查,不与执行纪律打架");
   assert.match(body, /定位结论只对分析时的代码基线负责/,
     "版本分支推导必须有落点:差异写进「置信度」,结论只对分析基线负责");
-  // 与编排层模板同序同密度(2026-09-02):结论先行/证据指针化/结论版。
-  assert.ok(body.indexOf("## 结论") < body.indexOf("## 现象"),
-    "模板同序:结论先行,现象与流程图参考放最后");
-  assert.match(body, /一句话根因/,
-    "结论首行=一句话根因,与编排层模板同源");
+  // 与编排层模板同序同密度(2026-09-03):一句话总结先行/节名即问题/证据指针化/结论版。
+  assert.ok(body.indexOf("一句话总结") < body.indexOf("## 问题现象")
+    && body.indexOf("## 问题根因") < body.indexOf("## 修改方案")
+    && body.indexOf("## 修改方案") < body.indexOf("## 证据链"),
+    "模板同序:总结先行,节序=现象→根因→方案→证据链");
+  assert.match(body, /一句话总结/,
+    "首行=一句话总结(串联 现象→根因→方案),与编排层模板同源");
   assert.match(body, /出处指针/,
     "日志证据指针化:时间戳+目录+关键字,不贴整段原文");
   assert.match(body, /结论版/,

@@ -88,9 +88,9 @@ function baseOptions(dataDir: string, model: ScriptedModelServer) {
 }
 
 /** 四要素合规的分析报告(门票校验过得了)。 */
-const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 结论\\n"
+const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n"
   + "非问题(测试环境时钟漂移)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n"
-  + "高:偏差可复现。\\n## 下一步建议\\n校时后观察,建议归档。\\n"
+  + "高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n"
   + "' > issue-analysis.md";
 
 test("月光开:有单分析闸全量代答,自动确认进问题修改", async () => {

@@ -184,7 +184,7 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 单号自动关联)。
 
 固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
-结论,以报告在场且四章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
+结论,以报告在场且五章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
 只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
 修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿收口)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
@@ -195,7 +195,7 @@ analyze,report_ut 仅 fix;build_deploy 因换库验证封存(ADR-0013)无
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
 图)、issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
-规范/报告四要素)、issue-research(研究方法与非问题出口,方法论兜底)、
+规范/报告五章节)、issue-research(研究方法与非问题出口,方法论兜底)、
 issue-delivery(分支/提交格式 `[单号][类型] 描述`/推送/MR)、
 issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 
@@ -215,13 +215,13 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
    未限定仓库/模块的 engineering 通用知识进所有问题会话,技术栈维度
    不参与,未分类维持不进。首个通用定位 skill 的仓内发布源:
    `assets/host-skills/dts-diagnose/SKILL.md`(五步诊断法,已经平台
-   适配:报告对齐四要素门票、无逐步确认、截图走 dts_get_ticket/
+   适配:报告对齐五章节门票、无逐步确认、截图走 dts_get_ticket/
    inspect_image;经管理面上传发布)。
 3. **仓内 issue-research**:兜底方法论;都没有则 Agent 按取证规范自行
    定位。
 
-报告门票:`submit_analysis` 机械校验 issue-analysis.md 含四章节
-(结论/证据链/置信度/下一步建议),缺章节整单打回——轻量路径的简版
+报告门票:`submit_analysis` 机械校验 issue-analysis.md 含五章节
+(问题现象/问题根因/修改方案/证据链/置信度),缺章节整单打回——轻量路径的简版
 报告同样要素不缺。"结论必附证据"由此从纯提示词约定升级为工具层关卡。
 
 ### 人工介入程度联动(2026-08-31,ADR-0006)
