@@ -893,11 +893,37 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --isolate-cache-root /var/cache/mae-flow-cloud/build \
   --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
+  --memsearch /srv/mae-flow/memsearch-venv/bin/python \
+  --memory-draft-provider <网关名> --memory-draft-model <便宜模型> \
   --data /var/lib/mae-flow-cloud --port 8787
 ```
 
 (外部演练交付链:去掉 `--platform`,改用 `--fake-platform`——
 从 `--repo` 灌裸仓当远端,推送/MR/流水线全环回。)
+
+### 任务记忆(memsearch 旁路 + 起草角色)要准备什么
+
+设计与边界见 `docs/knowledge-memory-design.md`(§7 旁路、§11 部署)。两行都是
+可选的:不给 `--memsearch` 就只有索引级开局推送、Agent 没有 corpus_search;
+不给起草角色就不起草、记忆只留模板 trigger。要上就按这个来:
+
+- **venv**:内网主机上 memsearch 0.4.19 + ONNX bge-m3(离线缓存)+ Milvus Lite,
+  装法、pip 源、根盘空间、HF 离线缓存结构、软链两级上级这四个坑,以内网主机
+  上的 `docs/memsearch-deploy.md`(2026-09-02 实装记录,尚未回灌本仓)为准。
+  `--memsearch` 给的是 venv 里的 python,环境变量(HF_HOME/OFFLINE/TMPDIR)
+  写在包装脚本里,不靠人 export。
+- **资源**:sidecar 常驻 RSS 内网实测 1.2 GB(macOS 本机 2.0 GB),预留 2.5 GB;
+  模型冷加载内网 2.8 s,ready 预算 60 s。索引 `milvus.db` 与语料 `corpus/`
+  都在 `--data` 目录下,受同一备份与回收纪律;索引删了可从 md 重建。
+- **起草角色**:`--memory-draft-provider/--memory-draft-model` 必须同时给,且在
+  models.json 里真有;选便宜的模型——每条闭环记忆一次单发、10 s 预算,目录
+  摘要同款。刻意不回落到任务模型(旁路不抢主会话额度)。
+- **容器**:整条链路在宿主进程里(sidecar 是宿主拉的子进程、起草是宿主发的
+  调用、corpus_search 是宿主进程内的工具),任务容器和 `--isolate-image`
+  不需要 python/memsearch/语料,镜像不用动。
+- **自查**:`harness/preflight.sh --memsearch <venv python> --models ... --provider ...`
+  的 4.7(sidecar 起得来、search 在预算内、报 RSS)与 4.8(`harness/memory-drill.ts`
+  真走记录→起草→台账→摘要→沉底,有 sidecar 加验搜得到/归档后搜不到)。
 
 - **`--pg` 是投影不是真相**:不配它一切照旧(文件即真相);配了它
   写失败也不影响流程(fail-open,页面只多一条投影失败日志)。建表
@@ -1089,6 +1115,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 6. 杀进程重启,确认等待中的任务还在、决定后能续跑
    (可执行演练:`harness/restart-drill.sh`——真 kill -9 真 HTTP,
    全绿即过;上线机器上跑一遍)。
+7. 任务记忆(可选项,配了才查):preflight 加 `--memsearch <venv python>`
+   跑 4.7/4.8 全绿;起一单在材料上圈选「记为记忆」,任务面板「这单记下的」
+   出现该条;再起一单同仓任务,开局使命里出现上一单的记忆且「这单用到的」
+   落账;团队资产「任务记忆」页签能看到并展开。
 
 ## 监控与排障
 
