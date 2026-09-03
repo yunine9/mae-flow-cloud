@@ -358,6 +358,15 @@ import {
   readExtractionJob,
   type ExtractionJobRecord,
 } from "./knowledgeExtraction.ts";
+import {
+  REQUIREMENT_REVIEW_DOCUMENT,
+  REQUIREMENT_REVIEW_RECEIPTS,
+  createRequirementReviewGateContract,
+  requirementReviewMission,
+} from "./requirementReviewAgent.ts";
+
+const REQUIREMENT_REVIEW_TIMEOUT_MS = 5 * 60_000;
+const MAX_REQUIREMENT_RECEIPTS_BYTES = 128 * 1024;
 
 /** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
 export type DecoratedHostSkillShelf = HostSkillShelf & {
@@ -3014,9 +3023,10 @@ export class TaskService {
     return true;
   }
 
-  /** 需求确认阶段只有 Agent 写文档，人只通过批注表达修改意见。单发
-   * 无工具模型调用返回完整新正文；没有第二份草稿、没有人工/Agent
-   * 合并，也不会提前启动内核需求分析。 */
+  /** 需求确认阶段只有 Agent 写文档，人只通过批注表达修改意见。每轮
+   * 在任务目录生成一份隔离副本，轻量 Agent 用 Read/Edit 原位修改并
+   * 写结构化回执；宿主校验、留 diff 后才替换正本。模型回复不再搬运
+   * 完整正文，因此长文也不受单次输出上限约束。 */
   private async reviseRequirementFromAnnotations(
     task: TaskState,
     annotations: Annotation[],
@@ -3044,54 +3054,113 @@ export class TaskService {
     };
     task.summary.detail = `Agent 正在落实 ${annotations.length} 条需求检视意见`;
     this.persist(task);
+    const reviewRoot = join(
+      task.summary.workspace, "requirement-review", revisionId);
+    const documentPath = join(reviewRoot, REQUIREMENT_REVIEW_DOCUMENT);
+    const receiptsPath = join(reviewRoot, REQUIREMENT_REVIEW_RECEIPTS);
+    let driver: CloudSession | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    let succeeded = false;
     try {
-      const raw = await draftWithModel({
-        modelsJson: this.activeModelsJson(),
+      mkdirSync(reviewRoot, { recursive: true });
+      writeFileSync(documentPath, task.summary.requirement, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+
+      const agentDir = join(
+        task.summary.workspace, "requirement-review-agent");
+      mkdirSync(agentDir, { recursive: true });
+      this.hardenAgentGitBoundary(agentDir);
+      writeFileSync(join(agentDir, "models.json"),
+        JSON.stringify(this.activeModelsJson()), { mode: 0o600 });
+      driver = await CloudSession.create({
+        taskId: `${task.summary.id}:requirement-review:${revisionId}`,
+        workspace: reviewRoot,
+        agentDir,
         provider: model.provider,
         model: model.model,
-        timeoutMs: 120_000,
-        system: [
-          "你是需求文档编辑 Agent。你只负责把人工检视意见准确落实到当前需求文档。",
-          "保持没有被意见要求改变的内容、结构与语气；不要开始技术分析、Story 或实现设计。",
-          "只修改意见指向的段落（以每条意见附带的原文定位）；其他段落必须逐字保留，服务端会逐段比对，动了未被指向的段落整轮拒收。需要新增内容时另起新段落。",
-          "意见明确时直接修改；不同意或确实存在歧义时，保留相关原文，不要猜测。",
-          "每条意见都必须有一条回执，用意见前面方括号里的 id 指回去：",
-          "outcome 取 fixed（已按意见修改）、not_fixed（没有修改，说明理由）、",
-          "needs_clarification（意见有歧义，说明需要提出人补充什么）；summary 用一两句话说清改了什么或为什么没改。",
-          "只输出以下格式，不要代码围栏、解释或其他文字：",
-          "===RECEIPTS===",
-          '[{"annotation_id":"<id>","outcome":"fixed","summary":"<说明>"}]',
-          "===REQUIREMENT===",
-          "<修改后的完整需求文档>",
-          "===END_REQUIREMENT===",
-        ].join("\n"),
-        user: [
-          "## 当前需求文档",
-          task.summary.requirement,
-          "",
-          "## 本轮人工检视意见",
-          renderAnnotations(annotations, this.ticketOf(task)),
-        ].join("\n"),
+        eventLog: new EventLog(join(reviewRoot, "events.jsonl")),
+        transcript: new TranscriptStore(
+          join(reviewRoot, "transcript.jsonl"), "requirement-review"),
+        gate: new GateService({
+          contract: createRequirementReviewGateContract(reviewRoot),
+          workspace: reviewRoot,
+          cwd: reviewRoot,
+          failClosed: true,
+          log: this.options.log,
+        }),
+        humanGate: new HumanGate(join(reviewRoot, "waiting.json")),
+        allowHumanQuestions: false,
+        allowSubagents: false,
+        sessionId: "requirement-review",
+        currentStep: () => "落实需求检视意见",
+        compactAnchor: () =>
+          `只修改 ${REQUIREMENT_REVIEW_DOCUMENT} 中本轮意见指向的内容`,
+        onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        log: this.options.log,
       });
-      const matched = raw.match(
-        /^\s*===RECEIPTS===\s*\n([\s\S]*?)\n===REQUIREMENT===\s*\n([\s\S]*?)\n===END_REQUIREMENT===\s*$/,
-      );
-      if (!matched?.[2]?.trim()) {
+      let timedOut = false;
+      timer = setTimeout(() => {
+        timedOut = true;
+        void driver?.abort().catch(() => undefined);
+      }, REQUIREMENT_REVIEW_TIMEOUT_MS);
+      timer.unref?.();
+      const outcome = await driver.start(requirementReviewMission({
+        annotations,
+        ticket: this.ticketOf(task),
+      }));
+      if (timedOut) {
         throw new TaskControlError(
-          "Agent 返回的需求文档格式不完整，本轮没有覆盖当前文档");
+          "需求文档修改超过 5 分钟，已停止本轮；原文未覆盖，检视意见可直接重提");
       }
-      // 回执和 MR 检视一样按 id 逐条对拍,少一条、多一条、说不清都不收:
-      // 没有回执的修改就是"改了但不告诉你哪条改了、哪条没采纳",复检的人
-      // 只能猜。回执不合格整轮拒收,意见留在草稿,文档一个字不动。
-      const receipts = this.parseRequirementReceipts(matched[1], annotations);
+      if (outcome.status === "session_ended" && outcome.reason === "failed") {
+        throw new TaskControlError(
+          `需求文档修改 Agent 未完成：${outcome.detail ?? "模型调用失败"}`);
+      }
       const current = task.summary.requirement_revision;
       if (current?.id !== revisionId
           || task.summary.status !== "waiting_for_human"
           || task.summary.waiting?.waiting_id !== waiting.waiting_id) {
         throw new StateConflictError("Agent 修改完成前任务状态已经变化，本轮结果未写入");
       }
+      if (!existsSync(receiptsPath)) {
+        const last = driver.finalReply().trim().slice(0, 240);
+        throw new TaskControlError(
+          "Agent 没有留下逐条检视回执，本轮拒收，原文未变"
+          + (last ? `；Agent 最后说明：${last}` : ""));
+      }
+      const receiptStat = lstatSync(receiptsPath);
+      if (!receiptStat.isFile() || receiptStat.isSymbolicLink()) {
+        throw new TaskControlError("Agent 的逐条回执不是普通文件，本轮拒收，原文未变");
+      }
+      if (receiptStat.size > MAX_REQUIREMENT_RECEIPTS_BYTES) {
+        throw new TaskControlError("Agent 的逐条回执异常过大，本轮拒收，原文未变");
+      }
+      let rawReceipts: string;
+      let after: string;
+      try {
+        rawReceipts = new TextDecoder("utf-8", { fatal: true })
+          .decode(readFileSync(receiptsPath));
+        after = new TextDecoder("utf-8", { fatal: true })
+          .decode(readFileSync(documentPath));
+      } catch {
+        throw new TaskControlError(
+          "Agent 写下的需求文档或逐条回执不是有效 UTF-8 文本，本轮拒收，原文未变");
+      }
+      // 回执和 MR 检视一样按 id 逐条对拍,少一条、多一条、说不清都不收。
+      // 区别只在传输方式:它是一个小型 JSON 文件，不再与完整正文揉进回复。
+      const receipts = this.parseRequirementReceipts(rawReceipts, annotations);
       const before = task.summary.requirement;
-      const after = matched[2].trim();
+      const reportsFixed = receipts.some((item) => item.outcome === "fixed");
+      if (reportsFixed && after === before) {
+        throw new TaskControlError(
+          "Agent 回执说已经修改，但需求原文没有变化；本轮拒收，检视意见仍可重提");
+      }
+      if (!reportsFixed && after !== before) {
+        throw new TaskControlError(
+          "Agent 修改了需求原文，但逐条回执没有说明哪条已落实；本轮拒收，原文未变");
+      }
       // 回执合格只说明"每条都有交代",挡不住顺手改别处;逐段比对才挡得住。
       const drifted = unanchoredRequirementChanges(before, after, annotations);
       if (drifted.length) {
@@ -3129,6 +3198,7 @@ export class TaskService {
       task.summary.requirement_revision = undefined;
       task.summary.detail = "Agent 已修改需求文档，等待检视意见闭环后确认进入分析";
       this.persist(task);
+      succeeded = true;
     } catch (error) {
       const current = task.summary.requirement_revision;
       if (current?.id === revisionId
@@ -3145,6 +3215,25 @@ export class TaskService {
         this.persist(task);
       }
       throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+      try {
+        driver?.dispose();
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 需求文档修改会话释放失败：${String(error)}`);
+      }
+      // 成功轮的证据已经进入 requirement-history 与批注回执，副本不再
+      // 有权威价值；失败现场保留，便于定位模型/门禁/文件错误。
+      if (succeeded && existsSync(reviewRoot)) {
+        try {
+          removeTaskTree(reviewRoot);
+        } catch (error) {
+          // 临时副本清扫是旁路，不能把已经可靠入账的成功轮反报成失败。
+          this.options.log?.(
+            `任务 ${task.summary.id} 需求文档修改临时目录清理失败：${String(error)}`);
+        }
+      }
     }
   }
 

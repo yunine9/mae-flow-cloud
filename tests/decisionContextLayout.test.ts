@@ -311,11 +311,14 @@ test("仓间依赖图里的负责面路径是块级元素,超宽省略而不是�
 });
 
 test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意见上", () => {
-  // 原来 Agent 返回整篇新文档直接覆盖,旧版本不留、没有回执,复检的人
-  // 只能靠锚点猜"改了什么",真核对得把整篇重读一遍。
+  // 文件编辑 Agent 只改隔离副本并留下独立回执；宿主校验、留底之后
+  // 才覆盖正本。模型回复不承担整篇正文传输。
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf8");
-  assert.match(service, /===RECEIPTS===/, "文档编辑 Agent 必须逐条回执");
-  assert.match(service, /parseRequirementReceipts\(matched\[1\], annotations\)/);
+  assert.match(service, /requirementReviewMission\(\{/);
+  assert.match(service, /parseRequirementReceipts\(rawReceipts, annotations\)/,
+    "文档编辑 Agent 必须逐条回执");
+  assert.doesNotMatch(service, /===END_REQUIREMENT===/,
+    "不许恢复让模型在回复里搬运完整需求正文的脆弱协议");
   assert.match(service, /storeRequirementRevision\(task\.summary\.workspace, revisionId, before, diff\.text\)/,
     "改前全文和 diff 先落盘再覆盖正文");
   assert.match(service, /store\.respond\(receipt\.annotation_id, \{/);
