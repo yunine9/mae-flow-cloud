@@ -104,12 +104,17 @@ test("任务容器默认可用 8 核，并在启动日志报告宿主可用 CPU"
   assert.match(result.output, /host-available-cpus=\d+/);
 });
 
-test("容器 npm 源(#75):命令行与 serve.json 都生效,缺席不注入", async () => {
+test("容器 npm 源(#75):命令行与 serve.json 都生效,内网形态零配置注入缺省", async () => {
   // 内网容器没有 registry 时 npm 打公网直到超时。配置入口是 --isolate-
   // npm-registry / serve.json "isolate-npm-registry"(键 = flag 去 --);
-  // 启动日志把生效值摆到明面,这里连缺省的"一个字都不提"一起钉死。
+  // 没配时按部署形态判定:挂载了 Maven settings.xml = 内网镜像部署,
+  // 回落内置缺省源,零配置直接可用(2026-09-03 部署反馈:不能指望运维
+  // 多配一行);非内网形态维持公网,但启动面要把后果与出路说明。
   const dir = mkdtempSync(join(tmpdir(), "mfc-npm-registry-serve-"));
   const registry = "https://npm.intra.example/repository/npm-group/";
+  const intranetDefault = "https://cmc.centralrepo.rnd.huawei.com/npm/";
+  const settingsXmlVolume
+    = "/etc/mae-flow/maven/settings.xml:/etc/mae-flow/maven/settings.xml:ro";
   const boot = (tag: string, args: string[]) => run([
     "--data", join(dir, tag), "--port", "0",
     "--isolate-image", "fixture/builder:test", ...args,
@@ -132,10 +137,25 @@ test("容器 npm 源(#75):命令行与 serve.json 都生效,缺席不注入", as
   assert.ok(fromFile.output.includes(`容器 npm 源: ${registry}`),
     `serve.json 键 isolate-npm-registry 未生效,输出:\n${fromFile.output.slice(0, 800)}`);
 
+  const intranet = await boot("intranet", ["--isolate-volume", settingsXmlVolume]);
+  assert.equal(intranet.code, 0, intranet.output);
+  assert.ok(intranet.output.includes(`容器 npm 源: ${intranetDefault}`),
+    "挂了 settings.xml 的内网形态必须零配置注入缺省源");
+  assert.ok(intranet.output.includes("内网形态缺省"),
+    "缺省注入要亮出来源,运维才知道去哪覆盖");
+
+  const intranetOverride = await boot("intranet-override", [
+    "--isolate-volume", settingsXmlVolume, "--isolate-npm-registry", registry,
+  ]);
+  assert.equal(intranetOverride.code, 0, intranetOverride.output);
+  assert.ok(intranetOverride.output.includes(`容器 npm 源: ${registry}`)
+    && !intranetOverride.output.includes("内网形态缺省"),
+    "显式配置覆盖形态缺省,且来源标注消失");
+
   const bare = await boot("bare", []);
   assert.equal(bare.code, 0, bare.output);
-  assert.ok(!bare.output.includes("容器 npm 源"),
-    "缺省不注入:没配 registry 时启动面不得声明 npm 源");
+  assert.ok(bare.output.includes("容器 npm 源: 未注入,npm 将打公网"),
+    "非内网形态(无 settings.xml 挂载)维持公网现状,但要把后果与出路说明");
 });
 
 test("SIGTERM 走优雅关闭并明确承诺业务状态不变", async () => {

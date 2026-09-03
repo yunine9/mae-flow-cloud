@@ -546,8 +546,20 @@ async function main(): Promise<void> {
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
   const isolateUser = flag("--isolate-user");
   // 容器里只有 npm_config_cache 没有源地址,内网 npm 会打公网直到超时
-  // (2026-09-03 issue #75)。配了才注入 npm_config_registry,缺席不注入。
-  const isolateNpmRegistry = flag("--isolate-npm-registry");
+  // (2026-09-03 issue #75)。显式配置优先;没配时按部署形态判定:挂载了
+  // Maven settings.xml 就是内网镜像形态,回落内置缺省源——与 DTS 网关
+  // 同款"值是死的就硬编码,但生效有门"(2026-09-03 部署反馈:零配置
+  // 部署要直接可用,不能指望多配一行)。URL 待 #77 与 issue-28 现场
+  // 对拍确认;演示/外网形态没有 settings.xml 挂载,npm 维持公网现状。
+  const NPM_REGISTRY_INTRANET_DEFAULT = "https://cmc.centralrepo.rnd.huawei.com/npm/";
+  const isolateVolumes = flags("--isolate-volume");
+  const isolateNpmRegistryExplicit = flag("--isolate-npm-registry");
+  const isolateNpmRegistry = isolateNpmRegistryExplicit
+    ?? (isolateVolumes.some((volume) =>
+          volume.split(":")[1]?.replace(/\/+$/, "")
+            === "/etc/mae-flow/maven/settings.xml")
+      ? NPM_REGISTRY_INTRANET_DEFAULT
+      : undefined);
   const isolateCacheRoot = resolve(
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
@@ -643,9 +655,16 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
-    // registry 配错只会在容器内 npm 报错时才暴露,启动期摆到明面好排障。
+    // registry 配错只会在容器内 npm 报错时才暴露,启动期摆到明面好排障;
+    // 来源(显式配置/内网形态缺省)也摆出来,运维一眼看出该不该改配置。
     if (isolateNpmRegistry) {
-      console.log(`[serve] 容器 npm 源: ${isolateNpmRegistry}`);
+      console.log(`[serve] 容器 npm 源: ${isolateNpmRegistry}${
+        isolateNpmRegistryExplicit ? ""
+          : "(内网形态缺省——挂载了 Maven settings.xml 自动注入,"
+            + "--isolate-npm-registry 可覆盖)"}`);
+    } else {
+      console.log("[serve] 容器 npm 源: 未注入,npm 将打公网"
+        + "(内网部署请挂载 Maven settings.xml 或配置 --isolate-npm-registry)");
     }
     console.log(`[serve] 构建缓存策略:连续 ${buildCacheRetentionDays} 天未使用回收，`
       + `总量上限 ${buildCacheMaxGb > 0 ? `${buildCacheMaxGb}GB` : "不限"}`);
