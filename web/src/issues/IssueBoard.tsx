@@ -137,7 +137,11 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   useEffect(() => {
     const sync = () => {
       const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
-      const next = match ? decodeURIComponent(match[1]) : "";
+      let next = "";
+      if (match) {
+        try { next = decodeURIComponent(match[1]); }
+        catch { next = match[1]; } // 坏编码按字面当 id:后端会 404,交给错误横幅
+      }
       setOpenId((current) => current === next ? current : next);
     };
     addEventListener("popstate", sync);

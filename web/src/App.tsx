@@ -938,12 +938,15 @@ export function App() {
       history.pushState(appHistoryState("issues"), "", next);
     }
   };
-  const closeIssueSession = () => {
+  /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
+   *  (toState 记录归位后所在视图)。关工作台与切页签守门共用这一份。 */
+  const normalizeIssueRoute = (target: View) => {
+    if (!readIssueRoute()) return;
+    history.replaceState(appHistoryState(target,
+      target === "knowledge" ? teamAssetTab : undefined), "", "/");
     setIssueRouteId("");
-    if (location.pathname !== "/") {
-      history.replaceState(appHistoryState("issues"), "", "/");
-    }
   };
+  const closeIssueSession = () => normalizeIssueRoute("issues");
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
     if (related) openArtifacts(related);
@@ -982,14 +985,11 @@ export function App() {
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
   /** 离开问题处理页签的归位守门人:URL 若还挂在 /issues/X(工作台深链),
-   * replaceState 回根路径并清 App 层快照——不变量「issueRouteId 非空 ⇔
-   * URL 是 /issues/:id」,别的页签不许背着工作台地址(刷新/后退行为
-   * 跳变)。目标仍是问题处理(重点当前页签)不算离开,原样返回。 */
+   * 归位到根路径(归一实现在 normalizeIssueRoute)。目标仍是问题处理
+   * (重点当前页签)不算离开,原样返回。 */
   const leaveIssueRoute = (target: View) => {
-    if (target === "issues" || !readIssueRoute()) return;
-    history.replaceState(appHistoryState(target,
-      target === "knowledge" ? teamAssetTab : undefined), "", "/");
-    setIssueRouteId("");
+    if (target === "issues") return;
+    normalizeIssueRoute(target);
   };
   const selectView = (next: View) => {
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
@@ -1186,7 +1186,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={() => setView("profile")} /></Suspense>}
+        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={() => { leaveIssueRoute("profile"); setView("profile"); }} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
