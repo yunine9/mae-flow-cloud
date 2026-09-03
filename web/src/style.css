@@ -11248,6 +11248,8 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .diagnostics-action small { color: var(--muted); font-size: 11px; }
 .ws-verify-focus {
   margin: 12px 14px;
+  min-width: 0;
+  max-width: calc(100% - 28px);
   padding: 14px 16px;
   display: grid;
   gap: 7px;
@@ -11259,9 +11261,13 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .ws-verify-focus strong { color: var(--text-strong); font-size: 15px; }
 .ws-verify-focus p {
   margin: 0;
+  min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   font-size: var(--font-size-assist);
   line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .ws-verify-focus-waiting {
   padding: 8px 11px;

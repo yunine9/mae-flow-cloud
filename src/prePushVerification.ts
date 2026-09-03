@@ -37,7 +37,8 @@ export type PrePushCheckOutcome =
 export type PrePushReportedOutcome = PrePushCheckOutcome | "not_run";
 
 export interface PrePushRevision {
-  /** 准备推送的本地 HEAD。新 SHA 即使 tree 相同也必须重新验证。 */
+  /** 准备推送的本地 HEAD。通常新 SHA 要重验；宿主证明只改提交元数据、
+   * tree 完全一致时可通过显式 rebindEquivalentPrePushRevision 迁票。 */
   sha: string;
   /**
    * 工作区内容指纹（应覆盖 tracked/untracked 的待推送源码和测试）。
@@ -649,6 +650,60 @@ export function getReusablePushReceipt(
       || state.receipt.checks.unit_test.completed_at
         !== state.checks.unit_test.completed_at) return undefined;
   return state.receipt;
+}
+
+/**
+ * 宿主已经机械证明前后 commit 的 tree 完全一致时，只把 PASS 收据重绑到
+ * 新提交对象。调用方负责 tree 等价校验；这里仍严格核对旧收据确实属于
+ * previous，避免把任意历史绿灯搬到新代码上。
+ */
+export function rebindEquivalentPrePushRevision(
+  state: PrePushVerificationState,
+  previous: PrePushRevision,
+  next: PrePushRevision,
+  at: string,
+): PrePushVerificationState {
+  if (!sameRevision(state, previous)) {
+    throw new Error("旧 Build-Fix 收据与提交说明修正前的 revision 不一致");
+  }
+  if (state.state === "user_skipped") {
+    return {
+      ...state,
+      sha: next.sha,
+      workspace_fingerprint: next.workspace_fingerprint,
+      updated_at: at,
+      message: `提交说明已修正；代码内容未变，沿用 ${state.skipped_by ?? "用户"} 的跳过决定`,
+      last_invalidation: {
+        reason: "new_sha",
+        previous_sha: previous.sha,
+        previous_workspace_fingerprint: previous.workspace_fingerprint,
+        at,
+      },
+    };
+  }
+  const receipt = getReusablePushReceipt(state, previous);
+  if (!receipt) throw new Error("只有有效的 Build-Fix PASS 收据才能等价重绑");
+  return {
+    ...state,
+    sha: next.sha,
+    workspace_fingerprint: next.workspace_fingerprint,
+    updated_at: at,
+    message: `提交说明已修正；代码内容未变，沿用 ${previous.sha.slice(0, 12)} 的编译和 UT 结果`,
+    receipt: {
+      ...receipt,
+      sha: next.sha,
+      workspace_fingerprint: next.workspace_fingerprint,
+      ...(receipt.execution ? {
+        execution: { ...receipt.execution, sha: next.sha },
+      } : {}),
+    },
+    last_invalidation: {
+      reason: "new_sha",
+      previous_sha: previous.sha,
+      previous_workspace_fingerprint: previous.workspace_fingerprint,
+      at,
+    },
+  };
 }
 
 export function canPushRevision(

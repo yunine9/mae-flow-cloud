@@ -468,7 +468,13 @@ REPLY` } } },
     assert.notEqual(shaBeforeBuildFix, shaAfterBuildFix,
       "测试前提：Build-Fix 必须在回复草稿之后产生新提交");
     const summary = service.get(id)!;
-    assert.equal(summary.delivery?.git_push?.sha, shaAfterBuildFix);
+    const pushedSha = summary.delivery?.git_push?.sha;
+    assert.ok(pushedSha);
+    assert.notEqual(pushedSha, shaAfterBuildFix,
+      "Build-Fix 的坏标题应在 push 前被安全 amend 成平台规范");
+    assert.equal(git(cwd, "rev-parse", `${pushedSha}^{tree}`),
+      git(cwd, "rev-parse", `${shaAfterBuildFix}^{tree}`),
+      "自动修标题不能改变 Build-Fix 已验证的代码内容");
     const operations = readFileSync(join(
       summary.workspace, "delivery-outbox.jsonl"), "utf-8")
       .trim().split("\n").map((line) => JSON.parse(line));
@@ -476,8 +482,8 @@ REPLY` } } },
       operation.op === "enqueue"
       && operation.item?.payload?.discussion_id === "d-final-sha");
     assert.equal(enqueued.length, 1);
-    assert.equal(enqueued[0].item.payload.expected_sha, shaAfterBuildFix,
-      "outbox 必须绑定 Build-Fix 收敛后的最终 SHA");
+    assert.equal(enqueued[0].item.payload.expected_sha, pushedSha,
+      "outbox 必须绑定修正标题后实际推送的最终 SHA");
     assert.notEqual(enqueued[0].item.payload.expected_sha, shaBeforeBuildFix,
       "普通 Agent 收口时的中间 SHA 不得提前入队");
   } finally {

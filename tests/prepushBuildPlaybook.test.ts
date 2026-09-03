@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   detectPrePushBuildProfile,
   isPrePushBuildCommand,
+  PrePushCommandRepeatGuard,
   prePushBuildGuidance,
   prePushCommandTimeoutSeconds,
   renderPrePushBuildGuidance,
@@ -221,4 +222,23 @@ test("build playbook: 实际注入 Build-Fix Agent mission，而非仅停留在�
   assert.match(mission, /不要自行用 600 秒/);
   assert.match(mission, /不要求 git status 为空/);
   assert.match(mission, /不要为了清空状态把编译产物提交进去/);
+  assert.match(mission, /不要使用 fix: \/ feat: \/ chore:/);
+  assert.match(mission, /同一份代码内容不要原样重复/);
+});
+
+test("Build-Fix 重型命令护栏：成功复用，失败仅允许一次原样重试", () => {
+  const guard = new PrePushCommandRepeatGuard();
+  const command = "mvn   test";
+  assert.equal(guard.decide("tree-a", command), "execute");
+  guard.record("tree-a", command, 1);
+  assert.equal(guard.decide("tree-a", "mvn test"), "execute",
+    "同代码首次失败后允许一次短暂环境抖动重试");
+  guard.record("tree-a", "mvn test", 1);
+  assert.equal(guard.decide("tree-a", command), "block_repeat");
+  assert.equal(guard.decide("tree-b", command), "execute",
+    "代码内容变化后自然获得新验证机会");
+
+  const passed = new PrePushCommandRepeatGuard();
+  passed.record("tree-a", command, 0);
+  assert.equal(passed.decide("tree-a", "mvn test"), "reuse_success");
 });

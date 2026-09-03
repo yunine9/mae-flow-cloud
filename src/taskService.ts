@@ -367,6 +367,9 @@ import {
 } from "./warmupAgent.ts";
 import {
   detectPrePushBuildProfile,
+  isPrePushBuildCommand,
+  PrePushCommandRepeatGuard,
+  prePushCommandIdentity,
   prePushCommandTimeoutSeconds,
   resolvePrePushExecutionBudget,
 } from "./prepushBuildPlaybook.ts";
@@ -384,6 +387,7 @@ import {
   getReusablePushReceipt,
   observePrePushRevision,
   recordPrePushReport,
+  rebindEquivalentPrePushRevision,
   retryPrePushVerification,
   restorePrePushVerification,
   sameRevision,
@@ -392,6 +396,16 @@ import {
   type PrePushRevision,
   type PrePushVerificationState,
 } from "./prePushVerification.ts";
+import {
+  CommitMessagePolicyError,
+  DEFAULT_COMMIT_CONVENTION,
+  cloudCommitSubject,
+  commitHookRejection,
+  rejectedCommitSha,
+  repairedPlatformCommitSubject,
+  validPlatformCommitSubject,
+  type CommitSubjectRecord,
+} from "./commitPolicy.ts";
 import {
   emptyTokenUsageState,
   recordTokenUsage,
@@ -468,6 +482,11 @@ export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
  * 保留用户能据此行动的结论，避免 TypeError 和宿主绝对路径外泄。 */
 export function userFacingDeliveryFailure(error: unknown): string {
   const raw = String(error).replace(/^(Error:\s*)+/, "").trim();
+  if (commitHookRejection(raw)) {
+    const sha = rejectedCommitSha(raw);
+    return `推送被仓库拒绝：提交${sha ? ` ${sha.slice(0, 12)}` : ""}`
+      + "的说明不符合仓库规范。远端没有接收这次更新，请修正提交说明后重新尝试交付";
+  }
   if (/\bfetch failed\b/i.test(raw)) {
     return "交付平台暂时连接不上，请检查平台地址或网络";
   }
@@ -488,7 +507,9 @@ export function userFacingDeliveryFailure(error: unknown): string {
  * 超时不在这里，仍由既有恢复预算自动续推。 */
 export function deterministicDeliveryFailure(cause: string): boolean {
   return cause.startsWith("交付平台响应不完整")
-    || cause.startsWith("流水线返回未知状态");
+    || cause.startsWith("流水线返回未知状态")
+    || cause.startsWith("推送被仓库拒绝")
+    || cause.startsWith("提交说明不符合仓库规范");
 }
 
 export type TaskStatus =
@@ -5545,7 +5566,7 @@ export class TaskService {
   private effectiveCommitConvention(): string | undefined {
     const text = this.options.commitConvention;
     const trimmed = String(text ?? "").trim();
-    return trimmed || undefined;
+    return trimmed || DEFAULT_COMMIT_CONVENTION;
   }
 
   /** 当前生效的 models.json 同形内容(设置层压部署层)——
@@ -9193,7 +9214,8 @@ export class TaskService {
         add.length ? `补入 ${add.length} 个勾选文件` : "",
       ].filter(Boolean).join("、");
       await run(["commit", "-m",
-        `chore: 按最终人工检视整理交付清单——${summary}`], "整理提交");
+        cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+          `按最终人工检视整理交付清单——${summary}`)], "整理提交");
     }
     // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
     // 不是"被销毁";它们成为未暂存改动留在现场,脏区检查放行已确认
@@ -12682,6 +12704,155 @@ export class TaskService {
     };
   }
 
+  /** 只审计本任务相对定格基线、且远端尚不存在的提交。冲突修复会把
+   * origin/目标分支合进 HEAD；这些二亲历史已经在远端，不是本任务新
+   * 推送的对象，不能因为它们沿用旧标题规范就误拦当前交付。 */
+  private async taskCommitSubjects(
+    task: TaskState,
+    head: string,
+  ): Promise<CommitSubjectRecord[]> {
+    if (!task.cwd) throw new CommitMessagePolicyError("任务代码现场不可用，无法检查提交说明");
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    const baseline = await frozenTaskBaseline(task.cwd) ?? snapshot?.baseline;
+    const range = baseline
+      ? [`${baseline}..${head}`, "--not", "--remotes"]
+      : [head, "--not", "--remotes"];
+    const result = await runSafeWorktreeGitAsync(task.cwd, [
+      "log", "--format=%H%x09%s", ...range,
+    ], { timeoutMs: 30_000 });
+    if (result.status !== 0) {
+      throw new CommitMessagePolicyError(
+        `读取待推送提交说明失败：${String(
+          result.stderr || result.error || "未知 Git 错误").trim().slice(0, 240)}`,
+      );
+    }
+    return String(result.stdout ?? "").split("\n").flatMap((line) => {
+      const separator = line.indexOf("\t");
+      if (separator <= 0) return [];
+      const sha = line.slice(0, separator).trim();
+      const subject = line.slice(separator + 1).trim();
+      return sha && subject ? [{ sha, subject }] : [];
+    });
+  }
+
+  private async invalidTaskCommitSubjects(
+    task: TaskState,
+    head: string,
+  ): Promise<CommitSubjectRecord[]> {
+    return (await this.taskCommitSubjects(task, head))
+      .filter((commit) => !validPlatformCommitSubject(commit.subject));
+  }
+
+  private commitPolicyFailure(
+    task: TaskState,
+    detail: string,
+  ): "blocked" {
+    task.summary.delivery = { ...task.summary.delivery, skipped: detail };
+    this.markVerificationStalled(task, detail);
+    this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+    return "blocked";
+  }
+
+  /**
+   * Build-Fix/旧版本 Cloud 若只把当前未推送 HEAD 的说明写成 `fix: ...`，
+   * 宿主可安全 amend：先确认索引无额外内容，修正后再证明 tree 完全一致。
+   * 多个坏提交或中间提交不猜着 rebase，明确停下；真正 push 前仍会再审计。
+   */
+  private async ensureCommitMessagePolicy(
+    task: TaskState,
+  ): Promise<"ok" | "repaired" | "blocked"> {
+    if (!task.cwd) return this.commitPolicyFailure(
+      task, "提交说明检查失败：任务代码现场不可用");
+    const before = await this.prePushRevision(task);
+    let invalid: CommitSubjectRecord[];
+    try {
+      invalid = await this.invalidTaskCommitSubjects(task, before.sha);
+    } catch (error) {
+      return this.commitPolicyFailure(task,
+        error instanceof Error ? error.message : String(error));
+    }
+    if (!invalid.length) return "ok";
+    const listed = invalid.slice(0, 3)
+      .map((item) => `${item.sha.slice(0, 12)}「${item.subject.slice(0, 80)}」`)
+      .join("、");
+    if (invalid.length !== 1 || invalid[0].sha !== before.sha
+        || task.summary.delivery?.git_push?.sha === before.sha) {
+      return this.commitPolicyFailure(task,
+        `提交说明不符合仓库规范：${listed}${invalid.length > 3
+          ? ` 等 ${invalid.length} 条` : ""}。为避免自动改写多提交历史，`
+        + "系统已停止推送；请修正这些提交说明后点“重新尝试交付”。");
+    }
+
+    const git = (args: string[]) => runSafeWorktreeGitAsync(task.cwd!, args, {
+      timeoutMs: 60_000,
+      configs: [
+        ["user.name", "mae-flow-cloud"],
+        ["user.email", "cloud@mae-flow.local"],
+      ],
+    });
+    const staged = await git(["diff", "--cached", "--quiet"]);
+    if (staged.status !== 0) {
+      return this.commitPolicyFailure(task,
+        `提交说明不符合仓库规范：${listed}；同时索引中还有未提交内容，`
+        + "系统不会把它们夹带进 amend。请整理后重新尝试交付。");
+    }
+    const oldTreeResult = await git(["rev-parse", `${before.sha}^{tree}`]);
+    const oldTree = String(oldTreeResult.stdout ?? "").trim();
+    if (oldTreeResult.status !== 0 || !oldTree) {
+      return this.commitPolicyFailure(task, "读取提交内容指纹失败，未自动修正提交说明");
+    }
+    const subject = repairedPlatformCommitSubject(
+      task.summary.ticket ?? task.summary.id,
+      invalid[0].subject,
+    );
+    const amended = await git(["commit", "--amend", "-m", subject]);
+    if (amended.status !== 0) {
+      return this.commitPolicyFailure(task,
+        `自动修正提交说明失败：${String(
+          amended.stderr || amended.error || "未知 Git 错误").trim().slice(0, 240)}`);
+    }
+    const after = await this.prePushRevision(task);
+    const newTreeResult = await git(["rev-parse", `${after.sha}^{tree}`]);
+    const newTree = String(newTreeResult.stdout ?? "").trim();
+    if (newTreeResult.status !== 0 || newTree !== oldTree) {
+      // staged 已确认为空，理论上不会走到这里；发生时回到旧提交并停下，
+      // 宁可保留原问题，也不能把未经验证的内容伪装成“只改了标题”。
+      await git(["reset", "--soft", before.sha]);
+      return this.commitPolicyFailure(task,
+        "自动修正提交说明后代码内容指纹发生变化，已回到原提交并停止推送");
+    }
+
+    const now = new Date().toISOString();
+    const prepush = task.summary.delivery?.prepush;
+    if (prepush && ["passed", "user_skipped"].includes(prepush.state)
+        && sameRevision(prepush, before)) {
+      this.setPrePushState(task,
+        rebindEquivalentPrePushRevision(prepush, before, after, now));
+    }
+    const selection = task.summary.delivery_selection;
+    if (selection?.status === "confirmed" && selection.head === before.sha) {
+      selection.head = after.sha;
+      selection.updated_at = now;
+      selection.confirmation_reason = [selection.confirmation_reason,
+        "宿主仅修正提交说明，代码内容与已确认版本完全一致"]
+        .filter(Boolean).join("；");
+    }
+    if (task.summary.delivery?.last_reviewed_head === before.sha) {
+      task.summary.delivery.last_reviewed_head = after.sha;
+    }
+    if (task.summary.delivery) {
+      task.summary.delivery.stalled = undefined;
+      task.summary.delivery.waiting_on = undefined;
+      task.summary.delivery.skipped = undefined;
+    }
+    task.summary.detail = `已自动把提交 ${before.sha.slice(0, 12)} 的说明修正为`
+      + `「${subject}」；代码内容未变，继续交付`;
+    this.persist(task);
+    this.options.log?.(`任务 ${task.summary.id} 提交说明已机械修正：`
+      + `${before.sha.slice(0, 12)} → ${after.sha.slice(0, 12)}；tree=${oldTree}`);
+    return "repaired";
+  }
+
   /** 脏路径清单(空数组=clean)。为什么要路径不只要布尔(2026-08-25
    * 内网事故复盘):构建在同挂载工作区里落产物时,"工作区仍有未提交
    * 业务改动"这句既没告诉模型该清什么,也没告诉人该 gitignore 什么,
@@ -13011,6 +13182,20 @@ export class TaskService {
       `Build-Fix 超过 ${Math.ceil(attemptTimeoutMs / 60_000)} 分钟，已终止本轮`,
     ), attemptTimeoutMs);
     attemptTimer.unref?.();
+    const repeatGuard = new PrePushCommandRepeatGuard();
+    // Edit/Write 会改变尚未 commit 的源码，HEAD tree 暂时看不出来；用本轮
+    // mutationGeneration 补上。使命已经禁止用 shell 文本替换伪装修改，
+    // Bash 修改最终 commit 后 tree 也会自然变化。
+    let mutationGeneration = 0;
+    const codeContentIdentity = async (): Promise<string> => {
+      // 护栏自己的版本探针不能占用容器执行通道：容器故障/超时应该精确
+      // 归到用户真正发出的构建命令，而不是先打中一条额外的内部命令。
+      const read = await runSafeWorktreeGitAsync(task.cwd!, [
+        "rev-parse", "--verify", "HEAD^{tree}",
+      ], { timeoutMs: 15_000 });
+      const tree = read.status === 0 ? String(read.stdout ?? "").trim() : "";
+      return `${tree || "tree-unavailable"}:${mutationGeneration}`;
+    };
     const withExecution = (result: PrePushRunResult): PrePushRunResult => {
       const metadata = container.metadata;
       if (!metadata) return result;
@@ -13114,15 +13299,41 @@ export class TaskService {
         bashOperations: {
           exec: async (command, dir, execOptions) => {
             try {
+              const heavy = isPrePushBuildCommand(command);
+              const contentIdentity = heavy
+                ? await codeContentIdentity() : undefined;
+              if (contentIdentity) {
+                const decision = repeatGuard.decide(contentIdentity, command);
+                if (decision === "reuse_success") {
+                  execOptions.onData(Buffer.from(
+                    "[Cloud] 当前代码内容上相同的重型命令已经成功，复用本轮真实结果，不再重复执行。\n",
+                  ));
+                  this.options.log?.(`[prepush-repeat] 任务 ${task.summary.id} 复用成功命令: ${
+                    prePushCommandIdentity(command).slice(0, 180)}`);
+                  return { exitCode: 0 };
+                }
+                if (decision === "block_repeat") {
+                  execOptions.onData(Buffer.from(
+                    "[Cloud] 已阻止第三次原样执行：当前代码内容未变化，且这条重型命令已经连续失败两次。请先阅读已有日志、修改代码或运行更小范围的定向检查；不要换空白或包装方式绕过。\n",
+                  ));
+                  this.options.log?.(`[prepush-repeat] 任务 ${task.summary.id} 阻止无进展命令: ${
+                    prePushCommandIdentity(command).slice(0, 180)}`);
+                  return { exitCode: 75 };
+                }
+              }
               const timeout = prePushCommandTimeoutSeconds(
                 command,
                 execOptions.timeout,
                 executionBudget,
               );
-              return await container.exec(command, dir, {
+              const result = await container.exec(command, dir, {
                 ...execOptions,
                 timeout,
               });
+              if (contentIdentity) {
+                repeatGuard.record(contentIdentity, command, result.exitCode);
+              }
+              return result;
             } catch (error) {
               if (error instanceof TaskContainerExecTimeoutError) {
                 failInfrastructure(
@@ -13139,6 +13350,9 @@ export class TaskService {
           },
         },
         afterFileMutation: (path) => {
+          if (!/(?:^|[\\/])\.mae-flow-work(?:[\\/]|$)/.test(path)) {
+            mutationGeneration += 1;
+          }
           repairContainerMutationOwnership({
             workspace: task.cwd!,
             path,
@@ -13278,6 +13492,7 @@ export class TaskService {
       ),
       branch,
       baseline,
+      commitConvention: this.effectiveCommitConvention(),
       ...(changeScope ? { changeScope } : {}),
       ...(task.summary.delivery_selection ? {
         deliverySelection: {
@@ -13882,7 +14097,8 @@ export class TaskService {
         + "工作区还有未提交改动;平台不猜着整理,请在代码检视中确认处理。");
     }
     const replay = await git(["commit-tree", `${head}^{tree}`, "-p", frozen,
-      "-m", "chore: 按任务定格基线重放净改动——历史重排已被平台整理"]);
+      "-m", cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+        "按任务定格基线重放净改动——历史重排已被平台整理")]);
     const replayed = String(replay.stdout ?? "").trim();
     if (replay.status !== 0 || !replayed) {
       return stall(`按定格基线重放净改动失败:${String(
@@ -14141,7 +14357,8 @@ export class TaskService {
       if (hasStaged.status !== 0) {
         await run([
           "commit", "-m",
-          "chore: 按已确认推送范围收口流水线修复",
+          cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+            "按已确认推送范围收口流水线修复"),
         ], "提交整理后的修复");
       }
     } catch (error) {
@@ -14319,15 +14536,23 @@ export class TaskService {
       const beforePrePush = await this.reconcileConfirmedDeliveryBoundary(task);
       if (beforePrePush === "blocked") return;
       if (!await this.agentPlatformChangesAllowPush(task)) return;
+      // 内核外的 Build-Fix/历史 Cloud 版本可能产生 `fix: ...` 提交。
+      // 在烧构建前先修当前 HEAD；中间坏提交明确停下，不等远端 hook 拒收。
+      if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
+      // Build-Fix 本身也允许本地 commit，收口后必须再用同一机器规则复核。
+      // 仅标题 amend 时 tree 不变，ensure 会迁移 PASS 收据而不重跑全量 UT。
+      if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       // prepush Agent 本身可能修代码并产生新提交。若它误带回的仍只是既有
       // 排除项，机械重组后需要让新 SHA 再验一次；最多这一次回补，不循环。
       const afterPrePush = await this.reconcileConfirmedDeliveryBoundary(task);
       if (afterPrePush === "blocked") return;
       if (afterPrePush === "changed") {
+        if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
         if (!await this.preparePush(task, branch, baseline, epoch)) return;
         if (!this.current(task, epoch)) return;
+        if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       }
       if (!await this.agentPlatformChangesAllowPush(task)) return;
       await this.inheritWorkspaceReviewDeliverySelection(task);
@@ -14558,9 +14783,15 @@ export class TaskService {
         // 还是 4xx,不烧重试预算,当场如实停摆喊人(MFC-020 实测同文
         // MR-400 以 poll_interval 节拍刷了 86 条日志、两轮预算)。
         // 408/429 是超时/限流,仍按瞬时故障自愈。
+        const commitRejected = error instanceof CommitMessagePolicyError
+          || commitHookRejection(rawCause)
+          || cause.startsWith("推送被仓库拒绝")
+          || cause.startsWith("提交说明不符合仓库规范");
         const contractBroken = deterministicDeliveryFailure(cause);
         if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause) || contractBroken) {
-          this.markVerificationStalled(task, `等待权威流水线：${reason}`);
+          this.markVerificationStalled(task, commitRejected
+            ? reason
+            : `等待权威流水线：${reason}`);
         } else {
           const retrying = cause.startsWith("交付平台暂时连接不上")
             ? "交付平台连接异常，系统正在自动重试，暂时无需操作"
@@ -17604,6 +17835,17 @@ export class TaskService {
         throw new Error(
           `安全拒绝：待推送 HEAD 已从已验证的 ${expectedSha.slice(0, 12)}`
           + ` 变为 ${sha.slice(0, 12)}，旧确认不可复用`);
+      }
+      const invalidCommits = await this.invalidTaskCommitSubjects(task, sha);
+      if (invalidCommits.length) {
+        const listed = invalidCommits.slice(0, 3)
+          .map((item) => `${item.sha.slice(0, 12)}「${item.subject.slice(0, 80)}」`)
+          .join("、");
+        throw new CommitMessagePolicyError(
+          `提交说明不符合仓库规范：${listed}${invalidCommits.length > 3
+            ? ` 等 ${invalidCommits.length} 条` : ""}。已在传输前停止，远端未发生变化`,
+          invalidCommits,
+        );
       }
       const objects = gitView.objectDirectory;
       const staging = join(sandbox.dir, "transport.git");

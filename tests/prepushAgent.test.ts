@@ -421,7 +421,7 @@ test("prepush evidence: 实发命令带 cd 前缀和退出码后缀时,上报的
     "包裹在 cd/重定向/echo 里的真实执行必须被认成证据");
 });
 
-test("prepush evidence: 跑过但只在改动之前——措辞要和'压根没跑'分开", () => {
+test("prepush evidence: 只把相同工作区内容封装成 commit 不作废已经通过的验证", () => {
   const events = [
     event(1, "tool_requested", {
       call_id: "compile", name: "Bash",
@@ -432,17 +432,15 @@ test("prepush evidence: 跑过但只在改动之前——措辞要和'压根没�
       call_id: "ut", name: "Bash", input: { command: `cd /x && ${PASSED.unit_test.command}` },
     }),
     event(4, "tool_finished", { call_id: "ut", name: "Bash", is_error: false }),
-    // 两条都跑完之后才提交:证据全部作废,但这不是"没跑过"。
+    // 两条都跑完之后才提交:commit 只封装当前工作区内容，不应逼 Agent
+    // 对完全相同的代码再跑一遍十几分钟全量 UT。
     event(5, "tool_requested", {
       call_id: "commit", name: "Bash",
       input: { command: 'git -c user.name=a commit -m "fix"' },
     }),
     event(6, "tool_finished", { call_id: "commit", name: "Bash", is_error: false }),
   ];
-  const error = verifyPrePushEvidence(events, PASSED);
-  assert.match(error, /只在最后一次代码修改\/提交之前成功过/);
-  assert.doesNotMatch(error, /没有在最后一次代码修改后真实成功执行/,
-    "跑过但太早,不能用和'压根没跑'一样的措辞——会被当成作弊");
+  assert.equal(verifyPrePushEvidence(events, PASSED), "");
 });
 
 test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得住", () => {

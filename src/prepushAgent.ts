@@ -9,6 +9,7 @@ import {
 } from "./prepushBuildPlaybook.ts";
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
+import { DEFAULT_COMMIT_CONVENTION } from "./commitPolicy.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -33,6 +34,8 @@ export interface PrePushRunRequest {
   requirement: string;
   branch: string;
   baseline: string;
+  /** 与宿主 push 前机械校验同源的人类可读规范。缺席时使用平台默认值。 */
+  commitConvention?: string;
   /** 用户已经确认过的最终交付边界。专项 Agent 可以修这些文件，但不能
    * 把此前排除的本地过程件重新带进提交；真正收口仍由宿主机械复核。 */
   deliverySelection?: {
@@ -441,11 +444,6 @@ export function verifyPrePushEvidence(
     }
     if (name === "Bash") {
       const command = String(payload.input?.command ?? "").trim();
-      // 本地 commit 也是代码快照变化点。即使修改通过 sed/heredoc 完成，
-      // 只要最终按要求提交，编译与 UT 都必须发生在最后一次 commit 之后。
-      if (/\bgit\b[\s\S]*\bcommit\b/i.test(command)) {
-        lastWrite = Math.max(lastWrite, event.eventId);
-      }
       requested.set(`${event.sessionId}:${String(payload.call_id ?? "")}`, {
         command,
         eventId: event.eventId,
@@ -479,7 +477,7 @@ export function verifyPrePushEvidence(
   // 错误,却被判"没有真实成功执行",人只能去翻 bash 日志才看得出冤枉)。
   const stale = missing.filter((command) => covers(ranBeforeLastWrite, command));
   if (stale.length === missing.length) {
-    return "报告中的命令只在最后一次代码修改/提交之前成功过，改动之后没有重跑: "
+    return "报告中的命令只在最后一次代码修改之前成功过，改动之后没有重跑: "
       + missing.join("；");
   }
   return "报告中的命令没有在最后一次代码修改后真实成功执行"
@@ -568,7 +566,9 @@ export function prePushMission(
     "你的唯一目标：在当前仓库找到真实构建方式，完成编译与单元测试；遇到代码或测试问题就直接修复，",
     "然后重新执行编译和 UT，直至两项都通过。可以自由检查源码、测试、pom/build/CMake/package 配置，",
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
-    "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
+    "如有修改，按下面的明确规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据：",
+    `- ${request.commitConvention?.trim() || DEFAULT_COMMIT_CONVENTION}`,
+    "- 提交前用 git log -1 --format=%s 自检标题；不要使用 fix: / feat: / chore: 这类 Conventional Commits 简写。",
     `如果此前误带了文件，可以用 git restore --source=${request.baseline} -- <具体文件>`
       + "、git checkout <提交> -- <具体文件> 或 git reset --soft 重新整理本地 commit；"
       + "精确文件回退允许，全树/通配回退和 reset --hard 仍禁止。",
@@ -594,6 +594,9 @@ export function prePushMission(
     "",
     buildGuidance,
     budgetGuidance,
+    "同一份代码内容不要原样重复执行同一条重型编译/测试命令：首次失败后先读日志、"
+      + "修代码或运行更小范围的定向检查；只有代码改变或确认属于短暂环境抖动时才重试。"
+      + "Cloud 会复用同一代码内容上已经成功的相同命令，并在连续失败且代码未变化时阻止第三次空跑。",
     "",
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。

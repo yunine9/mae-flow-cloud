@@ -86,3 +86,12 @@ test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对�
   assert.match(annotate,
     /\.workspace-review-notes \.annot-item:has\(\.annot-response\)[^{]*\{[^}]*grid-template-columns:/s);
 });
+
+test("交付失败长文本在右侧行动栏内换行，不横向冲出工作台", () => {
+  assert.match(workspace, /className="ws-verify-focus-waiting"/);
+  assert.match(css,
+    /\.ws-verify-focus\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*calc\(100% - 28px\)/s);
+  assert.match(css,
+    /\.ws-verify-focus p\s*\{[^}]*max-width:\s*100%[^}]*overflow-wrap:\s*anywhere[^}]*word-break:\s*break-word/s,
+    "远端 Hook 正则、commit SHA 和英文错误都必须在卡片内断行");
+});
