@@ -142,7 +142,6 @@ import {
   fixedStageLabel,
   gateOptionLabel,
   gateVerdict,
-  stageEntryGate,
   stageGateRoute,
 } from "./stageRegistry.ts";
 import {
@@ -1499,13 +1498,15 @@ export class IssueFlowService {
    * 非空才真举。同名跳过/扫描为空都留一行转移账(现场可查),不举卡
    * ——浪费用户一次点击的卡不是好卡。返回是否举了(工具回执据此叫
    * Agent 停回合)。 */
+  /** skill 圈选闸已封存(ADR-0014,2026-09-03):skill 是渐进式发现
+   * ——编排技能先列 .cac/skills 索引(name+description)再按相关性读
+   * 正文;描述没命中是维护者该修的描述,不拿运行时人工圈选来补。
+   * 本方法降级为 analyze 入口的扫描留痕:发现清单/同名告警进转移账,
+   **永不举卡、永不写 skill_selection 台账**。存量挂起的圈选卡仍可
+   * 作答(resolveSkillSelection),旧台账的必读清单照旧注入简报。 */
   private raiseSkillSelectionGate(live: LiveIssue): boolean {
     const { state } = live;
-    if (state.mode !== "fixed" || !state.scenario) return false;
-    if (stageEntryGate(state.stage as FixedStage) !== "skill_select") {
-      return false;
-    }
-    if (this.moonlightOn(live)) return false;
+    if (state.mode !== "fixed" || state.stage !== "analyze") return false;
     if (state.skill_selection) return false;
     if (state.gate) return false;
     const { choices: skills, warnings } = this.scanBusinessSkills(live);
@@ -1528,17 +1529,15 @@ export class IssueFlowService {
       });
       return false;
     }
-    raiseGate(
-      state,
-      "skill_select",
-      "进入问题分析:勾选要 AI 必读的仓内排障知识(可多选)",
-      undefined,
-      "以下是从已拉取的仓里扫描到的业务 skill(.cac/skills 与"
-        + ".agents/skills,同名按 .cac 优先)。勾选的会成为 AI 的必读"
-        + "材料;一个都不选则 AI 按方法论取用次序自主决定。",
-      undefined,
-      skills,
-    );
+    // 封存后的入口动作只留痕:AI 靠编排技能的索引纪律自主发现,
+    // 扫描账让现场可查"当时仓里有哪些 skill 可用"。
+    recordTransition(state, {
+      source: "platform",
+      note: `进入问题分析:扫描到 ${skills.length} 个业务 skill(`
+        + `${skills.map((skill) => skill.name).join("、")}),`
+        + "AI 按取用次序自主取用(渐进式发现,ADR-0014)",
+    });
+    return false;
     this.log(`[issue-flow] ${live.id} 举 skill 圈选闸:`
       + ` ${skills.map((skill) => skill.name).join("、")}`);
     return true;

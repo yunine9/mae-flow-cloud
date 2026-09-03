@@ -154,11 +154,9 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "中途发现还缺仓,pull_repo 随时可补",
   exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
   exitAction: "submit_analysis",
-  // 入口闸(ADR-0011):月光关档进入本阶段时举 skill 圈选卡——归属人
-  // 从已拉仓的 .cac/skills 里多选必读集合;月光开/自由模式不举,空扫描
-  // 也不举。是否真的举由 service 现读现判,注册表只声明"本阶段有这道
-  // 入口闸"。
-  entryGate: { kind: "skill_select" },
+  // 入口闸已拆除(ADR-0014,2026-09-03):skill 是渐进式发现(编排
+  // 技能先列索引再按需读),描述没命中是维护者该修的描述,不该用运行
+  // 时人工圈选来补。skill_select 闸封存:存量挂起卡仍可作答,新卡永不举。
   tools: [
     { name: "fetch_logs" },
     { name: "get_issue_meta" },
@@ -521,8 +519,9 @@ export function stageGateRoute(
 }
 
 /** 入口闸反查(ADR-0011):这个阶段的转移入口要不要举闸。没有入口
- * 闸的阶段返回 undefined——调用方(service)再叠现读现判条件
- * (月光现值/台账已圈选/扫描非空)。 */
+ * 闸的阶段返回 undefined。ADR-0014(2026-09-03)拆除了唯一的入口闸
+ * (skill 圈选),当前所有阶段都返回 undefined——函数保留给将来的
+ * 入口闸形态,别为"永假"删掉类型通道。 */
 export function stageEntryGate(stage: FixedStage): IssueGateKind | undefined {
   return FIXED_STAGE_SPECS[stage]?.entryGate?.kind;
 }
