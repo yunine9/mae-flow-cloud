@@ -2619,6 +2619,9 @@ export interface Annotation {
   file: string;
   line: number;
   anchor: string;
+  /** 划选一块时的整块原文与末行;定位仍靠 anchor。 */
+  quote?: string;
+  line_end?: number;
   note: string;
   edited_at?: string;
   kind: "doc" | "code";

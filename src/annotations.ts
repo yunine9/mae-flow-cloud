@@ -84,6 +84,11 @@ export interface Annotation {
   line: number;
   /** 原文快照——定位以它为准。内核那条经验在活靶子上更要紧。 */
   anchor: string;
+  /** 划选一块时的整块原文(≤ ANNOTATION_QUOTE_MAX):给人和模型看语境,
+   * 不参与定位;按行点的没有。 */
+  quote?: string;
+  /** 划选跨行时的末行;单行圈注没有。 */
+  line_end?: number;
   note: string;
   /** 最近一次修改意见的时间。修改留在 append-only 台账里，不覆盖旧记录。 */
   edited_at?: string;
@@ -120,7 +125,12 @@ export interface AnnotationInput {
   kind: AnnotationKind;
   route?: AnnotationRoute;
   assignee?: string;
+  quote?: string;
+  line_end?: number;
 }
+
+/** 整块原文上限,与前端 QUOTE_MAX 同值(两边各自截,不互信)。 */
+export const ANNOTATION_QUOTE_MAX = 1500;
 
 type Operation =
   | { op: "add"; record: Annotation }
@@ -286,14 +296,21 @@ export class AnnotationStore {
     if (!anchor) throw new AnnotationError("缺少原文快照,批注无从定位");
     const artifact = String(input.artifact ?? "").trim();
     if (!artifact) throw new AnnotationError("缺少产物名");
+    const line = Number.isFinite(input.line) ? Math.max(0, Math.trunc(input.line)) : 0;
+    const quote = String(input.quote ?? "").trim();
+    const lineEnd = Number.isFinite(input.line_end)
+      ? Math.trunc(input.line_end as number) : 0;
     const record: Annotation = {
       id: `an-${Date.now().toString(36)}-${this.list().length + 1}`,
       author: String(input.author ?? "").trim() || "未署名",
       created_at: new Date().toISOString(),
       artifact,
       file: String(input.file ?? "").trim() || artifact,
-      line: Number.isFinite(input.line) ? Math.max(0, Math.trunc(input.line)) : 0,
+      line,
       anchor,
+      ...(quote ? { quote: quote.length > ANNOTATION_QUOTE_MAX
+        ? quote.slice(0, ANNOTATION_QUOTE_MAX) + "…" : quote } : {}),
+      ...(lineEnd > line ? { line_end: lineEnd } : {}),
       note,
       kind: input.kind === "code" ? "code" : "doc",
       ...(input.route && input.route !== "agent" ? { route: input.route } : {}),
@@ -527,8 +544,17 @@ export function renderAnnotations(
     index += 1;
     // 稳定 id 是逐条回执的连接键。不能再靠“第 1 段大概回答第 1 条”猜，
     // Agent、服务端和页面都必须能精确指回同一条意见。
-    lines.push(`${index}. [${item.id}] 第 ${item.line} 行`);
-    lines.push(`   ${item.kind === "code" ? "当前代码" : "原文"}:${item.anchor}`);
+    const span = item.line_end && item.line_end > item.line
+      ? `第 ${item.line}–${item.line_end} 行` : `第 ${item.line} 行`;
+    lines.push(`${index}. [${item.id}] ${span}`);
+    const label = item.kind === "code" ? "当前代码" : "原文";
+    if (item.quote) {
+      // 划选了一块:整块给模型看语境;定位仍以首行原文(anchor)为准。
+      lines.push(`   ${label}(选中整块):`);
+      for (const quoted of item.quote.split("\n")) lines.push(`   | ${quoted}`);
+    } else {
+      lines.push(`   ${label}:${item.anchor}`);
+    }
     lines.push(`   要求:${item.note}`);
     // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,
     // 重则把已有改动翻回去。历史锚点一并给:它要能对出"上次改成了什么"。

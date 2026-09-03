@@ -2525,6 +2525,8 @@ export function createTaskServer(
               file: String(body.file ?? ""),
               line: Number(body.line ?? 0),
               anchor: String(body.anchor ?? ""),
+              quote: String(body.quote ?? ""),
+              line_end: Number(body.line_end ?? 0),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",
               route: body.route === "owner_reply" || body.route === "owner_decision"

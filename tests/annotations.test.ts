@@ -26,6 +26,7 @@ import {
   reanchor,
   renderAnnotations,
   type Annotation,
+  ANNOTATION_QUOTE_MAX,
 } from "../src/annotations.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
@@ -1077,4 +1078,24 @@ test("重锚定:跨行代码块的整块锚点刚创建时不能立刻 gone", ()
   const [check] = reanchor([block], () => source);
   assert.notEqual(check.state, "gone");
   assert.equal(check.line, 2, "跨行命中应定位到正文起始行");
+});
+
+test("划选一块:整块原文给模型看、跨行行号如实抬头、超长截断;定位仍靠首行", () => {
+  const target = store();
+  const base = {
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md",
+    line: 3, anchor: "背景:先看渠道开关", kind: "doc" as const,
+  };
+  const item = target.add({ ...base, line_end: 5, note: "这一整段记下来",
+    quote: "背景:先看渠道开关\n要求:\n不改 registry.xml" });
+  assert.equal(item.line_end, 5);
+  const text = renderAnnotations(target.drafts(), "T-1");
+  assert.match(text, /第 3–5 行/);
+  assert.match(text,
+    /原文\(选中整块\):\n   \| 背景:先看渠道开关\n   \| 要求:\n   \| 不改 registry\.xml/);
+  assert.doesNotMatch(text, /原文:背景/, "有整块就不再单抬首行,免得模型看两遍");
+  const capped = target.add({ ...base, line_end: 2, note: "太长",
+    quote: "长".repeat(3000) });
+  assert.equal(capped.quote?.length, ANNOTATION_QUOTE_MAX + 1, "超长截断带省略号");
+  assert.equal(capped.line_end, undefined, "末行不大于首行就不算跨行");
 });

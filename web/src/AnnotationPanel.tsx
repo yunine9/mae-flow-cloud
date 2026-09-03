@@ -671,15 +671,17 @@ export function AnnotationPanel({
                   {/* 需求原文是虚拟产物,内部名 __task_requirement__ 不该露给人
                       (2026-09-02 演示截图逮住)。 */}
                   <code>{item.file === TASK_REQUIREMENT_ARTIFACT
-                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}</code>
+                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
+                      item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
                 </button>
                 {/* 锚定原文接在位置后面收一行:它是"这条批注指着哪儿"的补充,
                     不是内容本身。原来它单占左栏一整块,把批注正文和 Agent
                     回应挤成两条窄柱(用户实测:760px 抽屉里两栏只剩 304 和
                     357)。整段仍在 title 里,点位置也能直接回到那一行。 */}
-                {item.anchor && <blockquote className="annot-anchor"
-                                            title={item.anchor}>
-                  {item.anchor}
+                {(item.quote || item.anchor) && <blockquote
+                  className={`annot-anchor${item.quote ? " has-quote" : ""}`}
+                  title={item.quote ?? item.anchor}>
+                  {item.quote ?? item.anchor}
                 </blockquote>}
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>

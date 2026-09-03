@@ -4628,7 +4628,7 @@ export class TaskService {
       : item.file || item.artifact;
     const trigger = code
       ? `改 ${item.file}${item.line ? ` 第 ${item.line} 行附近` : ""}时`
-      : `${where}里「${item.anchor.replace(/\s+/g, " ").slice(0, 40)}」这一段`;
+      : `${where}里「${(item.quote ?? item.anchor).replace(/\s+/g, " ").slice(0, 40)}」这一段`;
     const phase = task.summary.progress?.current_phase;
     return {
       source,
@@ -4642,7 +4642,8 @@ export class TaskService {
       evidence: `annotation:${item.id}`,
       author: item.author,
       trigger,
-      quote: item.anchor,
+      // 划选了一块就记整块:记忆的价值一半在语境里。
+      quote: item.quote ?? item.anchor,
       ...(source === "annotation"
         ? { problem: item.note, conclusion: item.response?.summary || item.note }
         : { conclusion: item.note }),

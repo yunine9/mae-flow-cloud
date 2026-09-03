@@ -12,7 +12,8 @@
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation } from "./api";
 import {
-  anchorOf, blockedBySelection, pickRow, pickRowFromStack, type RowNode,
+  anchorOf, pickRow, pickRowFromStack, quoteOfSelection, type RowNode,
+  type SelectionQuote,
 } from "./annotateTargets";
 import "./annotate.css";
 
@@ -43,6 +44,9 @@ interface Draft {
   file: string;
   line: number;
   anchor: string;
+  /** 划选了一块时的整块原文与末行;按行点的没有。 */
+  quote?: string;
+  lineEnd?: number;
   kind: "doc" | "code";
   /** 编辑框挂在哪个元素后面。 */
   host: HTMLElement;
@@ -76,6 +80,8 @@ export function Annotatable({
     line: number;
     anchor: string;
     note: string;
+    quote?: string;
+    line_end?: number;
   }) => Promise<{ error?: string }>;
   children: React.ReactNode;
 }) {
@@ -89,6 +95,9 @@ export function Annotatable({
   // 落点没命中行,而代码原来一声不吭。
   const [hint, setHint] = useState("");
   const [hovered, setHovered] = useState<HTMLElement>();
+  // 松手与紧随其后的 click 都可能开框,用它挡第二次(state 在同一拍里还是旧的)。
+  const draftRef = useRef<Draft | undefined>(undefined);
+  draftRef.current = draft;
 
   // 已圈过的行留一道竖杠:人扫一眼就知道自己圈到哪儿了。
   // 每次 items/内容变化都重刷——渲染器可能整块换掉。
@@ -108,16 +117,23 @@ export function Annotatable({
     }
   }, [items, artifact, children]);
 
-  function openRow(row: HTMLElement) {
-    // 划词是在读,不是要批注——但只认**这块材料里**的划词:原来只要
-    // 页面上任何地方残留一段选中文本,整块材料就点不动(用户看到的正是
-    // "批注功能点不了"),而那段选区多半来自别处、甚至上一次搜索。
+  /** 这块材料里划选的那一块(没有就 undefined)。只认落在本材料行里的
+   * 选区:别处残留的选中文本不算,也不再让材料"点不动"。 */
+  function selectedBlock(): SelectionQuote | undefined {
     const root = host.current;
-    if (blockedBySelection(window.getSelection(), (node) =>
-      !!node && !!root && root.contains(node as Node))) {
-      setHint("正在划词?松开鼠标、点一下空白处取消选择,再点这一行圈注");
-      return;
-    }
+    if (!root || typeof window === "undefined") return undefined;
+    return quoteOfSelection(window.getSelection(), (node) => {
+      if (!(node instanceof Node) || !root.contains(node)) return undefined;
+      const element = node instanceof Element ? node : node.parentElement;
+      return element?.closest<HTMLElement>("[data-l]") as unknown as RowNode | null;
+    });
+  }
+
+  function openRow(row: HTMLElement, block = selectedBlock()) {
+    // 划选了一块就圈这一块:编辑框与锚点挂在靠前那一行,整块原文另带。
+    // 原来"材料里有选区就不开框"——按行圈不够用,记为记忆常常要带一整段
+    // 语境(用户拍板)。
+    if (block) row = block.startRow as unknown as HTMLElement;
     const line = Number(row.dataset.l);
     if (!Number.isFinite(line) || line <= 0) return;
     setError("");
@@ -131,16 +147,37 @@ export function Annotatable({
       // 空行/图块也允许圈:锚点退回"第 N 行"。原来空快照直接放弃,
       // 点了什么都不发生——沉默比拒绝更难查。
       anchor: anchorOf(row as unknown as RowNode, line),
+      ...(block ? { quote: block.quote, lineEnd: block.lineEnd } : {}),
       kind,
       host: row,
     });
     setHovered(undefined);
   }
 
+  // 跨行拖选时 mousedown/mouseup 落在不同元素上,浏览器不派 click——所以
+  // 松手也看一眼:选了一块就开框。放到下一拍,等选区定型;click 若已开过
+  // 就不再开第二次。
+  function settle(event: React.MouseEvent) {
+    if (!enabled || draft) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.(".annot-fab, .annot-editor, button, a, textarea, input")) return;
+    setTimeout(() => {
+      if (draftRef.current) return;
+      const block = selectedBlock();
+      if (block) openRow(block.startRow as unknown as HTMLElement, block);
+    }, 0);
+  }
+
   function open(event: React.MouseEvent) {
     if (!enabled) return;
     const target = event.target as HTMLElement | null;
     if (!target?.closest) return;
+    if (target.closest("button, a, textarea, input, .annot-editor")) return;
+    const block = selectedBlock();
+    if (block) {
+      openRow(block.startRow as unknown as HTMLElement, block);
+      return;
+    }
     const row = pickRow(
       target as unknown as RowNode,
       host.current as unknown as RowNode,
@@ -174,7 +211,7 @@ export function Annotatable({
     // 点在了材料上、却落不到任何一行(容器空隙、纯装饰块):**说一句**,
     // 别装作没点——"点了没反应"是这个功能最常见的投诉,而多数时候它只是
     // 差了这一句话。
-    setHint("这一处没有行号可锚定,点正文那一行(标题/段落/列表项/代码行)");
+    setHint("这一处没有行号可锚定,点正文那一行(标题/段落/列表项/代码行),或划选一段再松手");
   }
 
   function track(event: React.MouseEvent) {
@@ -193,7 +230,8 @@ export function Annotatable({
     setError("");
     try {
       const result = addDraft
-        ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text })
+        ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text,
+            quote: draft.quote, line_end: draft.lineEnd })
         : await addAnnotation(taskId, {
           artifact,
           file: draft.file,
@@ -202,6 +240,7 @@ export function Annotatable({
           note: text,
           kind: draft.kind,
           route,
+          ...(draft.quote ? { quote: draft.quote, line_end: draft.lineEnd } : {}),
         });
       if (result.error) {
         setError(result.error);
@@ -222,6 +261,7 @@ export function Annotatable({
       className={`annotatable${enabled ? "" : " is-readonly"}`}
       ref={host}
       onClick={open}
+      onMouseUp={settle}
       onMouseMove={track}
       onMouseLeave={() => setHovered(undefined)}
     >
@@ -256,9 +296,13 @@ export function Annotatable({
           onClick={(event) => event.stopPropagation()}
         >
           <div className="annot-editor-head">
-            <span>第 {draft.line} 行</span>
-            <code>{draft.anchor}</code>
+            <span>{draft.lineEnd && draft.lineEnd > draft.line
+              ? `第 ${draft.line}–${draft.lineEnd} 行` : `第 ${draft.line} 行`}
+              {draft.quote ? ` · 选中 ${draft.quote.length} 字` : ""}</span>
+            {!draft.quote && <code>{draft.anchor}</code>}
           </div>
+          {draft.quote && <blockquote className="annot-editor-quote">
+            {draft.quote}</blockquote>}
           <textarea
             autoFocus
             rows={4}

@@ -105,7 +105,10 @@
   position: absolute;
   z-index: 5;
   padding: 10px 12px;
-  background: var(--surface);
+  /* 浅色主题的 --surface 带 .9 透明度(卡片压在渐变底上好看),编辑框压在
+     正文上就成了半透明,底下的字透上来(用户实锤"好丑")。下面垫一层不
+     透明的页面底色,任何主题都实心。 */
+  background: linear-gradient(var(--surface), var(--surface)), var(--page, #fff);
   border: 1px solid var(--accent);
   border-radius: 10px;
   box-shadow: 0 8px 26px rgba(0, 0, 0, .16);
@@ -132,6 +135,21 @@
   color: var(--text);
 }
 
+/* 划选一块时的整块原文:能滚,不把编辑框撑到屏外。 */
+.annot-editor-quote {
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 132px;
+  overflow: auto;
+  white-space: pre-line;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--surface-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+}
+
 /* 编辑框要能拉大(用户实锤):默认四行起步,竖向可拖到大半屏;横向跟着
    编辑框容器走,不单独拖(拖宽会顶出定位容器)。 */
 .annot-editor textarea {
@@ -153,10 +171,12 @@
   border-color: var(--accent);
 }
 
+/* 四个去向一排。原来是 repeat(3) 的网格,加了"记为记忆"第四个就被挤到
+   下一行(用户实锤);改成按内容流式排,放不下才折。 */
 .annot-route-picker {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, auto));
-  justify-content: start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
@@ -179,7 +199,7 @@
 }
 
 .annot-route-picker small {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
   color: var(--muted);
   font-size: 12.5px;
   line-height: 1.45;
@@ -187,7 +207,8 @@
 
 @media (max-width: 560px) {
   .annot-route-picker {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
   .annot-route-picker button {
     width: 100%;
@@ -1066,6 +1087,7 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.annot-anchor.has-quote { white-space: pre-line; }
 .annot-anchor:hover,
 .annot-anchor:focus-within {
   display: block;

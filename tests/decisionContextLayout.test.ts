@@ -117,8 +117,11 @@ test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
   const progressAt = panel.indexOf("annot-progress", head);
   assert.ok(head >= 0 && anchorAt > head && anchorAt < progressAt,
     "锚定原文应在 annot-item-head 里、排在状态之前");
-  assert.match(panel, /className="annot-anchor"\s*\n?\s*title=\{item\.anchor\}/,
-    "截断后整段必须还在 title 里,不能丢");
+  // 划选一块的整块原文(quote)优先于首行快照(anchor)——两者都得完整留在
+  // title 里,截断只发生在显示上。
+  assert.match(panel,
+    /className=\{`annot-anchor\$\{item\.quote \? " has-quote" : ""\}`\}\s*\n?\s*title=\{item\.quote \?\? item\.anchor\}/,
+    "截断后整段(或整块)必须还在 title 里,不能丢");
   assert.doesNotMatch(panel, /<span>针对<\/span>/,
     "锚定原文接在位置后面,不需要引导词");
 
