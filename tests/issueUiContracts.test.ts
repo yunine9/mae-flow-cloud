@@ -15,6 +15,8 @@ const css = readFileSync(resolve("web/src/style.css"), "utf-8");
 const issueFlow = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
 const environmentVault = readFileSync(resolve("src/issueEnvironment.ts"), "utf-8");
 const issueService = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
+const issuePrompt = readFileSync(resolve("src/issueFlow/prompt.ts"), "utf-8");
+const issueTools = readFileSync(resolve("src/issueFlow/tools.ts"), "utf-8");
 const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
 
@@ -410,4 +412,27 @@ test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻�
   // 没有它,历史分批装载期间贴底会被竞态打成「已暂停跟随」。
   assert.match(sticky, /Math\.abs\(node\.scrollTop - setTop\.current\) < 2/);
   assert.match(sticky, /setTop\.current = node\.scrollHeight/);
+});
+
+test("推送前 UT 纪律:阶段指引与 push_branch 描述都要写明先跑测试全绿再推(#83)", () => {
+  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。钉法:源码正则,
+  // 三要素各就位——跑什么(改动相关必跑+时间允许全量)、什么标准(全绿
+  // 才推)、不过怎么办(继续修,不许跳过测试直接推)。
+  for (const [where, source] of [
+    ["阶段指引(prompt.ts)", issuePrompt],
+    ["push_branch 工具描述(tools.ts)", issueTools],
+  ] as const) {
+    assert.match(source, /推送前 UT 纪律/, `${where}: 缺推送前 UT 纪律引导`);
+    assert.match(source, /用例必跑/, `${where}: 缺「改动相关用例必跑」口径`);
+    assert.match(source, /全量回归/, `${where}: 缺「时间允许跑全量回归」口径`);
+    assert.match(source, /全绿才推/, `${where}: 缺「全绿才推」标准`);
+    assert.match(source, /不许跳过测试直接推/, `${where}: 缺「挂测不许硬推」红线`);
+  }
+  // 纪律必须落在 push_branch 工具定义的 description 里(name 与
+  // parameters 之间),不是 tools.ts 里随便哪个角落。
+  const pushBranchDesc = issueTools.match(
+    /name: "push_branch"[\s\S]*?parameters: Type\.Object/)?.[0] ?? "";
+  assert.ok(pushBranchDesc, "push_branch 工具定义必须存在");
+  assert.match(pushBranchDesc, /推送前 UT 纪律/,
+    "push_branch 的 description 必须自带推送前跑 UT 的纪律");
 });
