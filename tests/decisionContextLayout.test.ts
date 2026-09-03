@@ -423,10 +423,12 @@ test("任务记忆第一期契约:记为记忆去向、面板只读列表、导�
 
 test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
-  assert.match(service, /extraTools: this\.memoryTools\(task\),\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
-    "主会话同时挂检索工具与首改目录提醒");
-  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 2,
-    "主会话 + 开发助手各挂一次;Build-Fix 不挂(它不是跟人协作的会话)");
+  // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
+  // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
+  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
+    "主会话同时挂检索工具、拆分提议与首改目录提醒");
+  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
+    "开发助手只挂记忆工具");
   assert.match(service, /this\.maybePushPhaseMemories\(task, progress\.current_phase\)/,
     "阶段切换推送挂在进度读取处");
   assert.match(service, /via: "memory_push"/, "推送不算人的插话");

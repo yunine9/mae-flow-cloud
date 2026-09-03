@@ -977,8 +977,12 @@ export interface TaskSummary {
   blocked_by?: string[];
   /** 本任务作为交付单元的负责文件面;缺席=整仓无边界。 */
   delivery_scope?: { name: string; paths: string[] };
-  /** 单仓下单时显式要求先分析拆分。 */
+  /** 先分析拆分:由 Agent 在开发中提议(propose_split)置上,或原位重跑沿用。 */
   requirement_analysis_requested?: boolean;
+  /** Agent 提议拆分留下的事实:为什么、建议怎么切、在哪个阶段。 */
+  split_escalation?: {
+    at: string; reason: string; suggested_units?: string[]; phase?: string;
+  };
   cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
     waiting_id: string;
@@ -2226,8 +2230,6 @@ export async function createTask(
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
     requirementBundle?: { name: string; contentBase64: string };
-    /** 单仓大需求:先走分析拆分(交付单元拆分),多仓天然分析。 */
-    requirementAnalysis?: boolean;
   },
   // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
   // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
@@ -2267,7 +2269,6 @@ export async function createTask(
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       knowledge_preview_digest: extras?.knowledgePreviewDigest,
       repository_profiles: extras?.repositoryProfiles,
-      requirement_analysis: extras?.requirementAnalysis || undefined,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));

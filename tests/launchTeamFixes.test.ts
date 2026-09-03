@@ -40,10 +40,11 @@ test("原位重跑沿用已受邀的参与人:别人的个人设置过期不挡�
   await service.shutdown();
 });
 
-test("下单页:多仓不再摆一个无效的大需求开关;名单读不到就清空邀请并说清", () => {
+test("下单页:没有大需求开关(2026-09-03 起单仓也没有);名单读不到就清空邀请并说清", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  // 多仓天然先形成主任务共同分析,开关开不开结果一样,留着只会让人以为还有得选。
-  assert.match(launch, /analysisEligible && !multiRepository && \(/);
+  // 多仓天然先形成主任务共同分析;单仓拆不拆由 Agent 读完仓后提议,下单页
+  // 不再摆任何"大需求"开关。
+  assert.doesNotMatch(launch, /analysisEligible && !multiRepository && \(/);
   assert.match(launch, /analysisEligible && multiRepository && \(/);
   assert.match(launch, /多个代码仓会先形成主任务共同分析/);
   // 名单读不到时文案说"本次不邀请其他人",动作也真的清空——不再让草稿里的

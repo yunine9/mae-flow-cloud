@@ -68,6 +68,7 @@ import {
 } from "./memoryDraft.ts";
 import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, renderMemoryHits } from "./memoryTools.ts";
+import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { dirname as pathDirname, relative as pathRelative } from "node:path";
 import {
   blockingAnnotations,
@@ -775,6 +776,16 @@ export interface PushReviewPresentation {
   verification?: string;
 }
 
+/** Agent 在开发中提议拆分(propose_split)留下的事实:为什么、建议怎么切、
+ * 在哪个阶段。有它就说明这单是从直接开发转成分析拆分的。 */
+export interface SplitEscalation {
+  at: string;
+  reason: string;
+  suggested_units?: string[];
+  /** 提议时所处阶段(来自进度镜像,可能没有)。 */
+  phase?: string;
+}
+
 export interface TaskSummary {
   id: string;
   /** 扫读标题:需求原文仍完整保留在 requirement。旧任务缺席时由读侧
@@ -903,9 +914,11 @@ export interface TaskSummary {
   feedback_error?: string;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
   requirement_graph?: RequirementGraph;
-  /** 单仓下单时显式要求先分析拆分(交付单元拆分入口)。落盘,重启后
-   * isRequirementAnalysis 判定不变。 */
+  /** 单仓先分析拆分。2026-09-03 起下单不再有开关(仓数与勾选都不该决定
+   * 拆不拆):它只由 Agent 在开发中 propose_split 置上,或原位重跑沿用。
+   * 落盘,重启后 isRequirementAnalysis 判定不变。 */
   requirement_analysis_requested?: boolean;
+  split_escalation?: SplitEscalation;
   /** 本任务作为交付单元的负责文件面(仓内相对路径前缀)。交付门禁
    * 据此校验越界;缺席 = 整仓无边界(普通任务/旧现场)。 */
   delivery_scope?: { name: string; paths: string[] };
@@ -4857,6 +4870,115 @@ export class TaskService {
   }
 
   /** 给 Agent 的检索工具;没有 sidecar 就不给(索引级没法回答自然语言)。 */
+  /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
+  private splitTools(task: TaskState): unknown[] {
+    const summary = task.summary;
+    if (summary.parent_task_id || this.isRequirementAnalysis(task)
+        || (summary.repositories?.length ?? 0) !== 1) return [];
+    return [createSplitProposalTool((input) => this.proposeSplit(task, input))];
+  }
+
+  /** Agent 在开发中提议拆分(docs/delivery-unit-split-design.md 2026-09-03
+   * 勘误):拆不拆是分析的产物,不是下单时的开关。这里只受理与登记,真正
+   * 的转身放到下一拍——工具结果得先回给会话,再把会话掐掉。拒绝用一句
+   * 人话回给模型,不抛错。 */
+  private proposeSplit(task: TaskState, input: SplitProposalInput): string {
+    const summary = task.summary;
+    if (summary.parent_task_id) {
+      return "本单是拆分后的交付单元子任务,不能再拆;按任务书范围继续。";
+    }
+    if (this.isRequirementAnalysis(task)) {
+      return "本单已经是分析拆分单,按分析流程走到确认即可。";
+    }
+    if ((summary.repositories?.length ?? 0) !== 1) {
+      return "只有单仓直接开发任务可以转为拆分分析。";
+    }
+    if (summary.delivery?.sha || summary.delivery?.mr_url) {
+      return "本单已有推送或 MR,不能再转为拆分;按现状继续交付。";
+    }
+    if (summary.status !== "running") {
+      return `本单当前状态是 ${summary.status},不能转为拆分。`;
+    }
+    if (summary.split_escalation) {
+      return "拆分提议已受理,正在转身;请停止调用工具,结束本轮发言。";
+    }
+    const reason = input.reason.trim();
+    if (!reason) return "reason 不能为空:写清改动面为什么一个 MR 装不下。";
+    summary.split_escalation = {
+      at: new Date().toISOString(),
+      reason: reason.slice(0, 2000),
+      ...(input.suggested_units?.length ? { suggested_units: input.suggested_units
+        .map((unit) => unit.trim()).filter(Boolean).slice(0, 20) } : {}),
+      ...(summary.progress?.current_phase
+        ? { phase: summary.progress.current_phase } : {}),
+    };
+    summary.requirement_analysis_requested = true;
+    // 单仓下单时是一个节点的退化图(stage confirmed),退回分析态;
+    // 节点保留:责任人默认沿用,单号在确认卡上逐单元定。
+    summary.requirement_graph = {
+      stage: "analysis",
+      repositories: (summary.requirement_graph?.repositories ?? []).map((node) => ({
+        ...node, task_id: undefined, task_status: undefined,
+      })),
+      dependencies: [],
+    };
+    this.persist(task);
+    setImmediate(() => this.bypass(task, "拆分转身", this.restartAsSplitAnalysis(task)));
+    return "已受理:本单转为先分析再拆分,当前会话即将终止并以分析现场重新启动。"
+      + "请立即结束本轮发言,不要再调用任何工具。";
+  }
+
+  /** 拆分转身:掐掉编码会话与容器,清空现场指针,按分析单重新排队。
+   * 清理的纪律同 finishPause:资源没确认释放就如实 failed,不静默续跑。 */
+  private async restartAsSplitAnalysis(task: TaskState): Promise<void> {
+    if (task.summary.status !== "running" || !task.summary.split_escalation) return;
+    task.controlEpoch += 1;
+    const epoch = task.controlEpoch;
+    const driver = task.driver;
+    const container = task.container;
+    task.summary.detail = "Agent 判断改动面过大,正在转为先分析再拆分";
+    this.persist(task);
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    // await 之后状态可能已被 cancel 换走;TS 把开头的 running 判断记到了
+    // 这里,得显式放宽。
+    const statusNow = task.summary.status as TaskStatus;
+    if (task.controlEpoch !== epoch || statusNow === "canceled") return;
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      task.summary.status = "failed";
+      task.summary.detail = "转为拆分分析失败,执行资源未能确认释放:"
+        + failures.join(";") + "。可取消后重新下单";
+      this.persist(task);
+      this.notifyOutcome(task);
+      return;
+    }
+    // 旧编码现场作废:分析单会在 workspace/repositories 下重新只读克隆。
+    task.cwd = undefined;
+    task.mission = undefined;
+    task.progressCache = undefined;
+    task.resume = false;
+    task.summary.progress = undefined;
+    task.summary.status = "queued";
+    task.summary.detail = `Agent 判断改动面过大,已转为先分析再拆分:${
+      task.summary.split_escalation.reason.replace(/\s+/g, " ").slice(0, 80)}`;
+    this.persist(task);
+    this.queue.push(task.summary.id);
+    this.bypass(undefined, "任务泵", this.pump());
+  }
+
   private memoryTools(task: TaskState): unknown[] | undefined {
     if (!this.memorySidecar) return undefined;
     return createMemoryTools({
@@ -6557,8 +6679,10 @@ export class TaskService {
       /** Chain 拆单内部会把原文与逐仓说明拼接，允许多一份原文大小的
        * 安全余量；外部下单绝不设置。 */
       internalRequirement?: boolean;
-      /** 单仓大需求显式要求先走分析拆分(设计:docs/
-       * delivery-unit-split-design.md)。多仓下单天然走分析,无需设置。 */
+      /** 单仓先走分析拆分。下单 API 不再接受它(2026-09-03 用户拍板:
+       * 拆不拆是分析的产物,不是下单时的开关);只剩原位重跑沿用旧单事实
+       * 这一个来源,Agent 提议拆分走 proposeSplit 在运行中置位。多仓天然
+       * 分析,无需设置。 */
       requirementAnalysis?: boolean;
       /** 普通新下单进入工作台后先检视需求原文；人工确认后才正式
        * 进入需求分析。重跑和跨仓拆出的内部任务不重复举卡。 */
@@ -12717,7 +12841,8 @@ export class TaskService {
         workspace: cwd,
         agentDir,
         // 任务记忆(§8):检索工具 + 首次改目录提醒。没有 sidecar 就都不挂。
-        extraTools: this.memoryTools(task),
+        // 拆分提议:只给单仓直接开发的主任务。
+        extraTools: [...(this.memoryTools(task) ?? []), ...this.splitTools(task)],
         onFileMutationIntent: (path) => this.onMemoryFileIntent(task, path),
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
@@ -18473,6 +18598,21 @@ export class TaskService {
         + `只读分析,禁止修改业务代码、提交或启动交付;工作区已在 git`
         + ` 配置层禁用推送,push 必然失败。`,
       `仓库清单（ID | 原始地址 | 本地只读分析路径）:\n${repositories}`,
+      // 从直接开发转过来的单子:上一位 Agent 读完仓的判断是起点,不是
+      // 结论——澄清与划分方向卡照走,不许照单全收。
+      ...(task.summary.split_escalation ? [
+        `背景:这单原本是单仓直接开发任务,上一位 Agent${
+          task.summary.split_escalation.phase
+            ? `在「${task.summary.split_escalation.phase}」阶段` : ""
+        }读完仓后判断改动面过大,提议拆分。它的理由:${
+          task.summary.split_escalation.reason}${
+          task.summary.split_escalation.suggested_units?.length
+            ? `\n它建议的切法:\n${task.summary.split_escalation.suggested_units
+                .map((unit, index) => `${index + 1}. ${unit}`).join("\n")}`
+            : ""
+        }\n以此为起点,但仍按下面的步骤走完澄清与划分方向卡;改动面要自己`
+        + `重新核实,切法可以推翻。`,
+      ] : []),
       "第一步:澄清(你的第一责任,相当于把需求评审会开完)。"
         + "请亲自阅读各仓代码,从关键词、接口调用链、配置路由三条路径核查。"
         + "每个触点必须给出仓库、文件、符号、相关原因和置信度。"

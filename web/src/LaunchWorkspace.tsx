@@ -60,7 +60,6 @@ type LaunchDraft = {
   moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
   repositoryTechnologies?: RepositoryTechnologyDraft[];
-  requirementAnalysis?: boolean;
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -325,10 +324,6 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
-  // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
-  // 小需求照旧直干;勾了走多仓同款的 Chain 分析,把一个仓拆成多个交付单元。
-  const [requirementAnalysis, setRequirementAnalysis] = useState(
-    validDraft?.requirementAnalysis === true);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -379,13 +374,11 @@ export function LaunchWorkspace({
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
   const multiRepository = repositoriesToProbe.length > 1;
-  // “大需求拆分”是需求颗粒度选择，不是仓库数量选择。第二个仓填入
-  // 后入口仍要稳定留在原位，并保留用户已经做出的选择。
   const analysisEligible = repoFieldsEnabled && repositoriesToProbe.length > 0;
-  // 多仓天然会先形成主任务；单仓则只有显式选择“大需求”才需要先
-  // 一起澄清。参与人属于主任务，不与任何一个仓库预绑定。
-  const analysisTeamVisible = analysisEligible
-    && (multiRepository || requirementAnalysis);
+  // 多仓天然先形成主任务共同澄清,参与人属于主任务,不与任何一个仓库预绑定。
+  // 单仓没有"大需求"开关了(2026-09-03 用户拍板):拆不拆是分析的产物,
+  // 由 Agent 读完仓后提议(propose_split),不由下单的人提前判断。
+  const analysisTeamVisible = analysisEligible && multiRepository;
   // 只要要先分析，最终交付单元就还没有形成；单号此时既无法准确
   // 归属，也不该让人填两遍，统一延后到拆分确认时逐单元收。
   const ticketsDeferred = analysisTeamVisible;
@@ -626,7 +619,6 @@ export function LaunchWorkspace({
     selectedBusinessModuleIds,
     moduleSelectionTouched,
     workflowSelection,
-    requirementAnalysis,
     repositoryTechnologies: repositoryTechnologies.map((item) => ({
       ...item, technologies: [...item.technologies],
     })),
@@ -653,7 +645,6 @@ export function LaunchWorkspace({
     selectedBusinessModuleIds, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
     requirementBundleDraftName,
-    requirementAnalysis,
     session.username]);
 
   useEffect(() => {
@@ -851,11 +842,6 @@ export function LaunchWorkspace({
               && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
-          // 显式的大需求模式与仓数无关：多仓虽天然先分析，也需要这个
-          // 事实决定下单时免单号、拆分确认时再逐单元补齐。
-          requirementAnalysis: requirementAnalysis && repoFieldsEnabled
-              && repositoriesToProbe.length > 0
-            ? true : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
           requirementBundle: requirementBundle
             ? {
@@ -945,7 +931,6 @@ export function LaunchWorkspace({
                   setRepos([""]);
                   setRepositoryTickets([""]);
                   setCollaborators([]);
-                  setRequirementAnalysis(false);
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
@@ -1151,24 +1136,6 @@ export function LaunchWorkspace({
                         <small className="repo-field-note">
                           多个代码仓会先形成主任务共同分析，拆分后再逐单元填写执行人与 AR 单号。
                         </small>
-                      )}
-                      {analysisEligible && !multiRepository && (
-                        <label className={`repo-analysis-toggle ${
-                          requirementAnalysis ? "selected" : ""}`}>
-                          <input type="checkbox" checked={requirementAnalysis}
-                            aria-label="大需求先分析再拆分"
-                            onChange={(event) =>
-                              setRequirementAnalysis(event.target.checked)} />
-                          <span className="repo-analysis-copy">
-                            <span className="repo-analysis-title">
-                              <em>大需求</em>
-                              <strong>先分析，再拆分</strong>
-                            </span>
-                            <small>先确认改动面与拆分方案，再逐单元创建任务；
-                              执行人与 AR 单号在拆分确认时填写。</small>
-                          </span>
-                          <span className="repo-analysis-switch" aria-hidden="true" />
-                        </label>
                       )}
                       {analysisTeamVisible && <LaunchRequirementTeam
                         owner={session}

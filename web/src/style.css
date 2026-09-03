@@ -1231,50 +1231,6 @@ svg {
 .repo-field { display: grid; gap: 6px; }
 .repo-field input { width: 100%; }
 .repo-field-note { color: var(--muted); font-size: var(--font-size-assist); }
-.repo-analysis-toggle {
-  margin-top: 5px; padding: 10px 11px 10px 12px;
-  display: grid; grid-template-columns: minmax(0, 1fr) 34px;
-  align-items: center; gap: 12px; border: 1px solid var(--line);
-  border-radius: 10px; background: var(--surface-soft); cursor: pointer;
-  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
-}
-.repo-analysis-toggle:hover { border-color: var(--line-strong); background: var(--surface); }
-.repo-analysis-toggle:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
-}
-.repo-analysis-toggle.selected {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-}
-.repo-analysis-toggle > input {
-  position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
-}
-.repo-analysis-copy { min-width: 0; display: grid; gap: 4px; }
-.repo-analysis-title { display: flex; align-items: center; gap: 7px; }
-.repo-analysis-title em {
-  padding: 2px 6px; border-radius: 5px; color: var(--accent);
-  background: var(--accent-soft); font-size: 10px; font-style: normal;
-  font-weight: 800; letter-spacing: .04em;
-}
-.repo-analysis-title strong { color: var(--text-strong); font-size: 12.5px; }
-.repo-analysis-copy > small {
-  color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.45;
-}
-.repo-analysis-switch {
-  position: relative; width: 34px; height: 20px; border: 1px solid var(--line-strong);
-  border-radius: 999px; background: var(--surface); transition: all var(--ease);
-}
-.repo-analysis-switch::after {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
-  border-radius: 50%; background: var(--muted); transition: all var(--ease);
-}
-.repo-analysis-toggle.selected .repo-analysis-switch {
-  border-color: var(--accent); background: var(--accent);
-}
-.repo-analysis-toggle.selected .repo-analysis-switch::after {
-  left: 16px; background: #fff;
-}
 .repo-field-title { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .repo-field-title > span { color: var(--text); font-size: var(--font-size-assist); font-weight: 700; }
 .repo-field-title > small { color: var(--muted); font-size: var(--font-size-assist); }
