@@ -24,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
@@ -43,7 +43,7 @@ import {
 } from "../containerRuntime.ts";
 import { mirrorPipelineArtifacts } from "../pipelineMirror.ts";
 import { repairBudget } from "./pipelineRepair.ts";
-import { touchBuildCache } from "../buildCache.ts";
+import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
 import {
   prepareContainerHostPaths,
   repairContainerCloneOwnership,
@@ -1810,68 +1810,28 @@ export class IssueFlowService {
     }
     const isolation = this.options.isolation;
     const instance = taskContainerInstance(this.options.dataDir);
-    // 分仓构建缓存挂载(与 taskService containerMountsForRepository 同款):
-    // issueFlow 容器内要跑 mvn clean package(build_deploy 工具),没有
-    // Maven 仓库挂载就找不到 parent POM。按会话首个仓做 cacheKey,挂载
-    // /cache/maven 并设 MAVEN_OPTS=-Dmaven.repo.local=/cache/maven/repository。
-    // 多仓场景下 cpp_sdk_repository 挂在 repo/ 目录下,所有仓的
-    // ${project.basedir}/../cpp_sdk_repository 都指向同一处——与单仓
-    // 语义天然一致。
-    let volumes = isolation.volumes;
-    // 先继承 isolation.environment(通用通道),再追加缓存变量——与
-    // taskService containerMountsForRepository 同一合并顺序。
-    let environment: NodeJS.ProcessEnv = { ...(isolation.environment ?? {}) };
-    if (isolation.cacheRoot) {
-      const repoUrl = live.state.repo_url
-        ?? live.state.repo_urls?.[0] ?? live.id;
+    // 分仓构建缓存挂载:与需求侧共用 perRepoBuildCacheMounts
+    // (2026-09-03, issue #78 抽取;防覆盖守卫、合并顺序、touch/mkdir
+    // 时机都在共享函数里,两侧不再各养一份)。issueFlow 容器内要跑
+    // mvn clean package(build_deploy 工具),没有 Maven 仓库挂载就找
+    // 不到 parent POM。cacheKey 按会话首个仓,缺了退会话 id。
+    const mounts = perRepoBuildCacheMounts({
+      cacheRoot: isolation.cacheRoot,
+      cacheKeySource: live.state.repo_url
+        ?? live.state.repo_urls?.[0] ?? live.id,
+      volumes: isolation.volumes,
+      seedEnvironment: isolation.environment,
       // C++ Maven 插件约定 ${project.basedir}/../cpp_sdk_repository;
       // issueFlow 仓在 live.root/repo/<仓名>/,所以 SDK 缓存挂在
-      // live.root/repo/cpp_sdk_repository,所有仓共享同一处。
-      const cppSdkDestination = join(live.root, "repo", "cpp_sdk_repository");
-      // 自定义挂载不能覆盖平台缓存目录(与 taskService 同款安全检查)。
-      const cacheDestinations = new Set([
-        "/cache/maven", "/cache/npm", "/cache/ccache", "/cache/xdg",
-        cppSdkDestination,
-      ]);
-      for (const volume of volumes) {
-        const dest = volume.split(":")[1]?.replace(/\/+$/, "");
-        if (dest && cacheDestinations.has(dest)) {
-          throw new Error(
-            `自定义挂载不能覆盖平台的分仓缓存目录: ${dest}`);
-        }
-      }
-      const { base: cacheBase } = touchBuildCache(isolation.cacheRoot, repoUrl);
-      for (const name of ["maven", "npm", "ccache", "xdg", "cpp-sdk"]) {
-        mkdirSync(join(cacheBase, name), { recursive: true });
-      }
-      const caches: Array<[string, string]> = [
-        ["maven", "/cache/maven"],
-        ["npm", "/cache/npm"],
-        ["ccache", "/cache/ccache"],
-        ["xdg", "/cache/xdg"],
-        ["cpp-sdk", cppSdkDestination],
-      ];
-      volumes = [
-        ...volumes,
-        ...caches.map(([name, dest]) => `${join(cacheBase, name)}:${dest}`),
-      ];
-      const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
-      environment = {
-        ...environment,
-        MAVEN_OPTS: [mavenOptions,
-          "-Dmaven.repo.local=/cache/maven/repository"]
-          .filter(Boolean).join(" "),
-        npm_config_cache: "/cache/npm",
-        CCACHE_DIR: "/cache/ccache",
-        XDG_CACHE_HOME: "/cache/xdg",
-        CMAKE_C_COMPILER_LAUNCHER: "ccache",
-        CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
-        ...(live.root
-          ? { CCACHE_BASEDIR: dirname(resolve(live.root)) } : {}),
-        CCACHE_NOHASHDIR: "1",
-        CCACHE_MAXSIZE: "20G",
-      };
-    }
+      // live.root/repo/cpp_sdk_repository,多仓场景所有仓共享同一处
+      // ——与单仓语义天然一致。
+      cppSdkDestination: join(live.root, "repo", "cpp_sdk_repository"),
+      ccacheBaseDirSource: live.root,
+      // 问题流没有宿主身份透传、防覆盖报错回显去尾斜杠形态:
+      // 两个旗子都缺席,正是抽取前这里的既有行为。
+    });
+    const volumes = mounts.volumes;
+    const environment = mounts.environment;
     const build: IssueContainerBuild = {
       image: isolation.image,
       workspace: live.root,

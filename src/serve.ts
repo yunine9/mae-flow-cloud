@@ -545,6 +545,9 @@ async function main(): Promise<void> {
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
   const isolateUser = flag("--isolate-user");
+  // 容器里只有 npm_config_cache 没有源地址,内网 npm 会打公网直到超时
+  // (2026-09-03 issue #75)。配了才注入 npm_config_registry,缺席不注入。
+  const isolateNpmRegistry = flag("--isolate-npm-registry");
   const isolateCacheRoot = resolve(
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
@@ -640,6 +643,10 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+    // registry 配错只会在容器内 npm 报错时才暴露,启动期摆到明面好排障。
+    if (isolateNpmRegistry) {
+      console.log(`[serve] 容器 npm 源: ${isolateNpmRegistry}`);
+    }
     console.log(`[serve] 构建缓存策略:连续 ${buildCacheRetentionDays} 天未使用回收，`
       + `总量上限 ${buildCacheMaxGb > 0 ? `${buildCacheMaxGb}GB` : "不限"}`);
   }
@@ -845,6 +852,9 @@ async function main(): Promise<void> {
             ...(containerUser.user ? { user: containerUser.user } : {}),
             pidsLimit: isolatePids,
             network: isolateNetwork,
+            ...(isolateNpmRegistry
+              ? { environment: { npm_config_registry: isolateNpmRegistry } }
+              : {}),
           },
         }
       : {}),
@@ -921,6 +931,9 @@ async function main(): Promise<void> {
           user: containerUser.user,
           pidsLimit: isolatePids,
           network: isolateNetwork,
+          ...(isolateNpmRegistry
+            ? { environment: { npm_config_registry: isolateNpmRegistry } }
+            : {}),
         }
       : undefined,
     ...(notifier ? { notifier } : {}),

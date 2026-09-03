@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dockerAvailable } from "../src/containerRuntime.ts";
@@ -111,6 +111,56 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   assert.throws(() => mounts("https://code.example/team/a.git", [
     `/host/shared:${join(workspaceRoot, "RepoA", "cpp_sdk_repository")}`,
   ]), /不能覆盖平台的分仓缓存目录/);
+});
+
+test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省绝不出现", () => {
+  // 内网容器里只有 npm_config_cache,没有源地址时 npm 打公网直到超时。
+  // serve 的 --isolate-npm-registry 落到 isolation.environment;需求侧
+  // 的合并点在 containerMountsForRepository(与 npm_config_cache 同一
+  // 出口)。问题流侧同款合并在 issueContainerLifecycle 钉死。
+  const registry = "https://npm.intra.example/repository/npm-group/";
+  const scratch: string[] = [];
+  const tempDir = (prefix: string) => {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratch.push(dir);
+    return dir;
+  };
+  const mounts = (service: TaskService) =>
+    (service as any).taskContainerMounts({
+      cwd: tempDir("mfc-npm-registry-ws-"),
+      summary: { id: "t", repo_url: "https://code.example/team/a.git" },
+    }, []) as { environment: NodeJS.ProcessEnv };
+
+  const configured = new TaskService({
+    dataDir: tempDir("mfc-npm-registry-with-"),
+    provider: "fixture",
+    model: "fixture",
+    modelsJson: {},
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      cacheRoot: tempDir("mfc-npm-registry-cache-"),
+      environment: { npm_config_registry: registry },
+    },
+  });
+  const env = mounts(configured).environment;
+  assert.equal(env.npm_config_registry, registry,
+    "registry 必须进容器创建环境,内网 npm 才不打公网");
+  assert.equal(env.npm_config_cache, "/cache/npm",
+    "registry 与缓存变量共存,合并顺序没被破坏");
+
+  const bare = new TaskService({
+    dataDir: tempDir("mfc-npm-registry-without-"),
+    provider: "fixture",
+    model: "fixture",
+    modelsJson: {},
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      cacheRoot: tempDir("mfc-npm-registry-cache2-"),
+    },
+  });
+  assert.ok(!("npm_config_registry" in mounts(bare).environment),
+    "缺省不注入:没配 registry 时容器创建环境不得出现该键");
+  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
 
 test("宿主身份 MAE_FLOW_HOST 跟进任务容器，云端 --auto 确认路径不失效", () => {

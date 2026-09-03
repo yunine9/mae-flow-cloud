@@ -412,10 +412,10 @@ import {
   cacheKeyFromPath,
   inspectBuildCaches,
   reclaimBuildCaches,
-  touchBuildCache,
   type BuildCacheReclaimResult,
   type BuildCacheStatus,
 } from "./buildCache.ts";
+import { perRepoBuildCacheMounts } from "./buildCacheMounts.ts";
 import {
   IssueEnvironmentVault,
   type IssueEnvironmentInput,
@@ -2385,74 +2385,22 @@ export class TaskService {
      */
     workspace?: string,
   ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
+    // 合并逻辑已抽到 buildCacheMounts.perRepoBuildCacheMounts
+    // (2026-09-03, issue #78,与问题流 ensureContainer 共用)。这个壳
+    // 只翻译任务侧语义:分区键=仓库 URL;cpp_sdk 挂仓名同级目录;
+    // CCACHE_BASEDIR 以任务工作区为基准;透传宿主身份。
     const isolation = this.options.isolation;
-    const environment: NodeJS.ProcessEnv = { ...(isolation?.environment ?? {}) };
-    // 宿主身份必须跟进容器:内核靠 MAE_FLOW_HOST 区分"用户是否坐在终端
-    // 前",漏传时容器里的 current 按本地宿主渲染,云端确认类步骤的
-    // --auto 路径整个失效(run8b 实测:领域归档在云端又弹了人工卡)。
-    if (process.env.MAE_FLOW_HOST && !environment.MAE_FLOW_HOST) {
-      environment.MAE_FLOW_HOST = process.env.MAE_FLOW_HOST;
-    }
-    if (!isolation?.cacheRoot) return { volumes, environment };
-
-    const cppSdkDestination = workspace
-      ? join(dirname(resolve(workspace)), "cpp_sdk_repository")
-      : undefined;
-    const destinations = new Set([
-      "/cache/maven", "/cache/npm", "/cache/ccache", "/cache/xdg",
-      ...(cppSdkDestination ? [cppSdkDestination] : []),
-    ]);
-    for (const volume of volumes) {
-      const destination = volume.split(":")[1];
-      if (destination && destinations.has(destination.replace(/\/+$/, ""))) {
-        throw new Error(
-          `自定义挂载不能覆盖平台的分仓缓存目录: ${destination}`,
-        );
-      }
-    }
-    const { base: cacheBase } = touchBuildCache(isolation.cacheRoot, repository);
-    const caches = [
-      ["maven", "/cache/maven"],
-      ["npm", "/cache/npm"],
-      ["ccache", "/cache/ccache"],
-      ["xdg", "/cache/xdg"],
-      ...(cppSdkDestination
-        ? [["cpp-sdk", cppSdkDestination] as const]
-        : []),
-    ] as const;
-    for (const [name] of caches) mkdirSync(join(cacheBase, name), { recursive: true });
-    const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
-    return {
-      volumes: [
-        ...volumes,
-        ...caches.map(([name, destination]) =>
-          `${join(cacheBase, name)}:${destination}`),
-      ],
-      environment: {
-        ...environment,
-        MAVEN_OPTS: [mavenOptions,
-          "-Dmaven.repo.local=/cache/maven/repository"]
-          .filter(Boolean).join(" "),
-        npm_config_cache: "/cache/npm",
-        CCACHE_DIR: "/cache/ccache",
-        XDG_CACHE_HOME: "/cache/xdg",
-        // ccache 真正接线(内网五项取证实锤:装了、CCACHE_DIR 也对,
-        // 但缓存 0 文件——编译器从没被包过,C++ 每轮全量冷编)。CMake
-        // 在 configure 时认这两个环境变量;部署基线镜像必装 ccache
-        // (playbook 基础设施预检同款清单),对 Java/JS 构建惰性无害。
-        CMAKE_C_COMPILER_LAUNCHER: "ccache",
-        CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
-        // 跨任务也要命中:不同任务克隆路径不同(task-N/仓名),按绝对
-        // 路径做 key 永远 miss。以任务目录为基准做相对化——克隆与
-        // cpp_sdk_repository 都在其下,相对布局跨任务恒定。
-        ...(workspace
-          ? { CCACHE_BASEDIR: dirname(resolve(workspace)) } : {}),
-        CCACHE_NOHASHDIR: "1",
-        // 30w 行 C++ 仓一轮对象 5.7G(内网实测),默认 5G 上限会被
-        // 自己的下一轮淘汰光;分仓缓存目录彼此隔离,放大到 20G。
-        CCACHE_MAXSIZE: "20G",
-      },
-    };
+    return perRepoBuildCacheMounts({
+      cacheRoot: isolation?.cacheRoot,
+      cacheKeySource: repository,
+      volumes,
+      seedEnvironment: isolation?.environment,
+      cppSdkDestination: workspace
+        ? join(dirname(resolve(workspace)), "cpp_sdk_repository")
+        : undefined,
+      ccacheBaseDirSource: workspace,
+      maeFlowHost: process.env.MAE_FLOW_HOST,
+    });
   }
 
   private prePushBuildSlotCount(): number {

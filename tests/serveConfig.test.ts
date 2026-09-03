@@ -104,6 +104,40 @@ test("任务容器默认可用 8 核，并在启动日志报告宿主可用 CPU"
   assert.match(result.output, /host-available-cpus=\d+/);
 });
 
+test("容器 npm 源(#75):命令行与 serve.json 都生效,缺席不注入", async () => {
+  // 内网容器没有 registry 时 npm 打公网直到超时。配置入口是 --isolate-
+  // npm-registry / serve.json "isolate-npm-registry"(键 = flag 去 --);
+  // 启动日志把生效值摆到明面,这里连缺省的"一个字都不提"一起钉死。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-npm-registry-serve-"));
+  const registry = "https://npm.intra.example/repository/npm-group/";
+  const boot = (tag: string, args: string[]) => run([
+    "--data", join(dir, tag), "--port", "0",
+    "--isolate-image", "fixture/builder:test", ...args,
+  ], (line) => line.startsWith("[serve] http://127.0.0.1:"));
+
+  const fromCli = await boot("cli", ["--isolate-npm-registry", registry]);
+  assert.equal(fromCli.code, 0, fromCli.output);
+  assert.ok(fromCli.output.includes(`容器 npm 源: ${registry}`),
+    `命令行 registry 未生效,输出:\n${fromCli.output.slice(0, 800)}`);
+
+  const config = join(dir, "serve.json");
+  writeFileSync(config, JSON.stringify({
+    "isolate-image": "fixture/builder:test",
+    "isolate-npm-registry": registry,
+  }));
+  const fromFile = await run([
+    "--config", config, "--data", join(dir, "file"), "--port", "0",
+  ], (line) => line.startsWith("[serve] http://127.0.0.1:"));
+  assert.equal(fromFile.code, 0, fromFile.output);
+  assert.ok(fromFile.output.includes(`容器 npm 源: ${registry}`),
+    `serve.json 键 isolate-npm-registry 未生效,输出:\n${fromFile.output.slice(0, 800)}`);
+
+  const bare = await boot("bare", []);
+  assert.equal(bare.code, 0, bare.output);
+  assert.ok(!bare.output.includes("容器 npm 源"),
+    "缺省不注入:没配 registry 时启动面不得声明 npm 源");
+});
+
 test("SIGTERM 走优雅关闭并明确承诺业务状态不变", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-graceful-stop-"));
   const result = await run([
