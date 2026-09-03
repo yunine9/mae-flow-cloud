@@ -1113,3 +1113,21 @@ test("记为记忆可以只圈不写;交给人的意见仍必须有内容", () =
     anchor: "背景:先看渠道开关", kind: "doc", note: "",
   }), /批注内容不能为空/);
 });
+
+test("追问留档:作者改字重提时 Agent 的问题不随回执抹掉,下一轮渲染给模型看", () => {
+  const target = store();
+  const item = seed(target, "空值要处理");
+  target.markSent([item.id], "interrupt");
+  target.respond(item.id, {
+    outcome: "needs_clarification", summary: "空值指的是入参还是返回值？", evidence: [],
+  });
+  const edited = target.edit(item.id, "空值指入参:入参为空时返回空列表", "liaoxiang");
+  assert.equal(edited.status, "draft", "改字即退回待提交");
+  assert.equal(edited.response, undefined);
+  assert.deepEqual(edited.clarifications?.map((row) => row.question),
+    ["空值指的是入参还是返回值？"]);
+  const text = renderAnnotations(target.drafts(), "T-1");
+  assert.match(text, /上一轮你问过:空值指的是入参还是返回值？/);
+  assert.match(text, /不要再问同一件事/);
+  assert.doesNotMatch(text, /第 2 次提出/, "补充说明不是返工,不许把它说成上一轮改坏了");
+});

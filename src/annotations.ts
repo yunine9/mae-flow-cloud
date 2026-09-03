@@ -113,6 +113,10 @@ export interface Annotation {
   rework?: number;
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
   anchor_was?: string;
+  /** Agent 问过什么(needs_clarification 的回执),作者改字重提时留档:
+   * 渲染给模型看,免得它把补充说明当新意见、再问一遍同一件事
+   * (内网实锤:两条意见来回问了几轮重复的问题)。 */
+  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
 }
 
 export interface AnnotationInput {
@@ -200,6 +204,15 @@ export class AnnotationStore {
         // 已送出的意见一旦改字，就不能继续冒充“这版已提交”。退回草稿，
         // 由责任人重新送出；旧内容和送出记录仍完整保留在 jsonl 中。
         if (found.status !== "draft") {
+          // Agent 的追问不能随回执一起抹掉:它是作者这次改字的由头,下一轮
+          // 要原样给模型看。
+          if (found.response?.outcome === "needs_clarification") {
+            found.clarifications = [...(found.clarifications ?? []), {
+              question: found.response.summary,
+              asked_at: found.response.responded_at,
+              answered_at: operation.at,
+            }];
+          }
           found.status = "draft";
           found.sent_at = undefined;
           found.sent_via = undefined;
@@ -558,6 +571,14 @@ export function renderAnnotations(
       lines.push(`   ${label}:${item.anchor}`);
     }
     lines.push(`   要求:${item.note}`);
+    // 追问过的意见:作者已经针对你的问题补充了,别再问同一件事。
+    for (const asked of item.clarifications ?? []) {
+      lines.push(`   上一轮你问过:${asked.question}`);
+    }
+    if (item.clarifications?.length) {
+      lines.push("   作者已针对上面的问题补充了要求;不要再问同一件事,仍不清楚就按"
+        + "最合理的理解处理,并在回执里写明你采用的假设。");
+    }
     // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,
     // 重则把已有改动翻回去。历史锚点一并给:它要能对出"上次改成了什么"。
     if (item.rework) {

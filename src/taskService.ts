@@ -6001,17 +6001,34 @@ export class TaskService {
 
   /** 消费本地检视 Agent 的结构化逐条回执。机器回应只写回批注账，不
    * 自动 verify；作者仍要看新代码后亲自裁决。 */
+  /** 本轮还欠 Agent 回执的意见:已送出、且当前轮还没答。Agent 已经答
+   * "需要补充说明"的那条不算欠——球在作者脚下,再要它答一遍就是让它把
+   * 同一个问题重复问(内网实锤)。 */
+  private awaitingAgentReceipt(item: Annotation): boolean {
+    if (item.status !== "sent") return false;
+    return !(item.response?.revision === (item.rework ?? 0)
+      && item.response.outcome === "needs_clarification");
+  }
+
   private async consumeWorkspaceReviewReceipts(task: TaskState): Promise<{
     ok: boolean;
     detail?: string;
+    /** Agent 说需要作者补充说明的意见——是合法结论不是失败:球交给作者。 */
+    clarifications?: Array<{ annotation_id: string; summary: string }>;
   }> {
     const loop = task.summary.delivery?.loop;
     if (loop?.review_source !== "workspace") return { ok: true };
     const wanted = new Set(loop.workspace_review_annotation_ids ?? []);
     if (!wanted.size) return { ok: true }; // 只有整体说明，由最终总检卡闭环
-    const expected = this.annotations(task).list().filter((item) =>
-      wanted.has(item.id) && item.status === "sent");
+    const listed = this.annotations(task).list();
+    const expected = listed.filter((item) =>
+      wanted.has(item.id) && this.awaitingAgentReceipt(item));
     if (!expected.length) return { ok: true };
+    // 上一轮已答"需要补充说明"、作者还没改字的那些:Agent 若又写了一条
+    // 回执不算多出,忽略即可(它没义务记得哪条已经答过)。
+    const stale = new Set(listed.filter((item) =>
+      wanted.has(item.id) && item.status === "sent"
+      && !this.awaitingAgentReceipt(item)).map((item) => item.id));
     const path = join(task.summary.workspace, "reviews", "local-receipts.json");
     const missing = expected.map((item) => item.id).join("、");
     let text: string;
@@ -6037,6 +6054,15 @@ export class TaskService {
         detail: `Agent 留下的逐条检视回执不是有效 JSON（涉及 ${missing}）：`
           + `${String(error)}。没有拿总体回复冒充逐条闭环。`,
       };
+    }
+    const dropStale = (rows: unknown[]) => rows.filter((row) => !stale.has(
+      String((row as Record<string, unknown> | null)?.annotation_id ?? "")));
+    if (raw && typeof raw === "object" && !Array.isArray(raw)
+        && Array.isArray((raw as { receipts?: unknown }).receipts)) {
+      (raw as { receipts: unknown[] }).receipts =
+        dropStale((raw as { receipts: unknown[] }).receipts);
+    } else if (Array.isArray(raw)) {
+      raw = dropStale(raw);
     }
     const parsed = parseWorkspaceReviewReceipts(raw, expected);
     if (parsed.errors.length || parsed.missing_ids.length
@@ -6065,14 +6091,31 @@ export class TaskService {
     }
     const clarification = parsed.receipts.filter((receipt) =>
       receipt.outcome === "needs_clarification");
-    if (clarification.length) {
-      return {
-        ok: false,
-        detail: `Agent 对 ${clarification.map((item) => item.annotation_id)
-          .join("、")} 仍需你补充说明。逐条回应已经保留，请修改对应批注后重新提交；系统不会猜着改，也不会进入 push。`,
-      };
+    if (!clarification.length) return { ok: true };
+    // "需要补充说明"是合法结论:回执齐了、球在作者脚下。原来把它当回执
+    // 失败——先催 Agent"只补回执"(它只能把同一个问题再写一遍),两次后
+    // 判 halted、通知责任人"自动补交仍未完成"(内网实锤:人看到的是一条
+    // 报错,不是一个问题)。现在:通知意见作者,流程照走,push 前的
+    // "逐条意见未闭环"那层会等作者补充并重提。
+    const byId = new Map(listed.map((item) => [item.id, item]));
+    for (const receipt of clarification) {
+      const author = byId.get(receipt.annotation_id)?.author;
+      if (!author || !this.options.notifier) continue;
+      this.bypass(task, "追问通知", this.options.notifier.notifyOutcome({
+        taskId: task.summary.id,
+        account: author,
+        status: "review_clarification",
+        summary: `Agent 对你的检视意见 ${receipt.annotation_id} 有疑问:${
+          receipt.summary.slice(0, 200)}。请在工作台「补充说明后重提」`,
+        link: personalTaskLink(this.notificationLinkBase(), author, task.summary.id),
+      }));
     }
-    return { ok: true };
+    return {
+      ok: true,
+      clarifications: clarification.map((receipt) => ({
+        annotation_id: receipt.annotation_id, summary: receipt.summary,
+      })),
+    };
   }
 
   /** 人工意见修复完以后，意见作者是唯一裁决人。最后一条点通过时只
@@ -19344,7 +19387,7 @@ export class TaskService {
               const wanted = new Set(
                 workspaceLoop.workspace_review_annotation_ids ?? []);
               const pending = this.annotations(task).list().filter((item) =>
-                wanted.has(item.id) && item.status === "sent");
+                wanted.has(item.id) && this.awaitingAgentReceipt(item));
               await this.settle(task, task.driver.continueWith([
                 "代码修改已经完成，但逐条检视回执没有成功落盘。",
                 receipts.detail ?? "逐条检视回执不完整。",

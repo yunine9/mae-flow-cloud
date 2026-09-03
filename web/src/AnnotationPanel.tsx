@@ -734,6 +734,10 @@ export function AnnotationPanel({
                 <div className="annot-note">
                   <strong>检视意见原文</strong>
                   <p>{item.note || "（只记了原文，没另写一句）"}</p>
+                  {/* 追问留档:作者已经补充过什么问题,人和 Agent 看到的是同一份历史。 */}
+                  {item.clarifications?.length ? <small className="annot-clarified">
+                    已答复 Agent 的追问：{item.clarifications.at(-1)!.question}
+                  </small> : null}
                 </div>
               )}
               {item.response && (

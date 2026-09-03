@@ -2657,6 +2657,8 @@ export interface Annotation {
   verified_by?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
+  /** Agent 追问过什么;作者补充说明重提后留档,下一轮给模型看。 */
+  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
 }
 
 export interface AnchorCheck {
