@@ -84,6 +84,7 @@ import {
   type IssueStatus,
   type IssueSummary,
   type IssueSessionState,
+  ENV_SCOPE_LABELS,
 } from "./state.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
 import {
@@ -311,12 +312,8 @@ function normalizeEnvironmentInput(
   };
 }
 
-/** env_needed 闸用途面的人话(环境拒绝的转移账与平台通知按它分叉,
- * 票 93):措辞与拍板口径一致——logs=拉日志 / deploy=换库部署。 */
-const ENV_SCOPE_LABELS: Record<IssueGateScope, string> = {
-  logs: "拉日志",
-  deploy: "换库部署",
-};
+/** env_needed 闸用途面的人话:单一来源在 state.ts(ENV_SCOPE_LABELS,
+ *  与 tools 共用),转移账与平台通知按它分叉。 */
 
 /** 问题域知识上下文(ADR-0005):货架 skill 匹配问题会话用的画像=
  * 登记的关联仓 + 绑定的业务模块。纯函数单源,openDriver 装配与测试

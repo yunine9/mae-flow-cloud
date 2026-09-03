@@ -341,7 +341,13 @@ const WRITE_ROUTES: Array<{
     what: "网管环境配置", method: "POST",
     parts: ["issues", LIVE, "environment"],
     payload: { hosts: ["10.0.0.8"], backend_password: "pw" },
-    denied: "只有归属人能配置网管环境",
+    denied: "只有归属人能作答网管环境卡(填写或拒绝)",
+  },
+  {
+    what: "网管环境拒绝", method: "POST",
+    parts: ["issues", LIVE, "environment"],
+    payload: { decline: true },
+    denied: "只有归属人能作答网管环境卡(填写或拒绝)",
   },
   {
     what: "补充插话", method: "POST",

@@ -1609,6 +1609,40 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     "举闸会记转移账——不举闸就不该有任何新增");
 });
 
+test("环境拒绝 scope 隔离(票 93):logs 已拒 → deploy 闸仍正常举起", async () => {
+  const now = new Date().toISOString();
+  const state: IssueSessionState = {
+    id: "issue-isolate", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", round: 1,
+    status: "running", stage: "locate_root", stage_note: "", stage_at: now,
+    env_declined: { scopes: ["logs"], at: now },
+  };
+  const ctx: IssueToolContext = {
+    state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    ops: fakeOps,
+    environmentPassword: () => undefined,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const buildDeploy = tools.find((tool) => tool.name === "build_deploy")!;
+  assert.ok(buildDeploy);
+  // logs 的拒绝不拦 deploy:无密码时 deploy 闸照常举起等用户配置。
+  await assert.rejects(
+    () => buildDeploy.execute("x", {}),
+    /已向用户发起网管环境配置请求/);
+  const gate = state.gate;
+  assert.equal(gate?.kind, "env_needed", "deploy 闸正常举起");
+  assert.equal((gate as { scope?: string }).scope, "deploy");
+});
+
 test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_logs 恢复正常路径", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envunlock-"));
   const origin = bareOrigin(dataDir);

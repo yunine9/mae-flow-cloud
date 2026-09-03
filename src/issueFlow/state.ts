@@ -217,6 +217,13 @@ export type IssueGateKind =
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
 
+/** 用途面的人话(拒绝按钮文案/转移账/平台通知按它分叉,票 93)。
+ *  service 与 tools 两处消费,单一来源在此——不许各写一份漂移。 */
+export const ENV_SCOPE_LABELS: Record<IssueGateScope, string> = {
+  logs: "拉日志",
+  deploy: "换库部署",
+};
+
 /** 环境拒绝台账(2026-09-03,票 93):归属人在 env_needed 卡上拒绝
  * 拉日志/换库——这是人的硬裁定。字段在场=清单里的 scope 已被拒:
  * 同 scope 工具再调不再举闸(防纠缠),配置环境成功即整册清除

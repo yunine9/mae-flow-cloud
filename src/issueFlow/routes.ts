@@ -783,12 +783,14 @@ export async function handleIssueRoutes(
     // 服务层如实打回。
     if (method === "POST" && parts[2] === "environment" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能配置网管环境" });
+        return done(403, { error: "只有归属人能作答网管环境卡(填写或拒绝)" });
       }
       const body = await readBody(request);
       if (body.decline === true) {
-        return done(200, issueFlow.declineEnvironment(id,
-          body.note !== undefined ? { note: String(body.note) } : undefined));
+        // note 只收字符串:null/数字等脏输入不当理由入账转 AI。
+        const note = typeof body.note === "string" && body.note.trim()
+          ? { note: String(body.note) } : undefined;
+        return done(200, issueFlow.declineEnvironment(id, note));
       }
       return done(200, issueFlow.attachEnvironment(id, {
         hosts: Array.isArray(body.hosts) ? body.hosts.map(String) : [],

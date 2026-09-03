@@ -41,6 +41,7 @@ import {
   raiseGate,
   recordTransition,
   validStage,
+  ENV_SCOPE_LABELS,
   type FixedStage,
   type IssueGateScope,
   type IssueSessionState,
@@ -155,7 +156,7 @@ function raiseEnvNeededGate(
   scope: IssueGateScope,
 ): never {
   if (ctx.state.env_declined?.scopes.includes(scope)) {
-    fail(`用户已确认无需此操作(${scope === "deploy" ? "换库部署" : "拉日志"}),`
+    fail(`用户已确认无需此操作(${ENV_SCOPE_LABELS[scope]}),`
       + "请基于现有证据继续;确有必要可在结论中说明证据局限,"
       + "不要再次请求环境");
   }
