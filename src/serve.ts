@@ -31,6 +31,7 @@ import {
   TaskService,
 } from "./taskService.ts";
 import { humanBytes } from "./workspaceReclaim.ts";
+import { reclaimIssueWorkspaces } from "./issueFlowWorkspaceReclaim.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
@@ -1031,6 +1032,27 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
+    }
+    // 问题流工作区回收(#84):与需求流同一个保留期旋钮(管理页设置,
+    // 两流一个口径,0=永不)、同一个每日节奏,不新起定时器。容器探活
+    // 是保险丝(终态会话容器应已停);纯旁路 fail-open。
+    try {
+      const sweptIssues = reclaimIssueWorkspaces({
+        dataDir,
+        retentionDays: service.workspaceRetentionDays(),
+        containerRunning: (id) => issueFlow.hasRunningContainer(id),
+        log: issueLog,
+      });
+      if (sweptIssues.reclaimed) {
+        console.log(`[serve] 问题现场回收 ${sweptIssues.reclaimed} 个会话,`
+          + `释放 ${humanBytes(sweptIssues.freed)}(保留期 `
+          + `${service.workspaceRetentionDays()} 天;台账与材料元数据保留)`
+          + (sweptIssues.skipped_container
+            ? `,容器在跑跳过 ${sweptIssues.skipped_container} 个`
+            : ""));
+      }
+    } catch (error) {
+      console.log(`[serve] 问题现场回收失败(不影响服务): ${String(error)}`);
     }
     try {
       if (service.buildCacheRetentionDays() > 0 || service.buildCacheMaxGb() > 0) {
