@@ -49,6 +49,7 @@ import {
   listCommitters,
   listTaskReviews,
   readArtifact,
+  readArtifactFileDiff,
   readPushReviewDiff,
   readRequirementRevision,
   repairStopped,
@@ -581,6 +582,9 @@ export function TaskWorkspace({
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedDiffPath, setSelectedDiffPath] = useState("");
+  const [diffFileLoading, setDiffFileLoading] = useState(false);
+  const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   const [reply, setReply] =
@@ -656,6 +660,9 @@ export function TaskWorkspace({
     setItems(undefined);
     setActive("");
     setContent("");
+    setSelectedDiffPath("");
+    setDiffFileLoading(false);
+    setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
@@ -928,16 +935,30 @@ export function TaskWorkspace({
   }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha]);
 
+  const activeArtifactForRead = items?.find((item) => item.name === active);
+  const activeChangeFiles = activeArtifactForRead?.change_files;
+  const requestedDiffPath = activeChangeFiles?.some((file) =>
+    file.path === selectedDiffPath)
+    ? selectedDiffPath
+    : activeChangeFiles?.[0]?.path ?? "";
+
   useEffect(() => {
     if (!active) return;
     let alive = true;
     setLoading((was) => was || !content);
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
+    const lazyWorkspaceDiff = !pushDiffActive
+      && activeArtifactForRead?.kind === "diff"
+      && Boolean(requestedDiffPath);
+    setDiffFileLoading(lazyWorkspaceDiff);
+    setDiffFileError("");
     if (pushDiffActive) setPushDiffState({ kind: "checking" });
     const reading = pushDiffActive
       ? readPushReviewDiff(task.id, diffScope)
-      : readArtifact(task.id, active);
+      : lazyWorkspaceDiff
+        ? readArtifactFileDiff(task.id, requestedDiffPath)
+        : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
       if (pushDiffActive) {
@@ -947,13 +968,16 @@ export function TaskWorkspace({
           ? current : normalized.content);
         setBranch(normalized.branch);
         setLoading(false);
+        setDiffFileLoading(false);
         return;
       }
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
       setBranch(result.branch ?? "");
+      setDiffFileError(lazyWorkspaceDiff ? result.unavailable ?? "" : "");
       setLoading(false);
+      setDiffFileLoading(false);
     }).catch((reason) => {
       if (!alive) return;
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -964,12 +988,14 @@ export function TaskWorkspace({
       } else {
         setContent(message);
         setBranch("");
+        if (lazyWorkspaceDiff) setDiffFileError(message);
       }
       setLoading(false);
+      setDiffFileLoading(false);
     });
     return () => { alive = false; };
   }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
-    items?.find((item) => item.name === active)?.kind]);
+    activeArtifactForRead?.kind, requestedDiffPath]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -1005,7 +1031,9 @@ export function TaskWorkspace({
     setWorkspaceView("materials");
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     if (!source && item.artifact !== active) setActive(item.artifact);
-    setMaterialView(materialViewForAnnotation(item.artifact, items));
+    const targetView = materialViewForAnnotation(item.artifact, items);
+    setMaterialView(targetView);
+    if (targetView === "diff" && item.file) setSelectedDiffPath(item.file);
     const check = checks.find((candidate) => candidate.id === item.id);
     const currentLine = check?.line ?? item.line;
     if (check?.state === "gone") {
@@ -1834,6 +1862,10 @@ export function TaskWorkspace({
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
+                      manifest={!pushReview ? activeMeta?.change_files : undefined}
+                      onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
+                      activeFileLoading={diffFileLoading}
+                      activeFileError={diffFileError}
                       hideKey={task.id}
                       scopeLabel={pushReview
                         ? diffScope === "changes"

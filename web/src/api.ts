@@ -3044,8 +3044,18 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /** 完整变更目录；正文在点开文件时另取，避免大文件吃掉整个响应。 */
+  change_files?: ArtifactChangeFile[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap";
+}
+
+export interface ArtifactChangeFile {
+  path: string;
+  stage: "committed" | "committed_working" | "staged"
+    | "staged_working" | "unstaged" | "untracked";
+  additions: number;
+  deletions: number;
 }
 
 export async function listArtifacts(
@@ -3300,6 +3310,30 @@ export async function readArtifact(
     content: String(body.content ?? ""),
     kind: String(body.kind ?? "doc"),
     branch: body.branch ? String(body.branch) : undefined,
+  };
+}
+
+export async function readArtifactFileDiff(
+  taskId: string,
+  path: string,
+): Promise<{
+  content?: string;
+  branch?: string;
+  truncated?: boolean;
+  unavailable?: string;
+}> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/artifacts/file-diff?path=${
+      encodeURIComponent(path)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return {
+    content: String(body.content ?? ""),
+    branch: body.branch ? String(body.branch) : undefined,
+    truncated: body.truncated === true,
   };
 }
 

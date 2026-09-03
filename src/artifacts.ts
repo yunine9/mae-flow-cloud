@@ -85,8 +85,30 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /**
+   * 工作区差异的完整文件清单。它与正文分开返回：再大的单个文件也
+   * 不能把后面的文件从目录树里挤掉；正文由页面点文件后按需读取。
+   */
+  change_files?: ArtifactChangeFile[];
   /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
   purpose?: "pipeline_evidence_gap";
+}
+
+export type ArtifactChangeStage = "committed" | "committed_working"
+  | "staged" | "staged_working" | "unstaged" | "untracked";
+
+export interface ArtifactChangeFile {
+  path: string;
+  stage: ArtifactChangeStage;
+  additions: number;
+  deletions: number;
+}
+
+export interface ArtifactFileDiff {
+  path: string;
+  content: string;
+  branch?: string;
+  truncated: boolean;
 }
 
 export interface ArtifactContent extends ArtifactMeta {
@@ -302,9 +324,13 @@ export function bundleArtifactDocuments(
 /** git 子进程:失败一律返回 undefined(不是 git 仓、git 不在、超时)。 */
 function git(cwd: string, args: string[]): string | undefined {
   try {
-    const hardened = args[0] === "diff"
+    const command = args[0] === "diff"
       ? ["diff", "--no-ext-diff", "--no-textconv", ...args.slice(1)]
       : args;
+    // Git 默认把中文路径转成八进制转义；那串展示文本既找不到真实文件，
+    // 也无法和按需读取请求命中。关闭 quotePath 后仍由参数数组和 `--`
+    // 负责安全边界，路径只恢复成人实际看到的 UTF-8 名字。
+    const hardened = ["-c", "core.quotepath=false", ...command];
     const run = runSafeWorktreeGit(cwd, hardened, {
       maxBuffer: 16 * 1024 * 1024,
       timeoutMs: 10_000,
@@ -318,9 +344,10 @@ function git(cwd: string, args: string[]): string | undefined {
 
 async function gitAsync(cwd: string, args: string[]): Promise<string | undefined> {
   try {
-    const hardened = args[0] === "diff"
+    const command = args[0] === "diff"
       ? ["diff", "--no-ext-diff", "--no-textconv", ...args.slice(1)]
       : args;
+    const hardened = ["-c", "core.quotepath=false", ...command];
     const run = await runSafeWorktreeGitAsync(cwd, hardened, {
       maxBuffer: 16 * 1024 * 1024,
       timeoutMs: 10_000,
@@ -399,8 +426,7 @@ function changedPaths(status: string): string[] {
     });
 }
 
-type ChangeOrigin = "committed" | "committed_working" | "staged"
-  | "staged_working" | "unstaged";
+type ChangeOrigin = Exclude<ArtifactChangeStage, "untracked">;
 
 const ORIGIN_HEADING: Record<ChangeOrigin, string> = {
   committed: "已提交(committed)",
@@ -673,6 +699,75 @@ function originOf(
   return "committed";
 }
 
+function numstatByPath(text: string): Map<string, {
+  additions: number;
+  deletions: number;
+}> {
+  const stats = new Map<string, { additions: number; deletions: number }>();
+  for (const line of text.split("\n")) {
+    const [added, deleted, ...pathParts] = line.split("\t");
+    const path = pathParts.at(-1)?.trim();
+    if (!path || isFlowControlPath(path)) continue;
+    const additions = Number.parseInt(added, 10);
+    const deletions = Number.parseInt(deleted, 10);
+    stats.set(path, {
+      additions: Number.isFinite(additions) ? additions : 0,
+      deletions: Number.isFinite(deletions) ? deletions : 0,
+    });
+  }
+  return stats;
+}
+
+/**
+ * 目录树只需要路径、来源与小体积 numstat，绝不能为列 186 个名字先
+ * 生成 186 份全文 diff。此前列表接口复用了 `--unified=999999` 的聚合
+ * 正文，既慢，又让 512 KB 正文上限和文件总数形成两套口径。
+ */
+async function collectDiffManifestAsync(
+  cwd: string,
+): Promise<ArtifactChangeFile[] | undefined> {
+  const toplevel = (await gitAsync(cwd, ["rev-parse", "--show-toplevel"]))
+    ?.trim();
+  let sameRoot = false;
+  try {
+    sameRoot = !!toplevel && realpathSync(toplevel) === realpathSync(cwd);
+  } catch {
+    sameRoot = false;
+  }
+  if (!sameRoot) return undefined;
+  const [status, baseline] = await Promise.all([
+    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all"]),
+    taskBaselineAsync(cwd),
+  ]);
+  if (status === undefined) return undefined;
+  const [committedText, numstatText] = await Promise.all([
+    baseline
+      ? gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"])
+      : Promise.resolve(undefined),
+    gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--"]),
+  ]);
+  const committed = new Set(uniqueBusinessPaths(
+    String(committedText ?? "").split("\n")));
+  const statuses = statusEntries(status);
+  const untracked = new Set(changedPaths(status.split("\n")
+    .filter((line) => line.startsWith("??")).join("\n")));
+  const stats = numstatByPath(numstatText ?? "");
+  const paths = uniqueBusinessPaths([
+    ...committed,
+    ...changedPaths(status),
+  ]);
+  return paths.map((path) => {
+    const stat = stats.get(path) ?? { additions: 0, deletions: 0 };
+    return {
+      path,
+      stage: untracked.has(path)
+        ? "untracked" as const
+        : originOf(path, committed, statuses),
+      ...stat,
+    };
+  });
+}
+
 /** 本任务变更快照:任务基线到当前工作区,包含已提交、未提交与未跟踪。
  * 基线不可用时退化为原有的工作区状态,旁路不因旧现场失效。 */
 function collectDiff(
@@ -825,6 +920,7 @@ async function collectDiffAsync(
 function diffMetaFromSnapshot(
   cwd: string,
   diff: { text: string; changed: string[] } | undefined,
+  changeFiles?: ArtifactChangeFile[],
 ): ArtifactMeta | undefined {
   if (!diff) return undefined;
   let newest = 0;
@@ -849,7 +945,22 @@ function diffMetaFromSnapshot(
     bytes: Buffer.byteLength(diff.text, "utf-8"),
     modified_at: new Date(newest).toISOString(),
     file_count: diff.changed.length,
+    ...(changeFiles ? { change_files: changeFiles } : {}),
   };
+}
+
+function diffMetaFromManifest(
+  cwd: string,
+  changeFiles: ArtifactChangeFile[] | undefined,
+): ArtifactMeta | undefined {
+  if (!changeFiles) return undefined;
+  const changed = changeFiles.map((file) => file.path);
+  // bytes 在虚拟产物上只用于轻量展示；用清单体积而非生成一份可能数十
+  // MiB 的聚合正文。文件内容在点开后单独读取。
+  return diffMetaFromSnapshot(cwd, {
+    text: changed.length ? changed.join("\n") : "本任务暂无代码变更。",
+    changed,
+  }, changeFiles);
 }
 
 function diffMeta(cwd: string): ArtifactMeta | undefined {
@@ -929,7 +1040,8 @@ export async function listArtifactsAsync(
   }
   try {
     const diff = cwd
-      ? diffMetaFromSnapshot(cwd, await collectDiffAsync(cwd)) : undefined;
+      ? diffMetaFromManifest(cwd, await collectDiffManifestAsync(cwd))
+      : undefined;
     if (diff) items.push(diff);
   } catch {
     // 观测旁路 fail-open。
@@ -994,6 +1106,51 @@ export async function readArtifactAsync(
       ...meta,
       content,
       truncated,
+      branch: await currentBranchAsync(cwd),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 按完整清单中的一个路径读取正文。请求路径必须先命中 Git 现算清单，
+ * 随后才作为 `--` 后的参数交给 Git；既避免路径穿越，也避免浏览器传
+ * 任意路径读取仓库外文件。每个文件单独享有 512 KB 阅读预算。
+ */
+export async function readArtifactFileDiffAsync(
+  cwd: string | undefined,
+  path: string,
+): Promise<ArtifactFileDiff | undefined> {
+  if (!cwd) return undefined;
+  const wanted = String(path ?? "").trim();
+  if (!wanted) return undefined;
+  try {
+    const files = await collectDiffManifestAsync(cwd);
+    const file = files?.find((entry) => entry.path === wanted);
+    if (!file) return undefined;
+    let raw: string | undefined;
+    let heading: string;
+    if (file.stage === "untracked") {
+      raw = await untrackedDiffAsync(cwd, file.path);
+      heading = "未跟踪(untracked)";
+    } else {
+      const baseline = await taskBaselineAsync(cwd);
+      raw = await gitAsync(cwd, [
+        "diff", "--unified=999999", baseline ?? "HEAD", "--", file.path,
+      ]);
+      heading = ORIGIN_HEADING[file.stage];
+    }
+    if (raw === undefined) return undefined;
+    const business = deliveryDiff(raw.trim());
+    const text = business
+      ? `## ${heading}\n\n${business}`
+      : `## ${heading}\n\n?? ${file.path}`;
+    const capped = cap(text);
+    return {
+      path: file.path,
+      content: capped.content,
+      truncated: capped.truncated,
       branch: await currentBranchAsync(cwd),
     };
   } catch {

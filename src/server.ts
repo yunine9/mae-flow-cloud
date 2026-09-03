@@ -89,6 +89,7 @@ import {
   bundleArtifactDocuments,
   listArtifactsAsync,
   readArtifactAsync,
+  readArtifactFileDiffAsync,
   resolveArtifactRoot,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
@@ -2842,6 +2843,16 @@ export function createTaskServer(
               "cache-control": "no-store",
             });
             return response.end(archive.data);
+          }
+          if (parts.length === 4 && parts[3] === "file-diff") {
+            const path = url.searchParams.get("path") ?? "";
+            const diff = await readArtifactFileDiffAsync(root, path);
+            if (!diff) {
+              return json(response, 404, {
+                error: "这个文件已不在当前工作区变更中，请刷新后重试",
+              });
+            }
+            return json(response, 200, diff);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));

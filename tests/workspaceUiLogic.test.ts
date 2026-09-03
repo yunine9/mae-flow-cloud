@@ -19,6 +19,7 @@ const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
 const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
+const gitDiff = await vite.ssrLoadModule("/src/GitDiff.tsx");
 
 after(async () => {
   await vite.close();
@@ -288,6 +289,27 @@ test("push diff API 保留 404 状态，供工作台识别版本失效", async (
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("代码差异目录以完整清单为准，正文只补当前文件", () => {
+  const files = gitDiff.filesForDiff([
+    "## 已提交(committed)",
+    "diff --git a/docs/large.md b/docs/large.md",
+    "--- a/docs/large.md",
+    "+++ b/docs/large.md",
+    "@@ -1 +1 @@",
+    "-旧内容",
+    "+新内容",
+  ].join("\n"), [
+    { path: "docs/large.md", stage: "committed", additions: 1, deletions: 1 },
+    { path: "src/after.ts", stage: "unstaged", additions: 3, deletions: 0 },
+  ]);
+  assert.deepEqual(files.map((file: { path: string }) => file.path),
+    ["docs/large.md", "src/after.ts"]);
+  assert.equal(files[0].lines.length > 0, true);
+  assert.equal(files[1].lines.length, 0,
+    "尚未点开的文件用清单占位，不能从目录树消失");
+  assert.equal(files[1].kind, "代码");
 });
 
 test("工作台面向用户只说实时执行日志和单元测试", () => {
