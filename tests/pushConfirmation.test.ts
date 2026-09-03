@@ -620,6 +620,117 @@ test("个人默认(缺省即开)驱动闸门:没有任务级设置也举卡", as
   }
 });
 
+test("全自动:Build-Fix 新 SHA 未改变已选范围时按策略续推，不生成假待办", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.luban_account = "owner";
+    (service as any).options.pushConfirmation = () => false;
+    (service as any).options.prepush = { enabled: true };
+    const oldHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery_selection = {
+      paths: ["src/feature.ts"],
+      observed_paths: ["src/feature.ts"],
+      excluded_paths: [],
+      status: "requested",
+      waiting_id: "delivery-review-old",
+      head: oldHead,
+      baseline: repo.git("rev-parse", "HEAD~1"),
+      updated_at: new Date().toISOString(),
+    };
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "prepush fixes regression");
+    const newHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = {
+      ...(internal.summary.delivery ?? {}),
+      prepush: { state: "passed", sha: newHead },
+    };
+
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), true,
+    "全自动不应先生成普通最终过目卡");
+    assert.equal(await (service as any).deliverySelectionAllowsPush(
+      internal, "master_bot_REQ1"), true,
+    "同一交付文件范围内的 Build-Fix 修复应自动续推");
+    const summary = service.get(id)!;
+    assert.equal(summary.waiting, undefined);
+    assert.equal(summary.delivery_selection?.status, "confirmed");
+    assert.equal(summary.delivery_selection?.head, newHead);
+    assert.equal(summary.delivery_selection?.confirmation_mode, "policy",
+      "自动续推必须留 policy 审计，不能冒充人工确认");
+    assert.match(summary.delivery_selection?.confirmation_reason ?? "",
+      /Build-Fix 已覆盖当前 SHA/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("全自动:Build-Fix 改变交付文件范围时强制出卡，月光不得代答", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.luban_account = "owner";
+    internal.summary.approval_mode = "moonlight";
+    (service as any).options.pushConfirmation = () => false;
+    (service as any).options.prepush = { enabled: true };
+    const oldHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery_selection = {
+      paths: ["src/feature.ts"],
+      observed_paths: ["src/feature.ts"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "delivery-review-old",
+      head: oldHead,
+      baseline: repo.git("rev-parse", "HEAD~1"),
+      confirmation_mode: "human",
+      updated_at: new Date().toISOString(),
+    };
+    writeFileSync(join(repo.cwd, "src", "extra.ts"),
+      "export const extra = true;\n");
+    repo.git("add", "src/extra.ts");
+    repo.git("commit", "--quiet", "-m", "prepush adds required test");
+    const newHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = {
+      ...(internal.summary.delivery ?? {}),
+      prepush: { state: "passed", sha: newHead },
+    };
+
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), true,
+    "普通最终过目已关闭，第一道偏好判断应放行");
+    assert.equal(await (service as any).deliverySelectionAllowsPush(
+      internal, "master_bot_REQ1"), false,
+    "交付范围扩大必须阻止 push");
+    const summary = service.get(id)!;
+    assert.equal(summary.status, "waiting_for_human");
+    assert.equal(summary.waiting?.step, "cloud_push_confirm",
+      "范围冲突必须真正生成可操作卡，不能停在 verifying 假等待");
+    assert.match(String(summary.waiting?.context), /新增 src\/extra\.ts/);
+    assert.equal((service as any).autoAnswerFor(internal, true), undefined,
+      "范围冲突卡即使月光开启也不得代答");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("全自动:存在未闭环人工意见时仍强制生成确认卡", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.luban_account = "owner";
+    (service as any).options.pushConfirmation = () => false;
+    service.addAnnotation(id, {
+      author: "owner", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "这里还要补空值处理", kind: "code",
+    });
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    assert.equal(service.get(id)?.waiting?.step, "cloud_push_confirm");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("LocalAuth 个人默认:真人缺省即开,显式关才关;无账号不举卡", async () => {
   const { LocalAuth } = await import("../src/auth.ts");
   const { mkdtempSync } = await import("node:fs");

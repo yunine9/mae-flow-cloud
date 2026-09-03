@@ -1017,10 +1017,10 @@ export interface TaskSummary {
       diagnosis?: string;
     };
   };
-  /** 人工在代码检视卡上签下的 push 收据。requested 表示已经作为
-   * 返工要求发给 Agent；confirmed 只授权当时精确的 head + paths。
-   * 后续任何修复产生新 HEAD，都必须先 Build-Fix、再重新检视；完全
-   * 相同 HEAD 的网络重试才复用这张收据。第一次与后续 push 同口径。 */
+  /** push 前最终交付范围收据。requested 表示已经作为返工要求发给
+   * Agent；confirmed 只授权当时精确的 head + paths。人工复检关闭时，
+   * Build-Fix 后若文件集合严格不变，可由明确的 policy 收据续推；它与
+   * 人工确认分开留痕，不能伪装成人看过最新代码。 */
   delivery_selection?: {
     paths: string[];
     observed_paths: string[];
@@ -1029,6 +1029,8 @@ export interface TaskSummary {
     waiting_id: string;
     head: string;
     baseline?: string;
+    confirmation_mode?: "human" | "policy";
+    confirmation_reason?: string;
     updated_at: string;
   };
   /** push 前人工确认交付范围(任务级显式开关;缺省由个人设置决定)。
@@ -8842,6 +8844,7 @@ export class TaskService {
         waiting_id: waiting.waiting_id,
         head: snapshot.head,
         baseline: snapshot.baseline,
+        ...(closesFeedback ? { confirmation_mode: "human" as const } : {}),
         updated_at: new Date().toISOString(),
       },
       note: deliverySelectionNote(paths, excluded) + vanishedNote,
@@ -8940,6 +8943,11 @@ export class TaskService {
       head: value.head,
       ...(typeof value.baseline === "string"
         ? { baseline: value.baseline } : {}),
+      ...(["human", "policy"].includes(String(value.confirmation_mode))
+        ? { confirmation_mode: value.confirmation_mode as "human" | "policy" }
+        : {}),
+      ...(typeof value.confirmation_reason === "string"
+        ? { confirmation_reason: value.confirmation_reason } : {}),
       updated_at: value.updated_at,
     };
   }
@@ -8989,6 +8997,8 @@ export class TaskService {
       waiting_id: waiting.waiting_id,
       head: snapshot.head,
       baseline: snapshot.baseline,
+      ...(this.pushConfirmationAccepted(waiting)
+        ? { confirmation_mode: "human" as const } : {}),
       updated_at: waiting.resolved_at || new Date().toISOString(),
     };
   }
@@ -13258,16 +13268,42 @@ export class TaskService {
     };
   }
 
-  private async pushConfirmationSatisfied(
-    task: TaskState,
-    branch: string,
-  ): Promise<boolean> {
+  /** Cloud 最终交付卡的唯一策略入口。过程月光只决定内核普通问题是否
+   * 自动作答；这里单独裁决最终过目、人工意见与文件范围冲突，避免两道
+   * push 门禁各读一次设置后得出相反结论。 */
+  private pushReviewPolicy(task: TaskState): {
+    required: boolean;
+    ordinaryReviewEnabled: boolean;
+    recheckRequired: boolean;
+    hasHumanFeedback: boolean;
+  } {
     const loop = task.summary.delivery?.loop;
     const recheckRequired = loop?.review_source === "workspace"
       && loop.workspace_review_recheck_required === true;
-    const required = recheckRequired || (task.summary.push_confirmation
+    const hasHumanFeedback = this.unresolvedAnnotations(task).length > 0;
+    const ordinaryReviewEnabled = task.summary.push_confirmation
       ?? this.options.pushConfirmation?.(task.summary.luban_account)
-      ?? Boolean(task.summary.delivery_selection));
+      ?? Boolean(task.summary.delivery_selection);
+    return {
+      required: recheckRequired || hasHumanFeedback || ordinaryReviewEnabled,
+      ordinaryReviewEnabled,
+      recheckRequired,
+      hasHumanFeedback,
+    };
+  }
+
+  private async pushConfirmationSatisfied(
+    task: TaskState,
+    branch: string,
+    force = false,
+  ): Promise<boolean> {
+    const loop = task.summary.delivery?.loop;
+    const policy = this.pushReviewPolicy(task);
+    const { recheckRequired } = policy;
+    // 未闭环人工意见和交付范围冲突属于安全例外，不能被月光/全自动
+    // 偏好吞掉。普通最终过目仍服从个人设置；旧的无设置测试/部署只要
+    // 已经存在 selection，就维持既有的保守复检语义。
+    const required = force || policy.required;
     if (!required || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) {
@@ -13401,9 +13437,7 @@ export class TaskService {
     const selection = task.summary.delivery_selection;
     if (!selection) return true;
     let reason = "";
-    if (selection.status !== "confirmed") {
-      reason = "交付文件清单仍在等待 Agent 整理并重新确认";
-    } else if (!task.cwd) {
+    if (!task.cwd) {
       reason = "代码现场不可用，无法复核交付文件清单";
     } else {
       const snapshot = await deliveryChangeSnapshot(task.cwd);
@@ -13412,7 +13446,45 @@ export class TaskService {
       } else {
         const current = (await this.deliveryContribution(task, snapshot)).paths;
         const expected = normalizedDeliveryPaths(selection.paths);
-        if (!samePaths(current, expected)) {
+        const sameScope = samePaths(current, expected);
+        const exactReceipt = selection.status === "confirmed"
+          && selection.head === snapshot.head && sameScope;
+        if (exactReceipt) return true;
+
+        // “全自动”关闭的是常规最终过目，不是交付白名单。Build-Fix 在
+        // 同一文件集合内修出新 SHA 时，系统可以按既定范围自动续推；
+        // 新增/移除文件则是范围冲突，必须强制出卡，月光也不能代答。
+        const policy = this.pushReviewPolicy(task);
+        const prepush = task.summary.delivery?.prepush;
+        const verified = !this.options.prepush?.enabled
+          || Boolean(prepush?.sha === snapshot.head
+            && ["passed", "user_skipped"].includes(prepush.state));
+        if (!policy.ordinaryReviewEnabled && !policy.recheckRequired
+            && !policy.hasHumanFeedback
+            && sameScope && verified) {
+          selection.status = "confirmed";
+          selection.head = snapshot.head;
+          selection.observed_paths = snapshot.workspace_paths;
+          selection.baseline = snapshot.baseline;
+          selection.confirmation_mode = "policy";
+          selection.confirmation_reason = prepush?.state === "user_skipped"
+            ? "用户已跳过 Build-Fix；当前 SHA 未改变已选交付文件范围"
+            : "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围";
+          selection.updated_at = new Date().toISOString();
+          this.persist(task);
+          this.options.log?.(
+            `任务 ${task.summary.id} 全自动续推：HEAD ${snapshot.head.slice(0, 12)}`
+            + ` 未改变已选交付范围(${current.length} 个文件)`);
+          return true;
+        }
+
+        if (!verified) {
+          this.markVerificationStalled(task,
+            `当前 HEAD ${snapshot.head.slice(0, 12)} 尚无有效 Build-Fix 收据，`
+            + "不能自动确认交付范围");
+          return false;
+        }
+        if (!sameScope) {
           const unexpected = current.filter((path) => !expected.includes(path));
           const missing = expected.filter((path) => !current.includes(path));
           reason = [
@@ -13421,6 +13493,11 @@ export class TaskService {
             missing.length
               ? `已确认文件不再提交 ${describeDirtyPaths(missing)}` : "",
           ].filter(Boolean).join("；") || "提交文件集合已经变化";
+        } else if (selection.status !== "confirmed") {
+          reason = "交付文件清单已整理完成，等待确认最新 Build-Fix 结果";
+        } else {
+          reason = `交付清单确认绑定的是 ${selection.head.slice(0, 12)}，`
+            + `当前待推送提交是 ${snapshot.head.slice(0, 12)}`;
         }
       }
     }
@@ -13432,7 +13509,9 @@ export class TaskService {
     if (task.summary.delivery) delete task.summary.delivery.skipped;
     this.persist(task);
     this.options.log?.(`任务 ${task.summary.id} ${detail}`);
-    await this.pushConfirmationSatisfied(task, branch);
+    // 这里是常规偏好之外的范围/人工意见冲突。必须强制出卡；再次读取
+    // “全自动”偏好会形成 verifying + 无 waiting + 无 MR 的死锁。
+    await this.pushConfirmationSatisfied(task, branch, true);
     return false;
   }
 

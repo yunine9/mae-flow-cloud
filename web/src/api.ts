@@ -1058,6 +1058,8 @@ export interface TaskSummary {
     waiting_id: string;
     head: string;
     baseline?: string;
+    confirmation_mode?: "human" | "policy";
+    confirmation_reason?: string;
     updated_at: string;
   };
   /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
