@@ -242,7 +242,7 @@ class LoopPlatform {
   }
 }
 
-test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿→换库→验证回退→二轮通过→归档", async () => {
+test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿收口→续聊返工→再申报→归档", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-fixed-"));
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform();
@@ -387,18 +387,20 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       { encoding: "utf-8" });
     assert.equal(branchNow.stdout.trim(), BRANCH, "pull_repo 时宿主切的修复分支名=master_工号_单号");
 
-    // ③ 流水线红→AI 修→再推→绿:全由宿主监看驱动,绿了自动进换库验证。
-    const gate2 = await until(() => {
+    // ③ 流水线红→AI 修→再推→绿:全由宿主监看驱动,绿了自动收口
+    // (ADR-0013:流程终点=MR 跑绿,收口后等用户归档)。
+    const closed1 = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
+      return issue.status === "idle" && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "一轮:流水线红转绿后部署举验证闸");
-    assert.equal(gate2.stage, "deploy_verify");
-    assert.equal(gate2.pipelines?.[origin]?.status, "success", "监看账应记全绿");
-    assert.equal(gate2.mrs?.[0]?.url, firstMrUrl,
+    }, "一轮:流水线红转绿后收口待归档");
+    assert.equal(closed1.stage, "mr_green", "收口在终点阶段");
+    assert.match(closed1.stage_note ?? "", /确认合入后可归档/);
+    assert.equal(closed1.pipelines?.[origin]?.status, "success", "监看账应记全绿");
+    assert.equal(closed1.mrs?.[0]?.url, firstMrUrl,
       "流水线反馈修复后必须更新同一个 MR，不能另建一张");
-    assert.deepEqual(gate2.feedback?.map((item) => ({
+    assert.deepEqual(closed1.feedback?.map((item) => ({
       source: item.source,
       status: item.status,
       observed_sha: item.observed_sha,
@@ -417,53 +419,29 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.match(JSON.stringify(model.requests), /失败产物全文已镜像/,
       "修复回合指令应指引 AI 读镜像产物");
 
-    // ④ 验证不通过:一律回退问题分析,轮次+1,UT/监看作废,分支 MR 延用。
-    const shaBefore = service.get(created.id).pushes![0].sha;
-    service.answer(created.id, {
-      state_version: gate2.gate!.state_version,
-      code: "fail",
-      notes: "并发场景仍偶发超时",
-    });
-    const gate3 = await until(() => {
+    // ④ 收口后返工(ADR-0013):用户续聊说没修好,重开 mr_green 继续修
+    // ——不是回退,轮次账不动;修完重推,同 MR 更新后再申报再收口。
+    const shaBefore = closed1.pushes![0].sha;
+    const reopened = service.reply(created.id, "并发场景仍偶发超时,继续修");
+    assert.equal(reopened.stage_states?.[4], "in_progress", "收口态续聊重开本阶段");
+    assert.equal(reopened.round, 1, "返工不是回退,轮次账不动");
+    const reopenedRound2 = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
-        && issue.round === 2 ? issue : undefined;
-    }, "回退后二轮分析闸");
-    assert.equal(gate3.stage, "analyze", "验证不通过一律回问题分析");
-    assert.equal(gate3.ut, undefined, "回退作废 UT 上报");
-    assert.equal(gate3.stage_states?.[3], "redo", "修改阶段标待重做");
-    assert.equal(gate3.stage_states?.[4], "redo", "MR 阶段标待重做");
-    assert.equal(gate3.pushes![0].sha, shaBefore, "分支与 MR 延用(不另开)");
+      return issue.status === "idle" && issue.stage_states?.[4] === "done"
+        ? issue : undefined;
+    }, "返工再申报后再次收口");
+    assert.equal(reopenedRound2.round, 1, "第二轮仍是返工,无回退轮次");
+    assert.equal(reopenedRound2.mrs?.[0]?.url, firstMrUrl,
+      "返工修复仍延用同一 MR");
+    assert.ok(reopenedRound2.pushes![0].sha !== shaBefore,
+      "返工产生新推送(同分支追加)");
 
-    // ⑤ 二轮走完至验证通过:末阶段完成,待手动归档。
-    service.answer(created.id, {
-      state_version: gate3.gate!.state_version,
-      code: "confirm",
-    });
-    const gate4 = await until(() => {
-      const issue = service.get(created.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
-        && issue.round === 2 ? issue : undefined;
-    }, "二轮:验证闸");
-    service.answer(created.id, {
-      state_version: gate4.gate!.state_version,
-      code: "pass",
-    });
-    const passed = await until(() => {
-      const issue = service.get(created.id);
-      return issue.status === "idle"
-        && issue.stage_states?.[5] === "done" ? issue : undefined;
-    }, "验证通过收尾");
-    assert.equal(passed.stage, "deploy_verify", "固定流程留在自己的词表里");
-    assert.equal(passed.pipelines?.[origin]?.status, "success");
-
-    // ⑥ 手动归档:有 MR 记录,结论=已交付。
+    // ⑤ 手动归档:有 MR 记录,结论=已交付。
     const archived = await service.control(created.id, { action: "archive" });
     assert.equal(archived.status, "archived");
     assert.equal(archived.conclusion?.kind, "delivered");
-    assert.equal(archived.stage, "deploy_verify", "归档不改写固定流程阶段词表");
+    assert.equal(archived.stage, "mr_green", "归档不改写固定流程阶段词表");
     // 登记元信息进上下文(ADR-0003):网管口令是现场公开默认值,明文
     // 随元信息块出现;平台凭据(git 令牌)的铁律不变。
     const requestText = JSON.stringify(model.requests);
@@ -1112,13 +1090,13 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1002",
     repo_url: origin, repo_urls: [origin], mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "done", "done", "done", "in_progress", "pending"],
+    stage_states: ["done", "done", "done", "done", "in_progress"],
     status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
     pushes: [{ repo: origin, branch: `master_dev_DTS-2026-1002`, sha, at: now }],
     mrs: [{ repo: origin, branch: `master_dev_DTS-2026-1002`,
       title: "[DTS-2026-1002] t", at: now }],
-    // MR 验绿门:申报已受理(不变量——进 deploy_verify 当且仅当
-    // 已申报且全绿;监看器绿了凭它在场放行)。
+    // MR 验绿门:申报已受理(不变量——收口当且仅当已申报且全绿;
+    // 监看器绿了凭它在场收口)。
     mr_gate: { mrs: [origin], at: now },
     pipelines: {
       [origin]: {
@@ -1141,11 +1119,13 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     const done = await until(() => {
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "deploy_verify" && issue.status === "idle"
+      return issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done" && issue.status === "idle"
         ? issue : undefined;
-    }, "恢复监看并推进到换库验证");
+    }, "恢复监看并在跑绿后收口待归档");
     assert.equal(done.pipelines?.[origin]?.status, "success");
     assert.equal(done.pipelines?.[origin]?.watching, false);
+    assert.match(done.stage_note ?? "", /确认合入后可归档/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -1694,9 +1674,9 @@ test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报�
   // 自由模式没有阶段真相,不催。
   assert.equal(
     shouldNudgeFixed(fixedState({ mode: "free", scenario: undefined })), false);
-  // 当前阶段已收口(如环境验证通过待归档):不催。
+  // 当前阶段已收口(如 MR 跑绿收口待归档,ADR-0013):不催。
   assert.equal(shouldNudgeFixed(fixedState({
-    stage: "deploy_verify",
+    stage: "mr_green",
     stage_states: FIXED_TICKET_STAGES.map(() => "done"),
   })), false);
   // MR 已建、流水线在途:停等流水线是出口的一部分,不催。

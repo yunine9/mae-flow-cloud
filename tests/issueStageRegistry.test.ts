@@ -53,19 +53,20 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
   assert.deepEqual(STAGE_ROUTES.ticket, [...FIXED_TICKET_STAGES]);
   assert.deepEqual(STAGE_ROUTES.no_ticket, [...FIXED_NO_TICKET_STAGES]);
   // 出口动作(2026-08-28 目标驱动拍板):四阶段出口=complete_stage
-  // 自报;三个举卡阶段卡工具即出口,没有 complete_stage 可绕。
+  // 自报;两个举卡阶段卡工具即出口,没有 complete_stage 可绕。
+  // (deploy_verify 封存下线,ADR-0013——注册表不再有它的行。)
   for (const stage of ["dts_info", "prep_repo", "fix", "mr_green"] as const) {
     assert.equal(FIXED_STAGE_SPECS[stage].exitAction, "complete_stage",
       `${stage} 的出口动作应是 complete_stage 自报`);
   }
   assert.equal(FIXED_STAGE_SPECS.analyze.exitAction, "submit_analysis");
   assert.equal(FIXED_STAGE_SPECS.conclude.exitAction, "submit_analysis");
-  assert.equal(FIXED_STAGE_SPECS.deploy_verify.exitAction, "build_deploy");
+  assert.ok(!(FIXED_TICKET_STAGES as readonly string[]).includes("deploy_verify"),
+    "换库验证已封存:有单词表五阶段,不含 deploy_verify");
   // 标签:prep_repo 两场景叫法不同(无单不建分支),其余共用。
   assert.equal(fixedStageLabel("ticket", "prep_repo"), "拉取代码仓·建分支");
   assert.equal(fixedStageLabel("no_ticket", "prep_repo"), "拉取代码仓");
   assert.equal(FIXED_STAGE_LABELS.no_ticket.conclude, "确定结论");
-  assert.equal(FIXED_STAGE_LABELS.ticket.deploy_verify, "换库环境验证");
   // 必读资源是预留列:当前没有任何阶段启用(将来上门槛逻辑时改这里)。
   for (const [stage, spec] of Object.entries(FIXED_STAGE_SPECS)) {
     assert.equal(spec.requiredResources, undefined,
@@ -92,9 +93,10 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("no_ticket", "submit_analysis"), ["analyze"]);
   assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["fix"]);
   assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), ["deploy_verify"]);
+  // build_deploy 封存(ADR-0013):无阶段开放,阶段门禁恒拒。
+  assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), []);
   // complete_stage 是四个自报阶段(拉单/拉仓/修复/提交MR)的出口;
-  // 三个举卡阶段(分析/无单结论/换库验证)卡工具即出口,不含它。
+  // 两个举卡阶段(分析/无单结论)卡工具即出口,不含它。
   assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
     ["dts_info", "prep_repo", "fix", "mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), ["prep_repo", "analyze"]);
@@ -104,7 +106,7 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("ticket", "bind_module"), fromPrep);
   // 自 fix 起常开:推送。
   assert.deepEqual(stagesAllowingTool("ticket", "push_branch"),
-    ["fix", "mr_green", "deploy_verify"]);
+    ["fix", "mr_green"]);
   // 无单 conclude:提交与跳过不再开放,拉仓/改绑/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);
@@ -124,8 +126,9 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
   const conclude = stageGateRoute("conclude");
   assert.equal(conclude?.stage, "conclude", "结论闸属无单的确定结论节点");
   assert.equal(conclude?.reworkTo, "analyze", "补充意见回流问题分析");
-  assert.equal(stageGateRoute("env_verify")?.stage, "deploy_verify",
-    "验证闸属换库环境验证阶段");
+  // env_verify 随换库验证封存(ADR-0013):无所属阶段,永不举起。
+  assert.equal(stageGateRoute("env_verify"), undefined,
+    "换库验证闸已封存,无阶段归属");
   assert.equal(stageGateRoute("env_needed"), undefined,
     "环境闸不绑阶段(作答口是配置表单,不走选项裁决)");
   assert.equal(stageGateRoute("push_confirm"), undefined,

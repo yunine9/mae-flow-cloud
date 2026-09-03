@@ -3263,13 +3263,13 @@ export type FixedIssueStage =
   | "analyze"
   | "fix"
   | "mr_green"
-  | "deploy_verify"
   | "conclude";
 
 export type AnyIssueStage = IssueStage | FixedIssueStage;
 
+/** 五阶段(2026-09-02 拍板:换库验证封存下线,流程终点=MR 跑绿)。 */
 export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
-  "dts_info", "prep_repo", "analyze", "fix", "mr_green", "deploy_verify",
+  "dts_info", "prep_repo", "analyze", "fix", "mr_green",
 ];
 export const FIXED_NO_TICKET_STAGES: FixedIssueStage[] = [
   "prep_repo", "analyze", "conclude",
@@ -3281,13 +3281,14 @@ const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
   analyze: "问题分析",
   fix: "问题修复",
   mr_green: "提交 MR·跑绿",
-  deploy_verify: "换库环境验证",
   conclude: "确定结论",
 };
 
-/** 旧现场词表:已移除的阶段(ut 并入 fix)原样示人,前端不猜。 */
+/** 旧现场词表:已移除的阶段(ut 并入 fix、换库验证封存下线)原样示人,
+ * 前端不猜。 */
 const LEGACY_STAGE_TEXT: Record<string, string> = {
   ut: "单元测试验证",
+  deploy_verify: "换库环境验证(已下线)",
 };
 
 /** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上

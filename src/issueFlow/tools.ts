@@ -34,6 +34,7 @@ import {
   STAGE_LABELS,
   FIXED_STAGE_LABELS,
   fixedAdvance,
+  fixedComplete,
   fixedStages,
   issueRepoWorkspaces,
   normalizeIssueRepos,
@@ -125,6 +126,9 @@ export interface IssueToolContext {
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
   onMrCreated?(repo: string): void;
+  /** mr_green 即时收口的用户通知(complete_stage 验绿当场全绿/空清单
+   * 时调;监看器滞后收口的通知在 service 侧,不经这里)。 */
+  notifyMrGreen?(): void;
   log?: (message: string) => void;
 }
 
@@ -401,13 +405,16 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- 运维:换库部署(fixed 仅换库验证阶段;成功即举环境验证闸) ----
+  // ---- 运维:换库部署(2026-09-02 封存,ADR-0013:换库验证阶段下线,
+  // 无阶段开放本工具,调用一律被阶段门禁拒绝;执行体与闸举升代码原地
+  // 保留——重启换库时在注册表加回阶段行即可,见 ADR-0013) ----
 
   tools.push(defineTool({
     name: "build_deploy",
     label: "Build And Deploy",
     description:
-      "把工作区代码仓(含 deployment/pom.xml)构建并部署到网管服务器,"
+      "(暂未启用:当前流程不含换库部署,调用会被拒绝)"
+      + "把工作区代码仓(含 deployment/pom.xml)构建并部署到网管服务器,"
       + "自动备份当前版本。多仓会话用 repo 参数指定要部署的仓(缺省首个"
       + "登记仓)。仅页面/前后端改动不要加 include_lib;"
       + "仅当 pom.xml 依赖版本变更时才加。部署后平台会举验证卡,"
@@ -985,13 +992,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "\n清单=台账:对每个改过的仓 push_branch + create_mr,然后把"
             + "全部 MR(链接或仓地址)重新申报,一个都不能少、不能编。");
       }
-      // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接放行。
+      // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接收口。
       if (!ledger.length) {
-        fixedAdvance(ctx.state, "deploy_verify",
-          `无 MR 交付(空清单=空台账):${note}`);
+        fixedComplete(ctx.state, `无 MR 交付(空清单=空台账):${note}`);
+        ctx.state.stage_note = "流程收口——确认后可归档";
         ctx.persist();
-        return ok(`MR 清单核验通过(空清单=空台账),平台推进到换库环境验证——\n`
-          + stageBriefLines(scenario, "deploy_verify").join("\n"));
+        ctx.notifyMrGreen?.();
+        return ok(`MR 清单核验通过(空清单=空台账),流程收口——`
+          + "全部工作已完成,等用户确认归档。");
       }
       const platformUrl = ctx.platformUrl;
       if (!platformUrl) {
@@ -1037,14 +1045,15 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       if (runs.every((item) => item.run.status === "success")) {
         delete state.mr_gate;
-        fixedAdvance(ctx.state, "deploy_verify",
+        fixedComplete(ctx.state,
           `MR 验绿通过(${runs.length} 个 MR 全绿):${note}`);
+        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
         ctx.persist();
+        ctx.notifyMrGreen?.();
         return ok(`MR 验绿通过(${runs.map((item) => item.repo).join(", ")}),`
-          + "平台推进到换库环境验证——\n"
-          + stageBriefLines(scenario, "deploy_verify").join("\n"));
+          + "流程收口——全部 MR 流水线跑绿,等用户确认归档。");
       }
-      // 在跑/无记录:受理——记申报账,监看器绿了放行、红了带回失败项。
+      // 在跑/无记录:受理——记申报账,监看器绿了收口、红了带回失败项。
       state.mr_gate = { mrs: declaredRepos, at: new Date().toISOString() };
       recordTransition(state, {
         source: "platform",
@@ -1052,7 +1061,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       ctx.persist();
       return ok(`MR 清单已受理(${declaredRepos.join(", ")})——流水线还在跑或`
-        + "暂无记录。绿了平台自动放行进换库验证,红了平台会把失败项带回;"
+        + "暂无记录。绿了平台自动收口并通知用户,红了平台会把失败项带回;"
         + "可结束本回合停等。");
     };
 
