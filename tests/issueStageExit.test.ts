@@ -218,7 +218,6 @@ async function startChain(options: {
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier,
   });
   const created = service.create({
@@ -562,7 +561,6 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({

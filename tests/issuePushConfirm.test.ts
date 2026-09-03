@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -68,6 +68,23 @@ function baseOptions(dataDir: string, model: ScriptedModelServer): IssueFlowOpti
   };
 }
 
+/** 自由探索入口已下线(#97):推送过目闸的回归现场是自由会话(阶段
+ * 门禁不掺和,与本闸正交)——create() 已恒为固定流程,这里直接种子
+ * 一个盘上存量自由会话,恢复管线点火。必须在构造服务**之前**调用。 */
+function seedFreeIssue(dataDir: string, repoUrl: string): { id: string } {
+  const now = new Date().toISOString();
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev", created_at: now, updated_at: now,
+    title: "登录超时", description: "", source: "dts",
+    ticket: TICKET,
+    repo_url: repoUrl, repo_urls: [repoUrl],
+    mode: "free", status: "running",
+    stage: "locate_root", stage_note: "正在排查", stage_at: now,
+  }));
+  return { id: "issue-1" };
+}
+
 /** 建分支并落一笔真实改动(过目卡上的 diff --stat 才有东西可看)。 */
 const COMMIT = `cd repo/origin && git checkout -q -b ${BRANCH} && `
   + "printf 'fixed\\n' > fix.txt && git add -A && "
@@ -107,15 +124,12 @@ test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成�
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
+  const created = seedFreeIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     pushConfirmation: () => true,
   });
   try {
-    const created = service.create({
-      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-      repoUrl: origin,
-    });
     const gated = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -226,15 +240,12 @@ test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
+  const created = seedFreeIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     pushConfirmation: () => true,
   });
   try {
-    const created = service.create({
-      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-      repoUrl: origin,
-    });
     const gated = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -278,15 +289,12 @@ test("过目关/回调缺席:push_branch 直推,行为与现状一致", async ()
     const model = new ScriptedModelServer(script, "scripted-v1",
       { linear: true });
     await model.start();
+    const created = seedFreeIssue(dataDir, origin);
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
       ...(label === "显式关" ? { pushConfirmation: () => false } : {}),
     });
     try {
-      const created = service.create({
-        account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-        repoUrl: origin,
-      });
       const idle = await until(() => {
         const issue = service.get(created.id);
         if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -314,16 +322,13 @@ test("月光开:push_confirm 闸不被自动作答(显式守卫,永等真人)", 
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
+  const created = seedFreeIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     moonlight: () => true,
     pushConfirmation: () => true,
   });
   try {
-    const created = service.create({
-      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-      repoUrl: origin,
-    });
     await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -356,16 +361,13 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
+  const created = seedFreeIssue(dataDir, origin);
   const first = new IssueFlowService({
     ...baseOptions(dataDir, model),
     pushConfirmation: () => true,
   });
   let second: IssueFlowService | undefined;
   try {
-    const created = first.create({
-      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-      repoUrl: origin,
-    });
     const gated = await until(() => {
       const issue = first.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -430,15 +432,12 @@ test("过目开:确认后又有新提交,重推对不上过目 tip 即作废重�
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
+  const created = seedFreeIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     pushConfirmation: () => true,
   });
   try {
-    const created = service.create({
-      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-      repoUrl: origin,
-    });
     const gated = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");

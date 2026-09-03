@@ -390,8 +390,6 @@ export interface IssueCreateInput {
    * 置真(DTS 预绑/登记页手工选;服务端 matchDtsToModule 自动匹配
    * 不算,那仍是机器猜测,不锁)。 */
   moduleLocked?: boolean;
-  /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
-  mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
 }
 
@@ -458,10 +456,6 @@ export interface IssueFlowOptions {
    *  改代码解决不了(要人在交付平台处理/豁免)——不派回合,停表请人。
    *  缺席=不分诊,红灯照旧派修,行为与现状一致。 */
   unfixableTools?: string[];
-  /** 探索方式烙印(个人设置,缺省固定流程)。回调缺席按自由模式——
-   * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
-   * auth.issueFlowMode 对真人缺省返回 fixed。 */
-  issueFlowMode?: (account: string) => IssueFlowMode;
   /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
    * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
    * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
@@ -920,8 +914,10 @@ export class IssueFlowService {
       throw new IssueControlError("单号只能是字母数字下划线连字符(如 DTS2026082001317)");
     }
     const explicitRepos = normalizeIssueRepos(input.repoUrl, input.repoUrls);
-    const mode: IssueFlowMode =
-      input.mode ?? this.options.issueFlowMode?.(account) ?? "free";
+    // 自由探索入口已下线(#97,T1):任何人都不能再产生新的自由模式
+    // 会话,创建一律钉死固定流程。存量自由会话照常恢复与收口,这里的
+    // 常量将来随自由引擎整体退役(规格 #96,后续票)。
+    const mode: IssueFlowMode = "fixed";
     const scenario: IssueScenario | undefined =
       mode === "fixed" ? (ticket ? "ticket" : "no_ticket") : undefined;
     // 模块是一等实体:module_id 必须真实存在且在架,名称由模块库派生

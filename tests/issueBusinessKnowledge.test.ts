@@ -128,7 +128,6 @@ test("绑定模块+仓内 docs:进 analyze 定格资产并投影,台账/文件/�
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     // 月光开:自动闭环归档,顺便证明定格/地图不分介入档。
     moonlight: () => true,
   });
@@ -189,7 +188,6 @@ test("模块没有已发布资产:台账为空,流程照走(旁路不卡会话)"
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => true,
   });
   try {

@@ -22,7 +22,6 @@ import {
   getMoonlightPreview,
   putMoonlight,
   putPersonalPushConfirmation,
-  putIssueFlowMode,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
 import { orderHierarchyBy, orderTaskHierarchy } from "./taskHierarchy";
@@ -349,56 +348,6 @@ function TaskSyncIndicator({
   );
 }
 
-/** 问题处理探索方式(2026-08-27 拍板):固定流程=平台按阶段状态机
- * 推进、工具按阶段开放;自由探索=AI 按 playbook 自主编排。缺省固定
- * 流程;只烙印新会话——进行中的会话不迁移,自由路径从未删掉,随时
- * 一键切回。 */
-function IssueFlowModeSetting({
-  session,
-  onChanged,
-}: {
-  session: AuthUser;
-  onChanged: (patch: Partial<AuthUser>) => void;
-}) {
-  const [mode, setMode] = useState<"fixed" | "free">(
-    session.issue_flow === "free" ? "free" : "fixed");
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
-  async function select(next: "fixed" | "free") {
-    if (busy || next === mode) return;
-    setBusy(true);
-    try {
-      const user = await putIssueFlowMode(next);
-      setMode(user.issue_flow === "free" ? "free" : "fixed");
-      setNote(next === "fixed"
-        ? "新发起的问题处理将按固定流程推进(五阶段/三节点,平台把关)"
-        : "新发起的问题处理改为自由探索(AI 按 playbook 自主编排);进行中的会话不受影响");
-      onChanged({ issue_flow: user.issue_flow });
-    } catch (cause) {
-      setNote(String((cause as Error).message ?? cause));
-    } finally { setBusy(false); }
-  }
-  return <section className="issue-flow-mode-setting" aria-labelledby="issue-flow-mode-title">
-    <header className="approval-setting-head">
-      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M4.5 15.5 8 9l3 3.5L14.5 5l2 4" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg></span>
-      <div><span className="section-kicker">ISSUE EXPLORATION</span><h2 id="issue-flow-mode-title">问题处理探索方式</h2></div>
-      <span className="approval-setting-state">当前：{mode === "fixed" ? "固定流程" : "自由探索"}</span>
-    </header>
-    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单五阶段、无单三节点;分析确认停下等你确认,MR 全部跑绿即收口待归档);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
-    <div className="approval-options" role="group" aria-label="问题处理探索方式">
-      <button type="button" className={mode === "fixed" ? "on" : ""} disabled={busy}
-        onClick={() => void select("fixed")}>
-        <strong>固定流程</strong><small>阶段固定、工具按阶段开放;报告确认与环境验证两处等你拍板(默认)</small>
-      </button>
-      <button type="button" className={mode === "free" ? "on" : ""} disabled={busy}
-        onClick={() => void select("free")}>
-        <strong>自由探索</strong><small>AI 自主决定研究路线,阶段自行上报;保留给需要灵活排查的场景</small>
-      </button>
-    </div>
-    {note ? <p className="approval-setting-note" role="status">{note}</p> : null}
-  </section>;
-}
-
 function PersonalSettingsPage({
   session,
   onSessionPatch,
@@ -413,7 +362,6 @@ function PersonalSettingsPage({
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
-    <IssueFlowModeSetting session={session} onChanged={onSessionPatch} />
     <section className="personal-connections" aria-labelledby="personal-connections-title">
       <div className="personal-connections-head">
         <div><span className="section-kicker">PERSONAL CONNECTIONS</span><h2 id="personal-connections-title">个人接入</h2></div>

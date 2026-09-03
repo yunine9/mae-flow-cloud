@@ -520,24 +520,6 @@ export function createTaskServer(
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
-        // 问题处理探索方式(固定流程/自由探索):个人偏好,只烙印到
-        // 新建的问题会话;进行中会话不迁移——"一键切回自由探索"的
-        // 保证就在这:自由路径从未被改掉。
-        if (request.method === "PUT" && parts[1] === "me"
-            && parts[2] === "issue-flow") {
-          if (!viewer) return json(response, 401, { error: "尚未登录" });
-          const body = await readBody(request);
-          const mode = body.mode === "free" ? "free"
-            : body.mode === "fixed" ? "fixed" : undefined;
-          if (!mode) {
-            return json(response, 400, {
-              error: "问题处理探索方式只能是 fixed(固定流程)或 free(自由探索)",
-            });
-          }
-          options.auth!.setIssueFlow(viewer.username, mode);
-          return json(response, 200,
-            options.auth!.sessionView(viewer.username));
-        }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "git-token") {

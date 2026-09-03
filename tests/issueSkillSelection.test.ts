@@ -131,7 +131,6 @@ async function runToAnalysisConfirm(origin: string, moonlight: boolean) {
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => moonlight,
   });
   const created = service.create({
@@ -253,7 +252,6 @@ test("存量挂起圈选卡仍可作答:清单外拒绝,正式勾选落台账清
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => false,
   });
   try {

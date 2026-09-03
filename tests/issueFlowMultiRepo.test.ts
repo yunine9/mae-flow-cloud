@@ -139,7 +139,6 @@ test("登记校验:无单必须带模块与环境(两模式同等);模块存在/
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: {},
-    issueFlowMode: () => "fixed",
   });
   try {
     createBusinessModule(dataDir, {
@@ -165,15 +164,11 @@ test("登记校验:无单必须带模块与环境(两模式同等);模块存在/
       }, null, 2)}\n`,
     );
 
-    // 登记门禁(#17):无单号必须指名业务模块并带网管环境,固定/自由
-    // 两模式同等;三种模块失败各有其文案。
+    // 登记门禁(#17):无单号必须指名业务模块并带网管环境;三种模块
+    // 失败各有其文案。
     assert.throws(
       () => service.create({ account: "dev", title: "t" }),
       /必须指定业务模块/,
-    );
-    assert.throws(
-      () => service.create({ account: "dev", title: "t", mode: "free" }),
-      /必须指定业务模块/, "自由探索同等拦截",
     );
     assert.throws(
       () => service.create({
@@ -278,7 +273,6 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     createBusinessModule(dataDir, {
@@ -425,7 +419,6 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   let second: IssueFlowService | undefined;
   try {
@@ -520,7 +513,6 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
       dataDir, provider: "maeflow", model: "scripted-v1",
       modelsJson: model.modelsJson(),
       dts: new MockDtsGateway(),
-      issueFlowMode: () => "fixed",
     });
     const gone = await issueGet(["issues", created.id], second);
     assert.equal(gone.status, 404, "物理清理后的旧会话详情 404");

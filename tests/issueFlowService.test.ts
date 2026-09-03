@@ -386,54 +386,23 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
+  // 自由探索入口已下线(#97):自由引擎的回归现场改为直接种子盘上
+  // 存量会话(恢复管线点火),不再经 create()——创建已恒为固定流程。
+  seedRecoverableIssue(dataDir, "issue-1", {
+    title: "播放器偶发黑屏",
+    description: "测试环境偶发黑屏,疑似新版本引入",
+    repo_url: origin, repo_urls: [origin],
+    status: "running",
+  });
   const service = new IssueFlowService({
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
+  // 种子会话没有创建回执:沿用 created.id 形状串起后续断言。
+  const created = { id: "issue-1" };
   try {
-    createBusinessModule(dataDir, {
-      id: "pay-core", name: "支付核心", description: "收单与清结算",
-      owner: "dev", repositories: [origin],
-    }, "tester");
-    const created = service.create({
-      account: "dev",
-      title: "播放器偶发黑屏",
-      description: "测试环境偶发黑屏,疑似新版本引入",
-      repoUrl: origin,
-      moduleId: "pay-core",
-      environment: {
-        hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
-        backendPassword: "env-shared-secret",
-      },
-    });
-    // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
-    assert.equal(created.status, "running");
-    assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
-    // 四件套落盘形状:页面账号是非密的登记元信息,回执可见;密码本体
-    // 只在 vault,状态文件与回执都搜不到。
-    assert.equal(created.environment?.page_account, "admin",
-      "页面账号未传缺省 admin");
-    assert.ok(created.environment?.page_credential_ref);
-    assert.ok(!JSON.stringify(created).includes("page-secret"));
-    assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
-      "问题会话不初始化内核(与需求流分属两个范式)");
-
-    // vault 两组凭据各自成组、可分别解出:后台三账号同密码,页面单账号。
-    const vault = new IssueEnvironmentVault(dataDir);
-    assert.deepEqual(
-      vault.credentials(created.id, created.environment!.credential_ref)
-        .map((account) => account.username),
-      ["sopuser", "ossuser", "ossadm"]);
-    assert.equal(vault.credential(created.id,
-      created.environment!.credential_ref, "sopuser")?.password,
-      "env-shared-secret");
-    assert.deepEqual(vault.credential(created.id,
-      created.environment!.page_credential_ref!),
-      { username: "admin", password: "page-secret" });
-
     const waiting = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -442,16 +411,6 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.equal(waiting.stage, "locate_root");
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
     assert.ok(waiting.has_analysis, "分析报告应已产出");
-
-    // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
-    const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /env-shared-secret/);
-    assert.match(requestText, /页面密码: page-secret/);
-    assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
-    const stateFile = readFileSync(
-      join(dataDir, "issues", created.id, "issue.json"), "utf-8");
-    assert.doesNotMatch(stateFile, /env-shared-secret/);
-    assert.doesNotMatch(stateFile, /page-secret/);
 
     service.answer(created.id, {
       state_version: waiting.waiting!.state_version,
@@ -464,9 +423,8 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     }, "作答后回合收口");
     assert.equal(idle.stage, "done", "作答后应继续推进到结论阶段");
     const thread = service.messages(created.id);
-    assert.ok(thread.some((message) =>
-      message.role === "user" && message.text.includes("黑屏")),
-    "开场问题应作为用户消息入账");
+    // 种子现场的开场是重启平台通知(不是登记开场词),开场词入账断言
+    // 在下方「创建恒为固定流程」的 create 路径钉住。
     assert.ok(thread.some((message) => message.role === "decision"),
     "用户决定应入账");
 
@@ -532,6 +490,88 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   }
 });
 
+test("创建恒为固定流程(#97 下线自由探索入口):登记回执、四件套 vault 与开场上下文照旧", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-create-fixed-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [{ text: "收到,先做初步排查。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
+    const created = service.create({
+      account: "dev",
+      title: "播放器偶发黑屏",
+      description: "测试环境偶发黑屏,疑似新版本引入",
+      repoUrl: origin,
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
+    // 创建恒为固定流程(#97 正向断言):回执与盘上状态一致,无单登记
+    // 烙 no_ticket 三节点。
+    assert.equal(created.mode, "fixed");
+    assert.equal(created.scenario, "no_ticket");
+    assert.equal(created.stage, "prep_repo");
+    assert.equal(loadState(join(dataDir, "issues", created.id))?.mode,
+      "fixed", "盘上 state.mode 恒为 fixed");
+    // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
+    assert.equal(created.status, "running");
+    assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
+    // 四件套落盘形状:页面账号是非密的登记元信息,回执可见;密码本体
+    // 只在 vault,状态文件与回执都搜不到。
+    assert.equal(created.environment?.page_account, "admin",
+      "页面账号未传缺省 admin");
+    assert.ok(created.environment?.page_credential_ref);
+    assert.ok(!JSON.stringify(created).includes("page-secret"));
+    assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
+      "问题会话不初始化内核(与需求流分属两个范式)");
+
+    // vault 两组凭据各自成组、可分别解出:后台三账号同密码,页面单账号。
+    const vault = new IssueEnvironmentVault(dataDir);
+    assert.deepEqual(
+      vault.credentials(created.id, created.environment!.credential_ref)
+        .map((account) => account.username),
+      ["sopuser", "ossuser", "ossadm"]);
+    assert.equal(vault.credential(created.id,
+      created.environment!.credential_ref, "sopuser")?.password,
+      "env-shared-secret");
+    assert.deepEqual(vault.credential(created.id,
+      created.environment!.page_credential_ref!),
+      { username: "admin", password: "page-secret" });
+    const stateFile = readFileSync(
+      join(dataDir, "issues", created.id, "issue.json"), "utf-8");
+    assert.doesNotMatch(stateFile, /env-shared-secret/);
+    assert.doesNotMatch(stateFile, /page-secret/);
+
+    // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
+    await until(() => model.requests.length ? 1 : undefined, "首轮请求");
+    const requestText = JSON.stringify(model.requests);
+    assert.match(requestText, /env-shared-secret/);
+    assert.match(requestText, /页面密码: page-secret/);
+    assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
+    // 开场问题应作为用户消息入账(等首回合收口再查线程)。
+    await until(() =>
+      service.get(created.id).status === "idle" ? 1 : undefined, "首回合收口");
+    const thread = service.messages(created.id);
+    assert.ok(thread.some((message) =>
+      message.role === "user" && message.text.includes("黑屏")),
+    "开场问题应作为用户消息入账");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-gate-"));
   const origin = bareOrigin(dataDir);
@@ -546,30 +586,24 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
+  // 单号门禁的可触现场是无单的自由会话推送;自由探索入口已下线(#97),
+  // 现场改为种子盘上存量会话(恢复管线点火)。
+  seedRecoverableIssue(dataDir, "issue-1", {
+    title: "无单号问题",
+    repo_url: origin, repo_urls: [origin],
+    status: "running",
+  });
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
+  const created = { id: "issue-1" };
   try {
-    createBusinessModule(dataDir, {
-      id: "pay-core", name: "支付核心", description: "收单与清结算",
-      owner: "dev", repositories: [origin],
-    }, "tester");
-    const created = service.create({
-      account: "dev", title: "无单号问题", repoUrl: origin,
-      moduleId: "pay-core",
-      environment: {
-        hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
-        backendPassword: "env-shared-secret",
-      },
-    });
     await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
     }, "无单号回合收口");
-    assert.equal(created.ticket, undefined);
     assert.equal(service.get(created.id).pushes, undefined,
       "没有单号就不该有任何推送记录");
     const events = readFileSync(
@@ -622,21 +656,23 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
+  // 自由探索入口已下线(#97):宿主推送/提 MR 的宿主管道回归改在种子
+  // 的存量自由会话上钉(固定流程的推送/MR 全链另有契约快照覆盖)。
+  seedRecoverableIssue(dataDir, "issue-1", {
+    title: "登录超时",
+    ticket: "DTS2026082001317",
+    source: "dts",
+    repo_url: origin, repo_urls: [origin],
+    status: "running",
+  });
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     platformUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
   });
+  const created = { id: "issue-1" };
   try {
-    const created = service.create({
-      account: "dev",
-      title: "登录超时",
-      ticket: "DTS2026082001317",
-      source: "dts",
-      repoUrl: origin,
-    });
-    assert.equal(created.ticket, "DTS2026082001317");
     await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");

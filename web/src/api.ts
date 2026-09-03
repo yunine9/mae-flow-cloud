@@ -96,9 +96,6 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
-  /** 问题处理探索方式:"fixed" 固定流程(缺省)/"free" 自由探索。
-   * 只烙印新会话,进行中会话不迁移。 */
-  issue_flow?: "fixed" | "free";
 }
 
 export interface CollaborationAssignee {
@@ -231,19 +228,6 @@ export async function putPersonalPushConfirmation(
   const response = await fetch("/auth/me/push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
-}
-
-/** 问题处理探索方式(固定流程/自由探索)。缺省固定流程;只影响
- * 新建的问题会话。 */
-export async function putIssueFlowMode(
-  mode: "fixed" | "free",
-): Promise<AuthUser> {
-  const response = await fetch("/auth/me/issue-flow", {
-    method: "PUT",
-    body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();

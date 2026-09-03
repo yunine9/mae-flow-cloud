@@ -304,7 +304,6 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -454,7 +453,6 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     createBusinessModule(dataDir, {
@@ -602,7 +600,6 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     platformUrl: platform.baseUrl,
     unfixableTools: ["SuperChecker"],
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const gated = await until(() => {
@@ -659,8 +656,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     modelsJson: model.modelsJson(),
   });
   try {
-    // 无单登记门禁(#17):自由模式同样要模块+环境;夹具仓不参与本
-    // 测试的断言,绑个占位本地路径即可。
+    // 无单登记门禁(#17):要模块+环境;夹具仓不参与本测试的断言,
+    // 绑个占位本地路径即可。
     createBusinessModule(dataDir, {
       id: "pay-core", name: "支付核心", description: "收单与清结算",
       owner: "dev", repositories: ["/tmp/fixture.git"],
@@ -710,7 +707,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     };
     assertWireShape(waitingSample, detail.body.waiting, "Agent 卡 .waiting");
 
-    // 自由模式无闸无账:summary 字段比固定流程少一圈,同样钉住。
+    // 固定流程(无单三节点)的 summary 形状:模式恒烙 fixed(#97 下线
+    // 自由探索入口),登记转移账带首阶段。
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
@@ -726,10 +724,10 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       module_id: undefined,
       baseline: undefined,
       environment: undefined,
-      mode: "free",
-      scenario: undefined,
-      stage_states: undefined,
-      round: undefined,
+      mode: "fixed",
+      scenario: "no_ticket",
+      stage_states: ["in_progress", "pending", "pending"],
+      round: 1,
       review_active: undefined,
       gate: undefined,
       ut: undefined,
@@ -739,20 +737,23 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       converted_to: undefined,
       inherited_accounts: undefined,
       status: "waiting_user",
-      stage: "registered",
-      stage_note: "已登记,准备开始首轮研究",
+      stage: "prep_repo",
+      stage_note: "已登记,固定流程启动",
       stage_at: "2026-08-28T00:00:00Z",
       has_environment: false,
       nudges: undefined,
       conclusion: undefined,
       pushes: undefined,
       mrs: undefined,
-      transitions: undefined,
+      transitions: [{
+        at: "2026-08-28T00:00:00Z", source: "platform",
+        stage: "prep_repo", note: "固定流程会话已登记(无单三节点)",
+      }],
       error: undefined,
       last_reply: undefined,
     };
     const detailSample: IssueDetail = { ...summarySample, waiting: waitingSample, has_analysis: false };
-    assertWireShape(detailSample, detail.body, "自由模式 GET /issues/:id");
+    assertWireShape(detailSample, detail.body, "固定流程 GET /issues/:id");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
