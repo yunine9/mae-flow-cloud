@@ -750,6 +750,7 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
   "isolate-memory": "8g", "isolate-cpus": "8", "isolate-pids": 512,
   "isolate-network": "bridge",
   "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
+  "isolate-npm-registry": "https://npm.intra.example/repository/npm-group/",
   "build-slots": 1
 }
 ```
@@ -780,6 +781,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | isolate-memory / isolate-cpus / isolate-pids | 8g / 8 / 512 | 每个任务容器的资源上限；`isolate-cpus` 是可用上限，不是预留核数 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
+| isolate-npm-registry | 内网形态缺省(见下) | 任务容器内的 npm 源,以 `npm_config_registry` 注入,需求流与问题流容器同一通道。未配置时按部署形态判定:挂载了 Maven settings.xml(内网镜像部署的标志)自动注入内置缺省源 `https://cmc.centralrepo.rnd.huawei.com/npm/`(URL 待与 issue-28 现场对拍确认,#77);演示/外网形态没有该挂载,npm 维持公网。显式配置覆盖缺省;启动日志注明来源与覆盖方式(#75) |
 | build-cache-retention-days | 30 | 仓库构建缓存从最后一次真实挂载起连续未使用多少天后自动回收；`0`=不按时间回收。正在运行或仍可能继续的任务一律保护 |
 | build-cache-max-gb | 100 | 构建缓存总量上限，超出后按最久未用优先回收；`0`=不限容量。扫描与删除使用异步 I/O，不阻塞服务请求 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
