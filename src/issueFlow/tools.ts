@@ -51,6 +51,7 @@ import {
   stagesAllowingTool,
   stageBriefLines,
 } from "./stageRegistry.ts";
+import { promptCopy } from "./promptCopy.ts";
 import {
   describePipelineRun,
   getPipelineStatus,
@@ -393,25 +394,25 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       ctx.persist();
       const baselineNote = facts.baselineMiss
-        ? `\n注意: 该仓没有基线分支 ${facts.baselineMiss},修复分支未创建、`
-          + "停在其默认分支——请核实基线是否正确,拿不准就用 AskUserQuestion 问用户。"
+        ? "\n" + promptCopy("receipts", "pull.baseline_miss",
+          { baseline: facts.baselineMiss })
         : "";
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
       // 自报)。拉取阶段的回执带注册表简报指引:还有仓继续拉,拉齐了
       // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
       const guide = fixed && scenario && state.stage === "prep_repo"
-        ? "\n\n拉仓指引:还有要用的仓继续调 pull_repo;都拉齐了就调 "
-          + "complete_stage 收口本阶段。\n"
-          + stageBriefLines(scenario, "prep_repo").join("\n")
+        ? "\n\n" + promptCopy("receipts", "pull.guide.prep", {
+          stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
+        }) + "\n"
         : "";
       return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
         + `- HEAD: ${facts.head.slice(0, 12)}`
         + `${facts.branch ? `\n- 修复分支: ${facts.branch}(已切好)` : ""}`
         + `${facts.remoteBranch
-          ? `\n- 遗留警报: 远端已存在同名修复分支 ${facts.branch}@${facts.remoteBranch},`
-            + "与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留。"
-            + "放着不管 push_branch 会被拒(非快进)。请用 AskUserQuestion "
-            + "请用户拍板处置:在代码平台删除远端旧分支后重推,还是沿用旧分支。"
+          ? `\n- ` + promptCopy("receipts", "pull.remote_branch_warn", {
+            branch: facts.branch ?? "",
+            remote: facts.remoteBranch,
+          })
           : ""}`
         + `${baselineNote}${guide}`);
     },
@@ -532,14 +533,15 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 门禁同源),告知"读完单据 complete_stage 收口"。单据自带的业务
       // 关键词(特性/模块)附在简报前,帮 lookup_modules 精准匹配。
       const moduleHint = detail.featureName || detail.moduleName
-        ? `\n\n业务信息:特性=${detail.featureName ?? "无"}`
-          + `,模块=${detail.moduleName ?? "无"}`
-          + "——请用这些关键词调 lookup_modules 检索业务模块"
+        ? "\n\n" + promptCopy("receipts", "dts.module_hint", {
+          feature: detail.featureName ?? "无",
+          module: detail.moduleName ?? "无",
+        })
         : "";
       const briefing = fixed && scenario && state.stage === "dts_info"
-        ? "\n\n单据详情已获取——通读单据后调 complete_stage 收口本阶段,"
-          + "进入拉取代码仓:\n"
-          + stageBriefLines(scenario, "prep_repo").join("\n")
+        ? "\n\n" + promptCopy("receipts", "dts.briefing", {
+          stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
+        })
         : "";
       return ok(`问题单 ${detail.ticket} 详情:\n${contentText}`
         + (imageNote ? `\n\n${imageNote}` : "")
@@ -600,8 +602,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       gateStage("push_branch");
       const state = ctx.state;
       if (!state.ticket) {
-        fail("单号门禁:会话尚未绑定 DTS 单号。请请用户在页面「绑定单号」后重试"
-          + "——推送与提 MR 都以单号为门票");
+        fail(promptCopy("receipts", "push.no_ticket"));
       }
       const repo = locateRepo(params.repo);
       if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送(先 pull_repo)");
@@ -610,20 +611,20 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
       const expected = expectedBranch(state);
       if (branch !== expected) {
-        fail(`分支名不符合交付规则: 应为 ${expected},实际 ${branch}。`
-          + "修复分支命名固定为 master_<工号>_<单号>");
+        fail(promptCopy("receipts", "push.branch_mismatch",
+          { expected, branch }));
       }
       // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
       // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
       // 出厂,不如在这里点破并给出该做的事。
       const dirty = await dirtyWorktree(repo.dir);
       if (dirty.length) {
-        fail("工作区有未提交改动,push 只推送已提交的历史——现在推只会"
-          + `推出旧提交(MR 将没有 diff)。先提交再重推:\n`
-          + `  git add -A && git commit -m "[${state.ticket}] <改动说明>"\n`
-          + `未提交的文件(${dirty.length} 条):\n`
-          + dirty.slice(0, 10).map((line) => `  ${line}`).join("\n")
-          + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""));
+        fail(promptCopy("receipts", "push.dirty", {
+          ticket: state.ticket,
+          count: dirty.length,
+          files: dirty.slice(0, 10).map((line) => `  ${line}`).join("\n")
+            + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""),
+        }));
       }
       // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
       // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
@@ -651,10 +652,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           summary,
         );
         ctx.persist();
-        fail(`${why ? why.replace(/,$/, "") + "——已重新举出推送确认卡" :
-          "已向用户举出推送确认卡"}(带本次变更摘要),git push 未执行。`
-          + "请结束本回合等待用户过目——确认后平台会通知你重新推送本分支;"
-          + "若用户答「暂不推送」,请按其意见调整后再来征求确认");
+        fail(why
+          ? promptCopy("receipts", "push.review.raised_stale", {
+            why: why.replace(/,$/, ""),
+          })
+          : promptCopy("receipts", "push.review.raised_new"));
       };
       if (ctx.pushConfirmation?.() === true) {
         if (!state.push_token) {
@@ -721,7 +723,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       gateStage("create_mr");
       const state = ctx.state;
       if (!state.ticket) {
-        fail("单号门禁:会话尚未绑定 DTS 单号,不能创建 MR");
+        fail(promptCopy("receipts", "mr.no_ticket"));
       }
       const platformUrl = ctx.platformUrl;
       if (!platformUrl) {
@@ -732,8 +734,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const repo = locateRepo(params.repo);
       const pushRecord = state.pushes?.find((item) => item.repo === repo.url);
       if (!pushRecord) {
-        fail(`仓 ${repo.url} 还没有推送记录:请先对该仓调用 push_branch,`
-          + "再创建 MR(一仓一 MR,改过的仓各自交付)");
+        fail(promptCopy("receipts", "mr.no_push", { repo: repo.url }));
       }
       const target = String(params.target_branch ?? "").trim() || "master";
       const title = String(params.title ?? "").trim()
@@ -763,9 +764,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       ctx.persist();
       if (fixed) ctx.onMrCreated?.(repo.url);
       return ok(`MR 已创建: ${receipt.url}\n(source ${pushRecord.branch} → ${target},`
-        + `仓 ${repo.url},关联单号 ${state.ticket})。${fixed
-          ? "平台已启动流水线监看:请结束本回合,等待流水线结果(红了平台会带回失败项让你修)。"
-          : "合入由用户在门禁通过后决定。"}`);
+        + `仓 ${repo.url},关联单号 ${state.ticket})。${promptCopy("receipts",
+          fixed ? "mr.receipt.fixed" : "mr.receipt.free")}`);
     },
   }));
 
@@ -793,10 +793,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 人工预绑锁(spec #57):模块是人在发起时显式选定的,绑定权
         // 在人——AI 不得改绑,发现不符只能 AskUserQuestion 报告给人。
         if (state.module_locked) {
-          fail("该会话的业务模块由人工预绑锁定,不能调用 bind_module 改绑。"
-            + "如你判断模块与单据明显不符,请用 AskUserQuestion 告知用户,"
-            + "由人在 DTS 列表改绑或提供代码仓地址;当前直接对已登记仓"
-            + "逐个 pull_repo 即可");
+          fail(promptCopy("receipts", "bind.locked"));
         }
         const moduleId = String(params.module_id ?? "").trim();
         if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
@@ -871,14 +868,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         gateStage("submit_analysis");
         const report = analysisReportPath(ctx);
         if (!existsSync(report)) {
-          fail(`分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md`
-            + `(问题现象/问题根因/修改方案/证据链/置信度五章节,首行一句话总结,模板见技能 issue-analysis),再提交`);
+          fail(promptCopy("receipts", "analysis.no_report"));
         }
         const missing = missingAnalysisSections(readFileSync(report, "utf-8"));
         if (missing.length) {
-          fail(`分析报告缺必备章节:${missing.join("、")}。`
-            + "按技能 issue-analysis 的模板补齐五章节再提交;轻量路径的简版"
-            + "报告也必须五章节齐全(内容可简,要素不缺)。");
+          fail(promptCopy("receipts", "analysis.missing_sections",
+            { missing: missing.join("、") }));
         }
         const summary = String(params.summary ?? "").trim();
         if (!summary) fail("summary 不能为空:给用户看的结论摘要");
@@ -913,8 +908,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 入口随之恢复——in-flight 标记在此清除。
         delete ctx.state.review_active;
         ctx.persist();
-        return ok("分析报告已提交,平台已举确认卡。请结束本回合,等待用户确认"
-          + (scenario === "no_ticket" ? "(用户将决定挂起等提单还是闭环归档)。" : "后进入问题修改。"));
+        return ok(promptCopy("receipts", scenario === "no_ticket"
+          ? "analysis.submitted.no_ticket"
+          : "analysis.submitted.ticket"));
       },
     }));
 
@@ -954,12 +950,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + ` — ${String(params.summary ?? "").split("\n")[0]}`,
         });
         ctx.persist();
-        return ok(params.passed === true
-          ? `UT 结果已记账(第 ${round} 轮:通过)。report_ut 只记账不推进——`
-            + "本阶段出口是 complete_stage,自检与测试可接受就调它收口,"
-            + "进入「提交 MR·跑绿」。"
-          : `UT 未通过已记账(第 ${round} 轮)——继续留在问题修复阶段:`
-            + "请修复后重跑重报;测试结果可接受后调 complete_stage 收口。");
+        return ok(promptCopy("receipts",
+          params.passed === true ? "ut.recorded" : "ut.failed",
+          { round }));
       },
     }));
 
@@ -995,15 +988,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         .map((record) => record.repo)
         .filter((repo) => !declaredRepos.includes(repo));
       if (missing.length || unknown.length) {
-        fail("MR 清单与台账不一致,不能收口:"
-          + (missing.length
-            ? `\n- 少报(台账里有、清单没申报): ${missing.join(", ")}`
-            : "")
+        const details = (missing.length
+          ? `\n- 少报(台账里有、清单没申报): ${missing.join(", ")}`
+          : "")
           + (unknown.length
             ? `\n- 多报(清单里有、台账没有这个 MR): ${unknown.join(", ")}`
-            : "")
-          + "\n清单=台账:对每个改过的仓 push_branch + create_mr,然后把"
-            + "全部 MR(链接或仓地址)重新申报,一个都不能少、不能编。");
+            : "");
+        fail(promptCopy("receipts", "mrgate.mismatch", { details }));
       }
       // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接收口。
       if (!ledger.length) {
@@ -1011,8 +1002,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ctx.state.stage_note = "流程收口——确认后可归档";
         ctx.persist();
         ctx.notifyMrGreen?.();
-        return ok(`MR 清单核验通过(空清单=空台账),流程收口——`
-          + "全部工作已完成,等用户确认归档。");
+        return ok(promptCopy("receipts", "mrgate.empty_ok"));
       }
       const platformUrl = ctx.platformUrl;
       if (!platformUrl) {
@@ -1049,12 +1039,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (failed.length) {
         delete state.mr_gate;
         ctx.persist();
-        fail("MR 验绿门:有流水线未通过,不能收口。\n"
-          + failed.map((item) =>
+        fail(promptCopy("receipts", "mrgate.red", {
+          details: failed.map((item) =>
             `- ${item.repo} @ ${item.sha.slice(0, 12)}\n  `
-              + describePipelineRun(item.run)).join("\n")
-          + "\n处置:修复后同分支 push_branch、重建 MR(create_mr),"
-          + "再调 complete_stage 重新申报。");
+              + describePipelineRun(item.run)).join("\n"),
+        }));
       }
       if (runs.every((item) => item.run.status === "success")) {
         delete state.mr_gate;
@@ -1063,8 +1052,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
         ctx.persist();
         ctx.notifyMrGreen?.();
-        return ok(`MR 验绿通过(${runs.map((item) => item.repo).join(", ")}),`
-          + "流程收口——全部 MR 流水线跑绿,等用户确认归档。");
+        return ok(promptCopy("receipts", "mrgate.all_green", {
+          repos: runs.map((item) => item.repo).join(", "),
+        }));
       }
       // 在跑/无记录:受理——记申报账,监看器绿了收口、红了带回失败项。
       state.mr_gate = { mrs: declaredRepos, at: new Date().toISOString() };
@@ -1073,9 +1063,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`,
       });
       ctx.persist();
-      return ok(`MR 清单已受理(${declaredRepos.join(", ")})——流水线还在跑或`
-        + "暂无记录。绿了平台自动收口并通知用户,红了平台会把失败项带回;"
-        + "可结束本回合停等。");
+      return ok(promptCopy("receipts", "mrgate.awaiting", {
+        repos: declaredRepos.join(", "),
+      }));
     };
 
     // 阶段自报出口(2026-08-28 目标驱动拍板):四个阶段(拉单/拉仓/
@@ -1132,9 +1122,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         void (enteredAnalyze
           ? ctx.raiseSkillSelection?.() : undefined);
         ctx.persist();
-        return ok(`已收口,平台推进到下一阶段——\n`
-          + stageBriefLines(scenario, to).join("\n")
-          + (knowledgeBrief ? `\n\n${knowledgeBrief}` : ""));
+        return ok(promptCopy("receipts", "stage.closed", {
+          stage_brief: stageBriefLines(scenario, to).join("\n"),
+        }) + (knowledgeBrief ? `\n\n${knowledgeBrief}` : ""));
       },
     }));
 

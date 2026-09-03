@@ -126,6 +126,7 @@ import {
   materializeIssueSkills,
   type IssueEnvCredentials,
 } from "./prompt.ts";
+import { promptCopy } from "./promptCopy.ts";
 import {
   orderAnnotations,
   type AnchorCheck,
@@ -541,8 +542,7 @@ const NUDGE_BUDGET = 2;
 /** 重启续跑的开场通知(#27):续跑回合以它为用户消息,落事件流——
  * 重启这件事在会话时间线里可查,不落 stage_note(那是显示层的现场
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
-const RESTART_RESUME_NOTICE =
-  "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
+const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
@@ -1180,10 +1180,7 @@ export class IssueFlowService {
     });
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);
-    this.startPlatformTurn(live,
-      "平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查"
-        + "登记元信息全量)。请重试刚才的操作——拉日志用 fetch_logs,"
-        + "换库部署用 build_deploy。");
+    this.startPlatformTurn(live, promptCopy("notices", "env.configured"));
     return summarize(state);
   }
 
@@ -1217,11 +1214,10 @@ export class IssueFlowService {
     });
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境配置被用户拒绝(${scope})`);
-    this.startPlatformTurn(live,
-      `平台通知: 用户已确认无需${ENV_SCOPE_LABELS[scope]}(拒绝了网管环境`
-        + "配置请求)。请基于现有证据继续,不要再次请求网管环境;"
-        + "如证据不足,在分析报告里如实说明证据局限。"
-        + (note ? `\n用户理由: ${note}` : ""));
+    this.startPlatformTurn(live, promptCopy("notices", "env.refused", {
+      scope: ENV_SCOPE_LABELS[scope],
+      note: note ? `\n用户理由: ${note}` : "",
+    }));
     return summarize(state);
   }
 
@@ -2382,8 +2378,10 @@ export class IssueFlowService {
         `用户确认分析报告,进入${stageName(target)}`);
       saveState(live.root, state);
       this.continueTurn(live, fixedAdvanceNotice(state,
-        `用户已确认问题分析报告,进入「${stageName(target)}」阶段。${supplement}`
-          + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
+        promptCopy("notices", "gate.analysis_confirm.confirm", {
+          stage: stageName(target),
+          supplement,
+        })));
       return summarize(state);
     }
 
@@ -2434,10 +2432,10 @@ export class IssueFlowService {
       fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
       saveState(live.root, state);
       this.continueTurn(live, fixedAdvanceNotice(state,
-        `用户在环境验证发现问题,已回退到「问题分析」阶段(第 ${state.round} 轮)。`
-          + `${supplement || `\n用户描述: ${reason}`}\n`
-          + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
-          + "分析完成后重新 submit_analysis。"));
+        promptCopy("notices", "gate.verify.fail", {
+          round: state.round ?? 1,
+          reason: supplement || `\n用户描述: ${reason}`,
+        })));
       return summarize(state);
     }
 
@@ -2456,9 +2454,7 @@ export class IssueFlowService {
       delete state.push_review_head;
       saveState(live.root, state);
       this.continueTurn(live,
-        `用户已过目本次变更并确认推送(推送确认)。令牌已生效——请重新调用`
-          + ` push_branch 完成推送(成功后令牌即消费,之后的每次推送都会重新`
-          + `举卡过目)。${supplement}`);
+        promptCopy("notices", "gate.push.grant", { supplement }));
       return summarize(state);
     }
 
@@ -2467,9 +2463,7 @@ export class IssueFlowService {
       // 上面入账(human_decision 事件+转移账),Agent 能看到用户意见。
       saveState(live.root, state);
       this.continueTurn(live,
-        `用户选择暂不推送,本次变更未获放行:${decision}${supplement}\n`
-          + "请不要推送——先按用户意见调整,调整好后再推(届时会重新举"
-          + "推送确认卡过目)。");
+        promptCopy("notices", "gate.push.hold", { decision, supplement }));
       return summarize(state);
     }
 
@@ -2547,12 +2541,11 @@ export class IssueFlowService {
       }
       saveState(live.root, state);
       this.continueTurn(live, [
-        `平台通知: 人工已从交付平台回灌流水线红灯的报错原文(仓 `
-          + `${target.repo},第 ${reds}/${max} 次红灯,仍在「提交 MR·跑绿」`
-          + "阶段)。",
-        `缺口维度(${dims})按下面的原文定位修复,不许猜改。`,
+        promptCopy("notices", "gate.evidence.header",
+          { repo: target.repo, reds, max }),
+        promptCopy("notices", "gate.evidence.dims", { dims }),
         "",
-        "人工从平台回灌的报错原文:",
+        promptCopy("notices", "gate.evidence.source"),
         evidence,
         "",
         ...(watch.checks?.length
@@ -2561,9 +2554,7 @@ export class IssueFlowService {
           : []),
         ...(previousFailureLines(previousSha, previousSummary)
           .flatMap((line, index) => index === 0 ? ["", line] : [line]), ""),
-        "失败产物(若已镜像)在会话工作区 pipeline/ 目录,可用 Bash 读全文。",
-        "请按原文修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟"
-          + "新提交),平台会重新监看。",
+        promptCopy("notices", "gate.evidence.tail"),
       ].join("\n"));
       return summarize(state);
     }
@@ -2586,16 +2577,17 @@ export class IssueFlowService {
       fixedAdvance(state, rework, "用户对结论有补充意见,继续分析");
       saveState(live.root, state);
       this.continueTurn(live,
-        `用户对分析结论提出意见,回到「${stageName(rework)}」阶段:${decision}${supplement}\n`
-          + "请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。");
+        promptCopy("notices", "gate.conclude.rework",
+          { stage: stageName(rework), decision, supplement }));
       return summarize(state);
     }
     // analysis_confirm 的补充意见:留在分析阶段继续完善,改完重新提交。
     state.stage_note = "用户对分析报告有补充意见,继续分析";
     saveState(live.root, state);
     this.continueTurn(live,
-      `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
-        + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
+      promptCopy("notices", "gate.analysis_confirm.supplement", {
+        stage: stageName(state.stage as FixedStage), decision, supplement,
+      }));
     return summarize(state);
   }
 
@@ -3133,16 +3125,14 @@ export class IssueFlowService {
         // 结算不进这里——阶段守卫挡住,不发过时的申报提醒。)
         saveState(live.root, state);
         this.startPlatformTurn(live,
-          `平台通知: 全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
-          + "请调 complete_stage(带 mrs 参数申报 MR 清单)完成"
-          + "「提交 MR·跑绿」阶段收口。");
+          promptCopy("notices", "pipeline.green.remind", {
+            repos: mrs.map((mr) => mr.repo).join(", "),
+          }));
       } else if (!anyWatching && mrs.length > 0) {
         // 有 MR 未绿且没表在跑:那就是失败了,带回失败项让 AI 修。
         saveState(live.root, state);
         this.startPlatformTurn(live,
-          `平台通知: 仓 ${repo} 流水线已全绿,但仍有 MR 未跑绿`
-          + "(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,"
-          + "需要的仓修复后同分支 push_branch 再 create_mr。");
+          promptCopy("notices", "pipeline.green.others_red", { repo }));
       }
       return;
     }
@@ -3656,8 +3646,8 @@ export class IssueFlowService {
       ? previousLines.join("\n") + "\n" : "";
     saveState(live.root, state);
     this.startPlatformTurn(live,
-      `平台通知: 流水线未通过(仓 ${repo},第 ${reds}/${max} 次红灯,`
-        + "仍在「提交 MR·跑绿」阶段)。\n"
+      promptCopy("notices", "pipeline.red.header", { repo, reds, max })
+        + "\n"
         + `${describePipelineRun(run)}\n`
         + (artifacts.length
           ? `失败产物全文已镜像到会话工作区 pipeline/ 目录`

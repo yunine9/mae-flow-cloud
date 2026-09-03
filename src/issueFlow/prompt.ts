@@ -10,6 +10,10 @@
  * 每次会话启动时从源目录整读、物化到工作区 skills/ 下(幂等重写)。
  * 技能文本与它引用的宿主工具同仓同版本演进——改工具就得同 commit
  * 改技能,评审看得见;想直接改文案就编辑 md 文件,不再碰 TS 字符串。
+ *
+ * 开场/通知/回执的提示词文案同理外置于 assets/issue-prompts/(ADR-0015),
+ * 由 promptCopy 挂载取段;本文件保留的是结构与插值(事实块、阶段简报、
+ * 措辞已全部搬走的条文不再在此)。
  */
 
 import {
@@ -32,6 +36,7 @@ import {
 } from "./state.ts";
 import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
+import { promptCopy } from "./promptCopy.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -228,16 +233,29 @@ export function issueFixedOpeningPrompt(
   const stages = fixedStages(scenario).map((stage) =>
     FIXED_STAGE_LABELS[scenario][stage]).join(" → ");
   const current = state.stage as FixedStage;
+  // 文案在 assets/issue-prompts/opening.md(ADR-0015);结构与插值留代码。
   const inheritedNote = state.converted_from
-    ? `\n- 本会话由 ${state.converted_from} 转正而来:分析报告(issue-analysis.md)已继承,`
-      + "前三个阶段视为已完成,直接从「问题修改」开始——先读报告再动手,不要重新分析。"
+    ? "\n- " + promptCopy("opening", "fixed.inherited",
+      { from: state.converted_from })
     : "";
   const meta = issueRegistrationMeta(state, credentials);
+  const skillLines = skillSelectionLines(state);
+  const knowledgeLines = options.workspace
+    ? businessKnowledgeLines(state, options.workspace)
+    : [];
+  const contract = promptCopy("opening", "fixed.contract", {
+    stage_brief:
+      `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
+      + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
+    skill_lines: skillLines.length ? skillLines.join("\n") + "\n" : "",
+    knowledge_lines: knowledgeLines.length
+      ? knowledgeLines.join("\n") + "\n" : "",
+    intervention: promptCopy("opening", options.moonlight
+      ? "fixed.intervention.moonlight"
+      : "fixed.intervention.guard"),
+  });
   return [
-    "你是本问题会话的处理 Agent。本会话走**固定流程**:每阶段给目标与唯一"
-      + "出口,活干到你判断达标就调出口动作自报收口,平台只在用户决策卡与 "
-      + "MR 验绿处设卡。分析工作流(方法论取用次序/轻量分流/取证规范/报告"
-      + "四要素)见技能 issue-analysis,交付参考 issue-delivery。",
+    promptCopy("opening", "fixed.header"),
     "",
     "## 问题事实",
     `- 标题: ${meta.title}`,
@@ -253,59 +271,15 @@ export function issueFixedOpeningPrompt(
     ...environmentLines(meta),
     inheritedNote,
     "",
-    `## 阶段路线(${scenario === "ticket" ? "有单六阶段" : "无单三节点"})`,
+    `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})`,
     stages,
     "",
     "## 阶段机契约(平台机械执行,说了算)",
-    "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
-    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
-      + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
-    ...skillSelectionLines(state),
-    ...(options.workspace
-      ? businessKnowledgeLines(state, options.workspace)
-      : []),
-    "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
-      + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
-      + "②出口动作已调用、平台交接词已到位(含 MR 清单申报受理后停等流水线);"
-      + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
-    "4. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
-      + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
-    "5. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
-      + "(拉日志缺环境时)——平台举卡等用户,你不要替用户猜结果,"
-      + "举卡后立即结束回合。",
-    "6. 问题修复按 TDD 走:先写(或改)能复现问题的单测,再改码让它转绿,"
-      + "UT 属于修复阶段的一部分;每轮结果可自愿调 report_ut 如实上报——"
-      + "平台只记账,出口仍是 complete_stage。推送前 UT 纪律:调 push_branch"
-      + " 之前,先在该仓把单元测试完整跑一遍(按仓的实际构建体系选回归"
-      + "命令,如 mvn test、npm test):本次改动涉及的用例必跑,时间允许"
-      + "就跑全量回归;跑过的用例全绿才推,有挂测继续修,不许跳过测试直接推。"
-      + "提交 MR 阶段:每个改过的仓 push_branch + create_mr 后,调 "
-      + "complete_stage 申报 MR 清单(mrs 参数),平台验绿(清单=台账、"
-      + "流水线全绿)通过即流程收口——有红当场打回带失败项:修复后同"
-      + "分支再推、重建 MR、重新申报;在跑则受理,你可停等,绿了平台自动"
-      + "收口;全绿未申报平台只会开回合提醒你申报,不会替你收口。",
-    "7. 收口后用户仍可能发消息说没修好:继续按修复处理(同分支追加修改、"
-      + "重推、重建 MR、重新申报),这是正常返工不是新问题;归档由用户操作,"
-      + "你不代归档。",
-    "8. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
-      + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
-      + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
-    "9. 持续维护 issue-analysis.md(首行一句话总结+问题现象/问题根因/"
-      + "修改方案/证据链/置信度五章节),它是本会话的核心交付物:证据链"
-      + "每条一行=事实+出处指针,原文不贴;修改方案是 fix 阶段的执行承诺,"
-      + "不是建议;submit_analysis 交的是收敛后的结论版(五章节齐全是门票)。",
-    ...(options.moonlight
-      ? ["10. 介入节奏(月光免审批,开):分析过程少问——证据不足先自查,"
-          + "待确认项写进「问题根因」的未收敛部分;不做中间简报,结论一次成稿;"
-          + "报告提交后平台会自动确认进入修改,把它写到无需补充即可执行"
-          + "的自足程度。"]
-      : ["10. 介入节奏(高把关):证据不足主动用 AskUserQuestion 问;"
-          + "现象理解、根因方向等关键节点主动对齐;完整路径的假设-验证"
-          + "循环每轮给一句中间简报。"]),
+    contract,
     "",
-    "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
+    promptCopy("opening", "fixed.kickoff")
       + (scenario === "ticket" && current === "dts_info"
-        ? "第一步固定是 dts_get_ticket 拉单据详情。" : ""),
+        ? promptCopy("opening", "fixed.first_step") : ""),
   ].filter(Boolean).join("\n");
 }
 
@@ -330,13 +304,12 @@ export function fixedNudgeNotice(
 ): string {
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
-  return [
-    `平台催办(第 ${attempt}/${budget} 次): 你在阶段未收口时结束了回合,`
-    + "这不算完成——阶段真相在平台,没走到出口就是没完。",
-    ...stageBriefLines(scenario, current),
-    "继续推进。除非举卡等用户或确需用户决策,不要停机;"
-      + `再无故停机 ${budget - attempt + 1} 次平台将不再催办,转为等你人工指令。`,
-  ].join("\n");
+  return promptCopy("notices", "nudge.body", {
+    attempt,
+    budget,
+    stage_brief: stageBriefLines(scenario, current).join("\n"),
+    remain: budget - attempt + 1,
+  });
 }
 
 export function issueOpeningPrompt(
@@ -345,9 +318,7 @@ export function issueOpeningPrompt(
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
-    "你是本问题会话的研究与处理 Agent。工作方式见技能 issue-playbook(路线图)、"
-      + "issue-analysis(分析工作流)、issue-research(研究方法)、"
-      + "issue-delivery(交付)、issue-ops(环境操作)。",
+    promptCopy("opening", "free.header"),
     "",
     "## 问题事实",
     `- 标题: ${meta.title}`,
@@ -361,23 +332,9 @@ export function issueOpeningPrompt(
     ...environmentLines(meta),
     "",
     "## 行为契约",
-    "1. 阶段上报:每进入新环节调 report_stage——平台显示你正在干什么,全靠它。",
-    "2. 人工闸门:对齐方案、部署后验证,必须 AskUserQuestion 停下等用户,绝不自作主张。",
-    "3. 非问题是一等结论:研究判定非问题就出结论收口,不强制编码。",
-    "4. 代码仓你自己拉(pull_repo)、自己管:改过的仓各自交付,一仓一 MR。",
-    "5. 停机纪律:研究中途不要输出阶段性总结后停机——要么继续查证,"
-      + "要么 AskUserQuestion 问,要么出结论(submit_analysis)。停机只属于"
-      + "举卡、结论收口、确需用户决策三种情况。",
-    "6. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
-      + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
-      + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
-    "7. 持续维护分析报告 issue-analysis.md(首行一句话总结+问题现象/"
-      + "问题根因/修改方案/证据链/置信度五章节),它是本会话的核心交付物:"
-      + "证据链每条一行=事实+出处指针,原文不贴;修改方案是 fix 阶段的执行"
-      + "承诺;提交的是收敛后的结论版(五章节齐全是门票)。",
+    promptCopy("opening", "free.contract"),
     "",
-    "现在开始:先复述你对问题现象的理解,给出研究计划(打算看什么、拉什么日志、"
-    + "问用户什么),然后按计划推进。",
+    promptCopy("opening", "free.kickoff"),
   ].join("\n");
 }
 
@@ -392,8 +349,7 @@ export function issueResumePrompt(
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
-    "服务重启/续聊后继续同一问题会话。已有现场(不要从头推翻,先读 "
-      + "issue-analysis.md 与 skills/ 提示,再继续):",
+    promptCopy("opening", "resume.header"),
     `- 标题: ${meta.title}`,
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
     moduleLine(meta),
@@ -404,9 +360,9 @@ export function issueResumePrompt(
       ? businessKnowledgeLines(state, options.workspace)
       : []),
     ...(state.mode === "fixed"
-      ? [options.moonlight
-        ? "介入节奏:月光免审批(开)——少问、不做中间简报,分析报告会被平台自动确认。"
-        : "介入节奏:高把关——证据不足主动问,关键节点主动对齐。"]
+      ? [promptCopy("opening", options.moonlight
+        ? "resume.intervention.moonlight"
+        : "resume.intervention.guard")]
       : []),
     state.pushes?.length
       ? `- 已推送: ${state.pushes.map((push) =>
