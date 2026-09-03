@@ -42,7 +42,10 @@ import { humanBytes, withinDataDir } from "./workspaceReclaim.ts";
 export const ISSUE_RECLAIM_HEAVY: readonly string[] = [
   "repo",         // 平铺的全部代码仓克隆(2026-08-28 后唯一布局),最大重货
   "ref",          // 平铺前的老布局参考仓,存量终态会话可能还留着
-  "pipeline",     // 流水线镜像产物(红灯日志、构建输出;平台侧未必留档)
+  "pipeline",     // 流水线镜像产物(红灯日志、构建输出)。需求流把这类
+                  // 日志当交付证据保留,问题流仍可删:权威裁决在平台流水
+                  // 线本身,且本回收只对终态+过保留期的会话动手——到那
+                  // 时本地留档的复盘价值已被平台侧取代,留着只剩占盘。
   "local-logs",   // 网管抓取的现场日志(转正路径明确不带:新一轮要拉新日志)
   "pi-agent",     // Agent 运行时目录(需求流同款回收:models.json 躺着密钥)
   "vision-cache", // 图片分析缓存(名字即语义,inspect_image 时可重建)

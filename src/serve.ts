@@ -1023,12 +1023,14 @@ async function main(): Promise<void> {
   const sweepStorage = async () => {
     if (storageSweepActive) return;
     storageSweepActive = true;
+    // 保留期一次读定:两流同一旋钮,一次清扫内不许读出不同的值。
+    const retentionDays = service.workspaceRetentionDays();
     try {
       const swept = service.reclaimIdleWorkspaces();
       if (swept.reclaimed) {
         console.log(`[serve] 现场回收 ${swept.reclaimed} 个任务,`
           + `释放 ${humanBytes(swept.freed)}(保留期 `
-          + `${service.workspaceRetentionDays()} 天;台账与证据保留)`);
+          + `${retentionDays} 天;台账与证据保留)`);
       }
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
@@ -1039,14 +1041,14 @@ async function main(): Promise<void> {
     try {
       const sweptIssues = reclaimIssueWorkspaces({
         dataDir,
-        retentionDays: service.workspaceRetentionDays(),
+        retentionDays,
         containerRunning: (id) => issueFlow.hasRunningContainer(id),
         log: issueLog,
       });
       if (sweptIssues.reclaimed) {
         console.log(`[serve] 问题现场回收 ${sweptIssues.reclaimed} 个会话,`
           + `释放 ${humanBytes(sweptIssues.freed)}(保留期 `
-          + `${service.workspaceRetentionDays()} 天;台账与材料元数据保留)`
+          + `${retentionDays} 天;台账与材料元数据保留)`
           + (sweptIssues.skipped_container
             ? `,容器在跑跳过 ${sweptIssues.skipped_container} 个`
             : ""));
