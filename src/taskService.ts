@@ -420,7 +420,7 @@ import {
   commitHookRejection,
   rejectedCommitSha,
   repairedPlatformCommitSubject,
-  validPlatformCommitSubject,
+  validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
 import {
@@ -437,6 +437,7 @@ import {
   runSafeWorktreeGit,
   runSafeWorktreeGitAsync,
   safeGitEnvironment,
+  type SafeGitCommitIdentity,
 } from "./safeGit.ts";
 import {
   AGENT_PLATFORM_LOCAL_EXCLUDES,
@@ -9509,7 +9510,7 @@ export class TaskService {
         add.length ? `补入 ${add.length} 个勾选文件` : "",
       ].filter(Boolean).join("、");
       await run(["commit", "-m",
-        cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+        cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
           `按最终人工检视整理交付清单——${summary}`)], "整理提交");
     }
     // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
@@ -13007,11 +13008,7 @@ export class TaskService {
     head: string,
   ): Promise<CommitSubjectRecord[]> {
     if (!task.cwd) throw new CommitMessagePolicyError("任务代码现场不可用，无法检查提交说明");
-    const snapshot = await deliveryChangeSnapshot(task.cwd);
-    const baseline = await frozenTaskBaseline(task.cwd) ?? snapshot?.baseline;
-    const range = baseline
-      ? [`${baseline}..${head}`, "--not", "--remotes"]
-      : [head, "--not", "--remotes"];
+    const range = await this.taskUnpushedRevisionArgs(task, head);
     const result = await runSafeWorktreeGitAsync(task.cwd, [
       "log", "--format=%H%x09%s", ...range,
     ], { timeoutMs: 30_000 });
@@ -13030,12 +13027,24 @@ export class TaskService {
     });
   }
 
+  private async taskUnpushedRevisionArgs(
+    task: TaskState,
+    head: string,
+  ): Promise<string[]> {
+    if (!task.cwd) throw new CommitMessagePolicyError("任务代码现场不可用，无法检查提交说明");
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    const baseline = await frozenTaskBaseline(task.cwd) ?? snapshot?.baseline;
+    return baseline
+      ? [`${baseline}..${head}`, "--not", "--remotes"]
+      : [head, "--not", "--remotes"];
+  }
+
   private async invalidTaskCommitSubjects(
     task: TaskState,
     head: string,
   ): Promise<CommitSubjectRecord[]> {
     return (await this.taskCommitSubjects(task, head))
-      .filter((commit) => !validPlatformCommitSubject(commit.subject));
+      .filter((commit) => !validTaskCommitSubject(commit.subject));
   }
 
   private commitPolicyFailure(
@@ -13049,9 +13058,140 @@ export class TaskService {
   }
 
   /**
-   * Build-Fix/旧版本 Cloud 若只把当前未推送 HEAD 的说明写成 `fix: ...`，
-   * 宿主可安全 amend：先确认索引无额外内容，修正后再证明 tree 完全一致。
-   * 多个坏提交或中间提交不猜着 rebase，明确停下；真正 push 前仍会再审计。
+   * 不用 rebase/cherry-pick 重放补丁，而是按原 commit 的 tree、父关系、
+   * 作者和时间直接重建尚未推送的对象。这样中间提交改标题时，后续提交
+   * 只因父 SHA 变化而重建，代码内容不会再经历一次可能冲突的 patch apply。
+   * 最终 ref 只在全部对象生成、标题复核和 HEAD tree 对拍成功后原子移动。
+   */
+  private async rewriteUnpushedCommitMessages(
+    task: TaskState,
+    before: PrePushRevision,
+    invalid: CommitSubjectRecord[],
+  ): Promise<{ after: PrePushRevision; repaired: string[]; tree: string }> {
+    if (!task.cwd) throw new CommitMessagePolicyError("任务代码现场不可用，无法修正提交说明");
+    const git = (
+      args: string[],
+      commitIdentity?: SafeGitCommitIdentity,
+    ) => runSafeWorktreeGitAsync(task.cwd!, args, {
+      timeoutMs: 60_000,
+      ...(commitIdentity ? { commitIdentity } : {}),
+    });
+    const branch = await git(["symbolic-ref", "-q", "HEAD"]);
+    const branchRef = String(branch.stdout ?? "").trim();
+    if (branch.status !== 0 || !branchRef.startsWith("refs/heads/")) {
+      throw new CommitMessagePolicyError(
+        "当前代码现场不在任务分支上，系统不会自动改写 detached HEAD");
+    }
+    const range = await this.taskUnpushedRevisionArgs(task, before.sha);
+    const revisions = await git(["rev-list", "--reverse", "--topo-order", ...range]);
+    const commits = String(revisions.stdout ?? "").trim().split(/\s+/).filter(Boolean);
+    if (revisions.status !== 0 || !commits.length) {
+      throw new CommitMessagePolicyError(
+        `读取待修正提交历史失败：${String(
+          revisions.stderr || revisions.error || "没有找到未推送提交").trim().slice(0, 240)}`);
+    }
+    const pending = new Set(commits);
+    if (invalid.some((item) => !pending.has(item.sha))) {
+      throw new CommitMessagePolicyError(
+        "待修正提交已不属于当前未推送历史，现场可能刚发生变化，请重新尝试");
+    }
+    const oldTreeResult = await git(["rev-parse", `${before.sha}^{tree}`]);
+    const oldTree = String(oldTreeResult.stdout ?? "").trim();
+    if (oldTreeResult.status !== 0 || !oldTree) {
+      throw new CommitMessagePolicyError("读取提交内容指纹失败，未自动修正提交说明");
+    }
+
+    const invalidBySha = new Map(invalid.map((item) => [item.sha, item]));
+    const rewritten = new Map<string, string>();
+    const repaired: string[] = [];
+    for (const sha of commits) {
+      const metadata = await git(["show", "-s",
+        "--format=%T%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B",
+        sha]);
+      if (metadata.status !== 0) {
+        throw new CommitMessagePolicyError(
+          `读取提交 ${sha.slice(0, 12)} 元数据失败：${String(
+            metadata.stderr || metadata.error || "未知 Git 错误").trim().slice(0, 200)}`);
+      }
+      const fields = String(metadata.stdout ?? "").split("\0");
+      if (fields.length < 9) {
+        throw new CommitMessagePolicyError(
+          `提交 ${sha.slice(0, 12)} 的元数据不完整，未改写历史`);
+      }
+      const [tree, parentsText, authorName, authorEmail, authorDate,
+        committerName, committerEmail, committerDate] = fields;
+      const parents = parentsText.trim().split(/\s+/).filter(Boolean);
+      const mappedParents = parents.map((parent) => rewritten.get(parent) ?? parent);
+      const bad = invalidBySha.get(sha);
+      const parentChanged = mappedParents.some((parent, index) => parent !== parents[index]);
+      if (!bad && !parentChanged) {
+        rewritten.set(sha, sha);
+        continue;
+      }
+      const originalMessage = fields.slice(8).join("\0").replace(/\n+$/, "");
+      let message = originalMessage;
+      if (bad) {
+        const subject = repairedPlatformCommitSubject(
+          task.summary.ticket ?? task.summary.id, bad.subject);
+        const lineBreak = originalMessage.indexOf("\n");
+        const body = lineBreak >= 0 ? originalMessage.slice(lineBreak + 1) : "";
+        message = `${subject}${body ? `\n${body}` : ""}`;
+        repaired.push(`${sha.slice(0, 12)}「${bad.subject}」→「${subject}」`);
+      }
+      const created = await git([
+        "commit-tree", tree,
+        ...mappedParents.flatMap((parent) => ["-p", parent]),
+        "-m", message,
+      ], {
+        authorName,
+        authorEmail,
+        authorDate,
+        committerName,
+        committerEmail,
+        committerDate,
+      });
+      const nextSha = String(created.stdout ?? "").trim();
+      if (created.status !== 0 || !/^[0-9a-f]{40,64}$/i.test(nextSha)) {
+        throw new CommitMessagePolicyError(
+          `重建提交 ${sha.slice(0, 12)} 失败：${String(
+            created.stderr || created.error || "Git 未返回新提交").trim().slice(0, 200)}`);
+      }
+      rewritten.set(sha, nextSha);
+    }
+
+    const nextHead = rewritten.get(before.sha);
+    if (!nextHead || nextHead === before.sha || repaired.length !== invalid.length) {
+      throw new CommitMessagePolicyError("提交说明修正结果不完整，原分支未发生变化");
+    }
+    const nextTreeResult = await git(["rev-parse", `${nextHead}^{tree}`]);
+    const nextTree = String(nextTreeResult.stdout ?? "").trim();
+    if (nextTreeResult.status !== 0 || nextTree !== oldTree) {
+      throw new CommitMessagePolicyError(
+        "修正提交说明后的代码内容指纹发生变化，原分支未发生变化");
+    }
+    const invalidAfter = await this.invalidTaskCommitSubjects(task, nextHead);
+    if (invalidAfter.length) {
+      throw new CommitMessagePolicyError(
+        `修正后仍有 ${invalidAfter.length} 条提交说明不合规，原分支未发生变化`,
+        invalidAfter);
+    }
+    const updated = await git(["update-ref", branchRef, nextHead, before.sha]);
+    if (updated.status !== 0) {
+      throw new CommitMessagePolicyError(
+        `任务分支在修正期间发生变化，未覆盖新现场：${String(
+          updated.stderr || updated.error || "Git 拒绝原子更新").trim().slice(0, 200)}`);
+    }
+    const after = await this.prePushRevision(task);
+    if (after.sha !== nextHead) {
+      throw new CommitMessagePolicyError("提交说明已重建但任务分支未指向新提交，请人工检查现场");
+    }
+    return { after, repaired, tree: oldTree };
+  }
+
+  /**
+   * Build-Fix/旧版本 Cloud 若把任意尚未推送提交写成 `fix: ...`，宿主
+   * 机械重建未推送 commit 图；不重放代码补丁，最终 tree 必须完全一致。
+   * 真正 push 前仍会再次审计，远端已存在的历史永远不改写。
    */
   private async ensureCommitMessagePolicy(
     task: TaskState,
@@ -13070,52 +13210,27 @@ export class TaskService {
     const listed = invalid.slice(0, 3)
       .map((item) => `${item.sha.slice(0, 12)}「${item.subject.slice(0, 80)}」`)
       .join("、");
-    if (invalid.length !== 1 || invalid[0].sha !== before.sha
-        || task.summary.delivery?.git_push?.sha === before.sha) {
+    if (task.summary.delivery?.git_push?.sha === before.sha) {
       return this.commitPolicyFailure(task,
         `提交说明不符合仓库规范：${listed}${invalid.length > 3
-          ? ` 等 ${invalid.length} 条` : ""}。为避免自动改写多提交历史，`
-        + "系统已停止推送；请修正这些提交说明后点“重新尝试交付”。");
+          ? ` 等 ${invalid.length} 条` : ""}。该版本已经有推送收据，系统不会改写远端历史。`);
     }
 
-    const git = (args: string[]) => runSafeWorktreeGitAsync(task.cwd!, args, {
-      timeoutMs: 60_000,
-      configs: [
-        ["user.name", "mae-flow-cloud"],
-        ["user.email", "cloud@mae-flow.local"],
-      ],
-    });
-    const staged = await git(["diff", "--cached", "--quiet"]);
+    const staged = await runSafeWorktreeGitAsync(
+      task.cwd, ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
     if (staged.status !== 0) {
       return this.commitPolicyFailure(task,
         `提交说明不符合仓库规范：${listed}；同时索引中还有未提交内容，`
-        + "系统不会把它们夹带进 amend。请整理后重新尝试交付。");
+        + "系统不会把它们夹带进历史重建。请整理后重新尝试交付。");
     }
-    const oldTreeResult = await git(["rev-parse", `${before.sha}^{tree}`]);
-    const oldTree = String(oldTreeResult.stdout ?? "").trim();
-    if (oldTreeResult.status !== 0 || !oldTree) {
-      return this.commitPolicyFailure(task, "读取提交内容指纹失败，未自动修正提交说明");
-    }
-    const subject = repairedPlatformCommitSubject(
-      task.summary.ticket ?? task.summary.id,
-      invalid[0].subject,
-    );
-    const amended = await git(["commit", "--amend", "-m", subject]);
-    if (amended.status !== 0) {
+    let rewrite: { after: PrePushRevision; repaired: string[]; tree: string };
+    try {
+      rewrite = await this.rewriteUnpushedCommitMessages(task, before, invalid);
+    } catch (error) {
       return this.commitPolicyFailure(task,
-        `自动修正提交说明失败：${String(
-          amended.stderr || amended.error || "未知 Git 错误").trim().slice(0, 240)}`);
+        error instanceof Error ? error.message : String(error));
     }
-    const after = await this.prePushRevision(task);
-    const newTreeResult = await git(["rev-parse", `${after.sha}^{tree}`]);
-    const newTree = String(newTreeResult.stdout ?? "").trim();
-    if (newTreeResult.status !== 0 || newTree !== oldTree) {
-      // staged 已确认为空，理论上不会走到这里；发生时回到旧提交并停下，
-      // 宁可保留原问题，也不能把未经验证的内容伪装成“只改了标题”。
-      await git(["reset", "--soft", before.sha]);
-      return this.commitPolicyFailure(task,
-        "自动修正提交说明后代码内容指纹发生变化，已回到原提交并停止推送");
-    }
+    const { after, repaired, tree } = rewrite;
 
     const now = new Date().toISOString();
     const prepush = task.summary.delivery?.prepush;
@@ -13140,11 +13255,11 @@ export class TaskService {
       task.summary.delivery.waiting_on = undefined;
       task.summary.delivery.skipped = undefined;
     }
-    task.summary.detail = `已自动把提交 ${before.sha.slice(0, 12)} 的说明修正为`
-      + `「${subject}」；代码内容未变，继续交付`;
+    task.summary.detail = `已自动修正 ${repaired.length} 条尚未推送的提交说明；`
+      + "代码内容未变，继续交付";
     this.persist(task);
-    this.options.log?.(`任务 ${task.summary.id} 提交说明已机械修正：`
-      + `${before.sha.slice(0, 12)} → ${after.sha.slice(0, 12)}；tree=${oldTree}`);
+    this.options.log?.(`任务 ${task.summary.id} 提交说明已机械修正：${repaired.join("；")}；`
+      + `HEAD ${before.sha.slice(0, 12)} → ${after.sha.slice(0, 12)}；tree=${tree}`);
     return "repaired";
   }
 
@@ -14392,7 +14507,7 @@ export class TaskService {
         + "工作区还有未提交改动;平台不猜着整理,请在代码检视中确认处理。");
     }
     const replay = await git(["commit-tree", `${head}^{tree}`, "-p", frozen,
-      "-m", cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+      "-m", cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
         "按任务定格基线重放净改动——历史重排已被平台整理")]);
     const replayed = String(replay.stdout ?? "").trim();
     if (replay.status !== 0 || !replayed) {
@@ -14652,7 +14767,7 @@ export class TaskService {
       if (hasStaged.status !== 0) {
         await run([
           "commit", "-m",
-          cloudCommitSubject(task.summary.ticket ?? task.summary.id, "chore",
+          cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
             "按已确认推送范围收口流水线修复"),
         ], "提交整理后的修复");
       }
@@ -14831,13 +14946,14 @@ export class TaskService {
       const beforePrePush = await this.reconcileConfirmedDeliveryBoundary(task);
       if (beforePrePush === "blocked") return;
       if (!await this.agentPlatformChangesAllowPush(task)) return;
-      // 内核外的 Build-Fix/历史 Cloud 版本可能产生 `fix: ...` 提交。
-      // 在烧构建前先修当前 HEAD；中间坏提交明确停下，不等远端 hook 拒收。
+      // 内核外的 Build-Fix/历史 Cloud 版本可能产生 `fix: ...` / `chore: ...` 提交。
+      // 在烧构建前重建尚未推送的提交链，只修标题并保留每个提交的代码树，
+      // 避免中间坏提交最终被远端 hook 拒收。
       if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
       // Build-Fix 本身也允许本地 commit，收口后必须再用同一机器规则复核。
-      // 仅标题 amend 时 tree 不变，ensure 会迁移 PASS 收据而不重跑全量 UT。
+      // 仅标题重建时 tree 不变，ensure 会迁移 PASS 收据而不重跑全量 UT。
       if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       // prepush Agent 本身可能修代码并产生新提交。若它误带回的仍只是既有
       // 排除项，机械重组后需要让新 SHA 再验一次；最多这一次回补，不循环。

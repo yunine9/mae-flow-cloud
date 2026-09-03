@@ -5,6 +5,7 @@ import {
   commitHookRejection,
   rejectedCommitSha,
   repairedPlatformCommitSubject,
+  validTaskCommitSubject,
   validPlatformCommitSubject,
 } from "../src/commitPolicy.ts";
 
@@ -30,8 +31,8 @@ test("CodeHub 默认提交标题契约覆盖业务、平台整理和允许的 me
 
 test("Cloud 生成和修复的标题天然满足同一机器规则", () => {
   assert.equal(
-    cloudCommitSubject("REQ-123", "chore", "整理最终清单"),
-    "[REQ_123][chore]整理最终清单",
+    cloudCommitSubject("REQ-123", "fix", "整理最终清单"),
+    "[REQ_123][fix]整理最终清单",
   );
   assert.equal(
     repairedPlatformCommitSubject("REQ123", "fix: prepush compile issue"),
@@ -39,6 +40,12 @@ test("Cloud 生成和修复的标题天然满足同一机器规则", () => {
   );
   assert.equal(validPlatformCommitSubject(
     repairedPlatformCommitSubject("task-36", "随手写的标题")), true);
+  assert.equal(validTaskCommitSubject("[REQ1][feat]新增能力"), true);
+  assert.equal(validTaskCommitSubject("[REQ1][fix]整理最终清单"), true);
+  assert.equal(validTaskCommitSubject("[REQ1][chore]整理最终清单"), false,
+    "CodeHub 虽接受 chore，Mae-Flow 任务契约仍只允许 feat/fix");
+  assert.equal(repairedPlatformCommitSubject("REQ1", "chore: 整理最终清单"),
+    "[REQ1][fix]整理最终清单");
 });
 
 test("识别远端项目 Hook 拒绝并提取提交 SHA", () => {

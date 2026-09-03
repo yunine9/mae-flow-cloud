@@ -147,6 +147,66 @@ test("Build-Fix 只写坏标题时自动修正且保留同一代码树的绿灯�
   }
 });
 
+test("旧 Cloud 的中间坏标题可无补丁重放修正，后续 Build-Fix 提交完整保留", async () => {
+  const { service, model, internal, repo } = await taskWithRepo();
+  try {
+    repo.git("checkout", "--quiet", "-b", "master_bot_REQ_MIDDLE");
+    repo.git("config", "user.name", "Legacy Cloud");
+    repo.git("config", "user.email", "legacy-cloud@test");
+    writeFileSync(join(repo.cwd, "selection.txt"), "selection\n");
+    repo.git("add", "selection.txt");
+    repo.git("commit", "--quiet", "-m",
+      "chore: 按最终人工检视整理交付清单——剔除 3 个未勾选文件",
+      "-m", "原交付清单审计正文必须保留");
+    const badIntermediate = repo.git("rev-parse", "HEAD");
+
+    repo.git("config", "user.name", "Build Fix Agent");
+    repo.git("config", "user.email", "build-fix@test");
+    writeFileSync(join(repo.cwd, "fix.txt"), "later verified fix\n");
+    repo.git("add", "fix.txt");
+    repo.git("commit", "--quiet", "-m", "[REQ_MIDDLE][fix]后续修复已通过");
+    internal.summary.ticket = "REQ-MIDDLE";
+    const before = await (service as any).prePushRevision(internal);
+    const beforeTree = repo.git("rev-parse", "HEAD^{tree}");
+    let passed = createPrePushVerification(before, new Date().toISOString());
+    passed = beginPrePushAttempt(passed, new Date().toISOString(), "attempt-middle");
+    passed = recordPrePushReport(passed, "attempt-middle", {
+      compile: { outcome: "passed" },
+      unit_test: { outcome: "passed" },
+    }, new Date().toISOString());
+    internal.summary.delivery = { prepush: passed, last_reviewed_head: before.sha };
+    internal.summary.delivery_selection = {
+      paths: ["fix.txt", "selection.txt"],
+      observed_paths: ["fix.txt", "selection.txt"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "waiting-middle",
+      head: before.sha,
+      confirmation_mode: "human",
+      updated_at: new Date().toISOString(),
+    };
+
+    assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "repaired");
+    const after = await (service as any).prePushRevision(internal);
+    assert.notEqual(after.sha, before.sha, "中间父 SHA 变化后后续提交必须随父关系重建");
+    assert.equal(repo.git("rev-parse", "HEAD^{tree}"), beforeTree);
+    const rewrittenIntermediate = repo.git("rev-parse", "HEAD~1");
+    assert.notEqual(rewrittenIntermediate, badIntermediate);
+    assert.equal(repo.git("show", "-s", "--format=%s", rewrittenIntermediate),
+      "[REQ_MIDDLE][fix]按最终人工检视整理交付清单——剔除 3 个未勾选文件");
+    assert.match(repo.git("show", "-s", "--format=%B", rewrittenIntermediate),
+      /原交付清单审计正文必须保留/);
+    assert.equal(repo.git("show", "-s", "--format=%an|%ae", rewrittenIntermediate),
+      "Legacy Cloud|legacy-cloud@test");
+    assert.equal(repo.git("show", "-s", "--format=%an|%ae", "HEAD"),
+      "Build Fix Agent|build-fix@test");
+    assert.ok(getReusablePushReceipt(internal.summary.delivery.prepush, after));
+    assert.equal(internal.summary.delivery_selection.head, after.sha);
+  } finally {
+    await model.stop();
+  }
+});
+
 test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {
