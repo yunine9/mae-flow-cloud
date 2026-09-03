@@ -110,6 +110,7 @@ import {
   workflowChoices,
   workflowLabel,
   type StepChoiceEffect,
+  kernelSpecsTruth,
 } from "./kernelChoices.ts";
 import {
   hasStructuralWorkflowProjectionMismatch,
@@ -14936,8 +14937,13 @@ export class TaskService {
       const clean = prefix.replace(/\/+$/, "");
       return path === clean || path.startsWith(`${clean}/`);
     });
+    // 内核流程自己要求写的规格(docs/specs 等,模式来自 flow.json)不算
+    // 改动面:每个单元都得写,它们是全仓共用的流程真相,不是谁的文件面。
+    // 内网实锤:pnp-deploy-contract 单元因 docs/specs/index.md 被判越界。
+    const specsTruth = kernelSpecsTruth(this.options.host?.kernelRoot);
+    const processArtifact = (path: string) => !!specsTruth && specsTruth.test(path);
     const violations = normalizedDeliveryPaths(committedPaths)
-      .filter((path) => !inScope(path) && !exempt.has(path));
+      .filter((path) => !inScope(path) && !exempt.has(path) && !processArtifact(path));
     if (!violations.length) {
       if (task.summary.delivery?.scope_violation) {
         delete task.summary.delivery.scope_violation;
