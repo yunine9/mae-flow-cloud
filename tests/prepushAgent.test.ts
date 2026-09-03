@@ -10,6 +10,7 @@ import {
   verifyPrePushEvidence,
   type PrePushAgentReport,
   isPlatformWorkPath,
+  prePushEvidenceFacts,
 } from "../src/prepushAgent.ts";
 
 test("Build-Fix 提交范围自检只在文件多或疑似产物时提示，不做硬拦截", () => {
@@ -137,7 +138,7 @@ test("prepush parser: 拒绝畸形和自相矛盾的通过结论", () => {
   })), undefined);
 });
 
-test("prepush evidence: 编译和 UT 必须在最后一次修改后真实成功", () => {
+test("prepush evidence: 只认真跑过且成功;顺序只出事实不裁决", () => {
   const events = [
     event(1, "tool_requested", {
       call_id: "edit", name: "Edit", input: { path: "src/a.ts" },
@@ -159,33 +160,30 @@ test("prepush evidence: 编译和 UT 必须在最后一次修改后真实成功"
     }),
   ];
   assert.equal(verifyPrePushEvidence(events, PASSED), "");
+  assert.deepEqual(prePushEvidenceFacts(events, PASSED),
+    { changed_after_run: [] });
 
+  // 2026-09-03 用户拍板:编译之后又改了代码,不再判失效——真裁判是绑 SHA
+  // 的流水线;但事实要写清给人看:改了哪些会进交付的文件。
   const modifiedAfterCompile = [
     ...events.slice(1, 3),
     event(6, "tool_requested", {
       call_id: "late-edit", name: "Write", input: { path: "src/a.ts" },
     }),
     ...events.slice(3).map((row) => ({ ...row, eventId: row.eventId + 4 })),
-  ];
-  const staleVerdict = verifyPrePushEvidence(modifiedAfterCompile, PASSED);
-  assert.match(staleVerdict, /mvn -q -DskipTests package/);
-  assert.match(staleVerdict, /最后一次代码修改\(src\/a\.ts,事件 6\)/,
-    "哪个文件让证据失效要写进措辞,人一眼能看出是不是冤枉");
-
-  // 内网 task-31 实锤:编译绿了之后只写了一笔构建笔记,不算代码修改,
-  // 不许因此判"改动之后没有重跑"。
-  const notesAfterCompile = [
-    ...events,
-    event(6, "tool_requested", {
+    event(11, "tool_requested", {
+      call_id: "later", name: "Edit", input: { file_path: "src/b.ts" },
+    }),
+    event(12, "tool_requested", {
       call_id: "notes", name: "Edit",
       input: { path: "/work/repo/.mae-flow-work/build-notes.md" },
     }),
-    event(7, "tool_requested", {
-      call_id: "state", name: "Write", input: { file_path: ".mae-flow.json" },
-    }),
   ];
-  assert.equal(verifyPrePushEvidence(notesAfterCompile, PASSED), "",
-    "平台笔记与状态文件的写入不算代码修改");
+  assert.equal(verifyPrePushEvidence(modifiedAfterCompile, PASSED), "",
+    "顺序不再是硬约束");
+  assert.deepEqual(prePushEvidenceFacts(modifiedAfterCompile, PASSED),
+    { changed_after_run: ["src/a.ts", "src/b.ts"] },
+    "编译成功(事件 3)之后改的 a.ts、UT 之后改的 b.ts 都列;平台笔记不列");
   assert.equal(isPlatformWorkPath(".mae-flow-work/bash-logs/1.log"), true);
   assert.equal(isPlatformWorkPath("src/.mae-flow-workshop/a.ts"), false,
     "只认 .mae-flow-work 目录本身,不吞名字相近的业务目录");
@@ -471,7 +469,7 @@ test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得�
     event(2, "tool_finished", { call_id: "ls", name: "Bash", is_error: false }),
   ];
   const error = verifyPrePushEvidence(events, PASSED);
-  assert.match(error, /没有在最后一次代码修改后真实成功执行/);
+  assert.match(error, /没有在本会话真实成功执行/);
   assert.match(error, /mvn -q -DskipTests package/);
   assert.match(error, /mvn -q test/);
   // 空命令不能因为"空串是任何串的子串"而白捡一张通行证。
@@ -479,5 +477,5 @@ test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得�
     verifyPrePushEvidence(events, {
       ...PASSED, compile: { command: "   ", status: "passed" },
     }),
-    /没有在最后一次代码修改后真实成功执行/);
+    /没有在本会话真实成功执行/);
 });

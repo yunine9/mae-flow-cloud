@@ -386,6 +386,7 @@ import {
   type PrePushRunRequest,
   type PrePushRunResult,
   type PrePushRunner,
+  prePushEvidenceFacts,
 } from "./prepushAgent.ts";
 import {
   parseWarmupReport,
@@ -14211,11 +14212,20 @@ export class TaskService {
             report,
           });
         }
+        const replayed = eventLog.replay();
         const evidence = report
-          ? verifyPrePushEvidence(eventLog.replay(), report)
+          ? verifyPrePushEvidence(replayed, report)
           : "收口缺少合法的 <prepush-result> 结构";
         const finalSha = (await this.prePushRevision(task)).sha;
         if (report && !evidence) {
+          // 顺序事实只展示不裁决(用户 2026-09-03 拍板:旧绿灯漏过去由绑
+          // SHA 的流水线兜底,误判的代价比它大):最后一次成功之后还改过
+          // 哪些会进交付的文件,写进收据,推送确认时人自己看。
+          const facts = prePushEvidenceFacts(replayed, report);
+          const staleNote = facts.changed_after_run.length
+            ? `。注意:最后一次成功编译/UT 之后还改过 ${describeDirtyPaths(
+              facts.changed_after_run)},没有重跑;推送前请自行判断是否需要打回重跑。`
+            : "";
           // 未提交文件只提示不拦截(用户拍板"不能卡死"):push 只传
           // HEAD,它们进不了交付;但把清单如实写进收据——产物该
           // .gitignore 的提出来让用户加规则(留着别删,增量编译要用),
@@ -14231,7 +14241,7 @@ export class TaskService {
           return withExecution({
             status: "passed",
             sha: finalSha,
-            message: report.summary + leftoverNote,
+            message: report.summary + staleNote + leftoverNote,
             report,
           });
         }
@@ -14245,7 +14255,7 @@ export class TaskService {
         outcome = await waitForTurn(driver.continueWith([
           "Build-Fix 尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
-          "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
+          "不要只重写结论；两项命令必须在本会话真实成功执行。",
         ].filter(Boolean).join("\n")));
       }
       throw new Error("Build-Fix 会话超过收口预算");
