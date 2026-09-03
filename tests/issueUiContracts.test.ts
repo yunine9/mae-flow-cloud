@@ -414,20 +414,24 @@ test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻�
   assert.match(sticky, /setTop\.current = node\.scrollHeight/);
 });
 
-test("推送前 UT 纪律:阶段指引与 push_branch 描述都要写明先跑测试全绿再推(#83)", () => {
-  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。钉法:源码正则,
-  // 三要素各就位——跑什么(改动相关必跑+时间允许全量)、什么标准(全绿
-  // 才推)、不过怎么办(继续修,不许跳过测试直接推)。
-  for (const [where, source] of [
-    ["阶段指引(prompt.ts)", issuePrompt],
-    ["push_branch 工具描述(tools.ts)", issueTools],
-  ] as const) {
-    assert.match(source, /推送前 UT 纪律/, `${where}: 缺推送前 UT 纪律引导`);
-    assert.match(source, /用例必跑/, `${where}: 缺「改动相关用例必跑」口径`);
-    assert.match(source, /全量回归/, `${where}: 缺「时间允许跑全量回归」口径`);
-    assert.match(source, /全绿才推/, `${where}: 缺「全绿才推」标准`);
-    assert.match(source, /不许跳过测试直接推/, `${where}: 缺「挂测不许硬推」红线`);
-  }
+test("推送前 UT 纪律:push_branch 描述写明先跑测试全绿再推,开场契约指路(#83)", () => {
+  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。ADR-0016 文案
+  // 外置后,纪律本体钉在 push_branch 的 description(调用时刻的权威
+  // 表面,Agent 常驻可见):跑什么(改动相关必跑+时间允许全量)、什么
+  // 标准(全绿才推)、不过怎么办(继续修,不许跳过测试直接推);开场
+  // 契约(assets/issue-prompts/opening.md)只留指路,不复述机制。
+  const opening = readFileSync(
+    resolve("assets/issue-prompts/opening.md"), "utf-8");
+  assert.match(opening, /推送、提 MR 与清单申报的纪律/,
+    "开场契约缺推送/申报纪律的指路句");
+  assert.match(opening, /写在对应工具的说明里/,
+    "开场契约应把机制让给工具说明(单一权威源)");
+  const source = issueTools;
+  assert.match(source, /推送前 UT 纪律/, "缺推送前 UT 纪律引导");
+  assert.match(source, /用例必跑/, "缺「改动相关用例必跑」口径");
+  assert.match(source, /全量回归/, "缺「时间允许跑全量回归」口径");
+  assert.match(source, /全绿才推/, "缺「全绿才推」标准");
+  assert.match(source, /不许跳过测试直接推/, "缺「挂测不许硬推」红线");
   // 纪律必须落在 push_branch 工具定义的 description 里(name 与
   // parameters 之间),不是 tools.ts 里随便哪个角落。
   const pushBranchDesc = issueTools.match(
