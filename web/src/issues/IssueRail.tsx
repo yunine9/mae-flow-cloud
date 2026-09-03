@@ -32,6 +32,8 @@ export interface IssueWaitingSnapshot {
   /** 平台闸专用:env_needed 闸在决策卡上渲染专用环境表单。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交。 */
+  gate_pipeline?: { repo: string; sha: string };
 }
 
 export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
@@ -70,6 +72,20 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
   return <aside className="issue-rail">
     <div className="issue-rail-head"><span>下一步</span></div>
     <div className="issue-rail-body">
+      {/* 分析报告是 AI 的主交付物(分析闸的门票、检视与转正的继承对象):
+          置顶醒目卡而非页脚小字——2026-09-02 用户反馈"几乎没人注意到"。
+          只读导航,查看模式保留;等待卡才是第一优先,排在其后。 */}
+      {detail.has_analysis && <button type="button"
+        className="issue-analysis-cta" onClick={onOpenDoc}>
+        <i className="issue-rail-pulse" aria-hidden />
+        <span className="issue-analysis-cta-text">
+          <strong>分析报告已产出</strong>
+          <small>过程文档可读可圈注——圈注意见提交后整体打回重跑分析</small>
+        </span>
+        <svg viewBox="0 0 16 16" aria-hidden>
+          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+        </svg>
+      </button>}
       {/* 等待中:归属人发作答卡,查看模式只给题面事实卡(卡与等待说明
           照看,作答控件一个不出)。 */}
       {waiting && (canOperate
@@ -138,23 +154,23 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
           {detail.conclusion?.kind === "converted"
             ? <p>本会话已关联单号 {detail.ticket ?? ""} 转正为
               {detail.converted_to ?? "新会话"}——后续在那里继续。</p>
-            : <p>没有待办动作;结论与账单见左侧页签。</p>}
+            : detail.status === "failed"
+              ? <p>失败的会话不能再续跑;要把它从列表清掉,用下方「取消」。</p>
+              : <p>没有待办动作;结论与账单见左侧页签。</p>}
         </div>}
     </div>
     <footer className="issue-rail-foot">
-      {/* 过程文档入口是只读导航(跳材料页签),查看模式保留。 */}
-      {detail.has_analysis && <button type="button" className="issue-analysis-flag"
-        title="查看过程文档(分析报告 / 过程问答)"
-        onClick={onOpenDoc}>
-        分析报告已产出,进入过程文档 →
-      </button>}
       {/* 同控制/确认/禁用条件与旧 composer-actions 完全一致;归档与
-          取消都是写操作,查看模式整组不渲染。 */}
+          取消都是写操作,查看模式整组不渲染。failed 例外:归档需要
+          结论而失败没有结论语义,只能取消清理(2026-09-02 拍板)。 */}
       {canOperate && <div className="issue-rail-actions">
         <button type="button" disabled={busy || ["archived", "canceled", "failed"]
-          .includes(detail.status)} onClick={onArchive}>归档收口</button>
+          .includes(detail.status)}
+          title={detail.status === "failed"
+            ? "失败的会话没有结论可归档——用「取消」清理" : undefined}
+          onClick={onArchive}>归档收口</button>
         <button type="button" className="danger" disabled={busy
-          || ["archived", "canceled", "failed"].includes(detail.status)}
+          || ["archived", "canceled"].includes(detail.status)}
           onClick={onCancel}>取消</button>
       </div>}
     </footer>
@@ -162,13 +178,19 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
 }
 
 /** 查看模式的等待卡事实面:决策背景、题面与选项照常陈列(替归属人
- * 判断卡在哪、值不值得催),作答控件一个不渲染。 */
+ * 判断卡在哪、值不值得催),作答控件一个不渲染。流水线红灯人工闸
+ * (票 03)如实点名"等归属人处理",其余闸沿用通用文案。 */
 function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingSnapshot }) {
   const questions = waiting.question?.questions ?? [];
+  const head = waiting.gate_kind === "pipeline_unfixable"
+    ? "等归属人在交付平台处理/豁免流水线告警"
+    : waiting.gate_kind === "pipeline_evidence"
+      ? "等归属人回灌流水线报错原文"
+      : waiting.gate_kind === "env_needed"
+        ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
+        : "等归属人答复";
   return <div className="issue-rail-card is-waiting">
-    <strong>{waiting.gate_kind === "env_needed"
-      ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
-      : "等归属人答复"}</strong>
+    <strong>{head}</strong>
     {waiting.context && <div className="issue-waiting-context">
       <Markdown text={waiting.context} />
     </div>}

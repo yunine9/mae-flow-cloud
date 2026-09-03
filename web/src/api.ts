@@ -868,6 +868,14 @@ export interface TaskSummary {
     finished_at?: string;
     error?: string;
   };
+  /** 已完成的每一轮需求修改;对比按 id 另取。 */
+  requirement_revisions?: Array<{
+    id: string;
+    at: string;
+    annotation_ids: string[];
+    additions: number;
+    deletions: number;
+  }>;
   requirement_document?: {
     name: string;
     bytes: number;
@@ -2572,6 +2580,10 @@ export interface InterruptRecord {
   text: string;
   at: string;
   delivered: boolean;
+  /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
+  deferred?: "decision" | "mission";
+  /** @ 引用的知识名(带发送时固定的版本号);正文不回传。 */
+  references?: string[];
   /** 你说完之后它说的话(按时间切到下一条插话为止)。
    * 刻意不叫 reply:宿主没法证明哪一段是在答你,只能给时间顺序。 */
   said: Array<{ text: string; at: string }>;
@@ -3127,6 +3139,20 @@ export async function testVisionCapability(): Promise<VisionProbeResult> {
   return response.json();
 }
 
+export async function readRequirementRevision(
+  taskId: string,
+  revisionId: string,
+): Promise<{ before?: string; diff?: string; unavailable?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/requirement-revisions/${encodeURIComponent(revisionId)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return { before: String(body.before ?? ""), diff: String(body.diff ?? "") };
+}
+
 export async function readArtifact(
   taskId: string,
   name: string,
@@ -3236,7 +3262,6 @@ export type FixedIssueStage =
   | "prep_repo"
   | "analyze"
   | "fix"
-  | "ut"
   | "mr_green"
   | "deploy_verify"
   | "conclude";
@@ -3244,7 +3269,7 @@ export type FixedIssueStage =
 export type AnyIssueStage = IssueStage | FixedIssueStage;
 
 export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
-  "dts_info", "prep_repo", "analyze", "fix", "ut", "mr_green", "deploy_verify",
+  "dts_info", "prep_repo", "analyze", "fix", "mr_green", "deploy_verify",
 ];
 export const FIXED_NO_TICKET_STAGES: FixedIssueStage[] = [
   "prep_repo", "analyze", "conclude",
@@ -3254,11 +3279,15 @@ const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
   dts_info: "获取 DTS 单信息",
   prep_repo: "拉取代码仓",
   analyze: "问题分析",
-  fix: "问题修改",
-  ut: "单元测试验证",
+  fix: "问题修复",
   mr_green: "提交 MR·跑绿",
   deploy_verify: "换库环境验证",
   conclude: "确定结论",
+};
+
+/** 旧现场词表:已移除的阶段(ut 并入 fix)原样示人,前端不猜。 */
+const LEGACY_STAGE_TEXT: Record<string, string> = {
+  ut: "单元测试验证",
 };
 
 /** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
@@ -3269,6 +3298,7 @@ export function issueStageText(issue: {
   stage: AnyIssueStage;
 }): string {
   return FIXED_STAGE_TEXT[issue.stage as FixedIssueStage]
+    ?? LEGACY_STAGE_TEXT[issue.stage]
     ?? ISSUE_STAGE_TEXT[issue.stage as IssueStage]
     ?? String(issue.stage);
 }
@@ -3303,7 +3333,12 @@ export type IssueGateKind =
   | "push_confirm"
   // skill 圈选闸(ADR-0011):分析入口的多选闸,月光关档举起;
   // 勾选清单走 selection 专用口,码表只有「都不用」单码。
-  | "skill_select";
+  | "skill_select"
+  // 流水线红灯人工闸(2026-09-01,票 03):不可修告警闸(人在交付平台
+  // 处理/豁免后作答,平台重置监看账重看同一 SHA)与证据回灌闸(把报错
+  // 原文粘贴进作答=回灌证据续跑修复)。问的是人工事实,月光永不代答。
+  | "pipeline_unfixable"
+  | "pipeline_evidence";
 
 /** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
  * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */
@@ -3337,6 +3372,9 @@ export interface IssueGateCard {
   scope?: "logs" | "deploy";
   /** 仅 skill_select:扫描所得的圈选清单,作答 selection 必须是其子集。 */
   skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交(卡面
+   * 展示用;作答续跑按它在服务端重置监看账/注入证据)。 */
+  pipeline?: { repo: string; sha: string };
   proposal?: {
     conclusion?: "issue" | "non_issue";
     summary?: string;
@@ -3410,6 +3448,9 @@ export interface IssueSummary {
     deadline: string;
     last_error?: string;
     round: number;
+    /** 本仓累计红灯次数(绿了清零):修复轮预算(repair_rounds)的计数,
+     *  超限停表请人工。 */
+    reds?: number;
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
   }>;
@@ -3465,11 +3506,15 @@ export interface IssueWaitingCard {
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
    * env_needed 据此渲染专用环境表单,skill_select 据此渲染多选圈选卡,
-   * 其余闸仍走通用选项卡。 */
+   * pipeline_unfixable/pipeline_evidence 渲染流水线红灯人工卡,其余闸
+   * 仍走通用选项卡。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
   /** 仅 skill_select:圈选清单(会话视图从 detail.gate.skills 带过来)。 */
   gate_skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交(会话
+   * 视图从 detail.gate.pipeline 带过来,卡面展示定位用)。 */
+  gate_pipeline?: { repo: string; sha: string };
   /** 以下为服务端 humanGate 记录随线携带的内部账(卡片只渲染上面的
    * 子集):契约测试(issueFlowContract)钉整卡形状,服务端加字段先
    * 来这里补镜再让测试转绿。 */

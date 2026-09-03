@@ -52,9 +52,9 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
   assert.equal(STAGE_ROUTES.ticket.includes("conclude"), false);
   assert.deepEqual(STAGE_ROUTES.ticket, [...FIXED_TICKET_STAGES]);
   assert.deepEqual(STAGE_ROUTES.no_ticket, [...FIXED_NO_TICKET_STAGES]);
-  // 出口动作(2026-08-28 目标驱动拍板):五阶段出口=complete_stage
+  // 出口动作(2026-08-28 目标驱动拍板):四阶段出口=complete_stage
   // 自报;三个举卡阶段卡工具即出口,没有 complete_stage 可绕。
-  for (const stage of ["dts_info", "prep_repo", "fix", "ut", "mr_green"] as const) {
+  for (const stage of ["dts_info", "prep_repo", "fix", "mr_green"] as const) {
     assert.equal(FIXED_STAGE_SPECS[stage].exitAction, "complete_stage",
       `${stage} 的出口动作应是 complete_stage 自报`);
   }
@@ -90,13 +90,13 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   // 出口/出厂工具各归其位(权威层矩阵,值与单源化前逐项一致)。
   assert.deepEqual(stagesAllowingTool("ticket", "submit_analysis"), ["analyze"]);
   assert.deepEqual(stagesAllowingTool("no_ticket", "submit_analysis"), ["analyze"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["ut"]);
+  assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["fix"]);
   assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), ["deploy_verify"]);
-  // complete_stage 是五个自报阶段(拉单/拉仓/修改/UT/提交MR)的出口;
+  // complete_stage 是四个自报阶段(拉单/拉仓/修复/提交MR)的出口;
   // 三个举卡阶段(分析/无单结论/换库验证)卡工具即出口,不含它。
   assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
-    ["dts_info", "prep_repo", "fix", "ut", "mr_green"]);
+    ["dts_info", "prep_repo", "fix", "mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), ["prep_repo", "analyze"]);
   // 自 prep_repo 起常开:拉仓与改绑,越往后越不收回。
   const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");
@@ -104,7 +104,7 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("ticket", "bind_module"), fromPrep);
   // 自 fix 起常开:推送。
   assert.deepEqual(stagesAllowingTool("ticket", "push_branch"),
-    ["fix", "ut", "mr_green", "deploy_verify"]);
+    ["fix", "mr_green", "deploy_verify"]);
   // 无单 conclude:提交与跳过不再开放,拉仓/改绑/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);

@@ -328,7 +328,7 @@ test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问
   })();
 });
 import { TaskService } from "../src/taskService.ts";
-import { createGoOpsTools } from "../src/issueFlow/opsTools.ts";
+import { createGoOpsTools, type ContainerExec } from "../src/issueFlow/opsTools.ts";
 import {
   McpGateway,
   UnconfiguredDtsGateway,
@@ -835,6 +835,33 @@ test("正式启动可延后恢复；取消必须等容器确认删除，失败�
   }
 });
 
+test("failed 会话的唯一出路是取消:归档被明确拒绝,取消清理成 canceled", async () => {
+  // 2026-09-02 用户实锤:failed 曾是死胡同终态——不能续聊、按钮全灰,
+  // 出错的会话永远占着"进行中"列表。出口定为取消(归档需要结论,结论
+  // 词表里没有"失败"语义)。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-failed-exit-"));
+  seedRecoverableIssue(dataDir, "issue-1", { status: "failed" });
+  seedRecoverableIssue(dataDir, "issue-2", { status: "failed" });
+  const service = new IssueFlowService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+    deferRecovery: true,
+  });
+  try {
+    service.start();
+    assert.equal(service.list().length, 2,
+      "failed 是终态,重启恢复不重新入队,但 live 句柄必须在(否则连取消都够不着)");
+    await assert.rejects(
+      service.control("issue-1", { action: "archive" }),
+      /已失败的会话没有结论可归档,只能取消清理/);
+    assert.equal(service.get("issue-1").status, "failed",
+      "拒绝归档不得翻转状态");
+    assert.equal((await service.control("issue-2", { action: "cancel" })).status,
+      "canceled", "failed 必须能取消——无路可走的终态就是列表里的永久噪音");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));
   // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版
@@ -1142,6 +1169,122 @@ test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async (t
       return true;
     },
   );
+});
+
+test("ops 容器内执行:超时第一响应在容器内,不连坐会话容器", async () => {
+  // 契约(2026-09-02 拍板):工具超时只了结工具进程组——命令必须由
+  // 容器内 timeout 打头(独立进程组,TERM→KILL),TaskContainer.exec
+  // 的兜底超时必须赛赢它(预算+余量);销毁容器只是 timeout 失效时
+  // 的保险,不是常规手段。
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-ops-wrap-"));
+  mkdirSync(join(workspace, "deployment"), { recursive: true });
+  writeFileSync(join(workspace, "deployment", "pom.xml"), "<project/>");
+  const calls: Array<{ command: string; cwd: string; timeout?: number }> = [];
+  // 按调用次序出牌:主命令→(失败时的诊断命令)。
+  const scripted: Array<{ exitCode: number | null; stdout: string; stderr: string }> = [];
+  // 2026-09-02:假执行器显式标注 ContainerExec——实现侧执行能力形状
+  // 一旦漂移(参数增删、返回字段改名),这里编译期就炸,而不是运行时。
+  const containerExec: ContainerExec = {
+    exec: async (command, cwd, options) => {
+      calls.push({ command, cwd, timeout: options.timeout });
+      return scripted.shift() ?? { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const ops = createGoOpsTools({ toolsDir: "unused", containerExec, workspace });
+  const request = {
+    projectPath: workspace,
+    hosts: ["10.0.0.1"],
+    password: "probe-pass",
+    includeLib: false,
+  };
+
+  // 超时(容器内 timeout 退出码固定 124):报错要说明容器没受影响,
+  // 并把输出尾部带出来供排障;密码照旧不得出现。
+  scripted.push({ exitCode: 124, stdout: "mvn 构建进行中…", stderr: "" });
+  await assert.rejects(
+    () => ops.buildDeploy(request),
+    (error: Error) => {
+      assert.match(error.message, /20 分钟预算/);
+      assert.match(error.message, /容器与工作区不受影响/);
+      assert.match(error.message, /构建进行中/);
+      assert.ok(!error.message.includes("probe-pass"),
+        "密码绝不能出现在错误文本里");
+      return true;
+    },
+  );
+  const wrapped = calls[0];
+  assert.match(wrapped.command, /^timeout --kill-after=30 1200 /,
+    "命令必须由容器内 timeout 打头,预算 1200s");
+  assert.match(wrapped.command, /'\.ops-tools\/build-deploy-[^']+'/);
+  assert.equal(wrapped.timeout, 1260,
+    "兜底超时 = 预算 + 60s 余量,必须赛赢容器内 timeout");
+  assert.equal(wrapped.cwd, workspace);
+
+  // 反例(2026-09-02):退出码 124 但哨兵在场,说明工具其实跑完了,
+  // 只是收尾晚于预算——超时判定必须"退出码 124 且哨兵缺席"同时成立,
+  // 不能只看退出码。此路必须落回普通失败路径(构建部署失败 + 诊断),
+  // 不能拿"超时、容器不受影响"的话术误导排查方向。
+  calls.length = 0;
+  scripted.push({ exitCode: 124, stdout: "[INFO] 部署完成", stderr: "" });
+  scripted.push({ exitCode: 0, stdout: "settings:OK", stderr: "" });
+  await assert.rejects(
+    () => ops.buildDeploy(request),
+    (error: Error) => {
+      assert.match(error.message, /构建部署失败/);
+      assert.ok(!error.message.includes("分钟预算"),
+        "哨兵在场就绝不是超时错误,报错不能带超时话术");
+      return true;
+    },
+  );
+  assert.equal(calls.length, 2, "普通失败路径的诊断命令照发");
+
+  // 成功路径(退出码 0 + 哨兵)不受包装影响。
+  calls.length = 0;
+  scripted.push({ exitCode: 0, stdout: "[INFO] 部署完成", stderr: "" });
+  const done = await ops.buildDeploy(request);
+  assert.match(done.summary, /部署输出/);
+  assert.match(calls[0].command, /^timeout --kill-after=30 1200 /);
+
+  // 普通失败(退出码 1)走原有错误路径,诊断命令照发。
+  calls.length = 0;
+  scripted.push({ exitCode: 1, stdout: "[ERROR] BUILD FAILURE", stderr: "" });
+  scripted.push({ exitCode: 0, stdout: "settings:OK", stderr: "" });
+  await assert.rejects(
+    () => ops.buildDeploy(request),
+    (error: Error) => {
+      assert.match(error.message, /构建部署失败/);
+      assert.match(error.message, /诊断/);
+      return true;
+    },
+  );
+
+  // fetch-logs 同一条容器内 timeout 契约(2026-09-02):预算 900s
+  // (15 分钟),兜底 960s 必须赛赢;超时报错同样说明容器与工作区
+  // 不受影响、带输出尾部、不泄密码。fetch-logs 不查 pom,无需真仓。
+  calls.length = 0;
+  const localDir = mkdtempSync(join(tmpdir(), "mfc-ops-fetch-"));
+  scripted.push({ exitCode: 124, stdout: "抓取进行中…", stderr: "" });
+  await assert.rejects(
+    () => ops.fetchLogs({
+      hosts: ["10.0.0.1"],
+      services: ["TranFmaWebsite"],
+      password: "probe-pass",
+      localDir,
+    }),
+    (error: Error) => {
+      assert.match(error.message, /15 分钟预算/);
+      assert.match(error.message, /容器与工作区不受影响/);
+      assert.ok(!error.message.includes("probe-pass"),
+        "密码绝不能出现在错误文本里");
+      return true;
+    },
+  );
+  const fetchCall = calls[0];
+  assert.match(fetchCall.command, /^timeout --kill-after=30 900 /,
+    "fetch-logs 命令必须由容器内 timeout 打头,预算 900s");
+  assert.equal(fetchCall.timeout, 960,
+    "兜底超时 = 预算 + 60s 余量,必须赛赢容器内 timeout");
+  assert.equal(fetchCall.cwd, workspace);
 });
 
 test("MCP 网关客户端:握手、token 头、工具调用与未配置 fail-loud", async () => {

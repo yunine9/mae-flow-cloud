@@ -243,6 +243,22 @@ test("start 强制加固参数、精确 safe.directory，并记录不可变镜�
   assert.equal(subject.state, "stopped");
 });
 
+test("#75 npm_config_registry 以 -e 进容器创建参数,保留名单不拦", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  const subject = container(runner, {
+    environment: {
+      npm_config_registry: "https://npm.intra.example/repository/npm-group/",
+    },
+  });
+  await subject.start();
+  const run = runner.commands.find((args) => args[0] === "run");
+  assert.ok(run?.includes(
+    "npm_config_registry=https://npm.intra.example/repository/npm-group/"),
+  "#75:registry 必须真的以 -e 进 docker run,内网 npm 才不打公网");
+  await subject.stop();
+  assert.equal(subject.state, "stopped");
+});
+
 test("exec 的瞬时 inspect 故障会重试且不会永久污染 lifecycle", async () => {
   const runner = new FakeDockerRunner(workspace());
   const subject = container(runner);

@@ -300,7 +300,8 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
   }
   lines.push(
     "基础设施预检：Java/C++ Maven 构建需要 JDK 21 与 Maven；前端需要仓库兼容的 Node/npm（部署基线为 Node 18/npm 9）；C++ 还需要 GCC/G++、binutils、bison、flex、ccache。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。低版本 JDK 的典型症状是 UnsupportedClassVersionError——那是环境问题，不是代码问题。",
-    "平台已经负责 Maven/npm 镜像、证书信任与凭据。不要克隆新副本、注入令牌、改全局 Git/Maven/npm 配置，也不要关闭 TLS/SSL 校验；遇到证书或鉴权故障只记录证据并报告基础设施失败。",
+    "镜像、证书信任与凭据按生态由平台分工注入，不要手动改配置自救（2026-09-03 勘误：npm 侧此前并没有镜像兜底）：Maven 镜像由平台只读挂载 /etc/mae-flow/maven/settings.xml（并接入 ~/.m2/settings.xml）负责；npm registry 由部署注入环境变量 `npm_config_registry`（配置项 isolate-npm-registry）负责，容器内没有其他 npm 镜像兜底，该变量缺席即部署缺配，按基础设施失败上报。",
+    "不要克隆新副本、注入令牌，也不要改全局 Git/Maven/npm 配置自救——`npm config set`、写 ~/.npmrc、/etc/npmrc、~/.gitconfig 都会被沙箱拒绝；同样不要关闭 TLS/SSL 校验；遇到证书或鉴权故障只记录证据并报告基础设施失败。",
     `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
     "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
     "并行度以容器配额为准，不要信 nproc：容器 CPU 是 CFS 配额不是绑核，nproc 虚报宿主全部核数，-j 超过配额会因限流不升反降（内网实锤：-j16 挤 8 核配额比干净 8 路还慢）。真实配额看 `cat /sys/fs/cgroup/cpu.max`（如 800000 100000 = 8 核），构建自带并行参数时按它设 -j。",

@@ -40,11 +40,15 @@ test("交付材料提供统一全屏入口且 Escape 先退出全屏", () => {
 });
 
 test("待闭环检视通过常驻按钮提示，但不自动接管当前工作面", () => {
-  // 入口卡与抽屉头部的数字统一走筛选条的"等我确认"口径(annotationCategory
-  // + 反馈 needs_human),不再另算一套"待处理"。
+  // 入口卡与筛选条的数字统一走"等我确认"口径(annotationCategory + 反馈
+  // needs_human),不再另算一套"待处理"。
+  // 2026-09-02 二改:抽屉标题栏原来还挂第三份同一个数,它下面 40px 就是
+  // 筛选条的"等我确认 N",打开前入口按钮上也有——同一屏三份,眼睛先去数
+  // 数字。计数只留在能点的地方(入口按钮和筛选条),标题栏只留关闭。
   assert.match(workspace, /className=\{`ws-review-launch/);
   assert.match(workspace, /\$\{reviewCounts\.mine\} 等我确认/);
-  assert.match(workspace, /\$\{reviewCounts\.mine\} 项等我确认/);
+  assert.doesNotMatch(workspace, /\$\{reviewCounts\.mine\} 项等我确认/,
+    "抽屉标题栏不再重复计数");
   assert.match(workspace, /onClick=\{\(\) => setReviewPanelOpen\(true\)\}/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
     "批注出现时只亮入口，不应自动弹出并抢走当前任务");
@@ -83,12 +87,136 @@ test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位
   assert.match(workspace,
     /if \(window\.matchMedia\("\(max-width: 900px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
     "只有窄屏(抽屉占满整屏)定位时才关抽屉");
+  // 2026-09-02 二改:抽屉原来 top/right/bottom 全是 0,四边贴死视口——
+  // 用户实测截图"上下都顶到头了,都没显示全"。它还正好盖住任务头右侧的
+  // "暂停/取消"(1512 宽下按钮在 x1152-1258),要暂停任务得先关面板。现在
+  // 从任务头下面起步并留出边距,面板看得见边界,任务头照常能点。
   assert.match(css,
-    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*right:\s*0[^}]*width:\s*min\(760px, 100vw\)/s);
+    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*top:\s*calc\(var\(--ws-head-h[^}]*right:\s*10px[^}]*bottom:\s*10px[^}]*width:\s*min\(760px, calc\(100vw - 20px\)\)/s);
+  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*border-radius:\s*14px/s,
+    "四边不再贴死视口,要有可见的面板边界");
+  assert.match(workspace, /--ws-head-h/,
+    "任务头高度由页面实测下发,不能在 CSS 里写死");
   assert.doesNotMatch(css, /\.ws-body\.has-review/);
-  assert.match(css, /@media \(max-width: 900px\) \{\s*\.workspace-review-drawer \{ width: 100vw/);
+  assert.match(css,
+    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer \{[^}]*width:\s*100vw/s,
+    "窄屏仍占满任务头以下整块");
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
     "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
+});
+
+test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
+  // 用户实测:"针对 1. 缺失变量输出空串并记录 warn 日志;"这行完全没必要
+  // 在左边。它原来是整块引言、单占左栏一行,760px 抽屉里两栏本就只有
+  // 304 和 357,正文和 Agent 回应被挤成两条窄柱。它只是"指着哪儿"的补充,
+  // 接在位置后面收一行即可,整段留在 title 里、点位置也能回到那一行。
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  const head = panel.indexOf('className="annot-item-head"');
+  const anchorAt = panel.indexOf("annot-anchor", head);
+  const progressAt = panel.indexOf("annot-progress", head);
+  assert.ok(head >= 0 && anchorAt > head && anchorAt < progressAt,
+    "锚定原文应在 annot-item-head 里、排在状态之前");
+  assert.match(panel, /className="annot-anchor"\s*\n?\s*title=\{item\.anchor\}/,
+    "截断后整段必须还在 title 里,不能丢");
+  assert.doesNotMatch(panel, /<span>针对<\/span>/,
+    "锚定原文接在位置后面,不需要引导词");
+
+  const annotate = readFileSync(
+    join(process.cwd(), "web/src/annotate.css"), "utf8");
+  assert.match(annotate,
+    /grid-template-areas:\s*"head head"\s*"route route"\s*"note response"\s*"foot foot"/s);
+  assert.doesNotMatch(annotate, /grid-area:\s*anchor/,
+    "anchor 那一行已经没有了");
+  // 归属徽标原来没给区域,自动排版把它丢进末尾空着的 stale 行,"Agent 处理"
+  // 于是落在页脚下面(实测 foot 底 940px、徽标 948px)。
+  assert.match(annotate, /\.annot-route-badge \{\s*grid-area: route/,
+    "归属徽标必须有明确区域,否则会被排到页脚后面");
+});
+
+test("检视意见原文和 Agent 回应是对称的两块,不是正文配卡片", () => {
+  // 左边原来是一段裸文字,右边是带标题的绿色块,读起来像"正文旁边配了张
+  // 卡片"而不是一问一答;而且没有一处说明左边那段到底是什么。
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(panel,
+    /<div className="annot-note">\s*<strong>检视意见原文<\/strong>/,
+    "意见块要明说自己是检视意见原文");
+  const annotate = readFileSync(
+    join(process.cwd(), "web/src/annotate.css"), "utf8");
+  const note = annotate.slice(annotate.indexOf(".annot-note {"),
+    annotate.indexOf(".annot-note > strong"));
+  assert.match(note, /border-left:\s*3px solid var\(--accent\)/);
+  assert.match(note, /background:\s*color-mix\(in srgb, var\(--accent\) 7%/);
+  const response = annotate.slice(annotate.indexOf(".annot-response {"),
+    annotate.indexOf(".annot-response.not_fixed"));
+  assert.match(response, /border-left:\s*3px solid var\(--success\)/,
+    "两块共用同一套块形,只靠颜色区分人和 Agent");
+});
+
+test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填执行人与单号", () => {
+  // 用户实测截图"右侧很丑":两个泛称标题摞在一起(当前需要处理/需要你
+  // 的决策)、300px 散文背景复述左边已经画出来的图、讨论参与人整块搬进
+  // 卡里带着第二个主按钮、单元行四列挤在 635px 里职责被截成省略号,
+  // 提交按钮在 1400px 之下还被"提问题"浮钮压着。
+  const card = readFileSync(join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
+  assert.match(card, /export function isChainReviewWaiting\(task: TaskSummary\)/);
+  assert.match(card, /if \(isChainReviewWaiting\(task\)\) return "确认拆分方案";/);
+  assert.match(card, /className="chain-decision-facts"/);
+  assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
+    "阶段数和左侧图共用同一个拓扑函数");
+  assert.match(card, /确认并生成 \$\{task\.requirement_graph\?\.repositories\.length \?\? 0\} 个子任务/,
+    "按钮要说清楚会生成几个子任务");
+  assert.match(card, /<details className="waiting-context-details">/);
+
+  assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
+    "判据只有一份");
+  const attachmentStart = workspace.indexOf("attachment={requirementAnalysisConfirmation ? undefined :");
+  const attachmentEnd = workspace.indexOf("<AttachedNotes", attachmentStart);
+  assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
+  assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
+    "讨论参与人不进确认卡");
+  assert.match(workspace, /teamInvite=\{canOperate && task\.requirement_graph\?\.stage === "analysis"/,
+    "参与人入口长在图里'主任务团队'那一块,不另起一条");
+  const graph = readFileSync(join(process.cwd(), "web/src/RequirementGraph.tsx"), "utf8");
+  assert.match(graph, /className="requirement-team-invite"/);
+
+  const picker = readFileSync(
+    join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
+  assert.match(picker, /duplicateTicketOf\(repository, tickets, assignments\)/,
+    "同仓同执行人同号在填的时候就要标出来,不能等服务端拒");
+  assert.match(picker, /单号与「\$\{unitLabel\(duplicate\)\}」重复/);
+
+  assert.match(css, /\.ws-decision \{ padding-bottom: 84px; \}/,
+    "右栏底部让开提问题浮钮");
+  assert.match(css, /\.options\.compact \.custom-entry \{ grid-column: 1 \/ -1;/,
+    "逃生口选项降成通栏一行");
+  assert.match(css, /\.ws-decision \.repository-assignee-list > label \{[^}]*grid-template-areas: "name name" "who ticket" "state state"/s);
+});
+
+test("抽屉标题栏按自己的高度占位,副标题不被裁", () => {
+  // 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:420px 宽下
+  // 它要 85px 只拿到 64px,副标题有半行被裁在边框外。
+  assert.match(css, /\.workspace-review-drawer > header \{[^}]*flex:\s*none/s);
+  assert.match(css,
+    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer > header p \{ display: none; \}/s,
+    "窄屏抽屉占满整屏,副标题那句'左侧材料仍可圈选'不成立就别说");
+});
+
+test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
+  // 浮钮挂在 .workspace-overlay(z-index 120)之外、自己 650,和抽屉的 950
+  // 不在同一个栈里比,所以照样压在抽屉右下角。原先靠内容底部留 84px 空白
+  // 躲开:空白本身就在浮钮底下,最后一条的操作还是点不到,只白白少一屏。
+  assert.match(css,
+    /body:has\(\.workspace-review-drawer\) \.wish-quick-trigger \{ display: none; \}/);
+  assert.doesNotMatch(css,
+    /\.workspace-review-drawer > \.workspace-review-content \{ padding: 12px 12px 84px; \}/,
+    "浮钮已经收起,底部不该再留那段躲避用的死白");
+  // macOS 悬浮滚动条不滚不出现,面板又比一屏长得多(实测 10 条 ≈ 2887px),
+  // 不给常驻滚动槽和底部渐隐,看到的就是"内容被截断"。
+  assert.match(css,
+    /\.workspace-review-drawer > \.workspace-review-content \{[^}]*scrollbar-gutter:\s*stable/s);
+  assert.match(css, /\.workspace-review-drawer::after \{[^}]*linear-gradient\(to top, var\(--page\)/s);
 });
 
 test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
@@ -171,4 +299,87 @@ test("执行中的任务默认打开执行现场", () => {
   assert.match(workspace,
     /\["queued", "running", "pausing", "verifying", "await_merge"\]/);
   assert.match(workspace, /\.includes\(task\.status\)\) return "execution"/);
+});
+
+test("仓间依赖图里的负责面路径是块级元素,超宽省略而不是横穿卡片", () => {
+  // 行内元素不吃 overflow/text-overflow:nowrap 的路径从卡片里直接穿出去,
+  // 压过阶段箭头压到下一张卡(实测溢出 274px/890px,用户截图实锤)。
+  assert.match(css, /\.repo-scope-paths \{\s*display: block; min-width: 0; overflow: hidden;/);
+});
+
+test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意见上", () => {
+  // 原来 Agent 返回整篇新文档直接覆盖,旧版本不留、没有回执,复检的人
+  // 只能靠锚点猜"改了什么",真核对得把整篇重读一遍。
+  const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf8");
+  assert.match(service, /===RECEIPTS===/, "文档编辑 Agent 必须逐条回执");
+  assert.match(service, /parseRequirementReceipts\(matched\[1\], annotations\)/);
+  assert.match(service, /storeRequirementRevision\(task\.summary\.workspace, revisionId, before, diff\.text\)/,
+    "改前全文和 diff 先落盘再覆盖正文");
+  assert.match(service, /store\.respond\(receipt\.annotation_id, \{/);
+  const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf8");
+  assert.match(server, /parts\[2\] === "requirement-revisions"/);
+  assert.match(workspace, /className="requirement-revision-bar"/);
+  assert.match(workspace, /<RequirementDiff text=\{revisionDiff\.text\} \/>/,
+    "需求对比直接摊开,不套代码检视的并排画布");
+  assert.match(css, /\.requirement-diff-row\.del \.requirement-diff-text \{ text-decoration: line-through/);
+});
+
+test("列表收起卡保留只有节点的阶段轨道——去词签不去进度条", () => {
+  // 7f8ebb1 把收起卡的轨道整条隐藏,用户实测"当前进度"下面空了一截,
+  // 以为进度条丢了。契约:收起时只藏词签与 Token 遥测,轨道本身必须留着。
+  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.task-phase-track,?\s*[^{]*\{ display: none; \}/);
+  assert.match(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.task-phase > span \{ display: none; \}/);
+  assert.match(css,
+    /\.task-card:not\(\.expanded\) \.task-summary \.token-usage \{ display: none; \}/);
+});
+
+test("开发协作:默认标签跟可用性走,占位文案与原因框一致,延后插话有回执", () => {
+  // 用户 2026-09-02 实测三处:任务不在运行就默认落到不可用的开发助手;
+  // 等人决定时占位写"主任务暂停时…"与原因框打架;等待/排队期 @ 引用发出
+  // 后「捎过去的话」永远不更新。
+  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(box,
+    /useState<CollaborationMode>\(\s*steerOnly \|\| task\.status === "running" \? "steer" : "assistant"/,
+    "默认标签不许按状态硬猜");
+  assert.match(box,
+    /task\.status !== "running" && assistant\.availability\.available\s*\? "assistant" : "steer"/);
+  assert.match(box, /modePicked\.current = true/, "人点过标签后不再替他换");
+  assert.doesNotMatch(box, /: "主任务暂停时，请切到“开发助手”直接处理代码现场"\}/);
+  assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
+  assert.match(box, /item\.deferred === "decision" \? "随下一次决定送达"/);
+  const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision", receipt\)/);
+  assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission", receipt\)/);
+  // 借活会话的 emit 记账,不另开实例撞编号。
+  assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred, \.\.\.receipt \}\)/);
+});
+
+test("需求修订失败原因上页面;开发助手接管前列明边界", () => {
+  const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /task\.requirement_revision\?\.state === "failed" && \(/);
+  assert.match(workspace, /className="requirement-revision-error" role="alert"/);
+  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  assert.match(box, /className="assistant-bounds"/);
+  assert.match(box, /Git 只读/);
+  assert.match(box, /交还后由主任务接手/);
+  const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
+  assert.match(service, /unanchoredRequirementChanges\(before, after, annotations\)/,
+    "回执之外还要逐段比对");
+});
+
+test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;退回方案时提示先批注", () => {
+  // 用户 2026-09-02 实测三处:依赖图全屏后仍卡 900px、需求原文全屏仍卡
+  // 860px、分析阶段看起来提不了检视意见(图圈不了,入口没露出)。
+  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  assert.match(css,
+    /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
+  const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /className="chain-review-entry" role="note"/);
+  assert.match(workspace, /CHAIN-\[\^\/\]\*\\\.md\$/, "入口指向内核产出的方案文档");
+  assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
+  const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
+  assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
 });

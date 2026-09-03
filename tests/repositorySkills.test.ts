@@ -183,7 +183,10 @@ test("最多返回 100 项，超出的目录不再读取", async () => {
     writeSkill(repo, ".agents/skills", name, name, `第 ${index} 个能力`);
   }
   commit(repo, "many skills");
-  const catalog = await discoverRepositorySkills({ repository: repo });
+  // 本用例验证的是 100 项截断,不是发现超时;全量套件并行负载下
+  // 缺省 15s 预算会被无关用例的负载顶穿(负载型抖动),显式放宽。
+  const catalog = await discoverRepositorySkills({
+    repository: repo, timeoutMs: 120_000 });
   assert.equal(catalog.error, undefined);
   assert.equal(catalog.skills.length, 100);
   assert.equal(catalog.skills[0].name, "skill-000");

@@ -20,15 +20,15 @@
 
 一个连续会话贯穿到底,但**阶段真相在宿主**(固定模式不注册
 report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶段
-声明目标与唯一出口,拉单/拉仓/修改/UT/提交MR 五个阶段由 AI 判断达成后
+声明目标与唯一出口,拉单/拉仓/修复/提交MR 四个阶段由 AI 判断达成后
 调 `complete_stage` 自报收口(平台不核实工作事实),问题分析/无单结论/
 换库验证三阶段的出口是卡工具本身(卡即出口,没有 complete_stage 可绕)。
 平台只守两道核验:人工闸(用户确认)与 MR 验绿门。工具按阶段开放,
 越权调用在 execute 入口被拒(提示词的工具清单只是引导层,工具门禁才是
 权威层,两者同源于阶段注册表的 tools 列)。
 
-**有单七阶段**:`dts_info 获取DTS单信息 → prep_repo 拉取代码仓·建分支
-→ analyze 问题分析 → fix 问题修改 → ut UT验证 → mr_green 提交MR·跑绿
+**有单六阶段**:`dts_info 获取DTS单信息 → prep_repo 拉取代码仓·建分支
+→ analyze 问题分析 → fix 问题修复(TDD,UT 并入本阶段) → mr_green 提交MR·跑绿
 → deploy_verify 换库环境验证`。已有单从 DTS 列表独立发起，登记页不再
 预填仓、模块或环境；工作台随后按问题单事实触发模块识别、拉仓和环境闸。
 分支 `master_工号_单号` 由**宿主**在阶段2创建(不交给 AI 起名)。
@@ -48,9 +48,9 @@ report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶�
   用户**真实验证**;通过→待手动归档,有问题→**一律回退 analyze**
   (轮次+1,fix 起各阶段标 redo,分支/MR 延用同分支追加,UT 上报/流水线
   监看/MR 申报账作废重来)。
-- UT 事实上报(2026-08-28 降级):AI 跑完测试**自愿**调 `report_ut`
+- UT 事实上报(2026-09-02 并入修复阶段,TDD;2026-08-28 降级):AI 跑完测试**自愿**调 `report_ut`
   如实上报,平台只记账(台账+事件流+现场记录)——不再是出口、不再是
-  建 MR 前置;UT 阶段出口= `complete_stage` 自报(硬验证在流水线,
+  建 MR 前置;修复阶段出口= `complete_stage` 自报(硬验证在流水线,
   UT 本身也在流水线里跑)。
 - MR 验绿门(mr_green 阶段的 complete_stage):AI 建齐 MR(create_mr
   自动记账进台账)后调 complete_stage **申报 MR 清单**(mrs 参数,MR
@@ -61,6 +61,19 @@ report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶�
   pipelineClient,触发+轮询,预算内不弃看)等绿自动放行、红携失败
   checks 开回合;全绿未申报只开回合提醒申报,不推进(不变量:进
   deploy_verify 当且仅当"已申报且全绿");预算耗尽如实停表请人工。
+- 流水线红灯人工闸(2026-09-01,票 03):红灯结算的两条停机路升级为
+  平台闸(不再是 stage_note 停机+通知)——
+  **不可修告警闸**(`pipeline_unfixable`):失败项全部是不可自动修复
+  的工具告警(--unfixable-tools 分诊)时举卡,卡面给失败摘要、逐维度
+  明细(含工具名)、镜像产物位置(pipeline/ 目录)与处置指引;人在
+  交付平台处理/豁免后于卡上作答「已在平台处理/豁免,重新监看」,
+  平台重置该仓监看账(deadline 重置、watching=true)重新监看同一 SHA
+  ——平台侧已处理则这次就绿,仍红则重新分诊。
+  **证据回灌闸**(`pipeline_evidence`):有失败维度但一条可定位报错都
+  没拿到(为免猜改)时举卡,卡面列缺口维度与原因;人把报错原文粘贴进
+  卡上的自由文本作答,平台把原文作为人工证据注入下一修复回合(该轮
+  才消耗修复轮预算 reds+1),AI 按原文修复后同分支再推、重新监看。
+  两张卡问的都是人工事实,月光永不代答。
 
 平台闸写进 issue.json(`gate` 字段),Agent 对该文件只读——AI 推不动
 闸,这是"固定"的强制度所在;渲染复用问题卡组件。
@@ -104,6 +117,12 @@ associate {ticket, confirm?}`。
 - 三条用户输入通道,全部复用 CloudSession 原语:
   - **问题卡作答**:AI 用 AskUserQuestion 挂起(自由模式的人工闸门),
     或平台闸(固定模式,同组件渲染);页面选项/自由作答后回合续跑;
+    手机端同权(2026-09-02,与需求侧手机审批同一网关):等待卡(闸
+    优先)经适配层(`src/issueFlow/lubanApproval.ts`)进小鲁班审批册,
+    通知审批码与网关派码同源,裸序号/审批码回复翻译回 `answer()` 的
+    作答协议(闸 label 反查码表、Agent 卡 label 反查投影码),「填写
+    补充说明」类选项空补充打回;卡被抢先作答/会话重跑即"审批码已
+    过期",与需求侧同一套 stale 语义;
   - **补充**:运行中 steer,当前工具调用完成后送达;
   - **续聊**:回合结束(idle)后发消息,`continueWith` / `startResume`
     续上现场;服务重启则由平台自动续跑(2026-08-29 拍板,#27:正在跑/
@@ -112,7 +131,14 @@ associate {ticket, confirm?}`。
 - 终态:`archived`(结论:非问题/已修复/已提MR/问题成立/已转正)、
   `canceled`、`failed`;`suspended` 是挂起中间态(只能关联转正或归档,
   不能续聊)。**非问题是一等结论**——研究判定误报就出结论归档,
-  不强制走编码交付。
+  不强制走编码交付。`failed` 的唯一出路是**取消**(2026-09-02 拍板,
+  此前是死胡同终态:不能续聊/归档/取消,出错的会话永远占着列表)——
+  归档需要结论而结论词表里没有"失败"语义,取消=放弃这单,错误信息
+  与账目都还在。
+- 「我的问题」列表带状态筛选:默认视图「进行中」只藏 archived/canceled
+  两个收口终态(failed 属"需介入",照常露面),另可按单个状态标签过滤
+  或看全量;选择落 localStorage,聚合徽章(待答复/需介入)按全量算,
+  不跟着筛选消失。
 
 ## 阶段显示
 
@@ -160,12 +186,12 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 
 固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
 结论,以报告在场且四章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
-只记账——不是出口、不是建 MR 前置)/ `complete_stage`(拉单/拉仓/
-修改/UT/提交MR 五个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
+只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
+修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿放行)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
 的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),
 create_mr 仅 mr_green,push_branch 自 fix 起,build_deploy 仅
-deploy_verify,submit_analysis 仅 analyze,report_ut 仅 ut。
+deploy_verify,submit_analysis 仅 analyze,report_ut 仅 fix。
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
 图)、issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
@@ -209,7 +235,9 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 - **无单结论闸**:月光开 → 仅提案 non_issue 且自报置信度高才自动
   闭环归档;是问题或置信度不足必举卡(闭环无下游闸,分级保守);
 - **永不代答**:env_needed/env_verify 问的是用户事实(环境配置/
-  验证结果);MR 验绿门不动;
+  验证结果);pipeline_unfixable/pipeline_evidence 问的是"人是否已在
+  交付平台处理/豁免"与"报错原文"——都是只有人拿得到的人工事实
+  (2026-09-01,票 03);MR 验绿门不动;
 - **Agent 卡按推荐项整卡代答**(2026-08-31 扩展,ADR-0006):月光开
   时,Agent 自举的问答卡(AskUserQuestion)凡每题都是选项题且都带
   recommended,即按推荐项的决策码整卡自动作答——走与真人作答同一

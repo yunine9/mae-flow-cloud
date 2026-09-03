@@ -78,9 +78,11 @@ export function SteerBox({
   steerOnly?: boolean;
   onChanged?: () => void;
 }) {
-  const [mode, setMode] = useState<CollaborationMode>(
-    steerOnly || task.status === "running" ? "steer" : "assistant",
-  );
+  // 默认标签跟着"哪边真能用"走,不再按状态硬猜:原来任务只要不在运行
+  // 就落到「开发助手」,而演示部署/分析单上它根本不可用,人点开看到的是
+  // 一个灰掉的输入框(用户 2026-09-02 实测)。人自己点过标签后不再替他换。
+  const [mode, setMode] = useState<CollaborationMode>("steer");
+  const modePicked = useRef(false);
   const [steerText, setSteerText] = useState("");
   const [assistantText, setAssistantText] = useState("");
   const [steerBusy, setSteerBusy] = useState(false);
@@ -105,7 +107,8 @@ export function SteerBox({
   useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
 
   useEffect(() => {
-    setMode(steerOnly || task.status === "running" ? "steer" : "assistant");
+    modePicked.current = false;
+    setMode("steer");
     conversationPinned.current = true;
   }, [task.id, steerOnly]);
 
@@ -123,6 +126,14 @@ export function SteerBox({
       setMode("assistant");
     }
   }, [assistant.state, assistant.handoff?.state]);
+
+  // 主任务不在运行且助手真可接管时才默认落到「开发助手」;可用性来自
+  // 服务端快照(首轮拉取前一律按不可用算),人点过标签就不动了。
+  useEffect(() => {
+    if (modePicked.current || steerOnly) return;
+    setMode(task.status !== "running" && assistant.availability.available
+      ? "assistant" : "steer");
+  }, [task.status, assistant.availability.available, steerOnly]);
 
   // 补充说明的「已读取」是模型上下文实际消费事实，不是假回执。
   useEffect(() => {
@@ -331,13 +342,17 @@ export function SteerBox({
         <button type="button" role="tab" aria-selected={mode === "steer"}
           className={mode === "steer" ? "active" : ""}
           disabled={takeoverActive}
-          onClick={() => { if (!takeoverActive) setMode("steer"); }}>
+          onClick={() => {
+            if (takeoverActive) return;
+            modePicked.current = true;
+            setMode("steer");
+          }}>
           <strong>补充给主任务</strong>
           <small>不打断，忙完这步就会看到</small>
         </button>
         {!steerOnly && <button type="button" role="tab" aria-selected={mode === "assistant"}
           className={mode === "assistant" ? "active" : ""}
-          onClick={() => setMode("assistant")}>
+          onClick={() => { modePicked.current = true; setMode("assistant"); }}>
           <strong>开发助手</strong>
           <small>你主动接管现场，直接查代码、跑命令、修改</small>
         </button>}
@@ -356,11 +371,15 @@ export function SteerBox({
               || steerBusy}
             placeholder={canSteer
               ? "例如：掩码保留后四位，不要处理区号"
+              : refs.length > 0 && canSteerKnowledge
+                ? `可以再补一句说明；${refDeliveryHint}`
               : steerOnly && task.status === "waiting_for_human"
                 ? "方案正在等主责人确认；请在材料上圈批注，意见会随最终决定送给 AI"
                 : steerOnly
                   ? "主任务当前未运行，暂不能追加给 AI"
-                  : "主任务暂停时，请切到“开发助手”直接处理代码现场"}
+                  // 占位文案与下方的原因框说同一件事:原来不分状态一律写
+                  // "主任务暂停时请切到开发助手",等人决定时和原因框自相矛盾。
+                  : steerDisabledReason?.title ?? "主任务当前未运行"}
             rows={3} onChange={(event) => {
               setSteerText(event.target.value);
               if (sent) setSent(false);
@@ -466,9 +485,19 @@ export function SteerBox({
                 <li key={`${item.at}-${at}`}
                   className={item.delivered ? "done" : "waiting"}>
                   <span className="steer-log-state">
-                    {item.delivered ? "已读取" : "待读取"}
+                    {item.delivered ? "已读取"
+                      : item.deferred === "decision" ? "随下一次决定送达"
+                      : item.deferred === "mission" ? "任务启动时送达"
+                      : "待读取"}
                   </span>
                   <span className="steer-log-text">{item.text}</span>
+                  {!!item.references?.length && (
+                    <span className="steer-log-refs" aria-label="引用的知识">
+                      {item.references.map((label) => (
+                        <span key={label}>@ {label}</span>
+                      ))}
+                    </span>
+                  )}
                   {item.said.length > 0 && (
                     <span className="steer-said">
                       <em>你说完之后它说的</em>
@@ -514,6 +543,13 @@ export function SteerBox({
             这是一个持续的开发 CLI：接管一次后可多轮排查、修改和运行命令。
             主任务在后台保持暂停；只有你点击“交还主任务”才退出本次接管。
           </p>
+          {/* 边界要在接管前说清:它不是本地那种想 commit 就 commit 的 CLI,
+              第一次撞上"不能 git commit"的人会以为坏了(用户 2026-09-02 讨论定的)。 */}
+          <ul className="assistant-bounds" aria-label="开发助手的边界">
+            <li><strong>Git 只读</strong>：不能 commit、push、切分支或 reset，改动只留在工作树。</li>
+            <li><strong>不推进流程</strong>：不调用 Mae-Flow 命令，不生成审批卡。</li>
+            <li><strong>交还后由主任务接手</strong>：改动作为现场修改交给主 Agent，在当前步骤检视、提交、交付。</li>
+          </ul>
 
           {assistant.handoff && assistant.handoff.state !== "running" && (
             <div className={`assistant-handoff ${assistant.handoff.state === "blocked"

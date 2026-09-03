@@ -25,6 +25,7 @@ import {
   putIssueFlowMode,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
+import { orderHierarchyBy, orderTaskHierarchy } from "./taskHierarchy";
 import {
   byTeamAttention,
   isBlocked,
@@ -370,7 +371,7 @@ function IssueFlowModeSetting({
       const user = await putIssueFlowMode(next);
       setMode(user.issue_flow === "free" ? "free" : "fixed");
       setNote(next === "fixed"
-        ? "新发起的问题处理将按固定流程推进(七阶段/三节点,平台把关)"
+        ? "新发起的问题处理将按固定流程推进(六阶段/三节点,平台把关)"
         : "新发起的问题处理改为自由探索(AI 按 playbook 自主编排);进行中的会话不受影响");
       onChanged({ issue_flow: user.issue_flow });
     } catch (cause) {
@@ -383,7 +384,7 @@ function IssueFlowModeSetting({
       <div><span className="section-kicker">ISSUE EXPLORATION</span><h2 id="issue-flow-mode-title">问题处理探索方式</h2></div>
       <span className="approval-setting-state">当前：{mode === "fixed" ? "固定流程" : "自由探索"}</span>
     </header>
-    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单七阶段、无单三节点,两个节点停下等你确认);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
+    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单六阶段、无单三节点;分析确认与换库验证停下等你确认);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
     <div className="approval-options" role="group" aria-label="问题处理探索方式">
       <button type="button" className={mode === "fixed" ? "on" : ""} disabled={busy}
         onClick={() => void select("fixed")}>
@@ -441,30 +442,6 @@ function NavIcon({ name }: { name: View }) {
 // MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视，
 // 但在“我的工作”里与已完成任务共用交付接力区，不混进自动推进列表。
 const DELIVERY_HANDOFF_STATUSES: TaskStatus[] = ["await_merge", "completed"];
-
-/** 只调整同一列表内的顺序：主任务在前，紧跟它的直接子任务。
- * 父任务被筛掉时子任务仍保留，并由卡片上的“隶属于主任务”说明来源。 */
-export function orderTaskHierarchy<T extends { id: string; parent_task_id?: string }>(
-  tasks: T[],
-): T[] {
-  const ids = new Set(tasks.map((task) => task.id));
-  const children = new Map<string, T[]>();
-  for (const task of tasks) {
-    if (!task.parent_task_id || !ids.has(task.parent_task_id)) continue;
-    children.set(task.parent_task_id, [
-      ...(children.get(task.parent_task_id) ?? []), task,
-    ]);
-  }
-  const ordered: T[] = [];
-  const append = (task: T) => {
-    ordered.push(task);
-    for (const child of children.get(task.id) ?? []) append(child);
-  };
-  for (const task of tasks) {
-    if (!task.parent_task_id || !ids.has(task.parent_task_id)) append(task);
-  }
-  return ordered;
-}
 
 export interface PersonalActionItem {
   key: string;
@@ -1593,7 +1570,10 @@ function TeamDashboard({
         {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{visible.map((item) => item.issue
+      <div className="task-list">{orderHierarchyBy(visible,
+        (item) => item.teamTask.id,
+        (item) => item.task?.parent_task_id,
+      ).map((item) => item.issue
         ? <TeamIssueCard key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
         : item.task ? <TaskCard key={item.teamTask.id} task={item.task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />
         : null)}</div>

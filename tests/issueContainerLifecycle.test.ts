@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskContainer } from "../src/containerRuntime.ts";
-import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { IssueFlowService, type IssueContainerBuild } from "../src/issueFlow/service.ts";
 
 /** 无 daemon 假容器:只记生命周期事件,不碰 Docker CLI。 */
 class FakeTaskContainer extends TaskContainer {
@@ -121,5 +121,81 @@ test("容器随会话存活:回合收口不停、续聊复用原实例,取消才
     await service.shutdown().catch(() => undefined);
     await model.stop();
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("容器 npm 源(#75):isolation.environment 进问题流创建环境,缺省绝不出现", async () => {
+  // --isolate-npm-registry 在 serve 层落进 isolation.environment;问题流
+  // 侧的合并点在 ensureContainer(先继承 environment 再追加缓存变量)。
+  // 用生产形态(cacheRoot 在场)钉:registry 必须在合并后幸存。
+  async function boot(environment?: NodeJS.ProcessEnv) {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-registry-"));
+    const model = new ScriptedModelServer(
+      [{ text: "已收到问题,先做初步分析。" }]);
+    await model.start();
+    const builds: IssueContainerBuild[] = [];
+    const service = new IssueFlowService({
+      dataDir,
+      provider: "maeflow",
+      model: "scripted-v1",
+      modelsJson: model.modelsJson(),
+      isolation: {
+        image: "fake-image",
+        volumes: [],
+        cacheRoot: join(dataDir, "cache"),
+        memory: "1g",
+        cpus: "1",
+        pidsLimit: 100,
+        network: "none",
+        ...(environment ? { environment } : {}),
+        containerFactory: (build) => {
+          builds.push(build);
+          return new FakeTaskContainer();
+        },
+      },
+    });
+    return { dataDir, model, builds, service };
+  }
+  const registry = "https://npm.intra.example/repository/npm-group/";
+
+  const configured = await boot({ npm_config_registry: registry });
+  try {
+    const created = configured.service.create({
+      account: "dev", title: "容器 npm 源", description: "验证注入",
+      ticket: "DTS-REG1",
+    });
+    await until(() => {
+      const issue = configured.service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "首轮收口到 idle");
+    assert.equal(configured.builds.length, 1, "首轮恰好拉起一个容器");
+    assert.equal(configured.builds[0].options.environment?.npm_config_registry,
+      registry, "registry 必须进容器创建环境,内网 npm 才不打公网");
+    assert.equal(configured.builds[0].options.environment?.npm_config_cache,
+      "/cache/npm", "registry 与缓存变量共存,合并顺序没被破坏");
+  } finally {
+    await configured.service.shutdown().catch(() => undefined);
+    await configured.model.stop();
+    rmSync(configured.dataDir, { recursive: true, force: true });
+  }
+
+  const bare = await boot();
+  try {
+    const created = bare.service.create({
+      account: "dev", title: "容器 npm 源缺省", description: "验证缺省不注入",
+      ticket: "DTS-REG2",
+    });
+    await until(() => {
+      const issue = bare.service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "首轮收口到 idle");
+    assert.ok(!("npm_config_registry" in (bare.builds[0].options.environment ?? {})),
+      "缺省不注入:没配 registry 时容器创建环境不得出现该键");
+  } finally {
+    await bare.service.shutdown().catch(() => undefined);
+    await bare.model.stop();
+    rmSync(bare.dataDir, { recursive: true, force: true });
   }
 });

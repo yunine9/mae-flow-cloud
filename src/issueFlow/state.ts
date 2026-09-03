@@ -66,7 +66,7 @@ export type IssueStatus =
  * 影响新会话,这是"一键切换回来"承诺的底座。缺省视为 free(旧会话)。 */
 export type IssueFlowMode = "fixed" | "free";
 
-/** 固定流程的两大场景:有单走七阶段,无单走三节点(结论后可挂起)。 */
+/** 固定流程的两大场景:有单走六阶段,无单走三节点(结论后可挂起)。 */
 export type IssueScenario = "ticket" | "no_ticket";
 
 /** Agent 上报的处理阶段(2026-08-27 用户拍板的词表)。流程动态:阶段
@@ -203,9 +203,16 @@ export type IssueGateKind =
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
   | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
                        // 确认产一次性令牌放行一次推送;不绑阶段(两模式同过)。
-  | "skill_select";    // skill 圈选(ADR-0011):analyze 入口的多选闸,
+  | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
                        // 月光关档由归属人圈定业务仓 skill 必读集合;
                        // 作答走 selection 专用口(与 env_needed 表单同款)。
+  | "pipeline_unfixable" // 流水线不可修告警(2026-09-01,票 03):红灯失败项
+                         // 全是不可自动修复的工具告警——人在交付平台处理/
+                         // 豁免后于卡上作答,平台重置监看账重看同一 SHA;
+                         // 问的是人工处理事实,月光永不代答。
+  | "pipeline_evidence"; // 流水线证据回灌(同票):红灯但没有一条可定位的
+                         // 具体报错,为免猜改停机——请人把报错原文粘贴进
+                         // 作答(自由文本),作答即证据回灌+续跑修复回合。
 
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
@@ -274,6 +281,10 @@ export interface IssueGate {
    * 仍在 GATE_OPTIONS)。作答的 selection 必须是这里 path 的子集,
    * 浏览器自报路径一律拒绝(与需求侧仓内能力发现同一纪律)。 */
   skills?: IssueSkillChoice[];
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸属于哪个仓的哪次提交
+   * (作答后续跑按它重置监看账/注入证据——同 SHA 重新监看或带着人工
+   * 原文开修复回合)。卡面(卡面与作答协议)见 stageRegistry 码表。 */
+  pipeline?: { repo: string; sha: string };
   /** 机器可读提案(结论闸带 AI 的结论与摘要,用户过目后确认)。 */
   proposal?: {
     conclusion?: "issue" | "non_issue";
@@ -286,7 +297,7 @@ export interface IssueGate {
   created_at: string;
 }
 
-/** UT 验证上报(阶段5,事实上报):平台只记账留痕,不推进、不设门——
+/** UT 验证上报(修复阶段内,事实上报):平台只记账留痕,不推进、不设门——
  * 真正的硬验证在阶段6流水线(UT 本身也在流水线里跑),阶段出口是
  * complete_stage 自报。 */
 export interface IssueUtRecord {
@@ -309,6 +320,28 @@ export interface IssuePipelineWatch {
   checks?: import("../pipelineContract.ts").PipelineCheck[];
   last_error?: string;
   round: number;
+  /** 本仓累计红灯次数(绿了清零):与需求侧修复轮预算同语义——超过
+   *  repair_rounds 就停止自动回灌修复,留痕请人工。 */
+  reds?: number;
+  /** 证据重试窗(票 82):红灯证据全缺/盲输入时不立即举卡,先记下
+   *  取证截止时间,定时器每隔一段重拉镜像重新评估——产物晚到在窗内
+   *  自愈(自动派修,人无感),到点仍缺才举 pipeline_evidence 卡。
+   *  字段在场=重试窗在途;随 issue.json 落盘,重启凭它续算(不重置
+   *  截止、不白等),新流水线重挂表时不随迁(旧窗随旧提交作废)。 */
+  evidence_retry_deadline?: string;
+  /** 重试窗内已做的重评次数(留痕/排障用,不作收手判据)。 */
+  evidence_retry_attempts?: number;
+  /** 进窗那次红灯的失败摘要原文(截断防膨胀):重启续算时重评的
+   *  failureSummary 输入——结算现场的 run 不跨进程,落盘才评得动。 */
+  evidence_failure_log?: string;
+  /** 上次派修的提交(票 82 同提交刹车):红灯 SHA===它=修了没出新
+   *  提交,停机不派(reds 不变),会话最后发言作诊断。派修时写入,
+   *  跨重挂表保留(刹车判据必须跨 push/re-arm 存活),绿了清账。 */
+  last_repair_sha?: string;
+  /** 上轮报错摘要(维度点名+报错节选,截断防膨胀):下轮派修拼进
+   *  回合提示词,附"同一处必须换思路"纪律(需求流 loop.failure 同
+   *  语义);与 last_repair_sha 同拍写入、同拍清理。 */
+  last_failure_summary?: string;
 }
 
 /** MR 验绿门的申报账(阶段6受理路):AI 调 complete_stage 申报清单时
@@ -609,6 +642,8 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   env_needed: "网管环境配置",
   push_confirm: "推送确认",
   skill_select: "skill 圈选",
+  pipeline_unfixable: "流水线不可修告警",
+  pipeline_evidence: "流水线报错回灌",
 };
 
 export function raiseGate(
@@ -621,6 +656,9 @@ export function raiseGate(
   /** 仅 skill_select:扫描所得的圈选清单(动态数据,非文案——选项
    * 码表照旧出自 GATE_OPTIONS)。其余闸不传,在场即阶段配置错误。 */
   skills?: IssueSkillChoice[],
+  /** 仅 pipeline_unfixable/pipeline_evidence:闸归属的仓与提交
+   * (作答续跑的重新监看/证据注入按它定位)。 */
+  pipeline?: IssueGate["pipeline"],
 ): void {
   const recommended = gateRecommendedCode(kind, proposal);
   state.gate = {
@@ -638,6 +676,7 @@ export function raiseGate(
     ...(context ? { context } : {}),
     ...(scope ? { scope } : {}),
     ...(skills ? { skills } : {}),
+    ...(pipeline ? { pipeline } : {}),
     created_at: new Date().toISOString(),
   };
   recordTransition(state, {

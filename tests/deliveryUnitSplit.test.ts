@@ -3,7 +3,8 @@
  * 一个仓显式要求先分析 → 剧本模型写出"同仓两个交付单元"的图 →
  * 同单号确认被撞分支校验挡下 → 分单号确认 → 平台按拓扑序补隐式
  * 串行边、机械生成单元任务书、把负责文件面下传给子任务;
- * 另测负责面交付门禁:越界提交停摆举卡,主责任人放行(记豁免)或
+ * 另测串行单元可重叠修改同一范围，以及负责面交付门禁:越界提交
+ * 停摆举卡,主责任人放行(记豁免)或
  * 打回(派撤出修复),邻居目录前缀(src/filterX)不被吞进面内。
  *
  * HTTP 侧也起真服务、带两个真实登录态点击 scope-decision：非主责任人
@@ -103,12 +104,14 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.match(prompt, /划分方向卡/, "拆分前必须固定动作问人偏好");
     assert.match(prompt, /契约骨架/, "同仓多单元第一个必须是契约骨架");
     assert.match(prompt, /已确认事项清单/, "澄清期 Q&A 必须落进方案正文");
-    assert.match(prompt, /每个路径恰好有一个 owner/,
-      "生成拆分图前必须机械核对路径唯一归属");
+    assert.match(prompt, /不是文件永久所有权/,
+      "负责面是允许改动范围,不能误当成文件唯一归属");
     assert.match(prompt, /任务书要求修改但 scope 未授权/,
       "契约单元职责与负责面必须闭合");
-    assert.match(prompt, /同仓多单元的 scope 默认不得相互包含或重叠/,
-      "同仓拆分不能用宽 scope 吞掉后续单元");
+    assert.match(prompt, /骨架→实现→补测可以声明相同或包含的路径/,
+      "同仓串行接力必须允许重复修改同一批文件");
+    assert.match(prompt, /若任务计划并行执行,重叠范围必须增加明确的先后依赖/,
+      "无序并行任务仍须提示增加依赖或确认风险");
     assert.match(prompt, /"scope":\{"name"/, "图产物格式必须含 scope 示例");
     assert.match(prompt, /同仓单元由平台自动按顺序串行/,
       "串行是平台纪律,不让模型自己写同仓边");
@@ -123,19 +126,20 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.deepEqual(nodes.map((node) => node.scope?.name),
       ["契约骨架", "过滤实现"]);
 
-    // 宽负责面会吞掉后续单元。即使模型漏掉自查，确认入口也要机械挡住，
-    // 不能等开发完成后才在越界裁决里发现拆分方案自相矛盾。
+    // 骨架→实现属于串行接力，后续单元会在上游 MR 合入后从远端基准
+    // 分支重新建现场；父子目录重叠是合法的允许改动范围，不是文件
+    // 所有权冲突。用不同子单号绕开下方独立的分支名校验来单测它。
     const parentState = (service as any).tasks.get(parent.id);
     const graphPath = join(parentState.cwd, artifactDir,
       "requirement-graph.json");
     const overlappingGraph = JSON.parse(graphJson) as RequirementGraph;
     overlappingGraph.repositories[1].scope!.paths = ["src/contract/filter/"];
     writeFileSync(graphPath, JSON.stringify(overlappingGraph));
-    await assert.rejects(
-      () => service.confirmRequirementGraph(parent.id),
-      (error: unknown) => error instanceof TaskControlError
-        && /负责面.*重叠/.test((error as Error).message),
-      "同仓交付单元的 scope 路径不得互相包含");
+    assert.doesNotThrow(() => (service as any).requirementGraphPlan(
+      parentState,
+      { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
+      { "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102" },
+    ), "有序的同仓交付单元可以声明相同或互相包含的允许改动范围");
     writeFileSync(graphPath, graphJson);
 
     // 两个单元此刻同责任人、同单号(都继承父单):分支名会互相覆盖,

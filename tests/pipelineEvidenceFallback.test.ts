@@ -13,6 +13,7 @@ import {
   PIPELINE_EVIDENCE_GAP_ARTIFACT,
   readArtifactAsync,
 } from "../src/artifacts.ts";
+import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
 
 async function until(
   probe: () => boolean,
@@ -287,6 +288,65 @@ test("服务重启后从同一 SHA 继续取证，不误走 prepush 或主任务
     assert.equal(after.get(id)?.detail.includes("prepush"), false);
   } finally {
     await after.shutdown();
+    await platform.stop();
+  }
+});
+
+test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺口", async () => {
+  const platform = new FakeGitPlatform();
+  await platform.start();
+  platform.artifacts.push({
+    name: "build_log_ut-1.txt",
+    text: JEST_LOG,
+  });
+  const service: any = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-evidence-ut-jest-")),
+    provider: "fixture", model: "fixture", modelsJson: {}, maxConcurrent: 0,
+    delivery: { platformUrl: platform.baseUrl, pollTimeoutMs: 0 },
+  });
+  try {
+    const { task, sha } = prepareFailedTask(service, [
+      { dimension: "UT", status: "failed", tool: "build2.0" },
+    ]);
+    await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
+    assert.equal(task.summary.status, "queued",
+      "UT 维有可定位原文,照常派修");
+    assert.equal(task.summary.delivery.loop.round, 1);
+    assert.equal(task.summary.delivery.evidence_gap, undefined,
+      "证据全有时不得生成证据缺口求助");
+    assert.match(task.mission, /build_log_ut-1\.txt/,
+      "修复使命点名镜像日志,让会话读原文定位");
+    assert.doesNotMatch(task.mission, /证据缺口/);
+  } finally {
+    await service.shutdown();
+    await platform.stop();
+  }
+});
+
+test("issue-28 形态：维度错配的质量门红灯从等人工变派修", async () => {
+  const platform = new FakeGitPlatform();
+  await platform.start();
+  platform.artifacts.push(...issue28Artifacts());
+  const service: any = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-evidence-issue28-")),
+    provider: "fixture", model: "fixture", modelsJson: {}, maxConcurrent: 0,
+    delivery: { platformUrl: platform.baseUrl, pollTimeoutMs: 0 },
+  });
+  try {
+    const { task, sha } = prepareFailedTask(service, [
+      { dimension: "CODECHECK", status: "failed", tool: "CodeCCP2.0" },
+    ]);
+    await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
+    assert.equal(task.summary.status, "queued",
+      "维度错配由跨维度兜底救回,自动派修");
+    assert.equal(task.summary.delivery.loop.round, 1);
+    assert.equal(task.summary.delivery.evidence_gap, undefined,
+      "不再生成证据缺口求助");
+    assert.match(task.mission, /维度归类错配的兜底采信/);
+    assert.match(task.mission, /build_log_.*跨维度兜底/,
+      "兜底来源带错配标注,修复会话按日志原文定位");
+  } finally {
+    await service.shutdown();
     await platform.stop();
   }
 });

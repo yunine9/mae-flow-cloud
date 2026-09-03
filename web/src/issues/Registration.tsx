@@ -931,19 +931,23 @@ function DtsRegister({
           <button type="button" className="issue-dts-refresh" onClick={load}
             disabled={loading}
             title="重新拉取名下问题单(勾选与搜索会重置)">
-            {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "↻ 刷新"}
+            <svg viewBox="0 0 16 16" aria-hidden>
+              <path d="M13.5 8a5.5 5.5 0 1 1-1.62-3.9M13.5 1.5v3h-3" />
+            </svg>
+            <span>{loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}</span>
           </button>
-          <label className="issue-dts-module-toggle" title="显示或隐藏「所属模块」列">
-            <input type="checkbox" checked={moduleCol}
-              onChange={(event) => {
-                setModuleCol(event.target.checked);
-                try {
-                  localStorage.setItem(moduleColKey,
-                    event.target.checked ? "shown" : "hidden");
-                } catch { /* 旁路:存不下就本次会话内有效 */ }
-              }} />
-            <span>模块列</span>
-          </label>
+          <button type="button" role="switch" aria-checked={moduleCol}
+            className={`issue-dts-module-toggle${moduleCol ? " on" : ""}`}
+            title="显示或隐藏「所属模块」列"
+            onClick={() => {
+              const next = !moduleCol;
+              setModuleCol(next);
+              try {
+                localStorage.setItem(moduleColKey, next ? "shown" : "hidden");
+              } catch { /* 旁路:存不下就本次会话内有效 */ }
+            }}>
+            模块列
+          </button>
           {note && <span className="issue-dts-note">{note}</span>}
         </div>
       <button type="button" className="primary"
@@ -964,7 +968,9 @@ function DtsRegister({
           onClick={() => setVersionOpen((open) => !open)}>
           <span>{selectedVersions.length
             ? `版本过滤(已选 ${selectedVersions.length})` : "版本过滤(全部)"}</span>
-          <i aria-hidden>{versionOpen ? "▴" : "▾"}</i>
+          <i aria-hidden className={versionOpen ? "open" : undefined}>
+            <svg viewBox="0 0 16 16"><path d="m4 6.5 4 4 4-4" /></svg>
+          </i>
         </button>
         {selectedVersions.length > 0 && <button type="button"
           className="issue-dts-version-clear"
@@ -1046,7 +1052,9 @@ function DtsRegister({
                   aria-controls={detailId}
                   aria-label={`${isExpanded ? "收起" : "展开"} ${ticket.ticket} 详情`}
                   onClick={() => void toggleExpand(ticket.ticket)}>
-                  <span aria-hidden>{isExpanded ? "▼" : "▶"}</span>
+                  <svg viewBox="0 0 16 16" aria-hidden className={isExpanded ? "open" : undefined}>
+                    <path d="m6 4 4 4-4 4" />
+                  </svg>
                 </button>
               </div>
               {moduleCol && <div className="issue-dts-module-cell">

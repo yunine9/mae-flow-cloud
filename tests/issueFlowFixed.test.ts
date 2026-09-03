@@ -27,9 +27,12 @@ import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
+import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
 import {
   FIXED_TICKET_STAGES,
   shouldNudgeFixed,
+  type IssuePipelineWatch,
   type IssueSessionState,
 } from "../src/issueFlow/state.ts";
 import {
@@ -94,11 +97,29 @@ async function until<T>(
   }
 }
 
-/** 快速轮询的运行参数(流水线监看测试用:1s 一轮,预算 2 分钟)。 */
+/** 快速轮询的运行参数(流水线监看测试用:1s 一轮,预算 2 分钟)。
+ *  evidence_retry_minutes: 0 = 关闭证据重试窗(票 82)——既有红灯系列
+ *  (全缺/盲输入举卡)钉的就是"0=关,立即举卡"的现状行为;重试窗的
+ *  正窗用例各自带 settings 覆盖(见下方 retryWindow 等构造)。 */
 const fastPoll = {
   models: () => ({}),
-  runtime: () => ({ poll_interval_s: 1, poll_timeout_s: 120 }),
+  runtime: () => ({
+    poll_interval_s: 1, poll_timeout_s: 120,
+    evidence_retry_minutes: 0,
+  }),
 };
+
+/** 证据重试窗的正窗运行参数(票 82 测试用):窗口为分钟小数(亚分钟
+ *  窗口是旋钮的正当形态),节拍=窗口的 1/5,测试不等真实的 15 分钟。 */
+function retryWindow(minutes: number) {
+  return {
+    models: () => ({}),
+    runtime: () => ({
+      poll_interval_s: 1, poll_timeout_s: 120,
+      evidence_retry_minutes: minutes,
+    }),
+  };
+}
 
 const fakeOps = {
   async fetchLogs() {
@@ -124,8 +145,19 @@ class LoopPlatform {
   private mrCount = 0;
   private server: ReturnType<typeof createServer> | undefined;
   baseUrl = "";
+  /** 首个终态为 failed 时的剧本覆盖(红灯分诊/证据分级测试用):
+   *  给出 failed run 的 log 与 checks。缺省 undefined 维持原演出
+   *  (log=BUILD FAILURE,无 checks——盲修复路径的回归锚)。 */
+  firstFailure: { log?: string; checks?: unknown } | undefined;
+  /** /pipeline/artifacts 的剧本覆盖(证据评估测试用):红灯修复链会
+   *  把它镜像进会话工作区 pipeline/。缺省演一份编译失败的 build.log。 */
+  firstFailureArtifacts: Array<{ name: string; text: string }> | undefined;
 
-  constructor(private readonly firstTerminal: "failed" | "success" = "failed") {}
+  constructor(
+    private readonly firstTerminal: "failed" | "success" = "failed",
+    /** firstTerminal 之后的终态:缺省 success(红一轮修好再绿);
+     *  "failed" = 红到底(修复轮预算耗尽类测试用)。 */
+    private readonly subsequentTerminal: "failed" | "success" = "success") {}
 
   async start(): Promise<void> {
     this.server = createServer((request, response) => {
@@ -158,6 +190,14 @@ class LoopPlatform {
           send({ status: "running" });
           return;
         }
+        if (request.method === "GET" && request.url?.startsWith("/pipeline/artifacts")) {
+          // 失败产物假件:红灯修复链会把它镜像进会话工作区 pipeline/。
+          send({ files: this.firstFailureArtifacts ?? [{
+            name: "build.log",
+            text: "BUILD FAILURE: 模块 notify-service 编译失败(全文堆栈省略)",
+          }] });
+          return;
+        }
         if (request.method === "GET" && request.url?.startsWith("/pipeline/status")) {
           const sha = new URL(request.url, "http://loop").searchParams.get("sha") ?? "";
           const calls = (this.statusCalls.get(sha) ?? 0) + 1;
@@ -168,12 +208,14 @@ class LoopPlatform {
           }
           this.terminalRound += 1;
           const status = this.terminalRound === 1
-            ? this.firstTerminal : "success";
+            ? this.firstTerminal : this.subsequentTerminal;
           send({
             runs: [{ status: "running" }, {
               status,
               ...(status === "failed"
-                ? { log: "BUILD FAILURE: 模块 notify-service 编译失败" }
+                ? (this.firstFailure ?? {
+                    log: "BUILD FAILURE: 模块 notify-service 编译失败",
+                  })
                 : { checks: [
                     { dimension: "COMPILE", status: "success" },
                     { dimension: "UT", status: "success" },
@@ -221,13 +263,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
     { text: "分析报告已提交,等待用户确认。" },
-    // 第 2 回合(用户确认报告):提交修复 → 自报修改完成 → UT 上报
-    // (只记账)→ 自报 UT 完成 → 推送 → 建 MR → complete_stage 申报
-    // MR 清单(在跑→受理等绿)。
+    // 第 2 回合(用户确认报告):提交修复 → UT 上报(只记账,仍在
+    // 修复段)→ 自报修复完成(UT 并入本阶段)→ 推送 → 建 MR →
+    // complete_stage 申报 MR 清单(在跑→受理等绿)。
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
-    { tool: { name: "complete_stage", input: { note: "连接池超时回收已实现" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
-    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "连接池超时回收已实现,UT 12/12 通过" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
@@ -248,10 +289,9 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "submit_analysis",
       input: { summary: "二轮:回收策略缺竞态保护" } } },
     { text: "第二轮分析已提交。" },
-    // 第 6 回合(二轮确认):改完 → UT 上报+自报收口 → 推 → MR → 申报。
-    { tool: { name: "complete_stage", input: { note: "竞态保护补丁" } } },
+    // 第 6 回合(二轮确认):改完 → UT 上报 → 自报修复完成 → 推 → MR → 申报。
     { tool: { name: "report_ut", input: { passed: true, summary: "15/15 通过" } } },
-    { tool: { name: "complete_stage", input: { note: "二轮 UT 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "竞态保护补丁,二轮 UT 15/15 通过" } } },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 回收竞态保护`) } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
@@ -335,9 +375,8 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       return issue.stage === "mr_green" && issue.status === "idle" ? issue : undefined;
     }, "修改+UT+推送+MR 回合收口");
     const fixing = service.get(created.id);
-    assert.equal(fixing.stage_states?.[3], "done", "问题修改完成");
-    assert.equal(fixing.stage_states?.[4], "done", "UT 通过记账");
-    assert.equal(fixing.stage_states?.[5], "in_progress", "MR 跑绿进行中");
+    assert.equal(fixing.stage_states?.[3], "done", "问题修复完成(UT 并入)");
+    assert.equal(fixing.stage_states?.[4], "in_progress", "MR 跑绿进行中");
     assert.equal(fixing.pushes?.length, 1, "修复分支已推送(按仓记账)");
     assert.equal(fixing.pushes?.[0]?.repo, origin);
     assert.equal(fixing.mrs?.length, 1, "MR 已创建(按仓记账)");
@@ -371,6 +410,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const failedRound = platform.seen.filter((entry) =>
       entry.method === "POST" && entry.url === "/pipeline/trigger").length;
     assert.ok(failedRound >= 2, "红过一轮就要有第二轮触发(同 MR 修复再推)");
+    // 红灯取证:平台失败产物已镜像进会话工作区 pipeline/,修复回合的
+    // 指令里点名了它——AI 读全文修,不是只啃 1500 字摘要。
+    assert.ok(existsSync(join(dataDir, "issues", created.id,
+      "pipeline", "build.log")), "红灯产物应镜像到会话工作区");
+    assert.match(JSON.stringify(model.requests), /失败产物全文已镜像/,
+      "修复回合指令应指引 AI 读镜像产物");
 
     // ④ 验证不通过:一律回退问题分析,轮次+1,UT/监看作废,分支 MR 延用。
     const shaBefore = service.get(created.id).pushes![0].sha;
@@ -388,7 +433,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(gate3.stage, "analyze", "验证不通过一律回问题分析");
     assert.equal(gate3.ut, undefined, "回退作废 UT 上报");
     assert.equal(gate3.stage_states?.[3], "redo", "修改阶段标待重做");
-    assert.equal(gate3.stage_states?.[5], "redo", "MR 阶段标待重做");
+    assert.equal(gate3.stage_states?.[4], "redo", "MR 阶段标待重做");
     assert.equal(gate3.pushes![0].sha, shaBefore, "分支与 MR 延用(不另开)");
 
     // ⑤ 二轮走完至验证通过:末阶段完成,待手动归档。
@@ -409,7 +454,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const passed = await until(() => {
       const issue = service.get(created.id);
       return issue.status === "idle"
-        && issue.stage_states?.[6] === "done" ? issue : undefined;
+        && issue.stage_states?.[5] === "done" ? issue : undefined;
     }, "验证通过收尾");
     assert.equal(passed.stage, "deploy_verify", "固定流程留在自己的词表里");
     assert.equal(passed.pipelines?.[origin]?.status, "success");
@@ -781,15 +826,15 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
   }
 });
 
-test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 降级不再挡建 MR", async () => {
+test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修复不挡建 MR", async () => {
   const base: IssueSessionState = {
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "T1",
     repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
     mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "done", "done", "in_progress", "pending", "pending"],
-    status: "idle", stage: "ut", stage_note: "", stage_at: new Date().toISOString(),
+    stage_states: ["done", "done", "done", "in_progress", "pending", "pending"],
+    status: "idle", stage: "fix", stage_note: "", stage_at: new Date().toISOString(),
     pushes: [{ repo: "/tmp/x.git", branch: "master_dev_T1",
       sha: "a".repeat(40), at: new Date().toISOString() }],
   };
@@ -815,9 +860,9 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 降级不�
   // 固定流程不注册 report_stage(阶段真相在宿主)。
   assert.equal(tools.some((tool) => tool.name === "report_stage"), false);
   assert.equal(tools.some((tool) => tool.name === "submit_analysis"), true);
-  // UT 阶段:建 MR 仍被阶段门禁拒;complete_stage 已是本阶段出口。
+  // fix 阶段:建 MR 仍被阶段门禁拒;report_ut 在本阶段开放,complete_stage 是出口。
   await assert.rejects(() => byName("create_mr").execute("x", {}),
-    /阶段门禁/, "ut 阶段建 MR 必须被拒");
+    /阶段门禁/, "fix 阶段建 MR 必须被拒");
   // mr_green 阶段:没有 UT 记录不再挡建 MR(UT 降级为事实上报)——
   // 门禁放行,卡在机械前置(平台未配置),而不是任何 UT/阶段闸。
   base.stage = "mr_green";
@@ -844,7 +889,7 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1001",
     repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending", "pending"],
+    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending"],
     status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
   };
   const ctx: IssueToolContext = {
@@ -872,10 +917,10 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     () => byName("fetch_logs").execute("x", { services: ["TranFmaWebsite"] }),
     (error: Error) => !/阶段门禁/.test(error.message),
     "fetch_logs 应全程开放;此处缺席的是运维工具,不是阶段许可");
-  // dts_get_ticket 在 ut 阶段重查:内容照回,阶段不倒转,转移账留痕。
-  base.stage = "ut";
+  // dts_get_ticket 在 fix 阶段重查:内容照回,阶段不倒转,转移账留痕。
+  base.stage = "fix";
   await byName("dts_get_ticket").execute("x", { ticket: "DTS-2026-1001" });
-  assert.equal(base.stage, "ut", "重查单据不得把阶段倒回 prep_repo");
+  assert.equal(base.stage, "fix", "重查单据不得把阶段倒回 prep_repo");
   assert.ok(base.transitions?.some((entry) =>
     /详情已获取/.test(entry.note)), "重查要留转移账");
 });
@@ -1850,5 +1895,1444 @@ test("登记元信息进开场上下文(service 接线):vault 解出的四件套
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
+  }
+});
+
+test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开回合", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget0-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  await platform.start();
+  const script: Scene[] = [
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 问题分析\\n\\n## 结论\\n连接池耗尽。\\n## 证据链\\n日志。\\n## 置信度\\n高。\\n## 下一步建议\\n超时回收。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { summary: "根因=连接池耗尽" } } },
+    { text: "分析报告已提交,等待用户确认。" },
+    { tool: { name: "bash", input: { command:
+      `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复'` } } },
+    { tool: { name: "report_ut", input: { passed: true, summary: "3/3" } } },
+    { tool: { name: "complete_stage", input: { note: "修复完成(UT 3/3)" } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "MR 已创建并申报,等待流水线。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: {
+      models: () => ({}),
+      // 预算 0 = 关掉自动修复:第一次红灯就留痕请人工(需求侧同语义)。
+      runtime: () => ({ poll_interval_s: 1, poll_timeout_s: 120, repair_rounds: 0 }),
+    },
+    dts: new MockDtsGateway(),
+    opsTools: fakeOps,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev",
+      title: "预算关断验收",
+      ticket: TICKET,
+      source: "dts",
+      repoUrl: origin,
+    });
+    // ① 分析确认闸放行 → 走到 MR 提交,回合收口(idle 等流水线)。
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
+        ? issue : undefined;
+    }, "分析确认闸");
+    service.answer(created.id, {
+      state_version: service.get(created.id).gate!.state_version,
+      code: "confirm",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      return issue.stage === "mr_green" && issue.status === "idle" ? issue : undefined;
+    }, "MR 提交回合收口");
+    const requestsAfterMr = model.requests.length;
+
+    // ② 流水线红结算:预算 0 → 不开修复回合,留痕请人工。
+    await until(() => {
+      const issue = service.get(created.id);
+      return issue.pipelines?.[origin]?.last_error?.includes("修复轮预算耗尽")
+        ? issue : undefined;
+    }, "红灯预算耗尽停表");
+    const exhausted = service.get(created.id);
+    assert.equal(exhausted.status, "idle", "不开回合,会话停机等人");
+    assert.match(exhausted.stage_note ?? "", /修复轮预算/);
+    assert.equal(exhausted.pipelines?.[origin]?.watching, false);
+    assert.equal(exhausted.pipelines?.[origin]?.reds, 1, "红灯计数入账");
+    assert.equal(exhausted.feedback?.at(-1)?.status, "repairing",
+      "红灯仍要留痕(反馈账本 repairing),人工处理后可闭环");
+    // 取证照做:产物镜像不因预算关断而缺席。
+    assert.ok(existsSync(join(dataDir, "issues", created.id,
+      "pipeline", "build.log")), "预算关断不影响取证镜像");
+    assert.equal(model.requests.length, requestsAfterMr,
+      "预算耗尽后不得再有平台回合");
+    // ③ 用户人工介入后发消息仍能继续(闸门不锁死会话)。
+    await service.reply(created.id, "我已在平台豁免告警,请重跑确认");
+    assert.equal(service.get(created.id).status, "running");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+// ---- 红灯分诊与证据分级(2026-09-01,票 02;票 03 起两条停机路 ----
+// ---- 升级为平台闸):先判改代码有没有用,再评证据够不够修。    ----
+
+/** 落一个「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,
+ *  监看器重挂表直奔红灯结算——分诊/分级测试不用重走全链(拉单→
+ *  分析→修→推→MR 三回合),聚焦结算判定本身。watch 覆盖项供停机
+ *  通知类测试预置 reds/过期 deadline(票 81),缺省维持原演出。 */
+function seedMrGreenWatch(
+  dataDir: string,
+  repo: string,
+  watch: Partial<IssuePipelineWatch> = {},
+): void {
+  const sha = "c".repeat(40);
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "红灯分诊夹具", description: "", source: "dts",
+    ticket: "DTS-2026-1002",
+    repo_url: repo, repo_urls: [repo],
+    mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: [
+      "done", "done", "done", "done", "done", "in_progress", "pending",
+    ],
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+    pushes: [{ repo, branch: "master_dev_DTS-2026-1002", sha, at: now }],
+    mrs: [{ repo, branch: "master_dev_DTS-2026-1002",
+      title: "[DTS-2026-1002] 红灯分诊夹具",
+      url: "http://loop.test/mr/1", at: now }],
+    pipelines: {
+      [repo]: {
+        sha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+        ...watch,
+      },
+    },
+  }));
+}
+
+/** 停机通知幂等测试用:把已停表的监看账重挂(watching=true),再构造
+ *  服务即走恢复路径重看同一提交——模拟"恢复重放再停机"的场景。 */
+function rearmMrGreenWatch(dataDir: string, repo: string): void {
+  const path = join(dataDir, "issues", "issue-1", "issue.json");
+  const state = JSON.parse(readFileSync(path, "utf-8")) as {
+    pipelines: Record<string, { watching: boolean }>;
+  };
+  state.pipelines[repo].watching = true;
+  writeFileSync(path, JSON.stringify(state));
+}
+
+test("红灯分诊:失败项全在不可修名单→举卡不派回合不耗预算,作答后重置监看重看同 SHA", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "CodeCheck 阶段失败",
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+      details: [{ tool: "SuperChecker", file: "src/A.java", line: 0,
+        message: "规则 R1 命中" }],
+    }],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 剧本只服务作答后的续跑(全绿→complete_stage 申报提醒的 platform 回合);
+  // 分诊停机路本身不许开任何平台回合。
+  const model = new ScriptedModelServer([
+    { text: "收到,重新申报 MR 清单。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    unfixableTools: ["SuperChecker"],
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  try {
+    const sha = "c".repeat(40);
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_unfixable"
+        ? issue : undefined;
+    }, "不可修闸举卡");
+    const gate = gated.gate!;
+    // 卡面:失败摘要、逐维度明细(含工具名)、产物位置、处置指引
+    // (题面+决策背景合起来看)。
+    assert.equal(gate.pipeline?.repo, origin, "闸要带归属仓");
+    assert.equal(gate.pipeline?.sha, sha, "闸要带归属提交(作答重看同一 SHA)");
+    assert.deepEqual(gate.question.questions[0].options,
+      [{ code: "resume", label: "已在平台处理/豁免,重新监看" }]);
+    assert.equal(gate.question.questions[0].recommended, undefined,
+      "人工事实卡不派推荐(宿主核验不了平台侧处理)");
+    const face = `${gate.question.questions[0].question}\n${gate.context ?? ""}`;
+    assert.match(face, /不可自动修复的工具告警\(SuperChecker\)/);
+    assert.match(face, /SuperChecker\/R1\]? ?规则 R1 命中|规则 R1 命中/,
+      "逐维度明细带缺陷条目");
+    assert.match(face, /pipeline\/ 目录/, "镜像产物位置上卡");
+    assert.match(face, /交付平台/, "处置指引点名交付平台");
+    // 停表留痕照旧:不派回合、不耗预算、反馈账本 repairing、镜像照做。
+    assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
+    assert.equal(gated.pipelines?.[origin]?.reds, undefined,
+      "未派修复回合就不消耗预算(需求侧同口径)");
+    assert.equal(gated.feedback?.at(-1)?.status, "repairing",
+      "红灯反馈账本留痕(人在平台处理后由新绿灯闭环)");
+    assert.equal(model.requests.length, 0, "不得有平台回合(改代码没用)");
+    assert.ok(existsSync(join(dataDir, "issues", "issue-1",
+      "pipeline", "build.log")), "取证镜像照做(不因停机缺席)");
+    // 小鲁班通知改走等待卡通道:说清卡在哪、要人做什么。
+    const messages = await until(() =>
+      luban.messages.length ? luban.messages : undefined, "小鲁班通知");
+    assert.match(JSON.stringify(messages), /不可自动修复的工具\(SuperChecker\)/);
+    assert.match(JSON.stringify(messages), /交付平台/);
+    // 认不得的答复打回(状态未动,闸还在)。
+    assert.throws(() =>
+      service.answer("issue-1", { state_version: gate.state_version,
+        code: "hold" }), /无法识别的验证答复/);
+    assert.equal(service.get("issue-1").gate?.kind, "pipeline_unfixable",
+      "打回后闸仍在场");
+    // 作答:重置监看账(deadline 重置、watching=true)并重新监看同一 SHA。
+    const deadlineBefore = gated.pipelines?.[origin]?.deadline ?? "";
+    service.answer("issue-1", {
+      state_version: gate.state_version,
+      code: "resume",
+      notes: "已在平台豁免规则 R1",
+    });
+    const rearmed = await until(() => {
+      const issue = service.get("issue-1");
+      const watch = issue.pipelines?.[origin];
+      return issue.gate === undefined && issue.status === "idle"
+        && watch?.watching && watch.status === "running"
+        && watch.deadline > deadlineBefore
+        ? issue : undefined;
+    }, "作答后重置监看账重新挂表");
+    assert.equal(rearmed.pipelines?.[origin]?.sha, sha, "同一 SHA 重新监看");
+    assert.equal(rearmed.pipelines?.[origin]?.last_error, undefined,
+      "上一轮红灯留痕清掉");
+    // 平台侧已处理(假件第二轮终态即 success):绿了走既有结算——
+    // 提醒 AI 重新申报 MR 清单(申报账在红灯时已打回)。
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.status === "success" ? issue : undefined;
+    }, "重新监看后跑绿");
+    assert.equal(service.get("issue-1").pipelines?.[origin]?.reds, 0,
+      "绿灯清零红灯计数");
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "全绿后的申报提醒回合");
+    assert.match(requestText, /complete_stage/, "提醒重新申报 MR 清单");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("红灯分诊回归:名单在场但工具不在名单→照常派修,证据齐时点名维度", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-miss-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+      details: [{ tool: "SuperChecker", file: "src/Order.java", line: 88,
+        message: "命名不规范[1002]" }],
+    }],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const script: Scene[] = [{ text: "收到,按证据修。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    // 名单配的是别的工具:SuperChecker 不在名单 → 拿不准宁可派修。
+    unfixableTools: ["OtherChecker"],
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return model.requests.length ? issue : undefined;
+    }, "红灯修复回合派出");
+    const requestText = JSON.stringify(model.requests);
+    assert.match(requestText, /第 1\/20 次红灯/, "照常派修,文案带红灯计数");
+    assert.match(requestText, /本次红灯维度\(CodeCheck\)/, "证据齐:点名维度");
+    assert.match(requestText, /都有可定位的具体报错/);
+    assert.doesNotMatch(requestText, /不许猜改/,
+      "没有缺口维度时不该出现猜改警告");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "实际派出修复回合才 reds+1");
+    assert.equal(settled.feedback?.at(-1)?.status, "repairing");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯证据分级:部分维度缺证据→派修但点名缺口维度不许猜改,并请人补原文", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-evidence-partial-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    // 编译有结构化明细(可修),CodeCheck 只有汇总没定位(缺口)。
+    log: "流水线运行失败",
+    checks: [
+      { dimension: "COMPILE", status: "failed",
+        details: [{ file: "src/service/Order.java", line: 88,
+          message: "cannot find symbol: orderCache" }] },
+      { dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+        details: [{ tool: "SuperChecker", message: "规则 1002:方法超长" }] },
+    ],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const script: Scene[] = [{ text: "先修有证据的维度。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return model.requests.length ? issue : undefined;
+    }, "部分缺证据的修复回合派出");
+    const requestText = JSON.stringify(model.requests);
+    assert.match(requestText, /有证据的维度\(编译\/构建\)\s*照常修复/);
+    assert.match(requestText, /缺口维度\(CodeCheck\)/, "缺口维度要点名");
+    assert.match(requestText, /不许猜改/);
+    assert.match(requestText, /CodeCheck 红灯，但没有可定位的具体报错/,
+      "缺口原因(assess 的 reasons)要随回合下发");
+    assert.match(requestText, /直接粘贴到会话/, "同时请人补报错原文");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "部分缺也派了回合,预算照记");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作答回灌证据并消耗预算", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-evidence-none-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    // 只有总体失败:checks 无明细,摘要与镜像产物都不构成逐维度证据。
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed" }],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  // 剧本只服务作答后的修复回合;证据全缺的停机路本身不许开回合。
+  const model = new ScriptedModelServer([
+    { text: "收到,按回灌的原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_evidence"
+        ? issue : undefined;
+    }, "证据回灌闸举卡");
+    const gate = gated.gate!;
+    assert.equal(gate.pipeline?.repo, origin, "闸要带归属仓");
+    assert.deepEqual(gate.question.questions[0].options,
+      [{ code: "supply", label: "已粘贴报错原文,继续修复" }]);
+    const face = `${gate.context ?? ""}`;
+    assert.match(face, /编译\/构建/, "卡面点名失败维度");
+    assert.match(face, /编译\/构建 红灯，但没有可定位的具体报错/,
+      "缺口原因(assess 兜底)上卡");
+    assert.match(face, /粘贴/, "指引人把原文贴进作答");
+    assert.equal(gated.status, "waiting_user", "举闸即等作答");
+    assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
+    assert.equal(gated.pipelines?.[origin]?.reds, undefined,
+      "举卡停机不消耗修复轮预算");
+    assert.equal(gated.pipelines?.[origin]?.evidence_retry_deadline, undefined,
+      "旋钮 0=关(票 82):不进证据重试窗,立即举卡");
+    assert.equal(gated.feedback?.at(-1)?.status, "repairing", "留痕照记");
+    assert.equal(model.requests.length, 0, "不得有平台回合(派了只会猜改)");
+    // 镜像产物在场(build.log)也不给维度背书:证据评估按维度对齐,
+    // 不拿"材料包非空"替代具体报错。
+    assert.ok(existsSync(join(dataDir, "issues", "issue-1",
+      "pipeline", "build.log")));
+    // 空答复打回:码到了但原文没贴,选项标签不能冒充证据。
+    assert.throws(() =>
+      service.answer("issue-1", { state_version: gate.state_version,
+        code: "supply" }), /报错原文/);
+    assert.equal(service.get("issue-1").gate?.kind, "pipeline_evidence",
+      "打回后闸仍在场");
+    // 作答(自由文本主通道,只给文本不带码也受理——码从文本在场归码):
+    // 原文作为人工证据注入修复回合,该轮才消耗修复轮预算(reds+1)。
+    const pasted = "BUILD FAILURE: src/service/Order.java:88 "
+      + "cannot find symbol: orderCache(人工从平台复制的原文)";
+    service.answer("issue-1", { state_version: gate.state_version,
+      decision: pasted });
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "带着回灌证据的修复回合派出");
+    assert.match(requestText, /人工从平台回灌的报错原文/,
+      "回合文案带人工证据段");
+    assert.match(requestText, /Order\.java:88/, "粘贴的原文随回合下发");
+    assert.match(requestText, /不许猜改/);
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.gate, undefined, "闸随作答清场");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "回灌后的修复回合消耗修复轮预算(reds+1)");
+    assert.equal(settled.feedback?.at(-1)?.status, "repairing");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派修点名维度,不举卡", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-ut-jest-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "UT", status: "failed", tool: "build2.0" }],
+  };
+  // 镜像产物是前端测试失败原文:内容嗅探把它背书给 UT 维,证据评估
+  // 全有→照常派修(修复回合能读到全文),不再举卡要人贴报错。
+  platform.firstFailureArtifacts = [{
+    name: "build_log_ut-1.txt",
+    text: JEST_LOG,
+  }];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按 UT 原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "UT 红灯修复回合派出");
+    assert.match(requestText, /第 1\/20 次红灯/);
+    assert.match(requestText, /本次红灯维度\(UT\/覆盖率\)/,
+      "UT 维有证据,点名维度照常修");
+    assert.match(requestText, /都有可定位的具体报错/);
+    assert.doesNotMatch(requestText, /不许猜改/,
+      "证据全有时不出现猜改警告");
+    assert.equal(service.get("issue-1").gate, undefined,
+      "可修的红灯不得举卡");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "实际派出修复回合才 reds+1");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派修,兜底备注回合可见", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-issue28-"));
+  const origin = bareOrigin(dataDir);
+  // 真实脱敏样例:构建 record 全 SUCCESS(errorInfo 拒答),红的是质量门
+  // 指标(js pass rate 99.78%<100、DT 缺陷 1),Jest 原文在 build_log 里;
+  // 平台把失败维度报成 CODECHECK,缺陷归属工具 build2.0 被归类到编译维。
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "CodeCCP2.0 质量门未达标: js pass rate 99.7778 < 100, DT 缺陷 1",
+    checks: [{ dimension: "CODECHECK", status: "failed",
+      tool: "CodeCCP2.0" }],
+  };
+  platform.firstFailureArtifacts = issue28Artifacts();
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按 Jest 原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // 旧行为:CodeCheck 维零证据→举 pipeline_evidence 卡要人贴原文。
+    // 兜底后:镜像日志内容含可定位报错,自动派修并把错配说清。
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "维度错配红灯自动派修(不再举卡)");
+    assert.match(requestText, /本次红灯维度\(CodeCheck\)/);
+    assert.match(requestText, /都有可定位的具体报错/);
+    assert.match(requestText, /跨维度兜底/,
+      "兜底备注回合可见,修复侧按日志原文定位");
+    assert.match(requestText, /build_log_/);
+    assert.equal(service.get("issue-1").gate, undefined,
+      "有可修原文的质量门红灯不得举卡");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      "兜底派出的修复回合照常计预算");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空名单恒 false 同口径)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-none-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "CodeCheck 阶段失败",
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+      details: [{ tool: "SuperChecker", file: "src/A.java", line: 0,
+        message: "规则 R1 命中" }],
+    }],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const script: Scene[] = [{ text: "收到,按证据修。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    // 不配置名单:判定函数对空名单恒 false——照常派修(部署没表态就不拦)。
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return model.requests.length ? issue : undefined;
+    }, "红灯修复回合派出");
+    assert.equal(service.get("issue-1").gate, undefined,
+      "无名单不分诊,不得举卡");
+    const requestText = JSON.stringify(model.requests);
+    assert.match(requestText, /第 1\/20 次红灯/, "照常派修,文案带红灯计数");
+    assert.match(requestText, /本次红灯维度\(CodeCheck\)/);
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    assert.equal(settled.pipelines?.[origin]?.reds, 1);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+// ---- 停机通知 + 盲输入闸(票 81):放弃点主动喊人(需求侧 ----
+// ---- notifyRepairStopped 同语义),盲输入并入证据回灌举卡路。 ----
+
+test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/轮次/建议动作);同因恢复重放不重发", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget-notify-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed", "failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed",
+      details: [{ file: "src/service/Order.java", line: 88,
+        message: "cannot find symbol: orderCache" }] }],
+  };
+  await platform.start();
+  // 预算 1、reds 已 1:第一次红灯结算就到顶——停机喊人,不派回合。
+  seedMrGreenWatch(dataDir, origin, { reds: 1 });
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 幂等键在通知器实例内记账:两次构造服务共用同一实例(与 serve
+  // 同形——通知器是进程级单例),恢复重放才验的是真幂等。
+  const notifier = new Notifier({ endpoint: luban.endpoint, fake: true });
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const buildService = () => new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: {
+      models: () => ({}),
+      runtime: () => ({ poll_interval_s: 1, poll_timeout_s: 120, repair_rounds: 1 }),
+    },
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier,
+    linkBase: "http://work.test",
+  });
+  const service = buildService();
+  try {
+    const stopped = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.pipelines?.[origin]?.last_error?.includes("修复轮预算耗尽")
+        ? issue : undefined;
+    }, "红灯预算耗尽停机");
+    assert.equal(stopped.pipelines?.[origin]?.watching, false, "监看停表");
+    assert.equal(stopped.pipelines?.[origin]?.reds, 2, "停机前记了一轮");
+    assert.equal(model.requests.length, 0, "预算耗尽不开平台回合");
+    // 通知到达:问题标题/单号、放弃原因、轮次(x/max)、建议动作。
+    const messages = await until(() =>
+      luban.messages.length ? luban.messages : undefined, "停机通知到达");
+    assert.equal(messages.length, 1, "同因只发一条");
+    const text = JSON.stringify(messages);
+    assert.match(text, /红灯分诊夹具/, "问题标题入文案");
+    assert.match(text, /DTS-2026-1002/, "单号入文案");
+    assert.match(text, /连续 2 次红灯/, "轮次(x)入文案");
+    assert.match(text, /1 轮\)已耗尽,自动修复已放弃/, "轮次(max)与放弃原因入文案");
+    assert.match(text, /请人工查看 MR\/流水线/, "建议动作入文案");
+    assert.match(text, /发消息继续/, "建议动作含续跑指引");
+    // 幂等键落在 outcome 通道既有机制:会话:原因:仓:提交。
+    const key = `issue-1:outcome:pipeline_repair_exhausted:${origin}:`
+      + "c".repeat(40);
+    assert.ok(notifier.list().some((record) => record.waiting_id === key),
+      "幂等键=会话 id+原因+提交(outcome 通道 waiting_id)");
+    // 同因再停机不重发:恢复重放(监看账重挂同一提交)再次停机,
+    // outcome 通道凭同键幂等,用户只收一条。
+    await service.shutdown().catch(() => undefined);
+    rearmMrGreenWatch(dataDir, origin);
+    const revived = buildService();
+    try {
+      await until(() => {
+        const issue = revived.get("issue-1");
+        return issue.pipelines?.[origin]?.watching === false ? issue : undefined;
+      }, "恢复重放后再次停机");
+      // 第二次停机的通知调用在停表同一同步段内完成,留一拍再对账。
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(luban.messages.length, 1, "同因恢复重放不重发");
+    } finally {
+      await revived.shutdown().catch(() => undefined);
+    }
+  } finally {
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落停表路);同因恢复重放不重发", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-watch-notify-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  await platform.start();
+  // deadline 已过期:恢复重挂表后循环条件立刻为假,直奔停表路。
+  seedMrGreenWatch(dataDir, origin, {
+    deadline: new Date(Date.now() - 60_000).toISOString(),
+  });
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const notifier = new Notifier({ endpoint: luban.endpoint, fake: true });
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const buildService = () => new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier,
+    linkBase: "http://work.test",
+  });
+  const service = buildService();
+  try {
+    const stopped = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.pipelines?.[origin]?.last_error === "轮询预算耗尽,请人工查看流水线"
+        ? issue : undefined;
+    }, "轮询预算耗尽停表");
+    assert.equal(stopped.pipelines?.[origin]?.watching, false, "监看停表");
+    assert.match(stopped.stage_note ?? "", /轮询预算耗尽/);
+    assert.equal(model.requests.length, 0, "停表不开平台回合");
+    // 通知到达:标题/单号、放弃原因、轮次、建议动作。
+    const messages = await until(() =>
+      luban.messages.length ? luban.messages : undefined, "停机通知到达");
+    assert.equal(messages.length, 1, "同因只发一条");
+    const text = JSON.stringify(messages);
+    assert.match(text, /红灯分诊夹具/, "问题标题入文案");
+    assert.match(text, /DTS-2026-1002/, "单号入文案");
+    assert.match(text, /轮询预算耗尽/, "放弃原因入文案");
+    assert.match(text, /第 1 轮验证/, "监看轮次入文案");
+    assert.match(text, /请人工查看 MR\/流水线/, "建议动作入文案");
+    assert.match(text, /发消息继续/, "建议动作含续跑指引");
+    const key = `issue-1:outcome:pipeline_watch_timeout:${origin}:`
+      + "c".repeat(40);
+    assert.ok(notifier.list().some((record) => record.waiting_id === key),
+      "幂等键=会话 id+原因+提交(outcome 通道 waiting_id)");
+    // 同因再停机不重发:恢复重放(deadline 依旧过期)再次停表,同键幂等。
+    await service.shutdown().catch(() => undefined);
+    rearmMrGreenWatch(dataDir, origin);
+    const revived = buildService();
+    try {
+      await until(() => {
+        const issue = revived.get("issue-1");
+        return issue.pipelines?.[origin]?.watching === false ? issue : undefined;
+      }, "恢复重放后再次停表");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(luban.messages.length, 1, "同因恢复重放不重发");
+    } finally {
+      await revived.shutdown().catch(() => undefined);
+    }
+  } finally {
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("盲输入闸:checks 缺席+链接式摘要+零产物→举 pipeline_evidence 卡,不派回合不耗预算", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-blind-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  // 内网实锤形态:摘要=标签+链接(会话没登录态打不开),checks 缺席,
+  // 产物零镜像——三条件同时成立才拦(票 81 红线:触发面收窄)。
+  platform.firstFailure = {
+    log: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
+      + "https://loop.test/pipeline/1",
+  };
+  platform.firstFailureArtifacts = [];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 空剧本当金丝雀:盲输入停机路不许开任何平台回合。
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "pipeline_evidence" ? issue : undefined;
+    }, "盲输入闸举卡");
+    const gate = gated.gate!;
+    assert.equal(gate.pipeline?.repo, origin, "闸要带归属仓");
+    assert.equal(gate.pipeline?.sha, "c".repeat(40), "闸要带归属提交");
+    assert.deepEqual(gate.question.questions[0].options,
+      [{ code: "supply", label: "已粘贴报错原文,继续修复" }],
+      "与证据全缺同一条回灌卡路");
+    const face = `${gate.question.questions[0].question}\n${gate.context ?? ""}`;
+    assert.match(face, /摘要只有链接且无产物/, "卡面点明盲因");
+    assert.match(face, /粘贴/, "指引人把报错原文贴进作答");
+    assert.match(face, /平台未返回本次失败产物/, "零产物如实说明");
+    assert.doesNotMatch(face, /缺口维度/, "无 checks 就没有维度可点名");
+    assert.equal(gated.status, "waiting_user", "举闸即等作答");
+    assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
+    assert.equal(gated.pipelines?.[origin]?.reds, undefined,
+      "举卡停机不消耗修复轮预算");
+    assert.equal(gated.pipelines?.[origin]?.evidence_retry_deadline, undefined,
+      "旋钮 0=关(票 82):不进证据重试窗,立即举卡");
+    assert.equal(gated.feedback?.at(-1)?.status, "repairing", "留痕照记");
+    assert.equal(model.requests.length, 0, "不得有平台回合(派了只会猜改)");
+    assert.equal(existsSync(join(dataDir, "issues", "issue-1",
+      "pipeline", "build.log")), false, "零产物前提成立");
+    // 小鲁班等待卡通知也点明盲因,人不用开网页就知道要贴原文。
+    const messages = await until(() =>
+      luban.messages.length ? luban.messages : undefined, "等待卡通知");
+    assert.match(JSON.stringify(messages), /摘要只有链接且无产物/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+/** 盲输入闸的"能修"对照组(票 81 红线):三种情形必须照常派修零影响。
+ *  各起一个独立现场,断言回合派出、无闸、reds 记一轮。 */
+async function assertRepairDispatched(input: {
+  what: string;
+  firstFailure: { log?: string; checks?: unknown };
+  /** undefined=默认演 build.log 产物在场;[]=平台零产物。 */
+  artifacts?: Array<{ name: string; text: string }>;
+  expect?: RegExp[];
+}): Promise<void> {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-dispatch-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = input.firstFailure;
+  if (input.artifacts) platform.firstFailureArtifacts = input.artifacts;
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按证据修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    `${input.what}:红灯修复回合派出`);
+    for (const pattern of input.expect ?? []) {
+      assert.match(requestText, pattern);
+    }
+    assert.equal(service.get("issue-1").gate, undefined,
+      `${input.what}:不得举卡`);
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, `${input.what}:修复回合收口`);
+    assert.equal(settled.pipelines?.[origin]?.reds, 1,
+      `${input.what}:派出即记一轮预算`);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+}
+
+test("盲输入闸不误伤:摘要有真实内容/产物在场/checks 明细三种情形照常派修", async () => {
+  // ① checks 缺席但摘要有真实内容(零产物):既有默认路径,显式钉死。
+  await assertRepairDispatched({
+    what: "checks 缺席但摘要有真实内容",
+    firstFailure: { log: "BUILD FAILURE: 模块 notify-service 编译失败" },
+    artifacts: [],
+    expect: [/第 1\/20 次红灯/],
+  });
+  // ② 产物在场(哪怕摘要只是链接):镜像产物比链接可信,放行派修。
+  await assertRepairDispatched({
+    what: "产物在场(摘要只是链接)",
+    firstFailure: { log: "流水线失败详情: https://loop.test/pipeline/1" },
+    expect: [/第 1\/20 次红灯/, /失败产物全文已镜像/],
+  });
+  // ③ checks 有结构化明细:失败维度在场,盲输入闸根本不进判定。
+  await assertRepairDispatched({
+    what: "checks 有结构化明细",
+    firstFailure: {
+      log: "流水线运行失败",
+      checks: [{ dimension: "COMPILE", status: "failed",
+        details: [{ file: "src/service/Order.java", line: 88,
+          message: "cannot find symbol: orderCache" }] }],
+    },
+    expect: [/第 1\/20 次红灯/, /本次红灯维度\(编译\/构建\)/],
+  });
+});
+
+// ---- 证据重试窗 + 同提交刹车(票 82):防假卡、防原地打转。 ----
+// ---- 重试窗三不:不耗 reds、不重复通知、不白等(落盘续算)。 ----
+
+test("证据重试窗:产物晚到自愈——先零产物进窗不举卡,窗口内补出自动派修", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-heal-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "UT", status: "failed", tool: "build2.0" }],
+  };
+  // 晚到剧本:红灯结算时平台还没有产物(零镜像),进重试窗;
+  // 窗口内产物补出(UT 失败原文),下一拍重评应读到并自动派修。
+  platform.firstFailureArtifacts = [];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const model = new ScriptedModelServer([
+    { text: "收到,按 UT 原文修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  // 窗口 0.1 分钟=6 秒,节拍 1.2 秒一评:测试不等真实的 15 分钟。
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: retryWindow(0.1),
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // 进窗:不举卡、不开回合、不耗预算;截止时间落盘。
+    const windowed = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      const watch = issue.pipelines?.[origin];
+      return watch?.evidence_retry_deadline && !watch.watching
+        ? issue : undefined;
+    }, "证据重试窗落盘");
+    assert.equal(windowed.gate, undefined, "窗内不举卡(防假卡)");
+    assert.equal(model.requests.length, 0, "窗内不开修复回合");
+    assert.equal(windowed.pipelines?.[origin]?.reds, undefined,
+      "重试不消耗修复轮预算");
+    assert.equal(windowed.pipelines?.[origin]?.evidence_retry_attempts, 0);
+    assert.ok(windowed.pipelines?.[origin]?.evidence_failure_log,
+      "失败摘要落盘(重启续算的重评输入)");
+    // 产物补出:下一拍重评拉到证据 → 走正常派修路径(既有分级文案)。
+    platform.firstFailureArtifacts = [{
+      name: "build_log_ut-1.txt",
+      text: JEST_LOG,
+    }];
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "产物补出后自动派修");
+    assert.match(requestText, /本次红灯维度\(UT\/覆盖率\)/,
+      "证据出现走既有分级文案");
+    assert.match(requestText, /失败产物全文已镜像/);
+    assert.equal(service.get("issue-1").gate, undefined,
+      "自愈路全程不举卡");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    const watch = settled.pipelines?.[origin];
+    assert.equal(watch?.reds, 1, "派了回合才 reds+1");
+    assert.equal(watch?.evidence_retry_deadline, undefined,
+      "证据出现即清重试窗字段");
+    assert.equal(watch?.last_repair_sha, "c".repeat(40),
+      "派修写入刹车账(上次派修提交)");
+    assert.match(watch?.last_failure_summary ?? "", /UT\/覆盖率/,
+      "派修写入本轮红灯摘要");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+/** "到点仍缺举卡"的双场景对照组(普通全缺 vs 盲输入):卡面必须区分
+ *  两种情形,通知只发一次,全程零回合、零预算消耗。 */
+async function assertCardAfterWindow(input: {
+  what: string;
+  firstFailure: { log?: string; checks?: unknown };
+  artifacts?: Array<{ name: string; text: string }>;
+  facePatterns: RegExp[];
+  faceAntiPatterns?: RegExp[];
+}): Promise<void> {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-card-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = input.firstFailure;
+  if (input.artifacts) platform.firstFailureArtifacts = input.artifacts;
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 空剧本当金丝雀:重试窗停机路不许开任何平台回合。
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  // 窗口 0.05 分钟=3 秒,节拍 600ms 一评。
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: retryWindow(0.05),
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  try {
+    const windowed = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.pipelines?.[origin]?.evidence_retry_deadline
+        ? issue : undefined;
+    }, `${input.what}:先进重试窗(不立即举卡)`);
+    assert.equal(windowed.gate, undefined, `${input.what}:窗内不举卡`);
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "pipeline_evidence" ? issue : undefined;
+    }, `${input.what}:到点举卡`);
+    assert.ok((windowed.pipelines?.[origin]?.evidence_retry_attempts ?? 0) >= 0);
+    const watch = gated.pipelines?.[origin];
+    assert.equal(watch?.watching, false, "监看停表");
+    assert.equal(watch?.reds, undefined, "到点举卡仍不耗预算");
+    assert.equal(watch?.evidence_retry_deadline, undefined,
+      "举卡即清重试窗字段");
+    assert.match(watch?.last_error ?? "", /重评 .* 次/,
+      "留痕带上已试次数");
+    const face = `${gated.gate!.question.questions[0].question}`
+      + `\n${gated.gate!.context ?? ""}`;
+    for (const pattern of input.facePatterns) assert.match(face, pattern);
+    for (const pattern of input.faceAntiPatterns ?? []) {
+      assert.doesNotMatch(face, pattern);
+    }
+    assert.equal(model.requests.length, 0, "全程零平台回合");
+    // 通知只此一次:举卡走等待卡通道,等一拍确认不重发。
+    await until(() => luban.messages.length ? luban.messages : undefined,
+      `${input.what}:等待卡通知`);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    assert.equal(luban.messages.length, 1,
+      `${input.what}:整个重试窗生命周期只通知一次`);
+    assert.match(JSON.stringify(luban.messages), /粘贴/,
+      "通知指引人贴报错原文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+}
+
+test("证据重试窗:到点仍缺举卡——通知一次,卡面区分普通全缺与盲输入", async () => {
+  // 场景一(普通全缺):checks 有失败维度但零明细,卡面点名缺口维度。
+  await assertCardAfterWindow({
+    what: "普通全缺",
+    firstFailure: {
+      log: "流水线运行失败",
+      checks: [{ dimension: "COMPILE", status: "failed" }],
+    },
+    facePatterns: [/缺口维度与原因/, /编译\/构建/, /粘贴/],
+    faceAntiPatterns: [/盲输入原因/],
+  });
+  // 场景二(盲输入):checks 缺席+链接式摘要+零产物,卡面点明盲因。
+  await assertCardAfterWindow({
+    what: "盲输入",
+    firstFailure: {
+      log: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
+        + "https://loop.test/pipeline/1",
+    },
+    artifacts: [],
+    facePatterns: [/盲输入原因/, /摘要只有链接且无产物/, /粘贴/],
+    faceAntiPatterns: [/缺口维度/],
+  });
+});
+
+test("证据重试窗:会话取消后循环收手——到点不举卡、不通知,字段清账", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-cancel-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed" }],
+  };
+  platform.firstFailureArtifacts = [];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: retryWindow(0.05),
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.evidence_retry_deadline
+        ? issue : undefined;
+    }, "进窗");
+    // 窗中途取消会话:终态。下一拍重评必须收手(清字段、不举卡)。
+    await service.control("issue-1", { action: "cancel" });
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.evidence_retry_deadline === undefined
+        ? issue : undefined;
+    }, "取消后重试循环收手清账");
+    assert.equal(settled.status, "canceled");
+    // 熬过原截止时间:不得再举卡,也不得有任何通知。
+    const deadline = new Date(Date.now() + 4_000).getTime();
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    assert.equal(service.get("issue-1").gate, undefined,
+      "取消后到点不举卡");
+    assert.equal(luban.messages.length, 0, "取消后无任何通知");
+    assert.equal(model.requests.length, 0, "取消后无平台回合");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍缺才举卡", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-restart-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed" }],
+  };
+  platform.firstFailureArtifacts = [];
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const statePath = join(dataDir, "issues", "issue-1", "issue.json");
+  const buildService = () => new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: retryWindow(0.1),
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  const service = buildService();
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.evidence_retry_deadline
+        ? issue : undefined;
+    }, "第一世进窗");
+    const onDisk = JSON.parse(readFileSync(statePath, "utf-8")) as {
+      pipelines: Record<string, { evidence_retry_deadline?: string }>;
+    };
+    const deadlineBefore = onDisk.pipelines[origin].evidence_retry_deadline!;
+    // 窗口中途"重启":关停第一世,1.5 秒(不足 6 秒窗)后重建服务。
+    await service.shutdown().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const revived = buildService();
+    try {
+      const onDiskAfter = JSON.parse(readFileSync(statePath, "utf-8")) as {
+        pipelines: Record<string, { evidence_retry_deadline?: string }>;
+      };
+      assert.equal(onDiskAfter.pipelines[origin].evidence_retry_deadline,
+        deadlineBefore, "重启不重置截止时间(不白等也不白送)");
+      // 到点(原 deadline)行为正确:举卡一次,通知一条,零回合。
+      const gated = await until(() => {
+        const issue = revived.get("issue-1");
+        return issue.status === "waiting_user"
+          && issue.gate?.kind === "pipeline_evidence" ? issue : undefined;
+      }, "续算到点举卡");
+      assert.equal(gated.pipelines?.[origin]?.reds, undefined,
+        "续算全程不耗预算");
+      assert.equal(model.requests.length, 0, "续算不开平台回合");
+      await until(() => luban.messages.length ? luban.messages : undefined,
+        "续算到点通知");
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      assert.equal(luban.messages.length, 1, "跨重启仍只通知一次");
+    } finally {
+      await revived.shutdown().catch(() => undefined);
+    }
+  } finally {
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("重试窗守卫:已举卡的会话重启后不续算重试窗", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-guard-"));
+  const origin = bareOrigin(dataDir);
+  // 盘上直接种"窗到点已举卡"的现场:重试窗字段已清是对的吗——不是,
+  // 这里钉的是另一条守卫:闸在场时恢复路径不得把窗重新挂上再举一次。
+  seedMrGreenWatch(dataDir, origin, { watching: false });
+  const statePath = join(dataDir, "issues", "issue-1", "issue.json");
+  const seed = JSON.parse(readFileSync(statePath, "utf-8")) as {
+    pipelines: Record<string, Record<string, unknown>>;
+    gate?: Record<string, unknown>;
+  };
+  seed.pipelines[origin].evidence_retry_deadline =
+    new Date(Date.now() - 60_000).toISOString();
+  seed.pipelines[origin].evidence_retry_attempts = 2;
+  seed.gate = {
+    id: "gate-seeded", kind: "pipeline_evidence", state_version: 0,
+    question: { questions: [{ question: "请贴报错原文",
+      options: [{ code: "supply", label: "已粘贴报错原文,继续修复" }] }] },
+    pipeline: { repo: origin, sha: "c".repeat(40) },
+    created_at: new Date().toISOString(),
+  };
+  writeFileSync(statePath, JSON.stringify(seed));
+  // 无 platformUrl:恢复路径的续算分支与定时器照走(守卫与平台无关)。
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: { scripted: {} },
+    settings: retryWindow(0.05),
+    dts: new MockDtsGateway(),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // 熬过期窗的定时器节拍:守卫必须让一切保持原样。
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const after = JSON.parse(readFileSync(statePath, "utf-8")) as {
+      pipelines: Record<string, Record<string, unknown>>;
+      gate?: Record<string, unknown>;
+    };
+    assert.equal(after.gate?.kind, "pipeline_evidence", "已举的卡不动");
+    assert.equal(after.pipelines[origin].evidence_retry_deadline,
+      seed.pipelines[origin].evidence_retry_deadline,
+      "闸在场:恢复路径不续算重试窗(字段原样)");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通知,reds 不变", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-brake-"));
+  const origin = bareOrigin(dataDir);
+  // 红到底:第一轮派修后,同一提交再红(重推无新提交)触发刹车。
+  const platform = new LoopPlatform("failed", "failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed",
+      details: [{ file: "src/service/Order.java", line: 88,
+        message: "cannot find symbol: orderCache" }] }],
+  };
+  await platform.start();
+  // 工作区:真实克隆+交付分支(push_branch 要求克隆在场)。种子夹具的
+  // sha 是假串,而 push_branch 会把台账更新为工作区真实 HEAD——把种子
+  // 的提交统一改成真实 HEAD,"同 SHA 重推"才真的同 SHA。
+  const clone = join(dataDir, "issues", "issue-1", "repo", "origin");
+  execFileSync("git", ["clone", "-q", origin, clone], { env: GIT_ENV });
+  execFileSync("git", ["-C", clone, "checkout", "-q", "-b", BRANCH],
+    { env: GIT_ENV });
+  execFileSync("git", ["-C", clone, "commit", "-q", "--allow-empty",
+    "-m", "red commit"], { env: GIT_ENV });
+  const head = execFileSync("git", ["-C", clone, "rev-parse", "HEAD"])
+    .toString().trim();
+  seedMrGreenWatch(dataDir, origin, { sha: head });
+  const statePath = join(dataDir, "issues", "issue-1", "issue.json");
+  const seeded = JSON.parse(readFileSync(statePath, "utf-8")) as {
+    pushes: Array<{ sha: string }>;
+    pipelines: Record<string, { sha: string }>;
+  };
+  seeded.pushes[0].sha = head;
+  seeded.pipelines[origin].sha = head;
+  writeFileSync(statePath, JSON.stringify(seeded));
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const notifier = new Notifier({ endpoint: luban.endpoint, fake: true });
+  // 第一轮派修的剧本:重推同一提交+重建 MR(没有新 commit),收口
+  // 发言=诊断。
+  const model = new ScriptedModelServer([
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { text: "对比了报错,这个编译告警改不动,需要平台侧处理。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+    notifier,
+    linkBase: "http://work.test",
+  });
+  try {
+    // 第一轮:照常派修并落刹车账。
+    await until(() => model.requests.length ? model.requests : undefined,
+      "第一轮派修");
+    const dispatched = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.last_repair_sha === head
+        ? issue : undefined;
+    }, "派修写入刹车账");
+    assert.equal(dispatched.pipelines?.[origin]?.reds, 1);
+    // 同 SHA 再红:刹车停机——不再派第二轮,reds 不变,诊断进留痕。
+    const braked = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.pipelines?.[origin]?.last_error?.includes("同一提交")
+        ? issue : undefined;
+    }, "同提交刹车停机");
+    assert.equal(braked.pipelines?.[origin]?.reds, 1,
+      "刹车不消耗修复轮预算(reds 不变)");
+    assert.match(braked.stage_note ?? "", /AI 最后诊断/, "诊断写进留痕");
+    assert.match(braked.stage_note ?? "", /改不动/, "诊断是会话原话");
+    await until(() => luban.messages.length ? luban.messages : undefined,
+      "刹车停机通知");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    // 线性剧本按场景计请求(3 场景=3 请求):判"没有第二轮派修"要看
+    // 请求里有没有第二轮红灯的平台通知词。
+    assert.doesNotMatch(JSON.stringify(model.requests), /第 2\/20 次红灯/,
+      "刹车后不再派修复回合");
+    assert.equal(luban.messages.length, 1, "同因只发一条");
+    const text = JSON.stringify(luban.messages);
+    assert.match(text, /红灯分诊夹具/, "问题标题入文案");
+    assert.match(text, /DTS-2026-1002/, "单号入文案");
+    assert.match(text, /同一提交/, "刹车原因入文案");
+    assert.match(text, /改不动/, "AI 诊断入通知");
+    assert.match(text, /请人工查看/, "建议动作入文案");
+    const key = `issue-1:outcome:pipeline_repair_brake:${origin}:${head}`;
+    assert.ok(notifier.list().some((record) => record.waiting_id === key),
+      "幂等键=会话+刹车原因+仓+提交");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮报错段与换思路纪律", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-brake-miss-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "流水线运行失败",
+    checks: [{ dimension: "COMPILE", status: "failed",
+      details: [{ file: "src/service/Order.java", line: 88,
+        message: "cannot find symbol: orderCache" }] }],
+  };
+  await platform.start();
+  // 上次派修的是另一个提交("d" 串):本次红灯=新提交,不刹车照常派;
+  // 盘上预置上轮报错摘要,断言它拼进回合提示词。
+  seedMrGreenWatch(dataDir, origin, {
+    reds: 1,
+    last_repair_sha: "d".repeat(40),
+    last_failure_summary: "失败维度: 编译/构建;"
+      + "BUILD FAILURE: 模块 notify-service 编译失败(上一轮原文)",
+  });
+  const model = new ScriptedModelServer([
+    { text: "收到,先对比上轮报错再修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const requestText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "换新提交照常派修");
+    assert.match(requestText, /第 2\/20 次红灯/, "reds 跨 SHA 累计,照常派");
+    assert.match(requestText, /本次红灯维度\(编译\/构建\)/);
+    assert.match(requestText,
+      new RegExp(`上一轮\\(提交 ${"d".repeat(12)}\\)红灯的报错摘要`),
+      "上轮报错段随回合下发");
+    assert.match(requestText, /先对比是否同一处/);
+    assert.match(requestText, /notify-service 编译失败/, "上轮摘要在场");
+    assert.match(requestText, /同一处必须换思路/, "换思路纪律入文案");
+    assert.match(requestText, /直说修不了/, "修不了出口入文案");
+    assert.match(requestText, /不许重复同样的修改/, "反重复纪律入文案");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    const watch = settled.pipelines?.[origin];
+    assert.equal(watch?.reds, 2, "新提交红灯照常 reds+1");
+    assert.equal(watch?.last_repair_sha, "c".repeat(40),
+      "刹车账更新为本轮提交");
+    assert.match(watch?.last_failure_summary ?? "", /编译\/构建/,
+      "本轮红灯摘要落账");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
   }
 });

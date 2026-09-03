@@ -31,6 +31,7 @@ import {
   TaskService,
 } from "./taskService.ts";
 import { humanBytes } from "./workspaceReclaim.ts";
+import { reclaimIssueWorkspaces } from "./issueFlowWorkspaceReclaim.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
+import { IssueFlowLubanApproval } from "./issueFlow/lubanApproval.ts";
 import {
   McpGateway,
   McpDtsGateway,
@@ -544,6 +546,21 @@ async function main(): Promise<void> {
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
   const isolateUser = flag("--isolate-user");
+  // 容器里只有 npm_config_cache 没有源地址,内网 npm 会打公网直到超时
+  // (2026-09-03 issue #75)。显式配置优先;没配时按部署形态判定:挂载了
+  // Maven settings.xml 就是内网镜像形态,回落内置缺省源——与 DTS 网关
+  // 同款"值是死的就硬编码,但生效有门"(2026-09-03 部署反馈:零配置
+  // 部署要直接可用,不能指望多配一行)。URL 待 #77 与 issue-28 现场
+  // 对拍确认;演示/外网形态没有 settings.xml 挂载,npm 维持公网现状。
+  const NPM_REGISTRY_INTRANET_DEFAULT = "https://cmc.centralrepo.rnd.huawei.com/npm/";
+  const isolateVolumes = flags("--isolate-volume");
+  const isolateNpmRegistryExplicit = flag("--isolate-npm-registry");
+  const isolateNpmRegistry = isolateNpmRegistryExplicit
+    ?? (isolateVolumes.some((volume) =>
+          volume.split(":")[1]?.replace(/\/+$/, "")
+            === "/etc/mae-flow/maven/settings.xml")
+      ? NPM_REGISTRY_INTRANET_DEFAULT
+      : undefined);
   const isolateCacheRoot = resolve(
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
@@ -639,6 +656,17 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+    // registry 配错只会在容器内 npm 报错时才暴露,启动期摆到明面好排障;
+    // 来源(显式配置/内网形态缺省)也摆出来,运维一眼看出该不该改配置。
+    if (isolateNpmRegistry) {
+      console.log(`[serve] 容器 npm 源: ${isolateNpmRegistry}${
+        isolateNpmRegistryExplicit ? ""
+          : "(内网形态缺省——挂载了 Maven settings.xml 自动注入,"
+            + "--isolate-npm-registry 可覆盖)"}`);
+    } else {
+      console.log("[serve] 容器 npm 源: 未注入,npm 将打公网"
+        + "(内网部署请挂载 Maven settings.xml 或配置 --isolate-npm-registry)");
+    }
     console.log(`[serve] 构建缓存策略:连续 ${buildCacheRetentionDays} 天未使用回收，`
       + `总量上限 ${buildCacheMaxGb > 0 ? `${buildCacheMaxGb}GB` : "不限"}`);
   }
@@ -822,6 +850,10 @@ async function main(): Promise<void> {
     dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
     ...(platformUrl ? { platformUrl } : {}),
+    // 不可修工具名单(--unfixable-tools,需求交付同一面旗同一语义):
+    // 问题流红灯分诊用——失败项全部落在名单内时不派修复回合,停表
+    // 请人在交付平台处理/豁免。缺席=不分诊,行为照旧。
+    ...(unfixableTools.length ? { unfixableTools } : {}),
     // 视觉旁路与需求侧共用同一对旗标(--vision-provider/--vision-model):
     // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
     ...(visionProvider && visionModel
@@ -840,6 +872,9 @@ async function main(): Promise<void> {
             ...(containerUser.user ? { user: containerUser.user } : {}),
             pidsLimit: isolatePids,
             network: isolateNetwork,
+            ...(isolateNpmRegistry
+              ? { environment: { npm_config_registry: isolateNpmRegistry } }
+              : {}),
           },
         }
       : {}),
@@ -916,6 +951,9 @@ async function main(): Promise<void> {
           user: containerUser.user,
           pidsLimit: isolatePids,
           network: isolateNetwork,
+          ...(isolateNpmRegistry
+            ? { environment: { npm_config_registry: isolateNpmRegistry } }
+            : {}),
         }
       : undefined,
     ...(notifier ? { notifier } : {}),
@@ -963,7 +1001,13 @@ async function main(): Promise<void> {
       + `(重新入队 ${recovered.requeued} 个)`);
   }
   const lubanApproval = lubanPluginToken
-    ? new LubanApprovalGateway(service, {
+    ? new LubanApprovalGateway([
+        // 需求任务与问题会话的等待卡同一部手机都能答:问题会话经
+        // 适配层投影(list 现查、decide 转 answer),审批真相各自
+        // 只在自家一处,网关不认识两个域的差别。
+        service,
+        new IssueFlowLubanApproval(issueFlow),
+      ], {
         token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
         ...(notifier ? {
@@ -979,15 +1023,38 @@ async function main(): Promise<void> {
   const sweepStorage = async () => {
     if (storageSweepActive) return;
     storageSweepActive = true;
+    // 保留期一次读定:两流同一旋钮,一次清扫内不许读出不同的值。
+    const retentionDays = service.workspaceRetentionDays();
     try {
       const swept = service.reclaimIdleWorkspaces();
       if (swept.reclaimed) {
         console.log(`[serve] 现场回收 ${swept.reclaimed} 个任务,`
           + `释放 ${humanBytes(swept.freed)}(保留期 `
-          + `${service.workspaceRetentionDays()} 天;台账与证据保留)`);
+          + `${retentionDays} 天;台账与证据保留)`);
       }
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
+    }
+    // 问题流工作区回收(#84):与需求流同一个保留期旋钮(管理页设置,
+    // 两流一个口径,0=永不)、同一个每日节奏,不新起定时器。容器探活
+    // 是保险丝(终态会话容器应已停);纯旁路 fail-open。
+    try {
+      const sweptIssues = reclaimIssueWorkspaces({
+        dataDir,
+        retentionDays,
+        containerRunning: (id) => issueFlow.hasRunningContainer(id),
+        log: issueLog,
+      });
+      if (sweptIssues.reclaimed) {
+        console.log(`[serve] 问题现场回收 ${sweptIssues.reclaimed} 个会话,`
+          + `释放 ${humanBytes(sweptIssues.freed)}(保留期 `
+          + `${retentionDays} 天;台账与材料元数据保留)`
+          + (sweptIssues.skipped_container
+            ? `,容器在跑跳过 ${sweptIssues.skipped_container} 个`
+            : ""));
+      }
+    } catch (error) {
+      console.log(`[serve] 问题现场回收失败(不影响服务): ${String(error)}`);
     }
     try {
       if (service.buildCacheRetentionDays() > 0 || service.buildCacheMaxGb() > 0) {

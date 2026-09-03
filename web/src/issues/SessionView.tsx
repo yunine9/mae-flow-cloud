@@ -128,7 +128,9 @@ export function IssueSessionView({
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
   // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
   // gate_kind/scope 随卡带给决策卡:env_needed 换专用环境表单,
-  // skill_select 换多选圈选卡(ADR-0011)。
+  // skill_select 换多选圈选卡(ADR-0011),pipeline_unfixable/
+  // pipeline_evidence 换流水线红灯人工卡(票 03),gate_pipeline 带
+  // 闸归属的仓与提交。
   const gateCard = detail.status === "waiting_user" && detail.gate
     ? {
         waiting_id: detail.gate.id,
@@ -139,6 +141,7 @@ export function IssueSessionView({
         gate_kind: detail.gate.kind,
         gate_scope: detail.gate.scope,
         gate_skills: detail.gate.skills,
+        gate_pipeline: detail.gate.pipeline,
       }
     : undefined;
   const waiting = gateCard
@@ -326,7 +329,7 @@ export function IssueSessionView({
         右栏靠 order 提到内容之上,见 style.css 的 1100px 断点。 */}
     <div className="issue-two-pane">
       <section className="issue-main-pane" aria-label="会话内容">
-        <IssuePaneTabs tab={tab} onPick={setTab} />
+        <IssuePaneTabs tab={tab} onPick={setTab} hasAnalysis={detail.has_analysis} />
         {tab === "materials"
           ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
               onView={setMaterialsView} onNotifyAI={notifyAI}
@@ -548,9 +551,13 @@ function IssueJourneyTrail({ trail }: {
 function IssuePaneTabs({
   tab,
   onPick,
+  hasAnalysis,
 }: {
   tab: "materials" | "events";
   onPick: (tab: "materials" | "events") => void;
+  /** 分析报告在库:材料页签挂脉冲点——报告是主交付物,入口要找得到
+   * (2026-09-02 用户反馈页脚小字没人注意)。 */
+  hasAnalysis?: boolean;
 }) {
   const views = [
     ["materials", "材料", "DTS 单据、过程文档、工作区变更与拉取日志"],
@@ -562,7 +569,8 @@ function IssuePaneTabs({
         aria-selected={tab === value}
         className={tab === value ? "active" : ""}
         onClick={() => onPick(value)}>
-        <strong>{label}</strong>
+        <strong>{label}{value === "materials" && hasAnalysis
+          && <i className="ws-tab-dot" aria-hidden />}</strong>
         <small>{hint}</small>
       </button>
     ))}

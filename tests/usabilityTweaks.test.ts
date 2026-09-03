@@ -13,6 +13,7 @@ const app = read("web/src/App.tsx");
 const taskCard = read("web/src/TaskCard.tsx");
 const css = read("web/src/style.css");
 const taskTime = read("web/src/taskTime.ts");
+const taskHierarchy = read("web/src/taskHierarchy.ts");
 
 test("批注编辑框默认更高,且能竖向拖到大半屏", () => {
   assert.match(annotatable, /<textarea\s+autoFocus\s+rows=\{4\}/);
@@ -32,6 +33,10 @@ test("任务列表默认最新在上,开关可切回待核对在前并记在本�
   assert.match(app, /最新在上/);
   assert.match(app, /待核对在前/);
   assert.match(css, /\.task-order-toggle\s*\{/);
+  assert.match(taskHierarchy, /export function orderHierarchyBy/,
+    "时间只排序任务组，主任务与子任务必须随后恢复成树形顺序");
+  assert.match(app, /orderHierarchyBy\(visible,[\s\S]*item\.task\?\.parent_task_id/,
+    "团队任务列表也必须恢复主子层级，不能只修我的需求");
 });
 
 test("决策选项原文可拖选复制,拖选松手不选中选项", () => {
