@@ -261,7 +261,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     { tool: { name: "pull_repo", input: { url: originC } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 结论\\n是问题(接口超时)。\\n## 证据链\\n日志:读超时。\\n## 置信度\\n高。\\n## 下一步建议\\n调大超时并重试。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(接口超时)。\\n## 证据链\\n日志:读超时。\\n## 置信度\\n高。\\n## 修改方案\\n调大超时并重试。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:接口超时" } } },
     { text: "等用户确认。" },
@@ -407,7 +407,7 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
     { tool: { name: "pull_repo", input: { url: originB } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 结论\\n是问题(接口超时)。\\n## 证据链\\n日志:读超时。\\n## 置信度\\n高。\\n## 下一步建议\\n调大超时并重试。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(接口超时)。\\n## 证据链\\n日志:读超时。\\n## 置信度\\n高。\\n## 修改方案\\n调大超时并重试。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:扣款重复" } } },
     { text: "等用户确认。" },

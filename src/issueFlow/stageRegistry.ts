@@ -30,7 +30,7 @@ import type { AnyIssueStage, IssueGateKind, IssueScenario } from "./state.ts";
 export const FIXED_TICKET_STAGES = [
   "dts_info",      // 获取 DTS 单信息(通读单据后 complete_stage 自报收口)
   "prep_repo",     // 拉取代码仓+创建分支(拉齐后 complete_stage 自报收口,无需代码仓也由它跳过)
-  "analyze",       // 问题分析:证据链定位,产出四要素分析报告(submit_analysis 触发人工闸)
+  "analyze",       // 问题分析:证据链定位,产出五章节分析报告(submit_analysis 触发人工闸)
   "fix",           // 问题修改:TDD 节奏,先写复现单测再改码转绿,UT 属于本阶段(report_ut 事实上报)
   "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿收口)
 ] as const;
@@ -148,7 +148,8 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   analyze: {
     label: "问题分析",
     goal: "按证据链定位(方法论取用/分流/取证规范见技能 issue-analysis),"
-      + "产出 issue-analysis.md(结论/证据链/置信度/下一步建议),"
+      + "产出 issue-analysis.md(首行一句话总结+问题现象/问题根因/"
+      + "修改方案/证据链/置信度五章节),"
       + "然后 submit_analysis 提交(无单场景需带结论 issue/non_issue)。"
       + "中途发现还缺仓,pull_repo 随时可补",
   exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",

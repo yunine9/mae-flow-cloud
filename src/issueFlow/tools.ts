@@ -170,13 +170,16 @@ function analysisReportPath(ctx: IssueToolContext): string {
   return join(ctx.workspace, "issue-analysis.md");
 }
 
-/** 分析报告四要素(CONTEXT.md「分析报告」词条,模板在技能
+/** 分析报告五章节(CONTEXT.md「分析报告」词条,模板在技能
  * issue-analysis):submit_analysis 的门票从"文件在场"升级为"章节
  * 齐全"——结论必附证据是分析质量的最后防线,提示词管不住的侥幸在
  * 工具层过不去。章节按标题行匹配(1~4 级),内容长短不管:轻量
- * 路径的报告照样四章节齐全,只是每节更短。 */
+ * 路径的报告照样五章节齐全,只是每节更短。首行是一句话总结(现象→
+ * 根因→方案串联),不是章节。(2026-09-03 重构:现象-根因-方案
+ * 三段式解禁,下一步建议并入修改方案——从可选建议升格为 fix 阶段
+ * 的执行承诺。) */
 export const ANALYSIS_REPORT_SECTIONS = [
-  "结论", "证据链", "置信度", "下一步建议",
+  "问题现象", "问题根因", "修改方案", "证据链", "置信度",
 ] as const;
 
 export function missingAnalysisSections(content: string): string[] {
@@ -835,8 +838,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       label: "Submit Analysis Report",
       description:
         "宣布问题分析完成并提交分析报告(工作区根目录的 issue-analysis.md)。"
-        + "调用前报告必须已写好——平台以文件在场且四章节齐全(结论/证据链/"
-        + "置信度/下一步建议,模板见技能 issue-analysis)为门票。提交后平台举"
+        + "调用前报告必须已写好——平台以文件在场且五章节齐全(问题现象/"
+        + "问题根因/修改方案/证据链/置信度,首行一句话总结串联三者,"
+        + "模板见技能 issue-analysis)为门票。提交后平台举"
         + "确认卡等用户过目:有单场景确认后进入问题修改;无单场景需给 conclusion"
         + "(issue=是问题/non_issue=非问题)由用户定夺挂起或闭环。"
         + "提交后请结束回合等待用户。",
@@ -859,13 +863,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         const report = analysisReportPath(ctx);
         if (!existsSync(report)) {
           fail(`分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md`
-            + `(结论/证据链/置信度/下一步建议四章节,模板见技能 issue-analysis),再提交`);
+            + `(问题现象/问题根因/修改方案/证据链/置信度五章节,首行一句话总结,模板见技能 issue-analysis),再提交`);
         }
         const missing = missingAnalysisSections(readFileSync(report, "utf-8"));
         if (missing.length) {
           fail(`分析报告缺必备章节:${missing.join("、")}。`
-            + "按技能 issue-analysis 的模板补齐四要素再提交;轻量路径的简版"
-            + "报告也必须四章节齐全(内容可简,要素不缺)。");
+            + "按技能 issue-analysis 的模板补齐五章节再提交;轻量路径的简版"
+            + "报告也必须五章节齐全(内容可简,要素不缺)。");
         }
         const summary = String(params.summary ?? "").trim();
         if (!summary) fail("summary 不能为空:给用户看的结论摘要");

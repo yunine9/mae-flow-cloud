@@ -111,9 +111,9 @@ function baseOptions(dataDir: string, model: ScriptedModelServer) {
 }
 
 /** 四要素合规的分析报告(门票校验过得了)。 */
-const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 结论\\n"
+const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n"
   + "会话网关超时配置过小。\\n## 证据链\\n网关日志时间戳。\\n## 置信度\\n"
-  + "中:缺复现环境。\\n## 下一步建议\\n调大超时阈值。\\n"
+  + "中:缺复现环境。\\n## 修改方案\\n调大超时阈值。\\n"
   + "' > issue-analysis.md";
 
 /** 拉单→拉仓→收口进 analyze 的公共前半段:第 4 幕 complete_stage 会

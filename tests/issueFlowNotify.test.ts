@@ -144,7 +144,7 @@ test("平台闸卡:通知用人话 label 不带决策码,waiting_id 用 gate.id"
     { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "complete_stage", input: { note: "本单无需代码仓" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n现象:登录超时。\\n## 结论\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高:日志直接指向。\\n## 下一步建议\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高:日志直接指向。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
     { text: "分析报告已提交,等待用户确认。" },

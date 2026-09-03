@@ -106,9 +106,9 @@ function baseOptions(dataDir: string, model: ScriptedModelServer) {
   };
 }
 
-const REPORT = "printf '# 问题分析\\n\\n现象:对账差异。\\n## 结论\\n"
+const REPORT = "printf '# 问题分析\\n\\n现象:对账差异。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n"
   + "非问题(测试数据问题)。\\n## 证据链\\n对账记录。\\n## 置信度\\n"
-  + "高。\\n## 下一步建议\\n修正数据。\\n"
+  + "高。\\n## 修改方案\\n修正数据。\\n"
   + "' > issue-analysis.md";
 
 test("绑定模块+仓内 docs:进 analyze 定格资产并投影,台账/文件/转移账齐全", async () => {

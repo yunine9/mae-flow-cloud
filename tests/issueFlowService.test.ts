@@ -374,7 +374,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     { tool: { name: "report_stage",
       input: { stage: "locate_root", note: "从日志与代码初步定位" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 根因分析\\n\\n## 结论\\n非问题(测试环境时钟漂移导致的误报)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高:偏差可复现。\\n## 下一步建议\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
+      "printf '# 根因分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n非问题(测试环境时钟漂移导致的误报)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "分析结论是非问题(误报),确认归档收口?",
       options: ["确认归档", "继续研究"],
