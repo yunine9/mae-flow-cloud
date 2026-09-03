@@ -4735,7 +4735,8 @@ export class TaskService {
       quote: item.quote ?? item.anchor,
       ...(source === "annotation"
         ? { problem: item.note, conclusion: item.response?.summary || item.note }
-        : { conclusion: item.note }),
+        // 没写一句话就把原文本身当结论:记的是"这段话",不是对它的评价。
+        : { conclusion: item.note || item.quote || item.anchor }),
     };
   }
 

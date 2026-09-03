@@ -733,7 +733,7 @@ export function AnnotationPanel({
                 // 的块形和标题,明说这是检视意见原文,两边才对得起来。
                 <div className="annot-note">
                   <strong>检视意见原文</strong>
-                  <p>{item.note}</p>
+                  <p>{item.note || "（只记了原文，没另写一句）"}</p>
                 </div>
               )}
               {item.response && (

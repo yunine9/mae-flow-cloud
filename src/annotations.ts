@@ -291,7 +291,9 @@ export class AnnotationStore {
 
   add(input: AnnotationInput): Annotation {
     const note = String(input.note ?? "").trim();
-    if (!note) throw new AnnotationError("批注内容不能为空");
+    // 记为记忆可以不写一句话:圈的那段原文本身就是要记的东西(用户拍板,
+    // "必须像批注一样输入想法"是多余负担)。交给人的意见仍必须有内容。
+    if (!note && input.route !== "memory") throw new AnnotationError("批注内容不能为空");
     const anchor = String(input.anchor ?? "").trim();
     if (!anchor) throw new AnnotationError("缺少原文快照,批注无从定位");
     const artifact = String(input.artifact ?? "").trim();

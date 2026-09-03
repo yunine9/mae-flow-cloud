@@ -265,3 +265,22 @@ test("开局推送:同仓、未撤回、非本单的记忆按人判优先挑最�
     await svc.shutdown();
   }
 });
+
+test("只圈不写的记忆:结论就是圈的那段原文", () => {
+  const { service: svc } = service();
+  try {
+    const id = svc.create("给手机号打码").id;
+    const internal = (svc as any).tasks.get(id);
+    internal.summary.repo_url = "git@example.com:demo/notify-service.git";
+    svc.addAnnotation(id, {
+      author: "alice", artifact: "需求原文", file: "需求原文", line: 5, line_end: 7,
+      anchor: "要求:", quote: "要求:\n黑名单先于渠道开关\n不改 registry.xml",
+      note: "", kind: "doc", route: "memory",
+    });
+    const [row] = svc.listTaskMemories(id);
+    assert.equal(row.conclusion, "要求:\n黑名单先于渠道开关\n不改 registry.xml");
+    assert.equal(row.quote, row.conclusion, "原文与结论同一段:记的是这段话本身");
+  } finally {
+    void svc.shutdown();
+  }
+});

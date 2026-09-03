@@ -225,7 +225,8 @@ export function Annotatable({
   async function save() {
     if (!draft || busy) return;
     const text = note.trim();
-    if (!text) return;
+    // 记为记忆可以只圈不写:原文本身就是要记的东西。
+    if (!text && route !== "memory") return;
     setBusy(true);
     setError("");
     try {
@@ -307,7 +308,9 @@ export function Annotatable({
             autoFocus
             rows={4}
             value={note}
-            placeholder="这里要改什么？例如：这个重试应该只对网关失败生效"
+            placeholder={route === "memory"
+              ? "可不写：只记这段原文；想补一句结论也行"
+              : "这里要改什么？例如：这个重试应该只对网关失败生效"}
             onChange={(event) => setNote(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") setDraft(undefined);
@@ -337,7 +340,7 @@ export function Annotatable({
             <button type="button" className="ghost"
                     onClick={() => setDraft(undefined)}>取消</button>
             <button type="button" className="primary"
-                    disabled={busy || !note.trim()}
+                    disabled={busy || (!note.trim() && route !== "memory")}
                     onClick={() => void save()}>
               {busy ? "记下中…" : "记下"}
             </button>

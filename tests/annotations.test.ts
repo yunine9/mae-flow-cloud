@@ -1099,3 +1099,17 @@ test("划选一块:整块原文给模型看、跨行行号如实抬头、超长�
   assert.equal(capped.quote?.length, ANNOTATION_QUOTE_MAX + 1, "超长截断带省略号");
   assert.equal(capped.line_end, undefined, "末行不大于首行就不算跨行");
 });
+
+test("记为记忆可以只圈不写;交给人的意见仍必须有内容", () => {
+  const target = store();
+  const silent = target.add({
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md", line: 3,
+    anchor: "背景:先看渠道开关", kind: "doc", route: "memory", note: "   ",
+  });
+  assert.equal(silent.note, "");
+  assert.equal(silent.status, "verified");
+  assert.throws(() => target.add({
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md", line: 3,
+    anchor: "背景:先看渠道开关", kind: "doc", note: "",
+  }), /批注内容不能为空/);
+});
