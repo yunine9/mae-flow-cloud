@@ -336,6 +336,9 @@ export class CloudSession {
   private decisionResolvers = new Map<string, (text: string) => void>();
   private waitingRecord?: WaitingRecord;
   private hostAnswered = new Set<string>();
+  /** 宿主自己举的卡(如拆分提议):走同一条决定通道,但内核没见过这次
+   * 提问,回执不进内核账本,也不再替 pi 补一条 AskUserQuestion 回声。 */
+  private hostRaised = new Set<string>();
   /** 主会话本轮活动量与模型层错误:pi 把 API 失败静默成
    * stopReason="error" 的空 assistant 消息(run4 实测,回合零活动
    * 直接 end_turn),宿主必须自己识别,否则空转被标成 completed。 */
@@ -732,6 +735,25 @@ export class CloudSession {
     return this.promptTurn(userMessage);
   }
 
+  /** 宿主在某个自定义工具里举卡等人(拆分提议):记录由宿主建好,这里只
+   * 把会话挂在同一条决定通道上——状态切 waiting_for_human、通知、决定回注
+   * 与 AskUserQuestion 完全同款。区别在回注时:不给内核补回执(内核没见过
+   * 这次提问),也不替 pi 补回声(pi 自己会给这个工具发 tool_finished)。 */
+  awaitHostDecision(record: WaitingRecord): Promise<string> {
+    if (record.status === "resolved") return Promise.resolve(renderDecision(record));
+    if (record.status === "superseded") {
+      return Promise.resolve("这张卡已因用户接管代码现场而失效,按最新现场继续。");
+    }
+    this.hostRaised.add(record.call_id);
+    this.waitingRecord = record;
+    const decision = new Promise<string>((resolve) =>
+      this.decisionResolvers.set(record.call_id, resolve));
+    this.waitingSignal.resolve({
+      status: "waiting_for_human", waiting: { ...record },
+    });
+    return decision;
+  }
+
   /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。 */
   async resumeWithDecision(record: WaitingRecord): Promise<Outcome> {
     const waiting = this.waitingRecord;
@@ -744,20 +766,24 @@ export class CloudSession {
       decision: record.decision,
       notes: record.notes,
     });
-    // 宿主代演的工具结果由 driver 登记;pi 的回声按 hostAnswered 丢弃。
-    // answers 是结构化回答(问题→选项):内核 ack 的"整份背书"判定看的是
-    // 结构不是措辞——键是配置项名的只代表单项,独立确认题才能替整份背书。
-    const finished = this.emit("tool_finished", this.sessionId, {
-      call_id: waiting.call_id,
-      name: "AskUserQuestion",
-      input: waiting.question,
-      is_error: false,
-      result: renderDecision(record),
-      answers: answersOf(record, waiting),
-    });
-    // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
-    this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
-    this.hostAnswered.add(waiting.call_id);
+    if (this.hostRaised.has(waiting.call_id)) {
+      this.hostRaised.delete(waiting.call_id);
+    } else {
+      // 宿主代演的工具结果由 driver 登记;pi 的回声按 hostAnswered 丢弃。
+      // answers 是结构化回答(问题→选项):内核 ack 的"整份背书"判定看的是
+      // 结构不是措辞——键是配置项名的只代表单项,独立确认题才能替整份背书。
+      const finished = this.emit("tool_finished", this.sessionId, {
+        call_id: waiting.call_id,
+        name: "AskUserQuestion",
+        input: waiting.question,
+        is_error: false,
+        result: renderDecision(record),
+        answers: answersOf(record, waiting),
+      });
+      // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
+      this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
+      this.hostAnswered.add(waiting.call_id);
+    }
     this.decisionResolvers.delete(waiting.call_id);
     this.waitingRecord = undefined;
     this.waitingSignal = deferred<Outcome>();

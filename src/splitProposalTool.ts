@@ -18,7 +18,7 @@ export interface SplitProposalInput {
 }
 
 export function createSplitProposalTool(
-  onPropose: (input: SplitProposalInput) => string,
+  onPropose: (input: SplitProposalInput, toolCallId: string) => Promise<string> | string,
 ) {
   return defineTool({
     name: "propose_split",
@@ -28,8 +28,9 @@ export function createSplitProposalTool(
       + "如果判断改动面大到一个人没法负责任地检视一个 MR(经验线:要动的既有"
       + "位置十来处以上,或横跨互不相关的模块),用它把本单转为「先分析再拆分」:"
       + "平台会终止当前会话,以只读分析现场重新启动,走澄清→改动面盘点→划分"
-      + "方向卡→拆分方案→人工确认,再按交付单元生成子任务。调用前不要开始改"
-      + "代码;已有推送或 MR 的任务不能再转。",
+      + "方向卡→拆分方案→人工确认,再按交付单元生成子任务。拆不拆由责任人"
+      + "在决定卡上拍板:选「不拆」你就按一个任务继续,不要再提议。调用前不要"
+      + "开始改代码;已有推送或 MR 的任务不能再转。",
     promptSnippet: "propose_split:改动面大到一个 MR 装不下时,把本单转为先分析再拆分",
     promptGuidelines: [
       "澄清需求或定规格阶段读完仓、盘出改动面后,如果要动的既有位置多到一个人"
@@ -42,12 +43,13 @@ export function createSplitProposalTool(
       suggested_units: Type.Optional(Type.Array(Type.String(), {
         description: "建议的切法,每项一句话(第一块通常是契约骨架);拿不准可以不给" })),
     }),
-    async execute(_toolCallId: string, params: any) {
-      const text = onPropose({
+    async execute(toolCallId: string, params: any) {
+      // 会话挂起点:受理后宿主举卡,人拍板前 pi 停在这里(同 AskUserQuestion)。
+      const text = await onPropose({
         reason: String(params.reason ?? ""),
         suggested_units: Array.isArray(params.suggested_units)
           ? params.suggested_units.map((item: unknown) => String(item)) : undefined,
-      });
+      }, toolCallId);
       return { content: [{ type: "text" as const, text }], details: {} };
     },
   });

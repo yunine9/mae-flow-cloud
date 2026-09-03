@@ -784,6 +784,10 @@ export interface SplitEscalation {
   suggested_units?: string[];
   /** 提议时所处阶段(来自进度镜像,可能没有)。 */
   phase?: string;
+  /** pending=卡上等人;split=人选了拆,已转身;declined=人否决,按一个任务干完。 */
+  decision: "pending" | "split" | "declined";
+  decided_by?: string;
+  decided_at?: string;
 }
 
 export interface TaskSummary {
@@ -1851,6 +1855,11 @@ const PUSH_CONFIRM_REWORK = "需要调整代码（按清单返工）";
  * 确认后才入队。 */
 const CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP =
   "cloud_requirement_analysis_confirm";
+/** Agent 提议拆分的决定卡:Cloud 自己的步骤,不在内核流程里。人有最后一票
+ * ——选「不拆」编码会话原地继续,零成本;选拆才转身成分析单。 */
+const CLOUD_SPLIT_PROPOSAL_STEP = "cloud_split_proposal";
+const SPLIT_PROPOSAL_ACCEPT = "先分析再拆分";
+const SPLIT_PROPOSAL_DECLINE = "不拆，一个任务干完";
 const REQUIREMENT_ANALYSIS_ACCEPT =
   "需求已确认，进入需求分析";
 
@@ -3768,7 +3777,21 @@ export class TaskService {
     // 去写自定义答复。云端原生卡的选项与服务端处理本就由本文件定义，
     // 在同一处把关闭/返工语义投影出去，历史待办读取时也能立即恢复。
     const choiceEffects: StepChoiceEffect[] =
-      summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
+      summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
+        ? [{
+            key: "split",
+            answers: [SPLIT_PROPOSAL_ACCEPT],
+            allowsSourceEdit: false,
+            handlesFeedback: false,
+            closesFeedback: false,
+          }, {
+            key: "decline",
+            answers: [SPLIT_PROPOSAL_DECLINE],
+            allowsSourceEdit: false,
+            handlesFeedback: false,
+            closesFeedback: false,
+          }]
+      : summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
         ? [{
             key: "confirm",
             answers: [PUSH_CONFIRM_ACCEPT],
@@ -3788,6 +3811,7 @@ export class TaskService {
           );
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
       summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+        || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         ? "source"
       : this.isRequirementAnalysis(task)
       ? "chain"
@@ -4875,14 +4899,19 @@ export class TaskService {
     const summary = task.summary;
     if (summary.parent_task_id || this.isRequirementAnalysis(task)
         || (summary.repositories?.length ?? 0) !== 1) return [];
-    return [createSplitProposalTool((input) => this.proposeSplit(task, input))];
+    return [createSplitProposalTool((input, callId) => this.proposeSplit(task, input, callId))];
   }
 
   /** Agent 在开发中提议拆分(docs/delivery-unit-split-design.md 2026-09-03
-   * 勘误):拆不拆是分析的产物,不是下单时的开关。这里只受理与登记,真正
-   * 的转身放到下一拍——工具结果得先回给会话,再把会话掐掉。拒绝用一句
-   * 人话回给模型,不抛错。 */
-  private proposeSplit(task: TaskState, input: SplitProposalInput): string {
+   * 勘误):拆不拆是分析的产物,不是下单时的开关;但人有最后一票——受理
+   * 即举决定卡,会话停在这里等责任人拍板(同 AskUserQuestion 的挂起点)。
+   * 选拆:decide 里转身成分析单,本会话被掐掉;选不拆:原地继续,以后
+   * 不再受理。拒绝用一句人话回给模型,不抛错。 */
+  private async proposeSplit(
+    task: TaskState,
+    input: SplitProposalInput,
+    callId: string,
+  ): Promise<string> {
     const summary = task.summary;
     if (summary.parent_task_id) {
       return "本单是拆分后的交付单元子任务,不能再拆;按任务书范围继续。";
@@ -4896,42 +4925,111 @@ export class TaskService {
     if (summary.delivery?.sha || summary.delivery?.mr_url) {
       return "本单已有推送或 MR,不能再转为拆分;按现状继续交付。";
     }
+    if (summary.split_escalation?.decision === "declined") {
+      return "责任人已否决拆分:按一个任务干完,不要再提议。";
+    }
+    if (summary.split_escalation) {
+      return "拆分提议已在卡上等责任人拍板;请停止调用工具,结束本轮发言。";
+    }
     if (summary.status !== "running") {
       return `本单当前状态是 ${summary.status},不能转为拆分。`;
     }
-    if (summary.split_escalation) {
-      return "拆分提议已受理,正在转身;请停止调用工具,结束本轮发言。";
-    }
     const reason = input.reason.trim();
     if (!reason) return "reason 不能为空:写清改动面为什么一个 MR 装不下。";
+    const driver = task.driver;
+    if (!driver) return "当前没有可挂起的会话,稍后再试。";
+    const units = (input.suggested_units ?? [])
+      .map((unit) => unit.trim()).filter(Boolean).slice(0, 20);
     summary.split_escalation = {
       at: new Date().toISOString(),
       reason: reason.slice(0, 2000),
-      ...(input.suggested_units?.length ? { suggested_units: input.suggested_units
-        .map((unit) => unit.trim()).filter(Boolean).slice(0, 20) } : {}),
+      ...(units.length ? { suggested_units: units } : {}),
       ...(summary.progress?.current_phase
         ? { phase: summary.progress.current_phase } : {}),
-    };
-    summary.requirement_analysis_requested = true;
-    // 单仓下单时是一个节点的退化图(stage confirmed),退回分析态;
-    // 节点保留:责任人默认沿用,单号在确认卡上逐单元定。
-    summary.requirement_graph = {
-      stage: "analysis",
-      repositories: (summary.requirement_graph?.repositories ?? []).map((node) => ({
-        ...node, task_id: undefined, task_status: undefined,
-      })),
-      dependencies: [],
+      decision: "pending",
     };
     this.persist(task);
-    setImmediate(() => this.bypass(task, "拆分转身", this.restartAsSplitAnalysis(task)));
-    return "已受理:本单转为先分析再拆分,当前会话即将终止并以分析现场重新启动。"
-      + "请立即结束本轮发言,不要再调用任何工具。";
+    const record = task.humanGate.createWaiting({
+      taskId: summary.id,
+      step: CLOUD_SPLIT_PROPOSAL_STEP,
+      callId,
+      questionInput: { questions: [{
+        question: "Agent 建议把本单拆成多个交付单元。先分析再拆分,还是不拆、一个任务干完?",
+        options: [SPLIT_PROPOSAL_ACCEPT, SPLIT_PROPOSAL_DECLINE],
+        recommended: SPLIT_PROPOSAL_ACCEPT,
+      }] },
+      context: [
+        `**Agent 读完仓后判断改动面过大,提议拆分。**`,
+        `理由:${reason}`,
+        ...(units.length ? ["建议的切法:", ...units.map((unit, index) => `${index + 1}. ${unit}`)] : []),
+        "",
+        `选「${SPLIT_PROPOSAL_ACCEPT}」:当前编码会话终止,以只读分析现场重新启动,`
+        + "走澄清→改动面盘点→划分方向卡→拆分方案→确认→按单元建子任务;"
+        + "单号在确认卡上逐单元填,同仓单元串行。",
+        `选「${SPLIT_PROPOSAL_DECLINE}」:Agent 原地继续,按一个任务做完,不再提议。`,
+      ].join("\n"),
+    });
+    // 会话挂起点:决定到达前 pi 停在这里。选拆时 decide 会掐掉本会话,
+    // 这个 Promise 由 abort 解开;选不拆时拿到决定原文,给模型一句明确的话。
+    const text = await driver.awaitHostDecision(record);
+    if (task.summary.split_escalation?.decision === "declined") {
+      return `责任人决定:${SPLIT_PROPOSAL_DECLINE}。继续当前流程,把本单当一个任务做完,不要再提议拆分。`;
+    }
+    return text;
+  }
+
+  /** 拆分卡拍板后的宿主动作:拆→转身;不拆→记下否决,会话原地继续。
+   * decide 与重启后回放已决待办都走这里。 */
+  private async applySplitProposalDecision(
+    task: TaskState,
+    resolved: WaitingRecord,
+  ): Promise<void> {
+    const escalation = task.summary.split_escalation;
+    const submitted = [...Object.values(resolved.answers ?? {}), resolved.decision];
+    const accepted = submitted.includes(SPLIT_PROPOSAL_ACCEPT);
+    if (!escalation) return;
+    escalation.decision = accepted ? "split" : "declined";
+    escalation.decided_by = resolved.decided_by;
+    escalation.decided_at = new Date().toISOString();
+    task.summary.waiting = undefined;
+    if (accepted) {
+      task.summary.requirement_analysis_requested = true;
+      // 单仓下单时是一个节点的退化图(stage confirmed),退回分析态;节点
+      // 保留:责任人默认沿用,单号在确认卡上逐单元定。
+      task.summary.requirement_graph = {
+        stage: "analysis",
+        repositories: (task.summary.requirement_graph?.repositories ?? []).map((node) => ({
+          ...node, task_id: undefined, task_status: undefined,
+        })),
+        dependencies: [],
+      };
+      this.persist(task);
+      await this.restartAsSplitAnalysis(task);
+      return;
+    }
+    if (task.driver) {
+      task.summary.status = "running";
+      task.summary.detail = "责任人决定不拆,按一个任务继续";
+      this.persist(task);
+      this.bypass(task, "拆分否决续跑",
+        this.settle(task, task.driver.resumeWithDecision(resolved)));
+      return;
+    }
+    // 重启后回放:旧会话已死,决定只剩"不拆"这个事实;重建会话时那次
+    // propose_split 调用按 interrupted 登记,模型再提会被"已否决"挡住。
+    task.summary.status = "queued";
+    task.summary.detail = "责任人决定不拆,等待重建会话续跑";
+    task.resume = true;
+    this.persist(task);
+    if (!this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
+    this.bypass(undefined, "任务泵", this.pump());
   }
 
   /** 拆分转身:掐掉编码会话与容器,清空现场指针,按分析单重新排队。
    * 清理的纪律同 finishPause:资源没确认释放就如实 failed,不静默续跑。 */
   private async restartAsSplitAnalysis(task: TaskState): Promise<void> {
-    if (task.summary.status !== "running" || !task.summary.split_escalation) return;
+    if (task.summary.split_escalation?.decision !== "split") return;
+    if (!["running", "waiting_for_human"].includes(task.summary.status)) return;
     task.controlEpoch += 1;
     const epoch = task.controlEpoch;
     const driver = task.driver;
@@ -10023,6 +10121,10 @@ export class TaskService {
       this.finishRequirementAnalysisEntryDecision(task, waiting);
       return;
     }
+    if (waiting.step === CLOUD_SPLIT_PROPOSAL_STEP) {
+      await this.applySplitProposalDecision(task, waiting);
+      return;
+    }
     if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) {
       try {
         const selection = await this.resolvedPushSelection(task, waiting);
@@ -10160,6 +10262,29 @@ export class TaskService {
     }
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
+    if (waiting.step === CLOUD_SPLIT_PROPOSAL_STEP) {
+      if (input.actor && task.summary.luban_account
+          && input.actor !== task.summary.luban_account) {
+        throw new TaskControlError(
+          `只有主责任人 ${task.summary.luban_account} 可以决定拆不拆`);
+      }
+      const submitted = [...Object.values(answers), decision];
+      if (!submitted.includes(SPLIT_PROPOSAL_ACCEPT)
+          && !submitted.includes(SPLIT_PROPOSAL_DECLINE)) {
+        throw new TaskControlError(
+          `请选择「${SPLIT_PROPOSAL_ACCEPT}」或「${SPLIT_PROPOSAL_DECLINE}」`);
+      }
+      const resolved = task.humanGate.resolve(waiting.waiting_id, {
+        stateVersion: input.state_version,
+        decision,
+        answers: Object.keys(answers).length ? answers : undefined,
+        notes: normalized.notes,
+        requestDigest,
+        decidedBy: input.actor,
+      });
+      await this.applySplitProposalDecision(task, resolved);
+      return { ...task.summary };
+    }
     if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       if (input.actor && task.summary.luban_account
           && input.actor !== task.summary.luban_account) {
@@ -17908,8 +18033,10 @@ export class TaskService {
     if (!waiting || questions.length === 0) return undefined;
     // push 前确认卡是用户**显式开启**的"我要亲自看一眼",月光免审批
     // 不得代答它——两者都是用户意志,更具体的那个赢。
+    // 拆分提议同理:拆不拆是责任人的一票,月光不代答。
     if (waiting.step === CLOUD_PUSH_CONFIRM_STEP
-        || waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
+        || waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+        || waiting.step === CLOUD_SPLIT_PROPOSAL_STEP) {
       return undefined;
     }
     // 分析单已确认拆单完毕,父会话再举的任何卡都不该到人(内网实锤:

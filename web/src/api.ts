@@ -982,6 +982,9 @@ export interface TaskSummary {
   /** Agent 提议拆分留下的事实:为什么、建议怎么切、在哪个阶段。 */
   split_escalation?: {
     at: string; reason: string; suggested_units?: string[]; phase?: string;
+    /** pending=卡上等人;split=已转身;declined=人否决,按一个任务干完。 */
+    decision: "pending" | "split" | "declined";
+    decided_by?: string; decided_at?: string;
   };
   cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
