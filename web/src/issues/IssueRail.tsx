@@ -62,12 +62,10 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
   /** env_needed 闸的专用提交口(POST /issues/:id/environment)。 */
   onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
-  // 收口态:自由模式=done+idle;固定模式=末阶段完成+idle(验证通过后)。
+  // 收口态:末阶段完成+idle(验证通过后;#98 单路径化,只按固定流程判定)。
   const lastState = detail.stage_states?.[detail.stage_states.length - 1];
   const doneIdle = !waiting && detail.status === "idle"
-    && (detail.mode === "fixed"
-      ? lastState === "done"
-      : detail.stage === "done");
+    && lastState === "done";
 
   return <aside className="issue-rail">
     <div className="issue-rail-head"><span>下一步</span></div>
@@ -104,9 +102,7 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
       {!waiting && detail.status !== "suspended" && doneIdle
         && <div className="issue-rail-card is-done">
           <strong>AI 已给出结论</strong>
-          <p>{detail.mode === "fixed"
-            ? "环境验证已通过——确认 MR 合入后归档收口。"
-            : "归档收口即正式关闭这份研究现场。"}</p>
+          <p>环境验证已通过——确认 MR 合入后归档收口。</p>
           {/* 收口不锁门:归档前仍可续聊(对话页签已并入现场,发言口
               收拢到右栏各态,这里是 done 态的那一个)。两件都是写操作,
               查看模式不渲染。 */}

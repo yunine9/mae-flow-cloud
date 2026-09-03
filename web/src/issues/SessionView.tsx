@@ -2,10 +2,11 @@
  * 会话域:会话工作台全屏视图(头部 / 阶段线 / 逐仓交付 / 耗时卡点 / 双栏)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
- * 固定流程画计划线(IssueFixedProgress,列表卡也复用),自由模式画
- * 旅程线(IssueJourneyTrail);右栏 NEXT ACTION 在 IssueRail(独立
- * 文件),左栏材料页签在 MaterialsPane.tsx、现场页签在 EventsPane.tsx。
- * 耗时卡点(IssueCostPanel)同时被列表卡的展开态复用,也从这里出。
+ * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
+ * #98 单路径化:不再感知"模式",自由旅程线已删);右栏 NEXT ACTION
+ * 在 IssueRail(独立文件),左栏材料页签在 MaterialsPane.tsx、
+ * 现场页签在 EventsPane.tsx。耗时卡点(IssueCostPanel)同时被列表卡
+ * 的展开态复用,也从这里出。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
@@ -19,7 +20,6 @@ import {
   answerIssue,
   associateIssueTicket,
   attachIssueEnvironment,
-  bindIssueTicket,
   controlIssue,
   fixedStageList,
   getIssue,
@@ -71,7 +71,6 @@ export function IssueSessionView({
   /** 转正等场景直接跳到另一个会话(如新生的有单会话)。 */
   onOpenIssue: (id: string) => void;
 }) {
-  const [ticket, setTicket] = useState("");
   const [busy, setBusy] = useState(false);
   // 左栏页签:默认"现场"(AI 干活的直播面),用户手选优先;换会话重置。
   // 发言不靠页签——右栏 NEXT ACTION 六态常驻输入,现场只管看。
@@ -146,9 +145,6 @@ export function IssueSessionView({
     : undefined;
   const waiting = gateCard
     ?? (detail.status === "waiting_user" ? detail.waiting : undefined);
-  // 阶段轨迹:按转移账实际发生顺序画——问题阶段是动态的,这是一条
-  // "旅程线"而非"计划线":只画走过的节点,不补未来占位。
-  const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
 
   /** 问题卡作答:decision=人话文本;code=平台闸决策码(裁决协议);
    * answers=Agent 卡逐题作答(码或自由文本);selection=skill 圈选闸
@@ -231,7 +227,7 @@ export function IssueSessionView({
       </button>
       <div className="issue-session-title">
         <strong>{detail.title}</strong>
-        {/* 查看模式标识(非归属人围观):徽标样式沿用 issue-mode 的
+        {/* 查看模式标识(非归属人围观):徽标样式沿用状态徽标的
             身份徽标语言,文本即 aria 信息(读屏直读 span 文本)。 */}
         {!canOperate && <span className="issue-view-mode" role="status"
           title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
@@ -240,13 +236,9 @@ export function IssueSessionView({
         <span className={`issue-status status-${detail.status}`}>
           {ISSUE_STATUS_TEXT[detail.status]}
         </span>
-        <span className={`issue-mode mode-${detail.mode ?? "free"}`}>
-          {detail.mode === "fixed" ? "固定流程" : "自由探索"}
-        </span>
         <span className="issue-stage">
           {issueStageText(detail)}
-          {detail.mode === "fixed" && detail.round && detail.round > 1
-            ? `(第 ${detail.round} 轮)` : ""}
+          {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}
           {detail.stage_note ? ` · ${detail.stage_note}` : ""}
         </span>
         {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
@@ -262,26 +254,14 @@ export function IssueSessionView({
         </span>}
       </div>
       <div className="issue-session-ticket">
+        {/* 固定流程没有"中途绑单":无单会话走结论→挂起→关联转正(#98
+            单路径化后一切会话都是固定流程,绑单输入已随自由分支删除)。
+            「无单场景」是状态说明不是控件,查看模式照常示人。 */}
         {detail.ticket
           ? <span className="issue-ticket">{detail.ticket}</span>
-          : detail.mode === "fixed"
-            // 固定流程没有"中途绑单":无单会话走结论→挂起→关联转正。
-            // 「无单场景」是状态说明不是控件,查看模式照常示人。
-            ? <span className="issue-ticket empty">无单场景</span>
-            // 绑单输入是写操作:查看模式整块不渲染(单号本身仍会
-            // 在绑定后如实陈列)。
-            : canOperate && <span className="issue-bind">
-                <input value={ticket} placeholder="绑定 DTS 单号"
-                  onChange={(event) => setTicket(event.target.value)} />
-                <button type="button" disabled={!ticket.trim() || busy}
-                  onClick={() => perform(() => bindIssueTicket(detail.id, ticket.trim()))}>
-                  绑定
-                </button>
-              </span>}
+          : <span className="issue-ticket empty">无单场景</span>}
         <span className="issue-bind-hint" title="推送与提 MR 的门票是单号;研究阶段不需要">
-          {detail.ticket ? "" : detail.mode === "fixed"
-            ? "结论为问题时挂起,关联单号后转正"
-            : "提 MR 前必须绑定单号"}
+          {detail.ticket ? "" : "结论为问题时挂起,关联单号后转正"}
         </span>
         <button type="button" className="issue-export" disabled={busy}
           title="导出现场记录(Markdown:人粗读 + AI 精读复盘)"
@@ -300,12 +280,10 @@ export function IssueSessionView({
     </div>
 
     <div className="issue-workspace-body">
-    {/* 固定流程:只留计划线——全阶段一条,走到哪亮到哪,当前阶段脉冲
-        呼吸(2026-08-28 拍板:固定流程下旅程线与计划线信息重复,省一行);
-        自由模式仍是旅程线(走过的才画——账实序是自由模式唯一真相)。 */}
-    {detail.mode === "fixed"
-      ? <IssueFixedProgress issue={detail} />
-      : <IssueJourneyTrail trail={trail} />}
+    {/* 固定流程计划线:全阶段一条,走到哪亮到哪,当前阶段脉冲呼吸
+        (2026-08-28 拍板:旅程线与计划线信息重复,省一行;#98 单路径化
+        后工作台只认这一条线,对 mode 缺席的会话数据同样成立)。 */}
+    <IssueFixedProgress issue={detail} />
 
     {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
     {detail.error && <div className="issue-session-error" role="alert">
@@ -504,8 +482,7 @@ export function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
       {stages.map((stage, index) => {
         const state = states[index] ?? "pending";
         const current = state === "in_progress";
-        const label = issueStageText({
-          mode: "fixed", scenario: issue.scenario, stage });
+        const label = issueStageText({ scenario: issue.scenario, stage });
         return <span key={stage}
           className={`issue-fixed-step state-${state}${current ? " current" : ""}`}
           title={`${label} · ${labels[state]}${current ? "(当前)" : ""}`}>
@@ -516,29 +493,6 @@ export function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
         </span>;
       })}
     </span>
-  </nav>;
-}
-
-/** 阶段英雄轨:旅程线(dates = transitions 账,走过才画)。
- * 节点是"点在上、词签在下"的小栈,节点间连条渐变着色(调色对抄自
- * ws-progress 的 nth-child);末位为当前节点——点放大描白边带双光晕,
- * 词签加粗。来源(AI 上报/平台事实)保留在 title 悬浮里,不参与配色。 */
-function IssueJourneyTrail({ trail }: {
-  trail: NonNullable<IssueDetail["transitions"]>;
-}) {
-  if (trail.length === 0) return null;
-  return <nav className="stage-trail issue-journey" aria-label="处理阶段轨迹">
-    {trail.map((entry, index) => {
-      const last = index === trail.length - 1;
-      return <span
-        key={`${entry.at}-${index}`}
-        className={`issue-jnode${last ? " current" : ""}`}
-        data-source={entry.source}
-        title={`${entry.source === "agent" ? "AI 上报" : "平台事实"} · ${entry.note}`}>
-        <i aria-hidden />
-        <b>{entry.stage ? issueStageText({ stage: entry.stage }) : entry.note}</b>
-      </span>;
-    })}
   </nav>;
 }
 

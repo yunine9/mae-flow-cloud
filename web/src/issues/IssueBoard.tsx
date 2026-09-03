@@ -284,8 +284,7 @@ function IssueCard({ issue, active, onOpen }: {
   const doneIdle = issue.status === "idle" && issue.stage === "done";
   const stageLine = [
     issueStageText(issue),
-    issue.mode === "fixed" && issue.round && issue.round > 1
-      ? ` · 第 ${issue.round} 轮` : "",
+    issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
     issue.stage_note ? ` · ${issue.stage_note}` : "",
   ].join("");
 
@@ -316,7 +315,7 @@ function IssueCard({ issue, active, onOpen }: {
           <strong>{stageLine}</strong>
           {issue.conclusion && <span>结论 · {issueConclusionText(issue)}</span>}
         </span>
-        {issue.mode === "fixed" && <IssueFixedProgress issue={issue} />}
+        <IssueFixedProgress issue={issue} />
       </span>
       <span className="task-chevron" aria-hidden>
         <svg viewBox="0 0 20 20">

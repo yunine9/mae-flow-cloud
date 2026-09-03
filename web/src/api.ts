@@ -3237,9 +3237,8 @@ export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
   done: "问题闭环",
 };
 
-// ---- 固定流程(2026-08-27 拍板;自由探索那套词表原样保留) ----
+// ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----
 
-export type IssueFlowMode = "fixed" | "free";
 export type IssueScenario = "ticket" | "no_ticket";
 export type FixedIssueStage =
   | "dts_info"
@@ -3275,10 +3274,8 @@ const LEGACY_STAGE_TEXT: Record<string, string> = {
   deploy_verify: "换库环境验证(已下线)",
 };
 
-/** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
- * (旧现场/异键)原样示人——前端不猜)。 */
+/** 阶段中文名(固定流程词表;对不上(旧现场/异键)原样示人——前端不猜)。 */
 export function issueStageText(issue: {
-  mode?: IssueFlowMode;
   scenario?: IssueScenario;
   stage: AnyIssueStage;
 }): string {
@@ -3396,7 +3393,6 @@ export interface IssueSummary {
     page_account?: string;
     page_credential_ref?: string;
   };
-  mode?: IssueFlowMode;
   scenario?: IssueScenario;
   stage_states?: IssueStageState[];
   round?: number;

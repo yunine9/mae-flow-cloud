@@ -331,11 +331,13 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
-  // 工作台头部:绑单输入是写操作,三元链最末分支必须直接挂在 canOperate
-  // 上——把控件挪出该分支(渲染后靠报错兜底)= 回归,当场红;
-  // 「无单场景」是状态说明不是控件,查看模式照常示人。
+  // 工作台头部:「无单场景」是状态说明不是控件,查看模式照常示人。
+  // #98 单路径化后一切会话都是固定流程,自由分支的绑单输入已整体删除,
+  // 不得再以任何形式回流。
   assert.match(sessionView,
-    /\? <span className="issue-ticket empty">无单场景<\/span>[\s\S]*?: canOperate && <span className="issue-bind">/);
+    /\? <span className="issue-ticket">\{detail\.ticket\}<\/span>\s*: <span className="issue-ticket empty">无单场景<\/span>/);
+  assert.doesNotMatch(sessionView, /className="issue-bind"/);
+  assert.doesNotMatch(sessionView, /bindIssueTicket/);
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
   assert.match(sessionView,
     /\{canOperate && onNavigateProfile && detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
@@ -366,9 +368,54 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.match(materials,
     /\{canOperate && node\.archive && <button type="button" className="issue-log-extract"/);
   assert.match(materials,
-    /canOperate && detail\.mode === "fixed"\s*\?\s*\[\{ key: REVIEW_TAB/);
+    /canOperate\s*\?\s*\[\{ key: REVIEW_TAB/);
   assert.match(materials,
     /active === ANALYSIS_DOC && reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+});
+
+// ---- 问题会话单路径化(#98):前端不再感知"模式"概念,任意会话一律
+// ---- 按固定流程渲染;自由旅程线与模式徽标整体退场。后端仍会在会话
+// ---- 数据里带 mode:"fixed"(#99 删字段),前端不再读它。
+
+test("工作台单路径化(#98):mode 缺席也画固定计划线,自由旅程线不得回流", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
+  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  const teamCard = readFileSync(
+    resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // 会话工作台无条件画固定流程计划线——契约上不再容忍自由形状:对
+  // mode 缺席的会话数据(后端删字段后)照样输出固定进度条,不存在
+  // 任何条件分支;旅程线组件与 mode 读取一并禁止回流。
+  assert.match(sessionView, /^    <IssueFixedProgress issue=\{detail\} \/>$/m);
+  assert.doesNotMatch(sessionView, /IssueJourneyTrail|issue-journey|issue-jnode/);
+  assert.doesNotMatch(sessionView, /detail\.mode/);
+  // 列表卡与团队卡:轮次标注、进度条无条件渲染(原 mode 恒真判断删除,
+  // 固定流程会话的渲染结果不变)。
+  assert.match(board, /^        <IssueFixedProgress issue=\{issue\} \/>$/m);
+  assert.doesNotMatch(board, /issue\.mode/);
+  assert.doesNotMatch(teamCard, /issue\.mode/);
+  // 收口态只按固定流程语义判定:末阶段完成+idle。
+  assert.match(rail,
+    /const doneIdle = !waiting && detail\.status === "idle"\s*\n\s*&& lastState === "done";/);
+  // 前端类型面不再携带模式:IssueFlowMode 与会话上的 mode 字段删除。
+  assert.doesNotMatch(apiTypes, /IssueFlowMode/);
+  assert.doesNotMatch(apiTypes, /\bmode\?:/);
+  // LEGACY_STAGE_TEXT(ut/deploy_verify)是固定流程自己的旧阶段展示
+  // 兼容,与自由探索无关,必须原样保留。
+  assert.match(apiTypes, /LEGACY_STAGE_TEXT/);
+  assert.match(apiTypes, /ut: "单元测试验证"/);
+});
+
+test("帮助中心单一流程化(#98):设置页契约无探索方式卡片", () => {
+  const helpCenter = readFileSync(resolve("web/src/HelpCenter.tsx"), "utf-8");
+  // 任何角落不得再出现"两种探索方式"与自由探索表述;个人设置文章的
+  // 步骤与截图说明不再描述探索方式卡片(区域编号已顺号修正)。
+  assert.doesNotMatch(helpCenter, /自由探索|探索方式|两种探索/);
+  // 旅程线与模式徽标样式随分支一并退场(查看模式徽标 issue-view-mode 保留)。
+  assert.doesNotMatch(css, /\.issue-journey|\.issue-jnode|\.issue-mode[ .:{]/);
+  assert.match(css, /\.issue-view-mode \{/);
 });
 
 test("团队看板问题卡片入口行为不变:点击即进,不含归属判断", () => {
