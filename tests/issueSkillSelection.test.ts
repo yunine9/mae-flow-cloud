@@ -7,6 +7,9 @@
  * - 空选 =「都不用,AI 自主」:台账记空集合;重走(检视意见回流)
  *   不重举;
  * - 月光开不举卡;扫描为空不举卡;
+ * - 扫描目录为 `.cac/skills` + `.agents/skills` 两根(2026-09-03
+ *   拍板):`.cac` 同名优先,`.agents` 补位,同名跳过在转移账留告警
+ *   (文案含技能名与两目录来源),仅 `.agents` 有的技能可见可用;
  * - 提示层:开场词在 analyze 阶段注入必读集合。
  *
  * 范式与 issueMoonlight.test.ts 同款:ScriptedModelServer 剧本,只走
@@ -48,6 +51,33 @@ function bareOrigin(root: string, withSkill: boolean): string {
       + "description: 登录链路五步排障:定位超时环节,核对会话与网关配置\n"
       + "---\n\n# 登录链路排障\n\n先复现,再分段计时。\n");
   }
+  execFileSync("git", ["-C", seed, "add", "."], { env: GIT_ENV });
+  execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
+    "-m", "init"], { env: GIT_ENV });
+  const origin = join(root, "origin.git");
+  execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
+  return origin;
+}
+
+/** 两目录夹具:cacNames 落 `.cac/skills`,agentsNames 落
+ * `.agents/skills`,同名用例靠同一名字进两目录构造。 */
+function bareOriginWithSkills(
+  root: string,
+  cacNames: string[],
+  agentsNames: string[],
+): string {
+  const seed = join(root, "seed-repo");
+  execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
+  const writeSkill = (base: string[], name: string) => {
+    const skillDir = join(seed, ...base, name);
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"),
+      `---\nname: ${name}\n`
+      + `description: ${name} 的排障要点:先复现,再分段计时。\n`
+      + `---\n\n# ${name}\n\n先复现,再分段计时。\n`);
+  };
+  for (const name of cacNames) writeSkill([".cac", "skills"], name);
+  for (const name of agentsNames) writeSkill([".agents", "skills"], name);
   execFileSync("git", ["-C", seed, "add", "."], { env: GIT_ENV });
   execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
@@ -333,6 +363,166 @@ test("扫描为空:仓里没有 .cac/skills 时不举卡,留一行转移账直�
     assert.equal(
       transitions.filter((entry) => entry.note.includes("skill 圈选")).length,
       0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("两目录各有技能:都进圈选清单,.cac 在前;补位技能可用", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-both-"));
+  const origin = bareOriginWithSkills(dataDir, ["login-triage"], ["deploy-check"]);
+  const script: Scene[] = [
+    ...frontScenes(origin),
+    { tool: { name: "bash", input: { command: REPORT } } },
+    { tool: { name: "submit_analysis", input: { summary: "会话网关超时配置过小" } } },
+    { text: "报告已提交。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    issueFlowMode: () => "fixed",
+    moonlight: () => false,
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      repoUrl: origin,
+    });
+    const gated = await waitSkillGate(service, created.id);
+    assert.deepEqual(gated.gate?.skills?.map((skill) => skill.path), [
+      "repo/origin/.cac/skills/login-triage/SKILL.md",
+      "repo/origin/.agents/skills/deploy-check/SKILL.md",
+    ], "两目录技能都上榜,.cac 根在前");
+    assert.ok(
+      !(gated.transitions ?? []).some((entry) =>
+        entry.note.includes("skill 扫描告警")),
+      "无同名不该有告警");
+
+    // 勾选 .agents 补位的那项:照常受理,补位技能可用。
+    const agentsPath = "repo/origin/.agents/skills/deploy-check/SKILL.md";
+    const answered = service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      selection: [agentsPath],
+    });
+    assert.equal(answered.skill_selection?.skills.length, 1);
+    assert.equal(answered.skill_selection!.skills[0].path, agentsPath);
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+    }, "圈选补位技能后继续走到报告确认闸");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("跨目录同名:.cac 胜出、.agents 版本跳过,转移账留告警(含两目录来源)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-dup-"));
+  const origin = bareOriginWithSkills(
+    dataDir, ["login-triage"], ["login-triage", "deploy-check"]);
+  const script: Scene[] = [
+    ...frontScenes(origin),
+    { tool: { name: "bash", input: { command: REPORT } } },
+    { tool: { name: "submit_analysis", input: { summary: "会话网关超时配置过小" } } },
+    { text: "报告已提交。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    issueFlowMode: () => "fixed",
+    moonlight: () => false,
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      repoUrl: origin,
+    });
+    const gated = await waitSkillGate(service, created.id);
+    assert.deepEqual(gated.gate?.skills?.map((skill) => skill.path), [
+      "repo/origin/.cac/skills/login-triage/SKILL.md",
+      "repo/origin/.agents/skills/deploy-check/SKILL.md",
+    ], "同名技能只上 .cac 版本,.agents 版本不重复上榜");
+
+    // 同名跳过必须留痕:告警文案含技能名与两目录来源,不静默。
+    const warning = (gated.transitions ?? []).find((entry) =>
+      entry.note.includes("skill 扫描告警"));
+    assert.ok(warning, "同名跳过在转移账留告警");
+    assert.match(warning!.note,
+      /技能 login-triage 在 \.agents\/skills 有同名定义,按 \.cac 优先已跳过/);
+    assert.ok(warning!.note.includes(".cac/skills"),
+      "告警含胜出目录来源");
+
+    // 圈选同名技能:落在 .cac 版本上。
+    const cacPath = "repo/origin/.cac/skills/login-triage/SKILL.md";
+    const answered = service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      selection: [cacPath],
+    });
+    assert.equal(answered.skill_selection?.skills[0]?.path, cacPath);
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+    }, "圈选后继续走到报告确认闸");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("仅 .agents/skills 有技能:补位可见可用,路径指向 .agents", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-agents-"));
+  const origin = bareOriginWithSkills(dataDir, [], ["solo-skill"]);
+  const script: Scene[] = [
+    ...frontScenes(origin),
+    { tool: { name: "bash", input: { command: REPORT } } },
+    { tool: { name: "submit_analysis", input: { summary: "会话网关超时配置过小" } } },
+    { text: "报告已提交。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    issueFlowMode: () => "fixed",
+    moonlight: () => false,
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      repoUrl: origin,
+    });
+    const gated = await waitSkillGate(service, created.id);
+    const [choice] = gated.gate?.skills ?? [];
+    assert.equal(choice?.path,
+      "repo/origin/.agents/skills/solo-skill/SKILL.md",
+      "仅 .agents 有的技能照常进清单");
+    assert.match(choice?.description ?? "", /solo-skill/,
+      "描述取自 .agents 下的 SKILL.md frontmatter");
+    assert.ok(
+      !(gated.transitions ?? []).some((entry) =>
+        entry.note.includes("未发现业务 skill")),
+      "有技能就不写空扫描账");
+
+    // 可用:勾选照常受理,路径随台账留存。
+    const agentsPath = "repo/origin/.agents/skills/solo-skill/SKILL.md";
+    const answered = service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      selection: [agentsPath],
+    });
+    assert.equal(answered.skill_selection?.skills.length, 1);
+    assert.equal(answered.skill_selection!.skills[0].path, agentsPath);
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+    }, "圈选后继续走到报告确认闸");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

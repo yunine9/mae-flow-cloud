@@ -554,6 +554,14 @@ function skillDescription(path: string): string {
   }
 }
 
+/** skill 圈选扫描的两个固定目录(2026-09-03 拍板):数组序即优先级,
+ * `.cac` 在前(存量团队行为不变),`.agents` 补位;pi/.claude 不进
+ * 问题流扫描(与需求流 REPOSITORY_SKILL_ROOTS 四根刻意不同)。 */
+const SKILL_SCAN_ROOTS = [
+  { dir: join(".cac", "skills"), label: ".cac/skills" },
+  { dir: join(".agents", "skills"), label: ".agents/skills" },
+] as const;
+
 /** 不可修分诊命中时,给通知文案列人话工具名(失败项里落在名单内的
  *  工具,保原大小写)。与 onlyUnfixableToolFailures 同源的收集口径:
  *  check.tool + details[].tool,名单内的才列。 */
@@ -1473,9 +1481,10 @@ export class IssueFlowService {
   /** skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时由
    * 工具层调用。现读现判五条件:固定流程 + 注册表声明本阶段有入口闸
    * + 月光关 + 台账未圈选过 + 盘上无其他闸;再扫描已拉仓的
-   * `.cac/skills/`,非空才真举。扫描为空留一行转移账(现场可查),
-   * 不举卡——浪费用户一次点击的卡不是好卡。返回是否举了(工具回执
-   * 据此叫 Agent 停回合)。 */
+   * `.cac/skills/` 与 `.agents/skills/`(.cac 同名优先,见扫描处),
+   * 非空才真举。同名跳过/扫描为空都留一行转移账(现场可查),不举卡
+   * ——浪费用户一次点击的卡不是好卡。返回是否举了(工具回执据此叫
+   * Agent 停回合)。 */
   private raiseSkillSelectionGate(live: LiveIssue): boolean {
     const { state } = live;
     if (state.mode !== "fixed" || !state.scenario) return false;
@@ -1485,12 +1494,23 @@ export class IssueFlowService {
     if (this.moonlightOn(live)) return false;
     if (state.skill_selection) return false;
     if (state.gate) return false;
-    const skills = this.scanBusinessSkills(live);
+    const { choices: skills, warnings } = this.scanBusinessSkills(live);
+    // 跨目录同名跳过必须留痕(2026-09-03 拍板,不静默):转移账一行
+    // + 平台日志,团队得能从现场账查到".agents 里那个为什么没上清单"。
+    if (warnings.length) {
+      recordTransition(state, {
+        source: "platform",
+        note: `skill 扫描告警:${warnings.join(";")}`,
+      });
+      for (const warning of warnings) {
+        this.log(`[issue-flow] ${live.id} skill 扫描告警: ${warning}`);
+      }
+    }
     if (!skills.length) {
       recordTransition(state, {
         source: "platform",
-        note: "进入问题分析:已拉仓内未发现业务 skill(.cac/skills),"
-          + "AI 按取用次序自主定位",
+        note: "进入问题分析:已拉仓内未发现业务 skill"
+          + "(.cac/skills、.agents/skills),AI 按取用次序自主定位",
       });
       return false;
     }
@@ -1499,8 +1519,9 @@ export class IssueFlowService {
       "skill_select",
       "进入问题分析:勾选要 AI 必读的仓内排障知识(可多选)",
       undefined,
-      "以下是从已拉取的仓里扫描到的业务 skill(.cac/skills)。勾选的会"
-        + "成为 AI 的必读材料;一个都不选则 AI 按方法论取用次序自主决定。",
+      "以下是从已拉取的仓里扫描到的业务 skill(.cac/skills 与"
+        + ".agents/skills,同名按 .cac 优先)。勾选的会成为 AI 的必读"
+        + "材料;一个都不选则 AI 按方法论取用次序自主决定。",
       undefined,
       skills,
     );
@@ -1509,33 +1530,50 @@ export class IssueFlowService {
     return true;
   }
 
-  /** 扫描已拉仓工作区里的业务 skill(ADR-0011):repo/<仓名>/.cac/
-   * skills/<名>/SKILL.md 标准一层目录。本地文件系统扫描,零新增网络
+  /** 扫描已拉仓工作区里的业务 skill(ADR-0011):repo/<仓名>/ 下的
+   * `.cac/skills/<名>/SKILL.md` 与 `.agents/skills/<名>/SKILL.md`
+   * 标准一层目录(2026-09-03 拍板扩为两根,pi/.claude 不进问题流)。
+   * 固定优先级 **`.cac` 优先**(存量团队行为不变),`.agents` 补位:
+   * 同仓内跨目录同名时 `.cac` 版本胜出,`.agents` 版本跳过并出告警
+   * (warnings,由调用方留痕,不静默)。本地文件系统扫描,零新增网络
    * 路径——仓已落地,这就是 Agent 视角的同一份事实(需求侧走网络
    * 发现是因为下单时仓还没 clone,威胁模型不同)。 */
-  private scanBusinessSkills(live: LiveIssue): IssueSkillChoice[] {
+  private scanBusinessSkills(
+    live: LiveIssue,
+  ): { choices: IssueSkillChoice[]; warnings: string[] } {
     const choices: IssueSkillChoice[] = [];
+    const warnings: string[] = [];
     for (const repo of issueRepoWorkspaces(live.state, live.root)) {
-      const skillsRoot = join(repo.dir, ".cac", "skills");
-      let entries: import("node:fs").Dirent[];
-      try {
-        entries = readdirSync(skillsRoot, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillFile = join(skillsRoot, entry.name, "SKILL.md");
-        if (!existsSync(skillFile)) continue;
-        choices.push({
-          path: relative(live.root, skillFile).split("\\").join("/"),
-          repo: repo.url,
-          name: entry.name,
-          description: skillDescription(skillFile),
-        });
+      const claimed = new Set<string>();
+      for (const root of SKILL_SCAN_ROOTS) {
+        const skillsRoot = join(repo.dir, root.dir);
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(skillsRoot, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillFile = join(skillsRoot, entry.name, "SKILL.md");
+          if (!existsSync(skillFile)) continue;
+          if (claimed.has(entry.name)) {
+            warnings.push(`技能 ${entry.name} 在 ${root.label}`
+              + ` 有同名定义,按 .cac 优先已跳过`
+              + `(${SKILL_SCAN_ROOTS[0].label} 版本生效;仓 ${repo.url})`);
+            continue;
+          }
+          claimed.add(entry.name);
+          choices.push({
+            path: relative(live.root, skillFile).split("\\").join("/"),
+            repo: repo.url,
+            name: entry.name,
+            description: skillDescription(skillFile),
+          });
+        }
       }
     }
-    return choices;
+    return { choices, warnings };
   }
 
   /** 业务知识资产定格(ADR-0012):进入 analyze 时按**当时**的绑定
@@ -2565,7 +2603,8 @@ export class IssueFlowService {
           `- ${skill.path}${skill.description ? ` — ${skill.description}` : ""}`),
         "读完它们再继续问题分析;读完仍可按方法论取用次序补充其他材料。"]
       : ["用户未圈选任何业务 skill——按方法论取用次序自主定位"
-          + "(业务仓 .cac/skills、货架通用 skill、issue-research、自行取证)。"];
+          + "(业务仓 .cac/skills 与 .agents/skills、货架通用 skill、"
+          + "issue-research、自行取证)。"];
     this.continueTurn(live, [
       ...lines,
       "",
