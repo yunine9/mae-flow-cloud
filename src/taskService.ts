@@ -4943,7 +4943,7 @@ export class TaskService {
     });
   }
 
-  /** §5 起草 trigger/scope:入库后异步补一版,预算 10 s,失败保留模板并
+  /** §5 起草 trigger/scope:入库后异步补一版,预算 90 s(旁路,给宽),失败保留模板并
    * 标 failed。user_note 不过这道(人写的那句话就是 trigger,固定 general)。 */
   private queueMemoryDraft(task: TaskState, record: MemoryRecord): void {
     if (record.source === "user_note") return;

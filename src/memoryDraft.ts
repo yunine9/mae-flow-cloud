@@ -16,8 +16,10 @@
 import type { MemoryRecord, MemoryScope } from "./taskMemory.ts";
 import { MEMORY_TRIGGER_LIMIT } from "./taskMemory.ts";
 
-export const MEMORY_DRAFT_BUDGET_MS = 10_000;
-export const MEMORY_DIGEST_BUDGET_MS = 10_000;
+/** 起草与摘要都是旁路,不在主会话的路上,预算可以给宽:内网网关慢(用户
+ * 2026-09-03 拍板 10 s 太短),给 90 s;到点就放弃、保留模板,绝不重试硬等。 */
+export const MEMORY_DRAFT_BUDGET_MS = 90_000;
+export const MEMORY_DIGEST_BUDGET_MS = 90_000;
 /** 单目录超过这个数就推摘要不推明细(§13)。 */
 export const MEMORY_DIGEST_THRESHOLD = 15;
 

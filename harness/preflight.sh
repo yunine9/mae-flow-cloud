@@ -221,7 +221,7 @@ fi
 
 # 4.8 记忆三期链路演练(设计稿 §5/§6/§13):记录→起草收尾→台账/效果账→目录
 # 摘要兜底→沉底归档,临时目录里真跑一遍;有 --memsearch 再验"起草后按新说法
-# 搜得到、归档重建后搜不到",有 --models 再真起草一次(10 s 预算)。
+# 搜得到、归档重建后搜不到",有 --models 再真起草一次(90 s 预算)。
 # 部署边界:整条链路在宿主进程里,任务容器不需要 python/memsearch/语料。
 DRILL_ARGS=()
 [ -n "$MEMSEARCH" ] && [ -x "$MEMSEARCH" ] && DRILL_ARGS+=(--memsearch "$MEMSEARCH")

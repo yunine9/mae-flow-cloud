@@ -487,7 +487,7 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   preflight 4.7 实测 2.0 GB,部署预留按 2.5 GB 起算),没做多任务并发压测。
 - **2026-09-03 任务记忆第三期:起草、效果账、目录摘要、沉底、总览页**(同一
   设计稿 §5/§6/§8-3/§9/§13):①闭环记忆入库后异步单发起草 trigger/scope
-  (**专用便宜模型角色** `--memory-draft-provider/--memory-draft-model`,10 s
+  (**专用便宜模型角色** `--memory-draft-provider/--memory-draft-model`,90 s
   硬预算,无工具;不配就不起草只留模板。刻意不回落到任务模型:旁路不抢主会话
   额度,而且剧本模型按幕应答、旁路多问一句就吃掉主会话下一幕——mrLoop 两条
   用例实锤),在同一条记录上收尾——md 改标题、索引

@@ -916,7 +916,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   模型冷加载内网 2.8 s,ready 预算 60 s。索引 `milvus.db` 与语料 `corpus/`
   都在 `--data` 目录下,受同一备份与回收纪律;索引删了可从 md 重建。
 - **起草角色**:`--memory-draft-provider/--memory-draft-model` 必须同时给,且在
-  models.json 里真有;选便宜的模型——每条闭环记忆一次单发、10 s 预算,目录
+  models.json 里真有;选便宜的模型——每条闭环记忆一次单发、90 s 预算(旁路,不在主会话路上),目录
   摘要同款。刻意不回落到任务模型(旁路不抢主会话额度)。
 - **容器**:整条链路在宿主进程里(sidecar 是宿主拉的子进程、起草是宿主发的
   调用、corpus_search 是宿主进程内的工具),任务容器和 `--isolate-image`
