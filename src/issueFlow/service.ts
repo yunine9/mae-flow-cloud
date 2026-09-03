@@ -2074,6 +2074,9 @@ export class IssueFlowService {
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
       onMrCreated: (repo: string) => service.armPipelineWatch(live, repo),
+      // mr_green 即时收口(complete_stage 验绿当场全绿/空清单)的用户
+      // 通知;监看器滞后收口走 settlePipeline 的 closeMrGreen 同款。
+      notifyMrGreen: () => this.notifyMrGreenClosed(live),
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -2647,6 +2650,25 @@ export class IssueFlowService {
     }
     const content = text?.trim();
     if (!content) throw new IssueControlError("消息内容不能为空");
+    // 收口后返工(ADR-0013):流程终点是 MR 跑绿,收口态(idle+阶段
+    // done)下用户续聊 = "还没修好",重开当前阶段让 AI 继续修——归档
+    // 之前都能继续,可多轮(修完重推再申报,验绿门重新受理)。封存/
+    // 自由态(fixedStageIndex -1)不重开。轮次账不动:这不是回退,
+    // 分支与 MR 延用,现场记录本就连续。
+    if (live.state.mode === "fixed" && live.state.scenario
+        && live.state.status === "idle") {
+      const index = fixedStageIndex(
+        live.state.scenario, live.state.stage as FixedStage);
+      if (index >= 0 && live.state.stage_states?.[index] === "done") {
+        live.state.stage_states![index] = "in_progress";
+        recordTransition(live.state, {
+          source: "platform",
+          note: `用户续聊返工,重开「${fixedStageLabel(
+            live.state.scenario, live.state.stage as FixedStage)}」阶段`,
+        });
+        saveState(live.root, live.state);
+      }
+    }
     this.continueTurn(live, content);
     return summarize(live.state);
   }
@@ -3047,9 +3069,9 @@ export class IssueFlowService {
         source: "platform", note: `流水线全绿(${repo})@ ${sha.slice(0, 12)}`,
       });
       // 多仓语义(2026-08-28 拍板):AI 已建的 MR 各自跑流水线,全部
-      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。放行还要过
-      // MR 验绿门的申报半边(不变量:进 deploy_verify 当且仅当
-      // "已申报且全绿"):AI 没申报就不推进,开回合提醒它 complete_stage。
+      // 跑绿才收口;还有在途/未绿的就等齐,不抢跑。收口还要过 MR 验绿
+      // 门的申报半边(不变量:收口当且仅当"已申报且全绿"):AI 没申报
+      // 就不收,开回合提醒它 complete_stage。
       const mrs = state.mrs ?? [];
       const allGreen = mrs.length > 0 && mrs.every((mr) =>
         state.pipelines?.[mr.repo]?.status === "success");
@@ -3057,16 +3079,12 @@ export class IssueFlowService {
         .some((item) => item.watching);
       if (allGreen && !anyWatching && state.mr_gate) {
         delete state.mr_gate;
-        fixedAdvance(state, "deploy_verify",
-          `全部 ${mrs.length} 个 MR 流水线跑绿,进入换库环境验证`);
-        saveState(live.root, state);
-        this.startPlatformTurn(live, fixedAdvanceNotice(state,
-          `全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
-            + "进入「换库环境验证」阶段。请调用 build_deploy 部署到网管环境"
-            + "(多仓时指定要部署的仓);部署完成后平台会举验证卡,等用户真实验证。"));
-      } else if (allGreen && !anyWatching && state.stage === "mr_green") {
-        // 全绿但 AI 还没申报清单:不推进(申报是 mr_green 的出口半边),
-        // 提醒它调 complete_stage 完成收口。(已在验绿门当场放行的滞后
+        this.closeMrGreen(live,
+          `全部 ${mrs.length} 个 MR 流水线跑绿(监看器验绿收口)`);
+      } else if (allGreen && !anyWatching && state.stage === "mr_green"
+          && !this.mrGreenClosed(state)) {
+        // 全绿但 AI 还没申报清单:不收口(申报是 mr_green 的出口半边),
+        // 提醒它调 complete_stage 完成收口。(已在验绿门当场收口的滞后
         // 结算不进这里——阶段守卫挡住,不发过时的申报提醒。)
         saveState(live.root, state);
         this.startPlatformTurn(live,
@@ -3605,6 +3623,41 @@ export class IssueFlowService {
         + previousFailure
         + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),"
         + "平台会重新监看。");
+  }
+
+  /** mr_green 收口(2026-09-02 拍板,ADR-0013:流程终点=流水线全绿,
+   * 换库验证封存):当前阶段 fixedComplete、用户小鲁班通知、等归属人
+   * 手动归档。归档前用户续聊即重开本阶段返工(见 reply 的收口重开),
+   * AI 修完重推再申报,可多轮。状态保持 idle——收口是"等人拍板归档",
+   * 不是终态。 */
+  private closeMrGreen(live: LiveIssue, note: string): void {
+    const { state } = live;
+    fixedComplete(state, note);
+    state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
+    saveState(live.root, state);
+    this.notifyMrGreenClosed(live);
+  }
+
+  /** mr_green 收口的用户通知(即时收口与监看器滞后收口共用)。 */
+  private notifyMrGreenClosed(live: LiveIssue): void {
+    const { state } = live;
+    void this.options.notifier?.notifyOutcome({
+      taskId: live.id,
+      account: state.account,
+      status: "待归档",
+      summary: `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
+        + "——确认合入后可归档收口",
+      link: this.issueLink(live.id),
+    }).catch(() => undefined);
+  }
+
+  /** mr_green 是否已收口(本阶段 stage_states=done)。监看器的滞后结算
+   * 与重复放行都靠它挡——收口后再结算不重通知、不重记账。 */
+  private mrGreenClosed(state: IssueSessionState): boolean {
+    if (state.mode !== "fixed" || !state.scenario) return false;
+    const index = fixedStageIndex(state.scenario, "mr_green");
+    return index >= 0
+      && (state.stage_states?.[index] ?? "pending") === "done";
   }
 
   /** 红灯取证的评估输入:把刚镜像到会话工作区 pipeline/ 的产物读回

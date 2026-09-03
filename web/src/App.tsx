@@ -372,7 +372,7 @@ function IssueFlowModeSetting({
       const user = await putIssueFlowMode(next);
       setMode(user.issue_flow === "free" ? "free" : "fixed");
       setNote(next === "fixed"
-        ? "新发起的问题处理将按固定流程推进(六阶段/三节点,平台把关)"
+        ? "新发起的问题处理将按固定流程推进(五阶段/三节点,平台把关)"
         : "新发起的问题处理改为自由探索(AI 按 playbook 自主编排);进行中的会话不受影响");
       onChanged({ issue_flow: user.issue_flow });
     } catch (cause) {
@@ -385,7 +385,7 @@ function IssueFlowModeSetting({
       <div><span className="section-kicker">ISSUE EXPLORATION</span><h2 id="issue-flow-mode-title">问题处理探索方式</h2></div>
       <span className="approval-setting-state">当前：{mode === "fixed" ? "固定流程" : "自由探索"}</span>
     </header>
-    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单六阶段、无单三节点;分析确认与换库验证停下等你确认);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
+    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单五阶段、无单三节点;分析确认停下等你确认,MR 全部跑绿即收口待归档);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
     <div className="approval-options" role="group" aria-label="问题处理探索方式">
       <button type="button" className={mode === "fixed" ? "on" : ""} disabled={busy}
         onClick={() => void select("fixed")}>

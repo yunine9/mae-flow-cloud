@@ -25,14 +25,14 @@ import type { AnyIssueStage, IssueGateKind, IssueScenario } from "./state.ts";
 
 // ---- 阶段词表与路线 ----
 
-/** 有单场景六阶段。 */
+/** 有单场景五阶段(2026-09-02 拍板:换库环境验证封存下线,见
+ * ADR-0013——mr_green 全绿即流程收口,归档前可续聊返工)。 */
 export const FIXED_TICKET_STAGES = [
   "dts_info",      // 获取 DTS 单信息(通读单据后 complete_stage 自报收口)
   "prep_repo",     // 拉取代码仓+创建分支(拉齐后 complete_stage 自报收口,无需代码仓也由它跳过)
   "analyze",       // 问题分析:证据链定位,产出四要素分析报告(submit_analysis 触发人工闸)
   "fix",           // 问题修改:TDD 节奏,先写复现单测再改码转绿,UT 属于本阶段(report_ut 事实上报)
-  "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿放行)
-  "deploy_verify", // 换库环境验证(build_deploy 部署后平台闸等用户真实验证)
+  "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿收口)
 ] as const;
 
 /** 无单场景三节点:测试/开发自行定位用,结论"是问题"→挂起待关联。 */
@@ -206,23 +206,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "pull_repo" },
       { name: "bind_module" },
     ],
-  },
-  deploy_verify: {
-    label: "换库环境验证",
-    goal: "调 build_deploy 换库部署(多仓时用 repo 参数指定要部署的仓);"
-      + "部署完成平台举验证卡,停下等用户真实验证",
-    exit: "build_deploy 部署完成 → 平台举「环境验证」卡等用户",
-    exitAction: "build_deploy",
-    tools: [
-      { name: "build_deploy" },
-      { name: "fetch_logs" },
-      { name: "get_issue_meta" },
-      { name: "dts_get_ticket" },
-      { name: "pull_repo" },
-      { name: "bind_module" },
-      { name: "push_branch" },
-    ],
-    gate: { kind: "env_verify" },
   },
   conclude: {
     label: "确定结论",

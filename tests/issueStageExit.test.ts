@@ -20,6 +20,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
@@ -165,6 +166,8 @@ function chainScenes(origin: string, declarations: string[][]): Scene[] {
 interface Chain {
   dataDir: string;
   origin: string;
+  luban: FakeLubanServer;
+  notifier: Notifier;
   platform: GatePlatform;
   model: ScriptedModelServer;
   service: IssueFlowService;
@@ -180,6 +183,7 @@ async function stopChain(chain: Chain): Promise<void> {
   await chain.service.shutdown().catch(() => undefined);
   await chain.model.stop();
   await chain.platform.stop();
+  await chain.luban.stop();
 }
 
 /** 登记有单会话,等分析闸并确认,把剧本推进到提交MR回合。
@@ -199,6 +203,12 @@ async function startChain(options: {
     chainScenes(origin, options.declarations?.(origin) ?? []),
     "scripted-v1", { linear: true });
   await model.start();
+  // 假小鲁班挂上收口通知:mr_green 全绿收口要点名用户待归档(ADR-0013)。
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const notifier = new Notifier({
+    endpoint: luban.endpoint, backoffMs: [0],
+  });
   const service = new IssueFlowService({
     dataDir,
     provider: "maeflow",
@@ -209,6 +219,7 @@ async function startChain(options: {
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
     issueFlowMode: () => "fixed",
+    notifier,
   });
   const created = service.create({
     account: "dev", title: "出口回归", ticket: TICKET, source: "dts",
@@ -236,6 +247,8 @@ async function startChain(options: {
     platform,
     model,
     service,
+    luban,
+    notifier,
     id: created.id,
     events: readEvents,
     saved: () => loadState(eventsRoot)!,
@@ -333,8 +346,8 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
 
 test("出口回归(免模型):三个举卡阶段调 complete_stage 被门禁拒绝", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-gate-"));
-  // 分析(有单)与结论(无单)的出口是 submit_analysis;换库验证的
-  // 出口是 build_deploy——卡即出口,没有 complete_stage 可绕。
+  // 分析(有单)与结论(无单)的出口是 submit_analysis;换库验证已
+  // 封存(ADR-0013)——build_deploy 无阶段开放,调用恒被阶段门禁拒。
   const analyze = directTools(directState(dataDir, "ticket", "analyze"), dataDir);
   await assert.rejects(
     () => analyze.byName("complete_stage").execute("x", { note: "n" }),
@@ -343,10 +356,10 @@ test("出口回归(免模型):三个举卡阶段调 complete_stage 被门禁拒�
   await assert.rejects(
     () => conclude.byName("complete_stage").execute("x", { note: "n" }),
     /阶段门禁/, "无单结论节点的出口是 submit_analysis(带结论)");
-  const deploy = directTools(directState(dataDir, "ticket", "deploy_verify"), dataDir);
+  const sealed = directTools(directState(dataDir, "ticket", "mr_green"), dataDir);
   await assert.rejects(
-    () => deploy.byName("complete_stage").execute("x", { note: "n" }),
-    /阶段门禁/, "换库验证阶段的出口是 build_deploy");
+    () => sealed.byName("build_deploy").execute("x", { include_lib: false }),
+    /阶段门禁/, "换库验证封存后 build_deploy 恒被阶段门禁拒绝");
 });
 
 test("出口回归(免模型):report_ut 降级为事实上报——只记账不推进", async () => {
@@ -369,7 +382,7 @@ test("出口回归(免模型):report_ut 降级为事实上报——只记账不�
 
 // ---- MR 验绿门三态(service 驱动,假交付平台) ----
 
-test("MR 验绿门·全绿当场放行:申报即核验,全绿当场进换库验证", async () => {
+test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待归档", async () => {
   const chain = await startChain({
     platformStatus: "success",
     declarations: (origin) => [[origin]],
@@ -378,18 +391,26 @@ test("MR 验绿门·全绿当场放行:申报即核验,全绿当场进换库验�
     const done = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "deploy_verify" ? issue : undefined;
-    }, "全绿当场放行进换库验证");
-    assert.equal(done.stage_states?.[4], "done", "mr_green 随申报收口");
-    assert.equal(done.stage_states?.[5], "in_progress", "换库验证进行中");
+      return issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done" && issue.status === "idle"
+        ? issue : undefined;
+    }, "全绿当场收口待归档");
+    assert.equal(done.stage, "mr_green", "终点阶段不动,收口在本阶段");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
-    // 当场放行没有停等:受理账不在场。
+    assert.match(done.stage_note ?? "", /确认合入后可归档/);
+    // 当场收口没有停等:受理账不在场。
     assert.equal(chain.saved().mr_gate, undefined);
-    // 回执与台账:验绿通过 + deploy_verify 注册表简报进现场。
+    // 回执与台账:验绿通过 + 收口话术进现场。
     assert.match(chain.okReceipts(), /MR 验绿通过/);
-    assert.match(chain.okReceipts(), /当前阶段「换库环境验证」/);
+    assert.match(chain.okReceipts(), /流程收口/);
     assert.match(chain.trail(), /MR 验绿通过/, "验绿裁决要进台账");
+    // 收口要点名用户:小鲁班通知"全部跑绿,待归档"(ADR-0013)。
+    // (等待闸卡也发通知,按内容取收口那条。)
+    const notice = await until(() =>
+      chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
+      "收口通知");
+    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
   } finally {
     await stopChain(chain);
   }
@@ -436,15 +457,21 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
     assert.deepEqual(saved.mr_gate?.mrs, [chain.origin], "受理要记申报账");
     assert.match(chain.okReceipts(), /已受理/);
     assert.match(chain.trail(), /MR 清单已申报/, "申报要进台账");
-    // 平台转绿:监看器等绿后凭申报账放行(不变量:已申报且全绿)。
+    // 平台转绿:监看器等绿后凭申报账收口(不变量:收口当且仅当
+    // 已申报且全绿)。
     chain.platform.defaultStatus = "success";
     const done = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "deploy_verify" ? issue : undefined;
-    }, "监看器等绿后放行");
-    assert.equal(done.stage_states?.[5], "in_progress");
-    assert.equal(chain.saved().mr_gate, undefined, "放行即清申报账");
+      return issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done" ? issue : undefined;
+    }, "监看器等绿后收口");
+    assert.equal(done.status, "idle", "收口待归档");
+    assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
+    const notice = await until(() =>
+      chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
+      "滞后收口通知");
+    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
   } finally {
     await stopChain(chain);
   }
@@ -555,11 +582,12 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     const done = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "deploy_verify" && issue.status === "idle"
+      return issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done" && issue.status === "idle"
         ? issue : undefined;
-    }, "空=空放行进换库验证");
+    }, "空=空收口待归档");
     assert.equal(done.mrs, undefined, "零 MR 交付");
-    assert.equal(done.stage_states?.[4], "done", "mr_green 收口(空=空)");
+    assert.equal(done.stage, "mr_green", "收口在终点阶段");
     const saved = loadState(join(dataDir, "issues", created.id))!;
     const trail = (saved.transitions ?? []).map((entry) => entry.note).join("\n");
     assert.match(trail, /空清单=空台账/);
@@ -571,7 +599,7 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
         && event.payload?.name === "complete_stage" && !event.payload.is_error)
       .map((event) => String(event.payload.result)).join("\n");
     assert.match(receipts, /空清单=空台账/);
-    assert.match(receipts, /当前阶段「换库环境验证」/);
+    assert.match(receipts, /流程收口/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -609,8 +637,8 @@ test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模�
       chain.service.get(chain.id).status === "idle" ? 1 : undefined, "回合收口");
     chain.platform.defaultStatus = "success";
     await until(() =>
-      chain.service.get(chain.id).stage === "deploy_verify" ? 1 : undefined,
-      "监看器等绿后放行");
+      chain.service.get(chain.id).stage_states?.[4] === "done" ? 1 : undefined,
+      "监看器等绿后收口");
     // 真实环境事故:适配层状态命令模板引用 {mr},缺参渲染失败 502——
     // 验绿门当场查与监看器轮询两路都必须带上台账里的 iid。
     const statusUrls = chain.platform.seen
@@ -650,4 +678,39 @@ test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放�
   const receipt = textOf(await byName("push_branch").execute("x", {}));
   assert.match(receipt, /已推送/);
   assert.equal(state.pushes?.length, 1);
+});
+
+test("收口后返工:续聊重开 mr_green,再申报再收口;通知不重复轰炸", async () => {
+  const chain = await startChain({
+    platformStatus: "success",
+    declarations: (origin) => [[origin]],
+  });
+  try {
+    // 第一轮:全绿即时收口(申报即验绿),通知用户待归档。
+    await until(() => {
+      const issue = chain.service.get(chain.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" && issue.stage_states?.[4] === "done"
+        ? issue : undefined;
+    }, "第一轮收口");
+    const closed = chain.service.get(chain.id);
+    assert.equal(closed.stage, "mr_green", "收口在终点阶段");
+    await until(() =>
+      chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
+      "第一轮收口通知");
+
+    // 收口后用户说没修好:重开 mr_green 返工(不是回退,轮次账不动)。
+    const reopened = chain.service.reply(chain.id, "还是超时,继续修");
+    assert.equal(reopened.status, "running", "续聊即开新回合");
+    assert.equal(reopened.stage_states?.[4], "in_progress",
+      "收口态续聊重开本阶段");
+    assert.match(chain.trail(), /续聊返工/, "重开要进转移账");
+    assert.equal(reopened.round, 1, "返工不是回退,轮次账不动");
+
+    // 第二轮申报:剧本耗尽后由固定回执驱动——这里只断言重开态被平台
+    // 接受为进行中(验绿门允许再次申报收口,可多轮)。
+    assert.equal(chain.service.get(chain.id).mr_gate, undefined);
+  } finally {
+    await stopChain(chain);
+  }
 });
