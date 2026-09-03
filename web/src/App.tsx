@@ -583,15 +583,21 @@ export function App() {
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
   const targetReviewId = targetRoute.reviewId;
-  // 问题会话深链(/issues/:id):只承载"打开哪个会话",用户在页内
-  // 切换后 URL 不跟随(与 /work 深链先例同款的最小路由)。
+  // 问题会话工作台路由(/issues/:id):App 层是唯一写入口(openIssueSession/
+  // closeIssueSession/selectView 对表),快照与 URL 同生共死——不变量:
+  // issueRouteId 非空 ⇔ 当前 URL 是 /issues/:id。
   const [issueRouteId, setIssueRouteId] = useState(readIssueRoute);
 
   useEffect(() => {
     const syncRoute = () => {
       const next = readWorkspaceRoute();
       setTargetRoute(next);
-      setIssueRouteId(readIssueRoute());
+      const issueId = readIssueRoute();
+      setIssueRouteId(issueId);
+      // 浏览器在别的页签后退/前进到 /issues/X:除更新快照外还要真的切
+      // 回问题处理页签(以前只改状态不切页,按后退像没反应)。管理员没有
+      // 问题处理页(渲染条件排除),保持原页签;/work 深链照旧只恢复任务。
+      if (issueId && session?.role !== "admin") setView("issues");
       if (!next.taskId) {
         setArtifactTaskId("");
         setArtifactTaskSnapshot(undefined);
@@ -599,7 +605,7 @@ export function App() {
     };
     addEventListener("popstate", syncRoute);
     return () => removeEventListener("popstate", syncRoute);
-  }, []);
+  }, [session?.role]);
 
   useEffect(() => {
     const syncKnowledgeRoute = (event: PopStateEvent) => {
@@ -921,15 +927,27 @@ export function App() {
       setTargetRoute({ taskId: task.id, reviewId: "" });
     }
   };
-  /** 团队看板点开问题会话:切到问题处理 tab + 设路由(URL 跟随)。 */
-  const openIssueFromTeam = (id: string) => {
+  /** 问题工作台开/关的唯一写入口,服务三处:Board 列表点卡与页内切会话、
+   * 「返回列表」、团队看板问题卡跳转。App 层快照与 URL 一次写齐,守住
+   * 不变量:issueRouteId 非空 ⇔ 当前 URL 是 /issues/:id——Board 卸载重挂
+   * 时拿到的 initialOpenId 永远与地址栏一致,不再有"陈旧快照顶回来"。 */
+  const openIssueSession = (id: string) => {
     setView("issues");
     setIssueRouteId(id);
     const next = `/issues/${encodeURIComponent(id)}`;
     if (location.pathname !== next) {
-      history.pushState({}, "", next);
+      history.pushState(appHistoryState("issues"), "", next);
     }
   };
+  /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
+   *  (toState 记录归位后所在视图)。关工作台与切页签守门共用这一份。 */
+  const normalizeIssueRoute = (target: View) => {
+    if (!readIssueRoute()) return;
+    history.replaceState(appHistoryState(target,
+      target === "knowledge" ? teamAssetTab : undefined), "", "/");
+    setIssueRouteId("");
+  };
+  const closeIssueSession = () => normalizeIssueRoute("issues");
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
     if (related) openArtifacts(related);
@@ -967,6 +985,13 @@ export function App() {
     ? personalActionItems.length
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
+  /** 离开问题处理页签的归位守门人:URL 若还挂在 /issues/X(工作台深链),
+   * 归位到根路径(归一实现在 normalizeIssueRoute)。目标仍是问题处理
+   * (重点当前页签)不算离开,原样返回。 */
+  const leaveIssueRoute = (target: View) => {
+    if (target === "issues") return;
+    normalizeIssueRoute(target);
+  };
   const selectView = (next: View) => {
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
@@ -988,7 +1013,13 @@ export function App() {
       history.replaceState(appHistoryState(next,
         next === "knowledge" ? teamAssetTab : undefined), "",
         location.pathname + location.search);
+    } else {
+      leaveIssueRoute(next);
     }
+    // 不变量对表:进出页签、history 同步写完后按当前 URL 重读快照——
+    // 进入问题处理拿到深链 id(有则直达工作台),离开则随归位清成空串。
+    // Board 重挂时的 initialOpenId 从此与地址栏一致。
+    setIssueRouteId(readIssueRoute());
     setView(next);
   };
   const selectTeamAssetTab = (next: TeamAssetTab) => {
@@ -1064,7 +1095,7 @@ export function App() {
               users={teamUsers}
               onChanged={refresh}
               onOpenArtifacts={openArtifacts}
-              onOpenIssue={openIssueFromTeam}
+              onOpenIssue={openIssueSession}
             />
           </div> : <div role="tabpanel"
             id="team-task-archive-panel" aria-labelledby="team-task-archive-tab">
@@ -1166,7 +1197,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onNavigateProfile={() => setView("profile")} /></Suspense>}
+        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={() => { leaveIssueRoute("profile"); setView("profile"); }} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -1224,6 +1255,9 @@ export function App() {
         }
       }} />}
     <QuickWishButton onOpenWall={() => {
+      // 快速许愿的「查看许愿墙」也可能从 /issues/X 工作台点出,同样
+      // 先归位(不变量守门),再切页签。
+      leaveIssueRoute("wishes");
       setView("wishes");
       setLaunchOpen(false);
       closeArtifacts();

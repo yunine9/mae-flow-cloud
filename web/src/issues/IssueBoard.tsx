@@ -48,17 +48,28 @@ function readIssueListFilter(): IssueListFilter {
   return "active";
 }
 
-export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
+export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
+  onOpenIssue, onCloseIssue }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
   /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):作 openId 初值,
-   * 浏览器后退/前进时也同步过来。点开/返回列表会 pushState/replaceState,
-   * 让 URL 跟着会话走——与任务侧 /work/:id 同款分享语义。 */
+   * 浏览器后退/前进时也同步过来。初值由 App 层按当前 URL 对表后下发。 */
   initialOpenId?: string;
+  /** 写穿归一:点卡/页内切会话与「返回列表」都交给 App 层统一写
+   * issueRouteId + URL(pushState/replaceState),本组件不再直接操作
+   * history——App 快照、Board openId、URL 三处状态由此保持一致。 */
+  onOpenIssue: (id: string) => void;
+  onCloseIssue: () => void;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
+  /** 详情拉取是否失败过(当前 openId):失败只置横幅不清输入,加载
+   * 指示停转;再点同一张卡由 detailRetry 强制重试。 */
+  const [detailFailed, setDetailFailed] = useState(false);
+  /** 详情强制重试计数:openIssue 点到同一张卡时 +1,并入详情 effect
+   * 依赖——effect 只靠 [openId] 时同卡重复点击不会重跑,也就无从重试。 */
+  const [detailRetry, setDetailRetry] = useState(0);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<IssueListFilter>(readIssueListFilter);
 
@@ -89,25 +100,31 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   };
   useEffect(() => startVisiblePolling(refreshList, 5000, document), []);
 
-  // 打开会话时跟读详情;列表照常低频轮询。
+  // 打开会话时跟读详情;列表照常低频轮询。openId 变化即清旧 detail
+  // (上一会话的内容不许顶在新 URL 下),detailRetry 并入依赖——同一张
+  // 卡重复点击也强制重拉。失败只置横幅 + detailFailed(加载指示停转),
+  // 用户再点同卡即重试。
   useEffect(() => {
     if (!openId) {
       setDetail(undefined);
+      setDetailFailed(false);
       return;
     }
     let alive = true;
-    const refresh = () => {
-      void getIssue(openId).then((next) => {
-        if (alive) setDetail(next);
-      }).catch((reason) => {
-        if (alive) setError(String(reason instanceof Error ? reason.message : reason));
-      });
-    };
-    refresh();
+    setDetail(undefined);
+    setDetailFailed(false);
+    void getIssue(openId).then((next) => {
+      if (alive) setDetail(next);
+    }).catch((reason) => {
+      if (alive) {
+        setError(String(reason instanceof Error ? reason.message : reason));
+        setDetailFailed(true);
+      }
+    });
     return () => {
       alive = false;
     };
-  }, [openId]);
+  }, [openId, detailRetry]);
 
   // 状态/阶段/待办卡的低频刷新;执行过程的实时跟随在现场页签自己订 SSE。
   useEffect(() => startVisiblePolling(() => {
@@ -120,32 +137,38 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   useEffect(() => {
     const sync = () => {
       const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
-      const next = match ? decodeURIComponent(match[1]) : "";
+      let next = "";
+      if (match) {
+        try { next = decodeURIComponent(match[1]); }
+        catch { next = match[1]; } // 坏编码按字面当 id:后端会 404,交给错误横幅
+      }
       setOpenId((current) => current === next ? current : next);
     };
     addEventListener("popstate", sync);
     return () => removeEventListener("popstate", sync);
   }, []);
 
-  /** 打开会话:设 state + pushState(URL 可分享,后退能回列表)。 */
+  /** 打开会话:设本地 state,URL 与 App 层快照交给 onOpenIssue 统一写。
+   * 点到已打开的同一张卡不静默返回——上一轮详情可能拉取失败
+   * (effect 依赖里没有"点击"这个输入,自己不会重跑),强制重试一次。 */
   const openIssue = (id: string) => {
-    setOpenId(id);
-    const next = `/issues/${encodeURIComponent(id)}`;
-    if (location.pathname !== next) {
-      history.pushState({}, "", next);
+    if (id === openId) {
+      setDetailRetry((count) => count + 1);
     }
+    setOpenId(id);
+    onOpenIssue(id);
   };
 
-  /** 返回列表:清 state + replaceState(不在历史里留空壳)。 */
+  /** 返回列表:清本地 state,URL 归位交给 onCloseIssue 统一写。 */
   const backToList = () => {
     setOpenId("");
     setDetail(undefined);
-    if (location.pathname !== "/") {
-      history.replaceState({}, "", "/");
-    }
+    onCloseIssue();
   };
 
-  if (openId && detail) {
+  // 渲染门要求内容匹配:URL 指向的会话与已加载的 detail 必须是同一个,
+  // 否则宁可回列表显示加载态——根绝"URL 是 Y、页面渲染的是 X"的错位。
+  if (openId && detail?.id === openId) {
     return <IssueSessionView
       detail={detail}
       viewerUsername={viewer.username}
@@ -213,6 +236,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
               已收起 {issues.length - visibleIssues.length} 个</span>}
         </span>
       </div>
+      {/* 打开过渡态:openId 已设而匹配的详情未到(首次拉取中或重试中)
+          时在列表位置给出明确指示,不再无声停在列表;失败后停转让位给
+          顶部错误横幅,再点同一张卡即可重试。 */}
+      {openId && detail?.id !== openId && !detailFailed
+        && <div className="issue-open-loading" role="status">
+          <i aria-hidden />
+          <span>正在打开问题工作台…</span>
+        </div>}
       {issues.length === 0
         ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
             <strong>还没有问题会话</strong>

@@ -2511,6 +2511,24 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* ---- 问题处理页(与我的需求隔离的独立会话域) ---- */
 .issue-board { display: grid; gap: 18px; }
 .issue-board-loading { padding: 40px; color: var(--muted); }
+/* 打开工作台过渡态(openId 已设、匹配详情未到):与 issue-board-loading
+ * 同语气(muted、assist 字号),加 wish-loading-dot 同款细环 spinner,
+ * 让"点了有效果"看得见;请求失败后组件停转,这里只管在途的样子。 */
+.issue-open-loading {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 2px 2px;
+  color: var(--muted); font-size: var(--font-size-assist);
+}
+.issue-open-loading > i {
+  width: 12px; height: 12px; flex: none;
+  border: 2px solid var(--line-strong); border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: issueOpenSpin .8s linear infinite;
+}
+@keyframes issueOpenSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .issue-open-loading > i { animation: none; }
+}
 /* 我的问题的状态筛选:胶囊 select,与右侧计数徽章同排同语气——
  * appearance:none 摘掉系统原生箭头,自绘 chevron(中灰,明暗两主题
  * 都成立),hover/focus 走 accent 环,与全站交互语言一致。 */
