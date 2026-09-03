@@ -2707,10 +2707,51 @@ export interface MemoryRecord {
   file: string;
   withdrawn?: boolean;
   superseded_by?: string;
+  /** trigger/scope 是模板给的、模型起草的,还是起草失败保留模板。 */
+  draft?: "template" | "model" | "failed";
+  revision?: number;
+  archived?: boolean;
+  archive_reason?: string;
+}
+
+/** 效能页「任务记忆」只读页签(服务端 src/taskMemory.ts 的镜像)。 */
+export interface MemoryRepoInsight {
+  repo: string; total: number; active: number; archived: number; withdrawn: number;
+  one_off: number; pushes: number; hits: number; reworks: number;
+}
+export interface MemoryInsightRow {
+  id: string; repo: string; trigger: string; conclusion: string;
+  source: MemoryRecord["source"]; judged_by: MemoryRecord["judged_by"];
+  scope: MemoryRecord["scope"]; draft: "template" | "model" | "failed";
+  at: string; task: string; paths: string[]; line?: number;
+  weight: number; pushes: number; hits: number; reworks: number; last_used?: string;
+  archived?: boolean; archive_reason?: string; withdrawn?: boolean; superseded_by?: string;
+}
+export interface MemoryInsights {
+  generated_at: string;
+  drafting: number;
+  sidecar: "ready" | "unavailable" | "absent";
+  repos: MemoryRepoInsight[];
+  memories: MemoryInsightRow[];
+}
+export async function getMemoryInsights(): Promise<MemoryInsights> {
+  const response = await fetch("/memory-insights");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+export async function readMemoryInsight(
+  id: string,
+): Promise<{ record: MemoryRecord; content: string } | undefined> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(id)}`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 /** 这单用到的记忆:宿主三个时刻的推送 + Agent 自己的检索/展开。 */
 export interface MemoryUsageRow {
+  /** 首改目录时推的是目录摘要而不是逐条。 */
+  digest?: boolean;
   ts: string;
   moment: "launch" | "phase" | "edit" | "search" | "expand";
   ids: string[];
@@ -2959,7 +3000,7 @@ export function tailIssueEvents(
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
 export interface TimelineEntry {
   ts: string;
-  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality";
+  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality" | "memory";
   title: string;
   detail?: string;
   tone: "info" | "attention" | "success" | "danger";

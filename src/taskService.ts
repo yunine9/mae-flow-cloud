@@ -48,7 +48,24 @@ import {
   repoSlug,
   type MemoryInput,
   type MemoryRecord,
+  type MemoryDraftState,
+  type MemoryInsights,
+  type MemoryRepoInsight,
+  type MemoryStats,
+  EMPTY_STATS,
+  memoryWeight,
 } from "./taskMemory.ts";
+import {
+  MEMORY_DIGEST_BUDGET_MS,
+  MEMORY_DIGEST_THRESHOLD,
+  MEMORY_DRAFT_BUDGET_MS,
+  buildDirectoryDigestPrompt,
+  buildMemoryDraftPrompt,
+  digestKey,
+  parseDirectoryDigest,
+  parseMemoryDraft,
+  renderDirectoryDigestFallback,
+} from "./memoryDraft.ts";
 import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, renderMemoryHits } from "./memoryTools.ts";
 import { dirname as pathDirname, relative as pathRelative } from "node:path";
@@ -1109,6 +1126,13 @@ export interface TaskServiceOptions {
     model?: string;
     env?: NodeJS.ProcessEnv;
   };
+  /** 记忆起草/目录摘要用的**专用便宜模型角色**(§5"一次便宜的模型调用")。
+   * 不配就不起草:模板保留、不追加版本。刻意不回落到任务模型——起草是旁路,
+   * 不该和主会话抢同一个模型的额度;而且测试的剧本模型按场次应答,旁路
+   * 多问一句就把主会话下一幕吃掉了(mrLoop 两条用例实锤,2026-09-03)。 */
+  memoryDraftModel?: { provider: string; model: string };
+  /** 测试注入:替换真实的单发调用。 */
+  memoryDrafter?: (prompt: { system: string; user: string }) => Promise<string>;
   /** 可选的专用视觉模型角色。模型定义位于同一份 models.json，主 Agent
    * 仅通过 InspectImage Tool 调用它，不切换主会话模型。 */
   vision?: VisionModelChoice;
@@ -1941,6 +1965,15 @@ function runGitProcess(
   });
 }
 
+/** 单发模型调用的硬预算:drafter 自己也有超时,这层是兜底,绝无无限等待。 */
+function withBudget<T>(promise: Promise<T>, budgetMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`超预算 ${budgetMs}ms`)), budgetMs);
+    promise.then((value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
 export class TaskService {
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
    * 通知由该次请求触发时即可带上同事能访问的内网 Host，而不是回环地址。 */
@@ -2001,6 +2034,14 @@ export class TaskService {
       void this.memorySidecar.start().then((ok) => options.log?.(
         ok ? "任务记忆检索旁路已就绪" : "任务记忆检索旁路未就绪,开局推送退回索引级"));
     }
+    // 沉底扫描(§6):起服务后稍等一会儿做一次,之后每天一次。旁路,
+    // 失败只记日志;只碰一年以上从未用过、或失锚半年以上的记录。
+    this.memorySweepTimer = setTimeout(() => {
+      this.sweepMemoryArchive();
+      this.memorySweepTimer = setInterval(() => this.sweepMemoryArchive(), 24 * 3_600_000);
+      this.memorySweepTimer.unref?.();
+    }, 30_000);
+    this.memorySweepTimer.unref?.();
     // 被彻底删除的最高编号不能在重启后复用；否则旧通知/浏览器收藏会
     // 悄悄指向一张毫不相关的新任务。水位单独留在 dataDir，不属于任
     // 何任务历史，因此硬删除不会碰它。
@@ -2335,6 +2376,7 @@ export class TaskService {
    */
   async shutdown(): Promise<void> {
     this.memorySidecar?.stop();
+    if (this.memorySweepTimer) clearTimeout(this.memorySweepTimer);
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     this.shutdownPromise = (async () => {
@@ -4310,6 +4352,9 @@ export class TaskService {
 
   private memoryStore?: MemoryStore;
   private memorySidecar?: MemorySidecar;
+  private memorySweepTimer?: NodeJS.Timeout;
+  /** 在途的起草作业:shutdown/测试 flush 用;失败不抛,只落日志。 */
+  private readonly memoryDraftJobs = new Set<Promise<void>>();
 
   private memories(): MemoryStore {
     return this.memoryStore ??= new MemoryStore(this.options.dataDir);
@@ -4545,6 +4590,10 @@ export class TaskService {
       throw new TaskControlError("当前任务没有责任人，暂时不能创建需要责任人答复的意见");
     }
     const record = this.annotations(task).add({ ...input, route, assignee });
+    // 效果账(§6):推过的记忆所在文件又被人提了意见 → 那条记忆记一笔返工。
+    if (route === "agent" && record.kind === "code" && record.file) {
+      this.noteMemoryRework(task, record.file);
+    }
     if (route === "memory") {
       // 圈选即闭环:人主动说"记下来",不经 Agent、不进决定卡。写不进语料
       // 就不留半截批注——人以为记了其实没记,比当场报错糟得多。
@@ -4634,8 +4683,6 @@ export class TaskService {
    * 旁路:索引读不动就不推,绝不挡启动。 */
   private async memoryBriefing(task: TaskState): Promise<string | undefined> {
     try {
-      const repo = this.memoryRepo(task);
-      const weight = (row: MemoryRecord) => row.judged_by === "human" ? 1 : 0;
       const candidates = this.memoryCandidates(task);
       // sidecar 在场就按需求语义再捞一把:换说法的老坑靠索引键捞不到。
       const hits = await this.memorySearch(task, {
@@ -4644,14 +4691,12 @@ export class TaskService {
       const byId = new Map(candidates.map((row) => [row.id, row] as const));
       const semantic = (hits ?? []).map((hit) => byId.get(hit.id))
         .filter((row): row is MemoryRecord => !!row);
-      const rest = candidates
-        .filter((row) => !semantic.some((hit) => hit.id === row.id))
-        .sort((a, b) => weight(b) - weight(a) || b.at.localeCompare(a.at));
+      // 候选已按权重排好(人判 > 流水线、时间衰减、效果账),语义命中的插到最前。
+      const rest = candidates.filter((row) => !semantic.some((hit) => hit.id === row.id));
       const rows = [...semantic, ...rest].slice(0, 8);
       if (!rows.length) return undefined;
       task.memoryBriefingIds = rows.map((row) => row.id);
       this.logMemoryUsage(task, { moment: "launch", ids: task.memoryBriefingIds });
-      void repo;
       const lines = rows.map((row) => {
         const who = row.judged_by === "human" ? "人确认" : "流水线";
         const where = row.paths[0]
@@ -4673,14 +4718,36 @@ export class TaskService {
     return repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
   }
 
-  /** 可推送的记忆:同仓、未撤回未覆盖、非一次性、非本单;带路径的还要
-   * 路径在现场里还存在(失锚的不推,只留全文检索——§6)。 */
+  /** 可推送的记忆:同仓、未撤回未覆盖未归档、非一次性、非本单;带路径的还要
+   * 路径在现场里还存在(失锚的不推,只留全文检索——§6)。返回已按权重排序。 */
   private memoryCandidates(task: TaskState): MemoryRecord[] {
     const repo = this.memoryRepo(task);
-    return this.memories().list().filter((row) => row.repo === repo
-      && !row.withdrawn && !row.superseded_by && row.scope !== "one_off"
-      && row.task !== task.summary.id
-      && (!task.cwd || !row.paths[0] || existsSync(join(task.cwd, row.paths[0]))));
+    const store = this.memories();
+    const stats = store.ledger.stats();
+    // 失锚只在真现场(有 .git)里记台账:假 cwd 会把好记忆记成失锚,半年后误沉底。
+    const realCheckout = !!task.cwd && existsSync(join(task.cwd, ".git"));
+    const rows = store.list().filter((row) => {
+      if (row.repo !== repo || row.withdrawn || row.superseded_by || row.archived
+          || row.scope === "one_off" || row.task === task.summary.id) return false;
+      if (task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
+        if (realCheckout && !stats.get(row.id)?.unanchored_since) {
+          store.ledger.append({ kind: "unanchored", id: row.id,
+            task: task.summary.id, note: row.paths[0] });
+        }
+        return false;
+      }
+      return true;
+    });
+    return this.rankMemories(rows, stats);
+  }
+
+  /** §5 排序:权重高的在前,同权重新的在前。 */
+  private rankMemories(rows: MemoryRecord[], stats: Map<string, MemoryStats>): MemoryRecord[] {
+    const now = Date.now();
+    return [...rows].sort((a, b) =>
+      memoryWeight(b, stats.get(b.id) ?? EMPTY_STATS, now)
+        - memoryWeight(a, stats.get(a.id) ?? EMPTY_STATS, now)
+      || b.at.localeCompare(a.at));
   }
 
   private async memorySearch(
@@ -4705,13 +4772,24 @@ export class TaskService {
   /** 这单用到的记忆足迹:旁路,写失败只记日志。 */
   private logMemoryUsage(task: TaskState, event: {
     moment: "launch" | "phase" | "edit" | "search" | "expand";
-    ids: string[]; query?: string; phase?: string; dir?: string;
+    ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
   }): void {
     try {
       appendFileSync(join(task.summary.workspace, "memory-usage.jsonl"),
         JSON.stringify({ ts: new Date().toISOString(), ...event }) + "\n", "utf-8");
     } catch (error) {
       this.options.log?.(`任务 ${task.summary.id} 记忆足迹写入失败: ${String(error)}`);
+    }
+    // 台账是跨任务的账(排序、沉底都看它),足迹是这单的账;两边都记。
+    try {
+      const kind = event.moment === "search" || event.moment === "expand"
+        ? event.moment : "push";
+      for (const id of event.ids) {
+        this.memories().ledger.append({ kind, id, task: task.summary.id,
+          note: event.moment === "edit" ? event.dir : event.phase ?? event.moment });
+      }
+    } catch (error) {
+      this.options.log?.(`记忆台账写入失败: ${String(error)}`);
     }
   }
 
@@ -4738,10 +4816,23 @@ export class TaskService {
     task.memoryDirsReminded.add(dir);
     const rows = this.memoryCandidates(task)
       .filter((row) => row.paths.some((item) =>
-        dir ? item.startsWith(`${dir}/`) : !item.includes("/")))
-      .sort((a, b) => (b.judged_by === "human" ? 1 : 0) - (a.judged_by === "human" ? 1 : 0)
-        || b.at.localeCompare(a.at));
+        dir ? item.startsWith(`${dir}/`) : !item.includes("/")));
     if (!rows.length) return;
+    // 目录摘要层(§8-3 / §13):攒到十几条再逐条推等于没推,压成一段摘要。
+    if (rows.length > MEMORY_DIGEST_THRESHOLD) {
+      const ids = rows.map((row) => row.id);
+      void this.memoryDirectoryDigest(task, dir, rows).then((digest) => {
+        const driver = task.driver;
+        if (!driver) return;
+        const text = `【任务记忆】你正要改 ${dir || "仓库根"} 目录,这里攒了 ${rows.length} 条`
+          + `历史记忆,先看摘要:\n${digest.text}\n是线索不是规则;明细用 corpus_search`
+          + `(path_prefix=${dir || "."}),全文用 corpus_expand。`;
+        this.logMemoryUsage(task, { moment: "edit", ids, dir, digest: true });
+        return driver.steer(text, { via: "memory_push", memory_ids: ids });
+      }).catch((error) => this.options.log?.(
+        `任务 ${task.summary.id} 目录摘要推送未送达: ${String(error)}`));
+      return;
+    }
     const top = rows[0];
     const text = `【任务记忆】你正要改 ${dir || "仓库根"} 目录,这里有 ${rows.length} 条`
       + `历史记忆,最重的一条:${top.trigger}:${top.conclusion.slice(0, 160)}`
@@ -4791,6 +4882,7 @@ export class TaskService {
     const record = this.memories().record(input);
     // 索引是旁路:失败只记日志,正本已在 md 里,删索引重建也不丢。
     void this.memorySidecar?.ingest(join(this.memories().root, record.file));
+    this.queueMemoryDraft(task, record);
     task.summary.memories_recorded = (task.summary.memories_recorded ?? 0) + 1;
     this.persist(task);
     this.options.log?.(
@@ -4827,6 +4919,209 @@ export class TaskService {
       throw error instanceof MemoryError
         ? new TaskControlError(error.message) : error;
     }
+  }
+
+  /** 单发起草用哪个模型:注入的假件 > 专用角色;没配就 undefined(不起草)。
+   * 角色必须在生效的 models.json 里真有,配置漂移时宁可不起草。 */
+  private memoryDrafter(_task: TaskState)
+    : ((prompt: { system: string; user: string }) => Promise<string>) | undefined {
+    if (this.options.memoryDrafter) return this.options.memoryDrafter;
+    const model = this.options.memoryDraftModel;
+    if (!model?.provider || !model.model) return undefined;
+    const known = (this.activeModelsJson() as {
+      providers?: Record<string, { models?: Array<{ id?: string }> }>;
+    }).providers?.[model.provider]?.models?.some((item) => String(item?.id ?? "") === model.model);
+    if (!known) return undefined;
+    return (prompt) => draftWithModel({
+      modelsJson: this.activeModelsJson(),
+      provider: model.provider,
+      model: model.model,
+      system: prompt.system,
+      user: prompt.user,
+      timeoutMs: MEMORY_DRAFT_BUDGET_MS,
+    });
+  }
+
+  /** §5 起草 trigger/scope:入库后异步补一版,预算 10 s,失败保留模板并
+   * 标 failed。user_note 不过这道(人写的那句话就是 trigger,固定 general)。 */
+  private queueMemoryDraft(task: TaskState, record: MemoryRecord): void {
+    if (record.source === "user_note") return;
+    const drafter = this.memoryDrafter(task);
+    if (!drafter) return;
+    const job = (async () => {
+      let draft: { trigger: string; scope: MemoryRecord["scope"] } | undefined;
+      try {
+        draft = parseMemoryDraft(await withBudget(
+          drafter(buildMemoryDraftPrompt(record)), MEMORY_DRAFT_BUDGET_MS + 2_000));
+      } catch (error) {
+        this.options.log?.(`记忆 ${record.id} 起草失败(保留模板): ${String(error)}`);
+      }
+      const state: MemoryDraftState = draft ? "model" : "failed";
+      try {
+        const next = this.memories().finalizeDraft(record.id, { ...draft, state });
+        void this.memorySidecar?.ingest(join(this.memories().root, next.file));
+        this.options.log?.(`记忆 ${record.id} 起草收尾:${state === "model"
+          ? `${next.scope} / ${next.trigger}` : "模型没给出可用草稿,保留模板"}`);
+      } catch (error) {
+        this.options.log?.(`记忆 ${record.id} 起草收尾写入失败: ${String(error)}`);
+      }
+    })();
+    this.memoryDraftJobs.add(job);
+    void job.finally(() => this.memoryDraftJobs.delete(job));
+  }
+
+  /** 等在途起草全部落地(测试与优雅关闭用)。 */
+  async flushMemoryDrafts(): Promise<void> {
+    await Promise.all([...this.memoryDraftJobs]);
+  }
+
+  /** 效果账:这单推过的记忆里,路径正好是刚被人提意见的那个文件的,
+   * 各记一笔返工(同一单同一条只记一次)。旁路,失败只记日志。 */
+  private noteMemoryRework(task: TaskState, file: string): void {
+    try {
+      const pushed = new Set<string>();
+      for (const row of this.listTaskMemoryUsage(task.summary.id)) {
+        if (!["launch", "phase", "edit"].includes(String(row.moment))) continue;
+        for (const id of (Array.isArray(row.ids) ? row.ids : []) as unknown[]) {
+          pushed.add(String(id));
+        }
+      }
+      if (!pushed.size) return;
+      const ledger = this.memories().ledger;
+      const already = new Set(ledger.rows()
+        .filter((row) => row.kind === "rework" && row.task === task.summary.id)
+        .map((row) => row.id));
+      for (const record of this.memories().list()) {
+        if (!pushed.has(record.id) || already.has(record.id)) continue;
+        if (!record.paths.includes(file)) continue;
+        ledger.append({ kind: "rework", id: record.id, task: task.summary.id, note: file });
+        this.options.log?.(
+          `记忆 ${record.id} 推送后同文件 ${file} 又被提意见,效果账记一笔返工`);
+      }
+    } catch (error) {
+      this.options.log?.(`记忆效果账写入失败: ${String(error)}`);
+    }
+  }
+
+  /** 目录摘要:按成员 id 集合缓存在 corpus/_digests/ 下;成员没变就复用,
+   * 变了就重做(模型 10 s 预算,失败用确定性兜底)。 */
+  private async memoryDirectoryDigest(
+    task: TaskState,
+    dir: string,
+    rows: MemoryRecord[],
+  ): Promise<{ text: string; draft: "model" | "template" }> {
+    const key = digestKey(rows);
+    const repo = this.memoryRepo(task);
+    const cachePath = join(this.memories().root, "_digests", repo,
+      `${createHash("sha1").update(dir).digest("hex").slice(0, 16)}.json`);
+    try {
+      if (existsSync(cachePath)) {
+        const cached = JSON.parse(readFileSync(cachePath, "utf-8")) as {
+          key?: string; text?: string; draft?: "model" | "template" };
+        if (cached.key === key && cached.text) {
+          return { text: cached.text, draft: cached.draft ?? "template" };
+        }
+      }
+    } catch {
+      // 缓存坏了当没有,重做一份。
+    }
+    let text: string | undefined;
+    const drafter = this.memoryDrafter(task);
+    if (drafter) {
+      try {
+        text = parseDirectoryDigest(await withBudget(
+          drafter(buildDirectoryDigestPrompt(dir, rows)), MEMORY_DIGEST_BUDGET_MS + 2_000), rows);
+      } catch (error) {
+        this.options.log?.(`目录 ${dir || "."} 记忆摘要起草失败(用兜底): ${String(error)}`);
+      }
+    }
+    const draft: "model" | "template" = text ? "model" : "template";
+    text ??= renderDirectoryDigestFallback(dir, rows);
+    try {
+      mkdirSync(pathDirname(cachePath), { recursive: true });
+      writeFileSync(cachePath, JSON.stringify({
+        dir, key, text, draft, at: new Date().toISOString(), count: rows.length,
+      }), "utf-8");
+    } catch (error) {
+      this.options.log?.(`目录记忆摘要缓存写入失败: ${String(error)}`);
+    }
+    return { text, draft };
+  }
+
+  /** §6 沉底扫描。归档了东西就重建索引,让它们真的不再被检索到;
+   * 重建是旁路(预算见 sidecar),没完成前归档的仍可能被搜到——如实记日志。 */
+  sweepMemoryArchive(options: {
+    now?: number; idleDays?: number; unanchoredDays?: number;
+  } = {}): Array<{ id: string; reason: string }> {
+    try {
+      const archived = this.memories().sweepArchive(options);
+      if (archived.length) {
+        this.options.log?.(`任务记忆沉底 ${archived.length} 条:`
+          + archived.map((row) => `${row.id}(${row.reason})`).join("; "));
+        void this.memorySidecar?.reindex().then((chunks) => this.options.log?.(
+          chunks === undefined
+            ? "沉底后索引重建未完成(旁路不可用),归档的记忆在重建前仍可能被检索到"
+            : `沉底后索引重建完成,${chunks} 块`));
+      }
+      return archived;
+    } catch (error) {
+      this.options.log?.(`任务记忆沉底扫描失败: ${String(error)}`);
+      return [];
+    }
+  }
+
+  /** 效能页只读页签(§9 可见不可管):全仓记忆 + 台账统计,按权重排。 */
+  memoryInsights(): MemoryInsights {
+    const store = this.memories();
+    const stats = store.ledger.stats();
+    const now = Date.now();
+    const repos = new Map<string, MemoryRepoInsight>();
+    const memories = store.list().map((row) => {
+      const own = stats.get(row.id) ?? EMPTY_STATS;
+      const bucket = repos.get(row.repo) ?? {
+        repo: row.repo, total: 0, active: 0, archived: 0, withdrawn: 0, one_off: 0,
+        pushes: 0, hits: 0, reworks: 0,
+      };
+      bucket.total += 1;
+      if (row.withdrawn) bucket.withdrawn += 1;
+      else if (row.archived) bucket.archived += 1;
+      else if (!row.superseded_by) {
+        bucket.active += 1;
+        if (row.scope === "one_off") bucket.one_off += 1;
+      }
+      bucket.pushes += own.pushes;
+      bucket.hits += own.hits;
+      bucket.reworks += own.reworks;
+      repos.set(row.repo, bucket);
+      return {
+        id: row.id, repo: row.repo, trigger: row.trigger,
+        conclusion: row.conclusion.replace(/\s+/g, " ").slice(0, 240),
+        source: row.source, judged_by: row.judged_by, scope: row.scope,
+        draft: row.draft ?? "template", at: row.at, task: row.task,
+        paths: row.paths, ...(row.line ? { line: row.line } : {}),
+        weight: Number(memoryWeight(row, own, now).toFixed(3)),
+        pushes: own.pushes, hits: own.hits, reworks: own.reworks,
+        ...(own.last_used ? { last_used: own.last_used } : {}),
+        ...(row.archived ? { archived: true, archive_reason: row.archive_reason } : {}),
+        ...(row.withdrawn ? { withdrawn: true } : {}),
+        ...(row.superseded_by ? { superseded_by: row.superseded_by } : {}),
+      };
+    }).sort((a, b) => b.weight - a.weight || b.at.localeCompare(a.at));
+    return {
+      generated_at: new Date(now).toISOString(),
+      drafting: this.memoryDraftJobs.size,
+      sidecar: this.memorySidecar
+        ? (this.memorySidecar.available ? "ready" : "unavailable") : "absent",
+      repos: [...repos.values()].sort((a, b) => b.total - a.total),
+      memories,
+    };
+  }
+
+  readMemoryInsight(memoryId: string): { record: MemoryRecord; content: string } | undefined {
+    const record = this.memories().find(memoryId);
+    if (!record) return undefined;
+    const content = this.memories().read(memoryId);
+    return content === undefined ? undefined : { record, content };
   }
 
   /** 责任人回答检视意见。普通问答停在提出人确认；“决策后处理”把

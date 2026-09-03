@@ -4,6 +4,8 @@
  *   POST /tasks                {requirement}            → 201 摘要
  *   GET  /tasks                                         → 列表
  *   GET  /knowledge-insights                            → 团队知识效能(只读)
+ *   GET  /memory-insights                               → 任务记忆总览(只读,可见不可管)
+ *   GET  /memory-insights/:mid                          → 一条记忆的原文(归档的也能读)
  *   GET  /business-modules                              → 业务模块、Owner 与知识目录
  *   POST /business-modules                              → 管理员创建并指定 Owner
  *   PUT  /business-modules/:id                          → 管理模块(转移 Owner 仅管理员)
@@ -955,6 +957,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
+        || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
@@ -993,6 +996,16 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 任务记忆总览:只读。没有编辑、没有删除——可见不可管(§9)。
+      if (request.method === "GET" && url.pathname === "/memory-insights") {
+        return json(response, 200, service.memoryInsights());
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/memory-insights/")) {
+        const found = service.readMemoryInsight(
+          decodeURIComponent(url.pathname.slice("/memory-insights/".length)));
+        return found ? json(response, 200, found)
+          : json(response, 404, { error: "这条记忆不存在" });
       }
       // 发起页权威知识预匹配：只回元数据与固定身份，不分配 task id、
       // 不写任务现场。保存的工作流选择必须在服务端解析已发布版本，

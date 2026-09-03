@@ -47,6 +47,7 @@ import {
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeInsightsBoard } from "./KnowledgeFlywheel";
+import { MemoryBoard } from "./MemoryBoard";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { QuickWishButton } from "./WishQuickCreate";
@@ -76,14 +77,14 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights";
+type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights" | "memories";
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
   "wishes", "help",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
-  "knowledge", "modules", "workflows", "insights",
+  "knowledge", "modules", "workflows", "insights", "memories",
 ]);
 
 function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
@@ -1098,6 +1099,11 @@ export function App() {
               onClick={() => selectTeamAssetTab("insights")}>
               <strong>使用效能</strong><small>谁真被读、谁选而未用，以及下一步改哪里</small>
             </button>
+            <button type="button" className={teamAssetTab === "memories" ? "active" : ""}
+              aria-pressed={teamAssetTab === "memories"}
+              onClick={() => selectTeamAssetTab("memories")}>
+              <strong>任务记忆</strong><small>平台记住的闭环：谁被推过、谁真被用、谁沉底了</small>
+            </button>
           </nav>
           {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
@@ -1111,6 +1117,11 @@ export function App() {
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}
             onRetry={refreshKnowledgeInsights}
+            onOpenTask={(taskId) => {
+              const target = tasks.find((task) => task.id === taskId);
+              if (target) openArtifacts(target);
+            }}
+          /> : teamAssetTab === "memories" ? <MemoryBoard
             onOpenTask={(taskId) => {
               const target = tasks.find((task) => task.id === taskId);
               if (target) openArtifacts(target);

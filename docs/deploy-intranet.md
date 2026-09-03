@@ -775,6 +775,8 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺 `/mfc` 激活后可回复 |
 | luban-template-waiting / -outcome / -review | 内置默认文案 | 通知正文模板，`{占位符}` 按类别白名单，词汇表与用法见 [`docs/luban-notification-templates.md`](./luban-notification-templates.md)；配错占位符拒绝启动 |
 | pg | 无 | 投影(纯旁路) |
+| memsearch | 无 | 任务记忆检索旁路:memsearch venv 的 python 路径。不配则没有语义检索与 corpus_search,只剩索引级开局推送;宿主进程拉子进程,任务容器不需要 python/memsearch(设计稿 `docs/knowledge-memory-design.md` §7/§11,预留 RSS 2.5 GB) |
+| memory-draft-provider / memory-draft-model | 无 | 记忆起草与目录摘要用的专用便宜模型角色,必须同时配且在 models.json 里真有;不配就不起草只留模板。刻意不回落到任务模型 |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
 | isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |

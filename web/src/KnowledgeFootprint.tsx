@@ -157,7 +157,14 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
               <i aria-hidden>{item.source === "user_note" ? "记"
                 : item.source === "prepush_fix" ? "修" : "议"}</i>
               <span>
-                <strong>{item.trigger}</strong>
+                <strong>{item.trigger}
+                  {item.source !== "user_note" && <b className={`knowledge-memory-scope scope-${item.scope}`}
+                    title={item.draft === "model" ? "范围由模型起草判定"
+                      : item.draft === "failed" ? "模型起草失败,保留了模板" : "起草中:先按模板落盘,模型补全后更新"}>
+                    {item.scope === "one_off" ? "一次性" : item.scope === "general" ? "通用" : "局部"}
+                    {item.draft === "model" ? "" : item.draft === "failed" ? "·模板" : "·起草中"}</b>}
+                  {item.archived && <b className="knowledge-memory-scope is-archived" title={item.archive_reason}>已沉底</b>}
+                </strong>
                 <em>{gone ? "已撤回" : item.conclusion}</em>
                 <small>{item.source === "user_note" ? `${item.author ?? "有人"} 圈选记下`
                   : item.source === "prepush_fix" ? "Build-Fix 失败后修好"
@@ -189,7 +196,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
             <span>
               <strong>{row.moment === "launch" ? "开局推送"
                 : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
-                  : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时提醒`
+                  : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时${row.digest ? "推送目录摘要" : "提醒"}`
                     : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`
                       : "Agent 展开记忆"}</strong>
               <em>{row.ids.length ? row.ids.join("、") : "没有命中"}</em>

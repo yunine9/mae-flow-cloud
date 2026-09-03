@@ -219,6 +219,20 @@ else
   skip "4.7 记忆检索旁路:给 --memsearch <venv python> 后执行"
 fi
 
+# 4.8 记忆三期链路演练(设计稿 §5/§6/§13):记录→起草收尾→台账/效果账→目录
+# 摘要兜底→沉底归档,临时目录里真跑一遍;有 --memsearch 再验"起草后按新说法
+# 搜得到、归档重建后搜不到",有 --models 再真起草一次(10 s 预算)。
+# 部署边界:整条链路在宿主进程里,任务容器不需要 python/memsearch/语料。
+DRILL_ARGS=()
+[ -n "$MEMSEARCH" ] && [ -x "$MEMSEARCH" ] && DRILL_ARGS+=(--memsearch "$MEMSEARCH")
+[ -n "$MODELS" ] && DRILL_ARGS+=(--models "$MODELS")
+[ -n "$PROVIDER" ] && DRILL_ARGS+=(--provider "$PROVIDER")
+if npx tsx harness/memory-drill.ts "${DRILL_ARGS[@]}" > /tmp/preflight-memory-drill.log 2>&1; then
+  ok "4.8 记忆三期链路($(tail -1 /tmp/preflight-memory-drill.log))"
+else
+  bad "4.8 记忆三期链路演练失败(日志 /tmp/preflight-memory-drill.log)"
+fi
+
 echo
 echo "人工项(脚本不假装能自动化):"
 echo "  5. 发一单真需求走到 await_merge,MR 出现在真平台上;"

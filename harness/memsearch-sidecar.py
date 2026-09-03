@@ -91,7 +91,8 @@ class Sidecar:
             embedding_model=args.model or None,
             milvus_uri=args.milvus,
             reranker_model="",
-            exclude=["index.jsonl", "_archive/**"],
+            # 台账与目录摘要不是记忆,归档的不再命中(reindex 时生效)。
+            exclude=["index.jsonl", "ledger.jsonl", "_archive/**", "_digests/**"],
         )
 
     async def health(self, _req: dict) -> dict:
