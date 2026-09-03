@@ -2465,9 +2465,9 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.listInterrupts(id));
         }
-        // 检视批注:圈注权和送达权分开——谁都能圈(领导路过提一句是
-        // 真实场景),送达只有该单负责人。这一刀下去,"多人并发提交"
-        // 根本不会发生:提交的永远只有一个人。
+        // 检视批注:圈注权和送达权分开——谁都能圈。作者可提交自己的
+        // 意见；任务责任人还可以原样转交他人的意见，但不能改写或替他
+        // 闭环。这样路过成员留下的有效意见不会成为无人能接的草稿。
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2501,7 +2501,8 @@ export function createTaskServer(
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
-              await service.sendAnnotations(id, ids, author));
+              await service.sendAnnotations(id, ids, author,
+                canOperate(viewer, target.luban_account, !!options.auth)));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,

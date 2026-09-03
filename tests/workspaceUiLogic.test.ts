@@ -477,6 +477,35 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
   ));
   assert.match(decisionHtml, /决策后处理 · owner/);
   assert.match(decisionHtml, />作出决定<\/button>/);
+
+  const foreignDraftsHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    {
+      ...common,
+      viewerUsername: "owner",
+      canRouteOthers: true,
+      items: [
+        annotation({
+          id: "foreign-agent", author: "reviewer", status: "draft",
+          response: undefined,
+        }),
+        annotation({
+          id: "foreign-owner", author: "reviewer", status: "draft",
+          route: "owner_reply", assignee: "owner", response: undefined,
+        }),
+      ],
+    },
+  ));
+  assert.match(foreignDraftsHtml, />原样交给 Agent<\/button>/);
+  assert.match(foreignDraftsHtml, />回答这条意见<\/button>/,
+    "责任人应能直接接住尚未提交的提问并答复");
+  assert.equal(annotationPanel.annotationCategory(
+    annotation({ author: "reviewer", status: "draft", response: undefined }),
+    {
+      viewerUsername: "owner", taskStatus: "running", reviewReady: false,
+      canOverride: false, canRouteOthers: true, reviewAnnotationIds: [],
+    },
+  ), "mine", "别人留下的待路由意见应进入责任人的待办筛选");
 });
 
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {

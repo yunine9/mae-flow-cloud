@@ -4536,6 +4536,12 @@ export class TaskService {
     const store = this.annotations(task);
     const before = store.list().find((item) => item.id === annotationId);
     if (!before) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    if (before.status === "draft"
+        && ["completed", "canceled"].includes(task.summary.status)) {
+      throw new TaskControlError(task.summary.status === "completed"
+        ? "任务已经交付，这条意见只能作为归档记录，不能再发起答复"
+        : "任务已由用户停止，不能再发起答复");
+    }
     const adminOverride = override && before.assignee !== by;
     let replied: Annotation;
     if (before.owner_reply) {
@@ -4551,13 +4557,34 @@ export class TaskService {
       replied = store.replyAsOwner(annotationId, by, text, adminOverride);
       this.persist(task);
     }
+    // “责任人答复”下一棒在意见提出人：提醒他确认已解答或继续追问。
+    // “责任人决策”下一棒在 Agent，不在这里制造一条对提出人无动作的通知；
+    // Agent 真正处理完以后仍走既有的复检通知。
+    if (replied.route === "owner_reply" && replied.author !== by) {
+      const notifier = this.options.notifier;
+      if (notifier) {
+        const title = String(task.summary.title ?? task.summary.requirement
+          ?? task.summary.id).trim().slice(0, 80) || task.summary.id;
+        this.bypass(task, `责任人答复通知 ${replied.author}`,
+          notifier.notifyReviewReady({
+            taskId: task.summary.id,
+            senderAccount: by,
+            account: replied.author,
+            summary: `责任人 ${by} 已答复你在「${title}」中提出的检视意见。`
+              + "请打开任务确认“已解答”或“仍有疑问”。",
+            link: personalTaskLink(
+              this.notificationLinkBase(), replied.author, task.summary.id),
+            revisionKey: `owner-reply:${replied.id}:r${replied.rework ?? 0}`,
+          }));
+      }
+    }
     if (replied.route === "owner_decision") {
       if (replied.sent_via !== "owner_pending") return replied;
       await this.deliverAgentAnnotations(task, [replied], [
         "[责任人已作出明确决策]",
         `责任人 ${replied.owner_reply?.author ?? by} 的决定：${replied.owner_reply?.text ?? text}`,
         "请以这份决定为准处理对应检视意见；不要再向 Agent 猜测责任人的意图。",
-      ].join("\n"), true);
+      ].join("\n"), true, by);
     }
     return this.annotations(task).list().find((item) => item.id === annotationId)!;
   }
@@ -4706,7 +4733,12 @@ export class TaskService {
   /** 送批注:走插话通道,当场发给正在跑的模型。
    * 送达之后才标 sent——先标后发会留下"提过了"的假账,而人会据此
    * 以为说过了。 */
-  async sendAnnotations(id: string, ids?: string[], actor?: string): Promise<{
+  async sendAnnotations(
+    id: string,
+    ids?: string[],
+    actor?: string,
+    allowForeign = false,
+  ): Promise<{
     sent: string[]; text: string;
   }> {
     const task = this.tasks.get(id);
@@ -4716,14 +4748,14 @@ export class TaskService {
         ? "MR 已合入，任务已经结束，不能再提交批注"
         : "任务已由用户停止，不能再提交批注");
     }
-    const allPicked = this.pickDrafts(task, ids, actor);
+    const allPicked = this.pickDrafts(task, ids, actor, allowForeign);
     const ownerPicked = allPicked.filter((item) =>
       (item.route ?? "agent") !== "agent");
     const picked = allPicked.filter((item) =>
       (item.route ?? "agent") === "agent");
     if (ownerPicked.length) {
       this.annotations(task).markSent(
-        ownerPicked.map((item) => item.id), "owner_pending");
+        ownerPicked.map((item) => item.id), "owner_pending", actor);
       this.persist(task);
       const notifier = this.options.notifier;
       const owner = task.summary.luban_account;
@@ -4744,7 +4776,8 @@ export class TaskService {
         text: `已提交 ${ownerPicked.length} 条意见给任务责任人`,
       };
     }
-    const delivered = await this.deliverAgentAnnotations(task, picked);
+    const delivered = await this.deliverAgentAnnotations(
+      task, picked, undefined, false, actor);
     return {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
@@ -4756,6 +4789,7 @@ export class TaskService {
     picked: Annotation[],
     ownerDecisionContext?: string,
     queueAtHumanGate = false,
+    sentBy?: string,
   ): Promise<{ sent: string[]; text: string }> {
     const text = [
       ownerDecisionContext,
@@ -4814,18 +4848,18 @@ export class TaskService {
           `任务 ${task.summary.id} 当前是 ${task.summary.status}，不能恢复流水线修复`);
       }
       this.annotations(task).markSent(
-        picked.map((item) => item.id), "pipeline_evidence");
+        picked.map((item) => item.id), "pipeline_evidence", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
     if (queueAtHumanGate && task.summary.status === "waiting_for_human") {
       this.annotations(task).markSent(
-        picked.map((item) => item.id), "queued_decision");
+        picked.map((item) => item.id), "queued_decision", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
     if (this.hasOpenMergeRequest(task)) {
-      return this.sendMergeRequestReview(task, picked, text);
+      return this.sendMergeRequestReview(task, picked, text, sentBy);
     }
     // 任务正等人决定时,插话通道不可用——但检视人(批注作者≠决定人)
     // 在这窗口里必须有合法提交路径,否则责任人一放行意见就落空
@@ -4833,12 +4867,13 @@ export class TaskService {
     // 正文由下一次决定的 continuation 送达 Agent。
     if (task.summary.status === "waiting_for_human") {
       this.annotations(task).markSent(
-        picked.map((item) => item.id), "queued_decision");
+        picked.map((item) => item.id), "queued_decision", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
     await this.interrupt(task.summary.id, text);
-    this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
+    this.annotations(task).markSent(
+      picked.map((item) => item.id), "interrupt", sentBy);
     return { sent: picked.map((item) => item.id), text };
   }
 
@@ -4849,6 +4884,7 @@ export class TaskService {
     task: TaskState,
     picked: Annotation[],
     text: string,
+    sentBy?: string,
   ): Promise<{ sent: string[]; text: string }> {
     // await_merge 的页面与平台“刚刚点合入”可能竞态。能查询到终态就
     // 先如实收口；平台不支持门禁契约则 fail-open，后续 push 仍会以
@@ -4934,7 +4970,7 @@ export class TaskService {
       } else {
         // 等待 driver 的几毫秒里旧会话可能刚好收口。此时再走一次本方法
         // 的状态分支，仍只会开一轮正式 review，不会与旧 writer 重叠。
-        return this.sendMergeRequestReview(task, picked, text);
+        return this.sendMergeRequestReview(task, picked, text, sentBy);
       }
       this.rememberWorkspaceReview(task, picked);
       this.persist(task);
@@ -4956,7 +4992,7 @@ export class TaskService {
       this.dispatchWorkspaceReviewRepair(task, picked, text);
     }
     this.annotations(task).markSent(
-      picked.map((item) => item.id), "review_repair");
+      picked.map((item) => item.id), "review_repair", sentBy);
     return { sent: picked.map((item) => item.id), text };
   }
 
@@ -5152,9 +5188,12 @@ export class TaskService {
     task: TaskState,
     ids?: string[],
     actor?: string,
+    allowForeign = false,
   ): Annotation[] {
     const allDrafts = this.annotations(task).drafts();
-    const drafts = actor
+    // 兼容旧客户端的“ids 省略=提交我的全部草稿”。责任人代转必须逐条
+    // 给出 ID，不能因为旧按钮没带 ids 就顺手发送所有人的私人草稿。
+    const drafts = actor && (!allowForeign || !ids?.length)
       ? allDrafts.filter((item) => item.author === actor) : allDrafts;
     if (!ids?.length) {
       if (!drafts.length) throw new NotFoundError("没有待送出的批注");

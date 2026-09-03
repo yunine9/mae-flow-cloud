@@ -1041,6 +1041,7 @@ export function TaskWorkspace({
     taskStatus: task.status,
     reviewReady: workspaceReviewReady,
     canOverride,
+    canRouteOthers: canOperate,
     reviewAnnotationIds: workspaceReviewAnnotationIds,
   });
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
@@ -1206,6 +1207,7 @@ export function TaskWorkspace({
           checks={checks}
           reply={reply}
           canOperate={canContributeReview}
+          canRouteOthers={canOperate}
           taskStatus={task.status}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}

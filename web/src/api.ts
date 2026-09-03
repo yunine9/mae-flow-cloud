@@ -2620,6 +2620,8 @@ export interface Annotation {
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
     | "queued_decision" | "owner_pending";
+  /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
+  sent_by?: string;
   response?: {
     revision: number;
     outcome: "fixed" | "not_fixed" | "needs_clarification";

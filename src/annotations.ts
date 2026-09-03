@@ -91,6 +91,9 @@ export interface Annotation {
   status: AnnotationStatus;
   sent_at?: string;
   sent_via?: SentVia;
+  /** 谁把草稿正式送入处理流程。与 author 分开：责任人可以原样转交
+   * 他人的意见，但不能因此变成作者或取得最终裁决权。 */
+  sent_by?: string;
   /** Agent 对当前 rework revision 的逐条回应。 */
   response?: AnnotationResponse;
   owner_reply?: AnnotationOwnerReply;
@@ -120,9 +123,12 @@ type Operation =
   | { op: "edit"; id: string; note: string; at: string }
   /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
   | { op: "drop"; id: string; by?: string }
-  | { op: "sent"; ids: string[]; via: SentVia; at: string }
+  | { op: "sent"; ids: string[]; via: SentVia; at: string; by?: string }
   | { op: "respond"; id: string; response: AnnotationResponse }
-  | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply }
+  /** via 只在责任人直接接住 draft 并答复时出现，使“接收 + 答复”成为
+   * 一条原子台账操作；旧记录缺少 via 时仍按原语义回放。 */
+  | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply;
+      via?: "owner_pending" }
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string };
@@ -183,6 +189,7 @@ export class AnnotationStore {
           found.status = "draft";
           found.sent_at = undefined;
           found.sent_via = undefined;
+          found.sent_by = undefined;
           found.response = undefined;
           found.owner_reply = undefined;
           found.verified_at = undefined;
@@ -196,6 +203,7 @@ export class AnnotationStore {
           found.status = "sent";
           found.sent_at = operation.at;
           found.sent_via = operation.via;
+          if (operation.by) found.sent_by = operation.by;
         }
         continue;
       }
@@ -212,7 +220,16 @@ export class AnnotationStore {
       }
       if (operation.op === "owner_reply") {
         const found = byId.get(operation.id);
-        if (!found || found.status !== "sent") continue;
+        if (!found || found.status === "dropped" || found.status === "verified") {
+          continue;
+        }
+        if (found.status === "draft" && operation.via === "owner_pending") {
+          found.status = "sent";
+          found.sent_at = operation.reply.replied_at;
+          found.sent_via = operation.via;
+          found.sent_by = operation.reply.author;
+        }
+        if (found.status !== "sent") continue;
         found.owner_reply = operation.reply;
         continue;
       }
@@ -232,6 +249,7 @@ export class AnnotationStore {
         found.rework = (found.rework ?? 0) + 1;
         found.sent_at = undefined;
         found.sent_via = undefined;
+        found.sent_by = undefined;
         found.response = undefined;
         found.owner_reply = undefined;
         found.verified_at = undefined;
@@ -321,9 +339,9 @@ export class AnnotationStore {
     return this.list().find((item) => item.id === id)!;
   }
 
-  markSent(ids: string[], via: SentVia): void {
+  markSent(ids: string[], via: SentVia, by?: string): void {
     if (!ids.length) return;
-    this.append({ op: "sent", ids, via, at: new Date().toISOString() });
+    this.append({ op: "sent", ids, via, at: new Date().toISOString(), by });
   }
 
   /** 记录 Agent 的逐条回应。只接受已经提交且仍是当前 revision 的意见；
@@ -377,8 +395,8 @@ export class AnnotationStore {
     if ((found.route ?? "agent") === "agent") {
       throw new AnnotationError("这条意见是交给 Agent 处理的，不需要责任人答复");
     }
-    if (found.status !== "sent") {
-      throw new AnnotationError("这条意见尚未提交，暂时不能答复");
+    if (found.status !== "draft" && found.status !== "sent") {
+      throw new AnnotationError("这条意见当前不能答复");
     }
     if (found.owner_reply) {
       throw new AnnotationError("责任人已经答复；如需改变结论，请由提出人重新发起一轮");
@@ -395,7 +413,10 @@ export class AnnotationStore {
       text: normalized,
       replied_at: new Date().toISOString(),
     };
-    this.append({ op: "owner_reply", id, reply });
+    this.append({
+      op: "owner_reply", id, reply,
+      ...(found.status === "draft" ? { via: "owner_pending" as const } : {}),
+    });
     return this.list().find((item) => item.id === id)!;
   }
 

@@ -152,12 +152,18 @@ export function annotationCategory(
     taskStatus: TaskStatus;
     reviewReady: boolean;
     canOverride: boolean;
+    canRouteOthers?: boolean;
     reviewAnnotationIds: readonly string[];
   },
 ): Exclude<ReviewFilter, "all"> {
   if (item.status === "verified" || item.status === "dropped") return "closed";
   const isAuthor = item.author === context.viewerUsername;
-  if (item.status === "draft") return isAuthor ? "mine" : "agent";
+  if (item.status === "draft") {
+    const routable = context.canRouteOthers
+      && !["completed", "canceled"].includes(context.taskStatus)
+      && (routeOf(item) === "agent" || item.assignee === context.viewerUsername);
+    return isAuthor || routable ? "mine" : "agent";
+  }
   if (isAuthor && authorVerdictReady(item, context.taskStatus, context.reviewReady)) {
     return "mine";
   }
@@ -268,6 +274,7 @@ export function AnnotationPanel({
   checks,
   reply,
   canOperate,
+  canRouteOthers = false,
   canOverride = false,
   taskStatus,
   reviewReady = false,
@@ -289,6 +296,8 @@ export function AnnotationPanel({
   /** 旧任务的总体回复兼容展示；新检视以每条 response 为权威。 */
   reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
+  /** 任务责任人可以原样转交他人的草稿；不因此获得编辑或闭环权。 */
+  canRouteOthers?: boolean;
   /** 管理员应急旁路:作者不在场时可代删/代确认,服务端会记录操作人。 */
   canOverride?: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
@@ -320,6 +329,10 @@ export function AnnotationPanel({
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
     item.status === "draft" && item.author === viewerUsername);
+  const routedDrafts = items.filter((item) =>
+    item.status === "draft" && item.author !== viewerUsername
+    && canRouteOthers && !["completed", "canceled"].includes(taskStatus)
+    && (routeOf(item) === "agent" || item.assignee === viewerUsername));
   const overrideReviewCount = items.filter((item) => adminOverrideAccess({
     item,
     viewerUsername,
@@ -348,7 +361,8 @@ export function AnnotationPanel({
   const authorActionableCount = items.filter(authorActionable).length;
   const overrideActionableCount = items.filter((item) =>
     !authorActionable(item) && overrideActionable(item)).length;
-  const actionableReviewCount = authorActionableCount + overrideActionableCount;
+  const actionableReviewCount = authorActionableCount + overrideActionableCount
+    + routedDrafts.length;
   const currentReviewIds = new Set(reviewAnnotationIds);
   const missingReceiptCount = reviewReady ? items.filter((item) =>
     currentReviewIds.has(item.id)
@@ -360,9 +374,9 @@ export function AnnotationPanel({
   const orderedItems = items.map((item, index) => ({ item, index }))
     .sort((left, right) => {
       const leftActionable = authorActionable(left.item)
-        || overrideActionable(left.item);
+        || overrideActionable(left.item) || routedDrafts.includes(left.item);
       const rightActionable = authorActionable(right.item)
-        || overrideActionable(right.item);
+        || overrideActionable(right.item) || routedDrafts.includes(right.item);
       if (leftActionable !== rightActionable) return rightActionable ? 1 : -1;
       const leftCurrent = currentReviewIds.has(left.item.id);
       const rightCurrent = currentReviewIds.has(right.item.id);
@@ -371,7 +385,8 @@ export function AnnotationPanel({
     }).map(({ item }) => item);
   const visibleItems = filter === "all" ? orderedItems : orderedItems.filter(
     (item) => annotationCategory(item, {
-      viewerUsername, taskStatus, reviewReady, canOverride, reviewAnnotationIds,
+      viewerUsername, taskStatus, reviewReady, canOverride, canRouteOthers,
+      reviewAnnotationIds,
     }) === filter);
   // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
   // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
@@ -489,6 +504,13 @@ export function AnnotationPanel({
     }
   }
 
+  async function routeDraftToAgent(item: Annotation) {
+    await mutateAnnotation(item.id, async () => {
+      const result = await sendAnnotations(taskId, [item.id]);
+      return { error: result.error };
+    });
+  }
+
   return (
     <details className="annot-panel" aria-label="批注" open={open}
              onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -542,7 +564,8 @@ export function AnnotationPanel({
       )}
       {actionableReviewCount > 0 && (
         <div className="annot-review-queue" role="heading" aria-level={3}>
-          <div><strong>待我确认</strong><span>先逐条核对，再做整体交付决定</span></div>
+          <div><strong>{routedDrafts.length ? "待我处理" : "待我确认"}</strong>
+            <span>先逐条核对，再做整体交付决定</span></div>
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
@@ -728,6 +751,17 @@ export function AnnotationPanel({
                   <small>{item.owner_reply.author} · {relativeTime(item.owner_reply.replied_at)}</small>
                 </div>
               )}
+              {item.status === "draft" && !isAuthor && canRouteOthers
+                && routeOf(item) === "agent" && (
+                <div className="annot-owner-reply-action">
+                  <button type="button" className="primary"
+                    disabled={!canSend || !!mutationBusy}
+                    title={canSend ? undefined : "当前没有可接收意见的执行会话"}
+                    onClick={() => void routeDraftToAgent(item)}>
+                    {mutationBusy === item.id ? "转交中…" : "原样交给 Agent"}
+                  </button>
+                </div>
+              )}
               {item.status === "sent" && routeOf(item) === "owner_decision"
                 && item.owner_reply && item.sent_via === "owner_pending"
                 && item.assignee === viewerUsername && (
@@ -741,7 +775,10 @@ export function AnnotationPanel({
                   </button>
                 </div>
               )}
-              {item.status === "sent" && routeOf(item) !== "agent"
+              {(item.status === "sent" || (item.status === "draft"
+                  && canRouteOthers
+                  && !["completed", "canceled"].includes(taskStatus)))
+                && routeOf(item) !== "agent"
                 && !item.owner_reply && item.assignee === viewerUsername && (
                 replyingId === item.id ? (
                   <div className="annot-owner-reply-editor">
@@ -776,6 +813,8 @@ export function AnnotationPanel({
               <div className="annot-item-foot">
                 <small>
                   {deliveryText(item, archival)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
+                  {item.sent_by && item.sent_by !== item.author
+                    && ` · 由 ${item.sent_by} 原样转交`}
                   {item.edited_at && " · 已编辑"}
                   {check && check.state !== "hit"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
