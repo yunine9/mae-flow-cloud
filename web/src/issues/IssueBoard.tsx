@@ -48,13 +48,18 @@ function readIssueListFilter(): IssueListFilter {
   return "active";
 }
 
-export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
+export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
+  onOpenIssue, onCloseIssue }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
   /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):作 openId 初值,
-   * 浏览器后退/前进时也同步过来。点开/返回列表会 pushState/replaceState,
-   * 让 URL 跟着会话走——与任务侧 /work/:id 同款分享语义。 */
+   * 浏览器后退/前进时也同步过来。初值由 App 层按当前 URL 对表后下发。 */
   initialOpenId?: string;
+  /** 写穿归一:点卡/页内切会话与「返回列表」都交给 App 层统一写
+   * issueRouteId + URL(pushState/replaceState),本组件不再直接操作
+   * history——App 快照、Board openId、URL 三处状态由此保持一致。 */
+  onOpenIssue: (id: string) => void;
+  onCloseIssue: () => void;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
@@ -139,7 +144,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
     return () => removeEventListener("popstate", sync);
   }, []);
 
-  /** 打开会话:设 state + pushState(URL 可分享,后退能回列表)。
+  /** 打开会话:设本地 state,URL 与 App 层快照交给 onOpenIssue 统一写。
    * 点到已打开的同一张卡不静默返回——上一轮详情可能拉取失败
    * (effect 依赖里没有"点击"这个输入,自己不会重跑),强制重试一次。 */
   const openIssue = (id: string) => {
@@ -147,19 +152,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
       setDetailRetry((count) => count + 1);
     }
     setOpenId(id);
-    const next = `/issues/${encodeURIComponent(id)}`;
-    if (location.pathname !== next) {
-      history.pushState({}, "", next);
-    }
+    onOpenIssue(id);
   };
 
-  /** 返回列表:清 state + replaceState(不在历史里留空壳)。 */
+  /** 返回列表:清本地 state,URL 归位交给 onCloseIssue 统一写。 */
   const backToList = () => {
     setOpenId("");
     setDetail(undefined);
-    if (location.pathname !== "/") {
-      history.replaceState({}, "", "/");
-    }
+    onCloseIssue();
   };
 
   // 渲染门要求内容匹配:URL 指向的会话与已加载的 detail 必须是同一个,
