@@ -562,7 +562,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       "把当前修复分支经宿主推送到远端(git push 在容器里是禁用的,必须走"
       + "本工具)。机械门禁:会话必须已绑定单号,分支名必须是 "
       + "master_<工号>_<单号>,且工作区不能有未提交改动(push 只推已提交"
-      + "的历史——改完先 git add -A && git commit 再推)。推送后返回 SHA。",
+      + "的历史——改完先 git add -A && git commit 再推)。推送前 UT 纪律:"
+      + "调用本工具之前,先在该仓把单元测试完整跑一遍(按仓的实际构建"
+      + "体系选回归命令,如 mvn test、npm test):改动相关用例必跑,时间"
+      + "允许就跑全量回归;跑过的用例全绿才推,有挂测继续修,"
+      + "不许跳过测试直接推。推送后返回 SHA。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
