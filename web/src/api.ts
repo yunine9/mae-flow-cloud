@@ -962,6 +962,7 @@ export interface TaskSummary {
     projection_state?: "pending" | "ready" | "invalid";
     projection_error?: string;
     plan_revision?: string;
+    sync_required?: boolean;
     chain_sha256?: string;
     projection_sha256?: string;
     repository_assessments?: Array<{

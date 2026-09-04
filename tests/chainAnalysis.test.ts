@@ -11,7 +11,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -412,4 +414,65 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   assert.equal(state.summary.requirement_graph.projection_state, "invalid");
   assert.match(state.summary.requirement_graph.projection_error,
     /版本 r2 的产物内容发生变化/);
+});
+
+test("升级前已生成的存量依赖图继续展示；返工后再强制升级同步契约", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-legacy-"));
+  const apiRepo = makeRepo(dataDir, "legacy-api");
+  const webRepo = makeRepo(dataDir, "legacy-web");
+  const ticket = "REQ2026090404";
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  const parent = service.create("存量模块方案", {
+    account: "owner", ticket, repos: [apiRepo, webRepo],
+  });
+  const state = (service as any).tasks.get(parent.id);
+  assert.equal(state.summary.requirement_graph.sync_required, true,
+    "新任务从创建时就必须执行强同步契约");
+  const cwd = join(parent.workspace, "repositories");
+  const artifactDir = join(cwd, ".mae-flow-work", ticket);
+  mkdirSync(artifactDir, { recursive: true });
+  const chainPath = join(artifactDir, `CHAIN-${ticket}.md`);
+  writeFileSync(chainPath, "# 存量方案\n接口先行，页面随后。\n");
+  writeFileSync(join(artifactDir, "requirement-graph.json"), JSON.stringify({
+    repository_assessments: [
+      { name: "legacy-api", url: apiRepo, outcome: "change_required",
+        reason: "接口需要调整" },
+      { name: "legacy-web", url: webRepo, outcome: "change_required",
+        reason: "页面需要跟随" },
+    ],
+    repositories: [
+      { id: "unit-api", name: "legacy-api", url: apiRepo,
+        responsibility: "提供接口",
+        scope: { name: "接口模块", paths: ["src/api/"] } },
+      { id: "unit-web", name: "legacy-web", url: webRepo,
+        responsibility: "消费接口",
+        scope: { name: "页面模块", paths: ["src/web/"] } },
+    ],
+    dependencies: [{ dependent: "unit-web", prerequisite: "unit-api",
+      reason: "页面等待接口" }],
+  }));
+  state.cwd = cwd;
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "invalid");
+  assert.match(state.summary.requirement_graph.projection_error, /仍是旧格式/,
+    "新任务不能利用存量兼容口绕过强同步");
+
+  // 模拟升级前已经生成并持久化为 ready 的任务：当时没有 strict 标记。
+  delete state.summary.requirement_graph.sync_required;
+  state.summary.requirement_graph.projection_state = "ready";
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready");
+  assert.equal(state.summary.requirement_graph.repositories.length, 2);
+  assert.equal(state.summary.requirement_graph.sync_required, false);
+
+  // 兼容仅限原样展示；存量内容一旦返工，就不能继续拿旧格式蒙混过去。
+  writeFileSync(chainPath, "# 存量方案\n接口协议先行，页面随后。\n");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "invalid");
+  assert.match(state.summary.requirement_graph.projection_error,
+    /存量方案已经发生修改.*plan_revision/);
 });

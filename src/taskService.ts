@@ -751,6 +751,9 @@ export interface RequirementGraph {
   projection_error?: string;
   /** CHAIN 文档与机读图共同携带的修订号；二者不一致时禁止拆单。 */
   plan_revision?: string;
+  /** 新建分析任务必须使用强同步契约；存量任务缺席时先兼容展示，
+   * 一旦产物发生返工就要求升级。 */
+  sync_required?: boolean;
   /** Agent 在图文件里声明的 CHAIN 原文摘要，由宿主按真实字节复核。 */
   chain_sha256?: string;
   /** 宿主对 requirement-graph.json 原文计算的摘要，用来阻止同 revision
@@ -4110,35 +4113,52 @@ export class TaskService {
         dependencies?: RawRequirementDependency[];
       };
       const planRevision = String(parsed.plan_revision ?? "").trim();
-      if (!/^[A-Za-z0-9._:-]{1,80}$/.test(planRevision)) {
-        throw new Error("requirement-graph.json 缺少合法的 plan_revision");
-      }
       const revisionMarkers = [...chainSource.matchAll(
         /<!--\s*mae-flow-plan-revision:\s*([A-Za-z0-9._:-]{1,80})\s*-->/g,
       )];
-      if (revisionMarkers.length !== 1) {
-        throw new Error("CHAIN 文档必须且只能声明一个 mae-flow-plan-revision");
-      }
-      if (revisionMarkers[0][1] !== planRevision) {
-        throw new Error(`CHAIN 文档版本 ${revisionMarkers[0][1]} 与机读图版本 ${
-          planRevision} 不一致`);
-      }
       const claimedChainSha = String(parsed.chain_sha256 ?? "")
         .trim().toLowerCase().replace(/^sha256:/, "");
-      if (!/^[a-f0-9]{64}$/.test(claimedChainSha)) {
-        throw new Error("requirement-graph.json 缺少合法的 chain_sha256");
-      }
       const actualChainSha = createHash("sha256")
         .update(chainSource, "utf-8").digest("hex");
-      if (claimedChainSha !== actualChainSha) {
-        throw new Error("CHAIN 文档内容已经变化，但机读依赖图还没有同步更新");
-      }
       const projectionSha = createHash("sha256")
         .update(graphSource, "utf-8").digest("hex");
-      if (previous?.plan_revision === planRevision
-          && previous.projection_sha256
-          && previous.projection_sha256 !== projectionSha) {
-        throw new Error(`版本 ${planRevision} 的产物内容发生变化；请同时更新两份产物并换用新的 plan_revision`);
+      const declaresSyncContract = Boolean(
+        planRevision || revisionMarkers.length || claimedChainSha,
+      );
+      if (!declaresSyncContract) {
+        // 上线前已经生成并等待用户检视的存量图没有修订字段。先照常展示，
+        // 并记住此刻两份原文的摘要；一旦任一份变化，必须升级契约，不能
+        // 借“兼容旧单”永久绕过同步校验。新任务从创建时就带 strict 标记。
+        if (previous?.sync_required) {
+          throw new Error("机读依赖图仍是旧格式；请让 Agent 同步更新方案文档和依赖图后再确认");
+        }
+        if ((previous?.chain_sha256 && previous.chain_sha256 !== actualChainSha)
+            || (previous?.projection_sha256
+              && previous.projection_sha256 !== projectionSha)) {
+          throw new Error("存量方案已经发生修改；请让 Agent 同步更新两份产物并补充 plan_revision");
+        }
+      } else {
+        if (!/^[A-Za-z0-9._:-]{1,80}$/.test(planRevision)) {
+          throw new Error("requirement-graph.json 缺少合法的 plan_revision");
+        }
+        if (revisionMarkers.length !== 1) {
+          throw new Error("CHAIN 文档必须且只能声明一个 mae-flow-plan-revision");
+        }
+        if (revisionMarkers[0][1] !== planRevision) {
+          throw new Error(`CHAIN 文档版本 ${revisionMarkers[0][1]} 与机读图版本 ${
+            planRevision} 不一致`);
+        }
+        if (!/^[a-f0-9]{64}$/.test(claimedChainSha)) {
+          throw new Error("requirement-graph.json 缺少合法的 chain_sha256");
+        }
+        if (claimedChainSha !== actualChainSha) {
+          throw new Error("CHAIN 文档内容已经变化，但机读依赖图还没有同步更新");
+        }
+        if (previous?.plan_revision === planRevision
+            && previous.projection_sha256
+            && previous.projection_sha256 !== projectionSha) {
+          throw new Error(`版本 ${planRevision} 的产物内容发生变化；请同时更新两份产物并换用新的 plan_revision`);
+        }
       }
       const expected = task.summary.repositories ?? [];
       if (!Array.isArray(parsed.repository_assessments)) {
@@ -4278,7 +4298,8 @@ export class TaskService {
       task.summary.requirement_graph = {
         stage: task.summary.requirement_graph?.stage ?? "analysis",
         projection_state: "ready",
-        plan_revision: planRevision,
+        sync_required: declaresSyncContract,
+        ...(planRevision ? { plan_revision: planRevision } : {}),
         chain_sha256: actualChainSha,
         projection_sha256: projectionSha,
         repository_assessments: assessments,
@@ -5207,6 +5228,7 @@ export class TaskService {
       // 保留:责任人默认沿用,单号在确认卡上逐单元定。
       task.summary.requirement_graph = {
         stage: "analysis",
+        sync_required: true,
         repositories: (task.summary.requirement_graph?.repositories ?? []).map((node) => ({
           ...node, task_id: undefined, task_status: undefined,
         })),
@@ -7635,6 +7657,7 @@ export class TaskService {
             // 产出的交付图。确认入口必须等 requirement-graph.json 被成功
             // 解析后看到 ready，绝不能拿这份一仓一节点的占位数据建任务。
             projection_state: analysisParent ? "pending" : "ready",
+            ...(analysisParent ? { sync_required: true } : {}),
             repositories: repositories.map((url, index) => ({
               id: `repo-${index + 1}`,
               name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
