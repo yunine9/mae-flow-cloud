@@ -77,7 +77,11 @@ import {
   sep as pathSep,
 } from "node:path";
 import {
+  annotationClosures,
   blockingAnnotations,
+  workspaceReviewReady,
+  type AnnotationClosure,
+  type AnnotationClosureFacts,
   parseWorkspaceReviewReceipts,
   unansweredAnnotations,
   workspaceReviewReceiptInstructions,
@@ -5065,9 +5069,18 @@ export class TaskService {
 
   /** 工作台轮询专用异步读侧。先按 artifact 去重读取，再用同一份快照
    * 重锚定，避免 N 条代码批注触发 N 次完整 Git diff。 */
-  async listAnnotationsAsync(id: string): Promise<{
+  /** 面板要的全部事实。**闭环判定只在 feedbackPolicy 里做一次**:页面
+   * 拿到的是结论(状态词、提示、按钮开关),不再自己按 sent_via 推一遍。
+   * viewer 缺席=无认证部署的单用户语义,权限全开。 */
+  async listAnnotationsAsync(id: string, viewer?: {
+    username: string;
+    can_override: boolean;
+    can_route_others: boolean;
+    person_name?: (username: string) => string;
+  }): Promise<{
     items: Annotation[];
     checks: AnchorCheck[];
+    closures: AnnotationClosure[];
     reply?: { texts: string[]; truncated: boolean };
   }> {
     const task = this.tasks.get(id);
@@ -5081,7 +5094,41 @@ export class TaskService {
           await this.annotationArtifactContentAsync(task, artifact));
       }));
     const checks = reanchor(items, (artifact) => contents.get(artifact));
-    return { items, checks, reply: this.annotationReply(task, items) };
+    const closures = annotationClosures(
+      items,
+      this.annotationClosureFacts(task),
+      {
+        username: viewer?.username ?? "本地用户",
+        can_override: viewer?.can_override ?? true,
+        can_route_others: viewer?.can_route_others ?? true,
+      },
+      {
+        // "被改动"只认一个判据:锚定的原文消失了。行号漂移不算——
+        // 原文还在就说明这处还没动,只是别处改动把行挤走了。
+        anchor_gone_ids: checks.filter((check) => check.state === "gone")
+          .map((check) => check.id),
+        ...(viewer?.person_name ? { person_name: viewer.person_name } : {}),
+      },
+    );
+    return { items, checks, closures, reply: this.annotationReply(task, items) };
+  }
+
+  /** 判定要用的任务侧事实。取现成字段,不猜。 */
+  private annotationClosureFacts(task: TaskState): AnnotationClosureFacts {
+    const loop = task.summary.delivery?.loop;
+    const ready = workspaceReviewReady({
+      task_status: task.summary.status,
+      waiting_step: task.summary.waiting?.step,
+      review_source: loop?.review_source,
+      recheck_required: loop?.workspace_review_recheck_required,
+    });
+    return {
+      task_status: task.summary.status,
+      review_ready: ready,
+      review_annotation_ids: ready
+        ? loop?.workspace_review_annotation_ids ?? [] : [],
+      archival: task.summary.status === "completed",
+    };
   }
 
   /** 最后一批批注送出之后,主会话 AI 说过的话——原样带给面板。

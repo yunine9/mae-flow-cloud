@@ -2692,16 +2692,39 @@ export interface AnchorCheck {
   now?: string;
 }
 
+/** 一条意见此刻的处境:**服务端 feedbackPolicy 算好的结论**。
+ *
+ * 页面不再按 status/sent_via/response 自己推一遍——那份推法曾经和服务端
+ * 各走各的,每加一个入口就多一处不一致(2026-09-04 盘账:本周 42 条 fix
+ * 落在这个概念上)。这里只渲染:文案照抄 text/hint,按钮照 can_* 开关。 */
+export interface AnnotationClosure {
+  id: string;
+  tone: "draft" | "waiting" | "review" | "done";
+  text: string;
+  hint?: string;
+  bucket: "mine" | "agent" | "closed";
+  delivery_text: string;
+  verdict_ready: boolean;
+  actionable: boolean;
+  can_verify: boolean;
+  can_override_verify: boolean;
+  can_override_drop: boolean;
+  can_route: boolean;
+  needs_clarification: boolean;
+  receipt_missing: boolean;
+}
+
 export async function listAnnotations(
   taskId: string,
 ): Promise<{
   items: Annotation[];
   checks: AnchorCheck[];
+  closures: AnnotationClosure[];
   /** 最后一批批注送出后,AI 在主会话说的原话(未做逐条对应)。 */
   reply?: { texts: string[]; truncated: boolean };
 }> {
   const response = await fetch(`/tasks/${taskId}/annotations`);
-  if (!response.ok) return { items: [], checks: [] };
+  if (!response.ok) return { items: [], checks: [], closures: [] };
   return response.json();
 }
 

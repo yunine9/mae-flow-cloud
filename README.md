@@ -278,6 +278,32 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-04 检视意见的闭环判定收敛成一处**(用户拍板"是时候重构了,
+  要保证后续可扩展性与可维护性")。当周盘账:302 条提交里 111 条是 fix,
+  把每条 fix 删掉的行 blame 回去,**22% 是在修同一周里自己的上一次修复**;
+  111 条 fix 中 42 条围绕同一个概念——一条意见到底算不算闭环。根因是
+  这个判定同时长在两处:服务端按 status/sent_via/response 决定放不放行,
+  前端 `AnnotationPanel` 自己再推一遍决定显示什么字、开哪个按钮
+  (`authorVerdictReady`/`annotationCategory`/`progressOf`/`deliveryText`/
+  `adminOverrideAccess`,约 270 行分支)。两份推法各自演化,每加一个入口
+  (抽屉、全屏、决定卡、MR 复检)就多一份不一致,也就多一条 fix——违反的
+  正是本仓自己的规矩「前端不推断状态,一切文案来自任务 API 镜像」。
+  现在唯一判定处是 `src/feedbackPolicy.ts` 的 `annotationClosure`:输入
+  是意见事实 + 任务事实 + 观察者身份,输出是状态词、提示、分档、去向
+  说明和每个按钮的开关;`GET /tasks/:id/annotations` 带 `closures` 下发,
+  页面只渲染。前端那五个函数连同 `canOverride`/`canRouteOthers` 两个入参
+  一起删干净(面板 -308 行),避免留门。已验:唯一判定处 24 项分支契约
+  (`tests/annotationClosure.test.ts`)、面板改吃服务端结论后既有渲染断言
+  全部原样通过(`tests/workspaceUiLogic.test.ts` 24 项,是"行为没变"的
+  实锤)、三处源码级不许回退的断言(状态词不许出现在页面、分档只认
+  `closure.bucket`、管理员入口按 `can_override_*` 开)。顺带修掉一处同源
+  隐患:页面判"需要补充说明"只看 outcome 不看 revision,上一轮的追问会让
+  按钮错开,现在按当前 revision 判。**仍未收敛**:服务端 `workspaceReviewReady`
+  的四条件谓词已提取,但 taskService 里另有几处只取其中两条的门禁
+  (交付放行、修复轮派单)语义确实不同,没有强行合并;`ordinaryReviewCount`
+  与 owner_pending 的两处展示分支仍读原始字段,它们只影响分组和文案,
+  不影响谁能按哪个钮。
+
 - **2026-09-04 全仓 UT 护栏对 C++/native 改成只提示不拦截**(用户拍板
   "改成提示吧")。7b1abfa 把无过滤的全仓 UT 命令一律在执行前拒掉,并要求
   Agent 按"未找到定向 UT"停下。这对 Java/JS/Go/Rust/Python 成立——`-Dtest`

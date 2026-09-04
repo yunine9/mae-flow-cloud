@@ -16,9 +16,7 @@ import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
-import {
-  AnnotationPanel, annotationCategory, type ReviewFilter,
-} from "./AnnotationPanel";
+import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
@@ -60,6 +58,7 @@ import {
   statusText,
   TASK_REQUIREMENT_ARTIFACT,
   type AnchorCheck,
+  type AnnotationClosure,
   type Annotation,
   type ArtifactMeta,
   type AuthUser,
@@ -617,6 +616,8 @@ export function TaskWorkspace({
   const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
+  // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
+  const [closures, setClosures] = useState<AnnotationClosure[]>([]);
   const [reply, setReply] =
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
@@ -1136,6 +1137,7 @@ export function TaskWorkspace({
       if (!alive) return;
       setNotes(result.items);
       setChecks(result.checks);
+      setClosures(result.closures);
       setReply(result.reply);
     });
     return () => { alive = false; };
@@ -1313,14 +1315,10 @@ export function TaskWorkspace({
   const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
     item.status === "closed" ? "closed"
       : item.status === "needs_human" ? "mine" : "agent";
-  const noteCategory = (item: Annotation) => annotationCategory(item, {
-    viewerUsername,
-    taskStatus: task.status,
-    reviewReady: workspaceReviewReady,
-    canOverride,
-    canRouteOthers: canOperate,
-    reviewAnnotationIds: workspaceReviewAnnotationIds,
-  });
+  // 归档也照服务端结论:页面不再按 status/sent_via 自己分档。
+  const closureOf = (id: string) => closures.find((one) => one.id === id);
+  const noteCategory = (item: Annotation): Exclude<ReviewFilter, "all"> =>
+    closureOf(item.id)?.bucket ?? "agent";
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
   for (const item of notes) reviewCounts[noteCategory(item)] += 1;
   for (const item of [...codehubFeedback, ...machineFeedback]) {
@@ -1491,12 +1489,11 @@ export function TaskWorkspace({
         <AnnotationPanel
           taskId={task.id}
           viewerUsername={viewerUsername}
-          canOverride={canOverride}
           items={notes}
           checks={checks}
+          closures={closures}
           reply={reply}
           canOperate={canContributeReview}
-          canRouteOthers={canOperate}
           taskStatus={task.status}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}

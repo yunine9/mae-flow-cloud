@@ -2529,7 +2529,17 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const author = viewer?.username ?? "本地用户";
           if (request.method === "GET" && parts.length === 3) {
-            return json(response, 200, await service.listAnnotationsAsync(id));
+            // 闭环判定连同人名一起在服务端算完:页面只渲染,不推断。
+            const people = options.auth?.listUsers() ?? [];
+            return json(response, 200, await service.listAnnotationsAsync(id, {
+              username: author,
+              can_override: !options.auth || viewer?.role === "admin",
+              can_route_others: canOperate(
+                viewer, target.luban_account, !!options.auth),
+              person_name: (username: string) =>
+                people.find((person) => person.username === username)
+                  ?.display_name?.trim() || username,
+            }));
           }
           if (request.method === "POST" && parts.length === 3) {
             const body = await readBody(request);
