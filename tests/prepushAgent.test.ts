@@ -54,6 +54,16 @@ test("prepush 使命明确 Agent 平台目录只读且不得提交", () => {
   assert.match(mission, /\.claude.*\.cac.*只读使用.*禁止修改.*提交/s);
 });
 
+test("prepush 不会为了当前构建现场诱导 Agent 修改业务仓 ignore 规则", () => {
+  const mission = prePushMission({
+    taskId: "T-build-residue", workspace: "/tmp/repo", sha: "d".repeat(40),
+    round: 1, requirement: "修复问题", branch: "feature", baseline: "master",
+  });
+  assert.match(mission, /不要仅为隐藏本轮编译产物修改业务仓 \.gitignore/);
+  assert.match(mission, /build\/、test\/.*宽目录整体忽略/);
+  assert.match(mission, /只有需求明确包含仓库忽略规则治理时.*\.gitignore.*交付内容/s);
+});
+
 test("prepush 修复继承用户确认的交付范围，不把拒绝文件带回来", () => {
   const mission = prePushMission({
     taskId: "T-prepush-selection",

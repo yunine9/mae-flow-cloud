@@ -13798,7 +13798,7 @@ export class TaskService {
 
   /** 脏路径清单(空数组=clean)。为什么要路径不只要布尔(2026-08-25
    * 内网事故复盘):构建在同挂载工作区里落产物时,"工作区仍有未提交
-   * 业务改动"这句既没告诉模型该清什么,也没告诉人该 gitignore 什么,
+   * 业务改动"这句既没告诉模型该核对什么,也没告诉人有哪些本地现场,
    * 每一轮验证都在同一处失败还说不出原因。git 读不到时返回哨兵行——
    * 判 dirty 并把原因说出来,不许把"读不到"伪装成"干净"。 */
   private async prePushDirtyPaths(task: TaskState): Promise<string[]> {
@@ -14355,15 +14355,14 @@ export class TaskService {
               facts.changed_after_run)},没有重跑;推送前请自行判断是否需要打回重跑。`
             : "";
           // 未提交文件只提示不拦截(用户拍板"不能卡死"):push 只传
-          // HEAD,它们进不了交付;但把清单如实写进收据——产物该
-          // .gitignore 的提出来让用户加规则(留着别删,增量编译要用),
-          // 万一里面混着漏提交的业务改动,人在推送确认时能看见。
+          // HEAD,它们进不了交付;把清单如实写进收据,让人看见万一
+          // 混在其中的漏提交业务改动。构建现场保留即可,不能再为了
+          // 当前一次编译诱导 Agent 修改业务仓 .gitignore。
           const leftover = await this.prePushDirtyPaths(task);
           const leftoverNote = leftover.length
             ? `。工作区尚有未提交/未跟踪文件(${describeDirtyPaths(leftover)}`
               + ")——push 只传 HEAD,它们不进交付,也不影响通过。构建产物"
-              + "请保留勿删;想让它们以后不再列出,让 Agent 把路径补进仓库 "
-              + ".gitignore 随单交付即可(普通代码改动,MR 检视可见)。"
+              + "请保留勿删,无需为本轮编译修改业务仓 .gitignore。"
               + "若其中有本单业务改动,请在推送确认时核对是否遗漏。"
             : "";
           return withExecution({

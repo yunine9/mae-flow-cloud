@@ -615,6 +615,9 @@ export function prePushMission(
       + "产物目录（target/、build/、cmake-build*、CMakeFiles、CMakeCache.txt、"
       + "node_modules，相对路径，白名单放行）；除产物目录外禁止递归强删，"
       + "clean 请走构建工具生命周期。",
+    "不要仅为隐藏本轮编译产物修改业务仓 .gitignore，更不要把 build/、test/"
+      + " 这类可能含源码的宽目录整体忽略；只有需求明确包含仓库忽略规则治理时，"
+      + ".gitignore 才是本单交付内容。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
@@ -639,7 +642,7 @@ export function prePushMission(
     // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
     "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
       + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
-      + "编译产物提交进去。最后一段必须严格输出下面结构"
+      + "编译产物提交进去或修改业务仓 .gitignore。最后一段必须严格输出下面结构"
       + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",

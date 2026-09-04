@@ -17,6 +17,10 @@ from mae_flow_core.cli_commands import delivery_manifest  # noqa: E402
 from mae_flow_core.cli_commands.delivery_manifest import (  # noqa: E402
     build_delivery_manifest,
     confirm_delivery_manifest,
+    select_unchanged_build_residue,
+)
+from mae_flow_core.cli_commands.git_ownership import (  # noqa: E402
+    _build_artifact_confidence,
 )
 
 
@@ -99,6 +103,77 @@ class DeliveryConfirmationTests(unittest.TestCase):
                 state = self.state()
                 state["domain_archive"] = archive
                 builder(state, "main", current_dirty=dirty)
+
+    def test_unchanged_delivery_keeps_proven_build_residue_out_of_manifest(self):
+        state = self.state()
+        state["domain_archive"] = {
+            "status": "applied", "result": "unchanged",
+            "applied_paths": [],
+        }
+        manifest = delivery_manifest.build_unchanged_delivery_manifest(
+            state,
+            "main",
+            current_dirty=(
+                "docs/user-notes.md", "build/main.o", "test/fars1.db"),
+            preserved_initial_dirty=("docs/user-notes.md",),
+            build_residue_fingerprints={
+                "build/main.o": "object-fingerprint",
+                "test/fars1.db": "database-fingerprint",
+            },
+        )
+
+        self.assertEqual([], manifest["files"])
+        self.assertEqual({
+            "build/main.o": "object-fingerprint",
+            "test/fars1.db": "database-fingerprint",
+        }, manifest["unchanged_build_residue"])
+
+    def test_residue_selection_uses_provenance_and_never_hides_agent_source(self):
+        dirty = (
+            "build/main.o",
+            "test/fars1.db",
+            "test/new_case.cpp",
+            "imap/maybe-resource.json",
+            ".gitignore",
+        )
+        residue = select_unchanged_build_residue(
+            dirty,
+            agent_written=(".gitignore",),
+            compile_side_effects=(
+                "test/fars1.db", "test/new_case.cpp"),
+            artifact_confidence=lambda path: (
+                "strong" if path.endswith(".o") else ""),
+            is_source=lambda path: path.endswith(".cpp"),
+            fingerprint=lambda path: "fp:" + path,
+        )
+
+        self.assertEqual({
+            "build/main.o": "fp:build/main.o",
+            "test/fars1.db": "fp:test/fars1.db",
+        }, residue)
+        self.assertNotIn("test/new_case.cpp", residue)
+        self.assertNotIn("imap/maybe-resource.json", residue)
+        self.assertNotIn(".gitignore", residue)
+
+    def test_unchanged_delivery_rejects_stale_build_residue_receipt(self):
+        state = self.state()
+        state["domain_archive"] = {
+            "status": "applied", "result": "unchanged",
+            "applied_paths": [],
+        }
+        with self.assertRaisesRegex(ValueError, "不属于当前未提交文件"):
+            delivery_manifest.build_unchanged_delivery_manifest(
+                state,
+                "main",
+                current_dirty=("build/current.o",),
+                build_residue_fingerprints={
+                    "build/current.o": "current-fingerprint",
+                    "build/stale.o": "stale-fingerprint",
+                },
+            )
+
+    def test_compile_logs_are_recognised_as_strong_build_artifacts(self):
+        self.assertEqual("strong", _build_artifact_confidence("build/compile.log"))
 
     def test_startup_dirty_requires_explicit_natural_language_adoption(self):
         with self.assertRaisesRegex(ValueError, "启动时已有修改"):
