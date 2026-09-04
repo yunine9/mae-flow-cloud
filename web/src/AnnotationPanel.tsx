@@ -23,6 +23,7 @@ import {
   judgeAnnotation,
   replyToAnnotation,
   sendAnnotations,
+  decide,
   TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
   type AnchorCheck,
@@ -250,6 +251,12 @@ function progressOf(
   }
   // "被改动"只认一个判据:锚定的原文消失了。行号漂移(moved)不算——
   // 原文还在就说明它还没改这处,只是别处的改动把行挤动了。
+  // 等决定期间提交的意见只是登记成团队事实,正文还没送到 Agent——原来
+  // 也显示"已提交",人以为送到了,其实要等责任人在卡上选返工(内网实锤)。
+  if (route === "agent" && item.sent_via === "queued_decision") {
+    return { tone: "waiting", text: "已排队·等决定",
+      hint: "还没送到 Agent:任务正等一张决定卡,责任人在卡上选「需要调整」提交后才随决定送达。" };
+  }
   return check?.state === "gone"
     ? { tone: "review", text: "已被改动·请你确认",
         hint: "你批注的那段原文已经不在了。是不是照你说的改的,系统不替你判断,请回到原位看一眼。" }
@@ -270,6 +277,7 @@ function deliveryText(item: Annotation, archival = false): string {
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
   if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
+  if (item.sent_via === "queued_decision") return "已排队，随决定送达";
   return "执行中发送";
 }
 
@@ -290,9 +298,21 @@ export function AnnotationPanel({
   mergeRequestOpen,
   evidenceAwaiting = false,
   filter = "all",
+  reworkChoice,
+  canDecide = false,
   onChanged,
   onLocate,
 }: {
+  /** 当前决定卡上"需要调整"那一项。有它且 canDecide 时,提交就是一步到位
+   * 的"提交并返工"——直接以这个选项提交决定卡,意见随之送给 Agent。 */
+  reworkChoice?: {
+    waitingId: string;
+    stateVersion: number;
+    question: string;
+    option: string;
+  };
+  /** 提交人就是决定人(责任人/管理员)。检视人不是,只能排队等责任人返工。 */
+  canDecide?: boolean;
   /** 抽屉顶部筛选条选中的档;非 all 时只列该档的批注。 */
   filter?: ReviewFilter;
   taskId: string;
@@ -406,6 +426,11 @@ export function AnnotationPanel({
   // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
   // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
   const queueable = taskStatus === "waiting_for_human";
+  // 责任人自己提意见时,"抽屉里提交、再回卡上选返工"是同一个意图拆成两步
+  // (内网实锤:点了"提交给 Agent"以为送到了,其实要点返工才送)。决定人
+  // 在这里直接以返工选项提交决定卡,一步到位;检视人仍走排队。
+  const oneStepRework = queueable && !requirementReview && canDecide
+    && !!reworkChoice;
   const canSend = !requirementRevisionRunning
     && (running || evidenceAwaiting || reviewSendable || queueable);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
@@ -436,9 +461,19 @@ export function AnnotationPanel({
     setBusy(true);
     setError("");
     try {
-      const result = await sendAnnotations(taskId,
-        drafts.map((item) => item.id));
-      if (result.error) setError(result.error);
+      if (oneStepRework && reworkChoice) {
+        // 服务端 decide 会把本人全部草稿 + 等待期排队的意见一并渲进
+        // 决定正文,再 resume Agent——和在卡上手点"需要调整"完全同一条路。
+        const result = await decide(taskId, reworkChoice.stateVersion,
+          { [reworkChoice.question]: reworkChoice.option }, {}, undefined,
+          drafts.map((item) => item.id), undefined, undefined, undefined,
+          undefined, reworkChoice.waitingId);
+        if (result.conflict) setError(result.conflict);
+      } else {
+        const result = await sendAnnotations(taskId,
+          drafts.map((item) => item.id));
+        if (result.error) setError(result.error);
+      }
       onChanged();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "批注提交失败，请重试");
@@ -579,7 +614,9 @@ export function AnnotationPanel({
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
                   onClick={() => void send()}>
-            {busy ? "提交中…" : drafts.every((item) => routeOf(item) === "owner_reply")
+            {busy ? "提交中…"
+              : oneStepRework ? `提交 ${drafts.length} 条并返工`
+              : drafts.every((item) => routeOf(item) === "owner_reply")
               ? `提交 ${drafts.length} 条给责任人答复`
               : drafts.every((item) => routeOf(item) === "owner_decision")
                 ? `提交 ${drafts.length} 条给责任人决策`
@@ -589,7 +626,7 @@ export function AnnotationPanel({
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
                 : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
-                : queueable ? `提交 ${drafts.length} 条（随决定送达）`
+                : queueable ? `提交 ${drafts.length} 条（排队，等责任人返工时送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
           {reviewSendable && (
@@ -598,7 +635,9 @@ export function AnnotationPanel({
           {queueable && !reviewSendable && (
             <p>{requirementReview
               ? "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
-              : "任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。"}</p>
+              : oneStepRework
+                ? `会直接以「${reworkChoice!.option.replace(/[（(].*$/, "")}」提交当前决定卡，意见随之送给 Agent，不必再回卡上点返工。`
+                : `任务正等一张决定卡。提交只是先登记成待闭环事实（阻止直接放行），正文要等责任人在卡上选「${reworkChoice?.option.replace(/[（(].*$/, "") ?? "需要调整"}」后才随决定送给 Agent。`}</p>
           )}
         </div>
       )}

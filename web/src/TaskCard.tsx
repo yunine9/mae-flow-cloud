@@ -542,6 +542,33 @@ export function isChainReviewWaiting(task: TaskSummary): boolean {
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
 }
 
+/** 检视卡上"把意见送回 Agent 继续改"的那一项:choice_effects 标了
+ * handles_feedback 的选项;没标就取不关闭检视的选项里最像"需要调整"的。
+ * WaitingCard 的返工文案和批注面板的"提交并返工"共用这一个判据,别各抄
+ * 一份。没有 choice_effects 的卡(普通澄清、Chain 方案)不算。 */
+export function reworkChoiceOf(
+  task: TaskSummary,
+): { question: string; option: string } | undefined {
+  const effects = task.waiting?.choice_effects ?? [];
+  if (!effects.length) return undefined;
+  const feedbackAnswers = new Set(effects
+    .filter((effect) => effect.handles_feedback).flatMap((effect) => effect.answers));
+  const closingAnswers = new Set(effects
+    .filter((effect) => effect.closes_feedback).flatMap((effect) => effect.answers));
+  const allAnswers = new Set(effects.flatMap((effect) => effect.answers));
+  for (const item of task.waiting?.question?.questions ?? []) {
+    const options = item.options ?? [];
+    if (!options.some((option) => allAnswers.has(option))) continue;
+    const exact = options.find((option) => feedbackAnswers.has(option));
+    if (exact) return { question: item.question, option: exact };
+    const nonClosing = options.filter((option) => !closingAnswers.has(option));
+    const option = nonClosing.find((candidate) =>
+      /需要.*(?:调整|修改)|返工|补充/.test(candidate)) ?? nonClosing[0];
+    if (option) return { question: item.question, option };
+  }
+  return undefined;
+}
+
 /** 拍板类卡只认责任人:进不进分析、拆不拆。受邀参与讨论的人能答澄清题,
  * 这两张改任务形状的卡对他们只读;服务端 decide 是同一口径的硬闸。 */
 export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
@@ -631,22 +658,12 @@ export function WaitingCard({
     === "cloud_requirement_analysis_confirm";
   const chainReview = isChainReviewWaiting(task);
   const choiceEffects = task.waiting?.choice_effects ?? [];
-  const feedbackAnswers = new Set(choiceEffects
-    .filter((effect) => effect.handles_feedback)
-    .flatMap((effect) => effect.answers));
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
     .flatMap((effect) => effect.answers));
   const allChoiceAnswers = new Set(choiceEffects.flatMap((effect) => effect.answers));
-  const feedbackOption = questions.flatMap((item) => {
-    const options = item.options ?? [];
-    if (!options.some((option) => allChoiceAnswers.has(option))) return [];
-    const exact = options.find((option) => feedbackAnswers.has(option));
-    if (exact) return [exact];
-    const nonClosing = options.filter((option) => !closingAnswers.has(option));
-    return [nonClosing.find((option) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(option)) ?? nonClosing[0]].filter(Boolean);
-  })[0];
+  const reworkChoice = reworkChoiceOf(task);
+  const feedbackOption = reworkChoice?.option;
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;

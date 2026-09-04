@@ -70,6 +70,7 @@ import {
   ExecutionPanel,
   isChainReviewWaiting,
   isOwnerOnlyWaiting,
+  reworkChoiceOf,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -1256,6 +1257,12 @@ export function TaskWorkspace({
   // 回答);拍板类卡只认责任人。服务端 decide 是同一口径的硬闸。
   const decides = canOperate
     || (canCollaborate && !isOwnerOnlyWaiting(task));
+  // 检视卡上的返工选项,交给批注面板做"提交并返工"一步到位。
+  const reworkChoiceRaw = waiting ? reworkChoiceOf(task) : undefined;
+  const workspaceReworkChoice = reworkChoiceRaw && task.waiting
+    ? { ...reworkChoiceRaw, waitingId: task.waiting.waiting_id,
+        stateVersion: task.waiting.state_version }
+    : undefined;
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -1384,6 +1391,8 @@ export function TaskWorkspace({
           evidenceAwaiting={Boolean(
             task.delivery?.evidence_gap?.missing_dimensions.length)}
           filter={reviewFilter}
+          reworkChoice={workspaceReworkChoice}
+          canDecide={canOperate}
           onLocate={(item) => {
             // 抽屉只占右侧,定位不用关;窄屏抽屉占满整屏,关掉才看得见那一行。
             if (window.matchMedia("(max-width: 900px)").matches) {
