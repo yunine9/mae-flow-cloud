@@ -1534,6 +1534,23 @@ function taskTitle(requirement: string): string {
   return first.length > 80 ? `${first.slice(0, 79)}…` : first;
 }
 
+/** task.status 与 detail 必须描述同一个当下。AskUserQuestion 的完整结构
+ * 已经在 waiting 中，这里只提取一行可扫读摘要；不能继续沿用启动、恢复
+ * 或上一张卡的旧文案，否则页面会把活任务显示成仍在等待续跑。 */
+function waitingTaskDetail(waiting: WaitingRecord | undefined): string {
+  const raw = waiting?.question?.questions;
+  const questions = Array.isArray(raw) ? raw : [];
+  const first = questions.length && questions[0]
+    && typeof questions[0] === "object"
+    ? String((questions[0] as Record<string, unknown>).question ?? "")
+      .replace(/\s+/g, " ").trim()
+    : "";
+  if (!first) return "Agent 正在等待你的决定";
+  const clipped = first.length > 120 ? `${first.slice(0, 119)}…` : first;
+  return `等待你回答：${clipped}`
+    + (questions.length > 1 ? `（共 ${questions.length} 个问题）` : "");
+}
+
 /** 重启前发出、但很可能没送到模型的插话。
  *
  * 插话走 pi 的 steer,消息压在**进程内存**队列里,进程一死就没了;事件
@@ -10201,6 +10218,7 @@ export class TaskService {
     task.summary.waiting = undefined;
     if (task.driver) {
       task.summary.status = "running";
+      task.summary.detail = "决定已收到，Agent 正在继续处理";
       this.persist(task);
       this.bypass(task, "已决待办自愈续跑",
         this.settle(task, task.driver.resumeWithDecision(waiting)));
@@ -10627,6 +10645,7 @@ export class TaskService {
     task.summary.waiting = undefined;
     if (task.driver) {
       task.summary.status = "running";
+      task.summary.detail = "决定已收到，Agent 正在继续处理";
       this.persist(task);
       // 决定之后的这一轮是即发即忘:settle 自己会把异常收成"任务
       // failed",这里再兜一层——连收口都失败时,宁可只丢一条日志,
@@ -12400,7 +12419,13 @@ export class TaskService {
       // 控制动作可能已经把重复/陈旧队列项暂停或取消。
       if (!task || task.summary.status !== "queued") continue;
       this.runningCount += 1;
+      const wasManualRetry = task.summary.detail?.includes("人工重跑") === true;
       task.summary.status = "running";
+      task.summary.detail = wasManualRetry
+        ? "人工重跑已开始，Agent 正在继续处理"
+        : task.resume
+          ? "Agent 已恢复并继续处理"
+          : "Agent 正在处理";
       this.persist(task);
       const epoch = task.controlEpoch;
       this.bypass(task, "任务启动", this.launch(task, epoch).finally(() => {
@@ -19277,6 +19302,7 @@ export class TaskService {
           break;
         }
         task.summary.status = "waiting_for_human";
+        task.summary.detail = waitingTaskDetail(outcome.waiting);
         // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
         // 同名步骤,那是新一次卡壳,应当再催。
         task.nudgedStep = undefined;

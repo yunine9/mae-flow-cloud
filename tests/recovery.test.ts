@@ -85,6 +85,61 @@ test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运
   assert.match(restored.detail ?? "", /修复会话已完成/);
 });
 
+test("恢复续跑与普通提问都会刷新 detail，不残留服务重启文案", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-detail-"));
+  const workspace = join(dataDir, "task-1");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({
+    summary: {
+      id: "task-1",
+      requirement: "恢复后继续澄清需求",
+      workspace,
+      status: "running",
+      detail: "重启前遗留的旧阶段文案",
+      created_at: "2026-09-04T00:00:00.000Z",
+    } satisfies TaskSummary,
+  }, null, 2));
+
+  let releaseResponse: (() => void) | undefined;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "恢复后采用哪个兼容方案？",
+      options: ["保持旧协议", "升级新协议"],
+      recommended: "保持旧协议",
+    }] } } },
+  ], "scripted-v1", {
+    beforeScene: async ({ requestNumber }) => {
+      if (requestNumber === 1) await responseGate;
+    },
+  });
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const recovered = service.recover();
+  assert.equal(recovered.requeued, 1);
+
+  const running = await until(() => {
+    const task = service.get("task-1");
+    return task?.status === "running" ? task : undefined;
+  }, "恢复任务重新开始执行");
+  assert.equal(running.detail, "Agent 已恢复并继续处理");
+
+  releaseResponse!();
+  const waiting = await until(() => {
+    const task = service.get("task-1");
+    return task?.status === "waiting_for_human" ? task : undefined;
+  }, "恢复任务提出新问题");
+  assert.equal(waiting.detail, "等待你回答：恢复后采用哪个兼容方案？");
+
+  await service.shutdown();
+  await model.stop();
+});
+
 test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-"));
   // ---- 前世:走到等待人工,然后"崩溃"----
