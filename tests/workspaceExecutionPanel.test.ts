@@ -12,8 +12,17 @@ const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 const crossRepositorySync = readFileSync(
   resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
 
-test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
-  assert.match(workspace, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
+test("活动先给人的阶段摘要，原始事件保留但默认按需展开", () => {
+  const activity = workspace.slice(
+    workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">'),
+    workspace.indexOf('</>}\n        </section>',
+      workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">')),
+  );
+  assert.match(activity, /<TaskTimeline taskId=\{task\.id\} \/>/);
+  assert.match(activity, /<strong>原始事件<\/strong>/);
+  assert.match(activity, /<ExecutionPanel task=\{task\} \/>/);
+  assert.doesNotMatch(activity, /<ExecutionPanel task=\{task\} defaultOpen \/>/,
+    "Agent 原文和工具调用是审计材料，不应压过阶段进展");
 });
 
 test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主工作面", () => {
@@ -33,11 +42,11 @@ test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主�
     "批注不应以旧的'本轮检视清单'形态接管 Agent 当前问题");
 });
 
-test("Token 用量是执行现场独立页签，不混入实时事件或批注检视", () => {
-  assert.match(workspace, /type ExecutionView = "events" \| "knowledge" \| "tokens"/);
-  assert.match(workspace, /onClick=\{\(\) => setExecutionView\("tokens"\)\}/);
-  assert.match(workspace, /<strong>Token 使用<\/strong>/);
-  assert.match(workspace, /hidden=\{executionView !== "tokens"\}/);
+test("Token 用量保留在活动视图的低频披露中，不混入批注检视", () => {
+  assert.doesNotMatch(workspace, /type ExecutionView/,
+    "活动视图不应再嵌套一层页签导航");
+  assert.match(workspace, /<strong>模型用量<\/strong>/);
+  assert.match(workspace, /<TokenUsage usage=\{task\.token_usage\}/);
 
   const reviewContent = workspace.slice(
     workspace.indexOf("const reviewWorkspaceContent"),
@@ -46,19 +55,21 @@ test("Token 用量是执行现场独立页签，不混入实时事件或批注�
   assert.doesNotMatch(reviewContent, /<TokenUsage|<TaskTimeline/,
     "检视弹层只应承载意见和检视动作");
 
-  const eventContent = workspace.slice(
-    workspace.indexOf('hidden={executionView !== "events"}'),
-    workspace.indexOf('hidden={executionView !== "knowledge"}'),
+  const rawEvents = workspace.slice(
+    workspace.indexOf('className="ws-activity-section raw-events"'),
+    workspace.indexOf('className="ws-activity-disclosure"'),
   );
-  assert.doesNotMatch(eventContent, /<TokenUsage/,
-    "实时事件页不应继续重复显示 Token 卡");
+  assert.doesNotMatch(rawEvents, /<TokenUsage/,
+    "原始事件区不应继续重复显示 Token 卡");
 });
 
-test("低频跨仓同步下沉到开发协作底部并默认折叠", () => {
+test("开发协作只在当前上下文按需展开，低频跨仓同步仍置底", () => {
   const collaboration = workspace.slice(
-    workspace.indexOf('workspaceView === "collaboration"'),
-    workspace.indexOf('</> : <>', workspace.indexOf('workspaceView === "collaboration"')),
+    workspace.indexOf('<details className="ws-focus-collaboration"'),
+    workspace.indexOf('</details>',
+      workspace.indexOf('<details className="ws-focus-collaboration"')),
   );
+  assert.match(collaboration, /需要纠偏时再展开，不打断正常执行/);
   assert.ok(collaboration.indexOf("<SteerBox")
     < collaboration.indexOf("<CrossRepositorySync"),
   "主协作操作必须在前，低频跨仓工具放在底部");
@@ -68,16 +79,17 @@ test("低频跨仓同步下沉到开发协作底部并默认折叠", () => {
   assert.match(crossRepositorySync, /OPTIONAL TOOL/);
 });
 
-test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
+test("任何状态都稳定落在当前视图，由内容而不是自动跳页表达变化", () => {
   const policy = workspace.slice(
     workspace.indexOf("function defaultWorkspaceView"),
     workspace.indexOf("function sizeText"),
   );
-  assert.match(policy, /status === "paused"[^]*return "collaboration"/);
-  assert.match(policy,
-    /task\.waiting \|\| task\.status === "waiting_for_human"[^]*return "materials"/);
-  assert.match(policy,
-    /"queued", "running", "pausing", "verifying", "await_merge"[^]*return "execution"/);
+  assert.match(policy, /return "focus"/);
+  assert.doesNotMatch(policy, /task\.status|task\.waiting/,
+    "轮询更新不能把用户从正在阅读的工作面自动甩走");
+  assert.match(workspace, /\["focus", "当前"\]/);
+  assert.match(workspace, /\["materials", "产物"\]/);
+  assert.match(workspace, /\["execution", "活动"\]/);
 });
 
 test("等待人工检视时工作台标题显示人的当前事项，不沿用自动阶段旧步骤", () => {

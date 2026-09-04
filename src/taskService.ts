@@ -879,6 +879,9 @@ export interface SplitEscalation {
 
 export interface TaskSummary {
   id: string;
+  /** 仅供本地 UI 场景库冻结状态；必须同时显式开启
+   * MAE_FLOW_UI_FIXTURE_MODE，正式任务永远不会写入。 */
+  ui_fixture?: true;
   /** 扫读标题:需求原文仍完整保留在 requirement。旧任务缺席时由读侧
    * 从需求首行生成,不要求迁移现场文件。 */
   title?: string;
@@ -8408,6 +8411,17 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        // 本地视觉回归需要同一批排队/运行/验证/待合入样本跨重启保持
+        // 原样，否则 recover 会把它们重新入队或继续轮询，浏览器刚打开
+        // 场景就消失。双重门禁：环境变量 + 单任务标记缺一不可，正式数据
+        // 即使误开环境变量也仍按正常恢复语义执行。
+        if (process.env.MAE_FLOW_UI_FIXTURE_MODE === "1"
+            && summary.ui_fixture === true) {
+          this.counter = Math.max(
+            this.counter, Number(name.slice("task-".length)) || 0);
+          restored += 1;
+          continue;
+        }
         if (recoveredCwd !== savedCwd) {
           this.options.log?.(
             `任务 ${summary.id} 已从单号目录恢复代码现场: ${recoveredCwd ?? "未找到唯一候选"}`,

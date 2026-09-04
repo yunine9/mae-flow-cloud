@@ -6,6 +6,7 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 - [云端 MVP 设计](../mae-flow/docs/superpowers/specs/2026-08-14-mae-flow-cloud-mvp-design.md)
 - [宿主适配层详设](../mae-flow/docs/superpowers/specs/2026-08-14-cloud-host-adapter-design.md)
 - [问题流 v2:我的问题会话](docs/issue-flow.md)
+- [前端体验与视觉基线](docs/frontend-experience-baseline.md)
 
 ## 问题流(问题单处理,与需求内核分离)
 
@@ -109,6 +110,19 @@ npm test          # 不变式单测 + 任务 API 端到端(真 pi 会话)
 npm run probe     # 整链演练:进程内 pi + 剧本假模型,内核裁判验收九项事实
 npm run serve     # http://127.0.0.1:8787 浏览器走完 发任务→看进度→点审批
 ```
+
+工作台前端回归不必每次手工从头造任务。仓库内置 16 个固定场景，覆盖
+全部任务状态、长文决定、模块拆分、代码检视、批注、证据缺口、越界、
+合入与终态：
+
+```bash
+npm run ui:fixtures        # 首次生成；已有 .ui-fixtures 时原样复用
+npm run ui:preview         # http://127.0.0.1:8838，dev / mae-flow-demo
+npm run ui:fixtures:reset  # 只有需要恢复标准样本时才显式重置
+```
+
+场景目录和全局巡检点在 `scripts/ui-workbench-scenarios.ts`。预览模式只会
+冻结同时带 `ui_fixture` 标记的本地样本；正式任务仍执行正常的恢复与续跑。
 
 演示模式默认登录为 `admin / mae-flow-demo`。管理员登录后可在“账号管理”
 创建开发账号；开发账号默认进入“我的工作”，仍可查看团队全部任务，但只能

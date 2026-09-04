@@ -171,8 +171,8 @@ test("流水线证据缺口直接打开补证材料，用户切走后不被轮�
     } },
   };
   assert.equal(workspace.pipelineEvidenceNeedsHuman(evidenceTask), true);
-  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "materials",
-    "补证是明确的人工作业，不能仍默认打开执行现场");
+  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "focus",
+    "补证先在当前视图呈现行动与关键证据，不能用自动跳页替代信息层级");
   assert.equal(workspace.preferredWorkspaceArtifact(
     [spec, gap], "", undefined, true), gap.name,
   "点名的补证材料优先于最近修改排序");

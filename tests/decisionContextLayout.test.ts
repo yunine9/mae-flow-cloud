@@ -46,8 +46,13 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
   // 筛选条的"等我确认 N",打开前入口按钮上也有——同一屏三份,眼睛先去数
   // 数字。计数只留在能点的地方(入口按钮和筛选条),标题栏只留关闭。
   assert.match(workspace, /className=\{`ws-review-launch/);
-  assert.match(workspace, /\$\{reviewCounts\.mine\} 等我确认/);
-  assert.doesNotMatch(workspace, /\$\{reviewCounts\.mine\} 项等我确认/,
+  assert.match(workspace,
+    /reviewCounts\.mine > 0 \? reviewCounts\.mine : reviewRecordCount/);
+  const drawerHeader = workspace.slice(
+    workspace.indexOf('<section className="workspace-review-drawer"'),
+    workspace.indexOf('<div className="workspace-review-content ws-insights-view">'),
+  );
+  assert.doesNotMatch(drawerHeader, /项等我确认/,
     "抽屉标题栏不再重复计数");
   assert.match(workspace, /onClick=\{\(\) => setReviewPanelOpen\(true\)\}/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
@@ -272,15 +277,17 @@ test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源
   assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
 });
 
-test("持续检视意见:进度条下不再有摘要条,进行中数写进入口卡,正文按来源列进批注与检视", () => {
+test("持续检视意见:进度条下不再有摘要条,入口只留角标,正文按来源完整展示", () => {
   // 原来所有意见塞在进度条下横向滚动的小卡片里(9–11px、单行省略),MR
   // 检视人一段话被压成一行,用户实锤"排版太丑"。第二版换成一条摘要
   // (一排"MR 检视 3 2 进行中"胶囊 + 重复的入口按钮),用户再实锤"数字
   // 好丑、和批注与检视卡重叠"——整条撤掉,几条进行中并进入口卡副标题。
   assert.doesNotMatch(workspace, /FeedbackSummary|feedback-summary/);
   assert.doesNotMatch(css, /\.feedback-summary/);
-  assert.match(workspace, /条检视意见进行中/);
-  assert.match(workspace, /<small>\{feedbackDigest \|\| "批注、CodeHub 检视意见与机器检视"\}<\/small>/);
+  assert.match(workspace, /className=\{`ws-review-launch/);
+  assert.match(workspace, /<em>\{reviewCounts\.mine > 0 \? reviewCounts\.mine : reviewRecordCount\}<\/em>/);
+  assert.doesNotMatch(workspace, /feedbackDigest/,
+    "入口不应再堆一行解释性文案");
   assert.match(workspace, /function FeedbackList/);
   assert.match(workspace, /title="来自 CodeHub 的检视意见"/);
   assert.match(workspace, /item\.source === "mr_discussion"\)/);
@@ -317,10 +324,13 @@ test("批注与检视弹层里的批注面板默认展开", () => {
     /\.annot-response p \{[^}]*white-space:\s*pre-wrap/);
 });
 
-test("执行中的任务默认打开执行现场", () => {
-  assert.match(workspace,
-    /\["queued", "running", "pausing", "verifying", "await_merge"\]/);
-  assert.match(workspace, /\.includes\(task\.status\)\) return "execution"/);
+test("任务状态更新只刷新当前摘要，不自动切走用户正在看的页面", () => {
+  const policy = workspace.slice(
+    workspace.indexOf("function defaultWorkspaceView"),
+    workspace.indexOf("function sizeText"),
+  );
+  assert.match(policy, /return "focus"/);
+  assert.doesNotMatch(policy, /return "execution"|return "materials"/);
 });
 
 test("仓间依赖图里的负责面路径是块级元素,超宽省略而不是横穿卡片", () => {

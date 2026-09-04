@@ -3,8 +3,8 @@
  *
  * 用户实测的摩擦:审批卡问"本地 Spec 确认",spec.md 却只在内核
  * 现场面板(另一套 UI 的 iframe)里能看——读材料要跳出决策上下文。
- * 这里把两半合成一屏:主画布一次只承载材料、开发协作或执行现场；
- * 批注与检视由常驻入口打开完整工作面，右侧只保留此刻必须处理的决定。
+ * 新工作台只保留「当前 / 产物 / 活动」三个稳定视图。任务状态决定
+ * 「当前」里显示什么；协作、邀请、批注都是上下文动作，不再冒充导航。
  *
  * 内核面板不再暴露给业务用户：它是内核为“人坐在终端旁”生成的
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
@@ -81,9 +81,14 @@ import {
   WaitingCard,
 } from "./TaskCard";
 
-type WorkspaceView = "materials" | "collaboration" | "execution";
-type ExecutionView = "events" | "knowledge" | "tokens";
+type WorkspaceView = "focus" | "materials" | "execution";
 type MaterialView = "source" | "doc" | "chain" | "diff";
+
+const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
+  Digit1: "focus",
+  Digit2: "materials",
+  Digit3: "execution",
+};
 
 /** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
 export function canCreateWorkspaceAnnotation(
@@ -356,13 +361,9 @@ export function usablePushReviewSelection(
   return pushReviewActive && state.kind !== "ready" ? undefined : selection;
 }
 
-export function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
-  if (task.status === "paused") return "collaboration";
-  if (pipelineEvidenceNeedsHuman(task)) return "materials";
-  if (task.waiting || task.status === "waiting_for_human") return "materials";
-  if (["queued", "running", "pausing", "verifying", "await_merge"]
-      .includes(task.status)) return "execution";
-  return "materials";
+export function defaultWorkspaceView(_task: TaskSummary): WorkspaceView {
+  // 状态变化只改「当前」画布里的内容，不再把人自动甩到另一套导航。
+  return "focus";
 }
 
 function sizeText(bytes: number): string {
@@ -545,19 +546,6 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
   };
 }
 
-function assistantUnavailableReason(task: TaskSummary): string {
-  if (["waiting_for_human", "verifying"].includes(task.status)) {
-    return "先暂停主任务即可接管当前代码现场";
-  }
-  if (task.status === "completed") {
-    return "任务已经结束；运行中的开发实现阶段可直接查代码、跑命令和修改";
-  }
-  if (task.status === "canceled" || task.status === "failed") {
-    return "任务已经停止；重跑并进入可编辑阶段后开放";
-  }
-  return "代码现场就绪后即可使用";
-}
-
 export function TaskWorkspace({
   task,
   viewerUsername,
@@ -664,7 +652,6 @@ export function TaskWorkspace({
   const [revisionDiff, setRevisionDiff] = useState<{
     id: string; text: string; unavailable?: string;
   } | null>(null);
-  const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
@@ -735,7 +722,6 @@ export function TaskWorkspace({
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
     setReviewFocus(undefined);
-    setExecutionView("events");
     repositoryAssigneeSaveTask.current = task.id;
     setRepositoryAssigneeSave("idle");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
@@ -769,11 +755,8 @@ export function TaskWorkspace({
     const waitingId = task.waiting?.waiting_id;
     if (!waitingId || task.status === "paused") return;
 
-    // 暂停时工作台会主动切到“开发协作”，方便用户接管现场。恢复后若
-    // Agent 立即举出新问题，不能继续把左侧留在开发控制台——此刻人的
-    // 首要任务是对照证据做决定。每张新决策卡都回到材料视图；有明确的
-    // recommended_view 时再精确定位到文档或 diff。
-    setWorkspaceView("materials");
+    // 新决定回到「当前」；需要核对哪份材料由决定卡和证据入口精确打开。
+    setWorkspaceView("focus");
     const recommended = task.waiting?.recommended_view;
     if (!recommended) return;
     setMaterialView(recommended);
@@ -787,14 +770,7 @@ export function TaskWorkspace({
   }, [task.status, task.waiting?.waiting_id, task.waiting?.recommended_view]);
 
   useEffect(() => {
-    if (task.status === "paused") setWorkspaceView("collaboration");
-    else if (pipelineEvidenceNeedsHuman(task)) setWorkspaceView("materials");
-    else if (task.waiting || task.status === "waiting_for_human") {
-      setWorkspaceView("materials");
-    } else if (["queued", "running", "pausing", "verifying", "await_merge"]
-        .includes(task.status)) {
-      setWorkspaceView("execution");
-    }
+    setWorkspaceView("focus");
   }, [task.status, task.waiting?.waiting_id,
     task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha]);
@@ -922,8 +898,7 @@ export function TaskWorkspace({
   }, [materialSearchOpen, materialsFullscreen, reviewInviteOpen,
     reviewPanelOpen, onClose]);
 
-  // 全屏看材料时右栏(含"批注与检视"入口)整个藏起来,想开抽屉得先退全屏
-  // (用户 2026-09-04 实锤)。⌥/Alt+R 在任何布局下切换抽屉:按 code 不按
+  // ⌥/Alt+R 在任何布局下切换批注 Inspector:按 code 不按
   // key——Mac 上 ⌥R 的 key 是 "®";焦点在输入框里不抢,输入法合成中不抢。
   useEffect(() => {
     const toggle = (event: KeyboardEvent) => {
@@ -937,10 +912,23 @@ export function TaskWorkspace({
     return () => window.removeEventListener("keydown", toggle);
   }, []);
 
-  // 全屏 + 抽屉同屏:任务头藏了(--ws-head-h 归零),抽屉若仍从顶上起步就
-  // 盖住材料工具条,"退出全屏""批注与检视"点不到(1280 宽实测:按钮右缘
-  // 637/753,抽屉左缘 510)。工具条高度同样量出来写变量,抽屉从它下面起步;
-  // 全屏切换时工具条 min-height 会变,跟着重量。
+  // 熟练用户可以不离开键盘切换三块稳定画布；输入区与输入法合成期间
+  // 永远不抢键。快捷键只改变呈现，不触碰任何任务状态。
+  useEffect(() => {
+    const switchView = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+          || event.isComposing || isEditableTarget(event.target)) return;
+      const next = WORKSPACE_VIEW_SHORTCUTS[event.code];
+      if (!next) return;
+      event.preventDefault();
+      selectWorkspaceView(next);
+    };
+    window.addEventListener("keydown", switchView);
+    return () => window.removeEventListener("keydown", switchView);
+  }, [workspaceView]);
+
+  // 专注阅读仍保留完整批注能力；量出产物工具栏高度，让 Inspector 从其
+  // 下方出现，不遮住退出、搜索和材料切换。
   useEffect(() => {
     const head = evidenceHeadRef.current;
     const root = workspaceRoot.current;
@@ -952,7 +940,7 @@ export function TaskWorkspace({
       ? undefined : new ResizeObserver(publish);
     observer?.observe(head);
     return () => observer?.disconnect();
-  }, [materialsFullscreen]);
+  }, [materialsFullscreen, workspaceView]);
 
   // 搜索范围就是当前渲染出来的这一份材料。普通文档取带 data-l 的最深
   // 正文行；两种差异视图取各自的真实内容行，删除行没有新行号也能搜到。
@@ -1264,14 +1252,6 @@ export function TaskWorkspace({
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
   const reviewRecordCount = notes.length + codehubFeedback.length
     + machineFeedback.length;
-  const activeFeedback = (task.feedback ?? [])
-    .filter((item) => item.status !== "closed");
-  const feedbackDigest = activeFeedback.length
-    ? `${activeFeedback.length} 条检视意见进行中 · ${
-      groupFeedback(activeFeedback)
-        .map(([source, items]) => `${FEEDBACK_SOURCE_LABEL[source]} ${items.length}`)
-        .join(" · ")}`
-    : "";
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -1367,6 +1347,9 @@ export function TaskWorkspace({
     .includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
+  const actionRailVisible = Boolean(waiting)
+    || Boolean(task.delivery?.scope_violation)
+    || ["failed", "verifying", "await_merge", "coordinating"].includes(task.status);
   const pauseFeedback = task.status === "pausing"
     ? {
         state: "pending",
@@ -1530,13 +1513,11 @@ export function TaskWorkspace({
   );
 
   return (
-    <section
-      className={`workspace-overlay${materialsFullscreen
+    <main
+      className={`workspace-overlay task-workspace-v2${materialsFullscreen
         ? " materials-fullscreen" : ""}`}
       ref={workspaceRoot}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="task-workspace-title"
+      aria-label={`任务工作台：${task.title ?? task.requirement}`}
     >
       <header className="ws-head" ref={headRef}>
         <button type="button" className="ws-back" aria-label="返回列表"
@@ -1666,53 +1647,202 @@ export function TaskWorkspace({
         </div>
       )}
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
-        {([
-          ["materials", "交付材料", "文档、依赖与代码变更"],
-          ["collaboration", "开发协作", collaborationVisible
-            ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "实时执行日志"],
-        ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
-          <button type="button" role="tab" key={view}
-            aria-selected={workspaceView === view}
-            className={workspaceView === view ? "active" : ""}
-            onClick={() => selectWorkspaceView(view)}>
-            <strong>
+        <div className="ws-view-tabs" role="tablist" aria-label="工作台内容">
+          {([
+            ["focus", "当前"],
+            ["materials", "产物"],
+            ["execution", "活动"],
+          ] as Array<[WorkspaceView, string]>).map(([view, label], index) => (
+            <button type="button" role="tab" key={view}
+              aria-selected={workspaceView === view}
+              className={workspaceView === view ? "active" : ""}
+              title={`切换到${label}（⌥${index + 1}）`}
+              onClick={() => selectWorkspaceView(view)}>
               {label}
-            </strong>
-            <small>{hint}</small>
-          </button>
-        ))}
-        <button type="button" className={`ws-review-launch${
-          reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
-          aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
-          title={`快捷键 ${REVIEW_SHORTCUT} 随时打开或收起,全屏看材料时也行`}
-          onClick={() => setReviewPanelOpen(true)}>
-          <strong>批注与检视
+            </button>
+          ))}
+        </div>
+        <div className="ws-view-actions">
+          <button type="button" className={`ws-review-launch${
+            reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
+            aria-label="批注与检视" aria-haspopup="dialog"
+            aria-expanded={reviewPanelOpen}
+            title={`${REVIEW_SHORTCUT} 打开或收起批注`}
+            onClick={() => setReviewPanelOpen(true)}>
+            <span aria-hidden>✎</span>
+            <span className="ws-review-label">批注与检视</span>
             {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
-              <em>{reviewCounts.mine > 0
-                ? `${reviewCounts.mine} 等我确认` : reviewRecordCount}</em>
+              <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
             )}
-          </strong>
-          {/* 进行中的检视意见按来源报数写在副标题里。原来进度条下单独一条
-              摘要带一排"MR 检视 3 2 进行中"胶囊和一个重复的入口按钮,用户
-              实锤"数字好丑、和这张卡重叠",整条撤掉。 */}
-          <small>{feedbackDigest || "批注、CodeHub 检视意见与机器检视"}</small>
-        </button>
-        {canRequestReview && <button type="button"
-          className="ws-review-invite-launch"
-          aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
-          onClick={() => setReviewInviteOpen(true)}>
-          <strong><span aria-hidden>＋</span>邀请检视</strong>
-          <small>选择 Committer 参与代码检视</small>
-        </button>}
+          </button>
+        </div>
       </nav>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
-        <section className="ws-evidence" aria-label="待检视材料">
-          {workspaceView === "materials" ? <>
+      <div className={`ws-body ws-view-${workspaceView}${
+        workspaceView === "focus" && actionRailVisible ? " has-action" : ""}${
+        workspaceView === "focus" && waiting ? " has-decision" : ""}`}>
+        <section className="ws-evidence" aria-label={workspaceView === "focus"
+          ? "当前任务焦点" : workspaceView === "materials" ? "任务产物" : "任务活动"}>
+          {workspaceView === "focus" ? <>
+          <div className="ws-primary-scroll ws-focus-view">
+            <section className={`ws-focus-hero ${task.focus?.kind ?? task.status}`}>
+              <div className="ws-focus-status">
+                <i aria-hidden />
+                <span>{statusText(task)}</span>
+                <span>{health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
+                <span>更新 · {relativeTime(health?.last_progress_at
+                  ?? task.last_progress_at ?? task.updated_at ?? task.created_at) || "刚刚"}</span>
+              </div>
+              <h2>{task.focus?.headline ?? nextAction.title}</h2>
+              <p>{task.focus?.next_action ?? nextAction.detail}</p>
+            </section>
+
+            {(task.execution_plan_alerts ?? []).length > 0 && (
+              <section className="ws-focus-alert" role="alert">
+                <strong>执行方案与当前现场不一致</strong>
+                {task.execution_plan_alerts!.map((line, index) => (
+                  <p key={index}>{line.replace(/^⚠\s*/, "")}</p>
+                ))}
+              </section>
+            )}
+
+            {waiting && (
+              <section className="ws-focus-evidence-preview">
+                <header>
+                  <div>
+                  <span>决定前建议核对</span>
+                  <strong>{recommendedMaterialView === "diff" ? "代码与交付范围"
+                    : recommendedMaterialView === "chain" ? "模块拆分与依赖"
+                      : recommendedMaterialView === "doc" ? "过程文档" : "需求原文"}</strong>
+                  </div>
+                  <button type="button" onClick={() => {
+                  setWorkspaceView("materials");
+                  setMaterialView(recommendedMaterialView);
+                  }}>在产物中展开</button>
+                </header>
+                <div className="ws-focus-evidence-body">
+                  {recommendedMaterialView === "source" ? (
+                    <Annotatable
+                      taskId={task.id}
+                      artifact={TASK_REQUIREMENT_ARTIFACT}
+                      fallbackFile="需求原文"
+                      kind="doc"
+                      items={locatableNotes}
+                      enabled={canCreateAnnotation}
+                      onAdded={() => setNotesPulse((tick) => tick + 1)}
+                      onOpenAnnotations={openAnnotationReview}>
+                      <article className="requirement-source">
+                        <Markdown text={task.requirement} resolveImage={(path) =>
+                          task.requirement_document?.assets?.some(
+                            (asset) => asset.path === path)
+                            ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                            : undefined} />
+                      </article>
+                    </Annotatable>
+                  ) : recommendedMaterialView === "chain" ? (
+                    <RequirementGraph task={task} onOpenTask={onOpenTask}
+                      annotationEnabled={canCreateAnnotation
+                        && task.requirement_graph?.stage === "analysis"}
+                      annotations={notes}
+                      onAnnotationAdded={() => setNotesPulse((tick) => tick + 1)} />
+                  ) : loading ? (
+                    <div className="utility-note">正在读取相关产物…</div>
+                  ) : !content ? (
+                    <div className="utility-note">相关产物尚未生成。</div>
+                  ) : (
+                    <Annotatable
+                      taskId={task.id}
+                      artifact={active}
+                      fallbackFile={activeMeta?.label ?? active}
+                      kind={recommendedMaterialView === "diff" ? "code" : "doc"}
+                      items={locatableNotes}
+                      enabled={canCreateAnnotation}
+                      onAdded={() => setNotesPulse((tick) => tick + 1)}
+                      onOpenAnnotations={openAnnotationReview}>
+                      {recommendedMaterialView === "diff"
+                        ? <GitDiff text={content} branch={branch}
+                            manifest={!pushReview ? activeMeta?.change_files : undefined}
+                            untrackedDirectories={!pushReview
+                              ? activeMeta?.untracked_directories : undefined}
+                            onDirectoryLoad={!pushReview
+                              ? (path, offset) => listArtifactChangeDirectory(
+                                  task.id, path, offset)
+                              : undefined}
+                            onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
+                            activeFileLoading={diffFileLoading}
+                            activeFileError={diffFileError}
+                            hideKey={task.id}
+                            selectable={canOperate
+                              && task.waiting?.recommended_view === "diff"
+                              && (!pushReview || diffScope === "full")}
+                            selectionKey={task.waiting?.waiting_id}
+                            initialSelectedPaths={deliverySelection?.selectedPaths
+                              ?? (task.delivery_selection?.status === "requested"
+                                ? task.delivery_selection.paths : undefined)}
+                            onSelectionChange={setDeliverySelection}
+                            focusRequest={diffReviewRequest} />
+                        : <Markdown text={content} />}
+                    </Annotatable>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {task.status === "canceled" && (
+              <section className="ws-focus-note">
+                <strong>执行已停止</strong>
+                <p>此前产生的文档、代码和过程记录仍然保留，可以继续查看与归档。</p>
+              </section>
+            )}
+
+            {collaborationVisible && (
+              <details className="ws-focus-collaboration"
+                open={task.status === "paused" ? true : undefined}>
+                <summary>
+                  <span>
+                    <strong>{task.status === "paused" ? "继续或接管现场" : "补充给 Agent"}</strong>
+                    <small>{task.status === "paused"
+                      ? "现场已保留，可以恢复主任务或使用开发助手"
+                      : "需要纠偏时再展开，不打断正常执行"}</small>
+                  </span>
+                  <i aria-hidden />
+                </summary>
+                <div className="ws-focus-collaboration-body">
+                  <SteerBox task={task}
+                    steerOnly={task.requirement_graph?.stage === "analysis"}
+                    onChanged={() => {
+                      setLivePulse((value) => value + 1);
+                      onChanged();
+                    }} />
+                  {task.parent_task_id && <CrossRepositorySync
+                    taskId={task.id}
+                    updates={task.cross_repository_updates}
+                    onChanged={onChanged} />}
+                </div>
+              </details>
+            )}
+
+            {!waiting && task.status !== "canceled" && (
+              <section className="ws-focus-shortcuts" aria-label="继续查看">
+                <button type="button" onClick={() => setWorkspaceView("materials")}>
+                  <span>产物</span>
+                  <strong>{documents.length + changes.length > 0
+                    ? `${documents.length + changes.length} 项可查看` : "需求、文档与代码"}</strong>
+                  <small>阅读、搜索、对比与圈选批注</small>
+                  <i aria-hidden>→</i>
+                </button>
+                <button type="button" onClick={() => setWorkspaceView("execution")}>
+                  <span>活动</span>
+                  <strong>{visibleProgress.current_phase}</strong>
+                  <small>阶段进展、运行记录与任务上下文</small>
+                  <i aria-hidden>→</i>
+                </button>
+              </section>
+            )}
+          </div>
+          </> : workspaceView === "materials" ? <>
           <div className="ws-pane-head" ref={evidenceHeadRef}>
             <div>
-              <span>{materialHeading.kicker}</span>
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-source-switch" aria-label="材料类型">
@@ -2092,71 +2222,12 @@ export function TaskWorkspace({
               )}
             </>}
           </div>
-          </> : workspaceView === "collaboration" ? <>
-            <div className="ws-pane-head">
-              <div><span>DEVELOPER CONSOLE</span><strong>开发协作</strong></div>
-              <small>完整回复、命令结果与交还操作</small>
-            </div>
-            <div className="ws-primary-scroll ws-collaboration-view">
-              {collaborationVisible ? (
-                <>
-                  <SteerBox task={task}
-                    steerOnly={task.requirement_graph?.stage === "analysis"}
-                    onChanged={() => {
-                    setLivePulse((value) => value + 1);
-                    onChanged();
-                  }} />
-                  {task.parent_task_id && <CrossRepositorySync
-                    taskId={task.id}
-                    updates={task.cross_repository_updates}
-                    onChanged={onChanged} />}
-                </>
-              ) : (
-                <section className="ws-view-empty" aria-label="开发助手状态">
-                  <span aria-hidden>›_</span>
-                  <strong>当前没有可接管的代码现场</strong>
-                  <p>{assistantUnavailableReason(task)}</p>
-                </section>
-              )}
-            </div>
           </> : <>
             <div className="ws-pane-head">
-              <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
-              <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
+              <div><strong>活动</strong></div>
+              <small>阶段进展、上下文与原始记录</small>
             </div>
-            <nav className="ws-execution-subnav" role="tablist"
-              aria-label="执行现场内容">
-              <button type="button" role="tab"
-                aria-selected={executionView === "events"}
-                className={executionView === "events" ? "active" : ""}
-                onClick={() => setExecutionView("events")}>
-                <strong>实时事件</strong>
-                <small>{task.focus?.headline ?? "Agent 动作与工具结果"}</small>
-              </button>
-              <button type="button" role="tab"
-                aria-selected={executionView === "knowledge"}
-                className={executionView === "knowledge" ? "active" : ""}
-                onClick={() => setExecutionView("knowledge")}>
-                <strong>本任务知识
-                  <em>{task.knowledge_usage?.resources.length ?? 0}</em>
-                </strong>
-                <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
-                  {task.knowledge_usage?.resources.length ?? 0} 项可用
-                  {task.memories_recorded ? ` · 记下 ${task.memories_recorded} 条` : ""}</small>
-              </button>
-              <button type="button" role="tab"
-                aria-selected={executionView === "tokens"}
-                className={executionView === "tokens" ? "active" : ""}
-                onClick={() => setExecutionView("tokens")}>
-                <strong>Token 使用</strong>
-                <small>{task.token_usage
-                  ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
-                  : "模型用量与实时速率"}</small>
-              </button>
-            </nav>
             <div className="ws-primary-scroll ws-execution-view">
-              {/* 定制链对拍告警必须压在现场之上:呈现与实际不一致是
-                  最高级事故(用户红线),比事件流本身更优先。 */}
               {(task.execution_plan_alerts ?? []).length > 0 && (
                 <section className="ws-alert ws-plan-alert" role="alert">
                   <strong>执行方案与定格不一致</strong>
@@ -2165,45 +2236,76 @@ export function TaskWorkspace({
                   ))}
                 </section>
               )}
-              {/* SSE 实时现场是这个页签的主角(用户拍板),置顶;
-                  执行方案卡整体撤出堆叠——各阶段方案点上方进度条的
-                  阶段名查看(StagePlanDialog)。 */}
-              {/* 摘要卡里的执行现场默认收起，避免多张卡同时拉实时流；
-                  但这里已经是独立的“执行现场”页签，打开页签就该直接
-                  看见现场，不能再让用户做一次没有意义的展开。 */}
-              <div className="ws-execution-subview"
-                hidden={executionView !== "events"}>
-                <ExecutionPanel task={task} defaultOpen />
-                <WarmupPanel task={task} />
-                {task.workflow_profile && <WorkflowProfileCard
-                  profile={task.workflow_profile}
-                  warning={task.workflow_profile_warning} />}
+              <section className="ws-activity-section">
+                <header>
+                  <div><strong>阶段进展</strong><span>{task.focus?.headline
+                    ?? visibleProgress.current_phase}</span></div>
+                  <small>点击顶部阶段名称可查看本阶段执行方案</small>
+                </header>
                 <TaskTimeline taskId={task.id} />
-              </div>
-              <div className="ws-execution-subview is-knowledge"
-                hidden={executionView !== "knowledge"}>
+              </section>
+
+              <section className="ws-activity-section raw-events">
+                <header>
+                  <div><strong>原始事件</strong><span>工具调用、Agent 原文与系统回执</span></div>
+                  <small>审计时再展开</small>
+                </header>
+                <ExecutionPanel task={task} />
+              </section>
+
+              <details className="ws-activity-disclosure">
+                <summary>
+                  <span><strong>任务上下文</strong>
+                    <small>{task.knowledge_usage?.summary.used ?? 0} 项已使用 · {
+                      task.knowledge_usage?.resources.length ?? 0} 项可用{
+                      task.memories_recorded ? ` · 记下 ${task.memories_recorded} 条` : ""}</small></span>
+                  <i aria-hidden />
+                </summary>
+                <div>
                 <KnowledgeFootprint usage={task.knowledge_usage}
                   utMethod={task.ut_generation_method}
                   taskId={task.id} taskStatus={task.status} />
-              </div>
-              <div className="ws-execution-subview is-tokens"
-                hidden={executionView !== "tokens"}>
+                </div>
+              </details>
+
+              <details className="ws-activity-disclosure">
+                <summary>
+                  <span><strong>模型用量</strong><small>{task.token_usage
+                    ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
+                    : "提供方暂未返回用量"}</small></span>
+                  <i aria-hidden />
+                </summary>
+                <div>
                 {task.token_usage ? <TokenUsage usage={task.token_usage}
                   placement="detail" /> : <div className="ws-insight-empty">
                   模型提供方暂未返回 Token 用量。
                 </div>}
-              </div>
+                </div>
+              </details>
+
+              <details className="ws-activity-disclosure">
+                <summary>
+                  <span><strong>运行环境与执行配置</strong>
+                    <small>预热结果、工作流和低频技术信息</small></span>
+                  <i aria-hidden />
+                </summary>
+                <div>
+                  <WarmupPanel task={task} />
+                  {task.workflow_profile && <WorkflowProfileCard
+                    profile={task.workflow_profile}
+                    warning={task.workflow_profile_warning} />}
+                </div>
+              </details>
             </div>
           </>}
         </section>
 
+        {workspaceView === "focus" && actionRailVisible && (
         <aside className="ws-decision" aria-label="当前决策与关键操作">
-          <div className="ws-pane-head ws-pane-head-side">
-            {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
-                此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+          {!waiting && <div className="ws-action-heading">
+            <strong>{nextAction.title}</strong>
             <small>{nextAction.detail}</small>
-          </div>
+          </div>}
           {waiting && decides && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
@@ -2241,7 +2343,6 @@ export function TaskWorkspace({
                   }
                 : undefined}
               activeDeliveryScope={task.waiting?.recommended_view === "diff"
-                && workspaceView === "materials" && materialView === "diff"
                 ? diffScope : undefined}
               attachment={requirementAnalysisConfirmation ? undefined :
                 <>
@@ -2359,6 +2460,7 @@ export function TaskWorkspace({
             )
           )}
         </aside>
+        )}
       </div>
       {/* 批注与检视是固定在右侧的侧滑抽屉,不是遮罩弹层:看意见时左边露出
           的材料照常可点、可圈选新批注,"回到那一行"不用先关窗(用户定调:
@@ -2367,15 +2469,20 @@ export function TaskWorkspace({
       {reviewPanelOpen && <section className="workspace-review-drawer"
           role="complementary" aria-labelledby="workspace-review-title">
           <header>
-            <div><span>REVIEW NOTES</span>
-              <strong id="workspace-review-title">批注与检视</strong>
+            <div><strong id="workspace-review-title">批注与检视</strong>
               <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选，{REVIEW_SHORTCUT} 开关</p>
             </div>
-            {/* 这里原来还挂一枚"N 项等我确认"。它下面 40px 就是筛选条的
+            {/* 这里原来还挂一枚重复的待确认计数。它下面 40px 就是筛选条的
                 "等我确认 N",打开前入口按钮上也有同一个数——同一屏三份,
                 眼睛先去数数字而不是看意见。计数留在能点的地方(入口和
                 筛选条),标题栏只留关闭。 */}
             <div className="workspace-review-dialog-actions">
+              {canRequestReview && <button type="button"
+                className="workspace-review-invite-button"
+                aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
+                onClick={() => setReviewInviteOpen(true)}>
+                <span aria-hidden>＋</span>邀请检视
+              </button>}
               <button type="button" aria-label="关闭批注与检视"
                 autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
             </div>
@@ -2391,8 +2498,7 @@ export function TaskWorkspace({
         <section className="workspace-invite-dialog" role="dialog" aria-modal="true"
           aria-labelledby="workspace-invite-title">
           <header>
-            <div><span>COLLABORATIVE REVIEW</span>
-              <strong id="workspace-invite-title">邀请 Committer 检视</strong>
+            <div><strong id="workspace-invite-title">邀请 Committer 检视</strong>
               <p>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</p>
             </div>
             <button type="button" aria-label="关闭邀请检视"
@@ -2432,6 +2538,6 @@ export function TaskWorkspace({
           </div>
         </section>
       </div>}
-    </section>
+    </main>
   );
 }
