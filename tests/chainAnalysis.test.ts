@@ -141,6 +141,14 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     assert.equal(card.requirement_graph?.repository_assessments?.length, 3);
     assert.equal(card.requirement_graph?.repository_assessments?.[2].outcome,
       "no_change");
+    assert.equal(card.requirement_graph?.review_snapshot?.waiting_id,
+      card.waiting?.waiting_id,
+      "最终方案卡出现时必须锁定用户实际看到的版本");
+    const persistedCard = JSON.parse(readFileSync(
+      join(parent.workspace, "task.json"), "utf-8"));
+    assert.equal(persistedCard.summary.requirement_graph.review_snapshot.waiting_id,
+      card.waiting?.waiting_id,
+      "送审快照必须先于通知持久化，重启后不能丢");
     // 卡上不能出现 repo-1/repo-2(内网实锤"完全看不懂是哪个仓"):prompt
     // 改按名称呼,举卡文本再机械替换一道兜底。
     const asked = String(
@@ -373,6 +381,23 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   assert.equal(state.summary.requirement_graph.projection_state, "ready");
   assert.equal(state.summary.requirement_graph.plan_revision, "r1");
 
+  // 页面轮询可能在 Agent 尚未写完时先读到 r1。它只是草稿投影，不是
+  // 送审动作；同一分析回合继续完善职责/证据不能因此被误判成偷换版本。
+  const refinedGraph = {
+    ...graph,
+    repository_assessments: graph.repository_assessments.map((item, index) =>
+      index === 0 ? { ...item, reason: "接口定义与调用点都需要调整" } : item),
+    repositories: graph.repositories.map((item, index) =>
+      index === 0 ? { ...item, responsibility: "提供接口并完成调用点接线" } : item),
+  };
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口先行，页面随后。\n", refinedGraph, "r1");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready",
+    "举卡前同一 revision 的中间稿可继续完善");
+  assert.equal(state.summary.requirement_graph.repositories[0].responsibility,
+    "提供接口并完成调用点接线");
+
   const annotation = service.addAnnotation(parent.id, {
     author: "reviewer",
     artifact: REQUIREMENT_GRAPH_ARTIFACT,
@@ -399,12 +424,28 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   assert.throws(() => (service as any).requirementGraphPlan(state),
     /模块拆分与依赖图尚未生成完整/);
 
-  // 两份一起升级到 r2 后恢复；随后同 revision 偷换图内容仍必须被拒。
+  // 两份一起升级到 r2 后恢复；最终确认卡出现时才把 r2 封成送审快照。
   writeRequirementArtifacts(artifactDir, ticket,
     "# 模块方案\n接口协议先行，页面随后。\n", graph, "r2");
   (service as any).refreshRequirementGraph(state);
   assert.equal(state.summary.requirement_graph.projection_state, "ready");
   assert.equal(state.summary.requirement_graph.plan_revision, "r2");
+  const review = state.humanGate.createWaiting({
+    taskId: parent.id,
+    step: "requirement-analysis",
+    callId: "chain-revision-review-r2",
+    questionInput: { questions: [{
+      question: "检视方案与依赖图",
+      options: ["需要修改", "确认并生成任务"],
+    }] },
+  });
+  state.summary.status = "waiting_for_human";
+  state.summary.waiting = review;
+  assert.equal((service as any).sealRequirementGraphReview(state, review), true);
+  assert.equal(state.summary.requirement_graph.review_snapshot.plan_revision, "r2");
+  assert.deepEqual(state.summary.requirement_graph.reviewed_plan_revisions, ["r2"]);
+
+  // 送审后职责、证据和依赖都属于检视对象；同 revision 偷换仍必须被拒。
   writeRequirementArtifacts(artifactDir, ticket,
     "# 模块方案\n接口协议先行，页面随后。\n", {
       ...graph,
@@ -413,7 +454,129 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   (service as any).refreshRequirementGraph(state);
   assert.equal(state.summary.requirement_graph.projection_state, "invalid");
   assert.match(state.summary.requirement_graph.projection_error,
-    /版本 r2 的产物内容发生变化/);
+    /送审中的版本 r2 已发生变化/);
+
+  // 人选择修改后进入下一轮，r3 在再次举卡前同样可以多次保存；旧的 r2
+  // 送审记录仍保留，不能因为开放草稿就丢掉历史防偷换能力。
+  state.summary.status = "running";
+  state.summary.waiting = undefined;
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口协议先行，页面随后。\n", graph, "r3");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready");
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口协议先行，页面随后。\n", refinedGraph, "r3");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready");
+  assert.equal(state.summary.requirement_graph.review_snapshot.plan_revision, "r2");
+
+  const nextReview = state.humanGate.createWaiting({
+    taskId: parent.id,
+    step: "requirement-analysis",
+    callId: "chain-revision-review-r3",
+    questionInput: { questions: [{
+      question: "再次检视方案与依赖图",
+      options: ["需要修改", "确认并生成任务"],
+    }] },
+  });
+  state.summary.status = "waiting_for_human";
+  state.summary.waiting = nextReview;
+  assert.equal((service as any).sealRequirementGraphReview(state, nextReview), true);
+  (service as any).persist(state);
+  assert.deepEqual(state.summary.requirement_graph.reviewed_plan_revisions,
+    ["r2", "r3"]);
+
+  // 真正重建 TaskService，证明封版不是只在内存里有效。
+  const restored = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  restored.recover();
+  const restoredState = (restored as any).tasks.get(parent.id);
+  assert.equal(restoredState.summary.requirement_graph.review_snapshot.plan_revision,
+    "r3");
+  assert.deepEqual(restoredState.summary.requirement_graph.reviewed_plan_revisions,
+    ["r2", "r3"]);
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口协议先行，页面随后。\n", graph, "r3");
+  (restored as any).refreshRequirementGraph(restoredState);
+  assert.equal(restoredState.summary.requirement_graph.projection_state, "invalid");
+  assert.match(restoredState.summary.requirement_graph.projection_error,
+    /送审中的版本 r3 已发生变化/);
+});
+
+test("在途旧任务恢复：轮询记下 r4 中间稿时，以确认卡当前完整产物封版", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-draft-migration-"));
+  const apiRepo = makeRepo(dataDir, "draft-api");
+  const webRepo = makeRepo(dataDir, "draft-web");
+  const ticket = "REQ2026090405";
+  const options = {
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  };
+  const service = new TaskService(options);
+  const parent = service.create("恢复 r4 中间稿", {
+    account: "owner", ticket, repos: [apiRepo, webRepo],
+  });
+  const state = (service as any).tasks.get(parent.id);
+  const cwd = join(parent.workspace, "repositories");
+  const artifactDir = join(cwd, ".mae-flow-work", ticket);
+  const graph = {
+    repository_assessments: [
+      { name: "draft-api", url: apiRepo, outcome: "change_required",
+        reason: "接口需要修改" },
+      { name: "draft-web", url: webRepo, outcome: "change_required",
+        reason: "页面需要修改" },
+    ],
+    repositories: [
+      { id: "api", name: "draft-api", url: apiRepo,
+        responsibility: "接口中间稿",
+        scope: { name: "接口", paths: ["src/api/"] } },
+      { id: "web", name: "draft-web", url: webRepo,
+        responsibility: "页面",
+        scope: { name: "页面", paths: ["src/web/"] } },
+    ],
+    dependencies: [{ dependent: "web", prerequisite: "api", reason: "等待接口" }],
+  };
+  state.cwd = cwd;
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# r4 方案\n接口先行。\n", graph, "r4");
+  (service as any).refreshRequirementGraph(state);
+  const intermediateSha = state.summary.requirement_graph.projection_sha256;
+
+  // Agent 在同一回合继续完善 r4，但旧服务尚未来得及刷新 task.json。
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# r4 方案\n接口先行。\n", {
+      ...graph,
+      repositories: graph.repositories.map((item, index) => index === 0
+        ? { ...item, responsibility: "接口契约、实现与调用点接线" } : item),
+    }, "r4");
+  const review = state.humanGate.createWaiting({
+    taskId: parent.id,
+    step: "requirement-analysis",
+    callId: "legacy-r4-review",
+    questionInput: { questions: [{
+      question: "r4 方案是否确认?",
+      options: ["需要修改", "确认并生成任务"],
+    }] },
+  });
+  state.summary.status = "waiting_for_human";
+  state.summary.waiting = review;
+  // 精确模拟旧版落盘形态：只有中间 projection_sha256，没有送审快照。
+  (service as any).writeTaskState(state);
+
+  const restored = new TaskService(options);
+  restored.recover();
+  const recovered = restored.get(parent.id)!;
+  assert.equal(recovered.requirement_graph?.projection_state, "ready");
+  assert.equal(recovered.requirement_graph?.plan_revision, "r4");
+  assert.notEqual(recovered.requirement_graph?.projection_sha256, intermediateSha);
+  assert.equal(recovered.requirement_graph?.review_snapshot?.waiting_id,
+    review.waiting_id);
+  assert.equal(recovered.requirement_graph?.review_snapshot?.projection_sha256,
+    recovered.requirement_graph?.projection_sha256);
 });
 
 test("升级前已生成的存量依赖图继续展示；返工后再强制升级同步契约", () => {

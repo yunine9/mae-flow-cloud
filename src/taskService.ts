@@ -757,8 +757,20 @@ export interface RequirementGraph {
   /** Agent 在图文件里声明的 CHAIN 原文摘要，由宿主按真实字节复核。 */
   chain_sha256?: string;
   /** 宿主对 requirement-graph.json 原文计算的摘要，用来阻止同 revision
-   * 偷换任一份产物；这是投影账，不要求 Agent 写入图文件。 */
+   * 偷换任一份产物；这是当前草稿的投影账，不要求 Agent 写入图文件。
+   * 是否已经送审不能由这个字段判断：页面轮询也会刷新草稿投影。 */
   projection_sha256?: string;
+  /** 真正展示给人检视时封存的版本。Agent 运行中可以在同一 revision
+   * 内反复完善草稿；一旦举出最终方案确认卡，这份快照就不可改写。 */
+  review_snapshot?: {
+    waiting_id: string;
+    plan_revision: string;
+    chain_sha256: string;
+    projection_sha256: string;
+    sealed_at: string;
+  };
+  /** 已经送审过的修订号。打回后必须使用新号，不能回收旧号冒充新稿。 */
+  reviewed_plan_revisions?: string[];
   repository_assessments?: RequirementRepositoryAssessment[];
   repositories: RequirementRepository[];
   dependencies: RequirementDependency[];
@@ -3980,6 +3992,20 @@ export class TaskService {
       && !task.summary.parent_task_id;
   }
 
+  /** 只有最终拆分方案确认卡才是“送审”边界。分析过程中的普通澄清卡、
+   * 页面轮询和文件保存都不能把半成品封版。 */
+  private isRequirementGraphReviewWaiting(
+    task: TaskState,
+    waiting: WaitingRecord | undefined = task.summary.waiting,
+  ): boolean {
+    if (!waiting || !this.isRequirementAnalysis(task)) return false;
+    const questions = ((waiting.question as any)?.questions ?? []) as Array<{
+      options?: string[];
+    }>;
+    return questions.some((question) => (question.options ?? [])
+      .some((option) => confirmsRequirementGraph(String(option))));
+  }
+
   /** 新下单先停在工作台的需求原文检视：人只提批注，专用 Agent
    * 修改当前正本；只有主责任人明确确认才启动正式需求分析。 */
   private openRequirementAnalysisConfirmation(task: TaskState): WaitingRecord {
@@ -4154,10 +4180,28 @@ export class TaskService {
         if (claimedChainSha !== actualChainSha) {
           throw new Error("CHAIN 文档内容已经变化，但机读依赖图还没有同步更新");
         }
-        if (previous?.plan_revision === planRevision
-            && previous.projection_sha256
-            && previous.projection_sha256 !== projectionSha) {
-          throw new Error(`版本 ${planRevision} 的产物内容发生变化；请同时更新两份产物并换用新的 plan_revision`);
+        const sealed = previous?.review_snapshot;
+        const activeSealedReview = sealed
+          && task.summary.status === "waiting_for_human"
+          && task.summary.waiting?.waiting_id === sealed.waiting_id
+          && this.isRequirementGraphReviewWaiting(task);
+        if (activeSealedReview
+            && (sealed.plan_revision !== planRevision
+              || sealed.chain_sha256 !== actualChainSha
+              || sealed.projection_sha256 !== projectionSha)) {
+          throw new Error(
+            `送审中的版本 ${sealed.plan_revision} 已发生变化；请先选择“需要修改”，`
+            + "完成返工并生成新版本后再送审",
+          );
+        }
+        if (sealed?.plan_revision === planRevision
+            && (sealed.chain_sha256 !== actualChainSha
+              || sealed.projection_sha256 !== projectionSha)) {
+          throw new Error(`版本 ${planRevision} 已经送审，产物内容不能原地改写；请同时更新两份产物并换用新的 plan_revision`);
+        }
+        if ((previous?.reviewed_plan_revisions ?? []).includes(planRevision)
+            && sealed?.plan_revision !== planRevision) {
+          throw new Error(`版本号 ${planRevision} 已经送审过，不能重复使用；请换用新的 plan_revision`);
         }
       }
       const expected = task.summary.repositories ?? [];
@@ -4302,6 +4346,12 @@ export class TaskService {
         ...(planRevision ? { plan_revision: planRevision } : {}),
         chain_sha256: actualChainSha,
         projection_sha256: projectionSha,
+        ...(previous?.review_snapshot ? {
+          review_snapshot: { ...previous.review_snapshot },
+        } : {}),
+        ...(previous?.reviewed_plan_revisions?.length ? {
+          reviewed_plan_revisions: [...previous.reviewed_plan_revisions],
+        } : {}),
         repository_assessments: assessments,
         repositories,
         dependencies,
@@ -4311,6 +4361,48 @@ export class TaskService {
       markUnavailable("invalid", message);
       this.options.log?.(`任务 ${task.summary.id} 模块依赖图不可用: ${message}`);
     }
+  }
+
+  /** 把“人此刻看到的方案”封成不可变快照。封版只发生在最终确认卡
+   * 出现时；同一轮 Agent 在举卡前可以反复完善同一个 revision。 */
+  private sealRequirementGraphReview(
+    task: TaskState,
+    waiting: WaitingRecord | undefined = task.summary.waiting,
+  ): boolean {
+    if (!this.isRequirementGraphReviewWaiting(task, waiting)) return false;
+    this.refreshRequirementGraph(task);
+    const graph = task.summary.requirement_graph;
+    if (!graph || graph.projection_state !== "ready"
+        || !graph.plan_revision || !graph.chain_sha256
+        || !graph.projection_sha256 || !waiting) {
+      return false;
+    }
+    const previous = graph.review_snapshot;
+    if (previous?.waiting_id === waiting.waiting_id
+        && previous.plan_revision === graph.plan_revision
+        && previous.chain_sha256 === graph.chain_sha256
+        && previous.projection_sha256 === graph.projection_sha256) {
+      return false;
+    }
+    const reviewed = new Set(graph.reviewed_plan_revisions ?? []);
+    if (reviewed.has(graph.plan_revision)
+        && (previous?.plan_revision !== graph.plan_revision
+          || previous.chain_sha256 !== graph.chain_sha256
+          || previous.projection_sha256 !== graph.projection_sha256)) {
+      graph.projection_state = "invalid";
+      graph.projection_error = `版本号 ${graph.plan_revision} 已经送审过，不能重复使用；请换用新的 plan_revision`;
+      return false;
+    }
+    reviewed.add(graph.plan_revision);
+    graph.review_snapshot = {
+      waiting_id: waiting.waiting_id,
+      plan_revision: graph.plan_revision,
+      chain_sha256: graph.chain_sha256,
+      projection_sha256: graph.projection_sha256,
+      sealed_at: new Date().toISOString(),
+    };
+    graph.reviewed_plan_revisions = [...reviewed];
+    return true;
   }
 
   /** 进度条的阶段词表:内核 flow/phases.json,随 kernel/ 快照发布;
@@ -8230,6 +8322,13 @@ export class TaskService {
         this.reconcileResolvedDecisionAnnotations(task);
         const authoritativeWaiting = summary.waiting
           ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
+        // 升级前已经停在最终方案确认卡的任务没有 review_snapshot。
+        // 这里以恢复时磁盘上的完整产物做一次迁移封版，避免继续拿运行中
+        // 被页面轮询碰巧读到的中间哈希当成正式版本。
+        const sealedRecoveredRequirementGraph =
+          summary.status === "waiting_for_human"
+          && authoritativeWaiting?.status === "waiting"
+          && this.sealRequirementGraphReview(task, authoritativeWaiting);
         // 修复旧版本已经落盘的矛盾投影：waiting.json 明确仍在等当前
         // 问题，task.json 的 detail 却可能还写着“服务重启,等待续跑”。
         // 重启时就以人工待办权威账重建展示文案，不要求用户再触发一次
@@ -8240,6 +8339,9 @@ export class TaskService {
           if (summary.detail !== detail) {
             summary.detail = detail;
             this.persist(task);
+          } else if (sealedRecoveredRequirementGraph) {
+            // 不触发一整轮状态迁移，只把新补的送审快照原子落袋。
+            this.writeTaskState(task);
           }
         }
         // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
@@ -9791,6 +9893,9 @@ export class TaskService {
     if (!this.isRequirementAnalysis(task)) {
       throw new NotFoundError("该任务不是多仓需求分析单,没有需求图可确认");
     }
+    // 正常路径在举卡时已经封版；这一步同时兜住升级前已经在等待中的
+    // 老任务：第一次确认只认用户此刻实际看到的文件，随后立即锁定。
+    this.sealRequirementGraphReview(task);
     this.requirementGraphPlan(task, skillSelection?.repository_assignees,
       skillSelection?.repository_tickets);
     const alreadyGenerated = task.summary.requirement_graph?.repositories
@@ -10721,6 +10826,7 @@ export class TaskService {
       // 受邀参与人能答澄清题、能选"需要修改",但拆单这一下改的是任务的
       // 形状,谁下的单谁拍板。HTTP 层只挡到"是否参与讨论",这里是硬闸。
       this.assertOwnerDecides(task, input.actor, "确认拆分方案");
+      this.sealRequirementGraphReview(task, waiting);
       this.requirementGraphPlan(task, input.repository_assignees,
         input.repository_tickets);
       if (input.repository_assignees) {
@@ -19407,7 +19513,8 @@ export class TaskService {
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
         + "文档第一行必须写一个不可见版本标记 "
         + "<!-- mae-flow-plan-revision: <本轮唯一修订号> -->；首次可用 r1，"
-        + "每次根据人的批注修改任一份产物，都必须换一个从未使用过的新修订号。"
+        + "每次根据人的批注开始新一轮返工，都必须换一个从未使用过的新修订号；"
+        + "同一轮举卡送审前的多次内部保存仍使用本轮修订号，不要每改一个字段就递增。"
         + "正文必须包含:需求理解、**已确认事项清单**(逐条:问题→结论"
         + "→谁拍板,澄清期全部 Q&A 落在这里)、**改动面盘点**、逐单元"
         + "职责与接口契约、**候选仓逐仓排查结论**、依赖关系与交付顺序"
@@ -19840,6 +19947,9 @@ export class TaskService {
         }
         task.summary.status = "waiting_for_human";
         task.summary.detail = waitingTaskDetail(outcome.waiting);
+        // 文件写完并真正举出最终方案卡，才锁定这轮给人看的版本。
+        // 放在 persist 前，确保服务一旦重启仍记得检视对象是哪一份。
+        this.sealRequirementGraphReview(task, outcome.waiting);
         // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
         // 同名步骤,那是新一次卡壳,应当再催。
         task.nudgedStep = undefined;

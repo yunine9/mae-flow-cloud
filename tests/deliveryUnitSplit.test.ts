@@ -141,6 +141,10 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     const parentState = (service as any).tasks.get(parent.id);
     const graphPath = join(parentState.cwd, artifactDir,
       "requirement-graph.json");
+    // r1 已经随上面的确认卡送审。下面要改负责面，先模拟用户选择
+    // “需要修改”后进入的返工回合；不能在原确认卡还开着时偷换文件。
+    parentState.summary.status = "running";
+    parentState.summary.waiting = undefined;
     const overlappingGraph = JSON.parse(graphJson) as RequirementGraph;
     overlappingGraph.repositories[1].scope!.paths = ["src/contract/filter/"];
     writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
@@ -152,6 +156,18 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     ), "有序的同仓交付单元可以声明相同或互相包含的允许改动范围");
     writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
       graphDefinition, "r3");
+    const revisedReview = parentState.humanGate.createWaiting({
+      taskId: parent.id,
+      step: "requirement-analysis",
+      callId: "unit-split-revised-review",
+      questionInput: { questions: [{
+        question: "修改后的拆分方案是否确认?",
+        options: ["确认并生成任务", "需要修改"],
+      }] },
+    });
+    parentState.summary.status = "waiting_for_human";
+    parentState.summary.waiting = revisedReview;
+    (service as any).sealRequirementGraphReview(parentState, revisedReview);
 
     // 两个单元此刻同责任人、同单号(都继承父单):分支名会互相覆盖,
     // 必须在确认时挡下,不能等克隆后才炸。
