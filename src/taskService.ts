@@ -625,6 +625,16 @@ export interface RequirementRepository {
   current_phase?: string;
 }
 
+/** 下单仓库只是分析候选，不等于一定要创建开发任务。分析会话必须逐仓
+ * 给出结论；只有 change_required 的仓内模块才会进入交付图。 */
+export interface RequirementRepositoryAssessment {
+  name: string;
+  url: string;
+  outcome: "change_required" | "no_change";
+  reason: string;
+  evidence?: string[];
+}
+
 export interface RequirementDependency {
   /** 依赖方。语义是 `from 依赖 to`，因此 from 必须等待 to。 */
   from: string;
@@ -732,9 +742,13 @@ function validateRepositoryAddress(candidate: string): void {
   }
 }
 
-/** 所有需求都是一张仓库交付图：单仓只是只有一个节点、没有边。 */
+/** 分析中的初始仓库节点只是候选占位。只有 projection_state=ready 才是
+ * Agent 根据代码事实生成、可以拿来拆任务的模块依赖图。 */
 export interface RequirementGraph {
   stage: "analysis" | "confirmed";
+  projection_state?: "pending" | "ready" | "invalid";
+  projection_error?: string;
+  repository_assessments?: RequirementRepositoryAssessment[];
   repositories: RequirementRepository[];
   dependencies: RequirementDependency[];
 }
@@ -1880,6 +1894,13 @@ const SPLIT_PROPOSAL_ACCEPT = "先分析再拆分";
 const SPLIT_PROPOSAL_DECLINE = "不拆，一个任务干完";
 const REQUIREMENT_ANALYSIS_ACCEPT =
   "需求已确认，进入需求分析";
+const REQUIREMENT_GRAPH_CONFIRM = "确认并生成任务";
+const REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM = "确认分析结论";
+
+function confirmsRequirementGraph(answer: string): boolean {
+  return answer.includes(REQUIREMENT_GRAPH_CONFIRM)
+    || answer.includes(REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM);
+}
 
 /** 需求文档两版之间的统一 diff。走 git diff --no-index:本仓处处依赖 git,
  * 不为一个 diff 再背一个依赖。改前改后写进临时目录,头两行换成稳定的
@@ -4023,29 +4044,79 @@ export class TaskService {
     };
   }
 
-  /** Agent 写结构化投影，Markdown 仍是给人检视的正文。读失败只是不展示图。 */
+  /** Agent 写结构化投影，Markdown 仍是给人检视的正文。下单时那份一仓
+   * 一节点的数据只用于展示候选仓，绝不能在这里“读取失败就沿用”——那会
+   * 把候选仓直接建成子任务。分析期任何缺失/坏产物都显式标成未就绪。 */
   private refreshRequirementGraph(task: TaskState): void {
     if (!this.isRequirementAnalysis(task) || !task.cwd) return;
+    const previous = task.summary.requirement_graph;
+    // 已确认的图已经成为任务编排事实，不再让工作区文件反向改写它。
+    if (previous?.stage === "confirmed") return;
     const ticket = task.summary.ticket ?? task.summary.id;
     const path = join(task.cwd, ".mae-flow-work", ticket,
       "requirement-graph.json");
-    if (!existsSync(path)) return;
+    const markUnavailable = (
+      state: "pending" | "invalid",
+      message?: string,
+    ): void => {
+      if (!task.summary.requirement_graph) return;
+      task.summary.requirement_graph.projection_state = state;
+      task.summary.requirement_graph.projection_error = message;
+    };
+    if (!existsSync(path)) {
+      markUnavailable("pending");
+      return;
+    }
     try {
       const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
-        repositories?: RequirementRepository[];
+        repository_assessments?: RequirementRepositoryAssessment[];
+        repositories?: Array<Partial<RequirementRepository>>;
         dependencies?: RawRequirementDependency[];
       };
       const expected = task.summary.repositories ?? [];
-      const rawNodes = Array.isArray(parsed.repositories)
-        ? parsed.repositories.filter((item) => item && item.id
-            && expected.includes(item.url))
-        : [];
+      if (!Array.isArray(parsed.repository_assessments)) {
+        throw new Error("缺少 repository_assessments，无法区分需修改仓与仅排查仓");
+      }
+      const seenAssessmentUrls = new Set<string>();
+      const assessments = parsed.repository_assessments.map((item) => {
+        const url = String(item?.url ?? "").trim();
+        const name = String(item?.name ?? "").trim();
+        const outcome = item?.outcome;
+        const reason = String(item?.reason ?? "").trim();
+        if (!expected.includes(url)) {
+          throw new Error(`排查结论包含未下单的仓库：${url || "未填写地址"}`);
+        }
+        if (seenAssessmentUrls.has(url)) {
+          throw new Error(`仓库 ${name || url} 出现了重复的排查结论`);
+        }
+        if (!name || !reason
+            || (outcome !== "change_required" && outcome !== "no_change")) {
+          throw new Error(`仓库 ${name || url || "未知"} 的排查结论不完整`);
+        }
+        seenAssessmentUrls.add(url);
+        const evidence = Array.isArray(item.evidence)
+          ? item.evidence.map((entry) => String(entry).trim()).filter(Boolean)
+              .slice(0, 20)
+          : undefined;
+        return { name, url, outcome, reason,
+          ...(evidence?.length ? { evidence } : {}) };
+      });
+      const missingAssessments = expected.filter((url) =>
+        !seenAssessmentUrls.has(url));
+      if (missingAssessments.length) {
+        throw new Error(`还有 ${missingAssessments.length} 个候选仓没有排查结论`);
+      }
+      if (!Array.isArray(parsed.repositories)) {
+        throw new Error("缺少 repositories，模块交付单元尚未生成");
+      }
+      const rawNodes = parsed.repositories;
       // 同 url 是否唯一,决定旧图产物按 url 兜底匹配是否安全:单仓
       // 拆分后一个仓可有多个单元节点,url 兜底会把责任人/单号/task_id
       // 错配到别的单元上,只有该 url 仍然单节点时才允许。
       const urlCounts = new Map<string, number>();
       for (const item of rawNodes) {
-        urlCounts.set(item.url, (urlCounts.get(item.url) ?? 0) + 1);
+        const url = String(item?.url ?? "").trim();
+        urlCounts.set(url, (urlCounts.get(url) ?? 0) + 1);
       }
       // 拆分前每个仓只有一个节点(建单初始图),它身上带着下单时填的
       // 责任人。同仓拆出多单元后新节点 id 对不上、url 兜底又因多节点
@@ -4060,43 +4131,64 @@ export class TaskService {
           (previousUrlCounts.get(node.url) ?? 0) + 1);
       }
       const repositories = rawNodes.map((item) => {
+        const id = String(item?.id ?? "").trim();
+        const name = String(item?.name ?? "").trim();
+        const url = String(item?.url ?? "").trim();
+        const responsibility = String(item?.responsibility ?? "").trim();
+        if (!id || !name || !expected.includes(url) || !responsibility) {
+          throw new Error(`模块交付单元 ${name || id || "未知"} 的基本信息不完整`);
+        }
         const known = task.summary.requirement_graph?.repositories
-          .find((candidate) => candidate.id === item.id
-            || (urlCounts.get(item.url) === 1 && candidate.url === item.url));
+          .find((candidate) => candidate.id === id
+            || (urlCounts.get(url) === 1 && candidate.url === url));
         const inheritedAssignee = known?.assignee
-          ?? (previousUrlCounts.get(item.url) === 1
-            ? previousNodes.find((node) => node.url === item.url)?.assignee
+          ?? (previousUrlCounts.get(url) === 1
+            ? previousNodes.find((node) => node.url === url)?.assignee
             : undefined);
-        // scope 只认干净形状:名字非空、路径为相对前缀(不吞绝对路径/
-        // 越级),不合格整个丢弃退回"整仓一个单元"语义,不猜。
+        // 新分析产物必须拆到仓内模块和负责路径。scope 缺失时不能退化成
+        // “整仓任务”，否则用户选了几个候选仓就又会生几个仓库任务。
         const scopeName = String(item.scope?.name ?? "").trim();
         const scopePaths = Array.isArray(item.scope?.paths)
-          ? item.scope!.paths.map((p) => String(p).trim())
-              .filter((p) => p && !p.startsWith("/") && !p.includes(".."))
-              .slice(0, 50)
+          ? item.scope.paths.map((entry) => String(entry).trim())
           : [];
+        if (!scopeName || !scopePaths.length || scopePaths.length > 50
+            || scopePaths.some((scopePath) => !scopePath
+              || scopePath.startsWith("/") || scopePath.includes(".."))) {
+          throw new Error(`模块交付单元 ${name} 缺少合法的 scope.name/scope.paths`);
+        }
         return {
-          ...item,
-          ...(scopeName && scopePaths.length
-            ? { scope: { name: scopeName, paths: scopePaths } }
-            : { scope: undefined }),
+          id, name, url, responsibility,
+          scope: { name: scopeName, paths: scopePaths },
           assignee: inheritedAssignee,
           ticket: known?.ticket,
           task_id: known?.task_id,
         };
       });
-      // 校验从"节点与下单仓一一对应"放宽为:每个下单仓至少一个节点
-      // (单仓拆分允许一仓多单元);节点 id 不得重复。
-      const coveredUrls = new Set(repositories.map((item) => item.url));
-      if (!expected.every((url) => coveredUrls.has(url))) return;
       if (new Set(repositories.map((item) => item.id)).size
-          !== repositories.length) return;
+          !== repositories.length) {
+        throw new Error("模块交付单元 id 重复");
+      }
+      const unitsByUrl = new Map<string, number>();
+      for (const repository of repositories) {
+        unitsByUrl.set(repository.url, (unitsByUrl.get(repository.url) ?? 0) + 1);
+      }
+      for (const assessment of assessments) {
+        const units = unitsByUrl.get(assessment.url) ?? 0;
+        if (assessment.outcome === "change_required" && units === 0) {
+          throw new Error(`仓库 ${assessment.name} 标记为需要修改，但没有模块交付单元`);
+        }
+        if (assessment.outcome === "no_change" && units > 0) {
+          throw new Error(`仓库 ${assessment.name} 标记为无需修改，却生成了模块交付单元`);
+        }
+      }
       const ids = new Set(repositories.map((item) => item.id));
       // 新产物使用 dependent/prerequisite 消除歧义。旧版契约原本是
       // from 先于 to；若 reason 明确写了“A 依赖 B”，则以人工看到的
       // 说明为准，兼容早期模型把旧字段按自然语言填写的任务。
-      const dependencies = Array.isArray(parsed.dependencies)
-        ? parsed.dependencies.map((edge) => {
+      if (!Array.isArray(parsed.dependencies)) {
+        throw new Error("缺少 dependencies；没有硬依赖时也必须明确写空数组");
+      }
+      const dependencies = parsed.dependencies.map((edge) => {
             if (edge.dependent && edge.prerequisite) return {
               from: edge.dependent, to: edge.prerequisite, reason: edge.reason,
             };
@@ -4109,16 +4201,24 @@ export class TaskService {
             return reasonUsesNaturalDirection
               ? { from: legacyFrom, to: legacyTo, reason: edge.reason }
               : { from: legacyTo, to: legacyFrom, reason: edge.reason };
-          }).filter((edge) =>
-            ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to)
-        : [];
+          });
+      for (const edge of dependencies) {
+        if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to
+            || !String(edge.reason ?? "").trim()) {
+          throw new Error("依赖关系包含未知模块、自依赖或缺少原因");
+        }
+      }
       task.summary.requirement_graph = {
         stage: task.summary.requirement_graph?.stage ?? "analysis",
+        projection_state: "ready",
+        repository_assessments: assessments,
         repositories,
         dependencies,
       };
     } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 需求图读取失败: ${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      markUnavailable("invalid", message);
+      this.options.log?.(`任务 ${task.summary.id} 模块依赖图不可用: ${message}`);
     }
   }
 
@@ -7440,6 +7540,10 @@ export class TaskService {
       requirement_graph: repositories.length
         ? {
             stage: analysisParent ? "analysis" : "confirmed",
+            // 这里只是让分析开始前能展示候选仓、邀请参与人，不是 Agent
+            // 产出的交付图。确认入口必须等 requirement-graph.json 被成功
+            // 解析后看到 ready，绝不能拿这份一仓一节点的占位数据建任务。
+            projection_state: analysisParent ? "pending" : "ready",
             repositories: repositories.map((url, index) => ({
               id: `repo-${index + 1}`,
               name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
@@ -8973,13 +9077,16 @@ export class TaskService {
   } {
     this.refreshRequirementGraph(task);
     const graph = task.summary.requirement_graph;
-    // 单仓拆分后一仓可有多个单元节点:齐不齐看"每个下单仓都有节点",
-    // 不再要求数量相等。
-    const coveredUrls = new Set(
-      graph?.repositories.map((repository) => repository.url) ?? []);
-    if (!graph || !(task.summary.repositories ?? [])
-        .every((url) => coveredUrls.has(url))) {
-      throw new NotFoundError("需求图尚未生成完整，请先让 Agent 补齐分析产物");
+    // stage=analysis 时只认 Agent 机读产物成功解析后的 ready。下单初始化
+    // 的候选仓占位图即使“覆盖全部仓库”也不能通过；无改动仓只需要有
+    // assessment，不需要、也不允许伪造交付节点。
+    if (!graph || (graph.stage === "analysis"
+        && graph.projection_state !== "ready")) {
+      const reason = graph?.projection_error
+        ? `：${graph.projection_error}` : "";
+      throw new NotFoundError(
+        `模块拆分与依赖图尚未生成完整${reason}。请让 Agent 补齐后再确认`,
+      );
     }
     const ticket = task.summary.ticket ?? task.summary.id;
     const artifact = task.cwd
@@ -9000,12 +9107,12 @@ export class TaskService {
       unitsByUrl.set(repository.url, units);
     }
     for (const units of unitsByUrl.values()) {
-      if (units.length < 2) continue;
       for (const unit of units) {
-        if (!unit.scope?.paths.length) {
+        if (graph.stage === "analysis"
+            && (!unit.scope?.name || !unit.scope.paths.length)) {
           throw new TaskControlError(
-            `同仓拆分单元「${unit.scope?.name ?? unit.name}」缺少负责文件面;`
-            + "请先为每个单元填写 scope.paths 再确认");
+            `模块交付单元「${unit.scope?.name ?? unit.name}」缺少负责文件面;`
+            + "请先为每个单元填写 scope.name 和 scope.paths 再确认");
         }
       }
     }
@@ -9301,12 +9408,18 @@ export class TaskService {
     return update;
   }
 
-  /** 人工确认 Chain 产物后，把图上的节点落成现有普通任务。
-   * 可重入:已有 task_id 的仓跳过(第 N 个仓 create 抛错或中途重启后
-   * 重试,不许把前面的仓再建一遍);每建一个就 persist——task_id 只写
+  /** 人工确认 Chain 产物后，把图上的模块交付单元落成现有普通任务。
+   * 可重入:已有 task_id 的单元跳过(第 N 个单元 create 抛错或中途重启后
+   * 重试,不许把前面的单元再建一遍);每建一个就 persist——task_id 只写
    * 内存的话,重启即失忆,重试必出重复任务。 */
   private createRepositoryDeliveries(task: TaskState): void {
     const { graph, order, incoming } = this.requirementGraphPlan(task);
+    if (graph.repositories.length === 0) {
+      graph.stage = "confirmed";
+      task.summary.detail = "分析结论已确认：候选仓均无需修改，未生成开发任务";
+      this.persist(task);
+      return;
+    }
     if (graph.repositories.every((repository) => repository.task_id)) return;
     const artifact = task.cwd
       ? readArtifact(task.cwd,
@@ -9470,7 +9583,7 @@ export class TaskService {
       this.persist(task);
     }
     graph.stage = "confirmed";
-    task.summary.detail = `需求方案已确认，已生成 ${order.length} 个仓库交付任务`;
+    task.summary.detail = `需求方案已确认，已生成 ${order.length} 个模块开发任务`;
     this.persist(task);
   }
 
@@ -9574,22 +9687,27 @@ export class TaskService {
     if (task.summary.status === "waiting_for_human" && task.summary.waiting) {
       const questions = (
         (task.summary.waiting.question as any)?.questions ?? []
-      ) as Array<{ question?: string }>;
+      ) as Array<{ question?: string; options?: string[] }>;
       if (questions.length !== 1) {
         throw new NotFoundError(
           "仍有多项需求问题待澄清，请先逐题处理，再确认跨仓方案",
         );
       }
+      const expectedConfirmation = task.summary.requirement_graph
+          ?.repositories.length
+        ? REQUIREMENT_GRAPH_CONFIRM : REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM;
+      const decision = questions[0]?.options?.find((option) =>
+        confirmsRequirementGraph(option)) ?? expectedConfirmation;
       await this.decide(id, {
         state_version: task.summary.waiting.state_version,
-        decision: "确认并生成任务",
+        decision,
         repository_skill_catalog_token: skillSelection?.catalog_token,
         selected_repository_skill_ids: skillSelection?.selected_ids,
         repository_assignees: skillSelection?.repository_assignees,
         repository_tickets: skillSelection?.repository_tickets,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
-        notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
+        notes: "模块开发任务由平台自动生成与调度,不归本会话跟进;"
           + "请写一段简短收尾说明后立即结束,不要再提问。",
       });
       // decide 会在标准选项命中时生成任务；这里再走一次幂等兜底，
@@ -9609,15 +9727,16 @@ export class TaskService {
     return { ...task.summary };
   }
 
-  /** 父分析会话确认后硬收口，但主任务本身不能冒充“整个需求已完成”。
-   * 会话和容器立即释放给子任务；主任务进入 coordinating，只做跨仓
-   * 进度汇总。全部子任务真实 completed 后才由 reconcile 自动完成。 */
+  /** 父分析会话确认后硬收口。有交付单元时主任务进入 coordinating；
+   * 全部候选仓都无需修改时没有子任务可等，分析结论本身就是任务终态。 */
   private async finishRequirementAnalysis(task: TaskState): Promise<void> {
     task.controlEpoch += 1;
     task.pauseRequested = false;
     this.removeFromQueue(task.summary.id);
-    task.summary.status = "coordinating";
-    delete task.summary.completed_at;
+    const hasDeliveries = (task.summary.requirement_graph?.repositories.length ?? 0) > 0;
+    task.summary.status = hasDeliveries ? "coordinating" : "completed";
+    if (hasDeliveries) delete task.summary.completed_at;
+    else task.summary.completed_at = new Date().toISOString();
     task.mission = undefined;
     this.persist(task);
     const driver = task.driver;
@@ -9641,7 +9760,9 @@ export class TaskService {
         ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
         : []);
     if (failures.length) {
-      task.summary.detail = "子任务已开始推进，但分析资源未能确认释放："
+      task.summary.detail = (hasDeliveries
+        ? "子任务已开始推进，但分析资源未能确认释放："
+        : "分析结论已确认且无需修改代码，但分析资源未能确认释放：")
         + failures.join("；") + "。服务重启会按 ownership 再清扫";
       this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 分析收口清理不完整: `
@@ -10478,14 +10599,14 @@ export class TaskService {
     // (confirmRequirementGraph)——选项文字漂了也不丢单。
     const confirmingGraph = this.isRequirementAnalysis(task)
       && Object.values(answers).concat(decision).some((answer) =>
-        answer.includes("确认并生成任务"));
+        confirmsRequirementGraph(answer));
     if ((input.repository_assignees || input.repository_tickets) && !confirmingGraph) {
-      throw new NotFoundError("逐仓责任人与 AR 单号只能随“确认并生成任务”提交");
+      throw new NotFoundError("模块责任人与 AR 单号只能随拆分方案确认提交");
     }
     if (confirmingGraph) {
       // 受邀参与人能答澄清题、能选"需要修改",但拆单这一下改的是任务的
       // 形状,谁下的单谁拍板。HTTP 层只挡到"是否参与讨论",这里是硬闸。
-      this.assertOwnerDecides(task, input.actor, "确认并生成任务");
+      this.assertOwnerDecides(task, input.actor, "确认拆分方案");
       this.requirementGraphPlan(task, input.repository_assignees,
         input.repository_tickets);
       if (input.repository_assignees) {
@@ -10708,9 +10829,9 @@ export class TaskService {
         return { ...task.summary };
       } catch (cause) {
         task.summary.detail =
-          `确认已收到,但生成仓库任务失败:${String(cause)}。`
-          + "可在需求图面板重试「确认并生成任务」";
-        this.options.log?.(`任务 ${id} 生成仓库交付失败: ${String(cause)}`);
+          `确认已收到,但生成模块任务失败:${String(cause)}。`
+          + "可在需求图面板重试确认";
+        this.options.log?.(`任务 ${id} 生成模块交付失败: ${String(cause)}`);
       }
     }
     // push 前确认卡:没有会话停在 AskUserQuestion 里等这份决定(卡由
@@ -18390,7 +18511,7 @@ export class TaskService {
       const answers: Record<string, string> = {};
       for (const item of questions) {
         answers[String(item.question ?? "")] = item.options?.[0]
-          ?? "跨仓方案已确认，各仓交付任务已生成；分析会话请收尾结束。";
+          ?? "拆分方案已确认，模块任务已生成（或已确认无需改动）；分析会话请收尾结束。";
       }
       return {
         why: "分析单已确认拆单,父会话不再举卡",
@@ -19122,7 +19243,10 @@ export class TaskService {
         + "路由注册、启动装配、构建文件、测试依赖、资源文件、DB migration"
         + " 等全局单点)。必须沿运行链路和构建链路各走一遍:方案职责或"
         + "验收里点名的调用点、装配点、模块 pom/build 文件和测试依赖都要"
-        + "进入盘点,不能只盘新增源码目录。",
+        + "进入盘点,不能只盘新增源码目录。对下单选择的**每个候选仓**"
+        + "分别写出『需要修改』或『无需修改』及代码证据；候选仓只是排查"
+        + "范围，绝不能因为被选中就默认生成任务。无需修改的仓保留结论，"
+        + "但不得进入交付单元。",
       "第三步:划分方向卡(固定动作,不可跳过)。把改动面盘点用"
         + " AskUserQuestion 摆给用户,问「打算怎么拆分,有什么讲究?」,"
         + "并给出你建议的切法;用户可以给方向、指定某块归谁,也可以答"
@@ -19146,21 +19270,27 @@ export class TaskService {
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
         + "正文必须包含:需求理解、**已确认事项清单**(逐条:问题→结论"
         + "→谁拍板,澄清期全部 Q&A 落在这里)、**改动面盘点**、逐单元"
-        + "职责与接口契约、依赖关系与交付顺序(Mermaid 图)、逐单元启动"
+        + "职责与接口契约、**候选仓逐仓排查结论**、依赖关系与交付顺序"
+        + "(Mermaid 图；没有硬依赖也要画出可并行模块)、逐单元启动"
         + "说明(**按单元分节,节标题含单元 id**,平台会按节机械抽取生成"
         + "各单元的任务书)。接口的长期真相在代码里,方案是拆分时刻的"
         + "快照——写清即可,不承诺跟随后续代码演进。",
       `同时把机器可读投影写到 ${join(artifactDir, "requirement-graph.json")}，`
         + "格式严格为 "
-        + `{"repositories":[{"id":"unit-1","name":"名称","url":"原始地址",`
+        + `{"repository_assessments":[{"name":"仓库名","url":"原始地址",`
+        + `"outcome":"change_required|no_change","reason":"结论理由",`
+        + `"evidence":["文件/符号/调用链证据"]}],`
+        + `"repositories":[{"id":"unit-1","name":"仓库名","url":"原始地址",`
         + `"responsibility":"职责","scope":{"name":"单元名",`
         + `"paths":["src/filter/","include/notify/"]}}],"dependencies":[{`
         + `"dependent":"unit-2","prerequisite":"unit-1",`
         + `"reason":"为什么 dependent 必须等待 prerequisite"}]}。`
-        + "每个交付单元一个节点:url 原样照录下单仓地址,同一个仓拆多块"
-        + "就写多个节点(id 互不相同);scope.paths 是该单元负责的仓内"
-        + "相对路径前缀,允许指向尚不存在的目录(新增模块);整仓一个"
-        + "单元时 scope 可省略。上方每个仓库至少要有一个节点。"
+        + "repository_assessments 必须对上方每个候选仓恰好写一条结论。"
+        + "只有 outcome=change_required 的仓才允许生成 repositories 节点，"
+        + "且至少一个；outcome=no_change 的仓不得生成节点。每个节点是一个"
+        + "实际改动模块:url 原样照录下单仓地址,同一个仓拆多块就写多个"
+        + "节点(id 互不相同)。每个节点都必须填写 scope.name 和 scope.paths；"
+        + "paths 是该模块负责的仓内相对路径前缀,允许指向尚不存在的目录。"
         + "scope.paths 表示各单元允许修改的范围,不是文件永久所有权。"
         + "同仓单元由平台串行执行,骨架→实现→补测可以声明相同或包含的"
         + "路径;不要为了消除重叠而把同一阶段会一起改的文件生硬拆散。"
@@ -19170,12 +19300,16 @@ export class TaskService {
         + "本单元 scope 覆盖;发现遗漏先修方案,不得交付。"
         + "dependencies 的语义必须是 dependent 依赖 prerequisite，"
         + "也就是 prerequisite 先开发、dependent 后开发；"
-        + "只有确实不能并行的硬依赖才写，禁止循环依赖"
+        + "只有确实不能并行的硬依赖才写，禁止循环依赖；没有硬依赖也必须"
+        + "明确写 dependencies:[]，这表示这些模块可以并行"
         + "(同仓单元由平台自动按顺序串行执行,同仓相邻顺序不必写边)。",
-      "方案写完后必须调用 AskUserQuestion，请用户选择「需要修改」或"
-        + "「确认并生成任务」。用户选择需要修改时，结合随决定提交的批注"
+      "方案写完后必须调用 AskUserQuestion。存在模块交付单元时，请用户选择"
+        + "「需要修改」或「确认并生成任务」；如果所有候选仓都无需修改，"
+        + "请选择「需要修改」或「确认分析结论」。用户选择需要修改时，"
+        + "结合随决定提交的批注"
         + "继续修订同一份方案，再次发起检视；确认前不得收尾。"
-        + "用户确认后：各仓交付任务由平台自动生成与调度，**不归你跟进**"
+        + "用户确认后：模块开发任务由平台自动生成与调度（无改动时直接结束），"
+        + "**不归你跟进**"
         + "——写一段简短收尾说明后立即结束，禁止再调用 AskUserQuestion、"
         + "禁止替用户检视或跟进任何子任务。",
     ].join("\n\n");

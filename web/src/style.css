@@ -2059,6 +2059,32 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-team-pills i { color: var(--muted); font-size: 10px; font-style: normal; font-weight: 650; }
 .requirement-team-pills > strong i { color: var(--accent); }
 .requirement-team-pills > em { padding: 5px 0; color: var(--faint); font-size: 11.5px; font-style: normal; }
+.requirement-projection-state,
+.requirement-no-delivery,
+.requirement-parallel-note { margin: 2px 0 10px; padding: 11px 12px; display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.requirement-projection-state.invalid { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.requirement-projection-state > strong,
+.requirement-no-delivery > strong,
+.requirement-parallel-note > strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-projection-state.invalid > strong { color: var(--danger); }
+.requirement-projection-state > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.requirement-projection-state > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.requirement-projection-state > div > span { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 11px; }
+.requirement-assessments { margin: 2px 0 11px; display: grid; gap: 7px; }
+.requirement-assessments > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.requirement-assessments > header strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-assessments > header small { color: var(--muted); font-size: 11px; }
+.requirement-assessments > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px; }
+.requirement-assessments article { min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.requirement-assessments article > span { padding: 2px 5px; border-radius: 4px; color: var(--success); background: var(--success-soft); font-size: 10px; font-weight: 800; }
+.requirement-assessments article.no_change > span { color: var(--muted); background: var(--surface); }
+.requirement-assessments article > strong { overflow: hidden; color: var(--text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.requirement-assessments article > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.requirement-no-delivery { border-color: color-mix(in srgb, var(--success) 35%, var(--line)); background: var(--success-soft); }
+.requirement-no-delivery > strong,
+.requirement-parallel-note > strong { color: var(--success); }
+.requirement-no-delivery > span { color: var(--text); font-size: 12px; line-height: 1.5; }
+.requirement-parallel-note { padding: 8px 11px; }
 .requirement-stages { display: flex; align-items: stretch; gap: 26px; overflow-x: auto; padding: 1px 2px 7px; scrollbar-width: thin; }
 .requirement-stage { min-width: 170px; position: relative; display: grid; align-content: start; gap: 5px; }
 .requirement-stage:not(:last-child)::after { content: "→"; position: absolute; top: 38px; right: -19px; color: var(--accent); font-size: 17px; font-weight: 700; }

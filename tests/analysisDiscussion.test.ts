@@ -36,7 +36,7 @@ test("受邀参与讨论的人能答卡:HTTP、decide 硬闸、前端三层口�
     /parts\[2\] === "decision"[\s\S]{0,600}canCollaborate\(viewer, target, !!options\.auth\)/,
     "决策路由按参与讨论放行,不再只认责任人");
   const service = read("src/taskService.ts");
-  assert.match(service, /assertOwnerDecides\(task, input\.actor, "确认并生成任务"\)/,
+  assert.match(service, /assertOwnerDecides\(task, input\.actor, "确认拆分方案"\)/,
     "拆单只认责任人");
   assert.match(service, /assertOwnerDecides\(task, input\.actor, "决定拆不拆"\)/);
   assert.match(service, /assertOwnerDecides\(task, input\.actor, "确认进入需求分析"\)/);
@@ -50,7 +50,7 @@ test("受邀参与讨论的人能答卡:HTTP、decide 硬闸、前端三层口�
     "待办收件箱把受邀讨论单独立成一类");
   const card = read("web/src/TaskCard.tsx");
   assert.match(card, /export function isOwnerOnlyWaiting/);
-  assert.match(card, /participant && option\.includes\("确认并生成任务"\)/,
+  assert.match(card, /participant && confirmsChainOption\(option\)/,
     "参与人卡上的拆单项锁住");
   const workspace = read("web/src/TaskWorkspace.tsx");
   assert.match(workspace, /canCollaborate && !isOwnerOnlyWaiting\(task\)/);

@@ -958,9 +958,17 @@ export interface TaskSummary {
   ticket?: string;
   requirement_graph?: {
     stage: "analysis" | "confirmed";
+    /** pending 是下单候选仓占位；只有 ready 才能据此创建模块任务。 */
+    projection_state?: "pending" | "ready" | "invalid";
+    projection_error?: string;
+    repository_assessments?: Array<{
+      name: string; url: string;
+      outcome: "change_required" | "no_change";
+      reason: string; evidence?: string[];
+    }>;
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string;
-      /** 交付单元的文件面(单仓拆分):缺席=整仓一个单元。 */
+      /** Agent 分析出的模块交付单元及其负责文件面。 */
       scope?: { name: string; paths: string[] };
       assignee?: string; ticket?: string; task_id?: string;
       task_status?: TaskStatus; current_phase?: string;

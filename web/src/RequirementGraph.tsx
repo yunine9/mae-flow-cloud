@@ -50,9 +50,15 @@ export function RequirementGraph({
   const graph = task.requirement_graph;
   const [expanded, setExpanded] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
-  // 单仓分析单拆分前只有一个节点,也要露出概览让人看到"待拆分"。
   if (!graph) return null;
-  if (graph.repositories.length < 2 && task.requirement_analysis_requested !== true) return null;
+  const candidateCount = task.repositories?.length
+    ?? graph.repository_assessments?.length
+    ?? graph.repositories.length;
+  // 单仓分析单拆分前也要露出概览；多仓即使最终只有一个或零个模块
+  // 仍要展示逐仓排查结论，不能随着“无任务”一起消失。
+  if (candidateCount < 2 && task.requirement_analysis_requested !== true) return null;
+  const projectionReady = graph.stage === "confirmed"
+    || graph.projection_state === "ready";
   const participantNames = [...new Set([
     ...(task.collaborators ?? []),
     ...graph.repositories.map((repository) => repository.assignee)
@@ -61,30 +67,41 @@ export function RequirementGraph({
   const generated = graph.repositories.filter((repository) => repository.task_id).length;
   const completed = graph.repositories.filter((repository) =>
     repository.task_status === "completed").length;
-  const stages = chainStages(graph);
+  const stages = projectionReady ? chainStages(graph) : [];
+  const noChange = graph.repository_assessments?.filter((assessment) =>
+    assessment.outcome === "no_change") ?? [];
   const splitUrls = new Set(graph.repositories.map((item) => item.url)
     .filter((url, index, urls) => urls.indexOf(url) !== index));
   return <details className="requirement-graph" open={expanded}
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
     <summary>
       <div>
-        <span>CHAIN OVERVIEW</span>
-        <strong id="requirement-graph-title">主任务与子任务进展</strong>
+        <span>DELIVERY PLAN</span>
+        <strong id="requirement-graph-title">模块拆分与依赖</strong>
       </div>
-      <small>{generated < graph.repositories.length
-        ? `待拆分 · ${graph.repositories.length} 个交付单元`
-        : `${completed}/${graph.repositories.length} 个子任务已完成`}</small>
+      <small>{!projectionReady
+        ? graph.projection_state === "invalid" ? "分析产物需要修正" : "正在生成分析产物"
+        : graph.repositories.length === 0 ? "确认后结束 · 无需开发"
+        : generated < graph.repositories.length
+          ? `待确认 · ${graph.repositories.length} 个模块任务`
+          : `${completed}/${graph.repositories.length} 个模块任务已完成`}</small>
       <i className="requirement-toggle" aria-hidden />
     </summary>
     <div className="requirement-graph-body">
       <div className="requirement-root-task">
         <span>主任务</span>
         <div><strong>{task.title ?? task.requirement}</strong>
-          <small>{task.ticket ?? task.id} · 汇总各仓进展，全部子任务完成后自动完成</small></div>
+          <small>{task.ticket ?? task.id} · 先排查候选仓，再按实际改动模块创建任务</small></div>
         <em className={task.status}>{childStatusText[task.status] ?? task.status}</em>
       </div>
       <div className="requirement-split-label">
-        <span>{generated ? `已拆分为 ${generated} 个子任务` : "确认方案后按交付单元拆分子任务"}</span>
+        <span>{!projectionReady
+          ? `正在排查 ${candidateCount} 个候选仓，不会直接按仓建任务`
+          : graph.repositories.length === 0
+            ? "全部候选仓均无需修改，不生成开发任务"
+            : generated
+              ? `已创建 ${generated} 个模块任务`
+              : `确认方案后创建 ${graph.repositories.length} 个模块任务`}</span>
         {/* 从直接开发转过来的单子:说清是谁、在哪个阶段、为什么提议拆分,
             人才知道这张确认卡从哪来。 */}
         {task.split_escalation && <small className="requirement-split-escalation"
@@ -113,6 +130,35 @@ export function RequirementGraph({
           {teamInvite}
         </div>}
       </div>
+      {!projectionReady && (
+        <section className={`requirement-projection-state ${
+          graph.projection_state === "invalid" ? "invalid" : "pending"}`}>
+          <strong>{graph.projection_state === "invalid"
+            ? "模块拆分与依赖图还不能确认"
+            : "Agent 正在生成模块拆分与依赖图"}</strong>
+          <p>{graph.projection_error
+            ?? "下面这些只是候选仓，分析完成后只有确实需要修改的模块才会生成任务。"}</p>
+          <div>{graph.repositories.map((repository) => (
+            <span key={repository.url}>{repository.name}</span>
+          ))}</div>
+        </section>
+      )}
+      {projectionReady && graph.repository_assessments?.length ? (
+        <section className="requirement-assessments" aria-label="候选仓排查结论">
+          <header>
+            <strong>候选仓排查结论</strong>
+            <small>{graph.repository_assessments.length} 个已排查 · {noChange.length} 个无需修改</small>
+          </header>
+          <div>{graph.repository_assessments.map((assessment) => (
+            <article key={assessment.url} className={assessment.outcome}>
+              <span>{assessment.outcome === "change_required" ? "需要修改" : "无需修改"}</span>
+              <strong>{assessment.name}</strong>
+              <p>{assessment.reason}</p>
+            </article>
+          ))}</div>
+        </section>
+      ) : null}
+      {projectionReady && graph.repositories.length > 0 && (
       <div className="requirement-stages" aria-labelledby="requirement-graph-title">
         {stages.map((repositories, stage) => <div className="requirement-stage"
           key={repositories.map((repository) => repository.id).join("-")}>
@@ -156,8 +202,20 @@ export function RequirementGraph({
             })}
           </div>
         </div>)}
-      </div>
-      {graph.dependencies.length > 0 && <div className="requirement-edges">
+      </div>)}
+      {projectionReady && graph.repositories.length === 0 && (
+        <div className="requirement-no-delivery">
+          <strong>无需创建开发任务</strong>
+          <span>所有候选仓均已排查并确认不需要修改，确认后本分析任务直接结束。</span>
+        </div>
+      )}
+      {projectionReady && graph.repositories.length > 1
+        && graph.dependencies.length === 0 && (
+          <div className="requirement-parallel-note">
+            <strong>这些模块没有硬依赖，可以并行推进</strong>
+          </div>
+        )}
+      {projectionReady && graph.dependencies.length > 0 && <div className="requirement-edges">
         {graph.dependencies.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}>
           <span><strong>{repoName(edge.from, task)}</strong><i>依赖</i>
             <strong>{repoName(edge.to, task)}</strong></span>
@@ -177,7 +235,11 @@ export function RequirementGraph({
         </details>
       )}
       {task.status === "waiting_for_human" && <p className="requirement-graph-note">
-        核对完成后，请在右侧决策卡统一选择“确认并生成任务”或“需要修改”。
+        {!projectionReady
+          ? "当前只能退回让 Agent 补齐产物，不能用候选仓占位数据创建任务。"
+          : graph.repositories.length > 0
+            ? `核对完成后，请在右侧确认创建 ${graph.repositories.length} 个模块任务，或退回修改。`
+            : "核对完成后，请在右侧确认分析结论并结束，或退回修改。"}
       </p>}
     </div>
   </details>;

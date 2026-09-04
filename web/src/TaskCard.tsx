@@ -156,28 +156,39 @@ export function TaskCard({
             </span>
           )}
           {task.requirement_graph?.stage === "analysis"
-            && (task.requirement_graph.repositories.length ?? 0) > 1 && (
+            && ((task.repositories?.length ?? 0) > 1
+              || task.requirement_analysis_requested === true) && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
-                <b>{task.requirement_graph.repositories.length} 个仓库</b>
+                <b>{task.requirement_graph.projection_state === "ready"
+                  ? `${task.requirement_graph.repositories.length} 个模块任务`
+                  : `${task.repositories?.length
+                    ?? task.requirement_graph.repositories.length} 个候选仓`}</b>
                 <i aria-hidden>·</i>
-                <span>{task.status === "waiting_for_human"
-                    ? task.requirement_graph!.dependencies.length > 0
-                      ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
-                      : "仓间可并行，方案待检视"
-                    : "正在核对职责与依赖"}</span>
+                <span>{task.requirement_graph.projection_state === "invalid"
+                  ? "模块拆分与依赖图需要修正"
+                  : task.requirement_graph.projection_state !== "ready"
+                    ? "正在分析实际改动模块"
+                    : task.status === "waiting_for_human"
+                      ? task.requirement_graph.dependencies.length > 0
+                        ? `${task.requirement_graph.dependencies.length} 条硬依赖待检视`
+                        : "模块可并行，方案待检视"
+                      : "正在核对模块职责与依赖"}</span>
               </span>
-              <span className="task-repo-list" aria-label="涉及仓库">
-                {task.requirement_graph.repositories.map((repository) => (
-                  <span key={repository.id} title={repository.url}>
-                    <i aria-hidden />{repository.name}
-                    {repository.assignee && <b>· {repository.assignee}</b>}
-                    {repository.task_status && <em className={repository.task_status}>
-                      · {statusText({ status: repository.task_status })}
-                    </em>}
-                  </span>
-                ))}
-              </span>
+              {task.requirement_graph.projection_state === "ready" && (
+                <span className="task-repo-list" aria-label="实际改动模块">
+                  {task.requirement_graph.repositories.map((repository) => (
+                    <span key={repository.id} title={repository.url}>
+                      <i aria-hidden />{repository.scope?.name ?? repository.name}
+                      <small> · {repository.name}</small>
+                      {repository.assignee && <b>· {repository.assignee}</b>}
+                      {repository.task_status && <em className={repository.task_status}>
+                        · {statusText({ status: repository.task_status })}
+                      </em>}
+                    </span>
+                  ))}
+                </span>
+              )}
             </span>
           )}
           {(task.blocked_by?.length ?? 0) > 0 && task.status === "queued" && (
@@ -531,15 +542,17 @@ export function TaskProgress({
 
 /** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
-/** 这张卡是不是 Chain 的"拆分方案确认"。内核没给它专门的 step id,
- * 只能认选项文案——多仓分析中途的普通澄清也处于 analysis,但只有最终
- * 方案卡带"确认并生成任务"。工作台和卡片都用这一个判据,别各抄一份。 */
+function confirmsChainOption(option: string): boolean {
+  return option.includes("确认并生成任务") || option.includes("确认分析结论");
+}
+
+/** 这张卡是不是 Chain 的"拆分方案确认"。有模块时确认并生成任务；
+ * 全部候选仓均无需修改时只确认分析结论。 */
 export function isChainReviewWaiting(task: TaskSummary): boolean {
   const graph = task.requirement_graph;
   return graph?.stage === "analysis"
-    && graph.repositories.length > 1
     && (task.waiting?.question?.questions?.some((question) =>
-      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+      question.options?.some(confirmsChainOption)) ?? false);
 }
 
 /** 检视卡上"把意见送回 Agent 继续改"的那一项:choice_effects 标了
@@ -678,7 +691,8 @@ export function WaitingCard({
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const confirmsChainChoice = Object.values(picked).some((answer) =>
-    answer.includes("确认并生成任务"));
+    confirmsChainOption(answer));
+  const chainProjectionReady = task.requirement_graph?.projection_state === "ready";
   const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
     answer.includes("需要修改"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
@@ -730,6 +744,7 @@ export function WaitingCard({
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
+    && (!confirmsChainChoice || chainProjectionReady)
     && (!confirmsChainChoice || !repositoryAssigneeSelection
       || repositoryAssigneeSelection.ready)
     && (!requirementAnalysisConfirmation
@@ -782,7 +797,7 @@ export function WaitingCard({
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
-      answer.includes("确认并生成任务"));
+      confirmsChainOption(answer));
     const repositorySkills = confirmsChain
       && repositorySkillSelection?.scanned
       && repositorySkillSelection.catalogToken
@@ -820,9 +835,13 @@ export function WaitingCard({
 
   const submitLabel = submitting ? "正在提交…"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
-    // 按钮说清楚按下去会发生什么:生成几个子任务、还是把方案退回去改。
+    // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
     : chainReview && confirmsChainChoice
-      ? `确认并生成 ${task.requirement_graph?.repositories.length ?? 0} 个子任务`
+      ? !chainProjectionReady
+        ? "模块拆分与依赖图尚未就绪"
+        : (task.requirement_graph?.repositories.length ?? 0) > 0
+          ? `确认并创建 ${task.requirement_graph!.repositories.length} 个模块任务`
+          : "确认分析结论并结束"
     : reworksChainChoice ? "退回修改方案"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
@@ -859,10 +878,20 @@ export function WaitingCard({
            化的;卡上只放三个数和一句"去哪看"。原来这里是 300px 的一段散文
            背景,把左边已经画出来的东西再讲一遍。 */
         <div className="chain-decision-facts" role="note">
-          <span><b>{task.requirement_graph.repositories.length}</b>个交付单元</span>
-          <span><b>{chainStages(task.requirement_graph).length}</b>个阶段串行</span>
-          <span><b>{task.requirement_graph.dependencies.length}</b>条依赖</span>
-          <small>单元职责、负责面和先后顺序见左侧「仓间依赖」；这张卡只定每个单元由谁执行、用哪个单号。</small>
+          {chainProjectionReady ? <>
+            <span><b>{task.requirement_graph.repositories.length}</b>个模块任务</span>
+            <span><b>{task.requirement_graph.repository_assessments
+              ?.filter((item) => item.outcome === "no_change").length ?? 0}</b>个仓无需修改</span>
+            <span>{task.requirement_graph.dependencies.length > 0
+              ? <><b>{chainStages(task.requirement_graph).length}</b>个执行阶段</>
+              : <><b>可并行</b>无硬依赖</>}</span>
+            <small>逐仓排查结论、模块职责、负责面和先后顺序见左侧「模块拆分与依赖」；这里只给实际开发模块定负责人和单号。</small>
+          </> : <>
+            <span><b>未就绪</b>不能创建任务</span>
+            <small>{task.requirement_graph.projection_error
+              ? `模块拆分与依赖图不完整：${task.requirement_graph.projection_error}`
+              : "Agent 尚未生成真实的模块拆分与依赖图。下单时选择的仓库只是排查范围，不会直接生成任务。"}</small>
+          </>}
           {reworksChainChoice && (
             <small className="chain-rework-hint">
               退回前先在左侧「过程文档」的方案文档上圈出要改的地方并写意见；这些批注会随这次决定一起交给 Agent，没有批注的退回 Agent 只能猜。
@@ -1033,7 +1062,7 @@ export function WaitingCard({
               <div className={`options ${compact ? "compact" : "cards"}`}>
                 {options.map((option) => {
                   const chosen = picked[item.question] === option;
-                  const locked = participant && option.includes("确认并生成任务");
+                  const locked = participant && confirmsChainOption(option);
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));

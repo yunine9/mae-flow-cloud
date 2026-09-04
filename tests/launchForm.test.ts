@@ -604,11 +604,19 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   writeFileSync(join(artifacts, ".ticket-id"), "REQ-G3-API\n");
   writeFileSync(join(artifacts, "CHAIN-REQ-G3-API.md"), "# 已确认方案\n");
   writeFileSync(join(artifacts, "requirement-graph.json"), JSON.stringify({
+    repository_assessments: [
+      { name: "api", url: "https://codehub/team/api.git",
+        outcome: "change_required", reason: "接口需要调整" },
+      { name: "web", url: "https://codehub/team/web.git",
+        outcome: "change_required", reason: "页面需要消费接口" },
+    ],
     repositories: [
       { id: "api", name: "api", url: "https://codehub/team/api.git",
-        responsibility: "提供接口" },
+        responsibility: "提供接口",
+        scope: { name: "接口模块", paths: ["src/api/"] } },
       { id: "web", name: "web", url: "https://codehub/team/web.git",
-        responsibility: "消费接口" },
+        responsibility: "消费接口",
+        scope: { name: "页面模块", paths: ["src/web/"] } },
     ],
     // 历史产物的 from/to 是“api 先于 web”；升级后仍要读成 web 等 api。
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
@@ -655,8 +663,8 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     readFileSync(join(dataDir, webTask.id, "chain-plan.md"), "utf-8"),
     /已确认方案/,
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
-  assert.equal(apiTask.title, "跨仓订单状态交付 · api");
-  assert.equal(webTask.title, "跨仓订单状态交付 · web");
+  assert.equal(apiTask.title, "跨仓订单状态交付 · 接口模块");
+  assert.equal(webTask.title, "跨仓订单状态交付 · 页面模块");
   assert.ok(apiTask.workflow_profile?.final_snapshot?.stages
     .flatMap((item) => item.items)
     .some((item) => item.id === "api-diagnosis-skill"),

@@ -43,19 +43,30 @@ async function until<T>(
   }
 }
 
-test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单→收口", async () => {
+test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→依赖调度→收口", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-e2e-"));
   const apiRepo = makeRepo(dataDir, "svc-api");
   const webRepo = makeRepo(dataDir, "svc-web");
+  const auditRepo = makeRepo(dataDir, "svc-audit");
   const ticket = "REQ2026081930";
   // 机读需求图:url 必须原样照录下单地址(投影按白名单全等过滤)。
   const graphJson = JSON.stringify({
+    repository_assessments: [
+      { name: "svc-api", url: apiRepo, outcome: "change_required",
+        reason: "接口定义与实现需要调整", evidence: ["src/api.ts:createOrder"] },
+      { name: "svc-web", url: webRepo, outcome: "change_required",
+        reason: "页面需要消费新接口", evidence: ["src/order.ts:submit"] },
+      { name: "svc-audit", url: auditRepo, outcome: "no_change",
+        reason: "现有审计事件已经覆盖且接口未变化", evidence: ["src/audit.ts:record"] },
+    ],
     repositories: [
-      { id: "repo-1", name: "svc-api", url: apiRepo, responsibility: "提供接口" },
-      { id: "repo-2", name: "svc-web", url: webRepo, responsibility: "消费接口" },
+      { id: "unit-api", name: "svc-api", url: apiRepo, responsibility: "提供接口",
+        scope: { name: "订单接口", paths: ["src/api/"] } },
+      { id: "unit-web", name: "svc-web", url: webRepo, responsibility: "消费接口",
+        scope: { name: "订单页面", paths: ["src/order/"] } },
     ],
     dependencies: [
-      { dependent: "repo-2", prerequisite: "repo-1",
+      { dependent: "unit-web", prerequisite: "unit-api",
         reason: "svc-web 依赖 svc-api，接口没就绪前端无从联调" },
     ],
   });
@@ -88,9 +99,9 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     notifier,
   });
   try {
-    const parent = service.create("跨仓交付:api 出接口,web 消费", {
+    const parent = service.create("跨仓交付:api 出接口,web 消费,audit 仅排查", {
       account: "cloudbot", ticket,
-      repos: [apiRepo, webRepo],
+      repos: [apiRepo, webRepo, auditRepo],
     });
     // 受邀参与讨论的人:能答卡、要收通知;拆单仍只认责任人。
     service.setRequirementCollaborators(parent.id, ["alice"]);
@@ -103,6 +114,10 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
       "跨仓分析必须在拆单前追清新增数据由谁产生");
     assert.match(prompt, /仓库清单之外.*外部系统/,
       "外部生产系统不能拖到某个子任务质询时才发现");
+    assert.match(prompt, /候选仓只是排查范围/,
+      "下单仓不能被默认当成开发任务");
+    assert.match(prompt, /repository_assessments/,
+      "机读图必须逐仓记录改与不改的结论");
     assert.equal(parent.requirement_graph?.stage, "analysis");
     const card = await until(() => {
       const now = service.get(parent.id)!;
@@ -110,7 +125,13 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
       return now.status === "waiting_for_human" ? now : undefined;
     }, "确认卡");
     // 卡到手时投影应已能从产物读出依赖(面板据此画图)。
+    assert.equal(card.requirement_graph?.projection_state, "ready");
     assert.equal(card.requirement_graph?.dependencies.length, 1);
+    assert.equal(card.requirement_graph?.repositories.length, 2,
+      "选了三个候选仓，也只能为两个实际改动模块建任务");
+    assert.equal(card.requirement_graph?.repository_assessments?.length, 3);
+    assert.equal(card.requirement_graph?.repository_assessments?.[2].outcome,
+      "no_change");
     // 卡上不能出现 repo-1/repo-2(内网实锤"完全看不懂是哪个仓"):prompt
     // 改按名称呼,举卡文本再机械替换一道兜底。
     const asked = String(
@@ -121,7 +142,7 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     await assert.rejects(service.decide(parent.id, {
       actor: "alice", state_version: card.waiting!.state_version,
       decision: "确认并生成任务",
-    }), /只有主责任人 cloudbot 可以确认并生成任务/);
+    }), /只有主责任人 cloudbot 可以确认拆分方案/);
     assert.equal(service.get(parent.id)?.status, "waiting_for_human",
       "被拒的拍板不消费卡");
     // 问题卡通知责任人和受邀参与人各一条(通知键按人分开)。
@@ -159,7 +180,7 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
 
     // 现场:两仓按序克隆成只读(pushurl 已改指死路)。
     const root = join(dataDir, parent.id, "repositories");
-    for (const name of ["1-svc-api", "2-svc-web"]) {
+    for (const name of ["1-svc-api", "2-svc-web", "3-svc-audit"]) {
       assert.ok(existsSync(join(root, name)), `${name} 该被克隆`);
       const pushurl = execFileSync("git",
         ["-C", join(root, name), "config", "remote.origin.pushurl"],
@@ -169,6 +190,10 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     // 拆单事实:职责、依赖、继承(单号/归属)、方案正文随子任务走。
     assert.equal(apiChild.repo_url, apiRepo);
     assert.equal(webChild.repo_url, webRepo);
+    assert.equal(service.list().filter((item) => item.parent_task_id === parent.id).length,
+      2, "无需修改的 audit 仓只留分析结论，不生成子任务");
+    assert.equal(apiChild.delivery_scope?.name, "订单接口");
+    assert.equal(webChild.delivery_scope?.name, "订单页面");
     assert.deepEqual(webChild.blocked_by, [apiChild.id]);
     assert.equal(apiChild.blocked_by, undefined);
     assert.equal(apiChild.parent_task_id, parent.id);
@@ -189,5 +214,109 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
   } finally {
     await model.stop();
     await luban.stop();
+  }
+});
+
+test("真实模块依赖图缺失时拒绝确认，不能拿候选仓占位图生成任务", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-missing-graph-"));
+  const firstRepo = makeRepo(dataDir, "svc-first");
+  const secondRepo = makeRepo(dataDir, "svc-second");
+  const ticket = "REQ2026090401";
+  const artifactDir = join(".mae-flow-work", ticket);
+  const model = new ScriptedModelServer([
+    { text: "只写了给人看的方案，漏掉机读图",
+      tool: { name: "bash", input: { command:
+        `printf '%s' '# 方案已写，但模块图缺失\n' > "${
+          join(artifactDir, `CHAIN-${ticket}.md`)}"` } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "方案是否确认?",
+      options: ["确认并生成任务", "需要修改"],
+      recommended: "确认并生成任务",
+    }] } } },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), maxConcurrent: 1,
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  try {
+    const parent = service.create("分析两个候选仓的真实改动模块", {
+      account: "cloudbot", ticket, repos: [firstRepo, secondRepo],
+    });
+    const card = await until(() => {
+      const now = service.get(parent.id)!;
+      return now.status === "waiting_for_human" ? now : undefined;
+    }, "缺图确认卡");
+    assert.equal(card.requirement_graph?.projection_state, "pending");
+    assert.equal(card.requirement_graph?.repositories.length, 2,
+      "占位节点仍可用于展示候选仓，但不是交付单元");
+    await assert.rejects(
+      () => service.confirmRequirementGraph(parent.id),
+      /模块拆分与依赖图尚未生成完整/,
+    );
+    assert.equal(service.list().filter((item) =>
+      item.parent_task_id === parent.id).length, 0,
+    "缺图时一个子任务都不能生成");
+    assert.equal(service.get(parent.id)?.status, "waiting_for_human",
+      "拒绝确认不能消费原决定卡");
+  } finally {
+    await service.cancel(service.list()[0].id, "tester").catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("所有候选仓均无需修改时确认结论直接完成，不制造空子任务", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-no-change-"));
+  const firstRepo = makeRepo(dataDir, "svc-reader");
+  const secondRepo = makeRepo(dataDir, "svc-ledger");
+  const ticket = "REQ2026090402";
+  const artifactDir = join(".mae-flow-work", ticket);
+  const graphJson = JSON.stringify({
+    repository_assessments: [
+      { name: "svc-reader", url: firstRepo, outcome: "no_change",
+        reason: "现有读取接口已经满足需求", evidence: ["src/read.ts:get"] },
+      { name: "svc-ledger", url: secondRepo, outcome: "no_change",
+        reason: "账本格式没有变化", evidence: ["src/ledger.ts:append"] },
+    ],
+    repositories: [],
+    dependencies: [],
+  });
+  const model = new ScriptedModelServer([
+    { text: "逐仓核对后无需修改",
+      tool: { name: "bash", input: { command:
+        `printf '%s' '# 排查结论\n两个仓均无需修改。\n' > "${
+          join(artifactDir, `CHAIN-${ticket}.md`)}" && `
+        + `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n`
+        + `${graphJson}\nEOF` } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "是否确认无需修改代码?",
+      options: ["确认分析结论", "需要修改"],
+      recommended: "确认分析结论",
+    }] } } },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), maxConcurrent: 1,
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  try {
+    const parent = service.create("核对现有链路是否已经满足", {
+      account: "cloudbot", ticket, repos: [firstRepo, secondRepo],
+    });
+    const card = await until(() => {
+      const now = service.get(parent.id)!;
+      return now.status === "waiting_for_human" ? now : undefined;
+    }, "无需改动确认卡");
+    assert.equal(card.requirement_graph?.projection_state, "ready");
+    assert.equal(card.requirement_graph?.repositories.length, 0);
+    const confirmed = await service.confirmRequirementGraph(parent.id);
+    assert.equal(confirmed.status, "completed");
+    assert.match(confirmed.detail ?? "", /均无需修改/);
+    assert.equal(service.list().filter((item) =>
+      item.parent_task_id === parent.id).length, 0);
+  } finally {
+    await model.stop();
   }
 });

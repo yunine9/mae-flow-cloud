@@ -1156,11 +1156,14 @@ export function TaskWorkspace({
   const changeFileCount = changeCountKnown
     ? changes.reduce((sum, item) => sum + (item.file_count ?? 0), 0)
     : changes.length;
-  const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
+  const hasRequirementGraph = !!task.requirement_graph
+    && ((task.repositories?.length ?? 0) > 1
+      || task.requirement_analysis_requested === true
+      || task.requirement_graph.stage === "confirmed");
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "需求原文" }
     : materialView === "chain"
-    ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
+    ? { kicker: "DELIVERY PLAN", title: "模块拆分与依赖" }
     : materialView === "diff"
       ? pushReview
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
@@ -1621,7 +1624,9 @@ export function TaskWorkspace({
               </button>
               {hasRequirementGraph && <button className={materialView === "chain" ? "on" : ""}
                 onClick={() => setMaterialView("chain")}>
-                <span>仓间依赖</span><i>{task.requirement_graph!.dependencies.length}</i>
+                <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
+                  || task.requirement_graph!.stage === "confirmed"
+                  ? task.requirement_graph!.repositories.length : "…"}</i>
               </button>}
               <button className={materialView === "diff" ? "on" : ""}
                 onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
@@ -1851,7 +1856,9 @@ export function TaskWorkspace({
                       />
                     : undefined} />
                 {!chainReview && canOperate
-                  && task.requirement_graph?.stage === "analysis" && (
+                  && task.requirement_graph?.stage === "analysis"
+                  && task.requirement_graph.projection_state === "ready"
+                  && task.requirement_graph.repositories.length > 0 && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph.repositories}
@@ -2089,6 +2096,8 @@ export function TaskWorkspace({
               annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
               repositoryAssigneeSelection={chainReview && canOperate
+                && task.requirement_graph?.projection_state === "ready"
+                && task.requirement_graph.repositories.length > 0
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? decisionDeliverySelection : undefined}
@@ -2118,7 +2127,9 @@ export function TaskWorkspace({
                 <>
                   {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
                       单号。讨论参与人留在左侧图下面。 */}
-                  {chainReview && canOperate && (
+                  {chainReview && canOperate
+                    && task.requirement_graph?.projection_state === "ready"
+                    && task.requirement_graph.repositories.length > 0 && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph!.repositories}

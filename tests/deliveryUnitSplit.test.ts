@@ -53,6 +53,8 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
   const ticket = "REQ2026083100";
   // 同一个仓两个单元:url 都照录下单地址,靠 id + scope 区分。
   const graphJson = JSON.stringify({
+    repository_assessments: [{ name: "svc-core", url: repo,
+      outcome: "change_required", reason: "契约与过滤模块均需修改" }],
     repositories: [
       { id: "unit-contract", name: "svc-core", url: repo,
         responsibility: "接口契约骨架,整体编译得过",
@@ -456,6 +458,8 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
   const graphJson = JSON.stringify({
+    repository_assessments: [{ name: "svc-solo", url: repo,
+      outcome: "change_required", reason: "需要拆分契约和实现" }],
     repositories: [
       { id: "unit-a", name: "svc-solo", url: repo, responsibility: "契约",
         scope: { name: "契约骨架", paths: ["src/a/"] } },
@@ -612,12 +616,19 @@ test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不
   const artifactDir = join(cwd, ".mae-flow-work", "REQ2026090301");
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(join(artifactDir, "requirement-graph.json"), JSON.stringify({
+    repository_assessments: [
+      { name: "svc-a", url: repoA, outcome: "change_required",
+        reason: "契约和过滤实现需要修改" },
+      { name: "svc-b", url: repoB, outcome: "change_required",
+        reason: "消费接口需要修改" },
+    ],
     repositories: [
       { id: "unit-a1", name: "svc-a", url: repoA, responsibility: "契约",
         scope: { name: "契约骨架", paths: ["src/contract/"] } },
       { id: "unit-a2", name: "svc-a", url: repoA, responsibility: "实现",
         scope: { name: "过滤实现", paths: ["src/filter/"] } },
-      { id: "unit-b", name: "svc-b", url: repoB, responsibility: "消费接口" },
+      { id: "unit-b", name: "svc-b", url: repoB, responsibility: "消费接口",
+        scope: { name: "接口消费", paths: ["src/client/"] } },
     ],
     dependencies: [],
   }));

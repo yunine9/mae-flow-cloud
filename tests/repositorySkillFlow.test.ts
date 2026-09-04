@@ -351,14 +351,19 @@ test("Chain 检视决定可更新按仓 Skill，先落盘再生成子任务", as
   mkdirSync(artifactDirectory, { recursive: true });
   writeFileSync(join(artifactDirectory, "CHAIN-REQ20260007.md"),
     "# 已确认跨仓方案\n");
-  state.summary.requirement_graph = {
-    stage: "analysis",
+  writeFileSync(join(artifactDirectory, "requirement-graph.json"), JSON.stringify({
+    repository_assessments: [
+      { name: "review-a", url: repoA, outcome: "change_required", reason: "A" },
+      { name: "review-b", url: repoB, outcome: "change_required", reason: "B" },
+    ],
     repositories: [
-      { id: "repo-1", name: "review-a", url: repoA, responsibility: "A" },
-      { id: "repo-2", name: "review-b", url: repoB, responsibility: "B" },
+      { id: "repo-1", name: "review-a", url: repoA, responsibility: "A",
+        scope: { name: "A 模块", paths: ["src/a/"] } },
+      { id: "repo-2", name: "review-b", url: repoB, responsibility: "B",
+        scope: { name: "B 模块", paths: ["src/b/"] } },
     ],
     dependencies: [],
-  };
+  }));
   const waiting = state.humanGate.createWaiting({
     taskId: parent.id,
     step: "requirement-analysis",
@@ -447,15 +452,22 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
   mkdirSync(artifactDirectory, { recursive: true });
   writeFileSync(join(artifactDirectory, "CHAIN-REQ20260008.md"),
     "# 已确认跨仓方案\n");
-  state.summary.requirement_graph = {
-    stage: "analysis",
+  writeFileSync(join(artifactDirectory, "requirement-graph.json"), JSON.stringify({
+    repository_assessments: [
+      { name: "merge-a", url: repoA, outcome: "change_required", reason: "A" },
+      { name: "merge-b", url: repoB, outcome: "change_required", reason: "B" },
+      { name: "merge-c", url: repoC, outcome: "change_required", reason: "C" },
+    ],
     repositories: [
-      { id: "repo-1", name: "merge-a", url: repoA, responsibility: "A" },
-      { id: "repo-2", name: "merge-b", url: repoB, responsibility: "B" },
-      { id: "repo-3", name: "merge-c", url: repoC, responsibility: "C" },
+      { id: "repo-1", name: "merge-a", url: repoA, responsibility: "A",
+        scope: { name: "A 模块", paths: ["src/a/"] } },
+      { id: "repo-2", name: "merge-b", url: repoB, responsibility: "B",
+        scope: { name: "B 模块", paths: ["src/b/"] } },
+      { id: "repo-3", name: "merge-c", url: repoC, responsibility: "C",
+        scope: { name: "C 模块", paths: ["src/c/"] } },
     ],
     dependencies: [],
-  };
+  }));
   const waiting = state.humanGate.createWaiting({
     taskId: parent.id,
     step: "requirement-analysis",

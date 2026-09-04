@@ -88,6 +88,8 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
   const ticket = "REQ2026090301";
   const artifactDir = join(".mae-flow-work", ticket);
   const graphJson = JSON.stringify({
+    repository_assessments: [{ name: "svc-core", url: repo,
+      outcome: "change_required", reason: "契约和过滤模块需要分别交付" }],
     repositories: [
       { id: "unit-contract", name: "svc-core", url: repo,
         responsibility: "接口契约骨架,整体编译得过",

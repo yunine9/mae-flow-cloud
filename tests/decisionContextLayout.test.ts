@@ -169,8 +169,12 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.match(card, /className="chain-decision-facts"/);
   assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
     "阶段数和左侧图共用同一个拓扑函数");
-  assert.match(card, /确认并生成 \$\{task\.requirement_graph\?\.repositories\.length \?\? 0\} 个子任务/,
-    "按钮要说清楚会生成几个子任务");
+  assert.match(card, /确认并创建 \$\{task\.requirement_graph!\.repositories\.length\} 个模块任务/,
+    "按钮要说清楚会按模块生成几个任务");
+  assert.match(card, /模块拆分与依赖图尚未就绪/,
+    "真实机读图未就绪时不能把候选仓拿来确认");
+  assert.match(card, /确认分析结论并结束/,
+    "全部候选仓无需修改时不能制造空任务");
   assert.match(card, /<details className="waiting-context-details">/);
 
   assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
