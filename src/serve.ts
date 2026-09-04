@@ -872,6 +872,10 @@ async function main(): Promise<void> {
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "5"),
+    // 环境预热与需求侧同条件启用(host + 统一任务容器):拉仓收口进
+    // analyze 时后台编译基线、焐热分仓缓存,修复阶段少一次全量冷启。
+    // fail-open 旁路,缺席(测试/无隔离形态)不预热,行为照旧。
+    ...(host && isolateImage ? { warmup: { enabled: true } } : {}),
     ...(isolateImage
       ? {
           isolation: {

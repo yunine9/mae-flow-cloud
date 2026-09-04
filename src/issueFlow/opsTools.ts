@@ -32,6 +32,12 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import {
+  backstopTimeoutSeconds,
+  shellQuote,
+  timeoutPrefix,
+  TIMEOUT_EXIT_CODE,
+} from "../containerTimeout.ts";
 
 export interface OpsFetchLogsRequest {
   hosts: string[];
@@ -125,15 +131,9 @@ function tail(text: string, limit = 2_500): string {
   return text.length > limit ? `…${text.slice(-limit)}` : text;
 }
 
-/** 容器内 timeout 发出 TERM 后等 KILL 的宽限(秒)。 */
-const IN_CONTAINER_KILL_AFTER_S = 30;
-/** TaskContainer.exec 兜底超时的追加余量:常规超时必须先在容器内
- * 了结工具进程,销毁容器只是 timeout 自身失效时的保险——兜底必须
- * 赛输容器内 timeout,否则就退化回"超时连坐容器"。 */
-const BACKSTOP_MARGIN_MS = 60_000;
-/** GNU coreutils timeout 的约定超时退出码:到点 TERM 与 kill-after 后
- * KILL 两种了结方式都落在这个码上。 */
-const TIMEOUT_EXIT_CODE = 124;
+// 容器内超时机制已抽到共享模块(2026-09-04):AI bash 路径跟进同款
+// 语义,常量与拼装收拢到 src/containerTimeout.ts,这里只消费。
+
 /** 成功哨兵:退出码之外,以工具自己的输出作"活真干完了"的唯一证据。
  * 2026-09-02 拍板把哨兵收拢到这一处——调用方的成功判定和 runInContainer
  * 的超时守卫共用同一份真相,免得两处正则各写一份、日后各自漂移。 */
@@ -171,15 +171,12 @@ async function runInContainer(
   workspace: string,
   sentinel: RegExp,
 ): Promise<RunResult> {
-  // shell-escape:二进制路径和参数都用单引号包,内部单引号转义。
-  const safeQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   const command = [
-    "timeout", `--kill-after=${IN_CONTAINER_KILL_AFTER_S}`,
-    String(Math.ceil(timeoutMs / 1000)),
-    safeQuote(binary), ...args.map(safeQuote),
+    ...timeoutPrefix(timeoutMs / 1000),
+    shellQuote(binary), ...args.map(shellQuote),
   ].join(" ");
   const result = await containerExec.exec(command, workspace, {
-    timeout: Math.floor((timeoutMs + BACKSTOP_MARGIN_MS) / 1000),
+    timeout: backstopTimeoutSeconds(timeoutMs / 1000),
     privilegedEnv,
   });
   if (result.exitCode === TIMEOUT_EXIT_CODE

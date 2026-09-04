@@ -104,6 +104,14 @@ import {
 import { readBusinessModule } from "../businessModuleLibrary.ts";
 import { type ModelsSettings } from "../settings.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
+import { createContainerBashOperations } from "./containerBash.ts";
+import {
+  issueWarmupMission,
+  type IssueWarmupOutcome,
+  type IssueWarmupReceipt,
+  type IssueWarmupRunner,
+} from "./warmup.ts";
+import { parseWarmupReport } from "../warmupAgent.ts";
 import {
   DtsGatewayUnconfiguredError,
   IssueControlError,
@@ -492,6 +500,16 @@ export interface IssueFlowOptions {
    * /issues/<id>,与需求侧 /work/<id> 同一地位。 */
   linkBase?: string;
   isolation?: IssueIsolation;
+  /** 环境预热编译(需求侧 warmupAgent 的问题流移植,2026-09-04):
+   * 拉仓完成后于同一容器另起专职会话编译基线、焐热分仓缓存、沉淀
+   * build-notes。fail-open 旁路,失败绝不打断主流程。缺席=关闭
+   * (测试形态零意外会话);正式接线在 serve 层与需求侧同条件
+   * (host + isolateImage)。runner 供测试注入,生产缺席走原生
+   * CloudSession 执行器。 */
+  warmup?: {
+    enabled?: boolean;
+    runner?: IssueWarmupRunner;
+  };
   /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
    * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
   ownershipRuntime?: ContainerOwnershipRuntime;
@@ -513,6 +531,10 @@ interface LiveIssue {
   driver?: CloudSession;
   container?: TaskContainer;
   toolContext?: IssueToolContext;
+  /** 环境预热在跑的内存闸:预热会话与主会话共享容器,重复点火会
+   * 叠加编译负载;重启后丢内存态没关系,收据(state.warmup)兜底
+   * 幂等。 */
+  warmupActive?: boolean;
   /** 重启续跑的待递话:恢复路径把会话重新入队时放上平台通知,泵点火
    * 时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
   resumeMessage?: string;
@@ -2026,6 +2048,171 @@ export class IssueFlowService {
     this.stageOpsBinaries(live);
   }
 
+  /** 预热会话墙钟预算:与需求侧 attemptTimeoutMs 缺省同款。 */
+  private static readonly WARMUP_BUDGET_MS = 25 * 60_000;
+
+  /** 环境预热点火(2026-09-04,需求侧 startBaselineWarmup 的问题流
+   * 移植)。complete_stage 推进进 analyze 时由工具层调用,与主 Agent
+   * 的分析并行。守卫全 fail-open:开关缺席、无隔离、已在跑、收过
+   * 收据、容器不在场,任何一条不满足就静默跳过——预热是旁路,不是
+   * 流程依赖。幂等:收据在 state(重启/重走 analyze 都不再重跑)。 */
+  private startBaselineWarmup(live: LiveIssue): void {
+    const configured = this.options.warmup;
+    if (!configured || configured.enabled === false) return;
+    // 原生路径要真容器;测试注入 runner 时放行。
+    if (!configured.runner && !this.options.isolation) return;
+    if (live.warmupActive) return;
+    if (live.state.warmup?.finished_at) return;
+    if (!live.container && !configured.runner) return;
+    live.warmupActive = true;
+    const budgetMs = IssueFlowService.WARMUP_BUDGET_MS;
+    this.log(`[issue-warmup] ${live.id} 环境预热开跑(预算 `
+      + `${Math.round(budgetMs / 60_000)} 分钟)`);
+    void this.runWarmupSession(live, budgetMs)
+      .catch((error) => this.log(`[issue-warmup] ${live.id} 环境预热异常`
+        + `(fail-open,流程照走): ${String(error)}`))
+      .finally(() => { live.warmupActive = false; });
+  }
+
+  /** 预热原生执行器:任务容器里的独立 Pi 会话。与主会话共享容器但
+   * 不共享会话;此刻主 Agent 在分析(只读为主),编译负载可接受
+   * (2026-08-26 拍板"开始就爆红是好事"的同款取舍)。 */
+  private async runWarmupSession(
+    live: LiveIssue,
+    budgetMs: number,
+  ): Promise<void> {
+    const startedAt = new Date().toISOString();
+    const settle = (receipt: IssueWarmupReceipt) => {
+      // 会话已被取消/归档换新时,旧收据不覆盖新现实。
+      if (this.live.get(live.id) !== live) return;
+      live.state.warmup = receipt;
+      saveState(live.root, live.state);
+      this.log(`[issue-warmup] ${live.id} 环境预热收口: ${receipt.status}`
+        + (receipt.detail ? ` — ${receipt.detail.slice(0, 120)}` : ""));
+    };
+    const writeRunning = () => {
+      if (this.live.get(live.id) !== live) return;
+      live.state.warmup = { status: "running", started_at: startedAt };
+      saveState(live.root, live.state);
+    };
+    const finish = (
+      status: IssueWarmupReceipt["status"],
+      detail?: string,
+      build_command?: string,
+    ) => {
+      settle({
+        status,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        ...(detail ? { detail: detail.slice(0, 600) } : {}),
+        ...(build_command ? { build_command } : {}),
+      });
+    };
+    writeRunning();
+    let outcome: IssueWarmupOutcome;
+    try {
+      outcome = await (this.options.warmup?.runner
+        ? this.options.warmup.runner({ workspace: live.root })
+        : this.runCloudWarmupAgent(live, budgetMs));
+    } catch (error) {
+      // 执行器自身异常也是基建事实:如实收口,不留 running 僵收据。
+      outcome = {
+        status: "infrastructure_failure",
+        message: String(error instanceof Error ? error.message : error)
+          .slice(0, 300),
+      };
+    }
+    finish(outcome.status, outcome.message, outcome.build_command);
+  }
+
+  /** 预热会话执行器(需求侧 runCloudWarmupAgent 的简化移植):独立
+   * CloudSession,同款 <warmup-result> 报告协议,预算到点 abort。 */
+  private async runCloudWarmupAgent(
+    live: LiveIssue,
+    budgetMs: number,
+  ): Promise<IssueWarmupOutcome> {
+    const runRoot = join(live.root, "warmup");
+    // agentDir 与主会话共用顶层 pi-agent(需求侧同款):密钥目录的闸
+    // 只认工作区顶层路径段(HOST_SECRET_DIRS),埋进 warmup/ 子目录
+    // 等于把 models.json 的网关密钥暴露给预热会话。
+    const agentDir = join(live.root, "pi-agent");
+    mkdirSync(agentDir, { recursive: true });
+    // build-notes 目录宿主预建,预热专员只写放行的那个文件。
+    mkdirSync(join(live.root, ".mae-flow-work"), { recursive: true });
+    const model = this.modelChoice();
+    writeFileSync(join(agentDir, "models.json"),
+      JSON.stringify(model.json), { mode: 0o600 });
+    const driver = await CloudSession.create({
+      taskId: `${live.id}:warmup`,
+      workspace: live.root,
+      agentDir,
+      provider: model.provider,
+      model: model.model,
+      eventLog: new EventLog(join(runRoot, "events.jsonl")),
+      transcript: new TranscriptStore(join(runRoot, "transcript.jsonl"), "main"),
+      // 与主会话同一份可达边界:台账文件与只读投影目录同罪。
+      gate: new GateService({
+        workspace: live.root,
+        cwd: live.root,
+        extraLedgerFiles: ["issue.json", "issue.json.tmp"],
+        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills",
+          ".mae-flow-work/business-modules"],
+        failClosed: false,
+        log: (message) => this.log(`[issue-warmup-gate] ${message}`),
+      }),
+      humanGate: live.humanGate,
+      allowHumanQuestions: false,
+      allowSubagents: false,
+      bashOperations: this.options.isolation
+        ? // forwardAbort=false:预算到点的 abort 是系统发起,不得经
+          // Abort 语义销毁与主会话共享的容器(用户打断走主会话,不变)。
+          createContainerBashOperations(() => live.container,
+            { forwardAbort: false })
+        : undefined,
+      sessionId: "warmup",
+      currentStep: () => "环境预热编译",
+      compactAnchor: () => `问题会话「${live.state.title}」环境预热编译`,
+      log: (message) => this.log(`[issue-warmup] ${message}`),
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void driver.abort().catch(() => undefined);
+    }, budgetMs);
+    timer.unref?.();
+    try {
+      let outcome = await driver.start(
+        issueWarmupMission(Math.round(budgetMs / 60_000)));
+      for (let correction = 0; correction < 2; correction += 1) {
+        if (timedOut) {
+          return {
+            status: "infrastructure_failure",
+            message: `环境预热超过 ${Math.ceil(budgetMs / 60_000)} `
+              + "分钟预算,已安全停止;不代表基线编译失败",
+          };
+        }
+        if (outcome.status === "session_ended") {
+          return {
+            status: "infrastructure_failure",
+            message: outcome.detail ?? outcome.reason ?? "预热会话异常结束",
+          };
+        }
+        const report = parseWarmupReport(driver.finalReply());
+        if (report) return report;
+        // 报告缺失只是格式问题,给一次补交机会,别把整轮预热判死。
+        outcome = await driver.continueWith(
+          "预热尚未收口:请按任务说明输出单行 JSON 的 <warmup-result> 结构。");
+      }
+      return {
+        status: "infrastructure_failure",
+        message: "预热会话未产出合法的 <warmup-result> 报告",
+      };
+    } finally {
+      clearTimeout(timer);
+      driver.dispose();
+    }
+  }
+
   private async openDriver(live: LiveIssue): Promise<CloudSession> {
     if (live.driver) return live.driver;
     await this.ensureContainer(live);
@@ -2076,6 +2263,9 @@ export class IssueFlowService {
       // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
       // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。
       raiseSkillSelection: () => this.raiseSkillSelectionGate(live),
+      // 环境预热(2026-09-04):complete_stage 推进进 analyze 时点火,
+      // 与主 Agent 的分析并行(fail-open,见 startBaselineWarmup)。
+      startWarmup: () => this.startBaselineWarmup(live),
       // 业务知识资产定格(ADR-0012):进 analyze 时按绑定模块定格资产
       // 库知识并落台账;不分介入档,缺席静默(见 freezeBusinessKnowledge)。
       freezeBusinessKnowledge: () => this.freezeBusinessKnowledge(live),
@@ -2096,14 +2286,9 @@ export class IssueFlowService {
     const isolation = this.options.isolation;
     const bashOperations: import("@earendil-works/pi-coding-agent").BashOperations | undefined =
       isolation
-        ? {
-            exec: (command, dir, execOptions) => {
-              if (!live.container) {
-                throw new Error("会话容器不在场,拒绝执行(回合开始前应已拉起)");
-              }
-              return live.container.exec(command, dir, execOptions);
-            },
-          }
+        ? // 超时语义收窄的容器适配(2026-09-04):容器内 timeout 了结命令,
+          // 不再连坐销毁容器;动态取当前实例,重建后自动跟上。
+          createContainerBashOperations(() => live.container)
         : undefined;
     const sessionOptions: import("../sessionDriver.ts").CloudSessionOptions = {
       taskId: live.id,

@@ -30,6 +30,38 @@ ops 工具超时语义 2026-09-02 收窄:命令包进容器内 coreutils
 issueFlowService.test.ts` 的 fake-exec 契约测试),未验真容器内
 TERM→KILL 链(真容器用例未写)。
 
+AI bash 超时语义 2026-09-04 跟进同款收窄(此前透传 exec 的销毁式
+超时,一次 npm install 超时掀掉会话容器,自愈重建又给模型的无知
+重试添燃料——2940 次循环 1.5 小时的实锤):bash 命令包进容器内
+`timeout`(shell 行整体进内层 `sh -c`,timeout 不解析 shell),超时
+只了结命令进程组、容器不动,124 附一行可行动说明(重试传更大
+timeout)。Abort 语义不变(用户打断回合仍销毁容器)。机制本体抽在
+`src/containerTimeout.ts`,ops 与 bash 共用一份真相;契约测试在
+`tests/issueFlowContainerBash.test.ts`。
+
+问题流环境预热 2026-09-04 接入(需求侧 warmupAgent 的问题流移植):
+拉仓收口进 analyze 时,同一任务容器里另起专职会话编译基线、焐热
+分仓缓存、沉淀 `.mae-flow-work/build-notes.md`(修复阶段简报提示
+开改前先读)。fail-open 旁路:预热失败落 infrastructure_failure
+收据(`issue.json` 的 `warmup` 字段,不上 wire),主流程照走;与
+需求侧同条件启用(host + isolateImage),测试形态缺席即关。
+
+- **2026-09-04 AI bash 超时收窄**:已验 = 包装形状/兜底赛输时序/
+  124 说明/signal 剥离(fake 契约测试,`tests/issueFlowContainerBash.test.ts`);
+  未验 = 真容器内 TERM→KILL 链(与 ops 同款沿 coreutils 语义推定,
+  真 Docker 用例未补)。模型不传 timeout 的命令没有任何超时(Pi 契约
+  "no default timeout" 原样保留),失控命令只能靠用户 Abort 了结。
+- **2026-09-04 问题流环境预热**:已验 = 点火时机/幂等收据/fail-open/
+  abort 不销毁共享容器(fake runner 与契约测试);未验 = 真容器内的
+  预热会话端到端(依赖模型真实跑编译,待现场首单验证)。预热预算
+  (25 分钟)到点只收预热会话,不销毁任务容器——signal 已在预热
+  适配层剥离;超预算的单条命令按自己的容器内 timeout 或自然完成
+  收尾,收据如实记 infrastructure_failure。
+- **2026-09-04 GateService 嵌套账本目录修复**:此前带斜杠的
+  extraLedgerDirs 条目从未匹配,只读投影(.mae-flow-work/host-skills、
+  business-modules)实际可写。已修为整体前缀匹配并用例钉死;若有
+  Agent 曾依赖该洞写投影文件,升级后会被拒。
+
 ## 三条铁的边界
 
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在

@@ -3624,3 +3624,134 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
     await platform.stop();
   }
 });
+
+test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上 wire", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-warmup-"));
+  const origin = bareOrigin(dataDir);
+  const warmupWorkspaces: string[] = [];
+  let releaseWarmup: () => void = () => {};
+  const warmupStarted = new Promise<void>((resolve) => {
+    releaseWarmup = resolve;
+  });
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
+    { text: "结论是问题,已提交等用户确认。" },
+  ];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    warmup: {
+      enabled: true,
+      runner: async (request) => {
+        warmupWorkspaces.push(request.workspace);
+        releaseWarmup();
+        return {
+          status: "passed", message: "基线全绿", build_command: "mvn compile",
+        };
+      },
+    },
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "列表导出超时", repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    // complete_stage 推进进 analyze 时点火:预热与主 Agent 并行,主流程
+    // 不等它——结论闸照常升起。
+    const gate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "结论确认闸");
+    await warmupStarted;
+    assert.equal(warmupWorkspaces.length, 1, "点火恰好一次");
+    assert.equal(warmupWorkspaces[0],
+      join(dataDir, "issues", created.id), "workspace=会话工作区根");
+    const receipt = await until(() => {
+      const state = JSON.parse(readFileSync(
+        join(dataDir, "issues", created.id, "issue.json"), "utf-8")) as {
+        warmup?: { status: string; finished_at?: string; detail?: string;
+          build_command?: string };
+      };
+      return state.warmup?.finished_at ? state.warmup : undefined;
+    }, "预热收据");
+    assert.equal(receipt.status, "passed");
+    assert.equal(receipt.detail, "基线全绿");
+    assert.equal(receipt.build_command, "mvn compile");
+    // 收据是服务端流程状态:不上 wire(前端镜像没有这个字段)。
+    assert.equal("warmup" in service.get(created.id), false);
+    // 幂等:收过收据不再重跑(闸作答推进后计数不变)。
+    service.answer(created.id, {
+      state_version: gate.gate!.state_version, code: "issue",
+    });
+    await until(() => service.get(created.id).status === "suspended"
+      ? service.get(created.id) : undefined, "挂起");
+    assert.equal(warmupWorkspaces.length, 1, "收过收据不重跑");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("环境预热 fail-open:执行器异常落基建收据,主流程照走", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-warmup-fail-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示。\\n## 问题根因\\n是问题。\\n## 证据链\\n日志。\\n## 置信度\\n高。\\n## 修改方案\\n修。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "是问题" } } },
+    { text: "结论是问题。" },
+  ];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    warmup: {
+      enabled: true,
+      runner: async () => { throw new Error("预热容器炸了"); },
+    },
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "导出超时", repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    const gate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "结论确认闸(fail-open:预热异常不拦主流程)");
+    const receipt = await until(() => {
+      const state = JSON.parse(readFileSync(
+        join(dataDir, "issues", created.id, "issue.json"), "utf-8")) as {
+        warmup?: { status: string; finished_at?: string; detail?: string };
+      };
+      return state.warmup?.finished_at ? state.warmup : undefined;
+    }, "预热收据(不留 running 僵账)");
+    assert.equal(receipt.status, "infrastructure_failure");
+    assert.match(receipt.detail ?? "", /预热容器炸了/);
+    service.answer(created.id, {
+      state_version: gate.gate!.state_version, code: "issue",
+    });
+    await until(() => service.get(created.id).status === "suspended"
+      ? service.get(created.id) : undefined, "挂起");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
