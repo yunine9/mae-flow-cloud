@@ -171,7 +171,7 @@ test("prepush evidence: 只认真跑过且成功;顺序只出事实不裁决", (
   ];
   assert.equal(verifyPrePushEvidence(events, PASSED), "");
   assert.deepEqual(prePushEvidenceFacts(events, PASSED),
-    { changed_after_run: [] });
+    { changed_after_run: [], command_mismatch: [] });
 
   // 2026-09-03 用户拍板:编译之后又改了代码,不再判失效——真裁判是绑 SHA
   // 的流水线;但事实要写清给人看:改了哪些会进交付的文件。
@@ -192,7 +192,7 @@ test("prepush evidence: 只认真跑过且成功;顺序只出事实不裁决", (
   assert.equal(verifyPrePushEvidence(modifiedAfterCompile, PASSED), "",
     "顺序不再是硬约束");
   assert.deepEqual(prePushEvidenceFacts(modifiedAfterCompile, PASSED),
-    { changed_after_run: ["src/a.ts", "src/b.ts"] },
+    { changed_after_run: ["src/a.ts", "src/b.ts"], command_mismatch: [] },
     "编译成功(事件 3)之后改的 a.ts、UT 之后改的 b.ts 都列;平台笔记不列");
   assert.equal(isPlatformWorkPath(".mae-flow-work/bash-logs/1.log"), true);
   assert.equal(isPlatformWorkPath("src/.mae-flow-workshop/a.ts"), false,
@@ -471,6 +471,63 @@ test("prepush evidence: 只把相同工作区内容封装成 commit 不作废已
   assert.equal(verifyPrePushEvidence(events, PASSED), "");
 });
 
+test("prepush evidence: 重定向/引号/上报说明不再判死(内网 task-38 实锤)", () => {
+  // task-38:C++ 仓真改真跑真绿,只因三处形状差异被判"没跑过"。
+  // 实跑带 `> /dev/null 2>&1`、变量加引号;上报把三条 UT 合成一条加中文说明。
+  const report: PrePushAgentReport = {
+    status: "passed",
+    compile: {
+      command: "source build/svc_profile.sh && cd target/build && make -j16",
+      status: "passed",
+    },
+    unit_test: {
+      command: "source build/svc_profile.sh && cmake -E env"
+        + " LD_LIBRARY_PATH=$LD_LIBRARY_PATH /opt/x/DllPlugInTester -c --case all"
+        + " /opt/x/libTestCase_AdnSvr_CommUtils.so"
+        + "（并同口径跑 libTestCase_Probe_ADNService.so 与"
+        + " libTestCase_AdnSvr_PnpTaskDeployApiMgr.so）",
+      status: "passed",
+    },
+    summary: "编译与定向 UT 通过",
+  };
+  const ran = (id: number, callId: string, command: string) => [
+    event(id, "tool_requested", { call_id: callId, name: "Bash", input: { command } }),
+    event(id + 1, "tool_finished", { call_id: callId, name: "Bash", is_error: false }),
+  ];
+  const events = [
+    ...ran(1, "make",
+      "source build/svc_profile.sh > /dev/null 2>&1 && cd target/build"
+      + " && make -j16 > /dev/null 2>&1"),
+    ...ran(3, "ut1",
+      'source build/svc_profile.sh > /dev/null 2>&1 && cmake -E env'
+      + ' LD_LIBRARY_PATH="$LD_LIBRARY_PATH" /opt/x/DllPlugInTester -c --case all'
+      + ' /opt/x/libTestCase_AdnSvr_CommUtils.so'),
+  ];
+  assert.equal(verifyPrePushEvidence(events, report), "",
+    "重定向、引号与上报说明都是形状差异,不该判成没跑过");
+  assert.deepEqual(prePushEvidenceFacts(events, report).command_mismatch, [],
+    "形状归一化之后就是对上了,收据不该再报不一致");
+});
+
+test("prepush evidence: 命令对不上但真跑过重型构建时放行,把不一致写进收据", () => {
+  // 用户 2026-09-04 拍板:能松点就松点,让用户决策。这道闸只防凭空报 PASS。
+  const events = [
+    event(1, "tool_requested", {
+      call_id: "build", name: "Bash",
+      input: { command: "cd /x && mvn -q -pl order -Dtest=OrderTest test" },
+    }),
+    event(2, "tool_finished", { call_id: "build", name: "Bash", is_error: false }),
+  ];
+  assert.equal(verifyPrePushEvidence(events, PASSED), "",
+    "真跑过重型构建就放行,不再因为上报得不一样判死");
+  const facts = prePushEvidenceFacts(events, PASSED);
+  assert.deepEqual(facts.command_mismatch,
+    [PASSED.compile.command, PASSED.unit_test.command],
+    "对不上的命令原样写进收据");
+  assert.deepEqual(facts.changed_after_run, [],
+    "没有基准点时不谎称某文件在成功之后改过");
+});
+
 test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得住", () => {
   const events = [
     event(1, "tool_requested", {
@@ -478,8 +535,10 @@ test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得�
     }),
     event(2, "tool_finished", { call_id: "ls", name: "Bash", is_error: false }),
   ];
+  // ls 不是重型构建命令,降级放行不适用:凭空报 PASS 仍然拦得住。
   const error = verifyPrePushEvidence(events, PASSED);
   assert.match(error, /没有在本会话真实成功执行/);
+  assert.match(error, /没有任何重型构建命令成功跑过/);
   assert.match(error, /mvn -q -DskipTests package/);
   assert.match(error, /mvn -q test/);
   // 空命令不能因为"空串是任何串的子串"而白捡一张通行证。

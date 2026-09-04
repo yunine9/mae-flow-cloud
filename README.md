@@ -1479,3 +1479,33 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   具体停在内核哪一步没看到现场,判断基于 hf_open/delivery_review 都带
   approval_subject 这一事实;真会话下自动交卷后 Build-Fix→推送卡这一段
   沿用既有路径没有重跑。
+- Build-Fix 证据比对再降一级(2026-09-04 用户拍板"能松点就松点,让用户
+  决策";内网 task-38 实锤):C++ 仓真改真跑真绿,却被判"命令没有在本会话
+  真实成功执行"。根因不是"严"是**匹配方向反了**——`covers` 要求上报命令
+  是实跑命令的子串,而使命明说不必带 cd 前缀,等于允许整理简写;模型于是
+  把三条 UT 合成一条加中文说明,实跑又带 `> /dev/null 2>&1` 和变量引号。
+  用真实命令复现:三处形状差异**任一处单独出现就足以判死**。三层改:
+  ①`normalizeCommand` 剥噪声(末尾括号说明、`; echo XXX=$?` 尾巴、重定向、
+  引号;`$(` 命令替换不碰);②整条对不上时按 `&&`/`;` 拆片段,要求每个
+  真正干活的片段都能找到(cd/source/export 这类前置不单独算证据),接住
+  "多条合成一条";③仍对不上但本会话确实成功跑过重型构建命令(
+  `isPrePushBuildCommand`)就**放行**,把不一致写进收据的
+  `command_mismatch`,推送确认时人自己判。这道闸真正要防的只有"凭空报
+  PASS",那种情况下一条重型命令都不会成功跑过,仍然拦得住。命令对不上时
+  `changed_after_run` 返回空——没有基准点就不谎称某文件在成功之后改过。
+  **已验**:prepushAgent 用例(task-38 三处差异形状、降级放行写收据、
+  凭空报 PASS 照样拦)、用 task-38 真实命令直接跑新口径为放行且收据干净;
+  **未验**:内网那单没有重跑验证,判断基于事件流里的命令原文。
+- 反馈批次"还没人处理"与"回执不合格"分开(2026-09-04 内网 task-38 的第二段
+  根因):prepush 校验失败会登记一个 build_fix 反馈批次,12:29 建批、12:48
+  部署重启,Agent 一次都没被拉起来处理过;恢复时读不到 result json 就报
+  "Agent 没有留下本批逐条反馈回执"并停摆等人——可 Agent 压根没机会写。现在
+  `recordActiveFeedbackResult` 区分 ENOENT 与其他读取失败:前者带
+  `FEEDBACK_RESULT_MISSING` 前缀表示"这批尚未被修复会话处理过",
+  `runDeliveryRecovery` 据此**重新派单**(enqueueRepair,清单随使命带上),
+  不再停摆;文件存在但读不动或格式不对仍是"回执不合格",照旧如实停下叫人。
+  Agent 刚跑完一轮却没写的那条路径(settleTurn)不看前缀,仍是自动补交一次。
+  派单后状态转 queued,`recoveryStillNeeded` 不再成立,不会自旋。
+  **已验**:feedbackSourcesReceipt 用真内核跑通(措辞分流、恢复重新派单且
+  使命带清单、不合格照旧停摆);**未验**:内网那单没有重跑,判断基于事件流
+  与 .mae-flow.json 的 active_batch_id。

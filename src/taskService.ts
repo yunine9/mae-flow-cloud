@@ -1898,6 +1898,13 @@ const CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP =
 /** Agent 提议拆分的决定卡:Cloud 自己的步骤,不在内核流程里。人有最后一票
  * ——选「不拆」编码会话原地继续,零成本;选拆才转身成分析单。 */
 const CLOUD_SPLIT_PROPOSAL_STEP = "cloud_split_proposal";
+/** "这批还没人处理"与"回执不合格"是两回事。批次刚登记就被重启/异常打断
+ * 时 Agent 一次都没跑过,回执文件当然不存在——那不该报"Agent 没有留下
+ * 回执"再停摆等人(内网 task-38 实锤:12:29 建 build_fix 批次、12:48 部署
+ * 重启,Agent 从没被拉起来,恢复时直接判停摆)。带这个前缀的原因表示
+ * "尚未处理",恢复路径据此重新派单;Agent 刚跑完一轮却没写的那条路径
+ * 不看前缀,照旧自动补交一次。 */
+const FEEDBACK_RESULT_MISSING = "本批逐条反馈回执尚未落盘";
 const SPLIT_PROPOSAL_ACCEPT = "先分析再拆分";
 const SPLIT_PROPOSAL_DECLINE = "不拆，一个任务干完";
 const REQUIREMENT_ANALYSIS_ACCEPT =
@@ -13658,6 +13665,14 @@ export class TaskService {
             && Date.now() < this.verificationDeadline(task)) {
           this.holdExternalVerification(task, failure);
           this.scheduleDeliveryRecovery(task, epoch);
+        } else if (failure.startsWith(FEEDBACK_RESULT_MISSING)) {
+          // 这批还没人处理过(派单和重启撞上了),不是回执不合格:重新派给
+          // 修复会话,不能拿"Agent 没有留下回执"把任务停在这儿等人。派单后
+          // 状态转 queued,recoveryStillNeeded 不再成立,不会自旋。
+          this.enqueueRepair(task,
+            "本批持续检视反馈还没有被处理过：上一次派单被中断，现场已恢复。"
+            + "请按下面的反馈清单逐条处理，并写出机器可核对的逐条回执。",
+            "反馈批次尚未处理，已重新派给修复会话");
         } else {
           this.markVerificationStalled(task, failure);
         }
@@ -14667,6 +14682,15 @@ export class TaskService {
             ? `。注意:最后一次成功编译/UT 之后还改过 ${describeDirtyPaths(
               facts.changed_after_run)},没有重跑;推送前请自行判断是否需要打回重跑。`
             : "";
+          // 上报命令与实跑对不上时不再判死(用户 2026-09-04 拍板"能松点
+          // 就松点,让用户决策"):本会话确实跑成功过重型构建命令,把不一致
+          // 如实写进收据,推送确认时人自己看要不要打回。
+          const mismatchNote = facts.command_mismatch.length
+            ? `。注意:Agent 上报的命令(${facts.command_mismatch
+              .map((command) => command.slice(0, 120)).join("；")})`
+              + "与本会话实际执行记录对不上;本会话确实成功跑过重型构建命令,"
+              + "但无法逐条核对上报的就是它们。推送前请自行判断。"
+            : "";
           // 未提交文件只提示不拦截(用户拍板"不能卡死"):push 只传
           // HEAD,它们进不了交付;把清单如实写进收据,让人看见万一
           // 混在其中的漏提交业务改动。构建现场保留即可,不能再为了
@@ -14681,7 +14705,7 @@ export class TaskService {
           return withExecution({
             status: "passed",
             sha: finalSha,
-            message: report.summary + staleNote + leftoverNote,
+            message: report.summary + staleNote + mismatchNote + leftoverNote,
             report,
           });
         }
@@ -17436,7 +17460,13 @@ export class TaskService {
       try {
         raw = JSON.parse(readFileSync(path, "utf-8"));
       } catch (error) {
-        return `Agent 没有留下本批逐条反馈回执（${basename(path)}）：${String(error)}`;
+        // 文件压根不存在 = 这批还没人处理;存在但读不动/不是 JSON = 回执
+        // 确实不合格。两者的出路不同,措辞也不能一样。
+        return (error as NodeJS.ErrnoException)?.code === "ENOENT"
+          ? `${FEEDBACK_RESULT_MISSING}（${basename(path)}）：`
+            + "本批反馈尚未被修复会话处理过"
+          : `Agent 留下的本批逐条反馈回执无法读取（${basename(path)}）：`
+            + String(error);
       }
       if (raw?.schema !== "mae-flow-feedback-results/1"
           || raw?.batch_id !== batchId || !Array.isArray(raw?.results)) {

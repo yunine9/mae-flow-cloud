@@ -4,6 +4,7 @@ import type {
   GateDecision,
 } from "./gateService.ts";
 import {
+  isPrePushBuildCommand,
   prePushBuildGuidance,
   type PrePushExecutionBudget,
 } from "./prepushBuildPlaybook.ts";
@@ -454,14 +455,27 @@ export function verifyPrePushEvidence(
     return "编译与 UT 必须同时通过";
   }
   const successful = successfulBashRuns(events).map((run) => run.command);
-  const missing = [report.compile.command, report.unit_test.command]
+  if (!unmatchedReportedCommands(successful, report).length) return "";
+  // 2026-09-04 用户拍板再降一级:上报命令与实跑对不上,但本会话确实成功
+  // 跑过重型构建命令的,放行,把"对不上"写进收据让人在推送确认时自己判。
+  // 内网 task-38 实锤:模型真改真跑真绿,只因实跑带了 `> /dev/null 2>&1`、
+  // 变量加了引号、上报把三条 UT 合成一条加了中文说明,就被判"没跑过"。
+  // 使命本来就允许简写(不必带 cd 前缀),等于明示可以整理——一整理就挂,
+  // 是设计与使命自相矛盾,不是模型走神。这道闸真正要防的只有"凭空报
+  // PASS",那种情况下一条重型命令都不会成功跑过。
+  if (successful.some(isPrePushBuildCommand)) return "";
+  return "报告中的编译/UT 命令没有在本会话真实成功执行，本会话也没有任何"
+    + "重型构建命令成功跑过（编译与 UT 必须真的执行，不能只凭结论收口）: "
+    + unmatchedReportedCommands(successful, report).join("；");
+}
+
+/** 上报的编译/UT 命令里,哪几条在本会话的成功执行记录里找不到。 */
+function unmatchedReportedCommands(
+  successful: string[],
+  report: PrePushAgentReport,
+): string[] {
+  return [report.compile.command, report.unit_test.command]
     .filter((command) => !covers(successful, command));
-  if (!missing.length) return "";
-  // 措辞要让人分得清"没跑"和"跑了但报得不一样"(2026-08-21 整链试跑实锤:
-  // 模型真跑了、真绿了,却被判"没有真实成功执行",人只能翻 bash 日志)。
-  return "报告中的命令没有在本会话真实成功执行"
-    + "（若确实跑过，请核对上报命令与实际 Bash 调用是否一致）: "
-    + missing.join("；");
 }
 
 /** 事实不裁决:最后一次成功跑过编译/UT 之后,还改过哪些会进交付的文件。
@@ -470,12 +484,17 @@ export function verifyPrePushEvidence(
 export function prePushEvidenceFacts(
   events: SemanticEvent[],
   report: PrePushAgentReport,
-): { changed_after_run: string[] } {
+): { changed_after_run: string[]; command_mismatch: string[] } {
   const runs = successfulBashRuns(events);
+  const command_mismatch = unmatchedReportedCommands(
+    runs.map((run) => run.command), report);
   const lastRunOf = (reported: string) => Math.max(0, ...runs
     .filter((run) => covers([run.command], reported)).map((run) => run.eventId));
   const lastRun = Math.min(
     lastRunOf(report.compile.command), lastRunOf(report.unit_test.command));
+  // 命令对不上就没有"最后一次成功"这个基准点,列什么都是噪声:此时只报
+  // 不一致,不谎称"某某文件在成功之后改过"。
+  if (!lastRun) return { changed_after_run: [], command_mismatch };
   const changed = new Set<string>();
   for (const event of events) {
     if (event.kind !== "tool_requested" || event.eventId <= lastRun) continue;
@@ -484,7 +503,7 @@ export function prePushEvidenceFacts(
     const path = String(payload.input?.path ?? payload.input?.file_path ?? "");
     if (path && !isPlatformWorkPath(path)) changed.add(path);
   }
-  return { changed_after_run: [...changed].sort() };
+  return { changed_after_run: [...changed].sort(), command_mismatch };
 }
 
 /** 本会话里真实成功过的 Bash:请求与完成按 call_id 配对,失败的不算。 */
@@ -515,8 +534,23 @@ function successfulBashRuns(
 
 function covers(bucket: string[], reported: string): boolean {
   const needle = normalizeCommand(reported);
-  return Boolean(needle)
-    && bucket.some((actual) => normalizeCommand(actual).includes(needle));
+  if (!needle) return false;
+  const normalized = bucket.map(normalizeCommand);
+  if (normalized.some((actual) => actual.includes(needle))) return true;
+  // 整条对不上再按片段:模型常把多条命令合成一条上报,也常省掉前置
+  // cd/source。要求每个真正干活的片段都能在某条成功执行里找到——少跑
+  // 一条仍然算不上,只是不再因为拼接方式不同而判死。
+  const segments = commandSegments(reported);
+  return segments.length > 0 && segments.every((segment) =>
+    normalized.some((actual) => actual.includes(segment)));
+}
+
+/** 上报命令里真正干活的片段。cd/source/export 这类前置不单独算证据。 */
+function commandSegments(command: string): string[] {
+  return normalizeCommand(command).split(/&&|\|\||;/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment
+      && !/^(?:cd|source|\.|export|set|unset|umask|pushd|popd)\s/.test(segment));
 }
 
 /**
@@ -534,7 +568,18 @@ function covers(bucket: string[], reported: string): boolean {
  * 闸比一道稍松的闸有害得多。"退出成功"这条硬约束没动。
  */
 function normalizeCommand(command: string): string {
-  return String(command ?? "").replace(/\s+/g, " ").trim();
+  return String(command ?? "")
+    // 上报时补的说明:"…CommUtils.so（并同口径跑 X 与 Y）"。只削末尾,
+    // 命令中间的括号可能是 shell 语法;$( 是命令替换,一律不碰。
+    .replace(/(?<!\$)[（(][^（()）]*[)）]\s*$/, " ")
+    // 退出码回显尾巴:`; echo TEST_EXIT=$?`
+    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ")
+    // 重定向:`> /dev/null`、`>> build.log`、`2>&1`
+    .replace(/\d?>>?\s*\S+/g, " ")
+    // 引号:`LD_LIBRARY_PATH="$X"` 与 `LD_LIBRARY_PATH=$X` 是同一条命令
+    .replace(/["']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function prePushMission(
