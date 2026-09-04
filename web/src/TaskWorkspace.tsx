@@ -50,6 +50,7 @@ import {
   listCommitters,
   listPeople,
   listTaskReviews,
+  putRepositoryAssignees,
   readArtifact,
   readArtifactFileDiff,
   readPushReviewDiff,
@@ -627,6 +628,8 @@ export function TaskWorkspace({
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [repositoryAssignees, setRepositoryAssignees] =
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
+  const [repositoryAssigneeSave, setRepositoryAssigneeSave] =
+    useState<"idle" | "saving" | "saved" | "error">("idle");
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
   const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
@@ -666,6 +669,32 @@ export function TaskWorkspace({
   const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
   const reviewFocusRequest = useRef(0);
+  // 逐次串行落盘，避免用户连续输入单号时较慢的旧请求反过来覆盖新值。
+  // 切走工作台不会取消这条队列，最后一次输入仍会写回服务端。
+  const repositoryAssigneeSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const repositoryAssigneeSaveTask = useRef(task.id);
+
+  function changeRepositoryAssignees(next: RepositoryAssigneeSelection) {
+    const clean = next.error ? next : { ...next, error: undefined };
+    setRepositoryAssignees(clean);
+    if (next.loading) return;
+    const taskId = task.id;
+    setRepositoryAssigneeSave("saving");
+    repositoryAssigneeSaveQueue.current = repositoryAssigneeSaveQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        await putRepositoryAssignees(taskId, clean.assignments, clean.tickets);
+        if (repositoryAssigneeSaveTask.current === taskId) {
+          setRepositoryAssigneeSave("saved");
+        }
+      })
+      .catch((cause) => {
+        if (repositoryAssigneeSaveTask.current !== taskId) return;
+        const message = cause instanceof Error ? cause.message : "分工草稿保存失败";
+        setRepositoryAssigneeSave("error");
+        setRepositoryAssignees((current) => ({ ...current, error: message }));
+      });
+  }
 
   function selectWorkspaceView(next: WorkspaceView) {
     if (next === workspaceView) return;
@@ -702,6 +731,8 @@ export function TaskWorkspace({
     setReviewPanelOpen(false);
     setReviewFocus(undefined);
     setExecutionView("events");
+    repositoryAssigneeSaveTask.current = task.id;
+    setRepositoryAssigneeSave("idle");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setRevisionDiff(null);
     setDeliverySelection(undefined);
@@ -1941,7 +1972,8 @@ export function TaskWorkspace({
                       defaultAssignee={task.luban_account}
                       defaultTicket={task.ticket}
                       selection={repositoryAssignees}
-                      onSelectionChange={setRepositoryAssignees}
+                      onSelectionChange={changeRepositoryAssignees}
+                      saveState={repositoryAssigneeSave}
                     />
                 )}
               </>
@@ -2219,7 +2251,8 @@ export function TaskWorkspace({
                       defaultAssignee={task.luban_account}
                       defaultTicket={task.ticket}
                       selection={repositoryAssignees}
-                      onSelectionChange={setRepositoryAssignees}
+                      onSelectionChange={changeRepositoryAssignees}
+                      saveState={repositoryAssigneeSave}
                     />
                   )}
                   <AttachedNotes items={unresolvedNotes} onLocate={locate} />

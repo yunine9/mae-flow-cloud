@@ -12,7 +12,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -21,7 +27,10 @@ import { LocalAuth } from "../src/auth.ts";
 import { Notifier } from "../src/notifier.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import {
+  TaskService,
+  createRequirementAnalysisGateContract,
+} from "../src/taskService.ts";
 import { EventLog } from "../src/semanticEvents.ts";
 import { createTaskServer } from "../src/server.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
@@ -622,6 +631,16 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
   });
   state.cwd = root;
+  assert.doesNotThrow(() => service.saveRequirementRepositoryAssignmentDraft(
+    parent.id, { api: "alice" }, { api: "REQ-G3-API" }));
+  assert.equal(service.get(parent.id)!.requirement_graph?.repositories
+    .find((repository) => repository.id === "api")?.assignee, "alice",
+  "分工草稿允许只保存一个单元，不强迫用户填完后才能切走");
+  const persistedDraft = JSON.parse(readFileSync(
+    join(dataDir, parent.id, "task.json"), "utf-8"));
+  assert.equal(persistedDraft.summary.requirement_graph.repositories
+    .find((repository: { id: string }) => repository.id === "api").assignee,
+  "alice", "责任人草稿必须进入服务端任务账，而不是只放浏览器内存");
   assert.throws(() => service.setRequirementCollaborators(parent.id,
     ["alice", "charlie"]), /charlie.*CodeHub Token/,
   "个人设置不完整的人不能受邀参与主任务");
@@ -788,6 +807,51 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
       GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
   execFileSync("git", ["-C", normal, "push", "-q", "origin",
     "master:deliver-check"], { stdio: "pipe" });
+});
+
+test("需求分析与内核物理隔离，旧的错误配置待办可从原现场自愈", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-analysis-isolation-"));
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/kernel" },
+  });
+  const parent = service.create("分析跨仓改动", {
+    repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
+    account: "owner",
+  });
+  const state = (service as any).tasks.get(parent.id);
+  const root = join(dataDir, parent.id, "repositories");
+  const api = join(root, "1-api");
+  mkdirSync(api, { recursive: true });
+  const leakedState = join(api, ".mae-flow.json");
+  writeFileSync(leakedState, JSON.stringify({ current: "config_confirm" }));
+  state.cwd = root;
+  const waiting = state.humanGate.createWaiting({
+    taskId: parent.id, step: "需求分析", callId: "wrong-kernel-question",
+    questionInput: { questions: [{ question: "请选择单号", options: ["A"] }] },
+  });
+  state.summary.waiting = waiting;
+  state.summary.status = "waiting_for_human";
+
+  assert.equal((service as any).stalledStep(state), undefined,
+    "分析单永远不能被解释为尚未 init");
+  assert.equal((service as any).recoverMisroutedRequirementAnalysisWaiting(
+    state, waiting), true);
+  assert.equal(state.summary.status, "queued");
+  assert.equal(state.summary.waiting, undefined);
+  assert.equal(existsSync(leakedState), false);
+  assert.match(state.pendingResume.decision, /平台误触发/);
+
+  const artifacts = join(root, ".mae-flow-work", parent.id);
+  mkdirSync(artifacts, { recursive: true });
+  const gate = createRequirementAnalysisGateContract(root, artifacts);
+  assert.equal(gate("Write", join(artifacts, "requirement-graph.json"), {} as any),
+    undefined);
+  assert.equal(gate("Edit", join(api, "src/api.ts"), {} as any)?.action, "deny");
+  assert.equal(gate("Bash", "python /kernel/mae-flow.py init", {} as any)?.action,
+    "deny");
+  assert.equal(gate("Bash", "rg TODO 1-api", {} as any), undefined);
 });
 
 test("前置死透不许无限等:取消→子任务如实 failed;失败→留队说明", async () => {
@@ -1016,6 +1080,11 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
   assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
   assert.match(picker, /chooseAssignee/);
+  assert.match(picker, /已自动保存/);
+  const workspace = readFileSync(join(process.cwd(),
+    "web/src/TaskWorkspace.tsx"), "utf-8");
+  assert.match(workspace, /putRepositoryAssignees/,
+    "逐单元分工必须自动写回服务端，不能只活在 React state 里");
 });
 
 test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {

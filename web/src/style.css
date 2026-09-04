@@ -2210,6 +2210,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
 .repository-assignees > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
 .repository-assignees > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.repository-assignee-save { flex: none; color: var(--muted); font-size: 12px; }
+.repository-assignee-save.saved { color: var(--ok); }
+.repository-assignee-save.error { color: var(--danger); }
 .repository-assignees > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: var(--accent); font-weight: 750; cursor: pointer; }
 .repository-assignees > footer button:disabled { opacity: .45; cursor: not-allowed; }
 .ws-parent-task { width: fit-content; max-width: 100%; margin-top: 4px; padding: 3px 7px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-soft); cursor: pointer; }

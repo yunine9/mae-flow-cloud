@@ -70,7 +70,12 @@ import {
 import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, renderMemoryHits } from "./memoryTools.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
-import { dirname as pathDirname, relative as pathRelative } from "node:path";
+import {
+  dirname as pathDirname,
+  isAbsolute as pathIsAbsolute,
+  relative as pathRelative,
+  sep as pathSep,
+} from "node:path";
 import {
   blockingAnnotations,
   parseWorkspaceReviewReceipts,
@@ -511,6 +516,41 @@ export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
 /** 构建缓存比任务现场更值得复用，但也必须有自动止涨边界。 */
 export const DEFAULT_BUILD_CACHE_RETENTION_DAYS = 30;
 export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
+
+/** Cloud 需求分析不是内核流程。文件工具只能写最终分析产物目录；Bash
+ * 即使看见仓内残留脚本，也不准启动 mae-flow 生命周期。候选仓在容器
+ * 层另有只读挂载，这里负责文件工具和明确命令的第二道边界。 */
+export function createRequirementAnalysisGateContract(
+  cwd: string,
+  artifactRoot: string,
+  fallback?: GateContract,
+): GateContract {
+  const root = resolve(artifactRoot);
+  const writable = (value: string): boolean => {
+    const rel = pathRelative(root, resolve(cwd, value));
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${pathSep}`)
+      && !pathIsAbsolute(rel));
+  };
+  return (tool, value, event) => {
+    if (tool === "Bash"
+        && /(?:^|[\/\s'"`])mae[-_]?flow(?:\.py)?(?:[\s'"`]|$)|\.mae-flow\.json(?:\.exited)?/i
+          .test(value)) {
+      return {
+        action: "deny",
+        reason: "当前是需求分析，不属于 Mae-Flow 内核流程；禁止执行 init/"
+          + "current/done 或读写 .mae-flow.json。请继续只读分析，并把方案"
+          + "写到指定的 .mae-flow-work 目录。",
+      };
+    }
+    if (["Edit", "Write", "MultiEdit"].includes(tool) && !writable(value)) {
+      return {
+        action: "deny",
+        reason: `需求分析阶段只能修改分析产物目录 ${root}；候选仓业务代码只读。`,
+      };
+    }
+    return fallback?.(tool, value, event);
+  };
+}
 
 /** 交付失败在页面上的人话。原始异常仍进服务日志/诊断包；任务摘要只
  * 保留用户能据此行动的结论，避免 TypeError 和宿主绝对路径外泄。 */
@@ -2349,7 +2389,8 @@ export class TaskService {
     // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
     const effectiveRepo =
       task.summary.repo_url ?? this.effectiveDefaultRepo();
-    const hostMounts = this.options.host
+    const analysisOnly = this.isRequirementAnalysis(task);
+    const hostMounts = this.options.host && !analysisOnly
       ? [
           `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
           ...(effectiveRepo && existsSync(effectiveRepo)
@@ -2357,6 +2398,15 @@ export class TaskService {
             // 统一执行，不能因“这是本地路径”就把远端仓 RW 交给容器。
             ? [`${effectiveRepo}:${effectiveRepo}:ro`] : []),
         ]
+      : [];
+    // 需求分析只读候选仓。即便模型忽略提示词或通过 Bash 绕过文件工具，
+    // 也不能在候选仓里 init、改业务代码或生成内核状态；内核目录本身
+    // 也不会挂进这类容器。
+    const analysisRepositoryMounts = analysisOnly
+      ? (task.summary.repositories ?? []).map((repository, index) => join(cwd,
+          `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`))
+        .filter((path) => existsSync(path))
+        .map((path) => `${path}:${path}:ro`)
       : [];
     const gitPath = join(cwd, ".git");
     const pipelineArtifacts = resolve(task.summary.workspace, "pipeline");
@@ -2387,6 +2437,7 @@ export class TaskService {
     }
     const mounts = this.taskContainerMounts(task, [
       ...hostMounts,
+      ...analysisRepositoryMounts,
       ...(volumes ?? []),
       ...(mountPipelineArtifacts
         ? [`${pipelineArtifacts}:${pipelineArtifacts}:ro`] : []),
@@ -8320,8 +8371,12 @@ export class TaskService {
           }
         }
         this.reconcileResolvedDecisionAnnotations(task);
-        const authoritativeWaiting = summary.waiting
+        let authoritativeWaiting = summary.waiting
           ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
+        if (this.recoverMisroutedRequirementAnalysisWaiting(
+          task, authoritativeWaiting)) {
+          authoritativeWaiting = undefined;
+        }
         // 升级前已经停在最终方案确认卡的任务没有 review_snapshot。
         // 这里以恢复时磁盘上的完整产物做一次迁移封版，避免继续拿运行中
         // 被页面轮询碰巧读到的中间哈希当成正式版本。
@@ -9549,6 +9604,67 @@ export class TaskService {
     for (const repository of graph.repositories) {
       repository.assignee = normalized.get(repository.id)!;
       repository.ticket = normalizedTickets.get(repository.id)!;
+    }
+    this.persist(task);
+    return { ...task.summary };
+  }
+
+  /** 方案确认卡里的分工草稿要边填边落盘。它和最终确认是两件事：
+   * 这里允许只填一部分，切换任务、刷新页面后仍能恢复；真正创建子任务
+   * 时仍由 assignRequirementRepositories 做全量完整性与就绪校验。 */
+  saveRequirementRepositoryAssignmentDraft(
+    id: string,
+    assignments: Record<string, string>,
+    tickets?: Record<string, string>,
+  ): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!this.isRequirementAnalysis(task)) {
+      throw new NotFoundError("只有需求分析主任务可以保存交付单元分工草稿");
+    }
+    this.refreshRequirementGraph(task);
+    const graph = task.summary.requirement_graph;
+    if (!graph || !graph.repositories.length) {
+      throw new NotFoundError("需求图尚未生成，暂不能保存分工草稿");
+    }
+    if (graph.stage === "confirmed"
+        || graph.repositories.some((repository) => repository.task_id)) {
+      throw new TaskControlError("仓库任务已经生成，责任人不能在主任务上改派");
+    }
+    const ids = new Set(graph.repositories.map((repository) => repository.id));
+    const unknown = [...Object.keys(assignments), ...Object.keys(tickets ?? {})]
+      .filter((repositoryId) => !ids.has(repositoryId));
+    if (unknown.length) {
+      throw new TaskControlError(
+        `分工草稿包含已失效的交付单元：${[...new Set(unknown)].join("、")}`,
+      );
+    }
+    for (const repository of graph.repositories) {
+      if (Object.prototype.hasOwnProperty.call(assignments, repository.id)) {
+        const account = String(assignments[repository.id] ?? "").trim();
+        if (account) {
+          const readiness = this.options.collaborationAssigneeReadiness?.(account);
+          if (readiness && !readiness.ready) {
+            throw new TaskControlError(
+              `${account} 的个人设置尚未就绪：${readiness.missing.join("、")}`,
+            );
+          }
+          repository.assignee = account;
+        } else {
+          delete repository.assignee;
+        }
+      }
+      if (tickets
+          && Object.prototype.hasOwnProperty.call(tickets, repository.id)) {
+        const ticket = String(tickets[repository.id] ?? "").trim();
+        if (/\s/.test(ticket)) {
+          throw new TaskControlError(
+            `仓库 ${repository.name} 的 AR 单号不能含空白字符`,
+          );
+        }
+        if (ticket) repository.ticket = ticket;
+        else delete repository.ticket;
+      }
     }
     this.persist(task);
     return { ...task.summary };
@@ -13565,7 +13681,14 @@ export class TaskService {
             task, "投影事件", this.options.projection?.appendEvent(event))),
         transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
-          contract: this.options.contract,
+          contract: analysisOnly
+            ? createRequirementAnalysisGateContract(
+                cwd,
+                join(cwd, ".mae-flow-work", task.summary.ticket
+                  ?? task.summary.id),
+                this.options.contract,
+              )
+            : this.options.contract,
           // 边界=整个任务工作区(修复材料在仓外的 ../pipeline、../reviews);
           // 相对路径仍按会话 cwd(代码仓)解析。
           workspace,
@@ -19830,7 +19953,11 @@ export class TaskService {
    * 连 init 都没走(run4 实测:空转回合把未 init 的任务标成 completed),
    * 同样算卡壳。非内核模式(无 host)不判——演练剧本自己收口。 */
   private stalledStep(task: TaskState): string | undefined {
-    if (!this.options.host || !task.cwd) return undefined;
+    // 需求分析是 Cloud 的前置流程，没有内核状态。把“没有
+    // .mae-flow.json”解释成“尚未 init”会直接把分析单串进开发流程。
+    if (!this.options.host || !task.cwd || this.isRequirementAnalysis(task)) {
+      return undefined;
+    }
     try {
       const statePath = join(task.cwd, ".mae-flow.json");
       if (!existsSync(statePath)) return "init(尚未初始化)";
@@ -19846,6 +19973,61 @@ export class TaskService {
     } catch {
       return undefined;
     }
+  }
+
+  /** 升级前 Cloud 自己曾把分析任务误催进 init。只修复同时满足三项的
+   * 窄事故形态：分析单、候选仓出现未跟踪内核状态、当前又在问内核配置。
+   * 正常的需求澄清卡和仓库自带的受控文件都不会被碰。 */
+  private recoverMisroutedRequirementAnalysisWaiting(
+    task: TaskState,
+    waiting: WaitingRecord | undefined,
+  ): boolean {
+    if (!waiting || waiting.status !== "waiting"
+        || task.summary.status !== "waiting_for_human"
+        || !this.isRequirementAnalysis(task) || !task.cwd
+        || this.isRequirementGraphReviewWaiting(task, waiting)) {
+      return false;
+    }
+    const question = JSON.stringify(waiting.question ?? {});
+    if (!/(?:配置确认|交付方式|基线分支|工号|单号)/.test(question)) {
+      return false;
+    }
+    const polluted: string[] = [];
+    for (const [index, repository] of
+      (task.summary.repositories ?? []).entries()) {
+      const repo = join(task.cwd,
+        `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`);
+      for (const name of [
+        ".mae-flow.json", ".mae-flow.json.exited", ".mae-flow-history.jsonl",
+      ]) {
+        const path = join(repo, name);
+        if (!existsSync(path)) continue;
+        const tracked = spawnSync("git", ["-C", repo, "ls-files", "--error-unmatch", name],
+          { stdio: "ignore" }).status === 0;
+        if (!tracked) polluted.push(path);
+      }
+    }
+    if (!polluted.length) return false;
+    const superseded = task.humanGate.supersede(waiting.waiting_id, {
+      stateVersion: waiting.state_version,
+      notes: "平台升级自动撤销：需求分析被错误引导进入了内核配置流程",
+    });
+    for (const path of polluted) rmSync(path, { force: true });
+    task.pendingResume = {
+      ...superseded,
+      status: "resolved",
+      decision: "这张内核配置问题由平台误触发，现已撤销；不要回答或继续内核流程。",
+      notes: "请读取现有 CHAIN 与 requirement-graph.json，从当前需求分析现场继续，"
+        + "完成后发起拆分方案确认卡。",
+    };
+    task.summary.waiting = undefined;
+    task.summary.status = "queued";
+    task.summary.detail = "已撤销误触发的内核配置问题，正从现有需求分析现场继续";
+    task.resume = true;
+    this.persist(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} 已自愈分析流程串线，清理 ${polluted.length} 个未跟踪内核状态文件`);
+    return true;
   }
 
   private atExternalVerificationWait(task: TaskState): boolean {
@@ -19996,6 +20178,40 @@ export class TaskService {
             `任务 ${task.summary.id} 补发 ${late.length} 条未送达的插话`);
           await this.settle(
             task, task.driver.continueWith(late.join("\n\n")), epoch);
+          break;
+        }
+        // 分析单不属于内核，绝不能落入下面的 init/current 催办，也不能
+        // 因 tryDeliver 对分析单早退而被误标 completed。正常出口只有
+        // AskUserQuestion 举起澄清/方案确认卡；提前收嘴就沿同一会话续跑。
+        if (this.isRequirementAnalysis(task)) {
+          const step = "requirement_analysis";
+          if (task.nudgedStep !== step) {
+            task.nudgedStep = step;
+            task.nudgeCount = 0;
+          }
+          if (task.driver && (task.nudgeCount ?? 0) < 5) {
+            task.nudgeCount = (task.nudgeCount ?? 0) + 1;
+            this.options.log?.(
+              `任务 ${task.summary.id} 催办继续需求分析（未举起人工确认卡）`);
+            await this.settle(task, task.driver.continueWith(
+              "需求分析尚未通过 AskUserQuestion 进入人工确认。请继续当前分析，"
+              + "不要执行任何 mae-flow/init/current/done 命令。若 CHAIN 文档"
+              + "和 requirement-graph.json 已经完整且同步，立即按开场要求举起"
+              + "拆分方案确认卡；否则先补完分析产物再举卡。"), epoch);
+            break;
+          }
+          task.lastReply = task.driver?.finalReply();
+          const analysisDriver = task.driver;
+          if (task.driver === analysisDriver) task.driver = undefined;
+          analysisDriver?.dispose();
+          const cleanupFailure = await this.stopTaskContainer(
+            task, "需求分析提前结束后");
+          task.summary.status = "failed";
+          task.summary.detail = "Agent 连续结束需求分析但没有发起人工确认，"
+            + "已保留分析产物，请重跑后从现有方案继续"
+            + (cleanupFailure ? `；${cleanupFailure}` : "");
+          this.persist(task);
+          this.notifyOutcome(task);
           break;
         }
         // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在

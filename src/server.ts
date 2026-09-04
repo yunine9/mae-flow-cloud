@@ -2372,7 +2372,8 @@ export function createTaskServer(
                   [repositoryId, String(ticket)]))
             : undefined;
           return json(response, 200,
-            service.assignRequirementRepositories(id, assignments, tickets));
+            service.saveRequirementRepositoryAssignmentDraft(
+              id, assignments, tickets));
         }
         // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
         // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
