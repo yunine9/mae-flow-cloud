@@ -242,6 +242,7 @@ import {
 } from "./containerRuntime.ts";
 import {
   prepareContainerHostPaths,
+  prepareContainerWritableFile,
   repairContainerKernelOwnership,
   repairContainerMutationOwnership,
 } from "./containerOwnership.ts";
@@ -2531,6 +2532,12 @@ export class TaskService {
           + `${prepared.owner!.gid}`);
       }
     }
+    // feedback/ 同时保存宿主可信索引，绝不能像 reviews 一样整目录
+    // 交给 Agent。当前活跃批次若需要机器回执，只预建、交接并挂载那
+    // 一枚 result 文件；旧任务 mission 中的 ../feedback/result-* 路径
+    // 因此也能在升级后原样续跑。
+    const feedbackResult = this.activeFeedbackResult(task);
+    if (feedbackResult) this.prepareFeedbackResultFile(task, feedbackResult.path);
     const mounts = this.taskContainerMounts(task, [
       ...hostMounts,
       ...analysisRepositoryMounts,
@@ -2542,6 +2549,8 @@ export class TaskService {
       // 因而这里只额外挂入一个任务专属的小目录。
       ...(mountReviewMaterials && resolve(cwd) !== resolve(task.summary.workspace)
         ? [`${reviewMaterials}:${reviewMaterials}:rw`] : []),
+      ...(feedbackResult
+        ? [`${feedbackResult.path}:${feedbackResult.path}:rw`] : []),
       ...(safety.gitReadOnly && existsSync(gitPath)
         ? [`${gitPath}:${gitPath}:ro`] : []),
     ]);
@@ -17866,13 +17875,17 @@ export class TaskService {
     return join(task.summary.workspace, "feedback", `result-${digest}.json`);
   }
 
-  private activeFeedbackReceiptInstructions(task: TaskState): string {
-    if (!task.cwd) return "";
+  private activeFeedbackResult(task: TaskState): {
+    batchId: string;
+    items: any[];
+    path: string;
+  } | undefined {
+    if (!task.cwd) return undefined;
     let state: any;
     try {
       state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
-    } catch { return ""; }
+    } catch { return undefined; }
     const batchId = String(state?.delivery_loop?.active_batch_id ?? "");
     const batch = Array.isArray(state?.delivery_loop?.batches)
       ? state.delivery_loop.batches.find((item: any) => item?.batch_id === batchId)
@@ -17880,9 +17893,46 @@ export class TaskService {
     const items = Array.isArray(batch?.items) ? batch.items : [];
     if (!batchId || batch?.result_digest || !items.length
         || items.every((item: any) => ["workspace", "mr_discussion"]
-          .includes(String(item?.source ?? "")))) return "";
-    const path = this.feedbackResultPath(task, batchId);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+          .includes(String(item?.source ?? "")))) return undefined;
+    return { batchId, items, path: this.feedbackResultPath(task, batchId) };
+  }
+
+  private prepareFeedbackResultFile(
+    task: TaskState,
+    path: string,
+  ): void {
+    const directory = dirname(path);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const directoryStat = lstatSync(directory);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      throw new TaskControlError("反馈回执目录不是宿主可信的真实目录，拒绝派单");
+    }
+    // 旧现场可能直接把任务根作为主 workspace 挂进容器。目录只开放
+    // traverse，不开放 read/write；Agent 能按平台给定文件名抵达单文件
+    // bind，却不能列目录、创建文件或删除 root:0600 的 index.jsonl。
+    chmodSync(directory, 0o711);
+    if (!existsSync(path)) {
+      writeFileSync(path, "", { encoding: "utf-8", mode: 0o600, flag: "wx" });
+    }
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new TaskControlError("反馈回执目标不是宿主预创建的普通文件，拒绝派单");
+    }
+    chmodSync(path, 0o600);
+    if (this.options.isolation) {
+      prepareContainerWritableFile({
+        workspace: task.summary.workspace,
+        path,
+        user: this.options.isolation.user,
+      });
+    }
+  }
+
+  private activeFeedbackReceiptInstructions(task: TaskState): string {
+    const active = this.activeFeedbackResult(task);
+    if (!active) return "";
+    const { batchId, items, path } = active;
+    this.prepareFeedbackResultFile(task, path);
     const relative = `../feedback/${basename(path)}`;
     return [
       "逐条处理完成后，必须写一份机器可核对的反馈回执；总体回复不算回执。",
@@ -18000,6 +18050,11 @@ export class TaskService {
       const path = this.feedbackResultPath(task, batchId);
       let raw: any;
       try {
+        const stat = lstatSync(path);
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+          throw new Error("回执不是普通文件");
+        }
+        if (stat.size > 512 * 1024) throw new Error("回执超过 512 KiB 上限");
         raw = JSON.parse(readFileSync(path, "utf-8"));
       } catch (error) {
         // 文件压根不存在 = 这批还没人处理;存在但读不动/不是 JSON = 回执

@@ -43,7 +43,7 @@ export type GateContract = (
  * 路径按相对工作区根判定,目录项连同其下全部内容。 */
 const HOST_LEDGERS = [
   "events.jsonl", "transcript.jsonl", "waiting.json", "task.json",
-  "annotations.jsonl", "pipeline-facts.json",
+  "annotations.jsonl", "pipeline-facts.json", "feedback/index.jsonl",
 ];
 const HOST_LEDGER_DIRS = [".pi", ".claude"];
 /** 会话运行时目录:`pi-agent/models.json` 明文存着模型网关 API Key,
@@ -56,7 +56,7 @@ export interface GateServiceOptions {
   contract?: GateContract;
   /** 追加的宿主账本(相对工作区根):问题流这类旁路会话有自己的
    * 状态文件(issue.json)与注入的技能目录,同样不允许 Agent 改写。
-   * dirs 连同其下全部内容,files 只认工作区根下的同名文件。 */
+   * dirs 连同其下全部内容,files 认工作区根下的精确相对路径。 */
   extraLedgerDirs?: string[];
   extraLedgerFiles?: string[];
   /** 文件工具的可达边界=**任务工作区**(含代码仓与仓外的修复材料)。
@@ -244,7 +244,7 @@ export class GateService {
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
     const parts = rel.split(sep);
     return dirs.includes(parts[0])
-      || (parts.length === 1 && files.includes(parts[0]));
+      || files.includes(parts.join("/"));
   }
 
   private descendsFromWorkspace(target: string): boolean {

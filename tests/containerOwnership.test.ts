@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   prepareContainerHostPaths,
+  prepareContainerWritableFile,
   repairContainerCloneOwnership,
   repairContainerKernelOwnership,
   repairContainerMutationOwnership,
@@ -130,6 +131,35 @@ test("独立挂载的 reviews 目录也交给非 root 容器用户", () => {
   assert.equal(prepared.active, true);
   assert.equal(statSync(reviews).uid, uid);
   assert.equal(statSync(join(reviews, "local-annotations.json")).uid, uid);
+});
+
+test("反馈回执只交接单个文件，不改变同目录宿主索引的属主", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-container-receipt-owner-"));
+  const workspace = join(root, "task-1");
+  const feedback = join(workspace, "feedback");
+  const index = join(feedback, "index.jsonl");
+  const receipt = join(feedback, "result-one.json");
+  mkdirSync(feedback, { recursive: true, mode: 0o700 });
+  writeFileSync(index, "{}\n");
+  writeFileSync(receipt, "");
+  const uid = process.getuid?.() === 0 ? 12345 : process.getuid!();
+  const gid = process.getgid?.() === 0 ? 12345 : process.getgid!();
+  const directoryBefore = statSync(feedback);
+  const indexBefore = statSync(index);
+
+  prepareContainerWritableFile({
+    workspace,
+    path: receipt,
+    user: `${uid}:${gid}`,
+    runtime: { platform: "linux", effectiveUid: 0 },
+  });
+
+  assert.equal(statSync(receipt).uid, uid);
+  assert.equal(statSync(receipt).gid, gid);
+  assert.equal(statSync(feedback).uid, directoryBefore.uid,
+    "不能为写一份回执把 feedback 整目录交给 Agent");
+  assert.equal(statSync(index).uid, indexBefore.uid,
+    "宿主持续检视索引必须保持原属主");
 });
 
 test("bind 工作区根本身是软链时拒绝，不能把宿主路径偷换出去", () => {
