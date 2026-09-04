@@ -47,3 +47,16 @@ test("决策选项原文可拖选复制,拖选松手不选中选项", () => {
     /const selection = window\.getSelection\(\);\s*if \(selection && !selection\.isCollapsed[\s\S]{0,200}return;\s*\}\s*pickOption\(item\.question, option\);/,
     "拖选松手浏览器照样派 click,不拦一下就把选项选上了");
 });
+
+test("任务决策卡选项可取消，自定义答复入口不会在打开后消失", () => {
+  assert.match(taskCard,
+    /setPicked\(\(current\) => toggleDecisionChoice\(current, question, option\)\)/);
+  assert.match(taskCard,
+    /className=\{`option custom-entry\$\{customActive \? " picked" : ""\}`\}/);
+  assert.match(taskCard, /\? "自定义答复"/);
+  assert.doesNotMatch(taskCard, /\{!customOpen\[item\.question\] && \(/,
+    "打开编辑框后入口也必须保留，才能再次点击取消");
+  assert.match(taskCard,
+    /const explanation = customOpen\[item\.question\][\s\S]{0,100}\? custom\[item\.question\]\?\.trim\(\)/,
+    "收起的自定义草稿不能偷偷随另一选项提交");
+});

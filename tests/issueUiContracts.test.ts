@@ -96,6 +96,20 @@ test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
     assert.ok(decisions.includes(`\"${key}\"`), `缺少 ${key} 单选导航`);
   }
   assert.match(decisions, /radioRefs\.current\[questionIndex\]\?\.\[next\]\?\.focus\(\)/);
+  assert.match(decisions,
+    /const choices = \[\.\.\.options\.map\(\(option\) => option\.code\), MANUAL_CODE\]/,
+    "自定义答复也必须能通过方向键到达");
+  assert.match(decisions,
+    /moveRadio\(index, manualIndex, event\.key\)/,
+    "焦点到达自定义答复后也必须能继续用方向键离开");
+});
+
+test("问题决策卡的给定选项和自定义答复都能再次点击取消", () => {
+  assert.match(decisions,
+    /toggleDecisionChoice\(current, index, option\.code\)/);
+  assert.match(decisions,
+    /toggleDecisionChoice\(current, index, MANUAL_CODE\)/);
+  assert.match(decisions, /自定义答复/);
 });
 
 test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", () => {

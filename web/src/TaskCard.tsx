@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
+import { clearDecisionChoice, toggleDecisionChoice } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -663,6 +664,7 @@ export function WaitingCard({
   const hasCustomPrimaryAnswer = questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
+    && !!customOpen[item.question]
     && !!custom[item.question]?.trim());
   const isReviewDecision = requiresDeliverySelection
     || choiceEffects.some((effect) => effect.closes_feedback);
@@ -676,8 +678,9 @@ export function WaitingCard({
   const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
-      ? picked[item.question] || custom[item.question]?.trim()
-      : custom[item.question]?.trim();
+      ? picked[item.question]
+        || (customOpen[item.question] && custom[item.question]?.trim())
+      : customOpen[item.question] && custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
   })) && deliveryReady
     && !repositorySkillSelection?.scanning
@@ -692,11 +695,30 @@ export function WaitingCard({
     && !submitting;
 
   function pickOption(question: string, option: string) {
-    setPicked({ ...picked, [question]: option });
+    setPicked((current) => toggleDecisionChoice(current, question, option));
+    // 给定选项与自定义答复是同一题的两个分支。切回给定选项时收起
+    // 自定义编辑框；草稿仍保留，之后再切回来不会丢字。
+    setCustomOpen((current) => {
+      if (!current[question]) return current;
+      const next = { ...current };
+      delete next[question];
+      return next;
+    });
   }
 
-  function openCustom(question: string) {
-    setCustomOpen({ ...customOpen, [question]: true });
+  function toggleCustom(question: string) {
+    const willOpen = !customOpen[question];
+    setCustomOpen((current) => {
+      const next = { ...current };
+      if (current[question]) delete next[question];
+      else next[question] = true;
+      return next;
+    });
+    // 自定义答复是主答案，不和给定分支同时生效。补充原因仍走卡片
+    // 底部的“补充说明”，避免人看到两个答案却不知道系统听哪个。
+    if (willOpen) {
+      setPicked((current) => clearDecisionChoice(current, question));
+    }
   }
 
   async function submit(deliveryCompileAction?: DeliveryCompileAction) {
@@ -710,7 +732,9 @@ export function WaitingCard({
       if (options.length && selected) {
         selectedOptions[item.question] = selected;
       }
-      const explanation = custom[item.question]?.trim();
+      const explanation = customOpen[item.question]
+        ? custom[item.question]?.trim()
+        : "";
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
@@ -947,8 +971,7 @@ export function WaitingCard({
           const options = item.options ?? [];
           const compact = options.length <= 4
             && options.every((option) => option.length <= 14);
-          const customActive =
-            !!customOpen[item.question] && !!custom[item.question]?.trim();
+          const customActive = !!customOpen[item.question];
           const skippable = optional(item.question);
           const reviewQuestion = options.some((option) =>
             allChoiceAnswers.has(option));
@@ -988,6 +1011,7 @@ export function WaitingCard({
                       className={`option${chosen ? " picked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
+                      title={chosen ? "再次点击取消选择" : undefined}
                       onClick={(event) => {
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
@@ -1008,36 +1032,31 @@ export function WaitingCard({
                     </button>
                   );
                 })}
-                {!customOpen[item.question] && (
-                  <button
-                    type="button"
-                    className="option custom-entry"
-                    onClick={() => openCustom(item.question)}
-                  >
-                      <span className="radio" />
-                      <span className="option-body">
-                        <span className="option-title">{options.length
-                          ? picked[item.question]
-                            ? "补充说明"
-                            : "以上都不合适，直接回答"
-                          : "填写答复"}</span>
-                        <span className="option-hint">{options.length
-                          ? picked[item.question]
-                            ? "说明会随决定提交，但不会改变所选流程分支"
-                            : "你的文字将作为本题主答案，不会套用任一选项"
-                          : "填写本题的具体答案"}</span>
-                      </span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`option custom-entry${customActive ? " picked" : ""}`}
+                  role={options.length ? "radio" : undefined}
+                  aria-checked={options.length ? customActive : undefined}
+                  title={customActive ? "再次点击取消自定义答复" : undefined}
+                  onClick={() => toggleCustom(item.question)}
+                >
+                    <span className={`radio${customActive ? " on" : ""}`} />
+                    <span className="option-body">
+                      <span className="option-title">{options.length
+                        ? "自定义答复"
+                        : "填写答复"}</span>
+                      <span className="option-hint">{options.length
+                        ? "以上选项都不合适时，直接写下正确处理方式"
+                        : "填写本题的具体答案"}</span>
+                    </span>
+                </button>
               </div>
               {customOpen[item.question] && (
                 <div className="custom-answer">
                   <textarea
                     className={`custom-input${customActive ? " picked" : ""}`}
                     placeholder={options.length
-                      ? picked[item.question]
-                        ? "补充原因、修改点或约束…"
-                        : "写下选项之外的正确处理方式…"
+                      ? "写下选项之外的正确处理方式…"
                       : "写下你的答复…"}
                     value={custom[item.question] ?? ""}
                     autoFocus
@@ -1047,9 +1066,7 @@ export function WaitingCard({
                     })}
                   />
                   <span>{options.length
-                    ? picked[item.question]
-                      ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
-                      : "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
+                    ? "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
                     : "这段文字将作为开放题答案提交。"}</span>
                 </div>
               )}
