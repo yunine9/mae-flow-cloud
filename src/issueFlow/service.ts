@@ -2978,10 +2978,31 @@ export class IssueFlowService {
       mr: state.mrs?.find((item) => item.repo === repo)?.iid,
       credential: this.options.gitCredential?.(state.account),
     });
+    // 陈灯防御(票 107,对齐需求侧 selectTerminalRun 的「陈灯,拒绝
+    // 背书」):重推换 SHA 后、新 run 注册前,平台账面最新可能还是旧
+    // 提交的终态红——裸取最新 run 结算会把新监看账定格 failed、
+    // watching=false,真绿灯再没人看。给了 run 级 sha/is_valid 才核验
+    // (老适配层缺席=无陈灯信息,维持旧行为)。拒绝只记一次:轮询
+    // 每秒一轮,轮轮记就是日志噪声。
+    let staleLogged = false;
+    const rejectStale = (run: PipelineRun): boolean => {
+      const reason = typeof run.sha === "string" && run.sha && run.sha !== sha
+        ? `run 绑定 ${run.sha.slice(0, 12)} ≠ 当次提交 ${sha.slice(0, 12)}`
+        : run.is_valid === false
+        ? "is_valid=false(MR 头上挂的是陈灯)"
+        : undefined;
+      if (!reason) return false;
+      if (!staleLogged) {
+        staleLogged = true;
+        this.log(`[issue-flow] ${live.id} ${repo} 终态 run 疑似陈灯,`
+          + `拒绝结算继续轮询(${reason})`);
+      }
+      return true;
+    };
     // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
     try {
       const first = await triggerPipeline(call());
-      if (first.status !== "running") {
+      if (first.status !== "running" && !rejectStale(first)) {
         await this.settlePipeline(live, repo, sha, first);
         return;
       }
@@ -3006,7 +3027,7 @@ export class IssueFlowService {
         // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
         // 越过后触发且仍在 running 的新 run，让监看器提前收口。
         const latest = status.runs.at(-1);
-        if (latest && latest.status !== "running") {
+        if (latest && latest.status !== "running" && !rejectStale(latest)) {
           await this.settlePipeline(live, repo, sha, latest);
           return;
         }

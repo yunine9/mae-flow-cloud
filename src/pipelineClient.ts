@@ -126,6 +126,10 @@ export async function triggerPipeline(
     status,
     ...(typeof body.log === "string" && body.log
       ? { log: body.log } : {}),
+    ...(typeof body.sha === "string" && body.sha
+      ? { sha: body.sha } : {}),
+    ...(typeof body.is_valid === "boolean"
+      ? { is_valid: body.is_valid } : {}),
     ...(checks !== undefined ? { checks } : {}),
   };
 }
