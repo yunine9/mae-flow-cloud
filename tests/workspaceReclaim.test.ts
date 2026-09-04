@@ -72,6 +72,7 @@ function fullWorkspace(): { workspace: string; dataDir: string } {
   writeFileSync(join(workspace, "pipeline", "compile.log"), "BUILD SUCCESS");
   writeFileSync(join(workspace, "waiting.json"), "{}");
   writeFileSync(join(workspace, "chain-plan.md"), "# 链方案");
+  writeFileSync(join(workspace, "unit-brief.md"), "# 当前单元任务书");
 
   // —— 编译环境(可以清)——
   // 克隆目录名是按仓库地址算出来的,不是固定的 "origin":
@@ -172,6 +173,7 @@ test("交付历史一个字节都不动——用户点名要求,逐项验", () =
     ["pipeline", "compile.log"],
     ["waiting.json"],
     ["chain-plan.md"],
+    ["unit-brief.md"],
   ]) {
     assert.ok(existsSync(join(workspace, ...path)),
       `${path.join("/")} 属于交付历史,不许清`);

@@ -27,6 +27,7 @@ import {
   TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
   type AnchorCheck,
+  type AnnotationClosure,
   type TaskStatus,
 } from "./api";
 import { shortPath } from "./paths";
@@ -53,40 +54,6 @@ const ROUTE_LABEL: Record<AnnotationRoute, string> = {
   memory: "记忆",
 };
 
-export interface AdminOverrideAccess {
-  canDrop: boolean;
-  canVerify: boolean;
-}
-
-/** 管理员旁路必须同时满足服务端下发的“当前复检”白名单和页面阶段事实。
- * 缺少任一事实时默认关闭，不能把历史意见、草稿或自己的意见暴露为代办。 */
-export function adminOverrideAccess({
-  item,
-  viewerUsername,
-  canOverride,
-  reviewReady,
-  reviewAnnotationIds,
-}: {
-  item: Annotation;
-  viewerUsername: string;
-  canOverride: boolean;
-  reviewReady: boolean;
-  reviewAnnotationIds: readonly string[];
-}): AdminOverrideAccess {
-  const currentPending = canOverride
-    && reviewReady
-    && item.author !== viewerUsername
-    && item.status === "sent"
-    && reviewAnnotationIds.includes(item.id);
-  const currentResponse = item.response?.revision === (item.rework ?? 0);
-  return {
-    canDrop: currentPending,
-    canVerify: currentPending
-      && currentResponse
-      && item.response?.outcome !== "needs_clarification",
-  };
-}
-
 export type AdminOverrideAction = "drop" | "verify";
 
 export interface AdminOverrideArm {
@@ -106,44 +73,6 @@ export function advanceAdminOverrideArm(
   return { execute: false, arm: { annotationId, action } };
 }
 
-/** 意见作者什么时候可以裁决一条已送达批注。
- *
- * MR 修复轮有逐条结构化回执，仍按 reviewReady 的严格门禁开放；普通
- * 需求/设计检视没有这份回执，Agent 再次举卡就是本轮已经回到人工的
- * 权威事实。旧实现把两类场景混成一类，导致普通批注已经送达、Agent
- * 也改完并再次等人后，页面仍隐藏“确认已修复 / 仍需调整”，而服务端
- * 又用这条 sent 意见阻止通过，形成无法自救的闭环死锁。
- */
-export function authorVerdictReady(
-  item: Annotation,
-  taskStatus: TaskStatus,
-  workspaceReviewReady: boolean,
-): boolean {
-  if (item.status !== "sent") {
-    return false;
-  }
-  // 问责任人的意见不需要等 Agent 或任务阶段：责任人留下原话后，
-  // 提出人即可判断是否解答。决策后处理仍必须等 Agent 真正执行。
-  if (routeOf(item) === "owner_reply") return Boolean(item.owner_reply);
-  if (taskStatus !== "waiting_for_human") return false;
-  // 这类意见只是趁“等决定”窗口先登记为团队事实，尚未随决定真正
-  // 送给 Agent；不能刚提交就让作者自称已经验收。
-  if (item.sent_via === "queued_decision") return false;
-  // 流水线证据用于恢复取证，不是代码/文档检视闭环。
-  if (item.sent_via === "pipeline_evidence") return false;
-  // MR 工作区修复必须等 Build-Fix 收敛并生成当前复检卡；有总回复也
-  // 不能绕过逐条回执与 HEAD 绑定。
-  if (item.sent_via === "review_repair") {
-    const current = item.response?.revision === (item.rework ?? 0);
-    // "需要补充说明":回执已登记、球在作者脚下,不必等最终推送卡就能补。
-    if (current && item.response?.outcome === "needs_clarification") return true;
-    return workspaceReviewReady && current;
-  }
-  // decision / interrupt 以及没有 sent_via 的旧账都属于普通流程检视：
-  // Agent 再次进入人工节点后，由意见作者依据最新材料亲自裁决。
-  return true;
-}
-
 /** 批注与检视抽屉顶部筛选条的三档:等我确认 / 处理与验证 / 已闭环。
  * 批注、CodeHub 意见、机器告警三节共用,人一眼看到"此刻压在我这的有几条"。 */
 export type ReviewFilter = "all" | "mine" | "agent" | "closed";
@@ -157,203 +86,14 @@ export function displayPersonName(
     ?.display_name?.trim() || username;
 }
 
-/** 一条批注归筛选条的哪一档。只用现成事实(状态、作者、裁决就绪),不猜。 */
-export function annotationCategory(
-  item: Annotation,
-  context: {
-    viewerUsername: string;
-    taskStatus: TaskStatus;
-    reviewReady: boolean;
-    canOverride: boolean;
-    canRouteOthers?: boolean;
-    reviewAnnotationIds: readonly string[];
-  },
-): Exclude<ReviewFilter, "all"> {
-  if (item.status === "verified" || item.status === "dropped") return "closed";
-  const isAuthor = item.author === context.viewerUsername;
-  if (item.status === "draft") {
-    const routable = context.canRouteOthers
-      && !["completed", "canceled"].includes(context.taskStatus)
-      && (routeOf(item) === "agent" || item.assignee === context.viewerUsername);
-    return isAuthor || routable ? "mine" : "agent";
-  }
-  if (isAuthor && authorVerdictReady(item, context.taskStatus, context.reviewReady)) {
-    return "mine";
-  }
-  return adminOverrideAccess({
-    item,
-    viewerUsername: context.viewerUsername,
-    canOverride: context.canOverride,
-    reviewReady: context.reviewReady,
-    reviewAnnotationIds: context.reviewAnnotationIds,
-  }).canVerify ? "mine" : "agent";
-}
-
-/** 一条批注此刻处在哪。检视闭环的五站:
- * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
-function progressOf(
-  item: Annotation,
-  check?: AnchorCheck,
-  archival = false,
-  /** 当前看的人此刻能裁决(作者且到点,或管理员代办)。 */
-  verdictReady = false,
-  /** 这条意见本身到没到裁决点(与看的人无关)。 */
-  ready = verdictReady,
-  personName: (username: string) => string = (username) => username,
-): {
-  tone: "draft" | "waiting" | "review" | "done";
-  text: string;
-  hint?: string;
-} {
-  if (routeOf(item) === "memory") {
-    return { tone: "done", text: "已记为记忆",
-      hint: "没有发给任何人。以后有人改到这段附近时，平台会把它提醒给 Agent。" };
-  }
-  if (item.status === "verified") {
-    const proxyVerifier = item.verified_by && item.verified_by !== item.author
-      ? item.verified_by : undefined;
-    return proxyVerifier
-      ? { tone: "done", text: "管理员代确认",
-          hint: `由管理员 ${personName(proxyVerifier)} 代替批注作者 ${personName(item.author)} 确认。` }
-      : { tone: "done", text: "确认通过",
-          hint: "意见作者已确认这处改动符合要求。" };
-  }
-  if (item.status !== "sent") {
-    if (archival) {
-      return { tone: "draft", text: "交付后记录",
-        hint: "任务已经交付，这条记录保留在任务档案中，不会再触发 Agent 修改。" };
-    }
-    return item.rework
-      ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
-          hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
-      : { tone: "draft", text: "待提交" };
-  }
-  const route = routeOf(item);
-  if (route !== "agent" && !item.owner_reply) {
-    return {
-      tone: "waiting",
-      text: route === "owner_reply" ? "等待责任人答复" : "等待责任人决策",
-      hint: `已指派给 ${item.assignee ? personName(item.assignee) : "任务责任人"}，Agent 不会代答。`,
-    };
-  }
-  if (route === "owner_reply" && item.owner_reply) {
-    return {
-      tone: "review",
-      text: "等待提出人确认",
-      hint: "责任人已经答复，请由意见提出人确认是否解决问题。",
-    };
-  }
-  if (route === "owner_decision" && item.owner_reply && !verdictReady) {
-    return {
-      tone: "waiting",
-      text: item.sent_via === "owner_pending"
-        ? "决策已记录·等待继续"
-        : item.sent_via === "queued_decision"
-          ? "决策已记录·等待执行" : "决策已交给 Agent",
-      hint: item.sent_via === "owner_pending"
-        ? "责任人结论已经保存；当前流程暂时不能接收，恢复后可继续交给 Agent。"
-        : item.sent_via === "queued_decision"
-        ? "当前还有任务决定卡；提交决定后，这份责任人结论会一并交给 Agent。"
-        : "责任人已经给出结论，正在等待 Agent 完成修改。",
-    };
-  }
-  if (verdictReady) {
-    if (item.response?.revision === (item.rework ?? 0)
-        && item.response?.outcome === "needs_clarification") {
-      return {
-        tone: "review",
-        text: "Agent 需要你补充说明",
-        hint: item.response.summary || "Agent 说明这条意见有歧义，请补充后重提。",
-      };
-    }
-    return {
-      tone: "review",
-      text: "待你确认",
-      hint: item.response?.revision === (item.rework ?? 0)
-        ? "Agent 已留下当前轮逐条回应，请核对最新材料后确认或退回。"
-        : "任务已回到人工检视，请核对最新材料后确认或退回。",
-    };
-  }
-  // "被改动"只认一个判据:锚定的原文消失了。行号漂移(moved)不算——
-  // 原文还在就说明它还没改这处,只是别处的改动把行挤动了。
-  // 等决定期间提交的意见只是登记成团队事实,正文还没送到 Agent——原来
-  // 也显示"已提交",人以为送到了,其实要等责任人在卡上选返工(内网实锤)。
-  if (route === "agent" && item.sent_via === "queued_decision") {
-    return { tone: "waiting", text: "已排队·等决定",
-      hint: "还没送到 Agent:任务正等一张决定卡,责任人在卡上选「需要调整」提交后才随决定送达。" };
-  }
-  // 还没到裁决点:回执在 Agent 本轮结束后才登记,MR 修复轮的意见更要等到
-  // 最终推送确认卡。这之前面板只有锚点事实,原来写成"已提交/已被改动·
-  // 请你确认",人以为送到了、以为能确认(内网实锤:9 条意见、Agent 说全
-  // 闭环、面板却是这两种字样,确认按钮又不在)。现在把"还在处理、什么时候
-  // 轮到你"说清楚。
-  if (!ready && item.sent_via !== "pipeline_evidence") {
-    const viaRepair = item.sent_via === "review_repair";
-    // 原文消失只能证明"这处有改动",不能证明意见已经修好；但把这项
-    // 事实完全藏掉、继续写成"Agent 处理中"也是假状态。明确拆成已有
-    // 改动 / Agent 回执 / 人工确认三层，既不冒充闭环，也不让状态落后。
-    const where = check?.state === "gone"
-      ? "你圈的原文已经不在了（Agent 动过这处）；" : "";
-    const response = item.response?.revision === (item.rework ?? 0)
-      ? item.response : undefined;
-    if (response) {
-      const outcome = response.outcome === "fixed" ? "已修改"
-        : response.outcome === "not_fixed" ? "未修改" : "需要你补充说明";
-      return { tone: "waiting", text: `Agent 回执：${outcome}·等复检`,
-        hint: `${where}${response.summary}。Build-Fix 通过、最终推送确认卡出现时再由你确认。` };
-    }
-    if (check?.state === "gone") {
-      return {
-        tone: "waiting",
-        text: "已有改动·待验证",
-        hint: "你圈的原文已经发生变化；平台还在等待这条意见的逐条回执，暂不冒充已经修好。",
-      };
-    }
-    return { tone: "waiting",
-      text: viaRepair ? "等待 Agent 回执" : "已交给 Agent",
-      hint: viaRepair
-        ? `${where}Agent 处理完会为每条意见留下回执；Build-Fix 通过、最终推送确认卡出现时再由你逐条确认。`
-        : `${where}平台尚未收到这条意见的处理回执；任务再次停下等人时再由你确认。` };
-  }
-  // 到点了但看的人不是作者:裁决权在作者手里,别对旁人说"请你确认"。
-  return check?.state === "gone"
-    ? { tone: "review", text: "已被改动·等作者确认",
-        hint: `你圈的原文已经不在了；是否修好由意见作者 ${personName(item.author)} 确认。` }
-    : { tone: "waiting", text: "等作者确认",
-        hint: `由意见作者 ${personName(item.author)} 确认是否修好。` };
-}
-
-function deliveryText(
-  item: Annotation,
-  archival = false,
-  personName: (username: string) => string = (username) => username,
-): string {
-  if (routeOf(item) === "memory") return "已记为记忆，不发给任何人";
-  if (item.status === "verified") {
-    return item.verified_by && item.verified_by !== item.author
-      ? `管理员 ${personName(item.verified_by)} 代确认`
-      : "意见作者已确认";
-  }
-  if (item.status !== "sent") return archival ? "交付后记录" : "尚未提交";
-  if (item.sent_via === "owner_pending") {
-    return routeOf(item) === "owner_reply" ? "已交给责任人答复" : "已交给责任人决策";
-  }
-  if (item.sent_via === "decision") return "通过审批提交";
-  if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
-  if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
-  if (item.sent_via === "queued_decision") return "已排队，随决定送达";
-  return "执行中发送";
-}
-
 export function AnnotationPanel({
   taskId,
   viewerUsername,
   items,
   checks,
+  closures,
   reply,
   canOperate,
-  canRouteOthers = false,
-  canOverride = false,
   taskStatus,
   reviewReady = false,
   reviewAnnotationIds = [],
@@ -389,13 +129,12 @@ export function AnnotationPanel({
   viewerUsername: string;
   items: Annotation[];
   checks: AnchorCheck[];
+  /** 每条意见此刻的处境:服务端 feedbackPolicy 算好的唯一结论。
+   * 页面只渲染 text/hint、只按 can_* 开按钮,不再自己推。 */
+  closures: readonly AnnotationClosure[];
   /** 旧任务的总体回复兼容展示；新检视以每条 response 为权威。 */
   reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
-  /** 任务责任人可以原样转交他人的草稿；不因此获得编辑或闭环权。 */
-  canRouteOthers?: boolean;
-  /** 管理员应急旁路:作者不在场时可代删/代确认,服务端会记录操作人。 */
-  canOverride?: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
   taskStatus: TaskStatus;
@@ -423,50 +162,41 @@ export function AnnotationPanel({
   const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
   const listRef = useRef<HTMLOListElement>(null);
   const personName = (username: string) => displayPersonName(username, people);
+  // 结论按 id 取。服务端为每条可见意见都下发一条;真缺了就当"还在
+  // 处理"(不可操作),绝不在这里补一套推断把不一致藏起来。
+  const closureMap = new Map(closures.map((one) => [one.id, one]));
+  const closureOf = (item: Annotation): AnnotationClosure =>
+    closureMap.get(item.id) ?? {
+      id: item.id, tone: "waiting", text: "处理中", bucket: "agent",
+      delivery_text: "", verdict_ready: false, actionable: false,
+      can_verify: false, can_override_verify: false,
+      can_override_drop: false, can_route: false,
+      needs_clarification: false, receipt_missing: false,
+    };
   // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
     item.status === "draft" && item.author === viewerUsername);
-  const routedDrafts = items.filter((item) =>
-    item.status === "draft" && item.author !== viewerUsername
-    && canRouteOthers && !["completed", "canceled"].includes(taskStatus)
-    && (routeOf(item) === "agent" || item.assignee === viewerUsername));
-  const overrideReviewCount = items.filter((item) => adminOverrideAccess({
-    item,
-    viewerUsername,
-    canOverride,
-    reviewReady,
-    reviewAnnotationIds,
-  }).canDrop).length;
+  const routedDrafts = items.filter((item) => closureOf(item).can_route);
+  const overrideReviewCount = items.filter((item) =>
+    closureOf(item).can_override_drop).length;
   const ordinaryReviewCount = items.filter((item) =>
-    item.author === viewerUsername
-    && authorVerdictReady(item, taskStatus, reviewReady)
+    closureOf(item).can_verify
     && routeOf(item) !== "owner_reply"
     && item.sent_via !== "review_repair").length;
   const ownerReplyReviewCount = items.filter((item) =>
-    item.author === viewerUsername
-    && routeOf(item) === "owner_reply"
-    && authorVerdictReady(item, taskStatus, reviewReady)).length;
-  const authorActionable = (item: Annotation) => item.author === viewerUsername
-    && authorVerdictReady(item, taskStatus, reviewReady);
-  const overrideActionable = (item: Annotation) => adminOverrideAccess({
-    item,
-    viewerUsername,
-    canOverride,
-    reviewReady,
-    reviewAnnotationIds,
-  }).canVerify;
+    closureOf(item).can_verify && routeOf(item) === "owner_reply").length;
+  const authorActionable = (item: Annotation) => closureOf(item).can_verify;
+  const overrideActionable = (item: Annotation) =>
+    closureOf(item).can_override_verify;
   const authorActionableCount = items.filter(authorActionable).length;
   const overrideActionableCount = items.filter((item) =>
     !authorActionable(item) && overrideActionable(item)).length;
   const actionableReviewCount = authorActionableCount + overrideActionableCount
     + routedDrafts.length;
   const currentReviewIds = new Set(reviewAnnotationIds);
-  const missingReceiptCount = reviewReady ? items.filter((item) =>
-    currentReviewIds.has(item.id)
-    && item.status === "sent"
-    && item.author === viewerUsername
-    && item.response?.revision !== (item.rework ?? 0)).length : 0;
+  const missingReceiptCount = items.filter((item) =>
+    closureOf(item).receipt_missing).length;
   // 真正要人操作的卡永远置顶；保留原始顺序作为同优先级内的稳定顺序。
   // 过去提示在顶端、按钮却埋在历史记录中，用户会合理地认为按钮丢了。
   const orderedItems = items.map((item, index) => ({ item, index }))
@@ -481,11 +211,8 @@ export function AnnotationPanel({
       if (leftCurrent !== rightCurrent) return rightCurrent ? 1 : -1;
       return left.index - right.index;
     }).map(({ item }) => item);
-  const visibleItems = filter === "all" ? orderedItems : orderedItems.filter(
-    (item) => annotationCategory(item, {
-      viewerUsername, taskStatus, reviewReady, canOverride, canRouteOthers,
-      reviewAnnotationIds,
-    }) === filter);
+  const visibleItems = filter === "all" ? orderedItems
+    : orderedItems.filter((item) => closureOf(item).bucket === filter);
   // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
   // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
   // 多点一下标题才见内容,用户实锤"为啥默认折叠"。
@@ -603,14 +330,9 @@ export function AnnotationPanel({
     item: Annotation,
     action: AdminOverrideAction,
   ) {
-    const access = adminOverrideAccess({
-      item,
-      viewerUsername,
-      canOverride,
-      reviewReady,
-      reviewAnnotationIds,
-    });
-    if (action === "drop" ? !access.canDrop : !access.canVerify) {
+    const access = closureOf(item);
+    if (action === "drop"
+      ? !access.can_override_drop : !access.can_override_verify) {
       setOverrideArm(undefined);
       setError("这条意见已不属于当前复检，管理员代办已取消；请刷新后再检查。");
       return;
@@ -782,22 +504,14 @@ export function AnnotationPanel({
             && item.status === "draft";
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
-          const overrideAccess = adminOverrideAccess({
-            item,
-            viewerUsername,
-            canOverride,
-            reviewReady,
-            reviewAnnotationIds,
-          });
+          const closure = closureOf(item);
           const dropArmed = overrideArm?.annotationId === item.id
             && overrideArm.action === "drop";
           const verifyArmed = overrideArm?.annotationId === item.id
             && overrideArm.action === "verify";
-          const authorCanJudge = isAuthor
-            && authorVerdictReady(item, taskStatus, reviewReady);
-          const actionable = authorCanJudge || overrideAccess.canVerify;
-          const progress = progressOf(item, check, archival, actionable,
-            authorVerdictReady(item, taskStatus, reviewReady), personName);
+          const authorCanJudge = closure.can_verify;
+          const actionable = closure.actionable;
+          const progress = closure;
           return (
             <li key={item.id} data-annotation-id={item.id} tabIndex={-1}
                 className={`annot-item ${progress.tone}${actionable
@@ -901,8 +615,7 @@ export function AnnotationPanel({
                   <small>{personName(item.owner_reply.author)} · {relativeTime(item.owner_reply.replied_at)}</small>
                 </div>
               )}
-              {item.status === "draft" && !isAuthor && canRouteOthers
-                && routeOf(item) === "agent" && (
+              {closure.can_route && routeOf(item) === "agent" && (
                 <div className="annot-owner-reply-action">
                   <button type="button" className="primary"
                     disabled={!canSend || !!mutationBusy}
@@ -925,9 +638,8 @@ export function AnnotationPanel({
                   </button>
                 </div>
               )}
-              {(item.status === "sent" || (item.status === "draft"
-                  && canRouteOthers
-                  && !["completed", "canceled"].includes(taskStatus)))
+              {(item.status === "sent"
+                  || (item.status === "draft" && closure.can_route))
                 && routeOf(item) !== "agent"
                 && !item.owner_reply && item.assignee === viewerUsername && (
                 replyingId === item.id ? (
@@ -962,7 +674,7 @@ export function AnnotationPanel({
               )}
               <div className="annot-item-foot">
                 <small>
-                  {deliveryText(item, archival, personName)} · 批注作者 {personName(item.author)} · {relativeTime(item.created_at)}
+                  {closure.delivery_text} · 批注作者 {personName(item.author)} · {relativeTime(item.created_at)}
                   {item.sent_by && item.sent_by !== item.author
                     && ` · 由 ${personName(item.sent_by)} 原样转交`}
                   {item.edited_at && " · 已编辑"}
@@ -973,7 +685,7 @@ export function AnnotationPanel({
                 {/* 记忆没有编辑面:改就是再圈一次;撤回在「本任务知识」里。
                     这里的编辑/删除只改批注台账,记忆不会跟着变,露出来就是骗人。 */}
                 {routeOf(item) !== "memory"
-                  && (isAuthor || overrideAccess.canDrop) && !editing && (
+                  && (isAuthor || closure.can_override_drop) && !editing && (
                   <span className="annot-owner-actions">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}
@@ -1014,7 +726,7 @@ export function AnnotationPanel({
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
                 {item.status === "sent" && isAuthor && !editing
                   && authorCanJudge
-                  && item.response?.outcome === "needs_clarification" && (
+                  && closure.needs_clarification && (
                   <span className="annot-verdict">
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy}
@@ -1025,8 +737,8 @@ export function AnnotationPanel({
                   </span>
                 )}
                 {item.status === "sent"
-                  && (authorCanJudge || overrideAccess.canVerify) && !editing
-                  && item.response?.outcome !== "needs_clarification" && (
+                  && (authorCanJudge || closure.can_override_verify) && !editing
+                  && !closure.needs_clarification && (
                   <span className="annot-verdict">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}

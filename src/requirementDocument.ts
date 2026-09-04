@@ -89,10 +89,22 @@ export function materializeRequirementDocument(
   workspace: string,
   content: string,
   meta: RequirementDocumentMeta | undefined,
+  forceFile = false,
 ): string | undefined {
-  if (meta?.context_mode !== "file") return undefined;
+  if (!forceFile && meta?.context_mode !== "file") return undefined;
   writeNoFollow(join(workspace, AGENT_REQUIREMENT_DOCUMENT), content);
   return AGENT_REQUIREMENT_DOCUMENT;
+}
+
+/** 把平台定格的拆分材料带进代码工作区。固定文件名 + O_NOFOLLOW，避免
+ * 业务仓预埋同名软链让宿主把已确认方案写到任务边界之外。 */
+export function materializeDeliveryDocument(
+  workspace: string,
+  name: ".mae-flow-chain.md" | ".mae-flow-unit.md",
+  content: string,
+): string {
+  writeNoFollow(join(workspace, name), content);
+  return name;
 }
 
 export function storeRequirementRevision(

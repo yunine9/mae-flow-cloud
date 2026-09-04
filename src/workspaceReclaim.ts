@@ -61,6 +61,7 @@ export const RECLAIM_KEEP: readonly string[] = [
   "pipeline-facts.json", // 流水线事实(绑 SHA 的结论)
   "pipeline",            // 流水线日志:平台上两周后可能也没了,它是交付证据
   "chain-plan.md",       // 多仓链方案,几 KB
+  "unit-brief.md",       // 子任务自己的主任务书,回收后仍需可追溯
   KERNEL_STATE_SNAPSHOT,
 ];
 

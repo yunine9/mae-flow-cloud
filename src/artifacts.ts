@@ -50,6 +50,9 @@ export const PIPELINE_EVIDENCE_GAP_ARTIFACT =
 export interface ArtifactSources {
   /** 任务级流水线材料目录。调用方必须显式传入，不能从代码仓路径猜。 */
   pipelineRoot?: string;
+  /** 拆分子任务的只读材料保存在任务根，不属于业务仓过程产物。只读取
+   * 平台固定文件名，不能把任务根开放成任意文件浏览器。 */
+  taskMaterialRoot?: string;
 }
 
 /** Mae-Flow 自己的流程状态不是代码交付内容。Git 本地排除规则是第一道
@@ -72,6 +75,8 @@ function isFlowControlPath(path: string): boolean {
     // .git/info/exclude 里挡着,这里兜"exclude 没登记上的旧克隆"。
     || normalized === ".mae-flow-order.json"
     || normalized === ".mae-flow-chain.md"
+    || normalized === ".mae-flow-unit.md"
+    || normalized === ".mae-flow-requirement.md"
     || normalized === ".mae-flow-defaults.json";
 }
 
@@ -97,7 +102,7 @@ export interface ArtifactMeta {
    */
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
-  purpose?: "pipeline_evidence_gap";
+  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan";
 }
 
 export type ArtifactChangeStage = "committed" | "committed_working"
@@ -293,12 +298,58 @@ function collectPipelineDocs(pipelineRoot?: string): DocEntry[] {
   }
 }
 
+/** 子任务两份平台材料：自己的任务书是主入口，整体方案只作上下游参考。
+ * 文件在 Agent 启动前就已定格，因此即使还在排队，页面也应看得到。 */
+function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
+  if (!taskMaterialRoot) return [];
+  const definitions = [
+    {
+      file: "unit-brief.md",
+      name: "task-materials/unit-brief.md",
+      label: "当前单元任务书",
+      purpose: "delivery_unit_brief" as const,
+    },
+    {
+      file: "chain-plan.md",
+      name: "task-materials/chain-plan.md",
+      label: "整体拆分方案",
+      purpose: "delivery_plan" as const,
+    },
+  ];
+  const docs: DocEntry[] = [];
+  for (const definition of definitions) {
+    try {
+      const root = realpathSync(taskMaterialRoot);
+      const target = realpathSync(join(root, definition.file));
+      if (target !== root && !target.startsWith(root + sep)) continue;
+      const info = statSync(target);
+      if (!info.isFile()) continue;
+      docs.push({
+        path: target,
+        root,
+        meta: {
+          name: definition.name,
+          label: definition.label,
+          kind: "doc",
+          bytes: info.size,
+          modified_at: info.mtime.toISOString(),
+          purpose: definition.purpose,
+        },
+      });
+    } catch {
+      // 老任务没有这些文件、文件写入中或被替换：只让该项缺席。
+    }
+  }
+  return docs;
+}
+
 function collectReadableDocs(
   cwd: string | undefined,
   sources: ArtifactSources,
 ): DocEntry[] {
   return [
     ...(cwd ? collectDocs(cwd) : []),
+    ...collectTaskMaterialDocs(sources.taskMaterialRoot),
     ...collectPipelineDocs(sources.pipelineRoot),
   ];
 }

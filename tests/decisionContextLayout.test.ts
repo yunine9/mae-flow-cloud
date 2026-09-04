@@ -238,7 +238,12 @@ test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工�
   assert.match(workspace, /【转自 \$\{origin\}】/);
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  assert.match(panel, /export function annotationCategory/);
+  // 分档口径只有一处:服务端 feedbackPolicy 下发 bucket,面板照分。
+  // 页面一旦自己按 status/sent_via 推,这条就该红(2026-09-04 重构:
+  // 前后端各推一遍是本周 42 条检视类 fix 的共同根因)。
+  assert.match(panel, /closureOf\(item\)\.bucket === filter/);
+  assert.doesNotMatch(panel, /function annotationCategory/,
+    "分档不许回到页面里");
   assert.match(panel, /const visibleItems = filter === "all" \? orderedItems/);
   assert.match(css, /\.review-filter\s*\{/);
   assert.match(css, /\.feedback-convert\s*\{/);
@@ -441,9 +446,12 @@ test("任务记忆第一期契约:记为记忆去向、面板只读列表、导�
   assert.match(annotatable, /不发给任何人/);
   const panel = readFileSync(join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf-8");
   assert.match(panel, /memory: "记忆"/);
-  assert.match(panel, /routeOf\(item\) === "memory"\) \{\s*return \{ tone: "done", text: "已记为记忆"/,
-    "面板上记忆条目直接是闭环态,没有送出/回执/确认三站");
-  assert.match(panel, /routeOf\(item\) !== "memory"\s*&& \(isAuthor \|\| overrideAccess\.canDrop\)/,
+  // 状态词已经收敛到服务端唯一判定处(feedbackPolicy),这里按结论断言。
+  const policy = readFileSync(
+    join(process.cwd(), "src/feedbackPolicy.ts"), "utf-8");
+  assert.match(policy, /annotationRoute\(item\) === "memory"\) \{\s*return \{ tone: "done", text: "已记为记忆"/,
+    "记忆条目直接是闭环态,没有送出/回执/确认三站");
+  assert.match(panel, /routeOf\(item\) !== "memory"\s*&& \(isAuthor \|\| closure\.can_override_drop\)/,
     "记忆条目不露编辑/删除:改就是再圈一次,撤回在本任务知识里");
   assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
     "记忆是快照,不参与重锚定提示");
