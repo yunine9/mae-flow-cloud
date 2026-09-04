@@ -8,7 +8,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService, type TaskContainerFactoryInput } from "../src/taskService.ts";
@@ -116,6 +122,41 @@ test("主 Coding 容器读写挂载任务 reviews，Agent 可用 Bash 落逐条�
   assert.equal(containers.records[0]?.volumes.some((volume) =>
     volume === `${created.workspace}:${created.workspace}:rw`), false,
   "不得为写回执把整个任务控制目录交给容器");
+  await container.stop();
+  await service.shutdown();
+});
+
+test("机器反馈只把当前批次回执文件挂进容器，不暴露宿主反馈索引", async () => {
+  const containers = new FakeTaskContainerHarness();
+  const service: any = newService(containers.factory);
+  const created = service.create("机器反馈回执文件挂载");
+  const task = service.tasks.get(created.id);
+  const repository = join(created.workspace, "repository");
+  mkdirSync(repository);
+  task.cwd = repository;
+  task.containerWorkspace = repository;
+  const batchId = "fb-task-1-build-fix";
+  writeFileSync(join(repository, ".mae-flow.json"), JSON.stringify({
+    delivery_loop: {
+      active_batch_id: batchId,
+      batches: [{
+        batch_id: batchId,
+        items: [{ id: "build-fix:1", source: "build_fix" }],
+      }],
+    },
+  }));
+
+  const result = service.feedbackResultPath(task, batchId);
+  const container = await service.startCodingContainer(task);
+  assert.equal(existsSync(result), true, "容器启动前必须预创建精确回执文件");
+  assert.equal(statSync(join(created.workspace, "feedback")).mode & 0o777, 0o711,
+    "feedback 只开放路径穿越，不能给 Agent 目录写权限");
+  assert.ok(containers.records[0]?.volumes.includes(`${result}:${result}:rw`),
+    "只把当前批次 result 文件以 RW 方式挂给 Agent");
+  const feedback = join(created.workspace, "feedback");
+  assert.equal(containers.records[0]?.volumes.some((volume) =>
+    volume === `${feedback}:${feedback}:rw`), false,
+  "不能把含 index.jsonl 的 feedback 整目录交给 Agent");
   await container.stop();
   await service.shutdown();
 });
