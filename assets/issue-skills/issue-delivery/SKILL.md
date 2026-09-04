@@ -1,6 +1,6 @@
 ---
 name: issue-delivery
-description: 问题修复与交付环节(问题修复/提交MR阶段):修复分支、严格格式提交、经平台推送、一仓一 MR 与清单申报验绿。方案确认要动代码时使用;多仓修复时每个改过的仓各自走一遍。
+description: 交付流程。进入「问题修复」「提交 MR·跑绿」阶段要动代码时使用:分支核实、提交格式、push_branch 推送、一仓一 MR 与 complete_stage 申报验绿(流程收口出口);多仓逐仓各走一遍。
 metadata:
   tags: [issue, delivery, branch, commit, mr, codehub, multi-repo]
 ---
