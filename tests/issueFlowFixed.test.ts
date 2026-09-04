@@ -39,7 +39,6 @@ import {
 import {
   fixedNudgeNotice,
   issueFixedOpeningPrompt,
-  issueOpeningPrompt,
   issueRegistrationMeta,
   issueResumePrompt,
 } from "../src/issueFlow/prompt.ts";
@@ -314,7 +313,6 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -329,8 +327,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
         backendPassword: "env-shared-secret",
       },
     });
-    assert.equal(created.mode, "fixed", "个人偏好缺省固定流程,create 烙印");
-    assert.equal(created.scenario, "ticket");
+    assert.equal(created.scenario, "ticket", "有单登记烙 ticket 场景");
     assert.equal(created.stage, "dts_info");
     // 首阶段登记即 in_progress(进度条当前节点必须亮),其余 pending。
     assert.deepEqual(created.stage_states,
@@ -473,7 +470,6 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
@@ -530,7 +526,6 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
@@ -600,7 +595,6 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
@@ -694,7 +688,6 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
@@ -735,7 +728,6 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     const { converted } = await service.associate(created.id,
       { ticket: TICKET, confirm: true });
     assert.ok(converted, "确认后必须返回新会话");
-    assert.equal(converted!.mode, "fixed");
     assert.equal(converted!.scenario, "ticket");
     assert.equal(converted!.stage, "fix", "转正直接进问题修改");
     assert.deepEqual(converted!.stage_states?.slice(0, 3),
@@ -811,8 +803,8 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "T1",
     repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
-    mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "done", "in_progress", "pending", "pending"],
+    scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "in_progress", "pending"],
     status: "idle", stage: "fix", stage_note: "", stage_at: new Date().toISOString(),
     pushes: [{ repo: "/tmp/x.git", branch: "master_dev_T1",
       sha: "a".repeat(40), at: new Date().toISOString() }],
@@ -853,13 +845,26 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
   base.stage = "fix";
   await assert.rejects(() => byName("build_deploy").execute("x", { include_lib: false }),
     /阶段门禁/);
-  // 自由模式:report_stage 在场,阶段自由。
-  const free = createIssueTools({
+  // 门禁无旁路(#99):无场景阶段的存量现场一律按注册表打回,不再有
+  // "无场景即放行"的旁路;拒绝文案报出允许的阶段。
+  const orphan = createIssueTools({
     ...ctx,
-    state: { ...base, mode: undefined, scenario: undefined, stage: "locate_root" },
-  }) as Array<{ name: string }>;
-  assert.equal(free.some((tool) => tool.name === "report_stage"), true,
-    "自由模式保留 report_stage(零改动承诺)");
+    state: { ...base, scenario: undefined },
+  }) as Array<{ name: string; execute: (id: string, params: any) => Promise<unknown> }>;
+  const orphanTool = (name: string) => {
+    const tool = orphan.find((item) => item.name === name);
+    assert.ok(tool, `工具 ${name} 应注册`);
+    return tool!;
+  };
+  await assert.rejects(
+    () => orphanTool("push_branch").execute("x", { branch: "master_dev_T1" }),
+    (error: Error) => error.message.includes("阶段门禁:push_branch")
+      && error.message.includes("无(本场景流程不含该工具)"),
+    "无场景的会话过不了门禁,拒绝文案照常报出允许的阶段");
+  await assert.rejects(
+    () => orphanTool("create_mr").execute("x", {}),
+    /阶段门禁:create_mr/,
+    "出口轴工具同样逃不过无场景的打回(闸不再按模式旁路)");
 });
 
 test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查不倒转阶段", async () => {
@@ -867,8 +872,8 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1001",
-    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending"],
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
+    stage_states: ["pending", "pending", "done", "done", "in_progress"],
     status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
   };
   const ctx: IssueToolContext = {
@@ -930,11 +935,11 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     service = new IssueFlowService(base);
     assert.throws(() => service!.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
-      repoUrl: httpsRepo, mode: "fixed",
+      repoUrl: httpsRepo,
     }), /Git 令牌未配置.*个人设置/);
-    // 自由探索同样拦:自由模式填了远端仓,克隆一样要用发起人身份。
+    // 无单登记同样拦:带远端仓的会话,克隆一样要用发起人身份。
     assert.throws(() => service!.create({
-      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "free",
+      account: "dev", title: "登录超时", repoUrl: httpsRepo,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     }), /Git 令牌未配置/);
     await service.shutdown();
@@ -943,7 +948,7 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     service = new IssueFlowService(withCred());
     assert.throws(() => service!.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
-      repoUrl: httpsRepo, mode: "fixed",
+      repoUrl: httpsRepo,
     }), /个人邮箱未配置.*个人设置/);
     await service.shutdown();
 
@@ -951,22 +956,22 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     service = new IssueFlowService(withCred("dev@example.com"));
     const created = service.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
-      repoUrl: httpsRepo, mode: "fixed",
+      repoUrl: httpsRepo,
     });
-    assert.equal(created.mode, "fixed");
+    assert.equal(created.scenario, "ticket", "登记放行即带固定流程场景");
 
     // file:///本地路径仓:不碰远端,无凭据也不拦(测试/裸仓形态)。
     await service.shutdown();
     service = new IssueFlowService(base);
     const local = service.create({
       account: "dev", title: "本地裸仓问题", ticket: "DTS-2026-1002",
-      repoUrl: origin, mode: "fixed",
+      repoUrl: origin,
     });
     assert.ok(local.id);
-    // 自由探索(有单,不带仓):纯研究形态,与凭据无关。
+    // 有单不带仓:无仓登记放行,与凭据无关。
     const pure = service.create({
       account: "dev", title: "纯现象咨询", ticket: "DTS-2026-1003",
-      moduleId: MODULE_ID, environment: NO_TICKET_ENV, mode: "free",
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     assert.ok(pure.id);
   } finally {
@@ -1090,7 +1095,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     id: "issue-1", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1002",
-    repo_url: origin, repo_urls: [origin], mode: "fixed", scenario: "ticket", round: 1,
+    repo_url: origin, repo_urls: [origin], scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "in_progress"],
     status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
     pushes: [{ repo: origin, branch: `master_dev_DTS-2026-1002`, sha, at: now }],
@@ -1134,7 +1139,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
   }
 });
 
-test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服务按自由兼容", async () => {
+test("场景派生:有单五阶段、无单三节点(创建恒为固定流程)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mode-"));
   const script: Scene[] = [{ text: "ok" }];
   const model = new ScriptedModelServer(script);
@@ -1142,27 +1147,25 @@ test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: (account) => account === "freebird" ? "free" : "fixed",
   });
   try {
     const origin = bareOrigin(dataDir);
     seedModule(dataDir, origin);
-    const fixedOne = service.create({
+    // 有单登记:有单五阶段场景。
+    const ticketed = service.create({
       account: "dev", title: "默认固定", ticket: "T1", repoUrl: origin,
-      mode: undefined,
     });
-    assert.equal(fixedOne.mode, "fixed");
-    const freeOne = service.create({
-      account: "freebird", title: "偏好自由",
+    assert.equal(ticketed.scenario, "ticket");
+    // 无单登记:场景由单号有无机械派生,三节点。
+    const noTicket = service.create({
+      account: "freebird", title: "无单也是固定",
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
-    assert.equal(freeOne.mode, "free", "偏好自由的用户烙印 free");
-    assert.equal(freeOne.scenario, undefined);
-    const forced = service.create({
-      account: "dev", title: "显式自由", mode: "free",
-      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
-    });
-    assert.equal(forced.mode, "free", "显式入参盖过回调");
+    assert.equal(noTicket.scenario, "no_ticket");
+    assert.equal(noTicket.stage, "prep_repo");
+    // 场景落盘(不只是回执投影)。
+    const onDisk = loadState(join(dataDir, "issues", noTicket.id));
+    assert.equal(onDisk?.scenario, "no_ticket", "盘上状态同样带场景");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -1200,7 +1203,6 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     // ① 无仓登记放行(repo_needed 闸已退役,缺仓不再举平台卡)。
@@ -1304,7 +1306,6 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     // 无单登记带模块+环境(#17 门禁):首轮即 prep_repo,Agent 检索→
@@ -1343,7 +1344,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
       id: "issue-x", account: "dev",
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       title: "t", description: "", source: "dts", ticket: TICKET,
-      mode: "fixed", scenario: "ticket", round: 1,
+      scenario: "ticket", round: 1,
       stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
       status: "idle", stage: "prep_repo", stage_note: "", stage_at: new Date().toISOString(),
     };
@@ -1408,8 +1409,8 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     id: "issue-g", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: TICKET,
-    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "in_progress", "pending", "pending"],
     status: "running", stage: "analyze", stage_note: "", stage_at: new Date().toISOString(),
   };
   const directCtx: IssueToolContext = {
@@ -1449,7 +1450,6 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    issueFlowMode: () => "fixed",
   });
   try {
     // 无单登记必须带环境(#17):要测 env_needed 现场补配,登记只能走
@@ -1517,7 +1517,6 @@ test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -1580,8 +1579,8 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     id: "issue-decline", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
-    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
-    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "in_progress", "pending", "pending"],
     status: "running", stage: "analyze", stage_note: "", stage_at: now,
     env_declined: { scopes: ["logs"], at: now },
   };
@@ -1609,40 +1608,6 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     "举闸会记转移账——不举闸就不该有任何新增");
 });
 
-test("环境拒绝 scope 隔离(票 93):logs 已拒 → deploy 闸仍正常举起", async () => {
-  const now = new Date().toISOString();
-  const state: IssueSessionState = {
-    id: "issue-isolate", account: "dev",
-    created_at: now, updated_at: now,
-    title: "t", description: "", source: "dts", ticket: TICKET,
-    repo_url: "/tmp/x.git", round: 1,
-    status: "running", stage: "locate_root", stage_note: "", stage_at: now,
-    env_declined: { scopes: ["logs"], at: now },
-  };
-  const ctx: IssueToolContext = {
-    state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
-    persist: () => undefined,
-    ops: fakeOps,
-    environmentPassword: () => undefined,
-    pullRepo: async (url) => ({
-      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
-    }),
-  };
-  const tools = createIssueTools(ctx) as Array<{
-    name: string;
-    execute: (id: string, params: any) => Promise<unknown>;
-  }>;
-  const buildDeploy = tools.find((tool) => tool.name === "build_deploy")!;
-  assert.ok(buildDeploy);
-  // logs 的拒绝不拦 deploy:无密码时 deploy 闸照常举起等用户配置。
-  await assert.rejects(
-    () => buildDeploy.execute("x", {}),
-    /已向用户发起网管环境配置请求/);
-  const gate = state.gate;
-  assert.equal(gate?.kind, "env_needed", "deploy 闸正常举起");
-  assert.equal((gate as { scope?: string }).scope, "deploy");
-});
-
 test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_logs 恢复正常路径", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envunlock-"));
   const origin = bareOrigin(dataDir);
@@ -1659,7 +1624,6 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_l
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -1724,7 +1688,7 @@ test("环境拒绝 deploy 对称(票 93):deploy 闸拒绝按「换库部署」�
   writeFileSync(join(dataDir, "issues", "issue-d", "issue.json"), JSON.stringify({
     id: "issue-d", account: "dev",
     created_at: now, updated_at: now,
-    title: "t", description: "", source: "manual", mode: "fixed",
+    title: "t", description: "", source: "manual",
     scenario: "no_ticket", status: "waiting_user", stage: "analyze",
     stage_note: "", stage_at: now,
     gate: {
@@ -1762,35 +1726,6 @@ test("环境拒绝 deploy 对称(票 93):deploy 闸拒绝按「换库部署」�
     await model.stop();
   }
 
-  // 工具侧(自由模式绕开阶段门禁——ADR-0013 封存的是固定流程的
-  // build_deploy):deploy scope 已拒 → 同款失败文案,不举闸。
-  const freeState: IssueSessionState = {
-    id: "issue-deploy", account: "dev",
-    created_at: now, updated_at: now,
-    title: "t", description: "", source: "dts", ticket: TICKET,
-    repo_url: "/tmp/x.git", round: 1,
-    status: "running", stage: "locate_root", stage_note: "", stage_at: now,
-    env_declined: { scopes: ["deploy"], at: now },
-  };
-  const ctx: IssueToolContext = {
-    state: freeState, workspace: "/tmp/ws", dataRoot: "/tmp/data",
-    persist: () => undefined,
-    ops: fakeOps,
-    environmentPassword: () => undefined,
-    pullRepo: async (url) => ({
-      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
-    }),
-  };
-  const tools = createIssueTools(ctx) as Array<{
-    name: string;
-    execute: (id: string, params: any) => Promise<unknown>;
-  }>;
-  const buildDeploy = tools.find((tool) => tool.name === "build_deploy")!;
-  assert.ok(buildDeploy);
-  await assert.rejects(
-    () => buildDeploy.execute("x", { include_lib: false }),
-    /用户已确认无需此操作\(换库部署\)/);
-  assert.equal(freeState.gate, undefined, "deploy 同样不再举闸");
 });
 
 // ---- 催办续跑(2026-08-28 拍板 A+B):提前收嘴被推回阶段 ----
@@ -1802,7 +1737,7 @@ function fixedState(overrides: Partial<IssueSessionState> = {}): IssueSessionSta
     id: "issue-nudge", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
-    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
     stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
     status: "running", stage: "analyze", stage_note: "", stage_at: now,
     ...overrides,
@@ -1830,12 +1765,11 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     settings: fastPoll,
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
     const created = service.create({
-      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      account: "dev", title: "播放器偶发黑屏",
       repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
@@ -1874,12 +1808,11 @@ test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     settings: fastPoll,
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
     const created = service.create({
-      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      account: "dev", title: "播放器偶发黑屏",
       repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
@@ -1919,12 +1852,11 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     settings: fastPoll,
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
     const created = service.create({
-      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      account: "dev", title: "播放器偶发黑屏",
       repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
@@ -1961,13 +1893,13 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
   }
 });
 
-test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报等绿/自由模式豁免", () => {
+test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报等绿豁免", () => {
   const now = new Date().toISOString();
   // 分析阶段进行中:必催。
   assert.equal(shouldNudgeFixed(fixedState()), true);
-  // 自由模式没有阶段真相,不催。
+  // 没有场景阶段的存量现场,停机合法性无从机械判定,不催。
   assert.equal(
-    shouldNudgeFixed(fixedState({ mode: "free", scenario: undefined })), false);
+    shouldNudgeFixed(fixedState({ scenario: undefined })), false);
   // 当前阶段已收口(如 MR 跑绿收口待归档,ADR-0013):不催。
   assert.equal(shouldNudgeFixed(fixedState({
     stage: "mr_green",
@@ -1996,13 +1928,11 @@ test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报�
   })), false);
 });
 
-test("停机白名单与出口进了提示词(B):开局契约/自由契约/催办词三处", () => {
+test("停机白名单与出口进了提示词:开局契约/催办词两处", () => {
   const opening = issueFixedOpeningPrompt(fixedState());
   assert.match(opening, /停机白名单/, "开局契约要立停机规矩");
   assert.match(opening, /出口\(到什么程度算完\)/, "当前阶段要给出出口");
   assert.match(opening, /阶段性总结不是停机理由/);
-  const free = issueOpeningPrompt(fixedState({ mode: "free", scenario: undefined }));
-  assert.match(free, /停机纪律/);
   const nudge = fixedNudgeNotice(fixedState(), 1, 2);
   assert.match(nudge, /平台催办\(第 1\/2 次\)/);
   assert.match(nudge, /出口\(到什么程度算完\)/);
@@ -2044,11 +1974,6 @@ test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文�
   assert.match(fixed, /业务模块: 支付核心\(id: pay-core\)/);
   assert.match(fixed, /repo\/x\//);
   assert.match(fixed, /repo\/y\//);
-  // 自由模式同一事实源,同样带全量。
-  const free = issueOpeningPrompt(
-    metaState({ mode: "free", scenario: undefined }), META_CREDENTIALS);
-  assert.match(free, /页面密码: page-secret/);
-  assert.match(free, /env-shared-secret/);
   // 续聊词(重启重建上下文)也不让元信息断档。
   const resume = issueResumePrompt(metaState(), "继续", META_CREDENTIALS);
   assert.match(resume, /页面密码: page-secret/);
@@ -2141,12 +2066,11 @@ test("登记元信息进开场上下文(service 接线):vault 解出的四件套
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    issueFlowMode: () => "fixed",
   });
   try {
     seedModule(dataDir, origin);
     const created = service.create({
-      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      account: "dev", title: "播放器偶发黑屏",
       repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
@@ -2212,7 +2136,6 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -2289,7 +2212,7 @@ function seedMrGreenWatch(
     title: "红灯分诊夹具", description: "", source: "dts",
     ticket: "DTS-2026-1002",
     repo_url: repo, repo_urls: [repo],
-    mode: "fixed", scenario: "ticket", round: 1,
+    scenario: "ticket", round: 1,
     stage_states: [
       "done", "done", "done", "done", "done", "in_progress", "pending",
     ],
@@ -2351,7 +2274,6 @@ test("红灯分诊:失败项全在不可修名单→举卡不派回合不耗预�
     platformUrl: platform.baseUrl,
     unfixableTools: ["SuperChecker"],
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -2462,7 +2384,6 @@ test("红灯分诊回归:名单在场但工具不在名单→照常派修,证据
     // 名单配的是别的工具:SuperChecker 不在名单 → 拿不准宁可派修。
     unfixableTools: ["OtherChecker"],
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     await until(() => {
@@ -2517,7 +2438,6 @@ test("红灯证据分级:部分维度缺证据→派修但点名缺口维度不�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     await until(() => {
@@ -2568,7 +2488,6 @@ test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const gated = await until(() => {
@@ -2659,7 +2578,6 @@ test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const requestText = await until(() =>
@@ -2712,7 +2630,6 @@ test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     // 旧行为:CodeCheck 维零证据→举 pipeline_evidence 卡要人贴原文。
@@ -2765,7 +2682,6 @@ test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空
     platformUrl: platform.baseUrl,
     // 不配置名单:判定函数对空名单恒 false——照常派修(部署没表态就不拦)。
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     await until(() => {
@@ -2823,7 +2739,6 @@ test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier,
     linkBase: "http://work.test",
   });
@@ -2898,7 +2813,6 @@ test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier,
     linkBase: "http://work.test",
   });
@@ -2974,7 +2888,6 @@ test("盲输入闸:checks 缺席+链接式摘要+零产物→举 pipeline_eviden
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3045,7 +2958,6 @@ async function assertRepairDispatched(input: {
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const requestText = await until(() =>
@@ -3124,7 +3036,6 @@ test("证据重试窗:产物晚到自愈——先零产物进窗不举卡,窗口
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     // 进窗:不举卡、不开回合、不耗预算;截止时间落盘。
@@ -3203,7 +3114,6 @@ async function assertCardAfterWindow(input: {
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3297,7 +3207,6 @@ test("证据重试窗:会话取消后循环收手——到点不举卡、不通�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3355,7 +3264,6 @@ test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3431,7 +3339,6 @@ test("重试窗守卫:已举卡的会话重启后不续算重试窗", async () =
     modelsJson: { scripted: {} },
     settings: retryWindow(0.05),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     // 熬过期窗的定时器节拍:守卫必须让一切保持原样。
@@ -3499,7 +3406,6 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier,
     linkBase: "http://work.test",
   });
@@ -3578,7 +3484,6 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
   });
   try {
     const requestText = await until(() =>

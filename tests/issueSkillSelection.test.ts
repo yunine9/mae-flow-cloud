@@ -131,7 +131,6 @@ async function runToAnalysisConfirm(origin: string, moonlight: boolean) {
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => moonlight,
   });
   const created = service.create({
@@ -232,7 +231,7 @@ test("存量挂起圈选卡仍可作答:清单外拒绝,正式勾选落台账清
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
     repo_url: origin, repo_urls: [origin],
-    mode: "fixed", scenario: "ticket", round: 1,
+    scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "in_progress"],
     status: "waiting_user", stage: "analyze", stage_note: "", stage_at: now,
     gate: {
@@ -253,7 +252,6 @@ test("存量挂起圈选卡仍可作答:清单外拒绝,正式勾选落台账清
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => false,
   });
   try {
@@ -296,7 +294,7 @@ test("提示层:存量台账的必读清单仍随 analyze 开场词注入", () =
     description: "登录链路五步排障",
   };
   const base = {
-    id: "issue-1", mode: "fixed", scenario: "ticket",
+    id: "issue-1", scenario: "ticket",
     title: "登录超时", description: "", account: "dev", ticket: TICKET,
     skill_selection: { at: "2026-09-02T00:00:00Z", skills: [skill] },
   } as unknown as IssueSessionState;

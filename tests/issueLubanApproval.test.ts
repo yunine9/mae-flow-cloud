@@ -79,7 +79,6 @@ function reply(gateway: LubanApprovalGateway, content: string) {
 async function makeService(
   model: ScriptedModelServer,
   notifier: Notifier,
-  mode: "fixed" | "free",
 ) {
   const service = new IssueFlowService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-issue-luban-")),
@@ -89,7 +88,6 @@ async function makeService(
     dts: new MockDtsGateway(),
     notifier,
     linkBase: "https://mfc.example.com",
-    issueFlowMode: () => mode,
   });
   const created = service.create({
     account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
@@ -126,7 +124,7 @@ test("Agent 问题卡:通知审批码同源,手机裸序号回复落账并续跑
   const notifier = makeNotifier(luban);
   let service: IssueFlowService | undefined;
   try {
-    const made = await makeService(model, notifier, "free");
+    const made = await makeService(model, notifier);
     service = made.service;
     const { id } = made;
     await until(() => service!.get(id).status === "waiting_user"
@@ -165,7 +163,7 @@ test("平台闸卡:手机回复确认落账,闸清阶段走;卡换了回审批�
   const notifier = makeNotifier(luban);
   let service: IssueFlowService | undefined;
   try {
-    const made = await makeService(model, notifier, "fixed");
+    const made = await makeService(model, notifier);
     service = made.service;
     const { id } = made;
     const gated = await until(() => {
@@ -212,7 +210,7 @@ test("「填写补充说明」类选项:空补充打回并指引;带说明的补
   const notifier = makeNotifier(luban);
   let service: IssueFlowService | undefined;
   try {
-    const made = await makeService(model, notifier, "fixed");
+    const made = await makeService(model, notifier);
     service = made.service;
     const { id } = made;
     await until(() => {
@@ -288,7 +286,7 @@ test("多来源合并:需求任务与问题卡同册,回复各归各家", async 
     },
   };
   try {
-    const made = await makeService(model, notifier, "free");
+    const made = await makeService(model, notifier);
     service = made.service;
     const { id } = made;
     await until(() => service!.get(id).status === "waiting_user"

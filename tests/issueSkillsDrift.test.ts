@@ -1,8 +1,8 @@
 /**
  * 技能正文漂移对账(2026-09-03 提示词审查 P0):assets/issue-skills 是
  * Agent 的行为契约,历史上 ADR 级变更(换库封存、五章节、report_stage
- * 平台接管)从不回扫正文,skills 教已封存工具/已删机制、模式不分教
- * 不存在的工具。本测试把底线钉死:
+ * 随自由引擎整体删除,#99)从不回扫正文,skills 教已封存工具/已删
+ * 机制、教不存在的工具。本测试把底线钉死:
  * 1. 禁词——封存工具与已删机制不得在任何技能正文出现(封存纪律:
  *    代码原地保留,但"活表面"不指向它);
  * 2. 工具名真实性——正文反引号里的 snake_case 词必须是真实注册的
@@ -33,23 +33,22 @@ function skillFiles(): Array<{ name: string; text: string }> {
     });
 }
 
-function minimalState(mode: "fixed" | "free"): IssueSessionState {
+function minimalState(): IssueSessionState {
   const now = new Date().toISOString();
   return {
-    id: `drift-${mode}`, account: "dev",
+    id: "drift-fixed", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "manual",
-    repo_url: "/tmp/x.git", mode, ...(mode === "fixed"
-      ? { scenario: "ticket" as const } : {}),
+    repo_url: "/tmp/x.git", scenario: "ticket",
     round: 1,
-    status: "running", stage: mode === "fixed" ? "dts_info" : "locate_root",
+    status: "running", stage: "dts_info",
     stage_note: "", stage_at: now,
   };
 }
 
-function registeredToolNames(mode: "fixed" | "free"): Set<string> {
+function registeredToolNames(): Set<string> {
   const ctx: IssueToolContext = {
-    state: minimalState(mode),
+    state: minimalState(),
     workspace: "/tmp", dataRoot: "/tmp",
     persist: () => undefined,
     pullRepo: async () => ({
@@ -73,21 +72,20 @@ const BUILTINS = new Set([
   "bash", "AskUserQuestion", "inspect_image", "read", "read_file",
 ]);
 
-test("技能正文不指向封存工具与已删机制(ADR-0013/五章节/接管词表)", () => {
+test("技能正文不指向封存工具与已删机制(ADR-0013/五章节/#96 自由探索移除)", () => {
   const files = skillFiles();
-  assert.ok(files.length >= 5, `技能目录异常: ${files.length} 份`);
+  assert.ok(files.length >= 4, `技能目录异常: ${files.length} 份`);
   for (const { name, text } of files) {
-    for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify"]) {
+    for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify", "report_stage", "自由探索"]) {
       assert.ok(!text.includes(banned),
         `技能 ${name} 含禁词「${banned}」——封存/已删机制的活表面,改技能正文`);
     }
   }
 });
 
-test("技能正文引用的工具名全部真实存在(固定∪自由∪内建)", () => {
+test("技能正文引用的工具名全部真实存在(固定∪内建)", () => {
   const real = new Set([
-    ...registeredToolNames("fixed"),
-    ...registeredToolNames("free"),
+    ...registeredToolNames(),
     ...BUILTINS,
   ]);
   for (const { name, text } of skillFiles()) {

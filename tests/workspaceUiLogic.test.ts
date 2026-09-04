@@ -324,7 +324,6 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
     assert.doesNotMatch(prepush.prepushViewOf(state).detail, /\bUT\b/);
   }
   assert.equal(api.issueStageText({
-    mode: "fixed",
     scenario: "ticket",
     stage: "ut",
   }), "单元测试验证");

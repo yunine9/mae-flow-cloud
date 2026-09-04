@@ -396,10 +396,10 @@ function IssueProcessDocs({ detail, canOperate }: {
   }
 
   // 检视入口的会话级门槛(与服务端 requireReviewable 同口径的显示面):
-  // 固定流程、未终态、无转正继承段(转正继承的报告不可检视)、检视
-  // 回合未在进行中。后端仍逐项把门,这里只管把按钮放对位置。
-  const reviewEnabled = detail.mode === "fixed"
-    && !["archived", "canceled", "failed"].includes(detail.status)
+  // 未终态、无转正继承段(转正继承的报告不可检视)、检视回合未在进行中
+  // (#98 单路径化:不再按模式判定,一切会话都是固定流程)。后端仍逐项
+  // 把门,这里只管把按钮放对位置。
+  const reviewEnabled = !["archived", "canceled", "failed"].includes(detail.status)
     && !detail.stage_states?.some((state) => state === "inherited")
     && detail.review_active !== true;
   const draftCount = reviews.filter((item) => item.status === "draft").length;
@@ -410,7 +410,7 @@ function IssueProcessDocs({ detail, canOperate }: {
       hint: analysisMeta ? sizeText(analysisMeta.bytes) : "未生成" },
     { key: DIALOGUE_TAB, label: "过程问答",
       hint: turns.length ? `${turns.length} 回合` : "" },
-    ...(canOperate && detail.mode === "fixed"
+    ...(canOperate
       ? [{ key: REVIEW_TAB, label: "检视",
         hint: draftCount ? `${draftCount} 条待提交` : "" }]
       : []),

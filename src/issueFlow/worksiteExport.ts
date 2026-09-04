@@ -14,7 +14,6 @@
 import type { SemanticEvent } from "../semanticEvents.ts";
 import {
   FIXED_STAGE_LABELS,
-  STAGE_LABELS,
   type IssueSessionState,
 } from "./state.ts";
 
@@ -33,11 +32,9 @@ export interface WorksiteRecord {
   markdown: string;
 }
 
-/** 阶段键 → 显示名:自由词表与固定流程词表都可能出现在转移账里;
- * 固定流程的标签按场景嵌套,未知场景就全场景扫一遍同名键。 */
+/** 阶段键 → 显示名:固定流程词表按场景嵌套,未知场景就全场景扫一遍
+ * 同名键;都不认识(存量现场的旧键)原样展示,不猜。 */
 function stageLabel(stage: string, scenario?: string): string {
-  const free = (STAGE_LABELS as Record<string, string>)[stage];
-  if (free) return free;
   const fixed = FIXED_STAGE_LABELS as Record<
     string, Record<string, string>>;
   if (scenario && fixed[scenario]?.[stage]) return fixed[scenario][stage];

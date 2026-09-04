@@ -74,13 +74,11 @@ import {
   type IssueBusinessKnowledgeEntry,
   type IssueConclusionKind,
   type IssueEnvironmentConfig,
-  type IssueFlowMode,
   type IssueGate,
   type IssueGateScope,
   type IssueScenario,
   type IssueSkillChoice,
   type IssueSource,
-  type IssueStage,
   type IssueStatus,
   type IssueSummary,
   type IssueSessionState,
@@ -121,7 +119,6 @@ import {
   fixedAdvanceNotice,
   fixedNudgeNotice,
   issueFixedOpeningPrompt,
-  issueOpeningPrompt,
   issueResumePrompt,
   materializeIssueSkills,
   type IssueEnvCredentials,
@@ -390,8 +387,6 @@ export interface IssueCreateInput {
    * 置真(DTS 预绑/登记页手工选;服务端 matchDtsToModule 自动匹配
    * 不算,那仍是机器猜测,不锁)。 */
   moduleLocked?: boolean;
-  /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
-  mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
 }
 
@@ -458,10 +453,6 @@ export interface IssueFlowOptions {
    *  改代码解决不了(要人在交付平台处理/豁免)——不派回合,停表请人。
    *  缺席=不分诊,红灯照旧派修,行为与现状一致。 */
   unfixableTools?: string[];
-  /** 探索方式烙印(个人设置,缺省固定流程)。回调缺席按自由模式——
-   * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
-   * auth.issueFlowMode 对真人缺省返回 fixed。 */
-  issueFlowMode?: (account: string) => IssueFlowMode;
   /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
    * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
    * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
@@ -720,7 +711,6 @@ export class IssueFlowService {
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
       for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
-        if (state.mode !== "fixed") continue;
         if (watch.watching) {
           this.log(`[issue-flow] ${state.id} 恢复流水线监看(${repo})`
             + ` @ ${watch.sha.slice(0, 12)}`);
@@ -920,18 +910,16 @@ export class IssueFlowService {
       throw new IssueControlError("单号只能是字母数字下划线连字符(如 DTS2026082001317)");
     }
     const explicitRepos = normalizeIssueRepos(input.repoUrl, input.repoUrls);
-    const mode: IssueFlowMode =
-      input.mode ?? this.options.issueFlowMode?.(account) ?? "free";
-    const scenario: IssueScenario | undefined =
-      mode === "fixed" ? (ticket ? "ticket" : "no_ticket") : undefined;
+    // 场景由单号有无机械派生:有单走五阶段,无单走三节点。
+    const scenario: IssueScenario = ticket ? "ticket" : "no_ticket";
     // 模块是一等实体:module_id 必须真实存在且在架,名称由模块库派生
     // (前端传来的 module 文本在带 moduleId 时让位,标签不出现两个真相)。
     let moduleName = input.module?.trim() || undefined;
     let moduleRepos: string[] | undefined;
     const moduleId = input.moduleId?.trim() || undefined;
     // 登记门禁(无单定位的机械真相):无单号登记必须指名业务模块并带上
-    // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐,固定/
-    // 自由两模式同等。有单号登记(DTS 页签)不拦:单据自带现场线索,
+    // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐。
+    // 有单号登记(DTS 页签)不拦:单据自带现场线索,
     // 环境可以在会话内经 env_needed 闸现场补。
     if (!ticket && !moduleId) {
       throw new IssueControlError(
@@ -971,7 +959,7 @@ export class IssueFlowService {
     // 配套守卫):双发起 fail-loud 到具体单,而不是静默开出第二条平行
     // 工作流(分支/MR/流水线监看都会打架)。与 associate() 的单号查重
     // 同一口径。
-    if (mode === "fixed" && ticket) {
+    if (ticket) {
       const clash = [...this.live.values()].find((item) =>
         item.state.account === account
         && item.state.ticket === ticket
@@ -1011,9 +999,7 @@ export class IssueFlowService {
       ? this.storeEnvironment(id, input.environment, true)
       : undefined;
     const now = new Date().toISOString();
-    const firstStage: FixedStage | "registered" = scenario
-      ? fixedStages(scenario)[0]
-      : "registered";
+    const firstStage: FixedStage = fixedStages(scenario)[0];
     const state: IssueSessionState = {
       id,
       account,
@@ -1031,41 +1017,30 @@ export class IssueFlowService {
       ...(moduleId ? { module_id: moduleId } : {}),
       ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
-      // 模式一律烙印落盘(free 也记):审计要看"当时是什么模式",
-      // 旧现场缺字段读作自由(兼容),不等于新会话不记。
-      mode,
-      ...(scenario
-        ? {
-          scenario,
-          round: 1,
-          // 首阶段直接 in_progress:登记即入场,等 complete_stage 收口
-          // 后由 fixedAdvance 接管后续;全 pending 会让进度条首节点
-          // 不亮,当前感无处安放。
-          stage_states: initStageStates(scenario, 0)
-            .map((entry, index) =>
-              index === 0 ? "in_progress" as const : entry),
-        }
-        : {}),
+      scenario,
+      round: 1,
+      // 首阶段直接 in_progress:登记即入场,等 complete_stage 收口
+      // 后由 fixedAdvance 接管后续;全 pending 会让进度条首节点
+      // 不亮,当前感无处安放。
+      stage_states: initStageStates(scenario, 0)
+        .map((entry, index) =>
+          index === 0 ? "in_progress" as const : entry),
       status: "queued",
       stage: firstStage,
-      stage_note: mode === "fixed"
-        ? "已登记,固定流程启动"
-        : "已登记,准备开始首轮研究",
+      stage_note: "已登记,固定流程启动",
       stage_at: now,
     };
-    if (mode === "fixed" && scenario) {
-      recordTransition(state, {
-        source: "platform", stage: firstStage,
-        note: `固定流程会话已登记(${scenario === "ticket" ? "有单六阶段" : "无单三节点"})`,
-      });
-    }
+    recordTransition(state, {
+      source: "platform", stage: firstStage,
+      note: `固定流程会话已登记(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})`,
+    });
     saveState(root, state);
     this.live.set(id, {
       id, root, state,
       humanGate: new HumanGate(join(root, "waiting.json")),
       controlEpoch: 0,
     });
-    this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"},${mode === "fixed" ? "固定流程" : "自由探索"}): ${title}`);
+    this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"},固定流程): ${title}`);
     void this.pump();
     return summarize(state);
   }
@@ -1283,12 +1258,9 @@ export class IssueFlowService {
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
-        return driver.start(live.state.mode === "fixed"
-          ? issueFixedOpeningPrompt(live.state,
-            this.environmentCredentials(live),
-            { moonlight: this.moonlightOn(live), workspace: live.root })
-          : issueOpeningPrompt(live.state,
-            this.environmentCredentials(live)));
+        return driver.start(issueFixedOpeningPrompt(live.state,
+          this.environmentCredentials(live),
+          { moonlight: this.moonlightOn(live), workspace: live.root }));
       });
     }
   }
@@ -1548,7 +1520,7 @@ export class IssueFlowService {
    * 作答(resolveSkillSelection),旧台账的必读清单照旧注入简报。 */
   private raiseSkillSelectionGate(live: LiveIssue): boolean {
     const { state } = live;
-    if (state.mode !== "fixed" || state.stage !== "analyze") return false;
+    if (state.stage !== "analyze") return false;
     if (state.skill_selection) return false;
     if (state.gate) return false;
     const { choices: skills, warnings } = this.scanBusinessSkills(live);
@@ -1640,7 +1612,7 @@ export class IssueFlowService {
    * 留一行转移账。返回是否定格到了资产。 */
   private freezeBusinessKnowledge(live: LiveIssue): boolean {
     const { state } = live;
-    if (state.mode !== "fixed" || !state.scenario) return false;
+    if (!state.scenario) return false;
     if (state.stage !== "analyze") return false;
     if (state.business_knowledge) return false;
     const repositories = state.repo_urls?.length
@@ -2689,11 +2661,10 @@ export class IssueFlowService {
     if (!content) throw new IssueControlError("消息内容不能为空");
     // 收口后返工(ADR-0013):流程终点是 MR 跑绿,收口态(idle+阶段
     // done)下用户续聊 = "还没修好",重开当前阶段让 AI 继续修——归档
-    // 之前都能继续,可多轮(修完重推再申报,验绿门重新受理)。封存/
-    // 自由态(fixedStageIndex -1)不重开。轮次账不动:这不是回退,
-    // 分支与 MR 延用,现场记录本就连续。
-    if (live.state.mode === "fixed" && live.state.scenario
-        && live.state.status === "idle") {
+    // 之前都能继续,可多轮(修完重推再申报,验绿门重新受理)。不在
+    // 场景路线里的存量现场(fixedStageIndex -1)不重开。轮次账不动:
+    // 这不是回退,分支与 MR 延用,现场记录本就连续。
+    if (live.state.scenario && live.state.status === "idle") {
       const index = fixedStageIndex(
         live.state.scenario, live.state.stage as FixedStage);
       if (index >= 0 && live.state.stage_states?.[index] === "done") {
@@ -2729,9 +2700,9 @@ export class IssueFlowService {
    * 重跑会污染继承账(ADR-0007 拍板的边界)。 */
   private requireReviewable(live: LiveIssue): void {
     const { state } = live;
-    if (state.mode !== "fixed" || !state.scenario) {
+    if (!state.scenario) {
       throw new IssueControlError(
-        "检视重跑只支持固定流程会话(自由模式请直接发消息补充意见)");
+        "检视重跑只支持固定流程会话(请直接发消息补充意见)");
     }
     if (isTerminal(state.status)) {
       throw new IssueControlError("会话已结束,不能再检视");
@@ -2860,28 +2831,16 @@ export class IssueFlowService {
   // ---- 台面动作 ----
 
   bindTicket(id: string, ticket: string): IssueSummary {
-    const live = this.require(id);
+    this.require(id);
     const value = ticket?.trim() ?? "";
     if (!TICKET_PATTERN.test(value)) {
       throw new IssueControlError("单号只能是字母数字下划线连字符");
     }
-    if (live.state.mode === "fixed") {
-      throw new IssueControlError(
-        "固定流程的会话不直接绑定单号:无单场景结论后挂起,经「关联单号」校验 DTS "
-          + "存在后转正为新会话(带分析报告进入问题修改)");
-    }
-    live.state.ticket = value;
-    recordTransition(live.state, {
-      source: "platform", note: `单号已绑定 ${value}(用户操作)`,
-    });
-    saveState(live.root, live.state);
-    this.log(`[issue-flow] ${id} 绑定单号 ${value}`);
-    if (live.driver && live.state.status === "running") {
-      void live.driver.steer(
-        `用户已在平台绑定单号 ${value};后续分支/提交/推送请使用该单号。`)
-        .catch(() => undefined);
-    }
-    return summarize(live.state);
+    // 固定流程的会话不直接绑定单号(无单场景结论后挂起,经「关联单号」
+    // 校验 DTS 存在后转正为新会话):端点保留报错口径,兜住存量调用方。
+    throw new IssueControlError(
+      "固定流程的会话不直接绑定单号:无单场景结论后挂起,经「关联单号」校验 DTS "
+        + "存在后转正为新会话(带分析报告进入问题修改)");
   }
 
   async control(id: string, input: {
@@ -2938,17 +2897,8 @@ export class IssueFlowService {
         at: now,
       };
       live.state.status = "archived";
-      // 固定流程留在自己的词表里(进度条按 scenario 对齐);自由模式
-      // 沿用 done。
-      if (live.state.mode === "fixed" && live.state.scenario) {
-        fixedComplete(live.state, "会话已归档收口(用户操作)");
-      } else {
-        live.state.stage = "done";
-        live.state.stage_at = now;
-        recordTransition(live.state, {
-          source: "platform", stage: "done", note: "会话已归档收口(用户操作)",
-        });
-      }
+      // 阶段账留在场景路线自己的词表里(进度条按 scenario 对齐)。
+      fixedComplete(live.state, "会话已归档收口(用户操作)");
     }
     saveState(live.root, live.state);
     this.vault.remove(live.id);
@@ -2974,7 +2924,7 @@ export class IssueFlowService {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
     const sha = state.pushes?.find((item) => item.repo === repo)?.sha;
-    if (!platformUrl || !sha || state.mode !== "fixed") return;
+    if (!platformUrl || !sha) return;
     const watching = state.pipelines?.[repo];
     if (watching?.watching && watching.sha === sha) return;
     if (watching?.sha && watching.sha !== sha) {
@@ -3689,7 +3639,7 @@ export class IssueFlowService {
   /** mr_green 是否已收口(本阶段 stage_states=done)。监看器的滞后结算
    * 与重复放行都靠它挡——收口后再结算不重通知、不重记账。 */
   private mrGreenClosed(state: IssueSessionState): boolean {
-    if (state.mode !== "fixed" || !state.scenario) return false;
+    if (!state.scenario) return false;
     const index = fixedStageIndex(state.scenario, "mr_green");
     return index >= 0
       && (state.stage_states?.[index] ?? "pending") === "done";
@@ -3817,7 +3767,7 @@ export class IssueFlowService {
   }): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
     const live = this.require(id);
     const { state } = live;
-    if (state.mode !== "fixed" || state.scenario !== "no_ticket") {
+    if (state.scenario !== "no_ticket") {
       throw new IssueControlError("只有无单固定流程的挂起会话才能关联转正");
     }
     if (state.status !== "suspended") {
@@ -3921,7 +3871,6 @@ export class IssueFlowService {
       // 锁随模块走:老会话的模块是人工选的,转正后仍是人工的意志(spec #57)。
       ...(state.module_locked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
-      mode: "fixed",
       scenario: "ticket",
       round: 1,
       // 继承段 3 个(inherited),当前 fix 段直接 in_progress(同 create
@@ -4009,4 +3958,4 @@ export class IssueFlowService {
 }
 
 /** 供 server 路由做类型收窄的状态导出。 */
-export type { IssueStatus, IssueStage, IssueSummary };
+export type { IssueStatus, IssueSummary };

@@ -218,7 +218,6 @@ async function startChain(options: {
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
-    issueFlowMode: () => "fixed",
     notifier,
   });
   const created = service.create({
@@ -304,7 +303,7 @@ function directState(
     id: "issue-exit", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: TICKET,
-    mode: "fixed", scenario, round: 1,
+    scenario, round: 1,
     stage_states: fixedStages(scenario).map(() => "pending"),
     status: "idle", stage, stage_note: "", stage_at: now,
   };
@@ -562,7 +561,6 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({

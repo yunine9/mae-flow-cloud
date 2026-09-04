@@ -2525,7 +2525,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-field { display: grid; gap: 5px; font-size: var(--font-size-assist); color: var(--muted); }
 .issue-field.wide { grid-column: 1 / -1; }
 .issue-field i { font-style: normal; color: var(--faint); }
-.issue-field input, .issue-field select, .issue-field textarea, .issue-bind input {
+.issue-field input, .issue-field select, .issue-field textarea {
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong); font: inherit; width: 100%;
 }
@@ -2971,77 +2971,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-export:hover { border-color: var(--accent); color: var(--accent); }
 .issue-export:disabled { opacity: .5; cursor: not-allowed; }
-.issue-bind { display: flex; gap: 6px; }
-.issue-bind input { width: 180px; }
-.issue-bind button {
-  min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
-}
 .issue-bind-hint { color: var(--faint); font-size: var(--font-size-dense); }
 .issue-session-error { padding: 9px 13px; border-radius: 9px; background: rgba(214, 69, 69, .08); color: #d64545; font-size: var(--font-size-assist); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 .issue-session-error .issue-error-action { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; font-weight: 700; padding: 0; font-size: inherit; }
-/* ---- 阶段英雄轨(issue-journey):升级自 pill 版 stage-trail ----
-   问题阶段是动态的,这是一条"旅程线"而非"计划线":只画走过的节点,
-   不补未来占位(对比任务侧固定七段)。结构抄任务工作台 hero 进度条
-   (task-phase-track 节点栈 + ws-progress 的 nth-child 渐变调色对):
-   点在上、词签在下,节点间 4px 圆角连条紫→蓝→青→绿循环;末位即当前
-   ——点放大描白边带双光晕,词签加粗。来源(AI 上报/平台事实)保留在
-   title 悬浮里,不再参与配色叙事。 */
-.stage-trail.issue-journey {
-  flex: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
-  padding: 6px 2px 0;
-}
-.issue-jnode {
-  position: relative;
-  min-width: 0;
-  display: grid;
-  justify-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: var(--font-size-dense);
-  font-weight: 600;
-}
-/* 已走过的圆点:填节点相位色,一圈 surface 白边保证压在连条上也清爽 */
-.issue-jnode > i {
-  position: relative;
-  z-index: 2;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--phase-color);
-  box-shadow: 0 0 0 2px var(--surface);
-}
-/* 连条只存在于"走过的两节点之间":颜色表达的是已经发生的事 */
-.issue-jnode:not(:last-child)::before {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  top: 3px;
-  left: 50%;
-  width: 100%;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--phase-color), var(--phase-next));
-}
-.issue-jnode:nth-child(1) { --phase-color: #7b61d9; --phase-next: #5978e8; }
-.issue-jnode:nth-child(2) { --phase-color: #5978e8; --phase-next: #318fcf; }
-.issue-jnode:nth-child(3) { --phase-color: #318fcf; --phase-next: #20a99a; }
-.issue-jnode:nth-child(4) { --phase-color: #20a99a; --phase-next: #65ae62; }
-.issue-jnode:nth-child(5) { --phase-color: #65ae62; --phase-next: #d49b37; }
-.issue-jnode:nth-child(6) { --phase-color: #d49b37; --phase-next: #df6b7c; }
-.issue-jnode:nth-child(n + 7) { --phase-color: #df6b7c; --phase-next: #df6b7c; }
-.issue-jnode.current { color: var(--phase-color); font-weight: 800; font-size: var(--font-size-assist); }
-.issue-jnode.current > i {
-  width: 14px;
-  height: 14px;
-  margin-top: -2px;
-  border: 3px solid var(--surface);
-  background: var(--phase-color);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--phase-color) 24%, transparent),
-              0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
-}
 /* ---- 逐仓交付区(一仓一 MR):每个关联仓一张卡 ----
    卡片信息架构:仓名 + 角色词(变更仓/未交付,口径=有无推送记录)+
    流水线徽标(绿/红/运行中,只认 pipelines 该仓的 status),事实行是
@@ -3234,23 +3166,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   padding: 2px 5px; border-radius: 5px;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
-/* 模式徽标(固定流程/自由探索):会话头部的模式身份 */
-.issue-mode {
-  padding: 2px 8px; border-radius: 7px; font-size: var(--font-size-dense);
-  font-weight: 600;
-}
-.issue-mode.mode-fixed {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-}
-.issue-mode.mode-free {
-  color: var(--muted);
-  background: var(--surface-muted);
-  border: 1px solid var(--line);
-}
-/* 查看模式标识(非归属人围观问题会话):会话头部的身份徽标,同一
-   issue-mode 的徽标语言,色调用门禁条同款的中性琥珀(只提示不告警);
+/* 查看模式标识(非归属人围观问题会话):会话头部的身份徽标,沿用
+   状态徽标的徽标语言,色调用门禁条同款的中性琥珀(只提示不告警);
    操作控件由 canOperate 在 JSX 侧收闸,这里只管标明「在看别人的现场」。 */
 .issue-view-mode {
   padding: 2px 8px; border-radius: 7px; font-size: var(--font-size-dense);

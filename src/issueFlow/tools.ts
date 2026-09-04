@@ -21,8 +21,6 @@
  *   验证)由工具举闸——raiseGate 写进 issue.json,Agent 对它只读,
  *   推不动。UT 属于问题修复阶段(TDD:先写复现单测再改码转绿),
  *   report_ut 是修复过程中的事实上报(只记账)。
- *
- * 自由探索模式保持原有工具集(report_stage + 五工具)零改动。
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -30,8 +28,6 @@ import { Type } from "typebox";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import {
-  ISSUE_STAGES,
-  STAGE_LABELS,
   FIXED_STAGE_LABELS,
   fixedAdvance,
   fixedComplete,
@@ -40,7 +36,6 @@ import {
   normalizeIssueRepos,
   raiseGate,
   recordTransition,
-  validStage,
   ENV_SCOPE_LABELS,
   type FixedStage,
   type IssueGateScope,
@@ -200,7 +195,6 @@ export function missingAnalysisSections(content: string): string[] {
 export function createIssueTools(ctx: IssueToolContext): unknown[] {
   const tools: unknown[] = [];
   const state = ctx.state;
-  const fixed = state.mode === "fixed";
   const scenario = state.scenario;
 
   /** 会话仓定位:repo 参数(缺省首个登记仓)→ 克隆目录 + 权威地址。
@@ -221,17 +215,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     return match;
   };
 
-  // ---- 阶段门禁(固定流程专属;自由模式直接放行) ----
+  // ---- 阶段门禁(所有会话一律过闸;无场景的存量现场不在任何路线
+  // 里,与未开放工具同罪同罚) ----
   // 白名单查阶段注册表:每个阶段在注册表里声明自己开放哪些工具,
   // 简报(引导层)读同一列——这里不再各自硬编码,越权拒绝时反查
   // 注册表报出"允许的阶段"。
 
   const stageLabel = (): string =>
-    scenario ? FIXED_STAGE_LABELS[scenario][state.stage as FixedStage] ?? String(state.stage)
-      : STAGE_LABELS[state.stage as keyof typeof STAGE_LABELS] ?? String(state.stage);
+    scenario
+      ? FIXED_STAGE_LABELS[scenario][state.stage as FixedStage] ?? String(state.stage)
+      : String(state.stage);
 
   const gateStage = (tool: string): void => {
-    if (!fixed || !scenario) return;
     // 存量 skill 圈选闸在场(ADR-0011 举起的历史卡;ADR-0014 起新卡
     // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
     // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
@@ -239,53 +234,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       fail("skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。"
         + "请立即结束本回合,用户圈选后平台会带着必读集合开新一轮");
     }
-    if (stageAllowsTool(scenario, state.stage as FixedStage, tool)) return;
-    const allowed = stagesAllowingTool(scenario, tool)
-      .map((stage) => FIXED_STAGE_LABELS[scenario][stage]);
+    const allowedStages = scenario ? stagesAllowingTool(scenario, tool) : [];
+    if (scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) {
+      return;
+    }
+    const allowed = allowedStages
+      .map((stage) => FIXED_STAGE_LABELS[scenario!][stage]);
     fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
       + `允许的阶段:${allowed.length ? allowed.join(" / ") : "无(本场景流程不含该工具)"}`
       + `。固定流程按阶段出口推进,请先完成本阶段工作`);
   };
 
-  // ---- 自由探索:阶段自报工具(fixed 模式不注册——阶段真相在宿主) ----
-
-  if (!fixed) {
-    tools.push(defineTool({
-      name: "report_stage",
-      label: "Report Stage",
-      description:
-        "向平台上报当前处理阶段——状态条全靠它,每进入新环节调用一次,"
-        + "note 用一句话说明现场。阶段含义:fetch_detail=获取 DTS 详情"
-        + "(仅绑定了单号才有)/ align_issue=与用户对齐问题现象"
-        + "/ locate_root=分析根因 / align_solution=对齐修复方案"
-        + "/ modify_code=实施修改 / switch_db=换库 / verify=验证"
-        + "/ submit_mr=提交 MR / done=问题闭环=已给出结论,界面显示「问题闭环」(非问题也走它)。"
-        + "阶段可跳过、可回退:用户推翻结论继续查,就从 done 切回去。"
-        + "done 只是'AI 已出结论',正式收口由用户归档,两者不是一回事。"
-        + `合法阶段: ${ISSUE_STAGES.join(" / ")}`,
-      parameters: Type.Object({
-        stage: Type.Union(ISSUE_STAGES.map((stage) => Type.Literal(stage)), {
-          description: "当前阶段",
-        }),
-        note: Type.String({ description: "一句话现场说明(做了什么/发现了什么)" }),
-      }),
-      async execute(_toolCallId: string, params: any) {
-        if (!validStage(String(params.stage))) {
-          fail(`非法阶段: ${params.stage}。合法值: ${ISSUE_STAGES.join(" / ")}`);
-        }
-        ctx.state.stage = params.stage;
-        ctx.state.stage_note = String(params.note ?? "");
-        ctx.state.stage_at = new Date().toISOString();
-        recordTransition(ctx.state, {
-          source: "agent", stage: params.stage, note: String(params.note ?? ""),
-        });
-        ctx.persist();
-        return ok(`阶段已更新为 ${STAGE_LABELS[params.stage as keyof typeof STAGE_LABELS]}:${params.note}`);
-      },
-    }));
-  }
-
-  // ---- 运维:拉日志(两模式共用;fixed 自问题分析阶段起开放,含回退轮) ----
+  // ---- 运维:拉日志(自问题分析阶段起全程开放,含回退轮) ----
 
   tools.push(defineTool({
     name: "fetch_logs",
@@ -325,7 +285,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- 业务模块库检索(两模式共用;fixed 限拉取代码仓/问题分析阶段) ----
+  // ---- 业务模块库检索 ----
   // 把"问题单 → 业务模块 → 代码仓"的映射交给 Agent 现场查证:模块库
   // 是宿主数据目录里的显式发布实体,工具只读目录、只回 id/名称/仓清单,
   // 永不携带任何凭据。
@@ -336,7 +296,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "按关键词检索业务模块库(模块名称/ID/说明包含即命中,大小写不敏感),"
       + "返回命中的模块 ID、名称与绑定的代码仓清单。用于把问题单映射到业务模块:"
-      + "先检索,命中后(fixed 流程)用 bind_module 绑定;检索不到就如实告知并"
+      + "先检索,命中后用 bind_module 绑定;检索不到就如实告知并"
       + "用 AskUserQuestion 问用户。",
     parameters: Type.Object({
       keyword: Type.String({
@@ -359,12 +319,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           ? `:\n    ${module.repositories.join("\n    ")}`
           : "(该模块未绑定代码仓)"}`);
       return ok(`命中 ${hits.length} 个业务模块:\n${lines.join("\n")}`
-        + (fixed ? "\n\n要绑定其中某个模块请调用 bind_module(带模块 id)。"
-          : "(自由探索模式仅供参考,不提供绑定)"));
+        + "\n\n要绑定其中某个模块请调用 bind_module(带模块 id)。");
     },
   }));
 
-  // ---- 拉仓(两模式共用;2026-08-28 拍板:克隆是 Agent 的显式工具动作) ----
+  // ---- 拉仓(2026-08-28 拍板:克隆是 Agent 的显式工具动作) ----
 
   tools.push(defineTool({
     name: "pull_repo",
@@ -400,7 +359,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
       // 自报)。拉取阶段的回执带注册表简报指引:还有仓继续拉,拉齐了
       // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
-      const guide = fixed && scenario && state.stage === "prep_repo"
+      const guide = scenario && state.stage === "prep_repo"
         ? "\n\n" + promptCopy("receipts", "pull.guide.prep", {
           stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
         }) + "\n"
@@ -463,21 +422,16 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `换库部署完成:${result.summary.split("\n")[0]}`,
       });
-      if (fixed) {
-        raiseGate(
-          ctx.state,
-          "env_verify",
-          "换库部署已完成,请在目标环境验证问题是否修复",
-          undefined,
-          result.summary.split("\n")[0],
-        );
-        ctx.persist();
-        return ok(result.summary
-          + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
-      }
+      raiseGate(
+        ctx.state,
+        "env_verify",
+        "换库部署已完成,请在目标环境验证问题是否修复",
+        undefined,
+        result.summary.split("\n")[0],
+      );
       ctx.persist();
       return ok(result.summary
-        + "\n部署完成——请用 AskUserQuestion 请用户在环境上验证,等结果再继续。");
+        + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
     },
   }));
 
@@ -538,7 +492,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           module: detail.moduleName ?? "无",
         })
         : "";
-      const briefing = fixed && scenario && state.stage === "dts_info"
+      const briefing = scenario && state.stage === "dts_info"
         ? "\n\n" + promptCopy("receipts", "dts.briefing", {
           stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
         })
@@ -574,7 +528,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- 推送(fixed 自问题修改阶段起;机械单号门禁两模式同在) ----
+  // ---- 推送(自问题修改阶段起;机械单号门禁全程同在) ----
 
   tools.push(defineTool({
     name: "push_branch",
@@ -630,8 +584,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
       // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
       // 变更摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
-      // 那道门管"什么阶段能推",这道管"推之前给不给人过目";固定与
-      // 自由两模式同过。拒绝与 raiseEnvNeededGate 同款收口:工具如实
+      // 那道门管"什么阶段能推",这道管"推之前给不给人过目"。
+      // 拒绝与 raiseEnvNeededGate 同款收口:工具如实
       // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
       // 令牌绑定过目那一刻的分支 tip(push_review_head→push_token.head):
       // 确认之后又有新提交,重推对不上 tip 即作废重举——人看过的是
@@ -700,7 +654,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- MR 创建(fixed 仅提交MR·跑绿阶段;验绿由 complete_stage 的
+  // ---- MR 创建(仅提交MR·跑绿阶段;验绿由 complete_stage 的
   // MR 验绿门程序化把守,UT 不再是建 MR 前置) ----
 
   tools.push(defineTool({
@@ -762,16 +716,16 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         note: `MR 已创建: ${receipt.url}`,
       });
       ctx.persist();
-      if (fixed) ctx.onMrCreated?.(repo.url);
+      ctx.onMrCreated?.(repo.url);
       return ok(`MR 已创建: ${receipt.url}\n(source ${pushRecord.branch} → ${target},`
         + `仓 ${repo.url},关联单号 ${state.ticket})。${promptCopy("receipts",
-          fixed ? "mr.receipt.fixed" : "mr.receipt.free")}`);
+          "mr.receipt.fixed")}`);
     },
   }));
 
-  // ---- 以下三个工具仅固定流程注册 ----
+  // ---- 以下工具绑场景注册表(无场景的存量现场不注册) ----
 
-  if (fixed && scenario) {
+  if (scenario) {
     // 绑定业务模块(拉取代码仓阶段的 AI 识别路):只记账不克隆——
     // 克隆是 pull_repo 的活(2026-08-28 拍板:AI 对拉仓效果保持认知)。
     tools.push(defineTool({
@@ -1131,9 +1085,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   }
 
   // 给模型的固定流程阶段速查(描述里说明,方便宿主提示词引用)
-  if (fixed && scenario) {
+  if (scenario) {
     ctx.log?.(`[issue-tools] 固定流程工具集就绪(${scenario} 场景,`
-      + `${fixedStages(scenario).length} 阶段;report_stage 已由平台接管)`);
+      + `${fixedStages(scenario).length} 阶段)`);
   }
   return tools;
 }
