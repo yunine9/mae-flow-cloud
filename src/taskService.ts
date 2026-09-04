@@ -278,7 +278,6 @@ import {
   createKernelHostProof,
   ensureKernelHostCapability,
   kernelHostCapabilityPresent,
-  KERNEL_UNAVAILABLE,
   KernelUnavailableError,
   openKernelFeedback,
   recordKernelFeedbackResult,
@@ -453,6 +452,12 @@ import {
 } from "./commitPolicy.ts";
 import { absorbForeignBranchCommits } from "./foreignBranchCommits.ts";
 import {
+  classifyDeliveryFailure,
+  deliveryFailureMessage,
+  FEEDBACK_RESULT_MISSING,
+  heldForKernelUnavailable,
+} from "./deliveryFailure.ts";
+import {
   emptyTokenUsageState,
   recordTokenUsage,
   restoreTokenUsageState,
@@ -593,15 +598,6 @@ export function userFacingDeliveryFailure(error: unknown): string {
     /failed to push some refs to\s+(['"])[^'"]+\1/gi,
     "未能更新远端分支",
   );
-}
-
-/** 这类失败是平台契约接错/损坏，原样重放不会自愈；网络错误、限流和
- * 超时不在这里，仍由既有恢复预算自动续推。 */
-export function deterministicDeliveryFailure(cause: string): boolean {
-  return cause.startsWith("交付平台响应不完整")
-    || cause.startsWith("流水线返回未知状态")
-    || cause.startsWith("推送被仓库拒绝")
-    || cause.startsWith("提交说明不符合仓库规范");
 }
 
 export type TaskStatus =
@@ -2065,7 +2061,7 @@ const CLOUD_SPLIT_PROPOSAL_STEP = "cloud_split_proposal";
  * 重启,Agent 从没被拉起来,恢复时直接判停摆)。带这个前缀的原因表示
  * "尚未处理",恢复路径据此重新派单;Agent 刚跑完一轮却没写的那条路径
  * 不看前缀,照旧自动补交一次。 */
-const FEEDBACK_RESULT_MISSING = "本批逐条反馈回执尚未落盘";
+
 const SPLIT_PROPOSAL_ACCEPT = "先分析再拆分";
 const SPLIT_PROPOSAL_DECLINE = "不拆，一个任务干完";
 const REQUIREMENT_ANALYSIS_ACCEPT =
@@ -14309,14 +14305,17 @@ export class TaskService {
     // 因"内核暂时不可用"挂起的,先把没登记成的逐条回执补上再交付:回执
     // 材料在工作区文件里,登记按结果摘要幂等,不需要再叫 Agent。仍不可用
     // 就在预算内续等;换成别的原因(回执本身不合格)才如实停下叫人。
-    if (task.summary.delivery?.waiting_on?.startsWith(KERNEL_UNAVAILABLE)) {
+    if (heldForKernelUnavailable(task.summary.delivery?.waiting_on)) {
       const failure = this.recordActiveFeedbackResult(task);
       if (failure) {
-        if (failure.startsWith(KERNEL_UNAVAILABLE)
+        // 分类只有一处(deliveryFailure);这里只负责按结论走出路。
+        // 预算是 retry 的硬边界:烧完仍 fail-closed 停下喊人,不无限等。
+        const verdict = classifyDeliveryFailure(failure, "receipt");
+        if (verdict.disposition === "retry"
             && Date.now() < this.verificationDeadline(task)) {
           this.holdExternalVerification(task, failure);
           this.scheduleDeliveryRecovery(task, epoch);
-        } else if (failure.startsWith(FEEDBACK_RESULT_MISSING)) {
+        } else if (verdict.disposition === "dispatch") {
           // 这批还没人处理过(派单和重启撞上了),不是回执不合格:重新派给
           // 修复会话,不能拿"Agent 没有留下回执"把任务停在这儿等人。派单后
           // 状态转 queued,recoveryStillNeeded 不再成立,不会自旋。
@@ -16785,28 +16784,19 @@ export class TaskService {
         return;
       }
       if (this.atExternalVerificationWait(task)) {
+        // 该重试还是该停下喊人,只由 deliveryFailure 判一次:
         // push 504 / MR 网关 500 这类多半是一阵子的事,自己再试几轮;
-        // 预算用完就停下说人话,而不是永远停在"验证中"没人管
-        // (实测过:那种状态既没定时器、重启也不复活、连重跑都被拒)。
-        // 确定性 4xx(分支不存在、参数错……)例外:同一请求再发一百次
-        // 还是 4xx,不烧重试预算,当场如实停摆喊人(MFC-020 实测同文
-        // MR-400 以 poll_interval 节拍刷了 86 条日志、两轮预算)。
-        // 408/429 是超时/限流,仍按瞬时故障自愈。
-        const commitRejected = error instanceof CommitMessagePolicyError
-          || commitHookRejection(rawCause)
-          || cause.startsWith("推送被仓库拒绝")
-          || cause.startsWith("提交说明不符合仓库规范");
-        const contractBroken = deterministicDeliveryFailure(cause);
-        if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause) || contractBroken) {
-          this.markVerificationStalled(task, commitRejected
-            ? reason
-            : `等待权威流水线：${reason}`);
+        // 确定性 4xx 和契约损坏例外——同一请求再发一百次还是那个结果,
+        // 不烧重试预算(MFC-020 实测同文 MR-400 刷了 86 条日志两轮预算)。
+        const verdict = classifyDeliveryFailure(cause);
+        const message = deliveryFailureMessage(cause, reason);
+        if (verdict.disposition === "stall") {
+          this.markVerificationStalled(task, message);
         } else {
-          const retrying = cause.startsWith("交付平台暂时连接不上")
-            ? "交付平台连接异常，系统正在自动重试，暂时无需操作"
-            : `等待权威流水线：${reason}`;
-          this.holdWithRecovery(task, retrying, epoch);
+          this.holdWithRecovery(task, message, epoch);
         }
+        this.options.log?.(`任务 ${task.summary.id} 交付失败判为 `
+          + `${verdict.disposition}:${verdict.why}`);
       }
       this.logDeliveryFailure(task, reason);
     }
@@ -20943,7 +20933,8 @@ export class TaskService {
         const feedbackResultFailure = this.recordActiveFeedbackResult(task);
         const activeFeedback = this.activeKernelFeedback(task);
         if (feedbackResultFailure && task.driver && activeFeedback && workspaceLoop
-            && !feedbackResultFailure.startsWith(KERNEL_UNAVAILABLE)
+            && classifyDeliveryFailure(feedbackResultFailure, "receipt")
+              .disposition !== "retry"
             && workspaceLoop.review_source !== "workspace"
             && workspaceLoop.feedback_receipt_retry_for !== activeFeedback.batchId) {
           workspaceLoop.feedback_receipt_retry_for = activeFeedback.batchId;
@@ -20990,7 +20981,9 @@ export class TaskService {
         // Agent 的错也不是人的事:挂起带预算自愈,runDeliveryRecovery 会先
         // 补登记回执再交付(登记按结果摘要幂等)。原来一律 halted+stalled
         // 叫人,一次内核抖动就把整轮修复成果晾在那。
-        if (feedbackResultFailure?.startsWith(KERNEL_UNAVAILABLE)) {
+        if (feedbackResultFailure
+            && classifyDeliveryFailure(feedbackResultFailure, "receipt")
+              .disposition === "retry") {
           this.holdWithRecovery(task, feedbackResultFailure, epoch);
           break;
         }
