@@ -5,6 +5,7 @@ import {
   type Annotation,
   type TaskSummary,
 } from "./api";
+import { requirementNodeLabel } from "./requirementGraphLabel";
 
 interface GraphAnnotationTarget {
   label: string;
@@ -17,8 +18,7 @@ interface GraphAnnotationTarget {
 function repoName(id: string, task: TaskSummary): string {
   const node = task.requirement_graph?.repositories.find((item) => item.id === id);
   if (!node) return id;
-  // 单仓拆多个交付单元时仓名会重复,拼上单元名才分得清。
-  return node.scope?.name ? `${node.name} · ${node.scope.name}` : node.name;
+  return requirementNodeLabel(node);
 }
 
 const childStatusText: Record<string, string> = {
@@ -256,8 +256,7 @@ export function RequirementGraph({
                 title={repository.url}>
                 <div className="repo-node-head">
                   <i aria-hidden />
-                  <strong>{repository.scope?.name
-                    ? `${repository.name} · ${repository.scope.name}` : repository.name}</strong>
+                  <strong>{requirementNodeLabel(repository)}</strong>
                   {canAnnotateGraph && (() => {
                     const anchor = `模块 ${repository.id}：${
                       repository.scope?.name ?? repository.name}`;
@@ -269,7 +268,7 @@ export function RequirementGraph({
                         line: graph.repositories.indexOf(repository) + 2,
                         anchor,
                         quote: [
-                          `${repository.name} · ${repository.scope?.name ?? "未命名模块"}`,
+                          requirementNodeLabel(repository),
                           `职责：${repository.responsibility ?? "未说明"}`,
                           `负责面：${repository.scope?.paths.join("、") ?? "未说明"}`,
                         ].join("\n"),
