@@ -2813,7 +2813,7 @@ export class IssueFlowService {
         "读完它们再继续问题分析;读完仍可按方法论取用次序补充其他材料。"]
       : ["用户未圈选任何业务 skill——按方法论取用次序自主定位"
           + "(业务仓 .cac/skills 与 .agents/skills、货架通用 skill、"
-          + "issue-research、自行取证)。"];
+          + "issue-analysis 自力定位)。"];
     this.continueTurn(live, [
       ...lines,
       "",

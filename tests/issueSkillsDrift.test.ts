@@ -82,7 +82,7 @@ const BUILTINS = new Set([
 
 test("技能正文不指向封存工具与已删机制(ADR-0013/五章节/#96 自由探索移除)", () => {
   const files = skillFiles();
-  assert.ok(files.length >= 4, `技能目录异常: ${files.length} 份`);
+  assert.ok(files.length >= 3, `技能目录异常: ${files.length} 份`);
   for (const { name, text } of files) {
     for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify", "report_stage", "自由探索"]) {
       assert.ok(!text.includes(banned),
@@ -119,7 +119,7 @@ test("整包物化:技能目录的附属物(如 issue-ops 的 bin 引擎)必须�
   // 非标单文件物化的旧病回潮=技能携带的能力静默失效,按盘上真物验。
   const workspace = mkdtempSync(join(tmpdir(), "mfc-skill-materialize-"));
   const paths = materializeIssueSkills(workspace);
-  assert.ok(paths.length >= 4, "物化的技能数量异常");
+  assert.ok(paths.length >= 3, "物化的技能数量异常");
   for (const path of paths) {
     assert.ok(existsSync(path), `SKILL.md 未物化: ${path}`);
   }
