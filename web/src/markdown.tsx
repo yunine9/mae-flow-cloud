@@ -79,6 +79,12 @@ export function Markdown({
   while (index < lines.length) {
     const line = lines[index];
     if (!line.trim()) { index += 1; continue; }
+    // CHAIN 与机读图的共同修订号是机器校验标记，不是方案正文。只吞这
+    // 一个精确白名单注释；其余不认识的内容仍按“原样展示”原则处理。
+    if (/^\s*<!--\s*mae-flow-plan-revision:\s*[A-Za-z0-9._:-]+\s*-->\s*$/.test(line)) {
+      index += 1;
+      continue;
+    }
     // 每个块带上源文件行号(data-l,1 起)。批注要落成 `story.md:42`
     // 而不是"第三段那里"——没有这个锚,文档批注就只能让模型猜。
     // 内核面板用的是同一个属性名,两边的批注语义因此对得上。

@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
 import { deliveryChangeSnapshot } from "../src/artifacts.ts";
@@ -24,6 +24,10 @@ import { readJson } from "../src/jsonBody.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
+import {
+  requirementArtifacts,
+  writeRequirementArtifacts,
+} from "./requirementGraphFixture.ts";
 import {
   type RequirementGraph, TaskControlError, TaskService,
 } from "../src/taskService.ts";
@@ -52,7 +56,7 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     "-m", "init"], { env: GIT_ENV });
   const ticket = "REQ2026083100";
   // 同一个仓两个单元:url 都照录下单地址,靠 id + scope 区分。
-  const graphJson = JSON.stringify({
+  const graphDefinition = {
     repository_assessments: [{ name: "svc-core", url: repo,
       outcome: "change_required", reason: "契约与过滤模块均需修改" }],
     repositories: [
@@ -64,14 +68,17 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
         scope: { name: "过滤实现", paths: ["src/filter/"] } },
     ],
     dependencies: [],
-  });
+  };
+  const chainBody = "# 单仓拆分方案\n契约先行,过滤在后。\n";
+  const artifacts = requirementArtifacts(chainBody, graphDefinition);
+  const graphJson = artifacts.graph;
   const artifactDir = join(".mae-flow-work", ticket);
   const script: Scene[] = [
     { text: "读仓现场,写方案与机读投影",
       tool: { name: "bash", input: { command:
         `ls 1-svc-core && ` +
-        `printf '%s' '# 单仓拆分方案\n契约先行,过滤在后。\n' ` +
-        `> "${join(artifactDir, `CHAIN-${ticket}.md`)}" && ` +
+        `cat > "${join(artifactDir, `CHAIN-${ticket}.md`)}" << 'CHAIN_EOF'\n` +
+        `${artifacts.chain}CHAIN_EOF\n` +
         `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
     { tool: { name: "AskUserQuestion", input: { questions: [
@@ -136,13 +143,15 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       "requirement-graph.json");
     const overlappingGraph = JSON.parse(graphJson) as RequirementGraph;
     overlappingGraph.repositories[1].scope!.paths = ["src/contract/filter/"];
-    writeFileSync(graphPath, JSON.stringify(overlappingGraph));
+    writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
+      overlappingGraph as unknown as Record<string, unknown>, "r2");
     assert.doesNotThrow(() => (service as any).requirementGraphPlan(
       parentState,
       { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
       { "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102" },
     ), "有序的同仓交付单元可以声明相同或互相包含的允许改动范围");
-    writeFileSync(graphPath, graphJson);
+    writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
+      graphDefinition, "r3");
 
     // 两个单元此刻同责任人、同单号(都继承父单):分支名会互相覆盖,
     // 必须在确认时挡下,不能等克隆后才炸。
@@ -457,7 +466,8 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
   execFileSync("git", ["init", "-q", "-b", "master", repo]);
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
-  const graphJson = JSON.stringify({
+  const chainBody = "# 免单号拆分方案\n契约先行。\n";
+  const artifacts = requirementArtifacts(chainBody, {
     repository_assessments: [{ name: "svc-solo", url: repo,
       outcome: "change_required", reason: "需要拆分契约和实现" }],
     repositories: [
@@ -468,6 +478,7 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
     ],
     dependencies: [],
   });
+  const graphJson = artifacts.graph;
   // 没有单号时产物目录按任务 id 命名;会话 cwd 是 <任务id>/repositories,
   // 场景里从上级目录名取 id,和真模型看到的指引路径同源。
   const script: Scene[] = [
@@ -475,8 +486,8 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
       tool: { name: "bash", input: { command:
         `tid=$(basename "$(dirname "$PWD")") && ls 1-svc-solo && ` +
         `mkdir -p ".mae-flow-work/$tid" && ` +
-        `printf '%s' '# 免单号拆分方案\n契约先行。\n' ` +
-        `> ".mae-flow-work/$tid/CHAIN-$tid.md" && ` +
+        `cat > ".mae-flow-work/$tid/CHAIN-$tid.md" << 'CHAIN_EOF'\n` +
+        `${artifacts.chain}CHAIN_EOF\n` +
         `cat > ".mae-flow-work/$tid/requirement-graph.json" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
     { tool: { name: "AskUserQuestion", input: { questions: [
@@ -614,8 +625,8 @@ test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不
   // 模拟分析会话现场:A 仓拆成两个单元,B 仓保持一个节点。
   const cwd = join(dataDir, "analysis-cwd");
   const artifactDir = join(cwd, ".mae-flow-work", "REQ2026090301");
-  mkdirSync(artifactDir, { recursive: true });
-  writeFileSync(join(artifactDir, "requirement-graph.json"), JSON.stringify({
+  writeRequirementArtifacts(artifactDir, "REQ2026090301",
+    "# 多仓模块方案\nA 拆成契约与实现，B 负责消费。\n", {
     repository_assessments: [
       { name: "svc-a", url: repoA, outcome: "change_required",
         reason: "契约和过滤实现需要修改" },
@@ -631,7 +642,7 @@ test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不
         scope: { name: "接口消费", paths: ["src/client/"] } },
     ],
     dependencies: [],
-  }));
+  });
   state.cwd = cwd;
   (service as any).refreshRequirementGraph(state);
   const nodes = state.summary.requirement_graph.repositories;

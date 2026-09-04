@@ -381,7 +381,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
     "回执之外还要逐段比对");
 });
 
-test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;退回方案时提示先批注", () => {
+test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖批注;退回时有提示", () => {
   // 用户 2026-09-02 实测三处:依赖图全屏后仍卡 900px、需求原文全屏仍卡
   // 860px、分析阶段看起来提不了检视意见(图圈不了,入口没露出)。
   const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
@@ -391,6 +391,15 @@ test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;
   assert.match(workspace, /className="chain-review-entry" role="note"/);
   assert.match(workspace, /CHAIN-\[\^\/\]\*\\\.md\$/, "入口指向内核产出的方案文档");
   assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
+  const graph = readFileSync(new URL("../web/src/RequirementGraph.tsx", import.meta.url), "utf8");
+  assert.match(graph, /对整体方案提意见/);
+  assert.match(graph, /模块 \$\{repository\.id\}：/,
+    "模块批注用稳定单元 id 做锚，不依赖展示行号");
+  assert.match(graph, /依赖 \$\{edge\.from\} -> \$\{edge\.to\}/,
+    "依赖批注用边的两端 id 做锚");
+  assert.match(graph, /artifact: REQUIREMENT_GRAPH_ARTIFACT/,
+    "图批注进入统一任务批注账，不另造状态机");
+  assert.match(graph, /不需要为了批注去找文档中的某一行/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
   // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。

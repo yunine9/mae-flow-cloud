@@ -34,6 +34,7 @@ import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationPermissionError,
   AnnotationStore,
+  REQUIREMENT_GRAPH_ARTIFACT,
   TASK_REQUIREMENT_ARTIFACT,
   reanchor,
   renderAnnotations,
@@ -748,6 +749,13 @@ export interface RequirementGraph {
   stage: "analysis" | "confirmed";
   projection_state?: "pending" | "ready" | "invalid";
   projection_error?: string;
+  /** CHAIN 文档与机读图共同携带的修订号；二者不一致时禁止拆单。 */
+  plan_revision?: string;
+  /** Agent 在图文件里声明的 CHAIN 原文摘要，由宿主按真实字节复核。 */
+  chain_sha256?: string;
+  /** 宿主对 requirement-graph.json 原文计算的摘要，用来阻止同 revision
+   * 偷换任一份产物；这是投影账，不要求 Agent 写入图文件。 */
+  projection_sha256?: string;
   repository_assessments?: RequirementRepositoryAssessment[];
   repositories: RequirementRepository[];
   dependencies: RequirementDependency[];
@@ -3351,10 +3359,22 @@ export class TaskService {
     task: TaskState,
     annotations: Annotation[],
   ): string | undefined {
-    if (!annotations.some((item) =>
-      item.artifact === TASK_REQUIREMENT_ARTIFACT)) return undefined;
-    return "需求文档已经确认并锁定。不要修改需求文档；请把这条检视意见"
-      + "落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。";
+    const instructions: string[] = [];
+    if (annotations.some((item) =>
+      item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
+      instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
+        + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
+    }
+    if (annotations.some((item) =>
+      item.artifact === REQUIREMENT_GRAPH_ARTIFACT)) {
+      instructions.push("这些意见直接锚在模块拆分图上。不要只改图或只改说明："
+        + "请同步修订 CHAIN 文档与 requirement-graph.json，为两份产物换用"
+        + "同一个全新 plan_revision，最后重新计算并写入 chain_sha256。"
+        + "方案级意见作用于整体切法，模块级意见作用于指定模块，依赖级意见"
+        + "作用于指定边；如果人的意见仍有多种会导致不同拆法的理解，再用一张"
+        + "明确的问题卡说明差异，否则按最直接的理解落实。");
+    }
+    return instructions.length ? instructions.join("\n\n") : undefined;
   }
 
   historyMutationInProgress(id: string): boolean {
@@ -4055,6 +4075,8 @@ export class TaskService {
     const ticket = task.summary.ticket ?? task.summary.id;
     const path = join(task.cwd, ".mae-flow-work", ticket,
       "requirement-graph.json");
+    const chainPath = join(task.cwd, ".mae-flow-work", ticket,
+      `CHAIN-${ticket}.md`);
     const markUnavailable = (
       state: "pending" | "invalid",
       message?: string,
@@ -4068,11 +4090,49 @@ export class TaskService {
       return;
     }
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      if (!existsSync(chainPath)) {
+        throw new Error("缺少 CHAIN 方案文档，无法核对机读图来自哪一版方案");
+      }
+      const graphSource = readFileSync(path, "utf-8");
+      const chainSource = readFileSync(chainPath, "utf-8");
+      const parsed = JSON.parse(graphSource) as {
+        plan_revision?: string;
+        chain_sha256?: string;
         repository_assessments?: RequirementRepositoryAssessment[];
         repositories?: Array<Partial<RequirementRepository>>;
         dependencies?: RawRequirementDependency[];
       };
+      const planRevision = String(parsed.plan_revision ?? "").trim();
+      if (!/^[A-Za-z0-9._:-]{1,80}$/.test(planRevision)) {
+        throw new Error("requirement-graph.json 缺少合法的 plan_revision");
+      }
+      const revisionMarkers = [...chainSource.matchAll(
+        /<!--\s*mae-flow-plan-revision:\s*([A-Za-z0-9._:-]{1,80})\s*-->/g,
+      )];
+      if (revisionMarkers.length !== 1) {
+        throw new Error("CHAIN 文档必须且只能声明一个 mae-flow-plan-revision");
+      }
+      if (revisionMarkers[0][1] !== planRevision) {
+        throw new Error(`CHAIN 文档版本 ${revisionMarkers[0][1]} 与机读图版本 ${
+          planRevision} 不一致`);
+      }
+      const claimedChainSha = String(parsed.chain_sha256 ?? "")
+        .trim().toLowerCase().replace(/^sha256:/, "");
+      if (!/^[a-f0-9]{64}$/.test(claimedChainSha)) {
+        throw new Error("requirement-graph.json 缺少合法的 chain_sha256");
+      }
+      const actualChainSha = createHash("sha256")
+        .update(chainSource, "utf-8").digest("hex");
+      if (claimedChainSha !== actualChainSha) {
+        throw new Error("CHAIN 文档内容已经变化，但机读依赖图还没有同步更新");
+      }
+      const projectionSha = createHash("sha256")
+        .update(graphSource, "utf-8").digest("hex");
+      if (previous?.plan_revision === planRevision
+          && previous.projection_sha256
+          && previous.projection_sha256 !== projectionSha) {
+        throw new Error(`版本 ${planRevision} 的产物内容发生变化；请同时更新两份产物并换用新的 plan_revision`);
+      }
       const expected = task.summary.repositories ?? [];
       if (!Array.isArray(parsed.repository_assessments)) {
         throw new Error("缺少 repository_assessments，无法区分需修改仓与仅排查仓");
@@ -4211,6 +4271,9 @@ export class TaskService {
       task.summary.requirement_graph = {
         stage: task.summary.requirement_graph?.stage ?? "analysis",
         projection_state: "ready",
+        plan_revision: planRevision,
+        chain_sha256: actualChainSha,
+        projection_sha256: projectionSha,
         repository_assessments: assessments,
         repositories,
         dependencies,
@@ -4624,6 +4687,9 @@ export class TaskService {
     if (artifact === TASK_REQUIREMENT_ARTIFACT) {
       return task.summary.requirement;
     }
+    if (artifact === REQUIREMENT_GRAPH_ARTIFACT) {
+      return this.requirementGraphAnnotationContent(task);
+    }
     const root = this.artifactRoot(task.summary.id);
     return root ? readArtifact(root, artifact)?.content : undefined;
   }
@@ -4635,8 +4701,26 @@ export class TaskService {
     if (artifact === TASK_REQUIREMENT_ARTIFACT) {
       return task.summary.requirement;
     }
+    if (artifact === REQUIREMENT_GRAPH_ARTIFACT) {
+      return this.requirementGraphAnnotationContent(task);
+    }
     const root = this.artifactRoot(task.summary.id);
     return root ? (await readArtifactAsync(root, artifact))?.content : undefined;
+  }
+
+  /** 图上批注的可重锚定文本。行号只是现有批注合同的辅助字段，真正稳定
+   * 的定位是整体标识、模块 id 和依赖两端 id；模块改名不让意见失联，
+   * 节点/边被删则如实显示靶子已经变化。 */
+  private requirementGraphAnnotationContent(task: TaskState): string | undefined {
+    const graph = task.summary.requirement_graph;
+    if (!graph) return undefined;
+    return [
+      "模块拆分与依赖：整体方案",
+      ...graph.repositories.map((item) =>
+        `模块 ${item.id}：${item.scope?.name ?? item.name}`),
+      ...graph.dependencies.map((edge) =>
+        `依赖 ${edge.from} -> ${edge.to}`),
+    ].join("\n");
   }
 
   /** 单号来自内核状态文件;拿不到就退回任务号——不为抬头编内容。 */
@@ -19268,6 +19352,9 @@ export class TaskService {
         + "先加新形态的单元、再迁移、最后删旧形态,各自成单元。",
       "只有全部不确定事项都已经逐题确认后，才能生成以下两份最终产物。",
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
+        + "文档第一行必须写一个不可见版本标记 "
+        + "<!-- mae-flow-plan-revision: <本轮唯一修订号> -->；首次可用 r1，"
+        + "每次根据人的批注修改任一份产物，都必须换一个从未使用过的新修订号。"
         + "正文必须包含:需求理解、**已确认事项清单**(逐条:问题→结论"
         + "→谁拍板,澄清期全部 Q&A 落在这里)、**改动面盘点**、逐单元"
         + "职责与接口契约、**候选仓逐仓排查结论**、依赖关系与交付顺序"
@@ -19276,8 +19363,11 @@ export class TaskService {
         + "各单元的任务书)。接口的长期真相在代码里,方案是拆分时刻的"
         + "快照——写清即可,不承诺跟随后续代码演进。",
       `同时把机器可读投影写到 ${join(artifactDir, "requirement-graph.json")}，`
+        + "必须在 CHAIN 文档最终写完后计算该文件真实字节的 SHA-256，"
+        + "并把同一个修订号和摘要写入机读图。"
         + "格式严格为 "
-        + `{"repository_assessments":[{"name":"仓库名","url":"原始地址",`
+        + `{"plan_revision":"r1","chain_sha256":"64位十六进制摘要",`
+        + `"repository_assessments":[{"name":"仓库名","url":"原始地址",`
         + `"outcome":"change_required|no_change","reason":"结论理由",`
         + `"evidence":["文件/符号/调用链证据"]}],`
         + `"repositories":[{"id":"unit-1","name":"仓库名","url":"原始地址",`
@@ -19302,7 +19392,9 @@ export class TaskService {
         + "也就是 prerequisite 先开发、dependent 后开发；"
         + "只有确实不能并行的硬依赖才写，禁止循环依赖；没有硬依赖也必须"
         + "明确写 dependencies:[]，这表示这些模块可以并行"
-        + "(同仓单元由平台自动按顺序串行执行,同仓相邻顺序不必写边)。",
+        + "(同仓单元由平台自动按顺序串行执行,同仓相邻顺序不必写边)。"
+        + "平台会机械校验 CHAIN 里的版本标记、JSON 的 plan_revision 和"
+        + " chain_sha256；任一份漏改、同 revision 偷换内容都会拒绝确认。",
       "方案写完后必须调用 AskUserQuestion。存在模块交付单元时，请用户选择"
         + "「需要修改」或「确认并生成任务」；如果所有候选仓都无需修改，"
         + "请选择「需要修改」或「确认分析结论」。用户选择需要修改时，"

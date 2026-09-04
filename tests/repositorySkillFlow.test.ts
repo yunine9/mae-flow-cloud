@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { writeRequirementArtifacts } from "./requirementGraphFixture.ts";
 
 const KERNEL = resolve("kernel");
 
@@ -349,9 +350,8 @@ test("Chain 检视决定可更新按仓 Skill，先落盘再生成子任务", as
   const artifactDirectory = join(
     state.cwd, ".mae-flow-work", "REQ20260007");
   mkdirSync(artifactDirectory, { recursive: true });
-  writeFileSync(join(artifactDirectory, "CHAIN-REQ20260007.md"),
-    "# 已确认跨仓方案\n");
-  writeFileSync(join(artifactDirectory, "requirement-graph.json"), JSON.stringify({
+  writeRequirementArtifacts(artifactDirectory, "REQ20260007",
+    "# 已确认跨仓方案\n", {
     repository_assessments: [
       { name: "review-a", url: repoA, outcome: "change_required", reason: "A" },
       { name: "review-b", url: repoB, outcome: "change_required", reason: "B" },
@@ -363,7 +363,7 @@ test("Chain 检视决定可更新按仓 Skill，先落盘再生成子任务", as
         scope: { name: "B 模块", paths: ["src/b/"] } },
     ],
     dependencies: [],
-  }));
+  });
   const waiting = state.humanGate.createWaiting({
     taskId: parent.id,
     step: "requirement-analysis",
@@ -450,9 +450,8 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
   const artifactDirectory = join(
     state.cwd, ".mae-flow-work", "REQ20260008");
   mkdirSync(artifactDirectory, { recursive: true });
-  writeFileSync(join(artifactDirectory, "CHAIN-REQ20260008.md"),
-    "# 已确认跨仓方案\n");
-  writeFileSync(join(artifactDirectory, "requirement-graph.json"), JSON.stringify({
+  writeRequirementArtifacts(artifactDirectory, "REQ20260008",
+    "# 已确认跨仓方案\n", {
     repository_assessments: [
       { name: "merge-a", url: repoA, outcome: "change_required", reason: "A" },
       { name: "merge-b", url: repoB, outcome: "change_required", reason: "B" },
@@ -467,7 +466,7 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
         scope: { name: "C 模块", paths: ["src/c/"] } },
     ],
     dependencies: [],
-  }));
+  });
   const waiting = state.humanGate.createWaiting({
     taskId: parent.id,
     step: "requirement-analysis",

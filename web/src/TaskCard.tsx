@@ -894,7 +894,7 @@ export function WaitingCard({
           </>}
           {reworksChainChoice && (
             <small className="chain-rework-hint">
-              退回前先在左侧「过程文档」的方案文档上圈出要改的地方并写意见；这些批注会随这次决定一起交给 Agent，没有批注的退回 Agent 只能猜。
+              退回前可在左侧「模块与依赖」中直接批注整体方案、模块或依赖；具体措辞也可去方案文档逐行批注。这些意见会随决定一起交给 Agent，没有批注的退回 Agent 只能猜。
             </small>
           )}
         </div>

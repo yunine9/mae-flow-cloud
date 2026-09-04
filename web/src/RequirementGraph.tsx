@@ -1,5 +1,18 @@
 import { useState, type ReactNode } from "react";
-import type { TaskSummary } from "./api";
+import {
+  REQUIREMENT_GRAPH_ARTIFACT,
+  addAnnotation,
+  type Annotation,
+  type TaskSummary,
+} from "./api";
+
+interface GraphAnnotationTarget {
+  label: string;
+  file: string;
+  line: number;
+  anchor: string;
+  quote: string;
+}
 
 function repoName(id: string, task: TaskSummary): string {
   const node = task.requirement_graph?.repositories.find((item) => item.id === id);
@@ -40,16 +53,29 @@ export function RequirementGraph({
   task,
   onOpenTask,
   teamInvite,
+  annotationEnabled = false,
+  annotations = [],
+  onAnnotationAdded,
 }: {
   task: TaskSummary;
   onOpenTask?: (taskId: string) => void;
   /** 邀请讨论参与人的表单。它属于"主任务团队"那一块,就长在药丸旁边的
    * 按钮后面——单独挂在图下面成一条细条,看着像掉出来的页脚(用户实测)。 */
   teamInvite?: ReactNode;
+  /** 图批注仍落进任务统一批注账，只是锚点从“第几行”换成整体/模块/边。 */
+  annotationEnabled?: boolean;
+  annotations?: ReadonlyArray<Pick<Annotation,
+    "artifact" | "anchor" | "status">>;
+  onAnnotationAdded?: () => void;
 }) {
   const graph = task.requirement_graph;
   const [expanded, setExpanded] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [annotationTarget, setAnnotationTarget] =
+    useState<GraphAnnotationTarget>();
+  const [annotationNote, setAnnotationNote] = useState("");
+  const [annotationBusy, setAnnotationBusy] = useState(false);
+  const [annotationError, setAnnotationError] = useState("");
   if (!graph) return null;
   const candidateCount = task.repositories?.length
     ?? graph.repository_assessments?.length
@@ -72,6 +98,46 @@ export function RequirementGraph({
     assessment.outcome === "no_change") ?? [];
   const splitUrls = new Set(graph.repositories.map((item) => item.url)
     .filter((url, index, urls) => urls.indexOf(url) !== index));
+  const canAnnotateGraph = annotationEnabled && graph.stage === "analysis"
+    && projectionReady;
+  const annotationCount = (anchor: string) => annotations.filter((item) =>
+    item.artifact === REQUIREMENT_GRAPH_ARTIFACT
+      && item.anchor === anchor && item.status !== "dropped").length;
+  const openAnnotation = (target: GraphAnnotationTarget) => {
+    setAnnotationTarget(target);
+    setAnnotationNote("");
+    setAnnotationError("");
+  };
+  const saveAnnotation = async () => {
+    if (!annotationTarget || !annotationNote.trim() || annotationBusy) return;
+    setAnnotationBusy(true);
+    setAnnotationError("");
+    try {
+      const result = await addAnnotation(task.id, {
+        artifact: REQUIREMENT_GRAPH_ARTIFACT,
+        file: annotationTarget.file,
+        line: annotationTarget.line,
+        anchor: annotationTarget.anchor,
+        quote: annotationTarget.quote,
+        note: annotationNote.trim(),
+        kind: "doc",
+        route: "agent",
+      });
+      if (result.error) {
+        setAnnotationError(result.error);
+        return;
+      }
+      setAnnotationTarget(undefined);
+      setAnnotationNote("");
+      onAnnotationAdded?.();
+    } catch (reason) {
+      setAnnotationError(reason instanceof Error
+        ? reason.message : "批注保存失败，请重试");
+    } finally {
+      setAnnotationBusy(false);
+    }
+  };
+  const planAnchor = "模块拆分与依赖：整体方案";
   return <details className="requirement-graph" open={expanded}
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
     <summary>
@@ -88,6 +154,25 @@ export function RequirementGraph({
       <i className="requirement-toggle" aria-hidden />
     </summary>
     <div className="requirement-graph-body">
+      {canAnnotateGraph && <div className="requirement-graph-review-tools">
+        <div>
+          <strong>直接在图上提意见</strong>
+          <small>整体切法、某个模块或某条依赖都可以单独批注</small>
+        </div>
+        <button type="button" onClick={() => openAnnotation({
+          label: "整体拆分方案",
+          file: "模块拆分与依赖 / 整体方案",
+          line: 1,
+          anchor: planAnchor,
+          quote: `${graph.repositories.length} 个模块任务 · ${
+            graph.dependencies.length} 条硬依赖 · 方案版本 ${
+            graph.plan_revision ?? "未标记"}`,
+        })}>
+          对整体方案提意见
+          {annotationCount(planAnchor) > 0
+            && <i>{annotationCount(planAnchor)}</i>}
+        </button>
+      </div>}
       <div className="requirement-root-task">
         <span>主任务</span>
         <div><strong>{task.title ?? task.requirement}</strong>
@@ -173,6 +258,26 @@ export function RequirementGraph({
                   <i aria-hidden />
                   <strong>{repository.scope?.name
                     ? `${repository.name} · ${repository.scope.name}` : repository.name}</strong>
+                  {canAnnotateGraph && (() => {
+                    const anchor = `模块 ${repository.id}：${
+                      repository.scope?.name ?? repository.name}`;
+                    return <button type="button" className="graph-node-annotate"
+                      onClick={() => openAnnotation({
+                        label: `模块：${repository.scope?.name ?? repository.name}`,
+                        file: `模块拆分与依赖 / 模块 / ${
+                          repository.scope?.name ?? repository.name}`,
+                        line: graph.repositories.indexOf(repository) + 2,
+                        anchor,
+                        quote: [
+                          `${repository.name} · ${repository.scope?.name ?? "未命名模块"}`,
+                          `职责：${repository.responsibility ?? "未说明"}`,
+                          `负责面：${repository.scope?.paths.join("、") ?? "未说明"}`,
+                        ].join("\n"),
+                      })}>
+                      批注{annotationCount(anchor) > 0
+                        && <i>{annotationCount(anchor)}</i>}
+                    </button>;
+                  })()}
                   {repository.task_id && <button type="button"
                     onClick={() => onOpenTask?.(repository.task_id!)}>查看子任务</button>}
                 </div>
@@ -220,6 +325,22 @@ export function RequirementGraph({
           <span><strong>{repoName(edge.from, task)}</strong><i>依赖</i>
             <strong>{repoName(edge.to, task)}</strong></span>
           {edge.reason && <small>{edge.reason}</small>}
+          {canAnnotateGraph && (() => {
+            const anchor = `依赖 ${edge.from} -> ${edge.to}`;
+            return <button type="button" className="graph-edge-annotate"
+              onClick={() => openAnnotation({
+                label: `依赖：${repoName(edge.from, task)} → ${repoName(edge.to, task)}`,
+                file: `模块拆分与依赖 / 依赖 / ${repoName(edge.from, task)} → ${
+                  repoName(edge.to, task)}`,
+                line: graph.repositories.length + index + 2,
+                anchor,
+                quote: `${repoName(edge.from, task)} 依赖 ${repoName(edge.to, task)}`
+                  + `${edge.reason ? `\n原因：${edge.reason}` : ""}`,
+              })}>
+              批注{annotationCount(anchor) > 0
+                && <i>{annotationCount(anchor)}</i>}
+            </button>;
+          })()}
         </div>)}
       </div>}
       {(task.cross_repository_updates?.length ?? 0) > 0 && (
@@ -241,6 +362,47 @@ export function RequirementGraph({
             ? `核对完成后，请在右侧确认创建 ${graph.repositories.length} 个模块任务，或退回修改。`
             : "核对完成后，请在右侧确认分析结论并结束，或退回修改。"}
       </p>}
+      {annotationTarget && <div className="graph-annotation-backdrop"
+        role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !annotationBusy) {
+            setAnnotationTarget(undefined);
+          }
+        }}>
+        <section className="graph-annotation-editor" role="dialog"
+          aria-modal="true" aria-labelledby="graph-annotation-title">
+          <header>
+            <div><span>方案批注</span>
+              <strong id="graph-annotation-title">{annotationTarget.label}</strong></div>
+            <button type="button" aria-label="关闭批注"
+              disabled={annotationBusy}
+              onClick={() => setAnnotationTarget(undefined)}>×</button>
+          </header>
+          <blockquote>{annotationTarget.quote}</blockquote>
+          <textarea autoFocus rows={5} value={annotationNote}
+            placeholder="直接说明希望怎么调整；不需要为了批注去找文档中的某一行"
+            onChange={(event) => setAnnotationNote(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !annotationBusy) {
+                setAnnotationTarget(undefined);
+              }
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void saveAnnotation();
+              }
+            }} />
+          {annotationError && <p className="graph-annotation-error" role="alert">
+            {annotationError}</p>}
+          <footer><small>记下后，在右侧选择“需要修改”，意见会随决定交给 Agent</small>
+            <div><button type="button" disabled={annotationBusy}
+              onClick={() => setAnnotationTarget(undefined)}>取消</button>
+            <button type="button" className="primary"
+              disabled={annotationBusy || !annotationNote.trim()}
+              onClick={() => void saveAnnotation()}>
+              {annotationBusy ? "记下中…" : "记下意见"}
+            </button></div>
+          </footer>
+        </section>
+      </div>}
     </div>
   </details>;
 }

@@ -11,13 +11,18 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
+import { REQUIREMENT_GRAPH_ARTIFACT } from "../src/annotations.ts";
+import {
+  requirementArtifacts,
+  writeRequirementArtifacts,
+} from "./requirementGraphFixture.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -50,7 +55,8 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
   const auditRepo = makeRepo(dataDir, "svc-audit");
   const ticket = "REQ2026081930";
   // 机读需求图:url 必须原样照录下单地址(投影按白名单全等过滤)。
-  const graphJson = JSON.stringify({
+  const artifacts = requirementArtifacts(
+    "# 跨仓方案\n先 api 后 web,接口契约见正文。\n", {
     repository_assessments: [
       { name: "svc-api", url: apiRepo, outcome: "change_required",
         reason: "接口定义与实现需要调整", evidence: ["src/api.ts:createOrder"] },
@@ -70,13 +76,14 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
         reason: "svc-web 依赖 svc-api，接口没就绪前端无从联调" },
     ],
   });
+  const graphJson = artifacts.graph;
   const artifactDir = join(".mae-flow-work", ticket);
   const script: Scene[] = [
     { text: "读两仓现场,写方案与机读投影",
       tool: { name: "bash", input: { command:
         `ls 1-svc-api 2-svc-web && ` +
-        `printf '%s' '# 跨仓方案\n先 api 后 web,接口契约见正文。\n' ` +
-        `> "${join(artifactDir, `CHAIN-${ticket}.md`)}" && ` +
+        `cat > "${join(artifactDir, `CHAIN-${ticket}.md`)}" << 'CHAIN_EOF'\n` +
+        `${artifacts.chain}CHAIN_EOF\n` +
         `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
     // 模型照抄清单序号提问(内网实锤):卡上必须已经换成仓库名。
@@ -272,7 +279,8 @@ test("所有候选仓均无需修改时确认结论直接完成，不制造空�
   const secondRepo = makeRepo(dataDir, "svc-ledger");
   const ticket = "REQ2026090402";
   const artifactDir = join(".mae-flow-work", ticket);
-  const graphJson = JSON.stringify({
+  const artifacts = requirementArtifacts(
+    "# 排查结论\n两个仓均无需修改。\n", {
     repository_assessments: [
       { name: "svc-reader", url: firstRepo, outcome: "no_change",
         reason: "现有读取接口已经满足需求", evidence: ["src/read.ts:get"] },
@@ -282,11 +290,12 @@ test("所有候选仓均无需修改时确认结论直接完成，不制造空�
     repositories: [],
     dependencies: [],
   });
+  const graphJson = artifacts.graph;
   const model = new ScriptedModelServer([
     { text: "逐仓核对后无需修改",
       tool: { name: "bash", input: { command:
-        `printf '%s' '# 排查结论\n两个仓均无需修改。\n' > "${
-          join(artifactDir, `CHAIN-${ticket}.md`)}" && `
+        `cat > "${join(artifactDir, `CHAIN-${ticket}.md`)}" << 'CHAIN_EOF'\n`
+        + `${artifacts.chain}CHAIN_EOF\n`
         + `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n`
         + `${graphJson}\nEOF` } } },
     { tool: { name: "AskUserQuestion", input: { questions: [{
@@ -319,4 +328,88 @@ test("所有候选仓均无需修改时确认结论直接完成，不制造空�
   } finally {
     await model.stop();
   }
+});
+
+test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-revision-"));
+  const apiRepo = makeRepo(dataDir, "revision-api");
+  const webRepo = makeRepo(dataDir, "revision-web");
+  const ticket = "REQ2026090403";
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  const parent = service.create("强同步拆分方案", {
+    account: "owner", ticket, repos: [apiRepo, webRepo],
+  });
+  const state = (service as any).tasks.get(parent.id);
+  const cwd = join(parent.workspace, "repositories");
+  const artifactDir = join(cwd, ".mae-flow-work", ticket);
+  const graph = {
+    repository_assessments: [
+      { name: "revision-api", url: apiRepo, outcome: "change_required",
+        reason: "接口需要调整" },
+      { name: "revision-web", url: webRepo, outcome: "change_required",
+        reason: "页面需要跟随" },
+    ],
+    repositories: [
+      { id: "unit-api", name: "revision-api", url: apiRepo,
+        responsibility: "提供接口",
+        scope: { name: "接口模块", paths: ["src/api/"] } },
+      { id: "unit-web", name: "revision-web", url: webRepo,
+        responsibility: "消费接口",
+        scope: { name: "页面模块", paths: ["src/web/"] } },
+    ],
+    dependencies: [{ dependent: "unit-web", prerequisite: "unit-api",
+      reason: "页面等待接口" }],
+  };
+  const first = writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口先行，页面随后。\n", graph, "r1");
+  state.cwd = cwd;
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready");
+  assert.equal(state.summary.requirement_graph.plan_revision, "r1");
+
+  const annotation = service.addAnnotation(parent.id, {
+    author: "reviewer",
+    artifact: REQUIREMENT_GRAPH_ARTIFACT,
+    file: "模块拆分与依赖 / 模块 / 接口模块",
+    line: 2,
+    anchor: "模块 unit-api：接口模块",
+    quote: "revision-api · 接口模块\n职责：提供接口\n负责面：src/api/",
+    note: "这个模块还太大，请继续拆成协议和实现。",
+    kind: "doc",
+  });
+  assert.equal(service.listAnnotations(parent.id).checks[0]?.state, "hit",
+    "图批注要按模块 id 命中当前图，不依赖 JSON 行号");
+  assert.match(service.previewAnnotations(parent.id, [annotation.id]), /方案结构/);
+  assert.match((service as any).requirementAnnotationInstructions(
+    state, [annotation]), /同步修订 CHAIN 文档与 requirement-graph\.json/);
+
+  // 只改人看的文档：版本标记和 JSON 都没动，真实字节摘要必须立即失配。
+  writeFileSync(join(artifactDir, `CHAIN-${ticket}.md`),
+    first.chain.replace("接口先行", "接口协议先行"));
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "invalid");
+  assert.match(state.summary.requirement_graph.projection_error,
+    /文档内容已经变化.*机读依赖图还没有同步/);
+  assert.throws(() => (service as any).requirementGraphPlan(state),
+    /模块拆分与依赖图尚未生成完整/);
+
+  // 两份一起升级到 r2 后恢复；随后同 revision 偷换图内容仍必须被拒。
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口协议先行，页面随后。\n", graph, "r2");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "ready");
+  assert.equal(state.summary.requirement_graph.plan_revision, "r2");
+  writeRequirementArtifacts(artifactDir, ticket,
+    "# 模块方案\n接口协议先行，页面随后。\n", {
+      ...graph,
+      dependencies: [],
+    }, "r2");
+  (service as any).refreshRequirementGraph(state);
+  assert.equal(state.summary.requirement_graph.projection_state, "invalid");
+  assert.match(state.summary.requirement_graph.projection_error,
+    /版本 r2 的产物内容发生变化/);
 });

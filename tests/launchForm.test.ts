@@ -29,6 +29,7 @@ import {
   createBusinessModule,
   publishBusinessKnowledgeAsset,
 } from "../src/businessModuleLibrary.ts";
+import { writeRequirementArtifacts } from "./requirementGraphFixture.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
@@ -602,8 +603,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   const artifacts = join(root, ".mae-flow-work", "REQ-G3-API");
   mkdirSync(artifacts, { recursive: true });
   writeFileSync(join(artifacts, ".ticket-id"), "REQ-G3-API\n");
-  writeFileSync(join(artifacts, "CHAIN-REQ-G3-API.md"), "# 已确认方案\n");
-  writeFileSync(join(artifacts, "requirement-graph.json"), JSON.stringify({
+  writeRequirementArtifacts(artifacts, "REQ-G3-API", "# 已确认方案\n", {
     repository_assessments: [
       { name: "api", url: "https://codehub/team/api.git",
         outcome: "change_required", reason: "接口需要调整" },
@@ -620,7 +620,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     ],
     // 历史产物的 from/to 是“api 先于 web”；升级后仍要读成 web 等 api。
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
-  }));
+  });
   state.cwd = root;
   assert.throws(() => service.setRequirementCollaborators(parent.id,
     ["alice", "charlie"]), /charlie.*CodeHub Token/,

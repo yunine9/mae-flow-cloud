@@ -2038,6 +2038,20 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-toggle { width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 140ms ease; }
 .requirement-graph:not([open]) .requirement-toggle { transform: rotate(-45deg); }
 .requirement-graph-body { padding: 11px 13px 12px; border-top: 1px solid var(--line); }
+.requirement-graph-review-tools { margin-bottom: 10px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.requirement-graph-review-tools > div { min-width: 0; display: grid; gap: 2px; }
+.requirement-graph-review-tools strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-graph-review-tools small { color: var(--muted); font-size: 11.5px; }
+.requirement-graph-review-tools > button,
+.graph-node-annotate,
+.graph-edge-annotate { display: inline-flex; align-items: center; gap: 5px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 7px; color: var(--accent); background: var(--surface); font-size: 11.5px; font-weight: 750; cursor: pointer; }
+.requirement-graph-review-tools > button { flex: none; padding: 6px 9px; }
+.requirement-graph-review-tools button:hover,
+.graph-node-annotate:hover,
+.graph-edge-annotate:hover { border-color: var(--accent); background: var(--accent-soft); }
+.requirement-graph-review-tools button > i,
+.graph-node-annotate > i,
+.graph-edge-annotate > i { min-width: 16px; padding: 1px 4px; border-radius: 999px; color: #fff; background: var(--accent); font-size: 9.5px; font-style: normal; text-align: center; }
 .requirement-root-task { padding: 10px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 9px; background: var(--accent-soft); }
 .requirement-root-task > span { padding: 3px 6px; border-radius: 5px; color: #fff; background: var(--accent); font-size: 10.5px; font-weight: 800; }
 .requirement-root-task > div { min-width: 0; display: grid; gap: 2px; }
@@ -2096,16 +2110,35 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .has-prerequisite .repo-node-head > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
 .repo-node-head strong { overflow: hidden; color: var(--text-strong); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
 .repo-node-head button { padding: 3px 5px; color: var(--accent); border: 0; border-radius: 5px; background: var(--accent-soft); font-size: var(--font-size-assist); cursor: pointer; }
+.repo-node-head .graph-node-annotate { border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--surface); }
 .repo-assignee { display: inline-flex; width: fit-content; margin-top: 7px; padding: 3px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11.5px; font-weight: 750; }
 .repo-task-status { display: block; margin-top: 7px; }
 .requirement-stage article > p { margin: 6px 0 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.45; }
 .repo-prerequisite { display: block; margin-top: 5px; color: var(--attention); font-size: var(--font-size-assist); }
 .requirement-edges { margin-top: 9px; display: grid; gap: 7px; }
-.requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
+.requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
 .requirement-edges > div > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-assist); }
 .requirement-edges i { color: var(--accent); font-style: normal; }
 .requirement-edges strong { color: var(--text); font-weight: 700; }
-.requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
+.requirement-edges > div > small { grid-column: 1 / -1; display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
+.graph-edge-annotate { padding: 4px 7px; }
+.graph-annotation-backdrop { position: fixed; inset: 0; z-index: 285; padding: 24px; display: grid; place-items: center; background: color-mix(in srgb, #07101f 38%, transparent); backdrop-filter: blur(2px); }
+.graph-annotation-editor { width: min(590px, calc(100vw - 32px)); padding: 17px; display: grid; gap: 12px; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow-lg); }
+.graph-annotation-editor > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.graph-annotation-editor > header > div { display: grid; gap: 2px; }
+.graph-annotation-editor > header span { color: var(--accent); font: 750 10.5px var(--font-mono); letter-spacing: .11em; text-transform: uppercase; }
+.graph-annotation-editor > header strong { color: var(--text-strong); font-size: 16px; }
+.graph-annotation-editor > header > button { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: var(--surface-soft); font-size: 20px; cursor: pointer; }
+.graph-annotation-editor > blockquote { max-height: 145px; margin: 0; padding: 10px 11px; overflow: auto; border-left: 3px solid var(--accent); border-radius: 7px; color: var(--text); background: var(--surface-soft); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+.graph-annotation-editor > textarea { width: 100%; min-height: 118px; resize: vertical; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; line-height: 1.55; }
+.graph-annotation-editor > textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); border-color: var(--accent); }
+.graph-annotation-error { margin: 0; color: var(--danger); font-size: 12px; }
+.graph-annotation-editor > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.graph-annotation-editor > footer small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.graph-annotation-editor > footer > div { flex: none; display: flex; gap: 7px; }
+.graph-annotation-editor > footer button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); font-weight: 700; cursor: pointer; }
+.graph-annotation-editor > footer button.primary { border-color: var(--accent); color: #fff; background: var(--accent); }
+.graph-annotation-editor button:disabled { opacity: .55; cursor: wait; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 
 /* 这一段原来全是写死的十六进制绿(#16885d/#2e9b77/#d9f4e9):浅色下没事,
@@ -7515,8 +7548,7 @@ pre {
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
 .ws-doc > .requirement-graph + .requirement-team-picker,
 .ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
-/* 仓间依赖图是结构化的,圈不了批注;对方案的意见要落在方案文档上。
-   原来这一页没有任何入口,人以为这个阶段不能提检视意见(用户实测)。 */
+/* 图上直接收结构意见；这张轻入口只保留给需要引用 CHAIN 具体措辞的逐行批注。 */
 .ws-doc > .chain-review-entry {
   width: min(900px, 100%); margin: 0 auto 12px;
   padding: 10px 14px; display: flex; align-items: center; gap: 14px;

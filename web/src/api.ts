@@ -961,6 +961,9 @@ export interface TaskSummary {
     /** pending 是下单候选仓占位；只有 ready 才能据此创建模块任务。 */
     projection_state?: "pending" | "ready" | "invalid";
     projection_error?: string;
+    plan_revision?: string;
+    chain_sha256?: string;
+    projection_sha256?: string;
     repository_assessments?: Array<{
       name: string; url: string;
       outcome: "change_required" | "no_change";
@@ -2620,6 +2623,8 @@ export async function listInterrupts(
 
 /** 需求原文来自任务快照；这个保留标识与服务端 annotations.ts 同合同。 */
 export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
+/** 模块拆分图的虚拟批注靶；服务端按模块/依赖 id 重建锚点文本。 */
+export const REQUIREMENT_GRAPH_ARTIFACT = "__requirement_graph__";
 
 export interface Annotation {
   id: string;

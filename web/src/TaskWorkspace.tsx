@@ -1842,8 +1842,8 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               <>
-                {/* 图是结构化的圈不了批注,对方案的意见落在方案文档上;这里
-                    给个直达入口,不然人以为分析阶段不能提检视意见。 */}
+                {/* 结构意见直接在图上按整体/模块/依赖批注；需要引用详细措辞
+                    时仍可直达 CHAIN 文档逐行圈选。两种入口共用一套批注账。 */}
                 {canCreateAnnotation && task.requirement_graph?.stage === "analysis"
                   && (() => {
                     const chainDoc = documents.find((item) =>
@@ -1851,9 +1851,9 @@ export function TaskWorkspace({
                     return (
                       <div className="chain-review-entry" role="note">
                         <div>
-                          <strong>对拆分方案有意见？</strong>
+                          <strong>需要针对方案文字提意见？</strong>
                           <small>{chainDoc
-                            ? "在方案文档上圈选要改的地方并写意见；提交决定时选「需要修改」，意见会随决定一起交给 Agent。"
+                            ? "整体切法、模块和依赖可直接在下方图上批注；具体文字可打开方案文档圈选。"
                             : "方案文档还没生成，生成后可在过程文档里圈选批注。"}</small>
                         </div>
                         <button type="button" disabled={!chainDoc}
@@ -1862,7 +1862,7 @@ export function TaskWorkspace({
                             setMaterialView("doc");
                             setActive(chainDoc.name);
                           }}>
-                          打开方案文档批注
+                          打开方案文档逐行批注
                         </button>
                       </div>
                     );
@@ -1872,6 +1872,10 @@ export function TaskWorkspace({
                     卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。
                     现在长在图里"主任务团队"那一块的按钮后面,想拉人就点开。 */}
                 <RequirementGraph task={task} onOpenTask={onOpenTask}
+                  annotationEnabled={canCreateAnnotation
+                    && task.requirement_graph?.stage === "analysis"}
+                  annotations={notes}
+                  onAnnotationAdded={() => setNotesPulse((tick) => tick + 1)}
                   teamInvite={canOperate && task.requirement_graph?.stage === "analysis"
                     ? <RequirementTeamPicker
                         taskId={task.id}

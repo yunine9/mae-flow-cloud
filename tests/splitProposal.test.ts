@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
+import { requirementArtifacts } from "./requirementGraphFixture.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -87,7 +88,8 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
   const repo = makeRepo(dataDir);
   const ticket = "REQ2026090301";
   const artifactDir = join(".mae-flow-work", ticket);
-  const graphJson = JSON.stringify({
+  const artifacts = requirementArtifacts(
+    "# 拆分方案\n契约先行,过滤在后。\n", {
     repository_assessments: [{ name: "svc-core", url: repo,
       outcome: "change_required", reason: "契约和过滤模块需要分别交付" }],
     repositories: [
@@ -100,13 +102,14 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     ],
     dependencies: [],
   });
+  const graphJson = artifacts.graph;
   // 分析会话的剧本:写方案与机读图,举确认卡。
   const analysisScenes: Scene[] = [
     { text: "分析现场:写方案与机读投影",
       tool: { name: "bash", input: { command:
         `ls 1-svc-core && mkdir -p "${artifactDir}" && ` +
-        `printf '%s' '# 拆分方案\n契约先行,过滤在后。\n' ` +
-        `> "${join(artifactDir, `CHAIN-${ticket}.md`)}" && ` +
+        `cat > "${join(artifactDir, `CHAIN-${ticket}.md`)}" << 'CHAIN_EOF'\n` +
+        `${artifacts.chain}CHAIN_EOF\n` +
         `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
     { tool: { name: "AskUserQuestion", input: { questions: [
