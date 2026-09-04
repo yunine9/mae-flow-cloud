@@ -46,6 +46,9 @@ export interface PrePushRunRequest {
   /** 只用于提醒 Build-Fix Agent 自查提交范围，不是按目录硬拦截。
    * 某些仓会合法提交生成代码/二进制，最终判断仍由 Agent 基于仓库事实作出。 */
   changeScope?: BuildFixScopeReview;
+  /** 分支上有人直接推的提交。必须点名，否则 Build-Fix 很可能把别人的
+   * 改动当成"编译不过的脏东西"回滚掉——它有 commit 权限，做得到。 */
+  foreignCommits?: { count: number; subjects: string[] };
 }
 
 export interface BuildFixScopeReview {
@@ -614,6 +617,17 @@ export function prePushMission(
     "- 修复确实需要新增、删除或重命名业务文件时可以正常完成；Cloud 会只为"
       + "新的业务范围重新请用户确认一次，不要用日志、过程文档或平台目录凑提交。",
   ] : [];
+  const foreign = request.foreignCommits;
+  const foreignGuidance = foreign?.count ? [
+    "",
+    `分支上有 ${foreign.count} 条不是本任务产生的提交（有人直接往分支推了`
+      + "代码），它们已经在当前历史里：",
+    ...foreign.subjects.slice(0, 8).map((line) => `- ${line}`),
+    "- 它们默认可信：不要回滚、改写、squash 或\"整理\"掉，也不要因为它们"
+      + "编译不过就删代码。",
+    "- 修复只针对真实的编译/测试失败；确实是这些提交带来的问题，就把结论"
+      + "写进 summary 交给人，不要自己替人决定。",
+  ] : [];
   const changeScope = request.changeScope;
   const scopeGuidance = changeScope ? [
     "",
@@ -670,6 +684,7 @@ export function prePushMission(
       + "Cloud 会在 push 前复核整个提交历史。",
     ...scopeGuidance,
     ...deliveryGuidance,
+    ...foreignGuidance,
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
     "",

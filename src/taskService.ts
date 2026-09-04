@@ -444,6 +444,7 @@ import {
   validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
+import { absorbForeignBranchCommits } from "./foreignBranchCommits.ts";
 import {
   emptyTokenUsageState,
   recordTokenUsage,
@@ -570,6 +571,12 @@ export function userFacingDeliveryFailure(error: unknown): string {
   if (/remote unpack failed:\s*unable to create temporary object directory/i
     .test(raw)) {
     return "宿主推送失败：远端代码仓暂时无法写入，请检查仓库服务或存储权限";
+  }
+  // 非快进拒收 = 探测与推送之间有人往分支上推了东西。它不是坏契约,
+  // 重试有意义:下一轮 tryDeliver 开头会把外来提交接上再推。这句话
+  // 因此必须留在自愈通道里,别落进 deterministicDeliveryFailure。
+  if (/non-fast-forward|fetch first|\[rejected\]/i.test(raw)) {
+    return "远端分支已被他人更新，系统会把新提交接上后重试推送";
   }
   return raw.replace(
     /failed to push some refs to\s+(['"])[^'"]+\1/gi,
@@ -1080,6 +1087,19 @@ export interface TaskSummary {
       ref: string;
       remote: string;
       url?: string;
+    };
+    /** 分支上的外来提交(本任务没推过、却已在远端的提交)。它只可能是
+     * 人为介入,默认可信:宿主把自己的提交接到它后面,不举卡也不拦。
+     * 记账是为了两件不能忘的事——机械重组的锚不许比 base_sha 更老
+     * (否则一次 reset 就把人推上去的东西抹了),派给 Agent 的每一轮
+     * 都要点名"这些不是你写的,别回滚"。 */
+    foreign_commits?: {
+      /** 吸收时的远端分支头:此后一切机械重组的最老锚。 */
+      base_sha: string;
+      absorbed_at: string;
+      count: number;
+      /** `<短 SHA> <标题>`,只用于对人/对 Agent 披露。 */
+      subjects: string[];
     };
     /** Cloud 在每次新 HEAD 推送前运行的独立编译/UT 会话。它不是
      * Mae-Flow 步骤或审批门禁；PASS 收据只负责避免把明显红灯送去慢
@@ -15034,6 +15054,12 @@ export class TaskService {
       baseline,
       commitConvention: this.effectiveCommitConvention(),
       ...(changeScope ? { changeScope } : {}),
+      ...(task.summary.delivery?.foreign_commits?.count ? {
+        foreignCommits: {
+          count: task.summary.delivery.foreign_commits.count,
+          subjects: [...task.summary.delivery.foreign_commits.subjects],
+        },
+      } : {}),
       ...(task.summary.delivery_selection ? {
         deliverySelection: {
           paths: [...task.summary.delivery_selection.paths],
@@ -15636,6 +15662,16 @@ export class TaskService {
       return stall(`提交历史已脱离任务定格基线 ${frozen.slice(0, 7)},同时`
         + "工作区还有未提交改动;平台不猜着整理,请在代码检视中确认处理。");
     }
+    // 分支上有外来提交时绝不重放:下面的 commit-tree 会把所有历史压成
+    // 一条"净改动",人直接推上去的提交就此从历史里消失。平台可以整理
+    // 自己的提交,不能替人处置别人的。
+    const foreignBase = String(
+      task.summary.delivery?.foreign_commits?.base_sha ?? "").trim();
+    if (foreignBase && (await git(
+      ["merge-base", "--is-ancestor", foreignBase, head])).status === 0) {
+      return stall(`提交历史已脱离任务定格基线 ${frozen.slice(0, 7)},而分支上`
+        + "还有别人直接推的提交;平台不改写别人的历史,请人工确认现场。");
+    }
     const replay = await git(["commit-tree", `${head}^{tree}`, "-p", frozen,
       "-m", cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
         "按任务定格基线重放净改动——历史重排已被平台整理")]);
@@ -15699,10 +15735,16 @@ export class TaskService {
     }
     const listed = violations.slice(0, 20).join("、")
       + (violations.length > 20 ? ` 等 ${violations.length} 个` : "");
+    // 分支上有外来提交时越界文件很可能根本不是本单元干的:不点名这件事,
+    // 裁决人会对着别人的改动追问本单元责任人。
+    const foreign = task.summary.delivery?.foreign_commits;
     const detail = `本单元(${scope.name})的提交改动越出负责文件面:`
       + `${listed}。可能是实现确有需要(如修改接口契约),也可能是`
       + "拆分方案有误;请主责任人裁决:放行(改动随本单元 MR 一起检视)"
-      + "或打回(撤出越界改动)。";
+      + "或打回(撤出越界改动)。"
+      + (foreign?.count
+        ? `另外:本分支上有 ${foreign.count} 条别人直接推的提交,`
+          + "越界文件可能来自它们,不一定是本单元的改动。" : "");
     task.summary.delivery = {
       ...task.summary.delivery,
       scope_violation: { paths: violations, noted_at: new Date().toISOString() },
@@ -15840,8 +15882,21 @@ export class TaskService {
       return String(result.stdout ?? "").trim();
     };
     const head = await run(["rev-parse", "--verify", "HEAD"], "读取当前 HEAD");
+    const isAncestorSha = async (older: string, newer: string) =>
+      (await runSafeWorktreeGitAsync(cwd,
+        ["merge-base", "--is-ancestor", older, newer],
+        { timeoutMs: 30_000 })).status === 0;
+    // 已经在远端的提交是重组的**最老锚**。锚比它老,这次 reset 就会把
+    // 推上去的提交一起卷进重写——别人直接推的外来提交会因此从历史里
+    // 凭空消失。git_push 与外来提交基座都在远端,取其中更新的那个。
+    const pushedSha = String(task.summary.delivery?.git_push?.sha ?? "").trim();
+    const foreignBase = String(
+      task.summary.delivery?.foreign_commits?.base_sha ?? "").trim();
+    const remoteFloor = foreignBase
+        && (!pushedSha || await isAncestorSha(pushedSha, foreignBase))
+      ? foreignBase : pushedSha;
     const candidates = [
-      task.summary.delivery?.git_push?.sha,
+      remoteFloor,
       selection.head,
       contribution.base_sha,
       // 历史刚被按定格基线重放过时,旧 push/selection SHA 都不再是
@@ -16067,6 +16122,14 @@ export class TaskService {
         }
         return;
       }
+      // 远端分支被人推过就先把自己的提交接到它后面。这必须走在最前:
+      // 后面的 Build-Fix、范围整理、推送确认全都绑 HEAD,接续换了 HEAD
+      // 就得整条链重来一遍(task-40 实锤:不接续只会拿同一个 SHA 撞
+      // non-fast-forward 一百多次)。
+      if (await this.absorbForeignRemoteCommits(task, branch) === "blocked") {
+        return;
+      }
+      if (!this.current(task, epoch)) return;
       // 定格基线祖先门禁必须走在一切交付动作(Build-Fix/范围整理/推送)
       // 之前:历史脱离基线时后面每一步都在错的合同上白烧。
       const baselineGate =
@@ -16287,6 +16350,10 @@ export class TaskService {
           ? { loop: task.summary.delivery.loop } : {}),
         ...(task.summary.delivery?.prepush
           ? { prepush: task.summary.delivery.prepush } : {}),
+        // 外来提交是**分支**的既成事实,不是这一轮的过程状态:这份台账
+        // 一丢,下一轮的重组锚就会退回更老的 SHA,把人推的提交抹掉。
+        ...(task.summary.delivery?.foreign_commits
+          ? { foreign_commits: task.summary.delivery.foreign_commits } : {}),
         git_push: pushReceipt,
         mr_url: mr.url,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
@@ -18105,6 +18172,142 @@ export class TaskService {
    * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
    * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,交回统一的
    * host push 链，不烧会话。刹车=同 SHA 不二修。 */
+  /** 分支上的外来提交对 Agent 的披露。它们是人直接推上来的,默认可信;
+   * 但任何一轮修复会话若不知情,很容易把别人的改动当成脏东西"整理"掉
+   * (reset/revert/squash 都够呛),所以派单时必须点名。 */
+  private foreignCommitNotice(task: TaskState): string {
+    const foreign = task.summary.delivery?.foreign_commits;
+    if (!foreign?.count) return "";
+    return [
+      `注意:本任务分支上有 ${foreign.count} 条不是本任务产生的提交`
+        + "(有人直接往分支推了代码),它们已经在你的历史里:",
+      ...foreign.subjects.slice(0, 8).map((line) => `- ${line}`),
+      "它们默认可信:不要回滚、改写、squash 或\"整理\"掉。"
+        + "你的修改接在它们之后即可;确有冲突就如实说明,不要自己替人决定。",
+    ].join("\n");
+  }
+
+  /** 远端任务分支上出现了本任务没推过的提交时,把自己的提交接到它后面。
+   *
+   * 老行为是拿同一个已验证 SHA 一遍遍撞 non-fast-forward 拒收(task-40
+   * 实锤:同一条失败刷了 110 次)。外来提交只可能是人为介入,用户拍板
+   * 默认可信——不举卡、不加闸,接续后新 HEAD 照常走 Build-Fix / 推送确认
+   * / 推送这条既有链路,人该看的东西一样会看到。
+   *
+   * 探测失败(读不到远端、拉不下来)一律 fail-open:这不是新门禁,后面
+   * 真 push 会如实失败并按既有预算自愈。真正 fail-closed 的只有"历史被
+   * 改写"和"接不上",它们继续推下去只会把事情弄得更说不清。 */
+  private async absorbForeignRemoteCommits(
+    task: TaskState,
+    branch: string,
+  ): Promise<"ok" | "absorbed" | "blocked"> {
+    if (!this.options.host || !task.cwd) return "ok";
+    const cwd = task.cwd;
+    let remoteUrl: string;
+    try {
+      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
+      if (!configured) throw new Error("任务没有权威代码仓地址");
+      validateRepositoryAddress(configured);
+      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
+          && !/^(?:https?|file):\/\//i.test(configured)
+          && !/^[a-z]:[\\/]/i.test(configured)) {
+        throw new Error("只允许 HTTPS 或本地仓传输");
+      }
+      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
+        ? configured : resolve(configured);
+    } catch (error) {
+      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
+        + `(fail-open): ${String(error)}`);
+      return "ok";
+    }
+    const credential = this.options.gitCredential?.(
+      task.summary.luban_account);
+    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
+    try {
+      sandbox = this.prepareHostGitSandbox(credential);
+    } catch (error) {
+      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
+        + `(Git 沙箱创建失败,fail-open): ${String(error)}`);
+      return "ok";
+    }
+    let gitView: ReturnType<typeof createSafeGitView>;
+    try {
+      gitView = createSafeGitView(cwd);
+    } catch (error) {
+      this.cleanupHostGitCredential(sandbox);
+      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
+        + `(安全 Git 视图创建失败,fail-open): ${String(error)}`);
+      return "ok";
+    }
+    const identityName = credential?.username
+      ?? task.summary.luban_account ?? "mae-flow-cloud";
+    const identityEmail = credential?.email
+      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+    // 与冲突修复同一套边界:fetch/rebase 看真实 refs/index/objects,
+    // config 却来自空代理 gitdir,Agent 写进 .git/config 的 hook、
+    // fsmonitor、insteadOf 都进不了这个带宿主凭据的进程。
+    const worktreeArgs = [
+      ...sandbox.args,
+      "-c", `safe.directory=${resolve(cwd)}`,
+      "-c", "core.fsmonitor=false",
+      "-c", "commit.gpgSign=false",
+      "-c", `user.name=${identityName}`,
+      "-c", `user.email=${identityEmail}`,
+    ];
+    const worktreeEnv = gitView.environment(sandbox.env);
+    try {
+      const outcome = await absorbForeignBranchCommits({
+        branch,
+        remoteUrl,
+        lastPushedSha: task.summary.delivery?.git_push?.sha
+          ?? task.summary.delivery?.sha,
+        transport: (args) => runGitProcess([...sandbox.args, ...args], {
+          timeoutMs: 60_000, env: sandbox.env,
+        }),
+        // rebase 的中间状态落在 GIT_DIR(这里是代理 gitdir)里,
+        // 所以整轮必须复用同一个 view——换一个就 abort 不回来了。
+        worktree: (args) => runGitProcess([...worktreeArgs, ...args], {
+          cwd,
+          env: worktreeEnv,
+          timeoutMs: args[0] === "fetch" || args[0] === "rebase"
+            ? 5 * 60_000 : 30_000,
+        }),
+      });
+      if (outcome.kind === "none") return "ok";
+      if (outcome.kind === "unavailable") {
+        this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
+          + `(fail-open): ${outcome.reason}`);
+        return "ok";
+      }
+      if (outcome.kind === "blocked") {
+        this.markVerificationStalled(task, outcome.reason);
+        return "blocked";
+      }
+      const previous = task.summary.delivery?.foreign_commits;
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        foreign_commits: {
+          base_sha: outcome.base_sha,
+          absorbed_at: new Date().toISOString(),
+          count: (previous?.count ?? 0) + outcome.count,
+          subjects: [...outcome.subjects, ...(previous?.subjects ?? [])]
+            .slice(0, 12),
+        },
+      };
+      task.summary.detail = `分支上有 ${outcome.count} 条外来提交`
+        + "(有人直接推了代码),已把本任务的提交接到它们之后重新验证";
+      this.persist(task);
+      this.options.log?.(`任务 ${task.summary.id} 接续分支上的 `
+        + `${outcome.count} 条外来提交:${outcome.previous_head.slice(0, 12)}`
+        + ` → ${outcome.head.slice(0, 12)}(基座 ${
+          outcome.base_sha.slice(0, 12)})`);
+      return "absorbed";
+    } finally {
+      gitView.cleanup();
+      this.cleanupHostGitCredential(sandbox);
+    }
+  }
+
   private async dispatchConflictRepair(
     task: TaskState,
     sha: string,
@@ -18754,7 +18957,8 @@ export class TaskService {
     detail: string,
   ): void {
     const receipt = this.activeFeedbackReceiptInstructions(task);
-    task.mission = [mission, receipt].filter(Boolean).join("\n\n");
+    task.mission = [mission, this.foreignCommitNotice(task), receipt]
+      .filter(Boolean).join("\n\n");
     task.summary.status = "queued";
     task.summary.detail = detail;
     task.resume = true;

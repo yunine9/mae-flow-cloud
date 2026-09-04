@@ -462,6 +462,77 @@ test("旧 SHA 总体绿但 HEAD 已变化 → 先 STALE，再由宿主推新 HEA
   }
 });
 
+/** 人直接 clone 任务分支推一条提交:bot 分支上出现外来提交的唯一成因。 */
+function humanCommit(bare: string, branch: string, subject: string): string {
+  const clone = mkdtempSync(join(tmpdir(), "mfc-human-"));
+  execFileSync("git", ["clone", "--quiet", "--branch", branch, bare, clone]);
+  git(clone, "config", "user.email", "human@test");
+  git(clone, "config", "user.name", "human");
+  writeFileSync(join(clone, "hotfix.txt"), "human hotfix\n");
+  git(clone, "add", ".");
+  git(clone, "commit", "--quiet", "-m", subject);
+  git(clone, "push", "--quiet", "origin", branch);
+  return git(clone, "rev-parse", "HEAD");
+}
+
+// task-40 实锤:人往 bot 分支推了一条修复后,宿主拿同一个已验证 SHA 撞
+// 远端 non-fast-forward 拒收,自愈预算原样重放刷了 110 次同一条失败。
+// 外来提交只可能是人为介入(用户 2026-09-04 拍板"默认可信"):接上去继续,
+// 不举卡、不问、更不能改写别人的提交。
+test("分支上出现外来提交:宿主接上去继续推,不改写别人的提交", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "running";
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(externalWaitScript(), dataDir,
+    { terminalStep: "external_verify" });
+  await model.start();
+  try {
+    const service = buildService(platform, dataDir, model.modelsJson(),
+      { pollIntervalMs: 100 });
+    const created = service.create("交付 REQ9:分支上有人推了代码",
+      { ticket: "REQ9" });
+    await until(() =>
+      service.get(created.id)!.delivery?.pipeline === "running",
+    "宿主已推送第一版并等待流水线");
+    const before = service.get(created.id)!;
+    const branch = "master_bot_REQ9";
+    const firstPush = before.delivery!.git_push!.sha;
+    const human = humanCommit(platform.barePath, branch, "fix: 人工热修");
+    // 本任务这边也在继续做事(修复轮的产物),两边都有新提交才是真现场。
+    const cwd = String(JSON.parse(readFileSync(
+      join(before.workspace, "task.json"), "utf-8")).cwd);
+    writeFileSync(join(cwd, "local-only.txt"), "newer\n");
+    git(cwd, "add", "local-only.txt");
+    git(cwd, "commit", "--quiet", "-m", "fix: unpushed head");
+    // 旧 SHA 收敛成 success 触发 STALE,宿主据此推新 HEAD——正是这一步
+    // 从前撞在非快进上。
+    platform.nextPipelineStatus = "success";
+    platform.finishPipeline(before.delivery!.sha!, "success");
+
+    await until(() => service.get(created.id)!.status === "await_merge",
+      "接上外来提交后必须真的推成功");
+    const task = service.get(created.id)!;
+    assert.equal(platform.branchSha(branch), task.delivery?.sha,
+      "远端分支头必须是宿主这次推上去的提交");
+    assert.equal(git(platform.barePath, "merge-base", "--is-ancestor",
+      human, branch) , "", "人推的提交必须仍在分支历史里");
+    assert.equal(git(platform.barePath, "cat-file", "-p", `${human}:hotfix.txt`),
+      "human hotfix", "别人的提交内容一个字节都不能被改写");
+    assert.equal(git(platform.barePath, "merge-base", "--is-ancestor",
+      firstPush, branch), "", "本任务第一次推的提交同样不该被抹掉");
+    assert.equal(task.delivery?.foreign_commits?.count, 1);
+    assert.equal(task.delivery?.foreign_commits?.base_sha, human);
+    assert.match(task.delivery?.foreign_commits?.subjects[0] ?? "", /人工热修/);
+    assert.equal(task.delivery?.stalled, undefined,
+      "外来提交默认可信:不停摆、不举卡");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("流水线红(修复环关闭) → 验证中留痕,不标完成", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
