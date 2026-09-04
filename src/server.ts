@@ -2823,7 +2823,10 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const root = service.artifactRoot(id);
-          const sources = { pipelineRoot: join(target.workspace, "pipeline") };
+          const sources = {
+            pipelineRoot: join(target.workspace, "pipeline"),
+            taskMaterialRoot: target.workspace,
+          };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。

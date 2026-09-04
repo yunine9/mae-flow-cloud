@@ -123,6 +123,11 @@ export function preferredWorkspaceArtifact(
     const gap = items.find((item) => item.purpose === "pipeline_evidence_gap");
     if (gap) return gap.name;
   }
+  if (recommendedView === "doc") {
+    const brief = items.find((item) =>
+      item.purpose === "delivery_unit_brief");
+    if (brief) return brief.name;
+  }
   const preferredKind = recommendedView === "diff" ? "diff" : "doc";
   return items.find((item) => item.kind === preferredKind)?.name
     ?? items[0]?.name ?? "";
@@ -590,7 +595,8 @@ export function TaskWorkspace({
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view
-    ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
+    ?? (task.parent_task_id ? "doc"
+      : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
   // push_review 是一份绑定 HEAD 的阅读导航，不是 cloud_push_confirm
   // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
   // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
@@ -724,7 +730,8 @@ export function TaskWorkspace({
     setDiffFileLoading(false);
     setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
-      ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
+      ?? (task.parent_task_id ? "doc"
+        : task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
     setMaterialSearchOpen(false);
@@ -1027,19 +1034,20 @@ export function TaskWorkspace({
       const current = artifactTask.current === task.id && !newlyActionable
         ? active : "";
       const next = preferredWorkspaceArtifact(
-        result.items ?? [], current, task.waiting?.recommended_view,
+        result.items ?? [], current, recommendedMaterialView,
         pipelineEvidenceNeedsHuman(task));
       artifactTask.current = task.id;
       openedEvidenceGap.current = evidenceKey;
       setActive(next);
-      if (next !== current && result.items?.find((item) => item.name === next)
-          ?.purpose === "pipeline_evidence_gap") {
+      if (next !== current && ["pipeline_evidence_gap", "delivery_unit_brief",
+        "delivery_plan"].includes(result.items?.find((item) => item.name === next)
+          ?.purpose ?? "")) {
         setMaterialView("doc");
       }
     });
     return () => { alive = false; };
   }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
-    task.delivery?.evidence_gap?.sha]);
+    task.delivery?.evidence_gap?.sha, recommendedMaterialView]);
 
   const activeArtifactForRead = items?.find((item) => item.name === active);
   const activeChangeFiles = activeArtifactForRead?.change_files;
@@ -1190,7 +1198,15 @@ export function TaskWorkspace({
     window.setTimeout(seek, source || item.artifact === active ? 0 : 120);
   }
   const activeMeta = items?.find((item) => item.name === active);
-  const documents = items?.filter((item) => item.kind === "doc") ?? [];
+  const materialPriority = (item: ArtifactMeta): number =>
+    item.purpose === "delivery_unit_brief" ? 0
+      : item.purpose === "delivery_plan" ? 1 : 2;
+  const documents = (items?.filter((item) => item.kind === "doc") ?? [])
+    .sort((left, right) => materialPriority(left) - materialPriority(right));
+  const primaryDocument = task.parent_task_id
+    ? documents.find((item) => item.purpose === "delivery_unit_brief")
+      ?? documents[0]
+    : documents[0];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
   const evidenceGapArtifact = documents.find((item) =>
     item.purpose === "pipeline_evidence_gap");
@@ -1234,7 +1250,7 @@ export function TaskWorkspace({
     : changes.length;
   const untrackedDirectoryCount = changes.reduce((sum, item) =>
     sum + (item.untracked_directories?.length ?? 0), 0);
-  const hasRequirementGraph = !!task.requirement_graph
+  const hasRequirementGraph = !task.parent_task_id && !!task.requirement_graph
     && ((task.repositories?.length ?? 0) > 1
       || task.requirement_analysis_requested === true
       || task.requirement_graph.stage === "confirmed");
@@ -1247,7 +1263,11 @@ export function TaskWorkspace({
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
             ? pushReview.title : "完整交付内容" }
         : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
-      : { kicker: "WORK DOCUMENTS", title: "过程文档" };
+      : activeMeta?.purpose === "delivery_unit_brief"
+        ? { kicker: "CURRENT DELIVERY UNIT", title: "当前单元任务书" }
+        : activeMeta?.purpose === "delivery_plan"
+          ? { kicker: "REVIEWED DELIVERY PLAN", title: "整体拆分方案" }
+          : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
   const workspaceReviewReady = task.status === "waiting_for_human"
     && task.waiting?.step === "cloud_push_confirm"
@@ -1716,14 +1736,25 @@ export function TaskWorkspace({
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-source-switch" aria-label="材料类型">
-              <button className={materialView === "source" ? "on" : ""}
-                onClick={() => setMaterialView("source")}>
-                <span>需求原文</span><i>原始</i>
-              </button>
-              <button className={materialView === "doc" ? "on" : ""}
-                onClick={() => { setMaterialView("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                <span>过程文档</span><i>{documents.length}</i>
-              </button>
+              {task.parent_task_id ? <>
+                <button className={materialView === "doc" ? "on" : ""}
+                  onClick={() => { setMaterialView("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
+                  <span>当前任务书</span><i>主</i>
+                </button>
+                <button className={materialView === "source" ? "on" : ""}
+                  onClick={() => setMaterialView("source")}>
+                  <span>原始需求</span><i>参考</i>
+                </button>
+              </> : <>
+                <button className={materialView === "source" ? "on" : ""}
+                  onClick={() => setMaterialView("source")}>
+                  <span>需求原文</span><i>原始</i>
+                </button>
+                <button className={materialView === "doc" ? "on" : ""}
+                  onClick={() => { setMaterialView("doc"); if (documents[0]) setActive(documents[0].name); }}>
+                  <span>过程文档</span><i>{documents.length}</i>
+                </button>
+              </>}
               {hasRequirementGraph && <button className={materialView === "chain" ? "on" : ""}
                 onClick={() => setMaterialView("chain")}>
                 <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
@@ -1826,7 +1857,9 @@ export function TaskWorkspace({
             <div className="ws-tabs ws-document-tabs">
               {documents.map((item) => (
                 <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
-                  <span>{item.label}</span><i>{sizeText(item.bytes)}</i>
+                  <span>{item.label}</span><i>{item.purpose === "delivery_unit_brief"
+                    ? "主任务书" : item.purpose === "delivery_plan"
+                      ? "参考" : sizeText(item.bytes)}</i>
                 </button>
               ))}
               <button type="button" className="ws-document-download"

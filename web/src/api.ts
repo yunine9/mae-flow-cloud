@@ -3075,7 +3075,7 @@ export interface ArtifactMeta {
   /** 未跟踪目录根；目录内容由用户展开时分页读取。 */
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
-  purpose?: "pipeline_evidence_gap";
+  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan";
 }
 
 export interface ArtifactChangeFile {

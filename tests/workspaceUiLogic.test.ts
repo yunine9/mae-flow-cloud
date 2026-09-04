@@ -187,6 +187,22 @@ test("流水线证据缺口直接打开补证材料，用户切走后不被轮�
   }), false, "系统仍在自动重试时不冒充人工待办");
 });
 
+test("拆分子任务默认先打开自己的任务书，整体方案与原始需求只作参考", () => {
+  const plan = {
+    name: "task-materials/chain-plan.md", label: "整体拆分方案",
+    kind: "doc", purpose: "delivery_plan", bytes: 200,
+    modified_at: "2026-09-04T00:01:00.000Z",
+  };
+  const brief = {
+    name: "task-materials/unit-brief.md", label: "当前单元任务书",
+    kind: "doc", purpose: "delivery_unit_brief", bytes: 100,
+    modified_at: "2026-09-04T00:00:00.000Z",
+  };
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [plan, brief], "", "doc", false), brief.name,
+  "即使整体方案更新得更晚，也不能盖过当前子任务的主任务书");
+});
+
 test("已交付批注明确是归档记录，不再冒充待提交", () => {
   const html = renderToStaticMarkup(React.createElement(
     annotationPanel.AnnotationPanel,

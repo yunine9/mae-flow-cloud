@@ -184,6 +184,7 @@ import {
   AGENT_REQUIREMENT_DOCUMENT,
   MAX_REQUIREMENT_DOCUMENT_BYTES,
   STORED_REQUIREMENT_DOCUMENT,
+  materializeDeliveryDocument,
   materializeRequirementDocument,
   requirementContext,
   requirementDocumentMeta,
@@ -519,6 +520,10 @@ export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
 /** 构建缓存比任务现场更值得复用，但也必须有自动止涨边界。 */
 export const DEFAULT_BUILD_CACHE_RETENTION_DAYS = 30;
 export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
+const DELIVERY_CHAIN_SOURCE = "chain-plan.md";
+const DELIVERY_UNIT_SOURCE = "unit-brief.md";
+const AGENT_DELIVERY_CHAIN = ".mae-flow-chain.md";
+const AGENT_DELIVERY_UNIT = ".mae-flow-unit.md";
 
 /** Cloud 需求分析不是内核流程。文件工具只能写最终分析产物目录；Bash
  * 即使看见仓内残留脚本，也不准启动 mae-flow 生命周期。候选仓在容器
@@ -4982,7 +4987,10 @@ export class TaskService {
       return this.requirementGraphAnnotationContent(task);
     }
     const root = this.artifactRoot(task.summary.id);
-    return root ? readArtifact(root, artifact)?.content : undefined;
+    return readArtifact(root, artifact, {
+      pipelineRoot: join(task.summary.workspace, "pipeline"),
+      taskMaterialRoot: task.summary.workspace,
+    })?.content;
   }
 
   private async annotationArtifactContentAsync(
@@ -4996,7 +5004,10 @@ export class TaskService {
       return this.requirementGraphAnnotationContent(task);
     }
     const root = this.artifactRoot(task.summary.id);
-    return root ? (await readArtifactAsync(root, artifact))?.content : undefined;
+    return (await readArtifactAsync(root, artifact, {
+      pipelineRoot: join(task.summary.workspace, "pipeline"),
+      taskMaterialRoot: task.summary.workspace,
+    }))?.content;
   }
 
   /** 图上批注的可重锚定文本。行号只是现有批注合同的辅助字段，真正稳定
@@ -7311,8 +7322,8 @@ export class TaskService {
       /** ZIP 材料包已由入口解析并改写为安全相对路径的图片。 */
       requirementBundleName?: string;
       requirementAssets?: RequirementAsset[];
-      /** Chain 拆单内部会把原文与逐仓说明拼接，允许多一份原文大小的
-       * 安全余量；外部下单绝不设置。 */
+      /** Chain 拆单内部标记；外部下单绝不设置。子任务 requirement 仍是
+       * 原始需求，单元任务书单独落盘，不再拼到长文档末尾。 */
       internalRequirement?: boolean;
       /** 单仓先走分析拆分。下单 API 不再接受它(2026-09-03 用户拍板:
        * 拆不拆是分析的产物,不是下单时的开关);只剩原位重跑沿用旧单事实
@@ -7324,6 +7335,9 @@ export class TaskService {
       requirementAnalysisConfirmation?: boolean;
       /** Chain 确认后生成的仓库交付任务使用；不暴露给普通 API。 */
       parentTaskId?: string;
+      /** Chain 拆单内部定格的两份任务材料。当前单元任务书是执行入口，
+       * 整体方案只负责解释上下游；普通下单 API 不接收。 */
+      deliveryUnitMaterials?: { chain: string; unit: string };
       blockedBy?: string[];
       /** 交付单元的负责文件面(单仓拆分,Chain 建单内部下传):交付
        * 门禁据此校验越界。普通下单不暴露。 */
@@ -7700,6 +7714,15 @@ export class TaskService {
     let teamSkills: HostSkillShelfEntry[] = [];
     let hostSkillSnapshotWarnings: string[] = [];
     try {
+      if (options.deliveryUnitMaterials) {
+        if (!options.parentTaskId) {
+          throw new Error("只有拆分后的子任务可以携带单元任务书");
+        }
+        writeFileSync(join(workspace, DELIVERY_CHAIN_SOURCE),
+          options.deliveryUnitMaterials.chain, { mode: 0o600 });
+        writeFileSync(join(workspace, DELIVERY_UNIT_SOURCE),
+          options.deliveryUnitMaterials.unit, { mode: 0o600 });
+      }
       if (options.businessModules !== undefined) {
         if (!options.businessModuleSourceWorkspace) {
           throw new Error("复制业务模块快照时缺少父任务现场");
@@ -8716,6 +8739,18 @@ export class TaskService {
         }
       } catch (error) {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
+      }
+    }
+    // 等全部任务都加载完再补子任务材料：父任务可能排在子任务之后，
+    // 单任务恢复循环里还不一定找得到它。补齐发生在任务泵启动前，当前
+    // 已经生成的在途子任务升级后也会先拿到自己的任务书再恢复 Agent。
+    for (const task of this.tasks.values()) {
+      if (!task.summary.parent_task_id) continue;
+      try {
+        this.ensureDeliveryUnitMaterials(task);
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 补齐交付单元材料失败，将保留原现场: ${String(error)}`);
       }
     }
     // 旧版本在“拆单成功”时就把父任务写成 completed。等所有 task.json
@@ -9870,6 +9905,125 @@ export class TaskService {
     return update;
   }
 
+  /** 从已确认机读图机械生成当前单元任务书。它是子任务的执行边界；
+   * 原始需求与整体 Chain 只提供业务背景、约束来源和上下游解释，不能
+   * 反过来把本单元扩大成整张需求。 */
+  private deliveryUnitBrief(
+    parent: TaskState,
+    repository: RequirementRepository,
+    order: string[],
+    incoming: Map<string, string[]>,
+  ): string {
+    const graph = parent.summary.requirement_graph!;
+    const id = repository.id;
+    const label = repository.scope?.name ?? repository.name;
+    const position = `${order.indexOf(id) + 1}/${order.length}`;
+    const describe = (otherId: string): string => {
+      const other = graph.repositories.find((item) => item.id === otherId);
+      return other ? (other.scope?.name ?? other.name) : otherId;
+    };
+    const reasonFor = (dependent: string, prerequisite: string): string =>
+      graph.dependencies.find((edge) =>
+        edge.from === dependent && edge.to === prerequisite)?.reason?.trim() ?? "";
+    const upstream = (incoming.get(id) ?? []).map((otherId) => {
+      const reason = reasonFor(id, otherId);
+      return `- ${describe(otherId)}${reason ? `：${reason}` : ""}`;
+    });
+    const downstream = order
+      .filter((otherId) => (incoming.get(otherId) ?? []).includes(id))
+      .map((otherId) => {
+        const reason = reasonFor(otherId, id);
+        return `- ${describe(otherId)}${reason ? `：${reason}` : ""}`;
+      });
+    return [
+      `# 当前单元任务书：${label}`,
+      "",
+      "> **这是当前子任务的执行入口和范围边界。** 整体拆分方案用于"
+        + "核对上下游，原始需求用于按需核对背景、约束和验收来源；不得仅因"
+        + "参考材料涉及其他模块，就擅自扩大本单元范围。",
+      "",
+      "## 材料优先级",
+      "",
+      `1. \`${AGENT_DELIVERY_UNIT}\`：先读本任务书，明确自己要交付什么。`,
+      `2. \`${AGENT_DELIVERY_CHAIN}\`：再读已检视确认的整体拆分方案，核对上下游。`,
+      `3. \`${AGENT_REQUIREMENT_DOCUMENT}\`：按需查阅用户原始需求，核对业务背景、约束和验收来源。`,
+      "",
+      "## 本单元交付",
+      "",
+      `- 位置：第 ${position} 个交付单元`,
+      `- 单元：${label}`,
+      `- 代码仓：${repository.name}`,
+      `- 责任人：${repository.assignee ?? parent.summary.luban_account ?? "未指定"}`,
+      `- AR 单号：${repository.ticket ?? parent.summary.ticket ?? "未填写"}`,
+      `- 核心职责：${repository.responsibility ?? "以整体拆分方案中的当前单元章节为准"}`,
+      "",
+      "## 允许改动范围",
+      "",
+      ...(repository.scope?.paths.length
+        ? repository.scope.paths.map((path) => `- \`${path}\``)
+        : ["- 未限定目录；可在当前代码仓内完成上述职责所需的最小改动。"]),
+      "",
+      "## 上下游关系",
+      "",
+      ...(upstream.length ? ["### 依赖的上游", "", ...upstream, ""]
+        : ["- 无前置交付单元。", ""]),
+      ...(downstream.length ? ["### 依赖本单元的下游", "", ...downstream, ""]
+        : ["- 无下游交付单元。", ""]),
+      "## 执行边界",
+      "",
+      "- 只交付本任务书列出的职责与文件范围。",
+      "- 上游已合入时，以当前基线代码中的真实接口为准；整体方案是拆分时刻的快照。",
+      "- 参考材料与本任务书冲突、现有代码无法支撑方案，或确需越界改动时，停止猜测并明确报告冲突。",
+      "- 不得重新询问主任务已经确认的事项，也不得把其他单元的工作收进本单元。",
+      "",
+    ].join("\n");
+  }
+
+  /** 升级前的子任务只有 chain-plan.md，任务书被拼在长需求末尾。重启时
+   * 从父任务已确认图补出独立任务书，并把“需求原文”恢复成用户原文。
+   * 只修同时能找到父任务和 task_id 映射的确定形态，无法确认时不猜。 */
+  private ensureDeliveryUnitMaterials(task: TaskState): boolean {
+    if (!task.summary.parent_task_id) return false;
+    const parent = this.tasks.get(task.summary.parent_task_id);
+    const repository = parent?.summary.requirement_graph?.repositories
+      .find((item) => item.task_id === task.summary.id);
+    if (!parent || !repository) return false;
+    const chainPath = join(task.summary.workspace, DELIVERY_CHAIN_SOURCE);
+    const unitPath = join(task.summary.workspace, DELIVERY_UNIT_SOURCE);
+    const requirementPolluted = task.summary.requirement
+      !== parent.summary.requirement
+      && task.summary.requirement.startsWith(parent.summary.requirement)
+      && task.summary.requirement.includes("本单元任务书");
+    if (existsSync(chainPath) && existsSync(unitPath) && !requirementPolluted) {
+      return false;
+    }
+    const { order, incoming } = this.requirementGraphPlan(parent);
+    if (!existsSync(chainPath)) {
+      const ticket = parent.summary.ticket ?? parent.summary.id;
+      const artifact = parent.cwd
+        ? readArtifact(parent.cwd, `${ticket}/CHAIN-${ticket}.md`)
+        : undefined;
+      if (!artifact?.content) return false;
+      writeFileSync(chainPath, artifact.content, { mode: 0o600 });
+    }
+    if (!existsSync(unitPath)) {
+      writeFileSync(unitPath,
+        this.deliveryUnitBrief(parent, repository, order, incoming),
+        { mode: 0o600 });
+    }
+    if (requirementPolluted) {
+      task.summary.requirement = parent.summary.requirement;
+      task.summary.requirement_document = parent.summary.requirement_document
+        ? structuredClone(parent.summary.requirement_document) : undefined;
+      storeRequirementDocument(task.summary.workspace,
+        task.summary.requirement, task.summary.requirement_document);
+      this.persist(task);
+    }
+    this.options.log?.(
+      `任务 ${task.summary.id} 已补齐当前单元任务书与整体拆分方案入口`);
+    return true;
+  }
+
   /** 人工确认 Chain 产物后，把图上的模块交付单元落成现有普通任务。
    * 可重入:已有 task_id 的单元跳过(第 N 个单元 create 抛错或中途重启后
    * 重试,不许把前面的单元再建一遍);每建一个就 persist——task_id 只写
@@ -9887,6 +10041,10 @@ export class TaskService {
       ? readArtifact(task.cwd,
           `${task.summary.ticket ?? task.summary.id}/CHAIN-${task.summary.ticket ?? task.summary.id}.md`)
       : undefined;
+    if (!artifact?.content) {
+      throw new TaskControlError(
+        "已确认的整体拆分方案暂时无法读取，未生成子任务；请刷新后重试");
+    }
     const taskIds = new Map<string, string>();
     for (const repository of graph.repositories) {
       if (repository.task_id) taskIds.set(repository.id, repository.task_id);
@@ -9896,72 +10054,12 @@ export class TaskService {
       if (repository.task_id) continue;
       const blockers = (incoming.get(id) ?? [])
         .map((parent) => taskIds.get(parent)).filter(Boolean) as string[];
-      // 方案正文**不进需求原文**(2026-08-19 内网实锤:整份方案含
-      // "逐仓启动说明"塞进 prompt,模型把它当实施计划直接开写代码,
-      // 跳过 init→配置确认整个流程头部)。方案落到子任务工作区文件,
-      // launch 时进克隆并经下单事实把「需求文档」指过去——模型按内核
-      // 流程在配置阶段读它,而不是开场就被它牵着跑。
-      // 单元任务书:从图里**机械抽取**本单元的职责/负责面/依赖关系,
-      // 一页内联;完整方案与原需求仍走工作区文件按需读(不给每个任务
-      // 塞超长全文)。依赖只列直接相邻边,接口真相以基线代码为准。
-      const position = `${order.indexOf(id) + 1}/${order.length}`;
-      const dependsOn = (incoming.get(id) ?? []).map((parentId) => {
-        const parent = graph.repositories.find((item) => item.id === parentId);
-        return parent ? (parent.scope?.name ?? parent.name) : parentId;
-      });
-      // 从 incoming 反查而不是只看显式边:单仓串行的隐式前置边也要让
-      // 上游单元知道"有人基于你的接口开发",否则串行纪律白补了提醒。
-      const dependedBy = order
-        .filter((otherId) => (incoming.get(otherId) ?? []).includes(id))
-        .map((otherId) => {
-          const dependent = graph.repositories
-            .find((item) => item.id === otherId);
-          return dependent ? (dependent.scope?.name ?? dependent.name)
-            : otherId;
-        });
       const unitLabel = repository.scope?.name ?? repository.name;
-      const requirement = [
-        task.summary.requirement,
-        "本需求已分析拆分并经人工检视确认。完整方案(单元职责、"
-          + "接口契约、依赖关系、已确认事项清单)在工作区文件"
-          + " .mae-flow-chain.md,配置确认的「需求文档」会自动指向它"
-          + "——按内核流程推进,在需求/设计阶段读与你相关的章节,"
-          + "不要跳过流程直接实施。『已确认事项清单』是主任务已经拍板的"
-          + "权威输入:需求澄清阶段直接引用,不得把同一事项换个说法再次"
-          + "问人;只有代码事实与已确认结论发生明确冲突,或出现清单没有"
-          + "覆盖的新业务决定时才能举卡,并要点名冲突或新增项。"
-          + "工作区隔离是平台设计:每个子任务只挂载自己负责的一个代码"
-          + "仓,其他交付单元由主任务创建为独立任务/独立工作区;当前目录、"
-          + "remote 或 data/ 看不到其他单元是正常现象,不代表仓库或单元"
-          + "缺失,不得据此重新质疑拆分、要求改单仓交付或把跨单元同步"
-          + "重新举卡。跨单元状态与术语同步由主任务协调。"
-          + "本单元任务书中写明的仓库名称、单元名称、责任人与 AR 单号"
-          + "同样是下单确认事实；CHAIN 若为画图使用 repo-1/repo-2 等"
-          + "内部代号，不得据此声称真实名称缺失或再次向人提问，文档互链"
-          + "直接使用任务书中的名称。"
-          + "只交付本单元职责;发现方案不够用时"
-          + "停止并报告,不要自行改变拆分契约。",
-        [
-          `本单元任务书(第 ${position} 个交付单元):`,
-          `- 单元:${unitLabel}(仓库 ${repository.name})`,
-          `- 职责:${repository.responsibility ?? "见方案正文"}`,
-          ...(repository.scope?.paths.length ? [
-            `- 负责文件面:${repository.scope.paths.join("、")}`
-              + "(实现落在这些路径内;确需改动之外的文件,平台会拦下"
-              + "请主责任人裁决,这不是错误,是流程)"] : []),
-          ...(dependsOn.length ? [
-            `- 依赖上游:${dependsOn.join("、")}(它们已合入,接口以`
-              + "当前基线代码为准——方案文档只是拆分时刻的快照)"] : []),
-          ...(dependedBy.length ? [
-            `- 被依赖:${dependedBy.join("、")} 会在你之后基于你交付的`
-              + "接口开发,公共声明改动要格外慎重"] : []),
-        ].join("\n"),
-        `当前单元 AR 单号:${repository.ticket ?? task.summary.ticket ?? "未填写"}`,
-      ].filter(Boolean).join("\n\n");
+      const unitBrief = this.deliveryUnitBrief(task, repository, order, incoming);
       const preserveUndefinedRepositorySkills =
         task.summary.repository_skills === undefined;
       const parentWorkflow = task.summary.workflow_profile;
-      const child = this.create(requirement, {
+      const child = this.create(task.summary.requirement, {
         title: taskTitle(
           `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${unitLabel}`),
         account: repository.assignee ?? task.summary.luban_account,
@@ -10001,6 +10099,10 @@ export class TaskService {
         workflowProfileWarning: task.summary.workflow_profile_warning,
         hostSkillSnapshotSourceWorkspace: task.summary.workspace,
         parentTaskId: task.summary.id,
+        deliveryUnitMaterials: {
+          chain: artifact.content,
+          unit: unitBrief,
+        },
         internalRequirement: true,
         requirementDocumentName: task.summary.requirement_document?.name,
         requirementBundleName: task.summary.requirement_document?.bundle_name,
@@ -10027,19 +10129,6 @@ export class TaskService {
         engineeringKnowledgeSourceWorkspace: task.summary.workspace,
         preserveUndefinedRepositorySkills,
       });
-      // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
-      // launch 每次把它带进仓库克隆。写不进去不拦拆单——launch 侧
-      // 缺文件时子任务照常走流程,只是配置阶段要人补需求文档。
-      try {
-        writeFileSync(join(child.workspace, "chain-plan.md"), [
-          artifact?.content ?? "",
-          `\n\n---\n当前仓库:${repository.name}\n`
-            + `当前职责:${repository.responsibility ?? "见方案正文"}\n`,
-        ].join(""));
-      } catch (cause) {
-        this.options.log?.(
-          `任务 ${child.id} 方案文档落盘失败(fail-open): ${String(cause)}`);
-      }
       repository.task_id = child.id;
       taskIds.set(id, child.id);
       this.persist(task);
@@ -13416,8 +13505,10 @@ export class TaskService {
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
         requirementPath = materializeRequirementDocument(
-          cwd, task.summary.requirement, task.summary.requirement_document);
+          cwd, task.summary.requirement, task.summary.requirement_document,
+          Boolean(task.summary.parent_task_id));
         this.hardenAgentGitBoundary(agentDir, cwd);
+        let deliveryUnitReady = false;
         try {
           hasDependencyHandoff = await this.materializeDependencyHandoff(task, cwd);
         } catch (cause) {
@@ -13571,15 +13662,24 @@ export class TaskService {
           // 状态，不改交付方式、不生成第二张单。
           const lane = task.summary.lane;
           if (lane) order["交付方式"] = lane;
-          // 跨仓拆单的方案文档:拆单时落在任务 workspace 根,这里带进
-          // 克隆并经下单事实把「需求文档」指过去——方案经内核流程在
-          // 配置/需求阶段被读,而不是塞进开场 prompt 被模型当实施计划
-          // 直接开写(2026-08-19 内网实锤)。每次启动重拷,幂等。
-          const planSource = join(workspace, "chain-plan.md");
+          // 子任务的任务书是执行入口；整体方案负责依赖上下文，原始需求
+          // 只负责按需补充业务背景与验收语义。
+          // 三份文件都在 Agent 看见代码前由宿主定格，不能再把任务书
+          // 拼到几十万字原文末尾碰运气。旧子任务若只有 Chain，仍保留
+          // 原有入口，重启迁移会尽力补齐任务书。
+          const planSource = join(workspace, DELIVERY_CHAIN_SOURCE);
+          const unitSource = join(workspace, DELIVERY_UNIT_SOURCE);
           if (existsSync(planSource)) {
-            writeFileSync(join(cwd, ".mae-flow-chain.md"),
+            materializeDeliveryDocument(cwd, AGENT_DELIVERY_CHAIN,
               readFileSync(planSource, "utf-8"));
-            order["需求文档"] = ".mae-flow-chain.md";
+            order["需求文档"] = AGENT_DELIVERY_CHAIN;
+          }
+          if (existsSync(unitSource)) {
+            materializeDeliveryDocument(cwd, AGENT_DELIVERY_UNIT,
+              readFileSync(unitSource, "utf-8"));
+            order["需求文档"] = AGENT_DELIVERY_UNIT;
+            deliveryUnitReady = existsSync(planSource)
+              && Boolean(requirementPath);
           }
           writeFileSync(join(cwd, ".mae-flow-order.json"),
             JSON.stringify(order, null, 2) + "\n");
@@ -13595,7 +13695,8 @@ export class TaskService {
             // 修复 Agent 为了收干净工作区,把它提交进了**用户的 .gitignore**
             // 并随 MR 推走,平台关切污染了用户仓)。
             const missing = [
-              ".mae-flow-order.json", ".mae-flow-chain.md",
+              ".mae-flow-order.json", AGENT_DELIVERY_CHAIN,
+              AGENT_DELIVERY_UNIT,
               ".mae-flow-dependencies.md", ".mae-flow-issue.md",
               AGENT_REQUIREMENT_DOCUMENT,
               ".mae-flow.json", ".mae-flow.json.exited",
@@ -13625,11 +13726,21 @@ export class TaskService {
         // 首条 prompt = 需求 + 内核自己的开工引导(转发壳/init 指引),
         // 不由云端复述内核该说的话。重启后的 sessionstart 对内核是
         // 常态(老宿主重启会话同款),ACTIVE 状态下引导即当前步指引。
-        const requirementForAgent = requirementContext(
+        const originalRequirementContext = requirementContext(
           task.summary.requirement,
           task.summary.requirement_document,
           requirementPath,
         );
+        const requirementForAgent = deliveryUnitReady ? [
+          "【当前交付单元 · 必读顺序】先完整读取 .mae-flow-unit.md。"
+            + "它是本子任务的主任务书和范围边界；然后读取"
+            + " .mae-flow-chain.md 理解上下游，最后按需查阅"
+            + " .mae-flow-requirement.md 核对用户原始需求。"
+            + "后两份是背景与约束参考，不得据此擅自扩大当前单元范围。"
+            + "三者冲突或任务书不足以落地时，明确指出冲突并停下来询问，"
+            + "不要猜。",
+          originalRequirementContext,
+        ].join("\n\n") : originalRequirementContext;
         const repairKernelOwnership = () => {
           if (!this.options.isolation) return;
           repairContainerKernelOwnership({
@@ -13662,6 +13773,7 @@ export class TaskService {
           const continuingFeedback = Boolean(
             task.mission && task.summary.delivery?.mr_url);
           prompt = [
+            requirementForAgent,
             guidance,
             "云端服务重启,本会话为重建会话:此前对话不在上下文里," +
             "流程真相以内核状态为准。执行 current 查看当前步骤;" +

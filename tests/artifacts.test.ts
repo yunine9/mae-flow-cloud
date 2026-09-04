@@ -309,6 +309,40 @@ test("任务级流水线材料不跟随越出白名单目录的符号链接", as
     undefined, PIPELINE_EVIDENCE_GAP_ARTIFACT, { pipelineRoot }), undefined);
 });
 
+test("拆分子任务在排队时也能看到自己的任务书和整体方案", async () => {
+  const taskMaterialRoot = mkdtempSync(join(tmpdir(), "mfc-unit-material-"));
+  writeFileSync(join(taskMaterialRoot, "unit-brief.md"),
+    "# 当前单元任务书\n\n只实现订单接口。\n");
+  writeFileSync(join(taskMaterialRoot, "chain-plan.md"),
+    "# 整体拆分方案\n\n接口先于页面。\n");
+
+  const sources = { taskMaterialRoot };
+  const items = await listArtifactsAsync(undefined, sources);
+  assert.deepEqual(new Set(names(items)), new Set([
+    "task-materials/unit-brief.md", "task-materials/chain-plan.md",
+  ]));
+  assert.equal(items.find((item) => item.purpose === "delivery_unit_brief")
+    ?.label, "当前单元任务书");
+  assert.match(String((await readArtifactAsync(undefined,
+    "task-materials/unit-brief.md", sources))?.content), /只实现订单接口/);
+  assert.match(String((await readArtifactAsync(undefined,
+    "task-materials/chain-plan.md", sources))?.content), /接口先于页面/);
+});
+
+test("子任务材料只认固定文件且不跟随越界符号链接", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-unit-material-boundary-"));
+  const taskMaterialRoot = join(root, "task");
+  mkdirSync(taskMaterialRoot);
+  const secret = join(root, "secret.md");
+  writeFileSync(secret, "不能通过任务材料接口读取\n");
+  symlinkSync(secret, join(taskMaterialRoot, "unit-brief.md"));
+  writeFileSync(join(taskMaterialRoot, "unrelated.md"), "也不能读取\n");
+
+  assert.deepEqual(await listArtifactsAsync(undefined, { taskMaterialRoot }), []);
+  assert.equal(await readArtifactAsync(undefined,
+    "task-materials/unit-brief.md", { taskMaterialRoot }), undefined);
+});
+
 test("Mae-Flow 流程状态不混入代码差异,普通未跟踪文件仍展示", () => {
   const cwd = makeSite({ git: true });
   writeFileSync(join(cwd, "feature.ts"), "export const ready = true;\n");
