@@ -52,6 +52,7 @@ export function TaskCard({
   focused = false,
   canOperate = true,
   decisionMode = "form",
+  canDecide = canOperate,
   onOpenArtifacts,
   onOpenRelatedTask,
   showChildLinks = true,
@@ -61,6 +62,9 @@ export function TaskCard({
   focused?: boolean;
   canOperate?: boolean;
   decisionMode?: "form" | "signal";
+  /** 能答卡但不能管任务:受邀参与讨论的人(协作者/逐仓责任人)。缺省
+   * 与 canOperate 同值。 */
+  canDecide?: boolean;
   onOpenArtifacts?: () => void;
   onOpenRelatedTask?: (taskId: string) => void;
   showChildLinks?: boolean;
@@ -82,6 +86,10 @@ export function TaskCard({
     && ((task.requirement_graph?.repositories.length ?? 0) > 1
       // 单仓分析单在拆出多单元前也走同一套 Chain 检视语义。
       || task.requirement_analysis_requested === true);
+  // 受邀参与讨论的人能答澄清题;"进不进分析""拆不拆"这两张改任务形状的
+  // 拍板卡只认责任人(服务端 decide 同口径拒绝),对他们只读并说明找谁。
+  const ownerOnly = isOwnerOnlyWaiting(task);
+  const decides = canOperate || (canDecide && !ownerOnly);
   const childRepositories = task.requirement_graph?.stage === "confirmed"
     ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
     : [];
@@ -362,7 +370,7 @@ export function TaskCard({
                 .includes(task.status)}
             />
           )}
-          {chainReview && canOperate && (
+          {chainReview && decides && (
             <div className="chain-review-entry">
               <span>CHAIN REVIEW</span>
               <strong>跨仓方案已经生成，先看依赖再确认</strong>
@@ -370,7 +378,7 @@ export function TaskCard({
               <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
             </div>
           )}
-          {showDecisionForm && canOperate && !chainReview
+          {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
             task.waiting.recommended_view === "diff" ? (
               /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
@@ -388,12 +396,15 @@ export function TaskCard({
                 )}
               </div>
             ) : (
-              <WaitingCard task={task} onDecided={onChanged} />
+              <WaitingCard task={task} onDecided={onChanged}
+                participant={!canOperate} />
             )
           )}
-          {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (
+          {showDecisionForm && !decides && task.status === "waiting_for_human" && (
             <div className="read-only-notice">
-              该事项由 {task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。
+              {canDecide
+                ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以在工作台批注插话。`
+                : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。`}
             </div>
           )}
           <div className="task-utilities">
@@ -527,6 +538,14 @@ export function isChainReviewWaiting(task: TaskSummary): boolean {
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
 }
 
+/** 拍板类卡只认责任人:进不进分析、拆不拆。受邀参与讨论的人能答澄清题,
+ * 这两张改任务形状的卡对他们只读;服务端 decide 是同一口径的硬闸。 */
+export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
+  const step = task.waiting?.step;
+  return step === "cloud_requirement_analysis_confirm"
+    || step === "cloud_split_proposal";
+}
+
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
   if (step === "cloud_requirement_analysis_confirm") {
@@ -552,6 +571,7 @@ export function WaitingCard({
   pushReview,
   onLocateDelivery,
   activeDeliveryScope,
+  participant = false,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -579,6 +599,9 @@ export function WaitingCard({
   /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
    * 假装是一个点了会有动作的按钮。 */
   activeDeliveryScope?: "changes" | "full";
+  /** 受邀参与讨论的人在答卡:能答题、能选"需要修改",但"确认并生成任务"
+   * 这一项锁住——拆单由责任人拍板(服务端同口径拒绝,这里别让人白点)。 */
+  participant?: boolean;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -989,6 +1012,7 @@ export function WaitingCard({
               <div className={`options ${compact ? "compact" : "cards"}`}>
                 {options.map((option) => {
                   const chosen = picked[item.question] === option;
+                  const locked = participant && option.includes("确认并生成任务");
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));
@@ -1001,18 +1025,24 @@ export function WaitingCard({
                       : effect?.handles_feedback || inferredAdjustment
                         ? "将留在本轮，处理意见后重新检视"
                         : "";
-                  const [title, hint] = split
+                  const [title, rawHint] = split
                     ? [split[1].trim(), split[2].trim()]
                     : [option, consequence];
+                  const hint = locked
+                    ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
+                    : rawHint;
                   return (
                     <button
                       type="button"
                       key={option}
-                      className={`option${chosen ? " picked" : ""}`}
+                      className={`option${chosen ? " picked" : ""}${locked ? " locked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
-                      title={chosen ? "再次点击取消选择" : undefined}
+                      title={locked ? "由责任人确认"
+                        : chosen ? "再次点击取消选择" : undefined}
+                      disabled={locked}
                       onClick={(event) => {
+                        if (locked) return;
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
                         const selection = window.getSelection();

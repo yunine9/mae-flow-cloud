@@ -4745,6 +4745,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface);
 }
 .option.picked .radio { border-color: var(--accent); }
+/* 受邀参与人看到的"确认并生成任务":能看见、点不了,提示里写找谁。 */
+.option.locked { opacity: .55; cursor: not-allowed; }
+.option.locked:hover { border-color: var(--line); background: transparent; }
 .radio.on::after {
   content: "";
   position: absolute;

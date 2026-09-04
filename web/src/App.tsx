@@ -410,12 +410,15 @@ export function buildPersonalActionItems({
   merges,
   reviews,
   tasks,
+  discussions = [],
 }: {
   waiting: TaskSummary[];
   intervention: TaskSummary[];
   merges: TaskSummary[];
   reviews: ReviewRequest[];
   tasks: TaskSummary[];
+  /** 别人的分析单邀请我参与讨论、卡正等回答。 */
+  discussions?: TaskSummary[];
 }): PersonalActionItem[] {
   const seen = new Set<string>();
   const items: PersonalActionItem[] = [];
@@ -429,6 +432,18 @@ export function buildPersonalActionItems({
       title: task.title ?? task.requirement,
       detail: task.focus?.next_action ?? "查看材料并完成当前确认",
       action: "立即处理",
+    });
+  }
+  for (const task of discussions) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `discussion:${task.id}`,
+      task,
+      kicker: "受邀参与讨论",
+      title: task.title ?? task.requirement,
+      detail: `${responsibleOf(task) ?? "责任人"} 邀请你一起回答 Agent 的问题`,
+      action: "去回答",
     });
   }
   for (const review of reviews) {
@@ -769,9 +784,19 @@ export function App() {
     return () => { alive = false; };
   }, [artifactTaskId]);
 
+  // 受邀参与讨论(协作者/逐仓责任人)的分析单也算我的活:卡等的是你的
+  // 回答,只在团队列表亮个信号灯等于邀请了没喊人。分析确认后 stage
+  // 变了自然退出。判据与服务端 canCollaborate 同口径。
+  const invitedToDiscuss = (task: TaskSummary) => !!session
+    && task.requirement_graph?.stage === "analysis"
+    && responsibleOf(task) !== session.username
+    && (task.collaborators?.includes(session.username) === true
+      || task.requirement_graph.repositories.some((repository) =>
+        repository.assignee === session.username));
   const assignedToMe = session
     ? tasks.filter((task) => responsibleOf(task) === session.username)
     : [];
+  const discussingWithMe = tasks.filter(invitedToDiscuss);
   // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
   // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
@@ -820,7 +845,7 @@ export function App() {
   }
 
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
-  const myTasks = assignedToMe;
+  const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending");
   const myBlocked = myTasks.filter((task) =>
@@ -840,7 +865,8 @@ export function App() {
     DELIVERY_HANDOFF_STATUSES.includes(task.status));
   const myMerges = myTasks.filter((task) => task.status === "await_merge");
   const personalActionItems = buildPersonalActionItems({
-    waiting: myWaiting,
+    waiting: myWaiting.filter((task) => !invitedToDiscuss(task)),
+    discussions: myWaiting.filter(invitedToDiscuss),
     intervention: myIntervention,
     merges: myMerges,
     reviews: pendingReviews,
@@ -910,10 +936,7 @@ export function App() {
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || responsibleOf(task) === session.username;
   const canCollaborate = (task: TaskSummary) => canOperate(task)
-    || (task.requirement_graph?.stage === "analysis"
-      && (task.collaborators?.includes(session.username) === true
-        || task.requirement_graph.repositories.some((repository) =>
-          repository.assignee === session.username)));
+    || invitedToDiscuss(task);
   const header = {
     team: { title: "团队任务", description: teamTaskTab === "current"
       ? (session.role === "admin"
@@ -1141,7 +1164,7 @@ export function App() {
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
+            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}

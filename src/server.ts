@@ -2247,8 +2247,11 @@ export function createTaskServer(
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能处理分配给自己的任务"
+          // 受邀参与讨论的人(协作者/逐仓责任人)在分析期可以答卡——邀请了
+          // 就得能回答(2026-09-04 用户拍板)。拍板类决定由 decide() 再按
+          // 责任人硬闸一次,这里只挡"是否参与"。
+          if (!canCollaborate(viewer, target, !!options.auth)) {
+            return json(response, 403, { error: "只有责任人或受邀参与讨论的人可以回答这张卡"
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           const body = await readBody(request);

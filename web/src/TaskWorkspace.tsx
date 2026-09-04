@@ -69,6 +69,7 @@ import {
 import {
   ExecutionPanel,
   isChainReviewWaiting,
+  isOwnerOnlyWaiting,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -1206,6 +1207,10 @@ export function TaskWorkspace({
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
   const chainReview = !!waiting && isChainReviewWaiting(task);
+  // 受邀参与讨论的人在分析期能答卡(2026-09-04 用户拍板:邀请了就得能
+  // 回答);拍板类卡只认责任人。服务端 decide 是同一口径的硬闸。
+  const decides = canOperate
+    || (canCollaborate && !isOwnerOnlyWaiting(task));
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -2005,17 +2010,18 @@ export function TaskWorkspace({
             <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
             <small>{nextAction.detail}</small>
           </div>
-          {waiting && canOperate && (
+          {waiting && decides && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
                记下的选择对不上用户点的(2026-08-09 实战事故)。所以
                "这次会带上哪几处"只能摆进人按下提交的那一眼里。 */
             <WaitingCard
               task={task}
+              participant={!canOperate}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
               annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
-              repositoryAssigneeSelection={chainReview
+              repositoryAssigneeSelection={chainReview && canOperate
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? decisionDeliverySelection : undefined}
@@ -2045,7 +2051,7 @@ export function TaskWorkspace({
                 <>
                   {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
                       单号。讨论参与人留在左侧图下面。 */}
-                  {chainReview && (
+                  {chainReview && canOperate && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph!.repositories}
@@ -2060,10 +2066,11 @@ export function TaskWorkspace({
               }
             />
           )}
-          {waiting && !canOperate && (
+          {waiting && !decides && (
             <div className="read-only-notice">
-              该事项由 {task.luban_account ?? "其他成员"} 核对；
-              你可以查看全部材料，但不能代为提交决定。
+              {canCollaborate
+                ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以继续在材料上批注插话，意见会随卡送到 Agent。`
+                : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看全部材料，但不能代为提交决定。`}
             </div>
           )}
           {task.delivery?.scope_violation && (

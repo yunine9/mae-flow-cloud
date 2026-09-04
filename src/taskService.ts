@@ -216,6 +216,7 @@ import {
   renderDecision,
   type WaitingRecord,
 } from "./humanGate.ts";
+import { humanizeRepositoryIds } from "./repositoryNames.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import {
   probeVisionCapability,
@@ -10199,6 +10200,53 @@ export class TaskService {
     ].filter(Boolean).join("\n"), "按交付清单整理提交中");
   }
 
+  /** 拍板类决定只认主责任人。受邀参与讨论的人(协作者、逐仓责任人)能回答
+   * 分析期的澄清题,但"进不进分析""拆不拆""确认并生成任务"改的是任务
+   * 的形状——讨论开放,拍板不开放(2026-09-04 用户拍板)。管理员替人拍板
+   * 走 HTTP 层的 canOperate,这里只看提交者是不是责任人。 */
+  private assertOwnerDecides(
+    task: TaskState,
+    actor: string | undefined,
+    what: string,
+  ): void {
+    const owner = task.summary.luban_account;
+    if (actor && owner && actor !== owner) {
+      throw new TaskControlError(`只有主责任人 ${owner} 可以${what}`);
+    }
+  }
+
+  /** 拍板类卡:只认责任人,受邀参与人只读、也不通知。 */
+  private ownerOnlyWaiting(waiting: { step: string }): boolean {
+    return waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+      || waiting.step === CLOUD_SPLIT_PROPOSAL_STEP;
+  }
+
+  /** 分析期能回答问题卡的人:协作者 + 逐仓责任人,去掉责任人自己。
+   * 与 server.ts 的 canCollaborate 同一口径——那边放行 HTTP,这边决定
+   * 通知谁。分析确认后 stage 变了,自然没人了。 */
+  private discussionParticipants(task: TaskState): string[] {
+    const graph = task.summary.requirement_graph;
+    if (graph?.stage !== "analysis") return [];
+    const people = new Set<string>([
+      ...(task.summary.collaborators ?? []),
+      ...graph.repositories.flatMap((repository) =>
+        repository.assignee ? [repository.assignee] : []),
+    ]);
+    if (task.summary.luban_account) people.delete(task.summary.luban_account);
+    return [...people];
+  }
+
+  /** 分析清单里的仓库名,按下单顺序对应机读序号 repo-1、repo-2…
+   * (与 create() 建图节点的规则一致);名字取仓库地址末段。 */
+  private analysisRepositoryNames(
+    task: TaskState,
+  ): Array<{ id: string; name: string }> {
+    return (task.summary.repositories ?? []).map((url, index) => ({
+      id: `repo-${index + 1}`,
+      name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
+    }));
+  }
+
   private async resumeResolvedDecision(
     task: TaskState,
     waiting: WaitingRecord,
@@ -10354,11 +10402,7 @@ export class TaskService {
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
     if (waiting.step === CLOUD_SPLIT_PROPOSAL_STEP) {
-      if (input.actor && task.summary.luban_account
-          && input.actor !== task.summary.luban_account) {
-        throw new TaskControlError(
-          `只有主责任人 ${task.summary.luban_account} 可以决定拆不拆`);
-      }
+      this.assertOwnerDecides(task, input.actor, "决定拆不拆");
       const submitted = [...Object.values(answers), decision];
       if (!submitted.includes(SPLIT_PROPOSAL_ACCEPT)
           && !submitted.includes(SPLIT_PROPOSAL_DECLINE)) {
@@ -10377,11 +10421,7 @@ export class TaskService {
       return { ...task.summary };
     }
     if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
-      if (input.actor && task.summary.luban_account
-          && input.actor !== task.summary.luban_account) {
-        throw new TaskControlError(
-          `只有主责任人 ${task.summary.luban_account} 可以确认进入需求分析`);
-      }
+      this.assertOwnerDecides(task, input.actor, "确认进入需求分析");
       if (task.summary.requirement_revision?.state === "running") {
         throw new TaskControlError("Agent 正在修改需求文档，请完成后再确认");
       }
@@ -10425,6 +10465,9 @@ export class TaskService {
       throw new NotFoundError("逐仓责任人与 AR 单号只能随“确认并生成任务”提交");
     }
     if (confirmingGraph) {
+      // 受邀参与人能答澄清题、能选"需要修改",但拆单这一下改的是任务的
+      // 形状,谁下的单谁拍板。HTTP 层只挡到"是否参与讨论",这里是硬闸。
+      this.assertOwnerDecides(task, input.actor, "确认并生成任务");
       this.requirementGraphPlan(task, input.repository_assignees,
         input.repository_tickets);
       if (input.repository_assignees) {
@@ -13071,6 +13114,11 @@ export class TaskService {
         // 拆分提议:只给单仓直接开发的主任务。
         extraTools: [...(this.memoryTools(task) ?? []), ...this.splitTools(task)],
         onFileMutationIntent: (path) => this.onMemoryFileIntent(task, path),
+        // 分析卡上残留的 repo-N 序号机械换成仓库名(prompt 已按名称呼,
+        // 这是第二道)。编码会话没有序号清单,不挂。
+        humanizeQuestionText: analysisOnly
+          ? (text) => humanizeRepositoryIds(text, this.analysisRepositoryNames(task))
+          : undefined,
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
@@ -18410,38 +18458,51 @@ export class TaskService {
     const waiting = task.summary.waiting;
     const account = task.summary.luban_account;
     if (!notifier || !waiting || !account) return;
-    const questions =
-      ((waiting.question as any)?.questions ?? []) as Array<{
-        question?: string;
-        options?: string[];
-      }>;
-    this.bypass(task, "待办通知", notifier
-      .notifyWaiting({
-        waitingId: waiting.waiting_id,
-        stateVersion: waiting.state_version,
-        taskId: task.summary.id,
-        subject: task.summary.title ?? task.summary.requirement,
-        account,
-        step: waiting.step,
-        context: waiting.context,
-        questions: questions.map((item): NotifyQuestion => ({
-          question: String(item.question ?? ""),
-          options: Array.isArray(item.options) ? item.options.map(String) : [],
-        })),
-        summary: "需要你确认",
-        link: personalTaskLink(
-          this.notificationLinkBase(),
-          account,
-          task.summary.id,
-        ),
-      })
-      .then((record) => {
-        task.notifyRecord = record;
-        // 投递结果(尤其"没送到")要活过重启:不落盘的话,重启后页面
-        // 红旗消失,"通知失败"从可见事实变成不可见事实(2026-08-29
-        // 部署审计实锤)。写盘失败由 writeTaskState 自己记日志,纯旁路。
-        this.writeTaskState(task);
-      }));
+    const questions = (((waiting.question as any)?.questions ?? []) as Array<{
+      question?: string;
+      options?: string[];
+    }>).map((item): NotifyQuestion => ({
+      question: String(item.question ?? ""),
+      options: Array.isArray(item.options) ? item.options.map(String) : [],
+    }));
+    const subject = task.summary.title ?? task.summary.requirement;
+    const deliver = (
+      recipient: string, waitingId: string, stateVersion?: number,
+    ) => notifier.notifyWaiting({
+      waitingId,
+      stateVersion,
+      taskId: task.summary.id,
+      subject,
+      account: recipient,
+      step: waiting.step,
+      context: waiting.context,
+      questions,
+      summary: "需要你确认",
+      link: personalTaskLink(
+        this.notificationLinkBase(),
+        recipient,
+        task.summary.id,
+      ),
+    });
+    this.bypass(task, "待办通知",
+      deliver(account, waiting.waiting_id, waiting.state_version)
+        .then((record) => {
+          task.notifyRecord = record;
+          // 投递结果(尤其"没送到")要活过重启:不落盘的话,重启后页面
+          // 红旗消失,"通知失败"从可见事实变成不可见事实(2026-08-29
+          // 部署审计实锤)。写盘失败由 writeTaskState 自己记日志,纯旁路。
+          this.writeTaskState(task);
+        }));
+    // 受邀参与讨论的人能回答分析期的问题卡,不通知等于邀请了不喊人。
+    // 拍板类卡只认责任人,不扰。键按人分开:通知器按 waiting_id 幂等,
+    // 复用同一个键第二个人永远收不到;不带 state_version——手机短码
+    // 审批只给责任人,参与人在页面上答。页面上的通知红旗只跟责任人
+    // 那条走,参与人的投递结果不覆盖它。
+    if (this.ownerOnlyWaiting(waiting)) return;
+    for (const participant of this.discussionParticipants(task)) {
+      this.bypass(task, "讨论邀请通知",
+        deliver(participant, `${waiting.waiting_id}#${participant}`));
+    }
   }
 
   /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
@@ -18818,10 +18879,14 @@ export class TaskService {
     requirementPath?: string,
   ): string {
     const ticket = task.summary.ticket ?? task.summary.id;
-    const repositories = (task.summary.repositories ?? []).map((url, index) => {
+    // 第一列是仓库名不是序号:模型会照抄第一列去提问、写方案,序号落到
+    // 卡上人看不出是哪个仓(内网实锤 2026-09-04)。机读图按 url 照录,
+    // 序号在这里没有任何用处,不再出现。
+    const repositories = this.analysisRepositoryNames(task).map(({ name }, index) => {
+      const url = task.summary.repositories![index];
       const path = join(cwd,
         `${index + 1}-${basename(url).replace(/\.git$/, "") || "repo"}`);
-      return `- repo-${index + 1} | ${url} | ${path}`;
+      return `- ${name} | ${url} | ${path}`;
     }).join("\n");
     const artifactDir = join(cwd, ".mae-flow-work", ticket);
     return [
@@ -18840,7 +18905,10 @@ export class TaskService {
         + `正式交付流程会在方案确认后的独立任务中由内核主导。此阶段`
         + `只读分析,禁止修改业务代码、提交或启动交付;工作区已在 git`
         + ` 配置层禁用推送,push 必然失败。`,
-      `仓库清单（ID | 原始地址 | 本地只读分析路径）:\n${repositories}`,
+      `仓库清单（仓库名 | 原始地址 | 本地只读分析路径）:\n${repositories}`,
+      "称呼仓库一律用仓库名(清单第一列):提问、方案、图和清单里都不要写"
+        + " repo-1/repo-2 这类序号——人看不懂序号指的是哪个仓;本地目录名"
+        + "也只是路径,不当称呼。",
       // 从直接开发转过来的单子:上一位 Agent 读完仓的判断是起点,不是
       // 结论——澄清与划分方向卡照走,不许照单全收。
       ...(task.summary.split_escalation ? [

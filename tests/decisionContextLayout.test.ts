@@ -55,7 +55,8 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
 });
 
 test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () => {
-  assert.match(workspace, /waiting && canOperate && \(/,
+  // 2026-09-04 起闸门是 decides(责任人,或受邀参与人答非拍板卡)。
+  assert.match(workspace, /waiting && decides && \(/,
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
