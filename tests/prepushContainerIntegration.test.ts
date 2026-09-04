@@ -390,7 +390,10 @@ test("native prepush 自动放宽慢构建预算并在首次超时时收口", as
     mkdtempSync(join(tmpdir(), "mfc-prepush-timeout-platform-")));
   await platform.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-timeout-data-"));
-  const compile = "mvn compile -DDT_test=UT -DDT_run=true";
+  // 7b1abfa 起不带过滤的 DT UT 命令被判为全仓 UT 直接拒绝(exit 64),
+  // 根本走不到"抬预算"那一步;慢构建样例必须是平台放行的定向写法。
+  const compile =
+    "mvn compile -DDT_test=UT -DDT_run=true -DDT_COV_INCLUDES=*native_fixture*";
   const retryScenes = Array.from({ length: 20 }, (_, index): Scene => ({
     tool: { name: "bash", input: { command: `echo timeout-retry-${index}` } },
   }));
