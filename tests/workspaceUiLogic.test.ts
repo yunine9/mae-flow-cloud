@@ -101,6 +101,22 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
+test("Build-Fix 已恢复运行时不再显示旧的自动修复停机", () => {
+  const task = {
+    status: "verifying" as const,
+    delivery: {
+      loop: { state: "halted", kind: "review", round: 0, max: 20 },
+      prepush: { state: "preparing", round: 1, message: "准备定向验证" },
+      prepush_runtime: {
+        state: "recovering" as const,
+        message: "服务正在恢复上次中断的 Build-Fix",
+      },
+    },
+  };
+  assert.equal(api.repairStopped(task), false);
+  assert.equal(api.statusText(task), "Build-Fix 恢复中");
+});
+
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
   assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
     "已交付任务仍可留下交付后记录");

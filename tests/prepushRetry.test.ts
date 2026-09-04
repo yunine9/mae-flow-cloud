@@ -254,6 +254,16 @@ test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会
       stalled: "上轮环境失败",
       waiting_on: "修好环境后重跑",
       skipped: "Build-Fix 未通过",
+      loop: {
+        state: "halted",
+        kind: "review",
+        round: 0,
+        max: 20,
+        diagnosis: "部署前的旧停机结论",
+        workspace_review_pending: true,
+        workspace_review_recheck_required: true,
+        workspace_review_annotation_ids: ["an-await-author"],
+      },
     };
     (service as any).resumePrePushVerification = async () => {};
 
@@ -264,6 +274,11 @@ test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会
     assert.equal(internal.summary.delivery.stalled, undefined);
     assert.equal(internal.summary.delivery.waiting_on, undefined);
     assert.equal(internal.summary.delivery.skipped, undefined);
+    assert.equal(internal.summary.delivery.loop.state, "verifying");
+    assert.equal(internal.summary.delivery.loop.workspace_review_recheck_required, true,
+      "恢复机器验证不能替意见作者确认通过");
+    assert.deepEqual(internal.summary.delivery.loop.workspace_review_annotation_ids,
+      ["an-await-author"]);
   } finally {
     await model.stop();
   }

@@ -37,8 +37,15 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
  * verifying 的任务才给重跑按钮(在途验证点重跑=重复烧流水线)。 */
 export function repairStopped(task: {
   status: TaskStatus;
-  delivery?: { pipeline?: string; stalled?: string; loop?: { state: string } };
+  delivery?: {
+    pipeline?: string;
+    stalled?: string;
+    loop?: { state: string };
+    prepush_runtime?: { state?: string };
+  };
 }): boolean {
+  if (["running", "recovering"].includes(
+    task.delivery?.prepush_runtime?.state ?? "")) return false;
   const loop = task.delivery?.loop;
   return task.status === "verifying" && (
     loop?.state === "halted" || loop?.state === "exhausted"
@@ -55,9 +62,16 @@ export function statusText(task: {
   status: TaskStatus;
   delivery?: {
     loop?: { round: number; max?: number; state: string; kind?: string };
+    prepush?: { state?: string; round?: number; message?: string };
+    prepush_runtime?: { state?: string; message?: string };
   };
 }): string {
   const loop = task.delivery?.loop;
+  const runtime = task.delivery?.prepush_runtime;
+  if (["queued", "running", "verifying"].includes(task.status)) {
+    if (runtime?.state === "recovering") return "Build-Fix 恢复中";
+    if (runtime?.state === "running") return "Build-Fix 进行中";
+  }
   if (loop && ["queued", "running", "pausing", "verifying"]
     .includes(task.status)) {
     if (loop.state === "repairing") {

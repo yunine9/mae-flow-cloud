@@ -20,6 +20,7 @@ function git(cwd: string, ...args: string[]): string {
 function interruptedTask(
   status: TaskStatus,
   activeAttempt = true,
+  staleReviewLoop = false,
 ): { dataDir: string; cwd: string; oldAttempt?: string } {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-recover-"));
   const workspace = join(dataDir, "task-1");
@@ -50,6 +51,18 @@ function interruptedTask(
       status,
       created_at: "2026-08-29T00:00:00.000Z",
       delivery: {
+        ...(staleReviewLoop ? {
+          loop: {
+            state: "halted",
+            kind: "review",
+            round: 0,
+            max: 20,
+            diagnosis: "部署前的旧停机结论",
+            workspace_review_pending: true,
+            workspace_review_recheck_required: true,
+            workspace_review_annotation_ids: ["an-await-author"],
+          },
+        } : {}),
         prepush: {
           schema: PRE_PUSH_STATE_SCHEMA,
           state: "preparing",
@@ -74,6 +87,28 @@ function interruptedTask(
   }, null, 2));
   return { dataDir, cwd, oldAttempt };
 }
+
+test("恢复 Build-Fix 会撤销旧停机态，但保留待作者复核的检视账", async () => {
+  const fixture = interruptedTask("verifying", true, true);
+  const control = controlledRunner();
+  const current = service(fixture.dataDir, control.runner);
+  assert.equal(current.recover().requeued, 1);
+  const request = await control.request;
+  const live = current.get("task-1")!;
+  assert.equal(live.delivery?.loop?.state, "verifying");
+  assert.equal(live.delivery?.loop?.workspace_review_pending, true);
+  assert.equal(live.delivery?.loop?.workspace_review_recheck_required, true);
+  assert.deepEqual(live.delivery?.loop?.workspace_review_annotation_ids,
+    ["an-await-author"]);
+  assert.notEqual(live.focus?.kind, "blocked");
+
+  control.finish({
+    status: "infrastructure_failure",
+    sha: request.sha,
+    message: "测试主动收口恢复轮",
+  });
+  await until(() => current.get("task-1")?.status === "failed", "恢复轮收口");
+});
 
 function controlledRunner() {
   let started!: (request: PrePushRunRequest) => void;

@@ -95,6 +95,9 @@ export function TaskCard({
     : [];
   const notifyHttpError = task.notify?.last_error
     ?.match(/HTTP\s+\d{3}/)?.[0];
+  const buildFixActive = ["running", "recovering"].includes(
+    task.delivery?.prepush_runtime?.state ?? "",
+  );
 
   return (
     <article
@@ -143,6 +146,7 @@ export function TaskCard({
             <span className="task-key-line danger">{task.detail}</span>
           )}
           {!expanded && task.status === "verifying"
+            && !buildFixActive
             && (repairStopped(task) || task.delivery?.waiting_on) && (
             <span className="task-key-line attention">
               {repairStopped(task)
@@ -271,7 +275,7 @@ export function TaskCard({
             </svg>
           </a>
         )}
-        {task.delivery?.pipeline && (
+        {task.delivery?.pipeline && !buildFixActive && (
           // 原始状态串形如 "running(轮询预算耗尽,请人工查看流水线)"——
           // 括号里的注记才是给人看的;外壳状态词翻成人话,原文进 title。
           <span className="meta-fact" title={task.delivery.pipeline}>
@@ -350,7 +354,7 @@ export function TaskCard({
           {/* 还在等的时候也要说清在等什么。这行原来根本不渲染:页面只有
               "验证中"三个字,底下藏着的"某一项流水线结果一直没给"谁都
               看不到,任务看着像马上要成了。 */}
-          {!repairStopped(task) && task.status === "verifying"
+          {!repairStopped(task) && !buildFixActive && task.status === "verifying"
             && task.delivery?.waiting_on && (
             <div className="verify-waiting">
               <strong>正在等</strong>

@@ -630,12 +630,15 @@ export function prePushMission(
     "",
     buildGuidance,
     budgetGuidance,
-    "改了会进交付的文件(源码、测试、构建配置)之后记得重跑编译和 UT——平台不硬拦,"
+    "改了会进交付的文件(源码、测试、构建配置)之后记得重跑编译和受影响范围的定向 UT——平台不硬拦,"
       + "但会把「最后一次成功之后还改过哪些文件」写进收据给人看;写 .mae-flow-work/build-notes.md"
       + " 这类平台笔记不算改动,不用因此重跑。",
     "同一份代码内容不要原样重复执行同一条重型编译/测试命令：首次失败后先读日志、"
       + "修代码或运行更小范围的定向检查；只有代码改变或确认属于短暂环境抖动时才重试。"
       + "Cloud 会复用同一代码内容上已经成功的相同命令，并在连续失败且代码未变化时阻止第三次空跑。",
+    "Build-Fix 禁止运行全仓 UT：一次全量可能耗时一小时，不应在每轮修复里重复执行。"
+      + "只跑本次改动或当前失败直接影响的模块、测试类、suite/case；全量回归由远端权威流水线负责。"
+      + "若仓库没有可靠的定向选择方式，明确写“未找到定向 UT”并停下，不得为了收口偷偷改跑全量。",
     "",
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
@@ -643,7 +646,7 @@ export function prePushMission(
     "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
       + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
       + "编译产物提交进去或修改业务仓 .gitignore。最后一段必须严格输出下面结构"
-      + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
+      + "（command 写你真正执行的那段构建命令原文，如 `mvn -pl order -Dtest=OrderServiceTest test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",
     '{"status":"passed|code_failure|infrastructure_failure",'
@@ -657,11 +660,11 @@ export function prePushMission(
     // test 字样的仓),所以这里必须说到明面上——这条靠的是嘱咐,不是闸。
     // 措辞不许夸大宿主的核对能力:它核的是"你上报的命令确实成功跑过",
     // 核不出那条命令跑的是编译还是测试。
-    "unit_test 必须填**真跑过测试**的那条命令（Java 编译栏可用"
-      + " `mvn package -DskipTests`，但 UT 栏仍须另填 `mvn test`；C++ 可用"
-      + "`mvn compile -DDT_test=UT -DDT_run=true`、`npm test`），"
+    "unit_test 必须填**真跑过的定向测试**命令（Java 编译栏可用"
+      + " `mvn package -DskipTests`，UT 栏使用带 `-pl` / `-Dtest` 的测试命令；"
+      + "C++ 使用仓库 DT include、runner suite/case 或 `ctest -R` 过滤；JS 使用测试文件/用例过滤），"
       + "**不能把编译命令填进 UT 栏顶账**：只编译不跑 UT 等于这一关没做，"
       + "代价是把没测过的代码推上去烧流水线。"
-      + "仓库确实没有 UT 入口时，如实报 code_failure 并写清楚，不要以编译代替。",
+      + "仓库确实没有定向 UT 入口时，如实报 code_failure 并写清楚，不要以编译代替，也不要退回全量 UT。",
   ].join("\n");
 }

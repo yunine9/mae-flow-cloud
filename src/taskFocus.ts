@@ -166,6 +166,27 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       true,
     );
   }
+  // runtime 是当前 serve 的活性事实，优先于 task.json 里可能由部署前
+  // 留下的 loop.halted。只有真正在 running/recovering 时覆盖旧停机牌；
+  // interrupted/stopped 仍按下面的停机分支提醒人，不能用阶段名猜活性。
+  if (["queued", "running", "verifying"].includes(task.status)
+      && prepush && ["running", "recovering"]
+    .includes(delivery?.prepush_runtime?.state ?? "")
+      && [
+        "queued", "preparing", "compiling", "testing", "unit_testing", "ut",
+        "repairing",
+      ].includes(prepush.state ?? "")) {
+    return focus(
+      "machine",
+      delivery?.prepush_runtime?.state === "recovering"
+        ? (delivery.prepush_runtime.message || "服务正在恢复 Build-Fix")
+        : prepush.message?.trim()
+          || `正在进行 Build-Fix${prepush.round ? `（第 ${prepush.round} 轮）` : ""}`,
+      "定向编译与受影响 UT 通过后继续交付",
+      "agent",
+      58,
+    );
+  }
   if (delivery?.stalled || loop?.state === "halted"
       || loop?.state === "exhausted") {
     return focus(

@@ -38,7 +38,7 @@ export function prepushViewOf(state: string): PrepushView {
       return {
         phase: "preparing",
         label: "准备",
-        detail: "正在为最终工作区准备编译与单元测试。",
+        detail: "正在为最终工作区准备编译与受影响范围的定向单元测试。",
         tone: "active",
         busy: true,
       };
@@ -56,7 +56,7 @@ export function prepushViewOf(state: string): PrepushView {
       return {
         phase: "testing",
         label: "单元测试",
-        detail: "编译已通过，正在运行单元测试。",
+        detail: "编译已通过，正在运行受影响范围的定向单元测试。",
         tone: "active",
         busy: true,
       };
@@ -64,7 +64,7 @@ export function prepushViewOf(state: string): PrepushView {
       return {
         phase: "repairing",
         label: "自动修复",
-        detail: "专项 Agent 正在修复验证失败，修复后会重新编译并运行单元测试。",
+        detail: "专项 Agent 正在修复验证失败，修复后会重新编译并运行定向单元测试。",
         tone: "repair",
         busy: true,
       };
@@ -86,7 +86,7 @@ export function prepushViewOf(state: string): PrepushView {
       return {
         phase: "passed",
         label: "通过",
-        detail: "编译与单元测试已通过，Cloud 可以推送这个 SHA。",
+        detail: "编译与定向单元测试已通过，Cloud 可以推送这个 SHA；全量回归由远端流水线负责。",
         tone: "success",
       };
     case "user_skipped":

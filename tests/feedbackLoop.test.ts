@@ -15,6 +15,7 @@ import {
   FeedbackStoreCorruptionError,
   type FeedbackRecord,
 } from "../src/feedbackStore.ts";
+import { AnnotationStore } from "../src/annotations.ts";
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
@@ -81,6 +82,61 @@ test("反馈索引中间或完整坏账必须点名失败，不能静默隐藏�
   assert.throws(() => store.upsert([record({
     id: "pipeline:lint:r0@abc", source_id: "lint",
   })]), FeedbackStoreCorruptionError);
+});
+
+test("重启对账只关闭已撤回批注，fixed 仍等待提出人确认", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-feedback-annotation-reconcile-"));
+  const workspace = join(root, "task-1");
+  mkdirSync(workspace, { recursive: true });
+  const annotations = new AnnotationStore(join(workspace, "annotations.jsonl"));
+  const dropped = annotations.add({
+    author: "alice", artifact: "changes.diff", file: "src/a.ts", line: 1,
+    anchor: "old", note: "这条撤回", kind: "code",
+  });
+  const fixed = annotations.add({
+    author: "bob", artifact: "changes.diff", file: "src/b.ts", line: 2,
+    anchor: "before", note: "请修复", kind: "code",
+  });
+  annotations.markSent([dropped.id, fixed.id], "review_repair", "owner");
+  annotations.drop(dropped.id, "alice");
+  annotations.respond(fixed.id, {
+    outcome: "fixed", summary: "已经修改", evidence: ["src/b.ts"],
+  });
+
+  // 模拟进程死在“批注状态已落盘、反馈索引尚未核销”的窗口。
+  const store = new FeedbackStore(join(workspace, "feedback", "index.jsonl"));
+  store.upsert([
+    record({
+      id: `workspace:${dropped.id}:r0@abc`, batch_id: "fb-review",
+      source: "workspace", source_id: dropped.id, status: "repairing",
+    }),
+    record({
+      id: `workspace:${fixed.id}:r0@abc`, batch_id: "fb-review",
+      source: "workspace", source_id: fixed.id, status: "repairing",
+    }),
+  ]);
+  const service = new TaskService({
+    dataDir: root, provider: "unused", model: "unused", modelsJson: {},
+    maxConcurrent: 0,
+  });
+  const task = { summary: {
+    id: "task-1", requirement: "检视对账", status: "verifying",
+    created_at: "2026-09-04T00:00:00.000Z", workspace,
+    delivery: { loop: {
+      state: "verifying", kind: "review", round: 0, max: 20,
+      workspace_review_pending: true,
+      workspace_review_recheck_required: true,
+      workspace_review_annotation_ids: [dropped.id, fixed.id],
+    } },
+  } } as any;
+
+  (service as any).reconcileWorkspaceFeedbackAuthority(task);
+  const byId = new Map(store.list().map((item) => [item.source_id, item]));
+  assert.equal(byId.get(dropped.id)?.status, "closed");
+  assert.equal(byId.get(fixed.id)?.status, "awaiting_verification");
+  assert.match(byId.get(fixed.id)?.resolution ?? "", /等待.*确认/);
+  assert.equal(task.summary.delivery.loop.workspace_review_recheck_required, true,
+    "反馈索引对账不能替意见作者签字");
 });
 
 test("反馈索引的合法 JSON 也必须通过语义校验，不能伪造来源或核销未知项", () => {

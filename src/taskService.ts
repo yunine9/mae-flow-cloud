@@ -399,6 +399,7 @@ import {
 import {
   detectPrePushBuildProfile,
   isPrePushBuildCommand,
+  obviousFullSuiteCommand,
   PrePushCommandRepeatGuard,
   prePushCommandIdentity,
   prePushCommandTimeoutSeconds,
@@ -8079,6 +8080,20 @@ export class TaskService {
           }
         }
         this.replayProjection(task);
+        // annotations.jsonl 是工作台人工裁决的权威账。部署前若批注已被
+        // 撤回/确认、进程却死在 FeedbackStore 核销前，不能在重启后把
+        // 已关闭意见重新显示成进行中；反过来，Agent 仅回复 fixed 仍须
+        // 等提出人确认，绝不能趁恢复自动关闭。
+        try {
+          this.reconcileWorkspaceFeedbackAuthority(task);
+        } catch (error) {
+          const detail = `持续检视索引损坏或不可写，已停止自动闭环，不能静默隐藏反馈：${
+            String(error).slice(0, 800)}`;
+          this.options.log?.(`任务 ${summary.id} ${detail}`);
+          if (!["completed", "canceled"].includes(summary.status)) {
+            this.markVerificationStalled(task, detail);
+          }
+        }
         const reviewOutboxStalled = this.reviewReplyOutboxStalled(task);
         if (!["completed", "canceled"].includes(summary.status)
             && summary.status !== "await_merge"
@@ -8471,6 +8486,7 @@ export class TaskService {
     task.summary.status = "verifying";
     task.summary.detail = actor
       ? `人工重跑 Build-Fix(${actor})` : "人工重跑 Build-Fix";
+    this.markBuildFixResuming(task);
     this.persist(task);
     // 交付链自己会收口僵尸 attempt(restore 的 recovered 转移)并起新轮;
     // 这里只负责把链路重新踢活。
@@ -8584,6 +8600,7 @@ export class TaskService {
       task.summary.status = "verifying";
       task.summary.detail = actor
         ? `人工重跑 Build-Fix(${actor})` : "人工重跑 Build-Fix";
+      this.markBuildFixResuming(task);
       this.persist(task);
       this.bypass(task, "Build-Fix 人工重跑",
         this.resumePrePushVerification(task, task.controlEpoch));
@@ -8655,6 +8672,7 @@ export class TaskService {
       delivery.waiting_on = undefined;
       task.summary.detail = actor
         ? `人工重新尝试交付(${actor})` : "人工重新尝试交付";
+      this.markBuildFixResuming(task);
       this.persist(task);
       this.bypass(task, "人工重新尝试交付",
         this.tryDeliver(task, task.controlEpoch));
@@ -11691,6 +11709,7 @@ export class TaskService {
       // 并对同一 SHA 重跑；绝不再起一轮普通编码 Agent。
       task.summary.status = "verifying";
       task.summary.detail = "已恢复，等待重新执行 Build-Fix";
+      this.markBuildFixResuming(task);
       persistReturn();
       markReturned();
       this.bypass(task, "Build-Fix 恢复",
@@ -12207,6 +12226,7 @@ export class TaskService {
           store.resolve(id, projected, resolution);
         }
       }
+      this.reconcileWorkspaceFeedbackAuthority(task, store);
       const stalled = task.summary.delivery?.stalled;
       if (stalled?.startsWith("持续检视索引损坏或不可写")) {
         delete task.summary.delivery!.stalled;
@@ -12244,6 +12264,52 @@ export class TaskService {
       if (record.status !== "closed" && matches(record)) {
         store.resolve(record.id, status,
           typeof resolution === "function" ? resolution(record) : resolution);
+      }
+    }
+  }
+
+  /** 工作台批注账对 FeedbackStore 的单向权威校正。内核只能证明 Agent
+   * 是否处理过，不能代替意见作者确认；所以 fixed/not_fixed 只到
+   * awaiting_verification，只有批注的 verified/dropped 能最终 closed。
+   * 这也修复“重启后从内核重建索引，又把已撤回意见复活”的窗口。 */
+  private reconcileWorkspaceFeedbackAuthority(
+    task: TaskState,
+    existingStore?: FeedbackStore,
+  ): void {
+    const annotations = new Map(this.annotations(task).list()
+      .map((item) => [item.id, item]));
+    if (!annotations.size) return;
+    const store = existingStore ?? new FeedbackStore(
+      join(task.summary.workspace, "feedback", "index.jsonl"));
+    for (const record of store.list()) {
+      if (record.source !== "workspace" || record.status === "closed") continue;
+      const annotation = annotations.get(record.source_id);
+      if (!annotation) continue; // 找不到权威原件时 fail-closed，不猜已处理。
+      const revision = annotation.rework ?? 0;
+      if (annotation.status === "verified" || annotation.status === "dropped"
+          || revision > record.source_revision
+          || (annotation.status === "draft"
+            && revision === record.source_revision)) {
+        const reason = annotation.status === "verified"
+          ? "批注作者已确认通过"
+          : annotation.status === "dropped"
+            ? "批注作者已撤回"
+            : annotation.status === "draft"
+              ? "批注已修改，等待重新提交"
+              : "批注已进入新一轮返工";
+        store.resolve(record.id, "closed", reason);
+        continue;
+      }
+      if (revision !== record.source_revision
+          || annotation.status !== "sent"
+          || annotation.response?.revision !== revision) continue;
+      const status = annotation.response.outcome === "needs_clarification"
+        ? "needs_human" as const : "awaiting_verification" as const;
+      if (record.status !== status) {
+        store.resolve(record.id, status,
+          annotation.response.outcome === "needs_clarification"
+            ? `Agent 需要提出人补充说明：${annotation.response.summary}`
+            : "Agent 已处理，等待批注提出人确认");
       }
     }
   }
@@ -13862,6 +13928,31 @@ export class TaskService {
     };
   }
 
+  /** Build-Fix 已被当前进程接回时，旧 loop.halted/exhausted 就不再是
+   * 当前事实。只恢复机器状态并清掉旧诊断；人工复检标记与批注 ID 原样
+   * 保留，后续仍须意见作者逐条确认。 */
+  private markBuildFixResuming(task: TaskState): boolean {
+    const delivery = task.summary.delivery;
+    if (!delivery) return false;
+    let changed = false;
+    const staleKeys = [
+      "stalled", "waiting_on", "skipped", "verify_deadline",
+    ] as const;
+    for (const key of staleKeys) {
+      if (delivery[key] !== undefined) {
+        delete delivery[key];
+        changed = true;
+      }
+    }
+    const loop = delivery.loop;
+    if (loop && ["halted", "exhausted"].includes(loop.state)) {
+      loop.state = "verifying";
+      loop.diagnosis = undefined;
+      changed = true;
+    }
+    return changed;
+  }
+
   /** 恢复前置条件坏了必须把 preparing 收成明确环境异常。继续保留一个
    * 没有 owner 的“准备中”，页面和运维都会被同一份假活性误导。 */
   private failPendingPrePush(task: TaskState, reason: string): void {
@@ -13916,6 +14007,7 @@ export class TaskService {
     task.prepushRecoveryActive = true;
     task.summary.status = "verifying";
     task.summary.detail = "服务重启，正在恢复未完成的 Build-Fix";
+    this.markBuildFixResuming(task);
     delete task.summary.completed_at;
     this.persist(task);
     const epoch = task.controlEpoch;
@@ -14242,6 +14334,16 @@ export class TaskService {
         bashOperations: {
           exec: async (command, dir, execOptions) => {
             try {
+              if (obviousFullSuiteCommand(command)) {
+                execOptions.onData(Buffer.from(
+                  "[Cloud] 已阻止全仓 UT：Build-Fix 只运行本次改动/失败直接影响的模块和用例。请改用 -pl/-Dtest、DT include、ctest -R 或对应测试框架的显式选择器；全量回归由远端流水线负责。\n",
+                ));
+                this.options.log?.(
+                  `[prepush-targeted-ut] 任务 ${task.summary.id} 阻止全仓 UT: ${
+                    prePushCommandIdentity(command).slice(0, 180)}`,
+                );
+                return { exitCode: 64 };
+              }
               const heavy = isPrePushBuildCommand(command);
               const contentIdentity = heavy
                 ? await codeContentIdentity() : undefined;

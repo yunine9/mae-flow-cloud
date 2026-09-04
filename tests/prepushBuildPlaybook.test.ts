@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   detectPrePushBuildProfile,
   isPrePushBuildCommand,
+  obviousFullSuiteCommand,
   PrePushCommandRepeatGuard,
   prePushBuildGuidance,
   prePushCommandTimeoutSeconds,
@@ -46,7 +47,9 @@ test("build playbook: Java 先 package 跳测试，再单独跑定向 UT", (t) =
 
   const guidance = renderPrePushBuildGuidance(profile);
   assert.match(guidance, /\.\/mvnw package -DskipTests/);
-  assert.match(guidance, /\.\/mvnw test/);
+  assert.match(guidance, /-Dtest=ClassName#method/);
+  assert.match(guidance, /只跑受影响/);
+  assert.match(guidance, /不要跑全仓 UT/);
   assert.match(guidance, /不要先跑一次带测试的 package 又重复跑 test/);
   assert.match(guidance, /-Dtest=ClassName#method/);
   assert.match(guidance, /JDK 21/);
@@ -88,10 +91,11 @@ test("build playbook: 识别 C++ Maven DT 与定向覆盖参数", (t) => {
 
   const guidance = prePushBuildGuidance(repo.root);
   assert.match(guidance, /mvn compile -DDT_test=UT -DDT_run=true/);
-  assert.match(guidance, /mvn clean compile -DDT_test=UT -DDT_run=true/);
+  assert.doesNotMatch(guidance, /mvn clean compile -DDT_test=UT -DDT_run=true/);
   assert.match(guidance, /必须从输出确认 UT 进程确实执行/);
   assert.match(guidance, /ctest --output-on-failure/);
   assert.match(guidance, /DT_COV_INCLUDES/);
+  assert.match(guidance, /不得无过滤地跑全仓 UT/);
   assert.match(guidance, /GCC\/G\+\+/);
 });
 
@@ -116,7 +120,7 @@ test("build playbook: 混合仓保留全部维度并让 Skill/仓库事实优先
   assert.match(guidance, /pom\/package.*真实可执行入口.*业务仓 Skill.*辅助说明/);
   assert.match(guidance, /按当前任务判断相关性后自行决定是否读取/);
   assert.match(guidance, /混合仓/);
-  assert.match(guidance, /一次 Maven 生命周期覆盖时不要重复构建/);
+  assert.match(guidance, /一次 Maven 生命周期定向覆盖时不要重复构建/);
 });
 
 test("build budget: 慢 native 构建不再被 Agent 的 600 秒截断", () => {
@@ -169,6 +173,31 @@ test("build budget: 部署覆盖仍给整轮清理和收口留余量", () => {
   assert.equal(prePushCommandTimeoutSeconds("mvn test", 3600, budget), 18 * 60);
 });
 
+test("Build-Fix 全仓 UT 护栏只拦明显全量命令，定向选择器正常放行", () => {
+  for (const command of [
+    "mvn test",
+    "./mvnw verify",
+    "mvn compile -DDT_test=UT -DDT_run=true",
+    "npm test",
+    "ctest --output-on-failure",
+    "./gradlew test",
+    "cargo test",
+    "go test ./...",
+    "pytest",
+  ]) assert.equal(obviousFullSuiteCommand(command), true, command);
+
+  for (const command of [
+    "mvn package -DskipTests",
+    "mvn -pl order -Dtest=OrderServiceTest test",
+    "mvn compile -DDT_test=UT -DDT_run=true -DDT_COV_INCLUDES=*Order*",
+    "npm test -- src/order.test.ts",
+    "npm run test:order",
+    "ctest -R Order --output-on-failure",
+    "go test ./internal/order",
+    "pytest tests/test_order.py",
+  ]) assert.equal(obviousFullSuiteCommand(command), false, command);
+});
+
 test("build playbook: 安全地忽略符号链接，不建议泄露凭据或关闭 SSL", (t) => {
   const repo = repository({});
   t.after(repo.cleanup);
@@ -215,7 +244,9 @@ test("build playbook: 实际注入 Build-Fix Agent mission，而非仅停留在�
   assert.match(mission, /内网 Build-Fix 参考/);
   assert.match(mission, /pom\/package.*真实可执行入口/);
   assert.match(mission, /mvn package -DskipTests/);
-  assert.match(mission, /mvn test/);
+  assert.match(mission, /UT 只跑受本次改动影响/);
+  assert.match(mission, /全量回归由远端权威流水线负责/);
+  assert.doesNotMatch(mission, /收口前.*完整范围/);
   assert.match(mission, /内网经验只在仓库材料没有说明时兜底/);
   assert.match(mission, /整轮最多 60 分钟/);
   assert.match(mission, /重型构建单条至少获得 45 分钟/);

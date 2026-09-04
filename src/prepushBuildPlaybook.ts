@@ -98,6 +98,37 @@ export function isPrePushBuildCommand(command: string): boolean {
   return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner;
 }
 
+/**
+ * 只拦一眼就能确认的“全仓 UT”入口，不猜业务仓自定义脚本的语义。
+ * 目的不是做第三套构建解析器，而是保证 Agent 即使忽略提示，也不能把
+ * 最常见的一小时全量命令真正跑起来；拒绝文案会要求它换成显式选择器。
+ */
+export function obviousFullSuiteCommand(command: string): boolean {
+  const value = prePushCommandIdentity(command);
+  if (!value || /(?:-DskipTests(?:=true)?|-Dmaven\.test\.skip(?:=true)?)/i
+    .test(value)) return false;
+  const targeted = /(?:^|\s)(?:-pl|--projects)(?:=|\s)|-D(?:test|it\.test|DT_COV_INCLUDES)=|(?:^|\s)ctest(?:\s|$)[^;&|\n]*(?:-R|--tests-regex|-L|--label-regex|-I|--tests-information)(?:=|\s)|(?:^|\s)(?:npm|pnpm|yarn)(?:\s+run)?\s+test(?::[^\s;&|]+)|(?:^|\s)(?:npm|pnpm|yarn)(?:\s+run)?\s+test\s+--\s+[^-\s]/i
+    .test(value);
+  if (targeted) return false;
+
+  const mavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)\s+[^;&|\n]*\b(?:test|verify)\b/i
+    .test(value);
+  const nativeMavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)(?:\s|$)[^;&|\n]*-DDT_test=UT\b[^;&|\n]*-DDT_run=true\b/i
+    .test(value);
+  const barePackageTest = /(?:^|[;&|]\s*)(?:npm|pnpm|yarn)(?:\s+run)?\s+test\s*(?:$|[;&|>])/i
+    .test(value);
+  const bareCtest = /(?:^|[;&|]\s*)ctest(?:\s+--output-on-failure)?\s*(?:$|[;&|>])/i
+    .test(value);
+  const bareGradle = /(?:^|[\s;&|()])(?:gradle|\.\/gradlew)\s+(?:test|check)\s*(?:$|[;&|>])/i
+    .test(value);
+  const bareCargo = /(?:^|[;&|]\s*)cargo\s+test\s*(?:$|[;&|>])/i.test(value);
+  const allGo = /(?:^|[;&|]\s*)go\s+test\s+\.\/\.\.\.(?:\s|$|[;&|>])/i.test(value);
+  const barePytest = /(?:^|[;&|]\s*)(?:pytest|python\s+-m\s+pytest)\s*(?:$|[;&|>])/i
+    .test(value);
+  return mavenAll || nativeMavenAll || barePackageTest || bareCtest
+    || bareGradle || bareCargo || allGo || barePytest;
+}
+
 /** 同一代码内容上的同一重型命令使用稳定键；只折叠空白，不猜 shell 语义。 */
 export function prePushCommandIdentity(command: string): string {
   return String(command ?? "").replace(/\s+/g, " ").trim();
@@ -342,12 +373,13 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     "平台持久缓存事实（同一个仓的所有轮次共享，换容器不丢）：/cache/maven（已由 MAVEN_OPTS 注入 -Dmaven.repo.local=/cache/maven/repository）、/cache/npm（npm_config_cache）、/cache/ccache（CCACHE_DIR）、仓库同级 cpp_sdk_repository；工作区内的构建产物（target/、build/ 等）同样跨轮持久。$HOME 与 /tmp 是易失的，写进去的东西下一轮就没。",
     "构建慢先核对缓存真被吃到（内网实锤：每轮重拉依赖+全量编译）：Maven 若在重新下载依赖，多半是仓库包装脚本 export MAVEN_OPTS 把平台注入覆盖了——把 `-Dmaven.repo.local=/cache/maven/repository` 显式追加到 mvn 命令行（命令行 -D 优先级最高），并把“谁覆盖了缓存配置”写进收口摘要，这是平台要修的线索。",
     "同一容器里修完代码重编还在“Downloading”？先看下载的是什么：集中在 maven-metadata.xml 与 -SNAPSHOT 工件的，是 Maven 的 SNAPSHOT 更新策略在每次构建重查远端，不是缓存失效；修复循环内的重编可加 `-nsu`（--no-snapshot-updates）省掉重复检查，但收口前的最后一次编译不要加，保持与流水线同口径。下载的是 release 版工件才说明本地仓真没命中，按上一条排查。",
+    "Build-Fix 的 UT 只跑受本次改动影响的模块和用例，禁止把全仓 UT 当作收口动作；一次全量可能耗时一小时，不能在每轮修复中重复浪费。全量回归由远端权威流水线负责。先从变更文件、失败日志、模块依赖和仓库测试配置确定最小可靠范围；找不到可靠的定向入口就明确报告“未找到定向 UT”，不得悄悄退回全量。",
   );
 
   if (profile.stacks.includes("java")) {
     lines.push(
-      `Java：编译/打包检查默认用 \`${mvn} package -DskipTests\`，UT 再单独用 \`${mvn} test\`。不要先跑一次带测试的 package 又重复跑 test；只需验证编译时 \`${mvn} compile\` 就够。仓库脚本、pom 或已选择 Skill 明确给出其他入口时以仓库事实为准。`,
-      "Java 定向 UT 可用 `-Dtest=ClassName`、`-Dtest=ClassName#method`、通配符及 `-pl <module>`；修复循环先跑受影响测试，收口前仍按仓库要求跑完整范围。",
+      `Java：编译/打包检查默认用 \`${mvn} package -DskipTests\`，UT 再单独使用带模块/用例过滤的 test 命令。不要先跑一次带测试的 package 又重复跑 test；只需验证编译时 \`${mvn} compile\` 就够。仓库脚本、pom 或已选择 Skill 明确给出其他入口时以仓库事实为准。`,
+      "Java 定向 UT 使用 `-Dtest=ClassName`、`-Dtest=ClassName#method`、通配符及 `-pl <module>`，只跑受影响模块/用例；Build-Fix 收口也不要跑全仓 UT。必须带上仓库支持的模块或用例选择参数。",
       "Java UT 缺 native 系统库（如 SQLite）属环境问题：报 infrastructure_failure 并点名缺哪个库，不要改业务代码绕。",
     );
   }
@@ -368,18 +400,18 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
   if (profile.stacks.includes("cpp")) {
     lines.push(
       "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多；skill 与本手册冲突时以 skill 为准（它更贴仓库事实）。",
-      `C++/native：优先从 Maven 插件进入。当前内网经验的候选命令是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`；首次完整基线或确认生成物陈旧时才考虑 \`${mvn} clean compile -DDT_test=UT -DDT_run=true\`。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
+      `C++/native：优先从 Maven 插件进入。当前内网经验的基础候选是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`，但执行 UT 时必须再带仓库支持的模块/用例过滤；不得无过滤地跑全仓 UT。首次生成物陈旧时也只重建受影响模块，不要用 clean 触发全仓重编与全量测试。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
       "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
-      "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
+      "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"`、测试 runner 的 suite/case 过滤或 `ctest -R <pattern>`；从改动与失败日志选最小可靠范围，Build-Fix 收口仍保持定向，不补跑全仓。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
-      "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口仍用 mvn+DT 全口径命令，增量结果不顶账。",
+      "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口只需对受影响目标做可复现的增量编译与定向 UT，完整回归留给远端流水线。",
       "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不无谓 clean；②对象级缓存靠 ccache，平台已在容器环境注入 CMAKE_C/CXX_COMPILER_LAUNCHER=ccache 与 CCACHE_BASEDIR（跨任务路径相对化），CMake 重新 configure 时自动接上。编译收口后跑 `ccache -s` 核对命中/文件数并写进收口摘要：缓存文件数在涨说明已接上（首轮全 miss 属正常，是在灌缓存）；仍是 0 个文件且 target 下存在早于本轮的 CMakeCache.txt，说明旧 configure 缓存没带 launcher——删掉该 CMake 生成目录让插件重新 configure（一次性全量，换来后续对象级命中），并把这个决定写进收口摘要。除此之外不要为接 ccache 硬改仓库工具链。",
     );
   }
 
   if (profile.stacks.length > 1) {
-    lines.push("这是混合仓：先确认根 pom 是否已统一编排各模块；能由一次 Maven 生命周期覆盖时不要重复构建，不能覆盖的 UT 再按各模块真实入口补跑并分别记录证据。");
+    lines.push("这是混合仓：先按改动文件确定受影响模块；能由一次 Maven 生命周期定向覆盖时不要重复构建，不能覆盖的 UT 只按受影响模块真实入口补跑并分别记录证据，不扩成全仓回归。");
   }
   if (!profile.stacks.length) {
     lines.push("未识别到标准入口：继续从仓库 Skill、说明、脚本和 CI 发现真实编译/UT 命令，不要凭语言印象编造命令；确实没有 UT 入口时如实报告而非以 build 代替。");
