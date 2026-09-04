@@ -11,10 +11,18 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
+import { materializeIssueSkills } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 
 const SKILL_DIR = join(
@@ -104,5 +112,22 @@ test("技能 frontmatter:目录名与 name 一致,description 非空(路由索�
       `技能 ${name} 的 frontmatter name 与目录名不一致`);
     assert.match(frontmatter, /description:\s*\S/,
       `技能 ${name} 缺 description——路由索引没有原料,Agent 永远到不了它`);
+  }
+});
+
+test("整包物化:技能目录的附属物(如 issue-ops 的 bin 引擎)必须随技能落到工作区且有执行位", () => {
+  // 非标单文件物化的旧病回潮=技能携带的能力静默失效,按盘上真物验。
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-skill-materialize-"));
+  const paths = materializeIssueSkills(workspace);
+  assert.ok(paths.length >= 4, "物化的技能数量异常");
+  for (const path of paths) {
+    assert.ok(existsSync(path), `SKILL.md 未物化: ${path}`);
+  }
+  // issue-ops 的 bin 引擎:wrapper + 各架构二进制全部在场且可执行。
+  const binDir = join(workspace, "skills", "issue-ops", "bin");
+  assert.ok(existsSync(binDir), "issue-ops/bin 未随技能物化(整包拷贝失效?)");
+  for (const entry of readdirSync(binDir)) {
+    const mode = statSync(join(binDir, entry)).mode & 0o111;
+    assert.ok(mode, `bin 引擎缺执行位: ${entry}`);
   }
 });

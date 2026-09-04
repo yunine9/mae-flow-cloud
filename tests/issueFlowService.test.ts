@@ -1147,11 +1147,13 @@ test("问题流专用部署(--issue-only):需求流程停用,问题流不受影�
 });
 
 test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async (t) => {
+  // fetch-logs 引擎已迁为平台技能 issue-ops 的 bin(引擎未变,载体变了):
+  // 它的执行面由技能正文承载、内网实测;这里只剩封存中的 build-deploy。
   const toolsDir = join(process.cwd(), "assets", "ops-tools");
   const binary = process.platform === "win32"
-    ? "fetch-logs.exe"
+    ? "build-deploy.exe"
     : process.arch === "arm64"
-      ? "fetch-logs-linux-arm64" : "fetch-logs-linux-amd64";
+      ? "build-deploy-linux-arm64" : "build-deploy-linux-amd64";
   // 仓里只带 Linux ELF(和 Windows exe),macOS 上文件在场也跑不起来——
   // spawn 直接 ENOEXEC。光查 existsSync 会让开发机上这条恒红,红着的
   // 用例等于没有用例(实测:macOS 上断言拿到的是 "spawn ENOEXEC")。
@@ -1167,16 +1169,17 @@ test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async (t
     return;
   }
   const ops = createGoOpsTools({ toolsDir });
-  const localDir = join(tmpdir(), `mfc-issue-ops-${Date.now()}`);
+  // build-deploy 冒烟:无 deployment/pom.xml 的目录必被前置校验打回,
+  // 不发起真构建,密码不出现在错误文本里。
   await assert.rejects(
-    () => ops.fetchLogs({
-      hosts: ["127.0.0.1"],   // 必拒环回:真 SSH 立刻 refused
-      services: ["TranFmaWebsite"],
+    () => ops.buildDeploy({
+      projectPath: tmpdir(),
+      hosts: ["127.0.0.1"],
       password: "probe-pass",
-      localDir,
+      includeLib: false,
     }),
     (error: Error) => {
-      assert.match(error.message, /拉取日志失败/);
+      assert.match(error.message, /deployment\/pom\.xml/);
       assert.ok(!error.message.includes("probe-pass"),
         "密码绝不能出现在错误文本里");
       return true;
@@ -1270,34 +1273,9 @@ test("ops 容器内执行:超时第一响应在容器内,不连坐会话容器",
       return true;
     },
   );
-
-  // fetch-logs 同一条容器内 timeout 契约(2026-09-02):预算 900s
-  // (15 分钟),兜底 960s 必须赛赢;超时报错同样说明容器与工作区
-  // 不受影响、带输出尾部、不泄密码。fetch-logs 不查 pom,无需真仓。
-  calls.length = 0;
-  const localDir = mkdtempSync(join(tmpdir(), "mfc-ops-fetch-"));
-  scripted.push({ exitCode: 124, stdout: "抓取进行中…", stderr: "" });
-  await assert.rejects(
-    () => ops.fetchLogs({
-      hosts: ["10.0.0.1"],
-      services: ["TranFmaWebsite"],
-      password: "probe-pass",
-      localDir,
-    }),
-    (error: Error) => {
-      assert.match(error.message, /15 分钟预算/);
-      assert.match(error.message, /容器与工作区不受影响/);
-      assert.ok(!error.message.includes("probe-pass"),
-        "密码绝不能出现在错误文本里");
-      return true;
-    },
-  );
-  const fetchCall = calls[0];
-  assert.match(fetchCall.command, /^timeout --kill-after=30 900 /,
-    "fetch-logs 命令必须由容器内 timeout 打头,预算 900s");
-  assert.equal(fetchCall.timeout, 960,
-    "兜底超时 = 预算 + 60s 余量,必须赛赢容器内 timeout");
-  assert.equal(fetchCall.cwd, workspace);
+  // (fetch-logs 曾在此验证同一条容器内 timeout 契约;引擎迁为平台技能
+  // issue-ops 的 bin 后,该执行面由技能正文承载、内网实测——契约本身
+  // 已被上方 build-deploy 各例覆盖。)
 });
 
 test("MCP 网关客户端:握手、token 头、工具调用与未配置 fail-loud", async () => {
