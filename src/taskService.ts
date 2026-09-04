@@ -18291,6 +18291,77 @@ export class TaskService {
    * - **月光模式**:用户显式开启免审批,其余问题一律代答"预授权放行,
    *   按最稳妥判断继续,理由写明供复盘"。
    * 混合卡(既有交付方式又有别的问题)只在月光开着时整卡交,否则等人。 */
+  /** 工作台修复轮中途举卡(内核 hf_open/delivery_review 这类确认节点,或模型
+   * 自造的"检视结果确认"):这是修复流程的内部节点,不是人的验收——人的验收
+   * 只在最终推送卡上逐条点通过。原来逐条回执只在会话结束时读,卡开着时
+   * 平台什么都不知道,只能让人点;人点"确认"又被"未闭环"拦下,只剩"需要
+   * 调整"能点,Agent 白跑一轮(内网实锤 2026-09-04:9 条意见、Agent 说全
+   * 闭环、面板却是锚点推断的字样;隔壁 Agent 的状态机分析)。现在:回执
+   * 此刻已在盘上,先读先记;认得出"继续/确认"类选项就由平台自动交卷,
+   * 回执缺口写进交卷说明,会话结束时那道补交仍然生效。认不出选项(真
+   * 歧义题)、或还有别的未闭环意见(责任人草稿等)照旧留给人。 */
+  private async workspaceReviewNodeAnswer(task: TaskState): Promise<{
+    why: string;
+    answers: Record<string, string>;
+    notes: string;
+  } | undefined> {
+    const waiting = task.summary.waiting;
+    const loop = task.summary.delivery?.loop;
+    if (!waiting || loop?.kind !== "review" || loop.review_source !== "workspace"
+        || !loop.workspace_review_recheck_required || loop.state !== "repairing") {
+      return undefined;
+    }
+    if ([CLOUD_PUSH_CONFIRM_STEP, CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP,
+      CLOUD_SPLIT_PROPOSAL_STEP].includes(waiting.step)) {
+      return undefined;
+    }
+    const questions = ((waiting.question as any)?.questions ?? []) as Array<{
+      question?: string;
+      options?: string[];
+    }>;
+    if (!questions.length) return undefined;
+    if (this.unresolvedAnnotations(task)
+        .some((item) => item.sent_via !== "review_repair")) {
+      return undefined;
+    }
+    const closing = stepChoiceEffects(
+      this.options.host?.kernelRoot,
+      this.reviewContractStep(task, waiting),
+    ).filter((effect) => effect.closesFeedback);
+    const answers: Record<string, string> = {};
+    for (const item of questions) {
+      const options = item.options ?? [];
+      // 先认内核契约里的关闭选项;模型自造的卡按措辞认"确认/继续"类,
+      // 反向词一票否决。两者都认不出=真歧义题,整卡留给人。
+      const chosen = options.find((option) => closing.some((effect) =>
+        matchesStepChoice(effect, option)))
+        ?? options.find((option) =>
+          /通过|确认|同意|接受|继续|无需|无须|闭环/.test(option)
+          && !/不通过|打回|退回|拒绝|修改|调整|返工|补充|歧义/.test(option));
+      if (!chosen) return undefined;
+      answers[String(item.question ?? "")] = chosen;
+    }
+    let receiptNote: string;
+    try {
+      const receipts = await this.consumeWorkspaceReviewReceipts(task);
+      receiptNote = receipts.ok
+        ? receipts.clarifications?.length
+          ? `逐条回执已登记,${receipts.clarifications.length} 条需意见作者补充说明(已通知作者)`
+          : "逐条回执已登记齐全"
+        : `逐条回执尚未齐全(${receipts.detail ?? "缺回执"}),会话结束前必须补齐`;
+    } catch (error) {
+      receiptNote = `读取逐条回执失败:${String(error)}`;
+    }
+    this.persist(task);
+    return {
+      why: `工作台修复轮内部确认节点,${receiptNote}`,
+      answers,
+      notes: `系统自动交卷(工作台修复轮的内部确认节点;${receiptNote})。`
+        + "这不是意见作者的验收:每条意见由提出人在最终推送确认卡上逐条确认，"
+        + "全部闭环后责任人才能推送。",
+    };
+  }
+
   private autoAnswerFor(task: TaskState, forceMoonlight = false): {
     why: string;
     answers: Record<string, string>;
@@ -19497,7 +19568,11 @@ export class TaskService {
         // 先看有没有现成答案(下单预选/月光模式):有就自动交卷,
         // 不通知不打扰;没有才是真·等人。setImmediate 让本轮 settle
         // 先收完账再交卷——decide 会立刻把状态翻回 running。
-        const auto = this.autoAnswerFor(task);
+        // 工作台修复轮中途举的确认卡先读回执、由平台过节点(见
+        // workspaceReviewNodeAnswer);其余卡走下单预选/月光。
+        const reviewNode = await this.workspaceReviewNodeAnswer(task);
+        if (!this.current(task, epoch)) break;
+        const auto = reviewNode ?? this.autoAnswerFor(task);
         if (auto) {
           this.options.log?.(
             `任务 ${task.summary.id} 人工节点自动交卷(${auto.why})`);

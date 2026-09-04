@@ -134,8 +134,10 @@ export function authorVerdictReady(
   // MR 工作区修复必须等 Build-Fix 收敛并生成当前复检卡；有总回复也
   // 不能绕过逐条回执与 HEAD 绑定。
   if (item.sent_via === "review_repair") {
-    return workspaceReviewReady
-      && item.response?.revision === (item.rework ?? 0);
+    const current = item.response?.revision === (item.rework ?? 0);
+    // "需要补充说明":回执已登记、球在作者脚下,不必等最终推送卡就能补。
+    if (current && item.response?.outcome === "needs_clarification") return true;
+    return workspaceReviewReady && current;
   }
   // decision / interrupt 以及没有 sent_via 的旧账都属于普通流程检视：
   // Agent 再次进入人工节点后，由意见作者依据最新材料亲自裁决。
@@ -246,6 +248,14 @@ function progressOf(
     };
   }
   if (verdictReady) {
+    if (item.response?.revision === (item.rework ?? 0)
+        && item.response?.outcome === "needs_clarification") {
+      return {
+        tone: "review",
+        text: "Agent 需要你补充说明",
+        hint: item.response.summary || "Agent 说明这条意见有歧义，请补充后重提。",
+      };
+    }
     return {
       tone: "review",
       text: "待你确认",
@@ -267,15 +277,23 @@ function progressOf(
   // 轮到你"说清楚。
   if (!ready && item.sent_via !== "pipeline_evidence") {
     const viaRepair = item.sent_via === "review_repair";
-    const when = viaRepair ? "最终推送确认卡出现时" : "Agent 再次停下等人时";
-    return check?.state === "gone"
-      ? { tone: "waiting", text: "Agent 已改动这处·稍后再确认",
-          hint: `你圈的原文已经不在了，说明 Agent 动过这处；${
-            viaRepair ? "逐条回执在它本轮结束后登记，" : ""}${when}再由你确认是否修好。` }
-      : { tone: "waiting", text: "Agent 处理中",
-          hint: viaRepair
-            ? "已送到当前 MR 的修复 Agent；逐条回执在它本轮结束后登记，最终推送确认卡上再由你逐条确认。"
-            : `已送到 Agent，${when}再由你确认。` };
+    // 原文在不在只是定位信息,不能充当处理进度(隔壁 Agent 的分析:一半
+    // "已被改动"一半"已提交",人拿它当"处理了几条")。进度只认回执。
+    const where = check?.state === "gone"
+      ? "你圈的原文已经不在了（Agent 动过这处）；" : "";
+    const response = item.response?.revision === (item.rework ?? 0)
+      ? item.response : undefined;
+    if (response) {
+      const outcome = response.outcome === "fixed" ? "已修改"
+        : response.outcome === "not_fixed" ? "未修改" : "需要你补充说明";
+      return { tone: "waiting", text: `Agent 回执：${outcome}·等复检`,
+        hint: `${where}${response.summary}。Build-Fix 通过、最终推送确认卡出现时再由你确认。` };
+    }
+    return { tone: "waiting",
+      text: viaRepair ? "等待 Agent 逐条回执" : "Agent 处理中",
+      hint: viaRepair
+        ? `${where}Agent 处理完会为每条意见留下回执；Build-Fix 通过、最终推送确认卡出现时再由你逐条确认。`
+        : `${where}Agent 再次停下等人时再由你确认。` };
   }
   // 到点了但看的人不是作者:裁决权在作者手里,别对旁人说"请你确认"。
   return check?.state === "gone"
