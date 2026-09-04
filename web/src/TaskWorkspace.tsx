@@ -511,6 +511,18 @@ export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
  * 看板各说各话,老任务停在哪套显示哪套,点阶段名去内核方案词表里按名字
  * 找也必然落空(2026-09-02 用户实锤)。服务端也没给时只画一个"尚未进入
  * 阶段"的空轨道,绝不自造名字。 */
+/** 抽屉快捷键的显示文案:Mac 键帽是 ⌥,其他平台叫 Alt。 */
+const REVIEW_SHORTCUT = typeof navigator !== "undefined"
+  && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌥R" : "Alt+R";
+
+/** 焦点在能打字的地方时不抢快捷键:Mac 上 ⌥R 本来就会打出 ®。 */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
@@ -638,6 +650,7 @@ export function TaskWorkspace({
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
+  const evidenceHeadRef = useRef<HTMLDivElement>(null);
   const materialSearchInput = useRef<HTMLInputElement>(null);
   const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
@@ -848,6 +861,38 @@ export function TaskWorkspace({
     };
   }, [materialSearchOpen, materialsFullscreen, reviewInviteOpen,
     reviewPanelOpen, onClose]);
+
+  // 全屏看材料时右栏(含"批注与检视"入口)整个藏起来,想开抽屉得先退全屏
+  // (用户 2026-09-04 实锤)。⌥/Alt+R 在任何布局下切换抽屉:按 code 不按
+  // key——Mac 上 ⌥R 的 key 是 "®";焦点在输入框里不抢,输入法合成中不抢。
+  useEffect(() => {
+    const toggle = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+          || event.code !== "KeyR" || event.isComposing) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setReviewPanelOpen((open) => !open);
+    };
+    window.addEventListener("keydown", toggle);
+    return () => window.removeEventListener("keydown", toggle);
+  }, []);
+
+  // 全屏 + 抽屉同屏:任务头藏了(--ws-head-h 归零),抽屉若仍从顶上起步就
+  // 盖住材料工具条,"退出全屏""批注与检视"点不到(1280 宽实测:按钮右缘
+  // 637/753,抽屉左缘 510)。工具条高度同样量出来写变量,抽屉从它下面起步;
+  // 全屏切换时工具条 min-height 会变,跟着重量。
+  useEffect(() => {
+    const head = evidenceHeadRef.current;
+    const root = workspaceRoot.current;
+    if (!head || !root) return;
+    const publish = () => root.style.setProperty(
+      "--ws-pane-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
+    publish();
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined : new ResizeObserver(publish);
+    observer?.observe(head);
+    return () => observer?.disconnect();
+  }, [materialsFullscreen]);
 
   // 搜索范围就是当前渲染出来的这一份材料。普通文档取带 data-l 的最深
   // 正文行；两种差异视图取各自的真实内容行，删除行没有新行号也能搜到。
@@ -1526,6 +1571,7 @@ export function TaskWorkspace({
         <button type="button" className={`ws-review-launch${
           reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
           aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+          title={`快捷键 ${REVIEW_SHORTCUT} 随时打开或收起,全屏看材料时也行`}
           onClick={() => setReviewPanelOpen(true)}>
           <strong>批注与检视
             {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
@@ -1550,7 +1596,7 @@ export function TaskWorkspace({
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
-          <div className="ws-pane-head">
+          <div className="ws-pane-head" ref={evidenceHeadRef}>
             <div>
               <span>{materialHeading.kicker}</span>
               <strong>{materialHeading.title}</strong>
@@ -1579,6 +1625,18 @@ export function TaskWorkspace({
                 <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
                 {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>
+              {/* 全屏下右栏没了,入口搬到这里;不全屏时右栏那张大入口还在,
+                  不重复摆。 */}
+              {materialsFullscreen && <button type="button"
+                className={`materials-review-toggle${reviewPanelOpen ? " on" : ""}`}
+                aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+                title={`打开或收起批注与检视(${REVIEW_SHORTCUT})`}
+                onClick={() => setReviewPanelOpen((open) => !open)}>
+                <span aria-hidden>✎</span>批注与检视
+                {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+                  <i>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</i>
+                )}
+              </button>}
               {materialView !== "chain" && <button type="button"
                 className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
                 aria-expanded={materialSearchOpen}
@@ -2170,7 +2228,7 @@ export function TaskWorkspace({
           <header>
             <div><span>REVIEW NOTES</span>
               <strong id="workspace-review-title">批注与检视</strong>
-              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
+              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选，{REVIEW_SHORTCUT} 开关</p>
             </div>
             {/* 这里原来还挂一枚"N 项等我确认"。它下面 40px 就是筛选条的
                 "等我确认 N",打开前入口按钮上也有同一个数——同一屏三份,

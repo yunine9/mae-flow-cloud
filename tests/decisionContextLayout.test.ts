@@ -389,6 +389,21 @@ test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;
   assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
+  // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。
+  // 入口搬上工具条 + ⌥/Alt+R 快捷键,抽屉开着时材料区让位。
+  assert.match(workspace,
+    /materialsFullscreen && <button type="button"\s*className=\{`materials-review-toggle/,
+    "全屏下材料工具条上有批注与检视入口");
+  assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
+  assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
+  assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
+  assert.match(css,
+    /materials-fullscreen:has\(\.workspace-review-drawer\) \.ws-evidence \{\s*padding-right: calc\(min\(760px/,
+    "全屏抽屉打开时材料区让出抽屉宽度");
+  assert.match(css,
+    /materials-fullscreen \.workspace-review-drawer \{\s*top: calc\(var\(--ws-pane-head-h/,
+    "全屏下抽屉从工具条下面起步,退出全屏/批注与检视不被盖住");
+  assert.match(workspace, /"--ws-pane-head-h"/, "工具条高度量出来写变量,不写死");
 });
 
 test("任务记忆第一期契约:记为记忆去向、面板只读列表、导航计数、服务端只读路由", () => {

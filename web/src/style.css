@@ -7242,6 +7242,29 @@ pre {
   font-weight: 500;
   letter-spacing: 0;
 }
+/* 全屏看材料时右栏整个藏起来,"批注与检视"入口跟着没了,想开抽屉得先退
+   全屏(用户 2026-09-04 实锤)。全屏下入口搬到材料工具条上,和快捷键
+   ⌥/Alt+R 一起,任何布局下都能召唤抽屉。 */
+.ws-source-switch .materials-review-toggle {
+  margin-left: 5px;
+  padding-left: 12px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: var(--accent-soft);
+}
+.ws-source-switch .materials-review-toggle:hover:not(:disabled),
+.ws-source-switch .materials-review-toggle.on {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.ws-source-switch .materials-review-toggle.on i { color: var(--accent); background: #fff; }
+.ws-source-switch .materials-review-toggle > span {
+  color: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
 .ws-source-switch .material-search-toggle {
   padding-left: 10px;
   color: var(--accent);
@@ -7356,6 +7379,21 @@ pre {
 }
 .workspace-overlay.materials-fullscreen .ws-doc .md {
   width: min(1600px, 100%);
+}
+/* 全屏 + 抽屉同屏:抽屉固定在右侧 760px,材料区整体给它让位,否则工具条
+   上的"退出全屏"和正文右侧被盖住。窄屏抽屉本来就占满整屏,不让。 */
+@media (min-width: 901px) {
+  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence {
+    padding-right: calc(min(760px, 100vw - 20px) + 14px);
+  }
+  /* 工具条不让:它在抽屉上方整行保持满宽,"退出全屏/批注与检视"照常能点。 */
+  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence > .ws-pane-head {
+    margin-right: calc(-1 * (min(760px, 100vw - 20px) + 14px));
+  }
+  /* 任务头藏了,--ws-head-h 归零;抽屉改从材料工具条下面起步。 */
+  .workspace-overlay.materials-fullscreen .workspace-review-drawer {
+    top: calc(var(--ws-pane-head-h, 64px) + 10px);
+  }
 }
 /* 全屏是给"看不下"的材料用的,需求原文和仓间依赖图也得跟着铺开:原来
    只放宽了 .md,需求原文仍卡在 860px、依赖图仍卡在 900px,点了全屏两边
