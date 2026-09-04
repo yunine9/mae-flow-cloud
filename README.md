@@ -61,6 +61,14 @@ timeout)。Abort 语义不变(用户打断回合仍销毁容器)。机制本体�
   extraLedgerDirs 条目从未匹配,只读投影(.mae-flow-work/host-skills、
   business-modules)实际可写。已修为整体前缀匹配并用例钉死;若有
   Agent 曾依赖该洞写投影文件,升级后会被拒。
+- **2026-09-04 镜像工具链契约漂移(现场实锤)**:本仓 Dockerfile/README
+  钉的容器基线是 Node 18.16.1/npm 9.5.1,但内网实际部署镜像
+  (`v2-euleros-jdk21-mvn36-node18-node24`)默认 node 是 **v24.19.0**、
+  npm 11.17(node18 是备用二进制;现场 npm debug 日志头可直接核对)。
+  凡按文档基线做的判断(如 `NODE_USE_SYSTEM_CA` 的版本门槛、playbook
+  里"部署基线为 Node 18/npm 9"的提示)都可能被现实打脸——先看
+  `/cache/npm/_logs/*.log` 头两行再下结论。工具链基线文档与内部镜像
+  的对齐待现场运维确认后统一修订。
 
 ## 三条铁的边界
 
