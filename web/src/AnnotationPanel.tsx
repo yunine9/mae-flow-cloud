@@ -184,7 +184,10 @@ function progressOf(
   item: Annotation,
   check?: AnchorCheck,
   archival = false,
+  /** 当前看的人此刻能裁决(作者且到点,或管理员代办)。 */
   verdictReady = false,
+  /** 这条意见本身到没到裁决点(与看的人无关)。 */
+  ready = verdictReady,
 ): {
   tone: "draft" | "waiting" | "review" | "done";
   text: string;
@@ -257,10 +260,29 @@ function progressOf(
     return { tone: "waiting", text: "已排队·等决定",
       hint: "还没送到 Agent:任务正等一张决定卡,责任人在卡上选「需要调整」提交后才随决定送达。" };
   }
+  // 还没到裁决点:回执在 Agent 本轮结束后才登记,MR 修复轮的意见更要等到
+  // 最终推送确认卡。这之前面板只有锚点事实,原来写成"已提交/已被改动·
+  // 请你确认",人以为送到了、以为能确认(内网实锤:9 条意见、Agent 说全
+  // 闭环、面板却是这两种字样,确认按钮又不在)。现在把"还在处理、什么时候
+  // 轮到你"说清楚。
+  if (!ready && item.sent_via !== "pipeline_evidence") {
+    const viaRepair = item.sent_via === "review_repair";
+    const when = viaRepair ? "最终推送确认卡出现时" : "Agent 再次停下等人时";
+    return check?.state === "gone"
+      ? { tone: "waiting", text: "Agent 已改动这处·稍后再确认",
+          hint: `你圈的原文已经不在了，说明 Agent 动过这处；${
+            viaRepair ? "逐条回执在它本轮结束后登记，" : ""}${when}再由你确认是否修好。` }
+      : { tone: "waiting", text: "Agent 处理中",
+          hint: viaRepair
+            ? "已送到当前 MR 的修复 Agent；逐条回执在它本轮结束后登记，最终推送确认卡上再由你逐条确认。"
+            : `已送到 Agent，${when}再由你确认。` };
+  }
+  // 到点了但看的人不是作者:裁决权在作者手里,别对旁人说"请你确认"。
   return check?.state === "gone"
-    ? { tone: "review", text: "已被改动·请你确认",
-        hint: "你批注的那段原文已经不在了。是不是照你说的改的,系统不替你判断,请回到原位看一眼。" }
-    : { tone: "waiting", text: "已提交" };
+    ? { tone: "review", text: "已被改动·等作者确认",
+        hint: `你圈的原文已经不在了；是否修好由意见作者 ${item.author} 确认。` }
+    : { tone: "waiting", text: "等作者确认",
+        hint: `由意见作者 ${item.author} 确认是否修好。` };
 }
 
 function deliveryText(item: Annotation, archival = false): string {
@@ -698,7 +720,8 @@ export function AnnotationPanel({
           const authorCanJudge = isAuthor
             && authorVerdictReady(item, taskStatus, reviewReady);
           const actionable = authorCanJudge || overrideAccess.canVerify;
-          const progress = progressOf(item, check, archival, actionable);
+          const progress = progressOf(item, check, archival, actionable,
+            authorVerdictReady(item, taskStatus, reviewReady));
           return (
             <li key={item.id}
                 className={`annot-item ${progress.tone}${actionable

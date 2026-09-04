@@ -35,5 +35,12 @@ test("等决定期间的提交:决定人一步返工、检视人排队并说明�
   // 一步到位能成立的前提。
   const service = read("src/taskService.ts");
   assert.match(service, /markSent\(\s*picked\.map\(\(item\) => item\.id\), "queued_decision", sentBy\)/);
+  // 回执登记前面板不再写"已提交/已被改动·请你确认":那时确认按钮根本不在。
+  assert.match(panel, /text: "Agent 处理中"/);
+  assert.match(panel, /text: "Agent 已改动这处·稍后再确认"/);
+  assert.match(panel, /text: "已被改动·等作者确认"/, "到点了但不是作者:说清裁决权在谁");
+  assert.doesNotMatch(panel, /text: "已被改动·请你确认"/);
+  assert.match(service, /pushConfirmCard \|\| item\.sent_via !== "review_repair"\)/,
+    "修复轮意见只在最终推送卡上拦关闭");
   assert.match(service, /item\.status === "sent" && item\.sent_via === "queued_decision"/);
 });

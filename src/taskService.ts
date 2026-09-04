@@ -10560,7 +10560,13 @@ export class TaskService {
       // 新修复会话。这里必须由服务端认定为“处理意见”，不能依赖网页
       // 携带 annotation_ids——小鲁班回复只有选项和说明。
       || (pushConfirmCard && !confirmingPush);
-    const unresolved = this.unresolvedAnnotations(task);
+    // MR 修复轮(review_repair)的意见只能在最终推送确认卡上闭环:逐条回执
+    // 要等会话本轮结束才登记,作者中途点不了通过。内核中途的确认卡若也拿
+    // 它们拦"关闭",责任人确认不了、作者闭不了环,只剩"需要调整"能点
+    // (内网实锤 2026-09-04:9 条意见、Agent 说全闭环、卡上过不去)。所以
+    // 拦截只放在人能闭环的地方——push 确认卡仍是硬闸,中途卡不计它们。
+    const unresolved = this.unresolvedAnnotations(task).filter((item) =>
+      pushConfirmCard || item.sent_via !== "review_repair");
     if (unresolved.length && (closesFeedback || confirmingPush)) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
         ? waiting.question.questions as Array<{ options?: string[] }> : [];
