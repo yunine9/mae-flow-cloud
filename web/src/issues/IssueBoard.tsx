@@ -190,7 +190,9 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         </button>}
       <button type="button" onClick={() => setError("")}>知道了</button>
     </div>}
-    <IssueRegistration
+    {/* 发起入口仅开发者:管理员不发起问题会话(服务端对 admin POST 直接
+        403),管理视角的这块板只读——列表全员可见,会话点开落查看模式。 */}
+    {viewer.role !== "admin" && <IssueRegistration
       viewer={viewer}
       issues={issues}
       onCreated={(created) => {
@@ -199,12 +201,12 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       }}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
-    />
+    />}
     <section className="issue-section" aria-labelledby="issue-mine-title">
       <div className="section-head">
         <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。 */}
-          <h2 id="issue-mine-title">我的问题</h2>
+          <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
         <span className="current-work-counts">
@@ -246,9 +248,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         </div>}
       {issues.length === 0
         ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-            <strong>还没有问题会话</strong>
-            <p>从上方登记一个"我的问题",或从 DTS 拉取问题单发起处理;
-            研究结论是非问题也可以直接归档收口。</p>
+            <strong>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</strong>
+            <p>{viewer.role === "admin"
+              ? "开发成员从各自的问题处理页发起后,这里会汇总全员会话供查看。"
+              : "从上方登记一个\"我的问题\",或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</p>
           </div></div>
         : visibleIssues.length === 0
           ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
