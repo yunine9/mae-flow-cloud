@@ -1725,7 +1725,8 @@ export function TaskWorkspace({
               <div className="ws-focus-status">
                 <i aria-hidden />
                 <span>{statusText(task)}</span>
-                <span>{health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
+                <span>{health?.actor?.startsWith("你 · ")
+                  ? "由你负责" : health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
                 <span>更新 · {relativeTime(health?.last_progress_at
                   ?? task.last_progress_at ?? task.updated_at ?? task.created_at) || "刚刚"}</span>
               </div>
