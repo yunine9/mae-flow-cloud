@@ -193,9 +193,6 @@ const fastPoll = {
 };
 
 const fakeOps = {
-  async fetchLogs() {
-    return { summary: "日志已拉取(测试假件)" };
-  },
   async buildDeploy() {
     return { summary: "[INFO] 部署完成(测试假件)\n备份已写入 /backup" };
   },

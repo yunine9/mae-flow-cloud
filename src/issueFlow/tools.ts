@@ -12,7 +12,7 @@
  * - 阶段门禁:每个工具只在所属阶段开放,越权调用直接拒绝(双层
  *   门禁的权威层;提示词里的"本阶段工具清单"是引导层,两层的白名单
  *   同出阶段注册表 stageRegistry.ts,不会各说各话)。例外是
- *   工读类——fetch_logs 全程开放,dts_get_ticket 任意阶段可重查
+ *   request_env 举环境卡全程可调,dts_get_ticket 任意阶段可重查
  *   (2026-08-28 拍板:作业自由,门只守流程出口与出厂动作);
  * - 阶段推进(2026-08-28 目标驱动自报):四个阶段(拉单/拉仓/修改/
  *   提交MR)的出口是 complete_stage 自报收口,平台不核实 AI 的
@@ -248,43 +248,27 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + `。固定流程按阶段出口推进,请先完成本阶段工作`);
   };
 
-  // ---- 运维:拉日志(自问题分析阶段起全程开放,含回退轮) ----
+  // ---- 网管环境配置请求(平台机制,全程可调):日志抓取引擎已下放为
+  // 平台技能 issue-ops(整包自带 bin 引擎,按 SKILL.md 执行),这个工具
+  // 只剩一件事——缺网管环境时向用户举配置卡。闸本身(#93 拒绝流/
+  // vault 表单/配置通知)不随工具退役,换载体继续服务。 ----
 
   tools.push(defineTool({
-    name: "fetch_logs",
-    label: "Fetch Logs",
+    name: "request_env",
+    label: "Request Environment",
     description:
-      "从网管服务器抓取服务业务日志到工作区 local-logs/ 目录(完整目录结构,"
-      + "之后可直接 grep/读文件)。hosts 缺省用会话配置的网管环境。"
-      + "密码由平台自动带入,不需要你提供。",
-    parameters: Type.Object({
-      services: Type.Array(Type.String(), {
-        description: "服务名列表(如 TranFmaWebsite),抓 /var/log/oss/MAE/<服务名> 全部内容",
-      }),
-      hosts: Type.Optional(Type.Array(Type.String(), {
-        description: "网管服务器 IP(可多台串行抓取);缺省用会话环境配置",
-      })),
-    }),
-    async execute(_toolCallId: string, params: any) {
-      if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法拉日志");
-      const password = ctx.environmentPassword?.();
-      if (!password) raiseEnvNeededGate(ctx, "logs");
-      const hosts = (params.hosts as string[] | undefined)?.length
-        ? params.hosts as string[]
-        : ctx.state.environment?.hosts ?? [];
-      const localDir = join(ctx.workspace, "local-logs");
-      const result = await ctx.ops.fetchLogs({
-        hosts,
-        services: params.services as string[],
-        password,
-        localDir,
-      });
-      recordTransition(ctx.state, {
-        source: "platform",
-        note: `日志已拉取:${result.summary.split("\n")[0]}`,
-      });
-      ctx.persist();
-      return ok(result.summary);
+      "需要网管环境(抓日志等)但会话尚未配置时,调它向用户发起配置请求:"
+      + "平台举出配置卡(服务器地址+网管后台密码),用户填写后平台会通知你"
+      + "重试刚才的操作。登记元信息里已有网管环境(get_issue_meta 可查)"
+      + "就无需调用,按技能 issue-ops 直接抓取;用户已拒绝过本用途的"
+      + "环境请求时也不要再调(会被如实打回)。",
+    parameters: Type.Object({}),
+    async execute() {
+      if (ctx.environmentPassword?.()) {
+        return ok("网管环境已配置(get_issue_meta 可查全量),无需请求——"
+          + "按技能 issue-ops 抓取日志即可。");
+      }
+      raiseEnvNeededGate(ctx, "logs");
     },
   }));
 

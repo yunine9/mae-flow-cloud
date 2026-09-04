@@ -1098,7 +1098,7 @@ export class IssueFlowService {
   /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的
    * 加密文件),issue.json/公开 API/事件只有引用；随后
    * environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文。
-   * 后台凭据(both)供 fetch_logs/build_deploy 消费；页面凭据(page)供
+   * 后台凭据(both)供日志抓取(技能 issue-ops)/build_deploy 消费；页面凭据(page)供
    * 页面操作消费,两组各自成行、可分别解出。登记(withPage)与
    * env_needed 闸作答(只收地址+后台密码,页面字段即便递了也不认)
    * 共用本路径,秘密纪律只有一份。 */
@@ -1163,7 +1163,7 @@ export class IssueFlowService {
     const environment = this.storeEnvironment(id, input, false);
     state.environment = environment;
     // 解锢(票 93):配置成功即整册清除拒绝台账——用户对环境的新裁定
-    // 覆盖旧裁定,fetch_logs/build_deploy 恢复正常举闸路径。
+    // 覆盖旧裁定,日志抓取(技能 issue-ops)/build_deploy 恢复正常举闸路径。
     delete state.env_declined;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
@@ -1876,11 +1876,13 @@ export class IssueFlowService {
     if (!toolsDir || !this.options.isolation) return;
     const destDir = join(live.root, ".ops-tools");
     mkdirSync(destDir, { recursive: true });
+    // fetch-logs 引擎已迁为平台技能 issue-ops 的 bin(随技能整包物化),
+    // 这里只剩封存中的 build-deploy(ADR-0013:代码原地保留)。
     const binName = process.platform === "win32"
-      ? ["fetch-logs.exe", "build-deploy.exe"]
+      ? ["build-deploy.exe"]
       : process.arch === "arm64"
-        ? ["fetch-logs-linux-arm64", "build-deploy-linux-arm64"]
-        : ["fetch-logs-linux-amd64", "build-deploy-linux-amd64"];
+        ? ["build-deploy-linux-arm64"]
+        : ["build-deploy-linux-amd64"];
     for (const name of binName) {
       const src = join(toolsDir, name);
       if (!existsSync(src)) continue;

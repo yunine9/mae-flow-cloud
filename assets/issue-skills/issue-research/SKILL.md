@@ -1,6 +1,6 @@
 ---
 name: issue-research
-description: 兜底方法论(issue-analysis 的取用次序走完无命中时用):问题研究/根因定位的方法与产出规范;含找仓拉仓、与用户对齐的提问纪律与非问题出口。
+description: 兜底研究方法论——issue-analysis 的取用次序(业务仓 skill、团队货架)全部无命中时才用:复述现象→备齐材料→假设证实/证伪循环,含找仓拉仓、与用户提问的纪律与非问题出口。
 metadata:
   tags: [issue, research, root-cause, analysis, multi-repo]
 ---
@@ -15,7 +15,7 @@ metadata:
 2. **备齐材料**:
    - 找仓:`lookup_modules` 按问题里的业务关键词检索模块(跨端问题常对应多个模块),命中就 `bind_module` 登记再逐仓 `pull_repo`;检索不到用 AskUserQuestion 问用户;
    - 读代码:在 `repo/<仓名>/` 里定位相关模块,git log/blame 找最近变更——多仓问题每个仓都要看,别只盯一个;
-   - 拉日志:调 `fetch_logs`(多服务可一次拉),在 local-logs/ 里 grep 报错栈、时间线;
+   - 拉日志:按技能 issue-ops 抓取(多服务可一次拉),在 local-logs/ 里 grep 报错栈、时间线;
    - 查单据:有单号时调 `dts_get_ticket` 看处理历史,避免重复别人已排除的方向。
 3. **形成假设→找证据证实/证伪**,循环;证据不足就提问或补取证。中途发现还缺仓,`pull_repo` 随时补。
 

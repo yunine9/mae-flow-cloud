@@ -99,7 +99,6 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
     opsTools: {
-      async fetchLogs() { return { summary: "测试假件" }; },
       async buildDeploy() { return { summary: "测试假件" }; },
     },
     gitCredential: () => ({ username: "dev", password: "git-token" }),

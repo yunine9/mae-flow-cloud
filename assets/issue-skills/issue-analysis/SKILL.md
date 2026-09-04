@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: 问题分析工作流(编排层)。进入问题分析/无单结论阶段时使用:定位方法论的取用次序、简单问题的轻量分流、取证规范、issue-analysis.md 报告五章节与 submit_analysis 章节门票。
+description: 问题分析工作流。进入「问题分析」「确定结论」阶段时使用:定位方法论的取用次序(业务仓 skill→货架→issue-research)、轻量/完整分流、取证规范、报告五章节模板与 submit_analysis 门票。
 metadata:
   tags: [issue, analysis, workflow, evidence, root-cause]
 ---
@@ -36,7 +36,7 @@ metadata:
    - 单据:`dts_get_ticket` 看处理历史,别人已排除的方向不要重复;
    - 截图:工单内嵌截图已落 `ticket-images/<单号>/`,用 `inspect_image` 识图(没调过 dts_get_ticket 就没有截图可看);
    - 业务知识:先查简报里的「业务知识地图」(资产库定格的知识——跨仓模块先看「模块总览」——与仓内 `docs/` 树的一层索引),与当前问题相关才读正文;多仓场景先读各仓根 `CLAUDE.md`/`AGENTS.md` 了解仓概览,缺席再按需在 `docs/` 下找;引用业务事实把文件路径写进证据链——引用自己读过的原文,不用二手总结;
-   - 日志:`fetch_logs` 拉到 `local-logs/`,grep 报错栈与时间线;报告里只留一行关键报错+出处指针,原文不贴;
+   - 日志:按技能 issue-ops 抓取到 `local-logs/`,grep 报错栈与时间线;报告里只留一行关键报错+出处指针,原文不贴;
    - 代码:`git log`/`blame` 找最近变更,多仓问题每个仓都要看,别只盯一个;
    - 登记/环境信息拿不准调 `get_issue_meta` 重查。
 3. **假设→证据证实/证伪**,循环:每个假设要么被证据坐实,要么被证据排除。证据不足就问用户或补取证;中途缺仓随时 `pull_repo` 补。

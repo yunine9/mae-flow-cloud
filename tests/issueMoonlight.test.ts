@@ -511,11 +511,11 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
 
 test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-gate-"));
-  // 同一回合先举 env_needed 闸(拉日志缺网管环境,工具如实失败),
+  // 同一回合先举 env_needed 闸(拉日志缺网管环境,request_env 如实失败),
   // 再举 Agent 卡:收口时闸与卡同时在盘。env 闸月光永不代答,Agent 卡
   // 又因闸在场轮不到——两者都必须原地等真人。
   const script: Scene[] = [
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { tool: { name: "request_env", input: {} } },
     { tool: { name: "AskUserQuestion", input: {
       questions: [{
         question: "先按哪个思路排查?",
@@ -530,7 +530,6 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
     ...baseOptions(dataDir, model),
     // opsTools 在场才会走到「缺网管环境举 env_needed 闸」这一步。
     opsTools: {
-      async fetchLogs() { return { summary: "测试假件" }; },
       async buildDeploy() { return { summary: "测试假件" }; },
     },
     moonlight: () => true,

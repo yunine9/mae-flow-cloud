@@ -106,7 +106,8 @@ export interface IssueStageSpec {
 
 /**
  * 阶段注册表。工具列 = 该阶段门禁实际放行的全集(含工读类:
- * fetch_logs 全程开放、dts_get_ticket 任意阶段可重查、get_issue_meta
+ * request_env(缺网管环境举配置卡)全程可调、dts_get_ticket 任意阶段可重查、
+ * get_issue_meta
  * 任意阶段可查登记元信息,2026-08-28 拍板"作业自由,门只守流程出口
  * 与出厂动作",所以它们每行都在)。
  */
@@ -119,7 +120,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     tools: [
       { name: "dts_get_ticket" },
       { name: "complete_stage" },
-      { name: "fetch_logs" },
+      { name: "request_env" },
       { name: "get_issue_meta" },
     ],
   },
@@ -139,7 +140,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "bind_module" },
       { name: "pull_repo" },
       { name: "complete_stage" },
-      { name: "fetch_logs" },
+      { name: "request_env" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
     ],
@@ -157,7 +158,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   // 技能先列索引再按需读),描述没命中是维护者该修的描述,不该用运行
   // 时人工圈选来补。skill_select 闸封存:存量挂起卡仍可作答,新卡永不举。
   tools: [
-    { name: "fetch_logs" },
+    { name: "request_env" },
     { name: "get_issue_meta" },
     { name: "dts_get_ticket", note: "重查" },
     { name: "lookup_modules" },
@@ -173,11 +174,11 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);开改前可读 "
       + ".mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略);"
       + "每轮 UT 结果用 report_ut 如实上报(平台只记账),改完自检且测试可"
-      + "接受后 complete_stage 自报完成",
+      + "接受后 complete_stage 自报完成。分支、提交与推送的交付纪律见技能 issue-delivery",
     exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 自报完成",
     exitAction: "complete_stage",
     tools: [
-      { name: "fetch_logs", note: "补证据" },
+      { name: "request_env", note: "缺网管环境举卡" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
@@ -199,7 +200,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "push_branch" },
       { name: "create_mr" },
       { name: "complete_stage", note: "申报 MR 清单" },
-      { name: "fetch_logs" },
+      { name: "request_env" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
@@ -214,7 +215,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     // 出口动作 submit_analysis 是在 analyze 调的(调完即推进到本节点
     // 等闸),本阶段不再放行它——工具列以门禁真相为准,简报不谎报。
     tools: [
-      { name: "fetch_logs" },
+      { name: "request_env" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
