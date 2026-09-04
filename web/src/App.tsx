@@ -184,24 +184,20 @@ function initialView(user: AuthUser): View {
 }
 
 /** 人工介入程度(用户拍板:一个旋钮说清,不做任务粒度设置)。
- * 两个正交轴合成四档:月光管"过程节点停不停"(分析报告确认、无单
- * 结论确认、网管环境补配),推送前过目管"推送前给不给人看变更清单"。
- * 档名直接说"问什么";每档卡面带「会问你/不问你」两行实卡清单。
+ * 两个正交轴合成四档:过程节点停不停(分析报告确认、无单结论确认、
+ * 网管环境补配——卡面统称"过程"),推送前给不给人看变更清单(卡面
+ * 统称"推送")。每档卡面就是一行两轴状态,细节在上方 summary 讲一次。
  * 月光转开仍走预览/是否处理当前待办的既有流程;推送过目默认开,
  * 只落显式的关。MR 人工合入与流水线绑 SHA 不归此旋钮,始终生效。 */
 const INTERVENTION_PRESETS = [
   { key: "full", moonlight: false, push: true, title: "全程把关", isDefault: true,
-    ask: "分析报告确认、无单结论确认、网管环境补配,以及每次推送前的变更清单",
-    skip: "无——这是管得最多的一档" },
+    detail: "过程问你 · 推送问你" },
   { key: "process", moonlight: false, push: false, title: "只问过程", isDefault: false,
-    ask: "分析报告确认、无单结论确认、网管环境补配",
-    skip: "推送前过目——推送不再确认,直接走" },
+    detail: "过程问你 · 推送直走" },
   { key: "delivery", moonlight: true, push: true, title: "只问推送", isDefault: false,
-    ask: "每次推送前的变更清单",
-    skip: "过程节点——分析、结论等自动放行" },
+    detail: "过程自动 · 推送问你" },
   { key: "auto", moonlight: true, push: false, title: "全自动", isDefault: false,
-    ask: "无(完成后统一复盘)",
-    skip: "过程节点与推送前过目——全程不打断" },
+    detail: "过程自动 · 推送直走" },
 ] as const;
 
 function InterventionSetting({
@@ -278,7 +274,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效,回答两个问题:过程节点(分析报告确认、无单结论确认、网管环境补配)停不停等你;推送前要不要先给你看变更清单。无论选哪档,MR 人工合入、流水线绑 SHA 等门禁始终生效;人工检视意见引发的修改一定回到意见作者复检。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡;"推送"指每次 push 前先给你看变更清单(确认一次放行一次)。无论选哪档,MR 人工合入、流水线绑 SHA 等门禁始终生效;人工检视意见引发的修改一定回到意见作者复检。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
@@ -290,8 +286,7 @@ function InterventionSetting({
           <strong>{preset.title}
             {preset.isDefault && <i className="approval-option-default">默认</i>}
           </strong>
-          <small>会问你:{preset.ask}</small>
-          <small>不问你:{preset.skip}</small>
+          <small>{preset.detail}</small>
         </span>
       </button>)}
     </div>
