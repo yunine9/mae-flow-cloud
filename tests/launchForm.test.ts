@@ -1024,13 +1024,19 @@ test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话
   }
 });
 
-test("发起页会防抖探测仓库并阻止坏地址，浅色退出图标有明确对比色", () => {
+test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比色来自主题令牌", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
   const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  const tokens = readFileSync(join(process.cwd(), "web/src/tokens.css"), "utf-8");
   assert.match(source, /probeRepositories\(repositoriesToProbe/);
   assert.match(source, /repositoryProbeBlocked/);
   assert.match(source, /正在检查仓库地址/);
-  assert.match(style, /data-theme="light"\] \.logout-button svg[\s\S]*?#343b4f/);
+  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色:退出图标的颜色
+  // 来自令牌,浅/深两套令牌各自定义 --faint,对比度在令牌层保证。
+  assert.match(style, /\.logout-button,\n\.density-switch \{[\s\S]*?color: var\(--faint\)/);
+  assert.doesNotMatch(style, /data-theme="light"\] \.logout-button/);
+  assert.match(tokens, /:root \{[\s\S]*?--faint: #[0-9a-f]{6}/);
+  assert.match(tokens, /:root\[data-theme="dark"\] \{[\s\S]*?--faint: #[0-9a-f]{6}/);
 });
 
 test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格式区分 FuR", () => {

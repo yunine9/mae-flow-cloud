@@ -299,9 +299,6 @@ export function TaskCard({
             交付已阻止
           </span>
         )}
-        {task.luban_account && (
-          <span className="meta-fact">责任人 · {responsibleOf(task)}</span>
-        )}
       </div>
 
       {expanded && (
@@ -387,7 +384,7 @@ export function TaskCard({
           )}
           {chainReview && decides && (
             <div className="chain-review-entry">
-              <span>CHAIN REVIEW</span>
+              <span>跨仓方案</span>
               <strong>跨仓方案已经生成，先看依赖再确认</strong>
               <p>仓库职责、硬依赖和交付顺序都在任务工作台中；确认后才会拆成各仓交付任务。</p>
               <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
@@ -401,7 +398,7 @@ export function TaskCard({
                  停在"正在读取交付文件清单"(push 确认卡实锤死锁),
                  所以这里只给入口不给表单。 */
               <div className="chain-review-entry">
-                <span>DELIVERY REVIEW</span>
+                <span>交付检视</span>
                 <strong>Build-Fix 已通过，请做最终代码检视</strong>
                 <p>这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
                 {onOpenArtifacts && (
@@ -502,6 +499,7 @@ export function TaskProgress({
       <span>当前进度</span>
       {context && <span className="task-progress-caption-context">{context}</span>}
       <strong>{displayedCurrentLabel}</strong>
+      <em className="task-progress-count">{currentIndex + 1}/{phases.length}</em>
     </span>
     {showMilestone && milestone && (
       <span className={`task-milestone ${milestone.event}`}>
@@ -522,7 +520,7 @@ export function TaskProgress({
           {...(onPhaseClick ? {
             role: "button" as const,
             tabIndex: 0,
-            title: "查看该阶段执行方案",
+            title: `${phase} · 查看该阶段执行方案`,
             style: { cursor: "pointer" },
             onClick: () => onPhaseClick(phase),
             onKeyDown: (event: ReactKeyboardEvent) => {
@@ -531,7 +529,7 @@ export function TaskProgress({
                 onPhaseClick(phase);
               }
             },
-          } : {})}>
+          } : { title: phase })}>
           <i aria-hidden />
           <span>{phase}</span>
         </span>;
@@ -861,7 +859,7 @@ export function WaitingCard({
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
-          <span className="decision-kicker">ACTION REQUIRED</span>
+          <span className="decision-kicker">需要你决定</span>
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}

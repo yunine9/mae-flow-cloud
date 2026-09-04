@@ -89,7 +89,7 @@
 
 .annot-review-fab b {
   min-width: 13px;
-  font-size: 10px;
+  font-size: var(--fs-12);
   line-height: 1;
 }
 
@@ -268,7 +268,7 @@
 .annot-editor button.primary,
 .annot-panel button.primary {
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-fg);
   background: var(--accent);
   border: 1px solid var(--accent);
 }
@@ -310,7 +310,7 @@
 .annot-panel-head span {
   display: block;
   font-size: 12.5px;
-  letter-spacing: .09em;
+  letter-spacing: 0;
   color: var(--faint);
 }
 
@@ -1006,7 +1006,7 @@
 .cd-node.cd-abstract rect { stroke: var(--active); stroke-dasharray: 2 3; }
 
 .cd-tag {
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   font-weight: 700;
   fill: var(--faint);
 }
@@ -1018,7 +1018,7 @@
 }
 
 .cd-pkg {
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   fill: var(--faint);
 }
 

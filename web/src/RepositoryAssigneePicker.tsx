@@ -151,7 +151,7 @@ export function RepositoryAssigneePicker({
 
   return <section className="repository-assignees" aria-label="交付单元安排">
     <header>
-      <div><span>DELIVERY UNITS</span><strong>拆分后怎么执行</strong></div>
+      <div><span>交付单元</span><strong>拆分后怎么执行</strong></div>
       <small>{needsTicketEntry
         ? "按最终交付单元选择执行人并补齐 AR 单号"
         : "按最终交付单元选择执行人；AR 单号沿用已有信息"}</small>

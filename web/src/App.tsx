@@ -271,7 +271,7 @@ function InterventionSetting({
   return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
     <header className="approval-setting-head">
       <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
+      <div><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
     <p className="approval-setting-summary">一处设定,所有任务生效。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡;"推送"指每次 push 前先给你看变更清单(确认一次放行一次)。无论选哪档,MR 人工合入、流水线绑 SHA 等门禁始终生效;人工检视意见引发的修改一定回到意见作者复检。</p>
@@ -372,7 +372,7 @@ function PersonalSettingsPage({
     }} />
     <section className="personal-connections" aria-labelledby="personal-connections-title">
       <div className="personal-connections-head">
-        <div><span className="section-kicker">PERSONAL CONNECTIONS</span><h2 id="personal-connections-title">个人接入</h2></div>
+        <div><h2 id="personal-connections-title">个人接入</h2></div>
         <p>配置一次，后续任务自动使用你的代码身份和消息通知。</p>
       </div>
       <div className="credential-grid">
@@ -1016,7 +1016,7 @@ export function App() {
   };
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
+      <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
       <nav className="sidebar-nav" aria-label="视图切换">
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
@@ -1051,7 +1051,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
@@ -1162,11 +1162,16 @@ export function App() {
             hasOwnTasks={myTasks.length > 0}
             onOpen={openArtifacts}
           />
-          <section className="personal-pulse four" aria-label="我的任务摘要">
-            <button type="button" className={`personal-stat personal-action attention${mineScope === "waiting" ? " selected" : ""}`} aria-pressed={mineScope === "waiting"} onClick={() => setMineScope((current) => current === "waiting" ? "all" : "waiting")}><span>待我核对 <i aria-hidden>→</i></span><strong>{myWaiting.length}</strong></button>
-            <button type="button" className={`personal-stat personal-action danger${mineScope === "intervention" ? " selected" : ""}`} aria-pressed={mineScope === "intervention"} onClick={() => setMineScope((current) => current === "intervention" ? "all" : "intervention")}><span>需要介入 / 已暂停 <i aria-hidden>→</i></span><strong>{myIntervention.length}</strong></button>
-            <button type="button" className={`personal-stat personal-action active${mineScope === "active" ? " selected" : ""}`} aria-pressed={mineScope === "active"} onClick={() => setMineScope((current) => current === "active" ? "all" : "active")}><span>自动推进中 <i aria-hidden>→</i></span><strong>{myActive.length}</strong></button>
-            <button type="button" className={`personal-stat personal-action success${mineScope === "delivered" ? " selected" : ""}`} aria-pressed={mineScope === "delivered"} onClick={() => setMineScope((current) => current === "delivered" ? "all" : "delivered")}><span>待合入 / 完成 <i aria-hidden>→</i></span><strong>{myDelivered.length}</strong></button>
+          <section className="personal-pulse" aria-label="我的任务摘要">
+            <button type="button" className={`personal-stat personal-action${mineScope === "all" ? " selected" : ""}`} aria-pressed={mineScope === "all"} onClick={() => setMineScope("all")}><span>全部</span><strong>{myTasks.length}</strong></button>
+            {([
+              ["waiting", "待我核对", myWaiting.length, "attention"],
+              ["intervention", "需要介入 / 已暂停", myIntervention.length, "danger"],
+              ["active", "自动推进中", myActive.length, "active"],
+              ["delivered", "待合入 / 完成", myDelivered.length, "success"],
+            ] as Array<[MineScope, string, number, string]>).filter(([, , count]) => count > 0).map(([scope, label, count, tone]) => (
+              <button type="button" key={scope} className={`personal-stat personal-action ${tone}${mineScope === scope ? " selected" : ""}`} aria-pressed={mineScope === scope} onClick={() => setMineScope((current) => current === scope ? "all" : scope)}><span>{label}</span><strong>{count}</strong></button>
+            ))}
           </section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}
@@ -1174,7 +1179,7 @@ export function App() {
             onOpen={openArtifacts}
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
-            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
+            <div className="section-head"><div><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
             <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
@@ -1289,7 +1294,7 @@ function PersonalActionInbox({
   const shown = expanded ? items : items.slice(0, 3);
   return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
     <div className="personal-action-head">
-      <div><span className="section-kicker">NEXT ACTION</span>
+      <div>
         <h2 id="personal-action-title">我现在最应该做什么</h2></div>
       <span>{items.length ? `${items.length} 项待处理` : "当前已清空"}</span>
     </div>
@@ -1330,7 +1335,7 @@ function CommitterInbox({
 }) {
   return <section className="review-inbox committer-inbox" aria-labelledby="committer-inbox-title">
     <div className="section-head">
-      <div><span className="section-kicker">COMMITTER REVIEW</span><h2 id="committer-inbox-title">待我检视</h2></div>
+      <div><h2 id="committer-inbox-title">待我检视</h2></div>
       <span className="section-count attention">{reviews.length} 项</span>
     </div>
     {reviews.length === 0
@@ -1369,7 +1374,7 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
     catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败，请重试"); }
     finally { setBusy(false); }
   }
-  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong><small>Cloud Console</small></span></div><div className="login-heading"><span className="section-kicker">TEAM WORKSPACE</span><h1 id="login-title">登录工作台</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section><div className="login-aside" aria-hidden><span>01</span><strong>团队进度<br />一眼可见</strong><i /><span>02</span><strong>个人待办<br />集中处理</strong></div></main>;
+  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
 }
 
 function LoadingScreen() {
@@ -1446,7 +1451,7 @@ function UsersBoard({ me }: { me: string }) {
   return <section className="user-admin">
     <div className="user-create-card">
       <div className="user-create-copy">
-        <span className="section-kicker">CREATE ACCOUNT</span>
+        
         <h2>添加团队成员</h2>
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
@@ -1462,7 +1467,7 @@ function UsersBoard({ me }: { me: string }) {
     </div>
     <section className="user-list-card" aria-labelledby="user-list-title">
       <div className="section-head">
-        <div><span className="section-kicker">TEAM ACCOUNTS</span><h2 id="user-list-title">现有账号</h2><p className="section-note">Committer 只在开发主动邀请检视时收到通知。</p></div>
+        <div><h2 id="user-list-title">现有账号</h2><p className="section-note">Committer 只在开发主动邀请检视时收到通知。</p></div>
         <span className="section-count">{users.length} 人</span>
       </div>
       <div className="user-table">
@@ -1591,7 +1596,7 @@ function TeamDashboard({
       onSelectStatus={selectTaskStatus} />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
+      <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
@@ -1630,7 +1635,7 @@ function TaskGroup({
   tone?: string;
 }) {
   return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
-    <div className="section-head"><div><span className="section-kicker">{kicker}</span><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
+    <div className="section-head"><div><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
     {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>{empty ?? "当前没有任务"}</strong></div></div>}
     <div className="task-list">{orderTaskHierarchy(tasks).map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
       const related = tasks.find((item) => item.id === taskId);
@@ -1657,7 +1662,7 @@ function TeamDeliveryOverview({
   return <section className="team-delivery-overview" aria-label="团队任务统计">
     <header className="team-delivery-overview-head">
       <div className="team-delivery-overview-copy">
-        <span className="section-kicker">DELIVERY OVERVIEW</span>
+        
         <h2>交付概览</h2>
         <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在交付档案。</p>
       </div>

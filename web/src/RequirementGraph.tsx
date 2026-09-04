@@ -142,7 +142,7 @@ export function RequirementGraph({
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
     <summary>
       <div>
-        <span>DELIVERY PLAN</span>
+        <span>模块拆分与依赖</span>
         <strong id="requirement-graph-title">模块拆分与依赖</strong>
       </div>
       <small>{!projectionReady

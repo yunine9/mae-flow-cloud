@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { RootErrorBoundary } from "./RootErrorBoundary";
+import "./tokens.css";
 import "./style.css";
 import "./task-workspace.css";
 import "./help.css";

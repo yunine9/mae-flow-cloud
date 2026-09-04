@@ -203,7 +203,7 @@ test("已完成任务的进度展示收口到末段，不沿用合入前最后�
     /const currentLabel = completed\s*\? \(phases\.at\(-1\) \?\? progress\.current_phase\)/);
   assert.match(taskCard, /status=\{task\.status\}/,
     "列表卡和工作台都要把任务终态交给同一进度组件");
-  assert.match(workspace, /showDetailedStep status=\{task\.status\}/);
+  assert.match(workspace, /showDetailedStep=\{false\} status=\{task\.status\}/);
 });
 
 test("诊断包导出给出生成、成功与失败反馈，不再静默下载", () => {

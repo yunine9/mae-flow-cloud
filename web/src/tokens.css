@@ -1,0 +1,187 @@
+/* Mae-Flow 设计令牌 —— 全站唯一的色彩、排版、间距、圆角、层级来源。
+ *
+ * 视觉语言(2026-09-05 定稿,见 docs/frontend-experience-baseline.md §4):
+ *   · 画布是暖中性灰,不是蓝灰;深色主题是炭黑,不是海军蓝。
+ *   · 主动作是"墨":浅色下近黑、深色下近白。一屏只有一颗墨色按钮,
+ *     眼睛落点就是它。品牌不靠一种紫,靠克制与排版。
+ *   · 全站唯一的暖色是 attention(琥珀):任何暖色都在说"这里需要人"。
+ *     running/verifying 用冷静的蓝,success 绿只做勾,danger 红只做失败。
+ *   · 三层表面:canvas → surface → surface-2(输入/代码/悬停)。
+ *     边框一律发丝线;阴影只给浮层。
+ *
+ * 旧词表(--page/--surface-soft/--accent…)保留为别名,让 1.2 万行遗留样式
+ * 一次换肤;新代码只用本文件的新名。--accent 现在等于墨色:遗留里
+ * "紫底白字"的按钮因此自动变成墨底,前景色统一走 --accent-fg,深色主题
+ * 下才不会白底白字(实测 42 处)。 */
+
+:root {
+  color-scheme: light;
+
+  /* 表面 */
+  --canvas: #f4f4f1;
+  --main-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f4f4f1;
+  --surface-3: #e9e9e4;
+  --overlay: #ffffff;
+
+  /* 文字 */
+  --text-strong: #1a1a18;
+  --text: #2e2e2b;
+  --muted: #6e6e68;
+  --faint: #9b9b94;
+
+  /* 线 */
+  --line: #e6e6e1;
+  --line-strong: #cfcfc8;
+
+  /* 墨 = 主动作 */
+  --ink: #1a1a18;
+  --ink-hover: #33332f;
+  --ink-fg: #ffffff;
+
+  /* 语义色:只表达状态 */
+  --active: #2f66d6;
+  --active-soft: #eaf0fb;
+  --attention: #b0680d;
+  --attention-soft: #fbf1df;
+  --success: #1e7a4e;
+  --success-soft: #e5f3eb;
+  --danger: #c23d38;
+  --danger-soft: #fbebea;
+  --merge: #6b60ad;
+  --merge-soft: #eeecf7;
+  --focus: #2f66d6;
+
+  /* 字体:英文走构建内 Inter,中文按 Windows/macOS/Linux 回退。 */
+  --font-ui: "Inter Variable", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+    "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* 字阶:一页最多 5 级可感知字号。 */
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-17: 17px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-30: 30px;
+  --lh-tight: 1.25;
+  --lh-snug: 1.45;
+  --lh-body: 1.6;
+  --lh-read: 1.75;
+
+  /* 间距:4px 网格 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  /* 控件高度 */
+  --control-h-sm: 28px;
+  --control-h: 32px;
+  --control-h-lg: 36px;
+
+  /* 圆角:控件 6 / 面板 8 / 浮层 12 */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* 阴影:只有浮层才有 */
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 2px rgba(20, 20, 18, .05);
+  --shadow-md: 0 8px 24px rgba(20, 20, 18, .10), 0 1px 3px rgba(20, 20, 18, .06);
+  --shadow-lg: 0 24px 64px rgba(20, 20, 18, .16), 0 2px 8px rgba(20, 20, 18, .08);
+
+  --ease: 140ms cubic-bezier(.2, .8, .2, 1);
+  --ease-slow: 200ms cubic-bezier(.2, .8, .2, 1);
+
+  /* 阅读宽度 */
+  --reading-width: 72ch;
+  --page-width: 1200px;
+
+  /* ── 旧词表别名(不要在新代码里用) ── */
+  --page: var(--main-bg);
+  --surface-soft: var(--surface-2);
+  --surface-muted: var(--surface-3);
+  --sidebar: var(--canvas);
+  --sidebar-soft: var(--surface-3);
+  --accent: var(--ink);
+  --accent-hover: var(--ink-hover);
+  --accent-fg: var(--ink-fg);
+  --accent-soft: var(--surface-3);
+  --purple: var(--merge);
+  --purple-soft: var(--merge-soft);
+  --font-sans: var(--font-ui);
+  --mono: var(--font-mono);
+  --font-size-body: var(--fs-14);
+  --font-size-assist: var(--fs-13);
+  --font-size-dense: var(--fs-12);
+  --bg: var(--main-bg);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --warn: var(--attention);
+  --warn-weak: var(--attention-soft);
+  --warn-soft: var(--attention-soft);
+  --danger-weak: var(--danger-soft);
+  --ok: var(--success);
+}
+
+:root[data-density="compact"] {
+  --fs-14: 13px;
+  --fs-15: 14px;
+  --lh-body: 1.5;
+  --lh-read: 1.65;
+  --control-h-sm: 24px;
+  --control-h: 28px;
+  --control-h-lg: 32px;
+  --space-3: 10px;
+  --space-4: 14px;
+  --space-6: 20px;
+  --space-7: 26px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 52px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111110;
+  --main-bg: #151514;
+  --surface: #191918;
+  --surface-2: #202020;
+  --surface-3: #2a2a29;
+  --overlay: #1e1e1d;
+  --text-strong: #f2f2ef;
+  --text: #d4d4cf;
+  --muted: #93938b;
+  --faint: #6a6a63;
+  --line: #292927;
+  --line-strong: #3a3a37;
+  --ink: #f2f2ef;
+  --ink-hover: #ffffff;
+  --ink-fg: #141413;
+  --active: #7ea7ff;
+  --active-soft: rgba(126, 167, 255, .13);
+  --attention: #e4a34c;
+  --attention-soft: rgba(228, 163, 76, .13);
+  --success: #63c48f;
+  --success-soft: rgba(99, 196, 143, .13);
+  --danger: #f27b73;
+  --danger-soft: rgba(242, 123, 115, .13);
+  --merge: #b4a9ea;
+  --merge-soft: rgba(180, 169, 234, .14);
+  --focus: #8db0ff;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, .42), 0 1px 3px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .35);
+}

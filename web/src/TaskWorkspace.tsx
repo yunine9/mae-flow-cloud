@@ -504,7 +504,7 @@ export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
       </em>
     </header>
     {groupFeedback(feedback).map(([source, items]) => (
-      <FeedbackList key={source} kicker="CONTINUOUS REVIEW"
+      <FeedbackList key={source} kicker="持续检视"
         title={FEEDBACK_SOURCE_LABEL[source]} items={items} />
     ))}
   </section>;
@@ -1526,8 +1526,11 @@ export function TaskWorkspace({
           <span>返回列表</span>
         </button>
         <div className="ws-identity">
+          {task.ticket && <span className="ws-business-id">{task.ticket}</span>}
+          <strong id="task-workspace-title" title={task.title ?? task.requirement}>
+            {task.title ?? task.requirement}
+          </strong>
           <div className="ws-identity-line">
-            {task.ticket && <span className="ws-business-id">{task.ticket}</span>}
             <code title="平台内部编号">{task.id}</code>
             <span className={`pill ${task.status}`}>
               <i aria-hidden />{statusText(task)}
@@ -1537,7 +1540,6 @@ export function TaskWorkspace({
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>
-          <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
           {task.parent_task_id && <button type="button" className="ws-parent-task"
             onClick={() => onOpenTask?.(task.parent_task_id!)}>
             <span>返回主任务</span>
@@ -1599,31 +1601,66 @@ export function TaskWorkspace({
         )}
       </header>
 
-      <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
-        + `${health?.needs_attention ? " attention" : ""}`}>
-        {/* 阶段名可点:当前阶段弹内核编译的活方案,其他阶段弹标准
-            方案底版(用户拍板:方案入口收进进度条,执行页签让位给
-            SSE 现场)。需求受理/DTS 等云端词表任务的阶段名与内核
-            六阶段完全不同,弹出来必然落底版兜底属误导(审计 P0-3)
-            ——这些任务不提供弹层。 */}
-        <TaskProgress progress={visibleProgress} showDetailedStep status={task.status}
-          onPhaseClick={task.execution_plan || task.workflow_profile
-            ? setPlanPhase : undefined}
-          context={health && <>
-          <span title={health.next}><i>下一步</i>{health.next}</span>
-          <span><i>责任</i>{health.actor}</span>
-          <span title={health.last_progress_at}><i>更新</i>
-            {relativeTime(health.last_progress_at) || "暂无记录"}</span>
-        </>} />
-        {planPhase && <StagePlanDialog
-          phase={planPhase}
-          currentPhase={visibleProgress.current_phase}
-          plan={task.execution_plan}
-          planWarning={task.workflow_profile_warning}
-          profile={task.workflow_profile}
-          onSuggest={onExecutionPlanFeedback}
-          onClose={() => setPlanPhase("")} />}
-      </div>
+      <nav className="ws-workspace-nav" aria-label="任务工作台视图">
+        <div className="ws-view-tabs" role="tablist" aria-label="工作台内容">
+          {([
+            ["focus", "当前"],
+            ["materials", "产物"],
+            ["execution", "活动"],
+          ] as Array<[WorkspaceView, string]>).map(([view, label], index) => (
+            <button type="button" role="tab" key={view}
+              aria-selected={workspaceView === view}
+              className={workspaceView === view ? "active" : ""}
+              title={`切换到${label}（⌥${index + 1}）`}
+              onClick={() => selectWorkspaceView(view)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
+          + `${health?.needs_attention ? " attention" : ""}`
+          + `${task.status === "completed" ? " is-done" : task.status === "failed" ? " is-failed" : ""}`}>
+          {/* 阶段名可点:当前阶段弹内核编译的活方案,其他阶段弹标准
+              方案底版(用户拍板:方案入口收进进度条,执行页签让位给
+              SSE 现场)。需求受理/DTS 等云端词表任务的阶段名与内核
+              六阶段完全不同,弹出来必然落底版兜底属误导(审计 P0-3)
+              ——这些任务不提供弹层。 */}
+          {/* 刻度旁只放阶段名:步骤说明已经是主画布的标题,这里再写一遍
+              会把 44px 的视图条撑成一行长文。 */}
+          <TaskProgress progress={visibleProgress} showDetailedStep={false} status={task.status}
+            onPhaseClick={task.execution_plan || task.workflow_profile
+              ? setPlanPhase : undefined}
+            context={health && <>
+            <span title={health.next}><i>下一步</i>{health.next}</span>
+            <span><i>责任</i>{health.actor}</span>
+            <span title={health.last_progress_at}><i>更新</i>
+              {relativeTime(health.last_progress_at) || "暂无记录"}</span>
+          </>} />
+          {planPhase && <StagePlanDialog
+            phase={planPhase}
+            currentPhase={visibleProgress.current_phase}
+            plan={task.execution_plan}
+            planWarning={task.workflow_profile_warning}
+            profile={task.workflow_profile}
+            onSuggest={onExecutionPlanFeedback}
+            onClose={() => setPlanPhase("")} />}
+        </div>
+        <div className="ws-view-actions">
+          <button type="button" className={`ws-review-launch${
+            reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
+            aria-label="批注与检视" aria-haspopup="dialog"
+            aria-expanded={reviewPanelOpen}
+            title={`${REVIEW_SHORTCUT} 打开或收起批注`}
+            onClick={() => setReviewPanelOpen(true)}>
+            <span aria-hidden>✎</span>
+            <span className="ws-review-label">批注与检视</span>
+            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+              <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
+            )}
+          </button>
+        </div>
+      </nav>
+
       {task.feedback_error && (
         <section className="feedback-panel feedback-panel-error" role="alert">
           <h3>持续检视明细暂不可用</h3>
@@ -1646,37 +1683,6 @@ export function TaskWorkspace({
           </div>}
         </div>
       )}
-      <nav className="ws-workspace-nav" aria-label="任务工作台视图">
-        <div className="ws-view-tabs" role="tablist" aria-label="工作台内容">
-          {([
-            ["focus", "当前"],
-            ["materials", "产物"],
-            ["execution", "活动"],
-          ] as Array<[WorkspaceView, string]>).map(([view, label], index) => (
-            <button type="button" role="tab" key={view}
-              aria-selected={workspaceView === view}
-              className={workspaceView === view ? "active" : ""}
-              title={`切换到${label}（⌥${index + 1}）`}
-              onClick={() => selectWorkspaceView(view)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="ws-view-actions">
-          <button type="button" className={`ws-review-launch${
-            reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
-            aria-label="批注与检视" aria-haspopup="dialog"
-            aria-expanded={reviewPanelOpen}
-            title={`${REVIEW_SHORTCUT} 打开或收起批注`}
-            onClick={() => setReviewPanelOpen(true)}>
-            <span aria-hidden>✎</span>
-            <span className="ws-review-label">批注与检视</span>
-            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
-              <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
-            )}
-          </button>
-        </div>
-      </nav>
 
       <div className={`ws-body ws-view-${workspaceView}${
         workspaceView === "focus" && actionRailVisible ? " has-action" : ""}${
@@ -1971,7 +1977,7 @@ export function TaskWorkspace({
           {documentsDownloadError && <div className="utility-note" role="alert">
             打包下载失败：{documentsDownloadError}
           </div>}
-          <div className="ws-doc">
+          <div className={`ws-doc${materialView === "diff" ? " is-diff" : ""}`}>
             {locationNotice && (
               <div className="annotation-location-notice" role="status">
                 <div><strong>批注位置已变化</strong><span>{locationNotice}</span></div>
@@ -2223,10 +2229,6 @@ export function TaskWorkspace({
             </>}
           </div>
           </> : <>
-            <div className="ws-pane-head">
-              <div><strong>活动</strong></div>
-              <small>阶段进展、上下文与原始记录</small>
-            </div>
             <div className="ws-primary-scroll ws-execution-view">
               {(task.execution_plan_alerts ?? []).length > 0 && (
                 <section className="ws-alert ws-plan-alert" role="alert">

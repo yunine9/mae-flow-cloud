@@ -923,7 +923,7 @@ export function GitDiff({
             返回工作台
           </button>
           <div className="code-review-title">
-            <span>CODE REVIEW</span>
+            <span>代码检视</span>
             <strong>代码审阅</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
               <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
@@ -935,7 +935,7 @@ export function GitDiff({
       ) : (
         <header className="git-change-summary">
           <div>
-            <span>WORKTREE</span>
+            <span>工作区变更</span>
             <strong>{baseFiles.length} 个文件发生变化{directoryRoots.length
               ? ` · ${directoryRoots.length} 个未跟踪目录` : ""}</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>

@@ -42,7 +42,7 @@ export function QuickWishButton({ onOpenWall }: { onOpenWall: () => void }) {
         if (event.target === event.currentTarget) setOpen(false);
       }}>
       <form className="wish-quick-dialog" onSubmit={submit}>
-        <header><div><small>QUICK FEEDBACK</small>
+        <header><div><small>快速反馈</small>
           <h2 id="wish-quick-title">快速提个问题</h2></div>
           <button type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button>
         </header>
