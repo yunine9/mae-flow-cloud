@@ -12,8 +12,8 @@
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation } from "./api";
 import {
-  anchorOf, pickRow, pickRowFromStack, quoteOfSelection, type RowNode,
-  type SelectionQuote,
+  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection,
+  type MaterialAnnotation, type RowNode, type SelectionQuote,
 } from "./annotateTargets";
 import "./annotate.css";
 
@@ -60,6 +60,7 @@ export function Annotatable({
   items,
   enabled = true,
   onAdded,
+  onOpenAnnotations,
   addDraft,
   children,
 }: {
@@ -68,12 +69,13 @@ export function Annotatable({
   /** 文档没有 data-file,用产物名当路径。 */
   fallbackFile: string;
   kind: "doc" | "code";
-  /** 已有圈注:用来在材料上标出"这几处我圈过"。只要这三个字段——
-   * 任务批注与问题域检视意见两种账都能结构兼容,不必互为类型。 */
-  items: ReadonlyArray<{ artifact: string; line: number; status: string }>;
+  /** 已有圈注:精确到产物、文件与当前行，避免聚合 diff 的同号行串台。 */
+  items: ReadonlyArray<MaterialAnnotation>;
   /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
   onAdded: () => void;
+  /** 已圈过的行点这里直达右侧对应意见；正文点击仍保留新增批注语义。 */
+  onOpenAnnotations?: (ids: string[]) => void;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
    * 任务流 addAnnotation。交互两域同一套,只有提交端点不同。 */
   addDraft?: (input: {
@@ -107,15 +109,19 @@ export function Annotatable({
     root.querySelectorAll(".noted").forEach((node) => {
       node.classList.remove("noted", "noted-sent");
     });
-    for (const item of items) {
-      if (item.artifact !== artifact) continue;
-      for (const node of root.querySelectorAll<HTMLElement>("[data-l]")) {
-        if (Number(node.dataset.l) !== item.line) continue;
+    for (const node of root.querySelectorAll<HTMLElement>("[data-l]")) {
+      const line = Number(node.dataset.l);
+      const file = node.closest<HTMLElement>("[data-file]")?.dataset.file
+        ?? fallbackFile;
+      const attached = annotationsAtRow(items, { artifact, file, line });
+      if (attached.length) {
         node.classList.add("noted");
-        if (item.status === "sent") node.classList.add("noted-sent");
+        if (attached.some((item) => item.status === "sent")) {
+          node.classList.add("noted-sent");
+        }
       }
     }
-  }, [items, artifact, children]);
+  }, [items, artifact, fallbackFile, children]);
 
   /** 这块材料里划选的那一块(没有就 undefined)。只认落在本材料行里的
    * 选区:别处残留的选中文本不算,也不再让材料"点不动"。 */
@@ -215,12 +221,19 @@ export function Annotatable({
   }
 
   function track(event: React.MouseEvent) {
-    if (!enabled || draft) return;
+    if (draft) return;
     const target = event.target as HTMLElement | null;
     if (!target?.closest || target.closest(".annot-fab, .annot-editor")) return;
     const row = target.closest<HTMLElement>("[data-l]");
     setHovered((current) => current === row ? current : row ?? undefined);
   }
+
+  const hoveredAnnotations = hovered ? annotationsAtRow(items, {
+    artifact,
+    file: hovered.closest<HTMLElement>("[data-file]")?.dataset.file
+      ?? fallbackFile,
+    line: Number(hovered.dataset.l),
+  }) : [];
 
   async function save() {
     if (!draft || busy) return;
@@ -273,7 +286,25 @@ export function Annotatable({
           setHint("");
         }}>{hint}<b>知道了</b></div>
       )}
-      {enabled && hovered && !draft && (
+      {hovered && !draft && hoveredAnnotations.length > 0
+          && onOpenAnnotations ? (
+        <button
+          type="button"
+          className="annot-fab annot-review-fab"
+          aria-label={`查看这行的 ${hoveredAnnotations.length} 条检视意见`}
+          data-tip={`查看 ${hoveredAnnotations.length} 条检视意见`}
+          style={fabPosition(hovered, host.current)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenAnnotations(hoveredAnnotations.map((item) => item.id));
+          }}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden>
+            <path d="M4.25 5.25A2.25 2.25 0 0 1 6.5 3h7A2.25 2.25 0 0 1 15.75 5.25v5.5A2.25 2.25 0 0 1 13.5 13h-4l-3.25 2.5V13A2.25 2.25 0 0 1 4 10.75v-5.5Z" />
+          </svg>
+          <b>{hoveredAnnotations.length}</b>
+        </button>
+      ) : enabled && hovered && !draft && (
         <button
           type="button"
           className="annot-fab"

@@ -16,7 +16,7 @@
  * 没有"批注管理页":这块面板就长在工作台里,跟材料和决定同屏。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   dropAnnotation,
   editAnnotation,
@@ -144,9 +144,18 @@ export function authorVerdictReady(
   return true;
 }
 
-/** 批注与检视抽屉顶部筛选条的三档:等我确认 / Agent 处理中 / 已闭环。
+/** 批注与检视抽屉顶部筛选条的三档:等我确认 / 处理与验证 / 已闭环。
  * 批注、CodeHub 意见、机器告警三节共用,人一眼看到"此刻压在我这的有几条"。 */
 export type ReviewFilter = "all" | "mine" | "agent" | "closed";
+
+/** 账号是权限主键，不是给人看的称呼；没有配置姓名时才退回账号。 */
+export function displayPersonName(
+  username: string,
+  people: readonly { username: string; display_name?: string }[] = [],
+): string {
+  return people.find((person) => person.username === username)
+    ?.display_name?.trim() || username;
+}
 
 /** 一条批注归筛选条的哪一档。只用现成事实(状态、作者、裁决就绪),不猜。 */
 export function annotationCategory(
@@ -190,6 +199,7 @@ function progressOf(
   verdictReady = false,
   /** 这条意见本身到没到裁决点(与看的人无关)。 */
   ready = verdictReady,
+  personName: (username: string) => string = (username) => username,
 ): {
   tone: "draft" | "waiting" | "review" | "done";
   text: string;
@@ -204,7 +214,7 @@ function progressOf(
       ? item.verified_by : undefined;
     return proxyVerifier
       ? { tone: "done", text: "管理员代确认",
-          hint: `由管理员 ${proxyVerifier} 代替批注作者 ${item.author} 确认。` }
+          hint: `由管理员 ${personName(proxyVerifier)} 代替批注作者 ${personName(item.author)} 确认。` }
       : { tone: "done", text: "确认通过",
           hint: "意见作者已确认这处改动符合要求。" };
   }
@@ -223,7 +233,7 @@ function progressOf(
     return {
       tone: "waiting",
       text: route === "owner_reply" ? "等待责任人答复" : "等待责任人决策",
-      hint: `已指派给 ${item.assignee ?? "任务责任人"}，Agent 不会代答。`,
+      hint: `已指派给 ${item.assignee ? personName(item.assignee) : "任务责任人"}，Agent 不会代答。`,
     };
   }
   if (route === "owner_reply" && item.owner_reply) {
@@ -239,7 +249,7 @@ function progressOf(
       text: item.sent_via === "owner_pending"
         ? "决策已记录·等待继续"
         : item.sent_via === "queued_decision"
-          ? "决策已记录·等待执行" : "Agent 正在按决策处理",
+          ? "决策已记录·等待执行" : "决策已交给 Agent",
       hint: item.sent_via === "owner_pending"
         ? "责任人结论已经保存；当前流程暂时不能接收，恢复后可继续交给 Agent。"
         : item.sent_via === "queued_decision"
@@ -259,7 +269,9 @@ function progressOf(
     return {
       tone: "review",
       text: "待你确认",
-      hint: "Agent 已留下当前轮逐条回应，请核对最新材料后确认或退回。",
+      hint: item.response?.revision === (item.rework ?? 0)
+        ? "Agent 已留下当前轮逐条回应，请核对最新材料后确认或退回。"
+        : "任务已回到人工检视，请核对最新材料后确认或退回。",
     };
   }
   // "被改动"只认一个判据:锚定的原文消失了。行号漂移(moved)不算——
@@ -277,8 +289,9 @@ function progressOf(
   // 轮到你"说清楚。
   if (!ready && item.sent_via !== "pipeline_evidence") {
     const viaRepair = item.sent_via === "review_repair";
-    // 原文在不在只是定位信息,不能充当处理进度(隔壁 Agent 的分析:一半
-    // "已被改动"一半"已提交",人拿它当"处理了几条")。进度只认回执。
+    // 原文消失只能证明"这处有改动",不能证明意见已经修好；但把这项
+    // 事实完全藏掉、继续写成"Agent 处理中"也是假状态。明确拆成已有
+    // 改动 / Agent 回执 / 人工确认三层，既不冒充闭环，也不让状态落后。
     const where = check?.state === "gone"
       ? "你圈的原文已经不在了（Agent 动过这处）；" : "";
     const response = item.response?.revision === (item.rework ?? 0)
@@ -289,25 +302,36 @@ function progressOf(
       return { tone: "waiting", text: `Agent 回执：${outcome}·等复检`,
         hint: `${where}${response.summary}。Build-Fix 通过、最终推送确认卡出现时再由你确认。` };
     }
+    if (check?.state === "gone") {
+      return {
+        tone: "waiting",
+        text: "已有改动·待验证",
+        hint: "你圈的原文已经发生变化；平台还在等待这条意见的逐条回执，暂不冒充已经修好。",
+      };
+    }
     return { tone: "waiting",
-      text: viaRepair ? "等待 Agent 逐条回执" : "Agent 处理中",
+      text: viaRepair ? "等待 Agent 回执" : "已交给 Agent",
       hint: viaRepair
         ? `${where}Agent 处理完会为每条意见留下回执；Build-Fix 通过、最终推送确认卡出现时再由你逐条确认。`
-        : `${where}Agent 再次停下等人时再由你确认。` };
+        : `${where}平台尚未收到这条意见的处理回执；任务再次停下等人时再由你确认。` };
   }
   // 到点了但看的人不是作者:裁决权在作者手里,别对旁人说"请你确认"。
   return check?.state === "gone"
     ? { tone: "review", text: "已被改动·等作者确认",
-        hint: `你圈的原文已经不在了；是否修好由意见作者 ${item.author} 确认。` }
+        hint: `你圈的原文已经不在了；是否修好由意见作者 ${personName(item.author)} 确认。` }
     : { tone: "waiting", text: "等作者确认",
-        hint: `由意见作者 ${item.author} 确认是否修好。` };
+        hint: `由意见作者 ${personName(item.author)} 确认是否修好。` };
 }
 
-function deliveryText(item: Annotation, archival = false): string {
+function deliveryText(
+  item: Annotation,
+  archival = false,
+  personName: (username: string) => string = (username) => username,
+): string {
   if (routeOf(item) === "memory") return "已记为记忆，不发给任何人";
   if (item.status === "verified") {
     return item.verified_by && item.verified_by !== item.author
-      ? `管理员 ${item.verified_by} 代确认`
+      ? `管理员 ${personName(item.verified_by)} 代确认`
       : "意见作者已确认";
   }
   if (item.status !== "sent") return archival ? "交付后记录" : "尚未提交";
@@ -338,6 +362,8 @@ export function AnnotationPanel({
   mergeRequestOpen,
   evidenceAwaiting = false,
   filter = "all",
+  focus,
+  people = [],
   reworkChoice,
   canDecide = false,
   onChanged,
@@ -355,6 +381,10 @@ export function AnnotationPanel({
   canDecide?: boolean;
   /** 抽屉顶部筛选条选中的档;非 all 时只列该档的批注。 */
   filter?: ReviewFilter;
+  /** 从文档/代码行反向定位过来；request 保证连续点同一行也会重新闪。 */
+  focus?: { ids: readonly string[]; request: number };
+  /** 平台账号到显示姓名的窄视图；权限判断始终仍使用稳定账号。 */
+  people?: readonly { username: string; display_name?: string }[];
   taskId: string;
   viewerUsername: string;
   items: Annotation[];
@@ -391,6 +421,8 @@ export function AnnotationPanel({
   const [ownerReply, setOwnerReply] = useState("");
   const [error, setError] = useState("");
   const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
+  const listRef = useRef<HTMLOListElement>(null);
+  const personName = (username: string) => displayPersonName(username, people);
   // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
@@ -492,6 +524,32 @@ export function AnnotationPanel({
     const timer = window.setTimeout(() => setOverrideArm(undefined), 6000);
     return () => window.clearTimeout(timer);
   }, [overrideArm]);
+
+  useEffect(() => {
+    if (!focus?.ids.length) return;
+    setOpen(true);
+    let secondFrame = 0;
+    let clearTimer = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const wanted = new Set(focus.ids);
+        const matches = [...(listRef.current
+          ?.querySelectorAll<HTMLElement>("[data-annotation-id]") ?? [])]
+          .filter((node) => wanted.has(node.dataset.annotationId ?? ""));
+        if (!matches.length) return;
+        matches.forEach((node) => node.classList.add("annot-panel-focus"));
+        matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
+        matches[0].focus({ preventScroll: true });
+        clearTimer = window.setTimeout(() => matches.forEach((node) =>
+          node.classList.remove("annot-panel-focus")), 1800);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+      if (clearTimer) window.clearTimeout(clearTimer);
+    };
+  }, [focus?.request, filter]);
 
   if (!items.length) return null;
   const checkOf = (id: string) => checks.find((check) => check.id === id);
@@ -717,7 +775,7 @@ export function AnnotationPanel({
       {filter !== "all" && !visibleItems.length && items.length > 0 && (
         <p className="annot-panel-note">这一档下没有批注；切回“全部”看完整清单。</p>
       )}
-      <ol className="annot-list">
+      <ol className="annot-list" ref={listRef}>
         {visibleItems.map((item) => {
           const check = checkOf(item.id);
           const archival = taskStatus === "completed"
@@ -739,9 +797,9 @@ export function AnnotationPanel({
             && authorVerdictReady(item, taskStatus, reviewReady);
           const actionable = authorCanJudge || overrideAccess.canVerify;
           const progress = progressOf(item, check, archival, actionable,
-            authorVerdictReady(item, taskStatus, reviewReady));
+            authorVerdictReady(item, taskStatus, reviewReady), personName);
           return (
-            <li key={item.id}
+            <li key={item.id} data-annotation-id={item.id} tabIndex={-1}
                 className={`annot-item ${progress.tone}${actionable
                   ? " actionable" : ""}`}>
               <div className="annot-item-head">
@@ -771,7 +829,7 @@ export function AnnotationPanel({
               <div className={`annot-route-badge ${routeOf(item)}`}>
                 {ROUTE_LABEL[routeOf(item)]}
                 {routeOf(item) !== "agent" && item.assignee
-                  ? ` · ${item.assignee}` : ""}
+                  ? ` · ${personName(item.assignee)}` : ""}
               </div>
               {editing ? (
                 <div className="annot-inline-editor">
@@ -840,7 +898,7 @@ export function AnnotationPanel({
                 <div className="annot-owner-reply">
                   <strong>责任人答复</strong>
                   <p>{item.owner_reply.text}</p>
-                  <small>{item.owner_reply.author} · {relativeTime(item.owner_reply.replied_at)}</small>
+                  <small>{personName(item.owner_reply.author)} · {relativeTime(item.owner_reply.replied_at)}</small>
                 </div>
               )}
               {item.status === "draft" && !isAuthor && canRouteOthers
@@ -904,9 +962,9 @@ export function AnnotationPanel({
               )}
               <div className="annot-item-foot">
                 <small>
-                  {deliveryText(item, archival)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
+                  {deliveryText(item, archival, personName)} · 批注作者 {personName(item.author)} · {relativeTime(item.created_at)}
                   {item.sent_by && item.sent_by !== item.author
-                    && ` · 由 ${item.sent_by} 原样转交`}
+                    && ` · 由 ${personName(item.sent_by)} 原样转交`}
                   {item.edited_at && " · 已编辑"}
                   {/* 记忆条目是快照,不参与重锚定:原文以后变了也不追。 */}
                   {check && check.state !== "hit" && routeOf(item) !== "memory"
@@ -935,8 +993,8 @@ export function AnnotationPanel({
                         <button type="button" className="ghost danger"
                                 aria-pressed={dropArmed}
                                 title={dropArmed
-                                  ? `再次点击后，将由 ${viewerUsername} 代 ${item.author} 删除`
-                                  : `先进入确认，再由 ${viewerUsername} 代 ${item.author} 删除`}
+                                  ? `再次点击后，将由 ${personName(viewerUsername)} 代 ${personName(item.author)} 删除`
+                                  : `先进入确认，再由 ${personName(viewerUsername)} 代 ${personName(item.author)} 删除`}
                                 disabled={!!mutationBusy}
                                 onClick={() => void requestAdminOverride(item, "drop")}>
                           {dropArmed ? "再次点击确认代删" : "管理员代删"}
@@ -988,8 +1046,8 @@ export function AnnotationPanel({
                         <button type="button" className="approve"
                                 aria-pressed={verifyArmed}
                                 title={verifyArmed
-                                  ? `再次点击后，将由 ${viewerUsername} 代 ${item.author} 确认`
-                                  : `先进入确认，再由 ${viewerUsername} 代 ${item.author} 确认`}
+                                  ? `再次点击后，将由 ${personName(viewerUsername)} 代 ${personName(item.author)} 确认`
+                                  : `先进入确认，再由 ${personName(viewerUsername)} 代 ${personName(item.author)} 确认`}
                                 disabled={!!mutationBusy}
                                 onClick={() => void requestAdminOverride(item, "verify")}>
                           {verifyArmed ? "再次点击确认代确认" : "管理员代确认"}

@@ -1248,6 +1248,7 @@ export function App() {
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}
+      viewerDisplayName={session.display_name}
       canOverride={session.role === "admin"}
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}

@@ -27,6 +27,26 @@ export interface RowNode {
 /** 原文快照的长度上限,和内核面板一致:够定位,又不至于把整段搬走。 */
 export const ANCHOR_MAX = 90;
 
+export interface MaterialAnnotation {
+  id: string;
+  artifact: string;
+  file: string;
+  line: number;
+  status: string;
+}
+
+/** 当前材料行真正挂着哪些批注。不能只看行号：一个聚合 diff 里多个文件
+ * 都可能有第 12 行。虚拟材料没有真实文件层级，按 artifact + line 即可。 */
+export function annotationsAtRow<T extends MaterialAnnotation>(
+  items: readonly T[],
+  target: { artifact: string; file: string; line: number },
+): T[] {
+  return items.filter((item) => item.status !== "dropped"
+    && item.artifact === target.artifact
+    && item.line === target.line
+    && (target.artifact.startsWith("__") || item.file === target.file));
+}
+
 /** 原文快照只取"内容"那一段(diff 行里夹着行号与 +/− 标记,整行抓下来
  * 是脏原文,回头重锚定一比一个不中)。空内容不再判死:空行也能圈,
  * 锚点退回"第 N 行"——人指的是位置,不一定是文字。 */

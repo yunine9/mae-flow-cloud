@@ -595,6 +595,17 @@ export function createTaskServer(
           response.setHeader("set-cookie", sessionCookie("", request, true));
           return json(response, 200, { ok: true });
         }
+        // 协作界面需要把账号翻译成人名。所有登录者只读取这两个公开
+        // 身份字段；角色、权限与个人配置仍只在管理员账号接口里出现。
+        if (request.method === "GET" && parts[1] === "people"
+            && parts.length === 2) {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          return json(response, 200, (options.auth?.listUsers() ?? [])
+            .map(({ username, display_name }) => ({
+              username,
+              ...(display_name ? { display_name } : {}),
+            })));
+        }
         if (parts[1] === "users") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           if (viewer.role !== "admin") {

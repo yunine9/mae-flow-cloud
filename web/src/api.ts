@@ -114,6 +114,12 @@ export interface AuthUser {
   push_confirmation?: boolean;
 }
 
+/** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
+export interface PersonIdentity {
+  username: string;
+  display_name?: string;
+}
+
 export interface CollaborationAssignee {
   username: string;
   display_name?: string;
@@ -344,6 +350,12 @@ export async function testLubanConnection(): Promise<{
 
 export async function listUsers(): Promise<AuthUser[]> {
   const response = await fetch("/auth/users");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listPeople(): Promise<PersonIdentity[]> {
+  const response = await fetch("/auth/people");
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }

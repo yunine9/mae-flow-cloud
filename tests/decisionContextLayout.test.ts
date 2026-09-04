@@ -230,7 +230,7 @@ test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
 test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
   assert.match(workspace, /className="review-filter" role="tablist"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
-  assert.match(workspace, /\["agent", "Agent 处理中"\]/);
+  assert.match(workspace, /\["agent", "处理与验证"\]/);
   assert.match(workspace, /\["closed", "已闭环"\]/);
   assert.match(workspace, /filter=\{reviewFilter\}/, "批注面板吃同一个筛选档");
   assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
@@ -242,6 +242,20 @@ test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工�
   assert.match(panel, /const visibleItems = filter === "all" \? orderedItems/);
   assert.match(css, /\.review-filter\s*\{/);
   assert.match(css, /\.feedback-convert\s*\{/);
+});
+
+test("材料上的已有批注可以反向打开并定位到检视卡", () => {
+  const annotatable = readFileSync(
+    join(process.cwd(), "web/src/Annotatable.tsx"), "utf8");
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(annotatable, /onOpenAnnotations\(hoveredAnnotations\.map\(\(item\) => item\.id\)\)/,
+    "材料行把对应批注 id 交回工作台");
+  assert.match(workspace, /setReviewFilter\("all"\)[\s\S]*setReviewPanelOpen\(true\)/,
+    "反向定位先取消筛选并打开检视抽屉");
+  assert.match(panel, /data-annotation-id=\{item\.id\}/);
+  assert.match(panel, /matches\[0\]\.scrollIntoView/,
+    "面板滚到第一张对应卡，并同时高亮同一行的其他卡");
 });
 
 test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源逐条展示", () => {

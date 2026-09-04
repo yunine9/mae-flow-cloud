@@ -36,7 +36,7 @@ test("等决定期间的提交:决定人一步返工、检视人排队并说明�
   const service = read("src/taskService.ts");
   assert.match(service, /markSent\(\s*picked\.map\(\(item\) => item\.id\), "queued_decision", sentBy\)/);
   // 回执登记前面板不再写"已提交/已被改动·请你确认":那时确认按钮根本不在。
-  assert.match(panel, /text: viaRepair \? "等待 Agent 逐条回执" : "Agent 处理中"/,
+  assert.match(panel, /text: viaRepair \? "等待 Agent 回执" : "已交给 Agent"/,
     "没回执时统一等回执,原文在不在只进提示不当进度");
   assert.doesNotMatch(panel, /text: "Agent 已改动这处/);
   assert.match(panel, /text: `Agent 回执：\$\{outcome\}·等复检`/, "有回执按回执结论显示");

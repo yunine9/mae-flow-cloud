@@ -670,9 +670,45 @@ test("批注面板显示受限管理员入口和实际代确认审计", () => {
       reviewReady: false,
       items: [annotation({ status: "verified", verified_by: "ops-admin" })],
       reviewAnnotationIds: [],
+      people: [
+        { username: "alice", display_name: "爱丽丝" },
+        { username: "ops-admin", display_name: "值班管理员" },
+      ],
     },
   ));
-  assert.match(auditedHtml, /管理员 ops-admin 代确认/);
-  assert.match(auditedHtml, /批注作者 alice/);
+  assert.match(auditedHtml, /管理员 值班管理员 代确认/);
+  assert.match(auditedHtml, /批注作者 爱丽丝/);
+  assert.doesNotMatch(auditedHtml, /批注作者 alice/,
+    "看板展示姓名，账号仍只在权限判断里使用");
   assert.doesNotMatch(auditedHtml, /你已确认/);
+});
+
+test("检视状态只报告有证据的进度，不再把所有未闭环项写成 Agent 正在处理", () => {
+  const common = {
+    taskId: "task-status",
+    viewerUsername: "alice",
+    items: [annotation({ response: undefined, sent_via: "interrupt" })],
+    canOperate: true,
+    taskStatus: "running",
+    mergeRequestOpen: false,
+    onChanged: () => undefined,
+  };
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, checks: [] },
+  ));
+  assert.match(html, /已交给 Agent/);
+  assert.doesNotMatch(html, /Agent 处理中/);
+  const changedHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, checks: [{ id: "annotation-1", state: "gone" }] },
+  ));
+  assert.match(changedHtml, /已有改动·待验证/,
+    "圈选内容已经变化时如实显示已有改动，不继续冒充 Agent 仍在修改");
+  assert.doesNotMatch(changedHtml, /Agent 处理中/);
+  assert.equal(annotationPanel.displayPersonName("alice", [
+    { username: "alice", display_name: "  爱丽丝  " },
+  ]), "爱丽丝");
+  assert.equal(annotationPanel.displayPersonName("unknown", []), "unknown",
+    "历史账号没有姓名时仍可读");
 });

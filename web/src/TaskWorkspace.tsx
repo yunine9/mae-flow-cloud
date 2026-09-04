@@ -37,7 +37,7 @@ import {
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
 import { RequirementTeamPicker } from "./RequirementTeamPicker";
-import { UserPicker, userLabel } from "./UserPicker";
+import { UserPicker } from "./UserPicker";
 import {
   addAnnotation,
   completeReview,
@@ -48,6 +48,7 @@ import {
   listArtifactChangeDirectory,
   listArtifacts,
   listCommitters,
+  listPeople,
   listTaskReviews,
   readArtifact,
   readArtifactFileDiff,
@@ -559,6 +560,7 @@ function assistantUnavailableReason(task: TaskSummary): string {
 export function TaskWorkspace({
   task,
   viewerUsername,
+  viewerDisplayName,
   canOverride,
   canOperate,
   canCollaborate,
@@ -571,6 +573,7 @@ export function TaskWorkspace({
 }: {
   task: TaskSummary;
   viewerUsername: string;
+  viewerDisplayName?: string;
   /** 管理员仅可代删或代确认别人的批注；默认裁决权仍归作者。 */
   canOverride: boolean;
   canOperate: boolean;
@@ -607,6 +610,9 @@ export function TaskWorkspace({
   const [notesPulse, setNotesPulse] = useState(0);
   const [livePulse, setLivePulse] = useState(0);
   const [committers, setCommitters] = useState<AuthUser[]>([]);
+  const [reviewPeople, setReviewPeople] = useState<Array<{
+    username: string; display_name?: string;
+  }>>([]);
   const [reviewer, setReviewer] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewResult, setReviewResult] = useState("");
@@ -642,6 +648,9 @@ export function TaskWorkspace({
   const [documentsDownloading, setDocumentsDownloading] = useState(false);
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
+  const [reviewFocus, setReviewFocus] = useState<{
+    ids: string[]; request: number;
+  }>();
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
   /** 需求原文页签上"这一轮改了什么"的对比;null = 看全文。 */
   const [revisionDiff, setRevisionDiff] = useState<{
@@ -656,6 +665,7 @@ export function TaskWorkspace({
   const materialSearchInput = useRef<HTMLInputElement>(null);
   const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
+  const reviewFocusRequest = useRef(0);
 
   function selectWorkspaceView(next: WorkspaceView) {
     if (next === workspaceView) return;
@@ -690,6 +700,7 @@ export function TaskWorkspace({
     setDocumentsDownloading(false);
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
+    setReviewFocus(undefined);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setRevisionDiff(null);
@@ -751,6 +762,17 @@ export function TaskWorkspace({
   }, [task.status, task.waiting?.waiting_id,
     task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha]);
+
+  useEffect(() => {
+    let alive = true;
+    void listPeople().then((people) => {
+      if (alive) setReviewPeople(people);
+    }).catch(() => {
+      // 姓名只是显示增强；读取失败退回账号，不能挡住检视主流程。
+      if (alive) setReviewPeople([]);
+    });
+    return () => { alive = false; };
+  }, [task.id]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -1217,6 +1239,21 @@ export function TaskWorkspace({
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  // 服务端已经把移动过的原文重锚到当前行。材料标记必须使用这个当前
+  // 行号；原文已删除则不在别的内容上制造一个同号假标记。
+  const locatableNotes = notes.flatMap((item) => {
+    if (item.status === "dropped") return [];
+    const check = checks.find((candidate) => candidate.id === item.id);
+    if (check?.state === "gone") return [];
+    return [{ ...item, line: check?.line ?? item.line }];
+  });
+  const openAnnotationReview = (ids: string[]) => {
+    if (!ids.length) return;
+    reviewFocusRequest.current += 1;
+    setReviewFilter("all");
+    setReviewFocus({ ids, request: reviewFocusRequest.current });
+    setReviewPanelOpen(true);
+  };
   const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
     item.status === "closed" ? "closed"
       : item.status === "needs_human" ? "mine" : "agent";
@@ -1361,7 +1398,7 @@ export function TaskWorkspace({
         {([
           ["all", "全部"],
           ["mine", "等我确认"],
-          ["agent", "Agent 处理中"],
+          ["agent", "处理与验证"],
           ["closed", "已闭环"],
         ] as const).map(([key, label]) => (
           <button type="button" key={key} role="tab"
@@ -1379,7 +1416,9 @@ export function TaskWorkspace({
           <div>
             <span>COMMITTER REVIEW</span>
             <strong id="review-assignment-title">
-              {reviewAssignment.requester} 邀请你检视
+              {reviewPeople.find((person) =>
+                person.username === reviewAssignment.requester)
+                ?.display_name ?? reviewAssignment.requester} 邀请你检视
             </strong>
             <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
             {completeError && <small className="review-assignment-error">
@@ -1414,6 +1453,13 @@ export function TaskWorkspace({
           evidenceAwaiting={Boolean(
             task.delivery?.evidence_gap?.missing_dimensions.length)}
           filter={reviewFilter}
+          focus={reviewFocus}
+          people={[
+            ...(viewerDisplayName ? [{
+              username: viewerUsername, display_name: viewerDisplayName,
+            }] : []),
+            ...reviewPeople.filter((person) => person.username !== viewerUsername),
+          ]}
           reworkChoice={workspaceReworkChoice}
           canDecide={canOperate}
           onLocate={(item) => {
@@ -1773,9 +1819,10 @@ export function TaskWorkspace({
                 artifact={TASK_REQUIREMENT_ARTIFACT}
                 fallbackFile="需求原文"
                 kind="doc"
-                items={notes}
+                items={locatableNotes}
                 enabled={canCreateAnnotation}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
+                onOpenAnnotations={openAnnotationReview}
               >
                 <article className="requirement-source">
                   <div className="requirement-source-label">
@@ -1964,9 +2011,10 @@ export function TaskWorkspace({
                 artifact={active}
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
-                items={notes}
+                items={locatableNotes}
                 enabled={canCreateAnnotation}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
+                onOpenAnnotations={openAnnotationReview}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
@@ -2334,9 +2382,9 @@ export function TaskWorkspace({
                 {taskReviews.slice(0, 3).map((review) => (
                   <span key={review.id}>
                     <i className={review.status} aria-hidden />
-                    <strong>{userLabel(committers.find((user) =>
-                      user.username === review.committer)
-                      ?? { username: review.committer })}</strong>
+                    <strong>{committers.find((user) =>
+                      user.username === review.committer)?.display_name
+                      ?? review.committer}</strong>
                     <small>{review.status === "completed" ? "已完成检视"
                       : review.delivered ? "等待检视" : "通知未送达"}</small>
                   </span>
