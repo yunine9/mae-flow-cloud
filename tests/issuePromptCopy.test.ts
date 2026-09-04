@@ -22,7 +22,7 @@ test("文案目录挂载:三个文件全部加载,锚点按域分布", () => {
   // 高频锚点抽检:契约/催办/单号门禁在,少一个都是让 Agent 裸奔。
   for (const key of [
     "opening.fixed.contract",
-    "opening.free.contract",
+    "opening.resume.header",
     "notices.nudge.body",
     "receipts.push.no_ticket",
     "receipts.stage.closed",

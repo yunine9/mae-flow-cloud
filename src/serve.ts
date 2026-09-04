@@ -850,8 +850,6 @@ async function main(): Promise<void> {
     // 必须等统一容器清扫完成后再恢复并点火；否则构造期恢复出的新 issue
     // 容器可能被紧随其后的“上次进程孤儿清扫”误杀。
     deferRecovery: true,
-    // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
-    issueFlowMode: (account) => auth.issueFlowMode(account),
     // 月光免审批(人工介入程度的过程轴,现读现判):分析结论闸代答。
     moonlight: (account) => auth.moonlightEnabled(account),
     // 推送前过目(人工介入程度的交付轴,现读现判):push_branch 举卡

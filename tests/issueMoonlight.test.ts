@@ -110,7 +110,6 @@ test("月光开:有单分析闸全量代答,自动确认进问题修改", async 
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => true,
   });
   try {
@@ -156,7 +155,6 @@ test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async (
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => true,
   });
   try {
@@ -207,7 +205,6 @@ test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律
     await model.start();
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      issueFlowMode: () => "fixed",
       ...(item.moonlight === undefined
         ? {} : { moonlight: () => item.moonlight }),
     });
@@ -239,7 +236,7 @@ test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律
 
 test("提示层:开场词与续聊词按月光现值渲染介入节奏", () => {
   const state = {
-    id: "issue-1", mode: "fixed", scenario: "ticket", stage: "analyze",
+    id: "issue-1", scenario: "ticket", stage: "analyze",
     title: "登录超时", description: "", account: "dev", ticket: TICKET,
   } as unknown as IssueSessionState;
   const on = issueFixedOpeningPrompt(state, {}, { moonlight: true });
@@ -309,8 +306,7 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
     ...baseOptions(dataDir, model),
     notifier,
     linkBase: LINK_BASE,
-    // 自由模式同享:无平台闸,Agent 卡代答是月光在自由模式唯一的硬牙齿。
-    issueFlowMode: () => "free",
+    // 固定流程同享:有单登记不拦,开场即举 Agent 卡,代答牙齿照硬。
     moonlight: () => true,
   });
   try {
@@ -402,7 +398,6 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-hold-"));
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      issueFlowMode: () => "free",
       ...(item.moonlight === undefined
         ? {} : { moonlight: () => item.moonlight }),
     });
@@ -465,7 +460,6 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "fixed",
     moonlight: () => true,
   });
   try {
@@ -539,7 +533,6 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
       async fetchLogs() { return { summary: "测试假件" }; },
       async buildDeploy() { return { summary: "测试假件" }; },
     },
-    issueFlowMode: () => "fixed",
     moonlight: () => true,
   });
   try {
@@ -587,7 +580,6 @@ test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定
   let moon = false;
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    issueFlowMode: () => "free",
     moonlight: () => moon,
   });
   try {

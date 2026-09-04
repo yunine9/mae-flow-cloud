@@ -132,9 +132,10 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       moonlight: true,
       // push 前清单过目:真人缺省即开(2026-08-26 拍板)。
       push_confirmation: true,
-      // 问题处理探索方式:缺省固定流程(2026-08-27 拍板)。
-      issue_flow: "fixed",
     });
+    // 自由探索入口已下线(#97):会话视图不再携带 issue_flow 字段。
+    assert.equal("issue_flow" in aliceView, false,
+      "登录视图不得再有探索方式字段");
     assert.doesNotMatch(alice.text,
       /alice-codehub-secret|alice-luban-secret|bob-codehub-secret|bob@example/,
       "登录响应不得泄露本人明文或他人配置");
@@ -157,7 +158,6 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       luban_token_hint: "••••cret",
       moonlight: false,
       push_confirmation: true,
-      issue_flow: "fixed",
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
@@ -174,6 +174,15 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     });
     assert.equal(users.status, 403,
       "普通开发不能借账号管理接口读取其他用户信息");
+
+    // 探索方式设置端点已下线(#97):PUT /auth/me/issue-flow 必须是 404,
+    // 任何人都不能再切换/产生新的自由模式会话。
+    const issueFlowSetting = await fetch(`${base}/auth/me/issue-flow`, {
+      method: "PUT", headers: { cookie: alice.cookie },
+      body: JSON.stringify({ mode: "free" }),
+    });
+    assert.equal(issueFlowSetting.status, 404,
+      "探索方式端点已下线,必须 404");
 
     const candidates = await fetch(`${base}/auth/collaboration-assignees`, {
       headers: { cookie: bob.cookie },

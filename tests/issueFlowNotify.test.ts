@@ -82,7 +82,6 @@ test("Agent 举卡等决策:通知归属用户,载荷钉死;恢复不重复,正�
     // linkBase 带尾斜杠:链接拼接必须归一,不出现双斜杠。
     notifier,
     linkBase: `${LINK_BASE}/`,
-    issueFlowMode: () => "free",
   });
   try {
     const created = service.create({
@@ -114,7 +113,6 @@ test("Agent 举卡等决策:通知归属用户,载荷钉死;恢复不重复,正�
       ...baseOptions(dataDir, model),
       notifier,
       linkBase: LINK_BASE,
-      issueFlowMode: () => "free",
     });
     const after = restarted.get(created.id);
     assert.equal(after.status, "waiting_user", "恢复不重跑等待卡");
@@ -158,7 +156,6 @@ test("平台闸卡:通知用人话 label 不带决策码,waiting_id 用 gate.id"
     ...baseOptions(mkdtempSync(join(tmpdir(), "mfc-issue-notify-")), model),
     notifier,
     linkBase: LINK_BASE,
-    issueFlowMode: () => "fixed",
   });
   try {
     const created = service.create({
@@ -210,7 +207,6 @@ test("notifier 缺席(未配置):举卡照常等待,不炸不通知", async () =
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(mkdtempSync(join(tmpdir(), "mfc-issue-notify-")), model),
-    issueFlowMode: () => "free",
   });
   try {
     const created = service.create({

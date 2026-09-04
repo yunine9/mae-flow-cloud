@@ -2,10 +2,10 @@
  * 问题会话的状态模型(问题流 v2)。
  *
  * 问题流与需求内核是两个范式:内核是固定阶段状态机,真相在
- * .mae-flow.json;问题流是"AI 按 playbook 自主编排的多轮对话",
- * 平台只承载运行与显示。这里的状态文件是问题域自己的账本——
- * 阶段由 Agent 通过 report_stage 工具上报,宿主只做枚举校验,
- * 不推断(显示层 fail-open,与"前端不推断状态"同一纪律)。
+ * .mae-flow.json;问题流是"AI 在阶段内自主作业的多轮对话",
+ * 平台承载阶段机与运行显示。这里的状态文件是问题域自己的账本——
+ * 阶段真相在宿主(fixedAdvance 等机械操作是唯一写手,Agent 对
+ * issue.json 只读),显示层 fail-open(与"前端不推断状态"同一纪律)。
  *
  * 秘密纪律:issue.json 里永远只有环境引用(id),密码在
  * IssueEnvironmentVault 的加密文件里;API/模型/事件流同此。
@@ -23,8 +23,6 @@ import type { FeedbackRecord } from "../feedbackStore.ts";
 import { IssueControlError } from "./errors.ts";
 import { validateRepoUrl } from "./issueGit.ts";
 import {
-  FIXED_NO_TICKET_STAGES,
-  FIXED_TICKET_STAGES,
   fixedStageIndex,
   fixedStages,
   GATE_OPTIONS,
@@ -60,50 +58,8 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
-/** 问题处理探索方式(2026-08-27 领导拍板):固定流程=宿主权威阶段机
- * +工具门禁;自由探索=AI 按 playbook 自主编排(本文件里 ISSUE_STAGES
- * 那套)。模式在会话创建时烙印,进行中会话不迁移——个人设置切换只
- * 影响新会话,这是"一键切换回来"承诺的底座。缺省视为 free(旧会话)。 */
-export type IssueFlowMode = "fixed" | "free";
-
-/** 固定流程的两大场景:有单走六阶段,无单走三节点(结论后可挂起)。 */
+/** 固定流程的两大场景:有单走五阶段,无单走三节点(结论后可挂起)。 */
 export type IssueScenario = "ticket" | "no_ticket";
-
-/** Agent 上报的处理阶段(2026-08-27 用户拍板的词表)。流程动态:阶段
- * 可跳过、可回退(用户推翻结论继续查是正当的),平台只校验词表不排
- * 顺序。done ≠ 归档——它只表达"AI 已给出结论",正式收口走归档。 */
-export const ISSUE_STAGES = [
-  "registered",     // 已登记,尚未开工(平台写入,Agent 不上报)
-  "fetch_detail",   // 获取 DTS 详情
-  "align_issue",    // 对齐问题
-  "locate_root",    // 分析根因
-  "align_solution", // 对齐方案
-  "modify_code",    // 实施修改
-  "switch_db",      // 换库
-  "verify",         // 验证
-  "submit_mr",      // 提交 MR
-  "done",           // 结束(AI 已给出结论;收口归档是另一个动作)
-] as const;
-
-export type IssueStage = (typeof ISSUE_STAGES)[number];
-
-export const STAGE_LABELS: Record<IssueStage, string> = {
-  registered: "已登记",
-  fetch_detail: "获取 DTS 详情",
-  align_issue: "对齐问题",
-  locate_root: "分析根因",
-  align_solution: "对齐方案",
-  modify_code: "实施修改",
-  switch_db: "换库",
-  verify: "验证",
-  submit_mr: "提交 MR",
-  done: "问题闭环",
-};
-
-// ---- 固定流程阶段词表:定义与规则在阶段注册表(stageRegistry.ts) ----
-
-/** 自由/固定两套词表共用 state.stage 字段。 */
-export type AnyIssueStage = IssueStage | FixedStage;
 
 /** 固定流程单个阶段的执行状态(inherited=转正继承,redo=回退待重做)。 */
 export type StageState =
@@ -121,27 +77,13 @@ export function initStageStates(
     index < inherited ? "inherited" : "pending");
 }
 
-/** 2026-08-27 换词表前的旧值 → 新值。只在做读取迁移用,新代码不产旧值。 */
-const LEGACY_STAGES: Record<string, IssueStage> = {
-  ticket_fetched: "fetch_detail",
-  logs_fetched: "locate_root",
-  analyzing: "locate_root",
-  aligning: "align_solution",
-  implementing: "modify_code",
-  committing: "modify_code",
-  deploying: "switch_db",
-  verifying: "verify",
-  submitting_mr: "submit_mr",
-  concluded: "done",
-};
-
 /** 阶段转移日志:Agent 声明(source=agent)与平台机械事实(source=
  * platform,如推送成功/建 MR/绑单号)同账收记,各是各的真相——显示层
  * 只认 state.stage,这里只服务审计与排障("为什么卡在对齐方案三小时")。 */
 export interface StageTransition {
   at: string;
   source: "agent" | "platform";
-  stage?: AnyIssueStage;
+  stage?: FixedStage;
   note: string;
 }
 
@@ -202,7 +144,7 @@ export type IssueGateKind =
   | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
   | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
-                       // 确认产一次性令牌放行一次推送;不绑阶段(两模式同过)。
+                       // 确认产一次性令牌放行一次推送;不绑阶段。
   | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
                        // 月光关档由归属人圈定业务仓 skill 必读集合;
                        // 作答走 selection 专用口(与 env_needed 表单同款)。
@@ -401,9 +343,7 @@ export interface IssueSessionState {
    * (AI 运行时自己绑的可改绑,维持现状)。 */
   module_locked?: true;
   environment?: IssueEnvironmentConfig;
-  /** 探索方式:创建时烙印,会话中途不换。缺省视为 free(兼容旧会话)。 */
-  mode?: IssueFlowMode;
-  /** 固定流程的场景(fixed 模式必有)。 */
+  /** 固定流程的场景。 */
   scenario?: IssueScenario;
   /** 固定流程每阶段执行状态,与 scenario 阶段表对齐。 */
   stage_states?: StageState[];
@@ -439,7 +379,7 @@ export interface IssueSessionState {
    * 引用静默缺省。 */
   inherited_accounts?: { issue: string };
   status: IssueStatus;
-  stage: AnyIssueStage;
+  stage: FixedStage;
   stage_note: string;
   stage_at: string;
   /** 阶段转移审计日志(Agent 声明 + 平台机械事实)。只增不改。 */
@@ -550,11 +490,6 @@ export function loadState(root: string): IssueSessionState | undefined {
   const path = join(root, "issue.json");
   if (!existsSync(path)) return undefined;
   const state = JSON.parse(readFileSync(path, "utf-8")) as IssueSessionState;
-  // 旧词表迁移:在途问题带着旧阶段键落盘过,读进来就换成新键,
-  // 不让显示层到处兜旧值。固定/自由两套词表都认。
-  if (state.stage && !validStage(state.stage)) {
-    state.stage = LEGACY_STAGES[state.stage] ?? "registered";
-  }
   // 多仓迁移:repo_urls 是权威清单,repo_url 是单仓时代的兼容别名。
   // 老会话只有单仓字段,读进来就补齐另一侧,消费方不用两头兜底。
   if (state.repo_urls?.length) {
@@ -610,16 +545,16 @@ export function isTerminal(status: IssueStatus): boolean {
   return status === "archived" || status === "canceled" || status === "failed";
 }
 
-/** 催办谓词(fixed 模式):回合正常收口时,流程还没走到"可以停"的程度吗?
+/** 催办谓词:回合正常收口时,流程还没走到"可以停"的程度吗?
  * 四种情况算"可以停",不催:
+ * - 会话没有场景阶段(转正前的存量现场,停机合法性无从机械判定,不催);
  * - 当前阶段已收口(stage_states 里本阶段 done——如环境验证通过待归档);
  * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
  * - MR 验绿门已受理申报(mr_green 阶段 complete_stage 申报后等绿,
- *   同"停等流水线"的合法停机;推进/回退即清,不会滞留);
- * - 自由模式(无阶段真相,停机合法性无从机械判定,不催)。
+ *   同"停等流水线"的合法停机;推进/回退即清,不会滞留)。
  * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
 export function shouldNudgeFixed(state: IssueSessionState): boolean {
-  if (state.mode !== "fixed" || !state.scenario) return false;
+  if (!state.scenario) return false;
   const index = fixedStageIndex(state.scenario, state.stage as FixedStage);
   if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {
     return false;
@@ -631,17 +566,6 @@ export function shouldNudgeFixed(state: IssueSessionState): boolean {
   }
   if (state.mr_gate) return false;
   return true;
-}
-
-/** 阶段上报的宿主侧校验:自由/固定两套词表之外的值原样打回,不猜。 */
-export function validStage(value: string): AnyIssueStage | undefined {
-  if ((ISSUE_STAGES as readonly string[]).includes(value)) {
-    return value as IssueStage;
-  }
-  const fixed = [
-    ...FIXED_TICKET_STAGES, ...FIXED_NO_TICKET_STAGES,
-  ] as readonly string[];
-  return fixed.includes(value) ? value as FixedStage : undefined;
 }
 
 /** 追加一条转移日志(只增不改;调用方负责随 saveState 落盘)。 */

@@ -331,7 +331,7 @@ test("工具级锁:锁定会话 bind_module 被拒;未锁会话可绑可改绑(�
     id: "issue-x", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: "DTS20260901013",
-    mode: "fixed" as const, scenario: "ticket" as const, round: 1,
+    scenario: "ticket" as const, round: 1,
     stage_states: FIXED_TICKET_STAGES.map(() => "pending" as const),
     status: "idle" as const, stage: "prep_repo" as const,
     stage_note: "", stage_at: now,

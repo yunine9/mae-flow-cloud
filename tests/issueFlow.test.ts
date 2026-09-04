@@ -25,13 +25,12 @@ import {
 
 test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
   const expected = [
-    "issue-analysis", "issue-delivery", "issue-ops", "issue-playbook",
-    "issue-research",
+    "issue-analysis", "issue-delivery", "issue-ops", "issue-research",
   ];
   const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-"));
   const first = materializeIssueSkills(workspace);
   assert.deepEqual(first.map((path) => path.split("/").at(-2)), expected,
-    "五个改编技能必须齐装;少一个等于 Agent 少一条行为规矩");
+    "四个改编技能必须齐装;少一个等于 Agent 少一条行为规矩");
   for (const path of first) {
     const body = readFileSync(path, "utf-8");
     assert.match(body, /^---\nname: [^\n]+\ndescription: [^\n]+\n/,

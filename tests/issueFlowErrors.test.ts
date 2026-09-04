@@ -132,7 +132,7 @@ function seedSuspendedSession(dataDir: string): void {
     id: "issue-1", account: "dev",
     created_at: "2026-08-28T08:00:00Z", updated_at: "2026-08-28T09:00:00Z",
     title: "t", description: "", source: "manual",
-    mode: "fixed", scenario: "no_ticket",
+    scenario: "no_ticket",
     status: "suspended", stage: "conclude", stage_note: "",
     stage_at: "2026-08-28T09:00:00Z",
   }));

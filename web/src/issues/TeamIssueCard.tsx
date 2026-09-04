@@ -22,8 +22,7 @@ export function TeamIssueCard({ issue, onOpen }: {
   const [expanded, setExpanded] = useState(false);
   const stageLine = [
     issueStageText(issue),
-    issue.mode === "fixed" && issue.round && issue.round > 1
-      ? ` · 第 ${issue.round} 轮` : "",
+    issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
     issue.stage_note ? ` · ${issue.stage_note}` : "",
   ].join("");
 

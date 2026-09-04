@@ -98,9 +98,6 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
-  /** 问题处理探索方式:"fixed" 固定流程(缺省)/"free" 自由探索。
-   * 只烙印新会话,进行中会话不迁移。 */
-  issue_flow?: "fixed" | "free";
 }
 
 export interface CollaborationAssignee {
@@ -233,19 +230,6 @@ export async function putPersonalPushConfirmation(
   const response = await fetch("/auth/me/push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
-}
-
-/** 问题处理探索方式(固定流程/自由探索)。缺省固定流程;只影响
- * 新建的问题会话。 */
-export async function putIssueFlowMode(
-  mode: "fixed" | "free",
-): Promise<AuthUser> {
-  const response = await fetch("/auth/me/issue-flow", {
-    method: "PUT",
-    body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -3396,34 +3380,8 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   failed: "出错了",
 };
 
-export type IssueStage =
-  | "registered"
-  | "fetch_detail"
-  | "align_issue"
-  | "locate_root"
-  | "align_solution"
-  | "modify_code"
-  | "switch_db"
-  | "verify"
-  | "submit_mr"
-  | "done";
+// ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----
 
-export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
-  registered: "已登记",
-  fetch_detail: "获取 DTS 详情",
-  align_issue: "对齐问题",
-  locate_root: "分析根因",
-  align_solution: "对齐方案",
-  modify_code: "实施修改",
-  switch_db: "换库",
-  verify: "验证",
-  submit_mr: "提交 MR",
-  done: "问题闭环",
-};
-
-// ---- 固定流程(2026-08-27 拍板;自由探索那套词表原样保留) ----
-
-export type IssueFlowMode = "fixed" | "free";
 export type IssueScenario = "ticket" | "no_ticket";
 export type FixedIssueStage =
   | "dts_info"
@@ -3432,8 +3390,6 @@ export type FixedIssueStage =
   | "fix"
   | "mr_green"
   | "conclude";
-
-export type AnyIssueStage = IssueStage | FixedIssueStage;
 
 /** 五阶段(2026-09-02 拍板:换库验证封存下线,流程终点=MR 跑绿)。 */
 export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
@@ -3459,16 +3415,13 @@ const LEGACY_STAGE_TEXT: Record<string, string> = {
   deploy_verify: "换库环境验证(已下线)",
 };
 
-/** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
- * (旧现场/异键)原样示人——前端不猜)。 */
+/** 阶段中文名(固定流程词表;对不上(旧现场/异键)原样示人——前端不猜)。 */
 export function issueStageText(issue: {
-  mode?: IssueFlowMode;
   scenario?: IssueScenario;
-  stage: AnyIssueStage;
+  stage: FixedIssueStage;
 }): string {
-  return FIXED_STAGE_TEXT[issue.stage as FixedIssueStage]
+  return FIXED_STAGE_TEXT[issue.stage]
     ?? LEGACY_STAGE_TEXT[issue.stage]
-    ?? ISSUE_STAGE_TEXT[issue.stage as IssueStage]
     ?? String(issue.stage);
 }
 
@@ -3580,7 +3533,6 @@ export interface IssueSummary {
     page_account?: string;
     page_credential_ref?: string;
   };
-  mode?: IssueFlowMode;
   scenario?: IssueScenario;
   stage_states?: IssueStageState[];
   round?: number;
@@ -3632,7 +3584,7 @@ export interface IssueSummary {
    * 静默缺省(仓卡退回现状)。 */
   inherited_accounts?: { issue: string };
   status: IssueStatus;
-  stage: AnyIssueStage;
+  stage: FixedIssueStage;
   stage_note: string;
   /** 当前阶段的进入时刻(ISO)。 */
   stage_at: string;
@@ -3651,7 +3603,7 @@ export interface IssueSummary {
   mrs?: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
   /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
   transitions?: Array<{
-    at: string; source: "agent" | "platform"; stage?: AnyIssueStage; note: string;
+    at: string; source: "agent" | "platform"; stage?: FixedIssueStage; note: string;
   }>;
   error?: string;
   last_reply?: string;

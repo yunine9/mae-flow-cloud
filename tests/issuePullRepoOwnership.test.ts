@@ -67,7 +67,7 @@ function handcraftLive(service: IssueFlowService, root: string, origin: string):
     updated_at: new Date().toISOString(),
     title: "属主交接回归", description: "", source: "dts",
     ticket: TICKET, repo_url: origin, repo_urls: [origin],
-    mode: "fixed", scenario: "ticket", round: 1,
+    scenario: "ticket", round: 1,
     stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
     status: "idle", stage: "prep_repo", stage_note: "",
     stage_at: new Date().toISOString(),

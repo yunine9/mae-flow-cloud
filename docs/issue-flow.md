@@ -10,16 +10,10 @@
 提交→换库→验证→提MR 的原子能力菜单)。平台做三件事:**承载运行、
 显示阶段、守住门禁**。
 
-## 探索方式:固定流程 / 自由探索(2026-08-27 领导拍板)
+## 固定流程:宿主权威阶段机 + 工具门禁(方案 B)
 
-个人设置(「个人设置 → 问题处理探索方式」,缺省**固定流程**)决定
-**新会话**的烙印;进行中会话不迁移。自由探索路径从未被删改——这就是
-"将来一键切回"的保证。`mode` 落盘在 issue.json,旧现场缺字段读作自由。
-
-### 固定流程:宿主权威阶段机 + 工具门禁(方案 B)
-
-一个连续会话贯穿到底,但**阶段真相在宿主**(固定模式不注册
-report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶段
+一个连续会话贯穿到底,但**阶段真相在宿主**:目标驱动自报推进
+(2026-08-28 拍板,ADR 0002)——每阶段
 声明目标与唯一出口,拉单/拉仓/修复/提交MR 四个阶段由 AI 判断达成后
 调 `complete_stage` 自报收口(平台不核实工作事实),问题分析/无单结论
 两阶段的出口是卡工具本身(卡即出口,没有 complete_stage 可绕)。
@@ -87,11 +81,6 @@ issue-analysis.md,免二次克隆)、环境凭据(vault 复制后销毁旧的),
 会话的身份(分支名/MR/台账都带)。两段式接口:`POST /issues/:id/
 associate {ticket, confirm?}`。
 
-### 自由探索
-
-原范式不变:AI 按 playbook 自主编排,`report_stage` 上报阶段,阶段可
-跳可回,绑定单号随时绑/解(bindTicket),人工闸交给 AskUserQuestion。
-
 ## 生命周期
 
 - 登记有两个独立入口。**手工登记只用于无单问题**:标题、现象描述、
@@ -114,8 +103,8 @@ associate {ticket, confirm?}`。
   下载(#42,内容哈希去重、失败标记不再重试),前端展示仍走
   `/issues/dts-file` 代理,转正/导出不携带这些二进制)。
 - 三条用户输入通道,全部复用 CloudSession 原语:
-  - **问题卡作答**:AI 用 AskUserQuestion 挂起(自由模式的人工闸门),
-    或平台闸(固定模式,同组件渲染);页面选项/自由作答后回合续跑;
+  - **问题卡作答**:AI 用 AskUserQuestion 挂起,或平台闸(同组件
+    渲染);页面选项/自由作答后回合续跑;
     手机端同权(2026-09-02,与需求侧手机审批同一网关):等待卡(闸
     优先)经适配层(`src/issueFlow/lubanApproval.ts`)进小鲁班审批册,
     通知审批码与网关派码同源,裸序号/审批码回复翻译回 `answer()` 的
@@ -141,11 +130,8 @@ associate {ticket, confirm?}`。
 
 ## 阶段显示
 
-自由模式:阶段由 AI 通过 `report_stage` 工具**上报**(枚举 + 一句话
-note),宿主校验落 `issue.json`,前端纯镜像不推断。
-
-固定模式:阶段进度条(计划线,per-stage 状态:pending/in_progress/
-done/inherited/redo)+ 旅程线(transitions 账)并存。真相链:
+阶段进度条(计划线,per-stage 状态:pending/in_progress/
+done/inherited/redo);阶段转移账进 events,事件流可回放。真相链:
 `issue.json` + `events.jsonl`(SSE 尾随与任务侧同款)。
 
 ## 安全边界(比照需求流的同款纪律)
@@ -177,13 +163,12 @@ done/inherited/redo)+ 旅程线(transitions 账)并存。真相链:
 
 ## 宿主工具与会话技能
 
-自由模式工具(会话内):`report_stage` / `fetch_logs`(宿主跑
+会话工具:`fetch_logs`(宿主跑
 fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
-(宿主跑 build-deploy,成功哨兵校验)/ `dts_get_ticket` / `push_branch`
+(宿主跑 build-deploy,成功哨兵校验;换库验证封存期间无阶段开放,调用
+一律被门禁拒绝)/ `dts_get_ticket` / `push_branch`
 / `create_mr`(经公共 mrClient → 交付平台适配层 → codehub CLI,
-单号自动关联)。
-
-固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
+单号自动关联)/ `submit_analysis`(提交分析/
 结论,以报告在场且五章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
 只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
 修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
@@ -193,8 +178,7 @@ create_mr 仅 mr_green,push_branch 自 fix 起,submit_analysis 仅
 analyze,report_ut 仅 fix;build_deploy 因换库验证封存(ADR-0013)无
 阶段开放,调用一律被阶段门禁拒绝,执行体原地保留待重启。
 
-技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
-图)、issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
+技能(每次会话物化到 `skills/`):issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
 规范/报告五章节)、issue-research(研究方法与非问题出口,方法论兜底)、
 issue-delivery(分支/提交格式 `[单号][类型] 描述`/推送/MR)、
 issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
@@ -245,8 +229,7 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
   「月光免审批自动作答(推荐项:…)」,小鲁班通知照发;开放题卡、
   混卡(选项题+开放题)、检视回合的卡整卡等人,不做半卡代答;盘上
   有平台闸时仍闸优先,轮不到 Agent 卡;只在卡落地的收口时刻判定
-  一次,已挂起的卡不追溯代答。自由模式同享(它无平台闸,这是月光
-  在自由模式唯一的硬牙齿);
+  一次,已挂起的卡不追溯代答;
 - **提示层**:开场词/续聊词按月光现值渲染「介入节奏」(月光档少问、
   不做中间简报、报告写到自足;把关档主动问、每轮循环给简报);
   `submit_analysis` 增可选 confidence 自报字段供无单分级消费,
@@ -255,8 +238,8 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 ### 推送前过目(2026-08-31,ADR-0009)
 
 个人设置的交付轴(push_confirmation,真人缺省即开)现读现判接入问题
-流,push_branch 在执行前置检查过这道工具级硬闸(固定/自由两模式同过,
-与阶段门禁正交;create_mr 不另设闸——分支唯一出门口是 push_branch):
+流,push_branch 在执行前置检查过这道工具级硬闸(与阶段门禁正交;
+create_mr 不另设闸——分支唯一出门口是 push_branch):
 
 - **过目开且无令牌**:git push 不执行,举起 `push_confirm` 平台闸
   (选项「确认推送/暂不推送」,推荐=确认推送),卡上带服务端现查
@@ -368,7 +351,7 @@ Annotatable 同一套:块级 `data-l` 锚点、行尾 ✎、原地输入框「�
 `src/annotations.ts`,artifact 恒为分析报告,新增通道 `issue_review`)。
 
 - **对象只有分析报告**:代码层面的意见走工作区变更的"请 AI 复核";
-  自由模式没有阶段机可退,不提供检视(直接发消息补充)。
+  转正后的会话不可再检视。
 - **提交 = 整体回退的人工触发源**:攒批一次「提交 N 条意见并重跑
   分析」,页面层轻量确认列明后果;服务端把门(固定流程/未终态/
   分析段非转正继承/检视回合不可叠加/状态在 waiting_user 或 idle)。

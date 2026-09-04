@@ -132,7 +132,7 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
   assert.equal(stageGateRoute("env_needed"), undefined,
     "环境闸不绑阶段(作答口是配置表单,不走选项裁决)");
   assert.equal(stageGateRoute("push_confirm"), undefined,
-    "推送过目闸不绑阶段(push_branch 的工具级硬闸,两模式同过)");
+    "推送过目闸不绑阶段(push_branch 的工具级硬闸)");
 });
 
 test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, code)", () => {
@@ -219,7 +219,7 @@ test("生成等价性对账:同一注册表生成的简报与门禁,工具清单
       id: "issue-registry", account: "dev",
       created_at: now, updated_at: now,
       title: "t", description: "", source: "dts", ticket: "T1",
-      repo_url: "/tmp/x.git", mode: "fixed", scenario, round: 1,
+      repo_url: "/tmp/x.git", scenario, round: 1,
       stage_states: STAGE_ROUTES[scenario].map(() => "pending"),
       status: "running", stage, stage_note: "", stage_at: now,
     };
