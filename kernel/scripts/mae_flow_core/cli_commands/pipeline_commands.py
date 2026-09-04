@@ -119,7 +119,8 @@ def cmd_pipeline(flow, st, args):
                        and str(item.get("batch_id") or "") == active_id), None)
         if active and active.get("status") == "awaiting_verification":
             if not trusted_active_batch(
-                    st, ("feedback-result", "pipeline-record")):
+                    st, ("feedback-result", "pipeline-record",
+                         "selection-reconcile")):
                 api.die("pipeline record 拒绝核销未经宿主收据背书的反馈结果", 2)
     head = api.sh("git rev-parse --verify HEAD")
     at = time.strftime("%Y-%m-%d %H:%M:%S")

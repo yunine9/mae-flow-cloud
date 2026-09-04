@@ -17,6 +17,9 @@ const environmentVault = readFileSync(resolve("src/issueEnvironment.ts"), "utf-8
 const issueService = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
 const issuePrompt = readFileSync(resolve("src/issueFlow/prompt.ts"), "utf-8");
 const issueTools = readFileSync(resolve("src/issueFlow/tools.ts"), "utf-8");
+const appSource = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+const issueBoard = readFileSync(
+  resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
 
@@ -442,6 +445,32 @@ test("团队看板问题卡片入口行为不变:点击即进,不含归属判断
   assert.match(teamCard, /进入问题工作台/);
   // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
   assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
+});
+
+test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发者", () => {
+  // App 层:问题视图不再按角色拒绝渲染(admin 点团队问题卡不再白屏);
+  // 深链 /issues/:id 对 admin 也切视图;「去个人设置配置」跳转仅开发者。
+  assert.doesNotMatch(appSource,
+    /view === "issues" && session\.role !== "admin"/);
+  assert.doesNotMatch(appSource,
+    /issueId && session\?\.role !== "admin"/);
+  assert.match(appSource,
+    /onNavigateProfile=\{session\.role !== "admin" \? /);
+  // admin 侧栏常驻问题处理入口(管理视角分组内)。
+  const adminNav = appSource.slice(
+    appSource.indexOf('session.role === "admin" ? <>'),
+    appSource.indexOf("</> : <>"));
+  assert.ok(adminNav.includes('view="issues"'), "admin 侧栏缺问题处理入口");
+  // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题分「我的/全部」。
+  assert.match(issueBoard,
+    /viewer\.role !== "admin" && <IssueRegistration/);
+  assert.match(issueBoard,
+    /viewer\.role === "admin" \? "全部问题" : "我的问题"/);
+  // 会话工作台的查看模式边界不变:写口仍按归属人判定(admin 旁观不写)。
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  assert.match(sessionView,
+    /const canOperate = !viewerUsername \|\| viewerUsername === detail\.account/);
 });
 
 test("单号处处可选中复制:DTS 行单号独立于勾选 label,user-select 强制放开", () => {

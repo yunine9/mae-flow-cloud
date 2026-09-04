@@ -272,7 +272,7 @@ BUILD_SCRIPT_EXTS = source_paths.BUILD_SCRIPT_EXTENSIONS
 BUILD_ARTIFACT_STRONG_SUFFIXES = (
     ".o", ".obj", ".pyc", ".pyo", ".class", ".gcda", ".gcno",
     ".profraw", ".profdata", ".ilk", ".tlog", ".lastbuildstate",
-    ".ninja_deps", ".ninja_log",
+    ".ninja_deps", ".ninja_log", ".log",
 )
 
 BUILD_ARTIFACT_STRONG_NAMES = {

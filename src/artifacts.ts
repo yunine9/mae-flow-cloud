@@ -90,6 +90,12 @@ export interface ArtifactMeta {
    * 不能把后面的文件从目录树里挤掉；正文由页面点文件后按需读取。
    */
   change_files?: ArtifactChangeFile[];
+  /**
+   * Git 报告的未跟踪目录根。列表接口只返回目录本身，不能用
+   * `--untracked-files=all` 把一次编译产生的数万文件塞进页面；用户
+   * 展开目录时再通过分页接口读取下一层。
+   */
+  untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
   purpose?: "pipeline_evidence_gap";
 }
@@ -102,6 +108,27 @@ export interface ArtifactChangeFile {
   stage: ArtifactChangeStage;
   additions: number;
   deletions: number;
+}
+
+export interface ArtifactChangeDirectory {
+  path: string;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryEntry {
+  path: string;
+  kind: "file" | "directory";
+  /** 目录下包含的未跟踪文件总数；文件恒为 1。 */
+  file_count: number;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryPage {
+  path: string;
+  entries: ArtifactChangeDirectoryEntry[];
+  total_entries: number;
+  total_files: number;
+  next_offset?: number;
 }
 
 export interface ArtifactFileDiff {
@@ -725,7 +752,10 @@ function numstatByPath(text: string): Map<string, {
  */
 async function collectDiffManifestAsync(
   cwd: string,
-): Promise<ArtifactChangeFile[] | undefined> {
+): Promise<{
+  files: ArtifactChangeFile[];
+  untrackedDirectories: ArtifactChangeDirectory[];
+} | undefined> {
   const toplevel = (await gitAsync(cwd, ["rev-parse", "--show-toplevel"]))
     ?.trim();
   let sameRoot = false;
@@ -736,7 +766,10 @@ async function collectDiffManifestAsync(
   }
   if (!sameRoot) return undefined;
   const [status, baseline] = await Promise.all([
-    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all"]),
+    // `all` 会把 target/build 等目录里的每个编译产物逐条展开。一个
+    // 正常 C++ 构建即可制造数万行 JSON 和 DOM；`normal` 保留真实
+    // 文件，同时把全新目录表示成一个可按需展开的根节点。
+    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=normal"]),
     taskBaselineAsync(cwd),
   ]);
   if (status === undefined) return undefined;
@@ -748,15 +781,27 @@ async function collectDiffManifestAsync(
   ]);
   const committed = new Set(uniqueBusinessPaths(
     String(committedText ?? "").split("\n")));
+  const statusLines = status.split("\n");
   const statuses = statusEntries(status);
-  const untracked = new Set(changedPaths(status.split("\n")
-    .filter((line) => line.startsWith("??")).join("\n")));
+  const untrackedLines = statusLines.filter((line) => line.startsWith("??"));
+  const untrackedDirectories = uniqueBusinessPaths(untrackedLines
+    .map((line) => line.slice(3).trim())
+    .filter((path) => path.endsWith("/"))
+    .map((path) => path.replace(/\/$/, ""))
+    .filter((path) => !isFlowControlPath(path)
+      && !isAgentPlatformPath(path)))
+    .map((path) => ({ path, stage: "untracked" as const }));
+  const untracked = new Set(changedPaths(untrackedLines
+    .filter((line) => !line.slice(3).trim().endsWith("/"))
+    .join("\n")));
   const stats = numstatByPath(numstatText ?? "");
   const paths = uniqueBusinessPaths([
     ...committed,
-    ...changedPaths(status),
+    ...changedPaths(statusLines.filter((line) => !line.startsWith("??"))
+      .join("\n")),
+    ...untracked,
   ]);
-  return paths.map((path) => {
+  const files = paths.map((path) => {
     const stat = stats.get(path) ?? { additions: 0, deletions: 0 };
     return {
       path,
@@ -766,6 +811,7 @@ async function collectDiffManifestAsync(
       ...stat,
     };
   });
+  return { files, untrackedDirectories };
 }
 
 /** 本任务变更快照:任务基线到当前工作区,包含已提交、未提交与未跟踪。
@@ -951,16 +997,26 @@ function diffMetaFromSnapshot(
 
 function diffMetaFromManifest(
   cwd: string,
-  changeFiles: ArtifactChangeFile[] | undefined,
+  manifest: Awaited<ReturnType<typeof collectDiffManifestAsync>>,
 ): ArtifactMeta | undefined {
-  if (!changeFiles) return undefined;
-  const changed = changeFiles.map((file) => file.path);
+  if (!manifest) return undefined;
+  const changed = [
+    ...manifest.files.map((file) => file.path),
+    ...manifest.untrackedDirectories.map((directory) => directory.path),
+  ];
   // bytes 在虚拟产物上只用于轻量展示；用清单体积而非生成一份可能数十
   // MiB 的聚合正文。文件内容在点开后单独读取。
-  return diffMetaFromSnapshot(cwd, {
+  const meta = diffMetaFromSnapshot(cwd, {
     text: changed.length ? changed.join("\n") : "本任务暂无代码变更。",
     changed,
-  }, changeFiles);
+  }, manifest.files);
+  if (!meta) return undefined;
+  return {
+    ...meta,
+    file_count: manifest.files.length,
+    ...(manifest.untrackedDirectories.length
+      ? { untracked_directories: manifest.untrackedDirectories } : {}),
+  };
 }
 
 function diffMeta(cwd: string): ArtifactMeta | undefined {
@@ -1113,6 +1169,125 @@ export async function readArtifactAsync(
   }
 }
 
+function safeArtifactRelativePath(cwd: string, input: string): string | undefined {
+  const wanted = String(input ?? "").trim().replace(/\\/g, "/")
+    .replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  if (!wanted || wanted.includes("\0") || wanted.startsWith("/")
+      || wanted.split("/").some((part) => !part || part === "." || part === "..")
+      || isFlowControlPath(wanted) || isAgentPlatformPath(wanted)) {
+    return undefined;
+  }
+  const root = resolve(cwd);
+  const target = resolve(root, wanted);
+  return target.startsWith(root + sep) ? wanted : undefined;
+}
+
+/**
+ * 只核对一个文件是否仍属于当前变更，而不是为了打开一份正文重新扫描
+ * 整个工作区。目录清单可以有数万项，逐文件读取必须保持 O(该路径)。
+ */
+async function changeFileAtPathAsync(
+  cwd: string,
+  wanted: string,
+): Promise<ArtifactChangeFile | undefined> {
+  const [baseline, status, untrackedText] = await Promise.all([
+    taskBaselineAsync(cwd),
+    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all",
+      "--", wanted]),
+    gitAsync(cwd, ["ls-files", "-z", "--others", "--exclude-standard",
+      "--", wanted]),
+  ]);
+  if (status === undefined || untrackedText === undefined) return undefined;
+  const untracked = untrackedText.split("\0").some((path) => path === wanted);
+  if (untracked) {
+    return { path: wanted, stage: "untracked", additions: 0, deletions: 0 };
+  }
+  const [committedText, numstatText] = await Promise.all([
+    baseline
+      ? gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--", wanted])
+      : Promise.resolve(undefined),
+    gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--", wanted]),
+  ]);
+  const committed = new Set(uniqueBusinessPaths(
+    String(committedText ?? "").split("\n")));
+  const statuses = statusEntries(status);
+  if (!committed.has(wanted) && !statuses.has(wanted)) return undefined;
+  const stat = numstatByPath(numstatText ?? "").get(wanted)
+    ?? { additions: 0, deletions: 0 };
+  return {
+    path: wanted,
+    stage: originOf(wanted, committed, statuses),
+    ...stat,
+  };
+}
+
+/**
+ * 展开一个未跟踪目录的下一层。Git 仍负责 `.gitignore` 语义；宿主只
+ * 聚合直接子项并分页，所以即使目录里有六万多个编译产物，HTTP 响应
+ * 和浏览器 DOM 也始终有界。
+ */
+export async function listArtifactChangeDirectoryAsync(
+  cwd: string | undefined,
+  path: string,
+  offset = 0,
+  limit = 200,
+): Promise<ArtifactChangeDirectoryPage | undefined> {
+  if (!cwd) return undefined;
+  const wanted = safeArtifactRelativePath(cwd, path);
+  if (!wanted) return undefined;
+  try {
+    const root = realpathSync(cwd);
+    const target = realpathSync(join(cwd, wanted));
+    if ((target !== root && !target.startsWith(root + sep))
+        || !statSync(target).isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const listed = await gitAsync(cwd, [
+    "ls-files", "-z", "--others", "--exclude-standard", "--", `${wanted}/`,
+  ]);
+  if (listed === undefined) return undefined;
+  const prefix = `${wanted}/`;
+  const nodes = new Map<string, ArtifactChangeDirectoryEntry>();
+  let totalFiles = 0;
+  for (const file of listed.split("\0")) {
+    if (!file.startsWith(prefix) || file === prefix
+        || isFlowControlPath(file) || isAgentPlatformPath(file)) continue;
+    const relative = file.slice(prefix.length);
+    const first = relative.split("/")[0];
+    if (!first) continue;
+    totalFiles += 1;
+    const childPath = `${prefix}${first}`;
+    const directory = relative.includes("/");
+    const existing = nodes.get(childPath);
+    if (existing) {
+      if (directory) existing.file_count += 1;
+      continue;
+    }
+    nodes.set(childPath, {
+      path: childPath,
+      kind: directory ? "directory" : "file",
+      file_count: 1,
+      stage: "untracked",
+    });
+  }
+  if (!totalFiles) return undefined;
+  const entries = [...nodes.values()].sort((left, right) =>
+    left.kind === right.kind
+      ? left.path.localeCompare(right.path)
+      : left.kind === "directory" ? -1 : 1);
+  const pageOffset = Math.max(0, Math.floor(offset));
+  const pageLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const end = Math.min(entries.length, pageOffset + pageLimit);
+  return {
+    path: wanted,
+    entries: entries.slice(pageOffset, end),
+    total_entries: entries.length,
+    total_files: totalFiles,
+    ...(end < entries.length ? { next_offset: end } : {}),
+  };
+}
+
 /**
  * 按完整清单中的一个路径读取正文。请求路径必须先命中 Git 现算清单，
  * 随后才作为 `--` 后的参数交给 Git；既避免路径穿越，也避免浏览器传
@@ -1123,11 +1298,10 @@ export async function readArtifactFileDiffAsync(
   path: string,
 ): Promise<ArtifactFileDiff | undefined> {
   if (!cwd) return undefined;
-  const wanted = String(path ?? "").trim();
+  const wanted = safeArtifactRelativePath(cwd, path);
   if (!wanted) return undefined;
   try {
-    const files = await collectDiffManifestAsync(cwd);
-    const file = files?.find((entry) => entry.path === wanted);
+    const file = await changeFileAtPathAsync(cwd, wanted);
     if (!file) return undefined;
     let raw: string | undefined;
     let heading: string;

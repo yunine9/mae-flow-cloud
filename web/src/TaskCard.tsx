@@ -52,6 +52,7 @@ export function TaskCard({
   focused = false,
   canOperate = true,
   decisionMode = "form",
+  canDecide = canOperate,
   onOpenArtifacts,
   onOpenRelatedTask,
   showChildLinks = true,
@@ -61,6 +62,9 @@ export function TaskCard({
   focused?: boolean;
   canOperate?: boolean;
   decisionMode?: "form" | "signal";
+  /** 能答卡但不能管任务:受邀参与讨论的人(协作者/逐仓责任人)。缺省
+   * 与 canOperate 同值。 */
+  canDecide?: boolean;
   onOpenArtifacts?: () => void;
   onOpenRelatedTask?: (taskId: string) => void;
   showChildLinks?: boolean;
@@ -82,11 +86,18 @@ export function TaskCard({
     && ((task.requirement_graph?.repositories.length ?? 0) > 1
       // 单仓分析单在拆出多单元前也走同一套 Chain 检视语义。
       || task.requirement_analysis_requested === true);
+  // 受邀参与讨论的人能答澄清题;"进不进分析""拆不拆"这两张改任务形状的
+  // 拍板卡只认责任人(服务端 decide 同口径拒绝),对他们只读并说明找谁。
+  const ownerOnly = isOwnerOnlyWaiting(task);
+  const decides = canOperate || (canDecide && !ownerOnly);
   const childRepositories = task.requirement_graph?.stage === "confirmed"
     ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
     : [];
   const notifyHttpError = task.notify?.last_error
     ?.match(/HTTP\s+\d{3}/)?.[0];
+  const buildFixActive = ["running", "recovering"].includes(
+    task.delivery?.prepush_runtime?.state ?? "",
+  );
 
   return (
     <article
@@ -135,6 +146,7 @@ export function TaskCard({
             <span className="task-key-line danger">{task.detail}</span>
           )}
           {!expanded && task.status === "verifying"
+            && !buildFixActive
             && (repairStopped(task) || task.delivery?.waiting_on) && (
             <span className="task-key-line attention">
               {repairStopped(task)
@@ -144,28 +156,39 @@ export function TaskCard({
             </span>
           )}
           {task.requirement_graph?.stage === "analysis"
-            && (task.requirement_graph.repositories.length ?? 0) > 1 && (
+            && ((task.repositories?.length ?? 0) > 1
+              || task.requirement_analysis_requested === true) && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
-                <b>{task.requirement_graph.repositories.length} 个仓库</b>
+                <b>{task.requirement_graph.projection_state === "ready"
+                  ? `${task.requirement_graph.repositories.length} 个模块任务`
+                  : `${task.repositories?.length
+                    ?? task.requirement_graph.repositories.length} 个候选仓`}</b>
                 <i aria-hidden>·</i>
-                <span>{task.status === "waiting_for_human"
-                    ? task.requirement_graph!.dependencies.length > 0
-                      ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
-                      : "仓间可并行，方案待检视"
-                    : "正在核对职责与依赖"}</span>
+                <span>{task.requirement_graph.projection_state === "invalid"
+                  ? "模块拆分与依赖图需要修正"
+                  : task.requirement_graph.projection_state !== "ready"
+                    ? "正在分析实际改动模块"
+                    : task.status === "waiting_for_human"
+                      ? task.requirement_graph.dependencies.length > 0
+                        ? `${task.requirement_graph.dependencies.length} 条硬依赖待检视`
+                        : "模块可并行，方案待检视"
+                      : "正在核对模块职责与依赖"}</span>
               </span>
-              <span className="task-repo-list" aria-label="涉及仓库">
-                {task.requirement_graph.repositories.map((repository) => (
-                  <span key={repository.id} title={repository.url}>
-                    <i aria-hidden />{repository.name}
-                    {repository.assignee && <b>· {repository.assignee}</b>}
-                    {repository.task_status && <em className={repository.task_status}>
-                      · {statusText({ status: repository.task_status })}
-                    </em>}
-                  </span>
-                ))}
-              </span>
+              {task.requirement_graph.projection_state === "ready" && (
+                <span className="task-repo-list" aria-label="实际改动模块">
+                  {task.requirement_graph.repositories.map((repository) => (
+                    <span key={repository.id} title={repository.url}>
+                      <i aria-hidden />{repository.scope?.name ?? repository.name}
+                      <small> · {repository.name}</small>
+                      {repository.assignee && <b>· {repository.assignee}</b>}
+                      {repository.task_status && <em className={repository.task_status}>
+                        · {statusText({ status: repository.task_status })}
+                      </em>}
+                    </span>
+                  ))}
+                </span>
+              )}
             </span>
           )}
           {(task.blocked_by?.length ?? 0) > 0 && task.status === "queued" && (
@@ -263,7 +286,7 @@ export function TaskCard({
             </svg>
           </a>
         )}
-        {task.delivery?.pipeline && (
+        {task.delivery?.pipeline && !buildFixActive && (
           // 原始状态串形如 "running(轮询预算耗尽,请人工查看流水线)"——
           // 括号里的注记才是给人看的;外壳状态词翻成人话,原文进 title。
           <span className="meta-fact" title={task.delivery.pipeline}>
@@ -342,7 +365,7 @@ export function TaskCard({
           {/* 还在等的时候也要说清在等什么。这行原来根本不渲染:页面只有
               "验证中"三个字,底下藏着的"某一项流水线结果一直没给"谁都
               看不到,任务看着像马上要成了。 */}
-          {!repairStopped(task) && task.status === "verifying"
+          {!repairStopped(task) && !buildFixActive && task.status === "verifying"
             && task.delivery?.waiting_on && (
             <div className="verify-waiting">
               <strong>正在等</strong>
@@ -362,7 +385,7 @@ export function TaskCard({
                 .includes(task.status)}
             />
           )}
-          {chainReview && canOperate && (
+          {chainReview && decides && (
             <div className="chain-review-entry">
               <span>CHAIN REVIEW</span>
               <strong>跨仓方案已经生成，先看依赖再确认</strong>
@@ -370,7 +393,7 @@ export function TaskCard({
               <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
             </div>
           )}
-          {showDecisionForm && canOperate && !chainReview
+          {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
             task.waiting.recommended_view === "diff" ? (
               /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
@@ -388,12 +411,15 @@ export function TaskCard({
                 )}
               </div>
             ) : (
-              <WaitingCard task={task} onDecided={onChanged} />
+              <WaitingCard task={task} onDecided={onChanged}
+                participant={!canOperate} />
             )
           )}
-          {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (
+          {showDecisionForm && !decides && task.status === "waiting_for_human" && (
             <div className="read-only-notice">
-              该事项由 {task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。
+              {canDecide
+                ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以在工作台批注插话。`
+                : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。`}
             </div>
           )}
           <div className="task-utilities">
@@ -516,15 +542,52 @@ export function TaskProgress({
 
 /** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
-/** 这张卡是不是 Chain 的"拆分方案确认"。内核没给它专门的 step id,
- * 只能认选项文案——多仓分析中途的普通澄清也处于 analysis,但只有最终
- * 方案卡带"确认并生成任务"。工作台和卡片都用这一个判据,别各抄一份。 */
+function confirmsChainOption(option: string): boolean {
+  return option.includes("确认并生成任务") || option.includes("确认分析结论");
+}
+
+/** 这张卡是不是 Chain 的"拆分方案确认"。有模块时确认并生成任务；
+ * 全部候选仓均无需修改时只确认分析结论。 */
 export function isChainReviewWaiting(task: TaskSummary): boolean {
   const graph = task.requirement_graph;
   return graph?.stage === "analysis"
-    && graph.repositories.length > 1
     && (task.waiting?.question?.questions?.some((question) =>
-      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+      question.options?.some(confirmsChainOption)) ?? false);
+}
+
+/** 检视卡上"把意见送回 Agent 继续改"的那一项:choice_effects 标了
+ * handles_feedback 的选项;没标就取不关闭检视的选项里最像"需要调整"的。
+ * WaitingCard 的返工文案和批注面板的"提交并返工"共用这一个判据,别各抄
+ * 一份。没有 choice_effects 的卡(普通澄清、Chain 方案)不算。 */
+export function reworkChoiceOf(
+  task: TaskSummary,
+): { question: string; option: string } | undefined {
+  const effects = task.waiting?.choice_effects ?? [];
+  if (!effects.length) return undefined;
+  const feedbackAnswers = new Set(effects
+    .filter((effect) => effect.handles_feedback).flatMap((effect) => effect.answers));
+  const closingAnswers = new Set(effects
+    .filter((effect) => effect.closes_feedback).flatMap((effect) => effect.answers));
+  const allAnswers = new Set(effects.flatMap((effect) => effect.answers));
+  for (const item of task.waiting?.question?.questions ?? []) {
+    const options = item.options ?? [];
+    if (!options.some((option) => allAnswers.has(option))) continue;
+    const exact = options.find((option) => feedbackAnswers.has(option));
+    if (exact) return { question: item.question, option: exact };
+    const nonClosing = options.filter((option) => !closingAnswers.has(option));
+    const option = nonClosing.find((candidate) =>
+      /需要.*(?:调整|修改)|返工|补充/.test(candidate)) ?? nonClosing[0];
+    if (option) return { question: item.question, option };
+  }
+  return undefined;
+}
+
+/** 拍板类卡只认责任人:进不进分析、拆不拆。受邀参与讨论的人能答澄清题,
+ * 这两张改任务形状的卡对他们只读;服务端 decide 是同一口径的硬闸。 */
+export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
+  const step = task.waiting?.step;
+  return step === "cloud_requirement_analysis_confirm"
+    || step === "cloud_split_proposal";
 }
 
 function waitingStepTitle(task: TaskSummary): string | undefined {
@@ -552,6 +615,7 @@ export function WaitingCard({
   pushReview,
   onLocateDelivery,
   activeDeliveryScope,
+  participant = false,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -579,6 +643,9 @@ export function WaitingCard({
   /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
    * 假装是一个点了会有动作的按钮。 */
   activeDeliveryScope?: "changes" | "full";
+  /** 受邀参与讨论的人在答卡:能答题、能选"需要修改",但"确认并生成任务"
+   * 这一项锁住——拆单由责任人拍板(服务端同口径拒绝,这里别让人白点)。 */
+  participant?: boolean;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -604,22 +671,12 @@ export function WaitingCard({
     === "cloud_requirement_analysis_confirm";
   const chainReview = isChainReviewWaiting(task);
   const choiceEffects = task.waiting?.choice_effects ?? [];
-  const feedbackAnswers = new Set(choiceEffects
-    .filter((effect) => effect.handles_feedback)
-    .flatMap((effect) => effect.answers));
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
     .flatMap((effect) => effect.answers));
   const allChoiceAnswers = new Set(choiceEffects.flatMap((effect) => effect.answers));
-  const feedbackOption = questions.flatMap((item) => {
-    const options = item.options ?? [];
-    if (!options.some((option) => allChoiceAnswers.has(option))) return [];
-    const exact = options.find((option) => feedbackAnswers.has(option));
-    if (exact) return [exact];
-    const nonClosing = options.filter((option) => !closingAnswers.has(option));
-    return [nonClosing.find((option) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(option)) ?? nonClosing[0]].filter(Boolean);
-  })[0];
+  const reworkChoice = reworkChoiceOf(task);
+  const feedbackOption = reworkChoice?.option;
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;
@@ -634,7 +691,8 @@ export function WaitingCard({
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const confirmsChainChoice = Object.values(picked).some((answer) =>
-    answer.includes("确认并生成任务"));
+    confirmsChainOption(answer));
+  const chainProjectionReady = task.requirement_graph?.projection_state === "ready";
   const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
     answer.includes("需要修改"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
@@ -686,6 +744,7 @@ export function WaitingCard({
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
+    && (!confirmsChainChoice || chainProjectionReady)
     && (!confirmsChainChoice || !repositoryAssigneeSelection
       || repositoryAssigneeSelection.ready)
     && (!requirementAnalysisConfirmation
@@ -738,7 +797,7 @@ export function WaitingCard({
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
-      answer.includes("确认并生成任务"));
+      confirmsChainOption(answer));
     const repositorySkills = confirmsChain
       && repositorySkillSelection?.scanned
       && repositorySkillSelection.catalogToken
@@ -776,9 +835,13 @@ export function WaitingCard({
 
   const submitLabel = submitting ? "正在提交…"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
-    // 按钮说清楚按下去会发生什么:生成几个子任务、还是把方案退回去改。
+    // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
     : chainReview && confirmsChainChoice
-      ? `确认并生成 ${task.requirement_graph?.repositories.length ?? 0} 个子任务`
+      ? !chainProjectionReady
+        ? "模块拆分与依赖图尚未就绪"
+        : (task.requirement_graph?.repositories.length ?? 0) > 0
+          ? `确认并创建 ${task.requirement_graph!.repositories.length} 个模块任务`
+          : "确认分析结论并结束"
     : reworksChainChoice ? "退回修改方案"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
@@ -815,13 +878,23 @@ export function WaitingCard({
            化的;卡上只放三个数和一句"去哪看"。原来这里是 300px 的一段散文
            背景,把左边已经画出来的东西再讲一遍。 */
         <div className="chain-decision-facts" role="note">
-          <span><b>{task.requirement_graph.repositories.length}</b>个交付单元</span>
-          <span><b>{chainStages(task.requirement_graph).length}</b>个阶段串行</span>
-          <span><b>{task.requirement_graph.dependencies.length}</b>条依赖</span>
-          <small>单元职责、负责面和先后顺序见左侧「仓间依赖」；这张卡只定每个单元由谁执行、用哪个单号。</small>
+          {chainProjectionReady ? <>
+            <span><b>{task.requirement_graph.repositories.length}</b>个模块任务</span>
+            <span><b>{task.requirement_graph.repository_assessments
+              ?.filter((item) => item.outcome === "no_change").length ?? 0}</b>个仓无需修改</span>
+            <span>{task.requirement_graph.dependencies.length > 0
+              ? <><b>{chainStages(task.requirement_graph).length}</b>个执行阶段</>
+              : <><b>可并行</b>无硬依赖</>}</span>
+            <small>逐仓排查结论、模块职责、负责面和先后顺序见左侧「模块拆分与依赖」；这里只给实际开发模块定负责人和单号。</small>
+          </> : <>
+            <span><b>未就绪</b>不能创建任务</span>
+            <small>{task.requirement_graph.projection_error
+              ? `模块拆分与依赖图不完整：${task.requirement_graph.projection_error}`
+              : "Agent 尚未生成真实的模块拆分与依赖图。下单时选择的仓库只是排查范围，不会直接生成任务。"}</small>
+          </>}
           {reworksChainChoice && (
             <small className="chain-rework-hint">
-              退回前先在左侧「过程文档」的方案文档上圈出要改的地方并写意见；这些批注会随这次决定一起交给 Agent，没有批注的退回 Agent 只能猜。
+              退回前可在左侧「模块与依赖」中直接批注整体方案、模块或依赖；具体措辞也可去方案文档逐行批注。这些意见会随决定一起交给 Agent，没有批注的退回 Agent 只能猜。
             </small>
           )}
         </div>
@@ -989,6 +1062,7 @@ export function WaitingCard({
               <div className={`options ${compact ? "compact" : "cards"}`}>
                 {options.map((option) => {
                   const chosen = picked[item.question] === option;
+                  const locked = participant && confirmsChainOption(option);
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));
@@ -1001,18 +1075,24 @@ export function WaitingCard({
                       : effect?.handles_feedback || inferredAdjustment
                         ? "将留在本轮，处理意见后重新检视"
                         : "";
-                  const [title, hint] = split
+                  const [title, rawHint] = split
                     ? [split[1].trim(), split[2].trim()]
                     : [option, consequence];
+                  const hint = locked
+                    ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
+                    : rawHint;
                   return (
                     <button
                       type="button"
                       key={option}
-                      className={`option${chosen ? " picked" : ""}`}
+                      className={`option${chosen ? " picked" : ""}${locked ? " locked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
-                      title={chosen ? "再次点击取消选择" : undefined}
+                      title={locked ? "由责任人确认"
+                        : chosen ? "再次点击取消选择" : undefined}
+                      disabled={locked}
                       onClick={(event) => {
+                        if (locked) return;
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
                         const selection = window.getSelection();

@@ -61,3 +61,12 @@ test("Markdown 表格每一行保留自己的原文行号供逐行批注", () =>
   assert.match(html, /<tbody><tr data-l="5">/);
   assert.match(html, /<tr data-l="6"><td>通知模块<\/td>/);
 });
+
+test("CHAIN 的共同修订标记参与摘要但不显示给检视人", () => {
+  const html = renderToStaticMarkup(React.createElement(Markdown, {
+    text: "<!-- mae-flow-plan-revision: r2 -->\n# 模块拆分方案\n正文",
+  }));
+  assert.doesNotMatch(html, /mae-flow-plan-revision/);
+  assert.match(html, /<div class="md-heading md-h1" data-l="2">模块拆分方案<\/div>/);
+  assert.match(html, />正文</);
+});

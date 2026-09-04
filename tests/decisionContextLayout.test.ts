@@ -55,7 +55,8 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
 });
 
 test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () => {
-  assert.match(workspace, /waiting && canOperate && \(/,
+  // 2026-09-04 起闸门是 decides(责任人,或受邀参与人答非拍板卡)。
+  assert.match(workspace, /waiting && decides && \(/,
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
@@ -168,8 +169,12 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.match(card, /className="chain-decision-facts"/);
   assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
     "阶段数和左侧图共用同一个拓扑函数");
-  assert.match(card, /确认并生成 \$\{task\.requirement_graph\?\.repositories\.length \?\? 0\} 个子任务/,
-    "按钮要说清楚会生成几个子任务");
+  assert.match(card, /确认并创建 \$\{task\.requirement_graph!\.repositories\.length\} 个模块任务/,
+    "按钮要说清楚会按模块生成几个任务");
+  assert.match(card, /模块拆分与依赖图尚未就绪/,
+    "真实机读图未就绪时不能把候选仓拿来确认");
+  assert.match(card, /确认分析结论并结束/,
+    "全部候选仓无需修改时不能制造空任务");
   assert.match(card, /<details className="waiting-context-details">/);
 
   assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
@@ -225,7 +230,7 @@ test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
 test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
   assert.match(workspace, /className="review-filter" role="tablist"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
-  assert.match(workspace, /\["agent", "Agent 处理中"\]/);
+  assert.match(workspace, /\["agent", "处理与验证"\]/);
   assert.match(workspace, /\["closed", "已闭环"\]/);
   assert.match(workspace, /filter=\{reviewFilter\}/, "批注面板吃同一个筛选档");
   assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
@@ -237,6 +242,20 @@ test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工�
   assert.match(panel, /const visibleItems = filter === "all" \? orderedItems/);
   assert.match(css, /\.review-filter\s*\{/);
   assert.match(css, /\.feedback-convert\s*\{/);
+});
+
+test("材料上的已有批注可以反向打开并定位到检视卡", () => {
+  const annotatable = readFileSync(
+    join(process.cwd(), "web/src/Annotatable.tsx"), "utf8");
+  const panel = readFileSync(
+    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
+  assert.match(annotatable, /onOpenAnnotations\(hoveredAnnotations\.map\(\(item\) => item\.id\)\)/,
+    "材料行把对应批注 id 交回工作台");
+  assert.match(workspace, /setReviewFilter\("all"\)[\s\S]*setReviewPanelOpen\(true\)/,
+    "反向定位先取消筛选并打开检视抽屉");
+  assert.match(panel, /data-annotation-id=\{item\.id\}/);
+  assert.match(panel, /matches\[0\]\.scrollIntoView/,
+    "面板滚到第一张对应卡，并同时高亮同一行的其他卡");
 });
 
 test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源逐条展示", () => {
@@ -376,7 +395,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
     "回执之外还要逐段比对");
 });
 
-test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;退回方案时提示先批注", () => {
+test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖批注;退回时有提示", () => {
   // 用户 2026-09-02 实测三处:依赖图全屏后仍卡 900px、需求原文全屏仍卡
   // 860px、分析阶段看起来提不了检视意见(图圈不了,入口没露出)。
   const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
@@ -386,8 +405,32 @@ test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;
   assert.match(workspace, /className="chain-review-entry" role="note"/);
   assert.match(workspace, /CHAIN-\[\^\/\]\*\\\.md\$/, "入口指向内核产出的方案文档");
   assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
+  const graph = readFileSync(new URL("../web/src/RequirementGraph.tsx", import.meta.url), "utf8");
+  assert.match(graph, /对整体方案提意见/);
+  assert.match(graph, /模块 \$\{repository\.id\}：/,
+    "模块批注用稳定单元 id 做锚，不依赖展示行号");
+  assert.match(graph, /依赖 \$\{edge\.from\} -> \$\{edge\.to\}/,
+    "依赖批注用边的两端 id 做锚");
+  assert.match(graph, /artifact: REQUIREMENT_GRAPH_ARTIFACT/,
+    "图批注进入统一任务批注账，不另造状态机");
+  assert.match(graph, /不需要为了批注去找文档中的某一行/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
+  // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。
+  // 入口搬上工具条 + ⌥/Alt+R 快捷键,抽屉开着时材料区让位。
+  assert.match(workspace,
+    /materialsFullscreen && <button type="button"\s*className=\{`materials-review-toggle/,
+    "全屏下材料工具条上有批注与检视入口");
+  assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
+  assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
+  assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
+  assert.match(css,
+    /materials-fullscreen:has\(\.workspace-review-drawer\) \.ws-evidence \{\s*padding-right: calc\(min\(760px/,
+    "全屏抽屉打开时材料区让出抽屉宽度");
+  assert.match(css,
+    /materials-fullscreen \.workspace-review-drawer \{\s*top: calc\(var\(--ws-pane-head-h/,
+    "全屏下抽屉从工具条下面起步,退出全屏/批注与检视不被盖住");
+  assert.match(workspace, /"--ws-pane-head-h"/, "工具条高度量出来写变量,不写死");
 });
 
 test("任务记忆第一期契约:记为记忆去向、面板只读列表、导航计数、服务端只读路由", () => {

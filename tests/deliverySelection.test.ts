@@ -215,3 +215,50 @@ test("选“需要调整”仍走返工:清单以 requested 进入 Agent 上下�
     await model.stop();
   }
 });
+
+// 分支上有人直接推了提交(宿主已接续)之后,机械重组的锚必须是远端已有
+// 的那个提交。锚更老,一次 reset 就把人推上去的东西从交付树上抹掉——
+// 而且悄无声息:被剔除的路径不在勾选清单里,重组不会把它加回去。
+test("有外来提交时机械重组不越过它:人推的代码不会被 reset 抹掉", async () => {
+  const repo = repository();
+  const { service, model, id, internal } = await waitingService(repo);
+  try {
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
+      delivery_paths: ["src/feature.ts"],
+    });
+    assert.equal(service.get(id)?.delivery_selection?.status, "confirmed");
+    const pushed = repo.git("rev-parse", "HEAD");
+
+    // 人直接往分支上推的提交,已由宿主接续进本地历史。
+    writeFileSync(join(repo.cwd, "hotfix.txt"), "human hotfix\n");
+    repo.git("add", "hotfix.txt");
+    repo.git("commit", "--quiet", "-m", "fix: 人工热修");
+    const foreign = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = {
+      git_push: { sha: pushed, ref: "refs/heads/master_bot_REQ1",
+        remote: "origin" },
+      foreign_commits: { base_sha: foreign, absorbed_at: new Date().toISOString(),
+        count: 1, subjects: [`${foreign.slice(0, 7)} fix: 人工热修`] },
+    };
+
+    // 之后的修复又把已排除的编译产物带回了提交:这正是机械重组的触发点。
+    repo.git("add", "-f", "target/classes/Feature.class");
+    repo.git("commit", "--quiet", "-m", "fix: 修复顺手带回产物");
+
+    const outcome = await (service as any)
+      .reconcileConfirmedDeliveryBoundary(internal);
+
+    assert.equal(outcome, "changed");
+    assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "",
+      "已排除的产物仍要退出提交");
+    assert.equal(repo.git("merge-base", "--is-ancestor", foreign, "HEAD"), "",
+      "人推的提交必须仍是 HEAD 的祖先");
+    assert.equal(repo.git("show", "HEAD:hotfix.txt"), "human hotfix",
+      "人推的内容一个字节都不能丢");
+  } finally {
+    await model.stop();
+  }
+});

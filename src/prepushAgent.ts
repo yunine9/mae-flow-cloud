@@ -4,6 +4,7 @@ import type {
   GateDecision,
 } from "./gateService.ts";
 import {
+  isPrePushBuildCommand,
   prePushBuildGuidance,
   type PrePushExecutionBudget,
 } from "./prepushBuildPlaybook.ts";
@@ -45,6 +46,9 @@ export interface PrePushRunRequest {
   /** 只用于提醒 Build-Fix Agent 自查提交范围，不是按目录硬拦截。
    * 某些仓会合法提交生成代码/二进制，最终判断仍由 Agent 基于仓库事实作出。 */
   changeScope?: BuildFixScopeReview;
+  /** 分支上有人直接推的提交。必须点名，否则 Build-Fix 很可能把别人的
+   * 改动当成"编译不过的脏东西"回滚掉——它有 commit 权限，做得到。 */
+  foreignCommits?: { count: number; subjects: string[] };
 }
 
 export interface BuildFixScopeReview {
@@ -454,14 +458,27 @@ export function verifyPrePushEvidence(
     return "编译与 UT 必须同时通过";
   }
   const successful = successfulBashRuns(events).map((run) => run.command);
-  const missing = [report.compile.command, report.unit_test.command]
+  if (!unmatchedReportedCommands(successful, report).length) return "";
+  // 2026-09-04 用户拍板再降一级:上报命令与实跑对不上,但本会话确实成功
+  // 跑过重型构建命令的,放行,把"对不上"写进收据让人在推送确认时自己判。
+  // 内网 task-38 实锤:模型真改真跑真绿,只因实跑带了 `> /dev/null 2>&1`、
+  // 变量加了引号、上报把三条 UT 合成一条加了中文说明,就被判"没跑过"。
+  // 使命本来就允许简写(不必带 cd 前缀),等于明示可以整理——一整理就挂,
+  // 是设计与使命自相矛盾,不是模型走神。这道闸真正要防的只有"凭空报
+  // PASS",那种情况下一条重型命令都不会成功跑过。
+  if (successful.some(isPrePushBuildCommand)) return "";
+  return "报告中的编译/UT 命令没有在本会话真实成功执行，本会话也没有任何"
+    + "重型构建命令成功跑过（编译与 UT 必须真的执行，不能只凭结论收口）: "
+    + unmatchedReportedCommands(successful, report).join("；");
+}
+
+/** 上报的编译/UT 命令里,哪几条在本会话的成功执行记录里找不到。 */
+function unmatchedReportedCommands(
+  successful: string[],
+  report: PrePushAgentReport,
+): string[] {
+  return [report.compile.command, report.unit_test.command]
     .filter((command) => !covers(successful, command));
-  if (!missing.length) return "";
-  // 措辞要让人分得清"没跑"和"跑了但报得不一样"(2026-08-21 整链试跑实锤:
-  // 模型真跑了、真绿了,却被判"没有真实成功执行",人只能翻 bash 日志)。
-  return "报告中的命令没有在本会话真实成功执行"
-    + "（若确实跑过，请核对上报命令与实际 Bash 调用是否一致）: "
-    + missing.join("；");
 }
 
 /** 事实不裁决:最后一次成功跑过编译/UT 之后,还改过哪些会进交付的文件。
@@ -470,12 +487,17 @@ export function verifyPrePushEvidence(
 export function prePushEvidenceFacts(
   events: SemanticEvent[],
   report: PrePushAgentReport,
-): { changed_after_run: string[] } {
+): { changed_after_run: string[]; command_mismatch: string[] } {
   const runs = successfulBashRuns(events);
+  const command_mismatch = unmatchedReportedCommands(
+    runs.map((run) => run.command), report);
   const lastRunOf = (reported: string) => Math.max(0, ...runs
     .filter((run) => covers([run.command], reported)).map((run) => run.eventId));
   const lastRun = Math.min(
     lastRunOf(report.compile.command), lastRunOf(report.unit_test.command));
+  // 命令对不上就没有"最后一次成功"这个基准点,列什么都是噪声:此时只报
+  // 不一致,不谎称"某某文件在成功之后改过"。
+  if (!lastRun) return { changed_after_run: [], command_mismatch };
   const changed = new Set<string>();
   for (const event of events) {
     if (event.kind !== "tool_requested" || event.eventId <= lastRun) continue;
@@ -484,7 +506,7 @@ export function prePushEvidenceFacts(
     const path = String(payload.input?.path ?? payload.input?.file_path ?? "");
     if (path && !isPlatformWorkPath(path)) changed.add(path);
   }
-  return { changed_after_run: [...changed].sort() };
+  return { changed_after_run: [...changed].sort(), command_mismatch };
 }
 
 /** 本会话里真实成功过的 Bash:请求与完成按 call_id 配对,失败的不算。 */
@@ -515,8 +537,23 @@ function successfulBashRuns(
 
 function covers(bucket: string[], reported: string): boolean {
   const needle = normalizeCommand(reported);
-  return Boolean(needle)
-    && bucket.some((actual) => normalizeCommand(actual).includes(needle));
+  if (!needle) return false;
+  const normalized = bucket.map(normalizeCommand);
+  if (normalized.some((actual) => actual.includes(needle))) return true;
+  // 整条对不上再按片段:模型常把多条命令合成一条上报,也常省掉前置
+  // cd/source。要求每个真正干活的片段都能在某条成功执行里找到——少跑
+  // 一条仍然算不上,只是不再因为拼接方式不同而判死。
+  const segments = commandSegments(reported);
+  return segments.length > 0 && segments.every((segment) =>
+    normalized.some((actual) => actual.includes(segment)));
+}
+
+/** 上报命令里真正干活的片段。cd/source/export 这类前置不单独算证据。 */
+function commandSegments(command: string): string[] {
+  return normalizeCommand(command).split(/&&|\|\||;/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment
+      && !/^(?:cd|source|\.|export|set|unset|umask|pushd|popd)\s/.test(segment));
 }
 
 /**
@@ -534,7 +571,18 @@ function covers(bucket: string[], reported: string): boolean {
  * 闸比一道稍松的闸有害得多。"退出成功"这条硬约束没动。
  */
 function normalizeCommand(command: string): string {
-  return String(command ?? "").replace(/\s+/g, " ").trim();
+  return String(command ?? "")
+    // 上报时补的说明:"…CommUtils.so（并同口径跑 X 与 Y）"。只削末尾,
+    // 命令中间的括号可能是 shell 语法;$( 是命令替换,一律不碰。
+    .replace(/(?<!\$)[（(][^（()）]*[)）]\s*$/, " ")
+    // 退出码回显尾巴:`; echo TEST_EXIT=$?`
+    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ")
+    // 重定向:`> /dev/null`、`>> build.log`、`2>&1`
+    .replace(/\d?>>?\s*\S+/g, " ")
+    // 引号:`LD_LIBRARY_PATH="$X"` 与 `LD_LIBRARY_PATH=$X` 是同一条命令
+    .replace(/["']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function prePushMission(
@@ -568,6 +616,17 @@ export function prePushMission(
       ? [`  - …其余 ${deliverySelection.excludedPaths.length - 100} 个文件`] : []),
     "- 修复确实需要新增、删除或重命名业务文件时可以正常完成；Cloud 会只为"
       + "新的业务范围重新请用户确认一次，不要用日志、过程文档或平台目录凑提交。",
+  ] : [];
+  const foreign = request.foreignCommits;
+  const foreignGuidance = foreign?.count ? [
+    "",
+    `分支上有 ${foreign.count} 条不是本任务产生的提交（有人直接往分支推了`
+      + "代码），它们已经在当前历史里：",
+    ...foreign.subjects.slice(0, 8).map((line) => `- ${line}`),
+    "- 它们默认可信：不要回滚、改写、squash 或\"整理\"掉，也不要因为它们"
+      + "编译不过就删代码。",
+    "- 修复只针对真实的编译/测试失败；确实是这些提交带来的问题，就把结论"
+      + "写进 summary 交给人，不要自己替人决定。",
   ] : [];
   const changeScope = request.changeScope;
   const scopeGuidance = changeScope ? [
@@ -615,6 +674,9 @@ export function prePushMission(
       + "产物目录（target/、build/、cmake-build*、CMakeFiles、CMakeCache.txt、"
       + "node_modules，相对路径，白名单放行）；除产物目录外禁止递归强删，"
       + "clean 请走构建工具生命周期。",
+    "不要仅为隐藏本轮编译产物修改业务仓 .gitignore，更不要把 build/、test/"
+      + " 这类可能含源码的宽目录整体忽略；只有需求明确包含仓库忽略规则治理时，"
+      + ".gitignore 才是本单交付内容。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
@@ -622,25 +684,32 @@ export function prePushMission(
       + "Cloud 会在 push 前复核整个提交历史。",
     ...scopeGuidance,
     ...deliveryGuidance,
+    ...foreignGuidance,
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
     "",
     buildGuidance,
     budgetGuidance,
-    "改了会进交付的文件(源码、测试、构建配置)之后记得重跑编译和 UT——平台不硬拦,"
+    "改了会进交付的文件(源码、测试、构建配置)之后记得重跑编译和受影响范围的定向 UT——平台不硬拦,"
       + "但会把「最后一次成功之后还改过哪些文件」写进收据给人看;写 .mae-flow-work/build-notes.md"
       + " 这类平台笔记不算改动,不用因此重跑。",
     "同一份代码内容不要原样重复执行同一条重型编译/测试命令：首次失败后先读日志、"
       + "修代码或运行更小范围的定向检查；只有代码改变或确认属于短暂环境抖动时才重试。"
       + "Cloud 会复用同一代码内容上已经成功的相同命令，并在连续失败且代码未变化时阻止第三次空跑。",
+    "Build-Fix 不跑全仓 UT：一次全量可能耗时一小时，不应在每轮修复里重复执行。"
+      + "只跑本次改动或当前失败直接影响的模块、测试类、suite/case；全量回归由远端权威流水线负责。"
+      + "Java/JS/Go/Rust/Python 这类有标准定向入口的，平台会直接拦下无过滤的全量命令，"
+      + "换成显式选择器即可。C++/native 平台只提示不拦：先老实找仓库支持的定向方式"
+      + "（DT include、ctest -R、runner 的 suite/case 过滤），确实找不到就照常跑全量，"
+      + "并在 summary 里写清为什么没能定向——不要因此停下不跑 UT。",
     "",
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
     // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
     "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
       + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
-      + "编译产物提交进去。最后一段必须严格输出下面结构"
-      + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
+      + "编译产物提交进去或修改业务仓 .gitignore。最后一段必须严格输出下面结构"
+      + "（command 写你真正执行的那段构建命令原文，如 `mvn -pl order -Dtest=OrderServiceTest test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",
     '{"status":"passed|code_failure|infrastructure_failure",'
@@ -654,11 +723,12 @@ export function prePushMission(
     // test 字样的仓),所以这里必须说到明面上——这条靠的是嘱咐,不是闸。
     // 措辞不许夸大宿主的核对能力:它核的是"你上报的命令确实成功跑过",
     // 核不出那条命令跑的是编译还是测试。
-    "unit_test 必须填**真跑过测试**的那条命令（Java 编译栏可用"
-      + " `mvn package -DskipTests`，但 UT 栏仍须另填 `mvn test`；C++ 可用"
-      + "`mvn compile -DDT_test=UT -DDT_run=true`、`npm test`），"
+    "unit_test 必须填**真跑过的定向测试**命令（Java 编译栏可用"
+      + " `mvn package -DskipTests`，UT 栏使用带 `-pl` / `-Dtest` 的测试命令；"
+      + "C++ 使用仓库 DT include、runner suite/case 或 `ctest -R` 过滤；JS 使用测试文件/用例过滤），"
       + "**不能把编译命令填进 UT 栏顶账**：只编译不跑 UT 等于这一关没做，"
       + "代价是把没测过的代码推上去烧流水线。"
-      + "仓库确实没有 UT 入口时，如实报 code_failure 并写清楚，不要以编译代替。",
+      + "C++/native 仓确实找不到可用的定向入口时，可以跑全量 UT 并在 summary 写清原因；"
+      + "其他生态没有定向入口时如实报 code_failure 并写清楚。任何情况下都不要以编译代替 UT。",
   ].join("\n");
 }

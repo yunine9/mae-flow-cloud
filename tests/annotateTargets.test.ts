@@ -14,7 +14,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  anchorOf, pickRow, pickRowFromStack, quoteOfSelection, QUOTE_MAX, type RowNode,
+  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection,
+  QUOTE_MAX, type RowNode,
 } from "../web/src/annotateTargets.ts";
 
 /** 极简假节点:只实现规则用到的那几个 DOM 能力。 */
@@ -143,6 +144,28 @@ test("锚点:diff 行只取内容,空行退回「第 N 行」而不是放弃", (
   assert.equal(anchorOf(blank, 9), "第 9 行", "空行也得能圈,人指的是位置");
   const long = node({ tag: "p", line: 1, text: "长".repeat(200) });
   assert.equal(anchorOf(long, 1).length, 90);
+});
+
+test("材料行找批注同时核对产物、文件和当前行，删除项不再留假标记", () => {
+  const items = [
+    { id: "a", artifact: "diff", file: "src/a.ts", line: 12, status: "sent" },
+    { id: "b", artifact: "diff", file: "src/b.ts", line: 12, status: "sent" },
+    { id: "c", artifact: "other", file: "src/a.ts", line: 12, status: "sent" },
+    { id: "d", artifact: "diff", file: "src/a.ts", line: 12, status: "dropped" },
+  ];
+  assert.deepEqual(annotationsAtRow(items, {
+    artifact: "diff", file: "src/a.ts", line: 12,
+  }).map((item) => item.id), ["a"]);
+});
+
+test("需求原文是虚拟材料，旧批注文件名不同也能按同一行定位", () => {
+  const items = [
+    { id: "old", artifact: "__task_requirement__",
+      file: "__task_requirement__", line: 3, status: "verified" },
+  ];
+  assert.deepEqual(annotationsAtRow(items, {
+    artifact: "__task_requirement__", file: "需求原文", line: 3,
+  }).map((item) => item.id), ["old"]);
 });
 
 test("划选一块:两端都落在这块材料的行里才算,行号取两端、原文逐行收拾", () => {

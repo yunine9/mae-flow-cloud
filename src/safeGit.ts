@@ -61,6 +61,33 @@ export interface SafeGitView {
   cleanup(): void;
 }
 
+let processEmptyConfig: string | undefined;
+
+/**
+ * Git 的全局/系统配置必须指向真实空文件，不能依赖 `/dev/null`。
+ *
+ * 一些内网容器/沙箱会把 `/dev/null` 投影成普通文件，Git 会因此报
+ * `bad config line 1 in file /dev/null`，甚至 `git --version` 都无法
+ * 执行。这里每个 Cloud 进程只创建一次 0700 私有目录和 0600 空配置；
+ * 文件若被系统临时目录清理，下次调用会自动重建。
+ */
+function emptyGitConfig(): string {
+  if (processEmptyConfig && existsSync(processEmptyConfig)) {
+    try {
+      const info = lstatSync(processEmptyConfig);
+      if (info.isFile() && !info.isSymbolicLink()) return processEmptyConfig;
+    } catch {
+      // 系统可能刚清理临时目录；下面在新的私有目录中重建。
+    }
+  }
+  const root = mkdtempSync(join(tmpdir(), "mae-flow-git-config-"));
+  chmodSync(root, 0o700);
+  const config = join(root, "empty.gitconfig");
+  writeFileSync(config, "", { mode: 0o600 });
+  processEmptyConfig = config;
+  return config;
+}
+
 function contained(parent: string, child: string): boolean {
   const path = relative(parent, child);
   return path === "" || (path !== ".." && !path.startsWith(`..${sep}`)
@@ -159,10 +186,11 @@ export function safeGitEnvironment(
   for (const key of Object.keys(env)) {
     if (key.startsWith("GIT_") || key === "SSH_ASKPASS") delete env[key];
   }
+  const config = emptyGitConfig();
   return {
     ...env,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_GLOBAL: config,
+    GIT_CONFIG_SYSTEM: config,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ATTR_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",

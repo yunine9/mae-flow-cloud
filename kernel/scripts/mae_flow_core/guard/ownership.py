@@ -108,8 +108,8 @@ def _strong_artifact_block(facts):
             + ("…" if len(facts.strong_artifacts) > 8 else "")
             + "。这些文件通常不应进入 MR。若已暂存，执行 "
             "git restore --staged -- <上述路径>（只移出暂存区，不删除本地文件），"
-            "并把对应规则加入项目 .gitignore 后再提交；若命令是 git add && git commit，"
-            "从 git add 清单中移除这些路径。",
+            "若命令是 git add && git commit，从 git add 清单中移除这些路径。"
+            "保留在本地不会影响 push，不要仅为本轮产物修改业务仓 .gitignore。",
         )
     return None
 
@@ -140,8 +140,8 @@ def _ambiguous_artifact_block(facts):
         + ("…" if len(paths) > 8 else "")
         + "。这类文件几乎都是编译产出，不应进入交付分支。若已暂存，执行 "
         "git restore --staged -- <上述路径>（只移出暂存区，不删除本地文件），"
-        "并把对应规则加入项目 .gitignore；若命令是 git add && git commit，"
-        "从 git add 清单中移除这些路径。"
+        "若命令是 git add && git commit，从 git add 清单中移除这些路径。"
+        "保留在本地不会影响 push，不要仅为本轮产物修改业务仓 .gitignore。"
         "确实需要交付预编译产物时，把文件和理由展示给用户，按下方拦截编号放行。",
     )
 

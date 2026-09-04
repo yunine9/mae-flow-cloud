@@ -880,6 +880,75 @@ test("未闭环检视意见不能随直接提交分支越过返工", async () =>
   }
 });
 
+test("MR 修复轮的意见不拦内核中途的确认卡:作者只能在最终推送卡上闭环", async () => {
+  // 内网实锤 2026-09-04:9 条意见经修复通道送出,Agent 中途举卡说全闭环,
+  // 责任人点确认被"未闭环不能放行"拦下,作者又因回执未登记点不了通过,
+  // 只剩"需要调整"。拦截只能放在人能闭环的地方——最终推送确认卡。
+  const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-anno-kernel-"));
+  mkdirSync(join(kernelRoot, "flow"));
+  writeFileSync(join(kernelRoot, "flow", "flow.json"), JSON.stringify({
+    steps: {
+      inspect: {
+        approval_subject: { kind: "worktree" },
+        choices: ["continue", "revise"],
+        choice_answers: {
+          continue: ["代码无需调整，继续提交"],
+          revise: ["需要调整代码（按检视意见返工）"],
+        },
+        next: { continue: "commit", revise: "rework" },
+      },
+      commit: {},
+      rework: { allow_source_edit: true },
+    },
+  }));
+  const model = new ScriptedModelServer([{
+    tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "这轮代码通过吗?",
+      options: ["代码无需调整，继续提交", "需要调整代码（按检视意见返工）"],
+      recommended: "代码无需调整，继续提交",
+    }] } },
+  }, { text: "继续。" }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-repair-gate-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const id = service.create("中途卡不拦修复轮意见").id;
+    await until(
+      () => service.get(id)?.status === "waiting_for_human", "任务等人");
+    const note = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "SmsHandler.java",
+      line: 23, anchor: "retry(3)", note: "这里只重试网关错误", kind: "code",
+    });
+    const internal = (service as any).tasks.get(id);
+    internal.summary.waiting.step = "inspect";
+    (service.options as any).host = { kernelRoot, repoPath: "/unused" };
+    // 模拟 MR 已开、意见经修复通道送出:回执要等本轮结束,作者此刻点不了通过。
+    (service as any).annotations(internal)
+      .markSent([note.id], "review_repair", "liaoxiang");
+    (service as any).persist(internal);
+    const waiting = service.get(id)!.waiting!;
+    let rejected: unknown;
+    try {
+      await service.decide(id, {
+        state_version: waiting.state_version,
+        decision: "代码无需调整，继续提交",
+      });
+    } catch (error) {
+      rejected = error;
+    }
+    assert.ok(!(rejected instanceof TaskControlError)
+      || !/未闭环/.test(rejected.message),
+      `中途确认卡不该被修复轮意见拦下:${String(rejected)}`);
+    assert.equal(service.listAnnotations(id).items[0].status, "sent",
+      "意见仍在账上,等最终推送卡上由作者闭环");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async () => {
   const model = new ScriptedModelServer([
     { text: "先看看", tool: { name: "bash", input: { command: "sleep 2; echo OK" } } },

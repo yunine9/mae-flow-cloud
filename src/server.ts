@@ -88,9 +88,9 @@ import {
   ArtifactArchiveTooLargeError,
   bundleArtifactDocuments,
   listArtifactsAsync,
+  listArtifactChangeDirectoryAsync,
   readArtifactAsync,
   readArtifactFileDiffAsync,
-  resolveArtifactRoot,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
 import {
@@ -593,6 +593,17 @@ export function createTaskServer(
           options.auth?.endSession(sessionToken);
           response.setHeader("set-cookie", sessionCookie("", request, true));
           return json(response, 200, { ok: true });
+        }
+        // 协作界面需要把账号翻译成人名。所有登录者只读取这两个公开
+        // 身份字段；角色、权限与个人配置仍只在管理员账号接口里出现。
+        if (request.method === "GET" && parts[1] === "people"
+            && parts.length === 2) {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          return json(response, 200, (options.auth?.listUsers() ?? [])
+            .map(({ username, display_name }) => ({
+              username,
+              ...(display_name ? { display_name } : {}),
+            })));
         }
         if (parts[1] === "users") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
@@ -2247,8 +2258,11 @@ export function createTaskServer(
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能处理分配给自己的任务"
+          // 受邀参与讨论的人(协作者/逐仓责任人)在分析期可以答卡——邀请了
+          // 就得能回答(2026-09-04 用户拍板)。拍板类决定由 decide() 再按
+          // 责任人硬闸一次,这里只挡"是否参与"。
+          if (!canCollaborate(viewer, target, !!options.auth)) {
+            return json(response, 403, { error: "只有责任人或受邀参与讨论的人可以回答这张卡"
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           const body = await readBody(request);
@@ -2357,7 +2371,8 @@ export function createTaskServer(
                   [repositoryId, String(ticket)]))
             : undefined;
           return json(response, 200,
-            service.assignRequirementRepositories(id, assignments, tickets));
+            service.saveRequirementRepositoryAssignmentDraft(
+              id, assignments, tickets));
         }
         // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
         // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
@@ -2807,10 +2822,7 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "artifacts") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          const panel = service.panelFile(id, "panel.html")
-            ?? service.panelFile(id, "panel-pulse.js");
-          const root = resolveArtifactRoot(
-            target.workspace, panel ? dirname(dirname(panel)) : undefined);
+          const root = service.artifactRoot(id);
           const sources = { pipelineRoot: join(target.workspace, "pipeline") };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
@@ -2853,6 +2865,19 @@ export function createTaskServer(
               });
             }
             return json(response, 200, diff);
+          }
+          if (parts.length === 4 && parts[3] === "change-directory") {
+            const path = url.searchParams.get("path") ?? "";
+            const offset = Number.parseInt(
+              url.searchParams.get("offset") ?? "0", 10);
+            const page = await listArtifactChangeDirectoryAsync(
+              root, path, Number.isFinite(offset) ? offset : 0);
+            if (!page) {
+              return json(response, 404, {
+                error: "这个目录已不在当前未跟踪变更中，请刷新后重试",
+              });
+            }
+            return json(response, 200, page);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));

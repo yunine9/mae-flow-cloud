@@ -77,6 +77,24 @@
   transform: translate(0, -50%);
 }
 
+/* 已有意见时，同一个悬浮位改成“查看”，不再同时摆第二枚按钮挤正文。
+   正文点击仍是新增批注，按钮点击只打开对应意见，两个动作不打架。 */
+.annot-review-fab {
+  display: flex;
+  gap: 3px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 54%, var(--surface));
+}
+
+.annot-review-fab b {
+  min-width: 13px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.annot-review-fab::after { content: attr(data-tip); }
+
 @keyframes annotFabIn {
   from { opacity: 0; transform: scale(.92); }
   to { opacity: 1; transform: scale(1); }
@@ -416,6 +434,18 @@
 .annot-item.waiting { border-left-color: var(--attention); }
 .annot-item.review { border-left-color: var(--attention); }
 .annot-item.done { border-left-color: var(--success); }
+
+.annot-item.annot-panel-focus {
+  animation: annotPanelFocus 1.7s ease-out;
+}
+
+@keyframes annotPanelFocus {
+  0%, 58% {
+    background: color-mix(in srgb, var(--accent-soft) 68%, var(--surface));
+    box-shadow: inset 4px 0 var(--accent);
+  }
+  100% { background: transparent; box-shadow: none; }
+}
 
 .annot-item-head {
   min-width: 0;

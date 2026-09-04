@@ -2038,6 +2038,20 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-toggle { width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 140ms ease; }
 .requirement-graph:not([open]) .requirement-toggle { transform: rotate(-45deg); }
 .requirement-graph-body { padding: 11px 13px 12px; border-top: 1px solid var(--line); }
+.requirement-graph-review-tools { margin-bottom: 10px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.requirement-graph-review-tools > div { min-width: 0; display: grid; gap: 2px; }
+.requirement-graph-review-tools strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-graph-review-tools small { color: var(--muted); font-size: 11.5px; }
+.requirement-graph-review-tools > button,
+.graph-node-annotate,
+.graph-edge-annotate { display: inline-flex; align-items: center; gap: 5px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 7px; color: var(--accent); background: var(--surface); font-size: 11.5px; font-weight: 750; cursor: pointer; }
+.requirement-graph-review-tools > button { flex: none; padding: 6px 9px; }
+.requirement-graph-review-tools button:hover,
+.graph-node-annotate:hover,
+.graph-edge-annotate:hover { border-color: var(--accent); background: var(--accent-soft); }
+.requirement-graph-review-tools button > i,
+.graph-node-annotate > i,
+.graph-edge-annotate > i { min-width: 16px; padding: 1px 4px; border-radius: 999px; color: #fff; background: var(--accent); font-size: 9.5px; font-style: normal; text-align: center; }
 .requirement-root-task { padding: 10px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 9px; background: var(--accent-soft); }
 .requirement-root-task > span { padding: 3px 6px; border-radius: 5px; color: #fff; background: var(--accent); font-size: 10.5px; font-weight: 800; }
 .requirement-root-task > div { min-width: 0; display: grid; gap: 2px; }
@@ -2059,6 +2073,32 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-team-pills i { color: var(--muted); font-size: 10px; font-style: normal; font-weight: 650; }
 .requirement-team-pills > strong i { color: var(--accent); }
 .requirement-team-pills > em { padding: 5px 0; color: var(--faint); font-size: 11.5px; font-style: normal; }
+.requirement-projection-state,
+.requirement-no-delivery,
+.requirement-parallel-note { margin: 2px 0 10px; padding: 11px 12px; display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.requirement-projection-state.invalid { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.requirement-projection-state > strong,
+.requirement-no-delivery > strong,
+.requirement-parallel-note > strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-projection-state.invalid > strong { color: var(--danger); }
+.requirement-projection-state > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.requirement-projection-state > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.requirement-projection-state > div > span { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 11px; }
+.requirement-assessments { margin: 2px 0 11px; display: grid; gap: 7px; }
+.requirement-assessments > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.requirement-assessments > header strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-assessments > header small { color: var(--muted); font-size: 11px; }
+.requirement-assessments > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px; }
+.requirement-assessments article { min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.requirement-assessments article > span { padding: 2px 5px; border-radius: 4px; color: var(--success); background: var(--success-soft); font-size: 10px; font-weight: 800; }
+.requirement-assessments article.no_change > span { color: var(--muted); background: var(--surface); }
+.requirement-assessments article > strong { overflow: hidden; color: var(--text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.requirement-assessments article > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.requirement-no-delivery { border-color: color-mix(in srgb, var(--success) 35%, var(--line)); background: var(--success-soft); }
+.requirement-no-delivery > strong,
+.requirement-parallel-note > strong { color: var(--success); }
+.requirement-no-delivery > span { color: var(--text); font-size: 12px; line-height: 1.5; }
+.requirement-parallel-note { padding: 8px 11px; }
 .requirement-stages { display: flex; align-items: stretch; gap: 26px; overflow-x: auto; padding: 1px 2px 7px; scrollbar-width: thin; }
 .requirement-stage { min-width: 170px; position: relative; display: grid; align-content: start; gap: 5px; }
 .requirement-stage:not(:last-child)::after { content: "→"; position: absolute; top: 38px; right: -19px; color: var(--accent); font-size: 17px; font-weight: 700; }
@@ -2070,16 +2110,35 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .has-prerequisite .repo-node-head > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
 .repo-node-head strong { overflow: hidden; color: var(--text-strong); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
 .repo-node-head button { padding: 3px 5px; color: var(--accent); border: 0; border-radius: 5px; background: var(--accent-soft); font-size: var(--font-size-assist); cursor: pointer; }
+.repo-node-head .graph-node-annotate { border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--surface); }
 .repo-assignee { display: inline-flex; width: fit-content; margin-top: 7px; padding: 3px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11.5px; font-weight: 750; }
 .repo-task-status { display: block; margin-top: 7px; }
 .requirement-stage article > p { margin: 6px 0 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.45; }
 .repo-prerequisite { display: block; margin-top: 5px; color: var(--attention); font-size: var(--font-size-assist); }
 .requirement-edges { margin-top: 9px; display: grid; gap: 7px; }
-.requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
+.requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
 .requirement-edges > div > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-assist); }
 .requirement-edges i { color: var(--accent); font-style: normal; }
 .requirement-edges strong { color: var(--text); font-weight: 700; }
-.requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
+.requirement-edges > div > small { grid-column: 1 / -1; display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
+.graph-edge-annotate { padding: 4px 7px; }
+.graph-annotation-backdrop { position: fixed; inset: 0; z-index: 285; padding: 24px; display: grid; place-items: center; background: color-mix(in srgb, #07101f 38%, transparent); backdrop-filter: blur(2px); }
+.graph-annotation-editor { width: min(590px, calc(100vw - 32px)); padding: 17px; display: grid; gap: 12px; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow-lg); }
+.graph-annotation-editor > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.graph-annotation-editor > header > div { display: grid; gap: 2px; }
+.graph-annotation-editor > header span { color: var(--accent); font: 750 10.5px var(--font-mono); letter-spacing: .11em; text-transform: uppercase; }
+.graph-annotation-editor > header strong { color: var(--text-strong); font-size: 16px; }
+.graph-annotation-editor > header > button { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: var(--surface-soft); font-size: 20px; cursor: pointer; }
+.graph-annotation-editor > blockquote { max-height: 145px; margin: 0; padding: 10px 11px; overflow: auto; border-left: 3px solid var(--accent); border-radius: 7px; color: var(--text); background: var(--surface-soft); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+.graph-annotation-editor > textarea { width: 100%; min-height: 118px; resize: vertical; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; line-height: 1.55; }
+.graph-annotation-editor > textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); border-color: var(--accent); }
+.graph-annotation-error { margin: 0; color: var(--danger); font-size: 12px; }
+.graph-annotation-editor > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.graph-annotation-editor > footer small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.graph-annotation-editor > footer > div { flex: none; display: flex; gap: 7px; }
+.graph-annotation-editor > footer button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); font-weight: 700; cursor: pointer; }
+.graph-annotation-editor > footer button.primary { border-color: var(--accent); color: #fff; background: var(--accent); }
+.graph-annotation-editor button:disabled { opacity: .55; cursor: wait; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 
 /* 这一段原来全是写死的十六进制绿(#16885d/#2e9b77/#d9f4e9):浅色下没事,
@@ -2151,6 +2210,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
 .repository-assignees > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
 .repository-assignees > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.repository-assignee-save { flex: none; color: var(--muted); font-size: 12px; }
+.repository-assignee-save.saved { color: var(--ok); }
+.repository-assignee-save.error { color: var(--danger); }
 .repository-assignees > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: var(--accent); font-weight: 750; cursor: pointer; }
 .repository-assignees > footer button:disabled { opacity: .45; cursor: not-allowed; }
 .ws-parent-task { width: fit-content; max-width: 100%; margin-top: 4px; padding: 3px 7px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-soft); cursor: pointer; }
@@ -4745,6 +4807,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface);
 }
 .option.picked .radio { border-color: var(--accent); }
+/* 受邀参与人看到的"确认并生成任务":能看见、点不了,提示里写找谁。 */
+.option.locked { opacity: .55; cursor: not-allowed; }
+.option.locked:hover { border-color: var(--line); background: transparent; }
 .radio.on::after {
   content: "";
   position: absolute;
@@ -7239,6 +7304,29 @@ pre {
   font-weight: 500;
   letter-spacing: 0;
 }
+/* 全屏看材料时右栏整个藏起来,"批注与检视"入口跟着没了,想开抽屉得先退
+   全屏(用户 2026-09-04 实锤)。全屏下入口搬到材料工具条上,和快捷键
+   ⌥/Alt+R 一起,任何布局下都能召唤抽屉。 */
+.ws-source-switch .materials-review-toggle {
+  margin-left: 5px;
+  padding-left: 12px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: var(--accent-soft);
+}
+.ws-source-switch .materials-review-toggle:hover:not(:disabled),
+.ws-source-switch .materials-review-toggle.on {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.ws-source-switch .materials-review-toggle.on i { color: var(--accent); background: #fff; }
+.ws-source-switch .materials-review-toggle > span {
+  color: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
 .ws-source-switch .material-search-toggle {
   padding-left: 10px;
   color: var(--accent);
@@ -7354,6 +7442,21 @@ pre {
 .workspace-overlay.materials-fullscreen .ws-doc .md {
   width: min(1600px, 100%);
 }
+/* 全屏 + 抽屉同屏:抽屉固定在右侧 760px,材料区整体给它让位,否则工具条
+   上的"退出全屏"和正文右侧被盖住。窄屏抽屉本来就占满整屏,不让。 */
+@media (min-width: 901px) {
+  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence {
+    padding-right: calc(min(760px, 100vw - 20px) + 14px);
+  }
+  /* 工具条不让:它在抽屉上方整行保持满宽,"退出全屏/批注与检视"照常能点。 */
+  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence > .ws-pane-head {
+    margin-right: calc(-1 * (min(760px, 100vw - 20px) + 14px));
+  }
+  /* 任务头藏了,--ws-head-h 归零;抽屉改从材料工具条下面起步。 */
+  .workspace-overlay.materials-fullscreen .workspace-review-drawer {
+    top: calc(var(--ws-pane-head-h, 64px) + 10px);
+  }
+}
 /* 全屏是给"看不下"的材料用的,需求原文和仓间依赖图也得跟着铺开:原来
    只放宽了 .md,需求原文仍卡在 860px、依赖图仍卡在 900px,点了全屏两边
    还是大片空白(用户 2026-09-02 实测)。 */
@@ -7448,8 +7551,7 @@ pre {
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
 .ws-doc > .requirement-graph + .requirement-team-picker,
 .ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
-/* 仓间依赖图是结构化的,圈不了批注;对方案的意见要落在方案文档上。
-   原来这一页没有任何入口,人以为这个阶段不能提检视意见(用户实测)。 */
+/* 图上直接收结构意见；这张轻入口只保留给需要引用 CHAIN 具体措辞的逐行批注。 */
 .ws-doc > .chain-review-entry {
   width: min(900px, 100%); margin: 0 auto 12px;
   padding: 10px 14px; display: flex; align-items: center; gap: 14px;
@@ -8564,6 +8666,40 @@ pre {
 .change-hide:hover { color: var(--danger); background: var(--danger-soft); }
 .change-hide svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; }
 .change-tree-empty { padding: 22px 10px; color: var(--muted); font-size: var(--font-size-assist); text-align: center; }
+.change-tree-untracked { margin-top: 8px; }
+.untracked-directory > .change-tree-directory-row {
+  background: color-mix(in srgb, var(--attention) 4%, transparent);
+}
+.change-tree-lazy-note {
+  margin: 3px 8px 5px 24px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 6px;
+  font-size: var(--font-size-assist);
+}
+.change-tree-lazy-note.error { color: var(--danger); }
+.change-tree-lazy-note button,
+.change-tree-load-more {
+  padding: 5px 9px;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: var(--font-size-assist);
+  cursor: pointer;
+}
+.change-tree-load-more {
+  width: calc(100% - 24px);
+  margin: 4px 8px 6px 16px;
+}
+.change-tree-load-more:hover,
+.change-tree-lazy-note button:hover { border-color: var(--accent); }
+.change-tree-load-more:disabled { opacity: .62; cursor: wait; }
 .change-tree.overview .change-tree-directory-row,
 .change-tree.overview .change-tree-file { min-height: 46px; }
 .git-change-browser {

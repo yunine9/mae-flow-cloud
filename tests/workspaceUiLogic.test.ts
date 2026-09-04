@@ -101,6 +101,22 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
+test("Build-Fix 已恢复运行时不再显示旧的自动修复停机", () => {
+  const task = {
+    status: "verifying" as const,
+    delivery: {
+      loop: { state: "halted", kind: "review", round: 0, max: 20 },
+      prepush: { state: "preparing", round: 1, message: "准备定向验证" },
+      prepush_runtime: {
+        state: "recovering" as const,
+        message: "服务正在恢复上次中断的 Build-Fix",
+      },
+    },
+  };
+  assert.equal(api.repairStopped(task), false);
+  assert.equal(api.statusText(task), "Build-Fix 恢复中");
+});
+
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
   assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
     "已交付任务仍可留下交付后记录");
@@ -310,6 +326,24 @@ test("代码差异目录以完整清单为准，正文只补当前文件", () =>
   assert.equal(files[1].lines.length, 0,
     "尚未点开的文件用清单占位，不能从目录树消失");
   assert.equal(files[1].kind, "代码");
+});
+
+test("旧服务即使送来上万条清单，目录也在首次渲染前折叠", () => {
+  const manifest = Array.from({ length: 10_000 }, (_, index) => ({
+    path: `target/CMakeFiles/module-${index}/object.o`,
+    stage: "untracked",
+    additions: 0,
+    deletions: 0,
+  }));
+  const html = renderToStaticMarkup(React.createElement(gitDiff.GitDiff, {
+    text: "工作区文件正文按需读取",
+    manifest,
+  }));
+  assert.match(html, /target\/CMakeFiles/);
+  assert.doesNotMatch(html, /module-9999\/object\.o/,
+    "首屏不能先渲染所有文件、再靠 effect 折叠");
+  assert.ok(html.length < 100_000,
+    `折叠后的首屏 HTML 不应随一万条清单膨胀：${html.length}`);
 });
 
 test("工作台面向用户只说实时执行日志和单元测试", () => {
@@ -636,9 +670,45 @@ test("批注面板显示受限管理员入口和实际代确认审计", () => {
       reviewReady: false,
       items: [annotation({ status: "verified", verified_by: "ops-admin" })],
       reviewAnnotationIds: [],
+      people: [
+        { username: "alice", display_name: "爱丽丝" },
+        { username: "ops-admin", display_name: "值班管理员" },
+      ],
     },
   ));
-  assert.match(auditedHtml, /管理员 ops-admin 代确认/);
-  assert.match(auditedHtml, /批注作者 alice/);
+  assert.match(auditedHtml, /管理员 值班管理员 代确认/);
+  assert.match(auditedHtml, /批注作者 爱丽丝/);
+  assert.doesNotMatch(auditedHtml, /批注作者 alice/,
+    "看板展示姓名，账号仍只在权限判断里使用");
   assert.doesNotMatch(auditedHtml, /你已确认/);
+});
+
+test("检视状态只报告有证据的进度，不再把所有未闭环项写成 Agent 正在处理", () => {
+  const common = {
+    taskId: "task-status",
+    viewerUsername: "alice",
+    items: [annotation({ response: undefined, sent_via: "interrupt" })],
+    canOperate: true,
+    taskStatus: "running",
+    mergeRequestOpen: false,
+    onChanged: () => undefined,
+  };
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, checks: [] },
+  ));
+  assert.match(html, /已交给 Agent/);
+  assert.doesNotMatch(html, /Agent 处理中/);
+  const changedHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, checks: [{ id: "annotation-1", state: "gone" }] },
+  ));
+  assert.match(changedHtml, /已有改动·待验证/,
+    "圈选内容已经变化时如实显示已有改动，不继续冒充 Agent 仍在修改");
+  assert.doesNotMatch(changedHtml, /Agent 处理中/);
+  assert.equal(annotationPanel.displayPersonName("alice", [
+    { username: "alice", display_name: "  爱丽丝  " },
+  ]), "爱丽丝");
+  assert.equal(annotationPanel.displayPersonName("unknown", []), "unknown",
+    "历史账号没有姓名时仍可读");
 });

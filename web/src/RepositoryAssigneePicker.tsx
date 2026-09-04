@@ -24,6 +24,7 @@ export function RepositoryAssigneePicker({
   defaultTicket,
   selection,
   onSelectionChange,
+  saveState = "idle",
 }: {
   taskId: string;
   repositories: Array<{
@@ -35,6 +36,7 @@ export function RepositoryAssigneePicker({
   defaultTicket?: string;
   selection: RepositoryAssigneeSelection;
   onSelectionChange: (selection: RepositoryAssigneeSelection) => void;
+  saveState?: "idle" | "saving" | "saved" | "error";
 }) {
   const [people, setPeople] = useState<CollaborationAssignee[]>([]);
   const assignmentKey = repositories.map((item) =>
@@ -134,7 +136,8 @@ export function RepositoryAssigneePicker({
     const ready = repositories.every((repository) =>
       peopleByName.get(nextAssignments[repository.id])?.ready === true)
       && ticketsReady(selection.tickets, nextAssignments);
-    onSelectionChange({ ...selection, assignments: nextAssignments, ready });
+    onSelectionChange({ ...selection, assignments: nextAssignments, ready,
+      error: undefined });
   }
 
   function chooseTicket(repositoryId: string, value: string) {
@@ -142,7 +145,8 @@ export function RepositoryAssigneePicker({
     const ready = repositories.every((repository) =>
       peopleByName.get(selection.assignments[repository.id])?.ready === true)
       && ticketsReady(nextTickets, selection.assignments);
-    onSelectionChange({ ...selection, tickets: nextTickets, ready });
+    onSelectionChange({ ...selection, tickets: nextTickets, ready,
+      error: undefined });
   }
 
   return <section className="repository-assignees" aria-label="交付单元安排">
@@ -212,6 +216,11 @@ export function RepositoryAssigneePicker({
         : needsTicketEntry
           ? "为每个单元选定执行人并填写各自的 AR 单号；确认后将按依赖顺序生成子任务。"
           : "确认方案后，系统会按上面的执行人、单号和依赖关系生成交付任务。"}</p>
+      <small className={`repository-assignee-save ${saveState}`}>
+        {saveState === "saving" ? "正在保存…"
+          : saveState === "saved" ? "已自动保存"
+          : saveState === "error" ? "保存失败，请继续编辑后重试" : ""}
+      </small>
     </footer>
   </section>;
 }

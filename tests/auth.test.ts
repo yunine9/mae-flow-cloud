@@ -97,6 +97,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
   original.setGitToken("bob", "bob-codehub-secret", "bob@example.com");
   original.setLubanToken("bob", "bob-luban-secret");
   original.createUser("carol", "carol-password-123", "developer");
+  original.setDisplayName("admin", "平台管理员");
 
   // 用新的 LocalAuth 模拟服务重启，证明事实来自账号文件而非前端内存。
   const auth = new LocalAuth(file);
@@ -174,6 +175,17 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     });
     assert.equal(users.status, 403,
       "普通开发不能借账号管理接口读取其他用户信息");
+
+    const people = await fetch(`${base}/auth/people`, {
+      headers: { cookie: bob.cookie },
+    });
+    assert.equal(people.status, 200, "登录成员可以把协作账号翻译成显示姓名");
+    const identities = await people.json() as Array<Record<string, unknown>>;
+    assert.deepEqual(identities.find((person) => person.username === "admin"), {
+      username: "admin", display_name: "平台管理员",
+    });
+    assert.equal("role" in identities[0], false,
+      "姓名接口不顺带暴露角色或个人配置");
 
     // 探索方式设置端点已下线(#97):PUT /auth/me/issue-flow 必须是 404,
     // 任何人都不能再切换/产生新的自由模式会话。
@@ -364,6 +376,15 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
       "受邀开发者可以进入同一个主任务和 AI 讨论");
     assert.match(steered, /协作者 alice 插话.*接口字段还需要一起确认/,
       "插话前缀只标身份;\"跨仓协作\"标签曾污染单仓任务的交付件(MFC-021)");
+    // 受邀参与讨论的人可以答卡(2026-09-04 用户拍板)。这张假现场没有
+    // 待办:过了权限闸落到 404,而不是被 403 挡在门外。
+    const participantDecision = await fetch(
+      `${base}/tasks/${cross.id}/decision`, {
+        method: "POST", headers: { cookie: alice },
+        body: JSON.stringify({ state_version: 1, decision: "需要修改" }),
+      });
+    assert.equal(participantDecision.status, 404,
+      "受邀参与讨论的人过权限闸(无待办→404,不是 403)");
     const collaboratorCannotInvite = await fetch(
       `${base}/tasks/${cross.id}/collaborators`, {
         method: "PUT", headers: { cookie: alice },

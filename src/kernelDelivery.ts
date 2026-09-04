@@ -106,7 +106,7 @@ interface StoredKernelHostBinding {
 }
 
 export type KernelHostAction = "feedback-open" | "feedback-result" | "close"
-  | "pipeline-record" | "intervention-reconcile";
+  | "pipeline-record" | "intervention-reconcile" | "selection-reconcile";
 
 /**
  * 与内核 `_canonical`(json.dumps sort_keys、无空格、不转义 UTF-8)逐字节
@@ -711,6 +711,40 @@ export function recordKernelFeedbackResult(input: {
     taskId: input.taskId,
     action: "feedback-result", payload,
     args: ["feedback-result", "--file", path],
+  });
+}
+
+/**
+ * Cloud 文件勾选器已经把 Git HEAD 机械整理完后，把同一份人工决定交给
+ * 内核对账。它不是让 Cloud 代判流程：内核仍负责把领域归档原子组、
+ * delivery_manifest 与修复授权收敛成一致状态，签名只证明这份清单确实
+ * 来自工作区外的宿主，而不是 Agent 自己改 JSON 冒充用户。
+ */
+export function reconcileKernelDeliverySelection(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  waitingId: string;
+  head: string;
+  paths: string[];
+  excludedPaths: string[];
+  actor?: string;
+}): KernelDeliveryRecord {
+  const payload = {
+    schema: "mae-flow-delivery-selection/1",
+    task_id: input.taskId,
+    waiting_id: input.waitingId,
+    head: input.head,
+    paths: input.paths,
+    excluded_paths: input.excludedPaths,
+    actor: input.actor ?? "",
+  };
+  const path = factsPath(input.workspace, "selection-reconcile", payload);
+  return invoke({
+    host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.taskId, action: "selection-reconcile", payload,
+    args: ["selection-reconcile", "--file", path],
   });
 }
 

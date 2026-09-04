@@ -216,6 +216,27 @@ test("流水线修复播报保持原样(kind=ci)", () => {
   assert.match(focus.headline, /修复流水线问题/);
 });
 
+test("重启恢复中的 Build-Fix 压过旧的 halted 展示，但不伪造人工闭环", () => {
+  const focus = projectTaskFocus({
+    status: "verifying",
+    delivery: {
+      loop: {
+        state: "halted", kind: "review", round: 0, max: 20,
+        diagnosis: "部署前留下的旧停机原因",
+      },
+      prepush: { state: "preparing", round: 1, message: "准备定向验证" },
+      prepush_runtime: {
+        state: "recovering", message: "服务正在恢复上次中断的 Build-Fix",
+      },
+    },
+  });
+  assert.equal(focus.kind, "machine");
+  assert.equal(focus.owner, "agent");
+  assert.equal(focus.needs_attention, false);
+  assert.match(focus.headline, /恢复.*Build-Fix/);
+  assert.doesNotMatch(focus.headline, /停止|人工/);
+});
+
 test("助手占场的暂停指去交还入口,不指死路恢复(MFC-029)", () => {
   const focus = projectTaskFocus({
     status: "paused", assistant_engaged: true,

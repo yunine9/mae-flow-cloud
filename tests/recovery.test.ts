@@ -10,7 +10,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -43,6 +46,51 @@ const LIFE_A: Scene[] = [
 const LIFE_B: Scene[] = [
   { text: "已收到用户答复,继续并完成任务。" },
 ];
+
+test("恢复缺失 cwd 的在途任务：从唯一 Git 现场重绑并立刻持久化", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-cwd-"));
+  const workspace = join(dataDir, "task-36");
+  const cwd = join(workspace, "SWMExtFrontendService");
+  mkdirSync(cwd, { recursive: true });
+  const git = (...args: string[]) => execFileSync(
+    "git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
+  git("init", "--quiet", "-b", "master");
+  git("config", "user.name", "bot");
+  git("config", "user.email", "bot@test");
+  writeFileSync(join(cwd, "README.md"), "baseline\n");
+  git("add", "README.md");
+  git("commit", "--quiet", "-m", "baseline");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    current: "delivery_review",
+    config: { "基线分支": "master" },
+    step_heads: { branch_create: git("rev-parse", "HEAD") },
+  }));
+  const gate = new HumanGate(join(workspace, "waiting.json"));
+  const waiting = gate.createWaiting({
+    taskId: "task-36", step: "最终代码增量检视", callId: "review-1",
+    questionInput: { questions: [{
+      question: "本轮修改是否通过？", options: ["通过", "调整"],
+    }] },
+  });
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({
+    summary: {
+      id: "task-36", requirement: "恢复工作区变更", workspace,
+      repo_url: "https://example.test/team/SWMExtFrontendService.git",
+      status: "waiting_for_human", waiting,
+      created_at: "2026-09-04T00:00:00.000Z",
+    } satisfies TaskSummary,
+    cwd: null,
+  }, null, 2));
+
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {},
+  });
+  assert.equal(service.recover().restored, 1);
+  assert.equal(service.artifactRoot("task-36"), realpathSync(cwd));
+  const saved = JSON.parse(readFileSync(join(workspace, "task.json"), "utf-8"));
+  assert.equal(saved.cwd, realpathSync(cwd),
+    "修复后的 cwd 必须落盘，不能下次重启再丢");
+});
 
 test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运行中", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-repair-phase-"));
@@ -83,6 +131,94 @@ test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运
   assert.match(restored.focus?.headline ?? "", /中断.*没有.*执行会话/);
   assert.equal(restored.delivery?.prepush_runtime?.state, "interrupted");
   assert.match(restored.detail ?? "", /修复会话已完成/);
+});
+
+test("恢复已在等人的存量任务时，用 waiting 权威账修正旧 detail", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-waiting-detail-"));
+  const workspace = join(dataDir, "task-1");
+  const waiting = new HumanGate(join(workspace, "waiting.json")).createWaiting({
+    taskId: "task-1",
+    step: "grill",
+    callId: "question-after-restart",
+    questionInput: { questions: [{
+      question: "请确认接口兼容范围",
+      options: ["仅兼容当前版本", "同时兼容旧版本"],
+    }] },
+  });
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({
+    summary: {
+      id: "task-1",
+      requirement: "恢复既有等待卡",
+      workspace,
+      status: "waiting_for_human",
+      detail: "服务重启,等待续跑",
+      waiting,
+      created_at: "2026-09-04T00:00:00.000Z",
+    } satisfies TaskSummary,
+  }, null, 2));
+
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {},
+  });
+  const recovered = service.recover();
+  assert.equal(recovered.requeued, 0, "等人的任务不能因此重新烧模型");
+  assert.equal(service.get("task-1")?.detail,
+    "等待你回答：请确认接口兼容范围");
+});
+
+test("恢复续跑与普通提问都会刷新 detail，不残留服务重启文案", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-detail-"));
+  const workspace = join(dataDir, "task-1");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({
+    summary: {
+      id: "task-1",
+      requirement: "恢复后继续澄清需求",
+      workspace,
+      status: "running",
+      detail: "重启前遗留的旧阶段文案",
+      created_at: "2026-09-04T00:00:00.000Z",
+    } satisfies TaskSummary,
+  }, null, 2));
+
+  let releaseResponse: (() => void) | undefined;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "恢复后采用哪个兼容方案？",
+      options: ["保持旧协议", "升级新协议"],
+      recommended: "保持旧协议",
+    }] } } },
+  ], "scripted-v1", {
+    beforeScene: async ({ requestNumber }) => {
+      if (requestNumber === 1) await responseGate;
+    },
+  });
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const recovered = service.recover();
+  assert.equal(recovered.requeued, 1);
+
+  const running = await until(() => {
+    const task = service.get("task-1");
+    return task?.status === "running" ? task : undefined;
+  }, "恢复任务重新开始执行");
+  assert.equal(running.detail, "Agent 已恢复并继续处理");
+
+  releaseResponse!();
+  const waiting = await until(() => {
+    const task = service.get("task-1");
+    return task?.status === "waiting_for_human" ? task : undefined;
+  }, "恢复任务提出新问题");
+  assert.equal(waiting.detail, "等待你回答：恢复后采用哪个兼容方案？");
+
+  await service.shutdown();
+  await model.stop();
 });
 
 test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", async () => {

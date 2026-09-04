@@ -216,6 +216,10 @@ export interface CloudSessionOptions {
   allowHumanQuestions?: boolean;
   /** 专项旁路会话可关闭 Task，避免一个轻量助手再扩散出子 Agent 树。 */
   allowSubagents?: boolean;
+  /** 面向人的问题卡文本整形(问题/选项/推荐/背景)。分析会话用它把模型
+   * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
+   * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
+  humanizeQuestionText?: (text: string) => string;
   /** 编译专项会话把长 Bash 的 stdout 节流写入事件账，供独立 SSE 实时
    * 展示。普通编码会话默认关闭，避免把高频输出灌进主事件账。 */
   streamBashOutput?: boolean;
@@ -1342,15 +1346,28 @@ export class CloudSession {
             isError: true,
           };
         }
+        const humanize = driver.options.humanizeQuestionText
+          ?? ((text: string) => text);
+        const questions = (params.questions as Array<{
+          question: string; options?: string[]; recommended?: string;
+        }>).map((item) => ({
+          ...item,
+          question: humanize(item.question),
+          ...(item.options ? { options: item.options.map(humanize) } : {}),
+          ...(item.recommended !== undefined
+            ? { recommended: humanize(item.recommended) } : {}),
+        }));
         const explicitContext =
           typeof params.context === "string" && params.context.trim()
-            ? params.context.trim() : undefined;
-        const lastSaid = driver.lastAssistantText.get(driver.sessionId);
+            ? humanize(params.context.trim()) : undefined;
+        const lastSaidRaw = driver.lastAssistantText.get(driver.sessionId);
+        const lastSaid = lastSaidRaw === undefined
+          ? undefined : humanize(lastSaidRaw);
         const record = driver.options.humanGate.createWaiting({
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
-          questionInput: { questions: params.questions },
+          questionInput: { questions },
           context: explicitContext ?? lastSaid,
           // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
           // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻

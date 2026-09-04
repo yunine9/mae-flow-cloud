@@ -221,7 +221,9 @@ class BashWriteGateTests(unittest.TestCase):
         self.assertIn("Cloud", blocked.message)
 
     def test_delivery_host_commands_cannot_be_forged_by_main_agent(self):
-        for action in ("feedback-open", "feedback-result", "close"):
+        for action in (
+                "feedback-open", "feedback-result", "selection-reconcile",
+                "close"):
             with self.subTest(action=action):
                 blocked = decide_bash_write(self.context(
                     command='python ".mae-flow-work/bin/mae-flow.py" '

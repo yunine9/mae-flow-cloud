@@ -37,8 +37,15 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
  * verifying 的任务才给重跑按钮(在途验证点重跑=重复烧流水线)。 */
 export function repairStopped(task: {
   status: TaskStatus;
-  delivery?: { pipeline?: string; stalled?: string; loop?: { state: string } };
+  delivery?: {
+    pipeline?: string;
+    stalled?: string;
+    loop?: { state: string };
+    prepush_runtime?: { state?: string };
+  };
 }): boolean {
+  if (["running", "recovering"].includes(
+    task.delivery?.prepush_runtime?.state ?? "")) return false;
   const loop = task.delivery?.loop;
   return task.status === "verifying" && (
     loop?.state === "halted" || loop?.state === "exhausted"
@@ -55,9 +62,16 @@ export function statusText(task: {
   status: TaskStatus;
   delivery?: {
     loop?: { round: number; max?: number; state: string; kind?: string };
+    prepush?: { state?: string; round?: number; message?: string };
+    prepush_runtime?: { state?: string; message?: string };
   };
 }): string {
   const loop = task.delivery?.loop;
+  const runtime = task.delivery?.prepush_runtime;
+  if (["queued", "running", "verifying"].includes(task.status)) {
+    if (runtime?.state === "recovering") return "Build-Fix 恢复中";
+    if (runtime?.state === "running") return "Build-Fix 进行中";
+  }
   if (loop && ["queued", "running", "pausing", "verifying"]
     .includes(task.status)) {
     if (loop.state === "repairing") {
@@ -98,6 +112,12 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
+}
+
+/** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
+export interface PersonIdentity {
+  username: string;
+  display_name?: string;
 }
 
 export interface CollaborationAssignee {
@@ -330,6 +350,12 @@ export async function testLubanConnection(): Promise<{
 
 export async function listUsers(): Promise<AuthUser[]> {
   const response = await fetch("/auth/users");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listPeople(): Promise<PersonIdentity[]> {
+  const response = await fetch("/auth/people");
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -944,9 +970,21 @@ export interface TaskSummary {
   ticket?: string;
   requirement_graph?: {
     stage: "analysis" | "confirmed";
+    /** pending 是下单候选仓占位；只有 ready 才能据此创建模块任务。 */
+    projection_state?: "pending" | "ready" | "invalid";
+    projection_error?: string;
+    plan_revision?: string;
+    sync_required?: boolean;
+    chain_sha256?: string;
+    projection_sha256?: string;
+    repository_assessments?: Array<{
+      name: string; url: string;
+      outcome: "change_required" | "no_change";
+      reason: string; evidence?: string[];
+    }>;
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string;
-      /** 交付单元的文件面(单仓拆分):缺席=整仓一个单元。 */
+      /** Agent 分析出的模块交付单元及其负责文件面。 */
       scope?: { name: string; paths: string[] };
       assignee?: string; ticket?: string; task_id?: string;
       task_status?: TaskStatus; current_phase?: string;
@@ -2598,6 +2636,8 @@ export async function listInterrupts(
 
 /** 需求原文来自任务快照；这个保留标识与服务端 annotations.ts 同合同。 */
 export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
+/** 模块拆分图的虚拟批注靶；服务端按模块/依赖 id 重建锚点文本。 */
+export const REQUIREMENT_GRAPH_ARTIFACT = "__requirement_graph__";
 
 export interface Annotation {
   id: string;
@@ -3032,6 +3072,8 @@ export interface ArtifactMeta {
   file_count?: number;
   /** 完整变更目录；正文在点开文件时另取，避免大文件吃掉整个响应。 */
   change_files?: ArtifactChangeFile[];
+  /** 未跟踪目录根；目录内容由用户展开时分页读取。 */
+  untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap";
 }
@@ -3042,6 +3084,26 @@ export interface ArtifactChangeFile {
     | "staged_working" | "unstaged" | "untracked";
   additions: number;
   deletions: number;
+}
+
+export interface ArtifactChangeDirectory {
+  path: string;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryEntry {
+  path: string;
+  kind: "file" | "directory";
+  file_count: number;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryPage {
+  path: string;
+  entries: ArtifactChangeDirectoryEntry[];
+  total_entries: number;
+  total_files: number;
+  next_offset?: number;
 }
 
 export async function listArtifacts(
@@ -3321,6 +3383,21 @@ export async function readArtifactFileDiff(
     branch: body.branch ? String(body.branch) : undefined,
     truncated: body.truncated === true,
   };
+}
+
+export async function listArtifactChangeDirectory(
+  taskId: string,
+  path: string,
+  offset = 0,
+): Promise<ArtifactChangeDirectoryPage> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/artifacts/change-directory?path=${
+      encodeURIComponent(path)}&offset=${Math.max(0, Math.floor(offset))}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+  return await response.json() as ArtifactChangeDirectoryPage;
 }
 
 /** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。

@@ -137,11 +137,7 @@ def _identity(path):
     return repository_path_identity(path, case_insensitive=True)
 
 
-def eligible_repair_paths(state, head, dirty_paths, repository_root=None):
-    """Return exact business paths attributable to the active RED repair."""
-    active, authorization = active_repair_authorization(state, head)
-    if not active:
-        return ()
+def _repair_path_sets(state, authorization):
     excluded = {
         _identity(path) for path in (
             list((state or {}).get("initial_dirty") or ())
@@ -152,16 +148,37 @@ def eligible_repair_paths(state, head, dirty_paths, repository_root=None):
         _identity(path) for path in authorization.get("allowed_paths") or ()
         if isinstance(path, str)
     }
-    eligible = []
-    for path in dirty_paths:
-        if not isinstance(path, str):
-            continue
-        identity = _identity(path)
-        if identity in excluded and identity not in allowed:
-            continue
-        try:
-            validate_delivery_document_boundary((path,))
-        except ValueError:
-            continue
-        eligible.append(path)
+    archive = (state or {}).get("domain_archive") or {}
+    archive_paths = tuple(
+        path for path in archive.get("applied_paths") or ()
+        if archive.get("status") == "applied" and isinstance(path, str)
+    )
+    return excluded, allowed, archive_paths
+
+
+def _eligible_path(path, excluded, allowed, archive_ids, archive_paths):
+    if not isinstance(path, str):
+        return False
+    identity = _identity(path)
+    if (identity in excluded and identity not in allowed
+            and identity not in archive_ids):
+        return False
+    try:
+        validate_delivery_document_boundary((path,), archive_paths)
+    except ValueError:
+        return False
+    return True
+
+
+def eligible_repair_paths(state, head, dirty_paths, repository_root=None):
+    """Return exact business paths attributable to the active RED repair."""
+    active, authorization = active_repair_authorization(state, head)
+    if not active:
+        return ()
+    excluded, allowed, archive_paths = _repair_path_sets(state, authorization)
+    archive_ids = {_identity(path) for path in archive_paths}
+    # 领域归档是当前修复轮由内核事务刚应用的正式交付输出。只有精确
+    # applied_paths 收据可跨 baseline_dirty，不能把整个 docs/specs 放开。
+    eligible = [path for path in dirty_paths if _eligible_path(
+        path, excluded, allowed, archive_ids, archive_paths)]
     return tuple(dict.fromkeys(eligible))

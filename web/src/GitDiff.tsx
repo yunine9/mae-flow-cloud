@@ -61,6 +61,36 @@ export interface GitDiffFileManifest {
   deletions: number;
 }
 
+export interface GitDiffDirectoryManifest {
+  path: string;
+  stage: "untracked";
+}
+
+export interface GitDiffDirectoryEntry {
+  path: string;
+  kind: "file" | "directory";
+  file_count: number;
+  stage: "untracked";
+}
+
+export interface GitDiffDirectoryPage {
+  path: string;
+  entries: GitDiffDirectoryEntry[];
+  total_entries: number;
+  total_files: number;
+  next_offset?: number;
+}
+
+interface LoadedDirectory {
+  open: boolean;
+  loading: boolean;
+  error?: string;
+  entries?: GitDiffDirectoryEntry[];
+  totalEntries?: number;
+  totalFiles?: number;
+  nextOffset?: number;
+}
+
 /**
  * 文件树以服务端的小体积完整清单为准，正文只补当前已经读取的文件。
  * 这样前几个大文件即使触发正文上限，后面的文件仍然全部可见可点。
@@ -167,7 +197,9 @@ export function GitDiff({
   text,
   branch,
   manifest,
+  untrackedDirectories,
   onFileSelect,
+  onDirectoryLoad,
   activeFileLoading = false,
   activeFileError = "",
   hideKey,
@@ -182,7 +214,14 @@ export function GitDiff({
   branch?: string;
   /** 完整文件目录；正文 text 可以只包含当前点开的一个文件。 */
   manifest?: readonly GitDiffFileManifest[];
+  /** 未跟踪目录只给根节点，避免一次编译把数万文件灌进 React。 */
+  untrackedDirectories?: readonly GitDiffDirectoryManifest[];
   onFileSelect?: (path: string) => void;
+  /** 用户展开未跟踪目录时分页读取其直接子项。 */
+  onDirectoryLoad?: (
+    path: string,
+    offset: number,
+  ) => Promise<GitDiffDirectoryPage>;
   activeFileLoading?: boolean;
   activeFileError?: string;
   /** 每任务保存自己的视图隐藏项；隐藏不参与 Git 或交付判断。 */
@@ -199,8 +238,29 @@ export function GitDiff({
   /** 外部明确请求进入专注审阅；递增即可重复打开。 */
   focusRequest?: number;
 }) {
-  const files = useMemo(() => filesForDiff(text, manifest), [text, manifest]);
-  const [selected, setSelected] = useState(files[0]?.key ?? "");
+  const baseFiles = useMemo(() => filesForDiff(text, manifest), [text, manifest]);
+  const directoryRoots = useMemo(() => [...new Map(
+    (untrackedDirectories ?? []).map((directory) =>
+      [directory.path, directory] as const)).values()], [untrackedDirectories]);
+  const directoryRootKey = directoryRoots.map((directory) => directory.path)
+    .join("\0");
+  const [loadedUntrackedFiles, setLoadedUntrackedFiles] =
+    useState<Map<string, ChangedFile>>(new Map());
+  const files = useMemo(() => {
+    const merged = new Map(baseFiles.map((file) => [file.path, file]));
+    const contentByPath = new Map(parseChanges(text)
+      .map((file) => [file.path, file] as const));
+    for (const file of loadedUntrackedFiles.values()) {
+      const content = contentByPath.get(file.path);
+      merged.set(file.path, content
+        ? { ...content, key: file.key, stage: "untracked" }
+        : file);
+    }
+    return [...merged.values()];
+  }, [baseFiles, loadedUntrackedFiles, text]);
+  const [loadedDirectories, setLoadedDirectories] =
+    useState<Record<string, LoadedDirectory>>({});
+  const [selected, setSelected] = useState(baseFiles[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -215,9 +275,15 @@ export function GitDiff({
   const [diffFontSize, setDiffFontSize] = useState(() =>
     clampDiffFontSize(storedNumber("mae-flow:git-diff-font-size",
       DEFAULT_DIFF_FONT_SIZE)));
+  // 首次渲染就折叠目录。旧实现等首屏提交后才在 effect 里折叠，数万
+  // 文件会先真实生成数十万个 DOM 节点，浏览器已经卡死，effect 根本
+  // 来不及执行。
   const [collapsedDirectories, setCollapsedDirectories] =
-    useState<Set<string>>(new Set());
+    useState<Set<string>>(() => new Set(
+      displayDirectoryPaths(changeTree(baseFiles))));
   const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
+  const [hiddenDirectories, setHiddenDirectories] =
+    useState<Set<string>>(new Set());
   const [deliveryPaths, setDeliveryPaths] = useState<Set<string>>(new Set());
   const [localGroupOpen, setLocalGroupOpen] = useState(false);
   const [activeSelectionKey, setActiveSelectionKey] = useState("");
@@ -234,20 +300,37 @@ export function GitDiff({
   }>();
   const hiddenStorageKey = hideKey
     ? `mae-flow:hidden-change-files:${hideKey}` : "";
+  const hiddenDirectoryStorageKey = hideKey
+    ? `mae-flow:hidden-change-directories:${hideKey}` : "";
+  const pathInsideDirectory = (path: string, directory: string) =>
+    path.startsWith(`${directory}/`);
+  const hiddenByDirectory = (path: string) => [...hiddenDirectories]
+    .some((directory) => pathInsideDirectory(path, directory));
   const visibleFiles = useMemo(
-    () => files.filter((file) => !hiddenPaths.has(file.path)),
-    [files, hiddenPaths],
+    () => files.filter((file) => !hiddenPaths.has(file.path)
+      && !hiddenByDirectory(file.path)),
+    [files, hiddenPaths, hiddenDirectories],
   );
-  const tree = useMemo(() => changeTree(visibleFiles), [visibleFiles]);
+  const visibleDirectoryRoots = useMemo(() => directoryRoots.filter(
+    (directory) => !hiddenDirectories.has(directory.path)),
+  [directoryRoots, hiddenDirectories]);
+  // 按需载入的未跟踪文件由下面的懒目录原位绘制，不能又塞进普通树
+  // 形成两份同名节点。
+  const treeFiles = useMemo(() => visibleFiles.filter((file) =>
+    !directoryRoots.some((directory) =>
+      pathInsideDirectory(file.path, directory.path))),
+  [visibleFiles, directoryRoots]);
+  const tree = useMemo(() => changeTree(treeFiles), [treeFiles]);
   // 交付检视时按语义分两组:检视的重心是"将推送"的提交增量,工作区
   // 其他改动默认不进远端——混在一棵树里,人分不清哪些必须看。
-  const pushFiles = useMemo(() => visibleFiles.filter((file) =>
+  const pushFiles = useMemo(() => treeFiles.filter((file) =>
     file.stage === "committed" || file.stage === "committed_working"),
-  [visibleFiles]);
-  const localFiles = useMemo(() => visibleFiles.filter((file) =>
+  [treeFiles]);
+  const localFiles = useMemo(() => treeFiles.filter((file) =>
     file.stage !== "committed" && file.stage !== "committed_working"),
-  [visibleFiles]);
-  const grouped = selectable && pushFiles.length > 0 && localFiles.length > 0;
+  [treeFiles]);
+  const grouped = selectable && pushFiles.length > 0
+    && (localFiles.length > 0 || visibleDirectoryRoots.length > 0);
   const pushTree = useMemo(() => changeTree(pushFiles), [pushFiles]);
   const localTree = useMemo(() => changeTree(localFiles), [localFiles]);
   const allDirectories = useMemo(() => grouped
@@ -276,9 +359,35 @@ export function GitDiff({
   }, [hiddenStorageKey]);
 
   useEffect(() => {
+    if (!hiddenDirectoryStorageKey || typeof window === "undefined") {
+      setHiddenDirectories(new Set());
+      return;
+    }
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(hiddenDirectoryStorageKey) ?? "[]");
+      setHiddenDirectories(new Set(
+        Array.isArray(saved) ? saved.map(String) : []));
+    } catch {
+      setHiddenDirectories(new Set());
+    }
+  }, [hiddenDirectoryStorageKey]);
+
+  useEffect(() => {
     if (!hiddenStorageKey || typeof window === "undefined") return;
     localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenPaths]));
   }, [hiddenPaths, hiddenStorageKey]);
+
+  useEffect(() => {
+    if (!hiddenDirectoryStorageKey || typeof window === "undefined") return;
+    localStorage.setItem(hiddenDirectoryStorageKey,
+      JSON.stringify([...hiddenDirectories]));
+  }, [hiddenDirectories, hiddenDirectoryStorageKey]);
+
+  useEffect(() => {
+    setLoadedDirectories({});
+    setLoadedUntrackedFiles(new Map());
+  }, [directoryRootKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -310,6 +419,14 @@ export function GitDiff({
       return next.size === current.size ? current : next;
     });
   }, [files.map((file) => file.path).join("\0")]);
+
+  useEffect(() => {
+    setHiddenDirectories((current) => {
+      const next = new Set([...current].filter((path) => directoryRoots.some(
+        (root) => path === root.path || pathInsideDirectory(path, root.path))));
+      return next.size === current.size ? current : next;
+    });
+  }, [directoryRootKey]);
 
   useEffect(() => {
     const known = initializedDirectories.current;
@@ -468,6 +585,82 @@ export function GitDiff({
     setDiffSplit(diffSplitFromPointer(clientX, box.left, box.width));
   }
 
+  async function loadUntrackedDirectory(path: string, append = false) {
+    if (!onDirectoryLoad) return;
+    const current = loadedDirectories[path];
+    const offset = append ? current?.nextOffset : 0;
+    if (append && offset === undefined) return;
+    setLoadedDirectories((directories) => ({
+      ...directories,
+      [path]: {
+        ...directories[path],
+        open: true,
+        loading: true,
+        error: undefined,
+      },
+    }));
+    try {
+      const page = await onDirectoryLoad(path, offset ?? 0);
+      setLoadedDirectories((directories) => {
+        const previous = append ? directories[path]?.entries ?? [] : [];
+        const entries = [...new Map([...previous, ...page.entries]
+          .map((entry) => [entry.path, entry] as const)).values()];
+        return {
+          ...directories,
+          [path]: {
+            open: true,
+            loading: false,
+            entries,
+            totalEntries: page.total_entries,
+            totalFiles: page.total_files,
+            nextOffset: page.next_offset,
+          },
+        };
+      });
+      const fileEntries = page.entries.filter((entry) => entry.kind === "file");
+      if (fileEntries.length) {
+        setLoadedUntrackedFiles((currentFiles) => {
+          const next = new Map(currentFiles);
+          for (const entry of fileEntries) {
+            next.set(entry.path, {
+              key: `untracked:${entry.path}`,
+              path: entry.path,
+              stage: "untracked",
+              kind: fileKind(entry.path),
+              lines: [],
+              additions: 0,
+              deletions: 0,
+            });
+          }
+          return next;
+        });
+      }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setLoadedDirectories((directories) => ({
+        ...directories,
+        [path]: {
+          ...directories[path],
+          open: true,
+          loading: false,
+          error: message,
+        },
+      }));
+    }
+  }
+
+  function toggleUntrackedDirectory(path: string) {
+    const current = loadedDirectories[path];
+    if (!current?.entries && !current?.loading) {
+      void loadUntrackedDirectory(path);
+      return;
+    }
+    setLoadedDirectories((directories) => ({
+      ...directories,
+      [path]: { ...directories[path], open: !directories[path]?.open },
+    }));
+  }
+
   function renderFile(file: ChangedFile, depth: number, overview: boolean) {
     const included = deliveryPaths.has(file.path);
     return (
@@ -511,6 +704,94 @@ export function GitDiff({
           aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
           <svg viewBox="0 0 18 18" aria-hidden><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
         </button>
+      </div>
+    );
+  }
+
+  function renderUntrackedDirectory(
+    directory: GitDiffDirectoryManifest | GitDiffDirectoryEntry,
+    depth: number,
+    overview: boolean,
+  ): ReactNode {
+    if (hiddenDirectories.has(directory.path)) return null;
+    const state = loadedDirectories[directory.path];
+    const open = state?.open === true;
+    const count = state?.totalFiles
+      ?? ("file_count" in directory ? directory.file_count : undefined);
+    const label = depth === 0 ? directory.path
+      : directory.path.split("/").at(-1) ?? directory.path;
+    return (
+      <div className="change-tree-directory untracked-directory"
+        key={`untracked-directory:${directory.path}`}>
+        <div className="change-tree-directory-row"
+          style={{ "--tree-depth": depth } as CSSProperties}>
+          <button type="button" className="change-directory-main"
+            title={`${directory.path}（未跟踪目录，展开时按需读取）`}
+            aria-expanded={open}
+            onClick={() => toggleUntrackedDirectory(directory.path)}>
+            <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
+            <span aria-hidden>▰</span><strong>{label}</strong>
+            <i>{count === undefined ? "按需" : count}</i>
+          </button>
+          <button type="button" className="change-hide"
+            title="隐藏整个未跟踪目录；不改变 Git 或交付清单"
+            aria-label={`隐藏目录 ${directory.path}`}
+            onClick={() => setHiddenDirectories((current) =>
+              new Set([...current, directory.path]))}>
+            <svg viewBox="0 0 18 18" aria-hidden><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
+          </button>
+        </div>
+        {open && <div className="change-tree-children">
+          {state?.loading && !state.entries?.length && (
+            <div className="change-tree-lazy-note">正在读取这一层…</div>
+          )}
+          {state?.error && (
+            <div className="change-tree-lazy-note error">
+              <span>{state.error}</span>
+              <button type="button" onClick={() =>
+                void loadUntrackedDirectory(directory.path)}>重试</button>
+            </div>
+          )}
+          {state?.entries?.map((entry) => entry.kind === "directory"
+            ? renderUntrackedDirectory(entry, depth + 1, overview)
+            : hiddenPaths.has(entry.path) || hiddenByDirectory(entry.path)
+              ? null
+              : renderFile({
+                  key: `untracked:${entry.path}`,
+                  path: entry.path,
+                  stage: "untracked",
+                  kind: fileKind(entry.path),
+                  lines: [],
+                  additions: 0,
+                  deletions: 0,
+                }, depth + 1, overview))}
+          {state?.nextOffset !== undefined && (
+            <button type="button" className="change-tree-load-more"
+              disabled={state.loading}
+              onClick={() => void loadUntrackedDirectory(
+                directory.path, true)}>
+              {state.loading ? "正在加载…" : `继续加载（已显示 ${
+                state.entries?.length ?? 0} / ${state.totalEntries ?? 0} 项）`}
+            </button>
+          )}
+          {!state?.loading && !state?.error && state?.entries?.length === 0 && (
+            <div className="change-tree-lazy-note">目录当前没有可展示的未跟踪文件</div>
+          )}
+        </div>}
+      </div>
+    );
+  }
+
+  function renderUntrackedDirectories(overview: boolean) {
+    if (!visibleDirectoryRoots.length) return null;
+    return (
+      <div className="change-tree-untracked">
+        <div className="change-tree-group-head local">
+          <strong>未跟踪目录 · 默认折叠</strong>
+          <i>{visibleDirectoryRoots.length}</i>
+        </div>
+        {visibleDirectoryRoots.map((directory) =>
+          renderUntrackedDirectory(directory, 0, overview))}
       </div>
     );
   }
@@ -602,20 +883,24 @@ export function GitDiff({
                 onClick={() => setLocalGroupOpen((open) => !open)}>
                 <span aria-hidden>{localGroupOpen ? "⌄" : "›"}</span>
                 <strong>工作区其他改动 · 默认仅留本地</strong>
-                <i>{localFiles.length}</i>
+                <i>{localFiles.length + visibleDirectoryRoots.length}</i>
               </button>
               {localGroupOpen && renderTreeNodes(localTree, overview)}
+              {localGroupOpen && renderUntrackedDirectories(overview)}
             </div>
           </>
-        ) : renderTreeNodes(tree, overview)}
-        {!visibleFiles.length && (
+        ) : <>
+          {renderTreeNodes(tree, overview)}
+          {renderUntrackedDirectories(overview)}
+        </>}
+        {!visibleFiles.length && !visibleDirectoryRoots.length && (
           <div className="change-tree-empty">全部变更已从视图隐藏</div>
         )}
       </div>
     );
   }
 
-  if (!files.length) {
+  if (!files.length && !directoryRoots.length) {
     return <div className="worktree-clean"><strong>暂无代码变更</strong><span>{text}</span></div>;
   }
 
@@ -651,7 +936,8 @@ export function GitDiff({
         <header className="git-change-summary">
           <div>
             <span>WORKTREE</span>
-            <strong>{files.length} 个文件发生变化</strong>
+            <strong>{baseFiles.length} 个文件发生变化{directoryRoots.length
+              ? ` · ${directoryRoots.length} 个未跟踪目录` : ""}</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
               <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
@@ -668,7 +954,7 @@ export function GitDiff({
         </header>
       )}
 
-      {(selectable || hiddenPaths.size > 0) && (
+      {(selectable || hiddenPaths.size > 0 || hiddenDirectories.size > 0) && (
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
           {selectable && <div><strong>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span>{selectionChanged
@@ -680,13 +966,17 @@ export function GitDiff({
                 replaceDelivery(files.map((file) => file.path))}>全部纳入</button>
               <button type="button" onClick={() => replaceDelivery([])}>全部仅留本地</button>
             </>}
-            {hiddenPaths.size > 0 && <button type="button"
+            {(hiddenPaths.size > 0 || hiddenDirectories.size > 0) && <button type="button"
               title="隐藏只影响浏览，不影响上面的交付勾选"
-              onClick={() => setHiddenPaths(new Set())}>
-              恢复 {hiddenPaths.size} 个隐藏项
+              onClick={() => {
+                setHiddenPaths(new Set());
+                setHiddenDirectories(new Set());
+              }}>
+              恢复 {hiddenPaths.size + hiddenDirectories.size} 个隐藏项
             </button>}
           </div>
-          {hiddenPaths.size > 0 && <small>隐藏仅整理视图，不会自动排除提交。</small>}
+          {(hiddenPaths.size > 0 || hiddenDirectories.size > 0)
+            && <small>隐藏仅整理视图，不会自动排除提交。</small>}
         </div>
       )}
 
@@ -695,7 +985,8 @@ export function GitDiff({
         style={{ "--change-tree-width": `${treePanelWidth}px` } as CSSProperties}>
         <nav className="change-files" aria-label="变更文件">
           <div className="change-tree-caption"><span>按目录</span><div>
-            <i>{visibleFiles.length}</i>
+            <i>{treeFiles.length}{visibleDirectoryRoots.length
+              ? ` + ${visibleDirectoryRoots.length}目录` : ""}</i>
             {allDirectories.length > 0 && (
               <button type="button"
                 aria-label={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
@@ -776,6 +1067,11 @@ export function GitDiff({
           ) : activeFileError ? (
             <div className="untracked-file-note" role="alert">
               <strong>这个文件暂时打不开</strong><span>{activeFileError}</span>
+            </div>
+          ) : !active && directoryRoots.length ? (
+            <div className="untracked-file-note">
+              <strong>未跟踪目录已折叠</strong>
+              <span>从左侧展开需要查看的目录，再选择具体文件；目录内容不会一次性灌入页面。</span>
             </div>
           ) : !hasTextRows ? (
             <div className="untracked-file-note"><strong>没有可展示的文本内容</strong><span>文件可能为空、不可读或属于无法逐行比较的类型。</span></div>

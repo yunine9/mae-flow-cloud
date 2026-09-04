@@ -24,6 +24,12 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
  */
 export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 
+/** 模块拆分图不是磁盘文档，却同样需要进入统一批注账。artifact 使用稳定
+ * 虚拟标识，anchor 则记录方案整体、模块 id 或依赖边；服务端会从当前
+ * requirement_graph 机械还原可重锚定文本。这样图上意见不必硬挂到
+ * CHAIN 文档某一行，也不用另造一套“图评论”状态机。 */
+export const REQUIREMENT_GRAPH_ARTIFACT = "__requirement_graph__";
+
 export type AnnotationKind = "doc" | "code";
 /** 一条检视意见首先是在找谁做下一步，不是天然都在命令 Agent。旧账
  * 没有 route，读侧一律按 agent 解释，避免升级后改变历史任务语义。 */
@@ -536,6 +542,8 @@ export function renderAnnotations(
   ticket: string,
 ): string {
   const ordered = orderAnnotations(items);
+  const hasGraphAnnotations = ordered.some((item) =>
+    item.artifact === REQUIREMENT_GRAPH_ARTIFACT);
   const files = [...new Set(ordered.map((item) => item.file))];
   const lines: string[] = [
     `这是我人工检视 ${ticket} 的结果,共 ${ordered.length} 条,` +
@@ -547,6 +555,11 @@ export function renderAnnotations(
     "- 行号按你收到时的文件;你一改行号就会偏移,所以每条都附了原文,"
     + "以原文为准定位。",
     "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
+    ...(hasGraphAnnotations ? [
+      "- 标为“方案结构”的意见来自模块拆分图。按方案整体、模块 id 或依赖边定位，"
+        + "不要拿展示行号去猜 JSON 行号。处理后必须同时更新 CHAIN 文档和"
+        + " requirement-graph.json，并为两份产物换同一个新 plan_revision。",
+    ] : []),
     "",
   ];
   let seen = "";
@@ -559,8 +572,10 @@ export function renderAnnotations(
     index += 1;
     // 稳定 id 是逐条回执的连接键。不能再靠“第 1 段大概回答第 1 条”猜，
     // Agent、服务端和页面都必须能精确指回同一条意见。
-    const span = item.line_end && item.line_end > item.line
-      ? `第 ${item.line}–${item.line_end} 行` : `第 ${item.line} 行`;
+    const graphAnnotation = item.artifact === REQUIREMENT_GRAPH_ARTIFACT;
+    const span = graphAnnotation ? "方案结构"
+      : item.line_end && item.line_end > item.line
+        ? `第 ${item.line}–${item.line_end} 行` : `第 ${item.line} 行`;
     lines.push(`${index}. [${item.id}] ${span}`);
     const label = item.kind === "code" ? "当前代码" : "原文";
     if (item.quote) {

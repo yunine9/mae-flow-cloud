@@ -17,6 +17,7 @@ from .host_receipts import (
     attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
     save_with_host_proof, trusted_active_batch, trusted_current_lifecycle,
     trusted_pipeline_projection)
+from .selection_reconcile import reconcile_selection
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
@@ -27,10 +28,8 @@ _WRITER = frozenset(("feedback_triage", "build", "domain_archive",
 def _die(message):
     api.die("delivery: " + message, 2)
 
-
 def _verify_host_proof(state, args, action, payload):
     return verify_host_proof(state, args.host_proof, action, payload)
-
 
 def _payload(path, schema):
     absolute = os.path.abspath(path)
@@ -48,7 +47,6 @@ def _payload(path, schema):
         _die("事实文件 schema 必须是 %s" % schema)
     return value
 
-
 def _text(value, name, limit=4000, required=True):
     result = str(value or "").strip()
     if required and not result:
@@ -56,7 +54,6 @@ def _text(value, name, limit=4000, required=True):
     if len(result) > limit:
         _die("%s 超过 %s 字符" % (name, limit))
     return result
-
 
 def _loop(state):
     loop = state.setdefault("delivery_loop", {
@@ -73,7 +70,6 @@ def _loop(state):
     loop.setdefault("batches", [])
     loop.setdefault("close_events", [])
     return loop
-
 
 def _batch(loop, batch_id):
     return next((
@@ -185,11 +181,12 @@ def _open(flow, state, args):
         active_id = (str(existing_loop.get("active_batch_id") or "")
                      if isinstance(existing_loop, dict) else "")
         predecessor_ok = (trusted_active_batch(state, (
-            "feedback-open", "feedback-result", "pipeline-record"))
+            "feedback-open", "feedback-result", "pipeline-record",
+            "selection-reconcile"))
             if active_id
             else trusted_current_lifecycle(state, (
                 "pipeline-record", "feedback-open", "feedback-result",
-                "intervention-reconcile")))
+                "intervention-reconcile", "selection-reconcile")))
         # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
         # 升级、迁移前的现场),这条命令本身就是第一环;这时还要求"先有
         # 前驱收据"等于宣布这单的反馈永远打不开,且无命令可补。
@@ -341,7 +338,8 @@ def _result(flow, state, args):
     _capability(state)
     if (host_managed_continuous_review()
             and not trusted_active_batch(state, (
-                "feedback-open", "pipeline-record", "feedback-result"))):
+                "feedback-open", "pipeline-record", "feedback-result",
+                "selection-reconcile"))):
         _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
@@ -491,6 +489,10 @@ def cmd_delivery(flow, state, args):
         return _open(flow, state, args)
     if args.delivery_action == "feedback-result":
         return _result(flow, state, args)
+    if args.delivery_action == "selection-reconcile":
+        return reconcile_selection(state, args, load_payload=_payload,
+            verify_host_proof=_verify_host_proof, capability=_capability,
+            head=_head, history=_history, state_schema=STATE_SCHEMA)
     if args.delivery_action == "close":
         return _close(flow, state, args)
     if args.delivery_action == "attest":

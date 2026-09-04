@@ -417,12 +417,15 @@ export function buildPersonalActionItems({
   merges,
   reviews,
   tasks,
+  discussions = [],
 }: {
   waiting: TaskSummary[];
   intervention: TaskSummary[];
   merges: TaskSummary[];
   reviews: ReviewRequest[];
   tasks: TaskSummary[];
+  /** 别人的分析单邀请我参与讨论、卡正等回答。 */
+  discussions?: TaskSummary[];
 }): PersonalActionItem[] {
   const seen = new Set<string>();
   const items: PersonalActionItem[] = [];
@@ -436,6 +439,18 @@ export function buildPersonalActionItems({
       title: task.title ?? task.requirement,
       detail: task.focus?.next_action ?? "查看材料并完成当前确认",
       action: "立即处理",
+    });
+  }
+  for (const task of discussions) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `discussion:${task.id}`,
+      task,
+      kicker: "受邀参与讨论",
+      title: task.title ?? task.requirement,
+      detail: `${responsibleOf(task) ?? "责任人"} 邀请你一起回答 Agent 的问题`,
+      action: "去回答",
     });
   }
   for (const review of reviews) {
@@ -550,9 +565,9 @@ export function App() {
       const issueId = readIssueRoute();
       setIssueRouteId(issueId);
       // 浏览器在别的页签后退/前进到 /issues/X:除更新快照外还要真的切
-      // 回问题处理页签(以前只改状态不切页,按后退像没反应)。管理员没有
-      // 问题处理页(渲染条件排除),保持原页签;/work 深链照旧只恢复任务。
-      if (issueId && session?.role !== "admin") setView("issues");
+      // 回问题处理页签(以前只改状态不切页,按后退像没反应)。admin 也进
+      // 问题处理(#103,查看模式只读);/work 深链照旧只恢复任务。
+      if (issueId) setView("issues");
       if (!next.taskId) {
         setArtifactTaskId("");
         setArtifactTaskSnapshot(undefined);
@@ -776,9 +791,19 @@ export function App() {
     return () => { alive = false; };
   }, [artifactTaskId]);
 
+  // 受邀参与讨论(协作者/逐仓责任人)的分析单也算我的活:卡等的是你的
+  // 回答,只在团队列表亮个信号灯等于邀请了没喊人。分析确认后 stage
+  // 变了自然退出。判据与服务端 canCollaborate 同口径。
+  const invitedToDiscuss = (task: TaskSummary) => !!session
+    && task.requirement_graph?.stage === "analysis"
+    && responsibleOf(task) !== session.username
+    && (task.collaborators?.includes(session.username) === true
+      || task.requirement_graph.repositories.some((repository) =>
+        repository.assignee === session.username));
   const assignedToMe = session
     ? tasks.filter((task) => responsibleOf(task) === session.username)
     : [];
+  const discussingWithMe = tasks.filter(invitedToDiscuss);
   // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
   // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
@@ -827,7 +852,7 @@ export function App() {
   }
 
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
-  const myTasks = assignedToMe;
+  const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending");
   const myBlocked = myTasks.filter((task) =>
@@ -847,7 +872,8 @@ export function App() {
     DELIVERY_HANDOFF_STATUSES.includes(task.status));
   const myMerges = myTasks.filter((task) => task.status === "await_merge");
   const personalActionItems = buildPersonalActionItems({
-    waiting: myWaiting,
+    waiting: myWaiting.filter((task) => !invitedToDiscuss(task)),
+    discussions: myWaiting.filter(invitedToDiscuss),
     intervention: myIntervention,
     merges: myMerges,
     reviews: pendingReviews,
@@ -917,10 +943,7 @@ export function App() {
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || responsibleOf(task) === session.username;
   const canCollaborate = (task: TaskSummary) => canOperate(task)
-    || (task.requirement_graph?.stage === "analysis"
-      && (task.collaborators?.includes(session.username) === true
-        || task.requirement_graph.repositories.some((repository) =>
-          repository.assignee === session.username)));
+    || invitedToDiscuss(task);
   const header = {
     team: { title: "团队任务", description: teamTaskTab === "current"
       ? (session.role === "admin"
@@ -928,7 +951,9 @@ export function App() {
         : "了解团队此刻正在推进什么；你的操作仍留在个人工作台。")
       : "回看已经形成结果的交付档案、MR 和事件记录。" },
     mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
-    issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
+    issues: { title: "问题处理", description: session.role === "admin"
+      ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
+      : "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     knowledge: { title: "团队资产", description: "管理团队通用知识、业务模块和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
@@ -996,6 +1021,9 @@ export function App() {
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
           <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
+          {/* 问题处理对 admin 只读开放(#103):板内发起入口隐藏,
+              会话工作台自动落查看模式(写口仅归属人)。 */}
+          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理（Beta）" beta />
           <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
           <span className="nav-section-label admin-tools">系统管理</span>
@@ -1148,11 +1176,11 @@ export function App() {
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
+            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={() => { leaveIssueRoute("profile"); setView("profile"); }} /></Suspense>}
+        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -1220,6 +1248,7 @@ export function App() {
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}
+      viewerDisplayName={session.display_name}
       canOverride={session.role === "admin"}
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}

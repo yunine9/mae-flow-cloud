@@ -185,7 +185,7 @@ def _delivery_host_command_decision(context):
     """Continuous-review mutation commands are a Cloud host authority."""
     if re.search(
         r"mae-flow(?:\.py)?[^\n;|&]*\bdelivery\b[^\n;|&]*"
-        r"\b(?:feedback-open|feedback-result|close)\b",
+        r"\b(?:feedback-open|feedback-result|selection-reconcile|close)\b",
         context.command, re.I,
     ):
         return _absolute(
