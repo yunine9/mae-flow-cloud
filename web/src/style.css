@@ -8631,6 +8631,40 @@ pre {
 .change-hide:hover { color: var(--danger); background: var(--danger-soft); }
 .change-hide svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; }
 .change-tree-empty { padding: 22px 10px; color: var(--muted); font-size: var(--font-size-assist); text-align: center; }
+.change-tree-untracked { margin-top: 8px; }
+.untracked-directory > .change-tree-directory-row {
+  background: color-mix(in srgb, var(--attention) 4%, transparent);
+}
+.change-tree-lazy-note {
+  margin: 3px 8px 5px 24px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 6px;
+  font-size: var(--font-size-assist);
+}
+.change-tree-lazy-note.error { color: var(--danger); }
+.change-tree-lazy-note button,
+.change-tree-load-more {
+  padding: 5px 9px;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: var(--font-size-assist);
+  cursor: pointer;
+}
+.change-tree-load-more {
+  width: calc(100% - 24px);
+  margin: 4px 8px 6px 16px;
+}
+.change-tree-load-more:hover,
+.change-tree-lazy-note button:hover { border-color: var(--accent); }
+.change-tree-load-more:disabled { opacity: .62; cursor: wait; }
 .change-tree.overview .change-tree-directory-row,
 .change-tree.overview .change-tree-file { min-height: 46px; }
 .git-change-browser {

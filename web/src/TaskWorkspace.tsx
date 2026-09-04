@@ -45,6 +45,7 @@ import {
   decideScopeViolation,
   deleteHistoryTask,
   listAnnotations,
+  listArtifactChangeDirectory,
   listArtifacts,
   listCommitters,
   listTaskReviews,
@@ -984,8 +985,14 @@ export function TaskWorkspace({
 
   const activeArtifactForRead = items?.find((item) => item.name === active);
   const activeChangeFiles = activeArtifactForRead?.change_files;
+  const activeUntrackedDirectories =
+    activeArtifactForRead?.untracked_directories ?? [];
+  const activeUntrackedDirectoryKey = activeUntrackedDirectories
+    .map((directory) => directory.path).join("\0");
+  const selectedFromUntrackedDirectory = activeUntrackedDirectories.some(
+    (directory) => selectedDiffPath.startsWith(`${directory.path}/`));
   const requestedDiffPath = activeChangeFiles?.some((file) =>
-    file.path === selectedDiffPath)
+    file.path === selectedDiffPath) || selectedFromUntrackedDirectory
     ? selectedDiffPath
     : activeChangeFiles?.[0]?.path ?? "";
 
@@ -1001,10 +1008,20 @@ export function TaskWorkspace({
     setDiffFileLoading(lazyWorkspaceDiff);
     setDiffFileError("");
     if (pushDiffActive) setPushDiffState({ kind: "checking" });
+    const directoryOnlyWorkspaceDiff = !pushDiffActive
+      && activeArtifactForRead?.kind === "diff"
+      && !requestedDiffPath
+      && activeUntrackedDirectories.length > 0;
     const reading = pushDiffActive
       ? readPushReviewDiff(task.id, diffScope)
       : lazyWorkspaceDiff
         ? readArtifactFileDiff(task.id, requestedDiffPath)
+        : directoryOnlyWorkspaceDiff
+          ? Promise.resolve({
+              content: "未跟踪目录已折叠；展开目录后再按需读取文件。",
+              branch: undefined,
+              unavailable: undefined,
+            })
         : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
@@ -1042,7 +1059,8 @@ export function TaskWorkspace({
     });
     return () => { alive = false; };
   }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
-    activeArtifactForRead?.kind, requestedDiffPath]);
+    activeArtifactForRead?.kind, requestedDiffPath,
+    activeUntrackedDirectoryKey]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -1156,6 +1174,8 @@ export function TaskWorkspace({
   const changeFileCount = changeCountKnown
     ? changes.reduce((sum, item) => sum + (item.file_count ?? 0), 0)
     : changes.length;
+  const untrackedDirectoryCount = changes.reduce((sum, item) =>
+    sum + (item.untracked_directories?.length ?? 0), 0);
   const hasRequirementGraph = !!task.requirement_graph
     && ((task.repositories?.length ?? 0) > 1
       || task.requirement_analysis_requested === true
@@ -1629,8 +1649,13 @@ export function TaskWorkspace({
                   ? task.requirement_graph!.repositories.length : "…"}</i>
               </button>}
               <button className={materialView === "diff" ? "on" : ""}
-                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
-                <span>工作区变更</span><i>{changeFileCount}</i>
+                title={untrackedDirectoryCount
+                  ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
+                  : `${changeFileCount} 个文件`}
+                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }}
+                disabled={!changeFileCount && !untrackedDirectoryCount}>
+                <span>工作区变更</span><i>{changeFileCount}{untrackedDirectoryCount
+                  ? ` + ${untrackedDirectoryCount}目录` : ""}</i>
               </button>
               <button type="button" className="materials-fullscreen-toggle"
                 aria-pressed={materialsFullscreen}
@@ -1942,6 +1967,12 @@ export function TaskWorkspace({
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
                       manifest={!pushReview ? activeMeta?.change_files : undefined}
+                      untrackedDirectories={!pushReview
+                        ? activeMeta?.untracked_directories : undefined}
+                      onDirectoryLoad={!pushReview
+                        ? (path, offset) => listArtifactChangeDirectory(
+                            task.id, path, offset)
+                        : undefined}
                       onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
                       activeFileLoading={diffFileLoading}
                       activeFileError={diffFileError}

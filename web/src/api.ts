@@ -3054,6 +3054,8 @@ export interface ArtifactMeta {
   file_count?: number;
   /** 完整变更目录；正文在点开文件时另取，避免大文件吃掉整个响应。 */
   change_files?: ArtifactChangeFile[];
+  /** 未跟踪目录根；目录内容由用户展开时分页读取。 */
+  untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap";
 }
@@ -3064,6 +3066,26 @@ export interface ArtifactChangeFile {
     | "staged_working" | "unstaged" | "untracked";
   additions: number;
   deletions: number;
+}
+
+export interface ArtifactChangeDirectory {
+  path: string;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryEntry {
+  path: string;
+  kind: "file" | "directory";
+  file_count: number;
+  stage: "untracked";
+}
+
+export interface ArtifactChangeDirectoryPage {
+  path: string;
+  entries: ArtifactChangeDirectoryEntry[];
+  total_entries: number;
+  total_files: number;
+  next_offset?: number;
 }
 
 export async function listArtifacts(
@@ -3343,6 +3365,21 @@ export async function readArtifactFileDiff(
     branch: body.branch ? String(body.branch) : undefined,
     truncated: body.truncated === true,
   };
+}
+
+export async function listArtifactChangeDirectory(
+  taskId: string,
+  path: string,
+  offset = 0,
+): Promise<ArtifactChangeDirectoryPage> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/artifacts/change-directory?path=${
+      encodeURIComponent(path)}&offset=${Math.max(0, Math.floor(offset))}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+  return await response.json() as ArtifactChangeDirectoryPage;
 }
 
 /** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。

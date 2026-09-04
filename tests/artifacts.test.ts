@@ -34,6 +34,7 @@ import {
   PIPELINE_EVIDENCE_GAP_ARTIFACT,
   listArtifacts,
   listArtifactsAsync,
+  listArtifactChangeDirectoryAsync,
   readArtifact,
   readArtifactAsync,
   readArtifactFileDiffAsync,
@@ -185,6 +186,53 @@ test("异步工作台读侧与原有差异快照语义一致", async () => {
   const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
   assert.match(String(snapshot?.content), /异步路径修改/);
   assert.match(String(snapshot?.content), /异步路径未跟踪/);
+});
+
+test("大量未跟踪编译产物按目录聚合并分页展开", async () => {
+  const cwd = makeSite({ git: true });
+  writeFileSync(join(cwd, "tracked.txt"), "只有这个已跟踪文件发生修改\n");
+  for (let index = 0; index < 260; index += 1) {
+    const directory = join(cwd, "target", "CMakeFiles", `module-${index}`);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "object.o"), `compiled-${index}\n`);
+  }
+
+  const items = await listArtifactsAsync(cwd);
+  const diff = items.find((item) => item.name === DIFF_NAME);
+  assert.deepEqual(diff?.change_files?.map((file) => file.path), [
+    "tracked.txt",
+  ], "编译目录不能展开成 260 条首屏清单");
+  assert.equal(diff?.file_count, 1,
+    "入口数字应表示逐文件展示的真实变更，不能冒充编译产物总数");
+  assert.deepEqual(diff?.untracked_directories, [
+    { path: "target", stage: "untracked" },
+  ]);
+
+  const target = await listArtifactChangeDirectoryAsync(cwd, "target");
+  assert.equal(target?.total_files, 260);
+  assert.deepEqual(target?.entries, [{
+    path: "target/CMakeFiles",
+    kind: "directory",
+    file_count: 260,
+    stage: "untracked",
+  }]);
+
+  const first = await listArtifactChangeDirectoryAsync(
+    cwd, "target/CMakeFiles");
+  assert.equal(first?.entries.length, 200);
+  assert.equal(first?.total_entries, 260);
+  assert.equal(first?.next_offset, 200);
+  const second = await listArtifactChangeDirectoryAsync(
+    cwd, "target/CMakeFiles", first?.next_offset);
+  assert.equal(second?.entries.length, 60);
+  assert.equal(second?.next_offset, undefined);
+
+  const file = await readArtifactFileDiffAsync(
+    cwd, "target/CMakeFiles/module-259/object.o");
+  assert.match(String(file?.content), /compiled-259/,
+    "目录未进入首屏清单也必须支持按文件安全读取");
+  assert.equal(await listArtifactChangeDirectoryAsync(cwd, "../target"),
+    undefined, "目录展开接口不能越出仓库");
 });
 
 test("大文件不会挤掉完整变更目录，后面的源码可按文件读取", async () => {

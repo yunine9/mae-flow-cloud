@@ -328,6 +328,24 @@ test("代码差异目录以完整清单为准，正文只补当前文件", () =>
   assert.equal(files[1].kind, "代码");
 });
 
+test("旧服务即使送来上万条清单，目录也在首次渲染前折叠", () => {
+  const manifest = Array.from({ length: 10_000 }, (_, index) => ({
+    path: `target/CMakeFiles/module-${index}/object.o`,
+    stage: "untracked",
+    additions: 0,
+    deletions: 0,
+  }));
+  const html = renderToStaticMarkup(React.createElement(gitDiff.GitDiff, {
+    text: "工作区文件正文按需读取",
+    manifest,
+  }));
+  assert.match(html, /target\/CMakeFiles/);
+  assert.doesNotMatch(html, /module-9999\/object\.o/,
+    "首屏不能先渲染所有文件、再靠 effect 折叠");
+  assert.ok(html.length < 100_000,
+    `折叠后的首屏 HTML 不应随一万条清单膨胀：${html.length}`);
+});
+
 test("工作台面向用户只说实时执行日志和单元测试", () => {
   const html = renderToStaticMarkup(React.createElement(taskCard.ExecutionPanel, {
     task: task("live"),

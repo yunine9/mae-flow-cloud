@@ -88,6 +88,7 @@ import {
   ArtifactArchiveTooLargeError,
   bundleArtifactDocuments,
   listArtifactsAsync,
+  listArtifactChangeDirectoryAsync,
   readArtifactAsync,
   readArtifactFileDiffAsync,
   resolveArtifactRoot,
@@ -2856,6 +2857,19 @@ export function createTaskServer(
               });
             }
             return json(response, 200, diff);
+          }
+          if (parts.length === 4 && parts[3] === "change-directory") {
+            const path = url.searchParams.get("path") ?? "";
+            const offset = Number.parseInt(
+              url.searchParams.get("offset") ?? "0", 10);
+            const page = await listArtifactChangeDirectoryAsync(
+              root, path, Number.isFinite(offset) ? offset : 0);
+            if (!page) {
+              return json(response, 404, {
+                error: "这个目录已不在当前未跟踪变更中，请刷新后重试",
+              });
+            }
+            return json(response, 200, page);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));
