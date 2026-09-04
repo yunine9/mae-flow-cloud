@@ -43,6 +43,11 @@ export interface PipelineRun {
   status: "success" | "failed" | "running";
   log?: string;
   checks?: PipelineCheck[];
+  /** 适配层回传的 run 归属(陈灯防御的判断依据):sha=该 run 绑定的
+   * 提交;is_valid=false=MR 头上挂的陈灯。缺席=旧适配层/旧配置,
+   * 下游按无陈灯信息处理(行为与透传前一致)。 */
+  sha?: string;
+  is_valid?: boolean;
 }
 
 export interface PipelineStatus extends PipelineRun {
@@ -121,6 +126,10 @@ export async function triggerPipeline(
     status,
     ...(typeof body.log === "string" && body.log
       ? { log: body.log } : {}),
+    ...(typeof body.sha === "string" && body.sha
+      ? { sha: body.sha } : {}),
+    ...(typeof body.is_valid === "boolean"
+      ? { is_valid: body.is_valid } : {}),
     ...(checks !== undefined ? { checks } : {}),
   };
 }
@@ -151,6 +160,10 @@ export async function getPipelineStatus(
       ...(typeof run.log === "string" && run.log
         ? { log: run.log } : {}),
       ...(checks !== undefined ? { checks } : {}),
+      ...(typeof run.sha === "string" && run.sha
+        ? { sha: run.sha } : {}),
+      ...(typeof run.is_valid === "boolean"
+        ? { is_valid: run.is_valid } : {}),
     });
   }
   // 顶层字段(单 run 形态)与 runs 数组并存时以 runs 为准;顶层只在
@@ -165,6 +178,10 @@ export async function getPipelineStatus(
         ...(typeof body.log === "string" && body.log
           ? { log: body.log } : {}),
         ...(checks !== undefined ? { checks } : {}),
+        ...(typeof body.sha === "string" && body.sha
+          ? { sha: body.sha } : {}),
+        ...(typeof body.is_valid === "boolean"
+          ? { is_valid: body.is_valid } : {}),
       }],
     };
   }

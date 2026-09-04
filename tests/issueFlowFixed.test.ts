@@ -152,6 +152,10 @@ class LoopPlatform {
   /** /pipeline/artifacts 的剧本覆盖(证据评估测试用):红灯修复链会
    *  把它镜像进会话工作区 pipeline/。缺省演一份编译失败的 build.log。 */
   firstFailureArtifacts: Array<{ name: string; text: string }> | undefined;
+  /** 陈灯影子(#107 回归):置为旧提交 SHA 时,状态查询一律回一条绑
+   *  旧提交的终态红 run(复现"重推换 SHA 后、新 run 注册前"的窗口
+   *  期);置回 undefined 放开,恢复常规演出(新提交的真绿)。 */
+  staleOldSha: string | undefined;
 
   constructor(
     private readonly firstTerminal: "failed" | "success" = "failed",
@@ -200,6 +204,13 @@ class LoopPlatform {
         }
         if (request.method === "GET" && request.url?.startsWith("/pipeline/status")) {
           const sha = new URL(request.url, "http://loop").searchParams.get("sha") ?? "";
+          // 陈灯影子先于常规计数:窗口期的查询不烧"前两轮 running"
+          // 的预算,放开后新 run 照常先跑两轮再出终态。
+          if (this.staleOldSha) {
+            send({ runs: [{ status: "failed", sha: this.staleOldSha,
+              log: "BUILD FAILURE: 旧提交的陈灯" }] });
+            return;
+          }
           const calls = (this.statusCalls.get(sha) ?? 0) + 1;
           this.statusCalls.set(sha, calls);
           if (calls <= 2) {
@@ -1132,6 +1143,104 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     assert.equal(done.pipelines?.[origin]?.status, "success");
     assert.equal(done.pipelines?.[origin]?.watching, false);
     assert.match(done.stage_note ?? "", /确认合入后可归档/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真绿才结算", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-stale-"));
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  // 五阶段流程下全绿+未申报会开「申报提醒」回合:剧本留一幕给收口提醒。
+  const script: Scene[] = [
+    { text: "收到,我补申报 MR 清单完成收口。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  // 用户实报(#107)的现场:声明#1 后 sha1 首轮红过,修复回合推送
+  // sha2 并重挂监看;此刻平台上 sha2 的 run 还没注册,账面最新还是
+  // sha1 的红灯(staleOldSha 打开影子)。陈灯防御钉的就是这个窗口期
+  // ——裸取 runs.at(-1) 结算会把新监看账定格 failed,真绿灯没人看。
+  const staleSha = spawnSync("git", ["--git-dir", origin, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).stdout.trim();
+  const tree = spawnSync("git", ["--git-dir", origin, "rev-parse", "HEAD^{tree}"],
+    { encoding: "utf-8" }).stdout.trim();
+  const newSha = spawnSync("git", ["--git-dir", origin, "commit-tree", tree,
+    "-m", `[${TICKET}][fix] round2`], { env: GIT_ENV, encoding: "utf-8" })
+    .stdout.trim();
+  platform.staleOldSha = staleSha;
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "登录超时", description: "", source: "dts", ticket: TICKET,
+    repo_url: origin, repo_urls: [origin], scenario: "ticket", round: 2,
+    stage_states: ["done", "done", "done", "done", "in_progress"],
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+    pushes: [{ repo: origin, branch: BRANCH, sha: newSha, at: now }],
+    mrs: [{ repo: origin, branch: BRANCH,
+      title: `[${TICKET}] 登录超时`, at: now }],
+    // 无 mr_gate:修复回合还没重新申报——全绿后走「申报提醒」半边,
+    // 不收口(不变量:收口当且仅当已申报且全绿)。
+    pipelines: {
+      [origin]: {
+        sha: newSha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 2, reds: 1,
+      },
+    },
+  }));
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
+  });
+  try {
+    // 窗口期(影子未放开):轮轮查询拿到的都是绑旧提交的终态红,
+    // 监看账必须原地不动——不落 failed、watching 不翻 false、旧账
+    // 红灯不计入新提交的修复轮账。
+    await until(() =>
+      platform.seen.filter((entry) =>
+        entry.method === "GET" && entry.url.startsWith("/pipeline/status")
+      ).length >= 3 ? true : undefined,
+    "窗口期内至少三轮状态查询(影子未放开)", 20_000);
+    const midWindow = service.get("issue-1");
+    assert.equal(midWindow.pipelines?.[origin]?.status, "running",
+      "陈灯窗口期不得把监看账结算成 failed");
+    assert.equal(midWindow.pipelines?.[origin]?.watching, true,
+      "陈灯窗口期监看必须还活着,真绿灯才有人看");
+    assert.equal(midWindow.pipelines?.[origin]?.reds, 1,
+      "旧账红灯不计入新提交");
+    // 放开影子:新提交的真 run 注册好了,平台回复真绿。
+    platform.staleOldSha = undefined;
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.pipelines?.[origin]?.status === "success"
+        && issue.pipelines?.[origin]?.watching === false ? issue : undefined;
+    }, "放开后按真绿灯结算");
+    assert.equal(settled.pipelines?.[origin]?.reds, 0, "真绿清红灯账");
+    const notes = (settled.transitions ?? [])
+      .filter((item) => item.source === "platform").map((item) => item.note);
+    assert.ok(notes.some((note) => /流水线全绿/.test(note)),
+      "转移账记的是全绿结算");
+    assert.ok(!notes.some((note) => /流水线失败/.test(note)),
+      "陈灯全程不得留下失败结算");
+    // 全绿+未申报:开申报提醒回合,但不收口(申报半边还没过)。
+    await until(() =>
+      /全部 MR 流水线已跑绿/.test(JSON.stringify(model.requests))
+        ? true : undefined, "全绿申报提醒回合");
+    assert.equal(settled.stage, "mr_green", "未申报不收口");
+    assert.equal(settled.stage_states?.[4], "in_progress", "收口等申报");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

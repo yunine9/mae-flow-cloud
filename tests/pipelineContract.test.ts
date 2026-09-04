@@ -5,12 +5,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { type AddressInfo } from "node:net";
 import {
   onlyUnfixableToolFailures,
   parsePipelineChecks,
   selectTerminalRun,
   summarizeFailedChecks,
 } from "../src/pipelineContract.ts";
+import { getPipelineStatus } from "../src/pipelineClient.ts";
 
 const SHA = "a".repeat(40);
 const OTHER = "b".repeat(40);
@@ -118,4 +121,32 @@ test("不可修工具分诊:全体命中且有证据才成立,拿不准照常派
   }], ["SuperChecker"]), false);
   // 名单没配 = 分诊关闭。
   assert.equal(onlyUnfixableToolFailures(superOnly, undefined), false);
+});
+
+test("client 解析透传 run 级 sha/is_valid,缺席字段不造默认值", async () => {
+  const seen: unknown[] = [];
+  const server = createServer((request, response) => {
+    seen.push(new URL(request.url ?? "", "http://x").searchParams.get("sha"));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      status: "failed",
+      runs: [
+        { status: "failed", sha: "a".repeat(40), is_valid: false, log: "陈灯" },
+        { status: "running", sha: "b".repeat(40) },
+      ],
+    }));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const status = await getPipelineStatus({ platformUrl: base, sha: "b".repeat(40) });
+    assert.equal(status.runs.length, 2);
+    assert.equal(status.runs[0].sha, "a".repeat(40));
+    assert.equal(status.runs[0].is_valid, false, "陈灯标记要透传");
+    assert.equal(status.runs[1].is_valid, undefined,
+      "缺席的 is_valid 不造默认值(缺席=旧适配层)");
+    assert.equal(status.runs[1].sha, "b".repeat(40));
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+  }
 });
