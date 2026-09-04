@@ -91,7 +91,6 @@ import {
   listArtifactChangeDirectoryAsync,
   readArtifactAsync,
   readArtifactFileDiffAsync,
-  resolveArtifactRoot,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
 import {
@@ -2823,10 +2822,7 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "artifacts") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          const panel = service.panelFile(id, "panel.html")
-            ?? service.panelFile(id, "panel-pulse.js");
-          const root = resolveArtifactRoot(
-            target.workspace, panel ? dirname(dirname(panel)) : undefined);
+          const root = service.artifactRoot(id);
           const sources = { pipelineRoot: join(target.workspace, "pipeline") };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路

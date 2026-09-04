@@ -276,6 +276,7 @@ import {
   KernelUnavailableError,
   openKernelFeedback,
   recordKernelFeedbackResult,
+  reconcileKernelDeliverySelection,
   refreshKernelPanel,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
@@ -1808,6 +1809,81 @@ interface TaskState {
   /** 交付失败日志聚合:同一指纹只全文记一次,其后按计数聚合
    * (MFC-020:同文 MR-400 曾刷 86 条)。进程内即可,不持久化。 */
   deliveryFailureLog?: { fingerprint: string; count: number };
+}
+
+/**
+ * 从单号目录恢复真实代码现场。task.json 里的 cwd 是加速索引，不是真相：
+ * 老版本没写、目录整体搬迁或服务在 clone 落盘与 task.json 落盘之间退出，
+ * 都不能让一座仍完整存在的仓库从此变成“现场不存在”。
+ *
+ * 只在本任务 workspace 内寻找，正式开发仓必须是真 Git worktree；分析单
+ * 则只认固定的 repositories 聚合目录。候选不唯一时宁可不猜，避免把
+ * pi-agent、缓存或另一座仓误当成当前代码仓。
+ */
+function recoverTaskCwd(
+  summary: TaskSummary,
+  workspace: string,
+  saved: unknown,
+): string | undefined {
+  if (summary.workspace_reclaimed_at) return undefined;
+  let root: string;
+  try { root = realpathSync(workspace); } catch { return undefined; }
+  const location = (
+    candidate: string,
+    mustBeInside: boolean,
+  ): { actual: string; presented: string } | undefined => {
+    try {
+      const actual = realpathSync(candidate);
+      if (mustBeInside
+          && actual !== root && !actual.startsWith(`${root}${pathSep}`)) {
+        return undefined;
+      }
+      // realpath 只用于防越界与去重；运行路径沿用 task.json 原始拼法。
+      // macOS 会把 /var 改写成 /private/var，替换它会让既有任务、挂载
+      // 表和测试夹具拿到一个“同目录但不同字符串”的 cwd。
+      return { actual, presented: resolve(candidate) };
+    } catch { return undefined; }
+  };
+  const analysis = ((summary.repositories?.length ?? 0) > 1
+      || summary.requirement_analysis_requested === true)
+    && !summary.parent_task_id;
+  const valid = (candidate: string, mustBeInside = true): string | undefined => {
+    const found = location(candidate, mustBeInside);
+    if (!found) return undefined;
+    const { actual, presented } = found;
+    if (analysis) {
+      if (basename(actual) !== "repositories") return undefined;
+      return existsSync(join(actual, ".mae-flow-work"))
+          || (summary.repositories ?? []).some((repository, index) =>
+            existsSync(join(actual,
+              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
+              ".git")))
+        ? presented : undefined;
+    }
+    return existsSync(join(actual, ".git")) ? presented : undefined;
+  };
+  if (typeof saved === "string") {
+    // 明确保存过的 cwd 可以是老部署的外置现场，保持向后兼容；但它
+    // 一旦消失就不猜别的目录。只有 cwd 缺失(null/undefined)才执行
+    // 下面的安全发现，这可区分“旧版漏存索引”和“现场确实被删”。
+    return valid(saved, false);
+  }
+  if (analysis) return valid(join(root, "repositories"));
+
+  const repo = summary.repo_url
+    ?? (summary.repositories?.length === 1 ? summary.repositories[0] : undefined);
+  if (repo) {
+    const expected = valid(join(root,
+      basename(repo).replace(/\.git$/, "") || "repo"));
+    if (expected) return expected;
+  }
+  try {
+    const candidates = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => valid(join(root, entry.name)))
+      .filter((entry): entry is string => !!entry);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  } catch { return undefined; }
 }
 
 interface PrePushBuildWaiter {
@@ -4823,10 +4899,14 @@ export class TaskService {
   artifactRoot(id: string): string | undefined {
     const task = this.tasks.get(id);
     if (!task) return undefined;
-    const panel = this.panelFile(id, "panel.html")
-      ?? this.panelFile(id, "panel-pulse.js");
-    return resolveArtifactRoot(
-      task.summary.workspace, panel ? dirname(dirname(panel)) : undefined);
+    // 某些演练/旧任务把 task.cwd 指向任务目录，而该目录也可能因团队
+    // 知识投影含 `.mae-flow-work`；它不是 Git 代码现场，不能抢在真正
+    // 的 `<workspace>/<repo>` 前面。有效 cwd 仍直接使用，缺失时扫描。
+    const cwd = task.cwd && (
+      existsSync(join(task.cwd, ".git"))
+      || existsSync(join(task.cwd, ".mae-flow.json")))
+      ? task.cwd : undefined;
+    return resolveArtifactRoot(task.summary.workspace, cwd);
   }
 
   /** 当前 push 检视卡的代码比较。scope 只在服务端已经固化的两个锚中
@@ -4838,21 +4918,32 @@ export class TaskService {
   ): Promise<{ content: string; branch?: string; truncated?: boolean } | undefined> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const waiting = task.summary.waiting;
     const review = task.summary.delivery?.push_review;
-    if (!task.cwd || !review
-        || task.summary.waiting?.step !== CLOUD_PUSH_CONFIRM_STEP) {
+    const diffReview = waiting && (
+      waiting.step === CLOUD_PUSH_CONFIRM_STEP
+      || waiting.recommended_view === "diff"
+      || stepReviewSurface(
+        this.options.host?.kernelRoot,
+        this.reviewContractStep(task, waiting),
+      ) === "diff"
+    );
+    if (!task.cwd || !diffReview) {
       return undefined;
     }
-    const snapshot = await deliveryChangeSnapshot(task.cwd);
-    if (!snapshot || snapshot.head !== review.head_sha) return undefined;
-    if (scope === "full") {
-      // push 卡已经有权威 cwd，优先直接读它；纯会话/旧任务再沿用普通
-      // 产物定位。不能因此改变 /artifacts 的兼容扫描口径。
-      const root = resolveArtifactRoot(task.summary.workspace, task.cwd)
-        ?? this.artifactRoot(id);
-      return root ? readArtifactAsync(root, DIFF_NAME) : undefined;
+    if (review) {
+      const snapshot = await deliveryChangeSnapshot(task.cwd);
+      if (!snapshot || snapshot.head !== review.head_sha) return undefined;
+      if (scope === "changes") {
+        return compareDeliveryRevisions(
+          task.cwd, review.base_sha, review.head_sha);
+      }
     }
-    return compareDeliveryRevisions(task.cwd, review.base_sha, review.head_sha);
+    // 持续检视轮不一定有 Cloud push_review 导航卡，但它仍然是内核明确
+    // 推荐的代码检视面。此时“这次修改”没有一份可伪造的宿主基点，两个
+    // scope 都诚实退回任务基线到当前工作区的完整 Diff。
+    const root = this.artifactRoot(id);
+    return root ? readArtifactAsync(root, DIFF_NAME) : undefined;
   }
 
   private memoryStore?: MemoryStore;
@@ -8271,11 +8362,13 @@ export class TaskService {
             + `流程举卡时将真等人,答卡请选内核选项原文`);
           summary.lane = undefined;
         }
+        const savedCwd = typeof saved.cwd === "string" ? saved.cwd : undefined;
+        const recoveredCwd = recoverTaskCwd(summary, workspace, savedCwd);
         const task: TaskState = {
           summary,
           tokenUsage: restoreTokenUsageState(saved.token_usage_state),
           humanGate: new HumanGate(join(workspace, "waiting.json")),
-          cwd: typeof saved.cwd === "string" ? saved.cwd : undefined,
+          cwd: recoveredCwd,
           resume: true,
           mission: typeof saved.mission === "string"
             ? saved.mission : undefined,
@@ -8306,6 +8399,14 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        if (recoveredCwd !== savedCwd) {
+          this.options.log?.(
+            `任务 ${summary.id} 已从单号目录恢复代码现场: ${recoveredCwd ?? "未找到唯一候选"}`,
+          );
+          // 自愈结果立刻回写；否则每次重启都重复猜一次，且下一个进程仍
+          // 会读到 cwd=null。这里只补内部索引，不制造流程状态变化。
+          if (recoveredCwd) this.writeTaskState(task);
+        }
         if (summary.requirement_revision?.state === "running") {
           const interruptedIds = new Set(
             summary.requirement_revision.annotation_ids ?? []);
@@ -10310,8 +10411,23 @@ export class TaskService {
         + "、无内容可交付,已自动移出清单)";
     }
     const committed = contribution.paths;
-    const excluded = snapshot.workspace_paths.filter((path) =>
-      !paths.includes(path));
+    const archivePaths = this.deliveryArchivePaths(task.cwd);
+    const archiveIds = new Set(archivePaths.map((path) => path.toLowerCase()));
+    const rejectedArchive = archivePaths.filter((path) =>
+      !paths.some((selected) => selected.toLowerCase() === path.toLowerCase()));
+    let archiveNote = "";
+    if (rejectedArchive.length) {
+      // docs/specs/index.md 与本轮领域文档是一次 domain_archive 原子事务。
+      // 文件选择器若拒绝其中任一项，不能留一个孤零零的索引或半份领域
+      // 文档；整组退出本次交付，候选仍留在 .mae-flow-work 可再次送审。
+      paths = paths.filter((path) => !archiveIds.has(path.toLowerCase()));
+      archiveNote = `\n(领域归档是原子组；本次有 ${rejectedArchive.length} `
+        + `项未勾选，已将整组 ${archivePaths.length} 项退出交付，候选仍保留)`;
+    }
+    const excluded = normalizedDeliveryPaths([
+      ...snapshot.workspace_paths.filter((path) => !paths.includes(path)),
+      ...rejectedArchive,
+    ]);
     if (closesFeedback && !samePaths(paths, committed)) {
       // 清单调整仍是宿主机械活，不打回 Agent 猜。push 确认卡同时让
       // 用户选择“重新编译”或“直接提交”；旧客户端缺字段时保守重编。
@@ -10330,17 +10446,29 @@ export class TaskService {
       }
       const adjustedExcluded = adjusted.workspace_paths.filter((path) =>
         !paths.includes(path));
+      const reconciledExcluded = normalizedDeliveryPaths([
+        ...adjustedExcluded,
+        ...rejectedArchive,
+      ]);
+      if (rejectedArchive.length) {
+        await this.restoreRejectedDomainArchive(task.cwd, archivePaths);
+      }
+      this.reconcileDeliverySelectionWithKernel(
+        task, waiting, adjusted.head, paths, reconciledExcluded, input.actor);
       const actions = [
         mustRemove.length ? `剔除 ${describeDirtyPaths(mustRemove)}` : "",
         mustAdd.length ? `补入 ${describeDirtyPaths(mustAdd)}` : "",
       ].filter(Boolean).join(";");
-      this.registerAgentPlatformLocalExcludes(task.cwd, adjustedExcluded);
+      this.registerAgentPlatformLocalExcludes(task.cwd,
+        reconciledExcluded.filter((path) => !archiveIds.has(path.toLowerCase())));
       const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
       return {
         record: {
           paths,
-          observed_paths: adjusted.workspace_paths,
-          excluded_paths: adjustedExcluded,
+          observed_paths: normalizedDeliveryPaths([
+            ...adjusted.workspace_paths, ...rejectedArchive,
+          ]),
+          excluded_paths: reconciledExcluded,
           status: confirmed ? "confirmed" : "requested",
           waiting_id: waiting.waiting_id,
           head: adjusted.head,
@@ -10354,7 +10482,7 @@ export class TaskService {
           } : {}),
           updated_at: new Date().toISOString(),
         },
-        note: `${deliverySelectionNote(paths, adjustedExcluded)}\n`
+        note: `${deliverySelectionNote(paths, reconciledExcluded)}${archiveNote}\n`
           + (compileAction === "skip"
             ? `(宿主已按清单机械整理提交:${actions};用户选择不再编译，`
               + `将直接提交并由权威流水线裁决)${vanishedNote}`
@@ -10363,7 +10491,13 @@ export class TaskService {
       };
     }
     if (closesFeedback) {
-      this.registerAgentPlatformLocalExcludes(task.cwd, excluded);
+      if (rejectedArchive.length) {
+        await this.restoreRejectedDomainArchive(task.cwd, archivePaths);
+      }
+      this.reconcileDeliverySelectionWithKernel(
+        task, waiting, snapshot.head, paths, excluded, input.actor);
+      this.registerAgentPlatformLocalExcludes(task.cwd,
+        excluded.filter((path) => !archiveIds.has(path.toLowerCase())));
     }
     return {
       record: {
@@ -10377,8 +10511,84 @@ export class TaskService {
         ...(closesFeedback ? { confirmation_mode: "human" as const } : {}),
         updated_at: new Date().toISOString(),
       },
-      note: deliverySelectionNote(paths, excluded) + vanishedNote,
+      note: deliverySelectionNote(paths, excluded) + archiveNote + vanishedNote,
     };
+  }
+
+  private deliveryArchivePaths(cwd: string): string[] {
+    try {
+      const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+      const archive = state?.domain_archive;
+      return archive?.status === "applied"
+        ? normalizedDeliveryPaths(Array.isArray(archive.applied_paths)
+          ? archive.applied_paths.map(String) : [])
+        : [];
+    } catch { return []; }
+  }
+
+  /** 正式归档输出被用户拒绝后恢复为当前 HEAD；候选不在这些路径里，
+   * 因而不会丢。必须先恢复文件，再让内核改账，任何一步失败都不消费
+   * 人工决定，避免“页面说排除了，磁盘其实还在”的第二份矛盾状态。 */
+  private async restoreRejectedDomainArchive(
+    cwd: string,
+    paths: string[],
+  ): Promise<void> {
+    for (const path of paths) {
+      const tracked = await runSafeWorktreeGitAsync(cwd,
+        ["cat-file", "-e", `HEAD:${path}`], { timeoutMs: 30_000 });
+      if (tracked.status === 0) {
+        const restored = await runSafeWorktreeGitAsync(cwd,
+          ["checkout", "HEAD", "--", path], { timeoutMs: 30_000 });
+        if (restored.status !== 0) {
+          throw new TaskControlError(`恢复被拒绝的领域归档 ${path} 失败: `
+            + String(restored.stderr || restored.error || "").slice(0, 300));
+        }
+      } else {
+        rmSync(join(cwd, path), { force: true });
+      }
+    }
+    // 旧版把所有“未勾选”都永久写进 info/exclude。领域候选日后若重新
+    // 获批并应用到同一路径，那个陈旧规则会让 Git 永远看不见新文档。
+    // 拒绝的是这一轮正式输出，不是永久封禁这个路径。
+    const view = createSafeGitView(cwd);
+    try {
+      const excludePath = join(view.repositoryGitDir, "info", "exclude");
+      if (!existsSync(excludePath)) return;
+      const denied = new Set(paths.map((path) => `/${path}`));
+      const current = readFileSync(excludePath, "utf-8");
+      const next = current.split("\n")
+        .filter((line) => !denied.has(line.trim())).join("\n");
+      if (next !== current) writeFileSync(excludePath, next);
+    } finally { view.cleanup(); }
+  }
+
+  private reconcileDeliverySelectionWithKernel(
+    task: TaskState,
+    waiting: WaitingRecord,
+    head: string,
+    paths: string[],
+    excluded: string[],
+    actor?: string,
+  ): void {
+    if (!this.options.host || !task.cwd || !this.continuousReviewTask(task)) {
+      return;
+    }
+    try {
+      reconcileKernelDeliverySelection({
+        host: this.options.host,
+        cwd: task.cwd,
+        workspace: task.summary.workspace,
+        taskId: task.summary.id,
+        waitingId: waiting.waiting_id,
+        head,
+        paths,
+        excludedPaths: excluded,
+        actor,
+      });
+    } catch (error) {
+      throw new TaskControlError(
+        `交付清单已整理，但内核对账失败，决定尚未生效: ${String(error)}`);
+    }
   }
 
   /** 按用户选择的清单机械整理提交。剔除≠销毁(用户点名"直接回退太极端"):
@@ -12596,7 +12806,7 @@ export class TaskService {
       if (!this.options.host || !trustedKernelHostLifecycle({
         host: this.options.host,
         cwd: task.cwd,
-        actions: ["feedback-open", "pipeline-record"],
+        actions: ["feedback-open", "pipeline-record", "selection-reconcile"],
         state,
       })) return undefined;
       return {
@@ -12626,7 +12836,8 @@ export class TaskService {
       if (!trustedKernelHostLifecycle({
         host: this.options.host,
         cwd: task.cwd,
-        actions: ["feedback-open", "feedback-result", "pipeline-record", "close"],
+        actions: ["feedback-open", "feedback-result", "pipeline-record", "close",
+          "selection-reconcile"],
         state,
       })) {
         throw new Error("内核持续检视生命周期缺少完整的 Cloud 宿主权威收据");
@@ -17707,12 +17918,12 @@ export class TaskService {
       if (!(batch.result_digest ? trustedKernelHostLifecycle({
         host,
         cwd: task.cwd,
-        actions: ["feedback-result", "pipeline-record"],
+        actions: ["feedback-result", "pipeline-record", "selection-reconcile"],
         state,
       }) : trustedKernelHostActiveBatch({
         host,
         cwd: task.cwd,
-        actions: ["feedback-open", "pipeline-record"],
+        actions: ["feedback-open", "pipeline-record", "selection-reconcile"],
         state,
       }))) {
         return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
@@ -17721,7 +17932,7 @@ export class TaskService {
         if (!trustedKernelHostLifecycle({
           host,
           cwd: task.cwd,
-          actions: ["feedback-result", "pipeline-record"],
+          actions: ["feedback-result", "pipeline-record", "selection-reconcile"],
           state,
         })) {
           return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;

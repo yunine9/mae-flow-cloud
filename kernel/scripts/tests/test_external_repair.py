@@ -82,6 +82,23 @@ class ExternalRepairAuthorizationTests(unittest.TestCase):
             head=HEAD, at="later")
         self.assertNotIn("external_repair_authorization", state)
 
+    def test_exact_domain_archive_output_crosses_old_baseline_dirty(self):
+        """归档同名文件不是启动前脏文件；只信本轮 applied_paths 精确收据。"""
+        state = red_state()
+        issue_repair_authorization(
+            state, PipelineDecision("RED", "failed", {}),
+            head=HEAD, at="now",
+            dirty_paths=("docs/specs/radio.md", "docs/specs/other.md"))
+        state["domain_archive"] = {
+            "status": "applied", "result": "changes",
+            "applied_paths": ["docs/specs/radio.md"],
+        }
+        self.assertEqual(
+            ("docs/specs/radio.md",),
+            eligible_repair_paths(state, HEAD, (
+                "docs/specs/radio.md", "docs/specs/other.md")),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

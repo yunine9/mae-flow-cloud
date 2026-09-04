@@ -591,7 +591,12 @@ export function TaskWorkspace({
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view
     ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
-  const pushReview = task.waiting?.step === "cloud_push_confirm"
+  // push_review 是一份绑定 HEAD 的阅读导航，不是 cloud_push_confirm
+  // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
+  // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
+  // 成 0。审批权仍由 waiting + delivery_selection 单独判断。
+  const pushReview = (task.waiting?.recommended_view === "diff"
+      || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");

@@ -64,7 +64,8 @@ def host_projection(state, action, payload):
     防篡改强度一个字节没松,体积从此恒定。
     """
     if action not in ("feedback-open", "feedback-result", "close",
-                      "pipeline-record", "intervention-reconcile"):
+                      "pipeline-record", "intervention-reconcile",
+                      "selection-reconcile"):
         return None
     loop = state.get("delivery_loop")
     loop = loop if isinstance(loop, dict) else None

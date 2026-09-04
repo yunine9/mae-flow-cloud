@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -213,6 +213,21 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     const renewed = service.get(id)!.waiting!;
     assert.notEqual(renewed.waiting_id, waiting.waiting_id);
     assert.match(String(renewed.context), /src\/fix\.ts/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("持续检视卡复用绑定 HEAD 的 Diff，不再只认 cloud_push_confirm 步骤名", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    internal.summary.waiting.step = "最终代码增量检视";
+    internal.summary.waiting.recommended_view = "diff";
+    const diff = await service.pushReviewDiff(id, "full");
+    assert.match(String(diff?.content), /src\/feature\.ts/);
   } finally {
     await model.stop();
   }
@@ -1263,6 +1278,76 @@ test("push 检视返工用 feedback-open 进入持续检视，不倒退到开发
     assert.equal(internal.summary.delivery?.pipeline, undefined,
       "旧流水线绿灯不得继续展示在待返工代码上");
     assert.equal(internal.summary.delivery?.loop?.state, "repairing");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终清单拒绝领域归档：恢复正式文件并与内核原子对账，不再死锁", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const state = continuousReviewState(repo) as any;
+    state.config["单号"] = "REQ-ARCHIVE-REJECT";
+    state.domain_archive = {
+      status: "applied", result: "changes", domains: ["softwarepackage"],
+      input_sha256: "archive-before-selection",
+      applied_paths: ["docs/specs/index.md", "docs/specs/softwarepackage.md"],
+    };
+    state.delivery_manifest = {
+      files: ["src/feature.ts", "docs/specs/index.md",
+        "docs/specs/softwarepackage.md"],
+      commit_message: "[REQ][fix] task result", target_branch: "master",
+      adopted_dirty: {}, confirmed: true,
+    };
+    mkdirSync(join(repo.cwd, "docs", "specs"), { recursive: true });
+    writeFileSync(join(repo.cwd, "docs", "specs", "index.md"), "# generated index\n");
+    writeFileSync(join(repo.cwd, "docs", "specs", "softwarepackage.md"),
+      "# generated domain archive\n");
+    writeFileSync(join(repo.cwd, ".git", "info", "exclude"),
+      "/docs/specs/index.md\n/docs/specs/softwarepackage.md\n");
+    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify(state));
+    (service as any).options.host = {
+      kernelRoot: join(process.cwd(), "kernel"), python: "python3",
+      continuousReview: true,
+    };
+    sealPipelineLifecycle({
+      cwd: repo.cwd, workspace: internal.summary.workspace, taskId: id,
+      kernelRoot: join(process.cwd(), "kernel"),
+    });
+    (service as any).tryDeliver = async () => undefined;
+    internal.summary.push_confirmation = true;
+    internal.summary.delivery = {
+      ...(internal.summary.delivery ?? {}),
+      sha: repo.git("rev-parse", "HEAD"), pipeline: "passed",
+      prepush: { state: "passed", sha: repo.git("rev-parse", "HEAD") },
+    };
+    assert.equal(await (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1"), false);
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]: "确认按清单推送",
+      },
+      delivery_paths: ["src/feature.ts"],
+      delivery_compile_action: "skip",
+      actor: "owner.liao",
+    });
+
+    assert.equal(existsSync(join(repo.cwd, "docs", "specs", "index.md")), false);
+    assert.equal(existsSync(join(repo.cwd, "docs", "specs",
+      "softwarepackage.md")), false);
+    const reconciled = JSON.parse(readFileSync(
+      join(repo.cwd, ".mae-flow.json"), "utf-8"));
+    assert.equal(reconciled.domain_archive.result, "unchanged");
+    assert.deepEqual(reconciled.domain_archive.applied_paths, []);
+    assert.deepEqual(reconciled.delivery_manifest.files, ["src/feature.ts"]);
+    assert.deepEqual(service.get(id)?.delivery_selection?.paths,
+      ["src/feature.ts"]);
+    const excludes = readFileSync(join(repo.cwd, ".git", "info", "exclude"),
+      "utf-8");
+    assert.doesNotMatch(excludes, /docs\/specs/,
+      "拒绝本轮归档不是永久封禁该路径");
   } finally {
     await model.stop();
   }

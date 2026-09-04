@@ -19,6 +19,7 @@ import {
   KERNEL_UNAVAILABLE,
   KernelUnavailableError,
   openKernelFeedback,
+  reconcileKernelDeliverySelection,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
 } from "../src/kernelDelivery.ts";
@@ -146,4 +147,44 @@ test("Cloud 源码里不再有一行收据核对逻辑", () => {
     assert.equal(source.includes(forbidden), false,
       `kernelDelivery.ts 不该再出现 ${forbidden}:核对只在内核 delivery attest`);
   }
+});
+
+test("拒绝领域归档后由内核原子重建归档、Manifest 与修复授权", () => {
+  const { workspace, cwd, head, taskId } = watchingTask("selection-archive");
+  const state = readState(cwd);
+  state.config["单号"] = "REQ-ARCHIVE-1";
+  state.domain_archive = {
+    status: "applied", result: "changes", domains: [], input_sha256: "old",
+    applied_paths: ["docs/specs/index.md", "docs/specs/radio.md"],
+  };
+  state.delivery_manifest = {
+    files: ["main.ts", "docs/specs/index.md", "docs/specs/radio.md"],
+    commit_message: "[REQ][fix] result", target_branch: "master",
+    adopted_dirty: {}, confirmed: true,
+  };
+  state.delivery_repair_authorization = {
+    schema: "mae-flow-feedback-repair/1", status: "ready",
+    baseline_dirty: ["docs/specs/radio.md", "user.txt"],
+    allowed_paths: ["docs/specs/radio.md"],
+  };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+
+  reconcileKernelDeliverySelection({
+    host: HOST, cwd, workspace, taskId, waitingId: "review-9", head,
+    paths: ["main.ts"],
+    excludedPaths: ["docs/specs/index.md", "docs/specs/radio.md"],
+    actor: "owner.liao",
+  });
+  const reconciled = readState(cwd);
+  assert.equal(reconciled.domain_archive.result, "unchanged");
+  assert.deepEqual(reconciled.domain_archive.applied_paths, []);
+  assert.deepEqual(reconciled.domain_archive.declined_paths,
+    ["docs/specs/index.md", "docs/specs/radio.md"]);
+  assert.deepEqual(reconciled.delivery_manifest.files, ["main.ts"]);
+  assert.equal(reconciled.delivery_manifest.confirmed, true);
+  assert.deepEqual(reconciled.delivery_repair_authorization.baseline_dirty,
+    ["user.txt"]);
+  assert.equal(trustedKernelHostLifecycle({
+    host: HOST, cwd, actions: ["selection-reconcile"], state: reconciled,
+  }), true);
 });
