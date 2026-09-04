@@ -265,9 +265,12 @@ test("门禁:修复材料在仓外也要够得着,宿主账本只读", () => {
   for (const ledger of [
     "../events.jsonl", "../transcript.jsonl", "../waiting.json",
     "../task.json", "../annotations.jsonl", "../pipeline-facts.json",
+    "../feedback/index.jsonl",
   ]) {
     assert.equal(decide("Write", ledger), "deny", ledger);
   }
+  assert.equal(decide("Write", "../feedback/result-current.json"), "allow",
+    "机器回执文件不是宿主索引，必须允许 Agent 写入");
   // 会话运行时目录连读都不给:pi-agent/models.json 明文存着模型网关
   // API Key。放宽可达边界的同时这一格必须焊死,否则等于递密钥。
   for (const tool of ["Read", "Write", "Edit"]) {

@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
@@ -222,6 +223,42 @@ export function prepareContainerHostPaths(input: {
     if (prepareCache(source, owner, resolve(input.markerRoot))) cacheTrees += 1;
   }
   return { active: true, owner, workspaceEntries, cacheTrees };
+}
+
+/**
+ * 把任务控制面里平台明确划给 Agent 的单个回执文件交给容器用户。
+ *
+ * 不能为了一份回执递归 chown 它的父目录：父目录可能同时放着宿主的
+ * 可信索引。调用方先以宿主身份创建普通文件，这里只核对真实边界并
+ * 交接这一枚 inode；容器也应只 bind 这一文件，不能顺手挂整棵目录。
+ */
+export function prepareContainerWritableFile(input: {
+  workspace: string;
+  path: string;
+  user?: string;
+  runtime?: ContainerOwnershipRuntime;
+}): boolean {
+  const owner = rootContainerOwner(input.user, input.runtime);
+  if (!owner) return false;
+  const workspace = realpathSync(resolve(input.workspace));
+  const requested = resolve(input.path);
+  const stat = lstatSync(requested);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`容器回执必须是宿主预创建的普通文件：${requested}`);
+  }
+  // macOS 的 /var -> /private/var 等系统级规范化不能被误报为越界；
+  // 同时先 lstat 拒绝目标软链，避免 realpath 跟到工作区外。
+  const parent = realpathSync(dirname(requested));
+  const target = join(parent, basename(requested));
+  if (target === workspace || !target.startsWith(`${workspace}/`)) {
+    throw new Error(`拒绝准备任务工作区外的容器回执文件：${target}`);
+  }
+  if (parent !== workspace && !parent.startsWith(`${workspace}/`)) {
+    throw new Error(`容器回执文件父目录越出任务工作区：${target}`);
+  }
+  if (stat.uid === owner.uid && stat.gid === owner.gid) return false;
+  chownSync(requested, owner.uid, owner.gid);
+  return true;
 }
 
 /**
