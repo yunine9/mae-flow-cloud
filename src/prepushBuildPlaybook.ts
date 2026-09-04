@@ -98,18 +98,29 @@ export function isPrePushBuildCommand(command: string): boolean {
   return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner;
 }
 
+/** 全仓 UT 护栏的三种结论。`advised` 是刻意的中间态,见下。 */
+export type FullSuiteVerdict = "none" | "advised" | "blocked";
+
 /**
  * 只拦一眼就能确认的“全仓 UT”入口，不猜业务仓自定义脚本的语义。
  * 目的不是做第三套构建解析器，而是保证 Agent 即使忽略提示，也不能把
  * 最常见的一小时全量命令真正跑起来；拒绝文案会要求它换成显式选择器。
+ *
+ * **C++/native 只提示不拦截**(用户 2026-09-04 拍板"改成提示吧")。
+ * Java/JS/Rust/Go/Python 的定向选择器(-Dtest / -pl / 测试文件 / -run /
+ * 用例路径)是语言生态的标配,拦下去 Agent 一定换得出来;C++ 那条 DT 链路
+ * 不一样——`-DDT_COV_INCLUDES` 能不能用取决于仓库自己的 DT 插件配置,
+ * 平台没有在真仓上验证过。硬拒的代价是 Agent 按嘱咐报“未找到定向 UT”
+ * 直接停下,整个 C++ 仓从此跑不了 UT;放行的代价只是一次有预算上限的
+ * 全量。两边不对等,所以这里给提示、把决定权留在现场。
  */
-export function obviousFullSuiteCommand(command: string): boolean {
+export function fullSuiteCommandVerdict(command: string): FullSuiteVerdict {
   const value = prePushCommandIdentity(command);
   if (!value || /(?:-DskipTests(?:=true)?|-Dmaven\.test\.skip(?:=true)?)/i
-    .test(value)) return false;
+    .test(value)) return "none";
   const targeted = /(?:^|\s)(?:-pl|--projects)(?:=|\s)|-D(?:test|it\.test|DT_COV_INCLUDES)=|(?:^|\s)ctest(?:\s|$)[^;&|\n]*(?:-R|--tests-regex|-L|--label-regex|-I|--tests-information)(?:=|\s)|(?:^|\s)(?:npm|pnpm|yarn)(?:\s+run)?\s+test(?::[^\s;&|]+)|(?:^|\s)(?:npm|pnpm|yarn)(?:\s+run)?\s+test\s+--\s+[^-\s]/i
     .test(value);
-  if (targeted) return false;
+  if (targeted) return "none";
 
   const mavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)\s+[^;&|\n]*\b(?:test|verify)\b/i
     .test(value);
@@ -125,8 +136,12 @@ export function obviousFullSuiteCommand(command: string): boolean {
   const allGo = /(?:^|[;&|]\s*)go\s+test\s+\.\/\.\.\.(?:\s|$|[;&|>])/i.test(value);
   const barePytest = /(?:^|[;&|]\s*)(?:pytest|python\s+-m\s+pytest)\s*(?:$|[;&|>])/i
     .test(value);
-  return mavenAll || nativeMavenAll || barePackageTest || bareCtest
-    || bareGradle || bareCargo || allGo || barePytest;
+  // C++/native 的两个入口只提示:DT 参数的定向能力因仓而异,ctest 的
+  // -R 又要先知道用例名。真定向不了时,让它带着预算跑完并说明,好过
+  // 让整个仓卡在“未找到定向 UT”。
+  if (nativeMavenAll || bareCtest) return "advised";
+  return (mavenAll || barePackageTest || bareGradle || bareCargo || allGo
+    || barePytest) ? "blocked" : "none";
 }
 
 /** 同一代码内容上的同一重型命令使用稳定键；只折叠空白，不猜 shell 语义。 */
@@ -402,7 +417,10 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多；skill 与本手册冲突时以 skill 为准（它更贴仓库事实）。",
       `C++/native：优先从 Maven 插件进入。当前内网经验的基础候选是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`，但执行 UT 时必须再带仓库支持的模块/用例过滤；不得无过滤地跑全仓 UT。首次生成物陈旧时也只重建受影响模块，不要用 clean 触发全仓重编与全量测试。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
       "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
-      "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"`、测试 runner 的 suite/case 过滤或 `ctest -R <pattern>`；从改动与失败日志选最小可靠范围，Build-Fix 收口仍保持定向，不补跑全仓。",
+      "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"`、测试 runner 的 suite/case 过滤或 `ctest -R <pattern>`；从改动与失败日志选最小可靠范围，Build-Fix 收口仍保持定向，不补跑全仓。"
+        + "这些开关能不能用取决于本仓的 DT 插件与测试工程配置：先在本仓核实，"
+        + "确实没有可用的定向入口时可以跑全量（平台只提示不拦），"
+        + "但要在 summary 写清核实过程和为什么没能定向。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
       "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口只需对受影响目标做可复现的增量编译与定向 UT，完整回归留给远端流水线。",

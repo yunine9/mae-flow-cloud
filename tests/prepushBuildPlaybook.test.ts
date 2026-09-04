@@ -12,7 +12,7 @@ import { join } from "node:path";
 import {
   detectPrePushBuildProfile,
   isPrePushBuildCommand,
-  obviousFullSuiteCommand,
+  fullSuiteCommandVerdict,
   PrePushCommandRepeatGuard,
   prePushBuildGuidance,
   prePushCommandTimeoutSeconds,
@@ -174,17 +174,25 @@ test("build budget: 部署覆盖仍给整轮清理和收口留余量", () => {
 });
 
 test("Build-Fix 全仓 UT 护栏只拦明显全量命令，定向选择器正常放行", () => {
+  // 定向选择器是这些生态的标配,拦下去 Agent 一定换得出来。
   for (const command of [
     "mvn test",
     "./mvnw verify",
-    "mvn compile -DDT_test=UT -DDT_run=true",
     "npm test",
-    "ctest --output-on-failure",
     "./gradlew test",
     "cargo test",
     "go test ./...",
     "pytest",
-  ]) assert.equal(obviousFullSuiteCommand(command), true, command);
+  ]) assert.equal(fullSuiteCommandVerdict(command), "blocked", command);
+
+  // C++/native 只提示:DT include 能不能用取决于仓库自己的插件配置,
+  // 平台没在真仓上验证过。硬拒会让整个 C++ 仓跑不了 UT——代价不对等
+  // (用户 2026-09-04 拍板"改成提示吧")。
+  for (const command of [
+    "mvn compile -DDT_test=UT -DDT_run=true",
+    "ctest --output-on-failure",
+    "ctest",
+  ]) assert.equal(fullSuiteCommandVerdict(command), "advised", command);
 
   for (const command of [
     "mvn package -DskipTests",
@@ -195,7 +203,7 @@ test("Build-Fix 全仓 UT 护栏只拦明显全量命令，定向选择器正常
     "ctest -R Order --output-on-failure",
     "go test ./internal/order",
     "pytest tests/test_order.py",
-  ]) assert.equal(obviousFullSuiteCommand(command), false, command);
+  ]) assert.equal(fullSuiteCommandVerdict(command), "none", command);
 });
 
 test("build playbook: 安全地忽略符号链接，不建议泄露凭据或关闭 SSL", (t) => {

@@ -405,7 +405,7 @@ import {
 import {
   detectPrePushBuildProfile,
   isPrePushBuildCommand,
-  obviousFullSuiteCommand,
+  fullSuiteCommandVerdict,
   PrePushCommandRepeatGuard,
   prePushCommandIdentity,
   prePushCommandTimeoutSeconds,
@@ -14832,7 +14832,8 @@ export class TaskService {
         bashOperations: {
           exec: async (command, dir, execOptions) => {
             try {
-              if (obviousFullSuiteCommand(command)) {
+              const fullSuite = fullSuiteCommandVerdict(command);
+              if (fullSuite === "blocked") {
                 execOptions.onData(Buffer.from(
                   "[Cloud] 已阻止全仓 UT：Build-Fix 只运行本次改动/失败直接影响的模块和用例。请改用 -pl/-Dtest、DT include、ctest -R 或对应测试框架的显式选择器；全量回归由远端流水线负责。\n",
                 ));
@@ -14841,6 +14842,17 @@ export class TaskService {
                     prePushCommandIdentity(command).slice(0, 180)}`,
                 );
                 return { exitCode: 64 };
+              }
+              // C++/native:只提示不拦。定向能力因仓而异,平台没在真仓上
+              // 验证过 DT include,硬拒会让整个仓跑不了 UT(代价不对等)。
+              if (fullSuite === "advised") {
+                execOptions.onData(Buffer.from(
+                  "[Cloud] 提示：这条像是全仓 UT。本仓若支持定向选择（DT include、ctest -R、runner 的 suite/case 过滤），优先改成只跑本次改动影响的范围；确实没有可用的定向入口就照常执行，并在 summary 里写清为什么没能定向。\n",
+                ));
+                this.options.log?.(
+                  `[prepush-targeted-ut] 任务 ${task.summary.id} 提示全仓 UT(放行): ${
+                    prePushCommandIdentity(command).slice(0, 180)}`,
+                );
               }
               const heavy = isPrePushBuildCommand(command);
               const contentIdentity = heavy
