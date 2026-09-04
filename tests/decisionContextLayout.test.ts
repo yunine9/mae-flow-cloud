@@ -55,7 +55,8 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
 });
 
 test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () => {
-  assert.match(workspace, /waiting && canOperate && \(/,
+  // 2026-09-04 起闸门是 decides(责任人,或受邀参与人答非拍板卡)。
+  assert.match(workspace, /waiting && decides && \(/,
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
@@ -117,8 +118,11 @@ test("锚定原文收进批注头部,左栏整列让给批注正文", () => {
   const progressAt = panel.indexOf("annot-progress", head);
   assert.ok(head >= 0 && anchorAt > head && anchorAt < progressAt,
     "锚定原文应在 annot-item-head 里、排在状态之前");
-  assert.match(panel, /className="annot-anchor"\s*\n?\s*title=\{item\.anchor\}/,
-    "截断后整段必须还在 title 里,不能丢");
+  // 划选一块的整块原文(quote)优先于首行快照(anchor)——两者都得完整留在
+  // title 里,截断只发生在显示上。
+  assert.match(panel,
+    /className=\{`annot-anchor\$\{item\.quote \? " has-quote" : ""\}`\}\s*\n?\s*title=\{item\.quote \?\? item\.anchor\}/,
+    "截断后整段(或整块)必须还在 title 里,不能丢");
   assert.doesNotMatch(panel, /<span>针对<\/span>/,
     "锚定原文接在位置后面,不需要引导词");
 
@@ -308,11 +312,14 @@ test("仓间依赖图里的负责面路径是块级元素,超宽省略而不是�
 });
 
 test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意见上", () => {
-  // 原来 Agent 返回整篇新文档直接覆盖,旧版本不留、没有回执,复检的人
-  // 只能靠锚点猜"改了什么",真核对得把整篇重读一遍。
+  // 文件编辑 Agent 只改隔离副本并留下独立回执；宿主校验、留底之后
+  // 才覆盖正本。模型回复不承担整篇正文传输。
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf8");
-  assert.match(service, /===RECEIPTS===/, "文档编辑 Agent 必须逐条回执");
-  assert.match(service, /parseRequirementReceipts\(matched\[1\], annotations\)/);
+  assert.match(service, /requirementReviewMission\(\{/);
+  assert.match(service, /parseRequirementReceipts\(rawReceipts, annotations\)/,
+    "文档编辑 Agent 必须逐条回执");
+  assert.doesNotMatch(service, /===END_REQUIREMENT===/,
+    "不许恢复让模型在回复里搬运完整需求正文的脆弱协议");
   assert.match(service, /storeRequirementRevision\(task\.summary\.workspace, revisionId, before, diff\.text\)/,
     "改前全文和 diff 先落盘再覆盖正文");
   assert.match(service, /store\.respond\(receipt\.annotation_id, \{/);
@@ -382,4 +389,75 @@ test("材料全屏铺满需求原文与依赖图;仓间依赖页有批注入口;
   assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
+  // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。
+  // 入口搬上工具条 + ⌥/Alt+R 快捷键,抽屉开着时材料区让位。
+  assert.match(workspace,
+    /materialsFullscreen && <button type="button"\s*className=\{`materials-review-toggle/,
+    "全屏下材料工具条上有批注与检视入口");
+  assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
+  assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
+  assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
+  assert.match(css,
+    /materials-fullscreen:has\(\.workspace-review-drawer\) \.ws-evidence \{\s*padding-right: calc\(min\(760px/,
+    "全屏抽屉打开时材料区让出抽屉宽度");
+  assert.match(css,
+    /materials-fullscreen \.workspace-review-drawer \{\s*top: calc\(var\(--ws-pane-head-h/,
+    "全屏下抽屉从工具条下面起步,退出全屏/批注与检视不被盖住");
+  assert.match(workspace, /"--ws-pane-head-h"/, "工具条高度量出来写变量,不写死");
+});
+
+test("任务记忆第一期契约:记为记忆去向、面板只读列表、导航计数、服务端只读路由", () => {
+  // docs/knowledge-memory-design.md §4.1/§9:圈选是唯一的人工入口;可见但不可管。
+  const annotatable = readFileSync(join(process.cwd(), "web/src/Annotatable.tsx"), "utf-8");
+  assert.match(annotatable, /memory: \{\s*label: "记为记忆"/,
+    "批注框第四个去向:记为记忆");
+  assert.match(annotatable, /不发给任何人/);
+  const panel = readFileSync(join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf-8");
+  assert.match(panel, /memory: "记忆"/);
+  assert.match(panel, /routeOf\(item\) === "memory"\) \{\s*return \{ tone: "done", text: "已记为记忆"/,
+    "面板上记忆条目直接是闭环态,没有送出/回执/确认三站");
+  assert.match(panel, /routeOf\(item\) !== "memory"\s*&& \(isAuthor \|\| overrideAccess\.canDrop\)/,
+    "记忆条目不露编辑/删除:改就是再圈一次,撤回在本任务知识里");
+  assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
+    "记忆是快照,不参与重锚定提示");
+  const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
+  assert.match(footprint, /className="knowledge-memories"/);
+  assert.match(footprint, /这单记下的/);
+  assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
+  assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");
+  const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
+  assert.match(workspace, /记下 \$\{task\.memories_recorded\} 条/, "导航入口带条数");
+  const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
+  assert.match(server, /parts\[2\] === "memories"/);
+  assert.match(server, /parts\[4\] === "withdraw"/);
+  assert.doesNotMatch(server, /parts\[2\] === "memories"[\s\S]{0,1200}method === "(PATCH|PUT|DELETE)"/,
+    "服务端没有改写或删除记忆的路由");
+  const memory = readFileSync(join(process.cwd(), "src/taskMemory.ts"), "utf-8");
+  assert.match(memory, /MEMORY_BODY_LIMIT = 2000/);
+  assert.match(memory, /appendFileSync\(this\.indexPath/, "索引只追加");
+});
+
+test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
+  const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
+  // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
+  // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
+  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
+    "主会话同时挂检索工具、拆分提议与首改目录提醒");
+  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
+    "开发助手只挂记忆工具");
+  assert.match(service, /this\.maybePushPhaseMemories\(task, progress\.current_phase\)/,
+    "阶段切换推送挂在进度读取处");
+  assert.match(service, /via: "memory_push"/, "推送不算人的插话");
+  const driver = readFileSync(join(process.cwd(), "src/sessionDriver.ts"), "utf-8");
+  assert.match(driver, /onFileMutationIntent\?: \(path: string, tool: string\) => void/);
+  const tools = readFileSync(join(process.cwd(), "src/memoryTools.ts"), "utf-8");
+  assert.match(tools, /name: "corpus_search"/);
+  assert.doesNotMatch(tools, /repo: Type\./, "repo 由宿主固定,Agent 传不了");
+  const serve = readFileSync(join(process.cwd(), "src/serve.ts"), "utf-8");
+  assert.match(serve, /flag\("--memsearch"\)/);
+  const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
+  assert.match(footprint, /这单用到的/);
+  assert.match(footprint, /listTaskMemoryUsage\(taskId\)/);
+  const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
+  assert.match(server, /parts\[3\] === "usage"/);
 });

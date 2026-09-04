@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
+import { clearDecisionChoice, toggleDecisionChoice } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -16,6 +17,7 @@ import {
   statusText,
   tailEvents,
   type ExternalAction,
+  type DeliveryCompileAction,
   type SemanticEvent,
   type SseConnectionState,
   type TaskSummary,
@@ -50,6 +52,7 @@ export function TaskCard({
   focused = false,
   canOperate = true,
   decisionMode = "form",
+  canDecide = canOperate,
   onOpenArtifacts,
   onOpenRelatedTask,
   showChildLinks = true,
@@ -59,6 +62,9 @@ export function TaskCard({
   focused?: boolean;
   canOperate?: boolean;
   decisionMode?: "form" | "signal";
+  /** 能答卡但不能管任务:受邀参与讨论的人(协作者/逐仓责任人)。缺省
+   * 与 canOperate 同值。 */
+  canDecide?: boolean;
   onOpenArtifacts?: () => void;
   onOpenRelatedTask?: (taskId: string) => void;
   showChildLinks?: boolean;
@@ -80,6 +86,10 @@ export function TaskCard({
     && ((task.requirement_graph?.repositories.length ?? 0) > 1
       // 单仓分析单在拆出多单元前也走同一套 Chain 检视语义。
       || task.requirement_analysis_requested === true);
+  // 受邀参与讨论的人能答澄清题;"进不进分析""拆不拆"这两张改任务形状的
+  // 拍板卡只认责任人(服务端 decide 同口径拒绝),对他们只读并说明找谁。
+  const ownerOnly = isOwnerOnlyWaiting(task);
+  const decides = canOperate || (canDecide && !ownerOnly);
   const childRepositories = task.requirement_graph?.stage === "confirmed"
     ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
     : [];
@@ -360,7 +370,7 @@ export function TaskCard({
                 .includes(task.status)}
             />
           )}
-          {chainReview && canOperate && (
+          {chainReview && decides && (
             <div className="chain-review-entry">
               <span>CHAIN REVIEW</span>
               <strong>跨仓方案已经生成，先看依赖再确认</strong>
@@ -368,7 +378,7 @@ export function TaskCard({
               <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
             </div>
           )}
-          {showDecisionForm && canOperate && !chainReview
+          {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
             task.waiting.recommended_view === "diff" ? (
               /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
@@ -386,12 +396,15 @@ export function TaskCard({
                 )}
               </div>
             ) : (
-              <WaitingCard task={task} onDecided={onChanged} />
+              <WaitingCard task={task} onDecided={onChanged}
+                participant={!canOperate} />
             )
           )}
-          {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (
+          {showDecisionForm && !decides && task.status === "waiting_for_human" && (
             <div className="read-only-notice">
-              该事项由 {task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。
+              {canDecide
+                ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以在工作台批注插话。`
+                : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。`}
             </div>
           )}
           <div className="task-utilities">
@@ -525,6 +538,14 @@ export function isChainReviewWaiting(task: TaskSummary): boolean {
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
 }
 
+/** 拍板类卡只认责任人:进不进分析、拆不拆。受邀参与讨论的人能答澄清题,
+ * 这两张改任务形状的卡对他们只读;服务端 decide 是同一口径的硬闸。 */
+export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
+  const step = task.waiting?.step;
+  return step === "cloud_requirement_analysis_confirm"
+    || step === "cloud_split_proposal";
+}
+
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
   if (step === "cloud_requirement_analysis_confirm") {
@@ -550,6 +571,7 @@ export function WaitingCard({
   pushReview,
   onLocateDelivery,
   activeDeliveryScope,
+  participant = false,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -577,6 +599,9 @@ export function WaitingCard({
   /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
    * 假装是一个点了会有动作的按钮。 */
   activeDeliveryScope?: "changes" | "full";
+  /** 受邀参与讨论的人在答卡:能答题、能选"需要修改",但"确认并生成任务"
+   * 这一项锁住——拆单由责任人拍板(服务端同口径拒绝,这里别让人白点)。 */
+  participant?: boolean;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -636,8 +661,8 @@ export function WaitingCard({
   const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
     answer.includes("需要修改"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
-  // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
-  // 仍然拦"通过"——那是真有意见没处理。
+  // 会按勾选机械整理提交，用户在同一张卡选择重新编译或直接提交。
+  // 只有未闭环批注仍然拦“通过”——那是真有意见没处理。
   const reviewChoiceConflict = attachmentCount > 0
     && questions.some((item) => {
     const options = item.options ?? [];
@@ -662,6 +687,7 @@ export function WaitingCard({
   const hasCustomPrimaryAnswer = questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
+    && !!customOpen[item.question]
     && !!custom[item.question]?.trim());
   const isReviewDecision = requiresDeliverySelection
     || choiceEffects.some((effect) => effect.closes_feedback);
@@ -675,8 +701,9 @@ export function WaitingCard({
   const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
-      ? picked[item.question] || custom[item.question]?.trim()
-      : custom[item.question]?.trim();
+      ? picked[item.question]
+        || (customOpen[item.question] && custom[item.question]?.trim())
+      : customOpen[item.question] && custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
   })) && deliveryReady
     && !repositorySkillSelection?.scanning
@@ -691,14 +718,33 @@ export function WaitingCard({
     && !submitting;
 
   function pickOption(question: string, option: string) {
-    setPicked({ ...picked, [question]: option });
+    setPicked((current) => toggleDecisionChoice(current, question, option));
+    // 给定选项与自定义答复是同一题的两个分支。切回给定选项时收起
+    // 自定义编辑框；草稿仍保留，之后再切回来不会丢字。
+    setCustomOpen((current) => {
+      if (!current[question]) return current;
+      const next = { ...current };
+      delete next[question];
+      return next;
+    });
   }
 
-  function openCustom(question: string) {
-    setCustomOpen({ ...customOpen, [question]: true });
+  function toggleCustom(question: string) {
+    const willOpen = !customOpen[question];
+    setCustomOpen((current) => {
+      const next = { ...current };
+      if (current[question]) delete next[question];
+      else next[question] = true;
+      return next;
+    });
+    // 自定义答复是主答案，不和给定分支同时生效。补充原因仍走卡片
+    // 底部的“补充说明”，避免人看到两个答案却不知道系统听哪个。
+    if (willOpen) {
+      setPicked((current) => clearDecisionChoice(current, question));
+    }
   }
 
-  async function submit() {
+  async function submit(deliveryCompileAction?: DeliveryCompileAction) {
     if (!ready || submitting) return;
     const selectedOptions: Record<string, string> = {};
     const freeResponses: Record<string, string> = {};
@@ -709,7 +755,9 @@ export function WaitingCard({
       if (options.length && selected) {
         selectedOptions[item.question] = selected;
       }
-      const explanation = custom[item.question]?.trim();
+      const explanation = customOpen[item.question]
+        ? custom[item.question]?.trim()
+        : "";
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
@@ -738,6 +786,7 @@ export function WaitingCard({
         confirmsChain ? repositoryAssigneeSelection?.tickets : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
         task.waiting!.waiting_id,
+        deliveryCompileAction,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();
@@ -763,6 +812,10 @@ export function WaitingCard({
             : requiresDeliverySelection
               ? "先检视并选择交付文件"
               : "提交决定";
+  const showDeliveryCompileActions = requiresDeliverySelection
+    && deliverySelectionChanged
+    && !selectedHandlesFeedback
+    && !hasCustomPrimaryAnswer;
 
   return (
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
@@ -925,7 +978,7 @@ export function WaitingCard({
                 : deliverySelection.selectedPaths.length === 0
                   ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
                   : deliverySelectionChanged
-                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。`
+                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。提交时可选择是否重新编译。`
                     : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
             </div>
           )}
@@ -941,8 +994,7 @@ export function WaitingCard({
           const options = item.options ?? [];
           const compact = options.length <= 4
             && options.every((option) => option.length <= 14);
-          const customActive =
-            !!customOpen[item.question] && !!custom[item.question]?.trim();
+          const customActive = !!customOpen[item.question];
           const skippable = optional(item.question);
           const reviewQuestion = options.some((option) =>
             allChoiceAnswers.has(option));
@@ -960,6 +1012,7 @@ export function WaitingCard({
               <div className={`options ${compact ? "compact" : "cards"}`}>
                 {options.map((option) => {
                   const chosen = picked[item.question] === option;
+                  const locked = participant && option.includes("确认并生成任务");
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));
@@ -972,17 +1025,24 @@ export function WaitingCard({
                       : effect?.handles_feedback || inferredAdjustment
                         ? "将留在本轮，处理意见后重新检视"
                         : "";
-                  const [title, hint] = split
+                  const [title, rawHint] = split
                     ? [split[1].trim(), split[2].trim()]
                     : [option, consequence];
+                  const hint = locked
+                    ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
+                    : rawHint;
                   return (
                     <button
                       type="button"
                       key={option}
-                      className={`option${chosen ? " picked" : ""}`}
+                      className={`option${chosen ? " picked" : ""}${locked ? " locked" : ""}`}
                       role="radio"
                       aria-checked={chosen}
+                      title={locked ? "由责任人确认"
+                        : chosen ? "再次点击取消选择" : undefined}
+                      disabled={locked}
                       onClick={(event) => {
+                        if (locked) return;
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
                         const selection = window.getSelection();
@@ -1002,36 +1062,31 @@ export function WaitingCard({
                     </button>
                   );
                 })}
-                {!customOpen[item.question] && (
-                  <button
-                    type="button"
-                    className="option custom-entry"
-                    onClick={() => openCustom(item.question)}
-                  >
-                      <span className="radio" />
-                      <span className="option-body">
-                        <span className="option-title">{options.length
-                          ? picked[item.question]
-                            ? "补充说明"
-                            : "以上都不合适，直接回答"
-                          : "填写答复"}</span>
-                        <span className="option-hint">{options.length
-                          ? picked[item.question]
-                            ? "说明会随决定提交，但不会改变所选流程分支"
-                            : "你的文字将作为本题主答案，不会套用任一选项"
-                          : "填写本题的具体答案"}</span>
-                      </span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`option custom-entry${customActive ? " picked" : ""}`}
+                  role={options.length ? "radio" : undefined}
+                  aria-checked={options.length ? customActive : undefined}
+                  title={customActive ? "再次点击取消自定义答复" : undefined}
+                  onClick={() => toggleCustom(item.question)}
+                >
+                    <span className={`radio${customActive ? " on" : ""}`} />
+                    <span className="option-body">
+                      <span className="option-title">{options.length
+                        ? "自定义答复"
+                        : "填写答复"}</span>
+                      <span className="option-hint">{options.length
+                        ? "以上选项都不合适时，直接写下正确处理方式"
+                        : "填写本题的具体答案"}</span>
+                    </span>
+                </button>
               </div>
               {customOpen[item.question] && (
                 <div className="custom-answer">
                   <textarea
                     className={`custom-input${customActive ? " picked" : ""}`}
                     placeholder={options.length
-                      ? picked[item.question]
-                        ? "补充原因、修改点或约束…"
-                        : "写下选项之外的正确处理方式…"
+                      ? "写下选项之外的正确处理方式…"
                       : "写下你的答复…"}
                     value={custom[item.question] ?? ""}
                     autoFocus
@@ -1041,9 +1096,7 @@ export function WaitingCard({
                     })}
                   />
                   <span>{options.length
-                    ? picked[item.question]
-                      ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
-                      : "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
+                    ? "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
                     : "这段文字将作为开放题答案提交。"}</span>
                 </div>
               )}
@@ -1090,7 +1143,8 @@ export function WaitingCard({
         </div>
       )}
 
-      <footer className="decision-footer">
+      <footer className={`decision-footer${
+        showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {!requirementAnalysisConfirmation && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>
@@ -1116,17 +1170,33 @@ export function WaitingCard({
         {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
             最底沿,长卡时落在视口外,人以为点了没反应。 */}
         {conflict && <div className="alert" role="alert">{conflict}</div>}
-        <button
-          type="button"
-          className="submit-decision"
-          disabled={!ready}
-          onClick={submit}
-        >
-          {submitLabel}
-          <svg viewBox="0 0 20 20" aria-hidden>
-            <path d="m4 10 3.2 3.2L16 5.5" />
-          </svg>
-        </button>
+        {showDeliveryCompileActions ? (
+          <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
+            <button type="button" className="submit-decision secondary"
+              disabled={!ready} onClick={() => submit("rerun")}>
+              {submitting ? "正在提交…" : "重新编译后提交"}
+            </button>
+            <button type="button" className="submit-decision"
+              disabled={!ready} onClick={() => submit("skip")}>
+              {submitting ? "正在提交…" : "不再编译，直接提交"}
+              <svg viewBox="0 0 20 20" aria-hidden>
+                <path d="m4 10 3.2 3.2L16 5.5" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="submit-decision"
+            disabled={!ready}
+            onClick={() => submit()}
+          >
+            {submitLabel}
+            <svg viewBox="0 0 20 20" aria-hidden>
+              <path d="m4 10 3.2 3.2L16 5.5" />
+            </svg>
+          </button>
+        )}
       </footer>
     </section>
   );

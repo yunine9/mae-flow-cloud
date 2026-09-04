@@ -105,6 +105,59 @@ function decodeUtf8(bytes: Buffer, label: string): string {
   }
 }
 
+function tryDecode(bytes: Buffer, encoding: string): string | undefined {
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/** ZIP Unicode Path extra field (0x7075) uses the CRC-32 of the legacy name. */
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function unicodePathFromExtra(rawName: Buffer, extra: Buffer): string | undefined {
+  let cursor = 0;
+  while (cursor + 4 <= extra.length) {
+    const tag = extra.readUInt16LE(cursor);
+    const size = extra.readUInt16LE(cursor + 2);
+    cursor += 4;
+    if (cursor + size > extra.length) return undefined;
+    const payload = extra.subarray(cursor, cursor + size);
+    cursor += size;
+    if (tag !== 0x7075 || payload.length < 6 || payload[0] !== 1) continue;
+    if (payload.readUInt32LE(1) !== crc32(rawName)) continue;
+    const decoded = tryDecode(payload.subarray(5), "utf-8");
+    if (decoded !== undefined) return decoded;
+  }
+  return undefined;
+}
+
+/**
+ * ZIP only guarantees UTF-8 when general-purpose flag bit 11 is set. Older
+ * Windows archivers commonly write Chinese entry names as GBK without that
+ * flag; Info-ZIP instead preserves the UTF-8 name in extra field 0x7075.
+ */
+function decodeZipName(rawName: Buffer, flags: number, extra: Buffer): string {
+  if (flags & 0x800) return decodeUtf8(rawName, "ZIP 文件名");
+  const unicodeName = unicodePathFromExtra(rawName, extra);
+  if (unicodeName !== undefined) return unicodeName;
+  const utf8Name = tryDecode(rawName, "utf-8");
+  if (utf8Name !== undefined) return utf8Name;
+  const gb18030Name = tryDecode(rawName, "gb18030");
+  if (gb18030Name !== undefined) return gb18030Name;
+  throw new RequirementBundleError("ZIP 文件名编码无法识别，请使用 UTF-8 或 GBK/GB18030");
+}
+
 function findEndRecord(zip: Buffer): number {
   const floor = Math.max(0, zip.length - 65_557);
   for (let offset = zip.length - 22; offset >= floor; offset -= 1) {
@@ -150,7 +203,11 @@ function unzip(zip: Buffer): Map<string, Buffer> {
     const externalAttributes = zip.readUInt32LE(cursor + 38);
     const localOffset = zip.readUInt32LE(cursor + 42);
     const rawName = zip.subarray(cursor + 46, cursor + 46 + nameBytes);
-    const name = safeZipPath(decodeUtf8(rawName, "ZIP 文件名"));
+    const extra = zip.subarray(
+      cursor + 46 + nameBytes,
+      cursor + 46 + nameBytes + extraBytes,
+    );
+    const name = safeZipPath(decodeZipName(rawName, flags, extra));
     cursor += 46 + nameBytes + extraBytes + commentBytes;
     if (flags & 1) throw new RequirementBundleError("不支持加密 ZIP 材料包");
     const unixMode = (madeBy >> 8) === 3 ? externalAttributes >>> 16 : 0;

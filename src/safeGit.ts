@@ -27,8 +27,20 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 export interface SafeGitOptions {
   configs?: ReadonlyArray<readonly [key: string, value: string]>;
   env?: NodeJS.ProcessEnv;
+  /** 仅供宿主重建 commit 对象时显式提供。普通 env 中的 GIT_AUTHOR_* /
+   * GIT_COMMITTER_* 仍会被清除，避免 Agent 环境暗改宿主提交身份。 */
+  commitIdentity?: SafeGitCommitIdentity;
   maxBuffer?: number;
   timeoutMs?: number;
+}
+
+export interface SafeGitCommitIdentity {
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  committerName: string;
+  committerEmail: string;
+  committerDate: string;
 }
 
 export interface SafeGitAsyncResult {
@@ -209,7 +221,7 @@ export function runSafeWorktreeGit(
       encoding: "utf-8",
       maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
       timeout: options.timeoutMs,
-      env: view.environment(options.env),
+      env: safeGitProcessEnvironment(view, options),
     });
   } finally {
     view.cleanup();
@@ -241,7 +253,7 @@ export function runSafeWorktreeGitAsync(
       encoding: "utf-8",
       maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
       timeout: options.timeoutMs,
-      env: view.environment(options.env),
+      env: safeGitProcessEnvironment(view, options),
     }, (error, stdout, stderr) => {
       view.cleanup();
       const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -256,4 +268,22 @@ export function runSafeWorktreeGitAsync(
       });
     });
   });
+}
+
+function safeGitProcessEnvironment(
+  view: SafeGitView,
+  options: SafeGitOptions,
+): NodeJS.ProcessEnv {
+  const env = view.environment(options.env);
+  const identity = options.commitIdentity;
+  if (!identity) return env;
+  return {
+    ...env,
+    GIT_AUTHOR_NAME: identity.authorName,
+    GIT_AUTHOR_EMAIL: identity.authorEmail,
+    GIT_AUTHOR_DATE: identity.authorDate,
+    GIT_COMMITTER_NAME: identity.committerName,
+    GIT_COMMITTER_EMAIL: identity.committerEmail,
+    GIT_COMMITTER_DATE: identity.committerDate,
+  };
 }

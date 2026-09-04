@@ -59,13 +59,15 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
           return {
             repository: item?.repository ?? repository,
             technologies: item?.profile?.technologies ?? [],
-            confirmed: item?.profile?.confirmed === true,
-            remembered: !!item?.profile,
+            confirmed: item?.profile?.confirmed === true
+              && (item.profile.technologies?.length ?? 0) > 0,
+            remembered: !!item?.profile
+              && (item.profile.technologies?.length ?? 0) > 0,
           };
         }));
       }).catch((reason) => {
         if (!alive) return;
-        // 画像是推荐旁路，读不到不能卡下单；界面明确说明退化结果。
+        // 读不到历史记忆时仍可在本页完成当前选择；保存失败也不挡本单。
         setError(reason instanceof Error ? reason.message : "仓库技术画像读取失败");
         const local = new Map(valueRef.current.map((item) =>
           [identity(item.repository), item]));
@@ -90,6 +92,10 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
     item: RepositoryTechnologyDraft,
     technologies: string[],
   ) => {
+    if (!technologies.length) {
+      setError("请至少选择一种技术栈");
+      return;
+    }
     setSavingRepository(item.repository);
     setError("");
     try {
@@ -104,7 +110,7 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
         remembered: true,
       });
     } catch (reason) {
-      // 画像是推荐旁路：记忆失败不能卡本任务。当前选择仍进入本任务的
+      // 记忆失败不能卡本任务。当前选择仍进入本任务的
       // 资源匹配和任务快照，只明确告诉用户下次可能需要重新确认。
       update(item.repository, {
         technologies,
@@ -119,9 +125,13 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
   return <div className="repository-technology-picker">
     <div className="repository-technology-head">
       <span><strong>仓库技术栈</strong><small>
-        第一次由你选择，系统记住；以后用来匹配工程知识，不做代码猜测。</small></span>
-      <em>{loading ? "读取中…" : value.every((item) => item.confirmed)
-        ? "已确认" : "有首次选择"}</em>
+        第一次由你选择，系统记住；以后用来准确匹配工程知识和 Skill。</small></span>
+      <em className={value.length === normalized.length
+          && value.every((item) => item.confirmed && item.technologies.length)
+        ? undefined : "required"}>
+        {loading ? "读取中…" : value.length === normalized.length
+          && value.every((item) => item.confirmed && item.technologies.length)
+          ? "已确认" : "必须确认"}</em>
     </div>
     {error && <p className="repository-technology-warning" role="status">
       {error}。请核对上方当前选择状态；本单已确认的选择仍会保留。</p>}
@@ -135,7 +145,7 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
         {item.confirmed ? <>
           <div className="repository-technology-state">
             <KnowledgeLanguageTags languages={item.technologies}
-              empty="已确认：暂不确定 / 技术无关" />
+              empty="尚未选择" />
             <button type="button" onClick={() => update(item.repository,
               { confirmed: false })}>重新选择</button>
           </div>
@@ -147,22 +157,22 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
           <div><button type="button" className="primary"
             disabled={!item.technologies.length || !!savingRepository}
             onClick={() => void remember(item, item.technologies)}>
-            {savingRepository === item.repository ? "正在保存…" : "确认并记住"}</button>
-            <button type="button" disabled={!!savingRepository}
-              onClick={() => void remember(item, [])}>
-              暂不确定，也继续</button></div>
+            {savingRepository === item.repository ? "正在保存…" : "确认技术栈"}</button>
+            {!item.technologies.length && <small>至少选择一种；多语言仓可以多选</small>}
+          </div>
         </div>}
       </article>)}
     </div>
     <p className="repository-technology-note">
-      这项选择不构成流程门禁。未确认或暂不确定时，业务模块知识和仓内知识仍正常使用，只减少按技术栈自动匹配的工程知识。</p>
+      新任务必须确认每个代码仓的技术栈。系统记忆失败时，本单仍采用你刚选的结果，下次再确认即可。</p>
   </div>;
 }
 
 export function asRepositoryProfiles(
   drafts: RepositoryTechnologyDraft[],
 ): Array<Pick<RepositoryProfile, "repository" | "technologies" | "confirmed">> {
-  return drafts.filter((item) => item.confirmed).map((item) => ({
+  return drafts.filter((item) => item.confirmed && item.technologies.length)
+    .map((item) => ({
     repository: item.repository,
     technologies: item.technologies,
     confirmed: true,

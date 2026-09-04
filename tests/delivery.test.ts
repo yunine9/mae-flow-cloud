@@ -1130,6 +1130,8 @@ test("宿主推送失败 → 不硬造 MR,停在验证中并说明原因", async
 
 test("宿主 push 等待远端 Hook 时不阻塞 Node 事件循环", async () => {
   const cwd = makeSourceRepo();
+  git(cwd, "commit", "--amend", "--quiet", "-m",
+    "[TASK_ASYNC_PUSH][fix]初始化异步推送测试仓");
   const remote = mkdtempSync(join(tmpdir(), "mfc-async-push-remote-"));
   git(remote, "init", "--bare", "--quiet");
   const hook = join(remote, "hooks", "pre-receive");

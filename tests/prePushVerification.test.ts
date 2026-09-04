@@ -21,6 +21,7 @@ import {
   observePrePushRevision,
   recordPrePushCheck,
   recordPrePushReport,
+  rebindEquivalentPrePushRevision,
   restorePrePushVerification,
   retryPrePushVerification,
   transitionPrePush,
@@ -305,6 +306,38 @@ test("恢复前置条件缺失时收成环境异常，不留下无 owner 的 pre
   assert.equal(failed.issue?.kind, "infrastructure");
   assert.match(failed.message, /代码现场/);
   assert.equal(canPushRevision(failed, REVISION), false);
+});
+
+test("只改提交说明且 tree 等价时可机械迁移 PASS，不重跑编译和 UT", () => {
+  const started = beginPrePushAttempt(
+    createPrePushVerification(REVISION, at(0)), at(1));
+  const attempt = started.active_attempt!.id;
+  let passed = recordPrePushReport(started, attempt, {
+    compile: { outcome: "passed" },
+    unit_test: { outcome: "passed" },
+  }, at(2));
+  passed = attestPrePushExecution(passed, {
+    schema: PRE_PUSH_EXECUTION_SCHEMA,
+    attempt_id: attempt,
+    sha: REVISION.sha,
+    container_id: "container-1",
+    image_reference: "builder:test",
+    image_id: "image-1",
+    image_digest: "sha256:digest",
+    network: "bridge",
+    read_only_root: true,
+    pids_limit: 512,
+    mount_destinations: ["/workspace"],
+  });
+  const next = {
+    sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    workspace_fingerprint: "tree+worktree:222",
+  };
+  const rebound = rebindEquivalentPrePushRevision(
+    passed, REVISION, next, at(3));
+  assert.equal(canPushRevision(rebound, next), true);
+  assert.equal(rebound.receipt?.execution?.sha, next.sha);
+  assert.match(rebound.message, /代码内容未变/);
 });
 
 test("容器镜像与资源事实绑定同一 SHA/attempt，错配不能混入收据", () => {

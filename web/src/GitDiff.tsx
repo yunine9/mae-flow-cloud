@@ -11,6 +11,7 @@ import {
   compactDirectory,
   descendantFiles,
   displayDirectoryPaths,
+  fileKind,
   parseChanges,
   type ChangedFile,
   type ChangeDirectory,
@@ -51,6 +52,41 @@ export interface GitDiffSelection {
   selectedPaths: string[];
   committedPaths: string[];
   allPaths: string[];
+}
+
+export interface GitDiffFileManifest {
+  path: string;
+  stage: ChangeStage;
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * 文件树以服务端的小体积完整清单为准，正文只补当前已经读取的文件。
+ * 这样前几个大文件即使触发正文上限，后面的文件仍然全部可见可点。
+ */
+export function filesForDiff(
+  text: string,
+  manifest?: readonly GitDiffFileManifest[],
+): ChangedFile[] {
+  const parsed = parseChanges(text);
+  if (!manifest?.length) return parsed;
+  const contentByPath = new Map(parsed.map((file) => [file.path, file]));
+  return manifest.map((entry) => {
+    const content = contentByPath.get(entry.path);
+    return content
+      ? {
+          ...content,
+          key: `${entry.stage}:${entry.path}`,
+          stage: entry.stage,
+        }
+      : {
+          ...entry,
+          key: `${entry.stage}:${entry.path}`,
+          kind: fileKind(entry.path),
+          lines: [],
+        };
+  });
 }
 
 type ReviewEntry = DiffReviewRow | {
@@ -130,6 +166,10 @@ function DiffCellView({ cell }: { cell?: DiffCell }) {
 export function GitDiff({
   text,
   branch,
+  manifest,
+  onFileSelect,
+  activeFileLoading = false,
+  activeFileError = "",
   hideKey,
   selectable = false,
   selectionKey = "",
@@ -140,6 +180,11 @@ export function GitDiff({
 }: {
   text: string;
   branch?: string;
+  /** 完整文件目录；正文 text 可以只包含当前点开的一个文件。 */
+  manifest?: readonly GitDiffFileManifest[];
+  onFileSelect?: (path: string) => void;
+  activeFileLoading?: boolean;
+  activeFileError?: string;
   /** 每任务保存自己的视图隐藏项；隐藏不参与 Git 或交付判断。 */
   hideKey?: string;
   /** 仅代码检视待办开放交付勾选。 */
@@ -154,7 +199,7 @@ export function GitDiff({
   /** 外部明确请求进入专注审阅；递增即可重复打开。 */
   focusRequest?: number;
 }) {
-  const files = useMemo(() => parseChanges(text), [text]);
+  const files = useMemo(() => filesForDiff(text, manifest), [text, manifest]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
@@ -339,6 +384,9 @@ export function GitDiff({
   }, [visibleFiles, selected]);
   const active = visibleFiles.find((file) => file.key === selected)
     ?? visibleFiles[0];
+  useEffect(() => {
+    if (active?.path) onFileSelect?.(active.path);
+  }, [active?.path, onFileSelect]);
   useEffect(() => {
     setExpanded(new Set());
     setShowAll(false);
@@ -722,7 +770,14 @@ export function GitDiff({
               )}
             </div>
           </header>
-          {!hasTextRows ? (
+          {activeFileLoading ? (
+            <div className="untracked-file-note"><strong>正在读取这个文件…</strong>
+              <span>文件清单已经完整加载，正文按需打开。</span></div>
+          ) : activeFileError ? (
+            <div className="untracked-file-note" role="alert">
+              <strong>这个文件暂时打不开</strong><span>{activeFileError}</span>
+            </div>
+          ) : !hasTextRows ? (
             <div className="untracked-file-note"><strong>没有可展示的文本内容</strong><span>文件可能为空、不可读或属于无法逐行比较的类型。</span></div>
           ) : (
             // data-file / data-l 是批注的锚:批注层用事件委托认它们,

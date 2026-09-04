@@ -22,7 +22,7 @@ export type TimelineTone = "info" | "attention" | "success" | "danger";
 export interface TimelineEntry {
   /** 带时区的 ISO 时间。页面只按本地时区格式化，不再猜来源。 */
   ts: string;
-  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality";
+  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality" | "memory";
   title: string;
   detail?: string;
   tone: TimelineTone;
@@ -283,6 +283,51 @@ function fromQualityLedger(cwd: string): TimelineEntry[] {
   return entries;
 }
 
+/** 任务记忆足迹(memory-usage.jsonl):宿主推了什么、Agent 自己查了什么。
+ * 与「这单用到的」同一数据源,这里只是把它排进时间轴。 */
+function fromMemoryUsage(workspace: string): TimelineEntry[] {
+  const rows = readJsonl(join(workspace, "memory-usage.jsonl"));
+  const entries: TimelineEntry[] = [];
+  for (const row of rows) {
+    const ids = Array.isArray(row.ids) ? row.ids.map(String) : [];
+    const count = ids.length;
+    const moment = String(row.moment ?? "");
+    let title = "";
+    let detail: string | undefined;
+    switch (moment) {
+      case "launch":
+        title = `开局推送 ${count} 条任务记忆`;
+        break;
+      case "phase":
+        title = `进入「${clip(row.phase, 20)}」推送 ${count} 条记忆`;
+        break;
+      case "edit":
+        title = row.digest
+          ? `首改 ${clip(row.dir, 40) || "仓库根"} 目录:推送目录摘要(${count} 条)`
+          : `首改 ${clip(row.dir, 40) || "仓库根"} 目录:提醒 ${count} 条记忆`;
+        break;
+      case "search":
+        title = `Agent 检索记忆:命中 ${count} 条`;
+        detail = clip(row.query, 80) || undefined;
+        break;
+      case "expand":
+        title = "Agent 展开记忆全文";
+        detail = ids.join(", ") || undefined;
+        break;
+      default:
+        continue;
+    }
+    entries.push({
+      ts: normalizeTimestamp(row.ts, "utc"),
+      kind: "memory",
+      title,
+      detail: detail ?? (ids.length ? ids.slice(0, 4).join(", ") : undefined),
+      tone: "info",
+    });
+  }
+  return entries;
+}
+
 /**
  * 读一个任务现场,产出按时间正序的人话时间线。
  * 任何一路数据源出问题都只让那一路缺席,整体永远返回数组。
@@ -300,6 +345,7 @@ export function buildTimeline(
     }
   };
   push(() => fromEvents(workspace));
+  push(() => fromMemoryUsage(workspace));
   const codeDir = resolveCwd(workspace, cwd);
   if (codeDir) {
     push(() => fromKernel(codeDir));

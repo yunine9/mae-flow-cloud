@@ -41,6 +41,7 @@
  */
 import { useRef, useState } from "react";
 import type { IssueEnvironmentForm, IssueSkillChoice, IssueWaitingCard } from "../api";
+import { toggleDecisionChoice } from "../decisionSelection";
 import { Markdown } from "../markdown";
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
@@ -374,7 +375,7 @@ function PipelineGateCard({ waiting, busy, onAnswer }: {
 
 export function areIssueQuestionsComplete(
   questions: Array<{ options: ReadonlyArray<unknown> }>,
-  picked: Record<number, string>,
+  picked: Record<string, string>,
   custom: Record<number, string>,
 ): boolean {
   return questions.length > 0 && questions.every((item, index) => {
@@ -401,7 +402,7 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
   const contextLabel = waiting.gate_kind === "push_confirm"
     ? "变更摘要" : "决策背景";
   // picked 存决策码(选项的身份是 code,文案只用于显示)。
-  const [picked, setPicked] = useState<Record<number, string>>({});
+  const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState("");
@@ -419,17 +420,19 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
   ): boolean {
     const options = questions[questionIndex]?.options ?? [];
     if (!options.length) return false;
+    // 自定义答复也是这个单选组里的正式选项，必须能用方向键到达。
+    const choices = [...options.map((option) => option.code), MANUAL_CODE];
     const next = key === "Home" ? 0
-      : key === "End" ? options.length - 1
+      : key === "End" ? choices.length - 1
         : key === "ArrowRight" || key === "ArrowDown"
-          ? (optionIndex + 1) % options.length
+          ? (optionIndex + 1) % choices.length
           : key === "ArrowLeft" || key === "ArrowUp"
-            ? (optionIndex - 1 + options.length) % options.length
+            ? (optionIndex - 1 + choices.length) % choices.length
             : undefined;
     if (next === undefined) return false;
     setPicked((current) => ({
       ...current,
-      [questionIndex]: options[next].code,
+      [questionIndex]: choices[next],
     }));
     window.requestAnimationFrame(() =>
       radioRefs.current[questionIndex]?.[next]?.focus());
@@ -507,11 +510,12 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
                 aria-checked={chosen}
                 tabIndex={chosen || (!picked[index] && optionIndex === 0) ? 0 : -1}
                 className={`option${chosen ? " picked" : ""}${suggested ? " issue-recommended" : ""}`}
+                title={chosen ? "再次点击取消选择" : undefined}
                 onKeyDown={(event) => {
                   if (moveRadio(index, optionIndex, event.key)) event.preventDefault();
                 }}
                 onClick={() => setPicked((current) =>
-                  ({ ...current, [index]: option.code }))}>
+                  toggleDecisionChoice(current, index, option.code))}>
                 <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
                 <span className="option-body"><span className="option-title">
                   {option.label}
@@ -533,11 +537,17 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
                 aria-checked={manualChosen}
                 tabIndex={manualChosen ? 0 : -1}
                 className={`option manual${manualChosen ? " picked" : ""}`}
+                title={manualChosen ? "再次点击取消自定义答复" : undefined}
+                onKeyDown={(event) => {
+                  if (moveRadio(index, manualIndex, event.key)) event.preventDefault();
+                }}
                 onClick={() => setPicked((current) =>
-                  ({ ...current, [index]: MANUAL_CODE }))}>
+                  toggleDecisionChoice(current, index, MANUAL_CODE))}>
                 <span className={`radio${manualChosen ? " on" : ""}`} aria-hidden />
                 <span className="option-body"><span className="option-title">
-                  手动输入
+                  自定义答复
+                </span><span className="option-hint">
+                  以上选项都不合适时使用
                 </span></span>
               </button>;
             })()}

@@ -540,6 +540,21 @@ async function main(): Promise<void> {
   // 统一任务执行面:普通编码/修复/子 Agent/Build-Fix 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
+  // 任务记忆检索旁路(docs/knowledge-memory-design.md §7):给 venv 的
+  // python 就起常驻 sidecar;不给则只有索引级的开局推送,任务照跑。
+  // 记忆起草/目录摘要的专用便宜模型角色(设计稿 §5):不配就不起草,只留模板。
+  // 刻意不回落到任务模型——旁路不和主会话抢额度,也不吃剧本模型的下一幕。
+  const memoryDraftProvider = flag("--memory-draft-provider")?.trim();
+  const memoryDraftModel = flag("--memory-draft-model")?.trim();
+  if (!!memoryDraftProvider !== !!memoryDraftModel) {
+    console.error("[serve] --memory-draft-provider 与 --memory-draft-model 必须同时配置");
+    process.exit(2);
+  }
+  const memsearchPython = flag("--memsearch");
+  if (memsearchPython && !existsSync(memsearchPython)) {
+    console.error(`[serve] --memsearch 指向的 python 不存在: ${memsearchPython}`);
+    process.exit(2);
+  }
   const isolateMemory = flag("--isolate-memory") ?? "8g";
   const isolateCpus = flag("--isolate-cpus") ?? "8";
   const hostAvailableCpus = availableParallelism();
@@ -896,6 +911,13 @@ async function main(): Promise<void> {
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     deploymentRuntime,
+    ...(memoryDraftProvider && memoryDraftModel
+      ? { memoryDraftModel: { provider: memoryDraftProvider, model: memoryDraftModel } } : {}),
+    ...(memsearchPython ? { memory: {
+      python: memsearchPython,
+      script: join(REPO_ROOT, "harness", "memsearch-sidecar.py"),
+      milvusPath: join(dataDir, "memsearch", "milvus.db"),
+    } } : {}),
     ...(issueOnly ? { requirementDisabled: true } : {}),
     vision: visionProvider && visionModel
       ? { provider: visionProvider, model: visionModel } : undefined,

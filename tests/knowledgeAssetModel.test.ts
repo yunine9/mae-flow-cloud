@@ -14,6 +14,7 @@ import {
   writeSkillKnowledgeMetadata,
 } from "../src/knowledgeAssetModel.ts";
 import {
+  requireRepositoryProfiles,
   resolveRepositoryProfiles,
   saveRepositoryProfile,
 } from "../src/repositoryProfiles.ts";
@@ -23,6 +24,7 @@ import {
   readKnowledgeCandidate,
 } from "../src/knowledgeCandidates.ts";
 import {
+  copyEngineeringKnowledgeSnapshots,
   materializeEngineeringKnowledge,
   snapshotEngineeringKnowledge,
 } from "../src/engineeringKnowledgeRuntime.ts";
@@ -91,7 +93,7 @@ test("统一模型：性质与作用域强制；业务模块和工程语言均�
   assert.doesNotMatch(migrated, /^languages:/m);
 });
 
-test("仓库技术画像首次人工确认并复用；明确暂不确定与系统漏采可区分", () => {
+test("仓库技术画像首次人工确认并复用；新任务不接受空技术栈", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-repository-profile-"));
   const repository = "https://code.example/team/mixed.git";
   assert.equal(resolveRepositoryProfiles(dataDir, [repository])[0].profile,
@@ -105,11 +107,13 @@ test("仓库技术画像首次人工确认并复用；明确暂不确定与系�
   assert.equal(resolved.confirmed, true);
   assert.deepEqual(resolved.technologies, ["cpp", "javascript"]);
 
-  const unknown = saveRepositoryProfile(dataDir, {
+  assert.throws(() => saveRepositoryProfile(dataDir, {
     repository, technologies: [], confirmed: true,
-  }, "developer-a");
-  assert.equal(unknown.confirmed, true);
-  assert.deepEqual(unknown.technologies, []);
+  }, "developer-a"), /至少选择一种仓库技术栈/);
+  assert.throws(() => requireRepositoryProfiles(
+    [repository, "https://code.example/team/web.git"], [saved]),
+  /代码仓 web 还没有选择技术栈/);
+  assert.deepEqual(requireRepositoryProfiles([repository], [saved]), [saved]);
 });
 
 test("工程知识候选发布后按任务画像快照；不匹配时不误推荐", () => {
@@ -152,6 +156,38 @@ test("工程知识候选发布后按任务画像快照；不匹配时不误推�
   assert.deepEqual(materialized.warnings, []);
   assert.match(readFileSync(materialized.entries[0].path, "utf-8"),
     /不要把超时当基础设施故障/);
+});
+
+test("新跨仓子任务按自己的技术画像收窄父任务工程知识快照", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-engineering-child-scope-"));
+  const parentWorkspace = join(dataDir, "task-parent");
+  const childWorkspace = join(dataDir, "task-child");
+  mkdirSync(parentWorkspace, { recursive: true });
+  for (const technology of ["java", "cpp"]) {
+    const candidate = createKnowledgeCandidate(dataDir, {
+      source_task_id: "task-source",
+      title: technology + " 构建规则",
+      summary: technology + " 工程约定",
+      when_to_use: "修改对应语言代码时",
+      nature: "engineering", form: "rule",
+      technologies: [technology],
+      content: "# " + technology + " 构建规则\n",
+    }, "developer");
+    decideKnowledgeCandidate(dataDir, candidate.id, "published", "admin");
+  }
+  const parent = snapshotEngineeringKnowledge({
+    dataDir, taskWorkspace: parentWorkspace, repositories: [],
+    technologies: ["java", "cpp"], businessModuleIds: [],
+  });
+  assert.equal(parent.length, 2);
+  const child = copyEngineeringKnowledgeSnapshots({
+    selected: parent,
+    sourceTaskWorkspace: parentWorkspace,
+    targetTaskWorkspace: childWorkspace,
+    technologies: ["cpp"],
+    businessModuleIds: [],
+  });
+  assert.deepEqual(child.map((item) => item.technologies), [["cpp"]]);
 });
 
 test("工程知识管理页与任务选择都拒绝正文和发布指纹不一致的记录", () => {

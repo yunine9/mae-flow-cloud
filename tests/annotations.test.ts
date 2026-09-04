@@ -26,12 +26,14 @@ import {
   reanchor,
   renderAnnotations,
   type Annotation,
+  ANNOTATION_QUOTE_MAX,
 } from "../src/annotations.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 
 function store(): AnnotationStore {
   return new AnnotationStore(
@@ -64,10 +66,12 @@ test("批注接收对象：旧账默认 Agent，责任人答复独立留痕且�
   const question = seed(target, "为什么不用旧接口？", {
     route: "owner_reply", assignee: "owner",
   });
-  target.markSent([question.id], "owner_pending");
   assert.throws(() => target.replyAsOwner(question.id, "visitor", "我猜是历史原因"),
     AnnotationPermissionError);
   const answered = target.replyAsOwner(question.id, "owner", "旧接口不支持多通道");
+  assert.equal(answered.status, "sent", "责任人答复应原子接收尚未提交的意见");
+  assert.equal(answered.sent_via, "owner_pending");
+  assert.equal(answered.sent_by, "owner");
   assert.equal(answered.owner_reply?.author, "owner");
   assert.equal(answered.owner_reply?.text, "旧接口不支持多通道");
   assert.equal(answered.response, undefined, "责任人答复不能冒充 Agent 回执");
@@ -86,9 +90,6 @@ test("决策后处理：先等责任人，责任人落结论后排进当前人�
     route: "owner_decision",
   });
   assert.equal(note.assignee, "owner", "指派对象由任务责任人事实固定");
-  await service.sendAnnotations(id, [note.id], "reviewer");
-  assert.equal(service.listAnnotations(id).items[0].sent_via, "owner_pending");
-
   const internal = (service as any).tasks.get(id);
   internal.summary.status = "waiting_for_human";
   const replied = await service.replyToAnnotation(
@@ -96,6 +97,68 @@ test("决策后处理：先等责任人，责任人落结论后排进当前人�
   assert.equal(replied.owner_reply?.text, "重试耗尽后停止交付，不允许自动降级");
   assert.equal(replied.sent_via, "queued_decision",
     "已有人工卡时不越权跳过审批，而是把责任人结论排入当前决定");
+});
+
+test("责任人答复只通知意见提出人；责任人决策直接交 Agent 不发中间通知", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  try {
+    const service = new TaskService({
+      dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-owner-notify-")),
+      provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+      notifier: new Notifier({ endpoint: luban.endpoint }),
+    });
+    const id = service.create("核对接口兼容性", { account: "owner" }).id;
+    const question = service.addAnnotation(id, {
+      author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+      file: "需求原文", line: 1, anchor: "核对接口兼容性",
+      note: "请解释为什么不能兼容旧接口", kind: "doc", route: "owner_reply",
+    });
+    await service.replyToAnnotation(id, question.id, "owner", "旧接口缺少幂等键");
+    const deadline = Date.now() + 3_000;
+    while (luban.messages.length < 1 && Date.now() < deadline) {
+      await new Promise((tick) => setTimeout(tick, 20));
+    }
+    assert.equal(luban.messages.length, 1);
+    assert.equal((luban.messages[0] as { account: string }).account, "reviewer");
+    assert.match((luban.messages[0] as { text: string }).text,
+      /责任人 owner 已答复.*确认“已解答”或“仍有疑问”/);
+
+    const decision = service.addAnnotation(id, {
+      author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+      file: "需求原文", line: 1, anchor: "核对接口兼容性",
+      note: "请决定是否停止兼容", kind: "doc", route: "owner_decision",
+    });
+    const internal = (service as any).tasks.get(id);
+    internal.summary.status = "waiting_for_human";
+    await service.replyToAnnotation(id, decision.id, "owner", "继续兼容");
+    await new Promise((tick) => setTimeout(tick, 50));
+    assert.equal(luban.messages.length, 1,
+      "责任人决策后下一棒是 Agent，不应给提出人发送无行动通知");
+  } finally {
+    await luban.stop();
+  }
+});
+
+test("责任人代转必须显式点中意见，旧的无 ids 提交只发送自己的草稿", async () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-owner-explicit-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const id = service.create("显式转交", { account: "owner" }).id;
+  const own = service.addAnnotation(id, {
+    author: "owner", artifact: "spec.md", file: "spec.md", line: 1,
+    anchor: "a", note: "自己的问题", kind: "doc", route: "owner_reply",
+  });
+  const foreign = service.addAnnotation(id, {
+    author: "reviewer", artifact: "spec.md", file: "spec.md", line: 2,
+    anchor: "b", note: "别人的问题", kind: "doc", route: "owner_reply",
+  });
+  await service.sendAnnotations(id, undefined, "owner", true);
+  const items = service.listAnnotations(id).items;
+  assert.equal(items.find((item) => item.id === own.id)?.status, "sent");
+  assert.equal(items.find((item) => item.id === foreign.id)?.status, "draft",
+    "没有显式 ID 时不能把其他人的草稿整批送出");
 });
 
 test("批注清单:那四条护栏一字不能少", () => {
@@ -393,7 +456,7 @@ test("服务端管理员代办只在当前 workspace push 复检内生效", () =
   assert.equal(service.dropAnnotation(id, own.id, "admin", true).status, "dropped");
 });
 
-test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意见", async () => {
+test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直接答复", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-anno-auth-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("admin", "administrator-pass");
@@ -443,13 +506,7 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
     const developerNote = await add(developer, "开发的意见");
 
     const ownerQuestion = await add(
-      developer, "请任务责任人解释接口取舍", "owner_reply");
-    const ownerQuestionSent = await fetch(
-      `${base}/tasks/${created.id}/annotations/send`, {
-        method: "POST", headers: { cookie: developer },
-        body: JSON.stringify({ ids: [ownerQuestion.id] }),
-      });
-    assert.equal(ownerQuestionSent.status, 200);
+      committer, "请任务责任人解释接口取舍", "owner_reply");
     const visitorCannotReply = await fetch(
       `${base}/tasks/${created.id}/annotations/${ownerQuestion.id}/reply`, {
         method: "POST", headers: { cookie: committer },
@@ -464,8 +521,11 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
         body: JSON.stringify({ text: "旧接口无法支持多通道" }),
       });
     assert.equal(ownerReplies.status, 200);
-    assert.equal((await readJson(ownerReplies) as Annotation).owner_reply?.text,
-      "旧接口无法支持多通道");
+    const ownerReply = await readJson(ownerReplies) as Annotation;
+    assert.equal(ownerReply.owner_reply?.text, "旧接口无法支持多通道");
+    assert.equal(ownerReply.status, "sent",
+      "责任人应能直接接住别人尚未提交的提问并答复");
+    assert.equal(ownerReply.sent_by, "developer");
 
     const committerCannotSend = await fetch(
       `${base}/tasks/${created.id}/annotations/send`, {
@@ -474,6 +534,22 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
       });
     assert.equal(committerCannotSend.status, 403,
       "普通成员可以先圈注，但不能因此获得指挥 Agent 的权限");
+
+    const internal = (service as any).tasks.get(created.id);
+    internal.summary.status = "waiting_for_human";
+    internal.summary.waiting = undefined;
+    const ownerRoutesForeignDraft = await fetch(
+      `${base}/tasks/${created.id}/annotations/send`, {
+        method: "POST", headers: { cookie: developer },
+        body: JSON.stringify({ ids: [committerNote.id] }),
+      });
+    const ownerRoutesForeignBody = await readJson(ownerRoutesForeignDraft);
+    assert.equal(ownerRoutesForeignDraft.status, 200,
+      `任务责任人可以原样转交别人留下的意见：${JSON.stringify(ownerRoutesForeignBody)}`);
+    const routed = service.listAnnotations(created.id).items.find((item) =>
+      item.id === committerNote.id)!;
+    assert.equal(routed.sent_by, "developer");
+    assert.equal(routed.author, "committer", "转交不能篡改意见作者");
 
     const committerEditsOwn = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
@@ -512,7 +588,6 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
     assert.equal(adminCannotDeleteOrdinaryDraft.status, 409,
       "不在当前 push 复检时，admin 也不能直接删他人草稿");
 
-    const internal = (service as any).tasks.get(created.id);
     const annotations = (service as any).annotations(internal) as AnnotationStore;
     annotations.markSent(
       [developerNote.id, committerNote.id], "review_repair");
@@ -1003,4 +1078,56 @@ test("重锚定:跨行代码块的整块锚点刚创建时不能立刻 gone", ()
   const [check] = reanchor([block], () => source);
   assert.notEqual(check.state, "gone");
   assert.equal(check.line, 2, "跨行命中应定位到正文起始行");
+});
+
+test("划选一块:整块原文给模型看、跨行行号如实抬头、超长截断;定位仍靠首行", () => {
+  const target = store();
+  const base = {
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md",
+    line: 3, anchor: "背景:先看渠道开关", kind: "doc" as const,
+  };
+  const item = target.add({ ...base, line_end: 5, note: "这一整段记下来",
+    quote: "背景:先看渠道开关\n要求:\n不改 registry.xml" });
+  assert.equal(item.line_end, 5);
+  const text = renderAnnotations(target.drafts(), "T-1");
+  assert.match(text, /第 3–5 行/);
+  assert.match(text,
+    /原文\(选中整块\):\n   \| 背景:先看渠道开关\n   \| 要求:\n   \| 不改 registry\.xml/);
+  assert.doesNotMatch(text, /原文:背景/, "有整块就不再单抬首行,免得模型看两遍");
+  const capped = target.add({ ...base, line_end: 2, note: "太长",
+    quote: "长".repeat(3000) });
+  assert.equal(capped.quote?.length, ANNOTATION_QUOTE_MAX + 1, "超长截断带省略号");
+  assert.equal(capped.line_end, undefined, "末行不大于首行就不算跨行");
+});
+
+test("记为记忆可以只圈不写;交给人的意见仍必须有内容", () => {
+  const target = store();
+  const silent = target.add({
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md", line: 3,
+    anchor: "背景:先看渠道开关", kind: "doc", route: "memory", note: "   ",
+  });
+  assert.equal(silent.note, "");
+  assert.equal(silent.status, "verified");
+  assert.throws(() => target.add({
+    author: "liaoxiang", artifact: "REQ-1/spec.md", file: "spec.md", line: 3,
+    anchor: "背景:先看渠道开关", kind: "doc", note: "",
+  }), /批注内容不能为空/);
+});
+
+test("追问留档:作者改字重提时 Agent 的问题不随回执抹掉,下一轮渲染给模型看", () => {
+  const target = store();
+  const item = seed(target, "空值要处理");
+  target.markSent([item.id], "interrupt");
+  target.respond(item.id, {
+    outcome: "needs_clarification", summary: "空值指的是入参还是返回值？", evidence: [],
+  });
+  const edited = target.edit(item.id, "空值指入参:入参为空时返回空列表", "liaoxiang");
+  assert.equal(edited.status, "draft", "改字即退回待提交");
+  assert.equal(edited.response, undefined);
+  assert.deepEqual(edited.clarifications?.map((row) => row.question),
+    ["空值指的是入参还是返回值？"]);
+  const text = renderAnnotations(target.drafts(), "T-1");
+  assert.match(text, /上一轮你问过:空值指的是入参还是返回值？/);
+  assert.match(text, /不要再问同一件事/);
+  assert.doesNotMatch(text, /第 2 次提出/, "补充说明不是返工,不许把它说成上一轮改坏了");
 });

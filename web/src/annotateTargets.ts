@@ -96,20 +96,53 @@ export function pickRowFromStack(
   return undefined;
 }
 
+/** 划选的原文上限:一块材料里最多带走这么多字,够 Agent 看清语境;再长
+ * 就该分几条圈。与服务端 ANNOTATION_QUOTE_MAX 同值(两边各自截,不互信)。 */
+export const QUOTE_MAX = 1500;
+
+export interface SelectionQuote {
+  /** 逐行去掉首尾空白、空行剔掉之后的原文;超长截断带省略号。 */
+  quote: string;
+  /** 靠前的那一行:锚点与编辑框都挂它。 */
+  startRow: RowNode;
+  line: number;
+  lineEnd: number;
+}
+
 /**
- * 划词是在读,不是要批注——但只认**这块材料里**的划词。
+ * 划选一块原文 → 圈的是"这一块"而不是"这一行"(用户拍板:按行圈不够用,
+ * 记为记忆常常要带一整段语境)。
  *
- * 原来判据是"文档里任何地方有选区就不开框",于是在别处(决策卡、
- * 侧栏、甚至上一次搜索留下的高亮)残留一段选中文本,材料就整片点不动,
- * 表现正是"批注功能点不了"。选区还必须是真的划开了(非折叠)。
+ * 口径:选区非折叠、真有字、首尾两端都落在这块材料带行号的行里才算;
+ * 别处(决策卡/侧栏/上一次搜索)残留的选区一律不算——原来那条"页面上任何
+ * 地方有选区就整块禁用"的坑不能再踩。行号取两端行的最小/最大;锚点仍是
+ * 起始行的原文快照(重锚定靠它),整块原文另存,不参与定位。
  */
-export function blockedBySelection(selection: {
-  isCollapsed?: boolean;
-  toString(): string;
-  anchorNode?: unknown;
-} | null | undefined, contains: (node: unknown) => boolean): boolean {
-  if (!selection) return false;
-  if (selection.isCollapsed) return false;
-  if (!selection.toString().trim()) return false;
-  return contains(selection.anchorNode);
+export function quoteOfSelection(
+  selection: {
+    isCollapsed?: boolean;
+    toString(): string;
+    anchorNode?: unknown;
+    focusNode?: unknown;
+  } | null | undefined,
+  rowOf: (node: unknown) => RowNode | null | undefined,
+): SelectionQuote | undefined {
+  if (!selection || selection.isCollapsed) return undefined;
+  const raw = selection.toString();
+  if (!raw.trim()) return undefined;
+  const from = rowOf(selection.anchorNode);
+  const to = rowOf(selection.focusNode);
+  if (!from || !to) return undefined;
+  const a = lineOf(from);
+  const b = lineOf(to);
+  if (!a || !b) return undefined;
+  let quote = raw.split("\n").map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean).join("\n");
+  if (quote.length > QUOTE_MAX) quote = quote.slice(0, QUOTE_MAX) + "…";
+  return {
+    quote,
+    startRow: a <= b ? from : to,
+    line: Math.min(a, b),
+    lineEnd: Math.max(a, b),
+  };
 }

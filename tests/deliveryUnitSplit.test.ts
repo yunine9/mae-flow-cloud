@@ -242,7 +242,11 @@ function scopedRepository(target?: string) {
   writeFileSync(join(cwd, "src", "filter", "impl.ts"), "export const a = 1;\n");
   writeFileSync(join(cwd, "src", "filterX", "other.ts"), "export const b = 1;\n");
   writeFileSync(join(cwd, "src", "contract", "api.ts"), "export const c = 1;\n");
-  git("add", "src");
+  // 内核流程要求每个单元都写的规格:在面外,但不是越界(见下面的断言)。
+  mkdirSync(join(cwd, "docs", "specs"), { recursive: true });
+  writeFileSync(join(cwd, "docs", "specs", "index.md"), "# specs\n");
+  writeFileSync(join(cwd, "docs", "specs", "filter.md"), "# filter\n");
+  git("add", "src", "docs");
   git("commit", "--quiet", "-m", "unit work");
   const head = git("rev-parse", "HEAD");
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
@@ -304,6 +308,8 @@ test("负责面门禁:越界停摆举卡,放行记豁免续推,邻居目录不�
     assert.equal(await gate(), false, "越界提交必须被拦下");
     const violation = internal.summary.delivery?.scope_violation;
     // src/filterX 与面内前缀 src/filter 只差一个字符:必须算越界。
+    // docs/specs/* 是内核 flow.json specs_truth 点名的流程产物,每个单元
+    // 都得写,不算越界(内网实锤:pnp-deploy-contract 因它被拦)。
     assert.deepEqual(violation?.paths,
       ["src/contract/api.ts", "src/filterX/other.ts"]);
     assert.ok(internal.summary.delivery?.stalled, "越界即停摆等裁决");
@@ -363,7 +369,9 @@ test("负责面门禁:目标分支前进并合入后不把其他任务文件误�
     assert.ok(snapshot?.baseline);
     const presentation = await (service as any).buildPushReviewPresentation(
       internal, snapshot, false);
+    // 规格产物是本单元 MR 的净贡献之一(要随 MR 检视),只是不算越界。
     assert.deepEqual(presentation.committed_paths, [
+      "docs/specs/filter.md", "docs/specs/index.md",
       "src/contract/api.ts", "src/filter/impl.ts", "src/filterX/other.ts",
     ], "最终交付清单同样只显示本单元 MR 净贡献");
     assert.ok(!presentation.committed_paths.includes("docs/other-task.md"));

@@ -49,6 +49,7 @@ import {
   listCommitters,
   listTaskReviews,
   readArtifact,
+  readArtifactFileDiff,
   readPushReviewDiff,
   readRequirementRevision,
   repairStopped,
@@ -68,6 +69,7 @@ import {
 import {
   ExecutionPanel,
   isChainReviewWaiting,
+  isOwnerOnlyWaiting,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -129,6 +131,22 @@ export function decisionAnnotationIds(
 ): string[] {
   return items.filter((item) => item.status === "draft"
     && item.author === viewerUsername).map((item) => item.id);
+}
+
+/** 当前材料搜索只认正文行，不搜索页签、按钮等界面文案。 */
+export function matchingMaterialRowIndexes(
+  rows: ReadonlyArray<{ textContent: string | null }>,
+  query: string,
+): number[] {
+  const needle = query.trim().toLocaleLowerCase("zh-CN");
+  if (!needle) return [];
+  const matches: number[] = [];
+  rows.forEach((row, index) => {
+    if ((row.textContent ?? "").toLocaleLowerCase("zh-CN").includes(needle)) {
+      matches.push(index);
+    }
+  });
+  return matches;
 }
 
 export interface WorkspaceNextActionCopy {
@@ -493,6 +511,18 @@ export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
  * 看板各说各话,老任务停在哪套显示哪套,点阶段名去内核方案词表里按名字
  * 找也必然落空(2026-09-02 用户实锤)。服务端也没给时只画一个"尚未进入
  * 阶段"的空轨道,绝不自造名字。 */
+/** 抽屉快捷键的显示文案:Mac 键帽是 ⌥,其他平台叫 Alt。 */
+const REVIEW_SHORTCUT = typeof navigator !== "undefined"
+  && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌥R" : "Alt+R";
+
+/** 焦点在能打字的地方时不抢快捷键:Mac 上 ⌥R 本来就会打出 ®。 */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
@@ -565,6 +595,9 @@ export function TaskWorkspace({
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedDiffPath, setSelectedDiffPath] = useState("");
+  const [diffFileLoading, setDiffFileLoading] = useState(false);
+  const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   const [reply, setReply] =
@@ -600,6 +633,10 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
+  const [materialSearchOpen, setMaterialSearchOpen] = useState(false);
+  const [materialSearchQuery, setMaterialSearchQuery] = useState("");
+  const [materialSearchCount, setMaterialSearchCount] = useState(0);
+  const [materialSearchIndex, setMaterialSearchIndex] = useState(-1);
   const [documentsDownloading, setDocumentsDownloading] = useState(false);
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
@@ -613,6 +650,9 @@ export function TaskWorkspace({
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
+  const evidenceHeadRef = useRef<HTMLDivElement>(null);
+  const materialSearchInput = useRef<HTMLInputElement>(null);
+  const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -634,10 +674,17 @@ export function TaskWorkspace({
     setItems(undefined);
     setActive("");
     setContent("");
+    setSelectedDiffPath("");
+    setDiffFileLoading(false);
+    setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
+    setMaterialSearchOpen(false);
+    setMaterialSearchQuery("");
+    setMaterialSearchCount(0);
+    setMaterialSearchIndex(-1);
     setDocumentsDownloading(false);
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
@@ -797,7 +844,10 @@ export function TaskWorkspace({
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (reviewInviteOpen) setReviewInviteOpen(false);
+      if (materialSearchOpen) {
+        setMaterialSearchOpen(false);
+        setMaterialSearchQuery("");
+      } else if (reviewInviteOpen) setReviewInviteOpen(false);
       else if (reviewPanelOpen) setReviewPanelOpen(false);
       else if (materialsFullscreen) setMaterialsFullscreen(false);
       else onClose();
@@ -809,7 +859,96 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialsFullscreen, reviewInviteOpen, reviewPanelOpen, onClose]);
+  }, [materialSearchOpen, materialsFullscreen, reviewInviteOpen,
+    reviewPanelOpen, onClose]);
+
+  // 全屏看材料时右栏(含"批注与检视"入口)整个藏起来,想开抽屉得先退全屏
+  // (用户 2026-09-04 实锤)。⌥/Alt+R 在任何布局下切换抽屉:按 code 不按
+  // key——Mac 上 ⌥R 的 key 是 "®";焦点在输入框里不抢,输入法合成中不抢。
+  useEffect(() => {
+    const toggle = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+          || event.code !== "KeyR" || event.isComposing) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setReviewPanelOpen((open) => !open);
+    };
+    window.addEventListener("keydown", toggle);
+    return () => window.removeEventListener("keydown", toggle);
+  }, []);
+
+  // 全屏 + 抽屉同屏:任务头藏了(--ws-head-h 归零),抽屉若仍从顶上起步就
+  // 盖住材料工具条,"退出全屏""批注与检视"点不到(1280 宽实测:按钮右缘
+  // 637/753,抽屉左缘 510)。工具条高度同样量出来写变量,抽屉从它下面起步;
+  // 全屏切换时工具条 min-height 会变,跟着重量。
+  useEffect(() => {
+    const head = evidenceHeadRef.current;
+    const root = workspaceRoot.current;
+    if (!head || !root) return;
+    const publish = () => root.style.setProperty(
+      "--ws-pane-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
+    publish();
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined : new ResizeObserver(publish);
+    observer?.observe(head);
+    return () => observer?.disconnect();
+  }, [materialsFullscreen]);
+
+  // 搜索范围就是当前渲染出来的这一份材料。普通文档取带 data-l 的最深
+  // 正文行；两种差异视图取各自的真实内容行，删除行没有新行号也能搜到。
+  useEffect(() => {
+    for (const row of materialSearchRows.current) {
+      row.classList.remove("material-search-hit", "material-search-current");
+    }
+    materialSearchRows.current = [];
+    setMaterialSearchCount(0);
+    setMaterialSearchIndex(-1);
+    if (!materialSearchOpen || !materialSearchQuery.trim()
+        || workspaceView !== "materials" || materialView === "chain"
+        || loading) return;
+    const timer = window.setTimeout(() => {
+      const root = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
+      if (!root) return;
+      const diffRows = root.querySelectorAll<HTMLElement>(
+        ".diff-review-row, .requirement-diff-row");
+      const rows = diffRows.length
+        ? [...diffRows]
+        : [...root.querySelectorAll<HTMLElement>("[data-l]")]
+          .filter((row) => !row.querySelector("[data-l]"));
+      const matches = matchingMaterialRowIndexes(rows, materialSearchQuery)
+        .map((index) => rows[index]);
+      materialSearchRows.current = matches;
+      for (const row of matches) row.classList.add("material-search-hit");
+      setMaterialSearchCount(matches.length);
+      if (!matches.length) return;
+      matches[0].classList.add("material-search-current");
+      setMaterialSearchIndex(0);
+      matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [active, content, loading, materialSearchOpen, materialSearchQuery,
+    materialView, revisionDiff, task.requirement, workspaceView]);
+
+  function moveMaterialSearch(step: -1 | 1) {
+    const rows = materialSearchRows.current;
+    if (!rows.length) return;
+    rows[materialSearchIndex]?.classList.remove("material-search-current");
+    const next = materialSearchIndex < 0
+      ? 0 : (materialSearchIndex + step + rows.length) % rows.length;
+    rows[next].classList.add("material-search-current");
+    rows[next].scrollIntoView({ block: "center", behavior: "smooth" });
+    setMaterialSearchIndex(next);
+  }
+
+  function toggleMaterialSearch() {
+    if (materialSearchOpen) {
+      setMaterialSearchOpen(false);
+      setMaterialSearchQuery("");
+      return;
+    }
+    setMaterialSearchOpen(true);
+    window.requestAnimationFrame(() => materialSearchInput.current?.focus());
+  }
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -842,16 +981,30 @@ export function TaskWorkspace({
   }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha]);
 
+  const activeArtifactForRead = items?.find((item) => item.name === active);
+  const activeChangeFiles = activeArtifactForRead?.change_files;
+  const requestedDiffPath = activeChangeFiles?.some((file) =>
+    file.path === selectedDiffPath)
+    ? selectedDiffPath
+    : activeChangeFiles?.[0]?.path ?? "";
+
   useEffect(() => {
     if (!active) return;
     let alive = true;
     setLoading((was) => was || !content);
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
+    const lazyWorkspaceDiff = !pushDiffActive
+      && activeArtifactForRead?.kind === "diff"
+      && Boolean(requestedDiffPath);
+    setDiffFileLoading(lazyWorkspaceDiff);
+    setDiffFileError("");
     if (pushDiffActive) setPushDiffState({ kind: "checking" });
     const reading = pushDiffActive
       ? readPushReviewDiff(task.id, diffScope)
-      : readArtifact(task.id, active);
+      : lazyWorkspaceDiff
+        ? readArtifactFileDiff(task.id, requestedDiffPath)
+        : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
       if (pushDiffActive) {
@@ -861,13 +1014,16 @@ export function TaskWorkspace({
           ? current : normalized.content);
         setBranch(normalized.branch);
         setLoading(false);
+        setDiffFileLoading(false);
         return;
       }
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
       setBranch(result.branch ?? "");
+      setDiffFileError(lazyWorkspaceDiff ? result.unavailable ?? "" : "");
       setLoading(false);
+      setDiffFileLoading(false);
     }).catch((reason) => {
       if (!alive) return;
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -878,12 +1034,14 @@ export function TaskWorkspace({
       } else {
         setContent(message);
         setBranch("");
+        if (lazyWorkspaceDiff) setDiffFileError(message);
       }
       setLoading(false);
+      setDiffFileLoading(false);
     });
     return () => { alive = false; };
   }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
-    items?.find((item) => item.name === active)?.kind]);
+    activeArtifactForRead?.kind, requestedDiffPath]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -919,7 +1077,9 @@ export function TaskWorkspace({
     setWorkspaceView("materials");
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     if (!source && item.artifact !== active) setActive(item.artifact);
-    setMaterialView(materialViewForAnnotation(item.artifact, items));
+    const targetView = materialViewForAnnotation(item.artifact, items);
+    setMaterialView(targetView);
+    if (targetView === "diff" && item.file) setSelectedDiffPath(item.file);
     const check = checks.find((candidate) => candidate.id === item.id);
     const currentLine = check?.line ?? item.line;
     if (check?.state === "gone") {
@@ -1041,6 +1201,7 @@ export function TaskWorkspace({
     taskStatus: task.status,
     reviewReady: workspaceReviewReady,
     canOverride,
+    canRouteOthers: canOperate,
     reviewAnnotationIds: workspaceReviewAnnotationIds,
   });
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
@@ -1091,6 +1252,10 @@ export function TaskWorkspace({
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
   const chainReview = !!waiting && isChainReviewWaiting(task);
+  // 受邀参与讨论的人在分析期能答卡(2026-09-04 用户拍板:邀请了就得能
+  // 回答);拍板类卡只认责任人。服务端 decide 是同一口径的硬闸。
+  const decides = canOperate
+    || (canCollaborate && !isOwnerOnlyWaiting(task));
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -1206,6 +1371,7 @@ export function TaskWorkspace({
           checks={checks}
           reply={reply}
           canOperate={canContributeReview}
+          canRouteOthers={canOperate}
           taskStatus={task.status}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
@@ -1405,6 +1571,7 @@ export function TaskWorkspace({
         <button type="button" className={`ws-review-launch${
           reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
           aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+          title={`快捷键 ${REVIEW_SHORTCUT} 随时打开或收起,全屏看材料时也行`}
           onClick={() => setReviewPanelOpen(true)}>
           <strong>批注与检视
             {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
@@ -1429,7 +1596,7 @@ export function TaskWorkspace({
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
-          <div className="ws-pane-head">
+          <div className="ws-pane-head" ref={evidenceHeadRef}>
             <div>
               <span>{materialHeading.kicker}</span>
               <strong>{materialHeading.title}</strong>
@@ -1458,8 +1625,63 @@ export function TaskWorkspace({
                 <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
                 {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>
+              {/* 全屏下右栏没了,入口搬到这里;不全屏时右栏那张大入口还在,
+                  不重复摆。 */}
+              {materialsFullscreen && <button type="button"
+                className={`materials-review-toggle${reviewPanelOpen ? " on" : ""}`}
+                aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+                title={`打开或收起批注与检视(${REVIEW_SHORTCUT})`}
+                onClick={() => setReviewPanelOpen((open) => !open)}>
+                <span aria-hidden>✎</span>批注与检视
+                {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+                  <i>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</i>
+                )}
+              </button>}
+              {materialView !== "chain" && <button type="button"
+                className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
+                aria-expanded={materialSearchOpen}
+                title="只搜索当前打开的这份内容"
+                onClick={toggleMaterialSearch}>
+                <span aria-hidden>⌕</span>搜索
+              </button>}
             </div>
           </div>
+          {materialSearchOpen && materialView !== "chain" && (
+            <div className="material-search-bar" role="search">
+              <span className="material-search-icon" aria-hidden>⌕</span>
+              <input ref={materialSearchInput}
+                value={materialSearchQuery}
+                aria-label="搜索当前内容"
+                placeholder={materialView === "diff"
+                  ? "搜索当前代码变更"
+                  : materialView === "source"
+                    ? "搜索当前需求原文"
+                    : `搜索 ${activeMeta?.label ?? "当前文档"}`}
+                onChange={(event) => setMaterialSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    moveMaterialSearch(event.shiftKey ? -1 : 1);
+                  }
+                }} />
+              <span className={`material-search-count${materialSearchQuery.trim()
+                  && !materialSearchCount ? " empty" : ""}`}
+                aria-live="polite">
+                {!materialSearchQuery.trim() ? "输入关键词"
+                  : materialSearchCount
+                    ? `${materialSearchIndex + 1} / ${materialSearchCount}`
+                    : "没有找到"}
+              </span>
+              <button type="button" title="上一处（Shift + Enter）"
+                aria-label="上一个搜索结果" disabled={!materialSearchCount}
+                onClick={() => moveMaterialSearch(-1)}>↑</button>
+              <button type="button" title="下一处（Enter）"
+                aria-label="下一个搜索结果" disabled={!materialSearchCount}
+                onClick={() => moveMaterialSearch(1)}>↓</button>
+              <button type="button" className="material-search-close"
+                aria-label="关闭搜索" onClick={toggleMaterialSearch}>×</button>
+            </div>
+          )}
           {evidenceGapActionable && evidenceGapArtifact && (
             <section className="ws-evidence-gap-callout" role="status">
               <div>
@@ -1703,6 +1925,10 @@ export function TaskWorkspace({
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
+                      manifest={!pushReview ? activeMeta?.change_files : undefined}
+                      onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
+                      activeFileLoading={diffFileLoading}
+                      activeFileError={diffFileError}
                       hideKey={task.id}
                       scopeLabel={pushReview
                         ? diffScope === "changes"
@@ -1779,7 +2005,8 @@ export function TaskWorkspace({
                   <em>{task.knowledge_usage?.resources.length ?? 0}</em>
                 </strong>
                 <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
-                  {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+                  {task.knowledge_usage?.resources.length ?? 0} 项可用
+                  {task.memories_recorded ? ` · 记下 ${task.memories_recorded} 条` : ""}</small>
               </button>
               <button type="button" role="tab"
                 aria-selected={executionView === "tokens"}
@@ -1821,14 +2048,7 @@ export function TaskWorkspace({
                 hidden={executionView !== "knowledge"}>
                 <KnowledgeFootprint usage={task.knowledge_usage}
                   utMethod={task.ut_generation_method}
-                  taskId={task.id} taskStatus={task.status}
-                  repositories={task.repositories ?? []}
-                  repositoryTechnologies={[...new Set(
-                    (task.repository_profiles ?? []).flatMap((item) =>
-                      item.technologies))]}
-                  businessModules={(task.business_modules ?? []).map((module) => ({
-                    id: module.id, name: module.name,
-                  }))} />
+                  taskId={task.id} taskStatus={task.status} />
               </div>
               <div className="ws-execution-subview is-tokens"
                 hidden={executionView !== "tokens"}>
@@ -1848,17 +2068,18 @@ export function TaskWorkspace({
             <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
             <small>{nextAction.detail}</small>
           </div>
-          {waiting && canOperate && (
+          {waiting && decides && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
                记下的选择对不上用户点的(2026-08-09 实战事故)。所以
                "这次会带上哪几处"只能摆进人按下提交的那一眼里。 */
             <WaitingCard
               task={task}
+              participant={!canOperate}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
               annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
-              repositoryAssigneeSelection={chainReview
+              repositoryAssigneeSelection={chainReview && canOperate
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? decisionDeliverySelection : undefined}
@@ -1888,7 +2109,7 @@ export function TaskWorkspace({
                 <>
                   {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
                       单号。讨论参与人留在左侧图下面。 */}
-                  {chainReview && (
+                  {chainReview && canOperate && (
                     <RepositoryAssigneePicker
                       taskId={task.id}
                       repositories={task.requirement_graph!.repositories}
@@ -1903,10 +2124,11 @@ export function TaskWorkspace({
               }
             />
           )}
-          {waiting && !canOperate && (
+          {waiting && !decides && (
             <div className="read-only-notice">
-              该事项由 {task.luban_account ?? "其他成员"} 核对；
-              你可以查看全部材料，但不能代为提交决定。
+              {canCollaborate
+                ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以继续在材料上批注插话，意见会随卡送到 Agent。`
+                : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看全部材料，但不能代为提交决定。`}
             </div>
           )}
           {task.delivery?.scope_violation && (
@@ -2006,7 +2228,7 @@ export function TaskWorkspace({
           <header>
             <div><span>REVIEW NOTES</span>
               <strong id="workspace-review-title">批注与检视</strong>
-              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选</p>
+              <p>批注、CodeHub 检视意见、机器告警与 Agent 回应；左侧材料仍可圈选，{REVIEW_SHORTCUT} 开关</p>
             </div>
             {/* 这里原来还挂一枚"N 项等我确认"。它下面 40px 就是筛选条的
                 "等我确认 N",打开前入口按钮上也有同一个数——同一屏三份,

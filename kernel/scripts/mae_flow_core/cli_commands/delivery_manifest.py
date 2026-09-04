@@ -83,6 +83,46 @@ def _identity(path):
     return str(path).replace("\\", "/").casefold()
 
 
+def select_unchanged_build_residue(
+        current_dirty, agent_written, compile_side_effects,
+        artifact_confidence, is_source, fingerprint):
+    """Return fingerprinted local build residue safe to exclude from delivery.
+
+    The decision is provenance-first, not directory-name-first. A direct Agent
+    edit is always a delivery candidate. A strong compiler artefact may be
+    recognised by shape; every other path needs both a COMPILE side-effect
+    receipt and a non-source classification. Ambiguous ``test/``/``imap/``
+    directories therefore cannot be hidden merely because an Agent called them
+    generated output.
+    """
+    written = {_identity(path) for path in agent_written or ()}
+    compiled = {_identity(path) for path in compile_side_effects or ()}
+    residue = {}
+    for path in current_dirty or ():
+        identity = _identity(path)
+        if identity in written:
+            continue
+        confidence = artifact_confidence(path)
+        if (
+            confidence == "strong"
+            or (identity in compiled and not is_source(path))
+        ):
+            residue[path] = fingerprint(path)
+    return residue
+
+
+def _unchanged_build_residue(state, current_dirty):
+    """Bind proven build residue to its current bytes for an unchanged manifest."""
+    return select_unchanged_build_residue(
+        current_dirty,
+        api._agent_written_paths(),
+        api._compile_side_effect_paths(),
+        api._build_artifact_confidence,
+        lambda path: api._is_source_path(path, state or {}, api.FLOW or {}),
+        api._path_fingerprint,
+    )
+
+
 def _adoption_decisions(values, repository_root):
     decisions = {}
     for value in values or ():
@@ -167,7 +207,7 @@ def build_delivery_manifest(
 
 def build_unchanged_delivery_manifest(
         state, target, current_dirty=(), preserved_initial_dirty=(),
-        repository_root=None):
+        build_residue_fingerprints=None, repository_root=None):
     """Build a confirmed no-op manifest after an unchanged domain archive."""
     archive = (state or {}).get("domain_archive") or {}
     if archive.get("status") != "applied":
@@ -187,8 +227,32 @@ def build_unchanged_delivery_manifest(
     preserved = DeliveryManifest.from_paths(
         preserved_initial_dirty or (), repository_root=root).files
     preserved_ids = {_identity(path) for path in preserved}
+    residue_input = (
+        build_residue_fingerprints
+        if isinstance(build_residue_fingerprints, dict) else {})
+    residue_input_by_identity = {
+        _identity(path): value for path, value in residue_input.items()
+    }
+    residue_paths = DeliveryManifest.from_paths(
+        residue_input.keys(), repository_root=root).files
+    residue_by_identity = {
+        _identity(path): residue_input_by_identity[_identity(path)]
+        for path in residue_paths
+    }
+    dirty_ids = {_identity(path) for path in dirty}
+    stale_residue = [
+        path for path in residue_paths
+        if _identity(path) not in dirty_ids
+    ]
+    if stale_residue:
+        raise ValueError(
+            "构建现场不属于当前未提交文件: " + "、".join(stale_residue))
     unexpected = [
-        path for path in dirty if _identity(path) not in preserved_ids
+        path for path in dirty
+        if (
+            _identity(path) not in preserved_ids
+            and _identity(path) not in residue_by_identity
+        )
     ]
     if unexpected:
         raise ValueError("仍有新增未提交文件: " + "、".join(unexpected))
@@ -201,6 +265,12 @@ def build_unchanged_delivery_manifest(
         "confirmed": True,
         "no_changes": True,
         "unchanged_initial_dirty": sorted(preserved, key=str.casefold),
+        # 路径+指纹一起落盘：只豁免 manifest 当下那份编译现场。之后同路径
+        # 被改成源码或资源时指纹会失配，done 仍会明确拦住。
+        "unchanged_build_residue": {
+            path: residue_by_identity[_identity(path)]
+            for path in sorted(residue_paths, key=str.casefold)
+        },
         "confirmation": {"mode": "unchanged"},
     }
 
@@ -258,6 +328,13 @@ def _print_manifest(manifest):
         print("启动时已有修改的采用决定:")
         for path, decision in adopted.items():
             print("- %s: %s" % (path, decision))
+    residue = manifest.get("unchanged_build_residue") or {}
+    if residue:
+        print("本地构建现场（不交付、不要求清理）:")
+        for path in list(residue)[:20]:
+            print("- " + path)
+        if len(residue) > 20:
+            print("- …其余 %d 个" % (len(residue) - 20))
 
 
 def cmd_delivery_manifest(state, args):
@@ -279,7 +356,9 @@ def cmd_delivery_manifest(state, args):
                 )
                 manifest = build_unchanged_delivery_manifest(
                     state, args.target, current_dirty=dirty,
-                    preserved_initial_dirty=preserved)
+                    preserved_initial_dirty=preserved,
+                    build_residue_fingerprints=(
+                        _unchanged_build_residue(state, dirty)))
             else:
                 manifest = build_delivery_manifest(
                     state, args.file or (), args.message, args.target,

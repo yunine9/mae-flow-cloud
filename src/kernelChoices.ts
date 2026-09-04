@@ -109,6 +109,24 @@ function fromKernelCommand(kernelRoot: string): WorkflowEntry[] {
     .filter((item) => item.key && item.label);
 }
 
+/** 内核流程要求每个单元都写的规格产物在哪(flow.json 的 specs_truth,
+ * 如 docs/specs、openspec/specs)。负责面门禁拿它判"这是流程产物,不是
+ * 改动面"——每个交付单元都得往这里写规格,它们是全仓共用的流程真相,
+ * 不属于任何一个单元认领的文件面(内网实锤:pnp-deploy-contract 单元
+ * 因 docs/specs/index.md 被判越界)。模式从内核读,TS 不复刻。 */
+export function kernelSpecsTruth(kernelRoot: string | undefined): RegExp | undefined {
+  if (!kernelRoot) return undefined;
+  const path = join(kernelRoot, "flow", "flow.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const flow = JSON.parse(readFileSync(path, "utf-8"));
+    const pattern = String(flow?.specs_truth ?? "").trim();
+    return pattern ? new RegExp(pattern) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 兜底:直接读 flow.json。够用但耦合内核文件布局,能问就别读。 */
 function fromFlowJson(kernelRoot: string): WorkflowEntry[] {
   const path = join(kernelRoot, "flow", "flow.json");

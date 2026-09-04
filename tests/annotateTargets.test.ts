@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  anchorOf, blockedBySelection, pickRow, pickRowFromStack, type RowNode,
+  anchorOf, pickRow, pickRowFromStack, quoteOfSelection, QUOTE_MAX, type RowNode,
 } from "../web/src/annotateTargets.ts";
 
 /** 极简假节点:只实现规则用到的那几个 DOM 能力。 */
@@ -145,22 +145,33 @@ test("锚点:diff 行只取内容,空行退回「第 N 行」而不是放弃", (
   assert.equal(anchorOf(long, 1).length, 90);
 });
 
-test("划词只认这块材料里的:别处残留的选区不许把材料整片锁死", () => {
-  const inside = { id: "in" };
-  const outside = { id: "out" };
-  const contains = (node: unknown) => node === inside;
-  const dragging = {
-    isCollapsed: false, toString: () => "一段划中的文字", anchorNode: inside,
-  };
-  assert.equal(blockedBySelection(dragging, contains), true,
-    "正在这块材料里划词=在读,不弹编辑框");
-  assert.equal(
-    blockedBySelection({ ...dragging, anchorNode: outside }, contains), false,
-    "别处(决策卡/侧栏/上次搜索)的选区不该让材料点不动");
-  assert.equal(blockedBySelection(
-    { isCollapsed: true, toString: () => "", anchorNode: inside }, contains),
-    false, "点一下产生的折叠光标不算划词");
-  assert.equal(blockedBySelection(null, contains), false);
+test("划选一块:两端都落在这块材料的行里才算,行号取两端、原文逐行收拾", () => {
+  const first = node({ tag: "p", line: 3, text: "背景:先看渠道开关" });
+  const last = node({ tag: "li", line: 5, text: "  不改 registry.xml  " });
+  const outside = node({ tag: "p", text: "决策卡里的字" });
+  const rowOf = (target: unknown) =>
+    target === first || target === last ? target as RowNode : null;
+  const picked = quoteOfSelection({
+    isCollapsed: false, anchorNode: last, focusNode: first,
+    toString: () => "  不改 registry.xml  \n\n背景:先看  渠道开关",
+  }, rowOf);
+  assert.ok(picked);
+  assert.equal(picked.line, 3);
+  assert.equal(picked.lineEnd, 5);
+  assert.equal(picked.startRow, first, "反向拖选也以靠前的行为锚");
+  assert.equal(picked.quote, "不改 registry.xml\n背景:先看 渠道开关",
+    "逐行去首尾空白、空行剔掉、行内空白收成一个");
+  assert.equal(quoteOfSelection({
+    isCollapsed: false, anchorNode: outside, focusNode: first, toString: () => "x",
+  }, rowOf), undefined, "一端在别处(决策卡/侧栏/上次搜索)的选区不算");
+  assert.equal(quoteOfSelection({
+    isCollapsed: true, anchorNode: first, focusNode: first, toString: () => "",
+  }, rowOf), undefined, "点一下的折叠光标不算");
+  const long = quoteOfSelection({
+    isCollapsed: false, anchorNode: first, focusNode: last,
+    toString: () => "长".repeat(2000),
+  }, rowOf);
+  assert.equal(long?.quote.length, QUOTE_MAX + 1, "超长截断带省略号");
 });
 
 // MFC-034 案发现场:专注审阅的分栏把手(全高、left:50%、z-index:4)恰好

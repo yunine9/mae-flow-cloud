@@ -9,6 +9,7 @@ import {
 } from "./prepushBuildPlaybook.ts";
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
+import { DEFAULT_COMMIT_CONVENTION } from "./commitPolicy.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -33,6 +34,8 @@ export interface PrePushRunRequest {
   requirement: string;
   branch: string;
   baseline: string;
+  /** 与宿主 push 前机械校验同源的人类可读规范。缺席时使用平台默认值。 */
+  commitConvention?: string;
   /** 用户已经确认过的最终交付边界。专项 Agent 可以修这些文件，但不能
    * 把此前排除的本地过程件重新带进提交；真正收口仍由宿主机械复核。 */
   deliverySelection?: {
@@ -417,10 +420,30 @@ export function parsePrePushAgentReport(text: string): PrePushAgentReport | unde
   }
 }
 
+/** 平台现场文件:.mae-flow-work/ 下的笔记与日志、.mae-flow* 状态文件。
+ * 它们由宿主登记进 .git/info/exclude,push 只传 HEAD,永远进不了交付,
+ * 所以改它们不算"改过会进交付的文件"(只是事实展示的噪声过滤,不是门禁)。 */
+export function isPlatformWorkPath(path: string): boolean {
+  const segments = String(path ?? "").split(/[\\/]+/).filter(Boolean);
+  if (segments.some((segment) => segment === ".mae-flow-work")) return true;
+  const base = segments.at(-1) ?? "";
+  // 状态文件按名单认(与 .git/info/exclude 登记的同一批),不吞
+  // .mae-flow-workshop 这种名字相近的业务目录。
+  return /^\.mae-flow\.json(?:\.exited)?$/.test(base)
+    || /^\.mae-flow-(?:order\.json|chain\.md|dependencies\.md|issue\.md|history\.jsonl)$/.test(base);
+}
+
 /**
- * PASS 不能只认模型自述：报告中的编译与 UT 命令必须在本会话真实执行成功，
- * 且发生在最后一次文件 Edit/Write 之后。最终流水线仍是交付权威，这里只为
- * 避免把一眼可见的红灯推上去烧慢流水线。
+ * PASS 不能只认模型自述:报告中的编译与 UT 命令必须在本会话真实执行成功。
+ * 只防凭空报 PASS,零误判。
+ *
+ * 2026-09-03 用户拍板去掉"必须发生在最后一次代码修改之后"的硬约束:那条
+ * 防的是"改完没重跑拿旧绿灯"的走神,本仓记录里一例没发生过,记录在案的
+ * 全是反过来——模型真跑了真绿了被冤枉(2026-08-21 整链试跑;内网 task-31
+ * 写了一笔构建笔记就被判失效,两轮后 code_failure)。这道闸不是最终裁判,
+ * 真裁判是绑 SHA 的流水线,旧绿灯漏过去的代价有界且自动修复;误判的代价
+ * 是当场多跑一轮重型编译再把人叫来。顺序事实降级为"展示":见
+ * prePushEvidenceFacts,写进收据让人在推送确认时自己看。
  */
 export function verifyPrePushEvidence(
   events: SemanticEvent[],
@@ -430,61 +453,70 @@ export function verifyPrePushEvidence(
   if (report.compile.status !== "passed" || report.unit_test.status !== "passed") {
     return "编译与 UT 必须同时通过";
   }
+  const successful = successfulBashRuns(events).map((run) => run.command);
+  const missing = [report.compile.command, report.unit_test.command]
+    .filter((command) => !covers(successful, command));
+  if (!missing.length) return "";
+  // 措辞要让人分得清"没跑"和"跑了但报得不一样"(2026-08-21 整链试跑实锤:
+  // 模型真跑了、真绿了,却被判"没有真实成功执行",人只能翻 bash 日志)。
+  return "报告中的命令没有在本会话真实成功执行"
+    + "（若确实跑过，请核对上报命令与实际 Bash 调用是否一致）: "
+    + missing.join("；");
+}
+
+/** 事实不裁决:最后一次成功跑过编译/UT 之后,还改过哪些会进交付的文件。
+ * 平台笔记与状态文件(进不了交付)不列。给收据与推送确认卡看,人觉得该
+ * 重跑就打回,不觉得就推。 */
+export function prePushEvidenceFacts(
+  events: SemanticEvent[],
+  report: PrePushAgentReport,
+): { changed_after_run: string[] } {
+  const runs = successfulBashRuns(events);
+  const lastRunOf = (reported: string) => Math.max(0, ...runs
+    .filter((run) => covers([run.command], reported)).map((run) => run.eventId));
+  const lastRun = Math.min(
+    lastRunOf(report.compile.command), lastRunOf(report.unit_test.command));
+  const changed = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "tool_requested" || event.eventId <= lastRun) continue;
+    const payload = event.payload as Record<string, any>;
+    if (!["Edit", "Write", "MultiEdit"].includes(String(payload.name ?? ""))) continue;
+    const path = String(payload.input?.path ?? payload.input?.file_path ?? "");
+    if (path && !isPlatformWorkPath(path)) changed.add(path);
+  }
+  return { changed_after_run: [...changed].sort() };
+}
+
+/** 本会话里真实成功过的 Bash:请求与完成按 call_id 配对,失败的不算。 */
+function successfulBashRuns(
+  events: SemanticEvent[],
+): Array<{ command: string; eventId: number }> {
   const requested = new Map<string, { command: string; eventId: number }>();
-  let lastWrite = 0;
   for (const event of events) {
     if (event.kind !== "tool_requested") continue;
     const payload = event.payload as Record<string, any>;
-    const name = String(payload.name ?? "");
-    if (["Edit", "Write", "MultiEdit"].includes(name)) {
-      lastWrite = Math.max(lastWrite, event.eventId);
-    }
-    if (name === "Bash") {
-      const command = String(payload.input?.command ?? "").trim();
-      // 本地 commit 也是代码快照变化点。即使修改通过 sed/heredoc 完成，
-      // 只要最终按要求提交，编译与 UT 都必须发生在最后一次 commit 之后。
-      if (/\bgit\b[\s\S]*\bcommit\b/i.test(command)) {
-        lastWrite = Math.max(lastWrite, event.eventId);
-      }
-      requested.set(`${event.sessionId}:${String(payload.call_id ?? "")}`, {
-        command,
-        eventId: event.eventId,
-      });
-    }
+    if (String(payload.name ?? "") !== "Bash") continue;
+    requested.set(`${event.sessionId}:${String(payload.call_id ?? "")}`, {
+      command: String(payload.input?.command ?? "").trim(),
+      eventId: event.eventId,
+    });
   }
-  const successful: string[] = [];
-  const ranBeforeLastWrite: string[] = [];
+  const runs: Array<{ command: string; eventId: number }> = [];
   for (const event of events) {
     if (event.kind !== "tool_finished") continue;
     const payload = event.payload as Record<string, any>;
     if (String(payload.name ?? "") !== "Bash" || Boolean(payload.is_error)) continue;
-    const call = requested.get(
-      `${event.sessionId}:${String(payload.call_id ?? "")}`);
+    const call = requested.get(`${event.sessionId}:${String(payload.call_id ?? "")}`);
     if (!call || !call.command || event.eventId <= call.eventId) continue;
-    // 两个桶分开记:一个是合格证据,一个只用来把"跑过但太早"和
-    // "压根没跑"区分开——它们对人的含义完全不同(见下面的报错措辞)。
-    (call.eventId <= lastWrite ? ranBeforeLastWrite : successful)
-      .push(call.command);
+    runs.push({ command: call.command, eventId: event.eventId });
   }
-  const covers = (bucket: string[], reported: string) => {
-    const needle = normalizeCommand(reported);
-    return Boolean(needle)
-      && bucket.some((actual) => normalizeCommand(actual).includes(needle));
-  };
-  const missing = [report.compile.command, report.unit_test.command]
-    .filter((command) => !covers(successful, command));
-  if (!missing.length) return "";
-  // 措辞必须让人一眼分清三种情况,否则"跑了但报得不一样"会被当成作弊
-  // (2026-08-21 整链试跑实锤:模型真跑了、真绿了、还自己修好一个真编译
-  // 错误,却被判"没有真实成功执行",人只能去翻 bash 日志才看得出冤枉)。
-  const stale = missing.filter((command) => covers(ranBeforeLastWrite, command));
-  if (stale.length === missing.length) {
-    return "报告中的命令只在最后一次代码修改/提交之前成功过，改动之后没有重跑: "
-      + missing.join("；");
-  }
-  return "报告中的命令没有在最后一次代码修改后真实成功执行"
-    + "（若确实跑过，请核对上报命令与实际 Bash 调用是否一致）: "
-    + missing.join("；");
+  return runs;
+}
+
+function covers(bucket: string[], reported: string): boolean {
+  const needle = normalizeCommand(reported);
+  return Boolean(needle)
+    && bucket.some((actual) => normalizeCommand(actual).includes(needle));
 }
 
 /**
@@ -499,8 +531,7 @@ export function verifyPrePushEvidence(
  * 松了多少要说清楚:上报 `mvn test`、实跑 `mvn test -DskipTests` 现在混得
  * 过去。接受这个代价的理由是这道闸的定位——push 前的快速反馈与流量闸门,
  * **不冒充最终质量裁判**;真裁判是绑提交 SHA 的流水线。一道永远过不去的
- * 闸比一道稍松的闸有害得多。"退出成功"和"发生在最后一次修改之后"两条
- * 硬约束都没动。
+ * 闸比一道稍松的闸有害得多。"退出成功"这条硬约束没动。
  */
 function normalizeCommand(command: string): string {
   return String(command ?? "").replace(/\s+/g, " ").trim();
@@ -568,7 +599,9 @@ export function prePushMission(
     "你的唯一目标：在当前仓库找到真实构建方式，完成编译与单元测试；遇到代码或测试问题就直接修复，",
     "然后重新执行编译和 UT，直至两项都通过。可以自由检查源码、测试、pom/build/CMake/package 配置，",
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
-    "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
+    "如有修改，按下面的明确规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据：",
+    `- ${request.commitConvention?.trim() || DEFAULT_COMMIT_CONVENTION}`,
+    "- 提交前用 git log -1 --format=%s 自检标题；不要使用 fix: / feat: / chore: 这类 Conventional Commits 简写。",
     `如果此前误带了文件，可以用 git restore --source=${request.baseline} -- <具体文件>`
       + "、git checkout <提交> -- <具体文件> 或 git reset --soft 重新整理本地 commit；"
       + "精确文件回退允许，全树/通配回退和 reset --hard 仍禁止。",
@@ -582,6 +615,9 @@ export function prePushMission(
       + "产物目录（target/、build/、cmake-build*、CMakeFiles、CMakeCache.txt、"
       + "node_modules，相对路径，白名单放行）；除产物目录外禁止递归强删，"
       + "clean 请走构建工具生命周期。",
+    "不要仅为隐藏本轮编译产物修改业务仓 .gitignore，更不要把 build/、test/"
+      + " 这类可能含源码的宽目录整体忽略；只有需求明确包含仓库忽略规则治理时，"
+      + ".gitignore 才是本单交付内容。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
@@ -594,13 +630,19 @@ export function prePushMission(
     "",
     buildGuidance,
     budgetGuidance,
+    "改了会进交付的文件(源码、测试、构建配置)之后记得重跑编译和 UT——平台不硬拦,"
+      + "但会把「最后一次成功之后还改过哪些文件」写进收据给人看;写 .mae-flow-work/build-notes.md"
+      + " 这类平台笔记不算改动,不用因此重跑。",
+    "同一份代码内容不要原样重复执行同一条重型编译/测试命令：首次失败后先读日志、"
+      + "修代码或运行更小范围的定向检查；只有代码改变或确认属于短暂环境抖动时才重试。"
+      + "Cloud 会复用同一代码内容上已经成功的相同命令，并在连续失败且代码未变化时阻止第三次空跑。",
     "",
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
     // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
     "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
       + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
-      + "编译产物提交进去。最后一段必须严格输出下面结构"
+      + "编译产物提交进去或修改业务仓 .gitignore。最后一段必须严格输出下面结构"
       + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",

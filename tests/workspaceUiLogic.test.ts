@@ -19,6 +19,7 @@ const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
 const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
+const gitDiff = await vite.ssrLoadModule("/src/GitDiff.tsx");
 
 after(async () => {
   await vite.close();
@@ -116,6 +117,20 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
     annotation({ id: "sent", status: "sent", author: "alice" }),
   ], "alice"), ["mine"],
   "决定只能携带当前操作者自己的未送达草稿");
+});
+
+test("材料搜索只匹配当前正文行，兼容中文和英文大小写", () => {
+  const rows = [
+    { textContent: "配置确认：启用自动修复" },
+    { textContent: "const BuildResult = await compile();" },
+    { textContent: null },
+    { textContent: "自动修复完成" },
+  ];
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "自动修复"),
+    [0, 3]);
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "buildresult"),
+    [1]);
+  assert.deepEqual(workspace.matchingMaterialRowIndexes(rows, "  "), []);
 });
 
 test("流水线证据缺口直接打开补证材料，用户切走后不被轮询抢回", () => {
@@ -276,6 +291,27 @@ test("push diff API 保留 404 状态，供工作台识别版本失效", async (
   }
 });
 
+test("代码差异目录以完整清单为准，正文只补当前文件", () => {
+  const files = gitDiff.filesForDiff([
+    "## 已提交(committed)",
+    "diff --git a/docs/large.md b/docs/large.md",
+    "--- a/docs/large.md",
+    "+++ b/docs/large.md",
+    "@@ -1 +1 @@",
+    "-旧内容",
+    "+新内容",
+  ].join("\n"), [
+    { path: "docs/large.md", stage: "committed", additions: 1, deletions: 1 },
+    { path: "src/after.ts", stage: "unstaged", additions: 3, deletions: 0 },
+  ]);
+  assert.deepEqual(files.map((file: { path: string }) => file.path),
+    ["docs/large.md", "src/after.ts"]);
+  assert.equal(files[0].lines.length > 0, true);
+  assert.equal(files[1].lines.length, 0,
+    "尚未点开的文件用清单占位，不能从目录树消失");
+  assert.equal(files[1].kind, "代码");
+});
+
 test("工作台面向用户只说实时执行日志和单元测试", () => {
   const html = renderToStaticMarkup(React.createElement(taskCard.ExecutionPanel, {
     task: task("live"),
@@ -325,6 +361,8 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
   assert.match(html, /本次交付范围/);
   assert.match(html, /1 \/ 2 个文件将推送/);
   assert.match(html, /文件去留在左侧代码差异中调整/);
+  assert.match(html, /重新编译后提交/);
+  assert.match(html, /不再编译，直接提交/);
   assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
   assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
   assert.match(html, /当前有 3 条检视意见未闭环/);
@@ -476,6 +514,35 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
   ));
   assert.match(decisionHtml, /决策后处理 · owner/);
   assert.match(decisionHtml, />作出决定<\/button>/);
+
+  const foreignDraftsHtml = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    {
+      ...common,
+      viewerUsername: "owner",
+      canRouteOthers: true,
+      items: [
+        annotation({
+          id: "foreign-agent", author: "reviewer", status: "draft",
+          response: undefined,
+        }),
+        annotation({
+          id: "foreign-owner", author: "reviewer", status: "draft",
+          route: "owner_reply", assignee: "owner", response: undefined,
+        }),
+      ],
+    },
+  ));
+  assert.match(foreignDraftsHtml, />原样交给 Agent<\/button>/);
+  assert.match(foreignDraftsHtml, />回答这条意见<\/button>/,
+    "责任人应能直接接住尚未提交的提问并答复");
+  assert.equal(annotationPanel.annotationCategory(
+    annotation({ author: "reviewer", status: "draft", response: undefined }),
+    {
+      viewerUsername: "owner", taskStatus: "running", reviewReady: false,
+      canOverride: false, canRouteOthers: true, reviewAnnotationIds: [],
+    },
+  ), "mine", "别人留下的待路由意见应进入责任人的待办筛选");
 });
 
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {

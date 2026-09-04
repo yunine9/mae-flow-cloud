@@ -13,6 +13,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   knowledgeMatchesTask,
+  repositoryIdentity,
   type KnowledgeForm,
 } from "./knowledgeAssetModel.ts";
 import {
@@ -163,9 +164,24 @@ export function copyEngineeringKnowledgeSnapshots(options: {
   sourceTaskWorkspace: string;
   targetTaskWorkspace: string;
   repository?: string;
+  /** 新版跨仓子任务按自己的技术画像再次收窄父任务快照；缺席时保留
+   * 历史任务原来的仅按仓库复制语义。 */
+  technologies?: string[];
+  businessModuleIds?: string[];
 }): SelectedEngineeringKnowledge[] {
-  return (options.selected ?? []).filter((item) => !options.repository
-    || !item.repositories.length || item.repositories.includes(options.repository))
+  return (options.selected ?? []).filter((item) =>
+    options.technologies?.length
+      ? (!options.repository || !item.repositories.length
+          || item.repositories.some((repository) =>
+            repositoryIdentity(repository)
+              === repositoryIdentity(options.repository!)))
+        && (!item.technologies.length || item.technologies.some((technology) =>
+          options.technologies!.includes(technology)))
+        && (!item.business_module_ids.length
+          || item.business_module_ids.some((id) =>
+            (options.businessModuleIds ?? []).includes(id)))
+      : !options.repository || !item.repositories.length
+        || item.repositories.includes(options.repository))
     .flatMap((item) => {
       try {
         const source = safe(options.sourceTaskWorkspace, item.snapshot_path);

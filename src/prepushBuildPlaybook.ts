@@ -98,6 +98,40 @@ export function isPrePushBuildCommand(command: string): boolean {
   return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner;
 }
 
+/** 同一代码内容上的同一重型命令使用稳定键；只折叠空白，不猜 shell 语义。 */
+export function prePushCommandIdentity(command: string): string {
+  return String(command ?? "").replace(/\s+/g, " ").trim();
+}
+
+export type PrePushRepeatDecision = "execute" | "reuse_success" | "block_repeat";
+
+/**
+ * 轻量防空跑：同一内容上成功命令直接复用；失败允许一次环境抖动重试，
+ * 连续两次仍失败就把第三次挡回给 Agent 先诊断。代码内容变化后键自然变化。
+ */
+export class PrePushCommandRepeatGuard {
+  private readonly records = new Map<string, { failures: number; passed: boolean }>();
+
+  decide(contentIdentity: string, command: string): PrePushRepeatDecision {
+    const record = this.records.get(this.key(contentIdentity, command));
+    if (!record) return "execute";
+    if (record.passed) return "reuse_success";
+    return record.failures >= 2 ? "block_repeat" : "execute";
+  }
+
+  record(contentIdentity: string, command: string, exitCode: number | null): void {
+    const key = this.key(contentIdentity, command);
+    const previous = this.records.get(key) ?? { failures: 0, passed: false };
+    this.records.set(key, exitCode === 0
+      ? { ...previous, passed: true }
+      : { ...previous, failures: previous.failures + 1 });
+  }
+
+  private key(contentIdentity: string, command: string): string {
+    return `${contentIdentity}\0${prePushCommandIdentity(command)}`;
+  }
+}
+
 /**
  * 模型可以建议 timeout，但不能用一个随手填的 600 秒截断平台已知的慢构建。
  * 重型命令的 timeout 被抬到平台下限，并限制在整轮预算的安全余量内。

@@ -75,7 +75,26 @@ def review_has_confirmed_fix(text):
     return review_status_count(text, "修复(已确认)") > 0
 
 
-def _unchanged_manifest_result(manifest, archive, dirty_paths):
+def _dirty_outside_unchanged_receipts(
+        dirty_paths, preserved, residue, path_fingerprint):
+    leaked = []
+    for path in dirty_paths:
+        identity = str(path).replace("\\", "/").casefold()
+        if identity in preserved:
+            continue
+        expected = residue.get(identity)
+        if (
+            expected
+            and path_fingerprint is not None
+            and path_fingerprint(path) == expected
+        ):
+            continue
+        leaked.append(path)
+    return leaked
+
+
+def _unchanged_manifest_result(
+        manifest, archive, dirty_paths, path_fingerprint=None):
     valid = (
         manifest.get("no_changes") is True
         and manifest.get("confirmed") is True
@@ -94,9 +113,12 @@ def _unchanged_manifest_result(manifest, archive, dirty_paths):
         normalize(path) for path in
         (manifest.get("unchanged_initial_dirty") or ())
     }
-    leaked = [
-        path for path in dirty_paths if normalize(path) not in preserved
-    ]
+    residue = manifest.get("unchanged_build_residue") or {}
+    residue = (
+        {normalize(path): value for path, value in residue.items()}
+        if isinstance(residue, dict) else {})
+    leaked = _dirty_outside_unchanged_receipts(
+        dirty_paths, preserved, residue, path_fingerprint)
     if leaked:
         return EvidenceResult(
             False, "空交付清单之后仍有新增未提交文件: "
@@ -202,7 +224,8 @@ class DeliveryEvidenceRules:
         if not files:
             return _unchanged_manifest_result(
                 manifest, state.get("domain_archive") or {},
-                self.ports.dirty_paths())
+                self.ports.dirty_paths(),
+                getattr(self.ports, "path_fingerprint", None))
         if manifest.get("confirmed") is not True:
             return EvidenceResult(
                 False, "精确交付清单尚未确认，不能进入 push")

@@ -27,7 +27,11 @@ export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 export type AnnotationKind = "doc" | "code";
 /** 一条检视意见首先是在找谁做下一步，不是天然都在命令 Agent。旧账
  * 没有 route，读侧一律按 agent 解释，避免升级后改变历史任务语义。 */
-export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision";
+export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision"
+  /** 记为记忆:不发给任何人、不进决定卡,圈选即闭环,直接落一条任务记忆
+   * (docs/knowledge-memory-design.md §4.1)。空口一句缺的就是引文和位置,
+   * 圈选把这两样自动补齐。 */
+  | "memory";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
@@ -80,6 +84,11 @@ export interface Annotation {
   line: number;
   /** 原文快照——定位以它为准。内核那条经验在活靶子上更要紧。 */
   anchor: string;
+  /** 划选一块时的整块原文(≤ ANNOTATION_QUOTE_MAX):给人和模型看语境,
+   * 不参与定位;按行点的没有。 */
+  quote?: string;
+  /** 划选跨行时的末行;单行圈注没有。 */
+  line_end?: number;
   note: string;
   /** 最近一次修改意见的时间。修改留在 append-only 台账里，不覆盖旧记录。 */
   edited_at?: string;
@@ -91,6 +100,9 @@ export interface Annotation {
   status: AnnotationStatus;
   sent_at?: string;
   sent_via?: SentVia;
+  /** 谁把草稿正式送入处理流程。与 author 分开：责任人可以原样转交
+   * 他人的意见，但不能因此变成作者或取得最终裁决权。 */
+  sent_by?: string;
   /** Agent 对当前 rework revision 的逐条回应。 */
   response?: AnnotationResponse;
   owner_reply?: AnnotationOwnerReply;
@@ -101,6 +113,10 @@ export interface Annotation {
   rework?: number;
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
   anchor_was?: string;
+  /** Agent 问过什么(needs_clarification 的回执),作者改字重提时留档:
+   * 渲染给模型看,免得它把补充说明当新意见、再问一遍同一件事
+   * (内网实锤:两条意见来回问了几轮重复的问题)。 */
+  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
 }
 
 export interface AnnotationInput {
@@ -113,16 +129,24 @@ export interface AnnotationInput {
   kind: AnnotationKind;
   route?: AnnotationRoute;
   assignee?: string;
+  quote?: string;
+  line_end?: number;
 }
+
+/** 整块原文上限,与前端 QUOTE_MAX 同值(两边各自截,不互信)。 */
+export const ANNOTATION_QUOTE_MAX = 1500;
 
 type Operation =
   | { op: "add"; record: Annotation }
   | { op: "edit"; id: string; note: string; at: string }
   /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
   | { op: "drop"; id: string; by?: string }
-  | { op: "sent"; ids: string[]; via: SentVia; at: string }
+  | { op: "sent"; ids: string[]; via: SentVia; at: string; by?: string }
   | { op: "respond"; id: string; response: AnnotationResponse }
-  | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply }
+  /** via 只在责任人直接接住 draft 并答复时出现，使“接收 + 答复”成为
+   * 一条原子台账操作；旧记录缺少 via 时仍按原语义回放。 */
+  | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply;
+      via?: "owner_pending" }
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string };
@@ -180,9 +204,19 @@ export class AnnotationStore {
         // 已送出的意见一旦改字，就不能继续冒充“这版已提交”。退回草稿，
         // 由责任人重新送出；旧内容和送出记录仍完整保留在 jsonl 中。
         if (found.status !== "draft") {
+          // Agent 的追问不能随回执一起抹掉:它是作者这次改字的由头,下一轮
+          // 要原样给模型看。
+          if (found.response?.outcome === "needs_clarification") {
+            found.clarifications = [...(found.clarifications ?? []), {
+              question: found.response.summary,
+              asked_at: found.response.responded_at,
+              answered_at: operation.at,
+            }];
+          }
           found.status = "draft";
           found.sent_at = undefined;
           found.sent_via = undefined;
+          found.sent_by = undefined;
           found.response = undefined;
           found.owner_reply = undefined;
           found.verified_at = undefined;
@@ -196,6 +230,7 @@ export class AnnotationStore {
           found.status = "sent";
           found.sent_at = operation.at;
           found.sent_via = operation.via;
+          if (operation.by) found.sent_by = operation.by;
         }
         continue;
       }
@@ -212,7 +247,16 @@ export class AnnotationStore {
       }
       if (operation.op === "owner_reply") {
         const found = byId.get(operation.id);
-        if (!found || found.status !== "sent") continue;
+        if (!found || found.status === "dropped" || found.status === "verified") {
+          continue;
+        }
+        if (found.status === "draft" && operation.via === "owner_pending") {
+          found.status = "sent";
+          found.sent_at = operation.reply.replied_at;
+          found.sent_via = operation.via;
+          found.sent_by = operation.reply.author;
+        }
+        if (found.status !== "sent") continue;
         found.owner_reply = operation.reply;
         continue;
       }
@@ -232,6 +276,7 @@ export class AnnotationStore {
         found.rework = (found.rework ?? 0) + 1;
         found.sent_at = undefined;
         found.sent_via = undefined;
+        found.sent_by = undefined;
         found.response = undefined;
         found.owner_reply = undefined;
         found.verified_at = undefined;
@@ -259,24 +304,36 @@ export class AnnotationStore {
 
   add(input: AnnotationInput): Annotation {
     const note = String(input.note ?? "").trim();
-    if (!note) throw new AnnotationError("批注内容不能为空");
+    // 记为记忆可以不写一句话:圈的那段原文本身就是要记的东西(用户拍板,
+    // "必须像批注一样输入想法"是多余负担)。交给人的意见仍必须有内容。
+    if (!note && input.route !== "memory") throw new AnnotationError("批注内容不能为空");
     const anchor = String(input.anchor ?? "").trim();
     if (!anchor) throw new AnnotationError("缺少原文快照,批注无从定位");
     const artifact = String(input.artifact ?? "").trim();
     if (!artifact) throw new AnnotationError("缺少产物名");
+    const line = Number.isFinite(input.line) ? Math.max(0, Math.trunc(input.line)) : 0;
+    const quote = String(input.quote ?? "").trim();
+    const lineEnd = Number.isFinite(input.line_end)
+      ? Math.trunc(input.line_end as number) : 0;
     const record: Annotation = {
       id: `an-${Date.now().toString(36)}-${this.list().length + 1}`,
       author: String(input.author ?? "").trim() || "未署名",
       created_at: new Date().toISOString(),
       artifact,
       file: String(input.file ?? "").trim() || artifact,
-      line: Number.isFinite(input.line) ? Math.max(0, Math.trunc(input.line)) : 0,
+      line,
       anchor,
+      ...(quote ? { quote: quote.length > ANNOTATION_QUOTE_MAX
+        ? quote.slice(0, ANNOTATION_QUOTE_MAX) + "…" : quote } : {}),
+      ...(lineEnd > line ? { line_end: lineEnd } : {}),
       note,
       kind: input.kind === "code" ? "code" : "doc",
       ...(input.route && input.route !== "agent" ? { route: input.route } : {}),
       ...(input.assignee?.trim() ? { assignee: input.assignee.trim() } : {}),
-      status: "draft",
+      // 记忆条目没有"送出/回执/确认"这几站:人圈的那一下就是闭环。
+      ...(input.route === "memory"
+        ? { status: "verified" as const, verified_at: new Date().toISOString() }
+        : { status: "draft" as const }),
     };
     this.append({ op: "add", record });
     return record;
@@ -321,9 +378,9 @@ export class AnnotationStore {
     return this.list().find((item) => item.id === id)!;
   }
 
-  markSent(ids: string[], via: SentVia): void {
+  markSent(ids: string[], via: SentVia, by?: string): void {
     if (!ids.length) return;
-    this.append({ op: "sent", ids, via, at: new Date().toISOString() });
+    this.append({ op: "sent", ids, via, at: new Date().toISOString(), by });
   }
 
   /** 记录 Agent 的逐条回应。只接受已经提交且仍是当前 revision 的意见；
@@ -377,8 +434,8 @@ export class AnnotationStore {
     if ((found.route ?? "agent") === "agent") {
       throw new AnnotationError("这条意见是交给 Agent 处理的，不需要责任人答复");
     }
-    if (found.status !== "sent") {
-      throw new AnnotationError("这条意见尚未提交，暂时不能答复");
+    if (found.status !== "draft" && found.status !== "sent") {
+      throw new AnnotationError("这条意见当前不能答复");
     }
     if (found.owner_reply) {
       throw new AnnotationError("责任人已经答复；如需改变结论，请由提出人重新发起一轮");
@@ -395,7 +452,10 @@ export class AnnotationStore {
       text: normalized,
       replied_at: new Date().toISOString(),
     };
-    this.append({ op: "owner_reply", id, reply });
+    this.append({
+      op: "owner_reply", id, reply,
+      ...(found.status === "draft" ? { via: "owner_pending" as const } : {}),
+    });
     return this.list().find((item) => item.id === id)!;
   }
 
@@ -499,9 +559,26 @@ export function renderAnnotations(
     index += 1;
     // 稳定 id 是逐条回执的连接键。不能再靠“第 1 段大概回答第 1 条”猜，
     // Agent、服务端和页面都必须能精确指回同一条意见。
-    lines.push(`${index}. [${item.id}] 第 ${item.line} 行`);
-    lines.push(`   ${item.kind === "code" ? "当前代码" : "原文"}:${item.anchor}`);
+    const span = item.line_end && item.line_end > item.line
+      ? `第 ${item.line}–${item.line_end} 行` : `第 ${item.line} 行`;
+    lines.push(`${index}. [${item.id}] ${span}`);
+    const label = item.kind === "code" ? "当前代码" : "原文";
+    if (item.quote) {
+      // 划选了一块:整块给模型看语境;定位仍以首行原文(anchor)为准。
+      lines.push(`   ${label}(选中整块):`);
+      for (const quoted of item.quote.split("\n")) lines.push(`   | ${quoted}`);
+    } else {
+      lines.push(`   ${label}:${item.anchor}`);
+    }
     lines.push(`   要求:${item.note}`);
+    // 追问过的意见:作者已经针对你的问题补充了,别再问同一件事。
+    for (const asked of item.clarifications ?? []) {
+      lines.push(`   上一轮你问过:${asked.question}`);
+    }
+    if (item.clarifications?.length) {
+      lines.push("   作者已针对上面的问题补充了要求;不要再问同一件事,仍不清楚就按"
+        + "最合理的理解处理,并在回执里写明你采用的假设。");
+    }
     // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,
     // 重则把已有改动翻回去。历史锚点一并给:它要能对出"上次改成了什么"。
     if (item.rework) {

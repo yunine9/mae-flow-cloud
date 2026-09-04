@@ -983,27 +983,22 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(launch, /可多选；只邀请，不在这里按仓分工/);
   assert.match(launch, /collaborators: analysisTeamVisible \? collaborators : undefined/);
   assert.match(api, /collaborators: extras\?\.collaborators/);
-  // 单仓大需求和跨仓主任务都先讨论：下单不收单号，提交也不带。
+  // 跨仓主任务先讨论：下单不收单号，提交也不带。
   assert.match(launch, /options\.ticket\.enabled && !ticketsDeferred/);
   assert.match(launch, /ticket: ticketsDeferred \? undefined/);
-  // 单仓大需求入口是一条紧凑方案开关，不退回原生 checkbox + 长段虚线框。
-  assert.match(launch, /repo-analysis-toggle \$\{/);
-  assert.match(launch, /requirementAnalysis \? "selected"/);
-  assert.match(launch, /repo-analysis-switch/);
-  assert.match(launch, /先分析，再拆分/);
-  // 第二个仓填入后不能把入口卸载；大需求模式是颗粒度选择，不是仓数
-  // 选择。单仓选中或出现多仓都会进入主任务讨论，并延后收 AR。
+  // 2026-09-03 用户拍板:单仓没有"大需求先分析再拆分"开关。拆不拆是
+  // 分析的产物,由 Agent 读完仓后 propose_split 提议;下单的人不提前判断。
+  assert.doesNotMatch(launch, /repo-analysis-toggle|requirementAnalysis|先分析，再拆分/,
+    "发起表单不许再出现大需求开关");
+  assert.doesNotMatch(style, /repo-analysis/, "开关的样式一并删干净");
+  assert.doesNotMatch(api, /requirement_analysis:/, "下单 API 不再带这个字段");
   assert.match(launch,
     /const analysisEligible = repoFieldsEnabled && repositoriesToProbe\.length > 0/);
   assert.match(launch,
-    /const analysisTeamVisible = analysisEligible[\s\S]*?multiRepository \|\| requirementAnalysis/);
+    /const analysisTeamVisible = analysisEligible && multiRepository;/);
   assert.match(launch, /const ticketsDeferred = analysisTeamVisible/);
   assert.match(launch,
     /const repositoryTicketBlocked = Boolean\(options\?\.ticket\.enabled\)[\s\S]*?&& !ticketsDeferred/);
-  assert.match(launch,
-    /requirementAnalysis: requirementAnalysis && repoFieldsEnabled[\s\S]*?&& repositoriesToProbe\.length > 0/);
-  assert.match(style, /\.repo-analysis-toggle\.selected/);
-  assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
   assert.match(picker, /拆分后怎么执行/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
   // 执行人与 AR 都属于最终交付单元；执行人始终可选，免单号的分析
@@ -1025,8 +1020,6 @@ test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文�
 test("下单草稿在关闭、刷新和 ZIP 材料场景都不会丢失", () => {
   const source = readFileSync(
     join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  assert.match(source, /requirementAnalysis\?: boolean/,
-    "大需求选择本身也必须进入草稿");
   assert.match(source, /requirementBundleName\?: string/,
     "ZIP 只延后图片恢复，不能删除整张表单草稿");
   assert.match(source, /latestDraft\.current = \{/,

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -67,27 +68,37 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
         `> "${join(artifactDir, `CHAIN-${ticket}.md`)}" && ` +
         `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
+    // 模型照抄清单序号提问(内网实锤):卡上必须已经换成仓库名。
     { tool: { name: "AskUserQuestion", input: { questions: [
-        { question: "跨仓方案是否确认?",
+        { question: "repo-1 与 repo-2 的接口契约方案是否确认?",
           options: ["确认并生成任务", "需要修改"],
           recommended: "确认并生成任务" }] } } },
     { text: "方案已确认,分析收口。" },
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const notifier = new Notifier({ endpoint: luban.endpoint });
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     maxConcurrent: 1,
     host: { kernelRoot: join(dataDir, "no-kernel") },
+    notifier,
   });
   try {
     const parent = service.create("跨仓交付:api 出接口,web 消费", {
       account: "cloudbot", ticket,
       repos: [apiRepo, webRepo],
     });
+    // 受邀参与讨论的人:能答卡、要收通知;拆单仍只认责任人。
+    service.setRequirementCollaborators(parent.id, ["alice"]);
     const prompt = (service as any).requirementAnalysisPrompt(
       (service as any).tasks.get(parent.id), dataDir);
+    assert.match(prompt, /- svc-api \| /, "清单第一列是仓库名,模型照抄它去提问");
+    assert.doesNotMatch(prompt, /repo-\d+ \|/, "序号不再出现在清单里");
+    assert.match(prompt, /称呼仓库一律用仓库名/);
     assert.match(prompt, /生产者、转换者、消费者和责任系统/,
       "跨仓分析必须在拆单前追清新增数据由谁产生");
     assert.match(prompt, /仓库清单之外.*外部系统/,
@@ -100,6 +111,27 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     }, "确认卡");
     // 卡到手时投影应已能从产物读出依赖(面板据此画图)。
     assert.equal(card.requirement_graph?.dependencies.length, 1);
+    // 卡上不能出现 repo-1/repo-2(内网实锤"完全看不懂是哪个仓"):prompt
+    // 改按名称呼,举卡文本再机械替换一道兜底。
+    const asked = String(
+      (card.waiting?.question as any)?.questions?.[0]?.question ?? "");
+    assert.match(asked, /svc-api 与 svc-web/, `卡上要用仓库名:${asked}`);
+    assert.doesNotMatch(asked, /repo-\d/);
+    // 参与人过得了 HTTP 权限闸,但"确认并生成任务"改任务形状,只认责任人。
+    await assert.rejects(service.decide(parent.id, {
+      actor: "alice", state_version: card.waiting!.state_version,
+      decision: "确认并生成任务",
+    }), /只有主责任人 cloudbot 可以确认并生成任务/);
+    assert.equal(service.get(parent.id)?.status, "waiting_for_human",
+      "被拒的拍板不消费卡");
+    // 问题卡通知责任人和受邀参与人各一条(通知键按人分开)。
+    const recipients = await until(() => {
+      const accounts = notifier.list()
+        .filter((record) => record.waiting_id.startsWith(card.waiting!.waiting_id))
+        .map((record) => record.account).sort();
+      return accounts.length >= 2 ? accounts : undefined;
+    }, "参与人通知");
+    assert.deepEqual(recipients, ["alice", "cloudbot"]);
     const confirmed = await service.confirmRequirementGraph(parent.id);
     // 分析会话同步收口，但跨仓主任务要继续汇总各仓交付；不能把
     // “拆单成功”冒充为“整个需求完成”。
@@ -156,5 +188,6 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     assert.match(plan, /提供接口/, "方案文件带当前仓职责");
   } finally {
     await model.stop();
+    await luban.stop();
   }
 });

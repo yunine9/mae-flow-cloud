@@ -26,12 +26,17 @@ function zip(files: Array<{
   name: string;
   content: Buffer | string;
   compress?: boolean;
+  nameBytes?: Buffer;
+  flags?: number;
+  extra?: Buffer;
 }>): Buffer {
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
   let offset = 0;
   for (const file of files) {
-    const name = Buffer.from(file.name, "utf-8");
+    const name = file.nameBytes ?? Buffer.from(file.name, "utf-8");
+    const flags = file.flags ?? 0x800;
+    const extra = file.extra ?? Buffer.alloc(0);
     const content = Buffer.isBuffer(file.content)
       ? file.content : Buffer.from(file.content, "utf-8");
     const packed = file.compress ? deflateRawSync(content) : content;
@@ -39,25 +44,27 @@ function zip(files: Array<{
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x800, 6);
+    local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(method, 8);
     local.writeUInt32LE(packed.length, 18);
     local.writeUInt32LE(content.length, 22);
     local.writeUInt16LE(name.length, 26);
-    locals.push(local, name, packed);
+    local.writeUInt16LE(extra.length, 28);
+    locals.push(local, name, extra, packed);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(0x0314, 4);
     central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x800, 8);
+    central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(packed.length, 20);
     central.writeUInt32LE(content.length, 24);
     central.writeUInt16LE(name.length, 28);
+    central.writeUInt16LE(extra.length, 30);
     central.writeUInt32LE(offset, 42);
-    centrals.push(central, name);
-    offset += local.length + name.length + packed.length;
+    centrals.push(central, name, extra);
+    offset += local.length + name.length + extra.length + packed.length;
   }
   const directory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
@@ -67,6 +74,28 @@ function zip(files: Array<{
   end.writeUInt32LE(directory.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, directory, end]);
+}
+
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function unicodePathExtra(rawName: Buffer, unicodeName: string): Buffer {
+  const encoded = Buffer.from(unicodeName, "utf-8");
+  const extra = Buffer.alloc(4 + 1 + 4 + encoded.length);
+  extra.writeUInt16LE(0x7075, 0);
+  extra.writeUInt16LE(1 + 4 + encoded.length, 2);
+  extra[4] = 1;
+  extra.writeUInt32LE(crc32(rawName), 5);
+  encoded.copy(extra, 9);
+  return extra;
 }
 
 test("ZIP 需求材料包：读取 requirement.md、校验图片并改写为安全工作区路径", () => {
@@ -112,6 +141,43 @@ test("ZIP 只有一份 Markdown、没有图片也可以导入", () => {
   ]).toString("base64"));
   assert.equal(parsed.document_name, "说明.md");
   assert.equal(parsed.assets.length, 0);
+});
+
+test("ZIP 兼容 Windows GBK/GB18030 中文文件名", () => {
+  const gbkName = Buffer.from([
+    0xd0, 0xe8, 0xc7, 0xf3, 0x2f, 0xcb, 0xb5, 0xc3, 0xf7, 0x2e, 0x6d, 0x64,
+  ]); // 需求/说明.md
+  const parsed = parseRequirementBundle("中文材料.zip", zip([{
+    name: "unused.md",
+    nameBytes: gbkName,
+    flags: 0,
+    content: "# 中文需求\n\n兼容 Windows 压缩包。",
+  }]).toString("base64"));
+
+  assert.equal(parsed.document_name, "需求/说明.md");
+  assert.match(parsed.requirement, /兼容 Windows 压缩包/);
+});
+
+test("ZIP 优先使用经过 CRC 校验的 Unicode Path 文件名", () => {
+  const legacyName = Buffer.from("legacy.md", "ascii");
+  const parsed = parseRequirementBundle("资料.zip", zip([{
+    name: "legacy.md",
+    nameBytes: legacyName,
+    flags: 0,
+    extra: unicodePathExtra(legacyName, "资料/说明.md"),
+    content: "# Unicode Path",
+  }]).toString("base64"));
+
+  assert.equal(parsed.document_name, "资料/说明.md");
+});
+
+test("ZIP 声明 UTF-8 时仍严格拒绝损坏的文件名", () => {
+  assert.throws(() => parseRequirementBundle("bad.zip", zip([{
+    name: "unused.md",
+    nameBytes: Buffer.from([0xd0, 0xe8, 0x2e, 0x6d, 0x64]),
+    flags: 0x800,
+    content: "# bad",
+  }]).toString("base64")), /ZIP 文件名 不是有效的 UTF-8 文本/);
 });
 
 test("任务需求图片可持久化、复核并物化进 Agent 工作区", () => {

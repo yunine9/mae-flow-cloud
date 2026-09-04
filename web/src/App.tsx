@@ -46,6 +46,7 @@ import {
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeInsightsBoard } from "./KnowledgeFlywheel";
+import { MemoryBoard } from "./MemoryBoard";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { QuickWishButton } from "./WishQuickCreate";
@@ -75,14 +76,14 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights";
+type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights" | "memories";
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
   "wishes", "help",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
-  "knowledge", "modules", "workflows", "insights",
+  "knowledge", "modules", "workflows", "insights", "memories",
 ]);
 
 function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
@@ -183,18 +184,20 @@ function initialView(user: AuthUser): View {
 }
 
 /** 人工介入程度(用户拍板:一个旋钮说清,不做任务粒度设置)。
- * 两个正交轴合成四档:月光管"过程节点停不停",push 前确认管
- * "交付清单出门前给不给人过目"。月光转开仍走预览/是否处理当前
- * 待办的既有流程;push 默认开,只落显式的关。 */
+ * 两个正交轴合成四档:过程节点停不停(分析报告确认、无单结论确认、
+ * 网管环境补配——卡面统称"过程"),推送前给不给人看变更清单(卡面
+ * 统称"推送")。每档卡面就是一行两轴状态,细节在上方 summary 讲一次。
+ * 月光转开仍走预览/是否处理当前待办的既有流程;推送过目默认开,
+ * 只落显式的关。MR 人工合入与流水线绑 SHA 不归此旋钮,始终生效。 */
 const INTERVENTION_PRESETS = [
-  { key: "full", moonlight: false, push: true, title: "全程把关",
-    hint: "过程节点等你拍板,分析前先圈选仓内排障知识;验证后确认最终交付范围（默认）" },
-  { key: "process", moonlight: false, push: false, title: "逐步确认",
-    hint: "过程节点等你拍板,分析前先圈选仓内排障知识;交付信任三道门禁" },
-  { key: "delivery", moonlight: true, push: true, title: "只看交付",
-    hint: "过程自动放行,验证后确认最终交付范围" },
-  { key: "auto", moonlight: true, push: false, title: "全自动",
-    hint: "不中断执行,完成后统一复盘" },
+  { key: "full", moonlight: false, push: true, title: "全程把关", isDefault: true,
+    detail: "过程问你 · 推送问你" },
+  { key: "process", moonlight: false, push: false, title: "只问过程", isDefault: false,
+    detail: "过程问你 · 推送直走" },
+  { key: "delivery", moonlight: true, push: true, title: "只问推送", isDefault: false,
+    detail: "过程自动 · 推送问你" },
+  { key: "auto", moonlight: true, push: false, title: "全自动", isDefault: false,
+    detail: "过程自动 · 推送直走" },
 ] as const;
 
 function InterventionSetting({
@@ -256,8 +259,8 @@ function InterventionSetting({
         nextPush = user.push_confirmation !== false;
         setPush(nextPush);
         notes.push(nextPush
-          ? "后续任务会在 Build-Fix 完成后展示最终交付范围"
-          : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
+          ? "后续每次推送前会先给你看变更清单,确认一次放行一次"
+          : "后续推送不再等待清单确认;已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
       await onChanged({ moonlight: nextMoon, push_confirmation: nextPush });
@@ -271,7 +274,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,Build-Fix 完成后是否确认最终交付范围。纯自动修复留在已确认文件范围内时不会重复询问；人工检视意见引发的修改一定回到意见作者复检。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡;"推送"指每次 push 前先给你看变更清单(确认一次放行一次)。无论选哪档,MR 人工合入、流水线绑 SHA 等门禁始终生效;人工检视意见引发的修改一定回到意见作者复检。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
@@ -279,7 +282,12 @@ function InterventionSetting({
         <i aria-hidden>{preset.moonlight
           ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
           : "✓"}</i>
-        <span><strong>{preset.title}</strong><small>{preset.hint}</small></span>
+        <span>
+          <strong>{preset.title}
+            {preset.isDefault && <i className="approval-option-default">默认</i>}
+          </strong>
+          <small>{preset.detail}</small>
+        </span>
       </button>)}
     </div>
     {note && <p className="approval-setting-note" role="status">{note}</p>}
@@ -409,12 +417,15 @@ export function buildPersonalActionItems({
   merges,
   reviews,
   tasks,
+  discussions = [],
 }: {
   waiting: TaskSummary[];
   intervention: TaskSummary[];
   merges: TaskSummary[];
   reviews: ReviewRequest[];
   tasks: TaskSummary[];
+  /** 别人的分析单邀请我参与讨论、卡正等回答。 */
+  discussions?: TaskSummary[];
 }): PersonalActionItem[] {
   const seen = new Set<string>();
   const items: PersonalActionItem[] = [];
@@ -428,6 +439,18 @@ export function buildPersonalActionItems({
       title: task.title ?? task.requirement,
       detail: task.focus?.next_action ?? "查看材料并完成当前确认",
       action: "立即处理",
+    });
+  }
+  for (const task of discussions) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `discussion:${task.id}`,
+      task,
+      kicker: "受邀参与讨论",
+      title: task.title ?? task.requirement,
+      detail: `${responsibleOf(task) ?? "责任人"} 邀请你一起回答 Agent 的问题`,
+      action: "去回答",
     });
   }
   for (const review of reviews) {
@@ -768,9 +791,19 @@ export function App() {
     return () => { alive = false; };
   }, [artifactTaskId]);
 
+  // 受邀参与讨论(协作者/逐仓责任人)的分析单也算我的活:卡等的是你的
+  // 回答,只在团队列表亮个信号灯等于邀请了没喊人。分析确认后 stage
+  // 变了自然退出。判据与服务端 canCollaborate 同口径。
+  const invitedToDiscuss = (task: TaskSummary) => !!session
+    && task.requirement_graph?.stage === "analysis"
+    && responsibleOf(task) !== session.username
+    && (task.collaborators?.includes(session.username) === true
+      || task.requirement_graph.repositories.some((repository) =>
+        repository.assignee === session.username));
   const assignedToMe = session
     ? tasks.filter((task) => responsibleOf(task) === session.username)
     : [];
+  const discussingWithMe = tasks.filter(invitedToDiscuss);
   // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
   // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
@@ -819,7 +852,7 @@ export function App() {
   }
 
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
-  const myTasks = assignedToMe;
+  const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending");
   const myBlocked = myTasks.filter((task) =>
@@ -839,7 +872,8 @@ export function App() {
     DELIVERY_HANDOFF_STATUSES.includes(task.status));
   const myMerges = myTasks.filter((task) => task.status === "await_merge");
   const personalActionItems = buildPersonalActionItems({
-    waiting: myWaiting,
+    waiting: myWaiting.filter((task) => !invitedToDiscuss(task)),
+    discussions: myWaiting.filter(invitedToDiscuss),
     intervention: myIntervention,
     merges: myMerges,
     reviews: pendingReviews,
@@ -909,10 +943,7 @@ export function App() {
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || responsibleOf(task) === session.username;
   const canCollaborate = (task: TaskSummary) => canOperate(task)
-    || (task.requirement_graph?.stage === "analysis"
-      && (task.collaborators?.includes(session.username) === true
-        || task.requirement_graph.repositories.some((repository) =>
-          repository.assignee === session.username)));
+    || invitedToDiscuss(task);
   const header = {
     team: { title: "团队任务", description: teamTaskTab === "current"
       ? (session.role === "admin"
@@ -1082,6 +1113,11 @@ export function App() {
               onClick={() => selectTeamAssetTab("insights")}>
               <strong>使用效能</strong><small>谁真被读、谁选而未用，以及下一步改哪里</small>
             </button>
+            <button type="button" className={teamAssetTab === "memories" ? "active" : ""}
+              aria-pressed={teamAssetTab === "memories"}
+              onClick={() => selectTeamAssetTab("memories")}>
+              <strong>任务记忆</strong><small>平台记住的闭环：谁被推过、谁真被用、谁沉底了</small>
+            </button>
           </nav>
           {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
@@ -1095,6 +1131,11 @@ export function App() {
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}
             onRetry={refreshKnowledgeInsights}
+            onOpenTask={(taskId) => {
+              const target = tasks.find((task) => task.id === taskId);
+              if (target) openArtifacts(target);
+            }}
+          /> : teamAssetTab === "memories" ? <MemoryBoard
             onOpenTask={(taskId) => {
               const target = tasks.find((task) => task.id === taskId);
               if (target) openArtifacts(target);
@@ -1135,7 +1176,7 @@ export function App() {
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
+            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}

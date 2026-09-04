@@ -17,7 +17,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
-import { PRE_PUSH_STATE_SCHEMA } from "../src/prePushVerification.ts";
+import {
+  beginPrePushAttempt,
+  createPrePushVerification,
+  getReusablePushReceipt,
+  PRE_PUSH_STATE_SCHEMA,
+  recordPrePushReport,
+} from "../src/prePushVerification.ts";
 
 async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 20_000;
@@ -86,6 +92,120 @@ async function taskWithRepo() {
   internal.cwd = repo.cwd;
   return { service, model, id, internal, repo };
 }
+
+test("Build-Fix 只写坏标题时自动修正且保留同一代码树的绿灯与交付确认", async () => {
+  const { service, model, internal, repo } = await taskWithRepo();
+  try {
+    repo.git("checkout", "--quiet", "-b", "master_bot_REQ_REPAIR");
+    writeFileSync(join(repo.cwd, "feature.txt"), "verified code\n");
+    repo.git("add", "feature.txt");
+    repo.git("commit", "--quiet", "-m", "fix: prepush compile issue");
+    internal.summary.ticket = "REQ-REPAIR";
+
+    const before = await (service as any).prePushRevision(internal);
+    const beforeTree = repo.git("rev-parse", "HEAD^{tree}");
+    let passed = createPrePushVerification(before, new Date().toISOString());
+    passed = beginPrePushAttempt(passed, new Date().toISOString(), "attempt-green");
+    passed = recordPrePushReport(passed, "attempt-green", {
+      compile: { outcome: "passed" },
+      unit_test: { outcome: "passed" },
+    }, new Date().toISOString());
+    internal.summary.delivery = {
+      prepush: passed,
+      last_reviewed_head: before.sha,
+      stalled: "旧推送被 hook 拒收",
+      waiting_on: "修正提交说明",
+      skipped: "提交说明不合规",
+    };
+    internal.summary.delivery_selection = {
+      paths: ["feature.txt"],
+      observed_paths: ["feature.txt"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "waiting-before-amend",
+      head: before.sha,
+      confirmation_mode: "human",
+      updated_at: new Date().toISOString(),
+    };
+
+    assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "repaired");
+    const after = await (service as any).prePushRevision(internal);
+    assert.notEqual(after.sha, before.sha, "amend 必须形成新 commit 对象");
+    assert.equal(repo.git("rev-parse", "HEAD^{tree}"), beforeTree,
+      "只允许修标题，代码 tree 必须逐字节不变");
+    assert.equal(repo.git("log", "-1", "--format=%s"),
+      "[REQ_REPAIR][fix]prepush compile issue");
+    assert.ok(getReusablePushReceipt(internal.summary.delivery.prepush, after),
+      "同一代码 tree 的编译与 UT 绿灯不得因 amend 作废");
+    assert.equal(internal.summary.delivery_selection.head, after.sha,
+      "同一代码 tree 的人工交付范围确认应迁移到新 commit");
+    assert.equal(internal.summary.delivery.last_reviewed_head, after.sha);
+    assert.equal(internal.summary.delivery.stalled, undefined);
+    assert.equal(internal.summary.delivery.waiting_on, undefined);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("旧 Cloud 的中间坏标题可无补丁重放修正，后续 Build-Fix 提交完整保留", async () => {
+  const { service, model, internal, repo } = await taskWithRepo();
+  try {
+    repo.git("checkout", "--quiet", "-b", "master_bot_REQ_MIDDLE");
+    repo.git("config", "user.name", "Legacy Cloud");
+    repo.git("config", "user.email", "legacy-cloud@test");
+    writeFileSync(join(repo.cwd, "selection.txt"), "selection\n");
+    repo.git("add", "selection.txt");
+    repo.git("commit", "--quiet", "-m",
+      "chore: 按最终人工检视整理交付清单——剔除 3 个未勾选文件",
+      "-m", "原交付清单审计正文必须保留");
+    const badIntermediate = repo.git("rev-parse", "HEAD");
+
+    repo.git("config", "user.name", "Build Fix Agent");
+    repo.git("config", "user.email", "build-fix@test");
+    writeFileSync(join(repo.cwd, "fix.txt"), "later verified fix\n");
+    repo.git("add", "fix.txt");
+    repo.git("commit", "--quiet", "-m", "[REQ_MIDDLE][fix]后续修复已通过");
+    internal.summary.ticket = "REQ-MIDDLE";
+    const before = await (service as any).prePushRevision(internal);
+    const beforeTree = repo.git("rev-parse", "HEAD^{tree}");
+    let passed = createPrePushVerification(before, new Date().toISOString());
+    passed = beginPrePushAttempt(passed, new Date().toISOString(), "attempt-middle");
+    passed = recordPrePushReport(passed, "attempt-middle", {
+      compile: { outcome: "passed" },
+      unit_test: { outcome: "passed" },
+    }, new Date().toISOString());
+    internal.summary.delivery = { prepush: passed, last_reviewed_head: before.sha };
+    internal.summary.delivery_selection = {
+      paths: ["fix.txt", "selection.txt"],
+      observed_paths: ["fix.txt", "selection.txt"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "waiting-middle",
+      head: before.sha,
+      confirmation_mode: "human",
+      updated_at: new Date().toISOString(),
+    };
+
+    assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "repaired");
+    const after = await (service as any).prePushRevision(internal);
+    assert.notEqual(after.sha, before.sha, "中间父 SHA 变化后后续提交必须随父关系重建");
+    assert.equal(repo.git("rev-parse", "HEAD^{tree}"), beforeTree);
+    const rewrittenIntermediate = repo.git("rev-parse", "HEAD~1");
+    assert.notEqual(rewrittenIntermediate, badIntermediate);
+    assert.equal(repo.git("show", "-s", "--format=%s", rewrittenIntermediate),
+      "[REQ_MIDDLE][fix]按最终人工检视整理交付清单——剔除 3 个未勾选文件");
+    assert.match(repo.git("show", "-s", "--format=%B", rewrittenIntermediate),
+      /原交付清单审计正文必须保留/);
+    assert.equal(repo.git("show", "-s", "--format=%an|%ae", rewrittenIntermediate),
+      "Legacy Cloud|legacy-cloud@test");
+    assert.equal(repo.git("show", "-s", "--format=%an|%ae", "HEAD"),
+      "Build Fix Agent|build-fix@test");
+    assert.ok(getReusablePushReceipt(internal.summary.delivery.prepush, after));
+    assert.equal(internal.summary.delivery_selection.head, after.sha);
+  } finally {
+    await model.stop();
+  }
+});
 
 test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();

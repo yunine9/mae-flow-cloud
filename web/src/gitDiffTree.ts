@@ -12,7 +12,7 @@ export interface ChangedFile {
   deletions: number;
 }
 
-function fileKind(path: string): FileKind {
+export function fileKind(path: string): FileKind {
   const lower = path.toLowerCase();
   const name = lower.split("/").at(-1) ?? lower;
   if (/(^|\/)(test|tests|__tests__)\//.test(lower)

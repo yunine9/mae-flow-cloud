@@ -4,6 +4,8 @@
  *   POST /tasks                {requirement}            → 201 摘要
  *   GET  /tasks                                         → 列表
  *   GET  /knowledge-insights                            → 团队知识效能(只读)
+ *   GET  /memory-insights                               → 任务记忆总览(只读,可见不可管)
+ *   GET  /memory-insights/:mid                          → 一条记忆的原文(归档的也能读)
  *   GET  /business-modules                              → 业务模块、Owner 与知识目录
  *   POST /business-modules                              → 管理员创建并指定 Owner
  *   PUT  /business-modules/:id                          → 管理模块(转移 Owner 仅管理员)
@@ -33,6 +35,9 @@
  *   POST /tasks/:id/rerun                               → 200;原位清空并从头重跑
  *   DELETE /tasks/:id                                   → 200;责任人/管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
+ *   GET  /tasks/:id/memories                            → 本单落下的记忆(只读)
+ *   GET  /tasks/:id/memories/usage                      → 这单用到的记忆(推送/检索足迹)
+ *   POST /tasks/:id/memories/:mid/withdraw              → 撤回自己圈的记忆
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
  *   PATCH /tasks/:id/annotations/:annId {note}        → 修改(只能改自己的)
@@ -71,6 +76,7 @@ import {
   DEFAULT_BUILD_CACHE_MAX_GB,
   DEFAULT_BUILD_CACHE_RETENTION_DAYS,
   DEFAULT_WORKSPACE_RETENTION_DAYS,
+  type DeliveryCompileAction,
   NotFoundError,
   TaskControlError,
   type RequirementGraph,
@@ -83,6 +89,7 @@ import {
   bundleArtifactDocuments,
   listArtifactsAsync,
   readArtifactAsync,
+  readArtifactFileDiffAsync,
   resolveArtifactRoot,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
@@ -155,10 +162,10 @@ import {
 } from "./knowledgeAssetModel.ts";
 import {
   normalizeRepositoryProfile,
+  requireRepositoryProfiles,
   RepositoryProfileError,
   resolveRepositoryProfiles,
   saveRepositoryProfile,
-  type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import {
   KnowledgeCandidateError,
@@ -934,6 +941,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
+        || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
@@ -972,6 +980,16 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 任务记忆总览:只读。没有编辑、没有删除——可见不可管(§9)。
+      if (request.method === "GET" && url.pathname === "/memory-insights") {
+        return json(response, 200, service.memoryInsights());
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/memory-insights/")) {
+        const found = service.readMemoryInsight(
+          decodeURIComponent(url.pathname.slice("/memory-insights/".length)));
+        return found ? json(response, 200, found)
+          : json(response, 404, { error: "这条记忆不存在" });
       }
       // 发起页权威知识预匹配：只回元数据与固定身份，不分配 task id、
       // 不写任务现场。保存的工作流选择必须在服务端解析已发布版本，
@@ -1969,31 +1987,50 @@ export function createTaskServer(
             && !/^[a-f0-9]{64}$/.test(knowledgePreviewDigest ?? "")) {
           return json(response, 400, { error: "知识清单指纹不合法" });
         }
-        const repositoryProfiles = Array.isArray(body.repository_profiles)
+        const providedRepositoryProfiles = Array.isArray(body.repository_profiles)
           ? body.repository_profiles.flatMap((item: Record<string, unknown>) => {
-              let current: RepositoryProfile;
               try {
-                current = normalizeRepositoryProfile({
+                return [normalizeRepositoryProfile({
                   repository: String(item.repository ?? ""),
                   technologies: Array.isArray(item.technologies)
                     ? item.technologies.map(String) : [],
                   confirmed: item.confirmed !== false,
-                }, account ?? "本地部署");
+                }, account ?? "本地部署")];
               } catch (error) {
                 service.options.log?.(
                   `仓库技术画像无效(本单不采用): ${String(error)}`);
                 return [];
               }
-              try {
-                return [saveRepositoryProfile(service.options.dataDir, current,
-                  account ?? "本地部署")];
-              } catch (error) {
-                // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
-                service.options.log?.(
-                  `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
-                return [current];
-              }
             }) : undefined;
+        const requestedRepositories = repos?.length
+          ? repos : repo ? [repo] : [];
+        let repositoryProfiles = providedRepositoryProfiles;
+        if (requestedRepositories.length) {
+          try {
+            if (repositoryProfiles === undefined) {
+              repositoryProfiles = resolveRepositoryProfiles(
+                service.options.dataDir, requestedRepositories)
+                .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+            }
+            repositoryProfiles = requireRepositoryProfiles(
+              requestedRepositories, repositoryProfiles);
+            if (providedRepositoryProfiles !== undefined) {
+              repositoryProfiles = repositoryProfiles.map((current) => {
+                try {
+                  return saveRepositoryProfile(
+                    service.options.dataDir, current, account ?? "本地部署");
+                } catch (error) {
+                  // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
+                  service.options.log?.(
+                    `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
+                  return current;
+                }
+              });
+            }
+          } catch (error) {
+            return json(response, 400, { error: humanError(error) });
+          }
+        }
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -2066,8 +2103,6 @@ export function createTaskServer(
           // 旧页面、脚本或竞态都不能绕过这道闸。固定仓部署没有逐单地址，
           // 由启动自检负责，不在这里重复探测。知识清单契约先判，保持旧
           // 客户端拿到“先核对清单”的 409 后能按原流程自愈。
-          const requestedRepositories = repos?.length
-            ? repos : repo ? [repo] : [];
           if (service.launchOptions().repo.enabled
               && requestedRepositories.length > 0) {
             const probed = await service.probeRepositories({
@@ -2099,9 +2134,8 @@ export function createTaskServer(
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
+              requireRepositoryProfiles: requestedRepositories.length > 0,
               knowledgePreviewDigest,
-              // 单仓大需求显式要求先分析拆分(交付单元拆分入口)。
-              requirementAnalysis: body.requirement_analysis === true,
               // 下单后先在工作台检视需求原文；主责任人确认才入队。
               requirementAnalysisConfirmation: true,
             }));
@@ -2213,8 +2247,11 @@ export function createTaskServer(
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能处理分配给自己的任务"
+          // 受邀参与讨论的人(协作者/逐仓责任人)在分析期可以答卡——邀请了
+          // 就得能回答(2026-09-04 用户拍板)。拍板类决定由 decide() 再按
+          // 责任人硬闸一次,这里只挡"是否参与"。
+          if (!canCollaborate(viewer, target, !!options.auth)) {
+            return json(response, 403, { error: "只有责任人或受邀参与讨论的人可以回答这张卡"
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           const body = await readBody(request);
@@ -2261,6 +2298,10 @@ export function createTaskServer(
               : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
+            delivery_compile_action:
+              typeof body.delivery_compile_action === "string"
+                ? body.delivery_compile_action as DeliveryCompileAction
+                : undefined,
           });
           return json(response, 200, task);
         }
@@ -2447,9 +2488,30 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.listInterrupts(id));
         }
-        // 检视批注:圈注权和送达权分开——谁都能圈(领导路过提一句是
-        // 真实场景),送达只有该单负责人。这一刀下去,"多人并发提交"
-        // 根本不会发生:提交的永远只有一个人。
+        // 检视批注:圈注权和送达权分开——谁都能圈。作者可提交自己的
+        // 意见；任务责任人还可以原样转交他人的意见，但不能改写或替他
+        // 闭环。这样路过成员留下的有效意见不会成为无人能接的草稿。
+        // 任务记忆:只读列表、原文、撤回。没有编辑——改就是再圈一次。
+        if (parts[2] === "memories") {
+          if (!service.get(id)) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (request.method === "GET" && parts.length === 3) {
+            return json(response, 200, service.listTaskMemories(id));
+          }
+          // 这单用到的:宿主三次推送 + Agent 自己查/展开的足迹。
+          if (request.method === "GET" && parts.length === 4 && parts[3] === "usage") {
+            return json(response, 200, service.listTaskMemoryUsage(id));
+          }
+          if (request.method === "GET" && parts.length === 4) {
+            const found = service.readTaskMemory(id, decodeURIComponent(parts[3]));
+            return found ? json(response, 200, found)
+              : json(response, 404, { error: "这条记忆不存在" });
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[4] === "withdraw") {
+            return json(response, 200, service.withdrawTaskMemory(
+              id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户"));
+          }
+        }
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2465,10 +2527,12 @@ export function createTaskServer(
               file: String(body.file ?? ""),
               line: Number(body.line ?? 0),
               anchor: String(body.anchor ?? ""),
+              quote: String(body.quote ?? ""),
+              line_end: Number(body.line_end ?? 0),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",
               route: body.route === "owner_reply" || body.route === "owner_decision"
-                ? body.route : "agent",
+                || body.route === "memory" ? body.route : "agent",
             }));
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
@@ -2483,7 +2547,8 @@ export function createTaskServer(
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
-              await service.sendAnnotations(id, ids, author));
+              await service.sendAnnotations(id, ids, author,
+                canOperate(viewer, target.luban_account, !!options.auth)));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,
@@ -2781,6 +2846,16 @@ export function createTaskServer(
               "cache-control": "no-store",
             });
             return response.end(archive.data);
+          }
+          if (parts.length === 4 && parts[3] === "file-diff") {
+            const path = url.searchParams.get("path") ?? "";
+            const diff = await readArtifactFileDiffAsync(root, path);
+            if (!diff) {
+              return json(response, 404, {
+                error: "这个文件已不在当前工作区变更中，请刷新后重试",
+              });
+            }
+            return json(response, 200, diff);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));

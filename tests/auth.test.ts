@@ -364,6 +364,15 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
       "受邀开发者可以进入同一个主任务和 AI 讨论");
     assert.match(steered, /协作者 alice 插话.*接口字段还需要一起确认/,
       "插话前缀只标身份;\"跨仓协作\"标签曾污染单仓任务的交付件(MFC-021)");
+    // 受邀参与讨论的人可以答卡(2026-09-04 用户拍板)。这张假现场没有
+    // 待办:过了权限闸落到 404,而不是被 403 挡在门外。
+    const participantDecision = await fetch(
+      `${base}/tasks/${cross.id}/decision`, {
+        method: "POST", headers: { cookie: alice },
+        body: JSON.stringify({ state_version: 1, decision: "需要修改" }),
+      });
+    assert.equal(participantDecision.status, 404,
+      "受邀参与讨论的人过权限闸(无待办→404,不是 403)");
     const collaboratorCannotInvite = await fetch(
       `${base}/tasks/${cross.id}/collaborators`, {
         method: "PUT", headers: { cookie: alice },

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
@@ -41,15 +41,37 @@ test("新下单先在工作台确认需求，不会提前进入执行队列", ()
 });
 
 test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能确认分析", async () => {
-  // 剧本按请求顺序演:第 1 幕回执缺了 id → 整轮拒收;第 2 幕合格。
+  // 剧本按请求顺序演:第 1 个会话没有写回执 → 整轮拒收；后两轮都
+  // 用 Edit 修改副本、用 Write 单独留下小型 JSON 回执。
   const model = new ScriptedModelServer([{
-    text: "===RECEIPTS===\n[]\n===REQUIREMENT===\n# 用户需求\n瞎改\n===END_REQUIREMENT===",
+    text: "我没有完成逐条回执。",
   }, {
-    text: "===RECEIPTS===\n[{\"annotation_id\":\"__OWNER__\",\"outcome\":\"fixed\",\"summary\":\"补了验收口径\"}]\n"
-      + "===REQUIREMENT===\n# 用户需求\n已补充验收口径\n===END_REQUIREMENT===",
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [{ oldText: "原始口径", newText: "已补充验收口径" }],
+    } },
   }, {
-    text: "===RECEIPTS===\n[{\"annotation_id\":\"__REVIEWER__\",\"outcome\":\"not_fixed\",\"summary\":\"异常场景已在验收口径里覆盖,未另起段落\"}]\n"
-      + "===REQUIREMENT===\n# 用户需求\n已补充验收口径\n已明确异常场景\n===END_REQUIREMENT===",
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__OWNER__","outcome":"fixed","summary":"补了验收口径"}]',
+    } },
+  }, {
+    text: "已修改文档并留下逐条回执。",
+  }, {
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [{
+        oldText: "已补充验收口径",
+        newText: "已补充验收口径\n已明确异常场景",
+      }],
+    } },
+  }, {
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__REVIEWER__","outcome":"fixed","summary":"补了异常场景"}]',
+    } },
+  }, {
+    text: "已修改文档并留下逐条回执。",
   }], "scripted-v1", { linear: true });
   await model.start();
   try {
@@ -89,13 +111,23 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
 
     // 剧本里的占位 id 换成真实 id:回执必须能指回同一条意见。
     for (const scene of model.script) {
-      scene.text = scene.text!
-        .replace("__OWNER__", ownerNote.id).replace("__REVIEWER__", reviewerNote.id);
+      if (scene.text) {
+        scene.text = scene.text
+          .replace("__OWNER__", ownerNote.id)
+          .replace("__REVIEWER__", reviewerNote.id);
+      }
+      const content = scene.tool?.input.content;
+      if (typeof content === "string") {
+        scene.tool!.input.content = content
+          .replace("__OWNER__", ownerNote.id)
+          .replace("__REVIEWER__", reviewerNote.id);
+      }
     }
-    // 第 1 幕:回执缺了这条意见 → 整轮拒收,文档一个字不动,意见还是草稿。
+    // 第 1 轮:没落回执 → 整轮拒收,文档一个字不动,意见还是草稿。
     await assert.rejects(
       service.sendAnnotations(created.id, [ownerNote.id], "owner"),
-      (error) => error instanceof TaskControlError && /回执不完整/.test(error.message));
+      (error) => error instanceof TaskControlError
+        && /没有留下逐条检视回执/.test(error.message));
     assert.equal(service.get(created.id)?.requirement, "# 用户需求\n原始口径");
     assert.equal(service.listAnnotations(created.id).items
       .find((item) => item.id === ownerNote.id)?.status, "draft");
@@ -155,9 +187,13 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
     assert.equal(confirmed.requirement,
       "# 用户需求\n已补充验收口径\n已明确异常场景");
     assert.equal(service.listAnnotations(created.id).items
-      .find((item) => item.id === reviewerNote.id)?.response?.outcome, "not_fixed");
-    assert.equal(model.requests.length, 3,
-      "需求确认只启动专用文档修改(含被拒收的一轮)，不会提前启动主执行会话");
+      .find((item) => item.id === reviewerNote.id)?.response?.outcome, "fixed");
+    assert.equal(model.requests.length, 7,
+      "需求确认只启动专用文件编辑会话(含被拒收的一轮)，不会提前启动主执行会话");
+    const firstRequest = JSON.stringify(model.requests[0]);
+    assert.doesNotMatch(firstRequest, /## 当前需求文档/,
+      "使命只给文件位置和意见，不再把完整原文塞进模型请求");
+    assert.match(firstRequest, /requirement\.md/);
   } finally {
     await model.stop();
   }
@@ -196,6 +232,97 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   assert.equal(recovered.listAnnotations(created.id).items[0].status, "draft");
 });
 
+test("长需求由 Agent 原位编辑，不再要求模型往回复里搬运全文", async () => {
+  const model = new ScriptedModelServer([{
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [{ oldText: "验收口径：旧", newText: "验收口径：新" }],
+    } },
+  }, {
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新验收口径"}]',
+    } },
+  }, {
+    text: "已完成一处原位修改。",
+  }], "scripted-v1", { linear: true });
+  await model.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-long-"));
+    const service = new TaskService({
+      dataDir, provider: "maeflow", model: "scripted-v1",
+      modelsJson: model.modelsJson(), maxConcurrent: 0,
+    });
+    const tail = `正文保持不变-${"长内容".repeat(45_000)}-LONG-DOCUMENT-TAIL`;
+    const created = service.create(`验收口径：旧\n\n${tail}`, {
+      account: "owner", requirementAnalysisConfirmation: true,
+    });
+    const note = service.addAnnotation(created.id, {
+      author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+      file: "需求原文", line: 1, anchor: "验收口径：旧",
+      note: "改成新口径", kind: "doc",
+    });
+    model.script[1].tool!.input.content = String(
+      model.script[1].tool!.input.content).replace("__NOTE__", note.id);
+
+    await service.sendAnnotations(created.id, [note.id], "owner");
+    assert.equal(service.get(created.id)?.requirement,
+      `验收口径：新\n\n${tail}`, "未命中的十几万字必须逐字保留");
+    assert.doesNotMatch(JSON.stringify(model.requests[0]), /LONG-DOCUMENT-TAIL/,
+      "首轮模型请求不能再内联完整需求文档");
+    assert.equal(existsSync(join(created.workspace, "requirement-review",
+      service.get(created.id)!.requirement_revisions![0].id)), false,
+    "成功后清掉临时副本，权威历史只保留在 requirement-history");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("需求修改 Agent 不能用 Write 整篇覆盖原文", async () => {
+  const model = new ScriptedModelServer([{
+    tool: { name: "write", input: {
+      path: "requirement.md", content: "半截输出",
+    } },
+  }, {
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [{ oldText: "旧口径", newText: "新口径" }],
+    } },
+  }, {
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新口径"}]',
+    } },
+  }, {
+    text: "已改用 Edit 完成。",
+  }], "scripted-v1", { linear: true });
+  await model.start();
+  try {
+    const service = new TaskService({
+      dataDir: mkdtempSync(join(tmpdir(), "mfc-requirement-write-guard-")),
+      provider: "maeflow", model: "scripted-v1",
+      modelsJson: model.modelsJson(), maxConcurrent: 0,
+    });
+    const created = service.create("旧口径\n\n必须保留", {
+      account: "owner", requirementAnalysisConfirmation: true,
+    });
+    const note = service.addAnnotation(created.id, {
+      author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+      file: "需求原文", line: 1, anchor: "旧口径",
+      note: "更新口径", kind: "doc",
+    });
+    model.script[2].tool!.input.content = String(
+      model.script[2].tool!.input.content).replace("__NOTE__", note.id);
+
+    await service.sendAnnotations(created.id, [note.id], "owner");
+    assert.equal(service.get(created.id)?.requirement, "新口径\n\n必须保留");
+    assert.match(JSON.stringify(model.requests[1]), /禁止用 Write 覆盖需求原文/,
+      "模型必须真实收到门禁说明，不能只靠提示词约定");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("逐段比对:没有意见指向的段落被改就整轮拒收", () => {
   const before = "# 用户需求\n\n登录后记住账号。\n\n密码错误三次锁定十分钟。\n\n支持手机号登录。";
   const notes = [{ anchor: "记住账号", line: 3 }];
@@ -219,11 +346,35 @@ test("逐段比对:没有意见指向的段落被改就整轮拒收", () => {
 
 test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字不动", async () => {
   const model = new ScriptedModelServer([{
-    text: "===RECEIPTS===\n[{\"annotation_id\":\"__NOTE__\",\"outcome\":\"fixed\",\"summary\":\"补了时长\"}]\n"
-      + "===REQUIREMENT===\n# 用户需求\n\n登录后记住账号,30 天内免登录。\n\n密码错误三次锁定 10 分钟。\n===END_REQUIREMENT===",
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [
+        { oldText: "登录后记住账号。", newText: "登录后记住账号,30 天内免登录。" },
+        { oldText: "密码错误三次锁定十分钟。", newText: "密码错误三次锁定 10 分钟。" },
+      ],
+    } },
   }, {
-    text: "===RECEIPTS===\n[{\"annotation_id\":\"__NOTE__\",\"outcome\":\"fixed\",\"summary\":\"补了时长\"}]\n"
-      + "===REQUIREMENT===\n# 用户需求\n\n登录后记住账号,30 天内免登录。\n\n密码错误三次锁定十分钟。\n===END_REQUIREMENT===",
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了时长"}]',
+    } },
+  }, {
+    text: "已完成。",
+  }, {
+    tool: { name: "edit", input: {
+      path: "requirement.md",
+      edits: [{
+        oldText: "登录后记住账号。",
+        newText: "登录后记住账号,30 天内免登录。",
+      }],
+    } },
+  }, {
+    tool: { name: "write", input: {
+      path: "receipts.json",
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了时长"}]',
+    } },
+  }, {
+    text: "已完成。",
   }], "scripted-v1", { linear: true });
   await model.start();
   try {
@@ -243,7 +394,11 @@ test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字
       note: "写明记住多久", kind: "doc",
     });
     for (const scene of model.script) {
-      scene.text = scene.text!.replace("__NOTE__", note.id);
+      if (scene.text) scene.text = scene.text.replace("__NOTE__", note.id);
+      const content = scene.tool?.input.content;
+      if (typeof content === "string") {
+        scene.tool!.input.content = content.replace("__NOTE__", note.id);
+      }
     }
     // 第 1 幕:回执合格,但顺手把锁定时长那段也润色了 → 拒。
     await assert.rejects(

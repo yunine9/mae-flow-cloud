@@ -85,6 +85,13 @@ export function RequirementGraph({
       </div>
       <div className="requirement-split-label">
         <span>{generated ? `已拆分为 ${generated} 个子任务` : "确认方案后按交付单元拆分子任务"}</span>
+        {/* 从直接开发转过来的单子:说清是谁、在哪个阶段、为什么提议拆分,
+            人才知道这张确认卡从哪来。 */}
+        {task.split_escalation && <small className="requirement-split-escalation"
+          title={task.split_escalation.reason}>
+          由 Agent{task.split_escalation.phase
+            ? `在「${task.split_escalation.phase}」` : ""}提议拆分：{
+            task.split_escalation.reason}</small>}
       </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>

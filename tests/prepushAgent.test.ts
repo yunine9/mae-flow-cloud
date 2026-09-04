@@ -9,6 +9,8 @@ import {
   prePushSecurityDecision,
   verifyPrePushEvidence,
   type PrePushAgentReport,
+  isPlatformWorkPath,
+  prePushEvidenceFacts,
 } from "../src/prepushAgent.ts";
 
 test("Build-Fix 提交范围自检只在文件多或疑似产物时提示，不做硬拦截", () => {
@@ -50,6 +52,16 @@ test("prepush 使命明确 Agent 平台目录只读且不得提交", () => {
     round: 1, requirement: "修复问题", branch: "feature", baseline: "master",
   });
   assert.match(mission, /\.claude.*\.cac.*只读使用.*禁止修改.*提交/s);
+});
+
+test("prepush 不会为了当前构建现场诱导 Agent 修改业务仓 ignore 规则", () => {
+  const mission = prePushMission({
+    taskId: "T-build-residue", workspace: "/tmp/repo", sha: "d".repeat(40),
+    round: 1, requirement: "修复问题", branch: "feature", baseline: "master",
+  });
+  assert.match(mission, /不要仅为隐藏本轮编译产物修改业务仓 \.gitignore/);
+  assert.match(mission, /build\/、test\/.*宽目录整体忽略/);
+  assert.match(mission, /只有需求明确包含仓库忽略规则治理时.*\.gitignore.*交付内容/s);
 });
 
 test("prepush 修复继承用户确认的交付范围，不把拒绝文件带回来", () => {
@@ -136,7 +148,7 @@ test("prepush parser: 拒绝畸形和自相矛盾的通过结论", () => {
   })), undefined);
 });
 
-test("prepush evidence: 编译和 UT 必须在最后一次修改后真实成功", () => {
+test("prepush evidence: 只认真跑过且成功;顺序只出事实不裁决", () => {
   const events = [
     event(1, "tool_requested", {
       call_id: "edit", name: "Edit", input: { path: "src/a.ts" },
@@ -158,18 +170,34 @@ test("prepush evidence: 编译和 UT 必须在最后一次修改后真实成功"
     }),
   ];
   assert.equal(verifyPrePushEvidence(events, PASSED), "");
+  assert.deepEqual(prePushEvidenceFacts(events, PASSED),
+    { changed_after_run: [] });
 
+  // 2026-09-03 用户拍板:编译之后又改了代码,不再判失效——真裁判是绑 SHA
+  // 的流水线;但事实要写清给人看:改了哪些会进交付的文件。
   const modifiedAfterCompile = [
     ...events.slice(1, 3),
     event(6, "tool_requested", {
       call_id: "late-edit", name: "Write", input: { path: "src/a.ts" },
     }),
     ...events.slice(3).map((row) => ({ ...row, eventId: row.eventId + 4 })),
+    event(11, "tool_requested", {
+      call_id: "later", name: "Edit", input: { file_path: "src/b.ts" },
+    }),
+    event(12, "tool_requested", {
+      call_id: "notes", name: "Edit",
+      input: { path: "/work/repo/.mae-flow-work/build-notes.md" },
+    }),
   ];
-  assert.match(
-    verifyPrePushEvidence(modifiedAfterCompile, PASSED),
-    /mvn -q -DskipTests package/,
-  );
+  assert.equal(verifyPrePushEvidence(modifiedAfterCompile, PASSED), "",
+    "顺序不再是硬约束");
+  assert.deepEqual(prePushEvidenceFacts(modifiedAfterCompile, PASSED),
+    { changed_after_run: ["src/a.ts", "src/b.ts"] },
+    "编译成功(事件 3)之后改的 a.ts、UT 之后改的 b.ts 都列;平台笔记不列");
+  assert.equal(isPlatformWorkPath(".mae-flow-work/bash-logs/1.log"), true);
+  assert.equal(isPlatformWorkPath("src/.mae-flow-workshop/a.ts"), false,
+    "只认 .mae-flow-work 目录本身,不吞名字相近的业务目录");
+  assert.equal(isPlatformWorkPath("src/main/App.java"), false);
 });
 
 test("prepush evidence: 失败、伪造或不匹配的 Bash 结果不能充当证据", () => {
@@ -421,7 +449,7 @@ test("prepush evidence: 实发命令带 cd 前缀和退出码后缀时,上报的
     "包裹在 cd/重定向/echo 里的真实执行必须被认成证据");
 });
 
-test("prepush evidence: 跑过但只在改动之前——措辞要和'压根没跑'分开", () => {
+test("prepush evidence: 只把相同工作区内容封装成 commit 不作废已经通过的验证", () => {
   const events = [
     event(1, "tool_requested", {
       call_id: "compile", name: "Bash",
@@ -432,17 +460,15 @@ test("prepush evidence: 跑过但只在改动之前——措辞要和'压根没�
       call_id: "ut", name: "Bash", input: { command: `cd /x && ${PASSED.unit_test.command}` },
     }),
     event(4, "tool_finished", { call_id: "ut", name: "Bash", is_error: false }),
-    // 两条都跑完之后才提交:证据全部作废,但这不是"没跑过"。
+    // 两条都跑完之后才提交:commit 只封装当前工作区内容，不应逼 Agent
+    // 对完全相同的代码再跑一遍十几分钟全量 UT。
     event(5, "tool_requested", {
       call_id: "commit", name: "Bash",
       input: { command: 'git -c user.name=a commit -m "fix"' },
     }),
     event(6, "tool_finished", { call_id: "commit", name: "Bash", is_error: false }),
   ];
-  const error = verifyPrePushEvidence(events, PASSED);
-  assert.match(error, /只在最后一次代码修改\/提交之前成功过/);
-  assert.doesNotMatch(error, /没有在最后一次代码修改后真实成功执行/,
-    "跑过但太早,不能用和'压根没跑'一样的措辞——会被当成作弊");
+  assert.equal(verifyPrePushEvidence(events, PASSED), "");
 });
 
 test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得住", () => {
@@ -453,7 +479,7 @@ test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得�
     event(2, "tool_finished", { call_id: "ls", name: "Bash", is_error: false }),
   ];
   const error = verifyPrePushEvidence(events, PASSED);
-  assert.match(error, /没有在最后一次代码修改后真实成功执行/);
+  assert.match(error, /没有在本会话真实成功执行/);
   assert.match(error, /mvn -q -DskipTests package/);
   assert.match(error, /mvn -q test/);
   // 空命令不能因为"空串是任何串的子串"而白捡一张通行证。
@@ -461,5 +487,5 @@ test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得�
     verifyPrePushEvidence(events, {
       ...PASSED, compile: { command: "   ", status: "passed" },
     }),
-    /没有在最后一次代码修改后真实成功执行/);
+    /没有在本会话真实成功执行/);
 });

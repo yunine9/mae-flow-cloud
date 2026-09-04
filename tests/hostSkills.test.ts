@@ -202,6 +202,44 @@ test("任务资源清单可取消团队 Skill，空数组不会退回全量装�
   assert.deepEqual(empty.paths, []);
 });
 
+test("新跨仓子任务从父快照复制时仍按本仓技术画像筛选 Skill", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-child-scope-"));
+  const sourceRoot = join(root, "skills");
+  const parentWorkspace = join(root, "parent");
+  const childWorkspace = join(root, "child");
+  mkdirSync(parentWorkspace, { recursive: true });
+  mkdirSync(childWorkspace, { recursive: true });
+  writeSkill(sourceRoot, "java-autout", "JAVA-UT");
+  const cppSkill = writeSkill(sourceRoot, "cpp-autout", "CPP-UT");
+  writeFileSync(cppSkill, readFileSync(cppSkill, "utf-8")
+    .replace("technologies: [java]", "technologies: [cpp]"));
+
+  const parentRoot = join(parentWorkspace, "host-skill-snapshot");
+  const parent = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: parentWorkspace,
+    snapshotRoot: parentRoot,
+    context: {
+      repositories: [],
+      technologies: ["java", "cpp"],
+      businessModuleIds: [],
+    },
+  });
+  assert.deepEqual(parent.names.sort(), ["cpp-autout", "java-autout"]);
+
+  const child = materializeHostSkills({
+    sourceRoot: parentRoot,
+    workspaceRoot: childWorkspace,
+    snapshotRoot: join(childWorkspace, "host-skill-snapshot"),
+    context: {
+      repositories: [],
+      technologies: ["cpp"],
+      businessModuleIds: [],
+    },
+  });
+  assert.deepEqual(child.names, ["cpp-autout"]);
+});
+
 test("宿主 Skill 正文和附件从任务内只读快照读取,不暴露部署源路径", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-projection-"));
   const workspace = join(root, "repo");

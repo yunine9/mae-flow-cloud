@@ -14,7 +14,9 @@ if SCRIPTS not in sys.path:
 from mae_flow_core.delivery.evidence import DeliveryEvidenceRules  # noqa: E402
 
 
-def rules(committed=(), dirty=(), message="[REQ-1][feat]archive domain truth"):
+def rules(
+        committed=(), dirty=(), message="[REQ-1][feat]archive domain truth",
+        fingerprints=None):
     def argv(arguments):
         if arguments[:3] == ["git", "cat-file", "-t"]:
             return "commit"
@@ -28,6 +30,7 @@ def rules(committed=(), dirty=(), message="[REQ-1][feat]archive domain truth"):
         argv_output=argv,
         shell_output=lambda command: message if "pretty=%s" in command else "",
         dirty_paths=lambda: list(dirty),
+        path_fingerprint=lambda path: (fingerprints or {}).get(path, "missing"),
     ))
 
 
@@ -83,6 +86,39 @@ class DeliveryCommitCycleTests(unittest.TestCase):
         self.assertTrue(clean.passed, clean.reason)
         self.assertFalse(leaked.passed)
         self.assertIn("新增未提交", leaked.reason)
+
+    def test_unchanged_archive_allows_only_the_fingerprinted_build_snapshot(self):
+        state = self.state()
+        state["domain_archive"] = {
+            "status": "applied", "result": "unchanged",
+            "applied_paths": [],
+        }
+        state["delivery_manifest"] = {
+            "files": [], "confirmed": True, "no_changes": True,
+            "unchanged_initial_dirty": [],
+            "unchanged_build_residue": {
+                "build/main.o": "object-v1",
+            },
+        }
+
+        same = rules(
+            dirty=("build/main.o",),
+            fingerprints={"build/main.o": "object-v1"},
+        ).delivery_manifest_committed({}, state)
+        changed = rules(
+            dirty=("build/main.o",),
+            fingerprints={"build/main.o": "object-v2"},
+        ).delivery_manifest_committed({}, state)
+        mixed = rules(
+            dirty=("build/main.o", "src/leak.cpp"),
+            fingerprints={"build/main.o": "object-v1"},
+        ).delivery_manifest_committed({}, state)
+
+        self.assertTrue(same.passed, same.reason)
+        self.assertFalse(changed.passed)
+        self.assertIn("build/main.o", changed.reason)
+        self.assertFalse(mixed.passed)
+        self.assertIn("src/leak.cpp", mixed.reason)
 
 if __name__ == "__main__":
     unittest.main()

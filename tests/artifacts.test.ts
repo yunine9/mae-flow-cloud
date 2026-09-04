@@ -36,6 +36,7 @@ import {
   listArtifactsAsync,
   readArtifact,
   readArtifactAsync,
+  readArtifactFileDiffAsync,
   resolveArtifactRoot,
   type ArtifactMeta,
 } from "../src/artifacts.ts";
@@ -184,6 +185,52 @@ test("异步工作台读侧与原有差异快照语义一致", async () => {
   const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
   assert.match(String(snapshot?.content), /异步路径修改/);
   assert.match(String(snapshot?.content), /异步路径未跟踪/);
+});
+
+test("大文件不会挤掉完整变更目录，后面的源码可按文件读取", async () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  mkdirSync(join(cwd, "docs"), { recursive: true });
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  const original = Array.from({ length: 45_000 }, (_, index) =>
+    `旧文档第 ${index} 行`).join("\n");
+  writeFileSync(join(cwd, "docs", "01-大文档.md"), `${original}\n`);
+  writeFileSync(join(cwd, "src", "z-last.ts"),
+    "export const visibleAfterLargeDoc = false;\n");
+  run("add", "docs/01-大文档.md", "src/z-last.ts");
+  run("commit", "--quiet", "-m", "large fixture");
+
+  const changed = Array.from({ length: 45_000 }, (_, index) =>
+    `新文档第 ${index} 行`).join("\n");
+  writeFileSync(join(cwd, "docs", "01-大文档.md"), `${changed}\n`);
+  writeFileSync(join(cwd, "src", "z-last.ts"),
+    "export const visibleAfterLargeDoc = true;\n");
+
+  const items = await listArtifactsAsync(cwd);
+  const meta = items.find((item) => item.name === DIFF_NAME);
+  assert.deepEqual(meta?.change_files?.map((file) => file.path), [
+    "docs/01-大文档.md",
+    "src/z-last.ts",
+  ]);
+  assert.equal(meta?.file_count, 2);
+
+  const oldAggregate = await readArtifactAsync(cwd, DIFF_NAME);
+  assert.equal(oldAggregate?.truncated, true,
+    "夹具必须真实打到旧聚合正文的 512 KB 上限");
+  assert.doesNotMatch(String(oldAggregate?.content), /visibleAfterLargeDoc/,
+    "证明旧实现下后面的源码确实会被大文档挤掉");
+
+  const chinese = await readArtifactFileDiffAsync(cwd, "docs/01-大文档.md");
+  assert.equal(chinese?.path, "docs/01-大文档.md");
+  assert.match(String(chinese?.content),
+    /diff --git a\/docs\/01-大文档\.md b\/docs\/01-大文档\.md/,
+    "中文路径必须用真实 UTF-8 名字读取，不能保留 Git 八进制转义");
+  const source = await readArtifactFileDiffAsync(cwd, "src/z-last.ts");
+  assert.match(String(source?.content), /visibleAfterLargeDoc = true/);
+  assert.equal(source?.path, "src/z-last.ts");
+  assert.equal(await readArtifactFileDiffAsync(cwd, "../secret"), undefined,
+    "清单外路径不能进入 Git 读取参数");
 });
 
 test("任务级流水线证据缺口无需代码现场也能在工作台列出并读取", async () => {
@@ -550,11 +597,30 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     mkdirSync(ticket, { recursive: true });
     writeFileSync(join(ticket, ".ticket-id"), "REQ7");
     writeFileSync(join(ticket, "spec.md"), "# 规格\n\n决策与证据同屏。\n");
+    const repository = join(workspace, "origin");
+    execFileSync("git", ["-C", repository, "init", "--quiet", "-b", "master"]);
+    execFileSync("git", ["-C", repository, "config", "user.email", "bot@test"]);
+    execFileSync("git", ["-C", repository, "config", "user.name", "bot"]);
+    writeFileSync(join(repository, "feature.ts"), "export const routeValue = 1;\n");
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync("git", ["-C", repository, "commit", "--quiet", "-m", "init"]);
+    writeFileSync(join(repository, "feature.ts"), "export const routeValue = 2;\n");
     const listed = await fetch(`${base}/tasks/${created.id}/artifacts`)
       .then((response) => readJson(response)) as ArtifactMeta[];
     assert.deepEqual(new Set(names(listed)), new Set([
-      "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT,
+      "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT, DIFF_NAME,
     ]));
+    const diffMeta = listed.find((item) => item.name === DIFF_NAME);
+    assert.deepEqual(diffMeta?.change_files?.map((file) => file.path),
+      ["feature.ts"]);
+    const fileDiff = await fetch(`${base}/tasks/${created.id}/artifacts/file-diff?path=${
+      encodeURIComponent("feature.ts")}`);
+    assert.equal(fileDiff.status, 200);
+    assert.match(String((await readJson(fileDiff)).content), /routeValue = 2/);
+    const escapedDiff = await fetch(
+      `${base}/tasks/${created.id}/artifacts/file-diff?path=${
+        encodeURIComponent("../secret")}`);
+    assert.equal(escapedDiff.status, 404);
 
     const archiveResponse = await fetch(
       `${base}/tasks/${created.id}/artifacts/archive`);

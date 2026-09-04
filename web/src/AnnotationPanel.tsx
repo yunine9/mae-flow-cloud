@@ -49,6 +49,7 @@ const ROUTE_LABEL: Record<AnnotationRoute, string> = {
   agent: "Agent 处理",
   owner_reply: "责任人答复",
   owner_decision: "决策后处理",
+  memory: "记忆",
 };
 
 export interface AdminOverrideAccess {
@@ -152,12 +153,18 @@ export function annotationCategory(
     taskStatus: TaskStatus;
     reviewReady: boolean;
     canOverride: boolean;
+    canRouteOthers?: boolean;
     reviewAnnotationIds: readonly string[];
   },
 ): Exclude<ReviewFilter, "all"> {
   if (item.status === "verified" || item.status === "dropped") return "closed";
   const isAuthor = item.author === context.viewerUsername;
-  if (item.status === "draft") return isAuthor ? "mine" : "agent";
+  if (item.status === "draft") {
+    const routable = context.canRouteOthers
+      && !["completed", "canceled"].includes(context.taskStatus)
+      && (routeOf(item) === "agent" || item.assignee === context.viewerUsername);
+    return isAuthor || routable ? "mine" : "agent";
+  }
   if (isAuthor && authorVerdictReady(item, context.taskStatus, context.reviewReady)) {
     return "mine";
   }
@@ -182,6 +189,10 @@ function progressOf(
   text: string;
   hint?: string;
 } {
+  if (routeOf(item) === "memory") {
+    return { tone: "done", text: "已记为记忆",
+      hint: "没有发给任何人。以后有人改到这段附近时，平台会把它提醒给 Agent。" };
+  }
   if (item.status === "verified") {
     const proxyVerifier = item.verified_by && item.verified_by !== item.author
       ? item.verified_by : undefined;
@@ -246,6 +257,7 @@ function progressOf(
 }
 
 function deliveryText(item: Annotation, archival = false): string {
+  if (routeOf(item) === "memory") return "已记为记忆，不发给任何人";
   if (item.status === "verified") {
     return item.verified_by && item.verified_by !== item.author
       ? `管理员 ${item.verified_by} 代确认`
@@ -268,6 +280,7 @@ export function AnnotationPanel({
   checks,
   reply,
   canOperate,
+  canRouteOthers = false,
   canOverride = false,
   taskStatus,
   reviewReady = false,
@@ -289,6 +302,8 @@ export function AnnotationPanel({
   /** 旧任务的总体回复兼容展示；新检视以每条 response 为权威。 */
   reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
+  /** 任务责任人可以原样转交他人的草稿；不因此获得编辑或闭环权。 */
+  canRouteOthers?: boolean;
   /** 管理员应急旁路:作者不在场时可代删/代确认,服务端会记录操作人。 */
   canOverride?: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
@@ -320,6 +335,10 @@ export function AnnotationPanel({
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
     item.status === "draft" && item.author === viewerUsername);
+  const routedDrafts = items.filter((item) =>
+    item.status === "draft" && item.author !== viewerUsername
+    && canRouteOthers && !["completed", "canceled"].includes(taskStatus)
+    && (routeOf(item) === "agent" || item.assignee === viewerUsername));
   const overrideReviewCount = items.filter((item) => adminOverrideAccess({
     item,
     viewerUsername,
@@ -348,7 +367,8 @@ export function AnnotationPanel({
   const authorActionableCount = items.filter(authorActionable).length;
   const overrideActionableCount = items.filter((item) =>
     !authorActionable(item) && overrideActionable(item)).length;
-  const actionableReviewCount = authorActionableCount + overrideActionableCount;
+  const actionableReviewCount = authorActionableCount + overrideActionableCount
+    + routedDrafts.length;
   const currentReviewIds = new Set(reviewAnnotationIds);
   const missingReceiptCount = reviewReady ? items.filter((item) =>
     currentReviewIds.has(item.id)
@@ -360,9 +380,9 @@ export function AnnotationPanel({
   const orderedItems = items.map((item, index) => ({ item, index }))
     .sort((left, right) => {
       const leftActionable = authorActionable(left.item)
-        || overrideActionable(left.item);
+        || overrideActionable(left.item) || routedDrafts.includes(left.item);
       const rightActionable = authorActionable(right.item)
-        || overrideActionable(right.item);
+        || overrideActionable(right.item) || routedDrafts.includes(right.item);
       if (leftActionable !== rightActionable) return rightActionable ? 1 : -1;
       const leftCurrent = currentReviewIds.has(left.item.id);
       const rightCurrent = currentReviewIds.has(right.item.id);
@@ -371,7 +391,8 @@ export function AnnotationPanel({
     }).map(({ item }) => item);
   const visibleItems = filter === "all" ? orderedItems : orderedItems.filter(
     (item) => annotationCategory(item, {
-      viewerUsername, taskStatus, reviewReady, canOverride, reviewAnnotationIds,
+      viewerUsername, taskStatus, reviewReady, canOverride, canRouteOthers,
+      reviewAnnotationIds,
     }) === filter);
   // 默认展开。"只在有草稿/待办时才展开"是它还嵌在侧栏里时的省地方策略;
   // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
@@ -489,6 +510,13 @@ export function AnnotationPanel({
     }
   }
 
+  async function routeDraftToAgent(item: Annotation) {
+    await mutateAnnotation(item.id, async () => {
+      const result = await sendAnnotations(taskId, [item.id]);
+      return { error: result.error };
+    });
+  }
+
   return (
     <details className="annot-panel" aria-label="批注" open={open}
              onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -542,7 +570,8 @@ export function AnnotationPanel({
       )}
       {actionableReviewCount > 0 && (
         <div className="annot-review-queue" role="heading" aria-level={3}>
-          <div><strong>待我确认</strong><span>先逐条核对，再做整体交付决定</span></div>
+          <div><strong>{routedDrafts.length ? "待我处理" : "待我确认"}</strong>
+            <span>先逐条核对，再做整体交付决定</span></div>
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
@@ -642,15 +671,17 @@ export function AnnotationPanel({
                   {/* 需求原文是虚拟产物,内部名 __task_requirement__ 不该露给人
                       (2026-09-02 演示截图逮住)。 */}
                   <code>{item.file === TASK_REQUIREMENT_ARTIFACT
-                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}</code>
+                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
+                      item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
                 </button>
                 {/* 锚定原文接在位置后面收一行:它是"这条批注指着哪儿"的补充,
                     不是内容本身。原来它单占左栏一整块,把批注正文和 Agent
                     回应挤成两条窄柱(用户实测:760px 抽屉里两栏只剩 304 和
                     357)。整段仍在 title 里,点位置也能直接回到那一行。 */}
-                {item.anchor && <blockquote className="annot-anchor"
-                                            title={item.anchor}>
-                  {item.anchor}
+                {(item.quote || item.anchor) && <blockquote
+                  className={`annot-anchor${item.quote ? " has-quote" : ""}`}
+                  title={item.quote ?? item.anchor}>
+                  {item.quote ?? item.anchor}
                 </blockquote>}
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
@@ -702,7 +733,11 @@ export function AnnotationPanel({
                 // 的块形和标题,明说这是检视意见原文,两边才对得起来。
                 <div className="annot-note">
                   <strong>检视意见原文</strong>
-                  <p>{item.note}</p>
+                  <p>{item.note || "（只记了原文，没另写一句）"}</p>
+                  {/* 追问留档:作者已经补充过什么问题,人和 Agent 看到的是同一份历史。 */}
+                  {item.clarifications?.length ? <small className="annot-clarified">
+                    已答复 Agent 的追问：{item.clarifications.at(-1)!.question}
+                  </small> : null}
                 </div>
               )}
               {item.response && (
@@ -728,6 +763,17 @@ export function AnnotationPanel({
                   <small>{item.owner_reply.author} · {relativeTime(item.owner_reply.replied_at)}</small>
                 </div>
               )}
+              {item.status === "draft" && !isAuthor && canRouteOthers
+                && routeOf(item) === "agent" && (
+                <div className="annot-owner-reply-action">
+                  <button type="button" className="primary"
+                    disabled={!canSend || !!mutationBusy}
+                    title={canSend ? undefined : "当前没有可接收意见的执行会话"}
+                    onClick={() => void routeDraftToAgent(item)}>
+                    {mutationBusy === item.id ? "转交中…" : "原样交给 Agent"}
+                  </button>
+                </div>
+              )}
               {item.status === "sent" && routeOf(item) === "owner_decision"
                 && item.owner_reply && item.sent_via === "owner_pending"
                 && item.assignee === viewerUsername && (
@@ -741,7 +787,10 @@ export function AnnotationPanel({
                   </button>
                 </div>
               )}
-              {item.status === "sent" && routeOf(item) !== "agent"
+              {(item.status === "sent" || (item.status === "draft"
+                  && canRouteOthers
+                  && !["completed", "canceled"].includes(taskStatus)))
+                && routeOf(item) !== "agent"
                 && !item.owner_reply && item.assignee === viewerUsername && (
                 replyingId === item.id ? (
                   <div className="annot-owner-reply-editor">
@@ -776,11 +825,17 @@ export function AnnotationPanel({
               <div className="annot-item-foot">
                 <small>
                   {deliveryText(item, archival)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
+                  {item.sent_by && item.sent_by !== item.author
+                    && ` · 由 ${item.sent_by} 原样转交`}
                   {item.edited_at && " · 已编辑"}
-                  {check && check.state !== "hit"
+                  {/* 记忆条目是快照,不参与重锚定:原文以后变了也不追。 */}
+                  {check && check.state !== "hit" && routeOf(item) !== "memory"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
-                {(isAuthor || overrideAccess.canDrop) && !editing && (
+                {/* 记忆没有编辑面:改就是再圈一次;撤回在「本任务知识」里。
+                    这里的编辑/删除只改批注台账,记忆不会跟着变,露出来就是骗人。 */}
+                {routeOf(item) !== "memory"
+                  && (isAuthor || overrideAccess.canDrop) && !editing && (
                   <span className="annot-owner-actions">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}

@@ -107,3 +107,34 @@ test("异步安全 Git 等待子进程时不阻塞事件循环", async () => {
   assert.equal(timerFired, true,
     "Git 子进程运行期间 Node 定时器和 HTTP 回调必须仍可执行");
 });
+
+test("安全 Git 仅通过显式 commitIdentity 保留重建提交的作者与时间", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "mfc-safe-git-identity-"));
+  git(cwd, "init", "--quiet", "-b", "master");
+  git(cwd, "config", "user.email", "bot@test");
+  git(cwd, "config", "user.name", "bot");
+  writeFileSync(join(cwd, "a.txt"), "content\n");
+  git(cwd, "add", "a.txt");
+  git(cwd, "commit", "--quiet", "-m", "before");
+  const tree = git(cwd, "rev-parse", "HEAD^{tree}");
+  const parent = git(cwd, "rev-parse", "HEAD");
+  const rebuilt = runSafeWorktreeGit(cwd, [
+    "commit-tree", tree, "-p", parent, "-m", "[REQ][fix]修正标题",
+  ], {
+    env: { GIT_AUTHOR_NAME: "不能从普通环境注入" },
+    commitIdentity: {
+      authorName: "Original Author",
+      authorEmail: "author@example.test",
+      authorDate: "2026-09-01T09:10:11+08:00",
+      committerName: "Original Committer",
+      committerEmail: "committer@example.test",
+      committerDate: "2026-09-01T09:12:13+08:00",
+    },
+  });
+  assert.equal(rebuilt.status, 0, String(rebuilt.stderr));
+  const facts = git(cwd, "show", "-s", "--format=%an|%ae|%aI|%cn|%ce|%cI",
+    String(rebuilt.stdout).trim());
+  assert.equal(facts,
+    "Original Author|author@example.test|2026-09-01T09:10:11+08:00|"
+    + "Original Committer|committer@example.test|2026-09-01T09:12:13+08:00");
+});

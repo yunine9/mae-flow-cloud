@@ -17,6 +17,8 @@ export type TaskStatus =
   | "canceled"
   | "failed";
 
+export type DeliveryCompileAction = "rerun" | "skip";
+
 export const STATUS_TEXT: Record<TaskStatus, string> = {
   queued: "排队中",
   running: "进行中",
@@ -844,6 +846,8 @@ export interface TaskSummary {
   requirement: string;
   requirement_analysis_confirmation_required?: boolean;
   requirement_analysis_confirmed_at?: string;
+  /** 本单落下的记忆条数;明细走 listTaskMemories。 */
+  memories_recorded?: number;
   requirement_revision?: {
     id: string;
     state: "running" | "failed";
@@ -957,8 +961,15 @@ export interface TaskSummary {
   blocked_by?: string[];
   /** 本任务作为交付单元的负责文件面;缺席=整仓无边界。 */
   delivery_scope?: { name: string; paths: string[] };
-  /** 单仓下单时显式要求先分析拆分。 */
+  /** 先分析拆分:由 Agent 在开发中提议(propose_split)置上,或原位重跑沿用。 */
   requirement_analysis_requested?: boolean;
+  /** Agent 提议拆分留下的事实:为什么、建议怎么切、在哪个阶段。 */
+  split_escalation?: {
+    at: string; reason: string; suggested_units?: string[]; phase?: string;
+    /** pending=卡上等人;split=已转身;declined=人否决,按一个任务干完。 */
+    decision: "pending" | "split" | "declined";
+    decided_by?: string; decided_at?: string;
+  };
   cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
     waiting_id: string;
@@ -1042,6 +1053,8 @@ export interface TaskSummary {
     waiting_id: string;
     head: string;
     baseline?: string;
+    confirmation_mode?: "human" | "policy";
+    confirmation_reason?: string;
     updated_at: string;
   };
   /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
@@ -2204,8 +2217,6 @@ export async function createTask(
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
     requirementBundle?: { name: string; contentBase64: string };
-    /** 单仓大需求:先走分析拆分(交付单元拆分),多仓天然分析。 */
-    requirementAnalysis?: boolean;
   },
   // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
   // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
@@ -2245,7 +2256,6 @@ export async function createTask(
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       knowledge_preview_digest: extras?.knowledgePreviewDigest,
       repository_profiles: extras?.repositoryProfiles,
-      requirement_analysis: extras?.requirementAnalysis || undefined,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -2301,6 +2311,8 @@ export async function decide(
   deliveryPaths?: string[],
   /** 当前卡的稳定身份；用于把成功请求的网络重放识别为幂等成功。 */
   waitingId?: string,
+  /** 调整最终文件后，是重新编译还是把新提交直接交给权威流水线。 */
+  deliveryCompileAction?: DeliveryCompileAction,
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -2316,6 +2328,7 @@ export async function decide(
       repository_assignees: repositoryAssignees,
       repository_tickets: repositoryTickets,
       delivery_paths: deliveryPaths,
+      delivery_compile_action: deliveryCompileAction,
     }),
   });
   if (response.status === 409) {
@@ -2594,16 +2607,22 @@ export interface Annotation {
   file: string;
   line: number;
   anchor: string;
+  /** 划选一块时的整块原文与末行;定位仍靠 anchor。 */
+  quote?: string;
+  line_end?: number;
   note: string;
   edited_at?: string;
   kind: "doc" | "code";
-  /** 缺省值兼容旧任务：一律按交给 Agent 处理。 */
-  route?: "agent" | "owner_reply" | "owner_decision";
+  /** 缺省值兼容旧任务：一律按交给 Agent 处理。memory = 记为记忆:不发给
+   * 任何人,圈选即闭环。 */
+  route?: "agent" | "owner_reply" | "owner_decision" | "memory";
   assignee?: string;
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
     | "queued_decision" | "owner_pending";
+  /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
+  sent_by?: string;
   response?: {
     revision: number;
     outcome: "fixed" | "not_fixed" | "needs_clarification";
@@ -2622,6 +2641,8 @@ export interface Annotation {
   verified_by?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
+  /** Agent 追问过什么;作者补充说明重提后留档,下一轮给模型看。 */
+  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
 }
 
 export interface AnchorCheck {
@@ -2658,6 +2679,119 @@ export async function addAnnotation(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return { annotation: await response.json() };
+}
+
+/* ---------------- 任务记忆 ---------------- */
+
+/** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
+export interface MemoryRecord {
+  id: string;
+  source: "annotation" | "prepush_fix" | "user_note";
+  judged_by: "human" | "pipeline";
+  scope: "one_off" | "local" | "general";
+  repo: string;
+  paths: string[];
+  line?: number;
+  phase?: string;
+  task: string;
+  evidence: string;
+  author?: string;
+  trigger: string;
+  quote?: string;
+  problem?: string;
+  conclusion: string;
+  supersedes?: string;
+  at: string;
+  file: string;
+  withdrawn?: boolean;
+  superseded_by?: string;
+  /** trigger/scope 是模板给的、模型起草的,还是起草失败保留模板。 */
+  draft?: "template" | "model" | "failed";
+  revision?: number;
+  archived?: boolean;
+  archive_reason?: string;
+}
+
+/** 效能页「任务记忆」只读页签(服务端 src/taskMemory.ts 的镜像)。 */
+export interface MemoryRepoInsight {
+  repo: string; total: number; active: number; archived: number; withdrawn: number;
+  one_off: number; pushes: number; hits: number; reworks: number;
+}
+export interface MemoryInsightRow {
+  id: string; repo: string; trigger: string; conclusion: string;
+  source: MemoryRecord["source"]; judged_by: MemoryRecord["judged_by"];
+  scope: MemoryRecord["scope"]; draft: "template" | "model" | "failed";
+  at: string; task: string; paths: string[]; line?: number;
+  weight: number; pushes: number; hits: number; reworks: number; last_used?: string;
+  archived?: boolean; archive_reason?: string; withdrawn?: boolean; superseded_by?: string;
+}
+export interface MemoryInsights {
+  generated_at: string;
+  drafting: number;
+  sidecar: "ready" | "unavailable" | "absent";
+  repos: MemoryRepoInsight[];
+  memories: MemoryInsightRow[];
+}
+export async function getMemoryInsights(): Promise<MemoryInsights> {
+  const response = await fetch("/memory-insights");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+export async function readMemoryInsight(
+  id: string,
+): Promise<{ record: MemoryRecord; content: string } | undefined> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(id)}`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 这单用到的记忆:宿主三个时刻的推送 + Agent 自己的检索/展开。 */
+export interface MemoryUsageRow {
+  /** 首改目录时推的是目录摘要而不是逐条。 */
+  digest?: boolean;
+  ts: string;
+  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  ids: string[];
+  query?: string;
+  phase?: string;
+  dir?: string;
+}
+
+export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRow[]> {
+  const response = await fetch(`/tasks/${taskId}/memories/usage`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+export async function listTaskMemories(taskId: string): Promise<MemoryRecord[]> {
+  const response = await fetch(`/tasks/${taskId}/memories`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+export async function readTaskMemory(
+  taskId: string,
+  memoryId: string,
+): Promise<{ record: MemoryRecord; content: string } | undefined> {
+  const response = await fetch(
+    `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}`);
+  if (!response.ok) return undefined;
+  return response.json();
+}
+
+export async function withdrawTaskMemory(
+  taskId: string,
+  memoryId: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}/withdraw`,
+    { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
 }
 
 export async function dropAnnotation(
@@ -2864,7 +2998,7 @@ export function tailIssueEvents(
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
 export interface TimelineEntry {
   ts: string;
-  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality";
+  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality" | "memory";
   title: string;
   detail?: string;
   tone: "info" | "attention" | "success" | "danger";
@@ -2896,8 +3030,18 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /** 完整变更目录；正文在点开文件时另取，避免大文件吃掉整个响应。 */
+  change_files?: ArtifactChangeFile[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap";
+}
+
+export interface ArtifactChangeFile {
+  path: string;
+  stage: "committed" | "committed_working" | "staged"
+    | "staged_working" | "unstaged" | "untracked";
+  additions: number;
+  deletions: number;
 }
 
 export async function listArtifacts(
@@ -3152,6 +3296,30 @@ export async function readArtifact(
     content: String(body.content ?? ""),
     kind: String(body.kind ?? "doc"),
     branch: body.branch ? String(body.branch) : undefined,
+  };
+}
+
+export async function readArtifactFileDiff(
+  taskId: string,
+  path: string,
+): Promise<{
+  content?: string;
+  branch?: string;
+  truncated?: boolean;
+  unavailable?: string;
+}> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/artifacts/file-diff?path=${
+      encodeURIComponent(path)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return {
+    content: String(body.content ?? ""),
+    branch: body.branch ? String(body.branch) : undefined,
+    truncated: body.truncated === true,
   };
 }
 
