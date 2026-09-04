@@ -80,6 +80,12 @@ class GatePlatform {
   defaultStatus: "running" | "success" | "failed" = "running";
   /** 模拟同一 SHA 已有旧终态、随后重跑仍在进行的真实返回顺序。 */
   historicalStatus?: "success" | "failed";
+  /** 陈灯窗口(#108):>0 时,对"非首查 SHA"的状态查询返回旧 SHA 的
+   * 红灯 run(run 级 sha 标旧值,#106 已透传)——模拟修复重推新提交
+   * 后、新 run 在平台注册前的窗口期。每命中一次自减,归零即视为
+   * "新 run 已注册",后续查询回归正常路径。 */
+  staleRedHitsLeft = 0;
+  private firstStatusSha?: string;
   private mrCount = 0;
   private server: ReturnType<typeof createServer> | undefined;
   baseUrl = "";
@@ -107,6 +113,18 @@ class GatePlatform {
             && request.url?.startsWith("/pipeline/status")) {
           const sha = new URL(request.url, "http://loop")
             .searchParams.get("sha") ?? "";
+          this.firstStatusSha ??= sha;
+          if (this.staleRedHitsLeft > 0 && sha !== this.firstStatusSha) {
+            this.staleRedHitsLeft -= 1;
+            send({
+              runs: [{
+                status: "failed",
+                sha: this.firstStatusSha,
+                log: "BUILD FAILURE: 模块 notify-service 编译失败",
+              }],
+            });
+            return;
+          }
           const run = this.status.get(sha) ?? this.defaultStatus;
           send({
             runs: [{ status: this.historicalStatus ?? "running" }, {
@@ -138,9 +156,10 @@ class GatePlatform {
 const TICKET = "DTS-2026-1002";
 
 /** 走到 mr_green 的最小剧本:确认前六幕 + 确认后的 修复(UT 并入)→自报→
- * 推送→建MR(刻意不跑 report_ut:没有 UT 记录也能建 MR)→逐次申报
- * (declarations 即每次 complete_stage 带的 mrs 清单,可含错报演出)。 */
-function chainScenes(origin: string, declarations: string[][]): Scene[] {
+ * 推送→建MR(刻意不跑 report_ut:没有 UT 记录也能建 MR)→逐次申报。
+ * steps 的元素要么是申报清单(complete_stage 带 mrs,可含错报演出),
+ * 要么是原样插进申报序列的整幕 Scene(如修复轮的重推/重建 MR)。 */
+function chainScenes(origin: string, steps: Array<string[] | Scene>): Scene[] {
   const commit = (message: string) =>
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   return [
@@ -156,9 +175,10 @@ function chainScenes(origin: string, declarations: string[][]): Scene[] {
     { tool: { name: "complete_stage", input: { note: "修复完成(UT 已跑绿)" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
-    ...declarations.map((mrs): Scene => ({
-      tool: { name: "complete_stage", input: { note: "MR 已申报", mrs } },
-    })),
+    ...steps.map((step): Scene =>
+      Array.isArray(step)
+        ? { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: step } } }
+        : step),
     { text: "MR 已建,本回合到此。" },
   ];
 }
@@ -187,20 +207,23 @@ async function stopChain(chain: Chain): Promise<void> {
 }
 
 /** 登记有单会话,等分析闸并确认,把剧本推进到提交MR回合。
- * declarations 回调在拿到 origin 后生成申报演出(仓地址/错报清单)。 */
+ * steps 回调在拿到 origin 后生成申报演出(申报清单或插在申报序列
+ * 里的整幕 Scene)。 */
 async function startChain(options: {
   platformStatus?: "running" | "success" | "failed";
   historicalStatus?: "success" | "failed";
-  declarations?: (origin: string) => string[][];
+  staleRedHits?: number;
+  steps?: (origin: string) => Array<string[] | Scene>;
 }): Promise<Chain> {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-"));
   const origin = bareOrigin(dataDir);
   const platform = new GatePlatform();
   platform.defaultStatus = options.platformStatus ?? "running";
   platform.historicalStatus = options.historicalStatus;
+  platform.staleRedHitsLeft = options.staleRedHits ?? 0;
   await platform.start();
   const model = new ScriptedModelServer(
-    chainScenes(origin, options.declarations?.(origin) ?? []),
+    chainScenes(origin, options.steps?.(origin) ?? []),
     "scripted-v1", { linear: true });
   await model.start();
   // 假小鲁班挂上收口通知:mr_green 全绿收口要点名用户待归档(ADR-0013)。
@@ -384,7 +407,7 @@ test("出口回归(免模型):report_ut 降级为事实上报——只记账不�
 test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待归档", async () => {
   const chain = await startChain({
     platformStatus: "success",
-    declarations: (origin) => [[origin]],
+    steps: (origin) => [[origin]],
   });
   try {
     const done = await until(() => {
@@ -418,7 +441,7 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
 test("MR 验绿门·有红当场打回:fail 带失败项详情与处置指引", async () => {
   const chain = await startChain({
     platformStatus: "failed",
-    declarations: (origin) => [[origin]],
+    steps: (origin) => [[origin]],
   });
   try {
     // 与台账一致的清单申报,但平台流水线是红的:当场打回带失败项。
@@ -444,7 +467,7 @@ test("MR 验绿门·有红当场打回:fail 带失败项详情与处置指引", 
 test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行", async () => {
   const chain = await startChain({
     platformStatus: "running",
-    declarations: (origin) => [[origin]],
+    steps: (origin) => [[origin]],
   });
   try {
     await until(() =>
@@ -481,7 +504,7 @@ test("MR 验绿门·只认最新 run:历史绿/红后最新 running 均不得提
     const chain = await startChain({
       platformStatus: "running",
       historicalStatus,
-      declarations: (origin) => [[origin]],
+      steps: (origin) => [[origin]],
     });
     try {
       await until(() =>
@@ -507,10 +530,68 @@ test("MR 验绿门·只认最新 run:历史绿/红后最新 running 均不得提
   }
 });
 
+test("MR 验绿门·陈灯防御:窗口期旧 SHA 红灯不冤枉重推的申报,受理停等到真绿", async () => {
+  const chain = await startChain({
+    platformStatus: "failed",
+    // 真实事故形态(#108):AI 修复重推新提交(换 SHA)后立即 complete_stage
+    // 重新申报,而平台按 MR 维度返回流水线历史——新 run 注册前的窗口期
+    // 内,对新 SHA 的状态查询拿到的还是旧 SHA 的红灯 run。staleRedHits=1
+    // 演的正是这个窗口:第一次"非首查 SHA"的查询返回旧 SHA 红灯
+    // (run 级 sha 标旧值),其后即视为新 run 已注册。
+    staleRedHits: 1,
+    steps: (origin) => [
+      // 首报:查询 SHA 与 run 归属一致的真红灯,照旧当场打回——修复轮
+      // 由此而来,也守住了"真红灯当场打回"的原行为。
+      [origin],
+      // 修复轮:新提交(换 SHA)→重推→重建 MR(监看器随新提交重挂表)
+      // →立即重申报,正落在窗口期里。
+      { tool: { name: "bash", input: { command:
+        `cd repo/origin && git -c user.name=test -c user.email=t@e`
+          + ` commit -q --allow-empty -m '[${TICKET}][fix] 修复陈灯误伤'` } } },
+      { tool: { name: "push_branch", input: {} } },
+      { tool: { name: "create_mr", input: {} } },
+      // 窗口期重申报:必须按在跑受理停等,不许拿旧红打回清申报账。
+      [origin],
+    ],
+  });
+  try {
+    await until(() =>
+      chain.service.get(chain.id).status === "idle" ? 1 : undefined, "回合收口");
+    // 打回只许发生一次(首报的真红):窗口期重申报被旧红冤枉打回正是
+    // 要防的回归——修复后这里若多出第二条错误回执即说明防御失效。
+    const errors = chain.errorReceipts();
+    assert.equal(errors.length, 1, "只有首报的真红被打回,重申报不得被打回");
+    assert.match(errors[0], /BUILD FAILURE/);
+    // 受理停等:申报账在场、回执「已受理」、台账点名陈灯已拒。
+    const saved = chain.saved();
+    assert.equal(saved.stage, "mr_green", "受理停等,阶段不动");
+    assert.deepEqual(saved.mr_gate?.mrs, [chain.origin], "窗口期重申报记了申报账");
+    assert.match(chain.okReceipts(), /已受理/);
+    assert.match(chain.trail(), /陈灯/, "陈灯已拒要进台账留痕");
+    // 平台放开返回真绿(新 run 注册并跑绿):监看器收口,全链走完。
+    chain.platform.defaultStatus = "success";
+    const done = await until(() => {
+      const issue = chain.service.get(chain.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done" ? issue : undefined;
+    }, "监看器等真绿后收口");
+    assert.equal(done.status, "idle", "收口待归档");
+    assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
+    assert.equal(chain.saved().pipelines?.[chain.origin]?.status, "success");
+    const notice = await until(() =>
+      chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
+      "滞后收口通知");
+    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
+  } finally {
+    await stopChain(chain);
+  }
+});
+
 test("MR 验绿门·清单=台账:少报/多报都打回且点名差异", async () => {
   const chain = await startChain({
     platformStatus: "running",
-    declarations: (origin) => [
+    steps: (origin) => [
       [],                                        // 少报:台账 1 个,清单空。
       ["https://code.test/ghost.git"],           // 多报:编造不存在的 MR。
       [origin],                                  // 正确申报:在跑受理。
@@ -628,7 +709,7 @@ test("MR 验绿门·未申报不放行:监看器全绿只提醒申报,阶段原�
 test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模板空转", async () => {
   const chain = await startChain({
     platformStatus: "running",
-    declarations: (origin) => [[origin]],
+    steps: (origin) => [[origin]],
   });
   try {
     await until(() =>
@@ -681,7 +762,7 @@ test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放�
 test("收口后返工:续聊重开 mr_green,再申报再收口;通知不重复轰炸", async () => {
   const chain = await startChain({
     platformStatus: "success",
-    declarations: (origin) => [[origin]],
+    steps: (origin) => [[origin]],
   });
   try {
     // 第一轮:全绿即时收口(申报即验绿),通知用户待归档。

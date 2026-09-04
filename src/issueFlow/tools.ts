@@ -914,7 +914,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
      * 与台账(state.mrs,create_mr 自动记账)归一比对,少报多报都打回;
      * 再对台账每个 MR 的最新推送 SHA 查流水线,三态裁决——全绿当场
      * 放行、有红当场打回带失败项、在跑/无记录受理由监看器等绿放行
-     * (受理账 state.mr_gate,进 deploy_verify 当且仅当"已申报且全绿")。 */
+     * (受理账 state.mr_gate,进 deploy_verify 当且仅当"已申报且全绿")。
+     * 裁决只认 run 归属与申报 SHA 一致的记录:陈灯(旧提交的 run)不
+     * 背书也不定罪,对齐需求侧 selectTerminalRun 语义。 */
     const settleMrGate = async (
       declared: string[], note: string,
     ): Promise<ReturnType<typeof ok>> => {
@@ -964,6 +966,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       // 逐 MR 查最新推送 SHA 的流水线(验绿事实源,不新增按 MR id 查)。
       const runs: Array<{ repo: string; sha: string; run: PipelineRun }> = [];
+      const staleRepos: string[] = [];
       for (const record of ledger) {
         const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
         if (!sha) {
@@ -983,10 +986,22 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 当前流水线。历史绿/红后又触发的新 run 仍在 running 时，绝不
         // 能拿旧终态提前放行或打回。
         const latest = status.runs.at(-1);
+        // 陈灯防御(#108,对齐需求侧 selectTerminalRun):平台按 MR 维度
+        // 返回流水线历史,AI 修复重推新提交(换 SHA)后立即重新申报时,
+        // 新 run 注册前的窗口期内 runs.at(-1) 还是旧提交的 run——run 级
+        // sha 与申报 SHA 对不上(或 is_valid=false 的 MR 头陈灯)就是陈
+        // 灯,既不能让它给新提交背书(冒充 success),也不能拿它定罪
+        // (旧红算到新头上,申报被冤枉打回、申报账被清)。一律按在跑
+        // 受理停等,等监看器拿到新 run 的真终态再裁决。run 级 sha/is_valid
+        // 缺席(旧适配层)时不设防,行为与透传前一致。
+        const stale = latest !== undefined
+          && ((typeof latest.sha === "string" && latest.sha && latest.sha !== sha)
+            || latest.is_valid === false);
+        if (stale) staleRepos.push(record.repo);
         runs.push({
           repo: record.repo,
           sha,
-          run: latest ?? { status: status.status },
+          run: stale ? { status: "running" } : latest ?? { status: status.status },
         });
       }
       const failed = runs.filter((item) => item.run.status === "failed");
@@ -1014,7 +1029,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       state.mr_gate = { mrs: declaredRepos, at: new Date().toISOString() };
       recordTransition(state, {
         source: "platform",
-        note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`,
+        note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`
+          + (staleRepos.length
+            ? `(陈灯已拒,按在跑停等:${staleRepos.join(", ")})`
+            : ""),
       });
       ctx.persist();
       return ok(promptCopy("receipts", "mrgate.awaiting", {
