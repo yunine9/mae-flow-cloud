@@ -98,6 +98,16 @@ export function perRepoBuildCacheMounts(
         "-Dmaven.repo.local=/cache/maven/repository"]
         .filter(Boolean).join(" "),
       npm_config_cache: "/cache/npm",
+      // 容器内 Node 信任系统 CA 存储(2026-09-04,现场 npm debug 日志
+      // 实锤:部署镜像 v2-euleros-jdk21-mvn36-node18-node24 默认 node
+      // 是 v24.19.0,repository 默认走 npm@11)。内网端点(cmc npm 镜像)
+      // 签发链只在内网镜像的系统信任库里,Node 默认不信——npm install
+      // 全量 UNABLE_TO_VERIFY_LEAF_SIGNATURE 重试到超时。与宿主 serve
+      // 进程的 systemd drop-in 同款修复;该变量要求 Node ≥22.15/23.8,
+      // 镜像若回退 node18 备用二进制会静默 no-op,届时换 NODE_EXTRA_CA_
+      // CERTS 指系统 bundle。Maven/JDK 的信任在 java-cacerts/内部基底
+      // 已闭环,与 node 互不影响。
+      NODE_USE_SYSTEM_CA: "1",
       CCACHE_DIR: "/cache/ccache",
       XDG_CACHE_HOME: "/cache/xdg",
       // ccache 真正接线(内网五项取证实锤:装了、CCACHE_DIR 也对,
