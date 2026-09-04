@@ -6065,6 +6065,7 @@ pre {
 .approval-options button > i svg { width: 15px; height: 15px; }
 .approval-options button > span { min-width: 0; display: grid; gap: 3px; }
 .approval-options strong { color: var(--text-strong); font-size: 13.5px; }
+.approval-option-default { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-style: normal; font-weight: 500; vertical-align: 1px; }
 .approval-options small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.45; }
 .approval-setting-note { margin: 11px 0 0; color: var(--success); font-size: var(--font-size-assist); }
 
