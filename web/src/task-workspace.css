@@ -1,28 +1,29 @@
 /*
  * 任务工作台(受监督的工程执行驾驶舱)—— v4
  *
- * 结构:52px 任务头 → 44px 阶段条(七个阶段名 + 计数)→ 主区三栏:
- *   左导航(≥1280 常驻:三个视图、材料类型、活动分区、批注/协作入口)
- *   · 主画布(状态驱动)· 右检查器(决定卡;批注抽屉打开时停靠在同一栏)。
- * 窄于 1280 时左导航让位给顶部视图条,窄于 1100 时抽屉改为悬浮。
+ * 结构(参照 Devin / OpenAI Codex / Google Jules / Claude Code 网页版的会话页):
+ *   56px 任务头(返回 · 单号 · 标题 · 状态 · 七个阶段 · 控制)
+ *   ├ 左栏"对话与决定"(clamp 360–440px,canvas 底):状态标题 → 决定卡 /
+ *   │   失败原因 / 验证进度 → 底部固定的"补充给 Agent"输入区
+ *   └ 右栏"工作区"(surface 底):一行页签 [需求原文 | 过程文档 | 模块与依赖 |
+ *       工作区变更 | 活动] + 工具(搜索 · 全屏 · 批注与检视),下面是阅读器;
+ *       批注检查器停靠在右栏右缘(≥1100),窄屏改悬浮。
+ *   <1000 上下堆叠;全屏阅读时左栏隐藏。
  *
  * 视觉纪律(与 tokens.css 同源):
  *   · 一级区块是"面板":surface 底 + 发丝线 + 12px 圆角 + surface-2 题头。
- *     面板里最多再套一层 surface-2 的引用块,不再往下套。上一版全靠分割线,
- *     深色下面板、批注卡、展开区全"沉"进背景(2026-09-05 用户实锤),
- *     这轮把层级画出来。
- *   · 一屏一颗墨色按钮:等人时是决定卡的提交,暂停时是"恢复",材料页是
- *     当前选中的材料类型。
- *   · 暖色只表示"需要人":等待态的点、阶段条的当前段、批注入口的角标。
+ *     面板里最多再套一层 surface-2 的引用块,不再往下套。
+ *   · 一屏一颗墨色按钮:等人时是决定卡的提交,暂停时是"恢复"。
+ *   · 暖色只表示"需要人":等待态的点、当前阶段、批注入口的角标。
+ *   · 按钮三档:主(墨,36/32)· 次(边框 + surface,32)· 小次(28)· 文本(无边)。
  *   · 所有选择器都锁在 .task-workspace-v2 下,遗留工作台互不影响。
  */
 
 .task-workspace-v2 {
-  --ws-head-h: 52px;
-  --ws-strip-h: 44px;
+  --ws-head-h: 56px;
   --ws-subbar-h: 48px;
-  --ws-rail-w: 216px;
-  --ws-inspector-w: clamp(380px, 30vw, 460px);
+  --ws-side-w: clamp(360px, 30vw, 440px);
+  --ws-inspector-w: clamp(360px, 28vw, 440px);
   --ws-reading: 880px;
   --ws-gutter: clamp(24px, 4vw, 56px);
   position: fixed;
@@ -47,12 +48,16 @@
 .task-workspace-v2 .ws-head-controls > button,
 .task-workspace-v2 .ws-cancel-confirm button,
 .task-workspace-v2 .ws-delete-confirm button,
-.task-workspace-v2 .ws-focus-evidence-preview > header button,
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch .material-search-toggle,
 .task-workspace-v2 .ws-source-switch .materials-review-toggle,
-.task-workspace-v2 .ws-workspace-nav .ws-review-launch,
-.task-workspace-v2 .ws-document-download {
+.task-workspace-v2 .ws-source-switch .ws-review-launch,
+.task-workspace-v2 .ws-document-download,
+.task-workspace-v2 .focus-review,
+.task-workspace-v2 .delivery-locate,
+.task-workspace-v2 .feedback-convert,
+.task-workspace-v2 .knowledge-catalog-badge,
+.task-workspace-v2 .workspace-review-invite-button {
   height: var(--control-h);
   padding: 0 12px;
   display: inline-flex;
@@ -74,17 +79,74 @@
 .task-workspace-v2 .ws-head-controls > button:hover:not(:disabled),
 .task-workspace-v2 .ws-cancel-confirm button:hover:not(:disabled),
 .task-workspace-v2 .ws-delete-confirm button:hover:not(:disabled),
-.task-workspace-v2 .ws-focus-evidence-preview > header button:hover,
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle:hover,
 .task-workspace-v2 .ws-source-switch .material-search-toggle:hover,
 .task-workspace-v2 .ws-source-switch .materials-review-toggle:hover,
-.task-workspace-v2 .ws-workspace-nav .ws-review-launch:hover,
-.task-workspace-v2 .ws-document-download:hover:not(:disabled) {
+.task-workspace-v2 .ws-source-switch .ws-review-launch:hover,
+.task-workspace-v2 .ws-document-download:hover:not(:disabled),
+.task-workspace-v2 .focus-review:hover:not(:disabled),
+.task-workspace-v2 .delivery-locate:hover:not(:disabled),
+.task-workspace-v2 .feedback-convert:hover:not(:disabled),
+.task-workspace-v2 .knowledge-catalog-badge:hover,
+.task-workspace-v2 .workspace-review-invite-button:hover {
   color: var(--text-strong);
   border-color: var(--text-strong);
   background: var(--surface);
 }
 .task-workspace-v2 .ws-head-controls > button:disabled { opacity: .5; cursor: default; }
+
+/* 小号次级(28):卡片内的动作。 */
+.task-workspace-v2 .delivery-locate,
+.task-workspace-v2 .feedback-convert,
+.task-workspace-v2 .knowledge-catalog-badge,
+.task-workspace-v2 .workspace-review-invite-button,
+.task-workspace-v2 .ws-document-download { height: var(--control-h-sm); padding: 0 10px; font-size: var(--fs-12); border-radius: var(--radius-sm); }
+/* 文本按钮:无边无底,悬停变深。 */
+.task-workspace-v2 .cost-toggle,
+.task-workspace-v2 .steer-ref-add {
+  height: var(--control-h-sm);
+  padding: 0 6px;
+  color: var(--muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--fs-13);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+.task-workspace-v2 .cost-toggle:hover,
+.task-workspace-v2 .steer-ref-add:hover { color: var(--text-strong); background: var(--surface-2); }
+/* 主按钮统一 36 高、6px 圆角、14px 字。 */
+.task-workspace-v2 .steer-send,
+.task-workspace-v2 .submit-decision,
+.task-workspace-v2 .workspace-review-invite-action > button {
+  height: var(--control-h-lg);
+  min-height: var(--control-h-lg);
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-14);
+  font-weight: 500;
+}
+/* 筛选胶囊(事件流、检视抽屉共用一副面孔)。 */
+.task-workspace-v2 .event-filters button {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-workspace-v2 .event-filters button:hover { color: var(--text-strong); background: var(--surface-2); }
+.task-workspace-v2 .event-filters button.active { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
+.task-workspace-v2 .event-filters button span { color: inherit; background: color-mix(in srgb, currentColor 14%, transparent); font-size: var(--fs-12); }
+.task-workspace-v2 .event-filters button.active span { background: color-mix(in srgb, var(--ink-fg) 22%, transparent); }
+/* GitDiff 的"专注审阅"是次级 32,不是灰底胶囊;隐藏文件的小叉是图标钮。 */
+.task-workspace-v2 .focus-review { height: var(--control-h); border-radius: var(--radius-sm); background: var(--surface); }
+.task-workspace-v2 .change-hide { width: 28px; height: 28px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; }
+.task-workspace-v2 .change-hide:hover { border-color: var(--line-strong); background: var(--surface); }
 
 /* ── 任务头:返回 · 单号 · 标题 · 状态 · 控制 ───────────────────────── */
 
@@ -93,12 +155,17 @@
   min-height: var(--ws-head-h);
   padding: 0 16px 0 8px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "back identity progress controls";
   align-items: center;
-  gap: 8px;
+  gap: 8px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.task-workspace-v2 .ws-back { grid-area: back; }
+.task-workspace-v2 .ws-identity { grid-area: identity; }
+.task-workspace-v2 .ws-head > .ws-progress { grid-area: progress; }
+.task-workspace-v2 .ws-head-controls { grid-area: controls; }
 
 .task-workspace-v2 .ws-back {
   width: 32px;
@@ -242,98 +309,12 @@
   opacity: .9;
 }
 
-/* ── 顶部视图条:只在没有左导航的窄屏出现 ────────────────────────────── */
+/* ── 进度:并在任务头里,七个阶段名排开,当前段按语义着色,可点弹执行方案。
+   用户看完独占一行的阶段条说"再往上提一下"——进度是任务头信息,不是一层导航。 */
 
-.task-workspace-v2 .ws-workspace-nav {
-  flex: none;
-  min-height: 44px;
-  padding: 0 16px 0 12px;
-  display: flex;
-  align-items: stretch;
-  gap: 16px;
-  overflow: visible;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.task-workspace-v2 .ws-view-tabs {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-}
-.task-workspace-v2 .ws-view-tabs > button,
-.task-workspace-v2 .ws-view-tabs > button:nth-child(n) {
-  --workspace-tab-color: var(--ink);
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  padding: 0 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  font-size: var(--fs-14);
-  font-weight: 500;
-  line-height: 1;
-  transition: color var(--ease);
-}
-.task-workspace-v2 .ws-view-tabs > button::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  display: block;
-  border-radius: 2px 2px 0 0;
-  background: transparent;
-  transition: background var(--ease);
-}
-.task-workspace-v2 .ws-view-tabs > button:hover { color: var(--text-strong); background: transparent; }
-.task-workspace-v2 .ws-view-tabs > button.active { color: var(--text-strong); background: transparent; }
-.task-workspace-v2 .ws-view-tabs > button.active::after { background: var(--ink); }
-.task-workspace-v2 .ws-view-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.task-workspace-v2 .ws-workspace-nav .ws-review-launch { position: relative; height: var(--control-h-sm); padding: 0 10px 0 8px; }
-.task-workspace-v2 .ws-workspace-nav .ws-review-launch.attention {
-  color: var(--attention);
-  border-color: color-mix(in srgb, var(--attention) 50%, var(--line-strong));
-}
-.task-workspace-v2 .ws-workspace-nav .ws-review-launch em {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  display: inline-grid;
-  place-items: center;
-  color: currentColor;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font: 600 var(--fs-12)/1 var(--font-mono);
-  font-style: normal;
-}
-
-/* ── 阶段条:七个阶段名排开,当前段按语义着色,可点弹执行方案 ────────── */
-
-.task-workspace-v2 .ws-phase-strip {
-  flex: none;
-  min-height: var(--ws-strip-h);
-  padding: 0 20px;
-  display: flex;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
 .task-workspace-v2 .ws-progress {
   min-width: 0;
-  flex: 1;
+  justify-self: end;
   padding: 0;
   display: flex;
   align-items: center;
@@ -348,7 +329,7 @@
   margin: 0 !important;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 .task-workspace-v2 .ws-progress .task-phase-track {
   order: 1;
@@ -387,8 +368,6 @@
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
-.task-workspace-v2 .ws-progress .task-progress-count::before { content: "第 "; }
-.task-workspace-v2 .ws-progress .task-progress-count::after { content: " 步"; }
 
 .task-workspace-v2 .ws-progress .task-phase,
 .task-workspace-v2 .ws-progress .task-phase:nth-child(n) {
@@ -397,7 +376,7 @@
   position: relative;
   width: auto;
   min-width: 0;
-  padding: 6px 0;
+  padding: 4px 0;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -413,9 +392,9 @@
 .task-workspace-v2 .ws-progress .task-phase::before {
   content: "";
   position: static;
-  width: clamp(16px, 2.4vw, 40px);
+  width: clamp(10px, 1.4vw, 24px);
   height: 1px;
-  margin: 0 12px 0 10px;
+  margin: 0 10px 0 8px;
   display: block;
   border: 0;
   background: var(--line-strong);
@@ -438,11 +417,14 @@
 }
 .task-workspace-v2 .ws-progress .task-phase > span {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   font-size: inherit;
   font-weight: inherit;
   color: inherit;
+}
+/* 1181–1360 一行放不下七个名字:未到的阶段只留圆点,走过的和当前的保留名字。 */
+@media (max-width: 1360px) and (min-width: 1181px) {
+  .task-workspace-v2 .ws-progress .task-phase.future > span { display: none; }
 }
 .task-workspace-v2 .ws-progress .task-phase.past { color: var(--text); }
 .task-workspace-v2 .ws-progress .task-phase.past > i { border-color: var(--text-strong); background: var(--text-strong); }
@@ -470,7 +452,7 @@
   outline-offset: 2px;
 }
 
-/* 控制反馈与检视明细错误:阶段条下方的一行,不是弹窗。 */
+/* 控制反馈与检视明细错误:任务头下方的一行,不是弹窗。 */
 .task-workspace-v2 .task-control-feedback,
 .task-workspace-v2 .feedback-panel-error {
   flex: none;
@@ -481,22 +463,32 @@
 .task-workspace-v2 .feedback-panel-error h3 { margin: 0; font-size: var(--fs-14); }
 .task-workspace-v2 .feedback-panel-error p { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-13); }
 
-/* ── 主区三栏 ───────────────────────────────────────────────────────── */
+/* ── 主区两栏:左"对话与决定",右"工作区" ─────────────────────────── */
 
-.task-workspace-v2 .ws-body,
-.task-workspace-v2 .ws-body.has-decision,
-.task-workspace-v2 .ws-body.has-action {
+.task-workspace-v2 .ws-body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: var(--ws-side-w) minmax(0, 1fr);
   gap: 0;
   overflow: hidden;
   background: var(--main-bg);
 }
-.task-workspace-v2 .ws-rail { grid-column: 1; grid-row: 1; }
-.task-workspace-v2 .ws-evidence { grid-column: 2; grid-row: 1; }
-.task-workspace-v2 .ws-decision { grid-column: 3; grid-row: 1; width: var(--ws-inspector-w); }
+.task-workspace-v2 .ws-side {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--canvas);
+}
+.task-workspace-v2 .ws-side-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 24px 22px 32px 24px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 .task-workspace-v2 .ws-evidence {
   min-width: 0;
   min-height: 0;
@@ -504,138 +496,37 @@
   flex-direction: column;
   overflow: hidden;
   border: 0;
-  background: transparent;
+  background: var(--main-bg);
+  container: ws-pane / inline-size;
+}
+/* 右栏窄(检查器停靠、并排两栏)时工具按钮只留图标,提示语退场。 */
+@container ws-pane (max-width: 760px) {
+  .task-workspace-v2 .ws-annotate-hint { display: none; }
+  .task-workspace-v2 .ws-source-switch > button[role="tab"] + .materials-fullscreen-toggle,
+  .task-workspace-v2 .ws-source-switch > button[role="tab"] + .ws-review-launch,
+  .task-workspace-v2 .ws-source-switch > button[role="tab"] + .material-search-toggle { margin-left: auto; }
+  .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
+  .task-workspace-v2 .ws-source-switch .material-search-toggle,
+  .task-workspace-v2 .ws-source-switch .materials-review-toggle {
+    width: var(--control-h);
+    padding: 0;
+    justify-content: center;
+    overflow: hidden;
+    font-size: 0;
+  }
+  .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle > span,
+  .task-workspace-v2 .ws-source-switch .material-search-toggle > span,
+  .task-workspace-v2 .ws-source-switch .materials-review-toggle > span { font-size: var(--fs-14); }
+  .task-workspace-v2 .ws-source-switch .materials-review-toggle i { display: none; }
+  .task-workspace-v2 .ws-source-switch .ws-review-launch > .ws-review-label { display: none; }
+  .task-workspace-v2 .ws-source-switch > button[role="tab"] i { display: none; }
 }
 .task-workspace-v2 .ws-primary-scroll { scrollbar-gutter: stable; }
-
-/* ── 左导航:所有入口常驻可见 ───────────────────────────────────────── */
-
-.task-workspace-v2 .ws-rail {
-  width: var(--ws-rail-w);
-  min-height: 0;
-  padding: 14px 10px 24px;
-  display: none;
-  flex-direction: column;
-  gap: 14px;
-  overflow: auto;
-  border-right: 1px solid var(--line);
-  background: var(--canvas);
-  scrollbar-width: thin;
-}
-.task-workspace-v2 .ws-rail-group { display: flex; flex-direction: column; gap: 2px; }
-.task-workspace-v2 .ws-rail-actions { padding-top: 14px; border-top: 1px solid var(--line); }
-.task-workspace-v2 .ws-rail-item {
-  width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-  text-align: left;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-size: var(--fs-14);
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition: color var(--ease), background var(--ease), border-color var(--ease);
-}
-.task-workspace-v2 .ws-rail-item:hover { color: var(--text-strong); background: var(--surface-2); }
-.task-workspace-v2 .ws-rail-item.on {
-  color: var(--text-strong);
-  border-color: var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-.task-workspace-v2 .ws-rail-item > span,
-.task-workspace-v2 .ws-rail-sub > button > span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-workspace-v2 .ws-rail-item > em,
-.task-workspace-v2 .ws-rail-sub > button > em {
-  color: var(--faint);
-  font: 500 var(--fs-12)/1 var(--font-mono);
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-}
-.task-workspace-v2 .ws-rail-dot {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--attention);
-  box-shadow: 0 0 0 3px var(--attention-soft);
-}
-.task-workspace-v2 .ws-rail-sub {
-  position: relative;
-  margin: 2px 0 6px;
-  padding-left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.task-workspace-v2 .ws-rail-sub::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 14px;
-  width: 1px;
-  background: var(--line-strong);
-}
-.task-workspace-v2 .ws-rail-sub > button {
-  width: 100%;
-  height: 30px;
-  padding: 0 8px 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  text-align: left;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-size: var(--fs-13);
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition: color var(--ease), background var(--ease);
-}
-.task-workspace-v2 .ws-rail-sub > button:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-2); }
-.task-workspace-v2 .ws-rail-sub > button.on { color: var(--text-strong); background: var(--surface-2); font-weight: 600; }
-.task-workspace-v2 .ws-rail-sub > button:disabled { opacity: .45; cursor: default; }
-.task-workspace-v2 .ws-rail-review em {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  display: inline-grid;
-  place-items: center;
-  color: var(--text);
-  border-radius: 999px;
-  background: var(--surface-3);
-  font: 600 var(--fs-12)/1 var(--font-mono);
-}
-.task-workspace-v2 .ws-rail-review::before {
-  content: "✎";
-  color: var(--muted);
-  font-size: var(--fs-14);
-}
-.task-workspace-v2 .ws-rail-review.attention { color: var(--attention); }
-.task-workspace-v2 .ws-rail-review.attention::before { color: var(--attention); }
-.task-workspace-v2 .ws-rail-review.attention em { color: #fff; background: var(--attention); }
 
 /* ── 面板:工作台里一级区块的统一长相 ─────────────────────────────────
    surface 底 + 发丝线 + 12px 圆角;题头 48px、surface-2 底、左标题右动作。
    可折叠的用 <details>,收起时题头就是整块。 */
 
-.task-workspace-v2 .ws-focus-evidence-preview,
-.task-workspace-v2 .ws-focus-collaboration,
 .task-workspace-v2 .ws-activity-section,
 .task-workspace-v2 .ws-activity-disclosure {
   margin: 20px 0 0;
@@ -644,7 +535,6 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
 }
-.task-workspace-v2 .ws-focus-evidence-preview > header,
 .task-workspace-v2 .ws-focus-collaboration > summary,
 .task-workspace-v2 .ws-activity-section > header,
 .task-workspace-v2 .ws-activity-disclosure > summary {
@@ -666,7 +556,6 @@
 .task-workspace-v2 .ws-activity-disclosure:not([open]) > summary { border-bottom: 0; }
 .task-workspace-v2 .ws-focus-collaboration > summary::-webkit-details-marker,
 .task-workspace-v2 .ws-activity-disclosure > summary::-webkit-details-marker { display: none; }
-.task-workspace-v2 .ws-focus-evidence-preview > header > div,
 .task-workspace-v2 .ws-activity-section > header > div,
 .task-workspace-v2 .ws-focus-collaboration > summary > span,
 .task-workspace-v2 .ws-activity-disclosure > summary > span {
@@ -676,7 +565,6 @@
   flex-wrap: wrap;
   gap: 2px 10px;
 }
-.task-workspace-v2 .ws-focus-evidence-preview > header strong,
 .task-workspace-v2 .ws-activity-section > header strong,
 .task-workspace-v2 .ws-focus-collaboration summary strong,
 .task-workspace-v2 .ws-activity-disclosure summary strong {
@@ -684,7 +572,6 @@
   font-size: var(--fs-14);
   font-weight: 600;
 }
-.task-workspace-v2 .ws-focus-evidence-preview > header span,
 .task-workspace-v2 .ws-activity-section > header span,
 .task-workspace-v2 .ws-activity-section > header small,
 .task-workspace-v2 .ws-focus-collaboration summary small,
@@ -716,21 +603,7 @@
 
 /* ── 当前:一眼看清发生了什么、要不要我、下一步 ───────────────────── */
 
-.task-workspace-v2 .ws-focus-view {
-  flex: 1;
-  min-height: 0;
-  padding: 36px var(--ws-gutter) 96px;
-  overflow: auto;
-  background: transparent;
-}
-.task-workspace-v2 .ws-focus-view > * {
-  width: min(var(--ws-reading), 100%);
-  margin-inline: auto;
-}
-.task-workspace-v2 .has-action .ws-focus-view { padding: 32px clamp(24px, 3vw, 44px) 96px; }
-.task-workspace-v2 .has-action .ws-focus-view > * { width: min(820px, 100%); }
-
-.task-workspace-v2 .ws-focus-hero { padding: 0 0 8px; border: 0; }
+.task-workspace-v2 .ws-focus-hero { padding: 0 0 4px; border: 0; }
 .task-workspace-v2 .ws-focus-status {
   display: flex;
   align-items: center;
@@ -776,21 +649,20 @@
 .task-workspace-v2 .ws-focus-hero.canceled .ws-focus-status > i { background: var(--faint); box-shadow: 0 0 0 3px var(--surface-3); }
 
 .task-workspace-v2 .ws-focus-hero h2 {
-  max-width: 26em;
-  margin: 16px 0 10px;
+  margin: 12px 0 8px;
   color: var(--text-strong);
-  font-size: clamp(24px, 2.1vw, 30px);
+  font-size: var(--fs-20);
   font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: -.02em;
+  line-height: 1.3;
+  letter-spacing: -.015em;
   text-wrap: balance;
+  overflow-wrap: anywhere;
 }
 .task-workspace-v2 .ws-focus-hero > p {
-  max-width: 60ch;
   margin: 0;
   color: var(--muted);
-  font-size: var(--fs-15);
-  line-height: var(--lh-read);
+  font-size: var(--fs-14);
+  line-height: var(--lh-body);
 }
 
 .task-workspace-v2 .ws-focus-alert,
@@ -812,42 +684,61 @@
 .task-workspace-v2 .ws-focus-note p { margin: 4px 0 0; color: var(--text); font-size: var(--fs-13); line-height: 1.6; }
 .task-workspace-v2 .ws-focus-note strong { color: var(--text-strong); font-weight: 600; }
 
-/* 证据面板:决定前要核对的那份材料,摊在决定旁边。 */
-.task-workspace-v2 .ws-focus-evidence-preview { margin-top: 24px; overflow: visible; }
-.task-workspace-v2 .ws-focus-evidence-preview > header { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
-.task-workspace-v2 .ws-focus-evidence-preview > header span::after { content: " ·"; color: var(--faint); }
-.task-workspace-v2 .ws-focus-evidence-preview > header button { height: var(--control-h-sm); padding: 0 10px; font-size: var(--fs-12); }
-.task-workspace-v2 .ws-focus-evidence-preview > header button::after { content: "→"; margin-left: 2px; color: var(--muted); }
-.task-workspace-v2 .ws-focus-evidence-body {
-  min-height: 120px;
-  padding: 24px clamp(18px, 3vw, 32px) 28px;
+/* 输入区:左栏底部固定的"补充给 Agent / 继续或接管现场",像会话页的
+   输入框——收起时是一行可点的输入样式,展开后插话框在栏内滚动。 */
+.task-workspace-v2 .ws-focus-collaboration {
+  flex: none;
+  max-height: 62%;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 0;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  border-top: 1px solid var(--line);
+  border-radius: 0;
   background: var(--surface);
 }
-.task-workspace-v2 .ws-focus-evidence-body .requirement-source,
-.task-workspace-v2 .ws-focus-evidence-body > .annotatable,
-.task-workspace-v2 .ws-focus-evidence-body > .requirement-graph {
-  width: 100%;
-  max-width: none;
-  margin: 0;
+.task-workspace-v2 .ws-focus-collaboration > summary {
+  flex: none;
+  min-height: 56px;
+  padding: 10px 16px 10px 20px;
+  border: 0;
+  background: var(--surface);
 }
-.task-workspace-v2 .ws-focus-evidence-body .requirement-source { padding: 0; border: 0; background: transparent; }
-.task-workspace-v2 .ws-focus-evidence-body .requirement-source-label { display: none; }
-.task-workspace-v2 .ws-focus-evidence-body .md { width: 100%; }
-.task-workspace-v2 .ws-focus-evidence-body > .requirement-graph,
-.task-workspace-v2 .ws-focus-evidence-body .requirement-graph { border: 0; border-radius: 0; box-shadow: none; }
-.task-workspace-v2 .ws-focus-evidence-body:has(> .requirement-graph),
-.task-workspace-v2 .ws-focus-evidence-body:has(> .annotatable > .change-overview),
-.task-workspace-v2 .ws-focus-evidence-body:has(.change-files) { padding: 0; }
-
-/* 协作面板:补充给 Agent / 继续或接管现场。插话框自己带的卡皮去掉,
-   面板就是它的边界。 */
-.task-workspace-v2 .ws-focus-collaboration-body { padding: 0; border: 0; background: transparent; }
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary::before {
+  content: "✎";
+  margin-right: 10px;
+  color: var(--muted);
+  font-size: var(--fs-15);
+}
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary { cursor: text; }
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary > span {
+  min-width: 0;
+  flex: 1;
+  height: var(--control-h-lg);
+  padding: 0 12px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary strong { flex: none; color: var(--text); font-weight: 500; white-space: nowrap; }
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary:hover > span { border-color: var(--text-strong); }
+.task-workspace-v2 .ws-focus-collaboration[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.task-workspace-v2 .ws-focus-collaboration-body {
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  background: transparent;
+}
 .task-workspace-v2 .ws-focus-collaboration-body .steer {
   margin: 0;
-  padding: 18px 20px 20px;
+  padding: 16px 20px 18px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -863,72 +754,18 @@
 .task-workspace-v2 .ws-focus-collaboration-body .steer-send:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
 .task-workspace-v2 .ws-focus-collaboration-body .collaboration-tabs { background: var(--surface-2); border-color: var(--line); }
 
-/* 继续查看:窄屏没有左导航时的两行入口 */
-.task-workspace-v2 .ws-focus-shortcuts {
-  margin-top: 20px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-.task-workspace-v2 .ws-focus-shortcuts > button {
-  min-width: 0;
-  min-height: 56px;
-  padding: 12px 18px;
-  position: relative;
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
-  grid-template-areas: "label title arrow" "label hint arrow";
-  align-items: center;
-  gap: 0 12px;
-  color: var(--text);
-  text-align: left;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  transition: background var(--ease);
-}
-.task-workspace-v2 .ws-focus-shortcuts > button:last-child { border-bottom: 0; }
-.task-workspace-v2 .ws-focus-shortcuts > button:hover { border-color: var(--line); background: var(--surface-2); transform: none; }
-.task-workspace-v2 .ws-focus-shortcuts span { grid-area: label; color: var(--muted); font-size: var(--fs-13); font-weight: 500; }
-.task-workspace-v2 .ws-focus-shortcuts strong {
-  grid-area: title;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: var(--fs-14);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-workspace-v2 .ws-focus-shortcuts small { grid-area: hint; color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
-.task-workspace-v2 .ws-focus-shortcuts i {
-  grid-area: arrow;
-  position: static;
-  color: var(--faint);
-  font-size: var(--fs-15);
-  font-style: normal;
-  transition: color var(--ease), transform var(--ease);
-}
-.task-workspace-v2 .ws-focus-shortcuts > button:hover i { color: var(--text-strong); transform: translateX(2px); }
-
-/* ── 决定栏:有事才出现;卡片是 surface,栏是 canvas,层级一眼可辨 ── */
+/* ── 决定区:左栏里紧跟标题的一块;卡片是 surface,栏是 canvas ─────── */
 
 .task-workspace-v2 .ws-decision {
   min-width: 0;
-  min-height: 0;
-  padding: 20px 20px 48px;
+  margin-top: 20px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: auto;
-  border-left: 1px solid var(--line);
-  background: var(--canvas);
-  scrollbar-gutter: stable;
+  overflow: visible;
+  border: 0;
+  background: transparent;
 }
 .task-workspace-v2 .ws-action-heading {
   padding: 0 2px 12px;
@@ -987,14 +824,16 @@
 .task-workspace-v2 .ws-child-focus button em { font-size: var(--fs-12); }
 .task-workspace-v2 .diagnostics-link { color: var(--muted); font-size: var(--fs-13); }
 
-/* ── 产物:一份统一的阅读器 ─────────────────────────────────────────── */
+/* ── 工作区工具条:一行页签 [需求原文 | 过程文档 | 模块与依赖 | 工作区变更 | 活动]
+   + 右侧工具(批注提示 · 搜索 · 全屏 · 批注与检视)。页签是下划线式,
+   当前页签墨色底线;计数走等宽小字。 ───────────────────────────────── */
 
 .task-workspace-v2 .ws-pane-head {
   flex: none;
   min-height: var(--ws-subbar-h);
-  padding: 8px 16px 8px 20px;
+  padding: 0 16px 0 8px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
@@ -1011,52 +850,64 @@
   border: 0;
   background: transparent;
 }
-/* 材料类型是一组分段按钮:相邻共边,选中的那段是墨色——"我现在看的是哪
-   一份"不用猜。分段后面跟着提示和工具按钮,它们自己带 8px 间距。 */
-.task-workspace-v2 .ws-source-switch > button:not(.materials-fullscreen-toggle):not(.material-search-toggle):not(.materials-review-toggle) {
-  height: var(--control-h);
-  margin-left: -1px;
+.task-workspace-v2 .ws-source-switch > button[role="tab"] {
+  position: relative;
+  height: var(--ws-subbar-h);
+  margin: 0;
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--text);
-  border: 1px solid var(--line-strong);
+  gap: 7px;
+  color: var(--muted);
+  border: 0;
   border-radius: 0;
-  background: var(--surface);
-  font-size: var(--fs-13);
+  background: transparent;
+  font-size: var(--fs-14);
   font-weight: 500;
-  box-shadow: none;
+  line-height: 1;
   white-space: nowrap;
-  transition: color var(--ease), background var(--ease), border-color var(--ease);
+  box-shadow: none;
+  transition: color var(--ease);
 }
-.task-workspace-v2 .ws-source-switch > button:first-child { margin-left: 0; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.task-workspace-v2 .ws-source-switch > button:has(+ .ws-annotate-hint),
-.task-workspace-v2 .ws-source-switch > button:has(+ .materials-fullscreen-toggle) { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.task-workspace-v2 .ws-source-switch > button:first-child:has(+ .ws-annotate-hint),
-.task-workspace-v2 .ws-source-switch > button:first-child:has(+ .materials-fullscreen-toggle) { border-radius: var(--radius-sm); }
-.task-workspace-v2 .ws-source-switch > button:hover:not(:disabled):not(.on):not(.materials-fullscreen-toggle):not(.material-search-toggle):not(.materials-review-toggle) { color: var(--text-strong); background: var(--surface-2); }
-.task-workspace-v2 .ws-source-switch > button.on:not(.materials-fullscreen-toggle):not(.material-search-toggle):not(.materials-review-toggle) {
-  position: relative;
-  z-index: 1;
-  color: var(--ink-fg);
-  border-color: var(--ink);
-  background: var(--ink);
+.task-workspace-v2 .ws-source-switch > button[role="tab"]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  transition: background var(--ease);
 }
-.task-workspace-v2 .ws-source-switch > button:disabled { opacity: .45; }
-.task-workspace-v2 .ws-source-switch i {
+.task-workspace-v2 .ws-source-switch > button[role="tab"]:hover:not(:disabled) { color: var(--text-strong); background: transparent; }
+.task-workspace-v2 .ws-source-switch > button[role="tab"].on { color: var(--text-strong); font-weight: 600; background: transparent; }
+.task-workspace-v2 .ws-source-switch > button[role="tab"].on::after { background: var(--ink); }
+.task-workspace-v2 .ws-source-switch > button[role="tab"]:disabled { opacity: .4; }
+.task-workspace-v2 .ws-source-switch > button[role="tab"] i {
   min-width: 0;
   height: auto;
   padding: 0;
-  color: var(--muted);
+  color: var(--faint);
   background: transparent;
   font: 500 var(--fs-12)/1 var(--font-mono);
   font-style: normal;
 }
-.task-workspace-v2 .ws-source-switch > button.on:not(.materials-fullscreen-toggle):not(.material-search-toggle):not(.materials-review-toggle) i { color: var(--ink-fg); opacity: .7; }
-/* 遗留规则给 .on 里的 span 单独上了 --accent(现在等于墨),墨底上就是
-   黑字黑底(390 宽实测标签消失)。 */
-.task-workspace-v2 .ws-source-switch > button.on:not(.materials-fullscreen-toggle):not(.material-search-toggle):not(.materials-review-toggle) span { color: var(--ink-fg); }
+.task-workspace-v2 .ws-source-switch > button[role="tab"].on i { color: var(--muted); }
+/* 活动页签和材料页签之间一道竖线:它是另一类内容。 */
+.task-workspace-v2 .ws-source-switch > .ws-activity-tab {
+  margin-left: 6px;
+  padding-left: 18px;
+}
+.task-workspace-v2 .ws-source-switch > .ws-activity-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: var(--line-strong);
+}
 .task-workspace-v2 .ws-annotate-hint {
   margin-left: auto;
   padding-right: 4px;
@@ -1068,17 +919,24 @@
   white-space: nowrap;
 }
 .task-workspace-v2 .ws-annotate-hint::before { content: "✎"; color: var(--faint); font-size: var(--fs-13); }
-.task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle { margin-left: 8px; }
-.task-workspace-v2 .ws-source-switch .ws-annotate-hint + .materials-fullscreen-toggle { margin-left: 12px; }
-.task-workspace-v2 .ws-source-switch > button:not(.materials-fullscreen-toggle):has(~ .materials-fullscreen-toggle):not(:has(~ .ws-annotate-hint)):last-of-type { margin-left: auto; }
-.task-workspace-v2 .ws-source-switch .material-search-toggle,
-.task-workspace-v2 .ws-source-switch .materials-review-toggle { margin-left: 8px; }
+.task-workspace-v2 .ws-source-switch > .materials-fullscreen-toggle,
+.task-workspace-v2 .ws-source-switch > .material-search-toggle,
+.task-workspace-v2 .ws-source-switch > .materials-review-toggle,
+.task-workspace-v2 .ws-source-switch > .ws-review-launch { margin-left: 8px; }
+.task-workspace-v2 .ws-source-switch > button[role="tab"] + .materials-fullscreen-toggle,
+.task-workspace-v2 .ws-source-switch > button[role="tab"] + .ws-review-launch,
+.task-workspace-v2 .ws-source-switch > button[role="tab"] + .material-search-toggle { margin-left: auto; }
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle > span,
 .task-workspace-v2 .ws-source-switch .material-search-toggle > span,
-.task-workspace-v2 .ws-source-switch .materials-review-toggle > span { color: var(--muted); font-size: var(--fs-14); }
+.task-workspace-v2 .ws-source-switch .materials-review-toggle > span,
+.task-workspace-v2 .ws-source-switch .ws-review-launch > span[aria-hidden] { color: var(--muted); font-size: var(--fs-14); }
 .task-workspace-v2 .ws-source-switch .materials-review-toggle.on,
+.task-workspace-v2 .ws-source-switch .ws-review-launch.on,
 .task-workspace-v2 .ws-source-switch .material-search-toggle.on { color: var(--text-strong); border-color: var(--text-strong); background: var(--surface-2); }
-.task-workspace-v2 .ws-source-switch .materials-review-toggle i {
+.task-workspace-v2 .ws-source-switch .ws-review-launch.attention { color: var(--attention); border-color: color-mix(in srgb, var(--attention) 50%, var(--line-strong)); }
+.task-workspace-v2 .ws-source-switch .ws-review-launch.attention > span[aria-hidden] { color: var(--attention); }
+.task-workspace-v2 .ws-source-switch .materials-review-toggle i,
+.task-workspace-v2 .ws-source-switch .ws-review-launch em {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
@@ -1088,7 +946,9 @@
   border-radius: 999px;
   background: var(--surface-3);
   font: 600 var(--fs-12)/1 var(--font-mono);
+  font-style: normal;
 }
+.task-workspace-v2 .ws-source-switch .ws-review-launch.attention em { color: #fff; background: var(--attention); }
 
 /* 文档页签:一行下划线页签,当前文档墨色底线。 */
 .task-workspace-v2 .ws-tabs {
@@ -1178,7 +1038,7 @@
 .task-workspace-v2 .ws-doc {
   flex: 1;
   min-height: 0;
-  padding: 32px var(--ws-gutter) 96px;
+  padding: 32px clamp(20px, 3vw, 48px) 96px;
   overflow: auto;
   background: var(--main-bg);
   scrollbar-gutter: stable;
@@ -1287,7 +1147,7 @@
 .task-workspace-v2 .ws-execution-view {
   flex: 1;
   min-height: 0;
-  padding: 24px var(--ws-gutter) 96px;
+  padding: 24px clamp(20px, 3vw, 40px) 96px;
   display: block;
   overflow: auto;
   background: transparent;
@@ -1306,15 +1166,24 @@
 .task-workspace-v2 .ws-activity-section > .utility-panel,
 .task-workspace-v2 .ws-activity-section .utility-panel { margin: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .task-workspace-v2 .ws-activity-section .utility-panel:last-child { border-bottom: 0; }
-.task-workspace-v2 .ws-activity-section .utility-toggle,
-.task-workspace-v2 .ws-activity-section .utility-panel > summary {
-  min-height: 44px;
-  padding: 8px 18px;
-  border-bottom: 1px solid var(--line);
+/* 组件自己的折叠头藏起来,面板题头替它点(TaskWorkspace.toggleActivitySection)。 */
+.task-workspace-v2 .ws-activity-section > .utility-panel > .utility-toggle { display: none; }
+.task-workspace-v2 .ws-activity-section > header { cursor: pointer; user-select: none; }
+.task-workspace-v2 .ws-activity-section > header:hover { background: var(--surface-3); }
+.task-workspace-v2 .ws-activity-section > header:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.task-workspace-v2 .ws-activity-section > header > i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin: -3px 8px 0 4px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform var(--ease);
 }
-.task-workspace-v2 .ws-activity-section .utility-panel:not(.is-open):not([open]) > .utility-toggle,
-.task-workspace-v2 .ws-activity-section .utility-panel:not([open]) > summary { border-bottom: 0; }
-.task-workspace-v2 .ws-activity-section .utility-toggle strong { font-weight: 500; }
+.task-workspace-v2 .ws-activity-section:has(> .utility-panel.is-open) > header > i { transform: rotate(225deg); margin-top: 3px; }
+.task-workspace-v2 .ws-activity-section:not(:has(> .utility-panel.is-open)) > header { border-bottom: 0; }
+.task-workspace-v2 .ws-activity-section .utility-panel > summary { min-height: 44px; padding: 8px 18px; border-bottom: 1px solid var(--line); }
 .task-workspace-v2 .ws-activity-section .utility-note { padding: 14px 18px; }
 .task-workspace-v2 .ws-activity-section .cost { padding: 16px 18px 18px; gap: 14px; }
 .task-workspace-v2 .ws-activity-section .cost-focus {
@@ -1335,8 +1204,6 @@
 .task-workspace-v2 .ws-activity-section .cost-legend i.machine { background: var(--active); }
 .task-workspace-v2 .ws-activity-section .timeline { padding: 4px 18px 12px; }
 .task-workspace-v2 .ws-activity-section .event-filters { padding: 10px 18px; background: var(--surface); }
-.task-workspace-v2 .ws-activity-section .event-filters button { border-radius: var(--radius-sm); }
-.task-workspace-v2 .ws-activity-section .event-filters button.active { color: var(--text-strong); border-color: var(--line-strong); background: var(--surface-2); }
 .task-workspace-v2 .ws-activity-section .event-stream { padding: 12px 18px 16px; background: var(--surface-2); }
 .task-workspace-v2 .ws-activity-section .event-record { border-color: var(--line); border-radius: var(--radius); }
 .task-workspace-v2 .ws-activity-section .event-record > header { background: var(--surface); }
@@ -1378,7 +1245,10 @@
   background: var(--surface);
   box-shadow: none;
 }
-.task-workspace-v2 .ws-body.reviewing:not(.has-action) { padding-right: var(--ws-inspector-w); }
+.task-workspace-v2 .ws-body.reviewing { padding-right: var(--ws-inspector-w); }
+/* 遗留规则在全屏时又给 .ws-evidence 加一层 760px 的 padding-right,和上面
+   的让位叠加后材料区只剩 240px(上一版实测)。这里归零,只让一次。 */
+.task-workspace-v2.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence { padding-right: 0; }
 .task-workspace-v2 .workspace-review-drawer::after { background: linear-gradient(to top, var(--surface), transparent); border-radius: 0; left: 0; right: 0; bottom: 0; }
 .task-workspace-v2 .workspace-review-drawer > header {
   min-height: 52px;
@@ -1493,36 +1363,34 @@
 
 /* 专注阅读:整块画布给材料;左导航、决定栏都收起,检查器仍可停靠。 */
 .task-workspace-v2.materials-fullscreen > .ws-head,
-.task-workspace-v2.materials-fullscreen > .ws-workspace-nav,
-.task-workspace-v2.materials-fullscreen > .ws-phase-strip,
 .task-workspace-v2.materials-fullscreen > .task-control-feedback,
-.task-workspace-v2.materials-fullscreen .ws-rail,
-.task-workspace-v2.materials-fullscreen .ws-decision { display: none; }
-.task-workspace-v2.materials-fullscreen .ws-body,
-.task-workspace-v2.materials-fullscreen .ws-body.has-action,
-.task-workspace-v2.materials-fullscreen .ws-body.has-decision { grid-template-columns: 0 minmax(0, 1fr) 0; }
+.task-workspace-v2.materials-fullscreen .ws-side { display: none; }
+.task-workspace-v2.materials-fullscreen .ws-body { grid-template-columns: minmax(0, 1fr); }
 .task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: 0; }
 
 /* ── 响应式:变简单,不变挤 ─────────────────────────────────────────── */
 
-/* 宽屏:左导航接管视图切换,顶部视图条和"继续查看"入口退场。 */
-@media (min-width: 1280px) {
-  .task-workspace-v2 .ws-rail { display: flex; }
-  .task-workspace-v2 > .ws-workspace-nav { display: none; }
-  .task-workspace-v2 .ws-focus-shortcuts { display: none; }
-}
-
 @media (max-width: 1279px) {
-  /* 没有左导航的档位检查器只有 340–420px,标题栏那句说明会叠成三行;
-     计数筹码已经把"这里有什么"说清了。 */
+  /* 检查器只有 340–420px 时标题栏那句说明会叠成三行;计数筹码已经把
+     "这里有什么"说清了。 */
   .task-workspace-v2 .workspace-review-drawer > header p { display: none; }
 }
 
 @media (max-width: 1180px) {
-  .task-workspace-v2 { --ws-inspector-w: clamp(340px, 38vw, 420px); }
+  .task-workspace-v2 { --ws-inspector-w: clamp(340px, 38vw, 420px); --ws-side-w: clamp(320px, 34vw, 400px); }
+  .task-workspace-v2 .ws-annotate-hint { display: none; }
   .task-workspace-v2 .ws-identity-line code { display: none; }
   .task-workspace-v2 .ws-progress .task-milestone { display: none; }
-  .task-workspace-v2 .ws-progress .task-phase::before { width: 14px; margin: 0 8px; }
+  .task-workspace-v2 .ws-progress .task-phase::before { width: 12px; margin: 0 8px 0 6px; }
+  /* 放不下一行:进度换到任务头第二行,仍在任务头里。 */
+  .task-workspace-v2 .ws-head {
+    padding-bottom: 6px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "back identity controls" "progress progress progress";
+    row-gap: 0;
+  }
+  .task-workspace-v2 .ws-progress { max-width: none; justify-self: stretch; padding: 0 4px 0 8px; }
+  .task-workspace-v2 .ws-progress .task-progress-caption { margin-left: auto; }
 }
 
 /* 中等宽度:检查器回到悬浮抽屉,盖在右侧,材料仍露出。 */
@@ -1540,8 +1408,26 @@
     box-shadow: var(--shadow-lg);
   }
   .task-workspace-v2 .workspace-review-drawer::after { border-radius: 0 0 var(--radius-lg) var(--radius-lg); left: 1px; right: 1px; bottom: 1px; }
-  .task-workspace-v2 .ws-body.reviewing:not(.has-action) { padding-right: 0; }
+  .task-workspace-v2 .ws-body.reviewing { padding-right: 0; }
   .task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: calc(var(--ws-pane-head-h, 48px) + 8px); }
+}
+
+/* 窄屏:两栏上下堆叠,整页一个滚动;输入区不再固定在底部。 */
+@media (max-width: 1000px) {
+  .task-workspace-v2 .ws-body {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .task-workspace-v2 .ws-side { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .task-workspace-v2 .ws-side-scroll { overflow: visible; padding: 20px 20px 24px; }
+  .task-workspace-v2 .ws-focus-collaboration { max-height: none; overflow: visible; }
+  .task-workspace-v2 .ws-focus-collaboration-body { overflow: visible; }
+  .task-workspace-v2 .ws-evidence { flex: none; min-height: 75vh; overflow: visible; }
+  .task-workspace-v2 .ws-pane-head { position: sticky; top: 0; z-index: 5; }
+  .task-workspace-v2 .ws-doc,
+  .task-workspace-v2 .ws-execution-view { flex: none; min-height: 0; overflow: visible; }
+  .task-workspace-v2 .ws-source-switch { overflow-x: auto; scrollbar-width: none; }
 }
 
 @media (max-width: 900px) {
@@ -1549,34 +1435,11 @@
   .task-workspace-v2 .ws-identity-line .wait-badge,
   .task-workspace-v2 .ws-identity-line .prepush-status,
   .task-workspace-v2 .ws-parent-task { display: none; }
-  .task-workspace-v2 .ws-workspace-nav { gap: 10px; }
-  .task-workspace-v2 .ws-phase-strip { padding-inline: 12px; }
   .task-workspace-v2 .ws-progress .task-phase > span { display: none; }
   .task-workspace-v2 .ws-progress .task-phase.current > span { display: block; }
   .task-workspace-v2 .ws-progress .task-phase::before { width: 12px; margin: 0 6px; }
-  .task-workspace-v2 .ws-body,
-  .task-workspace-v2 .ws-body.has-action,
-  .task-workspace-v2 .ws-body.has-decision {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
-    overflow: auto;
-  }
-  .task-workspace-v2 .ws-evidence,
-  .task-workspace-v2 .ws-decision { grid-column: auto; grid-row: auto; width: auto; }
-  .task-workspace-v2 .has-action .ws-evidence {
-    min-height: auto;
-    overflow: visible;
-    border-bottom: 1px solid var(--line);
-  }
-  .task-workspace-v2 .has-action .ws-focus-view { overflow: visible; padding: 28px 20px 32px; }
-  .task-workspace-v2 .ws-decision {
-    min-height: auto;
-    overflow: visible;
-    padding: 20px 16px 48px;
-    border-left: 0;
-  }
   .task-workspace-v2 .workspace-review-drawer {
-    top: var(--ws-head-h, 52px);
+    top: var(--ws-head-h, 56px);
     right: 0;
     bottom: 0;
     width: 100vw;
@@ -1585,7 +1448,6 @@
   }
   .task-workspace-v2 .workspace-review-drawer::after { border-radius: 0; left: 0; right: 0; bottom: 0; }
   .task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: var(--ws-pane-head-h, 48px); }
-  .task-workspace-v2 .ws-annotate-hint { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -1597,23 +1459,13 @@
   .task-workspace-v2 .ws-head-controls { gap: 4px; }
   .task-workspace-v2 .ws-head-controls > button:not(.primary) { padding-inline: 8px; }
   .task-workspace-v2 .ws-head-controls > button.delete { display: none; }
-  .task-workspace-v2 .ws-workspace-nav { padding-inline: 6px 8px; gap: 6px; }
-  .task-workspace-v2 .ws-view-tabs { min-width: 0; flex: 1 1 auto; }
-  .task-workspace-v2 .ws-view-tabs > button { flex: 1 1 0; padding-inline: 6px; }
   .task-workspace-v2 .ws-progress .task-progress-count::before,
   .task-workspace-v2 .ws-progress .task-progress-count::after { content: none; }
-  .task-workspace-v2 .ws-workspace-nav .ws-review-launch { width: 30px; padding: 0; justify-content: center; }
-  .task-workspace-v2 .ws-workspace-nav .ws-review-launch > span { font-size: var(--fs-14); }
-  .task-workspace-v2 .ws-workspace-nav .ws-review-launch > .ws-review-label { display: none; }
-  .task-workspace-v2 .ws-workspace-nav .ws-review-launch em { position: absolute; top: -5px; right: -5px; }
-  .task-workspace-v2 .ws-focus-view,
-  .task-workspace-v2 .has-action .ws-focus-view { padding: 24px 16px 48px; }
-  .task-workspace-v2 .ws-focus-hero h2 { font-size: var(--fs-24); }
-  .task-workspace-v2 .ws-focus-evidence-preview > header { align-items: center; }
-  .task-workspace-v2 .ws-focus-evidence-body { padding: 20px 16px 24px; }
-  .task-workspace-v2 .ws-focus-shortcuts > button { grid-template-columns: 44px minmax(0, 1fr) auto; }
-  .task-workspace-v2 .ws-pane-head { padding: 6px 8px; }
-  .task-workspace-v2 .ws-source-switch { overflow-x: auto; scrollbar-width: none; }
+  .task-workspace-v2 .ws-pane-head { padding: 0 8px; }
+  .task-workspace-v2 .ws-source-switch .ws-review-launch { position: relative; width: 32px; padding: 0; justify-content: center; }
+  .task-workspace-v2 .ws-source-switch .ws-review-launch > .ws-review-label { display: none; }
+  .task-workspace-v2 .ws-source-switch .ws-review-launch em { position: absolute; top: -6px; right: -6px; }
+  .task-workspace-v2 .ws-side-scroll { padding: 16px 16px 20px; }
   .task-workspace-v2 .ws-doc { padding: 20px 16px 48px; }
   .task-workspace-v2 .push-review-scope { padding-inline: 16px; }
   .task-workspace-v2 .ws-execution-view { padding: 16px 12px 48px; }

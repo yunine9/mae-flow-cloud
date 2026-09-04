@@ -28,7 +28,7 @@ test("活动先给人的阶段摘要，原始事件保留但默认按需展开",
 test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主工作面", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<div ref={workspaceBody'),
+    workspace.indexOf('<section className="workspace-review-drawer"'),
   );
   assert.match(navigation, /ws-review-launch/);
   assert.match(navigation, /批注与检视/);
