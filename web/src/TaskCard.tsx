@@ -1472,7 +1472,7 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
     <div className="cost">
       <section className={`cost-focus ${pending ? "blocked" : "clear"}`}>
         <div className="cost-focus-copy">
-          <span>{pending ? "CURRENT BLOCKER" : "CURRENT STATUS"}</span>
+          <span>{pending ? "当前卡点" : "当前状态"}</span>
           <strong>{pending
             ? pending.ask.title.replace(/^请你决定[:：]/, "")
             : "当前没有人工卡点"}</strong>

@@ -22,7 +22,7 @@
   --main-bg: #ffffff;
   --surface: #ffffff;
   --surface-2: #f4f4f1;
-  --surface-3: #e9e9e4;
+  --surface-3: #e8e8e3;
   --overlay: #ffffff;
 
   /* 文字 */
@@ -32,8 +32,8 @@
   --faint: #9b9b94;
 
   /* 线 */
-  --line: #e6e6e1;
-  --line-strong: #cfcfc8;
+  --line: #dededa;
+  --line-strong: #c4c4bd;
 
   /* 墨 = 主动作 */
   --ink: #1a1a18;
@@ -155,18 +155,18 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #111110;
-  --main-bg: #151514;
-  --surface: #191918;
-  --surface-2: #202020;
-  --surface-3: #2a2a29;
-  --overlay: #1e1e1d;
+  --canvas: #0f0f0e;
+  --main-bg: #141413;
+  --surface: #1c1c1b;
+  --surface-2: #252524;
+  --surface-3: #2f2f2d;
+  --overlay: #1c1c1b;
   --text-strong: #f2f2ef;
   --text: #d4d4cf;
-  --muted: #93938b;
-  --faint: #6a6a63;
-  --line: #292927;
-  --line-strong: #3a3a37;
+  --muted: #9a9a92;
+  --faint: #6f6f68;
+  --line: #30302e;
+  --line-strong: #45453f;
   --ink: #f2f2ef;
   --ink-hover: #ffffff;
   --ink-fg: #141413;

@@ -1134,3 +1134,282 @@
   font-style: normal;
   font-weight: 600;
 }
+
+/* ── 任务工作台 v4 里的批注面:一条意见就是一张平的卡 ──────────────────
+   上面那套"意见原文一个色块、Agent 回应一个色块、外面再一张带边卡"在
+   440px 宽的检查器里变成框套框,重点被包装淹没(2026-09-05 用户实锤)。
+   这里只在工作台作用域内改成:卡有一条发丝边;意见原文靠一道墨色左线,
+   Agent 回应靠一道语义色左线 + surface-2 底;其余全是文字。上面的基础
+   规则原样保留(测试与遗留页面还在用)。 */
+
+.task-workspace-v2 .workspace-review-notes { width: 100%; }
+.task-workspace-v2 .workspace-review-opinions { min-width: 0; }
+.task-workspace-v2 .annot-panel {
+  margin-top: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.task-workspace-v2 .annot-panel + .annot-panel,
+.task-workspace-v2 .feedback-list + .annot-panel,
+.task-workspace-v2 .annot-panel + .feedback-list { margin-top: 12px; }
+.task-workspace-v2 .annot-panel-head {
+  padding: 10px 14px;
+  gap: 6px 12px;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-panel-head span { color: var(--faint); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-panel-head strong { color: var(--text-strong); font-size: var(--fs-14); font-weight: 600; }
+.task-workspace-v2 .annot-panel-counts span,
+.task-workspace-v2 .annot-panel-counts em {
+  padding: 2px 7px;
+  font: 600 var(--fs-12)/1.3 var(--font-mono);
+  font-style: normal;
+}
+.task-workspace-v2 .annot-panel-counts span { color: var(--muted); background: var(--surface-3); }
+.task-workspace-v2 .annot-panel-counts em { color: var(--attention); background: var(--attention-soft); }
+.task-workspace-v2 .annot-panel-actions {
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--attention-soft);
+}
+.task-workspace-v2 .annot-panel-actions button {
+  width: auto;
+  min-height: var(--control-h);
+  padding: 0 14px;
+  color: var(--ink-fg);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-panel-actions button:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
+.task-workspace-v2 .annot-panel-actions p { flex: 1 1 220px; margin: 0; color: var(--text); font-size: var(--fs-12); line-height: 1.5; }
+.task-workspace-v2 .annot-panel-note { padding: 10px 14px; font-size: var(--fs-13); line-height: 1.55; }
+.task-workspace-v2 .annot-panel-note.review-ready { color: var(--text); background: var(--surface-2); border-left: 3px solid var(--ink); }
+.task-workspace-v2 .annot-review-queue { padding: 10px 14px 6px; }
+.task-workspace-v2 .annot-review-queue strong { font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-review-queue span { font-size: var(--fs-12); }
+.task-workspace-v2 .annot-review-queue em { color: var(--attention); background: var(--attention-soft); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .annot-list { padding: 10px; display: grid; gap: 8px; }
+.task-workspace-v2 .annot-item,
+.task-workspace-v2 .annot-item.actionable,
+.task-workspace-v2 .annot-item.actionable:last-child {
+  margin: 0;
+  padding: 12px 14px 10px;
+  display: block;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: none;
+}
+.task-workspace-v2 .annot-item.draft { border-left-color: var(--text-strong); }
+.task-workspace-v2 .annot-item.waiting { border-left-color: var(--active); }
+.task-workspace-v2 .annot-item.review,
+.task-workspace-v2 .annot-item.actionable { border-left-color: var(--attention); }
+.task-workspace-v2 .annot-item.done { border-left-color: var(--success); }
+.task-workspace-v2 .annot-item.actionable { background: var(--surface); border-color: color-mix(in srgb, var(--attention) 40%, var(--line)); }
+/* 检查器只有 380–460px,基础规则里 ≥860px 视口的"意见|回应"双栏在这里
+   会把两段挤成 180px 窄柱;工作台内一律单列上下排。 */
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) {
+  display: block;
+  grid-template-columns: none;
+  grid-template-areas: none;
+}
+.task-workspace-v2 .annot-item-head {
+  margin-bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.task-workspace-v2 .annot-where { max-width: 100%; font-size: var(--fs-12); }
+.task-workspace-v2 .annot-where code {
+  padding: 2px 6px;
+  color: var(--text-strong);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: 500 var(--fs-12)/1.4 var(--font-mono);
+}
+.task-workspace-v2 .annot-anchor {
+  flex: 1 1 100%;
+  order: 5;
+  margin: 2px 0 0;
+  padding: 1px 0 1px 10px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  font: 400 var(--fs-12)/1.5 var(--font-mono);
+  white-space: normal;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.task-workspace-v2 .annot-progress,
+.task-workspace-v2 .annot-progress.draft,
+.task-workspace-v2 .annot-progress.waiting,
+.task-workspace-v2 .annot-progress.review,
+.task-workspace-v2 .annot-progress.done {
+  margin-left: auto;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-radius: 0;
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-progress::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.task-workspace-v2 .annot-progress.draft { color: var(--text); }
+.task-workspace-v2 .annot-progress.waiting { color: var(--active); }
+.task-workspace-v2 .annot-progress.review { color: var(--attention); }
+.task-workspace-v2 .annot-progress.done { color: var(--success); }
+.task-workspace-v2 .annot-route-badge,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-route-badge {
+  margin: -4px 0 8px;
+  padding: 0;
+  display: block;
+  color: var(--faint);
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-route-badge::before { content: "→ "; }
+.task-workspace-v2 .annot-note {
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  gap: 3px;
+  border: 0;
+  border-left: 2px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+}
+.task-workspace-v2 .annot-note > strong { color: var(--faint); font-size: var(--fs-12); font-weight: 500; letter-spacing: 0; }
+.task-workspace-v2 .annot-note > p { color: var(--text-strong); font-size: var(--fs-14); font-weight: 500; line-height: 1.6; }
+.task-workspace-v2 .annot-clarified { color: var(--muted); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-response,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-response {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  gap: 3px;
+  border: 0;
+  border-left: 2px solid var(--success);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-response.not_fixed { border-left-color: var(--attention); background: var(--surface-2); }
+.task-workspace-v2 .annot-response.needs_clarification { border-left-color: var(--danger); background: var(--surface-2); }
+.task-workspace-v2 .annot-response strong { color: var(--success); font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-response.not_fixed strong { color: var(--attention); }
+.task-workspace-v2 .annot-response.needs_clarification strong { color: var(--danger); }
+.task-workspace-v2 .annot-response p { color: var(--text); font-size: var(--fs-13); line-height: 1.6; }
+.task-workspace-v2 .annot-response small { color: var(--muted); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-owner-reply {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--active);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-owner-reply strong { color: var(--active); font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-owner-reply p { font-size: var(--fs-13); }
+.task-workspace-v2 .annot-owner-reply small { font-size: var(--fs-12); }
+.task-workspace-v2 .annot-item-foot,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-item-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.task-workspace-v2 .annot-item-foot small { min-width: 0; color: var(--faint); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-owner-actions button,
+.task-workspace-v2 .annot-panel button.ghost {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-panel button.ghost.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line-strong)); }
+.task-workspace-v2 .annot-panel button.primary {
+  height: var(--control-h-sm);
+  padding: 0 12px;
+  color: var(--ink-fg);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-stale { margin-top: 8px; padding: 8px 10px; font-size: var(--fs-13); border-radius: var(--radius-sm); }
+.task-workspace-v2 .annot-inline-editor { margin: 0 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.task-workspace-v2 .annot-inline-editor textarea { border-color: var(--line-strong); background: var(--surface); }
+
+/* 抽屉顶部的筛选条与 CodeHub 意见列表:同一套令牌。 */
+.task-workspace-v2 .review-filter {
+  top: -16px;
+  margin: -16px -16px 12px;
+  padding: 12px 16px;
+  gap: 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.task-workspace-v2 .review-filter button {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-workspace-v2 .review-filter button i {
+  min-width: 16px;
+  padding: 0 5px;
+  color: var(--muted);
+  background: var(--surface-3);
+  font: 600 var(--fs-12)/1.4 var(--font-mono);
+  font-style: normal;
+}
+.task-workspace-v2 .review-filter button.attention { border-color: color-mix(in srgb, var(--attention) 50%, var(--line-strong)); }
+.task-workspace-v2 .review-filter button.attention i { color: var(--attention); background: var(--attention-soft); }
+.task-workspace-v2 .review-filter button.active { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
+.task-workspace-v2 .review-filter button.active i { color: var(--ink-fg); background: color-mix(in srgb, var(--ink-fg) 22%, transparent); }
+.task-workspace-v2 .feedback-list { border-color: var(--line); border-radius: var(--radius-lg); }
+.task-workspace-v2 .feedback-list > header { padding: 10px 14px; background: var(--surface-2); }
+.task-workspace-v2 .feedback-list > header span { color: var(--faint); font-size: var(--fs-12); }
+.task-workspace-v2 .feedback-list > header strong { font-size: var(--fs-14); font-weight: 600; }
+.task-workspace-v2 .feedback-list > header p { font-size: var(--fs-12); }
+.task-workspace-v2 .feedback-list-side i { color: var(--muted); background: var(--surface-3); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .feedback-list-side em { color: var(--attention); background: var(--attention-soft); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .feedback-list-side a { border-color: var(--line-strong); color: var(--text); font-size: var(--fs-12); font-weight: 500; }
+.task-workspace-v2 .feedback-item { padding: 12px 14px; }
+.task-workspace-v2 .feedback-item.open, .task-workspace-v2 .feedback-item.repairing { border-left-color: var(--active); }
+.task-workspace-v2 .feedback-item.awaiting_verification, .task-workspace-v2 .feedback-item.addressed { border-left-color: var(--attention); }
+.task-workspace-v2 .feedback-item.closed { border-left-color: var(--success); }
+.task-workspace-v2 .feedback-item.needs_human { border-left-color: var(--danger); }
+.task-workspace-v2 .feedback-item-head code { font: 500 var(--fs-12)/1.4 var(--font-mono); }
+.task-workspace-v2 .feedback-state { padding: 0; color: var(--muted); background: transparent; font-size: var(--fs-12); font-weight: 500; }
+.task-workspace-v2 .feedback-state.repairing { color: var(--active); background: transparent; }
+.task-workspace-v2 .feedback-state.awaiting_verification, .task-workspace-v2 .feedback-state.addressed { color: var(--attention); background: transparent; }
+.task-workspace-v2 .feedback-state.closed { color: var(--success); background: transparent; }
+.task-workspace-v2 .feedback-state.needs_human { color: var(--danger); background: transparent; }
+.task-workspace-v2 .feedback-body { font-size: var(--fs-14); font-weight: 500; color: var(--text-strong); }
+.task-workspace-v2 .feedback-response { padding: 10px 12px; border-left: 2px solid var(--line-strong); border-radius: 0 var(--radius) var(--radius) 0; background: var(--surface-2); }
+.task-workspace-v2 .feedback-response strong { font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .feedback-response p { font-size: var(--fs-13); }
+.task-workspace-v2 .feedback-item-foot small { color: var(--faint); font-size: var(--fs-12); }

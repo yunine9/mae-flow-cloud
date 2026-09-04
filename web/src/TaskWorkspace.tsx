@@ -657,6 +657,7 @@ export function TaskWorkspace({
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
   const evidenceHeadRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const materialSearchInput = useRef<HTMLInputElement>(null);
   const materialSearchRows = useRef<HTMLElement[]>([]);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
@@ -876,6 +877,47 @@ export function TaskWorkspace({
       observer?.disconnect();
     };
   }, []);
+
+  // 宽屏下批注检查器不再悬浮盖住材料,而是停靠在主画布右栏:它的顶边就是
+  // 主画布的顶边。阶段条、控制反馈条都会改变这个值,量出来写进变量。
+  useEffect(() => {
+    const body = bodyRef.current;
+    const root = workspaceRoot.current;
+    if (!body || !root) return;
+    const publish = () => root.style.setProperty(
+      "--ws-body-top", `${Math.round(body.offsetTop)}px`);
+    publish();
+    window.addEventListener("resize", publish);
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined : new ResizeObserver(publish);
+    for (const sibling of Array.from(root.children)) {
+      if (sibling === body) break;
+      observer?.observe(sibling);
+    }
+    return () => {
+      window.removeEventListener("resize", publish);
+      observer?.disconnect();
+    };
+  }, [task.id, task.status, task.feedback_error, controlError]);
+
+  // 左导航点"补充给 Agent / 原始事件"这类二级入口:切到对应视图,把目标
+  // 区块展开并滚到眼前。视图切换本身会先恢复上次滚动位置,所以等两帧。
+  function revealSection(view: WorkspaceView, id: string) {
+    selectWorkspaceView(view);
+    // 后台标签页里 rAF 不投递(Claude Browser 面板实测),只靠它会永远不
+    // 展开;定时器兜底,谁先到谁执行,只执行一次。
+    let done = false;
+    const run = () => {
+      if (done) return;
+      done = true;
+      const target = workspaceRoot.current?.querySelector<HTMLElement>(`#${id}`);
+      if (!target) return;
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+    };
+    window.requestAnimationFrame(() => window.requestAnimationFrame(run));
+    window.setTimeout(run, 120);
+  }
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -1617,6 +1659,23 @@ export function TaskWorkspace({
             </button>
           ))}
         </div>
+        <div className="ws-view-actions">
+          <button type="button" className={`ws-review-launch${
+            reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
+            aria-label="批注与检视" aria-haspopup="dialog"
+            aria-expanded={reviewPanelOpen}
+            title={`${REVIEW_SHORTCUT} 打开或收起批注`}
+            onClick={() => setReviewPanelOpen(true)}>
+            <span aria-hidden>✎</span>
+            <span className="ws-review-label">批注与检视</span>
+            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+              <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
+            )}
+          </button>
+        </div>
+      </nav>
+
+      <div className="ws-phase-strip" aria-label="阶段进度">
         <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
           + `${health?.needs_attention ? " attention" : ""}`
           + `${task.status === "completed" ? " is-done" : task.status === "failed" ? " is-failed" : ""}`}>
@@ -1645,21 +1704,7 @@ export function TaskWorkspace({
             onSuggest={onExecutionPlanFeedback}
             onClose={() => setPlanPhase("")} />}
         </div>
-        <div className="ws-view-actions">
-          <button type="button" className={`ws-review-launch${
-            reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
-            aria-label="批注与检视" aria-haspopup="dialog"
-            aria-expanded={reviewPanelOpen}
-            title={`${REVIEW_SHORTCUT} 打开或收起批注`}
-            onClick={() => setReviewPanelOpen(true)}>
-            <span aria-hidden>✎</span>
-            <span className="ws-review-label">批注与检视</span>
-            {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
-              <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
-            )}
-          </button>
-        </div>
-      </nav>
+      </div>
 
       {task.feedback_error && (
         <section className="feedback-panel feedback-panel-error" role="alert">
@@ -1686,7 +1731,105 @@ export function TaskWorkspace({
 
       <div className={`ws-body ws-view-${workspaceView}${
         workspaceView === "focus" && actionRailVisible ? " has-action" : ""}${
-        workspaceView === "focus" && waiting ? " has-decision" : ""}`}>
+        workspaceView === "focus" && waiting ? " has-decision" : ""}${
+        reviewPanelOpen ? " reviewing" : ""}`} ref={bodyRef}>
+        {/* 左导航:三个视图和它们的二级入口全部常驻可见。上一版把材料
+            类型、活动分区、协作入口都藏在各自视图里面,用户实锤"很多功能
+            不直观,过于隐藏"。窄屏(<1280)由顶部视图条接管,导航隐藏。 */}
+        <nav className="ws-rail" aria-label="工作台导航">
+          <div className="ws-rail-group">
+            <button type="button" className={`ws-rail-item${workspaceView === "focus" ? " on" : ""}`}
+              aria-current={workspaceView === "focus" ? "page" : undefined}
+              onClick={() => selectWorkspaceView("focus")}>
+              <span>当前</span>
+              {waiting && <i className="ws-rail-dot" aria-label="等你决定" />}
+            </button>
+            <button type="button" className={`ws-rail-item${workspaceView === "materials" ? " on" : ""}`}
+              aria-current={workspaceView === "materials" ? "page" : undefined}
+              onClick={() => selectWorkspaceView("materials")}>
+              <span>产物</span>
+              <em>{documents.length + changes.length || ""}</em>
+            </button>
+            <div className="ws-rail-sub">
+              <button type="button"
+                className={workspaceView === "materials" && materialView === "source" ? "on" : ""}
+                onClick={() => { selectWorkspaceView("materials"); setMaterialView("source"); }}>
+                <span>需求原文</span>
+              </button>
+              <button type="button"
+                className={workspaceView === "materials" && materialView === "doc" ? "on" : ""}
+                onClick={() => {
+                  selectWorkspaceView("materials");
+                  setMaterialView("doc");
+                  if (documents[0]) setActive(documents[0].name);
+                }}>
+                <span>过程文档</span><em>{documents.length || ""}</em>
+              </button>
+              {hasRequirementGraph && <button type="button"
+                className={workspaceView === "materials" && materialView === "chain" ? "on" : ""}
+                onClick={() => { selectWorkspaceView("materials"); setMaterialView("chain"); }}>
+                <span>模块与依赖</span>
+                <em>{task.requirement_graph!.projection_state === "ready"
+                  || task.requirement_graph!.stage === "confirmed"
+                  ? task.requirement_graph!.repositories.length : ""}</em>
+              </button>}
+              <button type="button"
+                className={workspaceView === "materials" && materialView === "diff" ? "on" : ""}
+                disabled={!changeFileCount && !untrackedDirectoryCount}
+                onClick={() => {
+                  selectWorkspaceView("materials");
+                  setMaterialView("diff");
+                  if (changes[0]) setActive(changes[0].name);
+                }}>
+                <span>工作区变更</span><em>{changeFileCount || ""}</em>
+              </button>
+            </div>
+            <button type="button" className={`ws-rail-item${workspaceView === "execution" ? " on" : ""}`}
+              aria-current={workspaceView === "execution" ? "page" : undefined}
+              onClick={() => selectWorkspaceView("execution")}>
+              <span>活动</span>
+            </button>
+            <div className="ws-rail-sub">
+              <button type="button" onClick={() => revealSection("execution", "ws-activity-progress")}>
+                <span>阶段进展</span>
+              </button>
+              <button type="button" onClick={() => revealSection("execution", "ws-activity-events")}>
+                <span>原始事件</span>
+              </button>
+              <button type="button" onClick={() => revealSection("execution", "ws-activity-context")}>
+                <span>任务上下文</span>
+              </button>
+              <button type="button" onClick={() => revealSection("execution", "ws-activity-usage")}>
+                <span>模型用量</span>
+              </button>
+              <button type="button" onClick={() => revealSection("execution", "ws-activity-env")}>
+                <span>运行环境</span>
+              </button>
+            </div>
+          </div>
+          <div className="ws-rail-group ws-rail-actions">
+            <button type="button"
+              className={`ws-rail-item ws-rail-review${reviewPanelOpen ? " on" : ""}${
+                reviewCounts.mine > 0 || reviewAssignment ? " attention" : ""}`}
+              aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+              title={`${REVIEW_SHORTCUT} 打开或收起批注`}
+              onClick={() => setReviewPanelOpen((open) => !open)}>
+              <span>批注与检视</span>
+              {(reviewCounts.mine > 0 || reviewRecordCount > 0) && (
+                <em>{reviewCounts.mine > 0 ? reviewCounts.mine : reviewRecordCount}</em>
+              )}
+            </button>
+            {collaborationVisible && <button type="button" className="ws-rail-item"
+              onClick={() => revealSection("focus", "ws-collaboration")}>
+              <span>{task.status === "paused" ? "继续或接管现场" : "补充给 Agent"}</span>
+            </button>}
+            {workspaceView === "materials" && <button type="button" className="ws-rail-item"
+              aria-pressed={materialsFullscreen}
+              onClick={() => setMaterialsFullscreen((current) => !current)}>
+              <span>{materialsFullscreen ? "退出全屏" : "全屏阅读"}</span>
+            </button>}
+          </div>
+        </nav>
         <section className="ws-evidence" aria-label={workspaceView === "focus"
           ? "当前任务焦点" : workspaceView === "materials" ? "任务产物" : "任务活动"}>
           {workspaceView === "focus" ? <>
@@ -1802,7 +1945,7 @@ export function TaskWorkspace({
             )}
 
             {collaborationVisible && (
-              <details className="ws-focus-collaboration"
+              <details className="ws-focus-collaboration" id="ws-collaboration"
                 open={task.status === "paused" ? true : undefined}>
                 <summary>
                   <span>
@@ -1875,6 +2018,9 @@ export function TaskWorkspace({
                 <span>工作区变更</span><i>{changeFileCount}{untrackedDirectoryCount
                   ? ` + ${untrackedDirectoryCount}目录` : ""}</i>
               </button>
+              {canCreateAnnotation && <span className="ws-annotate-hint">
+                选中文字或悬停段落即可批注
+              </span>}
               <button type="button" className="materials-fullscreen-toggle"
                 aria-pressed={materialsFullscreen}
                 title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
@@ -2238,7 +2384,7 @@ export function TaskWorkspace({
                   ))}
                 </section>
               )}
-              <section className="ws-activity-section">
+              <section className="ws-activity-section" id="ws-activity-progress">
                 <header>
                   <div><strong>阶段进展</strong><span>{task.focus?.headline
                     ?? visibleProgress.current_phase}</span></div>
@@ -2247,7 +2393,7 @@ export function TaskWorkspace({
                 <TaskTimeline taskId={task.id} />
               </section>
 
-              <section className="ws-activity-section raw-events">
+              <section className="ws-activity-section raw-events" id="ws-activity-events">
                 <header>
                   <div><strong>原始事件</strong><span>工具调用、Agent 原文与系统回执</span></div>
                   <small>审计时再展开</small>
@@ -2255,7 +2401,7 @@ export function TaskWorkspace({
                 <ExecutionPanel task={task} />
               </section>
 
-              <details className="ws-activity-disclosure">
+              <details className="ws-activity-disclosure" id="ws-activity-context">
                 <summary>
                   <span><strong>任务上下文</strong>
                     <small>{task.knowledge_usage?.summary.used ?? 0} 项已使用 · {
@@ -2270,7 +2416,7 @@ export function TaskWorkspace({
                 </div>
               </details>
 
-              <details className="ws-activity-disclosure">
+              <details className="ws-activity-disclosure" id="ws-activity-usage">
                 <summary>
                   <span><strong>模型用量</strong><small>{task.token_usage
                     ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
@@ -2285,7 +2431,7 @@ export function TaskWorkspace({
                 </div>
               </details>
 
-              <details className="ws-activity-disclosure">
+              <details className="ws-activity-disclosure" id="ws-activity-env">
                 <summary>
                   <span><strong>运行环境与执行配置</strong>
                     <small>预热结果、工作流和低频技术信息</small></span>
