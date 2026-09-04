@@ -277,3 +277,45 @@ test("门禁:修复材料在仓外也要够得着,宿主账本只读", () => {
   assert.equal(decide("Read", "../../别人的任务"), "deny");
   assert.equal(decide("Write", "/etc/passwd"), "deny");
 });
+
+test("门禁:extraLedgerDirs 支持嵌套条目,目录连同其下全部内容", () => {
+  // 2026-09-04 探针实锤:账本目录匹配只看相对路径首段,带斜杠的嵌套
+  // 条目(问题流的 .mae-flow-work/host-skills 只读投影)永远落空——
+  // 注入的投影对 Agent 变成可写。钉死嵌套匹配与顶层条目两种形状。
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-gate-ledger-"));
+  mkdirSync(join(workspace, ".mae-flow-work/host-skills/abc"), {
+    recursive: true,
+  });
+  const gate = new GateService({
+    workspace,
+    cwd: workspace,
+    extraLedgerFiles: ["issue.json"],
+    extraLedgerDirs: ["skills", ".mae-flow-work/host-skills"],
+  });
+  const decide = (tool: string, path: string) => gate.decide(
+    event(1, "tool_requested", {
+      call_id: "c1", name: tool, input: { path },
+    }),
+  ).action;
+
+  assert.equal(
+    decide("Write", join(workspace, ".mae-flow-work/host-skills/abc/SKILL.md")),
+    "deny", "嵌套账本目录条目连同其下内容全拒写",
+  );
+  assert.equal(
+    decide("Read", join(workspace, ".mae-flow-work/host-skills/abc/SKILL.md")),
+    "allow", "账本读不受限(它本来就是宿主自己的记录)",
+  );
+  assert.equal(
+    decide("Write", join(workspace, ".mae-flow-work/build-notes.md")),
+    "allow", "账本目录之外的 .mae-flow-work 照常可写(预热 build-notes)",
+  );
+  assert.equal(
+    decide("Write", join(workspace, "skills/x.md")),
+    "deny", "顶层账本目录条目保持原语义",
+  );
+  assert.equal(
+    decide("Write", join(workspace, "issue.json")),
+    "deny", "嵌套目录修复不影响账本文件判定",
+  );
+});

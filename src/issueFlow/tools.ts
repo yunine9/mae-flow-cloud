@@ -109,6 +109,9 @@ export interface IssueToolContext {
   /** 业务知识地图(ADR-0012):analyze 简报的注入段(台账资产+仓内
    * docs/ 现扫);两源皆空为空串。 */
   businessKnowledgeBrief?: () => string;
+  /** 环境预热(2026-09-04):complete_stage 推进进 analyze 时调用。
+   * service 侧现读现判开关与幂等,缺席=不预热。 */
+  startWarmup?: () => void;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
    * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
@@ -1093,6 +1096,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           : "";
         void (enteredAnalyze
           ? ctx.raiseSkillSelection?.() : undefined);
+        // 环境预热(2026-09-04):拉仓收口进 analyze 时点火,与主
+        // Agent 的分析并行。fail-open 旁路:预热自己的失败不碰流程。
+        void (enteredAnalyze ? ctx.startWarmup?.() : undefined);
         ctx.persist();
         return ok(promptCopy("receipts", "stage.closed", {
           stage_brief: stageBriefLines(scenario, to).join("\n"),

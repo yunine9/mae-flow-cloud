@@ -170,9 +170,10 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   fix: {
     label: "问题修复",
     goal: "按 TDD 节奏实施修复:先写(或改)能复现问题的单测,再改码让它"
-      + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);每轮 UT "
-      + "结果用 report_ut 如实上报(平台只记账),改完自检且测试可接受后 "
-      + "complete_stage 自报完成",
+      + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);开改前可读 "
+      + ".mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略);"
+      + "每轮 UT 结果用 report_ut 如实上报(平台只记账),改完自检且测试可"
+      + "接受后 complete_stage 自报完成",
     exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 自报完成",
     exitAction: "complete_stage",
     tools: [

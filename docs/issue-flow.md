@@ -33,6 +33,13 @@ UT 并入本阶段) → mr_green 提交MR·跑绿`。已有单从 DTS 列表独�
 结论"是问题"→ **挂起(suspended)** 等提单;"非问题"→ 直接闭环归档
 (报告仍落 issue-analysis.md 留痕)。
 
+**环境预热旁路**(2026-09-04 接入,需求侧 warmup 同款):拉仓收口进
+analyze 时,同一任务容器里后台另起预热专员编译基线、焐热分仓缓存、
+沉淀 `.mae-flow-work/build-notes.md`(fix 阶段简报提示开改前先读)。
+fail-open:失败落 infrastructure_failure 收据(`issue.json` 的 `warmup`
+字段,不上 wire),主流程照走;与需求侧同条件启用(host + 任务容器),
+测试形态缺席即关。
+
 **两个人工硬闸 + MR 验绿门**(2026-08-28 拍板:平台只守它比 AI 强的
 核验,其余出口 AI 自报):
 
@@ -172,7 +179,10 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 结论,以报告在场且五章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
 只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
 修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
-平台验绿收口)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
+平台验绿收口)。AI 的 bash 超时语义已收窄(2026-09-04):命令包进容器内
+`timeout`,超时只了结命令进程组、会话容器不动(见 README)。
+
+阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
 的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),
 create_mr 仅 mr_green,push_branch 自 fix 起,submit_analysis 仅
 analyze,report_ut 仅 fix;build_deploy 因换库验证封存(ADR-0013)无
