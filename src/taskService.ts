@@ -8010,6 +8010,18 @@ export class TaskService {
         this.reconcileResolvedDecisionAnnotations(task);
         const authoritativeWaiting = summary.waiting
           ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
+        // 修复旧版本已经落盘的矛盾投影：waiting.json 明确仍在等当前
+        // 问题，task.json 的 detail 却可能还写着“服务重启,等待续跑”。
+        // 重启时就以人工待办权威账重建展示文案，不要求用户再触发一次
+        // 状态变化；这也是升级后让在途任务立即自愈的入口。
+        if (summary.status === "waiting_for_human"
+            && authoritativeWaiting?.status === "waiting") {
+          const detail = waitingTaskDetail(authoritativeWaiting);
+          if (summary.detail !== detail) {
+            summary.detail = detail;
+            this.persist(task);
+          }
+        }
         // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
         // 消费完，真实当前动作其实是 prepush/流水线验证；恢复时同步
         // 校正，不能让重新部署后的老任务继续同时显示两种当前阶段。

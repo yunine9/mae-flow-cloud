@@ -85,6 +85,39 @@ test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运
   assert.match(restored.detail ?? "", /修复会话已完成/);
 });
 
+test("恢复已在等人的存量任务时，用 waiting 权威账修正旧 detail", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-waiting-detail-"));
+  const workspace = join(dataDir, "task-1");
+  const waiting = new HumanGate(join(workspace, "waiting.json")).createWaiting({
+    taskId: "task-1",
+    step: "grill",
+    callId: "question-after-restart",
+    questionInput: { questions: [{
+      question: "请确认接口兼容范围",
+      options: ["仅兼容当前版本", "同时兼容旧版本"],
+    }] },
+  });
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({
+    summary: {
+      id: "task-1",
+      requirement: "恢复既有等待卡",
+      workspace,
+      status: "waiting_for_human",
+      detail: "服务重启,等待续跑",
+      waiting,
+      created_at: "2026-09-04T00:00:00.000Z",
+    } satisfies TaskSummary,
+  }, null, 2));
+
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {},
+  });
+  const recovered = service.recover();
+  assert.equal(recovered.requeued, 0, "等人的任务不能因此重新烧模型");
+  assert.equal(service.get("task-1")?.detail,
+    "等待你回答：请确认接口兼容范围");
+});
+
 test("恢复续跑与普通提问都会刷新 detail，不残留服务重启文案", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-detail-"));
   const workspace = join(dataDir, "task-1");
