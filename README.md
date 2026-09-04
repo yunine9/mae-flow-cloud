@@ -289,10 +289,20 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   -DDT_run=true`(无 include)和裸 `ctest` 现在打印提示后照常执行,提示
   要求 Agent 先在本仓核实定向入口、真没有就跑全量并在 summary 写清原因;
   其余生态维持硬拒。已验:三档判定(`tests/prepushBuildPlaybook.test.ts`,
-  blocked/advised/none 各一组命令)。**未验**:C++ 仓到底支不支持
-  `-DDT_COV_INCLUDES` 这类定向写法——这正是不敢硬拒的原因,要在 mcde
-  之类的真仓上实测一次才能收紧;在那之前 C++ 全量 UT 的时间成本由
-  Build-Fix 的重型命令预算(单命令 20/45 分钟、整轮 30/60 分钟)兜底。
+  blocked/advised/none 各一组命令)。
+  **当日勘误(同日晚,用户提供 mcde 的 `mae-remote-build` skill 真件)**:
+  上面写的"未验,要在真仓实测"已被这份真件回答——skill 里**没有**
+  `-DDT_COV_INCLUDES`,也**没有** `-DDT_run=true`;真实 UT 入口是
+  `mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT`(有 `${HOME}/settings.xml`
+  时用 `install ... -s`),而它说的"增量 UT / 全量 UT"差别**只是带不带
+  `clean`**,不是测试选择。整份 skill 没有任何按用例过滤的开关,真正
+  缩小范围的手段是**进受影响子模块的目录**再构建/跑 UT。据此三处校准:
+  ①护栏的 native 识别从"必须带 `-DDT_run=true`"放宽到只要 `-DDT_test=UT`
+  ——原来的模式对真实命令视而不见,advised 分支根本不会触发;②build
+  playbook 的 C++ 段改成"先按目录缩小、`-DDT_COV_INCLUDES` 未必存在要先
+  在本仓核实、增量就是不加 clean";③提示文案同步。C++ 全量 UT 的时间
+  成本仍由 Build-Fix 的重型命令预算(单命令 20/45 分钟、整轮 30/60 分钟)
+  兜底。**仍未验**:mcde 之外的 C++ 仓是否另有定向开关。
 
 - **2026-09-04 分支上的外来提交默认可信,宿主接上去继续推**(用户拍板:
   "外来提交一定是人为介入")。task-40 实锤:有人直接往 bot 分支推了一条

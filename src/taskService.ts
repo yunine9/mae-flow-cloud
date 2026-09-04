@@ -15179,7 +15179,7 @@ export class TaskService {
               // 验证过 DT include,硬拒会让整个仓跑不了 UT(代价不对等)。
               if (fullSuite === "advised") {
                 execOptions.onData(Buffer.from(
-                  "[Cloud] 提示：这条像是全仓 UT。本仓若支持定向选择（DT include、ctest -R、runner 的 suite/case 过滤），优先改成只跑本次改动影响的范围；确实没有可用的定向入口就照常执行，并在 summary 里写清为什么没能定向。\n",
+                  "[Cloud] 提示：这条像是全仓 UT。C++/native 缩小范围首选进受影响子模块的目录再构建/跑 UT（mcde 的 mae-remote-build 就是这么做的）；已经在子目录里跑就忽略本提示。`-DDT_COV_INCLUDES` 未必存在，先在本仓核实再用，还可以用 `ctest -R` 或 runner 的 suite/case 过滤。确实没有可用的定向入口就照常执行，并在 summary 里写清为什么没能定向。\n",
                 ));
                 this.options.log?.(
                   `[prepush-targeted-ut] 任务 ${task.summary.id} 提示全仓 UT(放行): ${
