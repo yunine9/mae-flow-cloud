@@ -86,6 +86,28 @@ function managedStubKernel(failInit = false): string {
   return root;
 }
 
+function managedStubKernelRejectingDevNullConfig(): string {
+  const root = managedStubKernel();
+  const script = join(root, "scripts", "mae-flow.py");
+  writeFileSync(script, [
+    "import json, os, sys",
+    "command = sys.argv[1] if len(sys.argv) > 1 else ''",
+    "if os.environ.get('GIT_CONFIG_GLOBAL') == '/dev/null':",
+    "    sys.stderr.write('fatal: bad config line 1 in file /dev/null')",
+    "    raise SystemExit(128)",
+    "config = os.environ.get('GIT_CONFIG_GLOBAL', '')",
+    "if not os.path.isfile(config) or open(config).read() != '':",
+    "    sys.stderr.write('safe Git config is not a real empty file')",
+    "    raise SystemExit(129)",
+    "if command == 'init':",
+    "    with open('.mae-flow.json', 'w') as f:",
+    "        json.dump({'current': 'config_confirm'}, f)",
+    "if command == 'current':",
+    "    print('CURRENT: 先确认配置，不要修改源码')",
+  ].join("\n"));
+  return root;
+}
+
 function captured(root: string): Array<{ event: string; payload: any }> {
   return readFileSync(join(root, "captured.jsonl"), "utf-8")
     .trim().split("\n").map((line) => JSON.parse(line));
@@ -174,6 +196,21 @@ test("Cloud 托管启动:init 失败时拒绝创建可工作的 Agent 现场", a
     /内核 init 登记失败.*fixture init failed/,
   );
   assert.equal(existsSync(join(workspace, ".mae-flow.json")), false);
+});
+
+test("Cloud 托管启动:内核 Git 预检不再把 /dev/null 当配置文件", async () => {
+  // 内网子任务事故实锤：运行环境里的 /dev/null 不是 Git 可读取的空
+  // 配置，旧安全环境让 `git --version` 直接退 128。这里用内核桩复现
+  // 同一兼容性条件，确保 init 收到的是宿主私有真实空文件。
+  const workspace = gitWorkspace("mfc-managed-real-empty-config-");
+  const host = new KernelHost({
+    kernelRoot: managedStubKernelRejectingDevNullConfig(),
+    workspace,
+    transcriptPath: join(workspace, "transcript.jsonl"),
+    taskId: "managed-real-empty-config",
+  });
+  const guidance = await host.bootstrapManaged("实现拆分后的交付单元");
+  assert.match(guidance, /CURRENT: 先确认配置/);
 });
 
 test("内核进程不可用时授权与证据都 fail-closed", async () => {
