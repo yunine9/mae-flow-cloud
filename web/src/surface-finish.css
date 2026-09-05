@@ -1,0 +1,139 @@
+/* Shared visual finish. Keep interaction placement and task-row density intact. */
+.workspace { background: var(--canvas); }
+.sidebar {
+  background: linear-gradient(170deg, var(--surface) 0%, var(--surface-2) 60%, var(--canvas) 100%);
+  padding-top: 22px;
+}
+.brand-lockup { margin-bottom: 24px; }
+.brand-symbol { width: 26px; height: 26px; border-radius: 8px; box-shadow: var(--shadow-primary); }
+.brand-copy strong { font-size: 15px; letter-spacing: -.025em; }
+.sidebar-nav { gap: 4px; }
+.nav-item { height: 36px; padding-inline: 10px; border: 1px solid transparent; border-radius: 8px; }
+.nav-item.on { color: var(--accent); background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-sm); }
+.nav-item.on svg { color: var(--accent); }
+.nav-section-label { margin-bottom: 8px; font-size: 11px; letter-spacing: .03em; }
+.sidebar-foot { padding-top: 14px; }
+.workspace-header { padding-top: 32px; padding-bottom: 26px; }
+.workspace-header h1 { font-size: 28px; font-weight: 650; letter-spacing: -.035em; margin-bottom: 8px; }
+.workspace-header p { font-size: 13px; }
+.workspace-header .header-attention { border: 1px solid color-mix(in srgb, var(--attention) 12%, transparent); border-radius: 8px; }
+
+/* A single raised surface for the immediate queue; regular task rows stay 44px. */
+.personal-action-inbox { margin-top: 0; margin-bottom: 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-panel); overflow: hidden; }
+.personal-action-head { padding: 16px 20px; background: linear-gradient(110deg, var(--surface), var(--surface-2)); }
+.personal-action-head h2 { font-size: 15px; font-weight: 650; }
+.personal-action-list article { padding: 13px 20px; gap: 14px; }
+.personal-action-list article > div { grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; }
+.personal-action-list article strong { grid-column: 1; grid-row: 1; font-size: 14px; }
+.personal-action-list article small { grid-column: 2; grid-row: 1; align-self: center; font-size: 11px; }
+.personal-action-list article p { grid-column: 1 / -1; font-size: 12px; }
+.personal-action-rank { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); font-size: 11px; }
+.personal-action-list article.primary .personal-action-rank { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 18%, var(--line)); background: var(--accent-soft); }
+.personal-action-more { padding: 10px 20px; background: var(--surface-2); border: 0; font-size: 12px; }
+.personal-action-clear { padding: 20px; }
+.personal-stat { border-radius: 7px; }
+.personal-action.selected { color: var(--accent); border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-sm); }
+.section-head h2 { font-weight: 650; font-size: 15px; }
+.task-list:has(> .task-overview-row) { border-radius: 12px; box-shadow: var(--shadow-panel); }
+.task-overview-row { border-bottom-color: color-mix(in srgb, var(--line) 75%, transparent); }
+.task-overview-open { transition: background var(--ease); }
+.task-overview-title { font-weight: 550; color: var(--text-strong); }
+.task-overview-id, .task-overview-time { font-variant-numeric: tabular-nums; }
+.task-overview-arrow { color: var(--faint); }
+.task-overview-open:hover .task-overview-arrow { color: var(--accent); }
+.team-overview, .team-delivery-overview { box-shadow: var(--shadow-panel); border-radius: 12px; }
+.team-task-tabs, .team-assets-tabs { border-color: var(--line); }
+.team-task-tabs button.active, .team-assets-tabs button.active { box-shadow: var(--shadow-sm); }
+.team-overview-metrics { border-color: var(--line); background: var(--surface-2); border-radius: 9px; }
+.overview-metric > span { font-weight: 550; }
+.overview-metric > strong { font-weight: 600; letter-spacing: -.05em; }
+
+/* Controls have a light bevel; stronger depth is reserved for primary actions. */
+:is(.header-launch, .personal-action-list article.primary button):not(:disabled) {
+  color: var(--ink-fg); background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 90%, white), var(--ink));
+  border-color: color-mix(in srgb, var(--ink) 90%, black); border-radius: 8px; box-shadow: var(--shadow-primary);
+}
+:is(.header-launch, .personal-action-list article.primary button):hover:not(:disabled) { background: var(--ink-hover); }
+.personal-action-list button, .task-order-toggle { box-shadow: var(--shadow-control); border-color: var(--line); }
+:is(.workspace, .workspace-studio, .task-inspector) :is(textarea, input[type="text"], input[type="search"], input[type="password"]):not(:disabled) {
+  border-color: var(--line-strong); background: var(--surface); transition: border-color var(--ease), box-shadow var(--ease);
+}
+:is(.workspace, .workspace-studio, .task-inspector) :is(textarea, input[type="text"], input[type="search"], input[type="password"]):focus-visible {
+  border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* The material reader and collaboration column sit above a quiet shared canvas. */
+.workspace-studio.task-workspace-v2 .ws-head {
+  background: linear-gradient(110deg, var(--surface) 55%, var(--surface-2));
+  box-shadow: inset 0 2px var(--studio-chrome), 0 1px 4px #28234b04;
+}
+.workspace-studio.task-workspace-v2 .ws-identity > strong { font-weight: 650; letter-spacing: -.025em; }
+.workspace-studio .ws-business-id { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-xs); }
+.workspace-studio.task-workspace-v2 .ws-body { padding: 12px; gap: 12px; background: var(--canvas); }
+.workspace-studio.task-workspace-v2 :is(.ws-evidence, .ws-side) {
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-panel); overflow: hidden;
+}
+.workspace-studio.task-workspace-v2 .ws-side { background: var(--surface-2); }
+.workspace-studio.task-workspace-v2 :is(.ws-pane-head, .ws-collaboration-head) {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+  border-bottom-color: var(--line); min-height: 50px;
+}
+.workspace-studio .ws-collaboration-head strong { color: var(--text-strong); font-weight: 600; }
+.workspace-studio.task-workspace-v2 .ws-source-switch { gap: 10px; }
+.workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"] { color: var(--muted); font-weight: 500; }
+.workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"] > span { color: inherit; }
+.workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"].on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 650; }
+.workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"]:disabled { color: var(--faint); opacity: .6; }
+.workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"] i { color: var(--faint); font-weight: 400; }
+.workspace-studio.task-workspace-v2 .ws-source-switch .ws-review-launch { color: var(--muted); font-weight: 500; }
+.workspace-studio.task-workspace-v2 .ws-source-switch .ws-review-launch.on { color: var(--accent); background: var(--accent-soft); border-radius: 6px; box-shadow: none; }
+.workspace-studio.task-workspace-v2 .ws-head-controls > button,
+.workspace-studio .ws-source-switch :is(.materials-fullscreen-toggle, .material-search-toggle),
+.workspace-studio .ws-task-details-trigger { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-control); border-radius: 7px; }
+.workspace-studio.task-workspace-v2 .ws-head-controls > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-2); }
+.workspace-studio.task-workspace-v2 :is(.submit-decision, .ws-head-controls > button.primary):not(:disabled) {
+  color: var(--ink-fg); background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 90%, white), var(--ink));
+  border-color: var(--ink); border-radius: 8px; box-shadow: var(--shadow-primary);
+}
+.workspace-studio.task-workspace-v2 :is(.submit-decision, .ws-head-controls > button.primary):hover:not(:disabled) { background: var(--ink-hover); }
+.workspace-studio.task-workspace-v2 .decision-card { border-color: var(--line); border-radius: 10px; box-shadow: var(--shadow-sm); padding: 18px; }
+.workspace-studio.task-workspace-v2 .decision-head h3 { font-size: 16px; font-weight: 650; line-height: 1.65; letter-spacing: -.015em; }
+.workspace-studio.task-workspace-v2 .waiting-context .md { color: var(--muted); line-height: 1.8; }
+.workspace-studio.task-workspace-v2 .option { padding: 10px 12px; border-color: var(--line); border-radius: 8px; box-shadow: var(--shadow-xs); transition: background var(--ease), border-color var(--ease), box-shadow var(--ease); }
+.workspace-studio.task-workspace-v2 .option:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.workspace-studio.task-workspace-v2 .option.picked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 7%, transparent); }
+.workspace-studio .ws-reply-dock { background: var(--surface); box-shadow: 0 -4px 16px #28234b04; padding: 14px 16px; }
+.workspace-studio .decision-unified-reply textarea { background: var(--surface-2); border-color: var(--line); line-height: 1.7; }
+.workspace-studio.task-workspace-v2 .ws-focus-hero h2 { color: var(--text-strong); font-size: 17px; line-height: 1.7; letter-spacing: -.02em; }
+.workspace-studio.task-workspace-v2 .ws-focus-collaboration { border-color: var(--line); box-shadow: var(--shadow-xs); }
+.workspace-studio .collaboration-tabs { border-color: var(--line); background: var(--surface-2); }
+.workspace-studio .collaboration-tabs [aria-selected="true"] { box-shadow: var(--shadow-control); border-color: var(--line); }
+
+/* Reading surfaces: stable type rhythm, quieter navigation and code furniture. */
+.workspace-studio .requirement-source-label { border-color: var(--line); color: var(--muted); font-size: 12px; }
+.workspace-studio .requirement-source .md { line-height: 1.9; }
+.workspace-studio .requirement-source .md-h1 { font-size: 23px; letter-spacing: -.025em; font-weight: 650; }
+.workspace-studio .requirement-source .md-h2 { font-size: 18px; margin-top: 28px; }
+.workspace-studio .ws-document-tabs .ws-tab.on { box-shadow: var(--shadow-sm); }
+.workspace-studio .is-embedded .change-files { background: var(--surface-2); }
+.workspace-studio .is-embedded .git-change-summary { margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+.workspace-studio .is-embedded .git-change-browser { border: 0; border-radius: 0; }
+.workspace-studio .is-embedded .change-file-detail > header { background: var(--surface); border-color: var(--line); }
+.workspace-studio .ws-review-canvas { background: var(--surface-2); box-shadow: inset 4px 0 12px #28234b03; }
+.workspace-studio.task-workspace-v2 .annot-list .annot-item,
+.workspace-studio.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) { box-shadow: var(--shadow-sm); }
+.workspace-studio .ws-review-canvas .review-filter { background: var(--surface-2); }
+.workspace-studio .ws-review-canvas .review-filter button.active { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-xs); }
+.journey-heading h2 { color: var(--text-strong); font-size: 22px; font-weight: 650; letter-spacing: -.025em; }
+.journey-entry-mark { box-shadow: var(--shadow-xs); }
+.journey-event-meta time { color: var(--faint); }
+.task-inspector { box-shadow: var(--shadow-lg); border-color: var(--line); }
+.task-inspector > header { background: linear-gradient(110deg, var(--surface), var(--surface-2)); }
+.task-inspector .inspector-task-title { color: var(--text-strong); font-weight: 650; }
+.task-inspector-backdrop { background: #17132d45; backdrop-filter: blur(5px); }
+.warmup-dialog { border: 1px solid var(--line); box-shadow: var(--shadow-lg); background: var(--surface); }
+.warmup-dialog > header { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.workspace-studio.task-workspace-v2.materials-fullscreen .ws-body { padding: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .task-overview-open, .workspace-studio.task-workspace-v2 .option { transition: none; }
+}

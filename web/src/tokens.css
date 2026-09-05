@@ -1,27 +1,27 @@
 /* 全站紫白主题：导航、任务总览与工作台共享令牌。
  * 紫色用于主动作与选中态；琥珀、红、绿保留状态语义。
- * 保留现有表面层次、边框、阴影和密度。旧变量以别名兼容。 */
+ * 表面、控件与浮层使用不同高度的阴影。旧变量以别名兼容。 */
 
 :root {
   color-scheme: light;
 
   /* 表面 */
-  --canvas: #f1f0f8;
+  --canvas: #f3f3fa;
   --main-bg: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f7f6fc;
-  --surface-3: #ededff;
+  --surface-2: #f8f8fc;
+  --surface-3: #efedfc;
   --overlay: #ffffff;
 
   /* 文字 */
-  --text-strong: #222d3d;
-  --text: #303c4e;
-  --muted: #687589;
-  --faint: #9694aa;
+  --text-strong: #24263b;
+  --text: #393c50;
+  --muted: #6b7085;
+  --faint: #868b9e;
 
   /* 线 */
-  --line: #e2e0ee;
-  --line-strong: #cbc6e1;
+  --line: #e5e5ef;
+  --line-strong: #cfcddd;
 
   /* 紫色主动作（兼容 ink 命名） */
   --ink: #5b5bd6;
@@ -84,11 +84,14 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  /* 阴影:只有浮层才有 */
-  --shadow-xs: none;
-  --shadow-sm: 0 1px 2px rgba(20, 20, 18, .05);
-  --shadow-md: 0 8px 24px rgba(20, 20, 18, .10), 0 1px 3px rgba(20, 20, 18, .06);
-  --shadow-lg: 0 24px 64px rgba(20, 20, 18, .16), 0 2px 8px rgba(20, 20, 18, .08);
+  /* 层次:画布 → 白色面板 → 控件 → 浮层。 */
+  --shadow-xs: 0 1px 2px #28234b05;
+  --shadow-sm: 0 1px 2px #28234b08, 0 3px 8px #28234b04;
+  --shadow-panel: 0 2px 4px #28234b04, 0 8px 24px #28234b06;
+  --shadow-control: inset 0 1px 0 #ffffffb3, 0 1px 2px #28234b0d;
+  --shadow-primary: inset 0 1px 0 #ffffff29, 0 2px 3px #3832801a, 0 4px 10px #5b5bd622;
+  --shadow-md: 0 8px 32px #28234b14, 0 2px 6px #28234b0a;
+  --shadow-lg: 0 24px 80px #211c4529, 0 4px 12px #211c4514;
 
   --ease: 140ms cubic-bezier(.2, .8, .2, 1);
   --ease-slow: 200ms cubic-bezier(.2, .8, .2, 1);
@@ -143,21 +146,21 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #141920;
-  --main-bg: #1c222c;
-  --surface: #1c222c;
-  --surface-2: #242d39;
-  --surface-3: #303b4c;
-  --overlay: #1c222c;
+  --canvas: #151621;
+  --main-bg: #1e2030;
+  --surface: #1e2030;
+  --surface-2: #252739;
+  --surface-3: #303149;
+  --overlay: #1e2030;
   --text-strong: #edf2fa;
   --text: #dae3f1;
   --muted: #a3b0c4;
   --faint: #78869b;
-  --line: #354154;
-  --line-strong: #52627b;
-  --ink: #edf2fa;
-  --ink-hover: #ffffff;
-  --ink-fg: #1c222c;
+  --line: #35384c;
+  --line-strong: #515672;
+  --ink: #b6aaff;
+  --ink-hover: #c8bfff;
+  --ink-fg: #211b3a;
   --active: #7ea7ff;
   --active-soft: rgba(126, 167, 255, .13);
   --attention: #e4a34c;
@@ -170,33 +173,22 @@
   --merge-soft: rgba(180, 169, 234, .14);
   --focus: #8db0ff;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-panel: 0 2px 4px #00000012, 0 8px 24px #0000001f;
+  --shadow-control: inset 0 1px 0 #ffffff08, 0 1px 2px #00000033;
+  --shadow-primary: inset 0 1px 0 #ffffff26, 0 2px 8px #00000033;
   --shadow-md: 0 8px 24px rgba(0, 0, 0, .42), 0 1px 3px rgba(0, 0, 0, .3);
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .35);
 }
 
-/* Studio workbench palette. Scoped so the accepted redesign does not restyle
- * unrelated product pages; all workbench components share these same tokens. */
+/* Workbench-specific roles inherit the shared page palette. */
 .workspace-studio {
-  --canvas: #f1f0f8;
-  --main-bg: #ffffff;
-  --surface: #ffffff;
-  --surface-2: #f7f6fc;
-  --surface-3: #ededff;
-  --text-strong: #222d3d;
-  --text: #303c4e;
-  --muted: #687589;
-  --line: #e2e0ee;
-  --line-strong: #cbc6e1;
-  --ink: #5b5bd6;
-  --ink-hover: #4e4ec4;
-  --ink-fg: #ffffff;
   --studio-add-text: #17663a;
   --studio-add-bg: #eaf7ee;
   --studio-remove-text: #a33238;
   --studio-remove-bg: #fff0f0;
-  --studio-accent: #5b5bd6;
-  --studio-tint: #ededff;
-  --studio-chrome: #5b5bd6;
+  --studio-accent: var(--ink);
+  --studio-tint: var(--surface-3);
+  --studio-chrome: var(--ink);
   --studio-chrome-fg: #f4f6fc;
   --accent: var(--ink);
   --accent-hover: var(--ink-hover);
@@ -213,25 +205,9 @@
   --ws-document-tree-w: 192px;
 }
 :root[data-theme="dark"] .workspace-studio {
-  --canvas: #141920;
-  --main-bg: #1c222c;
-  --surface: #1c222c;
-  --surface-2: #242d39;
-  --surface-3: #303b4c;
-  --text-strong: #edf2fa;
-  --text: #dae3f1;
-  --muted: #a3b0c4;
-  --line: #354154;
-  --line-strong: #52627b;
-  --ink: #e4ebf7;
-  --ink-hover: #ffffff;
-  --ink-fg: #1f2a3b;
   --studio-add-text: #bbf7d0;
   --studio-add-bg: #183829;
   --studio-remove-text: #fecaca;
   --studio-remove-bg: #402629;
-  --studio-accent: #b6aaff;
-  --studio-tint: #342d52;
-  --studio-chrome: #111721;
   --studio-chrome-fg: #edf2fa;
 }
