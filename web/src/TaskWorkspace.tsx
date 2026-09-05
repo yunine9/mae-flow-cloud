@@ -1130,7 +1130,10 @@ export function TaskWorkspace({
     activeUntrackedDirectoryKey]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
-  // 进展(那处动没动)是服务端现算的,前端不自己推断。
+  // 进展(那处动没动)和闭环结论都是服务端现算的,前端不自己推断。
+  // 结论的输入还有当前卡和复检标记:两张人工卡背靠背换、status 不变时,
+  // 只盯 status 会让结论停在上一张卡上(收敛后才有的时序,原来前端按
+  // props 现推没这个问题),所以卡版本与复检标记也要触发重取。
   useEffect(() => {
     let alive = true;
     void listAnnotations(task.id).then((result) => {
@@ -1141,7 +1144,9 @@ export function TaskWorkspace({
       setReply(result.reply);
     });
     return () => { alive = false; };
-  }, [task.id, task.status, notesPulse, livePulse]);
+  }, [task.id, task.status, task.waiting?.state_version,
+    task.delivery?.loop?.workspace_review_recheck_required,
+    notesPulse, livePulse]);
 
   const requirementAnalysisConfirmation = task.status === "waiting_for_human"
     && task.waiting?.step === "cloud_requirement_analysis_confirm";

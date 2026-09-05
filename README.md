@@ -328,7 +328,14 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   实锤)、三处源码级不许回退的断言(状态词不许出现在页面、分档只认
   `closure.bucket`、管理员入口按 `can_override_*` 开)。顺带修掉一处同源
   隐患:页面判"需要补充说明"只看 outcome 不看 revision,上一轮的追问会让
-  按钮错开,现在按当前 revision 判。**仍未收敛**:服务端 `workspaceReviewReady`
+  按钮错开,现在按当前 revision 判。**次日勘误(2026-09-05)**:收敛把
+  "现算"改成了"取回",多出一个原来没有的时序——结论的输入除了 status
+  还有当前卡与复检标记,两张人工卡背靠背换而 status 不变时,只盯 status
+  重取会让结论停在上一张卡上;已把卡版本(`waiting.state_version`)与
+  复检标记加进重取依赖。另一条是口径假设而非改动:无认证部署下服务端把
+  代办/转交权限全开(与 `canOperate` 一致),而原前端在无 session 时
+  按无权处理;内网与演示都开着认证,这条只影响测试形态。
+  **仍未收敛**:服务端 `workspaceReviewReady`
   的四条件谓词已提取,但 taskService 里另有几处只取其中两条的门禁
   (交付放行、修复轮派单)语义确实不同,没有强行合并;`ordinaryReviewCount`
   与 owner_pending 的两处展示分支仍读原始字段,它们只影响分组和文案,
