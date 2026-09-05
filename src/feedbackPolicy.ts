@@ -422,7 +422,12 @@ function progressOf(
   /** 这条意见本身到没到裁决点(与看的人无关)。 */
   ready: boolean,
   personName: (username: string) => string,
+  /** 看的人就是作者。"再由你确认"只能对作者说,对旁人要点名作者——
+   *  用户 2026-09-05 以责任人身份看别人的意见,问"在哪里点通过":文案
+   *  说"再由你确认",按钮却永远不会给他。 */
+  isAuthor: boolean,
 ): { tone: AnnotationTone; text: string; hint?: string } {
+  const judge = isAuthor ? "你" : `意见作者 ${personName(item.author)} `;
   if (annotationRoute(item) === "memory") {
     return { tone: "done", text: "已记为记忆",
       hint: "没有发给任何人。以后有人改到这段附近时，平台会把它提醒给 Agent。" };
@@ -505,8 +510,9 @@ function progressOf(
     if (current) {
       const outcome = current.outcome === "fixed" ? "已修改"
         : current.outcome === "not_fixed" ? "未修改" : "需要你补充说明";
+      // 回执正文卡上就有,不在这里重复;这里只说"等谁、到哪一步能点"。
       return { tone: "waiting", text: `Agent 回执：${outcome}·等复检`,
-        hint: `${where}${current.summary}。Build-Fix 通过、最终推送确认卡出现时再由你确认。` };
+        hint: `${where}Build-Fix 通过、最终推送确认卡出现后，由${judge}点「确认已修复」或「仍需调整」。` };
     }
     if (anchorGone) {
       return { tone: "waiting", text: "已有改动·待验证",
@@ -515,8 +521,8 @@ function progressOf(
     return { tone: "waiting",
       text: viaRepair ? "等待 Agent 回执" : "已交给 Agent",
       hint: viaRepair
-        ? `${where}Agent 处理完会为每条意见留下回执；Build-Fix 通过、最终推送确认卡出现时再由你确认。`
-        : `${where}平台尚未收到这条意见的处理回执；任务再次停下等人时再由你确认。` };
+        ? `${where}Agent 处理完会为每条意见留下回执；Build-Fix 通过、最终推送确认卡出现后由${judge}确认。`
+        : `${where}平台尚未收到这条意见的处理回执；任务再次停下等人时由${judge}确认。` };
   }
   // 到点了但看的人不是作者:裁决权在作者手里,别对旁人说"请你确认"。
   return anchorGone
@@ -544,7 +550,7 @@ export function annotationClosure(
   const canVerify = isAuthor && ready;
   const actionable = canVerify || override.can_verify;
   const progress = progressOf(item, facts, Boolean(options.anchor_gone),
-    actionable, ready, personName);
+    actionable, ready, personName, isAuthor);
   const bucket: AnnotationBucket =
     item.status === "verified" || item.status === "dropped" ? "closed"
     : item.status === "draft"

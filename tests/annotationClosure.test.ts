@@ -84,7 +84,12 @@ test("MR 修复轮:回执到了但复检卡没到,报回执不报可确认", () 
   const closure = annotationClosure(item, FACTS, ALICE);
   assert.equal(closure.verdict_ready, false);
   assert.match(closure.text, /Agent 回执：已修改·等复检/);
-  assert.match(closure.hint ?? "", /已按意见改/);
+  // 回执正文卡上已有,提示只说等谁、到哪步能点;对作者说"你",对旁人点名作者
+  assert.doesNotMatch(closure.hint ?? "", /已按意见改/);
+  assert.match(closure.hint ?? "", /最终推送确认卡出现后，由你点「确认已修复」/);
+  const bystander = annotationClosure(item, FACTS, { ...ALICE, username: "someone-else" });
+  assert.match(bystander.hint ?? "", /由意见作者 alice 点「确认已修复」/);
+  assert.doesNotMatch(bystander.hint ?? "", /由你/);
 });
 
 test("MR 修复轮:复检卡到了+本轮回执 → 作者可裁决", () => {

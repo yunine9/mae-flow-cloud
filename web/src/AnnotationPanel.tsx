@@ -687,6 +687,12 @@ export function AnnotationPanel({
                   </div>
                 )
               )}
+              {/* 已送出、但看的人此刻点不了:把"等谁、到哪步能点"写在卡上,
+                  不藏在状态词的悬停提示里(用户 2026-09-05:"检视意见在哪里点
+                  通过?没看到"——其实是等作者、等复检卡,卡上一个字没说)。 */}
+              {item.status === "sent" && !actionable && !editing && closure.hint && (
+                <p className="annot-next"><b>下一步</b>{closure.hint}</p>
+              )}
               <div className="annot-item-foot">
                 <small>
                   {closure.delivery_text} · 批注作者 {personName(item.author)} · {relativeTime(item.created_at)}

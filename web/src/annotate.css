@@ -1343,6 +1343,9 @@
   border-top: 1px solid var(--line);
 }
 .task-workspace-v2 .annot-item-foot small { min-width: 0; color: var(--faint); font-size: var(--fs-12); }
+/* "下一步"行:等谁、到哪一步能点;只在已送出但此刻点不了时出现 */
+.task-workspace-v2 .annot-next { margin: 8px 0 0; color: var(--muted); font-size: var(--fs-12); line-height: 1.55; }
+.task-workspace-v2 .annot-next b { margin-right: 6px; color: var(--attention); font-weight: 600; }
 .task-workspace-v2 .annot-owner-actions button,
 .task-workspace-v2 .annot-panel button.ghost {
   height: var(--control-h-sm);
