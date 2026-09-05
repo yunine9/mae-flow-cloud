@@ -9,14 +9,11 @@ const workspace = readFileSync(
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
-test("长批注在右侧抽屉内滚动,不挤压主工作台", () => {
-  // 2026-09-02 弹层改抽屉(用户定调易用性优先):滚动仍由抽屉内容区兜住。
-  assert.match(workspace,
-    /className="workspace-review-drawer"\s+role="complementary"/);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*min-height:\s*0/s);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.workspace-review-content\s*\{[^}]*overflow:\s*auto/s,
-    "长批注应由抽屉内容区统一滚动，不能挤压主工作台");
+test("长批注在工作区滚动，材料与检视视图互斥但保留挂载", () => {
+  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  assert.match(workspace, /className="ws-review-canvas"/);
+  assert.match(workspace, /className="ws-material-content" hidden=\{reviewPanelOpen\}/);
+  assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);
 });
 
 test("Markdown 全屏使用宽画布且图表优先缩放到一屏", () => {
@@ -45,7 +42,7 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
 test("邀请 Committer 收进批注 Inspector 标题栏，不占用主导航", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<div className={`ws-material-reader'),
+    workspace.indexOf('<section className="ws-review-canvas"'),
   );
   assert.match(navigation, /ws-review-launch/);
   assert.doesNotMatch(navigation, /邀请检视/,
@@ -58,8 +55,8 @@ test("邀请 Committer 收进批注 Inspector 标题栏，不占用主导航", (
   assert.match(css, /\.workspace-invite-dialog\s*\{[^}]*width:\s*min\(460px, 100%\)/s);
 
   const reviewDialog = workspace.slice(
-    workspace.indexOf('className="workspace-review-drawer"'),
-    workspace.indexOf('{reviewInviteOpen &&'),
+    workspace.indexOf('className="ws-review-canvas"'),
+    workspace.indexOf('<div className="ws-material-content"'),
   );
   assert.match(reviewDialog, /workspace-review-invite-button/,
     "邀请属于检视上下文，应在 Inspector 内一步可达");

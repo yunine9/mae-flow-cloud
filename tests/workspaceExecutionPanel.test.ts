@@ -18,28 +18,22 @@ test("活动先给人的阶段摘要，原始事件保留但默认按需展开",
     workspace.indexOf('</>}\n        </section>',
       workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">')),
   );
-  assert.match(activity, /<TaskTimeline taskId=\{task\.id\} \/>/);
-  assert.match(activity, /<strong>原始事件<\/strong>/);
+  assert.match(activity, /<TaskTimeline taskId=\{task\.id\} defaultOpen \/>/);
+  assert.match(activity, /<strong>执行日志<\/strong>/);
   assert.match(activity, /<ExecutionPanel task=\{task\} \/>/);
   assert.doesNotMatch(activity, /<ExecutionPanel task=\{task\} defaultOpen \/>/,
     "Agent 原文和工具调用是审计材料，不应压过阶段进展");
 });
 
-test("批注与检视是常驻按钮，点击展开右侧抽屉且不替换主工作面", () => {
-  const navigation = workspace.slice(
-    workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<section className="workspace-review-drawer"'),
-  );
-  assert.match(navigation, /ws-review-launch/);
-  assert.match(navigation, /批注与检视/);
-  assert.match(navigation, /aria-haspopup="dialog"/);
-  // 2026-09-02 弹层改抽屉:挤进正文右栏,主工作面(材料/协作/执行)不动。
-  assert.match(workspace,
-    /className="workspace-review-drawer"\s+role="complementary"/);
-  assert.match(workspace, /\{reviewWorkspaceContent\}/,
-    "抽屉应承载完整批注、回应和 Committer 检视工作面");
-  assert.doesNotMatch(workspace, /aria-label="本轮检视清单"/,
-    "批注不应以旧的'本轮检视清单'形态接管 Agent 当前问题");
+test("批注与检视在工作区独立呈现，右侧不再承载意见面板", () => {
+  assert.match(workspace, /aria-controls="ws-review-canvas"/);
+  assert.match(workspace, /className="ws-review-canvas"[\s\S]*?role="tabpanel"/);
+  assert.match(workspace, /hidden=\{!reviewPanelOpen\}/);
+  assert.doesNotMatch(workspace, /className="workspace-review-drawer"/);
+  const side = workspace.slice(workspace.indexOf('<section className="ws-side"'),
+    workspace.indexOf('{reviewInviteOpen &&'));
+  assert.doesNotMatch(side, /reviewWorkspaceContent|ws-feedback-home/);
+  assert.match(workspace, /function locate\(item: Annotation\) \{\s*setReviewPanelOpen\(false\)/);
 });
 
 test("Token 用量保留在活动视图的低频披露中，不混入批注检视", () => {

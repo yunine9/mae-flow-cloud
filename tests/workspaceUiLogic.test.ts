@@ -166,6 +166,8 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
     "用户明确停止的任务不再新增记录");
   assert.equal(workspace.materialViewForAnnotation(
     api.TASK_REQUIREMENT_ARTIFACT, []), "source");
+  assert.equal(workspace.materialViewForAnnotation("__workspace_diff__", []), "diff",
+    "工作区代码批注的虚拟标识不能被当作文档名");
   assert.equal(workspace.materialViewForAnnotation("changes.diff", [
     { name: "changes.diff", label: "代码差异", kind: "diff", bytes: 1 },
   ]), "diff");
