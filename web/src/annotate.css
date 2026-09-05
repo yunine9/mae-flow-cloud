@@ -77,8 +77,20 @@
   transform: translate(0, -50%);
 }
 
-/* 已有意见时，同一个悬浮位改成“查看”，不再同时摆第二枚按钮挤正文。
-   正文点击仍是新增批注，按钮点击只打开对应意见，两个动作不打架。 */
+/* 选中文字只提供一个轻量操作，保留原文选区和复制行为。 */
+.annot-selection-fab {
+  width: 132px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.annot-selection-fab::after { display: none; }
+
+/* 已有意见时，同一个悬浮位改成“查看”；展开后可补充批注。 */
 .annot-review-fab {
   display: flex;
   gap: 3px;

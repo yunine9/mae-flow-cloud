@@ -5,14 +5,14 @@
  * 知道"批注"这回事,只管吐出 `data-l` / `data-file`。内核面板也是这么
  * 分层的,两边语义对得上。
  *
- * 手感上只有一件事:悬停出 ✎,点一下原地展开输入框,写完收起。
- * 没有模式开关、没有工具栏、没有"提交批注"按钮——那些都是把圈注变回填表。
+ * 正文默认用于阅读与复制。悬停行后点批注图标，或选中文字后点
+ * “批注选中内容”，才展开编辑框；点击、双击和拖选本身不创建批注。
  */
 
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation } from "./api";
 import {
-  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection,
+  anchorOf, annotationsAtRow, quoteOfSelection,
   type MaterialAnnotation, type RowNode, type SelectionQuote,
 } from "./annotateTargets";
 import "./annotate.css";
@@ -56,6 +56,8 @@ interface Draft {
   host: HTMLElement;
 }
 
+type SelectedBlock = SelectionQuote & { focusRow: HTMLElement };
+
 export function Annotatable({
   taskId,
   artifact,
@@ -81,7 +83,7 @@ export function Annotatable({
   /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
   onAdded: () => void;
-  /** 已圈过的行点这里直达右侧对应意见；正文点击仍保留新增批注语义。 */
+  /** 已圈过的行通过图标查看意见；正文仍然只用于阅读。 */
   onOpenAnnotations?: (ids: string[]) => void;
   /** Same live feedback component as the collaboration feed, scoped to this location. */
   renderInlineReview?: (ids: string[]) => React.ReactNode;
@@ -115,20 +117,34 @@ export function Annotatable({
     ? "随决定交给 Agent" : ROUTE_COPY[route].action;
   const deliveryHint = route === "agent"
     ? queueWithDecision
-      ? "这条意见会先登记；提交当前决定后，一并送达 Agent。"
-      : "发送后，在这条批注下查看送达状态和处理结果。"
+      ? "当前任务正等你决定。这里先登记意见，提交当前决定后送达；不会让 Agent 提前继续。"
+      : "现在就发送给 Agent，无需等最终决定；送达状态和处理结果会显示在这条批注下。"
     : route === "owner_reply"
       ? "发送后，等待任务责任人在这条批注中答复。"
       : "发送后，先等责任人给出结论，再交给 Agent 执行。";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // 点了但没开成框时的一句人话:功能"点不了"的投诉里,多数其实是
-  // 落点没命中行,而代码原来一声不吭。
-  const [hint, setHint] = useState("");
   const [hovered, setHovered] = useState<HTMLElement>();
-  // 松手与紧随其后的 click 都可能开框,用它挡第二次(state 在同一拍里还是旧的)。
+  const [selected, setSelected] = useState<SelectedBlock>();
   const draftRef = useRef<Draft | undefined>(undefined);
   draftRef.current = draft;
+
+  // 保留选区只为显示显式操作；选择、复制文字不打开编辑框也不抢焦点。
+  useEffect(() => {
+    setSelected(undefined);
+    setHovered(undefined);
+    if (!enabled) return;
+    function selectionChanged() {
+      if (draftRef.current) return;
+      const block = selectedBlock();
+      setSelected((current) => current?.startRow === block?.startRow
+        && current?.focusRow === block?.focusRow
+        && current?.lineEnd === block?.lineEnd && current?.quote === block?.quote
+        ? current : block);
+    }
+    document.addEventListener("selectionchange", selectionChanged);
+    return () => document.removeEventListener("selectionchange", selectionChanged);
+  }, [taskId, artifact, enabled]);
 
   // 已圈过的行留一道竖杠:人扫一眼就知道自己圈到哪儿了。
   // 每次 items/内容变化都重刷——渲染器可能整块换掉。
@@ -154,14 +170,19 @@ export function Annotatable({
 
   /** 这块材料里划选的那一块(没有就 undefined)。只认落在本材料行里的
    * 选区:别处残留的选中文本不算,也不再让材料"点不动"。 */
-  function selectedBlock(): SelectionQuote | undefined {
+  function selectedBlock(): SelectedBlock | undefined {
     const root = host.current;
     if (!root || typeof window === "undefined") return undefined;
-    return quoteOfSelection(window.getSelection(), (node) => {
+    const selection = window.getSelection();
+    const rowOf = (node: unknown) => {
       if (!(node instanceof Node) || !root.contains(node)) return undefined;
       const element = node instanceof Element ? node : node.parentElement;
-      return element?.closest<HTMLElement>("[data-l]") as unknown as RowNode | null;
-    });
+      return element?.closest<HTMLElement>("[data-l]");
+    };
+    const block = quoteOfSelection(selection, (node) => rowOf(node) as unknown as RowNode | undefined);
+    const focusRow = rowOf(selection?.focusNode);
+    // 操作跟着拖选结束的位置；跨多段选择时，起始行可能已经滚出屏幕。
+    return block && focusRow ? { ...block, focusRow } : undefined;
   }
 
   function openRow(row: HTMLElement, block = selectedBlock()) {
@@ -174,7 +195,7 @@ export function Annotatable({
     setError("");
     setThread(undefined);
     setReceipt("");
-    setHint("");
+    setSelected(undefined);
     setNote("");
     setRoute("agent");
     setDraft({
@@ -189,66 +210,6 @@ export function Annotatable({
       host: row,
     });
     setHovered(undefined);
-  }
-
-  // 跨行拖选时 mousedown/mouseup 落在不同元素上,浏览器不派 click——所以
-  // 松手也看一眼:选了一块就开框。放到下一拍,等选区定型;click 若已开过
-  // 就不再开第二次。
-  function settle(event: React.MouseEvent) {
-    if (!enabled || draft) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest?.(".annot-fab, .annot-editor, button, a, textarea, input")) return;
-    setTimeout(() => {
-      if (draftRef.current) return;
-      const block = selectedBlock();
-      if (block) openRow(block.startRow as unknown as HTMLElement, block);
-    }, 0);
-  }
-
-  function open(event: React.MouseEvent) {
-    if (!enabled) return;
-    const target = event.target as HTMLElement | null;
-    if (!target?.closest) return;
-    if (target.closest("button, a, textarea, input, .annot-editor")) return;
-    const block = selectedBlock();
-    if (block) {
-      openRow(block.startRow as unknown as HTMLElement, block);
-      return;
-    }
-    const row = pickRow(
-      target as unknown as RowNode,
-      host.current as unknown as RowNode,
-    ) as unknown as HTMLElement | undefined;
-    if (row) {
-      openRow(row);
-      return;
-    }
-    // 点在交互元素上(按钮/链接)不打扰:那儿有它自己的活。
-    if (target.closest("button, a, textarea, input, .annot-editor")) return;
-    // 落点被覆盖层挡住(专注审阅的分栏把手正压在行中心,MFC-034):
-    // 沿该坐标下的整叠元素穿透找行,不再赌事件恰好命中行节点。
-    const covered = typeof document !== "undefined"
-      && typeof document.elementsFromPoint === "function"
-      ? pickRowFromStack(
-          document.elementsFromPoint(event.clientX, event.clientY) as
-            unknown as ArrayLike<RowNode>,
-          host.current as unknown as RowNode,
-          (node) => !!host.current
-            && host.current.contains(node as unknown as Node),
-        ) as unknown as HTMLElement | undefined
-      : undefined;
-    if (covered) {
-      openRow(covered);
-      return;
-    }
-    // Annotatable 包着整块 Git 审阅器，目录树、标题、分栏把手也都在
-    // 它里面。那些控件的空隙不是“材料正文”，点它们不该冒出一条
-    // 批注失败提示；只有确实落在文档或 diff 正文里时才解释为何没锚点。
-    if (!target.closest(".ws-doc, .diff-review-body")) return;
-    // 点在了材料上、却落不到任何一行(容器空隙、纯装饰块):**说一句**,
-    // 别装作没点——"点了没反应"是这个功能最常见的投诉,而多数时候它只是
-    // 差了这一句话。
-    setHint("这一处没有行号可锚定,点正文那一行(标题/段落/列表项/代码行),或划选一段再松手");
   }
 
   function track(event: React.MouseEvent) {
@@ -320,19 +281,25 @@ export function Annotatable({
     <div
       className={`annotatable${enabled ? "" : " is-readonly"}`}
       ref={host}
-      onClick={open}
-      onMouseUp={settle}
       onMouseMove={track}
       onMouseLeave={() => setHovered(undefined)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setSelected(undefined);
+      }}
     >
       {children}
-      {hint && !draft && (
-        <div className="annot-hint" role="status" onClick={(event) => {
-          event.stopPropagation();
-          setHint("");
-        }}>{hint}<b>知道了</b></div>
-      )}
-      {hovered && !draft && hoveredAnnotations.length > 0
+      {enabled && selected && !draft ? (
+        <button type="button" className="annot-fab annot-selection-fab"
+          style={fabPosition(selected.focusRow, host.current, 132)}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => openRow(selected.startRow as unknown as HTMLElement, selected)}>
+          <svg viewBox="0 0 20 20" aria-hidden>
+            <path d="M4.25 5.25A2.25 2.25 0 0 1 6.5 3h7A2.25 2.25 0 0 1 15.75 5.25v5.5A2.25 2.25 0 0 1 13.5 13h-4l-3.25 2.5V13A2.25 2.25 0 0 1 4 10.75v-5.5Z" />
+            <path d="M10 6v4M8 8h4" />
+          </svg>
+          批注选中内容
+        </button>
+      ) : hovered && !draft && hoveredAnnotations.length > 0
           && onOpenAnnotations ? (
         <button
           type="button"
@@ -453,6 +420,7 @@ export function Annotatable({
 function fabPosition(
   row: HTMLElement,
   root: HTMLElement | null,
+  width = 32,
 ): React.CSSProperties {
   if (!root) return {};
   const rowBox = row.getBoundingClientRect();
@@ -464,13 +432,13 @@ function fabPosition(
       position: "fixed",
       zIndex: 260,
       top: rowBox.top + Math.max(2, (rowBox.height - size) / 2),
-      left: Math.min(window.innerWidth - size - 7, rowBox.right - size - 6),
+      left: Math.max(7, Math.min(window.innerWidth - width - 7, rowBox.right - width - 6)),
     };
   }
   const rootBox = root.getBoundingClientRect();
   const size = 32;
   const rowRight = rowBox.right - rootBox.left + root.scrollLeft;
-  const left = Math.max(4, Math.min(root.clientWidth - size - 6, rowRight - size - 5));
+  const left = Math.max(4, Math.min(root.clientWidth - width - 6, rowRight - width - 5));
   const top = rowBox.top - rootBox.top + root.scrollTop
     + Math.max(2, Math.min(8, (rowBox.height - size) / 2));
   return { top, left };
