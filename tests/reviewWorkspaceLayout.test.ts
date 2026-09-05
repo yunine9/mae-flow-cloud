@@ -9,10 +9,11 @@ const workspace = readFileSync(
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
-test("长批注在工作区滚动，材料与检视视图互斥但保留挂载", () => {
+test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
   const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
   assert.match(workspace, /className="ws-review-canvas"/);
-  assert.match(workspace, /className="ws-material-content" hidden=\{reviewPanelOpen\}/);
+  assert.match(workspace, /className="ws-material-stage"/);
+  assert.match(workspace, /className="ws-material-content">/);
   assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);
 });
 

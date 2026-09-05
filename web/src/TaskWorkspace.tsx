@@ -723,12 +723,11 @@ export function TaskWorkspace({
 
   // 工作区内切换材料、检视和运行记录；右栏只承接决定与回复。
   function openMaterial(view: MaterialView) {
-    setReviewPanelOpen(false);
     if (workspaceView === "execution") selectWorkspaceView("materials");
     setMaterialView(view);
   }
   function materialTabOn(view: MaterialView): boolean {
-    return !reviewPanelOpen && workspaceView !== "execution" && materialView === view;
+    return workspaceView !== "execution" && materialView === view;
   }
 
   // 活动面板的题头代替组件自己的折叠头:两层头摞在一起是用户实锤的
@@ -745,7 +744,6 @@ export function TaskWorkspace({
   }
 
   function selectWorkspaceView(next: WorkspaceView) {
-    setReviewPanelOpen(false);
     if (next === workspaceView) return;
     const currentScroll = workspaceRoot.current?.querySelector<HTMLElement>(
       ".ws-primary-scroll");
@@ -1222,7 +1220,6 @@ export function TaskWorkspace({
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
   function locate(item: Annotation) {
-    setReviewPanelOpen(false);
     setWorkspaceView("materials");
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     const targetArtifact = item.artifact === "__workspace_diff__"
@@ -1808,8 +1805,8 @@ export function TaskWorkspace({
                   ? ` + ${untrackedDirectoryCount}目录` : ""}</i>
               </button>
               <button type="button" role="tab" className={`ws-activity-tab${
-                  !reviewPanelOpen && workspaceView === "execution" ? " on" : ""}`}
-                aria-selected={!reviewPanelOpen && workspaceView === "execution"}
+                  workspaceView === "execution" ? " on" : ""}`}
+                aria-selected={workspaceView === "execution"}
                 title={`运行记录：阶段进展、原始事件、任务上下文与模型用量（${viewShortcutHint("execution")}）`}
                 onClick={() => selectWorkspaceView("execution")}>
                 <span>运行记录</span><i>进度 · 日志 · 用量</i>
@@ -1824,18 +1821,18 @@ export function TaskWorkspace({
                 <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
                 {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>}
-              <button type="button" role="tab"
+              <button type="button"
                 className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
-                aria-label="批注与检视" aria-selected={reviewPanelOpen} aria-controls="ws-review-canvas"
+                aria-label="批注与检视" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
                 title={`查看意见、Agent 回应并复检（${REVIEW_SHORTCUT}）`}
                 onClick={() => {
-                  setReviewPanelOpen(true);
+                  setReviewPanelOpen((open) => !open);
                   setReviewRevealRequest((request) => request + 1);
                 }}>
                 <span className="ws-review-label">批注与检视</span>
                 <em>{reviewCounts.mine || reviewRecordCount}</em>
               </button>
-              {!reviewPanelOpen && materialView !== "chain" && workspaceView !== "execution" && <button type="button"
+              {materialView !== "chain" && workspaceView !== "execution" && <button type="button"
                 className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
                 aria-expanded={materialSearchOpen}
                 title="只搜索当前打开的这份内容"
@@ -1844,16 +1841,20 @@ export function TaskWorkspace({
               </button>}
             </div>
           </div>
-          <section className="ws-review-canvas" id="ws-review-canvas" role="tabpanel"
+          <div className="ws-material-stage">
+          <section className="ws-review-canvas" id="ws-review-canvas" role="complementary"
             aria-label="批注与检视" tabIndex={-1} hidden={!reviewPanelOpen}>
             <header className="ws-view-intro">
-              <div><h2>批注与检视</h2><p>集中查看意见和 Agent 回应，复检后确认闭环。点击文件位置回到原文或代码。</p></div>
+              <div><h2>批注与检视</h2><p>对照材料查看意见和回应，点击位置即可定位。</p></div>
+              <button type="button" aria-label="收起批注与检视" onClick={() => setReviewPanelOpen(false)}>×</button>
+            </header>
+            <div className="ws-review-tools">
               {canRequestReview && <button type="button" className="workspace-review-invite-button"
                 onClick={() => setReviewInviteOpen(true)}>邀请检视</button>}
-            </header>
+            </div>
             {reviewWorkspaceContent}
           </section>
-          <div className="ws-material-content" hidden={reviewPanelOpen}>
+          <div className="ws-material-content">
           {workspaceView === "execution" ? (
             <div className="ws-primary-scroll ws-execution-view">
               <header className="ws-view-intro"><div><h2>运行记录</h2>
@@ -2275,6 +2276,7 @@ export function TaskWorkspace({
           </div>
           </div>
           </>}
+          </div>
           </div>
         </section>
         <section className="ws-side" aria-label="与 Agent 协作">

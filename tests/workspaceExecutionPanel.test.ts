@@ -25,15 +25,17 @@ test("活动先给人的阶段摘要，原始事件保留但默认按需展开",
     "Agent 原文和工具调用是审计材料，不应压过阶段进展");
 });
 
-test("批注与检视在工作区独立呈现，右侧不再承载意见面板", () => {
+test("批注检视停靠工作区，材料保持可见，决定栏不承载意见", () => {
   assert.match(workspace, /aria-controls="ws-review-canvas"/);
-  assert.match(workspace, /className="ws-review-canvas"[\s\S]*?role="tabpanel"/);
+  assert.match(workspace, /className="ws-review-canvas"[\s\S]*?role="complementary"/);
   assert.match(workspace, /hidden=\{!reviewPanelOpen\}/);
   assert.doesNotMatch(workspace, /className="workspace-review-drawer"/);
   const side = workspace.slice(workspace.indexOf('<section className="ws-side"'),
     workspace.indexOf('{reviewInviteOpen &&'));
   assert.doesNotMatch(side, /reviewWorkspaceContent|ws-feedback-home/);
-  assert.match(workspace, /function locate\(item: Annotation\) \{\s*setReviewPanelOpen\(false\)/);
+  const locate = workspace.slice(workspace.indexOf("function locate(item: Annotation)"), workspace.indexOf("const activeMeta"));
+  assert.doesNotMatch(locate, /setReviewPanelOpen\(false\)/);
+  assert.doesNotMatch(workspace, /className="ws-material-content" hidden/);
 });
 
 test("Token 用量保留在活动视图的低频披露中，不混入批注检视", () => {
