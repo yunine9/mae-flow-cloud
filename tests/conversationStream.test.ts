@@ -120,7 +120,7 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.match(html, /旧版本回执，不算数/);
   assert.match(html, /随下一次决定送达/);
   assert.match(html, /CodeHub 检视/);
-  assert.match(html, /只看这条的往来/);
+  assert.match(html, /看这条的处理记录/);
   assert.match(html, /data-annotation-ids="a-1 a-2"/);
   assert.match(html, /Agent 正在写代码/, "没有待办时锚条说当前在干嘛");
 });
@@ -152,10 +152,10 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   assert.match(confirm, /3 条意见等你逐条确认/);
   assert.match(confirm, /打开批注与检视/);
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
-  // 输入框就空了(用户点「往来」后实锤"说给 Agent 栏没了")。
+  // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。
   const threaded = render({ task: waitingTask, decides: true, thread: "a-1",
     currentCard: React.createElement("div", { className: "probe-card" }, "决定卡本体") });
-  assert.match(threaded, /只看这条意见的往来/);
+  assert.match(threaded, /只看这条意见的处理记录/);
   assert.match(threaded, /conv-card current"><div class="probe-card">决定卡本体/,
     "线程视图不丢当前卡");
 });

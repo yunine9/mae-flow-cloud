@@ -403,6 +403,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   实锤"说给 Agent 栏没了"——线程视图原来不钉当前决定卡,而卡的提交区(附言框
   + 提交键)是经 portal 挂进输入框的,卡不渲输入框就只剩一句"等你在上面点一个
   选项"。现在当前卡在线程视图里照样钉在末尾,回归用例进了 conversationStream。
+  同时按用户意见把「往来」改叫「看处理记录」(原词不知道要干啥),线程视图头
+  与流里的入口同步改词;那个小按钮原来 22px 定高装不下 studio 皮肤给 button
+  的通用内边距,字挂在框外,已按 (0,4,0) 特异性钉死盒子。
   **已验**:`tests/conversation.test.ts`(回合合并与步骤计数、过程话/交接语标记、子会话不进流、卡
   与决定来自 waiting.json、批注账七种操作还原与合批、外部意见按批次、裸时间戳
   与同毫秒排序、坏行容错);`tests/conversationStream.test.ts`(Vite SSR 静态

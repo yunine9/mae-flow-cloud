@@ -235,7 +235,7 @@ export function ConversationStream({
   people: readonly { username: string; display_name?: string }[];
   filter: StreamFilter;
   onFilterChange: (filter: StreamFilter) => void;
-  /** 线程视图:只看这条批注的往来。 */
+  /** 线程视图:只看这条批注的处理记录。 */
   thread?: string;
   onThreadChange: (id?: string) => void;
   annotations: readonly Annotation[];
@@ -284,7 +284,7 @@ export function ConversationStream({
   // 被埋在这些条目上面,人得往回翻才找得到选项(fixture 实测)。时间线上
   // 它原来的位置不重复渲。线程视图也钉:卡的提交区经 portal 挂在输入框里,
   // 卡不渲输入框就只剩一句"等你在上面点一个选项"——用户 2026-09-05 点了
-  // 「往来」后实锤"说给 Agent 栏没了"。
+  // 「看处理记录」后实锤"说给 Agent 栏没了"。
   const pinnedCard = !!waiting && !!currentCard;
   const chronological = pinnedCard
     ? visible.filter((item) => !(item.kind === "card" && item.waiting_id === waiting.waiting_id))
@@ -373,7 +373,7 @@ export function ConversationStream({
     if (thread === id) return null;
     return (
       <button type="button" className="conv-thread-link"
-        onClick={() => onThreadChange(id)}>只看这条的往来</button>
+        onClick={() => onThreadChange(id)}>看这条的处理记录</button>
     );
   }
 
@@ -713,7 +713,7 @@ export function ConversationStream({
       {thread && (
         <div className="ws-thread-head" role="note">
           <span>
-            只看这条意见的往来
+            只看这条意见的处理记录
             {threadAnnotation && <code>{shortPath(threadAnnotation.file)}:{threadAnnotation.line}</code>}
             {threadAnnotation && <small>{threadAnnotation.note}</small>}
           </span>
@@ -733,12 +733,12 @@ export function ConversationStream({
         {problems.map((problem) => (
           <div className="conv-problem" role="status" key={problem}>{problem}</div>
         ))}
-        {!loaded && !unavailable && <div className="conv-empty">正在读取往来…</div>}
+        {!loaded && !unavailable && <div className="conv-empty">正在读取记录…</div>}
         {loaded && !shown.length && !currentCard && (
           <div className="conv-empty">
-            {thread ? "这条意见还没有往来记录。"
-              : filter !== "all" ? "这一档下还没有记录；切回「全部」看完整往来。"
-              : "还没有往来。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}
+            {thread ? "这条意见还没有处理记录。"
+              : filter !== "all" ? "这一档下还没有记录；切回「全部」看完整记录。"
+              : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}
           </div>
         )}
         {rows}

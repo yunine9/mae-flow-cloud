@@ -115,7 +115,7 @@ test("锚定原文单独一行接在头部下面,一行截断、整段留在 tit
   // 用户实测:"针对 1. 缺失变量输出空串并记录 warn 日志;"这行完全没必要
   // 占一整块。它只是"指着哪儿"的补充,一行截断即可,整段留在 title 里、
   // 点位置也能回到那一行。2026-09-05 再改:它挤在头部会把状态推到第二行
-  // (截图"信息密度太低"),现在头部一行放位置·去向·状态·往来,锚点单独一行。
+  // (截图"信息密度太低"),现在头部一行放位置·去向·状态·看处理记录,锚点单独一行。
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
   const head = panel.indexOf('className="annot-item-head"');

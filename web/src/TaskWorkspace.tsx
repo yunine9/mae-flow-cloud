@@ -2553,7 +2553,7 @@ export function TaskWorkspace({
               onAssistant={setAssistantView} />
           ) : (
             <div className="ws-composer-readonly">
-              你可以查看全部往来与材料；提交决定和插话由责任人 {task.luban_account ?? "或协作者"} 处理。
+              你可以查看全部记录与材料；提交决定和插话由责任人 {task.luban_account ?? "或协作者"} 处理。
             </div>
           )}
         </section>

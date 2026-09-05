@@ -389,13 +389,17 @@
 .task-workspace-v2 .ws-composer .ws-reply-dock .decision-dock-notice[role="status"] { color: var(--attention); }
 
 /* 批注抽屉里每条意见的"往来"入口:回到流里只看这条 */
-.annot-thread {
-  height: 22px; padding: 0 8px; margin-left: 4px;
-  border: 1px solid var(--line); border-radius: 999px;
-  background: transparent; color: var(--muted);
-  font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap;
+/* 「看处理记录」小按钮:studio 皮肤给所有 button 的 5px/13px 内边距和 14.5px
+   字号特异性更高,原来 22px 定高装不下,字挂在框外(用户 2026-09-05 截图
+   "两字和框没对上")。这里以 (0,4,0) 把盒子每一项都钉死。 */
+.workspace-studio.task-workspace-v2 .annot-item-head .annot-thread {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 24px; min-height: 0; padding: 0 10px; margin-left: auto;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  color: var(--muted); font-size: var(--fs-12); line-height: 1; white-space: nowrap;
+  cursor: pointer;
 }
-.annot-thread:hover { color: var(--ink); border-color: var(--ink); }
+.workspace-studio.task-workspace-v2 .annot-item-head .annot-thread:hover { color: var(--ink); border-color: var(--ink); }
 
 /* 窄屏:两栏上下堆叠时流不再内滚,输入框跟在流后面 */
 @media (max-width: 1000px) {

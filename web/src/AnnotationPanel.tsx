@@ -138,7 +138,7 @@ export function AnnotationPanel({
   canOperate: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
-  /** 到右栏会话流里只看这条意见的往来(送出→回执→追问→确认)。 */
+  /** 到右栏会话流里只看这条意见的处理记录(送出→回执→追问→确认)。 */
   onShowThread?: (id: string) => void;
   taskStatus: TaskStatus;
   /** 人工意见修复与 Build-Fix 都已完成，当前真的轮到意见作者裁决。 */
@@ -529,7 +529,7 @@ export function AnnotationPanel({
                     ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
                       item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
                 </button>
-                {/* 一行头:位置 · 去向 · 状态 · 往来。去向原来单占一行,状态被锚点
+                {/* 一行头:位置 · 去向 · 状态 · 看处理记录。去向原来单占一行,状态被锚点
                     挤到第二行(用户 2026-09-05 截图"信息密度太低")。 */}
                 <span className={`annot-route-badge ${routeOf(item)}`}>
                   {ROUTE_LABEL[routeOf(item)]}
@@ -542,8 +542,8 @@ export function AnnotationPanel({
                 </span>
                 {onShowThread && item.status !== "draft" && (
                   <button type="button" className="annot-thread"
-                          title="在右栏会话流里只看这条意见的往来"
-                          onClick={() => onShowThread(item.id)}>往来</button>
+                          title="右栏只显示这条意见的处理记录:什么时候送给 Agent、Agent 怎么回的、谁确认或退回"
+                          onClick={() => onShowThread(item.id)}>看处理记录</button>
                 )}
               </div>
               {/* 锚定原文单独一行、一行截断:它是"这条批注指着哪儿"的补充,不是
