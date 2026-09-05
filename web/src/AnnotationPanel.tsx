@@ -529,15 +529,13 @@ export function AnnotationPanel({
                     ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
                       item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
                 </button>
-                {/* 锚定原文接在位置后面收一行:它是"这条批注指着哪儿"的补充,
-                    不是内容本身。原来它单占左栏一整块,把批注正文和 Agent
-                    回应挤成两条窄柱(用户实测:760px 抽屉里两栏只剩 304 和
-                    357)。整段仍在 title 里,点位置也能直接回到那一行。 */}
-                {(item.quote || item.anchor) && <blockquote
-                  className={`annot-anchor${item.quote ? " has-quote" : ""}`}
-                  title={item.quote ?? item.anchor}>
-                  {item.quote ?? item.anchor}
-                </blockquote>}
+                {/* 一行头:位置 · 去向 · 状态 · 往来。去向原来单占一行,状态被锚点
+                    挤到第二行(用户 2026-09-05 截图"信息密度太低")。 */}
+                <span className={`annot-route-badge ${routeOf(item)}`}>
+                  {ROUTE_LABEL[routeOf(item)]}
+                  {routeOf(item) !== "agent" && item.assignee
+                    ? ` · ${personName(item.assignee)}` : ""}
+                </span>
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
                   {progress.text}
@@ -548,11 +546,13 @@ export function AnnotationPanel({
                           onClick={() => onShowThread(item.id)}>往来</button>
                 )}
               </div>
-              <div className={`annot-route-badge ${routeOf(item)}`}>
-                {ROUTE_LABEL[routeOf(item)]}
-                {routeOf(item) !== "agent" && item.assignee
-                  ? ` · ${personName(item.assignee)}` : ""}
-              </div>
+              {/* 锚定原文单独一行、一行截断:它是"这条批注指着哪儿"的补充,不是
+                  内容本身。整段仍在 title 里,点位置也能直接回到那一行。 */}
+              {(item.quote || item.anchor) && <blockquote
+                className={`annot-anchor${item.quote ? " has-quote" : ""}`}
+                title={item.quote ?? item.anchor}>
+                {item.quote ?? item.anchor}
+              </blockquote>}
               {editing ? (
                 <div className="annot-inline-editor">
                   <textarea value={editingNote} autoFocus rows={5}
@@ -592,7 +592,6 @@ export function AnnotationPanel({
                 // 色块,看上去像"正文 vs 卡片"而不是"一问一答"。给它同样
                 // 的块形和标题,明说这是检视意见原文,两边才对得起来。
                 <div className="annot-note">
-                  <strong>检视意见原文</strong>
                   <p>{item.note || "（只记了原文，没另写一句）"}</p>
                   {/* 追问留档:作者已经补充过什么问题,人和 Agent 看到的是同一份历史。
                       在澄清卡上直接答的那种,连答复一起摆出来。 */}
@@ -614,11 +613,13 @@ export function AnnotationPanel({
                       ? "Agent：没有修改"
                       : "Agent：需要你补充说明"}</strong>
                   <p>{item.response.summary}</p>
-                  {item.response.evidence.length > 0 && (
-                    <small>依据：{item.response.evidence.join("；")}</small>
-                  )}
-                  {item.response.fixed_sha && (
-                    <small>对应提交：{item.response.fixed_sha.slice(0, 12)}</small>
+                  {(item.response.evidence.length > 0 || item.response.fixed_sha) && (
+                    <small>{[
+                      ...(item.response.evidence.length > 0
+                        ? [`依据 ${item.response.evidence.join("；")}`] : []),
+                      ...(item.response.fixed_sha
+                        ? [`提交 ${item.response.fixed_sha.slice(0, 12)}`] : []),
+                    ].join(" · ")}</small>
                   )}
                 </div>
               )}

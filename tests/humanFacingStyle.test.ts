@@ -11,7 +11,10 @@ import { readFileSync } from "node:fs";
 import { HUMAN_FACING_STYLE } from "../src/sessionDriver.ts";
 
 test("口径常量说全四件事,且不是命令式校验", () => {
-  for (const cue of ["先一句结论", "不要把整段 diff", "过程话", "听得懂的话", "用中文"]) {
+  // 骨架借自 ayghri/i-have-adhd(先说动作、不寒暄、多步编号、一个下一步、
+  // 列表封顶、报错就事论事),再加本仓的现场约束。
+  for (const cue of ["先说结论", "不写开场白", "结尾只给一个下一步", "用编号", "封顶五条",
+    "进展到哪了", "不要把整段 diff", "过程话", "就事论事", "听得懂的话", "用中文", "例外"]) {
     assert.ok(HUMAN_FACING_STYLE.includes(cue), `缺少:${cue}`);
   }
   assert.doesNotMatch(HUMAN_FACING_STYLE, /必须|禁止|否则/, "是口径提示,不是门禁措辞");

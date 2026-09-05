@@ -40,15 +40,18 @@
   border: 1px solid var(--line); border-radius: 9px; background: var(--surface); min-width: 0;
 }
 .workspace-studio.task-workspace-v2 .annot-list .annot-item.annot-panel-focus { border-color: var(--studio-accent); background: var(--studio-tint); }
-.workspace-studio.task-workspace-v2 .annot-item-head { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.workspace-studio.task-workspace-v2 .annot-anchor { width: 100%; margin: 0; padding: 8px 10px; font-size: var(--fs-12); background: var(--surface-2); border-left: 2px solid var(--line-strong); }
+/* 头部一行放位置·去向·状态·往来,放不下再折行;锚点单独一行、一行截断。原来
+   头部竖排(每个字段各占一行)、锚点带 8px 内边距还允许换行,一条意见占大半屏
+   (用户 2026-09-05 截图"信息密度太低")。 */
+.workspace-studio.task-workspace-v2 .annot-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.workspace-studio.task-workspace-v2 .annot-anchor { width: 100%; margin: 0 0 6px; padding: 2px 8px; font: 12px/1.5 var(--font-mono); background: var(--surface-2); border-left: 2px solid var(--line-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-studio.task-workspace-v2 .annot-note { padding: 0; border: 0; background: transparent; width: 100%; }
 .workspace-studio.task-workspace-v2 .annot-note > strong { display: none; }
 .workspace-studio.task-workspace-v2 .annot-note p { font-size: var(--fs-13); line-height: 1.7; }
 .workspace-studio.task-workspace-v2 .annot-response { min-width: 0; width: 100%; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line); background: transparent; }
 .workspace-studio.task-workspace-v2 .annot-response p { font-size: var(--fs-13); line-height: 1.7; }
 .workspace-studio.task-workspace-v2 .annot-progress,
-.workspace-studio.task-workspace-v2 .annot-route-badge { font-size: var(--fs-12); line-height: 1.5; white-space: normal; }
+.workspace-studio.task-workspace-v2 .annot-route-badge { font-size: var(--fs-12); line-height: 1.5; white-space: nowrap; }
 .workspace-studio.task-workspace-v2 .annot-panel-actions,
 .workspace-studio.task-workspace-v2 .annot-panel-note { padding: 10px; margin: 8px 0; font-size: var(--fs-12); border-radius: var(--radius-sm); }
 .workspace-studio.task-workspace-v2 .annot-panel-actions button { width: 100%; height: auto; white-space: normal; padding: 8px 10px; }
