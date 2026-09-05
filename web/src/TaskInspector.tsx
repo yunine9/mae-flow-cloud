@@ -4,13 +4,12 @@ import { statusText, type TaskSummary } from "./api";
 import { formatLocalDateTime } from "./time";
 import { ExecutionPanel, TaskTimeline } from "./TaskCard";
 import { TokenUsage } from "./TokenUsage";
-import { WarmupPanel } from "./WarmupPanel";
 import { WorkflowProfileCard } from "./WorkflowProfileCard";
 
-export type TaskInspectorKind = "details" | "usage" | "environment" | "logs" | "timing";
+export type TaskInspectorKind = "details" | "usage" | "workflow" | "logs" | "timing";
 const titles: Record<TaskInspectorKind, string> = {
   details: "任务详情",
-  usage: "模型用量", environment: "环境与执行配置",
+  usage: "模型用量", workflow: "执行方案",
   logs: "执行日志", timing: "耗时分析",
 };
 export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }: {
@@ -37,7 +36,7 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
       }
     }}>
     <header><div>
-      {(kind === "usage" || kind === "environment") && <button type="button" className="inspector-back"
+      {(kind === "usage" || kind === "workflow") && <button type="button" className="inspector-back"
         onClick={() => onInspect("details")}>← 返回任务详情</button>}
       <small>{task.ticket || task.id}</small><h2 id="task-inspector-title">{titles[kind]}</h2></div>
       <button type="button" className="inspector-close" aria-label="关闭任务详情" ref={closeButton} onClick={onClose}>×</button></header>
@@ -69,18 +68,17 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
         <nav className="inspector-resource-links" aria-label="任务执行信息">
           <button type="button" onClick={() => onInspect("usage")}><span><strong>模型用量</strong>
             <small>{task.token_usage ? `累计 ${task.token_usage.total_tokens.toLocaleString()} Token` : "提供方暂未返回用量"}</small></span><i aria-hidden>→</i></button>
-          <button type="button" onClick={() => onInspect("environment")}><span><strong>环境与执行配置</strong>
-            <small>查看预热记录和本次执行方案</small></span><i aria-hidden>→</i></button>
+          <button type="button" onClick={() => onInspect("workflow")}><span><strong>执行方案</strong>
+            <small>本任务采用的流程版本与定制</small></span><i aria-hidden>→</i></button>
         </nav>
       </div>}
       {kind === "logs" && <ExecutionPanel task={task} defaultOpen />}
       {kind === "timing" && <><p className="inspector-note">按已记录的事件估算历史耗时；任务当前状态以工作台为准。</p><TaskTimeline taskId={task.id} defaultOpen /></>}
       {kind === "usage" && (task.token_usage ? <TokenUsage usage={task.token_usage} placement="detail" />
         : <p className="inspector-note">模型提供方暂未返回用量，不能据此认为消耗为零。</p>)}
-      {kind === "environment" && <><WarmupPanel task={task} />
-        {!task.baseline_build && <p className="inspector-note">本任务没有环境预热记录。</p>}
+      {kind === "workflow" && <>
         {task.workflow_profile ? <WorkflowProfileCard profile={task.workflow_profile} warning={task.workflow_profile_warning} />
-          : <p className="inspector-note">本任务没有记录执行配置。</p>}
+          : <p className="inspector-note">本任务没有记录执行方案。</p>}
         {(task.execution_plan_alerts ?? []).map((line, index) => <p className="inspector-note" key={index}>{line}</p>)}
       </>}
     </div>

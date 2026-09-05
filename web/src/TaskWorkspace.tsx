@@ -26,7 +26,7 @@ import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
 import { CrossRepositorySync } from "./CrossRepositorySync";
-import { WarmupBadge } from "./WarmupPanel";
+import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
@@ -672,6 +672,7 @@ export function TaskWorkspace({
   const [documentsDownloading, setDocumentsDownloading] = useState(false);
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [taskInspector, setTaskInspector] = useState<TaskInspectorKind>();
+  const [warmupOpen, setWarmupOpen] = useState(false);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewRevealRequest, setReviewRevealRequest] = useState(0);
   const [reviewFocus, setReviewFocus] = useState<{
@@ -764,6 +765,7 @@ export function TaskWorkspace({
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
     setTaskInspector(undefined);
+    setWarmupOpen(false);
     setReviewFocus(undefined);
     repositoryAssigneeSaveTask.current = task.id;
     setRepositoryAssigneeSave("idle");
@@ -946,6 +948,7 @@ export function TaskWorkspace({
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (warmupOpen) { setWarmupOpen(false); return; }
       if (taskInspector) {
         if (!document.querySelector(".warmup-overlay")) setTaskInspector(undefined);
         return;
@@ -965,7 +968,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [taskInspector, materialSearchOpen, materialsFullscreen, reviewInviteOpen,
+  }, [taskInspector, warmupOpen, materialSearchOpen, materialsFullscreen, reviewInviteOpen,
     reviewPanelOpen, onClose]);
 
   // ⌥/Alt+R 在任何布局下切换批注 Inspector:按 code 不按
@@ -1626,7 +1629,6 @@ export function TaskWorkspace({
             <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />
-            <WarmupBadge task={task} />
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>
@@ -1648,6 +1650,7 @@ export function TaskWorkspace({
           {/* 刻度旁只放阶段名:步骤说明已经是主画布的标题,这里再写一遍
               会把 44px 的视图条撑成一行长文。 */}
           <TaskProgress progress={visibleProgress} showDetailedStep={false} status={task.status}
+            preparation={<WarmupBadge task={task} onOpen={() => setWarmupOpen(true)} />}
             onPhaseClick={task.execution_plan || task.workflow_profile
               ? setPlanPhase : undefined}
             context={health && <>
@@ -1726,6 +1729,9 @@ export function TaskWorkspace({
 
       {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
+      {warmupOpen && <OverlayDialog ariaLabel="基线编译详情" title="基线编译与准备状态" onClose={() => setWarmupOpen(false)}>
+        <WarmupPanel task={task} />
+      </OverlayDialog>}
 
       {task.feedback_error && (
         <section className="feedback-panel feedback-panel-error" role="alert">
@@ -2234,8 +2240,8 @@ export function TaskWorkspace({
             )}
 
             {task.baseline_build?.status === "failed" && <div className="alert" role="status">
-              <strong>环境预热失败</strong><span>基线编译未通过，查看环境或上游问题。</span>
-              <button type="button" onClick={() => setTaskInspector("environment")}>查看预热失败原因</button>
+              <strong>基线编译失败</strong><span>基线编译未通过，查看环境或上游问题。</span>
+              <button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button>
             </div>}
             {task.delivery?.skipped && <div className="alert" role="alert">
               <strong>交付已阻止</strong><span>{task.delivery.skipped}</span>

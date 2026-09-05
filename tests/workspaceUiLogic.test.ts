@@ -27,6 +27,7 @@ const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
 const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
 const gitDiff = await vite.ssrLoadModule("/src/GitDiff.tsx");
+const warmup = await vite.ssrLoadModule("/src/WarmupPanel.tsx");
 
 // 闭环判定已经收敛到服务端唯一处;页面只渲染结论。测试因此也走同一条
 // 路:用 feedbackPolicy 算好 closures 再喂给面板——两半对不上就红。
@@ -76,6 +77,24 @@ function task(id: string, status = "running", owner = "alice") {
     luban_account: owner,
   };
 }
+
+test("基线编译准备常驻显示，缺记录及已回收不声称就绪", () => {
+  const render = (extra = {}) => renderToStaticMarkup(React.createElement(warmup.WarmupBadge, {
+    task: { ...task("readiness"), ...extra }, onOpen() {},
+  }));
+  const receipt = { sha: "abc123", started_at: "2026-09-05T00:00:00Z" };
+  for (const [status, label] of [["running", "准备中"], ["passed", "已就绪"], ["failed", "失败"], ["infrastructure_failure", "准备中断"]]) {
+    const html = render({ baseline_build: { ...receipt, status } });
+    assert.match(html, /aria-haspopup="dialog"/);
+    assert.ok(html.includes(`<b>${label}</b>`));
+  }
+  const missing = render();
+  assert.match(missing, /<b>暂无记录<\/b>/);
+  assert.doesNotMatch(missing, /is-passed|<b>已就绪/);
+  const reclaimed = render({ baseline_build: { ...receipt, status: "passed" }, workspace_reclaimed_at: "2026-09-05T01:00:00Z" });
+  assert.match(reclaimed, /<b>现场已回收<\/b>/);
+  assert.doesNotMatch(reclaimed, /is-passed|<b>已就绪/);
+});
 
 function review(id: string, taskId: string) {
   return {

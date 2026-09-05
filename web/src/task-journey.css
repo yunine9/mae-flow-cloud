@@ -100,3 +100,16 @@
 .inspector-resource-links small { display: block; margin-top: 5px; font-size: 12px; color: var(--muted); }
 .inspector-resource-links i { font-style: normal; color: var(--accent); }
 .task-inspector button:focus-visible, .task-journey button:focus-visible, .workspace-studio .ws-task-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Build readiness is a live task signal, alongside the progress track. */
+.workspace-studio.task-workspace-v2 .ws-progress .task-progress-caption { justify-content: flex-start; gap: 12px; }
+.workspace-studio.task-workspace-v2 .ws-progress .task-progress-preparation { display: inline-flex; }
+.workspace-studio.task-workspace-v2 .ws-progress .task-progress-count { margin-left: auto; }
+.workspace-studio .task-progress-preparation .warmup-badge { padding: 3px 8px; border-radius: 6px; gap: 6px; font-size: 11px; line-height: 1.4; white-space: nowrap; }
+.workspace-studio .task-progress-preparation .warmup-badge b { font-weight: 600; }
+.workspace-studio .task-progress-preparation .warmup-badge.is-passed { color: var(--success); border-color: color-mix(in srgb, var(--success) 24%, var(--line)); background: color-mix(in srgb, var(--success) 5%, var(--surface)); }
+.workspace-studio .task-progress-preparation .warmup-badge.is-running { color: var(--accent); background: var(--surface-2); }
+.workspace-studio .task-progress-preparation .warmup-badge.is-infrastructure_failure { color: var(--attention); border-color: var(--attention); }
+.workspace-studio .task-progress-preparation .warmup-badge:hover { border-color: currentColor; }
+.workspace-studio .task-progress-preparation .warmup-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.warmup-empty { margin: 0; padding: 24px; font-size: 14px; line-height: 1.8; color: var(--muted); }

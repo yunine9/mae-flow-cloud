@@ -480,12 +480,14 @@ export function TaskProgress({
   progress,
   showDetailedStep,
   context,
+  preparation,
   onPhaseClick,
   status,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
   context?: ReactNode;
+  preparation?: ReactNode;
   status?: TaskSummary["status"];
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
@@ -518,6 +520,7 @@ export function TaskProgress({
   return <span className="task-progress" aria-label={`当前阶段：${displayedCurrentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
+      {preparation && <span className="task-progress-preparation">{preparation}</span>}
       {context && <span className="task-progress-caption-context">{context}</span>}
       <strong>{displayedCurrentLabel}</strong>
       <em className="task-progress-count">{currentIndex + 1}/{phases.length}</em>
