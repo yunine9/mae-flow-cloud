@@ -2510,14 +2510,21 @@ export function TaskWorkspace({
               )}
             </div>
             )}
-            <section className="ws-feedback-home" id="ws-feedback" aria-label="反馈与回应" tabIndex={-1}>
+            <section className={`ws-feedback-home${reviewPanelOpen ? " is-expanded" : ""}`} id="ws-feedback" aria-label="反馈与回应" tabIndex={-1}>
               <header className="ws-feedback-heading">
-                <strong>反馈与回应</strong>
+                <button type="button" className="ws-feedback-toggle"
+                  aria-expanded={reviewPanelOpen} aria-controls="ws-feedback-content"
+                  onClick={() => setReviewPanelOpen((open) => !open)}>
+                  <span><strong>反馈与回应 <b>{reviewCounts.all}</b></strong>
+                    <small>{reviewCounts.mine ? `${reviewCounts.mine} 条等你确认` : "暂无待你确认的意见"}
+                      {reviewCounts.agent > 0 && ` · ${reviewCounts.agent} 条处理与验证`}</small></span>
+                  <span aria-hidden>{reviewPanelOpen ? "收起 ↑" : "展开 ↓"}</span>
+                </button>
                 {canRequestReview && <button type="button"
                   className="workspace-review-invite-button"
                   onClick={() => setReviewInviteOpen(true)}>邀请检视</button>}
               </header>
-              {!materialsFullscreen && reviewWorkspaceContent}
+              {!materialsFullscreen && <div id="ws-feedback-content" hidden={!reviewPanelOpen}>{reviewWorkspaceContent}</div>}
             </section>
           {collaborationVisible && (
             <WorkspaceDock target={!waiting ? decisionFooterTarget : undefined}>

@@ -115,7 +115,7 @@ export function TaskCard({
       : task.status === "coordinating" ? "子任务推进" : statusText(task)}
     owner={responsibleOf(task)} updatedAt={task.updated_at ?? task.created_at}
     detail={task.focus?.next_action ?? task.detail} child={!!task.parent_task_id}
-    focused={focused} onOpen={onOpenArtifacts} childCount={childCount}
+    attention={repairStopped(task)} focused={focused} onOpen={onOpenArtifacts} childCount={childCount}
     parentId={task.parent_task_id} parentLabel={parentTask?.ticket ?? task.parent_task_id}
     parentTitle={parentTask?.title ?? parentTask?.requirement}
     onOpenParent={parentTask && onOpenRelatedTask ? () => onOpenRelatedTask(parentTask.id) : undefined} />;

@@ -421,3 +421,23 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 
   .workspace-studio .ws-task-facts { max-height: none; }
 }
+
+/* State is visible across the entire row, with text labels retained. */
+.task-overview-row { --row-tone: var(--muted); background: color-mix(in srgb, var(--row-tone) 5%, var(--surface)); box-shadow: inset 3px 0 var(--row-tone); }
+.task-overview-row[data-status-tone="attention"] { --row-tone: var(--amber, #b7791f); }
+.task-overview-row[data-status-tone="danger"] { --row-tone: var(--danger); }
+.task-overview-row[data-status-tone="active"] { --row-tone: var(--accent); }
+.task-overview-row[data-status-tone="done"] { --row-tone: var(--success, #278566); }
+.task-overview-row[data-status-tone="merge"] { --row-tone: #318b99; }
+.task-overview-row[data-status-tone]:not([data-status-tone="quiet"]) { background: color-mix(in srgb, var(--row-tone) 9%, var(--surface)); }
+.task-overview-row .task-overview-open:hover,
+.task-overview-row.focused { background: color-mix(in srgb, var(--row-tone) 14%, transparent); }
+.workspace-studio.task-workspace-v2 .ws-feedback-home { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 12px; }
+.workspace-studio.task-workspace-v2 .ws-feedback-home:not(.is-expanded) { flex: none; min-height: 0; }
+.workspace-studio.task-workspace-v2 .ws-feedback-heading { position: static; background: transparent; padding: 0; margin: 0; align-items: flex-start; }
+.workspace-studio .ws-feedback-toggle { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; padding: 0; text-align: left; background: transparent; color: var(--text); cursor: pointer; }
+.workspace-studio .ws-feedback-toggle strong { display: block; color: var(--text); font-size: 13px; }
+.workspace-studio .ws-feedback-toggle b { font-weight: 500; color: var(--muted); margin-left: 5px; }
+.workspace-studio .ws-feedback-toggle small { display: block; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.workspace-studio .ws-feedback-toggle > span:last-child { white-space: nowrap; font-size: 11px; color: var(--accent); }
+.workspace-studio #ws-feedback-content { margin-top: 16px; }

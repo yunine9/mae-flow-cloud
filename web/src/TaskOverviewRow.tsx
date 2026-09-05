@@ -3,14 +3,20 @@ import { formatLocalDateTime, relativeTime } from "./time";
 /** Overview navigation only: task details and actions live in the workspace. */
 export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
   updatedAt, detail, child = false, focused = false, issue = false, onOpen,
-  childCount = 0, parentId, parentLabel, parentTitle, onOpenParent,
+  attention = false, childCount = 0, parentId, parentLabel, parentTitle, onOpenParent,
 }: {
   id: string; ticket?: string; title: string; status: string; statusLabel: string;
   owner?: string; updatedAt: string; detail?: string; child?: boolean;
   focused?: boolean; issue?: boolean; onOpen: () => void;
+  attention?: boolean;
   childCount?: number; parentId?: string; parentLabel?: string; parentTitle?: string; onOpenParent?: () => void;
 }) {
-  return <article id={`${issue ? "issue" : "task"}-${id}`}
+  const tone = status === "failed" ? "danger"
+    : attention || ["waiting_for_human", "waiting_user", "idle", "paused", "suspended"].includes(status) ? "attention"
+    : ["completed", "archived"].includes(status) ? "done"
+    : status === "await_merge" ? "merge"
+    : ["running", "verifying", "coordinating", "pausing"].includes(status) ? "active" : "quiet";
+  return <article data-status-tone={tone} id={`${issue ? "issue" : "task"}-${id}`}
     className={`task-overview-row status-${status}${child ? " is-child" : ""}${focused ? " focused" : ""}`}>
     <button type="button" className="task-overview-open" onClick={onOpen}
       aria-label={`打开${issue ? "问题" : "任务"}工作台：${title}`}>
