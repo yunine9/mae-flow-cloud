@@ -16,7 +16,7 @@ test("内容页签与阅读检视工具是独立区域，检视仍随时可开�
   const tabs = workspace.slice(tabsStart, toolsStart);
   assert.doesNotMatch(tabs, /ws-review-launch|materials-fullscreen-toggle|material-search-toggle/);
   const tools = workspace.slice(toolsStart, workspace.indexOf('<div className="ws-material-stage"'));
-  assert.match(tools, /aria-label="批注与检视" aria-expanded=\{reviewPanelOpen\}/);
+  assert.match(tools, /aria-label="检视意见" aria-expanded=\{reviewPanelOpen\}/);
   assert.match(tools, /setReviewPanelOpen\(\(open\) => !open\)/);
   assert.match(tools, /materials-fullscreen-toggle/);
 });
@@ -52,7 +52,7 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
   assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
 });
 
-test("邀请检视在任务头独立可见，不依赖打开批注面板", () => {
+test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
   const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
     workspace.indexOf('{task.feedback_error &&'));
   assert.match(controls, /canRequestReview && <button/);

@@ -79,36 +79,36 @@ export function WarmupBadge({ task, onOpen }: { task: TaskSummary; onOpen: () =>
   const labels = { running: "准备中", passed: "已就绪", failed: "失败", infrastructure_failure: "准备中断", unknown: "暂无记录", reclaimed: "现场已回收" };
   const descriptions = {
     running: "正在编译原有代码并准备构建缓存，点击查看实时过程。",
-    passed: "基线编译已通过，构建缓存已就绪；本次修改的验证结果另见推送前验证。",
-    failed: "基线编译失败，点击查看环境或上游问题。",
+    passed: "开工前编译已通过，构建缓存已就绪；本次修改的验证结果另见推送前验证。",
+    failed: "开工前编译失败，点击查看环境或上游问题。",
     infrastructure_failure: "基础设施问题导致准备未完成，点击查看原因。",
-    unknown: "尚未收到基线编译记录，暂时无法确认是否就绪。",
+    unknown: "尚未收到开工前编译记录，暂时无法确认是否就绪。",
     reclaimed: "任务现场已回收，之前的编译记录仅供查看。",
   };
   return <button type="button" className={`warmup-badge is-${state}`} aria-haspopup="dialog"
     onClick={onOpen} title={descriptions[state]}>
-    <i aria-hidden /><span>基线编译</span><b>{labels[state]}</b><span aria-hidden>↗</span>
+    <i aria-hidden /><span>开工前编译</span><b>{labels[state]}</b><span aria-hidden>↗</span>
   </button>;
 }
 
 export function WarmupPanel({ task }: { task: TaskSummary }) {
   const receipt = task.baseline_build;
-  if (!receipt) return <p className="warmup-empty" role="status">尚未收到基线编译记录，暂时无法确认是否就绪。收到检查结果后，顶部状态会自动更新。</p>;
+  if (!receipt) return <p className="warmup-empty" role="status">尚未收到开工前编译记录，暂时无法确认是否就绪。收到检查结果后，顶部状态会自动更新。</p>;
   const running = receipt.status === "running";
   return (
     <section className={`warmup-panel is-${receipt.status}`}
       aria-label="环境预热编译">
       <header>
         <i aria-hidden />
-        <strong>基线编译</strong>
+        <strong>开工前编译</strong>
         <span>
           {receipt.status === "running"
             ? `正在编译基线 ${receipt.sha.slice(0, 12)},为增量编译焐热缓存`
             : receipt.status === "passed"
-              ? `基线编译通过(${receipt.sha.slice(0, 12)}),构建缓存已就绪`
+              ? `开工前编译通过(${receipt.sha.slice(0, 12)}),构建缓存已就绪`
               : receipt.status === "failed"
-                ? "基线编译失败——环境或上游问题,与本单增量无关"
-                : "预热未完成(基础设施问题),不代表基线编译失败"}
+                ? "开工前编译失败——环境或上游问题,与本单增量无关"
+                : "预热未完成(基础设施问题),不代表开工前编译失败"}
         </span>
       </header>
       {task.workspace_reclaimed_at && <p className="warmup-detail">任务现场已回收，以下是回收前的检查记录，不代表当前现场仍可使用。</p>}

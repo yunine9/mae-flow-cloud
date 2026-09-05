@@ -474,8 +474,8 @@ export function buildPersonalActionItems({
       task,
       kicker: task.status === "paused" ? "任务已暂停" : "需要人工介入",
       title: task.title ?? task.requirement,
-      detail: task.focus?.next_action ?? task.detail ?? "查看现场并决定下一步",
-      action: "查看现场",
+      detail: task.focus?.next_action ?? task.detail ?? "打开工作台并决定下一步",
+      action: "打开工作台",
     });
   }
   for (const task of merges) {
@@ -1096,17 +1096,17 @@ export function App() {
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
               onClick={() => selectTeamAssetTab("knowledge")}>
-              <strong>知识资产</strong><small>上架、审核并维护团队通用知识</small>
+              <strong>知识资产</strong><small>团队共用的文档、技能和规则，Agent 干活时会用到</small>
             </button>
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
               onClick={() => selectTeamAssetTab("modules")}>
-              <strong>业务模块</strong><small>模块是抽屉，集中维护业务语义和模块知识</small>
+              <strong>业务模块</strong><small>按业务模块整理说明和知识，Agent 干活时会参考</small>
             </button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
               onClick={() => selectTeamAssetTab("workflows")}>
-              <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
+              <strong>工作流方案</strong><small>给每个阶段配好 Agent 能用的能力，存成方案反复用</small>
             </button>
             <button type="button" className={teamAssetTab === "insights" ? "active" : ""}
               aria-pressed={teamAssetTab === "insights"}

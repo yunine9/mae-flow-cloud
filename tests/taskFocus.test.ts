@@ -242,7 +242,7 @@ test("助手占场的暂停指去交还入口,不指死路恢复(MFC-029)", () =
     status: "paused", assistant_engaged: true,
   });
   assert.match(focus.headline, /开发助手/);
-  assert.match(focus.next_action, /交还主任务/);
+  assert.match(focus.next_action, /交回给 Agent/);
   const plain = projectTaskFocus({ status: "paused" });
   assert.match(plain.next_action, /恢复/);
 });

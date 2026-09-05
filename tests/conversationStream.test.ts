@@ -1,6 +1,6 @@
 /**
  * 右栏会话流的页面契约(纯渲染,不起服务):
- * - 筛选:全部 / 需要我的 / 意见与回执;线程视图只留牵涉这条批注的条目;
+ * - 筛选:全部 / 需要我的 / 检视意见;线程视图只留牵涉这条批注的条目;
  * - 回合:最后一段话摊开、此前的折叠、工具步骤折成一行计数并可跳工作过程;
  * - 卡:历史卡是只读摘要并标出选了哪项;当前卡由父级传入渲在流末尾;
  * - 回执:逐条带结论,旧版本回执明说"不算数";
@@ -92,7 +92,7 @@ function render(overrides: Record<string, unknown> = {}): string {
   }));
 }
 
-test("筛选与线程:意见与回执只留批注类条目;线程只留牵涉这条批注的", () => {
+test("筛选与线程:检视意见只留批注类条目;线程只留牵涉这条批注的", () => {
   const review = visibleConversationItems(items, { filter: "review", viewer: "zhou" });
   assert.deepEqual(review.map((item) => item.kind), ["annotations_sent", "receipts", "external"]);
   const mine = visibleConversationItems(items, { filter: "mine", viewer: "zhou" });
@@ -150,7 +150,7 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   assert.match(html, /conv-card current"><div class="probe-card">决定卡本体/);
   const confirm = render({ awaitingYou: 3 });
   assert.match(confirm, /3 条意见等你逐条确认/);
-  assert.match(confirm, /打开批注与检视/);
+  assert.match(confirm, /打开检视意见/);
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
   // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。
   const threaded = render({ task: waitingTask, decides: true, thread: "a-1",

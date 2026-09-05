@@ -12842,7 +12842,7 @@ export class TaskService {
           .includes(assistantSnapshot.state)
         || assistantSnapshot.handoff?.state === "running") {
       throw new TaskControlError(
-        "开发接管会话仍占有主现场，请在右栏输入框的「接管现场」档执行“交还主任务”");
+        "开发接管会话仍占有主现场，请在右栏输入框的「我来接手」档点“交回给 Agent”");
     }
     const beforeSummary = JSON.parse(JSON.stringify(task.summary)) as TaskSummary;
     const beforeHandoffPrompt = task.pendingAssistantHandoff;

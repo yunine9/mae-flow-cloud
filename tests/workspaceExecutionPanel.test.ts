@@ -66,8 +66,8 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.match(composer, /className="ws-reply-dock" ref=\{dockRef\}/,
     "决定卡的提交区经 portal 挂到输入框");
   assert.match(composer, /说给 Agent/);
-  assert.match(composer, /接管现场/);
-  assert.match(composer, /交还主任务/);
+  assert.match(composer, /我来接手/);
+  assert.match(composer, /交回给 Agent/);
   assert.match(side, /tail=\{streamTail\}/);
   // 2026-09-05 用户:"占据的面积太小了,都没空间显示文字了"——栏头、状态行、
   // 锚条、筛选四行摞着吃掉 180px。现在栏头(标题+筛选)与锚条(轮到谁·状态·
@@ -105,8 +105,8 @@ test("任何状态都稳定落在当前视图，由内容而不是自动跳页�
   assert.doesNotMatch(policy, /task\.status|task\.waiting/,
     "轮询更新不能把用户从正在阅读的工作面自动甩走");
   assert.match(workspace, /\["focus", "当前"\]/);
-  assert.match(workspace, /\["materials", "产物"\]/);
-  assert.match(workspace, /\["execution", "活动"\]/);
+  assert.match(workspace, /\["materials", "材料"\]/);
+  assert.match(workspace, /\["execution", "工作过程"\]/);
 });
 
 test("等待人工检视时工作台标题显示人的当前事项，不沿用自动阶段旧步骤", () => {
@@ -150,9 +150,9 @@ test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接",
 });
 
 test("push 检视先给这次修改入口，同时保留完整交付与文件选择", () => {
-  assert.match(taskCard, />\s*查看这次修改\s*</);
-  assert.match(taskCard, />\s*查看完整交付\s*</);
-  assert.match(taskCard, /activeDeliveryScope === "full"[^]*完整交付已显示/,
+  assert.match(taskCard, />\s*看这次改的\s*</);
+  assert.match(taskCard, />\s*看全部改动\s*</);
+  assert.match(taskCard, /activeDeliveryScope === "full"[^]*正在看全部改动/,
     "已经摆在左侧的完整交付必须是状态，不得保留成点击无反馈的假按钮");
   assert.match(workspace, /activeDeliveryScope=\{task\.waiting[^]*diffScope/,
     "决策卡必须知道左侧当前显示的范围，不能只拿到一个盲跳回调");
@@ -177,8 +177,8 @@ test("Agent 长说明与提交记录默认折叠，避免挤满窄决策栏", ()
 
 test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达入口", () => {
   assert.doesNotMatch(taskCard, /className="delivery-scope-files"/);
-  assert.match(taskCard, /文件去留在左侧代码差异中调整/);
-  assert.match(taskCard, /打开代码差异并调整文件/);
+  assert.match(taskCard, /文件去留在左侧「代码改动」里调整/);
+  assert.match(taskCard, /去代码改动里选文件/);
   assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
   assert.match(taskCard, /重新编译后提交/);
   assert.match(taskCard, /不再编译，直接提交/);

@@ -100,8 +100,8 @@ const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
  *  "产物/活动"是右侧工作区的两种内容。 */
 const WORKSPACE_VIEW_LABELS: Array<[WorkspaceView, string]> = [
   ["focus", "当前"],
-  ["materials", "产物"],
-  ["execution", "活动"],
+  ["materials", "材料"],
+  ["execution", "工作过程"],
 ];
 function viewShortcutHint(view: WorkspaceView): string {
   const index = WORKSPACE_VIEW_LABELS.findIndex(([candidate]) => candidate === view);
@@ -115,7 +115,7 @@ export function canCreateWorkspaceAnnotation(
   return status !== "canceled";
 }
 
-/** 批注定位必须能回到虚拟的需求原文，而不是把它误当过程文档。 */
+/** 批注定位必须能回到虚拟的需求原文，而不是把它误当产出文档。 */
 export function materialViewForAnnotation(
   artifact: string,
   artifacts: readonly ArtifactMeta[] = [],
@@ -411,7 +411,7 @@ const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
   repairing: "处理中",
   addressed: "已处理",
   awaiting_verification: "待核验",
-  closed: "已闭环",
+  closed: "已完成",
   needs_human: "需要你决定",
 };
 
@@ -438,7 +438,7 @@ function groupFeedback(feedback: FeedbackRecord[]) {
 }
 
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
- * 和批注卡片同一套版式,放进「批注与检视」里不违和。 */
+ * 和批注卡片同一套版式,放进「检视意见」里不违和。 */
 export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
   kicker: string;
   title: string;
@@ -517,7 +517,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
   </section>;
 }
 
-/** 缺陷单等没有「批注与检视」弹层的页面用:按来源分节的完整列表。 */
+/** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
   const active = feedback.filter((item) => item.status !== "closed").length;
   return <section className="feedback-panel" aria-label="持续检视反馈明细">
@@ -602,7 +602,7 @@ export function TaskWorkspace({
   onExecutionPlanFeedback?: (draft: { title: string; detail: string }) => void;
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
-  // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
+  // 原文是唯一保证存在的证据，不能默认打开一个空的产出文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view
     ?? (task.parent_task_id ? "doc"
       : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
@@ -1171,7 +1171,7 @@ export function TaskWorkspace({
       setUnavailable(result.unavailable ?? "");
       setItems(result.items);
       // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
-      // 用户已经切到工作区变更时绝不能被后台刷新拽回最近文档。
+      // 用户已经切到代码改动时绝不能被后台刷新拽回最近文档。
       const evidenceKey = pipelineEvidenceNeedsHuman(task)
         ? `${task.id}:${task.delivery?.evidence_gap?.sha ?? ""}` : "";
       const newlyActionable = Boolean(evidenceKey
@@ -1374,7 +1374,7 @@ export function TaskWorkspace({
       const blobUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = blobUrl;
-      anchor.download = `${task.id}-过程文档-`
+      anchor.download = `${task.id}-产出文档-`
         + `${new Date().toISOString().slice(0, 10)}.zip`;
       document.body.appendChild(anchor);
       anchor.click();
@@ -1410,12 +1410,12 @@ export function TaskWorkspace({
       ? pushReview
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
             ? pushReview.title : "完整交付内容" }
-        : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
+        : { kicker: "WORKTREE CHANGES", title: "代码改动" }
       : activeMeta?.purpose === "delivery_unit_brief"
         ? { kicker: "CURRENT DELIVERY UNIT", title: "当前单元任务书" }
         : activeMeta?.purpose === "delivery_plan"
           ? { kicker: "REVIEWED DELIVERY PLAN", title: "整体拆分方案" }
-          : { kicker: "WORK DOCUMENTS", title: "过程文档" };
+          : { kicker: "WORK DOCUMENTS", title: "产出文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
   const workspaceReviewReady = task.status === "waiting_for_human"
     && task.waiting?.step === "cloud_push_confirm"
@@ -1424,7 +1424,7 @@ export function TaskWorkspace({
   const workspaceReviewAnnotationIds = workspaceReviewReady
     ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
     : [];
-  // 批注与检视里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
+  // 检视意见里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
   // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
   const codehubFeedback = (task.feedback ?? [])
     .filter((item) => item.source === "mr_discussion");
@@ -1724,8 +1724,8 @@ export function TaskWorkspace({
         {([
           ["all", "全部"],
           ["mine", "等我确认"],
-          ["agent", "处理与验证"],
-          ["closed", "已闭环"],
+          ["agent", "Agent 处理中"],
+          ["closed", "已完成"],
         ] as const).map(([key, label]) => (
           <button type="button" key={key} role="tab"
             className={`${reviewFilter === key ? "active" : ""}${
@@ -1761,7 +1761,7 @@ export function TaskWorkspace({
         {renderAnnotations(notes)}
         {!notes.length && (
           <div className="ws-insight-empty">
-            在原文、过程文档或代码上圈选，即可原位写下反馈。
+            在原文、产出文档或代码上圈选，即可原位写下反馈。
           </div>
         )}
         {filteredCodehub.length > 0 && <FeedbackList
@@ -1852,7 +1852,7 @@ export function TaskWorkspace({
             {canRequestReview && <button type="button" className="workspace-review-invite-button"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
-              onClick={() => setReviewInviteOpen(true)}>邀请检视</button>}
+              onClick={() => setReviewInviteOpen(true)}>邀请他人检视</button>}
             {onOpenFeedbackWall && <QuickWishButton inline onOpenWall={onOpenFeedbackWall} />}
             {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
@@ -1908,7 +1908,7 @@ export function TaskWorkspace({
 
       {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
-      {warmupOpen && <OverlayDialog ariaLabel="基线编译详情" title="基线编译与准备状态" onClose={() => setWarmupOpen(false)}>
+      {warmupOpen && <OverlayDialog ariaLabel="开工前编译详情" title="开工前编译与准备状态" onClose={() => setWarmupOpen(false)}>
         <WarmupPanel task={task} />
       </OverlayDialog>}
 
@@ -1947,7 +1947,7 @@ export function TaskWorkspace({
                   </button>
                   <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
                     onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                    <span>过程文档</span><i>{documents.length}</i>
+                    <span>产出文档</span><i>{documents.length}</i>
                   </button>
                 </>}
                 {hasRequirementGraph && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
@@ -1963,12 +1963,12 @@ export function TaskWorkspace({
                     : `${changeFileCount} 个文件`}
                   onClick={() => { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }}
                   disabled={!changeFileCount && !untrackedDirectoryCount}>
-                  <span>工作区变更</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
+                  <span>代码改动</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
                     ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
                 </button>
                 <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
                   aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
-                  <span>知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
+                  <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
                 </button>
                 <button type="button" role="tab" className={`ws-activity-tab${
                     workspaceView === "execution" ? " on" : ""}`}
@@ -1981,14 +1981,14 @@ export function TaskWorkspace({
               <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
-                  aria-label="批注与检视" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
+                  aria-label="检视意见" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
                   title={`查看意见、Agent 回应并复检（${REVIEW_SHORTCUT}）`}
                   onClick={() => {
                     setReviewPanelOpen((open) => !open);
                     setReviewRevealRequest((request) => request + 1);
                   }}>
                   <svg viewBox="0 0 20 20" aria-hidden><path d="M4 3.5h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-5 3v-3H3v-9a1 1 0 0 1 1-1Z" /><path d="M6.5 7h7M6.5 10h4" /></svg>
-                  <span className="ws-review-label">批注与检视</span>
+                  <span className="ws-review-label">检视意见</span>
                   {Boolean(reviewCounts.mine || reviewRecordCount) && <em>{reviewCounts.mine || reviewRecordCount}</em>}
                 </button>
                 {workspaceView !== "execution" && <button type="button" className="materials-fullscreen-toggle"
@@ -2012,10 +2012,10 @@ export function TaskWorkspace({
           </div>
           <div className="ws-material-stage">
           <section className="ws-review-canvas" id="ws-review-canvas" role="complementary"
-            aria-label="批注与检视" tabIndex={-1} hidden={!reviewPanelOpen}>
+            aria-label="检视意见" tabIndex={-1} hidden={!reviewPanelOpen}>
             <header className="ws-view-intro">
-              <div><h2>批注与检视</h2><p>对照材料查看意见和回应，点击位置即可定位。</p></div>
-              <button type="button" aria-label="收起批注与检视" onClick={() => setReviewPanelOpen(false)}>×</button>
+              <div><h2>检视意见</h2><p>对照材料查看意见和回应，点击位置即可定位。</p></div>
+              <button type="button" aria-label="收起检视意见" onClick={() => setReviewPanelOpen(false)}>×</button>
             </header>
             {reviewWorkspaceContent}
           </section>
@@ -2099,7 +2099,7 @@ export function TaskWorkspace({
               ))}
               <button type="button" className="ws-document-download"
                 disabled={documentsDownloading}
-                title={`下载全部 ${documents.length} 份过程文档(完整原文件)`}
+                title={`下载全部 ${documents.length} 份产出文档(完整原文件)`}
                 onClick={() => void downloadDocuments()}>
                 <span aria-hidden>⇩</span>
                 {documentsDownloading ? "打包中…" : "打包下载"}
@@ -2208,7 +2208,7 @@ export function TaskWorkspace({
                           <strong>需要针对方案文字提意见？</strong>
                           <small>{chainDoc
                             ? "整体切法、模块和依赖可直接在下方图上批注；具体文字可打开方案文档圈选。"
-                            : "方案文档还没生成，生成后可在过程文档里圈选批注。"}</small>
+                            : "方案文档还没生成，生成后可在产出文档里圈选批注。"}</small>
                         </div>
                         <button type="button" disabled={!chainDoc}
                           onClick={() => {
@@ -2265,7 +2265,7 @@ export function TaskWorkspace({
                         setPushDiffState({ kind: "checking" });
                         setDiffScope("changes");
                       }}>
-                      <strong>这次修改</strong>
+                      <strong>这次改的</strong>
                       <span>{pushReview.title}</span>
                     </button>
                     <button type="button"
@@ -2276,14 +2276,14 @@ export function TaskWorkspace({
                         setPushDiffState({ kind: "checking" });
                         setDiffScope("full");
                       }}>
-                      <strong>完整交付</strong>
+                      <strong>全部改动</strong>
                       <span>从任务起点到当前待推送代码</span>
                     </button>
                   </> : (
                     // 只有一个范围时不是"可切换":按钮外观点了没反应,
                     // 用户会当成坏了(MFC-035)。老实渲染成状态标签。
                     <div className="on scope-single" role="note">
-                      <strong>完整交付</strong>
+                      <strong>全部改动</strong>
                       <span>从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
                     </div>
                   )}
@@ -2409,7 +2409,7 @@ export function TaskWorkspace({
             )}
 
             {task.baseline_build?.status === "failed" && <div className="alert" role="status">
-              <strong>基线编译失败</strong><span>基线编译未通过，查看环境或上游问题。</span>
+              <strong>开工前编译失败</strong><span>开工前编译未通过，查看环境或上游问题。</span>
               <button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button>
             </div>}
             {task.delivery?.skipped && <div className="alert" role="alert">

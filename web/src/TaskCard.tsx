@@ -349,7 +349,7 @@ export function TaskCard({
           )}
           {task.baseline_build?.status === "failed" && (
             <div className="alert">
-              <strong>基线编译失败(环境预热)</strong>
+              <strong>开工前编译失败(环境预热)</strong>
               <span>
                 环境或上游问题,与本单增量无关;详情在工作台执行现场。
                 {task.baseline_build.detail
@@ -1216,7 +1216,7 @@ export function WaitingCard({
       </footer>
       </DecisionFooterMount>
       {(pushReview || requiresDeliverySelection) && <details className="decision-evidence">
-        <summary>交付依据与文件范围</summary>
+        <summary>改动摘要与推送范围</summary>
       {pushReview && (
         <section className="push-review-overview" aria-label="本次代码检视摘要">
           <div className="push-review-copy">
@@ -1269,17 +1269,17 @@ export function WaitingCard({
             <div className="push-review-actions">
               {pushReview.has_focused_changes && (
                 activeDeliveryScope === "changes"
-                  ? <span className="current" role="status">这次修改已显示</span>
+                  ? <span className="current" role="status">正在看这次改的</span>
                   : <button type="button" className="primary"
                       onClick={() => onLocateDelivery("changes")}>
-                      查看这次修改
+                      看这次改的
                     </button>
               )}
               {activeDeliveryScope === "full"
-                ? <span className="current" role="status">完整交付已显示</span>
+                ? <span className="current" role="status">正在看全部改动</span>
                 : <button type="button"
                     onClick={() => onLocateDelivery("full")}>
-                    查看完整交付
+                    看全部改动
                   </button>}
             </div>
           )}
@@ -1292,17 +1292,17 @@ export function WaitingCard({
           aria-labelledby={`delivery-scope-${task.id}`}>
           <header>
             <div>
-              <span>本次交付范围</span>
+              <span>这次推送哪些文件</span>
               <strong id={`delivery-scope-${task.id}`}>{deliverySelection
                 ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
                 : "先打开代码差异完成检视"}</strong>
             </div>
           </header>
           {!deliverySelection ? (
-            <p>请到左侧「工作区变更」逐文件查看 diff，并在那里决定文件去留。</p>
+            <p>请到左侧「代码改动」逐个文件查看，并在那里决定文件去留。</p>
           ) : (
             <div className="delivery-scope-result" role="status">
-              <strong>文件去留在左侧代码差异中调整</strong>
+              <strong>文件去留在左侧「代码改动」里调整</strong>
               <span>{selectedHandlesFeedback
                 ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
                 : deliverySelection.selectedPaths.length === 0
@@ -1314,7 +1314,7 @@ export function WaitingCard({
           )}
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
-              onClick={() => onLocateDelivery("full")}>打开代码差异并调整文件</button>
+              onClick={() => onLocateDelivery("full")}>去代码改动里选文件</button>
           )}
         </section>
       )}

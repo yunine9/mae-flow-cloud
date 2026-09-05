@@ -65,7 +65,7 @@ test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () =
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
-  assert.match(workspace, /aria-label="关闭批注与检视"/);
+  assert.match(workspace, /aria-label="关闭检视意见"/);
   assert.match(workspace, /if \(reviewPanelOpen\) setReviewPanelOpen\(false\)/,
     "Escape 应先关闭批注弹层，再退出整个工作台");
   assert.doesNotMatch(taskCard, /setPicked\(\(current\) =>[\s\S]{0,900}feedbackAnswers/,
@@ -79,7 +79,7 @@ test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(css, /\.annotation-location-notice\s*\{/);
 });
 
-test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位不必先关窗", () => {
+test("检视意见是固定在右侧的侧滑抽屉:材料露出可点,定位不必先关窗", () => {
   // 原来是遮罩弹层,看意见时看不到材料,"回到那一行"要先关窗(用户定调
   // 这块是核心竞争力、易用性优先后改成抽屉)。第一版把抽屉挤进 .ws-body
   // 栅格右栏,中等宽度下正文切成上下堆叠时抽屉被当普通块塞到最下面、
@@ -89,7 +89,7 @@ test("批注与检视是固定在右侧的侧滑抽屉:材料露出可点,定位
   assert.doesNotMatch(workspace, /has-review/, "抽屉不再进正文栅格");
   assert.doesNotMatch(workspace,
     /reviewPanelOpen && <div className="workspace-review-backdrop"/,
-    "批注与检视不再是遮罩弹层");
+    "检视意见不再是遮罩弹层");
   assert.match(workspace,
     /if \(window\.matchMedia\("\(max-width: 900px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
     "只有窄屏(抽屉占满整屏)定位时才关抽屉");
@@ -237,11 +237,11 @@ test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
   assert.match(css, /\.workspace-review-drawer::after \{[^}]*linear-gradient\(to top, var\(--page\)/s);
 });
 
-test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
+test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
   assert.match(workspace, /className="review-filter" role="tablist"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
-  assert.match(workspace, /\["agent", "处理与验证"\]/);
-  assert.match(workspace, /\["closed", "已闭环"\]/);
+  assert.match(workspace, /\["agent", "Agent 处理中"\]/);
+  assert.match(workspace, /\["closed", "已完成"\]/);
   assert.match(workspace, /filter=\{inline \? "all" : reviewFilter\}/, "批注面板吃同一个筛选档");
   assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
     "转批注沿用批注创建权限");
@@ -291,7 +291,7 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   // 原来所有意见塞在进度条下横向滚动的小卡片里(9–11px、单行省略),MR
   // 检视人一段话被压成一行,用户实锤"排版太丑"。第二版换成一条摘要
   // (一排"MR 检视 3 2 进行中"胶囊 + 重复的入口按钮),用户再实锤"数字
-  // 好丑、和批注与检视卡重叠"——整条撤掉,几条进行中并进入口卡副标题。
+  // 好丑、和检视意见卡重叠"——整条撤掉,几条进行中并进入口卡副标题。
   assert.doesNotMatch(workspace, /FeedbackSummary|feedback-summary/);
   assert.doesNotMatch(css, /\.feedback-summary/);
   assert.match(workspace, /className=\{`ws-review-launch/);
@@ -321,7 +321,7 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
     "横向卡片墙已删,不许悄悄回来");
 });
 
-test("批注与检视弹层里的批注面板默认展开", () => {
+test("检视意见弹层里的批注面板默认展开", () => {
   // 弹层是人主动点开的,正文再折叠一层等于让人点两次(用户实锤)。
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
@@ -411,7 +411,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   const box = readFileSync(new URL("../web/src/Composer.tsx", import.meta.url), "utf8");
   assert.match(box, /className="assistant-bounds"/);
   assert.match(box, /Git 只读/);
-  assert.match(box, /交还后由主任务接手/);
+  assert.match(box, /交回后由 Agent 接着做/);
   const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
   assert.match(service, /unanchoredRequirementChanges\(before, after, annotations\)/,
     "回执之外还要逐段比对");
@@ -442,7 +442,7 @@ test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖�
   // 入口搬上工具条 + ⌥/Alt+R 快捷键,抽屉开着时材料区让位。
   assert.match(workspace,
     /materialsFullscreen && <button type="button"\s*className=\{`materials-review-toggle/,
-    "全屏下材料工具条上有批注与检视入口");
+    "全屏下材料工具条上有检视意见入口");
   assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
   assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
   assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
@@ -451,7 +451,7 @@ test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖�
     "全屏抽屉打开时材料区让出抽屉宽度");
   assert.match(css,
     /materials-fullscreen \.workspace-review-drawer \{\s*top: calc\(var\(--ws-pane-head-h/,
-    "全屏下抽屉从工具条下面起步,退出全屏/批注与检视不被盖住");
+    "全屏下抽屉从工具条下面起步,退出全屏/检视意见不被盖住");
   assert.match(workspace, /"--ws-pane-head-h"/, "工具条高度量出来写变量,不写死");
 });
 

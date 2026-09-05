@@ -104,7 +104,7 @@ test("AR 保持可编辑时仍校验同仓同执行人的重复单号和空白",
   assert.doesNotMatch(render({ a: "REQ-ONE", b: "REQ-TWO" }), /单号.*重复|AR 单号无效|缺少 AR 单号/);
 });
 
-test("基线编译准备常驻显示，缺记录及已回收不声称就绪", () => {
+test("开工前编译准备常驻显示，缺记录及已回收不声称就绪", () => {
   const render = (extra = {}) => renderToStaticMarkup(React.createElement(warmup.WarmupBadge, {
     task: { ...task("readiness"), ...extra }, onOpen() {},
   }));
@@ -497,9 +497,9 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
     unresolvedAnnotationCount: 3,
     onDeliverySelectionChange: () => undefined,
   }));
-  assert.match(html, /本次交付范围/);
+  assert.match(html, /这次推送哪些文件/);
   assert.match(html, /1 \/ 2 个文件将推送/);
-  assert.match(html, /文件去留在左侧代码差异中调整/);
+  assert.match(html, /文件去留在左侧「代码改动」里调整/);
   assert.match(html, /重新编译后提交/);
   assert.match(html, /不再编译，直接提交/);
   assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);

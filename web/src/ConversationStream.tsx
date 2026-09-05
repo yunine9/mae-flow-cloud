@@ -340,7 +340,7 @@ export function ConversationStream({
         tone: "attention" as const,
         text: `${awaitingYou} 条意见等你逐条确认`,
         detail: "Agent 已登记回执，是否修好由你判断",
-        action: { label: "打开批注与检视", onClick: () => onOpenReview([]) },
+        action: { label: "打开检视意见", onClick: () => onOpenReview([]) },
       };
     }
     if (waiting) {
@@ -689,7 +689,7 @@ export function ConversationStream({
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
         <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"], ["review", "意见与回执"]] as const)
+          {([["all", "全部"], ["mine", "需要我的"], ["review", "检视意见"]] as const)
             .map(([key, label]) => (
               <button type="button" key={key} role="tab"
                 aria-selected={!thread && filter === key}

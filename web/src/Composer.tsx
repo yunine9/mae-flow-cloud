@@ -45,11 +45,11 @@ const EMPTY_ASSISTANT: DeveloperAssistantView = {
 };
 
 const ASSISTANT_STATE: Record<DeveloperAssistantView["state"], string> = {
-  idle: "等待接管",
-  acquiring: "正在接管主现场",
+  idle: "等待接手",
+  acquiring: "正在接手",
   working: "正在工作",
   ready: "CLI 已就绪",
-  returning: "正在交还主任务",
+  returning: "正在交回给 Agent",
   running: "正在工作",
   completed: "CLI 已就绪",
   failed: "本轮失败",
@@ -275,8 +275,8 @@ export function Composer({
     : "随下一次决定一起送达";
   const steerDisabledReason = canSteer ? undefined
     : takeoverActive ? {
-        title: "你正在接管现场",
-        detail: "先交还主任务;主 Agent 恢复运行后才能继续补充。",
+        title: "现在由你操作中",
+        detail: "先交回给 Agent；它恢复运行后才能继续补充。",
       }
     : task.status === "waiting_for_human" ? {
         title: "主任务正在等待人工决定",
@@ -286,11 +286,11 @@ export function Composer({
         title: "主任务已暂停",
         detail: steerOnly
           ? "需要由主责任人先恢复主任务,Agent 运行后才能接收补充。"
-          : "先恢复主任务;要立即查代码或修改,切到「接管现场」。",
+          : "先恢复任务；要马上查代码或改代码，切到「我来接手」。",
       }
     : task.status === "pausing" ? {
         title: "主任务正在暂停",
-        detail: "系统正在保存执行现场,完成后可恢复主任务或接管现场。",
+        detail: "系统正在保存进度，完成后可以恢复任务或自己接手。",
       }
     : task.status === "verifying" ? {
         title: "当前正在验证交付结果",
@@ -321,33 +321,33 @@ export function Composer({
             <button type="button" role="tab" aria-selected={!showAssistant}
               className={!showAssistant ? "on" : ""}
               disabled={takeoverActive}
-              title={takeoverActive ? "先交还主任务" : undefined}
+              title={takeoverActive ? "先交回给 Agent" : undefined}
               onClick={() => { modePicked.current = true; setMode("steer"); }}>
               说给 Agent
             </button>
             <button type="button" role="tab" aria-selected={showAssistant}
               className={showAssistant ? "on" : ""}
-              title={assistantAvailable || takeoverActive ? "你主动接管现场:查代码、跑命令、改文件"
+              title={assistantAvailable || takeoverActive ? "你自己接手：查代码、跑命令、改文件"
                 : assistant.availability.reason}
               onClick={() => { modePicked.current = true; setMode("assistant"); }}>
-              接管现场
+              我来接手
             </button>
           </div>
         )}
         {showAssistant ? (
           <>
             <span className={`ws-composer-mode ${takeoverActive ? "active" : "quiet"}`}>
-              {takeoverActive ? "开发助手在你手里" : assistantAvailable ? "现在可接管" : "当前不可接管"}
+              {takeoverActive ? "现在由你操作" : assistantAvailable ? "现在可以接手" : "现在不能接手"}
             </span>
             <span className="ws-composer-hint">
-              {takeoverActive ? "主任务保持暂停,直到你交还" : assistantAvailable
-                ? "发出第一条指令后自动安全接管主现场" : assistant.availability.reason}
+              {takeoverActive ? "Agent 暂停中，直到你交回" : assistantAvailable
+                ? "发出第一条指令后 Agent 会停下，改由你操作" : assistant.availability.reason}
             </span>
             {canReturn && takeoverActive && (
               <button type="button" className="ws-composer-return"
                 disabled={assistantRequestBusy}
                 onClick={() => void resumeMainTask()}>
-                交还主任务
+                交回给 Agent
               </button>
             )}
           </>
@@ -498,7 +498,7 @@ export function Composer({
                     : assistant.state === "returning"
                       ? "正在释放开发会话并与内核核对现场"
                       : takeoverActive
-                        ? "主任务保持暂停;继续输入,或交还主任务"
+                        ? "Agent 暂停中；继续输入，或交回给 Agent"
                         : "多轮排查、修改和运行命令;主任务在后台保持暂停"}
             </span>
           </div>
@@ -509,7 +509,7 @@ export function Composer({
             <ul className="assistant-bounds" aria-label="开发助手的边界">
               <li><strong>Git 只读</strong>:不能 commit、push、切分支或 reset,改动只留在工作树。</li>
               <li><strong>不推进流程</strong>:不调用 Mae-Flow 命令,不生成审批卡。</li>
-              <li><strong>交还后由主任务接手</strong>:改动作为现场修改交给主 Agent,在当前步骤检视、提交、交付。</li>
+              <li><strong>交回后由 Agent 接着做</strong>:改动作为现场修改交给主 Agent,在当前步骤检视、提交、交付。</li>
             </ul>
           </details>
 
@@ -519,7 +519,7 @@ export function Composer({
               <div>
                 <i aria-hidden />
                 <strong>{assistant.handoff.state === "changed"
-                  ? "有修改,等待交还"
+                  ? "有修改，等待交回"
                   : assistant.handoff.state === "unchanged"
                     ? "无代码变化"
                     : assistant.handoff.state === "returned"
@@ -561,7 +561,7 @@ export function Composer({
                   ? "当前轮执行中;新输入会在安全边界追加给助手"
                   : takeoverActive
                     ? "CLI 已保持现场和上下文,继续输入下一步"
-                    : "⌘/Ctrl + Enter 接管主现场"}
+                    : "⌘/Ctrl + Enter 接手并执行"}
               </span>
               {assistant.error && <small className="ws-composer-error">{assistant.error}</small>}
             </div>
@@ -579,7 +579,7 @@ export function Composer({
                 onClick={() => void sendAssistant()}>
                 {assistantRequestBusy ? "发送中…"
                   : ["working", "running", "acquiring"].includes(assistant.state)
-                    ? "追加指令" : takeoverActive ? "执行" : "接管并执行"}
+                    ? "追加指令" : takeoverActive ? "执行" : "接手并执行"}
               </button>
             </div>
           </div>

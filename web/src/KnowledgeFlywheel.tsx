@@ -203,7 +203,7 @@ export function KnowledgeInsightsBoard({
           </div>
         </aside>
       </div>
-      <footer className="knowledge-flywheel-note"><span>口径</span>任务需求、附件与过程文档只留在单任务现场，项目规则只属于相关仓库；团队页只统计正式模块知识和 Skill，交付结果仅作相关性参考。</footer>
+      <footer className="knowledge-flywheel-note"><span>口径</span>任务需求、附件与产出文档只留在单任务现场，项目规则只属于相关仓库；团队页只统计正式模块知识和 Skill，交付结果仅作相关性参考。</footer>
     </>}
   </section>;
 }

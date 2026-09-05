@@ -909,7 +909,7 @@ export function GitDiff({
 
   return (
     <section className={`git-change-view${focused ? " is-focused" : ""}${embeddedBrowser ? " is-embedded" : ""}`}
-      aria-label={focused ? "专注代码审阅" : "工作区变更"}
+      aria-label={focused ? "专注代码审阅" : "代码改动"}
       role={focused ? "dialog" : undefined}
       aria-modal={focused ? "true" : undefined}
       onKeyDown={(event) => {
@@ -938,7 +938,7 @@ export function GitDiff({
       ) : (
         <header className="git-change-summary">
           <div>
-            <span>工作区变更</span>
+            <span>代码改动</span>
             <strong>{baseFiles.length} 个文件发生变化{directoryRoots.length
               ? ` · ${directoryRoots.length} 个未跟踪目录` : ""}</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>

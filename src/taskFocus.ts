@@ -149,7 +149,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       return focus(
         "blocked",
         "开发助手正在接管代码现场，主任务已安全暂停",
-        "在右栏输入框切到「接管现场」完成工作并「交还主任务」后自动继续",
+        "在右栏输入框切到「我来接手」完成工作并点「交回给 Agent」后自动继续",
         "responsible",
         90,
         true,
