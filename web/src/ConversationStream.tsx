@@ -220,6 +220,8 @@ export function ConversationStream({
   tail,
   assistantTools,
   takeover,
+  statusText,
+  actor,
   onLocateAnnotation,
   onOpenReview,
   onOpenSteps,
@@ -249,6 +251,10 @@ export function ConversationStream({
   tail?: ReactNode;
   assistantTools?: readonly DeveloperAssistantToolRun[];
   takeover: boolean;
+  /** 任务状态的人话(执行中/已暂停…)与责任("由你负责"):并进锚条那一行,
+   * 不再单独占一行。 */
+  statusText?: string;
+  actor?: string;
   onLocateAnnotation: (id: string) => void;
   onOpenReview: (ids: string[]) => void;
   onOpenSteps: () => void;
@@ -316,13 +322,14 @@ export function ConversationStream({
 
   /* ---- 待你处理锚条:一句话说清现在轮到谁、点一下就到 ---- */
   const anchor = (() => {
+    const join = (...parts: Array<string | undefined>) => parts.filter(Boolean).join(" · ");
     if (waiting && decides) {
       const clarification = waiting.question?.purpose === "clarification";
       return {
         tone: "attention" as const,
         text: clarification ? "Agent 在追问，等你补充信息"
           : "等你决定",
-        detail: waitedFor(waiting.created_at),
+        detail: join(waitedFor(waiting.created_at), actor),
         action: { label: "跳到卡片", onClick: scrollToEnd },
       };
     }
@@ -344,7 +351,7 @@ export function ConversationStream({
     return {
       tone: "neutral" as const,
       text: task.focus?.headline ?? fallbackHeadline,
-      detail: task.focus?.next_action ?? fallbackDetail,
+      detail: join(statusText, actor, task.focus?.next_action ?? fallbackDetail),
     };
   })();
 
@@ -674,26 +681,32 @@ export function ConversationStream({
 
   return (
     <div className="ws-stream-shell">
+      {/* 栏头一行:标题 + 筛选;状态与"轮到谁"并成锚条一行。原来栏头、状态行、
+          锚条、筛选四行摞着吃掉 180px,流只剩三百多像素(用户 2026-09-05:"都没
+          空间显示文字了")。 */}
+      <header className="ws-collaboration-head">
+        <strong>与 Agent 协作</strong>
+        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
+          {([["all", "全部"], ["mine", "需要我的"], ["review", "意见与回执"]] as const)
+            .map(([key, label]) => (
+              <button type="button" key={key} role="tab"
+                aria-selected={!thread && filter === key}
+                className={!thread && filter === key ? "on" : ""}
+                onClick={() => { onThreadChange(undefined); onFilterChange(key); }}>
+                {label}
+              </button>
+            ))}
+        </div>
+      </header>
       <div className={`ws-anchor ${anchor.tone}`} role="status">
         <i aria-hidden />
-        <span className="ws-anchor-text">
+        <span className="ws-anchor-text" title={[anchor.text, anchor.detail].filter(Boolean).join(" · ")}>
           <strong>{anchor.text}</strong>
           {anchor.detail && <small>{anchor.detail}</small>}
         </span>
         {anchor.action && (
           <button type="button" onClick={anchor.action.onClick}>{anchor.action.label}</button>
         )}
-      </div>
-      <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-        {([["all", "全部"], ["mine", "需要我的"], ["review", "意见与回执"]] as const)
-          .map(([key, label]) => (
-            <button type="button" key={key} role="tab"
-              aria-selected={!thread && filter === key}
-              className={!thread && filter === key ? "on" : ""}
-              onClick={() => { onThreadChange(undefined); onFilterChange(key); }}>
-              {label}
-            </button>
-          ))}
       </div>
       {thread && (
         <div className="ws-thread-head" role="note">

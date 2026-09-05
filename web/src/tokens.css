@@ -201,7 +201,7 @@
   --bg: var(--main-bg);
   --border: var(--line);
   --text-muted: var(--muted);
-  --ws-side-w: clamp(340px, 29vw, 430px);
+  --ws-side-w: clamp(420px, 36vw, 640px);
   --ws-document-tree-w: 192px;
 }
 :root[data-theme="dark"] .workspace-studio {

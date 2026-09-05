@@ -11,9 +11,15 @@
   overflow: hidden;
   background: var(--canvas);
 }
-.task-workspace-v2 .ws-side > .ws-collaboration-head { order: 0; flex: none; }
-.task-workspace-v2 .ws-side > .ws-focus-hero { order: 1; flex: none; }
+.task-workspace-v2 .ws-side { position: relative; }
 .task-workspace-v2 .ws-side > .ws-side-notices { order: 2; flex: none; }
+/* 左缘拖柄:平时看不见,悬停/拖动时一道紫线 */
+.task-workspace-v2 .ws-side-resizer {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 3;
+  cursor: col-resize; touch-action: none;
+}
+.task-workspace-v2 .ws-side-resizer:hover,
+.task-workspace-v2 .ws-side-resizer:active { background: color-mix(in srgb, var(--ink) 45%, transparent); }
 .task-workspace-v2 .ws-side > .ws-stream-shell { order: 3; flex: 1 1 auto; min-height: 0; }
 .task-workspace-v2 .ws-side > .ws-composer,
 .task-workspace-v2 .ws-side > .ws-composer-readonly { order: 4; flex: none; }
@@ -21,27 +27,27 @@
 .task-workspace-v2 .ws-side-notices {
   display: grid;
   gap: 8px;
-  padding: 0 18px 8px;
+  padding: 8px 14px 0;
 }
 .task-workspace-v2 .ws-side-notices > * { margin: 0; }
 .task-workspace-v2 .ws-side-notices .ws-focus-alert,
 .task-workspace-v2 .ws-side-notices .ws-focus-note { margin-top: 0; }
 .task-workspace-v2 .ws-side .task-control-feedback { padding: 0 18px 8px; }
 
-/* 状态行:一颗点 + 状态词 + 责任 + 更新时间。栏头下面,不再有大标题——
-   标题在流末尾的卡上,或在锚条上。 */
-.task-workspace-v2 .ws-focus-hero { padding: 10px 18px 8px; border: 0; }
-
-/* ── 待你处理锚条 ─────────────────────────────────────────────────── */
+/* ── 栏头(标题 + 筛选)与锚条(轮到谁 · 状态 · 责任)各一行,其余全给流 ──── */
 .task-workspace-v2 .ws-stream-shell {
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   position: relative;
 }
+.task-workspace-v2 .ws-stream-shell > * { flex: none; }
+.task-workspace-v2 .ws-stream-shell > .ws-stream { flex: 1 1 auto; }
+/* surface-finish 用 :is() 把栏头钉在 50px,这里加一级特异性压到 44px */
+.workspace-studio.task-workspace-v2 .ws-stream-shell > .ws-collaboration-head { min-height: 44px; padding: 6px 14px 6px 16px; gap: 8px; }
 .task-workspace-v2 .ws-anchor {
-  margin: 0 18px 8px;
-  padding: 9px 12px;
+  margin: 8px 14px 6px;
+  padding: 6px 10px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -57,10 +63,10 @@
 }
 .task-workspace-v2 .ws-anchor.attention { border-color: color-mix(in srgb, var(--attention) 40%, var(--line)); background: var(--attention-soft); }
 .task-workspace-v2 .ws-anchor.attention > i { background: var(--attention); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 22%, transparent); }
-.task-workspace-v2 .ws-anchor-text { min-width: 0; display: grid; gap: 1px; }
-.task-workspace-v2 .ws-anchor-text strong { color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-anchor-text { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.task-workspace-v2 .ws-anchor-text strong { flex: none; max-width: 62%; color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-workspace-v2 .ws-anchor.attention .ws-anchor-text strong { color: var(--attention); }
-.task-workspace-v2 .ws-anchor-text small { color: var(--muted); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-anchor-text small { flex: 1; min-width: 0; color: var(--muted); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-workspace-v2 .ws-anchor > button {
   height: 26px; padding: 0 10px;
   border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
@@ -71,7 +77,7 @@
 
 /* ── 筛选:全部 / 需要我的 / 意见与回执 ─────────────────────────────── */
 .task-workspace-v2 .ws-stream-filters {
-  display: flex; gap: 4px; padding: 0 18px 6px;
+  display: flex; gap: 2px; padding: 0;
 }
 .task-workspace-v2 .ws-stream-filters > button {
   height: 26px; padding: 0 10px;
@@ -82,7 +88,7 @@
 .task-workspace-v2 .ws-stream-filters > button:hover { color: var(--text-strong); background: var(--surface); }
 .task-workspace-v2 .ws-stream-filters > button.on { color: var(--ink); background: var(--ink-soft); border-color: transparent; }
 .task-workspace-v2 .ws-thread-head {
-  margin: 0 18px 6px;
+  margin: 0 14px 6px;
   padding: 6px 8px 6px 12px;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   border: 1px solid var(--ink); border-radius: var(--radius-sm);
@@ -98,7 +104,7 @@
 /* ── 流 ─────────────────────────────────────────────────────────────── */
 .task-workspace-v2 .ws-stream {
   min-height: 0;
-  padding: 4px 18px 16px;
+  padding: 4px 14px 14px;
   overflow: auto;
   scrollbar-gutter: stable;
   display: flex; flex-direction: column; gap: 14px;
@@ -308,8 +314,8 @@
 
 /* ── 输入框:整个右栏只有这一个 ────────────────────────────────────── */
 .task-workspace-v2 .ws-composer {
-  display: grid; gap: 8px;
-  padding: 10px 14px 14px;
+  display: grid; gap: 6px;
+  padding: 8px 14px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
@@ -340,7 +346,7 @@
   background: var(--surface); color: var(--text-strong);
   font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer;
 }
-.task-workspace-v2 .ws-composer .steer-input { font-size: var(--fs-14); min-height: 64px; margin: 0; }
+.task-workspace-v2 .ws-composer .steer-input { font-size: var(--fs-14); min-height: 52px; margin: 0; }
 .task-workspace-v2 .ws-composer .steer-input.cli { font-family: var(--font-mono); font-size: var(--fs-13); }
 .task-workspace-v2 .ws-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .task-workspace-v2 .ws-composer-left { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
@@ -366,10 +372,14 @@
 /* 附言在上、提交在下——和输入框的"写完再发"一个方向;原 ws-decision 时代是
    column-reverse(按钮在上),放进输入框里就反了。 */
 .task-workspace-v2 .ws-composer .ws-reply-dock .decision-footer {
-  min-height: 0; padding: 0; display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  min-height: 0; padding: 0; display: flex; flex-direction: column; align-items: stretch; gap: 6px;
   border: 0; background: transparent;
 }
-.task-workspace-v2 .ws-composer .ws-reply-dock .decision-unified-reply textarea { min-height: 64px; font-size: var(--fs-14); }
+/* 附言框默认一行高(可竖向拉大):它是可选附言,不该按两行 textarea 的默认
+   高度先占掉流的地方。dock 内边距也收成 8/12。 */
+.task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock { padding: 8px 12px 10px; }
+.task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock .decision-unified-reply textarea { height: 44px; min-height: 44px; padding: 9px 10px; line-height: 1.6; font-size: var(--fs-14); }
+.task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock .decision-unified-reply > span { margin-bottom: 4px; }
 .task-workspace-v2 .ws-composer .ws-reply-dock .decision-notes > button { padding: 0; font-size: var(--fs-13); }
 .task-workspace-v2 .ws-composer .ws-reply-dock .submit-decision {
   width: 100%; min-height: var(--control-h-lg); height: auto; padding: 9px 16px;
@@ -390,6 +400,7 @@
 /* 窄屏:两栏上下堆叠时流不再内滚,输入框跟在流后面 */
 @media (max-width: 1000px) {
   .task-workspace-v2 .ws-side { overflow: visible; }
+  .task-workspace-v2 .ws-side-resizer { display: none; }
   .task-workspace-v2 .ws-side > .ws-stream-shell { flex: none; }
   .task-workspace-v2 .ws-stream-shell { display: block; }
   .task-workspace-v2 .ws-stream { overflow: visible; max-height: none; }

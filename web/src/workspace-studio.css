@@ -17,8 +17,6 @@
 .workspace-studio .ws-collaboration-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
 .workspace-studio .ws-collaboration-head strong { font-size: var(--fs-14); font-weight: 600; }
 .workspace-studio .ws-collaboration-head span { font-size: var(--fs-12); color: var(--muted); }
-.workspace-studio.task-workspace-v2 .ws-focus-status { font-size: var(--fs-12); flex-wrap: wrap; }
-.workspace-studio.task-workspace-v2 .ws-focus-hero h2 { font-size: var(--fs-17); }
 .workspace-studio.task-workspace-v2 .ws-feedback-home { margin: 18px 0 24px; }
 .workspace-studio .ws-feedback-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .workspace-studio .ws-feedback-heading strong { font-size: var(--fs-13); font-weight: 500; color: var(--muted); }
@@ -160,7 +158,7 @@
 .workspace-studio button:focus-visible, .workspace-studio summary:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
 
 @media (max-width: 1200px) {
-  .workspace-studio { --ws-side-w: 340px; --ws-document-tree-w: 156px; }
+  .workspace-studio { --ws-side-w: clamp(340px, 36vw, 420px); --ws-document-tree-w: 156px; }
   .workspace-studio.task-workspace-v2 .ws-head { grid-template-columns: 30px minmax(180px,1fr) auto; }
   .workspace-studio.task-workspace-v2 .ws-progress { grid-column: 2 / -1; max-width: none; width: 100%; }
   .workspace-studio.task-workspace-v2 .ws-source-switch { gap: 4px; }

@@ -10,7 +10,7 @@
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
@@ -85,6 +85,10 @@ import {
 } from "./TaskCard";
 
 type WorkspaceView = "focus" | "materials" | "execution" | "knowledge";
+
+/** 右栏宽度:人拖过就记住(浏览器本地),没拖过走样式表的默认档。 */
+const SIDE_WIDTH_KEY = "mae-flow:ws-side-w";
+const SIDE_WIDTH_MIN = 360;
 type MaterialView = "source" | "doc" | "chain" | "diff";
 
 const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
@@ -691,6 +695,42 @@ export function TaskWorkspace({
   const [streamFilter, setStreamFilter] = useState<StreamFilter>("all");
   const [streamThread, setStreamThread] = useState<string>();
   const [assistantView, setAssistantView] = useState<DeveloperAssistantView>();
+  const [sideWidth, setSideWidth] = useState<number | undefined>(() => {
+    try {
+      const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY));
+      return saved >= SIDE_WIDTH_MIN ? saved : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  function startSideResize(event: React.PointerEvent<HTMLDivElement>) {
+    const body = bodyRef.current;
+    if (!body || event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    // 捕获失败(比如合成事件没有真实 pointerId)也照常拖:只是指针滑出拖柄时会掉
+    try { handle.setPointerCapture(event.pointerId); } catch { /* 退化为无捕获拖动 */ }
+    const bounds = body.getBoundingClientRect();
+    const maxWidth = Math.max(SIDE_WIDTH_MIN, Math.floor(bounds.width * 0.6));
+    const move = (pointer: PointerEvent) => {
+      setSideWidth(Math.round(Math.min(maxWidth,
+        Math.max(SIDE_WIDTH_MIN, bounds.right - pointer.clientX))));
+    };
+    const stop = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+      setSideWidth((current) => {
+        try {
+          if (current) localStorage.setItem(SIDE_WIDTH_KEY, String(current));
+        } catch { /* 私密模式也能用 */ }
+        return current;
+      });
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  }
   const conversationRequest = useRef(0);
   const loadConversation = (taskId: string) => {
     const sequence = ++conversationRequest.current;
@@ -1747,6 +1787,7 @@ export function TaskWorkspace({
         ? " materials-fullscreen" : ""}`}
       ref={workspaceRoot}
       aria-label={`任务工作台：${task.title ?? task.requirement}`}
+      style={sideWidth ? { ["--ws-side-w" as string]: `${sideWidth}px` } as CSSProperties : undefined}
     >
       <header className="ws-head" ref={headRef}>
         <button type="button" className="ws-back" aria-label="返回列表"
@@ -2331,20 +2372,15 @@ export function TaskWorkspace({
           </div>
         </section>
         <section className="ws-side" aria-label="与 Agent 协作">
-          <header className="ws-collaboration-head">
-            <strong>与 Agent 协作</strong>
-            <span>{viewerDisplayName || viewerUsername}</span>
-          </header>
-          <section className={`ws-focus-hero ${task.focus?.kind ?? task.status} ${task.status}`}>
-            <div className="ws-focus-status">
-              <i aria-hidden />
-              <span>{waiting && !decides ? "等待负责人决定" : statusText(task)}</span>
-              <span>{health?.actor?.startsWith("你 · ")
-                ? "由你负责" : health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
-              <span>更新 · {relativeTime(health?.last_progress_at
-                ?? task.last_progress_at ?? task.updated_at ?? task.created_at) || "刚刚"}</span>
-            </div>
-          </section>
+          {/* 栏宽可拖(双击复位),记在浏览器里:默认 36vw 封顶 640px 仍嫌窄的话
+              人自己拉(用户 2026-09-05:"占据的面积太小了")。 */}
+          <div className="ws-side-resizer" role="separator" aria-orientation="vertical"
+            aria-label="拖动调整协作栏宽度" title="拖动调整宽度，双击恢复默认"
+            onPointerDown={startSideResize}
+            onDoubleClick={() => {
+              setSideWidth(undefined);
+              try { localStorage.removeItem(SIDE_WIDTH_KEY); } catch { /* 私密模式 */ }
+            }} />
           <div className="ws-side-notices">
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
@@ -2484,6 +2520,9 @@ export function TaskWorkspace({
             tail={streamTail}
             assistantTools={assistantView?.tools}
             takeover={assistantView ? takeoverActiveOf(assistantView) : false}
+            statusText={waiting && !decides ? "等待负责人决定" : statusText(task)}
+            actor={health?.actor?.startsWith("你 · ")
+              ? "由你负责" : health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}
             onLocateAnnotation={(id) => {
               const item = notes.find((note) => note.id === id);
               if (!item) return;

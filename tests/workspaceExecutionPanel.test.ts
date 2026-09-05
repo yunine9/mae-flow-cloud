@@ -69,6 +69,16 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.match(composer, /接管现场/);
   assert.match(composer, /交还主任务/);
   assert.match(side, /tail=\{streamTail\}/);
+  // 2026-09-05 用户:"占据的面积太小了,都没空间显示文字了"——栏头、状态行、
+  // 锚条、筛选四行摞着吃掉 180px。现在栏头(标题+筛选)与锚条(轮到谁·状态·
+  // 责任)各一行,都由 ConversationStream 自己渲;栏宽可拖并记在浏览器里。
+  assert.doesNotMatch(side, /ws-collaboration-head|ws-focus-hero|ws-focus-status/,
+    "工作台不再自己摞栏头与状态行");
+  assert.match(side, /className="ws-side-resizer" role="separator"/);
+  assert.match(side, /statusText=\{waiting && !decides \? "等待负责人决定" : statusText\(task\)\}/);
+  assert.match(workspace, /localStorage\.setItem\(SIDE_WIDTH_KEY, String\(current\)\)/);
+  assert.match(workspace, /\["--ws-side-w" as string\]: `\$\{sideWidth\}px`/,
+    "拖过的宽度以内联变量覆盖样式表默认档");
   assert.ok(workspace.indexOf("<CrossRepositorySync") > workspace.indexOf("const streamTail"),
     "低频跨仓同步作为流的收口块,不再另开区块");
   assert.match(crossRepositorySync,

@@ -125,6 +125,20 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.match(html, /Agent 正在写代码/, "没有待办时锚条说当前在干嘛");
 });
 
+test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各占一行", () => {
+  const html = render({ statusText: "执行中", actor: "由你负责" });
+  assert.match(html, /<header class="ws-collaboration-head"><strong>与 Agent 协作<\/strong><div class="ws-stream-filters"/,
+    "筛选进栏头,不再单独一行");
+  assert.match(html, /<small>执行中 · 由你负责 · 写完后会举卡请你检视<\/small>/,
+    "状态、责任、下一步并成锚条的一行小字");
+  assert.doesNotMatch(html, /ws-focus-status/);
+  const waitingTask = { ...task, status: "waiting_for_human",
+    waiting: { waiting_id: "w2", state_version: 1, created_at: T3,
+      question: { questions: [{ question: "确认?" }] } } } as unknown as TaskSummary;
+  const attention = render({ task: waitingTask, decides: true, actor: "由你负责" });
+  assert.match(attention, /<strong>等你决定<\/strong><small>等你 [^<]* · 由你负责<\/small>/);
+});
+
 test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲在流末尾", () => {
   const waitingTask = { ...task, status: "waiting_for_human",
     waiting: { waiting_id: "w2", state_version: 1, created_at: T3,

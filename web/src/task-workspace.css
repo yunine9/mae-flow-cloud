@@ -22,7 +22,7 @@
 .task-workspace-v2 {
   --ws-head-h: 56px;
   --ws-subbar-h: 48px;
-  --ws-side-w: clamp(360px, 30vw, 440px);
+  --ws-side-w: clamp(420px, 36vw, 640px);
   --ws-inspector-w: clamp(360px, 28vw, 440px);
   --ws-reading: 880px;
   --ws-gutter: clamp(24px, 4vw, 56px);
@@ -545,68 +545,6 @@
 }
 
 /* ── 当前:一眼看清发生了什么、要不要我、下一步 ───────────────────── */
-
-.task-workspace-v2 .ws-focus-hero { padding: 0 0 4px; border: 0; }
-.task-workspace-v2 .ws-focus-status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 0;
-  color: var(--muted);
-  font-size: var(--fs-13);
-  line-height: 1.4;
-}
-.task-workspace-v2 .ws-focus-status > i {
-  width: 8px;
-  height: 8px;
-  margin-right: 8px;
-  border-radius: 50%;
-  background: var(--active);
-  box-shadow: 0 0 0 3px var(--active-soft);
-}
-.task-workspace-v2 .ws-focus-status > span + span::before {
-  content: "·";
-  margin: 0 10px;
-  color: var(--faint);
-}
-.task-workspace-v2 .ws-focus-status > span:nth-child(2) { color: var(--text-strong); font-weight: 600; }
-.task-workspace-v2 .ws-focus-hero.running .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.verifying .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.coordinating .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.progress .ws-focus-status > i {
-  animation: statusBlink 1.6s ease-in-out infinite;
-}
-.task-workspace-v2 .ws-focus-hero.human_action .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.blocked .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.waiting_for_human .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.pausing .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.await_merge .ws-focus-status > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
-.task-workspace-v2 .ws-focus-hero.human_action .ws-focus-status > span:nth-child(2),
-.task-workspace-v2 .ws-focus-hero.waiting_for_human .ws-focus-status > span:nth-child(2) { color: var(--attention); }
-.task-workspace-v2 .ws-focus-hero.done .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.completed .ws-focus-status > i { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
-.task-workspace-v2 .ws-focus-hero.failed .ws-focus-status > i { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
-.task-workspace-v2 .ws-focus-hero.failed .ws-focus-status > span:nth-child(2) { color: var(--danger); }
-.task-workspace-v2 .ws-focus-hero.paused .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.queued .ws-focus-status > i,
-.task-workspace-v2 .ws-focus-hero.canceled .ws-focus-status > i { background: var(--faint); box-shadow: 0 0 0 3px var(--surface-3); }
-
-.task-workspace-v2 .ws-focus-hero h2 {
-  margin: 12px 0 8px;
-  color: var(--text-strong);
-  font-size: var(--fs-20);
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -.015em;
-  text-wrap: balance;
-  overflow-wrap: anywhere;
-}
-.task-workspace-v2 .ws-focus-hero > p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--fs-14);
-  line-height: var(--lh-body);
-}
 
 .task-workspace-v2 .ws-focus-alert,
 .task-workspace-v2 .ws-focus-note {
@@ -1215,7 +1153,7 @@
 }
 
 @media (max-width: 1180px) {
-  .task-workspace-v2 { --ws-inspector-w: clamp(340px, 38vw, 420px); --ws-side-w: clamp(320px, 34vw, 400px); }
+  .task-workspace-v2 { --ws-inspector-w: clamp(340px, 38vw, 420px); --ws-side-w: clamp(360px, 38vw, 460px); }
   .task-workspace-v2 .ws-annotate-hint { display: none; }
   .task-workspace-v2 .ws-identity-line code { display: none; }
   .task-workspace-v2 .ws-progress .task-milestone { display: none; }
@@ -1321,7 +1259,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .task-workspace-v2 { animation: none; }
-  .task-workspace-v2 .ws-focus-status > i,
   .task-workspace-v2 .pill i { animation: none !important; }
   .task-workspace-v2 *,
   .task-workspace-v2 *::before,
