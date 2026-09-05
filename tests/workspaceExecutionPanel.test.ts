@@ -36,8 +36,12 @@ test("批注检视停靠工作区，材料保持可见，决定栏不承载意�
 });
 
 test("低频资料集中在任务详情，暂停成功不重复占据通栏", () => {
-  const facts = workspace.slice(workspace.indexOf('<details className="ws-task-facts"'), workspace.indexOf('{actionRailVisible &&'));
-  for (const kind of ["usage", "environment"]) assert.ok(facts.includes(`setTaskInspector("${kind}")`));
+  const identity = workspace.slice(workspace.indexOf('<div className="ws-identity">'), workspace.indexOf('<div className={`ws-progress'));
+  assert.match(identity, /aria-haspopup="dialog"[\s\S]*?setTaskInspector\("details"\)/);
+  assert.doesNotMatch(workspace, /ws-task-facts/);
+  const inspector = readFileSync(resolve("web/src/TaskInspector.tsx"), "utf8");
+  for (const kind of ["usage", "environment"]) assert.ok(inspector.includes(`onInspect("${kind}")`));
+  for (const fact of ["luban_account", "mr_url", "pipeline", "milestone", "workspace_reclaimed_at"]) assert.ok(inspector.includes(fact));
   assert.match(workspace, /selectWorkspaceView\("knowledge"\)/);
   assert.match(workspace, /className="ws-primary-scroll ws-knowledge-view"/);
   assert.doesNotMatch(workspace, /ws-task-resources|已安全暂停/);

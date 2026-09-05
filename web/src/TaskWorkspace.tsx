@@ -1623,6 +1623,8 @@ export function TaskWorkspace({
             <span className={`pill ${task.status}`}>
               <i aria-hidden />{statusText(task)}
             </span>
+            <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
+              onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />
             <WarmupBadge task={task} />
             <PrepushBadge task={task} canOperate={canOperate}
@@ -1722,7 +1724,8 @@ export function TaskWorkspace({
         )}
       </header>
 
-      {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)} />}
+      {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
+        onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
 
       {task.feedback_error && (
         <section className="feedback-panel feedback-panel-error" role="alert">
@@ -2251,26 +2254,6 @@ export function TaskWorkspace({
                 ))}</div>
               </div>
             )}
-            <details className="ws-task-facts">
-              <summary>任务详情与交付 <small>合入请求 · 流水线 · 现场信息</small></summary>
-              <div>
-                <p>负责人：{task.luban_account ?? "未指定"}</p>
-                <button type="button" onClick={() => setTaskInspector("usage")}>查看模型用量{task.token_usage ? ` · ${task.token_usage.total_tokens.toLocaleString()} Token` : ""}</button>
-                <button type="button" onClick={() => setTaskInspector("environment")}>查看执行配置与预热记录</button>
-                {task.progress?.step && <p>当前步骤：{task.progress.step}</p>}
-                {task.progress?.milestone && <p>子任务里程碑：{task.progress.milestone.title} · {task.progress.milestone.event}
-                  {task.progress.milestone.reason && ` · ${task.progress.milestone.reason}`}</p>}
-                {task.delivery?.mr_url && <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
-                  打开合入请求 · {task.delivery.mr_state || "查看状态"}</a>}
-                {task.delivery?.pipeline && <p>流水线：{task.delivery.pipeline}</p>}
-                {task.delivery?.loop?.failure && <p>流水线失败原文：{task.delivery.loop.failure}</p>}
-                {task.workspace_reclaimed_at && <p>任务现场已于 {task.workspace_reclaimed_at} 回收。
-                  过程记录、交付账本、流水线证据与批注仍保留，代码差异不再可看。</p>}
-                <button type="button" onClick={() => selectWorkspaceView("execution")}>
-                  查看工作过程</button>
-              </div>
-            </details>
-
             {actionRailVisible && (
             <div className="ws-decision" aria-label="当前决策与关键操作">
               {!waiting && <div className="ws-action-heading">

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { listTimeline, tailEvents, type TaskSummary, type TimelineEntry } from "./api";
-import { formatLocalDateTime } from "./time";
+import { formatLocalDateTime, formatLocalDate, formatLocalClock } from "./time";
+import { Markdown } from "./markdown";
 import { startVisiblePolling } from "./visiblePolling";
 import { journeyCurrent, recentJourney, journeyMessage } from "./journeyModel";
 
@@ -8,6 +9,29 @@ const labels: Record<TimelineEntry["kind"], string> = {
   session: "执行", phase: "阶段", ask: "请求确认", decision: "人的决定",
   agent: "Agent 回应", quality: "验证结果", memory: "记录经验",
 };
+
+/** Keep complete Markdown intact; collapse by rendered height instead of cutting syntax. */
+export function JourneyDetail({ text }: { text: string }) {
+  const body = useRef<HTMLDivElement>(null);
+  const contentId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const node = body.current;
+    if (!node) return;
+    const measure = () => setOverflows(node.scrollHeight > 240);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+  return <div className={`journey-detail${overflows && !expanded ? " is-collapsed" : ""}`}>
+    <div className="journey-detail-window" id={contentId} onFocusCapture={() => setExpanded(true)}>
+      <div className="journey-detail-body" ref={body}><Markdown text={text} /></div></div>
+    {overflows && <button type="button" className="journey-expand" aria-expanded={expanded} aria-controls={contentId}
+      onClick={() => setExpanded((value) => !value)}>{expanded ? "收起内容 ↑" : "展开完整内容 ↓"}</button>}
+  </div>;
+}
 
 export function TaskJourney({ task, onLogs, onTiming }: {
   task: TaskSummary; onLogs: () => void; onTiming: () => void;
@@ -51,6 +75,16 @@ export function TaskJourney({ task, onLogs, onTiming }: {
   }, [task.id, reload]);
   const current = journeyCurrent(task);
   const ordered = recentJourney([...(entries ?? []), ...Object.values(messages)]);
+  const days: Array<{ date: string; entries: Array<{ entry: TimelineEntry; key: string }> }> = [];
+  const keys = new Map<string, number>();
+  for (const entry of ordered.slice(0, limit)) {
+    const date = formatLocalDate(entry.ts) || "时间未记录";
+    if (days.at(-1)?.date !== date) days.push({ date, entries: [] });
+    const identity = JSON.stringify([entry.ts, entry.kind, entry.title, entry.detail]);
+    const occurrence = keys.get(identity) ?? 0;
+    keys.set(identity, occurrence + 1);
+    days.at(-1)!.entries.push({ entry, key: `${identity}:${occurrence}` });
+  }
   return <section className="task-journey" aria-label="Agent 工作过程">
     <header className="journey-heading">
       <div><h2>Agent 的工作过程</h2><p>查看 Agent 的说明、阶段结果和你的历史决定。</p></div>
@@ -66,11 +100,23 @@ export function TaskJourney({ task, onLogs, onTiming }: {
     {!entries && !error && <p className="journey-empty" role="status">正在读取进展…</p>}
     {entries?.length === 0 && ordered.length === 0 && <div className="journey-empty"><strong>还没有形成阶段记录</strong>
       <p>当前状态见上方；需要查看启动或工具调用细节时，可以打开执行日志。</p><button type="button" onClick={onLogs}>查看执行日志</button></div>}
-    <ol className="journey-events">{ordered.slice(0, limit).map((entry, index) => <li key={`${entry.ts}:${entry.kind}:${index}`} className={entry.tone}>
-      <div className="journey-event-meta"><span>{labels[entry.kind]}</span><time dateTime={entry.ts}>{formatLocalDateTime(entry.ts)}</time></div>
-      <h4>{entry.title}</h4>
-      {entry.detail && (entry.detail.length > 200 ? <details><summary>{entry.detail.slice(0, 120)}… 查看完整内容</summary><p>{entry.detail}</p></details> : <p>{entry.detail}</p>)}
-    </li>)}</ol>
+    <div className="journey-days">{days.map((day) => <section className="journey-day-group" key={day.date} aria-label={day.date}>
+      <header className="journey-day-heading"><span>{day.date}</span><i aria-hidden /></header>
+      <ol className="journey-events">{day.entries.map(({ entry, key }) => {
+        const isMessage = entry.kind === "agent" && ["Agent 的进展说明", "开发助手的进展说明"].includes(entry.title);
+        return <li key={key} className={`journey-entry ${entry.tone}${isMessage ? " is-message" : ""}`}>
+          <span className="journey-entry-mark" aria-hidden>{isMessage ? "A" : entry.kind === "decision" ? "↳" : "•"}</span>
+          <article>
+            <header className="journey-event-meta">
+              <strong>{isMessage ? entry.title.startsWith("开发助手") ? "开发助手" : "Agent" : labels[entry.kind]}</strong>
+              <time dateTime={entry.ts} title={formatLocalDateTime(entry.ts, { seconds: true, year: true })}>{formatLocalClock(entry.ts)}</time>
+            </header>
+            {!isMessage && <h4>{entry.title}</h4>}
+            {entry.detail && <JourneyDetail text={entry.detail} />}
+          </article>
+        </li>;
+      })}</ol>
+    </section>)}</div>
     {ordered.length > limit && <button type="button" className="journey-more" onClick={() => setLimit((value) => value + 20)}>查看更早的进展（还有 {ordered.length - limit} 条）</button>}
   </section>;
 }
