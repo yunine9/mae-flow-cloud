@@ -54,7 +54,7 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
   );
   assert.doesNotMatch(drawerHeader, /项等我确认/,
     "抽屉标题栏不再重复计数");
-  assert.match(workspace, /onClick=\{\(\) => setReviewPanelOpen\(true\)\}/);
+  assert.match(workspace, /setReviewRevealRequest\(\(request\) => request \+ 1\)/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
     "批注出现时只亮入口，不应自动弹出并抢走当前任务");
 });
@@ -185,7 +185,7 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
     "判据只有一份");
   const attachmentStart = workspace.indexOf("attachment={requirementAnalysisConfirmation ? undefined :");
-  const attachmentEnd = workspace.indexOf("<AttachedNotes", attachmentStart);
+  const attachmentEnd = workspace.indexOf('className="ws-attached-feedback"', attachmentStart);
   assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
   assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
     "讨论参与人不进确认卡");
@@ -237,7 +237,7 @@ test("批注与检视顶部有处理归属筛选条,CodeHub 意见可转成工�
   assert.match(workspace, /\["mine", "等我确认"\]/);
   assert.match(workspace, /\["agent", "处理与验证"\]/);
   assert.match(workspace, /\["closed", "已闭环"\]/);
-  assert.match(workspace, /filter=\{reviewFilter\}/, "批注面板吃同一个筛选档");
+  assert.match(workspace, /filter=\{inline \? "all" : reviewFilter\}/, "批注面板吃同一个筛选档");
   assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
     "转批注沿用批注创建权限");
   assert.match(workspace, /【转自 \$\{origin\}】/);
@@ -254,7 +254,7 @@ test("材料上的已有批注可以反向打开并定位到检视卡", () => {
     join(process.cwd(), "web/src/Annotatable.tsx"), "utf8");
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  assert.match(annotatable, /onOpenAnnotations\(hoveredAnnotations\.map\(\(item\) => item\.id\)\)/,
+  assert.match(annotatable, /const ids = hoveredAnnotations\.map\(\(item\) => item\.id\)/,
     "材料行把对应批注 id 交回工作台");
   assert.match(workspace, /setReviewFilter\("all"\)[\s\S]*setReviewPanelOpen\(true\)/,
     "反向定位先取消筛选并打开检视抽屉");

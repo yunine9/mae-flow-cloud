@@ -4,8 +4,11 @@
  */
 
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { taskOverviewRelationship } from "./taskHierarchy";
+import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, toggleDecisionChoice } from "./decisionSelection";
+import { clearDecisionChoice, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -56,6 +59,8 @@ export function TaskCard({
   onOpenArtifacts,
   onOpenRelatedTask,
   showChildLinks = true,
+  compact = false,
+  relatedTasks = [],
 }: {
   task: TaskSummary;
   onChanged: () => void;
@@ -68,8 +73,10 @@ export function TaskCard({
   onOpenArtifacts?: () => void;
   onOpenRelatedTask?: (taskId: string) => void;
   showChildLinks?: boolean;
+  compact?: boolean;
+  relatedTasks?: TaskSummary[];
 }) {
-  const showDecisionForm = decisionMode === "form";
+  const showDecisionForm = !compact && decisionMode === "form";
   const [expanded, setExpanded] = useState(
     (showDecisionForm && task.status === "waiting_for_human") || focused,
   );
@@ -98,6 +105,20 @@ export function TaskCard({
   const buildFixActive = ["running", "recovering"].includes(
     task.delivery?.prepush_runtime?.state ?? "",
   );
+
+  const { parent: parentTask, childCount } = taskOverviewRelationship(task, relatedTasks);
+  if (compact && onOpenArtifacts) return <TaskOverviewRow
+    id={task.id} ticket={task.ticket} title={task.title ?? task.requirement}
+    status={task.status} statusLabel={task.status === "waiting_for_human" ? "待决定"
+      : task.status === "verifying" ? (repairStopped(task) ? "需介入" : "验证中")
+      : task.status === "await_merge" ? "待合入"
+      : task.status === "coordinating" ? "子任务推进" : statusText(task)}
+    owner={responsibleOf(task)} updatedAt={task.updated_at ?? task.created_at}
+    detail={task.focus?.next_action ?? task.detail} child={!!task.parent_task_id}
+    focused={focused} onOpen={onOpenArtifacts} childCount={childCount}
+    parentId={task.parent_task_id} parentLabel={parentTask?.ticket ?? task.parent_task_id}
+    parentTitle={parentTask?.title ?? parentTask?.requirement}
+    onOpenParent={parentTask && onOpenRelatedTask ? () => onOpenRelatedTask(parentTask.id) : undefined} />;
 
   return (
     <article
@@ -601,6 +622,10 @@ function waitingStepTitle(task: TaskSummary): string | undefined {
   return undefined;
 }
 
+function DecisionFooterMount({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
+  return target ? createPortal(children, target) : children;
+}
+
 export function WaitingCard({
   task,
   onDecided,
@@ -614,8 +639,12 @@ export function WaitingCard({
   onLocateDelivery,
   activeDeliveryScope,
   participant = false,
+  presentation = "default",
+  footerTarget,
 }: {
   task: TaskSummary;
+  presentation?: "default" | "studio";
+  footerTarget?: HTMLElement | null;
   onDecided: () => void;
   /** 本次仍待发送的 draft 批注；sent 已经送达，不能重复附带。 */
   annotationIds?: string[];
@@ -649,6 +678,7 @@ export function WaitingCard({
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
+  const [replyText, setReplyText] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [conflict, setConflict] = useState("");
@@ -660,6 +690,7 @@ export function WaitingCard({
     setCustom({});
     setCustomOpen({});
     setNotes("");
+    setReplyText("");
     setNotesOpen(false);
     setContextOpen(false);
     setConflict("");
@@ -668,6 +699,8 @@ export function WaitingCard({
   const requirementAnalysisConfirmation = task.waiting?.step
     === "cloud_requirement_analysis_confirm";
   const chainReview = isChainReviewWaiting(task);
+  const unifiedReply = presentation === "studio" && questions.length === 1
+    && !requirementAnalysisConfirmation;
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
@@ -717,7 +750,7 @@ export function WaitingCard({
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
     || (requiresDeliverySelection && selectedAnswers.some((answer) =>
       /需要.*(?:调整|修改)|返工|补充/.test(answer)));
-  const hasCustomPrimaryAnswer = questions.some((item) =>
+  const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
     && !!customOpen[item.question]
@@ -733,7 +766,7 @@ export function WaitingCard({
     || Boolean(deliverySelection?.selectedPaths.length);
   const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
-    const answered = options.length
+    const answered = unifiedReply ? Boolean(picked[item.question] || replyText.trim()) : options.length
       ? picked[item.question]
         || (customOpen[item.question] && custom[item.question]?.trim())
       : customOpen[item.question] && custom[item.question]?.trim();
@@ -789,9 +822,9 @@ export function WaitingCard({
       if (options.length && selected) {
         selectedOptions[item.question] = selected;
       }
-      const explanation = customOpen[item.question]
-        ? custom[item.question]?.trim()
-        : "";
+      const explanation = unifiedReply
+        ? unifiedDecisionReply(selected, replyText).freeResponse
+        : customOpen[item.question] ? custom[item.question]?.trim() : "";
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
@@ -813,7 +846,7 @@ export function WaitingCard({
         task.waiting!.state_version,
         selectedOptions,
         freeResponses,
-        notes,
+        unifiedReply ? unifiedDecisionReply(picked[questions[0].question], replyText).notes : notes,
         annotationIds,
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
@@ -859,7 +892,7 @@ export function WaitingCard({
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
-          <span className="decision-kicker">需要你决定</span>
+          {presentation !== "studio" && <span className="decision-kicker">需要你决定</span>}
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}
@@ -898,6 +931,269 @@ export function WaitingCard({
         </div>
       )}
 
+      {task.waiting?.context && (() => {
+        /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
+           重点(要我做什么、较上次变了什么)在前几行,整版清单是
+           留档不是必读;需要时一键展开。
+           preface = 举卡前 Agent 刚展示的完整清单:卡上写"上述配置
+           是否正确"时,"上述"必须就在卡里(MFC-028 盲签)。 */
+        const preface = task.waiting.preface
+          ? rewritePanelPath(task.waiting.preface, task.id) : undefined;
+        const contextText = (preface ? `${preface}\n\n---\n\n` : "")
+          + rewritePanelPath(task.waiting.context, task.id);
+        const contextLines = contextText.split("\n").length;
+        const collapsible = contextLines > 16;
+        const block = (
+          <div className="waiting-context">
+            <div className="context-label">决策背景</div>
+            <div className={`waiting-context-body${
+              collapsible && !contextOpen ? " clamped" : ""}`}>
+              <Markdown text={contextText} />
+            </div>
+            {collapsible && (
+              <button type="button" className="context-toggle"
+                onClick={() => setContextOpen((value) => !value)}>
+                {contextOpen ? "收起背景" : `展开全部背景（共 ${contextLines} 行）`}
+              </button>
+            )}
+          </div>
+        );
+        // 拆分确认卡的背景是 Agent 对方案的复述,方案本身已在左侧成图;
+        // 默认收起,想看原话再展开。其它卡照旧摊开(推送确认那类"上述
+        // 配置是否正确"的卡,上述必须就在眼前——MFC-028 盲签)。
+        return chainReview
+          ? <details className="waiting-context-details">
+              <summary>Agent 对方案的说明</summary>{block}
+            </details>
+          : block;
+      })()}
+
+      {!requirementAnalysisConfirmation && <div className="question-list">
+        {questions.map((item, index) => {
+          const options = item.options ?? [];
+          const compact = options.length <= 4
+            && options.every((option) => option.length <= 14);
+          const customActive = !!customOpen[item.question];
+          const skippable = optional(item.question);
+          const reviewQuestion = options.some((option) =>
+            allChoiceAnswers.has(option));
+          return (
+            <fieldset className="question" key={item.question}>
+              <legend>
+                {questions.length > 1 && <span className="question-number">
+                  {String(index + 1).padStart(2, "0")}
+                </span>}
+                <span className="question-text">
+                  {item.question || "需要你确认"}
+                </span>
+                {skippable && <span className="q-optional">可跳过</span>}
+              </legend>
+              <div className={`options ${compact ? "compact" : "cards"}`}>
+                {options.map((option) => {
+                  const chosen = picked[item.question] === option;
+                  const locked = participant && confirmsChainOption(option);
+                  const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
+                  const effect = choiceEffects.find((candidate) =>
+                    candidate.answers.includes(option));
+                  const inferredAdjustment = reviewQuestion
+                    && !closingAnswers.has(option);
+                  const consequence = effect?.closes_feedback
+                    ? "将关闭本轮检视并进入下一步"
+                    : effect?.handles_feedback && effect.allows_source_edit
+                      ? "将进入返工，处理意见后重新检视"
+                      : effect?.handles_feedback || inferredAdjustment
+                        ? "将留在本轮，处理意见后重新检视"
+                        : "";
+                  const [title, rawHint] = split
+                    ? [split[1].trim(), split[2].trim()]
+                    : [option, consequence];
+                  const hint = locked
+                    ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
+                    : rawHint;
+                  return (
+                    <button
+                      type="button"
+                      key={option}
+                      className={`option${chosen ? " picked" : ""}${locked ? " locked" : ""}`}
+                      role="radio"
+                      aria-checked={chosen}
+                      title={locked ? "由责任人确认"
+                        : chosen ? "再次点击取消选择" : undefined}
+                      disabled={locked}
+                      onClick={(event) => {
+                        if (locked) return;
+                        // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
+                        // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
+                        const selection = window.getSelection();
+                        if (selection && !selection.isCollapsed
+                            && selection.anchorNode
+                            && event.currentTarget.contains(selection.anchorNode)) {
+                          return;
+                        }
+                        pickOption(item.question, option);
+                      }}
+                    >
+                      <span className={`radio${chosen ? " on" : ""}`} />
+                      <span className="option-body">
+                        <span className="option-title">{title}</span>
+                        {hint && <span className="option-hint">{hint}</span>}
+                      </span>
+                    </button>
+                  );
+                })}
+                {!unifiedReply && <button
+                  type="button"
+                  className={`option custom-entry${customActive ? " picked" : ""}`}
+                  role={options.length ? "radio" : undefined}
+                  aria-checked={options.length ? customActive : undefined}
+                  title={customActive ? "再次点击取消自定义答复" : undefined}
+                  onClick={() => toggleCustom(item.question)}
+                >
+                    <span className={`radio${customActive ? " on" : ""}`} />
+                    <span className="option-body">
+                      <span className="option-title">{options.length
+                        ? "自定义答复"
+                        : "填写答复"}</span>
+                      <span className="option-hint">{options.length
+                        ? "以上选项都不合适时，直接写下正确处理方式"
+                        : "填写本题的具体答案"}</span>
+                    </span>
+                </button>}
+              </div>
+              {customOpen[item.question] && (
+                <div className="custom-answer">
+                  <textarea
+                    className={`custom-input${customActive ? " picked" : ""}`}
+                    placeholder={options.length
+                      ? "写下选项之外的正确处理方式…"
+                      : "写下你的答复…"}
+                    value={custom[item.question] ?? ""}
+                    autoFocus
+                    onChange={(change) => setCustom({
+                      ...custom,
+                      [item.question]: change.target.value,
+                    })}
+                  />
+                  <span>{options.length
+                    ? "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
+                    : "这段文字将作为开放题答案提交。"}</span>
+                </div>
+              )}
+            </fieldset>
+          );
+        })}
+      </div>}
+
+      {attachment && (
+        <fieldset className="decision-attachment" disabled={submitting}>
+          {attachment}
+        </fieldset>
+      )}
+
+      {attachmentCount > 0 && isReviewDecision && (
+        <div className={`review-decision-guidance${
+          reviewChoiceConflict ? " conflict" : ""
+        }`} role={reviewChoiceConflict ? "alert" : "status"}>
+          <strong>当前有 {attachmentCount} 条检视意见未闭环</strong>
+          <span>{!feedbackOption
+            ? "当前卡片缺少调整选项，请用“自定义答复”明确要求继续调整。"
+            : reviewChoiceConflict
+            ? `建议选择“${feedbackLabel}”。当前选项会关闭本轮检视，不会处理这些意见。`
+            : selectedReviewAnswer === feedbackOption
+              ? `已选择“${feedbackLabel}”，提交后会继续处理这些意见。`
+              : `建议选择“${feedbackLabel}”，提交后会继续处理这些意见。`}</span>
+        </div>
+      )}
+
+      {requirementAnalysisConfirmation
+        && task.requirement_revision?.state === "running" && (
+        <div className="review-decision-guidance" role="status">
+          <strong>Agent 正在修改需求文档</strong>
+          <span>正在落实已提交的检视意见。修改完成并逐条复检后，才能确认进入需求分析。</span>
+        </div>
+      )}
+
+      {requirementAnalysisConfirmation
+        && task.requirement_revision?.state !== "running"
+        && attachmentCount > 0 && (
+        <div className="review-decision-guidance conflict" role="alert">
+          <strong>还有 {attachmentCount} 条需求检视意见未闭环</strong>
+          <span>请由意见提出人核对 Agent 修改结果并逐条确认，全部闭环后即可通过。</span>
+        </div>
+      )}
+
+      <DecisionFooterMount target={footerTarget}>
+      <footer className={`decision-footer${
+        showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
+        {unifiedReply && <label className="decision-unified-reply">
+          <span>你的回复 <small>{picked[questions[0].question]
+            ? "随所选决定补充说明" : "选择处理方式，或直接填写答复"}</small></span>
+          <textarea value={replyText} aria-label="决定回复"
+            placeholder="补充整体意见，或说明处理要求…"
+            onChange={(event) => setReplyText(event.target.value)} />
+        </label>}
+        {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
+          {!notesOpen ? (
+            <button type="button" onClick={() => setNotesOpen(true)}>
+              {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
+            </button>
+          ) : (
+            <label>
+              <span>{isReviewDecision
+                ? "检视说明（可选，不改变上方分支）"
+                : "决策备注（可选）"}</span>
+              <input
+                type="text"
+                placeholder={isReviewDecision
+                  ? "补充修改原因或处理要求；流程走向以上方选项为准"
+                  : "随本次决定一起记录"}
+                value={notes}
+                autoFocus
+                onChange={(change) => setNotes(change.target.value)}
+              />
+            </label>
+          )}
+        </div>}
+        {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
+            最底沿,长卡时落在视口外,人以为点了没反应。 */}
+        {footerTarget && (reviewChoiceConflict || (requirementAnalysisConfirmation && attachmentCount > 0)) && (
+          <p className="decision-dock-notice" role="status">还有 {attachmentCount} 条检视意见未闭环，请先处理后再确认通过。</p>
+        )}
+        {footerTarget && !reviewChoiceConflict && (annotationIds?.length ?? 0) > 0 && (
+          <p className="decision-dock-notice">将附带你的 {annotationIds!.length} 条未发送反馈。</p>
+        )}
+        {conflict && <div className="alert" role="alert">{conflict}</div>}
+        {showDeliveryCompileActions ? (
+          <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
+            <button type="button" className="submit-decision secondary"
+              disabled={!ready} onClick={() => submit("rerun")}>
+              {submitting ? "正在提交…" : "重新编译后提交"}
+            </button>
+            <button type="button" className="submit-decision"
+              disabled={!ready} onClick={() => submit("skip")}>
+              {submitting ? "正在提交…" : "不再编译，直接提交"}
+              <svg viewBox="0 0 20 20" aria-hidden>
+                <path d="m4 10 3.2 3.2L16 5.5" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="submit-decision"
+            disabled={!ready}
+            onClick={() => submit()}
+          >
+            {submitLabel}
+            <svg viewBox="0 0 20 20" aria-hidden>
+              <path d="m4 10 3.2 3.2L16 5.5" />
+            </svg>
+          </button>
+        )}
+      </footer>
+      </DecisionFooterMount>
+      {(pushReview || requiresDeliverySelection) && <details className="decision-evidence">
+        <summary>交付依据与文件范围</summary>
       {pushReview && (
         <section className="push-review-overview" aria-label="本次代码检视摘要">
           <div className="push-review-copy">
@@ -967,43 +1263,6 @@ export function WaitingCard({
         </section>
       )}
 
-      {task.waiting?.context && (() => {
-        /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
-           重点(要我做什么、较上次变了什么)在前几行,整版清单是
-           留档不是必读;需要时一键展开。
-           preface = 举卡前 Agent 刚展示的完整清单:卡上写"上述配置
-           是否正确"时,"上述"必须就在卡里(MFC-028 盲签)。 */
-        const preface = task.waiting.preface
-          ? rewritePanelPath(task.waiting.preface, task.id) : undefined;
-        const contextText = (preface ? `${preface}\n\n---\n\n` : "")
-          + rewritePanelPath(task.waiting.context, task.id);
-        const contextLines = contextText.split("\n").length;
-        const collapsible = contextLines > 16;
-        const block = (
-          <div className="waiting-context">
-            <div className="context-label">决策背景</div>
-            <div className={`waiting-context-body${
-              collapsible && !contextOpen ? " clamped" : ""}`}>
-              <Markdown text={contextText} />
-            </div>
-            {collapsible && (
-              <button type="button" className="context-toggle"
-                onClick={() => setContextOpen((value) => !value)}>
-                {contextOpen ? "收起背景" : `展开全部背景（共 ${contextLines} 行）`}
-              </button>
-            )}
-          </div>
-        );
-        // 拆分确认卡的背景是 Agent 对方案的复述,方案本身已在左侧成图;
-        // 默认收起,想看原话再展开。其它卡照旧摊开(推送确认那类"上述
-        // 配置是否正确"的卡,上述必须就在眼前——MFC-028 盲签)。
-        return chainReview
-          ? <details className="waiting-context-details">
-              <summary>Agent 对方案的说明</summary>{block}
-            </details>
-          : block;
-      })()}
-
       {requiresDeliverySelection && (
         <section className={`delivery-scope-card${
           deliverySelectionChanged ? " changed" : ""}`}
@@ -1037,215 +1296,7 @@ export function WaitingCard({
         </section>
       )}
 
-      {!requirementAnalysisConfirmation && <div className="question-list">
-        {questions.map((item, index) => {
-          const options = item.options ?? [];
-          const compact = options.length <= 4
-            && options.every((option) => option.length <= 14);
-          const customActive = !!customOpen[item.question];
-          const skippable = optional(item.question);
-          const reviewQuestion = options.some((option) =>
-            allChoiceAnswers.has(option));
-          return (
-            <fieldset className="question" key={item.question}>
-              <legend>
-                <span className="question-number">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <span className="question-text">
-                  {item.question || "需要你确认"}
-                </span>
-                {skippable && <span className="q-optional">可跳过</span>}
-              </legend>
-              <div className={`options ${compact ? "compact" : "cards"}`}>
-                {options.map((option) => {
-                  const chosen = picked[item.question] === option;
-                  const locked = participant && confirmsChainOption(option);
-                  const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
-                  const effect = choiceEffects.find((candidate) =>
-                    candidate.answers.includes(option));
-                  const inferredAdjustment = reviewQuestion
-                    && !closingAnswers.has(option);
-                  const consequence = effect?.closes_feedback
-                    ? "将关闭本轮检视并进入下一步"
-                    : effect?.handles_feedback && effect.allows_source_edit
-                      ? "将进入返工，处理意见后重新检视"
-                      : effect?.handles_feedback || inferredAdjustment
-                        ? "将留在本轮，处理意见后重新检视"
-                        : "";
-                  const [title, rawHint] = split
-                    ? [split[1].trim(), split[2].trim()]
-                    : [option, consequence];
-                  const hint = locked
-                    ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
-                    : rawHint;
-                  return (
-                    <button
-                      type="button"
-                      key={option}
-                      className={`option${chosen ? " picked" : ""}${locked ? " locked" : ""}`}
-                      role="radio"
-                      aria-checked={chosen}
-                      title={locked ? "由责任人确认"
-                        : chosen ? "再次点击取消选择" : undefined}
-                      disabled={locked}
-                      onClick={(event) => {
-                        if (locked) return;
-                        // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
-                        // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
-                        const selection = window.getSelection();
-                        if (selection && !selection.isCollapsed
-                            && selection.anchorNode
-                            && event.currentTarget.contains(selection.anchorNode)) {
-                          return;
-                        }
-                        pickOption(item.question, option);
-                      }}
-                    >
-                      <span className={`radio${chosen ? " on" : ""}`} />
-                      <span className="option-body">
-                        <span className="option-title">{title}</span>
-                        {hint && <span className="option-hint">{hint}</span>}
-                      </span>
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  className={`option custom-entry${customActive ? " picked" : ""}`}
-                  role={options.length ? "radio" : undefined}
-                  aria-checked={options.length ? customActive : undefined}
-                  title={customActive ? "再次点击取消自定义答复" : undefined}
-                  onClick={() => toggleCustom(item.question)}
-                >
-                    <span className={`radio${customActive ? " on" : ""}`} />
-                    <span className="option-body">
-                      <span className="option-title">{options.length
-                        ? "自定义答复"
-                        : "填写答复"}</span>
-                      <span className="option-hint">{options.length
-                        ? "以上选项都不合适时，直接写下正确处理方式"
-                        : "填写本题的具体答案"}</span>
-                    </span>
-                </button>
-              </div>
-              {customOpen[item.question] && (
-                <div className="custom-answer">
-                  <textarea
-                    className={`custom-input${customActive ? " picked" : ""}`}
-                    placeholder={options.length
-                      ? "写下选项之外的正确处理方式…"
-                      : "写下你的答复…"}
-                    value={custom[item.question] ?? ""}
-                    autoFocus
-                    onChange={(change) => setCustom({
-                      ...custom,
-                      [item.question]: change.target.value,
-                    })}
-                  />
-                  <span>{options.length
-                    ? "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
-                    : "这段文字将作为开放题答案提交。"}</span>
-                </div>
-              )}
-            </fieldset>
-          );
-        })}
-      </div>}
-
-      {attachment && (
-        <fieldset className="decision-attachment" disabled={submitting}>
-          {attachment}
-        </fieldset>
-      )}
-
-      {attachmentCount > 0 && isReviewDecision && (
-        <div className={`review-decision-guidance${
-          reviewChoiceConflict ? " conflict" : ""
-        }`} role={reviewChoiceConflict ? "alert" : "status"}>
-          <strong>当前有 {attachmentCount} 条检视意见未闭环</strong>
-          <span>{!feedbackOption
-            ? "当前卡片缺少调整选项，请用“自定义答复”明确要求继续调整。"
-            : reviewChoiceConflict
-            ? `建议选择“${feedbackLabel}”。当前选项会关闭本轮检视，不会处理这些意见。`
-            : selectedReviewAnswer === feedbackOption
-              ? `已选择“${feedbackLabel}”，提交后会继续处理这些意见。`
-              : `建议选择“${feedbackLabel}”，提交后会继续处理这些意见。`}</span>
-        </div>
-      )}
-
-      {requirementAnalysisConfirmation
-        && task.requirement_revision?.state === "running" && (
-        <div className="review-decision-guidance" role="status">
-          <strong>Agent 正在修改需求文档</strong>
-          <span>正在落实已提交的检视意见。修改完成并逐条复检后，才能确认进入需求分析。</span>
-        </div>
-      )}
-
-      {requirementAnalysisConfirmation
-        && task.requirement_revision?.state !== "running"
-        && attachmentCount > 0 && (
-        <div className="review-decision-guidance conflict" role="alert">
-          <strong>还有 {attachmentCount} 条需求检视意见未闭环</strong>
-          <span>请由意见提出人核对 Agent 修改结果并逐条确认，全部闭环后即可通过。</span>
-        </div>
-      )}
-
-      <footer className={`decision-footer${
-        showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
-        {!requirementAnalysisConfirmation && <div className="decision-notes">
-          {!notesOpen ? (
-            <button type="button" onClick={() => setNotesOpen(true)}>
-              {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
-            </button>
-          ) : (
-            <label>
-              <span>{isReviewDecision
-                ? "检视说明（可选，不改变上方分支）"
-                : "决策备注（可选）"}</span>
-              <input
-                type="text"
-                placeholder={isReviewDecision
-                  ? "补充修改原因或处理要求；流程走向以上方选项为准"
-                  : "随本次决定一起记录"}
-                value={notes}
-                autoFocus
-                onChange={(change) => setNotes(change.target.value)}
-              />
-            </label>
-          )}
-        </div>}
-        {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
-            最底沿,长卡时落在视口外,人以为点了没反应。 */}
-        {conflict && <div className="alert" role="alert">{conflict}</div>}
-        {showDeliveryCompileActions ? (
-          <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
-            <button type="button" className="submit-decision secondary"
-              disabled={!ready} onClick={() => submit("rerun")}>
-              {submitting ? "正在提交…" : "重新编译后提交"}
-            </button>
-            <button type="button" className="submit-decision"
-              disabled={!ready} onClick={() => submit("skip")}>
-              {submitting ? "正在提交…" : "不再编译，直接提交"}
-              <svg viewBox="0 0 20 20" aria-hidden>
-                <path d="m4 10 3.2 3.2L16 5.5" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="submit-decision"
-            disabled={!ready}
-            onClick={() => submit()}
-          >
-            {submitLabel}
-            <svg viewBox="0 0 20 20" aria-hidden>
-              <path d="m4 10 3.2 3.2L16 5.5" />
-            </svg>
-          </button>
-        )}
-      </footer>
+      </details>}
     </section>
   );
 }

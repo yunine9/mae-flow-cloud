@@ -44,3 +44,22 @@ export function orderTaskHierarchy<T extends {
   return orderHierarchyBy(tasks, (task) => task.id,
     (task) => task.parent_task_id);
 }
+
+/** Resolve relationships against the full permitted list, independently of filters. */
+export function taskOverviewRelationship<T extends {
+  id: string;
+  parent_task_id?: string;
+  requirement_graph?: { stage: string; repositories: Array<{ task_id?: string }> };
+}>(task: T, allTasks: T[]): { parent: T | undefined; childCount: number } {
+  const children = new Set(allTasks.filter((item) => item.parent_task_id === task.id).map((item) => item.id));
+  if (task.requirement_graph?.stage === "confirmed") {
+    for (const repository of task.requirement_graph.repositories) {
+      if (repository.task_id && repository.task_id !== task.id) children.add(repository.task_id);
+    }
+  }
+  children.delete(task.id);
+  return {
+    parent: task.parent_task_id !== task.id ? allTasks.find((item) => item.id === task.parent_task_id) : undefined,
+    childCount: children.size,
+  };
+}

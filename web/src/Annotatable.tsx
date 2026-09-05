@@ -61,6 +61,9 @@ export function Annotatable({
   enabled = true,
   onAdded,
   onOpenAnnotations,
+  renderInlineReview,
+  onSendDraft,
+  deliveryHint,
   addDraft,
   children,
 }: {
@@ -76,6 +79,11 @@ export function Annotatable({
   onAdded: () => void;
   /** 已圈过的行点这里直达右侧对应意见；正文点击仍保留新增批注语义。 */
   onOpenAnnotations?: (ids: string[]) => void;
+  /** Same live feedback component as the collaboration feed, scoped to this location. */
+  renderInlineReview?: (ids: string[]) => React.ReactNode;
+  /** Explicit submit; saving alone never authorizes a workflow decision. */
+  onSendDraft?: (id: string) => Promise<{ error?: string }>;
+  deliveryHint?: string;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
    * 任务流 addAnnotation。交互两域同一套,只有提交端点不同。 */
   addDraft?: (input: {
@@ -89,6 +97,13 @@ export function Annotatable({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Draft>();
+  const [thread, setThread] = useState<{ ids: string[]; host: HTMLElement }>();
+  const [receipt, setReceipt] = useState("");
+  useEffect(() => {
+    setThread(undefined);
+    setDraft(undefined);
+    setReceipt("");
+  }, [taskId, artifact]);
   const [note, setNote] = useState("");
   const [route, setRoute] = useState<AnnotationRoute>("agent");
   const [busy, setBusy] = useState(false);
@@ -143,6 +158,8 @@ export function Annotatable({
     const line = Number(row.dataset.l);
     if (!Number.isFinite(line) || line <= 0) return;
     setError("");
+    setThread(undefined);
+    setReceipt("");
     setHint("");
     setNote("");
     setRoute("agent");
@@ -235,7 +252,7 @@ export function Annotatable({
     line: Number(hovered.dataset.l),
   }) : [];
 
-  async function save() {
+  async function save(deliver = false) {
     if (!draft || busy) return;
     const text = note.trim();
     // 记为记忆可以只圈不写:原文本身就是要记的东西。
@@ -259,6 +276,21 @@ export function Annotatable({
       if (result.error) {
         setError(result.error);
         return;
+      }
+      const annotation = "annotation" in result ? result.annotation : undefined;
+      if (annotation && typeof annotation === "object" && "id" in annotation) {
+        const id = String(annotation.id);
+        if (renderInlineReview) setThread({ ids: [id], host: draft.host });
+        if (deliver && onSendDraft && route !== "memory") {
+          try {
+            const sent = await onSendDraft(id);
+            setReceipt(sent.error
+              ? `意见已保存，但提交未完成：${sent.error}。可在下方重试。`
+              : "意见已提交；送达与回应以这条记录的状态为准。");
+          } catch (reason) {
+            setReceipt(`意见已保存，提交未完成：${reason instanceof Error ? reason.message : String(reason)}。可在下方重试。`);
+          }
+        } else setReceipt(route === "memory" ? "已记为记忆。" : "草稿已保存，尚未提交。");
       }
       setDraft(undefined);
       setNote("");
@@ -296,7 +328,11 @@ export function Annotatable({
           style={fabPosition(hovered, host.current)}
           onClick={(event) => {
             event.stopPropagation();
-            onOpenAnnotations(hoveredAnnotations.map((item) => item.id));
+            const ids = hoveredAnnotations.map((item) => item.id);
+            if (renderInlineReview) {
+              setReceipt("");
+              setThread({ ids, host: hovered });
+            } else onOpenAnnotations(ids);
           }}
         >
           <svg viewBox="0 0 20 20" aria-hidden>
@@ -320,6 +356,20 @@ export function Annotatable({
             <path d="M10 6v4M8 8h4" />
           </svg>
         </button>
+      )}
+      {thread && renderInlineReview && !draft && (
+        <section className="workspace-inline-review annot-editor"
+          aria-label="当前位置的反馈与回应"
+          style={editorPosition(thread.host, host.current)}
+          onClick={(event) => event.stopPropagation()}>
+          <header className="workspace-inline-review-head">
+            <strong>此处的反馈与回应</strong>
+            {enabled && <button type="button" onClick={() => openRow(thread.host)}>补充批注</button>}
+            <button type="button" aria-label="收起当前位置反馈" onClick={() => setThread(undefined)}>×</button>
+          </header>
+          {receipt && <p className="annotation-delivery-receipt" role="status">{receipt}</p>}
+          {renderInlineReview(thread.ids)}
+        </section>
       )}
       {draft && (
         <div
@@ -347,7 +397,7 @@ export function Annotatable({
               if (event.key === "Escape") setDraft(undefined);
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 event.preventDefault();
-                void save();
+                void save(Boolean(onSendDraft) && route !== "memory");
               }
             }}
           />
@@ -367,13 +417,15 @@ export function Annotatable({
           )}
           {error && <div className="alert">{error}</div>}
           <div className="annot-editor-actions">
-            <span>⌘/Ctrl + Enter 记下 · Esc 取消</span>
+            <span>{onSendDraft && route !== "memory" ? deliveryHint ?? "提交后在原记录查看送达与回应" : "⌘/Ctrl + Enter 记下 · Esc 取消"}</span>
             <button type="button" className="ghost"
                     onClick={() => setDraft(undefined)}>取消</button>
+            {onSendDraft && route !== "memory" && <button type="button"
+              disabled={busy || !note.trim()} onClick={() => void save()}>存为草稿</button>}
             <button type="button" className="primary"
                     disabled={busy || (!note.trim() && route !== "memory")}
-                    onClick={() => void save()}>
-              {busy ? "记下中…" : "记下"}
+                    onClick={() => void save(Boolean(onSendDraft) && route !== "memory")}>
+              {busy ? "提交中…" : onSendDraft && route !== "memory" ? "提交反馈" : "记下"}
             </button>
           </div>
         </div>
@@ -431,7 +483,9 @@ function editorPosition(
   }
   const rootBox = root.getBoundingClientRect();
   return {
-    top: rowBox.bottom - rootBox.top + root.scrollTop + 4,
+    top: Math.max(0, Math.min(rowBox.bottom + 4,
+      window.innerHeight - Math.min(380, window.innerHeight * .65))
+      - rootBox.top + root.scrollTop),
     left: 0,
     right: 0,
   };

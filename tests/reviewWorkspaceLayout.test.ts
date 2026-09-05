@@ -45,7 +45,7 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
 test("邀请 Committer 收进批注 Inspector 标题栏，不占用主导航", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<section className="workspace-review-drawer"'),
+    workspace.indexOf('<div className={`ws-material-reader'),
   );
   assert.match(navigation, /ws-review-launch/);
   assert.doesNotMatch(navigation, /邀请检视/,

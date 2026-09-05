@@ -1,43 +1,31 @@
-/* Mae-Flow 设计令牌 —— 全站唯一的色彩、排版、间距、圆角、层级来源。
- *
- * 视觉语言(2026-09-05 定稿,见 docs/frontend-experience-baseline.md §4):
- *   · 画布是暖中性灰,不是蓝灰;深色主题是炭黑,不是海军蓝。
- *   · 主动作是"墨":浅色下近黑、深色下近白。一屏只有一颗墨色按钮,
- *     眼睛落点就是它。品牌不靠一种紫,靠克制与排版。
- *   · 全站唯一的暖色是 attention(琥珀):任何暖色都在说"这里需要人"。
- *     running/verifying 用冷静的蓝,success 绿只做勾,danger 红只做失败。
- *   · 三层表面:canvas → surface → surface-2(输入/代码/悬停)。
- *     边框一律发丝线;阴影只给浮层。
- *
- * 旧词表(--page/--surface-soft/--accent…)保留为别名,让 1.2 万行遗留样式
- * 一次换肤;新代码只用本文件的新名。--accent 现在等于墨色:遗留里
- * "紫底白字"的按钮因此自动变成墨底,前景色统一走 --accent-fg,深色主题
- * 下才不会白底白字(实测 42 处)。 */
+/* 全站紫白主题：导航、任务总览与工作台共享令牌。
+ * 紫色用于主动作与选中态；琥珀、红、绿保留状态语义。
+ * 保留现有表面层次、边框、阴影和密度。旧变量以别名兼容。 */
 
 :root {
   color-scheme: light;
 
   /* 表面 */
-  --canvas: #f4f4f1;
+  --canvas: #f1f0f8;
   --main-bg: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f4f4f1;
-  --surface-3: #e8e8e3;
+  --surface-2: #f7f6fc;
+  --surface-3: #ededff;
   --overlay: #ffffff;
 
   /* 文字 */
-  --text-strong: #1a1a18;
-  --text: #2e2e2b;
-  --muted: #6e6e68;
-  --faint: #9b9b94;
+  --text-strong: #222d3d;
+  --text: #303c4e;
+  --muted: #687589;
+  --faint: #9694aa;
 
   /* 线 */
-  --line: #dededa;
-  --line-strong: #c4c4bd;
+  --line: #e2e0ee;
+  --line-strong: #cbc6e1;
 
-  /* 墨 = 主动作 */
-  --ink: #1a1a18;
-  --ink-hover: #33332f;
+  /* 紫色主动作（兼容 ink 命名） */
+  --ink: #5b5bd6;
+  --ink-hover: #4e4ec4;
   --ink-fg: #ffffff;
 
   /* 语义色:只表达状态 */
@@ -51,7 +39,7 @@
   --danger-soft: #fbebea;
   --merge: #6b60ad;
   --merge-soft: #eeecf7;
-  --focus: #2f66d6;
+  --focus: #5b5bd6;
 
   /* 字体:英文走构建内 Inter,中文按 Windows/macOS/Linux 回退。 */
   --font-ui: "Inter Variable", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
@@ -155,21 +143,21 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #0f0f0e;
-  --main-bg: #141413;
-  --surface: #1c1c1b;
-  --surface-2: #252524;
-  --surface-3: #2f2f2d;
-  --overlay: #1c1c1b;
-  --text-strong: #f2f2ef;
-  --text: #d4d4cf;
-  --muted: #9a9a92;
-  --faint: #6f6f68;
-  --line: #30302e;
-  --line-strong: #45453f;
-  --ink: #f2f2ef;
+  --canvas: #141920;
+  --main-bg: #1c222c;
+  --surface: #1c222c;
+  --surface-2: #242d39;
+  --surface-3: #303b4c;
+  --overlay: #1c222c;
+  --text-strong: #edf2fa;
+  --text: #dae3f1;
+  --muted: #a3b0c4;
+  --faint: #78869b;
+  --line: #354154;
+  --line-strong: #52627b;
+  --ink: #edf2fa;
   --ink-hover: #ffffff;
-  --ink-fg: #141413;
+  --ink-fg: #1c222c;
   --active: #7ea7ff;
   --active-soft: rgba(126, 167, 255, .13);
   --attention: #e4a34c;
@@ -184,4 +172,66 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, .42), 0 1px 3px rgba(0, 0, 0, .3);
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .35);
+}
+
+/* Studio workbench palette. Scoped so the accepted redesign does not restyle
+ * unrelated product pages; all workbench components share these same tokens. */
+.workspace-studio {
+  --canvas: #f1f0f8;
+  --main-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f6fc;
+  --surface-3: #ededff;
+  --text-strong: #222d3d;
+  --text: #303c4e;
+  --muted: #687589;
+  --line: #e2e0ee;
+  --line-strong: #cbc6e1;
+  --ink: #5b5bd6;
+  --ink-hover: #4e4ec4;
+  --ink-fg: #ffffff;
+  --studio-add-text: #17663a;
+  --studio-add-bg: #eaf7ee;
+  --studio-remove-text: #a33238;
+  --studio-remove-bg: #fff0f0;
+  --studio-accent: #5b5bd6;
+  --studio-tint: #ededff;
+  --studio-chrome: #5b5bd6;
+  --studio-chrome-fg: #f4f6fc;
+  --accent: var(--ink);
+  --accent-hover: var(--ink-hover);
+  --accent-fg: var(--ink-fg);
+  --accent-soft: var(--studio-tint);
+  --focus: var(--studio-accent);
+  --page: var(--main-bg);
+  --surface-soft: var(--surface-2);
+  --surface-muted: var(--surface-3);
+  --bg: var(--main-bg);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --ws-side-w: clamp(340px, 29vw, 430px);
+  --ws-document-tree-w: 192px;
+}
+:root[data-theme="dark"] .workspace-studio {
+  --canvas: #141920;
+  --main-bg: #1c222c;
+  --surface: #1c222c;
+  --surface-2: #242d39;
+  --surface-3: #303b4c;
+  --text-strong: #edf2fa;
+  --text: #dae3f1;
+  --muted: #a3b0c4;
+  --line: #354154;
+  --line-strong: #52627b;
+  --ink: #e4ebf7;
+  --ink-hover: #ffffff;
+  --ink-fg: #1f2a3b;
+  --studio-add-text: #bbf7d0;
+  --studio-add-bg: #183829;
+  --studio-remove-text: #fecaca;
+  --studio-remove-bg: #402629;
+  --studio-accent: #b6aaff;
+  --studio-tint: #342d52;
+  --studio-chrome: #111721;
+  --studio-chrome-fg: #edf2fa;
 }

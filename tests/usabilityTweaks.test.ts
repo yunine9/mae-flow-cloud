@@ -57,6 +57,6 @@ test("任务决策卡选项可取消，自定义答复入口不会在打开后�
   assert.doesNotMatch(taskCard, /\{!customOpen\[item\.question\] && \(/,
     "打开编辑框后入口也必须保留，才能再次点击取消");
   assert.match(taskCard,
-    /const explanation = customOpen\[item\.question\][\s\S]{0,100}\? custom\[item\.question\]\?\.trim\(\)/,
+    /: customOpen\[item\.question\] \? custom\[item\.question\]\?\.trim\(\)/,
     "收起的自定义草稿不能偷偷随另一选项提交");
 });

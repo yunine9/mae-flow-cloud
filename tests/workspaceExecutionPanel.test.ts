@@ -169,7 +169,7 @@ test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达�
     "返工不能被 diff/文件清单加载失败卡死；只有确认推送需要当前清单");
   assert.doesNotMatch(workspace, /onDeliverySelectionChange=\{task\.waiting/);
   assert.match(workspace, /focusRequest=\{diffReviewRequest\}/);
-  assert.match(gitDiff, /if \(focusRequest > 0\) setFocused\(true\)/);
+  assert.match(gitDiff, /if \(focusRequest > 0 && !embeddedBrowser\) setFocused\(true\)/);
   assert.match(gitDiff, /requestedDeliveryKey[^]*setDeliveryPaths/);
 });
 

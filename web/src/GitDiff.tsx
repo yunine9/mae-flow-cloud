@@ -209,6 +209,7 @@ export function GitDiff({
   onSelectionChange,
   scopeLabel,
   focusRequest = 0,
+  embeddedBrowser = false,
 }: {
   text: string;
   branch?: string;
@@ -237,6 +238,8 @@ export function GitDiff({
   scopeLabel?: string;
   /** 外部明确请求进入专注审阅；递增即可重复打开。 */
   focusRequest?: number;
+  /** Keep the full file tree and diff in the workspace instead of opening a modal. */
+  embeddedBrowser?: boolean;
 }) {
   const baseFiles = useMemo(() => filesForDiff(text, manifest), [text, manifest]);
   const directoryRoots = useMemo(() => [...new Map(
@@ -265,8 +268,8 @@ export function GitDiff({
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
-    if (focusRequest > 0) setFocused(true);
-  }, [focusRequest]);
+    if (focusRequest > 0 && !embeddedBrowser) setFocused(true);
+  }, [focusRequest, embeddedBrowser]);
   const [treePanelWidth, setTreePanelWidth] = useState(() =>
     clampTreePanelWidth(storedNumber("mae-flow:git-tree-width",
       DEFAULT_TREE_PANEL_WIDTH), 2000));
@@ -905,7 +908,7 @@ export function GitDiff({
   }
 
   return (
-    <section className={`git-change-view${focused ? " is-focused" : ""}`}
+    <section className={`git-change-view${focused ? " is-focused" : ""}${embeddedBrowser ? " is-embedded" : ""}`}
       aria-label={focused ? "专注代码审阅" : "工作区变更"}
       role={focused ? "dialog" : undefined}
       aria-modal={focused ? "true" : undefined}
@@ -980,7 +983,7 @@ export function GitDiff({
         </div>
       )}
 
-      {focused ? (
+      {focused || embeddedBrowser ? (
       <div className="git-change-browser" ref={gitBrowser}
         style={{ "--change-tree-width": `${treePanelWidth}px` } as CSSProperties}>
         <nav className="change-files" aria-label="变更文件">

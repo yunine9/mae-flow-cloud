@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 const read = (path: string) =>
   readFileSync(new URL(`../${path}`, import.meta.url), "utf-8");
 
-test("等决定期间的提交:决定人一步返工、检视人排队并说明、卡上预选返工", () => {
+test("等决定期间的提交:全屏可显式一步返工，普通及行内提交仅登记反馈", () => {
   const panel = read("web/src/AnnotationPanel.tsx");
   assert.match(panel, /const oneStepRework = queueable && !requirementReview && canDecide\s*&& !!reworkChoice;/,
     "只有决定人、且卡上有返工选项时才一步到位;需求确认卡另有机制");
@@ -29,7 +29,7 @@ test("等决定期间的提交:决定人一步返工、检视人排队并说明�
   // 卡上不预选返工:既有契约"意见未闭环只能阻止放行,不能替用户默认选择"。
   assert.doesNotMatch(card, /preselectRework/);
   const workspace = read("web/src/TaskWorkspace.tsx");
-  assert.match(workspace, /reworkChoice=\{workspaceReworkChoice\}\s*canDecide=\{canOperate\}/,
+  assert.match(workspace, /reworkChoice=\{materialsFullscreen && !inline \? workspaceReworkChoice : undefined\}\s*canDecide=\{materialsFullscreen && !inline && canOperate\}/,
     "工作台把当前卡的返工选项和决定权交给面板");
   // 服务端语义不变:等待期 send 仍只排队,决定时把排队的意见带上——这是
   // 一步到位能成立的前提。

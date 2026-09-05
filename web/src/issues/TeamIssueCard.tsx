@@ -7,6 +7,7 @@
  * 展示:状态轨/单号/pill/时间/标题/处理人/阶段线;展开态多一条
  * "进入问题工作台"入口。点击由父级接管(切到问题处理 tab + 设路由)。
  */
+import { TaskOverviewRow } from "../TaskOverviewRow";
 import { useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
@@ -15,7 +16,8 @@ import {
 } from "../api";
 import { formatLocalDateTime } from "../time";
 
-export function TeamIssueCard({ issue, onOpen }: {
+export function TeamIssueCard({ issue, onOpen, compact = false }: {
+  compact?: boolean;
   issue: IssueSummary;
   onOpen: () => void;
 }) {
@@ -25,6 +27,10 @@ export function TeamIssueCard({ issue, onOpen }: {
     issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
     issue.stage_note ? ` · ${issue.stage_note}` : "",
   ].join("");
+
+  if (compact) return <TaskOverviewRow issue id={issue.id} ticket={issue.ticket}
+    title={issue.title} status={issue.status} statusLabel={ISSUE_STATUS_TEXT[issue.status]}
+    owner={issue.account} updatedAt={issue.updated_at} detail={stageLine} onOpen={onOpen} />;
 
   return <article id={`issue-${issue.id}`}
     className={`task-card issue-card-large status-${issue.status}`

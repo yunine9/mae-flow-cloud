@@ -1,5 +1,8 @@
 # 前端工作台重构交接（2026-09-05，Claude → Codex）
 
+> 后续更新：Codex 已按用户确认原型推进 v5。当前结构和规则以
+> `frontend-experience-baseline.md` v5 为准；下文是 v4 的历史交接，保留用于追溯。
+
 > 读者：接手下一轮前端重构的 Agent 与 liaoxiang。分支 `codex/frontend-workbench-rebuild`，
 > 本文对应 HEAD `e138c2c`。基线文档 `docs/frontend-experience-baseline.md`（v4）是设计
 > 规则的唯一权威，本文只讲"做到哪、为什么、用户要什么、坑在哪"。

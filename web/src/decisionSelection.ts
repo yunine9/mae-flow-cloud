@@ -25,3 +25,11 @@ export function clearDecisionChoice(
   delete next[key];
   return next;
 }
+
+/** One reply field: preserve an explicit branch; otherwise the text is the answer. */
+export function unifiedDecisionReply(selected: string | undefined, text: string): {
+  freeResponse: string; notes: string;
+} {
+  const reply = text.trim();
+  return selected ? { freeResponse: "", notes: reply } : { freeResponse: reply, notes: "" };
+}
