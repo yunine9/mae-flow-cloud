@@ -1420,6 +1420,11 @@ export function TaskWorkspace({
   );
   const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
+  const annotationQueueWithDecision = task.status === "waiting_for_human"
+    && !requirementAnalysisConfirmation
+    && !(task.delivery?.mr_url
+      && task.delivery.mr_state !== "已关闭"
+      && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
   const annotationCanSend = canContributeReview
     && task.requirement_revision?.state !== "running"
     && (task.status === "running" || task.status === "waiting_for_human"
@@ -1954,9 +1959,7 @@ export function TaskWorkspace({
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
                 onSendDraft={annotationCanSend ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                deliveryHint={waiting && !requirementAnalysisConfirmation
-                  ? "先登记反馈，等待决定后送达；不会自动确认推送。"
-                  : "直接提交；接收与处理进展在本条反馈中更新。"}
+                queueWithDecision={annotationQueueWithDecision}
               >
                 <article className="requirement-source">
                   <div className="requirement-source-label">
@@ -2152,9 +2155,7 @@ export function TaskWorkspace({
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
                 onSendDraft={annotationCanSend ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                deliveryHint={waiting && !requirementAnalysisConfirmation
-                  ? "先登记反馈，等待决定后送达；不会自动确认推送。"
-                  : "直接提交；接收与处理进展在本条反馈中更新。"}
+                queueWithDecision={annotationQueueWithDecision}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser

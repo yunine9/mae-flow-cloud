@@ -19,24 +19,28 @@ import "./annotate.css";
 
 type AnnotationRoute = "agent" | "owner_reply" | "owner_decision" | "memory";
 
-const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string }> = {
+const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string; action: string }> = {
   agent: {
     label: "Agent 处理",
-    hint: "Agent 直接修改并提供处理结果。",
+    hint: "由 Agent 处理这条意见，并在原处提供处理结果。",
+    action: "发送给 Agent",
   },
   owner_reply: {
     label: "责任人答复",
     hint: "由任务责任人回答，Agent 不会代替责任人表态。",
+    action: "请责任人答复",
   },
   owner_decision: {
     label: "决策后处理",
     hint: "责任人先给结论，系统再把结论交给 Agent 执行。",
+    action: "请责任人决策",
   },
   // 第四个去向不是"交给谁",是"记住":不发给任何人、不进决定卡。圈选
   // 让记忆自带原文和位置,比空口一句"记下来"有用得多(用户拍板)。
   memory: {
     label: "记为记忆",
     hint: "不发给任何人，只记住这段原文和你的一句话；以后有人改到这里时提醒 Agent。",
+    action: "记为记忆",
   },
 };
 
@@ -63,7 +67,7 @@ export function Annotatable({
   onOpenAnnotations,
   renderInlineReview,
   onSendDraft,
-  deliveryHint,
+  queueWithDecision = false,
   addDraft,
   children,
 }: {
@@ -83,7 +87,8 @@ export function Annotatable({
   renderInlineReview?: (ids: string[]) => React.ReactNode;
   /** Explicit submit; saving alone never authorizes a workflow decision. */
   onSendDraft?: (id: string) => Promise<{ error?: string }>;
-  deliveryHint?: string;
+  /** 普通人工决定窗口只能登记，正文随当前决定送达。 */
+  queueWithDecision?: boolean;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
    * 任务流 addAnnotation。交互两域同一套,只有提交端点不同。 */
   addDraft?: (input: {
@@ -106,6 +111,15 @@ export function Annotatable({
   }, [taskId, artifact]);
   const [note, setNote] = useState("");
   const [route, setRoute] = useState<AnnotationRoute>("agent");
+  const sendLabel = route === "agent" && queueWithDecision
+    ? "随决定交给 Agent" : ROUTE_COPY[route].action;
+  const deliveryHint = route === "agent"
+    ? queueWithDecision
+      ? "这条意见会先登记；提交当前决定后，一并送达 Agent。"
+      : "发送后，在这条批注下查看送达状态和处理结果。"
+    : route === "owner_reply"
+      ? "发送后，等待任务责任人在这条批注中答复。"
+      : "发送后，先等责任人给出结论，再交给 Agent 执行。";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 点了但没开成框时的一句人话:功能"点不了"的投诉里,多数其实是
@@ -285,12 +299,12 @@ export function Annotatable({
           try {
             const sent = await onSendDraft(id);
             setReceipt(sent.error
-              ? `意见已保存，但提交未完成：${sent.error}。可在下方重试。`
-              : "意见已提交；送达与回应以这条记录的状态为准。");
+              ? `意见已保存，但发送未完成：${sent.error}。可在下方重试。`
+              : "意见已登记；送达状态和处理结果会显示在下方。");
           } catch (reason) {
-            setReceipt(`意见已保存，提交未完成：${reason instanceof Error ? reason.message : String(reason)}。可在下方重试。`);
+            setReceipt(`意见已保存，发送未完成：${reason instanceof Error ? reason.message : String(reason)}。可在下方重试。`);
           }
-        } else setReceipt(route === "memory" ? "已记为记忆。" : "草稿已保存，尚未提交。");
+        } else setReceipt(route === "memory" ? "已记为记忆。" : "草稿已保存，尚未发送。");
       }
       setDraft(undefined);
       setNote("");
@@ -417,7 +431,7 @@ export function Annotatable({
           )}
           {error && <div className="alert">{error}</div>}
           <div className="annot-editor-actions">
-            <span>{onSendDraft && route !== "memory" ? deliveryHint ?? "提交后在原记录查看送达与回应" : "⌘/Ctrl + Enter 记下 · Esc 取消"}</span>
+            <span>{onSendDraft && route !== "memory" ? deliveryHint : "⌘/Ctrl + Enter 记下 · Esc 取消"}</span>
             <button type="button" className="ghost"
                     onClick={() => setDraft(undefined)}>取消</button>
             {onSendDraft && route !== "memory" && <button type="button"
@@ -425,7 +439,7 @@ export function Annotatable({
             <button type="button" className="primary"
                     disabled={busy || (!note.trim() && route !== "memory")}
                     onClick={() => void save(Boolean(onSendDraft) && route !== "memory")}>
-              {busy ? "提交中…" : onSendDraft && route !== "memory" ? "提交反馈" : "记下"}
+              {busy ? "保存中…" : onSendDraft && route !== "memory" ? sendLabel : "记下"}
             </button>
           </div>
         </div>
