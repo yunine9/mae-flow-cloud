@@ -14,7 +14,6 @@
 .workspace-studio.task-workspace-v2 .ws-body { grid-template-columns: minmax(0,1fr) var(--ws-side-w); padding-right: 0; }
 .workspace-studio.task-workspace-v2 .ws-body.reviewing { padding-right: 0; }
 .workspace-studio.task-workspace-v2 .ws-side { border: 0; border-left: 1px solid var(--line); background: var(--canvas); }
-.workspace-studio.task-workspace-v2 .ws-side-scroll { padding: 20px 18px; overflow-x: hidden; }
 .workspace-studio .ws-collaboration-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
 .workspace-studio .ws-collaboration-head strong { font-size: var(--fs-14); font-weight: 600; }
 .workspace-studio .ws-collaboration-head span { font-size: var(--fs-12); color: var(--muted); }
@@ -59,7 +58,7 @@
 .workspace-studio.task-workspace-v2 .feedback-list { padding: 12px; margin: 12px 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .workspace-studio.task-workspace-v2 .feedback-list > header h3 { font-size: var(--fs-13); }
 .workspace-studio.task-workspace-v2 .feedback-body { font-size: var(--fs-13); }
-.workspace-studio.task-workspace-v2 .ws-decision { padding: 0; margin: 22px 0 0; overflow: visible; background: transparent; }
+
 .workspace-studio.task-workspace-v2 .decision-card { display: block; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 16px; }
 .workspace-studio.task-workspace-v2 .decision-card > * { order: initial; }
 .workspace-studio.task-workspace-v2 .decision-head { padding: 0 0 12px; border: 0; }
@@ -86,14 +85,7 @@
 .workspace-studio.task-workspace-v2 .decision-evidence .push-review-overview,
 .workspace-studio.task-workspace-v2 .decision-evidence .delivery-scope-card { padding: 10px 0; margin: 0; border: 0; border-radius: 0; background: transparent; }
 .workspace-studio .ws-attached-feedback { font-size: var(--fs-12); color: var(--muted); line-height: 1.6; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration { margin: 18px 0 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); flex: none; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration > summary { padding: 12px; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration-body { padding: 12px; }
-.workspace-studio .ws-focus-collaboration .steer { margin: 0; border: 0; padding: 0; background: transparent; }
-.workspace-studio .ws-focus-collaboration .steer-head { display: flex; padding: 0 0 8px; }
-.workspace-studio .ws-focus-collaboration .steer-head > div { display: none; }
-.workspace-studio .ws-focus-collaboration .steer-copy { font-size: var(--fs-12); }
-.workspace-studio .ws-focus-collaboration .steer-log { max-height: none; }
+
 .workspace-studio.task-workspace-v2 .ws-pane-head { min-height: 52px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .workspace-studio.task-workspace-v2 .ws-pane-head > div:first-child { display: none; }
 .workspace-studio.task-workspace-v2 .ws-source-switch { width: 100%; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
@@ -148,8 +140,8 @@
   .workspace-studio.task-workspace-v2 .ws-focus-hero { flex: none; }
   .workspace-studio.task-workspace-v2 .ws-feedback-home { flex: 1 1 180px; min-height: 160px; overflow: auto; overscroll-behavior: contain; margin: 0; padding-right: 4px; }
   .workspace-studio.task-workspace-v2 .ws-feedback-heading { position: sticky; top: 0; background: var(--canvas); z-index: 2; padding: 4px 0 8px; }
-  .workspace-studio.task-workspace-v2 .ws-decision { flex: 0 1 auto; min-height: 0; max-height: 64%; overflow: auto; margin: 0; overscroll-behavior: contain; }
-  .workspace-studio.task-workspace-v2 .ws-focus-collaboration { margin: 0; max-height: 52%; overflow: auto; }
+  
+  
   .workspace-studio.task-workspace-v2 .ws-focus-alert { max-height: 100px; flex: none; overflow: auto; }
 }
 .workspace-studio .diff-review { background: var(--surface); }
@@ -163,7 +155,7 @@
 .workspace-studio .diff-review-meta, .workspace-studio .diff-fold { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
 .workspace-studio .diff-cell + .diff-cell { border-color: var(--line); }
 .workspace-studio button:focus-visible, .workspace-studio summary:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
-.workspace-studio .ws-feedback-home, .workspace-studio .ws-decision { scrollbar-width: thin; scrollbar-gutter: stable; }
+
 @media (max-width: 1200px) {
   .workspace-studio { --ws-side-w: 340px; --ws-document-tree-w: 156px; }
   .workspace-studio.task-workspace-v2 .ws-head { grid-template-columns: 30px minmax(180px,1fr) auto; }
@@ -176,7 +168,7 @@
   .workspace-studio.task-workspace-v2 .ws-evidence { min-height: 65vh; flex: 0 0 65vh; overflow: hidden; }
   .workspace-studio.task-workspace-v2 .ws-side { min-height: 0; flex: none; border-left: 0; border-top: 1px solid var(--line); }
   .workspace-studio.task-workspace-v2 .ws-side-scroll { overflow: visible; }
-  .workspace-studio.task-workspace-v2 .ws-focus-collaboration { max-height: none; }
+  
   .workspace-studio.materials-fullscreen .ws-evidence { flex: 1; }
   .workspace-studio.materials-fullscreen:has(.workspace-review-drawer) .ws-body { padding-right: 0; }
   .workspace-studio.materials-fullscreen .workspace-review-drawer { width: min(430px,100%); top: var(--ws-pane-head-h,52px); }
@@ -205,8 +197,6 @@
 .workspace-studio .decision-unified-reply textarea { min-height: 54px; height: 54px; padding: 8px 10px; }
 .workspace-studio .decision-unified-reply small { display: block; font-size: 11px; }
 .workspace-studio.task-workspace-v2 .question { margin-bottom: 10px; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration > summary small { display: none; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration > summary { padding: 8px 10px; }
 
 /* Product feedback stays reachable from the task list without covering task actions. */
 body:has(.workspace-studio) .wish-quick-trigger { display: none; }
@@ -219,14 +209,9 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio.task-workspace-v2 .decision-card .option { min-height: 38px; padding: 7px 8px; }
 .workspace-studio.task-workspace-v2 .decision-card .option > span { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 
-/* A single scrollable conversation, with the actual decision composer docked below. */
-.workspace-studio.task-workspace-v2 .ws-side-scroll { overflow-y: auto; display: flex; flex-direction: column; }
-.workspace-studio.task-workspace-v2 .ws-side-scroll > * { flex: none; }
-.workspace-studio.task-workspace-v2 .ws-focus-hero { order: -3; }
-.workspace-studio.task-workspace-v2 .ws-focus-alert { order: -2; }
-.workspace-studio.task-workspace-v2 .ws-decision { order: -1; max-height: none; overflow: visible; }
+
 .workspace-studio.task-workspace-v2 .ws-feedback-home { min-height: 0; overflow: visible; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration { max-height: none; }
+
 .workspace-studio .ws-reply-dock:empty { display: none; }
 .workspace-studio .ws-reply-dock { flex: none; padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--line); max-height: 45vh; overflow: auto; }
 .workspace-studio.task-workspace-v2 .ws-reply-dock .decision-footer { position: static; margin: 0; padding: 0; border: 0; }
@@ -246,11 +231,8 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio .ws-document-tabs .ws-tab::after { display: none; }
 .workspace-studio .ws-source-switch button { white-space: nowrap; }
 
-.workspace-studio.task-workspace-v2 .ws-reply-dock .ws-focus-collaboration { border: 0; margin: 0; padding: 0; background: transparent; }
-.workspace-studio.task-workspace-v2 .ws-reply-dock .ws-focus-collaboration-body { padding: 8px 0 0; }
 .workspace-studio .ws-reply-dock .steer-input { min-height: 64px; }
-.workspace-studio .ws-reply-dock .steer-log { max-height: 160px; overflow: auto; }
-.workspace-studio .ws-reply-dock .steer-actions { position: sticky; bottom: -12px; background: var(--surface); padding: 8px 0; }
+
 @media (max-width:600px) {
  .workspace-studio.task-workspace-v2 .ws-head { padding-left: 12px; }
  .workspace-studio.task-workspace-v2 .ws-identity { margin-left: 6px; }
@@ -262,8 +244,7 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 @media (max-width:900px) {
   .workspace-studio.task-workspace-v2 .ws-evidence { min-height: 260px; flex-basis: 42vh; }
 }
-.workspace-studio .ws-reply-dock .collaboration-tabs button { min-height: 0; padding: 8px; }
-.workspace-studio .ws-reply-dock .collaboration-tabs small { font-size: 11px; line-height: 1.45; }
+
 .workspace-studio .ws-reply-dock .steer-input { background: var(--surface); color: var(--text); }
 .workspace-studio .ws-reply-dock .steer-input:disabled { background: var(--surface-2); }
 

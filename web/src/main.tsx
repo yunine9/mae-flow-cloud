@@ -4,6 +4,7 @@ import { RootErrorBoundary } from "./RootErrorBoundary";
 import "./tokens.css";
 import "./style.css";
 import "./task-workspace.css";
+import "./conversation.css";
 import "./workspace-studio.css";
 import "./help.css";
 // 错误页样式单独一个文件,不并进 style.css:那是全站共享的热点文件,

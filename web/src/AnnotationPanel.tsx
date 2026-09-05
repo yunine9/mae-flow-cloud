@@ -108,6 +108,7 @@ export function AnnotationPanel({
   canDecide = false,
   onChanged,
   onLocate,
+  onShowThread,
 }: {
   /** 当前决定卡上"需要调整"那一项。有它且 canDecide 时,提交就是一步到位
    * 的"提交并返工"——直接以这个选项提交决定卡,意见随之送给 Agent。 */
@@ -137,6 +138,8 @@ export function AnnotationPanel({
   canOperate: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
+  /** 到右栏会话流里只看这条意见的往来(送出→回执→追问→确认)。 */
+  onShowThread?: (id: string) => void;
   taskStatus: TaskStatus;
   /** 人工意见修复与 Build-Fix 都已完成，当前真的轮到意见作者裁决。 */
   reviewReady?: boolean;
@@ -539,6 +542,11 @@ export function AnnotationPanel({
                       title={progress.hint}>
                   {progress.text}
                 </span>
+                {onShowThread && item.status !== "draft" && (
+                  <button type="button" className="annot-thread"
+                          title="在右栏会话流里只看这条意见的往来"
+                          onClick={() => onShowThread(item.id)}>往来</button>
+                )}
               </div>
               <div className={`annot-route-badge ${routeOf(item)}`}>
                 {ROUTE_LABEL[routeOf(item)]}

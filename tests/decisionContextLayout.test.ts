@@ -380,16 +380,18 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
   // 用户 2026-09-02 实测三处:任务不在运行就默认落到不可用的开发助手;
   // 等人决定时占位写"主任务暂停时…"与原因框打架;等待/排队期 @ 引用发出
   // 后「捎过去的话」永远不更新。
-  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  // 2026-09-05 起两个页签并成右栏输入框的两档(Composer),送达回执进会话流。
+  const box = readFileSync(new URL("../web/src/Composer.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(box,
     /useState<CollaborationMode>\(\s*steerOnly \|\| task\.status === "running" \? "steer" : "assistant"/,
-    "默认标签不许按状态硬猜");
+    "默认档不许按状态硬猜");
   assert.match(box,
     /task\.status !== "running" && assistant\.availability\.available\s*\? "assistant" : "steer"/);
-  assert.match(box, /modePicked\.current = true/, "人点过标签后不再替他换");
+  assert.match(box, /modePicked\.current = true/, "人点过档位后不再替他换");
   assert.doesNotMatch(box, /: "主任务暂停时，请切到“开发助手”直接处理代码现场"\}/);
   assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
-  assert.match(box, /item\.deferred === "decision" \? "随下一次决定送达"/);
+  const stream = readFileSync(new URL("../web/src/ConversationStream.tsx", import.meta.url), "utf8");
+  assert.match(stream, /item\.deferred === "decision" \? "随下一次决定送达"/);
   const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
   assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision", receipt\)/);
   assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission", receipt\)/);
@@ -401,7 +403,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /task\.requirement_revision\?\.state === "failed" && \(/);
   assert.match(workspace, /className="requirement-revision-error" role="alert"/);
-  const box = readFileSync(new URL("../web/src/SteerBox.tsx", import.meta.url), "utf8");
+  const box = readFileSync(new URL("../web/src/Composer.tsx", import.meta.url), "utf8");
   assert.match(box, /className="assistant-bounds"/);
   assert.match(box, /Git 只读/);
   assert.match(box, /交还后由主任务接手/);

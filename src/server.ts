@@ -2767,6 +2767,13 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.activity(id));
         }
+        // 会话流(只读):人和 Agent 之间的回合。权限口径同任务详情;
+        // 纯展示,不参与判定。
+        if (request.method === "GET" && parts[2] === "conversation") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return json(response, 200, service.conversation(id));
+        }
         // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
         // ——能看任务就能看它经历了什么。纯展示,不参与判定。
         if (request.method === "GET" && parts[2] === "timeline") {

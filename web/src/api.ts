@@ -4276,3 +4276,122 @@ export function putDtsModuleBinding(
     },
   );
 }
+
+/* ---------------------------------------------------------------- *
+ * 会话流(右栏):服务端把事件账、决定账、批注账、反馈索引拼成"回合"。
+ * 页面只渲染、不推断——谁说的、什么时候、针对哪条意见都由服务端给。
+ * ---------------------------------------------------------------- */
+
+export interface ConversationSteps {
+  calls: number;
+  errors: number;
+  reads: number;
+  edits: number;
+  bash: number;
+  agents: number;
+  sample: Array<{ kind: "edit" | "bash" | "agent"; subject: string }>;
+}
+
+export interface ConversationAnnotationRef {
+  id: string;
+  author: string;
+  kind: string;
+  file: string;
+  line: number;
+  note: string;
+}
+
+export type ConversationItem =
+  | {
+      kind: "session"; id: string; ts: string;
+      phase: "started" | "ended";
+      resume?: boolean; reason?: string; detail?: string;
+    }
+  | {
+      kind: "turn"; id: string; ts: string; end_ts: string;
+      texts: Array<{ ts: string; text: string; truncated: boolean }>;
+      steps: ConversationSteps;
+      open: boolean;
+    }
+  | {
+      kind: "card"; id: string; ts: string; waiting_id: string; step: string;
+      purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+      questions: Array<{ question: string; options: string[] }>;
+      status: "waiting" | "resolved" | "superseded";
+    }
+  | {
+      kind: "decision"; id: string; ts: string; waiting_id: string;
+      by?: string; decision: string; answers?: Record<string, string>;
+      notes: string; purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+    }
+  | {
+      kind: "steer"; id: string; ts: string; text: string;
+      references?: string[]; deferred?: "decision" | "mission";
+      delivered: boolean;
+    }
+  | {
+      kind: "annotations_sent"; id: string; ts: string; by?: string;
+      via: string; items: ConversationAnnotationRef[];
+    }
+  | {
+      kind: "receipts"; id: string; ts: string;
+      items: Array<ConversationAnnotationRef & {
+        outcome: string; summary: string; revision: number;
+        current: boolean; fixed_sha?: string;
+      }>;
+    }
+  | {
+      kind: "owner_reply"; id: string; ts: string;
+      annotation: ConversationAnnotationRef; by: string; text: string;
+    }
+  | {
+      kind: "clarified"; id: string; ts: string;
+      annotation: ConversationAnnotationRef; by?: string;
+      question: string; answer: string;
+    }
+  | {
+      kind: "verified"; id: string; ts: string;
+      annotation: ConversationAnnotationRef; by?: string;
+    }
+  | {
+      kind: "reopened"; id: string; ts: string;
+      annotation: ConversationAnnotationRef; note?: string; returned: number;
+    }
+  | { kind: "revised"; id: string; ts: string; annotation: ConversationAnnotationRef }
+  | {
+      kind: "external"; id: string; ts: string; source: FeedbackSource;
+      author?: string;
+      items: Array<{
+        id: string; summary: string; file?: string; line?: number;
+        status: FeedbackStatus; resolution?: string;
+      }>;
+    }
+  | {
+      kind: "assistant"; id: string; ts: string; role: "user" | "assistant";
+      text: string;
+    };
+
+export interface ConversationView {
+  items: ConversationItem[];
+  events_seen: number;
+  problems: string[];
+}
+
+/** 会话流。旧进程没有这条路由时把原因带回,页面如实说"读不到",
+ * 不假装这单没发生过任何往来。 */
+export async function getConversation(
+  taskId: string,
+): Promise<{ view?: ConversationView; unavailable?: string }> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/conversation`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return {
+      unavailable: response.status === 404
+        ? "会话流接口尚未就绪(服务重启后可用)。"
+        : String(body.error ?? `HTTP ${response.status}`),
+    };
+  }
+  return { view: await response.json() };
+}

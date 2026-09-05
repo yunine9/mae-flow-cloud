@@ -129,9 +129,6 @@
 .workspace-studio .ws-reply-dock { background: var(--surface); box-shadow: 0 -4px 16px #28234b04; padding: 14px 16px; }
 .workspace-studio .decision-unified-reply textarea { background: var(--surface-2); border-color: var(--line); line-height: 1.7; }
 .workspace-studio.task-workspace-v2 .ws-focus-hero h2 { color: var(--text-strong); font-size: 17px; line-height: 1.7; letter-spacing: -.02em; }
-.workspace-studio.task-workspace-v2 .ws-focus-collaboration { border-color: var(--line); box-shadow: var(--shadow-xs); }
-.workspace-studio .collaboration-tabs { border-color: var(--line); background: var(--surface-2); }
-.workspace-studio .collaboration-tabs [aria-selected="true"] { box-shadow: var(--shadow-control); border-color: var(--line); }
 
 /* Reading surfaces: stable type rhythm, quieter navigation and code furniture. */
 .workspace-studio .requirement-source-label { border-color: var(--line); color: var(--muted); font-size: 12px; }

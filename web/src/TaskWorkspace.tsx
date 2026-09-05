@@ -10,16 +10,13 @@
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
-import {
-  useEffect, useRef, useState,
-  type ReactNode,
-} from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
-import { SteerBox } from "./SteerBox";
+import { ConversationStream, type StreamFilter } from "./ConversationStream";
+import { Composer, takeoverActiveOf } from "./Composer";
 import { Annotatable } from "./Annotatable";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
@@ -44,6 +41,7 @@ import {
   addAnnotation,
   completeReview,
   controlTask,
+  getConversation,
   decideScopeViolation,
   deleteHistoryTask,
   listAnnotations,
@@ -67,6 +65,8 @@ import {
   type Annotation,
   type ArtifactMeta,
   type AuthUser,
+  type ConversationItem,
+  type DeveloperAssistantView,
   type FeedbackRecord,
   type FeedbackSource,
   type FeedbackStatus,
@@ -99,10 +99,6 @@ const WORKSPACE_VIEW_LABELS: Array<[WorkspaceView, string]> = [
   ["materials", "产物"],
   ["execution", "活动"],
 ];
-function WorkspaceDock({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
-  return target ? createPortal(children, target) : children;
-}
-
 function viewShortcutHint(view: WorkspaceView): string {
   const index = WORKSPACE_VIEW_LABELS.findIndex(([candidate]) => candidate === view);
   return `⌥${index + 1}`;
@@ -687,6 +683,56 @@ export function TaskWorkspace({
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const [decisionFooterTarget, setDecisionFooterTarget] = useState<HTMLDivElement | null>(null);
+  // 右栏会话流:服务端投影(事件账/决定账/批注账/反馈索引拼成的回合)。
+  // 每 4 秒一拍,决定/插话/批注落账后立刻补取一次,不等下一拍。
+  const [conversation, setConversation] = useState<{
+    items: ConversationItem[]; problems: string[]; loaded: boolean; unavailable?: string;
+  }>({ items: [], problems: [], loaded: false });
+  const [streamFilter, setStreamFilter] = useState<StreamFilter>("all");
+  const [streamThread, setStreamThread] = useState<string>();
+  const [assistantView, setAssistantView] = useState<DeveloperAssistantView>();
+  const conversationRequest = useRef(0);
+  const loadConversation = (taskId: string) => {
+    const sequence = ++conversationRequest.current;
+    return getConversation(taskId).then((result) => {
+      if (sequence !== conversationRequest.current) return;
+      if (result.view) {
+        setConversation({ items: result.view.items, problems: result.view.problems, loaded: true });
+      } else {
+        setConversation((current) => ({ ...current, loaded: true, unavailable: result.unavailable }));
+      }
+    }).catch(() => {
+      if (sequence === conversationRequest.current) {
+        setConversation((current) => ({ ...current, loaded: true, unavailable: "会话流暂时读不到,稍后自动重试。" }));
+      }
+    });
+  };
+  useEffect(() => {
+    setConversation({ items: [], problems: [], loaded: false });
+    setStreamFilter("all");
+    setStreamThread(undefined);
+    setAssistantView(undefined);
+    const stop = startVisiblePolling(() => void loadConversation(task.id), 4000, document);
+    return () => { stop(); conversationRequest.current += 1; };
+  }, [task.id]);
+  useEffect(() => {
+    if (!livePulse && !notesPulse) return;
+    void loadConversation(task.id);
+  }, [livePulse, notesPulse, task.status, task.waiting?.waiting_id]);
+  // 深链:#thread=<批注 id> 打开时直接落到那条意见的往来(通知里带的链接)。
+  useEffect(() => {
+    const match = /(?:^#|&)thread=([^&]+)/.exec(window.location.hash);
+    if (match) {
+      setStreamThread(decodeURIComponent(match[1]));
+      setStreamFilter("review");
+    }
+  }, [task.id]);
+  function showThread(id?: string) {
+    setStreamThread(id);
+    if (id) setStreamFilter("review");
+    const base = window.location.pathname + window.location.search;
+    window.history.replaceState(null, "", id ? `${base}#thread=${encodeURIComponent(id)}` : base);
+  }
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
   const evidenceHeadRef = useRef<HTMLDivElement>(null);
@@ -1434,9 +1480,6 @@ export function TaskWorkspace({
         && task.delivery?.mr_state !== "已关闭"
         && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
         && ["queued", "verifying", "await_merge", "failed"].includes(task.status)));
-  const collaborationVisible = canCollaborate && [
-    "running", "pausing", "paused", "waiting_for_human", "verifying",
-  ].includes(task.status);
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
   const chainReview = !!waiting && isChainReviewWaiting(task);
@@ -1463,9 +1506,6 @@ export function TaskWorkspace({
     .includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
-  const actionRailVisible = Boolean(waiting)
-    || Boolean(task.delivery?.scope_violation)
-    || ["failed", "canceled", "verifying", "await_merge", "coordinating"].includes(task.status);
   const pauseFeedback = task.status === "pausing"
     ? {
         state: "pending",
@@ -1520,6 +1560,88 @@ export function TaskWorkspace({
     }
   }
 
+  const streamPeople = [
+    ...(viewerDisplayName ? [{ username: viewerUsername, display_name: viewerDisplayName }] : []),
+    ...reviewPeople.filter((person) => person.username !== viewerUsername),
+  ];
+  // 非决定态的收口块:失败原因与重跑、验证中卡在哪、等合入、子任务清单。
+  // 它们是流的"最后一条",不是第二个面板。
+  const streamTailVisible = Boolean(task.delivery?.scope_violation)
+    || ["failed", "canceled"].includes(task.status)
+    || (!waiting && ["await_merge", "verifying", "coordinating"].includes(task.status))
+    || Boolean(task.parent_task_id);
+  const streamTail = streamTailVisible ? (
+    <>
+      {task.delivery?.scope_violation && (
+        <ScopeViolationCard task={task} onChanged={onChanged} />
+      )}
+      {task.status === "failed" && (
+        <>
+          {task.detail && (
+            <div className="alert">
+              <strong>任务执行失败</strong>
+              <span>{task.detail}</span>
+            </div>
+          )}
+          {canOperate && !waiting && (
+            <div className="ws-failed-actions">
+              <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />
+              <DiagnosticsLink taskId={task.id} />
+            </div>
+          )}
+        </>
+      )}
+      {task.status === "canceled" && (
+        <div className="task-canceled-note">
+          <strong>任务已取消</strong>
+          <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
+          {canOperate && <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />}
+        </div>
+      )}
+      {!waiting && task.status === "await_merge" && (
+        <MergeWaitLine task={task} canOperate={canOperate} />
+      )}
+      {!waiting && task.status === "verifying" && (
+        <div className="ws-verify-focus">
+          <strong>交付验证进行中</strong>
+          {task.delivery?.waiting_on ? (
+            <p className="ws-verify-focus-waiting">{task.delivery.waiting_on}</p>
+          ) : (
+            <p>{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
+          )}
+          {canOperate && repairStopped(task) && (
+            <RetryButton taskId={task.id} onDone={onChanged}
+              label={task.delivery?.stalled && !task.delivery?.loop
+                  && !task.delivery?.evidence_gap
+                ? "重新尝试交付" : undefined} />
+          )}
+          {task.delivery?.stalled && <DiagnosticsLink taskId={task.id} />}
+        </div>
+      )}
+      {!waiting && task.status === "coordinating" && (
+        <div className="ws-child-focus">
+          <strong>{task.focus?.needs_attention ? "有子任务需要处理" : "子任务正在推进"}</strong>
+          <p>{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
+          <div>{task.requirement_graph?.repositories.map((repository) => (
+            <button type="button" key={repository.id}
+              disabled={!repository.task_id || !onOpenTask}
+              onClick={() => repository.task_id && onOpenTask?.(repository.task_id)}>
+              <span><strong>{repository.name}</strong>
+                <small>{repository.assignee ?? "未指定负责人"}</small></span>
+              <em className={repository.task_status ?? "queued"}>
+                {statusText({ status: repository.task_status ?? "queued" })}
+              </em>
+            </button>
+          ))}</div>
+        </div>
+      )}
+      {task.parent_task_id && <CrossRepositorySync
+        taskId={task.id}
+        updates={task.cross_repository_updates}
+        onChanged={onChanged} />}
+    </>
+  ) : undefined;
+
   const renderAnnotations = (selectedNotes: Annotation[], inline = false) => (
         <AnnotationPanel
           taskId={task.id}
@@ -1551,6 +1673,7 @@ export function TaskWorkspace({
           reworkChoice={materialsFullscreen && !inline ? workspaceReworkChoice : undefined}
           canDecide={materialsFullscreen && !inline && canOperate}
           onLocate={locate}
+          onShowThread={showThread}
           onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
         />
   );
@@ -2212,22 +2335,17 @@ export function TaskWorkspace({
             <strong>与 Agent 协作</strong>
             <span>{viewerDisplayName || viewerUsername}</span>
           </header>
-          <div className="ws-side-scroll">
-            <section className={`ws-focus-hero ${task.focus?.kind ?? task.status} ${task.status}`}>
-              <div className="ws-focus-status">
-                <i aria-hidden />
-                <span>{waiting && !decides ? "等待负责人决定" : statusText(task)}</span>
-                <span>{health?.actor?.startsWith("你 · ")
-                  ? "由你负责" : health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
-                <span>更新 · {relativeTime(health?.last_progress_at
-                  ?? task.last_progress_at ?? task.updated_at ?? task.created_at) || "刚刚"}</span>
-              </div>
-              {!waiting && !["failed", "canceled", "verifying"].includes(task.status) && <>
-                <h2>{task.focus?.headline ?? nextAction.title}</h2>
-                <p>{task.focus?.next_action ?? nextAction.detail}</p>
-              </>}
-            </section>
-
+          <section className={`ws-focus-hero ${task.focus?.kind ?? task.status} ${task.status}`}>
+            <div className="ws-focus-status">
+              <i aria-hidden />
+              <span>{waiting && !decides ? "等待负责人决定" : statusText(task)}</span>
+              <span>{health?.actor?.startsWith("你 · ")
+                ? "由你负责" : health?.actor ?? `责任 · ${task.luban_account ?? "系统"}`}</span>
+              <span>更新 · {relativeTime(health?.last_progress_at
+                ?? task.last_progress_at ?? task.updated_at ?? task.created_at) || "刚刚"}</span>
+            </div>
+          </section>
+          <div className="ws-side-notices">
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
           {pauseFeedback && (
@@ -2275,17 +2393,29 @@ export function TaskWorkspace({
                 ))}</div>
               </div>
             )}
-            {actionRailVisible && (
-            <div className="ws-decision" aria-label="当前决策与关键操作">
-              {!waiting && <div className="ws-action-heading">
-                <strong>{nextAction.title}</strong>
-                <small>{nextAction.detail}</small>
-              </div>}
-              {waiting && decides && (
-                /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
-                   选项标签是内核的——它按标签给这次选择记账,前端改写会让
-                   记下的选择对不上用户点的(2026-08-09 实战事故)。所以
-                   "这次会带上哪几处"只能摆进人按下提交的那一眼里。 */
+          </div>
+          {/* 右栏 = 一条会话流 + 一个输入框(2026-09-05 用户拍板):卡上的选项就是
+              动作,输入框只写附言/自定义/插话;工具步骤留在「工作过程」,流里只有
+              回合。批注挂在提交按钮正上方(WaitingCard 内部)的原则不变——选项
+              标签是内核的,前端改写会让记账对不上(2026-08-09 实战事故)。 */}
+          <ConversationStream
+            task={task}
+            items={conversation.items}
+            problems={conversation.problems}
+            loaded={conversation.loaded}
+            unavailable={conversation.unavailable}
+            viewerUsername={viewerUsername}
+            people={streamPeople}
+            filter={streamFilter}
+            onFilterChange={setStreamFilter}
+            thread={streamThread}
+            onThreadChange={showThread}
+            annotations={notes}
+            decides={Boolean(waiting) && decides}
+            awaitingYou={reviewCounts.mine}
+            fallbackHeadline={nextAction.title}
+            fallbackDetail={nextAction.detail}
+            currentCard={waiting ? (decides ? (
                 <WaitingCard
                   task={task}
                   presentation="studio"
@@ -2344,133 +2474,49 @@ export function TaskWorkspace({
                     </>
                   }
                 />
-              )}
-              {waiting && !decides && (
+              ) : (
                 <div className="read-only-notice">
                   {canCollaborate
                     ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以继续在材料上批注插话，意见会随卡送到 Agent。`
                     : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看全部材料，但不能代为提交决定。`}
                 </div>
-              )}
-              {task.delivery?.scope_violation && (
-                <ScopeViolationCard task={task} onChanged={onChanged} />
-              )}
-              {/* failed 的重点是"为什么失败":原因置顶,重跑按钮紧随其后,
-                  不再先渲一段"当前没有待你决定的事项"把它压到最底。 */}
-              {task.status === "failed" && (
-                <>
-                  {task.detail && (
-                    <div className="alert">
-                      <strong>任务执行失败</strong>
-                      <span>{task.detail}</span>
-                    </div>
-                  )}
-                  {canOperate && !waiting && (
-                    <div className="ws-failed-actions">
-                      <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />
-                      <DiagnosticsLink taskId={task.id} />
-                    </div>
-                  )}
-                </>
-              )}
-              {task.status === "canceled" && (
-                <div className="task-canceled-note">
-                  <strong>任务已取消</strong>
-                  <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
-                  {canOperate && <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />}
-                </div>
-              )}
-              {!waiting && task.status !== "failed" && task.status !== "canceled" && (
-                task.status === "await_merge" ? (
-                  // 右栏标题已经说了"等待检视与合入":这里不再摆一张层级
-                  // 更高的大卡复读(MFC-039 用户拍板),默认只有一行状态,
-                  // 点开才展开说明与 MR 链接。MR 被关是需要人处理的例外,
-                  // 保持直接可见。
-                  <MergeWaitLine task={task} canOperate={canOperate} />
-                ) : task.status === "verifying" ? (
-                  /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
-                     waiting_on 有值就点名;修复停机时直接给重试入口。 */
-                  <div className="ws-verify-focus">
-                    <strong>交付验证进行中</strong>
-                    {task.delivery?.waiting_on ? (
-                      <p className="ws-verify-focus-waiting">
-                        {task.delivery.waiting_on}
-                      </p>
-                    ) : (
-                      <p>{task.detail
-                        || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
-                    )}
-                    {canOperate && repairStopped(task) && (
-                      <RetryButton taskId={task.id} onDone={onChanged}
-                        label={task.delivery?.stalled && !task.delivery?.loop
-                            && !task.delivery?.evidence_gap
-                          ? "重新尝试交付" : undefined} />
-                    )}
-                    {task.delivery?.stalled && (
-                      <DiagnosticsLink taskId={task.id} />
-                    )}
-                  </div>
-                ) : task.status === "coordinating" ? (
-                  <div className="ws-child-focus">
-                    <strong>{task.focus?.needs_attention
-                      ? "有子任务需要处理" : "子任务正在推进"}</strong>
-                    <p>{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
-                    <div>{task.requirement_graph?.repositories.map((repository) => (
-                      <button type="button" key={repository.id}
-                        disabled={!repository.task_id || !onOpenTask}
-                        onClick={() => repository.task_id
-                          && onOpenTask?.(repository.task_id)}>
-                        <span><strong>{repository.name}</strong>
-                          <small>{repository.assignee ?? "未指定负责人"}</small></span>
-                        <em className={repository.task_status ?? "queued"}>
-                          {statusText({ status: repository.task_status ?? "queued" })}
-                        </em>
-                      </button>
-                    ))}</div>
-                  </div>
-                ) : (
-                  <div className="ws-idle">
-                    <strong>当前没有待你决定的事项</strong>
-                    <p>
-                      {task.status === "running"
-                        ? "模型正在推进；需要时可切到执行现场查看。"
-                        : "材料、协作和运行记录都在左侧主视图。"}
-                    </p>
-                  </div>
-                )
-              )}
+              )) : undefined}
+            tail={streamTail}
+            assistantTools={assistantView?.tools}
+            takeover={assistantView ? takeoverActiveOf(assistantView) : false}
+            onLocateAnnotation={(id) => {
+              const item = notes.find((note) => note.id === id);
+              if (!item) return;
+              locate(item);
+              openAnnotationReview([id]);
+            }}
+            onOpenReview={(ids) => {
+              if (ids.length) { openAnnotationReview(ids); return; }
+              setReviewFilter("mine");
+              setReviewPanelOpen(true);
+            }}
+            onOpenSteps={() => selectWorkspaceView("execution")}
+          />
+          {canCollaborate || decides ? (
+            <Composer task={task}
+              steerOnly={task.requirement_graph?.stage === "analysis"}
+              decisionDock={Boolean(waiting) && decides}
+              dockContext={draftIds.length > 0 && !requirementAnalysisConfirmation
+                ? `这里写的说明和你的 ${draftIds.length} 条排队批注会随选项一起送给 Agent`
+                : isClarificationWaiting(task)
+                  ? "答复只把缺的信息给 Agent，它接着处理；这不是最终验收"
+                  : "这里写的说明会随选项一起送给 Agent"}
+              dockRef={setDecisionFooterTarget}
+              onChanged={() => {
+                setLivePulse((value) => value + 1);
+                onChanged();
+              }}
+              onAssistant={setAssistantView} />
+          ) : (
+            <div className="ws-composer-readonly">
+              你可以查看全部往来与材料；提交决定和插话由责任人 {task.luban_account ?? "或协作者"} 处理。
             </div>
-            )}
-          {collaborationVisible && (
-            <WorkspaceDock target={!waiting ? decisionFooterTarget : undefined}>
-            <details className="ws-focus-collaboration" id="ws-collaboration"
-              open={!waiting || task.status === "paused" ? true : undefined}>
-              <summary>
-                <span>
-                  <strong>{task.status === "paused" ? "继续或接管现场" : "补充给 Agent"}</strong>
-                  <small>{task.status === "paused"
-                    ? "现场已保留，可以恢复主任务或使用开发助手"
-                    : "需要纠偏时再展开，不打断正常执行"}</small>
-                </span>
-                <i aria-hidden />
-              </summary>
-              <div className="ws-focus-collaboration-body">
-                <SteerBox task={task}
-                  steerOnly={task.requirement_graph?.stage === "analysis"}
-                  onChanged={() => {
-                    setLivePulse((value) => value + 1);
-                    onChanged();
-                  }} />
-                {task.parent_task_id && <CrossRepositorySync
-                  taskId={task.id}
-                  updates={task.cross_repository_updates}
-                  onChanged={onChanged} />}
-              </div>
-            </details>
-            </WorkspaceDock>
           )}
-          </div>
-          <div className="ws-reply-dock" ref={setDecisionFooterTarget} role="region" aria-label="回复与提交" />
         </section>
       </div>
       {reviewInviteOpen && <div className="workspace-review-backdrop"

@@ -51,7 +51,8 @@ test("场景动作覆盖工作台全部层级，不把能力删成好看的空�
   assert.match(workspace, /\["focus", "当前"\]/);
   assert.match(workspace, /\["materials", "产物"\]/);
   assert.match(workspace, /\["execution", "活动"\]/);
-  assert.match(workspace, /<SteerBox/);
+  assert.match(workspace, /<Composer/);
+  assert.match(workspace, /<ConversationStream/);
   assert.match(workspace, /<CrossRepositorySync/);
   assert.match(workspace, /<ExecutionPanel/);
   assert.match(workspace, /<KnowledgeFootprint/);

@@ -1,0 +1,389 @@
+/* 工作台右栏:会话流 + 唯一输入框(2026-09-05 重做)。
+   令牌全部来自 tokens.css;紫白视觉、栏宽、桌面布局不动。
+   结构:栏头(标题 + 责任人)→ 待你处理锚条 → 筛选 → 流(可滚)→ 输入框(常驻)。 */
+
+/* 栏是纵向 flex:头/状态/提示/输入框都不伸缩,只有流那一段吃剩余高度。
+   (不用 grid 定行:提示区为空时 display:none,行号会整体错位——实测输入框
+   被挤出视口。)顺序用 order 钉死,不受旧样式里 order 的影响。 */
+.task-workspace-v2 .ws-side {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--canvas);
+}
+.task-workspace-v2 .ws-side > .ws-collaboration-head { order: 0; flex: none; }
+.task-workspace-v2 .ws-side > .ws-focus-hero { order: 1; flex: none; }
+.task-workspace-v2 .ws-side > .ws-side-notices { order: 2; flex: none; }
+.task-workspace-v2 .ws-side > .ws-stream-shell { order: 3; flex: 1 1 auto; min-height: 0; }
+.task-workspace-v2 .ws-side > .ws-composer,
+.task-workspace-v2 .ws-side > .ws-composer-readonly { order: 4; flex: none; }
+.task-workspace-v2 .ws-side-notices:empty { display: none; }
+.task-workspace-v2 .ws-side-notices {
+  display: grid;
+  gap: 8px;
+  padding: 0 18px 8px;
+}
+.task-workspace-v2 .ws-side-notices > * { margin: 0; }
+.task-workspace-v2 .ws-side-notices .ws-focus-alert,
+.task-workspace-v2 .ws-side-notices .ws-focus-note { margin-top: 0; }
+.task-workspace-v2 .ws-side .task-control-feedback { padding: 0 18px 8px; }
+
+/* 状态行:一颗点 + 状态词 + 责任 + 更新时间。栏头下面,不再有大标题——
+   标题在流末尾的卡上,或在锚条上。 */
+.task-workspace-v2 .ws-focus-hero { padding: 10px 18px 8px; border: 0; }
+
+/* ── 待你处理锚条 ─────────────────────────────────────────────────── */
+.task-workspace-v2 .ws-stream-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  position: relative;
+}
+.task-workspace-v2 .ws-anchor {
+  margin: 0 18px 8px;
+  padding: 9px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--fs-13);
+}
+.task-workspace-v2 .ws-anchor > i {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--faint); box-shadow: 0 0 0 3px var(--surface-3);
+}
+.task-workspace-v2 .ws-anchor.attention { border-color: color-mix(in srgb, var(--attention) 40%, var(--line)); background: var(--attention-soft); }
+.task-workspace-v2 .ws-anchor.attention > i { background: var(--attention); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 22%, transparent); }
+.task-workspace-v2 .ws-anchor-text { min-width: 0; display: grid; gap: 1px; }
+.task-workspace-v2 .ws-anchor-text strong { color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-anchor.attention .ws-anchor-text strong { color: var(--attention); }
+.task-workspace-v2 .ws-anchor-text small { color: var(--muted); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-anchor > button {
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-strong);
+  font: inherit; font-size: var(--fs-12); font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.task-workspace-v2 .ws-anchor > button:hover { border-color: var(--text-strong); }
+
+/* ── 筛选:全部 / 需要我的 / 意见与回执 ─────────────────────────────── */
+.task-workspace-v2 .ws-stream-filters {
+  display: flex; gap: 4px; padding: 0 18px 6px;
+}
+.task-workspace-v2 .ws-stream-filters > button {
+  height: 26px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer;
+}
+.task-workspace-v2 .ws-stream-filters > button:hover { color: var(--text-strong); background: var(--surface); }
+.task-workspace-v2 .ws-stream-filters > button.on { color: var(--ink); background: var(--ink-soft); border-color: transparent; }
+.task-workspace-v2 .ws-thread-head {
+  margin: 0 18px 6px;
+  padding: 6px 8px 6px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid var(--ink); border-radius: var(--radius-sm);
+  background: var(--ink-soft); color: var(--ink);
+  font-size: var(--fs-12);
+}
+.task-workspace-v2 .ws-thread-head > span { min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
+.task-workspace-v2 .ws-thread-head code { flex: none; font: 500 11px/1 var(--font-mono); }
+.task-workspace-v2 .ws-thread-head small { min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-thread-head > button { flex: none; width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; color: var(--ink); font-size: 15px; cursor: pointer; }
+.task-workspace-v2 .ws-thread-head > button:hover { background: var(--surface); }
+
+/* ── 流 ─────────────────────────────────────────────────────────────── */
+.task-workspace-v2 .ws-stream {
+  min-height: 0;
+  padding: 4px 18px 16px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.task-workspace-v2 .ws-stream-new {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  height: 28px; padding: 0 12px;
+  border: 1px solid var(--ink); border-radius: 999px;
+  background: var(--ink); color: var(--ink-fg);
+  font: inherit; font-size: var(--fs-12); font-weight: 600; cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+.task-workspace-v2 .conv-more,
+.task-workspace-v2 .conv-empty,
+.task-workspace-v2 .conv-problem {
+  margin: 0; padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--muted); font-size: var(--fs-12); text-align: center;
+}
+.task-workspace-v2 .conv-more { border: 1px dashed var(--line-strong); background: transparent; font: inherit; font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .conv-more:hover { color: var(--text-strong); border-color: var(--text-strong); }
+.task-workspace-v2 .conv-empty { padding: 24px 12px; line-height: 1.6; }
+.task-workspace-v2 .conv-problem { color: var(--attention); background: var(--attention-soft); text-align: left; }
+.task-workspace-v2 .conv-date,
+.task-workspace-v2 .conv-divider {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--faint); font-size: 11px;
+  margin: 4px 0 -4px;
+}
+.task-workspace-v2 .conv-date::before, .task-workspace-v2 .conv-date::after,
+.task-workspace-v2 .conv-divider::before, .task-workspace-v2 .conv-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+
+/* 一条消息:头像 + 正文 */
+.task-workspace-v2 .conv-msg {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px;
+  scroll-margin-top: 12px;
+}
+.task-workspace-v2 .conv-avatar {
+  width: 24px; height: 24px; border-radius: 7px;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: #fff; background: var(--ink);
+}
+.task-workspace-v2 .conv-avatar.you { background: var(--text-strong); }
+.task-workspace-v2 .conv-avatar.person { background: var(--muted); }
+.task-workspace-v2 .conv-avatar.system { background: transparent; color: var(--faint); border: 1px dashed var(--line-strong); }
+.task-workspace-v2 .conv-avatar.external { background: var(--active); }
+.task-workspace-v2 .conv-avatar.assistant { background: var(--success); }
+.task-workspace-v2 .conv-body { min-width: 0; display: grid; gap: 6px; }
+.task-workspace-v2 .conv-who {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
+  color: var(--muted); font-size: var(--fs-12);
+}
+.task-workspace-v2 .conv-who b { color: var(--text-strong); font-weight: 600; }
+.task-workspace-v2 .conv-who time { color: var(--faint); }
+.task-workspace-v2 .conv-tag {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
+  border-radius: 5px; font-size: 11px; font-weight: 500; font-style: normal;
+  background: var(--surface-3); color: var(--muted);
+}
+.task-workspace-v2 .conv-tag.ok { background: var(--success-soft); color: var(--success); }
+.task-workspace-v2 .conv-tag.att { background: var(--attention-soft); color: var(--attention); }
+.task-workspace-v2 .conv-tag.ink { background: var(--ink-soft); color: var(--ink); }
+.task-workspace-v2 .conv-tag.src { background: var(--active-soft); color: var(--active); }
+
+.task-workspace-v2 .conv-text { color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); overflow-wrap: anywhere; }
+.task-workspace-v2 .conv-text .md > :first-child { margin-top: 0; }
+.task-workspace-v2 .conv-text .md > :last-child { margin-bottom: 0; }
+.task-workspace-v2 .conv-earlier { border-left: 2px solid var(--line); padding-left: 10px; }
+.task-workspace-v2 .conv-earlier > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .conv-earlier .conv-text { margin-top: 8px; color: var(--muted); font-size: var(--fs-13); }
+.task-workspace-v2 .conv-act {
+  display: block; width: 100%; padding: 2px 0; margin: 0;
+  border: 0; background: transparent; text-align: left;
+  color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-workspace-v2 .conv-act > span { color: var(--faint); margin-right: 6px; }
+.task-workspace-v2 .conv-act:hover { color: var(--ink); }
+.task-workspace-v2 .conv-lead { margin: 0; color: var(--text); font-size: var(--fs-13); }
+.task-workspace-v2 .conv-answer { margin: 0; color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-workspace-v2 .conv-notes { margin: 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.6; white-space: pre-wrap; }
+.task-workspace-v2 .conv-question-echo { margin: 0; color: var(--muted); font-size: var(--fs-13); }
+.task-workspace-v2 .conv-refs { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-workspace-v2 .conv-refs > span { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.task-workspace-v2 .conv-cli {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+  font: 12px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* 引用一条批注:文件:行 + 意见原文;点了回到材料原位 */
+.task-workspace-v2 .conv-quote {
+  display: grid; gap: 2px; width: 100%; margin: 0; padding: 4px 10px;
+  border: 0; border-left: 3px solid var(--line-strong); border-radius: 0;
+  background: transparent; text-align: left; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: var(--fs-13); line-height: 1.5;
+}
+.task-workspace-v2 .conv-quote:hover { border-left-color: var(--ink); color: var(--text); }
+.task-workspace-v2 .conv-quote code { font: 500 11px/1.4 var(--font-mono); color: var(--faint); }
+.task-workspace-v2 .conv-quote span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.task-workspace-v2 .conv-thread-link {
+  justify-self: start; padding: 0; border: 0; background: transparent;
+  color: var(--ink); font: inherit; font-size: var(--fs-12); cursor: pointer;
+}
+.task-workspace-v2 .conv-thread-link:hover { text-decoration: underline; }
+
+/* 回执清单 */
+.task-workspace-v2 .conv-receipts { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.task-workspace-v2 .conv-receipts > li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; }
+.task-workspace-v2 .conv-receipts > li > i {
+  width: 16px; height: 16px; margin-top: 3px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 10px; font-style: normal; color: #fff; background: var(--faint);
+}
+.task-workspace-v2 .conv-receipts > li.fixed > i { background: var(--success); }
+.task-workspace-v2 .conv-receipts > li.not_fixed > i { background: var(--danger); }
+.task-workspace-v2 .conv-receipts > li.needs_clarification > i { background: var(--attention); }
+.task-workspace-v2 .conv-receipts > li > div { min-width: 0; display: grid; gap: 2px; }
+.task-workspace-v2 .conv-receipt-title {
+  justify-self: start; padding: 0; border: 0; background: transparent; text-align: left;
+  color: var(--text); font: inherit; font-size: var(--fs-13); line-height: 1.5; cursor: pointer;
+}
+.task-workspace-v2 .conv-receipt-title:hover { color: var(--ink); }
+.task-workspace-v2 .conv-receipts small { color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
+.task-workspace-v2 .conv-receipts small b { font-weight: 600; color: var(--text); }
+.task-workspace-v2 .conv-receipts small code { font: 11px var(--font-mono); }
+
+/* 外部意见 */
+.task-workspace-v2 .conv-external { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.task-workspace-v2 .conv-external > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding-left: 10px; border-left: 3px solid var(--line-strong); font-size: var(--fs-13); color: var(--text); }
+.task-workspace-v2 .conv-external code { font: 500 11px/1.4 var(--font-mono); color: var(--faint); }
+.task-workspace-v2 .conv-external small { flex-basis: 100%; color: var(--muted); font-size: var(--fs-12); }
+
+/* 卡:历史卡是只读摘要;当前卡是 WaitingCard 本体 */
+.task-workspace-v2 .conv-card {
+  border: 1px solid var(--line-strong); border-radius: var(--radius-lg);
+  background: var(--surface); overflow: hidden;
+}
+.task-workspace-v2 .conv-card.resolved, .task-workspace-v2 .conv-card.superseded { border-color: var(--line); }
+.task-workspace-v2 .conv-card-head { padding: 10px 14px 8px; border-bottom: 1px solid var(--line); }
+.task-workspace-v2 .conv-kicker { display: block; color: var(--attention); font-size: var(--fs-12); font-weight: 500; }
+.task-workspace-v2 .conv-card.resolved .conv-kicker, .task-workspace-v2 .conv-card.superseded .conv-kicker { color: var(--faint); }
+.task-workspace-v2 .conv-card-head h4 { margin: 2px 0 0; color: var(--text-strong); font-size: var(--fs-14); font-weight: 600; line-height: 1.4; }
+.task-workspace-v2 .conv-question { padding: 8px 14px 4px; }
+.task-workspace-v2 .conv-question > p { margin: 0 0 6px; color: var(--text); font-size: var(--fs-13); }
+.task-workspace-v2 .conv-options { margin: 0 0 6px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.task-workspace-v2 .conv-options > li {
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  color: var(--muted); font-size: var(--fs-13);
+}
+.task-workspace-v2 .conv-options > li.chosen { border-color: var(--ink); background: var(--ink-soft); color: var(--ink); font-weight: 600; }
+.task-workspace-v2 .conv-options > li.chosen::after { content: " ✓"; }
+.task-workspace-v2 .conv-card-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-12); }
+.task-workspace-v2 .conv-card-foot > button { padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-12); cursor: pointer; }
+
+/* 当前决定卡:WaitingCard 塞进气泡——去掉卡自己的大外框内边距,让它像一条消息。
+   卡内区块的 flex order 与 ws-decision 同一套(标题 → Agent 的话 → 选项 → 提醒 → 附带批注 → 依据),
+   提交区经 portal 挂到输入框,不在卡里。 */
+.task-workspace-v2 .conv-card.current { border-color: var(--line-strong); }
+.task-workspace-v2 .conv-card.current .decision-card { display: flex; flex-direction: column; border: 0; border-radius: 0; background: transparent; box-shadow: none; margin: 0; padding: 0; }
+.task-workspace-v2 .conv-card.current .decision-head { order: 0; padding: 12px 14px 4px; }
+.task-workspace-v2 .conv-card.current .decision-kicker { display: none; }
+.task-workspace-v2 .conv-card.current .decision-head h3 { font-size: var(--fs-15); line-height: 1.4; letter-spacing: -.01em; }
+.task-workspace-v2 .conv-card.current .decision-count { align-self: flex-start; }
+.task-workspace-v2 .conv-card.current .decision-clarification-note { order: 1; margin: 0; padding: 4px 14px 0; }
+.task-workspace-v2 .conv-card.current .waiting-context,
+.task-workspace-v2 .conv-card.current .waiting-context-details { order: 1; max-height: none; padding: 4px 14px 0; overflow: visible; border: 0; background: transparent; }
+.task-workspace-v2 .conv-card.current .waiting-context .context-label { display: none; }
+.task-workspace-v2 .conv-card.current .waiting-context .md,
+.task-workspace-v2 .conv-card.current .waiting-context-body { color: var(--text); font-size: var(--fs-13); line-height: var(--lh-body); }
+.task-workspace-v2 .conv-card.current .waiting-context .md > :first-child { margin-top: 0; }
+.task-workspace-v2 .conv-card.current .waiting-context .md > :last-child { margin-bottom: 0; }
+.task-workspace-v2 .conv-card.current .chain-decision-facts { order: 1; margin: 8px 14px 0; }
+.task-workspace-v2 .conv-card.current .question-list { order: 2; padding: 8px 14px 0; }
+.task-workspace-v2 .conv-card.current .question { padding-block: 4px 10px; }
+.task-workspace-v2 .conv-card.current .question-text { font-size: var(--fs-14); line-height: 1.5; }
+.task-workspace-v2 .conv-card.current .review-decision-guidance,
+.task-workspace-v2 .conv-card.current .delivery-decision-guidance { order: 3; margin: 10px 14px 0; }
+.task-workspace-v2 .conv-card.current .decision-attachment { order: 4; margin: 10px 14px 0; padding: 0; border: 0; }
+.task-workspace-v2 .conv-card.current .decision-evidence { order: 6; margin: 8px 0 0; border-top: 1px solid var(--line); }
+.task-workspace-v2 .conv-card.current .decision-evidence > summary { padding: 8px 14px; color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .conv-card.current .push-review-overview,
+.task-workspace-v2 .conv-card.current .delivery-scope-card { margin: 0; padding: 10px 14px 12px; border: 0; border-top: 1px solid var(--line); }
+.task-workspace-v2 .conv-card.current .decision-card > :last-child { padding-bottom: 12px; }
+.task-workspace-v2 .conv-card.current .ws-attached-feedback { margin: 0; }
+
+/* 收口块(失败/验证中/等合入/子任务)与只读说明 */
+.task-workspace-v2 .conv-tail { display: grid; gap: 10px; }
+.task-workspace-v2 .conv-tail .read-only-notice { margin: 0; }
+.task-workspace-v2 .conv-tools { border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); padding: 6px 10px; }
+.task-workspace-v2 .conv-tools > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .conv-tool { display: grid; grid-template-columns: 8px auto auto; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--fs-12); color: var(--muted); }
+.task-workspace-v2 .conv-tool > i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.task-workspace-v2 .conv-tool.passed > i { background: var(--success); }
+.task-workspace-v2 .conv-tool.failed > i { background: var(--danger); }
+.task-workspace-v2 .conv-tool > b { color: var(--text); font-weight: 600; }
+.task-workspace-v2 .conv-tool > pre { grid-column: 1 / -1; margin: 0; padding: 6px 8px; max-height: 96px; overflow: auto; border-radius: var(--radius-sm); background: var(--surface-2); font: 11px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ── 输入框:整个右栏只有这一个 ────────────────────────────────────── */
+.task-workspace-v2 .ws-composer {
+  display: grid; gap: 8px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.task-workspace-v2 .ws-composer-ctx {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  color: var(--muted); font-size: var(--fs-12); line-height: 1.4;
+}
+.task-workspace-v2 .ws-composer-modes {
+  display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); overflow: hidden;
+}
+.task-workspace-v2 .ws-composer-modes > button {
+  height: 24px; padding: 0 10px; border: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer;
+}
+.task-workspace-v2 .ws-composer-modes > button + button { border-left: 1px solid var(--line-strong); }
+.task-workspace-v2 .ws-composer-modes > button.on { background: var(--text-strong); color: var(--surface); }
+.task-workspace-v2 .ws-composer-modes > button:disabled { cursor: not-allowed; opacity: .6; }
+.task-workspace-v2 .ws-composer-mode { color: var(--text-strong); font-weight: 600; }
+.task-workspace-v2 .ws-composer-mode::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 6px; vertical-align: 1px; background: var(--faint);
+}
+.task-workspace-v2 .ws-composer-mode.active::before { background: var(--attention); }
+.task-workspace-v2 .ws-composer-hint { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-workspace-v2 .ws-composer-return {
+  margin-left: auto; height: 26px; padding: 0 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-strong);
+  font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer;
+}
+.task-workspace-v2 .ws-composer .steer-input { font-size: var(--fs-14); min-height: 64px; margin: 0; }
+.task-workspace-v2 .ws-composer .steer-input.cli { font-family: var(--font-mono); font-size: var(--fs-13); }
+.task-workspace-v2 .ws-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.task-workspace-v2 .ws-composer-left { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.task-workspace-v2 .ws-composer .steer-hint { font-size: var(--fs-12); color: var(--faint); }
+.task-workspace-v2 .ws-composer-error { color: var(--danger); font-size: var(--fs-12); }
+.task-workspace-v2 .ws-composer .steer-send {
+  height: var(--control-h); padding: 0 14px; font-size: var(--fs-13); font-weight: 500;
+  color: var(--ink-fg); border: 1px solid var(--ink); background: var(--ink);
+}
+.task-workspace-v2 .ws-composer .steer-send:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
+.task-workspace-v2 .ws-composer .steer-send:disabled { color: var(--faint); background: var(--surface-muted); border-color: var(--line); }
+.task-workspace-v2 .ws-composer .assistant-buttons { display: flex; gap: 8px; }
+.task-workspace-v2 .ws-composer .assistant-bounds-details > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .ws-composer .assistant-bounds { margin: 6px 0 0; font-size: var(--fs-12); }
+.task-workspace-v2 .ws-composer .alert { margin: 0; }
+.task-workspace-v2 .ws-composer-readonly {
+  padding: 12px 18px 14px; border-top: 1px solid var(--line);
+  background: var(--surface); color: var(--muted); font-size: var(--fs-13); line-height: 1.6;
+}
+
+/* 决定卡提交区挂在输入框里:附言 textarea + 提交按钮,和 ws-decision 时代同一套控件 */
+.task-workspace-v2 .ws-composer .ws-reply-dock:empty { display: none; }
+/* 附言在上、提交在下——和输入框的"写完再发"一个方向;原 ws-decision 时代是
+   column-reverse(按钮在上),放进输入框里就反了。 */
+.task-workspace-v2 .ws-composer .ws-reply-dock .decision-footer {
+  min-height: 0; padding: 0; display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  border: 0; background: transparent;
+}
+.task-workspace-v2 .ws-composer .ws-reply-dock .decision-unified-reply textarea { min-height: 64px; font-size: var(--fs-14); }
+.task-workspace-v2 .ws-composer .ws-reply-dock .decision-notes > button { padding: 0; font-size: var(--fs-13); }
+.task-workspace-v2 .ws-composer .ws-reply-dock .submit-decision {
+  width: 100%; min-height: var(--control-h-lg); height: auto; padding: 9px 16px;
+  justify-content: center; font-size: var(--fs-14); line-height: 1.3; white-space: normal;
+}
+.task-workspace-v2 .ws-composer .ws-reply-dock .decision-dock-notice { margin: 0; color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
+.task-workspace-v2 .ws-composer .ws-reply-dock .decision-dock-notice[role="status"] { color: var(--attention); }
+
+/* 批注抽屉里每条意见的"往来"入口:回到流里只看这条 */
+.annot-thread {
+  height: 22px; padding: 0 8px; margin-left: 4px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.annot-thread:hover { color: var(--ink); border-color: var(--ink); }
+
+/* 窄屏:两栏上下堆叠时流不再内滚,输入框跟在流后面 */
+@media (max-width: 1000px) {
+  .task-workspace-v2 .ws-side { overflow: visible; }
+  .task-workspace-v2 .ws-side > .ws-stream-shell { flex: none; }
+  .task-workspace-v2 .ws-stream-shell { display: block; }
+  .task-workspace-v2 .ws-stream { overflow: visible; max-height: none; }
+  .task-workspace-v2 .ws-stream-new { display: none; }
+}

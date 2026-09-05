@@ -7,7 +7,8 @@ const workspace = readFileSync(resolve("web/src/TaskWorkspace.tsx"), "utf-8");
 const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
 const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
-const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
+const composer = readFileSync(resolve("web/src/Composer.tsx"), "utf-8");
+const stream = readFileSync(resolve("web/src/ConversationStream.tsx"), "utf-8");
 const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 const crossRepositorySync = readFileSync(
   resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
@@ -51,20 +52,38 @@ test("低频资料集中在任务详情，暂停成功不重复占据通栏", ()
   assert.ok(workspace.indexOf('className="task-control-feedback"') > body);
 });
 
-test("开发协作只在当前上下文按需展开，低频跨仓同步仍置底", () => {
-  const collaboration = workspace.slice(
-    workspace.indexOf('<details className="ws-focus-collaboration"'),
-    workspace.indexOf('</details>',
-      workspace.indexOf('<details className="ws-focus-collaboration"')),
-  );
-  assert.match(collaboration, /需要纠偏时再展开，不打断正常执行/);
-  assert.ok(collaboration.indexOf("<SteerBox")
-    < collaboration.indexOf("<CrossRepositorySync"),
-  "主协作操作必须在前，低频跨仓工具放在底部");
+test("右栏是一条会话流加一个输入框:卡在流里、提交区在输入框、接管是输入框的一档", () => {
+  // 2026-09-05 用户拍板:右栏承载太多功能——改成会话流 + 单一输入框。
+  // 选项在卡上就是动作;输入框只写附言/自定义/插话;工具步骤留在工作过程。
+  const side = workspace.slice(workspace.indexOf('<section className="ws-side"'),
+    workspace.indexOf('{reviewInviteOpen &&'));
+  assert.ok(side.indexOf("<ConversationStream") < side.indexOf("<Composer"),
+    "流在上、输入框在下");
+  assert.doesNotMatch(side, /ws-focus-collaboration|<SteerBox|ws-decision|ws-idle/);
+  assert.match(side, /currentCard=\{waiting \? \(decides \? \(\s*<WaitingCard/,
+    "当前决定卡渲在流里");
+  assert.match(side, /footerTarget=\{decisionFooterTarget\}/);
+  assert.match(composer, /className="ws-reply-dock" ref=\{dockRef\}/,
+    "决定卡的提交区经 portal 挂到输入框");
+  assert.match(composer, /说给 Agent/);
+  assert.match(composer, /接管现场/);
+  assert.match(composer, /交还主任务/);
+  assert.match(side, /tail=\{streamTail\}/);
+  assert.ok(workspace.indexOf("<CrossRepositorySync") > workspace.indexOf("const streamTail"),
+    "低频跨仓同步作为流的收口块,不再另开区块");
   assert.match(crossRepositorySync,
     /return <details className="cross-repository-sync">/,
-    "跨仓同步默认折叠，不能继续占据整块首屏");
+    "跨仓同步默认折叠,不能继续占据整块首屏");
   assert.match(crossRepositorySync, /OPTIONAL TOOL/);
+  // 定位靠 id 双向跳:抽屉 → 流线程,流 → 材料原位 + 抽屉那条卡。
+  assert.match(workspace, /onShowThread=\{showThread\}/);
+  assert.match(stream, /onThreadChange\(id\)/);
+  assert.match(stream, /data-annotation-ids=/);
+  assert.match(workspace, /#thread=\$\{encodeURIComponent\(id\)\}/, "深链带批注 id");
+  // 工作过程只留步骤:Agent 的话、卡与决定不再重复出现。
+  const journey = readFileSync(resolve("web/src/TaskJourney.tsx"), "utf8");
+  assert.match(journey, /!\["ask", "decision"\]\.includes\(entry\.kind\)/);
+  assert.doesNotMatch(journey, /tailEvents/);
 });
 
 test("任何状态都稳定落在当前视图，由内容而不是自动跳页表达变化", () => {
@@ -90,12 +109,14 @@ test("等待人工检视时工作台标题显示人的当前事项，不沿用�
 });
 
 test("补充给主任务置灰时明确解释原因，而不是只留一个灰输入框", () => {
-  assert.match(steerBox, /steerDisabledReason/);
-  assert.match(steerBox, /主任务正在等待人工决定/);
-  assert.match(steerBox, /主任务已暂停/);
-  assert.match(steerBox, /当前正在验证交付结果/);
-  assert.match(steerBox, /当前正在等待合入/);
-  assert.match(steerBox, /className="steer-disabled-reason"/);
+  // 原因写在输入框上方的语境条里(模式词 + 一句解释),不再是灰框下面的告示。
+  assert.match(composer, /steerDisabledReason/);
+  assert.match(composer, /主任务正在等待人工决定/);
+  assert.match(composer, /主任务已暂停/);
+  assert.match(composer, /当前正在验证交付结果/);
+  assert.match(composer, /当前正在等待合入/);
+  assert.match(composer, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
+  assert.match(composer, /: steerDisabledReason\?\.detail\}/);
 });
 
 test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {

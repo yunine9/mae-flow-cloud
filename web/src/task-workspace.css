@@ -535,66 +535,9 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
 }
-.task-workspace-v2 .ws-focus-collaboration > summary,
-.task-workspace-v2 .ws-activity-section > header,
-.task-workspace-v2 .ws-activity-disclosure > summary {
-  min-height: 48px;
-  padding: 8px 12px 8px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--text);
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-  list-style: none;
-}
-.task-workspace-v2 .ws-focus-collaboration > summary,
-.task-workspace-v2 .ws-activity-disclosure > summary { cursor: pointer; }
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary,
-.task-workspace-v2 .ws-activity-disclosure:not([open]) > summary { border-bottom: 0; }
-.task-workspace-v2 .ws-focus-collaboration > summary::-webkit-details-marker,
-.task-workspace-v2 .ws-activity-disclosure > summary::-webkit-details-marker { display: none; }
-.task-workspace-v2 .ws-activity-section > header > div,
-.task-workspace-v2 .ws-focus-collaboration > summary > span,
-.task-workspace-v2 .ws-activity-disclosure > summary > span {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-}
-.task-workspace-v2 .ws-activity-section > header strong,
-.task-workspace-v2 .ws-focus-collaboration summary strong,
-.task-workspace-v2 .ws-activity-disclosure summary strong {
-  color: var(--text-strong);
-  font-size: var(--fs-14);
-  font-weight: 600;
-}
-.task-workspace-v2 .ws-activity-section > header span,
-.task-workspace-v2 .ws-activity-section > header small,
-.task-workspace-v2 .ws-focus-collaboration summary small,
-.task-workspace-v2 .ws-activity-disclosure summary small {
-  color: var(--muted);
-  font-size: var(--fs-13);
-  font-weight: 400;
-  line-height: 1.4;
-}
+
 .task-workspace-v2 .ws-activity-section > header small { flex: none; color: var(--faint); font-size: var(--fs-12); }
-.task-workspace-v2 .ws-focus-collaboration summary > i,
-.task-workspace-v2 .ws-activity-disclosure summary > i {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  margin: -3px 8px 0 4px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: rotate(45deg);
-  transition: transform var(--ease);
-}
-.task-workspace-v2 .ws-focus-collaboration[open] summary > i,
-.task-workspace-v2 .ws-activity-disclosure[open] summary > i { transform: rotate(225deg); margin-top: 3px; }
+
 .task-workspace-v2 .ws-activity-disclosure > div {
   padding: 16px 18px 20px;
   border: 0;
@@ -686,204 +629,23 @@
 
 /* 输入区:左栏底部固定的"补充给 Agent / 继续或接管现场",像会话页的
    输入框——收起时是一行可点的输入样式,展开后插话框在栏内滚动。 */
-.task-workspace-v2 .ws-focus-collaboration {
-  flex: none;
-  max-height: 62%;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--surface);
-}
-.task-workspace-v2 .ws-focus-collaboration > summary {
-  flex: none;
-  min-height: 56px;
-  padding: 10px 16px 10px 20px;
-  border: 0;
-  background: var(--surface);
-}
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary::before {
-  content: "✎";
-  margin-right: 10px;
-  color: var(--muted);
-  font-size: var(--fs-15);
-}
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary { cursor: text; }
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary > span {
-  min-width: 0;
-  flex: 1;
-  height: var(--control-h-lg);
-  padding: 0 12px;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary strong { flex: none; color: var(--text); font-weight: 500; white-space: nowrap; }
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-workspace-v2 .ws-focus-collaboration:not([open]) > summary:hover > span { border-color: var(--text-strong); }
-.task-workspace-v2 .ws-focus-collaboration[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
-.task-workspace-v2 .ws-focus-collaboration-body {
-  min-height: 0;
-  padding: 0;
-  overflow: auto;
-  border: 0;
-  background: transparent;
-}
-.task-workspace-v2 .ws-focus-collaboration-body .steer {
-  margin: 0;
-  padding: 16px 20px 18px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.task-workspace-v2 .ws-focus-collaboration-body .steer-head > div strong { font-size: var(--fs-15); font-weight: 600; }
-.task-workspace-v2 .ws-focus-collaboration-body .steer + * { border-top: 1px solid var(--line); }
-.task-workspace-v2 .ws-focus-collaboration-body .steer-send {
-  color: var(--ink-fg);
-  border: 1px solid var(--ink);
-  background: var(--ink);
-  font-weight: 500;
-}
-.task-workspace-v2 .ws-focus-collaboration-body .steer-send:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
-.task-workspace-v2 .ws-focus-collaboration-body .collaboration-tabs { background: var(--surface-2); border-color: var(--line); }
 
 /* ── 决定区:左栏里紧跟状态行的一块;卡片是 surface,栏是 canvas ─────
    卡片内容按"标题 → Agent 的话 → 问题与选项 → 提醒 → 会带上的批注 → 提交
    → 依据"排(flex order):上一版按数据结构顺序堆了六七个带小标题的方块,
    用户实锤"左边都是啥"。依据(待推送代码、交付范围)沉到底部灰带,只读。 */
 
-.task-workspace-v2 .ws-decision {
-  min-width: 0;
-  margin-top: 16px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-}
 /* 有决定卡时状态行下面那两行(泛称标题 + "提交决定后 Agent 自动继续")
    是重复的:卡片标题就是标题。 */
-.task-workspace-v2 .ws-side:has(.decision-card) .ws-focus-hero h2,
-.task-workspace-v2 .ws-side:has(.decision-card) .ws-focus-hero > p { display: none; }
-.task-workspace-v2 .ws-side:has(.decision-card) .ws-focus-hero { padding-bottom: 0; }
-.task-workspace-v2 .ws-side:has(.decision-card) .ws-decision { margin-top: 14px; }
+
 /* 非决定态的"任务已失败 / 看原因…"小标题:标题已经在状态行下面说过,只留那句提示。 */
-.task-workspace-v2 .ws-action-heading { padding: 0 0 4px; border: 0; }
-.task-workspace-v2 .ws-action-heading strong { display: none; }
 
-.task-workspace-v2 .ws-decision .decision-card { display: flex; flex-direction: column; }
-.task-workspace-v2 .ws-decision .decision-head { order: 0; padding: 18px 20px 4px; }
-.task-workspace-v2 .ws-decision .decision-kicker { display: none; }
-.task-workspace-v2 .ws-decision .decision-head h3 { font-size: var(--fs-17); line-height: 1.35; letter-spacing: -.01em; }
-.task-workspace-v2 .ws-decision .decision-count { align-self: flex-start; }
 /* Agent 的话:一段正文,不是带"决策背景"标签的灰框。 */
-.task-workspace-v2 .ws-decision .waiting-context {
-  order: 1;
-  max-height: none;
-  padding: 6px 20px 4px;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-}
-.task-workspace-v2 .ws-decision .waiting-context .context-label { display: none; }
-.task-workspace-v2 .ws-decision .waiting-context .md,
-.task-workspace-v2 .ws-decision .waiting-context-body { color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); }
-.task-workspace-v2 .ws-decision .waiting-context .md > :first-child { margin-top: 0; }
-.task-workspace-v2 .ws-decision .waiting-context .md > :last-child { margin-bottom: 0; }
-.task-workspace-v2 .ws-decision .question-list { order: 2; padding: 10px 20px 0; }
-.task-workspace-v2 .ws-decision .question { padding-block: 6px 12px; }
-.task-workspace-v2 .ws-decision .question-text { font-size: var(--fs-15); line-height: 1.5; }
-.task-workspace-v2 .ws-decision .review-decision-guidance,
-.task-workspace-v2 .ws-decision .delivery-decision-guidance { order: 3; margin: 12px 20px 0; }
-.task-workspace-v2 .ws-decision .decision-attachment { order: 4; margin: 12px 20px 0; padding: 0; border: 0; }
-.task-workspace-v2 .ws-decision .annot-attached { margin: 0; padding: 10px 12px; font-size: var(--fs-13); border-color: var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.task-workspace-v2 .ws-decision .annot-attached-list button { font-size: var(--fs-13); }
-.task-workspace-v2 .ws-decision .decision-footer {
-  order: 5;
-  min-height: 0;
-  padding: 16px 20px 18px;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: stretch;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-}
-.task-workspace-v2 .ws-decision .decision-notes > button { padding: 0; font-size: var(--fs-13); }
-.task-workspace-v2 .ws-decision .submit-decision {
-  width: 100%;
-  min-height: var(--control-h-lg);
-  height: auto;
-  padding: 9px 16px;
-  justify-content: center;
-  font-size: var(--fs-14);
-  line-height: 1.3;
-  white-space: normal;
-}
-/* 依据带:待推送代码摘要、交付范围。灰底、小字、只读,在提交按钮之后。 */
-.task-workspace-v2 .ws-decision .push-review-overview,
-.task-workspace-v2 .ws-decision .delivery-scope-card {
-  margin: 0;
-  padding: 14px 20px 16px;
-  display: grid;
-  gap: 8px;
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--surface-2);
-}
-.task-workspace-v2 .ws-decision .push-review-overview { order: 6; }
-.task-workspace-v2 .ws-decision .delivery-scope-card { order: 7; padding-top: 12px; }
-.task-workspace-v2 .ws-decision .push-review-overview + .delivery-scope-card,
-.task-workspace-v2 .ws-decision .delivery-scope-card + .push-review-overview { border-top-color: var(--line); }
-.task-workspace-v2 .ws-decision .push-review-copy { gap: 1px; }
-.task-workspace-v2 .ws-decision .push-review-copy > span { color: var(--faint); font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .push-review-copy > strong { font-size: var(--fs-13); font-weight: 600; }
-.task-workspace-v2 .ws-decision .push-review-copy > p { font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .push-review-facts { gap: 8px 12px; }
-.task-workspace-v2 .ws-decision .push-review-facts > span { font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .push-review-evidence { margin: 0; border-color: var(--line); border-radius: var(--radius-sm); background: var(--surface); }
-.task-workspace-v2 .ws-decision .push-review-evidence > summary { min-height: 32px; padding: 6px 10px; font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .push-review-actions { gap: 6px; }
-.task-workspace-v2 .ws-decision .push-review-actions .current,
-.task-workspace-v2 .ws-decision .push-review-actions button { height: var(--control-h-sm); padding: 0 10px; font-size: var(--fs-12); border-radius: var(--radius-sm); }
-.task-workspace-v2 .ws-decision .delivery-scope-card > header { padding: 0; }
-.task-workspace-v2 .ws-decision .delivery-scope-card > header span { color: var(--faint); font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .delivery-scope-card > header strong { font-size: var(--fs-13); font-weight: 600; }
-.task-workspace-v2 .ws-decision .delivery-scope-card > p,
-.task-workspace-v2 .ws-decision .delivery-scope-result { padding: 0; font-size: var(--fs-12); }
-.task-workspace-v2 .ws-decision .delivery-scope-result strong { font-size: var(--fs-12); font-weight: 500; color: var(--text); }
-.task-workspace-v2 .ws-decision .delivery-scope-result span { color: var(--muted); }
-.task-workspace-v2 .ws-decision .delivery-locate { justify-self: start; }
-.task-workspace-v2 .ws-action-heading {
-  padding: 0 2px 12px;
-  display: grid;
-  gap: 3px;
-  border-bottom: 1px solid var(--line);
-}
-.task-workspace-v2 .ws-action-heading strong { color: var(--text-strong); font-size: var(--fs-15); font-weight: 600; }
-.task-workspace-v2 .ws-action-heading small { color: var(--muted); font-size: var(--fs-13); line-height: 1.5; }
 
-.task-workspace-v2 .ws-decision .decision-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
+/* 依据带:待推送代码摘要、交付范围。灰底、小字、只读,在提交按钮之后。 */
 
 .task-workspace-v2 .read-only-notice { margin: 0; }
-.task-workspace-v2 .ws-idle { padding: 0; border: 0; color: var(--muted); }
-.task-workspace-v2 .ws-idle strong { display: block; margin: 0 0 4px; color: var(--text); font-size: var(--fs-14); font-weight: 500; }
-.task-workspace-v2 .ws-idle p { margin: 0; font-size: var(--fs-13); line-height: 1.6; }
+
 .task-workspace-v2 .ws-verify-focus { display: grid; gap: 8px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .task-workspace-v2 .ws-verify-focus > strong { color: var(--text-strong); font-size: var(--fs-15); }
 .task-workspace-v2 .ws-verify-focus > p { margin: 0; color: var(--muted); font-size: var(--fs-14); line-height: 1.6; }
@@ -1497,8 +1259,8 @@
   }
   .task-workspace-v2 .ws-side { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
   .task-workspace-v2 .ws-side-scroll { overflow: visible; padding: 20px 20px 24px; }
-  .task-workspace-v2 .ws-focus-collaboration { max-height: none; overflow: visible; }
-  .task-workspace-v2 .ws-focus-collaboration-body { overflow: visible; }
+  
+  
   .task-workspace-v2 .ws-evidence { flex: none; min-height: 75vh; overflow: visible; }
   .task-workspace-v2 .ws-pane-head { position: sticky; top: 0; z-index: 5; }
   .task-workspace-v2 .ws-doc,

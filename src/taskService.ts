@@ -39,6 +39,7 @@ import {
   reanchor,
   renderAnnotations,
   type Annotation,
+  type AnnotationOperation,
   type AnchorCheck,
   type AnnotationInput,
   type SentVia,
@@ -222,10 +223,11 @@ import type {
   NotifyQuestion,
   NotifyRecord,
 } from "./notifier.ts";
-import { EventLog } from "./semanticEvents.ts";
+import { EventLog, type SemanticEvent } from "./semanticEvents.ts";
 import {
   buildActivity, readActivityEvents, type ActivityView,
 } from "./activity.ts";
+import { buildConversation, type ConversationView } from "./conversation.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
 import {
@@ -4916,6 +4918,59 @@ export class TaskService {
     const task = this.tasks.get(id)!;
     return buildActivity(readActivityEvents(this.eventLogPath(id)), {
       running: task.summary.status === "running",
+    });
+  }
+
+  /** 会话流(只读投影):事件账、决定账、批注账、反馈索引、开发助手
+   * 往来拼成"谁对谁说了什么、现在轮到谁"。每本账各自降级,读不动的写进
+   * problems——旁路绝不因一本账坏了把整栏拖没。 */
+  conversation(id: string): ConversationView {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const workspace = task.summary.workspace;
+    const problems: string[] = [];
+    const events = readActivityEvents(this.eventLogPath(id));
+    let waiting: WaitingRecord[] = [];
+    try {
+      waiting = task.humanGate.all();
+    } catch (error) {
+      problems.push(`决定账读取失败:${String(error).slice(0, 200)}`);
+    }
+    let annotations: Annotation[] = [];
+    let annotationHistory: AnnotationOperation[] = [];
+    try {
+      const store = this.annotations(task);
+      annotations = store.list();
+      annotationHistory = store.history();
+    } catch (error) {
+      problems.push(`批注账读取失败:${String(error).slice(0, 200)}`);
+    }
+    let feedback: FeedbackRecord[] = [];
+    try {
+      feedback = new FeedbackStore(join(workspace, "feedback", "index.jsonl")).list();
+    } catch (error) {
+      problems.push(`持续检视索引读取失败:${String(error).slice(0, 200)}`);
+    }
+    let interrupts: ReturnType<TaskService["listInterrupts"]> = [];
+    try {
+      interrupts = this.listInterrupts(id);
+    } catch {
+      // listInterrupts 自己已 fail-open;这里只是双保险
+    }
+    let assistant: Array<{
+      id: string; role: "user" | "assistant"; text: string; at: string;
+    }> = [];
+    try {
+      // 只读快照,不走 developerAssistant():那条读法会顺手中断失活会话,
+      // 投影不该有副作用。
+      assistant = developerAssistantConversation(
+        readDeveloperAssistant(workspace), events as SemanticEvent[]);
+    } catch (error) {
+      problems.push(`开发助手往来读取失败:${String(error).slice(0, 200)}`);
+    }
+    return buildConversation({
+      events, waiting, annotations, annotationHistory, feedback, interrupts,
+      assistant, running: task.summary.status === "running", problems,
     });
   }
 
@@ -12786,7 +12841,7 @@ export class TaskService {
           .includes(assistantSnapshot.state)
         || assistantSnapshot.handoff?.state === "running") {
       throw new TaskControlError(
-        "开发接管会话仍占有主现场，请从开发协作面板执行“交还主任务”");
+        "开发接管会话仍占有主现场，请在右栏输入框的「接管现场」档执行“交还主任务”");
     }
     const beforeSummary = JSON.parse(JSON.stringify(task.summary)) as TaskSummary;
     const beforeHandoffPrompt = task.pendingAssistantHandoff;

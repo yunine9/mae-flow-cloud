@@ -54,5 +54,6 @@ test("受邀参与讨论的人能答卡:HTTP、decide 硬闸、前端三层口�
     "参与人卡上的拆单项锁住");
   const workspace = read("web/src/TaskWorkspace.tsx");
   assert.match(workspace, /canCollaborate && !isOwnerOnlyWaiting\(task\)/);
-  assert.match(workspace, /\{waiting && decides && \(/);
+  // 2026-09-05 起决定卡渲在右栏会话流里:能答的人拿到 WaitingCard,不能答的拿到只读说明。
+  assert.match(workspace, /currentCard=\{waiting \? \(decides \? \(/);
 });

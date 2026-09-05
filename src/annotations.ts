@@ -174,6 +174,10 @@ type Operation =
   /** 人在澄清卡上答了 Agent 的追问:追问留档带答复,回执清空等新回执。 */
   | { op: "clarified"; id: string; answer: string; at: string; by?: string };
 
+/** 台账的原始操作(只读暴露给会话流投影:回执/退回/确认各自落账的时刻
+ * 只在操作上,回放后的记录只剩"最终状态")。 */
+export type AnnotationOperation = Operation;
+
 export class AnnotationError extends Error {}
 export class AnnotationPermissionError extends AnnotationError {}
 
@@ -336,6 +340,31 @@ export class AnnotationStore {
       }
     }
     return [...byId.values()];
+  }
+
+  /** 原始操作按落账顺序(坏行跳过)。它是给投影读时刻用的,业务状态一律
+   * 走 list() 的回放结论——两处口径分家就会出现"流里说已确认、面板说还等"。 */
+  history(): AnnotationOperation[] {
+    if (!existsSync(this.path)) return [];
+    let text = "";
+    try {
+      text = readFileSync(this.path, "utf-8");
+    } catch {
+      return [];
+    }
+    const operations: AnnotationOperation[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const operation = JSON.parse(line) as AnnotationOperation;
+        if (operation && typeof operation === "object" && "op" in operation) {
+          operations.push(operation);
+        }
+      } catch {
+        // 半行 JSON 只丢它自己
+      }
+    }
+    return operations;
   }
 
   /** 还没送出去的:决定卡与插话都取这一批。 */
