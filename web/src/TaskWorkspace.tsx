@@ -1679,8 +1679,12 @@ export function TaskWorkspace({
             onSuggest={onExecutionPlanFeedback}
             onClose={() => setPlanPhase("")} />}
         </div>
-        {(controllable || deletable || onOpenFeedbackWall) && (
+        {(controllable || deletable || canRequestReview || onOpenFeedbackWall) && (
           <div className="ws-head-controls" aria-label="任务控制">
+            {canRequestReview && <button type="button" className="workspace-review-invite-button"
+              aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
+              title="选择 Committer 参与代码检视"
+              onClick={() => setReviewInviteOpen(true)}>邀请检视</button>}
             {onOpenFeedbackWall && <QuickWishButton inline onOpenWall={onOpenFeedbackWall} />}
             {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
@@ -1848,10 +1852,6 @@ export function TaskWorkspace({
               <div><h2>批注与检视</h2><p>对照材料查看意见和回应，点击位置即可定位。</p></div>
               <button type="button" aria-label="收起批注与检视" onClick={() => setReviewPanelOpen(false)}>×</button>
             </header>
-            <div className="ws-review-tools">
-              {canRequestReview && <button type="button" className="workspace-review-invite-button"
-                onClick={() => setReviewInviteOpen(true)}>邀请检视</button>}
-            </div>
             {reviewWorkspaceContent}
           </section>
           <div className="ws-material-content">

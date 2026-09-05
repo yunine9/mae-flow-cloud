@@ -40,29 +40,20 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
   assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
 });
 
-test("邀请 Committer 收进批注 Inspector 标题栏，不占用主导航", () => {
-  const navigation = workspace.slice(
-    workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<section className="ws-review-canvas"'),
-  );
-  assert.match(navigation, /ws-review-launch/);
-  assert.doesNotMatch(navigation, /邀请检视/,
-    "低频邀请动作不应和当前、产物、活动争抢一级空间");
+test("邀请检视在任务头独立可见，不依赖打开批注面板", () => {
+  const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
+    workspace.indexOf('{task.feedback_error &&'));
+  assert.match(controls, /canRequestReview && <button/);
+  assert.match(controls, /workspace-review-invite-button/);
+  assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
+  assert.match(controls, /setReviewInviteOpen\(true\)/);
+  assert.doesNotMatch(controls, /reviewPanelOpen/);
+  const panel = workspace.slice(workspace.indexOf('className="ws-review-canvas"'),
+    workspace.indexOf('<div className="ws-material-content"'));
+  assert.doesNotMatch(panel, /workspace-review-invite-button/);
   assert.match(workspace, /className="workspace-invite-dialog" role="dialog"/);
   assert.match(workspace, /<UserPicker ariaLabel="选择 Committer"/);
   assert.match(workspace, /reviewBusy \? "发送中…" : "发送邀请"/);
-  assert.match(workspace,
-    /className="workspace-review-invite-button"[\s\S]*邀请检视/);
-  assert.match(css, /\.workspace-invite-dialog\s*\{[^}]*width:\s*min\(460px, 100%\)/s);
-
-  const reviewDialog = workspace.slice(
-    workspace.indexOf('className="ws-review-canvas"'),
-    workspace.indexOf('<div className="ws-material-content"'),
-  );
-  assert.match(reviewDialog, /workspace-review-invite-button/,
-    "邀请属于检视上下文，应在 Inspector 内一步可达");
-  assert.doesNotMatch(reviewDialog, /<UserPicker|发送邀请/,
-    "选人表单仍应留在独立对话框，避免挤压意见正文");
 });
 
 test("人员下拉保持紧凑并原位展开，不遮住邀请和交付信息", () => {

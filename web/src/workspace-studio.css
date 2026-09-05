@@ -465,4 +465,3 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio .ws-review-canvas .ws-view-intro h2 { font-size: 16px; }
 .workspace-studio .ws-review-canvas .ws-view-intro p { font-size: 12px; }
 .workspace-studio .ws-review-canvas .ws-view-intro > button { flex: none; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); cursor: pointer; }
-.workspace-studio .ws-review-tools { display: flex; justify-content: flex-end; margin-bottom: 12px; }
