@@ -1,0 +1,50 @@
+/* Progress is a narrative; task resources stay accessible from every view. */
+.workspace-studio.task-workspace-v2 .ws-execution-view { padding: 32px 40px 60px; background: var(--surface); }
+.task-journey { max-width: 920px; margin: 0 auto; color: var(--text); }
+.journey-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 28px; }
+.journey-heading h2 { margin: 0 0 8px; font-size: 23px; letter-spacing: -.4px; }
+.journey-heading p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.journey-tools { display: flex; gap: 8px; flex-shrink: 0; }
+.task-journey button { border: 1px solid var(--line); padding: 7px 11px; border-radius: 7px; background: var(--surface); color: var(--accent); cursor: pointer; font: inherit; font-size: 12px; }
+.task-journey button:hover { background: var(--surface-2); border-color: var(--accent); }
+.journey-history-heading { display: flex; align-items: center; gap: 12px; margin: 0 0 22px; }
+.journey-history-heading h3 { font-size: 14px; margin: 0; }
+.journey-history-heading span { color: var(--faint); font-size: 11px; }
+.journey-events { margin: 0 0 0 5px; padding: 0; list-style: none; }
+.journey-events > li { position: relative; border-left: 1px solid var(--line); padding: 0 0 26px 26px; }
+.journey-events > li:last-child { border-left-color: transparent; }
+.journey-events > li::before { content: ""; position: absolute; left: -4px; top: 5px; width: 7px; height: 7px; background: var(--line-strong); border-radius: 50%; box-shadow: 0 0 0 4px var(--surface); }
+.journey-events > li.danger::before { background: var(--danger); }
+.journey-events > li.success::before { background: var(--success, #26856a); }
+.journey-events > li.attention::before { background: var(--amber, #ad7b26); }
+.journey-event-meta { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--muted); }
+.journey-event-meta span { color: var(--accent); }
+.journey-events h4 { margin: 8px 0; font-size: 14px; font-weight: 600; line-height: 1.6; }
+.journey-events p { margin: 0; font-size: 13px; line-height: 1.8; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.journey-events summary { cursor: pointer; font-size: 13px; line-height: 1.8; color: var(--muted); overflow-wrap: anywhere; }
+.journey-empty { color: var(--muted); font-size: 13px; padding: 20px 0; line-height: 1.7; }
+.journey-empty strong { font-weight: 500; color: var(--text); }
+.journey-warning { border-left: 2px solid var(--danger); padding: 8px 12px; font-size: 13px; }
+.task-inspector { width: min(1040px, 90vw); max-width: none; max-height: 84vh; padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 24px 90px #17113144; }
+.task-inspector-backdrop { position: fixed; inset: 0; z-index: 350; display: flex; align-items: center; justify-content: center; background: #17132d55; backdrop-filter: blur(3px); }
+.task-inspector > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--line); }
+.task-inspector > header small { color: var(--muted); font: 11px var(--font-mono); }
+.task-inspector h2 { margin: 5px 0 0; font-size: 18px; }
+.task-inspector > header button { width: 30px; height: 30px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 20px; cursor: pointer; }
+.task-inspector-body { padding: 24px; max-height: calc(84vh - 95px); overflow: auto; }
+.task-inspector .execution-panel > .utility-toggle, .task-inspector.inspector-timing .utility-toggle { display: none; }
+.task-inspector .execution-panel { border: 0; padding: 0; margin: 0; }
+.task-inspector .execution-body { display: flex; flex-direction: column; min-height: 420px; }
+.inspector-note { margin: 0 0 20px; color: var(--muted); line-height: 1.7; font-size: 13px; }
+@media (max-width: 1440px) { .workspace-studio.task-workspace-v2 .ws-execution-view { padding: 26px; } .journey-heading { flex-wrap: wrap; gap: 14px; } }
+.workspace-studio.task-workspace-v2 .ws-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 10px; }
+.workspace-studio.task-workspace-v2 .ws-identity-line { grid-column: 1 / -1; margin-top: 0; flex-wrap: wrap; gap: 7px; }
+.workspace-studio.task-workspace-v2 .ws-parent-task { grid-column: 1 / -1; }
+.task-inspector.inspector-timing .cost-focus { display: none; }
+.journey-live-state { display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 13px 0; margin: 0 0 28px; color: var(--accent); font-size: 12px; }
+.journey-live-state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.journey-live-state strong { font-weight: 500; }
+.journey-live-state span { color: var(--muted); margin-left: auto; }
+.journey-live-state.attention { color: var(--amber, #ad7b26); }
+.journey-live-state.danger { color: var(--danger); }
+.workspace-studio .ws-knowledge-view { flex: 1; min-height: 0; overflow: auto; padding: 28px; }

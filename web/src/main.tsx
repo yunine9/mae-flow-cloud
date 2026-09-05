@@ -10,6 +10,7 @@ import "./help.css";
 // 几路改动同时往文件尾追加会互相踩(实测撞过一次)。样式在这里引,
 // 不在组件里引——组件要能被 node 测试直接 import,而 node 加载不了 .css。
 import "./rootError.css";
+import "./task-journey.css";
 
 // 主题:URL 仅用于截图/核查;日常选择持久化。第一次访问才跟随系统，
 // 之后由用户明确选择，避免刷新时在明暗之间闪烁。

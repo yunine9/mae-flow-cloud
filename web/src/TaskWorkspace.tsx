@@ -12,7 +12,7 @@
 
 import {
   useEffect, useRef, useState,
-  type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { Markdown } from "./markdown";
@@ -24,12 +24,12 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
-import { TokenUsage } from "./TokenUsage";
-import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { StagePlanDialog } from "./StagePlanDialog";
-import { WorkflowProfileCard } from "./WorkflowProfileCard";
 import { CrossRepositorySync } from "./CrossRepositorySync";
-import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
+import { WarmupBadge } from "./WarmupPanel";
+import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { TaskJourney } from "./TaskJourney";
+import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -74,18 +74,16 @@ import {
   type TaskSummary,
 } from "./api";
 import {
-  ExecutionPanel,
   isChainReviewWaiting,
   isOwnerOnlyWaiting,
   reworkChoiceOf,
   RetryButton,
   TaskProgress,
-  TaskTimeline,
   WaitBadge,
   WaitingCard,
 } from "./TaskCard";
 
-type WorkspaceView = "focus" | "materials" | "execution";
+type WorkspaceView = "focus" | "materials" | "execution" | "knowledge";
 type MaterialView = "source" | "doc" | "chain" | "diff";
 
 const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
@@ -673,6 +671,7 @@ export function TaskWorkspace({
   const [materialSearchIndex, setMaterialSearchIndex] = useState(-1);
   const [documentsDownloading, setDocumentsDownloading] = useState(false);
   const [documentsDownloadError, setDocumentsDownloadError] = useState("");
+  const [taskInspector, setTaskInspector] = useState<TaskInspectorKind>();
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewRevealRequest, setReviewRevealRequest] = useState(0);
   const [reviewFocus, setReviewFocus] = useState<{
@@ -723,24 +722,11 @@ export function TaskWorkspace({
 
   // 工作区内切换材料、检视和运行记录；右栏只承接决定与回复。
   function openMaterial(view: MaterialView) {
-    if (workspaceView === "execution") selectWorkspaceView("materials");
+    if (workspaceView === "execution" || workspaceView === "knowledge") selectWorkspaceView("materials");
     setMaterialView(view);
   }
   function materialTabOn(view: MaterialView): boolean {
-    return workspaceView !== "execution" && materialView === view;
-  }
-
-  // 活动面板的题头代替组件自己的折叠头:两层头摞在一起是用户实锤的
-  // "点进去里面还能切换"。组件的按钮仍在 DOM 里(display:none),题头替它点。
-  function toggleActivitySection(event: ReactMouseEvent<HTMLElement>) {
-    event.currentTarget.parentElement
-      ?.querySelector<HTMLButtonElement>(".utility-toggle")?.click();
-  }
-  function toggleActivitySectionByKey(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    event.currentTarget.parentElement
-      ?.querySelector<HTMLButtonElement>(".utility-toggle")?.click();
+    return (workspaceView === "focus" || workspaceView === "materials") && materialView === view;
   }
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -777,6 +763,7 @@ export function TaskWorkspace({
     setDocumentsDownloading(false);
     setDocumentsDownloadError("");
     setReviewPanelOpen(false);
+    setTaskInspector(undefined);
     setReviewFocus(undefined);
     repositoryAssigneeSaveTask.current = task.id;
     setRepositoryAssigneeSave("idle");
@@ -959,6 +946,10 @@ export function TaskWorkspace({
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (taskInspector) {
+        if (!document.querySelector(".warmup-overlay")) setTaskInspector(undefined);
+        return;
+      }
       if (materialSearchOpen) {
         setMaterialSearchOpen(false);
         setMaterialSearchQuery("");
@@ -974,7 +965,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialSearchOpen, materialsFullscreen, reviewInviteOpen,
+  }, [taskInspector, materialSearchOpen, materialsFullscreen, reviewInviteOpen,
     reviewPanelOpen, onClose]);
 
   // ⌥/Alt+R 在任何布局下切换批注 Inspector:按 code 不按
@@ -1464,14 +1455,7 @@ export function TaskWorkspace({
         detail: task.detail
           || "系统正在结束当前操作并保存现场；完成后会自动变为“已暂停”，无需重复点击。",
       }
-    : task.status === "paused"
-      ? {
-          state: "done",
-          title: "已安全暂停",
-          detail: task.detail
-            || "现场和进度已经保留，需要继续时点击右上角“恢复”。",
-        }
-      : controlBusy === "pause"
+    : controlBusy === "pause"
         ? {
             state: "pending",
             title: "暂停请求已提交",
@@ -1738,29 +1722,14 @@ export function TaskWorkspace({
         )}
       </header>
 
+      {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)} />}
+
       {task.feedback_error && (
         <section className="feedback-panel feedback-panel-error" role="alert">
           <h3>持续检视明细暂不可用</h3>
           <p>{task.feedback_error}</p>
         </section>
       )}
-      {(pauseFeedback || controlError) && (
-        <div className="task-control-feedback" aria-live="polite">
-          {pauseFeedback && (
-            <div className={`task-control-state ${pauseFeedback.state}`}
-              role="status">
-              <i aria-hidden />
-              <span><strong>{pauseFeedback.title}</strong>
-                <small>{pauseFeedback.detail}</small></span>
-            </div>
-          )}
-          {controlError && <div className="task-control-error" role="alert">
-            <strong>操作没有完成</strong>
-            <span>{controlError}</span>
-          </div>}
-        </div>
-      )}
-
       {/* 主区两栏(参照 Devin / Codex / Jules 的会话页):左边是"对话与决定"
           ——状态、决定卡、给 Agent 的输入框;右边是"工作区"——需求、文档、
           代码、活动的页签阅读器,批注检查器停靠在它右缘。上两版的左导航、
@@ -1808,12 +1777,16 @@ export function TaskWorkspace({
                 <span>工作区变更</span><i>{changeFileCount}{untrackedDirectoryCount
                   ? ` + ${untrackedDirectoryCount}目录` : ""}</i>
               </button>
+              <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
+                aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
+                <span>知识</span><i>{task.knowledge_usage?.resources.length ?? 0}</i>
+              </button>
               <button type="button" role="tab" className={`ws-activity-tab${
                   workspaceView === "execution" ? " on" : ""}`}
                 aria-selected={workspaceView === "execution"}
-                title={`运行记录：阶段进展、原始事件、任务上下文与模型用量（${viewShortcutHint("execution")}）`}
+                title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}
                 onClick={() => selectWorkspaceView("execution")}>
-                <span>运行记录</span><i>进度 · 日志 · 用量</i>
+                <span>工作过程</span>
               </button>
               {canCreateAnnotation && workspaceView !== "execution" && <span className="ws-annotate-hint">
                 选中文字或悬停段落即可批注
@@ -1836,7 +1809,7 @@ export function TaskWorkspace({
                 <span className="ws-review-label">批注与检视</span>
                 <em>{reviewCounts.mine || reviewRecordCount}</em>
               </button>
-              {materialView !== "chain" && workspaceView !== "execution" && <button type="button"
+              {materialView !== "chain" && workspaceView !== "execution" && workspaceView !== "knowledge" && <button type="button"
                 className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
                 aria-expanded={materialSearchOpen}
                 title="只搜索当前打开的这份内容"
@@ -1855,85 +1828,16 @@ export function TaskWorkspace({
             {reviewWorkspaceContent}
           </section>
           <div className="ws-material-content">
-          {workspaceView === "execution" ? (
+          {workspaceView === "knowledge" ? (
+            <div className="ws-primary-scroll ws-knowledge-view">
+              <KnowledgeFootprint usage={task.knowledge_usage} utMethod={task.ut_generation_method}
+                taskId={task.id} taskStatus={task.status} />
+            </div>
+          ) : workspaceView === "execution" ? (
             <div className="ws-primary-scroll ws-execution-view">
-              <header className="ws-view-intro"><div><h2>运行记录</h2>
-                <p>先看任务走到哪一步、卡在哪里；需要排查时，再展开日志、用量和环境信息。</p></div></header>
-              <h3 className="ws-records-group">进展与卡点</h3>
-              {(task.execution_plan_alerts ?? []).length > 0 && (
-                <section className="ws-alert ws-plan-alert" role="alert">
-                  <strong>执行方案与定格不一致</strong>
-                  {task.execution_plan_alerts!.map((line, index) => (
-                    <p key={index}>{line.replace(/^⚠\s*/, "")}</p>
-                  ))}
-                </section>
-              )}
-              <section className="ws-activity-section" id="ws-activity-progress">
-                <header role="button" tabIndex={0} onClick={toggleActivitySection}
-                  onKeyDown={toggleActivitySectionByKey}>
-                  <div><strong>阶段进展</strong><span>{task.focus?.headline
-                    ?? visibleProgress.current_phase}</span></div>
-                  <small>耗时与卡点 · 点阶段名看执行方案</small>
-                  <i aria-hidden />
-                </header>
-                <TaskTimeline taskId={task.id} defaultOpen />
-              </section>
-
-              <h3 className="ws-records-group">排查与资源</h3>
-              <p className="ws-records-hint">查 Agent 做了什么、用了哪些知识、花了多少 Token，以及运行环境是否正常。</p>
-              <section className="ws-activity-section raw-events" id="ws-activity-events">
-                <header role="button" tabIndex={0} onClick={toggleActivitySection}
-                  onKeyDown={toggleActivitySectionByKey}>
-                  <div><strong>执行日志</strong><span>Agent 说了什么、调用了哪些工具</span></div>
-                  <small>审计时再展开</small>
-                  <i aria-hidden />
-                </header>
-                <ExecutionPanel task={task} />
-              </section>
-
-              <details className="ws-activity-disclosure" id="ws-activity-context">
-                <summary>
-                  <span><strong>知识与上下文</strong>
-                    <small>{task.knowledge_usage?.summary.used ?? 0} 项已使用 · {
-                      task.knowledge_usage?.resources.length ?? 0} 项可用{
-                      task.memories_recorded ? ` · 记下 ${task.memories_recorded} 条` : ""}</small></span>
-                  <i aria-hidden />
-                </summary>
-                <div>
-                <KnowledgeFootprint usage={task.knowledge_usage}
-                  utMethod={task.ut_generation_method}
-                  taskId={task.id} taskStatus={task.status} />
-                </div>
-              </details>
-
-              <details className="ws-activity-disclosure" id="ws-activity-usage">
-                <summary>
-                  <span><strong>模型用量</strong><small>{task.token_usage
-                    ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
-                    : "提供方暂未返回用量"}</small></span>
-                  <i aria-hidden />
-                </summary>
-                <div>
-                {task.token_usage ? <TokenUsage usage={task.token_usage}
-                  placement="detail" /> : <div className="ws-insight-empty">
-                  模型提供方暂未返回 Token 用量。
-                </div>}
-                </div>
-              </details>
-
-              <details className="ws-activity-disclosure" id="ws-activity-env">
-                <summary>
-                  <span><strong>运行环境与执行配置</strong>
-                    <small>预热结果、工作流和低频技术信息</small></span>
-                  <i aria-hidden />
-                </summary>
-                <div>
-                  <WarmupPanel task={task} />
-                  {task.workflow_profile && <WorkflowProfileCard
-                    profile={task.workflow_profile}
-                    warning={task.workflow_profile_warning} />}
-                </div>
-              </details>
+              <TaskJourney task={task} onLogs={() => setTaskInspector("logs")}
+                onTiming={() => setTaskInspector("timing")}
+                />
             </div>
           ) : <>
           {materialSearchOpen && materialView !== "chain" && (
@@ -2300,6 +2204,23 @@ export function TaskWorkspace({
               </>}
             </section>
 
+      {(pauseFeedback || controlError) && (
+        <div className="task-control-feedback" aria-live="polite">
+          {pauseFeedback && (
+            <div className={`task-control-state ${pauseFeedback.state}`}
+              role="status">
+              <i aria-hidden />
+              <span><strong>{pauseFeedback.title}</strong>
+                <small>{pauseFeedback.detail}</small></span>
+            </div>
+          )}
+          {controlError && <div className="task-control-error" role="alert">
+            <strong>操作没有完成</strong>
+            <span>{controlError}</span>
+          </div>}
+        </div>
+      )}
+
             {(task.execution_plan_alerts ?? []).length > 0 && (
               <section className="ws-focus-alert" role="alert">
                 <strong>执行方案与当前现场不一致</strong>
@@ -2309,6 +2230,10 @@ export function TaskWorkspace({
               </section>
             )}
 
+            {task.baseline_build?.status === "failed" && <div className="alert" role="status">
+              <strong>环境预热失败</strong><span>基线编译未通过，查看环境或上游问题。</span>
+              <button type="button" onClick={() => setTaskInspector("environment")}>查看预热失败原因</button>
+            </div>}
             {task.delivery?.skipped && <div className="alert" role="alert">
               <strong>交付已阻止</strong><span>{task.delivery.skipped}</span>
             </div>}
@@ -2330,6 +2255,8 @@ export function TaskWorkspace({
               <summary>任务详情与交付 <small>合入请求 · 流水线 · 现场信息</small></summary>
               <div>
                 <p>负责人：{task.luban_account ?? "未指定"}</p>
+                <button type="button" onClick={() => setTaskInspector("usage")}>查看模型用量{task.token_usage ? ` · ${task.token_usage.total_tokens.toLocaleString()} Token` : ""}</button>
+                <button type="button" onClick={() => setTaskInspector("environment")}>查看执行配置与预热记录</button>
                 {task.progress?.step && <p>当前步骤：{task.progress.step}</p>}
                 {task.progress?.milestone && <p>子任务里程碑：{task.progress.milestone.title} · {task.progress.milestone.event}
                   {task.progress.milestone.reason && ` · ${task.progress.milestone.reason}`}</p>}
@@ -2340,7 +2267,7 @@ export function TaskWorkspace({
                 {task.workspace_reclaimed_at && <p>任务现场已于 {task.workspace_reclaimed_at} 回收。
                   过程记录、交付账本、流水线证据与批注仍保留，代码差异不再可看。</p>}
                 <button type="button" onClick={() => selectWorkspaceView("execution")}>
-                  查看运行记录、模型用量与环境配置</button>
+                  查看工作过程</button>
               </div>
             </details>
 

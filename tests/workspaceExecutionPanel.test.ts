@@ -12,17 +12,14 @@ const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 const crossRepositorySync = readFileSync(
   resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
 
-test("活动先给人的阶段摘要，原始事件保留但默认按需展开", () => {
-  const activity = workspace.slice(
-    workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">'),
-    workspace.indexOf('</>}\n        </section>',
-      workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">')),
-  );
-  assert.match(activity, /<TaskTimeline taskId=\{task\.id\} defaultOpen \/>/);
-  assert.match(activity, /<strong>执行日志<\/strong>/);
-  assert.match(activity, /<ExecutionPanel task=\{task\} \/>/);
-  assert.doesNotMatch(activity, /<ExecutionPanel task=\{task\} defaultOpen \/>/,
-    "Agent 原文和工具调用是审计材料，不应压过阶段进展");
+test("任务进展只展示过程，日志在用户主动打开时加载", () => {
+  const activity = workspace.slice(workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">'),
+    workspace.indexOf('          ) : <>', workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">')));
+  assert.match(activity, /<TaskJourney task=\{task\}/);
+  assert.doesNotMatch(activity, /<ExecutionPanel|<TaskTimeline|<TokenUsage|<KnowledgeFootprint|<WarmupPanel/);
+  assert.match(workspace, /taskInspector && <TaskInspector/);
+  const inspector = readFileSync(resolve("web/src/TaskInspector.tsx"), "utf8");
+  assert.match(inspector, /kind === "logs" && <ExecutionPanel task=\{task\} defaultOpen/);
 });
 
 test("批注检视停靠工作区，材料保持可见，决定栏不承载意见", () => {
@@ -38,25 +35,14 @@ test("批注检视停靠工作区，材料保持可见，决定栏不承载意�
   assert.doesNotMatch(workspace, /className="ws-material-content" hidden/);
 });
 
-test("Token 用量保留在活动视图的低频披露中，不混入批注检视", () => {
-  assert.doesNotMatch(workspace, /type ExecutionView/,
-    "活动视图不应再嵌套一层页签导航");
-  assert.match(workspace, /<strong>模型用量<\/strong>/);
-  assert.match(workspace, /<TokenUsage usage=\{task\.token_usage\}/);
-
-  const reviewContent = workspace.slice(
-    workspace.indexOf("const reviewWorkspaceContent"),
-    workspace.indexOf("return (", workspace.indexOf("const reviewWorkspaceContent")),
-  );
-  assert.doesNotMatch(reviewContent, /<TokenUsage|<TaskTimeline/,
-    "检视弹层只应承载意见和检视动作");
-
-  const rawEvents = workspace.slice(
-    workspace.indexOf('className="ws-activity-section raw-events"'),
-    workspace.indexOf('className="ws-activity-disclosure"'),
-  );
-  assert.doesNotMatch(rawEvents, /<TokenUsage/,
-    "原始事件区不应继续重复显示 Token 卡");
+test("低频资料集中在任务详情，暂停成功不重复占据通栏", () => {
+  const facts = workspace.slice(workspace.indexOf('<details className="ws-task-facts"'), workspace.indexOf('{actionRailVisible &&'));
+  for (const kind of ["usage", "environment"]) assert.ok(facts.includes(`setTaskInspector("${kind}")`));
+  assert.match(workspace, /selectWorkspaceView\("knowledge"\)/);
+  assert.match(workspace, /className="ws-primary-scroll ws-knowledge-view"/);
+  assert.doesNotMatch(workspace, /ws-task-resources|已安全暂停/);
+  const body = workspace.indexOf('<div className="ws-body"');
+  assert.ok(workspace.indexOf('className="task-control-feedback"') > body);
 });
 
 test("开发协作只在当前上下文按需展开，低频跨仓同步仍置底", () => {
