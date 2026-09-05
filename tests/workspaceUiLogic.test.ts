@@ -28,6 +28,7 @@ const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
 const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
 const gitDiff = await vite.ssrLoadModule("/src/GitDiff.tsx");
 const warmup = await vite.ssrLoadModule("/src/WarmupPanel.tsx");
+const repositoryPicker = await vite.ssrLoadModule("/src/RepositoryAssigneePicker.tsx");
 
 // 闭环判定已经收敛到服务端唯一处;页面只渲染结论。测试因此也走同一条
 // 路:用 feedbackPolicy 算好 closures 再喂给面板——两半对不上就红。
@@ -77,6 +78,31 @@ function task(id: string, status = "running", owner = "alice") {
     luban_account: owner,
   };
 }
+
+test("单仓单元的 AR 已有值、清空、输入首字符后始终可编辑", () => {
+  for (const ticket of ["REQ-UI-301", "", "R", "REQ-NEW-302"]) {
+    const html = renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
+      taskId: "editable-ar", repositories: [{ id: "a", name: "前端", url: "https://example.test/ui.git", ticket: "REQ-UI-301" }],
+      selection: { assignments: { a: "alice" }, tickets: { a: ticket }, ready: true, loading: false }, onSelectionChange() {},
+    }));
+    assert.match(html, /<input[^>]*aria-label="前端的 AR 单号"/);
+    assert.ok(html.includes(`value="${ticket}"`));
+    assert.doesNotMatch(html, /repository-ticket-readonly|readonly=/i);
+    if (!ticket) assert.match(html, /缺少 AR 单号/);
+  }
+});
+
+test("AR 保持可编辑时仍校验同仓同执行人的重复单号和空白", () => {
+  const render = (tickets: Record<string, string>) => renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
+    taskId: "duplicate-ar", repositories: [
+      { id: "a", name: "模块一", url: "https://example.test/ui.git" },
+      { id: "b", name: "模块二", url: "https://example.test/ui.git" },
+    ], selection: { assignments: { a: "alice", b: "alice" }, tickets, ready: false, loading: false }, onSelectionChange() {},
+  }));
+  assert.match(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号与「模块二」重复/);
+  assert.match(render({ a: "REQ BAD", b: "REQ-OK" }), /AR 单号无效/);
+  assert.doesNotMatch(render({ a: "REQ-ONE", b: "REQ-TWO" }), /单号.*重复|AR 单号无效|缺少 AR 单号/);
+});
 
 test("基线编译准备常驻显示，缺记录及已回收不声称就绪", () => {
   const render = (extra = {}) => renderToStaticMarkup(React.createElement(warmup.WarmupBadge, {

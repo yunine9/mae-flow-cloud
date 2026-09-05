@@ -9,6 +9,18 @@ const workspace = readFileSync(
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
+test("内容页签与阅读检视工具是独立区域，检视仍随时可开关", () => {
+  const tabsStart = workspace.indexOf('className="ws-source-switch" role="tablist"');
+  const toolsStart = workspace.indexOf('className="ws-material-tools"');
+  assert.ok(tabsStart > 0 && toolsStart > tabsStart);
+  const tabs = workspace.slice(tabsStart, toolsStart);
+  assert.doesNotMatch(tabs, /ws-review-launch|materials-fullscreen-toggle|material-search-toggle/);
+  const tools = workspace.slice(toolsStart, workspace.indexOf('<div className="ws-material-stage"'));
+  assert.match(tools, /aria-label="批注与检视" aria-expanded=\{reviewPanelOpen\}/);
+  assert.match(tools, /setReviewPanelOpen\(\(open\) => !open\)/);
+  assert.match(tools, /materials-fullscreen-toggle/);
+});
+
 test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
   const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
   assert.match(workspace, /className="ws-review-canvas"/);

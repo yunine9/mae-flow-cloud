@@ -698,23 +698,27 @@ export function TaskWorkspace({
   // 切走工作台不会取消这条队列，最后一次输入仍会写回服务端。
   const repositoryAssigneeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const repositoryAssigneeSaveTask = useRef(task.id);
+  const repositoryAssigneeSaveRevision = useRef(0);
 
   function changeRepositoryAssignees(next: RepositoryAssigneeSelection) {
     const clean = next.error ? next : { ...next, error: undefined };
     setRepositoryAssignees(clean);
     if (next.loading) return;
     const taskId = task.id;
+    const revision = ++repositoryAssigneeSaveRevision.current;
     setRepositoryAssigneeSave("saving");
     repositoryAssigneeSaveQueue.current = repositoryAssigneeSaveQueue.current
       .catch(() => undefined)
       .then(async () => {
         await putRepositoryAssignees(taskId, clean.assignments, clean.tickets);
-        if (repositoryAssigneeSaveTask.current === taskId) {
+        if (repositoryAssigneeSaveTask.current === taskId
+          && repositoryAssigneeSaveRevision.current === revision) {
           setRepositoryAssigneeSave("saved");
         }
       })
       .catch((cause) => {
-        if (repositoryAssigneeSaveTask.current !== taskId) return;
+        if (repositoryAssigneeSaveTask.current !== taskId
+          || repositoryAssigneeSaveRevision.current !== revision) return;
         const message = cause instanceof Error ? cause.message : "分工草稿保存失败";
         setRepositoryAssigneeSave("error");
         setRepositoryAssignees((current) => ({ ...current, error: message }));
@@ -1750,81 +1754,85 @@ export function TaskWorkspace({
             <div>
               <strong>{materialHeading.title}</strong>
             </div>
-            <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
-              {task.parent_task_id ? <>
-                <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                  onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
-                  <span>当前任务书</span><i>主</i>
+            <div className="ws-material-toolbar">
+              <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
+                {task.parent_task_id ? <>
+                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
+                    onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
+                    <span>当前任务书</span>
+                  </button>
+                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
+                    onClick={() => openMaterial("source")}>
+                    <span>原始需求</span>
+                  </button>
+                </> : <>
+                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
+                    onClick={() => openMaterial("source")}>
+                    <span>需求原文</span>
+                  </button>
+                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
+                    onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
+                    <span>过程文档</span><i>{documents.length}</i>
+                  </button>
+                </>}
+                {hasRequirementGraph && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
+                  onClick={() => openMaterial("chain")}>
+                  <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
+                    || task.requirement_graph!.stage === "confirmed"
+                    ? task.requirement_graph!.repositories.length : "…"}</i>
+                </button>}
+                <button type="button" role="tab" aria-selected={materialTabOn("diff")}
+                  className={materialTabOn("diff") ? "on" : ""}
+                  title={untrackedDirectoryCount
+                    ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
+                    : `${changeFileCount} 个文件`}
+                  onClick={() => { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }}
+                  disabled={!changeFileCount && !untrackedDirectoryCount}>
+                  <span>工作区变更</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
+                    ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
                 </button>
-                <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                  onClick={() => openMaterial("source")}>
-                  <span>原始需求</span><i>参考</i>
+                <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
+                  aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
+                  <span>知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
                 </button>
-              </> : <>
-                <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                  onClick={() => openMaterial("source")}>
-                  <span>需求原文</span><i>原始</i>
+                <button type="button" role="tab" className={`ws-activity-tab${
+                    workspaceView === "execution" ? " on" : ""}`}
+                  aria-selected={workspaceView === "execution"}
+                  title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}
+                  onClick={() => selectWorkspaceView("execution")}>
+                  <span>工作过程</span>
                 </button>
-                <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                  onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                  <span>过程文档</span><i>{documents.length}</i>
+              </div>
+              <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
+                <button type="button"
+                  className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
+                  aria-label="批注与检视" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
+                  title={`查看意见、Agent 回应并复检（${REVIEW_SHORTCUT}）`}
+                  onClick={() => {
+                    setReviewPanelOpen((open) => !open);
+                    setReviewRevealRequest((request) => request + 1);
+                  }}>
+                  <svg viewBox="0 0 20 20" aria-hidden><path d="M4 3.5h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-5 3v-3H3v-9a1 1 0 0 1 1-1Z" /><path d="M6.5 7h7M6.5 10h4" /></svg>
+                  <span className="ws-review-label">批注与检视</span>
+                  {Boolean(reviewCounts.mine || reviewRecordCount) && <em>{reviewCounts.mine || reviewRecordCount}</em>}
                 </button>
-              </>}
-              {hasRequirementGraph && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
-                onClick={() => openMaterial("chain")}>
-                <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
-                  || task.requirement_graph!.stage === "confirmed"
-                  ? task.requirement_graph!.repositories.length : "…"}</i>
-              </button>}
-              <button type="button" role="tab" aria-selected={materialTabOn("diff")}
-                className={materialTabOn("diff") ? "on" : ""}
-                title={untrackedDirectoryCount
-                  ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
-                  : `${changeFileCount} 个文件`}
-                onClick={() => { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }}
-                disabled={!changeFileCount && !untrackedDirectoryCount}>
-                <span>工作区变更</span><i>{changeFileCount}{untrackedDirectoryCount
-                  ? ` + ${untrackedDirectoryCount}目录` : ""}</i>
-              </button>
-              <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
-                aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
-                <span>知识</span><i>{task.knowledge_usage?.resources.length ?? 0}</i>
-              </button>
-              <button type="button" role="tab" className={`ws-activity-tab${
-                  workspaceView === "execution" ? " on" : ""}`}
-                aria-selected={workspaceView === "execution"}
-                title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}
-                onClick={() => selectWorkspaceView("execution")}>
-                <span>工作过程</span>
-              </button>
-              {canCreateAnnotation && workspaceView !== "execution" && <span className="ws-annotate-hint">
-                选中文字或悬停段落即可批注
-              </span>}
-              {workspaceView !== "execution" && <button type="button" className="materials-fullscreen-toggle"
-                aria-pressed={materialsFullscreen}
-                title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
-                onClick={() => setMaterialsFullscreen((current) => !current)}>
-                <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
-                {materialsFullscreen ? "退出全屏" : "全屏查看"}
-              </button>}
-              <button type="button"
-                className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
-                aria-label="批注与检视" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
-                title={`查看意见、Agent 回应并复检（${REVIEW_SHORTCUT}）`}
-                onClick={() => {
-                  setReviewPanelOpen((open) => !open);
-                  setReviewRevealRequest((request) => request + 1);
-                }}>
-                <span className="ws-review-label">批注与检视</span>
-                <em>{reviewCounts.mine || reviewRecordCount}</em>
-              </button>
-              {materialView !== "chain" && workspaceView !== "execution" && workspaceView !== "knowledge" && <button type="button"
-                className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
-                aria-expanded={materialSearchOpen}
-                title="只搜索当前打开的这份内容"
-                onClick={toggleMaterialSearch}>
-                <span aria-hidden>⌕</span>搜索
-              </button>}
+                {workspaceView !== "execution" && <button type="button" className="materials-fullscreen-toggle"
+                  aria-pressed={materialsFullscreen}
+                  title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
+                  onClick={() => setMaterialsFullscreen((current) => !current)}>
+                  <svg viewBox="0 0 20 20" aria-hidden>{materialsFullscreen
+                    ? <path d="M7 3v4H3M13 3v4h4M7 17v-4H3M13 17v-4h4" />
+                    : <path d="M7 3H3v4M13 3h4v4M3 13v4h4M17 13v4h-4" />}</svg>
+                  <span>{materialsFullscreen ? "退出全屏" : "全屏查看"}</span>
+                </button>}
+                {materialView !== "chain" && workspaceView !== "execution" && workspaceView !== "knowledge" && <button type="button"
+                  className={`material-search-toggle${materialSearchOpen ? " on" : ""}`}
+                  aria-expanded={materialSearchOpen}
+                  title="只搜索当前打开的这份内容"
+                  onClick={toggleMaterialSearch}>
+                  <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="5" /><path d="m12.5 12.5 4 4" /></svg><span>搜索</span>
+                </button>}
+              </div>
             </div>
           </div>
           <div className="ws-material-stage">

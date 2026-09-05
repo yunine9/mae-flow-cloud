@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   listCollaborationAssignees,
   type CollaborationAssignee,
@@ -39,6 +39,8 @@ export function RepositoryAssigneePicker({
   saveState?: "idle" | "saving" | "saved" | "error";
 }) {
   const [people, setPeople] = useState<CollaborationAssignee[]>([]);
+  const draftKey = JSON.stringify([taskId, repositories.map((item) => [item.id, item.url])]);
+  const edits = useRef({ key: draftKey, assignments: {} as Record<string, string>, tickets: {} as Record<string, string> });
   const assignmentKey = repositories.map((item) =>
     `${item.id}:${item.assignee ?? ""}:${item.ticket ?? ""}`).join("\0");
   const initialAssignments = useMemo(() => Object.fromEntries(
@@ -90,30 +92,37 @@ export function RepositoryAssigneePicker({
 
   useEffect(() => {
     let alive = true;
-    onSelectionChange({ assignments: initialAssignments, tickets: initialTickets,
+    if (edits.current.key !== draftKey) edits.current = { key: draftKey, assignments: {}, tickets: {} };
+    // Polling can echo an earlier autosave while typing. Keep local edits, including
+    // an intentionally empty field, and also merge edits made while people load.
+    const currentDraft = () => ({
+      assignments: { ...initialAssignments, ...edits.current.assignments },
+      tickets: { ...initialTickets, ...edits.current.tickets },
+    });
+    onSelectionChange({ ...currentDraft(),
       ready: false, loading: true });
     void listCollaborationAssignees().then((candidates) => {
       if (!alive) return;
       setPeople(candidates);
       const byName = new Map(candidates.map((candidate) =>
         [candidate.username, candidate]));
+      const draft = currentDraft();
       const ready = repositories.every((repository) =>
-        byName.get(initialAssignments[repository.id])?.ready === true)
-        && ticketsReady(initialTickets, initialAssignments);
-      onSelectionChange({ assignments: initialAssignments, tickets: initialTickets,
+        byName.get(draft.assignments[repository.id])?.ready === true)
+        && ticketsReady(draft.tickets, draft.assignments);
+      onSelectionChange({ ...draft,
         ready, loading: false });
     }).catch((cause) => {
       if (!alive) return;
       onSelectionChange({
-        assignments: initialAssignments,
-        tickets: initialTickets,
+        ...currentDraft(),
         ready: false,
         loading: false,
         error: cause instanceof Error ? cause.message : "责任人状态读取失败",
       });
     });
     return () => { alive = false; };
-  }, [taskId, initialAssignments, initialTickets]);
+  }, [draftKey, initialAssignments, initialTickets]);
 
   const peopleByName = new Map(people.map((person) => [person.username, person]));
   // 同一个 url 出现多行 = 该仓拆成了多个交付单元。这用于判断旧任务
@@ -126,12 +135,8 @@ export function RepositoryAssigneePicker({
   const isUnitRow = (repository: { url: string }) =>
     (urlRowCounts.get(repository.url) ?? 0) > 1;
   const hasDeliveryUnits = repositories.some(isUnitRow);
-  // 下单免了单号的分析单(或旧图缺单号):节点没有可继承的单号,
-  // 只读展示会把人永远卡在"缺少 AR 单号"上,必须给输入框。
-  const needsTicketEntry = hasDeliveryUnits || repositories.some(
-    (repository) => !(selection.tickets[repository.id] ?? "").trim());
-
   function chooseAssignee(repositoryId: string, value: string) {
+    edits.current.assignments[repositoryId] = value;
     const nextAssignments = { ...selection.assignments, [repositoryId]: value };
     const ready = repositories.every((repository) =>
       peopleByName.get(nextAssignments[repository.id])?.ready === true)
@@ -141,6 +146,7 @@ export function RepositoryAssigneePicker({
   }
 
   function chooseTicket(repositoryId: string, value: string) {
+    edits.current.tickets[repositoryId] = value;
     const nextTickets = { ...selection.tickets, [repositoryId]: value };
     const ready = repositories.every((repository) =>
       peopleByName.get(selection.assignments[repository.id])?.ready === true)
@@ -152,9 +158,7 @@ export function RepositoryAssigneePicker({
   return <section className="repository-assignees" aria-label="交付单元安排">
     <header>
       <div><span>交付单元</span><strong>拆分后怎么执行</strong></div>
-      <small>{needsTicketEntry
-        ? "按最终交付单元选择执行人并补齐 AR 单号"
-        : "按最终交付单元选择执行人；AR 单号沿用已有信息"}</small>
+      <small>确认拆分前可修改执行人和 AR 单号，修改自动保存</small>
     </header>
     <div className="repository-assignee-list">
       {repositories.map((repository) => {
@@ -189,17 +193,14 @@ export function RepositoryAssigneePicker({
                   };
                 })} />
           </span>
-          {(isUnitRow(repository) || !ticket.trim())
-            ? <span className="repository-ticket-editable">
+          <span className="repository-ticket-editable">
             <small>该单元的 AR 单号</small>
-            <input value={ticket}
+            <input type="text" value={ticket}
               aria-label={`${rowLabel}的 AR 单号`}
+              aria-invalid={Boolean(ticketProblem)}
               placeholder="例如：REQ2026xxxx"
               onChange={(event) => chooseTicket(repository.id, event.target.value)} />
-          </span> : <span className="repository-ticket-readonly"
-            title="AR 单号来自发起任务时填写的逐仓信息">
-            <small>AR 单号</small><strong>{ticket || "未填写"}</strong>
-          </span>}
+          </span>
           <em className={person?.ready && !ticketProblem ? "ready" : "missing"}>
             {ticketProblem || (person?.ready ? "可委派"
               : person ? `未就绪：${person.missing.join("、")}` : "待选择")}
@@ -213,9 +214,7 @@ export function RepositoryAssigneePicker({
     <footer>
       <p>{hasDeliveryUnits
         ? "为每个单元选定执行人并填写 AR 单号（同仓同执行人的单元不能同号）；确认后将按依赖顺序生成子任务。"
-        : needsTicketEntry
-          ? "为每个单元选定执行人并填写各自的 AR 单号；确认后将按依赖顺序生成子任务。"
-          : "确认方案后，系统会按上面的执行人、单号和依赖关系生成交付任务。"}</p>
+        : "确认方案后，系统会按上面的执行人、单号和依赖关系生成交付任务。"}</p>
       <small className={`repository-assignee-save ${saveState}`}>
         {saveState === "saving" ? "正在保存…"
           : saveState === "saved" ? "已自动保存"

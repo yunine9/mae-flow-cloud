@@ -1088,7 +1088,9 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(picker, /<span className="repository-assignee-editable">/);
   assert.match(picker, /该单元的执行人/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
-  assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
+  assert.match(picker, /<input type="text" value=\{ticket\}/);
+  assert.doesNotMatch(picker, /repository-ticket-readonly|isUnitRow\(repository\) \|\| !ticket\.trim\(\)/,
+    "已有单号与输入首字符都不能把编辑框变回只读");
   assert.match(picker, /chooseAssignee/);
   assert.match(picker, /已自动保存/);
   const workspace = readFileSync(join(process.cwd(),
