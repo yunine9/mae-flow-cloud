@@ -21,9 +21,7 @@ import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
-import {
-  AnnotationPanel, annotationCategory, type ReviewFilter,
-} from "./AnnotationPanel";
+import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
@@ -65,6 +63,7 @@ import {
   statusText,
   TASK_REQUIREMENT_ARTIFACT,
   type AnchorCheck,
+  type AnnotationClosure,
   type Annotation,
   type ArtifactMeta,
   type AuthUser,
@@ -147,6 +146,11 @@ export function preferredWorkspaceArtifact(
   if (evidenceGapActive) {
     const gap = items.find((item) => item.purpose === "pipeline_evidence_gap");
     if (gap) return gap.name;
+  }
+  if (recommendedView === "doc") {
+    const brief = items.find((item) =>
+      item.purpose === "delivery_unit_brief");
+    if (brief) return brief.name;
   }
   const preferredKind = recommendedView === "diff" ? "diff" : "doc";
   return items.find((item) => item.kind === preferredKind)?.name
@@ -600,7 +604,8 @@ export function TaskWorkspace({
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view
-    ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
+    ?? (task.parent_task_id ? "doc"
+      : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
   // push_review 是一份绑定 HEAD 的阅读导航，不是 cloud_push_confirm
   // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
   // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
@@ -621,6 +626,8 @@ export function TaskWorkspace({
   const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
+  // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
+  const [closures, setClosures] = useState<AnnotationClosure[]>([]);
   const [reply, setReply] =
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
@@ -759,7 +766,8 @@ export function TaskWorkspace({
     setDiffFileLoading(false);
     setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
-      ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
+      ?? (task.parent_task_id ? "doc"
+        : task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
     setMaterialSearchOpen(false);
@@ -1086,19 +1094,20 @@ export function TaskWorkspace({
       const current = artifactTask.current === task.id && !newlyActionable
         ? active : "";
       const next = preferredWorkspaceArtifact(
-        result.items ?? [], current, task.waiting?.recommended_view,
+        result.items ?? [], current, recommendedMaterialView,
         pipelineEvidenceNeedsHuman(task));
       artifactTask.current = task.id;
       openedEvidenceGap.current = evidenceKey;
       setActive(next);
-      if (next !== current && result.items?.find((item) => item.name === next)
-          ?.purpose === "pipeline_evidence_gap") {
+      if (next !== current && ["pipeline_evidence_gap", "delivery_unit_brief",
+        "delivery_plan"].includes(result.items?.find((item) => item.name === next)
+          ?.purpose ?? "")) {
         setMaterialView("doc");
       }
     });
     return () => { alive = false; };
   }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
-    task.delivery?.evidence_gap?.sha]);
+    task.delivery?.evidence_gap?.sha, recommendedMaterialView]);
 
   const activeArtifactForRead = items?.find((item) => item.name === active);
   const activeChangeFiles = activeArtifactForRead?.change_files;
@@ -1187,6 +1196,7 @@ export function TaskWorkspace({
       if (!alive) return;
       setNotes(result.items);
       setChecks(result.checks);
+      setClosures(result.closures);
       setReply(result.reply);
     });
     return () => { alive = false; };
@@ -1249,7 +1259,15 @@ export function TaskWorkspace({
     window.setTimeout(seek, source || item.artifact === active ? 0 : 120);
   }
   const activeMeta = items?.find((item) => item.name === active);
-  const documents = items?.filter((item) => item.kind === "doc") ?? [];
+  const materialPriority = (item: ArtifactMeta): number =>
+    item.purpose === "delivery_unit_brief" ? 0
+      : item.purpose === "delivery_plan" ? 1 : 2;
+  const documents = (items?.filter((item) => item.kind === "doc") ?? [])
+    .sort((left, right) => materialPriority(left) - materialPriority(right));
+  const primaryDocument = task.parent_task_id
+    ? documents.find((item) => item.purpose === "delivery_unit_brief")
+      ?? documents[0]
+    : documents[0];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
   const evidenceGapArtifact = documents.find((item) =>
     item.purpose === "pipeline_evidence_gap");
@@ -1293,7 +1311,7 @@ export function TaskWorkspace({
     : changes.length;
   const untrackedDirectoryCount = changes.reduce((sum, item) =>
     sum + (item.untracked_directories?.length ?? 0), 0);
-  const hasRequirementGraph = !!task.requirement_graph
+  const hasRequirementGraph = !task.parent_task_id && !!task.requirement_graph
     && ((task.repositories?.length ?? 0) > 1
       || task.requirement_analysis_requested === true
       || task.requirement_graph.stage === "confirmed");
@@ -1306,7 +1324,11 @@ export function TaskWorkspace({
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
             ? pushReview.title : "完整交付内容" }
         : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
-      : { kicker: "WORK DOCUMENTS", title: "过程文档" };
+      : activeMeta?.purpose === "delivery_unit_brief"
+        ? { kicker: "CURRENT DELIVERY UNIT", title: "当前单元任务书" }
+        : activeMeta?.purpose === "delivery_plan"
+          ? { kicker: "REVIEWED DELIVERY PLAN", title: "整体拆分方案" }
+          : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
   const workspaceReviewReady = task.status === "waiting_for_human"
     && task.waiting?.step === "cloud_push_confirm"
@@ -1344,14 +1366,10 @@ export function TaskWorkspace({
   const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
     item.status === "closed" ? "closed"
       : item.status === "needs_human" ? "mine" : "agent";
-  const noteCategory = (item: Annotation) => annotationCategory(item, {
-    viewerUsername,
-    taskStatus: task.status,
-    reviewReady: workspaceReviewReady,
-    canOverride,
-    canRouteOthers: canOperate,
-    reviewAnnotationIds: workspaceReviewAnnotationIds,
-  });
+  // 归档也照服务端结论:页面不再按 status/sent_via 自己分档。
+  const closureOf = (id: string) => closures.find((one) => one.id === id);
+  const noteCategory = (item: Annotation): Exclude<ReviewFilter, "all"> =>
+    closureOf(item.id)?.bucket ?? "agent";
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
   for (const item of notes) reviewCounts[noteCategory(item)] += 1;
   for (const item of [...codehubFeedback, ...machineFeedback]) {
@@ -1502,12 +1520,11 @@ export function TaskWorkspace({
         <AnnotationPanel
           taskId={task.id}
           viewerUsername={viewerUsername}
-          canOverride={canOverride}
           items={selectedNotes}
           checks={checks}
+          closures={closures}
           reply={inline ? undefined : reply}
           canOperate={canContributeReview}
-          canRouteOthers={canOperate}
           taskStatus={task.status}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
@@ -1756,19 +1773,26 @@ export function TaskWorkspace({
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
-              <button type="button" role="tab" aria-selected={materialTabOn("source")}
-                className={materialTabOn("source") ? "on" : ""}
-                onClick={() => openMaterial("source")}>
-                <span>需求原文</span><i>原始</i>
-              </button>
-              <button type="button" role="tab" aria-selected={materialTabOn("doc")}
-                className={materialTabOn("doc") ? "on" : ""}
-                onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                <span>过程文档</span><i>{documents.length}</i>
-              </button>
-              {hasRequirementGraph && <button type="button" role="tab"
-                aria-selected={materialTabOn("chain")}
-                className={materialTabOn("chain") ? "on" : ""}
+              {task.parent_task_id ? <>
+                <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
+                  onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
+                  <span>当前任务书</span><i>主</i>
+                </button>
+                <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
+                  onClick={() => openMaterial("source")}>
+                  <span>原始需求</span><i>参考</i>
+                </button>
+              </> : <>
+                <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
+                  onClick={() => openMaterial("source")}>
+                  <span>需求原文</span><i>原始</i>
+                </button>
+                <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
+                  onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
+                  <span>过程文档</span><i>{documents.length}</i>
+                </button>
+              </>}
+              {hasRequirementGraph && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
                 onClick={() => openMaterial("chain")}>
                 <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
                   || task.requirement_graph!.stage === "confirmed"
@@ -1974,7 +1998,9 @@ export function TaskWorkspace({
             <div className="ws-tabs ws-document-tabs">
               {documents.map((item) => (
                 <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
-                  <span>{item.label}</span><i>{sizeText(item.bytes)}</i>
+                  <span>{item.label}</span><i>{item.purpose === "delivery_unit_brief"
+                    ? "主任务书" : item.purpose === "delivery_plan"
+                      ? "参考" : sizeText(item.bytes)}</i>
                 </button>
               ))}
               <button type="button" className="ws-document-download"

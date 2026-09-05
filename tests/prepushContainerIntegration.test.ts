@@ -88,6 +88,10 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
     second.volumes[0].split(":")[0], "不同仓不得共享可写缓存");
   assert.ok(first.volumes.every((volume) => existsSync(volume.split(":")[0])));
   assert.equal(first.environment.npm_config_cache, "/cache/npm");
+  // 容器内 Node 信任系统 CA 存储(2026-09-04):部署镜像默认 node
+  // v24.19.0,npm install 打内网镜像没有这条就是全量证书失败重试到
+  // 超时。两条流共用 buildCacheMounts 合并点,一处注入两侧生效。
+  assert.equal(first.environment.NODE_USE_SYSTEM_CA, "1");
   assert.equal(first.environment.CCACHE_DIR, "/cache/ccache");
   assert.match(String(first.environment.MAVEN_OPTS),
     /maven\.repo\.local=\/cache\/maven\/repository/);

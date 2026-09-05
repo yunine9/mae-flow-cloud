@@ -211,26 +211,24 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.equal(filterChild.ticket, "REQ2026083102");
     assert.match(contractChild.title ?? "", /契约骨架/,
       "子任务标题要带单元名,列表里才分得清同仓的两单");
-    // 单元任务书:位置、负责面、上下游(隐式串行边也要出现在书里)。
-    assert.match(contractChild.requirement, /第 1\/2 个交付单元/);
-    assert.match(filterChild.requirement, /第 2\/2 个交付单元/);
-    assert.match(filterChild.requirement, /负责文件面:src\/filter\//);
-    assert.match(filterChild.requirement, /依赖上游:契约骨架/,
+    // 需求原文保持原样；任务书独立且位于第一阅读入口，不再藏在长原文末尾。
+    assert.equal(contractChild.requirement, parent.requirement);
+    assert.equal(filterChild.requirement, parent.requirement);
+    const contractBrief = readFileSync(
+      join(dataDir, contractChild.id, "unit-brief.md"), "utf-8");
+    const filterBrief = readFileSync(
+      join(dataDir, filterChild.id, "unit-brief.md"), "utf-8");
+    assert.match(contractBrief, /第 1\/2 个交付单元/);
+    assert.match(filterBrief, /第 2\/2 个交付单元/);
+    assert.match(filterBrief, /`src\/filter\/`/);
+    assert.match(filterBrief, /依赖的上游[\s\S]*契约骨架/,
       "隐式串行边必须写进下游任务书");
-    assert.match(contractChild.requirement, /被依赖:过滤实现/,
+    assert.match(contractBrief, /依赖本单元的下游[\s\S]*过滤实现/,
       "隐式串行边必须让上游知道有人基于它开发");
-    assert.match(filterChild.requirement, /\.mae-flow-chain\.md/,
-      "方案正文不内联,只指路");
-    assert.match(filterChild.requirement, /不得把同一事项换个说法再次问人/,
+    assert.match(filterBrief, /\.mae-flow-unit\.md[\s\S]*\.mae-flow-chain\.md/,
+      "任务书必须把自己放在整体方案之前");
+    assert.match(filterBrief, /不得重新询问主任务已经确认的事项/,
       "子任务必须消费主任务已拍板结论,不能重新开一轮相同澄清");
-    assert.match(filterChild.requirement,
-      /当前目录、remote 或 data\/ 看不到其他单元是正常现象/,
-      "隔离工作区不能被 Agent 误判成其他仓或交付单元缺失");
-    assert.match(filterChild.requirement, /跨单元状态与术语同步由主任务协调/,
-      "跨单元同步责任必须明确落到主任务,不能重复抛给子任务用户");
-    assert.match(filterChild.requirement,
-      /任务书中写明的仓库名称.*CHAIN.*内部代号.*不得据此声称真实名称缺失/s,
-      "仓名已在任务书落定时,不能因 CHAIN 使用内部 id 再问人");
     assert.ok(!filterChild.requirement.includes("契约先行,过滤在后"),
       "方案正文不得内联进需求");
     const plan = readFileSync(
@@ -555,7 +553,10 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
     await service.cancel(second.id, "tester");
     assert.equal(first.ticket, "REQ2026090201");
     assert.equal(second.ticket, "REQ2026090202");
-    assert.match(first.requirement, /当前单元 AR 单号:REQ2026090201/);
+    assert.equal(first.requirement, parent.requirement);
+    assert.match(readFileSync(
+      join(dataDir, first.id, "unit-brief.md"), "utf-8"),
+    /AR 单号：REQ2026090201/);
     assert.deepEqual(second.blocked_by, [first.id],
       "免单号路径不改串行纪律");
   } finally {

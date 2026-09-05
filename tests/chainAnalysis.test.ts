@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -58,7 +58,8 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
   const ticket = "REQ2026081930";
   // 机读需求图:url 必须原样照录下单地址(投影按白名单全等过滤)。
   const artifacts = requirementArtifacts(
-    "# 跨仓方案\n先 api 后 web,接口契约见正文。\n", {
+    "# 跨仓方案\n\n- svc-api：提供接口\n- svc-web：消费接口\n\n"
+      + "先 api 后 web,接口契约见正文。\n", {
     repository_assessments: [
       { name: "svc-api", url: apiRepo, outcome: "change_required",
         reason: "接口定义与实现需要调整", evidence: ["src/api.ts:createOrder"] },
@@ -180,13 +181,22 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     assert.equal(graph.stage, "confirmed");
     const apiChild = service.get(graph.repositories[0].task_id!)!;
     const webChild = service.get(graph.repositories[1].task_id!)!;
+    // 升级现场：旧版把任务书塞在需求末尾且没有独立文件。部署恢复时
+    // 必须从父任务已确认图机械补齐，当前已生成的任务也能继续用。
+    const internal = service as any;
+    const apiState = internal.tasks.get(apiChild.id);
+    rmSync(join(dataDir, apiChild.id, "unit-brief.md"));
+    apiState.summary.requirement = `${parent.requirement}\n\n本单元任务书(旧格式)`;
+    internal.persist(apiState);
+    assert.equal(internal.ensureDeliveryUnitMaterials(apiState), true);
+    assert.equal(service.get(apiChild.id)?.requirement, parent.requirement);
+    assert.ok(existsSync(join(dataDir, apiChild.id, "unit-brief.md")));
     // 子任务立即取消:它们的交付链(内核)由别的端到端覆盖,这里不跑
     // (父单收口会放出并发槽,晚一步取消子会话就会去误消费剧本场景)。
     await service.cancel(apiChild.id, "tester");
     await service.cancel(webChild.id, "tester");
     assert.equal(service.get(parent.id)?.status, "coordinating",
       "子任务取消后父任务仍应留在当前现场并提示处理");
-    const internal = service as any;
     for (const child of [apiChild, webChild]) {
       const state = internal.tasks.get(child.id);
       state.summary.status = "completed";
@@ -219,11 +229,12 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     // 方案正文不进需求原文(整份方案塞 prompt 会被模型当实施计划直接
     // 开写,跳过流程头部——内网实锤):落成工作区文件,需求里只指路,
     // launch 再把它带进克隆并经下单事实指给「需求文档」。
-    assert.match(apiChild.requirement, /\.mae-flow-chain\.md/,
-      "需求原文只指路,不内联方案正文");
+    assert.equal(apiChild.requirement, parent.requirement,
+      "子任务的需求原文必须保持用户原文，不能再拼接任务书");
     assert.ok(!apiChild.requirement.includes("先 api 后 web"),
       "方案正文不得内联进需求");
-    assert.match(apiChild.requirement, /提供接口/);
+    assert.match(readFileSync(
+      join(dataDir, apiChild.id, "unit-brief.md"), "utf-8"), /提供接口/);
     const plan = readFileSync(
       join(dataDir, apiChild.id, "chain-plan.md"), "utf-8");
     assert.match(plan, /跨仓方案/, "人工检视过的 CHAIN 正文随子任务落盘");

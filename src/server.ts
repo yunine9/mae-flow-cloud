@@ -2529,7 +2529,17 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const author = viewer?.username ?? "本地用户";
           if (request.method === "GET" && parts.length === 3) {
-            return json(response, 200, await service.listAnnotationsAsync(id));
+            // 闭环判定连同人名一起在服务端算完:页面只渲染,不推断。
+            const people = options.auth?.listUsers() ?? [];
+            return json(response, 200, await service.listAnnotationsAsync(id, {
+              username: author,
+              can_override: !options.auth || viewer?.role === "admin",
+              can_route_others: canOperate(
+                viewer, target.luban_account, !!options.auth),
+              person_name: (username: string) =>
+                people.find((person) => person.username === username)
+                  ?.display_name?.trim() || username,
+            }));
           }
           if (request.method === "POST" && parts.length === 3) {
             const body = await readBody(request);
@@ -2823,7 +2833,10 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const root = service.artifactRoot(id);
-          const sources = { pipelineRoot: join(target.workspace, "pipeline") };
+          const sources = {
+            pipelineRoot: join(target.workspace, "pipeline"),
+            taskMaterialRoot: target.workspace,
+          };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。

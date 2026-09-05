@@ -124,7 +124,10 @@ export function fullSuiteCommandVerdict(command: string): FullSuiteVerdict {
 
   const mavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)\s+[^;&|\n]*\b(?:test|verify)\b/i
     .test(value);
-  const nativeMavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)(?:\s|$)[^;&|\n]*-DDT_test=UT\b[^;&|\n]*-DDT_run=true\b/i
+  // mcde 的 mae-remote-build skill(用户 2026-09-04 提供的真件)口径是
+  // `mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT`,压根没有 -DDT_run;
+  // 只认带 DT_run 的写法等于对真实命令视而不见。
+  const nativeMavenAll = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)(?:\s|$)[^;&|\n]*-DDT_test=UT\b/i
     .test(value);
   const barePackageTest = /(?:^|[;&|]\s*)(?:npm|pnpm|yarn)(?:\s+run)?\s+test\s*(?:$|[;&|>])/i
     .test(value);
@@ -414,13 +417,22 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
 
   if (profile.stacks.includes("cpp")) {
     lines.push(
-      "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多；skill 与本手册冲突时以 skill 为准（它更贴仓库事实）。",
-      `C++/native：优先从 Maven 插件进入。当前内网经验的基础候选是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`，但执行 UT 时必须再带仓库支持的模块/用例过滤；不得无过滤地跑全仓 UT。首次生成物陈旧时也只重建受影响模块，不要用 clean 触发全仓重编与全量测试。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
+      "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多。",
+      "skill 与本手册冲突时分两类看：**仓库事实**（命令形状、构建入口、DT/插件参数、增量与全量的判据）以 skill 为准，它更贴仓库；"
+        + "**平台事实**（并行度按容器 CPU 配额、缓存目录、超时预算、产物与提交纪律）以本手册为准。"
+        + "典型例子：skill 里写死的 `make -j12` 是它自己远端机器的假设，本平台容器是 CFS 配额，照抄会因限流更慢——并行度仍按配额算。",
+      `C++/native：优先从 Maven 插件进入。mcde 的 mae-remote-build skill 口径是 \`${mvn} compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT\`（存在 \`\${HOME}/settings.xml\` 时把 compile 换成 \`install ... -s \${HOME}/settings.xml\`）；另一处内网经验还带过 \`-DDT_run=true\`，两者不一致时以本仓 pom/脚本/skill 为准，不要两个都往上堆。`,
+      "mcde 口径里「增量 UT / 全量 UT」的差别只是**带不带 clean**，不是测试选择：不加 clean 就是增量。所以修复循环里绝不要用 clean 触发全仓重编与全量测试。",
       "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
-      "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"`、测试 runner 的 suite/case 过滤或 `ctest -R <pattern>`；从改动与失败日志选最小可靠范围，Build-Fix 收口仍保持定向，不补跑全仓。"
-        + "这些开关能不能用取决于本仓的 DT 插件与测试工程配置：先在本仓核实，"
-        + "确实没有可用的定向入口时可以跑全量（平台只提示不拦），"
-        + "但要在 summary 写清核实过程和为什么没能定向。",
+      "C++ 缩小 UT 范围的**首选是目录**：进受本次改动影响的子模块目录（自带 `pom.xml` 或 `CMakeLists.txt` 的那一层）再构建/跑 UT——mcde 的 mae-remote-build 就是这么做的，它整份 skill 里没有任何按用例过滤的开关。",
+      "CMake 子目录 UT 的现成配方（mae-remote-build skill 原文，并行度换成按容器配额）："
+        + "`export without_tests=0 && export DT_test=UT && source <仓库根>/build/svc_profile.sh"
+        + " && mkdir -p <子目录>/build && cd <子目录>/build"
+        + " && cmake -DDEBUG_FLAG=DEBUG -DCMAKE_EXPORT_COMPILE_COMMANDS=1 .. && make -j<按 cpu.max>`；"
+        + "跑完 unset 这两个环境变量，别让它们泄进后面的纯编译验证。",
+      "`-DDT_COV_INCLUDES=\"*ModuleName*\"` 不在 mcde skill 里，不要当成通用开关：先在本仓 pom/插件说明里核实它是否存在，"
+        + "核实不到就别写进命令。runner 层面还有 `ctest -R <pattern>` 和测试框架自带的 suite/case 过滤可用。"
+        + "确实没有任何可用的定向入口时可以跑全量（平台只提示不拦），但要在 summary 写清核实过程和为什么没能定向。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
       "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口只需对受影响目标做可复现的增量编译与定向 UT，完整回归留给远端流水线。",

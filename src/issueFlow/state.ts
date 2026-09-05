@@ -21,6 +21,7 @@ import {
 import { join } from "node:path";
 import type { FeedbackRecord } from "../feedbackStore.ts";
 import { IssueControlError } from "./errors.ts";
+import type { IssueWarmupReceipt } from "./warmup.ts";
 import { validateRepoUrl } from "./issueGit.ts";
 import {
   fixedStageIndex,
@@ -406,6 +407,11 @@ export interface IssueSessionState {
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
+  /** 环境预热收据(2026-09-04,需求侧 baseline_build 的问题流形态):
+   * 拉仓完成进 analyze 时后台预热专员的状态。幂等判据=finished_at;
+   * warmup 模块权威,前端镜像没有这个字段。类型与收据写入方共用
+   * IssueWarmupReceipt,防两侧 status 联合各自漂移。 */
+  warmup?: IssueWarmupReceipt;
   error?: string;
   last_reply?: string;
 }
@@ -476,10 +482,12 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // 令牌)与 push_review_head(举闸时记的过目对象 tip)同罪同罚:
   // 它们的效力只在服务端 push_branch 消费口,不是前端要渲染的状态。
   // env_declined(环境拒绝台账,票 93)同理:效力只在服务端工具层
-  // (同 scope 不再举闸),前端镜像没有这个字段。
+  // (同 scope 不再举闸),前端镜像没有这个字段。warmup(环境预热
+  // 收据,2026-09-04)也是服务端流程机制状态:修复 Agent 经文件系统
+  // 读 build-notes,前端不需要渲染它。
   const { mr_gate: _gate, push_token: _pushToken,
     push_review_head: _pushReviewHead, env_declined: _envDeclined,
-    ...rest } = state;
+    warmup: _warmup, ...rest } = state;
   return {
     ...rest,
     has_environment: Boolean(state.environment),

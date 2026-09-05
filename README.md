@@ -31,6 +31,46 @@ ops 工具超时语义 2026-09-02 收窄:命令包进容器内 coreutils
 issueFlowService.test.ts` 的 fake-exec 契约测试),未验真容器内
 TERM→KILL 链(真容器用例未写)。
 
+AI bash 超时语义 2026-09-04 跟进同款收窄(此前透传 exec 的销毁式
+超时,一次 npm install 超时掀掉会话容器,自愈重建又给模型的无知
+重试添燃料——2940 次循环 1.5 小时的实锤):bash 命令包进容器内
+`timeout`(shell 行整体进内层 `sh -c`,timeout 不解析 shell),超时
+只了结命令进程组、容器不动,124 附一行可行动说明(重试传更大
+timeout)。Abort 语义不变(用户打断回合仍销毁容器)。机制本体抽在
+`src/containerTimeout.ts`,ops 与 bash 共用一份真相;契约测试在
+`tests/issueFlowContainerBash.test.ts`。
+
+问题流环境预热 2026-09-04 接入(需求侧 warmupAgent 的问题流移植):
+拉仓收口进 analyze 时,同一任务容器里另起专职会话编译基线、焐热
+分仓缓存、沉淀 `.mae-flow-work/build-notes.md`(修复阶段简报提示
+开改前先读)。fail-open 旁路:预热失败落 infrastructure_failure
+收据(`issue.json` 的 `warmup` 字段,不上 wire),主流程照走;与
+需求侧同条件启用(host + isolateImage),测试形态缺席即关。
+
+- **2026-09-04 AI bash 超时收窄**:已验 = 包装形状/兜底赛输时序/
+  124 说明/signal 剥离(fake 契约测试,`tests/issueFlowContainerBash.test.ts`);
+  未验 = 真容器内 TERM→KILL 链(与 ops 同款沿 coreutils 语义推定,
+  真 Docker 用例未补)。模型不传 timeout 的命令没有任何超时(Pi 契约
+  "no default timeout" 原样保留),失控命令只能靠用户 Abort 了结。
+- **2026-09-04 问题流环境预热**:已验 = 点火时机/幂等收据/fail-open/
+  abort 不销毁共享容器(fake runner 与契约测试);未验 = 真容器内的
+  预热会话端到端(依赖模型真实跑编译,待现场首单验证)。预热预算
+  (25 分钟)到点只收预热会话,不销毁任务容器——signal 已在预热
+  适配层剥离;超预算的单条命令按自己的容器内 timeout 或自然完成
+  收尾,收据如实记 infrastructure_failure。
+- **2026-09-04 GateService 嵌套账本目录修复**:此前带斜杠的
+  extraLedgerDirs 条目从未匹配,只读投影(.mae-flow-work/host-skills、
+  business-modules)实际可写。已修为整体前缀匹配并用例钉死;若有
+  Agent 曾依赖该洞写投影文件,升级后会被拒。
+- **2026-09-04 镜像工具链契约漂移(现场实锤)**:本仓 Dockerfile/README
+  钉的容器基线是 Node 18.16.1/npm 9.5.1,但内网实际部署镜像
+  (`v2-euleros-jdk21-mvn36-node18-node24`)默认 node 是 **v24.19.0**、
+  npm 11.17(node18 是备用二进制;现场 npm debug 日志头可直接核对)。
+  凡按文档基线做的判断(如 `NODE_USE_SYSTEM_CA` 的版本门槛、playbook
+  里"部署基线为 Node 18/npm 9"的提示)都可能被现实打脸——先看
+  `/cache/npm/_logs/*.log` 头两行再下结论。工具链基线文档与内部镜像
+  的对齐待现场运维确认后统一修订。
+
 ## 三条铁的边界
 
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在
@@ -260,6 +300,54 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-04 交付失败的处置判定收敛成一处**(接着闭环判定那次重构做
+  第二刀)。当周 17 条 fix 都在补同一类误诊:内核抖一下被当成"内核拒收"
+  直接停摆、流水线登记失败被误诊成"索引损坏"、宿主命令一次超时就等于
+  整轮停摆。根因同上一刀:同一个判断散在四五处,各自对**中文消息做
+  `startsWith` 前缀匹配**——谁写新分支谁按自己的理解判一次。
+  现在唯一分类处是 `src/deliveryFailure.ts` 的 `classifyDeliveryFailure`,
+  三档对三条出路:`retry`(基础设施/瞬时,挂起按既有预算自愈)、`stall`
+  (契约坏了或确定性 4xx,重放无意义,当场如实停下喊人)、`dispatch`
+  (这活儿压根没人做过,重新派给修复会话)。**第二个轴是收敛时才浮出来的**:
+  同一句话在"平台调用"和"Agent 回执"两条路上默认出路相反——平台侧没见过
+  的错按瞬时自愈,回执侧没见过的错就是材料不合格、当场停摆。这个差别原来
+  只隐含在两处 else 分支里,没写在任何地方,差点被抹平(全量跑出来一条红,
+  才把它显式化成 `FailureSource`)。
+  红线不变:分不出类的一律走**有预算**的自愈,预算烧完仍 fail-closed 停下,
+  绝不无预算干等也绝不静默放行。
+  已验:分类九项契约(`tests/deliveryFailure.test.ts`,含两条路的默认出路
+  各一组)、一条源码级不许回退的断言(除分类器与标记产出处外,`src/` 下
+  任何文件再对这些前缀做一次匹配就红)。**仍未收敛**:`markVerificationStalled`
+  仍有 20 余处直接调用,它们是调用方自己就知道终局的语义条件(基线不可读、
+  越界待裁决、MR 没返回 SHA),不经过分类器也不该经过;问题流(`src/issueFlow/`)
+  有自己的一套重试语义,这次没有动。
+
+- **2026-09-04 检视意见的闭环判定收敛成一处**(用户拍板"是时候重构了,
+  要保证后续可扩展性与可维护性")。当周盘账:302 条提交里 111 条是 fix,
+  把每条 fix 删掉的行 blame 回去,**22% 是在修同一周里自己的上一次修复**;
+  111 条 fix 中 42 条围绕同一个概念——一条意见到底算不算闭环。根因是
+  这个判定同时长在两处:服务端按 status/sent_via/response 决定放不放行,
+  前端 `AnnotationPanel` 自己再推一遍决定显示什么字、开哪个按钮
+  (`authorVerdictReady`/`annotationCategory`/`progressOf`/`deliveryText`/
+  `adminOverrideAccess`,约 270 行分支)。两份推法各自演化,每加一个入口
+  (抽屉、全屏、决定卡、MR 复检)就多一份不一致,也就多一条 fix——违反的
+  正是本仓自己的规矩「前端不推断状态,一切文案来自任务 API 镜像」。
+  现在唯一判定处是 `src/feedbackPolicy.ts` 的 `annotationClosure`:输入
+  是意见事实 + 任务事实 + 观察者身份,输出是状态词、提示、分档、去向
+  说明和每个按钮的开关;`GET /tasks/:id/annotations` 带 `closures` 下发,
+  页面只渲染。前端那五个函数连同 `canOverride`/`canRouteOthers` 两个入参
+  一起删干净(面板 -308 行),避免留门。已验:唯一判定处 24 项分支契约
+  (`tests/annotationClosure.test.ts`)、面板改吃服务端结论后既有渲染断言
+  全部原样通过(`tests/workspaceUiLogic.test.ts` 24 项,是"行为没变"的
+  实锤)、三处源码级不许回退的断言(状态词不许出现在页面、分档只认
+  `closure.bucket`、管理员入口按 `can_override_*` 开)。顺带修掉一处同源
+  隐患:页面判"需要补充说明"只看 outcome 不看 revision,上一轮的追问会让
+  按钮错开,现在按当前 revision 判。**仍未收敛**:服务端 `workspaceReviewReady`
+  的四条件谓词已提取,但 taskService 里另有几处只取其中两条的门禁
+  (交付放行、修复轮派单)语义确实不同,没有强行合并;`ordinaryReviewCount`
+  与 owner_pending 的两处展示分支仍读原始字段,它们只影响分组和文案,
+  不影响谁能按哪个钮。
+
 - **2026-09-04 全仓 UT 护栏对 C++/native 改成只提示不拦截**(用户拍板
   "改成提示吧")。7b1abfa 把无过滤的全仓 UT 命令一律在执行前拒掉,并要求
   Agent 按"未找到定向 UT"停下。这对 Java/JS/Go/Rust/Python 成立——`-Dtest`
@@ -271,10 +359,20 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   -DDT_run=true`(无 include)和裸 `ctest` 现在打印提示后照常执行,提示
   要求 Agent 先在本仓核实定向入口、真没有就跑全量并在 summary 写清原因;
   其余生态维持硬拒。已验:三档判定(`tests/prepushBuildPlaybook.test.ts`,
-  blocked/advised/none 各一组命令)。**未验**:C++ 仓到底支不支持
-  `-DDT_COV_INCLUDES` 这类定向写法——这正是不敢硬拒的原因,要在 mcde
-  之类的真仓上实测一次才能收紧;在那之前 C++ 全量 UT 的时间成本由
-  Build-Fix 的重型命令预算(单命令 20/45 分钟、整轮 30/60 分钟)兜底。
+  blocked/advised/none 各一组命令)。
+  **当日勘误(同日晚,用户提供 mcde 的 `mae-remote-build` skill 真件)**:
+  上面写的"未验,要在真仓实测"已被这份真件回答——skill 里**没有**
+  `-DDT_COV_INCLUDES`,也**没有** `-DDT_run=true`;真实 UT 入口是
+  `mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT`(有 `${HOME}/settings.xml`
+  时用 `install ... -s`),而它说的"增量 UT / 全量 UT"差别**只是带不带
+  `clean`**,不是测试选择。整份 skill 没有任何按用例过滤的开关,真正
+  缩小范围的手段是**进受影响子模块的目录**再构建/跑 UT。据此三处校准:
+  ①护栏的 native 识别从"必须带 `-DDT_run=true`"放宽到只要 `-DDT_test=UT`
+  ——原来的模式对真实命令视而不见,advised 分支根本不会触发;②build
+  playbook 的 C++ 段改成"先按目录缩小、`-DDT_COV_INCLUDES` 未必存在要先
+  在本仓核实、增量就是不加 clean";③提示文案同步。C++ 全量 UT 的时间
+  成本仍由 Build-Fix 的重型命令预算(单命令 20/45 分钟、整轮 30/60 分钟)
+  兜底。**仍未验**:mcde 之外的 C++ 仓是否另有定向开关。
 
 - **2026-09-04 分支上的外来提交默认可信,宿主接上去继续推**(用户拍板:
   "外来提交一定是人为介入")。task-40 实锤:有人直接往 bot 分支推了一条

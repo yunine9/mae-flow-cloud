@@ -243,7 +243,12 @@ export class GateService {
     const rel = relative(this.workspace, target);
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
     const parts = rel.split(sep);
-    return dirs.includes(parts[0])
+    // dirs 支持嵌套条目(如问题流的 .mae-flow-work/host-skills):按
+    // 相对路径整体做前缀匹配,不能只看首段——首段匹配让带斜杠的条目
+    // 永远落空,注入的只读投影对 Agent 变成可写(2026-09-04 探针实锤)。
+    // files 认工作区根下的精确相对路径(feedback/index.jsonl 形状,
+    // join("/") 顺带归一 Windows sep)。
+    return dirs.some((dir) => rel === dir || rel.startsWith(`${dir}${sep}`))
       || files.includes(parts.join("/"));
   }
 

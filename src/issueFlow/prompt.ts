@@ -4,7 +4,7 @@
  * 技能源头是仓内静态目录 assets/issue-skills/<name>/SKILL.md(标准
  * skill 目录形态),从 every-skill 仓的 playbook 改编而来,适配云上:
  * - 工号不再是 $HOME 目录名,而是平台注入的登录账号;
- * - 二进制/MCP 不由 Agent 直调,换成宿主工具(fetch_logs/build_deploy/
+ * - 二进制/MCP 不由 Agent 直调,换成宿主工具(build_deploy/
  *   push_branch/create_mr/dts_get_ticket/get_issue_meta);
  * - 新增"非问题出口":研究结论可以就是终点,不强制进编码交付。
  * 每次会话启动时从源目录整读、物化到工作区 skills/ 下(幂等重写)。
@@ -17,6 +17,8 @@
  */
 
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -42,9 +44,11 @@ export const SKILL_SOURCE_DIR = resolve(
   fileURLToPath(import.meta.url), "..", "..", "..",
   "assets", "issue-skills");
 
-/** 把改编技能物化到工作区(幂等重写),返回 SKILL.md 精确路径。
- * 源目录缺失或缺 SKILL.md 都 fail-loud:技能是行为契约,静默少一个
- * 等于让 Agent 少一条规矩,不如启动就响。 */
+/** 把技能整包物化到工作区(幂等重写),返回 SKILL.md 精确路径。
+ * 整包 = 技能目录内所有文件随 SKILL.md 一起走(2026-09-04 拍板:平台
+ * 自带技能与团队货架同范式,可携带 bin/ 可执行引擎——日志抓取引擎
+ * 已落 issue-ops/bin)。源目录缺失或缺 SKILL.md 都 fail-loud:技能是
+ * 行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。 */
 export function materializeIssueSkills(workspace: string): string[] {
   if (!existsSync(SKILL_SOURCE_DIR)) {
     throw new Error(`问题会话技能源目录缺失: ${SKILL_SOURCE_DIR}`);
@@ -58,18 +62,30 @@ export function materializeIssueSkills(workspace: string): string[] {
   }
   const paths: string[] = [];
   for (const name of entries) {
-    const source = join(SKILL_SOURCE_DIR, name, "SKILL.md");
-    if (!existsSync(source)) {
+    const source = join(SKILL_SOURCE_DIR, name);
+    const skillMd = join(source, "SKILL.md");
+    if (!existsSync(skillMd)) {
       throw new Error(
         `技能目录 ${name} 缺 SKILL.md(源: ${SKILL_SOURCE_DIR})`);
     }
-    const dir = join(workspace, "skills", name);
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, "SKILL.md");
-    writeFileSync(path, readFileSync(source, "utf-8"), "utf-8");
-    paths.push(path);
+    copyPackage(source, join(workspace, "skills", name));
+    paths.push(skillMd);
   }
   return paths;
+}
+
+/** 递归整包拷贝;bin/ 下的引擎补执行位(git 不一定保留 +x,物化兜底)。 */
+function copyPackage(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dest = join(to, entry.name);
+    if (entry.isDirectory()) copyPackage(src, dest);
+    else {
+      copyFileSync(src, dest);
+      if (entry.parentPath.endsWith("bin")) chmodSync(dest, 0o755);
+    }
+  }
 }
 
 // ---- 登记元信息(提示词块与 get_issue_meta 工具的同一事实源) ----
