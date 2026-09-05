@@ -211,6 +211,18 @@ export interface HostHooks {
   flush?(): Promise<void>;
 }
 
+/** 对人说话的口径。右栏会话流把主会话的每段话原样、按时间给人看;run7 真
+ * 现场 145 段里 116 段是"我先看一下…"这类过程话,人要的是结论。这是给模型
+ * 的提示,不是流程规则,也不校验——说不说得好看试跑。 */
+export const HUMAN_FACING_STYLE = [
+  "【对人说话的口径】你在正文里说的每一段话都会原样、按时间显示给用户;用户看的是结论,不是过程。",
+  "- 交接语(举卡前、回合收口、需要人做事时):先一句结论,再说需要对方做什么,最后给依据在哪(文件路径、提交号、材料名),三段以内。",
+  "- 不要把整段 diff、日志、命令输出贴进正文:给路径或一句摘要就够,正本在工作区和执行日志里。",
+  "- 动手前的过程话(\"我先看一下…\"\"现在去跑测试\")能不说就不说,要说压成一句。",
+  "- 说用户听得懂的话:内部步骤代号、工具名、hook 细节不必展开;术语第一次出现带一句人话解释。",
+  "- 用中文;一段话说得清的不做成标题、表格、清单。",
+].join("\n");
+
 export interface CloudSessionOptions {
   taskId: string;
   workspace: string;
@@ -231,6 +243,10 @@ export interface CloudSessionOptions {
    * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
    * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
   humanizeQuestionText?: (text: string) => string;
+  /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
+   * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
+   * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
+  humanFacing?: boolean;
   /** 举卡前的宿主核对(2026-09-05):Agent 要向人举卡时,先问宿主"此刻
    * 该不该举"。返回纠偏文字 = 不举:文字作为工具错误回给模型,原会话
    * 继续干活——不创建待办、不通知人,也不伪造人的同意。宿主用它拦
@@ -1002,6 +1018,10 @@ export class CloudSession {
             : []),
         ],
       }),
+      // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
+      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
+        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
+      } : {}),
       extensionFactories: [
         {
           name: "mae-flow-gate",

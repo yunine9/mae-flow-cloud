@@ -12494,6 +12494,7 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: task.cwd,
         agentDir,
+        humanFacing: true,
         // 开发助手也能查记忆(§8:所有会话同有);不挂首改目录提醒——
         // 人在接管,提醒是给自动跑的主 Agent 的。
         extraTools: this.memoryTools(task),
@@ -14426,6 +14427,7 @@ export class TaskService {
         // 举卡前核对(2026-09-05):检视意见没处理完不许举确认卡,只放行
         // 合规的澄清卡;拦下的话作为工具错误回给模型,原会话继续。
         beforeHumanQuestion: (input) => this.beforeReviewQuestion(task, input),
+        humanFacing: true,
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),

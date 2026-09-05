@@ -49,8 +49,9 @@ const items: ConversationItem[] = [
   { kind: "session", id: "s1", ts: T0, phase: "started", resume: false },
   { kind: "turn", id: "turn-1", ts: T0, end_ts: T1, open: false,
     texts: [
-      { ts: T0, text: "我先核对现有实现。", truncated: false },
-      { ts: T1, text: "结论:只改一处,请确认。", truncated: false },
+      { ts: T0, text: "我先核对现有实现。", truncated: false, role: "narration" },
+      { ts: T0, text: "现在去跑一遍测试。", truncated: false, role: "narration" },
+      { ts: T1, text: "结论:只改一处,请确认。", truncated: false, role: "handoff" },
     ],
     steps: { calls: 12, errors: 1, reads: 8, edits: 2, bash: 2, agents: 0,
       sample: [{ kind: "edit", subject: "…/src/a.ts" }, { kind: "bash", subject: "npm test" }] } },
@@ -106,8 +107,8 @@ test("筛选与线程:意见与回执只留批注类条目;线程只留牵涉这
 
 test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史卡标出选了哪项", () => {
   const html = render();
-  assert.match(html, /此前 1 段说明/);
-  assert.match(html, /结论:只改一处,请确认。/);
+  assert.match(html, /2 段过程说明/, "过程话折成一行");
+  assert.match(html, /结论:只改一处,请确认。/, "交接语摊开");
   assert.match(html, /编辑 …\/src\/a\.ts · 运行 npm test · 共 12 步 · 1 步失败/);
   assert.match(html, /最终检视：确认这版代码可直接推送/);
   assert.match(html, /class="chosen">需要调整代码/);
@@ -141,11 +142,39 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
 test("超过一屏的历史默认折叠,给出「显示更早的 N 条」", () => {
   const many: ConversationItem[] = Array.from({ length: 60 }, (_, index) => ({
     kind: "turn", id: `turn-${index}`, ts: new Date(Date.parse(T0) + index * 60_000).toISOString(),
-    end_ts: T0, open: false, texts: [{ ts: T0, text: `第 ${index} 段`, truncated: false }],
+    end_ts: T0, open: false, texts: [{ ts: T0, text: `第 ${index} 段`, truncated: false, role: "handoff" }],
     steps: { calls: 0, errors: 0, reads: 0, edits: 0, bash: 0, agents: 0, sample: [] },
   }));
   const html = render({ items: many });
   assert.match(html, /显示更早的 10 条/);
   assert.doesNotMatch(html, /第 3 段/);
   assert.match(html, /第 59 段/);
+});
+
+
+test("举卡前那段话与当前卡的决策背景重复时,流里只留卡里那份;回合全是过程话时摊开最后一段", () => {
+  const speech = "三条意见逐条处理如下,一条需要你补充信息:长文的边界按信息任务还是按字数?";
+  const withCard = { ...task, status: "waiting_for_human",
+    waiting: { waiting_id: "w3", state_version: 1, created_at: T3, context: speech,
+      question: { questions: [{ question: "按哪种?" }] } } } as unknown as TaskSummary;
+  const echoed: ConversationItem[] = [
+    { kind: "turn", id: "turn-echo", ts: T2, end_ts: T3, open: false,
+      texts: [{ ts: T2, text: "我先看一眼 spec。", truncated: false, role: "narration" },
+        { ts: T3, text: speech, truncated: false, role: "handoff" }],
+      steps: { calls: 1, errors: 0, reads: 1, edits: 0, bash: 0, agents: 0, sample: [] } },
+  ];
+  const html = render({ task: withCard, items: echoed, decides: true,
+    currentCard: React.createElement("div", { className: "probe-card" }, "卡") });
+  assert.doesNotMatch(html, /长文的边界按信息任务还是按字数/, "同一段字不读两遍");
+  assert.match(html, /1 段过程说明/);
+  const narrationOnly: ConversationItem[] = [
+    { kind: "turn", id: "turn-n", ts: T2, end_ts: T3, open: true,
+      texts: [{ ts: T2, text: "先读调用点。", truncated: false, role: "narration" },
+        { ts: T3, text: "现在补一个条目再跑测试。", truncated: false, role: "narration" }],
+      steps: { calls: 2, errors: 0, reads: 2, edits: 0, bash: 0, agents: 0, sample: [] } },
+  ];
+  const running = render({ items: narrationOnly });
+  assert.match(running, /现在补一个条目再跑测试。/, "没有交接语时最后一段过程话摊开");
+  assert.match(running, /1 段过程说明/);
+  assert.match(running, /正在进行/);
 });

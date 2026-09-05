@@ -46,7 +46,10 @@ export type ConversationItem =
     }
   | {
       kind: "turn"; id: string; ts: string; end_ts: string;
-      texts: Array<{ ts: string; text: string; truncated: boolean }>;
+      /** narration = 说完就去调工具的过程话("我先看一下…");handoff = 说完
+       * 举卡 / 收口 / 等人的交接语。run7 真现场 145 段里 116 段是过程话——
+       * 页面默认只摊开交接语。 */
+      texts: Array<{ ts: string; text: string; truncated: boolean; role: "narration" | "handoff" }>;
       steps: ConversationSteps;
       /** 回合还没收尾(任务仍在跑):最后一条是"正在说的"。 */
       open: boolean;
@@ -220,6 +223,12 @@ function fromEvents(
 
   let turn: Extract<ConversationItem, { kind: "turn" }> | undefined;
   let turnSeq = 0;
+  // 一段话的角色要看它后面跟的是什么:跟工具调用 = 过程话;跟举卡/收口/换人
+  // 说话 = 交接语。回合收口时还没定角色的按交接语算。
+  const settle = (role: "narration" | "handoff") => {
+    const last = turn?.texts.at(-1);
+    if (last && last.role === "handoff" && role === "narration") last.role = "narration";
+  };
   const flush = (endTs: string) => {
     if (!turn) return;
     if (turn.texts.length || turn.steps.calls || turn.steps.agents) {
@@ -299,12 +308,18 @@ function fromEvents(
     if (kind === "assistant_message") {
       const text = clip(payload.text, TEXT_LIMIT);
       if (!text.text) continue;
-      ensureTurn(ts).texts.push({ ts, ...text });
+      ensureTurn(ts).texts.push({ ts, ...text, role: "handoff" });
+      continue;
+    }
+    if (kind === "tool_requested") {
+      // 举卡前那段话是交接语(它就是卡的"决策背景");其它工具前的是过程话。
+      if (String(payload.name ?? "") !== "AskUserQuestion") settle("narration");
       continue;
     }
     if (kind === "tool_finished") {
       const name = String(payload.name ?? "");
       if (name === "AskUserQuestion") continue;  // 卡那条账已经在流里
+      settle("narration");
       const current = ensureTurn(ts);
       const input = (payload.input ?? {}) as Record<string, unknown>;
       current.steps.calls += 1;
@@ -328,6 +343,7 @@ function fromEvents(
       continue;
     }
     if (kind === "agent_spawned") {
+      settle("narration");
       const current = ensureTurn(ts);
       current.steps.agents += 1;
       const subject = clip(payload.description ?? payload.agent_type ?? "子任务", 60).text;

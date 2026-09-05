@@ -168,7 +168,15 @@
 .task-workspace-v2 .conv-text { color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); overflow-wrap: anywhere; }
 .task-workspace-v2 .conv-text .md > :first-child { margin-top: 0; }
 .task-workspace-v2 .conv-text .md > :last-child { margin-bottom: 0; }
+/* 长话折叠:固定高度 + 底部渐隐 + 展开全文;代码块、表格在气泡里自己滚,不撑栏 */
+.task-workspace-v2 .conv-text.clamped .conv-text-window { position: relative; max-height: 260px; overflow: hidden; }
+.task-workspace-v2 .conv-text.clamped .conv-text-window::after { content: ""; position: absolute; inset: auto 0 0; height: 48px; background: linear-gradient(transparent, var(--canvas)); pointer-events: none; }
+.task-workspace-v2 .conv-expand { margin-top: 4px; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-12); cursor: pointer; }
+.task-workspace-v2 .conv-expand:hover { text-decoration: underline; }
+.task-workspace-v2 .conv-text pre { max-height: 180px; overflow: auto; font-size: var(--fs-12); }
+.task-workspace-v2 .conv-text table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--fs-13); }
 .task-workspace-v2 .conv-earlier { border-left: 2px solid var(--line); padding-left: 10px; }
+.task-workspace-v2 .conv-earlier.narration > summary { color: var(--faint); }
 .task-workspace-v2 .conv-earlier > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
 .task-workspace-v2 .conv-earlier .conv-text { margin-top: 8px; color: var(--muted); font-size: var(--fs-13); }
 .task-workspace-v2 .conv-act {

@@ -161,6 +161,44 @@ function stepsLine(steps: ConversationSteps): string {
   return parts.length ? `${parts.join(" · ")} · ${tail}` : tail;
 }
 
+/** 长话按渲染高度折叠,不按字数切(工作过程页签踩过切坏 Markdown 的坑)。
+ * 超过约 12 行收成固定高度加"展开全文";静态渲染(测试)下量不到高度,原样摊开。 */
+const CLAMP_PX = 260;
+function ClampedText({ text }: { text: string }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const node = body.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const measure = () => setOverflows(node.scrollHeight > CLAMP_PX + 24);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+  return (
+    <div className={`conv-text${overflows && !expanded ? " clamped" : ""}`}>
+      <div className="conv-text-window"><div ref={body}><Markdown text={text} /></div></div>
+      {overflows && (
+        <button type="button" className="conv-expand" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "收起" : "展开全文"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 举卡前那段话就是卡的"决策背景",两处同一段字只留卡里那份。投影把话
+ * 裁到 1600 字,比较按较短的一方对齐。 */
+function sameSpeech(left: string, right: string): boolean {
+  const a = left.replace(/\s+/g, " ").trim().replace(/…$/, "");
+  const b = right.replace(/\s+/g, " ").trim();
+  if (!a || !b) return false;
+  const span = Math.min(a.length, b.length, 1500);
+  return span >= 24 && a.slice(0, span) === b.slice(0, span);
+}
+
 export function ConversationStream({
   task,
   items,
@@ -368,15 +406,36 @@ export function ConversationStream({
           </div>
         );
       case "turn": {
-        const last = item.texts.at(-1);
-        const earlier = item.texts.slice(0, -1);
+        // 交接语摊开(最后一段全文,此前的折叠);过程话默认折成一行;举卡前那段
+        // 与当前卡的决策背景重复的不再渲。回合全是过程话时把最后一段当交接语。
+        const cardContext = pinnedCard ? (waiting?.context ?? "") : "";
+        const handoffs = item.texts.filter((text) => text.role !== "narration"
+          && !(cardContext && sameSpeech(text.text, cardContext)));
+        const echoedByCard = item.texts.some((text) => text.role !== "narration"
+          && cardContext && sameSpeech(text.text, cardContext));
+        const narrations = item.texts.filter((text) => text.role === "narration");
+        const spoken = handoffs.length ? handoffs
+          : (!echoedByCard && narrations.length ? [narrations[narrations.length - 1]] : []);
+        const folded = narrations.filter((text) => !spoken.includes(text));
+        const last = spoken.at(-1);
+        const earlier = spoken.slice(0, -1);
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
           tag: item.open ? <em className="conv-tag ink">正在进行</em> : undefined,
           children: <>
+            {folded.length > 0 && (
+              <details className="conv-earlier narration">
+                <summary>{folded.length} 段过程说明</summary>
+                {folded.map((text, index) => (
+                  <div className="conv-text" key={index}>
+                    <Markdown text={text.text} />
+                  </div>
+                ))}
+              </details>
+            )}
             {earlier.length > 0 && (
               <details className="conv-earlier">
-                <summary>此前 {earlier.length} 段说明</summary>
+                <summary>此前 {earlier.length} 段</summary>
                 {earlier.map((text, index) => (
                   <div className="conv-text" key={index}>
                     <Markdown text={text.text} />
@@ -384,7 +443,7 @@ export function ConversationStream({
                 ))}
               </details>
             )}
-            {last && <div className="conv-text"><Markdown text={last.text} /></div>}
+            {last && <ClampedText text={last.text} />}
             {(item.steps.calls > 0 || item.steps.agents > 0) && (
               <button type="button" className="conv-act" onClick={onOpenSteps}
                 title="到「工作过程」看每一步">

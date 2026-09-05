@@ -56,6 +56,9 @@ test("主会话按回合合并,工具步骤折成计数,子会话与 AskUserQues
   const [, first, second] = view.items as Array<Extract<ConversationItem, { kind: "turn" }>>;
   assert.equal(first.texts.length, 2);
   assert.equal(first.texts[0].text, "我先看一眼现有实现。");
+  assert.deepEqual(first.texts.map((text) => text.role), ["narration", "handoff"],
+    "说完去读文件的是过程话,说完举卡的是交接语");
+  assert.equal(second.texts[0].role, "handoff", "说完回合结束的按交接语算");
   assert.deepEqual(
     { calls: first.steps.calls, errors: first.steps.errors, reads: first.steps.reads,
       edits: first.steps.edits, bash: first.steps.bash, agents: first.steps.agents },
@@ -79,6 +82,8 @@ test("任务仍在跑时最后一个回合标记为未收尾;插话带送达事�
     running: true,
   });
   assert.deepEqual(kinds(view.items), ["steer", "turn"]);
+  assert.equal((view.items[1] as Extract<ConversationItem, { kind: "turn" }>).texts[0].role,
+    "handoff", "任务还在跑、后面还没跟工具的话先按交接语算");
   const steer = view.items[0] as Extract<ConversationItem, { kind: "steer" }>;
   assert.equal(steer.text, "别动区号");
   assert.equal(steer.delivered, false);

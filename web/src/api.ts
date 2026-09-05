@@ -4309,7 +4309,8 @@ export type ConversationItem =
     }
   | {
       kind: "turn"; id: string; ts: string; end_ts: string;
-      texts: Array<{ ts: string; text: string; truncated: boolean }>;
+      /** narration = 说完就去调工具的过程话;handoff = 说完举卡/收口的交接语。 */
+      texts: Array<{ ts: string; text: string; truncated: boolean; role: "narration" | "handoff" }>;
       steps: ConversationSteps;
       open: boolean;
     }

@@ -369,11 +369,23 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   验证结论 / 经验记录与执行日志入口,Agent 的话、卡与决定不再重复出现,原来那
   条实时 SSE 尾巴也去掉了。`SteerBox` 已删,页头、左栏材料、批注与检视抽屉、
   紫白视觉与进度条不动。
-  **已验**:`tests/conversation.test.ts`(回合合并与步骤计数、子会话不进流、卡
+  **可读性(同日追加,用户原话"Agent 发回来一大堆东西可读性很差")**:拿 run7
+  对过数——主会话 145 段话里 116 段后面紧跟工具调用(过程话),只有 24 段是举卡
+  或收口前的交接语;长度中位数 65 字,超 800 字的只有 4 段。所以问题是数量不是
+  长度:投影给每段话标 `role`(跟工具调用 = narration,跟举卡/收口 = handoff),
+  流里只摊开交接语,过程话折成一行"N 段过程说明";举卡前那段话就是卡的"决策
+  背景",两处同一段字只留卡里那份;长话按渲染高度折叠(约 12 行,不按字数切),
+  代码块与表格在气泡里自己滚。提示词层面按用户拍板"不做强校验,提示一下让他
+  说人话":`HUMAN_FACING_STYLE`(结论先行、不贴 diff/日志、过程话压成一句、
+  说人话、用中文)经 pi 的 `appendSystemPromptOverride` 只挂在直接面对人的会话
+  (主会话、开发助手),子 Agent 与专项会话不挂;模型听不听得进去要真模型试跑
+  才知道,这里没有验证。
+  **已验**:`tests/conversation.test.ts`(回合合并与步骤计数、过程话/交接语标记、子会话不进流、卡
   与决定来自 waiting.json、批注账七种操作还原与合批、外部意见按批次、裸时间戳
   与同毫秒排序、坏行容错);`tests/conversationStream.test.ts`(Vite SSR 静态
   渲染:三档筛选与线程、回合摊开 / 折叠、历史卡标出所选、回执与旧版本标记、
-  锚条三态、当前卡由父级传入、超 50 条折叠);源码契约测试改到新结构
+  锚条三态、当前卡由父级传入、超 50 条折叠、过程话折叠与决策背景去重);
+  `tests/humanFacingStyle.test.ts`(口径常量、只挂面对人的两类会话);源码契约测试改到新结构
   (`workspaceExecutionPanel` / `decisionContextLayout` / `analysisDiscussion` /
   `uiWorkbenchScenarios`);fixture 服务(`npm run ui:preview`)里 1440×900 实
   测 task-8:栏头 → 状态行 → 锚条 → 筛选 → 流(可滚、贴底)→ 输入框全部在视
