@@ -565,6 +565,10 @@ export function AnnotationPanel({
                         : "保存后仍在待提交清单中。"
                       : taskStatus === "completed"
                         ? "修改后会成为交付后记录，不会再次送给 Agent。"
+                      : closure.needs_clarification
+                        // 回答 Agent 的追问就是把答复写进意见正文:没有单独的
+                        // 回复框(用户 2026-09-05:"没看到让我在哪回答这个问题")
+                        ? "把答复写进意见正文里。保存后这条回到待提交，随下一次提交送给 Agent 重新处理。"
                         : "修改后会回到待提交，避免新内容被误认为已经送达。"}</span>
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy}
@@ -754,7 +758,7 @@ export function AnnotationPanel({
                             onClick={() => {
                               setEditingId(item.id);
                               setEditingNote(item.note);
-                            }}>补充说明后重提</button>
+                            }}>回答这个问题</button>
                   </span>
                 )}
                 {item.status === "sent"

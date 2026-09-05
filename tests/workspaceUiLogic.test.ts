@@ -742,7 +742,7 @@ test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时�
   assert.match(html, /另有 1 条意见的当前轮逐条回执尚未就绪/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
-  assert.match(html, />补充说明后重提<\/button>/);
+  assert.match(html, />回答这个问题<\/button>/, "追问的回答入口按动作命名");
   assert.ok(html.indexOf("src/actionable.ts") < html.indexOf("src/history.ts"),
     "待确认卡必须排在历史记录前面");
 });
