@@ -282,8 +282,10 @@ export function ConversationStream({
   const waiting = task.status === "waiting_for_human" ? task.waiting : undefined;
   // 当前这张卡永远钉在流的末尾:它举卡之后人还会提批注、插话,按时间排它会
   // 被埋在这些条目上面,人得往回翻才找得到选项(fixture 实测)。时间线上
-  // 它原来的位置不重复渲。
-  const pinnedCard = !!waiting && !!currentCard && !thread;
+  // 它原来的位置不重复渲。线程视图也钉:卡的提交区经 portal 挂在输入框里,
+  // 卡不渲输入框就只剩一句"等你在上面点一个选项"——用户 2026-09-05 点了
+  // 「往来」后实锤"说给 Agent 栏没了"。
+  const pinnedCard = !!waiting && !!currentCard;
   const chronological = pinnedCard
     ? visible.filter((item) => !(item.kind === "card" && item.waiting_id === waiting.waiting_id))
     : visible;

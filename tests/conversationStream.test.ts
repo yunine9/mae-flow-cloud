@@ -151,6 +151,13 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   const confirm = render({ awaitingYou: 3 });
   assert.match(confirm, /3 条意见等你逐条确认/);
   assert.match(confirm, /打开批注与检视/);
+  // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
+  // 输入框就空了(用户点「往来」后实锤"说给 Agent 栏没了")。
+  const threaded = render({ task: waitingTask, decides: true, thread: "a-1",
+    currentCard: React.createElement("div", { className: "probe-card" }, "决定卡本体") });
+  assert.match(threaded, /只看这条意见的往来/);
+  assert.match(threaded, /conv-card current"><div class="probe-card">决定卡本体/,
+    "线程视图不丢当前卡");
 });
 
 test("超过一屏的历史默认折叠,给出「显示更早的 N 条」", () => {
