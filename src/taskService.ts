@@ -78,7 +78,14 @@ import {
 } from "node:path";
 import {
   annotationClosures,
+  answeredClarificationReceipt,
   blockingAnnotations,
+  agentReviewAnnotations,
+  clarificationRoundsLeft,
+  describeReviewProcessingGap,
+  MAX_CLARIFICATION_ROUNDS,
+  pendingReviewProcessing,
+  reviewProcessingKey,
   workspaceReviewReady,
   type AnnotationClosure,
   type AnnotationClosureFacts,
@@ -1203,6 +1210,9 @@ export interface TaskSummary {
       feedback_receipt_retry_for?: string;
       diagnosis?: string;
     };
+    /** 推送卡前发现检视意见没处理完时,已为哪一批(id:版本 指纹)重新派过
+     * Agent。同一批只派一次:派过仍没完成就如实举卡让人返工,不空转。 */
+    review_processing_dispatched_for?: string;
   };
   /** push 前最终交付范围收据。requested 表示已经作为返工要求发给
    * Agent；confirmed 只授权当时精确的 head + paths。人工复检关闭时，
@@ -1649,14 +1659,19 @@ function taskTitle(requirement: string): string {
 function waitingTaskDetail(waiting: WaitingRecord | undefined): string {
   const raw = waiting?.question?.questions;
   const questions = Array.isArray(raw) ? raw : [];
+  // 澄清卡是 Agent 处理检视意见时缺信息在问人,与"要不要通过"的确认卡
+  // 是两回事,一行摘要就得分开说。
+  const clarifying = waiting?.question?.purpose === "clarification";
   const first = questions.length && questions[0]
     && typeof questions[0] === "object"
     ? String((questions[0] as Record<string, unknown>).question ?? "")
       .replace(/\s+/g, " ").trim()
     : "";
-  if (!first) return "Agent 正在等待你的决定";
+  if (!first) {
+    return clarifying ? "Agent 处理检视意见时缺少信息,等待你补充" : "Agent 正在等待你的决定";
+  }
   const clipped = first.length > 120 ? `${first.slice(0, 119)}…` : first;
-  return `等待你回答：${clipped}`
+  return `${clarifying ? "Agent 需要补充信息" : "等待你回答"}：${clipped}`
     + (questions.length > 1 ? `（共 ${questions.length} 个问题）` : "");
 }
 
@@ -1729,6 +1744,9 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
+  /** 回合收口时检视意见还没处理完的催办账(内存态):同一批意见最多让原
+   * 会话接着处理两次,催不动就按原路收口,由推送卡那道兜底再派一次。 */
+  reviewProcessingNudge?: { key: string; count: number };
   /** 任务专属容器(隔离模式):随任务起,随收口停。人工等待期间保持
    * 原实例不动，保证 Agent 的 HOME、/tmp 与执行环境连续。 */
   container?: TaskCommandContainer;
@@ -4978,6 +4996,289 @@ export class TaskService {
       join(task.summary.workspace, "annotations.jsonl"));
   }
 
+  /* ---------------------------------------------------------------- *
+   * 检视意见的"处理完成"闸(用户 2026-09-05 拍板):
+   * 中途提交的意见 Agent 要及时处理;最终"是否通过 / 确认推送"卡出现之前,
+   * 所有已提交意见必须处理完成——只认当前版本的 fixed 回执,"收到了""回了
+   * 一句"、旧版本回执、not_fixed、needs_clarification 都不算。确实缺信息
+   * 可以单独追问(澄清卡),答了继续处理。处理完成 ≠ 验收:提出人仍逐条确认。
+   * 三道检查共用下面这组方法:举卡前(beforeReviewQuestion,拦下让原会话
+   * 继续)、回合收口(settleTurn,催原会话接着处理)、推送卡前(
+   * pushConfirmationSatisfied,重新派单)。原来只在人点"通过"时拦,卡已经
+   * 举出来了,人只剩"需要调整"可点——举卡时机太早。
+   * ---------------------------------------------------------------- */
+
+  /** 逐条回执文件:普通插话、决定卡随批、MR 修复共用同一份。 */
+  private reviewReceiptsPath(task: TaskState): string {
+    return join(task.summary.workspace, "reviews", "local-receipts.json");
+  }
+
+  /** 送意见给 Agent 之前把 reviews 目录建好:使命里说"不要创建上级目录",
+   * 目录就得由平台准备。建不出来只记日志——它不该拦住意见送达。 */
+  private ensureReviewsDir(task: TaskState): void {
+    try {
+      mkdirSync(join(task.summary.workspace, "reviews"), { recursive: true });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} reviews 目录创建失败(意见照送): ${String(error)}`);
+    }
+  }
+
+  /** 回执契约按会话 cwd 换算路径:普通任务 cwd 是仓根(../reviews),分析单
+   * 是 repositories/(也是 ../reviews),演练/测试的 cwd 就是任务目录(reviews)。 */
+  private reviewReceiptInstructionsFor(task: TaskState, items: Annotation[]): string {
+    const directory = pathRelative(task.cwd ?? task.summary.workspace,
+      join(task.summary.workspace, "reviews")).split(pathSep).join("/") || ".";
+    return workspaceReviewReceiptInstructions(items)
+      .replaceAll("../reviews", directory);
+  }
+
+  /** 读盘上的逐条回执并登记进批注账。与 MR 修复轮的
+   * consumeWorkspaceReviewReceipts 不同:这里不是"这轮必须齐",而是"此刻
+   * 盘上有什么就记什么"——举卡前、回合收口、推送卡前都会读,允许 Agent
+   * 分批落盘。畸形/重复/未知 id 是错误(要 Agent 修文件,返回原因);旧版本
+   * 回执、人已答过的追问、已闭环意见的残留是历史,直接忽略。 */
+  private async consumeReviewProcessingReceipts(
+    task: TaskState,
+  ): Promise<string | undefined> {
+    const store = this.annotations(task);
+    const listed = store.list();
+    const submitted = agentReviewAnnotations(listed);
+    if (!submitted.length) return undefined;
+    const path = this.reviewReceiptsPath(task);
+    if (!existsSync(path)) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(path, "utf-8"));
+    } catch (error) {
+      return `逐条检视回执不是可读取的 JSON(${String(error)}),请修正后继续。`;
+    }
+    const rows = Array.isArray(raw) ? raw
+      : raw && typeof raw === "object"
+        ? (raw as { receipts?: unknown }).receipts : undefined;
+    if (!Array.isArray(rows)) return "逐条检视回执缺少 receipts 数组。";
+    const byId = new Map(submitted.map((item) => [item.id, item]));
+    const known = new Set(listed.map((item) => item.id));
+    const live = rows.filter((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      const id = String(record.annotation_id ?? "");
+      const target = byId.get(id);
+      // 已闭环/撤回/退回草稿的意见留下的条目是历史;真正没见过的 id 留给
+      // 校验报"未知意见"。
+      if (!target) return !known.has(id);
+      const revision = Number(record.revision ?? 0);
+      // 改字/返工之后的旧版本回执也是历史,不背书新文字,也不算错。
+      return !(Number.isInteger(revision) && revision < (target.rework ?? 0));
+    });
+    const parsed = parseWorkspaceReviewReceipts(live, submitted);
+    if (parsed.errors.length || parsed.unexpected_ids.length) {
+      return `逐条检视回执未通过核对:${[
+        ...parsed.errors,
+        ...parsed.unexpected_ids.map((id) => `未知意见 ${id}`),
+      ].join(";")}`;
+    }
+    let sha: string | undefined;
+    for (const receipt of parsed.receipts) {
+      const target = byId.get(receipt.annotation_id)!;
+      // 人在澄清卡上已经答过的追问,Agent 原样再抄一遍不能把它"复活"。
+      if (answeredClarificationReceipt(target, receipt)) continue;
+      const before = target.response?.revision === receipt.revision
+        ? target.response : undefined;
+      if (before && before.outcome === receipt.outcome
+          && before.summary === receipt.summary
+          && JSON.stringify(before.evidence)
+            === JSON.stringify(receipt.evidence ?? [])) continue;
+      if (sha === undefined) {
+        // 没有 git 现场(演练/测试)就不绑提交;读不到不是回执的错。
+        try { sha = task.cwd ? (await this.prePushRevision(task)).sha : ""; }
+        catch { sha = ""; }
+      }
+      store.respond(receipt.annotation_id, {
+        revision: receipt.revision,
+        outcome: receipt.outcome,
+        summary: receipt.summary,
+        evidence: receipt.evidence ?? [],
+        ...(sha ? { fixed_sha: sha } : {}),
+      });
+    }
+    return undefined;
+  }
+
+  /** 此刻还没处理完成的意见,外加回执文件本身的问题(读不动/格式坏)。
+   * 文件坏了但没有待处理意见时不算事——没有东西被它挡着,只记日志。 */
+  private async reviewProcessingGap(task: TaskState): Promise<{
+    pending: Annotation[];
+    error?: string;
+  }> {
+    const error = await this.consumeReviewProcessingReceipts(task);
+    const pending = pendingReviewProcessing(this.annotations(task).list());
+    if (error && !pending.length) {
+      this.options.log?.(`任务 ${task.summary.id} 回执文件有问题但无待处理意见: ${error}`);
+    }
+    return { pending, ...(error && pending.length ? { error } : {}) };
+  }
+
+  /** 给 Agent 的纠偏话:哪些意见还没处理完、各卡在哪、怎么写回执、缺
+   * 信息怎么问。三道检查用同一段话,模型看到的要求不会前后不一。 */
+  private reviewProcessingPrompt(
+    task: TaskState,
+    pending: Annotation[],
+    error?: string,
+  ): string {
+    return [
+      `还有 ${pending.length} 条已提交的检视意见没有处理完成:不能举起整体确认卡、`
+        + "不能交付,也不要就此结束本轮。",
+      error ? `另外,回执文件有问题:${error}` : "",
+      "逐条现状:\n" + pending.map((item) =>
+        `- ${describeReviewProcessingGap(item)}`).join("\n"),
+      renderAnnotations(pending, this.ticketOf(task)),
+      this.reviewReceiptInstructionsFor(task, pending),
+      "先把要求明确的意见改完并逐条登记 fixed 回执;确实缺信息的才单独追问"
+        + "(purpose=clarification,只问缺的信息),人答复后按答复继续并更新回执。"
+        + "全部处理完再举确认卡。处理完成不等于验收:提出人会在最终卡上逐条"
+        + "确认,你不能替他们点通过。",
+    ].filter(Boolean).join("\n\n");
+  }
+
+  /** 举卡前的核对(接 CloudSession.beforeHumanQuestion):还有意见没处理完
+   * 就不许举确认卡;只放行形状合规的澄清卡。返回文字 = 拦下,原会话拿着
+   * 这段话继续干活,不创建待办、不通知人、不伪造人的同意。 */
+  private async beforeReviewQuestion(
+    task: TaskState,
+    input: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    const { pending, error } = await this.reviewProcessingGap(task);
+    if (!pending.length) return undefined;
+    if (input.purpose === "clarification") {
+      const rejected = this.clarificationCardRejection(task, pending, input);
+      if (!rejected) return undefined;
+      this.options.log?.(`任务 ${task.summary.id} 澄清卡不合规被拦:${rejected}`);
+      return [rejected, this.reviewProcessingPrompt(task, pending, error)].join("\n\n");
+    }
+    this.options.log?.(`任务 ${task.summary.id} 举卡被拦:${pending.length} 条检视意见`
+      + `未处理完成(${reviewProcessingKey(pending)})`);
+    return this.reviewProcessingPrompt(task, pending, error);
+  }
+
+  /** 澄清卡合规三条:①annotation_ids 都是当前正 needs_clarification 的意见
+   * (先把疑问写进回执,再问人——回执是账,卡只是问);②同一版正文的追问
+   * 次数没用完;③选项里没有通过/推送/验收类字样,也没有内核当前步骤的关闭
+   * 选项——追问不能顺带把验收夹带过去。不合规返回原因。 */
+  private clarificationCardRejection(
+    task: TaskState,
+    pending: Annotation[],
+    input: Record<string, unknown>,
+  ): string | undefined {
+    const ids = Array.isArray(input.annotation_ids)
+      ? input.annotation_ids.map(String) : [];
+    if (!ids.length) return "补充信息卡必须用 annotation_ids 指明追问的是哪几条意见。";
+    const byId = new Map(pending.map((item) => [item.id, item]));
+    for (const id of ids) {
+      const item = byId.get(id);
+      if (!item) return `意见 ${id} 不在待处理清单里,不能为它追问。`;
+      const current = item.response?.revision === (item.rework ?? 0)
+        ? item.response : undefined;
+      if (current?.outcome !== "needs_clarification") {
+        return `意见 ${id} 还没有当前版本的 needs_clarification 回执;先把具体疑问`
+          + "写进回执,再追问。";
+      }
+      if (clarificationRoundsLeft(item) <= 0) {
+        return `意见 ${id} 的追问已达 ${MAX_CLARIFICATION_ROUNDS} 次上限,不能再问;`
+          + "按最合理理解处理,并在回执 summary 写明假设。";
+      }
+    }
+    const questions = Array.isArray(input.questions)
+      ? input.questions as Array<{ options?: unknown }> : [];
+    const options = questions.flatMap((question) =>
+      Array.isArray(question?.options) ? question.options.map(String) : []);
+    const closing = stepChoiceEffects(this.options.host?.kernelRoot,
+      this.reviewContractStep(task, undefined)).filter((effect) => effect.closesFeedback);
+    const approval = options.find((option) =>
+      closing.some((effect) => matchesStepChoice(effect, option))
+      || /确认.*(?:通过|推送|验收|合入)|全部通过|按清单推送|approve/i.test(option));
+    if (approval) {
+      return `补充信息卡只能问缺少的信息,不能带「${approval}」这类通过/推送/验收选项。`;
+    }
+    return undefined;
+  }
+
+  /** 澄清卡答复落账:追问连同答复留档、当前回执清空、盘上那条旧追问回执
+   * 剪掉——Agent 按答复继续并重新写回执,不能拿"问过了"当处理完成,也
+   * 不能再问同一件事。答复原文随决定(renderDecision)回注给会话。 */
+  private recordClarificationAnswers(
+    task: TaskState,
+    waiting: WaitingRecord,
+    resolved: WaitingRecord,
+    actor?: string,
+  ): void {
+    const question = (waiting.question ?? {}) as Record<string, unknown>;
+    if (question.purpose !== "clarification") return;
+    const ids = Array.isArray(question.annotation_ids)
+      ? question.annotation_ids.map(String) : [];
+    if (!ids.length) return;
+    const answer = renderDecision(resolved).trim();
+    if (!answer) return;
+    const store = this.annotations(task);
+    const answered: string[] = [];
+    for (const id of ids) {
+      try {
+        store.answerClarification(id, answer, actor);
+        answered.push(id);
+      } catch (error) {
+        // 作者已改字重提、或 Agent 已另写回执:这份答复只是迟到的历史。
+        this.options.log?.(
+          `任务 ${task.summary.id} 追问答复未落到 ${id}: ${String(error)}`);
+      }
+    }
+    if (answered.length) this.pruneReviewReceipts(task, answered);
+  }
+
+  /** 从回执文件里剪掉这些意见的条目:人答完追问后,盘上那条
+   * needs_clarification 不能再被读成"还在等人"。文件是仓外派生物,剪不动
+   * 只记日志(读侧还有 answeredClarificationReceipt 兜着)。 */
+  private pruneReviewReceipts(task: TaskState, ids: string[]): void {
+    const path = this.reviewReceiptsPath(task);
+    if (!existsSync(path)) return;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf-8"));
+      const drop = new Set(ids);
+      const keep = (rows: unknown[]) => rows.filter((row) => !drop.has(
+        String((row as Record<string, unknown> | null)?.annotation_id ?? "")));
+      const next = Array.isArray(raw) ? keep(raw)
+        : raw && typeof raw === "object" && Array.isArray(raw.receipts)
+          ? { ...raw, receipts: keep(raw.receipts) } : raw;
+      writeFileSync(path, JSON.stringify(next, null, 2));
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 剪除已答复追问的回执失败(读侧另有兜底): ${String(error)}`);
+    }
+  }
+
+  /** 推送卡前的兜底:意见还没处理完就不举最终卡,按既有续跑机制把任务重新
+   * 排队让 Agent 接着处理(此时原会话已收口,不会有第二个 Agent 并发)。
+   * 同一批意见只派一次:派过一轮回来还没完成,就不再空转,让卡如实出现,
+   * 人在卡上看到"未处理"只能选返工。 */
+  private dispatchReviewProcessing(
+    task: TaskState,
+    pending: Annotation[],
+  ): "dispatched" | "busy" | "exhausted" {
+    const key = reviewProcessingKey(pending);
+    const delivery = task.summary.delivery ?? (task.summary.delivery = {});
+    if (delivery.review_processing_dispatched_for === key) {
+      this.options.log?.(`任务 ${task.summary.id} 检视意见 ${key} 派过一轮仍未处理完成,`
+        + "不再重派,按现状举卡");
+      return "exhausted";
+    }
+    // 有会话在跑/在排队就不另起——这条路是"回合收口后才发现"的兜底。
+    if (task.driver || ["running", "queued"].includes(task.summary.status)) return "busy";
+    delivery.review_processing_dispatched_for = key;
+    this.enqueueRepair(task, this.reviewProcessingPrompt(task, pending),
+      `还有 ${pending.length} 条检视意见未处理完成,已让 Agent 继续处理`);
+    this.options.log?.(
+      `任务 ${task.summary.id} 推送卡前发现 ${pending.length} 条检视意见未处理完成,重新派单(${key})`);
+    return "dispatched";
+  }
+
   /** 批注靶子既可能是真实产物，也可能是任务快照里的需求原文。 */
   private annotationArtifactContent(
     task: TaskState,
@@ -6352,7 +6653,11 @@ export class TaskService {
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
-    await this.interrupt(task.summary.id, text);
+    // 回执契约随意见一起到:原来普通插话只让 Agent"逐条回我改了什么",
+    // 没有机器回执,平台无从判断处理完没有(举卡前那道闸要读它)。
+    this.ensureReviewsDir(task);
+    await this.interrupt(task.summary.id,
+      [text, this.reviewReceiptInstructionsFor(task, picked)].join("\n\n"));
     this.annotations(task).markSent(
       picked.map((item) => item.id), "interrupt", sentBy);
     return { sent: picked.map((item) => item.id), text };
@@ -11487,6 +11792,9 @@ export class TaskService {
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
       picked.length
         ? this.requirementAnnotationInstructions(task, picked) : undefined,
+      // push 返工的使命里已经带了同一份回执契约,不重复。
+      picked.length && !pushConfirmCard
+        ? this.reviewReceiptInstructionsFor(task, picked) : undefined,
       // 等待期间 @ 引用的知识随本次决定送达(版本在引用时已固定)。
       ...(task.pendingDecisionKnowledge ?? []),
     ].filter(Boolean).join("\n\n") || undefined;
@@ -11511,6 +11819,9 @@ export class TaskService {
     }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     this.markResolvedDecisionAnnotations(task, resolved);
+    if (picked.length) this.ensureReviewsDir(task);
+    // 澄清卡的答复落到被追问的意见上:回执清空,Agent 按答复继续处理。
+    this.recordClarificationAnswers(task, waiting, resolved, input.actor);
     // “问责任人 / 决策后处理”不能因为恰好随任务决定一并提交，就被
     // 混进 Agent 修改清单。它们独立进入责任人待办；旧 agent 草稿仍
     // 沿用 waiting continuation 的崩溃恢复合同。
@@ -14057,6 +14368,9 @@ export class TaskService {
         humanizeQuestionText: analysisOnly
           ? (text) => humanizeRepositoryIds(text, this.analysisRepositoryNames(task))
           : undefined,
+        // 举卡前核对(2026-09-05):检视意见没处理完不许举确认卡,只放行
+        // 合规的澄清卡;拦下的话作为工具错误回给模型,原会话继续。
+        beforeHumanQuestion: (input) => this.beforeReviewQuestion(task, input),
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
@@ -15807,6 +16121,13 @@ export class TaskService {
     // 已经存在 selection，就维持既有的保守复检语义。
     const required = force || policy.required;
     if (!required || !task.cwd) return true;
+    // 最终卡出现之前,所有已提交意见必须处理完成(2026-09-05):还没处理完
+    // 就先不举卡,让 Agent 接着处理;派过一轮仍未完成才按现状举卡。
+    const reviewGap = await this.reviewProcessingGap(task);
+    if (reviewGap.pending.length
+        && this.dispatchReviewProcessing(task, reviewGap.pending) !== "exhausted") {
+      return false;
+    }
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) {
       this.markVerificationStalled(task,
@@ -19447,6 +19768,10 @@ export class TaskService {
       CLOUD_SPLIT_PROPOSAL_STEP].includes(waiting.step)) {
       return undefined;
     }
+    // 澄清卡是 Agent 缺信息在问人,不是流程节点,平台不代答。
+    if ((waiting.question as Record<string, unknown>)?.purpose === "clarification") {
+      return undefined;
+    }
     const questions = ((waiting.question as any)?.questions ?? []) as Array<{
       question?: string;
       options?: string[];
@@ -19529,6 +19854,11 @@ export class TaskService {
         answers,
         notes: "系统自动交卷(分析已确认,子任务各有检视闸),非人工答复",
       };
+    }
+    // 澄清卡(Agent 处理检视意见时缺信息,单独问人)只能由人答:月光免审批、
+    // 下单预选都不代答——代答等于机器替人编造缺失的信息。
+    if ((waiting.question as Record<string, unknown>)?.purpose === "clarification") {
+      return undefined;
     }
     const moonlight = this.moonlightEnabledFor(task, forceMoonlight);
     const hasUnresolvedAnnotations = this.unresolvedAnnotations(task).length > 0;
@@ -19776,6 +20106,8 @@ export class TaskService {
       options: Array.isArray(item.options) ? item.options.map(String) : [],
     }));
     const subject = task.summary.title ?? task.summary.requirement;
+    const clarifying = (waiting.question as Record<string, unknown>)?.purpose
+      === "clarification";
     const deliver = (
       recipient: string, waitingId: string, stateVersion?: number,
     ) => notifier.notifyWaiting({
@@ -19787,7 +20119,7 @@ export class TaskService {
       step: waiting.step,
       context: waiting.context,
       questions,
-      summary: "需要你确认",
+      summary: clarifying ? "Agent 处理检视意见时缺少信息,需要你补充" : "需要你确认",
       link: personalTaskLink(
         this.notificationLinkBase(),
         recipient,
@@ -19813,6 +20145,34 @@ export class TaskService {
       this.bypass(task, "讨论邀请通知",
         deliver(participant, `${waiting.waiting_id}#${participant}`));
     }
+    // 澄清卡问的是意见作者:被追问的人不是责任人时也要喊到(他能在页面
+    // 上答这张卡;答复权限见 server 的 canAnswerClarification)。
+    if (clarifying) {
+      for (const author of this.clarificationRespondents(task, waiting)) {
+        if (author === account) continue;
+        this.bypass(task, "追问作者通知",
+          deliver(author, `${waiting.waiting_id}#${author}`));
+      }
+    }
+  }
+
+  /** 澄清卡追问的那些意见的作者——除责任人外,他们也能答这张卡。 */
+  clarificationRespondents(task: TaskState, waiting: WaitingRecord): string[] {
+    const question = (waiting.question ?? {}) as Record<string, unknown>;
+    if (question.purpose !== "clarification") return [];
+    const ids = new Set(Array.isArray(question.annotation_ids)
+      ? question.annotation_ids.map(String) : []);
+    if (!ids.size) return [];
+    return [...new Set(this.annotations(task).list()
+      .filter((item) => ids.has(item.id)).map((item) => item.author))];
+  }
+
+  /** HTTP 层问:这个人能不能答当前这张澄清卡(意见作者 ≠ 责任人的情形)。 */
+  canAnswerClarification(id: string, username: string | undefined): boolean {
+    const task = this.tasks.get(id);
+    const waiting = task?.summary.waiting;
+    if (!task || !waiting || !username) return false;
+    return this.clarificationRespondents(task, waiting).includes(username);
   }
 
   /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
@@ -20824,6 +21184,39 @@ export class TaskService {
           await this.settle(
             task, task.driver.continueWith(late.join("\n\n")), epoch);
           break;
+        }
+        // 检视意见没处理完就收口,是"举卡太早"的另一面(用户 2026-09-05
+        // 拍板:最终卡出现之前所有已提交意见必须处理完成)。趁原会话还活着
+        // 让它接着处理,不另起会话;同一批意见最多催两次,催不动就按原路
+        // 收口——推送卡那道兜底会再派一次,再不成就如实举卡让人返工。
+        const reviewGap = await this.reviewProcessingGap(task);
+        if (!this.current(task, epoch)) break;
+        // MR 修复轮里"回执一条没写"另有一条更窄的路(下面的"只补回执,不要
+        // 重新修改代码",自动补交一次、再失败如实停下),这里让给它;这里
+        // 只管回执写了但不算完成的 not_fixed / needs_clarification,以及
+        // 没有修复环的普通流程。
+        const mrLoopOwesReceipts = task.summary.delivery?.loop?.review_source
+          === "workspace" && reviewGap.pending.some((item) =>
+          item.response?.revision !== (item.rework ?? 0));
+        if (reviewGap.pending.length && task.driver && !mrLoopOwesReceipts) {
+          const key = reviewProcessingKey(reviewGap.pending);
+          const nudge = task.reviewProcessingNudge?.key === key
+            ? task.reviewProcessingNudge : { key, count: 0 };
+          if (nudge.count < 2) {
+            task.reviewProcessingNudge = { key, count: nudge.count + 1 };
+            task.summary.detail =
+              `还有 ${reviewGap.pending.length} 条检视意见未处理完成,Agent 正在继续处理`;
+            this.persist(task);
+            this.options.log?.(`任务 ${task.summary.id} 回合收口时 ${
+              reviewGap.pending.length} 条检视意见未处理完成,催原会话继续(第 ${
+              nudge.count + 1} 次)`);
+            await this.settle(task, task.driver.continueWith(
+              this.reviewProcessingPrompt(task, reviewGap.pending, reviewGap.error)),
+              epoch);
+            break;
+          }
+          this.options.log?.(
+            `任务 ${task.summary.id} 检视意见 ${key} 催办两次仍未处理完成,按原路收口`);
         }
         // 分析单不属于内核，绝不能落入下面的 init/current 催办，也不能
         // 因 tryDeliver 对分析单早退而被误标 completed。正常出口只有

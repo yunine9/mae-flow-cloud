@@ -1052,6 +1052,14 @@ test("批注已主动送达后，检视决定的补充说明仍可提交且不�
     await service.sendAnnotations(id, [note.id]);
     const sentAt = service.listAnnotations(id).items[0].sent_at;
     assert.ok(sentAt, "主动送达后应记录 sent_at");
+    // 2026-09-05 起意见没处理完不许举确认卡:这里替剧本模型把"处理完成"的
+    // 机器回执写上(真模型由使命里的回执契约驱动),检视卡才会出现。
+    const workspace = (service as any).tasks.get(id).summary.workspace as string;
+    mkdirSync(join(workspace, "reviews"), { recursive: true });
+    writeFileSync(join(workspace, "reviews", "local-receipts.json"), JSON.stringify({
+      receipts: [{ annotation_id: note.id, revision: 0, outcome: "fixed",
+        summary: "只对网关错误重试", evidence: ["SmsHandler.java:23"] }],
+    }));
 
     await until(
       () => service.get(id)?.status === "waiting_for_human", "任务进入检视");

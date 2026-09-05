@@ -29,6 +29,92 @@ export function submittedAnnotations(items: Annotation[]): Annotation[] {
   return items.filter((item) => item.status === "sent");
 }
 
+/* ------------------------------------------------------------------ *
+ * Agent 的"处理完成"与提出人的"验收"是两件事(用户 2026-09-05 拍板):
+ * - 已提交给 Agent 的意见,在最终"是否通过 / 确认推送"卡出现之前必须
+ *   全部处理完成;"收到了""回了一句"都不算——只有**当前版本**的 fixed
+ *   回执算。缺回执、旧版本回执、not_fixed、needs_clarification 都拦。
+ * - 确实缺信息时 Agent 可以单独追问(澄清卡),人答了就继续处理;
+ *   追问有次数上限,不许来回问。
+ * - 处理完成 ≠ 验收:提出人仍在最终卡上逐条确认,Agent 不能替人点通过。
+ * ------------------------------------------------------------------ */
+
+/** 此刻在 Agent 手里的意见:已送到它眼前、要它处理的那些。草稿还没送、
+ * queued_decision 还在等下一张决定卡捎过去、流水线证据只是取证材料、
+ * 记忆不发给任何人、交给责任人的答复/决策没到 Agent 之前也不算。 */
+export function agentReviewAnnotations(items: Annotation[]): Annotation[] {
+  return items.filter((item) => item.status === "sent"
+    && item.sent_via !== "pipeline_evidence"
+    && item.sent_via !== "queued_decision"
+    && item.sent_via !== "issue_review"
+    && ((item.route ?? "agent") === "agent"
+      || (item.route === "owner_decision" && item.sent_via !== "owner_pending")));
+}
+
+/** 还没处理完成的:没有当前版本的 fixed 回执。 */
+export function pendingReviewProcessing(items: Annotation[]): Annotation[] {
+  return agentReviewAnnotations(items).filter((item) =>
+    item.response?.revision !== (item.rework ?? 0)
+    || item.response.outcome !== "fixed");
+}
+
+/** 同一版正文最多追问几次。人答过两次还问,就是把工作退回给人——之后
+ * 只能按最合理理解处理并在回执里写明假设。 */
+export const MAX_CLARIFICATION_ROUNDS = 2;
+
+/** 当前版本里人已经在澄清卡上答过的追问。 */
+export function answeredClarifications(item: Annotation): NonNullable<Annotation["clarifications"]> {
+  const revision = item.rework ?? 0;
+  return (item.clarifications ?? []).filter((row) =>
+    row.answer !== undefined && row.revision === revision);
+}
+
+export function clarificationRoundsLeft(item: Annotation): number {
+  return Math.max(0, MAX_CLARIFICATION_ROUNDS - answeredClarifications(item).length);
+}
+
+/** 这份回执是不是人已经答过的那个追问:Agent 写回执文件时可能把旧的
+ * needs_clarification 原样再抄一遍(它没义务记得哪条已被答复)。这样的
+ * 回执不能把已答复的追问"复活"成又在等人。 */
+export function answeredClarificationReceipt(
+  item: Annotation,
+  receipt: Pick<WorkspaceReviewReceipt, "outcome" | "summary" | "revision">,
+): boolean {
+  return receipt.outcome === "needs_clarification"
+    && answeredClarifications(item).some((row) =>
+      row.revision === receipt.revision && row.question === receipt.summary);
+}
+
+/** 一条未处理完成的意见此刻卡在哪,说给 Agent 听(也写进日志)。 */
+export function describeReviewProcessingGap(item: Annotation): string {
+  const revision = item.rework ?? 0;
+  const current = item.response?.revision === revision ? item.response : undefined;
+  const answered = answeredClarifications(item);
+  const answeredNote = answered.length
+    ? `;你之前的追问已答复:${answered.map((row) =>
+      `「${row.question}」→「${row.answer}」`).join("、")}`
+    : "";
+  if (!current) {
+    return `${item.id}:缺当前版本(revision ${revision})的回执${answeredNote}`;
+  }
+  if (current.outcome === "not_fixed") {
+    return `${item.id}:回执是 not_fixed(${current.summary}),不算处理完成`
+      + "——要么按意见修改,要么先追问提出人拿到明确答复后再按答复处理"
+      + answeredNote;
+  }
+  return `${item.id}:回执是 needs_clarification(${current.summary}),`
+    + (clarificationRoundsLeft(item) > 0
+      ? "尚未向人追问——用 AskUserQuestion(purpose=clarification)问清楚,答复后继续"
+      : `追问已达 ${MAX_CLARIFICATION_ROUNDS} 次上限,不能再问——按最合理理解处理,回执里写明假设`)
+    + answeredNote;
+}
+
+/** 一组待处理意见的指纹(id + 版本):催办预算、派单去重都按它算,换一批
+ * 意见或改了字自然重置。 */
+export function reviewProcessingKey(items: Annotation[]): string {
+  return items.map((item) => `${item.id}:r${item.rework ?? 0}`).sort().join(",");
+}
+
 export interface WorkspaceReviewReceipt {
   annotation_id: string;
   revision: number;
@@ -139,6 +225,13 @@ export function workspaceReviewReceiptInstructions(items: Annotation[]): string 
       + '"outcome":"fixed|not_fixed|needs_clarification",'
       + '"summary":"改了什么，或为什么不改","evidence":["path:line"]}]}',
     "每个 annotation_id 恰好一条；缺失、重复或旧 revision 都不会进入 push。",
+    "在你举起任何确认卡、或结束本轮之前，所有已提交意见都必须有当前 revision 的"
+      + " fixed 回执。not_fixed 和 needs_clarification 都不算处理完成，只是中间状态。",
+    "确实缺少信息时：先把这条写成 needs_clarification 并写明具体疑问，再单独调用"
+      + " AskUserQuestion，purpose=clarification、annotation_ids=[对应意见 ID]，"
+      + "只问缺少的信息，不夹带整体通过、验收或推送确认。人答复后按答复继续处理，"
+      + "把这条改写成 fixed（summary 写明依据）。同一条意见最多追问"
+      + ` ${MAX_CLARIFICATION_ROUNDS} 次；仍不清楚就按最合理理解处理并在 summary 写明假设。`,
     "本轮清单：",
     revisions,
   ].join("\n");
@@ -349,8 +442,10 @@ function progressOf(
       return { tone: "draft", text: "交付后记录",
         hint: "任务已经交付，这条记录保留在任务档案中，不会再触发 Agent 修改。" };
     }
-    return item.rework
-      ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
+    // 看 returned 不看 rework:作者补充说明后重提也会换版本号,但那不是
+    // "上一轮改坏了"。
+    return item.returned
+      ? { tone: "draft", text: `第 ${item.returned + 1} 轮·待提交`,
           hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
       : { tone: "draft", text: "待提交" };
   }

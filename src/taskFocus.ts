@@ -37,7 +37,7 @@ interface FocusTask {
   /** 执行队列位次(1 起,投影字段):排队真相必须压过陈旧 detail。 */
   queue_position?: number;
   blocked_by?: string[];
-  waiting?: { question?: { questions?: unknown[] } };
+  waiting?: { question?: { questions?: unknown[]; purpose?: string } };
   progress?: {
     current_phase?: string;
     step?: string;
@@ -106,6 +106,17 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
 
   if (task.status === "waiting_for_human") {
     const questions = task.waiting?.question?.questions?.length ?? 0;
+    // 澄清卡:Agent 处理检视意见时缺信息在问人,不是"要不要通过"。
+    if (task.waiting?.question?.purpose === "clarification") {
+      return focus(
+        "human_action",
+        "Agent 处理检视意见时缺少信息,需要你补充",
+        "答复后 Agent 继续处理这条意见;这不是最终验收",
+        "responsible",
+        100,
+        true,
+      );
+    }
     return focus(
       "human_action",
       questions > 0 ? `需要确认 ${questions} 个决策项` : "需要负责人确认",

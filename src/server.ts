@@ -2261,7 +2261,10 @@ export function createTaskServer(
           // 受邀参与讨论的人(协作者/逐仓责任人)在分析期可以答卡——邀请了
           // 就得能回答(2026-09-04 用户拍板)。拍板类决定由 decide() 再按
           // 责任人硬闸一次,这里只挡"是否参与"。
-          if (!canCollaborate(viewer, target, !!options.auth)) {
+          // 澄清卡(Agent 追问某条检视意见)同理:被追问的意见作者能答——
+          // 问的是他,不能只让责任人替他猜(2026-09-05)。
+          if (!canCollaborate(viewer, target, !!options.auth)
+              && !(options.auth && service.canAnswerClarification(id, viewer?.username))) {
             return json(response, 403, { error: "只有责任人或受邀参与讨论的人可以回答这张卡"
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }

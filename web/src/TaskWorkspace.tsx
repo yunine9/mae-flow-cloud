@@ -75,6 +75,7 @@ import {
 } from "./api";
 import {
   isChainReviewWaiting,
+  isClarificationWaiting,
   isOwnerOnlyWaiting,
   reworkChoiceOf,
   RetryButton,
@@ -1441,8 +1442,13 @@ export function TaskWorkspace({
   const chainReview = !!waiting && isChainReviewWaiting(task);
   // 受邀参与讨论的人在分析期能答卡(2026-09-04 用户拍板:邀请了就得能
   // 回答);拍板类卡只认责任人。服务端 decide 是同一口径的硬闸。
+  // 澄清卡问的是意见作者:被追问的人即使不是责任人也能答(服务端同口径)。
+  const clarificationRespondent = !!waiting && isClarificationWaiting(task)
+    && notes.some((item) => item.author === viewerUsername
+      && (task.waiting?.question?.annotation_ids ?? []).includes(item.id));
   const decides = canOperate
-    || (canCollaborate && !isOwnerOnlyWaiting(task));
+    || (canCollaborate && !isOwnerOnlyWaiting(task))
+    || clarificationRespondent;
   // 检视卡上的返工选项,交给批注面板做"提交并返工"一步到位。
   const reworkChoiceRaw = waiting ? reworkChoiceOf(task) : undefined;
   const workspaceReworkChoice = reworkChoiceRaw && task.waiting

@@ -1015,7 +1015,13 @@ export interface TaskSummary {
     /** 待办生成时刻:等待时长的唯一来源(服务端本来就发)。 */
     created_at?: string;
     step?: string;
-    question?: { questions?: WaitingQuestion[] };
+    question?: {
+      questions?: WaitingQuestion[];
+      /** clarification = Agent 处理检视意见时缺信息,单独问人;不是验收。 */
+      purpose?: "confirmation" | "clarification";
+      /** 澄清卡追问的检视意见 ID。 */
+      annotation_ids?: string[];
+    };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
     context?: string;
     /** 举卡前 Agent 刚展示的上文(完整清单/确认单),随卡呈现防盲签。 */
@@ -2679,10 +2685,20 @@ export interface Annotation {
   verified_at?: string;
   /** 非作者代确认时的实际操作者；缺席表示由意见作者本人确认。 */
   verified_by?: string;
-  /** 第几次返工(0/缺省 = 首轮)。 */
+  /** 意见正文的版本号(0/缺省 = 首版):返工与改字重提都会加一。 */
   rework?: number;
-  /** Agent 追问过什么;作者补充说明重提后留档,下一轮给模型看。 */
-  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
+  /** 人点过几次"仍需调整"(0/缺省 = 没退回过)。 */
+  returned?: number;
+  /** Agent 追问过什么;作者补充说明重提后留档,下一轮给模型看。带 answer
+   * 的是人在澄清卡上直接答的。 */
+  clarifications?: Array<{
+    question: string;
+    asked_at: string;
+    answered_at: string;
+    answer?: string;
+    answered_by?: string;
+    revision?: number;
+  }>;
 }
 
 export interface AnchorCheck {

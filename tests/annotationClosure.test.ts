@@ -256,9 +256,12 @@ test("任务已完成:别人的草稿不再可转交", () => {
 });
 
 test("返工轮次与交付后归档各有各的说法", () => {
-  const rework = annotationClosure(note({ status: "draft", rework: 1 }),
+  // rework 是正文版本号(改字重提也会加),"第几轮"看的是人退回的次数 returned。
+  const rework = annotationClosure(note({ status: "draft", rework: 1, returned: 1 }),
     FACTS, ALICE);
   assert.equal(rework.text, "第 2 轮·待提交");
+  const edited = annotationClosure(note({ status: "draft", rework: 1 }), FACTS, ALICE);
+  assert.equal(edited.text, "待提交", "作者补充说明重提不是返工,不许说成上一轮改坏了");
   const archived = annotationClosure(note({ status: "draft" }),
     { ...FACTS, archival: true }, ALICE);
   assert.equal(archived.text, "交付后记录");

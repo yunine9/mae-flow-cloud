@@ -612,11 +612,18 @@ export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
     || step === "cloud_split_proposal";
 }
 
+/** 澄清卡:Agent 处理检视意见时缺信息,单独问人。它不是"要不要通过",
+ * 标题、按钮、提示都要跟最终验收分开说。 */
+export function isClarificationWaiting(task: TaskSummary): boolean {
+  return task.waiting?.question?.purpose === "clarification";
+}
+
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
   if (step === "cloud_requirement_analysis_confirm") {
     return "确认需求";
   }
+  if (isClarificationWaiting(task)) return "需要补充信息";
   // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
   // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
   if (isChainReviewWaiting(task)) return "确认拆分方案";
@@ -701,6 +708,8 @@ export function WaitingCard({
   const questions = task.waiting?.question?.questions ?? [];
   const requirementAnalysisConfirmation = task.waiting?.step
     === "cloud_requirement_analysis_confirm";
+  const clarification = isClarificationWaiting(task);
+  const clarificationTargets = task.waiting?.question?.annotation_ids?.length ?? 0;
   const chainReview = isChainReviewWaiting(task);
   const unifiedReply = presentation === "studio" && questions.length === 1
     && !requirementAnalysisConfirmation;
@@ -868,6 +877,7 @@ export function WaitingCard({
   }
 
   const submitLabel = submitting ? "正在提交…"
+    : clarification ? "发送答复"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
     : chainReview && confirmsChainChoice
@@ -895,7 +905,9 @@ export function WaitingCard({
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
-          {presentation !== "studio" && <span className="decision-kicker">需要你决定</span>}
+          {presentation !== "studio" && <span className="decision-kicker">
+            {clarification ? "Agent 在追问" : "需要你决定"}
+          </span>}
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}
@@ -906,6 +918,14 @@ export function WaitingCard({
           <span className="decision-count">{questions.length} 个问题</span>
         )}
       </header>
+      {clarification && (
+        /* 澄清卡与最终验收分开说:答复只是把缺的信息给 Agent,它接着处理;
+           意见是否修好仍由提出人在最终卡上逐条确认。 */
+        <p className="decision-clarification-note">
+          Agent 处理{clarificationTargets > 0 ? ` ${clarificationTargets} 条` : ""}检视意见时缺少信息，
+          答复后它会继续处理并重新登记回执。这不是最终验收，意见是否修好仍由提出人确认。
+        </p>
+      )}
 
       {chainReview && task.requirement_graph && (
         /* 方案本体(单元职责、负责面、依赖顺序)在左侧仓间依赖图里,是结构

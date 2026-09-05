@@ -115,14 +115,29 @@ export interface Annotation {
   verified_at?: string;
   /** 非作者(管理员)代确认时记谁点的;作者本人裁决不填。 */
   verified_by?: string;
-  /** 第几次返工(0 = 首轮)。返工回到 draft,走原有的两条送出通道。 */
+  /** 这条意见正文的版本号(0 = 首版):人退回返工、或作者改字重提都
+   * 会加一。Agent 回执必须带同一个 revision 才算数——旧版本的回执不能
+   * 背书新文字(2026-09-05:改字曾不加版本,盘上残留的旧 fixed 回执
+   * 会被下一次读取当成新文字已处理)。"第几次返工"看 returned。 */
   rework?: number;
+  /** 人点过几次"仍需调整"(0/缺省 = 没退回过)。只用于人话与提示——
+   * 作者补充说明重提不算返工,不能把它说成"上一轮改坏了"。 */
+  returned?: number;
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
   anchor_was?: string;
   /** Agent 问过什么(needs_clarification 的回执),作者改字重提时留档:
    * 渲染给模型看,免得它把补充说明当新意见、再问一遍同一件事
-   * (内网实锤:两条意见来回问了几轮重复的问题)。 */
-  clarifications?: Array<{ question: string; asked_at: string; answered_at: string }>;
+   * (内网实锤:两条意见来回问了几轮重复的问题)。
+   * 带 answer 的一条是人在澄清卡上直接答的:回执随之清空,Agent 要按
+   * 答复继续并重新写回执;revision 记它属于哪一版正文,用来限次追问。 */
+  clarifications?: Array<{
+    question: string;
+    asked_at: string;
+    answered_at: string;
+    answer?: string;
+    answered_by?: string;
+    revision?: number;
+  }>;
 }
 
 export interface AnnotationInput {
@@ -155,7 +170,9 @@ type Operation =
       via?: "owner_pending" }
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
-      line?: number; anchor?: string; note?: string };
+      line?: number; anchor?: string; note?: string }
+  /** 人在澄清卡上答了 Agent 的追问:追问留档带答复,回执清空等新回执。 */
+  | { op: "clarified"; id: string; answer: string; at: string; by?: string };
 
 export class AnnotationError extends Error {}
 export class AnnotationPermissionError extends AnnotationError {}
@@ -210,6 +227,9 @@ export class AnnotationStore {
         // 已送出的意见一旦改字，就不能继续冒充“这版已提交”。退回草稿，
         // 由责任人重新送出；旧内容和送出记录仍完整保留在 jsonl 中。
         if (found.status !== "draft") {
+          // 改字就是新版本:盘上残留的旧回执(同 id、旧 revision)不能再
+          // 被读成"新文字已处理"。返工次数(returned)不动——这不是退回。
+          found.rework = (found.rework ?? 0) + 1;
           // Agent 的追问不能随回执一起抹掉:它是作者这次改字的由头,下一轮
           // 要原样给模型看。
           if (found.response?.outcome === "needs_clarification") {
@@ -275,11 +295,32 @@ export class AnnotationStore {
         }
         continue;
       }
+      if (operation.op === "clarified") {
+        const found = byId.get(operation.id);
+        // 只对"当前版本正等补充说明"的意见成立;作者已改字重提(版本变了)
+        // 或 Agent 已另写回执时,这份答复只是迟到的历史,不改状态。
+        if (!found || found.status !== "sent"
+            || found.response?.outcome !== "needs_clarification"
+            || found.response.revision !== (found.rework ?? 0)) {
+          continue;
+        }
+        found.clarifications = [...(found.clarifications ?? []), {
+          question: found.response.summary,
+          asked_at: found.response.responded_at,
+          answered_at: operation.at,
+          answer: operation.answer,
+          ...(operation.by ? { answered_by: operation.by } : {}),
+          revision: found.rework ?? 0,
+        }];
+        found.response = undefined;
+        continue;
+      }
       if (operation.op === "reopen") {
         const found = byId.get(operation.id);
         if (!found) continue;
         found.status = "draft";
         found.rework = (found.rework ?? 0) + 1;
+        found.returned = (found.returned ?? 0) + 1;
         found.sent_at = undefined;
         found.sent_via = undefined;
         found.sent_by = undefined;
@@ -424,6 +465,24 @@ export class AnnotationStore {
       responded_at: input.responded_at ?? new Date().toISOString(),
     };
     this.append({ op: "respond", id, response });
+    return this.list().find((item) => item.id === id)!;
+  }
+
+  /** 人在澄清卡上答复 Agent 的追问。答复不是验收:它只把球踢回 Agent
+   * ——追问连同答复留档,当前回执清空,Agent 必须按答复继续并重新写
+   * 回执;意见作者仍在最终卡上逐条确认。谁能答由上层(卡的权限)定。 */
+  answerClarification(id: string, answer: string, by?: string): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.status !== "sent"
+        || found.response?.outcome !== "needs_clarification"
+        || found.response.revision !== (found.rework ?? 0)) {
+      throw new AnnotationError(`批注 ${id} 当前没有等待答复的追问`);
+    }
+    const normalized = String(answer ?? "").trim();
+    if (!normalized) throw new AnnotationError("答复不能为空");
+    this.append({ op: "clarified", id, answer: normalized,
+      at: new Date().toISOString(), ...(by ? { by } : {}) });
     return this.list().find((item) => item.id === id)!;
   }
 
@@ -586,9 +645,14 @@ export function renderAnnotations(
       lines.push(`   ${label}:${item.anchor}`);
     }
     lines.push(`   要求:${item.note}`);
-    // 追问过的意见:作者已经针对你的问题补充了,别再问同一件事。
+    // 追问过的意见:作者已经针对你的问题补充了(改字重提,或在澄清卡上
+    // 直接答了),别再问同一件事。
     for (const asked of item.clarifications ?? []) {
       lines.push(`   上一轮你问过:${asked.question}`);
+      if (asked.answer !== undefined) {
+        lines.push(`   ${asked.answered_by ? `${asked.answered_by} ` : ""}答复:${
+          asked.answer.replace(/\s*\n\s*/g, " ")}`);
+      }
     }
     if (item.clarifications?.length) {
       lines.push("   作者已针对上面的问题补充了要求;不要再问同一件事,仍不清楚就按"
@@ -596,8 +660,9 @@ export function renderAnnotations(
     }
     // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,
     // 重则把已有改动翻回去。历史锚点一并给:它要能对出"上次改成了什么"。
-    if (item.rework) {
-      lines.push(`   注意:这是同一条意见的第 ${item.rework + 1} 次提出,`
+    // 看 returned 不看 rework:改字重提也会换版本,但那不是退回。
+    if (item.returned) {
+      lines.push(`   注意:这是同一条意见的第 ${item.returned + 1} 次提出,`
         + "上一轮的改动没有达到要求。先弄清上次改了什么、差在哪,再动手;"
         + "不要原样重复上次的改法。");
       if (item.anchor_was) {

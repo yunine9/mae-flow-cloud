@@ -716,6 +716,46 @@ test("最终确认恢复:waiting 已决但任务概要仍在等待时自动返�
   }
 });
 
+test("推送卡前兜底:意见没处理完不举最终卡,按续跑机制重新派单;同一批只派一次,再来就如实举卡", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    // 派单会把任务重新排队、真起会话跑剧本;这里只验闸门本身,关掉并发
+    // 额度让它留在队列里。
+    (service as any).options.maxConcurrent = 0;
+    internal.summary.luban_account = "owner";
+    const store = (service as any).annotations(internal);
+    const item = store.add({
+      author: "reviewer-a", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;", note: "补上空值处理", kind: "code",
+    });
+    store.markSent([item.id], "interrupt");
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    const queued = service.get(id)!;
+    assert.equal(queued.waiting, undefined, "意见没处理完,最终卡不出现");
+    assert.equal(queued.status, "queued", "复用续跑机制:任务重新排队,不并发起第二个 Agent");
+    assert.match(String(queued.detail), /1 条检视意见未处理完成/);
+    assert.match(String(internal.mission), new RegExp(item.id));
+    assert.match(String(internal.mission), /local-receipts\.json/);
+    assert.equal(internal.summary.delivery?.review_processing_dispatched_for,
+      `${item.id}:r0`);
+    // 派出去那一轮回来仍没处理完:不再空转,按现状举卡,人只能选返工。
+    internal.summary.status = "verifying";
+    internal.mission = undefined;
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false);
+    const card = service.get(id)!;
+    assert.equal(card.waiting?.step, "cloud_push_confirm", "同一批只派一次,第二次如实举卡");
+    const question = (card.waiting!.question as any).questions[0].question;
+    await assert.rejects(service.decide(id, {
+      waiting_id: card.waiting!.waiting_id, state_version: card.waiting!.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+    }), /未闭环/, "卡上仍不能替提出人放行");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("个人默认(缺省即开)驱动闸门:没有任务级设置也举卡", async () => {
   const { service, model, id, internal } = await verifyingTask();
   try {
@@ -907,6 +947,15 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     });
     (service as any).annotations(internal).markSent(
       [first.id, second.id], "review_repair");
+    // 2026-09-05 起最终卡出现之前所有意见必须有当前版本 fixed 回执(缺回执
+    // 会先派单,见「推送卡前兜底」用例);这里先把 Agent 的处理回执登记上,
+    // 验的是"处理完成 ≠ 验收":卡出现后仍要提出人逐条确认。
+    (service as any).annotations(internal).respond(first.id, {
+      outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
+    });
+    (service as any).annotations(internal).respond(second.id, {
+      outcome: "fixed", summary: "已补边界测试", evidence: ["src/feature.ts:1"],
+    });
     internal.summary.delivery = {
       loop: {
         round: 0,

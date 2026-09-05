@@ -4397,6 +4397,15 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   letter-spacing: 0;
 }
 .decision-kicker::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+/* 澄清卡的说明行:把"这是追问不是验收"讲在卡顶,别让人把答复当成放行。 */
+.decision-clarification-note {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  border-bottom: 1px solid var(--line);
+}
 .decision-head h3 {
   margin: 6px 0 0;
   color: var(--text-strong);

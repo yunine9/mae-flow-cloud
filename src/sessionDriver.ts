@@ -120,8 +120,19 @@ export function validateAskUserQuestionInput(input: unknown): string | undefined
   if (!input || typeof input !== "object") return "缺少 questions";
   const request = input as Record<string, unknown>;
   const extra = Object.keys(request)
-    .filter((key) => key !== "questions" && key !== "context");
+    .filter((key) => !["questions", "context", "purpose", "annotation_ids"].includes(key));
   if (extra.length) return `问题卡含不支持字段 ${extra.join("、")}`;
+  if (request.purpose !== undefined
+      && !["confirmation", "clarification"].includes(String(request.purpose))) {
+    return "purpose 只能是 confirmation 或 clarification";
+  }
+  if (request.annotation_ids !== undefined
+      && (request.purpose !== "clarification" || !Array.isArray(request.annotation_ids)
+        || !request.annotation_ids.length
+        || request.annotation_ids.some((id) => typeof id !== "string" || !id.trim())
+        || new Set(request.annotation_ids).size !== request.annotation_ids.length)) {
+    return "annotation_ids 只能用于 clarification，必须是非空、无重复的意见 ID 数组";
+  }
   if (request.context !== undefined
       && (typeof request.context !== "string" || !request.context.trim())) {
     return "context 必须是非空的用户可见说明";
@@ -220,6 +231,12 @@ export interface CloudSessionOptions {
    * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
    * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
   humanizeQuestionText?: (text: string) => string;
+  /** 举卡前的宿主核对(2026-09-05):Agent 要向人举卡时,先问宿主"此刻
+   * 该不该举"。返回纠偏文字 = 不举:文字作为工具错误回给模型,原会话
+   * 继续干活——不创建待办、不通知人,也不伪造人的同意。宿主用它拦
+   * "检视意见还没处理完就举最终确认卡";已答过/已作废的重放不再问。 */
+  beforeHumanQuestion?: (input: Record<string, unknown>) =>
+    string | undefined | Promise<string | undefined>;
   /** 编译专项会话把长 Bash 的 stdout 节流写入事件账，供独立 SSE 实时
    * 展示。普通编码会话默认关闭，避免把高频输出灌进主事件账。 */
   streamBashOutput?: boolean;
@@ -1295,6 +1312,12 @@ export class CloudSession {
       // question + options。回答按问题分开记录——内核"整份背书"判定
       // 依赖这个结构。
       parameters: Type.Object({
+        purpose: Type.Optional(Type.Union([
+          Type.Literal("confirmation"), Type.Literal("clarification"),
+        ], { description: "默认 confirmation。仅补充缺失信息用 clarification，不能夹带最终验收" })),
+        annotation_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+          minItems: 1, description: "clarification 所追问的检视意见 ID；先为它们记录 needs_clarification 回执",
+        })),
         context: Type.Optional(Type.String({
           description: "用户可见的决策背景；只写事实、证据与影响，不写内部操作过程",
           minLength: 1,
@@ -1363,11 +1386,36 @@ export class CloudSession {
         const lastSaidRaw = driver.lastAssistantText.get(driver.sessionId);
         const lastSaid = lastSaidRaw === undefined
           ? undefined : humanize(lastSaidRaw);
+        // 重放已决/已作废的旧卡不再核对(下面按记录原样回放);新卡先问
+        // 宿主。核对本身出错不能让卡消失也不能让会话死:按"没拦"处理,
+        // 交给回合结束与推送卡那两道后置检查兜底,错误记进日志。
+        const previous = driver.options.humanGate.get(`${driver.options.taskId}:${callId}`);
+        let blocked: string | undefined;
+        if (previous?.status !== "resolved" && previous?.status !== "superseded") {
+          try {
+            blocked = await driver.options.beforeHumanQuestion?.(params);
+          } catch (error) {
+            driver.options.log?.(
+              `任务 ${driver.options.taskId} 举卡前核对出错(按未拦处理): ${String(error)}`);
+          }
+        }
+        if (blocked) {
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId, name: "AskUserQuestion", input: params,
+            is_error: true, result: blocked,
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          return { content: [{ type: "text", text: blocked }], details: {}, isError: true };
+        }
         const record = driver.options.humanGate.createWaiting({
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
-          questionInput: { questions },
+          questionInput: { questions,
+            ...(params.purpose ? { purpose: params.purpose } : {}),
+            ...(params.annotation_ids ? { annotation_ids: params.annotation_ids } : {}),
+          },
           context: explicitContext ?? lastSaid,
           // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
           // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻
