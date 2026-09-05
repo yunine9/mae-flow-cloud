@@ -295,9 +295,60 @@
 .task-workspace-v2 .conv-card.current .decision-attachment { order: 4; margin: 10px 14px 0; padding: 0; border: 0; }
 .task-workspace-v2 .conv-card.current .decision-evidence { order: 6; margin: 8px 0 0; border-top: 1px solid var(--line); }
 .task-workspace-v2 .conv-card.current .decision-evidence > summary { padding: 8px 14px; color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
-.task-workspace-v2 .conv-card.current .push-review-overview,
-.task-workspace-v2 .conv-card.current .delivery-scope-card { margin: 0; padding: 10px 14px 12px; border: 0; border-top: 1px solid var(--line); }
 .task-workspace-v2 .conv-card.current .decision-card > :last-child { padding-bottom: 12px; }
+
+/* ── 「交付依据与文件范围」在流卡里的紧凑版 ───────────────────────────
+   原样式是给整页宽的决定卡写的:三行抬头(待推送代码 / 本次修改 / 任务名)、
+   20px 内边距、15px 大数字、虚线框的"已显示"、单独一段"文件去留…"。塞进
+   450px 宽的流卡里就是一堆大小不一的字和错位的缩进(用户 2026-09-05 截图
+   "这里很丑")。这里统一成:13px 一行标题、12px 事实行、26px 小控件、缩进
+   一律 14px 对齐卡片。studio 皮肤那条 (0,4,0) 的 padding 规则在后面加载,
+   所以全部用 (0,5,0) 压住。 */
+.workspace-studio.task-workspace-v2 .conv-card.current .decision-evidence .push-review-overview,
+.workspace-studio.task-workspace-v2 .conv-card.current .decision-evidence .delivery-scope-card {
+  margin: 0; padding: 10px 14px 12px; display: grid; gap: 8px;
+  border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent;
+}
+/* 抬头:去掉"待推送代码"这个与 summary 重复的小标签,标题与任务名并成一行 */
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-copy { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-copy > span { display: none; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-copy > strong { font-size: var(--fs-13); line-height: 1.5; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-copy > p { font-size: var(--fs-12); line-height: 1.5; }
+/* 事实行:文件数 · +18 −3 · ✓ 校验,一行 12px */
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-facts { gap: 4px 10px; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-facts > span { font-size: var(--fs-12); font-weight: 500; line-height: 1.5; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-facts > span > b { font-size: var(--fs-12); }
+/* Agent 交付说明:折叠条本身也收窄 */
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-evidence { border-radius: var(--radius-sm); }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-evidence > summary { min-height: 30px; padding: 5px 10px; font-size: var(--fs-12); }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-evidence > summary::after { font-size: var(--fs-12); }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-agent-note { padding: 8px 10px; font-size: var(--fs-12); line-height: 1.6; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-evidence .push-review-commits { padding: 6px 10px; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-commits > span { font-size: var(--fs-12); }
+/* 阅读范围切换:两个 26px 小药丸,当前那个是实底而不是虚线框(虚线像禁用按钮) */
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions { gap: 6px; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current,
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button {
+  min-height: 26px; padding: 0 10px; border-radius: 999px; font-size: var(--fs-12); font-weight: 500; line-height: 1;
+}
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current {
+  border: 1px solid transparent; background: var(--surface-3); color: var(--text-strong);
+}
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current::before { content: "✓"; margin-right: 4px; color: var(--success); font-weight: 700; }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button { border-color: var(--line); background: transparent; color: var(--text); }
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button.primary { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
+/* 交付范围:标签 + 数字一行,说明一行,按钮一个,缩进与卡片一致 */
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header { padding: 0; }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header > div:first-child > span { font-size: var(--fs-12); }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header > div:first-child > strong { font-size: var(--fs-13); line-height: 1.5; }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > p,
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-result { padding: 0; font-size: var(--fs-12); line-height: 1.55; }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-result > strong { font-weight: 500; }
+.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > .delivery-locate {
+  margin: 0; justify-self: start; height: 26px; min-height: 0; padding: 0 10px; border-radius: 999px;
+  border-color: var(--line); background: transparent; font-size: var(--fs-12); font-weight: 500;
+}
 .task-workspace-v2 .conv-card.current .ws-attached-feedback { margin: 0; }
 
 /* 收口块(失败/验证中/等合入/子任务)与只读说明 */
