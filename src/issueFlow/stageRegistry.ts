@@ -82,8 +82,10 @@ export interface IssueStageSpec {
   label: string;
   /** 无单场景的显示名覆写(目前只有 prep_repo:无单不建分支)。 */
   noTicketLabel?: string;
-  /** 阶段目标(提示词引导层:这个阶段干什么)。 */
-  goal: string;
+  // 阶段引导语(2026-09-06,ADR-0017)不在本表:goal 的自由引导部分
+  // 外置 assets/issue-prompts/briefs.md(锚点 stage.<名>),渲染时由
+  // 调用方取文案传入 stageBriefLines;本表只留与门禁/出口同源的
+  // 契约列(exit/tools/exitAction)。
   /** 出口——"到什么程度算完"的白纸黑字,停机合法性只认出口动作。 */
   exit: string;
   /** 出口动作(见 StageExitAction):四阶段=complete_stage 自报;
@@ -114,7 +116,6 @@ export interface IssueStageSpec {
 export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   dts_info: {
     label: "获取 DTS 单信息",
-    goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史",
     exit: "通读单据后调 complete_stage 申报完成(dts_get_ticket 返回成功只是材料到位,不会自动推进)",
     exitAction: "complete_stage",
     tools: [
@@ -127,12 +128,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   prep_repo: {
     label: "拉取代码仓·建分支",
     noTicketLabel: "拉取代码仓",
-    goal: "把代码仓拉齐:模块已在发起时人工预绑锁定(见元信息,调 bind_module "
-      + "会被拒)就直接对已登记仓逐个 pull_repo;没绑才 lookup_modules 按单据"
-      + "里的业务关键词检索模块,命中就 bind_module 登记它的仓,再逐个 "
-      + "pull_repo 拉取(有单场景平台会顺带切好修复分支);检索不到就 "
-      + "AskUserQuestion 问用户要仓地址再 pull_repo。本单无需代码改动则"
-      + "直接 complete_stage 跳过",
     exit: "要用的仓都 pull_repo 拉齐 → complete_stage 申报完成;无需代码仓则直接 complete_stage 跳过",
     exitAction: "complete_stage",
     tools: [
@@ -147,11 +142,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
   analyze: {
     label: "问题分析",
-    goal: "按证据链定位(方法论取用/分流/取证规范见技能 issue-analysis),"
-      + "产出 issue-analysis.md(首行一句话总结+问题现象/问题根因/"
-      + "修改方案/证据链/置信度五章节),"
-      + "然后 submit_analysis 提交(无单场景需带结论 issue/non_issue)。"
-      + "中途发现还缺仓,pull_repo 随时可补",
   exit: "issue-analysis.md 写完 → submit_analysis 提交,平台把确认卡转给用户",
   exitAction: "submit_analysis",
   // 入口闸已拆除(ADR-0014,2026-09-03):skill 是渐进式发现(编排
@@ -170,11 +160,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
 },
   fix: {
     label: "问题修复",
-    goal: "按 TDD 节奏实施修复:先写(或改)能复现问题的单测,再改码让它"
-      + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);开改前可读 "
-      + ".mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略);"
-      + "每轮 UT 结果用 report_ut 如实上报(平台只做记录),改完自检且测试可"
-      + "接受后 complete_stage 申报完成。分支、提交与推送的交付纪律见技能 issue-delivery",
     exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 申报完成",
     exitAction: "complete_stage",
     tools: [
@@ -190,10 +175,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
   mr_green: {
     label: "提交 MR·跑绿",
-    goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
-      + "仓参数别漏);然后调 complete_stage 申报 MR 清单(必带 mrs 参数),"
-      + "平台核验放行:清单与实际 MR 一致、流水线全绿——有红当场打回,"
-      + "在跑则受理等绿",
     exit: "对每个改过的仓 push_branch + create_mr,然后 complete_stage 申报 MR 清单"
       + "(平台核验清单与实际一致、流水线全绿:全绿进下一阶段,有红当场打回,在跑等绿)",
     exitAction: "complete_stage",
@@ -210,7 +191,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
   conclude: {
     label: "确定结论",
-    goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
     exit: "结论明确 → submit_analysis 提交,等用户在「结论确认」卡上作答",
     exitAction: "submit_analysis",
     // 出口动作 submit_analysis 是在 analyze 调的(调完即推进到本节点
@@ -316,11 +296,11 @@ export function stageToolLine(stage: FixedStage): string {
  * 也从这里生成,消灭手写交接文案;label 按场景取词(prep_repo 两
  * 场景叫法不同)。 */
 export function stageBriefLines(
-  scenario: IssueScenario, stage: FixedStage,
+  scenario: IssueScenario, stage: FixedStage, guidance: string,
 ): string[] {
   const spec = fixedStageSpec(stage);
   return [
-    `当前阶段「${fixedStageLabel(scenario, stage)}」: ${spec.goal}`,
+    `当前阶段「${fixedStageLabel(scenario, stage)}」: ${guidance}`,
     `怎么算完: ${spec.exit}`,
     `可用工具: ${stageToolLine(stage)}`,
   ];

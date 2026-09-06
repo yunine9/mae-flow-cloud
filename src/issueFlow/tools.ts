@@ -348,7 +348,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
       const guide = scenario && state.stage === "prep_repo"
         ? "\n\n" + promptCopy("receipts", "pull.guide.prep", {
-          stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
+          stage_brief: stageBriefLines(scenario, "prep_repo",
+            promptCopy("briefs", "stage.prep_repo")).join("\n"),
         }) + "\n"
         : "";
       return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
@@ -481,7 +482,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         : "";
       const briefing = scenario && state.stage === "dts_info"
         ? "\n\n" + promptCopy("receipts", "dts.briefing", {
-          stage_brief: stageBriefLines(scenario, "prep_repo").join("\n"),
+          stage_brief: stageBriefLines(scenario, "prep_repo",
+            promptCopy("briefs", "stage.prep_repo")).join("\n"),
         })
         : "";
       return ok(`问题单 ${detail.ticket} 详情:\n${contentText}`
@@ -1083,7 +1085,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         void (enteredAnalyze ? ctx.startWarmup?.() : undefined);
         ctx.persist();
         return ok(promptCopy("receipts", "stage.closed", {
-          stage_brief: stageBriefLines(scenario, to).join("\n"),
+          stage_brief: stageBriefLines(scenario, to,
+            promptCopy("briefs", `stage.${to}`)).join("\n"),
         }) + (knowledgeBrief ? `\n\n${knowledgeBrief}` : ""));
       },
     }));

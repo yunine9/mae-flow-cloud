@@ -30,6 +30,7 @@ import {
   type FixedStage,
 } from "../src/issueFlow/stageRegistry.ts";
 import { fixedNudgeNotice } from "../src/issueFlow/prompt.ts";
+import { promptCopy } from "../src/issueFlow/promptCopy.ts";
 import type { IssueScenario, IssueSessionState } from "../src/issueFlow/state.ts";
 
 test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工具,conclude 只属无单", () => {
@@ -37,7 +38,10 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
     for (const stage of STAGE_ROUTES[scenario]) {
       const spec = FIXED_STAGE_SPECS[stage];
       assert.ok(spec.label.length > 0, `${scenario}/${stage} 缺 label`);
-      assert.ok(spec.goal.length > 8, `${scenario}/${stage} 缺目标`);
+      // 引导语已外置(ADR-0017):锚点必须在 briefs.md 齐装(缺锚点
+      // 是 fail-loud,会话启动就响),内容长度下限防手滑清空。
+      const guidance = promptCopy("briefs", `stage.${stage}`);
+      assert.ok(guidance.length > 20, `${scenario}/${stage} 缺引导语`);
       assert.ok(spec.exit.length > 0, `${scenario}/${stage} 缺出口`);
       assert.ok(spec.tools.length > 0, `${scenario}/${stage} 至少声明一个工具`);
       for (const tool of spec.tools) {
