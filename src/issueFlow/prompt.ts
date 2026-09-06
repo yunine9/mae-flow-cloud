@@ -1,8 +1,9 @@
 /**
  * 问题会话的首轮提示词与 playbook 改编技能。
  *
- * 技能源头是仓内静态目录 assets/issue-skills/<name>/SKILL.md(标准
- * skill 目录形态),从 every-skill 仓的 playbook 改编而来,适配云上:
+ * 技能源头是仓内静态目录 assets/issue-skills/(标准 skill 目录形态,
+ * 支持分类层递归组织:直接含 SKILL.md 的目录即一个技能,见
+ * discoverIssueSkillPackages),从 every-skill 仓的 playbook 改编而来,适配云上:
  * - 工号不再是 $HOME 目录名,而是平台注入的登录账号;
  * - 二进制/MCP 不由 Agent 直调,换成宿主工具(build_deploy/
  *   push_branch/create_mr/dts_get_ticket/get_issue_meta);
@@ -39,37 +40,70 @@ import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
 import { promptCopy } from "./promptCopy.ts";
 
-/** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
+/** 技能源目录:标准 skill 目录形态——技能包 = 直接含 SKILL.md 的目录,
+ * 支持分类层递归组织(如 engineering/<名>/SKILL.md),目录名即技能
+ * 装载名且必须全局唯一(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
   fileURLToPath(import.meta.url), "..", "..", "..",
   "assets", "issue-skills");
 
+/** 技能发现的递归深度上限(与团队货架 collectSkillFiles 同约定)。 */
+const MAX_SKILL_SOURCE_DEPTH = 8;
+
+/** 递归发现源目录下的技能包:目录直接含 SKILL.md 即一个包,发现即止
+ * (不进包内再找技能,包的子目录是资源不是分类);普通文件跳过。
+ * 分类层只是维护者的源码组织——物化目的地仍平铺 workspace/
+ * skills/<名>/,技能正文里写死的 ./skills/<名>/ 引用(如 issue-ops
+ * 的 bin 引擎)不因分层漂移。 */
+export function discoverIssueSkillPackages(
+  sourceDir: string,
+): Array<{ name: string; dir: string }> {
+  const found: Array<{ name: string; dir: string }> = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > MAX_SKILL_SOURCE_DEPTH) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const absolute = join(dir, entry.name);
+      if (existsSync(join(absolute, "SKILL.md"))) {
+        found.push({ name: entry.name, dir: absolute });
+      } else {
+        walk(absolute, depth + 1);
+      }
+    }
+  };
+  walk(sourceDir, 0);
+  return found.sort((left, right) => left.name < right.name ? -1
+    : left.name > right.name ? 1 : 0);
+}
+
 /** 把技能整包物化到工作区(幂等重写),返回 SKILL.md 精确路径。
  * 整包 = 技能目录内所有文件随 SKILL.md 一起走(2026-09-04 拍板:平台
  * 自带技能与团队货架同范式,可携带 bin/ 可执行引擎——日志抓取引擎
- * 已落 issue-ops/bin)。源目录缺失或缺 SKILL.md 都 fail-loud:技能是
- * 行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。 */
-export function materializeIssueSkills(workspace: string): string[] {
-  if (!existsSync(SKILL_SOURCE_DIR)) {
-    throw new Error(`问题会话技能源目录缺失: ${SKILL_SOURCE_DIR}`);
+ * 已落 issue-ops/bin)。支持分类层源目录(递归发现,见上),物化目的地
+ * 恒平铺。源目录缺失、递归后一个技能都没有、目录名重复,都 fail-loud:
+ * 技能是行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。 */
+export function materializeIssueSkills(
+  workspace: string,
+  sourceDir: string = SKILL_SOURCE_DIR,
+): string[] {
+  if (!existsSync(sourceDir)) {
+    throw new Error(`问题会话技能源目录缺失: ${sourceDir}`);
   }
-  const entries = readdirSync(SKILL_SOURCE_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  if (!entries.length) {
-    throw new Error(`技能源目录为空: ${SKILL_SOURCE_DIR}`);
+  const packages = discoverIssueSkillPackages(sourceDir);
+  if (!packages.length) {
+    throw new Error(
+      `技能源目录递归后未发现任何技能(直接含 SKILL.md 的目录): ${sourceDir}`);
   }
   const paths: string[] = [];
-  for (const name of entries) {
-    const source = join(SKILL_SOURCE_DIR, name);
-    const skillMd = join(source, "SKILL.md");
-    if (!existsSync(skillMd)) {
+  const claimed = new Set<string>();
+  for (const pkg of packages) {
+    if (claimed.has(pkg.name)) {
       throw new Error(
-        `技能目录 ${name} 缺 SKILL.md(源: ${SKILL_SOURCE_DIR})`);
+        `技能目录名重复: ${pkg.name}(分类层只改组织不重名,源: ${sourceDir})`);
     }
-    copyPackage(source, join(workspace, "skills", name));
-    paths.push(skillMd);
+    claimed.add(pkg.name);
+    copyPackage(pkg.dir, join(workspace, "skills", pkg.name));
+    paths.push(join(pkg.dir, "SKILL.md"));
   }
   return paths;
 }

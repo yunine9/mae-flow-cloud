@@ -297,26 +297,54 @@ export async function discoverRepositorySkills(
       throw new Error("invalid resolved revision");
     }
 
+    // 递归发现(2026-09-04 起支持分类层,如 .agents/skills/<分类>/<名>/
+    // SKILL.md):直接含 SKILL.md 的子树即一个技能包,发现即止——包内
+    // 子目录是资源不是分类。深度封顶与团队货架同约定;每层段名仍走
+    // safePathSegment。flat 技能的 relativePath 形状不变,既有 id 稳定。
+    const MAX_SKILL_TREE_DEPTH = 8;
     const candidates: Array<{
       root: (typeof REPOSITORY_SKILL_ROOTS)[number];
       directory: TreeEntry;
+      relPath: string;
     }> = [];
-    for (const root of REPOSITORY_SKILL_ROOTS) {
-      const rootEntry = await rootTree(cloneDir, revision, root, deadline);
-      if (!rootEntry) continue;
-      const children = (await listTree(cloneDir, rootEntry.oid, deadline))
+    const collectCandidates = async (
+      treeOid: string,
+      relParts: string[],
+      depth: number,
+      root: (typeof REPOSITORY_SKILL_ROOTS)[number],
+    ): Promise<void> => {
+      if (depth > MAX_SKILL_TREE_DEPTH) return;
+      const entries = await listTree(cloneDir, treeOid, deadline);
+      if (entries.some((entry) => entry.name === "SKILL.md")) {
+        const name = relParts.at(-1)!;
+        candidates.push({
+          root,
+          directory: { name, oid: treeOid, mode: "040000", type: "tree" },
+          relPath: `${root}/${relParts.join("/")}/SKILL.md`,
+        });
+        return;
+      }
+      const children = entries
         .filter((entry) => entry.mode === "040000"
           && entry.type === "tree" && safePathSegment(entry.name))
         .sort((left, right) => left.name < right.name ? -1
           : left.name > right.name ? 1 : 0);
-      for (const directory of children) {
-        candidates.push({ root, directory });
+      for (const child of children) {
+        await collectCandidates(
+          child.oid, [...relParts, child.name], depth + 1, root);
       }
+    };
+    for (const root of REPOSITORY_SKILL_ROOTS) {
+      const rootEntry = await rootTree(cloneDir, revision, root, deadline);
+      if (!rootEntry) continue;
+      await collectCandidates(rootEntry.oid, [], 0, root);
     }
+    candidates.sort((left, right) => left.relPath < right.relPath ? -1
+      : left.relPath > right.relPath ? 1 : 0);
 
     const skills: RepositorySkillDescriptor[] = [];
     for (let index = 0; index < candidates.length; index += 1) {
-      const { root, directory } = candidates[index];
+      const { root, directory, relPath } = candidates[index];
       const skillFile = (await listTree(cloneDir, directory.oid, deadline))
         .find((entry) => entry.name === "SKILL.md");
       // 100644/100755 是普通 blob；120000 符号链接、160000 submodule
@@ -350,7 +378,7 @@ export async function discoverRepositorySkills(
       if (typeof skill.name !== "string" || typeof skill.description !== "string"
           || !skill.name || !skill.description.trim()) continue;
 
-      const relativePath = `${root}/${directory.name}/SKILL.md`;
+      const relativePath = relPath;
       const digest = sha256(content);
       const selectable = !skill.disableModelInvocation;
       skills.push({

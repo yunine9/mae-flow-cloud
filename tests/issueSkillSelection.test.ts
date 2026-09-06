@@ -18,7 +18,10 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { IssueFlowService } from "../src/issueFlow/service.ts";
+import {
+  discoverBusinessSkillDirs,
+  IssueFlowService,
+} from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { issueFixedOpeningPrompt } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
@@ -310,4 +313,35 @@ test("提示层:存量台账的必读清单仍随 analyze 开场词注入", () =
     { ...base, stage: "analyze", skill_selection: undefined } as IssueSessionState,
     {}, { moonlight: false });
   assert.doesNotMatch(untouched, /必读 skill/, "未圈选不注入");
+});
+
+test("业务 skill 扫描分类层(2026-09-04):嵌套发现、包内不递归、根缺席零发现", () => {
+  // discoverBusinessSkillDirs 是扫描的原语(公开导出供契约测试):
+  // 目录直接含 SKILL.md 即技能,分类层只是组织;包原子,不进包内找。
+  const root = mkdtempSync(join(tmpdir(), "mfc-issue-skill-nest-"));
+  const skillsRoot = join(root, ".cac", "skills");
+  const write = (rel: string) => {
+    const dir = join(skillsRoot, rel);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"),
+      `---\nname: ${rel.split("/").at(-1)}\ndescription: ${rel}\n---\n`);
+  };
+  write("engineering/login-triage");
+  write("login-triage");
+  // 技能包内部:templates 不是分类,里面的 SKILL.md 不单独立项。
+  const inner = join(skillsRoot, "login-triage", "templates");
+  mkdirSync(inner, { recursive: true });
+  writeFileSync(join(inner, "SKILL.md"),
+    "---\nname: inner\ndescription: 包内资源\n---\n");
+
+  const found = discoverBusinessSkillDirs(skillsRoot)
+    .map((dir) => dir.split(`${skillsRoot}/`)[1]).sort();
+  assert.deepEqual(found,
+    ["engineering/login-triage", "login-triage"],
+    "两个含 SKILL.md 的目录都被发现(分类层+平铺);同名互斥由 "
+      + "scanBusinessSkills 的 claim 层裁定,原语只管发现");
+  assert.ok(!found.some((rel) => rel.includes("templates")),
+    "技能包内部不递归(包是原子的)");
+  assert.equal(discoverBusinessSkillDirs(join(root, "absent")).length, 0,
+    "根缺席=零发现,不响(可选能力)");
 });

@@ -11,9 +11,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +48,44 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
       `${name} 物化内容必须与仓内源文件逐字节一致`);
   }
   assert.equal(readdirSync(join(workspace, "skills")).length, expected.length);
+});
+
+test("技能源目录分类层(2026-09-04):递归发现、物化平铺、重名 fail-loud", () => {
+  const source = mkdtempSync(join(tmpdir(), "mfc-issue-skills-src-"));
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-nest-"));
+  const write = (rel: string, name: string) => {
+    const dir = join(source, rel);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: ${name}\n---\n`);
+  };
+  write("engineering/alpha", "alpha");
+  write("beta", "beta");
+  write("db/alpha", "alpha-dup");
+  // 分类目录可以没有技能(empty 目录保留,不写 SKILL.md)。
+  mkdirSync(join(source, "empty"), { recursive: true });
+
+  // 整树零技能必须响(递归后一个包都没有)。
+  assert.throws(
+    () => materializeIssueSkills(mkdtempSync(join(tmpdir(), "mfc-x-")),
+      join(source, "empty")),
+    /未发现任何技能/);
+  // 重名(不同分类里的同名目录)fail-loud——装载名必须全局唯一。
+  assert.throws(() => materializeIssueSkills(workspace, source),
+    /技能目录名重复: alpha/);
+  rmSync(join(source, "db"), { recursive: true, force: true });
+
+  const paths = materializeIssueSkills(workspace, source);
+  assert.deepEqual(paths.map((path) => path.split("/").at(-2)),
+    ["alpha", "beta"], "发现嵌套与顶层技能");
+  // 目的地恒平铺:分类层只是源码组织,AI 看到的 skills/<名>/ 不变,
+  // 技能正文里写死的 ./skills/<名>/ 引用(如 issue-ops bin)不漂移。
+  assert.equal(readdirSync(join(workspace, "skills")).sort().join(","),
+    "alpha,beta");
+  assert.ok(!existsSync(join(workspace, "skills", "engineering")),
+    "分类层不进物化产物");
+  const again = materializeIssueSkills(workspace, source);
+  assert.deepEqual(paths, again, "幂等重写:路径稳定");
 });
 
 test("环境保险箱:API 引用无密码、宿主可解密、文件不是明文", () => {
