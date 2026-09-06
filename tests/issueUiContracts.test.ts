@@ -292,6 +292,26 @@ test("过程文档可原位全屏，退出后保留当前页签", () => {
   assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
 });
 
+test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择靠它(AI 不试错)", () => {
+  const registration = readFileSync(
+    resolve("web/src/issues/Registration.tsx"), "utf-8");
+  const decisionCard = readFileSync(
+    resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // 登记表单:形态下拉(虚拟化/容器化)必选,随 environment 上送。
+  assert.match(registration, /环境形态 <i className="req">\*<\/i>/);
+  assert.match(registration, /<option value="virtualized">虚拟化<\/option>/);
+  assert.match(registration, /<option value="k8s">容器化\(K8s\)<\/option>/);
+  assert.match(registration, /env_type: envType/);
+  // env_needed 卡:同款下拉,未选形态不得提交,提交 wire 带形态。
+  assert.match(decisionCard, /<span>环境形态<\/span>/);
+  assert.match(decisionCard, /<option value="k8s">容器化\(K8s\)<\/option>/);
+  assert.match(decisionCard, /envType !== ""/, "未选形态不得提交");
+  assert.match(decisionCard, /env_type: envType/);
+  // wire 类型:形态字段在册(提交必带语义见注释)。
+  assert.match(apiTypes, /env_type\?: "virtualized" \| "k8s"/);
+});
+
 test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(spec #57)", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");

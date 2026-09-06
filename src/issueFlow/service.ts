@@ -83,6 +83,8 @@ import {
   type IssueSummary,
   type IssueSessionState,
   ENV_SCOPE_LABELS,
+  ENV_TYPE_LABELS,
+  type IssueEnvType,
 } from "./state.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
 import {
@@ -280,6 +282,9 @@ export interface IssueEnvironmentInput {
   pagePassword?: string;
   /** 网管后台密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
   backendPassword: string;
+  /** 环境形态(虚拟化/容器化 K8s):登记页面下拉或 env_needed 卡下拉
+   * 人工选定,决定日志抓取走哪套引擎;AI 只读不猜。 */
+  envType?: IssueEnvType;
 }
 
 /** 四件套的机械校验与归一(登记与 env_needed 闸作答共用同一把尺,差别
@@ -295,6 +300,7 @@ function normalizeEnvironmentInput(
   pageAccount: string;
   pagePassword?: string;
   backendPassword: string;
+  envType?: IssueEnvType;
 } {
   const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
   if (!hosts.length) {
@@ -308,6 +314,10 @@ function normalizeEnvironmentInput(
   if (withPage && !pagePassword) {
     throw new IssueControlError("配置了网管环境就必须填写页面密码");
   }
+  if (input.envType !== undefined
+      && input.envType !== "virtualized" && input.envType !== "k8s") {
+    throw new IssueControlError("环境形态只能是虚拟化或容器化(K8s)");
+  }
   return {
     hosts,
     name: input.name?.trim() || hosts[0],
@@ -315,6 +325,7 @@ function normalizeEnvironmentInput(
     pageAccount: input.pageAccount?.trim() || "admin",
     ...(pagePassword ? { pagePassword } : {}),
     backendPassword,
+    ...(input.envType ? { envType: input.envType } : {}),
   };
 }
 
@@ -1158,6 +1169,7 @@ export class IssueFlowService {
           page_credential_ref: refs[1]?.id ?? "",
         }
         : {}),
+      ...(parts.envType ? { env_type: parts.envType } : {}),
     };
   }
 
@@ -1203,7 +1215,10 @@ export class IssueFlowService {
     }
     recordTransition(state, {
       source: "platform",
-      note: `网管环境已配置(${environment.hosts.join(", ")})`,
+      note: `网管环境已配置(${environment.hosts.join(", ")})`
+        + (environment.env_type
+          ? `,形态${ENV_TYPE_LABELS[environment.env_type]}`
+          : ""),
     });
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);

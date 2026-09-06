@@ -1606,6 +1606,59 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
   }
 });
 
+test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值当场打回(2026-09-06)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envtype-"));
+  const origin = bareOrigin(dataDir);
+  const model = new ScriptedModelServer(
+    [{ text: "收到。" }, { text: "收到。" }], "scripted-v1");
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    opsTools: fakeOps,
+  });
+  try {
+    // 登记路:环境四件套 + 形态(虚拟化)一并入状态。
+    const registered = service.create({
+      account: "dev", title: "登记带形态", repoUrl: origin,
+      ticket: "DTS-2026-1001", source: "dts",
+      environment: {
+        hosts: ["10.0.0.8"], backendPassword: "env-shared-secret",
+        pagePassword: "page-secret", envType: "virtualized",
+      },
+    });
+    assert.equal(service.get(registered.id).environment?.env_type,
+      "virtualized", "登记形态入状态");
+
+    // 配置卡路:env_needed 现场补配带形态(容器化),转移账点名形态。
+    const carded = service.create({
+      account: "dev", title: "配置卡带形态", repoUrl: origin,
+      ticket: "DTS-2026-1002", source: "dts",
+    });
+    const configured = service.attachEnvironment(carded.id, {
+      hosts: ["71.26.146.142"], backendPassword: "env-shared-secret",
+      envType: "k8s",
+    });
+    assert.equal(configured.environment?.env_type, "k8s", "配置卡形态入状态");
+    assert.ok(configured.transitions?.some((entry) =>
+      entry.note.includes("形态容器化(K8s)")), "转移账点名形态");
+
+    // 非法值:归一当场打回,状态不被污染。
+    assert.throws(
+      () => service.attachEnvironment(carded.id, {
+        hosts: ["71.26.146.142"], backendPassword: "env-shared-secret",
+        envType: "vm" as never,
+      }),
+      /环境形态/,
+    );
+    assert.equal(service.get(carded.id).environment?.env_type, "k8s",
+      "打回后形态保持原值");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回合告知「用户已确认」,拒绝台账入册不上 wire", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-"));
   const origin = bareOrigin(dataDir);
@@ -2062,6 +2115,7 @@ function metaState(overrides: Partial<IssueSessionState> = {}): IssueSessionStat
       port: 22,
       page_account: "admin",
       page_credential_ref: "page-1",
+      env_type: "virtualized",
     },
     ...overrides,
   });
@@ -2073,6 +2127,7 @@ test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文�
   const fixed = issueFixedOpeningPrompt(metaState(), META_CREDENTIALS);
   // 四件套明文:密码字面量就出现在渲染结果里(不脱敏)。
   assert.match(fixed, /服务器地址: 10\.0\.0\.8, 10\.0\.0\.9/);
+  assert.match(fixed, /环境形态: 虚拟化/);
   assert.match(fixed, /页面账号: admin/);
   assert.match(fixed, /页面密码: page-secret/);
   assert.match(fixed, /网管后台密码.*: env-shared-secret/);
@@ -2102,6 +2157,8 @@ test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文�
   assert.match(gateOnly, /网管后台密码.*: env-shared-secret/);
   assert.doesNotMatch(gateOnly, /页面账号/);
   assert.doesNotMatch(gateOnly, /页面密码/);
+  // 形态没登记就不渲染(闸补配的存量环境),不造空壳。
+  assert.doesNotMatch(gateOnly, /环境形态/);
 });
 
 test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、密码在返回值里;无环境缺省形", async () => {
@@ -2137,6 +2194,7 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
     environment: {
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
+      env_type: "virtualized",
       page_account: "admin",
       page_password: "page-secret",
       backend_password: "env-shared-secret",

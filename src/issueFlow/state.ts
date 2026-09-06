@@ -108,6 +108,9 @@ export interface IssueEnvironmentConfig {
   /** 页面凭据组的 vault 引用(页面密码本体只在 vault;纯记录,本期
    * 无消费方,为页面自动化预留)。 */
   page_credential_ref?: string;
+  /** 环境形态(虚拟化/容器化 K8s,登记页面或 env_needed 卡人工选定;
+   * 缺席=形态未登记的存量环境,AI 举卡补配时一并补齐)。 */
+  env_type?: IssueEnvType;
 }
 
 export interface IssueConclusion {
@@ -165,6 +168,18 @@ export type IssueGateScope = "logs" | "deploy";
 export const ENV_SCOPE_LABELS: Record<IssueGateScope, string> = {
   logs: "拉日志",
   deploy: "换库部署",
+};
+
+/** 网管环境形态(2026-09-06 拍板):决定日志抓取走哪套引擎——
+ * virtualized=虚拟化(网管节点 ipmc_adm 发现后台节点),k8s=容器化
+ * (OM 节点 kubectl 发现 Pod)。登记页面与 env_needed 配置卡都是
+ * 人工下拉选定,AI 只读不猜、不试错。 */
+export type IssueEnvType = "virtualized" | "k8s";
+
+/** 形态的人话(元信息行/转移账/配置回执消费,单一来源在此)。 */
+export const ENV_TYPE_LABELS: Record<IssueEnvType, string> = {
+  virtualized: "虚拟化",
+  k8s: "容器化(K8s)",
 };
 
 /** 环境拒绝台账(2026-09-03,票 93):归属人在 env_needed 卡上拒绝
