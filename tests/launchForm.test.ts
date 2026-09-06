@@ -884,7 +884,7 @@ test("前置死透不许无限等:取消→子任务如实 failed;失败→留�
   parentState.summary.status = "queued";
   await service.cancel(parent.id, "tester");
   // cancel 内部已触发泵(fire-and-forget),等它跑完。
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(service.get(child.id)!.status, "failed",
     "前置取消是终态,等它=永远等——子任务必须如实 failed");
   assert.match(service.get(child.id)!.detail ?? "", /已取消或不存在/);

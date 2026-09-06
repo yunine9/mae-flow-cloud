@@ -691,6 +691,13 @@ export async function handleIssueRoutes(
       });
     }
 
+    // 协作流(只读,ADR-0018):事件账本投影成任务侧会话流同形状条目,
+    // 右栏「与 Agent 协作」对话框消费;在场闸由服务侧从状态投影为
+    // waiting 卡。查看模式语义与 dialogue 一致:登录即可读。
+    if (method === "GET" && parts[2] === "conversation" && parts.length === 3) {
+      return done(200, issueFlow.conversation(id));
+    }
+
     // 检视(ADR-0007):意见账本 + 提交重跑。读:登录即可(查看模式);
     // 记/删/提交:仅归属人。提交是"整体回退"这一有后果动作的人工触发
     // 源,服务层把门(固定流程/未终态/非转正继承/不可叠加/状态在

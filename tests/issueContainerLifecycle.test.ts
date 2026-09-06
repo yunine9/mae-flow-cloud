@@ -55,7 +55,7 @@ async function until<T>(
     const value = probe();
     if (value !== undefined) return value;
     if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 

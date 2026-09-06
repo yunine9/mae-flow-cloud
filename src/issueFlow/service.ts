@@ -148,6 +148,11 @@ import {
   submitReviews as submitReviewLedger,
 } from "./reviews.ts";
 import {
+  issueConversation,
+  readConversationEvents,
+  type IssueConversationView,
+} from "./conversation.ts";
+import {
   GATE_OPTIONS,
   fixedStageLabel,
   gateOptionLabel,
@@ -899,6 +904,31 @@ export class IssueFlowService {
       }
     }
     return messages.slice(-300);
+  }
+
+  /** 协作流(ADR-0018):事件账本投影成任务侧 ConversationItem 同形状
+   * 的条目数组,右栏「与 Agent 协作」对话框消费。与过程问答(documents
+   * 的 projectDialogue)是同一条现场记录的两个投影——这里是流回放,
+   * 问答是复盘阅读;在场未作答的平台闸从状态投影为 waiting 卡。只读:
+   * 坏行跳过、缺账本给空,绝不抛错拖垮页面。 */
+  conversation(id: string): IssueConversationView {
+    const live = this.require(id);
+    const events = readConversationEvents(join(live.root, "events.jsonl"));
+    const gate = live.state.gate;
+    const firstQuestion = gate?.question.questions[0];
+    return issueConversation(events, {
+      ...(gate
+        ? { waitingCard: {
+          waiting_id: gate.id,
+          step: live.state.scenario && live.state.stage
+            ? fixedStageLabel(live.state.scenario,
+              live.state.stage as FixedStage)
+            : undefined,
+          question: firstQuestion?.question,
+          options: firstQuestion?.options.map((option) => option.label),
+        } }
+        : {}),
+    });
   }
 
   /** 会话现场定位(收窄票 #7):材料/事件旁路改由路由直连各自模块后,
