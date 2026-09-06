@@ -928,6 +928,8 @@ export interface TaskSummary {
     needs_attention: boolean;
     priority: number;
   };
+  /** 下单时选的模型;缺席=跟随服务当前默认。页面据此说清"谁跑的"。 */
+  model_choice?: { provider: string; model: string };
   detail?: string;
   created_at: string;
   updated_at?: string;
