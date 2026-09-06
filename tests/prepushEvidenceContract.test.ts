@@ -40,8 +40,8 @@ const PASS = report("mvn -q -DskipTests package", "mvn -q test");
 
 interface Row {
   case: string;
-  /** 现状里疑似漏洞的行:钉住是为了改的时候有人知道,不是认可。 */
-  hole?: boolean;
+  /** 刻意放开的行(用户 2026-09-06 拍板):钉住是为了改的时候有人知道。 */
+  loosened?: boolean;
   events: SemanticEvent[];
   report: PrePushAgentReport;
   /** "" 表示放行;否则是拒绝理由里必须出现的片段。 */
@@ -56,13 +56,13 @@ const ROWS: Row[] = [
   { case: "报告没说通过:拒",
     events: [...bash(PASS.compile.command), ...bash(PASS.unit_test.command)],
     report: report(PASS.compile.command, PASS.unit_test.command, "code_failure"), verdict: /没有报告通过/ },
-  // ↓ 下面两行是 2026-09-04 放宽后的现状,不是设计意图:只要会话里成功跑过
-  // 任何一条重型构建命令(编译本身就是),上报的 UT 没跑过/跑失败也放行。
-  // "只防凭空报 PASS"防的是整份报告造假,防不住"编译真过、UT 编的"。
-  // 要不要收紧待用户拍板;收紧时改这两行的 verdict 即可,表就是契约。
-  { case: "现状·只有编译过、UT 没跑:放行(编译已算重型构建)", hole: true,
+  // ↓ 下面两行是 2026-09-04 放宽后的口径,用户 2026-09-06 确认"就这样,专门
+  // 放开的":只要会话里成功跑过任何一条重型构建命令(编译本身就是),上报的
+  // UT 没跑过/跑失败也放行——这道闸只防整份报告凭空造假,真裁判是绑 SHA 的
+  // 流水线。标 loosened 是让后来人知道这是决定,不是疏忽;要收紧先来改表。
+  { case: "放开·只有编译过、UT 没跑:放行(编译已算重型构建)", loosened: true,
     events: [...bash(PASS.compile.command)], report: PASS, verdict: "" },
-  { case: "现状·UT 跑了但失败:放行(同上)", hole: true,
+  { case: "放开·UT 跑了但失败:放行(同上)", loosened: true,
     events: [...bash(PASS.compile.command), ...bash(PASS.unit_test.command, false)], report: PASS, verdict: "" },
   { case: "实发带 cd 前缀与退出码后缀(2026-08-21 首次整链实锤):算数",
     events: [...bash(`cd /w/repo && ${PASS.compile.command}; echo TEST_EXIT=$?`), ...bash(`cd /w/repo && ${PASS.unit_test.command}; echo TEST_EXIT=$?`)],
@@ -87,8 +87,8 @@ const ROWS: Row[] = [
     events: [...bash(PASS.compile.command), ...bash(PASS.unit_test.command), ...edit("/w/repo/.mae-flow-work/build-notes.md"), ...edit(".mae-flow.json")],
     report: PASS, verdict: "", facts: { changed_after_run: [], command_mismatch: [] } },
   // 事件账按 sessionId:call_id 配对,但不限定是哪个会话:编码主会话跑过的
-  // 命令也算。给的是整份 events,调用方负责只喂 Build-Fix 会话的事件。
-  { case: "现状·配对按会话隔离,但不限定会话:别的会话的成功也算", hole: true,
+  // 命令也算(同样是刻意放开)。调用方负责只喂 Build-Fix 会话的事件。
+  { case: "放开·配对按会话隔离,但不限定会话:别的会话的成功也算", loosened: true,
     events: [...bash(PASS.compile.command, true, "coding-main"), ...bash(PASS.unit_test.command, true, "coding-main")],
     report: PASS, verdict: "" },
 ];
@@ -103,14 +103,14 @@ for (const row of ROWS) {
 }
 
 test("Build-Fix 证据表:放行至少六种、拒绝至少两种形状,表不能被裁", () => {
-  assert.ok(ROWS.filter((row) => row.verdict === "" && !row.hole).length >= 6);
+  assert.ok(ROWS.filter((row) => row.verdict === "" && !row.loosened).length >= 6);
   assert.ok(ROWS.filter((row) => row.verdict !== "").length >= 2);
 });
 
-test("Build-Fix 证据表:已知漏洞清单——收紧闸门时来这里改,别再各修各的", () => {
-  assert.deepEqual(ROWS.filter((row) => row.hole).map((row) => row.case), [
-    "现状·只有编译过、UT 没跑:放行(编译已算重型构建)",
-    "现状·UT 跑了但失败:放行(同上)",
-    "现状·配对按会话隔离,但不限定会话:别的会话的成功也算",
+test("Build-Fix 证据表:刻意放开清单——要收紧先来这里改,别再各修各的", () => {
+  assert.deepEqual(ROWS.filter((row) => row.loosened).map((row) => row.case), [
+    "放开·只有编译过、UT 没跑:放行(编译已算重型构建)",
+    "放开·UT 跑了但失败:放行(同上)",
+    "放开·配对按会话隔离,但不限定会话:别的会话的成功也算",
   ]);
 });

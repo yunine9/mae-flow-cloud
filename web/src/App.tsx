@@ -667,12 +667,17 @@ export function App() {
       : current);
     const running = (async () => {
       try {
-        const [nextTasks, reviews, nextIssues] = await Promise.all([
+        // 三路各自独立:任务列表是这块屏幕的正文,拿不到才算同步中断;检视与
+        // 问题是旁栏,哪一路失败就保留上次结果。原来 Promise.all 捆在一起,
+        // 问题流没启用的部署(试跑器现场、最小部署)/issues 一律 404,整页永远
+        // "数据更新中断、尚未取得任务数据"(2026-09-06 用户在演练现场实锤)。
+        const [tasksResult, reviewsResult, issuesResult] = await Promise.allSettled([
           listTasks(), listMyReviews(), listAllIssues(),
         ]);
-        setTasks(nextTasks.sort(byUrgency));
-        setMyReviews(reviews);
-        setTeamIssues(nextIssues);
+        if (tasksResult.status === "rejected") throw tasksResult.reason;
+        setTasks(tasksResult.value.sort(byUrgency));
+        if (reviewsResult.status === "fulfilled") setMyReviews(reviewsResult.value);
+        if (issuesResult.status === "fulfilled") setTeamIssues(issuesResult.value);
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
