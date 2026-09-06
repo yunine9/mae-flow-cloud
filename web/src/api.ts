@@ -3657,6 +3657,8 @@ export interface IssueSummary {
     port: number;
     page_account?: string;
     page_credential_ref?: string;
+    /** 环境形态:虚拟化/容器化 K8s,决定日志抓取引擎;登记或配置卡选定。 */
+    env_type?: "virtualized" | "k8s";
   };
   scenario?: IssueScenario;
   stage_states?: IssueStageState[];
@@ -3807,12 +3809,15 @@ export interface DtsTicketDetail {
 }
 
 /** env_needed 闸的环境表单 wire 形(POST /issues/:id/environment 请求体,
- * 与服务端 routes 的读取一一对应):地址 + 端口 + 网管后台密码。闸只收
- * 这三样——现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据
- * 的位置;密码只进服务端 vault,不落状态/事件。 */
+ * 与服务端 routes 的读取一一对应):地址 + 端口 + 环境形态 + 网管后台密码。
+ * 形态(虚拟化/容器化)决定日志抓取引擎;密码只进服务端 vault,不落
+ * 状态/事件;现场补配的流程碰不到网管页面,没有页面凭据的位置。 */
 export interface IssueEnvironmentForm {
   hosts: string[];
   port?: number;
+  /** 环境形态(虚拟化/容器化):填写提交必带(表单 ready 门强制);
+   * decline 分支不带。 */
+  env_type?: "virtualized" | "k8s";
   backend_password: string;
 }
 
@@ -3848,6 +3853,8 @@ export function getIssue(id: string): Promise<IssueDetail> {
  * 无单登记服务端强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。 */
 export interface IssueRegistrationEnvironment {
   hosts: string[];
+  /** 环境形态(虚拟化/容器化 K8s),决定日志抓取引擎。 */
+  env_type: "virtualized" | "k8s";
   page_account?: string;
   page_password: string;
   backend_password: string;

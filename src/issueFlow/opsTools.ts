@@ -1,15 +1,12 @@
 /**
- * 问题流的宿主侧运维工具执行器(fetch-logs / build-deploy)。
+ * 问题流的宿主侧运维工具执行器(build-deploy)。
  *
+ * 日志抓取引擎已迁为平台技能 issue-ops 的 bin(容器内由 Agent 直接
+ * 跑,见 assets/issue-skills/issue-ops),这里只剩 build-deploy:
  * 二进制来自 assets/ops-tools(every-skill 仓的 Go 产物,本仓带
  * linux-amd64/arm64/exe 三平台)。关键边界:密码经环境变量只交给
- * 子进程(FETCH_LOGS_PASSWORD / BUILD_DEPLOY_PASSWORD),不落盘、
- * 不回传、不进模型上下文——与旧 Go 适配器同一条纪律,只是调用方
- * 从"宿主适配器"换成了"会话宿主工具"。
- *
- * fetch-logs 的产物直接落到会话工作区的 local-logs/ 下,Agent 在
- * 容器里 grep/读真实文件——不再像旧适配器那样截成 2MB 摘要,深度
- * 分析需要完整日志目录结构。
+ * 子进程(BUILD_DEPLOY_PASSWORD),不落盘、不回传、不进模型上下文
+ * ——与旧 Go 适配器同一条纪律。
  *
  * 2026-08-31:build-deploy 原在宿主(root)执行,AI 的 bash 走容器内
  * (mfc 用户),Maven 环境(root 的 /root/.m2 vs 容器 /tmp/m2)不一致

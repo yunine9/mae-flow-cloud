@@ -82,7 +82,7 @@ import {
   readSessionDocument,
 } from "./documents.ts";
 import type { DtsGateway } from "./gateways.ts";
-import { isTerminal } from "./state.ts";
+import { isTerminal, type IssueEnvType } from "./state.ts";
 import {
   ISSUE_IMAGE_MAX_BYTES,
   readStagedImage,
@@ -389,6 +389,8 @@ export async function handleIssueRoutes(
               ? { pageAccount: String(body.environment.page_account) } : {}),
             ...(body.environment.page_password !== undefined
               ? { pagePassword: String(body.environment.page_password) } : {}),
+            ...(body.environment.env_type !== undefined
+              ? { envType: String(body.environment.env_type) as IssueEnvType } : {}),
             backendPassword: String(body.environment.backend_password ?? ""),
           },
         } : {}),
@@ -795,6 +797,8 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.attachEnvironment(id, {
         hosts: Array.isArray(body.hosts) ? body.hosts.map(String) : [],
         ...(body.port !== undefined ? { port: Number(body.port) } : {}),
+        ...(body.env_type !== undefined
+          ? { envType: String(body.env_type) as IssueEnvType } : {}),
         backendPassword: String(body.backend_password ?? ""),
       }));
     }

@@ -1,6 +1,6 @@
 #!/bin/sh
 # 架构自适应入口:选对本平台的引擎后原样透传参数与退出码。
-# 用法见同目录 SKILL.md;密码经 FETCH_LOGS_PASSWORD 环境变量传入。
+# 用法见同目录 SKILL.md;密码经 FETCH_LOGS_PWD 环境变量传入。
 set -e
 ARCH=$(uname -m)
 case "$ARCH" in

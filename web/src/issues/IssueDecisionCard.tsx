@@ -116,18 +116,20 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
 }
 
-/** 网管环境表单:网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)
- * + 网管后台密码。密码经 POST 进服务端 vault
- * (AES-GCM 加密文件),前端不存草稿;之后会进入本问题会话的 AI 上下文,
- * 让拉日志/换库工具能够消费,但不出现在会话列表、状态摘要或事件流。
- * 次要出路是拒绝(票 93):AI 误判要日志/要部署时,人可以不填环境
- * 直接拒绝——按闸 scope 显示拍板文案,选填一句理由随平台通知转给 AI。 */
+/** 网管环境表单:环境形态(虚拟化/容器化 K8s,决定日志抓取引擎)+
+ * 网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)+ 网管后台密码。
+ * 密码经 POST 进服务端 vault(AES-GCM 加密文件),前端不存草稿;之后会
+ * 进入本问题会话的 AI 上下文,让拉日志工具能够消费,但不出现在会话
+ * 列表、状态摘要或事件流。次要出路是拒绝(票 93):AI 误判要日志/要
+ * 部署时,人可以不填环境直接拒绝——按闸 scope 显示拍板文案,选填一句
+ * 理由随平台通知转给 AI。 */
 function EnvNeededForm({ busy, scope, onSubmit }: {
   busy: boolean;
   /** 闸的用途面(logs=拉日志 / deploy=换库部署),拒绝文案按它分叉。 */
   scope?: string;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
+  const [envType, setEnvType] = useState<"" | "virtualized" | "k8s">("");
   const [hosts, setHosts] = useState("");
   const [port, setPort] = useState("22");
   const [backendPassword, setBackendPassword] = useState("");
@@ -136,7 +138,8 @@ function EnvNeededForm({ busy, scope, onSubmit }: {
   const host = hosts.trim();
   const invalidHost = host !== "" && /[\s,，、]/.test(host);
   const portNumber = Number(port);
-  const ready = host !== "" && !invalidHost && backendPassword.length > 0
+  const ready = envType !== "" && host !== "" && !invalidHost
+    && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
   async function submit() {
@@ -144,9 +147,11 @@ function EnvNeededForm({ busy, scope, onSubmit }: {
     const ok = await onSubmit({
       hosts: [host],
       ...(port !== "22" ? { port: portNumber } : {}),
+      env_type: envType,
       backend_password: backendPassword,
     });
     if (ok) {
+      setEnvType("");
       setBackendPassword("");
       setError("");
     } else {
@@ -169,6 +174,15 @@ function EnvNeededForm({ busy, scope, onSubmit }: {
   }
 
   return <div className="issue-decision-env">
+    <label className="issue-field">
+      <span>环境形态</span>
+      <select value={envType}
+        onChange={(event) => setEnvType(event.target.value as "" | "virtualized" | "k8s")}>
+        <option value="" disabled>请选择</option>
+        <option value="virtualized">虚拟化</option>
+        <option value="k8s">容器化(K8s)</option>
+      </select>
+    </label>
     <label className="issue-field wide">
       <span>网管环境IP</span>
       <input value={hosts} spellCheck={false}

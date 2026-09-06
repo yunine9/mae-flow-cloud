@@ -256,8 +256,9 @@ function ManualRegister({
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
   const [moduleLoadError, setModuleLoadError] = useState("");
   const [moduleLoadAttempt, setModuleLoadAttempt] = useState(0);
-  // 网管环境四件套常开必填(不再折叠):单个 IP/页面账号
-  // (预填 admin 可改)/页面密码/网管后台密码。两个密码不进草稿。
+  // 网管环境常开必填(不再折叠):环境形态(虚拟化/容器化)/单个 IP/
+  // 页面账号(预填 admin 可改)/页面密码/网管后台密码。两个密码不进草稿。
+  const [envType, setEnvType] = useState<"" | "virtualized" | "k8s">("");
   const [envHosts, setEnvHosts] = useState("");
   const [envPageAccount, setEnvPageAccount] = useState("admin");
   const [envPagePassword, setEnvPagePassword] = useState("");
@@ -427,6 +428,10 @@ function ManualRegister({
       onError("网管环境IP一次只填一个，请不要输入逗号、空格或换行");
       return;
     }
+    if (!envType) {
+      onError("环境形态必选——按现场实际选虚拟化或容器化(K8s),AI 按它决定日志抓取方式");
+      return;
+    }
     if (!envPageAccount.trim()) {
       onError("页面账号必填——默认 admin 可改,请填写网管页面登录名");
       return;
@@ -447,13 +452,15 @@ function ManualRegister({
         module_id: moduleId,
         environment: {
           hosts: [host],
+          env_type: envType,
           page_account: envPageAccount.trim(),
           page_password: envPagePassword,
           backend_password: envBackendPassword,
         },
       });
       setTitle(""); setDescription(""); setModuleId("");
-      setEnvHosts(""); setEnvPageAccount("admin");
+      setEnvHosts(""); setEnvType("");
+      setEnvPageAccount("admin");
       setEnvPagePassword(""); setEnvBackendPassword("");
       onCreated(created);
     } catch (reason) {
@@ -535,6 +542,15 @@ function ManualRegister({
     <div className="issue-group wide">
       <span className="issue-group-title">网管环境</span>
       <div className="issue-group-body">
+        <label className="issue-field">
+          <span>环境形态 <i className="req">*</i></span>
+          <select value={envType} required
+            onChange={(event) => setEnvType(event.target.value as "" | "virtualized" | "k8s")}>
+            <option value="" disabled>请选择</option>
+            <option value="virtualized">虚拟化</option>
+            <option value="k8s">容器化(K8s)</option>
+          </select>
+        </label>
         <label className="issue-field">
           <span>网管环境IP <i className="req">*</i></span>
           <input value={envHosts} spellCheck={false}
