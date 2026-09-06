@@ -57,7 +57,7 @@ function writeSkill(
   ].filter((line) => line !== "").join("\n"));
 }
 
-test("固定四根、只扫直接子目录，并生成绑定仓库版本与内容的稳定 id", async () => {
+test("固定四根、支持分类层递归发现，并生成绑定仓库版本与内容的稳定 id", async () => {
   const repo = makeRepo();
   writeSkill(repo, ".agents/skills", "java-review", "java-review",
     "检查 Java 代码约束");
@@ -67,13 +67,18 @@ test("固定四根、只扫直接子目录，并生成绑定仓库版本与内�
     "数据库迁移规范");
   writeSkill(repo, ".cac/skills", "cac-review", "cac-review",
     "CAC 随仓检视规范");
-  // 根目录 markdown 与二级嵌套都不属于“直接子目录/SKILL.md”。
+  // 分类层(2026-09-04):目录直接含 SKILL.md 即技能包,分类目录只是
+  // 组织。嵌套与平铺同清单共存。
+  writeSkill(repo, ".agents/skills/engineering", "nested",
+    "nested", "分类层嵌套的技能");
+  // 根目录散文件不是技能;技能包内部的 SKILL.md 是资源不是新技能
+  // (发现即止,不进包内再找)。
   writeFileSync(join(repo, ".pi/skills/loose.md"),
     "---\nname: loose\ndescription: 不应发现\n---\n");
-  const nested = join(repo, ".agents/skills/container/nested");
-  mkdirSync(nested, { recursive: true });
-  writeFileSync(join(nested, "SKILL.md"),
-    "---\nname: nested\ndescription: 不应递归发现\n---\n");
+  const inner = join(repo, ".cac/skills/cac-review/templates");
+  mkdirSync(inner, { recursive: true });
+  writeFileSync(join(inner, "SKILL.md"),
+    "---\nname: inner\ndescription: 包内资源不应单独发现\n---\n");
   const revision = commit(repo, "skills");
 
   const first = await discoverRepositorySkills({ repository: repo });
@@ -82,14 +87,23 @@ test("固定四根、只扫直接子目录，并生成绑定仓库版本与内�
   assert.equal(first.revision, revision);
   assert.deepEqual(REPOSITORY_SKILL_ROOTS,
     [".agents/skills", ".pi/skills", ".claude/skills", ".cac/skills"]);
+  // 候选按相对路径排序:分类层嵌套与平铺混排时顺序仍确定。
   assert.deepEqual(first.skills.map((skill) => skill.name),
-    ["java-review", "api-contract", "db-migrate", "cac-review"]);
+    ["nested", "java-review", "cac-review", "db-migrate", "api-contract"]);
   assert.deepEqual(first.skills.map((skill) => skill.source),
-    REPOSITORY_SKILL_ROOTS);
+    [".agents/skills", ".agents/skills", ".cac/skills",
+      ".claude/skills", ".pi/skills"]);
   assert.ok(first.skills.every((skill) => /^[0-9a-f]{64}$/.test(skill.digest)));
   assert.deepEqual(first.skills.map((skill) => skill.id),
     again.skills.map((skill) => skill.id), "同仓同版本 id 必须稳定");
-  assert.ok(!first.skills.some((skill) => /loose|nested/.test(skill.name)));
+  const nestedSkill = first.skills.find((skill) => skill.name === "nested")!;
+  assert.equal(nestedSkill.relative_path,
+    ".agents/skills/engineering/nested/SKILL.md",
+    "嵌套技能的相对路径携带分类层");
+  assert.ok(!first.skills.some((skill) => skill.name === "loose"),
+    "根目录散文件不发现");
+  assert.ok(!first.skills.some((skill) => skill.name === "inner"),
+    "技能包内部不递归发现(包是原子的)");
 });
 
 test("仓库没有 Skill 时成功返回空目录，不把可选能力变成下单故障", async () => {

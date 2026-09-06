@@ -24,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
@@ -578,6 +578,36 @@ const SKILL_SCAN_ROOTS = [
   { dir: join(".cac", "skills"), label: ".cac/skills" },
   { dir: join(".agents", "skills"), label: ".agents/skills" },
 ] as const;
+
+/** 业务 skill 发现的递归深度上限(与团队货架 collectSkillFiles 同约定):
+ * 分类层(如 .cac/skills/engineering/<名>/SKILL.md)支持到 8 层。 */
+const MAX_BUSINESS_SKILL_DEPTH = 8;
+
+/** 递归发现根下全部技能目录(直接含 SKILL.md 的目录),发现即止——
+ * 技能包的子目录是资源不是分类;根不存在/不可读=零发现(可选能力,
+ * 不响)。导出仅供测试。 */
+export function discoverBusinessSkillDirs(
+  skillsRoot: string,
+): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > MAX_BUSINESS_SKILL_DEPTH) return;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const absolute = join(dir, entry.name);
+      if (existsSync(join(absolute, "SKILL.md"))) found.push(absolute);
+      else walk(absolute, depth + 1);
+    }
+  };
+  walk(skillsRoot, 0);
+  return found.sort();
+}
 
 /** 不可修分诊命中时,给通知文案列人话工具名(失败项里落在名单内的
  *  工具,保原大小写)。与 onlyUnfixableToolFailures 同源的收集口径:
@@ -1580,13 +1610,15 @@ export class IssueFlowService {
   }
 
   /** 扫描已拉仓工作区里的业务 skill(ADR-0011):repo/<仓名>/ 下的
-   * `.cac/skills/<名>/SKILL.md` 与 `.agents/skills/<名>/SKILL.md`
-   * 标准一层目录(2026-09-03 拍板扩为两根,pi/.claude 不进问题流)。
+   * `.cac/skills/` 与 `.agents/skills/`(2026-09-03 拍板扩为两根,
+   * pi/.claude 不进问题流;2026-09-04 起支持分类层——递归发现直接含
+   * SKILL.md 的目录,深度封顶 8,不进技能包内再找技能)。
    * 固定优先级 **`.cac` 优先**(存量团队行为不变),`.agents` 补位:
-   * 同仓内跨目录同名时 `.cac` 版本胜出,`.agents` 版本跳过并出告警
-   * (warnings,由调用方留痕,不静默)。本地文件系统扫描,零新增网络
-   * 路径——仓已落地,这就是 Agent 视角的同一份事实(需求侧走网络
-   * 发现是因为下单时仓还没 clone,威胁模型不同)。 */
+   * 同仓内跨目录同名(以 SKILL.md 所在目录名为准)时 `.cac` 版本胜出,
+   * 另一个版本跳过并出告警(warnings,由调用方留痕,不静默)。
+   * 本地文件系统扫描,零新增网络路径——仓已落地,这就是 Agent 视角的
+   * 同一份事实(需求侧走网络发现是因为下单时仓还没 clone,威胁模型
+   * 不同)。 */
   private scanBusinessSkills(
     live: LiveIssue,
   ): { choices: IssueSkillChoice[]; warnings: string[] } {
@@ -1596,27 +1628,20 @@ export class IssueFlowService {
       const claimed = new Set<string>();
       for (const root of SKILL_SCAN_ROOTS) {
         const skillsRoot = join(repo.dir, root.dir);
-        let entries: import("node:fs").Dirent[];
-        try {
-          entries = readdirSync(skillsRoot, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const skillFile = join(skillsRoot, entry.name, "SKILL.md");
-          if (!existsSync(skillFile)) continue;
-          if (claimed.has(entry.name)) {
-            warnings.push(`技能 ${entry.name} 在 ${root.label}`
+        for (const skillDir of discoverBusinessSkillDirs(skillsRoot)) {
+          const name = basename(skillDir);
+          const skillFile = join(skillDir, "SKILL.md");
+          if (claimed.has(name)) {
+            warnings.push(`技能 ${name} 在 ${root.label}`
               + ` 有同名定义,按 .cac 优先已跳过`
               + `(${SKILL_SCAN_ROOTS[0].label} 版本生效;仓 ${repo.url})`);
             continue;
           }
-          claimed.add(entry.name);
+          claimed.add(name);
           choices.push({
             path: relative(live.root, skillFile).split("\\").join("/"),
             repo: repo.url,
-            name: entry.name,
+            name,
             description: skillDescription(skillFile),
           });
         }
