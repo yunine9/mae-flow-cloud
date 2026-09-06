@@ -466,6 +466,7 @@ import {
   FEEDBACK_RESULT_MISSING,
   heldForKernelUnavailable,
 } from "./deliveryFailure.ts";
+import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
 import { STALL_POLICY, type StallClass } from "./stallPolicy.ts";
 import {
   emptyTokenUsageState,
@@ -3254,6 +3255,18 @@ export class TaskService {
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
     return task ? this.project(task, true) : undefined;
+  }
+
+  /** 批注附图落盘:任务目录是真相,同时铺进 Agent 工作区供 inspect_image 读。 */
+  storeAnnotationAsset(id: string, bytes: Buffer) {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return storeReviewAsset(task.summary.workspace, task.cwd, bytes);
+  }
+
+  annotationAsset(id: string, path: string): { mime_type: string; content: Buffer } | undefined {
+    const task = this.tasks.get(id);
+    return task ? readReviewAsset(task.summary.workspace, path) : undefined;
   }
 
   requirementAsset(
@@ -13872,6 +13885,8 @@ export class TaskService {
         task.cwd = cwd;
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
+        // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
+        try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document);
         // 恢复旧分析现场时也清除曾经持久化的 helper；每个仓仍可正常
@@ -13943,6 +13958,8 @@ export class TaskService {
         task.cwd = cwd;
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
+        // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
+        try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document,
           Boolean(task.summary.parent_task_id));

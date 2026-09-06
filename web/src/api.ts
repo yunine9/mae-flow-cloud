@@ -2664,6 +2664,35 @@ export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 /** 模块拆分图的虚拟批注靶；服务端按模块/依赖 id 重建锚点文本。 */
 export const REQUIREMENT_GRAPH_ARTIFACT = "__requirement_graph__";
 
+/** 批注附图引用(服务端 reviewAssets):path 是 Agent 工作区相对路径。 */
+export interface AnnotationImage { path: string; label?: string }
+
+export function annotationAssetUrl(taskId: string, path: string): string {
+  return `/tasks/${encodeURIComponent(taskId)}/annotation-asset?path=${encodeURIComponent(path)}`;
+}
+
+/** 把一张图先存成检视图片资产,拿到 Agent 能读的路径;随后随批注引用。 */
+export async function uploadAnnotationAsset(
+  taskId: string,
+  file: Blob,
+): Promise<{ path?: string; mime_type?: string; bytes?: number; error?: string }> {
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let index = 0; index < buffer.length; index += 0x8000) {
+    binary += String.fromCharCode(...buffer.subarray(index, index + 0x8000));
+  }
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/annotation-assets`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content_base64: btoa(binary) }),
+  });
+  if (!response.ok) {
+    const body = await errorBody(response);
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return parseJson(response);
+}
+
 export interface Annotation {
   id: string;
   author: string;
@@ -2676,6 +2705,7 @@ export interface Annotation {
   quote?: string;
   line_end?: number;
   note: string;
+  images?: AnnotationImage[];
   edited_at?: string;
   kind: "doc" | "code";
   /** 缺省值兼容旧任务：一律按交给 Agent 处理。memory = 记为记忆:不发给

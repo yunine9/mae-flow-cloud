@@ -84,6 +84,7 @@ import {
   type TaskService,
 } from "./taskService.ts";
 import { PLANTUML_SOURCE_LIMIT, renderPlantUml } from "./plantumlRender.ts";
+import { REVIEW_ASSET_MAX_BYTES, ReviewAssetError } from "./reviewAssets.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
   ArtifactArchiveTooLargeError,
@@ -2183,6 +2184,36 @@ export function createTaskServer(
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
         }
+        // 批注附图:上传落盘拿路径,再随批注引用;读取只认资产模块的路径形状。
+        if (request.method === "POST" && parts.length === 3
+            && parts[2] === "annotation-assets") {
+          const body = await readBody(request, REVIEW_ASSET_MAX_BYTES * 2);
+          let bytes: Buffer;
+          try {
+            bytes = Buffer.from(String(body?.content_base64 ?? ""), "base64");
+          } catch {
+            return json(response, 400, { error: "图片内容不是合法的 base64" });
+          }
+          try {
+            return json(response, 201, service.storeAnnotationAsset(id, bytes));
+          } catch (error) {
+            if (error instanceof ReviewAssetError) return json(response, 400, { error: error.message });
+            throw error;
+          }
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "annotation-asset") {
+          const asset = service.annotationAsset(id, url.searchParams.get("path") ?? "");
+          if (!asset) return json(response, 404, { error: "批注附图不存在" });
+          response.writeHead(200, {
+            "content-type": asset.mime_type,
+            "content-length": asset.content.length,
+            "content-disposition": "inline",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, max-age=86400",
+          });
+          return response.end(asset.content);
+        }
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "requirement-asset") {
           const path = url.searchParams.get("path") ?? "";
@@ -2572,6 +2603,7 @@ export function createTaskServer(
               kind: body.kind === "code" ? "code" : "doc",
               route: body.route === "owner_reply" || body.route === "owner_decision"
                 || body.route === "memory" ? body.route : "agent",
+              images: Array.isArray(body.images) ? body.images : undefined,
             }));
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。

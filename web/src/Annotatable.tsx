@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { addAnnotation } from "./api";
+import { addAnnotation, uploadAnnotationAsset, type AnnotationImage } from "./api";
 import {
   anchorOf, annotationsAtRow, quoteOfSelection,
   type MaterialAnnotation, type RowNode, type SelectionQuote,
@@ -124,6 +124,31 @@ export function Annotatable({
       : "发送后，先等责任人给出结论，再交给 Agent 执行。";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 附图是给 Agent 看的(设计稿、期望效果):先上传成检视图片资产拿路径,
+  // 记下时随批注引用。粘贴截图与选文件同一条路。
+  const [images, setImages] = useState<Array<AnnotationImage & { preview: string }>>([]);
+  const [uploading, setUploading] = useState(0);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  async function attachFiles(files: Iterable<File>) {
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      setUploading((count) => count + 1);
+      try {
+        const stored = await uploadAnnotationAsset(taskId, file);
+        if (stored.error || !stored.path) {
+          setError(stored.error ?? "图片上传失败");
+          continue;
+        }
+        const path = stored.path;
+        setImages((current) => current.some((image) => image.path === path) ? current
+          : [...current, { path, label: file.name.replace(/\.[a-z0-9]+$/i, "").slice(0, 80),
+              preview: URL.createObjectURL(file) }]);
+      } finally {
+        setUploading((count) => count - 1);
+      }
+    }
+  }
   const [hovered, setHovered] = useState<HTMLElement>();
   const [selected, setSelected] = useState<SelectedBlock>();
   const draftRef = useRef<Draft | undefined>(undefined);
@@ -247,6 +272,7 @@ export function Annotatable({
           kind: draft.kind,
           route,
           ...(draft.quote ? { quote: draft.quote, line_end: draft.lineEnd } : {}),
+          ...(images.length ? { images: images.map(({ path, label }) => ({ path, ...(label ? { label } : {}) })) } : {}),
         });
       if (result.error) {
         setError(result.error);
@@ -374,6 +400,12 @@ export function Annotatable({
               ? "可不写：只记这段原文；想补一句结论也行"
               : "这里要改什么？例如：这个重试应该只对网关失败生效"}
             onChange={(event) => setNote(event.target.value)}
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+              if (!files.length) return;
+              event.preventDefault();
+              void attachFiles(files);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Escape") setDraft(undefined);
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -396,11 +428,32 @@ export function Annotatable({
               <small>{ROUTE_COPY[route].hint}</small>
             </div>
           )}
+          {route !== "memory" && (
+            <div className="annot-editor-images">
+              {images.map((image) => (
+                <span key={image.path} className="annot-image-chip" title={image.path}>
+                  <img src={image.preview} alt={image.label ?? "附图"} />
+                  <button type="button" aria-label="移除这张图"
+                    onClick={() => setImages((current) => current.filter((item) => item.path !== image.path))}>×</button>
+                </span>
+              ))}
+              <button type="button" className="annot-image-add" disabled={busy}
+                onClick={() => fileInput.current?.click()}>
+                {uploading > 0 ? "上传中…" : images.length ? "再加一张图" : "加一张图给 Agent 看"}
+              </button>
+              <small>可直接把截图粘贴进上面的文字框;Agent 会用视觉工具看图</small>
+              <input ref={fileInput} type="file" accept="image/*" multiple hidden
+                onChange={(event) => {
+                  void attachFiles(event.target.files ?? []);
+                  event.target.value = "";
+                }} />
+            </div>
+          )}
           {error && <div className="alert">{error}</div>}
           <div className="annot-editor-actions">
             <span>{onSendDraft && route !== "memory" ? deliveryHint : "⌘/Ctrl + Enter 记下 · Esc 取消"}</span>
             <button type="button" className="ghost"
-                    onClick={() => setDraft(undefined)}>取消</button>
+                    onClick={() => { setDraft(undefined); setImages([]); }}>取消</button>
             {onSendDraft && route !== "memory" && <button type="button"
               disabled={busy || !note.trim()} onClick={() => void save()}>存为草稿</button>}
             <button type="button" className="primary"

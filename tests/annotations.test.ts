@@ -1208,3 +1208,22 @@ test("追问留档:作者改字重提时 Agent 的问题不随回执抹掉,下�
   assert.match(text, /不要再问同一件事/);
   assert.doesNotMatch(text, /第 2 次提出/, "补充说明不是返工,不许把它说成上一轮改坏了");
 });
+
+test("批注附图:只认资产路径,随记录落盘,给 Agent 的材料引导 inspect_image 逐张看", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-annot-img-"));
+  const store = new AnnotationStore(join(dir, "annotations.jsonl"));
+  const base = { author: "zhou", artifact: "docs/spec.md", file: "docs/spec.md", line: 3,
+    anchor: "页面布局", kind: "doc" as const };
+  assert.throws(() => store.add({ ...base, note: "按图改", images: [{ path: "/etc/passwd" }] }),
+    /附图路径不合法/);
+  const image = { path: ".mae-flow-work/review-assets/0123456789abcdef01234567.png", label: "期望效果" };
+  const added = store.add({ ...base, note: "按这张图的布局改", images: [image] });
+  assert.deepEqual(added.images, [image]);
+  const reloaded = new AnnotationStore(join(dir, "annotations.jsonl")).list().find((item) => item.id === added.id)!;
+  assert.deepEqual(reloaded.images, [image], "重放台账后附图引用还在");
+  const text = renderAnnotations([added], "REQ1");
+  assert.match(text, /附图 1 张,先用 inspect_image 逐张看清再动手/);
+  assert.match(text, /- \.mae-flow-work\/review-assets\/0123456789abcdef01234567\.png\(期望效果\)/);
+  const plain = store.add({ ...base, note: "不带图" });
+  assert.equal(plain.images, undefined);
+});

@@ -29,6 +29,7 @@ import {
   type AnchorCheck,
   type AnnotationClosure,
   type TaskStatus,
+  annotationAssetUrl,
 } from "./api";
 import { shortPath } from "./paths";
 import { relativeTime } from "./time";
@@ -598,6 +599,16 @@ export function AnnotationPanel({
                     </em>
                   </div>
                   <p>{item.note || "（只记了原文，没另写一句）"}</p>
+                  {item.images && item.images.length > 0 && (
+                    <div className="annot-images" aria-label="批注附图">
+                      {item.images.map((image) => (
+                        <a key={image.path} href={annotationAssetUrl(taskId, image.path)}
+                          target="_blank" rel="noreferrer" title={image.label ?? image.path}>
+                          <img src={annotationAssetUrl(taskId, image.path)} alt={image.label ?? "批注附图"} loading="lazy" />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                   {/* 圈的原文跟在意见下面、一行截断:它是"指着哪儿"的补充,整段留在
                       title 里,点位置也能直接回到那一行。 */}
                   {(item.quote || item.anchor) && <blockquote

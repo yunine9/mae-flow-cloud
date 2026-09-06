@@ -17,6 +17,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { isReviewAssetPath } from "./reviewAssets.ts";
 
 /**
  * 需求原文来自任务快照，不是 .mae-flow-work 下的真实产物。批注仍需一个
@@ -96,6 +97,9 @@ export interface Annotation {
   /** 划选跨行时的末行;单行圈注没有。 */
   line_end?: number;
   note: string;
+  /** 批注附图(给 Agent 看的截图/设计稿):工作区相对路径,Agent 用
+   * inspect_image 读。图先经 /annotation-assets 落盘,这里只记引用。 */
+  images?: Array<{ path: string; label?: string }>;
   /** 最近一次修改意见的时间。修改留在 append-only 台账里，不覆盖旧记录。 */
   edited_at?: string;
   kind: AnnotationKind;
@@ -152,6 +156,7 @@ export interface AnnotationInput {
   assignee?: string;
   quote?: string;
   line_end?: number;
+  images?: Array<{ path: string; label?: string }>;
 }
 
 /** 整块原文上限,与前端 QUOTE_MAX 同值(两边各自截,不互信)。 */
@@ -391,6 +396,17 @@ export class AnnotationStore {
     const quote = String(input.quote ?? "").trim();
     const lineEnd = Number.isFinite(input.line_end)
       ? Math.trunc(input.line_end as number) : 0;
+    // 附图只认资产模块产出的路径形状:别的路径 Agent 读不到,也可能越界。
+    const images = (input.images ?? []).map((image) => ({
+      path: String(image?.path ?? "").trim(),
+      ...(String(image?.label ?? "").trim() ? { label: String(image.label).trim().slice(0, 80) } : {}),
+    })).filter((image) => image.path);
+    for (const image of images) {
+      if (!isReviewAssetPath(image.path)) {
+        throw new AnnotationError(`附图路径不合法:${image.path}(须先上传为检视图片资产)`);
+      }
+    }
+    if (images.length > 6) throw new AnnotationError("一条批注最多带 6 张图");
     const record: Annotation = {
       id: `an-${Date.now().toString(36)}-${this.list().length + 1}`,
       author: String(input.author ?? "").trim() || "未署名",
@@ -403,6 +419,7 @@ export class AnnotationStore {
         ? quote.slice(0, ANNOTATION_QUOTE_MAX) + "…" : quote } : {}),
       ...(lineEnd > line ? { line_end: lineEnd } : {}),
       note,
+      ...(images.length ? { images } : {}),
       kind: input.kind === "code" ? "code" : "doc",
       ...(input.route && input.route !== "agent" ? { route: input.route } : {}),
       ...(input.assignee?.trim() ? { assignee: input.assignee.trim() } : {}),
@@ -674,6 +691,13 @@ export function renderAnnotations(
       lines.push(`   ${label}:${item.anchor}`);
     }
     lines.push(`   要求:${item.note}`);
+    // 附图是意见的一部分:设计稿、期望效果截图。不看图就动手等于没读意见。
+    if (item.images?.length) {
+      lines.push(`   附图 ${item.images.length} 张,先用 inspect_image 逐张看清再动手(工作区相对路径):`);
+      for (const image of item.images) {
+        lines.push(`   - ${image.path}${image.label ? `(${image.label})` : ""}`);
+      }
+    }
     // 追问过的意见:作者已经针对你的问题补充了(改字重提,或在澄清卡上
     // 直接答了),别再问同一件事。
     for (const asked of item.clarifications ?? []) {
