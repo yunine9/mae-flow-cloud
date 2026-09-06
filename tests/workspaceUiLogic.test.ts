@@ -177,31 +177,17 @@ function annotation(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
-  assert.equal(api.statusText({
-    status: "running",
-    delivery: { loop: { state: "repairing", kind: "review", round: 0, max: 2 } },
-  }), "正在按检视意见修改");
-  assert.equal(api.statusText({
-    status: "verifying",
-    delivery: { loop: { state: "repairing", kind: "ci", round: 1, max: 2 } },
-  }), "流水线修复中");
-});
-
-test("Build-Fix 已恢复运行时不再显示旧的自动修复停机", () => {
-  const task = {
-    status: "verifying" as const,
-    delivery: {
-      loop: { state: "halted", kind: "review", round: 0, max: 20 },
-      prepush: { state: "preparing", round: 1, message: "准备定向验证" },
-      prepush_runtime: {
-        state: "recovering" as const,
-        message: "服务正在恢复上次中断的 Build-Fix",
-      },
-    },
-  };
-  assert.equal(api.repairStopped(task), false);
-  assert.equal(api.statusText(task), "Build-Fix 恢复中");
+test("状态短文案与'需介入'只镜像服务端投影,前端不再按 loop/prepush 自己判", () => {
+  // 推断表在 tests/statusLabel.test.ts(src/taskFocus.ts);这里只钉住
+  // 镜像语义:有 status_label 就显示它,没有(只知道状态码的子任务行)退回词表。
+  assert.equal(api.statusText({ status: "running", status_label: "正在按检视意见修改" }),
+    "正在按检视意见修改");
+  assert.equal(api.statusText({ status: "verifying" }), "代码已提交,流水线验证中");
+  assert.equal(api.statusText({ status: "verifying", status_label: "Build-Fix 恢复中" }),
+    "Build-Fix 恢复中");
+  assert.equal(api.repairStopped({ repair_stopped: true }), true);
+  assert.equal(api.repairStopped({ repair_stopped: false }), false);
+  assert.equal(api.repairStopped({}), false, "旧后端缺席时不亮'需介入'");
 });
 
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {

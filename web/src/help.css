@@ -1,3 +1,4 @@
+@layer legacy {
 /* 使用帮助是独立信息界面，不把长文章样式继续塞进全站热点 style.css。 */
 .sidebar-help-entry {
   margin-bottom: 2px;
@@ -574,4 +575,5 @@
     height: calc(100dvh - 20px);
     border-radius: 12px;
   }
+}
 }

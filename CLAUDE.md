@@ -56,6 +56,8 @@ npm test                 # 全量(需 docker/PG 的用例没有环境会显式 s
 npm run typecheck        # 零构建≠不查类型(tsx 不看类型,写错字段名会静默)
 npm run gate             # 推送闸门:typecheck+web 构建+秒级契约测试(hooksPath=.githooks 则 push 前自动跑)
 npm run fix-ratio -- 7   # 每周复测 fix 提交占比与重灾区文件;每周真模型演练清单见 docs/weekly-drill.md
+npm run visual -- --out <目录>            # 五档宽度静态截图(先 cd web && npm run build);改 CSS 前后各截一次
+npm run visual -- --compare <改前> <改后>   # 逐像素比对,任何差异都要能说出是哪条规则
 npm run probe            # 整链演练,内核裁判九项事实
 npm run serve            # 演示模式(剧本假模型;清场要显式 --fresh)
 npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)

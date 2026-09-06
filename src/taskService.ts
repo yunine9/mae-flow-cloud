@@ -97,8 +97,9 @@ import {
 } from "./feedbackPolicy.ts";
 import {
   type PushReviewPolicy, deliveryScopeViolations, describeDirtyPaths, listedPaths,
-  pushReviewCallId, pushReviewPolicyFor, pushReviewReceiptCovers, pushWaitingDetail,
-  recardDetail, samePaths, scopeDeltaLine, scopeViolationDetail, selectionPushDecision,
+  normalizedDeliveryPaths, pushReviewCallId, pushReviewPolicyFor, pushReviewReceiptCovers,
+  pushWaitingDetail, recardDetail, samePaths, scopeDeltaLine, scopeViolationDetail,
+  selectionPushDecision,
 } from "./pushReviewPolicy.ts";
 import {
   DeliveryOutbox,
@@ -521,7 +522,10 @@ import {
   type IssueEnvironmentInput,
   type IssueEnvironmentRef,
 } from "./issueEnvironment.ts";
-import { projectTaskFocus, type TaskFocus } from "./taskFocus.ts";
+import {
+  deliveryStopped, projectRepairStopped, projectStatusLabel, projectTaskFocus, type TaskFocus,
+} from "./taskFocus.ts";
+import { NotFoundError, TaskControlError } from "./errors.ts";
 import { createMergeRequest } from "./mrClient.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
@@ -950,6 +954,10 @@ export interface TaskSummary {
   queue_position?: number;
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
+  /** 状态短文案(taskFocus.projectStatusLabel);前端不再按 loop/prepush 自己拼。 */
+  status_label?: string;
+  /** 机器停了该人上(taskFocus.projectRepairStopped);与 retry 准入同源。 */
+  repair_stopped?: boolean;
   waiting?: WaitingRecord & {
     /** 推荐先看的证据面，由内核 approval_subject 或 Cloud 原生分析类型投影。 */
     recommended_view?: "source" | "doc" | "chain" | "diff";
@@ -1934,18 +1942,6 @@ export interface DecisionSubmission {
   /** 操作人(HTTP 层从登录会话注入,自动交卷不填)。只入审计账,
    * 不参与请求指纹——同内容的网络重试无论谁发都幂等。 */
   actor?: string;
-}
-
-function normalizedDeliveryPaths(values: string[]): string[] {
-  const paths = values.map((value) => String(value).trim()
-    .replace(/\\/g, "/").replace(/^(?:\.\/)+/, "")).filter(Boolean);
-  for (const path of paths) {
-    if (path.startsWith("/") || path === ".." || path.startsWith("../")
-        || path.includes("/../") || /[\0\r\n]/.test(path)) {
-      throw new TaskControlError(`交付清单包含不安全路径：${path}`);
-    }
-  }
-  return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
 }
 
 function orderedRecord(
@@ -4089,7 +4085,8 @@ export class TaskService {
       ...(feedback.length ? { feedback } : {}),
       ...(feedbackError ? { feedback_error: feedbackError } : {}),
     };
-    return { ...projected, focus: projectTaskFocus(projected) };
+    return { ...projected, focus: projectTaskFocus(projected),
+      status_label: projectStatusLabel(projected), repair_stopped: projectRepairStopped(projected) };
   }
 
   /** 知识足迹是 Cloud 观测旁路：阶段只读内核投影，写失败不影响任务。 */
@@ -9460,11 +9457,7 @@ export class TaskService {
     // 流水线迟迟不给可核销结果……)。它必须和修复环停机同等对待:
     // 那种状态下没有任何东西在收敛,再拦着人重跑就是把任务锁死。
     const evidenceStopped = delivery?.evidence_gap?.state === "waiting_human";
-    const repairStopped = delivery?.loop?.state === "halted"
-      || delivery?.loop?.state === "exhausted"
-      || Boolean(delivery?.stalled)
-      || evidenceStopped
-      || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
+    const repairStopped = deliveryStopped(delivery) || evidenceStopped;
     if (status === "verifying" && !repairStopped) {
       throw new NotFoundError(
         `任务 ${id} 流水线验证还在进行中,重跑会重复烧流水线;` +
@@ -21441,8 +21434,8 @@ export class TaskService {
   }
 }
 
-export class NotFoundError extends Error {}
-export class TaskControlError extends Error {}
+// 错误类型搬到 errors.ts(纯规则模块也要抛它们);这里原样再导出,调用方不动。
+export { NotFoundError, TaskControlError } from "./errors.ts";
 
 /** 插话里的 @ 知识引用(前端只传结构化标识,内容由服务端解析注入)。 */
 export interface SteerKnowledgeReference {

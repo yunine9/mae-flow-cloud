@@ -8,6 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { TaskControlError } from "./errors.ts";
 
 export interface PushReviewSnapshot {
   head: string;
@@ -60,6 +61,20 @@ export function pushReviewCallId(
 export function describeDirtyPaths(paths: string[]): string {
   const shown = paths.slice(0, 5).join("、");
   return paths.length > 5 ? `${shown} 等 ${paths.length} 个路径` : shown;
+}
+
+/** 交付清单路径归一:去 ./ 前缀、反斜杠转正、去重排序;绝对路径、..、控制字符
+ * 一律拒绝——清单是要拿去 git 操作的,不能让一条路径逃出工作区。 */
+export function normalizedDeliveryPaths(values: string[]): string[] {
+  const paths = values.map((value) => String(value).trim()
+    .replace(/\\/g, "/").replace(/^(?:\.\/)+/, "")).filter(Boolean);
+  for (const path of paths) {
+    if (path.startsWith("/") || path === ".." || path.startsWith("../")
+        || path.includes("/../") || /[\0\r\n]/.test(path)) {
+      throw new TaskControlError(`交付清单包含不安全路径：${path}`);
+    }
+  }
+  return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
 }
 
 /** 两份已归一化的路径清单是否同一集合(调用方保证已排序去重)。 */

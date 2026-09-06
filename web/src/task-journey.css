@@ -1,3 +1,4 @@
+@layer legacy {
 /* Progress is a narrative; task resources stay accessible from every view. */
 .workspace-studio.task-workspace-v2 .ws-execution-view { padding: 32px 40px 60px; background: var(--surface); }
 .task-journey { max-width: 920px; margin: 0 auto; color: var(--text); }
@@ -113,3 +114,4 @@
 .workspace-studio .task-progress-preparation .warmup-badge:hover { border-color: currentColor; }
 .workspace-studio .task-progress-preparation .warmup-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .warmup-empty { margin: 0; padding: 24px; font-size: 14px; line-height: 1.8; color: var(--muted); }
+}

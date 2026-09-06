@@ -33,64 +33,20 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
   canceled: "已取消",
 };
 
-/** 修复停机(需人工):与服务端 retry 的准入同一口径——只有这时
- * verifying 的任务才给重跑按钮(在途验证点重跑=重复烧流水线)。 */
-export function repairStopped(task: {
-  status: TaskStatus;
-  delivery?: {
-    pipeline?: string;
-    stalled?: string;
-    /** 停摆类别(服务端 stallPolicy);前端只透传,不据此拼文案。 */
-    stall_class?: "infrastructure" | "evidence_missing" | "evidence_invalid" | "contract" | "safety";
-    loop?: { state: string };
-    prepush_runtime?: { state?: string };
-  };
-}): boolean {
-  if (["running", "recovering"].includes(
-    task.delivery?.prepush_runtime?.state ?? "")) return false;
-  const loop = task.delivery?.loop;
-  return task.status === "verifying" && (
-    loop?.state === "halted" || loop?.state === "exhausted"
-    // stalled = 外部验证自愈预算烧完并如实停下(推送一直失败、流水线
-    // 迟迟不给可核销结果)。同样是"机器停了,该人上"。
-    || Boolean(task.delivery?.stalled)
-    || (task.delivery?.pipeline ?? "").includes("轮询预算耗尽"));
+/** 修复停机(需人工):服务端 taskFocus.projectRepairStopped 的镜像,与
+ * retry 准入同源——只有这时 verifying 的任务才给重跑按钮(在途验证点重跑
+ * =重复烧流水线)。2026-09-06 起前端不再按 loop/prepush 自己判。 */
+export function repairStopped(task: { repair_stopped?: boolean }): boolean {
+  return task.repair_stopped === true;
 }
 
-/** 状态文案:修复环激活时,"机器正在自救/机器停了需要人"比伞状态
- * "验证中"更有信息量——数据全部来自服务端 loop 账本,不做推断。
- * 人工节点与出错永远压过修复环文案(等人/坏了都比修复更紧急)。 */
+/** 状态短文案:服务端 status_label 的镜像(taskFocus.projectStatusLabel)。
+ * 只知道状态码的地方(跨仓子任务行、历史)退回状态词表——那是词典不是推断。 */
 export function statusText(task: {
   status: TaskStatus;
-  delivery?: {
-    loop?: { round: number; max?: number; state: string; kind?: string };
-    prepush?: { state?: string; round?: number; message?: string };
-    prepush_runtime?: { state?: string; message?: string };
-  };
+  status_label?: string;
 }): string {
-  const loop = task.delivery?.loop;
-  const runtime = task.delivery?.prepush_runtime;
-  if (["queued", "running", "verifying"].includes(task.status)) {
-    if (runtime?.state === "recovering") return "Build-Fix 恢复中";
-    if (runtime?.state === "running") return "Build-Fix 进行中";
-  }
-  if (loop && ["queued", "running", "pausing", "verifying"]
-    .includes(task.status)) {
-    if (loop.state === "repairing") {
-      // 人工检视刚触发返工时，round=0 表示尚未消耗任何流水线修复
-      // 轮次。它是内部状态，不应作为“第 0 轮”暴露给用户；此时用户
-      // 真正关心的是 Agent 正在处理检视意见。只有进入真实 CI 修复轮后
-      // 才展示轮次。
-      if (loop.kind === "review" || loop.round <= 0) {
-        return "正在按检视意见修改";
-      }
-      return "流水线修复中";
-    }
-    if (loop.state === "verifying") return "修复结果验证中";
-    if (loop.state === "halted") return "自动修复已停,需人工";
-    if (loop.state === "exhausted") return "修复预算用完,需人工";
-  }
-  return STATUS_TEXT[task.status] ?? task.status;
+  return task.status_label ?? STATUS_TEXT[task.status] ?? task.status;
 }
 
 export type UserRole = "admin" | "developer";
@@ -928,6 +884,10 @@ export interface TaskSummary {
     needs_attention: boolean;
     priority: number;
   };
+  /** 状态短文案(服务端 projectStatusLabel);statusText() 只读它。 */
+  status_label?: string;
+  /** 机器停了该人上(服务端 projectRepairStopped);repairStopped() 只读它。 */
+  repair_stopped?: boolean;
   /** 下单时选的模型;缺席=跟随服务当前默认。页面据此说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
   detail?: string;

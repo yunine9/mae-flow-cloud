@@ -1,3 +1,4 @@
+@layer legacy {
 /* 工作台右栏:会话流 + 唯一输入框(2026-09-05 重做)。
    令牌全部来自 tokens.css;紫白视觉、栏宽、桌面布局不动。
    结构:栏头(标题 + 责任人)→ 待你处理锚条 → 筛选 → 流(可滚)→ 输入框(常驻)。 */
@@ -473,3 +474,4 @@
 .task-workspace-v2 .conv-digest { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; color: var(--text); font-size: var(--fs-13); line-height: 1.55; }
 .task-workspace-v2 .conv-digest small { color: var(--attention); font-size: var(--fs-12); }
 .task-workspace-v2 .conv-digest .conv-act { margin-left: auto; }
+}

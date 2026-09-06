@@ -1,3 +1,4 @@
+@layer legacy {
 /* Shared visual finish. Keep interaction placement and task-row density intact. */
 .workspace { background: var(--canvas); }
 .sidebar {
@@ -160,4 +161,5 @@
 .workspace-studio.task-workspace-v2.materials-fullscreen .ws-body { padding: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .task-overview-open, .workspace-studio.task-workspace-v2 .option { transition: none; }
+}
 }

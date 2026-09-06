@@ -3,9 +3,10 @@
  *
  * 为什么要有:十天里 27 笔 fix 是"样式被别的文件压住了"——修法几乎都是再
  * 写一条更长的选择器或者加 !important,于是 16.8k 行 CSS 里覆盖式选择器
- * 只增不减,下一次改样式又踩到上一次的补丁。还没决定要不要引入 @layer
- * 之前,先把三个数钉住:只许降,不许升。要升必须来改这里的上限,并在
- * commit 里说清为什么这次非加不可。
+ * 只增不减,下一次改样式又踩到上一次的补丁。三个数钉住:只许降,不许升。
+ * 要升必须来改这里的上限,并在 commit 里说清为什么这次非加不可。
+ * 2026-09-06 起叠层有了正式出口(见文末用例):覆盖写进 @layer fixes,
+ * 无条件赢——再往上限里加数就没有借口了。
  *
  * 数字是 2026-09-06 main@338d662 的实测。
  */
@@ -18,9 +19,10 @@ const dir = new URL("../web/src/", import.meta.url).pathname;
 const files = readdirSync(dir).filter((name) => name.endsWith(".css"));
 const css = Object.fromEntries(files.map((name) => [name, readFileSync(join(dir, name), "utf-8")]));
 
+// 2026-09-06 晚拧到当前实测值(删死 CSS 后):要升必须来改这里并说清为什么。
 const CEILING = {
   important: 55,
-  studioOverride: 286,
+  studioOverride: 285,
   duplicateTopLevelClass: 23,
 };
 
@@ -50,4 +52,25 @@ test("CSS 棘轮:同名顶层类规则跨文件重复只许减少", () => {
   assert.ok(duplicated.length <= CEILING.duplicateTopLevelClass,
     `跨文件重复定义的顶层类从 ${CEILING.duplicateTopLevelClass} 涨到 ${duplicated.length}:`
     + duplicated.slice(0, 8).map(([cls, owners]) => `.${cls}(${[...owners].join(",")})`).join(" "));
+});
+
+test("CSS 叠层:现有样式全在 legacy 一层,覆盖只走 fixes 层,不再新开层", () => {
+  // 2026-09-06 决定:按文件分层被五档宽度截图裁判(scripts/visual-scenes.ts)
+  // 否掉——480 张里 209 张变了,后面文件里被长选择器压住的规则一夜全赢,那是
+  // 没人审过的改版。现有样式整体进 legacy 一层(与不分层逐像素一致);以后
+  // 的覆盖写进 `@layer fixes { … }`,无条件赢,不用再堆长选择器或 !important。
+  const declarations = Object.values(css)
+    .flatMap((text) => text.match(/^@layer [^{;]+;$/gm) ?? []);
+  assert.deepEqual(declarations, ["@layer legacy, fixes;"],
+    "层顺序只在 tokens.css 声明一次,且只有 legacy、fixes 两层");
+  for (const [name, text] of Object.entries(css)) {
+    const body = text.replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^@layer [^{;]+;$/m, "").trim();
+    assert.ok(body.startsWith("@layer legacy {"),
+      `${name} 的样式必须整体包在 @layer legacy { … } 里(新文件也一样)`);
+    assert.ok(body.endsWith("}"), `${name} 的 legacy 层没有闭合`);
+    const layers = [...text.matchAll(/@layer\s+([a-zA-Z-]+)\s*\{/g)].map((match) => match[1]);
+    assert.deepEqual([...new Set(layers)].filter((layer) => layer !== "legacy" && layer !== "fixes"), [],
+      `${name} 用了未登记的层;要新开层先过一遍截图裁判再来改这里`);
+  }
 });

@@ -1,3 +1,4 @@
+@layer legacy {
 /* 插话框。单独一份而不是并进 style.css:那份正被隔壁大改,
    插话是自成一块的东西,分开放谁都不踩谁。色板复用同一套变量。 */
 
@@ -266,3 +267,4 @@
 }
 .assistant-bounds li + li { margin-top: 2px; }
 .assistant-bounds strong { color: var(--text); font-weight: 700; }
+}

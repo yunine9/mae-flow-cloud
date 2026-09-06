@@ -87,6 +87,68 @@ function focus(
   };
 }
 
+/** 状态短文案(列表药丸、检查器"任务状态"一行)。2026-09-06 从前端
+ * api.ts 搬来:前端不推断状态,这里是唯一来源;前端只读 status_label。 */
+export const TASK_STATUS_TEXT: Record<string, string> = {
+  queued: "排队中",
+  running: "进行中",
+  pausing: "正在暂停",
+  paused: "已暂停",
+  waiting_for_human: "等你决定",
+  coordinating: "子任务进行中",
+  completed: "已完成",
+  failed: "出错了",
+  verifying: "代码已提交,流水线验证中",
+  await_merge: "已提合入请求,等待合入",
+  canceled: "已取消",
+};
+
+/** 机器停了、该人上:修复环停机、外部验证自愈预算烧完如实停下、旧的
+ * 轮询预算耗尽。retry 准入与页面的"需介入"都从这里读,不再各判一套。 */
+export function deliveryStopped(delivery: FocusTask["delivery"]): boolean {
+  return delivery?.loop?.state === "halted"
+    || delivery?.loop?.state === "exhausted"
+    || Boolean(delivery?.stalled)
+    || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
+}
+
+/** 页面的"需介入/重跑续推"闸:只有 verifying 且机器确实停了才算;Build-Fix
+ * 正在 running/recovering 时旧的停机牌不算数(服务已经在自救)。 */
+export function projectRepairStopped(task: FocusTask): boolean {
+  if (["running", "recovering"].includes(
+    task.delivery?.prepush_runtime?.state ?? "")) return false;
+  return task.status === "verifying" && deliveryStopped(task.delivery);
+}
+
+/** 修复环激活时,"机器正在自救/机器停了需要人"比伞状态"验证中"更有
+ * 信息量——全部来自 loop/prepush 账本。人工节点与出错永远压过修复环文案
+ * (等人/坏了都比修复更紧急),所以只在 queued/running/(pausing)/verifying
+ * 下改写。 */
+export function projectStatusLabel(task: FocusTask): string {
+  const loop = task.delivery?.loop;
+  const runtime = task.delivery?.prepush_runtime;
+  if (["queued", "running", "verifying"].includes(task.status)) {
+    if (runtime?.state === "recovering") return "Build-Fix 恢复中";
+    if (runtime?.state === "running") return "Build-Fix 进行中";
+  }
+  if (loop && ["queued", "running", "pausing", "verifying"]
+    .includes(task.status)) {
+    if (loop.state === "repairing") {
+      // 人工检视刚触发返工时 round=0 表示尚未消耗任何流水线修复轮次:
+      // 内部状态,不能作为"第 0 轮"暴露;此时人关心的是 Agent 正在处理
+      // 检视意见。只有进入真实 CI 修复轮才说"流水线修复中"。
+      if (loop.kind === "review" || (loop.round ?? 0) <= 0) {
+        return "正在按检视意见修改";
+      }
+      return "流水线修复中";
+    }
+    if (loop.state === "verifying") return "修复结果验证中";
+    if (loop.state === "halted") return "自动修复已停,需人工";
+    if (loop.state === "exhausted") return "修复预算用完,需人工";
+  }
+  return TASK_STATUS_TEXT[task.status] ?? task.status;
+}
+
 /** 从服务端已有事实生成唯一的扫读口径；任何未知状态都安全降级。 */
 export function projectTaskFocus(task: FocusTask): TaskFocus {
   const delivery = task.delivery;
