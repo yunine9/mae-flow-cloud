@@ -83,6 +83,7 @@ import {
   type SteerKnowledgeReference,
   type TaskService,
 } from "./taskService.ts";
+import { PLANTUML_SOURCE_LIMIT, renderPlantUml } from "./plantumlRender.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
   ArtifactArchiveTooLargeError,
@@ -877,6 +878,19 @@ export function createTaskServer(
       // 部署版本号:任何页面加载时可查(无需登录),用于确认部署生效。
       if (request.method === "GET" && url.pathname === "/build-info") {
         return json(response, 200, { build_hash: options.buildHash ?? null });
+      }
+
+      // PlantUML 出图:参考实现在服务端跑(vendor 里的 jar + 宿主 JDK),
+      // 前端只显示 SVG。出不了图返回原因,页面原样显示源码(旁路 fail-open)。
+      if (request.method === "POST" && url.pathname === "/diagrams/plantuml") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        const body = await readBody(request, PLANTUML_SOURCE_LIMIT + 4096);
+        const rendered = await renderPlantUml(String(body?.source ?? ""), {
+          cacheDir: join(service.options.dataDir, "diagram-cache"),
+        });
+        return json(response, 200, rendered);
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,

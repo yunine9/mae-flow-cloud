@@ -106,7 +106,10 @@
 .workspace-studio.task-workspace-v2 .with-documents .ws-doc { grid-column: 2; grid-row: 1; }
 .workspace-studio.task-workspace-v2 .ws-doc { padding: 28px clamp(20px,3vw,44px); background: var(--surface); min-width: 0; }
 .workspace-studio.task-workspace-v2 .ws-doc.is-diff { padding: 0; }
-.workspace-studio.task-workspace-v2 .ws-doc .md { max-width: 80ch; }
+.workspace-studio.task-workspace-v2 .ws-doc .md { max-width: var(--doc-measure, 80ch); }
+/* 全屏是为了铺开看:80ch 的阅读宽度在全屏里两边空一大截(用户 2026-09-06
+   第二次提)。用变量改量,不再叠更长的选择器去压上面那条。 */
+.materials-fullscreen { --doc-measure: min(120ch, 100%); }
 .workspace-studio .git-change-view.is-embedded { border: 0; border-radius: 0; margin: 0; }
 .workspace-studio .is-embedded .git-change-summary { padding: 12px 18px; border-bottom: 1px solid var(--line); }
 .workspace-studio .is-embedded .git-change-summary > div > span { display: none; }

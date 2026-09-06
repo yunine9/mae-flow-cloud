@@ -239,5 +239,13 @@ echo "  5. 发一单真需求走到 await_merge,MR 出现在真平台上;"
 echo "  6. 杀进程重启恢复——已有可执行演练:harness/restart-drill.sh"
 echo "     (真 kill -9 真 HTTP;语义测试另见 tests/recovery.test.ts)。"
 echo
+# PlantUML 出图靠宿主 JDK + vendor 里的 jar(手搓渲染器已删,2026-09-06):
+# 没有 Java 不拦启动,图会退成源码,但要在上线前知道。
+if command -v java >/dev/null 2>&1 && [ -f "$(dirname "$0")/../vendor/plantuml/plantuml-mit-1.2026.8.jar" ]; then
+  ok "PlantUML 出图:Java 与运行库都在"
+else
+  skip "PlantUML 出图:缺 Java 或 vendor/plantuml 运行库,文档里的图只会显示源码(不拦启动)"
+fi
+
 echo "结果: ✅ $PASS  ❌ $FAIL  ⏭️ $SKIP"
 [ "$FAIL" -eq 0 ] || exit 1

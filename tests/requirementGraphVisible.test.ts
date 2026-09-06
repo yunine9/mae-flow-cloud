@@ -34,3 +34,25 @@ test("候选仓缺席时退回逐仓排查结论数,再退回模块数", () => {
   assert.equal(requirementGraphVisible({ requirement_graph: graph("analysis", 1, 1) }), false);
   assert.equal(requirementGraphVisible({ requirement_graph: graph("analysis", 2) }), true);
 });
+
+import { keepFamiliesTogether } from "../web/src/taskHierarchy.ts";
+
+test("一家人一起看:先完成的子任务留在还在推进的父任务下面", () => {
+  const all = [
+    { id: "p", status: "coordinating" },
+    { id: "c1", status: "completed", parent_task_id: "p" },
+    { id: "c2", status: "running", parent_task_id: "p" },
+    { id: "solo-done", status: "completed" },
+  ];
+  const current = all.filter((task) => !["completed"].includes(task.status));
+  assert.deepEqual(keepFamiliesTogether(current, all).map((task) => task.id), ["p", "c2", "c1"],
+    "完成的 c1 跟父任务回到当前桶");
+  const delivered = all.filter((task) => task.status === "completed");
+  assert.deepEqual(keepFamiliesTogether(delivered, all).map((task) => task.id), ["solo-done"],
+    "c1 不再重复出现在完成桶;没有父任务的完成单照常");
+});
+
+test("一家人一起看:父任务不在列表里的子任务按自己的状态分桶", () => {
+  const all = [{ id: "c1", status: "completed", parent_task_id: "gone" }];
+  assert.deepEqual(keepFamiliesTogether(all, all).map((task) => task.id), ["c1"]);
+});

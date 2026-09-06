@@ -4419,3 +4419,21 @@ export async function getConversation(
   }
   return { view: await parseJson(response) };
 }
+
+/** 服务端 PlantUML 出图结果:svg 或出不了图的原因;语法错误时 svg 是标出错行的错误图。 */
+export interface PlantUmlRender {
+  svg?: string;
+  syntax_error?: boolean;
+  error?: string;
+  cached?: boolean;
+}
+
+export async function renderPlantUml(source: string): Promise<PlantUmlRender> {
+  const response = await fetch("/diagrams/plantuml", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}

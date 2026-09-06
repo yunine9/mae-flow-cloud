@@ -89,3 +89,24 @@ export function requirementGraphVisible(task: {
     || graph.stage === "confirmed"
     || task.requirement_analysis_requested === true;
 }
+
+/** 一家人一起看:子任务跟着父任务所在的分组走。
+ *
+ * 列表按状态分桶(当前 / 待合入与最近完成),跨仓父任务还在推进时,先完成
+ * 的那个子任务会被分到"最近完成"桶,父任务下面只剩一个子任务,人以为
+ * 少了一个(2026-09-06 演练现场实锤:两个子任务只显示一个)。规则:父任务
+ * 在哪个桶,它的子任务都跟去那个桶;没有父任务在列表里的子任务按自己
+ * 的状态分。 */
+export function keepFamiliesTogether<T extends { id: string; parent_task_id?: string }>(
+  bucket: T[],
+  all: T[],
+): T[] {
+  const inBucket = new Set(bucket.map((task) => task.id));
+  const parentsHere = new Set(bucket.filter((task) => !task.parent_task_id).map((task) => task.id));
+  const followers = all.filter((task) => task.parent_task_id
+    && parentsHere.has(task.parent_task_id) && !inBucket.has(task.id));
+  const parentElsewhere = (task: T) => Boolean(task.parent_task_id)
+    && !parentsHere.has(task.parent_task_id!)
+    && all.some((item) => item.id === task.parent_task_id);
+  return [...bucket.filter((task) => !parentElsewhere(task)), ...followers];
+}

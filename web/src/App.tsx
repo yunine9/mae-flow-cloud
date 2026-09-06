@@ -24,7 +24,7 @@ import {
   putPersonalPushConfirmation,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
-import { orderHierarchyBy, orderTaskHierarchy } from "./taskHierarchy";
+import { orderHierarchyBy, orderTaskHierarchy, keepFamiliesTogether } from "./taskHierarchy";
 import {
   byTeamAttention,
   isBlocked,
@@ -870,11 +870,12 @@ export function App() {
     task.status !== "waiting_for_human" && !isBlocked(task)
     && task.status !== "paused" && task.status !== "canceled"
     && !DELIVERY_HANDOFF_STATUSES.includes(task.status));
-  const myCurrent = myTasks.filter((task) =>
-    task.status !== "canceled" && !DELIVERY_HANDOFF_STATUSES.includes(task.status))
+  // 子任务跟着父任务所在的桶走:先完成的子任务不从父任务下面消失。
+  const myCurrent = keepFamiliesTogether(myTasks.filter((task) =>
+    task.status !== "canceled" && !DELIVERY_HANDOFF_STATUSES.includes(task.status)), myTasks)
     .sort(byTeamAttention);
-  const myDelivered = myTasks.filter((task) =>
-    DELIVERY_HANDOFF_STATUSES.includes(task.status));
+  const myDelivered = keepFamiliesTogether(myTasks.filter((task) =>
+    DELIVERY_HANDOFF_STATUSES.includes(task.status)), myTasks);
   const myMerges = myTasks.filter((task) => task.status === "await_merge");
   const personalActionItems = buildPersonalActionItems({
     waiting: myWaiting.filter((task) => !invitedToDiscuss(task)),
@@ -1559,8 +1560,13 @@ function TeamDashboard({
     ...tasks.map((task) => ({ teamTask: task as TeamTask, task })),
     ...issues.map((issue) => ({ teamTask: issueToTeamTask(issue), issue })),
   ], [tasks, issues]);
-  const currentItems = useMemo(() =>
-    combined.filter((item) => isCurrentTeamTask(item.teamTask)), [combined]);
+  // 子任务跟着父任务走:父任务还在现场,先完成的子任务也留在它下面。
+  const currentItems = useMemo(() => {
+    const current = combined.filter((item) => isCurrentTeamTask(item.teamTask));
+    const keep = new Set(keepFamiliesTogether(
+      current.map((item) => item.teamTask), combined.map((item) => item.teamTask)).map((task) => task.id));
+    return combined.filter((item) => keep.has(item.teamTask.id));
+  }, [combined]);
   const deliveryStats = useMemo(() => teamDeliveryBreakdown(tasks), [tasks]);
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
