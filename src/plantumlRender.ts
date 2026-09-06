@@ -14,7 +14,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,9 +39,18 @@ let javaCommand: string | null | undefined;
 /** 找 Java:JAVA_HOME 优先,其次 PATH。结果缓存——一次进程里不会变。 */
 export function findJava(): string | undefined {
   if (javaCommand !== undefined) return javaCommand ?? undefined;
+  // Homebrew 的 openjdk@N 是 keg-only,不进 PATH(2026-09-06 本机装 JDK 21 实锤):
+  // 按固定前缀探一遍,免得每台开发机都得改 shell 配置。
+  const brewKegs = ["/opt/homebrew/opt", "/usr/local/opt"].flatMap((root) => {
+    try {
+      return readdirSync(root).filter((name) => /^openjdk(@\d+)?$/.test(name))
+        .sort().reverse().map((name) => join(root, name, "bin", "java"));
+    } catch { return []; }
+  });
   const candidates = [
     ...(process.env.JAVA_HOME ? [join(process.env.JAVA_HOME, "bin", "java")] : []),
     "java",
+    ...brewKegs,
   ];
   for (const candidate of candidates) {
     const probe = spawnSync(candidate, ["-version"], { encoding: "utf-8", timeout: 10_000 });

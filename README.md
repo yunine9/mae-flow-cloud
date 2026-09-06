@@ -327,9 +327,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   `plantuml-mit-1.2026.8.jar`(MIT 版,17.7 MB,随仓库)+ 宿主 JDK 出 SVG,smetana
   布局不依赖 Graphviz,按源码哈希缓存在数据目录 diagram-cache;前端 `<img data:svg>`
   显示。没有 Java / 超时 / jar 缺失一律 fail-open 显示源码并说明原因;语法错误
-  显示 PlantUML 自己画的标错行图。**边界**:本机(macOS 开发机)没有 Java,真渲染
-  用例显式 skip,只在 JDK 21 构建镜像里用命令行验过含中文组件图;生产宿主有 JDK
-  (用户 09-06 确认),preflight 加了检查项。演练里那句 `[Notification] : 六字段含
+  显示 PlantUML 自己画的标错行图。**边界**:开发机已装 Homebrew 的 openjdk@21
+  (keg-only,渲染模块会按 Homebrew 前缀探 Java,不依赖 PATH),真渲染用例本机
+  真跑(含中文组件图、语法错标行、超时终止、缓存命中);生产宿主有 JDK(用户
+  09-06 确认),preflight 加了检查项。演练里那句 `[Notification] : 六字段含
   tenantId` 本身不是合法 PlantUML,参考实现同样判语法错——这类是模型写错,不是
   渲染器的锅,现在能看到 PlantUML 标出的错行。
 - **2026-09-06 列表里一家人一起看。** 子任务跟着父任务所在的分桶走:跨仓父任务
