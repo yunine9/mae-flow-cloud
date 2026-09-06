@@ -70,27 +70,24 @@ export function itemAnnotationIds(item: ConversationItem): string[] {
   }
 }
 
-/** "需要我的":等人处理的卡、人的决定与答复、我提的意见及其回执。
- * 这是一个阅读筛选,不是权限判断——能不能答卡由决定卡自己说。 */
-function concernsViewer(item: ConversationItem, viewer: string): boolean {
+/** "需要我的" = 此刻还等我动手的事,不是"跟我有关的历史"。原来把所有卡、决定、
+ * 插话、我提过的意见全算进来,点开和「全部」几乎没区别(用户 2026-09-06 实锤,
+ * fixture 里只少了会话开始和一段过程话)。现在只剩三类:还开着的卡;我提的意见
+ * 收到了当前版本的回执、而那条意见还没闭环(要我确认修好 / 退回 / 补充说明);
+ * 收到的上下游通知。这是阅读筛选,不是权限判断——能不能答卡由决定卡自己说。 */
+function concernsViewer(
+  item: ConversationItem,
+  viewer: string,
+  settled: ReadonlySet<string>,
+): boolean {
   switch (item.kind) {
     case "card":
-    case "decision":
-    case "clarified":
-    case "steer":
-      return true;
+      return item.status === "waiting";
     case "sync":
-      // 收到的上下游通知是要人核对的事,进「需要我的」;自己发出的不进
       return item.direction === "received";
-    case "annotations_sent":
-      return item.by === viewer || item.items.some((entry) => entry.author === viewer);
     case "receipts":
-      return item.items.some((entry) => entry.author === viewer);
-    case "owner_reply":
-    case "verified":
-    case "reopened":
-    case "revised":
-      return item.annotation.author === viewer || ("by" in item && item.by === viewer);
+      return item.items.some((entry) => entry.current && entry.author === viewer
+        && !settled.has(entry.id));
     default:
       return false;
   }
@@ -98,14 +95,19 @@ function concernsViewer(item: ConversationItem, viewer: string): boolean {
 
 export function visibleConversationItems(
   items: readonly ConversationItem[],
-  options: { filter: StreamFilter; thread?: string; viewer: string },
+  options: {
+    filter: StreamFilter; thread?: string; viewer: string;
+    /** 已闭环(确认通过 / 删除)的意见 id:它们的回执不再需要我。 */
+    settled?: ReadonlySet<string>;
+  },
 ): ConversationItem[] {
   if (options.thread) {
     const thread = options.thread;
     return items.filter((item) => itemAnnotationIds(item).includes(thread));
   }
   if (options.filter === "mine") {
-    return items.filter((item) => concernsViewer(item, options.viewer));
+    const settled = options.settled ?? new Set<string>();
+    return items.filter((item) => concernsViewer(item, options.viewer, settled));
   }
   return [...items];
 }
@@ -265,9 +267,12 @@ export function ConversationStream({
     setHasNew(false);
   }, [task.id, filter, thread]);
 
+  const settled = useMemo(() => new Set(annotations
+    .filter((item) => item.status === "verified" || item.status === "dropped")
+    .map((item) => item.id)), [annotations]);
   const visible = useMemo(() => visibleConversationItems(items, {
-    filter, thread, viewer: viewerUsername,
-  }), [items, filter, thread, viewerUsername]);
+    filter, thread, viewer: viewerUsername, settled,
+  }), [items, filter, thread, viewerUsername, settled]);
   const decisions = useMemo(() => {
     const map = new Map<string, Extract<ConversationItem, { kind: "decision" }>>();
     for (const item of items) if (item.kind === "decision") map.set(item.waiting_id, item);
@@ -838,7 +843,7 @@ export function ConversationStream({
         {loaded && !shown.length && !currentCard && (
           <div className="conv-empty">
             {thread ? "这条意见还没有处理记录。"
-              : filter !== "all" ? "这一档下还没有记录；切回「全部」看完整记录。"
+              : filter === "mine" ? "现在没有需要你处理的事。"
               : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}
           </div>
         )}

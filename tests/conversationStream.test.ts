@@ -95,9 +95,16 @@ function render(overrides: Record<string, unknown> = {}): string {
 test("筛选与线程:只剩全部 / 需要我的;线程只留牵涉这条批注的", () => {
   // 2026-09-06 用户:"右边的检视意见和左边的抽屉是不是重复"——第三档筛选去掉,
   // 意见类条目在流里只留一行摘要,详情只在抽屉。
+  // 「需要我的」只留此刻还等我动手的:开着的卡、我提的意见收到的当前回执、
+  // 收到的上下游通知。历史(已答的卡、决定、插话、我提过的意见)不算。
   const mine = visibleConversationItems(items, { filter: "mine", viewer: "zhou" });
-  assert.ok(mine.every((item) => item.kind !== "turn" && item.kind !== "session"));
-  assert.ok(mine.some((item) => item.id === "sent-1"), "我提的意见在「需要我的」里");
+  assert.deepEqual(mine.map((item) => item.id), ["receipts-1"],
+    "zhou 的意见 a-1 有当前版本的回执在等她;已答复的卡、决定、插话都不算");
+  const settled = visibleConversationItems(items,
+    { filter: "mine", viewer: "zhou", settled: new Set(["a-1"]) });
+  assert.deepEqual(settled, [], "意见闭环后回执不再需要我");
+  const lin = visibleConversationItems(items, { filter: "mine", viewer: "lin" });
+  assert.deepEqual(lin, [], "a-2 的回执是旧版本,不算 lin 的待办");
   const thread = visibleConversationItems(items, { filter: "all", thread: "a-1", viewer: "zhou" });
   assert.deepEqual(thread.map((item) => item.id), ["sent-1", "receipts-1"]);
   assert.deepEqual(itemAnnotationIds(items[5]), ["a-1", "a-2"]);
