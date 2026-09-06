@@ -347,7 +347,20 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .task-overview-status.running, .task-overview-status.verifying { color: var(--active); }
 .task-overview-status.completed { color: var(--success); }
 .task-overview-owner, .task-overview-time, .task-overview-arrow { font-size: 12px; color: var(--muted); }
-.task-overview-row.is-child .task-overview-title { padding-left: 12px; }
+/* 子任务行:缩进 + 连到上一行的折线,连续多个子任务竖线贯穿。旧卡片列表
+   有 28px 缩进和连线,紧凑行改版后只剩 12px 标题内缩和一道 3px 浅色内阴影,
+   父子层级基本看不出来(2026-09-06 用户实测)。 */
+.task-overview-row.is-child { position: relative; }
+.task-overview-row.is-child .task-overview-open { padding-left: 42px; }
+.task-overview-row.is-child::before {
+  content: ""; position: absolute; left: 20px; top: -1px; width: 12px; height: 23px;
+  border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong);
+  border-radius: 0 0 0 7px; pointer-events: none;
+}
+.task-overview-row.is-child:has(+ .task-overview-row.is-child)::after {
+  content: ""; position: absolute; left: 20px; top: 22px; bottom: -1px;
+  border-left: 1px solid var(--line-strong); pointer-events: none;
+}
 @media (max-width:1000px) {
  .task-overview-open { grid-template-columns: 80px minmax(0,1fr) 112px 72px 12px; gap: 10px; }
  .task-overview-time { display: none; }
@@ -357,7 +370,9 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
  .task-overview-id { display: none; }
  .task-overview-title { font-size: 12px; }
  .task-overview-status, .task-overview-owner { font-size: 11px; }
- .task-overview-row.is-child .task-overview-title { padding-left: 4px; }
+ .task-overview-row.is-child .task-overview-open { padding-left: 24px; }
+ .task-overview-row.is-child::before { left: 10px; width: 8px; }
+ .task-overview-row.is-child:has(+ .task-overview-row.is-child)::after { left: 10px; }
 }
 .task-overview-row { display: grid; grid-template-columns: minmax(0,1fr) 140px; align-items: center; }
 .task-overview-relation { min-width: 0; display: flex; align-items: center; padding-right: 12px; color: var(--muted); font-size: 11px; }
@@ -366,7 +381,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .task-overview-relation button:hover { text-decoration: underline; }
 .task-overview-relation button:disabled { color: var(--muted); cursor: default; }
 .task-overview-relation button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.task-overview-row.is-child { box-shadow: inset 3px 0 var(--accent-soft); }
 @media (max-width:1000px) { .task-overview-row { grid-template-columns: minmax(0,1fr) 112px; } }
 @media (max-width:600px) {
  .task-overview-row { grid-template-columns: minmax(0,1fr) 76px; }

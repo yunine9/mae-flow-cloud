@@ -397,6 +397,9 @@ function applyScenario(
   });
   if (key === "coordinating") Object.assign(summary, {
     progress: progress(4, "两个交付单元并行推进"),
+    // 候选仓必须与拆分出的模块一致:原来只有 1 个候选仓却拆出 2 个模块,
+    // 依赖图组件按候选仓数判"不必展示",工作台的「模块与依赖」一片空白。
+    repositories: ["fixture://frontend", "fixture://quality"],
     collaborators: ["reviewer"],
     requirement_graph: {
       stage: "confirmed", projection_state: "ready", plan_revision: "fixture-parent",
@@ -412,6 +415,10 @@ function applyScenario(
     },
     detail: "2 个交付单元正在推进，完成后自动收口",
   });
+  // 跨仓父任务 task-9 的两个交付单元:列表要能看出层级(缩进+连线)。
+  if (key === "running-rich" || key === "verifying-live") {
+    Object.assign(summary, { parent_task_id: "task-9" });
+  }
   if (key === "verifying-live") Object.assign(summary, {
     progress: progress(5, "流水线正在核对当前提交"),
     delivery: { mr_url: "https://code.example.test/mae-flow/merge_requests/129",

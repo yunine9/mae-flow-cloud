@@ -20,6 +20,7 @@ import { Composer, takeoverActiveOf } from "./Composer";
 import { Annotatable } from "./Annotatable";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
+import { requirementGraphVisible } from "./taskHierarchy";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
 import { CrossRepositorySync } from "./CrossRepositorySync";
@@ -1401,10 +1402,8 @@ export function TaskWorkspace({
     : changes.length;
   const untrackedDirectoryCount = changes.reduce((sum, item) =>
     sum + (item.untracked_directories?.length ?? 0), 0);
-  const hasRequirementGraph = !task.parent_task_id && !!task.requirement_graph
-    && ((task.repositories?.length ?? 0) > 1
-      || task.requirement_analysis_requested === true
-      || task.requirement_graph.stage === "confirmed");
+  // 与 RequirementGraph 组件同一个判定:页签露出而组件返回 null 就是空白面板。
+  const hasRequirementGraph = requirementGraphVisible(task);
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "需求原文" }
     : materialView === "chain"

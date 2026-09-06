@@ -63,3 +63,29 @@ export function taskOverviewRelationship<T extends {
     childCount: children.size,
   };
 }
+
+/** 图什么时候该露面——页签与组件必须用同一个判定。原来页签多认一条
+ * "stage=confirmed",组件不认,于是拆分确认后的父任务点进「模块与依赖」是
+ * 一片空白(2026-09-06 用户在演示数据上实测:候选仓 1 个、模块 2 个)。
+ * 单仓分析单拆分前也要露出概览;多仓即使最终只剩一个或零个模块仍要展示
+ * 逐仓排查结论;已确认的拆分方案更不能随候选仓数量消失。 */
+export function requirementGraphVisible(task: {
+  parent_task_id?: string;
+  repositories?: string[];
+  requirement_analysis_requested?: boolean;
+  requirement_graph?: {
+    stage: string;
+    repositories: Array<{ task_id?: string }>;
+    repository_assessments?: unknown[];
+  };
+}): boolean {
+  const graph = task.requirement_graph;
+  if (!graph || task.parent_task_id) return false;
+  const candidateCount = task.repositories?.length
+    ?? graph.repository_assessments?.length
+    ?? graph.repositories.length;
+  return candidateCount >= 2
+    || graph.repositories.length >= 2
+    || graph.stage === "confirmed"
+    || task.requirement_analysis_requested === true;
+}
