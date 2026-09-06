@@ -491,6 +491,21 @@ for (const [index, scenario] of WORKBENCH_UI_SCENARIOS.entries()) {
     id, scenario.title, scenario.status, workspace, cwd, ticket);
   applyScenario(scenario.key, id, summary, git);
   const waiting = summary.waiting as ReturnType<typeof waitingRecord> | undefined;
+  // 阶段真相只在工作区:服务端从 .mae-flow-work/panel-pulse.js 投影进度,
+  // task.json 里的 progress 不算数。没有脉冲的单仓任务一律占位到「启动」,
+  // 用户在演示数据上看到"验证中的任务进度条停在启动"(2026-09-06)。
+  // 不写 step id:假 id 会撞上按步骤名判断的契约。
+  const progressSnapshot = summary.progress as
+    { current_phase: string; step?: string; revision?: number } | undefined;
+  if (progressSnapshot && !summary.requirement_graph) {
+    mkdirSync(join(cwd, ".mae-flow-work"), { recursive: true });
+    writeFileSync(join(cwd, ".mae-flow-work", "panel-pulse.js"),
+      `window.__maeFlowPulse = ${JSON.stringify({
+        phase: progressSnapshot.current_phase,
+        step_title: progressSnapshot.step ?? "",
+        revision: progressSnapshot.revision ?? 7,
+      })};\n`);
+  }
   writeJson(join(workspace, "task.json"), {
     summary,
     cwd,
