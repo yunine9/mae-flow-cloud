@@ -30,7 +30,7 @@ type StreamModule = {
   itemAnnotationIds: (item: ConversationItem) => string[];
   visibleConversationItems: (
     items: readonly ConversationItem[],
-    options: { filter: "all" | "mine" | "review"; thread?: string; viewer: string },
+    options: { filter: "all" | "mine"; thread?: string; viewer: string },
   ) => ConversationItem[];
 };
 const {
@@ -92,9 +92,9 @@ function render(overrides: Record<string, unknown> = {}): string {
   }));
 }
 
-test("筛选与线程:检视意见只留批注类条目;线程只留牵涉这条批注的", () => {
-  const review = visibleConversationItems(items, { filter: "review", viewer: "zhou" });
-  assert.deepEqual(review.map((item) => item.kind), ["annotations_sent", "receipts", "external"]);
+test("筛选与线程:只剩全部 / 需要我的;线程只留牵涉这条批注的", () => {
+  // 2026-09-06 用户:"右边的检视意见和左边的抽屉是不是重复"——第三档筛选去掉,
+  // 意见类条目在流里只留一行摘要,详情只在抽屉。
   const mine = visibleConversationItems(items, { filter: "mine", viewer: "zhou" });
   assert.ok(mine.every((item) => item.kind !== "turn" && item.kind !== "session"));
   assert.ok(mine.some((item) => item.id === "sent-1"), "我提的意见在「需要我的」里");
@@ -114,15 +114,27 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.match(html, /class="chosen">需要调整代码/);
   assert.match(html, /林知远/, "决定人按显示名");
   assert.match(html, /第 9 行别暴露枚举/);
-  assert.match(html, /提交了 1 条批注给 Agent/);
-  assert.match(html, /2 条意见的处理回执/);
-  assert.match(html, /需要补充信息/);
-  assert.match(html, /旧版本回执，不算数/);
-  assert.match(html, /随下一次决定送达/);
+  // 非线程视图:意见类条目一行摘要 + 打开检视意见,不摊开正文(抽屉里有)
+  assert.match(html, /提交了 1 条意见给 Agent/);
+  assert.match(html, /回了 1 条意见的处理结果：1 条需要补充说明/);
+  assert.match(html, /另 1 条是旧版本回执，不算数/);
+  assert.doesNotMatch(html, /按字数还是按任务\?/, "回执正文不在流里重复");
+  assert.doesNotMatch(html, /class="conv-receipts"/, "逐条回执列表只在线程视图");
   assert.match(html, /CodeHub 检视/);
-  assert.match(html, /看这条的处理记录/);
+  assert.match(html, /提了 1 条意见，1 条还没闭环/);
+  assert.doesNotMatch(html, /移动端入口别竖排/, "外部意见正文也只在抽屉");
+  assert.ok((html.match(/打开检视意见/g) ?? []).length >= 3);
+  assert.doesNotMatch(html, /看这条的处理记录/, "非线程视图不再逐条给入口");
   assert.match(html, /data-annotation-ids="a-1 a-2"/);
+  assert.match(html, /随下一次决定送达/);
   assert.match(html, /Agent 正在写代码/, "没有待办时锚条说当前在干嘛");
+  assert.doesNotMatch(html, /role="tab"[^>]*>检视意见/, "第三档筛选已去掉");
+  // 线程视图:同一批条目逐条完整
+  const threaded = render({ thread: "a-1" });
+  assert.match(threaded, /2 条意见的处理回执/);
+  assert.match(threaded, /按字数还是按任务\?/);
+  assert.match(threaded, /需要补充信息/);
+  assert.match(threaded, /看这条的处理记录/);
 });
 
 test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各占一行", () => {

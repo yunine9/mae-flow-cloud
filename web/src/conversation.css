@@ -466,3 +466,8 @@
 .task-workspace-v2 .conv-sync { display: grid; gap: 4px; }
 .task-workspace-v2 .conv-sync p { margin: 0; color: var(--text); font-size: var(--fs-13); line-height: var(--lh-body); white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-workspace-v2 .conv-sync small { color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
+
+/* 意见类条目的一行摘要:一句话 + 打开检视意见 */
+.task-workspace-v2 .conv-digest { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; color: var(--text); font-size: var(--fs-13); line-height: 1.55; }
+.task-workspace-v2 .conv-digest small { color: var(--attention); font-size: var(--fs-12); }
+.task-workspace-v2 .conv-digest .conv-act { margin-left: auto; }

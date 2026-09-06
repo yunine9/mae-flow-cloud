@@ -25,15 +25,11 @@ import {
   type TaskSummary,
 } from "./api";
 
-export type StreamFilter = "all" | "mine" | "review";
+export type StreamFilter = "all" | "mine";
 
 /** 一屏先渲最近这些条;更早的按需展开(run7 真现场主会话 145 段话)。 */
 const INITIAL_LIMIT = 50;
 
-const REVIEW_KINDS = new Set<ConversationItem["kind"]>([
-  "annotations_sent", "receipts", "owner_reply", "clarified", "verified",
-  "reopened", "revised", "external",
-]);
 
 const SOURCE_LABEL: Record<FeedbackSource, string> = {
   workspace: "工作台批注",
@@ -107,11 +103,6 @@ export function visibleConversationItems(
   if (options.thread) {
     const thread = options.thread;
     return items.filter((item) => itemAnnotationIds(item).includes(thread));
-  }
-  if (options.filter === "review") {
-    return items.filter((item) => REVIEW_KINDS.has(item.kind)
-      || (item.kind === "card" && item.purpose === "clarification")
-      || (item.kind === "decision" && item.purpose === "clarification"));
   }
   if (options.filter === "mine") {
     return items.filter((item) => concernsViewer(item, options.viewer));
@@ -543,6 +534,13 @@ export function ConversationStream({
         });
       case "annotations_sent": {
         const who = item.by ?? item.items[0]?.author;
+        if (!thread) {
+          return message({
+            key: item.id, who: who === viewerUsername ? "you" : "person",
+            name: nameOf(who) || "检视人", ts: item.ts, ids: item.items.map((entry) => entry.id),
+            children: digest(`提交了 ${item.items.length} 条意见给 Agent`, item.items.map((entry) => entry.id)),
+          });
+        }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "检视人", ts: item.ts, ids: item.items.map((entry) => entry.id),
@@ -553,7 +551,27 @@ export function ConversationStream({
           </>,
         });
       }
-      case "receipts":
+      case "receipts": {
+        if (!thread) {
+          const current = item.items.filter((entry) => entry.current);
+          const stale = item.items.length - current.length;
+          const count = (outcome: string) => current.filter((entry) => entry.outcome === outcome).length;
+          const parts = [
+            count("fixed") ? `${count("fixed")} 条已处理` : "",
+            count("not_fixed") ? `${count("not_fixed")} 条没有修改` : "",
+            count("needs_clarification") ? `${count("needs_clarification")} 条需要补充说明` : "",
+          ].filter(Boolean).join("、");
+          return message({
+            key: item.id, who: "agent", name: "Agent", ts: item.ts,
+            ids: item.items.map((entry) => entry.id),
+            children: digest(
+              current.length
+                ? `回了 ${current.length} 条意见的处理结果：${parts}`
+                : `回了 ${item.items.length} 条意见的处理结果`,
+              item.items.map((entry) => entry.id),
+              stale ? `另 ${stale} 条是旧版本回执，不算数` : undefined),
+          });
+        }
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
           ids: item.items.map((entry) => entry.id),
@@ -582,7 +600,15 @@ export function ConversationStream({
             </ul>
           </>,
         });
+      }
       case "owner_reply":
+        if (!thread) {
+          return message({
+            key: item.id, who: item.by === viewerUsername ? "you" : "person",
+            name: nameOf(item.by) || "责任人", ts: item.ts, ids: [item.annotation.id],
+            children: digest("答复了 1 条意见", [item.annotation.id]),
+          });
+        }
         return message({
           key: item.id, who: item.by === viewerUsername ? "you" : "person",
           name: nameOf(item.by) || "责任人", ts: item.ts, ids: [item.annotation.id],
@@ -595,6 +621,13 @@ export function ConversationStream({
         });
       case "clarified": {
         const who = item.by ?? item.annotation.author;
+        if (!thread) {
+          return message({
+            key: item.id, who: who === viewerUsername ? "you" : "person",
+            name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
+            children: digest("答复了 Agent 对 1 条意见的追问", [item.annotation.id]),
+          });
+        }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
@@ -609,6 +642,13 @@ export function ConversationStream({
       }
       case "verified": {
         const who = item.by ?? item.annotation.author;
+        if (!thread) {
+          return message({
+            key: item.id, who: who === viewerUsername ? "you" : "person",
+            name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
+            children: digest("确认 1 条意见已修好", [item.annotation.id]),
+          });
+        }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
@@ -618,6 +658,13 @@ export function ConversationStream({
       }
       case "reopened": {
         const who = item.annotation.author;
+        if (!thread) {
+          return message({
+            key: item.id, who: who === viewerUsername ? "you" : "person",
+            name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
+            children: digest(`退回 1 条意见，第 ${item.returned} 次要求再改`, [item.annotation.id]),
+          });
+        }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
@@ -631,6 +678,13 @@ export function ConversationStream({
       }
       case "revised": {
         const who = item.annotation.author;
+        if (!thread) {
+          return message({
+            key: item.id, who: who === viewerUsername ? "you" : "person",
+            name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
+            children: digest("改写了 1 条意见，等重新提交", [item.annotation.id]),
+          });
+        }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
@@ -658,7 +712,18 @@ export function ConversationStream({
                 : "已回流大任务；依赖图上没有相邻仓库"}</small>
           </div>,
         });
-      case "external":
+      case "external": {
+        if (!thread) {
+          const open = item.items.filter((entry) => entry.status !== "closed").length;
+          return message({
+            key: item.id, who: "external", name: item.author ?? SOURCE_LABEL[item.source] ?? item.source,
+            ts: item.ts,
+            tag: <em className="conv-tag src">{SOURCE_LABEL[item.source] ?? item.source}</em>,
+            children: digest(
+              `提了 ${item.items.length} 条意见${open ? `，${open} 条还没闭环` : "，已全部闭环"}`,
+              []),
+          });
+        }
         return message({
           key: item.id, who: "external", name: item.author ?? SOURCE_LABEL[item.source] ?? item.source,
           ts: item.ts,
@@ -677,6 +742,7 @@ export function ConversationStream({
             ))}
           </ul>,
         });
+      }
       case "assistant":
         return message({
           key: item.id, who: item.role === "user" ? "you" : "assistant",
@@ -689,6 +755,18 @@ export function ConversationStream({
       default:
         return null;
     }
+  }
+
+  /** 流里的意见类条目在非线程视图只留一行:详情在左边的「检视意见」抽屉,
+   *  两边摊开同样的字是重复(用户 2026-09-06)。线程视图仍逐条完整。 */
+  function digest(lead: string, ids: string[], note?: string): ReactNode {
+    return (
+      <p className="conv-digest">
+        <span>{lead}</span>
+        {note && <small>{note}</small>}
+        <button type="button" className="conv-act" onClick={() => onOpenReview(ids)}>打开检视意见</button>
+      </p>
+    );
   }
 
   const rows: ReactNode[] = [];
@@ -712,7 +790,7 @@ export function ConversationStream({
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
         <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"], ["review", "检视意见"]] as const)
+          {([["all", "全部"], ["mine", "需要我的"]] as const)
             .map(([key, label]) => (
               <button type="button" key={key} role="tab"
                 aria-selected={!thread && filter === key}

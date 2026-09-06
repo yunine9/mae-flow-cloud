@@ -764,12 +764,10 @@ export function TaskWorkspace({
     const match = /(?:^#|&)thread=([^&]+)/.exec(window.location.hash);
     if (match) {
       setStreamThread(decodeURIComponent(match[1]));
-      setStreamFilter("review");
     }
   }, [task.id]);
   function showThread(id?: string) {
     setStreamThread(id);
-    if (id) setStreamFilter("review");
     const base = window.location.pathname + window.location.search;
     window.history.replaceState(null, "", id ? `${base}#thread=${encodeURIComponent(id)}` : base);
   }
