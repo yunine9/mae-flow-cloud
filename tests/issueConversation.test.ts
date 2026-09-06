@@ -59,11 +59,11 @@ test("回合聚合:assistant 发言入 texts,平台工具回执计入 steps,turn
   assert.ok(turn.end_ts);
 });
 
-test("未收口的回合 open=true,running 时悬置回合照常呈现", () => {
+test("未收口的回合 open=true:没有 turn_finished 就悬置", () => {
   const items = issueConversation([
     ev("session_started"),
     ev("assistant_message", { text: "正在分析" }),
-  ], { running: true }).items;
+  ], {}).items;
   const turn = items.at(-1) as Extract<typeof items[number], { kind: "turn" }>;
   assert.equal(turn.kind, "turn");
   assert.equal(turn.open, true);
@@ -124,19 +124,22 @@ test("回执:平台工具的 tool_finished 投影为 receipts 条目(成功失�
       is_error: false, result: "已推送 master_dev_D1 @ abc" }),
     ev("tool_finished", { call_id: "c4", name: "request_env",
       is_error: true, result: "已向用户发起网管环境配置请求" }),
+    // bash 是过程性调用:进回合 steps,不单列回执。
+    ev("tool_finished", { call_id: "c5", name: "bash",
+      is_error: false, result: "ok" }),
   ], {}).items;
   const receipts = items.find((item) => item.kind === "receipts") as
     Extract<typeof items[number], { kind: "receipts" }>;
   assert.ok(receipts, "回执条目在场");
-  assert.equal(receipts.items.length, 2);
+  assert.equal(receipts.items.length, 2, "bash 不进回执");
   assert.equal(receipts.items[0].outcome, "success");
   assert.equal(receipts.items[1].outcome, "error");
 });
 
-test("在场闸:运行中未作答的平台闸投影为 waiting 卡,排在流末尾", () => {
+test("在场闸:未作答的平台闸投影为 waiting 卡,排在流末尾", () => {
   const items = issueConversation([
     ev("session_started"),
-  ], { running: true, waitingCard: {
+  ], { waitingCard: {
     waiting_id: "gate-9", step: "问题分析",
     question: "问题分析报告已产出,请查阅 issue-analysis.md 后确认",
     options: ["确认报告,开始问题修复", "有补充意见(填写补充说明)"],
@@ -219,6 +222,35 @@ test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为
       "清闸后不再有 waiting 卡");
     assert.ok(cleared.items.some((item) => item.kind === "turn"),
       "回合回放在场");
+
+    // HTTP 冒烟(handleIssueRoutes 直调,先例 issueFlowContract):登录
+    // 可读、形状对、未登录 401。
+    const { handleIssueRoutes } = await import("../src/issueFlow/routes.ts");
+    const call = (parts: string[], viewer?: object) =>
+      new Promise<{ status: number; body: Record<string, any> }>(
+        (resolve, reject) => {
+          let status = 0;
+          void handleIssueRoutes(
+            { method: "GET" } as never,
+            {
+              writeHead: (code: number) => { status = code; },
+              end: (payload?: string) => {
+                try { resolve({ status, body: JSON.parse(payload ?? "{}") }); }
+                catch (error) { reject(error); }
+              },
+            } as never,
+            parts,
+            { issueFlow: service, authEnabled: true,
+              ...(viewer ? { viewer } : {}) } as never,
+          ).catch(reject);
+        });
+    const ok = await call(["issues", created.id, "conversation"],
+      { username: "dev", role: "developer" });
+    assert.equal(ok.status, 200);
+    assert.ok(Array.isArray(ok.body.items), "协作流条目是数组");
+    assert.ok(ok.body.events_seen > 0);
+    const denied = await call(["issues", created.id, "conversation"]);
+    assert.equal(denied.status, 401, "未登录 401");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

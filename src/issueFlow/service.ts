@@ -149,7 +149,7 @@ import {
 } from "./reviews.ts";
 import {
   issueConversation,
-  type IssueConversationEvent,
+  readConversationEvents,
   type IssueConversationView,
 } from "./conversation.ts";
 import {
@@ -913,23 +913,10 @@ export class IssueFlowService {
    * 坏行跳过、缺账本给空,绝不抛错拖垮页面。 */
   conversation(id: string): IssueConversationView {
     const live = this.require(id);
-    const path = join(live.root, "events.jsonl");
-    const events: IssueConversationEvent[] = [];
-    if (existsSync(path)) {
-      for (const line of readFileSync(path, "utf-8").split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          events.push(JSON.parse(line) as IssueConversationEvent);
-        } catch {
-          // 半行(写入方还在写)跳过:投影是旁路,不是第二本账。
-        }
-      }
-    }
+    const events = readConversationEvents(join(live.root, "events.jsonl"));
     const gate = live.state.gate;
     const firstQuestion = gate?.question.questions[0];
     return issueConversation(events, {
-      running: live.state.status === "running"
-        || live.state.status === "queued",
       ...(gate
         ? { waitingCard: {
           waiting_id: gate.id,

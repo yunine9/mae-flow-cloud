@@ -273,8 +273,8 @@ export function projectDialogue(root: string): {
 
 /** 问答卡的入参 → 问题清单(形状读不出来当没有;选项兼容字符串与
  * {code,label} 两种现场——码是投影层的事,人看文案)。平台闸的问句
- * 快照同走此路,一个形状。 */
-function cardQuestions(input: unknown): IssueDialogueQuestion[] {
+ * 快照同走此路,一个形状。协作流投影(conversation.ts)复用本函数。 */
+export function cardQuestions(input: unknown): IssueDialogueQuestion[] {
   const questions = (input as { questions?: unknown } | undefined)?.questions;
   if (!Array.isArray(questions)) return [];
   return questions.map((item) => {
