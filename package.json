@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.contract.json",
     "gate": "bash scripts/gate.sh",
     "fix-ratio": "bash scripts/fix-ratio.sh",
+    "visual": "tsx scripts/visual-scenes.ts",
     "ui:fixtures": "tsx scripts/seed-ui-workbench-fixtures.ts",
     "ui:fixtures:reset": "tsx scripts/seed-ui-workbench-fixtures.ts --force",
     "ui:preview": "MAE_FLOW_UI_FIXTURE_MODE=1 tsx src/serve.ts --data .ui-fixtures --port 8838",

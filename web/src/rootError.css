@@ -1,3 +1,4 @@
+@layer legacy {
 /* ── 根错误边界:白屏换成能读、能复制、能刷新的错误页(2026-08-29
    "点知识清单某一行就白屏"实测:未捕获渲染异常会卸载整棵树,
    页面纯白且零线索)。 ── */
@@ -31,3 +32,4 @@
   background: var(--surface-soft, rgba(255,255,255,.06)); font-size: 13px;
 }
 .root-error-actions button:hover { border-color: var(--accent, #7777ec); }
+}

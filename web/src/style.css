@@ -1,3 +1,4 @@
+@layer legacy {
 /* Mae-Flow Cloud Console —— 全站基础与遗留页面样式。
    设计令牌只在 tokens.css(必须先于本文件加载);本文件不再定义颜色。
    遗留区域按"触碰即收敛"迁移:改到哪块,把那块的硬编码尺寸与颜色换成
@@ -11550,4 +11551,5 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .memory-board-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .memory-board-row { grid-template-columns: 28px minmax(0, 1fr); }
   .memory-board-stats { grid-column: 2; }
+}
 }

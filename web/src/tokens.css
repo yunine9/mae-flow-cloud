@@ -1,3 +1,12 @@
+/* 叠层(2026-09-06 立):现有样式全部在 legacy 一层里——同一层内的叠层规则与不分层
+   时一模一样(五档宽度 480 张截图逐像素核过,scripts/visual-scenes.ts),所以这一步
+   不改任何像素。价值在 fixes 层:以后要压过旧样式,写进 `@layer fixes { ... }`,不管
+   选择器多短都无条件赢,再也不用堆四段长的压制选择器或 important 标记。
+   当天试过按文件分层(annotate/steer < tokens < style < … < surface-finish):480 张里
+   209 张变了——后面文件里被更长选择器压住的规则一夜之间全赢了,那是一次没人审过的
+   改版,不是重构;要那么做得逐处对着截图审。 */
+@layer legacy, fixes;
+@layer legacy {
 /* 全站紫白主题：导航、任务总览与工作台共享令牌。
  * 紫色用于主动作与选中态；琥珀、红、绿保留状态语义。
  * 表面、控件与浮层使用不同高度的阴影。旧变量以别名兼容。 */
@@ -210,4 +219,5 @@
   --studio-remove-text: #fecaca;
   --studio-remove-bg: #402629;
   --studio-chrome-fg: #edf2fa;
+}
 }

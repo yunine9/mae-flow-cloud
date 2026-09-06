@@ -300,6 +300,19 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 CSS 叠层:现有样式整体进 `legacy` 一层,覆盖走 `fixes` 层;按文件分层被截图裁判否掉。**
+  先立裁判:`npm run visual -- --out <目录>` 把 16 个夹具任务 × 工作台/卡片/列表行 ×
+  明暗 × 五档宽度(1440/1200/900/600/390)用真组件 SSR 成静态页、内联构建产物 CSS、
+  无头 Chrome 截 480 张;`--compare` 逐像素比对(时间冻结、动画关闭,噪声底是偶发
+  15 像素)。按文件分层(annotate/steer < tokens < style < … < surface-finish)一试:
+  **480 张里 209 张变了**,全部 16 个工作台场景五档都变——后面文件里原本被更长
+  选择器压住的规则一夜全赢,那是一次没人审过的改版,不是重构,回退。落定方案:
+  11 份样式表整体包进 `@layer legacy {}`(同层内叠层规则与不分层一模一样,实测
+  478/480 一致,2 张 15 像素差异在同一构建重截也会出现),tokens.css 顶部声明
+  `@layer legacy, fixes;`,以后要压过旧样式写进 `@layer fixes { … }`——无条件赢,
+  不用再堆四段长选择器或 important 标记;`tests/cssOverrideRatchet.test.ts` 锁住
+  这个约定并把三个棘轮拧到当前值(55/285/23)。**未验**:静态标记覆盖不到 hover、
+  弹层、拖拽中的状态;字体在 file:// 下退回系统字体(前后一致,比对仍成立)。
 - **2026-09-06 前端真相收敛:状态短文案与"需介入"搬到服务端。** 前端 api.ts 里
   `statusText`/`repairStopped` 原来按 loop/prepush 自己推断(与 README"前端不推断
   状态"相悖,也和服务端 retry 准入各判一套)。现在服务端读侧投影 `status_label`

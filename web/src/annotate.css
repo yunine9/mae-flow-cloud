@@ -1,3 +1,4 @@
+@layer legacy {
 /* 批注:圈注手感 + 清单可见性。单独一份,不去挤正被大改的 style.css。 */
 
 .annotatable {
@@ -1536,3 +1537,4 @@
 .annot-image-add:disabled { opacity: .5; cursor: not-allowed; }
 .annot-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .annot-images img { max-width: 220px; max-height: 160px; border: 1px solid var(--line); border-radius: 6px; display: block; }
+}
