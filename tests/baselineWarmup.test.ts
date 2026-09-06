@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 /**
  * 环境预热编译(观测旁路,用户 2026-08-26 拍板"开始就爆红是好事"):
  * 现场就绪即并行编译基线。契约:收据绑起跑 SHA;runner 抛错=按基础
@@ -166,4 +167,13 @@ test("使命写清三件事与红线;报告解析只认合法结构、后写者�
   ].join("\n"));
   assert.equal(last?.status, "passed");
   assert.equal(last?.build_command, "npm run build");
+});
+
+test("预热与 Build-Fix 的 Java 生命周期同一条:预热要把 package 用的插件拉进缓存", () => {
+  // 2026-09-06 跨仓演练:预热只跑 compile/test,Build-Fix 首条是 package -DskipTests,
+  // jar/resources 插件不在缓存、容器没外网,依赖解析空转 14 分钟烧光 30 分钟预算。
+  const mission = warmupMission({ taskId: "t2", workspace: "/tmp/repo", sha: "b".repeat(40) });
+  assert.match(mission, /mvn package -DskipTests/, "预热样例必须包含 Build-Fix 的那条 package 命令");
+  const playbook = readFileSync(new URL("../src/prepushBuildPlaybook.ts", import.meta.url), "utf-8");
+  assert.match(playbook, /package -DskipTests/, "Build-Fix 的 Java 首条仍是 package -DskipTests;改了这里也要改预热样例");
 });
