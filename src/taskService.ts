@@ -521,7 +521,10 @@ import {
   type IssueEnvironmentInput,
   type IssueEnvironmentRef,
 } from "./issueEnvironment.ts";
-import { projectTaskFocus, type TaskFocus } from "./taskFocus.ts";
+import {
+  deliveryStopped, projectRepairStopped, projectStatusLabel, projectTaskFocus,
+  type TaskFocus,
+} from "./taskFocus.ts";
 import { createMergeRequest } from "./mrClient.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
@@ -950,6 +953,12 @@ export interface TaskSummary {
   queue_position?: number;
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
+  /** 状态短文案(taskFocus.projectStatusLabel):列表药丸与检查器直接显示,
+   * 前端不再按 loop/prepush 自己拼(2026-09-06 收敛)。 */
+  status_label?: string;
+  /** "机器停了该人上"(taskFocus.projectRepairStopped):页面据此亮"需介入"
+   * 与「重跑续推」,与 retry 准入同源。 */
+  repair_stopped?: boolean;
   waiting?: WaitingRecord & {
     /** 推荐先看的证据面，由内核 approval_subject 或 Cloud 原生分析类型投影。 */
     recommended_view?: "source" | "doc" | "chain" | "diff";
@@ -4089,7 +4098,12 @@ export class TaskService {
       ...(feedback.length ? { feedback } : {}),
       ...(feedbackError ? { feedback_error: feedbackError } : {}),
     };
-    return { ...projected, focus: projectTaskFocus(projected) };
+    return {
+      ...projected,
+      focus: projectTaskFocus(projected),
+      status_label: projectStatusLabel(projected),
+      repair_stopped: projectRepairStopped(projected),
+    };
   }
 
   /** 知识足迹是 Cloud 观测旁路：阶段只读内核投影，写失败不影响任务。 */
@@ -9460,11 +9474,7 @@ export class TaskService {
     // 流水线迟迟不给可核销结果……)。它必须和修复环停机同等对待:
     // 那种状态下没有任何东西在收敛,再拦着人重跑就是把任务锁死。
     const evidenceStopped = delivery?.evidence_gap?.state === "waiting_human";
-    const repairStopped = delivery?.loop?.state === "halted"
-      || delivery?.loop?.state === "exhausted"
-      || Boolean(delivery?.stalled)
-      || evidenceStopped
-      || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
+    const repairStopped = deliveryStopped(delivery) || evidenceStopped;
     if (status === "verifying" && !repairStopped) {
       throw new NotFoundError(
         `任务 ${id} 流水线验证还在进行中,重跑会重复烧流水线;` +

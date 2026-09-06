@@ -300,6 +300,14 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 前端真相收敛:状态短文案与"需介入"搬到服务端。** 前端 api.ts 里
+  `statusText`/`repairStopped` 原来按 loop/prepush 自己推断(与 README"前端不推断
+  状态"相悖,也和服务端 retry 准入各判一套)。现在服务端读侧投影 `status_label`
+  (taskFocus.projectStatusLabel)与 `repair_stopped`(projectRepairStopped,
+  与 retry 准入同源 deliveryStopped),前端两个函数只读镜像字段;只知道状态码的
+  地方(跨仓子任务行、历史)退回状态词表——那是词典不是推断。推断表在
+  `tests/statusLabel.test.ts`。**已验**:SSR 逻辑用例、焦点契约、镜像对账、
+  web 构建;**未验**:内网页面没有肉眼对过一遍药丸文案(措辞逐字未变)。
 - **2026-09-06 绞杀第三块:push 前确认与交付范围的决策并入 `src/pushReviewPolicy.ts`。**
   要不要人过目(任务级设置 > 个人默认 > 有清单即保守复检;未闭环意见与工作台
   返工复检是吞不掉的安全例外)、到了推送点是放行/全自动代确认/没 Build-Fix
