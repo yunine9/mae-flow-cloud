@@ -26,6 +26,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { constants, existsSync, readFileSync, statSync } from "node:fs";
+import { withModelTransport } from "./modelTransport.ts";
 import {
   access as fsAccess,
   mkdir as fsMkdir,
@@ -394,6 +395,11 @@ export class CloudSession {
   private overflowRepaired = false;
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
+  /** 各会话最近一条 assistant 消息若是模型层错误,记下原文;成功消息即清除。
+   * 子会话必须也记:pi 遇模型错误是正常收轮、prompt() 正常 resolve,不记的话
+   * 子 Agent 死于 300s 掐线也会被当成"返回了",主 Agent 拿到的是失败前最后
+   * 一句旁白(cross-glm53-20260906c 实锤,连派两次各白等 5 分钟)。 */
+  private modelErrors = new Map<string, string>();
   private childCount = 0;
   private childSessions = new Map<string, any>();
   private pendingKernel = new Set<Promise<void>>();
@@ -414,9 +420,11 @@ export class CloudSession {
   static async create(options: CloudSessionOptions): Promise<CloudSession> {
     ensureLoopbackDirect();
     const driver = new CloudSession(options);
-    driver.modelRuntime = await ModelRuntime.create({
+    // 模型请求套上长空闲预算的 fetch(见 modelTransport.ts 头注:Node 默认
+    // 300s 掐线,GLM 长生成首 token 前的沉默经常超过它)。
+    driver.modelRuntime = withModelTransport(await ModelRuntime.create({
       modelsPath: join(options.agentDir, "models.json"),
-    });
+    }));
     driver.session = await driver.openSession({
       sessionId: driver.sessionId,
       customTools: [
@@ -1254,9 +1262,16 @@ export class CloudSession {
         }
       }
       // 模型层错误藏在 stopReason 里(消息往往无文本,不能只看 text)。
-      if (sessionId === this.sessionId
-          && String(message.stopReason ?? "") === "error") {
-        this.turnError = String(message.errorMessage ?? "未知模型错误");
+      // 主会话与子会话都记:原文进日志,以后再出"5 分钟沉默后返回"这种事,
+      // 不用再从 pi 源码反推是谁掐的线。
+      if (String(message.stopReason ?? "") === "error") {
+        const modelError = String(message.errorMessage ?? "未知模型错误");
+        this.modelErrors.set(sessionId, modelError);
+        if (sessionId === this.sessionId) this.turnError = modelError;
+        this.options.log?.(
+          `任务 ${this.options.taskId} 会话 ${sessionId} 模型层错误: ${modelError.slice(0, 400)}`);
+      } else {
+        this.modelErrors.delete(sessionId);
       }
       const text = (Array.isArray(message.content) ? message.content : [])
         .filter((block: any) => block?.type === "text")
@@ -1266,6 +1281,22 @@ export class CloudSession {
       if (sessionId === this.sessionId) this.turnActivity += 1;
       this.lastAssistantText.set(sessionId, text);
       this.emit("assistant_message", sessionId, { text });
+      return;
+    }
+    // pi 的自动重试(默认 3 次,2s/4s/8s 退避)以前完全不可见——现场里只看到
+    // 一段沉默。写进日志,重试了几次、每次为什么失败都有据可查。
+    if (kind === "auto_retry_start") {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 会话 ${sessionId} 模型请求自动重试 `
+        + `${event.attempt}/${event.maxAttempts}(${event.delayMs}ms 后): `
+        + String(event.errorMessage ?? "").slice(0, 200));
+      return;
+    }
+    if (kind === "auto_retry_end") {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 会话 ${sessionId} 模型请求自动重试`
+        + `${event.success ? "成功" : "放弃"}(第 ${event.attempt} 次)`
+        + (event.finalError ? `: ${String(event.finalError).slice(0, 200)}` : ""));
       return;
     }
     if (kind === "tool_execution_start") {
@@ -1593,7 +1624,7 @@ export class CloudSession {
       ],
     });
     this.childSessions.set(childId, child);
-    let lifecycle: "returned" | "interrupted" = "returned";
+    let lifecycle: "returned" | "interrupted" | "failed" = "returned";
     try {
       await child.prompt(String(params.prompt ?? ""));
     } catch (error) {
@@ -1603,7 +1634,19 @@ export class CloudSession {
       this.childSessions.delete(childId);
       child.dispose();
     }
-    const finalText = this.lastAssistantText.get(childId) ?? "";
+    let finalText = this.lastAssistantText.get(childId) ?? "";
+    // pi 遇模型层错误(掐线、429 用尽重试……)是正常收轮,prompt() 照样
+    // resolve。这时 lastAssistantText 是失败前最后一句旁白,交回去主 Agent
+    // 只会看到"中途话术"然后再派一次(实锤:同一子任务连派两次各白等 5 分钟)。
+    // 如实按失败返回,错误原文带上,主 Agent 才有依据决定重派还是停下。
+    const modelError = this.modelErrors.get(childId);
+    this.modelErrors.delete(childId);
+    if (lifecycle === "returned" && modelError) {
+      lifecycle = "failed";
+      finalText = `子 Agent 模型请求失败(pi 自动重试后仍失败): ${modelError}`
+        + (finalText ? `\n失败前最后一句: ${finalText}` : "");
+      this.options.log?.(`子 Agent ${childId} 模型层失败: ${modelError.slice(0, 400)}`);
+    }
     this.emit("agent_finished", this.sessionId, {
       call_id: callId,
       child_session_id: childId,

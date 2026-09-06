@@ -180,8 +180,10 @@ function toAtom(event: Record<string, any>): Atom | null {
     };
   }
   if (kind === "agent_spawned" || kind === "agent_finished") {
+    // failed=模型层错误如实返回;interrupted=prompt 抛错或被掐断。两者都是
+    // "没交出结果",心流上都该亮红。
     const failed = kind === "agent_finished"
-      && String(payload.lifecycle ?? "") === "failed";
+      && ["failed", "interrupted"].includes(String(payload.lifecycle ?? ""));
     return {
       ts, ms, kind: "agent",
       subject: clip(payload.description ?? payload.agent_type ?? "子任务", 80),
