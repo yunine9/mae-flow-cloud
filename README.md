@@ -300,6 +300,12 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 质量加固第四、五步立成例行:每周真模型演练 + fix 占比复测。**
+  演练清单在 `docs/weekly-drill.md`(跑什么、看什么、问题怎么进 issue,基于
+  cross-glm53-20260906b 那次首跑);`npm run fix-ratio -- 7` 给出近 N 天 fix
+  提交占比与被 fix 触碰最多的文件。基线(2026-09-06 前 14 天):692 提交、
+  fix 249(35%),src/taskService.ts 被 107 个 fix 提交触碰。**未验**:清单
+  还没在第二个人手里跑过一遍,措辞按首次执行的反馈再改。
 - **2026-09-06 绞杀第二块:合入监控的决策抽成 `src/mergeWatch.ts`。** 门禁分类
   表(REPAIRABLE_GATES/HUMAN_GATE_TEXT/classifyGates)整块搬家;监控环每一拍
   拿到平台事实后往哪走(merged 任何状态下都收口、writer 在途只看 merged、
