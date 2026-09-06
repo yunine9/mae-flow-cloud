@@ -1,3 +1,4 @@
+import { requirementGraphVisible } from "./taskHierarchy";
 import { useState, type ReactNode } from "react";
 import {
   REQUIREMENT_GRAPH_ARTIFACT,
@@ -76,13 +77,10 @@ export function RequirementGraph({
   const [annotationNote, setAnnotationNote] = useState("");
   const [annotationBusy, setAnnotationBusy] = useState(false);
   const [annotationError, setAnnotationError] = useState("");
-  if (!graph) return null;
+  if (!graph || !requirementGraphVisible(task)) return null;
   const candidateCount = task.repositories?.length
     ?? graph.repository_assessments?.length
     ?? graph.repositories.length;
-  // 单仓分析单拆分前也要露出概览；多仓即使最终只有一个或零个模块
-  // 仍要展示逐仓排查结论，不能随着“无任务”一起消失。
-  if (candidateCount < 2 && task.requirement_analysis_requested !== true) return null;
   const projectionReady = graph.stage === "confirmed"
     || graph.projection_state === "ready";
   const participantNames = [...new Set([
@@ -142,7 +140,7 @@ export function RequirementGraph({
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
     <summary>
       <div>
-        <span>DELIVERY PLAN</span>
+        <span>模块拆分与依赖</span>
         <strong id="requirement-graph-title">模块拆分与依赖</strong>
       </div>
       <small>{!projectionReady

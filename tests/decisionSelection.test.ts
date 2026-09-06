@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearDecisionChoice,
+  unifiedDecisionReply,
   toggleDecisionChoice,
 } from "../web/src/decisionSelection";
 
@@ -29,4 +30,21 @@ test("选择自定义答复时可以清掉已有分支", () => {
     untouched: "保留",
   });
   assert.strictEqual(clearDecisionChoice(current, "不存在"), current);
+});
+
+test("统一回复保留显式决定分支，补充意见不会替换所选答案", () => {
+  assert.deepEqual(unifiedDecisionReply("需要调整代码", "  修复空状态  "), {
+    freeResponse: "", notes: "修复空状态",
+  });
+  assert.deepEqual(unifiedDecisionReply("确认按清单推送", ""), {
+    freeResponse: "", notes: "",
+  });
+});
+test("取消选项后意见成为自由答复，不会丢失或重复附带", () => {
+  assert.deepEqual(unifiedDecisionReply(undefined, "  先补验证再检视  "), {
+    freeResponse: "先补验证再检视", notes: "",
+  });
+  assert.deepEqual(unifiedDecisionReply(undefined, "  "), {
+    freeResponse: "", notes: "",
+  });
 });

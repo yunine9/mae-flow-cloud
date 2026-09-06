@@ -83,6 +83,8 @@ import {
   type SteerKnowledgeReference,
   type TaskService,
 } from "./taskService.ts";
+import { PLANTUML_SOURCE_LIMIT, renderPlantUml } from "./plantumlRender.ts";
+import { REVIEW_ASSET_MAX_BYTES, ReviewAssetError } from "./reviewAssets.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
   ArtifactArchiveTooLargeError,
@@ -877,6 +879,19 @@ export function createTaskServer(
       // 部署版本号:任何页面加载时可查(无需登录),用于确认部署生效。
       if (request.method === "GET" && url.pathname === "/build-info") {
         return json(response, 200, { build_hash: options.buildHash ?? null });
+      }
+
+      // PlantUML 出图:参考实现在服务端跑(vendor 里的 jar + 宿主 JDK),
+      // 前端只显示 SVG。出不了图返回原因,页面原样显示源码(旁路 fail-open)。
+      if (request.method === "POST" && url.pathname === "/diagrams/plantuml") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        const body = await readBody(request, PLANTUML_SOURCE_LIMIT + 4096);
+        const rendered = await renderPlantUml(String(body?.source ?? ""), {
+          cacheDir: join(service.options.dataDir, "diagram-cache"),
+        });
+        return json(response, 200, rendered);
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
@@ -2169,6 +2184,36 @@ export function createTaskServer(
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
         }
+        // 批注附图:上传落盘拿路径,再随批注引用;读取只认资产模块的路径形状。
+        if (request.method === "POST" && parts.length === 3
+            && parts[2] === "annotation-assets") {
+          const body = await readBody(request, REVIEW_ASSET_MAX_BYTES * 2);
+          let bytes: Buffer;
+          try {
+            bytes = Buffer.from(String(body?.content_base64 ?? ""), "base64");
+          } catch {
+            return json(response, 400, { error: "图片内容不是合法的 base64" });
+          }
+          try {
+            return json(response, 201, service.storeAnnotationAsset(id, bytes));
+          } catch (error) {
+            if (error instanceof ReviewAssetError) return json(response, 400, { error: error.message });
+            throw error;
+          }
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "annotation-asset") {
+          const asset = service.annotationAsset(id, url.searchParams.get("path") ?? "");
+          if (!asset) return json(response, 404, { error: "批注附图不存在" });
+          response.writeHead(200, {
+            "content-type": asset.mime_type,
+            "content-length": asset.content.length,
+            "content-disposition": "inline",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, max-age=86400",
+          });
+          return response.end(asset.content);
+        }
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "requirement-asset") {
           const path = url.searchParams.get("path") ?? "";
@@ -2261,7 +2306,10 @@ export function createTaskServer(
           // 受邀参与讨论的人(协作者/逐仓责任人)在分析期可以答卡——邀请了
           // 就得能回答(2026-09-04 用户拍板)。拍板类决定由 decide() 再按
           // 责任人硬闸一次,这里只挡"是否参与"。
-          if (!canCollaborate(viewer, target, !!options.auth)) {
+          // 澄清卡(Agent 追问某条检视意见)同理:被追问的意见作者能答——
+          // 问的是他,不能只让责任人替他猜(2026-09-05)。
+          if (!canCollaborate(viewer, target, !!options.auth)
+              && !(options.auth && service.canAnswerClarification(id, viewer?.username))) {
             return json(response, 403, { error: "只有责任人或受邀参与讨论的人可以回答这张卡"
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
@@ -2529,7 +2577,17 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const author = viewer?.username ?? "本地用户";
           if (request.method === "GET" && parts.length === 3) {
-            return json(response, 200, await service.listAnnotationsAsync(id));
+            // 闭环判定连同人名一起在服务端算完:页面只渲染,不推断。
+            const people = options.auth?.listUsers() ?? [];
+            return json(response, 200, await service.listAnnotationsAsync(id, {
+              username: author,
+              can_override: !options.auth || viewer?.role === "admin",
+              can_route_others: canOperate(
+                viewer, target.luban_account, !!options.auth),
+              person_name: (username: string) =>
+                people.find((person) => person.username === username)
+                  ?.display_name?.trim() || username,
+            }));
           }
           if (request.method === "POST" && parts.length === 3) {
             const body = await readBody(request);
@@ -2545,6 +2603,7 @@ export function createTaskServer(
               kind: body.kind === "code" ? "code" : "doc",
               route: body.route === "owner_reply" || body.route === "owner_decision"
                 || body.route === "memory" ? body.route : "agent",
+              images: Array.isArray(body.images) ? body.images : undefined,
             }));
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
@@ -2754,6 +2813,13 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.activity(id));
         }
+        // 会话流(只读):人和 Agent 之间的回合。权限口径同任务详情;
+        // 纯展示,不参与判定。
+        if (request.method === "GET" && parts[2] === "conversation") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return json(response, 200, service.conversation(id));
+        }
         // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
         // ——能看任务就能看它经历了什么。纯展示,不参与判定。
         if (request.method === "GET" && parts[2] === "timeline") {
@@ -2823,7 +2889,10 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const root = service.artifactRoot(id);
-          const sources = { pipelineRoot: join(target.workspace, "pipeline") };
+          const sources = {
+            pipelineRoot: join(target.workspace, "pipeline"),
+            taskMaterialRoot: target.workspace,
+          };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。

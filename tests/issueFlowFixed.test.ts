@@ -122,9 +122,6 @@ function retryWindow(minutes: number) {
 }
 
 const fakeOps = {
-  async fetchLogs() {
-    return { summary: "日志已拉取(测试假件):TranFmaWebsite 共 3 个文件,解压完成" };
-  },
   async buildDeploy() {
     return { summary: "[INFO] 部署完成(测试假件)\n备份已写入 /backup" };
   },
@@ -878,7 +875,7 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
     "出口轴工具同样逃不过无场景的打回(闸不再按模式旁路)");
 });
 
-test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查不倒转阶段", async () => {
+test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查不倒转阶段", async () => {
   const base: IssueSessionState = {
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -906,12 +903,12 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     assert.ok(tool, `应注册 ${name}`);
     return tool!;
   };
-  // fetch_logs 在第一阶段(dts_info)不再被阶段门禁拦——放宽后会因
-  // 运维工具缺席而失败,而不是阶段门禁。
+  // request_env 在第一阶段(dts_info)不被阶段门禁拦——缺环境时会举
+  // 配置卡(拒绝文案是配置请求,不是阶段门禁)。
   await assert.rejects(
-    () => byName("fetch_logs").execute("x", { services: ["TranFmaWebsite"] }),
+    () => byName("request_env").execute("x", {}),
     (error: Error) => !/阶段门禁/.test(error.message),
-    "fetch_logs 应全程开放;此处缺席的是运维工具,不是阶段许可");
+    "request_env 应全程开放;此处是配置请求,不是阶段许可");
   // dts_get_ticket 在 fix 阶段重查:内容照回,阶段不倒转,转移账留痕。
   base.stage = "fix";
   await byName("dts_get_ticket").execute("x", { ticket: "DTS-2026-1001" });
@@ -1511,7 +1508,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
   }
 });
 
-test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs);配置走 vault 不进 issue.json,配置后重试放行", async () => {
+test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs);配置走 vault 不进 issue.json,配置后指路技能", async () => {
   // 直调:env 缺席 → 举 env_needed 闸 + 工具如实失败(不再让 AI 空口
   // 向用户要密码)。
   const gateState: IssueSessionState = {
@@ -1535,23 +1532,23 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     name: string;
     execute: (id: string, params: any) => Promise<unknown>;
   }>;
-  const fetchLogs = directTools.find((tool) => tool.name === "fetch_logs")!;
-  assert.ok(fetchLogs);
+  const requestEnv = directTools.find((tool) => tool.name === "request_env")!;
+  assert.ok(requestEnv);
   await assert.rejects(
-    () => fetchLogs.execute("x", { services: ["TranFmaWebsite"] }),
+    () => requestEnv.execute("x", {}),
     /已向用户发起网管环境配置请求/);
   assert.equal(gateState.gate?.kind, "env_needed");
   assert.equal(gateState.gate?.scope, "logs", "闸带用途面,决策卡据此给表单文案");
 
-  // 端到端:无环境发起 → fetch_logs 举闸 → attachEnvironment 配置
-  // (密码只进 vault)→ 清闸开平台回合 → 重试放行。
+  // 端到端:无环境发起 → request_env 举闸 → attachEnvironment 配置
+  // (密码只进 vault)→ 清闸开平台回合 → 重试指路技能。
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envgate-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { tool: { name: "request_env", input: {} } },
     { text: "等待用户配置网管环境。" },
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
-    { text: "环境已配置,日志已拉取。" },
+    { tool: { name: "request_env", input: {} } },
+    { text: "环境已配置,按技能 issue-ops 抓取日志。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -1590,16 +1587,16 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     await until(() =>
       service.get(created.id).status === "idle" ? 1 : undefined,
     "配置后的平台回合收口");
-    // 现场账:第一次 fetch_logs 因缺环境失败,第二次放行。
+    // 现场账:第一次 request_env 因缺环境失败,第二次指路技能。
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
-    const fetches = events.split("\n").filter(Boolean)
+    const requests = events.split("\n").filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, any>)
       .filter((event) => event.kind === "tool_finished"
-        && event.payload?.name === "fetch_logs");
-    assert.equal(fetches.length, 2);
-    assert.equal(fetches[0].payload.is_error, true, "缺环境时如实失败");
-    assert.notEqual(fetches[1].payload.is_error, true, "配置后重试放行");
+        && event.payload?.name === "request_env");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].payload.is_error, true, "缺环境时如实失败");
+    assert.notEqual(requests[1].payload.is_error, true, "配置后重试指路技能");
     // 环境是开场后才补配的:开场词渲染时元信息还没有环境,密码不借闸
     // 进上下文(ADR-0003 的明文只随登记元信息走,要查调 get_issue_meta)。
     assert.doesNotMatch(JSON.stringify(model.requests), /env-shared-secret/);
@@ -1612,12 +1609,12 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
 test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回合告知「用户已确认」,拒绝台账入册不上 wire", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-"));
   const origin = bareOrigin(dataDir);
-  // 剧本:第 1 回合 fetch_logs 举闸停机;拒绝后的平台回合里 AI 再调
-  // fetch_logs(防纠缠:不举闸、如实失败),然后基于现有证据收嘴。
+  // 剧本:第 1 回合 request_env 举闸停机;拒绝后的平台回合里 AI 再调
+  // request_env(防纠缠:不举闸、如实失败),然后基于现有证据收嘴。
   const script: Scene[] = [
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { tool: { name: "request_env", input: {} } },
     { text: "等用户配环境或拒绝。" },
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { tool: { name: "request_env", input: {} } },
     { text: "用户已裁定,基于现有证据继续。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
@@ -1665,15 +1662,15 @@ test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回
     assert.match(declineTurn, /不要再次请求网管环境/);
     assert.match(declineTurn, /如实说明证据局限/);
     assert.match(declineTurn, /问题在页面侧即可复现/, "理由要随通知转给 AI");
-    // 防纠缠的端到端面:被拒后 fetch_logs 如实失败,闸保持清空。
+    // 防纠缠的端到端面:被拒后 request_env 如实失败,闸保持清空。
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
-    const fetches = events.split("\n").filter(Boolean)
+    const requests = events.split("\n").filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, any>)
       .filter((event) => event.kind === "tool_finished"
-        && event.payload?.name === "fetch_logs");
-    assert.equal(fetches.length, 2);
-    assert.equal(fetches[1].payload.is_error, true, "拒绝后再调如实失败");
+        && event.payload?.name === "request_env");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].payload.is_error, true, "拒绝后再调如实失败");
     assert.equal(service.get(created.id).gate, undefined,
       "拒绝后不重复举卡");
   } finally {
@@ -1706,25 +1703,25 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     name: string;
     execute: (id: string, params: any) => Promise<unknown>;
   }>;
-  const fetchLogs = tools.find((tool) => tool.name === "fetch_logs")!;
-  assert.ok(fetchLogs);
+  const requestEnv = tools.find((tool) => tool.name === "request_env")!;
+  assert.ok(requestEnv);
   const before = state.transitions?.length ?? 0;
   await assert.rejects(
-    () => fetchLogs.execute("x", { services: ["TranFmaWebsite"] }),
+    () => requestEnv.execute("x", {}),
     /用户已确认无需此操作.*拉日志[\s\S]*证据局限[\s\S]*不要再次请求环境/);
   assert.equal(state.gate, undefined, "硬拒绝:不再举闸");
   assert.equal(state.transitions?.length ?? 0, before,
     "举闸会记转移账——不举闸就不该有任何新增");
 });
 
-test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_logs 恢复正常路径", async () => {
+test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,request_env 恢复正常路径", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envunlock-"));
   const origin = bareOrigin(dataDir);
   // 剧本只负责举起 env_needed 闸(固定流程的催办续跑会在其后追加尾随
   // 回合,剧本耗尽后重复末幕文本——不依赖回合时序,解锢后的工具路径
   // 用直调缝按盘上真实状态验证)。
   const script: Scene[] = [
-    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { tool: { name: "request_env", input: {} } },
     { text: "等用户配环境或拒绝。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
@@ -1765,8 +1762,8 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_l
     assert.equal(persisted.env_declined, undefined,
       "配置成功即解锢:拒绝台账整册清除");
 
-    // fetch_logs 恢复正常路径:按盘上真实状态(拒绝台账已清+环境已在)
-    // 直调工具——密码门前放行,不再是「用户已确认」的硬拒绝。
+    // request_env 恢复正常路径:按盘上真实状态(拒绝台账已清+环境已在)
+    // 直调工具——密码门前放行,返回「已配置」指路,不再是硬拒绝。
     const tools = createIssueTools({
       state: persisted,
       workspace: "/tmp/ws", dataRoot: dataDir,
@@ -1777,11 +1774,11 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,fetch_l
         dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
       }),
     }) as Array<{ name: string; execute: (id: string, params: any) => Promise<unknown> }>;
-    const fetchLogs = tools.find((tool) => tool.name === "fetch_logs")!;
-    assert.ok(fetchLogs);
-    const receipt = await fetchLogs.execute("x", { services: ["TranFmaWebsite"] });
-    assert.match(String((receipt as any)?.content?.[0]?.text ?? ""), /日志已拉取/,
-      "解锢后 fetch_logs 走正常执行路");
+    const requestEnv = tools.find((tool) => tool.name === "request_env")!;
+    assert.ok(requestEnv);
+    const receipt = await requestEnv.execute("x", {});
+    assert.match(String((receipt as any)?.content?.[0]?.text ?? ""), /网管环境已配置/,
+      "解锢后 request_env 走正常指路");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

@@ -9,14 +9,24 @@ const workspace = readFileSync(
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 
-test("长批注在右侧抽屉内滚动,不挤压主工作台", () => {
-  // 2026-09-02 弹层改抽屉(用户定调易用性优先):滚动仍由抽屉内容区兜住。
-  assert.match(workspace,
-    /className="workspace-review-drawer"\s+role="complementary"/);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*min-height:\s*0/s);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.workspace-review-content\s*\{[^}]*overflow:\s*auto/s,
-    "长批注应由抽屉内容区统一滚动，不能挤压主工作台");
+test("内容页签与阅读检视工具是独立区域，检视仍随时可开关", () => {
+  const tabsStart = workspace.indexOf('className="ws-source-switch" role="tablist"');
+  const toolsStart = workspace.indexOf('className="ws-material-tools"');
+  assert.ok(tabsStart > 0 && toolsStart > tabsStart);
+  const tabs = workspace.slice(tabsStart, toolsStart);
+  assert.doesNotMatch(tabs, /ws-review-launch|materials-fullscreen-toggle|material-search-toggle/);
+  const tools = workspace.slice(toolsStart, workspace.indexOf('<div className="ws-material-stage"'));
+  assert.match(tools, /aria-label="检视意见" aria-expanded=\{reviewPanelOpen\}/);
+  assert.match(tools, /setReviewPanelOpen\(\(open\) => !open\)/);
+  assert.match(tools, /materials-fullscreen-toggle/);
+});
+
+test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
+  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  assert.match(workspace, /className="ws-review-canvas"/);
+  assert.match(workspace, /className="ws-material-stage"/);
+  assert.match(workspace, /className="ws-material-content">/);
+  assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);
 });
 
 test("Markdown 全屏使用宽画布且图表优先缩放到一屏", () => {
@@ -42,27 +52,20 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
   assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
 });
 
-test("邀请 Committer 是批注与检视旁的常驻协作入口", () => {
-  const navigation = workspace.slice(
-    workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<div className={`ws-body'),
-  );
-  assert.match(navigation,
-    /ws-review-launch[\s\S]*ws-review-invite-launch/,
-    "邀请检视应紧挨批注与检视，而不是藏在意见弹层里");
-  assert.match(navigation, /<strong><span aria-hidden>＋<\/span>邀请检视<\/strong>/);
+test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
+  const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
+    workspace.indexOf('{task.feedback_error &&'));
+  assert.match(controls, /canRequestReview && <button/);
+  assert.match(controls, /workspace-review-invite-button/);
+  assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
+  assert.match(controls, /setReviewInviteOpen\(true\)/);
+  assert.doesNotMatch(controls, /reviewPanelOpen/);
+  const panel = workspace.slice(workspace.indexOf('className="ws-review-canvas"'),
+    workspace.indexOf('<div className="ws-material-content"'));
+  assert.doesNotMatch(panel, /workspace-review-invite-button/);
   assert.match(workspace, /className="workspace-invite-dialog" role="dialog"/);
   assert.match(workspace, /<UserPicker ariaLabel="选择 Committer"/);
   assert.match(workspace, /reviewBusy \? "发送中…" : "发送邀请"/);
-  assert.match(css, /\.ws-workspace-nav \.ws-review-invite-launch\s*\{/);
-  assert.match(css, /\.workspace-invite-dialog\s*\{[^}]*width:\s*min\(460px, 100%\)/s);
-
-  const reviewDialog = workspace.slice(
-    workspace.indexOf('className="workspace-review-dialog"'),
-    workspace.indexOf('{reviewInviteOpen &&'),
-  );
-  assert.doesNotMatch(reviewDialog, /选择 Committer|发送邀请/,
-    "邀请动作不能继续占据检视意见弹层");
 });
 
 test("人员下拉保持紧凑并原位展开，不遮住邀请和交付信息", () => {

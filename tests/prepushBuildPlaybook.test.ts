@@ -90,12 +90,16 @@ test("build playbook: 识别 C++ Maven DT 与定向覆盖参数", (t) => {
   assert.ok(profile.signals.includes("pom.xml:native/DT"));
 
   const guidance = prePushBuildGuidance(repo.root);
-  assert.match(guidance, /mvn compile -DDT_test=UT -DDT_run=true/);
-  assert.doesNotMatch(guidance, /mvn clean compile -DDT_test=UT -DDT_run=true/);
+  // 命令口径以 mcde 的 mae-remote-build skill 真件为准:没有 -DDT_run,
+  // 增量/全量只差一个 clean(用户 2026-09-04 提供)。
+  assert.match(guidance, /mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT/);
+  assert.doesNotMatch(guidance, /mvn clean compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT/);
   assert.match(guidance, /必须从输出确认 UT 进程确实执行/);
   assert.match(guidance, /ctest --output-on-failure/);
-  assert.match(guidance, /DT_COV_INCLUDES/);
-  assert.match(guidance, /不得无过滤地跑全仓 UT/);
+  // 缩小范围首选目录;DT_COV_INCLUDES 只作为"先核实再用"的候选出现,
+  // 不能再被当成通用开关写进命令。
+  assert.match(guidance, /首选是目录/);
+  assert.match(guidance, /DT_COV_INCLUDES[^]{0,80}不在 mcde skill 里/);
   assert.match(guidance, /GCC\/G\+\+/);
 });
 
@@ -189,6 +193,10 @@ test("Build-Fix 全仓 UT 护栏只拦明显全量命令，定向选择器正常
   // 平台没在真仓上验证过。硬拒会让整个 C++ 仓跑不了 UT——代价不对等
   // (用户 2026-09-04 拍板"改成提示吧")。
   for (const command of [
+    // mcde 的 mae-remote-build skill 真件口径:没有 DT_run,增量/全量只差
+    // 一个 clean。只认带 DT_run 的写法等于对真实命令视而不见。
+    "mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT",
+    "mvn clean install -U -DDEBUG_FLAG=DEBUG -DDT_test=UT -s ${HOME}/settings.xml",
     "mvn compile -DDT_test=UT -DDT_run=true",
     "ctest --output-on-failure",
     "ctest",

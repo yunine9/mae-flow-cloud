@@ -10,7 +10,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
 import {
-  KERNEL_UNAVAILABLE,
   KernelUnavailableError,
   trustedKernelHostLifecycle,
 } from "./kernelDelivery.ts";

@@ -1,4 +1,11 @@
 import assert from "node:assert/strict";
+import {
+  annotationClosure,
+  annotationClosures,
+  annotationOverrideAccess,
+  annotationVerdictReady,
+} from "../src/feedbackPolicy.ts";
+import type { Annotation } from "../src/annotations.ts";
 import { after, test } from "node:test";
 import React from "../web/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
@@ -20,6 +27,43 @@ const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
 const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
 const gitDiff = await vite.ssrLoadModule("/src/GitDiff.tsx");
+const warmup = await vite.ssrLoadModule("/src/WarmupPanel.tsx");
+const repositoryPicker = await vite.ssrLoadModule("/src/RepositoryAssigneePicker.tsx");
+
+// 闭环判定已经收敛到服务端唯一处;页面只渲染结论。测试因此也走同一条
+// 路:用 feedbackPolicy 算好 closures 再喂给面板——两半对不上就红。
+const Panel = (props: Record<string, unknown>) => React.createElement(
+  annotationPanel.AnnotationPanel, { ...props, closures: closuresFor(props) });
+
+function closuresFor(props: Record<string, unknown>) {
+  const items = (props.items ?? []) as Annotation[];
+  const checks = (props.checks ?? []) as Array<{ id: string; state: string }>;
+  const people = (props.people ?? []) as Array<
+    { username: string; display_name?: string }>;
+  return annotationClosures(items, {
+    task_status: String(props.taskStatus ?? "running"),
+    review_ready: Boolean(props.reviewReady),
+    review_annotation_ids: (props.reviewAnnotationIds ?? []) as string[],
+    archival: props.taskStatus === "completed",
+  }, {
+    username: String(props.viewerUsername ?? ""),
+    can_override: Boolean(props.canOverride),
+    can_route_others: Boolean(props.canRouteOthers),
+  }, {
+    anchor_gone_ids: checks.filter((one) => one.state === "gone")
+      .map((one) => one.id),
+    person_name: (username) => people.find((one) => one.username === username)
+      ?.display_name?.trim() || username,
+  });
+}
+
+const verdictReady = (
+  item: unknown, status: string, reviewReady: boolean,
+) =>
+  annotationVerdictReady(item as Annotation, {
+    task_status: status, review_ready: reviewReady,
+    review_annotation_ids: [], archival: false,
+  });
 
 after(async () => {
   await vite.close();
@@ -34,6 +78,49 @@ function task(id: string, status = "running", owner = "alice") {
     luban_account: owner,
   };
 }
+
+test("单仓单元的 AR 已有值、清空、输入首字符后始终可编辑", () => {
+  for (const ticket of ["REQ-UI-301", "", "R", "REQ-NEW-302"]) {
+    const html = renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
+      taskId: "editable-ar", repositories: [{ id: "a", name: "前端", url: "https://example.test/ui.git", ticket: "REQ-UI-301" }],
+      selection: { assignments: { a: "alice" }, tickets: { a: ticket }, ready: true, loading: false }, onSelectionChange() {},
+    }));
+    assert.match(html, /<input[^>]*aria-label="前端的 AR 单号"/);
+    assert.ok(html.includes(`value="${ticket}"`));
+    assert.doesNotMatch(html, /repository-ticket-readonly|readonly=/i);
+    if (!ticket) assert.match(html, /缺少 AR 单号/);
+  }
+});
+
+test("AR 保持可编辑时仍校验同仓同执行人的重复单号和空白", () => {
+  const render = (tickets: Record<string, string>) => renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
+    taskId: "duplicate-ar", repositories: [
+      { id: "a", name: "模块一", url: "https://example.test/ui.git" },
+      { id: "b", name: "模块二", url: "https://example.test/ui.git" },
+    ], selection: { assignments: { a: "alice", b: "alice" }, tickets, ready: false, loading: false }, onSelectionChange() {},
+  }));
+  assert.match(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号与「模块二」重复/);
+  assert.match(render({ a: "REQ BAD", b: "REQ-OK" }), /AR 单号无效/);
+  assert.doesNotMatch(render({ a: "REQ-ONE", b: "REQ-TWO" }), /单号.*重复|AR 单号无效|缺少 AR 单号/);
+});
+
+test("开工前编译准备常驻显示，缺记录及已回收不声称就绪", () => {
+  const render = (extra = {}) => renderToStaticMarkup(React.createElement(warmup.WarmupBadge, {
+    task: { ...task("readiness"), ...extra }, onOpen() {},
+  }));
+  const receipt = { sha: "abc123", started_at: "2026-09-05T00:00:00Z" };
+  for (const [status, label] of [["running", "准备中"], ["passed", "已就绪"], ["failed", "失败"], ["infrastructure_failure", "准备中断"]]) {
+    const html = render({ baseline_build: { ...receipt, status } });
+    assert.match(html, /aria-haspopup="dialog"/);
+    assert.ok(html.includes(`<b>${label}</b>`));
+  }
+  const missing = render();
+  assert.match(missing, /<b>暂无记录<\/b>/);
+  assert.doesNotMatch(missing, /is-passed|<b>已就绪/);
+  const reclaimed = render({ baseline_build: { ...receipt, status: "passed" }, workspace_reclaimed_at: "2026-09-05T01:00:00Z" });
+  assert.match(reclaimed, /<b>现场已回收<\/b>/);
+  assert.doesNotMatch(reclaimed, /is-passed|<b>已就绪/);
+});
 
 function review(id: string, taskId: string) {
   return {
@@ -124,6 +211,8 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
     "用户明确停止的任务不再新增记录");
   assert.equal(workspace.materialViewForAnnotation(
     api.TASK_REQUIREMENT_ARTIFACT, []), "source");
+  assert.equal(workspace.materialViewForAnnotation("__workspace_diff__", []), "diff",
+    "工作区代码批注的虚拟标识不能被当作文档名");
   assert.equal(workspace.materialViewForAnnotation("changes.diff", [
     { name: "changes.diff", label: "代码差异", kind: "diff", bytes: 1 },
   ]), "diff");
@@ -171,8 +260,8 @@ test("流水线证据缺口直接打开补证材料，用户切走后不被轮�
     } },
   };
   assert.equal(workspace.pipelineEvidenceNeedsHuman(evidenceTask), true);
-  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "materials",
-    "补证是明确的人工作业，不能仍默认打开执行现场");
+  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "focus",
+    "补证先在当前视图呈现行动与关键证据，不能用自动跳页替代信息层级");
   assert.equal(workspace.preferredWorkspaceArtifact(
     [spec, gap], "", undefined, true), gap.name,
   "点名的补证材料优先于最近修改排序");
@@ -187,9 +276,25 @@ test("流水线证据缺口直接打开补证材料，用户切走后不被轮�
   }), false, "系统仍在自动重试时不冒充人工待办");
 });
 
+test("拆分子任务默认先打开自己的任务书，整体方案与原始需求只作参考", () => {
+  const plan = {
+    name: "task-materials/chain-plan.md", label: "整体拆分方案",
+    kind: "doc", purpose: "delivery_plan", bytes: 200,
+    modified_at: "2026-09-04T00:01:00.000Z",
+  };
+  const brief = {
+    name: "task-materials/unit-brief.md", label: "当前单元任务书",
+    kind: "doc", purpose: "delivery_unit_brief", bytes: 100,
+    modified_at: "2026-09-04T00:00:00.000Z",
+  };
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [plan, brief], "", "doc", false), brief.name,
+  "即使整体方案更新得更晚，也不能盖过当前子任务的主任务书");
+});
+
 test("已交付批注明确是归档记录，不再冒充待提交", () => {
   const html = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     {
       taskId: "task-done",
       viewerUsername: "visitor",
@@ -392,9 +497,9 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
     unresolvedAnnotationCount: 3,
     onDeliverySelectionChange: () => undefined,
   }));
-  assert.match(html, /本次交付范围/);
+  assert.match(html, /这次推送哪些文件/);
   assert.match(html, /1 \/ 2 个文件将推送/);
-  assert.match(html, /文件去留在左侧代码差异中调整/);
+  assert.match(html, /文件去留在左侧「代码改动」里调整/);
   assert.match(html, /重新编译后提交/);
   assert.match(html, /不再编译，直接提交/);
   assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
@@ -410,13 +515,19 @@ test("管理员旁路只开放给当前复检白名单中的他人待闭环意�
     viewerUsername?: string;
     reviewReady?: boolean;
     ids?: string[];
-  } = {}) => annotationPanel.adminOverrideAccess({
-    item,
-    viewerUsername: options.viewerUsername ?? "admin",
-    canOverride: true,
-    reviewReady: options.reviewReady ?? true,
-    reviewAnnotationIds: options.ids ?? ["annotation-1"],
-  });
+  } = {}) => {
+    const access = annotationOverrideAccess(item as unknown as Annotation, {
+      task_status: "waiting_for_human",
+      review_ready: options.reviewReady ?? true,
+      review_annotation_ids: options.ids ?? ["annotation-1"],
+      archival: false,
+    }, {
+      username: options.viewerUsername ?? "admin",
+      can_override: true,
+      can_route_others: false,
+    });
+    return { canDrop: access.can_drop, canVerify: access.can_verify };
+  };
 
   assert.deepEqual(access(current), { canDrop: true, canVerify: true });
   assert.deepEqual(access(current, { ids: [] }),
@@ -469,28 +580,28 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
     onChanged: () => undefined,
   };
   const ordinary = annotation({ sent_via: "decision", response: undefined });
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     ordinary, "waiting_for_human", false), true);
   const html = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, items: [ordinary] },
   ));
   assert.match(html, /Agent 已再次回到人工检视/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
 
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     ordinary, "running", false), false,
   "Agent 仍在修改时不能提前验收");
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     annotation({ sent_via: "queued_decision", response: undefined }),
     "waiting_for_human", false), false,
   "只登记、尚未真正送达 Agent 的意见不能立即验收");
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     annotation({ sent_via: "review_repair" }),
     "waiting_for_human", false), false,
   "MR 修复仍必须等 Build-Fix 与复检卡");
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     annotation({ sent_via: "review_repair", response: undefined }),
     "waiting_for_human", true), false,
   "MR 修复缺逐条回执时不能误开放通过");
@@ -513,7 +624,7 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
     assignee: "owner", sent_via: "owner_pending", response: undefined,
   });
   const ownerHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, viewerUsername: "owner", items: [waitingOwner] },
   ));
   assert.match(ownerHtml, /责任人答复 · owner/);
@@ -528,11 +639,11 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
       replied_at: "2026-08-30T00:02:00.000Z",
     },
   });
-  assert.equal(annotationPanel.authorVerdictReady(
+  assert.equal(verdictReady(
     answered, "running", false), true,
   "责任人已经答复时，提出人不必等任务进入人工阶段即可确认");
   const reviewerHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, viewerUsername: "reviewer", items: [answered] },
   ));
   assert.match(reviewerHtml, /旧接口不支持多通道/);
@@ -540,7 +651,7 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
   assert.match(reviewerHtml, />确认已解答<\/button>/);
 
   const decisionHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, viewerUsername: "owner", items: [annotation({
       id: "owner-decision", author: "reviewer", route: "owner_decision",
       assignee: "owner", sent_via: "owner_pending", response: undefined,
@@ -550,7 +661,7 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
   assert.match(decisionHtml, />作出决定<\/button>/);
 
   const foreignDraftsHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     {
       ...common,
       viewerUsername: "owner",
@@ -570,13 +681,14 @@ test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处�
   assert.match(foreignDraftsHtml, />原样交给 Agent<\/button>/);
   assert.match(foreignDraftsHtml, />回答这条意见<\/button>/,
     "责任人应能直接接住尚未提交的提问并答复");
-  assert.equal(annotationPanel.annotationCategory(
-    annotation({ author: "reviewer", status: "draft", response: undefined }),
-    {
-      viewerUsername: "owner", taskStatus: "running", reviewReady: false,
-      canOverride: false, canRouteOthers: true, reviewAnnotationIds: [],
-    },
-  ), "mine", "别人留下的待路由意见应进入责任人的待办筛选");
+  const foreignDraft = annotation({
+    author: "reviewer", status: "draft", response: undefined,
+  }) as unknown as Annotation;
+  assert.equal(annotationClosure(foreignDraft,
+    { task_status: "running", review_ready: false,
+      review_annotation_ids: [], archival: false },
+    { username: "owner", can_override: false, can_route_others: true },
+  ).bucket, "mine", "别人留下的待路由意见应进入责任人的待办筛选");
 });
 
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {
@@ -610,7 +722,7 @@ test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时�
     sent_via: "review_repair",
   });
   const html = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     {
       taskId: "task-review",
       viewerUsername: "alice",
@@ -630,7 +742,7 @@ test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时�
   assert.match(html, /另有 1 条意见的当前轮逐条回执尚未就绪/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
-  assert.match(html, />补充说明后重提<\/button>/);
+  assert.match(html, />回答这个问题<\/button>/, "追问的回答入口按动作命名");
   assert.ok(html.indexOf("src/actionable.ts") < html.indexOf("src/history.ts"),
     "待确认卡必须排在历史记录前面");
 });
@@ -649,7 +761,7 @@ test("批注面板显示受限管理员入口和实际代确认审计", () => {
   };
   const current = annotation();
   const eligibleHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, items: [current], reviewAnnotationIds: [current.id] },
   ));
   assert.match(eligibleHtml, />管理员代删<\/button>/);
@@ -657,14 +769,14 @@ test("批注面板显示受限管理员入口和实际代确认审计", () => {
   assert.match(eligibleHtml, /第一次点击只会进入确认/);
 
   const historicalHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, items: [current], reviewAnnotationIds: [] },
   ));
   assert.doesNotMatch(historicalHtml, />管理员代删<\/button>/);
   assert.doesNotMatch(historicalHtml, />管理员代确认<\/button>/);
 
   const auditedHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     {
       ...common,
       reviewReady: false,
@@ -694,13 +806,13 @@ test("检视状态只报告有证据的进度，不再把所有未闭环项写�
     onChanged: () => undefined,
   };
   const html = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, checks: [] },
   ));
   assert.match(html, /已交给 Agent/);
   assert.doesNotMatch(html, /Agent 处理中/);
   const changedHtml = renderToStaticMarkup(React.createElement(
-    annotationPanel.AnnotationPanel,
+    Panel,
     { ...common, checks: [{ id: "annotation-1", state: "gone" }] },
   ));
   assert.match(changedHtml, /已有改动·待验证/,

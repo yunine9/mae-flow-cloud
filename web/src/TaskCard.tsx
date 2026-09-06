@@ -4,8 +4,11 @@
  */
 
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { taskOverviewRelationship } from "./taskHierarchy";
+import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, toggleDecisionChoice } from "./decisionSelection";
+import { clearDecisionChoice, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -56,6 +59,8 @@ export function TaskCard({
   onOpenArtifacts,
   onOpenRelatedTask,
   showChildLinks = true,
+  compact = false,
+  relatedTasks = [],
 }: {
   task: TaskSummary;
   onChanged: () => void;
@@ -68,8 +73,10 @@ export function TaskCard({
   onOpenArtifacts?: () => void;
   onOpenRelatedTask?: (taskId: string) => void;
   showChildLinks?: boolean;
+  compact?: boolean;
+  relatedTasks?: TaskSummary[];
 }) {
-  const showDecisionForm = decisionMode === "form";
+  const showDecisionForm = !compact && decisionMode === "form";
   const [expanded, setExpanded] = useState(
     (showDecisionForm && task.status === "waiting_for_human") || focused,
   );
@@ -98,6 +105,20 @@ export function TaskCard({
   const buildFixActive = ["running", "recovering"].includes(
     task.delivery?.prepush_runtime?.state ?? "",
   );
+
+  const { parent: parentTask, childCount } = taskOverviewRelationship(task, relatedTasks);
+  if (compact && onOpenArtifacts) return <TaskOverviewRow
+    id={task.id} ticket={task.ticket} title={task.title ?? task.requirement}
+    status={task.status} statusLabel={task.status === "waiting_for_human" ? "待决定"
+      : task.status === "verifying" ? (repairStopped(task) ? "需介入" : "验证中")
+      : task.status === "await_merge" ? "待合入"
+      : task.status === "coordinating" ? "子任务推进" : statusText(task)}
+    owner={responsibleOf(task)} updatedAt={task.updated_at ?? task.created_at}
+    detail={task.focus?.next_action ?? task.detail} child={!!task.parent_task_id}
+    attention={repairStopped(task)} focused={focused} onOpen={onOpenArtifacts} childCount={childCount}
+    parentId={task.parent_task_id} parentLabel={parentTask?.ticket ?? task.parent_task_id}
+    parentTitle={parentTask?.title ?? parentTask?.requirement}
+    onOpenParent={parentTask && onOpenRelatedTask ? () => onOpenRelatedTask(parentTask.id) : undefined} />;
 
   return (
     <article
@@ -299,9 +320,6 @@ export function TaskCard({
             交付已阻止
           </span>
         )}
-        {task.luban_account && (
-          <span className="meta-fact">责任人 · {responsibleOf(task)}</span>
-        )}
       </div>
 
       {expanded && (
@@ -331,7 +349,7 @@ export function TaskCard({
           )}
           {task.baseline_build?.status === "failed" && (
             <div className="alert">
-              <strong>基线编译失败(环境预热)</strong>
+              <strong>开工前编译失败(环境预热)</strong>
               <span>
                 环境或上游问题,与本单增量无关;详情在工作台执行现场。
                 {task.baseline_build.detail
@@ -348,9 +366,11 @@ export function TaskCard({
               <span>
                 {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
-                {task.delivery?.stalled && !task.delivery?.loop
-                    && !task.delivery?.evidence_gap
-                  ? " 确认外部平台恢复后，点「重新尝试交付」。"
+                {/* 下一步来自服务端焦点(按停摆类别给):原来这里写死
+                    "确认外部平台恢复后点重新尝试交付",对 SHA 对不上、
+                    外来提交这类完整性停摆等于劝人跳过核实直接重试。 */}
+                {task.focus?.next_action
+                  ? ` ${task.focus.next_action}。`
                   : " 办完之后点「重跑续推」，机器接着干。"}
               </span>
               {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
@@ -387,7 +407,7 @@ export function TaskCard({
           )}
           {chainReview && decides && (
             <div className="chain-review-entry">
-              <span>CHAIN REVIEW</span>
+              <span>跨仓方案</span>
               <strong>跨仓方案已经生成，先看依赖再确认</strong>
               <p>仓库职责、硬依赖和交付顺序都在任务工作台中；确认后才会拆成各仓交付任务。</p>
               <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
@@ -401,7 +421,7 @@ export function TaskCard({
                  停在"正在读取交付文件清单"(push 确认卡实锤死锁),
                  所以这里只给入口不给表单。 */
               <div className="chain-review-entry">
-                <span>DELIVERY REVIEW</span>
+                <span>交付检视</span>
                 <strong>Build-Fix 已通过，请做最终代码检视</strong>
                 <p>这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
                 {onOpenArtifacts && (
@@ -462,12 +482,14 @@ export function TaskProgress({
   progress,
   showDetailedStep,
   context,
+  preparation,
   onPhaseClick,
   status,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
   context?: ReactNode;
+  preparation?: ReactNode;
   status?: TaskSummary["status"];
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
@@ -500,8 +522,10 @@ export function TaskProgress({
   return <span className="task-progress" aria-label={`当前阶段：${displayedCurrentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
+      {preparation && <span className="task-progress-preparation">{preparation}</span>}
       {context && <span className="task-progress-caption-context">{context}</span>}
       <strong>{displayedCurrentLabel}</strong>
+      <em className="task-progress-count">{currentIndex + 1}/{phases.length}</em>
     </span>
     {showMilestone && milestone && (
       <span className={`task-milestone ${milestone.event}`}>
@@ -522,7 +546,7 @@ export function TaskProgress({
           {...(onPhaseClick ? {
             role: "button" as const,
             tabIndex: 0,
-            title: "查看该阶段执行方案",
+            title: `${phase} · 查看该阶段执行方案`,
             style: { cursor: "pointer" },
             onClick: () => onPhaseClick(phase),
             onKeyDown: (event: ReactKeyboardEvent) => {
@@ -531,7 +555,7 @@ export function TaskProgress({
                 onPhaseClick(phase);
               }
             },
-          } : {})}>
+          } : { title: phase })}>
           <i aria-hidden />
           <span>{phase}</span>
         </span>;
@@ -590,17 +614,28 @@ export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
     || step === "cloud_split_proposal";
 }
 
+/** 澄清卡:Agent 处理检视意见时缺信息,单独问人。它不是"要不要通过",
+ * 标题、按钮、提示都要跟最终验收分开说。 */
+export function isClarificationWaiting(task: TaskSummary): boolean {
+  return task.waiting?.question?.purpose === "clarification";
+}
+
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
   if (step === "cloud_requirement_analysis_confirm") {
     return "确认需求";
   }
+  if (isClarificationWaiting(task)) return "需要补充信息";
   // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
   // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
   if (isChainReviewWaiting(task)) return "确认拆分方案";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (task.waiting?.recommended_view === "diff") return "代码检视";
   return undefined;
+}
+
+function DecisionFooterMount({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
+  return target ? createPortal(children, target) : children;
 }
 
 export function WaitingCard({
@@ -616,8 +651,12 @@ export function WaitingCard({
   onLocateDelivery,
   activeDeliveryScope,
   participant = false,
+  presentation = "default",
+  footerTarget,
 }: {
   task: TaskSummary;
+  presentation?: "default" | "studio";
+  footerTarget?: HTMLElement | null;
   onDecided: () => void;
   /** 本次仍待发送的 draft 批注；sent 已经送达，不能重复附带。 */
   annotationIds?: string[];
@@ -651,6 +690,7 @@ export function WaitingCard({
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
+  const [replyText, setReplyText] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [conflict, setConflict] = useState("");
@@ -662,6 +702,7 @@ export function WaitingCard({
     setCustom({});
     setCustomOpen({});
     setNotes("");
+    setReplyText("");
     setNotesOpen(false);
     setContextOpen(false);
     setConflict("");
@@ -669,7 +710,11 @@ export function WaitingCard({
   const questions = task.waiting?.question?.questions ?? [];
   const requirementAnalysisConfirmation = task.waiting?.step
     === "cloud_requirement_analysis_confirm";
+  const clarification = isClarificationWaiting(task);
+  const clarificationTargets = task.waiting?.question?.annotation_ids?.length ?? 0;
   const chainReview = isChainReviewWaiting(task);
+  const unifiedReply = presentation === "studio" && questions.length === 1
+    && !requirementAnalysisConfirmation;
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
@@ -719,7 +764,7 @@ export function WaitingCard({
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
     || (requiresDeliverySelection && selectedAnswers.some((answer) =>
       /需要.*(?:调整|修改)|返工|补充/.test(answer)));
-  const hasCustomPrimaryAnswer = questions.some((item) =>
+  const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
     && !!customOpen[item.question]
@@ -735,7 +780,7 @@ export function WaitingCard({
     || Boolean(deliverySelection?.selectedPaths.length);
   const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
-    const answered = options.length
+    const answered = unifiedReply ? Boolean(picked[item.question] || replyText.trim()) : options.length
       ? picked[item.question]
         || (customOpen[item.question] && custom[item.question]?.trim())
       : customOpen[item.question] && custom[item.question]?.trim();
@@ -791,9 +836,9 @@ export function WaitingCard({
       if (options.length && selected) {
         selectedOptions[item.question] = selected;
       }
-      const explanation = customOpen[item.question]
-        ? custom[item.question]?.trim()
-        : "";
+      const explanation = unifiedReply
+        ? unifiedDecisionReply(selected, replyText).freeResponse
+        : customOpen[item.question] ? custom[item.question]?.trim() : "";
       if (explanation) freeResponses[item.question] = explanation;
     }
     const confirmsChain = Object.values(selectedOptions).some((answer) =>
@@ -815,7 +860,7 @@ export function WaitingCard({
         task.waiting!.state_version,
         selectedOptions,
         freeResponses,
-        notes,
+        unifiedReply ? unifiedDecisionReply(picked[questions[0].question], replyText).notes : notes,
         annotationIds,
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
@@ -834,6 +879,7 @@ export function WaitingCard({
   }
 
   const submitLabel = submitting ? "正在提交…"
+    : clarification ? "发送答复"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
     : chainReview && confirmsChainChoice
@@ -861,7 +907,9 @@ export function WaitingCard({
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
-          <span className="decision-kicker">ACTION REQUIRED</span>
+          {presentation !== "studio" && <span className="decision-kicker">
+            {clarification ? "Agent 在追问" : "需要你决定"}
+          </span>}
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}
@@ -872,6 +920,14 @@ export function WaitingCard({
           <span className="decision-count">{questions.length} 个问题</span>
         )}
       </header>
+      {clarification && (
+        /* 澄清卡与最终验收分开说:答复只是把缺的信息给 Agent,它接着处理;
+           意见是否修好仍由提出人在最终卡上逐条确认。 */
+        <p className="decision-clarification-note">
+          Agent 处理{clarificationTargets > 0 ? ` ${clarificationTargets} 条` : ""}检视意见时缺少信息，
+          答复后它会继续处理并重新登记回执。这不是最终验收，意见是否修好仍由提出人确认。
+        </p>
+      )}
 
       {chainReview && task.requirement_graph && (
         /* 方案本体(单元职责、负责面、依赖顺序)在左侧仓间依赖图里,是结构
@@ -898,75 +954,6 @@ export function WaitingCard({
             </small>
           )}
         </div>
-      )}
-
-      {pushReview && (
-        <section className="push-review-overview" aria-label="本次代码检视摘要">
-          <div className="push-review-copy">
-            <span>待推送代码</span>
-            <strong>{pushReview.title}</strong>
-            <p>{pushReview.description}</p>
-          </div>
-          <div className="push-review-facts" aria-label="修改统计">
-            <span><b>{pushReview.file_count}</b>
-              {pushReview.has_focused_changes ? " 个本次修改文件" : " 个交付文件"}
-            </span>
-            {/* 统计不可得时说原因,不许摆 +0/−0:文件数有值、行数假零的
-                混合结果比没有更误导(MFC-040 实证)。 */}
-            {pushReview.stats_unavailable_reason ? (
-              <span className="stats-unavailable" role="alert">
-                统计不可用:{pushReview.stats_unavailable_reason}
-              </span>
-            ) : <>
-              <span className="added">+{pushReview.additions}</span>
-              <span className="deleted">-{pushReview.deletions}</span>
-            </>}
-            {pushReview.verification && <span className="verified">
-              {pushReview.verification}
-            </span>}
-          </div>
-          {(pushReview.agent_note || pushReview.commits.length > 0) && (
-            <details className="push-review-evidence">
-              <summary>
-                <strong>Agent 交付说明</strong>
-                <span>{pushReview.commits.length
-                  ? `${pushReview.commits.length} 个提交` : "实现与验证摘要"}</span>
-              </summary>
-              {pushReview.agent_note && (
-                <div className="push-review-agent-note">
-                  <Markdown text={pushReview.agent_note} />
-                </div>
-              )}
-              {pushReview.commits.length > 0 && (
-                <div className="push-review-commits">
-                  {pushReview.commits.slice(0, 3).map((commit) => (
-                    <span key={commit.sha}>
-                      <code>{commit.sha}</code>{commit.subject}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </details>
-          )}
-          {onLocateDelivery && (
-            <div className="push-review-actions">
-              {pushReview.has_focused_changes && (
-                activeDeliveryScope === "changes"
-                  ? <span className="current" role="status">这次修改已显示</span>
-                  : <button type="button" className="primary"
-                      onClick={() => onLocateDelivery("changes")}>
-                      查看这次修改
-                    </button>
-              )}
-              {activeDeliveryScope === "full"
-                ? <span className="current" role="status">完整交付已显示</span>
-                : <button type="button"
-                    onClick={() => onLocateDelivery("full")}>
-                    查看完整交付
-                  </button>}
-            </div>
-          )}
-        </section>
       )}
 
       {task.waiting?.context && (() => {
@@ -1006,39 +993,6 @@ export function WaitingCard({
           : block;
       })()}
 
-      {requiresDeliverySelection && (
-        <section className={`delivery-scope-card${
-          deliverySelectionChanged ? " changed" : ""}`}
-          aria-labelledby={`delivery-scope-${task.id}`}>
-          <header>
-            <div>
-              <span>本次交付范围</span>
-              <strong id={`delivery-scope-${task.id}`}>{deliverySelection
-                ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
-                : "先打开代码差异完成检视"}</strong>
-            </div>
-          </header>
-          {!deliverySelection ? (
-            <p>请到左侧「工作区变更」逐文件查看 diff，并在那里决定文件去留。</p>
-          ) : (
-            <div className="delivery-scope-result" role="status">
-              <strong>文件去留在左侧代码差异中调整</strong>
-              <span>{selectedHandlesFeedback
-                ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
-                : deliverySelection.selectedPaths.length === 0
-                  ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
-                  : deliverySelectionChanged
-                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。提交时可选择是否重新编译。`
-                    : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
-            </div>
-          )}
-          {onLocateDelivery && (
-            <button type="button" className="delivery-locate"
-              onClick={() => onLocateDelivery("full")}>打开代码差异并调整文件</button>
-          )}
-        </section>
-      )}
-
       {!requirementAnalysisConfirmation && <div className="question-list">
         {questions.map((item, index) => {
           const options = item.options ?? [];
@@ -1051,9 +1005,9 @@ export function WaitingCard({
           return (
             <fieldset className="question" key={item.question}>
               <legend>
-                <span className="question-number">
+                {questions.length > 1 && <span className="question-number">
                   {String(index + 1).padStart(2, "0")}
-                </span>
+                </span>}
                 <span className="question-text">
                   {item.question || "需要你确认"}
                 </span>
@@ -1112,7 +1066,7 @@ export function WaitingCard({
                     </button>
                   );
                 })}
-                <button
+                {!unifiedReply && <button
                   type="button"
                   className={`option custom-entry${customActive ? " picked" : ""}`}
                   role={options.length ? "radio" : undefined}
@@ -1129,7 +1083,7 @@ export function WaitingCard({
                         ? "以上选项都不合适时，直接写下正确处理方式"
                         : "填写本题的具体答案"}</span>
                     </span>
-                </button>
+                </button>}
               </div>
               {customOpen[item.question] && (
                 <div className="custom-answer">
@@ -1193,9 +1147,17 @@ export function WaitingCard({
         </div>
       )}
 
+      <DecisionFooterMount target={footerTarget}>
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
-        {!requirementAnalysisConfirmation && <div className="decision-notes">
+        {unifiedReply && <label className="decision-unified-reply">
+          <span>你的回复 <small>{picked[questions[0].question]
+            ? "随所选决定补充说明" : "选择处理方式，或直接填写答复"}</small></span>
+          <textarea value={replyText} aria-label="决定回复"
+            placeholder="补充整体意见，或说明处理要求…"
+            onChange={(event) => setReplyText(event.target.value)} />
+        </label>}
+        {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>
               {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
@@ -1219,6 +1181,12 @@ export function WaitingCard({
         </div>}
         {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
             最底沿,长卡时落在视口外,人以为点了没反应。 */}
+        {footerTarget && (reviewChoiceConflict || (requirementAnalysisConfirmation && attachmentCount > 0)) && (
+          <p className="decision-dock-notice" role="status">还有 {attachmentCount} 条检视意见未闭环，请先处理后再确认通过。</p>
+        )}
+        {footerTarget && !reviewChoiceConflict && (annotationIds?.length ?? 0) > 0 && (
+          <p className="decision-dock-notice">将附带你的 {annotationIds!.length} 条未发送反馈。</p>
+        )}
         {conflict && <div className="alert" role="alert">{conflict}</div>}
         {showDeliveryCompileActions ? (
           <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
@@ -1248,6 +1216,112 @@ export function WaitingCard({
           </button>
         )}
       </footer>
+      </DecisionFooterMount>
+      {(pushReview || requiresDeliverySelection) && <details className="decision-evidence">
+        <summary>改动摘要与推送范围</summary>
+      {pushReview && (
+        <section className="push-review-overview" aria-label="本次代码检视摘要">
+          <div className="push-review-copy">
+            <span>待推送代码</span>
+            <strong>{pushReview.title}</strong>
+            <p>{pushReview.description}</p>
+          </div>
+          <div className="push-review-facts" aria-label="修改统计">
+            <span><b>{pushReview.file_count}</b>
+              {pushReview.has_focused_changes ? " 个本次修改文件" : " 个交付文件"}
+            </span>
+            {/* 统计不可得时说原因,不许摆 +0/−0:文件数有值、行数假零的
+                混合结果比没有更误导(MFC-040 实证)。 */}
+            {pushReview.stats_unavailable_reason ? (
+              <span className="stats-unavailable" role="alert">
+                统计不可用:{pushReview.stats_unavailable_reason}
+              </span>
+            ) : <>
+              <span className="added">+{pushReview.additions}</span>
+              <span className="deleted">-{pushReview.deletions}</span>
+            </>}
+            {pushReview.verification && <span className="verified">
+              {pushReview.verification}
+            </span>}
+          </div>
+          {(pushReview.agent_note || pushReview.commits.length > 0) && (
+            <details className="push-review-evidence">
+              <summary>
+                <strong>Agent 交付说明</strong>
+                <span>{pushReview.commits.length
+                  ? `${pushReview.commits.length} 个提交` : "实现与验证摘要"}</span>
+              </summary>
+              {pushReview.agent_note && (
+                <div className="push-review-agent-note">
+                  <Markdown text={pushReview.agent_note} />
+                </div>
+              )}
+              {pushReview.commits.length > 0 && (
+                <div className="push-review-commits">
+                  {pushReview.commits.slice(0, 3).map((commit) => (
+                    <span key={commit.sha}>
+                      <code>{commit.sha}</code>{commit.subject}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </details>
+          )}
+          {onLocateDelivery && (
+            <div className="push-review-actions">
+              {pushReview.has_focused_changes && (
+                activeDeliveryScope === "changes"
+                  ? <span className="current" role="status">正在看这次改的</span>
+                  : <button type="button" className="primary"
+                      onClick={() => onLocateDelivery("changes")}>
+                      看这次改的
+                    </button>
+              )}
+              {activeDeliveryScope === "full"
+                ? <span className="current" role="status">正在看全部改动</span>
+                : <button type="button"
+                    onClick={() => onLocateDelivery("full")}>
+                    看全部改动
+                  </button>}
+            </div>
+          )}
+        </section>
+      )}
+
+      {requiresDeliverySelection && (
+        <section className={`delivery-scope-card${
+          deliverySelectionChanged ? " changed" : ""}`}
+          aria-labelledby={`delivery-scope-${task.id}`}>
+          <header>
+            <div>
+              <span>这次推送哪些文件</span>
+              <strong id={`delivery-scope-${task.id}`}>{deliverySelection
+                ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
+                : "先打开代码差异完成检视"}</strong>
+            </div>
+          </header>
+          {!deliverySelection ? (
+            <p>请到左侧「代码改动」逐个文件查看，并在那里决定文件去留。</p>
+          ) : (
+            <div className="delivery-scope-result" role="status">
+              <strong>文件去留在左侧「代码改动」里调整</strong>
+              <span>{selectedHandlesFeedback
+                ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
+                : deliverySelection.selectedPaths.length === 0
+                  ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
+                  : deliverySelectionChanged
+                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。提交时可选择是否重新编译。`
+                    : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
+            </div>
+          )}
+          {onLocateDelivery && (
+            <button type="button" className="delivery-locate"
+              onClick={() => onLocateDelivery("full")}>去代码改动里选文件</button>
+          )}
+        </section>
+      )}
+
+      </details>}
     </section>
   );
 }
@@ -1474,7 +1548,7 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
     <div className="cost">
       <section className={`cost-focus ${pending ? "blocked" : "clear"}`}>
         <div className="cost-focus-copy">
-          <span>{pending ? "CURRENT BLOCKER" : "CURRENT STATUS"}</span>
+          <span>{pending ? "当前卡点" : "当前状态"}</span>
           <strong>{pending
             ? pending.ask.title.replace(/^请你决定[:：]/, "")
             : "当前没有人工卡点"}</strong>

@@ -120,8 +120,19 @@ export function validateAskUserQuestionInput(input: unknown): string | undefined
   if (!input || typeof input !== "object") return "缺少 questions";
   const request = input as Record<string, unknown>;
   const extra = Object.keys(request)
-    .filter((key) => key !== "questions" && key !== "context");
+    .filter((key) => !["questions", "context", "purpose", "annotation_ids"].includes(key));
   if (extra.length) return `问题卡含不支持字段 ${extra.join("、")}`;
+  if (request.purpose !== undefined
+      && !["confirmation", "clarification"].includes(String(request.purpose))) {
+    return "purpose 只能是 confirmation 或 clarification";
+  }
+  if (request.annotation_ids !== undefined
+      && (request.purpose !== "clarification" || !Array.isArray(request.annotation_ids)
+        || !request.annotation_ids.length
+        || request.annotation_ids.some((id) => typeof id !== "string" || !id.trim())
+        || new Set(request.annotation_ids).size !== request.annotation_ids.length)) {
+    return "annotation_ids 只能用于 clarification，必须是非空、无重复的意见 ID 数组";
+  }
   if (request.context !== undefined
       && (typeof request.context !== "string" || !request.context.trim())) {
     return "context 必须是非空的用户可见说明";
@@ -200,6 +211,25 @@ export interface HostHooks {
   flush?(): Promise<void>;
 }
 
+/** 对人说话的口径。右栏会话流把主会话的每段话原样、按时间给人看;run7 真
+ * 现场 145 段里 116 段是"我先看一下…"这类过程话,人要的是结论。规则的骨架
+ * 借自 ayghri/i-have-adhd(用户点名的那份"让 agent 说人话"的 skill:先说
+ * 动作、不寒暄、多步编号、收尾只给一个下一步、列表封顶五条、报错就事论事),
+ * 再加上本仓的现场约束(不贴 diff/日志、说人话、用中文)。这是给模型的提示,
+ * 不是流程规则,也不校验——说不说得好看试跑。 */
+export const HUMAN_FACING_STYLE = [
+  "【对人说话的口径】你在正文里说的每一段话都会原样、按时间显示给用户;用户看的是结论,不是过程。",
+  "- 先说结论或要对方做的事,再给理由;不写开场白、寒暄、复述上文,也不写\"如有需要请告诉我\"这类收尾。",
+  "- 交接语(举卡前、回合收口、需要人做事时)三段以内:结论一句;需要对方做什么;依据在哪(文件路径、提交号、材料名)。结尾只给一个下一步。",
+  "- 多步的事用编号,一条一步;列表封顶五条,多了拆成\"现在做\"和\"以后做\"。",
+  "- 每次收口顺手说一句进展到哪了(如\"五步里做完第三步\"),用户不会记得上一轮。",
+  "- 不要把整段 diff、日志、命令输出贴进正文:给路径或一句摘要就够,正本在工作区和执行日志里。",
+  "- 动手前的过程话(\"我先看一下…\"\"现在去跑测试\")能不说就不说,要说压成一句。",
+  "- 报错就事论事:出了什么、原因、下一步怎么办;不写\"糟糕\"\"抱歉\"这类情绪词。",
+  "- 说用户听得懂的话:内部步骤代号、工具名、hook 细节不必展开;术语第一次出现带一句人话解释。用中文。",
+  "- 例外:用户要求详细解释、破坏性操作前的确认、真有歧义要问清时,该长就长。",
+].join("\n");
+
 export interface CloudSessionOptions {
   taskId: string;
   workspace: string;
@@ -220,6 +250,16 @@ export interface CloudSessionOptions {
    * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
    * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
   humanizeQuestionText?: (text: string) => string;
+  /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
+   * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
+   * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
+  humanFacing?: boolean;
+  /** 举卡前的宿主核对(2026-09-05):Agent 要向人举卡时,先问宿主"此刻
+   * 该不该举"。返回纠偏文字 = 不举:文字作为工具错误回给模型,原会话
+   * 继续干活——不创建待办、不通知人,也不伪造人的同意。宿主用它拦
+   * "检视意见还没处理完就举最终确认卡";已答过/已作废的重放不再问。 */
+  beforeHumanQuestion?: (input: Record<string, unknown>) =>
+    string | undefined | Promise<string | undefined>;
   /** 编译专项会话把长 Bash 的 stdout 节流写入事件账，供独立 SSE 实时
    * 展示。普通编码会话默认关闭，避免把高频输出灌进主事件账。 */
   streamBashOutput?: boolean;
@@ -985,6 +1025,10 @@ export class CloudSession {
             : []),
         ],
       }),
+      // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
+      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
+        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
+      } : {}),
       extensionFactories: [
         {
           name: "mae-flow-gate",
@@ -1295,6 +1339,12 @@ export class CloudSession {
       // question + options。回答按问题分开记录——内核"整份背书"判定
       // 依赖这个结构。
       parameters: Type.Object({
+        purpose: Type.Optional(Type.Union([
+          Type.Literal("confirmation"), Type.Literal("clarification"),
+        ], { description: "默认 confirmation。仅补充缺失信息用 clarification，不能夹带最终验收" })),
+        annotation_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+          minItems: 1, description: "clarification 所追问的检视意见 ID；先为它们记录 needs_clarification 回执",
+        })),
         context: Type.Optional(Type.String({
           description: "用户可见的决策背景；只写事实、证据与影响，不写内部操作过程",
           minLength: 1,
@@ -1363,11 +1413,36 @@ export class CloudSession {
         const lastSaidRaw = driver.lastAssistantText.get(driver.sessionId);
         const lastSaid = lastSaidRaw === undefined
           ? undefined : humanize(lastSaidRaw);
+        // 重放已决/已作废的旧卡不再核对(下面按记录原样回放);新卡先问
+        // 宿主。核对本身出错不能让卡消失也不能让会话死:按"没拦"处理,
+        // 交给回合结束与推送卡那两道后置检查兜底,错误记进日志。
+        const previous = driver.options.humanGate.get(`${driver.options.taskId}:${callId}`);
+        let blocked: string | undefined;
+        if (previous?.status !== "resolved" && previous?.status !== "superseded") {
+          try {
+            blocked = await driver.options.beforeHumanQuestion?.(params);
+          } catch (error) {
+            driver.options.log?.(
+              `任务 ${driver.options.taskId} 举卡前核对出错(按未拦处理): ${String(error)}`);
+          }
+        }
+        if (blocked) {
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId, name: "AskUserQuestion", input: params,
+            is_error: true, result: blocked,
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          return { content: [{ type: "text", text: blocked }], details: {}, isError: true };
+        }
         const record = driver.options.humanGate.createWaiting({
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
-          questionInput: { questions },
+          questionInput: { questions,
+            ...(params.purpose ? { purpose: params.purpose } : {}),
+            ...(params.annotation_ids ? { annotation_ids: params.annotation_ids } : {}),
+          },
           context: explicitContext ?? lastSaid,
           // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
           // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻

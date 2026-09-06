@@ -118,3 +118,29 @@ test("推荐协议:选项题必须带 recommended 且命中一个选项,开放�
     ],
   }) ?? "", /第 2 题缺少推荐项/);
 });
+
+test("澄清卡形状:purpose 只认两个值;annotation_ids 只能跟着 clarification,且非空无重复", () => {
+  assert.equal(validateAskUserQuestionInput({
+    purpose: "clarification", annotation_ids: ["an-1"],
+    questions: [{ question: "空值指入参还是返回值?" }],
+  }), undefined, "合规的追问卡放行");
+  assert.match(validateAskUserQuestionInput({
+    purpose: "approval", questions: [{ question: "请说明" }],
+  }) ?? "", /purpose 只能是 confirmation 或 clarification/);
+  assert.match(validateAskUserQuestionInput({
+    purpose: "confirmation", annotation_ids: ["an-1"],
+    questions: [{ question: "请说明" }],
+  }) ?? "", /annotation_ids 只能用于 clarification/, "确认卡不能挂意见 ID 冒充追问");
+  assert.match(validateAskUserQuestionInput({
+    purpose: "clarification", annotation_ids: [],
+    questions: [{ question: "请说明" }],
+  }) ?? "", /非空、无重复/);
+  assert.match(validateAskUserQuestionInput({
+    purpose: "clarification", annotation_ids: ["an-1", "an-1"],
+    questions: [{ question: "请说明" }],
+  }) ?? "", /非空、无重复/);
+  assert.match(validateAskUserQuestionInput({
+    purpose: "clarification", annotation_ids: ["an-1", " "],
+    questions: [{ question: "请说明" }],
+  }) ?? "", /非空、无重复/);
+});

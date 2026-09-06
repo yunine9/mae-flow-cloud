@@ -671,19 +671,23 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "子任务读侧应直接给出可返回的主任务摘要");
   assert.equal(graph.repositories[0].task_status, "queued",
     "主任务协作树应投影子任务实时进展");
-  assert.match(apiTask.requirement, /当前单元 AR 单号:REQ-G3-API/);
+  assert.equal(apiTask.requirement, parent.requirement,
+    "子任务需求原文必须保持用户原文");
+  assert.match(readFileSync(
+    join(dataDir, apiTask.id, "unit-brief.md"), "utf-8"),
+  /AR 单号：REQ-G3-API/);
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
   // 当实施计划直接开写,跳过流程头部——2026-08-19 内网实锤)。
-  assert.match(webTask.requirement, /\.mae-flow-chain\.md/,
-    "子任务需求只指路方案文件,不再内联正文");
+  assert.equal(webTask.requirement, parent.requirement,
+    "任务书独立落盘，不再藏在需求原文末尾");
   assert.match(
     readFileSync(join(dataDir, webTask.id, "chain-plan.md"), "utf-8"),
     /已确认方案/,
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
-  assert.equal(apiTask.title, "跨仓订单状态交付 · 接口模块");
-  assert.equal(webTask.title, "跨仓订单状态交付 · 页面模块");
+  assert.equal(apiTask.title, "接口模块 · 跨仓订单状态交付");
+  assert.equal(webTask.title, "页面模块 · 跨仓订单状态交付");
   assert.ok(apiTask.workflow_profile?.final_snapshot?.stages
     .flatMap((item) => item.items)
     .some((item) => item.id === "api-diagnosis-skill"),
@@ -1024,13 +1028,19 @@ test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话
   }
 });
 
-test("发起页会防抖探测仓库并阻止坏地址，浅色退出图标有明确对比色", () => {
+test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比色来自主题令牌", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
   const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  const tokens = readFileSync(join(process.cwd(), "web/src/tokens.css"), "utf-8");
   assert.match(source, /probeRepositories\(repositoriesToProbe/);
   assert.match(source, /repositoryProbeBlocked/);
   assert.match(source, /正在检查仓库地址/);
-  assert.match(style, /data-theme="light"\] \.logout-button svg[\s\S]*?#343b4f/);
+  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色:退出图标的颜色
+  // 来自令牌,浅/深两套令牌各自定义 --faint,对比度在令牌层保证。
+  assert.match(style, /\.logout-button,\n\.density-switch \{[\s\S]*?color: var\(--faint\)/);
+  assert.doesNotMatch(style, /data-theme="light"\] \.logout-button/);
+  assert.match(tokens, /:root \{[\s\S]*?--faint: #[0-9a-f]{6}/);
+  assert.match(tokens, /:root\[data-theme="dark"\] \{[\s\S]*?--faint: #[0-9a-f]{6}/);
 });
 
 test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格式区分 FuR", () => {
@@ -1078,7 +1088,9 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(picker, /<span className="repository-assignee-editable">/);
   assert.match(picker, /该单元的执行人/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
-  assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
+  assert.match(picker, /<input type="text" value=\{ticket\}/);
+  assert.doesNotMatch(picker, /repository-ticket-readonly|isUnitRow\(repository\) \|\| !ticket\.trim\(\)/,
+    "已有单号与输入首字符都不能把编辑框变回只读");
   assert.match(picker, /chooseAssignee/);
   assert.match(picker, /已自动保存/);
   const workspace = readFileSync(join(process.cwd(),

@@ -40,7 +40,7 @@ export function TokenUsage({
           <div className="token-detail-title">
             <i aria-hidden>↕</i>
             <span>
-              <small>MODEL USAGE</small>
+              <small>模型用量</small>
               <strong>模型 Token 用量</strong>
             </span>
           </div>

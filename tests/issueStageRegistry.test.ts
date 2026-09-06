@@ -76,12 +76,12 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
 
 test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口工具各归其位)", () => {
   const allStages = [...FIXED_TICKET_STAGES, ...FIXED_NO_TICKET_STAGES];
-  // 工读类(2026-08-28 拍板):fetch_logs 全程开放,dts_get_ticket 任意
+  // 工读类(2026-08-28 拍板):request_env 全程可调,dts_get_ticket 任意
   // 阶段可重查,get_issue_meta 任意阶段可查登记元信息(ADR-0003)。
   for (const scenario of ["ticket", "no_ticket"] as const) {
     for (const stage of STAGE_ROUTES[scenario]) {
-      assert.equal(stageAllowsTool(scenario, stage, "fetch_logs"), true,
-        `${scenario}/${stage} 的 fetch_logs 应全程开放`);
+      assert.equal(stageAllowsTool(scenario, stage, "request_env"), true,
+        `${scenario}/${stage} 的 request_env 应全程可调`);
       assert.equal(stageAllowsTool(scenario, stage, "dts_get_ticket"), true,
         `${scenario}/${stage} 的 dts_get_ticket 应任意阶段可调`);
       assert.equal(stageAllowsTool(scenario, stage, "get_issue_meta"), true,
@@ -116,7 +116,7 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), []);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "push_branch"), false);
   // 不在路线里的阶段(异常现场)一律拒绝,不放空子。
-  assert.equal(stageAllowsTool("no_ticket", "dts_info", "fetch_logs"), false);
+  assert.equal(stageAllowsTool("no_ticket", "dts_info", "request_env"), false);
 });
 
 test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)", () => {

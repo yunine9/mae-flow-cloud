@@ -61,7 +61,7 @@
 
 ## env.configured
 
-平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查登记元信息全量)。请重试刚才的操作——拉日志用 fetch_logs。
+平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查登记元信息全量)。请重试刚才的操作——按技能 issue-ops 抓取日志。
 
 ## env.refused
 

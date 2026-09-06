@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createWish } from "./api";
 
-export function QuickWishButton({ onOpenWall }: { onOpenWall: () => void }) {
+export function QuickWishButton({ onOpenWall, inline = false }: { onOpenWall: () => void; inline?: boolean }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
@@ -31,7 +31,7 @@ export function QuickWishButton({ onOpenWall }: { onOpenWall: () => void }) {
   }
 
   return <>
-    <button type="button" className="wish-quick-trigger"
+    <button type="button" className={inline ? "wish-quick-inline" : "wish-quick-trigger"}
       aria-label="快速提问题" title="快速提问题"
       onClick={() => { setOpen(true); setMessage(""); }}>
       <span aria-hidden>✦</span><strong>提问题</strong>
@@ -42,7 +42,7 @@ export function QuickWishButton({ onOpenWall }: { onOpenWall: () => void }) {
         if (event.target === event.currentTarget) setOpen(false);
       }}>
       <form className="wish-quick-dialog" onSubmit={submit}>
-        <header><div><small>QUICK FEEDBACK</small>
+        <header><div><small>快速反馈</small>
           <h2 id="wish-quick-title">快速提个问题</h2></div>
           <button type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button>
         </header>

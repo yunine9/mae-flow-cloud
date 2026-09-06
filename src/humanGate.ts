@@ -120,6 +120,20 @@ export class HumanGate {
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
+  /** 全部记录(等待中/已决/已作废)按举卡时刻排——会话流投影用它把
+   * "举了什么卡、谁怎么答的"按时间摆回原位。只读,不参与判定。 */
+  all(): WaitingRecord[] {
+    let store: Store;
+    try {
+      store = this.load();
+    } catch {
+      return [];                 // 投影旁路:读不动就当没有,不挡页面
+    }
+    return Object.values(store.records)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((record) => ({ ...record }));
+  }
+
   /** waiting.json 是人工决定的权威账。task.json 只存页面投影副本；
    * 两者发生分叉时，调用方必须从这里重新对账。 */
   get(waitingId: string): WaitingRecord | undefined {

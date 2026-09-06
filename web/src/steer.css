@@ -1,127 +1,6 @@
 /* 插话框。单独一份而不是并进 style.css:那份正被隔壁大改,
    插话是自成一块的东西,分开放谁都不踩谁。色板复用同一套变量。 */
 
-.steer {
-  margin-top: 2px;
-  padding: 15px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.steer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.steer-head > div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.steer-head > div strong {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-strong);
-}
-
-.steer-head > div span {
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-
-.steer-head > em {
-  flex: none;
-  padding: 4px 9px;
-  color: var(--muted);
-  background: var(--surface-muted);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-style: normal;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.steer-head > em.active {
-  padding: 3px 8px;
-  color: var(--active);
-  background: var(--active-soft);
-  border-color: color-mix(in srgb, var(--active) 22%, transparent);
-}
-
-.steer-head > em.available {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
-}
-
-.steer-head > em.unavailable {
-  color: var(--muted);
-  background: var(--surface-muted);
-}
-
-.collaboration-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  padding: 4px;
-  background: var(--surface-muted);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-
-.collaboration-tabs button {
-  min-width: 0;
-  padding: 8px 10px;
-  text-align: left;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  cursor: pointer;
-}
-
-.collaboration-tabs button:hover { color: var(--text); }
-.collaboration-tabs button:disabled {
-  cursor: not-allowed;
-  opacity: .52;
-}
-
-.collaboration-tabs button.active {
-  color: var(--text-strong);
-  background: var(--surface);
-  border-color: var(--line);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 8%, transparent);
-}
-
-.collaboration-tabs strong,
-.collaboration-tabs small {
-  display: block;
-}
-
-.collaboration-tabs strong { font-size: 13.5px; }
-.collaboration-tabs small {
-  margin-top: 2px;
-  font-size: 11.5px;
-  line-height: 1.35;
-  color: var(--muted);
-}
-
-.steer-copy {
-  margin: -2px 0 2px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .steer-input {
   width: 100%;
   box-sizing: border-box;
@@ -149,51 +28,6 @@
   cursor: not-allowed;
 }
 
-.steer-disabled-reason {
-  margin-top: -3px;
-  padding: 9px 10px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, var(--attention) 34%, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--attention) 8%, var(--surface));
-}
-.steer-disabled-reason > span {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--attention);
-  background: color-mix(in srgb, var(--attention) 14%, transparent);
-  font: 800 11px var(--font-serif);
-}
-.steer-disabled-reason > div { min-width: 0; display: grid; gap: 2px; }
-.steer-disabled-reason strong { color: var(--text-strong); font-size: 12.5px; }
-.steer-disabled-reason small { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-
-.steer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.steer-actions > div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.steer-actions > div small {
-  max-width: 360px;
-  color: var(--danger);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
 .steer-hint {
   font-size: 14px;
   color: var(--muted);
@@ -204,7 +38,7 @@
   font-size: 15px;
   font-weight: 600;
   padding: 8px 14px;
-  color: #fff;
+  color: var(--accent-fg);
   background: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 9px;
@@ -224,91 +58,13 @@
 }
 
 /* 发过什么、读到没有。发完就没了等于对着空气说话。 */
-.steer-log {
-  margin: 4px 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.steer-log li {
-  display: flex;
-  flex-wrap: wrap;          /* 下文另起一行,不跟状态徽标挤在一条基线上 */
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 8px;
-  font-size: 13.5px;
-  line-height: 1.5;
-  background: var(--surface-soft);
-  border-radius: 7px;
-}
-
-.steer-log-state {
-  flex: none;
-  font-weight: 700;
-  padding: 1px 7px;
-  border-radius: 999px;
-}
-
-.steer-log li.done .steer-log-state {
-  color: var(--success);
-  background: var(--success-soft);   /* 写死的浅绿在深色主题里是块亮斑 */
-}
 
 /* 引用名药丸:只给名字和固定下来的版本号,正文进模型不进页面。 */
-.steer-log-refs {
-  flex-basis: 100%;
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
-.steer-log-refs > span {
-  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--muted);
-  font-size: var(--font-size-assist); font-weight: 600;
-}
-
-.steer-log li.waiting .steer-log-state {
-  color: var(--attention);
-  background: var(--attention-soft);
-}
-
-.steer-log-text {
-  flex: 1;
-  min-width: 0;
-  color: var(--muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 
 /* 你说完之后它说的话。缩进 + 左边一道线,让人一眼看出层级:
    上面是你的话,下面是它的下文,不是并列的两条记录。 */
-.steer-said {
-  flex-basis: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-left: 2px;
-  padding-left: 9px;
-  border-left: 2px solid var(--line);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.steer-said em {
-  font-style: normal;
-  font-weight: 700;
-  font-size: 12px;
-  color: var(--muted);
-}
 
 /* "读到了但还没说话"是一句解释,不是内容,弱化处理。 */
-.steer-said.quiet { color: var(--muted); font-size: 12.5px; }
 
 /* 旁路助手：状态、对话、工具结果都在一个视觉层级里。用户无需到 SSE
    猜它有没有执行；SSE 只承担完整现场与排障。 */
@@ -327,15 +83,6 @@
   display: flex;
   align-items: center;
   gap: 7px;
-}
-
-.assistant-state i,
-.assistant-tools summary i {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  border-radius: 999px;
-  background: var(--muted);
 }
 
 .assistant-state strong {
@@ -402,11 +149,6 @@
 .assistant-state.unavailable i { background: var(--muted); box-shadow: none; }
 .assistant-state.failed i { background: var(--danger); }
 .assistant-state.interrupted i { background: var(--attention); }
-.assistant-copy {
-  margin-bottom: 0;
-  color: var(--text);
-  line-height: 1.62;
-}
 
 @keyframes assistantPulse {
   0%, 100% { opacity: .55; }
@@ -461,132 +203,10 @@
   border: 1px solid var(--line);
   border-radius: 7px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   line-height: 1.55;
 }
 
-.assistant-conversation {
-  max-height: 330px;
-  padding: 4px;
-  overflow: auto;
-  display: grid;
-  gap: 7px;
-  scrollbar-gutter: stable;
-  border-left: 2px solid color-mix(in srgb, var(--active) 22%, var(--line));
-}
-
-.assistant-conversation article {
-  width: min(92%, 560px);
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-soft);
-}
-
-.assistant-conversation article.user {
-  margin-left: auto;
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
-}
-
-.assistant-conversation article.assistant {
-  border-left: 3px solid color-mix(in srgb, var(--active) 72%, var(--line));
-  background: color-mix(in srgb, var(--active-soft) 26%, var(--surface));
-}
-
-.assistant-conversation article.user::before {
-  content: ">";
-  float: left;
-  margin-right: 7px;
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-weight: 800;
-}
-
-.assistant-conversation article header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.assistant-conversation article strong { font-size: 12.5px; }
-.assistant-conversation article.assistant strong { color: var(--active); }
-.assistant-conversation article.user strong { color: var(--accent); }
-.assistant-conversation article time { color: var(--muted); font-size: 11px; }
-.assistant-conversation article p {
-  margin: 0;
-  color: var(--text);
-  font-size: 13.5px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.assistant-tools {
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-muted);
-}
-
-.assistant-tools > header {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 1px 2px 4px;
-}
-
-.assistant-tools > header strong { font-size: 12.5px; }
-.assistant-tools > header span { color: var(--muted); font-size: 11.5px; }
-.assistant-tools details {
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-}
-
-.assistant-tools summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 9px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.assistant-tools summary::-webkit-details-marker { display: none; }
-.assistant-tools summary strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12.5px;
-  white-space: nowrap;
-}
-
-.assistant-tools summary span { color: var(--muted); font-size: 11.5px; }
-.assistant-tools summary i.passed { background: var(--success); }
-.assistant-tools summary i.failed { background: var(--danger); }
-.assistant-tools summary i.running { background: var(--active); }
-.assistant-tools pre {
-  max-height: 180px;
-  margin: 0;
-  padding: 8px 10px;
-  overflow: auto;
-  color: var(--muted);
-  background: var(--surface-soft);
-  border-top: 1px solid var(--line);
-  font-size: 11.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.assistant-tools pre.result { color: var(--text); }
 .assistant-actions { align-items: flex-end; }
 .assistant-buttons { display: flex !important; grid-auto-flow: column; gap: 6px !important; }
 .assistant-return {
@@ -605,62 +225,17 @@
 
 /* 工作台把开发协作提升为主画布之后，不再沿用窄侧栏的字号和高度。
    组件本身仍可在任务卡里紧凑展示，这些规则只作用于完整协作视图。 */
-.ws-collaboration-view .steer {
-  margin-top: 0;
-  padding: 22px 24px 26px;
-  gap: 13px;
-  border-radius: 15px;
-  box-shadow: var(--shadow-sm);
-}
-.ws-collaboration-view .steer-head > div { gap: 4px; }
-.ws-collaboration-view .steer-head > div strong { font-size: 19px; }
-.ws-collaboration-view .steer-head > div span { font-size: 13.5px; }
-.ws-collaboration-view .steer-head > em { padding: 5px 10px; font-size: 12px; }
-.ws-collaboration-view .collaboration-tabs { gap: 7px; padding: 5px; }
-.ws-collaboration-view .collaboration-tabs button { min-height: 52px; padding: 9px 12px; }
-.ws-collaboration-view .collaboration-tabs strong { font-size: 14.5px; }
-.ws-collaboration-view .collaboration-tabs small { font-size: 12.5px; }
-.ws-collaboration-view .steer-copy { font-size: 14px; }
-.ws-collaboration-view .steer-input { min-height: 108px; font-size: 15.5px; }
-.ws-collaboration-view .assistant-state,
-.ws-collaboration-view .assistant-handoff { padding: 11px 13px; }
-.ws-collaboration-view .assistant-state strong,
-.ws-collaboration-view .assistant-handoff strong { font-size: 14px; }
-.ws-collaboration-view .assistant-state > span,
-.ws-collaboration-view .assistant-handoff p { font-size: 12.5px; }
-.ws-collaboration-view .assistant-conversation {
-  max-height: min(480px, 52vh);
-  padding: 7px;
-  gap: 9px;
-}
-.ws-collaboration-view .assistant-conversation article {
-  width: min(82%, 720px);
-  padding: 12px 14px;
-  border-radius: 11px;
-}
-.ws-collaboration-view .assistant-conversation article strong { font-size: 12.5px; }
-.ws-collaboration-view .assistant-conversation article p { font-size: 14.5px; line-height: 1.72; }
-.ws-collaboration-view .assistant-tools {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  padding: 11px;
-}
-.ws-collaboration-view .assistant-tools > header { grid-column: 1 / -1; padding-bottom: 5px; }
-.ws-collaboration-view .assistant-tools summary { min-height: 40px; padding: 8px 10px; }
-.ws-collaboration-view .assistant-tools pre { max-height: 260px; font-size: 12.5px; }
-.ws-collaboration-view .steer-send,
-.ws-collaboration-view .assistant-return { min-height: 38px; padding-left: 16px; padding-right: 16px; }
 
 @media (max-width: 600px) {
-  .steer { padding: 13px; }
-  .steer-head { align-items: flex-start; }
-  .collaboration-tabs { grid-template-columns: 1fr; }
+  
+  
+  
   .assistant-state { align-items: flex-start; flex-direction: column; gap: 3px; }
   .assistant-state > span { max-width: none; text-align: left; }
-  .assistant-tools > header { flex-direction: column; gap: 2px; }
-  .ws-collaboration-view .assistant-tools { grid-template-columns: 1fr; }
-  .ws-collaboration-view .assistant-tools > header { grid-column: auto; }
-  .ws-collaboration-view .assistant-conversation article { width: 96%; }
+  
+  
+  
+  
   .assistant-actions { align-items: stretch; flex-direction: column; }
   .assistant-buttons { justify-content: flex-end; }
 }

@@ -77,8 +77,20 @@
   transform: translate(0, -50%);
 }
 
-/* 已有意见时，同一个悬浮位改成“查看”，不再同时摆第二枚按钮挤正文。
-   正文点击仍是新增批注，按钮点击只打开对应意见，两个动作不打架。 */
+/* 选中文字只提供一个轻量操作，保留原文选区和复制行为。 */
+.annot-selection-fab {
+  width: 132px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.annot-selection-fab::after { display: none; }
+
+/* 已有意见时，同一个悬浮位改成“查看”；展开后可补充批注。 */
 .annot-review-fab {
   display: flex;
   gap: 3px;
@@ -89,7 +101,7 @@
 
 .annot-review-fab b {
   min-width: 13px;
-  font-size: 10px;
+  font-size: var(--fs-12);
   line-height: 1;
 }
 
@@ -268,7 +280,7 @@
 .annot-editor button.primary,
 .annot-panel button.primary {
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-fg);
   background: var(--accent);
   border: 1px solid var(--accent);
 }
@@ -310,7 +322,7 @@
 .annot-panel-head span {
   display: block;
   font-size: 12.5px;
-  letter-spacing: .09em;
+  letter-spacing: 0;
   color: var(--faint);
 }
 
@@ -807,12 +819,10 @@
   .workspace-review-notes .annot-item:has(.annot-response) {
     display: grid;
     grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
-    /* anchor 那一行去掉了:锚定原文已经收进 head。左栏原先被"正文 + 锚定
-       原文"两段瓜分,正文只剩一小截;现在整列都归批注正文,和右边的 Agent
-       回应从同一行起。 */
+    /* 头部一行(位置·去向·状态·往来)+ 锚点一行横跨两列;正文与回执并排,
+       整列都归批注正文。 */
     grid-template-areas:
       "head head"
-      "route route"
       "note response"
       "foot foot"
       "stale stale";
@@ -823,12 +833,6 @@
   .workspace-review-notes .annot-item:has(.annot-response) .annot-item-head {
     grid-area: head;
     margin-bottom: 0;
-  }
-  /* 归属徽标原来没给区域,自动排版把它丢进末尾那个空的 stale 行,于是
-     "Agent 处理"落在页脚下面(实测 foot 底 940px、徽标 948px)。 */
-  .workspace-review-notes .annot-item:has(.annot-response) .annot-route-badge {
-    grid-area: route;
-    margin: 0;
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-note,
   .workspace-review-notes .annot-item:has(.annot-response) .annot-inline-editor {
@@ -1006,7 +1010,7 @@
 .cd-node.cd-abstract rect { stroke: var(--active); stroke-dasharray: 2 3; }
 
 .cd-tag {
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   font-weight: 700;
   fill: var(--faint);
 }
@@ -1018,7 +1022,7 @@
 }
 
 .cd-pkg {
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   fill: var(--faint);
 }
 
@@ -1134,3 +1138,401 @@
   font-style: normal;
   font-weight: 600;
 }
+
+/* ── 任务工作台 v4 里的批注面:一条意见就是一张平的卡 ──────────────────
+   上面那套"意见原文一个色块、Agent 回应一个色块、外面再一张带边卡"在
+   440px 宽的检查器里变成框套框,重点被包装淹没(2026-09-05 用户实锤)。
+   这里只在工作台作用域内改成:卡有一条发丝边;意见原文靠一道墨色左线,
+   Agent 回应靠一道语义色左线 + surface-2 底;其余全是文字。上面的基础
+   规则原样保留(测试与遗留页面还在用)。 */
+
+.task-workspace-v2 .workspace-review-notes { width: 100%; }
+.task-workspace-v2 .workspace-review-opinions { min-width: 0; }
+.task-workspace-v2 .annot-panel {
+  margin-top: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.task-workspace-v2 .annot-panel + .annot-panel,
+.task-workspace-v2 .feedback-list + .annot-panel,
+.task-workspace-v2 .annot-panel + .feedback-list { margin-top: 12px; }
+.task-workspace-v2 .annot-panel-head {
+  padding: 10px 14px;
+  gap: 6px 12px;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-panel-head span { color: var(--faint); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-panel-head strong { color: var(--text-strong); font-size: var(--fs-14); font-weight: 600; }
+.task-workspace-v2 .annot-panel-counts span,
+.task-workspace-v2 .annot-panel-counts em {
+  padding: 2px 7px;
+  font: 600 var(--fs-12)/1.3 var(--font-mono);
+  font-style: normal;
+}
+.task-workspace-v2 .annot-panel-counts span { color: var(--muted); background: var(--surface-3); }
+.task-workspace-v2 .annot-panel-counts em { color: var(--attention); background: var(--attention-soft); }
+.task-workspace-v2 .annot-panel-actions {
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--attention-soft);
+}
+.task-workspace-v2 .annot-panel-actions button {
+  width: auto;
+  min-height: var(--control-h);
+  padding: 0 14px;
+  color: var(--ink-fg);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-panel-actions button:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
+.task-workspace-v2 .annot-panel-actions p { flex: 1 1 220px; margin: 0; color: var(--text); font-size: var(--fs-12); line-height: 1.5; }
+.task-workspace-v2 .annot-panel-note { padding: 10px 14px; font-size: var(--fs-13); line-height: 1.55; }
+.task-workspace-v2 .annot-panel-note.review-ready { color: var(--text); background: var(--surface-2); border-left: 3px solid var(--ink); }
+.task-workspace-v2 .annot-review-queue { padding: 10px 14px 6px; }
+.task-workspace-v2 .annot-review-queue strong { font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-review-queue span { font-size: var(--fs-12); }
+.task-workspace-v2 .annot-review-queue em { color: var(--attention); background: var(--attention-soft); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .annot-list { padding: 10px; display: grid; gap: 8px; }
+.task-workspace-v2 .annot-item,
+.task-workspace-v2 .annot-item.actionable,
+.task-workspace-v2 .annot-item.actionable:last-child {
+  margin: 0;
+  padding: 12px 14px 10px;
+  display: block;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: none;
+}
+.task-workspace-v2 .annot-item.draft { border-left-color: var(--text-strong); }
+.task-workspace-v2 .annot-item.waiting { border-left-color: var(--active); }
+.task-workspace-v2 .annot-item.review,
+.task-workspace-v2 .annot-item.actionable { border-left-color: var(--attention); }
+.task-workspace-v2 .annot-item.done { border-left-color: var(--success); }
+.task-workspace-v2 .annot-item.actionable { background: var(--surface); border-color: color-mix(in srgb, var(--attention) 40%, var(--line)); }
+/* 检查器只有 380–460px,基础规则里 ≥860px 视口的"意见|回应"双栏在这里
+   会把两段挤成 180px 窄柱;工作台内一律单列上下排。 */
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) {
+  display: block;
+  grid-template-columns: none;
+  grid-template-areas: none;
+}
+.task-workspace-v2 .annot-item-head {
+  margin-bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.task-workspace-v2 .annot-where { max-width: 100%; font-size: var(--fs-12); }
+.task-workspace-v2 .annot-where code {
+  padding: 2px 6px;
+  color: var(--text-strong);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: 500 var(--fs-12)/1.4 var(--font-mono);
+}
+.task-workspace-v2 .annot-anchor {
+  flex: 1 1 100%;
+  order: 5;
+  margin: 2px 0 0;
+  padding: 1px 0 1px 10px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  font: 400 var(--fs-12)/1.5 var(--font-mono);
+  white-space: normal;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.task-workspace-v2 .annot-progress,
+.task-workspace-v2 .annot-progress.draft,
+.task-workspace-v2 .annot-progress.waiting,
+.task-workspace-v2 .annot-progress.review,
+.task-workspace-v2 .annot-progress.done {
+  margin-left: auto;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-radius: 0;
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-progress::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.task-workspace-v2 .annot-progress.draft { color: var(--text); }
+.task-workspace-v2 .annot-progress.waiting { color: var(--active); }
+.task-workspace-v2 .annot-progress.review { color: var(--attention); }
+.task-workspace-v2 .annot-progress.done { color: var(--success); }
+.task-workspace-v2 .annot-route-badge,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-route-badge {
+  margin: -4px 0 8px;
+  padding: 0;
+  display: block;
+  color: var(--faint);
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-route-badge::before { content: "→ "; }
+.task-workspace-v2 .annot-note {
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  gap: 3px;
+  border: 0;
+  border-left: 2px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+}
+.task-workspace-v2 .annot-note > strong { color: var(--faint); font-size: var(--fs-12); font-weight: 500; letter-spacing: 0; }
+.task-workspace-v2 .annot-note > p { color: var(--text-strong); font-size: var(--fs-14); font-weight: 500; line-height: 1.6; }
+.task-workspace-v2 .annot-clarified { color: var(--muted); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-response,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-response {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  gap: 3px;
+  border: 0;
+  border-left: 2px solid var(--success);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-response.not_fixed { border-left-color: var(--attention); background: var(--surface-2); }
+.task-workspace-v2 .annot-response.needs_clarification { border-left-color: var(--danger); background: var(--surface-2); }
+.task-workspace-v2 .annot-response strong { color: var(--success); font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-response.not_fixed strong { color: var(--attention); }
+.task-workspace-v2 .annot-response.needs_clarification strong { color: var(--danger); }
+.task-workspace-v2 .annot-response p { color: var(--text); font-size: var(--fs-13); line-height: 1.6; }
+.task-workspace-v2 .annot-response small { color: var(--muted); font-size: var(--fs-12); }
+.task-workspace-v2 .annot-owner-reply {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--active);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2);
+}
+.task-workspace-v2 .annot-owner-reply strong { color: var(--active); font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .annot-owner-reply p { font-size: var(--fs-13); }
+.task-workspace-v2 .annot-owner-reply small { font-size: var(--fs-12); }
+.task-workspace-v2 .annot-item-foot,
+.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) .annot-item-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.task-workspace-v2 .annot-item-foot small { min-width: 0; color: var(--faint); font-size: var(--fs-12); }
+/* "下一步"行:等谁、到哪一步能点;只在已送出但此刻点不了时出现 */
+.task-workspace-v2 .annot-next { margin: 8px 0 0; color: var(--muted); font-size: var(--fs-12); line-height: 1.55; }
+.task-workspace-v2 .annot-next b { margin-right: 6px; color: var(--attention); font-weight: 600; }
+.task-workspace-v2 .annot-owner-actions button,
+.task-workspace-v2 .annot-panel button.ghost {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-panel button.ghost.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line-strong)); }
+.task-workspace-v2 .annot-panel button.primary {
+  height: var(--control-h-sm);
+  padding: 0 12px;
+  color: var(--ink-fg);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.task-workspace-v2 .annot-stale { margin-top: 8px; padding: 8px 10px; font-size: var(--fs-13); border-radius: var(--radius-sm); }
+.task-workspace-v2 .annot-inline-editor { margin: 0 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.task-workspace-v2 .annot-inline-editor textarea { border-color: var(--line-strong); background: var(--surface); }
+
+/* 抽屉顶部的筛选条与 CodeHub 意见列表:同一套令牌。 */
+.task-workspace-v2 .review-filter {
+  top: -16px;
+  margin: -16px -16px 12px;
+  padding: 12px 16px;
+  gap: 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.task-workspace-v2 .review-filter button {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-workspace-v2 .review-filter button i {
+  min-width: 16px;
+  padding: 0 5px;
+  color: var(--muted);
+  background: var(--surface-3);
+  font: 600 var(--fs-12)/1.4 var(--font-mono);
+  font-style: normal;
+}
+.task-workspace-v2 .review-filter button.attention { border-color: color-mix(in srgb, var(--attention) 50%, var(--line-strong)); }
+.task-workspace-v2 .review-filter button.attention i { color: var(--attention); background: var(--attention-soft); }
+.task-workspace-v2 .review-filter button.active { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
+.task-workspace-v2 .review-filter button.active i { color: var(--ink-fg); background: color-mix(in srgb, var(--ink-fg) 22%, transparent); }
+.task-workspace-v2 .feedback-list { border-color: var(--line); border-radius: var(--radius-lg); }
+.task-workspace-v2 .feedback-list > header { padding: 10px 14px; background: var(--surface-2); }
+.task-workspace-v2 .feedback-list > header span { color: var(--faint); font-size: var(--fs-12); }
+.task-workspace-v2 .feedback-list > header strong { font-size: var(--fs-14); font-weight: 600; }
+.task-workspace-v2 .feedback-list > header p { font-size: var(--fs-12); }
+.task-workspace-v2 .feedback-list-side i { color: var(--muted); background: var(--surface-3); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .feedback-list-side em { color: var(--attention); background: var(--attention-soft); font: 600 var(--fs-12)/1.3 var(--font-mono); font-style: normal; }
+.task-workspace-v2 .feedback-list-side a { border-color: var(--line-strong); color: var(--text); font-size: var(--fs-12); font-weight: 500; }
+.task-workspace-v2 .feedback-item { padding: 12px 14px; }
+.task-workspace-v2 .feedback-item.open, .task-workspace-v2 .feedback-item.repairing { border-left-color: var(--active); }
+.task-workspace-v2 .feedback-item.awaiting_verification, .task-workspace-v2 .feedback-item.addressed { border-left-color: var(--attention); }
+.task-workspace-v2 .feedback-item.closed { border-left-color: var(--success); }
+.task-workspace-v2 .feedback-item.needs_human { border-left-color: var(--danger); }
+.task-workspace-v2 .feedback-item-head code { font: 500 var(--fs-12)/1.4 var(--font-mono); }
+.task-workspace-v2 .feedback-state { padding: 0; color: var(--muted); background: transparent; font-size: var(--fs-12); font-weight: 500; }
+.task-workspace-v2 .feedback-state.repairing { color: var(--active); background: transparent; }
+.task-workspace-v2 .feedback-state.awaiting_verification, .task-workspace-v2 .feedback-state.addressed { color: var(--attention); background: transparent; }
+.task-workspace-v2 .feedback-state.closed { color: var(--success); background: transparent; }
+.task-workspace-v2 .feedback-state.needs_human { color: var(--danger); background: transparent; }
+.task-workspace-v2 .feedback-body { font-size: var(--fs-14); font-weight: 500; color: var(--text-strong); }
+.task-workspace-v2 .feedback-response { padding: 10px 12px; border-left: 2px solid var(--line-strong); border-radius: 0 var(--radius) var(--radius) 0; background: var(--surface-2); }
+.task-workspace-v2 .feedback-response strong { font-size: var(--fs-13); font-weight: 600; }
+.task-workspace-v2 .feedback-response p { font-size: var(--fs-13); }
+.task-workspace-v2 .feedback-item-foot small { color: var(--faint); font-size: var(--fs-12); }
+
+/* ── 对话式意见卡(2026-09-06 用户:"哪个是他的回复、哪个是我的原文、现在状态是
+   什么,很混乱")。一张卡三层:头一行 = 指着哪儿 + 状态药丸;"意见"块 = 说话人行
+   (你 / 某某 提的意见 · 时间 · 去向)+ 正文 + 圈的原文;"回复"块 = 说话人行
+   (Agent 的回复 · 时间 · 结论)+ 正文 + 依据。人的块紫色左条,Agent 的块按结论
+   绿 / 黄 / 红。写在最后、带 studio 前缀,盖过上面所有旧尺寸。 ── */
+.workspace-studio.task-workspace-v2 .annot-item { padding: 10px 12px 8px; }
+.workspace-studio.task-workspace-v2 .annot-item.actionable { margin: 0 8px 8px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-head {
+  display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
+.workspace-studio.task-workspace-v2 .annot-where { flex: 1 1 auto; min-width: 0; max-width: none; }
+.workspace-studio.task-workspace-v2 .annot-where code { font-size: 12.5px; }
+/* 状态是一枚实底药丸:一眼看到"现在到哪了" */
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.draft,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.waiting,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.review,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.done {
+  flex: none; margin: 0; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress::before { content: none; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.draft { color: var(--text); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.waiting { color: var(--active); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.review { color: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.done { color: var(--success); }
+/* 说话人行:头像字 + 名字 + 干了什么 · 时间 + 结论/去向小标 */
+.workspace-studio.task-workspace-v2 .annot-speaker {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.5;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker > i {
+  flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center;
+  color: #fff; font-size: 10.5px; font-style: normal; font-weight: 700; line-height: 1;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker.person > i { background: var(--ink); }
+.workspace-studio.task-workspace-v2 .annot-speaker.owner > i { background: var(--active); }
+.workspace-studio.task-workspace-v2 .annot-speaker.agent > i { background: var(--success); }
+.workspace-studio.task-workspace-v2 .annot-response.not_fixed .annot-speaker.agent > i { background: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-response.needs_clarification .annot-speaker.agent > i { background: var(--danger); }
+.workspace-studio.task-workspace-v2 .annot-speaker > b { color: var(--text-strong); font-weight: 600; }
+.workspace-studio.task-workspace-v2 .annot-speaker > em {
+  margin-left: auto; padding: 0 6px; border-radius: 4px; font-style: normal; font-weight: 600; font-size: 11.5px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.workspace-studio.task-workspace-v2 .annot-speaker.agent > em { color: var(--success); }
+.workspace-studio.task-workspace-v2 .annot-response.not_fixed .annot-speaker > em { color: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-response.needs_clarification .annot-speaker > em { color: var(--danger); }
+/* 去向小标(→ Agent 处理)在意见块的说话人行末尾,不再是头部里像链接的灰字 */
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge,
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge.owner_reply,
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge.owner_decision {
+  display: inline-block; width: auto; margin: 0 0 0 auto; border: 0; color: var(--muted);
+  background: var(--surface-3); line-height: 1.6;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge::before { content: "→ "; }
+/* 意见块 / 回复块:同一种块形,左条颜色分人和 Agent */
+.workspace-studio.task-workspace-v2 .annot-item .annot-note,
+.workspace-studio.task-workspace-v2 .annot-item .annot-response,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply {
+  display: grid; gap: 2px; width: auto; min-width: 0; margin: 0; padding: 7px 10px 8px;
+  border: 0; border-left: 3px solid var(--ink); border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-response,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply { margin-top: 8px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response { border-left-color: var(--success); background: color-mix(in srgb, var(--success) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response.not_fixed { border-left-color: var(--attention); background: color-mix(in srgb, var(--attention) 7%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response.needs_clarification { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply { border-left-color: var(--active); background: color-mix(in srgb, var(--active) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-note > p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-response p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply p {
+  margin: 0; color: var(--text-strong); font-size: 13.5px; font-weight: 500; line-height: 1.6;
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-response p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply p { color: var(--text); font-weight: 400; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.workspace-studio.task-workspace-v2 .annot-clarified { color: var(--muted); font-size: 12px; }
+/* 圈的原文:意见块里的最后一行,等宽、一行截断 */
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor,
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor.has-quote {
+  display: block; order: 0; width: auto; margin: 4px 0 0; padding: 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--muted); font: 12px/1.5 var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor > span {
+  margin-right: 6px; padding: 0 5px; border-radius: 3px; background: var(--surface-3);
+  color: var(--faint); font: 500 11px/1.6 var(--font-sans, inherit);
+}
+/* 页脚:去向说明 · 看处理记录 · 编辑/删除 */
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line);
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-foot small { flex: 1 1 auto; min-width: 0; color: var(--faint); font-size: 12px; }
+.workspace-studio.task-workspace-v2 .annot-owner-actions button,
+.workspace-studio.task-workspace-v2 .annot-verdict button,
+.workspace-studio.task-workspace-v2 .annot-panel button.ghost { min-height: 26px; height: 26px; padding: 0 10px; font-size: 12.5px; }
+.workspace-studio.task-workspace-v2 .annot-item.actionable .annot-verdict { padding-top: 6px; }
+.workspace-studio.task-workspace-v2 .annot-owner-reply-action { margin-top: 6px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response small.annot-no-evidence { color: var(--attention); }
+
+/* 批注附图:编辑器里是可移除的缩略图片;面板里是点开看大图的缩略图。 */
+.annot-editor-images { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.annot-editor-images small { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.annot-image-chip { position: relative; width: 64px; height: 48px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-soft); }
+.annot-image-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.annot-image-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; line-height: 18px; cursor: pointer; }
+.annot-image-add { padding: 6px 10px; border: 1px dashed var(--line-strong); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.annot-image-add:disabled { opacity: .5; cursor: not-allowed; }
+.annot-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.annot-images img { max-width: 220px; max-height: 160px; border: 1px solid var(--line); border-radius: 6px; display: block; }

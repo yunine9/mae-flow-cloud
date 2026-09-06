@@ -208,7 +208,7 @@ function LaunchRequirementTeam({
   return <section className="requirement-team-picker launch-requirement-team"
     aria-label="主任务讨论参与人">
     <header>
-      <div><span>MAIN TASK TEAM</span><strong>谁一起把需求聊清楚</strong></div>
+      <div><span>讨论参与人</span><strong>谁一起把需求聊清楚</strong></div>
       <small>可多选；只邀请，不在这里按仓分工</small>
     </header>
     <div className="requirement-team-owner">
@@ -909,7 +909,7 @@ export function LaunchWorkspace({
           <span>取消</span>
         </button>
         <div className="ws-identity">
-          <div className="ws-identity-line"><code>NEW DELIVERY</code></div>
+          <div className="ws-identity-line"><code>新任务</code></div>
           <strong id="launch-workspace-title">创建交付任务</strong>
         </div>
         <span className="launch-head-note"><i aria-hidden />草稿自动保存</span>
@@ -919,7 +919,7 @@ export function LaunchWorkspace({
         <section className="launch-panel" aria-labelledby="launch-title">
           <div className="launch-form-shell">
             <div className="launch-form-intro">
-              <div><span>CREATE WORK</span>
+              <div><span>发起任务</span>
                 <strong id="launch-title">说清任务，确认交付位置</strong>
                 <p>必填信息都在当前页面；工作流与知识清单仅在需要时调整。</p>
               </div>

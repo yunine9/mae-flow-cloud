@@ -90,7 +90,7 @@ export function RequirementTeamPicker({
 
   return <section className="requirement-team-picker" aria-label="主任务讨论参与人">
     <header>
-      <div><span>MAIN TASK TEAM</span><strong>谁一起把需求聊清楚</strong></div>
+      <div><span>讨论参与人</span><strong>谁一起把需求聊清楚</strong></div>
       <small>一位主责任人拍板，多位参与人一起讨论</small>
     </header>
     <div className="requirement-team-owner">

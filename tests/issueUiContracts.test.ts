@@ -120,7 +120,10 @@ test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", (
   assert.match(decisions, /不会出现在会话列表、[\s\S]*事件流[\s\S]*AI 上下文/);
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
-  assert.match(annotations, /canOverride\?: boolean/);
+  // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
+  // 结论开按钮;入口本身仍必须在面板上明确存在。
+  assert.match(annotations, /closure\.can_override_drop/);
+  assert.match(annotations, /closure\.can_override_verify/);
   assert.match(annotations, /管理员代删/);
   assert.match(annotations, /管理员代确认/);
   assert.match(annotations, /完整内容见“执行现场”/);

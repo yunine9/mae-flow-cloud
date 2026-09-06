@@ -73,7 +73,7 @@ export function requirementReviewMission(input: {
     "3. 意见明确就直接改；确实不同意或存在歧义时保留原文，不要猜。",
     `4. 最后用 Write 创建 ${REQUIREMENT_REVIEW_RECEIPTS}，内容必须是 JSON 数组，且每个意见 id 恰好一条：`,
     '[{"annotation_id":"<id>","outcome":"fixed|not_fixed|needs_clarification","summary":"改了什么或为什么没改","evidence":["requirement.md:行号"]}]',
-    "fixed 只用于已经真正落到文件里的修改；summary 必须是人能复核的一两句话。",
+    "fixed 只用于已经真正落到文件里的修改；summary 必须是人能复核的一两句话（不能只写「已处理」），且必须带 evidence 指出改在哪一行。",
     "写完回执就收口。最终回复只需简要说明完成情况，不要输出完整文档或回执 JSON。",
     "",
     "## 本轮人工检视意见",

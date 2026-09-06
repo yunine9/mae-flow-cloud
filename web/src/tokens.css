@@ -1,0 +1,213 @@
+/* 全站紫白主题：导航、任务总览与工作台共享令牌。
+ * 紫色用于主动作与选中态；琥珀、红、绿保留状态语义。
+ * 表面、控件与浮层使用不同高度的阴影。旧变量以别名兼容。 */
+
+:root {
+  color-scheme: light;
+
+  /* 表面 */
+  --canvas: #f3f3fa;
+  --main-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f8f8fc;
+  --surface-3: #efedfc;
+  --overlay: #ffffff;
+
+  /* 文字 */
+  --text-strong: #24263b;
+  --text: #393c50;
+  --muted: #6b7085;
+  --faint: #868b9e;
+
+  /* 线 */
+  --line: #e5e5ef;
+  --line-strong: #cfcddd;
+
+  /* 紫色主动作（兼容 ink 命名） */
+  --ink: #5b5bd6;
+  --ink-hover: #4e4ec4;
+  --ink-fg: #ffffff;
+
+  /* 语义色:只表达状态 */
+  --active: #2f66d6;
+  --active-soft: #eaf0fb;
+  --attention: #b0680d;
+  --attention-soft: #fbf1df;
+  --success: #1e7a4e;
+  --success-soft: #e5f3eb;
+  --danger: #c23d38;
+  --danger-soft: #fbebea;
+  --merge: #6b60ad;
+  --merge-soft: #eeecf7;
+  --focus: #5b5bd6;
+
+  /* 字体:英文走构建内 Inter,中文按 Windows/macOS/Linux 回退。 */
+  --font-ui: "Inter Variable", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+    "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* 字阶:一页最多 5 级可感知字号。 */
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-17: 17px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-30: 30px;
+  --lh-tight: 1.25;
+  --lh-snug: 1.45;
+  --lh-body: 1.6;
+  --lh-read: 1.75;
+
+  /* 间距:4px 网格 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  /* 控件高度 */
+  --control-h-sm: 28px;
+  --control-h: 32px;
+  --control-h-lg: 36px;
+
+  /* 圆角:控件 6 / 面板 8 / 浮层 12 */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* 层次:画布 → 白色面板 → 控件 → 浮层。 */
+  --shadow-xs: 0 1px 2px #28234b05;
+  --shadow-sm: 0 1px 2px #28234b08, 0 3px 8px #28234b04;
+  --shadow-panel: 0 2px 4px #28234b04, 0 8px 24px #28234b06;
+  --shadow-control: inset 0 1px 0 #ffffffb3, 0 1px 2px #28234b0d;
+  --shadow-primary: inset 0 1px 0 #ffffff29, 0 2px 3px #3832801a, 0 4px 10px #5b5bd622;
+  --shadow-md: 0 8px 32px #28234b14, 0 2px 6px #28234b0a;
+  --shadow-lg: 0 24px 80px #211c4529, 0 4px 12px #211c4514;
+
+  --ease: 140ms cubic-bezier(.2, .8, .2, 1);
+  --ease-slow: 200ms cubic-bezier(.2, .8, .2, 1);
+
+  /* 阅读宽度 */
+  --reading-width: 72ch;
+  --page-width: 1200px;
+
+  /* ── 旧词表别名(不要在新代码里用) ── */
+  --page: var(--main-bg);
+  --surface-soft: var(--surface-2);
+  --surface-muted: var(--surface-3);
+  --sidebar: var(--canvas);
+  --sidebar-soft: var(--surface-3);
+  --accent: var(--ink);
+  --accent-hover: var(--ink-hover);
+  --accent-fg: var(--ink-fg);
+  --accent-soft: var(--surface-3);
+  --purple: var(--merge);
+  --purple-soft: var(--merge-soft);
+  --font-sans: var(--font-ui);
+  --mono: var(--font-mono);
+  --font-size-body: var(--fs-14);
+  --font-size-assist: var(--fs-13);
+  --font-size-dense: var(--fs-12);
+  --bg: var(--main-bg);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --warn: var(--attention);
+  --warn-weak: var(--attention-soft);
+  --warn-soft: var(--attention-soft);
+  --danger-weak: var(--danger-soft);
+  --ok: var(--success);
+}
+
+:root[data-density="compact"] {
+  --fs-14: 13px;
+  --fs-15: 14px;
+  --lh-body: 1.5;
+  --lh-read: 1.65;
+  --control-h-sm: 24px;
+  --control-h: 28px;
+  --control-h-lg: 32px;
+  --space-3: 10px;
+  --space-4: 14px;
+  --space-6: 20px;
+  --space-7: 26px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 52px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #151621;
+  --main-bg: #1e2030;
+  --surface: #1e2030;
+  --surface-2: #252739;
+  --surface-3: #303149;
+  --overlay: #1e2030;
+  --text-strong: #edf2fa;
+  --text: #dae3f1;
+  --muted: #a3b0c4;
+  --faint: #78869b;
+  --line: #35384c;
+  --line-strong: #515672;
+  --ink: #b6aaff;
+  --ink-hover: #c8bfff;
+  --ink-fg: #211b3a;
+  --active: #7ea7ff;
+  --active-soft: rgba(126, 167, 255, .13);
+  --attention: #e4a34c;
+  --attention-soft: rgba(228, 163, 76, .13);
+  --success: #63c48f;
+  --success-soft: rgba(99, 196, 143, .13);
+  --danger: #f27b73;
+  --danger-soft: rgba(242, 123, 115, .13);
+  --merge: #b4a9ea;
+  --merge-soft: rgba(180, 169, 234, .14);
+  --focus: #8db0ff;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-panel: 0 2px 4px #00000012, 0 8px 24px #0000001f;
+  --shadow-control: inset 0 1px 0 #ffffff08, 0 1px 2px #00000033;
+  --shadow-primary: inset 0 1px 0 #ffffff26, 0 2px 8px #00000033;
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, .42), 0 1px 3px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .35);
+}
+
+/* Workbench-specific roles inherit the shared page palette. */
+.workspace-studio {
+  --studio-add-text: #17663a;
+  --studio-add-bg: #eaf7ee;
+  --studio-remove-text: #a33238;
+  --studio-remove-bg: #fff0f0;
+  --studio-accent: var(--ink);
+  --studio-tint: var(--surface-3);
+  --studio-chrome: var(--ink);
+  --studio-chrome-fg: #f4f6fc;
+  --accent: var(--ink);
+  --accent-hover: var(--ink-hover);
+  --accent-fg: var(--ink-fg);
+  --accent-soft: var(--studio-tint);
+  --focus: var(--studio-accent);
+  --page: var(--main-bg);
+  --surface-soft: var(--surface-2);
+  --surface-muted: var(--surface-3);
+  --bg: var(--main-bg);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --ws-side-w: clamp(420px, 36vw, 640px);
+  --ws-document-tree-w: 192px;
+}
+:root[data-theme="dark"] .workspace-studio {
+  --studio-add-text: #bbf7d0;
+  --studio-add-bg: #183829;
+  --studio-remove-text: #fecaca;
+  --studio-remove-bg: #402629;
+  --studio-chrome-fg: #edf2fa;
+}

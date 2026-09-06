@@ -96,8 +96,12 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-order-"));
   const skillDir = join(dataDir, "skills", "java-autout");
   mkdirSync(skillDir, { recursive: true });
+  // 知识治理口径(knowledgeMatchesTask):没有性质标签的 Skill 是"未治理
+  // 资产",不能靠无标签绕过匹配进任务——货架上的 UT skill 必须标明适用
+  // 语言,任务再按仓库技术画像把它选进来。这里模拟的就是那条正路。
   writeFileSync(join(skillDir, "SKILL.md"),
-    "---\nname: java-autout\ndescription: 只负责 Java 单元测试编写\n---\n");
+    "---\nname: java-autout\ndescription: 只负责 Java 单元测试编写\n"
+    + "knowledge_nature: engineering\ntechnologies: [java]\n---\n");
   const model = new ScriptedModelServer(script);
   await model.start();
   const service = new TaskService({
@@ -108,7 +112,11 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
   try {
     const created = service.create(
       `交付 ${ticket}:下单事实契约演练——配置一次收齐不再问`,
-      { account: "cloudbot", ticket, lane: "局部修改" });
+      { account: "cloudbot", ticket, lane: "局部修改",
+        repositoryProfiles: [{
+          repository: FIELDTEST, technologies: ["java"], confirmed: true,
+          updated_at: new Date().toISOString(), updated_by: "cloudbot",
+        }] });
     const cards: string[] = [];
     const perCard: Array<Record<string, string>> = [
       { "上述完整配置是否正确?": "确认以上全部配置" },

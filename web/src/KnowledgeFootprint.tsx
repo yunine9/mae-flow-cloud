@@ -99,7 +99,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
     aria-labelledby="knowledge-footprint-title">
     <header>
       <div className="knowledge-footprint-mark" aria-hidden>知</div>
-      <div><span>TASK KNOWLEDGE</span><strong id="knowledge-footprint-title">
+      <div><span>任务上下文</span><strong id="knowledge-footprint-title">
         本任务知识</strong>
         <p>看见本任务可用与实际消费的知识，可中途提醒 Agent 用某一条；沉淀不在这里做——闭环的意见和修复会自动记成下面的记忆。</p></div>
       <div className="knowledge-footprint-stats" aria-label="知识消费摘要">

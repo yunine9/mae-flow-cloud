@@ -39,14 +39,6 @@ import {
   TIMEOUT_EXIT_CODE,
 } from "../containerTimeout.ts";
 
-export interface OpsFetchLogsRequest {
-  hosts: string[];
-  services: string[];
-  password: string;
-  /** 日志落地目录(会话工作区内)。 */
-  localDir: string;
-}
-
 export interface OpsBuildDeployRequest {
   /** 含 deployment/pom.xml 的项目根(会话工作区内的克隆目录)。 */
   projectPath: string;
@@ -55,8 +47,9 @@ export interface OpsBuildDeployRequest {
   includeLib: boolean;
 }
 
+/** 日志抓取已是平台技能 issue-ops(整包自带 bin 引擎),这里只剩
+ * build-deploy——它被 ADR-0013 封存,引擎随技能迁移前原地保留。 */
 export interface IssueOpsTools {
-  fetchLogs(request: OpsFetchLogsRequest): Promise<{ summary: string }>;
   buildDeploy(request: OpsBuildDeployRequest): Promise<{ summary: string }>;
 }
 
@@ -136,8 +129,8 @@ function tail(text: string, limit = 2_500): string {
 
 /** 成功哨兵:退出码之外,以工具自己的输出作"活真干完了"的唯一证据。
  * 2026-09-02 拍板把哨兵收拢到这一处——调用方的成功判定和 runInContainer
- * 的超时守卫共用同一份真相,免得两处正则各写一份、日后各自漂移。 */
-export const FETCH_LOGS_SENTINEL = /解压完成/;
+ * 的超时守卫共用同一份真相,免得两处正则各写一份、日后各自漂移。
+ * (fetch-logs 引擎已迁为平台技能 issue-ops 的 bin,哨兵随迁技能正文。) */
 export const BUILD_DEPLOY_SENTINEL = /\[INFO\].*部署完成/;
 
 /** 失败报错统一拼输出尾部(stdout\nstderr 合并取尾):超时与业务失败
@@ -208,33 +201,6 @@ export function createGoOpsTools(options: {
 }): IssueOpsTools {
   const { toolsDir, containerExec, workspace, log } = options;
   return {
-    async fetchLogs(request) {
-      if (!request.hosts.length) throw new IssueOpsError("未提供网管服务器地址");
-      if (!request.services.length) throw new IssueOpsError("未提供要抓取的服务名");
-      const args = [
-        ...request.hosts.flatMap((host) => ["--host", host]),
-        ...request.services.flatMap((service) => ["--service", service]),
-        "--local-dir", request.localDir,
-      ];
-      log?.(`[issue-ops] fetch-logs: ${request.services.join(",")} @ `
-        + `${request.hosts.join(",")}`);
-      const privilegedEnv = { FETCH_LOGS_PASSWORD: request.password };
-      const result = containerExec
-        ? await runInContainer(
-          containerExec, containerBinary("fetch-logs"), args,
-          privilegedEnv, 15 * 60_000, workspace!, FETCH_LOGS_SENTINEL,
-        )
-        : await run(
-          platformBinary(toolsDir, "fetch-logs"), args,
-          { ...process.env, FETCH_LOGS_PASSWORD: request.password },
-          15 * 60_000,
-        );
-      if (result.code !== 0 || !FETCH_LOGS_SENTINEL.test(result.stdout)) {
-        throw failureWithTail(`拉取日志失败(退出码 ${result.code}): `, result);
-      }
-      return { summary: `日志已拉取到 ${request.localDir}:\n${tail(result.stdout)}` };
-    },
-
     async buildDeploy(request) {
       if (!request.hosts.length) throw new IssueOpsError("未提供部署目标服务器");
       if (!existsSync(join(request.projectPath, "deployment", "pom.xml"))) {

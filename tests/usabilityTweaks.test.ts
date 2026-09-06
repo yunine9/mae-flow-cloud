@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-// 2026-09-02 用户点名的三处易用性(批注与检视是核心竞争力,易用性优先):
+// 2026-09-02 用户点名的三处易用性(检视意见是核心竞争力,易用性优先):
 // 批注编辑框能拉大、任务列表最新在上(带开关)、决策选项原文可复制。
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 const annotatable = read("web/src/Annotatable.tsx");
@@ -57,6 +57,6 @@ test("任务决策卡选项可取消，自定义答复入口不会在打开后�
   assert.doesNotMatch(taskCard, /\{!customOpen\[item\.question\] && \(/,
     "打开编辑框后入口也必须保留，才能再次点击取消");
   assert.match(taskCard,
-    /const explanation = customOpen\[item\.question\][\s\S]{0,100}\? custom\[item\.question\]\?\.trim\(\)/,
+    /: customOpen\[item\.question\] \? custom\[item\.question\]\?\.trim\(\)/,
     "收起的自定义草稿不能偷偷随另一选项提交");
 });
