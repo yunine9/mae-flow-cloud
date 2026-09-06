@@ -1891,9 +1891,12 @@ export function TaskWorkspace({
             <div className="ws-material-toolbar">
               <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
                 {task.parent_task_id ? <>
+                  {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
+                      spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
+                      (2026-09-06 实战用户实锤"这里不应该叫当前任务书")。 */}
                   <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
                     onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
-                    <span>当前任务书</span>
+                    <span>文档</span><i>{documents.length}</i>
                   </button>
                   <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
                     onClick={() => openMaterial("source")}>
