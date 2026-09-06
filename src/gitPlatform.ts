@@ -16,7 +16,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PipelineCheck } from "./pipelineContract.ts";
 
@@ -109,6 +109,9 @@ export class FakeGitPlatform {
   /** 从源仓灌历史建裸仓——任务的 origin,推送的唯一去处。 */
   initBare(sourceRepo: string, dataDir: string): string {
     this.barePath = join(dataDir, "origin.git");
+    // 续跑:裸仓已经在(可能已被 MR 合入推进过 master),再从源仓 push 会撞
+    // 非快进被拒(2026-09-06 跨仓续跑实锤)。现场是真相,原样复用。
+    if (existsSync(join(this.barePath, "HEAD"))) return this.barePath;
     mkdirSync(this.barePath, { recursive: true });
     git(this.barePath, "init", "--bare", "--quiet");
     execFileSync(
