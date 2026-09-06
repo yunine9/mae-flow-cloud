@@ -146,7 +146,13 @@ tests/
 
 ```bash
 npm install
-npm test          # 不变式单测 + 任务 API 端到端(真 pi 会话)
+npm test          # 全量测试(合入门禁):不变式单测 + 任务 API 端到端(真 pi 会话)
+npm run test:fast # 日常开发用:同 test 但跳过重型慢测试,1-2 分钟跑完
+```
+
+`test:fast` 的排除清单依据 spec reporter 实测的 ≥8 秒慢测试文件排名
+(delivery、mrLoop、activity、containerOwnership 等,按文件名关键词匹配,
+后续拆分出的 `*.partN.test.ts` 同样命中);全量 `npm test` 仍是合入门禁。
 npm run probe     # 整链演练:进程内 pi + 剧本假模型,内核裁判验收九项事实
 npm run serve     # http://127.0.0.1:8787 浏览器走完 发任务→看进度→点审批
 ```

@@ -6,7 +6,8 @@
   "description": "Mae-Flow 云端服务:Pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配",
   "scripts": {
     "probe": "tsx src/probe.ts",
-    "test": "tsx scripts/clean-test-tmp.ts && tsx --test --test-timeout=180000 --test-force-exit tests/*.test.ts",
+    "test": "tsx scripts/clean-test-tmp.ts && tsx --test --test-concurrency=12 --test-timeout=180000 --test-force-exit tests/*.test.ts",
+    "test:fast": "tsx scripts/clean-test-tmp.ts && tsx --test --test-concurrency=12 --test-timeout=180000 --test-force-exit $(ls tests/*.test.ts | grep -vE 'delivery(\\.test|\\.part)|mrLoop|activity|containerOwnership|issueFlowFixed|continuousReviewContract|gitToken|managedStartup|issueGatewayDegrade|feedbackSourcesReceipt|annotateTargets|kernelUnavailableRecovery')",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.contract.json",
     "gate": "bash scripts/gate.sh",
     "fix-ratio": "bash scripts/fix-ratio.sh",

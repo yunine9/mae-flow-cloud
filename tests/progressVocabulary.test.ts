@@ -34,7 +34,7 @@ async function until(probe: () => boolean, what: string, ms = 20_000) {
   const deadline = Date.now() + ms;
   while (!probe()) {
     if (Date.now() > deadline) throw new Error(`等待超时: ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 

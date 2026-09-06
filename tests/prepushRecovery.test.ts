@@ -211,7 +211,7 @@ test("连续两次部署重启：每个新 serve 都重新取得 prepush 所有�
     sha: firstRequest.sha,
     message: "迟到的旧进程结果",
   });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.match(second.get("task-1")!.delivery?.prepush?.message ?? "", /第二台/);
 });
 
