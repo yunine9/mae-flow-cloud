@@ -443,6 +443,20 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   用尽才抛 `KernelUnavailableError`;catch 里的停是预算用尽后的 fail-closed,
   分类器把它记成基础设施类是对的。真正没有预算的只有"在途执行者未确认停止"
   一处(停止失败重试无意义)。逐点表见 docs/stall-sites-20260906.md。
+- **2026-09-06 子 Agent"沉默 5 分钟后中途返回"定位到根因,两层都修了。**
+  现象:写设计阶段 Story 子 Agent 最后一个工具结果后 305s/322s 无事件,然后
+  `agent_finished lifecycle=returned`,`final_text` 是失败前的旁白,主 Agent 当成
+  "中途话术"重派,再死一次(8-29 演练也有一例 479s 后空文本)。根因一:Node 自带
+  undici 的 bodyTimeout/headersTimeout 默认 300s,SSE 上 300s 没字节就掐线,pi-ai
+  收口成 `stopReason=error, errorMessage="terminated"`(本机沉默服务端复现 301.5s);
+  GLM 兼容网关在长生成首 token 前一声不吭,全部现场 1491 次响应里成功最长 246s,
+  失败全在 300s 之后。pi 的 CLI 自己装了同样的 300s,走 SDK 的宿主从没装过。
+  根因二:`sessionDriver` 只给主会话记模型层错误,子会话的错误被吞,pi 正常收轮
+  于是宿主报 returned。现在:模型请求用独立 fetch,空闲预算 10 分钟(有限预算,
+  `src/modelTransport.ts`,不动全局 fetch);子会话最后一条是模型错误则按
+  `lifecycle=failed` 抛回主 Agent 并带原文;pi 自动重试与模型错误原文进日志。
+  **没验证的**:10 分钟够不够内网慢模型(只知道 >322s 的沉默从没成功过);
+  让模型流式吐 thinking 能让沉默本身消失,但要改模型能力声明,未试。
 - **2026-09-06 跨仓子任务的标题把单元名放前面。** 原来是"父标题 · 单元名",
   父标题常常就是截到 80 字的需求首行,单元名被截掉,列表里两个子任务一模
   一样(跨仓真模型演练 cross-glm53-20260906b 实锤)。
