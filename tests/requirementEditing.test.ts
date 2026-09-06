@@ -53,7 +53,7 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__OWNER__","outcome":"fixed","summary":"补了验收口径"}]',
+      content: '[{"annotation_id":"__OWNER__","outcome":"fixed","summary":"补了验收口径","evidence":["requirement.md:2"]}]',
     } },
   }, {
     text: "已修改文档并留下逐条回执。",
@@ -68,7 +68,7 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__REVIEWER__","outcome":"fixed","summary":"补了异常场景"}]',
+      content: '[{"annotation_id":"__REVIEWER__","outcome":"fixed","summary":"补了异常场景","evidence":["requirement.md:4"]}]',
     } },
   }, {
     text: "已修改文档并留下逐条回执。",
@@ -241,7 +241,7 @@ test("长需求由 Agent 原位编辑，不再要求模型往回复里搬运全�
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新验收口径"}]',
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新验收口径","evidence":["requirement.md:2"]}]',
     } },
   }, {
     text: "已完成一处原位修改。",
@@ -291,7 +291,7 @@ test("需求修改 Agent 不能用 Write 整篇覆盖原文", async () => {
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新口径"}]',
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"更新了验收口径","evidence":["requirement.md:2"]}]',
     } },
   }, {
     text: "已改用 Edit 完成。",
@@ -356,7 +356,7 @@ test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了时长"}]',
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
     } },
   }, {
     text: "已完成。",
@@ -371,7 +371,7 @@ test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字
   }, {
     tool: { name: "write", input: {
       path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了时长"}]',
+      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
     } },
   }, {
     text: "已完成。",
