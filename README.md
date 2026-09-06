@@ -300,6 +300,19 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 绞杀第一块:交付恢复/停摆的决策抽成 `src/deliveryRecovery.ts`。**
+  taskService 里 verificationDeadline/markVerificationStalled/holdWithRecovery/
+  runDeliveryRecovery/schedulePipelineEvidenceRetry 这一簇的"算与判"(预算与
+  间隔取值、截止开表、停摆写盘形状、停摆通知文案、自愈链是否还该管、回执
+  补登记失败的三条出路、证据重试到点的现场校验)搬成纯函数,taskService 只
+  留定时器/持久化/通知/内核调用的薄壳;决策表在 `tests/deliveryRecovery.test.ts`,
+  每行是一条踩过的坑。行为零变更:截止仍惰性开表(派单/停摆的路上不开,
+  开了会留到下一轮验证里白吃预算),发件箱损坏判断仍只在已停摆时求值。
+  体量棘轮随之拧到 21,618。表里顺带钉住一条现状:catch 里认不出的错一律归
+  基础设施类(分类器对未识别的平台故障默认按瞬时自愈),只有认得出的确定性
+  故障才用调用点声明的类别。**已验**:簇上四个真内核集成用例
+  (kernelUnavailableRecovery、feedbackSourcesReceipt、pipelineVerdictSyncGuard、
+  kernelDeliveryInfraRetry)与决策表全绿;**未验**:内网现场没有重放。
 - **2026-09-06 质量加固第一步:测试回零、体量棘轮、推送闸门。** 全量 `npm test`
   此前常年挂着 9 条红(布局 7、场景覆盖 1、下单事实 1)——红灯常驻等于没有灯,
   新增的红没人再看。逐条对到现状:7 条布局测试断言的是 09-02 的固定定位检视

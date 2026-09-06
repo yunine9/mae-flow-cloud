@@ -466,8 +466,13 @@ import {
   FEEDBACK_RESULT_MISSING,
   heldForKernelUnavailable,
 } from "./deliveryFailure.ts";
+import {
+  evidenceRetryStillValid, recoveryDelayMs, recoveryStillNeeded as stillNeedsRecovery,
+  resolveVerifyDeadline, routeReceiptFailure, stallClassForError, stallDetail,
+  stallNotice, stallReasonOf, stallWrite, verificationBudgetMs,
+} from "./deliveryRecovery.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
-import { STALL_POLICY, type StallClass } from "./stallPolicy.ts";
+import { type StallClass } from "./stallPolicy.ts";
 import {
   emptyTokenUsageState,
   recordTokenUsage,
@@ -8923,7 +8928,7 @@ export class TaskService {
               ? error.message : String(error);
             this.markVerificationStalled(task,
               `持续检视迁移无法安全完成：${diagnosis}`,
-              this.stallClassFor(error, "contract"));
+              stallClassForError(error, "contract"));
           }
         }
         if (summary.status === "await_merge"
@@ -14626,18 +14631,16 @@ export class TaskService {
    * (默认 30 分钟),不另立旋钮。 */
   private verificationDeadline(task: TaskState): number {
     const delivery = task.summary.delivery;
-    const existing = delivery?.verify_deadline
-      ? Date.parse(delivery.verify_deadline) : NaN;
-    if (Number.isFinite(existing)) return existing;
-    const knobs = this.options.settings?.runtime() ?? {};
-    const budget = (knobs.poll_timeout_s !== undefined
-      ? knobs.poll_timeout_s * 1000 : undefined)
-      ?? this.options.delivery?.pollTimeoutMs ?? 30 * 60_000;
-    const deadline = Date.now() + budget;
-    task.summary.delivery = {
-      ...delivery,
-      verify_deadline: new Date(deadline).toISOString(),
-    };
+    const { deadline, opened } = resolveVerifyDeadline(
+      delivery?.verify_deadline, Date.now(),
+      verificationBudgetMs(this.options.settings?.runtime() ?? {},
+        this.options.delivery));
+    if (opened) {
+      task.summary.delivery = {
+        ...delivery,
+        verify_deadline: new Date(deadline).toISOString(),
+      };
+    }
     return deadline;
   }
 
@@ -14652,25 +14655,13 @@ export class TaskService {
     const delivery = task.summary.delivery;
     if (delivery?.stalled) return; // 幂等:同一次停摆只喊一次
     task.summary.status = "verifying";
-    task.summary.detail = `自动验证已停,需要你介入:${reason}`;
+    task.summary.detail = stallDetail(reason);
     task.summary.delivery = {
       ...delivery,
-      mr_state: delivery?.mr_state ?? "验证中",
-      waiting_on: reason,
-      stalled: reason,
-      stall_class: cls,
-      verify_deadline: undefined,
+      ...stallWrite(delivery?.mr_state, reason, cls),
     };
     this.persist(task);
     this.notifyVerificationStalled(task, reason, cls);
-  }
-
-  /** catch 里抓到的异常不知道是抖动还是坏了:交给唯一分类处。判成"重放
-   * 有意义"的按基础设施类记(人只需等恢复再重试),其余按调用点声明的类别。
-   * 2026-09-06 盘账:6 处 catch 原来一律直接停摆,内核一次没答就喊人。 */
-  private stallClassFor(error: unknown, declared: StallClass): StallClass {
-    return classifyDeliveryFailure(String(error)).disposition === "retry"
-      ? "infrastructure" : declared;
   }
 
   /** 每一次停摆都得有人知道。原来只调 notifyRepairStopped,而它在没有修复
@@ -14689,15 +14680,12 @@ export class TaskService {
     const { notifier } = this.options;
     const account = task.summary.luban_account;
     if (!notifier || !account) return;
-    const policy = STALL_POLICY[cls];
-    let digest = 0;
-    for (const ch of reason) digest = (digest * 31 + ch.charCodeAt(0)) >>> 0;
+    const notice = stallNotice(reason, cls);
     this.bypass(task, "停摆通知", notifier.notifyOutcome({
       taskId: task.summary.id,
       account,
-      status: `stalled_${cls}_${digest.toString(16)}`,
-      summary: `自动验证已停(${policy.label}),需要你介入——${reason.slice(0, 200)}`
-        + `。${policy.next_action}`,
+      status: notice.status,
+      summary: notice.summary,
       link: personalTaskLink(
         this.notificationLinkBase(), account, task.summary.id),
     }));
@@ -14731,11 +14719,8 @@ export class TaskService {
   private scheduleDeliveryRecovery(task: TaskState, epoch: number): void {
     if (task.deliveryRecoveryActive) return;
     task.deliveryRecoveryActive = true;
-    const knobs = this.options.settings?.runtime() ?? {};
-    const delay = Math.max(50,
-      (knobs.poll_interval_s !== undefined
-        ? knobs.poll_interval_s * 1000 : undefined)
-      ?? this.options.delivery?.pollIntervalMs ?? 10_000);
+    const delay = recoveryDelayMs(
+      this.options.settings?.runtime() ?? {}, this.options.delivery);
     const timer = setTimeout(() => {
       task.deliveryRecoveryActive = false;
       this.bypass(task, "交付自愈重试", this.runDeliveryRecovery(task, epoch));
@@ -14768,14 +14753,15 @@ export class TaskService {
     if (heldForKernelUnavailable(task.summary.delivery?.waiting_on)) {
       const failure = this.recordActiveFeedbackResult(task);
       if (failure) {
-        // 分类只有一处(deliveryFailure);这里只负责按结论走出路。
-        // 预算是 retry 的硬边界:烧完仍 fail-closed 停下喊人,不无限等。
-        const verdict = classifyDeliveryFailure(failure, "receipt");
-        if (verdict.disposition === "retry"
-            && Date.now() < this.verificationDeadline(task)) {
+        // 分类只有一处(deliveryFailure),出路只有一张表(deliveryRecovery),
+        // 这里只负责执行。截止惰性取:只有"重放有意义"才该开表,派单/停摆
+        // 的路上开了表会留到下一轮验证里白吃预算。
+        const route = routeReceiptFailure(failure, Date.now(),
+          () => this.verificationDeadline(task));
+        if (route.kind === "hold") {
           this.holdExternalVerification(task, failure);
           this.scheduleDeliveryRecovery(task, epoch);
-        } else if (verdict.disposition === "dispatch") {
+        } else if (route.kind === "dispatch") {
           // 这批还没人处理过(派单和重启撞上了),不是回执不合格:重新派给
           // 修复会话,不能拿"Agent 没有留下回执"把任务停在这儿等人。派单后
           // 状态转 queued,recoveryStillNeeded 不再成立,不会自旋。
@@ -14784,7 +14770,7 @@ export class TaskService {
             + "请按下面的反馈清单逐条处理，并写出机器可核对的逐条回执。",
             "反馈批次尚未处理，已重新派给修复会话");
         } else {
-          this.markVerificationStalled(task, failure, verdict.stall_class);
+          this.markVerificationStalled(task, failure, route.stall_class);
         }
         return;
       }
@@ -14802,21 +14788,24 @@ export class TaskService {
    * "宿主推送失败: fatal: ..." 才是人能拿着去办的那句。交付成功时
    * delivery 会整份换掉,skipped 不会残留成假线索。 */
   private stallReason(task: TaskState): string {
-    const delivery = task.summary.delivery;
-    return delivery?.skipped ?? delivery?.waiting_on
-      ?? task.summary.detail ?? "外部验证迟迟没有结果";
+    return stallReasonOf(task.summary.delivery, task.summary.detail);
   }
 
   /** 还该不该我管:别人在盯的(流水线轮询、证据核销重试)让它盯,
    * 已经走出验证中或已如实停摆的收手——两条自愈链不许互相踩。 */
   private recoveryStillNeeded(task: TaskState, epoch: number): boolean {
-    return this.current(task, epoch)
-      && task.summary.status === "verifying"
-      && (!task.summary.delivery?.stalled
-        || this.reviewReplyOutboxStalled(task))
-      && task.summary.delivery?.pipeline !== "running"
-      && !task.evidenceRetryActive
-      && !task.repairEvidenceRetryActive;
+    const current = this.current(task, epoch);
+    const stalled = Boolean(task.summary.delivery?.stalled);
+    return stillNeedsRecovery({
+      current,
+      status: task.summary.status,
+      stalled,
+      outboxStalled: current && task.summary.status === "verifying"
+        && stalled && this.reviewReplyOutboxStalled(task),
+      pipeline: task.summary.delivery?.pipeline,
+      evidenceRetryActive: Boolean(task.evidenceRetryActive),
+      repairEvidenceRetryActive: Boolean(task.repairEvidenceRetryActive),
+    });
   }
 
   /** INCOMPLETE / STALE / 登记抖动都是宿主等待，不得把 Agent 催回来
@@ -14839,18 +14828,17 @@ export class TaskService {
       return;
     }
     task.evidenceRetryActive = true;
-    const knobs = this.options.settings?.runtime() ?? {};
-    const delay = Math.max(50,
-      (knobs.poll_interval_s !== undefined
-        ? knobs.poll_interval_s * 1000 : undefined)
-      ?? this.options.delivery?.pollIntervalMs
-      ?? 10_000);
+    const delay = recoveryDelayMs(
+      this.options.settings?.runtime() ?? {}, this.options.delivery);
     const timer = setTimeout(() => {
       task.evidenceRetryActive = false;
-      if (!this.current(task, epoch)
-          || task.summary.status !== "verifying"
-          || task.summary.delivery?.sha !== sha
-          || task.summary.delivery?.pipeline !== "success") return;
+      if (!evidenceRetryStillValid({
+        current: this.current(task, epoch),
+        status: task.summary.status,
+        sha: task.summary.delivery?.sha,
+        expectedSha: sha,
+        pipeline: task.summary.delivery?.pipeline,
+      })) return;
       this.bypass(task, "流水线证据自动重试", stale
         ? this.tryDeliver(task, epoch)
         : this.retryPipelineEvidence(task, sha, epoch));
@@ -17854,7 +17842,7 @@ export class TaskService {
     } catch (error) {
       this.markVerificationStalled(task,
         `流水线失败已保留，但内核未能打开统一反馈批次：${String(error)}`,
-        this.stallClassFor(error, "contract"));
+        stallClassForError(error, "contract"));
       return;
     }
 
@@ -18161,7 +18149,7 @@ export class TaskService {
         } catch (error) {
           this.markVerificationStalled(task,
             `MR 已合入，但内核未能登记可信 close：${String(error)}`,
-            this.stallClassFor(error, "contract"));
+            stallClassForError(error, "contract"));
           return;
         }
       }
@@ -18909,7 +18897,7 @@ export class TaskService {
     } catch (error) {
       this.markVerificationStalled(task,
         `检视意见已保留，但内核未能打开持续检视批次，尚未启动 Agent：${String(error)}`,
-        this.stallClassFor(error, "contract"));
+        stallClassForError(error, "contract"));
       return "halted";
     }
     loop.kind = "review";
@@ -19041,7 +19029,7 @@ export class TaskService {
     } catch (error) {
       this.markVerificationStalled(task,
         `工作台批注已保留，但内核未能打开持续检视批次，尚未启动 Agent：${String(error)}`,
-        this.stallClassFor(error, "contract"));
+        stallClassForError(error, "contract"));
       return;
     }
     const priorPipeline = previousFailure
@@ -19391,7 +19379,7 @@ export class TaskService {
         await git("merge", "--abort");
         this.markVerificationStalled(task,
           `冲突事实已发现，但内核未能打开统一反馈批次：${String(error)}`,
-          this.stallClassFor(error, "contract"));
+          stallClassForError(error, "contract"));
         return true;
       }
       loop.kind = "conflict";
