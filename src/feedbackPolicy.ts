@@ -130,6 +130,12 @@ export interface ParsedWorkspaceReceipts {
   errors: string[];
 }
 
+/** 回执说明的下限:少于这个字数基本只能是结论词。 */
+export const MIN_RECEIPT_SUMMARY_LENGTH = 6;
+/** 只写结论词的"说明":已处理 / 已修改 / done / fixed / ok…,不算说明。 */
+const PLACEHOLDER_SUMMARY =
+  /^(已处理|已修改|已修复|已完成|已解决|处理完成|修改完成|修复完成|完成|搞定|改好了|done|fixed|resolved|ok|okay|n\/a|无)[。.!！~～]*$/i;
+
 /** Agent 写出的文件是不可信输入：逐项校验、按当前 revision 对拍，绝不
  * 用数组顺序猜对应关系。重复 id 也是错误，否则后写者会静默覆盖前者。 */
 export function parseWorkspaceReviewReceipts(
@@ -183,14 +189,28 @@ export function parseWorkspaceReviewReceipts(
       errors.push(`批注 ${id} 缺少逐条说明`);
       continue;
     }
+    // "已处理"三个字不是说明:人看到只知道它改了,不知道改了什么(用户实锤
+    // "显示已处理但完全不知道它怎么处理的")。一句话下限 6 个字,且不能只是
+    // 结论词本身。
+    if (summary.length < MIN_RECEIPT_SUMMARY_LENGTH || PLACEHOLDER_SUMMARY.test(summary)) {
+      errors.push(`批注 ${id} 的 summary 只写了「${summary}」,要说清改了什么或为什么不改`);
+      continue;
+    }
+    const evidence = Array.isArray(item.evidence)
+      ? item.evidence.map(String).map((one) => one.trim()).filter(Boolean)
+      : [];
+    // fixed = 真改了文件,那就必须能指出改在哪(path:line);没有位置的"已修复"
+    // 人无法复核。not_fixed / needs_clarification 不改文件,不强求。
+    if (outcome === "fixed" && !evidence.length) {
+      errors.push(`批注 ${id} 标了 fixed 但没有 evidence,写上改动位置(path:line)`);
+      continue;
+    }
     receipts.push({
       annotation_id: id,
       revision,
       outcome: outcome as WorkspaceReviewReceipt["outcome"],
       summary,
-      evidence: Array.isArray(item.evidence)
-        ? item.evidence.map(String).map((one) => one.trim()).filter(Boolean)
-        : [],
+      evidence,
     });
   }
   const accepted = new Set(receipts.map((item) => item.annotation_id));
@@ -225,6 +245,9 @@ export function workspaceReviewReceiptInstructions(items: Annotation[]): string 
       + '"outcome":"fixed|not_fixed|needs_clarification",'
       + '"summary":"改了什么，或为什么不改","evidence":["path:line"]}]}',
     "每个 annotation_id 恰好一条；缺失、重复或旧 revision 都不会进入 push。",
+    "summary 是给提意见的人看的:一句话说清改了什么或为什么不改,不能只写"
+      + "「已处理」这类结论词;outcome=fixed 必须带 evidence(path:line),"
+      + "指出改在哪里——没有位置的回执会被退回重写。",
     "在你举起任何确认卡、或结束本轮之前，所有已提交意见都必须有当前 revision 的"
       + " fixed 回执。not_fixed 和 needs_clarification 都不算处理完成，只是中间状态。",
     "确实缺少信息时：先把这条写成 needs_clarification 并写明具体疑问，再单独调用"

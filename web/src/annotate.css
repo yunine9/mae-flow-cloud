@@ -1524,3 +1524,4 @@
 .workspace-studio.task-workspace-v2 .annot-panel button.ghost { min-height: 26px; height: 26px; padding: 0 10px; font-size: 12.5px; }
 .workspace-studio.task-workspace-v2 .annot-item.actionable .annot-verdict { padding-top: 6px; }
 .workspace-studio.task-workspace-v2 .annot-owner-reply-action { margin-top: 6px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response small.annot-no-evidence { color: var(--attention); }

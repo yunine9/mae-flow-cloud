@@ -465,6 +465,15 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   文一行截断;task-4(带 parent_task_id 与 cross_repository_updates 的夹具)流里
   能看到 sync 条目。**未验**:真拆分交付里多层依赖的实际投递(steer 落地、排队
   注入)本轮没跑真模型;fixture 没有主任务视角的样本。
+  **"显示已处理但不知道它怎么处理的"(同日追问)**:现在"已处理"只可能来自
+  Agent 写进 `reviews/local-receipts.json`(需求检视是 `receipts.json`)的逐条回执,
+  三条入口都过同一个 `parseWorkspaceReviewReceipts`;此前它只要求 summary 非空,
+  "已处理"三个字也能过。现在两条硬规则:summary 至少 6 个字且不能只是结论词
+  (已处理 / 已修改 / done / fixed / ok…);outcome=fixed 必须带 evidence
+  (path:line)。不合规的回执按"缺失"退回——举卡前 `beforeReviewQuestion` 把原因
+  连同清单再喂给 Agent 重写(带预算,试不动了按现状举卡),不会静默放行,也不会
+  卡死。回执指令同步写明。老账目里没带位置的 fixed 回执,卡上如实标"Agent 没有
+  给出改动位置"。未验:真模型面对"退回重写"的服从度(内网只在演练里过过)。
   **已验**:`tests/conversation.test.ts`(回合合并与步骤计数、过程话/交接语标记、子会话不进流、卡
   与决定来自 waiting.json、批注账七种操作还原与合批、外部意见按批次、裸时间戳
   与同毫秒排序、坏行容错);`tests/conversationStream.test.ts`(Vite SSR 静态

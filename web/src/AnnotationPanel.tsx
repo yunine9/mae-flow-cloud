@@ -630,6 +630,10 @@ export function AnnotationPanel({
                         : "需要你补充说明"}</em>
                   </div>
                   <p>{item.response.summary}</p>
+                  {/* 老账目里可能有没带位置的 fixed 回执:如实标出,不装作有依据 */}
+                  {item.response.outcome === "fixed" && !item.response.evidence.length && (
+                    <small className="annot-no-evidence">Agent 没有给出改动位置</small>
+                  )}
                   {(item.response.evidence.length > 0 || item.response.fixed_sha) && (
                     <small>{[
                       ...(item.response.evidence.length > 0

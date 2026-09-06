@@ -293,7 +293,7 @@ test("举卡前:意见没处理完不许举确认卡;回执读盘即登记;旧�
     assert.match(stale ?? "", /缺当前版本\(revision 1\)的回执/);
     assert.doesNotMatch(stale ?? "", /回执文件有问题/, "旧版本回执是历史,不是格式错");
     receipts([{ annotation_id: first.id, revision: 1, outcome: "fixed",
-      summary: "按新要求改了", evidence: [] }]);
+      summary: "按新要求改成返回空列表", evidence: ["src/a.ts:3"] }]);
     assert.equal(await before(confirmCard), undefined);
 
     // 文件坏了:有待处理意见时把原因告诉 Agent 让它修。
@@ -398,7 +398,7 @@ test("澄清卡:只放行形状合规的追问;答复落账后回执清空、旧
       options: ["通过", "打回"], recommended: "通过" }] }) ?? "",
     /上限,不能再问——按最合理理解处理/);
     receipts([{ annotation_id: first.id, revision: 0, outcome: "fixed",
-      summary: "按两次答复处理:入参为空返回空列表并打 warn 日志", evidence: [] }]);
+      summary: "按两次答复处理:入参为空返回空列表并打 warn 日志", evidence: ["src/a.ts:3"] }]);
     assert.equal(await before({ questions: [{ question: "通过吗?",
       options: ["通过", "打回"], recommended: "通过" }] }), undefined);
     const done = store.list().find((item) => item.id === first.id)!;

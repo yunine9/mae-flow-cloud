@@ -77,7 +77,7 @@ test("需要补充说明:是结论不是失败;作者重提前不再要它的回
       { annotation_id: first.id, revision: 0, outcome: "needs_clarification",
         summary: "空值指的是入参还是返回值？", evidence: [] },
       { annotation_id: third.id, revision: 0, outcome: "fixed",
-        summary: "已调整顺序", evidence: ["src/c.ts:1"] },
+        summary: "已把校验挪到入库之前", evidence: ["src/c.ts:1"] },
     ]);
     const round2 = await (service as any).consumeWorkspaceReviewReceipts(internal);
     assert.equal(round2.ok, true, round2.detail);
@@ -86,7 +86,7 @@ test("需要补充说明:是结论不是失败;作者重提前不再要它的回
     assert.equal(notified.length, 1);
     receipts([
       { annotation_id: third.id, revision: 0, outcome: "fixed",
-        summary: "已调整顺序", evidence: ["src/c.ts:1"] },
+        summary: "已把校验挪到入库之前", evidence: ["src/c.ts:1"] },
     ]);
     assert.equal((await (service as any).consumeWorkspaceReviewReceipts(internal)).ok,
       true, "不写 first 的回执也齐");
