@@ -11,6 +11,7 @@
  * 原方法里的一段,原有集成测试照旧;决策表见 tests/deliveryRecovery.test.ts。
  */
 import { classifyDeliveryFailure } from "./deliveryFailure.ts";
+import { KernelDeliveryError, KernelUnavailableError } from "./kernelDelivery.ts";
 import { STALL_POLICY, type StallClass } from "./stallPolicy.ts";
 
 /** 运行参数里与自愈有关的两个旋钮(settings.runtime() 的子集)。 */
@@ -110,13 +111,21 @@ export function stallNotice(
   };
 }
 
-/** catch 里抓到的异常不知道是抖动还是坏了:交给唯一分类处。判成"重放
- * 有意义"的按基础设施类记(人只需等恢复再重试),其余按调用点声明的类别。 */
+/** catch 里抓到的异常不知道是抖动还是坏了。内核层已经分好两种:
+ * KernelUnavailableError=内核根本没答(预算内重试已用尽)→基础设施类,人只
+ * 需等恢复再重试;KernelDeliveryError=内核答了"不"→裁决,重放无意义,用
+ * 调用点声明的类别。其余按文案交给唯一分类处:判成"重放有意义"的按基础
+ * 设施类,认得出的确定性故障按声明。文案取 message 而不是 String(error):
+ * 后者带 "Error: " 前缀,分类器的前缀匹配一条都对不上——2026-09-06 决策表
+ * 逮住:六个 catch 里内核的裁决一律被记成"等恢复再试"。 */
 export function stallClassForError(
   error: unknown,
   declared: StallClass,
 ): StallClass {
-  return classifyDeliveryFailure(String(error)).disposition === "retry"
+  if (error instanceof KernelUnavailableError) return "infrastructure";
+  if (error instanceof KernelDeliveryError) return declared;
+  const text = error instanceof Error ? error.message : String(error);
+  return classifyDeliveryFailure(text).disposition === "retry"
     ? "infrastructure" : declared;
 }
 

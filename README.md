@@ -300,6 +300,16 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 catch 里的停摆分类改认内核错误类型(决策表逮住的行为变更)。**
+  六个包着内核调用的 catch 原来把 `String(error)` 交给文案分类器,而它带
+  "Error: " 前缀,分类器的前缀匹配一条都对不上,于是落到"未识别按瞬时"的
+  缺省——内核明明答了"不"(KernelDeliveryError,裁决,重放无意义)也被记成
+  基础设施类,页面和通知让人"等恢复再重试",重试结果不会变。现在
+  `stallClassForError`:KernelUnavailableError→基础设施类;KernelDeliveryError
+  →调用点声明的类别;其余取 `message` 交给文案分类器,认得出的确定性故障
+  (CONTRACT_BROKEN 前缀、确定性 4xx)按声明,认不出的仍按瞬时。**已验**:
+  决策表 + 簇上四个真内核集成用例;**未验**:内网没有重放过一次真实的内核
+  裁决停摆。
 - **2026-09-06 绞杀第一块:交付恢复/停摆的决策抽成 `src/deliveryRecovery.ts`。**
   taskService 里 verificationDeadline/markVerificationStalled/holdWithRecovery/
   runDeliveryRecovery/schedulePipelineEvidenceRetry 这一簇的"算与判"(预算与

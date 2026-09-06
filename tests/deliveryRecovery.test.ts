@@ -13,7 +13,9 @@ import {
   stallNotice, stallReasonOf, stallWrite, verificationBudgetMs,
 } from "../src/deliveryRecovery.ts";
 import { FEEDBACK_RESULT_MISSING } from "../src/deliveryFailure.ts";
-import { KERNEL_UNAVAILABLE } from "../src/kernelDelivery.ts";
+import {
+  KERNEL_UNAVAILABLE, KernelDeliveryError, KernelUnavailableError,
+} from "../src/kernelDelivery.ts";
 import { STALL_POLICY } from "../src/stallPolicy.ts";
 
 test("预算与间隔:运行参数 > 服务配置 > 缺省;间隔有下限不忙等", () => {
@@ -71,6 +73,16 @@ test("catch 里的异常:能重放的按基础设施类记,认得出的确定性
   assert.equal(stallClassForError("平台 HTTP 404 Not Found", "contract"), "contract",
     "确定性 4xx 重放不会变,才轮到调用点声明的类别");
   assert.equal(stallClassForError("平台 HTTP 404 Not Found", "safety"), "safety");
+  // 内核层的两种错早就分好了,分类要认它们而不是认字符串。
+  assert.equal(stallClassForError(
+    new KernelUnavailableError(`${KERNEL_UNAVAILABLE}: dispatch 超时`), "contract"),
+    "infrastructure", "内核根本没答(预算内重试已用尽):等恢复再试");
+  assert.equal(stallClassForError(
+    new KernelDeliveryError("内核拒绝登记:收据 sha 与提交不一致"), "contract"),
+    "contract", "内核答了'不'是裁决,重放无意义——修 String(error) 前它被记成基础设施类");
+  assert.equal(stallClassForError(new Error("推送被仓库拒绝: hook declined"), "safety"),
+    "safety", "Error 对象按 message 分类;String(error) 的 'Error: ' 前缀会让确定性故障漏成瞬时");
+  assert.equal(stallClassForError(new Error("read ECONNRESET"), "contract"), "infrastructure");
 });
 
 test("停摆原因说病因:skipped > waiting_on > detail > 兜底", () => {
