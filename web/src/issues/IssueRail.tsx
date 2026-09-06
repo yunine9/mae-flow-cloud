@@ -181,7 +181,7 @@ function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingSnapshot }) {
   const head = waiting.gate_kind === "pipeline_unfixable"
     ? "等归属人在交付平台处理/豁免流水线告警"
     : waiting.gate_kind === "pipeline_evidence"
-      ? "等归属人回灌流水线报错原文"
+      ? "等归属人贴回流水线报错原文"
       : waiting.gate_kind === "env_needed"
         ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
         : "等归属人答复";

@@ -186,7 +186,7 @@ test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成�
       return state.push_token === undefined ? state : undefined;
     }, "令牌消费(成功后清除)");
     assert.ok(consumed.transitions?.some((entry) =>
-      entry.note.includes("推送过目令牌已消费")), "消费要留痕");
+      entry.note.includes("推送确认令牌已用掉")), "消费要留痕");
     // 第三次推送重新被拦:每次过目,防盲签。
     const regated = await until(() => {
       const issue = service.get(created.id);

@@ -430,7 +430,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "按单号查 DTS 问题单详情(现象/影响/处理历史)。单号缺省用会话已"
       + "绑定的单号。任意阶段都可调用(重查单据不限阶段);在「获取单据"
-      + "信息」阶段拉到详情后,通读单据调 complete_stage 收口进入拉取"
+      + "信息」阶段拉到详情后,通读单据调 complete_stage 申报完成,进入拉取"
       + "代码仓。注意:绑定单号是用户动作——查到的单号要用于推送/提MR,"
       + "需请用户在页面完成绑定。",
     parameters: Type.Object({
@@ -593,11 +593,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           summary,
         );
         ctx.persist();
-        fail(why
-          ? promptCopy("receipts", "push.review.raised_stale", {
-            why: why.replace(/,$/, ""),
-          })
-          : promptCopy("receipts", "push.review.raised_new"));
+        fail(promptCopy("receipts", "push.review.raised", {
+          lead: why ? `${why.replace(/,$/, "")}——已重新` : "",
+        }));
       };
       if (ctx.pushConfirmation?.() === true) {
         if (!state.push_token) {
@@ -607,7 +605,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           if (state.push_token.head && head
             && head !== state.push_token.head) {
             delete state.push_token;
-            await raisePushReviewGate("分支在过目后又有新提交,");
+            await raisePushReviewGate("分支在上次确认后又有新提交,");
           }
         }
       }
@@ -633,7 +631,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       recordTransition(state, {
         source: "platform",
         note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
-          + (reviewed ? "(推送过目令牌已消费)" : ""),
+          + (reviewed ? "(推送确认令牌已用掉)" : ""),
       });
       ctx.persist();
       return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
@@ -787,8 +785,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         "宣布问题分析完成并提交分析报告(工作区根目录的 issue-analysis.md)。"
         + "调用前报告必须已写好——平台以文件在场且五章节齐全(问题现象/"
         + "问题根因/修改方案/证据链/置信度,首行一句话总结串联三者,"
-        + "模板见技能 issue-analysis)为门票。提交后平台举"
-        + "确认卡等用户过目:有单场景确认后进入问题修改;无单场景需给 conclusion"
+        + "模板见技能 issue-analysis)为通过条件。提交后平台把"
+        + "确认卡转给用户:有单场景确认后进入问题修复;无单场景需给 conclusion"
         + "(issue=是问题/non_issue=非问题)由用户定夺挂起或闭环。"
         + "提交后请结束回合等待用户。",
       parameters: Type.Object({
@@ -864,10 +862,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       label: "Report UT Result",
       description:
         "上报 UT 验证结果(在代码仓里实际跑的单测)。这是事实上报:平台只"
-        + "记账留痕,不推进阶段、不设任何门禁。UT 属于问题修复阶段的一部分"
+        + "记录留痕,不推进阶段、不设任何门禁。UT 属于问题修复阶段的一部分"
         + "(TDD:先写复现单测再改码转绿),修复过程中每轮都可上报。summary "
         + "带通过率与关键失败(如有),log_path 指向工作区内的测试报告/日志。"
-        + "测试结果可接受后调 complete_stage 收口本阶段。",
+        + "测试结果可接受后调 complete_stage 申报完成。",
       parameters: Type.Object({
         passed: Type.Boolean({ description: "本轮单测是否全部通过" }),
         summary: Type.String({ description: "一段话结果:跑了什么/通过率/关键失败" }),
@@ -942,7 +940,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接收口。
       if (!ledger.length) {
         fixedComplete(ctx.state, `无 MR 交付(空清单=空台账):${note}`);
-        ctx.state.stage_note = "流程收口——确认后可归档";
+        ctx.state.stage_note = "流程已完成——确认后可归档";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.empty_ok"));
@@ -1004,8 +1002,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (runs.every((item) => item.run.status === "success")) {
         delete state.mr_gate;
         fixedComplete(ctx.state,
-          `MR 验绿通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
+          `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
+        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后即可归档";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.all_green", {
@@ -1034,7 +1032,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       name: "complete_stage",
       label: "Complete Current Stage",
       description:
-        "宣布当前阶段目标已达成并收口——拉单/拉仓/修改/提交MR 四个"
+        "宣布当前阶段目标已达成并申报完成——拉单/拉仓/修改/提交MR 四个"
         + "阶段的唯一出口。「获取单据信息」通读单据后调;「拉取代码仓」"
         + "把要用的仓拉齐后调(包括「本单无需代码仓」的跳过:研究结论不"
         + "涉及代码改动时,不拉任何仓直接调它过关);「问题修复」按 TDD "

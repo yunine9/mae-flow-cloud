@@ -328,10 +328,10 @@ function PipelineGateCard({ waiting, busy, onAnswer }: {
   }
 
   return <section className="issue-decision"
-    aria-label={evidence ? "回灌流水线报错原文" : "流水线红灯人工处理"}>
+    aria-label={evidence ? "贴回流水线报错原文" : "流水线红灯人工处理"}>
     <header className="issue-decision-head">
       <span className="decision-kicker">
-        {evidence ? "流水线红灯·回灌报错原文" : "流水线红灯·需要人工处理"}
+        {evidence ? "流水线红灯·贴回报错原文" : "流水线红灯·需要人工处理"}
       </span>
       <span className="issue-decision-count">
         {evidence ? "粘贴原文后继续修复" : "交付平台处理/豁免"}

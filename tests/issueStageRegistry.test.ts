@@ -172,8 +172,8 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("env_verify", "fail"), "fail");
   // 认不得的答复(自由作答/乱码):报告确认与结论按补充意见处理
   // (旧协议里非确认文本的 else 分支语义),验证闸一律打回(旧 409)。
-  assert.equal(gateVerdict("analysis_confirm", "确认报告,开始问题修改"), "rework",
-    "旧文案只是普通文本,不再是匹配键");
+  assert.equal(gateVerdict("analysis_confirm", "确认报告,开始问题修复"), "rework",
+    "文案只是普通文本,不再是匹配键");
   assert.equal(gateVerdict("conclude", ""), "rework");
   assert.equal(gateVerdict("env_verify", "确认非问题,闭环归档"), "unrecognized");
   assert.equal(gateVerdict("env_verify", ""), "unrecognized");

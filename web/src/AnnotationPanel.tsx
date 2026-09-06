@@ -444,7 +444,7 @@ export function AnnotationPanel({
                 ? `提交 ${drafts.length} 条检视意见`
               : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
-              : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+              : evidenceAwaiting ? `贴回 ${drafts.length} 条报错`
                 : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
                 : queueable ? `提交 ${drafts.length} 条（排队，等责任人返工时送达）`
                 : `提交 ${drafts.length} 条批注`}

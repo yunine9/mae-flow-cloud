@@ -6,7 +6,7 @@
 
 ## pull.guide.prep
 
-拉仓指引:还有要用的仓继续调 pull_repo;都拉齐了就调 complete_stage 收口本阶段。
+拉仓指引:还有要用的仓继续调 pull_repo;都拉齐了就调 complete_stage 申报完成本阶段。
 {{stage_brief}}
 
 ## pull.baseline_miss
@@ -23,12 +23,12 @@
 
 ## dts.briefing
 
-单据详情已获取——通读单据后调 complete_stage 收口本阶段,进入拉取代码仓:
+单据详情已获取——通读单据后调 complete_stage 申报完成,进入拉取代码仓:
 {{stage_brief}}
 
 ## push.no_ticket
 
-单号门禁:会话尚未绑定 DTS 单号。请用户在页面「绑定单号」后重试——推送与提 MR 都以单号为门票
+单号门禁:会话尚未绑定 DTS 单号。请用户在页面「绑定单号」后重试——推送与提 MR 都必须先绑定单号
 
 ## push.branch_mismatch
 
@@ -41,13 +41,9 @@
 未提交的文件({{count}} 条):
 {{files}}
 
-## push.review.raised_new
+## push.review.raised
 
-已向用户举出推送确认卡(带本次变更摘要),git push 未执行。请结束本回合等待用户过目——确认后平台会通知你重新推送本分支;若用户答「暂不推送」,请按其意见调整后再来征求确认
-
-## push.review.raised_stale
-
-{{why}}——已重新举出推送确认卡(带本次变更摘要),git push 未执行。请结束本回合等待用户过目——确认后平台会通知你重新推送本分支;若用户答「暂不推送」,请按其意见调整后再来征求确认
+{{lead}}已发起推送确认卡(带本次变更摘要),git push 未执行。请结束本回合等用户确认——确认后平台会通知你重新推送本分支;若用户答「暂不推送」,按其意见调整后再重新发起确认
 
 ## mr.no_ticket
 
@@ -67,7 +63,7 @@
 
 ## analysis.no_report
 
-分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md(问题现象/问题根因/修改方案/证据链/置信度五章节,首行一句话总结,模板见技能 issue-analysis),再提交
+分析报告还没写出来:请先把报告写到工作区根目录 issue-analysis.md(问题现象/问题根因/修改方案/证据链/置信度五章节,首行一句话总结,模板见技能 issue-analysis),再提交
 
 ## analysis.missing_sections
 
@@ -75,44 +71,44 @@
 
 ## analysis.submitted.no_ticket
 
-分析报告已提交,平台已举确认卡。请结束本回合,等待用户确认(用户将决定挂起等提单还是闭环归档)。
+分析报告已提交,平台已把确认卡转给用户。请结束本回合等待作答(用户将决定挂起等提单还是闭环归档)。
 
 ## analysis.submitted.ticket
 
-分析报告已提交,平台已举确认卡。请结束本回合,等待用户确认后进入问题修改。
+分析报告已提交,平台已把确认卡转给用户。请结束本回合,等用户确认后进入问题修复。
 
 ## ut.recorded
 
-UT 结果已记账(第 {{round}} 轮:通过)。report_ut 只记账不推进——本阶段出口是 complete_stage,自检与测试可接受就调它收口,进入「提交 MR·跑绿」。
+UT 结果已记录(第 {{round}} 轮:通过)。report_ut 只记录结果、不推进阶段——自检与测试可接受就调 complete_stage 申报完成,进入「提交 MR·跑绿」。
 
 ## ut.failed
 
-UT 未通过已记账(第 {{round}} 轮)——继续留在问题修复阶段:请修复后重跑重报;测试结果可接受后调 complete_stage 收口。
+UT 未通过已记录(第 {{round}} 轮)——继续留在问题修复阶段:修复后重跑重报;测试结果可接受后调 complete_stage 申报完成。
 
 ## mrgate.mismatch
 
-MR 清单与台账不一致,不能收口:{{details}}
-清单=台账:对每个改过的仓 push_branch + create_mr,然后把全部 MR(链接或仓地址)重新申报,一个都不能少、不能编。
+MR 清单与实际不符,不能通过:{{details}}
+清单要和实际对得上:对每个改过的仓 push_branch + create_mr,然后把全部 MR(链接或仓地址)重新申报,一个都不能少、不能编。
 
 ## mrgate.empty_ok
 
-MR 清单核验通过(空清单=空台账),流程收口——全部工作已完成,等用户确认归档。
+MR 清单核验通过(没有改动、无需 MR),流程到此完成——等用户确认归档。
 
 ## mrgate.all_green
 
-MR 验绿通过({{repos}}),流程收口——全部 MR 流水线跑绿,等用户确认归档。
+MR 核验通过({{repos}}):全部 MR 流水线跑绿,流程到此完成——等用户确认归档。
 
 ## mrgate.red
 
-MR 验绿门:有流水线未通过,不能收口。
+MR 核验不通过:有流水线未跑绿,还不能申报完成。
 {{details}}
 处置:修复后同分支 push_branch、重建 MR(create_mr),再调 complete_stage 重新申报。
 
 ## mrgate.awaiting
 
-MR 清单已受理({{repos}})——流水线还在跑或暂无记录。绿了平台自动收口并通知用户,红了平台会把失败项带回;可结束本回合停等。
+MR 清单已受理({{repos}})——流水线还在跑或暂无记录。全绿后平台自动完成收尾并通知用户,有红平台会把失败项带回;可结束本回合等结果。
 
 ## stage.closed
 
-已收口,平台推进到下一阶段——
+阶段完成,平台推进到下一阶段——
 {{stage_brief}}

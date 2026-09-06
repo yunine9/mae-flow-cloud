@@ -259,7 +259,7 @@ export function issueFixedOpeningPrompt(
   const contract = promptCopy("opening", "fixed.contract", {
     stage_brief:
       `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
-      + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
+      + `怎么算完:${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     skill_lines: skillLines.length ? skillLines.join("\n") + "\n" : "",
     knowledge_lines: knowledgeLines.length
       ? knowledgeLines.join("\n") + "\n" : "",
@@ -290,9 +290,7 @@ export function issueFixedOpeningPrompt(
     "## 阶段机契约(平台机械执行,说了算)",
     contract,
     "",
-    promptCopy("opening", "fixed.kickoff")
-      + (scenario === "ticket" && current === "dts_info"
-        ? promptCopy("opening", "fixed.first_step") : ""),
+    promptCopy("opening", "fixed.kickoff"),
   ].filter(Boolean).join("\n");
 }
 
