@@ -179,7 +179,7 @@ export async function createWish(input: {
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function setWishVote(
@@ -191,7 +191,7 @@ export async function setWishVote(
     body: JSON.stringify({ voted }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function setWishStatus(
@@ -204,7 +204,7 @@ export async function setWishStatus(
     body: JSON.stringify({ status, note }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function deleteWish(id: string): Promise<void> {
@@ -224,7 +224,7 @@ export interface MoonlightPreview {
 export async function getMoonlightPreview(): Promise<MoonlightPreview> {
   const response = await fetch("/auth/me/moonlight-preview");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 默认只影响后续节点；当前待办必须在用户看过预览后显式提交。 */
@@ -242,7 +242,7 @@ export async function putMoonlight(
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** push 前清单过目的个人默认(缺省即开)。 */
@@ -254,7 +254,7 @@ export async function putPersonalPushConfirmation(
     body: JSON.stringify({ on }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** push 前人工确认开关。已推送后再开会 409,如实提示。 */
@@ -268,7 +268,7 @@ export async function putPushConfirmation(
       body: JSON.stringify({ on }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putTaskApprovalMode(
@@ -281,11 +281,24 @@ export async function putTaskApprovalMode(
     body: JSON.stringify({ mode, include_current: includeCurrent }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
+}
+
+/** 响应体按调用方声明的类型解出来。根 tsconfig 用的是 node 的 fetch 类型,
+ * `json()` 返回 unknown;原来 140 处直接 return,根 typecheck 一直是红的,
+ * 闸门形同虚设(2026-09-06)。这里不做运行时校验——前端一切文案来自服务端
+ * 镜像,形状契约由服务端测试兜底。 */
+async function parseJson<T>(response: Response): Promise<T> {
+  return await response.json() as T;
+}
+
+/** 出错响应体:只承诺可能有 error 字段,其余字段一律 unknown。 */
+async function errorBody(response: Response): Promise<{ error?: string } & Record<string, unknown>> {
+  return await response.json().catch(() => ({})) as { error?: string } & Record<string, unknown>;
 }
 
 async function errorText(response: Response): Promise<string> {
-  const body = await response.json().catch(() => ({}));
+  const body = await errorBody(response);
   return String(body.error ?? `HTTP ${response.status}`);
 }
 
@@ -293,7 +306,7 @@ export async function getSession(): Promise<AuthUser | null> {
   const response = await fetch("/auth/me");
   if (response.status === 401) return null;
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function login(
@@ -305,7 +318,7 @@ export async function login(
     body: JSON.stringify({ username, password }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function logout(): Promise<void> {
@@ -326,7 +339,7 @@ export async function putGitToken(
     body: JSON.stringify({ token, git_email: gitEmail }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putLubanToken(
@@ -337,7 +350,7 @@ export async function putLubanToken(
     body: JSON.stringify({ token }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 用已保存的个人 Token 走一遍正式小鲁班投递链路。 */
@@ -347,25 +360,25 @@ export async function testLubanConnection(): Promise<{
 }> {
   const response = await fetch("/auth/me/luban-test", { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listUsers(): Promise<AuthUser[]> {
   const response = await fetch("/auth/users");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listPeople(): Promise<PersonIdentity[]> {
   const response = await fetch("/auth/people");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listCollaborationAssignees(): Promise<CollaborationAssignee[]> {
   const response = await fetch("/auth/collaboration-assignees");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function createUser(
@@ -379,7 +392,7 @@ export async function createUser(
     body: JSON.stringify({ username, password, role, display_name: displayName }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putUserDisplayName(
@@ -392,7 +405,7 @@ export async function putUserDisplayName(
       body: JSON.stringify({ display_name: displayName }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 管理员重置密码:内部平台,不验旧密码(忘了就找管理员)。 */
@@ -418,7 +431,7 @@ export async function deleteUser(username: string): Promise<void> {
 export async function listCommitters(): Promise<AuthUser[]> {
   const response = await fetch("/auth/committers");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putCommitter(
@@ -431,7 +444,7 @@ export async function putCommitter(
       body: JSON.stringify({ on }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 多仓需求图的结构化确认:消费同一张人工检视卡并恢复分析会话，
@@ -448,7 +461,7 @@ export async function confirmRequirementGraph(
         repository_tickets: repositoryTickets }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putRepositoryAssignees(
@@ -463,7 +476,7 @@ export async function putRepositoryAssignees(
         repository_tickets: repositoryTickets }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function putTaskCollaborators(
@@ -476,7 +489,7 @@ export async function putTaskCollaborators(
       body: JSON.stringify({ collaborators }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function requestCommitterReview(
@@ -488,7 +501,7 @@ export async function requestCommitterReview(
     body: JSON.stringify({ committer }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface ReviewRequest {
@@ -508,20 +521,20 @@ export interface ReviewRequest {
 export async function listMyReviews(): Promise<ReviewRequest[]> {
   const response = await fetch("/reviews/mine");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listTaskReviews(taskId: string): Promise<ReviewRequest[]> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/reviews`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function completeReview(reviewId: string): Promise<ReviewRequest> {
   const response = await fetch(
     `/reviews/${encodeURIComponent(reviewId)}/complete`, { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface WaitingQuestion {
@@ -1151,10 +1164,10 @@ export async function listHistory(): Promise<{
   const response = await fetch("/history");
   if (response.status === 401) throw new Error(await errorText(response));
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { entries: await response.json() };
+  return { entries: await parseJson(response) };
 }
 
 export interface SemanticEvent {
@@ -1169,20 +1182,20 @@ export interface SemanticEvent {
 export async function listTasks(): Promise<TaskSummary[]> {
   const response = await fetch("/tasks");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function getTask(taskId: string): Promise<TaskSummary> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 团队知识运营使用独立低频读接口，不扩大任务列表轮询响应。 */
 export async function getKnowledgeInsights(): Promise<TeamKnowledgeInsights> {
   const response = await fetch("/knowledge-insights");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface KnowledgeCandidateRecord {
@@ -1223,13 +1236,13 @@ export async function createKnowledgeCandidate(taskId: string, input: {
     method: "POST", body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listKnowledgeCandidates(): Promise<KnowledgeCandidateRecord[]> {
   const response = await fetch("/knowledge-candidates");
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).candidates;
+  return (await parseJson<{ candidates: KnowledgeCandidateRecord[] }>(response)).candidates;
 }
 
 export async function publishKnowledgeCandidate(
@@ -1240,7 +1253,7 @@ export async function publishKnowledgeCandidate(
     method: "POST", body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function rejectKnowledgeCandidate(
@@ -1251,7 +1264,7 @@ export async function rejectKnowledgeCandidate(
     method: "POST", body: JSON.stringify({ reason }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
@@ -1377,7 +1390,7 @@ export async function getLaunchKnowledgePreview(input: {
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface EngineeringKnowledgeLaunchOption {
@@ -1407,7 +1420,7 @@ export async function resolveRepositoryProfiles(
     body: JSON.stringify({ repositories }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).repositories;
+  return (await parseJson<{ repositories: Array<{ repository: string; profile?: RepositoryProfile }> }>(response)).repositories;
 }
 
 export interface RepositoryProbeResult {
@@ -1426,7 +1439,7 @@ export async function probeRepositories(
     body: JSON.stringify({ repositories }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).repositories;
+  return (await parseJson<{ repositories: RepositoryProbeResult[] }>(response)).repositories;
 }
 
 export async function saveRepositoryProfile(input: {
@@ -1439,7 +1452,7 @@ export async function saveRepositoryProfile(input: {
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface BusinessModuleLaunchOption {
@@ -1537,7 +1550,7 @@ export interface BusinessModuleCatalog {
 export async function getBusinessModules(): Promise<BusinessModuleCatalog> {
   const response = await fetch("/business-modules");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function createBusinessModule(input: {
@@ -1553,7 +1566,7 @@ export async function createBusinessModule(input: {
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function updateBusinessModule(
@@ -1566,7 +1579,7 @@ export async function updateBusinessModule(
     body: JSON.stringify(patch),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function getBusinessKnowledgeAsset(
@@ -1584,7 +1597,7 @@ export async function getBusinessKnowledgeAsset(
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
     + `/assets/${encodeURIComponent(assetId)}${query}`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function publishBusinessKnowledgeAsset(
@@ -1599,7 +1612,7 @@ export async function publishBusinessKnowledgeAsset(
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function archiveBusinessKnowledgeAsset(
@@ -1609,7 +1622,7 @@ export async function archiveBusinessKnowledgeAsset(
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
     + `/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export class WorkflowApiError extends Error {
@@ -1716,7 +1729,7 @@ export async function workflowAssetAction(
 export async function getLaunchOptions(): Promise<LaunchOptions> {
   const response = await fetch("/launch-options");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface BuildInfo {
@@ -1727,7 +1740,7 @@ export interface BuildInfo {
 export async function getBuildInfo(): Promise<BuildInfo> {
   const response = await fetch("/build-info");
   if (!response.ok) return { build_hash: null };
-  return response.json();
+  return parseJson(response);
 }
 
 /** 业务仓自带的、可由本任务显式启用的 Skill。扫描只建立目录，真正
@@ -1950,7 +1963,7 @@ export async function getSkillLibrary(): Promise<
 > {
   const response = await fetch("/skills");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function getSkillDocument(
@@ -1958,7 +1971,7 @@ export async function getSkillDocument(
 ): Promise<HostSkillDocument> {
   const response = await fetch(`/skills/${encodeURIComponent(directory)}`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function uploadSkill(
@@ -1971,7 +1984,7 @@ export async function uploadSkill(
     body: JSON.stringify({ files, ...metadata }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
@@ -2004,7 +2017,7 @@ export async function startSkillExtraction(input: {
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function getSkillExtraction(
@@ -2013,7 +2026,7 @@ export async function getSkillExtraction(
   const response = await fetch(
     `/knowledge/skill-extract/${encodeURIComponent(id)}`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function submitSkill(
@@ -2027,7 +2040,7 @@ export async function submitSkill(
       body: JSON.stringify({ files, ...metadata }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function updateSkillLanguages(
@@ -2040,7 +2053,7 @@ export async function updateSkillLanguages(
       body: JSON.stringify({ languages }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function updateSkillKnowledgeMetadata(
@@ -2053,13 +2066,13 @@ export async function updateSkillKnowledgeMetadata(
       body: JSON.stringify(metadata),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listSkillSubmissions(): Promise<SkillSubmissionRecord[]> {
   const response = await fetch("/skills/submissions");
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).submissions ?? [];
+  return (await parseJson<{ submissions?: SkillSubmissionRecord[] }>(response)).submissions ?? [];
 }
 
 export async function approveSkillSubmission(
@@ -2070,7 +2083,7 @@ export async function approveSkillSubmission(
     `/skills/${encodeURIComponent(directory)}/submissions/`
     + `${encodeURIComponent(id)}/approve`, { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function rejectSkillSubmission(
@@ -2085,7 +2098,7 @@ export async function rejectSkillSubmission(
       body: JSON.stringify({ reason: reason ?? "" }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function offlineSkill(
@@ -2095,7 +2108,7 @@ export async function offlineSkill(
     method: "DELETE",
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listSkillVersions(
@@ -2104,7 +2117,7 @@ export async function listSkillVersions(
   const response = await fetch(
     `/skills/${encodeURIComponent(directory)}/versions`);
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).versions ?? [];
+  return (await parseJson<{ versions?: SkillVersionRecord[] }>(response)).versions ?? [];
 }
 
 export async function rollbackSkill(
@@ -2117,7 +2130,7 @@ export async function rollbackSkill(
       body: JSON.stringify({ version }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 修订候选(沉淀环):agent 从任务现场起草的 SKILL.md 草稿。 */
@@ -2138,7 +2151,7 @@ export async function distillSkill(
   const response = await fetch(
     `/skills/${encodeURIComponent(directory)}/distill`, { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listSkillCandidates(
@@ -2147,7 +2160,7 @@ export async function listSkillCandidates(
   const response = await fetch(
     `/skills/${encodeURIComponent(directory)}/candidates`);
   if (!response.ok) throw new Error(await errorText(response));
-  return (await response.json()).candidates ?? [];
+  return (await parseJson<{ candidates?: SkillCandidateRecord[] }>(response)).candidates ?? [];
 }
 
 export async function getSkillCandidate(
@@ -2162,7 +2175,7 @@ export async function getSkillCandidate(
   const response = await fetch(`/skills/${encodeURIComponent(directory)}`
     + `/candidates/${encodeURIComponent(id)}`);
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function adoptSkillCandidate(
@@ -2172,7 +2185,7 @@ export async function adoptSkillCandidate(
   const response = await fetch(`/skills/${encodeURIComponent(directory)}`
     + `/candidates/${encodeURIComponent(id)}/adopt`, { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function discardSkillCandidate(
@@ -2233,7 +2246,7 @@ export async function scanRepositorySkills(
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function createTask(
@@ -2332,7 +2345,7 @@ export async function previewRequirementBundle(
     body: JSON.stringify({ name, content_base64: contentBase64 }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 提交决定。结构化选项与自由说明分开，服务端统一查询未闭环批注。 */
@@ -2380,7 +2393,7 @@ export async function decide(
     }),
   });
   if (response.status === 409) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { conflict: String(body.error ?? "任务状态已变化") };
   }
   if (!response.ok) return { conflict: await errorText(response) };
@@ -2404,7 +2417,7 @@ export async function retryTask(
 ): Promise<{ error?: string }> {
   const response = await fetch(`/tasks/${taskId}/retry`, { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2422,7 +2435,7 @@ export async function decideScopeViolation(
       body: JSON.stringify({ decision }),
     });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2434,10 +2447,10 @@ export async function rerunTaskFromStart(
 ): Promise<{ task?: TaskSummary; error?: string }> {
   const response = await fetch(`/tasks/${taskId}/rerun`, { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { task: await response.json() };
+  return { task: await parseJson(response) };
 }
 
 /** 责任人可删除自己的真终态历史；管理员可删除任意真终态历史。 */
@@ -2448,7 +2461,7 @@ export async function deleteHistoryTask(
     method: "DELETE",
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2487,7 +2500,7 @@ export async function interruptTask(
     }),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2503,7 +2516,7 @@ export async function publishCrossRepositoryUpdate(
       body: JSON.stringify({ text }),
     });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface DeveloperAssistantMessage {
@@ -2564,7 +2577,7 @@ export async function getDeveloperAssistant(
     `/tasks/${encodeURIComponent(taskId)}/developer-assistant`,
   );
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function startDeveloperAssistant(
@@ -2580,7 +2593,7 @@ export async function startDeveloperAssistant(
     },
   );
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function stopDeveloperAssistant(
@@ -2591,7 +2604,7 @@ export async function stopDeveloperAssistant(
     { method: "POST" },
   );
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function returnDeveloperAssistant(
@@ -2602,7 +2615,7 @@ export async function returnDeveloperAssistant(
     { method: "POST" },
   );
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function controlTask(
@@ -2613,10 +2626,10 @@ export async function controlTask(
     method: "POST",
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { task: await response.json() };
+  return { task: await parseJson(response) };
 }
 
 /** 发过的补充说明 + 送达与否。delivered 是可观测事实(消息已离开
@@ -2639,7 +2652,7 @@ export async function listInterrupts(
 ): Promise<InterruptRecord[]> {
   const response = await fetch(`/tasks/${taskId}/interrupts`);
   if (!response.ok) return [];
-  return response.json();
+  return parseJson(response);
 }
 
 /* ---------------- 检视批注 ---------------- */
@@ -2745,7 +2758,7 @@ export async function listAnnotations(
 }> {
   const response = await fetch(`/tasks/${taskId}/annotations`);
   if (!response.ok) return { items: [], checks: [], closures: [] };
-  return response.json();
+  return parseJson(response);
 }
 
 export async function addAnnotation(
@@ -2758,10 +2771,10 @@ export async function addAnnotation(
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { annotation: await response.json() };
+  return { annotation: await parseJson(response) };
 }
 
 /* ---------------- 任务记忆 ---------------- */
@@ -2818,7 +2831,7 @@ export interface MemoryInsights {
 export async function getMemoryInsights(): Promise<MemoryInsights> {
   const response = await fetch("/memory-insights");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 export async function readMemoryInsight(
   id: string,
@@ -2826,7 +2839,7 @@ export async function readMemoryInsight(
   const response = await fetch(`/memory-insights/${encodeURIComponent(id)}`);
   if (response.status === 404) return undefined;
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 /** 这单用到的记忆:宿主三个时刻的推送 + Agent 自己的检索/展开。 */
@@ -2844,13 +2857,13 @@ export interface MemoryUsageRow {
 export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRow[]> {
   const response = await fetch(`/tasks/${taskId}/memories/usage`);
   if (!response.ok) return [];
-  return response.json();
+  return parseJson(response);
 }
 
 export async function listTaskMemories(taskId: string): Promise<MemoryRecord[]> {
   const response = await fetch(`/tasks/${taskId}/memories`);
   if (!response.ok) return [];
-  return response.json();
+  return parseJson(response);
 }
 
 export async function readTaskMemory(
@@ -2860,7 +2873,7 @@ export async function readTaskMemory(
   const response = await fetch(
     `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}`);
   if (!response.ok) return undefined;
-  return response.json();
+  return parseJson(response);
 }
 
 export async function withdrawTaskMemory(
@@ -2871,7 +2884,7 @@ export async function withdrawTaskMemory(
     `/tasks/${taskId}/memories/${encodeURIComponent(memoryId)}/withdraw`,
     { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2885,7 +2898,7 @@ export async function dropAnnotation(
     `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`,
     { method: "DELETE" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2904,10 +2917,10 @@ export async function editAnnotation(
       body: JSON.stringify({ note }),
     });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { annotation: await response.json() };
+  return { annotation: await parseJson(response) };
 }
 
 /** 检视闭环的裁决:verdict = verify(确认通过) | reopen(返工再送一轮)。 */
@@ -2920,7 +2933,7 @@ export async function judgeAnnotation(
     `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}/${verdict}`,
     { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
@@ -2937,10 +2950,10 @@ export async function sendAnnotations(
     body: JSON.stringify(ids ? { ids } : {}),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return await response.json();
+  return await parseJson(response);
 }
 
 export async function replyToAnnotation(
@@ -2956,10 +2969,10 @@ export async function replyToAnnotation(
       body: JSON.stringify({ text }),
     });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { annotation: await response.json() };
+  return { annotation: await parseJson(response) };
 }
 
 /** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
@@ -2968,10 +2981,10 @@ export async function listActions(
 ): Promise<{ actions?: ExternalAction[]; unavailable?: string }> {
   const response = await fetch(`/tasks/${taskId}/actions`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { actions: await response.json() };
+  return { actions: await parseJson(response) };
 }
 
 export type SseConnectionState = "connecting" | "live" | "reconnecting";
@@ -2999,7 +3012,7 @@ export async function skipBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/build-fix/skip`, { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
@@ -3010,7 +3023,7 @@ export async function retryBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/build-fix/retry`, { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
@@ -3022,7 +3035,7 @@ export async function stopBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/build-fix/stop`, { method: "POST" });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
@@ -3094,14 +3107,14 @@ export async function listTimeline(
 ): Promise<{ entries?: TimelineEntry[]; unavailable?: string }> {
   const response = await fetch(`/tasks/${taskId}/timeline`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return {
       unavailable: response.status === 404
         ? "时间线接口尚未就绪(服务重启后可用)。"
         : String(body.error ?? `HTTP ${response.status}`),
     };
   }
-  return { entries: await response.json() };
+  return { entries: await parseJson(response) };
 }
 
 /** 检视产物(服务端 src/artifacts.ts 的镜像):决策处要看的材料。 */
@@ -3154,14 +3167,14 @@ export async function listArtifacts(
 ): Promise<{ items?: ArtifactMeta[]; unavailable?: string }> {
   const response = await fetch(`/tasks/${taskId}/artifacts`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return {
       unavailable: response.status === 404
         ? "产物接口尚未就绪(服务重启后可用)。"
         : String(body.error ?? `HTTP ${response.status}`),
     };
   }
-  return { items: await response.json() };
+  return { items: await parseJson(response) };
 }
 
 /** 管理页运行时设置(服务端 src/settings.ts 的镜像)。
@@ -3248,13 +3261,13 @@ export interface SystemCheckResult {
 export async function getSystemCheck(): Promise<SystemCheckResult> {
   const response = await fetch("/settings/check");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function getSettings(): Promise<SettingsView> {
   const response = await fetch("/settings");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export interface BuildCacheEntry {
@@ -3287,7 +3300,7 @@ export interface BuildCacheReclaimResult {
 export async function getBuildCacheStatus(): Promise<BuildCacheStatus> {
   const response = await fetch("/settings/build-cache");
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResult> {
@@ -3296,7 +3309,7 @@ export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResul
     body: JSON.stringify({ all_unused: true }),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 async function putSettings(
@@ -3308,7 +3321,7 @@ async function putSettings(
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export function putRuntimeSettings(
@@ -3345,7 +3358,7 @@ export async function postModelsCheck(body: {
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export function putVisionSettings(body: {
@@ -3369,7 +3382,7 @@ export interface VisionProbeResult {
 export async function testVisionCapability(): Promise<VisionProbeResult> {
   const response = await fetch("/settings/vision/test", { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
+  return parseJson(response);
 }
 
 export async function readRequirementRevision(
@@ -3379,10 +3392,10 @@ export async function readRequirementRevision(
   const response = await fetch(
     `/tasks/${taskId}/requirement-revisions/${encodeURIComponent(revisionId)}`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  const body = await response.json();
+  const body = await parseJson<Record<string, unknown>>(response);
   return { before: String(body.before ?? ""), diff: String(body.diff ?? "") };
 }
 
@@ -3393,10 +3406,10 @@ export async function readArtifact(
   const response = await fetch(
     `/tasks/${taskId}/artifacts/${encodeURIComponent(name)}`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  const body = await response.json();
+  const body = await parseJson<Record<string, unknown>>(response);
   return {
     content: String(body.content ?? ""),
     kind: String(body.kind ?? "doc"),
@@ -3417,10 +3430,10 @@ export async function readArtifactFileDiff(
     `/tasks/${encodeURIComponent(taskId)}/artifacts/file-diff?path=${
       encodeURIComponent(path)}`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  const body = await response.json();
+  const body = await parseJson<Record<string, unknown>>(response);
   return {
     content: String(body.content ?? ""),
     branch: body.branch ? String(body.branch) : undefined,
@@ -3437,7 +3450,7 @@ export async function listArtifactChangeDirectory(
     `/tasks/${encodeURIComponent(taskId)}/artifacts/change-directory?path=${
       encodeURIComponent(path)}&offset=${Math.max(0, Math.floor(offset))}`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
   return await response.json() as ArtifactChangeDirectoryPage;
@@ -3458,13 +3471,13 @@ export async function readPushReviewDiff(
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return {
       unavailable: String(body.error ?? `HTTP ${response.status}`),
       status: response.status,
     };
   }
-  const body = await response.json();
+  const body = await parseJson<Record<string, unknown>>(response);
   return {
     content: String(body.content ?? ""),
     branch: body.branch ? String(body.branch) : undefined,
@@ -3817,10 +3830,10 @@ async function issueFetch(
 ): Promise<any> {
   const response = await fetch(path, init);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
-  return response.json();
+  return parseJson(response);
 }
 
 export function listIssues(): Promise<IssueSummary[]> {
@@ -4125,10 +4138,10 @@ export async function getIssueTimeline(
 ): Promise<{ timeline?: IssueTimeline; unavailable?: string }> {
   const response = await fetch(`/issues/${encodeURIComponent(id)}/timeline`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
-  return { timeline: await response.json() };
+  return { timeline: await parseJson(response) };
 }
 
 // ---- 过程文档(材料页签的过程文档子视图;数据面 documents.ts) ----
@@ -4395,12 +4408,12 @@ export async function getConversation(
 ): Promise<{ view?: ConversationView; unavailable?: string }> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/conversation`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    const body = await errorBody(response);
     return {
       unavailable: response.status === 404
         ? "会话流接口尚未就绪(服务重启后可用)。"
         : String(body.error ?? `HTTP ${response.status}`),
     };
   }
-  return { view: await response.json() };
+  return { view: await parseJson(response) };
 }
