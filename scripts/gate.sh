@@ -21,6 +21,8 @@ step "web 构建(TSX 的类型闸)"
 step "契约测试(源码断言,秒级)"
 npx tsx --test --test-concurrency=1 --test-timeout=60000 \
   tests/taskServiceSizeRatchet.test.ts \
+  tests/deliveryRecovery.test.ts \
+  tests/mergeWatch.test.ts \
   tests/cssOverrideRatchet.test.ts \
   tests/apiMirrorContract.test.ts \
   tests/taskFocusContract.test.ts \

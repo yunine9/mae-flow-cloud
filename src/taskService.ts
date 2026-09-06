@@ -471,6 +471,12 @@ import {
   resolveVerifyDeadline, routeReceiptFailure, stallClassForError, stallDetail,
   stallNotice, stallReasonOf, stallWrite, verificationBudgetMs,
 } from "./deliveryRecovery.ts";
+import {
+  CLOSED_MR_WRITE, REOPENED_MR_WRITE, autoRepairDisabledText, classifyGates,
+  mergedCompletionDetail, mergedPendingAttestationWrite, mergedShaMismatchReason,
+  nextWatchStep, sourceShaDrift, stopFailures, waitingWrite,
+  type GateItem, type GateView,
+} from "./mergeWatch.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
 import { type StallClass } from "./stallPolicy.ts";
 import {
@@ -1486,90 +1492,8 @@ export type TaskContainerFactory = (
   input: TaskContainerFactoryInput,
 ) => TaskCommandContainer;
 
-/** MR 合并门禁的分类表(照内网既有框架的实证结论,
- * docs/mr-loop-adaptation.md §4)。三项可修按优先级排:数字小=先修,
- * 同时多项失败只派最高优先级那一路——冲突不解 CI 白跑,检视优先于
- * 代码问题。其余六项(审批/投票/WIP/e2e/自定义/评估)只能等人:
- * 系统保持监控、通知归属人,不派 agent 不扣重试。认不出的名字一律
- * 按等人处理并把名字留痕——瞎修比不修危险。 */
-const REPAIRABLE_GATES: Record<
-  string,
-  { kind: "review" | "conflict" | "ci"; priority: number }
-> = {
-  resolve_discussion_passed: { kind: "review", priority: 10 },
-  conflict_passed: { kind: "conflict", priority: 15 },
-  ci_state_passed: { kind: "ci", priority: 20 },
-  // 代码质量门禁(内网 2026-08-18 首次拿到真实门禁集才发现有这一项)。
-  // 它是**改代码能解决的**——CodeCheck/CodeCC 那类扫描结论,正是 CI
-  // 修复使命里"按类分诊"已经覆盖的一类。归到等人的话,MR 卡在这里
-  // 永远没人动,任务干等到监控预算耗尽(逮住时它正是 false)。
-  // 与 ci_state_passed 同一路(同一个修复会话一次修完),排在其后:
-  // 流水线红通常连带质量红,先看流水线原文更全。
-  codequality_passed: { kind: "ci", priority: 25 },
-};
-
-/** 等人门禁的人话。名字缺席不影响判定(认不出=等人),只影响文案:
- * 界面上"等 approval_reviewers_required_passed"没人看得懂,而这些
- * 名字来自内网真实 MR(2026-08-18 selftest 实测的 19 项)。 */
-const HUMAN_GATE_TEXT: Record<string, string> = {
-  approvers_passed: "等审批",
-  vote_passed: "等投票",
-  work_in_progress_passed: "等摘除 WIP 标记",
-  e2e_check_passed: "等 e2e 检查",
-  custom_ctrl_items_passed: "等自定义门禁",
-  evaluation_passed: "等评估",
-  approval_approvers_required_passed: "等必需审批人审批",
-  approval_reviewers_required_passed: "等必需检视人检视",
-  committer_must_cast_two_votes_passed: "等提交人以外的两票",
-  merge_by_self_passed: "等他人代为合入(不允许自己合自己的单)",
-  merged_by_user_passed: "等有权限的人点合入(目标分支受保护)",
-  mr_state_passed: "等 MR 回到可合入状态",
-  no_commits_passed: "等分支上出现提交",
-  branch_missing_passed: "等分支恢复(远端分支不见了)",
-  // 非快进:平台要求线性历史。宿主的冲突修复走 merge(会产生合并
-  // 提交),对"必须快进"的仓解不了;真解法是变基后强推,而强推是
-  // 内核明令禁止的不可逆动作——所以这一项如实挂等人,交给人裁决。
-  non_ff_passed: "等处理非快进(需变基,自动修复不做强推)",
-};
-
 /** 最后兜底预算；同 SHA/同反馈版本无进展仍会更早停下。 */
 export const DEFAULT_REPAIR_ROUNDS = 20;
-
-interface GateItem {
-  name: string;
-  passed: boolean;
-  detail?: string;
-}
-
-interface GateView {
-  mrState: "opened" | "merged" | "closed";
-  gates: GateItem[];
-  /** 平台报告的 MR 源分支当前提交。MFC-038:合入监控必须核对它与本
-   * 任务验证过的 delivery.sha 一致,否则旧绿灯/旧人审在背书别的代码。
-   * 旧平台契约没有该字段时为 undefined——无法核对,保持旧行为并留痕。 */
-  sourceSha?: string;
-}
-
-/** 失败分类:可修的按优先级排序(全部返回——高优先级不可派时要能
- * 落到下一路,如"检视已回复等确认"时 CI 还得修);等人的翻成人话。 */
-function classifyGates(gates: GateItem[]): {
-  repairs: Array<{ kind: "review" | "conflict" | "ci"; gate: GateItem;
-                   priority: number }>;
-  waiting: string[];
-} {
-  const repairs: Array<{ kind: "review" | "conflict" | "ci";
-                         gate: GateItem; priority: number }> = [];
-  const waiting: string[] = [];
-  for (const gate of gates) {
-    if (gate.passed) continue;
-    const known = REPAIRABLE_GATES[gate.name];
-    if (known) repairs.push({ ...known, gate });
-    else waiting.push(HUMAN_GATE_TEXT[gate.name] ?? `等 ${gate.name}`);
-  }
-  repairs.sort((a, b) => a.priority - b.priority);
-  return { repairs, waiting };
-}
-
 /** 检视意见(适配层契约形状,宿主只读这些字段)。 */
 interface DiscussionItem {
   id: string;
@@ -18089,13 +18013,11 @@ export class TaskService {
   ): Promise<void> {
     const delivery = task.summary.delivery!;
     if (state === "merged") {
-      const verified = String(delivery.sha ?? "").trim();
-      const observed = String(observedSourceSha ?? "").trim();
-      if (verified && observed && verified !== observed) {
+      const { verified, observed, drifted } =
+        sourceShaDrift(delivery.sha, observedSourceSha);
+      if (drifted) {
         this.markVerificationStalled(task,
-          `平台实际合入的提交 ${observed.slice(0, 7)} 与本任务验证过的 ${
-            verified.slice(0, 7)} 不一致;流水线与人工检视只背书后者,`
-          + "不能标记完成。请人工核实分支是否被平台侧改写。", "safety");
+          mergedShaMismatchReason(observed, verified), "safety");
         return;
       }
       if (this.continuousReviewTask(task)) {
@@ -18128,10 +18050,7 @@ export class TaskService {
         }
         if (task.prepushActive === activePrepush) task.prepushActive = undefined;
         if (task.prepushAbort === abort) task.prepushAbort = undefined;
-        const failures = cleanup.flatMap((result, index) =>
-          result.status === "rejected"
-            ? [`${["Build-Fix", "Agent", "容器"][index]}停止失败:${String(result.reason)}`]
-            : []);
+        const failures = stopFailures(cleanup);
         if (failures.length) {
           this.markVerificationStalled(task,
             `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
@@ -18158,10 +18077,11 @@ export class TaskService {
         // 远端 MR 状态不能反向篡改内核流程真相。即使有人在平台上手工
         // 合入，也只有内核 terminal + 当前 HEAD 的逐项 PASS 才能解锁
         // 下游；恢复会再次对账并把该任务续到正确锚点。
-        delivery.mr_state = "已合入（内核终态待对账）";
-        delivery.waiting_on = attestation.reason;
+        const pending = mergedPendingAttestationWrite(attestation.reason);
+        delivery.mr_state = pending.mr_state;
+        delivery.waiting_on = pending.waiting_on;
         task.summary.status = "verifying";
-        task.summary.detail = `MR 已合入，但不能标记完成：${attestation.reason}`;
+        task.summary.detail = pending.detail;
         this.persist(task);
         return;
       }
@@ -18175,10 +18095,7 @@ export class TaskService {
         ? closeEvent.unpushed_local_commits.length : 0;
       const unpushedPaths = Array.isArray(closeEvent?.unpushed_local_paths)
         ? closeEvent.unpushed_local_paths.length : 0;
-      task.summary.detail = unpushedCommits || unpushedPaths
-        ? `MR 已合入，任务完成；合入时本地另有 ${unpushedCommits} 个未推送提交、`
-          + `${unpushedPaths} 个未提交路径，已在内核 close 事件留痕，未冒充交付`
-        : "MR 已合入,交付完成";
+      task.summary.detail = mergedCompletionDetail(unpushedCommits, unpushedPaths);
       this.persist(task);
       this.bypass(undefined, "依赖任务解锁", this.pump());
       const account = task.summary.luban_account;
@@ -18195,12 +18112,12 @@ export class TaskService {
       }
       return;
     }
-    const changed = delivery.mr_state !== "已关闭"
-      || delivery.waiting_on !== "MR 已关闭，请重新打开或由任务责任人主动停止任务";
-    delivery.mr_state = "已关闭";
-    delivery.waiting_on = "MR 已关闭，请重新打开或由任务责任人主动停止任务";
+    const changed = delivery.mr_state !== CLOSED_MR_WRITE.mr_state
+      || delivery.waiting_on !== CLOSED_MR_WRITE.waiting_on;
+    delivery.mr_state = CLOSED_MR_WRITE.mr_state;
+    delivery.waiting_on = CLOSED_MR_WRITE.waiting_on;
     task.summary.status = "await_merge";
-    task.summary.detail = "MR 已关闭但任务尚未结束；系统继续监听，重开后自动恢复";
+    task.summary.detail = CLOSED_MR_WRITE.detail;
     if (changed) this.persist(task);
   }
 
@@ -18238,41 +18155,34 @@ export class TaskService {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        if (view.mrState === "merged") {
-          await this.settleMergeState(task, "merged", view.sourceSha);
+        // 往哪走由决策表定(mergeWatch.nextWatchStep):merged 任何状态下都
+        // 收口;writer 在途只看 merged,门禁派单归它收口后的 await_merge;
+        // MFC-038 源提交漂移(平台侧改写分支)立即停摆喊人。
+        const step = nextWatchStep({
+          view, status: task.summary.status,
+          verifiedSha: task.summary.delivery?.sha,
+        });
+        if (step.kind === "settle_merged") {
+          await this.settleMergeState(task, "merged", step.sourceSha);
           return;
         }
-        // 反馈修复、Build-Fix、push 复检期间只消费真正终态 merged；门禁
-        // 派单仍由当前 writer 收口后的 await_merge 阶段负责，避免监听器
-        // 与正在工作的会话争抢方向盘。线程留在这里继续看合入即可。
-        if (task.summary.status !== "await_merge") {
+        if (step.kind === "wait") {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        if (view.mrState === "closed") {
+        if (step.kind === "settle_closed") {
           await this.settleMergeState(task, "closed");
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        // MFC-038:MR 还开着但源提交已不是本任务验证过的那一个——
-        // 有人在平台侧改写了分支。旧绿灯不背书新代码,立即停摆喊人;
-        // 在途修复不会走到这里(派修复即离开 await_merge,回来前会
-        // 重新对齐 MR 与 delivery.sha)。
-        {
-          const verified = String(task.summary.delivery?.sha ?? "").trim();
-          const observed = String(view.sourceSha ?? "").trim();
-          if (verified && observed && verified !== observed) {
-            this.markVerificationStalled(task,
-              `MR 源分支已指向未经本任务验证的提交 ${observed.slice(0, 7)}`
-              + `(已验证的是 ${verified.slice(0, 7)});已停止自动合入`
-              + "监控,请人工核实分支是否被平台侧改写。", "safety");
-            return;
-          }
+        if (step.kind === "stall_drift") {
+          this.markVerificationStalled(task, step.reason, "safety");
+          return;
         }
-        if (task.summary.delivery?.mr_state === "已关闭") {
-          task.summary.delivery.mr_state = "等待合入";
-          task.summary.delivery.waiting_on = undefined;
-          task.summary.detail = "MR 已重新打开，继续监听流水线与合入状态";
+        if (task.summary.delivery?.mr_state === CLOSED_MR_WRITE.mr_state) {
+          task.summary.delivery.mr_state = REOPENED_MR_WRITE.mr_state;
+          task.summary.delivery.waiting_on = REOPENED_MR_WRITE.waiting_on;
+          task.summary.detail = REOPENED_MR_WRITE.detail;
           this.persist(task);
         }
         const sorted = classifyGates(view.gates);
@@ -18295,11 +18205,7 @@ export class TaskService {
             // 关闭的是“自动修”，不是“持续观察”。旧实现直接 return，
             // 任务从此再也不知道门禁恢复、MR 被关/重开或最终合入。
             // 留在同一个监控环，只把当前红项如实交给人。
-            const names = sorted.repairs.map((candidate) =>
-              candidate.kind === "review" ? "检视意见"
-                : candidate.kind === "conflict" ? "代码冲突" : "流水线红灯");
-            sorted.waiting.push(
-              `自动修复已关闭，请人工处理${[...new Set(names)].join("、")}`);
+            sorted.waiting.push(autoRepairDisabledText(sorted.repairs));
           } else {
             const sha = task.summary.delivery?.sha ?? "";
             for (const candidate of sorted.repairs) {
@@ -18338,25 +18244,21 @@ export class TaskService {
             }
           }
         }
-        const waitingText = sorted.waiting.join("、");
-        if (waitingText !== (task.summary.delivery?.waiting_on ?? "")) {
-          task.summary.delivery!.waiting_on = waitingText || undefined;
-          task.summary.detail = waitingText
-            ? `门禁与流水线已过,MR 在${waitingText}`
-            : "门禁全绿,等待合入";
+        const write = waitingWrite(sorted.waiting, task.summary.delivery?.mr_url);
+        if ((write.waiting_on ?? "") !== (task.summary.delivery?.waiting_on ?? "")) {
+          task.summary.delivery!.waiting_on = write.waiting_on;
+          task.summary.detail = write.detail;
           this.persist(task);
           // 等人的事要告诉人(幂等键=门禁集合,同一批等待只提醒一次;
           // 换了一批等待项才再响)。
           const account = task.summary.luban_account;
-          if (waitingText && this.options.notifier && account) {
+          if (write.notice && this.options.notifier && account) {
             this.bypass(task, "等待通知",
               this.options.notifier.notifyOutcome({
               taskId: task.summary.id,
               account,
-              status: `waiting:${sorted.waiting.sort().join("+")}`,
-              summary: `MR 在${waitingText},需要相关人处理`
-                + (task.summary.delivery?.mr_url
-                  ? `:${task.summary.delivery.mr_url}` : ""),
+              status: write.notice.status,
+              summary: write.notice.summary,
               link: personalTaskLink(
                 this.notificationLinkBase(), account, task.summary.id),
             }));

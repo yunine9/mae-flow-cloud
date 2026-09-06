@@ -300,6 +300,15 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 绞杀第二块:合入监控的决策抽成 `src/mergeWatch.ts`。** 门禁分类
+  表(REPAIRABLE_GATES/HUMAN_GATE_TEXT/classifyGates)整块搬家;监控环每一拍
+  拿到平台事实后往哪走(merged 任何状态下都收口、writer 在途只看 merged、
+  关闭、MFC-038 源提交漂移)收成 `nextWatchStep` 一张表;合入/关闭/重开/待
+  对账/等人的台账措辞与通知幂等键都成了纯函数。watchMerge/settleMergeState
+  只剩轮询、派单、停在途执行者与内核 close。行为零变更(轮询间隔刻意没并到
+  deliveryRecovery 的取值函数:那边有 50ms 下限,这边原来没有);体量棘轮拧到
+  21,520。**已验**:决策表 + mrLoop/delivery/feedbackLoop/taskFocus/projection
+  用例;**未验**:内网真平台的门禁集合没有重放。
 - **2026-09-06 catch 里的停摆分类改认内核错误类型(决策表逮住的行为变更)。**
   六个包着内核调用的 catch 原来把 `String(error)` 交给文案分类器,而它带
   "Error: " 前缀,分类器的前缀匹配一条都对不上,于是落到"未识别按瞬时"的
@@ -336,7 +345,7 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   **体量棘轮**:`tests/taskServiceSizeRatchet.test.ts` 锁 `src/taskService.ts`
   ≤ 21,630 行(度量:12 天 245 个 fix 提交里 40% 落在这一个文件),每绞杀式
   抽出一块就往下拧,不许再长。**推送闸门**:`npm run gate` = 根 typecheck +
-  web 构建(`tsc -b`)+ 九个秒级契约测试;`git config core.hooksPath .githooks`
+  web 构建(`tsc -b`)+ 十一个秒级契约测试;`git config core.hooksPath .githooks`
   后 push 前自动跑,`MFC_SKIP_GATE=1` 可跳过一次(闸门自己坏了才用)。全量
   测试与真件演练仍手动,分钟级的东西塞进 hook 只会教人 --no-verify。
   **已验**:全量 `npm test` 单进程回到 0 红;**未验**:删掉的死 CSS 只靠
