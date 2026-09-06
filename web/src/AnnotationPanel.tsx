@@ -77,6 +77,13 @@ export function advanceAdminOverrideArm(
  * 批注、CodeHub 意见、机器告警三节共用,人一眼看到"此刻压在我这的有几条"。 */
 export type ReviewFilter = "all" | "mine" | "agent" | "closed";
 
+/** 说话人头像里的那一个字:中文名取姓(首字),英文名取首字母大写。 */
+function initialOf(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  return /^[A-Za-z]/.test(trimmed) ? trimmed[0].toUpperCase() : trimmed[0];
+}
+
 /** 账号是权限主键，不是给人看的称呼；没有配置姓名时才退回账号。 */
 export function displayPersonName(
   username: string,
@@ -519,6 +526,9 @@ export function AnnotationPanel({
             <li key={item.id} data-annotation-id={item.id} tabIndex={-1}
                 className={`annot-item ${progress.tone}${actionable
                   ? " actionable" : ""}`}>
+              {/* 头一行只回答两件事:指着哪儿、现在什么状态。谁提的 / 去向 / 时间
+                  搬进"意见"块的说话人行——用户 2026-09-06:"哪个是他的回复、哪个是
+                  我的原文、现在状态是什么,很混乱"。 */}
               <div className="annot-item-head">
                 <button type="button" className="annot-where"
                         onClick={() => onLocate?.(item)}
@@ -529,30 +539,11 @@ export function AnnotationPanel({
                     ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
                       item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
                 </button>
-                {/* 一行头:位置 · 去向 · 状态 · 看处理记录。去向原来单占一行,状态被锚点
-                    挤到第二行(用户 2026-09-05 截图"信息密度太低")。 */}
-                <span className={`annot-route-badge ${routeOf(item)}`}>
-                  {ROUTE_LABEL[routeOf(item)]}
-                  {routeOf(item) !== "agent" && item.assignee
-                    ? ` · ${personName(item.assignee)}` : ""}
-                </span>
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>
                   {progress.text}
                 </span>
-                {onShowThread && item.status !== "draft" && (
-                  <button type="button" className="annot-thread"
-                          title="右栏只显示这条意见的处理记录:什么时候送给 Agent、Agent 怎么回的、谁确认或退回"
-                          onClick={() => onShowThread(item.id)}>看处理记录</button>
-                )}
               </div>
-              {/* 锚定原文单独一行、一行截断:它是"这条批注指着哪儿"的补充,不是
-                  内容本身。整段仍在 title 里,点位置也能直接回到那一行。 */}
-              {(item.quote || item.anchor) && <blockquote
-                className={`annot-anchor${item.quote ? " has-quote" : ""}`}
-                title={item.quote ?? item.anchor}>
-                {item.quote ?? item.anchor}
-              </blockquote>}
               {editing ? (
                 <div className="annot-inline-editor">
                   <textarea value={editingNote} autoFocus rows={5}
@@ -596,7 +587,24 @@ export function AnnotationPanel({
                 // 色块,看上去像"正文 vs 卡片"而不是"一问一答"。给它同样
                 // 的块形和标题,明说这是检视意见原文,两边才对得起来。
                 <div className="annot-note">
+                  <div className="annot-speaker person">
+                    <i aria-hidden>{initialOf(isAuthor ? "你" : personName(item.author))}</i>
+                    <b>{isAuthor ? "你" : personName(item.author)}</b>
+                    <span>提的意见 · {relativeTime(item.created_at)}</span>
+                    <em className={`annot-route-badge ${routeOf(item)}`}>
+                      {ROUTE_LABEL[routeOf(item)]}
+                      {routeOf(item) !== "agent" && item.assignee
+                        ? ` · ${personName(item.assignee)}` : ""}
+                    </em>
+                  </div>
                   <p>{item.note || "（只记了原文，没另写一句）"}</p>
+                  {/* 圈的原文跟在意见下面、一行截断:它是"指着哪儿"的补充,整段留在
+                      title 里,点位置也能直接回到那一行。 */}
+                  {(item.quote || item.anchor) && <blockquote
+                    className={`annot-anchor${item.quote ? " has-quote" : ""}`}
+                    title={item.quote ?? item.anchor}>
+                    <span>圈的原文</span>{item.quote ?? item.anchor}
+                  </blockquote>}
                   {/* 追问留档:作者已经补充过什么问题,人和 Agent 看到的是同一份历史。
                       在澄清卡上直接答的那种,连答复一起摆出来。 */}
                   {item.clarifications?.length ? <small className="annot-clarified">
@@ -611,11 +619,16 @@ export function AnnotationPanel({
               )}
               {item.response && (
                 <div className={`annot-response ${item.response.outcome}`}>
-                  <strong>{item.response.outcome === "fixed"
-                    ? "Agent：已处理"
-                    : item.response.outcome === "not_fixed"
-                      ? "Agent：没有修改"
-                      : "Agent：需要你补充说明"}</strong>
+                  <div className="annot-speaker agent">
+                    <i aria-hidden>A</i>
+                    <b>Agent</b>
+                    <span>的回复 · {relativeTime(item.response.responded_at)}</span>
+                    <em>{item.response.outcome === "fixed"
+                      ? "已处理"
+                      : item.response.outcome === "not_fixed"
+                        ? "没有修改"
+                        : "需要你补充说明"}</em>
+                  </div>
                   <p>{item.response.summary}</p>
                   {(item.response.evidence.length > 0 || item.response.fixed_sha) && (
                     <small>{[
@@ -629,9 +642,12 @@ export function AnnotationPanel({
               )}
               {item.owner_reply && (
                 <div className="annot-owner-reply">
-                  <strong>责任人答复</strong>
+                  <div className="annot-speaker owner">
+                    <i aria-hidden>{initialOf(personName(item.owner_reply.author))}</i>
+                    <b>{personName(item.owner_reply.author)}</b>
+                    <span>责任人的答复 · {relativeTime(item.owner_reply.replied_at)}</span>
+                  </div>
                   <p>{item.owner_reply.text}</p>
-                  <small>{personName(item.owner_reply.author)} · {relativeTime(item.owner_reply.replied_at)}</small>
                 </div>
               )}
               {closure.can_route && routeOf(item) === "agent" && (
@@ -699,7 +715,7 @@ export function AnnotationPanel({
               )}
               <div className="annot-item-foot">
                 <small>
-                  {closure.delivery_text} · 批注作者 {personName(item.author)} · {relativeTime(item.created_at)}
+                  {closure.delivery_text}
                   {item.sent_by && item.sent_by !== item.author
                     && ` · 由 ${personName(item.sent_by)} 原样转交`}
                   {item.edited_at && " · 已编辑"}
@@ -707,6 +723,11 @@ export function AnnotationPanel({
                   {check && check.state !== "hit" && routeOf(item) !== "memory"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
+                {onShowThread && item.status !== "draft" && (
+                  <button type="button" className="annot-thread"
+                          title="右栏只显示这条意见的处理记录:什么时候送给 Agent、Agent 怎么回的、谁确认或退回"
+                          onClick={() => onShowThread(item.id)}>看处理记录</button>
+                )}
                 {/* 记忆没有编辑面:改就是再圈一次;撤回在「本任务知识」里。
                     这里的编辑/删除只改批注台账,记忆不会跟着变,露出来就是骗人。 */}
                 {routeOf(item) !== "memory"

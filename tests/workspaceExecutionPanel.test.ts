@@ -84,7 +84,10 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.match(crossRepositorySync,
     /return <details className="cross-repository-sync">/,
     "跨仓同步默认折叠,不能继续占据整块首屏");
-  assert.match(crossRepositorySync, /OPTIONAL TOOL/);
+  assert.match(crossRepositorySync, /按需使用/, "工具口吻说人话,不再是 OPTIONAL TOOL");
+  assert.match(crossRepositorySync, /通知上下游仓库/);
+  assert.doesNotMatch(crossRepositorySync, /cross-repository-sync-history/,
+    "收到的通知不再藏在工具的二级折叠里,而是作为 sync 条目进流");
   // 定位靠 id 双向跳:抽屉 → 流线程,流 → 材料原位 + 抽屉那条卡。
   assert.match(workspace, /onShowThread=\{showThread\}/);
   assert.match(stream, /onThreadChange\(id\)/);

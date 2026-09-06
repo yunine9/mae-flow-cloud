@@ -83,6 +83,9 @@ function concernsViewer(item: ConversationItem, viewer: string): boolean {
     case "clarified":
     case "steer":
       return true;
+    case "sync":
+      // 收到的上下游通知是要人核对的事,进「需要我的」;自己发出的不进
+      return item.direction === "received";
     case "annotations_sent":
       return item.by === viewer || item.items.some((entry) => entry.author === viewer);
     case "receipts":
@@ -635,6 +638,26 @@ export function ConversationStream({
           children: <>{annotationChip(item.annotation)}{threadButton(item.annotation.id)}</>,
         });
       }
+      case "sync":
+        // 跨仓通知:收到的按"谁 · 哪个仓"署名,发出的署名"你/某某"并说送到了几个仓
+        return message({
+          key: item.id, who: "external",
+          name: item.direction === "received"
+            ? `${nameOf(item.by)}${item.repository ? ` · ${item.repository} 仓` : ""}`
+            : nameOf(item.by),
+          ts: item.ts,
+          tag: <em className={`conv-tag ${item.direction === "received" ? "att" : "src"}`}>
+            {item.direction === "received" ? "上下游通知" : "已通知上下游"}
+          </em>,
+          children: <div className="conv-sync">
+            <p>{item.text}</p>
+            <small>{item.direction === "received"
+              ? "相邻仓库的接口或约定变了；Agent 收到后会核对是否影响本仓，有冲突会举卡。"
+              : item.targets
+                ? `已回流大任务，并送到 ${item.targets} 个相邻仓库的任务`
+                : "已回流大任务；依赖图上没有相邻仓库"}</small>
+          </div>,
+        });
       case "external":
         return message({
           key: item.id, who: "external", name: item.author ?? SOURCE_LABEL[item.source] ?? item.source,

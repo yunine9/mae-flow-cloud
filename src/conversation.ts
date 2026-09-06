@@ -108,6 +108,14 @@ export type ConversationItem =
   | {
       kind: "assistant"; id: string; ts: string; role: "user" | "assistant";
       text: string;
+    }
+  | {
+      /** 跨仓同步:拆分交付时相邻仓之间的"接口/约定变了"通知。received = 别的
+       * 仓同步给本任务;published = 本任务(或主任务视角下的某个子仓)发出的。
+       * 用户 2026-09-06 问"上下游通知是不是搞没了"——它原来只藏在流末尾一个
+       * 折叠工具的二级折叠里,等于没有;现在按时间进流。 */
+      kind: "sync"; id: string; ts: string; direction: "received" | "published";
+      by: string; repository?: string; targets: number; text: string;
     };
 
 export interface ConversationView {
@@ -131,6 +139,13 @@ export interface ConversationSources {
   }>;
   /** 开发助手接管期间的往来(它是另一个说话的人,不是主 Agent)。 */
   assistant?: Array<{ id: string; role: "user" | "assistant"; text: string; at: string }>;
+  /** 本任务 id:用来判断跨仓同步是自己发的还是收到的。 */
+  taskId?: string;
+  /** 跨仓同步记录(task.summary.cross_repository_updates 的口径)。 */
+  crossRepositoryUpdates?: Array<{
+    id: string; source_task_id: string; source_repository?: string; author: string;
+    text: string; target_task_ids: string[]; created_at: string;
+  }>;
   running?: boolean;
   problems?: string[];
 }
@@ -546,13 +561,22 @@ export function buildConversation(sources: ConversationSources): ConversationVie
       ts: normalizeTs(message.at), role: message.role,
       text: clip(message.text, TEXT_LIMIT).text,
     })),
+    ...(sources.crossRepositoryUpdates ?? []).map((update) => ({
+      kind: "sync" as const, id: `sync-${update.id}`, ts: normalizeTs(update.created_at),
+      direction: (update.source_task_id === sources.taskId ? "published" : "received") as
+        "published" | "received",
+      by: update.author,
+      ...(update.source_repository ? { repository: update.source_repository } : {}),
+      targets: update.target_task_ids.length,
+      text: clip(update.text, TEXT_LIMIT).text,
+    })),
   ];
   // 同一毫秒的并列按来源顺序:卡在它前面那段话之后,决定在卡之后。批注
   // 账的各类条目同一档——它们之间的先后就是台账顺序(sort 是稳定的)。
   const rank: Record<ConversationItem["kind"], number> = {
     session: 0, turn: 1, steer: 2, external: 3, card: 4, decision: 5,
     annotations_sent: 6, receipts: 6, owner_reply: 6, clarified: 6,
-    verified: 6, reopened: 6, revised: 6, assistant: 8,
+    verified: 6, reopened: 6, revised: 6, assistant: 8, sync: 3,
   };
   items.sort((left, right) =>
     (instant(left.ts) - instant(right.ts)) || (rank[left.kind] - rank[right.kind]));

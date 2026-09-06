@@ -111,62 +111,57 @@ test("检视意见是固定在右侧的侧滑抽屉:材料露出可点,定位不
     "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
 });
 
-test("锚定原文单独一行接在头部下面,一行截断、整段留在 title", () => {
-  // 用户实测:"针对 1. 缺失变量输出空串并记录 warn 日志;"这行完全没必要
-  // 占一整块。它只是"指着哪儿"的补充,一行截断即可,整段留在 title 里、
-  // 点位置也能回到那一行。2026-09-05 再改:它挤在头部会把状态推到第二行
-  // (截图"信息密度太低"),现在头部一行放位置·去向·状态·看处理记录,锚点单独一行。
+test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复块各带说话人行", () => {
+  // 2026-09-06 用户:"他的回复包括我的原文,我需要明确知道哪个是他的回复、哪个
+  // 是我的原文,然后现在状态是什么——现在很混乱"。头一行只回答"指着哪儿 +
+  // 现在什么状态";谁提的 / 去向 / 时间进"意见"块的说话人行;Agent 的回复自带
+  // 说话人行(Agent 的回复 · 时间 · 结论);圈的原文是意见块的最后一行。
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  const head = panel.indexOf('className="annot-item-head"');
-  const routeAt = panel.indexOf("annot-route-badge", head);
-  const progressAt = panel.indexOf("annot-progress", head);
-  const anchorAt = panel.indexOf("annot-anchor", head);
-  assert.ok(head >= 0 && routeAt > head && progressAt > routeAt && anchorAt > progressAt,
-    "头部一行:位置 → 去向 → 状态;锚定原文在头部之后单独一行");
-  // 划选一块的整块原文(quote)优先于首行快照(anchor)——两者都得完整留在
-  // title 里,截断只发生在显示上。
-  assert.match(panel,
+  const head = panel.slice(panel.indexOf('<div className="annot-item-head">'),
+    panel.indexOf("{editing ? ("));
+  assert.match(head, /className="annot-where"/);
+  assert.match(head, /className=\{`annot-progress \$\{progress\.tone\}`\}/);
+  assert.doesNotMatch(head, /annot-route-badge|annot-thread|annot-anchor/,
+    "头部只剩位置与状态;去向进说话人行,看处理记录进页脚,圈的原文进意见块");
+  const note = panel.slice(panel.indexOf('<div className="annot-note">'),
+    panel.indexOf("{item.response && ("));
+  assert.match(note, /className="annot-speaker person"[\s\S]*?<b>\{isAuthor \? "你" : personName\(item\.author\)\}<\/b>/,
+    "意见块的说话人行:作者本人看到\"你\",别人看到名字");
+  assert.match(note, /提的意见 · \{relativeTime\(item\.created_at\)\}/);
+  assert.match(note, /<em className=\{`annot-route-badge \$\{routeOf\(item\)\}`\}>/, "去向标在说话人行末尾");
+  assert.ok(note.indexOf("<p>{item.note") < note.indexOf("annot-anchor"), "圈的原文跟在意见正文后面");
+  assert.match(note,
     /className=\{`annot-anchor\$\{item\.quote \? " has-quote" : ""\}`\}\s*\n?\s*title=\{item\.quote \?\? item\.anchor\}/,
     "截断后整段(或整块)必须还在 title 里,不能丢");
-  assert.doesNotMatch(panel, /<span>针对<\/span>/,
-    "锚定原文接在位置后面,不需要引导词");
+  assert.match(note, /<span>圈的原文<\/span>/);
+  const response = panel.slice(panel.indexOf("{item.response && ("),
+    panel.indexOf("{item.owner_reply && ("));
+  assert.match(response, /className="annot-speaker agent"[\s\S]*?<b>Agent<\/b>/);
+  assert.match(response, /的回复 · \{relativeTime\(item\.response\.responded_at\)\}/);
+  assert.doesNotMatch(response, /Agent：已处理/, "结论不再拼在名字里,单独一枚小标");
+  assert.match(response, /`依据 \$\{item\.response\.evidence\.join\("；"\)\}`/);
+  assert.match(response, /\]\.join\(" · "\)/, "依据与提交并成一行");
+  const foot = panel.slice(panel.indexOf('<div className="annot-item-foot">'),
+    panel.indexOf('className="annot-owner-actions"'));
+  assert.match(foot, /className="annot-thread"[\s\S]*?看处理记录/, "看处理记录在页脚");
+  assert.doesNotMatch(foot, /批注作者/, "作者与时间已在说话人行,页脚不重复");
 
   const annotate = readFileSync(
     join(process.cwd(), "web/src/annotate.css"), "utf8");
-  // 宽抽屉的两列网格:头部与锚点各横跨一行,正文与回执并排。没给区域的元素会被
-  // 自动排版丢进末尾空行(实测过归属徽标落到页脚下面),所以锚点要点名区域;
-  // 归属徽标已并进头部,不再单独占行。
+  // 宽抽屉的两列网格:锚点已并进意见块,不再单独占一行、不再点名区域。
   assert.match(annotate,
-    /grid-template-areas:\s*"head head"\s*"anchor anchor"\s*"note response"\s*"foot foot"/s);
-  assert.match(annotate, /\.annot-anchor \{\s*grid-area: anchor/,
-    "锚点必须有明确区域,否则会被排到页脚后面");
-  assert.doesNotMatch(annotate, /grid-area:\s*route/, "去向徽标不再单独占一行");
-  // studio 皮肤原来把头部竖排(每个字段各占一行),那是密度低的根源。
+    /grid-template-areas:\s*"head head"\s*"note response"\s*"foot foot"/s);
+  assert.doesNotMatch(annotate, /grid-area:\s*(anchor|route)/);
+  // 状态是实底药丸;人的块与 Agent 的块同一块形、左条分色;说话人头像 18px 圆
+  assert.match(annotate, /annot-progress[^{]*\{[^}]*border-radius: 999px/);
+  assert.match(annotate, /\.annot-speaker > i \{[^}]*border-radius: 50%/);
+  assert.match(annotate, /\.annot-item \.annot-response \{ border-left-color: var\(--success\)/);
+  assert.match(annotate, /\.annot-item \.annot-response\.needs_clarification \{ border-left-color: var\(--danger\)/);
   const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
   assert.doesNotMatch(studio, /\.annot-item-head \{[^}]*flex-direction: column/);
-  assert.match(studio, /\.annot-anchor \{[^}]*white-space: nowrap/);
 });
 
-test("意见正文不带标题不带框,Agent 回执压成结论行 + 依据行", () => {
-  // 2026-09-05 用户截图"信息密度太低":正文顶着"检视意见原文"标题外加一个
-  // 色框,回执再来一个标题块、依据和提交各占一行——一条意见占掉大半屏。
-  // 现在正文就是正文;回执保留左侧色条区分结论,依据与提交并成一行。
-  const panel = readFileSync(
-    join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  assert.doesNotMatch(panel, /<strong>检视意见原文<\/strong>/);
-  assert.match(panel, /`依据 \$\{item\.response\.evidence\.join\("；"\)\}`/);
-  assert.match(panel, /\]\.join\(" · "\)/, "依据与提交并成一行");
-  const annotate = readFileSync(
-    join(process.cwd(), "web/src/annotate.css"), "utf8");
-  assert.match(annotate,
-    /\.task-workspace-v2 \.annot-note \{[^}]*padding: 0; border: 0;/);
-  const response = annotate.slice(annotate.indexOf(".annot-response {"),
-    annotate.indexOf(".annot-response.not_fixed"));
-  assert.match(response, /border-left:\s*3px solid var\(--success\)/,
-    "回执靠左侧色条报结论(绿=已处理/黄=没改/红=要补充)");
-  assert.match(annotate, /\.task-workspace-v2 \.annot-item-head \{ flex-wrap: wrap;/);
-});
 
 test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填执行人与单号", () => {
   // 用户实测截图"右侧很丑":两个泛称标题摞在一起(当前需要处理/需要你

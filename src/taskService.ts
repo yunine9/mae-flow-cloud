@@ -4971,6 +4971,8 @@ export class TaskService {
     return buildConversation({
       events, waiting, annotations, annotationHistory, feedback, interrupts,
       assistant, running: task.summary.status === "running", problems,
+      taskId: task.summary.id,
+      crossRepositoryUpdates: task.summary.cross_repository_updates ?? [],
     });
   }
 

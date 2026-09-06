@@ -3,7 +3,6 @@ import {
   publishCrossRepositoryUpdate,
   type CrossRepositoryUpdate,
 } from "./api";
-import { formatLocalDateTime } from "./time";
 
 export function CrossRepositorySync({
   taskId,
@@ -39,30 +38,22 @@ export function CrossRepositorySync({
 
   return <details className="cross-repository-sync">
     <summary>
-      <div><span>OPTIONAL TOOL</span><strong>同步跨仓影响</strong></div>
-      <small>需要通知其他仓库时再展开
-        {updates.length > 0 && <b>{updates.length} 条记录</b>}
+      <div><span>按需使用</span><strong>通知上下游仓库</strong></div>
+      <small>接口或约定变了，需要告诉依赖你或你依赖的仓库时再展开
+        {updates.length > 0 && <b>{updates.length} 条往来在上面的流里</b>}
       </small>
       <i aria-hidden />
     </summary>
     <div className="cross-repository-sync-body">
-      <p>把接口或契约变化回流给大任务，并提醒依赖图上的直接上下游。</p>
+      <p>写清楚哪个接口或约定变了、影响什么。它会回流给大任务，并送到依赖图上直接相邻的仓库；对方 Agent 会当成待核对的事实，不是聊天广播。</p>
       <textarea value={text} disabled={busy} rows={3}
         placeholder="说清楚：哪个接口/契约变了，影响什么，哪里还需要谁确认…"
         onChange={(event) => setText(event.target.value)} />
       <div className="cross-repository-sync-actions">
-        <span>{feedback || "这不是聊天广播；相关 Agent 会把它作为待核对的协作事实。"}</span>
+        <span>{feedback || "收到和发出的通知都按时间出现在上面的流里。"}</span>
         <button type="button" disabled={busy || !text.trim()}
-          onClick={() => void publish()}>{busy ? "正在同步…" : "同步给上下游"}</button>
+          onClick={() => void publish()}>{busy ? "正在发送…" : "通知上下游"}</button>
       </div>
-      {updates.length > 0 && <details className="cross-repository-sync-history">
-        <summary>收到的跨仓同步 <b>{updates.length}</b></summary>
-        <ol>{updates.slice(-8).reverse().map((update) => <li key={update.id}>
-          <div><strong>{update.source_repository ?? update.source_task_id}</strong>
-            <span>{update.author} · {formatLocalDateTime(update.created_at)}</span></div>
-          <p>{update.text}</p>
-        </li>)}</ol>
-      </details>}
     </div>
   </details>;
 }

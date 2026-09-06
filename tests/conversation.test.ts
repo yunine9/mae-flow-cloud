@@ -271,3 +271,25 @@ test("批注账坏行只丢它自己;problems 原样带出", () => {
   assert.deepEqual(kinds(view.items), ["annotations_sent"]);
   assert.deepEqual(view.problems, ["决定账读取失败:x"]);
 });
+
+test("跨仓同步进流:收到的标 received、自己发的标 published,按时间落位", () => {
+  const view = buildConversation({
+    events: [], waiting: [], annotations: [], annotationHistory: [], feedback: [],
+    taskId: "task-b",
+    crossRepositoryUpdates: [
+      { id: "u1", source_task_id: "task-a", source_repository: "auth-service", author: "zhou",
+        text: "登录接口多了 tenant 参数", target_task_ids: ["task-b"], created_at: at(10) },
+      { id: "u2", source_task_id: "task-b", source_repository: "web", author: "lin",
+        text: "前端已按 tenant 改", target_task_ids: ["task-a", "task-c"], created_at: at(20) },
+    ],
+  });
+  const syncs = view.items.filter((item) => item.kind === "sync") as
+    Array<Extract<ConversationItem, { kind: "sync" }>>;
+  assert.equal(syncs.length, 2);
+  assert.equal(syncs[0].direction, "received");
+  assert.equal(syncs[0].repository, "auth-service");
+  assert.equal(syncs[0].by, "zhou");
+  assert.equal(syncs[1].direction, "published");
+  assert.equal(syncs[1].targets, 2);
+  assert.ok(syncs[0].ts < syncs[1].ts, "按时间先后");
+});

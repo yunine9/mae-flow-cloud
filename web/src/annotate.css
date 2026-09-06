@@ -823,7 +823,6 @@
        整列都归批注正文。 */
     grid-template-areas:
       "head head"
-      "anchor anchor"
       "note response"
       "foot foot"
       "stale stale";
@@ -834,12 +833,6 @@
   .workspace-review-notes .annot-item:has(.annot-response) .annot-item-head {
     grid-area: head;
     margin-bottom: 0;
-  }
-  /* 没给区域的元素会被自动排版丢进末尾空行(实测过归属徽标落到页脚下面),
-     锚点也要点名区域。 */
-  .workspace-review-notes .annot-item:has(.annot-response) .annot-anchor {
-    grid-area: anchor;
-    margin: 0;
   }
   .workspace-review-notes .annot-item:has(.annot-response) .annot-note,
   .workspace-review-notes .annot-item:has(.annot-response) .annot-inline-editor {
@@ -1428,29 +1421,106 @@
 .task-workspace-v2 .feedback-response p { font-size: var(--fs-13); }
 .task-workspace-v2 .feedback-item-foot small { color: var(--faint); font-size: var(--fs-12); }
 
-/* ── 密度(2026-09-05 用户实测截图"信息密度太低"):一条意见 = 一行头(位置·去向·
-   状态·往来)+ 一行锚点 + 正文 + 回执(结论行 + 依据行)+ 一行脚注。正文不带标题
-   不带框,回执与按钮都收小一号。写在最后、带工作台前缀,盖过上面的旧尺寸。 ── */
-.task-workspace-v2 .annot-item { padding: 10px 12px 8px; }
-.task-workspace-v2 .annot-item.actionable { margin: 0 8px 8px; }
-.task-workspace-v2 .annot-item-head { flex-wrap: wrap; gap: 4px 8px; margin-bottom: 4px; }
-.task-workspace-v2 .annot-where { max-width: 100%; }
-.task-workspace-v2 .annot-where code { font-size: 12.5px; }
-.task-workspace-v2 .annot-item-head .annot-route-badge { width: auto; margin: 0; padding: 1px 6px; font-size: 11.5px; font-weight: 600; line-height: 1.4; }
-.task-workspace-v2 .annot-progress { font-size: 12px; padding: 1px 8px; }
-.task-workspace-v2 .annot-anchor { display: block; flex: none; margin: 0 0 6px; padding: 2px 8px; font: 12px/1.5 var(--font-mono); }
-.task-workspace-v2 .annot-note { gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.task-workspace-v2 .annot-note > p { font-size: 14px; font-weight: 500; line-height: 1.55; }
-.task-workspace-v2 .annot-clarified { font-size: 12px; color: var(--muted); }
-.task-workspace-v2 .annot-response { margin: 6px 0 0; padding: 5px 9px; gap: 1px; }
-.task-workspace-v2 .annot-response strong { font-size: 12.5px; }
-.task-workspace-v2 .annot-response p { font-size: 13px; line-height: 1.5; }
-.task-workspace-v2 .annot-response small { font-size: 12px; line-height: 1.5; }
-.task-workspace-v2 .annot-owner-reply { margin-top: 6px; padding: 5px 9px; gap: 2px; }
-.task-workspace-v2 .annot-item-foot { margin-top: 6px; gap: 4px 10px; }
-.task-workspace-v2 .annot-item-foot small { font-size: 12px; min-width: 0; }
-.task-workspace-v2 .annot-owner-actions button,
-.task-workspace-v2 .annot-verdict button,
-.task-workspace-v2 .annot-panel button.ghost { min-height: 26px; height: 26px; padding: 0 10px; font-size: 12.5px; }
-.task-workspace-v2 .annot-item.actionable .annot-verdict { padding-top: 6px; }
-.task-workspace-v2 .annot-owner-reply-action { margin-top: 6px; }
+/* ── 对话式意见卡(2026-09-06 用户:"哪个是他的回复、哪个是我的原文、现在状态是
+   什么,很混乱")。一张卡三层:头一行 = 指着哪儿 + 状态药丸;"意见"块 = 说话人行
+   (你 / 某某 提的意见 · 时间 · 去向)+ 正文 + 圈的原文;"回复"块 = 说话人行
+   (Agent 的回复 · 时间 · 结论)+ 正文 + 依据。人的块紫色左条,Agent 的块按结论
+   绿 / 黄 / 红。写在最后、带 studio 前缀,盖过上面所有旧尺寸。 ── */
+.workspace-studio.task-workspace-v2 .annot-item { padding: 10px 12px 8px; }
+.workspace-studio.task-workspace-v2 .annot-item.actionable { margin: 0 8px 8px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-head {
+  display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
+.workspace-studio.task-workspace-v2 .annot-where { flex: 1 1 auto; min-width: 0; max-width: none; }
+.workspace-studio.task-workspace-v2 .annot-where code { font-size: 12.5px; }
+/* 状态是一枚实底药丸:一眼看到"现在到哪了" */
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.draft,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.waiting,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.review,
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.done {
+  flex: none; margin: 0; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress::before { content: none; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.draft { color: var(--text); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.waiting { color: var(--active); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.review { color: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-progress.done { color: var(--success); }
+/* 说话人行:头像字 + 名字 + 干了什么 · 时间 + 结论/去向小标 */
+.workspace-studio.task-workspace-v2 .annot-speaker {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.5;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker > i {
+  flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center;
+  color: #fff; font-size: 10.5px; font-style: normal; font-weight: 700; line-height: 1;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker.person > i { background: var(--ink); }
+.workspace-studio.task-workspace-v2 .annot-speaker.owner > i { background: var(--active); }
+.workspace-studio.task-workspace-v2 .annot-speaker.agent > i { background: var(--success); }
+.workspace-studio.task-workspace-v2 .annot-response.not_fixed .annot-speaker.agent > i { background: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-response.needs_clarification .annot-speaker.agent > i { background: var(--danger); }
+.workspace-studio.task-workspace-v2 .annot-speaker > b { color: var(--text-strong); font-weight: 600; }
+.workspace-studio.task-workspace-v2 .annot-speaker > em {
+  margin-left: auto; padding: 0 6px; border-radius: 4px; font-style: normal; font-weight: 600; font-size: 11.5px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.workspace-studio.task-workspace-v2 .annot-speaker.agent > em { color: var(--success); }
+.workspace-studio.task-workspace-v2 .annot-response.not_fixed .annot-speaker > em { color: var(--attention); }
+.workspace-studio.task-workspace-v2 .annot-response.needs_clarification .annot-speaker > em { color: var(--danger); }
+/* 去向小标(→ Agent 处理)在意见块的说话人行末尾,不再是头部里像链接的灰字 */
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge,
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge.owner_reply,
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge.owner_decision {
+  display: inline-block; width: auto; margin: 0 0 0 auto; border: 0; color: var(--muted);
+  background: var(--surface-3); line-height: 1.6;
+}
+.workspace-studio.task-workspace-v2 .annot-speaker > .annot-route-badge::before { content: "→ "; }
+/* 意见块 / 回复块:同一种块形,左条颜色分人和 Agent */
+.workspace-studio.task-workspace-v2 .annot-item .annot-note,
+.workspace-studio.task-workspace-v2 .annot-item .annot-response,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply {
+  display: grid; gap: 2px; width: auto; min-width: 0; margin: 0; padding: 7px 10px 8px;
+  border: 0; border-left: 3px solid var(--ink); border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-response,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply { margin-top: 8px; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response { border-left-color: var(--success); background: color-mix(in srgb, var(--success) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response.not_fixed { border-left-color: var(--attention); background: color-mix(in srgb, var(--attention) 7%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response.needs_clarification { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply { border-left-color: var(--active); background: color-mix(in srgb, var(--active) 6%, var(--surface)); }
+.workspace-studio.task-workspace-v2 .annot-item .annot-note > p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-response p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply p {
+  margin: 0; color: var(--text-strong); font-size: 13.5px; font-weight: 500; line-height: 1.6;
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-response p,
+.workspace-studio.task-workspace-v2 .annot-item .annot-owner-reply p { color: var(--text); font-weight: 400; }
+.workspace-studio.task-workspace-v2 .annot-item .annot-response small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.workspace-studio.task-workspace-v2 .annot-clarified { color: var(--muted); font-size: 12px; }
+/* 圈的原文:意见块里的最后一行,等宽、一行截断 */
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor,
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor.has-quote {
+  display: block; order: 0; width: auto; margin: 4px 0 0; padding: 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--muted); font: 12px/1.5 var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-anchor > span {
+  margin-right: 6px; padding: 0 5px; border-radius: 3px; background: var(--surface-3);
+  color: var(--faint); font: 500 11px/1.6 var(--font-sans, inherit);
+}
+/* 页脚:去向说明 · 看处理记录 · 编辑/删除 */
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line);
+}
+.workspace-studio.task-workspace-v2 .annot-item .annot-item-foot small { flex: 1 1 auto; min-width: 0; color: var(--faint); font-size: 12px; }
+.workspace-studio.task-workspace-v2 .annot-owner-actions button,
+.workspace-studio.task-workspace-v2 .annot-verdict button,
+.workspace-studio.task-workspace-v2 .annot-panel button.ghost { min-height: 26px; height: 26px; padding: 0 10px; font-size: 12.5px; }
+.workspace-studio.task-workspace-v2 .annot-item.actionable .annot-verdict { padding-top: 6px; }
+.workspace-studio.task-workspace-v2 .annot-owner-reply-action { margin-top: 6px; }

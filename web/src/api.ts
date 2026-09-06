@@ -4370,6 +4370,10 @@ export type ConversationItem =
       }>;
     }
   | {
+      kind: "sync"; id: string; ts: string; direction: "received" | "published";
+      by: string; repository?: string; targets: number; text: string;
+    }
+  | {
       kind: "assistant"; id: string; ts: string; role: "user" | "assistant";
       text: string;
     };
