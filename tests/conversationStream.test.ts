@@ -30,7 +30,7 @@ type StreamModule = {
   itemAnnotationIds: (item: ConversationItem) => string[];
   visibleConversationItems: (
     items: readonly ConversationItem[],
-    options: { filter: "all" | "mine"; thread?: string; viewer: string },
+    options: { filter: "all" | "mine"; thread?: string; viewer: string; settled?: ReadonlySet<string> },
   ) => ConversationItem[];
 };
 const {
