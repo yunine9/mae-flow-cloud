@@ -2349,7 +2349,13 @@ export class IssueFlowService {
       }),
       humanGate: live.humanGate,
       allowHumanQuestions: true,
-      allowSubagents: false,
+      // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
+      // 并行评审/grilling 派子查证)原生可用。安全边界:
+      // - 业务工具(complete_stage/push_branch 等)只在主会话——
+      //   sessionDriver 的子会话 extraTools 强制为空;
+      // - 子内提问/再派发由框架拒绝工具打回,主 Agent 凭报告举卡;
+      // - 派发纪律(子只做只读任务/证据指针化/预算写进任务卡)由
+      //   适配层约束。预热专员会话保持关闭(专职编译,无需派发)。
       extraTools: createIssueTools(context),
       // 视觉旁路(与需求侧同一套配置语义):配了有效角色才注入
       // inspect_image,主上下文只收文字结论。

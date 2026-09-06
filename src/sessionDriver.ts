@@ -882,6 +882,10 @@ export class CloudSession {
   private async openSession(config: {
     sessionId: string;
     customTools: unknown[];
+    /** 缺省继承驱动级 extraTools(主会话形态);子 Agent 派发时必须传
+     *  []——complete_stage/push_branch 这类业务工具只能存在于主会话,
+     *  否则模型派个平行会话就能绕过主上下文推进阶段机(2026-09-06)。 */
+    extraTools?: unknown[];
   }) {
     const { workspace, agentDir, provider, model } = this.options;
     // Skill=写法指南(团队那两个 UT skill 只负责"单测怎么写"),云端照用:
@@ -1158,7 +1162,7 @@ export class CloudSession {
       resourceLoader: loader,
       customTools: [
         ...(config.customTools as any[]),
-        ...((this.options.extraTools ?? []) as any[]),
+        ...((config.extraTools ?? this.options.extraTools ?? []) as any[]),
         ...visionTools,
         ...ownedFileTools,
         ...isolatedTools,
@@ -1591,6 +1595,9 @@ export class CloudSession {
         this.refusalTool(childId, "Task",
           "Task", "Dispatch Agent", refusal),
       ],
+      // 业务工具不进子会话:子 Agent 是研究/评审等只读专职,阶段推进、
+      // 推送、交付类工具只归主会话(闸在主会话,工具也必须在主会话)。
+      extraTools: [],
     });
     this.childSessions.set(childId, child);
     let lifecycle: "returned" | "interrupted" = "returned";
