@@ -23,7 +23,6 @@ import { RequirementGraph } from "./RequirementGraph";
 import { requirementGraphVisible } from "./taskHierarchy";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
-import { CrossRepositorySync } from "./CrossRepositorySync";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
@@ -1677,10 +1676,6 @@ export function TaskWorkspace({
           ))}</div>
         </div>
       )}
-      {task.parent_task_id && <CrossRepositorySync
-        taskId={task.id}
-        updates={task.cross_repository_updates}
-        onChanged={onChanged} />}
     </>
   ) : undefined;
 
@@ -2540,6 +2535,7 @@ export function TaskWorkspace({
           />
           {canCollaborate || decides ? (
             <Composer task={task}
+              crossRepository={Boolean(task.parent_task_id)}
               steerOnly={task.requirement_graph?.stage === "analysis"}
               decisionDock={Boolean(waiting) && decides}
               dockContext={draftIds.length > 0 && !requirementAnalysisConfirmation

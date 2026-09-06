@@ -10,8 +10,6 @@ const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const composer = readFileSync(resolve("web/src/Composer.tsx"), "utf-8");
 const stream = readFileSync(resolve("web/src/ConversationStream.tsx"), "utf-8");
 const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
-const crossRepositorySync = readFileSync(
-  resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
 
 test("任务进展只展示过程，日志在用户主动打开时加载", () => {
   const activity = workspace.slice(workspace.indexOf('<div className="ws-primary-scroll ws-execution-view">'),
@@ -79,15 +77,16 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.match(workspace, /localStorage\.setItem\(SIDE_WIDTH_KEY, String\(current\)\)/);
   assert.match(workspace, /\["--ws-side-w" as string\]: `\$\{sideWidth\}px`/,
     "拖过的宽度以内联变量覆盖样式表默认档");
-  assert.ok(workspace.indexOf("<CrossRepositorySync") > workspace.indexOf("const streamTail"),
-    "低频跨仓同步作为流的收口块,不再另开区块");
-  assert.match(crossRepositorySync,
-    /return <details className="cross-repository-sync">/,
-    "跨仓同步默认折叠,不能继续占据整块首屏");
-  assert.match(crossRepositorySync, /按需使用/, "工具口吻说人话,不再是 OPTIONAL TOOL");
-  assert.match(crossRepositorySync, /通知上下游仓库/);
-  assert.doesNotMatch(crossRepositorySync, /cross-repository-sync-history/,
-    "收到的通知不再藏在工具的二级折叠里,而是作为 sync 条目进流");
+  // 2026-09-06 用户:"通知上下游仓库为什么不放在下面那个里面平行?"——原来是
+  // 流末尾一个独立折叠工具块,和输入区两套皮。现在是输入区的第三档,只有
+  // 跨仓子任务(有 parent_task_id)才出现;收到/发出的通知仍作为 sync 条目进流。
+  assert.doesNotMatch(workspace, /CrossRepositorySync/, "独立的跨仓同步块已并入输入区");
+  assert.match(workspace, /crossRepository=\{Boolean\(task\.parent_task_id\)\}/);
+  assert.match(composer, /通知上下游\n/, "第三档页签");
+  assert.match(composer, /const showSync = mode === "sync" && crossRepository && !steerOnly;/);
+  assert.match(composer, /publishCrossRepositoryUpdate\(task\.id, message\)/);
+  assert.match(composer, /hidden=\{!decisionDock \|\| showAssistant \|\| showSync\}/,
+    "通知档下决定卡的提交区让位");
   // 定位靠 id 双向跳:抽屉 → 流线程,流 → 材料原位 + 抽屉那条卡。
   assert.match(workspace, /onShowThread=\{showThread\}/);
   assert.match(stream, /onThreadChange\(id\)/);

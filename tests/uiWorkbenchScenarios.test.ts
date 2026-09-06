@@ -53,7 +53,7 @@ test("场景动作覆盖工作台全部层级，不把能力删成好看的空�
   assert.match(workspace, /\["execution", "活动"\]/);
   assert.match(workspace, /<Composer/);
   assert.match(workspace, /<ConversationStream/);
-  assert.match(workspace, /<CrossRepositorySync/);
+  assert.match(workspace, /crossRepository=\{Boolean\(task\.parent_task_id\)\}/, "跨仓子任务的输入区带「通知上下游」档");
   assert.match(workspace, /<ExecutionPanel/);
   assert.match(workspace, /<KnowledgeFootprint/);
   assert.match(workspace, /<TokenUsage/);

@@ -390,7 +390,9 @@
   margin-right: 6px; vertical-align: 1px; background: var(--faint);
 }
 .task-workspace-v2 .ws-composer-mode.active::before { background: var(--attention); }
-.task-workspace-v2 .ws-composer-hint { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 提示句挤不下就整句换到下一行,不截成"主 Agent"两个字(2026-09-06 用户截图:
+   第三档页签加进来后同一行只剩四个字的位置)。 */
+.task-workspace-v2 .ws-composer-hint { min-width: 0; flex: 1 1 220px; white-space: normal; }
 .task-workspace-v2 .ws-composer-return {
   margin-left: auto; height: 26px; padding: 0 10px;
   border: 1px solid var(--line-strong); border-radius: var(--radius-sm);

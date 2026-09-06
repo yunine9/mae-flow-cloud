@@ -26,11 +26,13 @@ import {
   type HostSkillShelfEntry,
   type SteerReference,
   type TaskSummary,
+  publishCrossRepositoryUpdate,
 } from "./api";
 import { startVisiblePolling } from "./visiblePolling";
 import "./steer.css";
 
-export type CollaborationMode = "steer" | "assistant";
+/** sync=通知上下游仓库:只有跨仓子任务有这一档。 */
+export type CollaborationMode = "steer" | "assistant" | "sync";
 
 const EMPTY_ASSISTANT: DeveloperAssistantView = {
   state: "idle",
@@ -77,8 +79,13 @@ export function Composer({
   dockRef,
   onChanged,
   onAssistant,
+  crossRepository = false,
 }: {
   task: TaskSummary;
+  /** 跨仓子任务:多一档「通知上下游」。原来是流末尾一个单独的折叠工具块,
+   * 和输入区两套皮、两种口吻(2026-09-06 用户:"为什么不放在下面那个里面
+   * 平行"),现在与「说给 Agent」「我来接手」并列成第三档。 */
+  crossRepository?: boolean;
   /** 跨仓分析主任务是共享讨论室,没有可编辑的单仓代码现场。 */
   steerOnly?: boolean;
   /** 等这位读者决定:输入区让给决定卡的提交区(WaitingCard 的 footer 经
@@ -95,6 +102,28 @@ export function Composer({
   // 落到灰掉的开发助手)。人自己点过档位后不再替他换。
   const [mode, setMode] = useState<CollaborationMode>("steer");
   const modePicked = useRef(false);
+  const [syncText, setSyncText] = useState("");
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState("");
+
+  async function sendSync() {
+    const message = syncText.trim();
+    if (!message || syncBusy) return;
+    setSyncBusy(true);
+    setSyncFeedback("");
+    try {
+      const result = await publishCrossRepositoryUpdate(task.id, message);
+      setSyncText("");
+      setSyncFeedback(result.target_task_ids.length
+        ? `已回流大任务，并送到 ${result.target_task_ids.length} 个直接上下游任务；上面的流里能看到`
+        : "已回流大任务；依赖图上当前没有直接相邻的任务");
+      onChangedRef.current?.();
+    } catch (cause) {
+      setSyncFeedback(cause instanceof Error ? cause.message : "通知上下游失败");
+    } finally {
+      setSyncBusy(false);
+    }
+  }
   const [steerText, setSteerText] = useState("");
   const [assistantText, setAssistantText] = useState("");
   const [steerBusy, setSteerBusy] = useState(false);
@@ -312,6 +341,7 @@ export function Composer({
   const canReturn = task.status === "paused"
     && !["acquiring", "working", "returning", "running"].includes(assistant.state);
   const showAssistant = mode === "assistant" && !steerOnly;
+  const showSync = mode === "sync" && crossRepository && !steerOnly;
 
   return (
     <section className="ws-composer" aria-label="回复与提交">
@@ -332,6 +362,14 @@ export function Composer({
               onClick={() => { modePicked.current = true; setMode("assistant"); }}>
               我来接手
             </button>
+            {crossRepository && (
+              <button type="button" role="tab" aria-selected={showSync}
+                className={showSync ? "on" : ""}
+                title="接口或约定变了,告诉依赖你或你依赖的仓库"
+                onClick={() => { modePicked.current = true; setMode("sync"); }}>
+                通知上下游
+              </button>
+            )}
           </div>
         )}
         {showAssistant ? (
@@ -350,6 +388,13 @@ export function Composer({
                 交回给 Agent
               </button>
             )}
+          </>
+        ) : showSync ? (
+          <>
+            <span className="ws-composer-mode active">告诉依赖你或你依赖的仓库</span>
+            <span className="ws-composer-hint">
+              会回流给大任务,并送到依赖图上直接相邻的仓库;对方 Agent 当作待核对的事实,不是聊天广播
+            </span>
           </>
         ) : decisionDock ? (
           <>
@@ -373,9 +418,36 @@ export function Composer({
       {/* 决定卡的提交区挂在这里:选项在流里的卡上,附言与提交按钮在输入区。
           takeover 档不让位——接管中没有卡可答。 */}
       <div className="ws-reply-dock" ref={dockRef} role="region" aria-label="决定的附言与提交"
-        hidden={!decisionDock || showAssistant} />
+        hidden={!decisionDock || showAssistant || showSync} />
 
-      {!showAssistant && !decisionDock && (
+      {showSync && (
+        <>
+          <textarea id={`sync-${task.id}`} className="steer-input"
+            value={syncText} disabled={syncBusy} rows={3}
+            placeholder="说清楚:哪个接口或约定变了,影响什么,哪里还需要谁确认…"
+            onChange={(event) => { setSyncText(event.target.value); if (syncFeedback) setSyncFeedback(""); }}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void sendSync();
+              }
+            }} />
+          <div className="ws-composer-row">
+            <div className="ws-composer-left">
+              <span className="steer-hint">
+                {syncFeedback || "收到和发出的通知都按时间出现在上面的流里 · ⌘/Ctrl + Enter 发送"}
+              </span>
+            </div>
+            <button type="button" className="steer-send"
+              disabled={syncBusy || !syncText.trim()}
+              onClick={() => void sendSync()}>
+              {syncBusy ? "发送中…" : "通知上下游"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {!showAssistant && !showSync && !decisionDock && (
         <>
           <textarea id={`steer-${task.id}`} className="steer-input"
             value={steerText}
