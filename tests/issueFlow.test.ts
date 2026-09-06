@@ -21,19 +21,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
-import {
-  materializeIssueSkills,
-  SKILL_SOURCE_DIR,
-} from "../src/issueFlow/prompt.ts";
+import { materializeIssueSkills } from "../src/issueFlow/prompt.ts";
 
 test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
+  // vendor/mattpocock/ 下是原封照搬的外部技能(同步时整目录覆盖,不本地
+  // 改),与平台自有技能同一张清单注册。
   const expected = [
-    "issue-analysis", "issue-delivery", "issue-ops",
+    "code-review", "codebase-design", "diagnosing-bugs", "grilling",
+    "implement", "issue-analysis", "issue-delivery", "issue-ops", "tdd",
   ];
   const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-"));
   const first = materializeIssueSkills(workspace);
   assert.deepEqual(first.map((path) => path.split("/").at(-2)), expected,
-    "三份平台技能必须齐装;少一个等于 Agent 少一条行为规矩");
+    "平台技能与 vendor 技能必须齐装;少一个等于 Agent 少一条行为规矩");
   for (const path of first) {
     const body = readFileSync(path, "utf-8");
     assert.match(body, /^---\nname: [^\n]+\ndescription: [^\n]+\n/,
@@ -41,10 +41,13 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
   }
   const second = materializeIssueSkills(workspace);
   assert.deepEqual(first, second, "幂等重写:路径稳定,重复物化不漂移");
-  for (const name of expected) {
+  // 源路径可带分类层(vendor/mattpocock/engineering/<名>/),用物化器
+  // 返回的源路径逐个比对,不假设平铺。
+  for (const sourcePath of first) {
+    const name = sourcePath.split("/").at(-2)!;
     assert.equal(
       readFileSync(join(workspace, "skills", name, "SKILL.md"), "utf-8"),
-      readFileSync(join(SKILL_SOURCE_DIR, name, "SKILL.md"), "utf-8"),
+      readFileSync(sourcePath, "utf-8"),
       `${name} 物化内容必须与仓内源文件逐字节一致`);
   }
   assert.equal(readdirSync(join(workspace, "skills")).length, expected.length);
