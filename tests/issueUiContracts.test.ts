@@ -199,9 +199,9 @@ test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、�
   // 对新闸天然成立,这里钉住分派没被绕开。
   assert.match(rail,
     /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
-  // 事实卡按闸种点名"等归属人做什么"(不可修=平台处理,证据=回灌原文)。
+  // 事实卡按闸种点名"等归属人做什么"(不可修=平台处理,证据=贴回原文)。
   assert.match(rail, /等归属人在交付平台处理\/豁免流水线告警/);
-  assert.match(rail, /等归属人回灌流水线报错原文/);
+  assert.match(rail, /等归属人贴回流水线报错原文/);
 });
 
 test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档纪律在位", () => {

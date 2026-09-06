@@ -115,7 +115,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   dts_info: {
     label: "获取 DTS 单信息",
     goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史",
-    exit: "通读单据后 complete_stage 收口(dts_get_ticket 成功返回只是材料到位,不自动推进)",
+    exit: "通读单据后调 complete_stage 申报完成(dts_get_ticket 返回成功只是材料到位,不会自动推进)",
     exitAction: "complete_stage",
     tools: [
       { name: "dts_get_ticket" },
@@ -133,7 +133,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "pull_repo 拉取(有单场景平台会顺带切好修复分支);检索不到就 "
       + "AskUserQuestion 问用户要仓地址再 pull_repo。本单无需代码改动则"
       + "直接 complete_stage 跳过",
-    exit: "要用的仓都 pull_repo 落地 → complete_stage 收口;无需代码仓则直接 complete_stage 跳过",
+    exit: "要用的仓都 pull_repo 拉齐 → complete_stage 申报完成;无需代码仓则直接 complete_stage 跳过",
     exitAction: "complete_stage",
     tools: [
       { name: "lookup_modules" },
@@ -152,7 +152,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "修改方案/证据链/置信度五章节),"
       + "然后 submit_analysis 提交(无单场景需带结论 issue/non_issue)。"
       + "中途发现还缺仓,pull_repo 随时可补",
-  exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
+  exit: "issue-analysis.md 写完 → submit_analysis 提交,平台把确认卡转给用户",
   exitAction: "submit_analysis",
   // 入口闸已拆除(ADR-0014,2026-09-03):skill 是渐进式发现(编排
   // 技能先列索引再按需读),描述没命中是维护者该修的描述,不该用运行
@@ -173,28 +173,29 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     goal: "按 TDD 节奏实施修复:先写(或改)能复现问题的单测,再改码让它"
       + "转绿(多仓问题在涉及的每个仓里改,用 bash 直接改码);开改前可读 "
       + ".mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略);"
-      + "每轮 UT 结果用 report_ut 如实上报(平台只记账),改完自检且测试可"
-      + "接受后 complete_stage 自报完成。分支、提交与推送的交付纪律见技能 issue-delivery",
-    exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 自报完成",
+      + "每轮 UT 结果用 report_ut 如实上报(平台只做记录),改完自检且测试可"
+      + "接受后 complete_stage 申报完成。分支、提交与推送的交付纪律见技能 issue-delivery",
+    exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 申报完成",
     exitAction: "complete_stage",
     tools: [
-      { name: "request_env", note: "缺网管环境举卡" },
+      { name: "request_env", note: "缺网管环境先要配置" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
       { name: "bind_module" },
       { name: "push_branch" },
-      { name: "report_ut", note: "UT 记账" },
+      { name: "report_ut", note: "记录 UT 结果" },
       { name: "complete_stage" },
     ],
   },
   mr_green: {
     label: "提交 MR·跑绿",
     goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
-      + "仓参数别漏);然后调 complete_stage 必带 mrs 申报 MR 清单,"
-      + "平台验绿放行:清单=台账+流水线全绿,红打回、在跑受理等绿",
+      + "仓参数别漏);然后调 complete_stage 申报 MR 清单(必带 mrs 参数),"
+      + "平台核验放行:清单与实际 MR 一致、流水线全绿——有红当场打回,"
+      + "在跑则受理等绿",
     exit: "对每个改过的仓 push_branch + create_mr,然后 complete_stage 申报 MR 清单"
-      + "(平台按台账与流水线验绿:全绿当场进下一阶段,有红当场打回,在跑受理等绿)",
+      + "(平台核验清单与实际一致、流水线全绿:全绿进下一阶段,有红当场打回,在跑等绿)",
     exitAction: "complete_stage",
     tools: [
       { name: "push_branch" },
@@ -210,7 +211,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   conclude: {
     label: "确定结论",
     goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
-    exit: "结论明确 → submit_analysis 提交并等平台举「结论确认」卡",
+    exit: "结论明确 → submit_analysis 提交,等用户在「结论确认」卡上作答",
     exitAction: "submit_analysis",
     // 出口动作 submit_analysis 是在 analyze 调的(调完即推进到本节点
     // 等闸),本阶段不再放行它——工具列以门禁真相为准,简报不谎报。
@@ -320,7 +321,7 @@ export function stageBriefLines(
   const spec = fixedStageSpec(stage);
   return [
     `当前阶段「${fixedStageLabel(scenario, stage)}」: ${spec.goal}`,
-    `出口(到什么程度算完): ${spec.exit}`,
+    `怎么算完: ${spec.exit}`,
     `可用工具: ${stageToolLine(stage)}`,
   ];
 }
@@ -353,7 +354,7 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
     // 分析确认的推荐就是放行:报告已过 submit_analysis 的文件门票,
     // 平台没有更多事实可核,推荐摇摆只会把用户拖回追问循环。
     options: [
-      { code: "confirm", label: "确认报告,开始问题修改" },
+      { code: "confirm", label: "确认报告,开始问题修复" },
       { code: "supplement", label: "有补充意见(填写补充说明)" },
     ],
     recommended: "confirm",

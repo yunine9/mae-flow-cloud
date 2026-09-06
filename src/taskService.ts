@@ -6594,7 +6594,7 @@ export class TaskService {
         await task.driver.steer(text);
       } else if (["queued", "running"].includes(task.summary.status)
           && task.mission) {
-        task.mission += "\n\n- 人工刚从工作台回灌的流水线报错原文：\n"
+        task.mission += "\n\n- 人工刚从工作台贴回的流水线报错原文：\n"
           + text;
       } else if (task.summary.status === "verifying") {
         task.summary.detail = "已收到人工流水线报错，正在自动恢复修复分诊";
@@ -17497,7 +17497,7 @@ export class TaskService {
       ...this.evidenceGapReasons(assessment).map((reason) => `- ${reason}`),
       "",
       "请在平台打开对应失败项，复制包含文件、行号、错误信息或堆栈的原文，",
-      "然后在本材料上添加批注并点击“回灌报错”。Agent 只会据此处理，",
+      "然后在本材料上添加批注并点击“贴回报错”。Agent 只会据此处理，",
       "不会把本说明本身当成流水线错误证据。",
       "",
     ].join("\n");
@@ -17785,7 +17785,7 @@ export class TaskService {
         ...assessment.fallbackSources.map((item) => `  - ${item}`),
       ] : []),
       ...(humanEvidence?.text ? [
-        "- 人工从工作台回灌的流水线报错原文（按人的原话定位，不扩大解释）：",
+        "- 人工从工作台贴回的流水线报错原文（按人的原话定位，不扩大解释）：",
         humanEvidence.text.slice(0, 12_000),
       ] : []),
       ...(unfixableHit ? [

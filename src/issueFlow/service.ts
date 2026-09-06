@@ -2984,12 +2984,12 @@ export class IssueFlowService {
         "上一轮检视的修订还没有重新提交分析报告,不能叠加检视");
     }
     if (this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,等当前回合收口后再提交检视");
+      throw new IssueControlError("会话正在运行,等当前回合结束后再提交检视");
     }
     if (state.status !== "waiting_user" && state.status !== "idle") {
       throw new IssueControlError(
         `当前状态 ${state.status} 不能提交检视(意见可以先记成草稿,`
-          + "等 AI 停机或举卡等你时再提交)");
+          + "等 AI 停下来或等你作答时再提交)");
     }
     if (!reviewStore(live.root).drafts().length) {
       throw new IssueControlError("没有待提交的检视意见");
@@ -3356,7 +3356,7 @@ export class IssueFlowService {
       const tools = unfixableToolNames(checks, this.options.unfixableTools);
       const sha12 = sha.slice(0, 12);
       const note = `流水线红灯全部来自不可自动修复的工具(${tools.join("、")})`
-        + "——已举卡等人工:在交付平台处理/豁免后于卡上作答继续";
+        + "——已发卡等人工:在交付平台处理/豁免后于卡上作答继续";
       watch.last_error = note;
       state.stage_note = note;
       const raised = this.raisePipelineGate(live, repo, sha,
@@ -3561,7 +3561,7 @@ export class IssueFlowService {
     const attempts = watch.evidence_retry_attempts ?? 0;
     this.clearEvidenceRetry(watch);
     const note = `证据重试窗(重评 ${attempts} 次)到点仍无可定位报错——`
-      + "已举卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
+      + "已发卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
     watch.last_error = note;
     state.stage_note = note;
     saveState(live.root, state);
