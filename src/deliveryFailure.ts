@@ -19,6 +19,7 @@
  */
 
 import { KERNEL_UNAVAILABLE } from "./kernelDelivery.ts";
+import type { StallClass } from "./stallPolicy.ts";
 
 export type FailureDisposition = "retry" | "stall" | "dispatch";
 
@@ -36,6 +37,9 @@ export interface ClassifiedFailure {
   disposition: FailureDisposition;
   /** 为什么这么判。进日志与诊断包,排障时不用再去猜分类依据。 */
   why: string;
+  /** 真要停下时记哪一类:调用方不必再自己翻译一遍分类结论。retry 的
+   * 结论对应基础设施类(预算烧完停下时人只需等恢复再重试)。 */
+  stall_class: StallClass;
 }
 
 /** 重放这些没有意义:平台契约接错/损坏、提交本身被仓库规则拒收。
@@ -64,22 +68,22 @@ export function classifyDeliveryFailure(
   // 内核这一下没答 ≠ 内核拒收:材料还在工作区文件里,补登记即可,
   // 不必叫 Agent 重做,更不该把整轮修复成果晾在停摆里。
   if (text.startsWith(KERNEL_UNAVAILABLE)) {
-    return { disposition: "retry", why: "内核基础设施故障,重放有意义" };
+    return { disposition: "retry", why: "内核基础设施故障,重放有意义", stall_class: "infrastructure" };
   }
   if (text.startsWith(FEEDBACK_RESULT_MISSING)) {
-    return { disposition: "dispatch", why: "本批反馈还没有被处理过" };
+    return { disposition: "dispatch", why: "本批反馈还没有被处理过", stall_class: "evidence_missing" };
   }
   if (CONTRACT_BROKEN.some((prefix) => text.startsWith(prefix))) {
-    return { disposition: "stall", why: "平台契约或提交本身有问题,重放不会自愈" };
+    return { disposition: "stall", why: "平台契约或提交本身有问题,重放不会自愈", stall_class: "contract" };
   }
   // 确定性 4xx:同一请求再发一百次还是 4xx(MFC-020 实测同文 MR-400 刷了
   // 86 条日志、两轮预算)。408 超时与 429 限流是瞬时的,不在此列。
   if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(text)) {
-    return { disposition: "stall", why: "确定性 4xx,重放结果不变" };
+    return { disposition: "stall", why: "确定性 4xx,重放结果不变", stall_class: "contract" };
   }
   return source === "receipt"
-    ? { disposition: "stall", why: "回执材料不合格,原样重读不会变好" }
-    : { disposition: "retry", why: "未识别为确定性故障,按瞬时故障带预算自愈" };
+    ? { disposition: "stall", why: "回执材料不合格,原样重读不会变好", stall_class: "evidence_invalid" }
+    : { disposition: "retry", why: "未识别为确定性故障,按瞬时故障带预算自愈", stall_class: "infrastructure" };
 }
 
 /** 病因在提交这一侧时不要再说"等待权威流水线":人拿着这句话没法办事。 */

@@ -40,6 +40,8 @@ export function repairStopped(task: {
   delivery?: {
     pipeline?: string;
     stalled?: string;
+    /** 停摆类别(服务端 stallPolicy);前端只透传,不据此拼文案。 */
+    stall_class?: "infrastructure" | "evidence_missing" | "evidence_invalid" | "contract" | "safety";
     loop?: { state: string };
     prepush_runtime?: { state?: string };
   };
@@ -1062,6 +1064,8 @@ export interface TaskSummary {
     waiting_on?: string;
     /** 自愈已停、等人介入的原因。有它就该亮牌子给「重跑续推」。 */
     stalled?: string;
+    /** 停摆类别(服务端 stallPolicy);前端只透传,不据此拼文案。 */
+    stall_class?: "infrastructure" | "evidence_missing" | "evidence_invalid" | "contract" | "safety";
     /** 红灯维度缺少可修复原文；工作台据此开放“批注回灌”入口。 */
     evidence_gap?: {
       sha: string;

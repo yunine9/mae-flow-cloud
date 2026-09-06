@@ -6,6 +6,8 @@
  * 前端也不再各自解释同一组 delivery/status 字段。
  */
 
+import { STALL_POLICY, type StallClass } from "./stallPolicy.ts";
+
 export type TaskFocusKind =
   | "human_action"
   | "blocked"
@@ -48,6 +50,8 @@ interface FocusTask {
     pipeline?: string;
     waiting_on?: string;
     stalled?: string;
+    /** 停摆类别(stallPolicy):有它才能说清"去哪、做什么"。 */
+    stall_class?: StallClass;
     evidence_gap?: {
       state?: "retrying" | "waiting_human" | "partial";
       missing_dimensions?: string[];
@@ -200,10 +204,14 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
   }
   if (delivery?.stalled || loop?.state === "halted"
       || loop?.state === "exhausted") {
+    // 停摆类别决定人的下一步:等平台恢复、补材料、让 Agent 重做、修配置,
+    // 还是先核实完整性再说。没有类别(修复环停摆)沿用泛化措辞。
+    const policy = delivery?.stalled && delivery.stall_class
+      ? STALL_POLICY[delivery.stall_class] : undefined;
     return focus(
       "blocked",
       delivery?.stalled || loop?.diagnosis || "自动验证已停止",
-      "查看失败原因并重跑续推",
+      policy?.next_action ?? "查看失败原因并重跑续推",
       "responsible",
       92,
       true,

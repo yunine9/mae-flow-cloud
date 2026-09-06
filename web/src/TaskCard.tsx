@@ -366,9 +366,11 @@ export function TaskCard({
               <span>
                 {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
-                {task.delivery?.stalled && !task.delivery?.loop
-                    && !task.delivery?.evidence_gap
-                  ? " 确认外部平台恢复后，点「重新尝试交付」。"
+                {/* 下一步来自服务端焦点(按停摆类别给):原来这里写死
+                    "确认外部平台恢复后点重新尝试交付",对 SHA 对不上、
+                    外来提交这类完整性停摆等于劝人跳过核实直接重试。 */}
+                {task.focus?.next_action
+                  ? ` ${task.focus.next_action}。`
                   : " 办完之后点「重跑续推」，机器接着干。"}
               </span>
               {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补

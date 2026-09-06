@@ -84,6 +84,29 @@ const ROWS: Row[] = [
   { branch: "停摆·stalled 原因",
     input: { status: "verifying", delivery: { stalled: "宿主推送失败: fatal: remote rejected" } },
     expect: F("blocked", "宿主推送失败: fatal: remote rejected", "查看失败原因并重跑续推", "responsible", 92, true) },
+  { branch: "停摆·基础设施类按类别给下一步",
+    input: { status: "verifying", delivery: { stalled: "内核暂时不可用: dispatch 超时", stall_class: "infrastructure" } },
+    expect: F("blocked", "内核暂时不可用: dispatch 超时",
+      "不用改代码:等平台或内核恢复后在任务页重试交付,机器从停下的地方接着验证", "responsible", 92, true) },
+  { branch: "停摆·材料缺失类",
+    input: { status: "verifying", delivery: { stalled: "当前 HEAD 尚无有效 Build-Fix 收据", stall_class: "evidence_missing" } },
+    expect: F("blocked", "当前 HEAD 尚无有效 Build-Fix 收据",
+      "按停摆原因把缺的材料补齐(回灌流水线原文、补 Build-Fix 收据或平台事实)后在任务页重试交付", "responsible", 92, true) },
+  { branch: "停摆·材料不合格类",
+    input: { status: "verifying", delivery: { stalled: "批注 a-1 标了 fixed 但没有 evidence", stall_class: "evidence_invalid" } },
+    expect: F("blocked", "批注 a-1 标了 fixed 但没有 evidence",
+      "看停摆原因点名的收据问题,让 Agent 重做或在工作台补说明,再在任务页重试交付", "responsible", 92, true) },
+  { branch: "停摆·配置契约类",
+    input: { status: "verifying", delivery: { stalled: "未配置交付平台", stall_class: "contract" } },
+    expect: F("blocked", "未配置交付平台",
+      "修正任务配置、平台接入或提交本身后在任务页重试交付;配置不改,重试结果不变", "responsible", 92, true) },
+  { branch: "停摆·完整性类不劝人直接重试",
+    input: { status: "verifying", delivery: { stalled: "平台实际合入的提交 abc1234 与本任务验证过的 def5678 不一致", stall_class: "safety" } },
+    expect: F("blocked", "平台实际合入的提交 abc1234 与本任务验证过的 def5678 不一致",
+      "先人工核实分支与提交(是否被平台改写、是否有外来改动),确认无误再重试交付;系统不会自动重试", "responsible", 92, true) },
+  { branch: "停摆·类别只在 stalled 存在时生效",
+    input: { status: "verifying", delivery: { stall_class: "safety", loop: { state: "halted", diagnosis: "修复会话判断需人工处理" } } },
+    expect: F("blocked", "修复会话判断需人工处理", "查看失败原因并重跑续推", "responsible", 92, true) },
   { branch: "停摆·修复环 halted 带诊断",
     input: { status: "verifying", delivery: { loop: { state: "halted", diagnosis: "修复会话判断需人工处理" } } },
     expect: F("blocked", "修复会话判断需人工处理", "查看失败原因并重跑续推", "responsible", 92, true) },
@@ -169,7 +192,7 @@ for (const row of ROWS) {
 /** 横切规则:等人的焦点必须自述"谁、干什么、之后怎样"。
  * 动作词表是"下一步必须给人一个动词"的最低要求;"正在…"是机器口吻,
  * 不许出现在要人动手的下一步里。 */
-const ACTION_WORD = /打开|查看|答复|提交|修正|重新|重跑|恢复|回灌|批注|接手|继续|等待|停止/;
+const ACTION_WORD = /打开|查看|答复|提交|修正|重新|重跑|重试|恢复|回灌|批注|接手|继续|等待|停止|核实|补齐/;
 
 test("焦点契约:凡 needs_attention 必有负责方、非裸状态标题、带动作的下一步", () => {
   const attention = ROWS.filter((row) => row.expect.needs_attention);
