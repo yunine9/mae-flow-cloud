@@ -7,7 +7,7 @@
  *   │   失败原因 / 验证进度 → 底部固定的"补充给 Agent"输入区
  *   └ 右栏"工作区"(surface 底):一行页签 [需求原文 | 过程文档 | 模块与依赖 |
  *       工作区变更 | 活动] + 工具(搜索 · 全屏 · 批注与检视),下面是阅读器;
- *       批注检查器停靠在右栏右缘(≥1100),窄屏改悬浮。
+ *       检视意见是材料区右侧的常驻画布(.ws-review-canvas),不再悬浮。
  *   <1000 上下堆叠;全屏阅读时左栏隐藏。
  *
  * 视觉纪律(与 tokens.css 同源):
@@ -50,7 +50,6 @@
 .task-workspace-v2 .ws-delete-confirm button,
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch .material-search-toggle,
-.task-workspace-v2 .ws-source-switch .materials-review-toggle,
 .task-workspace-v2 .ws-source-switch .ws-review-launch,
 .task-workspace-v2 .ws-document-download,
 .task-workspace-v2 .focus-review,
@@ -81,7 +80,6 @@
 .task-workspace-v2 .ws-delete-confirm button:hover:not(:disabled),
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle:hover,
 .task-workspace-v2 .ws-source-switch .material-search-toggle:hover,
-.task-workspace-v2 .ws-source-switch .materials-review-toggle:hover,
 .task-workspace-v2 .ws-source-switch .ws-review-launch:hover,
 .task-workspace-v2 .ws-document-download:hover:not(:disabled),
 .task-workspace-v2 .focus-review:hover:not(:disabled),
@@ -499,15 +497,14 @@
   background: var(--main-bg);
   container: ws-pane / inline-size;
 }
-/* 右栏窄(检查器停靠、并排两栏)时工具按钮只留图标,提示语退场。 */
+/* 右栏窄(检视画布打开、并排两栏)时工具按钮只留图标,提示语退场。 */
 @container ws-pane (max-width: 760px) {
   .task-workspace-v2 .ws-annotate-hint { display: none; }
   .task-workspace-v2 .ws-source-switch > button[role="tab"] + .materials-fullscreen-toggle,
   .task-workspace-v2 .ws-source-switch > button[role="tab"] + .ws-review-launch,
   .task-workspace-v2 .ws-source-switch > button[role="tab"] + .material-search-toggle { margin-left: auto; }
   .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
-  .task-workspace-v2 .ws-source-switch .material-search-toggle,
-  .task-workspace-v2 .ws-source-switch .materials-review-toggle {
+  .task-workspace-v2 .ws-source-switch .material-search-toggle {
     width: var(--control-h);
     padding: 0;
     justify-content: center;
@@ -515,9 +512,7 @@
     font-size: 0;
   }
   .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle > span,
-  .task-workspace-v2 .ws-source-switch .material-search-toggle > span,
-  .task-workspace-v2 .ws-source-switch .materials-review-toggle > span { font-size: var(--fs-14); }
-  .task-workspace-v2 .ws-source-switch .materials-review-toggle i { display: none; }
+  .task-workspace-v2 .ws-source-switch .material-search-toggle > span { font-size: var(--fs-14); }
   .task-workspace-v2 .ws-source-switch .ws-review-launch > .ws-review-label { display: none; }
   .task-workspace-v2 .ws-source-switch > button[role="tab"] i { display: none; }
 }
@@ -697,21 +692,17 @@
 .task-workspace-v2 .ws-annotate-hint::before { content: "✎"; color: var(--faint); font-size: var(--fs-13); }
 .task-workspace-v2 .ws-source-switch > .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch > .material-search-toggle,
-.task-workspace-v2 .ws-source-switch > .materials-review-toggle,
 .task-workspace-v2 .ws-source-switch > .ws-review-launch { margin-left: 8px; }
 .task-workspace-v2 .ws-source-switch > button[role="tab"] + .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch > button[role="tab"] + .ws-review-launch,
 .task-workspace-v2 .ws-source-switch > button[role="tab"] + .material-search-toggle { margin-left: auto; }
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle > span,
 .task-workspace-v2 .ws-source-switch .material-search-toggle > span,
-.task-workspace-v2 .ws-source-switch .materials-review-toggle > span,
 .task-workspace-v2 .ws-source-switch .ws-review-launch > span[aria-hidden] { color: var(--muted); font-size: var(--fs-14); }
-.task-workspace-v2 .ws-source-switch .materials-review-toggle.on,
 .task-workspace-v2 .ws-source-switch .ws-review-launch.on,
 .task-workspace-v2 .ws-source-switch .material-search-toggle.on { color: var(--text-strong); border-color: var(--text-strong); background: var(--surface-2); }
 .task-workspace-v2 .ws-source-switch .ws-review-launch.attention { color: var(--attention); border-color: color-mix(in srgb, var(--attention) 50%, var(--line-strong)); }
 .task-workspace-v2 .ws-source-switch .ws-review-launch.attention > span[aria-hidden] { color: var(--attention); }
-.task-workspace-v2 .ws-source-switch .materials-review-toggle i,
 .task-workspace-v2 .ws-source-switch .ws-review-launch em {
   min-width: 18px;
   height: 18px;
@@ -997,50 +988,7 @@
 }
 .task-workspace-v2 .ws-alert.ws-plan-alert p { margin: 4px 0 0; color: var(--text); font-size: var(--fs-13); }
 .task-workspace-v2 .ws-insight-empty { padding: 4px 0; color: var(--muted); font-size: var(--fs-13); }
-
-/* ── 批注与检视:停靠在右栏的检查器 ─────────────────────────────────
-   宽屏(≥1100)它就是主区的第三栏:从主画布顶边起、贴右、到底,和决定栏
-   同宽同位——打开时盖住决定卡,材料一寸不挡。没有决定栏时主画布自己让
-   出这一栏(padding-right)。窄屏退回悬浮抽屉。 */
-
-.task-workspace-v2 .workspace-review-drawer {
-  position: absolute;
-  top: var(--ws-body-top, calc(var(--ws-head-h) + var(--ws-strip-h)));
-  right: 0;
-  bottom: 0;
-  z-index: 60;
-  width: var(--ws-inspector-w);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  color: var(--text);
-  border: 0;
-  border-left: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--surface);
-  box-shadow: none;
-}
-.task-workspace-v2 .ws-body.reviewing { padding-right: var(--ws-inspector-w); }
-/* 遗留规则在全屏时又给 .ws-evidence 加一层 760px 的 padding-right,和上面
-   的让位叠加后材料区只剩 240px(上一版实测)。这里归零,只让一次。 */
-.task-workspace-v2.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence { padding-right: 0; }
-.task-workspace-v2 .workspace-review-drawer::after { background: linear-gradient(to top, var(--surface), transparent); border-radius: 0; left: 0; right: 0; bottom: 0; }
-.task-workspace-v2 .workspace-review-drawer > header {
-  min-height: 52px;
-  padding: 8px 10px 8px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-}
-.task-workspace-v2 .workspace-review-drawer > header strong { color: var(--text-strong); font-size: var(--fs-15); font-weight: 600; }
-.task-workspace-v2 .workspace-review-drawer > header p { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-12); line-height: 1.4; }
-.task-workspace-v2 .workspace-review-drawer > .workspace-review-content { padding: 16px 16px 24px; background: var(--surface); }
 .task-workspace-v2 .workspace-review-dialog-actions { flex: none; display: flex; align-items: center; gap: 6px; }
-.task-workspace-v2 .workspace-review-drawer > header > div:first-child { min-width: 0; flex: 1 1 auto; }
 .task-workspace-v2 .workspace-review-dialog-actions > button[aria-label="关闭批注与检视"] {
   width: 30px;
   height: 30px;
@@ -1137,20 +1085,13 @@
 .task-workspace-v2 .workspace-review-invite-history i.completed { background: var(--success); }
 .task-workspace-v2 .workspace-review-invite-history small { color: var(--muted); }
 
-/* 专注阅读:整块画布给材料;左导航、决定栏都收起,检查器仍可停靠。 */
+/* 专注阅读:整块画布给材料;左导航、决定栏都收起(检视画布在材料区内,不受影响)。 */
 .task-workspace-v2.materials-fullscreen > .ws-head,
 .task-workspace-v2.materials-fullscreen > .task-control-feedback,
 .task-workspace-v2.materials-fullscreen .ws-side { display: none; }
 .task-workspace-v2.materials-fullscreen .ws-body { grid-template-columns: minmax(0, 1fr); }
-.task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: 0; }
 
 /* ── 响应式:变简单,不变挤 ─────────────────────────────────────────── */
-
-@media (max-width: 1279px) {
-  /* 检查器只有 340–420px 时标题栏那句说明会叠成三行;计数筹码已经把
-     "这里有什么"说清了。 */
-  .task-workspace-v2 .workspace-review-drawer > header p { display: none; }
-}
 
 @media (max-width: 1180px) {
   .task-workspace-v2 { --ws-inspector-w: clamp(340px, 38vw, 420px); --ws-side-w: clamp(360px, 38vw, 460px); }
@@ -1167,25 +1108,6 @@
   }
   .task-workspace-v2 .ws-progress { max-width: none; justify-self: stretch; padding: 0 4px 0 8px; }
   .task-workspace-v2 .ws-progress .task-progress-caption { margin-left: auto; }
-}
-
-/* 中等宽度:检查器回到悬浮抽屉,盖在右侧,材料仍露出。 */
-@media (max-width: 1099px) {
-  .task-workspace-v2 .workspace-review-drawer {
-    position: fixed;
-    top: calc(var(--ws-head-h, 52px) + 8px);
-    right: 8px;
-    bottom: 8px;
-    z-index: 950;
-    width: min(600px, calc(100vw - 16px));
-    border: 1px solid var(--line);
-    border-radius: var(--radius-lg);
-    background: var(--overlay);
-    box-shadow: var(--shadow-lg);
-  }
-  .task-workspace-v2 .workspace-review-drawer::after { border-radius: 0 0 var(--radius-lg) var(--radius-lg); left: 1px; right: 1px; bottom: 1px; }
-  .task-workspace-v2 .ws-body.reviewing { padding-right: 0; }
-  .task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: calc(var(--ws-pane-head-h, 48px) + 8px); }
 }
 
 /* 窄屏:两栏上下堆叠,整页一个滚动;输入区不再固定在底部。 */
@@ -1214,16 +1136,6 @@
   .task-workspace-v2 .ws-progress .task-phase > span { display: none; }
   .task-workspace-v2 .ws-progress .task-phase.current > span { display: block; }
   .task-workspace-v2 .ws-progress .task-phase::before { width: 12px; margin: 0 6px; }
-  .task-workspace-v2 .workspace-review-drawer {
-    top: var(--ws-head-h, 56px);
-    right: 0;
-    bottom: 0;
-    width: 100vw;
-    border: 0;
-    border-radius: 0;
-  }
-  .task-workspace-v2 .workspace-review-drawer::after { border-radius: 0; left: 0; right: 0; bottom: 0; }
-  .task-workspace-v2.materials-fullscreen .workspace-review-drawer { top: var(--ws-pane-head-h, 48px); }
 }
 
 @media (max-width: 640px) {
@@ -1246,7 +1158,6 @@
   .task-workspace-v2 .push-review-scope { padding-inline: 16px; }
   .task-workspace-v2 .ws-execution-view { padding: 16px 12px 48px; }
   .task-workspace-v2 .ws-activity-section > header > small { display: none; }
-  .task-workspace-v2 .workspace-review-drawer > header p { display: none; }
   .task-workspace-v2 .workspace-review-dialog-actions .workspace-review-invite-button {
     width: 28px;
     padding: 0;

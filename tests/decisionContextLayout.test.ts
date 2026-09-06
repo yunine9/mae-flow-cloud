@@ -8,6 +8,10 @@ const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 const taskCard = readFileSync(
   join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
+const studio = readFileSync(
+  join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+const stream = readFileSync(
+  join(process.cwd(), "web/src/ConversationStream.tsx"), "utf8");
 
 test("决策背景展开后由外层真实占位，不能与后续问题重叠", () => {
   const legacyWorkspaceRule = css.indexOf(".ws-decision .waiting-context {");
@@ -21,12 +25,15 @@ test("决策背景展开后由外层真实占位，不能与后续问题重叠",
   assert.match(overrideBody, /overflow:\s*visible/);
 });
 
-test("长检视内容在抽屉内自己滚动，不把整页撑高", () => {
+test("长检视内容在检视画布内自己滚动，不把整页撑高", () => {
+  // 2026-09-05(740b6ff)起检视意见不再是固定定位抽屉,而是材料区右侧常驻
+  // 的画布:和材料内容并排在 .ws-material-stage 这一行里,自己滚、不撑父级。
   assert.match(workspace,
-    /className="workspace-review-drawer"\s+role="complementary"/);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*min-height:\s*0/s);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.workspace-review-content\s*\{[^}]*overflow:\s*auto/s);
+    /className="ws-review-canvas" id="ws-review-canvas" role="complementary"/);
+  assert.match(studio, /\.ws-review-canvas \{[^}]*min-height: 0;[^}]*overflow: auto/);
+  assert.match(studio, /\.ws-material-stage \{[^}]*min-height: 0;[^}]*overflow: hidden/);
+  assert.doesNotMatch(workspace, /workspace-review-drawer|workspace-review-content/,
+    "抽屉时代的类名不再出现在 TSX 里;它们的 CSS 已随之删除");
 });
 
 test("交付材料提供统一全屏入口且 Escape 先退出全屏", () => {
@@ -46,14 +53,14 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
   // 筛选条的"等我确认 N",打开前入口按钮上也有——同一屏三份,眼睛先去数
   // 数字。计数只留在能点的地方(入口按钮和筛选条),标题栏只留关闭。
   assert.match(workspace, /className=\{`ws-review-launch/);
-  assert.match(workspace,
-    /reviewCounts\.mine > 0 \? reviewCounts\.mine : reviewRecordCount/);
-  const drawerHeader = workspace.slice(
-    workspace.indexOf('<section className="workspace-review-drawer"'),
-    workspace.indexOf('<div className="workspace-review-content ws-insights-view">'),
+  assert.match(workspace, /reviewCounts\.mine \|\| reviewRecordCount/);
+  const canvasHeader = workspace.slice(
+    workspace.indexOf('<section className="ws-review-canvas"'),
+    workspace.indexOf("{reviewWorkspaceContent}"),
   );
-  assert.doesNotMatch(drawerHeader, /项等我确认/,
-    "抽屉标题栏不再重复计数");
+  assert.ok(canvasHeader.length > 0, "检视画布的标题栏要能定位到");
+  assert.doesNotMatch(canvasHeader, /项等我确认|reviewCounts/,
+    "画布标题栏不再重复计数");
   assert.match(workspace, /setReviewRevealRequest\(\(request\) => request \+ 1\)/);
   assert.doesNotMatch(workspace, /openedReviewAttention|previousReviewActionCount/,
     "批注出现时只亮入口，不应自动弹出并抢走当前任务");
@@ -61,11 +68,14 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
 
 test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () => {
   // 2026-09-04 起闸门是 decides(责任人,或受邀参与人答非拍板卡)。
-  assert.match(workspace, /waiting && decides && \(/,
+  // 2026-09-05 起决定卡钉在对话流顶部(ConversationStream.pinnedCard),
+  // 工作台只负责按 decides 造卡;有 waiting 就一直有卡,和检视画布无关。
+  assert.match(workspace, /currentCard=\{waiting \? \(decides \? \(/,
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
+  assert.match(stream, /const pinnedCard = !!waiting && !!currentCard;/);
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
-  assert.match(workspace, /aria-label="关闭检视意见"/);
+  assert.match(workspace, /aria-label="收起检视意见"/);
   assert.match(workspace, /if \(reviewPanelOpen\) setReviewPanelOpen\(false\)/,
     "Escape 应先关闭批注弹层，再退出整个工作台");
   assert.doesNotMatch(taskCard, /setPicked\(\(current\) =>[\s\S]{0,900}feedbackAnswers/,
@@ -79,36 +89,29 @@ test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(css, /\.annotation-location-notice\s*\{/);
 });
 
-test("检视意见是固定在右侧的侧滑抽屉:材料露出可点,定位不必先关窗", () => {
-  // 原来是遮罩弹层,看意见时看不到材料,"回到那一行"要先关窗(用户定调
-  // 这块是核心竞争力、易用性优先后改成抽屉)。第一版把抽屉挤进 .ws-body
-  // 栅格右栏,中等宽度下正文切成上下堆叠时抽屉被当普通块塞到最下面、
-  // 材料区头部被裁(用户截图实锤"看着都像 bug"),改成固定定位侧滑面板,
-  // 任何宽度行为一致。
-  assert.match(workspace, /className="workspace-review-drawer"/);
-  assert.doesNotMatch(workspace, /has-review/, "抽屉不再进正文栅格");
+test("检视意见是材料区右侧的常驻画布:材料露出可点,定位不必先关窗", () => {
+  // 形态史:遮罩弹层 → 挤进 .ws-body 栅格右栏(中等宽度被塞到最下面,
+  // 用户截图实锤"看着都像 bug")→ 固定定位侧滑抽屉(2026-09-02)→
+  // 2026-09-05 工作台重建(740b6ff)后落定为材料区内的并排画布:和材料
+  // 内容同在 .ws-material-stage 一行,打开不盖任务头、不改当前页签,
+  // 关掉只是 hidden——批注锚点还在,定位不必先关窗。
+  const stage = workspace.slice(
+    workspace.indexOf('<div className="ws-material-stage">'),
+    workspace.indexOf('<div className="ws-material-content">'));
+  assert.match(stage, /<section className="ws-review-canvas"[^>]*hidden=\{!reviewPanelOpen\}/,
+    "画布是材料舞台的直接子级,靠 hidden 开关而不是条件卸载");
+  assert.doesNotMatch(workspace, /has-review|workspace-review-drawer/,
+    "不再进 .ws-body 栅格,也没有抽屉");
   assert.doesNotMatch(workspace,
     /reviewPanelOpen && <div className="workspace-review-backdrop"/,
     "检视意见不再是遮罩弹层");
-  assert.match(workspace,
-    /if \(window\.matchMedia\("\(max-width: 900px\)"\)\.matches\) \{\s*setReviewPanelOpen\(false\);/,
-    "只有窄屏(抽屉占满整屏)定位时才关抽屉");
-  // 2026-09-02 二改:抽屉原来 top/right/bottom 全是 0,四边贴死视口——
-  // 用户实测截图"上下都顶到头了,都没显示全"。它还正好盖住任务头右侧的
-  // "暂停/取消"(1512 宽下按钮在 x1152-1258),要暂停任务得先关面板。现在
-  // 从任务头下面起步并留出边距,面板看得见边界,任务头照常能点。
-  assert.match(css,
-    /\.workspace-review-drawer\s*\{[^}]*position:\s*fixed[^}]*top:\s*calc\(var\(--ws-head-h[^}]*right:\s*10px[^}]*bottom:\s*10px[^}]*width:\s*min\(760px, calc\(100vw - 20px\)\)/s);
-  assert.match(css, /\.workspace-review-drawer\s*\{[^}]*border-radius:\s*14px/s,
-    "四边不再贴死视口,要有可见的面板边界");
-  assert.match(workspace, /--ws-head-h/,
-    "任务头高度由页面实测下发,不能在 CSS 里写死");
-  assert.doesNotMatch(css, /\.ws-body\.has-review/);
-  assert.match(css,
-    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer \{[^}]*width:\s*100vw/s,
-    "窄屏仍占满任务头以下整块");
+  assert.match(studio, /\.ws-review-canvas\[hidden\] \{ display: none; \}/);
+  assert.match(studio, /\.ws-review-canvas \{ order: 2; flex: 0 0 clamp\(340px, 40%, 420px\)/,
+    "画布靠右、定宽区间,左侧材料照常可点可圈选");
+  assert.doesNotMatch(css + studio, /\.workspace-review-drawer/,
+    "抽屉 CSS 已删,不许悄悄回来");
   assert.doesNotMatch(workspace, /setWorkspaceView\("insights"\)/,
-    "打开抽屉不能改掉交付材料、开发协作或执行现场的当前页签");
+    "打开画布不能改掉交付材料、开发协作或执行现场的当前页签");
 });
 
 test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复块各带说话人行", () => {
@@ -207,29 +210,25 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.match(css, /\.ws-decision \.repository-assignee-list > label \{[^}]*grid-template-areas: "name name" "who ticket" "state state"/s);
 });
 
-test("抽屉标题栏按自己的高度占位,副标题不被裁", () => {
-  // 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:420px 宽下
-  // 它要 85px 只拿到 64px,副标题有半行被裁在边框外。
-  assert.match(css, /\.workspace-review-drawer > header \{[^}]*flex:\s*none/s);
-  assert.match(css,
-    /@media \(max-width: 900px\) \{[^@]*\.workspace-review-drawer > header p \{ display: none; \}/s,
-    "窄屏抽屉占满整屏,副标题那句'左侧材料仍可圈选'不成立就别说");
+test("检视画布标题栏按自己的高度占位,副标题不被裁", () => {
+  // 抽屉时代它是竖向 flex,标题栏被内容区压缩到 min-height:420px 宽下要
+  // 85px 只拿到 64px,副标题半行裁在边框外。画布是普通块级滚动容器
+  // (overflow:auto,不是 flex 列),标题栏天然按内容占位;这里锁住"别再把
+  // 画布改回 flex 列"。
+  const canvasRule = /\.workspace-studio \.ws-review-canvas \{[^}]*\}/.exec(studio)?.[0] ?? "";
+  assert.ok(canvasRule, "画布规则要在 workspace-studio.css 里");
+  assert.doesNotMatch(canvasRule, /display:\s*flex|flex-direction/);
+  assert.match(studio, /\.ws-review-canvas \.ws-view-intro \{ gap: 12px; margin-bottom: 12px; \}/);
 });
 
-test("抽屉打开时收起提问题浮钮,底部不再靠留白躲它", () => {
-  // 浮钮挂在 .workspace-overlay(z-index 120)之外、自己 650,和抽屉的 950
-  // 不在同一个栈里比,所以照样压在抽屉右下角。原先靠内容底部留 84px 空白
-  // 躲开:空白本身就在浮钮底下,最后一条的操作还是点不到,只白白少一屏。
-  assert.match(css,
-    /body:has\(\.workspace-review-drawer\) \.wish-quick-trigger \{ display: none; \}/);
-  assert.doesNotMatch(css,
-    /\.workspace-review-drawer > \.workspace-review-content \{ padding: 12px 12px 84px; \}/,
-    "浮钮已经收起,底部不该再留那段躲避用的死白");
-  // macOS 悬浮滚动条不滚不出现,面板又比一屏长得多(实测 10 条 ≈ 2887px),
-  // 不给常驻滚动槽和底部渐隐,看到的就是"内容被截断"。
-  assert.match(css,
-    /\.workspace-review-drawer > \.workspace-review-content \{[^}]*scrollbar-gutter:\s*stable/s);
-  assert.match(css, /\.workspace-review-drawer::after \{[^}]*linear-gradient\(to top, var\(--page\)/s);
+test("工作台打开期间收起提问题浮钮,检视画布自己滚动", () => {
+  // 浮钮挂在 .workspace-overlay 之外、z-index 650,会压在工作台右下角——
+  // 抽屉时代只在抽屉开着时收起,原先还靠内容底部留 84px 死白躲它(空白
+  // 本身就在浮钮底下,最后一条的操作照样点不到)。工作台重建后整个工作台
+  // 打开期间都收起,画布(材料区右侧)的最后一条不再被它盖住。
+  assert.match(studio, /body:has\(\.workspace-studio\) \.wish-quick-trigger \{ display: none; \}/);
+  assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/, "画布自己滚,不靠底部留白躲浮钮");
+  assert.doesNotMatch(css + studio, /padding: 12px 12px 84px/, "躲避浮钮的死白不许回来");
 });
 
 test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
@@ -290,7 +289,7 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   assert.doesNotMatch(workspace, /FeedbackSummary|feedback-summary/);
   assert.doesNotMatch(css, /\.feedback-summary/);
   assert.match(workspace, /className=\{`ws-review-launch/);
-  assert.match(workspace, /<em>\{reviewCounts\.mine > 0 \? reviewCounts\.mine : reviewRecordCount\}<\/em>/);
+  assert.match(workspace, /<em>\{reviewCounts\.mine \|\| reviewRecordCount\}<\/em>/);
   assert.doesNotMatch(workspace, /feedbackDigest/,
     "入口不应再堆一行解释性文案");
   assert.match(workspace, /function FeedbackList/);
@@ -433,24 +432,30 @@ test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖�
   assert.match(graph, /不需要为了批注去找文档中的某一行/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
-  // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。
-  // 入口搬上工具条 + ⌥/Alt+R 快捷键,抽屉开着时材料区让位。
+  // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。当时
+  // 的解法是全屏下往工具条加一个入口 + ⌥/Alt+R。2026-09-05 工作台重建后
+  // 入口本来就常驻材料工具条(ws-review-launch),画布和材料内容同在
+  // .ws-material-stage 里并排,全屏与否都不需要"让位"补丁和量高变量。
   assert.match(workspace,
-    /materialsFullscreen && <button type="button"\s*className=\{`materials-review-toggle/,
-    "全屏下材料工具条上有检视意见入口");
+    /className=\{`ws-review-launch\$\{reviewPanelOpen \? " on" : ""\}`\}/,
+    "检视意见入口常驻材料工具条");
+  assert.doesNotMatch(workspace, /materialsFullscreen && <button[^>]*ws-review-launch/,
+    "入口不再只在全屏下出现");
   assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
   assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
   assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
-  assert.match(css,
-    /materials-fullscreen:has\(\.workspace-review-drawer\) \.ws-evidence \{\s*padding-right: calc\(min\(760px/,
-    "全屏抽屉打开时材料区让出抽屉宽度");
-  assert.match(css,
-    /materials-fullscreen \.workspace-review-drawer \{\s*top: calc\(var\(--ws-pane-head-h/,
-    "全屏下抽屉从工具条下面起步,退出全屏/检视意见不被盖住");
-  assert.match(workspace, /"--ws-pane-head-h"/, "工具条高度量出来写变量,不写死");
+  const studioCss = readFileSync(new URL("../web/src/workspace-studio.css", import.meta.url), "utf8");
+  assert.match(studioCss,
+    /\.ws-material-stage \{ display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; \}/,
+    "材料舞台是一行 flex:画布开着时材料内容自己收窄,不靠 padding 让位");
+  assert.doesNotMatch(css + studioCss,
+    /materials-fullscreen:has\(\.workspace-review-drawer\)|--ws-pane-head-h/,
+    "抽屉时代的让位补丁与工具条高度变量已随抽屉一起删除");
+  assert.doesNotMatch(workspace, /--ws-pane-head-h|--ws-body-top/,
+    "只喂抽屉的两个量高副作用一起删了,别留只写不读的变量");
 });
 
-test("任务记忆第一期契约:记为记忆去向、面板只读列表、导航计数、服务端只读路由", () => {
+test("任务记忆第一期契约:记为记忆去向、面板只读列表、服务端只读路由", () => {
   // docs/knowledge-memory-design.md §4.1/§9:圈选是唯一的人工入口;可见但不可管。
   const annotatable = readFileSync(join(process.cwd(), "web/src/Annotatable.tsx"), "utf-8");
   assert.match(annotatable, /memory: \{\s*label: "记为记忆"/,
@@ -473,7 +478,9 @@ test("任务记忆第一期契约:记为记忆去向、面板只读列表、导�
   assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
   assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");
   const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
-  assert.match(workspace, /记下 \$\{task\.memories_recorded\} 条/, "导航入口带条数");
+  // 2026-09-03 第二期(1553e0d)把任务页的沉淀入口连同导航条数一起砍掉:
+  // 记忆只在"这单用到的知识"里只读可见,导航不再自带计数。
+  assert.doesNotMatch(workspace, /memories_recorded/, "导航入口不再带条数");
   const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
   assert.match(server, /parts\[2\] === "memories"/);
   assert.match(server, /parts\[4\] === "withdraw"/);

@@ -31,7 +31,9 @@ export interface WorkbenchUiScenario {
   actions: string[];
 }
 
-const stableActions = ["当前", "产物", "活动", "批注与检视"];
+// 动作名即界面上的字样(2026-09-06 逐个对照 web/src 核过):三个视图叫
+// 「当前 / 材料 / 工作过程」,材料工具条上的检视入口叫「检视意见」。
+const stableActions = ["当前", "材料", "工作过程", "检视意见"];
 
 export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
   {
@@ -39,7 +41,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     title: "排队中的任务",
     status: "queued",
     purpose: "核对队列位置、责任人和无须介入的平静状态",
-    checkpoints: ["当前摘要", "队列位次", "产物空态", "活动空态"],
+    checkpoints: ["当前摘要", "队列位次", "材料空态", "工作过程空态"],
     actions: [...stableActions, "暂停", "取消"],
   },
   {
@@ -48,14 +50,14 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "running",
     purpose: "覆盖进度、长说明、工具事件、知识、Token、预热和执行方案",
     checkpoints: ["运行焦点", "阶段方案", "长文分层", "原始事件", "任务上下文", "模型用量", "运行环境"],
-    actions: [...stableActions, "预热通过", "补充给 Agent", "暂停", "取消", "查看阶段方案"],
+    actions: [...stableActions, "开工前编译", "补充给 Agent", "暂停", "取消", "点击进度条阶段（阶段方案弹层）"],
   },
   {
     key: "pausing",
     title: "正在安全暂停",
     status: "pausing",
     purpose: "覆盖控制动作尚未落定的过渡态",
-    checkpoints: ["暂停进度", "控制反馈", "只读活动"],
+    checkpoints: ["暂停进度", "控制反馈", "只读工作过程"],
     actions: [...stableActions, "取消"],
   },
   {
@@ -64,7 +66,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "paused",
     purpose: "覆盖恢复、交还、人工接管和跨仓同步入口",
     checkpoints: ["暂停焦点", "协作区默认展开", "助手占场说明"],
-    actions: [...stableActions, "恢复", "交还主任务", "发送补充", "取消"],
+    actions: [...stableActions, "恢复", "交回给 Agent", "发送", "取消"],
   },
   {
     key: "requirement-decision",
@@ -72,7 +74,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "waiting_for_human",
     purpose: "覆盖证据与单一决定同屏",
     checkpoints: ["需求原文预览", "决定背景", "单一主按钮"],
-    actions: [...stableActions, "在产物中展开", "搜索", "全屏查看", "需求已确认，进入需求分析"],
+    actions: [...stableActions, "搜索", "全屏查看", "需求已确认，进入需求分析"],
   },
   {
     key: "long-form-decision",
@@ -80,7 +82,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "waiting_for_human",
     purpose: "覆盖 Agent 大段前言、多道选择题与自定义答复",
     checkpoints: ["长前言折叠", "多问题", "开放题", "自定义答复"],
-    actions: [...stableActions, "展开完整说明", "自定义答复", "提交决定"],
+    actions: [...stableActions, "Agent 对方案的说明", "自定义答复", "提交决定"],
   },
   {
     key: "chain-decision",
@@ -88,7 +90,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "waiting_for_human",
     purpose: "覆盖跨仓图、执行人、单号和拆分决定",
     checkpoints: ["模块图", "依赖边", "人员分配", "子任务入口"],
-    actions: [...stableActions, "在产物中展开", "对整体方案提意见", "批注", "确认拆分并继续", "提交决定"],
+    actions: [...stableActions, "对整体方案提意见", "批注", "确认拆分并继续", "提交决定"],
   },
   {
     key: "push-review",
@@ -98,8 +100,8 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     checkpoints: ["代码目录", "双栏 Diff", "范围选择", "批注四态", "MR 意见", "机器告警"],
     actions: [
       ...stableActions,
-      "搜索", "全屏查看", "邀请检视", "等我确认", "处理与验证", "已闭环",
-      "查看完整交付", "打开代码差异并调整文件", "专注审阅", "全部纳入",
+      "搜索", "全屏查看", "邀请他人检视", "等我确认", "Agent 处理中", "已完成",
+      "看全部改动", "去代码改动里选文件", "专注审阅", "全部纳入",
       "全部仅留本地", "折叠全部目录", "缩小 Git 字号", "放大 Git 字号",
       "行批注", "确认按清单推送", "需要调整代码（按清单返工）", "提交返工意见",
     ],
@@ -110,7 +112,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "coordinating",
     purpose: "覆盖父子任务、依赖关系与整体进度",
     checkpoints: ["主任务焦点", "子任务状态", "依赖图", "阻塞关系"],
-    actions: [...stableActions, "打开子任务", "取消"],
+    actions: [...stableActions, "查看子任务", "取消"],
   },
   {
     key: "verifying-live",
@@ -158,7 +160,7 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     status: "completed",
     purpose: "覆盖终态、交付材料、用量与删除确认",
     checkpoints: ["完成焦点", "末段进度", "交付记录", "只读批注"],
-    actions: [...stableActions, "全屏查看", "下载全部文档", "删除任务", "确认删除"],
+    actions: [...stableActions, "全屏查看", "打包下载", "删除任务", "确认删除"],
   },
   {
     key: "canceled",

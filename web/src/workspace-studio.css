@@ -12,7 +12,6 @@
 .workspace-studio.task-workspace-v2 .ws-identity-line { margin-top: 7px; }
 .workspace-studio.task-workspace-v2 .ws-progress { max-width: 520px; }
 .workspace-studio.task-workspace-v2 .ws-body { grid-template-columns: minmax(0,1fr) var(--ws-side-w); padding-right: 0; }
-.workspace-studio.task-workspace-v2 .ws-body.reviewing { padding-right: 0; }
 .workspace-studio.task-workspace-v2 .ws-side { border: 0; border-left: 1px solid var(--line); background: var(--canvas); }
 .workspace-studio .ws-collaboration-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
 .workspace-studio .ws-collaboration-head strong { font-size: var(--fs-14); font-weight: 600; }
@@ -136,8 +135,6 @@
 .workspace-studio .annot-route-picker { flex-wrap: wrap; }
 .workspace-studio.materials-fullscreen .ws-body { grid-template-columns: minmax(0,1fr); }
 .workspace-studio.materials-fullscreen .ws-side { display: none; }
-.workspace-studio.materials-fullscreen:has(.workspace-review-drawer) .ws-body { padding-right: var(--ws-side-w); }
-.workspace-studio.materials-fullscreen .workspace-review-drawer { top: var(--ws-pane-head-h,52px); width: var(--ws-side-w); }
 /* Keep the current action reachable even with long review histories. */
 @media (min-width: 901px) {
   .workspace-studio.task-workspace-v2 .ws-side-scroll { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: hidden; padding: 14px; }
@@ -174,8 +171,6 @@
   .workspace-studio.task-workspace-v2 .ws-side-scroll { overflow: visible; }
   
   .workspace-studio.materials-fullscreen .ws-evidence { flex: 1; }
-  .workspace-studio.materials-fullscreen:has(.workspace-review-drawer) .ws-body { padding-right: 0; }
-  .workspace-studio.materials-fullscreen .workspace-review-drawer { width: min(430px,100%); top: var(--ws-pane-head-h,52px); }
 }
 @media (max-width: 600px) {
   .workspace-studio.task-workspace-v2 .ws-head { padding: 14px 12px; gap: 8px; grid-template-columns: 28px minmax(0,1fr); }

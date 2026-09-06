@@ -773,7 +773,6 @@ export function TaskWorkspace({
   }
   const workspaceRoot = useRef<HTMLElement>(null);
   const headRef = useRef<HTMLElement>(null);
-  const evidenceHeadRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const materialSearchInput = useRef<HTMLInputElement>(null);
   const materialSearchRows = useRef<HTMLElement[]>([]);
@@ -986,10 +985,10 @@ export function TaskWorkspace({
     );
   }, [task.status]);
 
-  // 批注抽屉要从任务头下面起步,否则"暂停/取消"被盖住,想暂停得先关面板。
-  // 头高不是常量:标题换行、窄屏都会撑高,写死 70px 迟早再盖回去。量一次
-  // 写进 CSS 变量,布局只认这一个真值。ResizeObserver 缺席就退回默认值,
-  // 面板照常能开——旁路不该让人卡住。
+  // 任务头实测高度写进 --ws-head-h(task-workspace.css 用它做 .ws-head 的
+  // min-height 底线)。头高不是常量:标题换行、窄屏都会撑高,写死迟早出缝。
+  // 原来还喂固定定位的检视抽屉,抽屉 2026-09-05 改成材料区内画布后只剩
+  // 这一个消费者。ResizeObserver 缺席就退回默认值——旁路不该让人卡住。
   useEffect(() => {
     const head = headRef.current;
     const root = workspaceRoot.current;
@@ -1010,28 +1009,6 @@ export function TaskWorkspace({
       observer?.disconnect();
     };
   }, []);
-
-  // 宽屏下批注检查器不再悬浮盖住材料,而是停靠在主画布右栏:它的顶边就是
-  // 主画布的顶边。阶段条、控制反馈条都会改变这个值,量出来写进变量。
-  useEffect(() => {
-    const body = bodyRef.current;
-    const root = workspaceRoot.current;
-    if (!body || !root) return;
-    const publish = () => root.style.setProperty(
-      "--ws-body-top", `${Math.round(body.offsetTop)}px`);
-    publish();
-    window.addEventListener("resize", publish);
-    const observer = typeof ResizeObserver === "undefined"
-      ? undefined : new ResizeObserver(publish);
-    for (const sibling of Array.from(root.children)) {
-      if (sibling === body) break;
-      observer?.observe(sibling);
-    }
-    return () => {
-      window.removeEventListener("resize", publish);
-      observer?.disconnect();
-    };
-  }, [task.id, task.status, task.feedback_error, controlError]);
 
 
   useEffect(() => {
@@ -1088,21 +1065,6 @@ export function TaskWorkspace({
     window.addEventListener("keydown", switchView);
     return () => window.removeEventListener("keydown", switchView);
   }, [workspaceView]);
-
-  // 专注阅读仍保留完整批注能力；量出产物工具栏高度，让 Inspector 从其
-  // 下方出现，不遮住退出、搜索和材料切换。
-  useEffect(() => {
-    const head = evidenceHeadRef.current;
-    const root = workspaceRoot.current;
-    if (!head || !root) return;
-    const publish = () => root.style.setProperty(
-      "--ws-pane-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
-    publish();
-    const observer = typeof ResizeObserver === "undefined"
-      ? undefined : new ResizeObserver(publish);
-    observer?.observe(head);
-    return () => observer?.disconnect();
-  }, [materialsFullscreen, workspaceView]);
 
   // 搜索范围就是当前渲染出来的这一份材料。普通文档取带 data-l 的最深
   // 正文行；两种差异视图取各自的真实内容行，删除行没有新行号也能搜到。
@@ -1922,7 +1884,7 @@ export function TaskWorkspace({
           平铺在这""力度不够",这次去掉。 */}
       <div className="ws-body" ref={bodyRef}>
         <section className="ws-evidence" aria-label="工作区">
-          <div className="ws-pane-head" ref={evidenceHeadRef} aria-label="任务工作台视图">
+          <div className="ws-pane-head" aria-label="任务工作台视图">
             <div>
               <strong>{materialHeading.title}</strong>
             </div>

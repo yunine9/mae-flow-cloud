@@ -1257,110 +1257,7 @@ svg {
   color: var(--text-strong);
   border-color: var(--line-strong);
 }
-.workspace-review-content {
-  min-height: 0;
-  padding: 16px;
-  overflow: auto;
-  background: var(--page);
-}
-/* 批注与检视抽屉:固定在视口右侧的侧滑面板,不参与 .ws-body 栅格——
-   第一版挤进栅格右栏,在中等宽度下正文栅格切成上下堆叠,抽屉被当普通块
-   塞到最下面、材料区头部被裁(用户截图实锤"看着都像 bug")。固定定位
-   后任何宽度行为一致:左侧露出的材料照常可点可圈选,窄屏占满整屏。 */
-.workspace-review-drawer {
-  position: fixed;
-  /* 让开任务头:top:0 时抽屉正好盖住"暂停/取消"和责任人一行(实测 1512
-     宽下按钮在 x1152-1258、y18-50),要暂停任务得先关面板。头高随标题
-     换行变,写死会重新盖回去——由 TaskWorkspace 实测写进 --ws-head-h。 */
-  top: calc(var(--ws-head-h, 70px) + 10px);
-  right: 10px;
-  bottom: 10px;
-  z-index: 950;
-  width: min(760px, calc(100vw - 20px));
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: -14px 0 40px rgba(0, 0, 0, .16), 0 18px 44px rgba(0, 0, 0, .14);
-}
-/* 内容远比一屏长(实测 10 条意见 ≈ 2887px,一屏 886px)。macOS 悬浮滚动条
-   不滚不出现,面板又四边贴死视口,看到的就是"内容被截断"而不是"还能往下
-   滚"——常驻滚动槽 + 底部渐隐,把"下面还有"画出来。 */
-.workspace-review-drawer > .workspace-review-content {
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-}
-.workspace-review-drawer::after {
-  content: "";
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 1px;
-  height: 26px;
-  border-radius: 0 0 13px 13px;
-  background: linear-gradient(to top, var(--page), transparent);
-  pointer-events: none;
-}
-.workspace-review-drawer > header {
-  position: relative;
-  /* 抽屉是竖向 flex,标题栏默认会被内容区压缩到 min-height:副标题一换行
-     就有半行被裁在边框外(420px 宽实测:需要 85px 只给了 64px)。标题栏
-     按自己的高度占位,压缩留给能滚的内容区。 */
-  flex: none;
-  min-height: 64px;
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.workspace-review-drawer > header > div:first-child {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-.workspace-review-drawer > header span {
-  color: var(--accent);
-  /* 11px 的眉标按默认 1.6 行高白占 7px;标题栏不再被压缩后这点直接算在
-     内容区头上。 */
-  font: 750 12px/1.25 var(--font-mono);
-  letter-spacing: 0;
-}
-.workspace-review-drawer > header strong { color: var(--text-strong); font-size: 18px; }
-/* 这句是在说"面板不挡事,左边照样能圈选"——被省略号切掉就等于没写。
-   标题栏腾出计数徽标的位置后放它换行,顶多占两行。 */
-.workspace-review-drawer > header p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--font-size-assist);
-  line-height: 1.45;
-}
-.workspace-review-drawer > header .workspace-review-dialog-actions em {
-  white-space: nowrap;
-}
-.workspace-review-drawer > .workspace-review-content { padding: 12px 12px 18px; }
-.workspace-review-drawer .workspace-review-notes { width: 100%; }
-@media (max-width: 900px) {
-  /* 窄屏没有"左边还看得见材料"这回事,抽屉占满头以下整块,不留边距。
-     副标题最后半句正是在承诺这件事,这里不成立,索性不说。 */
-  .workspace-review-drawer > header p { display: none; }
-  .workspace-review-drawer {
-    top: var(--ws-head-h, 70px);
-    right: 0;
-    bottom: 0;
-    width: 100vw;
-    border: 0;
-    border-radius: 0;
-  }
-  .workspace-review-drawer::after { left: 0; right: 0; bottom: 0; border-radius: 0; }
-}
-/* 抽屉顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
+/* 检视画布顶部筛选条:三节共用的处理归属档位,先看"压在我这的有几条"。 */
 .review-filter {
   position: sticky;
   top: -12px;
@@ -1541,7 +1438,6 @@ svg {
   .workspace-invite-dialog { max-height: calc(100vh - 20px); }
   .workspace-review-dialog > header { align-items: flex-start; }
   .workspace-review-dialog > header p { display: none; }
-  .workspace-review-content { padding: 10px; }
   .workspace-review-dialog-actions { align-items: flex-start; }
 }
 .annotation-location-notice {
@@ -1683,11 +1579,6 @@ svg {
 .wish-quick-dialog > p { margin: 0; color: var(--accent); font-size: 13px; }
 .wish-quick-dialog footer button { padding: 9px 13px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
 .wish-quick-dialog footer .primary { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
-/* 右下角"提问题"浮钮挂在 .workspace-overlay(z-index 120)之外,自己 650,
-   于是压在 z-index 950 的抽屉上——同一个栈里比不了,抽屉调多高都没用。
-   原先靠内容底部留 84px 空白躲它:空白照样在浮钮底下,最后一条还是点不
-   到,只是白白少了一屏内容。检视期间直接收起,关掉面板就回来。 */
-body:has(.workspace-review-drawer) .wish-quick-trigger { display: none; }
 
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
@@ -7093,29 +6984,6 @@ pre {
   font-weight: 500;
   letter-spacing: 0;
 }
-/* 全屏看材料时右栏整个藏起来,"批注与检视"入口跟着没了,想开抽屉得先退
-   全屏(用户 2026-09-04 实锤)。全屏下入口搬到材料工具条上,和快捷键
-   ⌥/Alt+R 一起,任何布局下都能召唤抽屉。 */
-.ws-source-switch .materials-review-toggle {
-  margin-left: 5px;
-  padding-left: 12px;
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
-  background: var(--accent-soft);
-}
-.ws-source-switch .materials-review-toggle:hover:not(:disabled),
-.ws-source-switch .materials-review-toggle.on {
-  color: var(--accent-fg);
-  border-color: var(--accent);
-  background: var(--accent);
-}
-.ws-source-switch .materials-review-toggle.on i { color: var(--accent); background: #fff; }
-.ws-source-switch .materials-review-toggle > span {
-  color: inherit;
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
 .ws-source-switch .material-search-toggle {
   padding-left: 10px;
   color: var(--accent);
@@ -7230,21 +7098,6 @@ pre {
 }
 .workspace-overlay.materials-fullscreen .ws-doc .md {
   width: min(1600px, 100%);
-}
-/* 全屏 + 抽屉同屏:抽屉固定在右侧 760px,材料区整体给它让位,否则工具条
-   上的"退出全屏"和正文右侧被盖住。窄屏抽屉本来就占满整屏,不让。 */
-@media (min-width: 901px) {
-  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence {
-    padding-right: calc(min(760px, 100vw - 20px) + 14px);
-  }
-  /* 工具条不让:它在抽屉上方整行保持满宽,"退出全屏/批注与检视"照常能点。 */
-  .workspace-overlay.materials-fullscreen:has(.workspace-review-drawer) .ws-evidence > .ws-pane-head {
-    margin-right: calc(-1 * (min(760px, 100vw - 20px) + 14px));
-  }
-  /* 任务头藏了,--ws-head-h 归零;抽屉改从材料工具条下面起步。 */
-  .workspace-overlay.materials-fullscreen .workspace-review-drawer {
-    top: calc(var(--ws-pane-head-h, 64px) + 10px);
-  }
 }
 /* 全屏是给"看不下"的材料用的,需求原文和仓间依赖图也得跟着铺开:原来
    只放宽了 .md,需求原文仍卡在 860px、依赖图仍卡在 900px,点了全屏两边

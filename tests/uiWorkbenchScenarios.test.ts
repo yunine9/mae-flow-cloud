@@ -10,6 +10,8 @@ import {
 
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
+const inspector = readFileSync(
+  join(process.cwd(), "web/src/TaskInspector.tsx"), "utf-8");
 const fixtureSeed = readFileSync(
   join(process.cwd(), "scripts/seed-ui-workbench-fixtures.ts"), "utf-8");
 const taskService = readFileSync(
@@ -34,9 +36,9 @@ test("工作台场景库覆盖全部任务状态与关键交互变体", () => {
 test("场景动作覆盖工作台全部层级，不把能力删成好看的空壳", () => {
   const actions = new Set(WORKBENCH_UI_SCENARIOS.flatMap((item) => item.actions));
   for (const required of [
-    "当前", "产物", "活动", "检视意见",
+    "当前", "材料", "工作过程", "检视意见",
     "暂停", "取消", "恢复", "交回给 Agent", "补充给 Agent",
-    "在产物中展开", "搜索", "全屏查看",
+    "搜索", "全屏查看",
     "邀请他人检视", "等我确认", "Agent 处理中", "已完成",
     "看全部改动", "去代码改动里选文件", "专注审阅",
     "全部纳入", "全部仅留本地", "折叠全部目录",
@@ -49,14 +51,17 @@ test("场景动作覆盖工作台全部层级，不把能力删成好看的空�
   ]) assert.ok(actions.has(required), `场景库缺少动作：${required}`);
 
   assert.match(workspace, /\["focus", "当前"\]/);
-  assert.match(workspace, /\["materials", "产物"\]/);
-  assert.match(workspace, /\["execution", "活动"\]/);
+  assert.match(workspace, /\["materials", "材料"\]/);
+  assert.match(workspace, /\["execution", "工作过程"\]/);
   assert.match(workspace, /<Composer/);
   assert.match(workspace, /<ConversationStream/);
   assert.match(workspace, /crossRepository=\{Boolean\(task\.parent_task_id\)\}/, "跨仓子任务的输入区带「通知上下游」档");
-  assert.match(workspace, /<ExecutionPanel/);
+  // 2026-09-05 重建后执行面板与用量进了任务检查器(TaskInspector),
+  // 工作过程视图挂的是 TaskJourney;能力没删,只是换了住处。
+  assert.match(workspace, /<TaskJourney/);
+  assert.match(inspector, /<ExecutionPanel/);
   assert.match(workspace, /<KnowledgeFootprint/);
-  assert.match(workspace, /<TokenUsage/);
+  assert.match(inspector, /<TokenUsage/);
   assert.match(workspace, /<WarmupPanel/);
 });
 

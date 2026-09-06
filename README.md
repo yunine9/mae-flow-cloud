@@ -300,6 +300,24 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 质量加固第一步:测试回零、体量棘轮、推送闸门。** 全量 `npm test`
+  此前常年挂着 9 条红(布局 7、场景覆盖 1、下单事实 1)——红灯常驻等于没有灯,
+  新增的红没人再看。逐条对到现状:7 条布局测试断言的是 09-02 的固定定位检视
+  抽屉,09-05 工作台重建后它已是材料区右侧的常驻画布(`ws-review-canvas`),
+  测试改锚到画布;抽屉时代只剩死 CSS(三份样式表约 240 行,外加两个只喂它的
+  量高副作用 `--ws-pane-head-h`/`--ws-body-top`)一并删除。场景库的动作名与
+  "产物/活动"页签名对齐到界面现有字样(材料/工作过程、检视意见、交回给 Agent、
+  看全部改动……逐个 grep 核过),没有对应按钮的动作删掉。下单事实用例的 UT
+  skill 没标适用语言,按知识治理口径(无标签资产不进任务)本就不该被选中,
+  测试补上 `technologies: [java]` 与仓库画像走正路——不是产品放宽。
+  **体量棘轮**:`tests/taskServiceSizeRatchet.test.ts` 锁 `src/taskService.ts`
+  ≤ 21,630 行(度量:12 天 245 个 fix 提交里 40% 落在这一个文件),每绞杀式
+  抽出一块就往下拧,不许再长。**推送闸门**:`npm run gate` = 根 typecheck +
+  web 构建(`tsc -b`)+ 九个秒级契约测试;`git config core.hooksPath .githooks`
+  后 push 前自动跑,`MFC_SKIP_GATE=1` 可跳过一次(闸门自己坏了才用)。全量
+  测试与真件演练仍手动,分钟级的东西塞进 hook 只会教人 --no-verify。
+  **已验**:全量 `npm test` 单进程回到 0 红;**未验**:删掉的死 CSS 只靠
+  "TSX 里没有这些类名"判定,五档宽度目测留给下一轮 CSS 分层时一起看。
 - **2026-09-06 批注可以带图给 Agent 看。** 批注框里粘贴截图或选文件,先上传成
   检视图片资产(`POST /tasks/:id/annotation-assets`,PNG/JPEG/GIF/WebP,≤8 MB,
   按内容哈希落任务目录 `reviews/assets/` 并铺进 Agent 工作区
