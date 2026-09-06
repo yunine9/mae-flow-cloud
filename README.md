@@ -312,8 +312,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 - **2026-09-06 跨仓真模型演练(cross-glm53-20260906b)的结论。** 分析→拆单→
   主仓子任务全链路真跑通并合入(17 文件 334 行,Build-Fix、流水线核销、待合入、
   假平台合入、完成);上游合入后门户仓子任务自动解阻塞。两个真问题:(1) 主仓
-  Agent 改了字段契约却一次没调「通知上下游」,门户仓子任务只能自己发现"契约在
-  本仓不可达"——机制在、界面在、Agent 没被要求用,待收;(2) 门户仓 Build-Fix
+  Agent 改了字段契约,门户仓子任务只能自己发现"契约在本仓不可达"——查实是
+  「通知上下游」只有页面入口,Agent 没有这个工具。用户 09-06 拍板:先不给 Agent
+  加工具,由人看到契约变化后从子任务页面手动通知;(2) 门户仓 Build-Fix
   30 分钟预算耗尽判 environment_error、任务 failed:`mvn package` 要的 jar/resources
   插件不在共享缓存里(预热只跑过 compile/test),容器又没外网,依赖解析空转 14
   分钟。已把预热的 Java 指引改成与 Build-Fix 同一条 `package -DskipTests`;

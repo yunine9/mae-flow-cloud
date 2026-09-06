@@ -686,8 +686,8 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     readFileSync(join(dataDir, webTask.id, "chain-plan.md"), "utf-8"),
     /已确认方案/,
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
-  assert.equal(apiTask.title, "跨仓订单状态交付 · 接口模块");
-  assert.equal(webTask.title, "跨仓订单状态交付 · 页面模块");
+  assert.equal(apiTask.title, "接口模块 · 跨仓订单状态交付");
+  assert.equal(webTask.title, "页面模块 · 跨仓订单状态交付");
   assert.ok(apiTask.workflow_profile?.final_snapshot?.stages
     .flatMap((item) => item.items)
     .some((item) => item.id === "api-diagnosis-skill"),
