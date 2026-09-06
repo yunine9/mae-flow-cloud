@@ -300,6 +300,16 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-06 绞杀第三块:push 前确认与交付范围的决策并入 `src/pushReviewPolicy.ts`。**
+  要不要人过目(任务级设置 > 个人默认 > 有清单即保守复检;未闭环意见与工作台
+  返工复检是吞不掉的安全例外)、到了推送点是放行/全自动代确认/没 Build-Fix
+  收据停下/重新出卡(`selectionPushDecision`)、越界怎么算(前缀按路径段闭合、
+  豁免、内核流程规格不算)、给人看的范围变化一行与裁决话术,全部成了纯函数
+  并进决策表。两处刻意保住原来的惰性:任务级设置在时不查个人默认;精确收据
+  放行时不算策略(不读批注)。体量棘轮拧到 21,455(三块累计 −175 行;数字
+  不大,值钱的是三张决策表——以后这三处的改动先改表再改壳)。**已验**:决策表
+  + pushConfirmation/deliverySelection/decisionSelection/prepushSkip/
+  prepushRecovery/deliveryUnitSplit 用例;**未验**:内网真平台没有重放。
 - **2026-09-06 质量加固第四、五步立成例行:每周真模型演练 + fix 占比复测。**
   演练清单在 `docs/weekly-drill.md`(跑什么、看什么、问题怎么进 issue,基于
   cross-glm53-20260906b 那次首跑);`npm run fix-ratio -- 7` 给出近 N 天 fix
@@ -351,7 +361,7 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   **体量棘轮**:`tests/taskServiceSizeRatchet.test.ts` 锁 `src/taskService.ts`
   ≤ 21,630 行(度量:12 天 245 个 fix 提交里 40% 落在这一个文件),每绞杀式
   抽出一块就往下拧,不许再长。**推送闸门**:`npm run gate` = 根 typecheck +
-  web 构建(`tsc -b`)+ 十一个秒级契约测试;`git config core.hooksPath .githooks`
+  web 构建(`tsc -b`)+ 十二个秒级契约测试;`git config core.hooksPath .githooks`
   后 push 前自动跑,`MFC_SKIP_GATE=1` 可跳过一次(闸门自己坏了才用)。全量
   测试与真件演练仍手动,分钟级的东西塞进 hook 只会教人 --no-verify。
   **已验**:全量 `npm test` 单进程回到 0 红;**未验**:删掉的死 CSS 只靠

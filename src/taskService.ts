@@ -96,8 +96,9 @@ import {
   type WorkspaceReviewReceipt,
 } from "./feedbackPolicy.ts";
 import {
-  pushReviewCallId,
-  pushReviewReceiptCovers,
+  type PushReviewPolicy, deliveryScopeViolations, describeDirtyPaths, listedPaths,
+  pushReviewCallId, pushReviewPolicyFor, pushReviewReceiptCovers, pushWaitingDetail,
+  recardDetail, samePaths, scopeDeltaLine, scopeViolationDetail, selectionPushDecision,
 } from "./pushReviewPolicy.ts";
 import {
   DeliveryOutbox,
@@ -1935,13 +1936,6 @@ export interface DecisionSubmission {
   actor?: string;
 }
 
-/** 脏路径给人看的形态:前几条点名,余量说总数——三万个产物文件不能
- * 整版倒进 detail,但"哪个目录在渗产物"必须一眼可见。 */
-function describeDirtyPaths(paths: string[]): string {
-  const shown = paths.slice(0, 5).join("、");
-  return paths.length > 5 ? `${shown} 等 ${paths.length} 个路径` : shown;
-}
-
 function normalizedDeliveryPaths(values: string[]): string[] {
   const paths = values.map((value) => String(value).trim()
     .replace(/\\/g, "/").replace(/^(?:\.\/)+/, "")).filter(Boolean);
@@ -1952,11 +1946,6 @@ function normalizedDeliveryPaths(values: string[]): string[] {
     }
   }
   return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
-}
-
-function samePaths(left: string[], right: string[]): boolean {
-  return left.length === right.length
-    && left.every((path, index) => path === right[index]);
 }
 
 function orderedRecord(
@@ -16133,25 +16122,17 @@ export class TaskService {
   /** Cloud 最终交付卡的唯一策略入口。过程月光只决定内核普通问题是否
    * 自动作答；这里单独裁决最终过目、人工意见与文件范围冲突，避免两道
    * push 门禁各读一次设置后得出相反结论。 */
-  private pushReviewPolicy(task: TaskState): {
-    required: boolean;
-    ordinaryReviewEnabled: boolean;
-    recheckRequired: boolean;
-    hasHumanFeedback: boolean;
-  } {
+  private pushReviewPolicy(task: TaskState): PushReviewPolicy {
     const loop = task.summary.delivery?.loop;
-    const recheckRequired = loop?.review_source === "workspace"
-      && loop.workspace_review_recheck_required === true;
-    const hasHumanFeedback = this.unresolvedAnnotations(task).length > 0;
-    const ordinaryReviewEnabled = task.summary.push_confirmation
-      ?? this.options.pushConfirmation?.(task.summary.luban_account)
-      ?? Boolean(task.summary.delivery_selection);
-    return {
-      required: recheckRequired || hasHumanFeedback || ordinaryReviewEnabled,
-      ordinaryReviewEnabled,
-      recheckRequired,
-      hasHumanFeedback,
-    };
+    return pushReviewPolicyFor({
+      reviewSource: loop?.review_source,
+      workspaceRecheckRequired: loop?.workspace_review_recheck_required,
+      unresolvedAnnotations: this.unresolvedAnnotations(task).length,
+      taskSetting: task.summary.push_confirmation,
+      accountDefault: () =>
+        this.options.pushConfirmation?.(task.summary.luban_account),
+      hasSelection: Boolean(task.summary.delivery_selection),
+    });
   }
 
   private async pushConfirmationSatisfied(
@@ -16208,19 +16189,8 @@ export class TaskService {
     // 人看一行就能拍板，不用整单重看；“增量 diff”这类实现词不露出。
     const previous = selection?.status === "confirmed"
       ? normalizedDeliveryPaths(selection.paths) : undefined;
-    const addedPaths = previous
-      ? committed.filter((path) => !previous.includes(path)) : [];
-    const removedPaths = previous
-      ? previous.filter((path) => !committed.includes(path)) : [];
-    const deltaLines = previous && (addedPaths.length || removedPaths.length)
-      ? [
-        `**文件范围变化：${[
-          addedPaths.length ? `新增 ${describeDirtyPaths(addedPaths)}` : "",
-          removedPaths.length ? `移除 ${describeDirtyPaths(removedPaths)}` : "",
-        ].filter(Boolean).join(";")};其余 ${
-          committed.filter((path) => previous.includes(path)).length
-        } 个文件与上次确认一致,可只检视变化部分。**`,
-      ] : [];
+    const deltaLine = scopeDeltaLine(previous, committed);
+    const deltaLines = deltaLine ? [deltaLine] : [];
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
     // 只在 Build-Fix 收敛后举卡。卡同时固化最终 HEAD 与文件集合：
@@ -16283,11 +16253,8 @@ export class TaskService {
       context,
     });
     task.summary.status = "waiting_for_human";
-    task.summary.detail = recheckRequired
-      ? pendingReviewItems.length
-        ? `等待 ${pendingReviewItems.length} 条检视意见由提出人确认`
-        : "检视意见已闭环，等待责任人确认推送"
-      : "等待确认最终交付范围";
+    task.summary.detail = pushWaitingDetail(
+      recheckRequired, pendingReviewItems.length);
     this.persist(task);
     if (recheckRequired) {
       this.notifyWorkspaceReviewReady(task, snapshot.head);
@@ -16315,30 +16282,29 @@ export class TaskService {
       } else {
         const current = (await this.deliveryContribution(task, snapshot)).paths;
         const expected = normalizedDeliveryPaths(selection.paths);
-        const sameScope = samePaths(current, expected);
-        const exactReceipt = selection.status === "confirmed"
-          && selection.head === snapshot.head && sameScope;
-        if (exactReceipt) return true;
-
-        // “全自动”关闭的是常规最终过目，不是交付白名单。Build-Fix 在
-        // 同一文件集合内修出新 SHA 时，系统可以按既定范围自动续推；
-        // 新增/移除文件则是范围冲突，必须强制出卡，月光也不能代答。
-        const policy = this.pushReviewPolicy(task);
+        // 放行/代确认/停下/重新出卡由决策表定(pushReviewPolicy.
+        // selectionPushDecision):"全自动"关闭的是常规最终过目,不是交付
+        // 白名单——同集合新 SHA 可代确认续推,范围变了月光也不能代答。
         const prepush = task.summary.delivery?.prepush;
-        const verified = !this.options.prepush?.enabled
-          || Boolean(prepush?.sha === snapshot.head
-            && ["passed", "user_skipped"].includes(prepush.state));
-        if (!policy.ordinaryReviewEnabled && !policy.recheckRequired
-            && !policy.hasHumanFeedback
-            && sameScope && verified) {
+        const decision = selectionPushDecision({
+          selectionStatus: selection.status,
+          selectionHead: selection.head,
+          expected,
+          current,
+          head: snapshot.head,
+          prepushEnabled: Boolean(this.options.prepush?.enabled),
+          prepushSha: prepush?.sha,
+          prepushState: prepush?.state,
+          policy: () => this.pushReviewPolicy(task),
+        });
+        if (decision.kind === "allow") return true;
+        if (decision.kind === "auto_confirm") {
           selection.status = "confirmed";
           selection.head = snapshot.head;
           selection.observed_paths = snapshot.workspace_paths;
           selection.baseline = snapshot.baseline;
           selection.confirmation_mode = "policy";
-          selection.confirmation_reason = prepush?.state === "user_skipped"
-            ? "用户已跳过 Build-Fix；当前 SHA 未改变已选交付文件范围"
-            : "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围";
+          selection.confirmation_reason = decision.reason;
           selection.updated_at = new Date().toISOString();
           this.persist(task);
           this.options.log?.(
@@ -16346,33 +16312,15 @@ export class TaskService {
             + ` 未改变已选交付范围(${current.length} 个文件)`);
           return true;
         }
-
-        if (!verified) {
-          this.markVerificationStalled(task,
-            `当前 HEAD ${snapshot.head.slice(0, 12)} 尚无有效 Build-Fix 收据，`
-            + "不能自动确认交付范围", "evidence_missing");
+        if (decision.kind === "stall") {
+          this.markVerificationStalled(task, decision.reason, "evidence_missing");
           return false;
         }
-        if (!sameScope) {
-          const unexpected = current.filter((path) => !expected.includes(path));
-          const missing = expected.filter((path) => !current.includes(path));
-          reason = [
-            unexpected.length
-              ? `新增了未确认文件 ${describeDirtyPaths(unexpected)}` : "",
-            missing.length
-              ? `已确认文件不再提交 ${describeDirtyPaths(missing)}` : "",
-          ].filter(Boolean).join("；") || "提交文件集合已经变化";
-        } else if (selection.status !== "confirmed") {
-          reason = "交付文件清单已整理完成，等待确认最新 Build-Fix 结果";
-        } else {
-          reason = `交付清单确认绑定的是 ${selection.head.slice(0, 12)}，`
-            + `当前待推送提交是 ${snapshot.head.slice(0, 12)}`;
-        }
+        reason = decision.reason;
       }
     }
     if (!reason) return true;
-    const detail = `最终确认后现场又发生变化：${reason}。旧确认已自动作废，`
-      + "正在按最新 HEAD 重新生成检视卡；不用重跑任务。";
+    const detail = recardDetail(reason);
     task.summary.status = "verifying";
     task.summary.detail = detail;
     if (task.summary.delivery) delete task.summary.delivery.skipped;
@@ -16485,19 +16433,15 @@ export class TaskService {
     if (!snapshot?.baseline) return true; // 基线不可读由后续门禁如实处理
     const committedPaths = (await this.deliveryContribution(task, snapshot)).paths;
     const exempt = new Set(task.summary.delivery_scope_exemptions ?? []);
-    // 前缀按路径段闭合:src/filter 匹配 src/filter 与 src/filter/**,
-    // 不吞 src/filterX(裸 startsWith 会把邻居目录错认成面内)。
-    const inScope = (path: string) => scope.paths.some((prefix) => {
-      const clean = prefix.replace(/\/+$/, "");
-      return path === clean || path.startsWith(`${clean}/`);
-    });
-    // 内核流程自己要求写的规格(docs/specs 等,模式来自 flow.json)不算
-    // 改动面:每个单元都得写,它们是全仓共用的流程真相,不是谁的文件面。
-    // 内网实锤:pnp-deploy-contract 单元因 docs/specs/index.md 被判越界。
+    // 越界怎么算在 pushReviewPolicy.deliveryScopeViolations(前缀按路径段
+    // 闭合、豁免、流程规格不算)。规格模式来自内核 flow.json。
     const specsTruth = kernelSpecsTruth(this.options.host?.kernelRoot);
-    const processArtifact = (path: string) => !!specsTruth && specsTruth.test(path);
-    const violations = normalizedDeliveryPaths(committedPaths)
-      .filter((path) => !inScope(path) && !exempt.has(path) && !processArtifact(path));
+    const violations = deliveryScopeViolations({
+      committed: normalizedDeliveryPaths(committedPaths),
+      scopePaths: scope.paths,
+      exempt,
+      processArtifact: (path) => !!specsTruth && specsTruth.test(path),
+    });
     if (!violations.length) {
       if (task.summary.delivery?.scope_violation) {
         delete task.summary.delivery.scope_violation;
@@ -16505,18 +16449,9 @@ export class TaskService {
       }
       return true;
     }
-    const listed = violations.slice(0, 20).join("、")
-      + (violations.length > 20 ? ` 等 ${violations.length} 个` : "");
-    // 分支上有外来提交时越界文件很可能根本不是本单元干的:不点名这件事,
-    // 裁决人会对着别人的改动追问本单元责任人。
-    const foreign = task.summary.delivery?.foreign_commits;
-    const detail = `本单元(${scope.name})的提交改动越出负责文件面:`
-      + `${listed}。可能是实现确有需要(如修改接口契约),也可能是`
-      + "拆分方案有误;请主责任人裁决:放行(改动随本单元 MR 一起检视)"
-      + "或打回(撤出越界改动)。"
-      + (foreign?.count
-        ? `另外:本分支上有 ${foreign.count} 条别人直接推的提交,`
-          + "越界文件可能来自它们,不一定是本单元的改动。" : "");
+    const listed = listedPaths(violations);
+    const detail = scopeViolationDetail(
+      scope.name, listed, task.summary.delivery?.foreign_commits?.count);
     task.summary.delivery = {
       ...task.summary.delivery,
       scope_violation: { paths: violations, noted_at: new Date().toISOString() },
