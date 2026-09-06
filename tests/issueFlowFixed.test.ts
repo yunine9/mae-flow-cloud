@@ -1492,7 +1492,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     const pullReceipt = textOf(
       await byName("pull_repo").execute("x", { url: origin }));
     assert.equal(state.stage, "prep_repo", "拉仓只落地,不机械推进");
-    assert.match(pullReceipt, /complete_stage 收口/, "拉仓回执要指路出口");
+    assert.match(pullReceipt, /complete_stage 申报完成/, "拉仓回执要指路出口");
     assert.match(pullReceipt, /当前阶段「拉取代码仓·建分支」/, "回执带注册表简报");
     await byName("complete_stage").execute("x", { note: "仓已拉齐" });
     assert.equal(state.stage, "analyze", "complete_stage 自报才推进问题分析");
@@ -1890,7 +1890,7 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
     const nudgeRequest = JSON.stringify(model.requests[4]);
     assert.match(nudgeRequest, /平台催办\(第 1\/2 次\)/, "催办词要报次数");
     assert.match(nudgeRequest, /当前阶段「问题分析」/, "催办要带上阶段定位");
-    assert.match(nudgeRequest, /出口\(到什么程度算完\)/, "催办要说清出口");
+    assert.match(nudgeRequest, /怎么算完/, "催办要说清完成标准");
     assert.equal(waiting.nudges, 1, "催办计数要入账");
     assert.equal(waiting.stage, "conclude", "无单场景提交即推进结论节点");
   } finally {
@@ -2034,14 +2034,14 @@ test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报�
   })), false);
 });
 
-test("停机白名单与出口进了提示词:开局契约/催办词两处", () => {
+test("停机规矩与完成标准进了提示词:开局契约/催办词两处", () => {
   const opening = issueFixedOpeningPrompt(fixedState());
-  assert.match(opening, /停机白名单/, "开局契约要立停机规矩");
-  assert.match(opening, /出口\(到什么程度算完\)/, "当前阶段要给出出口");
-  assert.match(opening, /阶段性总结不是停机理由/);
+  assert.match(opening, /只有三种情况可以停下来/, "开局契约要立停机规矩");
+  assert.match(opening, /怎么算完/, "当前阶段要给出完成标准");
+  assert.match(opening, /阶段性总结不算完成/);
   const nudge = fixedNudgeNotice(fixedState(), 1, 2);
   assert.match(nudge, /平台催办\(第 1\/2 次\)/);
-  assert.match(nudge, /出口\(到什么程度算完\)/);
+  assert.match(nudge, /怎么算完/);
 });
 
 // ---- 登记元信息全量进上下文 + get_issue_meta(ADR-0003 裁定落地) ----
@@ -2638,7 +2638,7 @@ test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
     "带着回灌证据的修复回合派出");
-    assert.match(requestText, /人工从平台回灌的报错原文/,
+    assert.match(requestText, /人工贴进来的报错原文/,
       "回合文案带人工证据段");
     assert.match(requestText, /Order\.java:88/, "粘贴的原文随回合下发");
     assert.match(requestText, /不许猜改/);

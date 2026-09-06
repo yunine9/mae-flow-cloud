@@ -341,10 +341,10 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
   const ticketReceipt = textOf(await byName("dts_get_ticket").execute("x", {}));
   assert.equal(state.stage, "dts_info", "拉单成功不再机械推进");
   assert.match(ticketReceipt, /MOCK 单据/);
-  assert.match(ticketReceipt, /complete_stage 收口本阶段/);
+  assert.match(ticketReceipt, /complete_stage 申报完成/);
   assert.match(ticketReceipt, /当前阶段「拉取代码仓·建分支」/,
     "回执的交接文案出自注册表简报");
-  assert.match(ticketReceipt, /出口\(到什么程度算完\)/);
+  assert.match(ticketReceipt, /怎么算完/);
   // complete_stage 才进 prep_repo,收口回执同样出自注册表。
   const enterPrep = textOf(
     await byName("complete_stage").execute("x", { note: "单据已通读" }));
@@ -357,7 +357,7 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
     await byName("pull_repo").execute("x", { url: origin }));
   assert.equal(state.stage, "prep_repo", "拉仓落地不再机械推进");
   assert.match(pullReceipt, /代码仓就绪/);
-  assert.match(pullReceipt, /都拉齐了就调 complete_stage 收口/);
+  assert.match(pullReceipt, /都拉齐了就调 complete_stage/);
   assert.match(pullReceipt, /当前阶段「拉取代码仓·建分支」/);
   const enterAnalyze = textOf(
     await byName("complete_stage").execute("x", { note: "仓已拉齐" }));
@@ -393,13 +393,13 @@ test("出口回归(免模型):report_ut 降级为事实上报——只记账不�
   }));
   assert.equal(state.stage, "fix", "report_ut 不推进阶段,UT 属修复段");
   assert.equal(state.ut?.passed, true, "结果照常记账(现场记录可查)");
-  assert.match(receipt, /只记账不推进/);
+  assert.match(receipt, /只记录结果、不推进阶段/);
   assert.match(receipt, /complete_stage/);
   const failReceipt = textOf(await byName("report_ut").execute("x", {
     passed: false, summary: "2 个用例失败",
   }));
   assert.equal(state.stage, "fix", "未通过同样原地不动");
-  assert.match(failReceipt, /已记账/);
+  assert.match(failReceipt, /已记录/);
 });
 
 // ---- MR 验绿门三态(service 驱动,假交付平台) ----
@@ -420,13 +420,13 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     assert.equal(done.stage, "mr_green", "终点阶段不动,收口在本阶段");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
-    assert.match(done.stage_note ?? "", /确认合入后可归档/);
+    assert.match(done.stage_note ?? "", /确认合入后即可归档/);
     // 当场收口没有停等:受理账不在场。
     assert.equal(chain.saved().mr_gate, undefined);
     // 回执与台账:验绿通过 + 收口话术进现场。
-    assert.match(chain.okReceipts(), /MR 验绿通过/);
-    assert.match(chain.okReceipts(), /流程收口/);
-    assert.match(chain.trail(), /MR 验绿通过/, "验绿裁决要进台账");
+    assert.match(chain.okReceipts(), /MR 核验通过/);
+    assert.match(chain.okReceipts(), /流程到此完成/);
+    assert.match(chain.trail(), /MR 核验通过/, "核验裁决要进台账");
     // 收口要点名用户:小鲁班通知"全部跑绿,待归档"(ADR-0013)。
     // (等待闸卡也发通知,按内容取收口那条。)
     const notice = await until(() =>
@@ -449,7 +449,7 @@ test("MR 验绿门·有红当场打回:fail 带失败项详情与处置指引", 
       const list = chain.errorReceipts();
       return list.length >= 1 ? list : undefined;
     }, "申报被打回");
-    assert.match(errors[0], /MR 验绿门/);
+    assert.match(errors[0], /MR 核验不通过/);
     assert.match(errors[0], /BUILD FAILURE/, "失败项详情要带回现场");
     assert.match(errors[0], /push_branch/);
     assert.match(errors[0], /重新申报/);
@@ -677,8 +677,8 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
       .filter((event) => event.kind === "tool_finished"
         && event.payload?.name === "complete_stage" && !event.payload.is_error)
       .map((event) => String(event.payload.result)).join("\n");
-    assert.match(receipts, /空清单=空台账/);
-    assert.match(receipts, /流程收口/);
+    assert.match(receipts, /没有改动、无需 MR/);
+    assert.match(receipts, /流程到此完成/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

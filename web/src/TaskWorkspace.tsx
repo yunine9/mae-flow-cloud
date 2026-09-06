@@ -2035,7 +2035,7 @@ export function TaskWorkspace({
               <div>
                 <span>流水线需要补充原文</span>
                 <strong>打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
-                <p>保存批注后会自动记入待处理反馈，点击“回灌报错”即可让 Agent 继续。</p>
+                <p>保存批注后会自动记入待处理反馈，点击“贴回报错”即可让 Agent 继续。</p>
               </div>
               <button type="button"
                 className={active === evidenceGapArtifact.name

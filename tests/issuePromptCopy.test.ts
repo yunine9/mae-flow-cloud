@@ -44,7 +44,7 @@ test("{{var}} 替换:数字自动转串,文本原样保序", () => {
   });
   assert.match(nudge, /平台催办\(第 1\/2 次\)/);
   assert.match(nudge, /当前阶段「问题分析」/);
-  assert.match(nudge, /再无故停机 2 次/);
+  assert.match(nudge, /再无故停下 2 次/);
 });
 
 test("fail-loud:锚点缺失、变量缺失、替换后残留占位符都当场抛错", () => {

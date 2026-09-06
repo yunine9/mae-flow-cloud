@@ -174,7 +174,7 @@ test("平台闸卡:通知用人话 label 不带决策码,waiting_id 用 gate.id"
     assert.equal(record.account, "dev");
     assert.equal(record.link, `${LINK_BASE}/issues/${created.id}`);
     // 通知给人话:码表 label 全文在场,决策码一个都不出现。
-    assert.ok(record.summary.includes("确认报告,开始问题修改"));
+    assert.ok(record.summary.includes("确认报告,开始问题修复"));
     assert.ok(record.summary.includes("有补充意见(填写补充说明)"));
     assert.ok(!record.summary.includes("confirm"));
     assert.ok(!record.summary.includes("supplement"));

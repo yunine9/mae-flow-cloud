@@ -180,7 +180,11 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
 修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿收口)。AI 的 bash 超时语义已收窄(2026-09-04):命令包进容器内
-`timeout`,超时只了结命令进程组、会话容器不动(见 README)。
+`timeout`,超时只了结命令进程组、会话容器不动(见 README)。子 Agent
+派发已开闸(2026-09-06):主会话模型可派 Task 平行会话,子会话继承容器
+bash 但**没有业务工具**(complete_stage/push_branch 等只在主会话),
+提问/再派发被框架打回——派发纪律(子只做只读任务、证据指针化、预算
+写进任务卡)由适配技能约束。
 
 阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
 的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),

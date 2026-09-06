@@ -35,6 +35,7 @@ import {
   fixedStages,
   type FixedStage,
   type IssueScenario,
+  ENV_TYPE_LABELS,
 } from "./state.ts";
 import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
@@ -147,6 +148,9 @@ export interface IssueRegistrationMeta {
   environment?: {
     name: string;
     hosts: string[];
+    /** 环境形态(虚拟化/容器化 K8s):日志抓取引擎的选择依据;
+     * 登记或配置卡没选时缺席,AI 举卡补齐,不自行猜。 */
+    env_type?: "virtualized" | "k8s";
     page_account?: string;
     page_password?: string;
     backend_password?: string;
@@ -177,6 +181,7 @@ export function issueRegistrationMeta(
       ? { environment: {
         name: env.name,
         hosts: [...env.hosts],
+        ...(env.env_type ? { env_type: env.env_type } : {}),
         ...(env.page_account ? { page_account: env.page_account } : {}),
         ...(credentials.page ? { page_password: credentials.page } : {}),
         ...(credentials.backend
@@ -196,6 +201,9 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
     `- 网管环境「${env.name}」(网管口令是现场公开的出厂默认值,凭据`
       + "明文如下,用户问起直接回答):",
     `    - 服务器地址: ${env.hosts.join(", ")}`,
+    ...(env.env_type
+      ? [`    - 环境形态: ${ENV_TYPE_LABELS[env.env_type]}(决定日志抓取用哪套引擎,见技能 issue-ops)`]
+      : []),
     ...(env.page_account ? [`    - 页面账号: ${env.page_account}`] : []),
     ...(env.page_password ? [`    - 页面密码: ${env.page_password}`] : []),
     ...(env.backend_password
@@ -292,8 +300,9 @@ export function issueFixedOpeningPrompt(
     : [];
   const contract = promptCopy("opening", "fixed.contract", {
     stage_brief:
-      `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
-      + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
+      `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:`
+      + `${promptCopy("briefs", `stage.${current}`)}。`
+      + `怎么算完:${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     skill_lines: skillLines.length ? skillLines.join("\n") + "\n" : "",
     knowledge_lines: knowledgeLines.length
       ? knowledgeLines.join("\n") + "\n" : "",
@@ -324,9 +333,7 @@ export function issueFixedOpeningPrompt(
     "## 阶段机契约(平台机械执行,说了算)",
     contract,
     "",
-    promptCopy("opening", "fixed.kickoff")
-      + (scenario === "ticket" && current === "dts_info"
-        ? promptCopy("opening", "fixed.first_step") : ""),
+    promptCopy("opening", "fixed.kickoff"),
   ].filter(Boolean).join("\n");
 }
 
@@ -339,7 +346,8 @@ export function fixedAdvanceNotice(
   const current = state.stage as FixedStage;
   return [
     `平台通知: ${message}`,
-    ...stageBriefLines(scenario, current),
+    ...stageBriefLines(scenario, current,
+      promptCopy("briefs", `stage.${current}`)),
   ].join("\n");
 }
 
@@ -354,7 +362,8 @@ export function fixedNudgeNotice(
   return promptCopy("notices", "nudge.body", {
     attempt,
     budget,
-    stage_brief: stageBriefLines(scenario, current).join("\n"),
+    stage_brief: stageBriefLines(scenario, current,
+      promptCopy("briefs", `stage.${current}`)).join("\n"),
     remain: budget - attempt + 1,
   });
 }

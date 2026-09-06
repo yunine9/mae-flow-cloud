@@ -2349,7 +2349,13 @@ export class IssueFlowService {
       }),
       humanGate: live.humanGate,
       allowHumanQuestions: true,
-      allowSubagents: false,
+      // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
+      // 并行评审/grilling 派子查证)原生可用。安全边界:
+      // - 业务工具(complete_stage/push_branch 等)只在主会话——
+      //   sessionDriver 的子会话 extraTools 强制为空;
+      // - 子内提问/再派发由框架拒绝工具打回,主 Agent 凭报告举卡;
+      // - 派发纪律(子只做只读任务/证据指针化/预算写进任务卡)由
+      //   适配层约束。预热专员会话保持关闭(专职编译,无需派发)。
       extraTools: createIssueTools(context),
       // 视觉旁路(与需求侧同一套配置语义):配了有效角色才注入
       // inspect_image,主上下文只收文字结论。
@@ -2984,12 +2990,12 @@ export class IssueFlowService {
         "上一轮检视的修订还没有重新提交分析报告,不能叠加检视");
     }
     if (this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,等当前回合收口后再提交检视");
+      throw new IssueControlError("会话正在运行,等当前回合结束后再提交检视");
     }
     if (state.status !== "waiting_user" && state.status !== "idle") {
       throw new IssueControlError(
         `当前状态 ${state.status} 不能提交检视(意见可以先记成草稿,`
-          + "等 AI 停机或举卡等你时再提交)");
+          + "等 AI 停下来或等你作答时再提交)");
     }
     if (!reviewStore(live.root).drafts().length) {
       throw new IssueControlError("没有待提交的检视意见");
@@ -3356,7 +3362,7 @@ export class IssueFlowService {
       const tools = unfixableToolNames(checks, this.options.unfixableTools);
       const sha12 = sha.slice(0, 12);
       const note = `流水线红灯全部来自不可自动修复的工具(${tools.join("、")})`
-        + "——已举卡等人工:在交付平台处理/豁免后于卡上作答继续";
+        + "——已发卡等人工:在交付平台处理/豁免后于卡上作答继续";
       watch.last_error = note;
       state.stage_note = note;
       const raised = this.raisePipelineGate(live, repo, sha,
@@ -3561,7 +3567,7 @@ export class IssueFlowService {
     const attempts = watch.evidence_retry_attempts ?? 0;
     this.clearEvidenceRetry(watch);
     const note = `证据重试窗(重评 ${attempts} 次)到点仍无可定位报错——`
-      + "已举卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
+      + "已发卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
     watch.last_error = note;
     state.stage_note = note;
     saveState(live.root, state);

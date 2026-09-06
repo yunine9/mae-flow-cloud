@@ -98,7 +98,7 @@ test("全部红灯无具体证据时不派 Agent、不消耗修复轮次并通�
     assert.match(String((await readArtifactAsync(undefined,
       PIPELINE_EVIDENCE_GAP_ARTIFACT, {
         pipelineRoot: join(task.summary.workspace, "pipeline"),
-      }))?.content), /添加批注并点击“回灌报错”/);
+      }))?.content), /添加批注并点击“贴回报错”/);
     await until(() => luban.messages.length === 1, "证据缺口通知");
     assert.match(String(luban.messages[0].text), /编译\/构建、CodeCheck/);
     assert.match(String(luban.messages[0].text), /工作台.*批注/);
@@ -201,7 +201,7 @@ test("工作台批注可回灌缺失报错并自动恢复同一 SHA", async () =
     await service.sendAnnotations(task.summary.id, [note.id]);
     await until(() => task.summary.status === "queued", "人工证据回灌后派修");
     assert.equal(task.summary.delivery.loop.round, 1);
-    assert.match(task.mission, /人工从工作台回灌/);
+    assert.match(task.mission, /人工从工作台贴回/);
     assert.match(task.mission, /G\.FUN\.01-CPP/);
     assert.equal(service.listAnnotations(task.summary.id).items[0].sent_via,
       "pipeline_evidence");
