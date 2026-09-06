@@ -8368,6 +8368,9 @@ pre {
   background: var(--page);
   animation: workspaceReveal 150ms ease-out;
 }
+/* 专注检视头部:曾写死深色底上的白字十六进制色,--sidebar 改成浅色后
+   "代码审阅"直接白字白底看不见(2026-09-06 演练实锤)。全部改主题令牌,
+   明暗两套都跟着走。 */
 .code-review-head {
   min-height: 68px;
   padding: 0 22px;
@@ -8376,10 +8379,10 @@ pre {
   align-items: center;
   gap: 18px;
   flex: none;
-  color: #e5eaf2;
-  background: var(--sidebar);
-  border-bottom: 1px solid rgba(255, 255, 255, .09);
-  box-shadow: 0 7px 24px rgba(0, 0, 0, .2);
+  color: var(--text);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
 }
 .code-review-back {
   height: 36px;
@@ -8387,28 +8390,24 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #cbd3df;
-  background: rgba(255, 255, 255, .045);
-  border: 1px solid rgba(255, 255, 255, .12);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   border-radius: 7px;
   font-size: var(--font-size-assist);
   font-weight: 700;
   cursor: pointer;
 }
-.code-review-back:hover { color: #fff; background: rgba(255, 255, 255, .085); }
+.code-review-back:hover { color: var(--text-strong); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .code-review-back svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .code-review-title { min-width: 0; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 9px; }
-.code-review-title span { color: #8b93ff; font-size: var(--font-size-assist); font-weight: 800; letter-spacing: 0; }
-.code-review-title strong { color: #fff; font-size: 16px; }
-.code-review-title small { overflow: hidden; color: #8994a7; font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
-.code-review-title small { display: flex; align-items: center; gap: 6px; }
-.code-review-title small code {
-  flex: none; max-width: 260px; color: #a7adff;
-  border-color: rgba(139, 147, 255, .24); background: rgba(139, 147, 255, .1);
-}
+.code-review-title span { color: var(--accent); font-size: var(--font-size-assist); font-weight: 800; letter-spacing: 0; }
+.code-review-title strong { color: var(--text-strong); font-size: 16px; }
+.code-review-title small { overflow: hidden; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
+.code-review-title small code { flex: none; max-width: 260px; }
 .code-review-totals { display: flex; gap: 10px; font: 700 13px var(--font-mono); }
-.code-review-totals b { color: #86efac; }
-.code-review-totals i { color: #fda4af; font-style: normal; }
+.code-review-totals b { color: var(--success); }
+.code-review-totals i { color: var(--danger); font-style: normal; }
 .git-change-view.is-focused .git-change-browser {
   flex: 1;
   min-height: 0;
