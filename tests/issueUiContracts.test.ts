@@ -765,3 +765,88 @@ test("卡座(#125):无卡时输入区恢复普通输入,查看模式只读不出
   // dock 门:归属人 + 有卡才为真;查看者(waiting 也在场)拿不到 dock。
   assert.match(stream, /dock=\{waiting && canOperate\}/);
 });
+
+// ---- 举卡入流·三类卡换壳(#126):通用决策/skill 圈选/流水线两闸照
+// ---- #125 卡座模式把附言/提交按钮区搬进输入区 dock(同一挂载器),
+// ---- 字段、校验、选项与提交语义零变化;流内历史卡只读回放不受影响。
+
+test("卡座(#126):三类卡的提交区进 dock——footerTarget 透传链与挂载器包法", () => {
+  // 透传链(#125 同一条):IssueDecisionCard 把 footerTarget 原样交给
+  // 三类卡;rail 直挂不传目标,挂载器原位渲染的兜底仍在。
+  assert.match(decisions,
+    /<SkillSelectForm busy=\{busy\} skills=\{waiting\.gate_skills \?\? \[\]\}\s*\n\s*footerTarget=\{footerTarget\}/);
+  assert.match(decisions,
+    /<PipelineGateCard waiting=\{waiting\} busy=\{busy\}\s*\n\s*footerTarget=\{footerTarget\} onAnswer=\{onAnswer\} \/>/);
+  assert.match(decisions,
+    /<GenericDecisionCard waiting=\{waiting\} busy=\{busy\}\s*\n\s*footerTarget=\{footerTarget\} onAnswer=\{onAnswer\} \/>/);
+  // 换壳标记:四类卡(env+三类)接上 dock 才收卡内铺陈,同一写法。
+  assert.equal(
+    (decisions.match(/className=\{`issue-decision\$\{footerTarget \? " foot-docked" : ""\}`\}/g) ?? []).length,
+    4, "四类卡必须用同一 foot-docked 条件标记");
+  const skillForm = decisions.slice(decisions.indexOf("function SkillSelectForm"));
+  const pipelineCard = decisions.slice(decisions.indexOf("function PipelineGateCard"));
+  const genericCard = decisions.slice(decisions.indexOf("function GenericDecisionCard"));
+  // 三张卡的提交区整块进挂载器(附言/错误提示+按钮排住 dock-foot)。
+  for (const [name, body] of [["skill", skillForm], ["pipeline", pipelineCard],
+    ["generic", genericCard]] as const) {
+    assert.match(body,
+      /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?issue-decision-dock-foot[\s\S]*?<\/IssueDecisionFooterMount>/,
+      `${name} 卡的提交区必须包进挂载器`);
+  }
+  // skill 圈选卡:勾选清单留在卡上,提交语义零变化——至少勾一项才可点
+  // 确认;「都不用」提交空选(两条路同口)。
+  assert.match(skillForm, /disabled=\{!picked\.size \|\| busy\}/);
+  assert.match(skillForm, /确认勾选\(\$\{picked\.size\}\)/);
+  assert.match(skillForm, /skill-skip" disabled=\{busy\}/);
+  assert.match(skillForm, /onClick=\{\(\) => void submit\(\[\]\)\}/);
+  // 流水线卡:证据卡的主字段(报错原文)留在卡上、空文本不可提交;
+  // 码与文案仍按服务端 options 镜像(缺省字面量兜底);不可修卡的补充
+  // 说明是附言,随提交钮进 dock。
+  assert.match(pipelineCard, /\{evidence && <div className="issue-decision-env">/);
+  assert.match(pipelineCard, /const ready = evidence \? !!text\.trim\(\) : true;/);
+  assert.match(pipelineCard, /evidence \? "supply" : "resume"/);
+  assert.match(pipelineCard, /报错原文粘贴到这里/);
+  assert.match(pipelineCard, /\{!evidence && <div className="issue-decision-env">/);
+  // 通用决策卡:推荐徽标与逐题作答留在卡上,ready 口径零变化(逐题全
+  // 答完才可提交);附言(补充说明)与提交答复钮进 dock。
+  assert.match(genericCard,
+    /const ready = areIssueQuestionsComplete\(questions, picked, custom\)/);
+  assert.match(genericCard, /issue-recommended-badge/);
+  assert.match(genericCard, /issue-decision-notes-toggle/);
+  assert.match(genericCard, /提交答复/);
+});
+
+test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 waiting_id 去重原样", () => {
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  // 卡座与去重(#125 的形状原样):当前卡钉在流末尾,流内同 waiting_id
+  // 投影摘除防双卡,其余历史卡(含三类卡的已决定投影)照常只读回放。
+  assert.match(stream, /const pinnedCard = Boolean\(waiting && currentCard\);/);
+  assert.match(stream,
+    /view\.items\.filter\(\(item\) =>\s*\n\s*!\(item\.kind === "card" && item\.waiting_id === waitingId\)\)/);
+  assert.match(stream,
+    /children: <div className="conv-card current">\{currentCard\}<\/div>/);
+  // 流内卡的回放按 status 给词签(waiting=等待决定/其余=已决定),勾选
+  // 对齐裁决文本——三类卡与通用卡走同一条投影渲染,不按卡种分叉。
+  assert.match(stream, /item\.status === "waiting" \? "等待决定" : "已决定"/);
+  assert.match(stream, /conversationCardTitle\(item\)/);
+  assert.match(stream, /decision\?\.decision\.split\("\\n"\)\.includes\(option\)/);
+  // 会话视图:dockRef setState → footerTarget → 当前卡一线到底,dock 门
+  // 仍是 waiting && canOperate(查看模式不出 dock)。
+  assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
+  assert.match(sessionView, /dockRef=\{setDecisionFooterTarget\}/);
+  assert.match(stream, /dock=\{waiting && canOperate\}/);
+  // 样式落点:#126 追加块顺延在 #125 之后,dock 内附言/表单段的铺陈
+  // 与 foot-docked 收尾留白各有规则。
+  assert.ok(css.indexOf("#126 三类卡 dock 铺陈") > css.indexOf("#125 卡座与 dock"),
+    "#126 块必须在 #125 之后追加");
+  const block = css.slice(css.indexOf("#126 三类卡 dock 铺陈"));
+  assert.ok(block.includes(
+    ".issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot .issue-decision-env {"),
+  "dock 内 env 段(不可修卡附言)的铺陈规则必须在 #126 块内");
+  assert.ok(block.includes(
+    ".issue-decision.foot-docked > .issue-decision-context:last-child,"),
+  "foot-docked 卡的收尾留白规则必须在 #126 块内");
+});

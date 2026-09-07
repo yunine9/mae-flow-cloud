@@ -11714,3 +11714,23 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 /* env 卡的提交区搬进 dock 后,卡体底部不再有提交块垫底:补回下内边距
    (只对已 dock 的 env 卡生效,skill/流水线卡 #126 前仍原样)。 */
 .issue-decision.foot-docked .issue-decision-env { padding-bottom: 15px; }
+
+/* ---- #126 三类卡 dock 铺陈:通用/skill 圈选/流水线两闸照 #125 卡座
+   模式换壳,提交区与 env 卡同一挂载器(只追加,不动上行) ---- */
+/* dock 内的附言/表单段:去掉卡内画法(env 段的侧内距、补充说明的
+   侧边距),dock 容器自带留白;附言在上、按钮在下,与 env 卡的
+   dock-foot 同一节奏。 */
+.issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot .issue-decision-env {
+  padding: 0;
+}
+.issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-notes,
+.issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-notes-toggle {
+  margin: 0;
+}
+/* 已 dock 的三类卡:卡体底部不再有提交块垫底。skill 圈选与证据贴回的
+   最后一段是 env 表单(#125 规则已给 padding-bottom);这里补的是以
+   上下文块/说明行收尾的卡(通用卡逐题作答、不可修卡的失败详情)。 */
+.issue-decision.foot-docked > .issue-decision-context:last-child,
+.issue-decision.foot-docked > .issue-decision-note:last-child {
+  margin-bottom: 14px;
+}
