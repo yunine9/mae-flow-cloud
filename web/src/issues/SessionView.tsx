@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
   ISSUE_STATUS_TEXT,
+  addIssueTakeoverNote,
   answerIssue,
   associateIssueTicket,
   attachIssueEnvironment,
@@ -28,7 +29,9 @@ import {
   getIssueTimeline,
   issueStageText,
   replyIssue,
+  resumeIssueTakeover,
   steerIssue,
+  takeoverIssue,
   type DtsTicketDetail,
   type IssueDetail,
   type IssueEnvironmentForm,
@@ -195,6 +198,14 @@ export function IssueSessionView({
     perform(() => attachIssueEnvironment(detail.id, input));
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
+  /** 人工接管三回调(2026-09-07 走查拍板)。接管/交还走 perform:成功
+   * 后带新详情回来(徽标与输入区模式随之翻转);人工记录不走 perform
+   * ——perform 会吞错,记录失败要让输入区当场报错保字。 */
+  const takeoverNow = () => perform(() => takeoverIssue(detail.id));
+  const sendTakeoverNote = (text: string) =>
+    addIssueTakeoverNote(detail.id, text).then(() => undefined);
+  const resumeTakeover = (note?: string) =>
+    perform(() => resumeIssueTakeover(detail.id, note));
   /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
    * 不另开会话干预口。等待人工决策时不可用(先把卡答了)。 */
   const notifyAI = (text: string) => detail.status === "running"
@@ -263,6 +274,10 @@ export function IssueSessionView({
           <span className={`issue-status status-${detail.status}`}>
             {ISSUE_STATUS_TEXT[detail.status]}
           </span>
+          {/* 人工接管徽标(2026-09-07 走查拍板):横幅态独立于六态——
+              在场即「AI 已暂停、人工作业中」,排在状态徽标之后。 */}
+          {detail.takeover
+            && <span className="issue-status status-takingover">人工接管中</span>}
           <span className="issue-stage">
             {issueStageText(detail)}
             {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}
@@ -389,6 +404,7 @@ export function IssueSessionView({
           busy={busy}
           owner={detail.account}
           viewerUsername={viewerUsername}
+          takeover={Boolean(detail.takeover)}
           currentCard={waiting ? (canOperate
             ? <IssueDecisionCard waiting={waiting} busy={busy}
                 footerTarget={decisionFooterTarget}
@@ -402,6 +418,9 @@ export function IssueSessionView({
           dockRef={setDecisionFooterTarget}
           onSteer={sendSteer}
           onReply={sendReply}
+          onTakeover={takeoverNow}
+          onTakeoverNote={sendTakeoverNote}
+          onResumeTakeover={resumeTakeover}
         />
       </section>
     </div>

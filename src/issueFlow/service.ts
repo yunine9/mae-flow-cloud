@@ -46,6 +46,7 @@ import {
   mirrorPipelineArtifacts,
 } from "../pipelineMirror.ts";
 import { repairBudget } from "./pipelineRepair.ts";
+import { collectRepoContextFiles } from "./repoContextFiles.ts";
 import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
 import {
   prepareContainerHostPaths,
@@ -1479,6 +1480,13 @@ export class IssueFlowService {
         live.state.status = "waiting_user";
         live.state.last_reply = live.driver?.finalReply() ?? live.state.last_reply;
       } else {
+        // 人工接管让路(2026-09-07 走查拍板):接管方已把状态定格 idle,
+        // abort 引爆的回合异常不标 failed、不 releaseDriver——现场还
+        // 要给交还后的续聊用。
+        if (live.state.takeover) {
+          saveState(live.root, live.state);
+          return;
+        }
         live.state.status = "failed";
         live.state.error = detail;
         this.releaseDriver(live);
@@ -1490,6 +1498,13 @@ export class IssueFlowService {
 
   private settle(live: LiveIssue, outcome: Outcome): void {
     const { state } = live;
+    // 人工接管让路(2026-09-07 走查拍板):abort 捏死的回合仍会带着
+    // outcome 走到结算——接管方已定格 idle 与 stage_note,这里不再
+    // 覆写(不催办、不置 waiting_user、不 releaseDriver),只如实落盘。
+    if (state.takeover) {
+      saveState(live.root, state);
+      return;
+    }
     if (outcome.status === "waiting_for_human") {
       state.status = "waiting_user";
     } else if (outcome.status === "turn_finished") {
@@ -2366,6 +2381,21 @@ export class IssueFlowService {
       taskId: live.id,
       workspace: live.root,
       agentDir,
+      // 多仓契约文件进系统提示词(spec #131 / issue #132,2026-09-03):
+      // 会话 cwd 是 live.root,repo/<仓名>/ 下的 AGENTS.md 不在 SDK 祖先
+      // 发现链上,平台按 SDK 同款候选序收好递进去。收集点=上下文构建:
+      // 本回合中途 pull_repo 落地的仓,下次会话重建才带上。fail-open
+      // 兜底:收集器自身已逐仓吞错,这里的 try/catch 防的是它之外的
+      // 意外——上下文装配绝不允许炸会话开启。
+      repoContextFiles: (() => {
+        try {
+          return collectRepoContextFiles(live.root);
+        } catch (error) {
+          this.log(`[issue-flow] ${live.id} 仓契约收集失败,按空处理: `
+            + String(error));
+          return [];
+        }
+      })(),
       // 改编版 playbook 技能(精确到 SKILL.md 文件的 allowlist 形态)。
       repositorySkillPaths: skillPaths,
       // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
@@ -2954,6 +2984,104 @@ export class IssueFlowService {
     void live.driver.steer(content).catch((error) =>
       this.log(`[issue-flow] ${id} 插话失败: ${String(error)}`));
     return summarize(live.state);
+  }
+
+  // ---- 人工接管(2026-09-07 走查拍板):打断 AI/期间人工记录/交还继续 ----
+
+  /** 接管=打断 AI:当前回合 abort(只掐回合,现场 CloudSession 保留,
+   * 交还后续聊免重建),状态定格 idle、现场交由人工。takeover 标记
+   * **必须在 abort 之前落盘**——被捏死的回合稍后走到 settle/catch,
+   * 两处的让路守卫靠它在场识别"这是接管,不是失败"。等待中的问题卡
+   * (waiting_user)与挂起(suspended)不是 AI 在干活,先答卡/先转正。 */
+  takeover(id: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    if (state.takeover) {
+      throw new IssueControlError("已在人工接管中");
+    }
+    if (isTerminal(state.status)) {
+      throw new IssueControlError("会话已结束,不能接管");
+    }
+    if (state.status === "waiting_user") {
+      throw new IssueControlError("先作答当前问题卡再接管");
+    }
+    if (state.status === "suspended") {
+      throw new IssueControlError("挂起会话先关联单号转正");
+    }
+    const previous = state.status;
+    const wasRunning = previous === "running";
+    state.takeover = { at: new Date().toISOString(), by: state.account };
+    recordTransition(state, {
+      source: "platform",
+      note: "人工接管:AI 回合中止,现场交由人工",
+    });
+    state.status = "idle";
+    state.stage_note = "人工接管中——AI 已暂停,交还后带着人工记录继续";
+    saveState(live.root, state);
+    this.log(`[issue-flow] ${id} 人工接管(原状态 ${previous}${wasRunning
+      ? ",回合中止" : ""})`);
+    if (wasRunning) {
+      // 异步 abort:接口即刻回执,不等模型侧收束;abort 完成后再落盘
+      // 一次,压住被中止回合 settle/catch 与本状态之间的结算竞态。
+      void (async () => {
+        await live.driver?.abort().catch(() => undefined);
+        saveState(live.root, state);
+      })();
+    }
+    return summarize(state);
+  }
+
+  /** 接管期间的人工操作记录:只记账不投喂 AI——事件账本追加一条
+   * via=takeover 的 user_message,协作流照常以插话气泡回放;正文在
+   * 交还(resumeFromTakeover)时才随续聊词回灌模型。 */
+  addTakeoverNote(id: string, text: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    if (!state.takeover) {
+      throw new IssueControlError("不在人工接管中,无处记录人工操作");
+    }
+    const content = text?.trim();
+    if (!content) throw new IssueControlError("记录内容不能为空");
+    this.appendSessionEvent(live, "user_message",
+      { text: content, via: "takeover" });
+    return summarize(state);
+  }
+
+  /** 交还:AI 带着人工记录继续。从事件账本收齐接管期(via=takeover
+   * 且 ts ≥ 接管时刻)的全部人工记录,拼进交接词照 reply() 的回合
+   * 模式续跑——现场 driver 在场直递续聊,进程重启后重建现场以同一句
+   * 开回合(记录在账本里,重建也不丢)。 */
+  resumeFromTakeover(id: string, input?: { note?: string }): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    if (!state.takeover) {
+      throw new IssueControlError("不在人工接管中,无从交还");
+    }
+    if (state.status === "running" || this.turning.has(live.id)) {
+      throw new IssueControlError("上一回合还在收尾,请稍候再交还");
+    }
+    const since = state.takeover.at;
+    const notes = readConversationEvents(join(live.root, "events.jsonl"))
+      .filter((event) => event.kind === "user_message"
+        && event.payload?.via === "takeover"
+        && String(event.ts ?? "") >= since)
+      .map((event) => String(event.payload?.text ?? "").trim())
+      .filter((text) => text.length > 0);
+    const note = input?.note?.trim() || undefined;
+    delete state.takeover;
+    const message = [
+      "人工接管结束,现场交还 AI 继续。",
+      ...(note ? [`交还说明:${note}`] : []),
+      notes.length
+        ? `接管期间的人工操作记录:\n${notes.map((item) => `- ${item}`).join("\n")}`
+        : "接管期间无人工操作记录。",
+      "人工改动以人的原话为准,先核实现状再继续推进当前阶段。",
+    ].join("\n");
+    this.log(`[issue-flow] ${id} 交还 AI(接管期人工记录 ${notes.length} 条)`);
+    this.beginTurn(live, async () => live.driver
+      ? live.driver.continueWith(message)
+      : (await this.openDriver(live)).startResume(message));
+    return summarize(state);
   }
 
   // ---- 检视(ADR-0007:人工意见触发整体回退,闭环靠分析确认卡) ----

@@ -3710,6 +3710,10 @@ export interface IssueSummary {
    * 渲染时按它经详情接口读旧账并标注「转正前」;旧会话被物理清理时
    * 静默缺省(仓卡退回现状)。 */
   inherited_accounts?: { issue: string };
+  /** 人工接管标记(2026-09-07 走查拍板):字段在场=AI 已暂停、人工作业
+   * 中——头部「人工接管中」徽标与输入区 takeover 模式都靠它分派;
+   * by=接管人,at=接管时刻。交还(resume)后消失。 */
+  takeover?: { at: string; by: string };
   status: IssueStatus;
   stage: FixedIssueStage;
   stage_note: string;
@@ -3932,6 +3936,41 @@ export function steerIssue(id: string, text: string): Promise<IssueSummary> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text }),
+  });
+}
+
+/** 人工接管(2026-09-07 走查拍板):打断 AI 当前回合,现场交由人工
+ * (AI 暂停,会话保留);接管期人工操作经 addIssueTakeoverNote 记账,
+ * 交还经 resumeIssueTakeover——AI 带着人工记录继续。 */
+export function takeoverIssue(id: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+/** 接管期人工操作记录:只记账不投喂 AI,交还时随交接词回灌。 */
+export function addIssueTakeoverNote(
+  id: string,
+  text: string,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover/note`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+/** 交还:AI 带着接管期人工记录继续;note 是可选的交还说明。 */
+export function resumeIssueTakeover(
+  id: string,
+  note?: string,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover/resume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(note ? { note } : {}),
   });
 }
 

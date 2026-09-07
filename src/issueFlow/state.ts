@@ -416,6 +416,13 @@ export interface IssueSessionState {
    * 不清它:已过目的确认不因重启要求重复点。summarize 不上 wire(与
    * mr_gate 同为流程机制状态,前端镜像没有这个字段)。 */
   push_token?: { at: string; decision: string; head?: string };
+  /** 人工接管标记(2026-09-07 走查拍板):字段在场=AI 已暂停、人工作业
+   * 中——接管即打断 AI 当前回合(abort 只掐回合,现场保留),状态定格
+   * idle;期间的人工操作以 via=takeover 的 user_message 记事件账,交还
+   * 时随续聊词回灌 AI。by=接管人(归属人);at 是接管时刻(交还时从
+   * 账本收集接管期记录的时间下界)。催办谓词对它让路(见
+   * shouldNudgeFixed):人工驾驶中平台不催。 */
+  takeover?: { at: string; by: string };
   /** 举 push_confirm 闸时记下的待推送 tip(过目对象的身份):确认时
    * 并进 push_token.head。不上 wire,与 push_token 同罪同罚。 */
   push_review_head?: string;
@@ -505,6 +512,9 @@ export function summarize(state: IssueSessionState): IssueSummary {
     warmup: _warmup, ...rest } = state;
   return {
     ...rest,
+    // takeover(人工接管标记)与上面的机制账不同:它要上 wire——头部
+    // 徽标与输入区 takeover 模式都靠它分派,缺席=不在接管中。
+    ...(state.takeover ? { takeover: state.takeover } : {}),
     has_environment: Boolean(state.environment),
   };
 }
@@ -577,6 +587,7 @@ export function isTerminal(status: IssueStatus): boolean {
  *   同"停等流水线"的合法停机;推进/回退即清,不会滞留)。
  * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
 export function shouldNudgeFixed(state: IssueSessionState): boolean {
+  if (state.takeover) return false;
   if (!state.scenario) return false;
   const index = fixedStageIndex(state.scenario, state.stage as FixedStage);
   if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {

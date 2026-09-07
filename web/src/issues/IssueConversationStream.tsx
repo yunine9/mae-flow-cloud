@@ -30,8 +30,11 @@
  *
  * 输入区按会话状态分派(轻量仿制任务侧 ws-composer 的结构与类名):
  * 运行中=插话(steerIssue,不打断当前步骤)、空闲=续聊(replyIssue);
- * 等卡/挂起/未启动/终态给原因说明,查看者(canOperate=false)只见只读
- * 提示——写口语义与拆栏前(#126 及更早)的 canOperate 门零变化。
+ * 人工接管中(2026-09-07 走查拍板,takeover=true)=人工驾驶:记录进
+ * 现场账(addIssueTakeoverNote,只记账不投喂)或交还给 AI
+ * (resumeIssueTakeover,以当前输入作交还说明);等卡/挂起/未启动/
+ * 终态给原因说明,查看者(canOperate=false)只见只读提示——写口语义
+ * 与拆栏前(#126 及更早)的 canOperate 门零变化。
  *
  * 挂起转正卡(#127):右栏 NEXT ACTION 侧栏拆除后,挂起
  * 会话的关联转正入口由会话视图组装(IssueAssociateCard / 查看模式
@@ -94,11 +97,15 @@ export function IssueConversationStream({
   busy,
   owner,
   viewerUsername,
+  takeover,
   currentCard,
   suspendedCard,
   dockRef,
   onSteer,
   onReply,
+  onTakeover,
+  onTakeoverNote,
+  onResumeTakeover,
 }: {
   issueId: string;
   /** 会话状态:输入区的插话/续聊/禁用分派只看它和 waiting。 */
@@ -116,6 +123,9 @@ export function IssueConversationStream({
   owner: string;
   /** 当前登录用户名(缺席=auth 关闭的演示形态,按归属人渲染)。 */
   viewerUsername?: string;
+  /** 人工接管中(2026-09-07 走查拍板):真=AI 已暂停,输入区换人工
+   * 驾驶模式(记录/交还);分派优先级在插话/续聊之前。 */
+  takeover: boolean;
   /** 当前待处理卡(IssueDecisionCard / 查看模式 IssueWaitingFacts),
    * 会话视图组装;卡座把它钉在流末尾的 Agent 气泡内(#125)。 */
   currentCard?: ReactNode;
@@ -130,6 +140,12 @@ export function IssueConversationStream({
   onSteer: (text: string) => Promise<boolean>;
   /** 空闲续聊(SessionView 的 sendReply → replyIssue)。 */
   onReply: (text: string) => Promise<boolean>;
+  /** 人工接管:打断 AI,现场交由人工(SessionView 包 perform)。 */
+  onTakeover: () => Promise<boolean>;
+  /** 接管期人工操作记录(不走 perform,失败原样抛回保字)。 */
+  onTakeoverNote: (text: string) => Promise<void>;
+  /** 交还:AI 带着人工记录继续;入参是可选的交还说明。 */
+  onResumeTakeover: (note?: string) => Promise<boolean>;
 }) {
   const [view, setView] = useState<{
     items: IssueConversationItem[]; truncated: boolean;
@@ -452,30 +468,39 @@ export function IssueConversationStream({
       canOperate={canOperate}
       busy={busy}
       owner={owner}
+      takeover={takeover}
       dock={waiting && canOperate}
       dockRef={dockRef}
       onSteer={onSteer}
       onReply={onReply}
+      onTakeover={onTakeover}
+      onTakeoverNote={onTakeoverNote}
+      onResumeTakeover={onResumeTakeover}
       onSent={() => load(issueId)}
     />
   </>;
 }
 
 /** 输入区(轻量仿制任务侧 ws-composer,类名同套):运行中=插话、空闲=
- * 续聊;等卡时让位给卡座 dock(卡的提交区经 portal 挂进 ws-reply-dock,
- * 附言与提交按钮就在输入区完成),挂起/未启动/终态给原因,查看者只读。
- * 发送走 SessionView 传入的 steerIssue/replyIssue 通道,成功后立刻拉一次
- * 流让发言上屏。 */
+ * 续聊;人工接管中=人工驾驶(记录到现场/交还给 AI 两钮,2026-09-07
+ * 走查拍板);等卡时让位给卡座 dock(卡的提交区经 portal 挂进
+ * ws-reply-dock,附言与提交按钮就在输入区完成),挂起/未启动/终态给
+ * 原因,查看者只读。发送走 SessionView 传入的 steerIssue/replyIssue
+ * 通道,成功后立刻拉一次流让发言上屏。 */
 function IssueCollaborationComposer({
   status,
   waiting,
   canOperate,
   busy,
   owner,
+  takeover,
   dock,
   dockRef,
   onSteer,
   onReply,
+  onTakeover,
+  onTakeoverNote,
+  onResumeTakeover,
   onSent,
 }: {
   status: IssueStatus;
@@ -483,6 +508,8 @@ function IssueCollaborationComposer({
   canOperate: boolean;
   busy: boolean;
   owner: string;
+  /** 人工接管中:真=人工驾驶模式(分派优先级在插话/续聊之前)。 */
+  takeover: boolean;
   /** 卡座 dock 位(#125):归属人答卡时为真——输入区预留 ws-reply-dock
    * 容器,当前卡的提交区经 portal 挂进来;查看者/无卡时为假。 */
   dock: boolean;
@@ -490,6 +517,12 @@ function IssueCollaborationComposer({
   dockRef?: (node: HTMLDivElement | null) => void;
   onSteer: (text: string) => Promise<boolean>;
   onReply: (text: string) => Promise<boolean>;
+  /** 人工接管(打断 AI)/交还(AI 带记录继续):经 perform 包装,
+   * 成功即有新详情回来,徽标与输入区模式随之翻转。 */
+  onTakeover: () => Promise<boolean>;
+  /** 人工操作记录:不走 perform(免吞错),失败原样抛到输入区报错。 */
+  onTakeoverNote: (text: string) => Promise<void>;
+  onResumeTakeover: (note?: string) => Promise<boolean>;
   /** 发送成功后立即刷新协作流(不等下一拍轮询)。 */
   onSent: () => void;
 }) {
@@ -501,6 +534,7 @@ function IssueCollaborationComposer({
   type Mode =
     | { kind: "readonly" }
     | { kind: "blocked"; title: string; hint: string }
+    | { kind: "takeover" }
     | { kind: "steer" }
     | { kind: "reply" };
   const ended = ["archived", "canceled", "failed"].includes(status);
@@ -521,12 +555,97 @@ function IssueCollaborationComposer({
         kind: "blocked", title: "会话已结束",
         hint: "协作记录只读回放;结论与账单见左侧。",
       }
+    // 人工驾驶(2026-09-07 走查拍板):接管在场即换模式,优先级压过
+    // 插话/续聊;但让位给终局/等卡/挂起——收了口的会话不再给驾驶舱。
+    : takeover === true ? { kind: "takeover" }
     : status === "running" ? { kind: "steer" }
     : { kind: "reply" };
 
   if (mode.kind === "readonly") {
     return <section className="ws-composer-readonly" aria-label="回复与提交(只读)">
       查看模式:协作记录完整可见;插话与续聊由归属人 {owner} 处理。
+    </section>;
+  }
+
+  // 人工驾驶模式(2026-09-07 走查拍板):AI 已暂停,输入区只剩两件事
+  // ——把人工操作记进现场账(可连续记多条),或连记录带说明一并交还
+  // 给 AI。记录失败不吞错、不丢稿;交还成功后详情轮询带回新状态,
+  // 输入区自动回到插话/续聊。
+  if (mode.kind === "takeover") {
+    async function recordNote() {
+      const body = text.trim();
+      if (!body || sending || busy) return;
+      setSending(true);
+      setError("");
+      try {
+        await onTakeoverNote(body);
+        setText("");
+        setSent(true);
+        onSent();
+      } catch (reason) {
+        setError(String(reason instanceof Error ? reason.message : reason));
+      } finally {
+        setSending(false);
+      }
+    }
+    async function handBack() {
+      if (sending || busy) return;
+      setSending(true);
+      setError("");
+      try {
+        // 当前输入整段作交还说明(空=不带说明);perform 吞错回 false:
+        // 失败保字,让用户重试不丢稿。
+        const ok = await onResumeTakeover(text.trim() || undefined);
+        if (ok) {
+          setText("");
+          onSent();
+        } else {
+          setError("交还未成功,请稍后重试");
+        }
+      } finally {
+        setSending(false);
+      }
+    }
+    return <section className="ws-composer takeover" aria-label="人工驾驶记录与交还">
+      <div className="ws-composer-ctx">
+        <span className={`ws-composer-mode ${busy ? "quiet" : "active"}`}>
+          人工驾驶中——AI 已暂停
+        </span>
+        <span className="ws-composer-hint">
+          记录到现场的每一条,交还时都会交给 AI
+        </span>
+      </div>
+      <textarea className="steer-input" value={text} rows={3}
+        disabled={sending || busy}
+        placeholder="记录你的人工操作,交还时 AI 会看到这些记录"
+        onChange={(event) => { setText(event.target.value); if (sent) setSent(false); }}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void recordNote();
+          }
+        }} />
+      <div className="ws-composer-row">
+        <div className="ws-composer-left">
+          <span className="steer-hint">
+            {sent && !text ? "已记录到现场" : "⌘/Ctrl + Enter 记录"}
+          </span>
+        </div>
+        <div className="issue-takeover-actions">
+          <button type="button" className="issue-takeover-note"
+            disabled={sending || busy || !text.trim()}
+            onClick={() => void recordNote()}>
+            {sending ? "处理中…" : "记录到现场"}
+          </button>
+          <button type="button" className="issue-takeover-resume"
+            disabled={sending || busy}
+            title="把当前输入作交还说明,连同接管期记录一并交给 AI"
+            onClick={() => void handBack()}>
+            交还给 AI 继续
+          </button>
+        </div>
+      </div>
+      {error && <div className="alert" role="alert">{error}</div>}
     </section>;
   }
 

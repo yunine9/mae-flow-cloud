@@ -945,3 +945,58 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
     ".issue-decision.foot-docked > .issue-decision-context:last-child,"),
   "foot-docked 卡的收尾留白规则必须在 #126 块内");
 });
+
+// ---- 人工接管(2026-09-07 走查拍板):接管=打断 AI;期间人工记录;
+// ---- 交还时 AI 带着记录继续。头部紫金徽标 + 输入区 takeover 模式
+// ---- (记录到现场/交还给 AI 两钮),api 镜像与 CSS 追加落点对账。
+
+test("人工接管:徽标/下传 takeover/三回调接线/composer 记录+交还两钮/CSS 追加落点", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // 头部徽标:detail.takeover 在场即挂「人工接管中」,排在状态徽标之后
+  // (横幅态独立于六态,复用 issue-status 徽标语言换紫金色)。
+  assert.match(sessionView,
+    /\{detail\.takeover\s*\n\s*&& <span className="issue-status status-takingover">人工接管中<\/span>\}/);
+  assert.match(css, /\.issue-status\.status-takingover \{/);
+  // 下传与三回调接线:takeover 布尔 + 接管/记录/交还各走各的通道——
+  // 接管/交还经 perform(成功带新详情回来,徽标与输入区模式随之翻转),
+  // 记录不走 perform(免吞错,失败原样抛回输入区报错)。
+  assert.match(sessionView, /takeover=\{Boolean\(detail\.takeover\)\}/);
+  assert.match(sessionView,
+    /const takeoverNow = \(\) => perform\(\(\) => takeoverIssue\(detail\.id\)\);/);
+  assert.match(sessionView,
+    /const sendTakeoverNote = \(text: string\) =>\s*\n\s*addIssueTakeoverNote\(detail\.id, text\)\.then\(\(\) => undefined\);/);
+  assert.match(sessionView,
+    /const resumeTakeover = \(note\?: string\) =>\s*\n\s*perform\(\(\) => resumeIssueTakeover\(detail\.id, note\)\);/);
+  assert.match(sessionView, /onTakeover=\{takeoverNow\}/);
+  assert.match(sessionView, /onTakeoverNote=\{sendTakeoverNote\}/);
+  assert.match(sessionView, /onResumeTakeover=\{resumeTakeover\}/);
+  // api 镜像:takeover 字段(与服务端 summarize 同形)+ 三个 POST。
+  assert.match(api, /takeover\?: \{ at: string; by: string \};/);
+  assert.match(api, /export function takeoverIssue\(/);
+  assert.match(api, /export function addIssueTakeoverNote\(/);
+  assert.match(api, /export function resumeIssueTakeover\(/);
+  // composer:takeover 模式分派在插话/续聊之前(接管=true 一票定音),
+  // ctx/占位符口径一致,「记录到现场」「交还给 AI 继续」两钮都在。
+  assert.match(stream, /\| \{ kind: "takeover" \}/);
+  assert.match(stream, /takeover === true \? \{ kind: "takeover" \}/);
+  assert.match(stream, /人工驾驶中——AI 已暂停/);
+  assert.match(stream, /placeholder="记录你的人工操作,交还时 AI 会看到这些记录"/);
+  assert.match(stream, /记录到现场/);
+  assert.match(stream, /交还给 AI 继续/);
+  // CSS 落点:追加块在既有 #126 块之后(只追加,不改既有行),徽标与
+  // 双钮样式都收在块内。
+  assert.ok(css.indexOf("---- 人工接管(2026-09-07 走查拍板)")
+    > css.indexOf("#126 三类卡 dock 铺陈"),
+  "人工接管块必须追加在 #126 块之后");
+  const takeoverBlock =
+    css.slice(css.indexOf("---- 人工接管(2026-09-07 走查拍板)"));
+  assert.ok(takeoverBlock.includes(".issue-status.status-takingover {"),
+    "接管徽标规则必须在人工接管追加块内");
+  assert.ok(
+    takeoverBlock.includes(".issue-takeover-actions > .issue-takeover-resume {"),
+    "交还主档按钮规则必须在人工接管追加块内");
+});

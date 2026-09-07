@@ -11596,3 +11596,58 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   font-size: var(--font-size-assist);
   background: color-mix(in srgb, var(--surface) 72%, transparent);
 }
+
+/* ---- 人工接管(2026-09-07 走查拍板):接管徽标 + 输入区 takeover 模式
+   (只追加,不改既有行) ---- */
+/* 徽标:紫金色系——人工驾驶是横幅态,独立于问题六态徽标的颜色语言。 */
+.issue-status.status-takingover {
+  color: #7a4fd0;
+  border-color: color-mix(in srgb, #7a4fd0 45%, transparent);
+  background:
+    linear-gradient(color-mix(in srgb, #d4af37 14%, transparent),
+      color-mix(in srgb, #d4af37 14%, transparent)),
+    color-mix(in srgb, #7a4fd0 8%, transparent);
+}
+/* takeover 模式输入区:容器描边随接管色,双钮排右侧——「记录到现场」
+   走次档(描边钮),「交还给 AI 继续」走主档(紫底实心,呼应徽标)。 */
+.issue-workspace.task-workspace-v2 .ws-composer.takeover {
+  border-top-color: color-mix(in srgb, #7a4fd0 40%, var(--line));
+}
+.issue-takeover-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.issue-takeover-actions > button {
+  font: inherit;
+  font-size: var(--fs-13);
+  font-weight: 500;
+  height: var(--control-h);
+  padding: 0 14px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.issue-takeover-actions > .issue-takeover-note {
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+.issue-takeover-actions > .issue-takeover-note:hover:not(:disabled) {
+  border-color: #7a4fd0;
+  color: #7a4fd0;
+}
+.issue-takeover-actions > .issue-takeover-resume {
+  color: #fff;
+  background: #7a4fd0;
+  border: 1px solid #7a4fd0;
+}
+.issue-takeover-actions > .issue-takeover-resume:hover:not(:disabled) {
+  background: #6a41b8;
+  border-color: #6a41b8;
+}
+.issue-takeover-actions > button:disabled {
+  cursor: default;
+  color: var(--faint);
+  background: var(--surface-muted);
+  border-color: var(--line);
+}
