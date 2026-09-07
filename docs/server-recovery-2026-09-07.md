@@ -1,5 +1,7 @@
 # 内网服务器释放后的全新部署
 
+> 本页是操作顺序摘要。完整组件归属、缺失交付件、数据边界和逐链验收见 [系统组件承载审计](system-component-ownership-2026-09-07.md)，部署前应先读该报告。
+
 当前事实：用户确认旧服务器及备份均已丢失。新服务器地址、系统、架构和登录方式待提供。尚未对任何远端机器执行部署。
 
 代码恢复基线：`main` 的 `869e382`，包含知识原文入口修复，以及此前 `c84f906` / `d9343cd` 的旧 MR 状态核对修复。此基线已推送远端；如使用更新版本，先记录和验证实际部署提交。
@@ -21,7 +23,7 @@
 
 1. 确认新机操作系统/CPU 架构、SSH 登录、磁盘挂载、出口和对外入口。旧 IP 可能已经回收，不能直接沿用旧脚本连接。
 2. 先恢复生产；测试环境另建数据目录、配置目录、端口和服务，不能与生产共用。
-3. 安装宿主 Node、Python、Git、Docker。旧脚本使用 Node 24.19.0/Linux x64，实际包必须匹配新机架构。禁止从 macOS 搬 `node_modules` 到 Linux。
+3. 安装宿主 Node、Python、Git、Docker，并为 PlantUML 出图准备宿主 Java、为问题材料解压准备 tar/unzip。旧脚本使用 Node 24.19.0/Linux x64，实际包必须匹配新机架构。禁止从 macOS 搬 `node_modules` 到 Linux。
 4. 在新机获取已验证代码，运行根目录 `npm ci`，再在 `web/` 运行 `npm ci`、`npm run build`。内网 npm 源若不全，在相同 OS/架构的联网机器准备依赖。
 5. 从镜像仓拉取已确认的任务构建镜像；没有则按 `deploy/build-image/README.md` 重建，并恢复内部 CA、Maven settings 与 npm 私服配置。
 6. 创建专用服务账号，准备数据、缓存和日志目录。可沿用原布局：`/data/mae-flow-cloud/{repo,data,cache,logs}`，配置在 `/etc/mae-flow-cloud/`。正式任务容器必须使用非 root 用户。
