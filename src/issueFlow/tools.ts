@@ -1084,7 +1084,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // Agent 的分析并行。fail-open 旁路:预热自己的失败不碰流程。
         void (enteredAnalyze ? ctx.startWarmup?.() : undefined);
         ctx.persist();
-        return ok(promptCopy("receipts", "stage.closed", {
+        return ok(promptCopy("receipts", "complete.stage_closed", {
           stage_brief: stageBriefLines(scenario, to,
             promptCopy("briefs", `stage.${to}`)).join("\n"),
         }) + (knowledgeBrief ? `\n\n${knowledgeBrief}` : ""));
