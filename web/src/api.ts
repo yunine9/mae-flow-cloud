@@ -2724,6 +2724,7 @@ export interface Annotation {
 export interface AnchorCheck {
   id: string;
   state: "hit" | "moved" | "gone" | "ambiguous";
+  line_end?: number;
   line?: number;
   now?: string;
 }

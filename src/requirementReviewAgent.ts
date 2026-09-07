@@ -121,7 +121,7 @@ export function requirementReviewMission(input: {
     "",
     "请这样处理：",
     `1. 用 read 按意见里的行号和原文定位读取 ${REQUIREMENT_REVIEW_DOCUMENT}；文档很长时用 offset/limit 分段读，不要把全文复述到回复里。`,
-    `2. 用 Edit 修改 ${REQUIREMENT_REVIEW_DOCUMENT}。只改意见指向的内容；未被意见要求改变的段落必须保留。禁止用 Write 重写整篇文档。`,
+    `2. 用 Edit 修改 ${REQUIREMENT_REVIEW_DOCUMENT}。围绕意见完善需求，必要时可连带调整相关表格、定义和前后文，在回执中说明原因与涉及位置；避免无关改写。禁止用 Write 重写整篇文档。`,
     "3. 意见明确就直接改；确实不同意或存在歧义时保留原文，不要猜。",
     `4. 最后用 Write 创建 ${REQUIREMENT_REVIEW_RECEIPTS}，内容必须是 JSON 数组，且每个意见 id 恰好一条：`,
     '[{"annotation_id":"<id>","outcome":"fixed|not_fixed|needs_clarification","summary":"改了什么或为什么没改","evidence":["requirement.md:行号"]}]',
@@ -130,6 +130,7 @@ export function requirementReviewMission(input: {
     "",
     "## 本轮人工检视意见",
     renderAnnotations(requirement === undefined ? input.annotations
-      : reanchorRequirementAnnotations(requirement, input.annotations), input.ticket),
+      : reanchorRequirementAnnotations(requirement, input.annotations), input.ticket, { allowRelatedChanges: true }),
+    "行号只辅助定位。原文已变化或有多个匹配时，结合划选正文、意见和上下文核对；仍无法确定才写 needs_clarification 回执，不要按旧行号猜测。",
   ].join("\n");
 }

@@ -30,12 +30,13 @@ export const ANCHOR_MAX = 90;
 /** 没找到、匹配多处或尚未取得检查结果，都不能拿历史行号冒充当前位置。 */
 export function resolvedAnnotationRange(
   item: { line: number; line_end?: number },
-  check?: { state: string; line?: number },
+  check?: { state: string; line?: number; line_end?: number },
 ): { line: number; lineEnd: number } | undefined {
   if (!check || !["hit", "moved"].includes(check.state)
       || !Number.isSafeInteger(check.line) || check.line! < 1) return undefined;
   const line = check.line!;
-  return { line, lineEnd: line + Math.max(0, (item.line_end ?? item.line) - item.line) };
+  return { line, lineEnd: check.line_end && check.line_end >= line
+    ? check.line_end : line + Math.max(0, (item.line_end ?? item.line) - item.line) };
 }
 
 export interface MaterialAnnotation {

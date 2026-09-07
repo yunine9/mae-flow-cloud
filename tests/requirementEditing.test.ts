@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
-import { unanchoredRequirementChanges } from "../src/requirementDocument.ts";
 import { EventLog } from "../src/semanticEvents.ts";
 
 const CONFIRM_STEP = "cloud_requirement_analysis_confirm";
@@ -432,105 +431,6 @@ test("需求修改 Agent 不能用 Write 整篇覆盖原文", async () => {
     assert.equal(service.get(created.id)?.requirement, "新口径\n\n必须保留");
     assert.match(JSON.stringify(model.requests[1]), /禁止用 Write 覆盖需求原文/,
       "模型必须真实收到门禁说明，不能只靠提示词约定");
-  } finally {
-    await model.stop();
-  }
-});
-
-test("逐段比对:没有意见指向的段落被改就整轮拒收", () => {
-  const before = "# 用户需求\n\n登录后记住账号。\n\n密码错误三次锁定十分钟。\n\n支持手机号登录。";
-  const notes = [{ anchor: "记住账号", line: 3 }];
-  // 只改被指向的段、在中间插新段、挪位置:都放行。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n新增:记住时长 30 天。\n\n支持手机号登录。\n\n密码错误三次锁定十分钟。",
-    notes), []);
-  // 顺手润色没被指向的段:拒。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n密码错误三次锁定 10 分钟。\n\n支持手机号登录。",
-    notes), ["密码错误三次锁定十分钟。"]);
-  // 悄悄删掉一段:拒。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n密码错误三次锁定十分钟。",
-    notes), ["支持手机号登录。"]);
-  // 锚点原文已被上一轮改掉时,按行号兜住这一段。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后自动填充账号。\n\n密码错误三次锁定十分钟。\n\n支持手机号登录。",
-    [{ anchor: "早就不在了", line: 3 }]), []);
-});
-
-test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字不动", async () => {
-  const model = new ScriptedModelServer([{
-    tool: { name: "edit", input: {
-      path: "requirement.md",
-      edits: [
-        { oldText: "登录后记住账号。", newText: "登录后记住账号,30 天内免登录。" },
-        { oldText: "密码错误三次锁定十分钟。", newText: "密码错误三次锁定 10 分钟。" },
-      ],
-    } },
-  }, {
-    tool: { name: "write", input: {
-      path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
-    } },
-  }, {
-    text: "已完成。",
-  }, {
-    tool: { name: "edit", input: {
-      path: "requirement.md",
-      edits: [{
-        oldText: "登录后记住账号。",
-        newText: "登录后记住账号,30 天内免登录。",
-      }],
-    } },
-  }, {
-    tool: { name: "write", input: {
-      path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
-    } },
-  }, {
-    text: "已完成。",
-  }], "scripted-v1", { linear: true });
-  await model.start();
-  try {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-drift-"));
-    const service = new TaskService({
-      dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), maxConcurrent: 0,
-    });
-    const original = "# 用户需求\n\n登录后记住账号。\n\n密码错误三次锁定十分钟。";
-    const created = service.create(original, {
-      account: "owner", requirementAnalysis: true,
-      requirementAnalysisConfirmation: true,
-    });
-    const note = service.addAnnotation(created.id, {
-      author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
-      file: "需求原文", line: 3, anchor: "记住账号",
-      note: "写明记住多久", kind: "doc",
-    });
-    for (const scene of model.script) {
-      if (scene.text) scene.text = scene.text.replace("__NOTE__", note.id);
-      const content = scene.tool?.input.content;
-      if (typeof content === "string") {
-        scene.tool!.input.content = content.replace("__NOTE__", note.id);
-      }
-    }
-    // 第 1 幕:回执合格,但顺手把锁定时长那段也润色了 → 拒。
-    await assert.rejects(
-      service.sendAnnotations(created.id, [note.id], "owner"),
-      (error) => error instanceof TaskControlError
-        && /没有意见指向的段落/.test(error.message)
-        && /密码错误三次锁定十分钟/.test(error.message));
-    assert.equal(service.get(created.id)?.requirement, original);
-    assert.equal(service.get(created.id)?.requirement_revision?.state, "failed");
-    assert.match(service.get(created.id)?.requirement_revision?.error ?? "",
-      /没有意见指向的段落/, "拒收原因要留在任务上,页面才有得显示");
-    assert.equal(service.get(created.id)?.requirement_revisions?.length ?? 0, 0,
-      "拒收的一轮不留底,不算一轮修改");
-    // 第 2 幕:只动被指向的段 → 收。
-    await service.sendAnnotations(created.id, [note.id], "owner");
-    assert.equal(service.get(created.id)?.requirement,
-      "# 用户需求\n\n登录后记住账号,30 天内免登录。\n\n密码错误三次锁定十分钟。");
-    assert.equal(service.get(created.id)?.requirement_revision, undefined);
   } finally {
     await model.stop();
   }

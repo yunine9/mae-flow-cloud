@@ -22,6 +22,8 @@ test("批注跳转与标记只用可靠的当前位置，起止行一起平移",
   const note = { line: 3, line_end: 7 };
   assert.deepEqual(resolvedAnnotationRange(note, { state: "moved", line: 13 }),
     { line: 13, lineEnd: 17 });
+  assert.deepEqual(resolvedAnnotationRange(note, { state: "moved", line: 13, line_end: 19 }),
+    { line: 13, lineEnd: 19 }, "服务端按完整选区定位的末行优先于旧范围长度");
   assert.deepEqual(resolvedAnnotationRange(note, { state: "hit", line: 3 }),
     { line: 3, lineEnd: 7 });
   for (const check of [undefined, { state: "gone" }, { state: "ambiguous", line: 20 },

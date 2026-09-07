@@ -197,6 +197,8 @@ export interface AnchorCheck {
   state: AnchorState;
   /** hit/moved/ambiguous 时的当前行号(1 起)。 */
   line?: number;
+  /** 完整划选原文仍在时，当前选区末行；不能只平移旧选区的长度。 */
+  line_end?: number;
   /** 靶子已变时的现状原文,让人自己判断这条还要不要送。 */
   now?: string;
 }
@@ -661,6 +663,7 @@ export function orderAnnotations(items: Annotation[]): Annotation[] {
 export function renderAnnotations(
   items: Annotation[],
   ticket: string,
+  options: { allowRelatedChanges?: boolean } = {},
 ): string {
   const ordered = orderAnnotations(items);
   const hasGraphAnnotations = ordered.some((item) =>
@@ -672,7 +675,9 @@ export function renderAnnotations(
     "",
     "几点要求:",
     "- 这是检视结论,不是征求意见。逐条落实,不要只回复\"已知悉\"。",
-    "- 只改这些地方。确实要连带改别处,先说清为什么,再动。",
+    options.allowRelatedChanges
+      ? "- 围绕这些意见修改，必要的相关表格、定义和上下文一起调整，在回执中说明原因与位置，交由人检视。"
+      : "- 只改这些地方。确实要连带改别处,先说清为什么,再动。",
     "- 行号按你收到时的文件;你一改行号就会偏移,所以每条都附了原文,"
     + "以原文为准定位。",
     "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
@@ -769,7 +774,7 @@ function normalize(text: string): string {
 }
 
 export function reanchor(
-  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line">>,
+  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line" | "quote" | "line_end">>,
   read: (artifact: string) => string | undefined,
 ): AnchorCheck[] {
   const cache = new Map<string, string[] | undefined>();
@@ -792,6 +797,29 @@ export function reanchor(
     }
     const needle = normalize(item.anchor);
     if (!needle) return { id: item.id, state: "hit", line: item.line };
+    // 表头在长文档里经常重复。划选正文能区分“哪张表”，不能只搜表头
+    // 然后退回历史行号。分隔线不显示在页面上，全文匹配也必须跳过它。
+    const normalizedLines = lines.map((line) => /^\s*\|[\s:|-]+\|\s*$/.test(line) ? "" : normalize(line));
+    const joined = normalizedLines.join("");
+    const lineAt = (offset: number) => {
+      let consumed = 0;
+      for (const [at, content] of normalizedLines.entries()) {
+        consumed += content.length;
+        if (offset < consumed) return at + 1;
+      }
+      return lines.length;
+    };
+    const quote = normalize(item.quote?.replace(/…$/, "") ?? "");
+    const quoteAt = quote ? joined.indexOf(quote) : -1;
+    if (quoteAt >= 0 && joined.indexOf(quote, quoteAt + 1) < 0) {
+      const line = lineAt(quoteAt);
+      const row = normalizedLines[line - 1];
+      if (row.includes(needle) || needle.includes(row)) {
+        return { id: item.id, state: line === item.line ? "hit" : "moved", line,
+          ...(item.line_end && !item.quote?.endsWith("…")
+            ? { line_end: lineAt(quoteAt + quote.length - 1) } : {}) };
+      }
+    }
     const hits: number[] = [];
     lines.forEach((line, at) => {
       if (normalize(line).includes(needle)) hits.push(at + 1);
@@ -800,8 +828,6 @@ export function reanchor(
       // 代码块、表格等一个 DOM 块可能跨多行；浏览器抓到的是整块
       // textContent，逐行当然永远匹配不到。再按同一归一化口径搜索
       // 连续全文，并把命中起点还原为源文件行号，避免批注刚记下就 gone。
-      const normalizedLines = lines.map(normalize);
-      const joined = normalizedLines.join("");
       const first = joined.indexOf(needle);
       if (first >= 0) {
         let offset = 0;

@@ -406,9 +406,6 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   assert.match(box, /className="assistant-bounds"/);
   assert.match(box, /Git 只读/);
   assert.match(box, /交回后由 Agent 接着做/);
-  const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
-  assert.match(service, /unanchoredRequirementChanges\(before, after, annotations\)/,
-    "回执之外还要逐段比对");
 });
 
 test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖批注;退回时有提示", () => {

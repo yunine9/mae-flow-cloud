@@ -209,7 +209,6 @@ import {
   type RequirementDocumentMeta,
   readRequirementRevision,
   storeRequirementRevision,
-  unanchoredRequirementChanges,
 } from "./requirementDocument.ts";
 import {
   loadRequirementAssets,
@@ -3355,12 +3354,7 @@ export class TaskService {
         throw new TaskControlError(
           "Agent 修改了需求原文，但逐条回执没有说明哪条已落实；本轮拒收，原文未变");
       }
-      // 回执合格只说明"每条都有交代",挡不住顺手改别处;逐段比对才挡得住。
-      const drifted = unanchoredRequirementChanges(before, after, annotations);
-      if (drifted.length) {
-        throw new TaskControlError(
-          `Agent 改动了没有意见指向的段落（${drifted.length} 处，如「${drifted[0]}」），本轮拒收，文档未变；意见仍在待提交`);
-      }
+      // 批注是修改意图，不是段落白名单。连带修改由完整 diff 和人工复检确认。
       // 改前全文和 diff 先落盘再覆盖正文:页面靠它给人看"这一轮改了什么",
       // 没有它,人只能把整篇重读一遍。
       const diff = requirementDiff(before, after);
