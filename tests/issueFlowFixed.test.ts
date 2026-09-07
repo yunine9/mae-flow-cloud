@@ -25,7 +25,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
-import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
+import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
@@ -418,6 +418,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const failedRound = platform.seen.filter((entry) =>
       entry.method === "POST" && entry.url === "/pipeline/trigger").length;
     assert.ok(failedRound >= 2, "红过一轮就要有第二轮触发(同 MR 修复再推)");
+    // MR 标题平台代笔(2026-09-07):每次建 MR 的标题都=DTS 单据标题,
+    // 精确相等——登记标题("登录超时")与 [单号] 前缀都不许出现。
+    for (const entry of platform.seen.filter((e) => e.url === "/mr")) {
+      assert.equal(entry.body?.title,
+        "【DEV·模拟】订单列表导出超时(数据量大时必现)");
+    }
     // 红灯取证:平台失败产物已镜像进会话工作区 pipeline/,修复回合的
     // 指令里点名了它——AI 读全文修,不是只啃 1500 字摘要。
     assert.ok(existsSync(join(dataDir, "issues", created.id,
@@ -873,6 +879,73 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
     () => orphanTool("create_mr").execute("x", {}),
     /阶段门禁:create_mr/,
     "出口轴工具同样逃不过无场景的打回(闸不再按模式旁路)");
+});
+
+test("create_mr 标题平台代笔(2026-09-07):标题=DTS 单据标题;拿不到如实打回,不拿登记标题顶替", async () => {
+  const base: IssueSessionState = {
+    id: "issue-1", account: "dev",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    title: "登录超时", description: "", source: "dts", ticket: "DTS-2026-1001",
+    repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
+    scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "done", "in_progress"],
+    status: "idle", stage: "mr_green", stage_note: "",
+    stage_at: new Date().toISOString(),
+    pushes: [{ repo: "/tmp/x.git", branch: "master_dev_DTS-2026-1001",
+      sha: "a".repeat(40), at: new Date().toISOString() }],
+  };
+  const platform = new LoopPlatform();
+  await platform.start();
+  const byName = (dts: DtsGateway = new MockDtsGateway()) => {
+    const tools = createIssueTools({
+      state: base,
+      workspace: "/tmp/ws",
+      dataRoot: "/tmp/data",
+      persist: () => undefined,
+      dts,
+      platformUrl: platform.baseUrl,
+      pullRepo: async (url) => ({
+        dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+      }),
+    }) as Array<{ name: string; execute: (id: string, params: any) => Promise<unknown> }>;
+    const tool = tools.find((item) => item.name === "create_mr");
+    assert.ok(tool, "mr_green 阶段应注册 create_mr");
+    return tool!;
+  };
+  try {
+    // AI 即便自拟 title 也被无视:标题=单据标题,与会话登记标题
+    // ("登录超时")无关、无 [单号] 前缀(CodeHub 精确相等)。
+    await byName().execute("x", { title: "AI 自拟标题" });
+    const mrBody = platform.seen.find((entry) => entry.url === "/mr")?.body;
+    assert.equal(mrBody?.title,
+      "【DEV·模拟】订单列表导出超时(数据量大时必现)");
+    assert.equal(base.mrs?.[0]?.title,
+      "【DEV·模拟】订单列表导出超时(数据量大时必现)",
+      "台账记实际使用的标题");
+
+    // 权威标题取不到(网关异常/单据标题为空)如实打回,绝不降级顶替;
+    // 打回发生在碰交付平台之前,/mr 不该有第二笔。
+    const broken: DtsGateway = {
+      listByOwner: async () => [],
+      detail: async () => { throw new Error("DTS 网关超时"); },
+      proxyFile: async () => ({ data: Buffer.alloc(0), contentType: "text/plain" }),
+    };
+    await assert.rejects(() => byName(broken).execute("x", {}),
+      (error: Error) => /权威标题/.test(error.message)
+        && /DTS 网关超时/.test(error.message));
+    const blank: DtsGateway = {
+      listByOwner: async () => [],
+      detail: async (ticket) => ({ ticket, title: "   ", content: "stub" }),
+      proxyFile: async () => ({ data: Buffer.alloc(0), contentType: "text/plain" }),
+    };
+    await assert.rejects(() => byName(blank).execute("x", {}),
+      (error: Error) => /权威标题/.test(error.message)
+        && /单据标题为空/.test(error.message));
+    assert.equal(platform.seen.filter((entry) => entry.url === "/mr").length, 1,
+      "打回的两次都不能建出 MR");
+  } finally {
+    await platform.stop();
+  }
 });
 
 test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查不倒转阶段", async () => {

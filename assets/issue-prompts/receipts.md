@@ -53,6 +53,10 @@
 
 仓 {{repo}} 还没有推送记录:请先对该仓调用 push_branch,再创建 MR(一仓一 MR,改过的仓各自交付)
 
+## mr.title_missing
+
+拿不到问题单 {{ticket}} 的权威标题({{reason}}),MR 没有创建——CodeHub 要求 MR 标题与问题单标题精确相等,平台不用别的字符串顶替。请稍后重试;仍失败就用 AskUserQuestion 告知用户
+
 ## mr.receipt.fixed
 
 平台已启动流水线监看:请结束本回合,等待流水线结果(红了平台会带回失败项让你修)。
