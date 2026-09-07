@@ -302,6 +302,19 @@ test("已交付批注明确是归档记录，不再冒充待提交", () => {
   assert.doesNotMatch(html, />提交 1 条/);
 });
 
+test("批注卡显示当前完整范围，原文消失后明确标历史行而不是当前跳转坐标", () => {
+  const props = { taskId: "t", viewerUsername: "visitor", canOperate: false,
+    items: [annotation({ line: 3, line_end: 7 })], onChanged() {} };
+  const moved = renderToStaticMarkup(React.createElement(Panel,
+    { ...props, checks: [{ id: "annotation-1", state: "moved", line: 13 }] }));
+  assert.match(moved, /:13–17/);
+  assert.doesNotMatch(moved, /:13–7/);
+  const gone = renderToStaticMarkup(React.createElement(Panel,
+    { ...props, checks: [{ id: "annotation-1", state: "gone" }] }));
+  assert.match(gone, /打开材料，核对原文位置/);
+  assert.match(gone, /原 3/);
+});
+
 test("个人行动清单能关联别人归属的 Committer 检视，且缺详情也不吞角标", () => {
   const foreign = task("foreign", "waiting_for_human", "alice");
   const visible = app.buildPersonalActionItems({

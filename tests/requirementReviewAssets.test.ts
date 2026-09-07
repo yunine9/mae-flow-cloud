@@ -92,6 +92,10 @@ test("需求检视会话按原路径读取附图并调用视觉模型，再修�
     main.script[4].tool!.input.content = JSON.stringify([{ annotation_id: note.id,
       outcome: "fixed", summary: "根据图片补充颜色顺序", evidence: ["requirement.md:1"] }]);
     await service.sendAnnotations(task.id, [note.id], "owner");
+    const offered = (main.requests[0].tools as Array<{ name: string }>).map((tool) => tool.name);
+    assert.deepEqual(offered.sort(), ["edit", "inspect_image", "read", "write"],
+      "需求编辑会话只能暴露可用的文件和看图工具，不能把 Bash 广告给模型再逐次拒绝");
+    assert.doesNotMatch(JSON.stringify(main.requests[0].system), /Use bash for file operations like ls, rg, find/);
     assert.equal(service.get(task.id)?.requirement, original.replace("原始口径", "色块从左到右是红、绿、蓝"));
     const events = new EventLog(service.eventLogPath(task.id)).replay();
     const reads = events.filter((event) => event.kind === "tool_finished" && event.payload.name === "Read");

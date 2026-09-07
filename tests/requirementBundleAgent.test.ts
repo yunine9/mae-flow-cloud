@@ -132,6 +132,8 @@ test("ZIP 图文需求端到端：Agent 收到完整原文、读取真实图片�
     const outcome = await session.start(prompt);
 
     assert.equal(outcome.status, "turn_finished");
+    assert.ok((main.requests[0].tools as Array<{ name: string }>).some((tool) => tool.name === "bash"),
+      "普通编码会话必须保留 Bash，不能被需求修订专项白名单误伤");
     const firstRequest = JSON.stringify(main.requests[0]);
     assert.match(firstRequest, /不可丢失的原文验收句/);
     assert.ok(firstRequest.includes(imagePath), "Agent 首轮必须拿到真实图片相对路径");

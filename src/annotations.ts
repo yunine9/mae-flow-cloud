@@ -769,7 +769,7 @@ function normalize(text: string): string {
 }
 
 export function reanchor(
-  items: Annotation[],
+  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line">>,
   read: (artifact: string) => string | undefined,
 ): AnchorCheck[] {
   const cache = new Map<string, string[] | undefined>();
@@ -827,8 +827,8 @@ export function reanchor(
         now: now === undefined ? undefined : now.trim(),
       };
     }
-    if (hits.includes(item.line)) return { id: item.id, state: "hit", line: item.line };
     if (hits.length > 1) return { id: item.id, state: "ambiguous", line: hits[0] };
+    if (hits.includes(item.line)) return { id: item.id, state: "hit", line: item.line };
     return { id: item.id, state: "moved", line: hits[0] };
   });
 }

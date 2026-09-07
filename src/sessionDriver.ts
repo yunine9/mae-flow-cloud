@@ -247,6 +247,8 @@ export interface CloudSessionOptions {
   allowHumanQuestions?: boolean;
   /** 专项旁路会话可关闭 Task，避免一个轻量助手再扩散出子 Agent 树。 */
   allowSubagents?: boolean;
+  /** 专项会话仅暴露能执行的工具，同时让 SDK 生成与门禁一致的工具说明。 */
+  allowedTools?: readonly string[];
   /** 面向人的问题卡文本整形(问题/选项/推荐/背景)。分析会话用它把模型
    * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
    * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
@@ -1190,6 +1192,7 @@ export class CloudSession {
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
+      tools: this.options.allowedTools ? [...this.options.allowedTools] : undefined,
       model: resolved,
       modelRuntime: this.modelRuntime,
       resourceLoader: loader,

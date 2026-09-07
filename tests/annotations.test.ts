@@ -231,6 +231,12 @@ test("重锚定读不到材料时按「还在」放行——旁路绝不挡住�
   assert.equal(checks[0].id, only.id);
 });
 
+test("重复原文即使占着旧行号也不能冒充唯一命中", () => {
+  const [check] = reanchor([{ id: "same", artifact: "doc.md", line: 3, anchor: "结论：涉及" }],
+    () => "**结论：涉及**\n\n**结论：涉及**");
+  assert.equal(check.state, "ambiguous");
+});
+
 test("需求原文批注直接锚定任务快照，现场不存在也能跟随新行号", async () => {
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-requirement-")),

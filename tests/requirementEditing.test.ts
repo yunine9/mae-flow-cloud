@@ -26,7 +26,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
   const started = new Promise<void>((resolve) => { entered = resolve; });
   const model = new ScriptedModelServer([
     { tool: { name: "edit", input: { path: "requirement.md",
-      edits: [{ oldText: "第一段旧口径", newText: "第一段新口径" }] } } },
+      edits: [{ oldText: "第一段旧口径", newText: "第一段新口径\n新增一行说明" }] } } },
     { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
     { text: "第一批已完成" },
     { tool: { name: "edit", input: { path: "requirement.md",
@@ -89,9 +89,16 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     await assert.rejects(confirm(), /正在修改需求文档/);
     release();
     await first;
+    assert.deepEqual((model.requests[0].tools as Array<{ name: string }>).map((tool) => tool.name).sort(),
+      ["edit", "read", "write"], "未配置视觉模型时只有三种文件工具，不影响排队修订");
+    assert.doesNotMatch(JSON.stringify(model.requests[0].system), /Use bash for file operations like ls, rg, find/);
     const repeatedDone = await service.sendAnnotations(task.id, [b.id], "reviewer");
     assert.match(repeatedDone.receipt ?? "", /已有处理回执/);
-    assert.equal(service.get(task.id)?.requirement, "第一段新口径\n\n第二段新口径");
+    assert.equal(service.get(task.id)?.requirement, "第一段新口径\n新增一行说明\n\n第二段新口径");
+    assert.match(JSON.stringify(model.requests[3]), /第 4 行/,
+      "第一批插入一行后，下一批使命应使用当前行号");
+    assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.line, 3,
+      "本轮使命使用重定位坐标，但原始批注的历史行号不改写");
     assert.deepEqual(service.get(task.id)?.requirement_revisions?.map((item) => item.annotation_ids), [[a.id], [b.id]]);
     const events = new EventLog(service.eventLogPath(task.id)).replay();
     assert.equal(new Set(events.map((event) => event.eventId)).size, events.length,

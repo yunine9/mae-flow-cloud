@@ -392,6 +392,7 @@ import {
 import {
   REQUIREMENT_REVIEW_DOCUMENT,
   REQUIREMENT_REVIEW_RECEIPTS,
+  REQUIREMENT_REVIEW_SESSION_POLICY,
   createRequirementReviewGateContract,
   prepareRequirementReviewWorkspace,
   requirementAnnotationInstructions,
@@ -3294,8 +3295,7 @@ export class TaskService {
           log: this.options.log,
         }),
         humanGate: new HumanGate(join(reviewRoot, "waiting.json")),
-        allowHumanQuestions: false,
-        allowSubagents: false,
+        ...REQUIREMENT_REVIEW_SESSION_POLICY,
         sessionId: `requirement-review:${revisionId}`,
         vision: this.taskVision(task),
         currentStep: () => "落实需求检视意见",
@@ -3307,7 +3307,7 @@ export class TaskService {
       const outcome = await driver.start(requirementReviewMission({
         annotations,
         ticket: this.ticketOf(task),
-      }));
+      }, task.summary.requirement));
       if (outcome.status === "session_ended" && outcome.reason === "failed") {
         throw new TaskControlError(
           `需求文档修改 Agent 未完成：${outcome.detail ?? "模型调用失败"}`);

@@ -8,11 +8,19 @@ import {
 } from "./annotations.ts";
 import type { GateContract, GateDecision } from "./gateService.ts";
 import type { RequirementDocumentMeta } from "./requirementDocument.ts";
+import { reanchorRequirementAnnotations } from "./requirementDocument.ts";
 import { materializeRequirementAssets } from "./requirementBundle.ts";
 import { isReviewAssetPath, materializeReviewAssets } from "./reviewAssets.ts";
 
 export const REQUIREMENT_REVIEW_DOCUMENT = "requirement.md";
 export const REQUIREMENT_REVIEW_RECEIPTS = "receipts.json";
+
+/** 工具列表和文件门禁必须一致，否则 SDK 会反过来引导模型反复调用 Bash。 */
+export const REQUIREMENT_REVIEW_SESSION_POLICY = {
+  allowHumanQuestions: false,
+  allowSubagents: false,
+  allowedTools: ["read", "edit", "write", "inspect_image"],
+} as const;
 
 /** 分析开始后原文是输入基线；后续意见落实到分析产物或实现。 */
 export function requirementAnnotationInstructions(annotations: Annotation[]): string | undefined {
@@ -102,16 +110,17 @@ export function createRequirementReviewGateContract(
 export function requirementReviewMission(input: {
   annotations: Annotation[];
   ticket: string;
-}): string {
+}, requirement?: string): string {
   return [
     "你是需求文档编辑 Agent，只负责落实本轮人工检视意见。",
     "当前工作目录包含本轮可编辑副本、回执和只读图片附件。",
+    "本会话只提供 read、edit、write，以及已配置时的 inspect_image；没有命令终端，不需要列目录或执行脚本校验 JSON。",
     `需求文档：${REQUIREMENT_REVIEW_DOCUMENT}`,
     `逐条回执：${REQUIREMENT_REVIEW_RECEIPTS}`,
     "正文和意见引用的图片已由宿主按原相对路径准备；有 inspect_image 时用它查看，否则用 Read。不要修改图片或用 Bash 复制文件。图片缺失或无法识别时如实记录 needs_clarification，不得猜测图片内容。",
     "",
     "请这样处理：",
-    `1. 用 Read 按意见里的行号和原文定位读取 ${REQUIREMENT_REVIEW_DOCUMENT}；文档很长时分段读，不要把全文复述到回复里。`,
+    `1. 用 read 按意见里的行号和原文定位读取 ${REQUIREMENT_REVIEW_DOCUMENT}；文档很长时用 offset/limit 分段读，不要把全文复述到回复里。`,
     `2. 用 Edit 修改 ${REQUIREMENT_REVIEW_DOCUMENT}。只改意见指向的内容；未被意见要求改变的段落必须保留。禁止用 Write 重写整篇文档。`,
     "3. 意见明确就直接改；确实不同意或存在歧义时保留原文，不要猜。",
     `4. 最后用 Write 创建 ${REQUIREMENT_REVIEW_RECEIPTS}，内容必须是 JSON 数组，且每个意见 id 恰好一条：`,
@@ -120,6 +129,7 @@ export function requirementReviewMission(input: {
     "写完回执就收口。最终回复只需简要说明完成情况，不要输出完整文档或回执 JSON。",
     "",
     "## 本轮人工检视意见",
-    renderAnnotations(input.annotations, input.ticket),
+    renderAnnotations(requirement === undefined ? input.annotations
+      : reanchorRequirementAnnotations(requirement, input.annotations), input.ticket),
   ].join("\n");
 }

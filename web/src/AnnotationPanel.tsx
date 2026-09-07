@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { resolvedAnnotationRange } from "./annotateTargets";
 import {
   dropAnnotation,
   editAnnotation,
@@ -525,6 +526,7 @@ export function AnnotationPanel({
       <ol className="annot-list" ref={listRef}>
         {visibleItems.map((item) => {
           const check = checkOf(item.id);
+          const location = resolvedAnnotationRange(item, check);
           const archival = taskStatus === "completed"
             && item.status === "draft";
           const isAuthor = item.author === viewerUsername;
@@ -547,12 +549,12 @@ export function AnnotationPanel({
               <div className="annot-item-head">
                 <button type="button" className="annot-where"
                         onClick={() => onLocate?.(item)}
-                        title={`回到 ${item.file}:${check?.line ?? item.line}`}>
+                        title={location ? `回到 ${item.file}:${location.line}` : "打开材料，核对原文位置"}>
                   {/* 需求原文是虚拟产物,内部名 __task_requirement__ 不该露给人
                       (2026-09-02 演示截图逮住)。 */}
                   <code>{item.file === TASK_REQUIREMENT_ARTIFACT
-                    ? "需求原文" : shortPath(item.file)}:{check?.line ?? item.line}{
-                      item.line_end && item.line_end > item.line ? `–${item.line_end}` : ""}</code>
+                    ? "需求原文" : shortPath(item.file)}:{location ? location.line : `原 ${item.line}`}{
+                      location && location.lineEnd > location.line ? `–${location.lineEnd}` : ""}</code>
                 </button>
                 <span className={`annot-progress ${progress.tone}`}
                       title={progress.hint}>

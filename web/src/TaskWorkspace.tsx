@@ -19,6 +19,7 @@ import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
 import { Annotatable } from "./Annotatable";
+import { resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
 import { requirementGraphVisible } from "./taskHierarchy";
@@ -626,6 +627,8 @@ export function TaskWorkspace({
   const [diffFileLoading, setDiffFileLoading] = useState(false);
   const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
+  const locationRequest = useRef(0);
+  useEffect(() => () => { locationRequest.current++; }, [task.id]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
   const [closures, setClosures] = useState<AnnotationClosure[]>([]);
@@ -1250,6 +1253,7 @@ export function TaskWorkspace({
     });
     return () => { alive = false; };
   }, [task.id, task.status, task.waiting?.state_version,
+    task.requirement,
     task.requirement_revision?.id, task.requirement_revision?.state,
     task.delivery?.loop?.workspace_review_recheck_required,
     notesPulse, livePulse]);
@@ -1271,7 +1275,8 @@ export function TaskWorkspace({
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
-  function locate(item: Annotation) {
+  async function locate(item: Annotation) {
+    const request = ++locationRequest.current;
     setWorkspaceView("materials");
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     const targetArtifact = item.artifact === "__workspace_diff__"
@@ -1280,26 +1285,47 @@ export function TaskWorkspace({
     const targetView = materialViewForAnnotation(item.artifact, items);
     setMaterialView(targetView);
     if (targetView === "diff" && item.file) setSelectedDiffPath(item.file);
-    const check = checks.find((candidate) => candidate.id === item.id);
-    const currentLine = check?.line ?? item.line;
+    setLocationNotice("正在核对批注的当前位置…");
+    let fresh;
+    try {
+      await onChanged();
+      fresh = await listAnnotations(task.id);
+    } catch {
+      if (request === locationRequest.current) setLocationNotice("无法核对批注的当前位置，请稍后重试；未跳转到旧行号。");
+      return;
+    }
+    if (request !== locationRequest.current) return;
+    setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures);
+    const check = fresh.checks.find((candidate) => candidate.id === item.id);
+    const range = resolvedAnnotationRange(item, check);
     if (check?.state === "gone") {
       setLocationNotice(
         `“${item.anchor.slice(0, 46)}${item.anchor.length > 46 ? "…" : ""}”`
         + " 已不在当前版本；左侧已打开最新材料，请结合差异和 Agent 回应核对。",
       );
+      return;
     } else if (check?.state === "ambiguous") {
       setLocationNotice("这段原文在当前材料中出现多次，已打开对应材料，请结合文件路径核对。");
+      return;
+    } else if (!range) {
+      setLocationNotice("暂时无法确认这条批注的当前位置，请在已打开的材料中核对原文。");
+      return;
     } else {
       setLocationNotice("");
     }
     let tries = 0;
     const seek = () => {
-      const node = document.querySelector<HTMLElement>(
-        `.ws-doc [data-l="${currentLine}"]`);
+      if (request !== locationRequest.current) return;
+      const reader = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
+      const expected = source ? TASK_REQUIREMENT_ARTIFACT : targetArtifact;
+      const ready = reader?.dataset.artifact === expected && reader?.dataset.loading !== "true";
+      const node = ready ? [...reader!.querySelectorAll<HTMLElement>(`[data-l="${range.line}"]`)]
+        .find((row) => targetView !== "diff"
+          || row.closest<HTMLElement>("[data-file]")?.dataset.file === item.file) : undefined;
       if (!node) {
         if (tries++ < 20) {
           window.setTimeout(seek, 100);
-        } else if (check?.state !== "gone") {
+        } else {
           setLocationNotice(
             `已打开 ${item.file}，但原第 ${item.line} 行已无法直接定位；请在当前材料中核对。`,
           );
@@ -1405,8 +1431,8 @@ export function TaskWorkspace({
   const locatableNotes = notes.flatMap((item) => {
     if (item.status === "dropped") return [];
     const check = checks.find((candidate) => candidate.id === item.id);
-    if (check?.state === "gone") return [];
-    return [{ ...item, line: check?.line ?? item.line }];
+    const range = resolvedAnnotationRange(item, check);
+    return range ? [{ ...item, line: range.line, line_end: range.lineEnd }] : [];
   });
   const openAnnotationReview = (ids: string[]) => {
     if (!ids.length) return;
@@ -2073,7 +2099,9 @@ export function TaskWorkspace({
           {documentsDownloadError && <div className="utility-note" role="alert">
             打包下载失败：{documentsDownloadError}
           </div>}
-          <div className={`ws-doc${materialView === "diff" ? " is-diff" : ""}`}>
+          <div className={`ws-doc${materialView === "diff" ? " is-diff" : ""}`}
+            data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT : active}
+            data-loading={materialView !== "source" && loading ? "true" : "false"}>
             {locationNotice && (
               <div className="annotation-location-notice" role="status">
                 <div><strong>批注位置已变化</strong><span>{locationNotice}</span></div>

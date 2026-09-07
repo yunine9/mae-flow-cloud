@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { RequirementAssetMeta } from "./requirementBundle.ts";
+import { reanchor, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
 
 export const MAX_REQUIREMENT_DOCUMENT_BYTES = 512 * 1024;
 export const INLINE_REQUIREMENT_DOCUMENT_BYTES = 32 * 1024;
@@ -188,27 +189,42 @@ function requirementParagraphs(text: string): Array<{ text: string; from: number
   return blocks;
 }
 
+/** 执行时和验收时都按同一份当前原文定位，不能页面已提示“位置变化”，
+ * 修订校验还拿旧行号。只调整本轮副本，不改写批注创建时的历史坐标。 */
+export function reanchorRequirementAnnotations<T extends { anchor: string; line: number; line_end?: number }>(
+  content: string, annotations: readonly T[],
+): T[] {
+  const checks = reanchor(annotations.map((item, index) => ({
+    ...item, id: String(index), artifact: TASK_REQUIREMENT_ARTIFACT,
+  })), () => content);
+  return annotations.map((item, index) => {
+    const check = checks[index];
+    if (check.state !== "moved" || check.line === undefined) return { ...item };
+    const delta = check.line - item.line;
+    return { ...item, line: check.line,
+      ...(item.line_end && item.line_end >= item.line ? { line_end: item.line_end + delta } : {}) };
+  });
+}
+
 /** 文档编辑 Agent 只许动意见指向的段落;其余段落必须逐字保留。
  *
  * 回执只能证明"每条意见都有交代",证明不了"没被指向的地方没动"——模型
  * 顺手润色两段、删掉一句它觉得多余的话,回执照样合格,复检的人对着
  * diff 才发现(需求确认阶段实测的口子)。判据是机械的:改前每个没有
  * 意见落在上面的段落,改后都得原样还在(允许挪位置、允许在中间插新段)。
- * 一段被算作"有意见落在上面"的条件是锚点原文在这段里,或者意见行号落在
- * 这段的行号范围内——后者兜锚点原文已经被上一轮改掉的情况。
+ * 先复用页面的 Markdown 重锚定，再检查完整划选范围与段落是否相交。
+ * 锚点已消失时沿用既有行号兜底；这类歧义仍需结合失败副本人工核对。
  * 返回被动了的未指向段落(截短),空数组 = 通过。 */
 export function unanchoredRequirementChanges(
   before: string,
   after: string,
-  annotations: ReadonlyArray<{ anchor: string; line: number }>,
+  annotations: ReadonlyArray<{ anchor: string; line: number; line_end?: number }>,
 ): string[] {
   const kept = new Set(requirementParagraphs(after).map((block) => block.text));
+  const current = reanchorRequirementAnnotations(before, annotations);
   const anchored = (block: { text: string; from: number; to: number }) =>
-    annotations.some((item) => {
-      const anchor = item.anchor.trim();
-      return (anchor && (block.text.includes(anchor) || anchor.includes(block.text)))
-        || (item.line >= block.from && item.line <= block.to);
-    });
+    current.some((item) => item.line <= block.to
+      && Math.max(item.line, item.line_end ?? item.line) >= block.from);
   return requirementParagraphs(before)
     .filter((block) => !anchored(block) && !kept.has(block.text))
     .map((block) => block.text.replace(/\s+/g, " ").slice(0, 40));

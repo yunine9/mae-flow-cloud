@@ -27,6 +27,17 @@ export interface RowNode {
 /** 原文快照的长度上限,和内核面板一致:够定位,又不至于把整段搬走。 */
 export const ANCHOR_MAX = 90;
 
+/** 没找到、匹配多处或尚未取得检查结果，都不能拿历史行号冒充当前位置。 */
+export function resolvedAnnotationRange(
+  item: { line: number; line_end?: number },
+  check?: { state: string; line?: number },
+): { line: number; lineEnd: number } | undefined {
+  if (!check || !["hit", "moved"].includes(check.state)
+      || !Number.isSafeInteger(check.line) || check.line! < 1) return undefined;
+  const line = check.line!;
+  return { line, lineEnd: line + Math.max(0, (item.line_end ?? item.line) - item.line) };
+}
+
 export interface MaterialAnnotation {
   id: string;
   artifact: string;
