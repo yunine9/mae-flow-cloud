@@ -88,6 +88,12 @@ export function IssueSessionView({
   onOpenIssue: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  // 卡座 dock(#125):输入区 ws-reply-dock 容器的节点。dockRef 交给右栏
+  // 协作区,节转成 footerTarget 发给当前卡——卡的提交区(附言+提交/
+  // 拒绝按钮)经 portal 挂进输入区;无卡/查看模式时它保持 null,提交区
+  // 原位渲染或干脆不出(查看模式事实卡无提交区)。
+  const [decisionFooterTarget, setDecisionFooterTarget] =
+    useState<HTMLDivElement | null>(null);
   // 左栏页签(#123 五选一):默认"对话现场"(AI 干活的直播面),用户
   // 手选优先;换会话重置。发言不靠页签——右栏 NEXT ACTION 六态常驻
   // 输入,对话现场只管看。
@@ -350,24 +356,29 @@ export function IssueSessionView({
         </section>
       </section>
       <section className="ws-side" aria-label="与 Agent 协作">
-        {/* #124 右栏协作对话框:协作头 + 当前待处理卡(本票临时挂在流
-            上方,卡入流 + 输入区 dock 是 #125)+ 会话流(聚合接口
-            GET /issues/:id/conversation + 可见轮询)+ 输入区(运行中=
-            插话 steerIssue,其余=续聊 replyIssue,查看者只读)。 */}
+        {/* #125 右栏协作对话框:协作头 + 会话流(聚合接口
+            GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
+            由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
+            去重),提交区经 portal 挂进输入区 dock(dockRef→footerTarget);
+            查看模式渲染只读事实卡、不出 dock。 */}
         <IssueConversationStream
           key={detail.id}
           issueId={detail.id}
           status={detail.status}
           waiting={Boolean(waiting)}
+          waitingId={waiting?.waiting_id}
+          waitingTs={waiting?.created_at}
           canOperate={canOperate}
           busy={busy}
           owner={detail.account}
           viewerUsername={viewerUsername}
           currentCard={waiting ? (canOperate
             ? <IssueDecisionCard waiting={waiting} busy={busy}
+                footerTarget={decisionFooterTarget}
                 onAnswer={answer} onEnvironment={attachEnvironment} />
             : <IssueWaitingFacts waiting={waiting} />)
             : undefined}
+          dockRef={setDecisionFooterTarget}
           onSteer={sendSteer}
           onReply={sendReply}
         />

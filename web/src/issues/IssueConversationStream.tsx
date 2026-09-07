@@ -13,9 +13,20 @@
  * 可见时每 4 秒轮询一次(任务侧同款节奏),换会话重置(序号作废半拍
  * 旧响应);贴底跟随 + 「有新消息」行为照搬任务侧。
  *
- * 当前等待卡不在流内渲染:会话视图把它作为 currentCard 挂在流上方
- * 「当前待你处理」容器里(临时形态,卡入流 + 输入区 dock 是 #125 的活);
- * 流内同卡的只读副本因此过滤,不重复呈现。
+ * 卡座与 dock(#125,ADR-0018 决策三「举卡入流」的通用模式,#126 照此
+ * 铺其余三类卡):
+ * - 卡座挂载点:当前等待卡永远钉在消息流末尾的 Agent 气泡内
+ *   (conv-card current,任务侧同款),不随时间线被新条目埋掉;流内
+ *   同卡(同 waiting_id)的投影副本按 id 去重防双卡,其余历史卡
+ *   (含更早已决定/作废的 waiting 投影)照常只读回放。卡上只留
+ *   题面/表单/选项。
+ * - dock 目标:输入区在等卡分支预留 ws-reply-dock 容器(dockRef 回调
+ *   把节点交给会话视图,会话视图把它作为 footerTarget 发给当前卡),
+ *   卡的提交区(附言+提交/拒绝按钮)经 createPortal 挂进来——附言与
+ *   决定一并提交,表单状态仍归卡组件(见 IssueDecisionCard)。
+ * - 查看模式(canOperate=false):卡以只读事实面(IssueWaitingFacts)
+ *   钉在流末尾,不出 dock,输入区只读。
+ * - 无卡:输入区恢复普通输入(运行中=插话/idle=续聊),dock 容器不渲染。
  *
  * 输入区按会话状态分派(轻量仿制任务侧 ws-composer 的结构与类名):
  * 运行中=插话(steerIssue,不打断当前步骤)、空闲=续聊(replyIssue);
@@ -72,20 +83,26 @@ export function IssueConversationStream({
   issueId,
   status,
   waiting,
+  waitingId,
+  waitingTs,
   canOperate,
   busy,
   owner,
   viewerUsername,
   currentCard,
+  dockRef,
   onSteer,
   onReply,
 }: {
   issueId: string;
   /** 会话状态:输入区的插话/续聊/禁用分派只看它和 waiting。 */
   status: IssueStatus;
-  /** 当前有等归属人的卡(waiting 非 undefined):流内同卡只读副本过滤,
-   * 真卡由会话视图经 currentCard 挂在流上方。 */
+  /** 当前有等归属人的卡:真卡钉在流末尾的 Agent 气泡内(#125 卡座)。 */
   waiting: boolean;
+  /** 当前卡的 waiting_id(卡座去重键):流内同卡投影按它摘除,防双卡。 */
+  waitingId?: string;
+  /** 当前卡的举起时刻(流内投影还没轮询到时给卡座气泡的时钟兜底)。 */
+  waitingTs?: string;
   /** 归属操作权(查看模式=false):false 时输入区只读,流完整可见。 */
   canOperate: boolean;
   busy: boolean;
@@ -94,8 +111,11 @@ export function IssueConversationStream({
   /** 当前登录用户名(缺席=auth 关闭的演示形态,按归属人渲染)。 */
   viewerUsername?: string;
   /** 当前待处理卡(IssueDecisionCard / 查看模式 IssueWaitingFacts),
-   * 会话视图组装;本票临时挂在流上方,#125 移入流末尾。 */
+   * 会话视图组装;卡座把它钉在流末尾的 Agent 气泡内(#125)。 */
   currentCard?: ReactNode;
+  /** 输入区 dock 容器的节点回调(#125):转交会话视图存为 footerTarget,
+   * 当前卡的提交区经 portal 挂进 dock。 */
+  dockRef?: (node: HTMLDivElement | null) => void;
   /** 运行中插话(SessionView 的 sendSteer → steerIssue)。 */
   onSteer: (text: string) => Promise<boolean>;
   /** 空闲续聊(SessionView 的 sendReply → replyIssue)。 */
@@ -139,15 +159,24 @@ export function IssueConversationStream({
     setHasNew(false);
   }, [issueId]);
 
-  // 当前等待卡的只读副本不进流(真卡在流上方),其余按投影给出的顺序排。
-  const chronological = useMemo(() => waiting
-    ? view.items.filter((item) => !(item.kind === "card" && item.status === "waiting"))
-    : view.items, [view.items, waiting]);
+  // 卡座(#125):当前等待卡钉在流末尾的 Agent 气泡内;流内同卡(同
+  // waiting_id)的投影副本按 id 摘除防双卡——不再整类过滤 waiting 投影,
+  // 历史卡(已决定/作废)照常只读回放。等待说明(详情轮询)与协作流
+  // (聚合轮询)节奏不同步的半拍,两源按 waiting_id 对齐。
+  const projectedCurrent = useMemo(() => (waitingId
+    ? view.items.find((item) =>
+        item.kind === "card" && item.waiting_id === waitingId)
+    : undefined), [view.items, waitingId]);
+  const pinnedCard = Boolean(waiting && currentCard);
+  const chronological = pinnedCard && waitingId
+    ? view.items.filter((item) =>
+        !(item.kind === "card" && item.waiting_id === waitingId))
+    : view.items;
   const hidden = Math.max(0, chronological.length - limit);
   const shown = hidden ? chronological.slice(hidden) : chronological;
 
   // 新条目到达:贴底就跟着滚,离开底部就亮「有新消息」,不抢人正在读的位置。
-  const streamKey = `${shown.at(-1)?.id ?? ""}:${shown.length}`;
+  const streamKey = `${shown.at(-1)?.id ?? ""}:${shown.length}:${waitingId ?? ""}`;
   useEffect(() => {
     const node = box.current;
     if (!node) return;
@@ -359,7 +388,7 @@ export function IssueConversationStream({
     rows.push(render(item));
   }
 
-  const nowLabel = canOperate ? "当前待你处理" : "当前待归属人处理";
+  const nowTag = canOperate ? "等你决定" : "等归属人决定";
 
   return <>
     <div className="ws-stream-shell">
@@ -367,12 +396,6 @@ export function IssueConversationStream({
         <strong>与 Agent 协作</strong>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
-      {/* 当前待处理卡:本票临时挂在流上方(容器即标注),保证作答链路
-          不断;#125 卡入流后这个容器整体拆除。 */}
-      {currentCard && <div className="issue-conv-now" role="region" aria-label={nowLabel}>
-        <span className="issue-conv-now-label">{nowLabel}</span>
-        {currentCard}
-      </div>}
       <div className="ws-stream" role="log" aria-live="polite" aria-relevant="additions"
         ref={box}
         onScroll={(event) => {
@@ -395,6 +418,15 @@ export function IssueConversationStream({
           </div>
         )}
         {rows}
+        {/* 卡座(#125):当前等待卡永远钉在流末尾的 Agent 气泡内,举卡
+            之后人再插话/裁决/回执它都不挪窝;流内同卡投影已按 waiting_id
+            去重。查看模式钉的是只读事实卡,同样不出 dock。 */}
+        {pinnedCard && message({
+          key: `card-${waitingId ?? "current"}`, who: "agent", name: "Agent",
+          ts: projectedCurrent?.ts ?? waitingTs ?? new Date().toISOString(),
+          tag: <em className="conv-tag att">{nowTag}</em>,
+          children: <div className="conv-card current">{currentCard}</div>,
+        })}
       </div>
       {hasNew && (
         <button type="button" className="ws-stream-new" onClick={scrollToEnd}>有新消息 ↓</button>
@@ -407,6 +439,8 @@ export function IssueConversationStream({
       canOperate={canOperate}
       busy={busy}
       owner={owner}
+      dock={waiting && canOperate}
+      dockRef={dockRef}
       onSteer={onSteer}
       onReply={onReply}
       onSent={() => load(issueId)}
@@ -415,14 +449,18 @@ export function IssueConversationStream({
 }
 
 /** 输入区(轻量仿制任务侧 ws-composer,类名同套):运行中=插话、空闲=
- * 续聊;等卡/挂起/未启动/终态给原因,查看者只读。发送走 SessionView
- * 传入的 steerIssue/replyIssue 通道,成功后立刻拉一次流让发言上屏。 */
+ * 续聊;等卡时让位给卡座 dock(卡的提交区经 portal 挂进 ws-reply-dock,
+ * 附言与提交按钮就在输入区完成),挂起/未启动/终态给原因,查看者只读。
+ * 发送走 SessionView 传入的 steerIssue/replyIssue 通道,成功后立刻拉一次
+ * 流让发言上屏。 */
 function IssueCollaborationComposer({
   status,
   waiting,
   canOperate,
   busy,
   owner,
+  dock,
+  dockRef,
   onSteer,
   onReply,
   onSent,
@@ -432,6 +470,11 @@ function IssueCollaborationComposer({
   canOperate: boolean;
   busy: boolean;
   owner: string;
+  /** 卡座 dock 位(#125):归属人答卡时为真——输入区预留 ws-reply-dock
+   * 容器,当前卡的提交区经 portal 挂进来;查看者/无卡时为假。 */
+  dock: boolean;
+  /** dock 容器节点回调(会话视图转交卡座,见本文件头部的模式说明)。 */
+  dockRef?: (node: HTMLDivElement | null) => void;
   onSteer: (text: string) => Promise<boolean>;
   onReply: (text: string) => Promise<boolean>;
   /** 发送成功后立即刷新协作流(不等下一拍轮询)。 */
@@ -451,7 +494,7 @@ function IssueCollaborationComposer({
   const mode: Mode = !canOperate ? { kind: "readonly" }
     : waiting || status === "waiting_user" ? {
         kind: "blocked", title: "等你作答",
-        hint: "先在上面的卡里作答;补充说明写在卡的「补充说明」里,随答复一起交给 AI。",
+        hint: "卡在上方流末尾;补充说明与提交按钮就在下方,作答后一并交给 AI。",
       }
     : status === "queued" ? {
         kind: "blocked", title: "会话还没启动",
@@ -480,6 +523,11 @@ function IssueCollaborationComposer({
         <span className="ws-composer-mode">{mode.title}</span>
         <span className="ws-composer-hint">{mode.hint}</span>
       </div>
+      {/* 卡座 dock 位(#125):当前等待卡的提交区(附言+提交/拒绝按钮)
+          经 portal 挂在这里。只在归属人答卡时预留;无卡(挂起/未启动/
+          终态)不出容器——输入区保持纯状态说明,不出现空 dock。 */}
+      {dock && <div className="ws-reply-dock" ref={dockRef} role="region"
+        aria-label="决定的附言与提交" />}
     </section>;
   }
 

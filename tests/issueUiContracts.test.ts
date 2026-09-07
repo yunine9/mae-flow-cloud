@@ -654,11 +654,9 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   assert.match(stream, /startVisiblePolling\(\(\) => load\(issueId\), 4000, document\)/);
   assert.match(stream,
     /useEffect\(\(\) => \{[\s\S]*setView\(\{ items: \[\], truncated: false, loaded: false \}\);[\s\S]*\}, \[issueId, load\]\)/);
-  // 当前等待卡临时挂在流上方:「当前待你处理」容器(查看模式文案换
-  // 归属人)包着决策卡(归属人)/事实卡(查看模式),作答链路不断;
-  // 卡入流是 #125 的活,本票不做。
-  assert.match(stream, /className="issue-conv-now"/);
-  assert.match(stream, /当前待你处理/);
+  // 当前等待卡已入流(#125 卡座):卡由会话视图组装下传(决策卡/查看
+  // 模式事实卡),钉在流末尾的 Agent 气泡内——流上方临时容器的形状
+  // 断言随 #125 拆除重写,卡座/dock 的契约为文末 #125 测试块钉住。
   assert.match(sessionView,
     /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
   // 输入区分派:运行中=插话(steerIssue)、其余=续聊(replyIssue),
@@ -677,4 +675,93 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   // 样式落点:#124 右栏协作的追加块在 style.css 末尾问题工作台区块内。
   assert.match(css, /#124 右栏协作/);
   assert.match(css, /\.issue-workspace\.task-workspace-v2 \.issue-conv-now \{/);
+});
+
+// ---- 举卡入流(#125,ADR-0018 决策三):当前等待卡钉在协作流末尾的
+// ---- Agent 气泡内(卡座),提交区(附言+提交/拒绝按钮)经 portal 挂进
+// ---- 输入区 dock;查看模式卡只读不出 dock,无卡时输入区恢复普通输入。
+// ---- 模式要素(挂载点/dock 接线/回放去重)供 #126 其余三类卡复制。
+
+test("卡座(#125):当前卡钉在流末尾 Agent 气泡内,按 waiting_id 去重,issue-conv-now 拆除", () => {
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  // 卡座挂载点:waiting + currentCard 同时在场即钉;气泡是 Agent 身份
+  // (conv-msg agent 由 message() 统一给),卡体住 conv-card current,
+  // 排在 rows(全部回放条目)之后——新条目到达它也不挪窝。
+  assert.match(stream, /const pinnedCard = Boolean\(waiting && currentCard\);/);
+  assert.match(stream,
+    /\{rows\}[\s\S]*\{pinnedCard && message\(\{[\s\S]*key: `card-\$\{waitingId/);
+  assert.match(stream,
+    /children: <div className="conv-card current">\{currentCard\}<\/div>/);
+  // 去重键:流内同 waiting_id 的投影副本摘除防双卡;其余 waiting 投影
+  // (历史卡)不再整类过滤,照常只读回放——旧的整类过滤形状必须消失。
+  assert.match(stream,
+    /view\.items\.filter\(\(item\) =>\s*\n\s*!\(item\.kind === "card" && item\.waiting_id === waitingId\)\)/);
+  assert.doesNotMatch(stream,
+    /filter\(\(item\) => !\(item\.kind === "card" && item\.status === "waiting"\)\)/,
+    "流内 waiting 投影不得再按状态整类过滤(按 waiting_id 去重)");
+  // 去重键来自会话视图下传的当前卡身份,不是流内推断。
+  assert.match(sessionView, /waitingId=\{waiting\?\.waiting_id\}/);
+  // 拆除:流上方临时容器「当前待你处理」(issue-conv-now)引用清零。
+  assert.doesNotMatch(stream, /issue-conv-now/);
+  assert.doesNotMatch(stream, /当前待你处理/);
+});
+
+test("卡座(#125):dock portal 接线——提交区挂输入区 dock,表单状态仍归卡组件", () => {
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  // 卡侧:提交区经 DecisionFooterMount 同款挂载器 createPortal 进 dock;
+  // 目标缺席(首帧/未接线)时原位渲染,portal 只搬 DOM 不搬状态。
+  assert.match(decisions,
+    /function IssueDecisionFooterMount\(\{ target, children \}/);
+  assert.match(decisions, /return target \? createPortal\(children, target\) : children;/);
+  assert.match(decisions, /footerTarget\?: HTMLElement \| null/);
+  // env 卡(本票走通的卡):附言(拒绝理由)+错误提示+提交/拒绝按钮
+  // 整块进 dock(挂载器包住 dock-foot);字段语义零变化——形态下拉必选、
+  // 拒绝 wire 复用 /environment(decline:true + note)。
+  assert.match(decisions,
+    /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?issue-decision-dock-foot[\s\S]*?<\/IssueDecisionFooterMount>/);
+  assert.match(decisions, /const ready = envType !== "" && host !== "" && !invalidHost/);
+  assert.match(decisions, /decline: true,/);
+  // 输入区侧:dock 容器(与任务侧同一 ws-reply-dock 形状,aria 同名)
+  // 只在等卡分支预留,由 dock=waiting && canOperate 门控。
+  assert.match(stream,
+    /\{dock && <div className="ws-reply-dock" ref=\{dockRef\} role="region"\s*\n\s*aria-label="决定的附言与提交" \/>\}/);
+  assert.match(stream, /dock=\{waiting && canOperate\}/);
+  // 会话视图:dock 节点回调与卡的 footerTarget 同源一线
+  // (dockRef setState → footerTarget → 卡 → portal)。
+  assert.match(sessionView, /dockRef=\{setDecisionFooterTarget\}/);
+  assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
+  // 样式落点:#125 追加块在 style.css 末尾问题工作台区块内,dock 内
+  // 的提交区铺陈(附言在上、按钮在下)与原位兜底各有形状。
+  assert.match(css, /#125 卡座与 dock/);
+  const block = css.slice(css.indexOf("#125 卡座与 dock"));
+  assert.ok(block.includes(
+    ".issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot {"),
+    "dock 内提交区的铺陈规则必须在 #125 追加块内");
+  assert.ok(block.includes(".issue-decision-dock-foot {"),
+    "原位(未接线)提交区的兜底形状必须在 #125 追加块内");
+});
+
+test("卡座(#125):无卡时输入区恢复普通输入,查看模式只读不出 dock", () => {
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  // 只读分支(查看模式):整段没有 dock 容器——事实卡只读钉在流末尾,
+  // 写口一个不出(与 canOperate 门语义一致)。
+  const readonlyStart = stream.indexOf('mode.kind === "readonly"');
+  const blockedStart = stream.indexOf('mode.kind === "blocked"');
+  const readonlySlice = stream.slice(readonlyStart, blockedStart);
+  assert.ok(readonlySlice.includes("ws-composer-readonly"));
+  assert.doesNotMatch(readonlySlice, /ws-reply-dock/, "查看模式不得出 dock");
+  // 无卡分支:插话/续聊的普通输入(steer-input)段没有 dock——dock 只
+  // 在等卡的 blocked 分支;无卡时 dock 容器不渲染,输入区恢复普通输入。
+  const steerBranch = stream.slice(stream.indexOf('const steer = mode.kind === "steer"'));
+  assert.ok(steerBranch.includes("steer-input"), "插话/续聊输入在场");
+  assert.doesNotMatch(steerBranch, /ws-reply-dock/, "无卡时不得出 dock");
+  // dock 门:归属人 + 有卡才为真;查看者(waiting 也在场)拿不到 dock。
+  assert.match(stream, /dock=\{waiting && canOperate\}/);
 });

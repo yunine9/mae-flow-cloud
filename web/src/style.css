@@ -11678,3 +11678,39 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   flex: 0 0 auto;
   border-top: 1px solid var(--line);
 }
+
+/* ---- #125 卡座与 dock:当前卡钉在协作流末尾的 Agent 气泡内,提交区
+   portal 进输入区(只追加,不动上行) ---- */
+/* 卡座气泡:决策卡住进 conv-card current(任务侧同款容器),占满气泡
+   体;卡外壳自带的外阴影在流内收敛,避免与气泡描边叠加发糊。 */
+.issue-workspace.task-workspace-v2 .ws-stream .conv-card.current .issue-decision {
+  box-shadow: none;
+}
+/* 提交区容器(issue-decision-dock-foot:附言+错误提示+按钮排)随卡座
+   分两态:原位(首帧/未接 dock 的兜底,rail 直挂同此)是卡内一节;
+   挂进输入区 dock 后是输入区自己的铺陈——附言在上、按钮在下,卡内
+   画法(负边距/顶边线/底色)让位。 */
+.issue-decision-dock-foot {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.issue-decision-dock-foot .issue-decision-submit {
+  margin: 0;
+  padding: 12px 0 0;
+  background: transparent;
+}
+.issue-decision-dock-foot .issue-decision-note { margin: 0; }
+.issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot {
+  margin: 0;
+  gap: 8px;
+}
+.issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-submit {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+/* env 卡的提交区搬进 dock 后,卡体底部不再有提交块垫底:补回下内边距
+   (只对已 dock 的 env 卡生效,skill/流水线卡 #126 前仍原样)。 */
+.issue-decision.foot-docked .issue-decision-env { padding-bottom: 15px; }
