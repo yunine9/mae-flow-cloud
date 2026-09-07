@@ -18,6 +18,77 @@ function confirmationQuestion(task: ReturnType<TaskService["get"]>): string {
   return questions[0].question;
 }
 
+test("修改需求时新意见立即入队，串行落实全部意见后仍需作者复检", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const model = new ScriptedModelServer([
+    { tool: { name: "edit", input: { path: "requirement.md",
+      edits: [{ oldText: "第一段旧口径", newText: "第一段新口径" }] } } },
+    { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
+    { text: "第一批已完成" },
+    { tool: { name: "edit", input: { path: "requirement.md",
+      edits: [{ oldText: "第二段旧口径", newText: "第二段新口径" }] } } },
+    { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
+    { text: "第二批已完成" },
+  ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
+    if (index === 0) { entered(); await held; }
+  } });
+  await model.start();
+  let first: Promise<unknown> | undefined;
+  try {
+    const service = new TaskService({
+      dataDir: mkdtempSync(join(tmpdir(), "mfc-requirement-queue-")),
+      provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
+      maxConcurrent: 0,
+    });
+    const task = service.create("第一段旧口径\n\n第二段旧口径", {
+      account: "owner", collaborators: ["reviewer"], requirementAnalysis: true,
+      requirementAnalysisConfirmation: true,
+    });
+    const a = service.addAnnotation(task.id, { author: "owner",
+      artifact: TASK_REQUIREMENT_ARTIFACT, file: "需求原文", line: 1,
+      anchor: "第一段旧口径", note: "修改第一段", kind: "doc" });
+    const b = service.addAnnotation(task.id, { author: "reviewer",
+      artifact: TASK_REQUIREMENT_ARTIFACT, file: "需求原文", line: 3,
+      anchor: "第二段旧口径", note: "修改第二段", kind: "doc" });
+    for (const [index, note] of [[1, a], [4, b]] as const) {
+      model.script[index].tool!.input.content = JSON.stringify([{
+        annotation_id: note.id, outcome: "fixed", summary: "已修改指定段落",
+        evidence: [`requirement.md:${note.line}`],
+      }]);
+    }
+    first = service.sendAnnotations(task.id, [a.id], "owner");
+    await started;
+    const queued = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.deepEqual(queued.sent, [b.id], "第一批仍被挂起时，第二批就能返回接收成功");
+    const queuedNote = service.listAnnotations(task.id).items.find((item) => item.id === b.id)!;
+    assert.equal(queuedNote.sent_via, "requirement_queue");
+    assert.equal(queuedNote.status, "sent");
+    assert.throws(() => service.verifyAnnotation(task.id, b.id, "reviewer"), /尚在排队/);
+    const confirm = () => service.decide(task.id, {
+      state_version: service.get(task.id)!.waiting!.state_version,
+      selected_options: { [confirmationQuestion(service.get(task.id))]: CONFIRM_OPTION },
+      actor: "owner",
+    });
+    await assert.rejects(confirm(), /正在修改需求文档/);
+    release();
+    await first;
+    assert.equal(service.get(task.id)?.requirement, "第一段新口径\n\n第二段新口径");
+    assert.deepEqual(service.get(task.id)?.requirement_revisions?.map((item) => item.annotation_ids), [[a.id], [b.id]]);
+    assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.response?.outcome, "fixed");
+    await assert.rejects(confirm(), /2 条意见仍待提出人确认/);
+    await service.verifyAnnotation(task.id, a.id, "owner");
+    await service.verifyAnnotation(task.id, b.id, "reviewer");
+    await confirm();
+  } finally {
+    release();
+    await first?.catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("新下单先在工作台确认需求，不会提前进入执行队列", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-confirm-"));
   const service = new TaskService({
@@ -214,6 +285,12 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   });
   const internal = (first as any).tasks.get(created.id);
   (first as any).annotations(internal).markSent([note.id], "interrupt");
+  const queued = first.addAnnotation(created.id, {
+    author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "待修改需求",
+    note: "还要补异常场景", kind: "doc",
+  });
+  (first as any).annotations(internal).markSent([queued.id], "requirement_queue");
   internal.summary.requirement_revision = {
     id: "revision-before-restart", state: "running",
     annotation_ids: [note.id], started_at: new Date().toISOString(),
@@ -230,6 +307,8 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   assert.equal(task.requirement_revision?.state, "failed");
   assert.match(task.requirement_revision?.error ?? "", /重新提交/);
   assert.equal(recovered.listAnnotations(created.id).items[0].status, "draft");
+  assert.equal(recovered.listAnnotations(created.id).items[1].status, "draft");
+  assert.equal(recovered.listAnnotations(created.id).items[1].note, "还要补异常场景");
 });
 
 test("长需求由 Agent 原位编辑，不再要求模型往回复里搬运全文", async () => {

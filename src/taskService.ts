@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
+import { resetQueuedRequirementReviews, submitRequirementReview } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
   AnnotationStore,
@@ -3239,13 +3240,6 @@ export class TaskService {
     task: TaskState,
     annotations: Annotation[],
   ): Promise<void> {
-    if (task.summary.requirement_revision?.state === "running") {
-      throw new TaskControlError("Agent 正在修改需求文档，请完成后再提交新意见");
-    }
-    if (!annotations.length || annotations.some((item) =>
-      item.artifact !== TASK_REQUIREMENT_ARTIFACT)) {
-      throw new TaskControlError("需求确认阶段只能提交需求文档上的检视意见");
-    }
     const waiting = task.summary.waiting;
     if (task.summary.status !== "waiting_for_human"
         || waiting?.step !== CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
@@ -6572,7 +6566,8 @@ export class TaskService {
     if (task.summary.status === "waiting_for_human"
         && task.summary.waiting?.step
           === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
-      await this.reviseRequirementFromAnnotations(task, picked);
+      await submitRequirementReview(task, this.annotations(task), picked,
+        (batch) => this.reviseRequirementFromAnnotations(task, batch));
       return { sent: picked.map((item) => item.id), text };
     }
     const gap = task.summary.delivery?.evidence_gap;
@@ -8784,6 +8779,7 @@ export class TaskService {
           // 会读到 cwd=null。这里只补内部索引，不制造流程状态变化。
           if (recoveredCwd) this.writeTaskState(task);
         }
+        resetQueuedRequirementReviews(this.annotations(task));
         if (summary.requirement_revision?.state === "running") {
           const interruptedIds = new Set(
             summary.requirement_revision.annotation_ids ?? []);

@@ -2685,7 +2685,7 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
-    | "queued_decision" | "owner_pending";
+    | "queued_decision" | "owner_pending" | "requirement_queue";
   /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
   sent_by?: string;
   response?: {

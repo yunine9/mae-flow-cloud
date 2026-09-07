@@ -1476,7 +1476,6 @@ export function TaskWorkspace({
       && task.delivery.mr_state !== "已关闭"
       && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
   const annotationCanSend = canContributeReview
-    && task.requirement_revision?.state !== "running"
     && (task.status === "running" || task.status === "waiting_for_human"
       || Boolean(task.delivery?.evidence_gap?.missing_dimensions.length)
       || (Boolean(task.delivery?.mr_url)

@@ -155,7 +155,7 @@ export function AnnotationPanel({
   reviewAnnotationIds?: readonly string[];
   /** 需求确认卡中的批注会立即驱动 Agent 修改当前需求正本。 */
   requirementReview?: boolean;
-  /** Agent 正在修改需求时禁止重复提交同一批草稿。 */
+  /** Agent 修改中仍接收新意见，服务端串行排队并去重。 */
   requirementRevisionRunning?: boolean;
   /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
   mergeRequestOpen: boolean;
@@ -241,8 +241,7 @@ export function AnnotationPanel({
   // 在这里直接以返工选项提交决定卡,一步到位;检视人仍走排队。
   const oneStepRework = queueable && !requirementReview && canDecide
     && !!reworkChoice;
-  const canSend = !requirementRevisionRunning
-    && !["completed", "canceled"].includes(taskStatus)
+  const canSend = !["completed", "canceled"].includes(taskStatus)
     && (running || evidenceAwaiting || reviewSendable || queueable);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
@@ -460,7 +459,9 @@ export function AnnotationPanel({
               : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `贴回 ${drafts.length} 条报错`
-                : requirementReview ? `提交 ${drafts.length} 条给 Agent 修改需求`
+                : requirementReview ? requirementRevisionRunning
+                  ? `提交 ${drafts.length} 条，排队修改需求`
+                  : `提交 ${drafts.length} 条给 Agent 修改需求`
                 : queueable ? `提交 ${drafts.length} 条（排队，等责任人返工时送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
@@ -469,7 +470,9 @@ export function AnnotationPanel({
           )}
           {queueable && !reviewSendable && (
             <p>{requirementReview
-              ? "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
+              ? requirementRevisionRunning
+                ? "意见提交后会排队；当前修订完成后自动处理，无需重复提交。所有意见处理并复检后，才能最终确认需求。"
+                : "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
               : oneStepRework
                 ? `会直接以「${reworkChoice!.option.replace(/[（(].*$/, "")}」提交当前决定卡，意见随之送给 Agent，不必再回卡上点返工。`
                 : `任务正等一张决定卡。提交只是先登记成待闭环事实（阻止直接放行），正文要等责任人在卡上选「${reworkChoice?.option.replace(/[（(].*$/, "") ?? "需要调整"}」后才随决定送给 Agent。`}</p>
@@ -498,9 +501,7 @@ export function AnnotationPanel({
       {canOperate && drafts.length > 0 && !canSend
         && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
-          {requirementRevisionRunning
-            ? "Agent 正在根据上一批检视意见修改需求文档；完成后即可继续提交。"
-            : taskStatus === "paused" || taskStatus === "pausing"
+          {taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
               : mergeRequestOpen === false && taskStatus === "await_merge"
                     ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"
