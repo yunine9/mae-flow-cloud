@@ -380,7 +380,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.doesNotMatch(sessionView, /bindIssueTicket/);
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
   assert.match(sessionView,
-    /\{canOperate && onNavigateProfile && detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
+    /canOperate && onNavigateProfile\s*&& detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
   // 双栏下传:右栏 NEXT ACTION 与材料页签都必须拿到 canOperate,
   // 面板内部的写控件由各自文件的断言钉住。
   assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
@@ -428,7 +428,12 @@ test("工作台单路径化(#98):mode 缺席也画固定计划线,自由旅程�
   // 会话工作台无条件画固定流程计划线——契约上不再容忍自由形状:对
   // mode 缺席的会话数据(后端删字段后)照样输出固定进度条,不存在
   // 任何条件分支;旅程线组件与 mode 读取一并禁止回流。
-  assert.match(sessionView, /^    <IssueFixedProgress issue=\{detail\} \/>$/m);
+  // ADR-0018 骨架对齐后,工作台头部用的是 task-progress 视觉的
+  // IssueWorkspaceProgress(数据仍是 stage_states);IssueFixedProgress
+  // 保留给列表卡,工作台不得回流自由旅程线。
+  assert.match(sessionView, /<IssueWorkspaceProgress issue=\{detail\} \/>/);
+  assert.match(sessionView, /<div className="ws-progress">/);
+  assert.match(sessionView, /export function IssueFixedProgress/);
   assert.doesNotMatch(sessionView, /IssueJourneyTrail|issue-journey|issue-jnode/);
   assert.doesNotMatch(sessionView, /detail\.mode/);
   // 列表卡与团队卡:轮次标注、进度条无条件渲染(原 mode 恒真判断删除,

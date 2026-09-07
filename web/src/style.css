@@ -11552,3 +11552,46 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .memory-board-stats { grid-column: 2; }
 }
 }
+
+/* ---- 问题工作台骨架(ADR-0018):复用任务侧 studio 骨架,主题走问题域 ---- */
+/* 同构不同色:studio 组件在问题工作台内一律取问题域变量(--accent 系),
+   两域今后各自的调色只动自己的令牌,不互相渗透。 */
+.issue-workspace.task-workspace-v2 {
+  --studio-accent: var(--accent);
+  --studio-tint: var(--accent-soft);
+  --workspace-tab-color: var(--accent);
+}
+/* ws-evidence 是问题工作台的滚动主区:错误横幅/逐仓交付/耗时卡点与
+   左栏内容都在其中;ws-side 承接协作区(现状 IssueRail,#124 换协作
+   对话框)。 */
+.issue-workspace.task-workspace-v2 .ws-evidence {
+  overflow-y: auto;
+  padding: 0 22px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.issue-workspace.task-workspace-v2 .ws-evidence .issue-main-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+.issue-workspace.task-workspace-v2 .ws-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.issue-workspace.task-workspace-v2 .ws-side .issue-rail {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  border-top: 0;
+}
+@media (max-width: 1100px) {
+  /* 窄屏单列:协作区回到内容之上(与旧双栏断点同语义)。 */
+  .issue-workspace.task-workspace-v2 .ws-body { grid-template-columns: minmax(0, 1fr); }
+  .issue-workspace.task-workspace-v2 .ws-side { order: -1; max-height: 46vh; }
+}
