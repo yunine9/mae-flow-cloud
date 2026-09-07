@@ -11595,3 +11595,30 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .issue-workspace.task-workspace-v2 .ws-body { grid-template-columns: minmax(0, 1fr); }
   .issue-workspace.task-workspace-v2 .ws-side { order: -1; max-height: 46vh; }
 }
+/* #123 左栏标签:五个一级标签直排(ws-pane-head > ws-source-switch),
+   页签一签一色——变量机制照搬任务侧(按页签序发 --workspace-tab-color),
+   色值沿用问题工作台页签一贯的五色序;激活态的边/底/字全走该变量。 */
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button.on {
+  color: color-mix(in srgb, var(--workspace-tab-color) 62%, var(--text-strong));
+  border-color: color-mix(in srgb, var(--workspace-tab-color) 34%, var(--line));
+  background: color-mix(in srgb, var(--workspace-tab-color) 9%, var(--surface));
+}
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button.on i {
+  color: var(--workspace-tab-color);
+  background: color-mix(in srgb, var(--workspace-tab-color) 12%, var(--surface));
+}
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(1) { --workspace-tab-color: #7566df; }
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(2) { --workspace-tab-color: #d28a31; }
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(3) { --workspace-tab-color: #20a28f; }
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(4) { --workspace-tab-color: #3b83d5; }
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(5) { --workspace-tab-color: #8059d6; }
+/* 「有分析报告」脉冲点随激活签色:页签条里 ws-source-switch i 的计数
+   徽标壳(17px 方圆角)会盖过全局 .ws-tab-dot 的 7px 圆点,这里按
+   圆点原样改回,底色换 --workspace-tab-color(动画交给全局规则)。 */
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch .ws-tab-dot {
+  min-width: 7px;
+  height: 7px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--workspace-tab-color);
+}

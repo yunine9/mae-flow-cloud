@@ -4,8 +4,9 @@
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
  * #98 单路径化:不再感知"模式",自由旅程线已删);右栏 NEXT ACTION
- * 在 IssueRail(独立文件),左栏材料页签在 MaterialsPane.tsx、
- * 现场页签在 EventsPane.tsx。耗时卡点(IssueCostPanel)同时被列表卡
+ * 在 IssueRail(独立文件)。左栏(#123 拍平)是五个一级标签直排——
+ * 页签条在本文件,四个材料子视图内容免壳直渲自 MaterialsPane.tsx、
+ * 现场直播在 EventsPane.tsx。耗时卡点(IssueCostPanel)同时被列表卡
  * 的展开态复用,也从这里出。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
@@ -49,6 +50,19 @@ import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 
+/** 左栏五个一级标签(#123 拍平):对话现场是默认入口放首位,其余四签
+ * 是原"材料"面板的二级页签升格——顶层"材料/现场"页签与材料面板壳
+ * 拆除,两层嵌套拍平(ADR-0018:页签条复用任务侧 ws-pane-head >
+ * ws-source-switch 同构,页签一签一色走 --workspace-tab-color)。 */
+const ISSUE_MAIN_TABS = [
+  { key: "events", label: "对话现场" },
+  { key: "dts", label: "DTS单据" },
+  { key: "doc", label: "过程文档" },
+  { key: "changes", label: "工作区变更" },
+  { key: "logs", label: "拉取日志" },
+] as const;
+type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
+
 export function IssueSessionView({
   detail,
   viewerUsername,
@@ -72,17 +86,14 @@ export function IssueSessionView({
   onOpenIssue: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  // 左栏页签:默认"现场"(AI 干活的直播面),用户手选优先;换会话重置。
-  // 发言不靠页签——右栏 NEXT ACTION 六态常驻输入,现场只管看。
-  const [tab, setTab] = useState<"materials" | "events">("events");
-  // 材料子视图提到会话层:右栏"分析报告已产出"要能一步跳到该子视图。
-  const [materialsView, setMaterialsView] = useState<
-    "dts" | "changes" | "logs" | "doc">("changes");
+  // 左栏页签(#123 五选一):默认"对话现场"(AI 干活的直播面),用户
+  // 手选优先;换会话重置。发言不靠页签——右栏 NEXT ACTION 六态常驻
+  // 输入,对话现场只管看。
+  const [tab, setTab] = useState<IssueMainTab>("events");
 
   useEffect(() => {
-    // 换一个会话就丢弃手选页签与材料子视图,回到默认入口。
+    // 换一个会话就丢弃手选页签,回到默认入口(对话现场)。
     setTab("events");
-    setMaterialsView("changes");
   }, [detail.id]);
 
   useEffect(() => {
@@ -220,8 +231,8 @@ export function IssueSessionView({
   // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
   // 右 ws-side 协作)。主题走问题域变量(见 style.css 的 .issue-workspace
-  // 覆写):同构不同色。左栏现状仍按"材料/现场"两页签跑(#123 拍平成
-  // 五个一级标签),右栏暂由 IssueRail 占位(#124 换协作对话框)。
+  // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏暂由
+  // IssueRail 占位(#124 换协作对话框)。
   return <section
     className="workspace-overlay issue-workspace task-workspace-v2 workspace-studio"
     role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
@@ -301,19 +312,46 @@ export function IssueSessionView({
 
         <IssueCostPanel id={detail.id} />
 
-        {/* 左栏内容:现状仍是"材料/现场"两页签(#123 换五个一级标签)。 */}
+        {/* 左栏内容(#123 拍平):五个一级标签直排——对话现场(默认入口)
+            放首位,其余四签是原"材料"面板二级页签的升格;旧顶层"材料/
+            现场"页签与材料面板壳拆除。页签条是任务侧左栏同款 ws-pane-head
+            > ws-source-switch(role=tablist),页签一签一色走问题域变量
+            --workspace-tab-color(五签色值见 style.css 末尾 #123 追加块)。 */}
         <section className="issue-main-pane" aria-label="会话内容">
-          <IssuePaneTabs tab={tab} onPick={setTab} hasAnalysis={detail.has_analysis} />
-          {tab === "materials"
-            ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
-                onView={setMaterialsView} onNotifyAI={notifyAI}
-                canOperate={canOperate} />
-            : <IssueEventsPane id={detail.id} active />}
+          <div className="ws-pane-head" aria-label="问题工作台视图">
+            <div><strong>{
+              ISSUE_MAIN_TABS.find((item) => item.key === tab)?.label
+            }</strong></div>
+            <div className="ws-source-switch" role="tablist"
+              aria-label="会话工作区内容">
+              {ISSUE_MAIN_TABS.map(({ key, label }) => (
+                <button type="button" key={key} role="tab"
+                  aria-selected={tab === key}
+                  className={tab === key ? "on" : ""}
+                  disabled={key === "dts" && !detail.ticket}
+                  title={key === "dts" && !detail.ticket
+                    ? "无单场景:还没有关联的 DTS 单据" : undefined}
+                  onClick={() => setTab(key)}>
+                  <span>{label}</span>
+                  {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
+                      入口要找得到(原材料页签的同一引导,随升格迁来)。 */}
+                  {key === "doc" && detail.has_analysis
+                    && <i className="ws-tab-dot" aria-hidden />}
+                </button>
+              ))}
+            </div>
+          </div>
+          {tab === "events"
+            ? <IssueEventsPane id={detail.id} active />
+            : <IssueMaterialsPane detail={detail} busy={busy} view={tab}
+                onNotifyAI={notifyAI} canOperate={canOperate} />}
         </section>
       </section>
       <section className="ws-side" aria-label="与 Agent 协作">
         {/* 右栏占位:IssueRail 原样(#124 换成协作对话框,消费
-            GET /issues/:id/conversation)。 */}
+            GET /issues/:id/conversation)。onOpenDoc 即右栏"分析报告
+            已产出"的跳转,#123 起直达「过程文档」一级标签——不再存在
+            材料子视图,换页签即达。 */}
         <IssueRail
           detail={detail}
           busy={busy}
@@ -324,7 +362,7 @@ export function IssueSessionView({
           onSteer={sendSteer}
           onArchive={archive}
           onCancel={cancelSession}
-          onOpenDoc={() => { setTab("materials"); setMaterialsView("doc"); }}
+          onOpenDoc={() => setTab("doc")}
           onAssociate={associate}
           onEnvironment={attachEnvironment}
         />
@@ -538,41 +576,6 @@ function IssueWorkspaceProgress({ issue }: { issue: IssueSummary }) {
       })}
     </span>
   </span>;
-}
-
-/** 材料 / 现场 的页签栏(左栏头;默认口在 IssueSessionView 里定:
- * 打开会话先看现场直播,手选保持到换会话)。发言入口仍走右栏
- * NEXT ACTION;对话的复盘阅读面在材料的「过程文档 · 过程问答」,
- * 现场的「消息」筛选管原始事件,三者各司其职。 */
-/** 页签栏:结构照搬任务工作台的 ws-workspace-nav(彩色卡 +
- * 主副两行文案),视觉与需求侧完全一致。 */
-function IssuePaneTabs({
-  tab,
-  onPick,
-  hasAnalysis,
-}: {
-  tab: "materials" | "events";
-  onPick: (tab: "materials" | "events") => void;
-  /** 分析报告在库:材料页签挂脉冲点——报告是主交付物,入口要找得到
-   * (2026-09-02 用户反馈页脚小字没人注意)。 */
-  hasAnalysis?: boolean;
-}) {
-  const views = [
-    ["materials", "材料", "DTS 单据、过程文档、工作区变更与拉取日志"],
-    ["events", "现场", "执行事件实时跟随,对话内容在「消息」筛选"],
-  ] as const;
-  return <nav className="ws-workspace-nav" aria-label="会话工作台视图">
-    {views.map(([value, label, hint]) => (
-      <button type="button" key={value}
-        aria-selected={tab === value}
-        className={tab === value ? "active" : ""}
-        onClick={() => onPick(value)}>
-        <strong>{label}{value === "materials" && hasAnalysis
-          && <i className="ws-tab-dot" aria-hidden />}</strong>
-        <small>{hint}</small>
-      </button>
-    ))}
-  </nav>;
 }
 
 /** 耗时与卡点:问题域版的 CostBreakdown。服务端(sessionView.ts)已经

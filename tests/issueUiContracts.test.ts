@@ -381,12 +381,13 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
   assert.match(sessionView,
     /canOperate && onNavigateProfile\s*&& detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
-  // 双栏下传:右栏 NEXT ACTION 与材料页签都必须拿到 canOperate,
+  // 双栏下传:右栏 NEXT ACTION 与左栏材料内容都必须拿到 canOperate,
   // 面板内部的写控件由各自文件的断言钉住。
   assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
   // 信息面不收:现场直播(SSE)与耗时卡点不带任何归属条件。
-  assert.match(sessionView, /: <IssueEventsPane id=\{detail\.id\} active \/>/);
+  // (#123 拍平后对话现场是五标签之首,直挂默认分支。)
+  assert.match(sessionView, /\? <IssueEventsPane id=\{detail\.id\} active \/>/);
   assert.match(sessionView, /<IssueCostPanel id=\{detail\.id\} \/>/);
   // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
@@ -557,4 +558,61 @@ test("推送前 UT 纪律:push_branch 描述写明先跑测试全绿再推,开�
   assert.ok(pushBranchDesc, "push_branch 工具定义必须存在");
   assert.match(pushBranchDesc, /推送前 UT 纪律/,
     "push_branch 的 description 必须自带推送前跑 UT 的纪律");
+});
+
+// ---- 左栏五标签(#123):材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
+
+test("左栏五标签(#123):顺序固定、对话现场默认,旧顶层页签引用清零", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  // 五标签一次成表,顺序即规格:对话现场(默认入口)在首位,其余四签
+  // 是原"材料"面板二级页签的升格——一签一名,不得改名换序。
+  const table = sessionView.match(
+    /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
+  assert.deepEqual(
+    [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
+      .map(([, key, label]) => `${key}:${label}`),
+    ["events:对话现场", "dts:DTS单据", "doc:过程文档",
+      "changes:工作区变更", "logs:拉取日志"]);
+  // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(role=tablist),
+  // 页签按钮 role=tab + aria-selected。
+  assert.match(sessionView,
+    /className="ws-pane-head" aria-label="问题工作台视图">[\s\S]*?className="ws-source-switch" role="tablist"/);
+  assert.match(sessionView, /role="tab"\s*\n\s*aria-selected=\{tab === key\}/);
+  // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
+  assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
+  assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
+  // 右栏"分析报告已产出"直达「过程文档」一级标签(材料子视图已不存在)。
+  assert.match(sessionView, /onOpenDoc=\{\(\) => setTab\("doc"\)\}/);
+  // 分析报告在库的脉冲点随升格迁到「过程文档」页签(入口要找得到)。
+  assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
+  // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
+  assert.doesNotMatch(sessionView, /IssuePaneTabs/);
+  assert.doesNotMatch(sessionView, /"materials"/);
+  assert.doesNotMatch(sessionView, /materialsView/);
+});
+
+test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
+  // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
+  // 只按会话层下发的 view 直渲内容,四个子视图与过程文档子页签原样。
+  assert.doesNotMatch(materials, /ws-pane-head/);
+  assert.doesNotMatch(materials, /ws-source-switch/);
+  // 词边界防误伤:SessionView 一词里就藏着 "onView" 子串。
+  assert.doesNotMatch(materials, /\bonView\b/);
+  assert.match(materials, /\{view === "dts" && /);
+  assert.match(materials, /\{view === "doc" && /);
+  assert.match(materials, /\{view === "changes" && /);
+  assert.match(materials, /\{view === "logs" && /);
+  assert.match(materials, /"ws-tabs" role="tablist"/);
+  // 页签一签一色:#123 追加块按页签序发 --workspace-tab-color(五签
+  // 五色),激活态样式走该变量;问题域默认值已在 .issue-workspace 定义。
+  assert.match(css, /\/\* #123 左栏标签/);
+  const block = css.slice(css.indexOf("/* #123 左栏标签"));
+  assert.ok(
+    block.includes(
+      ".issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button.on {"),
+    "激活页签的边/底/字必须走 --workspace-tab-color");
+  assert.ok(
+    (block.match(/--workspace-tab-color:/g) ?? []).length >= 5,
+    "五个页签各需一枚 --workspace-tab-color");
 });
