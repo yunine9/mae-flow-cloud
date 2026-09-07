@@ -9,6 +9,7 @@
  * 决定消费走 HumanGate 的先到生效语义,冲突原样抛给 API 层变 409。
  */
 
+import { prepareMaeBuildSupport, isMaeRepository, maeBuildRoot, maeBuildVolumes, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT } from "./maeBuildSupport.ts";
 import {
   accessSync,
   appendFileSync,
@@ -2494,7 +2495,7 @@ export class TaskService {
     // 因此也能在升级后原样续跑。
     const feedbackResult = this.activeFeedbackResult(task);
     if (feedbackResult) this.prepareFeedbackResultFile(task, feedbackResult.path);
-    const mounts = this.taskContainerMounts(task, [
+    const mounts = await this.taskContainerMounts(task, [
       ...hostMounts,
       ...analysisRepositoryMounts,
       ...(volumes ?? []),
@@ -2694,31 +2695,36 @@ export class TaskService {
     return this.shutdownPromise;
   }
 
-  private taskContainerMounts(
+  private async taskContainerMounts(
     task: TaskState,
     volumes: string[],
-  ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
+  ): Promise<{ volumes: string[]; environment: NodeJS.ProcessEnv }> {
     const repository = task.summary.repo_url
       ?? this.effectiveDefaultRepo()
       ?? task.cwd
       ?? task.summary.id;
-    return this.containerMountsForRepository(repository, volumes, task.cwd);
+    const root = dirname(resolve(task.cwd ?? task.summary.workspace));
+    const environment: NodeJS.ProcessEnv = {};
+    if (isMaeRepository(repository) && !this.isRequirementAnalysis(task)) {
+      environment.MFC_MAE_BUILD_ROOT = root;
+      environment.MFC_MAE_BASELINE = task.summary.baseline ?? "";
+      const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
+      try {
+        await prepareMaeBuildSupport({ root, dataDir: this.options.dataDir, repositories: [repository], log: this.options.log, user: this.options.isolation?.user,
+          clone: async (url, target, ref) => { await this.cloneRepo(dirname(target), sandbox, undefined, url, ref, basename(target), true, true); } });
+        volumes = [...volumes, ...maeBuildVolumes(root)];
+      } catch (error) { environment.MFC_MAE_BUILD_ERROR = String(error); this.options.log?.(`[mae-build] ${task.summary.id} 构建资源未就绪: ${String(error)}`); }
+      finally { this.cleanupHostGitCredential(sandbox); }
+    }
+    const mounted = this.containerMountsForRepository(repository, [...volumes, `${MAE_BUILD_ASSETS}:${MAE_BUILD_MOUNT}:ro`], task.cwd);
+    return { ...mounted, environment: { ...mounted.environment, ...environment } };
   }
 
   private containerMountsForRepository(
     repository: string,
     volumes: string[],
-    /**
-     * 正式任务是 <任务目录>/<仓名>。部分内部 C++ Maven 插件约定
-     * ${project.basedir}/../cpp_sdk_repository；因此 SDK 缓存必须作为
-     * 仓库同级目录挂入，不能拍扁到 /workspace 或镜像根目录。
-     */
     workspace?: string,
   ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
-    // 合并逻辑已抽到 buildCacheMounts.perRepoBuildCacheMounts
-    // (2026-09-03, issue #78,与问题流 ensureContainer 共用)。这个壳
-    // 只翻译任务侧语义:分区键=仓库 URL;cpp_sdk 挂仓名同级目录;
-    // CCACHE_BASEDIR 以任务工作区为基准;透传宿主身份。
     const isolation = this.options.isolation;
     return perRepoBuildCacheMounts({
       cacheRoot: isolation?.cacheRoot,
@@ -4703,7 +4709,7 @@ export class TaskService {
     const transcript = new TranscriptStore(
       join(runRoot, "transcript.jsonl"), "main");
     const attemptTimeoutMs =
-      this.options.warmup?.attemptTimeoutMs ?? 25 * 60_000;
+      this.options.warmup?.attemptTimeoutMs ?? (maeBuildRoot(task.cwd) ? 90 : 25) * 60_000;
     let timedOut = false;
     const driver = await CloudSession.create({
       taskId: `${task.summary.id}:warmup`,
@@ -4745,7 +4751,8 @@ export class TaskService {
         ? {
             exec: async (command, dir, execOptions) =>
               (await this.activeTaskContainer(task))
-                .exec(command, dir, execOptions),
+                .exec(command, dir, { ...execOptions, timeout: prePushCommandTimeoutSeconds(command, execOptions.timeout,
+                  resolvePrePushExecutionBudget(detectPrePushBuildProfile(task.cwd!), { attemptTimeoutMs })) }),
           }
         : undefined,
       afterFileMutation: this.options.isolation
@@ -15256,8 +15263,7 @@ export class TaskService {
       buildCommandTimeoutMs: this.options.prepush?.buildCommandTimeoutMs,
     });
 
-    // 正常收口路径会在 tryDeliver 前串行停净普通编码容器；恢复/异常
-    // 路径也在这里再兜一次。绝不能让两个容器同时写同一工作区。
+    // 不让两个容器同时写同一工作区。
     const previousContainer = task.container;
     if (previousContainer) {
       await previousContainer.stop();
@@ -15318,7 +15324,7 @@ export class TaskService {
     const instance = taskContainerInstance(this.options.dataDir).namePrefix;
     const attempt = `r${request.round}-${request.sha.slice(0, 12)}`
       .replace(/[^a-zA-Z0-9_.-]/g, "-");
-    const mounts = this.taskContainerMounts(task, isolation.volumes ?? []);
+    const mounts = await this.taskContainerMounts(task, isolation.volumes ?? []);
     const container = this.createTaskContainer({
       image: isolation.image,
       workspace: task.cwd,
@@ -20602,8 +20608,6 @@ export class TaskService {
 
   private async cloneRepo(
     workspace: string,
-    /** 带个人令牌时必须传加固沙箱(prepareHostGitSandbox),不能只给
-     * helper 路径——见下面 useCredential 分支的注释。 */
     sandbox?: { helper?: string; args: string[]; env: NodeJS.ProcessEnv },
     identity?: { username: string; email?: string },
     repoUrl?: string,
@@ -20612,11 +20616,9 @@ export class TaskService {
      * 物化，错一拍就会把“已选择”变成 digest 不符而静默跳过。 */
     baseline?: string,
     targetName?: string,
-    /** 只读分析现场(多仓需求理解):克隆后在 git 配置层禁用推送。
-     * 分析会话没有内核 preTool 门禁兜底,"禁止推送"不能只靠 prompt
-     * 嘱咐——pushurl 指向不存在的路径 + 不登记 credential helper,
-     * 模型真去 push 只会得到一个诚实的失败。 */
+    /** 分析现场禁用 push，辅助仓另以只读卷挂载。 */
     readonly = false,
+    shallow = false,
   ): Promise<string> {
     // 任务级仓(正式下单)> 部署 --repo(仅单仓试跑);都没有就如实失败，
     // 不猜一个仓出来。任务仓记在 summary，重启续跑仍使用同一地址。
@@ -20673,6 +20675,7 @@ export class TaskService {
           // (e2e-picky-20260830 实锤:任务对象 nlink=2452,容器内
           // mmap EACCES)。URL 仓不受此 flag 影响,统一加无副作用。
           "clone", "--quiet", "--no-local",
+          ...(shallow ? ["--depth", "1"] : []),
           ...(checkoutBaseline ? ["--branch", checkoutBaseline] : []),
           "--", source, target,
         ],

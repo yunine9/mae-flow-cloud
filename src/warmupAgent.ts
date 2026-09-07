@@ -9,6 +9,7 @@
  * SHA:基线红=环境或上游的锅,增量红才是 Agent 的锅,责任切得开。
  */
 
+import { MAE_FIRST_BUILD_GUIDANCE } from "./maeBuildSupport.ts";
 import { prePushBuildGuidance } from "./prepushBuildPlaybook.ts";
 import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
 
@@ -46,6 +47,7 @@ export function warmupMission(
 ): string {
   return [
     "# 环境预热编译任务",
+    MAE_FIRST_BUILD_GUIDANCE,
     "",
     "你是环境预热编译专员。此刻主 Agent 正在需求澄清,还没人改代码;",
     `当前 HEAD ${request.sha.slice(0, 12)} 就是任务基线。你要做三件事:`,

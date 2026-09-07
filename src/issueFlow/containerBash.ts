@@ -18,6 +18,7 @@
  */
 
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { prePushCommandTimeoutSeconds, type PrePushExecutionBudget } from "../prepushBuildPlaybook.ts";
 import type { TaskContainer } from "../containerRuntime.ts";
 import {
   backstopTimeoutSeconds,
@@ -44,7 +45,7 @@ function timeoutNote(timeoutSeconds: number): string {
  * Abort 语义不变。 */
 export function createContainerBashOperations(
   getContainer: () => TaskContainer | undefined,
-  options: { forwardAbort?: boolean } = {},
+  options: { forwardAbort?: boolean; buildBudget?: PrePushExecutionBudget } = {},
 ): BashOperations {
   const forwardAbort = options.forwardAbort ?? true;
   return {
@@ -53,7 +54,8 @@ export function createContainerBashOperations(
       if (!container) {
         throw new Error("会话容器不在场,拒绝执行(回合开始前应已拉起)");
       }
-      const timeoutSeconds = execOptions.timeout;
+      const timeoutSeconds = options.buildBudget
+        ? prePushCommandTimeoutSeconds(command, execOptions.timeout, options.buildBudget) : execOptions.timeout;
       const forwarded = forwardAbort
         ? execOptions
         : { ...execOptions, signal: undefined };

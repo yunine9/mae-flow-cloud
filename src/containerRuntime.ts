@@ -6,6 +6,7 @@
  * 确认时一律拒绝执行，绝不偷偷回退宿主。
  */
 
+import { MAE_CONTAINER_BOOTSTRAP, MAE_EXEC_ENVIRONMENT } from "./maeBuildSupport.ts";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -668,7 +669,10 @@ export class TaskContainer {
       this.startupDiagnostic = { phase: "startup-inspect", containerId: id };
       const metadata = await this.readAndValidateMetadata(id);
       this.startupDiagnostic.phase = "user-environment";
-      await this.command(["exec", id, "sh", "-lc", CONTAINER_USER_BOOTSTRAP]);
+      await this.command(["exec", id, "sh", "-lc", CONTAINER_USER_BOOTSTRAP
+        + "\n" + MAE_CONTAINER_BOOTSTRAP]);
+      if (this.baseEnvironment.MFC_MAE_BUILD_ROOT) await this.command(["exec", id, "sh", "-c",
+        'printf "%s" "$1" > "$HOME/.mae-build-image"', "sh", metadata.immutableImageReference]);
       this.metadataValue = metadata;
       this.lifecycle = "running";
       const role = metadata.labels["com.mae-flow-cloud.role"] ?? "unknown";
@@ -803,7 +807,7 @@ export class TaskContainer {
       "-w", exactCwd,
       ...envEntries(execEnvironment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
       this.containerId,
-      "sh", "-lc", withOptionalCompilerCache(command),
+      "sh", "-lc", withOptionalCompilerCache(MAE_EXEC_ENVIRONMENT + "\n" + command),
     ];
 
     let process: DockerStreamProcess;

@@ -1,3 +1,4 @@
+import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
  * 问题流服务:与需求任务并行的独立会话域。
  *
@@ -1409,6 +1410,13 @@ export class IssueFlowService {
         await cloneRepository(common);
       }
     }
+    if (this.options.isolation && isMaeRepository(url)) {
+      await this.prepareMaeBuild(live);
+      repairContainerCloneOwnership({ workspace: live.root, dir: join(live.root, "repo"),
+        user: this.options.isolation.user, runtime: this.options.ownershipRuntime });
+      if (live.container?.isAlive) await live.container.exec(MAE_CONTAINER_BOOTSTRAP, live.root,
+        { onData: () => {}, timeout: 30 });
+    }
     // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名);
     // 基线缺失时不建分支,让 Agent 先裁决基线对不对。
     let branch: string | undefined;
@@ -2016,6 +2024,14 @@ export class IssueFlowService {
     });
   }
 
+  private async prepareMaeBuild(live: LiveIssue): Promise<void> {
+    await prepareMaeBuildSupport({ root: join(live.root, "repo"), dataDir: this.options.dataDir, user: this.options.isolation?.user,
+      repositories: live.state.repo_urls ?? (live.state.repo_url ? [live.state.repo_url] : []),
+      clone: (repoUrl, targetDir, baseline) => cloneRepository({ dataDir: this.options.dataDir,
+        repoUrl, targetDir, baseline, shallow: true, credential: this.options.gitCredential?.(live.state.account) }),
+      log: (message) => this.log(message) });
+  }
+
   private async ensureContainer(live: LiveIssue): Promise<void> {
     if (!this.options.isolation) return;
     // 容器可能因为超时/OOM/外部因素已 stopped——引用还在但 lifecycle
@@ -2047,8 +2063,11 @@ export class IssueFlowService {
       // 问题流没有宿主身份透传、防覆盖报错回显去尾斜杠形态:
       // 两个旗子都缺席,正是抽取前这里的既有行为。
     });
-    const volumes = mounts.volumes;
-    const environment = mounts.environment;
+    // The issue container exists before pull_repo; keep a stable parent bind so late host preparation is visible.
+    await this.prepareMaeBuild(live);
+    const volumes = [...mounts.volumes, `${MAE_BUILD_ASSETS}:${MAE_BUILD_MOUNT}:ro`];
+    const environment = { ...mounts.environment, MFC_MAE_BUILD_ROOT: join(live.root, "repo"),
+      MFC_MAE_BASELINE: live.state.baseline ?? "" };
     const build: IssueContainerBuild = {
       image: isolation.image,
       workspace: live.root,
@@ -2152,7 +2171,8 @@ export class IssueFlowService {
     if (live.state.warmup?.finished_at) return;
     if (!live.container && !configured.runner) return;
     live.warmupActive = true;
-    const budgetMs = IssueFlowService.WARMUP_BUDGET_MS;
+    const budgetMs = (live.state.repo_urls ?? [live.state.repo_url ?? ""]).some(isMaeRepository)
+      ? 90 * 60_000 : IssueFlowService.WARMUP_BUDGET_MS;
     this.log(`[issue-warmup] ${live.id} 环境预热开跑(预算 `
       + `${Math.round(budgetMs / 60_000)} 分钟)`);
     void this.runWarmupSession(live, budgetMs)
@@ -2231,6 +2251,9 @@ export class IssueFlowService {
       JSON.stringify(model.json), { mode: 0o600 });
     const driver = await CloudSession.create({
       taskId: `${live.id}:warmup`,
+      knowledgeContext: issueKnowledgeContext(live.state),
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeScope: "issue",
       workspace: live.root,
       agentDir,
       provider: model.provider,
@@ -2254,7 +2277,8 @@ export class IssueFlowService {
         ? // forwardAbort=false:预算到点的 abort 是系统发起,不得经
           // Abort 语义销毁与主会话共享的容器(用户打断走主会话,不变)。
           createContainerBashOperations(() => live.container,
-            { forwardAbort: false })
+            { forwardAbort: false, buildBudget: { attemptTimeoutMs: budgetMs,
+              buildCommandTimeoutMs: Math.max(1000, budgetMs - 5 * 60_000) } })
         : undefined,
       sessionId: "warmup",
       currentStep: () => "环境预热编译",

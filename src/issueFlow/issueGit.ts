@@ -199,6 +199,7 @@ export async function cloneRepository(options: {
   targetDir: string;
   repoUrl: string;
   baseline?: string;
+  shallow?: boolean;
   credential?: GitCredential;
 }): Promise<void> {
   const url = validateRepoUrl(options.repoUrl);
@@ -208,6 +209,7 @@ export async function cloneRepository(options: {
       // --no-local:本地路径仓默认 hardlink 共享 .git/objects,问题仓
       // 会与源仓共 inode(同 taskService 正式 clone 的教训)。
       ...sandbox.args, "clone", "--quiet", "--no-local",
+      ...(options.shallow ? ["--depth", "1"] : []),
       ...(options.baseline ? ["--branch", options.baseline] : []),
       "--", url, options.targetDir,
     ], { env: sandbox.env, timeoutMs: GIT_TRANSFER_TIMEOUT_MS });
