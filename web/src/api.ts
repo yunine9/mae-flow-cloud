@@ -4532,7 +4532,8 @@ export type IssueConversationItem =
       purpose: "confirmation" | "clarification";
       annotation_ids: string[];
       questions: IssueConversationQuestion[];
-      status: "waiting" | "resolved";
+      /** superseded = 因人工接管现场而作废的历史卡(任务侧同款三态)。 */
+      status: "waiting" | "resolved" | "superseded";
     }
   | {
       kind: "decision"; id: string; ts: string; waiting_id: string; by?: string;

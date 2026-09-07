@@ -324,7 +324,8 @@ export function IssueConversationStream({
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
           tag: <em className={`conv-tag ${item.status === "waiting" ? "att" : "neutral"}`}>
-            {item.status === "waiting" ? "等待决定" : "已决定"}
+            {item.status === "waiting" ? "等待决定"
+              : item.status === "superseded" ? "已作废" : "已决定"}
           </em>,
           children: <div className={`conv-card ${item.status}`}>
             <div className="conv-card-head">

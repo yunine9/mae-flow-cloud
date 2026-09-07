@@ -80,21 +80,53 @@ test("插话与续聊:user_message 投影为 steer 条目", () => {
   assert.equal(items[1].kind, "steer");
 });
 
-test("Agent 卡:AskUserQuestion 投影为 card,后续有回合收口即 resolved", () => {
+test("Agent 卡:卡账源是 waiting.json 记录(真 waiting_id/真状态),事件不出卡", () => {
   const items = issueConversation([
     ev("tool_requested", { call_id: "c2", name: "AskUserQuestion", input: {
       questions: [{ question: "基线分支对吗?", options: ["master", "dev"] }],
     } }),
-    ev("human_decision", { waiting_id: "w1", state_version: 1,
+    ev("human_decision", { waiting_id: "issue-1:c2", state_version: 1,
       decision: "master", notes: "" }),
     ev("turn_finished", { reason: "end_turn" }),
-  ], {}).items;
-  const card = items.find((item) => item.kind === "card") as
-    Extract<typeof items[number], { kind: "card" }>;
-  assert.ok(card, "卡条目在场");
-  assert.equal(card.purpose, "clarification");
+  ], { agentCards: [{
+    waiting_id: "issue-1:c2", step: "问题分析",
+    created_at: "2026-09-07T00:00:00.000Z",
+    question: { questions: [{ question: "基线分支对吗?", options: ["master", "dev"] }] },
+    status: "resolved",
+  }] }).items;
+  const cards = items.filter((item) => item.kind === "card");
+  assert.equal(cards.length, 1, "卡只有一张,来自 waiting.json 记录");
+  const card = cards[0] as Extract<typeof items[number], { kind: "card" }>;
+  assert.equal(card.waiting_id, "issue-1:c2",
+    "真 waiting_id:卡座去重与选项高亮都靠它连接");
   assert.equal(card.status, "resolved");
+  // purpose 按协议缺省 confirmation(任务侧 purposeOf 同一口径);
+  // 旧事件路硬编码 clarification 本身就是错的。
+  assert.equal(card.purpose, "confirmation");
+  assert.equal(card.step, "问题分析");
   assert.deepEqual(card.questions[0]?.options, ["master", "dev"]);
+});
+
+test("重复举卡事件不重复出卡:重放与子会话拒绝的 AskUserQuestion 事件不冒充卡", () => {
+  const question = {
+    questions: [{ question: "采用哪个修复方案?", options: ["方案A", "方案B"] }],
+  };
+  const items = issueConversation([
+    ev("tool_requested", { call_id: "c2", name: "AskUserQuestion", input: question }),
+    // 重建会话把同一调用重放:账本里第二个同名词事件(转录配对所需,
+    // sessionDriver 有意为之)——它不是第二张卡。
+    ev("tool_requested", { call_id: "c2", name: "AskUserQuestion", input: question }),
+    // 子 Agent 里的 AskUserQuestion 是拒绝工具,同样落同名词事件。
+    ev("tool_requested", { call_id: "c9", name: "AskUserQuestion", input: question }),
+  ], { agentCards: [{
+    waiting_id: "issue-1:c2", step: "",
+    created_at: "2026-09-07T00:00:00.000Z",
+    question, status: "waiting",
+  }] }).items;
+  const cards = items.filter((item) => item.kind === "card");
+  assert.equal(cards.length, 1, "三条同名词事件只出记录对应的那一张卡");
+  assert.equal((cards[0] as Extract<typeof items[number], { kind: "card" }>)
+    .status, "waiting");
 });
 
 test("平台闸裁决:human_decision 带问句快照投影为 decision,闸题是确认不是澄清", () => {
@@ -174,6 +206,65 @@ test("坏账容忍:未知事件跳过,投影不炸", () => {
   ], {});
   assert.equal(view.items[0].kind, "session");
   assert.equal(view.items.length, 1);
+});
+
+test("服务级:等待中的 Agent 卡流内只有一条投影,waiting_id 是真去重键", async () => {
+  const dataDir = mfcTemp("mfc-issue-conv-card-");
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: {
+      context: "已对齐两个候选修复方案",
+      questions: [{
+        question: "采用哪个修复方案?",
+        options: ["方案A:超时回收", "方案B:扩容连接池"],
+        recommended: "方案A:超时回收",
+      }],
+    } } },
+    { text: "收到,按方案A处理完毕,本回合到此。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const { MockDtsGateway } = await import("../src/issueFlow/gateways.ts");
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    dts: new MockDtsGateway(),
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: "DTS-2026-1001", source: "dts",
+    });
+    const until = async (probe: () => boolean, what: string) => {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        if (probe()) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.fail(`超时:${what}`);
+    };
+    await until(() =>
+      service.get(created.id).status === "waiting_user", "Agent 卡举卡");
+    // 用户实测症状:等待中的卡在流里出现两份(流内一份还误标已决定)。
+    // 契约:卡座去重键(waiting_id)真实在卡条目上,且流内只有这一条。
+    const waiting = service.conversation(created.id);
+    const waitingCards = waiting.items.filter((item) => item.kind === "card");
+    assert.equal(waitingCards.length, 1, "等待中的卡流内只有一条投影");
+    assert.equal((waitingCards[0] as Extract<typeof waiting.items[number],
+      { kind: "card" }>).waiting_id, `${created.id}:scripted-0`,
+      "卡条目带真 waiting_id,与卡座同一把钥匙");
+    // 作答后:同一张卡转已决,不新增第二张。
+    service.answer(created.id, {
+      state_version: 1, answers: { "0": "opt-0-0" },
+    });
+    await until(() =>
+      service.get(created.id).status === "idle", "作答后收口");
+    const resolved = service.conversation(created.id);
+    const resolvedCards = resolved.items.filter((item) => item.kind === "card");
+    assert.equal(resolvedCards.length, 1, "答完还是同一张卡,不重复");
+    assert.equal((resolvedCards[0] as Extract<typeof resolved.items[number],
+      { kind: "card" }>).status, "resolved");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
 });
 
 test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为 waiting 卡", async () => {

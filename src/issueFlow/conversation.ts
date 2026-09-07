@@ -2,6 +2,13 @@
  * 问题域协作流投影(ADR-0018):events.jsonl 账本 → 任务侧
  * ConversationItem 同形状的条目数组,供「与 Agent 协作」对话框消费。
  *
+ * 卡的账源是两条旁路,不走事件:Agent 卡(AskUserQuestion)来自
+ * waiting.json 记录(options.agentCards,真 waiting_id/真状态——事件里
+ * 的同名词 tool_requested 会因重放/子会话拒绝重复出现且 waiting_id
+ * 恒空,拿它当卡源,等待中的卡会在流内多出误标"已决定"的影子);
+ * 平台闸卡从会话状态投影(options.waitingCard)。决定条目(human_decision
+ * 事件)带真 waiting_id,与卡条目按它连接。
+ *
  * 与过程问答投影(documents.ts 的 projectDialogue)是同一条现场记录的
  * 两个投影:过程问答是复盘阅读(只留问答与用户输入,ADR-0008),本投影
  * 是协作流回放(回合/卡/裁决/插话/检视/回执六类),口径不同互不替代。
@@ -11,6 +18,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import type { WaitingRecord } from "../humanGate.ts";
 import { cardQuestions } from "./documents.ts";
 import { registeredStageTools } from "./stageRegistry.ts";
 
@@ -44,6 +52,15 @@ export interface IssueConversationQuestion {
   options: string[];
 }
 
+/** Agent 卡(AskUserQuestion)的账源形状:waiting.json 记录里投影消费
+ * 的字段(HumanGate.all 的窄化投影)。卡的 waiting_id/状态/举起时刻
+ * 都以记录为准——事件里的 tool_requested 只配对转录用(重放/子会话
+ * 拒绝都会落同名词事件),不当卡源。 */
+export type IssueConversationAgentCard = Pick<
+  WaitingRecord,
+  "waiting_id" | "step" | "created_at" | "question" | "status"
+>;
+
 /** 任务侧 ConversationItem(src/conversation.ts)的问题域子集+扩展:
  * 同名成员(session/turn/card/decision/steer)逐字段兼容——前端会话流
  * 组件按同一条渲染路径走;receipts 是问题域扩展(平台工具回执的流内
@@ -59,7 +76,7 @@ export type IssueConversationItem =
       purpose: "confirmation" | "clarification";
       annotation_ids: string[];
       questions: IssueConversationQuestion[];
-      status: "waiting" | "resolved" }
+      status: "waiting" | "resolved" | "superseded" }
   | { kind: "decision"; id: string; ts: string; waiting_id: string; by?: string;
       decision: string; notes: string;
       purpose: "confirmation" | "clarification";
@@ -99,6 +116,10 @@ export interface IssueConversationOptions {
     question?: string;
     options?: string[];
   };
+  /** Agent 卡(AskUserQuestion)的 waiting.json 记录(HumanGate.all 的
+   * 窄化投影):卡条目的唯一账源。等待中的那条由前端卡座按 waiting_id
+   * 去重(钉在流末尾),历史已决/已作废的照常只读回放。 */
+  agentCards?: IssueConversationAgentCard[];
   /** 条目数上限(触顶保留最新)。 */
   maxItems?: number;
 }
@@ -194,13 +215,13 @@ export function issueConversation(
         break;
       }
       case "tool_requested": {
+        // AskUserQuestion 不从事件出卡:事件的 waiting_id 恒空、状态只有
+        // "发生过",拿它当卡源,等待中的卡会在流内多出一份误标"已决定"
+        // 的影子,重建会话的重放与子会话拒绝还会让同一张卡成倍繁殖
+        // (用户实测:当前卡上方叠着几张一模一样的"已决定"卡)。卡的
+        // 账源是 options.agentCards(waiting.json 记录),见流末投影。
         const name = String(payload.name ?? "");
-        if (name === "AskUserQuestion") {
-          items.push({ kind: "card", id, ts, waiting_id: "", step: "",
-            purpose: "clarification", annotation_ids: [],
-            questions: cardQuestions(payload.input), status: "resolved" });
-          break;
-        }
+        if (name === "AskUserQuestion") break;
         if (!turn) openTurn(id, ts);
         const bucket = turn!.steps;
         bucket.calls += 1;
@@ -274,6 +295,21 @@ export function issueConversation(
       default:
         break; // agent_spawned/session 之外的过程事件不进协作流
     }
+  }
+
+  // Agent 卡:waiting.json 记录投影(真 waiting_id/真状态),human_decision
+  // 事件出的决定条目按 waiting_id 与它对上(卡上选项高亮靠这条连接)。
+  // 排序按举起时刻入列,与回合/决定的先后由账本时间轴统一裁决。
+  for (const record of options.agentCards ?? []) {
+    const purpose = (record.question as { purpose?: unknown }).purpose
+      === "clarification" ? "clarification" as const : "confirmation" as const;
+    items.push({
+      kind: "card", id: `card-${record.waiting_id}`, ts: record.created_at,
+      waiting_id: record.waiting_id, step: record.step,
+      purpose, annotation_ids: [],
+      questions: cardQuestions(record.question),
+      status: record.status,
+    });
   }
 
   // 在场未作答的平台闸:不在账本里(答了才落账),从会话状态投影为

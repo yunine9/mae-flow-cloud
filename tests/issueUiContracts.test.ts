@@ -923,9 +923,11 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
     /view\.items\.filter\(\(item\) =>\s*\n\s*!\(item\.kind === "card" && item\.waiting_id === waitingId\)\)/);
   assert.match(stream,
     /children: <div className="conv-card current">\{currentCard\}<\/div>/);
-  // 流内卡的回放按 status 给词签(waiting=等待决定/其余=已决定),勾选
-  // 对齐裁决文本——三类卡与通用卡走同一条投影渲染,不按卡种分叉。
-  assert.match(stream, /item\.status === "waiting" \? "等待决定" : "已决定"/);
+  // 流内卡的回放按 status 给词签(waiting=等待决定/superseded=已作废/
+  // 其余=已决定),勾选对齐裁决文本——三类卡与通用卡走同一条投影渲染,
+  // 不按卡种分叉。
+  assert.match(stream,
+    /item\.status === "waiting" \? "等待决定"\s*\n\s*: item\.status === "superseded" \? "已作废" : "已决定"/);
   assert.match(stream, /conversationCardTitle\(item\)/);
   assert.match(stream, /decision\?\.decision\.split\("\\n"\)\.includes\(option\)/);
   // 会话视图:dockRef setState → footerTarget → 当前卡一线到底,dock 门
