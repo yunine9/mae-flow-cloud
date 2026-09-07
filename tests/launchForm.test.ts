@@ -42,6 +42,26 @@ import { writeRequirementArtifacts } from "./requirementGraphFixture.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
+test("代码仓不可选时必须解释部署原因；正式多仓模式保持可填写", () => {
+  const base = { dataDir: mkdtempSync(join(tmpdir(), "mfc-repo-availability-")),
+    maxConcurrent: 0, provider: "test", model: "test", modelsJson: {} };
+  const demo = new TaskService(base).launchOptions().repo;
+  assert.equal(demo.enabled, false);
+  assert.match(demo.disabled_reason ?? "", /kernel-mode/);
+  const issue = new TaskService({ ...base, requirementDisabled: true })
+    .launchOptions().repo;
+  assert.match(issue.disabled_reason ?? "", /仅启用了问题处理/);
+  const kernelRoot = discoverKernelRoot(process.cwd())!;
+  const pinned = new TaskService({ ...base,
+    host: { kernelRoot, repoPath: "/tmp/fixed-repository", repoPinned: true },
+  }).launchOptions().repo;
+  assert.equal(pinned.enabled, false);
+  assert.match(pinned.disabled_reason ?? "", /移除固定 repo 参数/);
+  const normal = new TaskService({ ...base, host: { kernelRoot } })
+    .launchOptions().repo;
+  assert.deepEqual(normal, { enabled: true, required: true });
+});
+
 test("launch-options:生效模型来自 models.json,设置层压部署层", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-"));
   const settings = new RuntimeSettings(dataDir);

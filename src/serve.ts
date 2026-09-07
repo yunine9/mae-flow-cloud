@@ -354,7 +354,14 @@ async function main(): Promise<void> {
 
   // 内核自动发现:链的语义与顺序见 kernelDiscovery.ts(serve/pilot/
   // 测试共用一条链,不许各写各的)。
-  const kernelRoot = discoverKernelRoot(REPO_ROOT);
+  let kernelRoot: string | undefined;
+  try {
+    kernelRoot = discoverKernelRoot(REPO_ROOT,
+      !has("--issue-only") && (has("--kernel-mode") || !!flag("--repo")));
+  } catch (error) {
+    console.error(`[serve] ${String(error)}`);
+    process.exit(2);
+  }
 
   // 问题流专用部署(--issue-only):需求流程的重依赖(内核/交付平台/
   // prepush/容器镜像守卫)整体不加载——它们缺配时也不再拒绝启动,

@@ -18,8 +18,14 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-export function discoverKernelRoot(repoRoot: string): string | undefined {
-  return process.env.MAE_FLOW_HOME
+export function discoverKernelRoot(repoRoot: string, required = false): string | undefined {
+  const root = process.env.MAE_FLOW_HOME
     ?? [resolve(repoRoot, "kernel"), resolve(repoRoot, "..", "mae-flow")]
       .find((candidate) => existsSync(join(candidate, "hooks", "dispatch.py")));
+  if (required && !root) {
+    throw new Error("已要求内核模式，但找不到内核，拒绝降级为演示模式。"
+      + "请恢复随 Cloud 发布的 kernel/，或正确配置 MAE_FLOW_HOME。"
+      + "否则下单无法选择代码仓、任务也不会克隆代码。");
+  }
+  return root;
 }

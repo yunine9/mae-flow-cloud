@@ -7148,7 +7148,7 @@ export class TaskService {
     model?: { provider: string; model: string };
     /** 当前默认修复轮；缺省仍明确返回平台兜底 20。 */
     repair_rounds?: number;
-    repo: { enabled: boolean; required: boolean };
+    repo: { enabled: boolean; required: boolean; disabled_reason?: string };
     /** 单号/基线分支:内核配置确认要的两项事实,表单下单就收——
      * 和交付方式同一逻辑,不让模型开工后逐项来问。 */
     ticket: { enabled: boolean; required: boolean };
@@ -7294,7 +7294,7 @@ export class TaskService {
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds
         ?? DEFAULT_REPAIR_ROUNDS,
-      // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
+      // 没接内核模式=任务不碰代码仓，表单展示不可用原因，不接受输入。
       // 钉死单仓部署(serve --repo,repoPinned)不收逐单仓:字段直接
       // 不启用,别让人填一个注定被拒/被换掉的地址(MFC-024;假平台
       // 部署曾因此推错仓)。required 与 create() 的实际校验同口径——
@@ -7302,6 +7302,13 @@ export class TaskService {
       repo: {
         enabled: !!this.options.host && !this.options.host.repoPinned,
         required: !!this.options.host && !this.options.host.repoPath,
+        ...(!this.options.host ? {
+          disabled_reason: this.options.requirementDisabled
+            ? "本服务仅启用了问题处理，需求代码交付未启用。请前往问题处理页，或联系管理员启用需求流程。"
+            : "本服务未启用代码交付，当前任务不会克隆代码仓。请联系管理员启用 kernel-mode，并检查内核、交付平台和任务镜像配置。",
+        } : this.options.host.repoPinned ? {
+          disabled_reason: "本服务通过 repo 参数固定了代码仓，不能逐单选择。需要选择代码仓时，请联系管理员移除固定 repo 参数并启用 kernel-mode。",
+        } : {}),
       },
       // AR/REQ 是业务任务身份，不是内核实现细节。即使是纯会话或本地
       // 演示形态也要保留填写入口；只有“是否强制填写”才随代码交付

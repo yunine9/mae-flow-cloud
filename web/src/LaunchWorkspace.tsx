@@ -367,7 +367,7 @@ export function LaunchWorkspace({
   const businessModuleNames = useMemo(() => new Map(
     businessModules.map((module) => [module.id, module.name])),
   [businessModules]);
-  // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
+  // 固定仓部署不接受仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
   const repositoriesToProbe = useMemo(() => [...new Set(
@@ -441,8 +441,7 @@ export function LaunchWorkspace({
   };
   const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
     + matchingTeamSkills.length;
-  const deliveryLocationVisible = !!options
-    && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
+  const deliveryLocationVisible = !!options;
   const selectedModuleKnowledgeCount = matchingModuleKnowledge.length;
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
     + matchedTeamKnowledgeCount;
@@ -1074,6 +1073,17 @@ export function LaunchWorkspace({
               {options && deliveryLocationVisible && (
                 <section className="launch-form-section launch-delivery-section">
                   <div className="launch-section-head"><i>2</i><div><strong>交付定位</strong><small>让 Agent 进入正确仓库和基线</small></div><em>必填</em></div>
+                  {!options.repo.enabled && <div className="repo-field" role="status">
+                    <label className="account-field">
+                      <span>代码仓</span>
+                      <input type="text" disabled placeholder="当前部署不支持逐单选择代码仓"
+                        aria-describedby="launch-repository-unavailable" />
+                    </label>
+                    <p id="launch-repository-unavailable" className="repo-field-note">
+                      {options.repo.disabled_reason
+                        || "当前部署未开放代码仓选择，请联系管理员检查部署模式。"}
+                    </p>
+                  </div>}
                   {options.repo.enabled && (
                     <div className="repo-field">
                       <div className="repo-field-title">

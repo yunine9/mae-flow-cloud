@@ -1241,9 +1241,9 @@ export interface LaunchOptions {
   model?: { provider: string; model: string };
   /** 数字=手刹上限；平台缺省为 20，0 表示关闭。 */
   repair_rounds?: number;
-  /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
+  /** enabled=false 时展示不可用原因，不能把代码仓入口静默隐藏。
    * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
-  repo: { enabled: boolean; required: boolean };
+  repo: { enabled: boolean; required: boolean; disabled_reason?: string };
   /** 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
    * 不让模型开工后再逐项来问(和交付方式同一逻辑)。 */
   ticket: { enabled: boolean; required: boolean };
