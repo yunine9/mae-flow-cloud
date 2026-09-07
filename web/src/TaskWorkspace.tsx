@@ -1697,7 +1697,7 @@ export function TaskWorkspace({
           </button>
         ))}
       </div>}
-      {reviewAssignment && (
+      {reviewAssignment?.status === "pending" && task.status !== "canceled" && (
         <section className="review-assignment" aria-labelledby="review-assignment-title">
           <div className="review-assignment-mark" aria-hidden>审</div>
           <div>
@@ -1810,7 +1810,7 @@ export function TaskWorkspace({
         </div>
         {(controllable || deletable || canRequestReview || onOpenFeedbackWall) && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {canRequestReview && <button type="button" className="workspace-review-invite-button"
+            {canRequestReview && task.status !== "canceled" && <button type="button" className="workspace-review-invite-button"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
               onClick={() => setReviewInviteOpen(true)}>邀请他人检视</button>}
@@ -2523,7 +2523,7 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && <div className="workspace-review-backdrop"
+      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <div className="workspace-review-backdrop"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setReviewInviteOpen(false);
         }}>
@@ -2561,7 +2561,8 @@ export function TaskWorkspace({
                     <strong>{committers.find((user) =>
                       user.username === review.committer)?.display_name
                       ?? review.committer}</strong>
-                    <small>{review.status === "completed" ? "已完成检视"
+                    <small>{review.status === "canceled" ? "任务已取消，邀请已关闭"
+                      : review.status === "completed" ? "已完成检视"
                       : review.delivered ? "等待检视" : "通知未送达"}</small>
                   </span>
                 ))}

@@ -1,8 +1,8 @@
 /**
  * Committer 检视台账：追加式 JSONL，服务重启后仍能恢复。
  *
- * 它刻意只有 pending / completed 两态：责任人主动邀请，Committer
- * 看完后收口。不引入接单、转派、多人会签等另一套流程系统。
+ * 责任人主动邀请，Committer 看完后收口；任务取消则关闭未完成邀请，
+ * 保留审计记录，不把取消冒充检视完成。
  */
 
 import {
@@ -24,9 +24,10 @@ export interface ReviewRequest {
   task_title: string;
   requester: string;
   committer: string;
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "canceled";
   created_at: string;
   completed_at?: string;
+  canceled_at?: string;
   delivered: boolean;
   attempts: number;
   last_error?: string;
@@ -35,11 +36,17 @@ export interface ReviewRequest {
 export class ReviewStore {
   private records = new Map<string, ReviewRequest>();
 
-  constructor(readonly path: string) {
+  constructor(readonly path: string, private readonly taskCanceled?: (id: string) => boolean) {
     this.load();
   }
 
   list(): ReviewRequest[] {
+    // 同时补齐旧版本遗留及任务落盘后进程中断的邀请，读到的待办必须有效。
+    for (const record of this.records.values()) {
+      if (record.status === "pending" && this.taskCanceled?.(record.task_id)) {
+        this.cancelTask(record.task_id);
+      }
+    }
     return [...this.records.values()]
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
@@ -50,6 +57,13 @@ export class ReviewStore {
 
   forTask(taskId: string): ReviewRequest[] {
     return this.list().filter((item) => item.task_id === taskId);
+  }
+
+  cancelTask(taskId: string): void {
+    for (const record of this.records.values()) {
+      if (record.task_id !== taskId || record.status !== "pending") continue;
+      this.save({ ...record, status: "canceled", canceled_at: new Date().toISOString() });
+    }
   }
 
   /** 彻底删除历史任务时同步清掉它的检视台账。JSONL 是追加日志，不能
@@ -139,7 +153,7 @@ export class ReviewStore {
     if (current.committer !== committer) {
       throw new Error("只能完成邀请给自己的检视");
     }
-    if (current.status === "completed") return current;
+    if (current.status !== "pending") return current;
     const next: ReviewRequest = {
       ...current,
       status: "completed",
@@ -178,5 +192,16 @@ export class ReviewStore {
         // 进程退出留下半行时只丢半行；前面已经落袋的记录仍可用。
       }
     }
+  }
+}
+
+export function assertReviewCanComplete(notes: ReadonlyArray<{ status: string }>): void {
+  const drafts = notes.filter((item) => item.status === "draft");
+  const open = notes.filter((item) => item.status === "sent");
+  if (drafts.length || open.length) {
+    throw new Error([
+      drafts.length ? `还有 ${drafts.length} 条草稿尚未提交或删除` : "",
+      open.length ? `还有 ${open.length} 条已提交意见尚未确认闭环` : "",
+    ].filter(Boolean).join("；"));
   }
 }

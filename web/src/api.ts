@@ -466,9 +466,10 @@ export interface ReviewRequest {
   task_title: string;
   requester: string;
   committer: string;
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "canceled";
   created_at: string;
   completed_at?: string;
+  canceled_at?: string;
   delivered: boolean;
   attempts: number;
   last_error?: string;

@@ -338,6 +338,14 @@ test("空任务目录完成加载后能判定 /work 深链失效，加载中不�
     { kind: "ready", task: present });
 });
 
+test("任务已取消时旧邀请不再进入行动清单，关闭状态也不冒充待检视", () => {
+  assert.deepEqual(app.buildPersonalActionItems({
+    waiting: [], intervention: [], merges: [],
+    reviews: [review("stale", "canceled"), { ...review("closed", "live"), status: "canceled" }],
+    tasks: [task("canceled", "canceled"), task("live")],
+  }), []);
+});
+
 test("await_merge 的右栏明确给出合入行动，关闭 MR 给出异常行动", () => {
   assert.deepEqual(workspace.workspaceNextActionCopy({
     ...task("merge", "await_merge"),

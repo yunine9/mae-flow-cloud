@@ -268,7 +268,7 @@ import {
 } from "./containerOwnership.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
-import { ReviewStore, type ReviewRequest } from "./reviews.ts";
+import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
 import {
   onlyUnfixableToolFailures,
   parsePipelineChecks,
@@ -2215,7 +2215,8 @@ export class TaskService {
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
 
   constructor(readonly options: TaskServiceOptions) {
-    this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
+    this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
+      (id) => this.tasks.get(id)?.summary.status === "canceled");
     if (options.memory) {
       // 旁路:起不来只记日志,任务照跑;首次真用时再等 ready。
       this.memorySidecar = new MemorySidecar({
@@ -3489,6 +3490,7 @@ export class TaskService {
   ): Promise<ReviewRequest> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.status === "canceled") throw new TaskControlError("任务已取消，不能再邀请检视");
     const notifier = this.options.notifier;
     if (!notifier) throw new Error("本部署未接通知器");
     const review = this.reviews.create({
@@ -3522,18 +3524,11 @@ export class TaskService {
     if (current.committer !== committer) {
       throw new Error("只能完成邀请给自己的检视");
     }
+    if (current.status !== "pending") return current;
     const task = this.tasks.get(current.task_id);
     if (!task) throw new Error(`任务 ${current.task_id} 不存在`);
-    const mine = this.annotations(task).visible().filter((item) =>
-      item.author === committer);
-    const drafts = mine.filter((item) => item.status === "draft");
-    const open = mine.filter((item) => item.status === "sent");
-    if (drafts.length || open.length) {
-      throw new Error([
-        drafts.length ? `还有 ${drafts.length} 条草稿尚未提交或删除` : "",
-        open.length ? `还有 ${open.length} 条已提交意见尚未确认闭环` : "",
-      ].filter(Boolean).join("；"));
-    }
+    assertReviewCanComplete(this.annotations(task).visible().filter((item) =>
+      item.author === committer));
     const record = this.reviews.complete(id, committer);
     // 收口回执:发起人在等这个信号——不发,他只能反复刷页面或线下问
     // (2026-08-30 审计:检视完成静默,两边互等)。纯旁路,失败只留日志。
@@ -8582,6 +8577,7 @@ export class TaskService {
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
     this.writeTaskState(task, strict);
+    if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));

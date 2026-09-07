@@ -455,6 +455,7 @@ export function buildPersonalActionItems({
   }
   for (const review of reviews) {
     const task = tasks.find((candidate) => candidate.id === review.task_id);
+    if (review.status !== "pending" || task?.status === "canceled") continue;
     items.push({
       key: `review:${review.id}`,
       task,
@@ -859,7 +860,8 @@ export function App() {
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
   const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
-  const pendingReviews = myReviews.filter((review) => review.status === "pending");
+  const pendingReviews = myReviews.filter((review) => review.status === "pending"
+    && tasks.find((task) => task.id === review.task_id)?.status !== "canceled");
   const myBlocked = myTasks.filter((task) =>
     task.status !== "waiting_for_human" && isBlocked(task));
   const myPaused = myTasks.filter((task) => task.status === "paused");
@@ -1269,9 +1271,9 @@ export function App() {
       canOverride={session.role === "admin"}
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}
-      canRequestReview={responsibleOf(artifactTask) === session.username}
-      reviewAssignment={myReviews.find((review) =>
-        review.task_id === artifactTask.id && review.status === "pending")}
+      canRequestReview={responsibleOf(artifactTask) === session.username
+        && artifactTask.status !== "canceled"}
+      reviewAssignment={pendingReviews.find((review) => review.task_id === artifactTask.id)}
       onChanged={refresh}
       onClose={closeArtifacts}
       onOpenTask={(taskId) => {
