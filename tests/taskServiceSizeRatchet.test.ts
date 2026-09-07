@@ -10,7 +10,7 @@ import test from "node:test";
 // 上限故意零余量——让"顺手加了 30 行"的改动立刻被问一句"能不能放别处"。
 // 度量口径与 wc -l 一致(数换行符),免得两边对不上。
 const LIMITS: Record<string, number> = {
-  "src/taskService.ts": 21447,
+  "src/taskService.ts": 21440,
 };
 
 for (const [file, limit] of Object.entries(LIMITS)) {
