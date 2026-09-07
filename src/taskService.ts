@@ -394,6 +394,7 @@ import {
   REQUIREMENT_REVIEW_RECEIPTS,
   createRequirementReviewGateContract,
   prepareRequirementReviewWorkspace,
+  requirementAnnotationInstructions,
   requirementReviewMission,
 } from "./requirementReviewAgent.ts";
 
@@ -3487,30 +3488,6 @@ export class TaskService {
     };
   }
 
-  /** 需求分析开始后原文是输入基线；圈在原文上的意见仍然送给 Agent，
-   * 但落实位置是当前分析产物/方案/实现，不再反向覆盖输入。 */
-  private requirementAnnotationInstructions(
-    task: TaskState,
-    annotations: Annotation[],
-  ): string | undefined {
-    const instructions: string[] = [];
-    if (annotations.some((item) =>
-      item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
-      instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
-        + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
-    }
-    if (annotations.some((item) =>
-      item.artifact === REQUIREMENT_GRAPH_ARTIFACT)) {
-      instructions.push("这些意见直接锚在模块拆分图上。不要只改图或只改说明："
-        + "请同步修订 CHAIN 文档与 requirement-graph.json，为两份产物换用"
-        + "同一个全新 plan_revision，最后重新计算并写入 chain_sha256。"
-        + "方案级意见作用于整体切法，模块级意见作用于指定模块，依赖级意见"
-        + "作用于指定边；如果人的意见仍有多种会导致不同拆法的理解，再用一张"
-        + "明确的问题卡说明差异，否则按最直接的理解落实。");
-    }
-    return instructions.length ? instructions.join("\n\n") : undefined;
-  }
-
   historyMutationInProgress(id: string): boolean {
     return this.historyMutationActive.has(id);
   }
@@ -6506,6 +6483,7 @@ export class TaskService {
     ids?: string[],
     actor?: string,
     allowForeign = false,
+    backgroundRequirementReview = false,
   ): Promise<{
     sent: string[]; text: string; receipt?: string;
   }> {
@@ -6546,7 +6524,7 @@ export class TaskService {
       };
     }
     const delivered = await this.deliverAgentAnnotations(
-      task, picked, undefined, false, actor);
+      task, picked, undefined, false, actor, backgroundRequirementReview);
     return {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
@@ -6560,17 +6538,22 @@ export class TaskService {
     ownerDecisionContext?: string,
     queueAtHumanGate = false,
     sentBy?: string,
+    backgroundRequirementReview = false,
   ): Promise<{ sent: string[]; text: string }> {
     const text = [
       ownerDecisionContext,
       renderAnnotations(picked, this.ticketOf(task)),
-      this.requirementAnnotationInstructions(task, picked),
+      requirementAnnotationInstructions(picked),
     ].filter(Boolean).join("\n\n");
     if (task.summary.status === "waiting_for_human"
         && task.summary.waiting?.step
           === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       await submitRequirementReview(task, this.annotations(task), picked,
-        (batch) => this.reviseRequirementFromAnnotations(task, batch));
+        (batch) => this.reviseRequirementFromAnnotations(task, batch),
+        backgroundRequirementReview ? (error) => {
+          task.summary.detail = `Agent 修改需求失败，意见已恢复待提交：${String(error)}`;
+          this.persist(task);
+        } : undefined);
       return { sent: picked.map((item) => item.id), text };
     }
     const gap = task.summary.delivery?.evidence_gap;
@@ -11763,7 +11746,7 @@ export class TaskService {
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
       picked.length
-        ? this.requirementAnnotationInstructions(task, picked) : undefined,
+        ? requirementAnnotationInstructions(picked) : undefined,
       // push 返工的使命里已经带了同一份回执契约,不重复。
       picked.length && !pushConfirmCard
         ? this.reviewReceiptInstructionsFor(task, picked) : undefined,

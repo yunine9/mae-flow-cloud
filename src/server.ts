@@ -2635,7 +2635,7 @@ export function createTaskServer(
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
               await service.sendAnnotations(id, ids, author,
-                canOperate(viewer, target.luban_account, !!options.auth)));
+                canOperate(viewer, target.luban_account, !!options.auth), true));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,

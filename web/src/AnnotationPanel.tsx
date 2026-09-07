@@ -382,8 +382,11 @@ export function AnnotationPanel({
   }
 
   async function routeDraftToAgent(item: Annotation) {
+    setSubmissionNotice("");
     await mutateAnnotation(item.id, async () => {
       const result = await sendAnnotations(taskId, [item.id]);
+      if (!result.error) setSubmissionNotice(result.receipt
+        ?? "已提交这条意见，请查看下方处理状态。");
       return { error: result.error };
     });
   }

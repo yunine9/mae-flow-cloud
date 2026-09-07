@@ -25,11 +25,15 @@ test("前后端共用检视参与权限：没有分析图也能提交，分析�
 
 test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代交或替责任人确认需求", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-review-participant-"));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
   const model = new ScriptedModelServer([
     { tool: { name: "edit", input: { path: "requirement.md", edits: [{ oldText: "旧口径", newText: "新口径" }] } } },
     { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
     { text: "已修改需求" },
-  ], "scripted-v1", { linear: true });
+  ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
+    if (index === 0) await held;
+  } });
   await model.start();
   const auth = new LocalAuth(join(root, "auth.json"));
   auth.bootstrapAdmin("admin", "administrator-pass");
@@ -60,6 +64,7 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
     const outsideNote = annotation("outsider");
     const send = (cookie: string, id: string) => fetch(`${base}/tasks/${task.id}/annotations/send`, {
       method: "POST", headers: { cookie }, body: JSON.stringify({ ids: [id] }),
+      signal: AbortSignal.timeout(2000),
     });
     const denied = await send(outsider, outsideNote.id);
     assert.equal(denied.status, 403);
@@ -72,6 +77,16 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
     const result = await readJson(sent) as { sent: string[]; receipt?: string };
     assert.equal(sent.status, 200, JSON.stringify(result));
     assert.deepEqual(result.sent, [mine.id]);
+    assert.match(result.receipt ?? "", /正在由 Agent 处理/);
+    assert.equal(service.get(task.id)?.requirement, "旧口径", "Agent 尚未处理完，HTTP 就应返回回执");
+    assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === mine.id)?.sent_via, "requirement_review");
+    const repeated = await send(guest, mine.id);
+    assert.equal(repeated.status, 200, "第一轮仍在处理时，重复提交也立即回执");
+    release();
+    const deadline = Date.now() + 5000;
+    while (service.get(task.id)?.requirement_revision?.state === "running" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assert.equal(service.get(task.id)?.requirement, "新口径");
     const own = service.listAnnotations(task.id).items.find((item) => item.id === mine.id)!;
     assert.equal(own.author, "guest");
@@ -80,6 +95,7 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
       headers: { cookie: guest }, body: JSON.stringify({}) });
     assert.equal(decide.status, 403, "提交本人意见不能获得最终需求确认权限");
   } finally {
+    release();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await model.stop();
     rmSync(root, { recursive: true, force: true });

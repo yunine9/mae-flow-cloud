@@ -18,6 +18,7 @@ export async function submitRequirementReview(
   store: AnnotationStore,
   annotations: Annotation[],
   run: (batch: Annotation[]) => Promise<void>,
+  onBackgroundError?: (error: unknown) => void,
 ): Promise<void> {
   if (!annotations.length || annotations.some((item) =>
     item.artifact !== TASK_REQUIREMENT_ARTIFACT)) {
@@ -40,6 +41,22 @@ export async function submitRequirementReview(
   }
   const current = new Set<string>();
   writers.set(task, current);
+  const processing = drainRequirementReviews(task, store, annotations, current, run);
+  // HTTP 只等接收和落盘；Agent 的整轮执行不能占住提交请求。
+  if (onBackgroundError) {
+    void processing.catch(onBackgroundError);
+    return;
+  }
+  await processing;
+}
+
+async function drainRequirementReviews(
+  task: object,
+  store: AnnotationStore,
+  annotations: Annotation[],
+  current: Set<string>,
+  run: (batch: Annotation[]) => Promise<void>,
+): Promise<void> {
   let batch = annotations;
   try {
     while (batch.length) {

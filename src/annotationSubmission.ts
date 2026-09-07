@@ -34,6 +34,9 @@ export function requirementSubmissionReceipt(items: Annotation[], ids: string[])
   const processing = picked.filter((item) => item.sent_via === "requirement_review").length;
   const queued = picked.filter((item) => item.sent_via === "requirement_queue").length;
   const processed = picked.filter((item) => item.sent_via === "interrupt" && !!item.response).length;
+  if (!processing && !queued && !processed) {
+    return "处理未启动或已失败，意见仍在待提交；请查看任务失败原因后重试。";
+  }
   return [
     processing ? `${processing} 条正在由 Agent 处理` : "",
     queued ? `${queued} 条已排队，当前一批完成后自动处理` : "",

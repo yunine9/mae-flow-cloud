@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
   renderAnnotations,
+  TASK_REQUIREMENT_ARTIFACT,
+  REQUIREMENT_GRAPH_ARTIFACT,
   type Annotation,
 } from "./annotations.ts";
 import type { GateContract, GateDecision } from "./gateService.ts";
@@ -11,6 +13,24 @@ import { isReviewAssetPath, materializeReviewAssets } from "./reviewAssets.ts";
 
 export const REQUIREMENT_REVIEW_DOCUMENT = "requirement.md";
 export const REQUIREMENT_REVIEW_RECEIPTS = "receipts.json";
+
+/** 分析开始后原文是输入基线；后续意见落实到分析产物或实现。 */
+export function requirementAnnotationInstructions(annotations: Annotation[]): string | undefined {
+  const instructions: string[] = [];
+  if (annotations.some((item) => item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
+    instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
+      + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
+  }
+  if (annotations.some((item) => item.artifact === REQUIREMENT_GRAPH_ARTIFACT)) {
+    instructions.push("这些意见直接锚在模块拆分图上。不要只改图或只改说明："
+      + "请同步修订 CHAIN 文档与 requirement-graph.json，为两份产物换用"
+      + "同一个全新 plan_revision，最后重新计算并写入 chain_sha256。"
+      + "方案级意见作用于整体切法，模块级意见作用于指定模块，依赖级意见"
+      + "作用于指定边；如果人的意见仍有多种会导致不同拆法的理解，再用一张"
+      + "明确的问题卡说明差异，否则按最直接的理解落实。");
+  }
+  return instructions.length ? instructions.join("\n\n") : undefined;
+}
 
 /** 修订副本保留原文中的图片路径，必须由宿主把附件一并准备好。 */
 export function prepareRequirementReviewWorkspace(
