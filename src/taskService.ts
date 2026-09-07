@@ -216,6 +216,7 @@ import {
   type RequirementAsset,
 } from "./requirementBundle.ts";
 import { readJson } from "./jsonBody.ts";
+import { fetchMrGates } from "./mrGateClient.ts";
 import {
   isBlindPipelineInput,
   mirrorPipelineArtifacts as mirrorPipelineArtifactsShared,
@@ -477,7 +478,7 @@ import {
   CLOSED_MR_WRITE, REOPENED_MR_WRITE, autoRepairDisabledText, classifyGates,
   mergedCompletionDetail, mergedPendingAttestationWrite, mergedShaMismatchReason,
   nextWatchStep, sourceShaDrift, stopFailures, waitingWrite,
-  type GateItem, type GateView,
+  type GateView,
 } from "./mergeWatch.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
 import { type StallClass } from "./stallPolicy.ts";
@@ -17913,55 +17914,13 @@ export class TaskService {
     return true;
   }
 
-  /** 门禁查询不可得返回 undefined。监控环下一拍再查，已有 MR 的续推
-   * 则停止本次写入。严格模式不把缺失的生命周期猜成 opened。 */
-  private async fetchGates(
-    task: TaskState, requireExisting = false,
-  ): Promise<GateView | undefined> {
-    const platformUrl = this.effectivePlatformUrl();
-    const delivery = task.summary.delivery;
-    if (!platformUrl || !delivery
-        || (!requireExisting && (!delivery.source_branch || !delivery.target_branch))) {
-      return undefined;
-    }
-    try {
-      const params = new URLSearchParams({
-        repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
-        source_branch: delivery.source_branch ?? "",
-        target_branch: delivery.target_branch ?? "",
-      });
-      if (delivery.mr_id !== undefined) {
-        params.set("mr", String(delivery.mr_id));
-      } else if (delivery.mr_url) {
-        params.set("mr", delivery.mr_url);
-      }
-      const response = await fetch(
-        `${platformUrl}/mr/gates?${params}`,
-        { headers: this.platformIdentity(task), signal: AbortSignal.timeout(10_000) });
-      if (response.status === 404) return undefined; // 平台不支持门禁契约
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await readJson(response);
-      if (requireExisting && !["opened", "merged", "closed"].includes(body.mr_state)) {
-        throw new Error("已有 MR 的生命周期状态缺失或无效");
-      }
-      const gates: GateItem[] = (Array.isArray(body.gates) ? body.gates : [])
-        .filter((gate: any) => typeof gate?.name === "string"
-          && typeof gate?.passed === "boolean")
-        .map((gate: any) => ({
-          name: gate.name,
-          passed: gate.passed,
-          ...(gate.detail ? { detail: String(gate.detail) } : {}),
-        }));
-      const mrState = body.mr_state === "merged" || body.mr_state === "closed"
-        ? body.mr_state : "opened";
-      const sourceSha = typeof body.sha === "string" && body.sha.trim()
-        ? body.sha.trim() : undefined;
-      return { mrState, gates, ...(sourceSha ? { sourceSha } : {}) };
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} 门禁查询失败(按不可得处理): ${String(error)}`);
-      return undefined;
-    }
+  private fetchGates(task: TaskState, requireExisting = false): Promise<GateView | undefined> {
+    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(),
+      delivery: task.summary.delivery, requireExisting,
+      repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+      headers: this.platformIdentity(task),
+      log: (error) => this.options.log?.(`任务 ${task.summary.id} 门禁查询失败: ${error}`),
+    });
   }
 
   /** MR 平台侧状态:merged 才是任务真正结束。closed 只是一个需要人
