@@ -398,7 +398,7 @@ import {
   requirementReviewMission,
 } from "./requirementReviewAgent.ts";
 
-const REQUIREMENT_REVIEW_TIMEOUT_MS = 5 * 60_000;
+import { GIT_TRANSFER_TIMEOUT_MS } from "./gitTransferBudget.ts";
 const MAX_REQUIREMENT_RECEIPTS_BYTES = 128 * 1024;
 
 /** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
@@ -3264,7 +3264,6 @@ export class TaskService {
     const documentPath = join(reviewRoot, REQUIREMENT_REVIEW_DOCUMENT);
     const receiptsPath = join(reviewRoot, REQUIREMENT_REVIEW_RECEIPTS);
     let driver: CloudSession | undefined;
-    let timer: NodeJS.Timeout | undefined;
     let succeeded = false;
     try {
       prepareRequirementReviewWorkspace(task.summary.workspace, reviewRoot,
@@ -3304,20 +3303,10 @@ export class TaskService {
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         log: this.options.log,
       });
-      let timedOut = false;
-      timer = setTimeout(() => {
-        timedOut = true;
-        void driver?.abort().catch(() => undefined);
-      }, REQUIREMENT_REVIEW_TIMEOUT_MS);
-      timer.unref?.();
       const outcome = await driver.start(requirementReviewMission({
         annotations,
         ticket: this.ticketOf(task),
       }));
-      if (timedOut) {
-        throw new TaskControlError(
-          "需求文档修改超过 5 分钟，已停止本轮；原文未覆盖，检视意见可直接重提");
-      }
       if (outcome.status === "session_ended" && outcome.reason === "failed") {
         throw new TaskControlError(
           `需求文档修改 Agent 未完成：${outcome.detail ?? "模型调用失败"}`);
@@ -3420,7 +3409,6 @@ export class TaskService {
       }
       throw error;
     } finally {
-      if (timer) clearTimeout(timer);
       try {
         driver?.dispose();
       } catch (error) {
@@ -18953,7 +18941,7 @@ export class TaskService {
           cwd,
           env: worktreeEnv,
           timeoutMs: args[0] === "fetch" || args[0] === "rebase"
-            ? 5 * 60_000 : 30_000,
+            ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
         }),
       });
       if (outcome.kind === "none") return "ok";
@@ -19071,7 +19059,7 @@ export class TaskService {
       [...worktreeArgs, ...args], {
         cwd, env: worktreeEnv,
         timeoutMs: args[0] === "fetch" || args[0] === "merge"
-          ? 5 * 60_000 : 30_000,
+          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
       });
     try {
       const targetCheck = await git("check-ref-format", "--branch", target);
@@ -20436,12 +20424,12 @@ export class TaskService {
         ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
         "--porcelain", remoteUrl, `${sha}:${ref}`,
       ], {
-        timeoutMs: 5 * 60_000,
+        timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
         env: { ...sandbox.env, ...objectEnv },
       });
       if (pushed.status !== 0) {
         const stderrText = pushed.timedOut
-          ? "超过 5 分钟，已终止 git/ssh 进程组"
+          ? `超过 ${GIT_TRANSFER_TIMEOUT_MS / 60_000} 分钟传输预算，已终止 git/ssh 进程组`
           : String(pushed.stderr || pushed.stdout || pushed.error);
         throw new Error(`宿主推送失败: ${stderrText}`);
       }
@@ -20696,7 +20684,7 @@ export class TaskService {
           "--", source, target,
         ],
         {
-          timeoutMs: 30 * 60_000,
+          timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
           // 子进程没有终端,git 想问密码只会把任务挂死——明令禁问,
           // 缺凭据就地失败,错误如实上浮(不卡死红线)。
           env: hardened

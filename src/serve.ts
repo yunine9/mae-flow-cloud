@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
+import { GIT_RUNTIME_RETENTION_MS } from "./gitTransferBudget.ts";
 import { requireContinuousReviewCapability } from "./kernelCapabilities.ts";
 import {
   DEFAULT_BUILD_CACHE_MAX_GB,
@@ -1266,10 +1267,10 @@ function warnStaleWeb(webRoot: string | undefined): void {
  * 目录,里面躺着**明文个人令牌**;正常路径 finally 里删,kill -9 不给
  * finally 机会——不扫的话每次硬重启都往磁盘上多留一份长期明文凭据
  * (2026-08-29 部署审计实锤)。只删"够老"的:推送走 detached 进程组,
- * 服务死了 git 可能还在 5 分钟预算内收尾,扫早了等于拔它的凭据。
+ * 服务死了 git 可能还在传输预算内收尾,扫早了等于拔它的凭据。
  * 纯旁路:任何一步失败只记日志,绝不拦启动。 */
 function sweepStaleGitRuntime(dataDir: string): void {
-  const cutoff = Date.now() - 15 * 60_000;
+  const cutoff = Date.now() - GIT_RUNTIME_RETENTION_MS;
   for (const lane of ["host-git", "issue-git"]) {
     const root = join(dataDir, ".runtime", lane);
     let entries: string[];

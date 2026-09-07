@@ -62,6 +62,7 @@ async function drainRequirementReviews(
   sentBy?: string,
 ): Promise<void> {
   let batch = annotations;
+  const failures: unknown[] = [];
   try {
     while (batch.length) {
       current.clear();
@@ -73,16 +74,30 @@ async function drainRequirementReviews(
         senders.set(by, [...(senders.get(by) ?? []), item.id]);
       }
       for (const [by, ids] of senders) store.markSent(ids, "requirement_review", by);
-      await run(batch);
+      try {
+        // 排队和整轮修改均不按时长判失败，等待明确的执行结果。
+        await run(batch);
+      } catch (error) {
+        failures.push(error);
+        const reason = `需求修订未完成：${String(error instanceof Error ? error.message : error).slice(0, 500)}`;
+        // 只恢复实际执行过的这一批。后续意见尚未执行，不能连带报失败。
+        for (const item of store.list()) {
+          if (current.has(item.id) && item.status === "sent"
+              && item.sent_via === "requirement_review") {
+            store.resetRequirementDelivery(item.id, reason);
+          }
+        }
+      }
       // 每轮重新读账，撤回/改写为草稿的意见不能被自动带入下一轮。
       batch = store.list().filter((item) => item.status === "sent"
         && item.sent_via === "requirement_queue");
     }
   } catch (error) {
-    // 失败不把尚未处理的意见留成假“处理中”；保留正文，允许显式重提。
-    resetQueuedRequirementReviews(store, `需求修订未完成：${String(error instanceof Error ? error.message : error).slice(0, 500)}`);
+    // 队列自身记账故障无法继续调度，明确标成未执行，不能借用上一批超时原因。
+    resetQueuedRequirementReviews(store, "需求意见队列调度中断，未完成的意见已保留，请重新提交");
     throw error;
   } finally {
     writers.delete(task);
   }
+  if (failures.length) throw failures[0];
 }
