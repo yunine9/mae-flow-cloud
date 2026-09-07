@@ -7,6 +7,7 @@ import { TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { unanchoredRequirementChanges } from "../src/requirementDocument.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 
 const CONFIRM_STEP = "cloud_requirement_analysis_confirm";
 const CONFIRM_OPTION = "需求已确认，进入需求分析";
@@ -33,7 +34,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
     { text: "第二批已完成" },
   ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
-    if (index === 0) { entered(); await held; }
+    if (index === 1) { entered(); await held; }
   } });
   await model.start();
   let first: Promise<unknown> | undefined;
@@ -61,6 +62,10 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     }
     first = service.sendAnnotations(task.id, [a.id], "owner");
     await started;
+    const liveEvents = new EventLog(service.eventLogPath(task.id)).replay();
+    assert.ok(liveEvents.some((event) => event.kind === "tool_requested"),
+      "Agent 仍在处理时，执行日志接口读取的主日志里就应有工具调用");
+    assert.ok(liveEvents.every((event) => event.taskId === task.id));
     const queued = await service.sendAnnotations(task.id, [b.id], "reviewer");
     assert.deepEqual(queued.sent, [b.id], "第一批仍被挂起时，第二批就能返回接收成功");
     const queuedNote = service.listAnnotations(task.id).items.find((item) => item.id === b.id)!;
@@ -77,6 +82,18 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     await first;
     assert.equal(service.get(task.id)?.requirement, "第一段新口径\n\n第二段新口径");
     assert.deepEqual(service.get(task.id)?.requirement_revisions?.map((item) => item.annotation_ids), [[a.id], [b.id]]);
+    const events = new EventLog(service.eventLogPath(task.id)).replay();
+    assert.equal(new Set(events.map((event) => event.eventId)).size, events.length,
+      "多轮事件编号不能重复，否则页面会去重丢掉后一轮");
+    assert.equal(new Set(events.map((event) => event.sessionId)).size, 2);
+    for (const revision of service.get(task.id)!.requirement_revisions!) {
+      assert.ok(events.some((event) => event.sessionId === `requirement-review:${revision.id}`
+        && event.kind === "tool_finished"));
+      assert.ok(readFileSync(join(task.workspace, "requirement-history",
+        `${revision.id}.transcript.jsonl`), "utf-8").length > 0,
+      "临时副本清理后，每轮会话记录必须仍可读取");
+      assert.equal(existsSync(join(task.workspace, "requirement-review", revision.id)), false);
+    }
     assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.response?.outcome, "fixed");
     await assert.rejects(confirm(), /2 条意见仍待提出人确认/);
     await service.verifyAnnotation(task.id, a.id, "owner");

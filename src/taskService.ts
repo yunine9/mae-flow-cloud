@@ -3277,14 +3277,14 @@ export class TaskService {
       writeFileSync(join(agentDir, "models.json"),
         JSON.stringify(this.activeModelsJson()), { mode: 0o600 });
       driver = await CloudSession.create({
-        taskId: `${task.summary.id}:requirement-review:${revisionId}`,
+        taskId: task.summary.id,
         workspace: reviewRoot,
         agentDir,
         provider: model.provider,
         model: model.model,
-        eventLog: new EventLog(join(reviewRoot, "events.jsonl")),
+        eventLog: new EventLog(this.eventLogPath(task.summary.id)),
         transcript: new TranscriptStore(
-          join(reviewRoot, "transcript.jsonl"), "requirement-review"),
+          join(task.summary.workspace, "requirement-history", `${revisionId}.transcript.jsonl`), `requirement-review:${revisionId}`),
         gate: new GateService({
           contract: createRequirementReviewGateContract(reviewRoot),
           workspace: reviewRoot,
@@ -3295,7 +3295,7 @@ export class TaskService {
         humanGate: new HumanGate(join(reviewRoot, "waiting.json")),
         allowHumanQuestions: false,
         allowSubagents: false,
-        sessionId: "requirement-review",
+        sessionId: `requirement-review:${revisionId}`,
         currentStep: () => "落实需求检视意见",
         compactAnchor: () =>
           `只修改 ${REQUIREMENT_REVIEW_DOCUMENT} 中本轮意见指向的内容`,
@@ -3425,7 +3425,7 @@ export class TaskService {
         this.options.log?.(
           `任务 ${task.summary.id} 需求文档修改会话释放失败：${String(error)}`);
       }
-      // 成功轮的证据已经进入 requirement-history 与批注回执，副本不再
+      // 执行事件已进任务日志，会话和改动历史已进 requirement-history，副本不再
       // 有权威价值；失败现场保留，便于定位模型/门禁/文件错误。
       if (succeeded && existsSync(reviewRoot)) {
         try {
