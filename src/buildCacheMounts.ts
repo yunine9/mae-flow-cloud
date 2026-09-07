@@ -98,6 +98,8 @@ export function perRepoBuildCacheMounts(
         "-Dmaven.repo.local=/cache/maven/repository"]
         .filter(Boolean).join(" "),
       npm_config_cache: "/cache/npm",
+      NPM_CONFIG_CACHE: "/cache/npm",
+      MFC_MAVEN_CACHE: "/cache/maven/repository",
       // 容器内 Node 信任系统 CA 存储(2026-09-04,现场 npm debug 日志
       // 实锤:部署镜像 v2-euleros-jdk21-mvn36-node18-node24 默认 node
       // 是 v24.19.0,repository 默认走 npm@11)。内网端点(cmc npm 镜像)
@@ -110,12 +112,7 @@ export function perRepoBuildCacheMounts(
       NODE_USE_SYSTEM_CA: "1",
       CCACHE_DIR: "/cache/ccache",
       XDG_CACHE_HOME: "/cache/xdg",
-      // ccache 真正接线(内网五项取证实锤:装了、CCACHE_DIR 也对,
-      // 但缓存 0 文件——编译器从没被包过,C++ 每轮全量冷编)。CMake
-      // 在 configure 时认这两个环境变量;部署基线镜像必装 ccache
-      // (playbook 基础设施预检同款清单),对 Java/JS 构建惰性无害。
-      CMAKE_C_COMPILER_LAUNCHER: "ccache",
-      CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
+      // launcher 在容器登录 shell 内确认 ccache 存在后接入，不能假设标准镜像必装。
       ...(input.ccacheBaseDirSource
         ? { CCACHE_BASEDIR: dirname(resolve(input.ccacheBaseDirSource)) } : {}),
       CCACHE_NOHASHDIR: "1",

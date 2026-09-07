@@ -136,6 +136,22 @@ test("部署自检失败返回 phase/name/id/image 与输出末段，便于直�
   assert.match(item?.suggestion ?? "", /Probe\.java:7/);
 });
 
+test("启动退出时没有 metadata 也能将真实 ID 和子阶段返回自检页面", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-check-startup-id-"));
+  const service = new TaskService({ dataDir, provider: "fixture", model: "fixture", modelsJson: {},
+    isolation: { image: "standard/builder", containerFactory: () => ({
+      diagnostics: { containerId: "a".repeat(64), phase: "startup-inspect" },
+      start: async () => { throw new Error("退出码 73；build environment is not writable: /home/huawei/.m2"); },
+      exec: async () => { throw new Error("不能执行"); }, stop: async () => undefined,
+    }) },
+  });
+  const result = await service.systemCheck();
+  const message = result.items.find((item) => item.key === "container")?.suggestion ?? "";
+  assert.match(message, /phase=startup-inspect.*id=aaaaaaaaaaaa/);
+  assert.match(message, /退出码 73.*\/home\/huawei/);
+  assert.doesNotMatch(message, /id=unknown/);
+});
+
 const REAL_IMAGE = process.env.MFC_REAL_BUILD_IMAGE;
 const REAL_DOCKER = REAL_IMAGE ? await dockerAvailable() : false;
 

@@ -50,6 +50,18 @@ function run(
   });
 }
 
+test("标准镜像 HOME 可通过配置文件指定，命令行覆盖配置文件", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-native-home-config-"));
+  const config = join(dir, "serve.json");
+  writeFileSync(config, JSON.stringify({ "isolate-image": "fixture/builder:test", "isolate-home": "/home/huawei" }));
+  for (const [args, expected] of [[[], "/home/huawei"], [["--isolate-home", "/home/other"], "/home/other"]] as const) {
+    const result = await run(["--config", config, "--data", join(dir, expected.split("/").at(-1)!), "--port", "0", ...args],
+      (line) => line.startsWith("[serve] http://127.0.0.1:"));
+    assert.equal(result.code, 0, result.output);
+    assert.ok(result.output.includes(`容器 HOME: ${expected}`));
+  }
+});
+
 test("配置文件坏了拒绝启动,不静默忽略", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-cfg-"));
   const bad = join(dir, "bad.json");

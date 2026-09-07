@@ -306,6 +306,12 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-07 标准镜像启动适配**：统一 HOME/Maven/npm 用户配置及 tmpfs，
+  新增 isolate-home 适配原生用户目录；平台自行接入 Maven settings，不要求
+  原始镜像安装平台 entrypoint。ccache 改为检测到才启用。修复 Docker logs
+  stderr 丢失、启动失败 id=unknown，并在取证后显式回收容器。本机真实 Docker
+  已复现退出73及修复后自检通过；内网部署及 FarsService 完整构建未验证。
+  详见 [诊断、修复与内网验收步骤](docs/standard-build-image-adaptation-2026-09-07.md)。
 - **2026-09-07 需求修订范围校验勘误（用户决定）**：取消“未圈选段落变化
   就整轮拒收”的机械校验，不再把批注范围当成段落白名单。相关表格、定义
   和前后文允许连带修改，Agent 在回执中说明；完整改前原文、diff 与逐条

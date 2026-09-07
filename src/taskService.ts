@@ -1479,6 +1479,7 @@ export interface TaskServiceOptions {
 export interface TaskCommandContainer {
   /** 真 Docker 后端在 start 后提供；测试/私有执行器可不实现。 */
   readonly metadata?: TaskContainerMetadata;
+  readonly diagnostics?: { containerId?: string; phase: string };
   start(): Promise<void>;
   exec(
     command: string,
@@ -2324,6 +2325,7 @@ export class TaskService {
     let startPromise: Promise<void> | undefined;
     const tracked: TaskCommandContainer = {
       get metadata() { return created.metadata; },
+      get diagnostics() { return created.diagnostics; },
       start: async () => {
         if (service.shuttingDown) {
           await created.stop();
@@ -3661,7 +3663,7 @@ export class TaskService {
         "ar --version",
         "bison --version",
         "flex --version",
-        "ccache --version",
+        "if command -v ccache >/dev/null 2>&1; then ccache --version; else echo __MFC_CCACHE_OPTIONAL_MISSING__; fi",
         "git --version",
         "python3 --version",
         // Cloud 的真正第一步不是“Python 能启动”，而是托管任务能在同一
@@ -3695,6 +3697,7 @@ export class TaskService {
         + "C/C++ 完成编译执行，Maven/npm/ccache/XDG 缓存均可写；"
         + "Node 18+/npm 9+、Git、Python 工具及 profile/CA/可选平台 CLI"
         + `${kernelRoot ? "、Mae-Flow 内核挂载" : ""}权限通过`;
+      if (output.includes("__MFC_CCACHE_OPTIONAL_MISSING__")) detail += "；ccache 未安装，使用原生编译器（不影响编译）";
       if (kernelRoot) {
         detail += "；容器内托管任务 init/current 与配置阶段源码写入拦截通过";
       }
@@ -3713,8 +3716,8 @@ export class TaskService {
     if (!failure) return { ready: true, detail };
     const tail = output.trim().split("\n").slice(-8).join(" | ");
     const metadata = container.metadata;
-    const context = `phase=${failurePhase} role=system-check name=${containerName}`
-      + ` id=${metadata?.containerId.slice(0, 12) ?? "unknown"}`
+    const context = `phase=${failurePhase === "start" ? container.diagnostics?.phase ?? failurePhase : failurePhase} role=system-check name=${containerName}`
+      + ` id=${(metadata?.containerId ?? container.diagnostics?.containerId)?.slice(0, 12) ?? "unknown"}`
       + ` image=${metadata?.immutableImageReference ?? isolation.image}`;
     return {
       ready: false,
