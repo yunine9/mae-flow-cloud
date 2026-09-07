@@ -58,13 +58,14 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
     task({ id: "coding", status: "running", progress: {
       current_phase: "开发", phases: ["方案", "开发", "检视与验证"],
     } }),
-    task({ id: "verify", status: "verifying", progress: {
+    task({ id: "verify", parent_task_id: "coding", status: "verifying", progress: {
       current_phase: "检视与验证", phases: ["方案", "开发", "检视与验证"],
     } }),
     task({ id: "failed", status: "failed" }),
     task({ id: "canceled", status: "canceled" }),
   ];
   const result = teamDeliveryBreakdown(rows);
+  assert.equal(result.requirements, 3, "需求数只计主任务，并沿用概览排除已取消的口径");
 
   assert.deepEqual({
     total: result.total,

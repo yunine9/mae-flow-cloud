@@ -1666,7 +1666,7 @@ function TaskGroup({
 }
 
 /** 总览只保留一层规模摘要；阶段与状态作为轻量筛选项呈现。
- * 三个规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
+ * 规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
 function TeamDeliveryOverview({
   stats,
   selectedPhase,
@@ -1688,7 +1688,9 @@ function TeamDeliveryOverview({
         <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在交付档案。</p>
       </div>
       <div className="team-delivery-summary"
-        aria-label={`全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
+        aria-label={`需求总数 ${stats.requirements} 项（仅主任务），全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
+        <span className="summary-total" title="主任务数量，不含子任务和已取消任务"><strong>{stats.requirements}</strong><small>需求总数</small></span>
+        <i aria-hidden />
         <span className="summary-total"><strong>{stats.total}</strong><small>全部任务</small></span>
         <i aria-hidden />
         <span className="summary-active"><strong>{stats.delivering}</strong><small>交付中</small></span>
