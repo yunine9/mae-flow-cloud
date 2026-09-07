@@ -31,6 +31,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
+import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
+import { resetQueuedRequirementReviews, submitRequirementReview } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
   AnnotationStore,
@@ -206,7 +209,6 @@ import {
   type RequirementDocumentMeta,
   readRequirementRevision,
   storeRequirementRevision,
-  unanchoredRequirementChanges,
 } from "./requirementDocument.ts";
 import {
   loadRequirementAssets,
@@ -216,6 +218,7 @@ import {
   type RequirementAsset,
 } from "./requirementBundle.ts";
 import { readJson } from "./jsonBody.ts";
+import { fetchMrGates } from "./mrGateClient.ts";
 import {
   isBlindPipelineInput,
   mirrorPipelineArtifacts as mirrorPipelineArtifactsShared,
@@ -264,7 +267,7 @@ import {
 } from "./containerOwnership.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
-import { ReviewStore, type ReviewRequest } from "./reviews.ts";
+import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
 import {
   onlyUnfixableToolFailures,
   parsePipelineChecks,
@@ -388,11 +391,14 @@ import {
 import {
   REQUIREMENT_REVIEW_DOCUMENT,
   REQUIREMENT_REVIEW_RECEIPTS,
+  REQUIREMENT_REVIEW_SESSION_POLICY,
   createRequirementReviewGateContract,
+  prepareRequirementReviewWorkspace,
+  requirementAnnotationInstructions,
   requirementReviewMission,
 } from "./requirementReviewAgent.ts";
 
-const REQUIREMENT_REVIEW_TIMEOUT_MS = 5 * 60_000;
+import { GIT_TRANSFER_TIMEOUT_MS } from "./gitTransferBudget.ts";
 const MAX_REQUIREMENT_RECEIPTS_BYTES = 128 * 1024;
 
 /** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
@@ -477,7 +483,7 @@ import {
   CLOSED_MR_WRITE, REOPENED_MR_WRITE, autoRepairDisabledText, classifyGates,
   mergedCompletionDetail, mergedPendingAttestationWrite, mergedShaMismatchReason,
   nextWatchStep, sourceShaDrift, stopFailures, waitingWrite,
-  type GateItem, type GateView,
+  type GateView,
 } from "./mergeWatch.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
 import { type StallClass } from "./stallPolicy.ts";
@@ -2209,7 +2215,8 @@ export class TaskService {
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
 
   constructor(readonly options: TaskServiceOptions) {
-    this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
+    this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
+      (id) => this.tasks.get(id)?.summary.status === "canceled");
     if (options.memory) {
       // 旁路:起不来只记日志,任务照跑;首次真用时再等 ready。
       this.memorySidecar = new MemorySidecar({
@@ -3237,13 +3244,6 @@ export class TaskService {
     task: TaskState,
     annotations: Annotation[],
   ): Promise<void> {
-    if (task.summary.requirement_revision?.state === "running") {
-      throw new TaskControlError("Agent 正在修改需求文档，请完成后再提交新意见");
-    }
-    if (!annotations.length || annotations.some((item) =>
-      item.artifact !== TASK_REQUIREMENT_ARTIFACT)) {
-      throw new TaskControlError("需求确认阶段只能提交需求文档上的检视意见");
-    }
     const waiting = task.summary.waiting;
     if (task.summary.status !== "waiting_for_human"
         || waiting?.step !== CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
@@ -3265,14 +3265,10 @@ export class TaskService {
     const documentPath = join(reviewRoot, REQUIREMENT_REVIEW_DOCUMENT);
     const receiptsPath = join(reviewRoot, REQUIREMENT_REVIEW_RECEIPTS);
     let driver: CloudSession | undefined;
-    let timer: NodeJS.Timeout | undefined;
     let succeeded = false;
     try {
-      mkdirSync(reviewRoot, { recursive: true });
-      writeFileSync(documentPath, task.summary.requirement, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
+      prepareRequirementReviewWorkspace(task.summary.workspace, reviewRoot,
+        task.summary.requirement, task.summary.requirement_document);
 
       const agentDir = join(
         task.summary.workspace, "requirement-review-agent");
@@ -3281,45 +3277,36 @@ export class TaskService {
       writeFileSync(join(agentDir, "models.json"),
         JSON.stringify(this.activeModelsJson()), { mode: 0o600 });
       driver = await CloudSession.create({
-        taskId: `${task.summary.id}:requirement-review:${revisionId}`,
+        taskId: task.summary.id,
         workspace: reviewRoot,
         agentDir,
         provider: model.provider,
         model: model.model,
-        eventLog: new EventLog(join(reviewRoot, "events.jsonl")),
+        eventLog: new EventLog(this.eventLogPath(task.summary.id)),
         transcript: new TranscriptStore(
-          join(reviewRoot, "transcript.jsonl"), "requirement-review"),
+          join(task.summary.workspace, "requirement-history", `${revisionId}.transcript.jsonl`), `requirement-review:${revisionId}`),
         gate: new GateService({
-          contract: createRequirementReviewGateContract(reviewRoot),
+          contract: createRequirementReviewGateContract(reviewRoot,
+            task.summary.requirement_document),
           workspace: reviewRoot,
           cwd: reviewRoot,
           failClosed: true,
           log: this.options.log,
         }),
         humanGate: new HumanGate(join(reviewRoot, "waiting.json")),
-        allowHumanQuestions: false,
-        allowSubagents: false,
-        sessionId: "requirement-review",
+        ...REQUIREMENT_REVIEW_SESSION_POLICY,
+        sessionId: `requirement-review:${revisionId}`,
+        vision: this.taskVision(task),
         currentStep: () => "落实需求检视意见",
         compactAnchor: () =>
           `只修改 ${REQUIREMENT_REVIEW_DOCUMENT} 中本轮意见指向的内容`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         log: this.options.log,
       });
-      let timedOut = false;
-      timer = setTimeout(() => {
-        timedOut = true;
-        void driver?.abort().catch(() => undefined);
-      }, REQUIREMENT_REVIEW_TIMEOUT_MS);
-      timer.unref?.();
       const outcome = await driver.start(requirementReviewMission({
         annotations,
         ticket: this.ticketOf(task),
-      }));
-      if (timedOut) {
-        throw new TaskControlError(
-          "需求文档修改超过 5 分钟，已停止本轮；原文未覆盖，检视意见可直接重提");
-      }
+      }, task.summary.requirement));
       if (outcome.status === "session_ended" && outcome.reason === "failed") {
         throw new TaskControlError(
           `需求文档修改 Agent 未完成：${outcome.detail ?? "模型调用失败"}`);
@@ -3367,12 +3354,7 @@ export class TaskService {
         throw new TaskControlError(
           "Agent 修改了需求原文，但逐条回执没有说明哪条已落实；本轮拒收，原文未变");
       }
-      // 回执合格只说明"每条都有交代",挡不住顺手改别处;逐段比对才挡得住。
-      const drifted = unanchoredRequirementChanges(before, after, annotations);
-      if (drifted.length) {
-        throw new TaskControlError(
-          `Agent 改动了没有意见指向的段落（${drifted.length} 处，如「${drifted[0]}」），本轮拒收，文档未变；意见仍在待提交`);
-      }
+      // 批注是修改意图，不是段落白名单。连带修改由完整 diff 和人工复检确认。
       // 改前全文和 diff 先落盘再覆盖正文:页面靠它给人看"这一轮改了什么",
       // 没有它,人只能把整篇重读一遍。
       const diff = requirementDiff(before, after);
@@ -3422,14 +3404,13 @@ export class TaskService {
       }
       throw error;
     } finally {
-      if (timer) clearTimeout(timer);
       try {
         driver?.dispose();
       } catch (error) {
         this.options.log?.(
           `任务 ${task.summary.id} 需求文档修改会话释放失败：${String(error)}`);
       }
-      // 成功轮的证据已经进入 requirement-history 与批注回执，副本不再
+      // 执行事件已进任务日志，会话和改动历史已进 requirement-history，副本不再
       // 有权威价值；失败现场保留，便于定位模型/门禁/文件错误。
       if (succeeded && existsSync(reviewRoot)) {
         try {
@@ -3490,30 +3471,6 @@ export class TaskService {
     };
   }
 
-  /** 需求分析开始后原文是输入基线；圈在原文上的意见仍然送给 Agent，
-   * 但落实位置是当前分析产物/方案/实现，不再反向覆盖输入。 */
-  private requirementAnnotationInstructions(
-    task: TaskState,
-    annotations: Annotation[],
-  ): string | undefined {
-    const instructions: string[] = [];
-    if (annotations.some((item) =>
-      item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
-      instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
-        + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
-    }
-    if (annotations.some((item) =>
-      item.artifact === REQUIREMENT_GRAPH_ARTIFACT)) {
-      instructions.push("这些意见直接锚在模块拆分图上。不要只改图或只改说明："
-        + "请同步修订 CHAIN 文档与 requirement-graph.json，为两份产物换用"
-        + "同一个全新 plan_revision，最后重新计算并写入 chain_sha256。"
-        + "方案级意见作用于整体切法，模块级意见作用于指定模块，依赖级意见"
-        + "作用于指定边；如果人的意见仍有多种会导致不同拆法的理解，再用一张"
-        + "明确的问题卡说明差异，否则按最直接的理解落实。");
-    }
-    return instructions.length ? instructions.join("\n\n") : undefined;
-  }
-
   historyMutationInProgress(id: string): boolean {
     return this.historyMutationActive.has(id);
   }
@@ -3527,6 +3484,7 @@ export class TaskService {
   ): Promise<ReviewRequest> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.status === "canceled") throw new TaskControlError("任务已取消，不能再邀请检视");
     const notifier = this.options.notifier;
     if (!notifier) throw new Error("本部署未接通知器");
     const review = this.reviews.create({
@@ -3560,18 +3518,11 @@ export class TaskService {
     if (current.committer !== committer) {
       throw new Error("只能完成邀请给自己的检视");
     }
+    if (current.status !== "pending") return current;
     const task = this.tasks.get(current.task_id);
     if (!task) throw new Error(`任务 ${current.task_id} 不存在`);
-    const mine = this.annotations(task).visible().filter((item) =>
-      item.author === committer);
-    const drafts = mine.filter((item) => item.status === "draft");
-    const open = mine.filter((item) => item.status === "sent");
-    if (drafts.length || open.length) {
-      throw new Error([
-        drafts.length ? `还有 ${drafts.length} 条草稿尚未提交或删除` : "",
-        open.length ? `还有 ${open.length} 条已提交意见尚未确认闭环` : "",
-      ].filter(Boolean).join("；"));
-    }
+    assertReviewCanComplete(this.annotations(task).visible().filter((item) =>
+      item.author === committer));
     const record = this.reviews.complete(id, committer);
     // 收口回执:发起人在等这个信号——不发,他只能反复刷页面或线下问
     // (2026-08-30 审计:检视完成静默,两边互等)。纯旁路,失败只留日志。
@@ -6509,8 +6460,9 @@ export class TaskService {
     ids?: string[],
     actor?: string,
     allowForeign = false,
+    backgroundRequirementReview = false,
   ): Promise<{
-    sent: string[]; text: string;
+    sent: string[]; text: string; receipt?: string;
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -6519,7 +6471,8 @@ export class TaskService {
         ? "MR 已合入，任务已经结束，不能再提交批注"
         : "任务已由用户停止，不能再提交批注");
     }
-    const allPicked = this.pickDrafts(task, ids, actor, allowForeign);
+    const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
+    const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
     const ownerPicked = allPicked.filter((item) =>
       (item.route ?? "agent") !== "agent");
     const picked = allPicked.filter((item) =>
@@ -6548,10 +6501,11 @@ export class TaskService {
       };
     }
     const delivered = await this.deliverAgentAnnotations(
-      task, picked, undefined, false, actor);
+      task, picked, undefined, false, actor, backgroundRequirementReview);
     return {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
+      receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent) : undefined,
     };
   }
 
@@ -6561,16 +6515,22 @@ export class TaskService {
     ownerDecisionContext?: string,
     queueAtHumanGate = false,
     sentBy?: string,
+    backgroundRequirementReview = false,
   ): Promise<{ sent: string[]; text: string }> {
     const text = [
       ownerDecisionContext,
       renderAnnotations(picked, this.ticketOf(task)),
-      this.requirementAnnotationInstructions(task, picked),
+      requirementAnnotationInstructions(picked),
     ].filter(Boolean).join("\n\n");
     if (task.summary.status === "waiting_for_human"
         && task.summary.waiting?.step
           === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
-      await this.reviseRequirementFromAnnotations(task, picked);
+      await submitRequirementReview(task, this.annotations(task), picked,
+        (batch) => this.reviseRequirementFromAnnotations(task, batch),
+        backgroundRequirementReview ? (error) => {
+          task.summary.detail = `Agent 修改需求失败，意见已恢复待提交：${String(error)}`;
+          this.persist(task);
+        } : undefined, sentBy);
       return { sent: picked.map((item) => item.id), text };
     }
     const gap = task.summary.delivery?.evidence_gap;
@@ -7007,24 +6967,10 @@ export class TaskService {
     ids?: string[],
     actor?: string,
     allowForeign = false,
+    acceptRequirementSubmitted = false,
   ): Annotation[] {
-    const allDrafts = this.annotations(task).drafts();
-    // 兼容旧客户端的“ids 省略=提交我的全部草稿”。责任人代转必须逐条
-    // 给出 ID，不能因为旧按钮没带 ids 就顺手发送所有人的私人草稿。
-    const drafts = actor && (!allowForeign || !ids?.length)
-      ? allDrafts.filter((item) => item.author === actor) : allDrafts;
-    if (!ids?.length) {
-      if (!drafts.length) throw new NotFoundError("没有待送出的批注");
-      return drafts;
-    }
-    const wanted = new Set(ids);
-    const picked = drafts.filter((item) => wanted.has(item.id));
-    if (picked.length !== wanted.size) {
-      throw new NotFoundError(actor
-        ? "有批注不存在、已经送出，或不是你写的"
-        : "有批注不存在或已经送出去了");
-    }
-    return picked;
+    return pickAnnotationSubmission(this.annotations(task).list(), ids,
+      actor, allowForeign, acceptRequirementSubmitted);
   }
 
   /** 决定卡与“主动送批注”不是同一种提交语义。
@@ -7147,7 +7093,7 @@ export class TaskService {
     model?: { provider: string; model: string };
     /** 当前默认修复轮；缺省仍明确返回平台兜底 20。 */
     repair_rounds?: number;
-    repo: { enabled: boolean; required: boolean };
+    repo: ReturnType<typeof launchRepositoryOptions>;
     /** 单号/基线分支:内核配置确认要的两项事实,表单下单就收——
      * 和交付方式同一逻辑,不让模型开工后逐项来问。 */
     ticket: { enabled: boolean; required: boolean };
@@ -7293,15 +7239,7 @@ export class TaskService {
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds
         ?? DEFAULT_REPAIR_ROUNDS,
-      // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
-      // 钉死单仓部署(serve --repo,repoPinned)不收逐单仓:字段直接
-      // 不启用,别让人填一个注定被拒/被换掉的地址(MFC-024;假平台
-      // 部署曾因此推错仓)。required 与 create() 的实际校验同口径——
-      // 曾经 UI 宣称必填、API 却放行空白,required 成了摆设。
-      repo: {
-        enabled: !!this.options.host && !this.options.host.repoPinned,
-        required: !!this.options.host && !this.options.host.repoPath,
-      },
+      repo: launchRepositoryOptions(this.options.host, this.options.requirementDisabled),
       // AR/REQ 是业务任务身份，不是内核实现细节。即使是纯会话或本地
       // 演示形态也要保留填写入口；只有“是否强制填写”才随代码交付
       // 形态变化，避免同一套创建页在不同部署里凭空少一项。
@@ -8633,6 +8571,7 @@ export class TaskService {
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
     this.writeTaskState(task, strict);
+    if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));
@@ -8790,6 +8729,7 @@ export class TaskService {
           // 会读到 cwd=null。这里只补内部索引，不制造流程状态变化。
           if (recoveredCwd) this.writeTaskState(task);
         }
+        resetQueuedRequirementReviews(this.annotations(task));
         if (summary.requirement_revision?.state === "running") {
           const interruptedIds = new Set(
             summary.requirement_revision.annotation_ids ?? []);
@@ -11784,7 +11724,7 @@ export class TaskService {
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
       picked.length
-        ? this.requirementAnnotationInstructions(task, picked) : undefined,
+        ? requirementAnnotationInstructions(picked) : undefined,
       // push 返工的使命里已经带了同一份回执契约,不重复。
       picked.length && !pushConfirmCard
         ? this.reviewReceiptInstructionsFor(task, picked) : undefined,
@@ -16763,6 +16703,9 @@ export class TaskService {
   ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    // task-40：旧 MR 已被人在远端合入，本地却仍是“验证中”。必须先
+    // 查同一个 MR，不能先 rebase/push 再靠创建接口猜它是否还存在。
+    if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
     // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
@@ -16914,6 +16857,8 @@ export class TaskService {
           && authorizedPrePush?.sha
           && ["passed", "user_skipped"].includes(authorizedPrePush.state)
         ? authorizedPrePush.sha : observedRevision.sha;
+      // Build-Fix 可能运行很久，期间 MR 也可能合入；写远端前再核对。
+      if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task, branch)) return;
       // 推送前最后一道基线复核:Build-Fix/确认期间若历史又被改写,
@@ -17883,49 +17828,38 @@ export class TaskService {
     setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
-  /** 门禁视图:平台不支持(404/没配分支对)或查询失败一律回
-   * undefined——调用方按"旧语义"处理,绝不让门禁查询卡死闭环。
-   * 形状校验从严:name/passed 类型不对的项直接丢弃,宿主不猜。 */
-  private async fetchGates(task: TaskState): Promise<GateView | undefined> {
-    const platformUrl = this.effectivePlatformUrl();
+  /** 已有关联 MR 时，只允许权威 opened 状态进入续推；查询不可得
+   * 留在可重跑的停机态，合入/关闭则复用现有生命周期收口。 */
+  private async existingMergeRequestAllowsDelivery(
+    task: TaskState, epoch: number,
+  ): Promise<boolean> {
+    if (!this.current(task, epoch)) return false;
     const delivery = task.summary.delivery;
-    if (!platformUrl || !delivery?.source_branch
-        || !delivery.target_branch) {
-      return undefined;
+    if (!delivery?.mr_url && delivery?.mr_id === undefined) return true;
+    const view = await this.fetchGates(task, true);
+    if (!this.current(task, epoch)) return false;
+    if (!view) {
+      this.markVerificationStalled(task,
+        "无法确认已有 MR 的远端状态，已停止续推；请恢复平台连接后重跑，避免重复创建 MR",
+        "infrastructure");
+      return false;
     }
-    try {
-      const params = new URLSearchParams({
-        repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
-        source_branch: delivery.source_branch,
-        target_branch: delivery.target_branch,
-      });
-      if (delivery.mr_id !== undefined) {
-        params.set("mr", String(delivery.mr_id));
-      }
-      const response = await fetch(
-        `${platformUrl}/mr/gates?${params}`,
-        { headers: this.platformIdentity(task) });
-      if (response.status === 404) return undefined; // 平台不支持门禁契约
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await readJson(response);
-      const gates: GateItem[] = (Array.isArray(body.gates) ? body.gates : [])
-        .filter((gate: any) => typeof gate?.name === "string"
-          && typeof gate?.passed === "boolean")
-        .map((gate: any) => ({
-          name: gate.name,
-          passed: gate.passed,
-          ...(gate.detail ? { detail: String(gate.detail) } : {}),
-        }));
-      const mrState = body.mr_state === "merged" || body.mr_state === "closed"
-        ? body.mr_state : "opened";
-      const sourceSha = typeof body.sha === "string" && body.sha.trim()
-        ? body.sha.trim() : undefined;
-      return { mrState, gates, ...(sourceSha ? { sourceSha } : {}) };
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} 门禁查询失败(按不可得处理): ${String(error)}`);
-      return undefined;
+    if (view.mrState === "merged" || view.mrState === "closed") {
+      // 复用合入事实收口，不能伪造一次 pipeline success；SHA 与内核
+      // close 的原有核对仍保留，异常时停下也绝不另建 MR。
+      await this.settleMergeState(task, view.mrState, view.sourceSha);
+      return false;
     }
+    return true;
+  }
+
+  private fetchGates(task: TaskState, requireExisting = false): Promise<GateView | undefined> {
+    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(),
+      delivery: task.summary.delivery, requireExisting,
+      repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+      headers: this.platformIdentity(task),
+      log: (error) => this.options.log?.(`任务 ${task.summary.id} 门禁查询失败: ${error}`),
+    });
   }
 
   /** MR 平台侧状态:merged 才是任务真正结束。closed 只是一个需要人
@@ -18016,6 +17950,10 @@ export class TaskService {
       if (delivery.loop) delivery.loop.state = "green";
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
+      delivery.stalled = undefined;
+      delivery.stall_class = undefined;
+      delivery.skipped = undefined;
+      delivery.verify_deadline = undefined;
       task.summary.status = "completed";
       const closeEvent = this.continuousReviewTask(task)
         ? this.latestKernelCloseEvent(task) : undefined;
@@ -18993,7 +18931,7 @@ export class TaskService {
           cwd,
           env: worktreeEnv,
           timeoutMs: args[0] === "fetch" || args[0] === "rebase"
-            ? 5 * 60_000 : 30_000,
+            ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
         }),
       });
       if (outcome.kind === "none") return "ok";
@@ -19111,7 +19049,7 @@ export class TaskService {
       [...worktreeArgs, ...args], {
         cwd, env: worktreeEnv,
         timeoutMs: args[0] === "fetch" || args[0] === "merge"
-          ? 5 * 60_000 : 30_000,
+          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
       });
     try {
       const targetCheck = await git("check-ref-format", "--branch", target);
@@ -20476,12 +20414,12 @@ export class TaskService {
         ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
         "--porcelain", remoteUrl, `${sha}:${ref}`,
       ], {
-        timeoutMs: 5 * 60_000,
+        timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
         env: { ...sandbox.env, ...objectEnv },
       });
       if (pushed.status !== 0) {
         const stderrText = pushed.timedOut
-          ? "超过 5 分钟，已终止 git/ssh 进程组"
+          ? `超过 ${GIT_TRANSFER_TIMEOUT_MS / 60_000} 分钟传输预算，已终止 git/ssh 进程组`
           : String(pushed.stderr || pushed.stdout || pushed.error);
         throw new Error(`宿主推送失败: ${stderrText}`);
       }
@@ -20736,7 +20674,7 @@ export class TaskService {
           "--", source, target,
         ],
         {
-          timeoutMs: 30 * 60_000,
+          timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
           // 子进程没有终端,git 想问密码只会把任务挂死——明令禁问,
           // 缺凭据就地失败,错误如实上浮(不卡死红线)。
           env: hardened

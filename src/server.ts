@@ -62,6 +62,8 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
+import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import {
   closeSync,
   existsSync,
@@ -2184,6 +2186,19 @@ export function createTaskServer(
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
         }
+        if (request.method === "GET" && parts.length === 3 && parts[2] === "knowledge-source") {
+          const task = service.get(id);
+          if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
+          try {
+            return json(response, 200, readTaskKnowledgeSource({
+              workspace: task.workspace, repositoryRoot: service.artifactRoot(id),
+              hostRulesRoot: process.cwd(), usage: task.knowledge_usage,
+              resourceId: url.searchParams.get("resource") ?? "",
+            }));
+          } catch (error) {
+            return json(response, 404, { error: humanError(error) });
+          }
+        }
         // 批注附图:上传落盘拿路径,再随批注引用;读取只认资产模块的路径形状。
         if (request.method === "POST" && parts.length === 3
             && parts[2] === "annotation-assets") {
@@ -2606,12 +2621,13 @@ export function createTaskServer(
               images: Array.isArray(body.images) ? body.images : undefined,
             }));
           }
-          // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
+          // 受邀者可提交本人意见，不复用只在分析期生效的决定卡权限。
           if (request.method === "POST" && parts[3] === "send") {
             const assignedReviewer = !!viewer && service.listTaskReviews(id)
               .some((review) => review.status === "pending"
                 && review.committer === viewer.username);
-            if (!canCollaborate(viewer, target, !!options.auth)
+            if (!canOperate(viewer, target.luban_account, !!options.auth)
+                && !isInvitedReviewParticipant(target, viewer?.username)
                 && !assignedReviewer) {
               return json(response, 403, { error: "只有任务责任人或受邀协作者可以送批注" });
             }
@@ -2619,7 +2635,7 @@ export function createTaskServer(
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
               await service.sendAnnotations(id, ids, author,
-                canOperate(viewer, target.luban_account, !!options.auth)));
+                canOperate(viewer, target.luban_account, !!options.auth), true));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,

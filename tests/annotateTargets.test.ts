@@ -14,9 +14,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection,
+  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection, resolvedAnnotationRange,
   QUOTE_MAX, type RowNode,
 } from "../web/src/annotateTargets.ts";
+
+test("批注跳转与标记只用可靠的当前位置，起止行一起平移", () => {
+  const note = { line: 3, line_end: 7 };
+  assert.deepEqual(resolvedAnnotationRange(note, { state: "moved", line: 13 }),
+    { line: 13, lineEnd: 17 });
+  assert.deepEqual(resolvedAnnotationRange(note, { state: "moved", line: 13, line_end: 19 }),
+    { line: 13, lineEnd: 19 }, "服务端按完整选区定位的末行优先于旧范围长度");
+  assert.deepEqual(resolvedAnnotationRange(note, { state: "hit", line: 3 }),
+    { line: 3, lineEnd: 7 });
+  for (const check of [undefined, { state: "gone" }, { state: "ambiguous", line: 20 },
+    { state: "moved", line: 0 }, { state: "hit" }]) {
+    assert.equal(resolvedAnnotationRange(note, check), undefined,
+      "原文不在或不唯一时不能降级到旧的第 3 行");
+  }
+});
 
 /** 极简假节点:只实现规则用到的那几个 DOM 能力。 */
 function node(spec: {

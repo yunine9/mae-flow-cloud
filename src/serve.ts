@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
+import { GIT_RUNTIME_RETENTION_MS } from "./gitTransferBudget.ts";
 import { requireContinuousReviewCapability } from "./kernelCapabilities.ts";
 import {
   DEFAULT_BUILD_CACHE_MAX_GB,
@@ -354,7 +355,14 @@ async function main(): Promise<void> {
 
   // 内核自动发现:链的语义与顺序见 kernelDiscovery.ts(serve/pilot/
   // 测试共用一条链,不许各写各的)。
-  const kernelRoot = discoverKernelRoot(REPO_ROOT);
+  let kernelRoot: string | undefined;
+  try {
+    kernelRoot = discoverKernelRoot(REPO_ROOT,
+      !has("--issue-only") && (has("--kernel-mode") || !!flag("--repo")));
+  } catch (error) {
+    console.error(`[serve] ${String(error)}`);
+    process.exit(2);
+  }
 
   // 问题流专用部署(--issue-only):需求流程的重依赖(内核/交付平台/
   // prepush/容器镜像守卫)整体不加载——它们缺配时也不再拒绝启动,
@@ -1259,10 +1267,10 @@ function warnStaleWeb(webRoot: string | undefined): void {
  * 目录,里面躺着**明文个人令牌**;正常路径 finally 里删,kill -9 不给
  * finally 机会——不扫的话每次硬重启都往磁盘上多留一份长期明文凭据
  * (2026-08-29 部署审计实锤)。只删"够老"的:推送走 detached 进程组,
- * 服务死了 git 可能还在 5 分钟预算内收尾,扫早了等于拔它的凭据。
+ * 服务死了 git 可能还在传输预算内收尾,扫早了等于拔它的凭据。
  * 纯旁路:任何一步失败只记日志,绝不拦启动。 */
 function sweepStaleGitRuntime(dataDir: string): void {
-  const cutoff = Date.now() - 15 * 60_000;
+  const cutoff = Date.now() - GIT_RUNTIME_RETENTION_MS;
   for (const lane of ["host-git", "issue-git"]) {
     const root = join(dataDir, ".runtime", lane);
     let entries: string[];

@@ -138,17 +138,18 @@ echo "  服务已停止"
 # 检查 detached git push
 GIT_PUSH_COUNT=\$(ps -eo pid,ppid,etime,command | grep -c "[g]it push" || true)
 if [ "\$GIT_PUSH_COUNT" -gt 0 ]; then
-    echo "  ⚠ 检测到 \$GIT_PUSH_COUNT 个 git push 进程仍在跑，等待完成（≤5分钟预算）…"
+    echo "  ⚠ 检测到 \$GIT_PUSH_COUNT 个 git push 进程仍在跑，等待完成（≤30分钟传输预算）…"
     ps -eo pid,ppid,etime,command | grep "[g]it push"
-    for i in \$(seq 1 30); do
+    for i in \$(seq 1 180); do
         sleep 10
         GIT_PUSH_COUNT=\$(ps -eo pid,ppid,etime,command | grep -c "[g]it push" || true)
         if [ "\$GIT_PUSH_COUNT" -eq 0 ]; then
             echo "  git push 已全部完成"
             break
         fi
-        if [ "\$i" -eq 30 ]; then
-            echo "  ⚠ 等待超时（5分钟），仍有 \$GIT_PUSH_COUNT 个 git push"
+        if [ "\$i" -eq 180 ]; then
+            echo "  ⚠ 等待超时（30分钟），仍有 \$GIT_PUSH_COUNT 个 git push；停止部署，请核对现场"
+            exit 1
         fi
     done
 else

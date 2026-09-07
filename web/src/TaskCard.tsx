@@ -1893,6 +1893,9 @@ function EventRecord({ event, selectedDetail, onInspect }: {
         {event.sessionId === "developer-assistant" && (
           <span className="event-session-label">开发助手</span>
         )}
+        {event.sessionId?.startsWith("requirement-review:") && (
+          <span className="event-session-label">需求预检</span>
+        )}
         <code>#{event.eventId}</code>
         <time dateTime={event.ts}
           title={formatLocalDateTime(event.ts, { seconds: true, year: true })}>

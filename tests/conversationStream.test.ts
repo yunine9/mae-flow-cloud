@@ -45,6 +45,17 @@ const T3 = "2026-09-05T02:15:00.000Z";
 
 const ref = { id: "a-1", author: "zhou", kind: "doc", file: "docs/spec.md", line: 7, note: "多长算长文?" };
 
+test("系统恢复意见显示原因，不署名为原作者退回", () => {
+  const reset: ConversationItem = { kind: "delivery_reset", id: "reset-1", ts: T1,
+    annotation: ref, reason: "模型响应超时" };
+  const html = render({ items: [reset] });
+  assert.match(html, /系统/);
+  assert.match(html, /处理未完成 · 待重新提交/);
+  assert.match(html, /模型响应超时/);
+  assert.doesNotMatch(html, /退回 1 条意见|第 1 次要求再改/);
+  assert.deepEqual(itemAnnotationIds(reset), [ref.id]);
+});
+
 const items: ConversationItem[] = [
   { kind: "session", id: "s1", ts: T0, phase: "started", resume: false },
   { kind: "turn", id: "turn-1", ts: T0, end_ts: T1, open: false,

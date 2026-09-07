@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
-import { unanchoredRequirementChanges } from "../src/requirementDocument.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 
 const CONFIRM_STEP = "cloud_requirement_analysis_confirm";
 const CONFIRM_OPTION = "需求已确认，进入需求分析";
@@ -17,6 +17,111 @@ function confirmationQuestion(task: ReturnType<TaskService["get"]>): string {
   assert.ok(questions?.[0]?.question);
   return questions[0].question;
 }
+
+test("修改需求时新意见立即入队，串行落实全部意见后仍需作者复检", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const model = new ScriptedModelServer([
+    { tool: { name: "edit", input: { path: "requirement.md",
+      edits: [{ oldText: "第一段旧口径", newText: "第一段新口径\n新增一行说明" }] } } },
+    { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
+    { text: "第一批已完成" },
+    { tool: { name: "edit", input: { path: "requirement.md",
+      edits: [{ oldText: "第二段旧口径", newText: "第二段新口径" }] } } },
+    { tool: { name: "write", input: { path: "receipts.json", content: "" } } },
+    { text: "第二批已完成" },
+  ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
+    if (index === 1) { entered(); await held; }
+  } });
+  await model.start();
+  let first: Promise<unknown> | undefined;
+  try {
+    const service = new TaskService({
+      dataDir: mkdtempSync(join(tmpdir(), "mfc-requirement-queue-")),
+      provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
+      maxConcurrent: 0,
+    });
+    const task = service.create("第一段旧口径\n\n第二段旧口径", {
+      account: "owner", collaborators: ["reviewer"], requirementAnalysis: true,
+      requirementAnalysisConfirmation: true,
+    });
+    const a = service.addAnnotation(task.id, { author: "owner",
+      artifact: TASK_REQUIREMENT_ARTIFACT, file: "需求原文", line: 1,
+      anchor: "第一段旧口径", note: "修改第一段", kind: "doc" });
+    const b = service.addAnnotation(task.id, { author: "reviewer",
+      artifact: TASK_REQUIREMENT_ARTIFACT, file: "需求原文", line: 3,
+      anchor: "第二段旧口径", note: "修改第二段", kind: "doc" });
+    for (const [index, note] of [[1, a], [4, b]] as const) {
+      model.script[index].tool!.input.content = JSON.stringify([{
+        annotation_id: note.id, outcome: "fixed", summary: "已修改指定段落",
+        evidence: [`requirement.md:${note.line}`],
+      }]);
+    }
+    first = service.sendAnnotations(task.id, [a.id], "owner");
+    await started;
+    const processing = service.listAnnotations(task.id).items.find((item) => item.id === a.id)!;
+    assert.equal(processing.status, "sent", "正在处理的意见不能仍被展示为草稿");
+    assert.equal(processing.sent_via, "requirement_review");
+    const repeated = await service.sendAnnotations(task.id, [a.id], "owner");
+    assert.match(repeated.receipt ?? "", /1 条正在由 Agent 处理/);
+    await assert.rejects(service.sendAnnotations(task.id, [a.id], "reviewer"), /不是你写的/);
+    await assert.rejects(service.sendAnnotations(task.id, ["missing-id"], "owner"), /不存在/);
+    const liveEvents = new EventLog(service.eventLogPath(task.id)).replay();
+    assert.ok(liveEvents.some((event) => event.kind === "tool_requested"),
+      "Agent 仍在处理时，执行日志接口读取的主日志里就应有工具调用");
+    assert.ok(liveEvents.every((event) => event.taskId === task.id));
+    const queued = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.deepEqual(queued.sent, [b.id], "第一批仍被挂起时，第二批就能返回接收成功");
+    const queuedNote = service.listAnnotations(task.id).items.find((item) => item.id === b.id)!;
+    assert.equal(queuedNote.sent_via, "requirement_queue");
+    assert.equal(queuedNote.status, "sent");
+    const repeatedQueue = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.match(repeatedQueue.receipt ?? "", /1 条已排队/);
+    assert.throws(() => service.verifyAnnotation(task.id, b.id, "reviewer"), /尚在排队/);
+    const confirm = () => service.decide(task.id, {
+      state_version: service.get(task.id)!.waiting!.state_version,
+      selected_options: { [confirmationQuestion(service.get(task.id))]: CONFIRM_OPTION },
+      actor: "owner",
+    });
+    await assert.rejects(confirm(), /正在修改需求文档/);
+    release();
+    await first;
+    assert.deepEqual((model.requests[0].tools as Array<{ name: string }>).map((tool) => tool.name).sort(),
+      ["edit", "read", "write"], "未配置视觉模型时只有三种文件工具，不影响排队修订");
+    assert.doesNotMatch(JSON.stringify(model.requests[0].system), /Use bash for file operations like ls, rg, find/);
+    const repeatedDone = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.match(repeatedDone.receipt ?? "", /已有处理回执/);
+    assert.equal(service.get(task.id)?.requirement, "第一段新口径\n新增一行说明\n\n第二段新口径");
+    assert.match(JSON.stringify(model.requests[3]), /第 4 行/,
+      "第一批插入一行后，下一批使命应使用当前行号");
+    assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.line, 3,
+      "本轮使命使用重定位坐标，但原始批注的历史行号不改写");
+    assert.deepEqual(service.get(task.id)?.requirement_revisions?.map((item) => item.annotation_ids), [[a.id], [b.id]]);
+    const events = new EventLog(service.eventLogPath(task.id)).replay();
+    assert.equal(new Set(events.map((event) => event.eventId)).size, events.length,
+      "多轮事件编号不能重复，否则页面会去重丢掉后一轮");
+    assert.equal(new Set(events.map((event) => event.sessionId)).size, 2);
+    for (const revision of service.get(task.id)!.requirement_revisions!) {
+      assert.ok(events.some((event) => event.sessionId === `requirement-review:${revision.id}`
+        && event.kind === "tool_finished"));
+      assert.ok(readFileSync(join(task.workspace, "requirement-history",
+        `${revision.id}.transcript.jsonl`), "utf-8").length > 0,
+      "临时副本清理后，每轮会话记录必须仍可读取");
+      assert.equal(existsSync(join(task.workspace, "requirement-review", revision.id)), false);
+    }
+    assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.response?.outcome, "fixed");
+    await assert.rejects(confirm(), /2 条意见仍待提出人确认/);
+    await service.verifyAnnotation(task.id, a.id, "owner");
+    await service.verifyAnnotation(task.id, b.id, "reviewer");
+    await confirm();
+  } finally {
+    release();
+    await first?.catch(() => undefined);
+    await model.stop();
+  }
+});
 
 test("新下单先在工作台确认需求，不会提前进入执行队列", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-confirm-"));
@@ -214,6 +319,12 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   });
   const internal = (first as any).tasks.get(created.id);
   (first as any).annotations(internal).markSent([note.id], "interrupt");
+  const queued = first.addAnnotation(created.id, {
+    author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "待修改需求",
+    note: "还要补异常场景", kind: "doc",
+  });
+  (first as any).annotations(internal).markSent([queued.id], "requirement_queue");
   internal.summary.requirement_revision = {
     id: "revision-before-restart", state: "running",
     annotation_ids: [note.id], started_at: new Date().toISOString(),
@@ -230,6 +341,8 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   assert.equal(task.requirement_revision?.state, "failed");
   assert.match(task.requirement_revision?.error ?? "", /重新提交/);
   assert.equal(recovered.listAnnotations(created.id).items[0].status, "draft");
+  assert.equal(recovered.listAnnotations(created.id).items[1].status, "draft");
+  assert.equal(recovered.listAnnotations(created.id).items[1].note, "还要补异常场景");
 });
 
 test("长需求由 Agent 原位编辑，不再要求模型往回复里搬运全文", async () => {
@@ -318,105 +431,6 @@ test("需求修改 Agent 不能用 Write 整篇覆盖原文", async () => {
     assert.equal(service.get(created.id)?.requirement, "新口径\n\n必须保留");
     assert.match(JSON.stringify(model.requests[1]), /禁止用 Write 覆盖需求原文/,
       "模型必须真实收到门禁说明，不能只靠提示词约定");
-  } finally {
-    await model.stop();
-  }
-});
-
-test("逐段比对:没有意见指向的段落被改就整轮拒收", () => {
-  const before = "# 用户需求\n\n登录后记住账号。\n\n密码错误三次锁定十分钟。\n\n支持手机号登录。";
-  const notes = [{ anchor: "记住账号", line: 3 }];
-  // 只改被指向的段、在中间插新段、挪位置:都放行。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n新增:记住时长 30 天。\n\n支持手机号登录。\n\n密码错误三次锁定十分钟。",
-    notes), []);
-  // 顺手润色没被指向的段:拒。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n密码错误三次锁定 10 分钟。\n\n支持手机号登录。",
-    notes), ["密码错误三次锁定十分钟。"]);
-  // 悄悄删掉一段:拒。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后记住账号,刷新不必重输。\n\n密码错误三次锁定十分钟。",
-    notes), ["支持手机号登录。"]);
-  // 锚点原文已被上一轮改掉时,按行号兜住这一段。
-  assert.deepEqual(unanchoredRequirementChanges(before,
-    "# 用户需求\n\n登录后自动填充账号。\n\n密码错误三次锁定十分钟。\n\n支持手机号登录。",
-    [{ anchor: "早就不在了", line: 3 }]), []);
-});
-
-test("Agent 改了没被指向的段落,回执再合格也拒收,文档一个字不动", async () => {
-  const model = new ScriptedModelServer([{
-    tool: { name: "edit", input: {
-      path: "requirement.md",
-      edits: [
-        { oldText: "登录后记住账号。", newText: "登录后记住账号,30 天内免登录。" },
-        { oldText: "密码错误三次锁定十分钟。", newText: "密码错误三次锁定 10 分钟。" },
-      ],
-    } },
-  }, {
-    tool: { name: "write", input: {
-      path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
-    } },
-  }, {
-    text: "已完成。",
-  }, {
-    tool: { name: "edit", input: {
-      path: "requirement.md",
-      edits: [{
-        oldText: "登录后记住账号。",
-        newText: "登录后记住账号,30 天内免登录。",
-      }],
-    } },
-  }, {
-    tool: { name: "write", input: {
-      path: "receipts.json",
-      content: '[{"annotation_id":"__NOTE__","outcome":"fixed","summary":"补了会话时长上限","evidence":["requirement.md:3"]}]',
-    } },
-  }, {
-    text: "已完成。",
-  }], "scripted-v1", { linear: true });
-  await model.start();
-  try {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-drift-"));
-    const service = new TaskService({
-      dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), maxConcurrent: 0,
-    });
-    const original = "# 用户需求\n\n登录后记住账号。\n\n密码错误三次锁定十分钟。";
-    const created = service.create(original, {
-      account: "owner", requirementAnalysis: true,
-      requirementAnalysisConfirmation: true,
-    });
-    const note = service.addAnnotation(created.id, {
-      author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
-      file: "需求原文", line: 3, anchor: "记住账号",
-      note: "写明记住多久", kind: "doc",
-    });
-    for (const scene of model.script) {
-      if (scene.text) scene.text = scene.text.replace("__NOTE__", note.id);
-      const content = scene.tool?.input.content;
-      if (typeof content === "string") {
-        scene.tool!.input.content = content.replace("__NOTE__", note.id);
-      }
-    }
-    // 第 1 幕:回执合格,但顺手把锁定时长那段也润色了 → 拒。
-    await assert.rejects(
-      service.sendAnnotations(created.id, [note.id], "owner"),
-      (error) => error instanceof TaskControlError
-        && /没有意见指向的段落/.test(error.message)
-        && /密码错误三次锁定十分钟/.test(error.message));
-    assert.equal(service.get(created.id)?.requirement, original);
-    assert.equal(service.get(created.id)?.requirement_revision?.state, "failed");
-    assert.match(service.get(created.id)?.requirement_revision?.error ?? "",
-      /没有意见指向的段落/, "拒收原因要留在任务上,页面才有得显示");
-    assert.equal(service.get(created.id)?.requirement_revisions?.length ?? 0, 0,
-      "拒收的一轮不留底,不算一轮修改");
-    // 第 2 幕:只动被指向的段 → 收。
-    await service.sendAnnotations(created.id, [note.id], "owner");
-    assert.equal(service.get(created.id)?.requirement,
-      "# 用户需求\n\n登录后记住账号,30 天内免登录。\n\n密码错误三次锁定十分钟。");
-    assert.equal(service.get(created.id)?.requirement_revision, undefined);
   } finally {
     await model.stop();
   }

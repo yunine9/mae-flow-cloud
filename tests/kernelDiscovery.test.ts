@@ -32,3 +32,19 @@ test("显式 MAE_FLOW_HOME 仍可选择联调中的活内核", () => {
     else process.env.MAE_FLOW_HOME = previous;
   }
 });
+
+test("正式模式缺少内核必须报错，不能启动后让代码仓入口消失", () => {
+  const previous = process.env.MAE_FLOW_HOME;
+  delete process.env.MAE_FLOW_HOME;
+  try {
+    const root = mkdtempSync(join(tmpdir(), "mfc-kernel-required-"));
+    const cloud = join(root, "cloud");
+    assert.equal(discoverKernelRoot(cloud), undefined, "演示模式仍可不加载内核");
+    assert.throws(() => discoverKernelRoot(cloud, true), /拒绝降级为演示模式/);
+    const bundled = kernelAt(join(cloud, "kernel"));
+    assert.equal(discoverKernelRoot(cloud, true), bundled);
+  } finally {
+    if (previous === undefined) delete process.env.MAE_FLOW_HOME;
+    else process.env.MAE_FLOW_HOME = previous;
+  }
+});

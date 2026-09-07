@@ -63,6 +63,7 @@ export function itemAnnotationIds(item: ConversationItem): string[] {
     case "clarified":
     case "verified":
     case "reopened":
+    case "delivery_reset":
     case "revised":
       return [item.annotation.id];
     default:
@@ -661,6 +662,17 @@ export function ConversationStream({
           children: <>{annotationChip(item.annotation)}{threadButton(item.annotation.id)}</>,
         });
       }
+      case "delivery_reset":
+        return message({
+          key: item.id, who: "external", name: "系统", ts: item.ts, ids: [item.annotation.id],
+          tag: <em className="conv-tag att">处理未完成 · 待重新提交</em>,
+          children: <>
+            <p>系统已将这条意见恢复为待提交，不计入人工退回次数。</p>
+            <p>{item.reason}</p>
+            {thread && annotationChip(item.annotation)}
+            {threadButton(item.annotation.id)}
+          </>,
+        });
       case "reopened": {
         const who = item.annotation.author;
         if (!thread) {

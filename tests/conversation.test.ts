@@ -14,10 +14,35 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildConversation, type ConversationItem } from "../src/conversation.ts";
-import { AnnotationStore } from "../src/annotations.ts";
+import { AnnotationStore, TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
 import { HumanGate } from "../src/humanGate.ts";
 
 const BASE = Date.parse("2026-09-05T02:00:00Z");
+
+test("代转失败只记系统恢复，不冒充原作者退回；重新提交后版本与真正退回次数各自正确", () => {
+  const store = new AnnotationStore(join(mkdtempSync(join(tmpdir(), "mfc-reset-conversation-")), "annotations.jsonl"));
+  const note = store.add({ author: "guest", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "原文", note: "补充验收", kind: "doc" });
+  store.markSent([note.id], "requirement_review", "owner");
+  store.resetRequirementDelivery(note.id, "模型响应超时");
+  assert.equal(store.list()[0].returned ?? 0, 0);
+  assert.equal(store.list()[0].rework, 1, "旧执行的回执必须失效");
+  store.edit(note.id, "补充验收和异常", "guest");
+  store.markSent([note.id], "requirement_review", "owner");
+  assert.throws(() => store.respond(note.id, { revision: 0, outcome: "fixed", summary: "旧回执", evidence: [] }), /旧轮/);
+  store.markSent([note.id], "interrupt", "owner");
+  store.respond(note.id, { revision: 1, outcome: "fixed", summary: "已补充验收", evidence: ["requirement.md:1"] });
+  store.reopen(note.id, "guest", { note: "仍缺异常场景" });
+  const view = buildConversation({ events: [], waiting: [], annotations: store.list(),
+    annotationHistory: store.history(), feedback: [] });
+  const resets = view.items.filter((item) => item.kind === "delivery_reset");
+  assert.equal(resets.length, 1);
+  assert.equal(resets[0].reason, "模型响应超时");
+  const reopened = view.items.filter((item) => item.kind === "reopened");
+  assert.equal(reopened.length, 1);
+  assert.equal(reopened[0].returned, 1, "只有作者主动要求再改才算一次退回");
+  assert.equal(view.items.find((item) => item.kind === "annotations_sent")?.by, "owner");
+});
 function at(offsetSeconds: number): string {
   return new Date(BASE + offsetSeconds * 1000).toISOString();
 }

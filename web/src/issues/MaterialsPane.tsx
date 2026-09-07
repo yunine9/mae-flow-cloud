@@ -461,6 +461,12 @@ function IssueProcessDocs({ detail, canOperate }: {
         onReload={() => void loadReviews()} onLocate={(line) => void locate(line)} />}
     {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
       && content && <>
+      {canOperate && draftCount > 0 && <div className="utility-note" role="status">
+        已记下 {draftCount} 条意见，尚未提交。
+        <button type="button" onClick={() => setActive(REVIEW_TAB)}>
+          查看并提交意见
+        </button>
+      </div>}
       <div className="issue-doc-toolbar">
         <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
         <button type="button" onClick={() => void loadActive()}>刷新</button>

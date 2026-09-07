@@ -11,6 +11,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { GIT_TRANSFER_TIMEOUT_MS } from "../gitTransferBudget.ts";
 import {
   chmodSync,
   existsSync,
@@ -209,7 +210,7 @@ export async function cloneRepository(options: {
       ...sandbox.args, "clone", "--quiet", "--no-local",
       ...(options.baseline ? ["--branch", options.baseline] : []),
       "--", url, options.targetDir,
-    ], { env: sandbox.env, timeoutMs: 30 * 60_000 });
+    ], { env: sandbox.env, timeoutMs: GIT_TRANSFER_TIMEOUT_MS });
     if (outcome.code !== 0) {
       throw new Error(cloneFailureMessage(options.credential, outcome.stderr));
     }
@@ -443,7 +444,7 @@ export async function pushFromIssueWorkspace(options: {
     const pushed = await runGit([
       ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
       "--porcelain", remoteUrl, `${sha}:${ref}`,
-    ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 5 * 60_000 });
+    ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: GIT_TRANSFER_TIMEOUT_MS });
     if (pushed.code !== 0) {
       // porcelain 的拒收摘要(! [rejected] (non-fast-forward))走 stdout,
       // 人话 hint 走 stderr——检测要两路合看,展示仍 stderr 优先。

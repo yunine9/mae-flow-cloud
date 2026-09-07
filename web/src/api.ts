@@ -466,9 +466,10 @@ export interface ReviewRequest {
   task_title: string;
   requester: string;
   committer: string;
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "canceled";
   created_at: string;
   completed_at?: string;
+  canceled_at?: string;
   delivered: boolean;
   attempts: number;
   last_error?: string;
@@ -1241,9 +1242,9 @@ export interface LaunchOptions {
   model?: { provider: string; model: string };
   /** 数字=手刹上限；平台缺省为 20，0 表示关闭。 */
   repair_rounds?: number;
-  /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
+  /** enabled=false 时展示不可用原因，不能把代码仓入口静默隐藏。
    * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
-  repo: { enabled: boolean; required: boolean };
+  repo: { enabled: boolean; required: boolean; disabled_reason?: string };
   /** 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
    * 不让模型开工后再逐项来问(和交付方式同一逻辑)。 */
   ticket: { enabled: boolean; required: boolean };
@@ -1740,6 +1741,16 @@ export interface TaskKnowledgeResource {
   read_count: number;
   first_at?: string;
   last_at?: string;
+}
+
+export interface TaskKnowledgeSource {
+  name: string; path: string; content: string; version_changed: boolean;
+}
+
+export async function readTaskKnowledgeSource(taskId: string, resourceId: string): Promise<TaskKnowledgeSource> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/knowledge-source?resource=${encodeURIComponent(resourceId)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
 }
 
 export interface TaskKnowledgeUsage {
@@ -2675,7 +2686,7 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
-    | "queued_decision" | "owner_pending";
+    | "queued_decision" | "owner_pending" | "requirement_queue" | "requirement_review";
   /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
   sent_by?: string;
   response?: {
@@ -2713,6 +2724,7 @@ export interface Annotation {
 export interface AnchorCheck {
   id: string;
   state: "hit" | "moved" | "gone" | "ambiguous";
+  line_end?: number;
   line?: number;
   now?: string;
 }
@@ -2935,7 +2947,7 @@ export async function judgeAnnotation(
 export async function sendAnnotations(
   taskId: string,
   ids?: string[],
-): Promise<{ sent?: string[]; error?: string }> {
+): Promise<{ sent?: string[]; receipt?: string; error?: string }> {
   const response = await fetch(`/tasks/${taskId}/annotations/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -4416,6 +4428,7 @@ export type ConversationItem =
       annotation: ConversationAnnotationRef; note?: string; returned: number;
     }
   | { kind: "revised"; id: string; ts: string; annotation: ConversationAnnotationRef }
+  | { kind: "delivery_reset"; id: string; ts: string; annotation: ConversationAnnotationRef; reason: string }
   | {
       kind: "external"; id: string; ts: string; source: FeedbackSource;
       author?: string;
