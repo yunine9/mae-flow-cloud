@@ -4434,3 +4434,85 @@ export async function renderPlantUml(source: string): Promise<PlantUmlRender> {
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
+
+/* ---------------------------------------------------------------- *
+ * 问题域协作流(#124 右栏「与 Agent 协作」):GET /issues/:id/conversation
+ * 把事件账本投影成任务侧 ConversationItem 同形状的条目(服务端本体是
+ * src/issueFlow/conversation.ts 的 issueConversation 纯函数)。前端只
+ * 渲染、不推断——成员类型与排序都由服务端给;同名成员(session/turn/
+ * card/decision/steer)逐字段对齐任务侧,receipts 是问题域扩展(平台
+ * 工具回执)。历史卡/裁决/回执只读回放。
+ * ---------------------------------------------------------------- */
+
+export interface IssueConversationQuestion {
+  question: string;
+  options: string[];
+}
+
+/** 回合步骤计数(逐字段对齐任务侧 ConversationSteps)。 */
+export interface IssueConversationSteps {
+  calls: number;
+  errors: number;
+  reads: number;
+  edits: number;
+  bash: number;
+  agents: number;
+  /** 最能说明"这回合干了什么"的几步(改了哪些文件、跑了什么命令)。 */
+  sample: Array<{ kind: "edit" | "bash" | "agent"; subject: string }>;
+}
+
+export type IssueConversationItem =
+  | {
+      kind: "session"; id: string; ts: string;
+      phase: "started" | "ended";
+      resume?: boolean; detail?: string;
+    }
+  | {
+      kind: "turn"; id: string; ts: string; end_ts: string;
+      /** narration = 说完就去调工具的过程话;handoff = 说完举卡/收口的交接语。 */
+      texts: Array<{ ts: string; text: string; truncated: boolean;
+        role: "narration" | "handoff" }>;
+      steps: IssueConversationSteps;
+      open: boolean;
+    }
+  | {
+      kind: "card"; id: string; ts: string; waiting_id: string; step: string;
+      purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+      questions: IssueConversationQuestion[];
+      status: "waiting" | "resolved";
+    }
+  | {
+      kind: "decision"; id: string; ts: string; waiting_id: string; by?: string;
+      decision: string; notes: string;
+      purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+      /** 平台闸作答带的问句快照(在闸事件的 payload 里随行)。 */
+      questions?: IssueConversationQuestion[];
+    }
+  | {
+      kind: "steer"; id: string; ts: string; text: string;
+      delivered: boolean;
+    }
+  | {
+      kind: "review"; id: string; ts: string;
+      count: number; text: string;
+    }
+  | {
+      kind: "receipts"; id: string; ts: string;
+      items: Array<{ name: string; outcome: "success" | "error"; summary: string }>;
+    };
+
+export interface IssueConversationView {
+  items: IssueConversationItem[];
+  /** 账本里读到的全部事件行数(含被投影跳过的)——前端"已读水位"。 */
+  events_seen: number;
+  truncated: boolean;
+}
+
+/** 问题会话协作流(右栏「与 Agent 协作」消费)。 */
+export function getIssueConversation(
+  id: string,
+): Promise<IssueConversationView> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/conversation`);
+}

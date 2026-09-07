@@ -45,7 +45,9 @@ import {
   type RepoDeliveryRow,
   type RepoLedgerInput,
 } from "./perRepo";
-import { IssueRail } from "./IssueRail";
+import { IssueRail, IssueWaitingFacts } from "./IssueRail";
+import { IssueDecisionCard } from "./IssueDecisionCard";
+import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
@@ -231,8 +233,8 @@ export function IssueSessionView({
   // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
   // 右 ws-side 协作)。主题走问题域变量(见 style.css 的 .issue-workspace
-  // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏暂由
-  // IssueRail 占位(#124 换协作对话框)。
+  // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏是 #124
+  // 的协作对话框(会话流+输入区),IssueRail 折进底部「更多操作」。
   return <section
     className="workspace-overlay issue-workspace task-workspace-v2 workspace-studio"
     role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
@@ -348,24 +350,49 @@ export function IssueSessionView({
         </section>
       </section>
       <section className="ws-side" aria-label="与 Agent 协作">
-        {/* 右栏占位:IssueRail 原样(#124 换成协作对话框,消费
-            GET /issues/:id/conversation)。onOpenDoc 即右栏"分析报告
-            已产出"的跳转,#123 起直达「过程文档」一级标签——不再存在
-            材料子视图,换页签即达。 */}
-        <IssueRail
-          detail={detail}
-          busy={busy}
+        {/* #124 右栏协作对话框:协作头 + 当前待处理卡(本票临时挂在流
+            上方,卡入流 + 输入区 dock 是 #125)+ 会话流(聚合接口
+            GET /issues/:id/conversation + 可见轮询)+ 输入区(运行中=
+            插话 steerIssue,其余=续聊 replyIssue,查看者只读)。 */}
+        <IssueConversationStream
+          key={detail.id}
+          issueId={detail.id}
+          status={detail.status}
+          waiting={Boolean(waiting)}
           canOperate={canOperate}
-          waiting={waiting}
-          onAnswer={answer}
-          onReply={sendReply}
+          busy={busy}
+          owner={detail.account}
+          viewerUsername={viewerUsername}
+          currentCard={waiting ? (canOperate
+            ? <IssueDecisionCard waiting={waiting} busy={busy}
+                onAnswer={answer} onEnvironment={attachEnvironment} />
+            : <IssueWaitingFacts waiting={waiting} />)
+            : undefined}
           onSteer={sendSteer}
-          onArchive={archive}
-          onCancel={cancelSession}
-          onOpenDoc={() => setTab("doc")}
-          onAssociate={associate}
-          onEnvironment={attachEnvironment}
+          onReply={sendReply}
         />
+        {/* IssueRail 本票不删(#127 再拆):折进底部「更多操作」details
+            默认收起,归档/终止/挂起转正等控件原样保留。当前等待卡已上移
+            协作区,这里传空避免同一张卡两处可交互(rail 对 waiting_user
+            无卡状态本就只出归档/终止,与旧态一致)。onOpenDoc 即右栏
+            "分析报告已产出"的跳转,#123 起直达「过程文档」一级标签。 */}
+        <details className="issue-side-more">
+          <summary>更多操作</summary>
+          <IssueRail
+            detail={detail}
+            busy={busy}
+            canOperate={canOperate}
+            waiting={undefined}
+            onAnswer={answer}
+            onReply={sendReply}
+            onSteer={sendSteer}
+            onArchive={archive}
+            onCancel={cancelSession}
+            onOpenDoc={() => setTab("doc")}
+            onAssociate={associate}
+            onEnvironment={attachEnvironment}
+          />
+        </details>
       </section>
     </div>
   </section>;

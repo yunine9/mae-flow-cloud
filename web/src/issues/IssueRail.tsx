@@ -175,8 +175,10 @@ export function IssueRail({ detail, busy, canOperate, waiting, onAnswer,
 
 /** 查看模式的等待卡事实面:决策背景、题面与选项照常陈列(替归属人
  * 判断卡在哪、值不值得催),作答控件一个不渲染。流水线红灯人工闸
- * (票 03)如实点名"等归属人处理",其余闸沿用通用文案。 */
-function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingSnapshot }) {
+ * (票 03)如实点名"等归属人处理",其余闸沿用通用文案。
+ * #124 起导出:同一张事实卡也挂右栏协作区流上方(仅渲染复用,组件
+ * 内部零变化;#125 卡入流后协作区与侧栏合一)。 */
+export function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingSnapshot }) {
   const questions = waiting.question?.questions ?? [];
   const head = waiting.gate_kind === "pipeline_unfixable"
     ? "等归属人在交付平台处理/豁免流水线告警"

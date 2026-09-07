@@ -616,3 +616,65 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
     (block.match(/--workspace-tab-color:/g) ?? []).length >= 5,
     "五个页签各需一枚 --workspace-tab-color");
 });
+
+// ---- 右栏协作对话框(#124):ws-side 从 IssueRail 占位换成「与 Agent
+// ---- 协作」——会话流接 GET /issues/:id/conversation 聚合接口(可见
+// ---- 轮询,任务侧同款节奏),当前等待卡临时挂在流上方保证作答链路
+// ---- 不断,IssueRail 折进底部「更多操作」默认收起(#127 再拆)。
+
+test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡上移/IssueRail 折叠", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // ws-side 协作头:流组件自带「与 Agent 协作」栏头(ws-collaboration-head,
+  // 与任务侧同一结构类),挂在会话视图的 ws-side(aria 同名)里。
+  assert.match(sessionView,
+    /<section className="ws-side" aria-label="与 Agent 协作">/);
+  assert.match(stream, /<header className="ws-collaboration-head">/);
+  assert.match(stream, /<strong>与 Agent 协作<\/strong>/);
+  assert.match(sessionView, /<IssueConversationStream/);
+  // 聚合接口接线:api.ts 出 getIssueConversation → GET /issues/:id/conversation,
+  // 成员形状镜像服务端 IssueConversationItem 的六类成员(session/turn/
+  // card/decision/steer/review/receipts);流组件消费它,不自己拼装。
+  assert.match(apiTypes,
+    /export function getIssueConversation\(\s*\n\s*id: string,\s*\n\): Promise<IssueConversationView>/);
+  assert.match(apiTypes,
+    /issueFetch\(`\/issues\/\$\{encodeURIComponent\(id\)\}\/conversation`\)/);
+  for (const kind of ["session", "turn", "card", "decision", "steer", "review",
+    "receipts"]) {
+    assert.match(apiTypes, new RegExp(`kind: "${kind}"`),
+      `api.ts 协作流类型缺 ${kind} 成员`);
+  }
+  assert.match(stream, /getIssueConversation\(id\)/);
+  // 轮询:会话视图可见时每 4 秒拉一次(任务侧同款节奏,visiblePolling),
+  // 换会话重置(流清空 + 序号作废半拍旧响应)。
+  assert.match(stream, /startVisiblePolling\(\(\) => load\(issueId\), 4000, document\)/);
+  assert.match(stream,
+    /useEffect\(\(\) => \{[\s\S]*setView\(\{ items: \[\], truncated: false, loaded: false \}\);[\s\S]*\}, \[issueId, load\]\)/);
+  // 当前等待卡临时挂在流上方:「当前待你处理」容器(查看模式文案换
+  // 归属人)包着决策卡(归属人)/事实卡(查看模式),作答链路不断;
+  // 卡入流是 #125 的活,本票不做。
+  assert.match(stream, /className="issue-conv-now"/);
+  assert.match(stream, /当前待你处理/);
+  assert.match(sessionView,
+    /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
+  // 输入区分派:运行中=插话(steerIssue)、其余=续聊(replyIssue),
+  // 查看者只读(ws-composer-readonly);回调沿用 SessionView 既有口。
+  assert.match(sessionView, /onSteer=\{sendSteer\}/);
+  assert.match(sessionView, /onReply=\{sendReply\}/);
+  assert.match(stream, /status === "running" \? \{ kind: "steer" \}/);
+  assert.match(stream, /ws-composer-readonly/);
+  // IssueRail 折叠保留:不删,折进 ws-side 底部「更多操作」details 默认
+  // 收起(归档/终止/挂起转正控件原样在);查看模式事实卡因此从 rail
+  // 导出复用,组件内部零变化。
+  assert.match(sessionView, /<details className="issue-side-more">/);
+  assert.match(sessionView, /<summary>更多操作<\/summary>/);
+  assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
+  assert.match(rail, /export function IssueWaitingFacts/);
+  // 样式落点:#124 右栏协作的追加块在 style.css 末尾问题工作台区块内。
+  assert.match(css, /#124 右栏协作/);
+  assert.match(css, /\.issue-workspace\.task-workspace-v2 \.issue-conv-now \{/);
+});

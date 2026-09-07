@@ -11622,3 +11622,59 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   border-radius: 50%;
   background: var(--workspace-tab-color);
 }
+
+/* ---- #124 右栏协作:会话流接聚合接口 + 输入区分派(只追加,不动上行) ---- */
+/* 当前待你处理:等待卡(决策卡/查看模式事实卡)本票临时挂在流上方
+   (#125 卡入流后容器拆除);容器自身可滚,高卡不把流挤没。 */
+.issue-workspace.task-workspace-v2 .issue-conv-now {
+  flex: none;
+  margin: 8px 14px 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px 0 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: auto;
+  max-height: 48vh;
+}
+.issue-workspace.task-workspace-v2 .issue-conv-now-label {
+  padding: 0 12px;
+  color: var(--attention);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+/* 回合步骤一行(任务侧点开去「工作过程」;问题域没有该视图,只读计数)。 */
+.issue-workspace.task-workspace-v2 .issue-conv-steps {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* IssueRail 折叠为「更多操作」(#127 再拆):钉在右栏最底(流与输入区
+   之下,conversation.css 的 order 3/4 之后),收起只占一行;展开后 rail
+   不再吃右栏 flex 分配(#122 给它的 flex:1 让位),保持自然高度。 */
+.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more {
+  order: 5;
+  flex: none;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more > summary {
+  padding: 8px 16px;
+  color: var(--muted);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  list-style: none;
+}
+.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more > summary::before {
+  content: "▸ ";
+}
+.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more[open] > summary::before {
+  content: "▾ ";
+}
+.issue-workspace.task-workspace-v2 .ws-side .issue-side-more .issue-rail {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+}
