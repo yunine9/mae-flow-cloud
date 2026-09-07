@@ -31,9 +31,10 @@ import {
   ANALYSIS_DOC_NAME,
   listSessionDocuments,
 } from "../src/issueFlow/documents.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function workspace(content = "# 分析报告\n\n根因:重试无上限。\n"): string {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-reviews-"));
+  const root = mfcTemp("mfc-issue-reviews-");
   writeFileSync(join(root, ANALYSIS_DOC_NAME), content);
   return root;
 }
@@ -83,7 +84,7 @@ test("锚点检测:没动=hit;重写原文消失=gone(已被改动的唯一判�
   assert.equal(anchorChecks(drift)[0]?.state, "moved");
 
   // 读不到报告(权限/缺失):按 hit 放行——重锚定绝不挡住面板
-  const blind = mkdtempSync(join(tmpdir(), "mfc-issue-reviews-blind-"));
+  const blind = mfcTemp("mfc-issue-reviews-blind-");
   addReview(blind, { author: "dev", line: 1, anchor: "随便", note: "n" });
   assert.equal(anchorChecks(blind)[0]?.state, "hit");
 });

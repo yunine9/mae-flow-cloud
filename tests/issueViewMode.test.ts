@@ -23,6 +23,7 @@ import {
   handleIssueRoutes,
   type IssueViewer,
 } from "../src/issueFlow/routes.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const OWNER = "dev";
 /** 非归属开发者(看板里点开同事卡片的普通人)。 */
@@ -137,7 +138,7 @@ function writeSession(dataDir: string, state: Record<string, unknown>): void {
 /** 四个会话:在途 + 归档 + 取消 + 挂起,全归 dev 名下(状态文件直接
  * 落盘,服务重启恢复逻辑把它们原样载入,不打模型)。 */
 function makeFixture(): { dataDir: string; service: IssueFlowService } {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-viewmode-"));
+  const dataDir = mfcTemp("mfc-issue-viewmode-");
   const base = {
     account: OWNER,
     title: "播放器偶发黑屏",

@@ -31,6 +31,7 @@ import {
   type IssueScenario,
   type IssueSessionState,
 } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -215,7 +216,7 @@ async function startChain(options: {
   staleRedHits?: number;
   steps?: (origin: string) => Array<string[] | Scene>;
 }): Promise<Chain> {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-"));
+  const dataDir = mfcTemp("mfc-issue-exit-");
   const origin = bareOrigin(dataDir);
   const platform = new GatePlatform();
   platform.defaultStatus = options.platformStatus ?? "running";
@@ -333,7 +334,7 @@ function directState(
 }
 
 test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表简报,complete_stage 才收口", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-advance-"));
+  const dataDir = mfcTemp("mfc-issue-exit-advance-");
   const origin = bareOrigin(dataDir);
   const state = directState(dataDir, "ticket", "dts_info");
   const { byName, textOf } = directTools(state, dataDir);
@@ -367,7 +368,7 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
 });
 
 test("出口回归(免模型):三个举卡阶段调 complete_stage 被门禁拒绝", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-gate-"));
+  const dataDir = mfcTemp("mfc-issue-exit-gate-");
   // 分析(有单)与结论(无单)的出口是 submit_analysis;换库验证已
   // 封存(ADR-0013)——build_deploy 无阶段开放,调用恒被阶段门禁拒。
   const analyze = directTools(directState(dataDir, "ticket", "analyze"), dataDir);
@@ -385,7 +386,7 @@ test("出口回归(免模型):三个举卡阶段调 complete_stage 被门禁拒�
 });
 
 test("出口回归(免模型):report_ut 降级为事实上报——只记账不推进", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-ut-"));
+  const dataDir = mfcTemp("mfc-issue-exit-ut-");
   const state = directState(dataDir, "ticket", "fix");
   const { byName, textOf } = directTools(state, dataDir);
   const receipt = textOf(await byName("report_ut").execute("x", {
@@ -618,7 +619,7 @@ test("MR 验绿门·清单=台账:少报/多报都打回且点名差异", async 
 });
 
 test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-empty-"));
+  const dataDir = mfcTemp("mfc-issue-exit-empty-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     // 跳过拉仓:研究结论不涉及代码改动(complete_stage 两跳)。
@@ -733,7 +734,7 @@ test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模�
 });
 
 test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放行", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-dirty-"));
+  const dataDir = mfcTemp("mfc-issue-exit-dirty-");
   const origin = bareOrigin(dataDir);
   const repoDir = join(dataDir, "repo", "origin");
   execFileSync("git", ["clone", "-q", origin, repoDir], { env: GIT_ENV });

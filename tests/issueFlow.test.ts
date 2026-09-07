@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
 import { materializeIssueSkills } from "../src/issueFlow/prompt.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
   // vendor/mattpocock/ 下是原封照搬的外部技能(同步时整目录覆盖,不本地
@@ -30,7 +31,7 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
     "code-review", "codebase-design", "diagnosing-bugs", "grilling",
     "implement", "issue-analysis", "issue-delivery", "issue-ops", "tdd",
   ];
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-"));
+  const workspace = mfcTemp("mfc-issue-skills-");
   const first = materializeIssueSkills(workspace);
   assert.deepEqual(first.map((path) => path.split("/").at(-2)), expected,
     "平台技能与 vendor 技能必须齐装;少一个等于 Agent 少一条行为规矩");
@@ -54,8 +55,8 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
 });
 
 test("技能源目录分类层(2026-09-04):递归发现、物化平铺、重名 fail-loud", () => {
-  const source = mkdtempSync(join(tmpdir(), "mfc-issue-skills-src-"));
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-nest-"));
+  const source = mfcTemp("mfc-issue-skills-src-");
+  const workspace = mfcTemp("mfc-issue-skills-nest-");
   const write = (rel: string, name: string) => {
     const dir = join(source, rel);
     mkdirSync(dir, { recursive: true });
@@ -92,7 +93,7 @@ test("技能源目录分类层(2026-09-04):递归发现、物化平铺、重名 
 });
 
 test("环境保险箱:API 引用无密码、宿主可解密、文件不是明文", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vault-"));
+  const dataDir = mfcTemp("mfc-issue-vault-");
   const vault = new IssueEnvironmentVault(dataDir);
   const refs = vault.store("issue-1", [{
     name: "灰度 A",
@@ -122,7 +123,7 @@ test("环境保险箱:API 引用无密码、宿主可解密、文件不是明文
 });
 
 test("环境保险箱:混合用途(both)按 playbook 契约放行,任务号与问题号同区不碰撞", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vault-both-"));
+  const dataDir = mfcTemp("mfc-issue-vault-both-");
   const vault = new IssueEnvironmentVault(dataDir);
   const refs = vault.store("issue-2", [{
     name: "共用环境",

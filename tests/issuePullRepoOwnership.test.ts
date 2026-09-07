@@ -24,6 +24,7 @@ import {
   type IssueSessionState,
 } from "../src/issueFlow/state.ts";
 import { HumanGate } from "../src/humanGate.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -131,7 +132,7 @@ function currentBranchOf(repoDir: string): string {
 }
 
 test("root 形态:pull_repo 克隆+宿主切分支后,整树含 .git 交回容器 uid:gid", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-clone-owner-"));
+  const dataDir = mfcTemp("mfc-issue-clone-owner-");
   const origin = bareOrigin(dataDir);
   const owner = containerOwner();
   const service = new IssueFlowService({
@@ -160,7 +161,7 @@ test("root 形态:pull_repo 克隆+宿主切分支后,整树含 .git 交回容�
 });
 
 test("存量 root 仓(cloned=false):pull_repo 不克隆也把整树交接修好", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-legacy-owner-"));
+  const dataDir = mfcTemp("mfc-issue-legacy-owner-");
   const origin = bareOrigin(dataDir);
   const owner = containerOwner();
   const service = new IssueFlowService({
@@ -195,7 +196,7 @@ test("存量 root 仓(cloned=false):pull_repo 不克隆也把整树交接修好"
 });
 
 test("属主收口必须压在整个宿主 git 写之后:探针炸出时序倒置", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-owner-order-"));
+  const dataDir = mfcTemp("mfc-issue-owner-order-");
   const origin = bareOrigin(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
@@ -222,8 +223,8 @@ test("属主收口必须压在整个宿主 git 写之后:探针炸出时序倒�
 });
 
 test("非 root 宿主或缺 isolation.user:pull_repo 照常,属主原样保留", async () => {
-  const dataDirA = mkdtempSync(join(tmpdir(), "mfc-issue-owner-guard-"));
-  const dataDirB = mkdtempSync(join(tmpdir(), "mfc-issue-owner-guard2-"));
+  const dataDirA = mfcTemp("mfc-issue-owner-guard-");
+  const dataDirB = mfcTemp("mfc-issue-owner-guard2-");
   const origin = bareOrigin(dataDirA);
   const hostUid = process.getuid?.();
   // 形态一:isolation 在场但宿主不是 root(守卫返回 false,零副作用)。

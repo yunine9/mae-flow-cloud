@@ -28,6 +28,7 @@ import {
   reclaimIssueWorkspaces,
   reclaimIssueWorkspace,
 } from "../src/issueFlowWorkspaceReclaim.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse("2026-09-03T12:00:00Z");
@@ -88,7 +89,7 @@ function sessionRoot(
 }
 
 function newDataDir(): string {
-  return mkdtempSync(join(tmpdir(), "mfc-issue-reclaim-"));
+  return mfcTemp("mfc-issue-reclaim-");
 }
 
 /** 带一个过期归档会话的 dataDir(默认场景,各用例再改状态/时间)。 */
@@ -218,7 +219,7 @@ test("issues/ 下的软链接不许绕过边界:realpath 在外面就一个字�
   // 2026-08-22 同款教训:readdir 看着在 dataDir 里,realpath 一解在外面,
   // 删的是原件。删除动作必须自己验边界。
   const dataDir = newDataDir();
-  const outside = mkdtempSync(join(tmpdir(), "mfc-issue-outside-"));
+  const outside = mfcTemp("mfc-issue-outside-");
   writeFileSync(join(outside, "issue.json"), JSON.stringify({
     id: "issue-9", status: "archived",
     conclusion: { kind: "fixed", summary: "", at: daysAgo(20) },

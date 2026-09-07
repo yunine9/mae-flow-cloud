@@ -23,6 +23,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import type { IssueFlowOptions } from "../src/issueFlow/service.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS2026082001317";
 const BRANCH = `master_dev_${TICKET}`;
@@ -114,7 +115,7 @@ function pushReceipts(dataDir: string, id: string): Array<{
 }
 
 test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成功→令牌消费→再推重新被拦", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushconfirm-"));
+  const dataDir = mfcTemp("mfc-issue-pushconfirm-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -233,7 +234,7 @@ test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成�
 });
 
 test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立卡面)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushhold-"));
+  const dataDir = mfcTemp("mfc-issue-pushhold-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -282,7 +283,7 @@ test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立
 
 test("过目关/回调缺席:push_branch 直推,行为与现状一致", async () => {
   for (const label of ["回调缺席", "显式关"] as const) {
-    const dataDir = mkdtempSync(join(tmpdir(), `mfc-issue-pushoff-${label}-`));
+    const dataDir = mfcTemp(`mfc-issue-pushoff-${label}-`);
     const origin = bareOrigin(dataDir);
     const script: Scene[] = [
       { tool: { name: "pull_repo", input: { url: origin } } },
@@ -316,7 +317,7 @@ test("过目关/回调缺席:push_branch 直推,行为与现状一致", async ()
 });
 
 test("月光开:push_confirm 闸不被自动作答(显式守卫,永等真人)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushmoon-"));
+  const dataDir = mfcTemp("mfc-issue-pushmoon-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -352,7 +353,7 @@ test("月光开:push_confirm 闸不被自动作答(显式守卫,永等真人)", 
 });
 
 test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成功", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushrestart-"));
+  const dataDir = mfcTemp("mfc-issue-pushrestart-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -415,7 +416,7 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
 });
 
 test("过目开:确认后又有新提交,重推对不上过目 tip 即作废重举(防盲签完整形态)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushstale-"));
+  const dataDir = mfcTemp("mfc-issue-pushstale-");
   const origin = bareOrigin(dataDir);
   // 第二笔提交:不再建分支(首笔已建),直接在 BRANCH 上加新文件。
   const COMMIT2 = `cd repo/origin && printf 'more\\n' > second.txt && `

@@ -19,6 +19,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
 const LINK_BASE = "https://mfc.example.com";
@@ -76,7 +77,7 @@ test("Agent 举卡等决策:通知归属用户,载荷钉死;恢复不重复,正�
   const luban = new FakeLubanServer();
   await luban.start();
   const notifier = makeNotifier(luban);
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-notify-"));
+  const dataDir = mfcTemp("mfc-issue-notify-");
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     // linkBase 带尾斜杠:链接拼接必须归一,不出现双斜杠。
@@ -153,7 +154,7 @@ test("平台闸卡:通知用人话 label 不带决策码,waiting_id 用 gate.id"
   await luban.start();
   const notifier = makeNotifier(luban);
   const service = new IssueFlowService({
-    ...baseOptions(mkdtempSync(join(tmpdir(), "mfc-issue-notify-")), model),
+    ...baseOptions(mfcTemp("mfc-issue-notify-"), model),
     notifier,
     linkBase: LINK_BASE,
   });
@@ -206,7 +207,7 @@ test("notifier 缺席(未配置):举卡照常等待,不炸不通知", async () =
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
-    ...baseOptions(mkdtempSync(join(tmpdir(), "mfc-issue-notify-")), model),
+    ...baseOptions(mfcTemp("mfc-issue-notify-"), model),
   });
   try {
     const created = service.create({

@@ -26,6 +26,7 @@ import {
   type LubanApprovalService,
 } from "../src/lubanApproval.ts";
 import type { TaskSummary } from "../src/taskService.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
 const TOKEN = "test-luban-plugin-token-32-bytes-minimum";
@@ -81,7 +82,7 @@ async function makeService(
   notifier: Notifier,
 ) {
   const service = new IssueFlowService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-issue-luban-")),
+    dataDir: mfcTemp("mfc-issue-luban-"),
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),

@@ -44,6 +44,7 @@ import type {
   IssueSummary,
   IssueWaitingCard,
 } from "../web/src/api.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 // ---- 契约对比器 ----
 
@@ -266,7 +267,7 @@ class GreenPlatform {
 // ---- 期望侧样例:每个字段都对照 web/src/api.ts 手写(漂移 tsc 红) ----
 
 test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑绿收口)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract-"));
+  const dataDir = mfcTemp("mfc-issue-contract-");
   const origin = bareOrigin(dataDir);
   const platform = new GreenPlatform();
   await platform.start();
@@ -434,7 +435,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
 });
 
 test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract2-"));
+  const dataDir = mfcTemp("mfc-issue-contract2-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -553,7 +554,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       }
     }
   }
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract-gate-"));
+  const dataDir = mfcTemp("mfc-issue-contract-gate-");
   const origin = bareOrigin(dataDir);
   const platform = new RedPlatform();
   await platform.start();
@@ -637,7 +638,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
 });
 
 test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract3-"));
+  const dataDir = mfcTemp("mfc-issue-contract3-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
@@ -788,7 +789,7 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
     }
   }
   const service = new IssueFlowService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-issue-contract4-")),
+    dataDir: mfcTemp("mfc-issue-contract4-"),
     provider: "p", model: "m", modelsJson: {},
   });
   const briefSample: DtsTicketBrief = {
@@ -828,7 +829,7 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
 });
 
 test("契约快照:POST /issues 登记新 wire 形(四件套过线,页面账号回执、密码只回引用)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract5-"));
+  const dataDir = mfcTemp("mfc-issue-contract5-");
   createBusinessModule(dataDir, {
     id: "pay-core", name: "支付核心", description: "收单与清结算",
     owner: "dev", repositories: ["/tmp/fixture.git"],

@@ -25,6 +25,7 @@ import {
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { issueFixedOpeningPrompt } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
 const SKILL_PATH = "repo/origin/.cac/skills/login-triage/SKILL.md";
@@ -128,7 +129,7 @@ function chainScenes(origin: string): Scene[] {
 }
 
 async function runToAnalysisConfirm(origin: string, moonlight: boolean) {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-find-"));
+  const dataDir = mfcTemp("mfc-issue-skill-find-");
   const script = chainScenes(origin);
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -150,7 +151,7 @@ async function runToAnalysisConfirm(origin: string, moonlight: boolean) {
 }
 
 test("月光关+仓内有 skill:入口不举卡,扫描清单留痕转移账,直达报告确认", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-note-"));
+  const dataDir = mfcTemp("mfc-issue-skill-note-");
   const origin = bareOrigin(dataDir, true);
   const { model, service, id, confirmed } =
     await runToAnalysisConfirm(origin, false);
@@ -173,7 +174,7 @@ test("月光关+仓内有 skill:入口不举卡,扫描清单留痕转移账,直�
 });
 
 test("扫描为空:留「未发现」账,不举卡", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-empty-"));
+  const dataDir = mfcTemp("mfc-issue-skill-empty-");
   const origin = bareOrigin(dataDir, false);
   const { model, service, id, confirmed } =
     await runToAnalysisConfirm(origin, false);
@@ -188,7 +189,7 @@ test("扫描为空:留「未发现」账,不举卡", async () => {
 });
 
 test("两目录同名:.cac 胜出,同名跳过留告警", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-dup-"));
+  const dataDir = mfcTemp("mfc-issue-skill-dup-");
   const origin = bareOriginWithSkills(dataDir, ["login-triage"], ["login-triage"]);
   const { model, service, confirmed } =
     await runToAnalysisConfirm(origin, false);
@@ -208,7 +209,7 @@ test("两目录同名:.cac 胜出,同名跳过留告警", async () => {
 });
 
 test("仅 .agents/skills 有技能:补位进扫描账", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-agents-"));
+  const dataDir = mfcTemp("mfc-issue-skill-agents-");
   const origin = bareOriginWithSkills(dataDir, [], ["agents-only"]);
   const { model, service, confirmed } =
     await runToAnalysisConfirm(origin, false);
@@ -223,7 +224,7 @@ test("仅 .agents/skills 有技能:补位进扫描账", async () => {
 });
 
 test("存量挂起圈选卡仍可作答:清单外拒绝,正式勾选落台账清闸", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-skill-legacy-"));
+  const dataDir = mfcTemp("mfc-issue-skill-legacy-");
   const origin = bareOrigin(dataDir, true);
   const now = new Date().toISOString();
   const root = join(dataDir, "issues", "issue-1");
@@ -318,7 +319,7 @@ test("提示层:存量台账的必读清单仍随 analyze 开场词注入", () =
 test("业务 skill 扫描分类层(2026-09-04):嵌套发现、包内不递归、根缺席零发现", () => {
   // discoverBusinessSkillDirs 是扫描的原语(公开导出供契约测试):
   // 目录直接含 SKILL.md 即技能,分类层只是组织;包原子,不进包内找。
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-skill-nest-"));
+  const root = mfcTemp("mfc-issue-skill-nest-");
   const skillsRoot = join(root, ".cac", "skills");
   const write = (rel: string) => {
     const dir = join(skillsRoot, rel);

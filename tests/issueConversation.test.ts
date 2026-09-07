@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { issueConversation } from "../src/issueFlow/conversation.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 let seq = 0;
 function ev(kind: string, payload: Record<string, unknown> = {}, ts?: string) {
@@ -176,7 +177,7 @@ test("坏账容忍:未知事件跳过,投影不炸", () => {
 });
 
 test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为 waiting 卡", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-conv-svc-"));
+  const dataDir = mfcTemp("mfc-issue-conv-svc-");
   const origin = join(dataDir, "origin.git");
   execFileSync("git", ["init", "--bare", "-q", origin]);
   const model = new ScriptedModelServer([

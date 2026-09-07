@@ -246,7 +246,7 @@ test("问题时间线归纳(纯函数):waiting_user 未决段以 now 封口;坏�
 });
 
 test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问答投影 fail-open", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-view-"));
+  const dataDir = mfcTemp("mfc-issue-view-");
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
     id: "issue-1", account: "dev",
@@ -306,6 +306,7 @@ import {
   McpGateway,
   UnconfiguredDtsGateway,
 } from "../src/issueFlow/gateways.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -341,7 +342,7 @@ async function until<T>(
 }
 
 test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无内核参与)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-flow2-"));
+  const dataDir = mfcTemp("mfc-issue-flow2-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "bash", input: { command:
@@ -456,7 +457,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
 });
 
 test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-create-fixed-"));
+  const dataDir = mfcTemp("mfc-issue-create-fixed-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [{ text: "收到,先做初步排查。" }];
   const model = new ScriptedModelServer(script);
@@ -536,7 +537,7 @@ test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧
 });
 
 test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-gate-"));
+  const dataDir = mfcTemp("mfc-issue-gate-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -588,7 +589,7 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
 });
 
 test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付同格式)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-push-"));
+  const dataDir = mfcTemp("mfc-issue-push-");
   const origin = bareOrigin(dataDir);
   const branch = "master_dev_DTS2026082001317";
   // 假交付平台:记录请求形状,回 MR 链接——与适配层 POST /mr 同构。
@@ -700,7 +701,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
 });
 
 test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover-"));
+  const dataDir = mfcTemp("mfc-issue-recover-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
@@ -787,7 +788,7 @@ function seedRecoverableIssue(
 }
 
 test("正式启动可延后恢复；取消必须等容器确认删除，失败保留句柄可重试", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-cleanup-"));
+  const dataDir = mfcTemp("mfc-issue-cleanup-");
   seedRecoverableIssue(dataDir, "issue-1", { status: "waiting_user" });
   seedRecoverableIssue(dataDir, "issue-2", { status: "waiting_user" });
   seedRecoverableIssue(dataDir, "issue-3", { status: "waiting_user" });
@@ -866,7 +867,7 @@ test("failed 会话的唯一出路是取消:归档被明确拒绝,取消清理�
   // 2026-09-02 用户实锤:failed 曾是死胡同终态——不能续聊、按钮全灰,
   // 出错的会话永远占着"进行中"列表。出口定为取消(归档需要结论,结论
   // 词表里没有"失败"语义)。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-failed-exit-"));
+  const dataDir = mfcTemp("mfc-issue-failed-exit-");
   seedRecoverableIssue(dataDir, "issue-1", { status: "failed" });
   seedRecoverableIssue(dataDir, "issue-2", { status: "failed" });
   const service = new IssueFlowService({
@@ -890,7 +891,7 @@ test("failed 会话的唯一出路是取消:归档被明确拒绝,取消清理�
 });
 
 test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));
+  const dataDir = mfcTemp("mfc-issue-recover2-");
   // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版
   // interrupted 已不在词表里,夹具按盘上原样写(旧版本盖的戳)。
   seedRecoverableIssue(dataDir, "issue-1", { status: "running" });
@@ -955,7 +956,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
 });
 
 test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上下文,事件流留痕", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-resume-"));
+  const dataDir = mfcTemp("mfc-issue-resume-");
   seedRecoverableIssue(dataDir, "issue-1", {
     title: "登录超时", status: "running",
   });
@@ -992,7 +993,7 @@ test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上
 });
 
 test("恢复续跑受并发额度约束:超出 maxConcurrentTurns 的会话排队逐个跑,不瞬时打满", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-quota-"));
+  const dataDir = mfcTemp("mfc-issue-quota-");
   for (const id of ["issue-1", "issue-2", "issue-3"]) {
     seedRecoverableIssue(dataDir, id, { status: "running" });
   }
@@ -1023,7 +1024,7 @@ test("恢复续跑受并发额度约束:超出 maxConcurrentTurns 的会话排�
 });
 
 test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文,AI 看到的仍是自己的措辞", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-agentcode-"));
+  const dataDir = mfcTemp("mfc-issue-agentcode-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
@@ -1085,7 +1086,7 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
 });
 
 test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题各自独立,开放题不带", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recommend-"));
+  const dataDir = mfcTemp("mfc-issue-recommend-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [
       { question: "影响范围?", options: ["仅 SMS ", "全部渠道"],
@@ -1142,7 +1143,7 @@ test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题
 });
 
 test("问题流专用部署(--issue-only):需求流程停用,问题流不受影响", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-only-"));
+  const dataDir = mfcTemp("mfc-issue-only-");
   const service = new TaskService({
     dataDir, provider: "p", model: "m", modelsJson: {}, maxConcurrent: 1,
     requirementDisabled: true,
@@ -1352,7 +1353,7 @@ test("MCP 网关客户端:握手、token 头、工具调用与未配置 fail-lou
 });
 
 test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码进 vault 不进 issue.json;缺地址/缺密码打回", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envroute-"));
+  const dataDir = mfcTemp("mfc-issue-envroute-");
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
     id: "issue-1", account: "dev",
@@ -1406,7 +1407,7 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
 });
 
 test("网管环境拒绝路由(票 93):POST /issues/:id/environment 的 decline 分支清闸回落;闸不在场 409 如实打回", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-route-"));
+  const dataDir = mfcTemp("mfc-issue-envdecline-route-");
   const now = "2026-09-03T00:00:00Z";
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
@@ -1505,7 +1506,7 @@ test("现场记录导出·纯构建器:工具命令/结果/决策逐字保真,�
 });
 
 test("现场记录导出·路由:markdown 直出、坏行跳过、未知问题 404", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-export-"));
+  const dataDir = mfcTemp("mfc-issue-export-");
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
     id: "issue-1", account: "dev",
@@ -1570,7 +1571,7 @@ test("现场记录导出·路由:markdown 直出、坏行跳过、未知问题 4
 });
 
 test("问题单并发数走管理页旋钮:额度现读,排队会话在额度腾出后补位", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget-"));
+  const dataDir = mfcTemp("mfc-issue-budget-");
   // 纯文本剧本(非 linear 按工具回执数取幕):两个会话各自一轮收口。
   const model = new ScriptedModelServer([{ text: "收到,先做初步分析。" }]);
   await model.start();

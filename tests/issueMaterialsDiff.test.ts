@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -100,7 +101,7 @@ function seedTwoRepoSession(dataDir: string): { id: string; service: IssueFlowSe
 }
 
 test("材料 diff 契约:无参数聚合带仓库分段标记,内容跨仓齐", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-all-"));
+  const dataDir = mfcTemp("mfc-issue-diff-all-");
   const { id, service } = seedTwoRepoSession(dataDir);
   try {
     const got = await issueGet(["issues", id, "materials", "diff"],
@@ -117,7 +118,7 @@ test("材料 diff 契约:无参数聚合带仓库分段标记,内容跨仓齐", 
 });
 
 test("材料 diff 契约:?repo= 只回该仓,无分段标记", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-repo-"));
+  const dataDir = mfcTemp("mfc-issue-diff-repo-");
   const { id, service } = seedTwoRepoSession(dataDir);
   try {
     const got = await issueGet(["issues", id, "materials", "diff"],
@@ -181,7 +182,7 @@ function seedCommittedSession(dataDir: string): {
 }
 
 test("问题修改已提交,工作区变更仍可见(基线口径,对齐需求侧)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-commit-"));
+  const dataDir = mfcTemp("mfc-issue-diff-commit-");
   const { id, service } = seedCommittedSession(dataDir);
   try {
     const diff = await issueGet(["issues", id, "materials", "diff"],
@@ -205,7 +206,7 @@ test("问题修改已提交,工作区变更仍可见(基线口径,对齐需求�
 });
 
 test("材料 diff 契约:仓名不匹配关联仓 → 400 带人话,不兜底到首仓", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-bad-"));
+  const dataDir = mfcTemp("mfc-issue-diff-bad-");
   const { id, service } = seedTwoRepoSession(dataDir);
   try {
     const got = await issueGet(["issues", id, "materials", "diff"],

@@ -32,6 +32,7 @@ import { StateConflictError } from "../src/humanGate.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import type { DtsGateway } from "../src/issueFlow/gateways.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 test("映射表直测:每族域错误对应确定的 HTTP 码,未登记的族不猜", () => {
   const notFound = toHttpError(new IssueNotFoundError("issue-1"));
@@ -139,7 +140,7 @@ function seedSuspendedSession(dataDir: string): void {
 }
 
 test("DTS 网关查询失败:拉单/详情/图代理/关联转正四条路同码 502", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-err-502-"));
+  const dataDir = mfcTemp("mfc-issue-err-502-");
   seedSuspendedSession(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
@@ -172,7 +173,7 @@ test("DTS 网关查询失败:拉单/详情/图代理/关联转正四条路同码
 });
 
 test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-err-409-"));
+  const dataDir = mfcTemp("mfc-issue-err-409-");
   seedSuspendedSession(dataDir);
   // 服务与路由都不给网关:路由走 requireDts 守卫,服务走 associate 的
   // 未配置档——两处都必须是 DtsGatewayUnconfiguredError(409)。
@@ -203,7 +204,7 @@ test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功
 });
 
 test("既有族不漂移:404/409/材料层 400 逐分支保持", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-err-keep-"));
+  const dataDir = mfcTemp("mfc-issue-err-keep-");
   seedSuspendedSession(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
