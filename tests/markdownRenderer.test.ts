@@ -70,3 +70,12 @@ test("CHAIN 的共同修订标记参与摘要但不显示给检视人", () => {
   assert.match(html, /<div class="md-heading md-h1" data-l="2">模块拆分方案<\/div>/);
   assert.match(html, />正文</);
 });
+
+
+test("代码块和引用内部原文行可定位；表格头部优先定位到行而非整表", () => {
+  const text = "```ts\nconst a = 1;\nconst b = 2;\n```\n> 第一行\n> 第二行\n\n    代码甲\n    代码乙";
+  const html = renderToStaticMarkup(React.createElement(Markdown, { text }));
+  assert.match(html, /class="md-block-code" data-l="1" data-line-end="4"/);
+  assert.match(html, /class="md-block-code" data-l="8" data-line-end="9"/);
+  assert.match(html, /class="md-p" data-l="6">第二行/);
+});

@@ -84,7 +84,7 @@ test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () =
 
 test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(workspace, /check\?\.state === "gone"/);
-  assert.match(workspace, /批注位置已变化/);
+  assert.match(workspace, /批注定位/);
   assert.match(workspace, /已不在当前版本/);
   assert.match(css, /\.annotation-location-notice\s*\{/);
 });

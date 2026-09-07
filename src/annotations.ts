@@ -18,6 +18,7 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { isReviewAssetPath } from "./reviewAssets.ts";
+import { annotationDiffLines } from "./annotationDiffLines.ts";
 
 /**
  * 需求原文来自任务快照，不是 .mae-flow-work 下的真实产物。批注仍需一个
@@ -199,6 +200,8 @@ export interface AnchorCheck {
   line?: number;
   /** 完整划选原文仍在时，当前选区末行；不能只平移旧选区的长度。 */
   line_end?: number;
+  /** 旁路放行不等于位置已验证；前端不得拿历史行号强行跳转。 */
+  location_verified?: boolean;
   /** 靶子已变时的现状原文,让人自己判断这条还要不要送。 */
   now?: string;
 }
@@ -774,14 +777,14 @@ function normalize(text: string): string {
 }
 
 export function reanchor(
-  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line" | "quote" | "line_end">>,
+  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line" | "quote" | "line_end"> & { file?: string }>,
   read: (artifact: string) => string | undefined,
 ): AnchorCheck[] {
   const cache = new Map<string, string[] | undefined>();
   const linesOf = (artifact: string): string[] | undefined => {
     if (!cache.has(artifact)) {
       const text = read(artifact);
-      cache.set(artifact, text === undefined ? undefined : text.split("\n"));
+      cache.set(artifact, text === undefined ? undefined : text.split(/\r\n|[\n\r\u2028\u2029]/));
     }
     return cache.get(artifact);
   };
@@ -789,14 +792,34 @@ export function reanchor(
     const lines = linesOf(item.artifact);
     // 读不到产物不等于靶子没了(可能是权限/路径问题),按 hit 放行——
     // 旁路一律 fail-open,重锚定绝不能挡住人送出意见。
-    if (!lines) return { id: item.id, state: "hit", line: item.line };
+    if (!lines) return { id: item.id, state: "hit", line: item.line, location_verified: false };
+    if (item.file && lines.some((line) => line.startsWith("diff --git "))) {
+      const projected = annotationDiffLines(lines.join("\n"), item.file);
+      const [check] = reanchor([{ ...item, file: undefined }], () => projected.text);
+      const line = check.line && projected.numbers[check.line - 1];
+      if (!line || check.location_verified === false) {
+        // diff 不包含全文；找不到可能只是移出了 hunk，不能据此宣告原文已删。
+        return { id: item.id, state: "hit", location_verified: false };
+      }
+      return { ...check, line,
+        state: check.state === "ambiguous" ? "ambiguous" : line === item.line ? "hit" : "moved",
+        ...(check.line_end ? { line_end: projected.numbers[check.line_end - 1] } : {}) };
+    }
+    if (item.artifact === REQUIREMENT_GRAPH_ARTIFACT) {
+      const module = item.anchor.match(/^模块 (.+?)：/);
+      if (module) {
+        const line = lines.findIndex((row) => row.startsWith(`模块 ${module[1]}：`)) + 1;
+        return line ? { id: item.id, state: line === item.line ? "hit" : "moved", line }
+          : { id: item.id, state: "gone" };
+      }
+    }
     // 空行/图块的锚点是"第 N 行"占位文本(人指的是位置不是文字),
     // 源文件里当然没有这串字——按位置放行,别把它判成"原文已删除"。
     if (/^第 \d+ 行$/.test(item.anchor)) {
-      return { id: item.id, state: "hit", line: item.line };
+      return { id: item.id, state: "hit", line: item.line, location_verified: false };
     }
     const needle = normalize(item.anchor);
-    if (!needle) return { id: item.id, state: "hit", line: item.line };
+    if (!needle) return { id: item.id, state: "hit", line: item.line, location_verified: false };
     // 表头在长文档里经常重复。划选正文能区分“哪张表”，不能只搜表头
     // 然后退回历史行号。分隔线不显示在页面上，全文匹配也必须跳过它。
     const normalizedLines = lines.map((line) => /^\s*\|[\s:|-]+\|\s*$/.test(line) ? "" : normalize(line));

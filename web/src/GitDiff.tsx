@@ -171,7 +171,7 @@ function foldedRows(
   return { entries, hidden };
 }
 
-function DiffCellView({ cell }: { cell?: DiffCell }) {
+function DiffCellView({ cell, side }: { cell?: DiffCell; side: "old" | "new" }) {
   const mark = cell?.kind === "added" ? "+"
     : cell?.kind === "removed" ? "−" : "";
   const text = cell?.text ?? "";
@@ -179,8 +179,8 @@ function DiffCellView({ cell }: { cell?: DiffCell }) {
   // 词级高亮:mark 元素不改变 textContent,批注取 [data-code] 原文
   // 与整行文本完全一致,锚定比对不受影响。
   const body = to > from
-    ? <span data-code>{text.slice(0, from)}<mark>{text.slice(from, to)}</mark>{text.slice(to)}</span>
-    : <span data-code>{text}</span>;
+    ? <span data-code data-code-side={side}>{text.slice(0, from)}<mark>{text.slice(from, to)}</mark>{text.slice(to)}</span>
+    : <span data-code data-code-side={side}>{text}</span>;
   return (
     <div className={`diff-cell ${cell?.kind ?? "empty"}`}>
       <span className="diff-line-number">{cell?.number ?? ""}</span>
@@ -210,6 +210,7 @@ export function GitDiff({
   scopeLabel,
   focusRequest = 0,
   embeddedBrowser = false,
+  annotationLocation,
 }: {
   text: string;
   branch?: string;
@@ -240,6 +241,8 @@ export function GitDiff({
   focusRequest?: number;
   /** Keep the full file tree and diff in the workspace instead of opening a modal. */
   embeddedBrowser?: boolean;
+  /** 从检视意见进入时显式选择文件，并展开被折叠的目标行。 */
+  annotationLocation?: { file: string; request: number };
 }) {
   const baseFiles = useMemo(() => filesForDiff(text, manifest), [text, manifest]);
   const directoryRoots = useMemo(() => [...new Map(
@@ -502,7 +505,8 @@ export function GitDiff({
       setSelected(visibleFiles[0]?.key ?? "");
     }
   }, [visibleFiles, selected]);
-  const active = visibleFiles.find((file) => file.key === selected)
+  const requestedFile = annotationLocation && files.find((file) => file.path === annotationLocation.file);
+  const active = requestedFile ?? visibleFiles.find((file) => file.key === selected)
     ?? visibleFiles[0];
   useEffect(() => {
     if (active?.path) onFileSelect?.(active.path);
@@ -517,9 +521,17 @@ export function GitDiff({
     [active],
   );
   const folded = useMemo(
-    () => foldedRows(reviewRows, expanded, showAll),
-    [reviewRows, expanded, showAll],
+    () => foldedRows(reviewRows, expanded, showAll || Boolean(requestedFile)),
+    [reviewRows, expanded, showAll, requestedFile],
   );
+  useEffect(() => {
+    if (requestedFile) {
+      setSelected(requestedFile.key); setShowAll(true);
+      setHiddenPaths((current) => new Set([...current].filter((path) => path !== requestedFile.path)));
+      setHiddenDirectories((current) => new Set([...current]
+        .filter((path) => !requestedFile.path.startsWith(`${path}/`))));
+    }
+  }, [requestedFile?.key, annotationLocation?.request]);
   const lineCount = reviewRows.reduce((largest, row) => row.type === "line"
     ? Math.max(largest, row.next?.number ?? row.old?.number ?? 0)
     : largest, 0);
@@ -1103,8 +1115,8 @@ export function GitDiff({
                   return (
                     <div className="diff-review-row" key={`line:${index}`}
                       {...(at ? { "data-l": at } : {})}>
-                      <DiffCellView cell={row.old} />
-                      <DiffCellView cell={row.next} />
+                      <DiffCellView cell={row.old} side="old" />
+                      <DiffCellView cell={row.next} side="new" />
                     </div>
                   );
                 })}

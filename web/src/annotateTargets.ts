@@ -30,13 +30,34 @@ export const ANCHOR_MAX = 90;
 /** 没找到、匹配多处或尚未取得检查结果，都不能拿历史行号冒充当前位置。 */
 export function resolvedAnnotationRange(
   item: { line: number; line_end?: number },
-  check?: { state: string; line?: number; line_end?: number },
+  check?: { state: string; line?: number; line_end?: number; location_verified?: boolean },
 ): { line: number; lineEnd: number } | undefined {
-  if (!check || !["hit", "moved"].includes(check.state)
+  if (!check || check.location_verified === false || !["hit", "moved"].includes(check.state)
       || !Number.isSafeInteger(check.line) || check.line! < 1) return undefined;
   const line = check.line!;
   return { line, lineEnd: check.line_end && check.line_end >= line
     ? check.line_end : line + Math.max(0, (item.line_end ?? item.line) - item.line) };
+}
+
+/** 按源文件范围找渲染块；代码/图表内部行归属于整个块。禁止猜最近一行。 */
+export function annotationLocationRow<T extends Pick<RowNode, "dataset" | "closest">>(
+  rows: readonly T[], line: number, file?: string,
+): T | undefined {
+  return rows.filter((row) => {
+    const start = Number(row.dataset.l);
+    const end = Number(row.dataset.lineEnd ?? row.dataset.l);
+    return start <= line && line <= end
+      && (file === undefined || row.closest("[data-file]")?.dataset.file === file);
+  }).sort((a, b) => {
+    const span = (row: T) => Number(row.dataset.lineEnd ?? row.dataset.l) - Number(row.dataset.l);
+    return span(a) - span(b);
+  })[0];
+}
+
+/** 模块名可改，稳定身份来自模块 ID；依赖由两端 ID 定位。 */
+export function graphAnnotationLocationKey(anchor: string): string {
+  return anchor.match(/^模块 (.+?)：/)?.[1]
+    ? `module:${anchor.match(/^模块 (.+?)：/)![1]}` : anchor;
 }
 
 export interface MaterialAnnotation {
@@ -63,7 +84,7 @@ export function annotationsAtRow<T extends MaterialAnnotation>(
  * 是脏原文,回头重锚定一比一个不中)。空内容不再判死:空行也能圈,
  * 锚点退回"第 N 行"——人指的是位置,不一定是文字。 */
 export function anchorOf(row: RowNode, line: number): string {
-  const content = row.querySelector("[data-code]") ?? row;
+  const content = row.querySelector('[data-code-side="new"]') ?? row.querySelector("[data-code]") ?? row;
   const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
   if (!text) return `第 ${line} 行`;
   return text.length > ANCHOR_MAX ? text.slice(0, ANCHOR_MAX) : text;

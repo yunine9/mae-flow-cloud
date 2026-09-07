@@ -101,14 +101,14 @@ export function Markdown({
       }
       if (index < lines.length) index += 1;
       blocks.push(language === "plantuml"
-        ? <div key={key++} className="md-uml" data-l={at}>
+        ? <div key={key++} className="md-uml" data-l={at} data-line-end={index}>
             <PlantUml source={source.join("\n")} />
           </div>
         : language === "mermaid"
-          ? <div key={key++} className="md-uml" data-l={at}>
+          ? <div key={key++} className="md-uml" data-l={at} data-line-end={index}>
               <MermaidFlow source={source.join("\n")} />
             </div>
-        : <pre key={key++} className="md-block-code" data-l={at}>
+        : <pre key={key++} className="md-block-code" data-l={at} data-line-end={index}>
             <code>{source.join("\n")}</code>
           </pre>);
       continue;
@@ -125,7 +125,7 @@ export function Markdown({
       }
       const [head, ...body] = rows;
       blocks.push(
-        <table key={key++} className="md-table" data-l={at}>
+        <table key={key++} className="md-table" data-l={at} data-line-end={index}>
           {head && (
             <thead><tr data-l={head.at}>
               {head.cells.map((cell, i) => <th key={i}>{inline(cell, resolveImage)}</th>)}
@@ -199,8 +199,8 @@ export function Markdown({
         index += 1;
       }
       blocks.push(
-        <blockquote key={key++} className="md-quote" data-l={at}>
-          {quoted.map((row, i) => <p key={i} className="md-p">{inline(row, resolveImage)}</p>)}
+        <blockquote key={key++} className="md-quote" data-l={at} data-line-end={index}>
+          {quoted.map((row, i) => <p key={i} className="md-p" data-l={at + i}>{inline(row, resolveImage)}</p>)}
         </blockquote>);
       continue;
     }
@@ -228,7 +228,7 @@ export function Markdown({
         index += 1;
       }
       blocks.push(
-        <pre key={key++} className="md-block-code" data-l={at}>
+        <pre key={key++} className="md-block-code" data-l={at} data-line-end={index}>
           <code>{source.join("\n")}</code>
         </pre>);
       continue;

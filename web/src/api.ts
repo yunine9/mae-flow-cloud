@@ -2725,6 +2725,7 @@ export interface AnchorCheck {
   id: string;
   state: "hit" | "moved" | "gone" | "ambiguous";
   line_end?: number;
+  location_verified?: boolean;
   line?: number;
   now?: string;
 }

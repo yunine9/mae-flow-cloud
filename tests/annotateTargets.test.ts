@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection, resolvedAnnotationRange,
+  annotationLocationRow, graphAnnotationLocationKey, anchorOf, annotationsAtRow, pickRow, pickRowFromStack, quoteOfSelection, resolvedAnnotationRange,
   QUOTE_MAX, type RowNode,
 } from "../web/src/annotateTargets.ts";
 
@@ -246,4 +246,31 @@ test("落点被覆盖层挡住:沿坐标下的整叠元素穿透找到底下那�
   const foreignRow = node({ tag: "div", line: 5 });
   node({ cls: "other", children: [foreignRow] });
   assert.equal(pickRowFromStack([foreignRow], root, inRoot), undefined);
+});
+
+
+test("文件定位选最小的真实渲染范围，不把缺失行猜成邻近行", () => {
+  const table = node({ line: 4, file: "a" }); table.dataset.lineEnd = "8";
+  const row = node({ line: 6, file: "a" });
+  const code = node({ line: 20, file: "a" }); code.dataset.lineEnd = "28";
+  const other = node({ line: 24, file: "b" });
+  assert.equal(annotationLocationRow([table, row], 6), row);
+  assert.equal(annotationLocationRow([code, other], 24, "a"), code);
+  assert.equal(annotationLocationRow([code], 29), undefined);
+  assert.equal(annotationLocationRow([code], 24, "missing"), undefined);
+  assert.equal(resolvedAnnotationRange({ line: 3 },
+    { state: "hit", line: 3, location_verified: false }), undefined);
+});
+
+test("模块改名后仍用模块 ID 找节点，依赖用两端 ID", () => {
+  assert.equal(graphAnnotationLocationKey("模块 repo-1：旧名字"), "module:repo-1");
+  assert.equal(graphAnnotationLocationKey("模块 repo-1：新名字"), "module:repo-1");
+  assert.equal(graphAnnotationLocationKey("依赖 a -> b"), "依赖 a -> b");
+});
+
+test("双栏代码差异的锚点取新代码，不误取左侧被替换的旧代码", () => {
+  const row = node({ line: 10, text: "old new" });
+  row.querySelector = (selector: string) => node({ text:
+    selector === '[data-code-side="new"]' ? "new();" : "old();" });
+  assert.equal(anchorOf(row, 10), "new();");
 });
