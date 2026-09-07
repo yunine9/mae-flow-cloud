@@ -4426,6 +4426,7 @@ export type ConversationItem =
       annotation: ConversationAnnotationRef; note?: string; returned: number;
     }
   | { kind: "revised"; id: string; ts: string; annotation: ConversationAnnotationRef }
+  | { kind: "delivery_reset"; id: string; ts: string; annotation: ConversationAnnotationRef; reason: string }
   | {
       kind: "external"; id: string; ts: string; source: FeedbackSource;
       author?: string;

@@ -6553,7 +6553,7 @@ export class TaskService {
         backgroundRequirementReview ? (error) => {
           task.summary.detail = `Agent 修改需求失败，意见已恢复待提交：${String(error)}`;
           this.persist(task);
-        } : undefined);
+        } : undefined, sentBy);
       return { sent: picked.map((item) => item.id), text };
     }
     const gap = task.summary.delivery?.evidence_gap;

@@ -178,6 +178,7 @@ type Operation =
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string }
+  | { op: "delivery_reset"; id: string; at: string; reason: string }
   /** 人在澄清卡上答了 Agent 的追问:追问留档带答复,回执清空等新回执。 */
   | { op: "clarified"; id: string; answer: string; at: string; by?: string };
 
@@ -326,18 +327,20 @@ export class AnnotationStore {
         found.response = undefined;
         continue;
       }
-      if (operation.op === "reopen") {
+      if (operation.op === "reopen" || operation.op === "delivery_reset") {
         const found = byId.get(operation.id);
         if (!found) continue;
         found.status = "draft";
         found.rework = (found.rework ?? 0) + 1;
-        found.returned = (found.returned ?? 0) + 1;
+        if (operation.op === "reopen") found.returned = (found.returned ?? 0) + 1;
         found.sent_at = undefined;
         found.sent_via = undefined;
         found.sent_by = undefined;
         found.response = undefined;
         found.owner_reply = undefined;
         found.verified_at = undefined;
+        found.verified_by = undefined;
+        if (operation.op === "delivery_reset") continue;
         if (operation.anchor && operation.anchor !== found.anchor) {
           found.anchor_was = found.anchor;
           found.anchor = operation.anchor;
@@ -476,6 +479,14 @@ export class AnnotationStore {
   markSent(ids: string[], via: SentVia, by?: string): void {
     if (!ids.length) return;
     this.append({ op: "sent", ids, via, at: new Date().toISOString(), by });
+  }
+
+  /** 系统处理失败或重启恢复，不代表作者否定结果；只更新回执版本。 */
+  resetRequirementDelivery(id: string, reason: string): void {
+    const found = this.list().find((item) => item.id === id);
+    if (!found || found.status !== "sent"
+        || !["requirement_queue", "requirement_review"].includes(found.sent_via ?? "")) return;
+    this.append({ op: "delivery_reset", id, at: new Date().toISOString(), reason });
   }
 
   /** 记录 Agent 的逐条回应。只接受已经提交且仍是当前 revision 的意见；

@@ -98,6 +98,7 @@ export type ConversationItem =
       note?: string; returned: number;
     }
   | { kind: "revised"; id: string; ts: string; annotation: AnnotationRef }
+  | { kind: "delivery_reset"; id: string; ts: string; annotation: AnnotationRef; reason: string }
   | {
       kind: "external"; id: string; ts: string; source: string; author?: string;
       items: Array<{
@@ -492,6 +493,15 @@ function fromAnnotations(
       });
       return;
     }
+    if (operation.op === "delivery_reset") {
+      const target = byId.get(operation.id);
+      revision.set(operation.id, (revision.get(operation.id) ?? 0) + 1);
+      wasSent.delete(operation.id);
+      if (target) items.push({ kind: "delivery_reset", id: `delivery-reset-${index}`,
+        ts: normalizeTs(operation.at), annotation: annotationRef(target),
+        reason: clip(operation.reason, NOTE_LIMIT).text });
+      return;
+    }
     if (operation.op === "reopen") {
       const target = byId.get(operation.id);
       revision.set(operation.id, (revision.get(operation.id) ?? 0) + 1);
@@ -576,7 +586,7 @@ export function buildConversation(sources: ConversationSources): ConversationVie
   const rank: Record<ConversationItem["kind"], number> = {
     session: 0, turn: 1, steer: 2, external: 3, card: 4, decision: 5,
     annotations_sent: 6, receipts: 6, owner_reply: 6, clarified: 6,
-    verified: 6, reopened: 6, revised: 6, assistant: 8, sync: 3,
+    verified: 6, reopened: 6, revised: 6, delivery_reset: 6, assistant: 8, sync: 3,
   };
   items.sort((left, right) =>
     (instant(left.ts) - instant(right.ts)) || (rank[left.kind] - rank[right.kind]));

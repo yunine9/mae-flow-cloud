@@ -20,14 +20,19 @@ test("后台接收第一批立即返回；失败后回报原因并恢复全部�
   let calls = 0;
   const run = async () => { calls++; await held; throw new Error("模型网关超时"); };
   try {
-    await submitRequirementReview(task, store, [a], run, observed);
+    await submitRequirementReview(task, store, [a], run, observed, "owner");
     assert.equal(store.list()[0].sent_via, "requirement_review");
+    assert.equal(store.list()[0].sent_by, "owner", "责任人代转应保留实际提交者");
+    assert.equal(store.list()[0].author, "guest");
     await submitRequirementReview(task, store, [b], run, observed);
     assert.equal(store.list()[1].sent_via, "requirement_queue");
     assert.equal(calls, 1);
     release();
     assert.match(String(await failed), /模型网关超时/);
     assert.deepEqual(store.list().map((item) => item.status), ["draft", "draft"]);
+    assert.ok(store.list().every((item) => !item.returned), "系统失败不能增加作者退回次数");
+    assert.ok(store.history().filter((item) => item.op === "delivery_reset").length === 2);
+    assert.ok(!store.history().some((item) => item.op === "reopen"));
     await submitRequirementReview(task, store, store.drafts(), async (batch) => {
       store.markSent(batch.map((item) => item.id), "interrupt");
     });
