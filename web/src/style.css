@@ -11583,3 +11583,16 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .issue-decision.foot-docked > .issue-decision-note:last-child {
   margin-bottom: 14px;
 }
+
+/* ---- 走查反馈(2026-09-07):逐仓交付页签(第 6 签)与空态 ---- */
+.issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(6) {
+  --workspace-tab-color: #7c5cd6;
+}
+.issue-repos-empty {
+  padding: 22px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}

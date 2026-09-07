@@ -568,7 +568,7 @@ function IssueCollaborationComposer({
   return <section className="ws-composer" aria-label="回复与提交">
     <div className="ws-composer-ctx">
       <span className={`ws-composer-mode ${busy ? "quiet" : "active"}`}>
-        {steer ? "插话给正在推进的 Agent" : "补充给 Agent"}
+        {steer ? "说给 Agent · 插话" : "说给 Agent · 续聊"}
       </span>
       <span className="ws-composer-hint">
         {steer ? "不打断当前步骤,Agent 下一步执行前送达"

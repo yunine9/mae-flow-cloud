@@ -390,10 +390,15 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 面板内部的写控件由各自文件的断言钉住(#127 起右栏是协作流)。
   assert.match(sessionView, /<IssueConversationStream[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
-  // 信息面不收:现场直播(SSE)与耗时卡点不带任何归属条件。
-  // (#123 拍平后对话现场是五标签之首,直挂默认分支。)
+  // 信息面不收:现场直播(SSE)不带任何归属条件。耗时卡点已随走查
+  // 反馈移出工作台(2026-09-07,只保留在列表卡展开态);逐仓交付收编
+  // 为「逐仓交付」页签。
+  // (#123 拍平后对话现场是标签之首,直挂默认分支。)
   assert.match(sessionView, /\? <IssueEventsPane id=\{detail\.id\} active \/>/);
-  assert.match(sessionView, /<IssueCostPanel id=\{detail\.id\} \/>/);
+  assert.match(sessionView, /<IssueWorkspaceRepos detail=\{detail\} \/>/);
+  assert.doesNotMatch(sessionView,
+    /<IssueCostPanel id=\{detail\.id\} \/>/,
+    "耗时卡点不再占工作台纵向空间(列表卡展开态仍可用)");
   // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
   assert.match(sessionView,
@@ -575,20 +580,22 @@ test("推送前 UT 纪律:push_branch 描述写明先跑测试全绿再推,开�
     "push_branch 的 description 必须自带推送前跑 UT 的纪律");
 });
 
-// ---- 左栏五标签(#123):材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
+// ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签)
+// ---- 材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
 
-test("左栏五标签(#123):顺序固定、对话现场默认,旧顶层页签引用清零", () => {
+test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 五标签一次成表,顺序即规格:对话现场(默认入口)在首位,其余四签
-  // 是原"材料"面板二级页签的升格——一签一名,不得改名换序。
+  // 六标签一次成表,顺序即规格:对话现场(默认入口)在首位,中间四签
+  // 是原"材料"面板二级页签的升格,逐仓交付收编为末签——一签一名,
+  // 不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
     ["events:对话现场", "dts:DTS单据", "doc:过程文档",
-      "changes:工作区变更", "logs:拉取日志"]);
+      "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(role=tablist),
   // 页签按钮 role=tab + aria-selected。
   assert.match(sessionView,

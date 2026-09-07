@@ -54,16 +54,18 @@ import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 
-/** 左栏五个一级标签(#123 拍平):对话现场是默认入口放首位,其余四签
- * 是原"材料"面板的二级页签升格——顶层"材料/现场"页签与材料面板壳
- * 拆除,两层嵌套拍平(ADR-0018:页签条复用任务侧 ws-pane-head >
- * ws-source-switch 同构,页签一签一色走 --workspace-tab-color)。 */
+/** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
+ * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
+ * (原悬在页签条上方的大卡区,2026-09-07 走查拍板:信息尽可能收进
+ * 页签圈,上方不占纵向空间)。页签条复用任务侧 ws-pane-head >
+ * ws-source-switch 同构,一签一色走 --workspace-tab-color。 */
 const ISSUE_MAIN_TABS = [
   { key: "events", label: "对话现场" },
   { key: "dts", label: "DTS单据" },
   { key: "doc", label: "过程文档" },
   { key: "changes", label: "工作区变更" },
   { key: "logs", label: "拉取日志" },
+  { key: "repos", label: "逐仓交付" },
 ] as const;
 type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
 
@@ -327,19 +329,15 @@ export function IssueSessionView({
             && <button type="button" className="issue-error-action"
               onClick={onNavigateProfile}>去个人设置配置令牌</button>}
         </div>}
-        {/* 逐仓交付区:每个关联仓一张卡(仓名/角色/MR/分支/流水线状态)。
-            事实全部由 perRepo.ts 从 API 字段派生,组件只渲染。 */}
-        <IssueRepoDelivery detail={detail} />
+        {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
+            不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}
         {Boolean(detail.feedback?.length)
           && <FeedbackPanel feedback={detail.feedback!} />}
 
-        <IssueCostPanel id={detail.id} />
-
-        {/* 左栏内容(#123 拍平):五个一级标签直排——对话现场(默认入口)
-            放首位,其余四签是原"材料"面板二级页签的升格;旧顶层"材料/
-            现场"页签与材料面板壳拆除。页签条是任务侧左栏同款 ws-pane-head
-            > ws-source-switch(role=tablist),页签一签一色走问题域变量
-            --workspace-tab-color(五签色值见 style.css 末尾 #123 追加块)。 */}
+        {/* 左栏内容(#123 拍平 + #127 走查反馈):六个一级标签直排——
+            对话现场(默认入口)放首位,逐仓交付收编为末签。页签条是
+            任务侧左栏同款 ws-pane-head > ws-source-switch(role=tablist),
+            页签一签一色走问题域变量 --workspace-tab-color。 */}
         <section className="issue-main-pane" aria-label="会话内容">
           <div className="ws-pane-head" aria-label="问题工作台视图">
             <div><strong>{
@@ -366,6 +364,8 @@ export function IssueSessionView({
           </div>
           {tab === "events"
             ? <IssueEventsPane id={detail.id} active />
+            : tab === "repos"
+            ? <IssueWorkspaceRepos detail={detail} />
             : <IssueMaterialsPane detail={detail} busy={busy} view={tab}
                 onNotifyAI={notifyAI} canOperate={canOperate} />}
         </section>
@@ -451,6 +451,18 @@ function useInheritedLedger(
     };
   }, [issueId]);
   return ledger;
+}
+
+/** 「逐仓交付」页签内容:有登记仓时渲染逐仓交付卡组,无仓给一句空态
+ * (发起时登记的模块决定关联仓,这里不是登记入口)。 */
+function IssueWorkspaceRepos({ detail }: { detail: IssueDetail }) {
+  if (!(detail.repo_urls?.length ?? 0) && !detail.repo_url) {
+    return <div className="issue-repos-empty">
+      会话没有登记代码仓——发起时登记的业务模块决定关联仓;
+      逐仓交付与流水线状态会在这里展示。
+    </div>;
+  }
+  return <IssueRepoDelivery detail={detail} />;
 }
 
 /** 逐仓交付区(一仓一 MR):每个关联仓一张卡——仓名/角色(变更仓·
