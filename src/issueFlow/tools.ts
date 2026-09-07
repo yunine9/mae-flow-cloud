@@ -54,7 +54,7 @@ import {
 } from "../pipelineClient.ts";
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
-import type { DtsGateway } from "./gateways.ts";
+import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
 import {
   applyTicketImageRewrites,
   renderTicketImageNote,
@@ -193,6 +193,36 @@ export const ANALYSIS_REPORT_SECTIONS = [
 export function missingAnalysisSections(content: string): string[] {
   return ANALYSIS_REPORT_SECTIONS.filter((section) =>
     !new RegExp(`^#{1,4}\\s*${section}`, "m").test(content));
+}
+
+/** MR 标题的权威解出(2026-09-07 拍板):CodeHub 要求 MR 标题与问题单
+ *  标题精确相等,标题没有 AI 裁决自由度——create_mr 平台代笔,按绑定
+ *  单号现场查 DTS 取标题。不收模型传入,也不拿会话登记标题顶替(登记
+ *  在先,单据标题可能已改;每次现场取,单据中途改题也不漂)。取不到/
+ *  为空如实打回(mr.title_missing),绝不静默降级。 */
+async function issueMrTitle(
+  ctx: IssueToolContext,
+  ticket: string,
+): Promise<string> {
+  if (!ctx.dts) {
+    fail("DTS 网关未配置,拿不到问题单权威标题(部署需 --dts-mcp-url)");
+  }
+  let detail: DtsTicketDetail;
+  try {
+    detail = await ctx.dts.detail(ticket);
+  } catch (error) {
+    fail(promptCopy("receipts", "mr.title_missing", {
+      ticket,
+      reason: String(error instanceof Error ? error.message : error),
+    }));
+  }
+  const title = detail.title.trim();
+  if (!title) {
+    fail(promptCopy("receipts", "mr.title_missing", {
+      ticket, reason: "单据标题为空",
+    }));
+  }
+  return title;
 }
 
 export function createIssueTools(ctx: IssueToolContext): unknown[] {
@@ -650,9 +680,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "为已推送的修复分支创建合并请求(经交付平台适配层调 codehub CLI;"
       + "单号自动关联,合入由用户在门禁通过后决定)。前置:已绑定单号、"
-      + "分支已 push_branch。title 缺省 [单号] 会话标题。",
+      + "分支已 push_branch。MR 标题平台代笔=问题单标题(CodeHub 要求"
+      + "精确相等),不用也不能自拟。",
     parameters: Type.Object({
-      title: Type.Optional(Type.String({ description: "MR 标题;缺省 [单号] 问题标题" })),
       target_branch: Type.Optional(Type.String({
         description: "目标分支,缺省 master",
       })),
@@ -678,8 +708,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail(promptCopy("receipts", "mr.no_push", { repo: repo.url }));
       }
       const target = String(params.target_branch ?? "").trim() || "master";
-      const title = String(params.title ?? "").trim()
-        || `[${state.ticket}] ${state.title}`;
+      const title = await issueMrTitle(ctx, state.ticket);
       const receipt = await createMergeRequest({
         platformUrl,
         repo: repo.url,

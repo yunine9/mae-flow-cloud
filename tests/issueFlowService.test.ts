@@ -32,6 +32,7 @@ import {
 } from "../src/issueFlow/routes.ts";
 import { cloneFailureMessage, GIT_AUTH_ERROR_TAG } from "../src/issueFlow/issueGit.ts";
 import { loadState, type IssueSessionState } from "../src/issueFlow/state.ts";
+import type { DtsGateway } from "../src/issueFlow/gateways.ts";
 import { buildWorksiteRecord } from "../src/issueFlow/worksiteExport.ts";
 import type { SemanticEvent } from "../src/semanticEvents.ts";
 
@@ -621,6 +622,15 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
+  // MR 标题平台代笔(2026-09-07):create_mr 现场查 DTS 取权威标题。
+  // stub 给一个与会话登记标题("登录超时")不同、不带 [单号] 前缀的标题。
+  const dts: DtsGateway = {
+    listByOwner: async () => [],
+    detail: async (ticket) => ({
+      ticket, title: "登录超时(压测环境批量操作必现)", content: "stub",
+    }),
+    proxyFile: async () => ({ data: Buffer.alloc(0), contentType: "text/plain" }),
+  };
   // 宿主推送/提 MR 的宿主管道回归钉在种子会话上:mr_green 阶段两工具
   // 都开放(阶段收口态的返工续推,不牵催办;固定流程推送/MR 全链另有
   // 契约快照覆盖)。
@@ -637,6 +647,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    dts,
     platformUrl,
     gitCredential: () => ({ username: "dev", password: "git-token" }),
   });
@@ -674,7 +685,11 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     assert.equal(mrCalls[0].body.source_branch, branch);
     assert.equal(mrCalls[0].body.target_branch, "master");
     assert.equal(mrCalls[0].body.dts_no, "DTS2026082001317", "单号要走 dts_no 关联");
-    assert.match(String(mrCalls[0].body.title), /^\[DTS2026082001317\]/);
+    // MR 标题平台代笔(2026-09-07):标题=DTS 单据标题,精确相等、
+    // 无 [单号] 前缀——登记标题("登录超时")不许顶替。
+    assert.equal(mrCalls[0].body.title, "登录超时(压测环境批量操作必现)");
+    assert.equal(final.mrs![0].title, "登录超时(压测环境批量操作必现)",
+      "台账记实际使用的标题");
     assert.equal(mrCalls[0].headers["x-mfc-git-user"], "dev");
     assert.equal(mrCalls[0].headers["x-mfc-git-token"], "git-token");
   } finally {
