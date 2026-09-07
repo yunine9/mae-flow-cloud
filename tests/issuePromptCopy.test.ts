@@ -25,7 +25,7 @@ test("文案目录挂载:三个文件全部加载,锚点按域分布", () => {
     "opening.resume.header",
     "notices.nudge.body",
     "receipts.push.no_ticket",
-    "receipts.stage.closed",
+    "receipts.complete.stage_closed",
   ]) {
     assert.ok(anchors.includes(key), `关键锚点缺失: ${key}`);
   }
