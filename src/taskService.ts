@@ -16763,6 +16763,9 @@ export class TaskService {
   ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    // task-40：旧 MR 已被人在远端合入，本地却仍是“验证中”。必须先
+    // 查同一个 MR，不能先 rebase/push 再靠创建接口猜它是否还存在。
+    if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
     // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
@@ -16914,6 +16917,8 @@ export class TaskService {
           && authorizedPrePush?.sha
           && ["passed", "user_skipped"].includes(authorizedPrePush.state)
         ? authorizedPrePush.sha : observedRevision.sha;
+      // Build-Fix 可能运行很久，期间 MR 也可能合入；写远端前再核对。
+      if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task, branch)) return;
       // 推送前最后一道基线复核:Build-Fix/确认期间若历史又被改写,
@@ -17883,31 +17888,62 @@ export class TaskService {
     setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
-  /** 门禁视图:平台不支持(404/没配分支对)或查询失败一律回
-   * undefined——调用方按"旧语义"处理,绝不让门禁查询卡死闭环。
-   * 形状校验从严:name/passed 类型不对的项直接丢弃,宿主不猜。 */
-  private async fetchGates(task: TaskState): Promise<GateView | undefined> {
+  /** 已有关联 MR 时，只允许权威 opened 状态进入续推；查询不可得
+   * 留在可重跑的停机态，合入/关闭则复用现有生命周期收口。 */
+  private async existingMergeRequestAllowsDelivery(
+    task: TaskState, epoch: number,
+  ): Promise<boolean> {
+    if (!this.current(task, epoch)) return false;
+    const delivery = task.summary.delivery;
+    if (!delivery?.mr_url && delivery?.mr_id === undefined) return true;
+    const view = await this.fetchGates(task, true);
+    if (!this.current(task, epoch)) return false;
+    if (!view) {
+      this.markVerificationStalled(task,
+        "无法确认已有 MR 的远端状态，已停止续推；请恢复平台连接后重跑，避免重复创建 MR",
+        "infrastructure");
+      return false;
+    }
+    if (view.mrState === "merged" || view.mrState === "closed") {
+      // 复用合入事实收口，不能伪造一次 pipeline success；SHA 与内核
+      // close 的原有核对仍保留，异常时停下也绝不另建 MR。
+      await this.settleMergeState(task, view.mrState, view.sourceSha);
+      return false;
+    }
+    return true;
+  }
+
+  /** 门禁查询不可得返回 undefined。监控环下一拍再查，已有 MR 的续推
+   * 则停止本次写入。严格模式不把缺失的生命周期猜成 opened。 */
+  private async fetchGates(
+    task: TaskState, requireExisting = false,
+  ): Promise<GateView | undefined> {
     const platformUrl = this.effectivePlatformUrl();
     const delivery = task.summary.delivery;
-    if (!platformUrl || !delivery?.source_branch
-        || !delivery.target_branch) {
+    if (!platformUrl || !delivery
+        || (!requireExisting && (!delivery.source_branch || !delivery.target_branch))) {
       return undefined;
     }
     try {
       const params = new URLSearchParams({
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
-        source_branch: delivery.source_branch,
-        target_branch: delivery.target_branch,
+        source_branch: delivery.source_branch ?? "",
+        target_branch: delivery.target_branch ?? "",
       });
       if (delivery.mr_id !== undefined) {
         params.set("mr", String(delivery.mr_id));
+      } else if (delivery.mr_url) {
+        params.set("mr", delivery.mr_url);
       }
       const response = await fetch(
         `${platformUrl}/mr/gates?${params}`,
-        { headers: this.platformIdentity(task) });
+        { headers: this.platformIdentity(task), signal: AbortSignal.timeout(10_000) });
       if (response.status === 404) return undefined; // 平台不支持门禁契约
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await readJson(response);
+      if (requireExisting && !["opened", "merged", "closed"].includes(body.mr_state)) {
+        throw new Error("已有 MR 的生命周期状态缺失或无效");
+      }
       const gates: GateItem[] = (Array.isArray(body.gates) ? body.gates : [])
         .filter((gate: any) => typeof gate?.name === "string"
           && typeof gate?.passed === "boolean")
@@ -18016,6 +18052,10 @@ export class TaskService {
       if (delivery.loop) delivery.loop.state = "green";
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
+      delivery.stalled = undefined;
+      delivery.stall_class = undefined;
+      delivery.skipped = undefined;
+      delivery.verify_deadline = undefined;
       task.summary.status = "completed";
       const closeEvent = this.continuousReviewTask(task)
         ? this.latestKernelCloseEvent(task) : undefined;
