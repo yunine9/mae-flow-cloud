@@ -21,6 +21,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { REQUIREMENT_GRAPH_ARTIFACT } from "../src/annotations.ts";
+import { requirementAnnotationInstructions } from "../src/requirementReviewAgent.ts";
 import {
   requirementArtifacts,
   writeRequirementArtifacts,
@@ -422,8 +423,9 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   assert.equal(service.listAnnotations(parent.id).checks[0]?.state, "hit",
     "图批注要按模块 id 命中当前图，不依赖 JSON 行号");
   assert.match(service.previewAnnotations(parent.id, [annotation.id]), /方案结构/);
-  assert.match((service as any).requirementAnnotationInstructions(
-    state, [annotation]), /同步修订 CHAIN 文档与 requirement-graph\.json/);
+  const instructions = requirementAnnotationInstructions([annotation]);
+  assert.ok(instructions, "图模块批注必须产出给 Agent 的修订指令");
+  assert.match(instructions, /同步修订 CHAIN 文档与 requirement-graph\.json/);
 
   // 只改人看的文档：版本标记和 JSON 都没动，真实字节摘要必须立即失配。
   writeFileSync(join(artifactDir, `CHAIN-${ticket}.md`),
