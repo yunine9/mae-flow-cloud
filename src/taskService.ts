@@ -4928,7 +4928,7 @@ export class TaskService {
   private memorySidecar?: MemorySidecar;
   private memorySweepTimer?: NodeJS.Timeout;
   /** 在途的起草作业:shutdown/测试 flush 用;失败不抛,只落日志。 */
-  private readonly memoryDraftJobs = new Set<Promise<void>>();
+  private readonly memoryDraftJobs = new Map<string, Promise<void>>();
 
   private memories(): MemoryStore {
     return this.memoryStore ??= new MemoryStore(this.options.dataDir);
@@ -6006,7 +6006,7 @@ export class TaskService {
   listTaskMemories(id: string): MemoryRecord[] {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    return this.memories().list({ task: id });
+    return this.memories().list({ task: id }).map((row) => ({ ...row, drafting: this.memoryDraftJobs.has(row.id) }));
   }
 
   readTaskMemory(
@@ -6079,13 +6079,13 @@ export class TaskService {
         this.options.log?.(`记忆 ${record.id} 起草收尾写入失败: ${String(error)}`);
       }
     })();
-    this.memoryDraftJobs.add(job);
-    void job.finally(() => this.memoryDraftJobs.delete(job));
+    this.memoryDraftJobs.set(record.id, job);
+    void job.finally(() => this.memoryDraftJobs.delete(record.id));
   }
 
   /** 等在途起草全部落地(测试与优雅关闭用)。 */
   async flushMemoryDrafts(): Promise<void> {
-    await Promise.all([...this.memoryDraftJobs]);
+    await Promise.all([...this.memoryDraftJobs.values()]);
   }
 
   /** 效果账:这单推过的记忆里,路径正好是刚被人提意见的那个文件的,
@@ -6210,7 +6210,7 @@ export class TaskService {
         id: row.id, repo: row.repo, trigger: row.trigger,
         conclusion: row.conclusion.replace(/\s+/g, " ").slice(0, 240),
         source: row.source, judged_by: row.judged_by, scope: row.scope,
-        draft: row.draft ?? "template", at: row.at, task: row.task,
+        draft: row.draft ?? "template", drafting: this.memoryDraftJobs.has(row.id), at: row.at, task: row.task,
         paths: row.paths, ...(row.line ? { line: row.line } : {}),
         weight: Number(memoryWeight(row, own, now).toFixed(3)),
         pushes: own.pushes, hits: own.hits, reworks: own.reworks,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { OverlayDialog } from "./WarmupPanel";
 import { KnowledgeSource } from "./KnowledgeSource";
 import { knowledgeOrigin } from "./knowledgeOrigin";
+import { memoryPreparation } from "./memoryPresentation";
 import {
   listTaskMemories,
   listTaskMemoryUsage,
@@ -152,6 +153,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
       {memories.length ? <ol>
         {memories.filter((item) => !item.withdrawn).map((item) => {
           const gone = !!item.superseded_by;
+          const preparation = memoryPreparation(item);
           return <li key={item.id} className={`source-${item.source}${gone ? " is-gone" : ""}`}>
             <button type="button" className="knowledge-memory-row"
               aria-expanded={memoryOpen?.id === item.id}
@@ -161,10 +163,9 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
               <span>
                 <strong>{item.trigger}
                   {item.source !== "user_note" && <b className={`knowledge-memory-scope scope-${item.scope}`}
-                    title={item.draft === "model" ? "范围由模型起草判定"
-                      : item.draft === "failed" ? "模型起草失败,保留了模板" : "起草中:先按模板落盘,模型补全后更新"}>
+                    title={preparation.title}>
                     {item.scope === "one_off" ? "一次性" : item.scope === "general" ? "通用" : "局部"}
-                    {item.draft === "model" ? "" : item.draft === "failed" ? "·模板" : "·起草中"}</b>}
+                    {`·${preparation.label}`}</b>}
                   {item.archived && <b className="knowledge-memory-scope is-archived" title={item.archive_reason}>已沉底</b>}
                 </strong>
                 <em>{gone ? "已撤回" : item.conclusion}</em>

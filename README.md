@@ -306,6 +306,13 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-09-07 任务记忆假“起草中”修复**：template 表示已按模板入库，
+  不表示模型作业在途。团队资产及任务知识页改为显示“已记录”，逐条整理状态
+  由服务中的实际作业 ID 派生；成功/失败如实收尾，重启后不把遗留模板冒充
+  在途作业。无需改写历史记忆；未配置 memory-draft-provider/model 时仍使用
+  模板，不擅自启用模型或补跑旧记录。已验：未配置/无效角色、单条在途、成功、
+  失败、重启与显示映射；真 memsearch 环境缺席而跳过，未核验内网模型配置。
+
 - **2026-09-07 标准镜像启动适配**：统一 HOME/Maven/npm 用户配置及 tmpfs，
   新增 isolate-home 适配原生用户目录；平台自行接入 Maven settings，不要求
   原始镜像安装平台 entrypoint。ccache 改为检测到才启用。修复 Docker logs

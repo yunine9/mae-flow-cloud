@@ -2808,6 +2808,8 @@ export interface MemoryRecord {
   superseded_by?: string;
   /** trigger/scope 是模板给的、模型起草的,还是起草失败保留模板。 */
   draft?: "template" | "model" | "failed";
+  /** 当前服务中该条记忆是否真的存在整理作业。 */
+  drafting?: boolean;
   revision?: number;
   archived?: boolean;
   archive_reason?: string;
@@ -2822,6 +2824,7 @@ export interface MemoryInsightRow {
   id: string; repo: string; trigger: string; conclusion: string;
   source: MemoryRecord["source"]; judged_by: MemoryRecord["judged_by"];
   scope: MemoryRecord["scope"]; draft: "template" | "model" | "failed";
+  drafting: boolean;
   at: string; task: string; paths: string[]; line?: number;
   weight: number; pushes: number; hits: number; reworks: number; last_used?: string;
   archived?: boolean; archive_reason?: string; withdrawn?: boolean; superseded_by?: string;
