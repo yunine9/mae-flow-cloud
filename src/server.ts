@@ -62,6 +62,7 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import {
   closeSync,
   existsSync,
@@ -2183,6 +2184,19 @@ export function createTaskServer(
           const task = service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
+        }
+        if (request.method === "GET" && parts.length === 3 && parts[2] === "knowledge-source") {
+          const task = service.get(id);
+          if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
+          try {
+            return json(response, 200, readTaskKnowledgeSource({
+              workspace: task.workspace, repositoryRoot: service.artifactRoot(id),
+              hostRulesRoot: process.cwd(), usage: task.knowledge_usage,
+              resourceId: url.searchParams.get("resource") ?? "",
+            }));
+          } catch (error) {
+            return json(response, 404, { error: humanError(error) });
+          }
         }
         // 批注附图:上传落盘拿路径,再随批注引用;读取只认资产模块的路径形状。
         if (request.method === "POST" && parts.length === 3

@@ -7,6 +7,16 @@ import {
   KnowledgeTrace,
   knowledgeUsageSnapshot,
 } from "../src/knowledgeTrace.ts";
+import { knowledgeOrigin } from "../web/src/knowledgeOrigin.ts";
+
+test("知识来源区分平台与代码仓，旧记录不猜来源", () => {
+  assert.equal(knowledgeOrigin({ id: "workflow-skill", scope: "team" }), "平台");
+  assert.equal(knowledgeOrigin({ id: "module-rule", scope: "module" }), "平台");
+  assert.equal(knowledgeOrigin({ id: "rules:AGENTS.md", scope: "repository" }), "代码仓");
+  assert.equal(knowledgeOrigin({ id: "repo-skill", repository: "app" }), "代码仓");
+  assert.equal(knowledgeOrigin({ id: "observed:legacy-document" }), "代码仓");
+  assert.equal(knowledgeOrigin({ id: "rules:legacy/CLAUDE.md" }), "来源未记录");
+});
 
 test("按会话与阶段记录规则、文档和 Skill 的真实消费", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-knowledge-trace-"));
@@ -44,6 +54,7 @@ test("按会话与阶段记录规则、文档和 Skill 的真实消费", () => {
     && event.name === "order-helper" && event.action === "read"));
   assert.ok(usage.events.some((event) => event.kind === "rules"
     && event.step === "build"));
+  assert.equal(usage.resources.find((item) => item.kind === "rules")?.scope, "repository");
   assert.ok(usage.resources.every((item) => !item.path.startsWith(root)),
     "读侧不能暴露宿主绝对路径");
 });

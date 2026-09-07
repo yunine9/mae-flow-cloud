@@ -1113,6 +1113,7 @@ export class CloudSession {
       const resource: KnowledgeResourceRef = {
         id: `rules:${display}`,
         kind: "rules",
+        scope: withinWorkspace ? "repository" : "team",
         name: display.split("/").at(-1) || "项目规则",
         path: display,
       };

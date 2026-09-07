@@ -1742,6 +1742,16 @@ export interface TaskKnowledgeResource {
   last_at?: string;
 }
 
+export interface TaskKnowledgeSource {
+  name: string; path: string; content: string; version_changed: boolean;
+}
+
+export async function readTaskKnowledgeSource(taskId: string, resourceId: string): Promise<TaskKnowledgeSource> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/knowledge-source?resource=${encodeURIComponent(resourceId)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
 export interface TaskKnowledgeUsage {
   summary: {
     resources: number;

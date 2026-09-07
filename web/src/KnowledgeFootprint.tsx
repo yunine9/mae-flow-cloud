@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { OverlayDialog } from "./WarmupPanel";
+import { KnowledgeSource } from "./KnowledgeSource";
+import { knowledgeOrigin } from "./knowledgeOrigin";
 import {
   listTaskMemories,
   listTaskMemoryUsage,
@@ -10,6 +12,7 @@ import {
   interruptTask,
   type KnowledgeAction,
   type TaskKnowledgeUsage,
+  type TaskKnowledgeResource,
 } from "./api";
 
 const KIND = { rules: "规则", document: "文档", skill: "Skill" } as const;
@@ -36,6 +39,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
   taskStatus: string;
 }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState<TaskKnowledgeResource>();
   const [feedback, setFeedback] = useState("");
   // 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表 + 撤回。
   // 不逐条在文档上打标——文档太多,标满了反而看不见(用户拍板)。
@@ -72,15 +76,12 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
     item.loaded_count > 0 || item.read_count > 0) ?? [];
   const resources = usage?.resources ?? [];
   const catalog = [
-    { title: "业务模块知识", note: "由模块 Owner 治理；按任务固定版本",
-      items: resources.filter((item) => item.scope === "module") },
-    { title: "团队通用知识", note: "由团队资产治理，按任务范围匹配并固定版本",
-      items: resources.filter((item) => item.scope === "team") },
-    { title: "代码仓原生能力", note: "来自任务固定的 Git commit；平台只读取，不管理",
-      items: resources.filter((item) => !!item.repository && item.kind === "skill") },
-    { title: "代码仓项目规则", note: "Agent 从 Git 工作现场自主发现",
-      items: resources.filter((item) => item.kind === "rules"
-        && !item.repository && item.scope !== "team") },
+    { title: "平台", note: "平台提供的知识，包含工作流自带的规则与 Skill",
+      items: resources.filter((item) => knowledgeOrigin(item) === "平台") },
+    { title: "代码仓", note: "代码仓中的项目规则、文档与 Skill",
+      items: resources.filter((item) => knowledgeOrigin(item) === "代码仓") },
+    { title: "来源未记录", note: "早期记录未保留来源，仍可查看原文和使用情况",
+      items: resources.filter((item) => knowledgeOrigin(item) === "来源未记录") },
   ].filter((group) => group.items.length > 0);
 
   async function remind(resource: typeof resources[number]) {
@@ -123,7 +124,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
           <strong>{group.title}<i>{group.items.length}</i></strong>
           <small className="knowledge-catalog-group-note">{group.note}</small>
           {group.items.slice(0, 30).map((item) => <article key={item.id}>
-            <b title={item.path}>{item.name}</b>
+            <button type="button" className="knowledge-source-link" title={`查看原文：${item.path}`}
+              onClick={() => { setCatalogOpen(false); setSourceOpen(item); }}>{item.name}</button>
             <span title={item.description ?? ""}>{item.description || item.path}</span>
             <small className={item.read_count > 0 ? "is-read"
               : item.loaded_count > 0 ? "is-loaded" : "is-idle"}>
@@ -216,11 +218,11 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
     {consumed.length ? <div className="knowledge-footprint-resources">
       {consumed.slice(0, 8).map((item) => <article key={item.id}
         className={`knowledge-resource kind-${item.kind}`}>
-        <span>{item.scope === "module" ? "模块知识"
-          : item.scope === "team" ? "团队通用知识"
-            : item.repository ? "仓库原生" : KIND[item.kind]}</span>
+        <span>{knowledgeOrigin(item)} · {KIND[item.kind]}</span>
         <strong title={item.name}>{item.name}</strong>
-        <code title={item.path}>{item.path}</code>
+        <button type="button" className="knowledge-source-link is-path"
+          aria-label={`查看原文：${item.name}`} title={`查看原文：${item.path}`}
+          onClick={() => setSourceOpen(item)}>{item.path} ↗</button>
         <small>{item.read_count > 0 ? `读取/检索 ${item.read_count} 次`
           : "开局已加载"}</small></article>)}</div>
       : <div className="knowledge-footprint-empty">
@@ -231,9 +233,14 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
         <article key={`${event.ts}-${event.id}-${index}`}>
           <i className={`kind-${event.kind}`} aria-hidden />
           <time dateTime={event.ts}>{time(event.ts)}</time>
-          <strong>{event.name}</strong><span>{ACTION[event.action]}</span>
+          <button type="button" className="knowledge-source-link"
+            title={`查看原文：${event.path}`}
+            onClick={() => setSourceOpen(resources.find((item) => item.id === event.id))}>
+            {event.name}</button><span>{knowledgeOrigin(resources.find((item) => item.id === event.id) ?? event)} · {ACTION[event.action]}</span>
           <small>{ROLE[event.session_role]}{event.step ? ` · ${event.step}` : ""}</small>
         </article>)}</div>
     </details>}
+    {sourceOpen && <KnowledgeSource taskId={taskId} resource={sourceOpen}
+      onClose={() => setSourceOpen(undefined)} />}
   </section>;
 }

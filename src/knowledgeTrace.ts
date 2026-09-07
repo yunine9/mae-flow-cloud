@@ -157,6 +157,7 @@ export class KnowledgeTrace {
     return {
       id: `observed:${sha256(rel)}`,
       kind: rules ? "rules" : "document",
+      scope: "repository",
       name: rules ? basename : safeName(rel),
       path: rel,
       description: this.summarize(absolute),
