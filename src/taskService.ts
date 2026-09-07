@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
+import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
 import { resetQueuedRequirementReviews, submitRequirementReview } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
@@ -392,6 +393,7 @@ import {
   REQUIREMENT_REVIEW_DOCUMENT,
   REQUIREMENT_REVIEW_RECEIPTS,
   createRequirementReviewGateContract,
+  prepareRequirementReviewWorkspace,
   requirementReviewMission,
 } from "./requirementReviewAgent.ts";
 
@@ -3264,11 +3266,8 @@ export class TaskService {
     let timer: NodeJS.Timeout | undefined;
     let succeeded = false;
     try {
-      mkdirSync(reviewRoot, { recursive: true });
-      writeFileSync(documentPath, task.summary.requirement, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
+      prepareRequirementReviewWorkspace(task.summary.workspace, reviewRoot,
+        task.summary.requirement, task.summary.requirement_document);
 
       const agentDir = join(
         task.summary.workspace, "requirement-review-agent");
@@ -3286,7 +3285,8 @@ export class TaskService {
         transcript: new TranscriptStore(
           join(task.summary.workspace, "requirement-history", `${revisionId}.transcript.jsonl`), `requirement-review:${revisionId}`),
         gate: new GateService({
-          contract: createRequirementReviewGateContract(reviewRoot),
+          contract: createRequirementReviewGateContract(reviewRoot,
+            task.summary.requirement_document),
           workspace: reviewRoot,
           cwd: reviewRoot,
           failClosed: true,
@@ -3296,6 +3296,7 @@ export class TaskService {
         allowHumanQuestions: false,
         allowSubagents: false,
         sessionId: `requirement-review:${revisionId}`,
+        vision: this.taskVision(task),
         currentStep: () => "落实需求检视意见",
         compactAnchor: () =>
           `只修改 ${REQUIREMENT_REVIEW_DOCUMENT} 中本轮意见指向的内容`,
@@ -6506,7 +6507,7 @@ export class TaskService {
     actor?: string,
     allowForeign = false,
   ): Promise<{
-    sent: string[]; text: string;
+    sent: string[]; text: string; receipt?: string;
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -6515,7 +6516,8 @@ export class TaskService {
         ? "MR 已合入，任务已经结束，不能再提交批注"
         : "任务已由用户停止，不能再提交批注");
     }
-    const allPicked = this.pickDrafts(task, ids, actor, allowForeign);
+    const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
+    const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
     const ownerPicked = allPicked.filter((item) =>
       (item.route ?? "agent") !== "agent");
     const picked = allPicked.filter((item) =>
@@ -6548,6 +6550,7 @@ export class TaskService {
     return {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
+      receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent) : undefined,
     };
   }
 
@@ -7004,24 +7007,10 @@ export class TaskService {
     ids?: string[],
     actor?: string,
     allowForeign = false,
+    acceptRequirementSubmitted = false,
   ): Annotation[] {
-    const allDrafts = this.annotations(task).drafts();
-    // 兼容旧客户端的“ids 省略=提交我的全部草稿”。责任人代转必须逐条
-    // 给出 ID，不能因为旧按钮没带 ids 就顺手发送所有人的私人草稿。
-    const drafts = actor && (!allowForeign || !ids?.length)
-      ? allDrafts.filter((item) => item.author === actor) : allDrafts;
-    if (!ids?.length) {
-      if (!drafts.length) throw new NotFoundError("没有待送出的批注");
-      return drafts;
-    }
-    const wanted = new Set(ids);
-    const picked = drafts.filter((item) => wanted.has(item.id));
-    if (picked.length !== wanted.size) {
-      throw new NotFoundError(actor
-        ? "有批注不存在、已经送出，或不是你写的"
-        : "有批注不存在或已经送出去了");
-    }
-    return picked;
+    return pickAnnotationSubmission(this.annotations(task).list(), ids,
+      actor, allowForeign, acceptRequirementSubmitted);
   }
 
   /** 决定卡与“主动送批注”不是同一种提交语义。

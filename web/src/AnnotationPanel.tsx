@@ -170,6 +170,7 @@ export function AnnotationPanel({
   const [replyingId, setReplyingId] = useState("");
   const [ownerReply, setOwnerReply] = useState("");
   const [error, setError] = useState("");
+  const [submissionNotice, setSubmissionNotice] = useState("");
   const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
   const listRef = useRef<HTMLOListElement>(null);
   const personName = (username: string) => displayPersonName(username, people);
@@ -296,6 +297,7 @@ export function AnnotationPanel({
     if (busy || !canOperate || !canSend || !drafts.length) return;
     setBusy(true);
     setError("");
+    setSubmissionNotice("");
     try {
       if (oneStepRework && reworkChoice) {
         // 服务端 decide 会把本人全部草稿 + 等待期排队的意见一并渲进
@@ -305,10 +307,13 @@ export function AnnotationPanel({
           drafts.map((item) => item.id), undefined, undefined, undefined,
           undefined, reworkChoice.waitingId);
         if (result.conflict) setError(result.conflict);
+        else setSubmissionNotice(`已提交 ${drafts.length} 条意见并请求返工。`);
       } else {
         const result = await sendAnnotations(taskId,
           drafts.map((item) => item.id));
         if (result.error) setError(result.error);
+        else setSubmissionNotice(result.receipt
+          ?? `已提交 ${result.sent?.length ?? drafts.length} 条意见，请查看下方逐条处理状态。`);
       }
       onChanged();
     } catch (reason) {
@@ -441,7 +446,7 @@ export function AnnotationPanel({
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
-      {drafts.length > 0 && (
+      {drafts.length > 0 && !["completed", "canceled"].includes(taskStatus) && (
         <div className="annot-panel-actions">
           <button type="button" className="primary"
                   disabled={busy || !canOperate || !canSend}
@@ -508,7 +513,8 @@ export function AnnotationPanel({
                 : `有 ${drafts.length} 条批注待提交；当前没有可接收意见的执行会话。`}
         </p>
       )}
-      {error && <div className="alert">{error}</div>}
+      {submissionNotice && <p className="annot-panel-note" role="status">{submissionNotice}</p>}
+      {error && <div className="alert" role="alert">{error}</div>}
 
       {filter !== "all" && !visibleItems.length && items.length > 0 && (
         <p className="annot-panel-note">这一档下没有批注；切回“全部”看完整清单。</p>

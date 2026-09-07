@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
@@ -1249,6 +1250,7 @@ export function TaskWorkspace({
     });
     return () => { alive = false; };
   }, [task.id, task.status, task.waiting?.state_version,
+    task.requirement_revision?.id, task.requirement_revision?.state,
     task.delivery?.loop?.workspace_review_recheck_required,
     notesPulse, livePulse]);
 
@@ -1468,7 +1470,8 @@ export function TaskWorkspace({
     pushDiffState,
     deliverySelection,
   );
-  const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
+  const canContributeReview = canOperate
+    || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
   const annotationQueueWithDecision = task.status === "waiting_for_human"
     && !requirementAnalysisConfirmation

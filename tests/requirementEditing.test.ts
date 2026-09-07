@@ -62,6 +62,13 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     }
     first = service.sendAnnotations(task.id, [a.id], "owner");
     await started;
+    const processing = service.listAnnotations(task.id).items.find((item) => item.id === a.id)!;
+    assert.equal(processing.status, "sent", "正在处理的意见不能仍被展示为草稿");
+    assert.equal(processing.sent_via, "requirement_review");
+    const repeated = await service.sendAnnotations(task.id, [a.id], "owner");
+    assert.match(repeated.receipt ?? "", /1 条正在由 Agent 处理/);
+    await assert.rejects(service.sendAnnotations(task.id, [a.id], "reviewer"), /不是你写的/);
+    await assert.rejects(service.sendAnnotations(task.id, ["missing-id"], "owner"), /不存在/);
     const liveEvents = new EventLog(service.eventLogPath(task.id)).replay();
     assert.ok(liveEvents.some((event) => event.kind === "tool_requested"),
       "Agent 仍在处理时，执行日志接口读取的主日志里就应有工具调用");
@@ -71,6 +78,8 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     const queuedNote = service.listAnnotations(task.id).items.find((item) => item.id === b.id)!;
     assert.equal(queuedNote.sent_via, "requirement_queue");
     assert.equal(queuedNote.status, "sent");
+    const repeatedQueue = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.match(repeatedQueue.receipt ?? "", /1 条已排队/);
     assert.throws(() => service.verifyAnnotation(task.id, b.id, "reviewer"), /尚在排队/);
     const confirm = () => service.decide(task.id, {
       state_version: service.get(task.id)!.waiting!.state_version,
@@ -80,6 +89,8 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     await assert.rejects(confirm(), /正在修改需求文档/);
     release();
     await first;
+    const repeatedDone = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    assert.match(repeatedDone.receipt ?? "", /已有处理回执/);
     assert.equal(service.get(task.id)?.requirement, "第一段新口径\n\n第二段新口径");
     assert.deepEqual(service.get(task.id)?.requirement_revisions?.map((item) => item.annotation_ids), [[a.id], [b.id]]);
     const events = new EventLog(service.eventLogPath(task.id)).replay();

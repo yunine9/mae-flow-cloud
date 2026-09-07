@@ -2685,7 +2685,7 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
-    | "queued_decision" | "owner_pending" | "requirement_queue";
+    | "queued_decision" | "owner_pending" | "requirement_queue" | "requirement_review";
   /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
   sent_by?: string;
   response?: {
@@ -2945,7 +2945,7 @@ export async function judgeAnnotation(
 export async function sendAnnotations(
   taskId: string,
   ids?: string[],
-): Promise<{ sent?: string[]; error?: string }> {
+): Promise<{ sent?: string[]; receipt?: string; error?: string }> {
   const response = await fetch(`/tasks/${taskId}/annotations/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },

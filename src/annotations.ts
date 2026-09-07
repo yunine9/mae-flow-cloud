@@ -43,6 +43,7 @@ export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision"
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
 export type SentVia =
+  | "requirement_review"
   | "requirement_queue"
   | "interrupt"
   | "decision"
@@ -591,8 +592,8 @@ export class AnnotationStore {
   /** 确认通过:人看过那处改动,认了。检视闭环的收口一步。 */
   verify(id: string, by: string, override = false): Annotation {
     const found = this.judgeable(id, by, override);
-    if (found.sent_via === "requirement_queue") {
-      throw new AnnotationError("这条需求意见尚在排队处理，不能提前确认通过");
+    if (found.sent_via === "requirement_queue" || found.sent_via === "requirement_review") {
+      throw new AnnotationError("这条需求意见尚在排队或处理中，不能提前确认通过");
     }
     const at = new Date().toISOString();
     const proxy = found.author !== by;

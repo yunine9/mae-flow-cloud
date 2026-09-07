@@ -88,7 +88,7 @@ export function Annotatable({
   /** Same live feedback component as the collaboration feed, scoped to this location. */
   renderInlineReview?: (ids: string[]) => React.ReactNode;
   /** Explicit submit; saving alone never authorizes a workflow decision. */
-  onSendDraft?: (id: string) => Promise<{ error?: string }>;
+  onSendDraft?: (id: string) => Promise<{ error?: string; receipt?: string }>;
   /** 普通人工决定窗口只能登记，正文随当前决定送达。 */
   queueWithDecision?: boolean;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
@@ -287,7 +287,7 @@ export function Annotatable({
             const sent = await onSendDraft(id);
             setReceipt(sent.error
               ? `意见已保存，但发送未完成：${sent.error}。可在下方重试。`
-              : "意见已登记；送达状态和处理结果会显示在下方。");
+              : sent.receipt ?? "意见已登记；送达状态和处理结果会显示在下方。");
           } catch (reason) {
             setReceipt(`意见已保存，发送未完成：${reason instanceof Error ? reason.message : String(reason)}。可在下方重试。`);
           }

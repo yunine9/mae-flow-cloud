@@ -363,7 +363,7 @@ export function annotationVerdictReady(
   if (annotationRoute(item) === "owner_reply") return Boolean(item.owner_reply);
   if (facts.task_status !== "waiting_for_human") return false;
   // 只是趁"等决定"窗口先登记为团队事实,还没随决定送给 Agent。
-  if (item.sent_via === "queued_decision" || item.sent_via === "requirement_queue") return false;
+  if (["queued_decision", "requirement_queue", "requirement_review"].includes(item.sent_via ?? "")) return false;
   // 流水线证据用于恢复取证,不是代码/文档检视闭环。
   if (item.sent_via === "pipeline_evidence") return false;
   // MR 工作区修复必须等 Build-Fix 收敛并生成当前复检卡;有总回复也
@@ -431,6 +431,7 @@ function deliveryTextOf(
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
   if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
+  if (item.sent_via === "requirement_review") return "Agent 正在处理这条需求意见";
   if (item.sent_via === "requirement_queue") return "已排队，当前需求修订完成后自动处理";
   if (item.sent_via === "queued_decision") return "已排队，随决定送达";
   return "执行中发送";
@@ -525,6 +526,10 @@ function progressOf(
   if (route === "agent" && item.sent_via === "requirement_queue") {
     return { tone: "waiting", text: "已排队·需求修订",
       hint: "当前一批完成后自动处理这条意见，无需再次提交；处理后仍需由意见作者复检确认。" };
+  }
+  if (route === "agent" && item.sent_via === "requirement_review") {
+    return { tone: "waiting", text: "Agent 正在修改需求",
+      hint: "这条意见已提交并正在处理，不需要再次提交；完成后请核对改动并确认。" };
   }
   // 还没到裁决点:回执在 Agent 本轮结束后才登记,MR 修复轮的意见更要等到
   // 最终推送确认卡。这之前原来写成"已提交/已被改动·请你确认",人以为

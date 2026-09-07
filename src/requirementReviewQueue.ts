@@ -6,7 +6,8 @@ const writers = new WeakMap<object, Set<string>>();
 
 export function resetQueuedRequirementReviews(store: AnnotationStore): void {
   for (const item of store.list()) {
-    if (item.status === "sent" && item.sent_via === "requirement_queue") {
+    if (item.status === "sent"
+        && ["requirement_queue", "requirement_review"].includes(item.sent_via ?? "")) {
       store.reopen(item.id, item.author);
     }
   }
@@ -26,6 +27,10 @@ export async function submitRequirementReview(
       || task.summary.waiting?.step !== "cloud_requirement_analysis_confirm") {
     throw new TaskControlError("当前已经不在需求确认阶段");
   }
+  // 页面尚未刷新或网络重试：已接收的当前版本只回执，不重复执行。
+  annotations = annotations.filter((item) => item.status === "draft"
+    || item.sent_via === "owner_pending");
+  if (!annotations.length) return;
   const active = writers.get(task);
   if (active) {
     // 重复点击同一批不重跑；新意见先持久化，HTTP 无需等待当前 Agent。
@@ -40,6 +45,8 @@ export async function submitRequirementReview(
     while (batch.length) {
       current.clear();
       batch.forEach((item) => current.add(item.id));
+      // 第一批也必须先登记“处理中”，否则页面仍把它当草稿反复提交。
+      store.markSent(batch.map((item) => item.id), "requirement_review");
       await run(batch);
       // 每轮重新读账，撤回/改写为草稿的意见不能被自动带入下一轮。
       batch = store.list().filter((item) => item.status === "sent"
