@@ -4,11 +4,11 @@
  * 与"我的需求"完全隔离:独立分包、独立轮询、独立 API 命名空间。
  * 本文件只剩列表与组装(spec #2 按域拆分):登记在 Registration.tsx,
  * 会话工作台在 SessionView.tsx,材料页签在 MaterialsPane.tsx,现场
- * 页签在 EventsPane.tsx;IssueRail / IssueDecisionCard 本就是独立文件。
- * 页面两块:上方登记(手工登记/DTS 列表),下方"我的问题"会话列表;
- * 点开进入会话详情——决策-centric 双栏(顶部阶段线 + 耗时卡点折叠条,
- * 左栏内容页签,右栏常驻 NEXT ACTION + 底部固死的归档与取消)。
- * 前端不推断状态:一切文案来自 /issues API 镜像。
+ * 页签在 EventsPane.tsx,协作流在 IssueConversationStream.tsx,
+ * 决策卡在 IssueDecisionCard.tsx。页面两块:上方登记(手工登记/DTS
+ * 列表),下方"我的问题"会话列表;点开进入会话工作台(studio 骨架:
+ * 头部进度 + 左栏五标签 + 右栏协作对话框;旧右栏 NEXT ACTION 侧栏
+ * 已随 #127 拆除)。前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useState } from "react";
 import {

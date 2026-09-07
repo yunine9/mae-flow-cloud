@@ -167,7 +167,8 @@ test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、�
     resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  const facts = readFileSync(
+    resolve("web/src/issues/IssueWaitingFacts.tsx"), "utf-8");
   // 前端闸种镜像:两种新闸都要进 IssueGateKind,pipeline 定位字段随卡
   // 上线(镜像不同步=契约对账当场红的同一教训)。
   assert.match(apiTypes, /\|\s*"pipeline_unfixable"/,
@@ -196,12 +197,13 @@ test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、�
   assert.match(sessionView, /gate_pipeline: detail\.gate\.pipeline/);
   // 查看模式:作答卡只在归属分支,新闸与所有等待卡走同一个
   // canOperate 分派(事实卡照看题面,零作答控件)——既有收闸语义
-  // 对新闸天然成立,这里钉住分派没被绕开。
-  assert.match(rail,
-    /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
+  // 对新闸天然成立,这里钉住分派没被绕开(#127 起分派在会话视图的
+  // currentCard 组装处)。
+  assert.match(sessionView,
+    /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
   // 事实卡按闸种点名"等归属人做什么"(不可修=平台处理,证据=贴回原文)。
-  assert.match(rail, /等归属人在交付平台处理\/豁免流水线告警/);
-  assert.match(rail, /等归属人贴回流水线报错原文/);
+  assert.match(facts, /等归属人在交付平台处理\/豁免流水线告警/);
+  assert.match(facts, /等归属人贴回流水线报错原文/);
 });
 
 test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档纪律在位", () => {
@@ -370,7 +372,10 @@ test("问题会话查看模式:标识上屏可读,判定按登录用户与会话
 test("问题会话查看模式:操作控件逐处收进归属分支,信息面不收", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const associate = readFileSync(
+    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
   // 工作台头部:「无单场景」是状态说明不是控件,查看模式照常示人。
   // #98 单路径化后一切会话都是固定流程,自由分支的绑单输入已整体删除,
   // 不得再以任何形式回流。
@@ -381,9 +386,9 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
   assert.match(sessionView,
     /canOperate && onNavigateProfile\s*&& detail\.error\.includes\(GIT_AUTH_ERROR_TAG\)/);
-  // 双栏下传:右栏 NEXT ACTION 与左栏材料内容都必须拿到 canOperate,
-  // 面板内部的写控件由各自文件的断言钉住。
-  assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
+  // 双栏下传:右栏协作流与左栏材料内容都必须拿到 canOperate,
+  // 面板内部的写控件由各自文件的断言钉住(#127 起右栏是协作流)。
+  assert.match(sessionView, /<IssueConversationStream[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
   // 信息面不收:现场直播(SSE)与耗时卡点不带任何归属条件。
   // (#123 拍平后对话现场是五标签之首,直挂默认分支。)
@@ -391,18 +396,26 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.match(sessionView, /<IssueCostPanel id=\{detail\.id\} \/>/);
   // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
-  assert.match(rail,
-    /waiting && \(canOperate\s*\?\s*<IssueDecisionCard[\s\S]*?:\s*<IssueWaitingFacts waiting=\{waiting\} \/>\)\}/);
-  // 转正卡只在归属分支;挂起的等待说明对围观者保留。
-  assert.match(rail,
-    /detail\.status === "suspended" && \(canOperate\s*\?\s*<IssueAssociateCard[\s\S]*?:\s*<div className="issue-rail-card is-suspended">/);
-  // 三处输入行(收口追问/运行中插话/空闲续聊)逐处收进归属分支。
-  assert.equal((rail.match(/canOperate && <RailInput/g) ?? []).length, 3,
-    "右栏的续聊/插话输入必须逐处挂在 canOperate 分支下");
-  // done 卡的归档按钮与底部归档/取消按钮组整组不渲染。
-  assert.match(rail,
-    /\{canOperate && <button type="button" className="issue-rail-primary"/);
-  assert.match(rail, /\{canOperate && <div className="issue-rail-actions">/);
+  assert.match(sessionView,
+    /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
+  // 转正卡只在归属分支(#127 协作流区顶部);挂起的只读说明对围观者保留。
+  assert.match(sessionView,
+    /suspendedCard=\{detail\.status === "suspended" \? \(canOperate\s*\n\s*\? <IssueAssociateCard[\s\S]*?: <IssueAssociateFacts \/>\)/);
+  // 只读说明组件零写口:没有输入、没有按钮。
+  const factsBody = associate.slice(associate.indexOf("export function IssueAssociateFacts"));
+  assert.doesNotMatch(factsBody, /<input|<button/);
+  // 输入区(#127 起发言唯一入口):查看者整段只读,插话/续聊收进归属分支。
+  assert.match(stream, /!canOperate \? \{ kind: "readonly" \}/);
+  // 头部控件区:归档/终止整组收进归属分支(#127 自侧栏栏脚迁入),
+  // 与「导出现场记录」并列;确认语义由 confirmDialog 断言钉住。
+  const headControls = sessionView.slice(
+    sessionView.indexOf('className="ws-head-controls"'),
+    sessionView.indexOf("</header>"));
+  assert.ok(headControls.includes("canOperate && <>"), "归档/终止必须挂在 canOperate 分支下");
+  assert.ok(headControls.includes("归档收口"), "头部控件区缺归档");
+  assert.ok(headControls.includes("终止会话"), "头部控件区缺终止");
+  assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
+  assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
   // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
   assert.match(materials, /\{canOperate && <div className="issue-materials-editor">/);
@@ -422,7 +435,8 @@ test("工作台单路径化(#98):mode 缺席也画固定计划线,自由旅程�
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
-  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
   const teamCard = readFileSync(
     resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
@@ -442,9 +456,10 @@ test("工作台单路径化(#98):mode 缺席也画固定计划线,自由旅程�
   assert.match(board, /^        <IssueFixedProgress issue=\{issue\} \/>$/m);
   assert.doesNotMatch(board, /issue\.mode/);
   assert.doesNotMatch(teamCard, /issue\.mode/);
-  // 收口态只按固定流程语义判定:末阶段完成+idle。
-  assert.match(rail,
-    /const doneIdle = !waiting && detail\.status === "idle"\s*\n\s*&& lastState === "done";/);
+  // 终局(归档/取消/失败)只按状态收口:输入区给只读原因说明,不问
+  // 模式(rail 拆除后 #127 起终局说明由输入区承载)。
+  assert.match(stream,
+    /const ended = \["archived", "canceled", "failed"\]\.includes\(status\);/);
   // 前端类型面不再携带模式:IssueFlowMode 与会话上的 mode 字段删除。
   assert.doesNotMatch(apiTypes, /IssueFlowMode/);
   assert.doesNotMatch(apiTypes, /\bmode\?:/);
@@ -582,9 +597,8 @@ test("左栏五标签(#123):顺序固定、对话现场默认,旧顶层页签引
   // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
   assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
   assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
-  // 右栏"分析报告已产出"直达「过程文档」一级标签(材料子视图已不存在)。
-  assert.match(sessionView, /onOpenDoc=\{\(\) => setTab\("doc"\)\}/);
-  // 分析报告在库的脉冲点随升格迁到「过程文档」页签(入口要找得到)。
+  // 分析报告在库的脉冲点随升格迁到「过程文档」页签(入口要找得到;
+  // 旧右栏"分析报告已产出"CTA 已随 #127 侧栏拆除一并退场)。
   assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
   // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
   assert.doesNotMatch(sessionView, /IssuePaneTabs/);
@@ -619,15 +633,14 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
 
 // ---- 右栏协作对话框(#124):ws-side 从 IssueRail 占位换成「与 Agent
 // ---- 协作」——会话流接 GET /issues/:id/conversation 聚合接口(可见
-// ---- 轮询,任务侧同款节奏),当前等待卡临时挂在流上方保证作答链路
-// ---- 不断,IssueRail 折进底部「更多操作」默认收起(#127 再拆)。
+// ---- 轮询,任务侧同款节奏),当前等待卡钉在流末尾的 Agent 气泡内
+// ---- (#125 卡座);IssueRail 折叠已于 #127 拆除,引用清零。
 
-test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡上移/IssueRail 折叠", () => {
+test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡上移", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const stream = readFileSync(
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
-  const rail = readFileSync(resolve("web/src/issues/IssueRail.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
   // ws-side 协作头:流组件自带「与 Agent 协作」栏头(ws-collaboration-head,
   // 与任务侧同一结构类),挂在会话视图的 ws-side(aria 同名)里。
@@ -655,8 +668,8 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   assert.match(stream,
     /useEffect\(\(\) => \{[\s\S]*setView\(\{ items: \[\], truncated: false, loaded: false \}\);[\s\S]*\}, \[issueId, load\]\)/);
   // 当前等待卡已入流(#125 卡座):卡由会话视图组装下传(决策卡/查看
-  // 模式事实卡),钉在流末尾的 Agent 气泡内——流上方临时容器的形状
-  // 断言随 #125 拆除重写,卡座/dock 的契约为文末 #125 测试块钉住。
+  // 模式事实卡),钉在流末尾的 Agent 气泡内——卡座/dock 的契约为文末
+  // #125 测试块钉住。
   assert.match(sessionView,
     /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
   // 输入区分派:运行中=插话(steerIssue)、其余=续聊(replyIssue),
@@ -665,16 +678,91 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   assert.match(sessionView, /onReply=\{sendReply\}/);
   assert.match(stream, /status === "running" \? \{ kind: "steer" \}/);
   assert.match(stream, /ws-composer-readonly/);
-  // IssueRail 折叠保留:不删,折进 ws-side 底部「更多操作」details 默认
-  // 收起(归档/终止/挂起转正控件原样在);查看模式事实卡因此从 rail
-  // 导出复用,组件内部零变化。
-  assert.match(sessionView, /<details className="issue-side-more">/);
-  assert.match(sessionView, /<summary>更多操作<\/summary>/);
-  assert.match(sessionView, /<IssueRail[\s\S]*?canOperate=\{canOperate\}/);
-  assert.match(rail, /export function IssueWaitingFacts/);
-  // 样式落点:#124 右栏协作的追加块在 style.css 末尾问题工作台区块内。
+  // 侧栏拆除(#127):ws-side 再无 rail 挂载与「更多操作」details;
+  // 查看模式事实卡自 IssueWaitingFacts.tsx 独立文件导出(组件零变化)。
+  assert.doesNotMatch(sessionView, /IssueRail/);
+  assert.doesNotMatch(sessionView, /issue-side-more/);
+  assert.doesNotMatch(sessionView, /更多操作/);
+  const facts = readFileSync(
+    resolve("web/src/issues/IssueWaitingFacts.tsx"), "utf-8");
+  assert.match(facts, /export function IssueWaitingFacts/);
+  // 样式落点:#124 右栏协作的追加块在 style.css 末尾问题工作台区块内;
+  // 流上方临时容器(issue-conv-now)的死规则已随 #125 卡座拆除清零。
   assert.match(css, /#124 右栏协作/);
-  assert.match(css, /\.issue-workspace\.task-workspace-v2 \.issue-conv-now \{/);
+  assert.doesNotMatch(css, /issue-conv-now/);
+});
+
+// ---- 右栏侧栏拆除(#127,#120 收尾):IssueRail 六态侧栏整体退场——
+// ---- 状态说明由头部徽标/阶段行与协作流承载,归档/终止入头部控件区,
+// ---- 挂起转正卡入协作流顶部;拆除项引用清零、死样式清理。
+
+test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,状态说明不丢", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  // 拆除项源码清零:IssueRail.tsx 文件不存在,问题工作台源码再无
+  // rail 组件/类名/「更多操作」details 的引用(死样式一并清零)。
+  assert.equal(
+    readdirSync(resolve("web/src/issues")).includes("IssueRail.tsx"), false,
+    "IssueRail.tsx 应随 #127 删除");
+  assert.doesNotMatch(sessionView, /IssueRail|issue-rail(?!-card)|issue-side-more/);
+  assert.doesNotMatch(stream, /IssueRail|issue-side-more/);
+  assert.doesNotMatch(css, /issue-side-more|issue-rail-input|issue-rail-foot|issue-rail-actions|issue-analysis-cta/);
+  // 归档/终止入头部控件区(与导出并列),确认语义保留:
+  // confirmDialog 的两条接入(归档/终止)在 SessionView 原样。
+  const headControls = sessionView.slice(
+    sessionView.indexOf('className="ws-head-controls"'),
+    sessionView.indexOf("</header>"));
+  assert.ok(headControls.includes("导出现场记录"));
+  assert.ok(headControls.includes("归档收口"));
+  assert.ok(headControls.includes("终止会话"));
+  assert.match(sessionView, /title: "归档会话"/);
+  assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
+  // 头部危险档:终止钮保留红色危险 affordance(问题域 #127 追加块)。
+  assert.match(css,
+    /\.issue-workspace\.task-workspace-v2 \.ws-head-controls > button\.danger \{/);
+  // 状态信息不丢:六态说明由头部状态徽标(ISSUE_STATUS_TEXT 全表)+
+  // 阶段行承载,不依赖已拆的侧栏状态卡。
+  assert.match(sessionView,
+    /<span className=\{`issue-status status-\$\{detail\.status\}`\}>\s*\n\s*\{ISSUE_STATUS_TEXT\[detail\.status\]\}\s*\n\s*<\/span>/);
+  assert.match(sessionView, /<span className="issue-stage">\s*\n\s*\{issueStageText\(detail\)\}/);
+  assert.match(stream, /kind: "blocked", title: "会话已结束"/,
+    "终局说明由输入区承载(终局无侧栏卡后不断档)");
+});
+
+test("挂起转正入流(#127):转正卡在协作流区顶部,两段式与查看模式只读语义原样", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const associate = readFileSync(
+    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
+  // 会话视图按挂起状态组装下传:归属人拿两段式转正卡,查看模式只读说明。
+  assert.match(sessionView,
+    /suspendedCard=\{detail\.status === "suspended" \? \(canOperate\s*\n\s*\? <IssueAssociateCard busy=\{busy\} onAssociate=\{associate\} \/>\s*\n\s*: <IssueAssociateFacts \/>\)\s*\n\s*: undefined\}/);
+  // 挂载点:协作流区顶部——「与 Agent 协作」头之下、可滚流区之上
+  // (不进流,不会被贴底跟随滚出视野)。
+  assert.match(stream,
+    /<header className="ws-collaboration-head">[\s\S]*?\{suspendedCard && <div className="issue-conv-suspended">\{suspendedCard\}<\/div>\}[\s\S]*?<div className="ws-stream"/);
+  // 样式落点:#127 追加块给槽位留白(ws-anchor 同节奏)。
+  assert.match(css,
+    /\.issue-workspace\.task-workspace-v2 \.ws-stream-shell > \.issue-conv-suspended \{/);
+  // 两段式搬运不改语义:输单号 → 校验过目(单据详情回显)→ 确认转正;
+  // 校验/确认都走同一个 onAssociate(ticket, confirm) 口。
+  assert.match(associate, /export function IssueAssociateCard/);
+  assert.match(associate, /const result = await onAssociate\(ticket\.trim\(\), false\);/);
+  assert.match(associate, /await onAssociate\(ticket\.trim\(\), true\);/);
+  assert.match(associate, /校验单号/);
+  assert.match(associate, /确认转正\(继承分析报告,进入问题修改\)/);
+  assert.match(associate, /转正不可逆:本会话将归档,新会话以该单号继续。/);
+  // 转正成功跳新会话:associate 结果带 converted 时 onOpenIssue 由
+  // 会话视图处理(链路在 SessionView,不在卡组件)。
+  assert.match(sessionView,
+    /if \(result\.converted\) \{[\s\S]*onOpenIssue\(result\.converted\.id\);/);
+  // 输入区挂起提示指向协作区(不再指向已拆的「更多操作」)。
+  assert.match(stream, /在上方协作区关联 DTS 单号转正/);
+  assert.doesNotMatch(stream, /更多操作/);
 });
 
 // ---- 举卡入流(#125,ADR-0018 决策三):当前等待卡钉在协作流末尾的

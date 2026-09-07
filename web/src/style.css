@@ -3096,46 +3096,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface);
   box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, .14));
 }
-/* 右栏 NEXT ACTION 常驻栏:flex 列让 body 吃满余量、footer 钉底 */
-.issue-rail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-muted);
-  overflow: hidden;
-}
-/* kicker 沿用 ws-pane-head 的语汇(accent 大写 + 宽字距);issues 视图
-   的 accent 已被 data-view 重映射为陶土色,var() 直接继承 */
-.issue-rail-head {
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.issue-rail-head > span {
-  color: var(--accent);
-  font-size: var(--font-size-assist);
-  font-weight: 700;
-  letter-spacing: 0;
-}
-.issue-rail-body {
-  flex: 1;
-  display: grid;
-  gap: 10px;
-  align-content: start;
-  padding: 12px;
-  overflow-y: auto;
-}
 @media (max-width: 1100px) {
   .issue-two-pane { grid-template-columns: 1fr; }
-  /* 单列时右栏不再吃视口高度,自然展开不内滚 */
-  .issue-rail { order: -1; max-height: none; }
   /* 单列下左栏不吃视口高,现场流恢复帽子保住内滚(贴底跟随依赖它) */
   .issue-main-pane > .event-panel-body > .event-stream { max-height: 62vh; }
 }
 
-/* 栏内状态卡:五态共用一张素卡,绿/脉冲只用语义 token 点缀 */
+/* 协作流内的状态卡(rail 拆除后的幸存者,类名承旧):挂起转正卡与
+   查看模式事实卡共用一张素卡,绿/脉冲只用语义 token 点缀 */
 .issue-rail-card {
   display: grid;
   gap: 8px;
@@ -3149,15 +3117,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-rail-card strong { display: flex; align-items: center; gap: 8px; color: var(--text-strong); }
 .issue-rail-card p { margin: 0; color: var(--muted); line-height: 1.55; }
 .issue-rail-card small { color: var(--faint); line-height: 1.5; }
-/* done ≠ 归档的收口引导从顶部横幅迁到这里:成功绿只洗这一张卡的底 */
-.issue-rail-card.is-done {
-  border-color: color-mix(in srgb, var(--success) 24%, var(--line));
-  background: var(--success-soft);
-}
-.issue-rail-card.is-done strong,
-.issue-rail-card.is-done p { color: var(--success); }
 
-/* 挂起(固定流程无单场景结论为"是问题"):关联转正卡 */
+/* 挂起(固定流程无单场景结论为"是问题"):协作流区顶部的关联转正卡 */
 .issue-rail-card.is-suspended {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
@@ -3195,70 +3156,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   line-height: 1.5; white-space: pre-line;
   max-height: 140px; overflow-y: auto;
 }
+/* 转正确认钮(rail 拆除后的幸存者,类名承旧):主色实底 */
 .issue-rail-primary {
   min-height: 34px; padding: 0 16px; border: 0; border-radius: 9px;
   background: var(--accent); color: var(--accent-fg); font-size: var(--font-size-assist);
   font-weight: 700; cursor: pointer;
 }
 .issue-rail-primary:disabled { opacity: .55; cursor: not-allowed; }
-/* 运行中呼吸点:活着的会话要有一眼可见的生命体征 */
-.issue-rail-pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: issueRailPulse 1.6s ease-in-out infinite;
-}
-@keyframes issueRailPulse {
-  0%, 100% { opacity: .35; transform: scale(.85); }
-  50% { opacity: 1; transform: scale(1); }
-}
-
-/* 栏内输入行:插话单行、续聊三行 textarea;提交在 success 后清空 */
-.issue-rail-input {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  width: 100%;
-}
-.issue-rail-input input, .issue-rail-input textarea {
-  width: 100%; padding: 8px 10px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface-muted);
-  color: var(--text-strong); font: inherit; resize: vertical;
-}
-.issue-rail-input > button {
-  flex: none; min-height: 30px; padding: 0 13px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface); color: var(--text-strong);
-  font-size: var(--font-size-dense); cursor: pointer;
-}
-.issue-rail-input > button.primary {
-  border: 0; background: var(--accent); color: var(--accent-fg); font-weight: 700;
-}
-.issue-rail-input > button:disabled { opacity: .55; cursor: not-allowed; }
-
-/* 栏脚:归档/取消钉底(自旧 composer-actions 整体迁入),分析报告
-   快捷键也落在这里;m-left:auto 在新上下文里没有意义,归零。 */
-.issue-rail-foot {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-.issue-rail-actions { display: flex; gap: 8px; }
-.issue-rail-actions button {
-  flex: 1;
-  min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong);
-  font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-rail-actions button:disabled { opacity: .5; cursor: not-allowed; }
-.issue-rail-actions .danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
-}
 
 /* 决策卡(WaitingCard anatomy 的问题域移植):白卡 + 琥珀对角线洗头 +
    计数 pill;问题/选项/圆点直接复用全局 .question/.option/.radio 族,
@@ -3380,31 +3284,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 
-/* 分析报告置顶 CTA(2026-09-02):页脚小字没人看得见,升为右栏首卡——
-   accent 描边+浅底+脉冲点(issue-rail-pulse 同款), hover 提亮;
-   材料页签同拍挂脉冲点,双入口同一事实源 has_analysis。 */
-.issue-analysis-cta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
-  border-radius: 10px;
-  background: var(--accent-soft);
-  cursor: pointer;
-  text-align: left;
-}
-.issue-analysis-cta:hover {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  border-color: var(--accent);
-}
-.issue-analysis-cta-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
-.issue-analysis-cta-text strong { color: var(--text-strong); font-size: 13px; }
-.issue-analysis-cta-text small { color: var(--muted); font-size: var(--font-size-assist); }
-.issue-analysis-cta > svg {
-  width: 14px; height: 14px; flex: none;
-  fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+/* 呼吸脉冲(rail 拆除后的幸存者,名字承旧):「有分析报告」圆点在用 */
+@keyframes issueRailPulse {
+  0%, 100% { opacity: .35; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1); }
 }
 /* 材料/现场页签栏上的"有分析报告"脉冲点,随标签文字走。 */
 .ws-tab-dot {
@@ -11562,8 +11445,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   --workspace-tab-color: var(--accent);
 }
 /* ws-evidence 是问题工作台的滚动主区:错误横幅/逐仓交付/耗时卡点与
-   左栏内容都在其中;ws-side 承接协作区(现状 IssueRail,#124 换协作
-   对话框)。 */
+   左栏内容都在其中;ws-side 承接协作区(#124 协作对话框,#127 起旧
+   侧栏已拆,归档/终止入头部、挂起转正卡入流)。 */
 .issue-workspace.task-workspace-v2 .ws-evidence {
   overflow-y: auto;
   padding: 0 22px 28px;
@@ -11582,13 +11465,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-}
-.issue-workspace.task-workspace-v2 .ws-side .issue-rail {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  border: 0;
-  border-top: 0;
 }
 @media (max-width: 1100px) {
   /* 窄屏单列:协作区回到内容之上(与旧双栏断点同语义)。 */
@@ -11624,26 +11500,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 
 /* ---- #124 右栏协作:会话流接聚合接口 + 输入区分派(只追加,不动上行) ---- */
-/* 当前待你处理:等待卡(决策卡/查看模式事实卡)本票临时挂在流上方
-   (#125 卡入流后容器拆除);容器自身可滚,高卡不把流挤没。 */
-.issue-workspace.task-workspace-v2 .issue-conv-now {
-  flex: none;
-  margin: 8px 14px 0;
-  display: grid;
-  gap: 6px;
-  padding: 8px 0 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  overflow: auto;
-  max-height: 48vh;
-}
-.issue-workspace.task-workspace-v2 .issue-conv-now-label {
-  padding: 0 12px;
-  color: var(--attention);
-  font-size: var(--fs-12);
-  font-weight: 600;
-}
 /* 回合步骤一行(任务侧点开去「工作过程」;问题域没有该视图,只读计数)。 */
 .issue-workspace.task-workspace-v2 .issue-conv-steps {
   color: var(--muted);
@@ -11652,31 +11508,24 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* IssueRail 折叠为「更多操作」(#127 再拆):钉在右栏最底(流与输入区
-   之下,conversation.css 的 order 3/4 之后),收起只占一行;展开后 rail
-   不再吃右栏 flex 分配(#122 给它的 flex:1 让位),保持自然高度。 */
-.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more {
-  order: 5;
+
+/* ---- #127 右栏侧栏拆除:归档/终止入头部、挂起转正卡入协作流顶部;
+   「更多操作」details 与 rail 布局规则随拆除清零 ---- */
+/* 挂起转正卡的槽位:协作头之下、流之上,不进可滚流区(不会被贴底
+   跟随滚出视野);留白与 ws-anchor 同节奏。 */
+.issue-workspace.task-workspace-v2 .ws-stream-shell > .issue-conv-suspended {
   flex: none;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
+  margin: 0 14px 6px;
 }
-.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more > summary {
-  padding: 8px 16px;
-  color: var(--muted);
-  font-size: var(--fs-13);
-  cursor: pointer;
-  list-style: none;
+/* 头部控件区的终止钮:危险档红(与任务侧 ws-head-controls 的按钮
+   形制一致,只洗色)。 */
+.issue-workspace.task-workspace-v2 .ws-head-controls > button.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong));
 }
-.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more > summary::before {
-  content: "▸ ";
-}
-.issue-workspace.task-workspace-v2 .ws-side > .issue-side-more[open] > summary::before {
-  content: "▾ ";
-}
-.issue-workspace.task-workspace-v2 .ws-side .issue-side-more .issue-rail {
-  flex: 0 0 auto;
-  border-top: 1px solid var(--line);
+.issue-workspace.task-workspace-v2 .ws-head-controls > button.danger:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ---- #125 卡座与 dock:当前卡钉在协作流末尾的 Agent 气泡内,提交区
@@ -11687,7 +11536,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   box-shadow: none;
 }
 /* 提交区容器(issue-decision-dock-foot:附言+错误提示+按钮排)随卡座
-   分两态:原位(首帧/未接 dock 的兜底,rail 直挂同此)是卡内一节;
+   分两态:原位(首帧/未接 dock 的兜底)是卡内一节;
    挂进输入区 dock 后是输入区自己的铺陈——附言在上、按钮在下,卡内
    画法(负边距/顶边线/底色)让位。 */
 .issue-decision-dock-foot {
@@ -11712,7 +11561,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   background: transparent;
 }
 /* env 卡的提交区搬进 dock 后,卡体底部不再有提交块垫底:补回下内边距
-   (只对已 dock 的 env 卡生效,skill/流水线卡 #126 前仍原样)。 */
+   (四类卡 dock 后都以表单段/说明段收尾,#126 块给其余收尾形状)。 */
 .issue-decision.foot-docked .issue-decision-env { padding-bottom: 15px; }
 
 /* ---- #126 三类卡 dock 铺陈:通用/skill 圈选/流水线两闸照 #125 卡座

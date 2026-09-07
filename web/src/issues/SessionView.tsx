@@ -3,11 +3,12 @@
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
- * #98 单路径化:不再感知"模式",自由旅程线已删);右栏 NEXT ACTION
- * 在 IssueRail(独立文件)。左栏(#123 拍平)是五个一级标签直排——
- * 页签条在本文件,四个材料子视图内容免壳直渲自 MaterialsPane.tsx、
- * 现场直播在 EventsPane.tsx。耗时卡点(IssueCostPanel)同时被列表卡
- * 的展开态复用,也从这里出。
+ * #98 单路径化:不再感知"模式",自由旅程线已删)。左栏(#123 拍平)
+ * 是五个一级标签直排——页签条在本文件,四个材料子视图内容免壳直渲自
+ * MaterialsPane.tsx、现场直播在 EventsPane.tsx。耗时卡点(IssueCostPanel)
+ * 同时被列表卡的展开态复用,也从这里出。右栏旧 NEXT ACTION 侧栏已随
+ * #127 整体拆除:归档/终止入头部控件区、挂起转正卡入协作流顶部、
+ * 状态说明由头部徽标与协作流承载。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
@@ -45,7 +46,8 @@ import {
   type RepoDeliveryRow,
   type RepoLedgerInput,
 } from "./perRepo";
-import { IssueRail, IssueWaitingFacts } from "./IssueRail";
+import { IssueWaitingFacts } from "./IssueWaitingFacts";
+import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
@@ -95,8 +97,8 @@ export function IssueSessionView({
   const [decisionFooterTarget, setDecisionFooterTarget] =
     useState<HTMLDivElement | null>(null);
   // 左栏页签(#123 五选一):默认"对话现场"(AI 干活的直播面),用户
-  // 手选优先;换会话重置。发言不靠页签——右栏 NEXT ACTION 六态常驻
-  // 输入,对话现场只管看。
+  // 手选优先;换会话重置。发言不靠页签——右栏输入区常驻(运行中=插话/
+  // 空闲=续聊),对话现场只管看。
   const [tab, setTab] = useState<IssueMainTab>("events");
 
   useEffect(() => {
@@ -240,7 +242,7 @@ export function IssueSessionView({
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
   // 右 ws-side 协作)。主题走问题域变量(见 style.css 的 .issue-workspace
   // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏是 #124
-  // 的协作对话框(会话流+输入区),IssueRail 折进底部「更多操作」。
+  // 的协作对话框(会话流+输入区);旧 NEXT ACTION 侧栏已按 #127 拆除。
   return <section
     className="workspace-overlay issue-workspace task-workspace-v2 workspace-studio"
     role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
@@ -296,12 +298,25 @@ export function IssueSessionView({
             anchor.click();
             anchor.remove();
           }}>导出现场记录</button>
+        {/* 归档/终止(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
+            确认语义、按状态禁用与 failed 例外(失败没有结论可归档,只能
+            终止清理)原样保留;都是写操作,查看模式整组不渲染。 */}
+        {canOperate && <>
+          <button type="button" disabled={busy
+            || ["archived", "canceled", "failed"].includes(detail.status)}
+            title={detail.status === "failed"
+              ? "失败的会话没有结论可归档——用「终止会话」清理" : undefined}
+            onClick={archive}>归档收口</button>
+          <button type="button" className="danger" disabled={busy
+            || ["archived", "canceled"].includes(detail.status)}
+            onClick={cancelSession}>终止会话</button>
+        </>}
       </div>
     </header>
 
     <div className="ws-body">
       <section className="ws-evidence" aria-label="会话工作区">
-        {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
+        {/* 错误横幅:认证类报错带一键跳转(查看模式不渲染)。 */}
         {detail.error && <div className="issue-session-error" role="alert">
           <span>{detail.error}</span>
           {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
@@ -360,7 +375,9 @@ export function IssueSessionView({
             GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
             由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
             去重),提交区经 portal 挂进输入区 dock(dockRef→footerTarget);
-            查看模式渲染只读事实卡、不出 dock。 */}
+            查看模式渲染只读事实卡、不出 dock。挂起会话(#127)的关联转正
+            卡走 suspendedCard 槽,渲染在协作头之下、流之上——rail 拆除后
+            转正入口的唯一家。 */}
         <IssueConversationStream
           key={detail.id}
           issueId={detail.id}
@@ -378,32 +395,14 @@ export function IssueSessionView({
                 onAnswer={answer} onEnvironment={attachEnvironment} />
             : <IssueWaitingFacts waiting={waiting} />)
             : undefined}
+          suspendedCard={detail.status === "suspended" ? (canOperate
+            ? <IssueAssociateCard busy={busy} onAssociate={associate} />
+            : <IssueAssociateFacts />)
+            : undefined}
           dockRef={setDecisionFooterTarget}
           onSteer={sendSteer}
           onReply={sendReply}
         />
-        {/* IssueRail 本票不删(#127 再拆):折进底部「更多操作」details
-            默认收起,归档/终止/挂起转正等控件原样保留。当前等待卡已上移
-            协作区,这里传空避免同一张卡两处可交互(rail 对 waiting_user
-            无卡状态本就只出归档/终止,与旧态一致)。onOpenDoc 即右栏
-            "分析报告已产出"的跳转,#123 起直达「过程文档」一级标签。 */}
-        <details className="issue-side-more">
-          <summary>更多操作</summary>
-          <IssueRail
-            detail={detail}
-            busy={busy}
-            canOperate={canOperate}
-            waiting={undefined}
-            onAnswer={answer}
-            onReply={sendReply}
-            onSteer={sendSteer}
-            onArchive={archive}
-            onCancel={cancelSession}
-            onOpenDoc={() => setTab("doc")}
-            onAssociate={associate}
-            onEnvironment={attachEnvironment}
-          />
-        </details>
       </section>
     </div>
   </section>;

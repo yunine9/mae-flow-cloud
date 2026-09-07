@@ -31,7 +31,12 @@
  * 输入区按会话状态分派(轻量仿制任务侧 ws-composer 的结构与类名):
  * 运行中=插话(steerIssue,不打断当前步骤)、空闲=续聊(replyIssue);
  * 等卡/挂起/未启动/终态给原因说明,查看者(canOperate=false)只见只读
- * 提示——写口语义与 IssueRail 时代的 canOperate 门零变化。
+ * 提示——写口语义与拆栏前(#126 及更早)的 canOperate 门零变化。
+ *
+ * 挂起转正卡(#127):右栏 NEXT ACTION 侧栏拆除后,挂起
+ * 会话的关联转正入口由会话视图组装(IssueAssociateCard / 查看模式
+ * IssueAssociateFacts)经 suspendedCard 槽下传,渲染在「与 Agent 协作」
+ * 头之下、流之上——协作流区顶部,不随流滚动。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -90,6 +95,7 @@ export function IssueConversationStream({
   owner,
   viewerUsername,
   currentCard,
+  suspendedCard,
   dockRef,
   onSteer,
   onReply,
@@ -113,6 +119,10 @@ export function IssueConversationStream({
   /** 当前待处理卡(IssueDecisionCard / 查看模式 IssueWaitingFacts),
    * 会话视图组装;卡座把它钉在流末尾的 Agent 气泡内(#125)。 */
   currentCard?: ReactNode;
+  /** 挂起转正卡(#127):协作流区顶部(协作头之下、流之上)渲染,
+   * 会话视图按 status === "suspended" 组装——归属人两段式转正卡,
+   * 查看模式只读说明。 */
+  suspendedCard?: ReactNode;
   /** 输入区 dock 容器的节点回调(#125):转交会话视图存为 footerTarget,
    * 当前卡的提交区经 portal 挂进 dock。 */
   dockRef?: (node: HTMLDivElement | null) => void;
@@ -396,6 +406,9 @@ export function IssueConversationStream({
         <strong>与 Agent 协作</strong>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
+      {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进
+          可滚流区,不会被贴底跟随滚出视野。 */}
+      {suspendedCard && <div className="issue-conv-suspended">{suspendedCard}</div>}
       <div className="ws-stream" role="log" aria-live="polite" aria-relevant="additions"
         ref={box}
         onScroll={(event) => {
@@ -502,7 +515,7 @@ function IssueCollaborationComposer({
       }
     : status === "suspended" ? {
         kind: "blocked", title: "会话挂起中",
-        hint: "在下方「更多操作」里关联 DTS 单号转正;转正后到新会话继续。",
+        hint: "在上方协作区关联 DTS 单号转正;转正后到新会话继续。",
       }
     : ended ? {
         kind: "blocked", title: "会话已结束",
