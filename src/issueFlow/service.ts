@@ -3259,6 +3259,7 @@ export class IssueFlowService {
     // “取消成功”但 Docker 仍在；失败后也没有句柄可重试。
     const previousStatus = live.state.status;
     if (input.action === "cancel") live.controlEpoch += 1;
+    delete live.state.takeover; // 接管中收口:人工驾驶标记不残留进终态
     void live.driver?.abort().catch(() => undefined);
     this.releaseDriver(live);
     try {

@@ -693,6 +693,13 @@ function IssueCollaborationComposer({
         {steer ? "不打断当前步骤,Agent 下一步执行前送达"
           : "会话空闲中,补充信息或调整方向后 AI 会接着推进"}
       </span>
+      {/* 人工接管入口(2026-09-07 走查拍板):运行/空闲都可发起——打断
+          AI、现场交由人工;接管后输入区换人工驾驶模式(记录/交还)。 */}
+      {!busy && <button type="button" className="issue-takeover-start"
+        title="打断 AI,现场交由人工操作;交还时 AI 会带着人工记录继续"
+        onClick={() => void onTakeover().catch(() => undefined)}>
+        接管现场
+      </button>}
     </div>
     <textarea className="steer-input" value={text} rows={3}
       disabled={sending || busy}

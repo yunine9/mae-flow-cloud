@@ -11651,3 +11651,16 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   background: var(--surface-muted);
   border-color: var(--line);
 }
+
+/* 人工接管:发起入口(插话/续聊档说明行右侧) */
+.issue-takeover-start {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--studio-accent) 45%, transparent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-strong);
+  font-size: var(--font-size-assist);
+  cursor: pointer;
+}
+.issue-takeover-start:hover { border-color: var(--studio-accent); color: var(--accent); }
