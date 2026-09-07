@@ -242,6 +242,7 @@ export function AnnotationPanel({
   const oneStepRework = queueable && !requirementReview && canDecide
     && !!reworkChoice;
   const canSend = !requirementRevisionRunning
+    && !["completed", "canceled"].includes(taskStatus)
     && (running || evidenceAwaiting || reviewSendable || queueable);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
@@ -293,7 +294,7 @@ export function AnnotationPanel({
   const checkOf = (id: string) => checks.find((check) => check.id === id);
 
   async function send() {
-    if (busy) return;
+    if (busy || !canOperate || !canSend || !drafts.length) return;
     setBusy(true);
     setError("");
     try {
@@ -441,9 +442,12 @@ export function AnnotationPanel({
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
-      {canOperate && drafts.length > 0 && canSend && (
+      {drafts.length > 0 && (
         <div className="annot-panel-actions">
-          <button type="button" className="primary" disabled={busy}
+          <button type="button" className="primary"
+                  disabled={busy || !canOperate || !canSend}
+                  title={!canOperate ? "你目前只有记录权限，暂不能发送批注"
+                    : !canSend ? "意见已保存为草稿；当前无法发送，原因见下方说明" : undefined}
                   onClick={() => void send()}>
             {busy ? "提交中…"
               : oneStepRework ? `提交 ${drafts.length} 条并返工`
