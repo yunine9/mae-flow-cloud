@@ -1,15 +1,17 @@
 /**
- * 材料域:会话材料页签(DTS 单据 / 过程文档 / 工作区变更含快速修改 /
+ * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更含快速修改 /
  * 拉取日志)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
- * 结构照搬任务工作台交付材料页(ws-pane-head + ws-source-switch +
- * ws-doc),diff 用同一把 GitDiff 渲染。合并视图直接渲染聚合 diff
- * (服务端自带「===== 仓库 =====」分段标记,GitDiff 按元信息行呈现);
- * 逐仓视图走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析
- * 分段标记。过程文档子视图(IssueProcessDocs,原结论文档升级:
- * 多页签 = 分析报告 + 过程问答 + Agent 落的其他 .md,页签样式同任务
- * 侧 ws-tabs)只有材料页签渲染,随本文件走。
+ * diff 用任务侧同一把 GitDiff 渲染。合并视图直接渲染聚合 diff(服务端
+ * 自带「===== 仓库 =====」分段标记,GitDiff 按元信息行呈现);逐仓视图
+ * 走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析分段标记。
+ * #123 拍平:面板壳(头部页签条)上收为会话层的五个一级标签
+ * (SessionView 直排),本组件改为免壳直渲——只按会话层下发的
+ * view 渲染对应内容,四类内容与整包下载原样;过程文档
+ * 子视图(IssueProcessDocs,原结论文档升级:多页签 = 分析报告 + 过程
+ * 问答 + 检视 + Agent 落的其他 .md,页签样式同任务侧 ws-tabs)保留
+ * 自己的子页签。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
@@ -621,18 +623,20 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
   </div>;
 }
 
-/** 会话材料(材料页签):DTS 单据 / 过程文档 / 工作区变更 / 拉取日志。
- * 数据全部旁路:任何一块失败给空态。
- * 子视图状态在会话层(右栏"分析报告已产出"要能一步跳进来)。
+/** 会话材料内容(免壳直渲,#123 拍平):DTS 单据 / 过程文档 / 工作区
+ * 变更 / 拉取日志四个子视图原样保留;面板壳(头部页签条)已上收为
+ * 会话层的五个一级标签——本组件只按 view 直渲对应内容,不再自带
+ * 头部页签条。
+ * 数据全部旁路:任何一块失败给空态。view 由会话层五标签下发(右栏
+ * "分析报告已产出"跳「过程文档」即 tab="doc")。
  * 查看模式(canOperate=false):快速修改编辑器与解压写口不渲染,
  * diff/日志/单据/文档的只读浏览完整保留。 */
-export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI, canOperate }: {
+export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate }: {
   detail: IssueDetail;
   busy: boolean;
-  view: "dts" | "changes" | "logs" | "doc";
-  onView: (view: "dts" | "changes" | "logs" | "doc") => void;
+  view: "dts" | "doc" | "changes" | "logs";
   onNotifyAI: (text: string) => Promise<boolean>;
-  /** 归属操作权(查看模式=false):材料页签只留只读浏览。 */
+  /** 归属操作权(查看模式=false):材料内容只留只读浏览。 */
   canOperate: boolean;
 }) {
   const [data, setData] = useState<IssueMaterials>();
@@ -654,8 +658,6 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI, can
   const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
   const [extracting, setExtracting] = useState("");
   const defaultExpandedDone = useRef(false);
-  // 过程文档清单(开关角标用):随会话动态轻量重读(只扫顶层 .md)。
-  const [docCount, setDocCount] = useState(0);
 
   async function load() {
     try {
@@ -682,13 +684,6 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI, can
       setNote("");
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
-    }
-    // 清单独立取(旁路):失败只是角标停在旧值,不拖累上面的主数据。
-    try {
-      const docs = await getIssueDocuments(detail.id);
-      setDocCount((docs.documents ?? []).length);
-    } catch {
-      // 角标口径照旧,fail-open。
     }
   }
 
@@ -798,28 +793,8 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI, can
   }, [changes]);
   const activeDiff = diffRepo ? repoDiff ?? "" : allDiff;
 
+  // 免壳直渲(#123):没有面板壳,失败备注顶格示人,其余按 view 出内容。
   return <div className="issue-materials">
-    <div className="ws-pane-head">
-      <div><span>材料清单</span><strong>会话材料</strong></div>
-      <div className="ws-source-switch" aria-label="材料类型">
-        <button className={view === "dts" ? "on" : ""}
-          disabled={!data?.ticket} onClick={() => onView("dts")}>
-          <span>DTS 单据</span><i>{data?.ticket ? "1" : "0"}</i>
-        </button>
-        <button className={view === "doc" ? "on" : ""}
-          onClick={() => onView("doc")}>
-          <span>过程文档</span><i>{docCount + 1}</i>
-        </button>
-        <button className={view === "changes" ? "on" : ""}
-          onClick={() => onView("changes")}>
-          <span>工作区变更</span><i>{changes.length}</i>
-        </button>
-        <button className={view === "logs" ? "on" : ""}
-          onClick={() => onView("logs")}>
-          <span>拉取日志</span><i>{data?.logs.entries.length ?? 0}</i>
-        </button>
-      </div>
-    </div>
     {note && <div className="utility-note">{note}</div>}
       {view === "changes" && <>
         {/* 编辑时机提醒只跟编辑器走:查看模式没有编辑器,也就不需要。 */}

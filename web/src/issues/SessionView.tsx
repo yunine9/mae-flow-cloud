@@ -3,10 +3,12 @@
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
- * #98 单路径化:不再感知"模式",自由旅程线已删);右栏 NEXT ACTION
- * 在 IssueRail(独立文件),左栏材料页签在 MaterialsPane.tsx、
- * 现场页签在 EventsPane.tsx。耗时卡点(IssueCostPanel)同时被列表卡
- * 的展开态复用,也从这里出。
+ * #98 单路径化:不再感知"模式",自由旅程线已删)。左栏(#123 拍平)
+ * 是五个一级标签直排——页签条在本文件,四个材料子视图内容免壳直渲自
+ * MaterialsPane.tsx、现场直播在 EventsPane.tsx。耗时卡点(IssueCostPanel)
+ * 同时被列表卡的展开态复用,也从这里出。右栏旧 NEXT ACTION 侧栏已随
+ * #127 整体拆除:归档/终止入头部控件区、挂起转正卡入协作流顶部、
+ * 状态说明由头部徽标与协作流承载。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
@@ -17,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
   ISSUE_STATUS_TEXT,
+  addIssueTakeoverNote,
   answerIssue,
   associateIssueTicket,
   attachIssueEnvironment,
@@ -26,7 +29,9 @@ import {
   getIssueTimeline,
   issueStageText,
   replyIssue,
+  resumeIssueTakeover,
   steerIssue,
+  takeoverIssue,
   type DtsTicketDetail,
   type IssueDetail,
   type IssueEnvironmentForm,
@@ -44,10 +49,28 @@ import {
   type RepoDeliveryRow,
   type RepoLedgerInput,
 } from "./perRepo";
-import { IssueRail } from "./IssueRail";
+import { IssueWaitingFacts } from "./IssueWaitingFacts";
+import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
+import { IssueDecisionCard } from "./IssueDecisionCard";
+import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
+
+/** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
+ * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
+ * (原悬在页签条上方的大卡区,2026-09-07 走查拍板:信息尽可能收进
+ * 页签圈,上方不占纵向空间)。页签条复用任务侧 ws-pane-head >
+ * ws-source-switch 同构,一签一色走 --workspace-tab-color。 */
+const ISSUE_MAIN_TABS = [
+  { key: "events", label: "对话现场" },
+  { key: "dts", label: "DTS单据" },
+  { key: "doc", label: "过程文档" },
+  { key: "changes", label: "工作区变更" },
+  { key: "logs", label: "拉取日志" },
+  { key: "repos", label: "逐仓交付" },
+] as const;
+type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
 
 export function IssueSessionView({
   detail,
@@ -72,17 +95,20 @@ export function IssueSessionView({
   onOpenIssue: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  // 左栏页签:默认"现场"(AI 干活的直播面),用户手选优先;换会话重置。
-  // 发言不靠页签——右栏 NEXT ACTION 六态常驻输入,现场只管看。
-  const [tab, setTab] = useState<"materials" | "events">("events");
-  // 材料子视图提到会话层:右栏"分析报告已产出"要能一步跳到该子视图。
-  const [materialsView, setMaterialsView] = useState<
-    "dts" | "changes" | "logs" | "doc">("changes");
+  // 卡座 dock(#125):输入区 ws-reply-dock 容器的节点。dockRef 交给右栏
+  // 协作区,节转成 footerTarget 发给当前卡——卡的提交区(附言+提交/
+  // 拒绝按钮)经 portal 挂进输入区;无卡/查看模式时它保持 null,提交区
+  // 原位渲染或干脆不出(查看模式事实卡无提交区)。
+  const [decisionFooterTarget, setDecisionFooterTarget] =
+    useState<HTMLDivElement | null>(null);
+  // 左栏页签(#123 五选一):默认"对话现场"(AI 干活的直播面),用户
+  // 手选优先;换会话重置。发言不靠页签——右栏输入区常驻(运行中=插话/
+  // 空闲=续聊),对话现场只管看。
+  const [tab, setTab] = useState<IssueMainTab>("events");
 
   useEffect(() => {
-    // 换一个会话就丢弃手选页签与材料子视图,回到默认入口。
+    // 换一个会话就丢弃手选页签,回到默认入口(对话现场)。
     setTab("events");
-    setMaterialsView("changes");
   }, [detail.id]);
 
   useEffect(() => {
@@ -172,6 +198,14 @@ export function IssueSessionView({
     perform(() => attachIssueEnvironment(detail.id, input));
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
+  /** 人工接管三回调(2026-09-07 走查拍板)。接管/交还走 perform:成功
+   * 后带新详情回来(徽标与输入区模式随之翻转);人工记录不走 perform
+   * ——perform 会吞错,记录失败要让输入区当场报错保字。 */
+  const takeoverNow = () => perform(() => takeoverIssue(detail.id));
+  const sendTakeoverNote = (text: string) =>
+    addIssueTakeoverNote(detail.id, text).then(() => undefined);
+  const resumeTakeover = (note?: string) =>
+    perform(() => resumeIssueTakeover(detail.id, note));
   /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
    * 不另开会话干预口。等待人工决策时不可用(先把卡答了)。 */
   const notifyAI = (text: string) => detail.status === "running"
@@ -217,52 +251,57 @@ export function IssueSessionView({
     void perform(() => controlIssue(detail.id, { action: "cancel" }));
   }
 
-  // 全屏工作台(与任务侧 workspace-overlay 同款):头部之外全部进
-  // 可滚动的现场体,横屏下信息面积拉满。
-  return <section className="workspace-overlay issue-workspace" role="dialog"
-    aria-modal="true" aria-label={`问题会话:${detail.title}`}>
-    <div className="issue-session-head">
-      <button type="button" className="issue-back" onClick={onBack}>
-        ← 返回我的问题(Esc)
-      </button>
-      <div className="issue-session-title">
+  // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
+  // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
+  // 右 ws-side 协作)。主题走问题域变量(见 style.css 的 .issue-workspace
+  // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏是 #124
+  // 的协作对话框(会话流+输入区);旧 NEXT ACTION 侧栏已按 #127 拆除。
+  return <section
+    className="workspace-overlay issue-workspace task-workspace-v2 workspace-studio"
+    role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
+    <header className="ws-head">
+      <button type="button" className="ws-back" onClick={onBack}
+        title="返回我的问题(Esc)" aria-label="返回我的问题(Esc)">←</button>
+      <div className="ws-identity">
         <strong>{detail.title}</strong>
-        {/* 查看模式标识(非归属人围观):徽标样式沿用状态徽标的
-            身份徽标语言,文本即 aria 信息(读屏直读 span 文本)。 */}
-        {!canOperate && <span className="issue-view-mode" role="status"
-          title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
-          查看模式:归属人 {detail.account} 的会话
-        </span>}
-        <span className={`issue-status status-${detail.status}`}>
-          {ISSUE_STATUS_TEXT[detail.status]}
-        </span>
-        <span className="issue-stage">
-          {issueStageText(detail)}
-          {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}
-          {detail.stage_note ? ` · ${detail.stage_note}` : ""}
-        </span>
-        {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
-            现场;ADR-0003:账号非密可上屏,密码本体只在 vault)。样式借
-            issue-stage 的行尾弱化文本。闸现场补配的环境没有页面凭据,
-            页面账号缺席就不占位。 */}
-        {detail.environment && <span className="issue-stage"
-          title="登记元信息里的网管环境(密码在平台加密保管,不上屏)">
-          网管环境 {detail.environment.hosts.join("、")}
-          {` · 端口 ${detail.environment.port}`}
-          {detail.environment.page_account
-            ? ` · 页面账号 ${detail.environment.page_account}` : ""}
-        </span>}
+        <div className="ws-identity-line">
+          {/* 查看模式标识(非归属人围观):徽标样式沿用状态徽标的
+              身份徽标语言,文本即 aria 信息(读屏直读 span 文本)。 */}
+          {!canOperate && <span className="issue-view-mode" role="status"
+            title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
+            查看模式:归属人 {detail.account} 的会话
+          </span>}
+          <span className={`issue-status status-${detail.status}`}>
+            {ISSUE_STATUS_TEXT[detail.status]}
+          </span>
+          {/* 人工接管徽标(2026-09-07 走查拍板):横幅态独立于六态——
+              在场即「AI 已暂停、人工作业中」,排在状态徽标之后。 */}
+          {detail.takeover
+            && <span className="issue-status status-takingover">人工接管中</span>}
+          <span className="issue-stage">
+            {issueStageText(detail)}
+            {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}
+            {detail.stage_note ? ` · ${detail.stage_note}` : ""}
+          </span>
+          {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
+              现场;ADR-0003:账号非密可上屏,密码本体只在 vault)。闸现场
+              补配的环境没有页面凭据,页面账号缺席就不占位。 */}
+          {detail.environment && <span className="issue-stage"
+            title="登记元信息里的网管环境(密码在平台加密保管,不上屏)">
+            网管环境 {detail.environment.hosts.join("、")}
+            {` · 端口 ${detail.environment.port}`}
+            {detail.environment.page_account
+              ? ` · 页面账号 ${detail.environment.page_account}` : ""}
+          </span>}
+          {detail.ticket
+            ? <span className="issue-ticket">{detail.ticket}</span>
+            : <span className="issue-ticket empty">无单场景</span>}
+        </div>
       </div>
-      <div className="issue-session-ticket">
-        {/* 固定流程没有"中途绑单":无单会话走结论→挂起→关联转正(#98
-            单路径化后一切会话都是固定流程,绑单输入已随自由分支删除)。
-            「无单场景」是状态说明不是控件,查看模式照常示人。 */}
-        {detail.ticket
-          ? <span className="issue-ticket">{detail.ticket}</span>
-          : <span className="issue-ticket empty">无单场景</span>}
-        <span className="issue-bind-hint" title="推送与提 MR 的门票是单号;研究阶段不需要">
-          {detail.ticket ? "" : "结论为问题时挂起,关联单号后转正"}
-        </span>
+      <div className="ws-progress">
+        <IssueWorkspaceProgress issue={detail} />
+      </div>
+      <div className="ws-head-controls">
         <button type="button" className="issue-export" disabled={busy}
           title="导出现场记录(Markdown:人粗读 + AI 精读复盘)"
           onClick={() => {
@@ -276,59 +315,114 @@ export function IssueSessionView({
             anchor.click();
             anchor.remove();
           }}>导出现场记录</button>
+        {/* 归档/终止(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
+            确认语义、按状态禁用与 failed 例外(失败没有结论可归档,只能
+            终止清理)原样保留;都是写操作,查看模式整组不渲染。 */}
+        {canOperate && <>
+          <button type="button" disabled={busy
+            || ["archived", "canceled", "failed"].includes(detail.status)}
+            title={detail.status === "failed"
+              ? "失败的会话没有结论可归档——用「终止会话」清理" : undefined}
+            onClick={archive}>归档收口</button>
+          <button type="button" className="danger" disabled={busy
+            || ["archived", "canceled"].includes(detail.status)}
+            onClick={cancelSession}>终止会话</button>
+        </>}
       </div>
-    </div>
+    </header>
 
-    <div className="issue-workspace-body">
-    {/* 固定流程计划线:全阶段一条,走到哪亮到哪,当前阶段脉冲呼吸
-        (2026-08-28 拍板:旅程线与计划线信息重复,省一行;#98 单路径化
-        后工作台只认这一条线,对 mode 缺席的会话数据同样成立)。 */}
-    <IssueFixedProgress issue={detail} />
+    <div className="ws-body">
+      <section className="ws-evidence" aria-label="会话工作区">
+        {/* 错误横幅:认证类报错带一键跳转(查看模式不渲染)。 */}
+        {detail.error && <div className="issue-session-error" role="alert">
+          <span>{detail.error}</span>
+          {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
+              镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。
+              跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
+          {canOperate && onNavigateProfile
+            && detail.error.includes(GIT_AUTH_ERROR_TAG)
+            && <button type="button" className="issue-error-action"
+              onClick={onNavigateProfile}>去个人设置配置令牌</button>}
+        </div>}
+        {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
+            不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}
+        {Boolean(detail.feedback?.length)
+          && <FeedbackPanel feedback={detail.feedback!} />}
 
-    {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
-    {detail.error && <div className="issue-session-error" role="alert">
-      <span>{detail.error}</span>
-      {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
-          镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。
-          跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
-      {canOperate && onNavigateProfile && detail.error.includes(GIT_AUTH_ERROR_TAG)
-        && <button type="button" className="issue-error-action"
-          onClick={onNavigateProfile}>去个人设置配置令牌</button>}
-    </div>}
-    {/* 逐仓交付区:每个关联仓一张卡(仓名/角色/MR/分支/流水线状态)。
-        事实全部由 perRepo.ts 从 API 字段派生,组件只渲染。 */}
-    <IssueRepoDelivery detail={detail} />
-    {Boolean(detail.feedback?.length)
-      && <FeedbackPanel feedback={detail.feedback!} />}
-
-    <IssueCostPanel id={detail.id} />
-
-    {/* 决策-centric 双栏:左=内容(页签),右=下一步动作。窄屏单列时
-        右栏靠 order 提到内容之上,见 style.css 的 1100px 断点。 */}
-    <div className="issue-two-pane">
-      <section className="issue-main-pane" aria-label="会话内容">
-        <IssuePaneTabs tab={tab} onPick={setTab} hasAnalysis={detail.has_analysis} />
-        {tab === "materials"
-          ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
-              onView={setMaterialsView} onNotifyAI={notifyAI}
-              canOperate={canOperate} />
-          : <IssueEventsPane id={detail.id} active />}
+        {/* 左栏内容(#123 拍平 + #127 走查反馈):六个一级标签直排——
+            对话现场(默认入口)放首位,逐仓交付收编为末签。页签条是
+            任务侧左栏同款 ws-pane-head > ws-source-switch(role=tablist),
+            页签一签一色走问题域变量 --workspace-tab-color。 */}
+        <section className="issue-main-pane" aria-label="会话内容">
+          <div className="ws-pane-head" aria-label="问题工作台视图">
+            <div><strong>{
+              ISSUE_MAIN_TABS.find((item) => item.key === tab)?.label
+            }</strong></div>
+            <div className="ws-source-switch" role="tablist"
+              aria-label="会话工作区内容">
+              {ISSUE_MAIN_TABS.map(({ key, label }) => (
+                <button type="button" key={key} role="tab"
+                  aria-selected={tab === key}
+                  className={tab === key ? "on" : ""}
+                  disabled={key === "dts" && !detail.ticket}
+                  title={key === "dts" && !detail.ticket
+                    ? "无单场景:还没有关联的 DTS 单据" : undefined}
+                  onClick={() => setTab(key)}>
+                  <span>{label}</span>
+                  {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
+                      入口要找得到(原材料页签的同一引导,随升格迁来)。 */}
+                  {key === "doc" && detail.has_analysis
+                    && <i className="ws-tab-dot" aria-hidden />}
+                </button>
+              ))}
+            </div>
+          </div>
+          {tab === "events"
+            ? <IssueEventsPane id={detail.id} active />
+            : tab === "repos"
+            ? <IssueWorkspaceRepos detail={detail} />
+            : <IssueMaterialsPane detail={detail} busy={busy} view={tab}
+                onNotifyAI={notifyAI} canOperate={canOperate} />}
+        </section>
       </section>
-      <IssueRail
-        detail={detail}
-        busy={busy}
-        canOperate={canOperate}
-        waiting={waiting}
-        onAnswer={answer}
-        onReply={sendReply}
-        onSteer={sendSteer}
-        onArchive={archive}
-        onCancel={cancelSession}
-        onOpenDoc={() => { setTab("materials"); setMaterialsView("doc"); }}
-        onAssociate={associate}
-        onEnvironment={attachEnvironment}
-      />
-    </div>
+      <section className="ws-side" aria-label="与 Agent 协作">
+        {/* #125 右栏协作对话框:协作头 + 会话流(聚合接口
+            GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
+            由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
+            去重),提交区经 portal 挂进输入区 dock(dockRef→footerTarget);
+            查看模式渲染只读事实卡、不出 dock。挂起会话(#127)的关联转正
+            卡走 suspendedCard 槽,渲染在协作头之下、流之上——rail 拆除后
+            转正入口的唯一家。 */}
+        <IssueConversationStream
+          key={detail.id}
+          issueId={detail.id}
+          status={detail.status}
+          waiting={Boolean(waiting)}
+          waitingId={waiting?.waiting_id}
+          waitingTs={waiting?.created_at}
+          canOperate={canOperate}
+          busy={busy}
+          owner={detail.account}
+          viewerUsername={viewerUsername}
+          takeover={Boolean(detail.takeover)}
+          currentCard={waiting ? (canOperate
+            ? <IssueDecisionCard waiting={waiting} busy={busy}
+                footerTarget={decisionFooterTarget}
+                onAnswer={answer} onEnvironment={attachEnvironment} />
+            : <IssueWaitingFacts waiting={waiting} />)
+            : undefined}
+          suspendedCard={detail.status === "suspended" ? (canOperate
+            ? <IssueAssociateCard busy={busy} onAssociate={associate} />
+            : <IssueAssociateFacts />)
+            : undefined}
+          dockRef={setDecisionFooterTarget}
+          onSteer={sendSteer}
+          onReply={sendReply}
+          onTakeover={takeoverNow}
+          onTakeoverNote={sendTakeoverNote}
+          onResumeTakeover={resumeTakeover}
+        />
+      </section>
     </div>
   </section>;
 }
@@ -376,6 +470,18 @@ function useInheritedLedger(
     };
   }, [issueId]);
   return ledger;
+}
+
+/** 「逐仓交付」页签内容:有登记仓时渲染逐仓交付卡组,无仓给一句空态
+ * (发起时登记的模块决定关联仓,这里不是登记入口)。 */
+function IssueWorkspaceRepos({ detail }: { detail: IssueDetail }) {
+  if (!(detail.repo_urls?.length ?? 0) && !detail.repo_url) {
+    return <div className="issue-repos-empty">
+      会话没有登记代码仓——发起时登记的业务模块决定关联仓;
+      逐仓交付与流水线状态会在这里展示。
+    </div>;
+  }
+  return <IssueRepoDelivery detail={detail} />;
 }
 
 /** 逐仓交付区(一仓一 MR):每个关联仓一张卡——仓名/角色(变更仓·
@@ -496,39 +602,48 @@ export function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
   </nav>;
 }
 
-/** 材料 / 现场 的页签栏(左栏头;默认口在 IssueSessionView 里定:
- * 打开会话先看现场直播,手选保持到换会话)。发言入口仍走右栏
- * NEXT ACTION;对话的复盘阅读面在材料的「过程文档 · 过程问答」,
- * 现场的「消息」筛选管原始事件,三者各司其职。 */
-/** 页签栏:结构照搬任务工作台的 ws-workspace-nav(彩色卡 +
- * 主副两行文案),视觉与需求侧完全一致。 */
-function IssuePaneTabs({
-  tab,
-  onPick,
-  hasAnalysis,
-}: {
-  tab: "materials" | "events";
-  onPick: (tab: "materials" | "events") => void;
-  /** 分析报告在库:材料页签挂脉冲点——报告是主交付物,入口要找得到
-   * (2026-09-02 用户反馈页脚小字没人注意)。 */
-  hasAnalysis?: boolean;
-}) {
-  const views = [
-    ["materials", "材料", "DTS 单据、过程文档、工作区变更与拉取日志"],
-    ["events", "现场", "执行事件实时跟随,对话内容在「消息」筛选"],
-  ] as const;
-  return <nav className="ws-workspace-nav" aria-label="会话工作台视图">
-    {views.map(([value, label, hint]) => (
-      <button type="button" key={value}
-        aria-selected={tab === value}
-        className={tab === value ? "active" : ""}
-        onClick={() => onPick(value)}>
-        <strong>{label}{value === "materials" && hasAnalysis
-          && <i className="ws-tab-dot" aria-hidden />}</strong>
-        <small>{hint}</small>
-      </button>
-    ))}
-  </nav>;
+/** 工作台头部进度(ADR-0018 骨架对齐):视觉复用任务侧 task-progress
+ * (caption+phase-track,节点上词签下、当前脉冲),数据仍是问题域
+ * stage_states;不做任务侧的"点阶段弹方案"——问题侧没有阶段计划。
+ * 无单三节点与有单五阶段同一条渲染路;inherited 弱化、redo 警示、
+ * 轮次>1 带轮次徽标。列表卡仍用 IssueFixedProgress,两份并存。 */
+function IssueWorkspaceProgress({ issue }: { issue: IssueSummary }) {
+  const stages = fixedStageList(issue.scenario);
+  const states = issue.stage_states ?? [];
+  const currentIndex = Math.max(0, stages.findIndex((_, index) =>
+    (states[index] ?? "pending") === "in_progress"));
+  const done = stages.every((_, index) =>
+    (states[index] ?? "pending") === "done"
+    || (states[index] ?? "pending") === "inherited");
+  return <span className="task-progress"
+    aria-label={`当前阶段:${issueStageText(issue)}`}>
+    <span className="task-progress-caption">
+      <span>当前进度</span>
+      <strong>{issueStageText(issue)}</strong>
+      <em className="task-progress-count">
+        {done ? stages.length : currentIndex + 1}/{stages.length}
+      </em>
+      {(issue.round ?? 1) > 1
+        && <em className="issue-round-badge">第 {issue.round} 轮</em>}
+    </span>
+    <span className="task-phase-track">
+      {stages.map((stage, index) => {
+        const state = states[index] ?? "pending";
+        const phaseClass = state === "in_progress" ? "current"
+          : state === "redo" ? "attention"
+          : state === "done" || state === "inherited" ? "past is-done"
+          : index < currentIndex ? "past" : "future";
+        const label = issueStageText({ scenario: issue.scenario, stage });
+        return <span key={stage} className={`task-phase ${phaseClass}`}
+          title={`${label} · ${state === "inherited" ? "已继承"
+            : state === "redo" ? "待重做" : state === "done" ? "已完成"
+            : state === "in_progress" ? "进行中(当前)" : "未开始"}`}>
+          <i aria-hidden />
+          <span>{label}</span>
+        </span>;
+      })}
+    </span>
+  </span>;
 }
 
 /** 耗时与卡点:问题域版的 CostBreakdown。服务端(sessionView.ts)已经

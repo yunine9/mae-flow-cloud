@@ -3720,6 +3720,10 @@ export interface IssueSummary {
    * 渲染时按它经详情接口读旧账并标注「转正前」;旧会话被物理清理时
    * 静默缺省(仓卡退回现状)。 */
   inherited_accounts?: { issue: string };
+  /** 人工接管标记(2026-09-07 走查拍板):字段在场=AI 已暂停、人工作业
+   * 中——头部「人工接管中」徽标与输入区 takeover 模式都靠它分派;
+   * by=接管人,at=接管时刻。交还(resume)后消失。 */
+  takeover?: { at: string; by: string };
   status: IssueStatus;
   stage: FixedIssueStage;
   stage_note: string;
@@ -3942,6 +3946,41 @@ export function steerIssue(id: string, text: string): Promise<IssueSummary> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text }),
+  });
+}
+
+/** 人工接管(2026-09-07 走查拍板):打断 AI 当前回合,现场交由人工
+ * (AI 暂停,会话保留);接管期人工操作经 addIssueTakeoverNote 记账,
+ * 交还经 resumeIssueTakeover——AI 带着人工记录继续。 */
+export function takeoverIssue(id: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+/** 接管期人工操作记录:只记账不投喂 AI,交还时随交接词回灌。 */
+export function addIssueTakeoverNote(
+  id: string,
+  text: string,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover/note`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+/** 交还:AI 带着接管期人工记录继续;note 是可选的交还说明。 */
+export function resumeIssueTakeover(
+  id: string,
+  note?: string,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/takeover/resume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(note ? { note } : {}),
   });
 }
 
@@ -4443,4 +4482,86 @@ export async function renderPlantUml(source: string): Promise<PlantUmlRender> {
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
+}
+
+/* ---------------------------------------------------------------- *
+ * 问题域协作流(#124 右栏「与 Agent 协作」):GET /issues/:id/conversation
+ * 把事件账本投影成任务侧 ConversationItem 同形状的条目(服务端本体是
+ * src/issueFlow/conversation.ts 的 issueConversation 纯函数)。前端只
+ * 渲染、不推断——成员类型与排序都由服务端给;同名成员(session/turn/
+ * card/decision/steer)逐字段对齐任务侧,receipts 是问题域扩展(平台
+ * 工具回执)。历史卡/裁决/回执只读回放。
+ * ---------------------------------------------------------------- */
+
+export interface IssueConversationQuestion {
+  question: string;
+  options: string[];
+}
+
+/** 回合步骤计数(逐字段对齐任务侧 ConversationSteps)。 */
+export interface IssueConversationSteps {
+  calls: number;
+  errors: number;
+  reads: number;
+  edits: number;
+  bash: number;
+  agents: number;
+  /** 最能说明"这回合干了什么"的几步(改了哪些文件、跑了什么命令)。 */
+  sample: Array<{ kind: "edit" | "bash" | "agent"; subject: string }>;
+}
+
+export type IssueConversationItem =
+  | {
+      kind: "session"; id: string; ts: string;
+      phase: "started" | "ended";
+      resume?: boolean; detail?: string;
+    }
+  | {
+      kind: "turn"; id: string; ts: string; end_ts: string;
+      /** narration = 说完就去调工具的过程话;handoff = 说完举卡/收口的交接语。 */
+      texts: Array<{ ts: string; text: string; truncated: boolean;
+        role: "narration" | "handoff" }>;
+      steps: IssueConversationSteps;
+      open: boolean;
+    }
+  | {
+      kind: "card"; id: string; ts: string; waiting_id: string; step: string;
+      purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+      questions: IssueConversationQuestion[];
+      status: "waiting" | "resolved";
+    }
+  | {
+      kind: "decision"; id: string; ts: string; waiting_id: string; by?: string;
+      decision: string; notes: string;
+      purpose: "confirmation" | "clarification";
+      annotation_ids: string[];
+      /** 平台闸作答带的问句快照(在闸事件的 payload 里随行)。 */
+      questions?: IssueConversationQuestion[];
+    }
+  | {
+      kind: "steer"; id: string; ts: string; text: string;
+      delivered: boolean;
+    }
+  | {
+      kind: "review"; id: string; ts: string;
+      count: number; text: string;
+    }
+  | {
+      kind: "receipts"; id: string; ts: string;
+      items: Array<{ name: string; outcome: "success" | "error"; summary: string }>;
+    };
+
+export interface IssueConversationView {
+  items: IssueConversationItem[];
+  /** 账本里读到的全部事件行数(含被投影跳过的)——前端"已读水位"。 */
+  events_seen: number;
+  truncated: boolean;
+}
+
+/** 问题会话协作流(右栏「与 Agent 协作」消费)。 */
+export function getIssueConversation(
+  id: string,
+): Promise<IssueConversationView> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/conversation`);
 }

@@ -38,11 +38,33 @@
  * ——「已在平台处理/豁免,重新监看」(code=resume),可附补充说明;
  * 证据卡是自由文本主通道(粘贴报错原文,空文本不可提交,code=supply)。
  * 两张卡问的都是人工事实,没有「AI 推荐」。
+ *
+ * 卡座形态(#125,ADR-0018 决策三「举卡入流」):卡住在协作流末尾的
+ * Agent 气泡里,卡上只留题面/表单/选项;提交动作(附言输入+提交/拒绝
+ * 按钮)经 React portal 挂进输入区的 dock 位(IssueConversationStream
+ * 预留的 ws-reply-dock 容器)。接线链:输入区 dock 节点(dockRef 回调)
+ * → 会话视图存为 footerTarget → 卡组件 → IssueDecisionFooterMount
+ * (任务侧 DecisionFooterMount 同款):有目标经 createPortal 挂入,
+ * 无目标(首帧/未接线的兜底,如 rail 直挂)原位渲染。表单状态(附言
+ * 草稿、提交失败提示)仍归卡组件自己——portal 只搬 DOM 不搬状态。
+ * #126 其余三类卡(通用决策/skill 圈选/流水线两闸)已照此换壳:四类卡
+ * 的提交区走同一个挂载器,字段/校验/提交语义零变化。
  */
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { IssueEnvironmentForm, IssueSkillChoice, IssueWaitingCard } from "../api";
 import { toggleDecisionChoice } from "../decisionSelection";
 import { Markdown } from "../markdown";
+
+/** 提交区的 dock 挂载器(#125,任务侧 TaskCard 的 DecisionFooterMount
+ * 同款):target 在场时把提交区 portal 进输入区 dock,缺席时原位渲染。
+ * 挂载器只搬 DOM;children 的状态与回调都由卡组件持有,不随挂载点变。 */
+function IssueDecisionFooterMount({ target, children }: {
+  target?: HTMLElement | null;
+  children: ReactNode;
+}) {
+  return target ? createPortal(children, target) : children;
+}
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
   logs: "拉取日志",
@@ -66,9 +88,13 @@ type IssueEnvironmentDeclineForm = IssueEnvironmentForm & {
   note?: string;
 };
 
-export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
+export function IssueDecisionCard({ waiting, busy, footerTarget, onAnswer, onEnvironment }: {
   waiting: IssueWaitingCard;
   busy: boolean;
+  /** 卡座 dock 目标(#125):提交区经 portal 挂进输入区 dock;缺席时
+   * 提交区原位渲染。#126 起四类卡(env/通用/skill 圈选/流水线)全部
+   * 走同一条透传链。 */
+  footerTarget?: HTMLElement | null;
   /** 组装好的答复。返回 true 表示提交成功(此时父级会带着新详情回来)。 */
   onAnswer: (decision: string, code?: string,
     answers?: Record<string, string>, notes?: string,
@@ -77,7 +103,10 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   if (waiting.gate_kind === "env_needed") {
-    return <section className="issue-decision" aria-label="配置网管环境">
+    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白
+    // (样式见 style.css 末尾 #125 追加块)。
+    return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
+      aria-label="配置网管环境">
       <header className="issue-decision-head">
         <span className="decision-kicker">配置网管环境</span>
         <span className="issue-decision-count">
@@ -89,11 +118,14 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
         <Markdown text={waiting.context} />
       </div>}
       <EnvNeededForm busy={busy} scope={waiting.gate_scope}
-        onSubmit={onEnvironment} />
+        footerTarget={footerTarget} onSubmit={onEnvironment} />
     </section>;
   }
   if (waiting.gate_kind === "skill_select") {
-    return <section className="issue-decision" aria-label="圈选必读知识">
+    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白
+    // (样式见 style.css 末尾 #125/#126 追加块)。
+    return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
+      aria-label="圈选必读知识">
       <header className="issue-decision-head">
         <span className="decision-kicker">圈选必读知识</span>
         <span className="issue-decision-count">
@@ -105,15 +137,18 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
         <Markdown text={waiting.context} />
       </div>}
       <SkillSelectForm busy={busy} skills={waiting.gate_skills ?? []}
+        footerTarget={footerTarget}
         onSubmit={(selection, decision) =>
           onAnswer(decision, undefined, undefined, undefined, selection)} />
     </section>;
   }
   if (waiting.gate_kind === "pipeline_unfixable"
       || waiting.gate_kind === "pipeline_evidence") {
-    return <PipelineGateCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
+    return <PipelineGateCard waiting={waiting} busy={busy}
+      footerTarget={footerTarget} onAnswer={onAnswer} />;
   }
-  return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
+  return <GenericDecisionCard waiting={waiting} busy={busy}
+    footerTarget={footerTarget} onAnswer={onAnswer} />;
 }
 
 /** 网管环境表单:环境形态(虚拟化/容器化 K8s,决定日志抓取引擎)+
@@ -122,11 +157,16 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
  * 进入本问题会话的 AI 上下文,让拉日志工具能够消费,但不出现在会话
  * 列表、状态摘要或事件流。次要出路是拒绝(票 93):AI 误判要日志/要
  * 部署时,人可以不填环境直接拒绝——按闸 scope 显示拍板文案,选填一句
- * 理由随平台通知转给 AI。 */
-function EnvNeededForm({ busy, scope, onSubmit }: {
+ * 理由随平台通知转给 AI。
+ * 卡座分工(#125):表单字段留在卡上;附言(拒绝理由)与提交/拒绝按钮
+ * 经 IssueDecisionFooterMount 挂进输入区 dock——提交未成功提示与理由
+ * 草稿的状态仍归本组件,portal 只搬 DOM。 */
+function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
   busy: boolean;
   /** 闸的用途面(logs=拉日志 / deploy=换库部署),拒绝文案按它分叉。 */
   scope?: string;
+  /** 卡座 dock 目标(#125);缺席时提交区原位渲染。 */
+  footerTarget?: HTMLElement | null;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   const [envType, setEnvType] = useState<"" | "virtualized" | "k8s">("");
@@ -206,23 +246,27 @@ function EnvNeededForm({ busy, scope, onSubmit }: {
       口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
       但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
     </p>
-    <label className="issue-field wide">
-      <span>确定不需要?留一句理由帮 AI 调整方向(可选)</span>
-      <textarea rows={2} className="custom-input"
-        placeholder="如:问题在页面侧即可复现,与后台日志无关…"
-        value={declineNote}
-        onChange={(event) => setDeclineNote(event.target.value)} />
-    </label>
-    {error && <p className="issue-decision-note" role="alert">{error}</p>}
-    <div className="issue-decision-submit">
-      <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
-        {busy ? "提交中…" : "保存并继续"}
-      </button>
-      <button type="button" className="issue-decline" disabled={busy}
-        onClick={() => void decline()}>
-        {ENV_DECLINE_TEXT[scope ?? "logs"] ?? ENV_DECLINE_TEXT.logs}
-      </button>
-    </div>
+    <IssueDecisionFooterMount target={footerTarget}>
+      <div className="issue-decision-dock-foot">
+        <label className="issue-field wide">
+          <span>确定不需要?留一句理由帮 AI 调整方向(可选)</span>
+          <textarea rows={2} className="custom-input"
+            placeholder="如:问题在页面侧即可复现,与后台日志无关…"
+            value={declineNote}
+            onChange={(event) => setDeclineNote(event.target.value)} />
+        </label>
+        {error && <p className="issue-decision-note" role="alert">{error}</p>}
+        <div className="issue-decision-submit">
+          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+            {busy ? "提交中…" : "保存并继续"}
+          </button>
+          <button type="button" className="issue-decline" disabled={busy}
+            onClick={() => void decline()}>
+            {ENV_DECLINE_TEXT[scope ?? "logs"] ?? ENV_DECLINE_TEXT.logs}
+          </button>
+        </div>
+      </div>
+    </IssueDecisionFooterMount>
   </div>;
 }
 
@@ -233,10 +277,15 @@ const MANUAL_CODE = "__manual_input__";
 
 /** skill 圈选表单(ADR-0011):按仓分组的多选清单,path 是提交身份
  * (仓段天然区分同名 skill)。「确认勾选」至少勾一项才可点;「都不用」
- * 提交空选,AI 按方法论取用次序自主——两条路的裁决在服务端同口。 */
-function SkillSelectForm({ busy, skills, onSubmit }: {
+ * 提交空选,AI 按方法论取用次序自主——两条路的裁决在服务端同口。
+ * 卡座分工(#126):勾选清单留在卡上;错误提示与「确认勾选/都不用」
+ * 按钮排经 IssueDecisionFooterMount 挂进输入区 dock——勾选状态仍归
+ * 本组件,portal 只搬 DOM。 */
+function SkillSelectForm({ busy, skills, footerTarget, onSubmit }: {
   busy: boolean;
   skills: IssueSkillChoice[];
+  /** 卡座 dock 目标(#126);缺席时提交区原位渲染。 */
+  footerTarget?: HTMLElement | null;
   onSubmit: (selection: string[], decision: string) => Promise<boolean>;
 }) {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -291,17 +340,21 @@ function SkillSelectForm({ busy, skills, onSubmit }: {
         })}
       </div>
     </fieldset>)}
-    {error && <p className="issue-decision-note" role="alert">{error}</p>}
-    <div className="issue-decision-submit">
-      <button type="button" disabled={!picked.size || busy}
-        onClick={() => void submit([...picked])}>
-        {busy ? "提交中…" : `确认勾选(${picked.size})`}
-      </button>
-      <button type="button" className="skill-skip" disabled={busy}
-        onClick={() => void submit([])}>
-        都不用,AI 按取用次序自主
-      </button>
-    </div>
+    <IssueDecisionFooterMount target={footerTarget}>
+      <div className="issue-decision-dock-foot">
+        {error && <p className="issue-decision-note" role="alert">{error}</p>}
+        <div className="issue-decision-submit">
+          <button type="button" disabled={!picked.size || busy}
+            onClick={() => void submit([...picked])}>
+            {busy ? "提交中…" : `确认勾选(${picked.size})`}
+          </button>
+          <button type="button" className="skill-skip" disabled={busy}
+            onClick={() => void submit([])}>
+            都不用,AI 按取用次序自主
+          </button>
+        </div>
+      </div>
+    </IssueDecisionFooterMount>
   </div>;
 }
 
@@ -311,10 +364,15 @@ function SkillSelectForm({ busy, skills, onSubmit }: {
  * - pipeline_unfixable:单出口作答「已在平台处理/豁免,重新监看」
  *   (code=resume),可附补充说明(随答复入账);
  * - pipeline_evidence:自由文本主通道——粘贴报错原文提交(code=supply),
- *   原文作为人工证据注入下一修复回合;空文本不可提交(服务端同尺打回)。 */
-function PipelineGateCard({ waiting, busy, onAnswer }: {
+ *   原文作为人工证据注入下一修复回合;空文本不可提交(服务端同尺打回)。
+ * 卡座分工(#126):证据卡的报错原文是主作答字段留在卡上;不可修卡的
+ * 补充说明是附言,与提交按钮一起经 IssueDecisionFooterMount 挂进输入
+ * 区 dock(与 env 卡的附言+按钮同一铺陈)——草稿与失败提示仍归本组件。 */
+function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
   waiting: IssueWaitingCard;
   busy: boolean;
+  /** 卡座 dock 目标(#126);缺席时提交区原位渲染。 */
+  footerTarget?: HTMLElement | null;
   onAnswer: (decision: string, code?: string,
     answers?: Record<string, string>, notes?: string) => Promise<boolean>;
 }) {
@@ -341,7 +399,7 @@ function PipelineGateCard({ waiting, busy, onAnswer }: {
     setError(ok ? "" : "提交未成功,请稍后重试");
   }
 
-  return <section className="issue-decision"
+  return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
     aria-label={evidence ? "贴回流水线报错原文" : "流水线红灯人工处理"}>
     <header className="issue-decision-head">
       <span className="decision-kicker">
@@ -358,17 +416,20 @@ function PipelineGateCard({ waiting, busy, onAnswer }: {
       <div className="context-label">{evidence ? "缺口详情" : "失败详情"}</div>
       <Markdown text={waiting.context} />
     </div>}
-    {evidence
-      ? <div className="issue-decision-env">
-          <label className="issue-field wide">
-            <span>报错原文(带文件/行号/堆栈)</span>
-            <textarea rows={8} className="custom-input"
-              placeholder="把交付平台上失败项的报错原文粘贴到这里——它会作为人工证据注入下一修复回合…"
-              value={text}
-              onChange={(event) => setText(event.target.value)} />
-          </label>
-        </div>
-      : <div className="issue-decision-env">
+    {evidence && <div className="issue-decision-env">
+      <label className="issue-field wide">
+        <span>报错原文(带文件/行号/堆栈)</span>
+        <textarea rows={8} className="custom-input"
+          placeholder="把交付平台上失败项的报错原文粘贴到这里——它会作为人工证据注入下一修复回合…"
+          value={text}
+          onChange={(event) => setText(event.target.value)} />
+      </label>
+    </div>}
+    <IssueDecisionFooterMount target={footerTarget}>
+      <div className="issue-decision-dock-foot">
+        {/* 不可修卡的补充说明是附言(票 03),随提交钮进 dock;证据卡的
+            主字段(报错原文)已在卡上,dock 里只剩错误提示与提交钮。 */}
+        {!evidence && <div className="issue-decision-env">
           <label className="issue-field wide">
             <span>补充说明(可选):在平台做了什么处理</span>
             <textarea rows={3} className="custom-input"
@@ -377,12 +438,14 @@ function PipelineGateCard({ waiting, busy, onAnswer }: {
               onChange={(event) => setNotes(event.target.value)} />
           </label>
         </div>}
-    {error && <p className="issue-decision-note" role="alert">{error}</p>}
-    <div className="issue-decision-submit">
-      <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
-        {busy ? "提交中…" : actionLabel}
-      </button>
-    </div>
+        {error && <p className="issue-decision-note" role="alert">{error}</p>}
+        <div className="issue-decision-submit">
+          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+            {busy ? "提交中…" : actionLabel}
+          </button>
+        </div>
+      </div>
+    </IssueDecisionFooterMount>
   </section>;
 }
 
@@ -404,9 +467,11 @@ export function areIssueQuestionsComplete(
   });
 }
 
-function GenericDecisionCard({ waiting, busy, onAnswer }: {
+function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
   waiting: IssueWaitingCard;
   busy: boolean;
+  /** 卡座 dock 目标(#126);缺席时提交区原位渲染。 */
+  footerTarget?: HTMLElement | null;
   onAnswer: (decision: string, code?: string,
     answers?: Record<string, string>, notes?: string) => Promise<boolean>;
 }) {
@@ -492,7 +557,8 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
     }
   }
 
-  return <section className="issue-decision" aria-label="等你答复">
+  return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
+    aria-label="等你答复">
     <header className="issue-decision-head">
       <span className="decision-kicker">等你答复</span>
       <span className="issue-decision-count">{questions.length} 个问题</span>
@@ -582,21 +648,28 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
       这张问题卡没有列出选项——在下方补充说明里写下你的答复。
     </p>}
 
-    {notesOpen
-      ? <div className="custom-answer issue-decision-notes">
-          <textarea className="custom-input"
-            placeholder="补充说明(可选):原因、约束、现场信息…"
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)} />
-          <span>这段说明会随答复一起交给 AI,不会改变上面所选的分支。</span>
-        </div>
-      : <button type="button" className="issue-decision-notes-toggle"
-          onClick={() => setNotesOpen(true)}>+ 补充说明(可选)</button>}
+    {/* 卡座分工(#126):附言(补充说明)与提交按钮经挂载器进输入区
+        dock;题面/选项/推荐徽标留在卡上——作答状态(picked/custom/
+        notes 草稿)仍归本组件,portal 只搬 DOM。 */}
+    <IssueDecisionFooterMount target={footerTarget}>
+      <div className="issue-decision-dock-foot">
+        {notesOpen
+          ? <div className="custom-answer issue-decision-notes">
+              <textarea className="custom-input"
+                placeholder="补充说明(可选):原因、约束、现场信息…"
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)} />
+              <span>这段说明会随答复一起交给 AI,不会改变上面所选的分支。</span>
+            </div>
+          : <button type="button" className="issue-decision-notes-toggle"
+              onClick={() => setNotesOpen(true)}>+ 补充说明(可选)</button>}
 
-    <div className="issue-decision-submit">
-      <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
-        {busy ? "提交中…" : "提交答复"}
-      </button>
-    </div>
+        <div className="issue-decision-submit">
+          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+            {busy ? "提交中…" : "提交答复"}
+          </button>
+        </div>
+      </div>
+    </IssueDecisionFooterMount>
   </section>;
 }

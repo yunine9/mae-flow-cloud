@@ -302,6 +302,14 @@ export interface CloudSessionOptions {
   /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
    * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
   repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
+  /** 多仓契约文件(spec #131 / issue #132,2026-09-03):问题流会话的
+   * 代码仓平铺在 <workspace>/repo/<仓名>/ 下,而会话 cwd 是 workspace——
+   * SDK 的祖先目录发现从 cwd 往上走,永远望不到仓根的 AGENTS.md。
+   * 平台按与 SDK 相同的候选优先级逐仓收好(见 issueFlow 的
+   * collectRepoContextFiles),这里原样并入系统提示词,顺序在知识
+   * 索引之后。收集发生在上下文构建时:回合中途 pull_repo 新落地的
+   * 仓,要等下一次会话重建才进入提示词。空/缺席=行为不变。 */
+  repoContextFiles?: Array<{ path: string; content: string }>;
   /** 会话专属宿主工具(defineTool 形状)。问题流这样的旁路会话用它把
    * 平台原子能力(报阶段/拉日志/受门禁的推送)递给 Agent——秘密留在
    * 宿主,Agent 只拿到工具语义。内核任务不传,行为不变。 */
@@ -1019,6 +1027,18 @@ export class CloudSession {
       this.options.log?.(
         `任务 ${this.options.taskId} 装载 skill: ${labels.join(", ")}`);
     }
+    // 仓契约注入同款一行事(2026-09-03):提示词里多了什么必须能在
+    // 日志里对账,只记 repo/ 下的相对路径,不贴正文。
+    const repoContextFiles = this.options.repoContextFiles ?? [];
+    if (repoContextFiles.length) {
+      this.options.log?.(`任务 ${this.options.taskId} 注入仓契约: ${
+        repoContextFiles.map((file) => {
+          const fromRepoRoot = relative(join(workspace, "repo"), file.path);
+          return fromRepoRoot && !fromRepoRoot.startsWith("..")
+            ? fromRepoRoot.split(sep).join("/")
+            : basename(file.path);
+        }).join(", ")}`);
+    }
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
@@ -1029,12 +1049,16 @@ export class CloudSession {
       additionalSkillPaths: skillPaths,
       // 平台管理的非 Skill 知识统一走轻量目录：默认勾选只表示“本任务
       // 可用”，正文按需 Read。仓库自身资料不进入平台知识通路。
+      // 仓契约文件(spec #131)排在其后:知识索引是平台账,仓契约是
+      // 仓自带的规矩——注入顺序即阅读顺序,SDK 默认 → 平台知识索引 →
+      // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
           ...current.agentsFiles,
           ...(knowledgeIndex.path && knowledgeIndex.content
             ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
             : []),
+          ...(this.options.repoContextFiles ?? []),
         ],
       }),
       // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。

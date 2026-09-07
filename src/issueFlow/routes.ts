@@ -43,6 +43,9 @@
  *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口;
  *                                      decline:true=拒绝,票 93)
  *   POST /issues/:id/interrupt        → 补充(运行中送达 AI)
+ *   POST /issues/:id/takeover         → 人工接管(打断 AI,现场交由人工)
+ *   POST /issues/:id/takeover/note    → 接管期人工操作记录(只记账不投喂)
+ *   POST /issues/:id/takeover/resume  → 交还(AI 带着人工记录继续)
  *   POST /issues/:id/ticket           → 绑定单号
  *   POST /issues/:id/control          → 归档/取消
  */
@@ -816,6 +819,35 @@ export async function handleIssueRoutes(
       }
       const body = await readBody(request);
       return done(200, issueFlow.steer(id, String(body.text ?? "")));
+    }
+
+    // 人工接管三口(2026-09-07 走查拍板):接管=打断 AI(回合中止,
+    // 现场交由人工);note=期间人工操作只记账不投喂;resume=交还,
+    // AI 带着接管期人工记录继续。写闸同 control:仅归属人,管理员不写。
+    if (method === "POST" && parts[2] === "takeover" && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能接管会话" });
+      }
+      return done(200, issueFlow.takeover(id));
+    }
+
+    if (method === "POST" && parts[2] === "takeover"
+        && parts[3] === "note" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能记录人工操作" });
+      }
+      const body = await readBody(request);
+      return done(200, issueFlow.addTakeoverNote(id, String(body.text ?? "")));
+    }
+
+    if (method === "POST" && parts[2] === "takeover"
+        && parts[3] === "resume" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能交还会话" });
+      }
+      const body = await readBody(request);
+      return done(200, issueFlow.resumeFromTakeover(id,
+        typeof body.note === "string" ? { note: body.note } : undefined));
     }
 
     if (method === "POST" && parts[2] === "ticket" && parts.length === 3) {
