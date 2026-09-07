@@ -141,7 +141,7 @@ export function summarizeFailedChecks(
     }
     if (total > maxDefectsPerCheck) {
       lines.push(`  - …还有 ${total - maxDefectsPerCheck} 条,`
-        + "完整清单在 ../pipeline/ 镜像材料里");
+        + "完整清单见本轮派发的流水线镜像材料");
     }
   }
   return lines;

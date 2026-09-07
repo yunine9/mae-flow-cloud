@@ -12,7 +12,7 @@
  */
 
 import type { SemanticEvent } from "./semanticEvents.ts";
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import {
   basename,
   dirname,
@@ -212,7 +212,12 @@ export class GateService {
     // 目标可以尚不存在；解析最近的已存在祖先，阻止仓内软链跳到仓外。
     let ancestor = target;
     const missing: string[] = [];
-    while (!existsSync(ancestor)) {
+    while (true) {
+      // existsSync 对悬空软链也返回 false，会误当成待创建的普通文件。
+      // lstat 先认出链接，再交给 realpath；解析失败就拒绝，不能越界写入。
+      try { lstatSync(ancestor); break; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "";
+      }
       const parent = dirname(ancestor);
       if (parent === ancestor) return "";
       missing.push(basename(ancestor));

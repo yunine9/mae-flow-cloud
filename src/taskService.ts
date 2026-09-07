@@ -9,6 +9,9 @@
  * 决定消费走 HumanGate 的先到生效语义,冲突原样抛给 API 层变 409。
  */
 
+import { taskAgentMaterialInstructions, prepareReviewReplyFile, repairTaskAgentFileOwnership } from "./taskAgentFiles.ts";
+import { createRequirementAnalysisGateContract } from "./requirementAnalysisGate.ts";
+export { createRequirementAnalysisGateContract } from "./requirementAnalysisGate.ts";
 import { prepareMaeBuildSupport, isMaeRepository, maeBuildRoot, maeBuildVolumes, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT } from "./maeBuildSupport.ts";
 import {
   accessSync,
@@ -567,41 +570,6 @@ const DELIVERY_CHAIN_SOURCE = "chain-plan.md";
 const DELIVERY_UNIT_SOURCE = "unit-brief.md";
 const AGENT_DELIVERY_CHAIN = ".mae-flow-chain.md";
 const AGENT_DELIVERY_UNIT = ".mae-flow-unit.md";
-
-/** Cloud 需求分析不是内核流程。文件工具只能写最终分析产物目录；Bash
- * 即使看见仓内残留脚本，也不准启动 mae-flow 生命周期。候选仓在容器
- * 层另有只读挂载，这里负责文件工具和明确命令的第二道边界。 */
-export function createRequirementAnalysisGateContract(
-  cwd: string,
-  artifactRoot: string,
-  fallback?: GateContract,
-): GateContract {
-  const root = resolve(artifactRoot);
-  const writable = (value: string): boolean => {
-    const rel = pathRelative(root, resolve(cwd, value));
-    return rel === "" || (rel !== ".." && !rel.startsWith(`..${pathSep}`)
-      && !pathIsAbsolute(rel));
-  };
-  return (tool, value, event) => {
-    if (tool === "Bash"
-        && /(?:^|[\/\s'"`])mae[-_]?flow(?:\.py)?(?:[\s'"`]|$)|\.mae-flow\.json(?:\.exited)?/i
-          .test(value)) {
-      return {
-        action: "deny",
-        reason: "当前是需求分析，不属于 Mae-Flow 内核流程；禁止执行 init/"
-          + "current/done 或读写 .mae-flow.json。请继续只读分析，并把方案"
-          + "写到指定的 .mae-flow-work 目录。",
-      };
-    }
-    if (["Edit", "Write", "MultiEdit"].includes(tool) && !writable(value)) {
-      return {
-        action: "deny",
-        reason: `需求分析阶段只能修改分析产物目录 ${root}；候选仓业务代码只读。`,
-      };
-    }
-    return fallback?.(tool, value, event);
-  };
-}
 
 /** 交付失败在页面上的人话。原始异常仍进服务日志/诊断包；任务摘要只
  * 保留用户能据此行动的结论，避免 TypeError 和宿主绝对路径外泄。 */
@@ -2465,10 +2433,12 @@ export class TaskService {
     const gitPath = join(cwd, ".git");
     const pipelineArtifacts = resolve(task.summary.workspace, "pipeline");
     const mountPipelineArtifacts = safety.pipelineArtifacts ?? true;
+    const prepushArtifacts = resolve(task.summary.workspace, "prepush");
     if (mountPipelineArtifacts) {
       // 容器通常早于首轮权威流水线启动。bind 源必须现在就存在，后续
       // mirrorPipelineArtifacts 只原地刷新内容，运行中的容器即可看到。
       mkdirSync(pipelineArtifacts, { recursive: true });
+      mkdirSync(prepushArtifacts, { recursive: true });
     }
     const reviewMaterials = resolve(task.summary.workspace, "reviews");
     const mountReviewMaterials = safety.reviewMaterials ?? true;
@@ -2493,6 +2463,8 @@ export class TaskService {
     // 交给 Agent。当前活跃批次若需要机器回执，只预建、交接并挂载那
     // 一枚 result 文件；旧任务 mission 中的 ../feedback/result-* 路径
     // 因此也能在升级后原样续跑。
+    const reviewReplies = mountReviewMaterials
+      ? prepareReviewReplyFile(task.summary.workspace, user) : undefined;
     const feedbackResult = this.activeFeedbackResult(task);
     if (feedbackResult) this.prepareFeedbackResultFile(task, feedbackResult.path);
     const mounts = await this.taskContainerMounts(task, [
@@ -2500,12 +2472,15 @@ export class TaskService {
       ...analysisRepositoryMounts,
       ...(volumes ?? []),
       ...(mountPipelineArtifacts
-        ? [`${pipelineArtifacts}:${pipelineArtifacts}:ro`] : []),
+        ? [`${pipelineArtifacts}:${pipelineArtifacts}:ro`,
+          `${prepushArtifacts}:${prepushArtifacts}:ro`] : []),
       // 兼容测试和旧现场直接把任务根当 cwd 的形态：主工作区挂载已经
       // 包含 reviews，不重复覆盖隔离关键目录。正式任务 cwd 是仓库子目录，
       // 因而这里只额外挂入一个任务专属的小目录。
       ...(mountReviewMaterials && resolve(cwd) !== resolve(task.summary.workspace)
         ? [`${reviewMaterials}:${reviewMaterials}:rw`] : []),
+      ...(reviewReplies && resolve(cwd) !== resolve(task.summary.workspace)
+        ? [`${reviewReplies}:${reviewReplies}:rw`] : []),
       ...(feedbackResult
         ? [`${feedbackResult.path}:${feedbackResult.path}:rw`] : []),
       ...(safety.gitReadOnly && existsSync(gitPath)
@@ -4960,7 +4935,7 @@ export class TaskService {
 
   /** 逐条回执文件:普通插话、决定卡随批、MR 修复共用同一份。 */
   private reviewReceiptsPath(task: TaskState): string {
-    return join(task.summary.workspace, "reviews", "local-receipts.json");
+    return resolve(task.summary.workspace, "reviews", "local-receipts.json");
   }
 
   /** 送意见给 Agent 之前把 reviews 目录建好:使命里说"不要创建上级目录",
@@ -4974,13 +4949,10 @@ export class TaskService {
     }
   }
 
-  /** 回执契约按会话 cwd 换算路径:普通任务 cwd 是仓根(../reviews),分析单
-   * 是 repositories/(也是 ../reviews),演练/测试的 cwd 就是任务目录(reviews)。 */
+  /** 回执地址由消费者确定，文件工具或 Bash 切换目录都不能改变它。 */
   private reviewReceiptInstructionsFor(task: TaskState, items: Annotation[]): string {
-    const directory = pathRelative(task.cwd ?? task.summary.workspace,
-      join(task.summary.workspace, "reviews")).split(pathSep).join("/") || ".";
-    return workspaceReviewReceiptInstructions(items)
-      .replaceAll("../reviews", directory);
+    if (items.length) this.ensureReviewsDir(task);
+    return workspaceReviewReceiptInstructions(items, this.reviewReceiptsPath(task));
   }
 
   /** 读盘上的逐条回执并登记进批注账。与 MR 修复轮的
@@ -6648,7 +6620,7 @@ export class TaskService {
         "当前 MR 已结束，不能再向原分支提交检视修改");
     }
 
-    const delivered = this.mergeRequestReviewPrompt(text, picked);
+    const delivered = this.mergeRequestReviewPrompt(task, text, picked);
     // prepush 是另一只专项 Agent，也会暂时占用 task.driver。把功能检视
     // steer 给它会与“只做编译/UT”使命打架。安全中止旧验证（不清现场），
     // 换代 epoch 让旧回调失去写状态权，再开正式 review 轮；新轮结束后
@@ -6681,7 +6653,7 @@ export class TaskService {
       source_revision: item.rework ?? 0,
       kind: "code_review",
       summary: item.note.slice(0, 1000),
-      material: "../reviews/local-annotations.json",
+      material: resolve(task.summary.workspace, "reviews", "local-annotations.json"),
       verification: item.author,
       file: item.file,
       line: item.line,
@@ -6751,13 +6723,13 @@ export class TaskService {
       && delivery.mr_state !== "已关闭";
   }
 
-  private mergeRequestReviewPrompt(text: string, annotations: Annotation[]): string {
+  private mergeRequestReviewPrompt(task: TaskState, text: string, annotations: Annotation[]): string {
     return [
       "[MR 本地检视 · 用户已明确提交]",
       "这批意见是当前 MR 的修改要求，优先级高于正在进行的流水线修复；不要另起分支或 MR。",
       text,
       "逐条核对并处理：要求明确就直接修改，不要再问一次‘是否接纳’；只有语义确实不清、不同理解会造成不同代码结果时才举卡，并把歧义说具体。",
-      workspaceReviewReceiptInstructions(annotations),
+      this.reviewReceiptInstructionsFor(task, annotations),
       "若本轮同时有流水线问题，两类问题合并进同一次 commit；完成后回到原使命收口。不要自行 push，Cloud 宿主会统一推送原 MR 分支并重新验证。",
     ].filter(Boolean).join("\n\n");
   }
@@ -6809,7 +6781,7 @@ export class TaskService {
     // append-only 批注账里的历史回应仍完整保留。
     if (startsNewCycle) {
       try {
-        rmSync(join(task.summary.workspace, "reviews", "local-receipts.json"),
+        rmSync(this.reviewReceiptsPath(task),
           { force: true });
       } catch { /* 下轮缺文件会明确停下，不拿清理故障挡住意见送达 */ }
     }
@@ -6845,7 +6817,7 @@ export class TaskService {
     const stale = new Set(listed.filter((item) =>
       wanted.has(item.id) && item.status === "sent"
       && !this.awaitingAgentReceipt(item)).map((item) => item.id));
-    const path = join(task.summary.workspace, "reviews", "local-receipts.json");
+    const path = this.reviewReceiptsPath(task);
     const missing = expected.map((item) => item.id).join("、");
     let text: string;
     try {
@@ -9490,7 +9462,7 @@ export class TaskService {
           "上一轮检视修改已经完成,但缺少机器可核对的逐条回执,系统据此停下。",
           "本次使命只有一件事:复核当前 HEAD 上这些意见的落实情况并补写回执;",
           "不要重新修改代码,除非复核发现某条意见确实没有落实。",
-          workspaceReviewReceiptInstructions(pendingReview),
+          this.reviewReceiptInstructionsFor(task, pendingReview),
         ].join("\n"), "人工重跑:复核当前 HEAD 并补齐逐条检视回执");
         return { ...task.summary };
       }
@@ -11303,7 +11275,7 @@ export class TaskService {
       // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码
       // 也不知道要写 local-receipts.json,收口时被回执门禁如实拦下,
       // 形成"改了却过不去"的死锁(e2e-picky-20260830 双复现,MFC-002)。
-      workspaceReviewReceiptInstructions(annotations),
+      this.reviewReceiptInstructionsFor(task, annotations),
     ].filter(Boolean).join("\n"), "按交付清单整理提交中");
   }
 
@@ -14359,7 +14331,7 @@ export class TaskService {
                 cwd,
                 join(cwd, ".mae-flow-work", task.summary.ticket
                   ?? task.summary.id),
-                this.options.contract,
+                this.options.contract, this.reviewReceiptsPath(task),
               )
             : this.options.contract,
           // 边界=整个任务工作区(修复材料在仓外的 ../pipeline、../reviews);
@@ -14382,9 +14354,9 @@ export class TaskService {
           : undefined,
         afterFileMutation: this.options.isolation
           ? (path) => {
-            repairContainerMutationOwnership({
-              workspace: cwd,
-              path,
+            repairTaskAgentFileOwnership({
+              workspace, cwd, path,
+              feedbackResult: this.activeFeedbackResult(task)?.path,
               user: this.options.isolation?.user,
             });
           }
@@ -14419,6 +14391,11 @@ export class TaskService {
         this.options.log?.(
           `任务 ${task.summary.id} 工作区丢失,决定无法回注,从头执行`);
       }
+      // 持久化使命可能来自旧版本；开场再次下发当前唯一回执地址。
+      const pendingReviews = pendingReviewProcessing(this.annotations(task).list());
+      if (pendingReviews.length) prompt += `\n\n${this.reviewReceiptInstructionsFor(task, pendingReviews)}`;
+      prompt += `\n\n${taskAgentMaterialInstructions(workspace)}`;
+      prompt += `\n\n${this.activeFeedbackReceiptInstructions(task)}`;
       const turn = rebuild
         ? task.driver.startResume(prompt)
         : task.driver.start(prompt);
@@ -15834,7 +15811,8 @@ export class TaskService {
           source_revision: state.round,
           kind: "quality_failure",
           summary: state.message.slice(0, 1000),
-          material: `../prepush/round-${state.round}-${finalRevision.sha.slice(0, 12)}/`,
+          material: resolve(task.summary.workspace, "prepush",
+            `round-${state.round}-${finalRevision.sha.slice(0, 12)}`),
           verification: "build_fix",
         }]);
         this.enqueueRepair(task, [
@@ -17642,7 +17620,7 @@ export class TaskService {
         source_revision: 0,
         kind: "quality_failure",
         summary: log.slice(0, 1000) || `流水线 ${dimensionKey} 未通过`,
-        material: "../pipeline/",
+        material: resolve(task.summary.workspace, "pipeline"),
         verification: "pipeline",
       }]);
     } catch (error) {
@@ -17718,7 +17696,7 @@ export class TaskService {
         `- 本轮失败的维度(平台逐项事实,权威):`
         + `${failedDimensions.join("、")}。**每一维都要收拾**,`
         + `不要只修下面日志里讲得细的那一维就交差——日志的详细程度`
-        + `按维度不均,讲得少不等于没红。某一维在日志和 ../pipeline/ 里`
+        + `按维度不均,讲得少不等于没红。某一维在日志和 ${resolve(task.summary.workspace, "pipeline")} 里`
         + `都找不到细节时,不许猜改,把"缺哪一维的失败原文"写进收口发言。`,
       ] : []),
       ...(structuredFailures.length ? [
@@ -17761,9 +17739,9 @@ export class TaskService {
         loop.failure,
       ]),
       ...(artifacts.length ? [
-        `- 完整失败材料已镜像到 ../pipeline/(仓库外,不会进提交),`
+        `- 完整失败材料已镜像到 ${resolve(task.summary.workspace, "pipeline")}(仓库外,不会进提交),`
         + `分诊与定位先读它们,别只凭上面的摘要猜:`,
-        ...artifacts.map((name) => `  ../pipeline/${name}`),
+        ...artifacts.map((name) => `  ${resolve(task.summary.workspace, "pipeline", name)}`),
       ] : []),
       ...(previousFailure ? [
         `- 上一轮修复后流水线仍红,上一轮的失败详情如下,先对比再动手:`
@@ -18261,7 +18239,7 @@ export class TaskService {
    * 摘要，条目集合始终来自内核已接纳的 batch，不能少报或夹带。 */
   private feedbackResultPath(task: TaskState, batchId: string): string {
     const digest = createHash("sha256").update(batchId).digest("hex").slice(0, 24);
-    return join(task.summary.workspace, "feedback", `result-${digest}.json`);
+    return resolve(task.summary.workspace, "feedback", `result-${digest}.json`);
   }
 
   private activeFeedbackResult(task: TaskState): {
@@ -18322,10 +18300,9 @@ export class TaskService {
     if (!active) return "";
     const { batchId, items, path } = active;
     this.prepareFeedbackResultFile(task, path);
-    const relative = `../feedback/${basename(path)}`;
     return [
       "逐条处理完成后，必须写一份机器可核对的反馈回执；总体回复不算回执。",
-      `写入 ${relative}（代码仓外，不会进入提交），只写 JSON，不要 Markdown 围栏：`,
+      `写入唯一绝对路径 ${JSON.stringify(path)}（不随工作目录变化），只写 JSON，不要 Markdown 围栏：`,
       '{"schema":"mae-flow-feedback-results/1","batch_id":"本批次",'
         + '"results":[{"id":"反馈完整ID","status":"fixed|explained|needs_human|not_applicable",'
         + '"summary":"这条具体做了什么或为什么不改","evidence":"文件:行或核对事实"}]}',
@@ -18417,7 +18394,7 @@ export class TaskService {
         });
       }
     } else if (batchItems.every((item: any) => item?.source === "mr_discussion")) {
-      const path = join(task.summary.workspace, "review_replies.md");
+      const path = resolve(task.summary.workspace, "review_replies.md");
       let parsed: ReturnType<typeof parseReviewReplies>;
       try {
         parsed = parseReviewReplies(readFileSync(path, "utf-8"),
@@ -18433,7 +18410,7 @@ export class TaskService {
         id: String(item.id),
         status: "explained" as const,
         summary: byId.get(String(item.source_id ?? ""))!.slice(0, 4000),
-        evidence: "../review_replies.md",
+        evidence: resolve(task.summary.workspace, "review_replies.md"),
       }));
     } else {
       const path = this.feedbackResultPath(task, batchId);
@@ -18537,7 +18514,7 @@ export class TaskService {
         source_revision: item.rework ?? 0,
         kind: "code_review",
         summary: String(item.note ?? "工作台检视意见").slice(0, 1000),
-        material: "../reviews/local-annotations.json",
+        material: resolve(task.summary.workspace, "reviews", "local-annotations.json"),
         verification: item.author || "author",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
@@ -18559,7 +18536,7 @@ export class TaskService {
         source_revision: discussionRevision(item),
         kind: "code_review",
         summary: String(item.body ?? "MR 检视意见").slice(0, 1000),
-        material: "../reviews/discussions.json",
+        material: resolve(task.summary.workspace, "reviews", "discussions.json"),
         verification: "reviewer",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
@@ -18665,7 +18642,7 @@ export class TaskService {
         source_revision: discussionRevision(item),
         kind: "code_review",
         summary: String(item.body ?? "MR 检视意见").slice(0, 1000),
-        material: "../reviews/discussions.json",
+        material: resolve(task.summary.workspace, "reviews", "discussions.json"),
         verification: "reviewer",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
@@ -18690,7 +18667,7 @@ export class TaskService {
     // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
     const reviewsDir = join(task.summary.workspace, "reviews");
     try {
-      rmSync(reviewsDir, { recursive: true, force: true });
+      // 保留目录本身及附件/其他回执，避免运行中 bind mount 指向被删的旧目录。
       mkdirSync(reviewsDir, { recursive: true });
       writeFileSync(join(reviewsDir, "discussions.json"),
         JSON.stringify(discussions, null, 2));
@@ -18715,11 +18692,11 @@ export class TaskService {
         `- Cloud 宿主已把本批意见登记到当前任务的持续检视流程；`
         + `**不要 init、不要 exit/goto/skip**。先执行 current，按当前`
         + `feedback_triage/build 指引处理，始终沿用当前现场。`,
-        `- 原始数据在 ../reviews/discussions.json(仓库外),需要完整`
+        `- 原始数据在 ${resolve(task.summary.workspace, "reviews", "discussions.json")}(仓库外),需要完整`
         + `上下文时自己读。`,
         `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
         + `不许含糊带过;不确定的按意见改(检视人对本仓比你熟)。`,
-        `- 把逐条回复写到 ../review_replies.md(仓库外,不会进提交),`
+        `- 把逐条回复写到绝对路径 ${JSON.stringify(resolve(task.summary.workspace, "review_replies.md"))}(仓库外,不会进提交),`
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${pending[0][1].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
@@ -18784,8 +18761,9 @@ export class TaskService {
       }, null, 2));
       // 本地检视没有 MR discussion 回复；残留的旧回复绝不能在本轮结束
       // 时被误发到平台。
-      rmSync(join(task.summary.workspace, "review_replies.md"), { force: true });
-      rmSync(join(reviewsDir, "local-receipts.json"), { force: true });
+      if (existsSync(resolve(task.summary.workspace, "review_replies.md")))
+        writeFileSync(resolve(task.summary.workspace, "review_replies.md"), "");
+      rmSync(this.reviewReceiptsPath(task), { force: true });
     } catch (error) {
       this.options.log?.(
         `任务 ${task.summary.id} 本地检视材料落盘失败(使命正文仍可用): ${String(error)}`);
@@ -18798,7 +18776,7 @@ export class TaskService {
         source_revision: item.rework ?? 0,
         kind: "code_review",
         summary: String(item.note ?? "工作台检视意见").slice(0, 1000),
-        material: "../reviews/local-annotations.json",
+        material: resolve(task.summary.workspace, "reviews", "local-annotations.json"),
         verification: item.author || "author",
         ...(item.file ? { file: item.file } : {}),
         ...(item.line !== undefined ? { line: item.line } : {}),
@@ -18813,7 +18791,7 @@ export class TaskService {
       ? [
           "- 当前 MR 同时还有上一轮流水线失败。人的检视优先，但不要丢掉已知 CI 问题；两类修改合进同一次提交：",
           previousFailure,
-          "  完整流水线材料若存在，仍在 ../pipeline/；新提交会重新跑权威流水线。",
+          `  完整流水线材料若存在，仍在 ${resolve(task.summary.workspace, "pipeline")}；新提交会重新跑权威流水线。`,
         ]
       : [];
     this.enqueueRepair(task, [
@@ -18831,7 +18809,7 @@ export class TaskService {
       "- 只有意见本身确实模糊、不同理解会造成不同代码结果时才 AskUserQuestion；"
         + "问题里必须点明歧义和不同结果，不能用泛泛的‘请确认’把工作退回用户。",
       ...priorPipeline,
-      workspaceReviewReceiptInstructions(annotations),
+      this.reviewReceiptInstructionsFor(task, annotations),
       "- 在当前 MR 分支修改必要的源码和测试，遵守 current 的提交清单与 commit 指引。"
         + "不要读取或索要个人 Git 令牌，不要自行 push；Cloud 会统一推送到原分支、"
         + "更新原 MR，并对新 SHA 重新执行 Build-Fix 与权威流水线。",
@@ -19201,7 +19179,7 @@ export class TaskService {
     if (loop?.review_source === "workspace" || loop?.kind !== "review") {
       return { ok: true };
     }
-    const repliesPath = join(task.summary.workspace, "review_replies.md");
+    const repliesPath = resolve(task.summary.workspace, "review_replies.md");
     const alreadyReplied = new Set(
       loop.replied_ids?.split(",").filter(Boolean) ?? []);
     let known = (loop.review_ids?.split(",").filter(Boolean) ?? [])
@@ -19269,7 +19247,7 @@ export class TaskService {
       };
     }
     const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
-    const resolve = this.options.delivery?.resolveDiscussions ?? false;
+    const resolveDiscussions = this.options.delivery?.resolveDiscussions ?? false;
     const revisionById = new Map(uncovered.map((item) =>
       [item.id, item.revision] as const));
     try {
@@ -19280,7 +19258,7 @@ export class TaskService {
           body: reply.body,
           repo,
           mr: task.summary.delivery?.mr_id,
-          resolve,
+          resolve: resolveDiscussions,
           expected_sha: sourceSha,
         });
       }
@@ -19291,7 +19269,7 @@ export class TaskService {
           + "草稿仍保留，未继续 push。",
       };
     }
-    try { rmSync(repliesPath, { force: true }); } catch {
+    try { writeFileSync(repliesPath, ""); } catch {
       // outbox 已是权威事实；残留草稿下次会幂等入同一动作，不会重复。
     }
     return { ok: true };
@@ -21231,9 +21209,8 @@ export class TaskService {
                 "代码修改已经完成，但逐条检视回执没有成功落盘。",
                 receipts.detail ?? "逐条检视回执不完整。",
                 "现在只补回执，不要重新修改代码、不要重新提交，也不要重复走流程。",
-                "平台已经创建并挂载 ../reviews 目录；直接写 local-receipts.json，"
-                  + "不要创建或修改它的上级目录。",
-                workspaceReviewReceiptInstructions(pending),
+                "平台已准备下述回执文件的父目录；使用给出的绝对路径，不要自行换算目录。",
+                this.reviewReceiptInstructionsFor(task, pending),
                 "写完后立即结束本轮。",
               ].join("\n\n")), epoch);
               break;
