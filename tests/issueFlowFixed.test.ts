@@ -46,6 +46,7 @@ import {
   getPipelineStatus,
   triggerPipeline,
 } from "../src/pipelineClient.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -251,7 +252,7 @@ class LoopPlatform {
 }
 
 test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿收口→续聊返工→再申报→归档", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-fixed-"));
+  const dataDir = mfcTemp("mfc-issue-fixed-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform();
   await platform.start();
@@ -468,7 +469,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
 });
 
 test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接归档留报告", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-noticket-"));
+  const dataDir = mfcTemp("mfc-issue-noticket-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -524,7 +525,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
 });
 
 test("固定流程无单闭环:结论非问题,用户确认后自动归档", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nonissue-"));
+  const dataDir = mfcTemp("mfc-issue-nonissue-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -580,7 +581,7 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
 });
 
 test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文案不再是匹配键", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-verdict-"));
+  const dataDir = mfcTemp("mfc-issue-verdict-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     // 会话 A:拉仓 → 自报收口 → 报告 → 举结论闸(顺序创建,不与 B 并发抢剧本)。
@@ -667,7 +668,7 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
 });
 
 test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继承,旧会话归档,单号唯一", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-assoc-"));
+  const dataDir = mfcTemp("mfc-issue-assoc-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     // 无单会话走到挂起(先自己拉仓,自报收口后分析阶段才开门)。
@@ -991,7 +992,7 @@ test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查
 });
 
 test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本地仓不拦", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-credgate-"));
+  const dataDir = mfcTemp("mfc-issue-credgate-");
   const origin = bareOrigin(dataDir);
   const httpsRepo = "https://codehub.test/some/repo.git";
   const script: Scene[] = [{ text: "ok" }];
@@ -1157,7 +1158,7 @@ test("pipelineClient 公共客户端:触发/查询/契约校验/checks 解析", 
 });
 
 test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-watch-recover-"));
+  const dataDir = mfcTemp("mfc-issue-watch-recover-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
@@ -1221,7 +1222,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
 });
 
 test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真绿才结算", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-stale-"));
+  const dataDir = mfcTemp("mfc-issue-stale-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
@@ -1319,7 +1320,7 @@ test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真�
 });
 
 test("场景派生:有单五阶段、无单三节点(创建恒为固定流程)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mode-"));
+  const dataDir = mfcTemp("mfc-issue-mode-");
   const script: Scene[] = [{ text: "ok" }];
   const model = new ScriptedModelServer(script);
   await model.start();
@@ -1352,7 +1353,7 @@ test("场景派生:有单五阶段、无单三节点(创建恒为固定流程)",
 });
 
 test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己拉仓/自报跳过 + 同单查重", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-repogate-"));
+  const dataDir = mfcTemp("mfc-issue-repogate-");
   const origin = bareOrigin(dataDir);
   // 线性剧本跨两个会话:每张单 = 拉单 → 自报收口 → AI 裁决(拉仓后
   // 再自报收口,或直接跳过)→ 分析。
@@ -1444,7 +1445,7 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
 });
 
 test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_repo;lookup 未命中说无匹配;零仓模块打回", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-bindmod-"));
+  const dataDir = mfcTemp("mfc-issue-bindmod-");
   const origin = bareOrigin(dataDir);
   createBusinessModule(dataDir, {
     id: "media-core", name: "媒体核心", description: "播放与转码",
@@ -1615,7 +1616,7 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
 
   // 端到端:无环境发起 → request_env 举闸 → attachEnvironment 配置
   // (密码只进 vault)→ 清闸开平台回合 → 重试指路技能。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envgate-"));
+  const dataDir = mfcTemp("mfc-issue-envgate-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "request_env", input: {} } },
@@ -1680,7 +1681,7 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
 });
 
 test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值当场打回(2026-09-06)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envtype-"));
+  const dataDir = mfcTemp("mfc-issue-envtype-");
   const origin = bareOrigin(dataDir);
   const model = new ScriptedModelServer(
     [{ text: "收到。" }, { text: "收到。" }], "scripted-v1");
@@ -1733,7 +1734,7 @@ test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值�
 });
 
 test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回合告知「用户已确认」,拒绝台账入册不上 wire", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-"));
+  const dataDir = mfcTemp("mfc-issue-envdecline-");
   const origin = bareOrigin(dataDir);
   // 剧本:第 1 回合 request_env 举闸停机;拒绝后的平台回合里 AI 再调
   // request_env(防纠缠:不举闸、如实失败),然后基于现有证据收嘴。
@@ -1841,7 +1842,7 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
 });
 
 test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,request_env 恢复正常路径", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envunlock-"));
+  const dataDir = mfcTemp("mfc-issue-envunlock-");
   const origin = bareOrigin(dataDir);
   // 剧本只负责举起 env_needed 闸(固定流程的催办续跑会在其后追加尾随
   // 回合,剧本耗尽后重复末幕文本——不依赖回合时序,解锢后的工具路径
@@ -1914,7 +1915,7 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,request
 test("环境拒绝 deploy 对称(票 93):deploy 闸拒绝按「换库部署」记账与通知;闸不在场如实打回;工具侧同文案不举闸", async () => {
   // 服务侧:盘上预置一张 deploy scope 的 env_needed 等答卡(build_deploy
   // 被阶段门禁封存 ADR-0013,现实里举不出来——重启换库时本路即生效)。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envdecline-deploy-"));
+  const dataDir = mfcTemp("mfc-issue-envdecline-deploy-");
   const now = "2026-09-03T00:00:00Z";
   mkdirSync(join(dataDir, "issues", "issue-d"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-d", "issue.json"), JSON.stringify({
@@ -1977,7 +1978,7 @@ function fixedState(overrides: Partial<IssueSessionState> = {}): IssueSessionSta
 }
 
 test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与出口,举卡才准停", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-"));
+  const dataDir = mfcTemp("mfc-issue-nudge-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     // 第 1 回合:拉仓 → 自报收口 → 写报告 → 提前收嘴(没举卡)。
@@ -2026,7 +2027,7 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
 });
 
 test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再无限续跑", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-out-"));
+  const dataDir = mfcTemp("mfc-issue-nudge-out-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -2065,7 +2066,7 @@ test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再�
 });
 
 test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,再耗尽仍走同一转人工路", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-round-"));
+  const dataDir = mfcTemp("mfc-issue-nudge-round-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     // 第 1 轮:拉仓 → 连续三次收嘴,预算 2 次耗尽落 idle(先例场景)。
@@ -2292,7 +2293,7 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
 });
 
 test("登记元信息进开场上下文(service 接线):vault 解出的四件套明文进模型请求,get_issue_meta 回执同源", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-meta-"));
+  const dataDir = mfcTemp("mfc-issue-meta-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "get_issue_meta", input: {} } },
@@ -2334,7 +2335,7 @@ test("登记元信息进开场上下文(service 接线):vault 解出的四件套
 });
 
 test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开回合", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget0-"));
+  const dataDir = mfcTemp("mfc-issue-budget0-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   await platform.start();
@@ -2482,7 +2483,7 @@ function rearmMrGreenWatch(dataDir: string, repo: string): void {
 }
 
 test("红灯分诊:失败项全在不可修名单→举卡不派回合不耗预算,作答后重置监看重看同 SHA", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-"));
+  const dataDir = mfcTemp("mfc-issue-unfixable-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2596,7 +2597,7 @@ test("红灯分诊:失败项全在不可修名单→举卡不派回合不耗预�
 });
 
 test("红灯分诊回归:名单在场但工具不在名单→照常派修,证据齐时点名维度", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-miss-"));
+  const dataDir = mfcTemp("mfc-issue-unfixable-miss-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2649,7 +2650,7 @@ test("红灯分诊回归:名单在场但工具不在名单→照常派修,证据
 });
 
 test("红灯证据分级:部分维度缺证据→派修但点名缺口维度不许猜改,并请人补原文", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-evidence-partial-"));
+  const dataDir = mfcTemp("mfc-issue-evidence-partial-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2703,7 +2704,7 @@ test("红灯证据分级:部分维度缺证据→派修但点名缺口维度不�
 });
 
 test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作答回灌证据并消耗预算", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-evidence-none-"));
+  const dataDir = mfcTemp("mfc-issue-evidence-none-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2789,7 +2790,7 @@ test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作
 });
 
 test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派修点名维度,不举卡", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-ut-jest-"));
+  const dataDir = mfcTemp("mfc-issue-ut-jest-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2842,7 +2843,7 @@ test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派
 });
 
 test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派修,兜底备注回合可见", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-issue28-"));
+  const dataDir = mfcTemp("mfc-issue-issue28-");
   const origin = bareOrigin(dataDir);
   // 真实脱敏样例:构建 record 全 SUCCESS(errorInfo 拒答),红的是质量门
   // 指标(js pass rate 99.78%<100、DT 缺陷 1),Jest 原文在 build_log 里;
@@ -2895,7 +2896,7 @@ test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派
 });
 
 test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空名单恒 false 同口径)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-unfixable-none-"));
+  const dataDir = mfcTemp("mfc-issue-unfixable-none-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -2947,7 +2948,7 @@ test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空
 // ---- notifyRepairStopped 同语义),盲输入并入证据回灌举卡路。 ----
 
 test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/轮次/建议动作);同因恢复重放不重发", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-budget-notify-"));
+  const dataDir = mfcTemp("mfc-issue-budget-notify-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed", "failed");
   platform.firstFailure = {
@@ -3030,7 +3031,7 @@ test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/�
 });
 
 test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落停表路);同因恢复重放不重发", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-watch-notify-"));
+  const dataDir = mfcTemp("mfc-issue-watch-notify-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   await platform.start();
@@ -3101,7 +3102,7 @@ test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落
 });
 
 test("盲输入闸:checks 缺席+链接式摘要+零产物→举 pipeline_evidence 卡,不派回合不耗预算", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-blind-"));
+  const dataDir = mfcTemp("mfc-issue-blind-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   // 内网实锤形态:摘要=标签+链接(会话没登录态打不开),checks 缺席,
@@ -3177,7 +3178,7 @@ async function assertRepairDispatched(input: {
   artifacts?: Array<{ name: string; text: string }>;
   expect?: RegExp[];
 }): Promise<void> {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-dispatch-"));
+  const dataDir = mfcTemp("mfc-issue-dispatch-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = input.firstFailure;
@@ -3249,7 +3250,7 @@ test("盲输入闸不误伤:摘要有真实内容/产物在场/checks 明细三�
 // ---- 重试窗三不:不耗 reds、不重复通知、不白等(落盘续算)。 ----
 
 test("证据重试窗:产物晚到自愈——先零产物进窗不举卡,窗口内补出自动派修", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-heal-"));
+  const dataDir = mfcTemp("mfc-issue-retry-heal-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -3331,7 +3332,7 @@ async function assertCardAfterWindow(input: {
   facePatterns: RegExp[];
   faceAntiPatterns?: RegExp[];
 }): Promise<void> {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-card-"));
+  const dataDir = mfcTemp("mfc-issue-retry-card-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = input.firstFailure;
@@ -3423,7 +3424,7 @@ test("证据重试窗:到点仍缺举卡——通知一次,卡面区分普通全
 });
 
 test("证据重试窗:会话取消后循环收手——到点不举卡、不通知,字段清账", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-cancel-"));
+  const dataDir = mfcTemp("mfc-issue-retry-cancel-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -3479,7 +3480,7 @@ test("证据重试窗:会话取消后循环收手——到点不举卡、不通�
 });
 
 test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍缺才举卡", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-restart-"));
+  const dataDir = mfcTemp("mfc-issue-retry-restart-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -3549,7 +3550,7 @@ test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍
 });
 
 test("重试窗守卫:已举卡的会话重启后不续算重试窗", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-retry-guard-"));
+  const dataDir = mfcTemp("mfc-issue-retry-guard-");
   const origin = bareOrigin(dataDir);
   // 盘上直接种"窗到点已举卡"的现场:重试窗字段已清是对的吗——不是,
   // 这里钉的是另一条守卫:闸在场时恢复路径不得把窗重新挂上再举一次。
@@ -3594,7 +3595,7 @@ test("重试窗守卫:已举卡的会话重启后不续算重试窗", async () =
 });
 
 test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通知,reds 不变", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-brake-"));
+  const dataDir = mfcTemp("mfc-issue-brake-");
   const origin = bareOrigin(dataDir);
   // 红到底:第一轮派修后,同一提交再红(重推无新提交)触发刹车。
   const platform = new LoopPlatform("failed", "failed");
@@ -3692,7 +3693,7 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
 });
 
 test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮报错段与换思路纪律", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-brake-miss-"));
+  const dataDir = mfcTemp("mfc-issue-brake-miss-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
@@ -3754,7 +3755,7 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
 });
 
 test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上 wire", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-warmup-"));
+  const dataDir = mfcTemp("mfc-issue-warmup-");
   const origin = bareOrigin(dataDir);
   const warmupWorkspaces: string[] = [];
   let releaseWarmup: () => void = () => {};
@@ -3831,7 +3832,7 @@ test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上
 });
 
 test("环境预热 fail-open:执行器异常落基建收据,主流程照走", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-warmup-fail-"));
+  const dataDir = mfcTemp("mfc-issue-warmup-fail-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },

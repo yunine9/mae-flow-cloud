@@ -55,7 +55,8 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
 test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
   const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
     workspace.indexOf('{task.feedback_error &&'));
-  assert.match(controls, /canRequestReview && <button/);
+  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <button/,
+    "邀请入口只对有权限者可见,且已取消任务不再提供");
   assert.match(controls, /workspace-review-invite-button/);
   assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
   assert.match(controls, /setReviewInviteOpen\(true\)/);

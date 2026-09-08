@@ -26,6 +26,7 @@ import {
   createBusinessModule,
   updateBusinessModule,
 } from "../src/businessModuleLibrary.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -85,7 +86,7 @@ test("仓→工作区映射:全部平铺 repo/<仓名>/,重名加序号,旧单�
 });
 
 test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeline 单数账升按仓", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-issue-multirepo-"));
+  const dir = mfcTemp("mfc-issue-multirepo-");
   const base = {
     id: "issue-1", account: "dev", created_at: "2026-08-28T00:00:00Z",
     updated_at: "2026-08-28T00:00:00Z", title: "t", description: "",
@@ -134,7 +135,7 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeli
 });
 
 test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;四件套缺一打回;有单不拦", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-"));
+  const dataDir = mfcTemp("mfc-issue-mr-");
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
@@ -242,7 +243,7 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
 });
 
 test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名>/ 平铺,转正全继承", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-e2e-"));
+  const dataDir = mfcTemp("mfc-issue-mr-e2e-");
   // 三个裸仓名相同,钉死 repo/ 平铺命名的去重序号。
   const originA = bareOriginAt(join(dataDir, "a"), "origin.git");
   const originB = bareOriginAt(join(dataDir, "b"), "origin.git");
@@ -390,7 +391,7 @@ function issueGet(
 }
 
 test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,物理清理后优雅缺省", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-inherit-"));
+  const dataDir = mfcTemp("mfc-issue-inherit-");
   const originA = bareOriginAt(join(dataDir, "a"), "alpha.git");
   const originB = bareOriginAt(join(dataDir, "b"), "beta.git");
   const TICKET = "DTS-2026-1003";

@@ -252,8 +252,8 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
   assert.match(workspace,
     /const check = checks\.find\(\(candidate\) => candidate\.id === item\.id\)/,
     "定位应读取当前批注的重锚定结果");
-  assert.match(workspace, /const currentLine = check\?\.line \?\? item\.line/,
-    "定位应优先使用重锚定后的当前行号");
+  assert.match(workspace, /const range = resolvedAnnotationRange\(item, check\)/,
+    "定位应优先使用重锚定后的当前行号(区间解析统一走 annotateTargets)");
 });
 
 test("需求确认复用标准决定卡，并收成一个明确的通过按钮", () => {

@@ -23,6 +23,7 @@ import {
   type IssueSessionState,
   type IssueSummary,
 } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const NOTE = "手工把网管侧 hosts 指回了备用环境,并重启了登录服务";
 const HANDOVER = "已按上面的记录核实现场,继续推进";
@@ -82,7 +83,7 @@ async function runningSession(dataDir: string, model: ScriptedModelServer) {
 }
 
 test("人工接管全链:running 中接管→AI 回合中止不标 failed;人工记录只记账;交还带着记录继续", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-takeover-"));
+  const dataDir = mfcTemp("mfc-issue-takeover-");
   const model = new ScriptedModelServer([
     { tool: { name: "bash", input: { command: "sleep 30" } } },
     { text: HANDOVER },
@@ -200,7 +201,7 @@ test("shouldNudgeFixed:人工接管在场平台不催(让路给人工驾驶),交
 // ---- 路由冒烟:三条 takeover 路由的鉴权(401)与归属人放行(200)----
 
 test("路由冒烟:takeover/note/resume 未登录 401,归属人 200 且状态翻转", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-takeover-routes-"));
+  const dataDir = mfcTemp("mfc-issue-takeover-routes-");
   const model = new ScriptedModelServer([{ text: "首轮收口。" }], "scripted-v1");
   await model.start();
   const service = new IssueFlowService({

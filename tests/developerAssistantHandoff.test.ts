@@ -16,6 +16,7 @@ import {
   inspectDeveloperAssistantAvailability,
   summarizeDeveloperAssistantChangedPaths,
 } from "../src/developerAssistantHandoff.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -29,7 +30,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function fixture(): { root: string; repo: string; kernel: string } {
-  const root = mkdtempSync(join(tmpdir(), "mfc-assistant-handoff-"));
+  const root = mfcTemp("mfc-assistant-handoff-");
   const repo = join(root, "repo");
   const kernel = join(root, "kernel");
   mkdirSync(repo);

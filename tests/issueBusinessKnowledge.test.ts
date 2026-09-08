@@ -30,6 +30,7 @@ import {
 } from "../src/issueFlow/businessKnowledge.ts";
 import { issueFixedOpeningPrompt } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const MODULE_ID = "pay-core";
 
@@ -112,7 +113,7 @@ const REPORT = "printf '# 问题分析\\n\\n现象:对账差异。\\n## 问题�
   + "' > issue-analysis.md";
 
 test("绑定模块+仓内 docs:进 analyze 定格资产并投影,台账/文件/转移账齐全", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-biz-know-"));
+  const dataDir = mfcTemp("mfc-issue-biz-know-");
   const origin = bareOrigin(dataDir, 2);
   seedModuleWithAsset(dataDir, origin, "# 清结算 FAQ\n\n对账差异先查时窗。\n");
   const script: Scene[] = [
@@ -169,7 +170,7 @@ test("绑定模块+仓内 docs:进 analyze 定格资产并投影,台账/文件/�
 });
 
 test("模块没有已发布资产:台账为空,流程照走(旁路不卡会话)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-biz-nomod-"));
+  const dataDir = mfcTemp("mfc-issue-biz-nomod-");
   const origin = bareOrigin(dataDir, 0);
   createBusinessModule(dataDir, {
     id: MODULE_ID, name: "支付核心", description: "收单与清结算",
@@ -209,7 +210,7 @@ test("模块没有已发布资产:台账为空,流程照走(旁路不卡会话)"
 });
 
 test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分组", () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-biz-docs-"));
+  const workspace = mfcTemp("mfc-issue-biz-docs-");
   const repoDir = join(workspace, "repo", "origin");
   mkdirSync(join(repoDir, "docs", "手册"), { recursive: true });
   writeFileSync(join(repoDir, "docs", "总览.md"), "# 总览\n");
@@ -227,7 +228,7 @@ test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分�
     "子目录内容不进地图,交给按需自查");
 
   // 超限折叠:45 个文件超过 40 条上限,只保留 40 条并注明折叠。
-  const big = mkdtempSync(join(tmpdir(), "mfc-issue-biz-big-"));
+  const big = mfcTemp("mfc-issue-biz-big-");
   const bigDocs = join(big, "repo", "origin", "docs");
   mkdirSync(bigDocs, { recursive: true });
   for (let index = 0; index < 45; index += 1) {
@@ -240,13 +241,13 @@ test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分�
   assert.ok(bigLines.some((line) => line.includes("已折叠")));
 
   // 缺席静默:没有 docs/ 也没有台账 → 整段缺席。
-  const empty = mkdtempSync(join(tmpdir(), "mfc-issue-biz-empty-"));
+  const empty = mfcTemp("mfc-issue-biz-empty-");
   assert.deepEqual(businessKnowledgeLines(
     { ...state, business_knowledge: undefined } as IssueSessionState, empty), []);
 });
 
 test("提示层:开场词只在 analyze 阶段注入业务知识地图", () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-biz-prompt-"));
+  const workspace = mfcTemp("mfc-issue-biz-prompt-");
   const repoDir = join(workspace, "repo", "origin", "docs");
   mkdirSync(repoDir, { recursive: true });
   writeFileSync(join(repoDir, "对账流程.md"), "# 对账流程\n");

@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 async function until<T>(
   probe: () => T | undefined,
@@ -76,7 +77,7 @@ const INSPECT_SCENE: Scene = {
 };
 
 test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路且主上下文只收文字", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vision-"));
+  const dataDir = mfcTemp("mfc-issue-vision-");
   const { main, vision, modelsJson } = await startModels([
     ASK_SCENE,
     INSPECT_SCENE,
@@ -139,7 +140,7 @@ test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路�
 });
 
 test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合照常收口", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vision-fail-"));
+  const dataDir = mfcTemp("mfc-issue-vision-fail-");
   const { main, vision, modelsJson } = await startModels([
     ASK_SCENE,
     INSPECT_SCENE,
@@ -185,7 +186,7 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
 });
 
 test("未配置 vision:工具清单不含 inspect_image,其余照旧", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vision-off-"));
+  const dataDir = mfcTemp("mfc-issue-vision-off-");
   const model = new ScriptedModelServer([
     { text: "收到问题,先给初步结论。" },
   ]);

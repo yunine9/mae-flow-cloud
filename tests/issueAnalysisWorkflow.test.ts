@@ -24,6 +24,7 @@ import {
   readSkillKnowledgeMetadata,
 } from "../src/knowledgeAssetModel.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 test("分析报告五章节门票:缺章节点名打回,齐全放行,标题级别宽容", () => {
   const full = [
@@ -109,7 +110,7 @@ function rmRf(path: string): void {
 }
 
 test("货架快照按 knowledgeScope 装载:issue 放行通用 skill,task 维持原口径", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-scope-"));
+  const root = mfcTemp("mfc-issue-scope-");
   const sourceRoot = join(root, "skills");
   const workspace = join(root, "workspace");
   mkdirSync(workspace, { recursive: true });

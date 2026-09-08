@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -52,7 +53,7 @@ async function until<T>(
 }
 
 test("子 Agent 派发:Task 落账不阻断主流程,业务工具不进子会话", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-subagent-"));
+  const dataDir = mfcTemp("mfc-issue-subagent-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },

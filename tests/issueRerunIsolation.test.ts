@@ -22,6 +22,7 @@ import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { pushFromIssueWorkspace } from "../src/issueFlow/issueGit.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -65,7 +66,7 @@ const TICKET = "DTS-2026-1006";
 const BRANCH = `master_dev_${TICKET}`;
 
 test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分支必须作为事实回执", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-rerun-"));
+  const dataDir = mfcTemp("mfc-issue-rerun-");
   const origin = bareOrigin(dataDir);
   const model = new ScriptedModelServer([
     // ---- 会话 A:拉单(自报收口)→ 拉仓 → 自报收口 → 修复分支上落一笔
@@ -161,7 +162,7 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
 });
 
 test("推送撞远端遗留同名分支:失败信息点名非快进与处置建议", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-push-"));
+  const dataDir = mfcTemp("mfc-issue-push-");
   const origin = bareOrigin(dataDir);
   // x:上次运行——同名分支带一笔提交推上远端。
   const x = join(dataDir, "x");

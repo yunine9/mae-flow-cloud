@@ -815,8 +815,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       description:
         "宣布问题分析完成并提交分析报告(工作区根目录的 issue-analysis.md)。"
         + "调用前报告必须已写好——平台以文件在场且五章节齐全(问题现象/"
-        + "问题根因/修改方案/证据链/置信度,首行一句话总结串联三者,"
-        + "模板见技能 issue-analysis)为通过条件。提交后平台把"
+        + "问题根因/修改方案/证据链/置信度;格式与写法以技能 issue-analysis"
+        + "的报告模板为准)为通过条件。提交后平台把"
         + "确认卡转给用户:有单场景确认后进入问题修复;无单场景需给 conclusion"
         + "(issue=是问题/non_issue=非问题)由用户定夺挂起或闭环。"
         + "提交后请结束回合等待用户。",

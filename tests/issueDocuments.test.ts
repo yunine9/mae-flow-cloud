@@ -27,6 +27,7 @@ import {
   readSessionDocument,
 } from "../src/issueFlow/documents.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 /** 测试只需读 ZIP 的 local file headers；生成器不写 data descriptor，
  * 因而无需引入第三方解压库就能核对文件名与完整内容。 */
@@ -50,7 +51,7 @@ function unzipEntries(zip: Buffer): Map<string, Buffer> {
 }
 
 test("过程文档清单:分析报告固定首位,其余最近修改在前;非顶层 .md 不入列", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-docs-"));
+  const root = mfcTemp("mfc-issue-docs-");
   writeFileSync(join(root, ANALYSIS_DOC_NAME), "# 分析报告");
   writeFileSync(join(root, "extra-notes.md"), "# 笔记");
   writeFileSync(join(root, "ignore.txt"), "不是文档");
@@ -67,7 +68,7 @@ test("过程文档清单:分析报告固定首位,其余最近修改在前;非�
 });
 
 test("过程文档读取:白名单即边界,路径拼接零容忍;缺失返回 undefined", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-doc-read-"));
+  const root = mfcTemp("mfc-issue-doc-read-");
   writeFileSync(join(root, ANALYSIS_DOC_NAME), "# 分析报告\n\n根因在此。");
 
   const read = readSessionDocument(root, ANALYSIS_DOC_NAME);
@@ -84,7 +85,7 @@ test("过程文档读取:白名单即边界,路径拼接零容忍;缺失返回 u
 });
 
 test("过程文档打包:只收清单白名单且保留完整原文件,不是页面截断稿", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-doc-archive-"));
+  const root = mfcTemp("mfc-issue-doc-archive-");
   const large = `# 完整分析\n\n${"根因。".repeat(180_000)}`;
   writeFileSync(join(root, ANALYSIS_DOC_NAME), large);
   writeFileSync(join(root, "补充结论.md"), "# 补充结论\n\n需要回归。\n");
@@ -102,7 +103,7 @@ test("过程文档打包:只收清单白名单且保留完整原文件,不是页
 });
 
 test("过程文档打包路由:返回标准附件头与 ZIP 二进制;空清单给人话", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-doc-route-"));
+  const root = mfcTemp("mfc-issue-doc-route-");
   writeFileSync(join(root, ANALYSIS_DOC_NAME), "# 分析报告\n");
   const service = {
     list: () => [{ id: "issue-zip", account: "dev" }],
@@ -153,7 +154,7 @@ test("过程文档打包路由:返回标准附件头与 ZIP 二进制;空清单�
 });
 
 test("问答投影(ADR-0008 口径):问答卡/用户决策/用户输入/检视意见进,agent 发言不进;闸问句随决策合成", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-dialogue-"));
+  const root = mfcTemp("mfc-issue-dialogue-");
   const lines = [
     { kind: "session_started", ts: "2026-08-29T08:00:00Z", payload: { resume: false } },
     { kind: "user_message", ts: "2026-08-29T08:00:01Z", payload: { text: "登录超时,帮我看看" } },
@@ -222,10 +223,10 @@ test("问答投影(ADR-0008 口径):问答卡/用户决策/用户输入/检视�
 });
 
 test("问答投影:事件文件缺失给空;触顶截断保留最新并如实标注", () => {
-  const empty = mkdtempSync(join(tmpdir(), "mfc-issue-dialogue-empty-"));
+  const empty = mfcTemp("mfc-issue-dialogue-empty-");
   assert.deepEqual(projectDialogue(empty), { turns: [], truncated: false });
 
-  const root = mkdtempSync(join(tmpdir(), "mfc-issue-dialogue-cap-"));
+  const root = mfcTemp("mfc-issue-dialogue-cap-");
   const lines: string[] = [];
   for (let index = 0; index < 501; index += 1) {
     lines.push(JSON.stringify({

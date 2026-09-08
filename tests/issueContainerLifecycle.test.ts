@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, lstatSync, readdirSync, chmodSync } from "node:fs"
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskContainer } from "../src/containerRuntime.ts";
 import { IssueFlowService, type IssueContainerBuild } from "../src/issueFlow/service.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function removeFixture(root: string): void {
   // 平台 Skill 快照目录是 0555；先还原测试目录权限，否则 rm 会留下 ENOTEMPTY。
@@ -74,7 +75,7 @@ async function until<T>(
 }
 
 test("容器随会话存活:回合收口不停、续聊复用原实例,取消才停", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-container-"));
+  const dataDir = mfcTemp("mfc-issue-container-");
   // 无工具的纯文本剧本:非 linear 索引按工具回执数取幕,两轮都落第 0 幕。
   const script: Scene[] = [{ text: "已收到问题,先做初步分析。" }];
   const model = new ScriptedModelServer(script);
@@ -143,7 +144,7 @@ test("容器 npm 源(#75):isolation.environment 进问题流创建环境,缺省�
   // 侧的合并点在 ensureContainer(先继承 environment 再追加缓存变量)。
   // 用生产形态(cacheRoot 在场)钉:registry 必须在合并后幸存。
   async function boot(environment?: NodeJS.ProcessEnv) {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-registry-"));
+    const dataDir = mfcTemp("mfc-issue-registry-");
     const model = new ScriptedModelServer(
       [{ text: "已收到问题,先做初步分析。" }]);
     await model.start();

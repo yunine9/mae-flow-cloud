@@ -27,6 +27,7 @@ import {
   issueResumePrompt,
 } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
 const MODULE_ID = "pay-core";
@@ -94,7 +95,7 @@ const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题�
   + "' > issue-analysis.md";
 
 test("月光开:有单分析闸全量代答,自动确认进问题修改", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-ticket-"));
+  const dataDir = mfcTemp("mfc-issue-moon-ticket-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "dts_get_ticket", input: {} } },
@@ -139,7 +140,7 @@ test("月光开:有单分析闸全量代答,自动确认进问题修改", async 
 });
 
 test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-close-"));
+  const dataDir = mfcTemp("mfc-issue-moon-close-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   const script: Scene[] = [
@@ -178,7 +179,7 @@ test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async (
 });
 
 test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律等真人", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-guard-"));
+  const dataDir = mfcTemp("mfc-issue-moon-guard-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 三种都不代答:是问题(挂起后果重)/没自报置信度(宁人工勿猜)/
@@ -301,7 +302,7 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
   const luban = new FakeLubanServer();
   await luban.start();
   const notifier = makeNotifier(luban);
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-card-"));
+  const dataDir = mfcTemp("mfc-issue-moon-card-");
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     notifier,
@@ -395,7 +396,7 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
     const model = new ScriptedModelServer(script, "scripted-v1",
       { linear: true });
     await model.start();
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-hold-"));
+    const dataDir = mfcTemp("mfc-issue-moon-hold-");
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
       ...(item.moonlight === undefined
@@ -432,7 +433,7 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
 });
 
 test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-review-"));
+  const dataDir = mfcTemp("mfc-issue-moon-review-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 线性剧本按请求数推进幕:cardA(代答续跑)→ 三幕文本(两次催办耗尽
@@ -510,7 +511,7 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
 });
 
 test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-gate-"));
+  const dataDir = mfcTemp("mfc-issue-moon-gate-");
   // 同一回合先举 env_needed 闸(拉日志缺网管环境,request_env 如实失败),
   // 再举 Agent 卡:收口时闸与卡同时在盘。env 闸月光永不代答,Agent 卡
   // 又因闸在场轮不到——两者都必须原地等真人。
@@ -574,7 +575,7 @@ test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-retro-"));
+  const dataDir = mfcTemp("mfc-issue-moon-retro-");
   // 月光开成可翻转的:卡落地时关,落地后再开——追溯与否看这张测试。
   let moon = false;
   const service = new IssueFlowService({

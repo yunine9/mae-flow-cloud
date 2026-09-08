@@ -42,6 +42,7 @@ import {
 } from "../src/issueFlow/materials.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const HAS_TAR = !!execFileSync("sh", ["-c", "command -v tar || true"])
   .toString().trim();
@@ -57,7 +58,7 @@ const SKIP_PYTHON = !HAS_PYTHON
   && "宿主无 python3:恶意/超限档案无法现场构造(tar 创建期会消毒成员名)";
 
 function stageDir(): string {
-  return mkdtempSync(join(tmpdir(), "mfc-issue-logs-"));
+  return mfcTemp("mfc-issue-logs-");
 }
 
 function cleanup(...paths: string[]): void {
@@ -148,7 +149,7 @@ test("listLogs 递归多层目录:path 相对、type 分目录文件、archive �
 
 test("listLogs 符号链接一律跳过不跟随", () => {
   const root = stageDir();
-  const outside = mkdtempSync(join(tmpdir(), "mfc-issue-logs-out-"));
+  const outside = mfcTemp("mfc-issue-logs-out-");
   try {
     const logs = join(root, "local-logs");
     mkdirSync(join(logs, "real"), { recursive: true });
@@ -427,7 +428,7 @@ function seedSessionWithLogs(dataDir: string): string {
 }
 
 test("路由:materials 清单带递归 logs,GET log 读子目录,穿越给 400 人话", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-logs-route-"));
+  const dataDir = mfcTemp("mfc-issue-logs-route-");
   const root = seedSessionWithLogs(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
@@ -457,7 +458,7 @@ test("路由:materials 清单带递归 logs,GET log 读子目录,穿越给 400 �
 
 test("路由:POST log-extract 解压 → 幂等复用;解压产物即读;恶意包/越界 400 人话",
   { skip: SKIP_TAR }, async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-logs-post-"));
+    const dataDir = mfcTemp("mfc-issue-logs-post-");
     const root = seedSessionWithLogs(dataDir);
     const service = new IssueFlowService({
       dataDir, provider: "p", model: "m", modelsJson: {},

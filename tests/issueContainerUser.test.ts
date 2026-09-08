@@ -20,6 +20,7 @@ import { dockerAvailable, TaskContainer } from "../src/containerRuntime.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 test("任务容器 run 参数:user 随 limits 透传为 --user", () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-user-arg-"));
@@ -44,7 +45,7 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
     t.skip("本机无 docker,冒烟层跳过(参数层已锁)");
     return;
   }
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-user-"));
+  const dataDir = mfcTemp("mfc-issue-user-");
   mkdirSync(join(dataDir, "issues"), { recursive: true });
   createBusinessModule(dataDir, {
     id: "smoke-mod", name: "冒烟模块", description: "容器用户冒烟占位",
