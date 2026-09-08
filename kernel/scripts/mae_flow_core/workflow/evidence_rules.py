@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 from ..foundation.models import EvidenceResult
+from .markdown_scope import without_sections
 from ..quality.implementation_tasks import implementation_task_progress
 
 
@@ -389,7 +390,8 @@ class WorkflowEvidenceRules:
         files = self.ports.glob_paths(path)
         if not files:
             return EvidenceResult(False, "未找到文件: " + path)
-        text = self.ports.read_text_replace(files[0])
+        text = without_sections(self.ports.read_text_replace(files[0]),
+                                spec.get("exclude_markdown_sections", []))
         hits = [
             pattern for pattern in spec["patterns"]
             if re.search(pattern, text)

@@ -45,7 +45,7 @@ _GRANT = re.compile(
     r"放行|允许|同意|批准|通过|可以|确认|没问题|无异议|采纳|执行吧|去吧|"
     r"(?<![A-Za-z])(?:ok|yes|approve|allow)(?![A-Za-z])", re.I)
 
-_TRIVIAL = re.compile(r"^[\s，。；;：:、!！?？.]*$")
+_TRIVIAL = re.compile(r"^[\s,，。；;：:、!！?？.]*$")
 
 
 def is_refusal(answer):
@@ -97,7 +97,7 @@ def option_labels(shown):
         if not isinstance(question, dict):
             continue
         for label in (question.get("options") or []):
-            out.add(re.sub(r"[\s，。；;：:、!！]+", "", str(label or "")).lower())
+            out.add(re.sub(r"[\s,，。；;：:、!！]+", "", str(label or "")).lower())
     return out
 
 

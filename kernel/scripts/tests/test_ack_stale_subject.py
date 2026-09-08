@@ -81,6 +81,36 @@ class StaleSubjectAckTests(unittest.TestCase):
         self.assertNotIn("尚未捕获到本步骤", why,
                          "内容变了不是没回答,不许误诊")
 
+    def test_halfwidth_comma_and_fullwidth_comma_are_the_same_confirmation(self):
+        for standard, answer in ((CONFIRM, CONFIRM.replace("，", ",")),
+                                 (CONFIRM.replace("，", ","), CONFIRM)):
+            with self.subTest(standard=standard, answer=answer):
+                self.step["confirmation_answers"] = [standard]
+                row = ledger_row("n" * 64)
+                row["text"] = json.dumps({"answers": {"Story 是否确认": answer}}, ensure_ascii=False)
+                self._write_ledger([row])
+                with in_directory(self.temp.name):
+                    self.assertEqual((True, ""), _implicit_ack_verified(self.step, self.state))
+
+    def test_punctuation_compatibility_does_not_accept_refusal_or_stale_approval(self):
+        for answer, sha in (("不确认,需要修改", "n" * 64),
+                            (CONFIRM.replace("，", ","), "o" * 64),
+                            (",", "n" * 64)):
+            row = ledger_row(sha)
+            row["text"] = json.dumps({"answers": {"Story 是否确认": answer}}, ensure_ascii=False)
+            self._write_ledger([row])
+            with in_directory(self.temp.name):
+                self.assertFalse(_implicit_ack_verified(self.step, self.state)[0])
+
+    def test_three_choice_receipt_maps_punctuation_without_using_option_order(self):
+        from mae_flow_core.workflow.completion import receipt_choice
+        step = {"choices": ["a", "b", "c"], "choice_answers": {
+            "a": ["方案甲，执行"], "b": ["方案乙，执行"], "c": ["方案丙，执行"]}}
+        receipt = {"askuser": {"questions": [{"options": [
+            "方案丙,执行", "方案甲,执行", "方案乙,执行"]}]}}
+        self.assertEqual("b", receipt_choice(step, receipt, "方案乙，执行"))
+        self.assertEqual("", receipt_choice(step, receipt, "不存在的方案，执行"))
+
     def test_matching_stamp_still_passes(self):
         self._write_ledger([ledger_row("n" * 64)])
         with in_directory(self.temp.name):

@@ -22,6 +22,7 @@ export type SemanticEventKind =
   | "tool_finished"
   | "agent_spawned"
   | "agent_finished"
+  | "agent_observed"
   | "turn_finished"
   | "session_ended"
   | "human_decision"
@@ -49,6 +50,7 @@ const REQUIRED_PAYLOAD: Record<SemanticEventKind, readonly string[]> = {
   agent_spawned: [
     "call_id", "agent_type", "description", "prompt", "child_session_id"],
   agent_finished: ["call_id", "child_session_id", "lifecycle", "final_text"],
+  agent_observed: ["call_id", "source_event_id"],
   turn_finished: ["reason"],
   session_ended: ["reason", "detail"],
   human_decision: ["waiting_id", "state_version", "decision", "notes"],

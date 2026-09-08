@@ -215,7 +215,7 @@ def _fresh_askuser(st):
 def _implicit_ack_verified(step, st):
     """Use a fresh button/plain-text answer directly; no second typed ACK."""
     expected = {
-        re.sub(r"[\s，。；;：:、!！]+", "", str(value)).lower()
+        re.sub(r"[\s,，。；;：:、!！]+", "", str(value)).lower()
         for value in step.get("confirmation_answers", [])
         if str(value).strip()
     }
@@ -234,7 +234,7 @@ def _implicit_ack_verified(step, st):
             refused_card = True
             break
         for candidate in reversed(candidates):
-            normalized = re.sub(r"[\s，。；;：:、!！]+", "", candidate)
+            normalized = re.sub(r"[\s,，。；;：:、!！]+", "", candidate)
             normalized = re.sub(
                 r"[（(]推荐[）)]", "", normalized).lower()
             if expected and normalized in expected:
@@ -302,7 +302,7 @@ def _choice_verified(step, st, choice, ack_cursor=None):
     alias_rows = []
     for key, values in (step.get("choice_answers") or {}).items():
         for value in [key] + list(values or []):
-            normalized = re.sub(r"[\s，。；;：:、!！]+", "", str(value))
+            normalized = re.sub(r"[\s,，。；;：:、!！]+", "", str(value))
             normalized = re.sub(r"[（(]推荐[）)]", "", normalized)
             if normalized:
                 alias_rows.append((key, normalized.lower()))
@@ -319,7 +319,7 @@ def _choice_verified(step, st, choice, ack_cursor=None):
             for candidate in _trusted_answer_candidates(
                 item.get("text", "")))
     for item, candidate in reversed(readable):
-        normalized = re.sub(r"[\s，。；;：:、!！]+", "", candidate)
+        normalized = re.sub(r"[\s,，。；;：:、!！]+", "", candidate)
         normalized = re.sub(r"[（(]推荐[）)]", "", normalized).lower()
         # 全等,或"标签开头+补充说明"(按钮文案常带括号注释)。禁止全文子串搜索:
         # 「这次不是 hotfix,走完整开发」会命中 hotfix、消息里出现 docs/review/ 路径

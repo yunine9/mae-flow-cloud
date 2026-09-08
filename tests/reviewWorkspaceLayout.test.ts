@@ -29,11 +29,12 @@ test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
   assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);
 });
 
-test("Markdown 全屏使用宽画布且图表优先缩放到一屏", () => {
+test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () => {
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.ws-doc \.md\s*\{[^}]*width:\s*min\(1600px, 100%\)/s);
-  assert.match(css,
-    /\.workspace-overlay\.materials-fullscreen \.plantuml-figure,[^}]*overflow-x:\s*hidden/s);
+  assert.doesNotMatch(css,
+    /\.plantuml-figure[^{}]*\{[^}]*overflow-x:\s*hidden/s);
+  assert.match(css, /\.plantuml-viewport\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.puml-diagram,[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
   assert.match(css,

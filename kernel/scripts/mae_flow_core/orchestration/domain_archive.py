@@ -161,7 +161,7 @@ def _transaction_write(contents, replacer=os.replace):
                 pass
 
 
-def apply_candidates(project_root, candidates, replacer=os.replace):
+def apply_candidates(project_root, candidates, replacer=os.replace, reapply_paths=()):
     root = os.path.abspath(os.fspath(project_root))
     entries = tuple(candidates)
     contents = {}
@@ -170,7 +170,7 @@ def apply_candidates(project_root, candidates, replacer=os.replace):
     for entry in entries:
         prepared = prepare_candidate(
             root, entry.candidate_path, entry.domain, entry.keywords)
-        if prepared.action == "unchanged":
+        if prepared.action == "unchanged" and prepared.target_path not in reapply_paths:
             continue
         target = os.path.join(root, *prepared.target_path.split("/"))
         contents[target] = _read(prepared.candidate_path)
@@ -180,7 +180,7 @@ def apply_candidates(project_root, candidates, replacer=os.replace):
         index = os.path.join(root, "docs", "specs", "index.md")
         current_index = _read(index)
         rendered_index = render_domain_index(current_index, additions)
-        if rendered_index != current_index:
+        if rendered_index != current_index or reapply_paths:
             contents[index] = rendered_index
             changed.append("docs/specs/index.md")
     if contents:

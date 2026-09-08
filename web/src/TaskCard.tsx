@@ -994,6 +994,13 @@ export function WaitingCard({
       })()}
 
       {!requirementAnalysisConfirmation && <div className="question-list">
+        {questions.some((item) => (item.options?.length ?? 0) > 0) && (
+          <p className="option-hint" role="status" aria-live="polite">
+            {submitting ? "正在提交答复…" : selectedAnswers.length > 0
+              ? <><strong>已选择，尚未提交。</strong>可补充说明，再点击下方提交按钮。</>
+              : "选中选项不会立即发送；请在下方提交答复。"}
+          </p>
+        )}
         {questions.map((item, index) => {
           const options = item.options ?? [];
           const compact = options.length <= 4
@@ -1151,10 +1158,10 @@ export function WaitingCard({
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {unifiedReply && <label className="decision-unified-reply">
-          <span>你的回复 <small>{picked[questions[0].question]
-            ? "随所选决定补充说明" : "选择处理方式，或直接填写答复"}</small></span>
+          <span>{picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{picked[questions[0].question]
+            ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
           <textarea value={replyText} aria-label="决定回复"
-            placeholder="补充整体意见，或说明处理要求…"
+            placeholder={picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
         </label>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">

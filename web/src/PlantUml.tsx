@@ -48,7 +48,9 @@ export function PlantUml({ source }: { source: string }) {
   }
   const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(result.svg)))}`;
   return <figure className={`plantuml-figure${result.syntax_error ? " syntax-error" : ""}`}>
-    <img src={dataUrl} alt={result.syntax_error ? "PlantUML 语法错误提示图" : "PlantUML 图"} />
+    <div className="plantuml-viewport" role="region" aria-label="PlantUML 图，可滚动查看完整内容" tabIndex={0}>
+      <img src={dataUrl} alt={result.syntax_error ? "PlantUML 语法错误提示图" : "PlantUML 图"} />
+    </div>
     {result.syntax_error && <details className="plantuml-source">
       <summary>PlantUML 判定这段源码有语法错误,图上标了出错行;展开看源码</summary>
       <pre className="md-block-code"><code>{source}</code></pre>

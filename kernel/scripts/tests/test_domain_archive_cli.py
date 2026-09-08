@@ -25,6 +25,12 @@ from mae_flow_core.orchestration.behavior_baseline import (  # noqa: E402
 
 
 class DomainArchiveCliTests(unittest.TestCase):
+    def setUp(self):
+        # These command-format unit tests isolate Git; recovery tests use a real repository.
+        patcher = mock.patch.object(domain_archive, "changed_domain_paths", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def _domain_document():
         return "# 无线接入\n\n" + "\n\n".join(

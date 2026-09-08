@@ -149,6 +149,33 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
   assert.equal(pre?.payload.tool_use_id, post?.payload.tool_use_id);
 });
 
+test("Hook 内部故障退出 75 会有界重试，正常返回后才算登记完成", async () => {
+  const root = stubKernel();
+  const path = join(root, "hooks", "dispatch.py");
+  writeFileSync(path, readFileSync(path, "utf8") + [
+    "assert os.environ.get('MAE_FLOW_HOOK_STRICT') == '1'",
+    "with open(path) as f: attempts = len(f.readlines())",
+    "if attempts < 3: raise SystemExit(75)",
+  ].join("\n") + "\n");
+  const host = new KernelHost({ kernelRoot: root,
+    workspace: gitWorkspace("mfc-hook-retry-"),
+    transcriptPath: join(root, "transcript.jsonl"), taskId: "t1" });
+  await host.postTool(toolEvent("tool_finished", "retry-call"));
+  assert.equal(captured(root).length, 3);
+});
+
+test("Hook 被信号结束不能被当作 exit 0 的成功登记", async () => {
+  const root = stubKernel();
+  const path = join(root, "hooks", "dispatch.py");
+  writeFileSync(path, readFileSync(path, "utf8") +
+    "import signal\nos.kill(os.getpid(), signal.SIGTERM)\n");
+  const host = new KernelHost({ kernelRoot: root,
+    workspace: gitWorkspace("mfc-hook-signal-"),
+    transcriptPath: join(root, "transcript.jsonl"), taskId: "t1" });
+  await assert.rejects(host.postTool(toolEvent("tool_finished", "signal-call")), /SIGTERM/);
+  assert.equal(captured(root).length, 3);
+});
+
 test("Cloud 托管启动:普通需求也机械 init，再把 current 交给模型", async () => {
   const workspace = gitWorkspace("mfc-managed-start-");
   const root = managedStubKernel();

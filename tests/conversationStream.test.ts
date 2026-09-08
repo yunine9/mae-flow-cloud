@@ -36,6 +36,7 @@ type StreamModule = {
 const {
   ConversationStream, conversationCardTitle, itemAnnotationIds, visibleConversationItems,
 } = await vite.ssrLoadModule("/src/ConversationStream.tsx") as StreamModule;
+const { TaskWaitingFacts } = await vite.ssrLoadModule("/src/TaskWaitingFacts.tsx");
 after(() => vite.close());
 
 const T0 = "2026-09-05T02:00:00.000Z";
@@ -228,4 +229,24 @@ test("举卡前那段话与当前卡的决策背景重复时,流里只留卡里�
   assert.match(running, /现在补一个条目再跑测试。/, "没有交接语时最后一段过程话摊开");
   assert.match(running, /1 段过程说明/);
   assert.match(running, /正在进行/);
+});
+
+test("责任人回答前，查看者能读当前题目/选项/背景，但没有代答控件", () => {
+  const waitingTask = { ...task, status: "waiting_for_human", waiting: {
+    waiting_id: "w-readonly", state_version: 1, created_at: T3,
+    context: "需要确认接口兼容策略", question: { questions: [
+      { question: "是否保留旧接口？", options: ["保留兼容", "直接替换"] },
+      { question: "补充约束", options: [] },
+    ] },
+  } } as unknown as TaskSummary;
+  const card = React.createElement(TaskWaitingFacts, { task: waitingTask });
+  const facts = renderToStaticMarkup(card);
+  for (const text of ["是否保留旧接口？", "保留兼容", "直接替换", "补充约束", "需要确认接口兼容策略", "只读查看"]) {
+    assert.ok(facts.includes(text), `查看者必须能读：${text}`);
+  }
+  assert.doesNotMatch(facts, /<(?:input|textarea|button|form)\b|role="radio"/);
+  const html = render({ task: waitingTask, decides: false, currentCard: card, filter: "mine", thread: "a-1" });
+  assert.match(html, /是否保留旧接口？/);
+  assert.match(html, /等待答复/);
+  assert.doesNotMatch(html, /<em class="conv-tag att">等你决定<\/em>/);
 });

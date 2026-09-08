@@ -398,7 +398,7 @@ export function Composer({
           </>
         ) : decisionDock ? (
           <>
-            <span className="ws-composer-mode active">等你在上面点一个选项</span>
+            <span className="ws-composer-mode active">选好后，在下方提交答复</span>
             <span className="ws-composer-hint">{dockContext ?? "这里写的说明会随选项一起送给 Agent"}</span>
           </>
         ) : (

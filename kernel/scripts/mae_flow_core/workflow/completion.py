@@ -53,7 +53,7 @@ def natural_binary_choice(step, value, is_positive):
         return ""
     if is_positive(value):
         return "continue"
-    compact = re.sub(r"[\s，。；;：:、!！]+", "", value or "")
+    compact = re.sub(r"[\s,，。；;：:、!！]+", "", value or "")
     if not compact or re.search(r"[?？]", compact):
         return ""
     if re.search(
@@ -66,7 +66,7 @@ def natural_binary_choice(step, value, is_positive):
 
 
 def _receipt_norm(value):
-    out = re.sub(r"[\s，。；;：:、!！]+", "", str(value or ""))
+    out = re.sub(r"[\s,，。；;：:、!！]+", "", str(value or ""))
     return re.sub(r"[（(]推荐[）)]", "", out).lower()
 
 

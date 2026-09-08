@@ -569,6 +569,13 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
       <Markdown text={waiting.context} />
     </div>}
 
+    {questions.some((item) => item.options.length > 0) && (
+      <p className="issue-decision-note" role="status" aria-live="polite">
+        {busy ? "正在提交答复…" : Object.values(picked).some(Boolean)
+          ? <><strong>已选择，尚未提交。</strong>可补充说明，再点击下方「提交答复」。</>
+          : "选中选项不会立即发送；请在下方提交答复。"}
+      </p>
+    )}
     {questions.map((item, index) => <fieldset className="question" key={index}>
       <legend>
         <span className="question-number">{String(index + 1).padStart(2, "0")}</span>

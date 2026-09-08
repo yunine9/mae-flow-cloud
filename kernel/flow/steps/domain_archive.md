@@ -22,3 +22,8 @@
 {{/LOCAL_HOST}}
 
 候选过期只重新 prepare，不回退编码或验证。命令失败时执行 `python "{MAEFLOW_PATH}" domain-archive status`，按输出的唯一恢复动作处理；禁止猜参数、循环重试或改写流程状态。应用完成后 done。
+
+恢复已有正式领域文档：若 build 阶段提前写了 `docs/specs/<领域>.md`，或归档曾误报 unchanged，
+保留文件，执行 `domain-archive prepare --domain "<领域>" --adopt-existing --keyword "<关键词>"`。
+该命令保留已有候选（若存在），核对内容后使用正常 show/apply 流程重新写入正式文件与索引；
+不会因为候选与现有正式文件相同而漏记本轮输出。不得手改 applied_paths 或伪造归档收据。

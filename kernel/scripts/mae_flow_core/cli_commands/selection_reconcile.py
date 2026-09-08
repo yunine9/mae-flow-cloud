@@ -178,7 +178,12 @@ def reconcile_selection(state, args, *, load_payload, verify_host_proof,
     declined = _domain_archive_unchanged(state, rejected, payload)
     archive_paths = ((state.get("domain_archive") or {}).get("applied_paths")
                      or ())
-    validate_delivery_document_boundary(paths, archive_paths)
+    try:
+        validate_delivery_document_boundary(paths, archive_paths)
+    except ValueError as exc:
+        _die(str(exc) + "；若是应交付的已有领域文档，执行 domain-archive prepare "
+             "--domain <领域> --adopt-existing --keyword <领域关键词>，"
+             "show 核对后 apply，再提交决定。")
     _write_manifest(state, payload, paths)
     state["delivery_selection"] = {
         "schema": SELECTION_SCHEMA,

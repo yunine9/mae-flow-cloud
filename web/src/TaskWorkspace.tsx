@@ -18,6 +18,7 @@ import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
+import { TaskWaitingFacts } from "./TaskWaitingFacts";
 import { Annotatable } from "./Annotatable";
 import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
@@ -625,6 +626,7 @@ export function TaskWorkspace({
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
+  const loadedMaterialKey = useRef("");
   const [selectedDiffPath, setSelectedDiffPath] = useState("");
   const [diffFileLoading, setDiffFileLoading] = useState(false);
   const [diffFileError, setDiffFileError] = useState("");
@@ -851,6 +853,7 @@ export function TaskWorkspace({
     setActive("");
     setContent("");
     setSelectedDiffPath("");
+    loadedMaterialKey.current = "";
     setDiffFileLoading(false);
     setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
@@ -1183,16 +1186,23 @@ export function TaskWorkspace({
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    setLoading((was) => was || !content);
     setMaterialReadError("");
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
     const lazyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
       && Boolean(requestedDiffPath);
-    setDiffFileLoading(lazyWorkspaceDiff);
+    // 同一份材料后台更新时保留正文、选区和滚动位置；切文件才显示加载态。
+    // 原来每 5 秒把差异正文换成“正在读取”，连未变化的文件也会闪一下。
+    const readKey = JSON.stringify([task.id, active, pushDiffActive
+      ? [diffScope, pushReview?.head_sha, task.waiting?.waiting_id]
+      : lazyWorkspaceDiff ? requestedDiffPath : activeUntrackedDirectoryKey]);
+    const opening = loadedMaterialKey.current !== readKey;
+    // 差异内部换文件只替换正文，保留文件树、分栏宽度及检视选择。
+    setLoading((was) => was || (opening && (!lazyWorkspaceDiff || !content)));
+    setDiffFileLoading(lazyWorkspaceDiff && opening);
     setDiffFileError("");
-    if (pushDiffActive) setPushDiffState({ kind: "checking" });
+    if (pushDiffActive && opening) setPushDiffState({ kind: "checking" });
     const directoryOnlyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
       && !requestedDiffPath
@@ -1210,6 +1220,7 @@ export function TaskWorkspace({
         : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
+      loadedMaterialKey.current = readKey;
       setLoadedMaterialReload(materialReload);
       if (pushDiffActive) {
         const normalized = normalizePushReviewDiffResult(result);
@@ -1249,6 +1260,7 @@ export function TaskWorkspace({
     });
     return () => { alive = false; };
   }, [task.id, active, livePulse, materialReload, diffScope, pushReview?.head_sha,
+    task.waiting?.waiting_id,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
 
@@ -2543,11 +2555,7 @@ export function TaskWorkspace({
                   }
                 />
               ) : (
-                <div className="read-only-notice">
-                  {canCollaborate
-                    ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以继续在材料上批注插话，意见会随卡送到 Agent。`
-                    : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看全部材料，但不能代为提交决定。`}
-                </div>
+                <TaskWaitingFacts task={task} />
               )) : undefined}
             tail={streamTail}
             assistantTools={assistantView?.tools}

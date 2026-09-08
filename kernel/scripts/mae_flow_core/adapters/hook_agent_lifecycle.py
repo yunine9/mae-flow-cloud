@@ -1,6 +1,7 @@
 """Reconcile host Agent lifecycle events with Mae-Flow observations."""
 
 import time
+from datetime import datetime
 
 from mae_flow_core.application.hooks.agent_completion import (
     AgentCompletionPorts,
@@ -37,6 +38,9 @@ class HookAgentLifecycle:
         alias = aliased_invocation(self.state_path, invocation_id)
         if alias and started_observation(self.state_path, alias):
             return alias
+        # PostToolUse 自带精确调用 ID；不可拿另一位 Critic 的开放记录兜底。
+        if payload.get("tool_use_id"):
+            return ""
         try:
             step = str(self.current_step() or "")
         except Exception:
@@ -63,14 +67,14 @@ class HookAgentLifecycle:
                 % (len(candidates), step or "unknown-step"))
         return ""
 
-    def _ports(self):
+    def _ports(self, completed_at=""):
         return AgentCompletionPorts(
             state_path=self.state_path,
             latest_started=self._resolve_started,
             record_finished=lambda state_path, invocation_id, lifecycle, detail:
             record_agent_finished(
                 state_path, invocation_id, lifecycle,
-                time.strftime("%Y-%m-%d %H:%M:%S"), detail),
+                completed_at or time.strftime("%Y-%m-%d %H:%M:%S"), detail),
             record_execution=self.record_execution,
             scope_violation=self.scope_violation,
             log=self.log,
@@ -91,7 +95,10 @@ class HookAgentLifecycle:
         return str(content or "")
 
     def complete(self, payload):
-        return handle_agent_completion(payload, self._ports())
+        stamp = payload.get("completed_at", "")
+        if stamp:
+            stamp = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return handle_agent_completion(payload, self._ports(stamp))
 
     def posttool(self, payload):
         response = payload.get("tool_response")
@@ -99,19 +106,21 @@ class HookAgentLifecycle:
         tool_use_id = str(payload.get("tool_use_id", "") or "")
         agent_id = str(
             response.get("agentId", response.get("agent_id", "")) or "")
-        if agent_id and tool_use_id:
+        if agent_id and tool_use_id and started_observation(self.state_path, tool_use_id):
             bind_agent_alias(self.state_path, agent_id, tool_use_id)
         status = str(response.get("status", "") or "").lower()
-        if status in ("async_launched", "launched", "background"):
+        if not response.get("is_error") and status in ("async_launched", "launched", "background"):
             return HookResponse()
         completion = dict(payload)
         completion["invocation_id"] = tool_use_id
+        completion["completed_at"] = response.get("completed_at", "")
+        completion["agent_type"] = (payload.get("tool_input") or {}).get("subagent_type", "")
         if agent_id:
             completion["agent_id"] = agent_id
         completion["assistant_text"] = self._response_detail(response)
         completion["lifecycle"] = (
             "interrupted"
-            if status in ("interrupted", "cancelled", "canceled", "failed")
-            else "returned"
+            if response.get("is_error") or status in ("interrupted", "cancelled", "canceled", "failed")
+            else "timeout" if status in ("timeout", "timed_out") else "returned"
         )
         return self.complete(completion)
