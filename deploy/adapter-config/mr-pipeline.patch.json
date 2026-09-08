@@ -1,0 +1,117 @@
+{
+  "mr_lookup": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "list",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "--source-branch",
+      "{source_branch}",
+      "--target-branch",
+      "{target_branch}",
+      "--state",
+      "opened",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--json",
+      "web_url,iid",
+      "-k"
+    ],
+    "url": {
+      "json": "0.web_url"
+    },
+    "id": {
+      "json": "0.iid"
+    }
+  },
+  "pipeline_trigger": {
+    "command": [
+      "bash",
+      "@REPO_DIR@/deploy/adapter-tools/pipeline-trigger.sh",
+      "{repo_path}",
+      "{sha}",
+      "{token}"
+    ],
+    "timeout_s": 30,
+    "status": {
+      "json": "status"
+    },
+    "status_map": {
+      "running": "running"
+    }
+  },
+  "pipeline_status": {
+    "command": [
+      "bash",
+      "@REPO_DIR@/deploy/adapter-tools/pipeline-status.sh",
+      "{repo_path}",
+      "{sha}",
+      "{token}"
+    ],
+    "status": {
+      "json": "status"
+    },
+    "log": {
+      "json": "fail_summary"
+    },
+    "run_sha": {
+      "json": "sha"
+    },
+    "pipeline_id": {
+      "json": "pipeline_id"
+    },
+    "web_url": {
+      "json": "web_url"
+    },
+    "checks": {
+      "json": "checks"
+    },
+    "check_dimension": {
+      "json": "dimension"
+    },
+    "check_status": {
+      "json": "status"
+    },
+    "check_job": {
+      "json": "job"
+    },
+    "check_url": {
+      "json": "url"
+    },
+    "check_tool": {
+      "json": "tool"
+    },
+    "status_map": {
+      "success": "success",
+      "failed": "failed",
+      "canceled": "failed",
+      "skipped": "failed",
+      "running": "running",
+      "pending": "running",
+      "created": "running",
+      "manual": "running"
+    }
+  },
+  "pipeline_artifacts": {
+    "command": [
+      "bash",
+      "@REPO_DIR@/deploy/adapter-tools/pipeline-artifacts.sh",
+      "{repo_path}",
+      "{sha}",
+      "{token}"
+    ],
+    "fields": {
+      "name": {
+        "json": "name"
+      },
+      "text": {
+        "json": "text"
+      }
+    }
+  }
+}
