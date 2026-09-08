@@ -4,6 +4,31 @@
 新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的六端点
 补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
 
+## 内网 Agent 本次只负责部署和验收
+
+这里的修复实现已经提交完成，下面不是让内网 Agent 再实现一遍的开发任务。
+
+1. 先记录当前代码提交、服务对应的工作目录和配置路径。若内网已经修改了
+   源码或脚本，保留 diff 和修改原因回传；不要覆盖、继续补丁或自行合并。
+2. 用已经同步的仓库版本部署，代码与 deploy 必须来自同一个提交，包含
+   `d02c4b0` 的修复。不要复活历史版本的 pipeline-trigger.sh，也不要混用
+   测试/生产目录中的脚本。工作副本存在未提交源码修改时，先停下回传差异。
+3. 按下文生成测试配置候选，核对路径、端口、凭据来源及实际配置差异。
+   允许调整的现场值是脚本根目录、端口、凭据文件路径与文档列出的环境
+   变量；不修改字段映射、查询逻辑、Python/TypeScript 或 CLI 源码。
+4. 备份并安装候选，重启测试 adapter **和 serve**：此次客户端 iid 兼容
+   在 serve 进程中，只重启 adapter 不会加载完整修复。
+5. 验证现有 MR 的只读接口和正常修复链路，回传验收记录。不要为了测试
+   生命周期主动关闭、合入或重跑真实 MR；终态查询可用已有历史 MR 样本。
+
+若出现 CLI 不支持字段、API 响应不同、401/403、TLS 错误、缺少 state/SHA
+或超时，记录失败命令、退出码、脱敏 stdout/stderr、HTTP 状态及实际 JSON
+字段。停止该项验收并回传，本仓修复后再部署。不要现场新增兜底脚本、修改
+判定或用常量把验收“跑绿”。服务受影响时恢复已有备份和原部署版本。
+
+回传内容应包括：部署提交、实际环境/配置路径、配置差异、两项服务状态，
+以及每个接口的脱敏请求/响应。只有“容器启动、Agent running”不算验收通过。
+
 ## 已修正
 
 - 保留 push/MR 自动触发机制。trigger 只做按完整 SHA 的 REST GET，
@@ -27,7 +52,7 @@
 
 必须先把**同一个提交的代码、deploy 目录全部同步**到内网；只换 JSON
 会缺少 mr-gates.py 或 mr_sha 支持。下面命令在测试仓库根目录执行，按实际
-位置替换配置路径。生产时改成对应生产目录，不要混用两套脚本路径。
+位置替换配置路径。本节只操作测试环境；生产升级在测试验收后另行执行。
 
 生成候选文件（保留现场端口、token_file、其他端点及已有候选链）：
 
@@ -65,7 +90,8 @@ PY
 ```
 
 候选独占创建，不会覆盖已有文件。该补丁依据本次贴出的 MR 创建参数；若
-现场随后增加了其他参数，合并时应保留。检查候选后安装并重启对应服务：
+现场有额外参数而候选会丢失，回传差异，不要自行改源码或猜映射。
+检查候选后安装并重启对应服务：
 
 ```bash
 sudo cp -p /etc/mae-flow-cloud-test/adapter.json \
@@ -73,6 +99,7 @@ sudo cp -p /etc/mae-flow-cloud-test/adapter.json \
 sudo install -m 600 /etc/mae-flow-cloud-test/adapter.candidate.json \
   /etc/mae-flow-cloud-test/adapter.json
 sudo systemctl restart mae-flow-adapter-test
+sudo systemctl restart mae-flow-serve-test
 ```
 
 内网验收：已有 MR 不误判关闭，task-4 的 MR 查询使用 iid 2931；失败后
