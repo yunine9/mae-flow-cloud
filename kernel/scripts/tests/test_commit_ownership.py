@@ -126,6 +126,63 @@ class CommitOwnershipTests(unittest.TestCase):
         self.assertNotEqual(0, blocked.returncode)
         self.assertIn("用户确认清单", blocked.stdout + blocked.stderr)
 
+    def test_corrupt_index_is_infrastructure_failure_not_missing_files(self):
+        mf.save_state(self.red_repair_state())
+        write(self.repo, "src/repair.py", "repair\n")
+        git(self.repo, "add", "--", "src/repair.py")
+        write(self.repo, ".git/index", "broken index\n")
+        result = self.gate_bash('git commit -m "[REQ123][fix]repair"')
+        output = result.stdout + result.stderr
+        self.assertEqual(75, result.returncode, output)
+        self.assertIn("Git 提交候选读取失败", output)
+        self.assertNotIn("缺少:", output)
+
+    def test_external_red_redirected_commit_reads_actual_staged_files(self):
+        paths = ("model/api.yaml", "src/Repair.java", "tests/RepairTest.java")
+        for path in paths:
+            write(self.repo, path, "before\n")
+        git(self.repo, "add", "--", *paths)
+        git(self.repo, "commit", "-qm", "base sources")
+        state = self.red_repair_state()
+        mf.save_state(state)
+        for path in paths:
+            write(self.repo, path, "after\n")
+        git(self.repo, "add", "--", *paths)
+        for suffix in ("2>&1", "> /dev/null", ">/dev/null 2>&1",
+                       "2>>/dev/null", "&>/dev/null", "| cat"):
+            with self.subTest(suffix=suffix):
+                command = 'git commit -m "[REQ123][fix]repair" ' + suffix
+                snapshot = mf._pending_commit_candidates(command)
+                self.assertEqual(set(paths), set(snapshot["paths"]))
+                allowed = self.gate_bash(command)
+                self.assertEqual(0, allowed.returncode,
+                                 allowed.stdout + allowed.stderr)
+        # The same command really commits precisely the inspected index.
+        result = subprocess.run(
+            'git commit -m "[REQ123][fix]repair" 2>&1', shell=True,
+            cwd=self.repo, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        actual = git(self.repo, "diff-tree", "--no-commit-id", "--name-only",
+                     "-r", "HEAD").splitlines()
+        self.assertEqual(set(paths), set(actual))
+
+    def test_redirected_compound_add_preserves_scope_and_exclusions(self):
+        repair = "src/repair.py"
+        startup = "src/user.py"
+        write(self.repo, startup, "user work\n")
+        state = self.red_repair_state()
+        self.mark_initial(state, startup)
+        mf.save_state(state)
+        write(self.repo, repair, "repair\n")
+        command = ('git add -- src/repair.py 2>&1 && '
+                   'git commit -m "[REQ123][fix]repair" 2>&1')
+        allowed = self.gate_bash(command)
+        self.assertEqual(0, allowed.returncode, allowed.stdout + allowed.stderr)
+        git(self.repo, "add", "--", repair, startup)
+        blocked = self.gate_bash('git commit -m "[REQ123][fix]repair" 2>&1')
+        self.assertNotEqual(0, blocked.returncode)
+        self.assertIn(startup, blocked.stdout + blocked.stderr)
+
     def test_external_red_never_adopts_startup_or_pre_red_dirt(self):
         startup = "docs/user-before.txt"
         before_red = "src/pre_red.py"

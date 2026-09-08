@@ -79,7 +79,7 @@ def _git_status_paths(pathspecs, include_ignored=False):
     ]
     if include_ignored:
         args.append("--ignored=matching")
-    out = api.argv_out([*args, "--", *pathspecs])
+    out = _git_candidate_output([*args, "--", *pathspecs])
     paths = []
     for line in out.splitlines():
         parts = line.split(None, 1)
@@ -258,16 +258,34 @@ def _trusted_harness_commit_path(
         return True
     return False
 
+def _git_candidate_output(args):
+    """A failed index/worktree read is not evidence of an empty candidate set."""
+    try:
+        result = subprocess.run(
+            list(args), shell=False, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        api.die("Git 提交候选读取失败（%s，cwd=%s）；未判定文件缺少，"
+                "请检查仓库和 Git index 可访问性后重试。"
+                % (type(exc).__name__, os.getcwd()), 75)
+    if result.returncode:
+        api.die("Git 提交候选读取失败（exit=%s，cwd=%s）：%s。"
+                "未判定文件缺少；请修复 Git 读取错误后重试，"
+                "无需反复 git add。"
+                % (result.returncode, os.getcwd(), result.stderr.strip()[:800]), 75)
+    return result.stdout.strip()
+
+
 def _staged_commit_candidates():
-    staged_all = api.argv_out([
+    staged_all = _git_candidate_output([
         "git", "-c", "core.quotepath=false", "diff", "--cached",
         "--name-only", "--no-renames", "--",
     ]).splitlines()
-    staged_new = api.argv_out([
+    staged_new = _git_candidate_output([
         "git", "-c", "core.quotepath=false", "diff", "--cached",
         "--name-only", "--diff-filter=A", "--no-renames", "--",
     ]).splitlines()
-    staged_deleted = api.argv_out([
+    staged_deleted = _git_candidate_output([
         "git", "-c", "core.quotepath=false", "diff", "--cached",
         "--name-only", "--diff-filter=D", "--no-renames", "--",
     ]).splitlines()
@@ -296,7 +314,7 @@ def _git_diff_names(
     args = _git_diff_name_args(
         diff, pathspecs, cached, diff_filter)
     return [
-        norm(path) for path in api.argv_out(args).splitlines()
+        norm(path) for path in _git_candidate_output(args).splitlines()
         if path
     ]
 

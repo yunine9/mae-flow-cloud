@@ -62,31 +62,75 @@ def _fold_shell_line_continuations(command):
     return "".join(result)
 
 
+def _shell_tokens(command):
+    """Keep operators distinct from quoted/escaped words until argv is built.
+
+    shlex with only command separators treats ``2>`` as a Git path; adding
+    ``<>`` to punctuation alone would also erase quoted literal filenames.
+    Tokenize raw word spans first so redirections never become pathspecs.
+    """
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char in " \t\r":
+            index += 1
+            continue
+        redirect = re.match(
+            r"(?:[0-9]+)?(?:&>>|&>|<<<|<<-|<<|>>|<>|>\||>&|<&|>|<)",
+            command[index:])
+        if redirect:
+            yield "redirect", redirect.group()
+            index += len(redirect.group())
+            continue
+        if char in ";&|()\n":
+            yield "control", char
+            index += 1
+            continue
+        start = index
+        quote = ""
+        while index < len(command):
+            char = command[index]
+            if char == "\\" and quote != "'" and index + 1 < len(command):
+                index += 2
+                continue
+            if char in ("'", '"'):
+                if not quote:
+                    quote = char
+                elif quote == char:
+                    quote = ""
+                index += 1
+                continue
+            if not quote and char in " \t\r\n;&|()<>":
+                break
+            index += 1
+        words = shlex.split(command[start:index], posix=True)
+        if words:
+            yield "word", words[0]
+
+
 def shell_command_groups(command):
-    """Tokenize shell command positions without splitting quoted separators."""
+    """Return command argv, excluding shell redirection operators and targets."""
     try:
-        lexer = shlex.shlex(
-            _fold_shell_line_continuations(command),
-            posix=True,
-            punctuation_chars=";&|()\n",
-        )
-        lexer.whitespace = " \t\r"
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
+        tokens = _shell_tokens(_fold_shell_line_continuations(command))
+        groups, current = [], []
+        redirect_target = False
+        for kind, token in tokens:
+            if kind == "control":
+                if current:
+                    groups.append(tuple(current))
+                    current = []
+                redirect_target = False
+            elif kind == "redirect":
+                redirect_target = True
+            elif redirect_target:
+                redirect_target = False
+            else:
+                current.append(token)
+        if current:
+            groups.append(tuple(current))
+        return tuple(groups)
     except ValueError:
         return ()
-    groups, current = [], []
-    for token in tokens:
-        if token and all(char in ";&|()\n" for char in token):
-            if current:
-                groups.append(tuple(current))
-                current = []
-            continue
-        current.append(token)
-    if current:
-        groups.append(tuple(current))
-    return tuple(groups)
 
 
 def _inline_alias_config(value):
