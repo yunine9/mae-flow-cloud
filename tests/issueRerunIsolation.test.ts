@@ -102,7 +102,7 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     opsTools: {
       async buildDeploy() { return { summary: "测试假件" }; },
     },
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const first = service.create({
