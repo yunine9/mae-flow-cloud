@@ -31,18 +31,23 @@
   },
   "pipeline_trigger": {
     "command": [
-      "bash",
-      "@REPO_DIR@/deploy/adapter-tools/pipeline-trigger.sh",
-      "{repo_path}",
-      "{sha}",
-      "{token}"
+      "curl",
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--noproxy",
+      "*",
+      "--connect-timeout",
+      "5",
+      "--max-time",
+      "20",
+      "-H",
+      "Private-Token: {token}",
+      "https://codehub-y.huawei.com/api/v4/projects/{repo_path}/pipelines?sha={sha}&per_page=1&order_by=id&sort=desc"
     ],
-    "timeout_s": 30,
+    "timeout_s": 25,
     "status": {
-      "json": "status"
-    },
-    "status_map": {
-      "running": "running"
+      "const": "running"
     }
   },
   "pipeline_status": {

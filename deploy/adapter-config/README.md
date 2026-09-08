@@ -1,70 +1,50 @@
-# 内网 MR 流水线修复的部署文件
+# 内网 adapter 配置修正
 
-## 适用范围：选择 CLI rerun 的部署
+已有链路是 push 自动触发流水线，trigger 只查询，status 轮询收敛。
+本次问题属于现场 adapter.json 的命令配置；不新增 trigger 脚本，
+不调用 rerun，也不改变宿主流程。
 
-这个脚本不是 MR 闭环的必需组件。历史部署可依赖 push 自动触发流水线，
-adapter trigger 仅查询，随后由 status 轮询收敛，详见
-[既有触发记录](../../docs/mr-loop-adaptation.md#11-adapterjson-参考填法照报告的真实形状进场对着微调)。
-本补丁服务于此次现场选择 `codehub-cli pipeline rerun` 的配置：宿主只给
-SHA，脚本将其转换成 CLI 所需的 pipeline-id 和 MR iid。只有需要这种
-失败/取消流水线重跑语义的部署才应用本补丁；已经采用自动触发且运行正常
-的部署不必切换。它不能创建首条流水线，仍依赖 push 自动创建。
+## 合并配置
 
-本目录版本化 adapter 配置补丁、合并工具和 root 服务的 HOME drop-in。
-实际 token、codehub-cli 安装/host 配置、MCP token 刷新程序仍是现场依赖，
-不包含在本目录。CLI 的参数依据现场提供的 v1.3.5 命令；需内网验收。
+`mr-pipeline.patch.json` 是配置片段，不能直接替换完整 adapter.json。
+以现场完整配置为基础，先备份再合并以下修正：
 
-## 生成配置候选
+1. 在原 `mr_create.command` 中补正 `--host yellow --project {repo}`，
+   保留源/目标分支、标题、token、需求号等原有参数和输出抽取规则。
+2. 加入片段中的 `mr_lookup`：查同源/目标分支的开放 MR，按
+   `0.web_url` / `0.iid` 抽取，启用已有的先查后建逻辑。
+3. 用片段中的 `pipeline_trigger` 替换错误的 rerun 配置。
+   它只调用 REST GET 按 SHA 查询，不依赖宿主未传的 `{mr}`。
+   HTTP 错误通过 curl 非零退出上报；成功后返回 running 表示进入轮询，
+   不代表新建或重跑了流水线。查询为空也可等待 push 的异步创建；
+   真实状态与质量结论由后续 pipeline_status 决定。
+4. status/artifacts 使用仓库已有脚本。将 `@REPO_DIR@` 替换为实际
+   仓库绝对路径（测试通常 `/data/mae-flow-cloud-test/repo`，生产通常
+   `/data/mae-flow-cloud/repo`）。已有 MCP 主路和自定义候选链应保留，
+   只更新对应的脚本候选，保留现场超时配置。
 
-以下以测试环境为例，在内网仓库根目录执行：
+其他端点、token_file、端口等保持现场配置。令牌和完整现场配置不要入库。
+此片段依据用户提供的内网分析及仓库契约整理，未读取实际部署的完整 JSON。
+CLI 的 `yellow` 别名及 v1.3.5 参数、REST 地址需在内网核验。
 
-```bash
-python3 deploy/adapter-config/prepare-config.py \
-  --input /etc/mae-flow-cloud-test/adapter.json \
-  --output /etc/mae-flow-cloud-test/adapter.candidate.json \
-  --repo-dir /data/mae-flow-cloud-test/repo
-```
+## systemd HOME
 
-工具保留 MR 创建的标题、目标分支、需求号等原参数，仅补正 host/project；
-合并 mr_lookup、trigger、status、artifacts，保留其他端点。已有 status
-候选链保留主路并更新 SHA 脚本 fallback。候选文件独占创建，权限 0600，
-不覆盖运行配置。合并前后的差异应在内网查看，避免把凭据贴到日志或仓库。
-已有 artifacts 候选链与 status/artifacts 端点超时也会保留。
+`home.conf` 是现场 root 服务的环境配置模板。根据服务用户确认 HOME 后，
+分别安装到所需环境的目录：
 
-确认候选后，备份原 adapter.json，再把候选复制为 adapter.json。
-生产环境对应改用 `/etc/mae-flow-cloud` 和 `/data/mae-flow-cloud/repo`。
-`yellow`、CodeHub API 默认地址与现有 status 脚本一致；其他平台需调整
-mr_create/mr_lookup 的 host，并设置 `MFC_CODEHUB_CLI_HOST` 和
-`MFC_CODEHUB_API`。REST 查询沿用现有脚本的系统 TLS 校验和绕代理策略。
+- `/etc/systemd/system/mae-flow-adapter-test.service.d/home.conf`
+- `/etc/systemd/system/mae-flow-adapter.service.d/home.conf`
 
-## 安装 systemd 环境
+已有文件先备份；运行 `systemctl daemon-reload` 后，重启对应服务生效。
+非 root 服务必须改成其实际用户目录。普通代码 rsync 不会安装这些 /etc
+配置，换机器需重新部署。
 
-```bash
-sudo bash deploy/adapter-config/install-home.sh test
-# 配置候选已核对并安装后：
-sudo systemctl restart mae-flow-adapter-test
-```
+## 验收及仓库边界
 
-生产使用 `prod`，工具只安装指定环境，已有 home.conf 会备份；不自动重启。
-只接受 root 服务，其他服务用户必须使用该用户的实际 HOME/config 目录。
-常规代码 rsync 不覆盖 /etc；换机器必须重新安装配置和 drop-in。
+本次补齐的是配置片段和 HOME 模板。status/artifacts、pipeline_log.py
+及 MCP 客户端此前已经在 `deploy/adapter-tools/` 中，不需要新增脚本。
+CLI 安装、host 配置、令牌和现场令牌刷新程序仍属于外部部署依赖。
 
-## 触发语义和验收
-
-- `pipeline-trigger.sh {repo_path} {sha} {token}` 不依赖可缺省的 `{mr}`。
-  SHA 必须完整；REST 按 SHA 精确查询并选择最大流水线 id。
-- 已在运行或已成功的流水线直接交给 status 轮询，不重复 rerun。
-  仅 failed/canceled 尝试 rerun；manual/skipped/未知状态明确报错。
-- 重跑前按源分支查开放 MR，多个 MR 拒绝猜测；独立调用脚本可传第 4
-  个参数 mr iid 消歧。MR 头 SHA 已变化、跨项目 MR 都拒绝重跑。
-- CLI 退出码、JSON、返回 id/SHA/status 均校验。任何触发异常只有重新
-  查询证明同 SHA/分支确实处于活动状态才报告 running，否则退出非零，
-  adapter 返回 502。不会把 401/403/422 一概当作成功。
-- 暂无流水线时报告可重试错误，不伪造已触发；首次 push 的异步创建窗口
-  需内网验证。脚本总 I/O 预算为 25 秒，以适配宿主 30 秒 trigger 超时。
-- 内网至少验证：MR 创建及复用、push 自动运行不被重复触发、失败重跑、
-  无权限、限流、多个 MR 歧义、status 质量检查和 artifacts 日志采集。
-  本地 mock 测试不能替代真实 v1.3.5 CLI 与 API 验收。
-
-脚本依赖 `deploy/adapter-tools/` 下的 Python 模块，均随仓管理。
-现有 MR 门禁、讨论和回复端点继续使用现场配置；此补丁不代替完整部署。
+内网验证：首次 push 自动触发、trigger 不产生额外 rerun、已有 MR 复用、
+指定 SHA 的 status/checks 和失败材料采集，以及无权限时如实报错。
+本地 adapter 回归测试不能代替这次真实部署验收。
