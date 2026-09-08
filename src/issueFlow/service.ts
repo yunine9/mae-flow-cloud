@@ -1076,14 +1076,12 @@ export class IssueFlowService {
           `该单号已有进行中的问题会话 ${clash.id},同一单号不能重复发起`);
       }
     }
-    // 个人凭据前置门禁(2026-08-28 拍板,需求侧 /launch-options 的同款
-    // 语义收窄到"这单真的会碰远端仓"):克隆与推送都用发起人身份,
-    // 没配令牌就让登记过门,失败发生在首轮回合准备期——那是终态,
-    // 整单作废。门关在前面:file:// 本地仓与不碰仓的纯研究不拦
-    // (拦了就是误伤),令牌在而邮箱缺同样拦(提交署名与平台归属
-    // 都按邮箱对人,缺了它推上去的提交是无主的)。无仓登记(代码仓
-    // 推迟到拉取代码仓阶段)自然不拦——闸门补填时会再过同一道检查。
-    this.requireGitIdentity(account, repoUrls);
+    // 个人凭据前置门禁(2026-08-28 立门;2026-09-08 升格无条件):有单
+    // 必经拉仓,无单也可能补仓——不管有没有单、登记时带不带仓,发起前
+    // 必须配齐 Git 令牌与署名邮箱。免仓发起曾借"登记期无仓可查"绕过
+    // 这道门,用户进了工作台才在拉仓期撞上报错;现在门关在发起按钮上。
+    // 拉仓期 requireGitIdentity 仍逐仓复查,双保险各守各的口。
+    this.requireGitAccount(account);
     // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。
     if (input.environment) normalizeEnvironmentInput(input.environment, true);
 
@@ -1161,23 +1159,34 @@ export class IssueFlowService {
     return `issue-${max + 1}`;
   }
 
-  /** 个人凭据前置门禁的判定本体:这批仓里只要碰远端(http),发起人
-   * 就必须有 Git 令牌与署名邮箱。登记(create)与闸门补填(resolveGate
-   * 的 repo_needed 手填路)共用——同一道门不该有两套文案。 */
-  private requireGitIdentity(account: string, repoUrls: string[]): void {
-    const remoteRepos = repoUrls.filter((url) => /^https?:\/\//i.test(url));
-    if (!remoteRepos.length) return;
-    const credential = this.options.gitCredential?.(account);
+  /** 发起即校验 Git 身份(2026-09-08 拍板,从"按仓校验"升格为无条件):
+   *  有单必经拉仓(可单结论也可能补仓),克隆与推送都用发起人身份——
+   *  没配齐就别进工作台。此前免仓发起(2026-08-28)在登记期无仓可查而
+   *  放行,第二道门(拉仓期)才撞,用户已进工作台才见 git 报错,观感即
+   *  "内部报错"。gitCredential 回调缺席=裸构造(测试世界无身份体系),
+   *  按缺席即放行的既有纪律处理;生产接线(serve)恒在,门恒生效。 */
+  private requireGitAccount(account: string): void {
+    // 回调缺席=裸构造(测试世界无身份体系),按缺席即放行的既有纪律
+    // 处理;生产接线(serve)恒注入回调,门恒生效。
+    if (!this.options.gitCredential) return;
+    const credential = this.options.gitCredential(account);
     if (!credential) {
       throw new IssueControlError(
-        "Git 令牌未配置(个人设置 → 个人接入):这单要拉取代码仓,"
-          + "克隆与推送都用你的身份——配好令牌后再发起");
+        "Git 令牌未配置(个人设置 → 个人接入):拉取代码仓、提交与推送"
+          + "都用你的身份——配好令牌后再发起问题会话");
     }
     if (!credential.email) {
       throw new IssueControlError(
         "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
-          + "归属都按邮箱对人——配好邮箱后再发起");
+          + "归属都按邮箱对人——配好邮箱后再发起问题会话");
     }
+  }
+
+  /** 拉仓路径的逐仓复查:碰远端仓才需要身份,file:// 本地仓不拦。 */
+  private requireGitIdentity(account: string, repoUrls: string[]): void {
+    const remoteRepos = repoUrls.filter((url) => /^https?:\/\//i.test(url));
+    if (!remoteRepos.length) return;
+    this.requireGitAccount(account);
   }
 
   /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的

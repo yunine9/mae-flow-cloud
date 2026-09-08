@@ -650,7 +650,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     modelsJson: model.modelsJson(),
     dts,
     platformUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   const created = { id: "issue-1" };
   try {

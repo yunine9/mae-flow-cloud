@@ -301,7 +301,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     dts: new MockDtsGateway(),
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const created = service.create({
@@ -596,7 +596,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     unfixableTools: ["SuperChecker"],
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const gated = await until(() => {
