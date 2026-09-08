@@ -17,6 +17,7 @@ from mae_flow_core.application.hooks.event_policies import (
     template_target,
 )
 from mae_flow_core.application.hooks.models import HookResponse
+from mae_flow_core.adapters.hook_failures import hook_failure
 from mae_flow_core.application.hooks.task_cards import (
     verify_agent_scope,
     verify_dispatch_task,
@@ -35,7 +36,7 @@ from mae_flow_core.adapters.hook_transcript_paths import (
 from mae_flow_core.adapters.hook_quality_execution import (
     HookQualityExecutionMixin,
 )
-from mae_flow_core.workflow.agent_observations import record_agent_started
+from mae_flow_core.workflow.agent_observations import record_agent_started, started_observation
 from mae_flow_core.quality.tool_transcript import (
     parse_transcript,
 )
@@ -118,14 +119,11 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
         return "agent-%s-%s" % (os.getpid(), time.time_ns())
 
     def _record_agent_start(self, payload, kind, state):
-        try:
-            record_agent_started(
-                self.state, kind, state.get("current", ""),
-                self._agent_invocation_id(payload),
-                time.strftime("%Y-%m-%d %H:%M:%S"),
-            )
-        except Exception as exc:
-            self.log("agent start observation EXC(fail-open): %s" % exc)
+        record_agent_started(
+            self.state, kind, state.get("current", ""),
+            self._agent_invocation_id(payload),
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
     def _gate_agent_dispatch(self, payload, tool_input):
         kind = agent_kind(tool_input)
@@ -151,8 +149,9 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
                 self._record_agent_start(payload, kind, state)
             return response
         except Exception as exc:
-            self.log("agent dispatch gate EXC(fail-open): %s" % exc)
-            return HookResponse()
+            reason = "Agent 启动授权/观察登记失败: %s" % exc
+            self.log(reason)
+            return HookResponse(exit_code=hook_failure(reason, self.log))
 
     def pretool(self, payload):
         tool = payload.get("tool_name", "")

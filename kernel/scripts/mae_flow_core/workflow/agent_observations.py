@@ -1,6 +1,7 @@
 """Opaque Agent lifecycle observations used as workflow evidence."""
 
 from dataclasses import asdict, dataclass
+import os
 from typing import Optional
 
 from mae_flow_core.state_store import safe_read_json, update_json
@@ -25,6 +26,8 @@ def observation_path(state_path):
 
 def _raw_data(state_path):
     data, error = safe_read_json(observation_path(state_path))
+    if error and os.environ.get("MAE_FLOW_HOOK_STRICT") == "1":
+        raise ValueError("Agent 观察记录不可读: " + error)
     if error or not isinstance(data, dict):
         return {}
     return data
@@ -85,7 +88,7 @@ def bind_agent_alias(state_path, agent_id, invocation_id):
 
     update_json(
         observation_path(state_path), mutate,
-        default={"observations": [], "aliases": {}}, recover_corrupt=True)
+        default={"observations": [], "aliases": {}}, recover_corrupt=os.environ.get("MAE_FLOW_HOOK_STRICT") != "1")
     return invocation_id
 
 
@@ -117,7 +120,7 @@ def _append(state_path, observation):
 
     update_json(
         observation_path(state_path), mutate,
-        default={"observations": []}, recover_corrupt=True)
+        default={"observations": []}, recover_corrupt=os.environ.get("MAE_FLOW_HOOK_STRICT") != "1")
     return observation
 
 

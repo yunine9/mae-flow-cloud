@@ -15,7 +15,7 @@ def is_full_config_confirmation(value, config=None):
     背书。判据换成事实——回答里点了某个配置项的值、又没说"以上/全部/所有",
     那就是在确认单项。
     """
-    compact = re.sub(r"[\s，。；;：:、!！]+", "", value or "")
+    compact = re.sub(r"[\s,，。；;：:、!！]+", "", value or "")
     if not compact or re.search(
             r"不确认|不同意|不是|不要|不能|没有|没法|否认|拒绝|暂不|取消|"
             r"修改|调整|不对|有误|有问题|什么意思|怎么|是否|能否|为什么|[?？]",
@@ -128,7 +128,7 @@ def whole_card_answers(messages, reviewed, fallback):
 
 
 def _is_positive_confirmation(value):
-    compact = re.sub(r"[\s，。；;：:、!！]+", "", value or "")
+    compact = re.sub(r"[\s,，。；;：:、!！]+", "", value or "")
     compact = re.sub(r"[（(]推荐[）)]", "", compact)
     if not compact or re.search(
             r"不确认|不同意|不是|不要|不能|没有|没法|拒绝|暂不|取消|"
@@ -156,7 +156,7 @@ def _button_confirmation_alias(item, candidate, expected):
     del expected                 # 精确匹配已在调用方先试过;这里只兜别名
     from mae_flow_core.workflow.consent import is_refusal, option_labels
     normalized = re.sub(
-        r"[\s，。；;：:、!！]+", "", str(candidate or "")).lower()
+        r"[\s,，。；;：:、!！]+", "", str(candidate or "")).lower()
     if not normalized or normalized not in option_labels(item.get("text", "")):
         return False
     return not is_refusal(candidate)

@@ -254,7 +254,7 @@ def _action_target_files(values, kind, config, flow):
 
 def _scope_confirmation_answer(value):
     """Accept an affirmative scope decision, never questions or rework intent."""
-    compact = re.sub(r"[\s，。；;：:、!！]+", "", value or "")
+    compact = re.sub(r"[\s,，。；;：:、!！]+", "", value or "")
     if not compact or re.search(
             r"不确认|还没确认|不同意|不是|不要|不能|拒绝|暂不|取消|"
             r"需要修改|需要调整|先别|等等|不对|有误|有问题|"

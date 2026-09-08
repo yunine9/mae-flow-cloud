@@ -4,10 +4,10 @@
 
 用法(hooks.json 中,shell form；公司 codeagent 不支持 exec form 的 args 数组):
   python "${CODEAGENT3_PLUGIN_ROOT}/hooks/dispatch.py" <事件>
-输入 stdin Hook JSON；exit 2 = 拦截/打回，其余一律 0(fail-open)。
+输入 stdin Hook JSON；exit 2 = 拦截/打回；Cloud 严格模式故障返回 75。
 
 防卡死设计(hook 在每条消息上同步执行,任何阻塞都会冻住整个会话):
-  - 看门狗:进程存活超过 WATCHDOG_SECS 秒无条件 os._exit(0) 放行;
+  - 看门狗:有界退出；Cloud 不把故障当作授权或证据成功;
   - stdin 守护线程在 STDIN_SECS 秒拿不到 EOF 时按空输入处理;
   - 调 mae-flow 的子进程带超时;
   - %TEMP%/mae-flow-hook.log 记录 start/end 与耗时供挂起定位。
@@ -28,6 +28,7 @@ from mae_flow_core import (
 )
 from mae_flow_core.file_io import write_text
 from mae_flow_core.adapters import hook_budget
+from mae_flow_core.adapters.hook_failures import hook_failure
 from mae_flow_core.application.hooks.events import handle_hook_event as _handle_hook_event
 from mae_flow_core.adapters.hook_active_events import ActiveHookEventAdapter
 from mae_flow_core.adapters.hook_events import HookEventAdapter
@@ -79,8 +80,7 @@ def _log(msg):
 
 def _arm_watchdog():
     def _kill():
-        _log("WATCHDOG timeout(%ss) — force exit 0(fail-open)" % WATCHDOG_SECS)
-        os._exit(0)
+        os._exit(hook_failure("WATCHDOG timeout(%ss)" % WATCHDOG_SECS, _log))
     t = threading.Timer(WATCHDOG_SECS, _kill)
     t.daemon = True
     t.start()
@@ -96,11 +96,9 @@ def maeflow(*args):
     杀软隔离,python 打不开文件恰好也退 2)或自身崩溃(rc=1 traceback)属于插件故障,
     必须 fail-open——否则在途流程里每次 Edit/Bash 都被拦,用户连自救编辑都做不了。"""
     if not os.path.isfile(MAEFLOW):
-        _log("maeflow missing at %s — fail-open" % MAEFLOW)
-        return 0
+        return hook_failure("maeflow missing at %s" % MAEFLOW, _log)
     if hook_budget.exhausted():
-        _log("maeflow %s 预算耗尽,未启动子进程 — fail-open" % (args[:2],))
-        return 0
+        return hook_failure("maeflow %s 预算耗尽" % (args[:2],), _log)
     try:
         r = subprocess.run([sys.executable, MAEFLOW, *args],
                            capture_output=True, text=True,
@@ -108,16 +106,14 @@ def maeflow(*args):
                            env=_DIAGNOSTICS.subprocess_environment(),
                            timeout=hook_budget.timeout_for(SUBPROC_SECS))
     except subprocess.TimeoutExpired:
-        _log("maeflow %s TIMEOUT" % (args,))
-        return 0
+        return hook_failure("maeflow %s TIMEOUT" % (args,), _log)
     if r.stdout:
         print(r.stdout, end="")
     stderr = _DIAGNOSTICS.sanitize_stderr(r.stderr)
     if stderr:
         print(stderr, end="", file=sys.stderr)
     if r.returncode not in (0, 2):
-        _log("maeflow %s rc=%s — 非门禁语义退出码,按 fail-open 放行" % (args[:2], r.returncode))
-        return 0
+        return hook_failure("maeflow %s rc=%s" % (args[:2], r.returncode), _log)
     return r.returncode
 
 
@@ -290,6 +286,8 @@ def main():
     rc = 0
     try:
         d = read_input()
+        if not d and os.environ.get("MAE_FLOW_HOOK_STRICT") == "1":
+            raise ValueError("Hook 输入为空或解析失败")
         _chdir_root(d)
         install_launcher_for_event(ev)
         runtime = resolve_runtime(os.getcwd())
@@ -304,8 +302,7 @@ def main():
     except SystemExit as e:
         rc = e.code if isinstance(e.code, int) else 0
     except Exception as e:
-        _log("EXC %s: %s" % (type(e).__name__, e))
-        rc = 0   # fail-open:hook 自身异常不阻塞正常工作
+        rc = hook_failure("EXC %s: %s" % (type(e).__name__, e), _log)
     _log("end %s rc=%s %dms" % (ev, rc, int((time.time() - _T0) * 1000)))
     if _STDIN_THREAD is not None and _STDIN_THREAD.is_alive():
         # stdin 读线程仍阻塞在 BufferedReader 上并持有其锁:正常 sys.exit 的解释器

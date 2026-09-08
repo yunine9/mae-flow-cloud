@@ -2,6 +2,7 @@
 """Protocol adapter tests kept at the Hook process boundary."""
 
 import importlib.util
+from pathlib import Path
 import json
 import os
 import subprocess
@@ -416,3 +417,36 @@ class HookProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudHookProtocolTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("cloud_hook_test", Path(ROOT) / "hooks/dispatch.py")
+        self.dispatch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.dispatch)
+        patch = mock.patch.dict(os.environ, {"MAE_FLOW_HOOK_STRICT": "1"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_top_level_exception_and_bad_input_fail_closed(self):
+        for input_mock in (mock.Mock(side_effect=RuntimeError("broken hook")), mock.Mock(return_value={})):
+            with mock.patch.object(self.dispatch, "read_input", input_mock), \
+                 mock.patch.object(self.dispatch, "_arm_watchdog"), \
+                 mock.patch.object(self.dispatch, "_log"), \
+                 self.assertRaises(SystemExit) as caught:
+                self.dispatch.main()
+            self.assertEqual(75, caught.exception.code)
+
+    def test_watchdog_is_failure_in_cloud(self):
+        with mock.patch.object(self.dispatch.threading, "Timer") as timer, \
+             mock.patch.object(self.dispatch.os, "_exit") as exit_process, \
+             mock.patch.object(self.dispatch, "_log"):
+            self.dispatch._arm_watchdog()
+            timer.call_args.args[1]()
+            exit_process.assert_called_once_with(75)
+        self.dispatch.hook_budget.clear()
+
+    def test_missing_cli_fails_closed(self):
+        with mock.patch.object(self.dispatch, "MAEFLOW", "/missing/mae-flow.py"), \
+             mock.patch.object(self.dispatch, "_log"):
+            self.assertEqual(75, self.dispatch.maeflow("gate", "bash"))

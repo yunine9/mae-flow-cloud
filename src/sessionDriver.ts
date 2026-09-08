@@ -508,9 +508,12 @@ export class CloudSession {
     const finishedTools = new Set(events
       .filter((event) => event.kind === "tool_finished")
       .map((event) => `${event.sessionId}:${String(event.payload.call_id ?? "")}`));
-    const finishedAgents = new Set(events
+    const finishedAgents = new Map(events
       .filter((event) => event.kind === "agent_finished")
-      .map((event) => String(event.payload.call_id ?? "")));
+      .map((event) => [String(event.payload.call_id ?? ""), event]));
+    const observedAgents = new Set(events
+      .filter((event) => event.kind === "agent_observed")
+      .map((event) => Number(event.payload.source_event_id)));
     for (const event of events) {
       const payload = event.payload as Record<string, any>;
       if (event.kind === "tool_requested") {
@@ -522,34 +525,24 @@ export class CloudSession {
           call_id: callId, name, input: payload.input ?? {}, is_error: true,
           result: "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记",
         });
-        this.kernelBypass(this.options.hostHooks?.postTool?.(interrupted));
+        this.trackKernelHook(this.options.hostHooks?.postTool?.(interrupted));
       }
       if (event.kind === "agent_spawned") {
         const callId = String(payload.call_id ?? "");
-        if (!callId || finishedAgents.has(callId)) continue;
+        if (!callId) continue;
         const childId = String(payload.child_session_id ?? "");
-        this.emit("agent_finished", this.sessionId, {
+        const finished = finishedAgents.get(callId) ?? this.emit("agent_finished", event.sessionId, {
           call_id: callId, child_session_id: childId,
           lifecycle: "interrupted",
           final_text: "服务重启时发现子 Agent 未返回，已登记中断；可按原任务卡受控重派",
         });
-        this.kernelBypass(this.options.hostHooks?.postTool?.({
-          eventId: this.options.eventLog.lastEventId(),
-          taskId: this.options.taskId,
-          sessionId: this.sessionId,
-          ts: new Date().toISOString(),
-          kind: "tool_finished",
-          payload: {
-            call_id: callId, name: "Task",
-            input: {
-              subagent_type: payload.agent_type,
-              description: payload.description,
-              prompt: payload.prompt,
-            },
-            is_error: true,
-            result: "服务重启导致子 Agent 中断",
-          },
-        }));
+        if (!observedAgents.has(finished.eventId)) {
+          await this.recordAgentCompletion(finished, {
+            subagent_type: payload.agent_type,
+            description: payload.description,
+            prompt: payload.prompt,
+          });
+        }
       }
     }
     const failure = await this.flushKernel();
@@ -576,7 +569,7 @@ export class CloudSession {
       result: renderDecision(record),
       answers: answersOf(record, record),
     });
-    this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
+    this.trackKernelHook(this.options.hostHooks?.postTool?.(finished));
     this.hostAnswered.add(record.call_id);
   }
 
@@ -586,7 +579,7 @@ export class CloudSession {
    * rejection.  That also let a task advance after its authorization/evidence
    * write had failed.  We now isolate the process in the same way, then flush
    * and adjudicate these writes before the turn can settle. */
-  private kernelBypass(work: Promise<unknown> | undefined): void {
+  private trackKernelHook(work: Promise<unknown> | undefined): void {
     if (!work) return;
     let tracked!: Promise<void>;
     tracked = work.then((feedback) => {
@@ -844,7 +837,7 @@ export class CloudSession {
         answers: answersOf(record, waiting),
       });
       // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
-      this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
+      this.trackKernelHook(this.options.hostHooks?.postTool?.(finished));
       this.hostAnswered.add(waiting.call_id);
     }
     this.decisionResolvers.delete(waiting.call_id);
@@ -1251,6 +1244,12 @@ export class CloudSession {
   // ---- 同步拦截(tool_call 钩子) ----
 
   private async onToolCall(sessionId: string, event: any) {
+    // 登记失败后不再让后续工具推进，不能等到 done 才发现证据缺失。
+    await Promise.all([...this.pendingKernel]);
+    if (this.kernelFailures.length) {
+      return { block: true, reason: "内核证据登记失败，已停止工具执行："
+        + this.kernelFailures.join("；") };
+    }
     const rawName = String(event.toolName ?? "");
     if (HOST_TOOLS.has(rawName)) return undefined; // 宿主工具在执行体内代演
     const name = TOOL_NAME_MAP[rawName] ?? rawName;
@@ -1390,7 +1389,7 @@ export class CloudSession {
         Boolean(event.isError),
       );
       // 证据登记交内核(fire 进 KernelHost 的串行链,顺序由它保证)。
-      this.kernelBypass(this.options.hostHooks?.postTool?.(semantic));
+      this.trackKernelHook(this.options.hostHooks?.postTool?.(semantic));
     }
   }
 
@@ -1464,7 +1463,7 @@ export class CloudSession {
             is_error: true,
             result: text,
           });
-          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
           driver.hostAnswered.add(callId);
           return {
             content: [{ type: "text", text }],
@@ -1507,7 +1506,7 @@ export class CloudSession {
             call_id: callId, name: "AskUserQuestion", input: params,
             is_error: true, result: blocked,
           });
-          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
           driver.hostAnswered.add(callId);
           return { content: [{ type: "text", text: blocked }], details: {}, isError: true };
         }
@@ -1540,7 +1539,7 @@ export class CloudSession {
             result: renderDecision(record),
             answers: answersOf(record, record),
           });
-          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
           driver.hostAnswered.add(callId);
           driver.options.log?.(
             `任务 ${driver.options.taskId} 重放已完成待办 ${record.waiting_id},不重复举卡`);
@@ -1559,7 +1558,7 @@ export class CloudSession {
             is_error: true,
             result: text,
           });
-          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
           driver.hostAnswered.add(callId);
           driver.options.log?.(
             `任务 ${driver.options.taskId} 拒绝重放已失效待办 ${record.waiting_id}`);
@@ -1659,30 +1658,32 @@ export class CloudSession {
     const refusal =
       "子 Agent 不设人工节点、不得再派子 Agent;" +
       "按任务卡既有信息完成或如实报告失败。";
-    const child = await this.openSession({
-      sessionId: childId,
-      customTools: [
-        this.refusalTool(childId, "AskUserQuestion",
-          "AskUserQuestion", "Ask User Question", refusal),
-        this.refusalTool(childId, "Task",
-          "Task", "Dispatch Agent", refusal),
-      ],
-      // 业务工具不进子会话:子 Agent 是研究/评审等只读专职,阶段推进、
-      // 推送、交付类工具只归主会话(闸在主会话,工具也必须在主会话)。
-      extraTools: [],
-    });
-    this.childSessions.set(childId, child);
     let lifecycle: "returned" | "interrupted" | "failed" = "returned";
+    let child: Awaited<ReturnType<CloudSession["openSession"]>> | undefined;
+    let setupError = "";
     try {
+      child = await this.openSession({
+        sessionId: childId,
+        customTools: [
+          this.refusalTool(childId, "AskUserQuestion",
+            "AskUserQuestion", "Ask User Question", refusal),
+          this.refusalTool(childId, "Task",
+            "Task", "Dispatch Agent", refusal),
+        ],
+        // 阶段推进、推送、交付类工具只归主会话。
+        extraTools: [],
+      });
+      this.childSessions.set(childId, child);
       await child.prompt(String(params.prompt ?? ""));
     } catch (error) {
-      lifecycle = "interrupted";
+      lifecycle = child ? "interrupted" : "failed";
+      setupError = String(error);
       this.options.log?.(`子 Agent ${childId} 中断: ${String(error)}`);
     } finally {
       this.childSessions.delete(childId);
-      child.dispose();
+      child?.dispose();
     }
-    let finalText = this.lastAssistantText.get(childId) ?? "";
+    let finalText = setupError || this.lastAssistantText.get(childId) || "";
     // pi 遇模型层错误(掐线、429 用尽重试……)是正常收轮,prompt() 照样
     // resolve。这时 lastAssistantText 是失败前最后一句旁白,交回去主 Agent
     // 只会看到"中途话术"然后再派一次(实锤:同一子任务连派两次各白等 5 分钟)。
@@ -1695,29 +1696,42 @@ export class CloudSession {
         + (finalText ? `\n失败前最后一句: ${finalText}` : "");
       this.options.log?.(`子 Agent ${childId} 模型层失败: ${modelError.slice(0, 400)}`);
     }
-    this.emit("agent_finished", this.sessionId, {
+    const finished = this.emit("agent_finished", this.sessionId, {
       call_id: callId,
       child_session_id: childId,
       lifecycle,
       final_text: finalText,
     });
     this.hostAnswered.add(callId); // pi 对 dispatch_agent 的回声丢弃
-    // 完成对账进内核:posttooluse(Task) 走 hook_agent_lifecycle 的
-    // tool_use_id 绑定,子 transcript 布局与旧确定性解析一致。
-    this.kernelBypass(this.options.hostHooks?.postTool?.({
-      eventId: this.options.eventLog.lastEventId(),
-      taskId: this.options.taskId,
-      sessionId: this.sessionId,
-      ts: "",
-      kind: "tool_finished",
-      payload: {
-        call_id: callId, name: "Task", input: params,
-        is_error: lifecycle !== "returned", result: finalText,
-      },
-    }));
+    await this.recordAgentCompletion(finished, params);
     if (lifecycle !== "returned") {
       throw new Error(finalText || "子 Agent 中断,无最终报告");
     }
     return finalText;
+  }
+
+  /** 先持久化报告，再等待内核登记，最后落确认事件。任何两步之间重启，
+   * 恢复都按原 call_id 重放未确认的完成事件；不补造 started 或成功结果。 */
+  private async recordAgentCompletion(
+    finished: SemanticEvent, params: Record<string, any>,
+  ): Promise<void> {
+    if (!this.options.hostHooks?.postTool) return;
+    const payload = finished.payload;
+    const work = this.options.hostHooks.postTool({
+      ...finished,
+      kind: "tool_finished",
+      payload: {
+        call_id: payload.call_id, name: "Task", input: params,
+        child_session_id: payload.child_session_id,
+        lifecycle: payload.lifecycle,
+        is_error: payload.lifecycle !== "returned", result: payload.final_text,
+      },
+    });
+    this.trackKernelHook(work);
+    const feedback = await work;
+    this.emit("agent_observed", finished.sessionId, {
+      call_id: payload.call_id, source_event_id: finished.eventId,
+      ...(feedback ? { feedback } : {}),
+    });
   }
 }

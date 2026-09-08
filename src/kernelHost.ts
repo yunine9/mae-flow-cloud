@@ -183,6 +183,11 @@ export class KernelHost {
         : {
             content: [{ type: "text", text: String(payload.result ?? "") }],
             is_error: Boolean(payload.is_error),
+            ...(["Task", "Agent"].includes(payload.name) ? {
+              agentId: payload.child_session_id,
+              status: payload.lifecycle ?? (payload.is_error ? "failed" : "returned"),
+              completed_at: event.ts,
+            } : {}),
           };
     const result = await this.dispatch("posttooluse", {
       tool_name: payload.name,
@@ -340,7 +345,7 @@ export class KernelHost {
         {
           cwd: workspace,
           stdio: ["ignore", "pipe", "pipe"],
-          env: gitView.environment(),
+          env: { ...gitView.environment(), MAE_FLOW_HOOK_STRICT: "1" },
         },
       );
       let stdout = "";
@@ -354,8 +359,9 @@ export class KernelHost {
         infraError = `内核 ${label} 超时`;
         child.kill("SIGKILL");
       }, this.options.timeoutMs ?? 30_000);
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         clearTimeout(timer);
+        if (signal) infraError ||= `内核 ${label} 被信号 ${signal} 中断`;
         finish({
           code: code ?? (infraError ? 1 : 0),
           stdout,
@@ -407,7 +413,7 @@ export class KernelHost {
           stdio: ["pipe", "pipe", "pipe"],
           // dispatch.py 会间接执行很多 git status/diff/rev-parse。它们必须
           // 看真实 index/objects，却绝不能读取 Agent 可写的 .git/config。
-          env: gitView.environment(),
+          env: { ...gitView.environment(), MAE_FLOW_HOOK_STRICT: "1" },
         },
       );
       let stdout = "";
@@ -425,8 +431,11 @@ export class KernelHost {
         this.options.log?.(infraError);
         child.kill("SIGKILL");
       }, this.options.timeoutMs ?? 30_000);
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         clearTimeout(timer);
+        if (signal || code === 75) infraError ||= signal
+          ? `dispatch ${event} 被信号 ${signal} 中断`
+          : `dispatch ${event} 登记基础设施故障: ${stderr.trim()}`;
         cleanup();
         resolve({ code: code ?? (infraError ? 1 : 0), stdout, stderr,
                   infraError: infraError || undefined });
@@ -447,7 +456,7 @@ export class KernelHost {
         infraError = `dispatch ${event} 写入失败: ${error}`;
         this.options.log?.(`${infraError}(当前任务按 fail-closed 停止推进)`);
       });
-      child.stdin.write(JSON.stringify(payload) + "\n");
+      child.stdin.write(JSON.stringify({ ...this.common(), ...payload }) + "\n");
       child.stdin.end();
     });
   }
