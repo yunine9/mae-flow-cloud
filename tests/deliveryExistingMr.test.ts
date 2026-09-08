@@ -65,7 +65,7 @@ test("只有 MR URL 也查询指定旧 MR，不依赖已删除的远端分支", 
   await (service as any).tryDeliver(internal, internal.controlEpoch);
   assert.equal(internal.summary.status, "completed");
   const query = new URL(requests[0].slice(4), "http://test").searchParams;
-  assert.equal(query.get("mr"), internal.summary.delivery.mr_url);
+  assert.equal(query.get("mr"), "420", "标准 MR URL 优先提取项目内编号");
 });
 
 test("旧 MR 仍打开才继续原交付链", async (t) => {
@@ -107,14 +107,32 @@ test("远端关闭的 MR 进入等待处理，不能自动新建", async (t) => 
   assert.equal(requests.length, 1);
 });
 
-test("合入 SHA 不匹配仍保留原有核对，不伪造流水线通过或新建 MR", async (t) => {
+test("外部合入新 SHA 直接完成，保留旧验证而不重推或新建 MR", async (t) => {
   const { service, internal, requests, work } = await fixture(t, "merged");
   internal.summary.delivery.sha = "different";
   internal.summary.delivery.stalled = undefined;
   await (service as any).tryDeliver(internal, internal.controlEpoch);
-  assert.equal(internal.summary.status, "verifying");
-  assert.match(internal.summary.delivery.stalled, /SHA|提交|版本/);
+  assert.equal(internal.summary.status, "completed");
+  assert.equal(internal.summary.delivery.sha, "different");
+  assert.equal(internal.summary.delivery.merged_sha, "abc123");
+  assert.equal(internal.summary.delivery.stalled, undefined);
   assert.equal(internal.summary.delivery.mr_id, 420);
   assert.deepEqual(work, []);
   assert.equal(requests.length, 1);
+});
+
+
+test("回执发布失败不能挡住外部合入监听及 writer 停止", async (t) => {
+  const { service, internal, work } = await fixture(t, "merged");
+  const stopped: string[] = [];
+  internal.summary.delivery.loop = { round: 1, state: "repairing" };
+  internal.driver = { abort: async () => { stopped.push("agent"); }, dispose() {} };
+  internal.container = { stop: async () => { stopped.push("container"); } };
+  internal.prepushAbort = { abort: () => { stopped.push("build-fix"); } };
+  (service as any).flushReviewReplyOutbox = async () => false;
+  await (service as any).watchMerge(internal, internal.controlEpoch);
+  assert.equal(internal.summary.status, "completed");
+  assert.deepEqual(stopped.sort(), ["agent", "build-fix", "container"]);
+  assert.equal(internal.summary.delivery.loop.state, "merged");
+  assert.deepEqual(work, []);
 });

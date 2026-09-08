@@ -1024,6 +1024,7 @@ export interface TaskSummary {
   delivery?: {
     mr_url?: string;
     mr_state?: string;
+    merged_sha?: string;
     pipeline?: string;
     skipped?: string;
     /** Cloud 原生 Build-Fix；缺席表示服务端尚未开始或不支持该能力。 */
@@ -1056,7 +1057,7 @@ export interface TaskSummary {
     loop?: {
       round: number;
       max?: number;
-      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
+      state: "repairing" | "verifying" | "green" | "merged" | "exhausted" | "halted";
       kind?: "ci" | "review" | "conflict";
       review_source?: "platform" | "workspace";
       /** true=人工意见已修复，push 前必须回到意见作者逐条复检。 */

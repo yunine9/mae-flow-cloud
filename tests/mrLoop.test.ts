@@ -1510,10 +1510,8 @@ test("自动修复关闭只停修复不停监控：人工处理后仍能识别�
   }
 });
 
-// MFC-038:merged 不是靠状态字段自证的。平台实际合入/指向的源提交必须
-// 等于本任务验证过的 delivery.sha——流水线绿灯、prepush 收据、人工检视
-// 全部绑定后者;分支被平台侧改写后,MFC 绝不能拿旧验证宣告完成。
-test("MR 源提交在等待合入期间被替换:拒绝完成,停摆点名两个 SHA", async () => {
+// 平台人工合入覆盖本地旧版本；保留验证记录而不是替新代码造 PASS。
+test("MR 外部合入新 SHA：可信收口且不改写旧验证", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
@@ -1530,16 +1528,36 @@ test("MR 源提交在等待合入期间被替换:拒绝完成,停摆点名两个
     // 夹具重放出 ef83355 合入,MFC 仍拿旧验证 4806f99 宣告完成)。
     const swapped = "f".repeat(40);
     platform.mergeRequests[0].sha = swapped;
+    await until(() => Boolean(service.get(id)!.delivery?.stalled), "外部推送后先暂停旧版交付");
     platform.mergeRequests[0].merge_state = "merged";
-    await until(() => Boolean(service.get(id)!.delivery?.stalled),
-      "监控必须停摆而不是收口");
+    await until(() => service.get(id)!.status === "completed", "外部合入可信收口");
     const summary = service.get(id)!;
-    assert.notEqual(summary.status, "completed",
-      "被替换的合入绝不能标记完成");
-    assert.match(String(summary.delivery?.stalled),
-      /不一致|未经本任务验证/, "停摆原因必须点名 SHA 不符");
-    assert.match(String(summary.delivery?.stalled),
-      new RegExp(verified.slice(0, 7)), "要点名本任务验证过的提交");
+    assert.equal(summary.delivery?.sha, verified);
+    assert.equal(summary.delivery?.merged_sha, swapped);
+    assert.equal(summary.delivery?.stalled, undefined);
+    const internal = (service as any).tasks.get(id);
+    const state = JSON.parse(readFileSync(join(internal.cwd, ".mae-flow.json"), "utf-8"));
+    assert.equal(state.current, "end");
+    assert.equal(state.quality.external_verification.sha, verified);
+    assert.equal(state.delivery_loop.close_events.at(-1).sha, swapped);
+    assert.equal((service as any).dependencyCompleted(internal), true,
+      "下游解锁同样使用可信合入收据，不再要求旧流水线背书新 SHA");
+    await service.shutdown();
+    // 模拟 close 已落盘、任务投影仍是事故前的 verifying 时进程退出。
+    const persisted = JSON.parse(readFileSync(join(summary.workspace, "task.json"), "utf-8"));
+    persisted.summary.status = "verifying";
+    persisted.summary.delivery.stalled = "old SHA mismatch";
+    delete persisted.summary.delivery.merged_sha;
+    writeFileSync(join(summary.workspace, "task.json"), JSON.stringify(persisted));
+    const revived = buildService(platform, dataDir, model.modelsJson());
+    try {
+      revived.recover();
+      assert.equal(revived.get(id)!.status, "completed", "重启使用可信 close 恢复终态");
+      assert.equal(revived.get(id)!.delivery?.merged_sha, swapped);
+      assert.equal(revived.get(id)!.delivery?.stalled, undefined);
+      assert.equal(platform.mergeRequests.length, 1);
+      assert.equal(platform.pipelines.length, 1);
+    } finally { await revived.shutdown(); }
   } finally {
     await model.stop();
     await platform.stop();

@@ -3,7 +3,8 @@
  *
  * task.json 是编排投影，不是流程真相。这里明确提供两把尺子：等待合入
  * 要求 delivery_watch + 当前 HEAD 逐项 PASS；真正完成要求可信 close
- * 已把内核推进 terminal。这个模块只读，调用方必须按场景选对证明。
+ * 已把内核推进 terminal。平台人工合入是独立完成依据，不要求替外部
+ * 提交补造流水线 PASS。这个模块只读，调用方必须按场景选对证明。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -205,6 +206,8 @@ function inspectKernelState(
         : `内核当前步骤是 ${current}，尚未到 delivery_watch`
       : `内核 current 缺失，不能推断${
           expected === "terminal" ? "终态" : "交付就绪态"}`;
+  } else if (expected === "terminal" && continuousReview && lifecycleTrusted) {
+    reason = `内核已终态，平台合入已确认@${closeSha.slice(0, 12)}；流水线结果保留原样`;
   } else if (!externalPassed) {
     reason = continuousReview && !lifecycleTrusted
       ? unavailable || (expected === "terminal"
@@ -231,7 +234,8 @@ function inspectKernelState(
     required_dimensions: required,
     ...(head ? { head } : {}),
     reason,
-    complete: lifecycleReached && externalPassed,
+    complete: lifecycleReached && (externalPassed
+      || (expected === "terminal" && continuousReview && lifecycleTrusted)),
   };
 }
 

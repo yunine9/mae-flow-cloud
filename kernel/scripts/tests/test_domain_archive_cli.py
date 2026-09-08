@@ -163,6 +163,8 @@ class DomainArchiveCliTests(unittest.TestCase):
             save_state=lambda value: saved.append(value),
             sh=lambda _command: "",
             argv_out=lambda _arguments: "",
+            _scope_diff=lambda _state: ("HEAD", ""),
+            _dirty_paths=lambda: [],
             die=lambda message, code=1: (_ for _ in ()).throw(
                 RuntimeError("%s:%s" % (code, message))),
         )
@@ -203,6 +205,8 @@ class DomainArchiveCliTests(unittest.TestCase):
             save_state=lambda value: saved.append(value),
             sh=lambda _command: "",
             argv_out=lambda _arguments: "",
+            _scope_diff=lambda _state: ("HEAD", ""),
+            _dirty_paths=lambda: [],
             die=lambda message, code=1: (_ for _ in ()).throw(
                 RuntimeError("%s:%s" % (code, message))),
         )
