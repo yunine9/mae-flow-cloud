@@ -1,4 +1,5 @@
 import { requirementDiff } from "./documentDiff.ts";
+import { withLiveReviewReceipts } from "./liveReviewReceipts.ts";
 import { recordTaskCreationAudit } from "./taskCreationAudit.ts";
 import { parseDocumentReviewReceipts } from "./documentReviewReceipts.ts";
 import { OverallStoryCoordinator } from "./overallStory.ts";
@@ -4932,6 +4933,19 @@ export class TaskService {
   ): Promise<string | undefined> {
     const store = this.annotations(task);
     const listed = store.list();
+    const loop = task.summary.delivery?.loop;
+    if (loop?.review_source === "workspace" && loop.workspace_review_annotation_ids) {
+      // 首版未送出的草稿不是本轮回检任务；改字/系统重置/人工返工都会
+      // 增加 rework，必须继续保留这些已进入过处理流程的意见。
+      const unsent = new Set(listed.filter((item) => item.status === "draft"
+        && !item.sent_at && !(item.rework ?? 0)).map((item) => item.id));
+      const ids = loop.workspace_review_annotation_ids.filter((id) => !unsent.has(id));
+      if (ids.length !== loop.workspace_review_annotation_ids.length) {
+        loop.workspace_review_annotation_ids = ids;
+        this.options.log?.(`任务 ${task.summary.id} 回检清单排除未发送初稿，草稿原样保留`);
+        this.persist(task);
+      }
+    }
     const submitted = agentReviewAnnotations(listed);
     if (!submitted.length) return undefined;
     const path = this.reviewReceiptsPath(task);
@@ -6812,6 +6826,9 @@ export class TaskService {
           + `${String(error)}。没有拿总体回复冒充逐条闭环。`,
       };
     }
+    // 回执可能包含作者尚未发送的草稿或已闭环意见；只消费本轮已发送项，
+    // 不替作者发送草稿，也不让这些已知残留阻断有效回执。
+    for (const item of listed) if (item.status !== "sent") stale.add(item.id);
     const dropStale = (rows: unknown[]) => rows.filter((row) => !stale.has(
       String((row as Record<string, unknown> | null)?.annotation_id ?? "")));
     if (raw && typeof raw === "object" && !Array.isArray(raw)
@@ -14281,7 +14298,12 @@ export class TaskService {
           failClosed: Boolean(this.options.host),
         }),
         humanGate: task.humanGate,
-        hostHooks,
+        hostHooks: withLiveReviewReceipts(hostHooks, {
+          current: () => this.current(task, epoch),
+          list: () => this.annotations(task).list(),
+          consume: () => this.consumeReviewProcessingReceipts(task),
+          log: (message) => this.options.log?.(`任务 ${task.summary.id} 运行中回执：${message}`),
+        }),
         bashOperations: task.container
           ? {
               // 不锁死开场那个容器实例:等人期间它会被释放,这里必须

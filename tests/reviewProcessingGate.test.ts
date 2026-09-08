@@ -27,6 +27,7 @@ import {
   reviewProcessingKey,
 } from "../src/feedbackPolicy.ts";
 import { CloudSession } from "../src/sessionDriver.ts";
+import { withLiveReviewReceipts } from "../src/liveReviewReceipts.ts";
 import { EventLog } from "../src/semanticEvents.ts";
 import { TranscriptStore } from "../src/transcriptStore.ts";
 import { GateService } from "../src/gateService.ts";
@@ -261,6 +262,77 @@ async function serviceWithSentAnnotation() {
   return { service, id, internal, store, first, receipts, receiptsPath, confirmCard,
     before, notified, waitingNotices, logs };
 }
+
+test("运行中写回执后下一工具前即登记：三条 sent 接收、草稿不发送、不需举卡或收口", async () => {
+  const { service, internal, first, store, receiptsPath } = await serviceWithSentAnnotation();
+  const extra = [2, 3, 4].map((i) => store.add({ author: "reviewer", artifact: "story.md",
+    file: "story.md", line: i, anchor: "场景", note: "补充验收口径", kind: "doc" }));
+  store.markSent(extra.slice(0, 2).map((a) => a.id), "review_repair");
+  const all = [first, ...extra];
+  internal.summary.delivery = { loop: { review_source: "workspace",
+    workspace_review_annotation_ids: all.map((a) => a.id) } };
+  const content = JSON.stringify({ receipts: all.map((a) => ({ annotation_id: a.id,
+    revision: 0, outcome: "fixed", summary: "已补充当前场景验收口径", evidence: ["story.md:3"] })) });
+  const logs: string[] = [];
+  let reads = 0;
+  const hooks = withLiveReviewReceipts({ preTool: async (event) => {
+    if (event.payload.name === "Read") {
+      reads++;
+      assert.equal(store.list().filter((a) => a.response?.outcome === "fixed").length, 3);
+      assert.equal(store.list().find((a) => a.id === extra[2].id)?.status, "draft");
+    }
+    return undefined;
+  } }, { current: () => true, list: () => store.list(),
+    consume: () => (service as any).consumeReviewProcessingReceipts(internal),
+    log: (message) => logs.push(message) });
+  const model = new ScriptedModelServer([
+    { tool: { name: "write", input: { path: receiptsPath, content } } },
+    { tool: { name: "read", input: { path: receiptsPath } } },
+    { tool: { name: "read", input: { path: receiptsPath } } },
+    { text: "回执已登记，完成本轮。" },
+  ]);
+  let session: CloudSession | undefined;
+  try {
+    await model.start();
+    const root = internal.summary.workspace;
+    const agentDir = join(root, "live-agent");
+    mkdirSync(agentDir);
+    writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.modelsJson()));
+    session = await CloudSession.create({ taskId: internal.summary.id, workspace: root, agentDir,
+      provider: "maeflow", model: "scripted-v1", hostHooks: hooks,
+      eventLog: new EventLog(join(agentDir, "events.jsonl")),
+      transcript: new TranscriptStore(join(agentDir, "transcript.jsonl"), "main"),
+      gate: new GateService({ workspace: root, cwd: root,
+        contract: createRequirementAnalysisGateContract(root, root, undefined, receiptsPath) }),
+      humanGate: new HumanGate(join(root, "live-waiting.json")),
+    });
+    await session.start("写入回执，再读两次核对。不要提问。");
+    assert.equal(reads, 2);
+    assert.equal(logs.filter((line) => line.includes("已登记 3 条")).length, 1);
+    assert.equal(store.list().filter((a) => a.status === "verified").length, 0);
+    const before = readFileSync(join(root, "annotations.jsonl"), "utf8");
+    const resumed = withLiveReviewReceipts(undefined, { current: () => true,
+      list: () => store.list(), consume: () => (service as any).consumeReviewProcessingReceipts(internal),
+      log() {} });
+    const event = { eventId: 20, taskId: internal.summary.id, sessionId: "main", ts: "",
+      kind: "tool_requested" as const,
+      payload: { name: "Bash", call_id: "current", input: { command: "python mae-flow.py current" } } };
+    await resumed.preTool!(event);
+    const notice = await resumed.postTool!({ ...event, kind: "tool_finished" });
+    assert.match(String(notice), /保留原始意见和来源 SHA/);
+    assert.equal(readFileSync(join(root, "annotations.jsonl"), "utf8"), before,
+      "重启和重复 current 不重复登记，也不凭新 HEAD 重绑旧回执");
+    assert.deepEqual(await (service as any).consumeWorkspaceReviewReceipts(internal), { ok: true },
+      "最终严格消费也忽略已知草稿的多余回执");
+    assert.equal(store.list().find((a) => a.id === extra[2].id)?.response, undefined);
+    assert.deepEqual(internal.summary.delivery.loop.workspace_review_annotation_ids,
+      [first.id, extra[0].id, extra[1].id], "未提交初稿不再混入本轮回检清单");
+    store.reopen(first.id, "reviewer-a");
+    await (service as any).consumeReviewProcessingReceipts(internal);
+    assert.ok(internal.summary.delivery.loop.workspace_review_annotation_ids.includes(first.id),
+      "作者返工后的草稿仍保留，不能借实时消费免除返工责任");
+  } finally { session?.dispose(); await model.stop(); await service.shutdown(); }
+});
 
 test("嵌套分析目录：错误位置的回执不算闭环，原会话按绝对路径补写后即可举卡", async () => {
   const { service, internal, first, store, receiptsPath, confirmCard, before } =

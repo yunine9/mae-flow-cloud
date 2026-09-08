@@ -19,6 +19,7 @@ import { TaskService } from "../src/taskService.ts";
 import { AnnotationStore } from "../src/annotations.ts";
 import { KERNEL_UNAVAILABLE, openKernelFeedback } from "../src/kernelDelivery.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
+import { withLiveReviewReceipts } from "../src/liveReviewReceipts.ts";
 
 const KERNEL_ROOT = join(process.cwd(), "kernel");
 const GIT_ENV = {
@@ -96,6 +97,39 @@ async function watchingService(label: string) {
   };
   return { service, internal, workspace, cwd, open, stop };
 }
+
+test("task-4 形态：四条文件回执、三条已发送、一条草稿，运行中登记后可交还真内核", async () => {
+  const { service, internal, workspace, cwd, open, stop } = await watchingService("live-workspace");
+  try {
+    const store = new AnnotationStore(join(workspace, "annotations.jsonl"));
+    const items = [1, 2, 3, 4].map((line) => store.add({ author: "reviewer",
+      artifact: "main.ts", file: "main.ts", line, anchor: "ready", note: "补充空值处理", kind: "code" }));
+    store.markSent(items.slice(0, 3).map((a) => a.id), "review_repair");
+    open("fb-live", [{ id: `ws:${items[0].id}`, source: "workspace", source_id: items[0].id,
+      source_revision: 0, kind: "code", summary: items[0].note, verification: "author" }]);
+    internal.summary.delivery = { loop: { review_source: "workspace", state: "repairing",
+      workspace_review_annotation_ids: items.map((a) => a.id) } };
+    writeFileSync(join(cwd, "main.ts"), "export const ready = false;\n");
+    execFileSync("git", ["add", "main.ts"], { cwd, env: GIT_ENV });
+    execFileSync("git", ["commit", "-qm", "repair"], { cwd, env: GIT_ENV });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+    mkdirSync(join(workspace, "reviews"), { recursive: true });
+    writeFileSync(join(workspace, "reviews/local-receipts.json"), JSON.stringify({ receipts:
+      items.map((a) => ({ annotation_id: a.id, revision: 0, outcome: "fixed",
+        summary: "已补充空值处理与对应测试", evidence: ["main.ts:1"] })) }));
+    const hooks = withLiveReviewReceipts(undefined, { current: () => true,
+      list: () => store.list(), consume: () => (service as any).consumeReviewProcessingReceipts(internal), log() {} });
+    await hooks.preTool!({ eventId: 1, taskId: internal.summary.id, sessionId: "main", ts: "",
+      kind: "tool_requested", payload: { name: "Bash", input: { command: "current" } } });
+    assert.ok(store.list().slice(0, 3).every((a) => a.response?.fixed_sha === head));
+    assert.equal(store.list()[3].response, undefined);
+    assert.equal((service as any).recordActiveFeedbackResult(internal), undefined);
+    const batch = readState(cwd).delivery_loop.batches.find((b: any) => b.batch_id === "fb-live");
+    assert.ok(batch.result_digest);
+    assert.equal(batch.results[0].status, "fixed");
+    assert.ok(store.list().every((a) => a.status !== "verified"));
+  } finally { await stop(); }
+});
 
 test("工作台批注来源:Agent 逐条回应(不带证据)登记进真内核", async () => {
   const { service, internal, workspace, cwd, open, stop } =
