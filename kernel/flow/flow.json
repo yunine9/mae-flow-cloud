@@ -248,6 +248,7 @@
     {
      "type": "content_free",
      "file": ".mae-flow-work/{单号}/story.md",
+     "exclude_markdown_sections": ["5 Story转测自检表"],
      "patterns": [
       "待确认"
      ],

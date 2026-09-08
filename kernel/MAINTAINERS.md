@@ -339,7 +339,7 @@ flow.json 步骤字段语义：
 | `spec_field` | 读 `.mae-flow.json` spec 段字段（v3 起阶段/产物指针的单一真相源）：`equals` 精确匹配或非空即过；指针字段登记时校验文件真实存在 + 现场复核（`yaml_field` 保留为在途兼容别名，指向同一实现） |
 | `pushed` | `git rev-parse --verify HEAD` == `@{u}`（实测已推送），并按 `.mae-flow.json.agent-writes` 与流程明确维护的交付产物核对尚未处理的候选；初始化后出现但没有 Agent 直接写入来源的 IDE/编译器目录只保留在工作区审计，不会被误判成必须提交；若绕过提交门夹带了指纹未变的初始脏文件，则在终态拒绝 |
 | `agent_ran` | 本步期间存在匹配 kind/step 的 `started → returned` 生命周期。PreToolUse 的 `tool_use_id` 与 SubagentStop 的 `agent_id` 属不同命名空间，通过 Agent PostToolUse 别名和唯一未闭合调用关联；两条返回通道幂等。返回文字不解析。compile/codecheck/UT 另核对与当前任务输入匹配的真实成功执行；AskUserQuestion 仍使用 ASKUSER 交互令牌。已有 started 但返回事件缺失时禁止自动重派，先 doctor；用户可用 `accept-risk` 只替代当前步骤该生命周期证据，其他机器证据不受影响。 |
-| `content_free` | 文件内容不得命中禁止正则——把"标注协议"变成机器可查终态（story 在用：零"待确认"+ 禁裸"不涉及"，破解指标博弈的职责锁） |
+| `content_free` | 文件内容不得命中禁止正则——把"标注协议"变成机器可查终态（story 在用：设计正文零"待确认"，明确排除后续转测自检表，破解指标博弈的职责锁） |
 | `domain_archive_complete` | 领域候选已经由用户确认并应用，结果为 changes/unchanged，路径只在 `docs/specs/` 且输入仍新鲜 |
 | `local_spec_valid` | 本单 `.mae-flow-work/<单号>/spec.md` 通过语义章节校验；仅有空文件或标题不能推进 |
 | `verification_passed` | 本单验证报告包含独立 PASS 且不含 FAIL；仅创建文件不能推进 |

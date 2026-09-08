@@ -626,6 +626,7 @@ export function TaskWorkspace({
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
+  const loadedMaterialKey = useRef("");
   const [selectedDiffPath, setSelectedDiffPath] = useState("");
   const [diffFileLoading, setDiffFileLoading] = useState(false);
   const [diffFileError, setDiffFileError] = useState("");
@@ -852,6 +853,7 @@ export function TaskWorkspace({
     setActive("");
     setContent("");
     setSelectedDiffPath("");
+    loadedMaterialKey.current = "";
     setDiffFileLoading(false);
     setDiffFileError("");
     setMaterialView(task.waiting?.recommended_view
@@ -1184,16 +1186,23 @@ export function TaskWorkspace({
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    setLoading((was) => was || !content);
     setMaterialReadError("");
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
     const lazyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
       && Boolean(requestedDiffPath);
-    setDiffFileLoading(lazyWorkspaceDiff);
+    // 同一份材料后台更新时保留正文、选区和滚动位置；切文件才显示加载态。
+    // 原来每 5 秒把差异正文换成“正在读取”，连未变化的文件也会闪一下。
+    const readKey = JSON.stringify([task.id, active, pushDiffActive
+      ? [diffScope, pushReview?.head_sha, task.waiting?.waiting_id]
+      : lazyWorkspaceDiff ? requestedDiffPath : activeUntrackedDirectoryKey]);
+    const opening = loadedMaterialKey.current !== readKey;
+    // 差异内部换文件只替换正文，保留文件树、分栏宽度及检视选择。
+    setLoading((was) => was || (opening && (!lazyWorkspaceDiff || !content)));
+    setDiffFileLoading(lazyWorkspaceDiff && opening);
     setDiffFileError("");
-    if (pushDiffActive) setPushDiffState({ kind: "checking" });
+    if (pushDiffActive && opening) setPushDiffState({ kind: "checking" });
     const directoryOnlyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
       && !requestedDiffPath
@@ -1211,6 +1220,7 @@ export function TaskWorkspace({
         : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
+      loadedMaterialKey.current = readKey;
       setLoadedMaterialReload(materialReload);
       if (pushDiffActive) {
         const normalized = normalizePushReviewDiffResult(result);
@@ -1250,6 +1260,7 @@ export function TaskWorkspace({
     });
     return () => { alive = false; };
   }, [task.id, active, livePulse, materialReload, diffScope, pushReview?.head_sha,
+    task.waiting?.waiting_id,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
 
