@@ -72,6 +72,7 @@ export function issueWarmupMission(budgetMinutes: number): string {
     "红线:",
     `- 除 ${WARMUP_NOTES_PATH} 外**不修改、不创建任何文件**;依赖安装与构建产物由构建工具自然产生,不算你改的。`,
     "- **不执行任何 git 写操作**(add/commit/checkout/restore/clean 都不许;只读命令可用)。修复阶段要做真正的提交,你弄脏 git 状态就是给它添乱。",
+    "- **辅助仓是只读基座**:repo/ 下的 MAE 辅助仓(MAEStarterParent/MAEServiceBuild/MAEBuild/DeployBuildTool)只供编译参照;构建链要在其下落产物时(签名工具改写 config、__pycache__ 等),重定向到业务仓或 /tmp——把它们的工作树写脏,重启续跑的完整性校验会把整个会话卡死。",
     `- Agent 平台目录(.mae-flow-work/ 下的只读投影)可能由平台注入,只读使用,不修改、不删除;你能写的只有 ${WARMUP_NOTES_PATH}。`,
     "- **基线代码红了不许修**——多仓问题里其他仓可能已在修复分支上,你只评判刚克隆的基线;编译失败如实报告就是你的交付。",
     "",
