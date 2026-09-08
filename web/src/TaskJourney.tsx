@@ -4,6 +4,7 @@ import { formatLocalDateTime, formatLocalDate, formatLocalClock } from "./time";
 import { Markdown } from "./markdown";
 import { startVisiblePolling } from "./visiblePolling";
 import { journeyCurrent, recentJourney } from "./journeyModel";
+import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 
 const labels: Record<TimelineEntry["kind"], string> = {
   session: "执行", phase: "阶段", ask: "请求确认", decision: "人的决定",
@@ -83,6 +84,10 @@ export function TaskJourney({ task, onLogs, onTiming }: {
     <div className={`journey-live-state ${current.tone}`}><i aria-hidden /><strong>{current.title}</strong>
       <span>{task.progress?.current_phase}</span></div>
     {(task.execution_plan_alerts ?? []).map((line, index) => <p className="journey-warning" key={index}>{line}</p>)}
+    {task.delivery?.prepush && <PrepushLiveLog taskId={task.id}
+      active={prepushActive(task.delivery.prepush.state, task.delivery.prepush_runtime)}
+      title={`Build-Fix · 编译与测试${task.delivery.prepush.round ? ` · 当前第 ${task.delivery.prepush.round} 轮` : ""}`}
+      onLogs={onLogs} />}
     <div className="journey-history-heading"><h3>过程记录</h3><span>自动刷新 · 最近的在前</span></div>
     {error && <div className="journey-empty" role="status"><strong>暂时无法更新进展</strong><p>{error}</p>
       {entries && <p>下方保留上次读取的记录。</p>}<button type="button" onClick={() => setReload((value) => value + 1)}>重新读取</button></div>}

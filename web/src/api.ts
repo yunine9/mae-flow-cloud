@@ -1135,6 +1135,7 @@ export async function listHistory(): Promise<{
 
 export interface SemanticEvent {
   eventId: number;
+  execution?: { source: "main" | "build_fix"; attempt: string; round?: number };
   kind: string;
   ts: string;
   /** 同一任务的主 Agent、开发助手、子 Agent 共用事件流，用它区分来源。 */
@@ -2995,7 +2996,7 @@ export async function listActions(
   return { actions: await parseJson(response) };
 }
 
-export type SseConnectionState = "connecting" | "live" | "reconnecting";
+export type SseConnectionState = "connecting" | "live" | "reconnecting" | "ended";
 
 /** SSE 事件流:重放 + 跟进,组件卸载时调用返回的清理函数。
  * error 时不能主动 close：EventSource 自带断线重连，服务端重放再由
@@ -3066,12 +3067,27 @@ export function tailBuildFixEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
   onState?: (state: SseConnectionState) => void,
+  options?: { follow?: boolean },
 ): () => void {
+  return tailExecutionProjection(taskId, "build-fix", onEvent, onState, options);
+}
+
+export function tailExecutionEvents(taskId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void) {
+  return tailExecutionProjection(taskId, "execution", onEvent, onState);
+}
+
+function tailExecutionProjection(taskId: string, sourceKind: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+  options?: { follow?: boolean }): () => void {
   onState?.("connecting");
-  const source = new EventSource(`/tasks/${taskId}/build-fix/events`);
+  const source = new EventSource(`/tasks/${encodeURIComponent(taskId)}/${sourceKind}/events${options?.follow === false ? "?follow=false" : ""}`);
   source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");
+  source.addEventListener("end", () => { source.close(); onState?.("ended"); });
   return () => source.close();
 }
 

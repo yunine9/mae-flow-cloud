@@ -8,7 +8,7 @@
  * 本地复刻已删除;事件筛选/窗口/计数在 eventView.ts。
  */
 import { useEffect, useState } from "react";
-import { tailIssueEvents, type SemanticEvent } from "../api";
+import { tailIssueEvents, type SemanticEvent, type SseConnectionState } from "../api";
 import {
   eventFilterCounts,
   eventWindow,
@@ -116,7 +116,7 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
   const PAGE_SIZE = 120;
   const [events, setEvents] = useState<SemanticEvent[]>([]);
   const [connection, setConnection] = useState<
-    "connecting" | "live" | "reconnecting">("connecting");
+    SseConnectionState>("connecting");
   const [filter, setFilter] = useState<EventFilter>("all");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const filtered = filterEvents(events, filter);
