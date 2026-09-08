@@ -864,7 +864,7 @@ export function ConversationStream({
           message({
             key: `card-${waiting.waiting_id}`, who: "agent", name: "Agent",
             ts: waiting.created_at ?? new Date().toISOString(),
-            tag: <em className="conv-tag att">{waiting.question?.purpose === "clarification" ? "在追问" : "等你决定"}</em>,
+            tag: <em className="conv-tag att">{waiting.question?.purpose === "clarification" ? "在追问" : decides ? "等你决定" : "等待答复"}</em>,
             children: <div className="conv-card current">{currentCard}</div>,
           })
         )}

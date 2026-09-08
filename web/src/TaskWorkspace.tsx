@@ -18,6 +18,7 @@ import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
+import { TaskWaitingFacts } from "./TaskWaitingFacts";
 import { Annotatable } from "./Annotatable";
 import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
@@ -2543,11 +2544,7 @@ export function TaskWorkspace({
                   }
                 />
               ) : (
-                <div className="read-only-notice">
-                  {canCollaborate
-                    ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以继续在材料上批注插话，意见会随卡送到 Agent。`
-                    : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看全部材料，但不能代为提交决定。`}
-                </div>
+                <TaskWaitingFacts task={task} />
               )) : undefined}
             tail={streamTail}
             assistantTools={assistantView?.tools}

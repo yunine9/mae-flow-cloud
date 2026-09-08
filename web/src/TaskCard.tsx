@@ -1158,10 +1158,10 @@ export function WaitingCard({
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {unifiedReply && <label className="decision-unified-reply">
-          <span>你的回复 <small>{picked[questions[0].question]
-            ? "随所选决定补充说明" : "选择处理方式，或直接填写答复"}</small></span>
+          <span>{picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{picked[questions[0].question]
+            ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
           <textarea value={replyText} aria-label="决定回复"
-            placeholder="补充整体意见，或说明处理要求…"
+            placeholder={picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
         </label>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
