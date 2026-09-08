@@ -994,6 +994,13 @@ export function WaitingCard({
       })()}
 
       {!requirementAnalysisConfirmation && <div className="question-list">
+        {questions.some((item) => (item.options?.length ?? 0) > 0) && (
+          <p className="option-hint" role="status" aria-live="polite">
+            {submitting ? "正在提交答复…" : selectedAnswers.length > 0
+              ? <><strong>已选择，尚未提交。</strong>可补充说明，再点击下方提交按钮。</>
+              : "选中选项不会立即发送；请在下方提交答复。"}
+          </p>
+        )}
         {questions.map((item, index) => {
           const options = item.options ?? [];
           const compact = options.length <= 4
