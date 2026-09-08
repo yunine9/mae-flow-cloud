@@ -2587,6 +2587,27 @@ export function createTaskServer(
               id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户"));
           }
         }
+        if (parts[2] === "overall-story") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (request.method === "GET") {
+            return json(response, 200, parts[3] === "revisions" && parts[4]
+              ? service.overallStories.revision(id, parts[4]) : service.overallStories.status(id));
+          }
+          if (request.method === "POST") {
+            if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+              return json(response, 403, { error: "只有责任人可以生成、更新或确认整体 Story；受邀者可提交检视意见" });
+            }
+            const actor = viewer?.username ?? "本地用户";
+            if (parts[3] === "stop") return json(response, 200, await service.overallStories.stop(id));
+            if (parts[3] === "confirm") {
+              const body = await readBody(request);
+              return json(response, 200, service.overallStories.confirm(id, String(body.revision ?? ""), actor));
+            }
+            if (parts.length !== 3) return json(response, 404, { error: "整体 Story 操作不存在" });
+            return json(response, 202, service.overallStories.generate(id, actor));
+          }
+        }
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });

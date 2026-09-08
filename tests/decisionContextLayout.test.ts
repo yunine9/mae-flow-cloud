@@ -348,7 +348,7 @@ test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意
   // 才覆盖正本。模型回复不承担整篇正文传输。
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf8");
   assert.match(service, /requirementReviewMission\(\{/);
-  assert.match(service, /parseRequirementReceipts\(rawReceipts, annotations\)/,
+  assert.match(service, /parseDocumentReviewReceipts\(rawReceipts, annotations\)/,
     "文档编辑 Agent 必须逐条回执");
   assert.doesNotMatch(service, /===END_REQUIREMENT===/,
     "不许恢复让模型在回复里搬运完整需求正文的脆弱协议");

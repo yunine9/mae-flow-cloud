@@ -1,3 +1,4 @@
+import { OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 /**
  * 批注清单:记录批注内容、提交状态和原位置变化。
  *
@@ -243,8 +244,13 @@ export function AnnotationPanel({
   // 在这里直接以返工选项提交决定卡,一步到位;检视人仍走排队。
   const oneStepRework = queueable && !requirementReview && canDecide
     && !!reworkChoice;
-  const canSend = !["completed", "canceled"].includes(taskStatus)
+  const ordinaryCanSend = !["completed", "canceled"].includes(taskStatus)
     && (running || evidenceAwaiting || reviewSendable || queueable);
+  const canSendItem = (item: Annotation) => item.artifact === OVERALL_STORY_ARTIFACT
+    ? taskStatus !== "canceled" : ordinaryCanSend;
+  const sendableDrafts = drafts.filter(canSendItem);
+  const canSend = sendableDrafts.length > 0;
+  const overallDrafts = sendableDrafts.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
 
@@ -300,7 +306,7 @@ export function AnnotationPanel({
     setError("");
     setSubmissionNotice("");
     try {
-      if (oneStepRework && reworkChoice) {
+      if (oneStepRework && reworkChoice && !overallDrafts.length) {
         // 服务端 decide 会把本人全部草稿 + 等待期排队的意见一并渲进
         // 决定正文,再 resume Agent——和在卡上手点"需要调整"完全同一条路。
         const result = await decide(taskId, reworkChoice.stateVersion,
@@ -310,11 +316,15 @@ export function AnnotationPanel({
         if (result.conflict) setError(result.conflict);
         else setSubmissionNotice(`已提交 ${drafts.length} 条意见并请求返工。`);
       } else {
-        const result = await sendAnnotations(taskId,
-          drafts.map((item) => item.id));
-        if (result.error) setError(result.error);
-        else setSubmissionNotice(result.receipt
-          ?? `已提交 ${result.sent?.length ?? drafts.length} 条意见，请查看下方逐条处理状态。`);
+        const groups = [overallDrafts, sendableDrafts.filter((item) => item.artifact !== OVERALL_STORY_ARTIFACT)];
+        const notices: string[] = [];
+        for (const group of groups) {
+          if (!group.length) continue;
+          const result = await sendAnnotations(taskId, group.map((item) => item.id));
+          if (result.error) { setError(result.error); break; }
+          notices.push(result.receipt ?? `已提交 ${result.sent?.length ?? group.length} 条意见，请查看逐条处理状态。`);
+        }
+        setSubmissionNotice(notices.join("；"));
       }
       onChanged();
     } catch (reason) {
@@ -450,7 +460,7 @@ export function AnnotationPanel({
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
-      {drafts.length > 0 && !["completed", "canceled"].includes(taskStatus) && (
+      {drafts.length > 0 && (taskStatus !== "completed" || overallDrafts.length > 0) && taskStatus !== "canceled" && (
         <div className="annot-panel-actions">
           <button type="button" className="primary"
                   disabled={busy || !canOperate || !canSend}
@@ -458,6 +468,7 @@ export function AnnotationPanel({
                     : !canSend ? "意见已保存为草稿；当前无法发送，原因见下方说明" : undefined}
                   onClick={() => void send()}>
             {busy ? "提交中…"
+              : overallDrafts.length ? `提交 ${sendableDrafts.length} 条给 Agent`
               : oneStepRework ? `提交 ${drafts.length} 条并返工`
               : drafts.every((item) => routeOf(item) === "owner_reply")
               ? `提交 ${drafts.length} 条给责任人答复`
@@ -477,7 +488,8 @@ export function AnnotationPanel({
           {reviewSendable && (
             <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
           )}
-          {queueable && !reviewSendable && (
+          {overallDrafts.length > 0 && <p>整体 Story 意见会立即排队，Agent 修改后由意见作者复检；不会改动子任务代码。</p>}
+          {queueable && !reviewSendable && !overallDrafts.length && (
             <p>{requirementReview
               ? requirementRevisionRunning
                 ? "意见提交后会排队；当前修订完成后自动处理，无需重复提交。所有意见处理并复检后，才能最终确认需求。"
@@ -489,7 +501,7 @@ export function AnnotationPanel({
         </div>
       )}
 
-      {drafts.length > 0 && taskStatus === "completed" && (
+      {drafts.some((item) => item.artifact !== OVERALL_STORY_ARTIFACT) && taskStatus === "completed" && (
         <p className="annot-panel-note">
           任务已经交付；这些批注已保存在本任务档案中，不会自动触发修改。
           需要继续改代码时，请创建后续任务。
@@ -528,7 +540,7 @@ export function AnnotationPanel({
           const check = checkOf(item.id);
           const location = resolvedAnnotationRange(item, check);
           const archival = taskStatus === "completed"
-            && item.status === "draft";
+            && item.artifact !== OVERALL_STORY_ARTIFACT && item.status === "draft";
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
           const closure = closureOf(item);
@@ -684,8 +696,8 @@ export function AnnotationPanel({
               {closure.can_route && routeOf(item) === "agent" && (
                 <div className="annot-owner-reply-action">
                   <button type="button" className="primary"
-                    disabled={!canSend || !!mutationBusy}
-                    title={canSend ? undefined : "当前没有可接收意见的执行会话"}
+                    disabled={!canSendItem(item) || !!mutationBusy}
+                    title={canSendItem(item) ? undefined : "当前没有可接收意见的执行会话"}
                     onClick={() => void routeDraftToAgent(item)}>
                     {mutationBusy === item.id ? "转交中…" : "原样交给 Agent"}
                   </button>

@@ -44,6 +44,7 @@ export type AnnotationRoute = "agent" | "owner_reply" | "owner_decision"
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
 export type SentVia =
+  | "overall_story_queue" | "overall_story_processing" | "overall_story"
   | "requirement_review"
   | "requirement_queue"
   | "interrupt"
@@ -490,7 +491,7 @@ export class AnnotationStore {
   resetRequirementDelivery(id: string, reason: string): void {
     const found = this.list().find((item) => item.id === id);
     if (!found || found.status !== "sent"
-        || !["requirement_queue", "requirement_review"].includes(found.sent_via ?? "")) return;
+        || !["requirement_queue", "requirement_review", "overall_story_queue", "overall_story_processing"].includes(found.sent_via ?? "")) return;
     this.append({ op: "delivery_reset", id, at: new Date().toISOString(), reason });
   }
 
@@ -608,8 +609,12 @@ export class AnnotationStore {
   /** 确认通过:人看过那处改动,认了。检视闭环的收口一步。 */
   verify(id: string, by: string, override = false): Annotation {
     const found = this.judgeable(id, by, override);
-    if (found.sent_via === "requirement_queue" || found.sent_via === "requirement_review") {
-      throw new AnnotationError("这条需求意见尚在排队或处理中，不能提前确认通过");
+    if (["requirement_queue", "requirement_review", "overall_story_queue", "overall_story_processing"].includes(found.sent_via ?? "")) {
+      throw new AnnotationError("这条意见尚在排队或处理中，不能提前确认通过");
+    }
+    if (found.sent_via === "overall_story" && (!found.response
+        || found.response.revision !== (found.rework ?? 0) || found.response.outcome === "needs_clarification")) {
+      throw new AnnotationError("请先补充说明并重新提交，再检视整体 Story 修改结果");
     }
     const at = new Date().toISOString();
     const proxy = found.author !== by;
@@ -629,7 +634,10 @@ export class AnnotationStore {
   reopen(id: string, by: string, update?: {
     line?: number; anchor?: string; note?: string;
   }): Annotation {
-    this.judgeable(id, by);
+    const current = this.judgeable(id, by);
+    if (["overall_story_queue", "overall_story_processing"].includes(current.sent_via ?? "")) {
+      throw new AnnotationError("整体 Story 仍在处理，请停止本轮后再调整意见");
+    }
     this.append({
       op: "reopen", id, at: new Date().toISOString(),
       line: update?.line, anchor: update?.anchor?.trim() || undefined,
