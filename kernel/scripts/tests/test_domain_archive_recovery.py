@@ -1,0 +1,162 @@
+"""Reproduce early-written/committed domain docs and recover without deleting them."""
+import contextlib
+import io
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from mae_flow_core.cli_parser import parse_args
+from mae_flow_core.cli_commands import domain_archive as cli
+from mae_flow_core.cli_commands import domain_archive_recovery as recovery
+from mae_flow_core.cli_commands import selection_reconcile as selection
+from mae_flow_core.orchestration.behavior_baseline import REQUIRED_DOMAIN_SECTIONS
+from mae_flow_core.guard.manifest import validate_delivery_document_boundary
+
+
+def document(suffix):
+    return "# Cross RAT\n" + "\n".join("## " + title + "\n" + suffix for title in REQUIRED_DOMAIN_SECTIONS)
+
+
+class RecoveryTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        before = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, before)
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        (self.root / "base").write_text("base")
+        self.git("add", ".")
+        self.git("commit", "-m", "baseline")
+        self.git("checkout", "-b", "feature")
+        self.specs = self.root / "docs/specs"
+        self.specs.mkdir(parents=True)
+        self.target = self.specs / "cross-rat.md"
+        self.target.write_text(document("真实业务规则与已验证的长期事实。"))
+        (self.specs / "index.md").write_text("# 领域索引\n\n| 领域 | 关键词 | 文档 |\n| --- | --- | --- |\n| cross-rat | RAT | docs/specs/cross-rat.md |\n")
+        self.state = {"current": "end", "config": {"单号": "REQ-4", "基线分支": "main"},
+                      "domain_archive": {"status": "applied", "result": "unchanged", "domains": [], "applied_paths": []}}
+        self.saved = []
+        self.api = SimpleNamespace(
+            save_state=lambda value: self.saved.append(value),
+            sh=lambda command: subprocess.check_output(command, shell=True, text=True).strip(),
+            argv_out=lambda args: subprocess.check_output(args, text=True).strip(),
+            _scope_diff=lambda state: ("main...HEAD", ""),
+            _dirty_paths=lambda: self.git("ls-files", "--others", "--exclude-standard").splitlines()
+                + self.git("diff", "--name-only", "HEAD").splitlines(),
+            _authorization_message=lambda *_: (True, "确认归档", {"message_id": "m1"}, ""),
+            die=lambda message, code=1: (_ for _ in ()).throw(RuntimeError(message)))
+        for module in (cli, recovery, selection):
+            patcher = mock.patch.object(module, "api", self.api)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], stderr=subprocess.DEVNULL, text=True).strip()
+
+    def command(self, *args):
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = cli.cmd_domain_archive(self.state, parse_args(["domain-archive", *args]))
+        if self.saved:
+            self.state = self.saved[-1]
+        return result
+
+    def prepare(self):
+        return self.command("prepare", "--domain", "cross-rat", "--adopt-existing", "--keyword", "RAT")
+
+    def test_recover_committed_documents_then_reconcile_real_selection(self):
+        self.git("add", "docs")
+        self.git("commit", "-m", "early domain docs")
+        package = cli.ensure_work_package(str(self.root), "REQ-4")
+        self.state["domain_archive"]["input_sha256"] = cli._fresh_digest(str(self.root), package, ())
+        before = self.target.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "领域归档记录与实际文档不一致"):
+            self.command("prepare", "--unchanged")
+        prepared = self.prepare()
+        self.assertEqual("prepared", prepared["status"])
+        self.assertEqual([], prepared["applied_paths"])
+        self.assertEqual(before, self.target.read_bytes())
+        applied = self.command("apply", "--message-id", "m1")
+        expected = ["docs/specs/cross-rat.md", "docs/specs/index.md"]
+        self.assertEqual(expected, applied["applied_paths"])
+        self.assertEqual(before, self.target.read_bytes())
+        validate_delivery_document_boundary(expected, applied["applied_paths"])
+        payload = {"head": self.git("rev-parse", "HEAD"), "paths": expected,
+                   "excluded_paths": [], "task_id": "task-4", "waiting_id": "w", "actor": "owner"}
+        with mock.patch.object(selection, "save_with_host_proof") as save, contextlib.redirect_stdout(io.StringIO()):
+            selection.reconcile_selection(self.state, SimpleNamespace(file="receipt"),
+                load_payload=lambda *_: payload, verify_host_proof=lambda *_: "nonce",
+                capability=lambda *_: None, head=lambda: payload["head"], history=lambda *_: None,
+                state_schema="mae-flow-delivery-loop/1")
+        save.assert_called_once()
+        self.assertTrue(self.state["delivery_manifest"]["confirmed"])
+        self.assertEqual("end", self.state["current"])
+
+    def test_untracked_domain_docs_cannot_claim_unchanged(self):
+        with self.assertRaisesRegex(RuntimeError, "adopt-existing"):
+            self.command("prepare", "--unchanged")
+        self.assertEqual([], self.saved)
+
+    def test_unchanged_is_still_valid_without_domain_changes(self):
+        self.git("add", "docs")
+        self.git("commit", "-m", "baseline docs")
+        self.git("branch", "-f", "main", "HEAD")
+        self.state.pop("domain_archive")
+        result = self.command("prepare", "--unchanged")
+        self.assertEqual("unchanged", result["result"])
+
+    def test_candidate_changed_after_prepare_needs_recheck(self):
+        prepared = self.prepare()
+        candidate = self.root / prepared["domains"][0]["candidate_path"]
+        candidate.write_text(document("候选在确认后变化。"))
+        with self.assertRaisesRegex(RuntimeError, "候选已过期"):
+            self.command("apply", "--message-id", "m1")
+        self.assertEqual([], self.state["domain_archive"]["applied_paths"])
+
+    def test_reprepare_preserves_explicit_adoption(self):
+        prepared = self.prepare()
+        template = self.root / ".mae-flow-work/plugin-resources/assets/DOMAIN-SPEC-TEMPLATE.md"
+        template.parent.mkdir(parents=True)
+        template.write_text(document("模板"))
+        candidate = self.root / prepared["domains"][0]["candidate_path"]
+        candidate.write_text(document("核对后补充的领域事实。"))
+        record = self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        self.assertEqual(["docs/specs/cross-rat.md"], record["reapply_paths"])
+        applied = self.command("apply", "--message-id", "m1")
+        self.assertIn("docs/specs/cross-rat.md", applied["applied_paths"])
+
+    def test_refusal_does_not_write_or_register_files(self):
+        self.prepare()
+        self.api._authorization_message = lambda *_: (True, "不同意", {}, "")
+        with self.assertRaisesRegex(RuntimeError, "没有明确批准"):
+            self.command("apply", "--message-id", "no")
+        self.assertEqual([], self.state["domain_archive"]["applied_paths"])
+
+    def test_invalid_document_cannot_be_adopted(self):
+        self.target.write_text("# 空文档")
+        with self.assertRaisesRegex(RuntimeError, "缺少章节"):
+            self.prepare()
+        self.assertEqual([], self.saved)
+
+    def test_invalid_selection_is_actionable_not_uncaught_value_error(self):
+        payload = {"head": "sha", "paths": ["docs/specs/cross-rat.md"], "excluded_paths": []}
+        with self.assertRaisesRegex(RuntimeError, "adopt-existing"):
+            selection.reconcile_selection(self.state, SimpleNamespace(file="receipt"),
+                load_payload=lambda *_: payload, verify_host_proof=lambda *_: "nonce",
+                capability=lambda *_: None, head=lambda: "sha", history=lambda *_: None,
+                state_schema="schema")
+        self.assertNotIn("delivery_selection", self.state)
+
+
+if __name__ == "__main__":
+    unittest.main()

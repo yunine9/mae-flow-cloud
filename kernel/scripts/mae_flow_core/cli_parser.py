@@ -264,6 +264,7 @@ def build_parser():
     archive_choice.add_argument("--domain")
     archive_choice.add_argument("--unchanged", action="store_true")
     archive_prepare.add_argument("--keyword", action="append", default=[])
+    archive_prepare.add_argument("--adopt-existing", action="store_true")
     archive_actions.add_parser("show")
     archive_actions.add_parser("status")
     archive_apply = archive_actions.add_parser("apply")

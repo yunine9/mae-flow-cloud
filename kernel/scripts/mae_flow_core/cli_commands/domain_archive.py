@@ -8,6 +8,8 @@ import sys
 
 from .shared import os
 from .wiring import api
+from .domain_archive_recovery import (
+    changed_domain_paths, prepare_existing, recovery_hint)
 from mae_flow_core.orchestration.domain_archive import (
     apply_candidates,
     candidate_from_dict,
@@ -92,6 +94,8 @@ def _fresh_digest(root, package, entries):
 def _show(record, root):
     print("[mae-flow] 领域归档状态: " + str(record.get("status", "未准备")))
     domains = record.get("domains") or ()
+    if record.get("reapply_paths"):
+        print("- 本次将由 apply 重新写入并接纳已有领域文档与索引；候选已冻结，请核对正文。")
     if not domains:
         if record.get("result") == "unchanged":
             print("- 结论: unchanged（无需更新领域文档）")
@@ -146,6 +150,14 @@ def _status_recovery(record):
 
 
 def _prepare(state, args, root, package):
+    if getattr(args, "adopt_existing", False):
+        record = prepare_existing(state, args, root, package, _fresh_digest)
+        _show(record, root)
+        return record
+    if args.unchanged:
+        changed = changed_domain_paths(state)
+        if changed:
+            raise ValueError(recovery_hint(changed))
     updated = copy.deepcopy(state)
     previous = copy.deepcopy(updated.get("domain_archive") or {})
     if previous.get("status") == "applied":
@@ -188,6 +200,7 @@ def _prepare(state, args, root, package):
         values.append(draft)
         record = {
             "status": "draft", "result": "pending", "domains": values,
+            "reapply_paths": list(previous.get("reapply_paths") or ()),
             "input_sha256": "", "applied_paths": [],
         }
         updated["domain_archive"] = record
@@ -205,8 +218,10 @@ def _prepare(state, args, root, package):
         "status": "prepared",
         "result": (
             "unchanged"
-            if entries and all(entry.action == "unchanged" for entry in entries)
+            if not previous.get("reapply_paths") and entries
+            and all(entry.action == "unchanged" for entry in entries)
             else "changes"),
+        "reapply_paths": list(previous.get("reapply_paths") or ()),
         "domains": values,
         "input_sha256": _fresh_digest(root, package, entries),
         "applied_paths": [],
@@ -243,7 +258,8 @@ def _apply(state, args, root, package):
             raise ValueError(
                 "用户回答没有明确批准本次领域归档；候选已保留，"
                 "按用户意见修改后重新 prepare/show")
-    paths = apply_candidates(root, entries)
+    paths = apply_candidates(root, entries,
+                             reapply_paths=record.get("reapply_paths") or ())
     record.update({
         "status": "applied", "applied_paths": list(paths),
         "authorization": receipt,
