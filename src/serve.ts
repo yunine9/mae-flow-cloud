@@ -55,6 +55,7 @@ import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
 import { RuntimeSettings } from "./settings.ts";
 import { resolveContainerUser } from "./containerRuntime.ts";
+import { containerUserEnvironment } from "./containerBuildEnvironment.ts";
 import {
   acquireInstanceLock,
   INSTANCE_LOCK_FILE,
@@ -569,6 +570,8 @@ async function main(): Promise<void> {
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
   const isolateUser = flag("--isolate-user");
+  const isolateHome = flag("--isolate-home");
+  if (isolateHome !== undefined) containerUserEnvironment(isolateHome);
   // 容器里只有 npm_config_cache 没有源地址,内网 npm 会打公网直到超时
   // (2026-09-03 issue #75)。显式配置优先;没配时按部署形态判定:挂载了
   // Maven settings.xml 就是内网镜像形态,回落内置缺省源——与 DTS 网关
@@ -679,6 +682,7 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+    console.log(`[serve] 容器 HOME: ${isolateHome ?? "/home/mae-flow"}（Maven/npm 用户配置与 tmpfs 同步）`);
     // registry 配错只会在容器内 npm 报错时才暴露,启动期摆到明面好排障;
     // 来源(显式配置/内网形态缺省)也摆出来,运维一眼看出该不该改配置。
     if (isolateNpmRegistry) {
@@ -897,9 +901,8 @@ async function main(): Promise<void> {
             ...(containerUser.user ? { user: containerUser.user } : {}),
             pidsLimit: isolatePids,
             network: isolateNetwork,
-            ...(isolateNpmRegistry
-              ? { environment: { npm_config_registry: isolateNpmRegistry } }
-              : {}),
+            environment: { ...(isolateHome ? { HOME: isolateHome } : {}),
+              ...(isolateNpmRegistry ? { npm_config_registry: isolateNpmRegistry } : {}) },
           },
         }
       : {}),
@@ -983,9 +986,8 @@ async function main(): Promise<void> {
           user: containerUser.user,
           pidsLimit: isolatePids,
           network: isolateNetwork,
-          ...(isolateNpmRegistry
-            ? { environment: { npm_config_registry: isolateNpmRegistry } }
-            : {}),
+          environment: { ...(isolateHome ? { HOME: isolateHome } : {}),
+            ...(isolateNpmRegistry ? { npm_config_registry: isolateNpmRegistry } : {}) },
         }
       : undefined,
     ...(notifier ? { notifier } : {}),

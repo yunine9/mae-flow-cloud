@@ -83,6 +83,8 @@ export interface MemoryRecord extends MemoryInput {
   /** 同一条记录在索引里的第几版(起草收尾会追加一版);读侧取最后一版。 */
   revision?: number;
   draft?: MemoryDraftState;
+  /** 服务读侧派生，只有该条记忆存在在途整理作业才为 true；不落盘。 */
+  drafting?: boolean;
   /** 读侧派生:被哪条覆盖了(不落盘)。 */
   superseded_by?: string;
   /** 读侧派生自台账:已沉底归档(md 在 _archive/ 下,不进索引)。 */
@@ -487,6 +489,7 @@ export interface MemoryInsightRow {
   judged_by: MemoryJudge;
   scope: MemoryScope;
   draft: MemoryDraftState;
+  drafting: boolean;
   at: string;
   task: string;
   paths: string[];

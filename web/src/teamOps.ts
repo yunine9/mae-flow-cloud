@@ -11,6 +11,7 @@ import { instantMs } from "./time";
 export interface TeamTask {
   id: string;
   requirement: string;
+  parent_task_id?: string;
   status: string;
   created_at: string;
   updated_at?: string;
@@ -62,6 +63,8 @@ const DELIVERY_STATUS_GROUPS = [
 ] as const;
 
 export interface TeamDeliveryBreakdown {
+  /** 与交付概览口径一致：只计未取消的主任务。 */
+  requirements: number;
   total: number;
   delivered: number;
   delivering: number;
@@ -121,6 +124,7 @@ export function teamDeliveryBreakdown(
       teamDeliveryStatusGroup(task.status) === "other").length,
   });
   return {
+    requirements: tasks.filter((task) => !task.parent_task_id && task.status !== "canceled").length,
     total: delivered.length + delivering.length,
     delivered: delivered.length,
     delivering: delivering.length,

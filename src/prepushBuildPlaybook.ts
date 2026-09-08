@@ -7,11 +7,13 @@ import {
   readFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { MAE_FIRST_BUILD_GUIDANCE, maeBuildRoot } from "./maeBuildSupport.ts";
 
 export type PrePushBuildStack = "java" | "javascript" | "cpp";
 
 export interface PrePushBuildProfile {
   stacks: PrePushBuildStack[];
+  mae?: boolean;
   /** 所有已识别语言是否都由根 pom.xml 编排。 */
   maven: boolean;
   maven_command: "./mvnw" | "mvn";
@@ -57,13 +59,14 @@ export function resolvePrePushExecutionBudget(
   options: PrePushExecutionBudgetOptions = {},
 ): PrePushExecutionBudget {
   const native = profile.stacks.includes("cpp");
+  const firstBuild = profile.mae;
   const attemptTimeoutMs = positiveBudget(
     options.attemptTimeoutMs,
-    native ? DEFAULT_NATIVE_ATTEMPT_TIMEOUT_MS : DEFAULT_ATTEMPT_TIMEOUT_MS,
+    firstBuild ? 90 * MINUTE_MS : native ? DEFAULT_NATIVE_ATTEMPT_TIMEOUT_MS : DEFAULT_ATTEMPT_TIMEOUT_MS,
   );
   const requestedBuildTimeoutMs = positiveBudget(
     options.buildCommandTimeoutMs,
-    native
+    firstBuild ? 75 * MINUTE_MS : native
       ? DEFAULT_NATIVE_BUILD_COMMAND_TIMEOUT_MS
       : DEFAULT_BUILD_COMMAND_TIMEOUT_MS,
   );
@@ -95,7 +98,9 @@ export function isPrePushBuildCommand(command: string): boolean {
     .test(value);
   const otherRunner = /(?:^|[\s;&|()])(?:cargo\s+(?:build|test)|go\s+test)(?:\s|$)/
     .test(value);
-  return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner;
+  const maeRunner = /(?:^|[\s;&|()])node\s+\/opt\/mae-flow-build\/first-build\.mjs\s+run(?:\s|$)/.test(value)
+    || /(?:^|[\s;&|()])bash\s+["']?[^\s;&|]*\/(?:build_service|build)\.sh(?:["']?\s|$)/.test(value);
+  return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner || maeRunner;
 }
 
 /** 全仓 UT 护栏的三种结论。`advised` 是刻意的中间态,见下。 */
@@ -339,6 +344,7 @@ export function detectPrePushBuildProfile(workspace: string): PrePushBuildProfil
 
   return {
     stacks,
+    ...(maeBuildRoot(workspace) ? { mae: true } : {}),
     maven: hasPom,
     maven_command: hasFile(workspace, "mvnw") ? "./mvnw" : "mvn",
     repository_guides: repositoryGuides,
@@ -365,6 +371,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
   const mvn = profile.maven_command;
   const lines = [
     "### 内网 Build-Fix 参考（建议，不是第二套流程）",
+    MAE_FIRST_BUILD_GUIDANCE,
     `识别到：${profile.stacks.length ? profile.stacks.map(stackLabel).join(" + ") : "尚未识别明确语言"}${profile.maven ? "；根目录由 Maven 编排" : ""}。`,
     "先以 pom/package、wrapper、仓库脚本与 CI 配置确认真实可执行入口；再根据已选择业务仓 Skill 的名称和描述判断是否相关，需要时读取其说明。Skill 是辅助说明，不得覆盖真实配置或安全边界；下述内网经验只在仓库材料没有说明时兜底。",
   ];
@@ -378,12 +385,12 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
 
   if (profile.maven) {
     lines.push(
-      "内网 MAE 仓的统一事实：C++/Java/JS 都以 Maven 为唯一编译入口，各仓私有依赖与环境变量（svc_profile、SDK、DT 参数）由 Maven 插件自动生成和管理——不要绕开它手搓构建，也不要手工 export 它该生成的东西。",
+      "根 POM 是构建入口线索，不代表 Maven 是唯一入口。MAE 首次构建遵循 mae-first-build 与仓库脚本；后续按已验证语言 Skill 和生成目录做增量，svc_profile 必须与编译在同一 shell 中使用。",
     );
   }
   lines.push(
-    "基础设施预检：Java/C++ Maven 构建需要 JDK 21 与 Maven；前端需要仓库兼容的 Node/npm（部署基线为 Node 18/npm 9）；C++ 还需要 GCC/G++、binutils、bison、flex、ccache。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。低版本 JDK 的典型症状是 UnsupportedClassVersionError——那是环境问题，不是代码问题。",
-    "镜像、证书信任与凭据按生态由平台分工注入，不要手动改配置自救（2026-09-03 勘误：npm 侧此前并没有镜像兜底）：Maven 镜像由平台只读挂载 /etc/mae-flow/maven/settings.xml（并接入 ~/.m2/settings.xml）负责；npm registry 由部署注入环境变量 `npm_config_registry`（配置项 isolate-npm-registry）负责，容器内没有其他 npm 镜像兜底，该变量缺席即部署缺配，按基础设施失败上报。",
+    "基础设施预检：工具链版本以仓库 POM、脚本及镜像实测为准；部分仓需要 JDK 21，不能推广到全部 Java/C++ 仓。前端核对仓库兼容的 Node/npm；C++ 核对 GCC/G++、binutils、bison、flex。ccache 是可选加速器，缺席不构成基础设施失败。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。低版本 JDK 的典型症状是 UnsupportedClassVersionError——那是环境问题，不是代码问题。",
+    "镜像、证书信任与凭据按生态由平台分工注入，不要手动改配置自救（2026-09-03 勘误：npm 侧此前并没有镜像兜底）：Maven 镜像由平台只读挂载 /etc/mae-flow/maven/settings.xml（并接入 ~/.m2/settings.xml）负责；npm registry 由部署注入环境变量 `npm_config_registry`（配置项 isolate-npm-registry）负责，MAE 任务另由平台从固定版本 MAEBuild 恢复用户 .npmrc 和 scope 路由，并以该配置的默认源覆盖旧的全局 registry；两者都缺席才报告部署缺配。",
     "不要克隆新副本、注入令牌，也不要改全局 Git/Maven/npm 配置自救——`npm config set`、写 ~/.npmrc、/etc/npmrc、~/.gitconfig 都会被沙箱拒绝；同样不要关闭 TLS/SSL 校验；遇到证书或鉴权故障只记录证据并报告基础设施失败。",
     `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
     "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
@@ -436,7 +443,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
       "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口只需对受影响目标做可复现的增量编译与定向 UT，完整回归留给远端流水线。",
-      "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不无谓 clean；②对象级缓存靠 ccache，平台已在容器环境注入 CMAKE_C/CXX_COMPILER_LAUNCHER=ccache 与 CCACHE_BASEDIR（跨任务路径相对化），CMake 重新 configure 时自动接上。编译收口后跑 `ccache -s` 核对命中/文件数并写进收口摘要：缓存文件数在涨说明已接上（首轮全 miss 属正常，是在灌缓存）；仍是 0 个文件且 target 下存在早于本轮的 CMakeCache.txt，说明旧 configure 缓存没带 launcher——删掉该 CMake 生成目录让插件重新 configure（一次性全量，换来后续对象级命中），并把这个决定写进收口摘要。除此之外不要为接 ccache 硬改仓库工具链。",
+      "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不无谓 clean；②对象级缓存靠 ccache，平台在容器登录 shell 确认 ccache 存在后才接入 CMAKE_C/CXX_COMPILER_LAUNCHER，并提供 CCACHE_BASEDIR（跨任务路径相对化）；缺席时直接使用原生编译器，不安装、不报失败。有 ccache 时，编译收口后跑 `ccache -s` 核对命中/文件数并写进收口摘要：缓存文件数在涨说明已接上（首轮全 miss 属正常，是在灌缓存）；仍是 0 个文件且 target 下存在早于本轮的 CMakeCache.txt，说明旧 configure 缓存没带 launcher——删掉该 CMake 生成目录让插件重新 configure（一次性全量，换来后续对象级命中），并把这个决定写进收口摘要。除此之外不要为接 ccache 硬改仓库工具链。",
     );
   }
 

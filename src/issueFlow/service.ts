@@ -1,3 +1,5 @@
+import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "../auxiliarySessions.ts";
+import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
  * 问题流服务:与需求任务并行的独立会话域。
  *
@@ -710,6 +712,7 @@ export class IssueFlowService {
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
   private recoveryStarted = false;
+  private shuttingDown = false;
   /** 证据重试窗的在途定时器(键=会话 id+仓地址,票 82):一仓一表,
    *  重排前清旧,关停统一清——unref 不阻进程,但不留重复轮。 */
   private readonly evidenceRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -754,6 +757,7 @@ export class IssueFlowService {
       const root = join(this.issuesRoot, name);
       const state = loadState(root);
       if (!state) continue;
+      if (interruptWarmupReceipt(state.warmup)) saveState(root, state);
       // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
       const diskStatus: string = state.status;
       const resuming = diskStatus === "running" || diskStatus === "interrupted";
@@ -1313,6 +1317,7 @@ export class IssueFlowService {
    * 出路语义各不相同,收进来反而要改行为。settle 里的催办/补发续跑
    * 不走这里——那是同一回合的延续,turning 还握着,预算也不清。 */
   private beginTurn(live: LiveIssue, body: () => Promise<Outcome>): void {
+    if (this.shuttingDown) return;
     const epoch = live.controlEpoch;
     this.turning.add(live.id);
     live.state.status = "running";
@@ -1350,6 +1355,7 @@ export class IssueFlowService {
    *  现读现判:管理页「问题单并发数」旋钮(issue_max_turns)每次点火
    *  都读,改完即生效;缺席退回部署旗 --issue-max-turns,再退缺省 5。 */
   private async pump(): Promise<void> {
+    if (this.shuttingDown) return;
     const budget = this.options.settings?.runtime?.().issue_max_turns
       ?? this.options.maxConcurrentTurns ?? 5;
     for (const live of this.live.values()) {
@@ -1417,6 +1423,13 @@ export class IssueFlowService {
           + `退回默认分支克隆 ${url}: ${String(error)}`);
         await cloneRepository(common);
       }
+    }
+    if (this.options.isolation && isMaeRepository(url)) {
+      await this.prepareMaeBuild(live);
+      repairContainerCloneOwnership({ workspace: live.root, dir: join(live.root, "repo"),
+        user: this.options.isolation.user, runtime: this.options.ownershipRuntime });
+      if (live.container?.isAlive) await live.container.exec(MAE_CONTAINER_BOOTSTRAP, live.root,
+        { onData: () => {}, timeout: 30 });
     }
     // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名);
     // 基线缺失时不建分支,让 Agent 先裁决基线对不对。
@@ -1916,9 +1929,11 @@ export class IssueFlowService {
    * 不能先把内存引用扔掉再把“已取消”返回给用户。 */
   private async stopContainer(live: LiveIssue): Promise<void> {
     const container = live.container;
-    if (!container) return;
-    await container.stop();
-    if (live.container === container) live.container = undefined;
+    const results = await Promise.allSettled([abortAuxiliarySessions(live), container?.stop()]);
+    if (results[1].status === "fulfilled" && live.container === container) live.container = undefined;
+    const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, "问题会话执行资源未能全部停止");
+    if (!this.shuttingDown && interruptWarmupReceipt(live.state.warmup)) saveState(live.root, live.state);
   }
 
   /** 阶段自然收口仍不阻塞业务答复，但失败必须留住句柄并明确记账；服务
@@ -2025,7 +2040,17 @@ export class IssueFlowService {
     });
   }
 
+  private async prepareMaeBuild(live: LiveIssue): Promise<void> {
+    await prepareMaeBuildSupport({ root: join(live.root, "repo"), dataDir: this.options.dataDir, user: this.options.isolation?.user,
+      repositories: live.state.repo_urls ?? (live.state.repo_url ? [live.state.repo_url] : []),
+      clone: (repoUrl, targetDir, baseline) => cloneRepository({ dataDir: this.options.dataDir,
+        repoUrl, targetDir, baseline, shallow: true, credential: this.options.gitCredential?.(live.state.account) }),
+      log: (message) => this.log(message) });
+  }
+
   private async ensureContainer(live: LiveIssue): Promise<void> {
+    if (this.shuttingDown || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
+    const epoch = live.controlEpoch;
     if (!this.options.isolation) return;
     // 容器可能因为超时/OOM/外部因素已 stopped——引用还在但 lifecycle
     // 不再 running。检查并重建,避免后续 exec 报"容器未运行"。
@@ -2056,8 +2081,12 @@ export class IssueFlowService {
       // 问题流没有宿主身份透传、防覆盖报错回显去尾斜杠形态:
       // 两个旗子都缺席,正是抽取前这里的既有行为。
     });
-    const volumes = mounts.volumes;
-    const environment = mounts.environment;
+    // The issue container exists before pull_repo; keep a stable parent bind so late host preparation is visible.
+    await this.prepareMaeBuild(live);
+    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
+    const volumes = [...mounts.volumes, `${MAE_BUILD_ASSETS}:${MAE_BUILD_MOUNT}:ro`];
+    const environment = { ...mounts.environment, MFC_MAE_BUILD_ROOT: join(live.root, "repo"),
+      MFC_MAE_BASELINE: live.state.baseline ?? "" };
     const build: IssueContainerBuild = {
       image: isolation.image,
       workspace: live.root,
@@ -2128,6 +2157,10 @@ export class IssueFlowService {
     }
     await container.start();
     live.container = container;
+    if (this.shuttingDown || live.controlEpoch !== epoch) {
+      await this.stopContainer(live);
+      throw new IssueControlError("会话已停止");
+    }
     // /etc/profile.d/mfc-env.sh 把 TMPDIR 设成 /tmp/mae-flow-build,但该
     // 目录不存在。登录 shell(sh -lc)会 source profile 导致 TMPDIR 指向
     // 不存在的路径,build-deploy 二进制用 TMPDIR 创建临时目录时 stat 失败。
@@ -2140,6 +2173,7 @@ export class IssueFlowService {
         { onData: () => {}, timeout: 5 },
       );
     } catch { /* best-effort; 目录可能已存在或容器未启用 exec */ }
+    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     // ops 二进制分发到 workspace(容器内同路径可执行)
     this.stageOpsBinaries(live);
   }
@@ -2153,6 +2187,7 @@ export class IssueFlowService {
    * 收据、容器不在场,任何一条不满足就静默跳过——预热是旁路,不是
    * 流程依赖。幂等:收据在 state(重启/重走 analyze 都不再重跑)。 */
   private startBaselineWarmup(live: LiveIssue): void {
+    if (this.shuttingDown || isTerminal(live.state.status)) return;
     const configured = this.options.warmup;
     if (!configured || configured.enabled === false) return;
     // 原生路径要真容器;测试注入 runner 时放行。
@@ -2161,7 +2196,8 @@ export class IssueFlowService {
     if (live.state.warmup?.finished_at) return;
     if (!live.container && !configured.runner) return;
     live.warmupActive = true;
-    const budgetMs = IssueFlowService.WARMUP_BUDGET_MS;
+    const budgetMs = (live.state.repo_urls ?? [live.state.repo_url ?? ""]).some(isMaeRepository)
+      ? 90 * 60_000 : IssueFlowService.WARMUP_BUDGET_MS;
     this.log(`[issue-warmup] ${live.id} 环境预热开跑(预算 `
       + `${Math.round(budgetMs / 60_000)} 分钟)`);
     void this.runWarmupSession(live, budgetMs)
@@ -2178,9 +2214,10 @@ export class IssueFlowService {
     budgetMs: number,
   ): Promise<void> {
     const startedAt = new Date().toISOString();
+    const sessionEpoch = auxiliarySessionEpoch(live);
     const settle = (receipt: IssueWarmupReceipt) => {
       // 会话已被取消/归档换新时,旧收据不覆盖新现实。
-      if (this.live.get(live.id) !== live) return;
+      if (this.shuttingDown || this.live.get(live.id) !== live || auxiliarySessionEpoch(live) !== sessionEpoch) return;
       live.state.warmup = receipt;
       saveState(live.root, live.state);
       this.log(`[issue-warmup] ${live.id} 环境预热收口: ${receipt.status}`
@@ -2227,6 +2264,8 @@ export class IssueFlowService {
     live: LiveIssue,
     budgetMs: number,
   ): Promise<IssueWarmupOutcome> {
+    if (this.shuttingDown || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
+    const sessionEpoch = auxiliarySessionEpoch(live);
     const runRoot = join(live.root, "warmup");
     // agentDir 与主会话共用顶层 pi-agent(需求侧同款):密钥目录的闸
     // 只认工作区顶层路径段(HOST_SECRET_DIRS),埋进 warmup/ 子目录
@@ -2240,6 +2279,9 @@ export class IssueFlowService {
       JSON.stringify(model.json), { mode: 0o600 });
     const driver = await CloudSession.create({
       taskId: `${live.id}:warmup`,
+      knowledgeContext: issueKnowledgeContext(live.state),
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeScope: "issue",
       workspace: live.root,
       agentDir,
       provider: model.provider,
@@ -2262,14 +2304,16 @@ export class IssueFlowService {
       bashOperations: this.options.isolation
         ? // forwardAbort=false:预算到点的 abort 是系统发起,不得经
           // Abort 语义销毁与主会话共享的容器(用户打断走主会话,不变)。
-          createContainerBashOperations(() => live.container,
-            { forwardAbort: false })
+          createContainerBashOperations(() => auxiliarySessionEpoch(live) === sessionEpoch ? live.container : undefined,
+            { forwardAbort: false, buildBudget: { attemptTimeoutMs: budgetMs,
+              buildCommandTimeoutMs: Math.max(1000, budgetMs - 5 * 60_000) } })
         : undefined,
       sessionId: "warmup",
       currentStep: () => "环境预热编译",
       compactAnchor: () => `问题会话「${live.state.title}」环境预热编译`,
       log: (message) => this.log(`[issue-warmup] ${message}`),
     });
+    trackAuxiliarySession(live, driver, sessionEpoch);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -2280,6 +2324,9 @@ export class IssueFlowService {
       let outcome = await driver.start(
         issueWarmupMission(Math.round(budgetMs / 60_000)));
       for (let correction = 0; correction < 2; correction += 1) {
+        if (this.shuttingDown || auxiliarySessionEpoch(live) !== sessionEpoch) {
+          return { status: "infrastructure_failure", message: "预热已停止" };
+        }
         if (timedOut) {
           return {
             status: "infrastructure_failure",
@@ -2305,13 +2352,17 @@ export class IssueFlowService {
       };
     } finally {
       clearTimeout(timer);
+      untrackAuxiliarySession(live, driver);
       driver.dispose();
     }
   }
 
   private async openDriver(live: LiveIssue): Promise<CloudSession> {
+    if (this.shuttingDown || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
+    const epoch = live.controlEpoch;
     if (live.driver) return live.driver;
     await this.ensureContainer(live);
+    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     const agentDir = join(live.root, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     const model = this.modelChoice();
@@ -2460,6 +2511,10 @@ export class IssueFlowService {
       log: (message) => this.log(`[issue-session] ${message}`),
     };
     const driver = await CloudSession.create(sessionOptions);
+    if (this.shuttingDown || live.controlEpoch !== epoch) {
+      driver.dispose();
+      throw new IssueControlError("会话已停止");
+    }
     live.driver = driver;
     return driver;
   }
@@ -3267,12 +3322,13 @@ export class IssueFlowService {
     // 先停净再写终态。过去先清 live.container、异步 stop，接口已经回了
     // “取消成功”但 Docker 仍在；失败后也没有句柄可重试。
     const previousStatus = live.state.status;
-    if (input.action === "cancel") live.controlEpoch += 1;
+    live.controlEpoch += 1;
     delete live.state.takeover; // 接管中收口:人工驾驶标记不残留进终态
-    void live.driver?.abort().catch(() => undefined);
-    this.releaseDriver(live);
     try {
-      await this.stopContainer(live);
+      const stopped = await Promise.allSettled([live.driver?.abort(), this.stopContainer(live)]);
+      const errors = stopped.flatMap((item) => item.status === "rejected" ? [item.reason] : []);
+      if (errors.length) throw new AggregateError(errors, "会话或容器未能停止");
+      this.releaseDriver(live);
     } catch (error) {
       if (input.action === "cancel" && previousStatus === "running") {
         live.state.status = "idle";
@@ -4357,6 +4413,7 @@ export class IssueFlowService {
   // ---- 关停 ----
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
     // 证据重试窗的在途定时器一并清(票 82):unref 本不阻进程,但显式
     // 清掉才不会有关停后仍触发的重评(测试 --force-exit 也干净)。
     for (const timer of this.evidenceRetryTimers.values()) {
@@ -4364,9 +4421,11 @@ export class IssueFlowService {
     }
     this.evidenceRetryTimers.clear();
     const work = [...this.live.values()].map(async (live) => {
-      await live.driver?.abort().catch(() => undefined);
+      live.controlEpoch += 1;
+      const stopped = await Promise.allSettled([live.driver?.abort(), this.stopContainer(live)]);
+      const errors = stopped.flatMap((item) => item.status === "rejected" ? [item.reason] : []);
+      if (errors.length) throw new AggregateError(errors, "会话或容器未能停止");
       this.releaseDriver(live);
-      await this.stopContainer(live);
     });
     const settled = await Promise.allSettled(work);
     const failures = settled

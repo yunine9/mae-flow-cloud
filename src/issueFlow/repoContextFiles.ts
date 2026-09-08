@@ -1,3 +1,4 @@
+import { MAE_BUILD_REPOSITORIES } from "../maeBuildSupport.ts";
 /**
  * 问题流多仓契约文件收集(spec #131 / issue #132,2026-09-03)。
  *
@@ -66,6 +67,7 @@ export function collectRepoContextFiles(
     // withFileTypes 走 lstat 语义:符号链接(哪怕指向目录)不算
     // isDirectory,天然出局——repo/ 下不该有指出去的链接,有也不追。
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+    if (MAE_BUILD_REPOSITORIES.some((repo) => repo.name === entry.name)) continue;
     const file = pickContractFile(join(repoRoot, entry.name));
     if (!file) continue;
     try {

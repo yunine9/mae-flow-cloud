@@ -6,6 +6,7 @@ import {
   type Annotation,
   type TaskSummary,
 } from "./api";
+import { graphAnnotationLocationKey } from "./annotateTargets";
 import { requirementNodeLabel } from "./requirementGraphLabel";
 
 interface GraphAnnotationTarget {
@@ -171,7 +172,7 @@ export function RequirementGraph({
             && <i>{annotationCount(planAnchor)}</i>}
         </button>
       </div>}
-      <div className="requirement-root-task">
+      <div className="requirement-root-task" data-review-anchor={planAnchor}>
         <span>主任务</span>
         <div><strong>{task.title ?? task.requirement}</strong>
           <small>{task.ticket ?? task.id} · 先排查候选仓，再按实际改动模块创建任务</small></div>
@@ -250,6 +251,7 @@ export function RequirementGraph({
             {repositories.map((repository) => {
               const parents = graph.dependencies.filter((edge) => edge.from === repository.id);
               return <article key={repository.id}
+                data-review-anchor={graphAnnotationLocationKey(`模块 ${repository.id}：`)}
                 className={parents.length ? "has-prerequisite" : "ready"}
                 title={repository.url}>
                 <div className="repo-node-head">
@@ -318,7 +320,8 @@ export function RequirementGraph({
           </div>
         )}
       {projectionReady && graph.dependencies.length > 0 && <div className="requirement-edges">
-        {graph.dependencies.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}>
+        {graph.dependencies.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}
+          data-review-anchor={`依赖 ${edge.from} -> ${edge.to}`}>
           <span><strong>{repoName(edge.from, task)}</strong><i>依赖</i>
             <strong>{repoName(edge.to, task)}</strong></span>
           {edge.reason && <small>{edge.reason}</small>}

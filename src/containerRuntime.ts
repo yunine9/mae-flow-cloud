@@ -6,10 +6,12 @@
  * 确认时一律拒绝执行，绝不偷偷回退宿主。
  */
 
+import { MAE_CONTAINER_BOOTSTRAP, MAE_EXEC_ENVIRONMENT } from "./maeBuildSupport.ts";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { CONTAINER_USER_BOOTSTRAP, containerUserEnvironment, withOptionalCompilerCache } from "./containerBuildEnvironment.ts";
 
 export const TASK_CONTAINER_HOME = "/home/mae-flow";
 
@@ -50,6 +52,7 @@ const SECRET_ENV = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|API
 
 export interface DockerCommandOptions {
   timeoutMs?: number;
+  includeStderr?: boolean;
 }
 
 export interface DockerStreamOptions {
@@ -113,7 +116,7 @@ export class TaskContainerExecTimeoutError extends Error {
   }
 }
 
-class DockerCliRunner implements DockerRunner {
+export class DockerCliRunner implements DockerRunner {
   command(
     args: readonly string[],
     options: DockerCommandOptions = {},
@@ -129,7 +132,7 @@ class DockerCliRunner implements DockerRunner {
           reject(new DockerCommandError(args, stderr.trim() || String(error), code));
           return;
         }
-        resolveResult(stdout.trim());
+        resolveResult((options.includeStderr ? `${stdout}\n${stderr}` : stdout).trim());
       });
     });
   }
@@ -225,7 +228,7 @@ interface ContainerInspect {
     Env?: string[];
     Labels?: Record<string, string>;
   };
-  State?: { Running?: boolean; StartedAt?: string };
+  State?: { Running?: boolean; StartedAt?: string; ExitCode?: number; Error?: string; OOMKilled?: boolean; Status?: string };
   HostConfig?: {
     ReadonlyRootfs?: boolean;
     CapDrop?: string[];
@@ -266,6 +269,7 @@ function isMissingContainer(error: unknown): boolean {
 }
 
 function errorDetail(error: unknown): string {
+  if (error instanceof DockerCommandError) return `docker ${error.args[0]} exit=${error.exitCode ?? "unknown"}: ${error.stderr}`;
   if (error instanceof AggregateError) {
     return `${error.message}: ${error.errors.map(errorDetail).join(" | ")}`;
   }
@@ -287,7 +291,7 @@ function envEntries(environment: NodeJS.ProcessEnv): Array<[string, string]> {
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
-function assertSafeVolume(volume: string, workspace: string): void {
+function assertSafeVolume(volume: string, workspace: string, home = TASK_CONTAINER_HOME): void {
   if (/docker\.sock/i.test(volume)) {
     throw new Error("任务容器禁止挂载 Docker socket");
   }
@@ -296,7 +300,7 @@ function assertSafeVolume(volume: string, workspace: string): void {
   if (!destination || !isAbsolute(destination)) {
     throw new Error(`容器挂载格式必须是 宿主绝对路径:容器绝对路径[:ro]: ${volume}`);
   }
-  if ([workspace, "/", TASK_CONTAINER_HOME, "/tmp"].includes(resolve(destination))) {
+  if ([workspace, "/", TASK_CONTAINER_HOME, home, "/tmp"].includes(resolve(destination))) {
     throw new Error(`额外挂载不能覆盖隔离关键目录: ${destination}`);
   }
 }
@@ -566,6 +570,8 @@ export class TaskContainer {
   private readonly baseEnvironment: Record<string, string>;
   private readonly forwardedEnvironment: Set<string>;
   private readonly activeProcesses = new Set<DockerStreamProcess>();
+  private startupDiagnostic: { containerId?: string; phase: string } = { phase: "not-started" };
+  get diagnostics() { return { ...this.startupDiagnostic }; }
 
   /** 当前生命周期状态(供宿主检查容器是否还在场)。 */
   get isAlive(): boolean {
@@ -600,8 +606,7 @@ export class TaskContainer {
       "com.mae-flow-cloud.container": name,
     };
     this.baseEnvironment = {
-      HOME: TASK_CONTAINER_HOME,
-      TMPDIR: "/tmp",
+      ...containerUserEnvironment(String(options.environment?.HOME ?? TASK_CONTAINER_HOME)),
       // 精确白名单，绝不能再用 safe.directory=*。
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "safe.directory",
@@ -609,7 +614,7 @@ export class TaskContainer {
     };
     for (const [key, value] of envEntries(options.environment ?? {})) {
       validateEnvKey(key);
-      if (RESERVED_ENV.has(key)) {
+      if (RESERVED_ENV.has(key) && key !== "HOME") {
         throw new Error(`容器环境变量 ${key} 由平台保留，不能覆盖`);
       }
       if (value.includes("\0")) throw new Error(`容器环境变量 ${key} 含 NUL`);
@@ -649,17 +654,25 @@ export class TaskContainer {
     this.validateConfiguration();
     this.lifecycle = "starting";
     this.metadataValue = undefined;
+    this.startupDiagnostic = { phase: "pre-cleanup" };
     let runAttempted = false;
     try {
       // 仅清理这个精确名字的上次残留；不存在是正常事实，daemon 不可查不是。
       await this.destroyReference(this.name);
       runAttempted = true;
+      this.startupDiagnostic.phase = "docker-run";
       const id = await this.command(this.runArgs());
       if (!/^[a-f0-9]{12,64}$/i.test(id)) {
         throw new Error(`docker run 未返回有效容器 ID: ${id || "<空>"}`);
       }
       this.containerId = id;
+      this.startupDiagnostic = { phase: "startup-inspect", containerId: id };
       const metadata = await this.readAndValidateMetadata(id);
+      this.startupDiagnostic.phase = "user-environment";
+      await this.command(["exec", id, "sh", "-lc", CONTAINER_USER_BOOTSTRAP
+        + "\n" + MAE_CONTAINER_BOOTSTRAP]);
+      if (this.baseEnvironment.MFC_MAE_BUILD_ROOT) await this.command(["exec", id, "sh", "-c",
+        'printf "%s" "$1" > "$HOME/.mae-build-image"', "sh", metadata.immutableImageReference]);
       this.metadataValue = metadata;
       this.lifecycle = "running";
       const role = metadata.labels["com.mae-flow-cloud.role"] ?? "unknown";
@@ -668,6 +681,7 @@ export class TaskContainer {
         + ` image=${metadata.immutableImageReference}`);
     } catch (error) {
       this.lifecycle = "failed";
+      this.log?.(`容器启动失败 phase=${this.startupDiagnostic.phase} name=${this.name} id=${this.startupDiagnostic.containerId ?? "unknown"}: ${errorDetail(error)}`);
       let cleanupError: unknown;
       // 同名外部容器在预清理阶段被识别时，绝不能在 catch 里再碰它。
       // docker run 已经发出但没回 ID 时，才用精确名字查找我们带 label
@@ -793,7 +807,7 @@ export class TaskContainer {
       "-w", exactCwd,
       ...envEntries(execEnvironment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
       this.containerId,
-      "sh", "-lc", command,
+      "sh", "-lc", withOptionalCompilerCache(MAE_EXEC_ENVIRONMENT + "\n" + command),
     ];
 
     let process: DockerStreamProcess;
@@ -923,7 +937,8 @@ export class TaskContainer {
         throw new Error(`容器 label 不合法: ${key}`);
       }
     }
-    for (const volume of this.volumes) assertSafeVolume(volume, resolve(this.workspace));
+    if (inside(this.baseEnvironment.HOME, resolve(this.workspace)) || inside(resolve(this.workspace), this.baseEnvironment.HOME)) throw new Error("容器 HOME 不得覆盖任务工作区");
+    for (const volume of this.volumes) assertSafeVolume(volume, resolve(this.workspace), this.baseEnvironment.HOME);
   }
 
   private pidsLimit(): number {
@@ -932,7 +947,7 @@ export class TaskContainer {
 
   private runArgs(): string[] {
     return [
-      "run", "-d", "--rm", "--init",
+      "run", "-d", "--init",
       "--name", this.name,
       "--stop-timeout", String(this.runtime.stopGraceSeconds),
       ...Object.entries(this.expectedLabels)
@@ -945,7 +960,7 @@ export class TaskContainer {
       "--network", this.runtime.network,
       ...(this.runtime.tmpfsHome === false ? [] : [
         "--tmpfs",
-        `${TASK_CONTAINER_HOME}:${this.runtime.tmpfsHome || DEFAULT_HOME_TMPFS}`,
+        `${this.baseEnvironment.HOME}:${this.runtime.tmpfsHome || DEFAULT_HOME_TMPFS}`,
       ]),
       ...(this.runtime.tmpfsTmp === false ? [] : [
         "--tmpfs", `/tmp:${this.runtime.tmpfsTmp || DEFAULT_TMP_TMPFS}`,
@@ -1058,23 +1073,25 @@ export class TaskContainer {
    * 纯旁路——取不到就返回空串,绝不把"拿日志失败"变成新的故障;
    * 这里已经在报错路径上,再抛一次只会盖掉真正的原因。
    */
-  private async exitDiagnosis(reference: string): Promise<string> {
+  private async exitDiagnosis(reference: string, observed?: ContainerInspect): Promise<string> {
     const parts: string[] = [];
     try {
-      const state = await this.containerInspect(reference);
-      const code = (state?.State as { ExitCode?: number } | undefined)?.ExitCode;
+      const state = observed ?? await this.containerInspect(reference);
+      const code = state?.State?.ExitCode;
       if (code !== undefined) parts.push(`退出码 ${code}`);
+      if (state?.State?.Error) parts.push(`Docker: ${state.State.Error}`);
+      if (state?.State?.OOMKilled) parts.push("OOMKilled=true");
     } catch {
       // inspect 失败不影响下面取日志。
     }
     try {
       const logs = await this.runner.command(
         ["logs", "--tail", "20", reference],
-        { timeoutMs: this.runtime.managementTimeoutMs });
+        { timeoutMs: this.runtime.managementTimeoutMs, includeStderr: true });
       const text = logs.trim();
       if (text) parts.push(`容器输出: ${text.slice(0, 2000)}`);
     } catch {
-      // 容器可能已被 --rm 收走;没日志就只报退出码。
+      // daemon/日志驱动不可用时保留已取得的退出状态，不覆盖原始错误。
     }
     return parts.length ? `(${parts.join("；")})` : "";
   }
@@ -1095,8 +1112,8 @@ export class TaskContainer {
       // (实测:统一构建镜像的 entrypoint 会校验缓存目录可写,不给
       // 缓存挂载就 "build environment is not writable" 退 73)。光说
       // "未处于 running" 等于让人去手工复现一遍——把日志带上来。
-      const detail = await this.exitDiagnosis(id);
-      throw new Error(`任务容器启动后未处于 running${detail}`);
+      const detail = await this.exitDiagnosis(id, inspected);
+      throw new Error(`任务容器启动后未处于 running id=${id.slice(0, 12)}${detail}`);
     }
     const configuredUser = String(inspected.Config?.User ?? "").trim();
     if (!configuredUser || /^(?:root|0)(?::|$)/i.test(configuredUser)) {
@@ -1119,7 +1136,7 @@ export class TaskContainer {
     if (String(host.NetworkMode ?? "") !== this.runtime.network) {
       throw new Error(`任务容器 network 未生效: ${host.NetworkMode}`);
     }
-    if (this.runtime.tmpfsHome !== false && !host.Tmpfs?.[TASK_CONTAINER_HOME]) {
+    if (this.runtime.tmpfsHome !== false && !host.Tmpfs?.[this.baseEnvironment.HOME]) {
       throw new Error("任务容器 HOME tmpfs 未生效");
     }
     if (this.runtime.tmpfsTmp !== false && !host.Tmpfs?.["/tmp"]) {

@@ -32,7 +32,7 @@ import { TranscriptStore } from "../src/transcriptStore.ts";
 import { GateService } from "../src/gateService.ts";
 import { HumanGate } from "../src/humanGate.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { createRequirementAnalysisGateContract, TaskService } from "../src/taskService.ts";
 
 function note(over: Partial<Annotation> = {}): Annotation {
   return {
@@ -262,6 +262,66 @@ async function serviceWithSentAnnotation() {
     before, notified, waitingNotices, logs };
 }
 
+test("嵌套分析目录：错误位置的回执不算闭环，原会话按绝对路径补写后即可举卡", async () => {
+  const { service, internal, first, store, receiptsPath, confirmCard, before } =
+    await serviceWithSentAnnotation();
+  const cwd = join(internal.summary.workspace, "repositories", ".mae-flow-work", "task-2");
+  mkdirSync(cwd, { recursive: true });
+  internal.cwd = cwd;
+  const content = JSON.stringify({ receipts: [{ annotation_id: first.id, revision: 0,
+    outcome: "fixed", summary: "已补充空值判断并完成检验", evidence: ["src/a.ts:3"] }] });
+  const wrong = join(cwd, "..", "reviews", "local-receipts.json");
+  mkdirSync(join(cwd, "..", "reviews"), { recursive: true });
+  writeFileSync(wrong, content);
+  const blocked = await before(confirmCard);
+  assert.ok(blocked?.includes(receiptsPath));
+  assert.equal(store.list()[0].response, undefined);
+  // 发单不能因工作目录在任务根、单仓、多仓或产物目录而换一个收件地址。
+  for (const relative of ["", "repository", "repositories", "repositories/.mae-flow-work/task-2"]) {
+    internal.cwd = join(internal.summary.workspace, relative);
+    assert.ok((service as any).reviewReceiptInstructionsFor(internal, [first]).includes(receiptsPath));
+  }
+  internal.cwd = cwd;
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: confirmCard } },
+    { tool: { name: "write", input: { path: receiptsPath, content } } },
+    { tool: { name: "AskUserQuestion", input: confirmCard } },
+    { text: "完成。" },
+  ]);
+  let session: CloudSession | undefined;
+  try {
+    await model.start();
+    const agentDir = join(internal.summary.workspace, "pi-agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.modelsJson()));
+    const humanGate = new HumanGate(join(internal.summary.workspace, "waiting-test.json"));
+    session = await CloudSession.create({
+      taskId: internal.summary.id, workspace: cwd, agentDir,
+      provider: "maeflow", model: "scripted-v1",
+      eventLog: new EventLog(join(agentDir, "events-test.jsonl")),
+      transcript: new TranscriptStore(join(agentDir, "transcript-test.jsonl"), "main"),
+      gate: new GateService({ workspace: internal.summary.workspace, cwd,
+        contract: createRequirementAnalysisGateContract(cwd, cwd, undefined, receiptsPath) }),
+      humanGate, beforeHumanQuestion: before,
+    });
+    const result = await session.start(blocked!);
+    assert.equal(result.status, "waiting_for_human", allSeen(model));
+    assert.equal(readFileSync(receiptsPath, "utf-8"), content);
+    assert.equal(store.list()[0].response?.outcome, "fixed");
+    assert.equal(store.list()[0].status, "sent", "作者仍保留最终验收权");
+    assert.equal(humanGate.pending().length, 1, "第一次被拦的卡没有进入待办");
+    // 工作台检视修复的另一条消费链也读同一份文件。
+    internal.summary.delivery = { loop: { review_source: "workspace",
+      workspace_review_annotation_ids: [first.id] } };
+    (service as any).prePushRevision = async () => ({ sha: "a".repeat(40) });
+    assert.deepEqual(await (service as any).consumeWorkspaceReviewReceipts(internal), { ok: true });
+  } finally {
+    session?.dispose();
+    await model.stop();
+    await service.shutdown();
+  }
+});
+
 test("举卡前:意见没处理完不许举确认卡;回执读盘即登记;旧版本回执是历史不背书新文字", async () => {
   const { service, first, store, receipts, receiptsPath, confirmCard, before } =
     await serviceWithSentAnnotation();
@@ -270,7 +330,7 @@ test("举卡前:意见没处理完不许举确认卡;回执读盘即登记;旧�
     assert.ok(blocked, "没有回执就不能举确认卡");
     assert.match(blocked!, /1 条已提交的检视意见没有处理完成/);
     assert.match(blocked!, new RegExp(`${first.id}:缺当前版本\\(revision 0\\)的回执`));
-    assert.match(blocked!, /reviews\/local-receipts\.json/, "回执路径按会话 cwd 换算");
+    assert.match(blocked!, /reviews\/local-receipts\.json/, "回执路径锚定任务根目录");
     assert.match(blocked!, /空值要处理/, "把意见原文再给一遍,不用它回翻");
     assert.match(blocked!, /不能替他们点通过/);
 

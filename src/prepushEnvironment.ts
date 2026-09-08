@@ -91,7 +91,7 @@ export function prePushEnvironmentCommand(
   }
 
   if (profile.stacks.includes("cpp")) {
-    for (const command of ["c++", "cmake", "ar", "bison", "flex", "ccache"]) {
+    for (const command of ["c++", "cmake", "ar", "bison", "flex"]) {
       lines.push(`mfc_need ${command}`);
     }
     lines.push(

@@ -197,6 +197,7 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
     "用户明确停止的任务不再新增记录");
   assert.equal(workspace.materialViewForAnnotation(
     api.TASK_REQUIREMENT_ARTIFACT, []), "source");
+  assert.equal(workspace.materialViewForAnnotation("__requirement_graph__", []), "chain");
   assert.equal(workspace.materialViewForAnnotation("__workspace_diff__", []), "diff",
     "工作区代码批注的虚拟标识不能被当作文档名");
   assert.equal(workspace.materialViewForAnnotation("changes.diff", [
@@ -830,4 +831,20 @@ test("检视状态只报告有证据的进度，不再把所有未闭环项写�
   ]), "爱丽丝");
   assert.equal(annotationPanel.displayPersonName("unknown", []), "unknown",
     "历史账号没有姓名时仍可读");
+});
+
+test("代码意见定位直接选目标文件，折叠的上下文行仍渲染，快照对应变更后代码", () => {
+  const text = [
+    "diff --git a/first.ts b/first.ts", "--- a/first.ts", "+++ b/first.ts",
+    "@@ -1 +1 @@", "-before();", "+after();",
+    "diff --git a/second.ts b/second.ts", "--- a/second.ts", "+++ b/second.ts",
+    "@@ -100,20 +100,20 @@", ...Array.from({ length: 20 }, (_, i) => ` context${i}();`),
+  ].join("\n");
+  const html = renderToStaticMarkup(React.createElement(gitDiff.GitDiff, {
+    text, embeddedBrowser: true, annotationLocation: { file: "second.ts", request: 1 },
+  }));
+  assert.match(html, /data-file="second.ts"/);
+  assert.match(html, /data-l="110"/);
+  assert.doesNotMatch(html, /class="diff-fold"/);
+  assert.match(html, /data-code-side="new"/);
 });

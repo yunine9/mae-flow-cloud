@@ -119,6 +119,12 @@ test("主 Coding 容器读写挂载任务 reviews，Agent 可用 Bash 落逐条�
   assert.ok(containers.records[0]?.volumes.includes(
     `${reviews}:${reviews}:rw`),
   "只挂任务自己的 reviews 子目录，允许 Bash 写 local-receipts.json");
+  const replies = join(created.workspace, "review_replies.md");
+  assert.ok(containers.records[0]?.volumes.includes(`${replies}:${replies}:rw`),
+    "MR 回复也是仓外材料，只额外挂这一份文件");
+  const prepush = join(created.workspace, "prepush");
+  assert.ok(containers.records[0]?.volumes.includes(`${prepush}:${prepush}:ro`),
+    "Build-Fix 记录只读，与提示词指向相同目录");
   assert.equal(containers.records[0]?.volumes.some((volume) =>
     volume === `${created.workspace}:${created.workspace}:rw`), false,
   "不得为写回执把整个任务控制目录交给容器");

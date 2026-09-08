@@ -383,3 +383,64 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
     sidecar.stop();
   }
 });
+
+test("没配专用模型或模型角色不存在时，模板已可用但不声称正在整理", async () => {
+  for (const options of [{}, { memoryDraftModel: { provider: "missing", model: "missing" } }]) {
+    const { svc } = fakeService(options);
+    try {
+      const { id, internal } = liveTask(svc);
+      const record = (svc as any).recordMemory(internal, { ...base, task: id });
+      await svc.flushMemoryDrafts();
+      assert.equal(svc.memoryInsights().drafting, 0);
+      const summary = svc.memoryInsights().memories.find((row) => row.id === record.id)!;
+      assert.equal(summary.draft, "template");
+      assert.equal(summary.drafting, false);
+      assert.equal(svc.listTaskMemories(id)[0].drafting, false);
+      assert.ok(svc.readTaskMemory(id, record.id)?.content.includes(base.conclusion));
+      const other = liveTask(svc, "另一单");
+      assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === record.id));
+    } finally { await svc.shutdown(); }
+  }
+});
+
+test("逐条整理状态只来自真实作业，完成和失败后两处读侧都清除在途标记", async () => {
+  for (const fail of [false, true]) {
+    let release!: (value: string) => void;
+    const result = new Promise<string>((resolve) => { release = resolve; });
+    const { svc, dataDir } = fakeService({ memoryDrafter: () => result });
+    try {
+      const { id, internal } = liveTask(svc);
+      const historical = new MemoryStore(dataDir).record({ ...base, task: id });
+      const running = (svc as any).recordMemory(internal, { ...base, task: id, evidence: "active" });
+      const before = svc.memoryInsights();
+      assert.equal(before.drafting, 1);
+      assert.equal(before.memories.find((row) => row.id === historical.id)?.drafting, false);
+      assert.equal(before.memories.find((row) => row.id === running.id)?.drafting, true);
+      assert.equal(svc.listTaskMemories(id).find((row) => row.id === running.id)?.drafting, true);
+      release(fail ? "不合法回复" : '{"trigger":"改过滤器时","scope":"local"}');
+      await svc.flushMemoryDrafts();
+      assert.equal(svc.memoryInsights().drafting, 0);
+      const after = svc.listTaskMemories(id).find((row) => row.id === running.id)!;
+      assert.equal(after.drafting, false);
+      assert.equal(after.draft, fail ? "failed" : "model");
+      assert.equal(svc.memoryInsights().memories.find((row) => row.id === running.id)?.drafting, false);
+      assert.equal(after.conclusion, base.conclusion);
+      const index = readFileSync(join(dataDir, "corpus", "index.jsonl"), "utf8");
+      assert.doesNotMatch(index, /"drafting"/, "在途标记不能持久化成重启后的假作业");
+    } finally { release("结束"); await svc.shutdown(); }
+  }
+});
+
+test("重启读取已持久化的模板记忆，没有作业时仍如实显示已记录", async () => {
+  const first = fakeService();
+  const { id, internal } = liveTask(first.svc);
+  const record = (first.svc as any).recordMemory(internal, { ...base, task: id });
+  await first.svc.shutdown();
+  const second = fakeService({ dataDir: first.dataDir });
+  try {
+    const insights = second.svc.memoryInsights();
+    assert.equal(insights.drafting, 0);
+    assert.equal(insights.memories.find((row) => row.id === record.id)?.drafting, false);
+    assert.equal(insights.memories.find((row) => row.id === record.id)?.draft, "template");
+  } finally { await second.svc.shutdown(); }
+});

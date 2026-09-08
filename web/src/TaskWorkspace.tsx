@@ -19,7 +19,7 @@ import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
 import { Annotatable } from "./Annotatable";
-import { resolvedAnnotationRange } from "./annotateTargets";
+import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { RequirementGraph } from "./RequirementGraph";
 import { requirementGraphVisible } from "./taskHierarchy";
@@ -62,6 +62,7 @@ import {
   sendAnnotations,
   statusText,
   TASK_REQUIREMENT_ARTIFACT,
+  REQUIREMENT_GRAPH_ARTIFACT,
   type AnchorCheck,
   type AnnotationClosure,
   type Annotation,
@@ -123,6 +124,7 @@ export function materialViewForAnnotation(
   artifacts: readonly ArtifactMeta[] = [],
 ): MaterialView {
   if (artifact === TASK_REQUIREMENT_ARTIFACT) return "source";
+  if (artifact === REQUIREMENT_GRAPH_ARTIFACT) return "chain";
   if (artifact === "__workspace_diff__") return "diff";
   return artifacts.find((item) => item.name === artifact)?.kind === "diff"
     ? "diff" : "doc";
@@ -628,6 +630,13 @@ export function TaskWorkspace({
   const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const locationRequest = useRef(0);
+  const [materialReload, setMaterialReload] = useState(0);
+  const [loadedMaterialReload, setLoadedMaterialReload] = useState(-1);
+  const [materialReadError, setMaterialReadError] = useState("");
+  const [pendingLocation, setPendingLocation] = useState<{
+    request: number; item: Annotation; view: MaterialView;
+    artifact?: string; line?: number;
+  }>();
   useEffect(() => () => { locationRequest.current++; }, [task.id]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
@@ -1175,6 +1184,7 @@ export function TaskWorkspace({
     if (!active) return;
     let alive = true;
     setLoading((was) => was || !content);
+    setMaterialReadError("");
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
     const lazyWorkspaceDiff = !pushDiffActive
@@ -1200,9 +1210,11 @@ export function TaskWorkspace({
         : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
+      setLoadedMaterialReload(materialReload);
       if (pushDiffActive) {
         const normalized = normalizePushReviewDiffResult(result);
         setPushDiffState(normalized.state);
+        setMaterialReadError(normalized.state.kind === "error" ? normalized.state.message : "");
         setContent((current) => current === normalized.content
           ? current : normalized.content);
         setBranch(normalized.branch);
@@ -1210,6 +1222,7 @@ export function TaskWorkspace({
         setDiffFileLoading(false);
         return;
       }
+      setMaterialReadError(result.unavailable ?? "");
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
@@ -1219,7 +1232,9 @@ export function TaskWorkspace({
       setDiffFileLoading(false);
     }).catch((reason) => {
       if (!alive) return;
+      setLoadedMaterialReload(materialReload);
       const message = reason instanceof Error ? reason.message : String(reason);
+      setMaterialReadError(message);
       if (pushDiffActive) {
         setPushDiffState({ kind: "error", message, expired: false });
         setContent("");
@@ -1233,7 +1248,7 @@ export function TaskWorkspace({
       setDiffFileLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
+  }, [task.id, active, livePulse, materialReload, diffScope, pushReview?.head_sha,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
 
@@ -1272,16 +1287,16 @@ export function TaskWorkspace({
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
 
-  /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
-   * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
-   * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
+  /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
     const request = ++locationRequest.current;
+    setPendingLocation(undefined);
     setWorkspaceView("materials");
+    const graph = item.artifact === REQUIREMENT_GRAPH_ARTIFACT;
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     const targetArtifact = item.artifact === "__workspace_diff__"
       ? items?.find((artifact) => artifact.kind === "diff")?.name : item.artifact;
-    if (!source && targetArtifact && targetArtifact !== active) setActive(targetArtifact);
+    if (!source && !graph && targetArtifact && targetArtifact !== active) setActive(targetArtifact);
     const targetView = materialViewForAnnotation(item.artifact, items);
     setMaterialView(targetView);
     if (targetView === "diff" && item.file) setSelectedDiffPath(item.file);
@@ -1296,6 +1311,14 @@ export function TaskWorkspace({
     }
     if (request !== locationRequest.current) return;
     setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures);
+    if (!source && !graph) {
+      setLoading(true);
+      setMaterialReload(request);
+    }
+    if (graph) {
+      setPendingLocation({ request, item, view: targetView, artifact: targetArtifact });
+      return;
+    }
     const check = fresh.checks.find((candidate) => candidate.id === item.id);
     const range = resolvedAnnotationRange(item, check);
     if (check?.state === "gone") {
@@ -1313,31 +1336,45 @@ export function TaskWorkspace({
     } else {
       setLocationNotice("");
     }
-    let tries = 0;
-    const seek = () => {
-      if (request !== locationRequest.current) return;
-      const reader = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
-      const expected = source ? TASK_REQUIREMENT_ARTIFACT : targetArtifact;
-      const ready = reader?.dataset.artifact === expected && reader?.dataset.loading !== "true";
-      const node = ready ? [...reader!.querySelectorAll<HTMLElement>(`[data-l="${range.line}"]`)]
-        .find((row) => targetView !== "diff"
-          || row.closest<HTMLElement>("[data-file]")?.dataset.file === item.file) : undefined;
-      if (!node) {
-        if (tries++ < 20) {
-          window.setTimeout(seek, 100);
-        } else {
-          setLocationNotice(
-            `已打开 ${item.file}，但原第 ${item.line} 行已无法直接定位；请在当前材料中核对。`,
-          );
-        }
-        return;
-      }
-      node.scrollIntoView({ block: "center", behavior: "smooth" });
-      node.classList.add("annot-flash");
-      window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
-    };
-    window.setTimeout(seek, source || item.artifact === active ? 0 : 120);
+    setPendingLocation({ request, item, view: targetView,
+      artifact: targetArtifact, line: range.line });
   }
+
+  useEffect(() => {
+    const pending = pendingLocation;
+    if (!pending || pending.request !== locationRequest.current) return;
+    if (materialView !== pending.view) { setPendingLocation(undefined); return; }
+    const reader = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
+    if (!reader || reader.dataset.artifact !== pending.artifact) return;
+    if (pending.view !== "source" && pending.view !== "chain"
+      && (loading || diffFileLoading || loadedMaterialReload !== pending.request)) return;
+    if (pending.view !== "source" && pending.view !== "chain" && materialReadError) {
+      setPendingLocation(undefined);
+      setLocationNotice(`材料读取失败：${materialReadError}；未跳转到旧行号。`);
+      return;
+    }
+    const node = pending.view === "chain"
+      ? [...reader.querySelectorAll<HTMLElement>("[data-review-anchor]")]
+        .find((row) => row.dataset.reviewAnchor === graphAnnotationLocationKey(pending.item.anchor))
+      : annotationLocationRow([...reader.querySelectorAll<HTMLElement>("[data-l]")],
+        pending.line!, pending.view === "diff" ? pending.item.file : undefined);
+    setPendingLocation(undefined);
+    if (!node) {
+      setLocationNotice(`已打开 ${pending.item.file}，当前版本没有可定位的对应位置；请结合原文和 Agent 回应核对。`);
+      return;
+    }
+    // 图可能被用户折叠，先展开再滚动；不改变右侧意见面板。
+    let ancestor = node.parentElement;
+    while (ancestor && ancestor !== reader) {
+      if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+      ancestor = ancestor.parentElement;
+    }
+    setLocationNotice("");
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+    node.classList.add("annot-flash");
+    window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
+  }, [pendingLocation, materialView, active, content, loading, diffFileLoading,
+    loadedMaterialReload, materialReadError, task.requirement, task.requirement_graph]);
   const activeMeta = items?.find((item) => item.name === active);
   const materialPriority = (item: ArtifactMeta): number =>
     item.purpose === "delivery_unit_brief" ? 0
@@ -2100,11 +2137,12 @@ export function TaskWorkspace({
             打包下载失败：{documentsDownloadError}
           </div>}
           <div className={`ws-doc${materialView === "diff" ? " is-diff" : ""}`}
-            data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT : active}
+            data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT
+              : materialView === "chain" ? REQUIREMENT_GRAPH_ARTIFACT : active}
             data-loading={materialView !== "source" && loading ? "true" : "false"}>
             {locationNotice && (
               <div className="annotation-location-notice" role="status">
-                <div><strong>批注位置已变化</strong><span>{locationNotice}</span></div>
+                <div><strong>批注定位</strong><span>{locationNotice}</span></div>
                 <button type="button" aria-label="关闭定位提示"
                   onClick={() => setLocationNotice("")}>×</button>
               </div>
@@ -2321,6 +2359,8 @@ export function TaskWorkspace({
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser
+                      annotationLocation={pendingLocation?.view === "diff"
+                        ? { file: pendingLocation.item.file, request: pendingLocation.request } : undefined}
                       manifest={!pushReview ? activeMeta?.change_files : undefined}
                       untrackedDirectories={!pushReview
                         ? activeMeta?.untracked_directories : undefined}

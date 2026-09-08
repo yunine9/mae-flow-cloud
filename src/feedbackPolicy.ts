@@ -233,12 +233,14 @@ export function unansweredAnnotations(
     && item.response?.revision !== (item.rework ?? 0));
 }
 
-export function workspaceReviewReceiptInstructions(items: Annotation[]): string {
+export function workspaceReviewReceiptInstructions(items: Annotation[], receiptPath: string): string {
   if (!items.length) return "";
   const revisions = items.map((item) =>
     `- ${item.id}: revision ${item.rework ?? 0}`).join("\n");
   return [
-    "逐条处理后必须把机器可核对的回执写到 ../reviews/local-receipts.json。",
+    `逐条处理后必须把机器可核对的回执写到这个唯一绝对路径：${JSON.stringify(receiptPath)}。`,
+    "回执路径以本次给出的绝对路径为准，覆盖旧提示中的相对路径；即使 Bash 切换了目录，也原样使用该地址。",
+    "若改动已经完成但回执写到了别处，只核对并补写回执，不要因此重复修改文档或代码。",
     "该目录在代码仓外，不会进入提交；可直接使用文件工具或 Bash 写入。",
     "文件格式必须是 JSON 对象，不要写 Markdown 围栏：",
     '{"receipts":[{"annotation_id":"an-...","revision":0,'

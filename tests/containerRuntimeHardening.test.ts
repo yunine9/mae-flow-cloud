@@ -43,6 +43,7 @@ class FakeDockerRunner implements DockerRunner {
   inspectFailuresRemaining = 0;
   streamKillCount = 0;
   configUser?: string;
+  exitOnStart = false;
   private runArguments: string[] = [];
 
   constructor(readonly workspace: string) {}
@@ -51,10 +52,11 @@ class FakeDockerRunner implements DockerRunner {
     const copy = [...args];
     this.commands.push(copy);
     if (args[0] === "info") return "27.0";
+    if (args[0] === "exec") return "";
     if (args[0] === "run") {
       this.runArguments = copy;
       this.exists = true;
-      this.running = true;
+      this.running = !this.exitOnStart;
       return ID;
     }
     if (args[0] === "inspect") {
@@ -69,6 +71,7 @@ class FakeDockerRunner implements DockerRunner {
     if (args[0] === "image" && args[1] === "inspect") {
       return JSON.stringify([{ Id: IMAGE_ID, RepoDigests: [REPO_DIGEST] }]);
     }
+    if (args[0] === "logs") return "build environment is not writable: /home/huawei/.m2";
     if (args[0] === "stop") {
       if (!this.exists) throw missing(args);
       this.running = false;
@@ -143,7 +146,7 @@ class FakeDockerRunner implements DockerRunner {
         Env: [...env, ...this.extraImageEnv],
         Labels: labels,
       },
-      State: { Running: this.running, StartedAt: "2026-08-21T01:00:01Z" },
+      State: { Running: this.running, ExitCode: this.exitOnStart ? 73 : 0, StartedAt: "2026-08-21T01:00:01Z" },
       HostConfig: {
         ReadonlyRootfs: this.insecureInspect
           ? false : this.runArguments.includes("--read-only"),
@@ -187,6 +190,35 @@ function container(
   );
 }
 
+test("标准镜像原生 HOME 同步用户配置、tmpfs，镜像旧 Maven 目录被明确覆盖", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  const subject = container(runner, { environment: { HOME: "/home/huawei" } });
+  await subject.start();
+  const run = runner.commands.find((args) => args[0] === "run")!;
+  assert.ok(run.includes("HOME=/home/huawei"));
+  assert.ok(run.includes("MAVEN_CONFIG=/home/huawei/.m2"));
+  assert.ok(run.includes("NPM_CONFIG_USERCONFIG=/home/huawei/.npmrc"));
+  assert.ok(run.includes("/home/huawei:rw,nosuid,nodev,size=256m,mode=1777"));
+  assert.ok(run.includes("--read-only"));
+  assert.ok(runner.commands.some((args) => args[0] === "exec" && args.at(-1)?.includes('"$MAVEN_CONFIG/settings.xml"')),
+    "原生镜像没有平台 entrypoint 时也接入部署 Maven settings");
+  await subject.stop();
+  assert.equal(runner.exists, false);
+});
+
+test("entrypoint 退出 73 保留真实 ID、退出码和日志，取证后显式清理", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  runner.exitOnStart = true;
+  const subject = container(runner);
+  await assert.rejects(subject.start(), /id=aaaaaaaaaaaa.*退出码 73.*\/home\/huawei\/\.m2/);
+  assert.equal(subject.metadata, undefined);
+  assert.equal(subject.diagnostics.containerId, ID, "metadata 未赋值也能诊断真实 ID");
+  assert.equal(subject.diagnostics.phase, "startup-inspect");
+  assert.equal(runner.exists, false, "失败取证后不能留容器");
+  assert.ok(runner.commands.findIndex((args) => args[0] === "logs")
+    < runner.commands.findIndex((args) => args[0] === "stop"));
+});
+
 test("start 强制加固参数、精确 safe.directory，并记录不可变镜像元数据", async () => {
   const runner = new FakeDockerRunner(workspace());
   const subject = container(runner, {
@@ -204,6 +236,9 @@ test("start 强制加固参数、精确 safe.directory，并记录不可变镜�
     ["--cap-drop", "ALL"]);
   assert.ok(run.includes("no-new-privileges:true"));
   assert.ok(run.includes(`${TASK_CONTAINER_HOME}:rw,nosuid,nodev,size=256m,mode=1777`));
+  assert.ok(run.includes(`MAVEN_CONFIG=${TASK_CONTAINER_HOME}/.m2`));
+  assert.ok(run.includes(`NPM_CONFIG_USERCONFIG=${TASK_CONTAINER_HOME}/.npmrc`));
+  assert.equal(run.includes("--rm"), false, "先取退出诊断，再由 stop/失败清理/启动清扫显式回收");
   assert.ok(run.includes("/tmp:rw,exec,nosuid,nodev,size=1g,mode=1777"));
   assert.ok(run.includes("GIT_CONFIG_KEY_0=safe.directory"));
   assert.ok(run.includes(`GIT_CONFIG_VALUE_0=${resolve(runner.workspace)}`));
@@ -303,7 +338,7 @@ test("疑似凭据、保留环境、Docker socket 与 host network 均 fail-clos
   }), /疑似凭据/);
   assert.throws(() => container(runner, {
     environment: { HOME: "/root" },
-  }), /平台保留/);
+  }), /独立的绝对用户目录/);
 
   const unsafeNetwork = container(runner, { network: "host" });
   await assert.rejects(unsafeNetwork.start(), /网络模式不安全/);

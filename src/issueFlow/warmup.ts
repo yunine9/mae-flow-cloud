@@ -12,6 +12,7 @@
  * 收口报告沿用需求侧的 <warmup-result> JSON 协议与解析器。
  */
 
+import { MAE_FIRST_BUILD_GUIDANCE } from "../maeBuildSupport.ts";
 import { WARMUP_NOTES_PATH } from "../warmupAgent.ts";
 
 export type IssueWarmupStatus = "passed" | "failed" | "infrastructure_failure";
@@ -45,6 +46,8 @@ export interface IssueWarmupReceipt {
 export function issueWarmupMission(budgetMinutes: number): string {
   return [
     "# 环境预热编译任务(问题会话)",
+    MAE_FIRST_BUILD_GUIDANCE,
+    "只编译登记的业务仓；MAEStarterParent、MAEServiceBuild、MAEBuild、DeployBuildTool 是平台辅助仓，不是待验证业务仓。",
     "",
     "你是环境预热编译专员。代码仓刚克隆到 `repo/<仓名>/`,主 Agent 正在",
     "分析问题,还没人改代码。你要做三件事:",
@@ -61,7 +64,7 @@ export function issueWarmupMission(budgetMinutes: number): string {
     "   Agent 会先读它。样例:",
     "   ```",
     "   ## <份数>",
-    "   - 全量编译(仓库根): mvn clean compile",
+    "   - 首次打包(仓库根): mvn package -DskipTests",
     "   - 增量编译(仓库根): mvn compile   # 日常自检用这条",
     "   - 注意: website/ 需先 npm install --legacy-peer-deps,Maven 不代劳",
     "   ```",

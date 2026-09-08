@@ -38,6 +38,7 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
+import { MAE_BUILD_SKILLS, maeBuildRoot } from "./maeBuildSupport.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
 import {
   modelTokenUsageSample,
@@ -942,11 +943,23 @@ export class CloudSession {
           return false;
         }
       });
+    const platformBuildSkills = (maeBuildRoot(workspace) || this.options.knowledgeScope === "issue") ? materializeHostSkills({
+      sourceRoot: MAE_BUILD_SKILLS, workspaceRoot: workspace,
+      snapshotRoot: join(workspace, ".mae-flow-work/host-skills/platform-build"),
+    }) : { paths: [] as string[], warnings: [] as string[] };
+    for (const warning of platformBuildSkills.warnings) this.options.log?.(`[mae-build-skill] ${warning}`);
     const skillPaths = [...new Set([
+      ...platformBuildSkills.paths,
       ...hostSkills.paths,
       ...repositorySkillPaths,
       ...(this.options.businessModuleKnowledge?.skill_paths ?? []),
     ])];
+    if (platformBuildSkills.paths.length) {
+      for (let i = skillPaths.length - 1; i >= 0; i--) {
+        if (!platformBuildSkills.paths.includes(skillPaths[i])
+          && /^name:\s*["']?mae-first-build["']?\s*$/m.test(readFileSync(skillPaths[i], "utf8"))) skillPaths.splice(i, 1);
+      }
+    }
     const engineeringKnowledgeEntries = (this.options.engineeringKnowledge?.entries ?? [])
       .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
     const businessModuleKnowledge = this.options.businessModuleKnowledge;

@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { memoryPreparation, memorySearchPresentation } from "./memoryPresentation";
 import {
   getMemoryInsights, readMemoryInsight,
   type MemoryInsightRow, type MemoryInsights,
@@ -15,7 +16,6 @@ const SOURCE = {
   annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
 } as const;
 const SCOPE = { one_off: "一次性", local: "局部", general: "通用" } as const;
-const DRAFT = { template: "起草中", model: "模型起草", failed: "起草失败·保留模板" } as const;
 
 function day(value?: string): string {
   if (!value) return "";
@@ -81,6 +81,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     if (found) setOpen({ id: row.id, content: found.content });
   }
 
+  const searchStatus = memorySearchPresentation(insights?.sidecar, Boolean(error));
+
   return <section className="memory-board" aria-labelledby="memory-board-title">
     <header className="knowledge-flywheel-head">
       <div><span className="section-kicker">TASK MEMORY</span>
@@ -90,11 +92,10 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           自动落成记忆，下一单改到同一处时推给 Agent。这里只看不管——排序和沉底由台账自动完成。
         </p></div>
       <div className="memory-board-status">
-        <span className={`memory-board-chip sidecar-${insights?.sidecar ?? "absent"}`}>
-          {insights?.sidecar === "ready" ? "语义检索在线"
-            : insights?.sidecar === "unavailable" ? "语义检索暂不可用" : "语义检索未部署"}
+        <span className={`memory-board-chip sidecar-${searchStatus.state}`} title={searchStatus.title}>
+          {searchStatus.label}
         </span>
-        {!!insights?.drafting && <span className="memory-board-chip">起草中 {insights.drafting}</span>}
+        {!!insights?.drafting && <span className="memory-board-chip">整理中 {insights.drafting}</span>}
         <button type="button" className="knowledge-flywheel-refresh" onClick={() => void load()}
           disabled={loading} aria-label="刷新记忆总览">{loading ? "刷新中…" : "刷新"}</button>
       </div>
@@ -131,6 +132,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     {rows.length ? <ol className="memory-board-list">
       {rows.map((row) => {
         const gone = row.archived || row.withdrawn || !!row.superseded_by;
+        const preparation = memoryPreparation(row);
         return <li key={row.id} className={`source-${row.source}${gone ? " is-gone" : ""}`}>
           <button type="button" className="memory-board-row" aria-expanded={open?.id === row.id}
             onClick={() => void toggle(row)}>
@@ -138,8 +140,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
             <span className="memory-board-main">
               <strong>{row.trigger}
                 <b className={`memory-board-tag scope-${row.scope}`}>{SCOPE[row.scope]}</b>
-                {row.source !== "user_note" && row.draft !== "model"
-                  && <b className="memory-board-tag" title={DRAFT[row.draft]}>{row.draft === "failed" ? "模板" : "起草中"}</b>}
+                {row.source !== "user_note"
+                  && <b className="memory-board-tag" title={preparation.title}>{preparation.label}</b>}
                 {row.archived && <b className="memory-board-tag is-archived" title={row.archive_reason}>已沉底</b>}
                 {row.withdrawn && <b className="memory-board-tag is-archived">已撤回</b>}
                 {row.superseded_by && <b className="memory-board-tag is-archived">被覆盖</b>}

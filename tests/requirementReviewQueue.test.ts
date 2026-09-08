@@ -4,7 +4,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AnnotationStore, TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
-import { submitRequirementReview } from "../src/requirementReviewQueue.ts";
+import { submitRequirementReview, interruptRequirementReviews } from "../src/requirementReviewQueue.ts";
+import { abortAuxiliarySessions } from "../src/auxiliarySessions.ts";
 
 test("后台接收立即返回；两批分别执行失败才各自恢复为待提交", async () => {
   const store = new AnnotationStore(join(mkdtempSync(join(tmpdir(), "mfc-rq-accept-")), "annotations.jsonl"));
@@ -137,4 +138,52 @@ test("排队后撤回的意见不会被下一轮自动执行", async () => {
   await first;
   assert.deepEqual(batches, [[a.id]]);
   assert.equal(store.list()[1].status, "dropped");
+});
+
+test("关停后旧队列不改账、不消费下一批，也不回调后台失败通知", async () => {
+  const store = new AnnotationStore(join(mkdtempSync(join(tmpdir(), "mfc-rq-stop-")), "annotations.jsonl"));
+  const add = (note: string) => store.add({ author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "原文", note, kind: "doc" });
+  const a = add("第一批"), b = add("第二批");
+  const task = { summary: { status: "waiting_for_human", waiting: { step: "cloud_requirement_analysis_confirm" } } };
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0, errors = 0;
+  const run = async () => { calls++; await held; throw new Error("旧进程返回"); };
+  await submitRequirementReview(task, store, [a], run, () => { errors++; });
+  await submitRequirementReview(task, store, [b], run);
+  await abortAuxiliarySessions(task);
+  const before = JSON.stringify(store.history());
+  release();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(JSON.stringify(store.history()), before);
+  assert.equal(calls, 1);
+  assert.equal(errors, 0);
+});
+
+test("暂停恢复后，旧队列收尾不能解开新队列的串行锁或重置新意见", async () => {
+  const store = new AnnotationStore(join(mkdtempSync(join(tmpdir(), "mfc-rq-resume-")), "annotations.jsonl"));
+  const add = (note: string) => store.add({ author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "原文", note, kind: "doc" });
+  const a = add("第一批"), b = add("第二批");
+  const task = { summary: { status: "waiting_for_human", waiting: { step: "cloud_requirement_analysis_confirm" },
+    requirement_revision: { state: "running" } } };
+  let releaseOld!: () => void, releaseNew!: () => void;
+  const oldHeld = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const newHeld = new Promise<void>((resolve) => { releaseNew = resolve; });
+  const old = submitRequirementReview(task, store, [a], async () => { await oldHeld; throw new Error("旧轮中断"); });
+  await abortAuxiliarySessions(task);
+  interruptRequirementReviews(task, store);
+  assert.equal(task.summary.requirement_revision.state, "failed");
+  let calls = 0;
+  const run = async (batch: typeof a[]) => {
+    calls++; await newHeld; store.markSent(batch.map((item) => item.id), "interrupt");
+  };
+  const current = submitRequirementReview(task, store, store.drafts().filter((item) => item.id === a.id), run);
+  releaseOld(); await old;
+  await submitRequirementReview(task, store, [b], run);
+  assert.equal(calls, 1, "新第二批应排队，不能与新第一批并行");
+  releaseNew(); await current;
+  assert.equal(calls, 2);
+  assert.ok(store.list().every((item) => item.sent_via === "interrupt"));
 });
