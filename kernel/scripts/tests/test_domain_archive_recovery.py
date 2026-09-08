@@ -102,6 +102,63 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(self.state["delivery_manifest"]["confirmed"])
         self.assertEqual("end", self.state["current"])
 
+    def test_committed_unchanged_candidate_is_reapplied_and_deliverable(self):
+        self.git("add", "docs")
+        self.git("commit", "-m", "prior round docs")
+        self.state.pop("domain_archive")
+        template = self.root / ".mae-flow-work/plugin-resources/assets/DOMAIN-SPEC-TEMPLATE.md"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(document("模板"))
+        self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        prepared = self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        self.assertEqual("unchanged", prepared["domains"][0]["action"])
+        self.assertEqual("changes", prepared["result"])
+        before = self.target.read_bytes()
+        applied = self.command("apply", "--message-id", "m1")
+        paths = ["docs/specs/cross-rat.md", "docs/specs/index.md"]
+        self.assertEqual(paths, applied["applied_paths"])
+        self.assertEqual(before, self.target.read_bytes())
+        validate_delivery_document_boundary(paths, applied["applied_paths"])
+        # 部署前已经 applied/unchanged 且丢失路径的现场也能原命令恢复。
+        self.state["domain_archive"]["applied_paths"] = []
+        self.state["domain_archive"]["result"] = "unchanged"
+        self.state["domain_archive"].pop("reapply_paths", None)
+        self.assertEqual(paths, self.command("apply", "--message-id", "m1")["applied_paths"])
+        with self.assertRaisesRegex(ValueError, "领域文档必须"):
+            validate_delivery_document_boundary(["docs/specs/other.md"], paths)
+
+    def test_later_round_keeps_other_domains_and_rechecks_all_candidates(self):
+        (self.specs / "billing.md").write_text(document("真实计费业务规则与已经验证的长期事实。"))
+        self.prepare()
+        self.command("prepare", "--domain", "billing", "--adopt-existing", "--keyword", "billing")
+        self.command("apply", "--message-id", "m1")
+        self.git("add", "docs")
+        self.git("commit", "-m", "prior round domains")
+        template = self.root / ".mae-flow-work/plugin-resources/assets/DOMAIN-SPEC-TEMPLATE.md"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(document("模板"))
+        # 业务修订触发下一轮；只显式 prepare 一个领域，也不能遗失另一个。
+        (self.root / "base").write_text("new business implementation")
+        prepared = self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        self.assertEqual({"billing", "cross-rat"}, {entry["domain"] for entry in prepared["domains"]})
+        applied = self.command("apply", "--message-id", "m1")
+        self.assertEqual(["docs/specs/billing.md", "docs/specs/cross-rat.md", "docs/specs/index.md"], applied["applied_paths"])
+        validate_delivery_document_boundary(applied["applied_paths"], applied["applied_paths"])
+
+    def test_unchanged_baseline_candidate_does_not_create_delivery_delta(self):
+        self.git("add", "docs")
+        self.git("commit", "-m", "baseline docs")
+        self.git("branch", "-f", "main", "HEAD")
+        self.state.pop("domain_archive")
+        template = self.root / ".mae-flow-work/plugin-resources/assets/DOMAIN-SPEC-TEMPLATE.md"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(document("模板"))
+        self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT")
+        applied = self.command("apply", "--message-id", "m1")
+        self.assertEqual("unchanged", applied["result"])
+        self.assertEqual([], applied["applied_paths"])
+
     def test_untracked_domain_docs_cannot_claim_unchanged(self):
         with self.assertRaisesRegex(RuntimeError, "adopt-existing"):
             self.command("prepare", "--unchanged")

@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { KernelHost } from "../src/kernelHost.ts";
+import { inspectKernelTaskCompletion, inspectKernelDeliveryReady } from "../src/terminalAttestation.ts";
 import { migrateContinuousReviewTask } from "../src/continuousReviewMigration.ts";
 import {
   closeKernelDelivery,
@@ -437,4 +438,25 @@ test("契约：只有 MR 合入或用户主动停止，Cloud 与内核才一起�
     eventId: `mr-merged:${sha}`,
   });
   assert.equal(readState(scene.cwd).current, "end");
+});
+
+
+test("外部新 SHA 的可信 close 解锁终态，旧流水线不伪造为新 SHA PASS", async () => {
+  const scene = await needsHumanScene();
+  const before = readState(scene.cwd).quality;
+  const merged = "f".repeat(40);
+  const host = { kernelRoot: KERNEL_ROOT!, python: "python3" };
+  closeKernelDelivery({ host, cwd: scene.cwd, workspace: dirname(scene.cwd),
+    taskId: scene.batch.task_id, sha: merged, eventId: `external:${merged}` });
+  const trust = { workspace: dirname(scene.cwd), taskId: scene.batch.task_id, python: "python3" };
+  const completion = inspectKernelTaskCompletion(scene.cwd, KERNEL_ROOT!, true, trust);
+  assert.equal(completion.complete, true);
+  assert.equal(completion.external_passed, false, "外部合入不伪造流水线已通过");
+  assert.deepEqual(readState(scene.cwd).quality, before);
+  assert.equal(inspectKernelDeliveryReady(scene.cwd, KERNEL_ROOT!, true, trust).complete, false);
+  const state = readState(scene.cwd);
+  state.delivery_loop.close_events.at(-1).sha = "a".repeat(40);
+  writeFileSync(join(scene.cwd, ".mae-flow.json"), JSON.stringify(state));
+  assert.equal(inspectKernelTaskCompletion(scene.cwd, KERNEL_ROOT!, true, trust).complete, false,
+    "Agent 改写合入 SHA 后宿主签名必须失效");
 });

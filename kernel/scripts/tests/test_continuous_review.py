@@ -289,6 +289,25 @@ class DeliveryCommandTests(TempProject):
         delivery.cmd_delivery(flow, value, args)
         self.assertEqual(without_host_nonces(first), without_host_nonces(value))
 
+    def test_trusted_external_merge_closes_failed_or_missing_verification(self):
+        for verdict in ("FAIL", "STALE", None):
+            with self.subTest(verdict=verdict):
+                value = self.live_state()
+                if verdict:
+                    value["quality"]["external_verification"]["verdict"] = verdict
+                else:
+                    value["quality"].pop("external_verification")
+                before = json.loads(json.dumps(value["quality"]))
+                merged = "f" * 40  # 人工外部提交无需先存在于宿主仓
+                args = SimpleNamespace(delivery_action="close", reason="merged",
+                    sha=merged, event_id="external-" + str(verdict))
+                delivery.cmd_delivery({"steps": {"end": {"terminal": True}}}, value, args)
+                self.assertEqual("end", value["current"])
+                self.assertEqual(before, value["quality"])
+                event = value["delivery_loop"]["close_events"][-1]
+                self.assertEqual(merged, event["sha"])
+                self.assertEqual("platform_merge", event["completion_basis"])
+
     def test_merged_close_records_clean_local_commits_not_in_mr(self):
         value = self.live_state()
         with open("tracked.txt", "a", encoding="utf-8") as stream:

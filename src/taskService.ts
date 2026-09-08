@@ -493,8 +493,8 @@ import {
 } from "./deliveryRecovery.ts";
 import {
   CLOSED_MR_WRITE, REOPENED_MR_WRITE, autoRepairDisabledText, classifyGates,
-  mergedCompletionDetail, mergedPendingAttestationWrite, mergedShaMismatchReason,
-  nextWatchStep, sourceShaDrift, stopFailures, waitingWrite,
+  mergedCompletionDetail, mergedPendingAttestationWrite,
+  nextWatchStep, stopFailures, waitingWrite,
   type GateView,
 } from "./mergeWatch.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
@@ -1099,6 +1099,8 @@ export interface TaskSummary {
     source_branch?: string;
     target_branch?: string;
     mr_state?: string;
+    /** 平台合入事实；独立于 sha/git_push，不能覆盖旧验证和推送记录。 */
+    merged_sha?: string;
     pipeline?: string;
     /** 平台按质量维度返回的 Job 结果（可选诊断增强）。契约已声明三项
      * 均由该权威流水线覆盖时，总体 success 可聚合核销；若逐项明确
@@ -1192,7 +1194,7 @@ export interface TaskSummary {
       max?: number;
       /** repairing 只表示修复 Agent 本身正在运行；会话收口后进入
        * verifying，覆盖新 SHA 的 prepush、push 与权威流水线验证。 */
-      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
+      state: "repairing" | "verifying" | "green" | "merged" | "exhausted" | "halted";
       /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
       kind?: "ci" | "review" | "conflict";
       /** review 的来源决定是否还需要人裁决：MR 讨论只是别人提的意见，
@@ -8735,7 +8737,7 @@ export class TaskService {
               stallClassForError(error, "contract"));
           }
         }
-        if (summary.status === "await_merge"
+        if (!["completed", "canceled"].includes(summary.status)
             && this.continuousReviewTask(task)) {
           const completed = this.taskCompletionAttestation(task);
           if (completed?.complete) {
@@ -8744,9 +8746,12 @@ export class TaskService {
               ? closeEvent.unpushed_local_commits.length : 0;
             const unpushedPaths = Array.isArray(closeEvent?.unpushed_local_paths)
               ? closeEvent.unpushed_local_paths.length : 0;
-            if (summary.delivery?.loop) summary.delivery.loop.state = "green";
+            if (summary.delivery?.loop) summary.delivery.loop.state = "merged";
             if (summary.delivery) {
               summary.delivery.mr_state = "已合入";
+              summary.delivery.merged_sha = String(closeEvent?.sha ?? "");
+              summary.delivery.stalled = undefined;
+              summary.delivery.stall_class = undefined;
               summary.delivery.waiting_on = undefined;
             }
             summary.status = "completed";
@@ -17833,12 +17838,8 @@ export class TaskService {
     });
   }
 
-  /** MR 平台侧状态:merged 才是任务真正结束。closed 只是一个需要人
-   * 处理的等待态：MR 可能被误关后重开，不能替用户把整个任务判死。
-   * observedSourceSha 是平台报告的 MR 源提交:与本任务验证过的
-   * delivery.sha 不一致时绝不能 completed——流水线绿灯、prepush 收据
-   * 与人工检视全部绑定旧 SHA,拿它们背书别的提交是交付完整性漏洞
-   * (MFC-038 实证:夹具换 SHA 合入,MFC 仍拿旧验证宣告完成)。 */
+  /** 平台人工合入是可信终态，优先停止旧 writer 并交给内核登记。
+   * 旧 SHA 的验证结果保留原样；完成依据是平台合入，不冒充流水线 PASS。 */
   private async settleMergeState(
     task: TaskState,
     state: "merged" | "closed",
@@ -17846,47 +17847,47 @@ export class TaskService {
   ): Promise<void> {
     const delivery = task.summary.delivery!;
     if (state === "merged") {
-      const { verified, observed, drifted } =
-        sourceShaDrift(delivery.sha, observedSourceSha);
-      if (drifted) {
+      const observed = observedSourceSha?.trim();
+      delivery.mr_state = "已合入（内核终态待对账）";
+      delivery.merged_sha = observed;
+      delivery.stalled = undefined;
+      delivery.stall_class = undefined;
+      this.persist(task);
+      // 合入是最终抢占事件：先让任何在途 writer 失去写状态权并停止，
+      // 再由可信宿主 close。工作区若仍有未推送变化，内核 close 会把
+      // 路径如实记账，绝不冒充这些内容已交付。
+      task.controlEpoch += 1;
+      const driver = task.driver;
+      const container = task.container;
+      const activePrepush = task.prepushActive;
+      const abort = task.prepushAbort;
+      abort?.abort();
+      const cleanup = await Promise.allSettled([
+        activePrepush?.then(() => undefined) ?? Promise.resolve(),
+        driver?.abort() ?? Promise.resolve(),
+        container?.stop() ?? Promise.resolve(),
+      ]);
+      if (cleanup[1].status === "fulfilled" && task.driver === driver) {
+        task.driver = undefined;
+        driver?.dispose();
+      }
+      if (cleanup[2].status === "fulfilled" && task.container === container) {
+        task.container = undefined;
+      }
+      if (task.prepushActive === activePrepush) task.prepushActive = undefined;
+      if (task.prepushAbort === abort) task.prepushAbort = undefined;
+      const failures = stopFailures(cleanup);
+      if (failures.length) {
         this.markVerificationStalled(task,
-          mergedShaMismatchReason(observed, verified), "safety");
+          `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
         return;
       }
+      if (task.summary.status === "canceled") return;
       if (this.continuousReviewTask(task)) {
         if (!observed) {
           this.markVerificationStalled(task,
-            "平台已报告 MR 合入，但没有返回实际源提交 SHA；无法把合入事件绑定到已验证版本",
+            "平台已报告 MR 合入，但没有返回实际源提交 SHA；无法登记合入版本",
             "evidence_missing");
-          return;
-        }
-        // 合入是最终抢占事件：先让任何在途 writer 失去写状态权并停止，
-        // 再由可信宿主 close。工作区若仍有未推送变化，内核 close 会把
-        // 路径如实记账，绝不冒充这些内容已交付。
-        task.controlEpoch += 1;
-        const driver = task.driver;
-        const container = task.container;
-        const activePrepush = task.prepushActive;
-        const abort = task.prepushAbort;
-        abort?.abort();
-        const cleanup = await Promise.allSettled([
-          activePrepush?.then(() => undefined) ?? Promise.resolve(),
-          driver?.abort() ?? Promise.resolve(),
-          container?.stop() ?? Promise.resolve(),
-        ]);
-        if (cleanup[1].status === "fulfilled" && task.driver === driver) {
-          task.driver = undefined;
-          driver?.dispose();
-        }
-        if (cleanup[2].status === "fulfilled" && task.container === container) {
-          task.container = undefined;
-        }
-        if (task.prepushActive === activePrepush) task.prepushActive = undefined;
-        if (task.prepushAbort === abort) task.prepushAbort = undefined;
-        const failures = stopFailures(cleanup);
-        if (failures.length) {
-          this.markVerificationStalled(task,
-            `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
           return;
         }
         try {
@@ -17907,9 +17908,7 @@ export class TaskService {
       }
       const attestation = this.taskCompletionAttestation(task);
       if (attestation && !attestation.complete) {
-        // 远端 MR 状态不能反向篡改内核流程真相。即使有人在平台上手工
-        // 合入，也只有内核 terminal + 当前 HEAD 的逐项 PASS 才能解锁
-        // 下游；恢复会再次对账并把该任务续到正确锚点。
+        // 等待可信 close 落盘，避免投影先完成而重启后内核仍在修复。
         const pending = mergedPendingAttestationWrite(attestation.reason);
         delivery.mr_state = pending.mr_state;
         delivery.waiting_on = pending.waiting_on;
@@ -17918,7 +17917,7 @@ export class TaskService {
         this.persist(task);
         return;
       }
-      if (delivery.loop) delivery.loop.state = "green";
+      if (delivery.loop) delivery.loop.state = "merged";
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
       delivery.stalled = undefined;
@@ -17977,12 +17976,6 @@ export class TaskService {
         if (this.shuttingDown
             || ["completed", "canceled"].includes(task.summary.status)
             || !task.summary.delivery?.mr_url) return;
-        if (!await this.flushReviewReplyOutbox(task)) {
-          await new Promise((tick) => setTimeout(tick, interval).unref());
-          continue;
-        }
-        if (this.shuttingDown
-            || ["completed", "canceled"].includes(task.summary.status)) return;
         const view = await this.fetchGates(task);
         if (this.shuttingDown
             || ["completed", "canceled"].includes(task.summary.status)) return;
@@ -18003,6 +17996,12 @@ export class TaskService {
           await this.settleMergeState(task, "merged", step.sourceSha);
           return;
         }
+        if (!await this.flushReviewReplyOutbox(task)) {
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
+        }
+        if (this.shuttingDown
+            || ["completed", "canceled"].includes(task.summary.status)) return;
         if (step.kind === "wait") {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
@@ -18014,7 +18013,8 @@ export class TaskService {
         }
         if (step.kind === "stall_drift") {
           this.markVerificationStalled(task, step.reason, "safety");
-          return;
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
         }
         if (task.summary.delivery?.mr_state === CLOSED_MR_WRITE.mr_state) {
           task.summary.delivery.mr_state = REOPENED_MR_WRITE.mr_state;

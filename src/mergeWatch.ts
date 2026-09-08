@@ -17,9 +17,8 @@ export interface GateItem {
 export interface GateView {
   mrState: "opened" | "merged" | "closed";
   gates: GateItem[];
-  /** 平台报告的 MR 源分支当前提交。MFC-038:合入监控必须核对它与本
-   * 任务验证过的 delivery.sha 一致,否则旧绿灯/旧人审在背书别的代码。
-   * 旧平台契约没有该字段时为 undefined——无法核对,保持旧行为并留痕。 */
+  /** 平台报告的 MR 源提交。未合入时核对版本；已合入时登记实际版本，
+   * 以平台人工合入收口，不要求它等于本任务旧验证 SHA。 */
   sourceSha?: string;
 }
 
@@ -108,16 +107,11 @@ export function sourceShaDrift(
     drifted: Boolean(verified && observed && verified !== observed) };
 }
 
-export function mergedShaMismatchReason(observed: string, verified: string): string {
-  return `平台实际合入的提交 ${observed.slice(0, 7)} 与本任务验证过的 ${
-    verified.slice(0, 7)} 不一致;流水线与人工检视只背书后者,`
-    + "不能标记完成。请人工核实分支是否被平台侧改写。";
-}
 
 export function openMrDriftReason(observed: string, verified: string): string {
   return `MR 源分支已指向未经本任务验证的提交 ${observed.slice(0, 7)}`
-    + `(已验证的是 ${verified.slice(0, 7)});已停止自动合入`
-    + "监控,请人工核实分支是否被平台侧改写。";
+    + `(任务记录的是 ${verified.slice(0, 7)});已暂停自动交付`
+    + "，继续监听平台合入结果。";
 }
 
 /** 监控环每一拍拿到平台事实之后往哪走。前面的退出检查(服务在停、任务已

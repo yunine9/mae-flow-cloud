@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CLOSED_MR_WRITE, REOPENED_MR_WRITE, autoRepairDisabledText, classifyGates,
-  mergedCompletionDetail, mergedPendingAttestationWrite, mergedShaMismatchReason,
+  mergedCompletionDetail, mergedPendingAttestationWrite,
   nextWatchStep, openMrDriftReason, sourceShaDrift, stopFailures, waitingWrite,
 } from "../src/mergeWatch.ts";
 
@@ -35,10 +35,8 @@ test("源提交漂移(MFC-038):两侧都有且不同才算;缺一侧无法核对
   assert.equal(sourceShaDrift("abc1234", "def5678").drifted, true);
   assert.equal(sourceShaDrift(undefined, "def5678").drifted, false, "旧平台契约没有源 SHA:保持旧行为");
   assert.equal(sourceShaDrift("abc1234", "").drifted, false);
-  assert.match(mergedShaMismatchReason("def5678abcd", "abc1234abcd"),
-    /合入的提交 def5678 与本任务验证过的 abc1234 不一致.*不能标记完成/);
   assert.match(openMrDriftReason("def5678abcd", "abc1234abcd"),
-    /指向未经本任务验证的提交 def5678.*已验证的是 abc1234.*已停止自动合入/);
+    /指向未经本任务验证的提交 def5678.*任务记录的是 abc1234.*已暂停自动交付/);
 });
 
 test("监控环每一拍:merged 任何状态下都收口;writer 在途只看 merged;关闭/漂移/看门禁", () => {

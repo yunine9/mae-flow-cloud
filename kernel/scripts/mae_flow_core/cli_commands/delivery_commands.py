@@ -1,6 +1,7 @@
 """Trusted Cloud host commands for the continuous delivery review loop."""
 import hashlib
 import json
+import re
 from .shared import os, time
 from .wiring import api
 from .delivery_support import (
@@ -438,33 +439,24 @@ def _close(flow, state, args):
         save_with_host_proof(state, proof_nonce)
         print(json.dumps({**previous, "idempotent": True}, ensure_ascii=False))
         return
+    # 平台合入是人的最终交付决定，由宿主签名证明来源。
+    # 可以覆盖旧 SHA 的失败/缺失验证，但不能把那些结果改写成 PASS。
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", str(args.sha)):
+        _die("合入源 SHA 格式不合法")
     verified = external_facts(state)
-    verified_sha = str(verified.get("sha") or "")
-    # 两条分支原来走的是两个语义不同的函数:else 分支拿"外部验证事实"
-    # 去和"生命周期投影"逐字比对,永远不可能相等——只要走到那条路就是
-    # 必死的 close。收据校验只有一种正确形态,不再留第二条。
-    #
-    # 有过流水线收据才拿收据说话。这一单的 PASS 若登记在能力链之前
-    # (老任务、迁移现场),它永远拿不出 pipeline-record 收据;此时还要
-    # 求"没收据就不许 close",等于宣布 MR 合入了任务也永远关不掉,而
-    # 合入本身是远端事实、迁移时宿主已核对过这份 PASS 绑当前 HEAD。
-    if (not trusted_pipeline_projection(state, verified)
-            and has_receipt_for(state, "pipeline-record")):
-        _die("当前流水线 PASS 没有 Cloud 宿主权威收据，拒绝 close")
-    if verified.get("verdict") != "PASS" or args.sha != verified_sha:
-        _die("合入源 SHA %s 没有当前权威 PASS 背书（最近验证 %s）"
-             % (str(args.sha)[:12], verified_sha[:12] or "无"))
     if not flow.get("steps", {}).get("end", {}).get("terminal"):
         _die("内核流程缺少终态 end")
     dirty = list(api._dirty_paths())
     local_head = _head()
-    unpushed_commits = collect_unpushed_commits(verified_sha, local_head, _die)
+    unpushed_commits = collect_unpushed_commits(str(args.sha), local_head, _die)
     old = str(state.get("current") or "")
     event = {
         "schema": STATE_SCHEMA,
         "event_id": event_id,
         "reason": "merged",
         "sha": str(args.sha),
+        "completion_basis": "platform_merge",
+        "last_verification": {"sha": verified.get("sha"), "verdict": verified.get("verdict")},
         "local_head": local_head,
         "unpushed_local_commits": unpushed_commits,
         "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),

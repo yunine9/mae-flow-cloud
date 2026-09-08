@@ -165,7 +165,12 @@ def _prepare(state, args, root, package):
         current_digest = _fresh_digest(root, package, previous_entries)
         if previous.get("input_sha256") == current_digest:
             raise ValueError("领域归档已经应用且输入未变化，无需重复准备")
-        previous = {}
+        # 后续轮次准备一个领域时保留同需求其他已核对候选；否则它们
+        # 仍在交付增量中，却会随 applied_paths 清空而失去归档归属。
+        previous = {} if args.unchanged else {
+            "domains": previous.get("domains") or [],
+            "reapply_paths": previous.get("reapply_paths") or [],
+        }
     if args.unchanged:
         if previous.get("domains"):
             raise ValueError("已经存在领域候选，不能再声明全部 unchanged")
@@ -214,14 +219,15 @@ def _prepare(state, args, root, package):
     values = [value for value in values if value.get("domain") != args.domain]
     values.append(prepared.to_dict(root))
     entries = tuple(candidate_from_dict(root, value) for value in values)
+    reapply_paths = _reapply_delivery_paths(state, entries, previous)
     record = {
         "status": "prepared",
         "result": (
             "unchanged"
-            if not previous.get("reapply_paths") and entries
+            if not reapply_paths and entries
             and all(entry.action == "unchanged" for entry in entries)
             else "changes"),
-        "reapply_paths": list(previous.get("reapply_paths") or ()),
+        "reapply_paths": reapply_paths,
         "domains": values,
         "input_sha256": _fresh_digest(root, package, entries),
         "applied_paths": [],
@@ -232,16 +238,31 @@ def _prepare(state, args, root, package):
     return record
 
 
+def _reapply_delivery_paths(state, entries, record):
+    paths = set(record.get("reapply_paths") or ())
+    if entries:
+        changed = set(changed_domain_paths(state))
+        for entry in entries:
+            if entry.target_path in changed or "docs/specs/index.md" in changed:
+                paths.add(entry.target_path)
+    return sorted(paths)
+
+
 def _apply(state, args, root, package):
     record = copy.deepcopy(state.get("domain_archive") or {})
-    if record.get("status") == "applied":
-        return record
-    if record.get("status") != "prepared":
+    already_applied = record.get("status") == "applied"
+    if already_applied:
+        targets = {value.get("target_path") for value in record.get("domains") or ()}
+        if not targets or targets.issubset(set(record.get("applied_paths") or ())):
+            return record
+    if record.get("status") not in ("prepared", "applied"):
         raise ValueError("领域归档尚未准备完成；执行 domain-archive status 查看恢复动作")
     entries = _entries(root, record)
     require_fresh(
         record.get("input_sha256"), _fresh_digest(root, package, entries))
-    if getattr(args, "moonlight_auto", False):
+    if already_applied and record.get("authorization"):
+        receipt = record["authorization"]
+    elif getattr(args, "moonlight_auto", False):
         from mae_flow_core import host_env
         if not host_env.unattended_confirm_allowed(state):
             raise ValueError("--auto 只允许在月光宝盒或云端宿主运行中使用")
@@ -258,8 +279,12 @@ def _apply(state, args, root, package):
             raise ValueError(
                 "用户回答没有明确批准本次领域归档；候选已保留，"
                 "按用户意见修改后重新 prepare/show")
-    paths = apply_candidates(root, entries,
-                             reapply_paths=record.get("reapply_paths") or ())
+    # unchanged 是候选对工作区的比较，不是相对交付基线的比较。
+    # 上轮已提交、仍属于本需求增量的文档，必须由本轮 apply 重新登记。
+    record["reapply_paths"] = _reapply_delivery_paths(state, entries, record)
+    paths = apply_candidates(root, entries, reapply_paths=record["reapply_paths"])
+    if paths:
+        record["result"] = "changes"
     record.update({
         "status": "applied", "applied_paths": list(paths),
         "authorization": receipt,
