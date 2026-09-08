@@ -241,7 +241,7 @@ async function startChain(options: {
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier,
   });
   const created = service.create({

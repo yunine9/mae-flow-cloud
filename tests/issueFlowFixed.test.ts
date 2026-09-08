@@ -321,7 +321,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     dts: new MockDtsGateway(),
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const created = service.create({
@@ -991,7 +991,7 @@ test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查
     /详情已获取/.test(entry.note)), "重查要留转移账");
 });
 
-test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本地仓不拦", async () => {
+test("个人凭据前置门禁:发起无条件要令牌与邮箱(2026-09-08),回调缺席裸构造放行", async () => {
   const dataDir = mfcTemp("mfc-issue-credgate-");
   const origin = bareOrigin(dataDir);
   const httpsRepo = "https://codehub.test/some/repo.git";
@@ -1002,19 +1002,26 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   } as const;
-  const withCred = (email?: string) => ({
+  const withCred = (mode: "none" | "no-email" | "full") => ({
     ...base,
-    ...(email === undefined
-      ? { gitCredential: () => ({ username: "dev", password: "tok" }) }
-      : { gitCredential: () => ({ username: "dev", password: "tok", email }) }),
+    ...(mode === "none"
+      ? { gitCredential: () => undefined }
+      : mode === "no-email"
+        ? { gitCredential: () => ({ username: "dev", password: "tok" }) }
+        : { gitCredential: () => ({ username: "dev", password: "tok", email: "dev@example.com" }) }),
   });
   let service: IssueFlowService | undefined;
   try {
     // 无单登记要模块+环境(#17);模块绑的是本地裸仓,不触发凭据门禁,
     // 这里钉的始终是 Git 身份这道门。
     seedModule(dataDir, origin);
+    // 无凭据 + 免仓有单发起:照样拒——这是 2026-09-08 升格的回归锚,
+    // 拉仓是硬阶段,免仓不再是登记期放行的理由(门在发起按钮上)。
+    service = new IssueFlowService(withCred("none"));
+    assert.throws(() => service!.create({
+      account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
+    }), /Git 令牌未配置.*个人设置/);
     // 无凭据 + https 仓:登记直接拒,指路个人设置(门在发起前,不在克隆后)。
-    service = new IssueFlowService(base);
     assert.throws(() => service!.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
       repoUrl: httpsRepo,
@@ -1027,7 +1034,7 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     await service.shutdown();
 
     // 令牌在而邮箱缺:提交署名无主,同样拦。
-    service = new IssueFlowService(withCred());
+    service = new IssueFlowService(withCred("no-email"));
     assert.throws(() => service!.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
       repoUrl: httpsRepo,
@@ -1035,22 +1042,25 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     await service.shutdown();
 
     // 令牌+邮箱齐:登记放行(克隆成败是后面回合的事,门禁只管身份在场)。
-    service = new IssueFlowService(withCred("dev@example.com"));
+    service = new IssueFlowService(withCred("full"));
     const created = service.create({
       account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
       repoUrl: httpsRepo,
     });
     assert.equal(created.scenario, "ticket", "登记放行即带固定流程场景");
 
-    // file:///本地路径仓:不碰远端,无凭据也不拦(测试/裸仓形态)。
+    // 回调缺席=裸构造(测试世界无身份体系),按缺席即放行的既有纪律
+    // 处理;生产接线(serve)恒注入回调,门恒生效。
     await service.shutdown();
     service = new IssueFlowService(base);
+    // file:///本地路径仓:不碰远端,拉仓期的 requireGitIdentity 也放行
+    // (逐仓复查只拦 http),测试/裸仓形态不受影响。
     const local = service.create({
       account: "dev", title: "本地裸仓问题", ticket: "DTS-2026-1002",
       repoUrl: origin,
     });
     assert.ok(local.id);
-    // 有单不带仓:无仓登记放行,与凭据无关。
+    // 有单不带仓:裸构造放行(生产同形态已被无条件门拦,见最上用例)。
     const pure = service.create({
       account: "dev", title: "纯现象咨询", ticket: "DTS-2026-1003",
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
@@ -1200,7 +1210,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     modelsJson: model.modelsJson(),
     settings: fastPoll,
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     // 构造即恢复:watching=true 的监看要重新挂表,预算沿用原 deadline。
@@ -1273,7 +1283,7 @@ test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真�
     modelsJson: model.modelsJson(),
     settings: fastPoll,
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     // 窗口期(影子未放开):轮轮查询拿到的都是绑旧提交的终态红,
@@ -2373,7 +2383,7 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
     dts: new MockDtsGateway(),
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const created = service.create({
@@ -2511,7 +2521,7 @@ test("红灯分诊:失败项全在不可修名单→举卡不派回合不耗预�
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     unfixableTools: ["SuperChecker"],
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -2621,7 +2631,7 @@ test("红灯分诊回归:名单在场但工具不在名单→照常派修,证据
     platformUrl: platform.baseUrl,
     // 名单配的是别的工具:SuperChecker 不在名单 → 拿不准宁可派修。
     unfixableTools: ["OtherChecker"],
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     await until(() => {
@@ -2675,7 +2685,7 @@ test("红灯证据分级:部分维度缺证据→派修但点名缺口维度不�
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     await until(() => {
@@ -2725,7 +2735,7 @@ test("红灯证据全缺:有失败维度但零证据→举卡请人贴原文,作
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const gated = await until(() => {
@@ -2815,7 +2825,7 @@ test("红灯证据分级:UT 红灯+镜像日志有 Jest 失败原文→照常派
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const requestText = await until(() =>
@@ -2867,7 +2877,7 @@ test("红灯证据 issue-28 形态:维度错配的质量门红灯从举卡变派
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     // 旧行为:CodeCheck 维零证据→举 pipeline_evidence 卡要人贴原文。
@@ -2919,7 +2929,7 @@ test("红灯分诊回归:名单未配置→不分诊照常派修(与需求侧空
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     // 不配置名单:判定函数对空名单恒 false——照常派修(部署没表态就不拦)。
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     await until(() => {
@@ -2976,7 +2986,7 @@ test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/�
     },
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier,
     linkBase: "http://work.test",
   });
@@ -3050,7 +3060,7 @@ test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier,
     linkBase: "http://work.test",
   });
@@ -3125,7 +3135,7 @@ test("盲输入闸:checks 缺席+链接式摘要+零产物→举 pipeline_eviden
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3195,7 +3205,7 @@ async function assertRepairDispatched(input: {
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const requestText = await until(() =>
@@ -3273,7 +3283,7 @@ test("证据重试窗:产物晚到自愈——先零产物进窗不举卡,窗口
     settings: retryWindow(0.1),
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     // 进窗:不举卡、不开回合、不耗预算;截止时间落盘。
@@ -3351,7 +3361,7 @@ async function assertCardAfterWindow(input: {
     settings: retryWindow(0.05),
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3444,7 +3454,7 @@ test("证据重试窗:会话取消后循环收手——到点不举卡、不通�
     settings: retryWindow(0.05),
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3501,7 +3511,7 @@ test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍
     settings: retryWindow(0.1),
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
     linkBase: "http://work.test",
   });
@@ -3643,7 +3653,7 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier,
     linkBase: "http://work.test",
   });
@@ -3721,7 +3731,7 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token" }),
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
     const requestText = await until(() =>
