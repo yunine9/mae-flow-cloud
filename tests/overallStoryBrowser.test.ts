@@ -42,6 +42,7 @@ test("整体 Story 浏览器：生成、阅读、版本对比、确认和待同�
       assert.ok(result, `${mode}: browser did not finish`);
       const value = JSON.parse(result);
       assert.equal(value.error, undefined, `${mode}: ${value.error}`);
+      assert.equal(value.childEntryHidden, true);
       assert.equal(value.readerStable, true);
       assert.equal(value.stale, true);
       assert.equal(value.confirmed, true);

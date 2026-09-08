@@ -69,9 +69,11 @@ export class OverallStoryCoordinator<T extends Owner> {
     return task;
   }
   private store(task: T) { return new AnnotationStore(join(task.summary.workspace, "annotations.jsonl")); }
-  private eligible(task: T) { return task.summary.requirement_graph?.stage === "confirmed"
+  private eligible(task: T) { return !task.summary.parent_task_id
+    && task.summary.requirement_graph?.stage === "confirmed"
     && Boolean(task.summary.requirement_graph.repositories.length); }
   private mutable(task: T) {
+    if (task.summary.parent_task_id) throw new TaskControlError("请在主任务中生成、更新或确认整体 Story");
     if (this.stopped || this.options.task(task.summary.id) !== task || task.summary.status === "canceled") throw new TaskControlError("任务已停止，不能更新整体 Story");
     if (!this.eligible(task)) throw new TaskControlError("确认模块拆分后才能生成整体 Story");
   }
@@ -112,7 +114,7 @@ export class OverallStoryCoordinator<T extends Owner> {
       && ["draft", "sent"].includes(a.status)).length;
     const complete = input.sources.length > 0 && input.sources.every((s) => !s.missing);
     return { ...state, eligible: this.eligible(task), sources: input.sources, stale, pending_reviews: pending,
-      can_confirm: Boolean(current && complete && !stale && !this.active.has(id) && !state.job && !pending && task.summary.status !== "canceled"),
+      can_confirm: Boolean(this.eligible(task) && current && complete && !stale && !this.active.has(id) && !state.job && !pending && task.summary.status !== "canceled"),
       label: this.active.has(id) || state.job ? "Agent 正在整理整体 Story" : !current ? "尚未生成整体 Story"
         : stale ? "子任务或需求已变化 · 待同步" : !complete ? "部分 Story 尚未产出"
           : pending ? "有检视意见待闭环" : state.confirmed?.revision === current.id ? "责任人已确认" : "待检视与确认" };
