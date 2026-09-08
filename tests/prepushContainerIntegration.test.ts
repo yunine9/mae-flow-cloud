@@ -56,7 +56,7 @@ async function until(
   }
 }
 
-test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
+test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", async () => {
   const cacheRoot = mkdtempSync(join(tmpdir(), "mfc-build-cache-"));
   const workspaceRoot = mkdtempSync(join(tmpdir(), "mfc-build-workspace-"));
   const service = new TaskService({
@@ -72,20 +72,25 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
     mkdirSync(cwd, { recursive: true });
     return cwd;
   };
-  const mounts = (repository: string, volumes: string[] = []) => {
+  const mounts = async (repository: string, volumes: string[] = []) => {
     const cwd = workspaceFor(repository);
-    return (service as any).taskContainerMounts({
+    return await (service as any).taskContainerMounts({
       cwd,
       summary: { id: repository, repo_url: repository },
     }, volumes) as { volumes: string[]; environment: NodeJS.ProcessEnv };
   };
-  const first = mounts("https://code.example/team/a.git");
-  const repeated = mounts("https://code.example/team/a.git");
-  const second = mounts("https://code.example/team/b.git");
+  const first = await mounts("https://code.example/team/a.git");
+  const repeated = await mounts("https://code.example/team/a.git");
+  const second = await mounts("https://code.example/team/b.git");
   assert.deepEqual(first.volumes, repeated.volumes,
     "同仓任务应复用自己的构建缓存");
-  assert.notEqual(first.volumes[0].split(":")[0],
-    second.volumes[0].split(":")[0], "不同仓不得共享可写缓存");
+  // volumes 里还有仓无关的共享资产卷(mae-build 等),缓存卷按来源目录认。
+  const cacheSource = (m: { volumes: string[] }) =>
+    m.volumes.map((volume) => volume.split(":")[0])
+      .find((source) => source.startsWith(cacheRoot));
+  assert.ok(cacheSource(first), "同仓任务应挂自己的可写缓存卷");
+  assert.notEqual(cacheSource(first), cacheSource(second),
+    "不同仓不得共享可写缓存");
   assert.ok(first.volumes.every((volume) => existsSync(volume.split(":")[0])));
   assert.equal(first.environment.npm_config_cache, "/cache/npm");
   // 容器内 Node 信任系统 CA 存储(2026-09-04):部署镜像默认 node
@@ -108,15 +113,15 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   assert.ok(existsSync(cppSdk.split(":")[0]));
   assert.equal(cppSdk.split(":")[1],
     join(workspaceRoot, "RepoA", "cpp_sdk_repository"));
-  assert.throws(() => mounts("https://code.example/team/a.git", [
+  await assert.rejects(mounts("https://code.example/team/a.git", [
     "/host/shared:/cache/npm",
   ]), /不能覆盖平台的分仓缓存目录/);
-  assert.throws(() => mounts("https://code.example/team/a.git", [
+  await assert.rejects(mounts("https://code.example/team/a.git", [
     `/host/shared:${join(workspaceRoot, "RepoA", "cpp_sdk_repository")}`,
   ]), /不能覆盖平台的分仓缓存目录/);
 });
 
-test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省绝不出现", () => {
+test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省绝不出现", async () => {
   // 内网容器里只有 npm_config_cache,没有源地址时 npm 打公网直到超时。
   // serve 的 --isolate-npm-registry 落到 isolation.environment;需求侧
   // 的合并点在 containerMountsForRepository(与 npm_config_cache 同一
@@ -128,8 +133,8 @@ test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省�
     scratch.push(dir);
     return dir;
   };
-  const mounts = (service: TaskService) =>
-    (service as any).taskContainerMounts({
+  const mounts = async (service: TaskService) =>
+    await (service as any).taskContainerMounts({
       cwd: tempDir("mfc-npm-registry-ws-"),
       summary: { id: "t", repo_url: "https://code.example/team/a.git" },
     }, []) as { environment: NodeJS.ProcessEnv };
@@ -145,7 +150,7 @@ test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省�
       environment: { npm_config_registry: registry },
     },
   });
-  const env = mounts(configured).environment;
+  const env = (await mounts(configured)).environment;
   assert.equal(env.npm_config_registry, registry,
     "registry 必须进容器创建环境,内网 npm 才不打公网");
   assert.equal(env.npm_config_cache, "/cache/npm",
@@ -161,12 +166,12 @@ test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省�
       cacheRoot: tempDir("mfc-npm-registry-cache2-"),
     },
   });
-  assert.ok(!("npm_config_registry" in mounts(bare).environment),
+  assert.ok(!("npm_config_registry" in (await mounts(bare)).environment),
     "缺省不注入:没配 registry 时容器创建环境不得出现该键");
   for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
 
-test("宿主身份 MAE_FLOW_HOST 跟进任务容器，云端 --auto 确认路径不失效", () => {
+test("宿主身份 MAE_FLOW_HOST 跟进任务容器，云端 --auto 确认路径不失效", async () => {
   // run8b 实测:漏传时容器里的内核 current 按本地宿主渲染,领域归档在
   // 云端又弹人工卡。宿主进程声明的身份必须原样进入容器环境。
   const cacheRoot = mkdtempSync(join(tmpdir(), "mfc-hostenv-cache-"));
@@ -181,12 +186,12 @@ test("宿主身份 MAE_FLOW_HOST 跟进任务容器，云端 --auto 确认路径
   const previous = process.env.MAE_FLOW_HOST;
   try {
     process.env.MAE_FLOW_HOST = "cloud";
-    const withHost = (service as any).taskContainerMounts({
+    const withHost = await (service as any).taskContainerMounts({
       cwd, summary: { id: "t", repo_url: "https://code.example/team/a.git" },
     }, []) as { environment: NodeJS.ProcessEnv };
     assert.equal(withHost.environment.MAE_FLOW_HOST, "cloud");
     delete process.env.MAE_FLOW_HOST;
-    const withoutHost = (service as any).taskContainerMounts({
+    const withoutHost = await (service as any).taskContainerMounts({
       cwd, summary: { id: "t", repo_url: "https://code.example/team/a.git" },
     }, []) as { environment: NodeJS.ProcessEnv };
     assert.equal(withoutHost.environment.MAE_FLOW_HOST, undefined,

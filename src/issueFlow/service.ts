@@ -1932,6 +1932,8 @@ export class IssueFlowService {
     const results = await Promise.allSettled([abortAuxiliarySessions(live), container?.stop()]);
     if (results[1].status === "fulfilled" && live.container === container) live.container = undefined;
     const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    // 单一原因直接透传,理由同 control():包裹层会把真实病因吃掉。
+    if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, "问题会话执行资源未能全部停止");
     if (!this.shuttingDown && interruptWarmupReceipt(live.state.warmup)) saveState(live.root, live.state);
   }
@@ -3327,6 +3329,9 @@ export class IssueFlowService {
     try {
       const stopped = await Promise.allSettled([live.driver?.abort(), this.stopContainer(live)]);
       const errors = stopped.flatMap((item) => item.status === "rejected" ? [item.reason] : []);
+      // 单一原因直接透传:AggregateError 的 String() 只剩"会话或容器未能
+      // 停止",底层的 permission denied 之类真实病因到不了用户眼前。
+      if (errors.length === 1) throw errors[0];
       if (errors.length) throw new AggregateError(errors, "会话或容器未能停止");
       this.releaseDriver(live);
     } catch (error) {

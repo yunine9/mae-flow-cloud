@@ -12,7 +12,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +19,7 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
-import { mfcTemp } from "./mfcTmp.ts";
+import { forceRm, mfcTemp } from "./mfcTmp.ts";
 
 async function until<T>(
   probe: () => T | undefined,
@@ -135,7 +134,7 @@ test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路�
     await service.shutdown().catch(() => undefined);
     await main.stop();
     await vision.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    forceRm(dataDir);
   }
 });
 
@@ -181,7 +180,7 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
     await service.shutdown().catch(() => undefined);
     await main.stop();
     await vision.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    forceRm(dataDir);
   }
 });
 
@@ -213,6 +212,6 @@ test("未配置 vision:工具清单不含 inspect_image,其余照旧", async () 
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    forceRm(dataDir);
   }
 });
