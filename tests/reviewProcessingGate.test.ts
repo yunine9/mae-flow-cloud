@@ -17,6 +17,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AnnotationStore, renderAnnotations, type Annotation } from "../src/annotations.ts";
+import { OVERALL_STORY_ARTIFACT } from "../src/overallStoryStore.ts";
 import {
   agentReviewAnnotations,
   answeredClarificationReceipt,
@@ -64,6 +65,9 @@ test("Agent 的待办集:只有送到它眼前、没有当前版本 fixed 回执
     note({ id: "owner-pending", route: "owner_reply", sent_via: "owner_pending" }),
     note({ id: "memory", route: "memory", status: "verified" }),
     note({ id: "verified", status: "verified" }),
+    ...(["requirement_queue", "requirement_review", "overall_story_queue", "overall_story_processing", "overall_story"] as const)
+      .map((sent_via) => note({ id: sent_via, sent_via })),
+    note({ id: "story-owner-decision", artifact: OVERALL_STORY_ARTIFACT, sent_via: "decision" }),
   ];
   assert.deepEqual(agentReviewAnnotations(items).map((item) => item.id), [
     "sent-no-receipt", "sent-fixed", "sent-not-fixed", "sent-asking",
@@ -75,6 +79,107 @@ test("Agent 的待办集:只有送到它眼前、没有当前版本 fixed 回执
   ], "收到了/回了一句都不算:not_fixed、needs_clarification、旧版本回执一律未完成");
   assert.equal(reviewProcessingKey(pendingReviewProcessing(items)),
     "decision-owner:r0,sent-asking:r0,sent-no-receipt:r0,sent-not-fixed:r0,sent-old-fixed:r1");
+});
+
+test("同文件坏回执不连坐有效项；重复 id 不取任意一条，重复 evidence 不反复写账", async () => {
+  const { service, internal, first, store, receipts } = await serviceWithSentAnnotation();
+  try {
+    const extra = ["malformed", "duplicate"].map((name) => store.add({ author: "alice", artifact: "src/a.ts",
+      file: "src/a.ts", line: 1, note: name, kind: "code", anchor: "x" }));
+    store.markSent(extra.map((a) => a.id), "interrupt");
+    const fixed = (id: string) => ({ annotation_id: id, revision: 0, outcome: "fixed",
+      summary: "已补充空值检查与边界测试", evidence: ["src/a.ts:3", "src/a.ts:3"] });
+    receipts([fixed(first.id), { ...fixed(extra[0].id), outcome: "invalid" },
+      fixed(extra[1].id), { ...fixed(extra[1].id), outcome: "not_fixed" }]);
+    const error = await (service as any).consumeReviewProcessingReceipts(internal);
+    assert.match(error, /outcome 不合法/); assert.match(error, /重复回执/);
+    const items = store.list();
+    assert.deepEqual(items.find((a) => a.id === first.id)?.response?.evidence, ["src/a.ts:3"]);
+    assert.ok(extra.every((a) => !items.find((b) => b.id === a.id)?.response));
+    const log = join(internal.summary.workspace, "annotations.jsonl");
+    const before = readFileSync(log, "utf8");
+    await (service as any).consumeReviewProcessingReceipts(internal);
+    assert.equal(readFileSync(log, "utf8"), before);
+    assert.deepEqual(pendingReviewProcessing(store.list()).map((a) => a.id), extra.map((a) => a.id));
+  } finally { await service.shutdown(); }
+});
+
+test("专项会话排队/处理中，主 Agent 不催办也不能用本地回执抢先登记", async () => {
+  const { service, internal, first, store, receipts, before, confirmCard } = await serviceWithSentAnnotation();
+  try {
+    const auxiliary = (["requirement_queue", "requirement_review", "overall_story_queue", "overall_story_processing"] as const)
+      .map((via) => {
+        const a = store.add({ author: "alice", artifact: "requirement.md", file: "requirement.md",
+          line: 1, note: "补充文档说明", kind: "doc", anchor: "x" });
+        store.markSent([a.id], via); return a;
+      });
+    receipts([first, ...auxiliary].map((a) => ({ annotation_id: a.id, revision: 0, outcome: "fixed",
+      summary: "已补充文档中的验收说明", evidence: ["requirement.md:1"] })));
+    assert.equal(await (service as any).consumeReviewProcessingReceipts(internal), undefined);
+    assert.ok(auxiliary.every((a) => !store.list().find((item) => item.id === a.id)?.response));
+    assert.deepEqual(pendingReviewProcessing(store.list()), []);
+    assert.equal(await before(confirmCard), undefined);
+  } finally { await service.shutdown(); }
+});
+
+test("读取 Git 期间意见被改写或任务停止，旧回执不写回也不把正常改写报成会话失败", async () => {
+  for (const change of ["edit", "cancel"] as const) {
+    const { service, internal, first, store, receipts } = await serviceWithSentAnnotation();
+    try {
+      receipts([{ annotation_id: first.id, revision: 0, outcome: "fixed", summary: "已补充空值检查与边界测试", evidence: ["src/a.ts:3"] }]);
+      internal.cwd = internal.summary.workspace;
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => { release = resolve; });
+      (service as any).prePushRevision = async () => { await waiting; return { sha: "a".repeat(40) }; };
+      const consume = (service as any).consumeReviewProcessingReceipts(internal);
+      if (change === "edit") store.edit(first.id, "请连同返回值空值也一并处理", "reviewer-a");
+      else { internal.controlEpoch++; internal.summary.status = "canceled"; }
+      release();
+      assert.equal(await consume, undefined);
+      assert.equal(store.list()[0].response, undefined);
+    } finally { await service.shutdown(); }
+  }
+});
+
+test("MR 意见在暂停或等人状态被拒绝时，不能先开内核批次再留下未发送草稿", async () => {
+  const { service, internal, store } = await serviceWithSentAnnotation();
+  try {
+    const draft = store.add({ author: "alice", artifact: "src/a.ts", file: "src/a.ts", line: 1,
+      note: "补充边界测试", kind: "code", anchor: "x" });
+    internal.summary.delivery = { mr_url: "https://example.invalid/mr/1", mr_state: "验证中" };
+    let opened = 0;
+    (service as any).openFeedbackBatch = () => { opened++; };
+    for (const status of ["paused", "pausing", "waiting_for_human"]) {
+      internal.summary.status = status;
+      await assert.rejects((service as any).sendMergeRequestReview(internal, [draft], draft.note), /暂停|等你回答/);
+    }
+    assert.equal(opened, 0);
+    assert.equal(store.list().find((a) => a.id === draft.id)?.status, "draft");
+  } finally { await service.shutdown(); }
+});
+
+test("最终回检只核对本批意见，不被同文件里其他批次或专项会话的回执卡住", async () => {
+  const { service, internal, first, store, receipts } = await serviceWithSentAnnotation();
+  try {
+    const other = store.add({ author: "alice", artifact: "src/b.ts", file: "src/b.ts", line: 1,
+      note: "另一个批次", kind: "code", anchor: "x" });
+    store.markSent([other.id], "interrupt");
+    internal.summary.delivery = { loop: { review_source: "workspace", workspace_review_annotation_ids: [first.id] } };
+    receipts([first, other].map((a) => ({ annotation_id: a.id, revision: 0, outcome: "fixed",
+      summary: "已补充空值检查与边界测试", evidence: ["src/a.ts:3"] })));
+    assert.deepEqual(await (service as any).consumeWorkspaceReviewReceipts(internal), { ok: true });
+    assert.equal(store.list().find((a) => a.id === other.id)?.response, undefined,
+      "忽略其他批次不代表代它登记；主 Agent 实时消费者仍会负责它");
+    internal.cwd = internal.summary.workspace;
+    (service as any).prePushRevision = async () => {
+      store.edit(first.id, "请修改另一处输入空值逻辑", "reviewer-a");
+      return { sha: "b".repeat(40) };
+    };
+    const changed = await (service as any).consumeWorkspaceReviewReceipts(internal);
+    assert.equal(changed.ok, false);
+    assert.match(changed.detail, /已变化/);
+    assert.equal(store.list().find((a) => a.id === first.id)?.response, undefined);
+  } finally { await service.shutdown(); }
 });
 
 test("追问预算与已答复追问的识别", () => {
@@ -307,6 +412,10 @@ test("运行中写回执后下一工具前即登记：三条 sent 接收、草�
       humanGate: new HumanGate(join(root, "live-waiting.json")),
     });
     await session.start("写入回执，再读两次核对。不要提问。");
+    assert.deepEqual(session.takeUndeliveredSteers(), [], "普通回执提示不能变成收口后重新续跑的插话");
+    assert.match(allSeen(model), /宿主已登记 3 条/);
+    assert.ok(!new EventLog(join(agentDir, "events.jsonl")).replay().some((event) => event.kind === "user_message"
+      && String(event.payload.text).startsWith("宿主已登记")), "进度说明必须是工具结果，不冒充用户指令");
     assert.equal(reads, 2);
     assert.equal(logs.filter((line) => line.includes("已登记 3 条")).length, 1);
     assert.equal(store.list().filter((a) => a.status === "verified").length, 0);
@@ -318,7 +427,8 @@ test("运行中写回执后下一工具前即登记：三条 sent 接收、草�
       kind: "tool_requested" as const,
       payload: { name: "Bash", call_id: "current", input: { command: "python mae-flow.py current" } } };
     await resumed.preTool!(event);
-    const notice = await resumed.postTool!({ ...event, kind: "tool_finished" });
+    assert.equal(await resumed.postTool!({ ...event, kind: "tool_finished" }), undefined);
+    const notice = await resumed.toolResultNote!({ name: "Bash", input: { command: "python mae-flow.py current" } });
     assert.match(String(notice), /保留原始意见和来源 SHA/);
     assert.equal(readFileSync(join(root, "annotations.jsonl"), "utf8"), before,
       "重启和重复 current 不重复登记，也不凭新 HEAD 重绑旧回执");

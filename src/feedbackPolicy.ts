@@ -45,6 +45,10 @@ export function submittedAnnotations(items: Annotation[]): Annotation[] {
  * 记忆不发给任何人、交给责任人的答复/决策没到 Agent 之前也不算。 */
 export function agentReviewAnnotations(items: Annotation[]): Annotation[] {
   return items.filter((item) => item.status === "sent"
+    // 专项文档会话在发布新正文时登记自己的回执，不归主编码会话处理。
+    && item.artifact !== OVERALL_STORY_ARTIFACT
+    && !["requirement_queue", "requirement_review", "overall_story_queue",
+      "overall_story_processing", "overall_story"].includes(item.sent_via ?? "")
     && item.sent_via !== "pipeline_evidence"
     && item.sent_via !== "queued_decision"
     && item.sent_via !== "issue_review"
@@ -152,6 +156,7 @@ export function parseWorkspaceReviewReceipts(
   const receipts: WorkspaceReviewReceipt[] = [];
   const errors: string[] = [];
   const seen = new Set<string>();
+  const duplicates = new Set<string>();
   const unexpected = new Set<string>();
   for (const [at, raw] of rows.entries()) {
     if (!raw || typeof raw !== "object") {
@@ -165,6 +170,7 @@ export function parseWorkspaceReviewReceipts(
       continue;
     }
     if (seen.has(id)) {
+      duplicates.add(id);
       errors.push(`批注 ${id} 出现重复回执`);
       continue;
     }
@@ -198,7 +204,7 @@ export function parseWorkspaceReviewReceipts(
       continue;
     }
     const evidence = Array.isArray(item.evidence)
-      ? item.evidence.map(String).map((one) => one.trim()).filter(Boolean)
+      ? [...new Set(item.evidence.map(String).map((one) => one.trim()).filter(Boolean))].slice(0, 20)
       : [];
     // fixed = 真改了文件,那就必须能指出改在哪(path:line);没有位置的"已修复"
     // 人无法复核。not_fixed / needs_clarification 不改文件,不强求。
@@ -214,9 +220,11 @@ export function parseWorkspaceReviewReceipts(
       evidence,
     });
   }
-  const accepted = new Set(receipts.map((item) => item.annotation_id));
+  // 重复 id 的任意一条都不能被当作确定结果，其他合法条目仍可独立登记。
+  const valid = receipts.filter((item) => !duplicates.has(item.annotation_id));
+  const accepted = new Set(valid.map((item) => item.annotation_id));
   return {
-    receipts,
+    receipts: valid,
     missing_ids: expected.filter((item) => !accepted.has(item.id))
       .map((item) => item.id),
     unexpected_ids: [...unexpected],

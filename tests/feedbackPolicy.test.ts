@@ -39,8 +39,8 @@ test("逐条回执按 id+revision 对拍，缺失/重复/旧轮都明确点名",
     { annotation_id: "A", revision: 0, outcome: "fixed", summary: "重复" },
     { annotation_id: "C", revision: 0, outcome: "fixed", summary: "越界" },
   ] }, [first, second]);
-  assert.deepEqual(result.receipts.map((item) => item.annotation_id), ["A"]);
-  assert.deepEqual(result.missing_ids, ["B"]);
+  assert.deepEqual(result.receipts.map((item) => item.annotation_id), [], "重复 ID 不能任选一条冒充有效回执");
+  assert.deepEqual(result.missing_ids, ["A", "B"]);
   assert.deepEqual(result.unexpected_ids, ["C"]);
   assert.ok(result.errors.some((line) => line.includes("revision")));
   assert.ok(result.errors.some((line) => line.includes("重复")));

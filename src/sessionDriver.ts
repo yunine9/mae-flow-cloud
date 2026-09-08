@@ -210,6 +210,8 @@ export interface HostHooks {
   preTool?(event: SemanticEvent): Promise<{ action: string; reason?: string } | undefined>;
   /** 解析出字符串 = 内核退 2 的纠偏话,调用方须送回模型,不是失败。 */
   postTool?(event: SemanticEvent): Promise<void | string>;
+  /** 普通进度说明附在本次工具结果中，不作为新用户插话重新启动回合。 */
+  toolResultNote?(tool: { name: string; input: Record<string, unknown> }): Promise<string | undefined>;
   flush?(): Promise<void>;
 }
 
@@ -1079,6 +1081,19 @@ export class CloudSession {
           factory: (pi: any) => {
             pi.on("tool_call", async (event: any) =>
               this.onToolCall(config.sessionId, event));
+            pi.on("tool_result", async (event: any) => {
+              try {
+                const note = await this.options.hostHooks?.toolResultNote?.({
+                  name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
+                  input: event.input ?? {},
+                });
+                if (note) return { content: [...event.content, { type: "text", text: note }] };
+              } catch (error) {
+                this.kernelFailures.push(String(error));
+                return { content: [...event.content, { type: "text",
+                  text: `宿主回执登记失败：${String(error)}` }], isError: true };
+              }
+            });
           },
         } as any,
       ],
