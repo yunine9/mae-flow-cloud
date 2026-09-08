@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { memoryPreparation } from "../web/src/memoryPresentation.ts";
+import { memoryPreparation, memorySearchPresentation } from "../web/src/memoryPresentation.ts";
+
+test("检索加载和请求失败不能冒充未启用；刷新失败不能冒充仍然在线", () => {
+  assert.equal(memorySearchPresentation().state, "unknown");
+  assert.equal(memorySearchPresentation(undefined, true).label, "检索状态读取失败");
+  assert.equal(memorySearchPresentation("ready", true).state, "unknown");
+  assert.equal(memorySearchPresentation("absent").label, "语义检索未启用");
+  assert.match(memorySearchPresentation("absent").title, /仍可记录、浏览和按索引推送/);
+  assert.equal(memorySearchPresentation("unavailable").label, "语义检索暂不可用");
+  assert.equal(memorySearchPresentation("ready").label, "语义检索在线");
+});
 
 test("模板、旧记录以及重启遗留的模板都表示已入库，不虚构在途整理", () => {
   for (const draft of [undefined, "template"] as const) {

@@ -1,3 +1,14 @@
+/** 未取得服务端事实时，不把未知状态误判成没有部署。 */
+export function memorySearchPresentation(
+  sidecar?: "ready" | "unavailable" | "absent", failed = false,
+): { label: string; title: string; state: string } {
+  if (failed) return { state: "unknown", label: "检索状态读取失败", title: "暂时无法确认检索状态，请刷新重试。" };
+  if (sidecar === "ready") return { state: sidecar, label: "语义检索在线", title: "Agent 可按语义查找相关任务记忆。" };
+  if (sidecar === "unavailable") return { state: sidecar, label: "语义检索暂不可用", title: "检索已启用但尚未就绪或运行异常；记忆记录仍保留。" };
+  if (sidecar === "absent") return { state: sidecar, label: "语义检索未启用", title: "当前服务未配置语义检索；记忆仍可记录、浏览和按索引推送。启用请联系管理员。" };
+  return { state: "unknown", label: "正在读取检索状态…", title: "等待服务返回检索状态。" };
+}
+
 /** 模板/模型描述记录如何形成；只有服务端的在途作业事实代表“正在整理”。 */
 export function memoryPreparation(row: {
   source: string;

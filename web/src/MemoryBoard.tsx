@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { memoryPreparation } from "./memoryPresentation";
+import { memoryPreparation, memorySearchPresentation } from "./memoryPresentation";
 import {
   getMemoryInsights, readMemoryInsight,
   type MemoryInsightRow, type MemoryInsights,
@@ -81,6 +81,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     if (found) setOpen({ id: row.id, content: found.content });
   }
 
+  const searchStatus = memorySearchPresentation(insights?.sidecar, Boolean(error));
+
   return <section className="memory-board" aria-labelledby="memory-board-title">
     <header className="knowledge-flywheel-head">
       <div><span className="section-kicker">TASK MEMORY</span>
@@ -90,9 +92,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           自动落成记忆，下一单改到同一处时推给 Agent。这里只看不管——排序和沉底由台账自动完成。
         </p></div>
       <div className="memory-board-status">
-        <span className={`memory-board-chip sidecar-${insights?.sidecar ?? "absent"}`}>
-          {insights?.sidecar === "ready" ? "语义检索在线"
-            : insights?.sidecar === "unavailable" ? "语义检索暂不可用" : "语义检索未部署"}
+        <span className={`memory-board-chip sidecar-${searchStatus.state}`} title={searchStatus.title}>
+          {searchStatus.label}
         </span>
         {!!insights?.drafting && <span className="memory-board-chip">整理中 {insights.drafting}</span>}
         <button type="button" className="knowledge-flywheel-refresh" onClick={() => void load()}
