@@ -73,10 +73,17 @@ export interface GitSandbox {
   cleanup(): void;
 }
 
-/** 一次 Git 动作一个私有 HOME/配置边界。同 TaskService 版语义。 */
+/** 一次 Git 动作一个私有 HOME/配置边界。同 TaskService 版语义。
+ *
+ * repoDir:仓库目录,按仓放行 safe.directory。问题流工作区宿主 root /
+ * 容器 1001 混属主是常态,git 2.35+ 对属主非当前用户的仓库一律拒操作
+ * (dubious ownership);沙箱又刻意隔断一切配置来源,系统/全局配置救
+ * 不了,只能逐仓放行精确路径——与 safeGit/containerRuntime 的精确
+ * 白名单同口径,绝不能用 *(见 container 运行时的复盘注释)。 */
 export function prepareSandbox(
   dataDir: string,
   credential: GitCredential | undefined,
+  repoDir?: string,
 ): GitSandbox {
   const dir = runtimeDir(dataDir);
   let helper: string | undefined;
@@ -127,6 +134,7 @@ export function prepareSandbox(
     GCM_INTERACTIVE: "Never",
   });
   const args = [
+    ...(repoDir ? ["-c", `safe.directory=${resolve(repoDir)}`] : []),
     "-c", "core.hooksPath=/dev/null",
     "-c", "protocol.ext.allow=never",
     "-c", "credential.helper=",
@@ -203,7 +211,8 @@ export async function cloneRepository(options: {
   credential?: GitCredential;
 }): Promise<void> {
   const url = validateRepoUrl(options.repoUrl);
-  const sandbox = prepareSandbox(options.dataDir, options.credential);
+  const sandbox = prepareSandbox(options.dataDir, options.credential,
+    options.targetDir);
   try {
     const outcome = await runGit([
       // --no-local:本地路径仓默认 hardlink 共享 .git/objects,问题仓
@@ -355,7 +364,7 @@ export async function ensureBranch(options: {
     ["check-ref-format", "--branch", options.branch],
     { env: process.env, timeoutMs: 10_000 });
   if (format.code !== 0) throw new Error(`分支名不合法: ${options.branch}`);
-  const sandbox = prepareSandbox(options.dataDir, undefined);
+  const sandbox = prepareSandbox(options.dataDir, undefined, options.repoDir);
   try {
     const current = await runGit(
       [...sandbox.args, "branch", "--show-current"],
@@ -411,7 +420,8 @@ export async function pushFromIssueWorkspace(options: {
     throw new Error(`代码克隆不存在: ${options.repoDir}`);
   }
   const remoteUrl = validateRepoUrl(options.repoUrl);
-  const sandbox = prepareSandbox(options.dataDir, options.credential);
+  const sandbox = prepareSandbox(options.dataDir, options.credential,
+    options.repoDir);
   let view: ReturnType<typeof createSafeGitView> | undefined;
   const ref = `refs/heads/${options.branch}`;
   try {
