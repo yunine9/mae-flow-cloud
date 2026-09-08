@@ -1,3 +1,4 @@
+import { auxiliarySessionEpoch, hasAuxiliarySessions, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "./auxiliarySessions.ts";
 /**
  * 任务编排(主 spec §5.2 的任务 API + 流程编排两个模块的骨架)。
  *
@@ -37,7 +38,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
 import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
-import { resetQueuedRequirementReviews, submitRequirementReview } from "./requirementReviewQueue.ts";
+import { resetQueuedRequirementReviews, submitRequirementReview, interruptRequirementReviews } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
   AnnotationStore,
@@ -2523,6 +2524,8 @@ export class TaskService {
   private async activeTaskContainer(
     task: TaskState,
   ): Promise<TaskCommandContainer> {
+    if (this.shuttingDown || ["canceled", "paused", "pausing"].includes(task.summary.status))
+      throw new TaskControlError("任务已停止，不再启动或使用执行容器");
     if (task.container) return task.container;
     const epoch = task.controlEpoch;
     if (!task.containerReopen) {
@@ -2591,6 +2594,7 @@ export class TaskService {
         task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
         task.pauseRequested = false;
         task.prepushAbort?.abort();
+        backgroundWork.push({ taskId: task.summary.id, role: "auxiliary", work: abortAuxiliarySessions(task) });
         task.prepushAbort = undefined;
         if (task.driver) drivers.set(task.driver, task.summary.id);
         task.driver = undefined;
@@ -3227,8 +3231,9 @@ export class TaskService {
     task: TaskState,
     annotations: Annotation[],
   ): Promise<void> {
+    const sessionEpoch = auxiliarySessionEpoch(task);
     const waiting = task.summary.waiting;
-    if (task.summary.status !== "waiting_for_human"
+    if (this.shuttingDown || task.summary.status !== "waiting_for_human"
         || waiting?.step !== CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       throw new TaskControlError("当前已经不在需求确认阶段");
     }
@@ -3286,6 +3291,7 @@ export class TaskService {
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         log: this.options.log,
       });
+      trackAuxiliarySession(task, driver, sessionEpoch);
       const outcome = await driver.start(requirementReviewMission({
         annotations,
         ticket: this.ticketOf(task),
@@ -3295,7 +3301,7 @@ export class TaskService {
           `需求文档修改 Agent 未完成：${outcome.detail ?? "模型调用失败"}`);
       }
       const current = task.summary.requirement_revision;
-      if (current?.id !== revisionId
+      if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch || current?.id !== revisionId
           || task.summary.status !== "waiting_for_human"
           || task.summary.waiting?.waiting_id !== waiting.waiting_id) {
         throw new StateConflictError("Agent 修改完成前任务状态已经变化，本轮结果未写入");
@@ -3372,7 +3378,7 @@ export class TaskService {
       succeeded = true;
     } catch (error) {
       const current = task.summary.requirement_revision;
-      if (current?.id === revisionId
+      if (!this.shuttingDown && auxiliarySessionEpoch(task) === sessionEpoch && current?.id === revisionId
           && task.summary.status === "waiting_for_human") {
         const message = String(error instanceof Error ? error.message : error)
           .slice(0, 500);
@@ -3387,6 +3393,7 @@ export class TaskService {
       }
       throw error;
     } finally {
+      untrackAuxiliarySession(task, driver);
       try {
         driver?.dispose();
       } catch (error) {
@@ -4597,12 +4604,11 @@ export class TaskService {
     }
   }
 
-  private async performBaselineWarmup(
-    task: TaskState,
-    epoch: number,
-  ): Promise<void> {
+  private async performBaselineWarmup(task: TaskState, _epoch: number): Promise<void> {
+    const sessionEpoch = auxiliarySessionEpoch(task);
     const head = await runSafeWorktreeGitAsync(
       task.cwd!, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
+    if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch) return;
     const sha = String(head.stdout ?? "").trim();
     const startedAt = new Date().toISOString();
     if (head.status !== 0 || !sha) {
@@ -4618,6 +4624,7 @@ export class TaskService {
     // 扣到"环境/上游"头上——宁可不预热,不出冤案。不落收据:没跑
     // 就是没跑,不伪装成基础设施故障。
     const dirty = await this.prePushDirtyPaths(task);
+    if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch) return;
     if (dirty.length) {
       this.options.log?.(
         `任务 ${task.summary.id} 工作区已有改动(${dirty.length} 处),`
@@ -4637,7 +4644,7 @@ export class TaskService {
     try {
       result = await (this.options.warmup?.runner
         ? this.options.warmup.runner(request)
-        : this.runCloudWarmupAgent(task, request));
+        : this.runCloudWarmupAgent(task, request, sessionEpoch));
     } catch (error) {
       result = {
         status: "infrastructure_failure",
@@ -4645,7 +4652,7 @@ export class TaskService {
           error instanceof Error ? error.message : error).slice(0, 300),
       };
     }
-    if (!this.tasks.has(task.summary.id)) return;
+    if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch || !this.tasks.has(task.summary.id)) return;
     task.summary.baseline_build = {
       status: result.status,
       sha,
@@ -4656,7 +4663,6 @@ export class TaskService {
       finished_at: new Date().toISOString(),
     };
     this.persist(task);
-    void epoch; // 收据不锁 epoch:会话重建了,预热事实照样成立。
     this.options.log?.(
       `任务 ${task.summary.id} 环境预热收口: ${result.status}`
       + (result.message ? ` — ${result.message.slice(0, 120)}` : ""));
@@ -4668,7 +4674,9 @@ export class TaskService {
   private async runCloudWarmupAgent(
     task: TaskState,
     request: WarmupRunRequest,
+    sessionEpoch: number,
   ): Promise<WarmupRunResult> {
+    if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch) throw new TaskControlError("预热已停止");
     if (!task.cwd) throw new Error("环境预热缺少代码工作区");
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
@@ -4724,10 +4732,13 @@ export class TaskService {
       onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
       bashOperations: this.options.isolation
         ? {
-            exec: async (command, dir, execOptions) =>
-              (await this.activeTaskContainer(task))
-                .exec(command, dir, { ...execOptions, timeout: prePushCommandTimeoutSeconds(command, execOptions.timeout,
-                  resolvePrePushExecutionBudget(detectPrePushBuildProfile(task.cwd!), { attemptTimeoutMs })) }),
+            exec: async (command, dir, execOptions) => {
+              if (auxiliarySessionEpoch(task) !== sessionEpoch) throw new TaskControlError("预热已停止");
+              const container = await this.activeTaskContainer(task);
+              if (auxiliarySessionEpoch(task) !== sessionEpoch) throw new TaskControlError("预热已停止");
+              return container.exec(command, dir, { ...execOptions, timeout: prePushCommandTimeoutSeconds(command, execOptions.timeout,
+                  resolvePrePushExecutionBudget(detectPrePushBuildProfile(task.cwd!), { attemptTimeoutMs })) });
+            },
           }
         : undefined,
       afterFileMutation: this.options.isolation
@@ -4741,6 +4752,7 @@ export class TaskService {
         : undefined,
       log: this.options.log,
     });
+    trackAuxiliarySession(task, driver, sessionEpoch);
     const timer = setTimeout(() => {
       timedOut = true;
       void driver.abort().catch(() => undefined);
@@ -4750,6 +4762,7 @@ export class TaskService {
       let outcome = await driver.start(warmupMission(
         request, Math.round(attemptTimeoutMs / 60_000)));
       for (let correction = 0; correction < 2; correction += 1) {
+        if (this.shuttingDown || auxiliarySessionEpoch(task) !== sessionEpoch) return { status: "infrastructure_failure", message: "预热已停止" };
         if (timedOut) {
           return {
             status: "infrastructure_failure",
@@ -4775,6 +4788,7 @@ export class TaskService {
       };
     } finally {
       clearTimeout(timer);
+      untrackAuxiliarySession(task, driver);
       driver.dispose();
     }
   }
@@ -8492,6 +8506,7 @@ export class TaskService {
     task: TaskState,
     sample: ModelTokenUsageSample,
   ): void {
+    if (this.shuttingDown) return;
     task.tokenUsage = recordTokenUsage(task.tokenUsage, sample);
     // Token 流量不是阶段推进，不能刷新 updated_at / 卡点时钟。
     this.writeTaskState(task);
@@ -8692,6 +8707,7 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        if (interruptWarmupReceipt(summary.baseline_build)) this.writeTaskState(task);
         // 本地视觉回归需要同一批排队/运行/验证/待合入样本跨重启保持
         // 原样，否则 recover 会把它们重新入队或继续轮询，浏览器刚打开
         // 场景就消失。双重门禁：环境变量 + 单任务标记缺一不可，正式数据
@@ -13019,7 +13035,7 @@ export class TaskService {
         `任务 ${id} 的子任务仍在推进，请先分别处理未完成的子任务`,
       );
     }
-    if (status === "canceled" && !task.driver && !task.container) {
+    if (status === "canceled" && !task.driver && !task.container && !hasAuxiliarySessions(task)) {
       return { ...task.summary };
     }
     if (status === "completed") {
@@ -13058,13 +13074,15 @@ export class TaskService {
       task.summary.workspace,
       `任务已由 ${actor} 取消，开发助手同时终止`,
     );
+    interruptWarmupReceipt(task.summary.baseline_build);
+    interruptRequirementReviews(task, this.annotations(task));
     this.persist(task);
     const driver = task.driver;
     const container = task.container;
     const prepushAbort = task.prepushAbort;
     prepushAbort?.abort();
     const cleanup = await Promise.allSettled([
-      driver?.abort() ?? Promise.resolve(),
+      Promise.all([driver?.abort(), abortAuxiliarySessions(task)]),
       container?.stop() ?? Promise.resolve(),
     ]);
     if (cleanup[0].status === "fulfilled") {
@@ -13500,7 +13518,7 @@ export class TaskService {
     }
     prepushAbort?.abort();
     const cleanup = await Promise.allSettled([
-      driver?.abort() ?? Promise.resolve(),
+      Promise.all([driver?.abort(), abortAuxiliarySessions(task)]),
       container?.stop() ?? Promise.resolve(),
     ]);
     if (cleanup[0].status === "fulfilled") {
@@ -13532,6 +13550,8 @@ export class TaskService {
       return;
     }
     task.summary.status = "paused";
+    interruptWarmupReceipt(task.summary.baseline_build);
+    interruptRequirementReviews(task, this.annotations(task));
     task.summary.detail = from === "waiting_for_human"
       ? "已暂停，恢复后继续等待决定"
       : from === "verifying"
@@ -15240,7 +15260,10 @@ export class TaskService {
       buildCommandTimeoutMs: this.options.prepush?.buildCommandTimeoutMs,
     });
 
-    // 不让两个容器同时写同一工作区。
+    // 换 Build-Fix 容器前停净预热，等待已发起的容器重建落定。
+    await abortAuxiliarySessions(task);
+    await task.containerReopen?.catch(() => undefined);
+    if (interruptWarmupReceipt(task.summary.baseline_build)) this.persist(task);
     const previousContainer = task.container;
     if (previousContainer) {
       await previousContainer.stop();

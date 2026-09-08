@@ -10,10 +10,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, lstatSync, readdirSync, chmodSync } from "node:fs";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskContainer } from "../src/containerRuntime.ts";
 import { IssueFlowService, type IssueContainerBuild } from "../src/issueFlow/service.ts";
+
+function removeFixture(root: string): void {
+  // 平台 Skill 快照目录是 0555；先还原测试目录权限，否则 rm 会留下 ENOTEMPTY。
+  const writable = (path: string): void => {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      chmodSync(path, 0o700);
+      for (const name of readdirSync(path)) writable(join(path, name));
+    }
+  };
+  writable(root);
+  rmSync(root, { recursive: true, force: true });
+}
 
 /** 无 daemon 假容器:只记生命周期事件,不碰 Docker CLI。 */
 class FakeTaskContainer extends TaskContainer {
@@ -120,7 +134,7 @@ test("容器随会话存活:回合收口不停、续聊复用原实例,取消才
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    removeFixture(dataDir);
   }
 });
 
@@ -177,7 +191,7 @@ test("容器 npm 源(#75):isolation.environment 进问题流创建环境,缺省�
   } finally {
     await configured.service.shutdown().catch(() => undefined);
     await configured.model.stop();
-    rmSync(configured.dataDir, { recursive: true, force: true });
+    removeFixture(configured.dataDir);
   }
 
   const bare = await boot();
@@ -196,6 +210,6 @@ test("容器 npm 源(#75):isolation.environment 进问题流创建环境,缺省�
   } finally {
     await bare.service.shutdown().catch(() => undefined);
     await bare.model.stop();
-    rmSync(bare.dataDir, { recursive: true, force: true });
+    removeFixture(bare.dataDir);
   }
 });

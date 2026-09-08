@@ -10,7 +10,7 @@ import { prePushSecurityDecision } from '../src/prepushAgent.ts';
 import { isPrePushBuildCommand, resolvePrePushExecutionBudget, prePushCommandTimeoutSeconds } from '../src/prepushBuildPlaybook.ts';
 import { collectRepoContextFiles } from '../src/issueFlow/repoContextFiles.ts';
 // JS is the exact artifact mounted into task containers; test it directly rather than a TS copy.
-const { buildType, quotaCores } = await import('../assets/mae-build/first-build.mjs');
+const { buildType, quotaCores, acquireBuildLock } = await import('../assets/mae-build/first-build.mjs');
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8' });
 function removeFixture(dir: string) {
   if (!existsSync(dir)) return;
@@ -19,6 +19,26 @@ function removeFixture(dir: string) {
   writable(dir); rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
 }
 function temp(t: any) { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mae-build-'))); t.after(() => removeFixture(dir)); return dir; }
+
+test('首编锁：旧空锁可恢复；活进程互斥；异常元数据明确报错而非永久等待', t => {
+  const repo = temp(t), lock = join(repo, '.mae-flow-work/mae-first-build.lock');
+  mkdirSync(lock, { recursive: true });
+  const release = acquireBuildLock(repo);
+  assert.equal(JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8')).pid, process.pid);
+  assert.throws(() => acquireBuildLock(repo), /已有首编正在执行/);
+  release();
+  assert.equal(existsSync(lock), false);
+  mkdirSync(lock);
+  writeFileSync(join(lock, 'owner.json'), '{broken');
+  assert.throws(() => acquireBuildLock(repo), /锁信息损坏/);
+  assert.deepEqual(readdirSync(dirname(lock)), ['mae-first-build.lock'], '失败的临时发布目录必须清理');
+  rmSync(lock, { recursive: true });
+  mkdirSync(lock);
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ host: 'removed-test-container', pid: 42 }));
+  const releaseAfterRestart = acquireBuildLock(repo);
+  releaseAfterRestart();
+  assert.equal(existsSync(lock), false);
+});
 async function cloneFixture(url: string, target: string) {
   mkdirSync(target, { recursive: true });
   git(target, 'init', '-q');

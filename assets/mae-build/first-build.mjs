@@ -2,7 +2,7 @@
 // Runs only inside a task container. Receipts accelerate preparation; they are not delivery evidence.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { availableParallelism, hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -42,6 +42,41 @@ function identity(repo, root) {
   }
   return hash.digest('hex');
 }
+
+export function acquireBuildLock(repo) {
+  const lock = join(repo, '.mae-flow-work/mae-first-build.lock');
+  mkdirSync(dirname(lock), { recursive: true });
+  // 先写完整元数据，再原子发布目录；进程中途退出不会留下“无人持有”的正式锁。
+  const publication = mkdtempSync(`${lock}.prepare-`);
+  const owner = { pid: process.pid, host: hostname(), token: publication };
+  try {
+    writeFileSync(join(publication, 'owner.json'), JSON.stringify(owner));
+    if (existsSync(lock)) {
+      let previous;
+      try { previous = JSON.parse(read(join(lock, 'owner.json'))); } catch { /* inspect below */ }
+      if (!previous || typeof previous.host !== 'string' || !Number.isInteger(previous.pid) || previous.pid <= 0) {
+        // 旧版本崩溃留下的空目录可以由 rename 原子替换；不猜测损坏的非空锁。
+        if (readdirSync(lock).length) throw new Error(`首编锁信息损坏：${lock}；请确认没有构建进程后移走该锁再重试`);
+      } else {
+        let alive = previous.host === hostname();
+        if (alive) { try { process.kill(previous.pid, 0); } catch (error) { if (error.code === 'ESRCH') alive = false; } }
+        if (alive) throw new Error('本仓已有首编正在执行，请等待其收口；不要同时启动第二次构建');
+        rmSync(lock, { recursive: true });
+      }
+    }
+    try { renameSync(publication, lock); }
+    catch (error) {
+      if (error.code === 'EEXIST' || error.code === 'ENOTEMPTY') throw new Error('本仓已有首编正在执行，请等待其收口');
+      throw error;
+    }
+  } finally { rmSync(publication, { recursive: true, force: true }); }
+  return () => {
+    let current;
+    try { current = JSON.parse(read(join(lock, 'owner.json'))); } catch { return; }
+    if (current.token === owner.token) rmSync(lock, { recursive: true, force: true });
+  };
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const [action, rawRepo, ...args] = argv;
   if (action === 'cores') {
@@ -69,21 +104,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (args.shift() !== '--' || !args.length) throw new Error('run 必须提供 -- 后的真实构建命令');
-  const lock = join(repo, '.mae-flow-work/mae-first-build.lock');
-  mkdirSync(dirname(lock), { recursive: true });
-  if (existsSync(lock)) {
-    let owner;
-    try { owner = JSON.parse(read(join(lock, 'owner.json'))); } catch { /* creation in progress */ }
-    let alive = true;
-    if (owner?.host !== undefined) {
-      if (owner.host !== hostname()) alive = false; // Platform permits one active container per task workspace.
-      else { try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') alive = false; } }
-    }
-    if (alive) throw new Error('本仓已有首编正在执行，请等待其收口；不要同时启动第二次构建');
-    rmSync(lock, { recursive: true });
-  }
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, host: hostname() }));
+  const releaseLock = acquireBuildLock(repo);
   try {
   if (!ready) {
     const platform = process.env.MFC_MAE_BUILD_PLATFORM || (process.arch === 'x64' ? 'euleros_x86' : '');
@@ -108,7 +129,7 @@ export async function main(argv = process.argv.slice(2)) {
     outputs: outputs.filter((path) => existsSync(join(repo, path))) }));
   renameSync(`${receipt}.tmp`, receipt);
   console.log('[mae-build] 本次构建命令成功；后续按语言 Skill 增量构建，交付仍需编译和测试验收');
-  } finally { rmSync(lock, { recursive: true, force: true }); }
+  } finally { releaseLock(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => { console.error(`[mae-build] ${error.message}`); process.exitCode = 1; });
