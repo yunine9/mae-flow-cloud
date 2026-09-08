@@ -1,0 +1,238 @@
+import { StateConflictError } from "./humanGate.ts";
+import { requirementDiff } from "./documentDiff.ts";
+import { readStoryOutput } from "./overallStoryAgent.ts";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { AnnotationStore, type Annotation } from "./annotations.ts";
+import { listArtifactDocuments, readArtifact } from "./artifacts.ts";
+import { auxiliarySessionEpoch } from "./auxiliarySessions.ts";
+import { TaskControlError, NotFoundError } from "./errors.ts";
+import { reanchorRequirementAnnotations } from "./requirementDocument.ts";
+import { parseDocumentReviewReceipts } from "./documentReviewReceipts.ts";
+import type { TaskSummary } from "./taskService.ts";
+import { OVERALL_STORY_ARTIFACT, readStoryState, readCurrentStory, storyHash,
+  storyPath, storyRevisionPath, writeStoryState, type StorySnapshot, type StoryState } from "./overallStoryStore.ts";
+
+export interface StoryInput extends StorySnapshot { files: Record<string, string> }
+export interface StoryRun {
+  root: string; id: string; before: string; input: StoryInput; annotations: Annotation[]; signal: AbortSignal;
+}
+export interface StoryStatus extends StoryState {
+  eligible: boolean; sources: StorySnapshot["sources"]; stale: boolean;
+  pending_reviews: number; can_confirm: boolean; label: string;
+}
+interface Owner { summary: TaskSummary }
+interface Options<T extends Owner> {
+  task(id: string): T | undefined;
+  artifactRoot(id: string): string | undefined;
+  run(task: T, job: StoryRun): Promise<void>;
+  ready(): void;
+  log?(message: string): void;
+}
+
+/** 只汇总已拆分主任务，来源用真实文件摘要识别，不依赖频繁刷新的任务时间。 */
+export function collectStoryInput<T extends Owner>(task: T, options: Pick<Options<T>, "task" | "artifactRoot">): StoryInput {
+  const graph = task.summary.requirement_graph;
+  const files: Record<string, string> = { "requirement.md": task.summary.requirement };
+  files["decomposition.json"] = JSON.stringify({ repositories: graph?.repositories.map((r) => ({
+    id: r.id, name: r.name, task_id: r.task_id, scope: r.scope,
+  })), dependencies: graph?.dependencies }, null, 2);
+  const sources: StorySnapshot["sources"] = (graph?.repositories ?? []).map((r, index) => {
+    const source: StorySnapshot["sources"][number] = { id: r.id, name: r.name, task_id: r.task_id };
+    const child = r.task_id ? options.task(r.task_id) : undefined;
+    const root = child ? options.artifactRoot(child.summary.id) : undefined;
+    if (!child || !root) return { ...source, missing: "子任务 Story 尚不可读" };
+    try {
+      const docs = listArtifactDocuments(root).filter((d) => /(?:^|\/)story\.md$/i.test(d.name));
+      const ticket = child.summary.ticket ?? r.ticket;
+      const exact = ticket ? docs.filter((d) => d.name === `${ticket}/story.md`) : [];
+      const doc = ticket ? exact[0] : docs.length === 1 ? docs[0] : undefined;
+      if (!doc) return { ...source, missing: docs.length ? "存在多份 Story，无法确定当前版本" : "尚未产出 Story" };
+      const content = readArtifact(root, doc.name);
+      if (!content || content.truncated || !content.content.trim()) return { ...source, missing: "Story 为空、过大或不可读" };
+      files[`children/${index + 1}.md`] = content.content;
+      return { ...source, artifact: doc.name, sha256: storyHash(content.content), input_file: `children/${index + 1}.md` };
+    } catch { return { ...source, missing: "Story 读取失败" }; }
+  });
+  files["sources.json"] = JSON.stringify(sources, null, 2);
+  return { files, sources, fingerprint: storyHash(JSON.stringify(files)) };
+}
+
+export class OverallStoryCoordinator<T extends Owner> {
+  private active = new Map<string, { promise: Promise<void>; controller: AbortController }>();
+  private stopped = false;
+  constructor(private options: Options<T>) {}
+  private owner(id: string): T {
+    const task = this.options.task(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return task;
+  }
+  private store(task: T) { return new AnnotationStore(join(task.summary.workspace, "annotations.jsonl")); }
+  private eligible(task: T) { return task.summary.requirement_graph?.stage === "confirmed"
+    && Boolean(task.summary.requirement_graph.repositories.length); }
+  private mutable(task: T) {
+    if (this.stopped || this.options.task(task.summary.id) !== task || task.summary.status === "canceled") throw new TaskControlError("任务已停止，不能更新整体 Story");
+    if (!this.eligible(task)) throw new TaskControlError("确认模块拆分后才能生成整体 Story");
+  }
+  private recover(task: T): StoryState {
+    const state = readStoryState(task.summary.workspace);
+    if (!this.active.has(task.summary.id)) {
+      const store = this.store(task);
+      for (const item of store.list()) {
+        if (item.status === "sent" && ["overall_story_queue", "overall_story_processing"].includes(item.sent_via ?? "")) {
+          // 发布文档与登记回执之间重启时，先恢复已发布修订中的回执，避免重复改文档。
+          const recovered = [...state.revisions].reverse().find((r) => r.annotation_ids.includes(item.id));
+          let receipt;
+          if (recovered) {
+            try {
+              const rows = JSON.parse(readFileSync(storyPath(task.summary.workspace,
+                `revisions/${recovered.id}/receipts.json`), "utf8"));
+              receipt = rows.find((r: { annotation_id: string; revision: number }) => r.annotation_id === item.id && r.revision === (item.rework ?? 0));
+            } catch { /* 未发布的回执不能充当处理结果 */ }
+          }
+          if (receipt) { store.markSent([item.id], "overall_story"); store.respond(item.id, receipt); }
+          else store.resetRequirementDelivery(item.id, "整体 Story 会话已中断，意见可重新提交");
+        }
+      }
+      if (state.job) {
+        state.job = undefined; state.error = "上次整体 Story 会话已中断；已发布版本保留，可重新更新";
+        writeStoryState(task.summary.workspace, state);
+      }
+    }
+    return state;
+  }
+  recoverTask(id: string): void { this.recover(this.owner(id)); }
+  status(id: string): StoryStatus {
+    const task = this.owner(id), state = this.recover(task);
+    const input = collectStoryInput(task, this.options);
+    const current = state.revisions.find((r) => r.id === state.current);
+    const stale = Boolean(current && current.fingerprint !== input.fingerprint);
+    const pending = this.store(task).list().filter((a) => a.artifact === OVERALL_STORY_ARTIFACT
+      && ["draft", "sent"].includes(a.status)).length;
+    const complete = input.sources.length > 0 && input.sources.every((s) => !s.missing);
+    return { ...state, eligible: this.eligible(task), sources: input.sources, stale, pending_reviews: pending,
+      can_confirm: Boolean(current && complete && !stale && !this.active.has(id) && !state.job && !pending && task.summary.status !== "canceled"),
+      label: this.active.has(id) || state.job ? "Agent 正在整理整体 Story" : !current ? "尚未生成整体 Story"
+        : stale ? "子任务或需求已变化 · 待同步" : !complete ? "部分 Story 尚未产出"
+          : pending ? "有检视意见待闭环" : state.confirmed?.revision === current.id ? "责任人已确认" : "待检视与确认" };
+  }
+  generate(id: string, by: string): StoryStatus {
+    const task = this.owner(id); this.mutable(task); this.recover(task);
+    if (this.active.has(id)) return this.status(id);
+    this.options.ready();
+    this.launch(task, by, true);
+    return this.status(id);
+  }
+  submit(id: string, picked: Annotation[], by?: string) {
+    const task = this.owner(id); this.mutable(task); this.recover(task); this.options.ready();
+    if (!readStoryState(task.summary.workspace).current) throw new TaskControlError("整体 Story 尚未生成");
+    if (picked.some((a) => a.artifact !== OVERALL_STORY_ARTIFACT)) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
+    const store = this.store(task);
+    const selected = new Set(picked.map((a) => a.id));
+    const pending = store.list().filter((a) => selected.has(a.id)
+      && (a.status === "draft" || a.sent_via === "owner_pending"));
+    store.markSent(pending.map((a) => a.id), "overall_story_queue", by);
+    if (pending.length && !this.active.has(id)) this.launch(task, by ?? "检视人", false);
+    return { sent: picked.map((a) => a.id), text: "已排队，Agent 将修改整体 Story，完成后请检视改动" };
+  }
+  private launch(task: T, by: string, generate: boolean) {
+    const id = task.summary.id, controller = new AbortController();
+    const epoch = auxiliarySessionEpoch(task);
+    const starting = readStoryState(task.summary.workspace);
+    starting.job = { id: randomUUID(), by, started_at: new Date().toISOString() };
+    starting.error = undefined;
+    writeStoryState(task.summary.workspace, starting);
+    // 在异步创建会话前占住写者位置，重复请求只返回已有工作。
+    const promise = Promise.resolve().then(async () => {
+      let initial = generate;
+      while (true) {
+        const batch = this.store(task).list().filter((a) => a.status === "sent" && a.sent_via === "overall_story_queue");
+        if (!initial && !batch.length) return;
+        const refreshSources = initial;
+        initial = false;
+        if (controller.signal.aborted || auxiliarySessionEpoch(task) !== epoch) throw new Error("任务已停止");
+        this.mutable(task);
+        const state = readStoryState(task.summary.workspace), jobId = state.job?.id ?? randomUUID();
+        // 批注只修当前文档；只有责任人“更新”才引入新的子任务来源。
+        const input: StoryInput = !refreshSources && state.current
+          ? JSON.parse(readFileSync(storyPath(task.summary.workspace, `revisions/${state.current}/inputs.json`), "utf8"))
+          : collectStoryInput(task, this.options);
+        const before = readCurrentStory(task.summary.workspace);
+        const root = storyPath(task.summary.workspace, `jobs/${jobId}`);
+        state.job = { id: jobId, by, started_at: new Date().toISOString() };
+        state.error = undefined;
+        writeStoryState(task.summary.workspace, state);
+        const store = this.store(task);
+        store.markSent(batch.map((a) => a.id), "overall_story_processing");
+        await this.options.run(task, { id: jobId, root, before, input,
+          annotations: reanchorRequirementAnnotations(before, batch), signal: controller.signal });
+        if (controller.signal.aborted || auxiliarySessionEpoch(task) !== epoch || this.stopped) throw new Error("任务已停止，本轮文档未发布");
+        this.mutable(task);
+        const after = readStoryOutput(join(root, "story.md"));
+        if (!after.trim()) throw new Error("Agent 未产出整体 Story，旧版保留");
+        const receipts = batch.length ? parseDocumentReviewReceipts(readStoryOutput(join(root, "receipts.json"), 256 * 1024), batch) : [];
+        const diff = requirementDiff(before, after);
+        const path = storyRevisionPath(task.summary.workspace, jobId);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, after, { mode: 0o600 });
+        writeFileSync(join(dirname(path), "inputs.json"), JSON.stringify(input), { mode: 0o600 });
+        writeFileSync(storyRevisionPath(task.summary.workspace, jobId, "diff.patch"), diff.text, { mode: 0o600 });
+        writeFileSync(join(dirname(path), "receipts.json"), JSON.stringify(receipts), { mode: 0o600 });
+        const current = readStoryState(task.summary.workspace);
+        current.revisions.push({ id: jobId, at: new Date().toISOString(), by,
+          fingerprint: input.fingerprint, sources: input.sources,
+          annotation_ids: batch.map((a) => a.id), additions: diff.additions, deletions: diff.deletions });
+        current.current = jobId; current.job = undefined; current.confirmed = undefined;
+        writeStoryState(task.summary.workspace, current);
+        for (const receipt of receipts) {
+          store.markSent([receipt.annotation_id], "overall_story");
+          store.respond(receipt.annotation_id, { ...receipt, evidence: receipt.evidence ?? [] });
+        }
+      }
+    }).catch((error) => {
+      // 清空重跑/删除可能已替换任务，不允许旧回调重新创建工作区或污染新任务。
+      if (this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
+      try {
+        const state = readStoryState(task.summary.workspace);
+        state.job = undefined; state.error = error instanceof Error ? error.message : String(error);
+        writeStoryState(task.summary.workspace, state);
+        const store = this.store(task);
+        for (const item of store.list()) {
+          if (item.status === "sent" && ["overall_story_queue", "overall_story_processing"].includes(item.sent_via ?? "")) {
+            store.resetRequirementDelivery(item.id, `整体 Story 修改未完成：${state.error}`);
+          }
+        }
+      } catch (storageError) {
+        this.options.log?.(`整体 Story ${id} 失败状态未落盘：${String(storageError)}`);
+      }
+    }).finally(() => { this.active.delete(id); });
+    this.active.set(id, { promise, controller });
+  }
+  async stop(id: string) {
+    this.active.get(id)?.controller.abort();
+    await this.active.get(id)?.promise;
+    return this.status(id);
+  }
+  async shutdown() {
+    this.stopped = true;
+    for (const job of this.active.values()) job.controller.abort();
+    await Promise.all([...this.active.values()].map((job) => job.promise));
+  }
+  async settled(id: string) { await this.active.get(id)?.promise; }
+  confirm(id: string, revision: string, by: string): StoryStatus {
+    const task = this.owner(id); this.mutable(task);
+    const status = this.status(id);
+    if (status.current !== revision || !status.can_confirm) throw new StateConflictError("整体 Story 已变化、来源不完整或仍有检视意见，请刷新后确认");
+    const state = readStoryState(task.summary.workspace);
+    state.confirmed = { revision, by, at: new Date().toISOString() };
+    writeStoryState(task.summary.workspace, state);
+    return this.status(id);
+  }
+  revision(id: string, revision: string) {
+    const task = this.owner(id), state = readStoryState(task.summary.workspace);
+    if (!state.revisions.some((r) => r.id === revision)) throw new NotFoundError("整体 Story 修订不存在");
+    return { diff: readFileSync(storyRevisionPath(task.summary.workspace, revision, "diff.patch"), "utf8"),
+      content: readFileSync(storyRevisionPath(task.summary.workspace, revision), "utf8") };
+  }
+}

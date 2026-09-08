@@ -1,3 +1,4 @@
+import { currentStoryFile, OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 /**
  * 检视产物(只读旁路):把内核留在工作区里的检视材料列出来、读出来,
  * 让"决策"和"证据"能同屏——审批卡问"本地 Spec 确认吗",spec.md 就
@@ -102,7 +103,7 @@ export interface ArtifactMeta {
    */
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
-  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan";
+  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan" | "overall_story";
 }
 
 export type ArtifactChangeStage = "committed" | "committed_working"
@@ -302,7 +303,7 @@ function collectPipelineDocs(pipelineRoot?: string): DocEntry[] {
  * 文件在 Agent 启动前就已定格，因此即使还在排队，页面也应看得到。 */
 function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
   if (!taskMaterialRoot) return [];
-  const definitions = [
+  const definitions: Array<{ file: string; name: string; label: string; purpose: ArtifactMeta["purpose"] }> = [
     {
       file: "unit-brief.md",
       name: "task-materials/unit-brief.md",
@@ -316,11 +317,16 @@ function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
       purpose: "delivery_plan" as const,
     },
   ];
+  try {
+    const overall = currentStoryFile(taskMaterialRoot);
+    if (overall) definitions.push({ file: overall, name: OVERALL_STORY_ARTIFACT,
+      label: "整体 Story", purpose: "overall_story" });
+  } catch { /* 独立文档损坏不能让其他任务材料消失，错误由整体 Story 状态接口报告。 */ }
   const docs: DocEntry[] = [];
   for (const definition of definitions) {
     try {
       const root = realpathSync(taskMaterialRoot);
-      const target = realpathSync(join(root, definition.file));
+      const target = realpathSync(resolve(root, definition.file));
       if (target !== root && !target.startsWith(root + sep)) continue;
       const info = statSync(target);
       if (!info.isFile()) continue;
@@ -1381,4 +1387,9 @@ export async function readArtifactFileDiffAsync(
   } catch {
     return undefined;
   }
+}
+
+/** 子任务 Story 汇总只读文档，不触发 Git diff 采集。 */
+export function listArtifactDocuments(cwd: string | undefined, sources: ArtifactSources = {}): ArtifactMeta[] {
+  return collectReadableDocs(cwd, sources).map((doc) => doc.meta);
 }

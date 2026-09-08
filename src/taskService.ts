@@ -1,3 +1,9 @@
+import { requirementDiff } from "./documentDiff.ts";
+import { recordTaskCreationAudit } from "./taskCreationAudit.ts";
+import { parseDocumentReviewReceipts } from "./documentReviewReceipts.ts";
+import { OverallStoryCoordinator } from "./overallStory.ts";
+import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
+import { runOverallStorySession } from "./overallStoryAgent.ts";
 import { auxiliarySessionEpoch, hasAuxiliarySessions, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "./auxiliarySessions.ts";
 /**
  * 任务编排(主 spec §5.2 的任务 API + 流程编排两个模块的骨架)。
@@ -1993,45 +1999,6 @@ function confirmsRequirementGraph(answer: string): boolean {
     || answer.includes(REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM);
 }
 
-/** 需求文档两版之间的统一 diff。走 git diff --no-index:本仓处处依赖 git,
- * 不为一个 diff 再背一个依赖。改前改后写进临时目录,头两行换成稳定的
- * 文件名,前端 GitDiff 才认得出这是一个文件。 */
-function requirementDiff(
-  before: string,
-  after: string,
-): { text: string; additions: number; deletions: number } {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-requirement-diff-"));
-  try {
-    const left = join(dir, "before.md");
-    const right = join(dir, "after.md");
-    writeFileSync(left, before.endsWith("\n") ? before : `${before}\n`);
-    writeFileSync(right, after.endsWith("\n") ? after : `${after}\n`);
-    const run = spawnSync("git", [
-      "diff", "--no-index", "--no-color", "--unified=3", "--", left, right,
-    ], { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
-    // --no-index 有差异时退出码是 1,不是错;2 才是 git 自己出错。
-    if (run.status !== 0 && run.status !== 1) {
-      throw new TaskControlError(`生成需求文档对比失败：${run.stderr?.trim() || run.status}`);
-    }
-    const text = String(run.stdout ?? "")
-      .split("\n")
-      .map((line) => line
-        .replace(/^diff --git a\S+ b\S+$/, "diff --git a/需求原文.md b/需求原文.md")
-        .replace(/^--- a\S+$/, "--- a/需求原文.md")
-        .replace(/^\+\+\+ b\S+$/, "+++ b/需求原文.md"))
-      .join("\n");
-    let additions = 0;
-    let deletions = 0;
-    for (const line of text.split("\n")) {
-      if (/^\+(?!\+\+ )/.test(line)) additions += 1;
-      else if (/^-(?!-- )/.test(line)) deletions += 1;
-    }
-    return { text, additions, deletions };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 function deliverySelectionNote(
   paths: string[],
   excluded: string[],
@@ -2184,6 +2151,24 @@ export class TaskService {
   /** 平台探测是异步的，launchOptions 只消费最近一次事实。serve 在开放
    * HTTP 前先探一次，管理页每次“重新检查”都会刷新。 */
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
+
+  readonly overallStories = new OverallStoryCoordinator<TaskState>({
+    task: (id) => this.tasks.get(id),
+    log: (message) => this.options.log?.(message),
+    artifactRoot: (id) => this.artifactRoot(id),
+    ready: () => {
+      if (!this.options.host?.kernelRoot || !this.activeModelChoice()) {
+        throw new TaskControlError("模型或内核 Story 模板未配置，暂时无法生成整体 Story");
+      }
+    },
+    run: (task, job) => runOverallStorySession(task, job, {
+      taskId: task.summary.id, workspace: task.summary.workspace,
+      kernelRoot: this.options.host!.kernelRoot, requirementDocument: task.summary.requirement_document,
+      model: task.summary.model_choice ?? this.activeModelChoice()!, models: this.activeModelsJson(),
+      vision: this.taskVision(task), onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+      log: this.options.log,
+    }),
+  });
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
@@ -2587,7 +2572,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [];
+      }> = [{ taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
@@ -3332,7 +3317,7 @@ export class TaskService {
       }
       // 回执和 MR 检视一样按 id 逐条对拍,少一条、多一条、说不清都不收。
       // 区别只在传输方式:它是一个小型 JSON 文件，不再与完整正文揉进回复。
-      const receipts = this.parseRequirementReceipts(rawReceipts, annotations);
+      const receipts = parseDocumentReviewReceipts(rawReceipts, annotations);
       const before = task.summary.requirement;
       const reportsFixed = receipts.some((item) => item.outcome === "fixed");
       if (reportsFixed && after === before) {
@@ -3412,38 +3397,6 @@ export class TaskService {
         }
       }
     }
-  }
-
-  /** 文档编辑 Agent 的逐条回执。格式校验复用 MR 检视那套(id 对拍、去重、
-   * outcome 合法、说明非空);它没有 rework 概念,revision 缺席时按当前轮补。 */
-  private parseRequirementReceipts(
-    raw: string,
-    annotations: Annotation[],
-  ): WorkspaceReviewReceipt[] {
-    let rows: unknown;
-    try {
-      rows = JSON.parse(raw.trim());
-    } catch {
-      throw new TaskControlError("Agent 的逐条回执不是合法 JSON，本轮拒收");
-    }
-    const byId = new Map(annotations.map((item) => [item.id, item]));
-    const withRevision = (Array.isArray(rows) ? rows : []).map((row) => {
-      if (!row || typeof row !== "object") return row;
-      const item = row as Record<string, unknown>;
-      const target = byId.get(String(item.annotation_id ?? ""));
-      return item.revision === undefined && target
-        ? { ...item, revision: target.rework ?? 0 } : item;
-    });
-    const parsed = parseWorkspaceReviewReceipts(withRevision, annotations);
-    const facts = [
-      parsed.missing_ids.length ? `缺少 ${parsed.missing_ids.join("、")}` : "",
-      parsed.unexpected_ids.length ? `多出 ${parsed.unexpected_ids.join("、")}` : "",
-      ...parsed.errors,
-    ].filter(Boolean);
-    if (facts.length) {
-      throw new TaskControlError(`Agent 的逐条回执不完整：${facts.join("；")}。本轮拒收，意见仍在待提交`);
-    }
-    return parsed.receipts;
   }
 
   /** 页面按 id 取某一轮修改的对比:改前全文 + 统一 diff。 */
@@ -6245,8 +6198,8 @@ export class TaskService {
     const store = this.annotations(task);
     const before = store.list().find((item) => item.id === annotationId);
     if (!before) throw new NotFoundError(`批注 ${annotationId} 不存在`);
-    if (before.status === "draft"
-        && ["completed", "canceled"].includes(task.summary.status)) {
+    if (before.status === "draft" && (task.summary.status === "canceled"
+        || (task.summary.status === "completed" && before.artifact !== OVERALL_STORY_ARTIFACT))) {
       throw new TaskControlError(task.summary.status === "completed"
         ? "任务已经交付，这条意见只能作为归档记录，不能再发起答复"
         : "任务已由用户停止，不能再发起答复");
@@ -6462,13 +6415,12 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    if (["completed", "canceled"].includes(task.summary.status)) {
-      throw new TaskControlError(task.summary.status === "completed"
-        ? "MR 已合入，任务已经结束，不能再提交批注"
-        : "任务已由用户停止，不能再提交批注");
-    }
+    if (task.summary.status === "canceled") throw new TaskControlError("任务已由用户停止，不能再提交批注");
     const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
     const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
+    const overall = allPicked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
+    if (overall.length && overall.length !== allPicked.length) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
+    if (task.summary.status === "completed" && !overall.length) throw new TaskControlError("MR 已合入，任务已经结束，不能再提交批注");
     const ownerPicked = allPicked.filter((item) =>
       (item.route ?? "agent") !== "agent");
     const picked = allPicked.filter((item) =>
@@ -6513,6 +6465,9 @@ export class TaskService {
     sentBy?: string,
     backgroundRequirementReview = false,
   ): Promise<{ sent: string[]; text: string }> {
+    if (picked.some((item) => item.artifact === OVERALL_STORY_ARTIFACT)) {
+      return this.overallStories.submit(task.summary.id, picked, sentBy);
+    }
     const text = [
       ownerDecisionContext,
       renderAnnotations(picked, this.ticketOf(task)),
@@ -8388,7 +8343,7 @@ export class TaskService {
     }
     try {
       this.persist(task);
-      this.recordTaskCreationAudit(task, creationAudit);
+      recordTaskCreationAudit(task, creationAudit, this.options.log);
     } catch (error) {
       // 任务事实落不了盘就不能留下半个现场:没有 task.json 的工作区
       // 谁也回收不了。这里必须走 removeTaskTree——知识与 Skill 快照
@@ -8405,44 +8360,6 @@ export class TaskService {
       this.bypass(undefined, "任务泵", this.pump());
     }
     return { ...summary };
-  }
-
-  /** 下单审计是诊断旁路：任务主账已经由 task.json 原子落袋，审计文件
-   * 写失败不能把一张已创建任务回滚掉；但服务日志必须明确报出缺口。
-   * 文件采用原子替换，避免进程中断留下半截 JSON 冒充完整记录。 */
-  private recordTaskCreationAudit(
-    task: TaskState,
-    audit: Record<string, unknown>,
-  ): void {
-    const path = join(task.summary.workspace, "creation-audit.json");
-    const temporary = `${path}.tmp`;
-    let persisted = false;
-    let writeError: string | undefined;
-    try {
-      writeFileSync(temporary, JSON.stringify(audit, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      chmodSync(temporary, 0o600);
-      renameSync(temporary, path);
-      persisted = true;
-    } catch (error) {
-      writeError = String(error);
-      try { rmSync(temporary, { force: true }); } catch { /* 旁路清理尽力而为 */ }
-    }
-    try {
-      this.options.log?.(`[task-create] ${JSON.stringify({
-        ...audit,
-        audit_file: persisted ? path : null,
-        audit_write_error: writeError ?? null,
-      })}`);
-      if (writeError) {
-        this.options.log?.(
-          `任务 ${task.summary.id} 下单审计文件落盘失败(任务主账已保存): ${writeError}`);
-      }
-    } catch {
-      // 日志接收器是旁路，不能因为接收器自身异常破坏已创建任务。
-    }
   }
 
   private allocateTaskId(): string {
@@ -8728,6 +8645,8 @@ export class TaskService {
           if (recoveredCwd) this.writeTaskState(task);
         }
         resetQueuedRequirementReviews(this.annotations(task));
+        try { this.overallStories.recoverTask(summary.id); }
+        catch (error) { this.options.log?.(`整体 Story 恢复失败 ${summary.id}：${String(error)}`); }
         if (summary.requirement_revision?.state === "running") {
           const interruptedIds = new Set(
             summary.requirement_revision.annotation_ids ?? []);

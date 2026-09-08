@@ -2686,7 +2686,7 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
-    | "queued_decision" | "owner_pending" | "requirement_queue" | "requirement_review";
+    | "queued_decision" | "owner_pending" | "overall_story_queue" | "overall_story_processing" | "overall_story" | "requirement_queue" | "requirement_review";
   /** 责任人可以原样转交他人的意见；作者与转交人分别留痕。 */
   sent_by?: string;
   response?: {
@@ -3139,7 +3139,7 @@ export interface ArtifactMeta {
   /** 未跟踪目录根；目录内容由用户展开时分页读取。 */
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
-  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan";
+  purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan" | "overall_story";
 }
 
 export interface ArtifactChangeFile {

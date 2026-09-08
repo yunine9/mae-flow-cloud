@@ -1,3 +1,5 @@
+import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
+import "./overall-story.css";
 /**
  * 任务工作台:决策发生在哪里,证据就在哪里。
  *
@@ -1264,6 +1266,12 @@ export function TaskWorkspace({
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
 
+  // 主任务协调/完成后仍可能有整体 Story 文档会话，检视回执需要独立刷新。
+  useEffect(() => {
+    if (task.requirement_graph?.stage !== "confirmed" || task.status === "canceled") return;
+    return startVisiblePolling(() => setNotesPulse((tick) => tick + 1), 5000, document);
+  }, [task.id, task.status, task.requirement_graph?.stage]);
+
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)和闭环结论都是服务端现算的,前端不自己推断。
   // 结论的输入还有当前卡和复检标记:两张人工卡背靠背换、status 不变时,
@@ -2126,6 +2134,12 @@ export function TaskWorkspace({
               </button>
             </section>
           )}
+          {materialView === "doc" && task.requirement_graph?.stage === "confirmed" && (
+            <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate}
+              canceled={task.status === "canceled"} active={active === OVERALL_STORY_ARTIFACT}
+              onOpen={() => setActive(OVERALL_STORY_ARTIFACT)} onOpenTask={onOpenTask}
+              onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />
+          )}
           <div className={`ws-material-reader${materialView === "doc" && documents.length > 0 ? " with-documents" : ""}`}>
           {materialView === "doc" && documents.length > 0 && (
             <div className="ws-tabs ws-document-tabs">
@@ -2366,8 +2380,8 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={annotationQueueWithDecision}
+                onSendDraft={annotationCanSend || (active === OVERALL_STORY_ARTIFACT && canContributeReview && task.status !== "canceled") ? (id) => sendAnnotations(task.id, [id]) : undefined}
+                queueWithDecision={active !== OVERALL_STORY_ARTIFACT && annotationQueueWithDecision}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser

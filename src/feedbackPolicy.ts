@@ -1,3 +1,4 @@
+import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 /**
  * 反馈闭环的纯领域规则。
  *
@@ -363,6 +364,9 @@ export function annotationVerdictReady(
   // 问责任人的意见不需要等 Agent 或任务阶段:责任人留下原话后,
   // 提出人即可判断是否解答。决策后处理仍必须等 Agent 真正执行。
   if (annotationRoute(item) === "owner_reply") return Boolean(item.owner_reply);
+  if (item.artifact === OVERALL_STORY_ARTIFACT) {
+    return facts.task_status !== "canceled" && item.sent_via === "overall_story" && Boolean(currentResponse(item));
+  }
   if (facts.task_status !== "waiting_for_human") return false;
   // 只是趁"等决定"窗口先登记为团队事实,还没随决定送给 Agent。
   if (["queued_decision", "requirement_queue", "requirement_review"].includes(item.sent_via ?? "")) return false;
@@ -408,7 +412,8 @@ function canRouteDraft(
   return item.status === "draft"
     && item.author !== viewer.username
     && viewer.can_route_others
-    && !["completed", "canceled"].includes(facts.task_status)
+    && facts.task_status !== "canceled"
+    && (facts.task_status !== "completed" || item.artifact === OVERALL_STORY_ARTIFACT)
     && (annotationRoute(item) === "agent" || item.assignee === viewer.username);
 }
 
@@ -430,6 +435,9 @@ function deliveryTextOf(
     return annotationRoute(item) === "owner_reply"
       ? "已交给责任人答复" : "已交给责任人决策";
   }
+  if (item.sent_via === "overall_story_queue") return "已排队，Agent 将修改整体 Story";
+  if (item.sent_via === "overall_story_processing") return "Agent 正在修改整体 Story";
+  if (item.sent_via === "overall_story") return "整体 Story 已有处理回执，请检视改动";
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
   if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
@@ -525,6 +533,12 @@ function progressOf(
     return { tone: "waiting", text: "已排队·等决定",
       hint: "还没送到 Agent:任务正等一张决定卡,责任人在卡上选「需要调整」提交后才随决定送达。" };
   }
+  if (item.sent_via === "overall_story_queue") {
+    return { tone: "waiting", text: "已排队 · 整体 Story", hint: "当前一轮结束后自动处理，完成后请检视文档改动。" };
+  }
+  if (item.sent_via === "overall_story_processing") {
+    return { tone: "waiting", text: "Agent 正在修改整体 Story", hint: "只修改整体文档；子任务设计和代码另行处理。" };
+  }
   if (route === "agent" && item.sent_via === "requirement_queue") {
     return { tone: "waiting", text: "已排队·需求修订",
       hint: "当前一批完成后自动处理这条意见，无需再次提交；处理后仍需由意见作者复检确认。" };
@@ -578,6 +592,7 @@ export function annotationClosure(
     person_name?: (username: string) => string;
   } = {},
 ): AnnotationClosure {
+  if (item.artifact === OVERALL_STORY_ARTIFACT) facts = { ...facts, archival: false };
   const personName = options.person_name ?? ((username: string) => username);
   const ready = annotationVerdictReady(item, facts);
   const override = annotationOverrideAccess(item, facts, viewer);

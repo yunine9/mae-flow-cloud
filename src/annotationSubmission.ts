@@ -1,3 +1,4 @@
+import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 import { type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
 import { NotFoundError } from "./errors.ts";
 
@@ -6,6 +7,9 @@ export function pickAnnotationSubmission(
   allowForeign = false, acceptRequirementSubmitted = false,
 ): Annotation[] {
   const eligible = items.filter((item) => item.status === "draft"
+    || (!!ids?.length && item.artifact === OVERALL_STORY_ARTIFACT
+      && ["sent", "verified"].includes(item.status)
+      && ["overall_story_queue", "overall_story_processing", "overall_story"].includes(item.sent_via ?? ""))
     || (acceptRequirementSubmitted && !!ids?.length
       && item.artifact === TASK_REQUIREMENT_ARTIFACT
       && (item.route ?? "agent") === "agent"
