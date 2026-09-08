@@ -9,8 +9,18 @@
  * 这里只做两件事:把页面稳住(还能刷新、还能看见自己在哪),把真相摆出来
  * (错误原文 + 组件栈,可一键复制)。它不替任何人"修复"异常,也不重试——
  * 掩盖一次渲染错误比白屏更坏。
+ *
+ * 唯一的例外(2026-09-08):chunk 加载失败——发版前开的标签页揣着旧
+ * chunk 名,点懒加载页签时服务器上已是新哈希,404 是运行时陈旧而非
+ * 代码缺陷,刷新即愈。识别到就自动整页刷新一次(30s 窗口防打转:部署
+ * 真缺文件时,第二次失败照常落错误卡)。其余渲染异常维持原立场。
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
+
+/** 同一类失败在不同浏览器的话术:Chromium / Firefox / Safari。 */
+const CHUNK_LOAD_ERROR = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i;
+const CHUNK_RELOAD_KEY = "mfc-chunk-reload-at";
+const CHUNK_RELOAD_WINDOW_MS = 30_000;
 
 interface RootErrorState {
   error?: Error;
@@ -29,6 +39,16 @@ export class RootErrorBoundary extends Component<
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // 控制台仍要留一份:开发者习惯先看 F12,别逼他从页面上抄。
     console.error("[app] 页面渲染失败", error, info);
+    // 陈旧标签页跨发版:自动刷新拿新入口,用户无感。窗口期内不重复刷
+    // (刷新是整页导航,正常情况下也不会在 30s 内回到同一棵渲染树)。
+    if (CHUNK_LOAD_ERROR.test(error.message)) {
+      const last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? 0);
+      if (Date.now() - last > CHUNK_RELOAD_WINDOW_MS) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+        location.reload();
+        return;
+      }
+    }
     this.setState({ componentStack: info.componentStack ?? undefined });
   }
 
