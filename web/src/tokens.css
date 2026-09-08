@@ -109,6 +109,15 @@
   --reading-width: 72ch;
   --page-width: 1200px;
 
+  /* 层叠阶梯:新弹层一律取自这里,不再散落魔法数(实测存量 20 个值)。
+   * modal 放 950:压过存量全屏视图(720)与浮层(650);topmost 留给
+   * 必须压过一切的确认框。 */
+  --z-nav: 240;
+  --z-sticky: 300;
+  --z-overlay: 650;
+  --z-modal: 950;
+  --z-topmost: 1001;
+
   /* ── 旧词表别名(不要在新代码里用) ── */
   --page: var(--main-bg);
   --surface-soft: var(--surface-2);
