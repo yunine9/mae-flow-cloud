@@ -21,7 +21,17 @@ export async function fetchMrGates(options: {
     const params = new URLSearchParams({ repo: options.repo,
       source_branch: delivery.source_branch ?? "",
       target_branch: delivery.target_branch ?? "" });
-    if (delivery.mr_id !== undefined) params.set("mr", String(delivery.mr_id));
+    // 旧现场 mr_create 曾保存全局 id，而 gate 需要项目内 iid。
+    // 标准 MR 链接中的 iid 是公开定位键，优先修正这些历史记录。
+    let urlIid: string | undefined;
+    if (delivery.mr_url) {
+      try {
+        urlIid = new URL(delivery.mr_url).pathname
+          .match(/\/merge_requests\/(\d+)\/?$/)?.[1];
+      } catch { /* 非标准链接沿用原标识。 */ }
+    }
+    if (urlIid) params.set("mr", urlIid);
+    else if (delivery.mr_id !== undefined) params.set("mr", String(delivery.mr_id));
     else if (delivery.mr_url) params.set("mr", delivery.mr_url);
     const response = await fetch(`${platformUrl}/mr/gates?${params}`, {
       headers: options.headers, signal: AbortSignal.timeout(10_000),

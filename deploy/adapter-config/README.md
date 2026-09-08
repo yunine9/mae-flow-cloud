@@ -1,50 +1,95 @@
-# 内网 adapter 配置修正
+# 内网 MR 流水线配置修复
 
-已有链路是 push 自动触发流水线，trigger 只查询，status 轮询收敛。
-本次问题属于现场 adapter.json 的命令配置；不新增 trigger 脚本，
-不调用 rerun，也不改变宿主流程。
+本目录以现场提供的六端点 adapter.json 为基础，修正配置并收编所有本次
+新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的六端点
+补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
 
-## 合并配置
+## 已修正
 
-`mr-pipeline.patch.json` 是配置片段，不能直接替换完整 adapter.json。
-以现场完整配置为基础，先备份再合并以下修正：
+- 保留 push/MR 自动触发机制。trigger 只做按完整 SHA 的 REST GET，
+  请求成功后进入 status 轮询；不调用 rerun，也不使用新增 trigger 脚本。
+  空列表或已有红/绿灯不从 trigger 直接进入裁决，HTTP 错误仍上报。
+- mr_create 与 mr_lookup 都提取项目内 iid。mr_create 的 host/project、
+  分支、标题、需求号和身份参数保留现场用法。宿主门禁客户端会优先从已存
+  MR URL 提取 iid，兼容旧配置保存了全局 id 的任务。
+- status/artifacts 继续调用原有收编脚本。
+- mr_gates 调用仓内 `deploy/adapter-tools/mr-gates.py`，只读合并 MR
+  详情和原 codehub-cli gate 输出。生命周期来自详情的 state，绝不从
+  merge_status 或门禁布尔 state 推断。已合入/已关闭无需再查询门禁。
+- 详情 SHA 通过 adapter 的 mr_sha 抽取回传，供已有的合入版本核验使用。
+  缺失/无效生命周期、SHA、iid 或查询失败均报错，不伪装 opened。
+- gate 整体预算 8 秒，adapter 超时 9 秒，与宿主 10 秒查询预算对齐。
 
-1. 在原 `mr_create.command` 中补正 `--host yellow --project {repo}`，
-   保留源/目标分支、标题、token、需求号等原有参数和输出抽取规则。
-2. 加入片段中的 `mr_lookup`：查同源/目标分支的开放 MR，按
-   `0.web_url` / `0.iid` 抽取，启用已有的先查后建逻辑。
-3. 用片段中的 `pipeline_trigger` 替换错误的 rerun 配置。
-   它只调用 REST GET 按 SHA 查询，不依赖宿主未传的 `{mr}`。
-   HTTP 错误通过 curl 非零退出上报；成功后返回 running 表示进入轮询，
-   不代表新建或重跑了流水线。查询为空也可等待 push 的异步创建；
-   真实状态与质量结论由后续 pipeline_status 决定。
-4. status/artifacts 使用仓库已有脚本。将 `@REPO_DIR@` 替换为实际
-   仓库绝对路径（测试通常 `/data/mae-flow-cloud-test/repo`，生产通常
-   `/data/mae-flow-cloud/repo`）。已有 MCP 主路和自定义候选链应保留，
-   只更新对应的脚本候选，保留现场超时配置。
+`mr-gates.py` 不是重跑脚本：它仅组合两个已有查询的字段。配置、查询桥、
+适配器字段支持和回归测试均在本仓，内网不需要再自行编写实现。
 
-其他端点、token_file、端口等保持现场配置。令牌和完整现场配置不要入库。
-此片段依据用户提供的内网分析及仓库契约整理，未读取实际部署的完整 JSON。
-CLI 的 `yellow` 别名及 v1.3.5 参数、REST 地址需在内网核验。
+## 内网应用：先测试环境
 
-## systemd HOME
+必须先把**同一个提交的代码、deploy 目录全部同步**到内网；只换 JSON
+会缺少 mr-gates.py 或 mr_sha 支持。下面命令在测试仓库根目录执行，按实际
+位置替换配置路径。生产时改成对应生产目录，不要混用两套脚本路径。
 
-`home.conf` 是现场 root 服务的环境配置模板。根据服务用户确认 HOME 后，
-分别安装到所需环境的目录：
+生成候选文件（保留现场端口、token_file、其他端点及已有候选链）：
 
-- `/etc/systemd/system/mae-flow-adapter-test.service.d/home.conf`
-- `/etc/systemd/system/mae-flow-adapter.service.d/home.conf`
+```bash
+python3 - /etc/mae-flow-cloud-test/adapter.json \
+  /etc/mae-flow-cloud-test/adapter.candidate.json "$PWD" <<'PY'
+import json, os, sys
+from pathlib import Path
+source, destination, root = map(Path, sys.argv[1:])
+config = json.loads(source.read_text())
+patch = json.loads((root / 'deploy/adapter-config/mr-pipeline.patch.json').read_text())
+for key, spec in patch.items():
+    spec['command'] = [part.replace('@REPO_DIR@', str(root.resolve())) for part in spec['command']]
+    if key in ('pipeline_status', 'pipeline_artifacts', 'mr_gates'):
+        assert Path(spec['command'][1]).is_file(), spec['command'][1]
+    existing = config.get(key, {})
+    if key in ('pipeline_status', 'pipeline_artifacts'):
+        if 'timeout_s' in existing:
+            spec['timeout_s'] = existing['timeout_s']
+        candidates = existing.get('candidates')
+        if candidates:
+            name = Path(spec['command'][1]).name
+            matches = [i for i, c in enumerate(candidates) if any(name in str(p) for p in c.get('command', []))]
+            position = matches[0] if matches else min(1, len(candidates))
+            retained = [c for i, c in enumerate(candidates) if i not in matches]
+            retained.insert(position, spec)
+            patch[key] = dict(existing, candidates=retained)
+config.update(patch)
+fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w') as output:
+    json.dump(config, output, ensure_ascii=False, indent=2)
+    output.write('\n')
+print('候选已生成:', destination)
+PY
+```
 
-已有文件先备份；运行 `systemctl daemon-reload` 后，重启对应服务生效。
-非 root 服务必须改成其实际用户目录。普通代码 rsync 不会安装这些 /etc
-配置，换机器需重新部署。
+候选独占创建，不会覆盖已有文件。该补丁依据本次贴出的 MR 创建参数；若
+现场随后增加了其他参数，合并时应保留。检查候选后安装并重启对应服务：
 
-## 验收及仓库边界
+```bash
+sudo cp -p /etc/mae-flow-cloud-test/adapter.json \
+  /etc/mae-flow-cloud-test/adapter.json.bak.$(date +%Y%m%d%H%M%S)
+sudo install -m 600 /etc/mae-flow-cloud-test/adapter.candidate.json \
+  /etc/mae-flow-cloud-test/adapter.json
+sudo systemctl restart mae-flow-adapter-test
+```
 
-本次补齐的是配置片段和 HOME 模板。status/artifacts、pipeline_log.py
-及 MCP 客户端此前已经在 `deploy/adapter-tools/` 中，不需要新增脚本。
-CLI 安装、host 配置、令牌和现场令牌刷新程序仍属于外部部署依赖。
+内网验收：已有 MR 不误判关闭，task-4 的 MR 查询使用 iid 2931；失败后
+修复产生新 SHA 能续推；trigger 不额外 rerun；status 返回真实检查和日志；
+平台合入后返回 merged 和对应源 SHA，开放但不能合入仍返回 opened。
+这里的本地测试覆盖真实 adapter 和查询桥，平台 I/O 用夹具替代，未声称
+已远程部署或已通过内网真实验收。
 
-内网验证：首次 push 自动触发、trigger 不产生额外 rerun、已有 MR 复用、
-指定 SHA 的 status/checks 和失败材料采集，以及无权限时如实报错。
-本地 adapter 回归测试不能代替这次真实部署验收。
+## systemd 与依赖
+
+`home.conf` 是现场 root 服务的模板，按环境安装到
+`/etc/systemd/system/mae-flow-adapter{,-test}.service.d/home.conf`，
+已有文件先备份，再 `systemctl daemon-reload` 并重启对应服务。
+非 root 用户改用其实际 HOME。普通 rsync 不会安装 /etc 文件。
+
+运行依赖：Python 3、curl、codehub-cli（沿用现场 yellow host 和
+CODEHUB_TOKEN 支持）、原有 MCP 客户端及 token 配置。查询桥 API 默认
+`https://codehub-y.huawei.com/api/v4`，可用 MFC_CODEHUB_API 覆盖；CLI host
+可用 MFC_CODEHUB_CLI_HOST 覆盖。REST 使用系统 TLS 校验并绕过代理，
+与原 pipeline-status.sh 一致。密钥及现场刷新程序不写进配置样例。

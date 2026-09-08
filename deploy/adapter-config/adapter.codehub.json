@@ -1,4 +1,5 @@
 {
+  "port": 8790,
   "mr_create": {
     "command": [
       "codehub-cli",
@@ -55,7 +56,7 @@
   "pipeline_status": {
     "command": [
       "bash",
-      "@REPO_DIR@/deploy/adapter-tools/pipeline-status.sh",
+      "/data/mae-flow-cloud/repo/deploy/adapter-tools/pipeline-status.sh",
       "{repo_path}",
       "{sha}",
       "{token}"
@@ -107,7 +108,7 @@
   "pipeline_artifacts": {
     "command": [
       "bash",
-      "@REPO_DIR@/deploy/adapter-tools/pipeline-artifacts.sh",
+      "/data/mae-flow-cloud/repo/deploy/adapter-tools/pipeline-artifacts.sh",
       "{repo_path}",
       "{sha}",
       "{token}"
@@ -154,7 +155,7 @@
   "mr_gates": {
     "command": [
       "python3",
-      "@REPO_DIR@/deploy/adapter-tools/mr-gates.py",
+      "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-gates.py",
       "{repo_path}",
       "{mr}",
       "{token}"

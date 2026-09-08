@@ -146,6 +146,8 @@ interface ListSpec extends CommandSpec {
   /** MR 生命周期抽取与映射(mr_gates 用):opened/merged/closed。 */
   mr_state?: Extract;
   mr_state_map?: Record<string, string>;
+  /** MR 详情的源提交 SHA，供宿主已有的合入版本校验使用。 */
+  mr_sha?: Extract;
   /** 材料落盘目录模板(pipeline_artifacts 用):命令负责把日志下载到
    * 这个目录(可用 {sha}/{repo} 占位),适配层读目录里全部文件返回
    * ——SSE 日志网关那类"先落盘再取"的形态就走这条,不用逐字段抽。 */
@@ -769,6 +771,14 @@ export class PlatformAdapter {
         return ["opened", "merged", "closed"].includes(mapped)
           ? mapped : "opened"; // 认不出的生命周期按在途处理,别把单误杀
       };
+      const mrShaOf = (stdout: string, parsed: () => unknown) => {
+        if (!spec.mr_sha) return {};
+        const sha = extract(spec.mr_sha, "MR 源提交 SHA", stdout, parsed);
+        if (typeof sha !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) {
+          throw new AdapterError("MR 源提交 SHA 缺失或无效");
+        }
+        return { sha };
+      };
       // 平铺布尔模式:CodeHub mergeable_state 的真实形状(报告 B 节)
       // ——门禁不是数组,是对象里一堆 *_passed 布尔 + reason 文案。
       // 布尔字段即门禁(非布尔跳过),ignore_fields 剔掉总开关类字段;
@@ -800,11 +810,12 @@ export class PlatformAdapter {
             };
           });
         return { status: 200, payload: {
-          mr_state: mrStateOf(stdout, parsed), gates } };
+          mr_state: mrStateOf(stdout, parsed), ...mrShaOf(stdout, parsed), gates } };
       }
       const { stdout, parsed, items } = await this.runList(spec, values);
       return { status: 200, payload: {
         mr_state: mrStateOf(stdout, parsed),
+        ...mrShaOf(stdout, parsed),
         gates: items
           .filter((row) => row.name !== undefined)
           .map((row) => ({
