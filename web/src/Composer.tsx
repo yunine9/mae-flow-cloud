@@ -31,7 +31,7 @@ import {
 import { startVisiblePolling } from "./visiblePolling";
 import "./steer.css";
 
-/** sync=通知上下游仓库:只有跨仓子任务有这一档。 */
+/** sync=通知所有子任务:只有跨仓子任务有这一档。 */
 export type CollaborationMode = "steer" | "assistant" | "sync";
 
 const EMPTY_ASSISTANT: DeveloperAssistantView = {
@@ -82,7 +82,7 @@ export function Composer({
   crossRepository = false,
 }: {
   task: TaskSummary;
-  /** 跨仓子任务:多一档「通知上下游」。原来是流末尾一个单独的折叠工具块,
+  /** 跨仓子任务:多一档「通知所有子任务」。原来是流末尾一个单独的折叠工具块,
    * 和输入区两套皮、两种口吻(2026-09-06 用户:"为什么不放在下面那个里面
    * 平行"),现在与「说给 Agent」「我来接手」并列成第三档。 */
   crossRepository?: boolean;
@@ -115,11 +115,11 @@ export function Composer({
       const result = await publishCrossRepositoryUpdate(task.id, message);
       setSyncText("");
       setSyncFeedback(result.target_task_ids.length
-        ? `已回流大任务，并送到 ${result.target_task_ids.length} 个直接上下游任务；上面的流里能看到`
-        : "已回流大任务；依赖图上当前没有直接相邻的任务");
+        ? `已同步主任务和 ${result.target_task_ids.length} 个其他子任务；排队任务启动时读取`
+        : "已同步主任务；后续创建的子任务也会收到");
       onChangedRef.current?.();
     } catch (cause) {
-      setSyncFeedback(cause instanceof Error ? cause.message : "通知上下游失败");
+      setSyncFeedback(cause instanceof Error ? cause.message : "通知所有子任务失败");
     } finally {
       setSyncBusy(false);
     }
@@ -367,7 +367,7 @@ export function Composer({
                 className={showSync ? "on" : ""}
                 title="接口或约定变了,告诉依赖你或你依赖的仓库"
                 onClick={() => { modePicked.current = true; setMode("sync"); }}>
-                通知上下游
+                通知所有子任务
               </button>
             )}
           </div>
@@ -435,13 +435,13 @@ export function Composer({
           <div className="ws-composer-row">
             <div className="ws-composer-left">
               <span className="steer-hint">
-                {syncFeedback || "收到和发出的通知都按时间出现在上面的流里 · ⌘/Ctrl + Enter 发送"}
+                {syncFeedback || "同一需求全部子任务都会记录；排队/暂停任务继续时读取，已结束任务不重启。"}
               </span>
             </div>
             <button type="button" className="steer-send"
               disabled={syncBusy || !syncText.trim()}
               onClick={() => void sendSync()}>
-              {syncBusy ? "发送中…" : "通知上下游"}
+              {syncBusy ? "发送中…" : "通知所有子任务"}
             </button>
           </div>
         </>

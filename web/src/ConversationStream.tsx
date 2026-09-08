@@ -718,15 +718,15 @@ export function ConversationStream({
             : nameOf(item.by),
           ts: item.ts,
           tag: <em className={`conv-tag ${item.direction === "received" ? "att" : "src"}`}>
-            {item.direction === "received" ? "上下游通知" : "已通知上下游"}
+            {item.direction === "received" ? "子任务通知" : "已通知所有子任务"}
           </em>,
           children: <div className="conv-sync">
             <p>{item.text}</p>
             <small>{item.direction === "received"
-              ? "相邻仓库的接口或约定变了；Agent 收到后会核对是否影响本仓，有冲突会举卡。"
+              ? "同一需求的协作通知；Agent 运行或继续时核对影响，无关就继续，有歧义再提问。"
               : item.targets
-                ? `已回流大任务，并送到 ${item.targets} 个相邻仓库的任务`
-                : "已回流大任务；依赖图上没有相邻仓库"}</small>
+                ? `已同步主任务和 ${item.targets} 个其他子任务；排队任务启动时读取`
+                : "已同步主任务，后续创建的子任务也会收到"}</small>
           </div>,
         });
       case "external": {

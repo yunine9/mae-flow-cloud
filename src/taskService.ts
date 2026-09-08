@@ -497,6 +497,7 @@ import {
   nextWatchStep, stopFailures, waitingWrite,
   type GateView,
 } from "./mergeWatch.ts";
+import { crossRepositoryUpdateContext, syncCrossRepositoryGroup } from "./crossRepositoryUpdates.ts";
 import { materializeReviewAssets, readReviewAsset, storeReviewAsset } from "./reviewAssets.ts";
 import { type StallClass } from "./stallPolicy.ts";
 import {
@@ -8392,6 +8393,7 @@ export class TaskService {
       removeTaskTree(workspace);
       throw error;
     }
+    if (summary.parent_task_id) this.syncCrossRepositoryUpdates(task);
     if (summary.requirement_analysis_confirmation_required) {
       this.notifyWaiting(task);
     } else if (!options.deferQueue) {
@@ -9004,8 +9006,13 @@ export class TaskService {
           `任务 ${task.summary.id} 补齐交付单元材料失败，将保留原现场: ${String(error)}`);
       }
     }
-    // 旧版本在“拆单成功”时就把父任务写成 completed。等所有 task.json
-    // 都恢复完再统一校正，避免父任务先加载时误把尚未入内存的子任务
+    // 全部任务恢复后补齐历史广播，避免加载顺序影响接收范围。
+    for (const parentId of new Set([...this.tasks.values()]
+      .map((task) => task.summary.parent_task_id).filter(Boolean))) {
+      const parent = this.tasks.get(parentId!);
+      if (parent) this.syncCrossRepositoryUpdates(parent);
+    }
+    // 旧版本拆单时就写 completed；全部恢复后统一校正，避免把未加载子任务
     // 当成缺失；无需一次性迁移脚本，重启即可恢复真实层级状态。
     for (const task of this.tasks.values()) {
       if (this.isRequirementAnalysis(task)) {
@@ -10086,9 +10093,18 @@ export class TaskService {
     return { ...task.summary };
   }
 
-  /** 子任务发现跨仓影响时回流大任务，并把同一条结构化消息投给依赖图
-   * 上直接相邻的上下游。运行中的 Agent 立即 steer；排队/暂停/等人
-   * 的任务由 launch/decision 注入，消息先落盘所以不会因会话状态丢失。 */
+  /** 同一需求广播：先落盘，再通知正在运行的 Agent；其他任务继续时读取。 */
+  private syncCrossRepositoryUpdates(task: TaskState): void {
+    const parent = task.summary.parent_task_id
+      ? this.tasks.get(task.summary.parent_task_id) : task;
+    if (!parent) return;
+    try {
+      syncCrossRepositoryGroup(parent, this.tasks.values(), (member) => this.persist(member));
+    } catch (error) {
+      this.options.log?.(`[cross-repo-update] ${task.summary.id} 历史通知补齐失败，保留已有记录: ${error}`);
+    }
+  }
+
   async publishCrossRepositoryUpdate(
     id: string,
     author: string,
@@ -10104,56 +10120,41 @@ export class TaskService {
     const parentId = source.summary.parent_task_id;
     const parent = parentId ? this.tasks.get(parentId) : undefined;
     const graph = parent?.summary.requirement_graph;
-    if (!parent || !graph) {
+    if (!parent) {
       throw new NotFoundError("该任务不隶属于可协作的跨仓大任务");
     }
-    const sourceRepository = graph.repositories.find((repository) =>
+    const sourceRepository = graph?.repositories.find((repository) =>
       repository.task_id === source.summary.id);
-    if (!sourceRepository) throw new NotFoundError("主任务中找不到当前仓库节点");
-    const relatedRepositoryIds = new Set(graph.dependencies.flatMap((edge) => {
-      if (edge.from === sourceRepository.id) return [edge.to];
-      if (edge.to === sourceRepository.id) return [edge.from];
-      return [];
-    }));
-    const targetTaskIds = graph.repositories
-      .filter((repository) => relatedRepositoryIds.has(repository.id)
-        && repository.task_id && repository.task_id !== source.summary.id)
-      .map((repository) => repository.task_id!);
     const update: CrossRepositoryUpdate = {
       id: `cross-${randomUUID()}`,
       parent_task_id: parentId!,
       source_task_id: source.summary.id,
-      source_repository: sourceRepository.name,
+      source_repository: sourceRepository?.name ?? source.summary.repo_url,
       author,
       text: message,
-      target_task_ids: targetTaskIds,
+      target_task_ids: [],
       created_at: new Date().toISOString(),
     };
-    parent.summary.cross_repository_updates = [
-      ...(parent.summary.cross_repository_updates ?? []), update,
-    ].slice(-100);
-    this.persist(parent);
-    for (const targetId of targetTaskIds) {
+    const recorded = syncCrossRepositoryGroup(parent, this.tasks.values(),
+      (member) => this.persist(member), update).find((item) => item.id === update.id)!;
+    // 先落盘再并行入队，一个 Agent 的即时投递失败不影响其他任务。
+    await Promise.all([parent.summary.id, ...recorded.target_task_ids].map(async (targetId) => {
       const target = this.tasks.get(targetId);
-      if (!target) continue;
-      target.summary.cross_repository_updates = [
-        ...(target.summary.cross_repository_updates ?? []), update,
-      ].slice(-30);
-      this.persist(target);
-      if (target.summary.status === "running" && target.driver) {
-        const delivered = [
-          `[跨仓影响同步 · ${author} · ${sourceRepository.name}]`,
-          message,
-          "请立即核对它是否影响当前仓的接口、设计或实现；有冲突就举卡，",
-          "并把结论回报跨仓主任务，不要静默猜测。",
-        ].join("\n");
-        await target.driver.steer(delivered).catch((cause) => {
-          this.options.log?.(
-            `[cross-repo-update] ${update.id} 即时投递 ${targetId} 失败，已落盘待后续注入: ${cause}`);
-        });
+      if (!target || target.summary.status !== "running") return;
+      try {
+        const context = crossRepositoryUpdateContext(target);
+        if (target.driver) {
+          await target.driver.steer([
+            `[需求协作通知 · ${author} · ${sourceRepository?.name ?? id}]`,
+            message, context,
+          ].join("\n"));
+        }
+      } catch (cause) {
+        this.options.log?.(
+          `[cross-repo-update] ${update.id} 即时投递 ${targetId} 失败，已落盘待后续注入: ${cause}`);
       }
-    }
-    return update;
+    }));
+    return recorded;
   }
 
   /** 从已确认机读图机械生成当前单元任务书。它是子任务的执行边界；
@@ -11674,12 +11675,7 @@ export class TaskService {
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [
       normalized.notes,
-      task.summary.cross_repository_updates?.length
-        ? "跨仓协作最新同步（需核对后继续）：\n"
-          + task.summary.cross_repository_updates.slice(-5)
-            .map((update) => `- ${update.source_repository ?? update.source_task_id}`
-              + ` / ${update.author}：${update.text}`).join("\n")
-        : undefined,
+      crossRepositoryUpdateContext(task),
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
       picked.length
@@ -14157,14 +14153,9 @@ export class TaskService {
           + `发现上游实际交付、当前实现或契约互相冲突时，停止猜测并举卡，`
           + `明确写出受影响的仓库、接口与需要谁确认；不要自行发明兼容方案。`;
       }
-      if (!analysisOnly && task.summary.cross_repository_updates?.length) {
-        prompt = `${prompt}\n\n跨仓主任务在分工后又收到以下影响同步。逐条核对它们`
-          + `是否改变当前仓的接口、设计或实现；有冲突就举卡并回报主任务，`
-          + `不要静默猜测：\n`
-          + task.summary.cross_repository_updates.slice(-10)
-            .map((update) => `- [${update.source_repository ?? update.source_task_id}`
-              + ` / ${update.author}] ${update.text}`).join("\n");
-      }
+      this.syncCrossRepositoryUpdates(task);
+      const collaboration = crossRepositoryUpdateContext(task);
+      if (collaboration) prompt += `\n\n${collaboration}`;
       if (!analysisOnly && loadedRepositorySkillNames.length) {
         prompt = `${prompt}\n\n本单已启用仓库自带 Skill：`
           + `${loadedRepositorySkillNames.join("、")}。它们是可选工作指南，`

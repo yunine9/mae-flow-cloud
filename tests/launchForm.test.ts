@@ -765,7 +765,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   assert.match(service.get(parent.id)!.cross_repository_updates![0].text,
     /改成字符串/);
   assert.equal(service.get(webTask.id)!.cross_repository_updates?.[0].id,
-    update.id, "分工后的影响必须回流大任务并复制给直接下游");
+    update.id, "分工后的影响必须同步主任务和所有兄弟子任务");
 
   // 可重入:部分仓已有 task_id 时重跑,不许重复建任务(第 N 个仓
   // create 抛错/中途重启后的重试路径)。
