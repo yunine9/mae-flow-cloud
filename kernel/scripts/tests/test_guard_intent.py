@@ -26,6 +26,38 @@ from mae_flow_core.foundation.git_intent import (  # noqa: E402
 
 
 class GuardIntentTests(unittest.TestCase):
+    def test_git_redirections_are_not_pathspecs(self):
+        for redirect in ("2>&1", "1>&2", ">out.log", ">> out.log",
+                         "2>>out.log", "&>out.log", "&>>out.log",
+                         "< /dev/null", "3<>out.log", "2>&-",
+                         "> 'log with spaces'", ">| out.log"):
+            with self.subTest(redirect=redirect):
+                command = 'git commit -m "repair" ' + redirect
+                self.assertEqual([], git_commit_intent(command)["pathspecs"])
+                self.assertEqual((), git_delivery_intents(command)[0].pathspecs)
+                command = 'git add ' + redirect + ' -- src/a.py'
+                self.assertEqual(["src/a.py"],
+                                 git_intent.git_add_intents(command)[0]["pathspecs"])
+
+    def test_quoted_redirect_literals_remain_git_arguments(self):
+        for path in ("2>", "a>b", ">", "&", "123"):
+            command = "git commit -m 'message > output' -- '" + path + "'"
+            self.assertEqual([path], git_commit_intent(command)["pathspecs"])
+        self.assertEqual(["2"], git_commit_intent(
+            'git commit -m repair -- "2">out.log')["pathspecs"])
+        self.assertEqual(["a>b"], git_commit_intent(
+            r'git commit -m repair -- a\>b')["pathspecs"])
+
+    def test_redirect_targets_do_not_hide_executed_substitutions(self):
+        actions = git_delivery_intents(
+            'git commit -m repair > "$(git push origin HEAD)" 2>&1')
+        self.assertEqual(["push", "commit"], [a.operation for a in actions])
+        self.assertEqual((), actions[-1].pathspecs)
+        actions = git_intent.git_actions(
+            'git commit -m repair 2>&1 && git push origin HEAD',
+            actor="agent-hook")
+        self.assertEqual(["commit", "push"], [a.operation for a in actions])
+
     def test_delivery_execution_predicate_follows_real_wrapper_positions(self):
         executes_delivery = getattr(
             git_intent, "executes_git_commit_or_push", lambda command: False)

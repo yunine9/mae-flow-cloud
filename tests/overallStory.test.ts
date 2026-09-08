@@ -45,6 +45,22 @@ function fixture() {
     runner: (next: typeof runner) => { runner = next; }, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+test("子任务即使携带已确认拆分方案也不能生成、更新、确认或派送整体 Story 意见", () => {
+  const f = fixture();
+  try {
+    f.child.summary.parent_task_id = f.task.summary.id;
+    f.child.summary.requirement_graph = f.task.summary.requirement_graph;
+    assert.equal(f.coordinator.status("parent").eligible, true);
+    const status = f.coordinator.status("child");
+    assert.equal(status.eligible, false);
+    assert.equal(status.can_confirm, false);
+    assert.throws(() => f.coordinator.generate("child", "owner"), /请在主任务/);
+    assert.throws(() => f.coordinator.confirm("child", "revision", "owner"), /请在主任务/);
+    assert.throws(() => f.coordinator.submit("child", [], "owner"), /请在主任务/);
+    assert.equal(f.calls(), 0);
+  } finally { f.dispose(); }
+});
+
 test("整体 Story 来源、缺失、版本与确认：只认文件变化，主任务完成后仍可使用", async () => {
   const f = fixture();
   try {

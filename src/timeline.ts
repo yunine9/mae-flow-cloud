@@ -16,6 +16,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { ExecutionEventReader } from "./executionEvents.ts";
 
 export type TimelineTone = "info" | "attention" | "success" | "danger";
 
@@ -345,6 +346,14 @@ export function buildTimeline(
     }
   };
   push(() => fromEvents(workspace));
+  push(() => new ExecutionEventReader(workspace, true).read()
+    .filter((event) => ["session_started", "turn_finished"].includes(event.kind))
+    .map((event) => ({
+      ts: normalizeTimestamp(event.ts, "utc"), kind: "session" as const, tone: "info" as const,
+      title: `Build-Fix · 第 ${event.execution.round} 轮${event.kind === "session_started" ? "开始" : "Agent 收口"}`,
+      detail: event.kind === "session_started" ? "开始编译、测试与必要修复；工具执行见 Build-Fix 过程与完整执行日志。"
+        : "本轮 Agent 已结束执行，编译与测试是否通过以 Build-Fix 验证结果为准。",
+    })));
   push(() => fromMemoryUsage(workspace));
   const codeDir = resolveCwd(workspace, cwd);
   if (codeDir) {

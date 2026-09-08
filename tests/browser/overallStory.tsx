@@ -6,6 +6,7 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const artifact = "task-materials/overall-story.md";
 let generated = 0, sourceChanged = false, confirmed = false;
 const errors: string[] = [];
+const storyRequests: string[] = [];
 window.addEventListener("error", (e) => errors.push(e.message));
 window.addEventListener("unhandledrejection", (e) => errors.push(String(e.reason)));
 const status = () => ({ eligible: true, current: generated ? "revision-1" : undefined,
@@ -17,6 +18,7 @@ const status = () => ({ eligible: true, current: generated ? "revision-1" : unde
 });
 window.fetch = async (input, init) => {
   const path = String(input);
+  if (path.includes("/overall-story")) storyRequests.push(path);
   let body: unknown;
   if (path.endsWith("/overall-story/confirm")) { confirmed = true; body = status(); }
   else if (path.includes("/overall-story/revisions/")) body = { diff: "@@ -0,0 +1,2 @@\n+# 整体 Story\n+整体验收口径" };
@@ -30,11 +32,12 @@ window.fetch = async (input, init) => {
   return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 };
 const root = createRoot(document.getElementById("app")!);
-root.render(<TaskWorkspace task={{ id: "task-story", ticket: "REQ-001", title: "跨模块任务体验", requirement: "跨模块需求", status: "completed",
+function renderTask(parentId?: string) { root.render(<TaskWorkspace key={parentId ?? "parent"} task={{ parent_task_id: parentId, id: parentId ? "child-story" : "task-story", ticket: "REQ-001", title: "跨模块任务体验", requirement: "跨模块需求", status: "completed",
   created_at: "2026-09-08", updated_at: "2026-09-08", luban_account: "dev",
   requirement_graph: { stage: "confirmed", repositories: [{ id: "web", name: "工作台", task_id: "child-1" }, { id: "api", name: "接口", task_id: "child-2" }], dependencies: [] },
 } as any} viewerUsername="dev" canOperate canCollaborate={false} canOverride={false} canRequestReview
-  onChanged={() => {}} onClose={() => {}} onOpenTask={() => {}} />);
+  onChanged={() => {}} onClose={() => {}} onOpenTask={() => {}} />); }
+renderTask("parent-story");
 async function button(text: string) {
   for (let i = 0; i < 50; i++) {
     const match = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(text) && !b.disabled);
@@ -44,6 +47,13 @@ async function button(text: string) {
   throw new Error(`button missing: ${text}; ${errors.join(";")}`);
 }
 async function run() {
+  (await button("文档")).click();
+  await pause(150);
+  if (document.querySelector(".overall-story-tools") || storyRequests.length) {
+    throw new Error("child task exposed overall Story generation or requested its API");
+  }
+  renderTask();
+  for (let i = 0; i < 50 && document.querySelector(".ws-parent-task"); i++) await pause(20);
   (await button("产出文档")).click();
   (await button("生成整体 Story")).click();
   for (let i = 0; i < 40 && !document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story"); i++) await pause(50);
@@ -65,7 +75,7 @@ async function run() {
   if (!document.querySelector(".overall-story-tools")?.textContent?.includes("待同步")) throw new Error("stale warning missing");
   if (document.documentElement.scrollWidth > window.innerWidth + 1) throw new Error("page overflow");
   if (errors.length) throw new Error(errors.join(";"));
-  return { generated, confirmed, diff: true, stale: true, readerStable: true, width: window.innerWidth };
+  return { childEntryHidden: true, generated, confirmed, diff: true, stale: true, readerStable: true, width: window.innerWidth };
 }
 run().then((value) => document.getElementById("result")!.textContent = JSON.stringify(value))
   .catch((e) => document.getElementById("result")!.textContent = JSON.stringify({ error: String(e) }));

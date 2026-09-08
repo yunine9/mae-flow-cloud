@@ -1,0 +1,199 @@
+{
+  "mr_create": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "create",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "--source-branch",
+      "{source_branch}",
+      "--target-branch",
+      "{target_branch}",
+      "--title",
+      "{title}",
+      "--e2e-issues",
+      "{dts_no}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--json",
+      "web_url,iid",
+      "-k"
+    ],
+    "url": {
+      "json": "web_url"
+    },
+    "id": {
+      "json": "iid"
+    }
+  },
+  "pipeline_trigger": {
+    "command": [
+      "curl",
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--noproxy",
+      "*",
+      "--connect-timeout",
+      "5",
+      "--max-time",
+      "20",
+      "-H",
+      "Private-Token: {token}",
+      "https://codehub-y.huawei.com/api/v4/projects/{repo_path}/pipelines?sha={sha}&per_page=1&order_by=id&sort=desc"
+    ],
+    "timeout_s": 25,
+    "status": {
+      "const": "running"
+    }
+  },
+  "pipeline_status": {
+    "command": [
+      "bash",
+      "@REPO_DIR@/deploy/adapter-tools/pipeline-status.sh",
+      "{repo_path}",
+      "{sha}",
+      "{token}"
+    ],
+    "status": {
+      "json": "status"
+    },
+    "log": {
+      "json": "fail_summary"
+    },
+    "run_sha": {
+      "json": "sha"
+    },
+    "pipeline_id": {
+      "json": "pipeline_id"
+    },
+    "web_url": {
+      "json": "web_url"
+    },
+    "checks": {
+      "json": "checks"
+    },
+    "check_dimension": {
+      "json": "dimension"
+    },
+    "check_status": {
+      "json": "status"
+    },
+    "check_job": {
+      "json": "job"
+    },
+    "check_url": {
+      "json": "url"
+    },
+    "check_tool": {
+      "json": "tool"
+    },
+    "status_map": {
+      "success": "success",
+      "failed": "failed",
+      "running": "running",
+      "pending": "running",
+      "canceled": "failed",
+      "skipped": "failed",
+      "created": "running",
+      "manual": "running"
+    }
+  },
+  "pipeline_artifacts": {
+    "command": [
+      "bash",
+      "@REPO_DIR@/deploy/adapter-tools/pipeline-artifacts.sh",
+      "{repo_path}",
+      "{sha}",
+      "{token}"
+    ],
+    "fields": {
+      "name": {
+        "json": "name"
+      },
+      "text": {
+        "json": "text"
+      }
+    }
+  },
+  "mr_lookup": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "list",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "--source-branch",
+      "{source_branch}",
+      "--target-branch",
+      "{target_branch}",
+      "--state",
+      "opened",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--json",
+      "web_url,iid",
+      "-k"
+    ],
+    "url": {
+      "json": "0.web_url"
+    },
+    "id": {
+      "json": "0.iid"
+    }
+  },
+  "mr_gates": {
+    "command": [
+      "python3",
+      "@REPO_DIR@/deploy/adapter-tools/mr-gates.py",
+      "{repo_path}",
+      "{mr}",
+      "{token}"
+    ],
+    "bools": {
+      "json": "gates"
+    },
+    "mr_state": {
+      "json": "mr_state"
+    },
+    "mr_state_map": {
+      "opened": "opened",
+      "merged": "merged",
+      "closed": "closed",
+      "locked": "opened"
+    },
+    "ignore_fields": [
+      "state",
+      "status_for_list",
+      "status_for_rebase_and_merge_without_conflict",
+      "status_without_conflict",
+      "status_without_non_ff",
+      "status_without_user_auth",
+      "can_force_merge",
+      "is_access_control_downgrade",
+      "is_target_branch_updated",
+      "query_conflict_process",
+      "merge_gate_verify_duration",
+      "merge_gate_verify_message",
+      "min_merged_score",
+      "merge_request_id",
+      "merge_request_switch"
+    ],
+    "timeout_s": 9,
+    "reason": {
+      "json": "gates.reason"
+    },
+    "mr_sha": {
+      "json": "sha"
+    }
+  }
+}

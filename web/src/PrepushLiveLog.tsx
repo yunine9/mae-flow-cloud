@@ -1,10 +1,12 @@
 /**
  * Build-Fix 实时过程(用户点名的可观测性缺口:编译过程、执行命令必须
- * 看得见)。只渲染服务端事件不做推断;验证进行中订阅 SSE,收口后保留
- * 末尾现场供回看。换轮由服务端切文件从头重放,前端只管去重与渲染。
+ * 看得见)。运行时跟随，结束后仍读取历史；独立轮次由服务端标记。
  */
 
 import { useEffect, useRef, useState } from "react";
+import { executionEventKey } from "./eventView";
+import { useStickyBottom } from "./stickyBottom";
+import { formatLocalClock } from "./time";
 import {
   tailBuildFixEvents,
   type PrepushRuntime,
@@ -24,12 +26,7 @@ interface LiveLine {
 }
 
 function timeOf(ts: string): string | undefined {
-  const date = new Date(ts);
-  return Number.isNaN(date.getTime())
-    ? undefined
-    : date.toLocaleTimeString([], {
-        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-      });
+  return formatLocalClock(ts, true);
 }
 
 function clip(value: string, limit: number): string {
@@ -46,9 +43,14 @@ function linesOf(event: SemanticEvent): LiveLine[] {
     is_error?: unknown;
     text?: unknown;
   };
-  const key = `${event.sessionId ?? "main"}:${event.eventId}`;
+  const key = executionEventKey(event);
   const time = timeOf(event.ts);
   switch (event.kind) {
+    case "session_started":
+      return [{ key, kind: "note", time, text: event.execution?.source === "build_fix"
+        ? `Build-Fix · 第 ${event.execution.round} 轮开始` : "执行会话开始" }];
+    case "turn_finished":
+      return [{ key, kind: "note", time, text: "本轮 Agent 已收口，构建结论以验证结果为准" }];
     case "tool_requested": {
       const name = String(payload.name ?? "");
       if (/^bash$/i.test(name)) {
@@ -61,7 +63,7 @@ function linesOf(event: SemanticEvent): LiveLine[] {
         const path = payload.input?.path ?? payload.input?.file_path ?? "";
         return [{ key, kind: "note", time, text: `✎ 修改 ${clip(String(path), 200)}` }];
       }
-      return [];
+      return [{ key, kind: "note", time, text: `${name} ${clip(String(payload.input?.path ?? payload.input?.file_path ?? ""), 200)}` }];
     }
     case "tool_output": {
       if (!/^bash$/i.test(String(payload.name ?? ""))) return [];
@@ -100,51 +102,55 @@ export function PrepushLiveLog({
   source = tailBuildFixEvents,
   title = "Build-Fix 过程",
   emptyText = "等待 Build-Fix Agent 的第一条命令……",
+  onLogs,
 }: {
   taskId: string;
-  /** 验证是否进行中:进行中订阅;结束后不再订阅但保留已收现场。 */
+  /** 运行时跟随，结束时读取一次完整历史快照。 */
   active: boolean;
   /** 事件源(默认 Build-Fix;环境预热等同构流复用本组件时替换)。 */
   source?: typeof tailBuildFixEvents;
   title?: string;
   emptyText?: string;
+  onLogs?: () => void;
 }) {
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [state, setState] = useState<SseConnectionState>("connecting");
   const seen = useRef(new Set<string>());
-  const scroller = useRef<HTMLDivElement>(null);
+  const [received, setReceived] = useState(0);
+  const follow = useStickyBottom<HTMLDivElement>(received);
   useEffect(() => {
-    if (!active) return;
     seen.current = new Set();
     setLines([]);
+    setReceived(0);
+  }, [taskId, source]);
+  useEffect(() => {
     return source(taskId, (event) => {
       // EventSource 断线重连时服务端整文件重放:按事件锚去重。
-      const anchor = `${event.sessionId ?? "main"}:${event.eventId}`;
+      const anchor = executionEventKey(event);
       if (seen.current.has(anchor)) return;
       seen.current.add(anchor);
       const next = linesOf(event);
       if (next.length) {
         setLines((current) => [...current, ...next].slice(-MAX_LINES));
+        setReceived((count) => count + next.length);
       }
-    }, setState);
-  }, [taskId, active]);
-  useEffect(() => {
-    const node = scroller.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [lines]);
-  if (!active && lines.length === 0) return null;
+    }, setState, { follow: active });
+  }, [taskId, active, source]);
   return <div className="prepush-live" aria-label="Build-Fix 实时过程">
     <div className="prepush-live-head">
       <strong>{title}</strong>
       {active
         ? <span className={`prepush-live-state is-${state}`}>{
           state === "live" ? "实时"
-            : state === "connecting" ? "连接中" : "重连中"}</span>
-        : <span className="prepush-live-state is-done">已结束,保留末尾现场</span>}
+            : state === "ended" ? "记录已读取"
+              : state === "connecting" ? "连接中" : "重连中"}</span>
+        : <span className="prepush-live-state is-done">{state === "ended" ? "历史记录" : state === "reconnecting" ? "读取中断，正在重连" : "正在读取历史"}</span>}
+      {onLogs && <button type="button" onClick={onLogs}>完整执行日志 ↗</button>}
     </div>
-    <div className="prepush-live-body" ref={scroller}>
+    {follow.paused && <button type="button" className="follow-resume" onClick={follow.toBottom}>↓ 回到最新{follow.behind > 0 ? `（${follow.behind} 条新记录）` : ""}</button>}
+    <div className="prepush-live-body" ref={follow.ref} onScroll={follow.onScroll}>
       {lines.length === 0
-        && <p className="prepush-live-empty">{emptyText}</p>}
+        && <p className="prepush-live-empty">{active ? emptyText : state === "ended" ? "没有可读取的 Build-Fix 执行记录。" : "正在读取 Build-Fix 历史记录…"}</p>}
       {lines.map((line) => <pre
         key={line.key} className={`line-${line.kind}`}>
         {line.time && <time>{line.time} </time>}{line.text}</pre>)}

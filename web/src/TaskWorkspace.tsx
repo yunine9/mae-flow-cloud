@@ -2134,7 +2134,9 @@ export function TaskWorkspace({
               </button>
             </section>
           )}
-          {materialView === "doc" && task.requirement_graph?.stage === "confirmed" && (
+          {materialView === "doc" && !task.parent_task_id
+            && task.requirement_graph?.stage === "confirmed"
+            && task.requirement_graph.repositories.length > 0 && (
             <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate}
               canceled={task.status === "canceled"} active={active === OVERALL_STORY_ARTIFACT}
               onOpen={() => setActive(OVERALL_STORY_ARTIFACT)} onOpenTask={onOpenTask}

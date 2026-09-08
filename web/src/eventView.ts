@@ -1,5 +1,10 @@
 export type EventFilter = "all" | "messages" | "tools" | "errors";
 
+export function executionEventKey(event: { eventId: number; sessionId?: string;
+  execution?: { attempt: string } }): string {
+  return `${event.execution?.attempt ?? "main"}:${event.sessionId ?? "main"}:${event.eventId}`;
+}
+
 export interface FilterableEvent {
   kind: string;
   payload: Record<string, unknown>;

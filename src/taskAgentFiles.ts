@@ -12,6 +12,8 @@ export function taskAgentMaterialInstructions(workspace: string): string {
     `流水线材料：${JSON.stringify(resolve(workspace, "pipeline"))}`,
     `Build-Fix 执行记录：${JSON.stringify(resolve(workspace, "prepush"))}`,
     "只处理本轮已派发的材料；不存在的材料不需创建。反馈批次 JSON 使用本批次单独给出的绝对回执路径。",
+    "current 的反馈清单保留原始意见及来源 SHA，不是尚未处理条目的实时清单。不要仅因原意见仍列在其中就重复修改或复制回执。",
+    "实际修改与本轮逐条回执完成后，按内核指引完成当前步骤并正常收口；宿主负责登记反馈结果、验证与推送后发布 MR 回复。回执落盘不等于已推送或作者已验收。",
   ].join("\n");
 }
 

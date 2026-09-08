@@ -68,6 +68,7 @@ export function OverallStoryTools({ taskId, canOperate, canceled, active, onOpen
     finally { setBusy(false); }
   }
   const available = status?.sources.filter((s) => !s.missing).length ?? 0;
+  if (status && !status.eligible) return null;
   return <section className="overall-story-tools" aria-label="整体 Story">
     <div className="overall-story-bar">
       <div className="overall-story-title"><span className="overall-story-icon" aria-hidden>▤</span>

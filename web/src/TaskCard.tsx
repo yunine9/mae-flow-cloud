@@ -18,7 +18,7 @@ import {
   retryTask,
   repairStopped,
   statusText,
-  tailEvents,
+  tailExecutionEvents,
   type ExternalAction,
   type DeliveryCompileAction,
   type SemanticEvent,
@@ -32,6 +32,7 @@ import { responsibleOf } from "./teamOps";
 import { useStickyBottom } from "./stickyBottom";
 import {
   eventFilterCounts,
+  executionEventKey,
   eventWindow,
   filterEvents,
   isErrorEvent,
@@ -1686,12 +1687,12 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
 
   useEffect(() => {
     if (!active) return;
-    const stop = tailEvents(
+    const stop = tailExecutionEvents(
       taskId,
       (event: SemanticEvent) => {
         setEvents((previous) => previous.some((item) => (
-          item.eventId === event.eventId
-        )) ? previous : [...previous, event]);
+          executionEventKey(item) === executionEventKey(event)
+        )) ? previous : [...previous, event].sort((a, b) => instantMs(a.ts) - instantMs(b.ts)));
       },
       setConnection,
     );
@@ -1703,7 +1704,8 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
       <div className={`event-live-state ${connection}`}>
         <i aria-hidden />
         <span>{!active ? "实时连接已暂停"
-          : connection === "live" ? "实时接收中"
+          : connection === "ended" ? "执行记录已读取"
+            : connection === "live" ? "实时接收中"
             : connection === "reconnecting" ? "连接中断，正在自动重连"
               : "正在连接任务现场"} · {events.length} 条
           {follow.paused ? " · 已暂停跟随" : ""}</span>
@@ -1744,8 +1746,8 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
           {events.length === 0 && (
             <div className="event-empty">
               <span aria-hidden />
-              <strong>正在连接任务现场</strong>
-              <small>新的执行动作会实时出现在这里。</small>
+              <strong>{connection === "ended" ? "暂无执行记录" : "正在连接任务现场"}</strong>
+              <small>主 Agent 与 Build-Fix 的执行动作统一显示在这里。</small>
             </div>
           )}
           {events.length > 0 && filtered.length === 0 && (
@@ -1755,7 +1757,7 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
             </div>
           )}
           {visible.items.map((event) => (
-            <EventRecord event={event} key={event.eventId}
+            <EventRecord event={event} key={executionEventKey(event)}
               selectedDetail={detail?.key}
               onInspect={setDetail} />
           ))}
@@ -1893,10 +1895,12 @@ function EventRecord({ event, selectedDetail, onInspect }: {
   const fields = Object.entries(event.payload);
   return (
     <article className={`event-record ${eventTone(event)}${selectedDetail
-      ?.startsWith(`${event.eventId}:`) ? " selected" : ""}`}>
+      ?.startsWith(`${executionEventKey(event)}:`) ? " selected" : ""}`}>
       <header>
         <span className="event-record-dot" aria-hidden />
         <strong>{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
+        {event.execution?.source === "build_fix" && <span className="event-session-label"
+          title={event.execution.attempt}>Build-Fix · 第 {event.execution.round} 轮</span>}
         {event.sessionId === "developer-assistant" && (
           <span className="event-session-label">开发助手</span>
         )}
@@ -1914,7 +1918,7 @@ function EventRecord({ event, selectedDetail, onInspect }: {
       ) : (
         <dl>
           {fields.map(([field, value]) => {
-            const key = `${event.eventId}:${field}`;
+            const key = `${executionEventKey(event)}:${field}`;
             return (
               <div key={field}>
                 <dt>{EVENT_FIELD_LABEL[field] ?? field}</dt>

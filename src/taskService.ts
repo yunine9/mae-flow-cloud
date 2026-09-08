@@ -1,4 +1,5 @@
 import { requirementDiff } from "./documentDiff.ts";
+import { withLiveReviewReceipts } from "./liveReviewReceipts.ts";
 import { recordTaskCreationAudit } from "./taskCreationAudit.ts";
 import { parseDocumentReviewReceipts } from "./documentReviewReceipts.ts";
 import { OverallStoryCoordinator } from "./overallStory.ts";
@@ -4930,8 +4931,22 @@ export class TaskService {
   private async consumeReviewProcessingReceipts(
     task: TaskState,
   ): Promise<string | undefined> {
+    const epoch = task.controlEpoch;
     const store = this.annotations(task);
     const listed = store.list();
+    const loop = task.summary.delivery?.loop;
+    if (loop?.review_source === "workspace" && loop.workspace_review_annotation_ids) {
+      // 首版未送出的草稿不是本轮回检任务；改字/系统重置/人工返工都会
+      // 增加 rework，必须继续保留这些已进入过处理流程的意见。
+      const unsent = new Set(listed.filter((item) => item.status === "draft"
+        && !item.sent_at && !(item.rework ?? 0)).map((item) => item.id));
+      const ids = loop.workspace_review_annotation_ids.filter((id) => !unsent.has(id));
+      if (ids.length !== loop.workspace_review_annotation_ids.length) {
+        loop.workspace_review_annotation_ids = ids;
+        this.options.log?.(`任务 ${task.summary.id} 回检清单排除未发送初稿，草稿原样保留`);
+        this.persist(task);
+      }
+    }
     const submitted = agentReviewAnnotations(listed);
     if (!submitted.length) return undefined;
     const path = this.reviewReceiptsPath(task);
@@ -4960,12 +4975,11 @@ export class TaskService {
       return !(Number.isInteger(revision) && revision < (target.rework ?? 0));
     });
     const parsed = parseWorkspaceReviewReceipts(live, submitted);
-    if (parsed.errors.length || parsed.unexpected_ids.length) {
-      return `逐条检视回执未通过核对:${[
+    const error = parsed.errors.length || parsed.unexpected_ids.length
+      ? `逐条检视回执未通过核对:${[
         ...parsed.errors,
         ...parsed.unexpected_ids.map((id) => `未知意见 ${id}`),
-      ].join(";")}`;
-    }
+      ].join(";")}` : undefined;
     let sha: string | undefined;
     for (const receipt of parsed.receipts) {
       const target = byId.get(receipt.annotation_id)!;
@@ -4982,6 +4996,11 @@ export class TaskService {
         try { sha = task.cwd ? (await this.prePushRevision(task)).sha : ""; }
         catch { sha = ""; }
       }
+      if (!this.current(task, epoch)) return undefined;
+      const current = store.list().find((item) => item.id === receipt.annotation_id);
+      if (!current || !agentReviewAnnotations([current]).length
+          || (current.rework ?? 0) !== receipt.revision
+          || answeredClarificationReceipt(current, receipt)) continue;
       store.respond(receipt.annotation_id, {
         revision: receipt.revision,
         outcome: receipt.outcome,
@@ -4990,7 +5009,7 @@ export class TaskService {
         ...(sha ? { fixed_sha: sha } : {}),
       });
     }
-    return undefined;
+    return error;
   }
 
   /** 此刻还没处理完成的意见,外加回执文件本身的问题(读不动/格式坏)。
@@ -6572,6 +6591,16 @@ export class TaskService {
     text: string,
     sentBy?: string,
   ): Promise<{ sent: string[]; text: string }> {
+    // 不可送达时先拒绝，不能先向内核开出一批任务再告诉用户“没提交”。
+    const assertDeliverable = () => {
+      if (!this.hasOpenMergeRequest(task)) throw new TaskControlError("当前 MR 或任务已结束，不能再提交检视修改");
+      if (["paused", "pausing", "waiting_for_human"].includes(task.summary.status)) {
+        throw new TaskControlError(task.summary.status === "waiting_for_human"
+          ? "Agent 正在等你回答当前问题。这批批注已保存，请在当前决定卡提交；系统会把批注一并交给 Agent"
+          : "任务当前已暂停，批注已经保存；恢复任务后即可提交给 Agent 继续修改");
+      }
+    };
+    assertDeliverable();
     // await_merge 的页面与平台“刚刚点合入”可能竞态。能查询到终态就
     // 先如实收口；平台不支持门禁契约则 fail-open，后续 push 仍会以
     // 远端事实失败，不拿一次查询抖动阻塞人的意见。
@@ -6607,6 +6636,7 @@ export class TaskService {
     // 人工意见先入持久反馈账，再决定是 steer 当前 writer 还是排下一批。
     // 内核若已有 active batch 会把它排成 queued；绝不因新意见并发启动
     // 第二个 Agent。材料先落盘，重启后仍能从同一 source revision 恢复。
+    assertDeliverable();
     const reviewsDir = join(task.summary.workspace, "reviews");
     mkdirSync(reviewsDir, { recursive: true });
     writeFileSync(join(reviewsDir, "local-annotations.json"), JSON.stringify({
@@ -6773,19 +6803,19 @@ export class TaskService {
     /** Agent 说需要作者补充说明的意见——是合法结论不是失败:球交给作者。 */
     clarifications?: Array<{ annotation_id: string; summary: string }>;
   }> {
+    const epoch = task.controlEpoch;
     const loop = task.summary.delivery?.loop;
     if (loop?.review_source !== "workspace") return { ok: true };
     const wanted = new Set(loop.workspace_review_annotation_ids ?? []);
     if (!wanted.size) return { ok: true }; // 只有整体说明，由最终总检卡闭环
     const listed = this.annotations(task).list();
-    const expected = listed.filter((item) =>
+    const expected = agentReviewAnnotations(listed).filter((item) =>
       wanted.has(item.id) && this.awaitingAgentReceipt(item));
     if (!expected.length) return { ok: true };
-    // 上一轮已答"需要补充说明"、作者还没改字的那些:Agent 若又写了一条
-    // 回执不算多出,忽略即可(它没义务记得哪条已经答过)。
-    const stale = new Set(listed.filter((item) =>
-      wanted.has(item.id) && item.status === "sent"
-      && !this.awaitingAgentReceipt(item)).map((item) => item.id));
+    // 同一回执文件服务多批意见：已知但不属于当前批的条目不算“多出”，
+    // 不替其他批次或专项会话登记；真正未知的 ID 仍明确报错。
+    const expectedIds = new Set(expected.map((item) => item.id));
+    const stale = new Set(listed.filter((item) => !expectedIds.has(item.id)).map((item) => item.id));
     const path = this.reviewReceiptsPath(task);
     const missing = expected.map((item) => item.id).join("、");
     let text: string;
@@ -6812,6 +6842,8 @@ export class TaskService {
           + `${String(error)}。没有拿总体回复冒充逐条闭环。`,
       };
     }
+    // 回执可能包含作者尚未发送的草稿或已闭环意见；只消费本轮已发送项，
+    // 不替作者发送草稿，也不让这些已知残留阻断有效回执。
     const dropStale = (rows: unknown[]) => rows.filter((row) => !stale.has(
       String((row as Record<string, unknown> | null)?.annotation_id ?? "")));
     if (raw && typeof raw === "object" && !Array.isArray(raw)
@@ -6837,6 +6869,11 @@ export class TaskService {
       };
     }
     const sha = task.cwd ? (await this.prePushRevision(task)).sha : undefined;
+    const latest = new Map(agentReviewAnnotations(this.annotations(task).list()).map((item) => [item.id, item]));
+    if (!this.current(task, epoch) || parsed.receipts.some((receipt) =>
+      !latest.has(receipt.annotation_id) || (latest.get(receipt.annotation_id)!.rework ?? 0) !== receipt.revision)) {
+      return { ok: false, detail: "任务或检视意见已变化，旧回执未登记，请按当前意见重新核对。" };
+    }
     for (const receipt of parsed.receipts) {
       this.annotations(task).respond(receipt.annotation_id, {
         revision: receipt.revision,
@@ -14281,7 +14318,12 @@ export class TaskService {
           failClosed: Boolean(this.options.host),
         }),
         humanGate: task.humanGate,
-        hostHooks,
+        hostHooks: withLiveReviewReceipts(hostHooks, {
+          current: () => this.current(task, epoch),
+          list: () => this.annotations(task).list(),
+          consume: () => this.consumeReviewProcessingReceipts(task),
+          log: (message) => this.options.log?.(`任务 ${task.summary.id} 运行中回执：${message}`),
+        }),
         bashOperations: task.container
           ? {
               // 不锁死开场那个容器实例:等人期间它会被释放,这里必须

@@ -13,6 +13,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createTaskServer } from "../src/server.ts";
 import { TaskService } from "../src/taskService.ts";
+import { ExecutionEventReader } from "../src/executionEvents.ts";
+import { buildTimeline } from "../src/timeline.ts";
 
 function eventLine(eventId: number, command: string): string {
   return JSON.stringify({
@@ -43,20 +45,14 @@ test("最新轮目录解析:取轮号最大者,没有轮目录时如实缺席", 
 
 test("Build-Fix SSE 流出事件;换轮切文件并从头放新一轮", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-prepush-sse-"));
-  const round1 = join(workspace, "round-1");
-  const round2 = join(workspace, "round-2");
+  const round1 = join(workspace, "prepush", "round-1-aaa");
+  const round2 = join(workspace, "prepush", "round-2-bbb");
   mkdirSync(round1, { recursive: true });
-  mkdirSync(round2, { recursive: true });
   writeFileSync(join(round1, "events.jsonl"),
     eventLine(1, "mvn -q compile"));
-  writeFileSync(join(round2, "events.jsonl"),
-    eventLine(1, "mvn -q test"));
-
-  let activePath = join(round1, "events.jsonl");
   let status = "verifying";
   const service = {
-    get: (id: string) => (id === "t1" ? { status } : undefined),
-    prePushEventLogPath: () => activePath,
+    get: (id: string) => (id === "t1" ? { status, workspace } : undefined),
     options: {},
   } as unknown as TaskService;
   const server = createTaskServer(service);
@@ -79,15 +75,16 @@ test("Build-Fix SSE 流出事件;换轮切文件并从头放新一轮", async ()
       const { value, done } = await reader.read();
       if (done) break;
       seen += decoder.decode(value, { stream: true });
-      for (const block of seen.split("\n\n")) {
-        const line = block.replace(/^data: /, "").trim();
-        if (!line) continue;
+      for (const raw of seen.split("\n")) {
+        if (!raw.startsWith("data: ")) continue;
+        const line = raw.slice(6);
         const command = JSON.parse(line).payload?.input?.command;
         if (command && !commands.includes(command)) commands.push(command);
       }
       if (commands.includes("mvn -q compile") && !switched) {
         switched = true;
-        activePath = join(round2, "events.jsonl"); // 修复后新一轮
+        mkdirSync(round2, { recursive: true });
+        writeFileSync(join(round2, "events.jsonl"), eventLine(1, "mvn -q test"));
       }
       if (commands.includes("mvn -q test") && !appended) {
         appended = true;
@@ -102,8 +99,47 @@ test("Build-Fix SSE 流出事件;换轮切文件并从头放新一轮", async ()
     assert.deepEqual(commands, [
       "mvn -q compile", "mvn -q test", "mvn -q test -pl service",
     ], "旧轮→新一轮整放→新一轮增量,顺序与内容都不能漂");
+    status = "verifying"; // Build-Fix 已结束，但任务还在等后续交付；回放也必须结束。
+    const history = await fetch(`http://127.0.0.1:${address.port}/tasks/t1/build-fix/events?follow=false`,
+      { signal: AbortSignal.timeout(5000) });
+    const replay = await history.text();
+    assert.match(replay, /mvn -q compile/);
+    assert.match(replay, /mvn -q test -pl service/);
+    assert.match(replay, /event: end/);
+    writeFileSync(join(workspace, "events.jsonl"), eventLine(1, "git status"));
+    const merged = await fetch(`http://127.0.0.1:${address.port}/tasks/t1/execution/events?follow=false`);
+    const all = await merged.text();
+    assert.match(all, /git status/);
+    assert.match(all, /mvn -q compile/);
+    assert.match(all, /"source":"main"/);
+    assert.match(all, /"source":"build_fix"/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) =>
       error ? reject(error) : resolve()));
   }
+});
+
+test("汇总读取保留跨会话同号事件、同轮不同 SHA、半行与损坏行，不重复增量", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-execution-reader-"));
+  const first = join(workspace, "prepush", "round-1-aaa");
+  const second = join(workspace, "prepush", "round-1-bbb");
+  mkdirSync(first, { recursive: true }); mkdirSync(second, { recursive: true });
+  writeFileSync(join(workspace, "events.jsonl"), eventLine(1, "git status"));
+  writeFileSync(join(first, "events.jsonl"), eventLine(1, "编译甲") + "bad json\n");
+  const line = Buffer.from(eventLine(1, "编译乙"));
+  const cut = line.indexOf(Buffer.from("乙")) + 1;
+  writeFileSync(join(second, "events.jsonl"), line.subarray(0, cut));
+  const reader = new ExecutionEventReader(workspace);
+  assert.equal(reader.read().length, 2);
+  assert.equal(reader.read().length, 0);
+  appendFileSync(join(second, "events.jsonl"), line.subarray(cut));
+  const added = reader.read();
+  assert.equal(added.length, 1);
+  assert.equal((added[0].payload.input as any).command, "编译乙");
+  assert.equal(added[0].execution.attempt, "round-1-bbb");
+  assert.equal(reader.read().length, 0);
+  appendFileSync(join(first, "events.jsonl"), JSON.stringify({ eventId: 2, sessionId: "prepush-1",
+    ts: "2026-09-08T10:30:00Z", kind: "session_started", payload: { resume: false } }) + "\n");
+  const timeline = buildTimeline(workspace);
+  assert.ok(timeline.some((entry) => entry.title === "Build-Fix · 第 1 轮开始"));
 });

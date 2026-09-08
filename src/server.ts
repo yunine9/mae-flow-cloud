@@ -88,6 +88,7 @@ import {
 import { PLANTUML_SOURCE_LIMIT, renderPlantUml } from "./plantumlRender.ts";
 import { REVIEW_ASSET_MAX_BYTES, ReviewAssetError } from "./reviewAssets.ts";
 import { buildTimeline } from "./timeline.ts";
+import { streamExecutionEvents } from "./executionEvents.ts";
 import {
   ArtifactArchiveTooLargeError,
   bundleArtifactDocuments,
@@ -2516,13 +2517,16 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
-        // Build-Fix 的实时事件流(用户点名:编译过程、执行命令必须
-        // 看得见)。轮目录由服务端每拍重解析,换轮自动从头放新一轮。
-        // /prepush 是旧客户端兼容别名；新客户端统一使用 /build-fix。
         if (request.method === "GET"
-            && ["build-fix", "prepush"].includes(parts[2])
+            && ["execution", "build-fix", "prepush"].includes(parts[2])
             && parts[3] === "events") {
-          return streamPrepushEvents(service, id, response);
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return streamExecutionEvents(response, target.workspace, {
+            buildFixOnly: parts[2] !== "execution",
+            follow: url.searchParams.get("follow") !== "false",
+            terminal: () => ["completed", "failed", "canceled"].includes(service.get(id)?.status ?? "canceled"),
+          });
         }
         // 环境预热编译的实时事件流(用户点名:预热进展必须清楚可见)。
         if (request.method === "GET" && parts[2] === "warmup"
@@ -3120,17 +3124,6 @@ function streamEvents(
   response: import("node:http").ServerResponse,
 ): void {
   streamJsonlAsSse(service, id, response, () => service.eventLogPath(id));
-}
-
-/** Build-Fix 事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
- * 目录,路径一变就从头放新一轮,客户端不用自己发现换轮。 */
-function streamPrepushEvents(
-  service: TaskService,
-  id: string,
-  response: import("node:http").ServerResponse,
-): void {
-  streamJsonlAsSse(service, id, response,
-    () => service.prePushEventLogPath(id));
 }
 
 function streamJsonlAsSse(

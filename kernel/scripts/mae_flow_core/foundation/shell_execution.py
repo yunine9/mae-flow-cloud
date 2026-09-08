@@ -134,7 +134,13 @@ def _raw_segments(command):
             text.append(_PLACEHOLDER)
             index = closing + 1
             continue
-        if not quote and char in _SEPARATORS:
+        # >& / <& / >| and Bash &> belong to the surrounding command.
+        # Keep them intact for argv tokenization, while substitutions inside
+        # redirection targets are still recorded above as executed commands.
+        redirect_operator = (
+            char in "&|" and index > 0 and command[index - 1] in "<>"
+            or char == "&" and command[index + 1:index + 2] == ">")
+        if not quote and char in _SEPARATORS and not redirect_operator:
             flush()
             index += 1
             continue
