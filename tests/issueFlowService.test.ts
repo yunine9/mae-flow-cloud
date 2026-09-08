@@ -19,7 +19,7 @@ import {
 import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
@@ -30,7 +30,7 @@ import {
 import {
   handleIssueRoutes,
 } from "../src/issueFlow/routes.ts";
-import { cloneFailureMessage, GIT_AUTH_ERROR_TAG } from "../src/issueFlow/issueGit.ts";
+import { cloneFailureMessage, GIT_AUTH_ERROR_TAG, prepareSandbox } from "../src/issueFlow/issueGit.ts";
 import { loadState, type IssueSessionState } from "../src/issueFlow/state.ts";
 import type { DtsGateway } from "../src/issueFlow/gateways.ts";
 import { buildWorksiteRecord } from "../src/issueFlow/worksiteExport.ts";
@@ -69,6 +69,22 @@ test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 gi
   assert.match(other, /not found/);
   assert.ok(!other.includes("Git 令牌"));
   assert.ok(!other.includes(GIT_AUTH_ERROR_TAG));
+});
+
+test("git 沙箱按仓放行 safe.directory:混属主工作区(宿主 root/容器 1001)不再撞 dubious ownership", () => {
+  const repoDir = "/tmp/mfc-issue-sandbox-shape/repo";
+  const sandbox = prepareSandbox("/tmp/mfc-issue-sandbox-shape/data",
+    undefined, repoDir);
+  // 放行的是 resolve 后的精确路径,逐仓白名单——绝不能出现 *。
+  assert.ok(sandbox.args.includes(`safe.directory=${resolve(repoDir)}`),
+    "args 必须带精确路径的 safe.directory(放行口径与 safeGit/containerRuntime 一致)");
+  assert.equal(sandbox.args.some((arg) => arg === "safe.directory=*"), false,
+    "不能用 *(containerRuntime 复盘注释钉死的决定)");
+  // 不传仓目录(不碰仓库的 git 动作)就不放行:白名单只给需要的。
+  const bare = prepareSandbox("/tmp/mfc-issue-sandbox-shape/data", undefined);
+  assert.equal(
+    bare.args.some((arg) => arg.startsWith("safe.directory=")), false,
+    "没传 repoDir 就不该有 safe.directory");
 });
 
 /** 走一遍真路由(/issues/*),拿到 {status, body}——视图旁路的端到端
