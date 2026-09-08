@@ -76,6 +76,30 @@ test('克隆半途失败不会冒充就绪；重试可完成', async t => {
   await prepareMaeBuildSupport(input);
   assert.ok(existsSync(join(input.root, 'MAEServiceBuildCache/mfc-support.json')));
 });
+test('问题流 prepareMaeBuild 降级：辅助仓 dirty 不再抛断会话，回执+转移账留痕', async t => {
+  const { IssueFlowService } = await import('../src/issueFlow/service.ts');
+  const { ScriptedModelServer } = await import('../src/scriptedModel.ts');
+  const dir = temp(t), root = join(dir, 'repo');
+  for (const repo of MAE_BUILD_REPOSITORIES) await cloneFixture(repo.url, join(root, repo.name));
+  const model = new ScriptedModelServer([{ text: 'idle' }]); await model.start();
+  const service = new IssueFlowService({ dataDir: join(dir, 'data'), provider: 'maeflow',
+    model: 'scripted-v1', modelsJson: model.modelsJson(), deferRecovery: true });
+  const state: any = { repo_urls: ['https://szv-y.codehub.huawei.com/MAE-M/FarsService.git'] };
+  const live = { id: 'issue-degrade', root: dir, state };
+  try {
+    // 干净辅助仓:照常就绪,无降级回执。
+    assert.equal(await (service as any).prepareMaeBuild(live), undefined);
+    // 模拟签名工具原地写脏 DeployBuildTool(重启续跑撞上的现场):
+    // 降级回执给调用方,转移账留痕,绝不抛——抛了就是重启即 failed。
+    writeFileSync(join(root, 'DeployBuildTool/fixture'), 'signature tool rewrote config');
+    const detail = await (service as any).prepareMaeBuild(live);
+    assert.match(String(detail), /已被修改: DeployBuildTool/);
+    assert.match(String(state.transitions?.at(-1)?.note ?? ''), /降级/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
 test('POM parent 按完整节点识别；cgroup v1/v2/max/小于一核', () => {
   assert.equal(buildType('<project><parent>\n<groupId>mae</groupId>\n<version>1</version><artifactId>cpp-parent</artifactId></parent></project>'), 'ServiceBuild_C');
   assert.equal(buildType('<!-- <parent><artifactId>cpp</artifactId></parent> --><parent><artifactId>java</artifactId></parent>'), 'ServiceBuild');

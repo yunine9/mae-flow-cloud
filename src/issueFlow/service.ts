@@ -2042,12 +2042,29 @@ export class IssueFlowService {
     });
   }
 
-  private async prepareMaeBuild(live: LiveIssue): Promise<void> {
-    await prepareMaeBuildSupport({ root: join(live.root, "repo"), dataDir: this.options.dataDir, user: this.options.isolation?.user,
-      repositories: live.state.repo_urls ?? (live.state.repo_url ? [live.state.repo_url] : []),
-      clone: (repoUrl, targetDir, baseline) => cloneRepository({ dataDir: this.options.dataDir,
-        repoUrl, targetDir, baseline, shallow: true, credential: this.options.gitCredential?.(live.state.account) }),
-      log: (message) => this.log(message) });
+  /** 辅助仓构建资源准备,失败降级不挡会话(2026-09-08 对齐 taskService
+   *  的 try/catch 口径):辅助仓只服务构建类阶段,analyze 以业务仓只读
+   *  证据为主,dirty 不影响分析正确性。此前裸抛使重启续跑撞上 warmup
+   *  编译链写脏的辅助仓(签名工具原地改写 config)就整会话 failed。
+   *  错误原文回传给调用方,ensureContainer 挂进 MFC_MAE_BUILD_ERROR
+   *  供构建类阶段感知。 */
+  private async prepareMaeBuild(live: LiveIssue): Promise<string | undefined> {
+    try {
+      await prepareMaeBuildSupport({ root: join(live.root, "repo"), dataDir: this.options.dataDir, user: this.options.isolation?.user,
+        repositories: live.state.repo_urls ?? (live.state.repo_url ? [live.state.repo_url] : []),
+        clone: (repoUrl, targetDir, baseline) => cloneRepository({ dataDir: this.options.dataDir,
+          repoUrl, targetDir, baseline, shallow: true, credential: this.options.gitCredential?.(live.state.account) }),
+        log: (message) => this.log(message) });
+      return undefined;
+    } catch (error) {
+      const detail = String(error instanceof Error ? error.message : error);
+      this.log(`[mae-build] ${live.id} 构建资源未就绪,降级不挡会话: ${detail}`);
+      recordTransition(live.state, {
+        source: "platform",
+        note: `构建资源未就绪,已降级继续(不影响分析): ${detail}`,
+      });
+      return detail;
+    }
   }
 
   private async ensureContainer(live: LiveIssue): Promise<void> {
@@ -2084,11 +2101,13 @@ export class IssueFlowService {
       // 两个旗子都缺席,正是抽取前这里的既有行为。
     });
     // The issue container exists before pull_repo; keep a stable parent bind so late host preparation is visible.
-    await this.prepareMaeBuild(live);
+    // 降级口径见 prepareMaeBuild:错误挂环境变量,不阻断容器与会话。
+    const maeBuildError = await this.prepareMaeBuild(live);
     if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     const volumes = [...mounts.volumes, `${MAE_BUILD_ASSETS}:${MAE_BUILD_MOUNT}:ro`];
     const environment = { ...mounts.environment, MFC_MAE_BUILD_ROOT: join(live.root, "repo"),
-      MFC_MAE_BASELINE: live.state.baseline ?? "" };
+      MFC_MAE_BASELINE: live.state.baseline ?? "",
+      ...(maeBuildError ? { MFC_MAE_BUILD_ERROR: maeBuildError } : {}) };
     const build: IssueContainerBuild = {
       image: isolation.image,
       workspace: live.root,
