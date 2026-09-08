@@ -20,6 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { forceRm } from "./mfcTmp.ts";
 import { isAbsolute, join } from "node:path";
 import {
   CONTRACT_CANDIDATES,
@@ -226,7 +227,7 @@ test("注入钉死:种子工作区带 repo 契约,重启恢复建会话时进模
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    forceRm(dataDir);
   }
 });
 
@@ -265,7 +266,7 @@ test("注入钉死(反面):工作区没有 repo/,提示词与日志都不出现�
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
-    rmSync(dataDir, { recursive: true, force: true });
+    forceRm(dataDir);
   }
 });
 

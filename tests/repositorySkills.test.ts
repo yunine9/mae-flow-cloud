@@ -245,5 +245,8 @@ test("克隆失败也清理临时目录，错误不泄露成未处理异常", as
   assert.deepEqual(catalog.skills, []);
   const after = new Set(readdirSync(tmpdir()).filter((name) =>
     name.startsWith(prefix)));
-  assert.deepEqual(after, before);
+  // 断言"没有新增残留"而不是 after==before:before 里可能有上轮强杀
+  // 留下的孤儿目录,它们不归本测试管,拿等式比会被环境残留误伤。
+  const leaked = [...after].filter((name) => !before.has(name));
+  assert.deepEqual(leaked, [], "克隆失败的临时目录必须清干净");
 });

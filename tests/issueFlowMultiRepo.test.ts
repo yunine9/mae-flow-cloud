@@ -26,7 +26,7 @@ import {
   createBusinessModule,
   updateBusinessModule,
 } from "../src/businessModuleLibrary.ts";
-import { mfcTemp } from "./mfcTmp.ts";
+import { forceRm, mfcTemp } from "./mfcTmp.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -508,8 +508,7 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
       return issue.status === "waiting_user" ? 1 : undefined;
     }, "转正会话首轮以问题卡停机");
     await service.shutdown();
-    rmSync(join(dataDir, "issues", created.id),
-      { recursive: true, force: true });
+    forceRm(join(dataDir, "issues", created.id));
     second = new IssueFlowService({
       dataDir, provider: "maeflow", model: "scripted-v1",
       modelsJson: model.modelsJson(),

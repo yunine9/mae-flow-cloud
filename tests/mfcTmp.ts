@@ -20,8 +20,9 @@ import { after } from "node:test";
 const created = new Set<string>();
 
 /** 删一棵目录树:git 产物里有只读目录挡 unlink(清道夫手册同款坑),
- * 先把沿途目录全放开再删一遍——删文件只需父目录可写,文件本身不用动。 */
-function forceRm(dir: string): void {
+ * 先把沿途目录全放开再删一遍——删文件只需父目录可写,文件本身不用动。
+ * 测试自身的 finally 清理也走这里(裸 rmSync 会撞只读目录直接炸)。 */
+export function forceRm(dir: string): void {
   try {
     rmSync(dir, { recursive: true, force: true });
     return;
