@@ -22,7 +22,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
-import { materializeIssueSkills } from "../src/issueFlow/prompt.ts";
+import {
+  discoverIssueSkillPackages,
+  materializeIssueSkills,
+  SKILL_SOURCE_DIR,
+} from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 
 const SKILL_DIR = join(
@@ -112,6 +116,21 @@ test("技能 frontmatter:目录名与 name 一致,description 非空(路由索�
       `技能 ${name} 的 frontmatter name 与目录名不一致`);
     assert.match(frontmatter, /description:\s*\S/,
       `技能 ${name} 缺 description——路由索引没有原料,Agent 永远到不了它`);
+  }
+});
+
+test("技能指路真实性:skills/<名>/SKILL.md 引用必须指向真实物化的技能", () => {
+  // 编排技能的让位/取用指针(implement 指路、diagnosing-bugs 回路、
+  // grilling 对齐)是 AI 顺藤摸瓜的藤:指路悬空=方法断供,按物化清单
+  // 当场对账。
+  const known = new Set(
+    discoverIssueSkillPackages(SKILL_SOURCE_DIR).map((pkg) => pkg.name));
+  assert.ok(known.size >= 9, "物化清单探针:平台+vendor 技能应齐装");
+  for (const { name, text } of skillFiles()) {
+    for (const match of text.matchAll(/skills\/([a-z0-9-]+)\/SKILL\.md/g)) {
+      assert.ok(known.has(match[1]),
+        `技能 ${name} 指路的「skills/${match[1]}/SKILL.md」不存在——查清单或改指路`);
+    }
   }
 });
 
