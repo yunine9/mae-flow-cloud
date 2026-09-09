@@ -66,10 +66,13 @@ export interface AuthUser {
   /** 个人通知令牌的掩码提示;同样只写不读。通知以令牌对应的人的
    * 身份发,所以按人配——管理员配一个服务号,大家收到的都是机器人。 */
   luban_token_hint?: string;
-  /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
+  /** 月光模式(免审批):开着时本人**需求交付**任务的人工节点自动放行。 */
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
+  /** 问题处理介入档位(ADR-0019 按流剥离):三档缺省二档,与需求侧
+   * 两轴互不带动。 */
+  issue_intervention_tier?: "1" | "2" | "3";
 }
 
 /** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
@@ -208,6 +211,20 @@ export async function putPersonalPushConfirmation(
   const response = await fetch("/auth/me/push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 问题处理介入档位(ADR-0019 按流剥离):一档全自动、二档仅分析
+ * 报告(缺省)、三档全程把控。现读现判、切换即刻生效,不追溯已
+ * 挂起的卡,没有需求侧月光的预览/清扫动作。 */
+export async function putIssueInterventionTier(
+  tier: "1" | "2" | "3",
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-intervention", {
+    method: "PUT",
+    body: JSON.stringify({ tier }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
@@ -3534,15 +3551,18 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
+/** 状态的人话文案。idle 与 waiting_user 的展示已归一为「等你答复」
+ * (2026-09-08 用户拍板:两者对人没差别——卡片在等或停机等继续,都是
+ * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。 */
 export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   queued: "排队启动中",
   running: "AI 处理中",
   waiting_user: "等你答复",
-  idle: "等你继续",
+  idle: "等你答复",
   suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
-  failed: "出错了",
+  failed: "异常",
 };
 
 // ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----

@@ -7,7 +7,7 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
 
 - **向 Cloud 单仓维护迁移**（用户 2026-09-09 最新决定）：目标是逐步将
   内核业务逻辑迁入 Cloud，最终不再依赖独立内核仓。见
-  `docs/adr/0019-cloud-owned-workflow-migration.md`。这项决定取代
+  `docs/adr/0020-cloud-owned-workflow-migration.md`。这项决定取代
   “规则永远只能在 Python 内核实现”的长期约束。按模块交接唯一实现与
   状态写入者，不双写、不复制已撤销门禁。当前仅确定迁移方案，尚未完成
   源码所有权与运行时切换；未迁模块仍沿用现有权威，不能直接绕过其登记。

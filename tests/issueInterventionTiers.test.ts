@@ -1,11 +1,12 @@
 /**
- * 问题流 × 人工介入程度(月光轴,ADR-0006)的契约测试:
- * - 机械层:analysis_confirm 月光全量代答;conclude 仅 non_issue+高置信
- *   代答(闭环无下游闸,分级保守);缺省(回调缺席)一律等真人;
- * - Agent 卡(AskUserQuestion):月光开 + 纯选项题卡按推荐项整卡代答,
- *   开放题/混卡/检视回合/月光关整卡等人(T2,ADR-0006 口径扩展);
+ * 问题流 × 介入档位(ADR-0019,个人设置按流剥离)的契约测试:
+ * - 机械层:一档「全自动」代答 analysis_confirm 全量、conclude 仅
+ *   non_issue+高置信(闭环无下游闸,分级保守);二档的停靠点恰是这些
+ *   闸,永不代答;缺省(回调缺席)=二档;
+ * - Agent 卡(AskUserQuestion):一/二档自动 + 纯选项题卡按推荐项整卡
+ *   代答,开放题/混卡/检视回合/三档把控整卡等人(ADR-0006 口径);
  * - 作答走 answer() 同一裁决通道:现场账、阶段推进与真人作答同款;
- * - 提示层:开场词/续聊词按月光现值渲染「介入节奏」。
+ * - 提示层:开场词/续聊词按介入档位渲染三种「介入节奏」。
  *
  * 范式与 issueFlowNotify.test.ts 同款:ScriptedModelServer 剧本,
  * 只走公开 API 断言。
@@ -94,8 +95,8 @@ const REPORT = "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题�
   + "高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n"
   + "' > issue-analysis.md";
 
-test("月光开:有单分析闸全量代答,自动确认进问题修改", async () => {
-  const dataDir = mfcTemp("mfc-issue-moon-ticket-");
+test("一档全自动:有单分析闸全量代答,自动确认进问题修改", async () => {
+  const dataDir = mfcTemp("mfc-issue-tier-ticket-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "dts_get_ticket", input: {} } },
@@ -111,7 +112,7 @@ test("月光开:有单分析闸全量代答,自动确认进问题修改", async 
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => true,
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -124,14 +125,14 @@ test("月光开:有单分析闸全量代答,自动确认进问题修改", async 
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.stage === "fix" ? issue : undefined;
-    }, "月光自动确认推进到问题修改");
+    }, "一档自动确认推进到问题修改");
     assert.equal(advanced.gate ?? undefined, undefined,
       "确认闸已被代答清掉,不再等用户");
     await until(() => service.get(created.id).status === "idle"
       ? true : undefined, "修改回合收口");
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
-    assert.ok(events.includes("月光免审批自动确认"),
+    assert.ok(events.includes("介入档位免审批自动确认"),
       "现场账必须记录这是系统代答,不是用户作答");
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -139,8 +140,8 @@ test("月光开:有单分析闸全量代答,自动确认进问题修改", async 
   }
 });
 
-test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async () => {
-  const dataDir = mfcTemp("mfc-issue-moon-close-");
+test("一档全自动:无单 non_issue 且自报高置信,自动闭环归档", async () => {
+  const dataDir = mfcTemp("mfc-issue-tier-close-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   const script: Scene[] = [
@@ -156,7 +157,7 @@ test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async (
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => true,
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -167,29 +168,30 @@ test("月光开:无单 non_issue 且自报高置信,自动闭环归档", async (
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "archived" ? issue : undefined;
-    }, "月光自动闭环归档");
+    }, "一档自动闭环归档");
     assert.equal(archived.conclusion?.kind, "non_issue");
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
-    assert.ok(events.includes("月光免审批自动确认"), "现场账记录代答");
+    assert.ok(events.includes("介入档位免审批自动确认"), "现场账记录代答");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });
 
-test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律等真人", async () => {
-  const dataDir = mfcTemp("mfc-issue-moon-guard-");
+test("一档分级不满足(是问题/缺置信度)与三档把控,结论闸一律等真人", async () => {
+  const dataDir = mfcTemp("mfc-issue-tier-guard-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 三种都不代答:是问题(挂起后果重)/没自报置信度(宁人工勿猜)/
-  // 月光关(缺省行为,向后兼容)。
-  const cases: Array<{ label: string; moonlight?: boolean; conclusion:
+  // 三档把控(停靠点就在结论)。
+  const cases: Array<{ label: string; tier?: "1" | "3"; conclusion:
     "issue" | "non_issue"; confidence?: "high" | "medium" | "low" }> = [
-    { label: "是问题必人工", moonlight: true, conclusion: "issue",
+    { label: "是问题必人工", tier: "1", conclusion: "issue",
       confidence: "high" },
-    { label: "缺置信度不代答", moonlight: true, conclusion: "non_issue" },
-    { label: "月光关不代答", conclusion: "non_issue", confidence: "high" },
+    { label: "缺置信度不代答", tier: "1", conclusion: "non_issue" },
+    { label: "三档把控不代答", tier: "3", conclusion: "non_issue",
+      confidence: "high" },
   ];
   for (const item of cases) {
     const script: Scene[] = [
@@ -206,8 +208,7 @@ test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律
     await model.start();
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      ...(item.moonlight === undefined
-        ? {} : { moonlight: () => item.moonlight }),
+      interventionTier: () => item.tier ?? "2",
     });
     try {
       const created = service.create({
@@ -235,22 +236,28 @@ test("月光开但分级不满足:issue 结论、缺置信度、月光关,一律
   }
 });
 
-test("提示层:开场词与续聊词按月光现值渲染介入节奏", () => {
+test("提示层:开场词与续聊词按介入档位渲染三种节奏", () => {
   const state = {
     id: "issue-1", scenario: "ticket", stage: "analyze",
     title: "登录超时", description: "", account: "dev", ticket: TICKET,
   } as unknown as IssueSessionState;
-  const on = issueFixedOpeningPrompt(state, {}, { moonlight: true });
-  const off = issueFixedOpeningPrompt(state, {}, { moonlight: false });
-  assert.match(on, /介入节奏\(月光免审批,开\)/,
-    "月光档:少问、不中间简报、报告会被自动确认");
-  assert.match(on, /无需补充即可执行/);
-  assert.match(off, /介入节奏\(高把关\)/, "把关档:主动问与对齐");
-  assert.doesNotMatch(off, /月光免审批/);
-  const resumeOn = issueResumePrompt(state, "继续", {}, { moonlight: true });
-  const resumeOff = issueResumePrompt(state, "继续", {}, { moonlight: false });
-  assert.match(resumeOn, /月光免审批\(开\)/);
-  assert.match(resumeOff, /高把关——证据不足主动问/);
+  const full = issueFixedOpeningPrompt(state, {}, { tier: "1" });
+  const report = issueFixedOpeningPrompt(state, {}, { tier: "2" });
+  const guard = issueFixedOpeningPrompt(state, {}, { tier: "3" });
+  assert.match(full, /介入节奏\(全自动档\)/,
+    "一档:不问、不简报、报告会被自动确认");
+  assert.match(full, /无需补充即可执行/);
+  assert.match(report, /介入节奏\(仅分析报告档\)/,
+    "二档:报告是唯一停靠点");
+  assert.match(report, /等用户检视/);
+  assert.match(guard, /介入节奏\(全程把控档\)/, "三档:主动问与对齐");
+  assert.doesNotMatch(guard, /自动确认/);
+  const resumeFull = issueResumePrompt(state, "继续", {}, { tier: "1" });
+  const resumeReport = issueResumePrompt(state, "继续", {}, { tier: "2" });
+  const resumeGuard = issueResumePrompt(state, "继续", {}, { tier: "3" });
+  assert.match(resumeFull, /介入节奏:全自动档/);
+  assert.match(resumeReport, /介入节奏:仅分析报告档/);
+  assert.match(resumeGuard, /介入节奏:全程把控档/);
 });
 
 // ---- Agent 卡代答(T2,ADR-0006 口径扩展) ----
@@ -281,7 +288,7 @@ function eventsFile(dataDir: string, issueId: string): string {
     join(dataDir, "issues", issueId, "events.jsonl"), "utf-8");
 }
 
-test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通知照发", async () => {
+test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通知照发", async () => {
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: {
       context: "已对齐两个候选修复方案",
@@ -302,13 +309,13 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
   const luban = new FakeLubanServer();
   await luban.start();
   const notifier = makeNotifier(luban);
-  const dataDir = mfcTemp("mfc-issue-moon-card-");
+  const dataDir = mfcTemp("mfc-issue-tier-card-");
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     notifier,
     linkBase: LINK_BASE,
     // 固定流程同享:有单登记不拦,开场即举 Agent 卡,代答牙齿照硬。
-    moonlight: () => true,
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -320,7 +327,7 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "月光代答 Agent 卡后续跑收口");
+    }, "自动档代答 Agent 卡后续跑收口");
     assert.equal(service.get(created.id).waiting ?? undefined, undefined,
       "卡已被 resolve,不再等用户");
     // 入账与真人页面作答同形:决策码还原成选项原文(decision),
@@ -333,22 +340,22 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
       "决策码还原成选项原文,与真人作答时代一致");
     assert.equal(
       record.notes,
-      "月光免审批自动作答(推荐项:方案A:超时回收、暂不更新)");
+      "介入档位免审批自动作答(推荐项:方案A:超时回收、暂不更新)");
     const events = eventsFile(dataDir, created.id);
-    assert.ok(events.includes("月光免审批自动作答"),
+    assert.ok(events.includes("介入档位免审批自动作答"),
       "现场账必须记录这是系统代答,不是用户作答");
     assert.ok(events.includes("两题都按推荐处理完毕"),
       "作答后走 resumeWithDecision 续跑,剧本下一幕真的执行了");
     // 小鲁班 outcome 通知照发:台账记录人话摘要,投递载荷带工作台链接。
     const outcome = await until(() =>
-      notifier.list().find((item) => item.summary.includes("月光免审批")),
+      notifier.list().find((item) => item.summary.includes("介入档位免审批")),
       "代答 outcome 通知落台账");
     assert.ok(outcome.summary.includes("按推荐项自动作答"));
     assert.equal(outcome.link, `${LINK_BASE}/issues/${created.id}`);
     const delivered = await until(() =>
       luban.messages.find((message) =>
         String(message.link ?? "") === `${LINK_BASE}/issues/${created.id}`
-        && String(message.text ?? "").includes("月光免审批")),
+        && String(message.text ?? "").includes("介入档位免审批")),
       "代答 outcome 通知投递到假小鲁班");
     assert.ok(delivered, "投递载荷带链接与代答说明");
   } finally {
@@ -358,20 +365,20 @@ test("月光开:纯选项题 Agent 卡按推荐项整卡代答,续跑+留痕+通
   }
 });
 
-test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关同样等人", async () => {
+test("自动档:开放题卡与混卡整卡等人,不做半卡代答;三档把控同样等人", async () => {
   const cases: Array<{
     label: string;
-    moonlight?: boolean;
+    tier?: "1" | "3";
     questions: Array<Record<string, unknown>>;
   }> = [
     {
-      label: "开放题卡",
-      moonlight: true,
+      label: "开放题卡(一档)",
+      tier: "1",
       questions: [{ question: "复现步骤具体是什么?" }],
     },
     {
-      label: "混卡(选项题+开放题)",
-      moonlight: true,
+      label: "混卡(选项题+开放题,一档)",
+      tier: "1",
       questions: [{
         question: "采用哪个修复方案?",
         options: ["方案A:超时回收", "方案B:扩容连接池"],
@@ -379,7 +386,8 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
       }, { question: "补充说明?" }],
     },
     {
-      label: "月光关",
+      label: "三档把控",
+      tier: "3",
       questions: [{
         question: "采用哪个修复方案?",
         options: ["方案A:超时回收", "方案B:扩容连接池"],
@@ -396,11 +404,10 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
     const model = new ScriptedModelServer(script, "scripted-v1",
       { linear: true });
     await model.start();
-    const dataDir = mfcTemp("mfc-issue-moon-hold-");
+    const dataDir = mfcTemp("mfc-issue-tier-hold-");
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      ...(item.moonlight === undefined
-        ? {} : { moonlight: () => item.moonlight }),
+      interventionTier: () => item.tier ?? "2",
     });
     try {
       const created = service.create({
@@ -423,7 +430,7 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
       assert.equal(record.status, "waiting", `${item.label}:卡未被碰`);
       assert.equal(record.decision, "", `${item.label}:没有任何代答入账`);
       assert.doesNotMatch(
-        eventsFile(dataDir, created.id), /月光免审批自动作答/,
+        eventsFile(dataDir, created.id), /介入档位免审批自动作答/,
         `${item.label}:不落代答留痕`);
     } finally {
       await service.shutdown().catch(() => undefined);
@@ -432,8 +439,8 @@ test("月光开:开放题卡与混卡整卡等人,不做半卡代答;月光关�
   }
 });
 
-test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)", async () => {
-  const dataDir = mfcTemp("mfc-issue-moon-review-");
+test("自动档:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)", async () => {
+  const dataDir = mfcTemp("mfc-issue-tier-review-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 线性剧本按请求数推进幕:cardA(代答续跑)→ 三幕文本(两次催办耗尽
@@ -461,7 +468,7 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => true,
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -475,7 +482,7 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
     }, "第一轮卡被代答后催办耗尽转 idle");
     const [firstCard] = waitingRecords(dataDir, created.id);
     assert.equal(firstCard.status, "resolved",
-      "前置事实:检视前的纯选项题卡确实被月光代答了");
+      "前置事实:检视前的纯选项题卡确实被自动档代答了");
     // 提交检视 = 整体回退,review_active 置位;续跑回合里 Agent 举 cardB。
     service.addReview(created.id, {
       line: 1, anchor: "第一轮按推荐项处理。",
@@ -501,7 +508,7 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
     assert.equal(secondCard!.status, "waiting", "卡未被代答");
     assert.equal(
       records.filter((record) =>
-        String(record.notes ?? "").includes("月光免审批自动作答")).length,
+        String(record.notes ?? "").includes("介入档位免审批自动作答")).length,
       1,
       "全程只有检视前那一卡被代答,检视回合的卡不追溯");
   } finally {
@@ -510,11 +517,11 @@ test("月光开:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
   }
 });
 
-test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", async () => {
-  const dataDir = mfcTemp("mfc-issue-moon-gate-");
+test("三档把控:盘上有平台闸等真人,Agent 卡闸优先同样等真人", async () => {
+  const dataDir = mfcTemp("mfc-issue-tier-gate-");
   // 同一回合先举 env_needed 闸(拉日志缺网管环境,request_env 如实失败),
-  // 再举 Agent 卡:收口时闸与卡同时在盘。env 闸月光永不代答,Agent 卡
-  // 又因闸在场轮不到——两者都必须原地等真人。
+  // 再举 Agent 卡:收口时闸与卡同时在盘。三档把控 env 闸照举,Agent 卡
+  // 又因闸在场轮不到自动——两者都必须原地等真人。
   const script: Scene[] = [
     { tool: { name: "request_env", input: {} } },
     { tool: { name: "AskUserQuestion", input: {
@@ -529,11 +536,12 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    // opsTools 在场才会走到「缺网管环境举 env_needed 闸」这一步。
+    // opsTools 在场才会走到「缺网管环境举 env_needed 闸」这一步;
+    // 三档把控 env 闸照举(一/二档不举,见 env 闸档位旁路)。
     opsTools: {
       async buildDeploy() { return { summary: "测试假件" }; },
     },
-    moonlight: () => true,
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({
@@ -546,15 +554,15 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
         ? issue : undefined;
     }, "同回合举闸又举卡后收口等真人");
     // 通知与人话口径:闸在场时只 notifyWaitingCard 闸卡,无任何代答
-    // (env 闸永不代、Agent 卡闸优先不代)——代答与不代都现读现判。
+    // (env 闸三档照举、Agent 卡闸优先不代)——现读现判。
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(service.get(created.id).gate?.kind, "env_needed",
-      "env 闸原地等人(月光永不代)");
+      "env 闸原地等人(三档把控照举)");
     const [record] = waitingRecords(dataDir, created.id);
     assert.equal(record.status, "waiting", "Agent 卡未被代答(闸优先)");
     assert.equal(record.decision, "");
     assert.doesNotMatch(
-      eventsFile(dataDir, created.id), /月光免审批自动作答/,
+      eventsFile(dataDir, created.id), /介入档位免审批自动作答/,
       "Agent 卡没有落代答留痕");
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -562,7 +570,7 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
   }
 });
 
-test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定)", async () => {
+test("档位中途切换:已挂起的卡不追溯代答(只在卡落地时判定)", async () => {
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: {
       questions: [{
@@ -575,12 +583,12 @@ test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
-  const dataDir = mfcTemp("mfc-issue-moon-retro-");
-  // 月光开成可翻转的:卡落地时关,落地后再开——追溯与否看这张测试。
-  let moon = false;
+  const dataDir = mfcTemp("mfc-issue-tier-retro-");
+  // 档位做成可翻转的:卡落地时三档把控,落地后切一档——追溯与否看这张测试。
+  let tier: "1" | "3" = "3";
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => moon,
+    interventionTier: () => tier,
   });
   try {
     const created = service.create({
@@ -590,16 +598,16 @@ test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" ? issue : undefined;
-    }, "月光关:卡落地等真人");
-    // 现读现判的边界:设置翻转只对后续到达的卡生效,已挂起的卡不追溯
+    }, "三档把控:卡落地等真人");
+    // 现读现判的边界:档位切换只对后续到达的卡生效,已挂起的卡不追溯
     // 代答(与需求流同口径——代答只发生在卡到达的那一刻)。
-    moon = true;
+    tier = "1";
     await new Promise((resolve) => setTimeout(resolve, 400));
     const [record] = waitingRecords(dataDir, created.id);
     assert.equal(record.status, "waiting", "已挂起的卡不被追溯代答");
     assert.equal(record.decision, "", "没有任何答案被冒名提交");
     assert.doesNotMatch(
-      eventsFile(dataDir, created.id), /月光免审批自动作答/,
+      eventsFile(dataDir, created.id), /介入档位免审批自动作答/,
       "追溯代答会留痕,现场账必须干净");
   } finally {
     await service.shutdown().catch(() => undefined);

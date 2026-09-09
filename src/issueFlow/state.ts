@@ -150,12 +150,12 @@ export type IssueGateKind =
   | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
                        // 确认产一次性令牌放行一次推送;不绑阶段。
   | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
-                       // 月光关档由归属人圈定业务仓 skill 必读集合;
+                       // 把控档由归属人圈定业务仓 skill 必读集合;
                        // 作答走 selection 专用口(与 env_needed 表单同款)。
   | "pipeline_unfixable" // 流水线不可修告警(2026-09-01,票 03):红灯失败项
                          // 全是不可自动修复的工具告警——人在交付平台处理/
                          // 豁免后于卡上作答,平台重置监看账重看同一 SHA;
-                         // 问的是人工处理事实,月光永不代答。
+                         // 问的是人工处理事实,任何介入档位都不代答。
   | "pipeline_evidence"; // 流水线证据回灌(同票):红灯但没有一条可定位的
                          // 具体报错,为免猜改停机——请人把报错原文粘贴进
                          // 作答(自由文本),作答即证据回灌+续跑修复回合。
@@ -267,7 +267,7 @@ export interface IssueGate {
     conclusion?: "issue" | "non_issue";
     summary?: string;
     report?: string;
-    /** 置信度自报(ADR-0006):无单结论闸的月光代答消费——non_issue
+    /** 置信度自报(ADR-0006):无单结论闸的一档全自动代答消费——non_issue
      * 且 high 才自动闭环;缺省按置信度不足处理,宁人工勿猜。 */
     confidence?: "high" | "medium" | "low";
   };

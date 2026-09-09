@@ -64,6 +64,7 @@
 import { createServer, type Server } from "node:http";
 import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
+import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
@@ -532,6 +533,21 @@ export function createTaskServer(
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           const body = await readBody(request);
           options.auth!.setPushConfirmation(viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
+        // 问题处理介入档位(ADR-0019,与需求侧两轴路由平行):三档
+        // 缺省二档,一人一根旋钮。闸位策略由问题流按档位现读现判,
+        // 这里只做存取与校验。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "issue-intervention") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          const tier = body.tier;
+          if (!isIssueInterventionTier(tier)) {
+            return json(response, 400, { error: "非法介入档位" });
+          }
+          options.auth!.setIssueInterventionTier(viewer.username, tier);
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }

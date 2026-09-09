@@ -37,6 +37,19 @@ export interface AuthUser {
   committer?: boolean;
 }
 
+/** 问题处理介入档位(ADR-0019):三档,缺省二档「仅分析报告」。
+ * 需求侧的月光/推送过目两轴在问题侧退役,由这一根旋钮替代。 */
+export type IssueInterventionTier = "1" | "2" | "3";
+
+export const DEFAULT_ISSUE_INTERVENTION_TIER: IssueInterventionTier = "2";
+
+/** HTTP 边界与存取共用的档位校验(单一事实源,防两处漂移)。 */
+export function isIssueInterventionTier(
+  value: unknown,
+): value is IssueInterventionTier {
+  return value === "1" || value === "2" || value === "3";
+}
+
 /** 登录后交给界面的本人视图。密钥原文永不离开服务端，只暴露能让
  * 用户确认“已经配置、末四位是什么”的掩码。 */
 export interface AuthSessionUser extends AuthUser {
@@ -45,6 +58,8 @@ export interface AuthSessionUser extends AuthUser {
   luban_token_hint?: string;
   moonlight: boolean;
   push_confirmation: boolean;
+  /** 问题处理介入档位(按流剥离):与需求侧两轴互不带动。 */
+  issue_intervention_tier: IssueInterventionTier;
 }
 
 /** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
@@ -73,18 +88,27 @@ interface StoredUser extends AuthUser {
    * "这个 commit 是谁的"按 commit email 映射账号——令牌只管推送
    * 鉴权,署名归这里。不是密钥,可以回显。 */
   git_email?: string;
-  /** 月光模式(免审批):开着时本人任务的人工节点由系统代答放行,
-   * 事后复盘。随时可开可关,是持续状态不是下单时的一次性选择。 */
+  /** 月光模式(免审批):开着时本人**需求交付**任务的人工节点由系统
+   * 代答放行,事后复盘。随时可开可关,是持续状态不是下单时的一次性
+   * 选择。问题处理不走这两根轴——那里是独立的介入档位(ADR-0019)。 */
   moonlight?: boolean;
-  /** push 前人工确认(交付清单过目):与 moonlight 合成"人工介入
-   * 程度"的两个正交轴——月光管过程节点停不停,这个管交付内容出门
-   * 前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26 拍板:
-   * 默认开启、不做任务粒度),所以只落盘显式的 false。 */
+  /** push 前人工确认(交付清单过目):与 moonlight 合成**需求交付**
+   * "人工介入程度"的两个正交轴——月光管过程节点停不停,这个管交付
+   * 内容出门前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26
+   * 拍板:默认开启、不做任务粒度),所以只落盘显式的 false。问题处理
+   * 侧没有独立开关——过目并进介入档位定义(ADR-0019)。 */
   push_confirmation?: boolean;
+  /** 问题处理的介入档位(v2 按流剥离,2026-09-09 拍板):三档,缺省
+   * 二档「仅分析报告」,全员从二档起步不继承需求侧。稀疏存储:二档
+   * 即缺省不落盘,只落显式的 1/3。 */
+  issue_intervention_tier?: IssueInterventionTier;
 }
 
 interface UserFile {
-  version: 1;
+  /** v2(2026-09-09):人工介入程度按流剥离——需求侧沿用 moonlight/
+   * push_confirmation,问题侧换成单一介入档位 issue_intervention_tier
+   * (缺省二档,不继承,v1 升级只改文件格式)。 */
+  version: 2;
   users: StoredUser[];
   /** 已删除账号永久占用用户名，避免后来同名账号继承旧任务操作权。 */
   retired_usernames?: string[];
@@ -378,6 +402,26 @@ export class LocalAuth {
     return !!stored?.moonlight && !stored.disabled;
   }
 
+  /** 问题处理介入档位(ADR-0019):缺省二档;闸位策略由问题流按档位
+   * 现读现判,这里只管存取。非法档位拒绝( HTTP 边界转 400)。 */
+  setIssueInterventionTier(username: string, tier: IssueInterventionTier): void {
+    if (!isIssueInterventionTier(tier)) {
+      throw new Error(`非法介入档位: ${String(tier)}`);
+    }
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (tier === "2") delete stored.issue_intervention_tier;
+    else stored.issue_intervention_tier = tier;
+    this.persist();
+  }
+
+  issueInterventionTier(username: string | undefined): IssueInterventionTier {
+    if (!username) return DEFAULT_ISSUE_INTERVENTION_TIER;
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return DEFAULT_ISSUE_INTERVENTION_TIER;
+    return stored.issue_intervention_tier ?? DEFAULT_ISSUE_INTERVENTION_TIER;
+  }
+
   /** push 前人工确认默认值(缺省即开,只落盘显式的关)。改动即时
    * 生效于本人后续到达推送点的任务;已经在等确认的卡不撤——那张卡
    * 是按当时的意愿举的,点一下"确认按清单推送"就走,不存在悬死。 */
@@ -409,6 +453,7 @@ export class LocalAuth {
       luban_token_hint: this.lubanTokenHint(username),
       moonlight: this.moonlightEnabled(username),
       push_confirmation: this.pushConfirmationEnabled(username),
+      issue_intervention_tier: this.issueInterventionTier(username),
     };
   }
 
@@ -473,21 +518,28 @@ export class LocalAuth {
 
   private load(): void {
     if (!existsSync(this.file)) return;
-    const parsed = JSON.parse(readFileSync(this.file, "utf-8")) as UserFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.users)) {
+    const parsed = JSON.parse(readFileSync(this.file, "utf-8")) as
+      { version?: number; users?: StoredUser[]; retired_usernames?: unknown[] };
+    if ((parsed.version !== 1 && parsed.version !== 2)
+        || !Array.isArray(parsed.users)) {
       throw new Error(`账号文件格式不受支持: ${this.file}`);
     }
-    for (const user of parsed.users) this.users.set(user.username, user);
+    for (const user of parsed.users) {
+      this.users.set(user.username, user);
+    }
     for (const username of parsed.retired_usernames ?? []) {
       if (typeof username === "string") this.retiredUsernames.add(username);
     }
+    // v1→v2 只升文件格式,不做任何继承:问题处理介入档位全员缺省
+    // 二档(ADR-0019 拍板),需求侧字段原值保留。
+    if (parsed.version === 1) this.persist();
   }
 
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true });
     const temp = `${this.file}.tmp`;
     const body: UserFile = {
-      version: 1,
+      version: 2,
       users: [...this.users.values()],
       ...(this.retiredUsernames.size
         ? { retired_usernames: [...this.retiredUsernames].sort() } : {}),

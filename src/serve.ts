@@ -865,11 +865,10 @@ async function main(): Promise<void> {
     // 检视回复发布时代点"已解决"(--resolve-discussions):默认关,
     // resolve 归检视人(与需求交付同一面旗,2026-09-08 问题流接入)。
     ...(resolveDiscussions ? { resolveDiscussions } : {}),
-    // 月光免审批(人工介入程度的过程轴,现读现判):分析结论闸代答。
-    moonlight: (account) => auth.moonlightEnabled(account),
-    // 推送前过目(人工介入程度的交付轴,现读现判):push_branch 举卡
-    // 等过目,确认产一次性令牌放行一次推送;真人缺省即开,显式关才关。
-    pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
+    // 问题处理介入档位(ADR-0019,个人设置按流剥离,现读现判):闸
+    // 策略、提示词节奏与推送过目全部由档位派生——三档全程把控,二档
+    // 只停在分析报告,一档全自动;缺省二档。
+    interventionTier: (account) => auth.issueInterventionTier(account),
     gitCredential: (account) => auth.gitCredential(account),
     opsToolsDir: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
@@ -942,9 +941,10 @@ async function main(): Promise<void> {
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
     // credential helper 注入;没配的用户走部署级访问方式。
     gitCredential: (account) => auth.gitCredential(account),
-    // 月光模式:每张卡到达时现读——开着的直行,关了的恢复审批。
+    // 月光模式(需求侧独立的「人工介入程度·需求交付」过程轴):
+    // 每张卡到达时现读——开着的直行,关了的恢复审批。
     moonlight: (account) => auth.moonlightEnabled(account),
-    // push 前清单过目:同样现读个人默认(真人缺省即开)。
+    // push 前清单过目(需求侧独立的交付轴):同样现读个人默认(真人缺省即开)。
     pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     collaborationAssigneeReadiness: (account) => {
       const needs = {

@@ -97,7 +97,7 @@ timeout)。Abort 语义不变(用户打断回合仍销毁容器)。机制本体�
 ## 三条铁的边界
 
 2026-09-09 更新：确定向 Cloud 单仓、单一运行时逐步迁移。
-见 [迁移决策与完成标准](docs/adr/0019-cloud-owned-workflow-migration.md)。
+见 [迁移决策与完成标准](docs/adr/0020-cloud-owned-workflow-migration.md)。
 当前仅完成方案与边界梳理，尚未切换模块运行权威；下文的双仓同步描述
 是迁移前现状，不能作为永久禁止 Cloud 接管业务逻辑的依据。
 
