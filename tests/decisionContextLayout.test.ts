@@ -28,8 +28,8 @@ test("决策背景展开后由外层真实占位，不能与后续问题重叠",
 test("长检视内容在检视画布内自己滚动，不把整页撑高", () => {
   // 2026-09-05(740b6ff)起检视意见不再是固定定位抽屉,而是材料区右侧常驻
   // 的画布:和材料内容并排在 .ws-material-stage 这一行里,自己滚、不撑父级。
-  assert.match(workspace,
-    /className="ws-review-canvas" id="ws-review-canvas" role="complementary"/);
+  assert.match(readFileSync(join(process.cwd(), "web/src/ResizableReviewPane.tsx"), "utf8"),
+    /className="ws-review-canvas" id="ws-review-canvas"[\s\S]*?role="complementary"/);
   assert.match(studio, /\.ws-review-canvas \{[^}]*min-height: 0;[^}]*overflow: auto/);
   assert.match(studio, /\.ws-material-stage \{[^}]*min-height: 0;[^}]*overflow: hidden/);
   assert.doesNotMatch(workspace, /workspace-review-drawer|workspace-review-content/,
@@ -55,7 +55,7 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
   assert.match(workspace, /className=\{`ws-review-launch/);
   assert.match(workspace, /reviewCounts\.mine \|\| reviewRecordCount/);
   const canvasHeader = workspace.slice(
-    workspace.indexOf('<section className="ws-review-canvas"'),
+    workspace.indexOf('<ResizableReviewPane open={reviewPanelOpen}>'),
     workspace.indexOf("{reviewWorkspaceContent}"),
   );
   assert.ok(canvasHeader.length > 0, "检视画布的标题栏要能定位到");
@@ -98,7 +98,7 @@ test("检视意见是材料区右侧的常驻画布:材料露出可点,定位不
   const stage = workspace.slice(
     workspace.indexOf('<div className="ws-material-stage">'),
     workspace.indexOf('<div className="ws-material-content">'));
-  assert.match(stage, /<section className="ws-review-canvas"[^>]*hidden=\{!reviewPanelOpen\}/,
+  assert.match(stage, /<ResizableReviewPane open=\{reviewPanelOpen\}>/,
     "画布是材料舞台的直接子级,靠 hidden 开关而不是条件卸载");
   assert.doesNotMatch(workspace, /has-review|workspace-review-drawer/,
     "不再进 .ws-body 栅格,也没有抽屉");

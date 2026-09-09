@@ -1,3 +1,4 @@
+import { ResizableReviewPane } from "./ResizableReviewPane";
 import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 import "./overall-story.css";
 /**
@@ -2073,14 +2074,13 @@ export function TaskWorkspace({
             </div>
           </div>
           <div className="ws-material-stage">
-          <section className="ws-review-canvas" id="ws-review-canvas" role="complementary"
-            aria-label="检视意见" tabIndex={-1} hidden={!reviewPanelOpen}>
+          <ResizableReviewPane open={reviewPanelOpen}>
             <header className="ws-view-intro">
               <div><h2>检视意见</h2><p>对照材料查看意见和回应，点击位置即可定位。</p></div>
               <button type="button" aria-label="收起检视意见" onClick={() => setReviewPanelOpen(false)}>×</button>
             </header>
             {reviewWorkspaceContent}
-          </section>
+          </ResizableReviewPane>
           <div className="ws-material-content">
           {workspaceView === "knowledge" ? (
             <div className="ws-primary-scroll ws-knowledge-view">
