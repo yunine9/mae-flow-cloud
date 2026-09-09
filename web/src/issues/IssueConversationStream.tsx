@@ -324,6 +324,11 @@ export function IssueConversationStream({
       }
       case "card": {
         const decision = decisions.get(item.waiting_id);
+        // 答案逐题对齐:decision 是逐题答案按题序的换行拼接(自定义
+        // 答复是原文,选了给定选项的是选项原文)。匹配上选项就高亮,
+        // 匹配不上=自定义答复,回填到题面上——只按行找选项的话,
+        // 自定义回答在卡上就无影无踪(用户实测)。
+        const answerLines = decision ? decision.decision.split("\n") : [];
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
           tag: <em className={`conv-tag ${item.status === "waiting" ? "att" : "neutral"}`}>
@@ -337,20 +342,24 @@ export function IssueConversationStream({
               </span>
               <h4>{conversationCardTitle(item)}</h4>
             </div>
-            {item.questions.map((question, index) => (
-              <div className="conv-question" key={index}>
-                {item.questions.length > 1 && <p>{question.question}</p>}
-                {question.options.length > 0 && (
-                  <ul className="conv-options">
-                    {question.options.map((option) => {
-                      // 裁决文本是提交时的选项原文(码还原后),逐行比对出勾。
-                      const chosen = decision?.decision.split("\n").includes(option);
-                      return <li key={option} className={chosen ? "chosen" : ""}>{option}</li>;
-                    })}
-                  </ul>
-                )}
-              </div>
-            ))}
+            {item.questions.map((question, index) => {
+              const line = answerLines[index] ?? "";
+              const custom = line !== "" && !question.options.includes(line);
+              return (
+                <div className="conv-question" key={index}>
+                  {item.questions.length > 1 && <p>{question.question}</p>}
+                  {question.options.length > 0 && (
+                    <ul className="conv-options">
+                      {question.options.map((option) => (
+                        <li key={option}
+                          className={option === line ? "chosen" : ""}>{option}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {custom && <p className="conv-answer">自定义答复:{line}</p>}
+                </div>
+              );
+            })}
           </div>,
         });
       }

@@ -932,12 +932,15 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
   assert.match(stream,
     /children: <div className="conv-card current">\{currentCard\}<\/div>/);
   // 流内卡的回放按 status 给词签(waiting=等待决定/superseded=已作废/
-  // 其余=已决定),勾选对齐裁决文本——三类卡与通用卡走同一条投影渲染,
-  // 不按卡种分叉。
+  // 其余=已决定),答案逐题对齐:decision 按题序换行拼接,本题行等于
+  // 选项原文即出勾,不等于任何选项=自定义答复回填题面(2026-09-08:
+  // 自定义回答只按行找选项,卡上无影无踪)。
   assert.match(stream,
     /item\.status === "waiting" \? "等待决定"\s*\n\s*: item\.status === "superseded" \? "已作废" : "已决定"/);
   assert.match(stream, /conversationCardTitle\(item\)/);
-  assert.match(stream, /decision\?\.decision\.split\("\\n"\)\.includes\(option\)/);
+  assert.match(stream, /const answerLines = decision \? decision\.decision\.split\("\\n"\) : \[\]/);
+  assert.match(stream, /const custom = line !== "" && !question\.options\.includes\(line\)/);
+  assert.match(stream, /自定义答复:\{line\}/);
   // 会话视图:dockRef setState → footerTarget → 当前卡一线到底,dock 门
   // 仍是 waiting && canOperate(查看模式不出 dock)。
   assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
