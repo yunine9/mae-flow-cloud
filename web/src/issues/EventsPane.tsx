@@ -1,11 +1,12 @@
 /**
  * 现场域:执行现场页签(SSE 直播)。
  *
- * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
- * 结构照搬任务侧 EventTail——筛选器 + 贴底跟随 + 色调标记,一种读法。
- * 数据源换成问题流的 SSE(tailIssueEvents),只陈列不解读。贴底跟随
- * 用两域共用的 useStickyBottom(stickyBottom.ts,判据见 follow.ts),
- * 本地复刻已删除;事件筛选/窗口/计数在 eventView.ts。
+ * 结构照搬任务侧 EventTail——筛选器 + 贴底跟随 + 色调标记,一种读法;
+ * 长内容/结构化内容默认只在行内给预览按钮,点「右侧查看 →」在流旁的
+ * 详情面板看全文(2026-09-08 与任务侧对齐,原就地 <details> 展开已删)。
+ * 数据源是问题流的 SSE(tailIssueEvents),只陈列不解读。贴底跟随
+ * 用两域共用的 useStickyBottom(stickyBottom.ts,判据见 follow.ts);
+ * 事件筛选/窗口/计数与详情选中类型在 eventView.ts。
  */
 import { useEffect, useState } from "react";
 import { tailIssueEvents, type SemanticEvent, type SseConnectionState } from "../api";
@@ -14,6 +15,7 @@ import {
   eventWindow,
   filterEvents,
   isErrorEvent,
+  type EventDetailSelection,
   type EventFilter,
 } from "../eventView";
 import { formatLocalDateTime } from "../time";
@@ -54,16 +56,20 @@ function issueEventTone(event: SemanticEvent): string {
   return "neutral";
 }
 
-function IssueEventValue({ value }: { value: unknown }) {
+function IssueEventValue({ value, onInspect }: {
+  value: unknown;
+  onInspect: (content: string, structured: boolean) => void;
+}) {
   if (typeof value === "string") {
     if (value.length > 480) {
-      return <details className="event-value-expand">
-        <summary>
+      return <button type="button" className="event-value-preview"
+        onClick={() => onInspect(value, false)}>
+        <span>
           <span>{value.slice(0, 180).trim()}…</span>
-          <small>展开完整内容 · {value.length} 字</small>
-        </summary>
-        <pre>{value}</pre>
-      </details>;
+          <small>{value.length} 字</small>
+        </span>
+        <strong>右侧查看 <i aria-hidden>→</i></strong>
+      </button>;
     }
     return <span className="event-value-text">{value || "（空）"}</span>;
   }
@@ -74,19 +80,25 @@ function IssueEventValue({ value }: { value: unknown }) {
     return <code className="event-value-atom">{String(value)}</code>;
   }
   const structured = JSON.stringify(value, null, 2);
-  return <details className="event-value-expand structured">
-    <summary>
+  return <button type="button" className="event-value-preview structured"
+    onClick={() => onInspect(structured, true)}>
+    <span>
       <span>结构化内容</span>
-      <small>展开查看 · {structured.split("\n").length} 行</small>
-    </summary>
-    <pre>{structured}</pre>
-  </details>;
+      <small>{structured.split("\n").length} 行</small>
+    </span>
+    <strong>右侧查看 <i aria-hidden>→</i></strong>
+  </button>;
 }
 
-function IssueEventRecord({ event }: { event: SemanticEvent }) {
+function IssueEventRecord({ event, selectedDetail, onInspect }: {
+  event: SemanticEvent;
+  selectedDetail?: string;
+  onInspect: (selection: EventDetailSelection) => void;
+}) {
   const fields = Object.entries(event.payload ?? {});
   return (
-    <article className={`event-record ${issueEventTone(event)}`}>
+    <article className={`event-record ${issueEventTone(event)}${selectedDetail
+      ?.startsWith(`${event.eventId}:`) ? " selected" : ""}`}>
       <header>
         <span className="event-record-dot" aria-hidden />
         <strong>{ISSUE_EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
@@ -103,7 +115,16 @@ function IssueEventRecord({ event }: { event: SemanticEvent }) {
           {fields.map(([field, value]) => (
             <div key={field}>
               <dt>{ISSUE_EVENT_FIELD_LABEL[field] ?? field}</dt>
-              <dd><IssueEventValue value={value} /></dd>
+              <dd><IssueEventValue value={value} onInspect={(content, structured) =>
+                onInspect({
+                  key: `${event.eventId}:${field}`,
+                  eventId: event.eventId,
+                  eventLabel: ISSUE_EVENT_KIND_LABEL[event.kind] ?? event.kind,
+                  fieldLabel: ISSUE_EVENT_FIELD_LABEL[field] ?? field,
+                  content,
+                  structured,
+                  timestamp: event.ts,
+                })} /></dd>
             </div>
           ))}
         </dl>
@@ -119,6 +140,7 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
     SseConnectionState>("connecting");
   const [filter, setFilter] = useState<EventFilter>("all");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const [detail, setDetail] = useState<EventDetailSelection>();
   const filtered = filterEvents(events, filter);
   const visible = eventWindow(filtered, visibleLimit);
   const counts = eventFilterCounts(events);
@@ -135,6 +157,7 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
     setEvents([]);
     setConnection("connecting");
     setVisibleLimit(PAGE_SIZE);
+    setDetail(undefined);
   }, [id]);
 
   useEffect(() => setVisibleLimit(PAGE_SIZE), [filter]);
@@ -183,7 +206,8 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
           </button>
         </div>
       )}
-      <div ref={follow.ref} className="event-stream"
+      <div className={`event-workspace${detail ? " has-detail" : ""}`}>
+        <div ref={follow.ref} className="event-stream"
            onScroll={follow.onScroll}>
         {visible.hidden > 0 && (
           <button type="button" className="event-load-earlier"
@@ -206,8 +230,29 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
           </div>
         )}
         {visible.items.map((event) => (
-          <IssueEventRecord event={event} key={event.eventId} />
+          <IssueEventRecord event={event} key={event.eventId}
+            selectedDetail={detail?.key}
+            onInspect={setDetail} />
         ))}
+        </div>
+        {detail && (
+          <aside className="event-detail" aria-label="事件完整内容">
+            <header>
+              <div>
+                <span>#{detail.eventId} · {detail.eventLabel}</span>
+                <strong>{detail.fieldLabel}</strong>
+                <time dateTime={detail.timestamp}>
+                  {formatLocalDateTime(detail.timestamp, { seconds: true })}
+                </time>
+              </div>
+              <button type="button" onClick={() => setDetail(undefined)}
+                aria-label="关闭事件详情" title="关闭详情">×</button>
+            </header>
+            <pre className={detail.structured ? "structured" : ""}>
+              {detail.content}
+            </pre>
+          </aside>
+        )}
       </div>
     </div>
   );

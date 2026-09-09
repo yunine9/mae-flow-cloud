@@ -1,0 +1,168 @@
+/**
+ * ui.css — 共享 primitives 类家族(组件统一化 2026-09-08,波次 0)。
+ *
+ * 全部消费 tokens.css 的变量;ui- 前缀命名空间,与存量裸类
+ * (primary/ghost/danger)并存,存量页面逐页迁移,新页面一律用这里。
+ *
+ * 为什么整体放 @layer fixes(登记在案的覆盖出口,见 tokens.css 头注释):
+ * 迁移页上 legacy 的容器级配方(.user-create-form button 之类,特异性
+ * (0,1,1))必须让位给单类 .ui-btn(0,1,0)——放 legacy 层会被压住,
+ * 迁移就成了空转。fixes 无条件赢,这正是它存在的意义;页面对迁移后
+ * 元素的定制,请写在元素自己的类上而不是回退容器配方。
+ */
+
+@layer legacy {
+  /* primitives 的基类在 fixes 层(见上);此处留空以满足分层纪律。 */
+}
+
+@layer fixes {
+
+  /* ---- 按钮:配方唯一份(accent 按钮配方曾按容器复制 ~19 份) ---- */
+  .ui-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--ease), border-color var(--ease),
+      color var(--ease);
+  }
+  .ui-btn:hover:not(:disabled) { border-color: var(--ink); }
+  .ui-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .ui-btn:disabled { opacity: .48; cursor: not-allowed; }
+
+  .ui-btn.primary {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--ink-fg);
+    font-weight: 650;
+  }
+  .ui-btn.primary:hover:not(:disabled) {
+    background: var(--ink-hover);
+    border-color: var(--ink-hover);
+  }
+
+  .ui-btn.ghost { border-color: transparent; background: transparent; }
+  .ui-btn.ghost:hover:not(:disabled) { background: var(--surface-3); }
+
+  .ui-btn.danger {
+    border-color: var(--danger);
+    background: var(--danger);
+    color: #fff;
+  }
+  .ui-btn.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 85%, #000);
+  }
+
+  .ui-btn.sm { padding: 4px 9px; font-size: var(--fs-13); }
+
+  /* ---- 徽标:语义 soft 底 + 同族深字(收编 58 处前缀徽标) ---- */
+  .ui-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: var(--fs-12);
+    line-height: 1.6;
+    background: var(--surface-3);
+    color: var(--muted);
+  }
+  .ui-badge.active { background: var(--active-soft); color: var(--active); }
+  .ui-badge.success { background: var(--success-soft); color: var(--success); }
+  .ui-badge.danger { background: var(--danger-soft); color: var(--danger); }
+  .ui-badge.attention { background: var(--attention-soft); color: var(--attention); }
+  .ui-badge.merge { background: var(--merge-soft); color: var(--merge); }
+
+  /* ---- 表单字段:label 包裹式网格(收编 5 份重复配方) ---- */
+  .ui-field {
+    display: grid;
+    gap: 5px;
+    color: var(--muted);
+    font-size: var(--fs-13);
+  }
+  .ui-field > input,
+  .ui-field > select,
+  .ui-field > textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--main-bg);
+    color: var(--text-strong);
+    font: inherit;
+  }
+  .ui-field > input:focus,
+  .ui-field > select:focus,
+  .ui-field > textarea:focus {
+    outline: 2px solid var(--focus);
+    outline-offset: -1px;
+    border-color: var(--focus);
+  }
+
+  /* ---- 卡片基座(收编 30 种卡片家族的公共部分) ---- */
+  .ui-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-xs);
+    color: var(--text);
+  }
+
+  /* ---- 空态基座(收编 53 个空态类) ---- */
+  .ui-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 28px 16px;
+    color: var(--faint);
+    font-size: var(--fs-13);
+    text-align: center;
+  }
+  .ui-empty > * { margin: 0; }
+
+  /* ---- 弹层(配 <Modal> 组件;层级走 tokens 的层叠阶梯) ---- */
+  .ui-modal-backdrop {
+    position: fixed;
+    z-index: var(--z-modal);
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: color-mix(in srgb, #07101d 62%, transparent);
+    backdrop-filter: blur(4px);
+  }
+  .ui-modal-dialog {
+    display: grid;
+    gap: 14px;
+    width: min(460px, calc(100vw - 48px));
+    padding: 22px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-xl);
+    background: var(--surface);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
+    color: var(--text);
+  }
+  .ui-modal-dialog > form { display: grid; gap: 14px; margin: 0; }
+  .ui-modal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .ui-modal-head h2 { margin: 3px 0 0; color: var(--text-strong); font-size: var(--fs-17); }
+  .ui-modal-head small { color: var(--ink); font-weight: 700; }
+  .ui-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 2px;
+  }
+}

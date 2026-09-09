@@ -72,10 +72,11 @@ const ENV_SCOPE_TEXT: Record<string, string> = {
 };
 
 /** 拒绝钮的拍板文案(票 93,按闸 scope 分叉;缺省按 logs——服务端
- * 对缺 scope 的旧卡也按 logs 处理,两端同一缺省)。 */
+ * 对缺 scope 的旧卡也按 logs 处理,两端同一缺省)。2026-09-08 走查:
+ * "无需拉日志"没人认出这是拒绝口,直说拒绝;理由走上方选填框。 */
 const ENV_DECLINE_TEXT: Record<string, string> = {
-  logs: "无需拉日志,继续分析",
-  deploy: "无需换库部署,继续",
+  logs: "拒绝填写,继续分析",
+  deploy: "拒绝填写,继续",
 };
 
 /** 拒绝分支的 wire 形(票 93):复用 POST /issues/:id/environment

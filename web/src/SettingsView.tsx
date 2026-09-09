@@ -80,7 +80,7 @@ function SystemCheckCard({ onResult }: {
       <div><span className="section-kicker">DEPLOYMENT CHECK</span><h2 id="system-check-title">部署自检</h2><p>只读检查当前服务，不发送消息、不创建任务。</p></div>
       <div className="system-check-actions">
         {result && <span className={`check-summary ${result.overall}`}><i aria-hidden />{summary}</span>}
-        <button type="button" disabled={busy} onClick={() => void run()}>{busy ? "检查中…" : "重新检查"}</button>
+        <button type="button" className="ui-btn" disabled={busy} onClick={() => void run()}>{busy ? "检查中…" : "重新检查"}</button>
       </div>
     </div>
     {error && <div className="form-message error">{error}</div>}
@@ -94,7 +94,7 @@ function KnobField({ label, note, defaultText, value, onChange }: {
   label: string; note: string; defaultText: string;
   value: string; onChange: (next: string) => void;
 }) {
-  return <label>
+  return <label className="ui-field">
     <span className="setting-label-row"><span>{label}</span><em>默认 {defaultText}</em></span>
     <input inputMode="numeric" value={value} placeholder={`使用默认值：${defaultText}`}
       onChange={(event) => onChange(event.target.value)} />
@@ -171,7 +171,7 @@ function RuntimeCard({ view, onSaved }: {
           ? "永不回收" : `${defaults.workspace_retention_days} 天`}
         note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
         value={retention} onChange={setRetention} />
-      <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
+      <button type="submit" className="ui-btn primary" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
       <Feedback message={message} />
     </form>
   </div>;
@@ -212,7 +212,7 @@ function ExecutionPolicyCard({ view, onSaved }: {
     </div>
     <form className="user-create-form settings-form execution-policy-form"
       onSubmit={submit}>
-      <label>
+      <label className="ui-field">
         <span>新任务默认补充</span>
         <textarea rows={7} maxLength={2000} value={instructions}
           placeholder="例如：涉及存量接口时先核对兼容性；不确定的外部行为明确说明，不要猜；公共契约变更必须点名影响方。"
@@ -224,7 +224,7 @@ function ExecutionPolicyCard({ view, onSaved }: {
       </label>
       {/* 团队各阶段勾选增强已随 v1 退役(2026-08-29):想定制阶段
           结构请到「团队资产 → 工作流」建团队工作流资产。 */}
-      <button type="submit" disabled={busy}>
+      <button type="submit" className="ui-btn primary" disabled={busy}>
         {busy ? "正在保存…" : "保存团队执行约定"}
       </button>
       <Feedback message={message} />
@@ -340,9 +340,9 @@ function BuildCacheCard({ view, onSaved }: {
         note="超出后优先清最久未用的缓存；0 表示不限制"
         value={maxGb} onChange={setMaxGb} />
       <div className="build-cache-actions span-2">
-        <button type="submit" disabled={saving || reclaiming}>
+        <button type="submit" className="ui-btn primary" disabled={saving || reclaiming}>
           {saving ? "正在保存…" : "保存缓存策略"}</button>
-        <button type="button" className="secondary" disabled={loading || reclaiming || !status?.caches}
+        <button type="button" className="ui-btn" disabled={loading || reclaiming || !status?.caches}
           onClick={() => void clearUnused()}>
           {reclaiming ? "正在清理…" : "清理未使用缓存"}</button>
       </div>
@@ -421,7 +421,7 @@ function ModelsCard({ view, onSaved }: {
       </span>
     </div>
     <form className="user-create-form settings-form" onSubmit={submit}>
-      <label className="span-2">
+      <label className="ui-field span-2">
         <span>模型网关地址</span>
         <input value={url} type="url" required spellCheck={false}
           placeholder={apiFormat === "anthropic-messages"
@@ -434,7 +434,7 @@ function ModelsCard({ view, onSaved }: {
             : "OpenAI Chat 兼容接口(请求发往 地址/chat/completions)。"}
         </small>
       </label>
-      <label className="span-2">
+      <label className="ui-field span-2">
         <span>API Key</span>
         <input value={apiKey} type="password" autoComplete="new-password"
           required={!models.configured}
@@ -445,13 +445,13 @@ function ModelsCard({ view, onSaved }: {
               : "请输入模型网关 API Key"}
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
-      <label>
+      <label className="ui-field">
         <span>模型名称</span>
         <input value={model} required spellCheck={false}
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
       </label>
-      <label>
+      <label className="ui-field">
         <span>接口格式</span>
         <select value={apiFormat}
           onChange={(event) => setApiFormat(event.target.value)}>
@@ -461,9 +461,9 @@ function ModelsCard({ view, onSaved }: {
         <small className="knob-note">按网关实际提供的接口协议选择</small>
       </label>
       <div className="settings-form-actions">
-        <button type="submit" disabled={busy || testing}>
+        <button type="submit" className="ui-btn primary" disabled={busy || testing}>
           {busy ? "正在保存…" : "保存模型配置"}</button>
-        <button type="button" disabled={busy || testing} onClick={() => void runCheck()}>
+        <button type="button" className="ui-btn" disabled={busy || testing} onClick={() => void runCheck()}>
           {testing ? "测试中…" : "测试连通"}</button>
       </div>
       <small className="knob-note">测试使用当前表单值向网关发送一条极小请求（密钥留空时沿用已保存的）。</small>
@@ -544,13 +544,13 @@ function VisionModelsCard({ view, onSaved }: {
       </span>
     </div>
     <form className="user-create-form settings-form" onSubmit={submit}>
-      <label className="span-2">
+      <label className="ui-field span-2">
         <span>图片识别网关地址</span>
         <input value={url} type="url" required spellCheck={false}
           placeholder="例如：https://qwen-vl.internal/v1"
           onChange={(event) => setUrl(event.target.value)} />
       </label>
-      <label>
+      <label className="ui-field">
         <span>接口协议</span>
         <select value={api} onChange={(event) => setApi(event.target.value)}>
           <option value="openai-completions">OpenAI Chat Completions</option>
@@ -558,13 +558,13 @@ function VisionModelsCard({ view, onSaved }: {
           <option value="anthropic-messages">Anthropic Messages</option>
         </select>
       </label>
-      <label>
+      <label className="ui-field">
         <span>模型名称</span>
         <input value={model} required spellCheck={false}
           placeholder="例如：qwen2.5-vl-72b-instruct"
           onChange={(event) => setModel(event.target.value)} />
       </label>
-      <label className="span-2">
+      <label className="ui-field span-2">
         <span>API Key</span>
         <input value={apiKey} type="password" autoComplete="new-password"
           required={!configured}
@@ -576,9 +576,9 @@ function VisionModelsCard({ view, onSaved }: {
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
       <div className="vision-settings-actions span-2">
-        <button type="submit" disabled={saving || testing}>
+        <button type="submit" className="ui-btn primary" disabled={saving || testing}>
           {saving ? "正在保存…" : "保存图片识别配置"}</button>
-        <button type="button" className="secondary"
+        <button type="button" className="ui-btn"
           disabled={!configured || dirty || saving || testing}
           onClick={() => void test()}>
           {testing ? "正在识别测试图…" : dirty ? "请先保存再测试" : "测试识图能力"}</button>

@@ -153,11 +153,17 @@ export function expectedBranch(state: IssueSessionState): string {
 function raiseEnvNeededGate(
   ctx: IssueToolContext,
   scope: IssueGateScope,
-): never {
+): string {
   if (ctx.state.env_declined?.scopes.includes(scope)) {
     fail(`用户已确认无需此操作(${ENV_SCOPE_LABELS[scope]}),`
       + "请基于现有证据继续;确有必要可在结论中说明证据局限,"
       + "不要再次请求环境");
+  }
+  if (ctx.state.gate?.kind === "env_needed") {
+    // 已有一张配置卡在等:幂等回报,不覆盖闸——覆盖会换 gate id,
+    // 页面卡与手机通知都按 waiting_id 对账,换了就成第二张卡。
+    return "已有一张网管环境配置卡在等用户填写,不要重复发起——"
+      + "等平台通知(用户填好或拒绝)后再继续。";
   }
   raiseGate(
     ctx.state,
@@ -168,8 +174,12 @@ function raiseEnvNeededGate(
     scope,
   );
   ctx.persist();
-  fail("已向用户发起网管环境配置请求,等待填写"
-    + "(用户在问题卡提交后,平台会通知你重试刚才的操作)");
+  // 成功收口(不是 fail):发起配置请求是一次完成的工具执行,把它记成
+  // 失败会让现场回执画 ✕、用户以为出错。模型侧语义靠文案自明:
+  // 等待期可继续不需要环境的工作,回合收口由平台闸接管。
+  return "已向用户发起网管环境配置请求,等待填写"
+    + "(用户在问题卡提交后,平台会通知你重试刚才的操作)。"
+    + "等待期间可继续不需要环境的工作。";
 }
 
 /** 分析报告的既定落点(prompt 行为契约要求 Agent 维护它,闸门以它
@@ -298,7 +308,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         return ok("网管环境已配置(get_issue_meta 可查全量),无需请求——"
           + "按技能 issue-ops 抓取日志即可。");
       }
-      raiseEnvNeededGate(ctx, "logs");
+      return ok(raiseEnvNeededGate(ctx, "logs"));
     },
   }));
 
@@ -424,7 +434,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       gateStage("build_deploy");
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法换库");
       const password = ctx.environmentPassword?.();
-      if (!password) raiseEnvNeededGate(ctx, "deploy");
+      if (!password) return ok(raiseEnvNeededGate(ctx, "deploy"));
       const repoDir = locateRepo(params.repo).dir;
       if (!existsSync(join(repoDir, ".git"))) fail("代码克隆不存在,无法部署(先 pull_repo)");
       const hosts = (params.hosts as string[] | undefined)?.length
