@@ -66,10 +66,13 @@ export interface AuthUser {
   /** 个人通知令牌的掩码提示;同样只写不读。通知以令牌对应的人的
    * 身份发,所以按人配——管理员配一个服务号,大家收到的都是机器人。 */
   luban_token_hint?: string;
-  /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
+  /** 月光模式(免审批):开着时本人**需求交付**任务的人工节点自动放行。 */
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
+  /** 问题处理侧的人工介入轴(按流剥离):与需求侧同义、独立取值。 */
+  issue_moonlight?: boolean;
+  issue_push_confirmation?: boolean;
 }
 
 /** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
@@ -206,6 +209,27 @@ export async function putPersonalPushConfirmation(
   on: boolean,
 ): Promise<AuthUser> {
   const response = await fetch("/auth/me/push-confirmation", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 问题处理侧的月光免审批(按流剥离)。现读现判、开闸不追溯:
+ * 已在等待的卡仍等真人,所以没有预览/清扫动作。 */
+export async function putIssueMoonlight(on: boolean): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-moonlight", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 问题处理侧的 push 前过目(缺省即开)。 */
+export async function putIssuePushConfirmation(on: boolean): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
   });
@@ -3527,15 +3551,18 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
+/** 状态的人话文案。idle 与 waiting_user 的展示已归一为「等你答复」
+ * (2026-09-08 用户拍板:两者对人没差别——卡片在等或停机等继续,都是
+ * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。 */
 export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   queued: "排队启动中",
   running: "AI 处理中",
   waiting_user: "等你答复",
-  idle: "等你继续",
+  idle: "等你答复",
   suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
-  failed: "出错了",
+  failed: "异常",
 };
 
 // ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----

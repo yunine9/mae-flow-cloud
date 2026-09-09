@@ -31,17 +31,20 @@ import { IssueCostPanel, IssueFixedProgress, IssueSessionView } from "./SessionV
 import { IssueEventsPane } from "./EventsPane";
 
 /** 列表状态筛选:默认"进行中"(只藏已归档/已取消两个收口终态——failed
- * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。 */
+ * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。
+ * idle 的展示已归一进「等你答复」(2026-09-08 拍板):不设独立筛选项,
+ * 选「等你答复」时两者一起命中。 */
 type IssueListFilter = "active" | IssueStatus | "all";
 const ISSUE_FILTER_STORAGE_KEY = "mae-flow:issue-list-filter";
 const ISSUE_FILTER_STATUSES: IssueStatus[] = [
-  "waiting_user", "running", "idle", "queued", "suspended", "failed",
+  "waiting_user", "running", "queued", "suspended", "failed",
   "archived", "canceled",
 ];
 
 function readIssueListFilter(): IssueListFilter {
   try {
     const saved = localStorage.getItem(ISSUE_FILTER_STORAGE_KEY);
+    if (saved === "idle") return "waiting_user";
     if (saved === "active" || saved === "all") return saved;
     if (saved && ISSUE_FILTER_STATUSES.includes(saved as IssueStatus)) {
       return saved as IssueStatus;
@@ -83,7 +86,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   // 聚合徽章(与任务侧"当前任务"同款语义):待答复置前,需介入报警。
   // 按全量算,不跟着筛选走——告警不该因为翻历史就消失。
   const waitingCount = issues.filter((issue) =>
-    issue.status === "waiting_user").length;
+    issue.status === "waiting_user" || issue.status === "idle").length;
   const interventionCount = issues.filter((issue) =>
     issue.status === "failed").length;
 
@@ -91,11 +94,18 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   for (const issue of issues) {
     statusCounts.set(issue.status, (statusCounts.get(issue.status) ?? 0) + 1);
   }
+  // 「等你答复」选项的计数含 idle(展示归一,计数同步归一)。
+  const filterOptionCount = (status: IssueStatus) =>
+    status === "waiting_user"
+      ? (statusCounts.get("waiting_user") ?? 0) + (statusCounts.get("idle") ?? 0)
+      : statusCounts.get(status) ?? 0;
   const visibleIssues = statusFilter === "all" ? issues
     : statusFilter === "active"
       ? issues.filter((issue) =>
           issue.status !== "archived" && issue.status !== "canceled")
-      : issues.filter((issue) => issue.status === statusFilter);
+      : issues.filter((issue) => statusFilter === "waiting_user"
+          ? issue.status === "waiting_user" || issue.status === "idle"
+          : issue.status === statusFilter);
 
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
@@ -223,7 +233,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               </option>
               {ISSUE_FILTER_STATUSES.map((status) => (
                 <option key={status} value={status}>
-                  {ISSUE_STATUS_TEXT[status]}({statusCounts.get(status) ?? 0})
+                  {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
                 </option>
               ))}
               <option value="all">全部({issues.length})</option>
