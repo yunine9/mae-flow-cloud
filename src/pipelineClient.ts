@@ -57,7 +57,9 @@ export interface PipelineStatus extends PipelineRun {
 
 const CONTRACT_STATUS = new Set(["success", "failed", "running"]);
 
-function pipelineHeaders(
+/** 身份头(个人凭据 percent 编码,令牌不进请求体)——pipeline/创建 MR/
+ * 检视讨论三类客户端共用的同一形状。 */
+export function pipelineHeaders(
   credential: PipelineCredential | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {};

@@ -67,6 +67,12 @@
 
 平台通知: 用户已确认无需{{scope}}(拒绝了网管环境配置请求)。请基于现有证据继续,不要再次请求网管环境;如证据不足,在分析报告里如实说明证据局限。{{note}}
 
+## mr_review
+
+平台通知: CodeHub MR 收到 {{count}} 条检视意见,请逐条处理:
+{{list}}
+逐条修复后,在同一修复分支追加提交,用 push_branch 重推、create_mr 重建 MR,再调 complete_stage 重新申报验绿。每条处理完,把回复写进工作区文件 mr-review-replies.json(JSON 数组,元素形如 {"discussion_id": "意见id", "body": "回复正文"}),平台会代为发布回 CodeHub。
+
 ## pipeline.green.remind
 
 平台通知: 全部 MR 流水线已跑绿({{repos}}),请调 complete_stage(带 mrs 参数申报 MR 清单)完成「提交 MR·跑绿」阶段申报。
