@@ -136,6 +136,9 @@ export interface IssueEnvCredentials {
   backend?: string;
   /** 网管页面密码。 */
   page?: string;
+  /** 独立 root 密码(#150,ADR-0020):只在显式凭据组在场时由服务层
+   * 解出;继承后台密码的会话缺席,出口按"没有独立 root"处理。 */
+  root?: string;
 }
 
 /** 登记元信息:手工登记时人填的输入全量(标题/现象/模块/带出仓/
@@ -155,6 +158,9 @@ export interface IssueRegistrationMeta {
     page_account?: string;
     page_password?: string;
     backend_password?: string;
+    /** 独立 root 密码:显式设置时才有(留空语义 = 与后台密码相同,
+     * 那种会话这里缺席)。 */
+    root_password?: string;
   };
 }
 
@@ -188,6 +194,7 @@ export function issueRegistrationMeta(
         ...(credentials.backend
           ? { backend_password: credentials.backend }
           : {}),
+        ...(credentials.root ? { root_password: credentials.root } : {}),
       } }
       : {}),
   };
@@ -209,6 +216,9 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
     ...(env.page_password ? [`    - 页面密码: ${env.page_password}`] : []),
     ...(env.backend_password
       ? [`    - 网管后台密码(sopuser/ossuser/ossadm 共用): ${env.backend_password}`]
+      : []),
+    ...(env.root_password
+      ? [`    - root 密码(独立设置;与后台密码不同): ${env.root_password}`]
       : []),
   ];
 }

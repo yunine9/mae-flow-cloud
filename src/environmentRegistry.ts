@@ -231,6 +231,12 @@ export class EnvironmentRegistry {
     this.store = new SealedFile(join(dataDir, ".environment-registry"));
   }
 
+  /** 按条目 id 取非密视图(消费方快照定位用,#150);不存在返回 undefined。 */
+  get(id: string): EnvironmentRegistryView | undefined {
+    const entry = this.read().find((item) => item.id === id);
+    return entry ? view(entry) : undefined;
+  }
+
   /** 台账列表(非密视图)。 */
   list(): EnvironmentRegistryView[] {
     return this.read().map(view);
@@ -387,4 +393,33 @@ export function upsertEnvironmentByIp(
     }, actor),
     created: false,
   };
+}
+
+/** 手动沉淀(#150,闸卡手填作答带 save_to_registry):按 IP 幂等地把
+ * 人现场填的环境存进团队台账,创建者/更新人 = 作答人。合并语义刻意比
+ * upsertEnvironmentByIp 保守——沉淀是旁路贡献,绝不覆盖台账维护者显式
+ * 配置过的数据:
+ * - 台账无该 IP → 整条创建(后台密码、显式 root 若给定);
+ * - 已有同 IP → 密码只补缺:后台密码恒已配置(创建必填)不动;root 仅
+ *   在继承态(root_password_inherited=true)且本次给了显式值时补写——
+ *   不清人家的显式 root,也不替换已显式配置的后台密码;
+ * - 端口/形态/标签是维护者的数据,沉淀不改写(闸上的一次手填没有越权
+ *   改写团队台账的道理)。 */
+export function contributeEnvironmentByIp(
+  registry: EnvironmentRegistry,
+  input: EnvironmentRegistryInput,
+  actor: string,
+): { entry: EnvironmentRegistryView; created: boolean } {
+  const existing = registry.findByIp(input.ip);
+  if (!existing) {
+    return { entry: registry.create(input, actor), created: true };
+  }
+  if (existing.root_password_inherited && input.rootPassword) {
+    return {
+      entry: registry.update(existing.id,
+        { rootPassword: input.rootPassword }, actor),
+      created: false,
+    };
+  }
+  return { entry: existing, created: false };
 }

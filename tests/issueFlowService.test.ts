@@ -23,6 +23,7 @@ import { join, resolve } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
+import { EnvironmentRegistry } from "../src/environmentRegistry.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
   buildIssueTimeline,
@@ -1623,6 +1624,259 @@ test("问题单并发数走管理页旋钮:额度现读,排队会话在额度腾
     await until(() =>
       service.get(second.id).status === "idle" ? second : undefined,
       "排队会话补位并收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+// ---- 环境台账快照(票 #150,ADR-0020「选入即快照」):登记与
+// ---- env_needed 闸都收 environment_id——前端永远没有密码,值由服务端
+// ---- 从台账解密后走既有 storeEnvironment 路径进会话 vault;台账后续
+// ---- 改/删不影响已拷贝的会话(测试钉死)。
+
+test("环境台账快照(#150):登记收 environment_id——服务端解密快照进 vault,root 显式/继承两语义;台账改/删不影响已拷贝会话", async () => {
+  const dataDir = mfcTemp("mfc-issue-envsnap-");
+  const registry = new EnvironmentRegistry(dataDir);
+  // 显式 root:快照把解析后的 root 密码一并带进会话(独立凭据组)。
+  const explicit = registry.create({
+    ip: "10.0.0.8", port: 2222, form: "k8s",
+    backendPassword: "backend-explicit", rootPassword: "root-explicit",
+    tags: ["v5"],
+  }, "keeper");
+  // 继承 root(留空):不落独立 root 凭据,会话与"只填后台密码"完全同构。
+  const inherited = registry.create({
+    ip: "10.0.0.9", form: "virtualized", backendPassword: "backend-inherit",
+  }, "keeper");
+  const script: Scene[] = [
+    { text: "收到,先做初步排查。" },
+    { text: "收到,继承态环境的会话也收口。" },
+  ];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    // 无单登记必须指定业务模块(spec #15):给一个最小模块供两次创建。
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [`file://${join(dataDir, "seed")}`],
+    }, "tester");
+    // 快照与手填字段互斥:同给 400,不烧会话号。
+    const mixed = await issuePost(["issues"], {
+      account: "dev", title: "互斥打回",
+      environment: { environment_id: explicit.id, hosts: ["10.9.9.9"] },
+    }, service);
+    assert.equal(mixed.status, 400);
+    assert.match(mixed.body.error, /互斥/);
+
+    // 显式 root 的快照登记:hosts 单台(现有 wire 格式)、端口/形态随
+    // 台账条目,来源 IP 记录在案;回执与状态文件搜不到任何密码明文。
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏", moduleId: "pay-core",
+      environment: {
+        environmentId: explicit.id,
+        pagePassword: "page-secret",
+      },
+    });
+    assert.deepEqual(created.environment?.hosts, ["10.0.0.8"]);
+    assert.equal(created.environment?.port, 2222);
+    assert.equal(created.environment?.env_type, "k8s");
+    assert.equal(created.environment?.environment_source_ip, "10.0.0.8",
+      "快照来源(选定时点的台账主 IP)进会话状态");
+    assert.equal(created.environment?.page_account, "admin",
+      "页面凭据不入台账,登记快照仍按手填带上");
+    assert.ok(created.environment?.root_credential_ref,
+      "台账显式设置 root 时,快照带独立 root 凭据组");
+    assert.ok(!JSON.stringify(created).includes("backend-explicit"));
+    const vault = new IssueEnvironmentVault(dataDir);
+    assert.equal(vault.credential(created.id,
+      created.environment!.credential_ref, "sopuser")?.password,
+      "backend-explicit");
+    assert.deepEqual(vault.credential(created.id,
+      created.environment!.root_credential_ref!),
+      { username: "root", password: "root-explicit" });
+    assert.equal(vault.credential(created.id,
+      created.environment!.page_credential_ref!)?.password, "page-secret");
+    const stateFile = readFileSync(
+      join(dataDir, "issues", created.id, "issue.json"), "utf-8");
+    assert.doesNotMatch(stateFile, /backend-explicit|root-explicit/);
+
+    // 继承 root 的快照登记:没有独立 root 凭据组,后台密码即解析值。
+    const second = service.create({
+      account: "dev", title: "继承 root 的会话", moduleId: "pay-core",
+      environment: { environmentId: inherited.id, pagePassword: "page-secret-2" },
+    });
+    assert.equal(second.environment?.root_credential_ref, undefined,
+      "继承态不落独立 root 凭据,会话行为与现状一致");
+    assert.equal(second.environment?.environment_source_ip, "10.0.0.9");
+    assert.equal(vault.credential(second.id,
+      second.environment!.credential_ref, "sopuser")?.password,
+      "backend-inherit");
+
+    // 元信息出口(root_password 按 page_password 先例,只在显式存在时):
+    // 开场上下文带独立 root 明文行(ADR-0003)。
+    await until(() => model.requests.length ? 1 : undefined, "首轮请求");
+    assert.match(JSON.stringify(model.requests),
+      /root 密码\(独立设置;与后台密码不同\): root-explicit/);
+
+    // 快照语义钉死:台账改密/删条目后,已拷贝会话的读取结果不变。
+    registry.update(explicit.id, { backendPassword: "rotated" }, "keeper");
+    registry.remove(inherited.id);
+    assert.equal(registry.secrets(explicit.id)?.backendPassword, "rotated",
+      "台账自身确已改变(对照)");
+    assert.equal(vault.credential(created.id,
+      created.environment!.credential_ref, "sopuser")?.password,
+      "backend-explicit", "会话快照不随台账轮换漂移");
+    assert.equal(vault.credential(created.id,
+      created.environment!.root_credential_ref!, "root")?.password,
+      "root-explicit");
+    assert.equal(vault.credential(second.id,
+      second.environment!.credential_ref, "sopuser")?.password,
+      "backend-inherit", "台账条目删除后,已拷贝会话照常解出");
+
+    // 登记快照的未知条目:人话打回,不烧会话号。
+    assert.throws(() => service.create({
+      account: "dev", title: "条目不存在", moduleId: "pay-core",
+      environment: { environmentId: "no-such-entry" },
+    }), /不存在/);
+    await until(() =>
+      service.get(created.id).status === "idle" ? 1 : undefined, "首回合收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("env_needed 闸快照与手动沉淀(#150):environment_id 作答即台账快照;互斥同给 400;save_to_registry 保守合并不覆盖已配置密码", async () => {
+  const dataDir = mfcTemp("mfc-issue-envsnap-gate-");
+  const registry = new EnvironmentRegistry(dataDir);
+  const entry = registry.create({
+    ip: "10.0.0.66", port: 2222, form: "k8s",
+    backendPassword: "snapshot-secret", tags: ["闸快选"],
+  }, "keeper");
+  const now = "2026-09-09T00:00:00Z";
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "manual",
+    scenario: "no_ticket", status: "waiting_user", stage: "analyze",
+    stage_note: "", stage_at: now,
+    gate: {
+      id: "gate-1", kind: "env_needed", state_version: 0,
+      question: { questions: [{
+        question: "获取日志/换库需要网管服务器地址与密码",
+        options: [{ code: "fill", label: "填写并继续" }],
+      }] },
+      scope: "logs",
+      created_at: now,
+    },
+  }));
+  const script: Scene[] = [
+    { text: "快照已配,重试日志。" },
+    { text: "手动沉淀一收口。" },
+    { text: "手动沉淀二收口。" },
+    { text: "手动沉淀三收口。" },
+  ];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const vault = new IssueEnvironmentVault(dataDir);
+  try {
+    // 互斥一律 400:environment_id 与 decline 同给、与手填字段同给、
+    // 与沉淀勾选同给,都不产生任何落盘。
+    for (const payload of [
+      { environment_id: entry.id, decline: true },
+      { environment_id: entry.id, backend_password: "x" },
+      { environment_id: entry.id, hosts: ["10.0.0.1"],
+        env_type: "k8s", save_to_registry: true },
+    ]) {
+      const rejected = await issuePost(
+        ["issues", "issue-1", "environment"], payload, service);
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.body.error, /互斥/);
+    }
+    assert.equal(loadState(join(dataDir, "issues", "issue-1"))?.environment,
+      undefined, "互斥打回不落任何盘");
+
+    // 未知条目:按本端口的控制族 409 人话打回。
+    const missing = await issuePost(["issues", "issue-1", "environment"],
+      { environment_id: "no-such-entry" }, service);
+    assert.equal(missing.status, 409);
+    assert.match(missing.body.error, /不存在/);
+
+    // 快照作答:200 清闸,值从台账进 vault,hosts 单台、来源 IP 在案。
+    const ok = await issuePost(["issues", "issue-1", "environment"],
+      { environment_id: entry.id }, service);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.gate ?? undefined, undefined, "快照作答即清闸");
+    assert.deepEqual(ok.body.environment?.hosts, ["10.0.0.66"]);
+    assert.equal(ok.body.environment?.port, 2222);
+    assert.equal(ok.body.environment?.env_type, "k8s");
+    assert.equal(ok.body.environment?.environment_source_ip, "10.0.0.66");
+    assert.equal(vault.credential("issue-1",
+      ok.body.environment.credential_ref, "sopuser")?.password,
+      "snapshot-secret");
+    await until(() => service.get("issue-1").status === "idle"
+      ? 1 : undefined, "快照作答的平台回合收口");
+
+    // 手动沉淀(ADR-0020 手动回退的沉淀出路):手填带 save_to_registry
+    // 与可选 root——台账按保守合并创建(创建者=作答人),会话 root
+    // 凭据显式落 vault。
+    const manual = await issuePost(["issues", "issue-1", "environment"], {
+      hosts: ["10.0.0.77"], port: 2223, env_type: "k8s",
+      backend_password: "manual-secret", root_password: "manual-root",
+      save_to_registry: true,
+    }, service);
+    assert.equal(manual.status, 200);
+    const contributed = registry.findByIp("10.0.0.77");
+    assert.ok(contributed, "手填沉淀进了台账");
+    assert.equal(contributed!.created_by, "dev", "创建者=作答人");
+    assert.equal(contributed!.port, 2223);
+    assert.deepEqual(registry.secrets(contributed!.id), {
+      backendPassword: "manual-secret",
+      rootPassword: "manual-root",
+    });
+    assert.ok(manual.body.environment?.root_credential_ref);
+    assert.equal(vault.credential("issue-1",
+      manual.body.environment.root_credential_ref, "root")?.password,
+      "manual-root");
+    const raw = readFileSync(
+      join(dataDir, "issues", "issue-1", "issue.json"), "utf-8");
+    assert.ok(!raw.includes("manual-root"), "沉淀路径同样秘密止步 vault");
+
+    // 合并语义钉死:同 IP 再沉淀——已显式配置的密码不被覆盖、显式
+    // root 不被清掉;继承态条目只补显式 root(只补缺)。
+    const inheritedEntry = registry.create({
+      ip: "10.0.0.78", form: "k8s", backendPassword: "be-78",
+    }, "keeper");
+    const again = await issuePost(["issues", "issue-1", "environment"], {
+      hosts: ["10.0.0.77"], port: 9999, env_type: "k8s",
+      backend_password: "rotated-attempt", save_to_registry: true,
+    }, service);
+    assert.equal(again.status, 200);
+    assert.deepEqual(registry.secrets(contributed!.id), {
+      backendPassword: "manual-secret",
+      rootPassword: "manual-root",
+    }, "沉淀是旁路贡献:已显式配置的密码原样保留");
+    const refill = await issuePost(["issues", "issue-1", "environment"], {
+      hosts: ["10.0.0.78"], env_type: "k8s",
+      backend_password: "be-78", root_password: "root-78",
+      save_to_registry: true,
+    }, service);
+    assert.equal(refill.status, 200);
+    assert.deepEqual(registry.secrets(inheritedEntry.id), {
+      backendPassword: "be-78",
+      rootPassword: "root-78",
+    }, "继承态条目只补显式 root,后台密码不动");
+    await until(() => service.get("issue-1").status === "idle"
+      ? 1 : undefined, "沉淀作答的平台回合收口");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

@@ -3709,7 +3709,10 @@ export interface IssueSummary {
   baseline?: string;
   /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
    * page_account/page_credential_ref 只在登记配了页面凭据时在场——env_needed
-   * 闸现场补配的环境没有页面凭据,两键一并缺席。 */
+   * 闸现场补配的环境没有页面凭据,两键一并缺席。root_credential_ref 只在
+   * 独立 root 密码显式存在时在场(ADR-0020:继承后台密码的会话不落独立
+   * 凭据)。environment_source_ip 在场=本环境来自环境管理台账的选定时点
+   * 快照(#150,非密来源展示用);手填环境没有这个字段。 */
   environment?: {
     credential_ref: string;
     name: string;
@@ -3717,6 +3720,9 @@ export interface IssueSummary {
     port: number;
     page_account?: string;
     page_credential_ref?: string;
+    root_credential_ref?: string;
+    /** 快照来源(#150):选定时点的台账主 IP(非密),展示「来自环境管理」用。 */
+    environment_source_ip?: string;
     /** 环境形态:虚拟化/容器化 K8s,决定日志抓取引擎;登记或配置卡选定。 */
     env_type?: "virtualized" | "k8s";
   };
@@ -3873,16 +3879,31 @@ export interface DtsTicketDetail {
 }
 
 /** env_needed 闸的环境表单 wire 形(POST /issues/:id/environment 请求体,
- * 与服务端 routes 的读取一一对应):地址 + 端口 + 环境形态 + 网管后台密码。
- * 形态(虚拟化/容器化)决定日志抓取引擎;密码只进服务端 vault,不落
- * 状态/事件;现场补配的流程碰不到网管页面,没有页面凭据的位置。 */
+ * 与服务端 routes 的读取一一对应)。两条作答路(#150,ADR-0020):
+ * - 手填:地址 + 端口 + 环境形态 + 网管后台密码,另带可选 root 密码
+ *   (留空 = 与后台密码相同)与「存入环境管理」沉淀勾选
+ *   (save_to_registry);形态决定日志抓取引擎。
+ * - 台账快选:只带 environment_id——值由服务端从台账解密快照进会话
+ *   vault,前端永远没有密码;与手填字段互斥,服务端同给 400。
+ * 密码只进服务端 vault,不落状态/事件;现场补配的流程碰不到网管页面,
+ * 没有页面凭据的位置。decline 分支复用本形状(hosts/backend_password
+ * 占位过类型,服务端不读)。 */
 export interface IssueEnvironmentForm {
-  hosts: string[];
+  /** 手填网管环境 IP(单个);快照提交只带 environment_id 时省略。 */
+  hosts?: string[];
   port?: number;
-  /** 环境形态(虚拟化/容器化):填写提交必带(表单 ready 门强制);
+  /** 环境形态(虚拟化/容器化):手填提交必带(表单 ready 门强制);
    * decline 分支不带。 */
   env_type?: "virtualized" | "k8s";
-  backend_password: string;
+  /** 手填网管后台密码;快照提交省略。 */
+  backend_password?: string;
+  /** 台账快选(#150):选中的环境管理条目 id,提交即服务端快照。 */
+  environment_id?: string;
+  /** 手填可选独立 root 密码:留空 = 与后台密码相同(服务端不落独立凭据)。 */
+  root_password?: string;
+  /** 手填沉淀(#150,ADR-0020):把这次手填幂等存进环境管理台账
+   * (创建者/更新人=作答人;不覆盖台账已显式配置的密码)。 */
+  save_to_registry?: boolean;
 }
 
 async function issueFetch(
@@ -3911,11 +3932,19 @@ export function getIssue(id: string): Promise<IssueDetail> {
   return issueFetch(`/issues/${encodeURIComponent(id)}`);
 }
 
-/** 登记侧网管环境四件套(wire 形,与服务端 service.ts 的
- * normalizeEnvironmentInput 同一把尺):hosts 支持多台;页面账号缺省
- * admin 由服务端归一;两个密码只进服务端 vault,任何接口不回显。
- * 无单登记服务端强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。 */
-export interface IssueRegistrationEnvironment {
+/** 登记侧网管环境(wire 形,与服务端 service.ts 的 normalizeEnvironmentInput
+ * 同一把尺):两个密码只进服务端 vault,任何接口不回显。无单登记服务端
+ * 强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。
+ * 快照语义(#150,ADR-0020):从环境管理选中提交只带 environment_id——
+ * 服务端从台账解密快照进会话 vault(前端永远没有密码);页面账号/密码
+ * 不入台账,仍手填随行。手填路保持原契约(与 environment_id 互斥)。 */
+export interface IssueRegistrationEnvironmentSnapshot {
+  environment_id: string;
+  page_account?: string;
+  page_password: string;
+}
+
+export interface IssueRegistrationEnvironmentManual {
   hosts: string[];
   /** 环境形态(虚拟化/容器化 K8s),决定日志抓取引擎。 */
   env_type: "virtualized" | "k8s";
@@ -3923,6 +3952,10 @@ export interface IssueRegistrationEnvironment {
   page_password: string;
   backend_password: string;
 }
+
+export type IssueRegistrationEnvironment =
+  | IssueRegistrationEnvironmentSnapshot
+  | IssueRegistrationEnvironmentManual;
 
 export function createIssue(input: {
   title: string;
