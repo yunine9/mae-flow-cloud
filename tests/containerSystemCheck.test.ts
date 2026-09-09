@@ -54,6 +54,18 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
             assert.match(command, /gate edit main\.ts/,
               "自检必须证明配置阶段源码写入会被内核拒绝");
             assert.match(command, /managed flow edit gate unexpectedly allowed/);
+            // Execute the exact managed-flow part, not just its wording. The
+            // old test mocked success and missed a real kernel policy change.
+            const start = command.indexOf('if test -n "${MFC_KERNEL_ROOT:-}"; then flow_probe=');
+            const end = command.indexOf('; cd "$OLDPWD"; fi', start);
+            assert.ok(start >= 0 && end > start);
+            const probe = command.slice(start, end + '; cd "$OLDPWD"; fi'.length);
+            const scratch = mkdtempSync(join(tmpdir(), "mfc-managed-flow-probe-"));
+            execFileSync("bash", ["-c", "set -eu; " + probe], {
+              cwd: scratch, timeout: 30_000,
+              env: { ...process.env, scratch, MFC_KERNEL_ROOT: join(process.cwd(), "kernel") },
+              stdio: "pipe",
+            });
             assert.match(command, /passwd_home/);
             assert.match(command, /Java version: 21/,
               "不能只看 java -version，必须核对 Maven 实际使用的 JVM");

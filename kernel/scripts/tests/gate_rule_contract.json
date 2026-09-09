@@ -132,15 +132,15 @@
     },
     "edit-before-workflow": {
       "kind": "permit",
-      "tier": "B",
+      "tier": "A",
       "escape": "permit",
-      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
+      "why": "配置确认和交付方式选择前不默认写源码；流程边界与质量建议分离，显式人工授权仍有效。"
     },
     "bash-before-workflow": {
       "kind": "permit",
-      "tier": "B",
+      "tier": "A",
       "escape": "permit",
-      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
+      "why": "配置确认和交付方式选择前不默认写源码；流程边界与质量建议分离，显式人工授权仍有效。"
     },
     "edit-readonly-resource": {
       "kind": "absolute",
