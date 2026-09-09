@@ -325,6 +325,27 @@ export class EnvironmentRegistry {
     };
   }
 
+  /** 探活写回(#151):只改 probe 三态与时间戳——失败一次即标 failed
+   * (带原因二分),下一次成功翻回 ok(原因一并清掉),unverified 只
+   * 是首录缺省。这是后台观察不是人工编辑:updated_by/updated_at 与
+   * 台账其余字段一概不碰。未知条目 404。 */
+  recordProbe(
+    id: string,
+    outcome: { ok: true } | { ok: false; reason: EnvironmentProbeFailureReason },
+  ): EnvironmentRegistryView {
+    const at = now();
+    let result: EnvironmentRegistryView | undefined;
+    this.write((entries) => {
+      const entry = entries.find((item) => item.id === id);
+      if (!entry) throw new EnvironmentNotFoundError(id);
+      entry.probe = outcome.ok
+        ? { state: "ok", at }
+        : { state: "failed", reason: outcome.reason, at };
+      result = view(entry);
+    });
+    return result!;
+  }
+
   private read(): StoredEntry[] {
     const file = this.store.read<RegistryFile>("registry.json");
     if (!file) return [];
