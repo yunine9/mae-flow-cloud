@@ -197,6 +197,14 @@ def _delivery_host_command_decision(context):
 
 
 def _bash_absolute_decision(context):
+    if context.writeish and context.hits_internal_state:
+        return _absolute(
+            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告和任务内"
+            "只读 Skill/模板资源由 mae-flow 或宿主维护,禁止经 Bash 改写/删除"
+            "(待重启标记只能靠重启会话清;"
+            "仓库预设决定门禁口径,流程外走正常评审提交)。"
+            "要推进或纠正流程请执行 current 按本步指引走。",
+            rule="bash-internal-state-write")
     command = context.command
     decision = (_pipeline_record_decision(context)
                 or _user_intervention_decision(context)
@@ -236,14 +244,6 @@ def _bash_absolute_decision(context):
             "全局版本随上游发布漂移(版本锁失效);init 还会交互式生成工具目录污染"
             "仓库。请使用 current 给出的 capability openspec 命令。",
             rule="bash-global-openspec")
-    if context.writeish and context.hits_internal_state:
-        return _absolute(
-            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告和任务内"
-            "只读 Skill/模板资源由 mae-flow 或宿主维护,禁止经 Bash 改写/删除"
-            "(待重启标记只能靠重启会话清;"
-            "仓库预设决定门禁口径,流程外走正常评审提交)。"
-            "要推进或纠正流程请执行 current 按本步指引走。",
-            rule="bash-internal-state-write")
     return None
 
 

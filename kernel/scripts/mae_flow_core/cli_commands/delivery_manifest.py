@@ -159,12 +159,12 @@ def build_delivery_manifest(
     archive_paths = (
         archive.get("applied_paths") or ()
         if archive.get("status") == "applied" else ())
-    validate_delivery_document_boundary(exact.files, archive_paths)
+    advisories = list(validate_delivery_document_boundary(exact.files, archive_paths))
 
     candidates = {_identity(path) for path in candidate_paths}
     outside = [path for path in exact.files if _identity(path) not in candidates]
     if outside:
-        raise ValueError("文件不在当前候选增量: " + "、".join(outside))
+        advisories.append("选定文件未出现在候选增量中，请检视: " + "、".join(outside))
 
     adopted = _adoption_decisions(adoption_values, root)
     initial = {
@@ -178,9 +178,7 @@ def build_delivery_manifest(
         if identity in initial and identity not in adopted_ids
     ]
     if missing_adoption:
-        raise ValueError(
-            "启动时已有修改必须逐文件记录用户决定: "
-            + "、".join(missing_adoption))
+        advisories.append("选定文件含启动前改动，请一并检视: " + "、".join(missing_adoption))
     outside_adoption = [
         path for path in adopted if _identity(path) not in selected
     ]
@@ -195,13 +193,18 @@ def build_delivery_manifest(
             path: adopted[path] for path in sorted(adopted, key=str.casefold)
         },
         "confirmed": False,
+        "advisories": advisories,
     }
     previous = (state or {}).get("delivery_manifest") or {}
     comparable = dict(candidate)
     comparable.pop("confirmed")
+    comparable.pop("advisories", None)
+    comparable.pop("commit_message", None)
     old_comparable = dict(previous)
     old_confirmed = bool(old_comparable.pop("confirmed", False))
     old_comparable.pop("confirmation", None)
+    old_comparable.pop("advisories", None)
+    old_comparable.pop("commit_message", None)
     if comparable == old_comparable and old_confirmed:
         candidate["confirmed"] = True
     return candidate
@@ -212,9 +215,12 @@ def build_unchanged_delivery_manifest(
         build_residue_fingerprints=None, repository_root=None):
     """Build a confirmed no-op manifest after an unchanged domain archive."""
     archive = (state or {}).get("domain_archive") or {}
-    if archive.get("status") != "applied":
-        raise ValueError("领域归档尚未应用，不能生成 unchanged 交付清单")
-    archive_receipt = committed_archive_receipt(archive, repository_root)
+    advisories = []
+    try:
+        archive_receipt = committed_archive_receipt(archive, repository_root)
+    except ValueError as exc:
+        archive_receipt = {}
+        advisories.append(str(exc))
     target = str(target or "").strip()
     if not target:
         raise ValueError("交付清单缺少目标分支")
@@ -262,6 +268,7 @@ def build_unchanged_delivery_manifest(
         "adopted_dirty": {},
         "confirmed": True,
         "no_changes": True,
+        "advisories": advisories,
         "committed_archive_receipt": archive_receipt,
         "unchanged_initial_dirty": sorted(preserved, key=str.casefold),
         # 路径+指纹一起落盘：只豁免 manifest 当下那份编译现场。之后同路径
@@ -322,6 +329,8 @@ def _print_manifest(manifest):
             print("- " + path)
     else:
         print("- 无新增待提交文件（已有提交仍须继续交付）")
+    for advisory in manifest.get("advisories") or ():
+        print("提示（不阻断）: " + advisory)
     adopted = manifest.get("adopted_dirty") or {}
     if adopted:
         print("启动时已有修改的采用决定:")

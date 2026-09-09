@@ -105,7 +105,7 @@ class AdvisoryChannelTests(unittest.TestCase):
 
             gate = subprocess.run(
                 [sys.executable, MAE, "gate", "bash",
-                 'git add -- m.c && git commit -m "[REQ123][fix]impl"'],
+                 'git add -- m.c && git commit -m "impl"'],
                 cwd=repo, text=True, capture_output=True, timeout=120)
             self.assertEqual(
                 0, gate.returncode, gate.stdout + gate.stderr)
@@ -115,7 +115,7 @@ class AdvisoryChannelTests(unittest.TestCase):
                 cwd=repo, text=True, capture_output=True, timeout=120)
 
         self.assertIn("非阻断提示", current.stdout, current.stderr)
-        self.assertIn("m.c", current.stdout)
+        self.assertIn("commit message", current.stdout)
 
 
 if __name__ == "__main__":

@@ -131,15 +131,16 @@ def is_process_document(path):
 
 
 def validate_delivery_document_boundary(paths, archive_paths=()):
-    """Reject process artifacts and unconfirmed durable-domain documents."""
+    """Report classification concerns; file selection belongs to the reviewer."""
     allowed_domain = {_identity(path) for path in archive_paths}
+    findings = []
     for path in paths:
         identity = _identity(path)
         if is_process_document(path):
-            raise ValueError("过程文件不得进入交付清单: %s" % path)
-        if identity.startswith("docs/specs/") and identity not in allowed_domain:
-            raise ValueError(
-                "领域文档必须由本次领域归档 domain-archive apply 实际产生: %s" % path)
+            findings.append("交付清单包含过程文件，请检视是否需要: %s" % path)
+        elif identity.startswith("docs/specs/") and identity not in allowed_domain:
+            findings.append("领域文档未关联本轮归档凭证，保留人工选定文件: %s" % path)
+    return tuple(findings)
 
 
 def _normalize_paths(paths, repository_root=None):

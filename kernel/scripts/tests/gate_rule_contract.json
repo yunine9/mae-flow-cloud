@@ -11,34 +11,6 @@
     "2026-08-07 曾把步骤级源码写入误当可逆流程督促退役；2026-08-25 内网 grill 实战证明 done/commit 兜底太晚，现恢复为 flow.json allow_source_edit 驱动的绝对阶段门禁。规格/需求文档、分支命名等其余可逆督促仍保持退役。"
   ],
   "rules": {
-    "bash-wrapped-git": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "直接使用可见的 git 命令",
-      "why": "换壳执行会让所有 Git 门禁形同虚设"
-    },
-    "bash-mutating-git-alias": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "请改用可见的 canonical git",
-      "why": "alias 隐藏真实写动作，Gate 无法预检"
-    },
-    "bash-opaque-pathspec": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "请改为显式",
-      "why": "Gate 无法在执行前核对 exact candidates"
-    },
-    "bash-multiple-head-mutations": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "请拆成独立命令",
-      "why": "一条 Bash 多次改写 HEAD 无法逐个预检"
-    },
     "bash-manual-dispatch": {
       "kind": "absolute",
       "tier": "A",
@@ -86,30 +58,24 @@
       "escape": "permit",
       "why": "单文件丢弃若命中用户流程启动前的未提交改动,等于销毁用户现场"
     },
-    "bash-git-revert-user-authorization": {
-      "kind": "permit",
-      "tier": "A",
-      "escape": "permit",
-      "why": "改写 HEAD 必须绑定用户明确指定的 exact commit"
-    },
     "bash-wide-add": {
       "kind": "absolute",
-      "tier": "A",
+      "tier": "B",
       "escape": "comply",
       "evidence": "必须精确到文件",
-      "why": "宽提交把无关文件卷进交付分支"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-build-artifacts": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
+      "kind": "permit",
+      "tier": "B",
+      "escape": "permit",
       "why": "高置信临时产物是完整性边界,不签放行令;文案直接给本地恢复做法",
       "evidence": "git restore --staged"
     },
     "bash-compile-side-effects": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
+      "kind": "permit",
+      "tier": "B",
+      "escape": "permit",
       "why": "编译副作用冒充源码改动是完整性边界,不签放行令;文案直接给移除做法",
       "evidence": "移除这些路径"
     },
@@ -127,16 +93,9 @@
     },
     "bash-wide-openspec-add": {
       "kind": "permit",
-      "tier": "A",
+      "tier": "B",
       "escape": "permit",
-      "why": "整目录暂存规格产物"
-    },
-    "bash-delivery-manifest-unconfirmed": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "cli:manifest",
-      "evidence": "manifest show",
-      "why": "提交内容必须先由用户确认"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-delivery-host-command": {
       "kind": "absolute",
@@ -145,26 +104,12 @@
       "evidence": "current",
       "why": "打开与核销反馈、宣布 MR 合入都能改变持续交付生命周期，只接受 Cloud 宿主权威事实；Agent 仅通过 current 承接已登记批次"
     },
-    "bash-delivery-manifest-files": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "cli:manifest",
-      "evidence": "manifest show",
-      "why": "提交必须精确等于用户确认的清单"
-    },
-    "bash-delivery-manifest-stage": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "cli:manifest",
-      "evidence": "manifest show",
-      "why": "暂存范围必须落在确认清单内"
-    },
     "bash-internal-state-read": {
       "kind": "absolute",
-      "tier": "A",
+      "tier": "B",
       "escape": "cli:current",
       "evidence": "current",
-      "why": "绕过子命令直接读写状态账本等于伪造证据"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-agent-interactive-exit": {
       "kind": "absolute",
@@ -175,9 +120,9 @@
     },
     "bash-commit-format": {
       "kind": "permit",
-      "tier": "A",
+      "tier": "B",
       "escape": "permit",
-      "why": "提交信息格式推上去就难改;保留拦截但文案要直接给出正确命令"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-commit-branch": {
       "kind": "permit",
@@ -187,15 +132,15 @@
     },
     "edit-before-workflow": {
       "kind": "permit",
-      "tier": "A",
+      "tier": "B",
       "escape": "permit",
-      "why": "交付方式选定前是流程头部:没分支没确认配置,写码全是污染基线的废功(2026-08-19 跨仓实锤:方案进 prompt 模型跳过流程直接开写)。正路是 current 走完配置确认与交付方式选择;破格走用户裁决 unlock source"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-before-workflow": {
       "kind": "permit",
-      "tier": "A",
+      "tier": "B",
       "escape": "permit",
-      "why": "同 edit-before-workflow(sed -i/重定向写源码绕不过同一条头部纪律)"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "edit-readonly-resource": {
       "kind": "absolute",
@@ -240,36 +185,30 @@
     },
     "bash-retired-force-phase": {
       "kind": "absolute",
-      "tier": "A",
+      "tier": "B",
       "escape": "cli:doctor",
       "evidence": "doctor",
-      "why": "已退役的外部阶段引擎逃生口;阶段归 mae-flow 管,异常走 doctor"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-vendored-runtime": {
       "kind": "absolute",
-      "tier": "A",
+      "tier": "B",
       "escape": "cli:current",
       "evidence": "capability 命令",
-      "why": "直接执行内嵌脚本会丢 capability 包装的环境,退落全局版本导致版本锁失效"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-global-openspec": {
       "kind": "absolute",
-      "tier": "A",
+      "tier": "B",
       "escape": "cli:current",
       "evidence": "capability openspec",
-      "why": "全局 openspec 随上游漂移且 init 会污染仓库;正路是 current 给出的 capability 命令"
+      "why": "2026-09-09 内核减权：仅建议，不阻断，不签重复授权。"
     },
     "bash-git-objects-surgery": {
       "kind": "permit",
       "tier": "A",
       "escape": "permit",
       "why": "重写 .git/objects 会污染硬链接共享的源仓并销毁故障证据"
-    },
-    "bash-core-dump-delete": {
-      "kind": "permit",
-      "tier": "A",
-      "escape": "permit",
-      "why": "core 是唯一能回溯崩溃原因的现场,删了\"已修复\"无法证伪"
     },
     "bash-git-recursive-perms": {
       "kind": "permit",

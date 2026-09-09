@@ -245,7 +245,7 @@ class HookProtocolTests(unittest.TestCase):
         self.assertEqual(os.path.realpath(project), active.repository_root)
         self.assertEqual(ROOT, active.plugin_root)
 
-    def test_production_pretool_agent_gate_rejects_a_missing_story_task(self):
+    def test_production_pretool_agent_needs_no_prescribed_task_card(self):
         with tempfile.TemporaryDirectory() as project:
             subprocess.run(
                 ["git", "init", "-q", project], check=True,
@@ -273,8 +273,8 @@ class HookProtocolTests(unittest.TestCase):
                 cwd=project, input=payload, text=True,
                 capture_output=True, timeout=15)
 
-        self.assertEqual(2, result.returncode, result.stderr)
-        self.assertIn("派发前拦截:STORY 尚无本步任务卡", result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("派发前拦截", result.stderr)
         self.assertNotIn("TaskCardPorts.__init__", result.stderr)
 
     def test_production_pretool_records_started_story_lifecycle(self):
@@ -411,7 +411,7 @@ class HookProtocolTests(unittest.TestCase):
                 "tool_input": {"path": document},
             })
 
-        self.assertEqual(2, response.exit_code)
+        self.assertEqual(0, response.exit_code)
         self.assertIn("必需章节", response.stderr)
 
 

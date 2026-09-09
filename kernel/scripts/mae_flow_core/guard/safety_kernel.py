@@ -272,46 +272,7 @@ def _manifest_has_unadopted_dirty(context, manifest):
 
 
 def _stage_decision(context, intent):
-    if intent.opaque_pathspec:
-        return _block(
-            "git_staging",
-            "Opaque Git staging pathspecs cannot be authorized exactly.",
-        )
-    manifest = _manifest(context)
-    paths = intent.pathspecs
-    if intent.all:
-        return _block(
-            "git_staging",
-            "Broad Git staging is not allowed; name exact files.",
-        )
-    if not paths:
-        return _allow("git_staging")
-    try:
-        requested = DeliveryManifest.from_paths(
-            paths, repository_root=context.repository_root)
-    except (TypeError, ValueError):
-        return _block(
-            "git_staging",
-            "Git staging pathspecs must identify exact files.",
-        )
-    if manifest is None or not manifest.files:
-        return _block(
-            "git_staging",
-            "Git staging requires an authorized delivery manifest.",
-        )
-    if not _identities(requested.files).issubset(
-            _identities(manifest.files)):
-        return _block(
-            "git_staging",
-            "Git staging includes files outside the authorized manifest.",
-        )
-    dirty = _identities(_initial_dirty_paths(context))
-    adopted = _identities(manifest.adopted_dirty)
-    if (_identities(requested.files) & dirty) - adopted:
-        return _block(
-            "git_staging",
-            "Startup-dirty files require explicit manifest adoption.",
-        )
+    """Staging is reversible local preparation, not publication permission."""
     return _allow("git_staging")
 
 
@@ -338,25 +299,8 @@ def _exact_manifest_decision(context, actual_files, rule):
 
 
 def _commit_decision(context, intent):
-    if intent.opaque_pathspec:
-        return _block(
-            "git_commit",
-            "Opaque commit pathspecs cannot be compared with the manifest.",
-        )
-    if intent.all or intent.include or intent.pathspecs:
-        return _block(
-            "git_commit",
-            "Commit must use the already-staged exact manifest.",
-        )
-    message = _commit_message(intent.arguments)
-    ticket = context.state.ticket
-    if not valid_business_commit_message(ticket, message):
-        return _block(
-            "git_commit",
-            "Commit message must use [%s][feat|fix]描述." % (ticket or "单号"),
-        )
-    return _exact_manifest_decision(
-        context, context.staged_files, "git_commit")
+    """A local commit needs no formatting, file-batch or task-card permit."""
+    return _allow("git_commit")
 
 
 def _commit_message(arguments):

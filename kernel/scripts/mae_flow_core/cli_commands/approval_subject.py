@@ -97,7 +97,6 @@ def _worktree_payload(root, state, step_id):
     没有清单的步骤(如 build_review)保持整工作区绑定的老语义。
     """
     base = _review_base(state, step_id)
-    head = str(_git(root, "rev-parse", "--verify", "HEAD")).strip()
     scope = _manifest_scope(state)
     if scope:
         diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
@@ -114,24 +113,17 @@ def _worktree_payload(root, state, step_id):
             ],
         }
     review_paths = (".",) + _FLOW_CONTROL_PATHSPECS
-    diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
-                *review_paths, binary=True)
-    status = _git(
-        root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-        "--", *review_paths, binary=True)
-    untracked = _git(
-        root, "ls-files", "--others", "--exclude-standard", "-z",
-        "--", *review_paths, binary=True)
-    paths = [item.decode("utf-8", errors="surrogateescape")
-             for item in untracked.split(b"\0") if item]
+    changed = _git(root, "diff", "--name-only", "-z", base, "--",
+                   *review_paths, binary=True)
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z",
+                     "--", *review_paths, binary=True)
+    paths = sorted({item.decode("utf-8", errors="surrogateescape")
+                    for item in (changed + untracked).split(b"\0") if item})
     return {
         "kind": "worktree",
         "base": base,
-        "head": head,
-        "diff_sha256": hashlib.sha256(diff).hexdigest(),
-        "status_sha256": hashlib.sha256(status).hexdigest(),
-        "untracked": paths,
-        "untracked_fingerprints": [
+        "paths": paths,
+        "path_fingerprints": [
             review_path_fingerprint(os.path.join(root, path)) for path in paths
         ],
     }

@@ -58,11 +58,11 @@ class ArchiveCommittedManifestTests(unittest.TestCase):
                 self.assertEqual(manifest, build_unchanged_delivery_manifest(state, 'main', repository_root=root))
                 path.write_text('actual new content\n')
                 self.assertFalse(_unchanged_manifest_result(manifest, archive, []).passed)
-                with self.assertRaisesRegex(ValueError, '仍未提交'):
-                    build_unchanged_delivery_manifest(state, 'main', repository_root=root)
+                with self.assertRaisesRegex(ValueError, '新增未提交'):
+                    build_unchanged_delivery_manifest(state, 'main', repository_root=root, current_dirty=['docs/specs/cross-self-detect.md'])
                 git('add', '.')
-                with self.assertRaisesRegex(ValueError, '仍未提交'):
-                    build_unchanged_delivery_manifest(state, 'main', repository_root=root)
+                with self.assertRaisesRegex(ValueError, '新增未提交'):
+                    build_unchanged_delivery_manifest(state, 'main', repository_root=root, current_dirty=['docs/specs/cross-self-detect.md'])
                 git('commit', '-m', 'changed domain')
                 self.assertFalse(_unchanged_manifest_result(manifest, archive, []).passed)
                 refreshed = build_unchanged_delivery_manifest(state, 'main', repository_root=root)
