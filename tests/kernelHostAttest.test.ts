@@ -188,3 +188,35 @@ test("拒绝领域归档后由内核原子重建归档、Manifest 与修复授�
     host: HOST, cwd, actions: ["selection-reconcile"], state: reconciled,
   }), true);
 });
+
+test("人工选择重排保留原确认；部分排除不把归档凭证变成内容变化", () => {
+  const { workspace, cwd, head, taskId } = watchingTask("selection-replay");
+  const state = readState(cwd);
+  state.domain_archive = {
+    status: "applied", result: "unchanged", domains: [], changed_paths: [],
+    applied_paths: ["docs/specs/index.md", "docs/specs/radio.md"],
+    reapply_paths: ["docs/specs/index.md", "docs/specs/radio.md"],
+  };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  const selection = {
+    host: HOST, cwd, workspace, taskId, waitingId: "review-replay", head,
+    paths: ["main.ts", "docs/specs/radio.md"],
+    excludedPaths: ["user.txt", "docs/specs/index.md"], actor: "owner.liao",
+  };
+  reconcileKernelDeliverySelection(selection);
+  const first = readState(cwd);
+  assert.equal(first.domain_archive.result, "unchanged");
+  assert.deepEqual(first.domain_archive.changed_paths, []);
+  assert.deepEqual(first.domain_archive.applied_paths, ["docs/specs/radio.md"]);
+  assert.deepEqual(first.domain_archive.reapply_paths, ["docs/specs/radio.md"]);
+  reconcileKernelDeliverySelection({ ...selection,
+    paths: [...selection.paths].reverse(), excludedPaths: [...selection.excludedPaths].reverse(),
+  });
+  const replayed = readState(cwd);
+  for (const key of ["delivery_selection", "delivery_manifest", "domain_archive", "history"]) {
+    assert.deepEqual(replayed[key], first[key], key);
+  }
+  assert.equal(trustedKernelHostLifecycle({
+    host: HOST, cwd, actions: ["selection-reconcile"], state: replayed,
+  }), true);
+});

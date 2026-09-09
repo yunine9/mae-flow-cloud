@@ -1,5 +1,6 @@
 """Reproduce early-written/committed domain docs and recover without deleting them."""
 import contextlib
+import copy
 import io
 import os
 from pathlib import Path
@@ -288,6 +289,80 @@ class RecoveryTests(unittest.TestCase):
                 capability=lambda *_: None, head=lambda: "sha", history=lambda *_: None,
                 state_schema="schema")
         self.assertEqual(payload["paths"], self.state["delivery_selection"]["paths"])
+
+    def reconcile(self, payload):
+        events = []
+        with mock.patch.object(selection, "save_with_host_proof"), contextlib.redirect_stdout(io.StringIO()):
+            selection.reconcile_selection(self.state, SimpleNamespace(file="receipt"),
+                load_payload=lambda *_: payload, verify_host_proof=lambda *_: "nonce",
+                capability=lambda *_: None, head=lambda: self.git("rev-parse", "HEAD"),
+                history=lambda *args: events.append(args), state_schema="schema")
+        return events
+
+    def test_selection_reordering_preserves_decision_and_history(self):
+        payload = {"head": self.git("rev-parse", "HEAD"),
+                   "paths": ["docs/specs/index.md", "docs/specs/cross-rat.md"],
+                   "excluded_paths": ["extra-b", "extra-a"],
+                   "task_id": "task-4", "waiting_id": "w", "actor": "owner"}
+        self.reconcile(payload)
+        before = copy.deepcopy(self.state)
+        reordered = dict(payload, paths=list(reversed(payload["paths"])),
+                         excluded_paths=list(reversed(payload["excluded_paths"])))
+        self.assertEqual([], self.reconcile(reordered))
+        self.assertEqual(before, self.state)
+        for key, value in (("waiting_id", "new-card"), ("actor", "other-owner"),
+                           ("task_id", "task-5"), ("paths", ["base"]),
+                           ("excluded_paths", ["extra-c"])):
+            self.state = copy.deepcopy(before)
+            self.assertTrue(self.reconcile(dict(reordered, **{key: value})), key)
+        self.state = before
+        with self.assertRaisesRegex(RuntimeError, "HEAD.*不一致"):
+            self.reconcile(dict(reordered, head="old-sha"))
+
+    def test_partial_rejection_preserves_unchanged_archive_and_repeat_apply(self):
+        self.prepare()
+        self.command("apply")
+        self.git("add", "docs")
+        self.git("commit", "-m", "archive baseline")
+        # A completed adoption has provenance but no content delta.
+        archive = self.state["domain_archive"]
+        archive.update(result="unchanged", changed_paths=[], declined_paths=["docs/specs/older.md"])
+        archive["reapply_paths"] = list(archive["applied_paths"])
+        payload = {"head": self.git("rev-parse", "HEAD"), "paths": ["docs/specs/cross-rat.md"],
+                   "excluded_paths": ["docs/specs/index.md"],
+                   "task_id": "task-4", "waiting_id": "w", "actor": "owner"}
+        self.reconcile(payload)
+        record = self.state["domain_archive"]
+        self.assertEqual("unchanged", record["result"])
+        self.assertEqual([], record["changed_paths"])
+        self.assertEqual(["docs/specs/cross-rat.md"], record["applied_paths"])
+        self.assertEqual(["docs/specs/cross-rat.md"], record["reapply_paths"])
+        self.assertEqual(["docs/specs/index.md", "docs/specs/older.md"], record["declined_paths"])
+        package = cli.ensure_work_package(str(self.root), "REQ-4")
+        self.assertEqual(cli._fresh_digest(str(self.root), package, cli._entries(str(self.root), record)),
+                         record["input_sha256"])
+        before = copy.deepcopy(record)
+        with mock.patch.object(cli, "apply_candidates", side_effect=AssertionError("重复写入归档")):
+            self.command("apply")
+        self.assertEqual(before, self.state["domain_archive"])
+
+    def test_partial_rejection_retains_only_actual_remaining_changes(self):
+        self.prepare()
+        self.command("apply")
+        self.git("add", "docs")
+        self.git("commit", "-m", "archive baseline")
+        archive = self.state["domain_archive"]
+        payload = {"head": self.git("rev-parse", "HEAD"), "paths": ["docs/specs/cross-rat.md"],
+                   "excluded_paths": ["docs/specs/index.md"],
+                   "task_id": "task-4", "waiting_id": "w", "actor": "owner"}
+        for changed, expected in ((["docs/specs/index.md"], "unchanged"),
+                                  (list(archive["applied_paths"]), "changes")):
+            self.state["domain_archive"] = dict(archive, changed_paths=changed, result="changes")
+            self.state.pop("delivery_selection", None)
+            self.reconcile(payload)
+            record = self.state["domain_archive"]
+            self.assertEqual(expected, record["result"])
+            self.assertNotIn("docs/specs/index.md", record["changed_paths"])
 
 
 if __name__ == "__main__":
