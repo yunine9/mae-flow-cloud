@@ -8,7 +8,7 @@ The main Agent implements and finalizes the whole approved change directly from 
 
 Read the confirmed behavior, design boundaries, affected code, repository build configuration, and intended test seam.
 
-Treat testability as a core coding principle: separate directly testable logic from external effects, reuse replaceable dependency boundaries, and keep module internals real in tests. Function-level UT remains foundational alongside module and integration verification; follow the construction guidance without adding abstraction or gates merely to reduce mocks.
+Treat testability as a core coding principle: separate directly testable logic from external effects, reuse replaceable dependency boundaries, and keep module internals real in tests. Current verification covers function-level and module-level UT only; separate REST, integration, MST, and deployment verification remain future capabilities. follow the construction guidance without adding abstraction or gates merely to reduce mocks.
 
 ## Stop for the user
 
