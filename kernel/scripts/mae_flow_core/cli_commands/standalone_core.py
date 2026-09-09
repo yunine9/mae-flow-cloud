@@ -12,6 +12,7 @@ from .shared import (
     shutil, sys, time,
 )
 from .wiring import api
+from mae_flow_core.foundation.git_excludes import append_local_excludes
 
 def _state_sidecars():
     """退出要一并收走、开新单要一并清掉的旁路状态。
@@ -122,22 +123,8 @@ def _save_action(action):
 def _git_local_runtime_ignore():
     """独立任务不改团队 .gitignore，只把本机运行现场加入当前仓的本地排除。"""
     path = api.sh("git rev-parse --git-path info/exclude")
-    if not path:
-        return
-    path = os.path.abspath(path)
-    marker = "/.mae-flow-work/"
     try:
-        old = ""
-        if os.path.isfile(path):
-            with open(path, encoding="utf-8") as stream:
-                old = stream.read()
-        if marker in {line.strip() for line in old.splitlines()}:
-            return
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            if old and not old.endswith("\n"):
-                f.write("\n")
-            f.write("# mae-flow local runtime\n" + marker + "\n")
+        append_local_excludes(path, ["/.mae-flow-work/"])
     except OSError as exc:
         # 排除失败不应阻止用户工作，但必须说清楚，避免过程文件被误提交。
         print("[mae-flow] ⚠ 无法写 Git 本地排除文件：%s；请勿提交 .mae-flow-work/。" % exc,

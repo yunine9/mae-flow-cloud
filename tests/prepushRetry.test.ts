@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -128,7 +128,14 @@ test("Build-Fix 只写坏标题时自动修正且保留同一代码树的绿灯�
       updated_at: new Date().toISOString(),
     };
 
+    writeFileSync(join(repo.cwd, "feature.txt"), "staged future edit\n");
+    repo.git("add", "feature.txt");
+    const pendingIndex = repo.git("write-tree");
+    writeFileSync(join(repo.cwd, "feature.txt"), "unstaged future edit\n");
     assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "repaired");
+    assert.equal(repo.git("write-tree"), pendingIndex,
+      "修标题不能消费未提交的暂存内容");
+    assert.equal(readFileSync(join(repo.cwd, "feature.txt"), "utf-8"), "unstaged future edit\n");
     const after = await (service as any).prePushRevision(internal);
     assert.notEqual(after.sha, before.sha, "amend 必须形成新 commit 对象");
     assert.equal(repo.git("rev-parse", "HEAD^{tree}"), beforeTree,

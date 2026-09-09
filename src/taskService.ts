@@ -14923,13 +14923,8 @@ export class TaskService {
           ? ` 等 ${invalid.length} 条` : ""}。该版本已经有推送收据，系统不会改写远端历史。`);
     }
 
-    const staged = await runSafeWorktreeGitAsync(
-      task.cwd, ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-    if (staged.status !== 0) {
-      return this.commitPolicyFailure(task,
-        `提交说明不符合仓库规范：${listed}；同时索引中还有未提交内容，`
-        + "系统不会把它们夹带进历史重建。请整理后重新尝试交付。");
-    }
+    // 只用旧 commit 的 tree 重建对象并 update-ref；不读索引来生成提交。
+    // 暂存内容原样保留，不应因无关本地改动阻断提交说明的机械修正。
     let rewrite: { after: PrePushRevision; repaired: string[]; tree: string };
     try {
       rewrite = await this.rewriteUnpushedCommitMessages(task, before, invalid);
@@ -14980,7 +14975,7 @@ export class TaskService {
     if (!task.cwd) return ["(任务没有代码工作区)"];
     const status = await runSafeWorktreeGitAsync(
       task.cwd, [
-        "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
+        "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
         ...AGENT_PLATFORM_PATHSPECS,
@@ -14989,15 +14984,14 @@ export class TaskService {
       return [`(git status 读取失败: ${
         String(status.stderr ?? status.error ?? "").trim().slice(0, 200)})`];
     }
-    // porcelain v1:两位状态 + 空格 + 路径;改名行取箭头右侧。
+    // NUL 分隔且禁用重命名折叠，中文、空格、引号和换行都是路径内容。
     // 用户在推送确认时拍板剔除的文件是"确认不交付"的改动,留在工作区
     // 不算脏账——不放行的话,后续每一轮 prepush 都会被它们绊倒。
     const sanctioned = new Set(
       task.summary.delivery_selection?.excluded_paths ?? []);
-    return String(status.stdout ?? "").split("\n")
-      .map((line) => line.trimEnd())
+    return String(status.stdout ?? "").split("\0")
       .filter(Boolean)
-      .map((line) => line.slice(3).split(" -> ").pop() ?? line)
+      .map((line) => line.slice(3))
       .filter((path) => !sanctioned.has(path));
   }
 
@@ -16248,13 +16242,8 @@ export class TaskService {
       return stall(`推送前复核发现提交历史脱离任务定格基线 ${
         frozen.slice(0, 7)}(疑似验证期间又被改写);已停止推送,请人工确认。`);
     }
-    // 只在 Agent 已用 commit 收口时重放;未提交的改动不能被宿主猜着处理。
-    const unstaged = await git(["diff", "--quiet"]);
-    const staged = await git(["diff", "--cached", "--quiet"]);
-    if (unstaged.status !== 0 || staged.status !== 0) {
-      return stall(`提交历史已脱离任务定格基线 ${frozen.slice(0, 7)},同时`
-        + "工作区还有未提交改动;平台不猜着整理,请在代码检视中确认处理。");
-    }
+    // 重放仅改变提交父节点：commit-tree 读取旧 HEAD 的 tree，reset
+    // --soft 保留索引与工作区。未提交内容不会被消费或夹带，不必拦它。
     // 分支上有外来提交时绝不重放:下面的 commit-tree 会把所有历史压成
     // 一条"净改动",人直接推上去的提交就此从历史里消失。平台可以整理
     // 自己的提交,不能替人处置别人的。
@@ -16396,15 +16385,26 @@ export class TaskService {
       return "blocked";
     }
 
-    // 只在 Agent 已经用 commit 收口时机械重组。未提交的业务改动不能被
-    // 宿主猜着一起提交；这种模糊现场停下给明确提示即可。
-    const unstaged = await runSafeWorktreeGitAsync(cwd,
-      ["diff", "--quiet"], { timeoutMs: 30_000 });
-    const staged = await runSafeWorktreeGitAsync(cwd,
-      ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-    if (unstaged.status !== 0 || staged.status !== 0) {
+    // 排除项的本地内容原样保留，不能因它们脏着就拒绝机械整理。
+    // 索引和工作区分别核对，防止 staged/unstaged 相互抵消；关闭重命名
+    // 检测，使从排除项移到业务路径的改动仍然可见。真正的新业务文件
+    // 也需要核对，不能只看上次选择的 expected，否则会被 git add 偷带。
+    const dirtyBusiness = new Set<string>();
+    for (const cached of [[], ["--cached"]]) {
+      const dirty = await runSafeWorktreeGitAsync(cwd,
+        ["diff", ...cached, "--name-only", "--no-renames", "-z", "--"],
+        { timeoutMs: 30_000 });
+      if (dirty.status !== 0) {
+        throw new Error(`读取未提交文件失败：${String(
+          dirty.stderr || dirty.error || "").trim().slice(0, 300)}`);
+      }
+      for (const path of String(dirty.stdout ?? "").split("\0").filter(Boolean)) {
+        if (!rejected.has(path) && !isAgentPlatformPath(path)) dirtyBusiness.add(path);
+      }
+    }
+    if (dirtyBusiness.size) {
       const detail = "检测到修复重新带入了已排除文件，同时还有未提交的业务"
-        + "改动；平台不会猜着整理或循环撞门禁。请在代码检视中确认处理。";
+        + `改动（${describeDirtyPaths([...dirtyBusiness])}）；平台不会猜着整理或循环撞门禁。请在代码检视中确认处理。`;
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };

@@ -451,6 +451,66 @@ test("修复重新带入已拒绝文件时宿主自动收口，不新增循环�
   }
 });
 
+for (const dirtyKind of ["excluded-unstaged", "excluded-staged", "excluded-both",
+  "business-unstaged", "business-staged", "business-compensated", "business-new-staged"] as const) {
+  test(`整理排除项保留本地改动并区分业务未提交内容：${dirtyKind}`, async () => {
+    const { service, model, internal, repo } = await verifyingTask();
+    try {
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n");
+      repo.git("add", ".gitignore");
+      repo.git("commit", "-qm", "tracked user config");
+      const cleanHead = repo.git("rev-parse", "HEAD");
+      const state = JSON.parse(readFileSync(join(repo.cwd, ".mae-flow.json"), "utf-8"));
+      state.step_heads.branch_create = cleanHead;
+      writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify(state));
+      internal.summary.delivery_selection = {
+        status: "confirmed", head: cleanHead, paths: ["src/feature.ts"],
+        excluded_paths: [".gitignore"],
+      };
+      internal.summary.delivery = { git_push: { sha: cleanHead } };
+      writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n");
+      repo.git("add", "src/feature.ts", ".gitignore");
+      repo.git("commit", "-qm", "repair plus excluded config");
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n/local-only/\n");
+      if (dirtyKind !== "excluded-unstaged") repo.git("add", ".gitignore");
+      if (dirtyKind === "excluded-both") {
+        writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n/local-only/\n/extra/\n");
+      }
+      if (dirtyKind.startsWith("business")) {
+        const path = dirtyKind === "business-new-staged" ? "src/new.ts" : "src/feature.ts";
+        writeFileSync(join(repo.cwd, path), "export const value = 3;\n");
+        if (dirtyKind !== "business-unstaged") repo.git("add", path);
+        if (dirtyKind === "business-compensated") {
+          writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
+        }
+      }
+      const head = repo.git("rev-parse", "HEAD");
+      const index = repo.git("write-tree");
+      const localIgnore = readFileSync(join(repo.cwd, ".gitignore"), "utf-8");
+      const result = await (service as any).reconcileConfirmedDeliveryBoundary(internal);
+      assert.equal(readFileSync(join(repo.cwd, ".gitignore"), "utf-8"), localIgnore);
+      if (dirtyKind.startsWith("business")) {
+        assert.equal(result, "blocked");
+        assert.ok(internal.summary.detail.includes(
+          dirtyKind === "business-new-staged" ? "src/new.ts" : "src/feature.ts"));
+        assert.equal(repo.git("rev-parse", "HEAD"), head);
+        assert.equal(repo.git("write-tree"), index);
+      } else {
+        assert.equal(result, "changed", internal.summary.detail);
+        assert.equal(repo.git("rev-parse", "HEAD^"), cleanHead);
+        assert.equal(repo.git("diff", "--name-only", cleanHead, "HEAD"), "src/feature.ts");
+        assert.equal(repo.git("show", "HEAD:.gitignore"), "/user-build/");
+        assert.equal(repo.git("show", "HEAD:src/feature.ts"), "export const value = 2;");
+        assert.equal(repo.git("diff", "--cached", "--name-only"), "");
+        assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+      }
+    } finally {
+      await model.stop();
+    }
+  });
+}
+
 test("交付范围确认只在 prepush 收敛后执行", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
@@ -1209,8 +1269,8 @@ test("历史脱离定格基线:宿主机械重放回基线且树不变;二次脱
   }
 });
 
-// 同场景但工作区还有未提交改动:宿主不猜着整理,如实停下喊人。
-test("历史脱离定格基线且工作区未收口:不改写,如实停下", async () => {
+// 历史树不变的重放不用索引组提交，暂存/未暂存的编辑均应原样保留。
+test("历史脱离定格基线且工作区未收口:只重放旧树，保留本地编辑", async () => {
   const { service, model, internal, repo } = await verifyingTask();
   try {
     const origHead = repo.git("rev-parse", "HEAD");
@@ -1219,12 +1279,17 @@ test("历史脱离定格基线且工作区未收口:不改写,如实停下", asy
     repo.git("reset", "--soft", orphan);
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 2;\n");
+    repo.git("add", "src/feature.ts");
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 3;\n");
+    const index = repo.git("write-tree");
     const outcome = await (service as any)
       .reconcileFrozenBaselineAncestry(internal, true);
-    assert.equal(outcome, "blocked");
-    assert.equal(repo.git("rev-parse", "HEAD"), orphan,
-      "未收口现场不得被宿主改写");
-    assert.match(String(internal.summary.delivery?.stalled), /未提交改动/);
+    assert.equal(outcome, "repaired");
+    assert.equal(repo.git("diff", origHead, "HEAD"), "");
+    assert.equal(repo.git("write-tree"), index);
+    assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf-8"),
+      "export const value = 3;\n");
   } finally {
     await model.stop();
   }
