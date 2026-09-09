@@ -532,6 +532,26 @@ export function createTaskServer(
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
+        // 问题处理侧的人工介入轴(v2 按流剥离,与需求侧同名路由平行):
+        // 问题是现读现判——月光开闸不追溯,已在等待的卡仍等真人,所以
+        // 没有需求侧 moonlight 的 preview/include_current 清扫动作。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "issue-moonlight") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          options.auth!.setIssueMoonlight(viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "issue-push-confirmation") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          options.auth!.setIssuePushConfirmation(
+            viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "git-token") {

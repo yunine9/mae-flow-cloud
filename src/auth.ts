@@ -45,6 +45,10 @@ export interface AuthSessionUser extends AuthUser {
   luban_token_hint?: string;
   moonlight: boolean;
   push_confirmation: boolean;
+  /** 问题处理侧的人工介入轴(v2 剥离):与需求侧同义、独立取值,
+   * 互不带动。 */
+  issue_moonlight: boolean;
+  issue_push_confirmation: boolean;
 }
 
 /** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
@@ -73,18 +77,29 @@ interface StoredUser extends AuthUser {
    * "这个 commit 是谁的"按 commit email 映射账号——令牌只管推送
    * 鉴权,署名归这里。不是密钥,可以回显。 */
   git_email?: string;
-  /** 月光模式(免审批):开着时本人任务的人工节点由系统代答放行,
-   * 事后复盘。随时可开可关,是持续状态不是下单时的一次性选择。 */
+  /** 月光模式(免审批):开着时本人**需求交付**任务的人工节点由系统
+   * 代答放行,事后复盘。随时可开可关,是持续状态不是下单时的一次性
+   * 选择。问题处理侧的对应开关是 issue_moonlight(v2 剥离,独立取值)。 */
   moonlight?: boolean;
-  /** push 前人工确认(交付清单过目):与 moonlight 合成"人工介入
-   * 程度"的两个正交轴——月光管过程节点停不停,这个管交付内容出门
-   * 前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26 拍板:
-   * 默认开启、不做任务粒度),所以只落盘显式的 false。 */
+  /** push 前人工确认(交付清单过目):与 moonlight 合成**需求交付**
+   * "人工介入程度"的两个正交轴——月光管过程节点停不停,这个管交付
+   * 内容出门前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26
+   * 拍板:默认开启、不做任务粒度),所以只落盘显式的 false。问题处理
+   * 侧的对应开关是 issue_push_confirmation(v2 剥离,独立取值)。 */
   push_confirmation?: boolean;
+  /** 问题处理的月光免审批(v2 按流剥离):语义同 moonlight,作用域是
+   * 问题流的分析结论闸/纯选项问答卡;与需求侧互不带动。 */
+  issue_moonlight?: boolean;
+  /** 问题处理的 push 前过目(v2 按流剥离):push_branch 举卡过目,
+   * 缺省即开,只落盘显式的 false;与需求侧互不带动。 */
+  issue_push_confirmation?: boolean;
 }
 
 interface UserFile {
-  version: 1;
+  /** v2(2026-09-09):人工介入程度按流剥离——需求侧沿用 moonlight/
+   * push_confirmation,问题侧新增 issue_moonlight/issue_push_confirmation。
+   * v1 文件读入时一次性继承(见 load),此后两边独立演化。 */
+  version: 2;
   users: StoredUser[];
   /** 已删除账号永久占用用户名，避免后来同名账号继承旧任务操作权。 */
   retired_usernames?: string[];
@@ -378,6 +393,23 @@ export class LocalAuth {
     return !!stored?.moonlight && !stored.disabled;
   }
 
+  /** 问题处理侧的月光开关(v2 剥离,与需求侧独立)。存储纪律同
+   * setMoonlight。问题流闸卡是回合收口时现读现判,没有需求侧"清扫
+   * 当前待办"的概念——开闸不追溯,已在等待的卡仍等真人。 */
+  setIssueMoonlight(username: string, on: boolean): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (on) stored.issue_moonlight = true;
+    else delete stored.issue_moonlight;
+    this.persist();
+  }
+
+  issueMoonlightEnabled(username: string | undefined): boolean {
+    if (!username) return false;
+    const stored = this.users.get(username);
+    return !!stored?.issue_moonlight && !stored.disabled;
+  }
+
   /** push 前人工确认默认值(缺省即开,只落盘显式的关)。改动即时
    * 生效于本人后续到达推送点的任务;已经在等确认的卡不撤——那张卡
    * 是按当时的意愿举的,点一下"确认按清单推送"就走,不存在悬死。 */
@@ -398,6 +430,23 @@ export class LocalAuth {
     return stored.push_confirmation !== false;
   }
 
+  /** 问题处理侧 push 前过目(v2 剥离):缺省即开、只落盘显式的关,
+   * 纪律与 setPushConfirmation 相同;关掉不撤已举的过目卡。 */
+  setIssuePushConfirmation(username: string, on: boolean): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (on) delete stored.issue_push_confirmation;
+    else stored.issue_push_confirmation = false;
+    this.persist();
+  }
+
+  issuePushConfirmationEnabled(username: string | undefined): boolean {
+    if (!username) return false;
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return false;
+    return stored.issue_push_confirmation !== false;
+  }
+
   /** 登录与 /auth/me 共用同一份本人视图，避免登录响应漏字段后让前端
    * 误以为个人配置丢失。只按传入账号读取，不接受客户端指定目标用户。 */
   sessionView(username: string): AuthSessionUser | undefined {
@@ -409,6 +458,8 @@ export class LocalAuth {
       luban_token_hint: this.lubanTokenHint(username),
       moonlight: this.moonlightEnabled(username),
       push_confirmation: this.pushConfirmationEnabled(username),
+      issue_moonlight: this.issueMoonlightEnabled(username),
+      issue_push_confirmation: this.issuePushConfirmationEnabled(username),
     };
   }
 
@@ -473,21 +524,27 @@ export class LocalAuth {
 
   private load(): void {
     if (!existsSync(this.file)) return;
-    const parsed = JSON.parse(readFileSync(this.file, "utf-8")) as UserFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.users)) {
+    const parsed = JSON.parse(readFileSync(this.file, "utf-8")) as
+      { version?: number; users?: StoredUser[]; retired_usernames?: unknown[] };
+    if ((parsed.version !== 1 && parsed.version !== 2)
+        || !Array.isArray(parsed.users)) {
       throw new Error(`账号文件格式不受支持: ${this.file}`);
     }
-    for (const user of parsed.users) this.users.set(user.username, user);
+    for (const user of parsed.users) {
+      if (parsed.version === 1) seedIssueIntervention(user);
+      this.users.set(user.username, user);
+    }
     for (const username of parsed.retired_usernames ?? []) {
       if (typeof username === "string") this.retiredUsernames.add(username);
     }
+    if (parsed.version === 1) this.persist();
   }
 
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true });
     const temp = `${this.file}.tmp`;
     const body: UserFile = {
-      version: 1,
+      version: 2,
       users: [...this.users.values()],
       ...(this.retiredUsernames.size
         ? { retired_usernames: [...this.retiredUsernames].sort() } : {}),
@@ -538,6 +595,20 @@ export class LocalAuth {
 /** 会话表键=令牌 sha256:内存与磁盘上都不存在可直接使用的令牌。 */
 function sessionKey(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/** v1→v2 一次性迁移:人工介入程度按流剥离时,问题侧初值继承剥离
+ * 时刻需求侧的现值——剥离不改变任何人的现状。只补缺不覆盖,此后
+ * 两边独立演化(再把需求侧月光打开不会带动问题侧)。缺省轴(月光
+ * 关/过目开)的"关/开"与缺省一致,无需落盘。 */
+function seedIssueIntervention(user: StoredUser): void {
+  if (user.moonlight === true && user.issue_moonlight === undefined) {
+    user.issue_moonlight = true;
+  }
+  if (user.push_confirmation === false
+      && user.issue_push_confirmation === undefined) {
+    user.issue_push_confirmation = false;
+  }
 }
 
 /** 掩码:••••末4位。密钥一律只写不读,界面只用它确认"配过了、是哪个"。 */

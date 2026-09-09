@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -133,6 +133,9 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       moonlight: true,
       // push 前清单过目:真人缺省即开(2026-08-26 拍板)。
       push_confirmation: true,
+      // 按流剥离(2026-09-09):问题侧独立取值,setMoonlight 不带动。
+      issue_moonlight: false,
+      issue_push_confirmation: true,
     });
     // 自由探索入口已下线(#97):会话视图不再携带 issue_flow 字段。
     assert.equal("issue_flow" in aliceView, false,
@@ -159,6 +162,8 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       luban_token_hint: "••••cret",
       moonlight: false,
       push_confirmation: true,
+      issue_moonlight: false,
+      issue_push_confirmation: true,
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
@@ -213,6 +218,96 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     assert.doesNotMatch(candidateText,
       /alice@example\.com|alice-codehub-secret|alice-luban-secret|cret/,
       "委派候选接口只能暴露就绪状态，不能带邮箱或任何令牌提示");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("人工介入按流剥离:v1 账号文件迁移时问题侧一次性继承现值", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-intervention-"));
+  const file = join(dir, "auth.json");
+  // 造一份真实 scrypt 哈希,手写 v1 文件(剥离前夜的存量部署快照)。
+  const seed = new LocalAuth(join(dir, "seed.json"));
+  seed.bootstrapAdmin("admin", "administrator-pass");
+  seed.createUser("alice", "alice-password-1", "developer");
+  const seedRaw = JSON.parse(readFileSync(join(dir, "seed.json"), "utf-8")) as
+    { users: Array<{ username: string; password_hash: string; created_at: string }> };
+  const seeded = seedRaw.users.find((user) => user.username === "alice")!;
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    users: [{
+      username: "alice", role: "developer", password_hash: seeded.password_hash,
+      created_at: seeded.created_at, disabled: false,
+      // 剥离前:需求侧月光开着、过目显式关了。
+      moonlight: true, push_confirmation: false,
+    }],
+  }), { encoding: "utf-8", mode: 0o600 });
+
+  const auth = new LocalAuth(file);
+  // 继承不改变现状:问题侧初值=剥离时刻需求侧的值。
+  assert.equal(auth.issueMoonlightEnabled("alice"), true);
+  assert.equal(auth.issuePushConfirmationEnabled("alice"), false);
+  assert.equal(auth.moonlightEnabled("alice"), true);
+  assert.equal(auth.pushConfirmationEnabled("alice"), false);
+  // 迁移即落盘 v2:下一次进程不再重放继承。
+  const raw = JSON.parse(readFileSync(file, "utf-8")) as { version: number };
+  assert.equal(raw.version, 2);
+  // 此后两边独立演化:关需求侧月光不带动问题侧。
+  auth.setMoonlight("alice", false);
+  assert.equal(auth.moonlightEnabled("alice"), false);
+  assert.equal(auth.issueMoonlightEnabled("alice"), true);
+  // 新用户走缺省:问题侧月光关、过目开(与需求侧同纪律)。
+  auth.createUser("bob", "bob-password-123", "developer");
+  assert.equal(auth.issueMoonlightEnabled("bob"), false);
+  assert.equal(auth.issuePushConfirmationEnabled("bob"), true);
+  auth.setIssuePushConfirmation("bob", false);
+  assert.equal(auth.issuePushConfirmationEnabled("bob"), false);
+  assert.equal(auth.pushConfirmationEnabled("bob"), true,
+    "问题侧过目开关不得带动需求侧");
+});
+
+test("人工介入按流剥离:issue 路由只动问题侧轴", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-routes-"));
+  const file = join(dir, "auth.json");
+  const auth = new LocalAuth(file);
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("alice", "alice-password-1", "developer");
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const login = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username: "alice", password: "alice-password-1" }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+
+    const moon = await fetch(`${base}/auth/me/issue-moonlight`, {
+      method: "PUT", headers: { cookie }, body: JSON.stringify({ on: true }),
+    });
+    assert.equal(moon.status, 200);
+    const moonView = await moon.json() as Record<string, unknown>;
+    assert.equal(moonView.issue_moonlight, true);
+    assert.equal(moonView.moonlight, false, "问题侧月光不得带动需求侧");
+
+    const push = await fetch(`${base}/auth/me/issue-push-confirmation`, {
+      method: "PUT", headers: { cookie }, body: JSON.stringify({ on: false }),
+    });
+    assert.equal(push.status, 200);
+    const pushView = await push.json() as Record<string, unknown>;
+    assert.equal(pushView.issue_push_confirmation, false);
+    assert.equal(pushView.push_confirmation, true, "问题侧过目不得带动需求侧");
+
+    const anon = await fetch(`${base}/auth/me/issue-moonlight`, {
+      method: "PUT", body: JSON.stringify({ on: true }),
+    });
+    assert.equal(anon.status, 401, "未登录不得改个人设置");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
