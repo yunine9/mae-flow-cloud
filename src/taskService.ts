@@ -13122,7 +13122,7 @@ export class TaskService {
   private activeKernelFeedback(task: TaskState): {
     batchId: string;
     current: string;
-    items: Array<{ id: string; summary?: string; source?: string }>;
+    items: Array<{ id: string; summary?: string; source?: string; source_id?: string }>;
   } | undefined {
     if (!task.cwd) return undefined;
     try {
@@ -13143,6 +13143,7 @@ export class TaskService {
         current: String(state?.current ?? ""),
         items: batch.items.map((item: any) => ({
           id: String(item?.id ?? ""),
+          source_id: String(item?.source_id ?? ""),
           ...(item?.summary ? { summary: String(item.summary) } : {}),
           ...(item?.source ? { source: String(item.source) } : {}),
         })).filter((item: { id: string }) => item.id),
@@ -18136,7 +18137,16 @@ export class TaskService {
 
   private activeFeedbackReceiptInstructions(task: TaskState): string {
     const active = this.activeFeedbackResult(task);
-    if (!active) return "";
+    if (!active) {
+      const batch = this.activeKernelFeedback(task);
+      if (!batch?.items.length || !batch.items.every((item) => item.source === "mr_discussion")) return "";
+      return [
+        `把本批 MR 逐条回复写入 ${JSON.stringify(resolve(task.summary.workspace, "review_replies.md"))}。`,
+        "使用每条的 source_id（讨论 ID），不要使用反馈批次 ID。每个方括号标题单独一行，下面填写该条回复，不得追加摘要到 ID。",
+        ...batch.items.map((item) => `[${item.source_id}]\n<填写这条的回复：改了什么或为什么不改>`),
+        "重复 ID 或缺失正文不能登记；只补回复，不要重复修改或提交代码。",
+      ].join("\n\n");
+    }
     this.prepareFeedbackResultFile(task, active.path);
     return feedbackReceiptInstructions(active);
   }
@@ -18229,6 +18239,9 @@ export class TaskService {
           batchItems.map((item: any) => String(item.source_id ?? "")));
       } catch (error) {
         return `Agent 没有留下 MR 逐条回复：${String(error)}`;
+      }
+      if (parsed.duplicate_ids.length) {
+        return `MR 逐条回复的讨论 ID 重复：${parsed.duplicate_ids.join("、")}；请为每条保留一份明确回复`;
       }
       if (parsed.missing_ids.length) {
         return `MR 逐条回复缺少：${parsed.missing_ids.join("、")}`;
@@ -19066,7 +19079,10 @@ export class TaskService {
     } catch (error) {
       return { ok: false, detail: `读取 MR 逐条回复失败：${String(error)}` };
     }
-    const parsed = parseReviewReplies(text, uncovered.map((item) => item.id));
+    const parsed = parseReviewReplies(text, uncovered.map((item) => item.id), known.map((item) => item.id));
+    if (parsed.duplicate_ids.length) {
+      return { ok: false, detail: `MR 逐条回复的讨论 ID 重复：${parsed.duplicate_ids.join("、")}；请保留一份明确回复` };
+    }
     if (parsed.missing_ids.length) {
       return {
         ok: false,

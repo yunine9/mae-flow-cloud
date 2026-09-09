@@ -66,6 +66,19 @@ test("outbox 部分成功可恢复：成功项不重投，失败项保留重试"
   assert.doesNotMatch(readFileSync(path, "utf-8"), /\{"op":"attempt"\{"op"/);
 });
 
+test("MR 重复 ID 不以后写覆盖先写，其他明确回复仍可解析", () => {
+  const result = parseReviewReplies("[d-1] 已修复\n[d-2] 无需修改\n[d-1] 无法修复", ["d-1", "d-2"]);
+  assert.deepEqual(result.duplicate_ids, ["d-1"]);
+  assert.deepEqual(result.missing_ids, ["d-1"]);
+  assert.deepEqual(result.replies, [{ id: "d-2", body: "无需修改" }]);
+});
+
+test("部分回复已入队时，旧讨论的回复不能拼到待发送的正文里", () => {
+  const result = parseReviewReplies("[d-new] 新回复\n[d-old] 旧回复\n[d-last] 最后回复",
+    ["d-new", "d-last"], ["d-new", "d-old", "d-last"]);
+  assert.deepEqual(result.replies, [{ id: "d-new", body: "新回复" }, { id: "d-last", body: "最后回复" }]);
+});
+
 test("outbox 中段或完整坏行 fail-closed,不得伪装成空账继续投递", () => {
   const path = join(mkdtempSync(join(tmpdir(), "mfc-outbox-bad-")),
     "outbox.jsonl");

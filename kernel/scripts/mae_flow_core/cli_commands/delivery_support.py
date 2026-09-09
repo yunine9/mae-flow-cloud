@@ -1,4 +1,5 @@
 """Small presentation and Git helpers for Cloud delivery commands."""
+import json
 import re
 
 from .wiring import api
@@ -36,10 +37,10 @@ def render_delivery_feedback(state):
         return ""
     lines = ["──── 持续检视第 %s 轮（%s） ────" % (
         batch.get("round", "?"), batch.get("status", "open"))]
-    for item in batch.get("items", []):
-        lines.append("- [%s] %s：%s%s" % (
-            item.get("source", "反馈"), item.get("id", "?"),
-            item.get("summary", ""),
-            ("（材料：%s）" % item.get("material"))
-            if item.get("material") else ""))
+    lines.append("反馈 ID 与正文分开列出；写回执时原样使用 id，不拼接摘要或状态：")
+    lines.append(json.dumps([
+        {key: item[key] for key in ("id", "source", "source_id", "summary", "material")
+         if key in item}
+        for item in batch.get("items", [])
+    ], ensure_ascii=False, indent=2))
     return "\n".join(lines)

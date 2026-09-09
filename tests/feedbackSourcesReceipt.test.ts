@@ -242,6 +242,14 @@ test("MR 检视人意见来源:review_replies.md 逐条回复登记进真内核"
       { id: "mr:d-2", source: "mr_discussion", source_id: "d-2", source_revision: 0,
         kind: "code_review", summary: "日志级别过高", verification: "reviewer" },
     ]);
+    const retry = (service as any).activeFeedbackReceiptInstructions(internal);
+    assert.ok(retry.includes(JSON.stringify(join(workspace, "review_replies.md"))));
+    assert.match(retry, /\[d-1\]/);
+    assert.match(retry, /\[d-2\]/);
+    assert.doesNotMatch(retry, /\[mr:d-1\]/);
+    writeFileSync(join(workspace, "review_replies.md"), "[d-1] 已修改\n[d-1] 不修改\n[d-2] 已降低日志级别");
+    assert.match((service as any).recordActiveFeedbackResult(internal), /ID 重复/);
+    assert.equal(readState(cwd).delivery_loop.batches[0].result_digest, undefined);
     writeFileSync(join(workspace, "review_replies.md"), [
       "[d-1] 已补空值分支，见 main.ts 第 3 行。",
       "[d-2]",
@@ -258,6 +266,23 @@ test("MR 检视人意见来源:review_replies.md 逐条回复登记进真内核"
   } finally {
     await stop();
   }
+});
+
+test("MR 部分回复已发送后补交，不把旧讨论正文混进新回复", async () => {
+  const { service, internal, workspace, cwd, stop } = await watchingService("partial-mr");
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+    internal.summary.repo_url = "https://code.example.invalid/repo.git";
+    internal.summary.delivery = { loop: { kind: "review", review_source: "mr_discussion",
+      review_ids: "d-new:r0,d-old:r0", replied_ids: "d-old:r0" } };
+    (service as any).prePushRevision = async () => ({ sha });
+    writeFileSync(join(workspace, "review_replies.md"), "[d-new] 新讨论的回复\n[d-old] 已发送的旧回复");
+    assert.deepEqual(await (service as any).stageReviewReplies(internal), { ok: true });
+    const entries = (service as any).deliveryOutbox(internal).list();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].payload.discussion_id, "d-new");
+    assert.equal(entries[0].payload.body, "新讨论的回复");
+  } finally { await stop(); }
 });
 
 test("流水线摘要误拼进 ID 必须拒收；模板保留原 ID，准确回执才登记", async () => {

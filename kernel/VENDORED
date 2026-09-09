@@ -3,3 +3,4 @@
 基线: mae-flow@ad5b92af3e19766558dbca476389dda5cd80d076
 收编时间: 2026-09-09
 纪律: 此目录是快照,不许手改;更新跑 harness/sync-kernel.sh
+增量同步: mae-flow@b21e4c6（反馈展示与对应回归；保留 Cloud 已有 Story 改动）

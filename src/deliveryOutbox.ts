@@ -47,20 +47,24 @@ type Operation =
 export interface ParsedReviewReplies {
   replies: Array<{ id: string; body: string }>;
   missing_ids: string[];
+  duplicate_ids: string[];
 }
 
 /** 模型常把正文写在 [id] 同一行，解析器同时接受单独行与同行正文。
- * knownIds 存在时只认本批讨论，避免正文里的普通 [foo] 被误切。 */
+ * knownIds 是本次需要的回复，boundaryIds 可包含已经入队的讨论：旧回复
+ * 仍需切段，但不能混进新回复正文；普通 [foo] 仍是正文。 */
 export function parseReviewReplies(
   text: string,
   knownIds?: Iterable<string>,
+  boundaryIds?: Iterable<string>,
 ): ParsedReviewReplies {
   const known = knownIds ? new Set(knownIds) : undefined;
+  const boundaries = boundaryIds ? new Set(boundaryIds) : known;
   const replies: Array<{ id: string; body: string }> = [];
   let current: { id: string; body: string[] } | undefined;
   for (const line of String(text ?? "").split("\n")) {
     const head = line.trim().match(/^\[([^\]\s]+)\]\s*(.*)$/);
-    if (head && (!known || known.has(head[1]))) {
+    if (head && (!boundaries || boundaries.has(head[1]))) {
       if (current) {
         replies.push({ id: current.id, body: current.body.join("\n").trim() });
       }
@@ -73,12 +77,19 @@ export function parseReviewReplies(
     replies.push({ id: current.id, body: current.body.join("\n").trim() });
   }
   const byId = new Map<string, string>();
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
   for (const reply of replies) {
+    if (known && !known.has(reply.id)) continue;
+    if (seen.has(reply.id)) duplicates.add(reply.id);
+    seen.add(reply.id);
     if (reply.body) byId.set(reply.id, reply.body);
   }
+  for (const id of duplicates) byId.delete(id);
   const normalized = [...byId].map(([id, body]) => ({ id, body }));
   return {
     replies: normalized,
+    duplicate_ids: [...duplicates],
     missing_ids: known
       ? [...known].filter((id) => !byId.has(id)) : [],
   };
