@@ -545,11 +545,8 @@ function invoke(input: {
  * 快照走 stdin:核对的必须是调用方**刚读到的那份**状态,而不是内核此刻
  * 再读一次的现场——两次读之间 Agent 可以改文件。
  *
- * 两种"没拿到 true"必须分开:内核**答了不**(拒收、输出不成形、状态文件
- * 读不了)是裁决,返回 false,这是门不是旁路;内核**根本没答**(起不来
- * 且三次重试用尽)抛 KernelUnavailableError,调用方按基础设施故障挂起
- * 重试——否则一次抖动会被当成"收据缺失/索引损坏"停摆叫人(main 上实测
- * 过同类误诊)。
+ * 只有结构化核验结果中的 false 才表示无收据背书。读盘失败、命令失败
+ * 和输出损坏是核验不可用，交给已有恢复机制，不冒充否定裁决。
  */
 export function attestKernelHost(input: {
   host: KernelDeliveryHost;
@@ -558,14 +555,25 @@ export function attestKernelHost(input: {
   lifecycle?: KernelHostAction[];
   activeBatch?: KernelHostAction[];
 }): { lifecycle: boolean; activeBatch: boolean } {
-  const denied = { lifecycle: false, activeBatch: false };
-  let state: unknown;
+  let state: Record<string, any>;
   try {
     state = input.state ?? JSON.parse(readFileSync(
       join(input.cwd, ".mae-flow.json"), "utf-8"));
-  } catch {
-    return denied;
+  } catch (error) {
+    throw new KernelUnavailableError(`${KERNEL_UNAVAILABLE}：无法读取核验状态：${String(error)}`);
   }
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    throw new KernelUnavailableError(`${KERNEL_UNAVAILABLE}：核验状态格式损坏`);
+  }
+  // Transport only receipt inputs; hashing, signatures and decisions stay in Python.
+  // Keep the complete loop: old batches are part of the signed lifecycle.
+  const snapshot = {
+    current: state.current,
+    delivery_loop: state.delivery_loop,
+    quality: { external_verification: state.quality?.external_verification },
+    user_intervention: state.user_intervention,
+    host_capability_nonces: state.host_capability_nonces,
+  };
   const args = ["attest", "--snapshot-stdin"];
   if (input.lifecycle?.length) args.push("--lifecycle", input.lifecycle.join(","));
   if (input.activeBatch?.length) {
@@ -574,12 +582,16 @@ export function attestKernelHost(input: {
   const result = spawnKernelDelivery({
     host: input.host,
     cwd: input.cwd,
-    stdin: JSON.stringify(state),
+    stdin: JSON.stringify(snapshot),
     attempt: () => ({ args, cleanup: () => {} }),
   });
   const record = lastJsonLine(result.stdout);
-  if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1") {
-    return denied;
+  if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1"
+      || (input.lifecycle?.length && typeof record.lifecycle !== "boolean")
+      || (input.activeBatch?.length && typeof record.active_batch !== "boolean")) {
+    const detail = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    throw new KernelUnavailableError(
+      `${KERNEL_UNAVAILABLE}：收据核验未完成：${detail || "没有有效的结构化结果"}`);
   }
   return {
     lifecycle: record.lifecycle === true,

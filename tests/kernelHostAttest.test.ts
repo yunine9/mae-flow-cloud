@@ -12,9 +12,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, renameSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   KERNEL_UNAVAILABLE,
   KernelUnavailableError,
@@ -116,12 +116,12 @@ test("活动批次:批次正文一字不差才算,current 合法移动不影响"
   }), false, "批次正文被改:不再背书");
 });
 
-test("内核答了不(脚本不存在、退非 0):false,不抛、不放行", () => {
+test("内核脚本缺失是核验不可用，不冒充没有授权", () => {
   const { cwd } = watchingTask("dead");
-  assert.equal(trustedKernelHostLifecycle({
+  assert.throws(() => trustedKernelHostLifecycle({
     host: { kernelRoot: join(process.cwd(), "kernel-not-exists") },
     cwd, actions: ["pipeline-record"],
-  }), false);
+  }), KernelUnavailableError);
 });
 
 test("内核根本没答(起不来且三次重试用尽):抛 KernelUnavailableError,不是 false", () => {
@@ -219,4 +219,44 @@ test("人工选择重排保留原确认；部分排除不把归档凭证变成�
   assert.equal(trustedKernelHostLifecycle({
     host: HOST, cwd, actions: ["selection-reconcile"], state: replayed,
   }), true);
+});
+
+
+test("重启恢复真实签名的待落盘收据；未保存的 nonce 和篡改投影不能恢复", () => {
+  const { cwd, workspace } = watchingTask("recover-receipt");
+  const state = readState(cwd);
+  const root = join(dirname(workspace), ".host-capabilities");
+  const path = join(root, readdirSync(root).find(n => n.includes(".receipt-") && n.endsWith(".json"))!);
+  const staged = path + ".staged";
+  renameSync(path, staged);
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({ ...state, host_capability_nonces: [] }));
+  const query = () => trustedKernelHostLifecycle({ host: HOST, cwd, actions: ["pipeline-record"], state });
+  assert.equal(query(), false, "内存快照不能代替落盘事实");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({ ...state, current: "end" }));
+  assert.equal(query(), false, "nonce 一样但内容不同也不能补收据");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  assert.equal(query(), true);
+  assert.equal(existsSync(staged), false);
+  assert.equal(query(), true, "重复核验幂等");
+});
+
+test("大任务历史与超过 512 KiB 的真实反馈生命周期均可核验", () => {
+  const { cwd, workspace, taskId } = watchingTask("large-state");
+  const state = readState(cwd);
+  state.history = [{ detail: "h".repeat(900000) }];
+  state.delivery_loop = { active_batch_id: "", batches: [{ batch_id: "old", status: "closed", summary: "x".repeat(600000) }] };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  sealPipelineLifecycle({ cwd, workspace, taskId, kernelRoot: KERNEL_ROOT });
+  assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd, actions: ["pipeline-record"] }), true);
+  const changed = readState(cwd);
+  changed.delivery_loop.batches[0].summary += "different";
+  assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd, actions: ["pipeline-record"], state: changed }), false);
+});
+
+test("核验输出格式错误不能变成否定裁决", () => {
+  const { cwd } = watchingTask("malformed-attest");
+  const script = join(cwd, "bad-attest.sh");
+  writeFileSync(script, `#!/bin/sh\ncat >/dev/null\necho '{"schema":"mae-flow-host-attest/1","lifecycle":"false"}'\n`);
+  chmodSync(script, 0o755);
+  assert.throws(() => trustedKernelHostLifecycle({ host: { ...HOST, python: script }, cwd, actions: ["pipeline-record"] }), KernelUnavailableError);
 });
