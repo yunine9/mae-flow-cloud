@@ -401,7 +401,9 @@ function TaskSyncIndicator({
   );
 }
 
-function PersonalSettingsPage({
+/** 导出供预览脚本 SSR 截图(组件统一化同款纪律:样式集中,不在
+ * 组件里 import CSS,node 可导入)。 */
+export function PersonalSettingsPage({
   session,
   onSessionPatch,
   onTasksChanged,
@@ -410,8 +412,7 @@ function PersonalSettingsPage({
   onSessionPatch: (patch: Partial<AuthUser>) => void;
   onTasksChanged: () => Promise<void>;
 }) {
-  return <div className="personal-settings-page">
-    <InterventionSetting scope="requirement" session={session} onChanged={async (patch) => {
+  return <div className="personal-settings-page">    <InterventionSetting scope="requirement" session={session} onChanged={async (patch) => {
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
