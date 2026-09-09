@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import type { TaskSummary } from "./api";
 import { Markdown } from "./markdown";
 
@@ -10,7 +11,7 @@ export function TaskWaitingFacts({ task }: { task: TaskSummary }) {
     <header className="decision-head">
       <div>
         <h3 id={`waiting-facts-${task.id}`}>待回答的问题</h3>
-        <p>等待 {task.luban_account ?? "任务责任人"} 答复；你可以只读查看题目和选项。</p>
+        <p>等待 <PersonName account={task.luban_account} fallback="任务责任人" /> 答复；你可以只读查看题目和选项。</p>
       </div>
     </header>
     {waiting.context && <details className="waiting-context-details">

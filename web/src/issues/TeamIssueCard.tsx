@@ -1,3 +1,4 @@
+import { PersonName } from "../People";
 /**
  * 团队看板里的问题会话卡片:IssueCard 的轻量子集,只为团队看板的
  * 扫读态服务——不拉 IssueBoard 的重组件(Registration/SessionView/
@@ -51,7 +52,7 @@ export function TeamIssueCard({ issue, onOpen, compact = false }: {
         </span>
         <strong className="task-title">{issue.title}</strong>
         <span className="task-ownership">
-          <span>处理人 · {issue.account}</span>
+          <span>处理人 · <PersonName account={issue.account} /></span>
           <span>{issue.source === "dts" ? "DTS 单" : "自研问题"}</span>
         </span>
         <span className={`task-focus task-focus-${issue.stage}`}>

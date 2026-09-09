@@ -1,3 +1,4 @@
+import { PersonName } from "../People";
 import type { WorkflowAssetDetail } from "../api";
 import { statusLabels } from "./model";
 
@@ -47,7 +48,7 @@ export function WorkflowDetail({
       <div><small>当前草稿</small><strong>r{draft.revision}</strong><span>{shortDigest(draft.digest)}</span></div>
       <div><small>最新发布</small><strong>{asset.latest_version ? `v${asset.latest_version}` : "未发布"}</strong>
         <span>{versions.at(-1)?.published_at ? formatDate(versions.at(-1)!.published_at) : "—"}</span></div>
-      <div><small>Owner</small><strong>{asset.owner}</strong><span>
+      <div><small>Owner</small><strong><PersonName account={asset.owner} /></strong><span>
         {asset.maintainers.length ? `${asset.maintainers.length} 位维护者` : "无额外维护者"}</span></div>
       {/* 说内容不报数:"3 个限定条件"回答不了"适用于哪"(审计 P2-17) */}
       {(() => {

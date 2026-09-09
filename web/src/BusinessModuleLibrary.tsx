@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { useEffect, useRef, useState } from "react";
 import {
   archiveBusinessKnowledgeAsset,
@@ -362,7 +363,7 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
             <span><span><strong>{module.name}</strong><code>{module.id}</code>
               {module.status === "archived" && <em>已归档</em>}</span>
               <small>{module.description}</small>
-              <span className="business-module-card-meta">Owner {module.owner} · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
+              <span className="business-module-card-meta">Owner <PersonName account={module.owner} /> · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
             </span>
             <i aria-hidden>{open ? "收起" : "展开"}</i>
           </button>

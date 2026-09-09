@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 /**
  * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
@@ -152,7 +153,7 @@ export function TaskCard({
           </span>
           <strong className="task-title">{task.title ?? task.requirement}</strong>
           <span className="task-ownership">
-            <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
+            <span>责任人 · <PersonName account={responsibleOf(task)} /></span>
           </span>
           {task.focus && (
             <span className={`task-focus task-focus-${task.focus.kind}`}>
@@ -203,7 +204,7 @@ export function TaskCard({
                     <span key={repository.id} title={repository.url}>
                       <i aria-hidden />{repository.scope?.name ?? repository.name}
                       <small> · {repository.name}</small>
-                      {repository.assignee && <b>· {repository.assignee}</b>}
+                      {repository.assignee && <b>· <PersonName account={repository.assignee} /></b>}
                       {repository.task_status && <em className={repository.task_status}>
                         · {statusText({ status: repository.task_status })}
                       </em>}
@@ -271,7 +272,7 @@ export function TaskCard({
               <span><strong>{repository.scope
                   ? `${repository.name} · ${repository.scope.name}`
                   : repository.name}</strong>
-                <small>{repository.assignee ?? "未指定负责人"}</small></span>
+                <small><PersonName account={repository.assignee} fallback="未指定负责人" /></small></span>
               <em className={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}
               </em>
@@ -285,7 +286,7 @@ export function TaskCard({
           <i aria-hidden />
           <strong>等待负责人拍板</strong>
           <span>
-            {task.luban_account ?? "未分配负责人"}
+            <PersonName account={task.luban_account} fallback="未分配负责人" />
             {waitingQuestions > 0 ? ` · ${waitingQuestions} 个决策项` : ""}
           </span>
         </div>
