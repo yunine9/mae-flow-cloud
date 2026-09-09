@@ -131,7 +131,7 @@ function requiredText(value: unknown, label: string, max: number): string {
   return text;
 }
 
-function normalizeIp(value: unknown): string {
+export function normalizeIp(value: unknown): string {
   const ip = requiredText(value, "主 IP", 255);
   if (/\s/.test(ip) || ip.startsWith("-")) {
     throw new EnvironmentRegistryError("主 IP 格式不合法");

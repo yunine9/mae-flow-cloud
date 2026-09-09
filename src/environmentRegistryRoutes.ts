@@ -26,6 +26,7 @@ import {
   EnvironmentIpConflictError,
   EnvironmentNotFoundError,
   EnvironmentRegistryError,
+  normalizeIp,
   type EnvironmentForm,
   type EnvironmentRegistry,
 } from "./environmentRegistry.ts";
@@ -84,12 +85,11 @@ function readBody(request: IncomingMessage): Promise<any> {
   });
 }
 
-/** 测试连接(表单草稿)的入参校验:与台账录入同一套口径与人话文案
- * (400 走 EnvironmentRegistryError 既有映射),但绝不落任何存储。 */
+/** 测试连接(表单草稿)的入参校验:直接复用台账录入的 IP 口径
+ * (normalizeIp,含内部空白/前导"-"拦截,人话 400 走既有映射),
+ * 但绝不落任何存储。 */
 function probeIp(value: unknown): string {
-  const ip = String(value ?? "").trim();
-  if (!ip) throw new EnvironmentRegistryError("主 IP不能为空");
-  return ip;
+  return normalizeIp(value);
 }
 
 function probePort(value: unknown): number {
@@ -166,13 +166,16 @@ export async function handleEnvironmentRoutes(
     }
     if (id !== undefined && method === "PUT") {
       const body = await readBody(request);
+      // null = 缺席(评审 P2:客户端按对称直觉送 null,不能串化成字面
+      // "null" 毁密码/改 IP);唯一例外 root_password:null 有清除语义。
+      const given = (value: unknown) => value !== undefined && value !== null;
       return done(200, registry.update(id, {
-        ...(body.ip !== undefined ? { ip: String(body.ip) } : {}),
-        ...(body.port !== undefined ? { port: Number(body.port) } : {}),
-        ...(body.form !== undefined
+        ...(given(body.ip) ? { ip: String(body.ip) } : {}),
+        ...(given(body.port) ? { port: Number(body.port) } : {}),
+        ...(given(body.form)
           ? { form: String(body.form) as EnvironmentForm } : {}),
         // 密码不回显、留空 = 不变:缺席就别碰,空串由模块按"不变"消化。
-        ...(body.backend_password !== undefined
+        ...(given(body.backend_password)
           ? { backendPassword: String(body.backend_password) } : {}),
         ...(body.root_password === undefined
           ? {} : { rootPassword: body.root_password as string | null }),

@@ -138,6 +138,16 @@ test("CRUD 往返:非密字段回读一致,探活默认 unverified,视图永不�
   assert.deepEqual(updated.body.tags, ["v6", "容器化"]);
   assert.equal(updated.body.created_by, "dev", "created_by 不被编辑改写");
 
+  // null = 缺席(评审 P2 回归钉):客户端按对称直觉送 null,不能串化成
+  // 字面 "null" 毁密码/改 IP;唯一例外 root_password:null 有清除语义。
+  const nulled = await drive("PUT", ["environments", created.body.id], opts, {
+    ip: null,
+    backend_password: null,
+  });
+  assert.equal(nulled.status, 200);
+  assert.equal(nulled.body.ip, "10.0.0.8", "ip: null 视为缺席,不是字面 \"null\"");
+  assert.equal(nulled.body.password_configured, true, "密码不被 null 改写");
+
   // 校验打回小样:缺主 IP / 坏形态 / 坏端口都是 400 带人话。
   const noIp = await drive("POST", ["environments"], opts,
     entryInput({ ip: "   " }));
