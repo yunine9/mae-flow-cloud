@@ -4,6 +4,7 @@ from .shared import os
 from .wiring import api
 from mae_flow_core.quality.external_repair import (
     active_repair_authorization, eligible_repair_paths)
+from mae_flow_core.guard.manifest import is_process_document
 
 
 def _candidate_ids(state):
@@ -24,7 +25,7 @@ def _candidate_ids(state):
 
 
 def gate_repair_commit(state, candidate_snapshot, die_rule):
-    """Handle exact commit scope; return False outside a RED repair window."""
+    """Enforce the authorized upper bound, without forcing one giant commit."""
     allowed = _candidate_ids(state)
     if allowed is None:
         return False
@@ -32,7 +33,15 @@ def gate_repair_commit(state, candidate_snapshot, die_rule):
         api._repo_path_identity(path)
         for path in candidate_snapshot.get("paths", ())
     }
-    if not allowed:
+    # Compound add / commit -i / pathspec can replace a staged deletion with
+    # file contents. The actual commit snapshot must still be deletion-only.
+    deleted = {api._repo_path_identity(path)
+               for path in candidate_snapshot.get("deleted_paths", ())}
+    if any(is_process_document(path) and path not in deleted for path in actual):
+        die_rule("bash-external-repair-process",
+                 "过程文件修复只允许撤出 Git 跟踪，不允许新增或修改其入库内容。"
+                 "本次授权要求撤出文件，请保留其从 Git 跟踪中删除的结果。")
+    if not allowed or not actual:
         die_rule(
             "bash-external-repair-empty",
             "流水线 RED 修复窗口里没有可自动提交的新增业务改动。授权集合"
@@ -40,16 +49,15 @@ def gate_repair_commit(state, candidate_snapshot, die_rule):
             "启动前脏文件、构建产物、过程文档(openspec/、docs/story 等)。"
             "若你的修复确实都落在这些排除项里,不要反复尝试提交——"
             "如实结束当前回合说明情况,交由宿主与人工裁决。")
-    if actual != allowed:
+    # Authorization is an upper bound, not a demand to commit every dirty file.
+    # A person may ask to remove one file while other repairs remain in progress.
+    # Splitting commits does not declare the whole feedback batch complete.
+    if actual - allowed:
         die_rule(
             "bash-external-repair-files",
-            "本次流水线修复提交必须精确包含失败 SHA 之后的业务改动。缺少: %s；"
-            "夹带: %s。流程内部文件、流水线登记前已有改动、启动前脏文件和"
-            "构建产物不会获得自动授权(产物请清理出工作区或原样留着,"
-            "不要提交)。按上面两个清单用 git add / git restore --staged "
-            "调平后重试提交。"
-            % ("、".join(sorted(allowed - actual)) or "无",
-               "、".join(sorted(actual - allowed)) or "无"))
+            "本次提交含授权范围外的文件: %s。请将这些文件撤出暂存区，"
+            "已有授权范围内的改动可以分次提交，无需把其他脏文件一起提交。"
+            % "、".join(sorted(actual - allowed)))
     return True
 
 def gate_repair_add(state, add_paths, die_rule):
@@ -59,7 +67,7 @@ def gate_repair_add(state, add_paths, die_rule):
         return False
     outside = [
         path for path in add_paths
-        if api._repo_path_identity(path) not in allowed
+        if api._repo_path_identity(path) not in allowed or is_process_document(path)
     ]
     if outside:
         die_rule(

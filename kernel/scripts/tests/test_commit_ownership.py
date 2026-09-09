@@ -137,6 +137,80 @@ class CommitOwnershipTests(unittest.TestCase):
         self.assertIn("Git 提交候选读取失败", output)
         self.assertNotIn("缺少:", output)
 
+    def cleanup_state(self, paths):
+        state = self.state(current="build")
+        state["delivery_loop"] = {"active_batch_id": "cleanup", "batches": [
+            {"batch_id": "cleanup", "status": "repairing"}]}
+        state["delivery_repair_authorization"] = {
+            "schema": "mae-flow-feedback-repair/1", "status": "ready",
+            "batch_id": "cleanup", "base_sha": git(self.repo, "rev-parse", "HEAD"),
+            "allowed_paths": paths, "baseline_dirty": paths,
+        }
+        state["delivery_manifest"] = {"files": paths, "confirmed": True}
+        return state
+
+    def test_authorized_runtime_untracking_commits_and_keeps_local_file(self):
+        path = ".mae-flow-dependencies.md"
+        write(self.repo, path, "platform handoff\n")
+        git(self.repo, "add", "-f", "--", path)
+        git(self.repo, "commit", "-qm", "accidental runtime inclusion")
+        mf.save_state(self.cleanup_state([path]))
+        git(self.repo, "rm", "--cached", "--", path)
+        self.assertNotIn(path, mf._dirty_paths())
+        # Other unfinished business changes must not be forced into cleanup.
+        write(self.repo, "README.md", "fixed\n")
+        command = 'git commit -m "[REQ123][fix]remove runtime tracking" 2>&1 | head'
+        result = self.gate_bash(command)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        result = self.gate_bash('git commit -am "[REQ123][fix]remove runtime tracking"')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        git(self.repo, "commit", "-qm", "[REQ123][fix]remove runtime tracking")
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, path)))
+        self.assertEqual("", git(self.repo, "ls-files", "--", path))
+        self.assertIn("README.md", git(self.repo, "diff", "--name-only"))
+        # Keeping the local runtime file never authorizes adding it again.
+        result = self.gate_bash('git add -f -- ' + path)
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_process_cleanup_does_not_authorize_modified_or_readded_contents(self):
+        path = ".mae-flow-issue.md"
+        write(self.repo, path, "runtime\n")
+        git(self.repo, "add", "-f", "--", path)
+        git(self.repo, "commit", "-qm", "accidental runtime inclusion")
+        mf.save_state(self.cleanup_state([path]))
+        write(self.repo, path, "changed runtime\n")
+        git(self.repo, "add", "-f", "--", path)
+        result = self.gate_bash('git commit -m "[REQ123][fix]runtime change"')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("过程文件修复只允许撤出", result.stdout + result.stderr)
+        git(self.repo, "rm", "--cached", "-f", "--", path)
+        for command in (
+                'git add -f -- %s && git commit -m "[REQ123][fix]readd"' % path,
+                'git commit -i %s -m "[REQ123][fix]readd"' % path):
+            result = self.gate_bash(command)
+            self.assertNotEqual(0, result.returncode, command)
+
+    def test_runtime_deletion_requires_exact_active_authorization(self):
+        path = ".mae-flow-dependencies.md"
+        write(self.repo, path, "runtime\n")
+        git(self.repo, "add", "-f", "--", path)
+        git(self.repo, "commit", "-qm", "accidental runtime inclusion")
+        state = self.cleanup_state([".mae-flow-other.md"])
+        mf.save_state(state)
+        git(self.repo, "rm", "--cached", "--", path)
+        result = self.gate_bash('git commit -m "[REQ123][fix]cleanup"')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("没有可自动提交", result.stdout + result.stderr)
+
+    def test_runtime_file_cannot_bypass_boundary_without_a_manifest(self):
+        mf.save_state(self.state())
+        path = ".mae-flow-dependencies.md"
+        write(self.repo, path, "runtime\n")
+        git(self.repo, "add", "-f", "--", path)
+        result = self.gate_bash('git commit -m "[REQ123][fix]runtime"')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("平台运行态文件不得提交", result.stdout + result.stderr)
+
     def test_external_red_redirected_commit_reads_actual_staged_files(self):
         paths = ("model/api.yaml", "src/Repair.java", "tests/RepairTest.java")
         for path in paths:

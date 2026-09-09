@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import type { GateContract, GateDecision } from "./gateService.ts";
 import { prePushSecurityDecision } from "./prepushAgent.ts";
+import { withoutShellRedirections } from "./shellRedirections.ts";
 import type { SemanticEvent } from "./semanticEvents.ts";
 import type {
   DeveloperAssistantAvailability,
@@ -284,6 +285,7 @@ const MUTATING_GIT_COMMANDS = new Set([
 ]);
 
 function mutatingGitCommand(source: string): string | undefined {
+  source = withoutShellRedirections(source);
   const segments = source.split(/[;&|\n()]+/);
   for (const segment of segments) {
     const match = segment.match(

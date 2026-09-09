@@ -225,6 +225,13 @@ def _gate_confirmed_manifest_add(st, add_paths):
 def _gate_commit_candidates(c, st, jdie):
     candidate_snapshot = api._pending_commit_candidates(c)
     _gate_confirmed_manifest_candidates(st, candidate_snapshot)
+    from mae_flow_core.guard.manifest import is_runtime_path
+    runtime = [path for path in candidate_snapshot.get("present_paths", ())
+               if is_runtime_path(path)]
+    if runtime:
+        _die_rule("bash-runtime-files",
+                  "平台运行态文件不得提交到业务仓: " + "、".join(runtime)
+                  + "。请从暂存区撤出；已误提交的文件须通过明确修复授权撤出跟踪。")
     (inherited, foreign_openspec, compile_side_effects, strong_artifacts,
      unproven_paths, artifact_hints) = api._pending_commit_files(
          c, st, candidate_snapshot)

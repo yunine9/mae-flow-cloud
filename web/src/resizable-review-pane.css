@@ -1,0 +1,21 @@
+@layer legacy {
+.workspace-studio .ws-review-resizer {
+  order: 2;
+  flex: 0 0 8px;
+  align-self: stretch;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  background: var(--surface);
+  border-inline: 1px solid var(--line);
+  transition: background 120ms ease;
+}
+.workspace-studio .ws-review-resizer[hidden] { display: none; }
+.workspace-studio .ws-review-resizer:hover,
+.workspace-studio .ws-review-resizer:active,
+.workspace-studio .ws-review-resizer:focus-visible {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  outline: none;
+}
+}

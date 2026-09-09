@@ -58,6 +58,9 @@ test("开发助手门禁绕开流程命令限制，但保留内核/Git/凭据边
   assert.notEqual(decide("Bash", "git diff -- src/add.ts")?.action, "deny");
   assert.equal(decide("Bash", "git restore src/example.ts")?.action, "deny");
   assert.equal(decide("Bash", "git commit -am test")?.action, "deny");
+  assert.equal(decide("Bash", "git 2>/tmp/git.log commit -am test")?.action, "deny");
+  assert.equal(decide("Bash", "git -C . 2>&1 restore src/example.ts")?.action, "deny");
+  assert.notEqual(decide("Bash", "git 2>/tmp/git.log diff -- src/add.ts")?.action, "deny");
   assert.equal(decide("Bash", "git push origin HEAD")?.action, "deny");
   assert.equal(decide("Write", ".git/HEAD")?.action, "deny");
   assert.equal(decide("Edit", ".git/refs/heads/main")?.action, "deny");

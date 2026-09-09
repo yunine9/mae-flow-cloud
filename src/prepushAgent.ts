@@ -11,6 +11,7 @@ import {
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
 import { DEFAULT_COMMIT_CONVENTION } from "./commitPolicy.ts";
+import { withoutShellRedirections } from "./shellRedirections.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -123,6 +124,7 @@ function unsafeDiscardPath(path: string): boolean {
 
 /** 精确文件回退是修复能力；全树/通配回退才是现场销毁。 */
 function unsafeGitWorktreeDiscard(segment: string): boolean {
+  segment = withoutShellRedirections(segment);
   const checkout = segment.match(/\bcheckout\b([\s\S]*)/i);
   if (checkout) {
     const words = shellWords(checkout[1]);
@@ -329,7 +331,8 @@ export function prePushSecurityDecision(
   // 拦所有 rm -rf,自相矛盾):目标**全部**是公认构建产物路径时放行。
   // 判不了的(变量/反引号/绝对路径/..)一律按拒处理,fail-closed。
   // 同时拦住 find -delete，防止工作区被不可恢复地批量清空。
-  const rmCommands = source.match(/(?:\bsudo\s+)?\brm\s+[^;&|\n]*/gi) ?? [];
+  const rmCommands = withoutShellRedirections(source)
+    .match(/(?:\bsudo\s+)?\brm\s+[^;&|\n]*/gi) ?? [];
   for (const command of rmCommands) {
     const hasRecursive = /(?:^|\s)-(?!-)[^\s]*[rR][^\s]*|--recursive\b/.test(command);
     const hasForce = /(?:^|\s)-(?!-)[^\s]*f[^\s]*|--force\b/.test(command);
@@ -571,14 +574,13 @@ function commandSegments(command: string): string[] {
  * 闸比一道稍松的闸有害得多。"退出成功"这条硬约束没动。
  */
 function normalizeCommand(command: string): string {
-  return String(command ?? "")
+  const source = String(command ?? "")
     // 上报时补的说明:"…CommUtils.so（并同口径跑 X 与 Y）"。只削末尾,
     // 命令中间的括号可能是 shell 语法;$( 是命令替换,一律不碰。
     .replace(/(?<!\$)[（(][^（()）]*[)）]\s*$/, " ")
     // 退出码回显尾巴:`; echo TEST_EXIT=$?`
-    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ")
-    // 重定向:`> /dev/null`、`>> build.log`、`2>&1`
-    .replace(/\d?>>?\s*\S+/g, " ")
+    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ");
+  return withoutShellRedirections(source)
     // 引号:`LD_LIBRARY_PATH="$X"` 与 `LD_LIBRARY_PATH=$X` 是同一条命令
     .replace(/["']/g, "")
     .replace(/\s+/g, " ")

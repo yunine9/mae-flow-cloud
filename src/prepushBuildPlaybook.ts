@@ -425,6 +425,8 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
   if (profile.stacks.includes("cpp")) {
     lines.push(
       "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多。",
+      `首编成功不代表 UT 依赖已准备：首编可能跳过测试。定向 UT configure 前，先核对本仓 skill/POM 的依赖生成入口及 cbbdevtest SDK（含 binmock.hpp）实际位置；对采用该配方的仓，在仓库要求的目录执行 \`${mvn} generate-sources -DDT_test=UT\`，沿用本轮 Maven 缓存和 settings 参数，成功后再核对 SDK 文件。已就绪则跳过；下载失败如实报告，不能靠反复 configure 或改测试代码绕过。`,
+      "UT 依赖就绪后若确认旧 CMake 缓存与本轮配置不兼容，仅清理受影响模块的生成目录/CMakeCache.txt/CMakeFiles，再按 skill 做子目录 configure 和定向 UT。不要因一个模块失败改跑全仓 reconfigure；target already exists 也可能是重复声明，必须先读具体 CMake 错误，不能一律归因缓存。",
       "skill 与本手册冲突时分两类看：**仓库事实**（命令形状、构建入口、DT/插件参数、增量与全量的判据）以 skill 为准，它更贴仓库；"
         + "**平台事实**（并行度按容器 CPU 配额、缓存目录、超时预算、产物与提交纪律）以本手册为准。"
         + "典型例子：skill 里写死的 `make -j12` 是它自己远端机器的假设，本平台容器是 CFS 配额，照抄会因限流更慢——并行度仍按配额算。",
