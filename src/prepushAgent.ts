@@ -574,14 +574,13 @@ function commandSegments(command: string): string[] {
  * 闸比一道稍松的闸有害得多。"退出成功"这条硬约束没动。
  */
 function normalizeCommand(command: string): string {
-  return String(command ?? "")
+  const source = String(command ?? "")
     // 上报时补的说明:"…CommUtils.so（并同口径跑 X 与 Y）"。只削末尾,
     // 命令中间的括号可能是 shell 语法;$( 是命令替换,一律不碰。
     .replace(/(?<!\$)[（(][^（()）]*[)）]\s*$/, " ")
     // 退出码回显尾巴:`; echo TEST_EXIT=$?`
-    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ")
-    // 重定向:`> /dev/null`、`>> build.log`、`2>&1`
-    .replace(/\d?>>?\s*\S+/g, " ")
+    .replace(/[;&]\s*echo\s+[\w]*EXIT[\w]*=\$\?\s*$/i, " ");
+  return withoutShellRedirections(source)
     // 引号:`LD_LIBRARY_PATH="$X"` 与 `LD_LIBRARY_PATH=$X` 是同一条命令
     .replace(/["']/g, "")
     .replace(/\s+/g, " ")
