@@ -36,6 +36,7 @@ import {
   eventWindow,
   filterEvents,
   isErrorEvent,
+  type EventDetailSelection,
   type EventFilter,
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
@@ -1651,16 +1652,6 @@ function FollowPaused({ behind, onResume }: {
       {behind > 0 ? `↓ ${behind} 条新的` : "↓ 回到最新"}
     </button>
   );
-}
-
-interface EventDetailSelection {
-  key: string;
-  eventId: number;
-  eventLabel: string;
-  fieldLabel: string;
-  content: string;
-  structured: boolean;
-  timestamp: string;
 }
 
 function EventTail({ taskId, active }: { taskId: string; active: boolean }) {

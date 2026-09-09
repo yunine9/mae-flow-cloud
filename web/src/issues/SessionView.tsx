@@ -151,12 +151,18 @@ export function IssueSessionView({
   }
 
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
-  // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
+  // 决策卡在卡在场时画。闸卡的分寸(2026-09-08):env_needed 在工具
+  // 举起闸的瞬间就出卡,不等回合收口的状态翻转——模型收口后仍可继续
+  // 不需要环境的工作,用户填卡/拒绝与它并行;其余闸都在阶段边界举起、
+  // 状态随即翻转,照旧只在 waiting_user 画。终态/挂起不出现卡。
   // gate_kind/scope 随卡带给决策卡:env_needed 换专用环境表单,
   // skill_select 换多选圈选卡(ADR-0011),pipeline_unfixable/
   // pipeline_evidence 换流水线红灯人工卡(票 03),gate_pipeline 带
   // 闸归属的仓与提交。
-  const gateCard = detail.status === "waiting_user" && detail.gate
+  const envGateLive = detail.gate?.kind === "env_needed"
+    && ["running", "idle", "waiting_user"].includes(detail.status);
+  const gateCard = (detail.status === "waiting_user" || envGateLive)
+    && detail.gate
     ? {
         waiting_id: detail.gate.id,
         state_version: detail.gate.state_version,
@@ -421,6 +427,7 @@ export function IssueSessionView({
           onTakeover={takeoverNow}
           onTakeoverNote={sendTakeoverNote}
           onResumeTakeover={resumeTakeover}
+          onOpenEvents={() => setTab("events")}
         />
       </section>
     </div>

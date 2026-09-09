@@ -300,6 +300,8 @@ test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择
   const decisionCard = readFileSync(
     resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 登记表单:形态下拉(虚拟化/容器化)必选,随 environment 上送。
   assert.match(registration, /环境形态 <i className="req">\*<\/i>/);
   assert.match(registration, /<option value="virtualized">虚拟化<\/option>/);
@@ -310,6 +312,12 @@ test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择
   assert.match(decisionCard, /<option value="k8s">容器化\(K8s\)<\/option>/);
   assert.match(decisionCard, /envType !== ""/, "未选形态不得提交");
   assert.match(decisionCard, /env_type: envType/);
+  // 拒绝口(票 93)文案直说拒绝(2026-09-08 走查:"无需拉日志"没人认出)。
+  assert.match(decisionCard, /拒绝填写,继续分析/);
+  assert.match(decisionCard, /拒绝填写,继续/);
+  // 环境卡中途即显(2026-09-08):闸在场即出卡,不等 waiting_user——
+  // 模型收口后继续不需要环境的工作,用户填卡与它并行。
+  assert.match(sessionView, /const envGateLive = detail\.gate\?\.kind === "env_needed"/);
   // wire 类型:形态字段在册(提交必带语义见注释)。
   assert.match(apiTypes, /env_type\?: "virtualized" \| "k8s"/);
 });
@@ -924,12 +932,18 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
   assert.match(stream,
     /children: <div className="conv-card current">\{currentCard\}<\/div>/);
   // 流内卡的回放按 status 给词签(waiting=等待决定/superseded=已作废/
-  // 其余=已决定),勾选对齐裁决文本——三类卡与通用卡走同一条投影渲染,
-  // 不按卡种分叉。
+  // 其余=已决定),答案逐题对齐:decision 按题序换行拼接,本题行等于
+  // 选项原文即出勾,不等于任何选项=自定义答复回填题面(2026-09-08:
+  // 自定义回答只按行找选项,卡上无影无踪)。
   assert.match(stream,
     /item\.status === "waiting" \? "等待决定"\s*\n\s*: item\.status === "superseded" \? "已作废" : "已决定"/);
   assert.match(stream, /conversationCardTitle\(item\)/);
-  assert.match(stream, /decision\?\.decision\.split\("\\n"\)\.includes\(option\)/);
+  assert.match(stream, /const answerLines = decision \? decision\.decision\.split\("\\n"\) : \[\]/);
+  assert.match(stream, /const custom = line !== "" && !question\.options\.includes\(line\)/);
+  assert.match(stream, /自定义答复:\$\{line\}/,
+    "选项题的自定义答复带前缀回填题面");
+  assert.match(stream, /\? `自定义答复:\$\{line\}` : line\}/,
+    "开放题的答案直出,不加自定义前缀");
   // 会话视图:dockRef setState → footerTarget → 当前卡一线到底,dock 门
   // 仍是 waiting && canOperate(查看模式不出 dock)。
   assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
@@ -1001,4 +1015,62 @@ test("人工接管:徽标/下传 takeover/三回调接线/composer 记录+交还
   assert.ok(
     takeoverBlock.includes(".issue-takeover-actions > .issue-takeover-resume {"),
     "交还主档按钮规则必须在人工接管追加块内");
+});
+
+// ---- 协作流对齐任务侧会话流(2026-09-08 走查拍板四点):长文量高折叠
+// ---- (ClampedText 两域共用一份)、工具步骤 conv-act 按钮切「对话现场」、
+// ---- 栏头「全部/需要我的」筛选、检视提交 conv-lead 批次卡。
+
+test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内筛选/批次卡", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const taskStream = readFileSync(
+    resolve("web/src/ConversationStream.tsx"), "utf-8");
+  const clamped = readFileSync(resolve("web/src/ClampedText.tsx"), "utf-8");
+  // 长文折叠:量高版抽成 ClampedText.tsx,两域同用一份;按字数的旧
+  // TurnText 已删(残字数阈值=两域折叠观感漂移的根源)。
+  assert.match(clamped, /ResizeObserver/);
+  assert.match(taskStream, /import \{ ClampedText \} from "\.\/ClampedText";/);
+  assert.match(stream, /import \{ ClampedText \} from "\.\.\/ClampedText";/);
+  assert.match(stream, /\{last && <ClampedText text=\{last\.text\} \/\>\}/);
+  assert.doesNotMatch(stream, /text\.length <= 1200/,
+    "按字数收折的旧 TurnText 必须删干净");
+  // 工具步骤:conv-act 按钮(任务侧同款)点开切「对话现场」;只读计数
+  // 行(issue-conv-steps)连同样式已删。
+  assert.match(stream,
+    /<button type="button" className="conv-act" onClick=\{onOpenEvents\}/);
+  assert.match(sessionView, /onOpenEvents=\{\(\) => setTab\("events"\)\}/);
+  assert.doesNotMatch(stream, /issue-conv-steps/);
+  assert.doesNotMatch(readFileSync(resolve("web/src/style.css"), "utf-8"),
+    /\.issue-conv-steps \{/);
+  // 流内筛选:栏头「全部/需要我的」(任务侧同款 ws-stream-filters),
+  // 「需要我的」口径=还开着的卡;钉在流末的当前卡不受筛选影响。
+  assert.match(stream, /<div className="ws-stream-filters" role="tablist"/);
+  assert.match(stream, /\["all", "全部"\], \["mine", "需要我的"\]/);
+  assert.match(stream,
+    /filter === "mine"\s*\n\s*\? limited\.filter\(\(item\) => item\.kind === "card" && item\.status === "waiting"\)/);
+  // 检视提交:conv-lead 批次卡导语(任务侧 annotations_sent 同款视觉),
+  // 不再是无导语的裸正文。
+  assert.match(stream,
+    /<p className="conv-lead">提交了 \{item\.count\} 条检视意见给 Agent<\/p>/);
+});
+
+test("现场页签对齐(2026-09-08):长内容/结构化内容右侧查看,不再就地展开", () => {
+  const events = readFileSync(resolve("web/src/issues/EventsPane.tsx"), "utf-8");
+  const eventView = readFileSync(resolve("web/src/eventView.ts"), "utf-8");
+  // 预览按钮模式(任务侧 EventValue 同款):>480 字与结构化内容行内只给
+  // 预览+「右侧查看 →」,点开在 event-workspace 旁的详情面板看全文。
+  assert.match(events, /className="event-value-preview"/);
+  assert.match(events, /右侧查看 <i aria-hidden>→<\/i>/);
+  assert.match(events, /<div className=\{`event-workspace\$\{detail \? " has-detail" : ""\}`\}>/);
+  assert.match(events, /<aside className="event-detail" aria-label="事件完整内容">/);
+  assert.doesNotMatch(events, /event-value-expand/,
+    "就地 <details> 展开是旧形态,必须删干净");
+  // 选中类型两域共用一份(eventView.ts),任务侧 EventTail 同接口。
+  assert.match(eventView, /export interface EventDetailSelection/);
+  const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
+  assert.match(taskCard, /type EventDetailSelection,\n\s*\} from "\.\/eventView";|type EventDetailSelection,[^]*from "\.\/eventView";/,
+    "任务侧应从 eventView 导入共享选中类型");
 });

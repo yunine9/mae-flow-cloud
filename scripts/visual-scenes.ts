@@ -15,6 +15,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { inflateSync } from "node:zlib";
 import React from "../web/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
 import { createServer } from "../web/node_modules/vite/dist/node/index.js";
@@ -22,7 +23,26 @@ import {
   projectRepairStopped, projectStatusLabel, projectTaskFocus,
 } from "../src/taskFocus.ts";
 
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+/** 浏览器可执行文件:缺省沿用 macOS 老路径;别的机器用环境变量指,
+ * 如 WSL: MFC_VISUAL_BROWSER="/mnt/c/Program Files (x86)/Microsoft/
+ * Edge/Application/msedge.exe"(Edge 同为 Chromium,无头参数通用)。 */
+const CHROME = process.env.MFC_VISUAL_BROWSER
+  ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+/** Windows 浏览器(经 WSL 互操作调用)看不见 /home 路径:场景目录必须
+ * 放在 /mnt/<盘> 下,且传给浏览器的路径/URL 要转成 Windows 形式。 */
+const WIN_BROWSER = /\.exe$/i.test(CHROME);
+
+function toBrowserPath(path: string): string {
+  return WIN_BROWSER
+    ? execFileSync("wslpath", ["-w", path], { encoding: "utf-8" }).trim()
+    : path;
+}
+
+function toBrowserFileUrl(path: string): string {
+  if (!WIN_BROWSER) return `file://${path}`;
+  // C:\Users\...\a.html → file:///C:/Users/.../a.html
+  return `file:///${toBrowserPath(path).replace(/\\/g, "/")}`;
+}
 
 // 时间冻结:页面上的"x 分钟前"随真实时钟走,前后两次截图隔了几分钟就会
 // 在几百个像素上假报差异(首轮实测 111 张"差异"全是它)。SSR 是同步的,
@@ -130,6 +150,10 @@ async function render(out: string): Promise<void> {
 }
 
 async function shoot(out: string, names: string[], widths: number[]): Promise<void> {
+  if (WIN_BROWSER && !out.startsWith("/mnt/")) {
+    throw new Error(`Windows 浏览器看不见 Linux 路径:${out}。`
+      + "请把 --out 放到 /mnt/<盘> 下(如 /mnt/c/Users/<你>/AppData/Local/Temp/mfc-visual)");
+  }
   const jobs = names.flatMap((name) => widths.map((width) => ({ name, width })));
   let next = 0; let done = 0;
   const worker = async () => {
@@ -140,8 +164,8 @@ async function shoot(out: string, names: string[], widths: number[]): Promise<vo
         const child = spawn(CHROME, [
           "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
           "--force-device-scale-factor=1", `--window-size=${job.width},1800`,
-          "--virtual-time-budget=1500", `--screenshot=${png}`,
-          `file://${resolve(join(out, `${job.name}.html`))}`,
+          "--virtual-time-budget=1500", `--screenshot=${toBrowserPath(png)}`,
+          toBrowserFileUrl(join(out, `${job.name}.html`)),
         ], { stdio: "ignore" });
         child.on("exit", () => resolveJob());
         child.on("error", () => resolveJob());
@@ -154,16 +178,65 @@ async function shoot(out: string, names: string[], widths: number[]): Promise<vo
   console.log(`[visual] 截图完成:${jobs.length} 张`);
 }
 
-/** sips 转成 BMP(无压缩)后逐像素比对,不引第三方图像库。 */
+/** 最小 PNG 解码:只认 Chromium 系截图的产出形态(8-bit RGB/RGBA,
+ * 非隔行)。逐像素比对要同尺寸同布局的字节阵;原先转 BMP 用的是
+ * macOS 独有的 sips,WSL/Linux 上没有——zlib 是 node 内置,直接解。 */
+function decodePng(file: string): { width: number; height: number; bpp: number; bytes: Buffer } {
+  const data = readFileSync(file);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!data.subarray(0, 8).equals(signature)) throw new Error(`不是 PNG: ${file}`);
+  let at = 8;
+  let width = 0; let height = 0; let bitDepth = 0; let colorType = 0; let interlace = 0;
+  const idat: Buffer[] = [];
+  while (at + 8 <= data.length) {
+    const length = data.readUInt32BE(at);
+    const type = data.toString("ascii", at + 4, at + 8);
+    const body = data.subarray(at + 8, at + 8 + length);
+    if (type === "IHDR") {
+      width = body.readUInt32BE(0); height = body.readUInt32BE(4);
+      bitDepth = body[8]; colorType = body[9]; interlace = body[12];
+    } else if (type === "IDAT") idat.push(body);
+    else if (type === "IEND") break;
+    at += 12 + length;
+  }
+  if (bitDepth !== 8 || interlace !== 0) {
+    throw new Error(`不支持的 PNG 形态(位深 ${bitDepth}, 隔行 ${interlace}): ${file}`);
+  }
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (!channels) throw new Error(`不支持的颜色类型 ${colorType}(只认 RGB/RGBA): ${file}`);
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const bytes = Buffer.alloc(height * stride);
+  let cursor = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = raw[cursor++];
+    const line = raw.subarray(cursor, cursor + stride);
+    cursor += stride;
+    const out = bytes.subarray(y * stride, (y + 1) * stride);
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= channels ? out[x - channels] : 0;
+      const up = y > 0 ? bytes[(y - 1) * stride + x] : 0;
+      const upLeft = y > 0 && x >= channels ? bytes[(y - 1) * stride + x - channels] : 0;
+      const value = line[x];
+      out[x] = filter === 0 ? value
+        : filter === 1 ? (value + left) & 0xff
+        : filter === 2 ? (value + up) & 0xff
+        : filter === 3 ? (value + ((left + up) >> 1)) & 0xff
+        : (() => {
+          const estimate = left + up - upLeft;
+          const pa = Math.abs(estimate - left);
+          const pb = Math.abs(estimate - up);
+          const pc = Math.abs(estimate - upLeft);
+          const predictor = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+          return (value + predictor) & 0xff;
+        })();
+    }
+  }
+  return { width, height, bpp: channels, bytes };
+}
+
 function pixels(png: string): { width: number; height: number; bytes: Buffer; bpp: number } {
-  const bmp = `${png}.bmp`;
-  execFileSync("sips", ["-s", "format", "bmp", png, "--out", bmp], { stdio: "ignore" });
-  const data = readFileSync(bmp);
-  const offset = data.readUInt32LE(10);
-  return {
-    width: data.readInt32LE(18), height: Math.abs(data.readInt32LE(22)),
-    bpp: data.readUInt16LE(28) / 8, bytes: data.subarray(offset),
-  };
+  return decodePng(png);
 }
 
 function compare(a: string, b: string): void {
