@@ -131,6 +131,8 @@ import {
   RequirementBundleError,
 } from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
+import { EnvironmentRegistry } from "./environmentRegistry.ts";
+import { handleEnvironmentRoutes } from "./environmentRegistryRoutes.ts";
 import {
   SkillLibraryError,
   approveSkillSubmission,
@@ -378,6 +380,11 @@ export function createTaskServer(
   let workflowAssets: WorkflowAssetLibrary | undefined;
   const getWorkflowAssets = () => workflowAssets ??= new WorkflowAssetLibrary(
     service.options.dataDir);
+  // 环境管理台账(#149,ADR-0020):按路由首次使用时才落 dataDir,与
+  // wishWall 同款惰性——旁路/最小服务替身不在起服阶段反向绑死台账。
+  let environmentRegistry: EnvironmentRegistry | undefined;
+  const getEnvironmentRegistry = () =>
+    environmentRegistry ??= new EnvironmentRegistry(service.options.dataDir);
   // 知识效能等独立只读接口会传最小服务替身；工作流旁路不能在起服
   // 阶段要求完整 TaskService.options，更不能反向绑死无关读侧。
   const workflowKernelRoot = service.options?.host?.kernelRoot
@@ -893,6 +900,25 @@ export function createTaskServer(
             viewer: viewer ?? undefined,
             authEnabled: Boolean(options.auth),
             log: options.log,
+          });
+          if (handled) return;
+        }
+      }
+
+      // 环境管理 API(/environments/*,票 #149,ADR-0020):全局台账,
+      // 登录即可读写(admin 同样可管理,不做归属闸与角色 403);未启用
+      // 时由路由自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被
+      // 接管);GET /environments 同时是页签深链地址,浏览器导航(Accept
+      // 要 text/html)让给前端 SPA,与 /issues/:id 的判别式同款。
+      if (parts[0] === "environments") {
+        const envPage = request.method === "GET"
+          && parts.length === 1
+          && String(request.headers.accept ?? "").includes("text/html");
+        if (!envPage) {
+          const handled = await handleEnvironmentRoutes(request, response, parts, {
+            registry: getEnvironmentRegistry(),
+            viewer: viewer ?? undefined,
+            authEnabled: Boolean(options.auth),
           });
           if (handled) return;
         }
