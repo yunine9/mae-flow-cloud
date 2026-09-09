@@ -49,9 +49,17 @@ def _write(path, content):
             os.unlink(temporary)
 
 
-def initialize_candidate(project_root, archive_root, domain, template_content):
+def initialize_candidate(project_root, archive_root, domain, template_content, *, adopt_existing=False):
     result = plan_domain_reconciliation(project_root, domain, "placeholder")
     candidate = os.path.join(os.path.abspath(archive_root), "%s.md" % result.domain)
+    if adopt_existing:
+        # Explicit adoption names the current formal document as the source.
+        # A candidate left over from an earlier round must not replace it.
+        with open(result.absolute_path, encoding="utf-8") as stream:
+            content = stream.read()
+        if not os.path.exists(candidate) or _read(candidate) != content:
+            _write(candidate, content)
+        return ArchiveCandidate(result.domain, (), candidate, result.path, "draft", False)
     if os.path.exists(candidate):
         return ArchiveCandidate(
             result.domain, (), candidate, result.path, "draft", False)

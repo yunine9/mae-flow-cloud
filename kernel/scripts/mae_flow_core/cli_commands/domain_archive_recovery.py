@@ -38,7 +38,7 @@ def prepare_existing(state, args, root, package, fresh_digest):
     if not os.path.isfile(target.absolute_path) or os.path.islink(target.absolute_path):
         raise ValueError("接纳的正式领域文档不存在或是符号链接: " + target.path)
     initialized = initialize_candidate(
-        root, os.path.join(package.root, "domain-archive"), args.domain, "")
+        root, os.path.join(package.root, "domain-archive"), args.domain, "", adopt_existing=True)
     prepared = prepare_candidate(root, initialized.candidate_path, args.domain, args.keyword)
     previous = state.get("domain_archive") or {}
     domains = [item for item in previous.get("domains", []) if item.get("domain") != args.domain]
