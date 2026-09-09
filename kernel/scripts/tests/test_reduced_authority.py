@@ -76,9 +76,14 @@ class ReducedAuthorityTests(unittest.TestCase):
                 result = self.cli('gate', 'bash', command)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
 
-    def test_source_edits_are_allowed_before_workflow_selection(self):
+    def test_source_edits_wait_for_config_and_workflow_selection(self):
         self.state['current'] = 'workflow_select'; self.state['choices'] = {}; self.save()
         result = self.cli('gate', 'edit', 'src/main.cpp')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("交付方式尚未选定", result.stdout + result.stderr)
+        result = self.cli("gate", "bash", "printf code > main.ts")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        result = self.cli("gate", "edit", "requirement.md")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_selected_domain_and_process_files_are_preserved_with_findings(self):

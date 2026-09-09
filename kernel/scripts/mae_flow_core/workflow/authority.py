@@ -11,7 +11,7 @@ ADVISORY_EVIDENCE = frozenset({
 })
 
 ADVISORY_TOOL_RULES = frozenset({
-    "edit-before-workflow", "bash-before-workflow", "bash-internal-state-read",
+    "bash-internal-state-read",
     "bash-wide-add", "bash-wide-openspec-add", "bash-commit-format",
     "bash-core-dump-delete", "bash-vendored-runtime", "bash-global-openspec",
     "bash-retired-force-phase",
