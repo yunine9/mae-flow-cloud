@@ -4618,3 +4618,102 @@ export function getIssueConversation(
 ): Promise<IssueConversationView> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/conversation`);
 }
+
+// ---- 环境管理(ADR-0020;票 #149 前端半边):网管环境台账的类型化镜像。
+// 台账是全局团队资源,四条路由都只要登录;这里只镜像 wire 形状,不做推断。
+
+export type EnvironmentForm = "virtualized" | "k8s";
+
+export interface EnvironmentProbeView {
+  state: "unverified" | "ok" | "failed";
+  /** 失败二分(#151 探活回填;本票恒缺席)。 */
+  reason?: "auth" | "unreachable";
+  at?: string;
+}
+
+/** 台账条目视图:服务端 EnvironmentRegistryView 的镜像。零密码字段——
+ * 机密只出 password_configured / root_password_inherited 两个非密布尔,
+ * 明文密码永不进任何响应、也永不回显进表单。 */
+export interface EnvironmentView {
+  id: string;
+  ip: string;
+  port: number;
+  form: EnvironmentForm;
+  tags: string[];
+  probe: EnvironmentProbeView;
+  /** true = 没有显式 root 密码,解析值 = 后台密码(表单标记用)。 */
+  root_password_inherited: boolean;
+  /** 机密只出"已配置"布尔(编辑时以此显示"已配置"占位)。 */
+  password_configured: boolean;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** IP 撞车(POST/PUT 都可能 409):带既有条目 id,页面据此引导去编辑。 */
+export class EnvironmentIpConflictError extends Error {
+  constructor(readonly existingId: string) {
+    super("该 IP 已存在于台账");
+  }
+}
+
+async function environmentError(response: Response): Promise<Error> {
+  const body = await errorBody(response);
+  if (response.status === 409 && typeof body.existing_id === "string") {
+    return new EnvironmentIpConflictError(body.existing_id);
+  }
+  return new Error(String(body.error ?? `HTTP ${response.status}`));
+}
+
+export async function listEnvironments(): Promise<EnvironmentView[]> {
+  const response = await fetch("/environments");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await parseJson<{ environments: EnvironmentView[] }>(response))
+    .environments;
+}
+
+export async function createEnvironment(input: {
+  ip: string;
+  port?: number;
+  form: EnvironmentForm;
+  backend_password: string;
+  /** 缺席/空 = 留空继承后台密码(placeholder 引导的语义)。 */
+  root_password?: string | null;
+  tags?: string[];
+}): Promise<EnvironmentView> {
+  const response = await fetch("/environments", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await environmentError(response);
+  return parseJson(response);
+}
+
+/** 编辑:backend_password 缺席/空 = 不变(不回显、留空即不改);
+ * root_password 缺席 = 不变,传 null = 清显式值回落继承后台密码。 */
+export async function updateEnvironment(
+  id: string,
+  patch: {
+    ip?: string;
+    port?: number;
+    form?: EnvironmentForm;
+    backend_password?: string;
+    root_password?: string | null;
+    tags?: string[];
+  },
+): Promise<EnvironmentView> {
+  const response = await fetch(`/environments/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw await environmentError(response);
+  return parseJson(response);
+}
+
+export async function deleteEnvironment(id: string): Promise<void> {
+  const response = await fetch(`/environments/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+}

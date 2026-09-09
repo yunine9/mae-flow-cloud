@@ -1902,7 +1902,9 @@ export function createTaskServer(
         // 问题会话工作台深链(小鲁班通知的落点):上一段已把带 text/html
         // 的 GET /issues/:id 让出,这里只管把它接住交给 React。
         const issuesRoute = parts[0] === "issues" && parts.length === 2;
-        const appRoute = workspaceRoute || helpRoute || issuesRoute;
+        // 环境管理页签深链(#149):API 判别式放行的 text/html GET 在这里接住交给 React。
+        const environmentsRoute = parts[0] === "environments" && parts.length === 1;
+        const appRoute = workspaceRoute || helpRoute || issuesRoute || environmentsRoute;
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
