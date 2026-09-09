@@ -118,14 +118,11 @@ def _flow_head_decision(context):
 
 
 def _source_edit_decision(context):
-    """步骤级"本步禁改源码"已整体退役(2026-08-28 用户拍板"编码阶段
-    自由,这种门禁都放开")。实锤:流水线 RED 修复窗口里,内核给
-    commit/add 签了精确范围授权(external_repair_gate),edit 闸却按
-    external_verify 的 allow_source_edit=False 把改码拦死——修复
-    Agent"能提交不能编辑",只能在夹缝里乱撞。交付链内的编辑自由交还
-    给 Agent;完整性由三道不动的闸把守:头部纪律(_flow_head_decision,
-    配置未定禁写)、绝对保护(流程状态文件)、提交侧范围闸(修复窗口
-    精确提交/交付清单)——拦"交付什么",不拦"改什么"。"""
+    """交付链内不按步骤冻结源码编辑，也不恢复已退役的精确提交闸。
+
+    配置未定默认禁写由 _flow_head_decision 处理；流程状态文件仍受
+    保护。流程推进、必要人工决定和真实交付事实在各自入口核对。
+    """
     return None
 
 

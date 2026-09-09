@@ -167,7 +167,12 @@ def _prepare(state, args, root, package):
     if previous.get("status") == "applied" and not args.unchanged:
         previous_entries = _entries(root, previous)
         current_digest = _fresh_digest(root, package, previous_entries)
-        if previous.get("input_sha256") == current_digest:
+        requested_keywords = tuple(dict.fromkeys(
+            str(word).strip() for word in args.keyword if str(word).strip()))
+        same_request = any(
+            entry.domain == args.domain and entry.keywords == requested_keywords
+            for entry in previous_entries)
+        if same_request and previous.get("input_sha256") == current_digest:
             _show(previous, root)
             print("提示: 已应用且内容未变化，可直接 done。")
             return previous
@@ -277,13 +282,6 @@ def _apply(state, args, root, package):
     entries = _entries(root, record)
     digest = _fresh_digest(root, package, entries)
     reapply = _reapply_delivery_paths(state, entries, record)
-    if (already_applied and "changed_paths" in record
-            and record.get("input_sha256") == digest
-            and set(reapply).issubset(set(record.get("applied_paths") or ()))):
-        _show(record, root)
-        return record
-    if record.get("input_sha256") != digest:
-        print("提示: 候选或目标内容已变化，按当前内容重新计算本次归档。")
     # Applying local documents is ordinary workspace editing, not publication.
     # A supplied human answer must still be genuine and must not be a refusal.
     receipt = {"mode": "moonlight-auto" if getattr(args, "moonlight_auto", False) else "local-edit"}
@@ -299,6 +297,13 @@ def _apply(state, args, root, package):
             raise ValueError(
                 "用户回答没有明确批准本次领域归档；候选已保留，"
                 "按用户意见修改后重新 prepare/show")
+    if (already_applied and "changed_paths" in record
+            and record.get("input_sha256") == digest
+            and set(reapply).issubset(set(record.get("applied_paths") or ()))):
+        _show(record, root)
+        return record
+    if record.get("input_sha256") != digest:
+        print("提示: 候选或目标内容已变化，按当前内容重新计算本次归档。")
     # Preserve provenance separately from bytes changed by this application.
     record["reapply_paths"] = reapply
     entries = tuple(prepare_candidate(root, e.candidate_path, e.domain, e.keywords) for e in entries)

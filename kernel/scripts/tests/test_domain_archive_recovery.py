@@ -240,6 +240,45 @@ class RecoveryTests(unittest.TestCase):
             self.command("apply")
         self.assertEqual(before, self.target.read_bytes())
 
+    def test_prepare_new_domain_after_apply_is_not_ignored(self):
+        self.prepare()
+        self.command("apply")
+        result = self.command("prepare", "--domain", "billing", "--keyword", "billing")
+        self.assertEqual("draft", result["status"])
+        self.assertEqual({"billing", "cross-rat"}, {e["domain"] for e in result["domains"]})
+        candidate = next(e for e in result["domains"] if e["domain"] == "billing")
+        (self.root / candidate["candidate_path"]).write_text(document("计费规则"))
+        self.command("prepare", "--domain", "billing", "--keyword", "billing")
+        self.command("apply")
+        self.assertIn("计费规则", (self.specs / "billing.md").read_text())
+
+    def test_prepare_new_keywords_after_apply_is_not_ignored(self):
+        self.prepare()
+        self.command("apply")
+        result = self.command("prepare", "--domain", "cross-rat", "--keyword", "新的关键词")
+        self.assertEqual("prepared", result["status"])
+        self.assertEqual(["新的关键词"], result["domains"][0]["keywords"])
+
+    def test_adopt_existing_uses_current_document_not_stale_candidate(self):
+        previous = self.prepare()
+        candidate = self.root / previous["domains"][0]["candidate_path"]
+        candidate.write_text(document("候选中尚未采纳的修改"))
+        self.target.write_text(document("人工更新的正式文档"))
+        expected = self.target.read_bytes()
+        self.prepare()
+        self.command("apply")
+        self.assertEqual(expected, self.target.read_bytes())
+        self.assertEqual(expected, candidate.read_bytes())
+
+    def test_repeated_apply_still_checks_explicit_refusal(self):
+        self.prepare()
+        self.command("apply")
+        before = self.target.read_bytes()
+        self.api._authorization_message = lambda *_: (True, "不同意", {}, "")
+        with self.assertRaisesRegex(RuntimeError, "没有明确批准"):
+            self.command("apply", "--message-id", "no")
+        self.assertEqual(before, self.target.read_bytes())
+
     def test_human_selection_does_not_require_archive_provenance(self):
         payload = {"head": "sha", "paths": ["docs/specs/cross-rat.md"], "excluded_paths": [],
                    "task_id": "task-3", "waiting_id": "w", "actor": "owner"}
