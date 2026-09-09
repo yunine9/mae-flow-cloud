@@ -165,13 +165,14 @@ def argv_out(args, timeout=15):
 
 def _dirty_paths():
     """返回当前工作区脏路径。状态文件与过程目录由流程自己维护，不算交付改动。"""
+    from mae_flow_core.guard.manifest import is_runtime_path
     out = []
     for line in sh("git -c core.quotepath=false status --porcelain --untracked-files=all").splitlines():
         parts = line.split(None, 1)
         if len(parts) != 2:
             continue
         p = api.norm(parts[1].split(" -> ")[-1].strip().strip('"'))
-        if not p or p.startswith(".mae-flow") or p.startswith(".codecheckcli/"):
+        if not p or is_runtime_path(p):
             continue
         out.append(p)
     return list(dict.fromkeys(out))

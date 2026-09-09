@@ -198,6 +198,9 @@ class DeliveryConfirmationTests(unittest.TestCase):
 
     def test_manifest_rejects_every_process_document_family(self):
         forbidden = (
+            ".mae-flow-dependencies.md", ".mae-flow-issue.md",
+            ".mae-flow-order.json", ".mae-flow-history.jsonl",
+            ".mae-flow.json.agent-observations", ".codecheckcli/report.json",
             ".mae-flow-work/REQ-42/spec.md",
             "docs/clarifications-REQ-42.md",
             "docs/review/REVIEW-REQ-42.md",

@@ -117,15 +117,25 @@ def _identity(path):
     return path.replace("\\", "/").casefold()
 
 
+def is_runtime_path(path):
+    """Reserved platform/kernel files share one boundary across Git gates."""
+    identity = _identity(path)
+    return identity.startswith(".mae-flow") or identity.startswith(".codecheckcli/")
+
+
+def is_process_document(path):
+    identity = _identity(path)
+    return (is_runtime_path(path) or identity in _PROCESS_DOCUMENT_FILES
+            or any(identity.startswith(prefix)
+                   for prefix in _PROCESS_DOCUMENT_PREFIXES))
+
+
 def validate_delivery_document_boundary(paths, archive_paths=()):
     """Reject process artifacts and unconfirmed durable-domain documents."""
     allowed_domain = {_identity(path) for path in archive_paths}
     for path in paths:
         identity = _identity(path)
-        if (
-                identity in _PROCESS_DOCUMENT_FILES
-                or any(identity.startswith(prefix)
-                       for prefix in _PROCESS_DOCUMENT_PREFIXES)):
+        if is_process_document(path):
             raise ValueError("过程文件不得进入交付清单: %s" % path)
         if identity.startswith("docs/specs/") and identity not in allowed_domain:
             raise ValueError(
