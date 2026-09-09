@@ -356,7 +356,11 @@ export function IssueConversationStream({
                       ))}
                     </ul>
                   )}
-                  {custom && <p className="conv-answer">自定义答复:{line}</p>}
+                  {/* 有给定选项时,不匹配的答案行是自定义答复,带前缀
+                      回填;开放题的答案行就是回答本身,直出不加 prefix。 */}
+                  {custom && <p className="conv-answer">
+                    {question.options.length > 0 ? `自定义答复:${line}` : line}
+                  </p>}
                 </div>
               );
             })}

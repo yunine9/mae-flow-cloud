@@ -940,7 +940,10 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
   assert.match(stream, /conversationCardTitle\(item\)/);
   assert.match(stream, /const answerLines = decision \? decision\.decision\.split\("\\n"\) : \[\]/);
   assert.match(stream, /const custom = line !== "" && !question\.options\.includes\(line\)/);
-  assert.match(stream, /自定义答复:\{line\}/);
+  assert.match(stream, /自定义答复:\$\{line\}/,
+    "选项题的自定义答复带前缀回填题面");
+  assert.match(stream, /\? `自定义答复:\$\{line\}` : line\}/,
+    "开放题的答案直出,不加自定义前缀");
   // 会话视图:dockRef setState → footerTarget → 当前卡一线到底,dock 门
   // 仍是 waiting && canOperate(查看模式不出 dock)。
   assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
