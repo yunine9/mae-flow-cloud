@@ -50,19 +50,54 @@ function issueBreakdown(issues: IssueSummary[]) {
   };
 }
 
-/** 问题域世界:与真实页面同位同款——概览/队列复用现有 class 与真实卡片。 */
+/** 问题域世界:与真实页面同位同款——概览/队列复用现有 class 与真实卡片。
+ * 队列筛选与需求侧同款三件套(搜索/现场范围/责任人),语义按问题域映射。 */
 function IssueWorld({ issues, filter, onFilter, onOpenIssue }: {
   issues: IssueSummary[]; filter: string; onFilter: (next: string) => void;
   onOpenIssue: (id: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState("all");
+  const [owner, setOwner] = useState("");
   const stats = issueBreakdown(issues);
   const live = issues.filter((issue) => issue.status !== "canceled");
-  const visible = !filter ? live
-    : filter.startsWith("s:")
-      ? issues.filter((issue) => filter.slice(2) === "waiting_user"
+  const owners = [...new Set(live.map((issue) => issue.account))];
+  const STALE_MS = 2 * 60 * 60_000;
+  const inScope = (issue: IssueSummary) => {
+    if (scope === "action") {
+      return ["waiting_user", "idle", "failed"].includes(issue.status);
+    }
+    if (scope === "stale") {
+      return ["queued", "running"].includes(issue.status)
+        && Date.now() - new Date(issue.updated_at).getTime() >= STALE_MS;
+    }
+    if (scope === "wip") return ["queued", "running"].includes(issue.status);
+    if (scope === "waiting") {
+      return ["waiting_user", "idle", "suspended"].includes(issue.status);
+    }
+    return true;
+  };
+  const needle = query.trim().toLocaleLowerCase();
+  const passFilter = (issue: IssueSummary) => {
+    if (filter) {
+      if (filter.startsWith("s:")) {
+        const status = filter.slice(2);
+        if (!(status === "waiting_user"
           ? issue.status === "waiting_user" || issue.status === "idle"
-          : issue.status === filter.slice(2))
-      : live.filter((issue) => issue.stage === filter.slice(2));
+          : issue.status === status)) return false;
+      } else if (issue.stage !== filter.slice(2)) return false;
+    }
+    if (scope !== "all" && !inScope(issue)) return false;
+    if (owner && issue.account !== owner) return false;
+    if (needle) {
+      const haystack = `${issue.title} ${issue.ticket ?? ""} ${issue.account}`
+        .toLocaleLowerCase();
+      if (!haystack.includes(needle)) return false;
+    }
+    return true;
+  };
+  const visible = live.filter(passFilter);
+  const anyFilter = Boolean(filter || query || scope !== "all" || owner);
   const cell = (key: string, label: string, count: number) => (
     <button type="button" key={key}
       className={filter === key ? "selected" : ""}
@@ -114,16 +149,35 @@ function IssueWorld({ issues, filter, onFilter, onOpenIssue }: {
     <section className="task-section" aria-labelledby="proto-issue-queue">
       <div className="section-head"><div>
         <h2 id="proto-issue-queue">当前现场</h2></div>
-        <span className={`section-count${filter ? " active-filter" : ""}`}>
-          {filter ? "已筛选 · " : ""}{visible.length} / {live.length} 项
+        <span className={`section-count${anyFilter ? " active-filter" : ""}`}>
+          {anyFilter ? "已筛选 · " : ""}{visible.length} / {live.length} 项
         </span>
+      </div>
+      <div className="task-filters" aria-label="筛选问题现场">
+        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" /></label>
+        <select aria-label="现场范围" value={scope}
+          onChange={(event) => setScope(event.target.value)}>
+          <option value="all">全部现场</option>
+          <option value="action">需要处理</option>
+          <option value="stale">停滞中</option>
+          <option value="wip">正在推进</option>
+          <option value="waiting">等你答复</option>
+        </select>
+        <select aria-label="责任人" value={owner}
+          onChange={(event) => setOwner(event.target.value)}>
+          <option value="">全部责任人</option>
+          {owners.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        {anyFilter && <button type="button" className="filter-reset"
+          onClick={() => { setQuery(""); setScope("all"); setOwner(""); onFilter(""); }}>
+          清除筛选</button>}
       </div>
       {visible.length === 0
         ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-            <strong>没有进行中的问题会话</strong>
-            <p>可以切回「全部」继续查看,会话没有丢。</p></div></div>
+            <strong>没有匹配的问题会话</strong>
+            <p>换关键词或清除筛选再看,会话没有丢。</p></div></div>
         : <div className="task-list">{visible.map((issue) => (
-            <TeamIssueCard compact key={issue.id} issue={issue}
+            <TeamIssueCard key={issue.id} issue={issue}
               onOpen={() => onOpenIssue(issue.id)} />
           ))}</div>}
     </section>

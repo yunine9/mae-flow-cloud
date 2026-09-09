@@ -1680,7 +1680,7 @@ function TeamDashboard({
         (item) => item.teamTask.id,
         (item) => item.task?.parent_task_id,
       ).map((item) => item.issue
-        ? <TeamIssueCard compact key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
+        ? <TeamIssueCard key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
         : item.task ? <TaskCard compact relatedTasks={tasks} key={item.teamTask.id} task={item.task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />
         : null)}</div>
     </section>
