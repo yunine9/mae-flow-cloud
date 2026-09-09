@@ -127,6 +127,18 @@ class ReducedAuthorityTests(unittest.TestCase):
         (self.root/'a.txt').write_text('actually different\n')
         self.assertNotEqual(before, build_subject(str(self.root), state, 'delivery_review', step))
 
+    def test_delivery_approval_without_recorded_base_survives_commit(self):
+        self.state.pop("implementation_base_head", None)
+        self.state["delivery_manifest"] = {"files": ["a.txt"], "confirmed": True}
+        (self.root / "a.txt").write_text("new content\n")
+        step = {"approval_subject": {"kind": "worktree"}}
+        subject = build_subject(str(self.root), self.state, "delivery_review", step)
+        self.git("add", "a.txt")
+        self.git("commit", "-qm", "local commit after selection")
+        self.assertEqual(subject, build_subject(str(self.root), self.state, "delivery_review", step))
+        (self.root / "a.txt").write_text("different content\n")
+        self.assertNotEqual(subject, build_subject(str(self.root), self.state, "delivery_review", step))
+
     def test_done_advances_without_domain_archive_bookkeeping(self):
         self.state['current'] = 'domain_archive'; self.save()
         result = self.cli('done')

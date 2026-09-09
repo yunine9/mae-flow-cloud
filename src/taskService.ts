@@ -10767,15 +10767,8 @@ export class TaskService {
     const archiveIds = new Set(archivePaths.map((path) => path.toLowerCase()));
     const rejectedArchive = archivePaths.filter((path) =>
       !paths.some((selected) => selected.toLowerCase() === path.toLowerCase()));
-    let archiveNote = "";
-    if (rejectedArchive.length) {
-      // docs/specs/index.md 与本轮领域文档是一次 domain_archive 原子事务。
-      // 文件选择器若拒绝其中任一项，不能留一个孤零零的索引或半份领域
-      // 文档；整组退出本次交付，候选仍留在 .mae-flow-work 可再次送审。
-      paths = paths.filter((path) => !archiveIds.has(path.toLowerCase()));
-      archiveNote = `\n(领域归档是原子组；本次有 ${rejectedArchive.length} `
-        + `项未勾选，已将整组 ${archivePaths.length} 项退出交付，候选仍保留)`;
-    }
+    const archiveNote = rejectedArchive.length
+      ? `\n(按你的选择排除 ${rejectedArchive.length} 个领域文件，其余选中项保留)` : "";
     const excluded = normalizedDeliveryPaths([
       ...snapshot.workspace_paths.filter((path) => !paths.includes(path)),
       ...rejectedArchive,
@@ -10803,7 +10796,7 @@ export class TaskService {
         ...rejectedArchive,
       ]);
       if (rejectedArchive.length) {
-        await this.restoreRejectedDomainArchive(task.cwd, archivePaths);
+        await this.restoreRejectedDomainArchive(task.cwd, rejectedArchive);
       }
       this.reconcileDeliverySelectionWithKernel(
         task, waiting, adjusted.head, paths, reconciledExcluded, input.actor);
@@ -10844,7 +10837,7 @@ export class TaskService {
     }
     if (closesFeedback) {
       if (rejectedArchive.length) {
-        await this.restoreRejectedDomainArchive(task.cwd, archivePaths);
+        await this.restoreRejectedDomainArchive(task.cwd, rejectedArchive);
       }
       this.reconcileDeliverySelectionWithKernel(
         task, waiting, snapshot.head, paths, excluded, input.actor);
@@ -11246,9 +11239,9 @@ export class TaskService {
       "  只允许在任务自己新增的提交范围内整理。历史乱了就在当前 HEAD 上",
       "  追加修正提交,绝不重写基线之前的历史。",
       "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
-      "- 入场后先执行 current，严格按当前 review 步骤顺序推进；交付清单尚未由流程确认前，不要直接 git add/commit。",
-      "- 若清单包含领域真相文档，不要直接编辑 docs 下的正式文件；只修改 domain-archive prepare 生成的候选，再由 apply 机械落到正式路径。",
-      "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
+      "- 入场后先执行 current，按当前 review 步骤承接人的决定；整理这份已由人指定的清单不需要再次询问同义问题。",
+      "- 领域文档可以直接编辑，也可用 domain-archive 辅助整理；不按归档凭证重新裁决人的文件选择。",
+      "- 整理完成后核对实际提交内容，代码与文档无需按阶段拆分提交；",
       `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
       // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码
       // 也不知道要写 local-receipts.json,收口时被回执门禁如实拦下,

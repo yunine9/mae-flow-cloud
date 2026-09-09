@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -46,6 +47,22 @@ class ApprovalSubjectTests(unittest.TestCase):
             out.write("new\n")
         third = build_subject(self.root, state, "build_review", step)
         self.assertNotEqual(second["sha256"], third["sha256"])
+
+    def test_legacy_moving_head_approval_keeps_receipt_when_bytes_are_unchanged(self):
+        state = {"delivery_manifest": {"files": ["a.txt"]}}
+        step = {"approval_subject": {"kind": "worktree"}}
+        with open(os.path.join(self.root, "a.txt"), "w") as stream:
+            stream.write("reviewed change\n")
+        with mock.patch("mae_flow_core.cli_commands.approval_subject._review_base", return_value="HEAD"):
+            legacy = build_subject(self.root, state, "delivery_review", step)
+        state["approval_subject"] = legacy
+        subprocess.run(["git", "-C", self.root, "add", "a.txt"], check=True)
+        subprocess.run(["git", "-C", self.root, "commit", "-qm", "commit reviewed bytes"], check=True)
+        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
+        self.assertEqual(legacy, state["approval_subject"])
+        with open(os.path.join(self.root, "a.txt"), "w") as stream:
+            stream.write("new unreviewed change\n")
+        self.assertFalse(subject_matches(self.root, state, "delivery_review", step)[0])
 
     def test_artifact_subject_invalidates_when_document_changes(self):
         folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")

@@ -37,8 +37,6 @@ def prepare_existing(state, args, root, package, fresh_digest):
     target = plan_domain_reconciliation(root, args.domain, "placeholder")
     if not os.path.isfile(target.absolute_path) or os.path.islink(target.absolute_path):
         raise ValueError("接纳的正式领域文档不存在或是符号链接: " + target.path)
-    if not args.keyword:
-        raise ValueError("接纳领域文档必须提供 --keyword 以核对领域索引")
     initialized = initialize_candidate(
         root, os.path.join(package.root, "domain-archive"), args.domain, "")
     prepared = prepare_candidate(root, initialized.candidate_path, args.domain, args.keyword)

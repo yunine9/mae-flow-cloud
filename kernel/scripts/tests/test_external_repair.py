@@ -45,7 +45,7 @@ class ExternalRepairAuthorizationTests(unittest.TestCase):
         # 登记在案的 RED 判决决定,见 test_non_red_clears_window。
         self.assertTrue(active_repair_authorization(state, "b" * 40)[0])
         self.assertEqual(
-            ("src/fix.py", "tests/test_fix.py"),
+            ("src/fix.py", "tests/test_fix.py", ".mae-flow.json", "docs/review/internal.md"),
             eligible_repair_paths(state, HEAD, (
                 "user-before.txt", "pre-red.txt", "src/fix.py",
                 "tests/test_fix.py", ".mae-flow.json",

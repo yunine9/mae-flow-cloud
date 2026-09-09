@@ -249,12 +249,12 @@ class GitObjectSurgeryTests(unittest.TestCase):
                     ("block", "bash-git-objects-surgery"),
                     (decision.kind, decision.rule))
 
-    def test_core_dump_delete_blocked(self):
+    def test_core_dump_cleanup_is_not_a_gate(self):
         for command in ('rm core', 'rm ./core.12345'):
             with self.subTest(command=command):
                 decision = decide_post_commit(self.context(command))
                 self.assertEqual(
-                    ("block", "bash-core-dump-delete"),
+                    ("allow", ""),
                     (decision.kind, decision.rule))
 
     def test_recursive_git_perms_blocked(self):

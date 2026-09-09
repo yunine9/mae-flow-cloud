@@ -408,7 +408,7 @@ class PhaseMonotonicTests(unittest.TestCase):
 
     # 明写的例外:返工流程处理完评审意见后本来就要回去重写代码。
     # 例外必须逐条列出来——不列就说明是笔误,而不是设计。
-    BACKWARD_BY_DESIGN = {("rf_verify", "build")}
+    BACKWARD_BY_DESIGN = {("rf_verify", "build"), ("feedback_triage", "build")}
 
     def _flow(self):
         import json as _json

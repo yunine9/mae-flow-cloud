@@ -29,11 +29,11 @@ class QualityFlowRedlineTests(unittest.TestCase):
         self.assertIn("delivery_manifest_committed", {
             row["type"] for row in delivery["evidence"]})
 
-    def test_unchanged_domain_archive_does_not_reuse_committed_source(self):
+    def test_delivery_can_include_existing_commits_without_archive_permits(self):
         guidance = read("flow/steps/delivery_review.md")
         self.assertIn("manifest set --unchanged", guidance)
-        self.assertIn("已经提交的源码", guidance)
-        self.assertIn("无需询问用户", guidance)
+        self.assertIn("已提交文件", guidance)
+        self.assertIn("不创建空提交", guidance)
 
     def test_unlock_guidance_never_precommits(self):
         lifecycle = read(

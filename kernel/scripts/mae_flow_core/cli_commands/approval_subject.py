@@ -70,8 +70,15 @@ def _artifact_payload(root, state, spec):
     }
 
 
-def _review_base(state, step_id):
-    return str((state or {}).get("implementation_base_head", "") or "HEAD")
+def _review_base(root, state, step_id):
+    base = str((state or {}).get("implementation_base_head", "") or "")
+    if not base or base == "HEAD":
+        # A moving HEAD is not a review baseline: committing unchanged bytes
+        # would otherwise turn its diff into empty and rotate the human card.
+        base = _git(root, "rev-parse", "--verify", "HEAD").strip()
+        if base:
+            state["implementation_base_head"] = base
+    return base or "HEAD"
 
 
 def _manifest_scope(state):
@@ -96,7 +103,7 @@ def _worktree_payload(root, state, step_id):
       内容差异由 diff(worktree vs base)与逐文件指纹兜住。
     没有清单的步骤(如 build_review)保持整工作区绑定的老语义。
     """
-    base = _review_base(state, step_id)
+    base = _review_base(root, state, step_id)
     scope = _manifest_scope(state)
     if scope:
         diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
@@ -170,6 +177,14 @@ def subject_matches(root, state, step_id, step):
         return False, (
             "绑定当前内容的新审批卡已自动生成；直接重新展示并取得一次决定，"
             "无需重新解释或重做已经完成的工作")
+    # Upgrade old moving-HEAD subjects without asking again when the exact
+    # reviewed paths and bytes are unchanged. Preserve the receipt's ID/hash.
+    if (current and stored.get("kind") == current.get("kind") == "worktree"
+            and stored.get("base") == "HEAD"
+            and stored.get("path_fingerprints")
+            and all(stored.get(key) == current.get(key) for key in
+                    ("scope", "paths", "path_fingerprints"))):
+        return True, ""
     if not current or current.get("sha256") != stored.get("sha256"):
         if current:
             current["supersedes"] = str(stored.get("id") or "")

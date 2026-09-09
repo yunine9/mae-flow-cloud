@@ -74,7 +74,7 @@ class HookBlockDiagnosticsTests(unittest.TestCase):
             }, stream)
 
     def test_blocked_bash_logs_rule_and_hash_without_command(self):
-        command = "git add . # secret-token-123"
+        command = "git push --force origin HEAD # secret-token-123"
         with tempfile.TemporaryDirectory() as project:
             with tempfile.TemporaryDirectory() as log_dir:
                 self._init_flow(project)
@@ -84,9 +84,9 @@ class HookBlockDiagnosticsTests(unittest.TestCase):
         self.assertEqual(2, result.returncode, result.stderr)
         self.assertIn(
             "decision event=pretooluse tool=Bash result=blocked "
-            "source=mae-flow rule=bash-wide-add "
-            "command_sha256=7d3319b51c438fda9df539ef0b62c134"
-            "b3ab1e470147919d2481670df1814379",
+            "source=mae-flow rule=bash-force-push "
+            "command_sha256=f6489e3c3908813d0bd6665f60b97df2"
+            "4dbaf3945ac7eb9ac2a4ff45ceebdcbe",
             log_text,
         )
         self.assertNotIn(command, log_text)

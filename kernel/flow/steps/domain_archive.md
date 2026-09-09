@@ -1,29 +1,17 @@
-实现与定稿已经完成。现在只把本次最终代码中已经确认、实现并验证的长期知识归档到领域真相源；Spec、Grill、Story、实施附录与过程件都留在 `.mae-flow-work/{单号}/`，不得提交。
+整理本次实现中值得长期复用的领域知识。归档是本地文档编辑工具，不是推进许可；代码与领域文档可以同一提交，也可以已经提交。不要为满足归档记账拆分提交、回退已完成工作或反复询问用户。
 
-先按 `docs/specs/index.md` 判断本次涉及的领域。每个领域分别执行：
+有知识增量时，按 `docs/specs/index.md` 选择领域，执行：
 
 `python "{MAEFLOW_PATH}" domain-archive prepare --domain "<领域>" --keyword "<关键词>"`
 
-首次执行只会在本单 `domain-archive/` 下初始化候选。根据本地 Spec、Grill、Story、实施附录、最终代码和测试补充长期事实，删除模板草稿标记，然后原样重跑该命令。多个领域逐个准备；没有任何长期知识变化时执行：
+首次执行会创建可编辑候选；根据需求、最终代码、测试和人的意见填写后重跑 prepare。
+用 `domain-archive show` 看正文差异，执行 `domain-archive apply` 写入当前候选。`--auto` 保留兼容，普通本地编辑也无需额外索取消息 ID。最终交付仍由人检视，不伪造确认或验证结果。
 
-`python "{MAEFLOW_PATH}" domain-archive prepare --unchanged`
+候选可以继续修改，apply 会重新计算；其他源码、编译产物、暂存或提交不会让它过期。
+重复 prepare/apply 安全返回。输出分别列出本次实际内容变化和已认领路径；存在归档凭证不代表还要创建新提交。
+已有正式文档可用 `prepare --domain "<领域>" --adopt-existing --keyword "<关键词>"` 辅助登记，无需重新创造相同内容。
 
-用 `python "{MAEFLOW_PATH}" domain-archive show` 展示归档结论和 diff。
-{{#CLOUD_HOST}}
-云端宿主无人值守：根据最终 Spec、代码、测试和既有领域索引保守填写候选，不确定内容不编造。
-完成 prepare/show 后执行 `python "{MAEFLOW_PATH}" domain-archive apply --auto`，
-禁止 AskUserQuestion 或伪造消息 ID；归档结论用户会在工作台与 MR 上看到。
-{{/CLOUD_HOST}}
-{{#LOCAL_HOST}}
-月光宝盒模式同样保守填写候选、不确定内容写入晨间待办，完成后执行
-`python "{MAEFLOW_PATH}" domain-archive apply --auto`。
-普通终端模式只向用户确认一次：收到回答后先执行 `python "{MAEFLOW_PATH}" messages`
-取得当前回答 ID，再执行 `python "{MAEFLOW_PATH}" domain-archive apply --message-id "<消息ID>"`。
-{{/LOCAL_HOST}}
+没有进一步知识增量时，可执行 `prepare --unchanged`、`apply`，或记录结论后直接 `done`。
+模板缺项、索引关键词、历史归档记录都只是检视提示。工具遇到文件不可读等问题时如实说明，保留已有文档后继续流程，不循环尝试归档命令、不改写内部凭证。
 
-候选过期只重新 prepare，不回退编码或验证。命令失败时执行 `python "{MAEFLOW_PATH}" domain-archive status`，按输出的唯一恢复动作处理；禁止猜参数、循环重试或改写流程状态。应用完成后 done。
-
-恢复已有正式领域文档：若 build 阶段提前写了 `docs/specs/<领域>.md`，或归档曾误报 unchanged，
-保留文件，执行 `domain-archive prepare --domain "<领域>" --adopt-existing --keyword "<关键词>"`。
-该命令保留已有候选（若存在），核对内容后使用正常 show/apply 流程重新写入正式文件与索引；
-不会因为候选与现有正式文件相同而漏记本轮输出。不得手改 applied_paths 或伪造归档收据。
+过程文档通常留在 `.mae-flow-work/{单号}/`。是否交付某个文件，以人的选择为准；归档命令不会擅自搬走已有文档。

@@ -46,13 +46,10 @@ class BranchFallbackTests(unittest.TestCase):
                 landing, flow["steps"],
                 "%s 在选择项缺失时落到了无效去向: %r" % (sid, landing))
 
-    def test_default_branch_is_the_conservative_one(self):
-        """兜底要选门禁最多的那条,不能借"没选"绕过检查。"""
+    def test_default_branch_keeps_full_flow_and_build_advances_to_archive(self):
         flow = self._flow()
-        self.assertEqual("enabled",
-                         flow["steps"]["build"]["next_default"])
-        for sid in ("branch_create", "build_commit"):
-            self.assertEqual("full", flow["steps"][sid]["next_default"])
+        self.assertEqual("full", flow["steps"]["branch_create"]["next_default"])
+        self.assertEqual("domain_archive", flow["steps"]["build"]["next"])
 
 
 class ReviewChoiceContractTests(unittest.TestCase):
@@ -65,27 +62,17 @@ class ReviewChoiceContractTests(unittest.TestCase):
                       encoding="utf-8") as stream:
             return _json.load(stream)
 
-    def test_review_revise_branch_lands_on_source_edit_step(self):
+    def test_continuous_feedback_returns_to_existing_build_step(self):
         flow = self._flow()
-        for review in ("build_review", "quality_review"):
-            step = flow["steps"][review]
-            revise = step["next"]["revise"]
-            # allow_source_edit 已随步骤级源码闸退役(2026-08-28,
-            # 交付链内编辑自由),返工只需落在真实步骤上。
-            self.assertIn(
-                revise, flow["steps"],
-                "%s 的返工选项指向了不存在的步骤" % review)
-            self.assertIn("返工", step["choice_answers"]["revise"][0])
-            self.assertIn("提交", step["choice_answers"]["continue"][0])
+        target = flow["steps"]["feedback_triage"]["next"]
+        self.assertEqual("build", target)
+        self.assertIn(target, flow["steps"])
 
-    def test_old_review_answers_remain_accepted_for_live_waiting_cards(self):
-        flow = self._flow()
-        self.assertIn(
-            "我已认真检视并完成自验证，继续",
-            flow["steps"]["build_review"]["choice_answers"]["continue"])
-        self.assertIn(
-            "需要调整代码",
-            flow["steps"]["build_review"]["choice_answers"]["revise"])
+    def test_final_review_keeps_explicit_confirmation_contract(self):
+        step = self._flow()["steps"]["delivery_review"]
+        self.assertTrue(step["confirmation_answers"])
+        self.assertEqual("worktree", step["approval_subject"]["kind"])
+        self.assertEqual("push", step["next"])
 
     def test_all_artifact_and_worktree_approvals_name_the_close_effect(self):
         """端到端检视都要让宿主识别“这句话会关闭本轮意见”。"""

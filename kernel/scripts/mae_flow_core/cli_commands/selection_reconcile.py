@@ -81,7 +81,8 @@ def _domain_archive_unchanged(state, rejected_paths, payload):
         "status": "applied",
         "result": "changes" if remaining_paths else "unchanged",
         "domains": [entry for entry in archive.get("domains") or ()
-                    if str(entry.get("target_path", "")).casefold() not in rejected_ids],
+                    if str(entry.get("target_path", "") if isinstance(entry, dict)
+                           else "docs/specs/%s.md" % entry).casefold() not in rejected_ids],
         "input_sha256": digest,
         "applied_paths": remaining_paths,
         "declined_paths": list(rejected),
