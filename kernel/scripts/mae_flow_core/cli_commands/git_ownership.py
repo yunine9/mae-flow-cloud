@@ -395,10 +395,15 @@ def _commit_worktree_candidates(command):
             _git_diff_names("HEAD", diff_filter="D"),
         )
     if pathspecs:
+        # Explicit commit paths (-i/--only) take contents from the worktree.
+        # After rm --cached, Git diff still reports D because the local file
+        # is untracked; that is not a deletion if this command includes it.
+        deleted = [path for path in _git_diff_names(
+            "HEAD", pathspecs, diff_filter="D") if not os.path.lexists(path)]
         return (
             _git_diff_names("HEAD", pathspecs),
             not intent["include"],
-            _git_diff_names("HEAD", pathspecs, diff_filter="D"),
+            deleted,
         )
     return [], False, []
 
