@@ -61,6 +61,14 @@
     background: color-mix(in srgb, var(--danger) 85%, #000);
   }
 
+  /* 列表卡上的低调破坏动作:幽灵形态 + 危险字色,不抢版面。 */
+  .ui-btn.danger.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--danger);
+  }
+  .ui-btn.danger.ghost:hover:not(:disabled) { background: var(--danger-soft); }
+
   .ui-btn.sm { padding: 4px 9px; font-size: var(--fs-13); }
 
   /* ---- 徽标:语义 soft 底 + 同族深字(收编 58 处前缀徽标) ---- */

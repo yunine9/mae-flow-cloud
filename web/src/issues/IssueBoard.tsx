@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
+  controlIssue,
   getIssue,
   issueStageText,
   listIssues,
@@ -21,6 +22,7 @@ import {
   type IssueStatus,
   type IssueSummary,
 } from "../api";
+import { confirmDialog } from "../ConfirmDialog";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
@@ -267,6 +269,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               issue={issue}
               active={openId === issue.id}
               onOpen={() => { openIssue(issue.id); }}
+              onSettled={refreshList}
             />)}
           </div>}
     </section>
@@ -278,17 +281,40 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
  * 任务"混合列表留口子——两张卡共用 task-* 全局类,同列渲染视觉一致。
  * 点击卡片=展开摘要;进会话走 meta 行「进入问题工作台」。
  * 焦点行只复述 API 字段(stage/round/stage_note),前端不推断状态。 */
-function IssueCard({ issue, active, onOpen }: {
+function IssueCard({ issue, active, onOpen, onSettled }: {
   issue: IssueSummary;
   active?: boolean;
   onOpen: () => void;
+  /** 终止成功后通知列表刷新(2026-09-08:列表卡直达终止,不再进工作台)。 */
+  onSettled?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState("");
   const stageLine = [
     issueStageText(issue),
     issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
-    issue.stage_note ? ` · ${issue.stage_note}` : "",
+    issue.stage_note ? ` · ${issue.stage_note} ` : "",
   ].join("");
+  // 终态(已归档/已取消)没有可终止的东西,按钮不渲染;failed 仍可终止
+  // 清理——与工作台头部「终止会话」同一口径。
+  const terminatable = issue.status !== "archived" && issue.status !== "canceled";
+
+  async function terminate() {
+    if (!await confirmDialog({
+      title: "终止会话",
+      message: `将终止 ${issue.id} 并清理现场，此操作不可撤销。`,
+      confirmLabel: "终止会话",
+      danger: true,
+    })) return;
+    setStopping(true); setStopError("");
+    try {
+      await controlIssue(issue.id, { action: "cancel" });
+      onSettled?.();
+    } catch (cause) {
+      setStopError(String((cause as Error).message ?? cause));
+    } finally { setStopping(false); }
+  }
 
   return <article id={`issue-${issue.id}`}
     className={`task-card issue-card-large status-${issue.status}`
@@ -333,6 +359,12 @@ function IssueCard({ issue, active, onOpen }: {
           <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
         </svg>
       </button>
+      {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
+          工作台头部「终止会话」同款。终态卡不渲染。 */}
+      {terminatable && <button type="button" className="ui-btn danger ghost sm"
+        disabled={stopping} onClick={() => void terminate()}>
+        {stopping ? "终止中…" : "终止"}</button>}
+      {stopError && <span className="form-message error">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}
       {issue.mrs?.map((mr) => {
