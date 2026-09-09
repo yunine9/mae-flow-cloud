@@ -22,8 +22,6 @@ from .host_capability import (
 LIFECYCLE_SCHEMA = "mae-flow-host-lifecycle/2"
 RECEIPT_SCHEMA = "mae-flow-host-receipt/1"
 ATTEST_SCHEMA = "mae-flow-host-attest/1"
-# 与 delivery 事实文件同一上限;状态快照就是一份 .mae-flow.json。
-_SNAPSHOT_LIMIT = 512 * 1024
 # 收据现在只封摘要,恒定几百字节;上限留给"写坏了/被人塞了别的东西"。
 _RECEIPT_LIMIT = 32 * 1024
 
@@ -98,14 +96,19 @@ def _receipt_path(root, task_id, nonce):
     return os.path.join(root, "%s%s.json" % (_receipt_prefix(task_id), nonce))
 
 
-def _stage_receipt(context, projection):
-    """Durably stage the receipt **before** the state it seals is saved.
+def _sync_receipt_directory(path):
+    descriptor = os.open(os.path.dirname(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
-    2026-09-01 勘误:原来是先 save_state 再落收据。中间失败一次就留下
-    "状态已推进、收据不存在"的账,而所有 trusted_* 都要求存在收据——
-    宿主从此被自己锁在门外。现在先把收据 fsync 到同目录临时文件,
-    状态存住了才原子改名;存不住就把临时文件删掉,不留孤儿收据
-    (孤儿收据会给 Agent 伪造状态提供现成背书)。
+
+def _stage_receipt(context, projection):
+    """Write ahead; a committed state can recover this receipt after a crash.
+
+    Temporary receipts are never accepted merely because they exist. Recovery
+    requires the persisted nonce and exact signed lifecycle to match.
     """
     proof = context["proof"]
     path = _receipt_path(context["root"], proof["task_id"], proof["nonce"])
@@ -128,6 +131,7 @@ def _stage_receipt(context, projection):
             stream.write(_canonical(record) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+        _sync_receipt_directory(staged)
     except OSError as exc:
         _die("无法落盘宿主权威收据: %s" % exc)
     return staged, path
@@ -173,9 +177,15 @@ def _scan_receipts(state):
     except OSError as exc:
         _die("无法读取 Cloud 宿主信任根: %s" % exc)
     for name in reversed(names):
-        if not name.startswith(prefix) or not name.endswith(".json"):
+        if not name.startswith(prefix):
             continue
-        record = _readable_receipt(os.path.join(root, name))
+        path = os.path.join(root, name)
+        if name.endswith(".json.staged"):
+            _recover_staged_receipt(path, authority)
+            path = path[:-7]
+        elif not name.endswith(".json"):
+            continue
+        record = _readable_receipt(path)
         if record is not None:
             yield authority, record
 
@@ -204,6 +214,36 @@ def _valid_stored_receipt(authority, record, action, projection):
             and hmac.compare_digest(
                 _canonical(record.get("projection")).encode("utf-8"),
                 _canonical(projection).encode("utf-8")))
+
+
+def _recover_staged_receipt(path, authority):
+    """Only the state actually saved on disk may finish a pending transaction."""
+    record = _readable_receipt(path)
+    if not record:
+        return
+    proof = record.get("proof")
+    if not isinstance(proof, dict):
+        return
+    try:
+        with open(STATE_PATH, encoding="utf-8") as stream:
+            committed = json.load(stream)
+    except (OSError, ValueError):
+        return
+    if not isinstance(committed, dict):
+        return
+    if proof.get("nonce") not in committed.get("host_capability_nonces", []):
+        return
+    action = proof.get("action")
+    projection = host_projection(committed, action, {})
+    if projection is None or not _valid_stored_receipt(authority, record, action, projection):
+        return
+    try:
+        os.replace(path, path[:-7])
+        _sync_receipt_directory(path)
+    except FileNotFoundError:
+        pass  # Another reader finished the same recovery.
+    except OSError as exc:
+        _die("宿主收据恢复暂时失败，请重试: %s" % exc)
 
 
 def trusted_projection(state, action, projection):
@@ -296,11 +336,10 @@ def trusted_active_batch(state, actions):
 
 
 def _snapshot_from_stdin():
-    raw = sys.stdin.read(_SNAPSHOT_LIMIT + 1)
-    if len(raw) > _SNAPSHOT_LIMIT:
-        _die("状态快照超过 512 KiB")
+    # Trusted local IPC: historical feedback may legitimately exceed 512 KiB.
+    # Decode the stream once; do not turn task age into an authorization limit.
     try:
-        value = json.loads(raw)
+        value = json.load(sys.stdin)
     except ValueError as exc:
         _die("状态快照不是合法 JSON: %s" % exc)
     if not isinstance(value, dict):
@@ -313,7 +352,7 @@ def _actions(raw):
 
 
 def attest_host_receipts(state, args):
-    """Read-only: is this lifecycle backed by a real host receipt?
+    """Verify receipt backing, finishing interrupted receipt publication if needed.
 
     Cloud 原来把这段核对(收据归属、签名、投影形状、活动批次摘要)抄了
     一份 TypeScript 镜像。2026-09-02 内核一改投影契约,镜像没跟上,Cloud
@@ -321,8 +360,8 @@ def attest_host_receipts(state, args):
     实现"的实锤。现在裁决只在这里:Cloud 只问,不判。
 
     快照走 stdin:Cloud 核对的必须是**它自己刚读到的那份**状态,而不是
-    内核此刻再读一次的现场——两次读之间 Agent 可以改文件。本命令不落盘、
-    不消费 nonce、不存状态;读的信任根本来就在 Agent 够不着的地方,所以
+    内核此刻再读一次的现场。本命令不消费 nonce、不改业务状态；仅可补完
+    已保存状态对应的收据改名。信任根在 Agent 够不着的地方,所以
     它不需要宿主凭据。
     """
     snapshot = _snapshot_from_stdin() if args.snapshot_stdin else state
@@ -352,16 +391,17 @@ def save_with_host_proof(state, context):
     if projection is None:
         _die("宿主命令没有形成可核对的权威投影")
     staged, path = _stage_receipt(context, projection)
-    try:
-        api.save_state(state)
-    except BaseException:
-        try:
-            os.unlink(staged)
-        except OSError:
-            pass
-        raise
+    # A save can fail after its atomic replacement. Keep the journal;
+    # recovery checks the persisted state, never this in-memory object.
+    api.save_state(state)
     try:
         os.rename(staged, path)
+        _sync_receipt_directory(path)
+    except FileNotFoundError:
+        # Concurrent attest may already have recovered this exact receipt.
+        record = _readable_receipt(path)
+        if not record or record.get("projection_digest") != _digest(projection):
+            _die("宿主权威收据未落盘，请重试")
     except OSError as exc:
         _die("无法落盘宿主权威收据: %s" % exc)
     _refresh_pulse()

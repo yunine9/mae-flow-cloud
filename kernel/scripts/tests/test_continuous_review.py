@@ -789,14 +789,13 @@ class DeliveryHostProofTests(TempProject):
             os.chdir(old)
             root.cleanup()
 
-    def test_attest_refuses_oversized_or_malformed_snapshots(self):
+    def test_attest_refuses_malformed_snapshots(self):
         root, old, _trust, _authority = self.trusted_layout()
         try:
             args = SimpleNamespace(
                 delivery_action="attest", lifecycle="close",
                 active_batch="", snapshot_stdin=True)
-            for raw in ("[1, 2]", "{ not json",
-                        "{\"pad\": \"%s\"}" % ("x" * host_receipts._SNAPSHOT_LIMIT)):
+            for raw in ("[1, 2]", "{ not json"):
                 with mock.patch("sys.stdin", io.StringIO(raw)), \
                         contextlib.redirect_stdout(io.StringIO()), \
                         contextlib.redirect_stderr(io.StringIO()):
