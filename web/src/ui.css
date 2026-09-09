@@ -61,6 +61,28 @@
     background: color-mix(in srgb, var(--danger) 85%, #000);
   }
 
+  /* 列表卡上的低调破坏动作:幽灵形态 + 危险字色,不抢版面。 */
+  .ui-btn.danger.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--danger);
+  }
+  .ui-btn.danger.ghost:hover:not(:disabled) { background: var(--danger-soft); }
+
+  /* 扁平文字钮:混排进文字链行(task-meta 等)时用——零盒感,字重与
+   * 邻居对齐,hover 下划线。放在变体之后声明,同特异性下压住盒装底。 */
+  .ui-btn.flat {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-weight: 600;
+  }
+  .ui-btn.flat:hover:not(:disabled) {
+    background: transparent;
+    text-decoration: underline;
+  }
+
   .ui-btn.sm { padding: 4px 9px; font-size: var(--fs-13); }
 
   /* ---- 徽标:语义 soft 底 + 同族深字(收编 58 处前缀徽标) ---- */
