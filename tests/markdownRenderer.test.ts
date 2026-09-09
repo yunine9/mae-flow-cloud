@@ -86,7 +86,8 @@ test("Story 图源收起仍保留源码行号与原文，标题不执行 HTML", 
   const html = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenArchitecture: () => {} }));
   assert.match(html, /class="md-architecture-reference" data-l="2" data-line-end="4"/);
   assert.match(html, /<details><summary>技术信息（排障）<\/summary>/);
-  assert.match(html, /打开大图 ↗<\/button>/);
+  assert.match(html, /title="在当前任务的架构视图中打开这张图"/);
+  assert.match(html, /转到架构视图 ↗<\/button>/);
   assert.match(html, /查看这个模块包含什么、依赖谁，以及它们如何连接。/);
   assert.match(html, /&lt;script&gt;图标题&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
