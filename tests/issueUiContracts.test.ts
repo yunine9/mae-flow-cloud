@@ -300,6 +300,8 @@ test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择
   const decisionCard = readFileSync(
     resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 登记表单:形态下拉(虚拟化/容器化)必选,随 environment 上送。
   assert.match(registration, /环境形态 <i className="req">\*<\/i>/);
   assert.match(registration, /<option value="virtualized">虚拟化<\/option>/);
@@ -310,6 +312,12 @@ test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择
   assert.match(decisionCard, /<option value="k8s">容器化\(K8s\)<\/option>/);
   assert.match(decisionCard, /envType !== ""/, "未选形态不得提交");
   assert.match(decisionCard, /env_type: envType/);
+  // 拒绝口(票 93)文案直说拒绝(2026-09-08 走查:"无需拉日志"没人认出)。
+  assert.match(decisionCard, /拒绝填写,继续分析/);
+  assert.match(decisionCard, /拒绝填写,继续/);
+  // 环境卡中途即显(2026-09-08):闸在场即出卡,不等 waiting_user——
+  // 模型收口后继续不需要环境的工作,用户填卡与它并行。
+  assert.match(sessionView, /const envGateLive = detail\.gate\?\.kind === "env_needed"/);
   // wire 类型:形态字段在册(提交必带语义见注释)。
   assert.match(apiTypes, /env_type\?: "virtualized" \| "k8s"/);
 });
@@ -1041,4 +1049,22 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
   // 不再是无导语的裸正文。
   assert.match(stream,
     /<p className="conv-lead">提交了 \{item\.count\} 条检视意见给 Agent<\/p>/);
+});
+
+test("现场页签对齐(2026-09-08):长内容/结构化内容右侧查看,不再就地展开", () => {
+  const events = readFileSync(resolve("web/src/issues/EventsPane.tsx"), "utf-8");
+  const eventView = readFileSync(resolve("web/src/eventView.ts"), "utf-8");
+  // 预览按钮模式(任务侧 EventValue 同款):>480 字与结构化内容行内只给
+  // 预览+「右侧查看 →」,点开在 event-workspace 旁的详情面板看全文。
+  assert.match(events, /className="event-value-preview"/);
+  assert.match(events, /右侧查看 <i aria-hidden>→<\/i>/);
+  assert.match(events, /<div className=\{`event-workspace\$\{detail \? " has-detail" : ""\}`\}>/);
+  assert.match(events, /<aside className="event-detail" aria-label="事件完整内容">/);
+  assert.doesNotMatch(events, /event-value-expand/,
+    "就地 <details> 展开是旧形态,必须删干净");
+  // 选中类型两域共用一份(eventView.ts),任务侧 EventTail 同接口。
+  assert.match(eventView, /export interface EventDetailSelection/);
+  const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
+  assert.match(taskCard, /type EventDetailSelection,\n\s*\} from "\.\/eventView";|type EventDetailSelection,[^]*from "\.\/eventView";/,
+    "任务侧应从 eventView 导入共享选中类型");
 });

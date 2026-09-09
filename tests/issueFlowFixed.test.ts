@@ -977,12 +977,22 @@ test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查
     assert.ok(tool, `应注册 ${name}`);
     return tool!;
   };
-  // request_env 在第一阶段(dts_info)不被阶段门禁拦——缺环境时会举
-  // 配置卡(拒绝文案是配置请求,不是阶段门禁)。
-  await assert.rejects(
-    () => byName("request_env").execute("x", {}),
-    (error: Error) => !/阶段门禁/.test(error.message),
+  // request_env 在第一阶段(dts_info)不被阶段门禁拦——举配置卡是
+  // 成功收口(2026-09-08:发起请求本身完成了,不再借错误通道,现场
+  // 回执画 ✓),文案是配置请求,不是阶段门禁。
+  const raised = await byName("request_env").execute("x", {}) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  assert.match(raised.content[0]?.text ?? "", /已向用户发起网管环境配置请求/,
     "request_env 应全程开放;此处是配置请求,不是阶段许可");
+  // 闸已在场:重复发起幂等回报,不覆盖闸(gate id 换了,页面卡与手机
+  // 通知按 waiting_id 对账就成第二张卡)。
+  const gateId = base.gate?.id;
+  const again = await byName("request_env").execute("x", {}) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  assert.match(again.content[0]?.text ?? "", /已有一张.*配置卡在等用户填写/);
+  assert.equal(base.gate?.id, gateId, "重复发起不得覆盖闸");
   // dts_get_ticket 在 fix 阶段重查:内容照回,阶段不倒转,转移账留痕。
   base.stage = "fix";
   await byName("dts_get_ticket").execute("x", { ticket: "DTS-2026-1001" });
@@ -1593,8 +1603,8 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
 });
 
 test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs);配置走 vault 不进 issue.json,配置后指路技能", async () => {
-  // 直调:env 缺席 → 举 env_needed 闸 + 工具如实失败(不再让 AI 空口
-  // 向用户要密码)。
+  // 直调:env 缺席 → 举 env_needed 闸 + 成功收口(2026-09-08:发起
+  // 请求本身完成了,不再借错误通道;硬拒绝才是 fail)。
   const gateState: IssueSessionState = {
     id: "issue-g", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -1618,9 +1628,10 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
   }>;
   const requestEnv = directTools.find((tool) => tool.name === "request_env")!;
   assert.ok(requestEnv);
-  await assert.rejects(
-    () => requestEnv.execute("x", {}),
-    /已向用户发起网管环境配置请求/);
+  const raised = await requestEnv.execute("x", {}) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  assert.match(raised.content[0]?.text ?? "", /已向用户发起网管环境配置请求/);
   assert.equal(gateState.gate?.kind, "env_needed");
   assert.equal(gateState.gate?.scope, "logs", "闸带用途面,决策卡据此给表单文案");
 
@@ -1671,7 +1682,8 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     await until(() =>
       service.get(created.id).status === "idle" ? 1 : undefined,
     "配置后的平台回合收口");
-    // 现场账:第一次 request_env 因缺环境失败,第二次指路技能。
+    // 现场账:第一次 request_env 举卡是成功收口(2026-09-08,不借错误
+    // 通道),第二次配置后重试指路技能。
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
     const requests = events.split("\n").filter(Boolean)
@@ -1679,7 +1691,8 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
       .filter((event) => event.kind === "tool_finished"
         && event.payload?.name === "request_env");
     assert.equal(requests.length, 2);
-    assert.equal(requests[0].payload.is_error, true, "缺环境时如实失败");
+    assert.equal(requests[0].payload.is_error, false,
+      "举配置卡是成功收口,回执不画 ✕");
     assert.notEqual(requests[1].payload.is_error, true, "配置后重试指路技能");
     // 环境是开场后才补配的:开场词渲染时元信息还没有环境,密码不借闸
     // 进上下文(ADR-0003 的明文只随登记元信息走,要查调 get_issue_meta)。
