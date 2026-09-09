@@ -96,6 +96,27 @@ export function displayPersonName(
     ?.display_name?.trim() || username;
 }
 
+/** 逐条处置使用该意见当前版本，结果与 Agent 回执分别展示。 */
+function OwnerResolution({ item, canVerify, busy, onResolve, onReopen }: {
+  item: Annotation; canVerify: boolean; busy: boolean;
+  onResolve(outcome: string, reason: string): void; onReopen(): void;
+}) {
+  const [outcome, setOutcome] = useState(canVerify ? "fixed" : "");
+  const [reason, setReason] = useState("");
+  return <div className="annot-owner-reply-editor">
+    <label>处置这条意见 <select aria-label="这条意见的处置结果" value={outcome} onChange={(event) => setOutcome(event.target.value)}>
+      <option value="">选择处置结果</option><option value="fixed">已修复 / 已解答</option>
+      <option value="not_adopted">不采纳</option><option value="deferred">延期处理</option>
+      <option value="accepted_risk">接受未解决风险继续</option>
+    </select></label>
+    <textarea aria-label="这条意见的处理依据" value={reason} rows={2} onChange={(event) => setReason(event.target.value)}
+      placeholder={outcome === "fixed" && canVerify ? "已有当前回执，可直接核对确认；也可补充依据" : "说明处理依据；延期时写清后续安排，接受风险时写清影响"} />
+    <div><button type="button" className="ghost" disabled={busy || item.status !== "sent"} onClick={onReopen}>仍需调整</button>
+      <button type="button" className="primary" disabled={busy || !outcome || (!(outcome === "fixed" && canVerify) && !reason.trim())}
+        onClick={() => onResolve(outcome, reason.trim())}>确认这条处置</button></div>
+  </div>;
+}
+
 export function AnnotationPanel({
   taskId,
   viewerUsername,
@@ -108,6 +129,7 @@ export function AnnotationPanel({
   reviewReady = false,
   reviewAnnotationIds = [],
   requirementReview = false,
+  overallStoryPublished = false,
   requirementRevisionRunning = false,
   mergeRequestOpen,
   evidenceAwaiting = false,
@@ -157,6 +179,8 @@ export function AnnotationPanel({
   reviewAnnotationIds?: readonly string[];
   /** 需求确认卡中的批注会立即驱动 Agent 修改当前需求正本。 */
   requirementReview?: boolean;
+  /** 设计发布后才使用独立 Story 会话；分析草稿仍随分析确认卡返工。 */
+  overallStoryPublished?: boolean;
   /** Agent 修改中仍接收新意见，服务端串行排队并去重。 */
   requirementRevisionRunning?: boolean;
   /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
@@ -195,12 +219,12 @@ export function AnnotationPanel({
   const overrideReviewCount = items.filter((item) =>
     closureOf(item).can_override_drop).length;
   const ordinaryReviewCount = items.filter((item) =>
-    closureOf(item).can_verify
+    (closureOf(item).can_resolve || closureOf(item).can_verify)
     && routeOf(item) !== "owner_reply"
     && item.sent_via !== "review_repair").length;
   const ownerReplyReviewCount = items.filter((item) =>
-    closureOf(item).can_verify && routeOf(item) === "owner_reply").length;
-  const authorActionable = (item: Annotation) => closureOf(item).can_verify;
+    (closureOf(item).can_resolve || closureOf(item).can_verify) && routeOf(item) === "owner_reply").length;
+  const authorActionable = (item: Annotation) => !!(closureOf(item).can_resolve || closureOf(item).can_verify);
   const overrideActionable = (item: Annotation) =>
     closureOf(item).can_override_verify;
   const authorActionableCount = items.filter(authorActionable).length;
@@ -246,11 +270,12 @@ export function AnnotationPanel({
     && !!reworkChoice;
   const ordinaryCanSend = !["completed", "canceled"].includes(taskStatus)
     && (running || evidenceAwaiting || reviewSendable || queueable);
-  const canSendItem = (item: Annotation) => item.artifact === OVERALL_STORY_ARTIFACT
+  const isPublishedStory = (item: Annotation) => overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT;
+  const canSendItem = (item: Annotation) => isPublishedStory(item)
     ? taskStatus !== "canceled" : ordinaryCanSend;
   const sendableDrafts = drafts.filter(canSendItem);
   const canSend = sendableDrafts.length > 0;
-  const overallDrafts = sendableDrafts.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
+  const overallDrafts = sendableDrafts.filter(isPublishedStory);
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
 
@@ -316,7 +341,7 @@ export function AnnotationPanel({
         if (result.conflict) setError(result.conflict);
         else setSubmissionNotice(`已提交 ${drafts.length} 条意见并请求返工。`);
       } else {
-        const groups = [overallDrafts, sendableDrafts.filter((item) => item.artifact !== OVERALL_STORY_ARTIFACT)];
+        const groups = [overallDrafts, sendableDrafts.filter((item) => !isPublishedStory(item))];
         const notices: string[] = [];
         for (const group of groups) {
           if (!group.length) continue;
@@ -369,7 +394,7 @@ export function AnnotationPanel({
     if (!next.execute) return;
     await mutateAnnotation(item.id, action === "drop"
       ? () => dropAnnotation(taskId, item.id)
-      : () => judgeAnnotation(taskId, item.id, "verify"));
+      : () => judgeAnnotation(taskId, item.id, "verify", { revision: item.rework ?? 0 }));
   }
 
   async function submitOwnerReply(item: Annotation, retryText?: string) {
@@ -424,20 +449,20 @@ export function AnnotationPanel({
       </summary>
       {reviewReady && authorActionableCount > 0 && (
         <div className="annot-panel-note review-ready" role="status">
-          Agent 已处理你提出的 {authorActionableCount} 条意见，Build-Fix 也已通过。
-          请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
+          本轮有 {authorActionableCount} 条意见待你逐条处置。
+          请核对最新代码与回执，再逐条确认处置结果；最终推送不能代替这些决定。
         </div>
       )}
       {reviewReady && missingReceiptCount > 0 && (
         <div className="annot-panel-note receipt-pending" role="alert">
-          另有 {missingReceiptCount} 条意见的当前轮逐条回执尚未就绪，暂不能确认。
+          另有 {missingReceiptCount} 条意见的当前轮逐条回执尚未就绪；责任人可等待回执或填写依据逐条处置。
           系统会保留这些意见并阻止推送；刷新后仍未恢复时，请查看执行现场中的回执诊断。
         </div>
       )}
       {ordinaryReviewCount > 0 && (
         <div className="annot-panel-note review-ready" role="status">
-          Agent 已再次回到人工检视。请核对最新材料后，逐条选择
-          “确认已修复”或“仍需调整”；没有全部闭环前不会继续。
+          请核对最新材料与处理依据，逐条确认已修复、不采纳、延期或接受风险，
+          也可以要求继续调整。
         </div>
       )}
       {ownerReplyReviewCount > 0 && (
@@ -501,7 +526,7 @@ export function AnnotationPanel({
         </div>
       )}
 
-      {drafts.some((item) => item.artifact !== OVERALL_STORY_ARTIFACT) && taskStatus === "completed" && (
+      {drafts.some((item) => !isPublishedStory(item)) && taskStatus === "completed" && (
         <p className="annot-panel-note">
           任务已经交付；这些批注已保存在本任务档案中，不会自动触发修改。
           需要继续改代码时，请创建后续任务。
@@ -540,7 +565,7 @@ export function AnnotationPanel({
           const check = checkOf(item.id);
           const location = resolvedAnnotationRange(item, check);
           const archival = taskStatus === "completed"
-            && item.artifact !== OVERALL_STORY_ARTIFACT && item.status === "draft";
+            && !isPublishedStory(item) && item.status === "draft";
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
           const closure = closureOf(item);
@@ -548,7 +573,7 @@ export function AnnotationPanel({
             && overrideArm.action === "drop";
           const verifyArmed = overrideArm?.annotationId === item.id
             && overrideArm.action === "verify";
-          const authorCanJudge = closure.can_verify;
+          const authorCanJudge = !closure.owner_controlled && closure.can_verify;
           const actionable = closure.actionable;
           const progress = closure;
           return (
@@ -705,7 +730,7 @@ export function AnnotationPanel({
               )}
               {item.status === "sent" && routeOf(item) === "owner_decision"
                 && item.owner_reply && item.sent_via === "owner_pending"
-                && item.assignee === viewerUsername && (
+                && (closure.owner_controlled ? (closure.can_resolve || closure.can_route) : item.assignee === viewerUsername) && (
                 <div className="annot-owner-reply-action">
                   <button type="button" className="primary"
                     disabled={!!mutationBusy}
@@ -719,7 +744,7 @@ export function AnnotationPanel({
               {(item.status === "sent"
                   || (item.status === "draft" && closure.can_route))
                 && routeOf(item) !== "agent"
-                && !item.owner_reply && item.assignee === viewerUsername && (
+                && !item.owner_reply && (closure.owner_controlled ? (closure.can_resolve || closure.can_route) : item.assignee === viewerUsername) && (
                 replyingId === item.id ? (
                   <div className="annot-owner-reply-editor">
                     <textarea rows={3} autoFocus value={ownerReply}
@@ -756,6 +781,12 @@ export function AnnotationPanel({
               {item.status === "sent" && !actionable && !editing && closure.hint && (
                 <p className="annot-next"><b>下一步</b>{closure.hint}</p>
               )}
+              {item.resolution && <p className="annot-next"><b>责任人处置</b>{closure.hint}</p>}
+              {closure.can_resolve && !editing && <OwnerResolution key={`${item.id}:${item.rework ?? 0}`}
+                item={item} canVerify={closure.can_verify} busy={!!mutationBusy}
+                onReopen={() => void mutateAnnotation(item.id, () => judgeAnnotation(taskId, item.id, "reopen", { revision: item.rework ?? 0 }))}
+                onResolve={(outcome, reason) => void mutateAnnotation(item.id,
+                  () => judgeAnnotation(taskId, item.id, "resolve", { revision: item.rework ?? 0, outcome, reason }))} />}
               <div className="annot-item-foot">
                 <small>
                   {closure.delivery_text}
@@ -774,7 +805,7 @@ export function AnnotationPanel({
                 {/* 记忆没有编辑面:改就是再圈一次;撤回在「本任务知识」里。
                     这里的编辑/删除只改批注台账,记忆不会跟着变,露出来就是骗人。 */}
                 {routeOf(item) !== "memory"
-                  && (isAuthor || closure.can_override_drop) && !editing && (
+                  && (isAuthor || closure.can_override_drop) && !item.resolution && item.status !== "verified" && !editing && (
                   <span className="annot-owner-actions">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}
@@ -787,7 +818,7 @@ export function AnnotationPanel({
                               disabled={!!mutationBusy}
                               onClick={() => void mutateAnnotation(item.id,
                                 () => dropAnnotation(taskId, item.id))}>
-                        删除
+                        {item.status === "draft" && !item.needs_owner_closure ? "删除草稿" : "申请撤回表达"}
                       </button>
                     ) : (
                       <>
@@ -832,14 +863,14 @@ export function AnnotationPanel({
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}
                             onClick={() => void mutateAnnotation(item.id,
-                              () => judgeAnnotation(taskId, item.id, "reopen"))}>
+                              () => judgeAnnotation(taskId, item.id, "reopen", { revision: item.rework ?? 0 }))}>
                       {routeOf(item) === "owner_reply" ? "仍有疑问" : "仍需调整"}
                     </button>}
                     {isAuthor ? (
                       <button type="button" className="approve"
                               disabled={!!mutationBusy}
                               onClick={() => void mutateAnnotation(item.id,
-                                () => judgeAnnotation(taskId, item.id, "verify"))}>
+                                () => judgeAnnotation(taskId, item.id, "verify", { revision: item.rework ?? 0 }))}>
                         {routeOf(item) === "owner_reply" ? "确认已解答" : "确认已修复"}
                       </button>
                     ) : (

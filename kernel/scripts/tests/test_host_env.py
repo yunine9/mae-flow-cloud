@@ -63,15 +63,13 @@ class ReviewPromptTests(unittest.TestCase):
             return stream.read()
 
     def test_review_steps_do_not_pin_the_user_to_an_ide(self):
-        for step in ("build_review", "quality_review"):
+        for step in ("story", "delivery_review"):
             with self.subTest(step=step):
                 text = self._step(step)
                 self.assertNotIn("在 IDE 中检视", text)
 
-    def test_build_review_tells_the_model_to_write_for_a_human(self):
-        text = self._step("build_review")
-        # 用户拍板需要的三件事:改了什么、为什么、哪里要重点看
-        self.assertIn("重点看", text)
-        self.assertIn("流程黑话", text)
-        # 反面清单同样要在:没有它,模型会把 diff 复述一遍充数
-        self.assertIn("不列文件清单", text)
+    def test_final_review_tells_the_model_to_show_files_and_real_evidence(self):
+        text = self._step("delivery_review")
+        self.assertIn("人工检视", text)
+        self.assertIn("实际", text)
+        self.assertIn("不能编造通过", text)

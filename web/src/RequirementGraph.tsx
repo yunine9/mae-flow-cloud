@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { requirementGraphVisible } from "./taskHierarchy";
 import { useState, type ReactNode } from "react";
 import {
@@ -188,11 +189,11 @@ export function RequirementGraph({
               : `确认方案后创建 ${graph.repositories.length} 个模块任务`}</span>
         {/* 从直接开发转过来的单子:说清是谁、在哪个阶段、为什么提议拆分,
             人才知道这张确认卡从哪来。 */}
-        {task.split_escalation && <small className="requirement-split-escalation"
-          title={task.split_escalation.reason}>
-          由 Agent{task.split_escalation.phase
-            ? `在「${task.split_escalation.phase}」` : ""}提议拆分：{
-            task.split_escalation.reason}</small>}
+        {task.split_escalation && <details className="requirement-split-escalation">
+          <summary>查看拆分依据{task.split_escalation.phase
+            ? ` · ${task.split_escalation.phase}` : ""}</summary>
+          <p>{task.split_escalation.reason}</p>
+        </details>}
       </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>
@@ -204,7 +205,7 @@ export function RequirementGraph({
           </button>}
         </div>
         <div className="requirement-team-pills">
-          <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
+          <strong><PersonName account={task.luban_account} fallback="本地主责任人" /><i>主责任人</i></strong>
           {participantNames.map((account) => <span key={account}>{account}
             <i>{task.collaborators?.includes(account) ? "参与讨论" : "单元执行"}</i>
           </span>)}
@@ -270,7 +271,7 @@ export function RequirementGraph({
                         quote: [
                           requirementNodeLabel(repository),
                           `职责：${repository.responsibility ?? "未说明"}`,
-                          `负责面：${repository.scope?.paths.join("、") ?? "未说明"}`,
+                          `参考位置：${repository.scope?.paths.join("、") ?? "未说明"}`,
                         ].join("\n"),
                       })}>
                       批注{annotationCount(anchor) > 0
@@ -286,7 +287,7 @@ export function RequirementGraph({
                   {repository.current_phase ? ` · ${repository.current_phase}` : ""}
                 </span>}
                 <span className="repo-assignee">
-                  {repository.assignee ? `负责人 · ${repository.assignee}` : "负责人待确认"}
+                  {repository.assignee ? <>负责人 · <PersonName account={repository.assignee} /></> : "负责人待确认"}
                 </span>
                 <span className="repo-ticket">
                   {/* 一仓拆多单元时单号逐单元填,父任务单号不是任何一块的
@@ -296,9 +297,11 @@ export function RequirementGraph({
                 </span>
                 {repository.scope && repository.scope.paths.length > 0 &&
                   <span className="repo-scope-paths" title={repository.scope.paths.join("\n")}>
-                    负责面 · {repository.scope.paths.join("、")}
+                    参考位置 · {repository.scope.paths.join("、")}
                   </span>}
-                {repository.responsibility && <p>{repository.responsibility}</p>}
+                {repository.responsibility && (repository.responsibility.length > 160
+                  ? <details className="repo-responsibility"><summary>职责与验收详情</summary><p>{repository.responsibility}</p></details>
+                  : <p>{repository.responsibility}</p>)}
                 {parents.length > 0 && <span className="repo-prerequisite">
                   等待 {parents.map((edge) => repoName(edge.to, task)).join("、")}
                 </span>}
@@ -349,7 +352,7 @@ export function RequirementGraph({
           <ol>{task.cross_repository_updates!.slice(-10).reverse().map((update) => (
             <li key={update.id}>
               <div><strong>{update.source_repository ?? update.source_task_id}</strong>
-                <span>{update.author}</span></div>
+                <span><PersonName account={update.author} /></span></div>
               <p>{update.text}</p>
             </li>
           ))}</ol>

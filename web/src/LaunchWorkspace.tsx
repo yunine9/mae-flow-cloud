@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createTask,
@@ -1243,7 +1244,7 @@ export function LaunchWorkspace({
                             </span>
                             <small>{module.description}</small>
                             <span className="business-module-meta">
-                              {module.assets} 项模块知识 · {module.owner} 维护
+                              {module.assets} 项模块知识 · <PersonName account={module.owner} /> 维护
                             </span>
                           </span>
                         </label>;

@@ -1839,8 +1839,16 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-root-task > em.completed, .repo-task-status.completed { color: var(--success); }
 .requirement-root-task > em.failed, .requirement-root-task > em.stalled,
 .repo-task-status.failed, .repo-task-status.stalled { color: var(--danger); }
-.requirement-split-label { height: 30px; display: grid; place-items: center; color: var(--muted); font-size: var(--fs-12); font-weight: 700; }
+.requirement-split-label { min-height: 30px; display: grid; place-items: center; gap: 6px; padding-bottom: 10px; color: var(--muted); font-size: var(--fs-12); font-weight: 700; }
 .requirement-split-label::before { width: 1px; height: 9px; background: var(--line-strong); content: ""; }
+.requirement-split-label > span { text-align: center; }
+.requirement-split-escalation { justify-self: stretch; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; font-weight: 400; line-height: 1.6; }
+.requirement-split-escalation > summary { color: var(--accent); cursor: pointer; }
+.requirement-split-escalation > p { margin: 8px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.workspace-studio .ws-doc.is-chain { flex: 1; min-height: 0; overflow: auto; }
+.repo-responsibility { margin-top: 8px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.repo-responsibility > summary { color: var(--accent); cursor: pointer; }
+.repo-responsibility > p { margin: 8px 0 0; }
 .requirement-main-team { margin-bottom: 11px; padding: 1px 1px 10px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
 .requirement-main-team > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .requirement-main-team > div:first-child span { color: var(--text-strong); font-size: 12.5px; font-weight: 800; }

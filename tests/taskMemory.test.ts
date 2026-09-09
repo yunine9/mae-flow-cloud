@@ -159,8 +159,8 @@ test("闭环的检视意见:人圈、Agent 改、人确认三件套齐才落;not
     store.respond(notFixed.id, {
       outcome: "not_fixed", summary: "与现有约定冲突,未改", evidence: [],
     });
-    svc.verifyAnnotation(id, fixed.id, "alice");
-    svc.verifyAnnotation(id, notFixed.id, "alice");
+    svc.verifyAnnotation(id, fixed.id, "本地用户");
+    svc.verifyAnnotation(id, notFixed.id, "本地用户", false, { revision: 0, outcome: "not_adopted", reason: "与现有约定冲突，不修改" });
     const rows = svc.listTaskMemories(id);
     assert.equal(rows.length, 1, "只有 fixed 且确认通过的才是闭环");
     assert.equal(rows[0].source, "annotation");

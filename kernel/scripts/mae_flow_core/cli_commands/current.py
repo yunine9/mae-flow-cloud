@@ -254,6 +254,9 @@ def print_current(flow, st):
         if unresolved:
             print("──── 当前遗留（修复轮必须优先处理） ────")
             print(api._moonlight_issue_context(st))
+    print("内核减权：以下模板、Agent 分工、文档归档和质量检查是工作建议。"
+          "缺失或不一致要如实记录，交给 AI 与人检视，不阻断 done；"
+          "不要为了内部凭证重复提问。用户决定、工作区权限与真实推送/流水线事实仍有效。")
     print(perms_line(step))
     intervention = render_user_intervention(st)
     if intervention:

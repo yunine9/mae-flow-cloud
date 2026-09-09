@@ -9,14 +9,13 @@ import sys
 from .shared import os
 from .wiring import api
 from .domain_archive_recovery import (
-    changed_domain_paths, prepare_existing, recovery_hint)
+    changed_domain_paths, prepare_existing)
 from mae_flow_core.orchestration.domain_archive import (
     apply_candidates,
     candidate_from_dict,
     initialize_candidate,
     input_digest,
     prepare_candidate,
-    require_fresh,
 )
 from mae_flow_core.orchestration.work_package import ensure_work_package
 
@@ -94,7 +93,12 @@ def _fresh_digest(root, package, entries):
 def _show(record, root):
     print("[mae-flow] 领域归档状态: " + str(record.get("status", "未准备")))
     domains = record.get("domains") or ()
-    if record.get("reapply_paths"):
+    print("- 归档结果: " + str(record.get("result", "未判定")))
+    if "changed_paths" in record:
+        print("- 本次实际内容变化: " + ("、".join(record["changed_paths"]) or "无"))
+    if record.get("applied_paths"):
+        print("- 已认领归档文件（不代表仍需新提交）: " + "、".join(record["applied_paths"]))
+    if record.get("reapply_paths") and record.get("status") != "applied":
         print("- 本次将由 apply 重新写入并接纳已有领域文档与索引；候选已冻结，请核对正文。")
     if not domains:
         if record.get("result") == "unchanged":
@@ -104,15 +108,19 @@ def _show(record, root):
         return
     for value in domains:
         entry = candidate_from_dict(root, value)
-        print("- %s: %s -> %s" % (entry.domain, entry.action, entry.target_path))
+        print("- %s: 候选内容 %s（相对当前文档） -> %s" % (entry.domain, entry.action, entry.target_path))
         target = os.path.join(root, *entry.target_path.split("/"))
         try:
             with open(target, encoding="utf-8") as stream:
                 before = stream.read().splitlines(True)
         except OSError:
             before = []
-        with open(entry.candidate_path, encoding="utf-8") as stream:
-            after = stream.read().splitlines(True)
+        try:
+            with open(entry.candidate_path, encoding="utf-8") as stream:
+                after = stream.read().splitlines(True)
+        except OSError:
+            print("  提示: 候选文件不可读，现有正式文档保持不变；可补充候选或直接 done。")
+            continue
         for line in difflib.unified_diff(
                 before, after, fromfile=entry.target_path,
                 tofile=value["candidate_path"]):
@@ -154,17 +162,20 @@ def _prepare(state, args, root, package):
         record = prepare_existing(state, args, root, package, _fresh_digest)
         _show(record, root)
         return record
-    if args.unchanged:
-        changed = changed_domain_paths(state)
-        if changed:
-            raise ValueError(recovery_hint(changed))
     updated = copy.deepcopy(state)
     previous = copy.deepcopy(updated.get("domain_archive") or {})
-    if previous.get("status") == "applied":
+    if previous.get("status") == "applied" and not args.unchanged:
         previous_entries = _entries(root, previous)
         current_digest = _fresh_digest(root, package, previous_entries)
-        if previous.get("input_sha256") == current_digest:
-            raise ValueError("领域归档已经应用且输入未变化，无需重复准备")
+        requested_keywords = tuple(dict.fromkeys(
+            str(word).strip() for word in args.keyword if str(word).strip()))
+        same_request = any(
+            entry.domain == args.domain and entry.keywords == requested_keywords
+            for entry in previous_entries)
+        if same_request and previous.get("input_sha256") == current_digest:
+            _show(previous, root)
+            print("提示: 已应用且内容未变化，可直接 done。")
+            return previous
         # 后续轮次准备一个领域时保留同需求其他已核对候选；否则它们
         # 仍在交付增量中，却会随 applied_paths 清空而失去归档归属。
         previous = {} if args.unchanged else {
@@ -172,12 +183,15 @@ def _prepare(state, args, root, package):
             "reapply_paths": previous.get("reapply_paths") or [],
         }
     if args.unchanged:
+        # Explicitly choosing no further archive edits does not erase documents
+        # or old provenance, and is independent of code already committed.
         if previous.get("domains"):
-            raise ValueError("已经存在领域候选，不能再声明全部 unchanged")
+            print("提示: 本轮不再应用候选；已有文档和归档凭证保留。")
         record = {
             "status": "prepared", "result": "unchanged", "domains": [],
             "input_sha256": _fresh_digest(root, package, ()),
-            "applied_paths": [],
+            "applied_paths": list(previous.get("applied_paths") or ()),
+            "changed_paths": [],
         }
         updated["domain_archive"] = record
         api.save_state(updated)
@@ -190,9 +204,9 @@ def _prepare(state, args, root, package):
     try:
         with open(template, encoding="utf-8") as stream:
             template_content = stream.read()
-    except OSError as exc:
-        raise ValueError(
-            "领域模板缺失；先重新执行 current 恢复项目本地资源: %s" % exc)
+    except OSError:
+        template_content = "# <领域名称>\n"
+        print("提示（不阻断）: 领域模板不可读，使用基础标题创建候选。")
     initialized = initialize_candidate(
         root, archive_root, args.domain, template_content)
     values = list(previous.get("domains") or ())
@@ -241,33 +255,37 @@ def _prepare(state, args, root, package):
 def _reapply_delivery_paths(state, entries, record):
     paths = set(record.get("reapply_paths") or ())
     if entries:
-        changed = set(changed_domain_paths(state))
+        try:
+            changed = set(changed_domain_paths(state))
+        except ValueError as exc:
+            print("提示（不阻断）: 无法计算历史归档归属: " + str(exc))
+            changed = set()
         for entry in entries:
             if entry.target_path in changed or "docs/specs/index.md" in changed:
                 paths.add(entry.target_path)
     return sorted(paths)
 
 
+def _document_bytes(root, path):
+    try:
+        with open(os.path.join(root, path), "rb") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
 def _apply(state, args, root, package):
     record = copy.deepcopy(state.get("domain_archive") or {})
     already_applied = record.get("status") == "applied"
-    if already_applied:
-        targets = {value.get("target_path") for value in record.get("domains") or ()}
-        if not targets or targets.issubset(set(record.get("applied_paths") or ())):
-            return record
     if record.get("status") not in ("prepared", "applied"):
         raise ValueError("领域归档尚未准备完成；执行 domain-archive status 查看恢复动作")
     entries = _entries(root, record)
-    require_fresh(
-        record.get("input_sha256"), _fresh_digest(root, package, entries))
-    if already_applied and record.get("authorization"):
-        receipt = record["authorization"]
-    elif getattr(args, "moonlight_auto", False):
-        from mae_flow_core import host_env
-        if not host_env.unattended_confirm_allowed(state):
-            raise ValueError("--auto 只允许在月光宝盒或云端宿主运行中使用")
-        receipt = {"mode": "moonlight-auto"}
-    else:
+    digest = _fresh_digest(root, package, entries)
+    reapply = _reapply_delivery_paths(state, entries, record)
+    # Applying local documents is ordinary workspace editing, not publication.
+    # A supplied human answer must still be genuine and must not be a refusal.
+    receipt = {"mode": "moonlight-auto" if getattr(args, "moonlight_auto", False) else "local-edit"}
+    if getattr(args, "message_id", None):
         ok, answer, receipt, error = api._authorization_message(
             state, args.message_id)
         if not ok:
@@ -279,14 +297,26 @@ def _apply(state, args, root, package):
             raise ValueError(
                 "用户回答没有明确批准本次领域归档；候选已保留，"
                 "按用户意见修改后重新 prepare/show")
-    # unchanged 是候选对工作区的比较，不是相对交付基线的比较。
-    # 上轮已提交、仍属于本需求增量的文档，必须由本轮 apply 重新登记。
-    record["reapply_paths"] = _reapply_delivery_paths(state, entries, record)
+    if (already_applied and "changed_paths" in record
+            and record.get("input_sha256") == digest
+            and set(reapply).issubset(set(record.get("applied_paths") or ()))):
+        _show(record, root)
+        return record
+    if record.get("input_sha256") != digest:
+        print("提示: 候选或目标内容已变化，按当前内容重新计算本次归档。")
+    # Preserve provenance separately from bytes changed by this application.
+    record["reapply_paths"] = reapply
+    entries = tuple(prepare_candidate(root, e.candidate_path, e.domain, e.keywords) for e in entries)
+    observed = {e.target_path for e in entries} | {"docs/specs/index.md"}
+    before = {path: _document_bytes(root, path) for path in observed}
     paths = apply_candidates(root, entries, reapply_paths=record["reapply_paths"])
-    if paths:
-        record["result"] = "changes"
+    changed = sorted(path for path in observed if before[path] != _document_bytes(root, path))
     record.update({
-        "status": "applied", "applied_paths": list(paths),
+        "status": "applied",
+        "result": "changes" if changed else "unchanged",
+        "changed_paths": changed,
+        "domains": [e.to_dict(root) for e in entries],
+        "applied_paths": sorted(set(paths) | set(record.get("applied_paths") or ())),
         "authorization": receipt,
     })
     record["input_sha256"] = _fresh_digest(root, package, entries)
@@ -296,8 +326,8 @@ def _apply(state, args, root, package):
     print("[mae-flow] 领域归档已应用。")
     for path in paths:
         print("- " + path)
-    if not paths:
-        print("- 无领域文档变化")
+    if not changed:
+        print("- 无领域文档内容变化；已认领路径仅作为归档凭证")
     return record
 
 
@@ -308,9 +338,6 @@ def cmd_domain_archive(state, args):
     try:
         package = ensure_work_package(root, _ticket(state))
         if args.domain_archive_action == "prepare":
-            for source, target in _localize_legacy_process_files(
-                    root, state, package):
-                print("[mae-flow] 已迁移未提交过程件: %s -> %s" % (source, target))
             return _prepare(state, args, root, package)
         record = state.get("domain_archive") or {}
         if args.domain_archive_action in {"show", "status"}:

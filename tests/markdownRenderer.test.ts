@@ -79,3 +79,18 @@ test("代码块和引用内部原文行可定位；表格头部优先定位到�
   assert.match(html, /class="md-block-code" data-l="8" data-line-end="9"/);
   assert.match(html, /class="md-p" data-l="6">第二行/);
 });
+
+test("Story 图源收起仍保留源码行号与原文，标题不执行 HTML", () => {
+  const source = JSON.stringify({ diagram_type: "architecture", meta: { title: "<script>图标题</script>" } });
+  const text = `前文\n\`\`\`archify\n${source}\n\`\`\`\n后文`;
+  const html = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenArchitecture: () => {} }));
+  assert.match(html, /class="md-architecture-reference" data-l="2" data-line-end="4"/);
+  assert.match(html, /<details><summary>查看图源<\/summary>/);
+  assert.match(html, /查看架构图<\/button>/);
+  assert.match(html, /&lt;script&gt;图标题&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /data-l="5">后文/);
+  const malformed = renderToStaticMarkup(React.createElement(Markdown, { text: "```archify\n{broken\n```" }));
+  assert.match(malformed, /\{broken/);
+  assert.doesNotMatch(malformed, /查看架构图<\/button>/);
+});

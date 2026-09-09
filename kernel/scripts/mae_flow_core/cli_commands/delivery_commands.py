@@ -5,6 +5,7 @@ import re
 from .shared import os, time
 from .wiring import api
 from .delivery_support import (
+    original_feedback_order,
     render_delivery_feedback,
     unpushed_commits as collect_unpushed_commits,
 )
@@ -23,6 +24,9 @@ BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
 _RESULTS = frozenset(("fixed", "explained", "needs_human", "not_applicable"))
+# Cloud adds source, revision and observed SHA around a valid source_id.
+# The composite identity must not inherit the shorter source_id limit.
+_FEEDBACK_ID_LIMIT = 512
 _WAITING = frozenset(("external_verify", "delivery_watch"))
 _WRITER = frozenset(("feedback_triage", "build", "domain_archive",
                      "delivery_review", "push"))
@@ -95,7 +99,7 @@ def _head():
 def _item(raw):
     if not isinstance(raw, dict):
         _die("items 每一项必须是 JSON object")
-    item_id = _text(raw.get("id"), "items.id", 200)
+    item_id = _text(raw.get("id"), "items.id", _FEEDBACK_ID_LIMIT)
     source = _text(raw.get("source"), "items.source", 80)
     result = {
         "id": item_id,
@@ -199,7 +203,7 @@ def _open(flow, state, args):
         incoming_digest = _result_digest({
             "task_id": payload.get("task_id"),
             "base_sha": payload.get("base_sha"),
-            "items": payload.get("items"),
+            "items": original_feedback_order(payload.get("items"), previous.get("items")),
         })
         if previous.get("payload_digest") != incoming_digest:
             _die("批次 %s 的载荷与首次登记不一致，拒绝当作幂等重放" % batch_id)
@@ -337,11 +341,13 @@ def _result(flow, state, args):
     payload = _payload(args.file, RESULT_SCHEMA)
     proof_nonce = _verify_host_proof(state, args, "feedback-result", payload)
     _capability(state)
-    if (host_managed_continuous_review()
-            and not trusted_active_batch(state, (
-                "feedback-open", "pipeline-record", "feedback-result",
-                "selection-reconcile"))):
-        _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
+    if host_managed_continuous_review():
+        # A successfully closed batch has no active writer. Its signed final
+        # lifecycle is the predecessor for replay, not a missing active batch.
+        checker = (trusted_active_batch if (state.get("delivery_loop") or {}).get("active_batch_id")
+                   else trusted_current_lifecycle)
+        if not checker(state, ("feedback-open", "pipeline-record", "feedback-result", "selection-reconcile")):
+            _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     batch = _batch(loop, batch_id)
@@ -358,7 +364,7 @@ def _result(flow, state, args):
         if status not in _RESULTS:
             _die("results.status 只能是 " + "/".join(sorted(_RESULTS)))
         results.append({
-            "id": _text(raw.get("id"), "results.id", 200),
+            "id": _text(raw.get("id"), "results.id", _FEEDBACK_ID_LIMIT),
             "status": status,
             "summary": _text(raw.get("summary"), "results.summary", 4000),
             "evidence": _text(raw.get("evidence"), "results.evidence", 4000,
@@ -372,7 +378,7 @@ def _result(flow, state, args):
                 "、".join(sorted(actual - expected)) or "无"))
     digest = _result_digest(results)
     if batch.get("result_digest"):
-        if batch.get("result_digest") != digest:
+        if batch.get("result_digest") != _result_digest(original_feedback_order(results, batch.get("results"))):
             _die("批次 %s 已登记不同结果，拒绝覆盖" % batch_id)
         save_with_host_proof(state, proof_nonce)
         print(json.dumps({

@@ -20,9 +20,9 @@ async function requestStory(taskId: string, action = "", body?: object): Promise
 }
 
 /** 状态局部轮询；只在文档版本变化时刷新阅读器，不让正文随 Agent 日志闪烁。 */
-export function OverallStoryTools({ taskId, canOperate, canceled, active, onOpen, onUpdated, onOpenTask }: {
-  taskId: string; canOperate: boolean; canceled: boolean; active: boolean;
-  onOpen(): void; onUpdated(): void; onOpenTask?(id: string): void;
+export function OverallStoryTools({ taskId, canOperate, canceled, onUpdated, onOpenTask }: {
+  taskId: string; canOperate: boolean; canceled: boolean;
+  onUpdated(): void; onOpenTask?(id: string): void;
 }) {
   const [status, setStatus] = useState<OverallStoryStatus>();
   const [error, setError] = useState("");
@@ -67,28 +67,23 @@ export function OverallStoryTools({ taskId, canOperate, canceled, active, onOpen
     catch (e) { setError(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(false); }
   }
-  const available = status?.sources.filter((s) => !s.missing).length ?? 0;
   if (status && !status.eligible) return null;
-  return <section className="overall-story-tools" aria-label="整体 Story">
+  return <section className="overall-story-tools" aria-label="全局 Story 维护">
     <div className="overall-story-bar">
-      <div className="overall-story-title"><span className="overall-story-icon" aria-hidden>▤</span>
-        <div><strong>整体 Story</strong><span>{status?.label ?? "读取文档状态…"}
-          {status && ` · ${available}/${status.sources.length} 份子任务 Story`}</span></div>
-      </div>
+      <span className="overall-story-status">{status?.label ?? "读取文档状态…"}</span>
       <div className="overall-story-actions">
-        {status?.current && !active && <button type="button" onClick={onOpen}>阅读整体 Story</button>}
-        {canOperate && !canceled && (status?.job
+        {canOperate && !canceled && status?.current && (status.job
           ? <button type="button" disabled={busy} onClick={() => void act("/stop")}>停止整理</button>
-          : <button type="button" className={!status?.current || status.stale ? "primary" : ""}
+          : <button type="button" className={status.stale ? "primary" : ""}
               disabled={busy || !status} onClick={() => void act("")}>
-              {busy ? "请求中…" : status?.current ? "更新整体 Story" : "生成整体 Story"}</button>)}
+              {busy ? "请求中…" : "更新 Story"}</button>)}
         <button type="button" className="overall-story-details" aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}>来源与版本 {expanded ? "⌃" : "⌄"}</button>
       </div>
     </div>
     {(error || status?.error) && <p className="overall-story-error" role="alert">{error || status?.error}</p>}
     {expanded && status && <div className="overall-story-detail">
-      <p>汇总原始需求、模块依赖和子任务 Story。子任务变化只提醒待同步，由责任人主动更新。可在正文划选批注，提交后由 Agent 修改整体 Story，再由意见作者复检。</p>
+      <p>维护全局设计、模块依赖和验收依据，子任务 Story 提供实现细化与变更反馈。子任务变化只提醒待同步，由责任人主动更新。可在正文划选批注，提交后由 Agent 修改整体 Story，再由意见作者复检。</p>
       <ul className="overall-story-sources">{status.sources.map((s) => <li key={s.id}>
         {s.task_id && onOpenTask ? <button type="button" onClick={() => onOpenTask(s.task_id!)}>{s.name} ↗</button> : <strong>{s.name}</strong>}
         <span className={s.missing ? "missing" : ""}>{s.missing ?? "Story 可读取"}</span>
@@ -102,7 +97,7 @@ export function OverallStoryTools({ taskId, canOperate, canceled, active, onOpen
         </select></label>
         {canOperate && status.current && status.confirmed?.revision !== status.current && <button type="button"
           disabled={busy || !status.can_confirm}
-          title={!status.can_confirm ? "来源全部就绪并同步、检视意见全部闭环后可以确认" : "确认当前版本的整体文档"}
+          title={!status.can_confirm ? "来源已同步、检视意见全部闭环后可以确认" : "确认当前版本的整体文档"}
           onClick={() => void act("/confirm")}>确认这版整体 Story</button>}
         {status.confirmed?.revision === status.current && <span>已由 {status.confirmed?.by} 确认</span>}
       </div>

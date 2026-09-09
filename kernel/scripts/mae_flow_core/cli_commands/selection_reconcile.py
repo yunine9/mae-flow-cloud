@@ -8,8 +8,7 @@ from .wiring import api
 from .host_receipts import save_with_host_proof
 from mae_flow_core.guard.manifest import (
     DeliveryManifest, validate_delivery_document_boundary)
-from mae_flow_core.orchestration.domain_archive import input_digest
-from mae_flow_core.orchestration.work_package import ensure_work_package
+from mae_flow_core.orchestration.domain_archive import candidate_from_dict, input_digest
 
 
 SELECTION_SCHEMA = "mae-flow-delivery-selection/1"
@@ -49,6 +48,17 @@ def _path_ids(paths):
     }
 
 
+def _same_selection(previous, payload):
+    # Replay in the recorded order: ordering is presentation, not a new decision.
+    # Hash all other fields unchanged, including the task, human, card and HEAD.
+    for key in ("paths", "excluded_paths"):
+        if set(payload.get(key) or ()) != set(previous.get(key) or ()):
+            return False
+    recorded_order = dict(payload, paths=previous.get("paths"),
+                          excluded_paths=previous.get("excluded_paths"))
+    return previous.get("payload_digest") == _selection_digest(recorded_order)
+
+
 def _domain_archive_unchanged(state, rejected_paths, payload):
     """Reset the formal archive projection after the user rejects its group."""
     archive = state.get("domain_archive") or {}
@@ -64,31 +74,40 @@ def _domain_archive_unchanged(state, rejected_paths, payload):
     if remaining:
         _die("领域归档拒绝项尚未从工作区恢复，不能只改状态账: "
              + "、".join(remaining))
-    ticket = _text(((state.get("config") or {}).get("单号")), "单号", 200)
-    package = ensure_work_package(os.getcwd(), ticket)
-    git_facts = "%s\n%s" % (
-        api.sh("git -c core.quotepath=false diff --no-ext-diff --binary HEAD -- ."),
-        api.sh("git -c core.quotepath=false status --porcelain --untracked-files=all"),
-    )
-    digest = input_digest(
-        os.getcwd(),
-        (package.spec, package.grill, package.story,
-         package.implementation, package.decisions),
-        git_facts, (),
-    )
-    state["domain_archive"] = {
+    remaining_paths = [path for path in applied if path.casefold() not in rejected_ids]
+    domains = [entry for entry in archive.get("domains") or ()
+               if str(entry.get("target_path", "") if isinstance(entry, dict)
+                      else "docs/specs/%s.md" % entry).casefold() not in rejected_ids]
+    record = dict(archive)
+    # Removing one group must preserve the remaining groups' content facts.
+    # Provenance alone never means that applying a document changed its bytes.
+    for key in ("changed_paths", "reapply_paths"):
+        if key in record:
+            record[key] = [path for path in record[key]
+                           if str(path).casefold() not in rejected_ids]
+    if "changed_paths" in record:
+        result = "changes" if record["changed_paths"] else "unchanged"
+    else:
+        result = archive.get("result", "unchanged") if remaining_paths else "unchanged"
+    record.update({
         "status": "applied",
-        "result": "unchanged",
-        "domains": [],
-        "input_sha256": digest,
-        "applied_paths": [],
-        "declined_paths": list(rejected),
+        "result": result,
+        "domains": domains,
+        "applied_paths": remaining_paths,
+        "declined_paths": sorted(set(archive.get("declined_paths") or ()) | set(rejected)),
         "authorization": {
             "mode": "cloud-delivery-selection",
             "waiting_id": payload.get("waiting_id"),
             "actor": payload.get("actor"),
         },
-    }
+    })
+    try:
+        entries = tuple(candidate_from_dict(os.getcwd(), entry) for entry in domains)
+        record["input_sha256"] = input_digest(os.getcwd(), (), "", entries)
+    except (KeyError, TypeError, ValueError):
+        # An incomplete archive projection must not veto the human's selection.
+        record.pop("input_sha256", None)
+    state["domain_archive"] = record
     _remove_declined_from_repair_authorizations(state, rejected)
     return tuple(rejected)
 
@@ -115,8 +134,6 @@ def _archive_rejections(state, paths, excluded):
     excluded_ids = _path_ids(excluded)
     rejected = [path for path in applied
                 if str(path).replace("\\", "/").casefold() in excluded_ids]
-    if rejected and _path_ids(paths) & _path_ids(applied):
-        _die("领域归档是一个原子组；不能只勾选其中一部分")
     return rejected
 
 
@@ -166,7 +183,8 @@ def reconcile_selection(state, args, *, load_payload, verify_host_proof,
     if _path_ids(paths) & _path_ids(excluded):
         _die("交付清单的勾选项与排除项重叠")
     digest = _selection_digest(payload)
-    if (state.get("delivery_selection") or {}).get("payload_digest") == digest:
+    previous = state.get("delivery_selection") or {}
+    if previous.get("payload_digest") == digest or _same_selection(previous, payload):
         save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": state_schema, "idempotent": True,
@@ -178,12 +196,9 @@ def reconcile_selection(state, args, *, load_payload, verify_host_proof,
     declined = _domain_archive_unchanged(state, rejected, payload)
     archive_paths = ((state.get("domain_archive") or {}).get("applied_paths")
                      or ())
-    try:
-        validate_delivery_document_boundary(paths, archive_paths)
-    except ValueError as exc:
-        _die(str(exc) + "；若是应交付的已有领域文档，执行 domain-archive prepare "
-             "--domain <领域> --adopt-existing --keyword <领域关键词>，"
-             "show 核对后 apply，再提交决定。")
+    findings = validate_delivery_document_boundary(paths, archive_paths)
+    for finding in findings:
+        history(state, str(state.get("current") or ""), "delivery-advisory", finding)
     _write_manifest(state, payload, paths)
     state["delivery_selection"] = {
         "schema": SELECTION_SCHEMA,

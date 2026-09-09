@@ -42,6 +42,8 @@ function closuresFor(props: Record<string, unknown>) {
     { username: string; display_name?: string }>;
   return annotationClosures(items, {
     task_status: String(props.taskStatus ?? "running"),
+    owner_controlled: Boolean(props.ownerControlled),
+    task_owner: String(props.taskOwner ?? "本地用户"),
     review_ready: Boolean(props.reviewReady),
     review_annotation_ids: (props.reviewAnnotationIds ?? []) as string[],
     archival: props.taskStatus === "completed",
@@ -618,7 +620,7 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
     Panel,
     { ...common, items: [ordinary] },
   ));
-  assert.match(html, /Agent 已再次回到人工检视/);
+  assert.match(html, /请核对最新材料与处理依据/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
 
@@ -770,7 +772,7 @@ test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时�
   ));
   assert.match(html, /待我确认/);
   assert.match(html, /2 项/);
-  assert.match(html, /Agent 已处理你提出的 2 条意见/);
+  assert.match(html, /本轮有 2 条意见待你逐条处置/);
   assert.match(html, /另有 1 条意见的当前轮逐条回执尚未就绪/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
@@ -871,4 +873,22 @@ test("代码意见定位直接选目标文件，折叠的上下文行仍渲染�
   assert.match(html, /data-l="110"/);
   assert.doesNotMatch(html, /class="diff-fold"/);
   assert.match(html, /data-code-side="new"/);
+});
+
+
+test("责任人逐条处置表单保留缺回执事实，检视人和管理员只能看处置状态", () => {
+  const pending = annotation({ author: "reviewer", response: undefined });
+  const props = { taskId: "owner-review", taskOwner: "owner", ownerControlled: true,
+    items: [pending], checks: [], taskStatus: "waiting_for_human", reviewReady: true,
+    reviewAnnotationIds: [pending.id], onChanged: () => undefined };
+  const html = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername: "owner" }));
+  assert.match(html, /确认这条处置/);
+  assert.match(html, /这条意见的处理依据/);
+  assert.match(html, /当前轮逐条回执尚未就绪/);
+  assert.doesNotMatch(html, /Agent 已处理本轮|Agent 已处理你提出/);
+  for (const viewerUsername of ["reviewer", "admin"]) {
+    const readonly = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername, canOverride: true }));
+    assert.doesNotMatch(readonly, /确认这条处置|管理员代确认|管理员代删/);
+    assert.match(readonly, /待责任人逐条处置/);
+  }
 });

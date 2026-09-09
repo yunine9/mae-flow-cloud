@@ -1,6 +1,7 @@
 """Delivery Evidence policies with explicit repository ports."""
 
 import re
+from .archive_commit import committed_archive_receipt
 from dataclasses import dataclass
 
 from ..foundation.models import EvidenceResult
@@ -99,12 +100,17 @@ def _unchanged_manifest_result(
         manifest.get("no_changes") is True
         and manifest.get("confirmed") is True
         and archive.get("status") == "applied"
-        and archive.get("result") == "unchanged"
-        and not (archive.get("applied_paths") or ())
     )
     if not valid:
         return EvidenceResult(
             False, "尚未生成精确交付清单；先执行 manifest set")
+
+    try:
+        receipt = committed_archive_receipt(archive)
+    except ValueError as exc:
+        return EvidenceResult(False, str(exc))
+    if receipt != (manifest.get("committed_archive_receipt") or {}):
+        return EvidenceResult(False, "归档提交内容已变化；执行 manifest set --unchanged 更新已提交文件凭证")
 
     def normalize(path):
         return str(path).replace("\\", "/").casefold()
@@ -123,7 +129,7 @@ def _unchanged_manifest_result(
         return EvidenceResult(
             False, "空交付清单之后仍有新增未提交文件: "
             + "、".join(leaked[:8]))
-    return EvidenceResult(True, "领域归档 unchanged，无需创建空提交")
+    return EvidenceResult(True, "归档文件已就绪，无需创建空提交；已有提交继续交付")
 
 
 class DeliveryEvidenceRules:
@@ -281,105 +287,11 @@ class DeliveryEvidenceRules:
             )
         return None
 
-    def _push_committed_result(self, state):
-        carried, error = self.ports.committed_initial_carryover(state)
-        if error:
-            return EvidenceResult(
-                False, "无法核对是否夹带上一单遗留文件:" + error)
-        if carried:
-            return EvidenceResult(
-                False,
-                "远端提交夹带了流程启动前已存在、且本单 Agent 未实际改写的文件: "
-                + "、".join(carried[:8])
-                + ("…" if len(carried) > 8 else "")
-                + "。这通常是上一单选择“不上传”后遗留的文件。"
-                "请用普通后续提交精确移除这些文件并重新 push；"
-                "不要 amend/rebase/force-push 改写已检视历史。"
-                "若本单确实需要它，先让 Agent 按本单需求实际修改并重新检视",
-            )
-        paths, error = self.ports.committed_delivery_paths(state)
-        if error:
-            return EvidenceResult(
-                False, "无法核对已推送 OpenSpec 的归属:" + error)
-        foreign = [
-            path for path in paths
-            if path.startswith("openspec/")
-            and not self.ports.trusted_harness_commit_path(path, state)
-        ]
-        if foreign:
-            return EvidenceResult(
-                False,
-                "远端提交含不属于当前 CHANGE_NAME/本次归档的 OpenSpec 文件: "
-                + "、".join(foreign[:8])
-                + ("…" if len(foreign) > 8 else "")
-                + "。请用普通后续提交精确移除并重新 push；"
-                "STORY 不入库时应移入 .mae-flow-work/story",
-            )
-        return None
-
-    def _changed_during_flow(self, state):
-        current = set(self.ports.dirty_paths())
-        initial = set(state.get("initial_dirty", []))
-        if "initial_dirty" not in state:
-            return current
-        fingerprints = (
-            state.get("initial_dirty_fingerprints", {}) or {})
-        changed_initial = set()
-        if fingerprints:
-            changed_initial = {
-                path for path in current & initial
-                if fingerprints.get(path)
-                != self.ports.path_fingerprint(path)
-            }
-        return (current - initial) | changed_initial
-
-    def _push_dirty_result(self, state):
-        changed = self._changed_during_flow(state)
-        written = self.ports.agent_written_paths()
-        dirty = {
-            path for path in changed
-            if (
-                self.ports.repo_path_identity(path) in written
-                or self.ports.trusted_harness_commit_path(path, state)
-            )
-        }
-        story_mode = str(
-            state.get("config", {}).get("STORY入库", "")).lower()
-        if any(value in story_mode for value in (
-                "不生成", "不入库", "不提交", "no", "false")):
-            story = "docs/story/STORY-%s.md" % (
-                state.get("config", {}).get("单号", ""))
-            tracked = self.ports.argv_output([
-                "git", "ls-tree", "-r", "--name-only",
-                "HEAD", "--", story])
-            if tracked:
-                return EvidenceResult(
-                    False,
-                    "STORY 已确认不入库，但 %s 仍在当前提交中。"
-                    "用 git rm --cached 精确移出索引并按单号提交修正；"
-                    "本地文件可以保留。" % story,
-                )
-            dirty = {
-                path for path in dirty
-                if not path.startswith("docs/story/")
-            }
-        if dirty:
-            return EvidenceResult(
-                False,
-                "仍有 Agent 实际写入或流程明确维护的交付候选未处理，"
-                "远端不包含这些变化: "
-                + "、".join(sorted(dirty)[:8])
-                + "。逐个查看 diff：需要交付的精确提交，不需要的撤销修改；"
-                "候选范围不代表必须全部提交。",
-            )
-        return None
-
     def pushed(self, _spec, state):
-        evaluators = [self._push_committed_result, self._push_dirty_result]
+        # Publication is a Git/platform fact. File provenance, local leftovers
+        # and earlier archive preferences cannot overrule the human selection.
         if self.ports.push_runs_locally(state):
-            evaluators.insert(0, self._push_head_result)
-        for evaluator in evaluators:
-            result = evaluator(state)
+            result = self._push_head_result(state)
             if result is not None:
                 return result
         return EvidenceResult(True, "")

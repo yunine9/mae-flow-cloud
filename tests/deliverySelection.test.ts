@@ -183,6 +183,14 @@ test("非 push 检视调整清单:宿主机械整理并等待重新编译", asyn
     assert.ok(!dirty.includes("README.md")
       && !dirty.includes("target/classes/Feature.class"),
       `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
+    const excludedNames = ["本地 说明.md", 'local "quote".md', "local -> notes.md", "local\nnotes.md"];
+    for (const name of excludedNames) writeFileSync(join(repo.cwd, name), "keep locally\n");
+    internal.summary.delivery_selection.excluded_paths.push(...excludedNames);
+    const activeName = '实际 "修改".md';
+    writeFileSync(join(repo.cwd, activeName), "real pending edit\n");
+    const exactDirty = await (service as any).prePushDirtyPaths(internal);
+    for (const name of excludedNames) assert.ok(!exactDirty.includes(name), name);
+    assert.ok(exactDirty.includes(activeName), "Git 原始路径不能被引号转义或截断");
 
     // 新 HEAD 明确回到 preparing，下一次交付统一重新编译。
     const prepush = service.get(id)?.delivery?.prepush;

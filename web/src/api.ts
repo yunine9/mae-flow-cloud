@@ -971,6 +971,7 @@ export interface TaskSummary {
     plan_revision?: string;
     sync_required?: boolean;
     chain_sha256?: string;
+    source_document?: "story.md" | "chain";
     projection_sha256?: string;
     repository_assessments?: Array<{
       name: string; url: string;
@@ -979,7 +980,7 @@ export interface TaskSummary {
     }>;
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string;
-      /** Agent 分析出的模块交付单元及其负责文件面。 */
+      /** Agent 分析出的功能模块和可选代码参考位置。 */
       scope?: { name: string; paths: string[] };
       assignee?: string; ticket?: string; task_id?: string;
       task_status?: TaskStatus; current_phase?: string;
@@ -1050,7 +1051,7 @@ export interface TaskSummary {
     prepush_runtime?: PrepushRuntime;
     /** 当前 push 检视的阅读导航；授权仍由 delivery_selection 决定。 */
     push_review?: PushReviewPresentation;
-    /** 越界改动待主责任人裁决(单仓拆分负责面门禁)。 */
+    /** 历史目录限制卡，恢复或继续验证时清理。 */
     scope_violation?: { paths: string[]; noted_at: string };
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
@@ -2721,6 +2722,9 @@ export interface Annotation {
     text: string;
     replied_at: string;
   };
+  resolution?: { revision: number; outcome: "fixed" | "not_adopted" | "deferred" | "accepted_risk"; reason: string; by: string; at: string };
+  needs_owner_closure?: boolean;
+  withdrawal_requested?: { by: string; at: string };
   verified_at?: string;
   /** 非作者代确认时的实际操作者；缺席表示由意见作者本人确认。 */
   verified_by?: string;
@@ -2764,6 +2768,8 @@ export interface AnnotationClosure {
   verdict_ready: boolean;
   actionable: boolean;
   can_verify: boolean;
+  owner_controlled?: boolean;
+  can_resolve?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
   can_route: boolean;
@@ -2954,11 +2960,12 @@ export async function editAnnotation(
 export async function judgeAnnotation(
   taskId: string,
   annotationId: string,
-  verdict: "verify" | "reopen",
+  verdict: "verify" | "reopen" | "resolve",
+  decision?: { revision: number; outcome?: string; reason?: string },
 ): Promise<{ error?: string }> {
   const response = await fetch(
     `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}/${verdict}`,
-    { method: "POST" });
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(decision ?? {}) });
   if (!response.ok) {
     const body = await errorBody(response);
     return { error: String(body.error ?? `HTTP ${response.status}`) };
@@ -4462,12 +4469,13 @@ export type ConversationItem =
     }
   | {
       kind: "verified"; id: string; ts: string;
-      annotation: ConversationAnnotationRef; by?: string;
+      annotation: ConversationAnnotationRef; by?: string; resolution?: Annotation["resolution"];
     }
   | {
       kind: "reopened"; id: string; ts: string;
-      annotation: ConversationAnnotationRef; note?: string; returned: number;
+      annotation: ConversationAnnotationRef; note?: string; returned: number; by?: string;
     }
+  | { kind: "withdrawal_requested"; id: string; ts: string; annotation: ConversationAnnotationRef; by: string }
   | { kind: "revised"; id: string; ts: string; annotation: ConversationAnnotationRef }
   | { kind: "delivery_reset"; id: string; ts: string; annotation: ConversationAnnotationRef; reason: string }
   | {

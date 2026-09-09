@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createWish,
@@ -386,7 +387,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
             <div className="wish-card-body">
               <header>
                 <span className={`wish-kind ${item.kind}`}>{item.kind === "wish" ? "诉求" : "问题"}</span>
-                <span className="wish-card-meta"><strong>{item.author}</strong><i>·</i><time title={formatLocalDateTime(item.created_at)}>{relativeTime(item.created_at)}</time></span>
+                <span className="wish-card-meta"><strong><PersonName account={item.author} /></strong><i>·</i><time title={formatLocalDateTime(item.created_at)}>{relativeTime(item.created_at)}</time></span>
               </header>
               <h3>{item.title}</h3>
               {item.detail && !expanded && <p className="wish-card-detail">{item.detail}</p>}

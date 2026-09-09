@@ -7,6 +7,8 @@ import tempfile
 import time
 
 from mae_flow_core import atomic_write_json
+from mae_flow_core.workflow.advisories import record_advisory
+from mae_flow_core.workflow.authority import advisory_message
 from mae_flow_core.application.hooks.event_policies import (
     active_pretool_decision,
     agent_kind,
@@ -18,10 +20,6 @@ from mae_flow_core.application.hooks.event_policies import (
 )
 from mae_flow_core.application.hooks.models import HookResponse
 from mae_flow_core.adapters.hook_failures import hook_failure
-from mae_flow_core.application.hooks.task_cards import (
-    verify_agent_scope,
-    verify_dispatch_task,
-)
 from mae_flow_core.file_io import (
     load_json,
     read_lines,
@@ -131,23 +129,9 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
             return HookResponse()
         try:
             state = self.runtime._contract_state()
-            decision = (
-                verify_dispatch_task(kind, state, self.task_card_ports())
-                if kind in (
-                    "STORY", "REVIEWER",
-                    "CODECHECK", "UT",
-                    "GRILL", "GRILL_PREP", "GRILL_FINAL",
-                )
-                else None
-            )
-            response = (
-                HookResponse()
-                if decision is None or decision.accepted
-                else HookResponse(exit_code=2, stderr=decision.reason + "\n")
-            )
-            if response.exit_code == 0:
-                self._record_agent_start(payload, kind, state)
-            return response
+            # Task cards guide the Agent; they do not grant permission to think.
+            self._record_agent_start(payload, kind, state)
+            return HookResponse()
         except Exception as exc:
             reason = "Agent 启动授权/观察登记失败: %s" % exc
             self.log(reason)
@@ -317,34 +301,9 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
             payload, invocation_id, project_root=self.repository_root)
 
     def _scope_violation(self, payload, invocation_id):
-        """Check repository writes without interpreting the Agent response."""
-        started = started_observation(self.state, invocation_id) or {}
-        kind = str(started.get("kind", "") or "")
-        if not kind:
-            return ""
-        state = self.runtime._contract_state()
-        task = (state.get("agent_tasks", {}) or {}).get(kind, {}) or {}
-        if not task:
-            return ""
-        direct_write_paths = ()
-        path = self._explicit_transcript_path(payload, invocation_id)
-        if path:
-            try:
-                calls = parse_transcript(
-                    self._load_agent_transcript(path)).tool_calls
-                direct_write_paths = successful_direct_write_paths(
-                    calls, self.repository_root)
-            except Exception as exc:
-                self.log(
-                    "scope transcript EXC(use repository facts): %s" % exc)
-        decision = verify_agent_scope(
-            kind,
-            task,
-            state,
-            self.task_card_ports(),
-            direct_write_paths=direct_write_paths,
-        )
-        return "" if decision.accepted else decision.reason
+        # Work is reviewed as a whole. A per-Agent task-card path list is not
+        # another authorization boundary; the workspace sandbox still applies.
+        return ""
 
     def subagentstop(self, payload):
         return self.agent_lifecycle.complete(payload)
@@ -366,14 +325,15 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
             return HookResponse()
         if decision.accepted:
             return HookResponse()
-        return HookResponse(
-            exit_code=2,
-            stderr=(
-                "[mae-flow] %s 结构与模板不符,缺少章节: %s。"
-                "请补齐缺失章节(无内容的章节按约定标注,不可省略标题)。\n"
-                % (label, " | ".join(decision.missing))
-            ),
-        )
+        message = advisory_message("%s 模板建议章节缺失: %s"
+                                   % (label, " | ".join(decision.missing)))
+        try:
+            state = self.runtime._contract_state()
+            record_advisory(self.state, state.get("current", ""), "template", message,
+                            time.strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception as exc:
+            self.log("模板提示记录失败: " + str(exc))
+        return HookResponse(stderr=message + "\n")
 
     def _panel_sync(self, written_path="", command=""):
         panel_sync.on_tool_event(

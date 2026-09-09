@@ -132,7 +132,7 @@ async function until(
 }
 
 /** 本地人工意见触发的修改统一在 push 前回到意见作者手里。测试辅助只
- * 代演真实交互：逐条作者确认，再由任务责任人确认最终代码。 */
+ * 代演真实交互：责任人逐条处置，再由任务责任人确认最终代码。 */
 async function closeWorkspaceReview(
   service: TaskService,
   id: string,
@@ -142,7 +142,7 @@ async function closeWorkspaceReview(
     && service.get(id)?.waiting?.step === "cloud_push_confirm",
   "人工意见修改后进入复检");
   for (const annotation of annotations) {
-    service.verifyAnnotation(id, annotation.id, annotation.author);
+    service.verifyAnnotation(id, annotation.id, service.get(id)?.luban_account ?? "本地用户");
   }
   const waiting = service.get(id)!.waiting!;
   const question = (waiting.question as any).questions[0].question;

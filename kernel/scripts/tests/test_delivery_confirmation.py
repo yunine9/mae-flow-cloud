@@ -90,10 +90,6 @@ class DeliveryConfirmationTests(unittest.TestCase):
             delivery_manifest, "build_unchanged_delivery_manifest", None)
         self.assertIsNotNone(builder)
         cases = (
-            ({"status": "prepared", "result": "unchanged",
-              "applied_paths": []}, (), "尚未应用"),
-            ({"status": "applied", "result": "changes",
-              "applied_paths": ["docs/specs/radio.md"]}, (), "不是 unchanged"),
             ({"status": "applied", "result": "unchanged",
               "applied_paths": []}, ("src/leak.cpp",), "新增未提交"),
         )
@@ -175,66 +171,8 @@ class DeliveryConfirmationTests(unittest.TestCase):
     def test_compile_logs_are_recognised_as_strong_build_artifacts(self):
         self.assertEqual("strong", _build_artifact_confidence("build/compile.log"))
 
-    def test_startup_dirty_requires_explicit_natural_language_adoption(self):
-        with self.assertRaisesRegex(ValueError, "启动时已有修改"):
-            build_delivery_manifest(
-                self.state(), ["docs/user-notes.md"], "docs: update", "main",
-                (), candidate_paths=("docs/user-notes.md",))
 
-        manifest = build_delivery_manifest(
-            self.state(), ["docs/user-notes.md"], "docs: update", "main",
-            ("docs/user-notes.md=用户确认属于本需求",),
-            candidate_paths=("docs/user-notes.md",))
-
-        self.assertEqual(
-            {"docs/user-notes.md": "用户确认属于本需求"},
-            manifest["adopted_dirty"])
-
-    def test_manifest_rejects_files_outside_old_candidate_ownership(self):
-        with self.assertRaisesRegex(ValueError, "不在当前候选增量"):
-            build_delivery_manifest(
-                self.state(), ["src/unrelated.cpp"], "feat: unrelated", "main",
-                (), candidate_paths=("src/a.cpp",))
-
-    def test_manifest_rejects_every_process_document_family(self):
-        forbidden = (
-            ".mae-flow-dependencies.md", ".mae-flow-issue.md",
-            ".mae-flow-order.json", ".mae-flow-history.jsonl",
-            ".mae-flow.json.agent-observations", ".codecheckcli/report.json",
-            ".mae-flow-work/REQ-42/spec.md",
-            "docs/clarifications-REQ-42.md",
-            "docs/review/REVIEW-REQ-42.md",
-            "docs/codecheck-exempt-REQ-42.md",
-            "docs/delivery-notes.md",
-            "docs/story/STORY-REQ-42.md",
-            "docs/superpowers/plans/plan.md",
-            "openspec/changes/change/change.md",
-            "openspec/specs/domain/spec.md",
-        )
-        for path in forbidden:
-            with self.subTest(path=path), self.assertRaisesRegex(
-                    ValueError, "过程文件"):
-                build_delivery_manifest(
-                    self.state(), [path], "docs: process", "main", (),
-                    candidate_paths=(path,))
-
-    def test_docs_specs_requires_exact_current_archive_output(self):
-        path = "docs/specs/radio.md"
-        with self.assertRaisesRegex(ValueError, "领域归档"):
-            build_delivery_manifest(
-                self.state(), [path], "docs: truth", "main", (),
-                candidate_paths=(path,))
-        state = self.state()
-        state["domain_archive"] = {
-            "status": "applied", "result": "changes",
-            "applied_paths": [path],
-        }
-        manifest = build_delivery_manifest(
-            state, [path], "docs: truth", "main", (),
-            candidate_paths=(path,))
-        self.assertEqual([path], manifest["files"])
-
-    def test_change_clears_confirmation_once_and_identical_set_keeps_it(self):
+    def test_commit_wording_does_not_invalidate_file_selection(self):
         state = self.state()
         state["delivery_manifest"] = {
             "files": ["src/a.cpp"],
@@ -252,9 +190,9 @@ class DeliveryConfirmationTests(unittest.TestCase):
             candidate_paths=("src/a.cpp",))
 
         self.assertTrue(same["confirmed"])
-        self.assertFalse(changed["confirmed"])
+        self.assertTrue(changed["confirmed"])
         state["delivery_manifest"] = changed
-        self.assertFalse(build_delivery_manifest(
+        self.assertTrue(build_delivery_manifest(
             state, ["src/a.cpp"], "feat: A revised", "main", (),
             candidate_paths=("src/a.cpp",))["confirmed"])
 

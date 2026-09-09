@@ -111,6 +111,19 @@ class StaleSubjectAckTests(unittest.TestCase):
         self.assertEqual("b", receipt_choice(step, receipt, "方案乙，执行"))
         self.assertEqual("", receipt_choice(step, receipt, "不存在的方案，执行"))
 
+    def test_direct_human_reply_does_not_need_to_repeat_standard_button(self):
+        for answer in ("可以", "确认并继续", "没问题", "确认 并继续", "确认\n并继续", " 没 问题 "):
+            row = ledger_row("n" * 64)
+            row["text"] = answer
+            self._write_ledger([row])
+            with in_directory(self.temp.name):
+                self.assertEqual((True, ""), _implicit_ack_verified(self.step, self.state))
+        for answer in ("不确认", "什么意思？", "需要调整"):
+            row["text"] = answer
+            self._write_ledger([row])
+            with in_directory(self.temp.name):
+                self.assertFalse(_implicit_ack_verified(self.step, self.state)[0])
+
     def test_matching_stamp_still_passes(self):
         self._write_ledger([ledger_row("n" * 64)])
         with in_directory(self.temp.name):

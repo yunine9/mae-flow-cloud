@@ -126,29 +126,29 @@ def main():
              "黑事件原型:提交 proposal.md 放行"),
             ("git add openspec/changes/probe-x/change.md", True,
              "v5 同形态:提交 change.md 放行"),
-            ('git add openspec/ && git commit -m "[REQ probe][fix]归档"', False,
-             "整目录 OpenSpec 提交被拦"),
+            ('git add openspec/ && git commit -m "[REQ probe][fix]归档"', True,
+             "整目录提交不再由流程文件分类否决"),
             ("mkdir openspec/changes/fake", True,
              "手动创建 openspec 不再拦(历史包袱规则已退役)"),
-            ('git commit -m "错误格式"', False,
-             "错误格式在提交那一刻拦(不是 done 才发现)"),
-            ('git commit --message="错误格式"', False,
-             "--message= 长参数形态同样实时拦"),
+            ('git commit -m "错误格式"', True,
+             "提交说明格式不再阻断本地提交"),
+            ('git commit --message="错误格式"', True,
+             "--message= 长参数形态同样放行"),
             ('git commit -m "[REQ probe][fix]合规提交"', True,
              "合规提交放行")):
         r = gate_bash(root, cmd)
         ok = (r.returncode == 0) == expect_ok
         check("提交链: " + name, ok, (r.stdout + r.stderr)[-150:])
 
-    # ---------- 1c. 提交候选约束（Agent 实际写过 ≠ 必须交，没写过默认可疑） ----------
+    # ---------- 1c. 来源/产物分类不再否决本地提交或擅改暂存区 ----------
     root = make_repo(base, "artifact-strong", "build")
     write(root, "build/CMakeFiles/Foo.dir/Foo.cpp.o", "binary-ish")
     subprocess.run(
         ["git", "add", "build/CMakeFiles/Foo.dir/Foo.cpp.o"],
         cwd=root, check=True, capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]编译修复"')
-    check("提交产物:新增 .o/CMakeFiles 高置信产物被拦",
-          r.returncode != 0 and "临时编译产物" in (r.stdout + r.stderr),
+    check("提交产物:新增 .o/CMakeFiles 不触发分类否决",
+          r.returncode == 0,
           (r.stdout + r.stderr)[-300:])
 
     root = make_repo(base, "artifact-compound", "build")
@@ -156,8 +156,8 @@ def main():
     r = gate_bash(
         root,
         'git add module/cache/Foo.obj && git commit -m "[REQ probe][fix]编译修复"')
-    check("提交产物:同一 Bash 内 add+commit 仍能提前拦截",
-          r.returncode != 0 and "Foo.obj" in (r.stdout + r.stderr),
+    check("提交产物:复合 add+commit 不因文件来源被拦",
+          r.returncode == 0,
           (r.stdout + r.stderr)[-300:])
 
     root = make_repo(base, "artifact-direct-write", "build")
@@ -173,8 +173,8 @@ def main():
         ["git", "add", "build/CMakeFiles/Foo.dir/Foo.cpp.o"],
         cwd=root, check=True, capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]测试夹具"')
-    check("提交候选:Agent 明确写过的产物不硬拦但仍提示复核",
-          r.returncode == 0 and "不代表必须提交" in (r.stdout + r.stderr),
+    check("提交候选:Agent 明确写过的产物正常放行",
+          r.returncode == 0,
           (r.stdout + r.stderr)[-300:])
 
     root = make_repo(base, "artifact-ambiguous", "build")
@@ -183,8 +183,8 @@ def main():
         ["git", "add", "dist/app.js"], cwd=root, check=True, capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]发布产物"')
     out = r.stdout + r.stderr
-    check("提交产物:Agent 没写过的输出目录候选被拦且给出放行编号",
-          r.returncode != 0 and "从未直接改写过" in out and "拦截编号" in out,
+    check("提交产物:来源记录缺失不制造额外授权",
+          r.returncode == 0 and "拦截编号" not in out,
           out[-300:])
 
     root = make_repo(base, "artifact-source", "build")
@@ -192,8 +192,8 @@ def main():
     subprocess.run(
         ["git", "add", "src/Foo.cpp"], cwd=root, check=True, capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]正常源码"')
-    check("提交候选:未记录的正常源码只提示、不漏提交",
-          r.returncode == 0 and "实际改写的候选范围" in (r.stdout + r.stderr),
+    check("提交候选:未记录的正常源码正常放行",
+          r.returncode == 0,
           (r.stdout + r.stderr)[-300:])
 
     root = make_repo(base, "compile-side-effect", "build")
@@ -208,8 +208,8 @@ def main():
     r = gate_bash(
         root,
         'git add internal/generated/build.properties && git commit -m "[REQ probe][fix]编译副作用"')
-    check("提交产物:记录的 COMPILE 副作用阻断精确提交",
-          r.returncode != 0 and generated in (r.stdout + r.stderr),
+    check("提交产物:COMPILE 副作用记录不否决精确提交",
+          r.returncode == 0,
           (r.stdout + r.stderr)[-300:])
 
     root = make_repo(base, "compile-side-effect-staged", "build")
@@ -227,8 +227,10 @@ def main():
                    capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]编译副作用"')
     output = r.stdout + r.stderr
-    check("提交产物:已暂存 COMPILE 副作用给出 restore 且不写 strike/permit",
-          r.returncode != 0 and "git restore --staged --" in output
+    check("提交产物:已暂存 COMPILE 副作用不阻断、不签发额外许可",
+          r.returncode == 0
+          and generated in subprocess.check_output(
+              ["git", "diff", "--cached", "--name-only"], cwd=root, text=True)
           and not os.path.exists(os.path.join(root, ".mae-flow.json.gate-strikes"))
           and not os.path.exists(os.path.join(root, ".mae-flow.json.gate-permits")),
           output[-300:])
@@ -253,9 +255,8 @@ def main():
     staged = subprocess.run(
         ["git", "diff", "--cached", "--name-only"], cwd=root, text=True,
         check=True, capture_output=True).stdout
-    check("提交产物:复合命令在暂存前阻断并要求移出 add 清单",
-          r.returncode != 0 and generated in output and "git add" in output
-          and "git restore --staged --" not in output and not staged.strip(),
+    check("提交产物:复合命令放行且预检不替 Agent 暂存文件",
+          r.returncode == 0 and not staged.strip(),
           output[-300:])
 
     root = make_repo(base, "compile-side-effect-many", "build")
@@ -274,9 +275,10 @@ def main():
                    capture_output=True)
     r = gate_bash(root, 'git commit -m "[REQ probe][fix]编译副作用"')
     output = r.stdout + r.stderr
-    check("提交产物:九个 COMPILE 副作用全部列出并可 restore",
-          r.returncode != 0 and "git restore --staged --" in output
-          and all(generated in output for generated in generated_paths),
+    staged = subprocess.check_output(
+        ["git", "diff", "--cached", "--name-only"], cwd=root, text=True).splitlines()
+    check("提交产物:批量 COMPILE 副作用放行且暂存清单原样保留",
+          r.returncode == 0 and set(staged) == set(generated_paths),
           output[-600:])
 
     # ---------- 2. 证据全路径（importlib 直调，selftest 同款） ----------

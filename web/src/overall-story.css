@@ -1,10 +1,7 @@
 @layer legacy {
-.overall-story-tools { flex: 0 0 auto; margin: 12px 18px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface, #fff); box-shadow: 0 2px 8px #45338506; }
-.overall-story-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 16px; }
-.overall-story-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.overall-story-icon { color: var(--ink); background: var(--surface-3); border-radius: 9px; padding: 8px 11px; font-size: 21px; }
-.overall-story-title strong { display: block; font-size: 14px; line-height: 1.5; color: var(--text-strong); }
-.overall-story-title div > span { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.overall-story-tools { flex: 0 0 auto; margin: 0 18px; border-bottom: 1px solid var(--line); background: var(--surface, #fff); }
+.overall-story-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
+.overall-story-status { font-size: 12px; color: var(--muted); }
 .overall-story-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .overall-story-tools button { min-height: 32px; padding: 6px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; box-shadow: 0 1px 3px #30266509; }
 .overall-story-tools button:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }

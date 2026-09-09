@@ -28,6 +28,7 @@ interface Options<T extends Owner> {
   artifactRoot(id: string): string | undefined;
   run(task: T, job: StoryRun): Promise<void>;
   ready(): void;
+  published?(task: T, content: string, revision: string): void;
   log?(message: string): void;
 }
 
@@ -37,6 +38,8 @@ export function collectStoryInput<T extends Owner>(task: T, options: Pick<Option
   const files: Record<string, string> = { "requirement.md": task.summary.requirement };
   files["decomposition.json"] = JSON.stringify({ repositories: graph?.repositories.map((r) => ({
     id: r.id, name: r.name, task_id: r.task_id, scope: r.scope,
+    // 旧汇总稿保持原输入摘要形态，升级本身不能把历史设计标成过期。
+    ...(graph.source_document === "story.md" ? { responsibility: r.responsibility } : {}),
   })), dependencies: graph?.dependencies }, null, 2);
   const sources: StorySnapshot["sources"] = (graph?.repositories ?? []).map((r, index) => {
     const source: StorySnapshot["sources"][number] = { id: r.id, name: r.name, task_id: r.task_id };
@@ -71,7 +74,34 @@ export class OverallStoryCoordinator<T extends Owner> {
   private store(task: T) { return new AnnotationStore(join(task.summary.workspace, "annotations.jsonl")); }
   private eligible(task: T) { return !task.summary.parent_task_id
     && task.summary.requirement_graph?.stage === "confirmed"
-    && Boolean(task.summary.requirement_graph.repositories.length); }
+    && (task.summary.requirement_graph.source_document === "story.md"
+      || Boolean(task.summary.requirement_graph.repositories.length)); }
+  /** 分析 Agent 的 Story 直接进入现有版本库，不再等待子任务后另写汇总。 */
+  adoptAnalysis(id: string, content: string, by: string): void {
+    const task = this.owner(id);
+    if (this.active.has(id)) throw new TaskControlError("整体 Story 正在更新，请稍后重试");
+    const state = this.recover(task);
+    if (state.current) {
+      const published = readCurrentStory(task.summary.workspace);
+      if (published) this.options.published?.(task, published, state.current);
+      return; // 重试不覆盖已发布版本，但补齐派生材料和通知。
+    }
+    const input = collectStoryInput(task, this.options);
+    const revision = randomUUID(), path = storyRevisionPath(task.summary.workspace, revision);
+    const diff = requirementDiff("", content);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content, { mode: 0o600 });
+    writeFileSync(join(dirname(path), "inputs.json"), JSON.stringify(input), { mode: 0o600 });
+    writeFileSync(join(dirname(path), "receipts.json"), "[]", { mode: 0o600 });
+    writeFileSync(storyRevisionPath(task.summary.workspace, revision, "diff.patch"), diff.text, { mode: 0o600 });
+    state.revisions.push({ id: revision, at: new Date().toISOString(), by,
+      fingerprint: input.fingerprint, sources: input.sources, annotation_ids: [],
+      additions: diff.additions, deletions: diff.deletions });
+    state.current = revision;
+    state.confirmed = { revision, by, at: new Date().toISOString() };
+    writeStoryState(task.summary.workspace, state);
+    this.options.published?.(task, content, revision);
+  }
   private mutable(task: T) {
     if (task.summary.parent_task_id) throw new TaskControlError("请在主任务中生成、更新或确认整体 Story");
     if (this.stopped || this.options.task(task.summary.id) !== task || task.summary.status === "canceled") throw new TaskControlError("任务已停止，不能更新整体 Story");
@@ -112,7 +142,8 @@ export class OverallStoryCoordinator<T extends Owner> {
     const stale = Boolean(current && current.fingerprint !== input.fingerprint);
     const pending = this.store(task).list().filter((a) => a.artifact === OVERALL_STORY_ARTIFACT
       && ["draft", "sent"].includes(a.status)).length;
-    const complete = input.sources.length > 0 && input.sources.every((s) => !s.missing);
+    const complete = task.summary.requirement_graph?.source_document === "story.md"
+      || (input.sources.length > 0 && input.sources.every((s) => !s.missing));
     return { ...state, eligible: this.eligible(task), sources: input.sources, stale, pending_reviews: pending,
       can_confirm: Boolean(this.eligible(task) && current && complete && !stale && !this.active.has(id) && !state.job && !pending && task.summary.status !== "canceled"),
       label: this.active.has(id) || state.job ? "Agent 正在整理整体 Story" : !current ? "尚未生成整体 Story"
@@ -191,6 +222,8 @@ export class OverallStoryCoordinator<T extends Owner> {
           store.markSent([receipt.annotation_id], "overall_story");
           store.respond(receipt.annotation_id, { ...receipt, evidence: receipt.evidence ?? [] });
         }
+        // 子任务同步是发布后的副作用；失败可重试，但不能抹掉已经发布的处理回执。
+        this.options.published?.(task, after, jobId);
       }
     }).catch((error) => {
       // 清空重跑/删除可能已替换任务，不允许旧回调重新创建工作区或污染新任务。

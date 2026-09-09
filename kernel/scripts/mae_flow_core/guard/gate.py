@@ -118,14 +118,11 @@ def _flow_head_decision(context):
 
 
 def _source_edit_decision(context):
-    """步骤级"本步禁改源码"已整体退役(2026-08-28 用户拍板"编码阶段
-    自由,这种门禁都放开")。实锤:流水线 RED 修复窗口里,内核给
-    commit/add 签了精确范围授权(external_repair_gate),edit 闸却按
-    external_verify 的 allow_source_edit=False 把改码拦死——修复
-    Agent"能提交不能编辑",只能在夹缝里乱撞。交付链内的编辑自由交还
-    给 Agent;完整性由三道不动的闸把守:头部纪律(_flow_head_decision,
-    配置未定禁写)、绝对保护(流程状态文件)、提交侧范围闸(修复窗口
-    精确提交/交付清单)——拦"交付什么",不拦"改什么"。"""
+    """交付链内不按步骤冻结源码编辑，也不恢复已退役的精确提交闸。
+
+    配置未定默认禁写由 _flow_head_decision 处理；流程状态文件仍受
+    保护。流程推进、必要人工决定和真实交付事实在各自入口核对。
+    """
     return None
 
 
@@ -197,6 +194,14 @@ def _delivery_host_command_decision(context):
 
 
 def _bash_absolute_decision(context):
+    if context.writeish and context.hits_internal_state:
+        return _absolute(
+            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告和任务内"
+            "只读 Skill/模板资源由 mae-flow 或宿主维护,禁止经 Bash 改写/删除"
+            "(待重启标记只能靠重启会话清;"
+            "仓库预设决定门禁口径,流程外走正常评审提交)。"
+            "要推进或纠正流程请执行 current 按本步指引走。",
+            rule="bash-internal-state-write")
     command = context.command
     decision = (_pipeline_record_decision(context)
                 or _user_intervention_decision(context)
@@ -236,14 +241,6 @@ def _bash_absolute_decision(context):
             "全局版本随上游发布漂移(版本锁失效);init 还会交互式生成工具目录污染"
             "仓库。请使用 current 给出的 capability openspec 命令。",
             rule="bash-global-openspec")
-    if context.writeish and context.hits_internal_state:
-        return _absolute(
-            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告和任务内"
-            "只读 Skill/模板资源由 mae-flow 或宿主维护,禁止经 Bash 改写/删除"
-            "(待重启标记只能靠重启会话清;"
-            "仓库预设决定门禁口径,流程外走正常评审提交)。"
-            "要推进或纠正流程请执行 current 按本步指引走。",
-            rule="bash-internal-state-write")
     return None
 
 

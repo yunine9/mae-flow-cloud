@@ -57,7 +57,7 @@ def _package_paths(root, state, names):
 
 
 def _artifact_payload(root, state, spec):
-    paths = _package_paths(root, state, spec.get("artifacts") or ())
+    paths = sorted(set(_package_paths(root, state, spec.get("artifacts") or ())))
     missing = [path for path in paths if not os.path.isfile(path)]
     if missing:
         raise RuntimeError("待审批产物尚未生成: " + "、".join(
@@ -70,8 +70,15 @@ def _artifact_payload(root, state, spec):
     }
 
 
-def _review_base(state, step_id):
-    return str((state or {}).get("implementation_base_head", "") or "HEAD")
+def _review_base(root, state, step_id):
+    base = str((state or {}).get("implementation_base_head", "") or "")
+    if not base or base == "HEAD":
+        # A moving HEAD is not a review baseline: committing unchanged bytes
+        # would otherwise turn its diff into empty and rotate the human card.
+        base = _git(root, "rev-parse", "--verify", "HEAD").strip()
+        if base:
+            state["implementation_base_head"] = base
+    return base or "HEAD"
 
 
 def _manifest_scope(state):
@@ -96,8 +103,7 @@ def _worktree_payload(root, state, step_id):
       内容差异由 diff(worktree vs base)与逐文件指纹兜住。
     没有清单的步骤(如 build_review)保持整工作区绑定的老语义。
     """
-    base = _review_base(state, step_id)
-    head = str(_git(root, "rev-parse", "--verify", "HEAD")).strip()
+    base = _review_base(root, state, step_id)
     scope = _manifest_scope(state)
     if scope:
         diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
@@ -114,24 +120,17 @@ def _worktree_payload(root, state, step_id):
             ],
         }
     review_paths = (".",) + _FLOW_CONTROL_PATHSPECS
-    diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
-                *review_paths, binary=True)
-    status = _git(
-        root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-        "--", *review_paths, binary=True)
-    untracked = _git(
-        root, "ls-files", "--others", "--exclude-standard", "-z",
-        "--", *review_paths, binary=True)
-    paths = [item.decode("utf-8", errors="surrogateescape")
-             for item in untracked.split(b"\0") if item]
+    changed = _git(root, "diff", "--name-only", "-z", base, "--",
+                   *review_paths, binary=True)
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z",
+                     "--", *review_paths, binary=True)
+    paths = sorted({item.decode("utf-8", errors="surrogateescape")
+                    for item in (changed + untracked).split(b"\0") if item})
     return {
         "kind": "worktree",
         "base": base,
-        "head": head,
-        "diff_sha256": hashlib.sha256(diff).hexdigest(),
-        "status_sha256": hashlib.sha256(status).hexdigest(),
-        "untracked": paths,
-        "untracked_fingerprints": [
+        "paths": paths,
+        "path_fingerprints": [
             review_path_fingerprint(os.path.join(root, path)) for path in paths
         ],
     }
@@ -157,6 +156,15 @@ def build_subject(root, state, step_id, step):
     return payload
 
 
+def _reviewed_files(subject):
+    paths = subject.get("paths")
+    key = "fingerprints" if subject.get("kind") == "artifacts" else "path_fingerprints"
+    fingerprints = subject.get(key)
+    if not isinstance(paths, list) or not isinstance(fingerprints, list) or len(paths) != len(fingerprints):
+        return None
+    return dict(zip(paths, fingerprints)) if len(set(paths)) == len(paths) else None
+
+
 def subject_matches(root, state, step_id, step):
     stored = (state or {}).get("approval_subject") or {}
     try:
@@ -178,6 +186,14 @@ def subject_matches(root, state, step_id, step):
         return False, (
             "绑定当前内容的新审批卡已自动生成；直接重新展示并取得一次决定，"
             "无需重新解释或重做已经完成的工作")
+    # People approve files, not list ordering or an internal diff base. Keep
+    # the original answer binding when those mechanics change but files do not.
+    if (current and stored.get("kind") == current.get("kind")
+            and stored.get("kind") in ("worktree", "artifacts")
+            and stored.get("scope") == current.get("scope")
+            and _reviewed_files(stored) is not None
+            and _reviewed_files(stored) == _reviewed_files(current)):
+        return True, ""
     if not current or current.get("sha256") != stored.get("sha256"):
         if current:
             current["supersedes"] = str(stored.get("id") or "")

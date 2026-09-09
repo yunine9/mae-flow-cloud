@@ -1,15 +1,4 @@
-/**
- * 单仓拆分(docs/delivery-unit-split-design.md)端到端与门禁契约:
- * 一个仓显式要求先分析 → 剧本模型写出"同仓两个交付单元"的图 →
- * 同单号确认被撞分支校验挡下 → 分单号确认 → 平台按拓扑序补隐式
- * 串行边、机械生成单元任务书、把负责文件面下传给子任务;
- * 另测串行单元可重叠修改同一范围，以及负责面交付门禁:越界提交
- * 停摆举卡,主责任人放行(记豁免)或
- * 打回(派撤出修复),邻居目录前缀(src/filterX)不被吞进面内。
- *
- * HTTP 侧也起真服务、带两个真实登录态点击 scope-decision：非主责任人
- * 必须 403，且错误正文点名真正应该联系的主责任人账号。
- */
+/** 功能模块拆分的端到端验证：Story 发布、同仓串行、参考目录和旧现场兼容。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,18 +8,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
-import { deliveryChangeSnapshot } from "../src/artifacts.ts";
+import { deliveryChangeSnapshot, listArtifactDocuments, readArtifact } from "../src/artifacts.ts";
 import { readJson } from "../src/jsonBody.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import {
-  requirementArtifacts,
+  requirementArtifacts, storyArtifacts, writeStoryArtifacts,
   writeRequirementArtifacts,
 } from "./requirementGraphFixture.ts";
 import {
   type RequirementGraph, TaskControlError, TaskService,
 } from "../src/taskService.ts";
+
+import { OVERALL_STORY_ARTIFACT, readCurrentStory, readStoryState } from "../src/overallStoryStore.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -48,7 +39,7 @@ async function until<T>(
   }
 }
 
-test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+任务书+负责面下传", async () => {
+test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+任务书+全局 Story 发布", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-unit-split-e2e-"));
   const repo = join(dataDir, "svc-core");
   execFileSync("git", ["init", "-q", "-b", "master", repo]);
@@ -65,19 +56,19 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
         scope: { name: "契约骨架", paths: ["src/contract/"] } },
       { id: "unit-filter", name: "svc-core", url: repo,
         responsibility: "过滤模块实现",
-        scope: { name: "过滤实现", paths: ["src/filter/"] } },
+        scope: { name: "过滤实现" } },
     ],
     dependencies: [],
   };
   const chainBody = "# 单仓拆分方案\n契约先行,过滤在后。\n";
-  const artifacts = requirementArtifacts(chainBody, graphDefinition);
+  const artifacts = storyArtifacts(chainBody, graphDefinition);
   const graphJson = artifacts.graph;
   const artifactDir = join(".mae-flow-work", ticket);
   const script: Scene[] = [
     { text: "读仓现场,写方案与机读投影",
       tool: { name: "bash", input: { command:
         `ls 1-svc-core && ` +
-        `cat > "${join(artifactDir, `CHAIN-${ticket}.md`)}" << 'CHAIN_EOF'\n` +
+        `cat > "${join(artifactDir, "story.md")}" << 'CHAIN_EOF'\n` +
         `${artifacts.chain}CHAIN_EOF\n` +
         `cat > "${join(artifactDir, "requirement-graph.json")}" << 'EOF'\n` +
         `${graphJson}\nEOF` } } },
@@ -107,23 +98,12 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       "单仓 + 显式要求 = 走分析前置阶段");
     const prompt = (service as any).requirementAnalysisPrompt(
       (service as any).tasks.get(parent.id), dataDir);
-    // 指引契约:澄清收口、划分方向卡、契约骨架判据、scope 输出格式。
-    assert.match(prompt, /每一条已识别的不确定事项都有结论/,
-      "澄清必须有收口标准,TBD 即不合格");
-    assert.match(prompt, /划分方向卡/, "拆分前必须固定动作问人偏好");
-    assert.match(prompt, /契约骨架/, "同仓多单元第一个必须是契约骨架");
-    assert.match(prompt, /已确认事项清单/, "澄清期 Q&A 必须落进方案正文");
-    assert.match(prompt, /不是文件永久所有权/,
-      "负责面是允许改动范围,不能误当成文件唯一归属");
-    assert.match(prompt, /任务书要求修改但 scope 未授权/,
-      "契约单元职责与负责面必须闭合");
-    assert.match(prompt, /骨架→实现→补测可以声明相同或包含的路径/,
-      "同仓串行接力必须允许重复修改同一批文件");
-    assert.match(prompt, /若任务计划并行执行,重叠范围必须增加明确的先后依赖/,
-      "无序并行任务仍须提示增加依赖或确认风险");
-    assert.match(prompt, /"scope":\{"name"/, "图产物格式必须含 scope 示例");
-    assert.match(prompt, /同仓单元由平台自动按顺序串行/,
-      "串行是平台纪律,不让模型自己写同仓边");
+    assert.match(prompt, /4\+1/);
+    assert.match(prompt, /原 Story 模板/);
+    assert.match(prompt, /后续每个功能模块包含完整接口接入、业务逻辑和测试/);
+    assert.match(prompt, /scope.paths 只是可选参考路径/);
+    assert.match(prompt, /story_sha256/);
+    assert.match(prompt, /不再生成独立 CHAIN/);
 
     const card = await until(() => {
       const now = service.get(parent.id)!;
@@ -147,14 +127,14 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     parentState.summary.waiting = undefined;
     const overlappingGraph = JSON.parse(graphJson) as RequirementGraph;
     overlappingGraph.repositories[1].scope!.paths = ["src/contract/filter/"];
-    writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
+    writeStoryArtifacts(dirname(graphPath), ticket, chainBody,
       overlappingGraph as unknown as Record<string, unknown>, "r2");
     assert.doesNotThrow(() => (service as any).requirementGraphPlan(
       parentState,
       { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
       { "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102" },
     ), "有序的同仓交付单元可以声明相同或互相包含的允许改动范围");
-    writeRequirementArtifacts(dirname(graphPath), ticket, chainBody,
+    writeStoryArtifacts(dirname(graphPath), ticket, chainBody,
       graphDefinition, "r3");
     const revisedReview = parentState.humanGate.createWaiting({
       taskId: parent.id,
@@ -202,11 +182,20 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.deepEqual(filterChild.blocked_by, [contractChild.id],
       "同仓第二个单元必须等第一个合入");
     assert.equal(contractChild.blocked_by, undefined);
-    // 负责面下传 + 单号/标题逐单元。
-    assert.deepEqual(contractChild.delivery_scope,
-      { name: "契约骨架", paths: ["src/contract/"] });
-    assert.deepEqual(filterChild.delivery_scope,
-      { name: "过滤实现", paths: ["src/filter/"] });
+    assert.equal(contractChild.delivery_scope, undefined);
+    assert.equal(filterChild.delivery_scope, undefined);
+    assert.equal(graph.source_document, "story.md");
+    const published = readCurrentStory(parent.workspace);
+    assert.equal(published, readFileSync(join(parentState.cwd, artifactDir, "story.md"), "utf8"));
+    assert.ok(readStoryState(parent.workspace).confirmed);
+    const sources = { taskMaterialRoot: parent.workspace, analysisStory: `${ticket}/story.md` };
+    const docs = listArtifactDocuments(parentState.cwd, sources);
+    assert.equal(docs.filter((d) => d.purpose === "overall_story").length, 1);
+    assert.ok(!docs.some((d) => d.name === `${ticket}/story.md`));
+    assert.equal(readArtifact(parentState.cwd, OVERALL_STORY_ARTIFACT, sources)?.content, published);
+    assert.equal(service.get(parent.id)!.cross_repository_updates?.length, 1);
+    (service as any).adoptRequirementStory(parentState);
+    assert.equal(service.get(parent.id)!.cross_repository_updates?.length, 1, "发布重试不重复广播");
     assert.equal(contractChild.ticket, "REQ2026083101");
     assert.equal(filterChild.ticket, "REQ2026083102");
     assert.match(contractChild.title ?? "", /契约骨架/,
@@ -220,7 +209,7 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       join(dataDir, filterChild.id, "unit-brief.md"), "utf-8");
     assert.match(contractBrief, /第 1\/2 个交付单元/);
     assert.match(filterBrief, /第 2\/2 个交付单元/);
-    assert.match(filterBrief, /`src\/filter\/`/);
+    assert.match(filterBrief, /未限定目录/);
     assert.match(filterBrief, /依赖的上游[\s\S]*契约骨架/,
       "隐式串行边必须写进下游任务书");
     assert.match(contractBrief, /依赖本单元的下游[\s\S]*过滤实现/,
@@ -326,45 +315,16 @@ async function scopedTask() {
   return { service, model, id, internal };
 }
 
-test("负责面门禁:越界停摆举卡,放行记豁免续推,邻居目录不被吞进面内", async () => {
+test("模块路径只是参考：目录外提交不会阻断或产生新门禁", async () => {
   const { service, model, id, internal } = await scopedTask();
   try {
-    const gate = () => (service as any).deliveryScopeAllowsPush(internal);
-    assert.equal(await gate(), false, "越界提交必须被拦下");
-    const violation = internal.summary.delivery?.scope_violation;
-    // src/filterX 与面内前缀 src/filter 只差一个字符:必须算越界。
-    // docs/specs/* 是内核 flow.json specs_truth 点名的流程产物,每个单元
-    // 都得写,不算越界(内网实锤:pnp-deploy-contract 因它被拦)。
-    assert.deepEqual(violation?.paths,
-      ["src/contract/api.ts", "src/filterX/other.ts"]);
-    assert.ok(internal.summary.delivery?.stalled, "越界即停摆等裁决");
-    assert.match(internal.summary.detail ?? "", /越出负责文件面/);
-    assert.match(internal.summary.detail ?? "", /过滤实现/,
-      "停摆原因要点名是哪个单元");
-
-    // 没有待裁决的越界时不许裁决(误触/重放要诚实拒绝)。
-    const fresh = service.create("无越界对照", {
-      account: "worker", ticket: "REQ-SCOPE-CONTROL", repo: internal.cwd,
-    }).id;
-    assert.throws(() => service.decideScopeViolation(fresh, "allow", "boss"),
-      /当前没有待裁决的越界改动/);
-
-    const allowed = service.decideScopeViolation(id, "allow", "boss");
-    assert.equal(allowed.status, "verifying");
-    assert.equal(allowed.delivery?.scope_violation, undefined);
-    assert.deepEqual(allowed.delivery_scope_exemptions,
-      ["src/contract/api.ts", "src/filterX/other.ts"],
-      "放行的文件逐个记入豁免名单");
-    assert.match(allowed.detail ?? "", /boss 放行/);
-    assert.equal(await gate(), true, "豁免后同一批提交必须放行");
+    const before = await deliveryChangeSnapshot(internal.cwd);
+    assert.equal(await (service as any).deliveryScopeAllowsPush(internal), true);
+    assert.equal(internal.summary.delivery?.scope_violation, undefined);
+    assert.equal(internal.summary.delivery_scope_exemptions, undefined);
+    assert.deepEqual(await deliveryChangeSnapshot(internal.cwd), before, "保留真实提交与改动");
     await service.cancel(id, "tester");
-    if (!["completed", "failed", "canceled"].includes(
-      service.get(fresh)?.status ?? "")) {
-      await service.cancel(fresh, "tester");
-    }
-  } finally {
-    await model.stop();
-  }
+  } finally { await model.stop(); }
 });
 
 test("负责面门禁:目标分支前进并合入后不把其他任务文件误报为本单元越界", async () => {
@@ -386,10 +346,8 @@ test("负责面门禁:目标分支前进并合入后不把其他任务文件误�
     git("merge", "--quiet", "--no-edit", "upstream-work");
 
     assert.equal(
-      await (service as any).deliveryScopeAllowsPush(internal), false);
-    assert.deepEqual(internal.summary.delivery?.scope_violation?.paths,
-      ["src/contract/api.ts", "src/filterX/other.ts"],
-      "目标分支自己的文档不属于本单元贡献，不能要求本单元责任人裁决");
+      await (service as any).deliveryScopeAllowsPush(internal), true);
+    assert.equal(internal.summary.delivery?.scope_violation, undefined);
     const snapshot = await deliveryChangeSnapshot(cwd);
     assert.ok(snapshot?.baseline);
     const presentation = await (service as any).buildPushReviewPresentation(
@@ -406,23 +364,19 @@ test("负责面门禁:目标分支前进并合入后不把其他任务文件误�
   }
 });
 
-test("负责面门禁:打回派窄使命撤出越界文件,面内实现保留", async () => {
+test("旧目录裁决入口不可派发撤出代码使命，过时卡在正常验证时清理", async () => {
   const { service, model, id, internal } = await scopedTask();
   try {
-    assert.equal(
-      await (service as any).deliveryScopeAllowsPush(internal), false);
-    const reverted = service.decideScopeViolation(id, "revert", "boss");
-    assert.equal(reverted.status, "queued", "打回=排修复会话,不是终态");
-    assert.match(reverted.detail ?? "", /撤出 2 个越界文件/);
-    assert.match(internal.mission ?? "", /src\/contract\/api\.ts/,
-      "修复使命必须逐个点名要撤出的文件");
-    assert.match(internal.mission ?? "", /负责面内的实现一律保留/);
-    assert.match(internal.mission ?? "", /不得 reset\/rebase/,
-      "撤出不许改写历史(定格基线纪律)");
+    internal.summary.delivery = { scope_violation: { paths: ["src/contract/api.ts"], noted_at: "old" } };
+    const before = await deliveryChangeSnapshot(internal.cwd);
+    for (const decision of ["allow", "revert"] as const) {
+      assert.throws(() => service.decideScopeViolation(id, decision, "boss"), /模块目录限制已取消/);
+    }
+    assert.equal(await (service as any).deliveryScopeAllowsPush(internal), true);
+    assert.equal(internal.summary.delivery.scope_violation, undefined);
+    assert.deepEqual(await deliveryChangeSnapshot(internal.cwd), before);
     await service.cancel(id, "tester");
-  } finally {
-    await model.stop();
-  }
+  } finally { await model.stop(); }
 });
 
 test("负责面门禁 HTTP:非主责任人 403 并点名应联系的账号", async () => {
@@ -559,58 +513,6 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
     /AR 单号：REQ2026090201/);
     assert.deepEqual(second.blocked_by, [first.id],
       "免单号路径不改串行纪律");
-  } finally {
-    await model.stop();
-  }
-});
-
-test("越界打回先登记持续检视批次；登记失败则裁决原样保留可重试", async () => {
-  const { service, model, id, internal } = await scopedTask();
-  try {
-    // 真实主链现场:内核停在 delivery_watch，负责面门禁在推送前拦下
-    // 越界。打回必须先由 feedback-open 建立精确授权，不能另开旧修复路。
-    internal.summary.delivery = {
-      ...(internal.summary.delivery ?? {}),
-      pipeline: "passed",
-      prepush: { state: "passed" },
-    };
-    assert.equal(
-      await (service as any).deliveryScopeAllowsPush(internal), false);
-    // 死内核在前:这道兜底必须在它防御的故障下被测。裁决整体失败,
-    // 越界卡原样保留、停摆原因不丢、内核状态一字未动。
-    (service as any).options.host = {
-      kernelRoot: join(internal.cwd, "kernel-not-exists"),
-      python: "python3",
-      continuousReview: true,
-    };
-    assert.throws(() => service.decideScopeViolation(id, "revert", "boss"),
-      /内核持续检视命令失败/);
-    assert.ok(internal.summary.delivery?.scope_violation,
-      "退不动时越界卡必须还在,主责任人才能重试");
-    assert.ok(internal.summary.delivery?.stalled);
-    assert.equal(internal.summary.delivery?.prepush?.state, "passed",
-      "裁决失败不得作废旧证据");
-    assert.equal(JSON.parse(readFileSync(
-      join(internal.cwd, ".mae-flow.json"), "utf-8")).current,
-      "delivery_watch");
-    // 换真件内核重试同一裁决:内核进入 feedback_triage,撤出使命才派发,
-    // 旧 SHA 证据此刻一并作废。
-    (service as any).options.host = {
-      kernelRoot: join(process.cwd(), "kernel"),
-      python: "python3",
-      continuousReview: true,
-    };
-    (service as any).runningCount = 99;
-    const reverted = service.decideScopeViolation(id, "revert", "boss");
-    assert.equal(JSON.parse(readFileSync(
-      join(internal.cwd, ".mae-flow.json"), "utf-8")).current, "feedback_triage",
-      "打回必须让内核真实打开反馈批次,撤出令才不是空话");
-    assert.equal(reverted.status, "queued");
-    assert.equal(reverted.delivery?.scope_violation, undefined);
-    assert.equal(reverted.delivery?.prepush, undefined,
-      "旧 Build-Fix 收据不得继续背书即将改变的 HEAD");
-    assert.equal(reverted.delivery?.pipeline, undefined);
-    await service.cancel(id, "tester");
   } finally {
     await model.stop();
   }

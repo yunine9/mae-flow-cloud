@@ -53,7 +53,7 @@ test("受邀参与讨论的人能答卡:HTTP、decide 硬闸、前端三层口�
   assert.match(card, /participant && confirmsChainOption\(option\)/,
     "参与人卡上的拆单项锁住");
   const workspace = read("web/src/TaskWorkspace.tsx");
-  assert.match(workspace, /canCollaborate && !isOwnerOnlyWaiting\(task\)/);
+  assert.match(workspace, /const decides = isOwnerOnlyWaiting\(task\)[\s\S]{0,180}viewerUsername === \(task\.luban_account \?\? "本地用户"\)/, "拍板卡只认当前任务责任人，管理员不能代签");
   // 2026-09-05 起决定卡渲在右栏会话流里:能答的人拿到 WaitingCard,不能答的拿到只读说明。
   assert.match(workspace, /currentCard=\{waiting \? \(decides \? \(/);
 });

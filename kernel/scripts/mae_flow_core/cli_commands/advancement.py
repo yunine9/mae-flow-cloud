@@ -5,9 +5,10 @@ from .shared import (
     load_order_facts, os, re, read_lines,
     read_text, resolve_order_workflow, review_status_count, review_statuses,
     sys, tempfile, time,
-    workflow_advancement, workflow_transitions, write_text,
+    workflow_advancement, workflow_transitions,
 )
 from .wiring import api
+from mae_flow_core.foundation.git_excludes import append_local_excludes
 from mae_flow_core.orchestration.work_package import ensure_work_package
 from mae_flow_core import host_env
 from mae_flow_core.panel import notify
@@ -40,24 +41,19 @@ def _host_transition_target(st, sid, target):
     return target
 
 def _gitignore():
-    gi = ".gitignore"
+    # Git resolves info/exclude for ordinary clones and linked worktrees alike.
+    # Local runtime bookkeeping must never dirty the user's tracked .gitignore.
+    gi = api.sh("git rev-parse --git-path info/exclude")
     # .mae-flow.json* 含 .tmp 原子写中间件与 .last 交付备份;历史账本单列(pattern 不覆盖)
     # openspec/config.yaml 是内置规格引擎读的本地脚手架(specengine_config 会读它),
     # 流程已不再创建或提交 OpenSpec change,它不该出现在用户的 git status 里。
     lines = [".mae-flow.json*", EXIT_PATH, HISTORY_PATH, ".mae-flow-work/",
              "openspec/config.yaml"]
-    # errors=replace:用户仓的 .gitignore 可能是 GBK 注释,严格解码会让 init 直接
-    # 崩 traceback(且报错看不出和 .gitignore 有关);替换字符只影响去重判断,无害。
-    txt = (read_text(gi, errors="replace")
-           if os.path.exists(gi) else "")
-    existing = {
-        line.strip() for line in txt.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-    add = [line for line in lines if line not in existing]
-    if add:
-        body = ("\n" if txt and not txt.endswith("\n") else "") + "\n".join(add) + "\n"
-        write_text(gi, body, mode="a")
+    try:
+        append_local_excludes(gi, lines)
+    except OSError as exc:
+        print("[mae-flow] 无法登记 Git 本地忽略规则（不阻断流程）：%s；请勿提交运行文件。" % exc,
+              file=sys.stderr)
 
 def _friction_from_log(st):
     """从 hook 日志统计本单起始时间之后的摩擦(gate 拦截/契约打回/hook 异常)。
@@ -116,7 +112,9 @@ def advance(flow, st, sid, step, tag, note=""):
         try:
             review_text = read_text(review_doc, errors="replace")
         except OSError as exc:
-            api.die("无法冻结评审裁决快照:" + str(exc), 2)
+            print("提示（不阻断）: 无法读取评审文档快照: " + str(exc))
+            review_text = ""
+            st["review_snapshot_unavailable"] = str(exc)
         st["review_triage_statuses"] = review_statuses(review_text)
         st["review_triage_transfer_count"] = review_status_count(
             review_text, "转规格轮次(已确认)")

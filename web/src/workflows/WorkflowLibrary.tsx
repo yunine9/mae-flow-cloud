@@ -1,3 +1,4 @@
+import { PersonName } from "../People";
 import { useMemo, useState } from "react";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
@@ -87,7 +88,7 @@ export function WorkflowLibrary({
             {/* 列表直接回答"适用于哪"(审计 P2-14),不逼人点详情 */}
             <span className="wf-workflow-scope">{applicabilityText(workflow)}</span>
             <span className="wf-workflow-owner">{workflow.scope === "team" ? "团队" : "个人"}
-              <i>·</i> Owner {workflow.owner}<i>·</i>{formatTime(workflow.updated_at)}</span>
+              <i>·</i> Owner <PersonName account={workflow.owner} /><i>·</i>{formatTime(workflow.updated_at)}</span>
           </span>
           <span className="wf-workflow-meta">
             <b>{workflow.latest_version ? `v${workflow.latest_version}` : "未发布"}</b>

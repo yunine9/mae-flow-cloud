@@ -35,3 +35,21 @@ export function writeRequirementArtifacts(
   writeFileSync(join(directory, "requirement-graph.json"), artifacts.graph);
   return artifacts;
 }
+
+/** 新主任务仍用同一修订合同，但摘要绑定 story.md。 */
+export function storyArtifacts(body: string, graph: Record<string, unknown>, revision = "r1") {
+  const artifacts = requirementArtifacts(body, graph, revision);
+  const projection = JSON.parse(artifacts.graph);
+  projection.story_sha256 = projection.chain_sha256;
+  delete projection.chain_sha256;
+  return { ...artifacts, graph: JSON.stringify(projection) };
+}
+
+export function writeStoryArtifacts(directory: string, _ticket: string,
+  body: string, graph: Record<string, unknown>, revision = "r1") {
+  const artifacts = storyArtifacts(body, graph, revision);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "story.md"), artifacts.chain);
+  writeFileSync(join(directory, "requirement-graph.json"), artifacts.graph);
+  return artifacts;
+}

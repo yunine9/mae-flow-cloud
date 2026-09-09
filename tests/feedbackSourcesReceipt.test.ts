@@ -48,6 +48,12 @@ async function watchingService(label: string) {
     modelsJson: model.modelsJson(),
   });
   const id = service.create(`反馈来源回执 ${label}`, { account: "worker" }).id;
+  const waiting = service.get(id)?.waiting;
+  if (waiting?.step === "cloud_requirement_analysis_confirm") {
+    const question = (waiting.question.questions as Array<{ question: string }>)[0].question;
+    await service.decide(id, { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+      selected_options: { [question]: "需求已确认，进入需求分析" } });
+  }
   await until(() => service.get(id)?.status === "completed", "首轮会话收口");
   const internal = (service as any).tasks.get(id);
   const workspace = internal.summary.workspace as string;
@@ -236,6 +242,14 @@ test("MR 检视人意见来源:review_replies.md 逐条回复登记进真内核"
       { id: "mr:d-2", source: "mr_discussion", source_id: "d-2", source_revision: 0,
         kind: "code_review", summary: "日志级别过高", verification: "reviewer" },
     ]);
+    const retry = (service as any).activeFeedbackReceiptInstructions(internal);
+    assert.ok(retry.includes(JSON.stringify(join(workspace, "review_replies.md"))));
+    assert.match(retry, /\[d-1\]/);
+    assert.match(retry, /\[d-2\]/);
+    assert.doesNotMatch(retry, /\[mr:d-1\]/);
+    writeFileSync(join(workspace, "review_replies.md"), "[d-1] 已修改\n[d-1] 不修改\n[d-2] 已降低日志级别");
+    assert.match((service as any).recordActiveFeedbackResult(internal), /ID 重复/);
+    assert.equal(readState(cwd).delivery_loop.batches[0].result_digest, undefined);
     writeFileSync(join(workspace, "review_replies.md"), [
       "[d-1] 已补空值分支，见 main.ts 第 3 行。",
       "[d-2]",
@@ -252,4 +266,54 @@ test("MR 检视人意见来源:review_replies.md 逐条回复登记进真内核"
   } finally {
     await stop();
   }
+});
+
+test("MR 部分回复已发送后补交，不把旧讨论正文混进新回复", async () => {
+  const { service, internal, workspace, cwd, stop } = await watchingService("partial-mr");
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+    internal.summary.repo_url = "https://code.example.invalid/repo.git";
+    internal.summary.delivery = { loop: { kind: "review", review_source: "mr_discussion",
+      review_ids: "d-new:r0,d-old:r0", replied_ids: "d-old:r0" } };
+    (service as any).prePushRevision = async () => ({ sha });
+    writeFileSync(join(workspace, "review_replies.md"), "[d-new] 新讨论的回复\n[d-old] 已发送的旧回复");
+    assert.deepEqual(await (service as any).stageReviewReplies(internal), { ok: true });
+    const entries = (service as any).deliveryOutbox(internal).list();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].payload.discussion_id, "d-new");
+    assert.equal(entries[0].payload.body, "新讨论的回复");
+  } finally { await stop(); }
+});
+
+test("流水线摘要误拼进 ID 必须拒收；模板保留原 ID，准确回执才登记", async () => {
+  const { service, internal, cwd, open, stop } = await watchingService("pipeline-id");
+  try {
+    const id = `pipeline:${"94746097".padEnd(40, "a")}:CODECHECK+COMPILE:r0@${"94746097".padEnd(40, "a")}`;
+    const summary = "FAILED stage=CodeCCP2.0 job=CodeCCP2.0\n【质量门禁指标】请核对";
+    open("fb-pipeline-id", [{ id, source: "pipeline", source_id: "CODECHECK+COMPILE",
+      source_revision: 0, kind: "quality_failure", summary, verification: "机器门禁" }]);
+    const instructions = (service as any).activeFeedbackReceiptInstructions(internal) as string;
+    const start = instructions.indexOf('{\n  "schema"');
+    const end = instructions.indexOf("\n只填写每条", start);
+    const receipt = JSON.parse(instructions.slice(start, end));
+    assert.equal(receipt.batch_id, "fb-pipeline-id");
+    assert.equal(receipt.results[0].id, id);
+    assert.equal(receipt.results[0].status, "", "平台不得代填处理结论");
+    assert.doesNotMatch(instructions, new RegExp("本轮反馈完整 ID："));
+    const path = (service as any).feedbackResultPath(internal, "fb-pipeline-id");
+    const check = () => {
+      writeFileSync(path, JSON.stringify(receipt));
+      return (service as any).recordActiveFeedbackResult(internal);
+    };
+    receipt.results[0] = { id: id + "：" + summary.split("\n")[0], status: "explained",
+      summary: "已核对流水线原始报告，需重新执行检查", evidence: "流水线报告" };
+    assert.match(check(), /逐条反馈回执含重复、夹带或字段不完整/);
+    assert.equal(readState(cwd).delivery_loop.batches[0].result_digest, undefined);
+    receipt.results[0].id = id;
+    receipt.results.push({ ...receipt.results[0] });
+    assert.match(check(), /逐条反馈回执含重复、夹带或字段不完整/);
+    receipt.results.pop();
+    assert.equal(check(), undefined);
+    assert.ok(readState(cwd).delivery_loop.batches[0].result_digest);
+  } finally { await stop(); }
 });

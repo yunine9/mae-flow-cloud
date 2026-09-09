@@ -41,9 +41,9 @@
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
  *   PATCH /tasks/:id/annotations/:annId {note}        → 修改(只能改自己的)
- *   DELETE /tasks/:id/annotations/:annId                → 软删(只能删自己的)
+ *   DELETE /tasks/:id/annotations/:annId                → 作者删除草稿或申请撤回已提交表达
  *   POST /tasks/:id/annotations/send {ids?}             → 走插话通道当场送给模型
- *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
+ *   POST /tasks/:id/annotations/:annId/verify           → 责任人逐条确认（revision 必填）
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/build-fix/events                    → SSE:Build-Fix 实时事件(换轮自动切新)
@@ -65,6 +65,8 @@ import { createServer, type Server } from "node:http";
 import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import { isIssueInterventionTier } from "./auth.ts";
+import { storyArchitecture } from "./storyArchitecture.ts";
+import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
   existsSync,
@@ -113,6 +115,7 @@ import {
 import {
   AnnotationError,
   AnnotationPermissionError,
+  AnnotationConflictError,
 } from "./annotations.ts";
 import {
   WishWallError,
@@ -2691,10 +2694,8 @@ export function createTaskServer(
             if (!annotation) {
               return json(response, 404, { error: `批注 ${annotationId} 不存在` });
             }
-            const isOwner = annotation.assignee
-              ? annotation.assignee === author
-              : target.luban_account === author;
-            if (!isOwner && viewer?.role !== "admin") {
+            const isOwner = (target.luban_account ?? "本地用户") === author;
+            if (!isOwner) {
               return json(response, 403, {
                 error: `这条意见需要任务责任人 ${annotation.assignee
                   ?? target.luban_account ?? "（未配置）"} 答复`,
@@ -2712,27 +2713,29 @@ export function createTaskServer(
                 String(body.note ?? ""), author));
           }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
-          // 管理员角色只提出 override 请求；服务层仍会原子复核当前状态
-          // 必须是 workspace review 的 cloud_push_confirm、当前 ID、sent
-          // 且未闭环，不能把这个布尔值当成全局代签通行证。
+          // 已提交的表达只能申请撤回，是否闭环仍由责任人逐条决定。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
               service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
                 viewer?.role === "admin"));
           }
-          // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
-          // 谁的意见谁裁决,替别人点"通过"等于替他签字；管理员的窄代办
-          // 同样由服务层按当前复检事实校验，并在台账记录 verified_by。
+          // 处置权属于当前任务责任人。版本由页面明确提交，服务层再次复核身份。
           if (request.method === "POST" && parts.length === 5
-              && parts[4] === "verify") {
-            return json(response, 200,
-              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author,
-                viewer?.role === "admin"));
-          }
-          if (request.method === "POST" && parts.length === 5
-              && parts[4] === "reopen") {
-            return json(response, 200, await service.reopenAnnotation(
-              id, decodeURIComponent(parts[3]), author));
+              && ["verify", "resolve", "reopen"].includes(parts[4])) {
+            if ((target.luban_account ?? "本地用户") !== author) {
+              return json(response, 403, { error: "只有当前任务责任人可以逐条闭环检视意见" });
+            }
+            const body = await readBody(request);
+            if (!Number.isInteger(body.revision) || Number(body.revision) < 0) {
+              return json(response, 409, { error: "请刷新意见后逐条处置，缺少当前意见版本" });
+            }
+            const annotationId = decodeURIComponent(parts[3]);
+            if (parts[4] === "reopen") return json(response, 200, await service.reopenAnnotation(
+              id, annotationId, author, Number(body.revision)));
+            return json(response, 200, service.verifyAnnotation(id, annotationId, author, false, {
+              revision: Number(body.revision), outcome: parts[4] === "verify" ? "fixed" : body.outcome,
+              reason: String(body.reason ?? ""),
+            }));
           }
         }
         // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头
@@ -2939,6 +2942,39 @@ export function createTaskServer(
           }
           return json(response, 200, comparison);
         }
+        // 架构展示复用文档的取源和任务读取权限，不接受客户端提供任意图源或文件路径。
+        if (request.method === "GET" && parts[2] === "architecture" && parts.length <= 4) {
+          const load = async () => {
+            const target = service.get(id);
+            if (!target || target.parent_task_id) return undefined;
+            return readArtifactAsync(service.artifactRoot(id), "task-materials/overall-story.md", {
+              pipelineRoot: join(target.workspace, "pipeline"), taskMaterialRoot: target.workspace,
+              publishedStory: target.requirement_graph?.source_document === "story.md"
+                && target.requirement_graph.stage === "confirmed",
+              analysisStory: target.requirement_graph ? `${target.ticket ?? target.id}/story.md` : undefined,
+            });
+          };
+          const artifact = await load();
+          if (!artifact) return json(response, 404, { error: "尚无全局 Story，请先完成主任务分析" });
+          if (artifact.truncated) return json(response, 413, { error: "Story 超过读取上限，请先阅读完整文档" });
+          const projection = storyArchitecture(artifact.content);
+          response.setHeader("cache-control", "no-store");
+          if (parts.length === 3) return json(response, 200, {
+            ...projection, renderer: ARCHIFY_COMMIT,
+            diagrams: projection.diagrams.map(({ source: _source, ...diagram }) => diagram),
+          });
+          if (url.searchParams.get("revision") !== projection.revision) {
+            return json(response, 409, { error: "Story 已更新，请刷新架构图" });
+          }
+          const diagram = projection.diagrams.find((item) => item.id === parts[3]);
+          if (!diagram) return json(response, 404, { error: "当前 Story 中没有这张图" });
+          const result = await renderArchify(diagram.source);
+          const after = await load();
+          if (!after || after.content !== artifact.content) {
+            return json(response, 409, { error: "生成期间 Story 已更新，请刷新架构图" });
+          }
+          return json(response, 200, { ...result, revision: projection.revision });
+        }
         // 检视产物(只读):决策与证据必须同屏——审批卡问"Spec 确认吗",
         // spec.md 就该在旁边,而不是让人跳到另一套界面里翻。权限口径
         // 同任务详情;能读哪些文件由 artifacts.ts 的白名单把守。
@@ -2949,6 +2985,10 @@ export function createTaskServer(
           const sources = {
             pipelineRoot: join(target.workspace, "pipeline"),
             taskMaterialRoot: target.workspace,
+            publishedStory: target.requirement_graph?.source_document === "story.md"
+              && target.requirement_graph.stage === "confirmed",
+            analysisStory: target.requirement_graph && !target.parent_task_id
+              ? `${target.ticket ?? target.id}/story.md` : undefined,
           };
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
@@ -3064,6 +3104,9 @@ export function createTaskServer(
       }
       if (error instanceof AnnotationPermissionError) {
         return json(response, 403, { error: error.message });
+      }
+      if (error instanceof AnnotationConflictError) {
+        return json(response, 409, { error: error.message });
       }
       if (error instanceof AnnotationError) {
         return json(response, 400, { error: error.message });

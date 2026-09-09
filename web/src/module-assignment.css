@@ -1,0 +1,57 @@
+@layer legacy {
+.module-assignment { margin: 0; }
+.module-assignment > header > div { gap: 6px; }
+.module-assignment > header button { border: 0; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+.module-assignment-brief { margin: 8px 0; font-size: 13px; color: var(--text); line-height: 1.6; }
+.is-module-confirmation .module-assignment > header { justify-content: flex-end; padding: 6px 12px; background: none; border-bottom: 0; }
+.is-module-confirmation .module-assignment > header > div { display: none; }
+.is-module-confirmation .decision-footer { display: grid; }
+.is-module-confirmation .decision-footer > .submit-decision { justify-self: end; }
+.module-assignment-stages { padding: 14px; display: grid; gap: 16px; }
+.module-assignment-stage { display: grid; gap: 10px; min-width: 0; }
+.module-assignment-stage h4 { margin: 0; font-size: 13px; color: var(--accent); }
+.module-assignment-unit { padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); min-width: 0; }
+.module-assignment-unit > header { display: grid; gap: 6px; }
+.module-assignment-title { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.module-assignment-title button { flex: none; border: 0; background: none; color: var(--accent); font-size: 12px; padding: 0; cursor: pointer; }
+.module-assignment-unit > header strong { color: var(--text-strong); font-size: 15px; line-height: 1.6; }
+.module-assignment-unit small { font-size: 12px; color: var(--muted); white-space: normal; overflow-wrap: anywhere; }
+.module-assignment-start, .module-assignment-dependency { margin: 10px 0; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.module-assignment-dependency { border-left: 2px solid var(--accent); padding-left: 10px; }
+.module-assignment-dependency p { margin: 3px 0; color: var(--text); }
+.module-assignment-dependency small { display: block; }
+.module-assignment-responsibility { margin: 10px 0; font-size: 12px; line-height: 1.7; }
+.module-assignment-responsibility summary { cursor: pointer; color: var(--accent); }
+.module-assignment-responsibility p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.module-assignment-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.module-assignment-fields > * { min-width: 0; display: grid; gap: 5px; }
+.module-assignment-fields input { width: 100%; box-sizing: border-box; }
+.module-assignment-unit > em { display: block; margin-top: 8px; color: var(--attention); font-size: 12px; font-style: normal; }
+.module-assignment-unit > em.ready { color: var(--success); }
+.module-assignment > footer { flex-wrap: wrap; }
+@media (max-width: 600px) { .module-assignment-fields { grid-template-columns: 1fr; } }
+}
+/* 会话卡旧样式用 flex order 重排，必须在宿主层恢复阅读顺序；仅改 DOM
+ * 顺序会把“提交”排到最上面。确认跟随分工滚动，不再吸附在视口底部。 */
+.is-module-confirmation > * { order: 0; }
+.is-module-confirmation > .decision-footer {
+  position: static; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
+  margin: 0; padding: 16px 18px 18px; border: 0; box-shadow: none;
+}
+.is-module-confirmation > .question-list { padding: 18px 18px 0; }
+.is-module-confirmation .question { margin: 0; padding: 0; min-width: 0; }
+.is-module-confirmation .question legend { margin: 0 0 12px; padding: 0; font-size: 15px; }
+.is-module-confirmation .question .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; padding: 0; border: 0; background: none; box-shadow: none; }
+.is-module-confirmation .options .option { min-width: 0; min-height: 66px; margin: 0; padding: 12px 14px; gap: 10px; border-radius: 9px; box-shadow: none; align-items: center; }
+.is-module-confirmation .option .option-title { font-size: 14px; line-height: 1.5; }
+.is-module-confirmation .option .option-hint { font-size: 12px; font-weight: 400; line-height: 1.5; }
+.is-module-confirmation .option .radio { width: 17px; height: 17px; flex: 0 0 17px; }
+.is-module-confirmation .decision-unified-reply { display: grid; gap: 8px; width: 100%; min-width: 0; margin: 0; }
+.is-module-confirmation .decision-unified-reply > span { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; margin: 0; }
+.is-module-confirmation .decision-unified-reply small { font-size: 12px; color: var(--muted); }
+.is-module-confirmation .decision-unified-reply textarea { width: 100%; max-width: none; min-height: 76px; box-sizing: border-box; padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.6; border: 1px solid var(--line); border-radius: 8px; resize: vertical; background: var(--surface); color: var(--text); }
+.is-module-confirmation .decision-footer > .submit-decision { justify-self: end; width: auto; margin: 0; min-height: 40px; padding: 9px 16px; font-size: 13px; border-radius: 8px; }
+.annotation-location-notice > .module-location-retry {
+  width: auto; height: auto; padding: 6px 10px;
+  color: var(--accent); font-size: 13px; white-space: nowrap;
+}

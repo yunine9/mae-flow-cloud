@@ -5,6 +5,7 @@ import re
 
 from ..foundation.git_execution import executed_git_invocations
 from .gate import GateDecision
+from ..workflow.authority import ADVISORY_TOOL_RULES
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ def decide_commit_branch(context):
 
 
 def decide_pre_commit(context):
+    advisory = None
     for evaluator in (
         _pre_repository,
         _pre_wide_add,
@@ -123,8 +125,11 @@ def decide_pre_commit(context):
     ):
         decision = evaluator(context)
         if decision is not None:
-            return decision
-    return GateDecision("allow")
+            if decision.rule in ADVISORY_TOOL_RULES:
+                advisory = advisory or decision
+            else:
+                return decision
+    return advisory or GateDecision("allow")
 
 
 def _post_early(context):
@@ -228,14 +233,6 @@ def _post_dangerous(context):
             "还会销毁故障证据。只做只读诊断(git fsck --full、stat、ls);"
             "确认是环境故障就原样停下,把现象交给用户或平台处理。")
     if re.search(
-        r"(?:^|[|&;]\s*)rm\b[^|&;]*(?:\s|/)core(?:\.\d+)?(?:\s|$)",
-        command):
-        return _block(
-            "bash-core-dump-delete",
-            "崩溃证据保护:core 文件是唯一能回溯崩溃原因的现场,删掉之后"
-            "\u201c已修复\u201d就再也无法证伪。移动到工作区外的隔离目录留存,"
-            "或把处置交给用户。")
-    if re.search(
         r"(?:^|[|&;]\s*)(?:chmod|chown)\b[^|&;]*-[a-zA-Z]*R[^|&;]*\.git\b",
         command):
         return _block(
@@ -274,6 +271,7 @@ def _post_dangerous(context):
 
 
 def decide_post_commit(context):
+    advisory = None
     for evaluator in (
         _post_early,
         _post_repository,
@@ -281,5 +279,8 @@ def decide_post_commit(context):
     ):
         decision = evaluator(context)
         if decision is not None:
-            return decision
-    return GateDecision("allow")
+            if decision.rule in ADVISORY_TOOL_RULES:
+                advisory = advisory or decision
+            else:
+                return decision
+    return advisory or GateDecision("allow")

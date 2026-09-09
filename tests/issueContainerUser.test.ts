@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerAvailable, TaskContainer } from "../src/containerRuntime.ts";
+import { dockerAvailable, TaskContainer, taskContainerInstance } from "../src/containerRuntime.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
@@ -107,6 +107,11 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
       network: "bridge",
     },
   });
+  // 同一 daemon 上可能正在跑真实任务；用另一个实例的存活容器证明清理不会越界。
+  const protectedId = execFileSync("docker", ["run", "-d", "--rm", "--user", "1000:1000",
+    "--label", "com.mae-flow-cloud.managed=true",
+    "--label", `com.mae-flow-cloud.instance=${taskContainerInstance(`${dataDir}-other`).fingerprint}`,
+    "node:18.16.1-bullseye-slim", "node", "-e", "setInterval(() => {}, 60000)"], { encoding: "utf8" }).trim();
   try {
     const created = service.create({
       account: "dev",
@@ -142,11 +147,18 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
     try {
       execFileSync("docker", [
         "ps", "-aq", "--filter", "label=com.mae-flow-cloud.managed",
+        "--filter", `label=com.mae-flow-cloud.instance=${taskContainerInstance(dataDir).fingerprint}`,
         "--filter", "status=created", "--filter", "status=running",
       ], { encoding: "utf-8" }).trim().split("\n").filter(Boolean)
         .forEach((id) => execFileSync("docker", ["rm", "-f", id]));
     } catch {
       // 清理失败不影响断言结论。
+    }
+    try {
+      assert.equal(execFileSync("docker", ["inspect", protectedId, "--format", "{{.State.Running}}"],
+        { encoding: "utf8" }).trim(), "true", "清理不得删除其他实例的活容器");
+    } finally {
+      try { execFileSync("docker", ["rm", "-f", protectedId], { stdio: "ignore" }); } catch { /* 仅回收本测试创建的哨兵。 */ }
     }
   }
 });

@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 /**
  * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
@@ -153,7 +154,7 @@ export function TaskCard({
           </span>
           <strong className="task-title">{task.title ?? task.requirement}</strong>
           <span className="task-ownership">
-            <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
+            <span>责任人 · <PersonName account={responsibleOf(task)} /></span>
           </span>
           {task.focus && (
             <span className={`task-focus task-focus-${task.focus.kind}`}>
@@ -204,7 +205,7 @@ export function TaskCard({
                     <span key={repository.id} title={repository.url}>
                       <i aria-hidden />{repository.scope?.name ?? repository.name}
                       <small> · {repository.name}</small>
-                      {repository.assignee && <b>· {repository.assignee}</b>}
+                      {repository.assignee && <b>· <PersonName account={repository.assignee} /></b>}
                       {repository.task_status && <em className={repository.task_status}>
                         · {statusText({ status: repository.task_status })}
                       </em>}
@@ -272,7 +273,7 @@ export function TaskCard({
               <span><strong>{repository.scope
                   ? `${repository.name} · ${repository.scope.name}`
                   : repository.name}</strong>
-                <small>{repository.assignee ?? "未指定负责人"}</small></span>
+                <small><PersonName account={repository.assignee} fallback="未指定负责人" /></small></span>
               <em className={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}
               </em>
@@ -286,7 +287,7 @@ export function TaskCard({
           <i aria-hidden />
           <strong>等待负责人拍板</strong>
           <span>
-            {task.luban_account ?? "未分配负责人"}
+            <PersonName account={task.luban_account} fallback="未分配负责人" />
             {waitingQuestions > 0 ? ` · ${waitingQuestions} 个决策项` : ""}
           </span>
         </div>
@@ -613,7 +614,8 @@ export function reworkChoiceOf(
 export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
   const step = task.waiting?.step;
   return step === "cloud_requirement_analysis_confirm"
-    || step === "cloud_split_proposal";
+    || step === "cloud_split_proposal"
+    || step === "cloud_push_confirm";
 }
 
 /** 澄清卡:Agent 处理检视意见时缺信息,单独问人。它不是"要不要通过",
@@ -906,7 +908,7 @@ export function WaitingCard({
     && !hasCustomPrimaryAnswer;
 
   return (
-    <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
+    <section className={`decision-card${chainReview ? " is-module-confirmation" : ""}`} aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
           {presentation !== "studio" && <span className="decision-kicker">
@@ -915,7 +917,7 @@ export function WaitingCard({
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}
-          <h3 id={`decision-${task.id}`}>{waitingStepTitle(task) ?? "需要你的决策"}</h3>
+          <h3 id={`decision-${task.id}`}>{chainReview ? "任务分工" : waitingStepTitle(task) ?? "需要你的决策"}</h3>
         </div>
         {/* 几乎恒为 1 题:徽标只在真有多题时才有信息量。 */}
         {questions.length > 1 && (
@@ -931,7 +933,10 @@ export function WaitingCard({
         </p>
       )}
 
-      {chainReview && task.requirement_graph && (
+      {chainReview && repositoryAssigneeSelection && attachment && (
+        <fieldset className="decision-attachment" disabled={submitting}>{attachment}</fieldset>
+      )}
+      {chainReview && task.requirement_graph && !repositoryAssigneeSelection && (
         /* 方案本体(单元职责、负责面、依赖顺序)在左侧仓间依赖图里,是结构
            化的;卡上只放三个数和一句"去哪看"。原来这里是 300px 的一段散文
            背景,把左边已经画出来的东西再讲一遍。 */
@@ -943,7 +948,7 @@ export function WaitingCard({
             <span>{task.requirement_graph.dependencies.length > 0
               ? <><b>{chainStages(task.requirement_graph).length}</b>个执行阶段</>
               : <><b>可并行</b>无硬依赖</>}</span>
-            <small>逐仓排查结论、模块职责、负责面和先后顺序见左侧「模块拆分与依赖」；这里只给实际开发模块定负责人和单号。</small>
+            <small>模块职责与依赖关系见全局 Story 和「架构视图」；这里确认各模块的负责人和单号。</small>
           </> : <>
             <span><b>未就绪</b>不能创建任务</span>
             <small>{task.requirement_graph.projection_error
@@ -952,13 +957,13 @@ export function WaitingCard({
           </>}
           {reworksChainChoice && (
             <small className="chain-rework-hint">
-              退回前可在左侧「模块与依赖」中直接批注整体方案、模块或依赖；具体措辞也可去方案文档逐行批注。这些意见会随决定一起交给 Agent，没有批注的退回 Agent 只能猜。
+              需要调整方案时，请在全局 Story 中逐行批注，或在答复中写清修改意见。意见会随决定交给 Agent。
             </small>
           )}
         </div>
       )}
 
-      {task.waiting?.context && (() => {
+      {!chainReview && task.waiting?.context && (() => {
         /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
            重点(要我做什么、较上次变了什么)在前几行,整版清单是
            留档不是必读;需要时一键展开。
@@ -996,7 +1001,7 @@ export function WaitingCard({
       })()}
 
       {!requirementAnalysisConfirmation && <div className="question-list">
-        {questions.some((item) => (item.options?.length ?? 0) > 0) && (
+        {!chainReview && questions.some((item) => (item.options?.length ?? 0) > 0) && (
           <p className="option-hint" role="status" aria-live="polite">
             {submitting ? "正在提交答复…" : selectedAnswers.length > 0
               ? <><strong>已选择，尚未提交。</strong>可补充说明，再点击下方提交按钮。</>
@@ -1018,7 +1023,7 @@ export function WaitingCard({
                   {String(index + 1).padStart(2, "0")}
                 </span>}
                 <span className="question-text">
-                  {item.question || "需要你确认"}
+                  {chainReview ? "确认以上分工？" : item.question || "需要你确认"}
                 </span>
                 {skippable && <span className="q-optional">可跳过</span>}
               </legend>
@@ -1029,7 +1034,7 @@ export function WaitingCard({
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));
-                  const inferredAdjustment = reviewQuestion
+                  const inferredAdjustment = !effect && reviewQuestion
                     && !closingAnswers.has(option);
                   const consequence = effect?.closes_feedback
                     ? "将关闭本轮检视并进入下一步"
@@ -1118,7 +1123,7 @@ export function WaitingCard({
         })}
       </div>}
 
-      {attachment && (
+      {attachment && !(chainReview && repositoryAssigneeSelection) && (
         <fieldset className="decision-attachment" disabled={submitting}>
           {attachment}
         </fieldset>
@@ -1160,9 +1165,12 @@ export function WaitingCard({
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {unifiedReply && <label className="decision-unified-reply">
-          <span>{picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{picked[questions[0].question]
-            ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
+          <span>{chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
+            : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{chainReview
+              ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
+              : picked[questions[0].question] ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
           <textarea value={replyText} aria-label="决定回复"
+            rows={chainReview ? 3 : undefined}
             placeholder={picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
         </label>}

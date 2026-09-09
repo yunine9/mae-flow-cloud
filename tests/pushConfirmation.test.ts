@@ -451,6 +451,66 @@ test("修复重新带入已拒绝文件时宿主自动收口，不新增循环�
   }
 });
 
+for (const dirtyKind of ["excluded-unstaged", "excluded-staged", "excluded-both",
+  "business-unstaged", "business-staged", "business-compensated", "business-new-staged"] as const) {
+  test(`整理排除项保留本地改动并区分业务未提交内容：${dirtyKind}`, async () => {
+    const { service, model, internal, repo } = await verifyingTask();
+    try {
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n");
+      repo.git("add", ".gitignore");
+      repo.git("commit", "-qm", "tracked user config");
+      const cleanHead = repo.git("rev-parse", "HEAD");
+      const state = JSON.parse(readFileSync(join(repo.cwd, ".mae-flow.json"), "utf-8"));
+      state.step_heads.branch_create = cleanHead;
+      writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify(state));
+      internal.summary.delivery_selection = {
+        status: "confirmed", head: cleanHead, paths: ["src/feature.ts"],
+        excluded_paths: [".gitignore"],
+      };
+      internal.summary.delivery = { git_push: { sha: cleanHead } };
+      writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n");
+      repo.git("add", "src/feature.ts", ".gitignore");
+      repo.git("commit", "-qm", "repair plus excluded config");
+      writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n/local-only/\n");
+      if (dirtyKind !== "excluded-unstaged") repo.git("add", ".gitignore");
+      if (dirtyKind === "excluded-both") {
+        writeFileSync(join(repo.cwd, ".gitignore"), "/user-build/\n.mae-flow*\n/local-only/\n/extra/\n");
+      }
+      if (dirtyKind.startsWith("business")) {
+        const path = dirtyKind === "business-new-staged" ? "src/new.ts" : "src/feature.ts";
+        writeFileSync(join(repo.cwd, path), "export const value = 3;\n");
+        if (dirtyKind !== "business-unstaged") repo.git("add", path);
+        if (dirtyKind === "business-compensated") {
+          writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
+        }
+      }
+      const head = repo.git("rev-parse", "HEAD");
+      const index = repo.git("write-tree");
+      const localIgnore = readFileSync(join(repo.cwd, ".gitignore"), "utf-8");
+      const result = await (service as any).reconcileConfirmedDeliveryBoundary(internal);
+      assert.equal(readFileSync(join(repo.cwd, ".gitignore"), "utf-8"), localIgnore);
+      if (dirtyKind.startsWith("business")) {
+        assert.equal(result, "blocked");
+        assert.ok(internal.summary.detail.includes(
+          dirtyKind === "business-new-staged" ? "src/new.ts" : "src/feature.ts"));
+        assert.equal(repo.git("rev-parse", "HEAD"), head);
+        assert.equal(repo.git("write-tree"), index);
+      } else {
+        assert.equal(result, "changed", internal.summary.detail);
+        assert.equal(repo.git("rev-parse", "HEAD^"), cleanHead);
+        assert.equal(repo.git("diff", "--name-only", cleanHead, "HEAD"), "src/feature.ts");
+        assert.equal(repo.git("show", "HEAD:.gitignore"), "/user-build/");
+        assert.equal(repo.git("show", "HEAD:src/feature.ts"), "export const value = 2;");
+        assert.equal(repo.git("diff", "--cached", "--name-only"), "");
+        assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+      }
+    } finally {
+      await model.stop();
+    }
+  });
+}
+
 test("交付范围确认只在 prepush 收敛后执行", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
@@ -974,7 +1034,7 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     const waiting = service.get(id)!.waiting!;
     assert.notEqual(waiting.waiting_id, "old-confirmation");
     assert.match(String(waiting.context), /人工意见修改后的复检/);
-    assert.match(String(waiting.context), /还有 2 条待提出人确认/);
+    assert.match(String(waiting.context), /还有 2 条待责任人逐条处置/);
     const question = (waiting.question as any).questions[0].question;
     const accept = {
       waiting_id: waiting.waiting_id,
@@ -984,13 +1044,13 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
 
     await assert.rejects(service.decide(id, accept),
       (error) => error instanceof TaskControlError
-        && /责任人的“继续提交”不能代替意见提出人确认/.test(error.message));
+        && /继续提交.*不能代替逐条处置/.test(error.message));
     assert.equal(service.get(id)!.waiting!.waiting_id, waiting.waiting_id,
       "越权放行必须零副作用，不能把原卡改旧造成后续假死");
     assert.equal(service.get(id)!.delivery_selection?.waiting_id,
       "old-confirmation", "拒绝前不能先改交付清单收据");
-    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
-      /只能由他裁决/);
+    assert.throws(() => service.verifyAnnotation(id, first.id, "reviewer-a"),
+      /只有当前任务责任人/);
     assert.throws(() => service.setPushConfirmation(id, false),
       /不能关闭确认绕过/);
 
@@ -998,8 +1058,8 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
       outcome: "needs_clarification", summary: "空值指的是入参还是返回值？",
       evidence: [],
     });
-    assert.throws(() => service.verifyAnnotation(id, first.id, "reviewer-a"),
-      /仍有歧义/,
+    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
+      /处理依据/,
       "Agent 明确说没理解时不能让人误点成已修复");
     (service as any).annotations(internal).respond(first.id, {
       outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
@@ -1007,11 +1067,12 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     (service as any).annotations(internal).respond(second.id, {
       outcome: "fixed", summary: "已补边界测试", evidence: ["src/feature.ts:1"],
     });
-    service.verifyAnnotation(id, first.id, "reviewer-a");
+    service.verifyAnnotation(id, first.id, "owner");
     await assert.rejects(service.decide(id, accept),
       (error) => error instanceof TaskControlError && /仍有 1 条/.test(error.message));
-    service.verifyAnnotation(id, second.id, "reviewer-b");
+    service.verifyAnnotation(id, second.id, "owner");
     assert.match(String(service.get(id)!.detail), /已全部闭环/);
+    await assert.rejects(service.decide(id, { ...accept, actor: "reviewer-a" }), /只有主责任人 owner/);
 
     let deliveries = 0;
     (service as any).tryDeliver = async () => { deliveries += 1; };
@@ -1208,8 +1269,8 @@ test("历史脱离定格基线:宿主机械重放回基线且树不变;二次脱
   }
 });
 
-// 同场景但工作区还有未提交改动:宿主不猜着整理,如实停下喊人。
-test("历史脱离定格基线且工作区未收口:不改写,如实停下", async () => {
+// 历史树不变的重放不用索引组提交，暂存/未暂存的编辑均应原样保留。
+test("历史脱离定格基线且工作区未收口:只重放旧树，保留本地编辑", async () => {
   const { service, model, internal, repo } = await verifyingTask();
   try {
     const origHead = repo.git("rev-parse", "HEAD");
@@ -1218,12 +1279,17 @@ test("历史脱离定格基线且工作区未收口:不改写,如实停下", asy
     repo.git("reset", "--soft", orphan);
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 2;\n");
+    repo.git("add", "src/feature.ts");
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 3;\n");
+    const index = repo.git("write-tree");
     const outcome = await (service as any)
       .reconcileFrozenBaselineAncestry(internal, true);
-    assert.equal(outcome, "blocked");
-    assert.equal(repo.git("rev-parse", "HEAD"), orphan,
-      "未收口现场不得被宿主改写");
-    assert.match(String(internal.summary.delivery?.stalled), /未提交改动/);
+    assert.equal(outcome, "repaired");
+    assert.equal(repo.git("diff", origHead, "HEAD"), "");
+    assert.equal(repo.git("write-tree"), index);
+    assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf-8"),
+      "export const value = 3;\n");
   } finally {
     await model.stop();
   }
@@ -1332,7 +1398,8 @@ test("push 检视返工用 feedback-open 进入持续检视，不倒退到开发
   }
 });
 
-test("最终清单拒绝领域归档：恢复正式文件并与内核原子对账，不再死锁", async () => {
+for (const keepDomain of [false, true]) {
+test(`最终清单${keepDomain ? "部分" : "全部"}拒绝领域归档：严格保留人的选择`, async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const state = continuousReviewState(repo) as any;
@@ -1353,7 +1420,7 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
     writeFileSync(join(repo.cwd, "docs", "specs", "softwarepackage.md"),
       "# generated domain archive\n");
     writeFileSync(join(repo.cwd, ".git", "info", "exclude"),
-      "/docs/specs/index.md\n/docs/specs/softwarepackage.md\n");
+      keepDomain ? "" : "/docs/specs/index.md\n/docs/specs/softwarepackage.md\n");
     writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify(state));
     (service as any).options.host = {
       kernelRoot: join(process.cwd(), "kernel"), python: "python3",
@@ -1378,21 +1445,21 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
       selected_options: {
         [(waiting.question as any).questions[0].question]: "确认按清单推送",
       },
-      delivery_paths: ["src/feature.ts"],
+      delivery_paths: keepDomain ? ["src/feature.ts", "docs/specs/softwarepackage.md"] : ["src/feature.ts"],
       delivery_compile_action: "skip",
       actor: "owner.liao",
     });
 
     assert.equal(existsSync(join(repo.cwd, "docs", "specs", "index.md")), false);
     assert.equal(existsSync(join(repo.cwd, "docs", "specs",
-      "softwarepackage.md")), false);
+      "softwarepackage.md")), keepDomain);
     const reconciled = JSON.parse(readFileSync(
       join(repo.cwd, ".mae-flow.json"), "utf-8"));
-    assert.equal(reconciled.domain_archive.result, "unchanged");
-    assert.deepEqual(reconciled.domain_archive.applied_paths, []);
-    assert.deepEqual(reconciled.delivery_manifest.files, ["src/feature.ts"]);
-    assert.deepEqual(service.get(id)?.delivery_selection?.paths,
-      ["src/feature.ts"]);
+    assert.equal(reconciled.domain_archive.result, keepDomain ? "changes" : "unchanged");
+    assert.deepEqual(reconciled.domain_archive.applied_paths, keepDomain ? ["docs/specs/softwarepackage.md"] : []);
+    const expected = keepDomain ? ["docs/specs/softwarepackage.md", "src/feature.ts"] : ["src/feature.ts"];
+    assert.deepEqual(reconciled.delivery_manifest.files, expected);
+    assert.deepEqual(service.get(id)?.delivery_selection?.paths, expected);
     const excludes = readFileSync(join(repo.cwd, ".git", "info", "exclude"),
       "utf-8");
     assert.doesNotMatch(excludes, /docs\/specs/,
@@ -1401,6 +1468,8 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
     await model.stop();
   }
 });
+
+}
 
 test("feedback-open 失败时决定原样保留，修好内核后同一提交可重试", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();

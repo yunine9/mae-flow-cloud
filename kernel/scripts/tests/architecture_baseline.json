@@ -18,7 +18,6 @@
     "scripts/mae_flow_core/cli_commands/gate.py": {
       "cmd_gate": 24,
       "_gate_edit": 10,
-      "_gate_commit_candidates": 11,
       "_gate_bash_writes": 23
     },
     "scripts/mae_flow_core/cli_commands/codecheck_commands.py": {},

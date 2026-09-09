@@ -22,9 +22,6 @@ if SCRIPTS not in sys.path:
 
 from mae_flow_core import cli_runtime  # noqa: E402,F401
 from mae_flow_core.cli_commands import delivery_commands as delivery  # noqa: E402
-from mae_flow_core.cli_commands.external_repair_gate import (  # noqa: E402
-    gate_repair_commit,
-)
 from mae_flow_core.cli_commands.pipeline_commands import (  # noqa: E402
     _route_external_verification, cmd_pipeline,
 )
@@ -251,6 +248,58 @@ class DeliveryCommandTests(TempProject):
                     delivery, "_verify_host_proof", return_value="queue-test-proof"):
                 delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
                     delivery_action="feedback-result", file=result_path))
+
+    def test_batch_replay_accepts_reordering_but_not_changed_content(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        payload["items"].append({**payload["items"][0], "id": "workspace:an-2", "source_id": "an-2"})
+        args = SimpleNamespace(delivery_action="feedback-open", file=self.write_json("batch.json", payload))
+        delivery.cmd_delivery({}, value, args)
+        before = without_host_nonces(value)
+        payload["items"].reverse()
+        self.write_json("batch.json", payload)
+        delivery.cmd_delivery({}, value, args)
+        self.assertEqual(before, without_host_nonces(value))
+        payload["items"][0]["summary"] = "本次改了意见正文"
+        self.write_json("batch.json", payload)
+        with self.assertRaises(SystemExit):
+            delivery.cmd_delivery({}, value, args)
+
+    def test_result_replay_accepts_reordering_but_not_changed_answer(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        payload["items"].append({**payload["items"][0], "id": "workspace:an-2", "source_id": "an-2"})
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-open",
+            file=self.write_json("batch.json", payload)))
+        receipt = {"schema": delivery.RESULT_SCHEMA, "batch_id": "fb-1", "changed": False,
+                   "results": [{"id": item["id"], "status": "explained", "summary": "已核对现有实现"}
+                               for item in payload["items"]]}
+        args = SimpleNamespace(delivery_action="feedback-result", file=self.write_json("result.json", receipt))
+        delivery.cmd_delivery({}, value, args)
+        before = without_host_nonces(value)
+        receipt["results"].reverse()
+        self.write_json("result.json", receipt)
+        delivery.cmd_delivery({}, value, args)
+        self.assertEqual(before, without_host_nonces(value))
+        receipt["results"][0]["status"] = "needs_human"
+        self.write_json("result.json", receipt)
+        with self.assertRaises(SystemExit):
+            delivery.cmd_delivery({}, value, args)
+
+    def test_composite_feedback_identity_preserves_long_valid_source_id(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        source_id = "discussion-" + "x" * 180
+        identity = "mr_discussion:" + source_id + ":r0@" + self.head
+        payload["items"] = [{**payload["items"][0], "source": "mr_discussion",
+                             "source_id": source_id, "id": identity}]
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-open",
+            file=self.write_json("batch.json", payload)))
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-result",
+            file=self.write_json("result.json", {"schema": delivery.RESULT_SCHEMA,
+                "batch_id": "fb-1", "changed": False, "results": [
+                    {"id": identity, "status": "explained", "summary": "现有实现已覆盖"}]})))
+        self.assertEqual(identity, value["delivery_loop"]["batches"][0]["results"][0]["id"])
 
     def test_red_feedback_replaces_awaiting_writer_and_later_pass_closes_both(self):
         value = self.live_state("external_verify")
@@ -780,34 +829,6 @@ class PipelineRoutingTests(unittest.TestCase):
 
 
 class FeedbackAuthorizationTests(unittest.TestCase):
-    def test_feedback_commit_scope_allows_partial_repair_but_rejects_extras(self):
-        value = state("feedback_triage")
-        value["delivery_loop"] = {
-            "schema": delivery.STATE_SCHEMA,
-            "active_batch_id": "fb-1",
-            "batches": [{"batch_id": "fb-1", "status": "repairing"}],
-        }
-        value["delivery_repair_authorization"] = {
-            "schema": "mae-flow-feedback-repair/1", "status": "ready",
-            "batch_id": "fb-1", "base_sha": HEAD,
-            "baseline_dirty": ["user.txt"],
-        }
-        messages = []
-
-        def die(_rule, message):
-            messages.append(message)
-            raise RuntimeError(message)
-
-        with mock.patch.object(cli_runtime, "_dirty_paths", return_value=(
-                "user.txt", "src/fix.py", "tests/fix_test.py", "target/a.o")), mock.patch.object(
-                cli_runtime, "sh", return_value=HEAD):
-            self.assertTrue(gate_repair_commit(
-                value, {"paths": ("src/fix.py",)}, die))
-            with self.assertRaises(RuntimeError):
-                gate_repair_commit(value, {"paths": ("src/fix.py", "extra.py")}, die)
-        self.assertNotIn("tests/fix_test.py", messages[0])
-        self.assertIn("extra.py", messages[0])
-        self.assertNotIn("target/a.o", messages[0])
 
     def test_named_conflict_path_can_cross_baseline_dirty_but_neighbors_cannot(self):
         value = state("feedback_triage")

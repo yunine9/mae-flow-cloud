@@ -2059,16 +2059,15 @@ with _TmpDir() as td:
             written_ok, written_why = mf.ev_pushed({}, state)
         finally:
             mf._repo_path_identity = original_identity
-        check("Windows 路径大小写差异不会丢失 Agent 写入候选",
-              not written_ok and "src/changed.cpp" in written_why
-              and "不需要的撤销" in written_why, written_why)
+        check("DONE 不因 Agent 写入记录中的路径大小写强迫提交本地文件",
+              written_ok and os.path.isfile("src/changed.cpp"), written_why)
 
         os.remove("src/changed.cpp")
         os.makedirs("openspec/changes/demo")
         open("openspec/changes/demo/change.md", "w", encoding="utf-8").write("# change\n")
         explicit_ok, explicit_why = mf.ev_pushed({}, state)
-        check("DONE 继续硬校验流程明确维护但无文件工具来源的交付产物",
-              not explicit_ok and "openspec/changes/demo/change.md" in explicit_why,
+        check("DONE 不因本地过程文件缺少提交来源而否决真实推送事实",
+              explicit_ok and os.path.isfile("openspec/changes/demo/change.md"),
               explicit_why)
     finally:
         os.chdir(old_cwd)
@@ -2080,10 +2079,12 @@ with _TmpDir() as td:
         open(".gitignore", "w", encoding="utf-8").write(
             "# .mae-flow.json* 将由工具维护\n"
             "# .mae-flow-work/ 是过程目录\n")
+        original_ignore = open(".gitignore", "rb").read()
+        mf.sh("git init -q")
         mf._gitignore()
         ignore_rules = {
             line.strip() for line in open(
-                ".gitignore", encoding="utf-8").read().splitlines()
+                mf.sh("git rev-parse --git-path info/exclude"), encoding="utf-8").read().splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         }
         check("注释中的状态路径不会冒充有效 Git 忽略规则",
@@ -2091,6 +2092,7 @@ with _TmpDir() as td:
               and ".mae-flow-work/" in ignore_rules
               # 内置规格引擎的本地脚手架不该出现在用户 git status 里
               and "openspec/config.yaml" in ignore_rules
+              and open(".gitignore", "rb").read() == original_ignore
               # comet 状态机已换轨:不再往用户仓写 .gitattributes
               and not os.path.exists(".gitattributes"))
     finally:

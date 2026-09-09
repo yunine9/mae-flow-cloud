@@ -18,7 +18,7 @@ function confirmationQuestion(task: ReturnType<TaskService["get"]>): string {
   return questions[0].question;
 }
 
-test("修改需求时新意见立即入队，串行落实全部意见后仍需作者复检", async () => {
+test("修改需求时新意见立即入队，串行落实全部意见后仍需责任人逐条处置", async () => {
   let release!: () => void;
   let entered!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -79,7 +79,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     assert.equal(queuedNote.status, "sent");
     const repeatedQueue = await service.sendAnnotations(task.id, [b.id], "reviewer");
     assert.match(repeatedQueue.receipt ?? "", /1 条已排队/);
-    assert.throws(() => service.verifyAnnotation(task.id, b.id, "reviewer"), /尚在排队/);
+    assert.throws(() => service.verifyAnnotation(task.id, b.id, "owner"), /处理依据/);
     const confirm = () => service.decide(task.id, {
       state_version: service.get(task.id)!.waiting!.state_version,
       selected_options: { [confirmationQuestion(service.get(task.id))]: CONFIRM_OPTION },
@@ -112,9 +112,9 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
       assert.equal(existsSync(join(task.workspace, "requirement-review", revision.id)), false);
     }
     assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === b.id)?.response?.outcome, "fixed");
-    await assert.rejects(confirm(), /2 条意见仍待提出人确认/);
+    await assert.rejects(confirm(), /2 条意见仍待责任人逐条处置/);
     await service.verifyAnnotation(task.id, a.id, "owner");
-    await service.verifyAnnotation(task.id, b.id, "reviewer");
+    await service.verifyAnnotation(task.id, b.id, "owner");
     await confirm();
   } finally {
     release();
@@ -276,9 +276,9 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
       state_version: service.get(created.id)!.waiting!.state_version,
       selected_options: { [question]: CONFIRM_OPTION }, actor: "owner",
     }), (error) => error instanceof TaskControlError
-      && /1 条意见仍待提出人确认/.test(error.message));
+      && /1 条意见仍待责任人逐条处置/.test(error.message));
 
-    await service.verifyAnnotation(created.id, reviewerNote.id, "reviewer");
+    await service.verifyAnnotation(created.id, reviewerNote.id, "owner");
     await service.decide(created.id, {
       waiting_id: service.get(created.id)!.waiting!.waiting_id,
       state_version: service.get(created.id)!.waiting!.state_version,

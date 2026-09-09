@@ -245,7 +245,9 @@ def _implicit_ack_verified(step, st):
                 _ack_failure(st, success=True)
                 return True, ""
             if not is_refusal(candidate):
-                if expected:
+                # A fresh, subject-bound direct reply need not copy a button.
+                if expected and not (re.sub(r"\s+", "", item.get("text", "")) == candidate
+                                     and _is_positive_confirmation(candidate)):
                     continue
                 _ack_failure(st, success=True)
                 return True, ""
