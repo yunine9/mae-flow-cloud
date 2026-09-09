@@ -5,7 +5,7 @@
  * - 仓内 docs/ 索引:一层扫描、40 条上限超限折叠、缺席静默;
  * - 注入点:开场词在 analyze 阶段注入业务知识地图。
  *
- * 范式与 issueMoonlight.test.ts 同款:ScriptedModelServer 剧本,只走
+ * 范式与 issueInterventionTiers.test.ts 同款:ScriptedModelServer 剧本,只走
  * 公开 API 断言;地图渲染为纯函数单元断言。
  */
 
@@ -129,8 +129,8 @@ test("绑定模块+仓内 docs:进 analyze 定格资产并投影,台账/文件/�
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    // 月光开:自动闭环归档,顺便证明定格/地图不分介入档。
-    moonlight: () => true,
+    // 一档全自动:自动闭环归档,顺便证明定格/地图不分介入档。
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -189,7 +189,7 @@ test("模块没有已发布资产:台账为空,流程照走(旁路不卡会话)"
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => true,
+    interventionTier: () => "1",
   });
   try {
     const created = service.create({
@@ -257,12 +257,12 @@ test("提示层:开场词只在 analyze 阶段注入业务知识地图", () => {
     repo_urls: ["http://example.com/origin.git"],
   } as unknown as IssueSessionState;
   const prompt = issueFixedOpeningPrompt(base, {},
-    { moonlight: false, workspace });
+    { tier: "3", workspace });
   assert.match(prompt, /业务知识地图/);
   assert.match(prompt, /repo\/origin\/docs\/对账流程\.md/);
   // 非 analyze 阶段不注入(地图跟着 analyze 简报走)。
   const prep = { ...base, stage: "prep_repo" } as IssueSessionState;
   assert.doesNotMatch(
-    issueFixedOpeningPrompt(prep, {}, { moonlight: false, workspace }),
+    issueFixedOpeningPrompt(prep, {}, { tier: "3", workspace }),
     /业务知识地图/);
 });

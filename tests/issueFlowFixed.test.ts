@@ -703,6 +703,8 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
+    // 转正两段式要等确认卡:显式三档把控(缺省二档会代答纯选项卡)。
+    interventionTier: () => "3",
   });
   try {
     seedModule(dataDir, origin);
@@ -964,6 +966,8 @@ test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查
     dataRoot: "/tmp/data",
     persist: () => undefined,
     dts: new MockDtsGateway(),
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
     pullRepo: async (url) => ({
       dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
     }),
@@ -1552,6 +1556,8 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     const ctx: IssueToolContext = {
       state, workspace: "/tmp/ws", dataRoot: dataDir,
       persist: () => undefined,
+      // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+      interventionTier: () => "3",
       pullRepo: async (url) => {
         pulled.push(url);
         return { dir: "repo/origin", cloned: true, head: "a".repeat(12) };
@@ -1618,6 +1624,8 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     persist: () => undefined,
     ops: fakeOps,
     environmentPassword: () => undefined,
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
     pullRepo: async (url) => ({
       dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
     }),
@@ -1651,6 +1659,8 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
   });
   try {
     // 无单登记必须带环境(#17):要测 env_needed 现场补配,登记只能走
@@ -1713,6 +1723,8 @@ test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
   });
   try {
     // 登记路:环境四件套 + 形态(虚拟化)一并入状态。
@@ -1773,6 +1785,8 @@ test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({
@@ -1845,6 +1859,8 @@ test("环境拒绝防纠缠(票 93):同 scope 已拒 → raiseEnvNeededGate 不�
     persist: () => undefined,
     ops: fakeOps,
     environmentPassword: () => undefined,
+    // 拒绝纠缠的守卫在档位旁路之前也成立:这里给三档让闸路径走到。
+    interventionTier: () => "3",
     pullRepo: async (url) => ({
       dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
     }),
@@ -1880,6 +1896,8 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,request
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
+    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({

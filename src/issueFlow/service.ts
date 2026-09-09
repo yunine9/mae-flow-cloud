@@ -38,6 +38,7 @@ import {
 } from "./mrDiscussions.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
+import type { IssueInterventionTier } from "../auth.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
@@ -218,7 +219,7 @@ function agentCardQuestions(record: WaitingRecord): Array<{
 }
 
 /** 「AI 推荐」的命中尺:trim 后逐字命中选项原文,返回下标(-1=没有)。
- * 投影(推荐原文换投影码)与月光代答(按推荐作答)共用同一把——
+ * 投影(推荐原文换投影码)与档位代答(按推荐作答)共用同一把——
  * 卡上标的推荐与代答认的推荐永远同一判定,不会各说各话。 */
 function recommendedIndex(
   options: string[] | undefined,
@@ -492,20 +493,14 @@ export interface IssueFlowOptions {
    *  同一面旗):默认关——resolve 归检视人,代点是越权;平台/团队
    *  明确允许的部署才开。 */
   resolveDiscussions?: boolean;
-  /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
-   * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
-   * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
-   * 代答(开放题/混卡/检视回合永不,ADR-0006)。
-   * env_needed/env_verify 问的是用户事实,永不代答。
-   * 回调缺席或返回非真=关闭,行为与现状一致。 */
-  moonlight?: (account?: string) => boolean | undefined;
-  /** 推送前过目(个人设置「人工介入程度」的交付轴,现读现判):开着时
-   * push_branch 无一次性令牌即被拒并举 push_confirm 闸(带服务端生成
-   * 的变更摘要),用户确认产令牌放行一次推送;月光永不代这张闸——
-   * 过目是用户显式开启的意志,更具体的意志赢(ADR-0009,与需求流
-   * push 前确认同一裁定)。回调缺席或返回非真=直推,行为与现状一致
-   * (裸构造兼容缺省;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
-  pushConfirmation?: (account?: string) => boolean | undefined;
+  /** 问题处理介入档位(ADR-0019,个人设置按流剥离):三档缺省二档,
+   * 按会话归属人现读现判,闸策略/提示词节奏/推送过目全部由档位派生——
+   * 三档「全程把控」=guard 提示词+环境闸与推送过目照旧;二档「仅分析
+   * 报告」=唯一停靠点是分析结论确认卡(检视循环),env 闸不举、直推;
+   * 一档「全自动」=确认类闸代答(analysis_confirm 全量/conclude 高置信
+   * 非问题)+纯选项问答卡代答+env 闸不举+直推。流水线人工事实闸任何
+   * 档都等人。回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
+  interventionTier?: (account?: string) => IssueInterventionTier;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -1374,7 +1369,7 @@ export class IssueFlowService {
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
       this.environmentCredentials(live),
-      { moonlight: this.moonlightOn(live), workspace: live.root }));
+      { tier: this.tierOf(live), workspace: live.root }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
@@ -1399,7 +1394,7 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(issueFixedOpeningPrompt(live.state,
           this.environmentCredentials(live),
-          { moonlight: this.moonlightOn(live), workspace: live.root }));
+          { tier: this.tierOf(live), workspace: live.root }));
       });
     }
   }
@@ -1653,10 +1648,22 @@ export class IssueFlowService {
         + String(error)));
   }
 
-  /** 月光轴现读现判:会话开/续聊渲染节奏、闸代答判定都读当下值,
-   * 用户改设置即刻生效(与需求流"每张卡到达时现读"同纪律)。 */
-  private moonlightOn(live: LiveIssue): boolean {
-    return this.options.moonlight?.(live.state.account) === true;
+  /** 介入档位现读现判(ADR-0019):会话开/续聊/闸判定都读当下值,
+   * 用户改档即刻生效;回调缺席=缺省二档。 */
+  private tierOf(live: LiveIssue): IssueInterventionTier {
+    return this.options.interventionTier?.(live.state.account) ?? "2";
+  }
+
+  /** 自动节奏(提示词少问/不简报、纯选项问答卡按推荐整卡代答):
+   * 一/二档自动,三档「全程把控」不自动。 */
+  private autoModeOn(live: LiveIssue): boolean {
+    return this.tierOf(live) !== "3";
+  }
+
+  /** 一档「全自动」专属:确认类闸(analysis_confirm 全量/conclude
+   * 高置信非问题)由系统代答;二档的停靠点恰是这些闸,永不代答。 */
+  private fullAutoOn(live: LiveIssue): boolean {
+    return this.tierOf(live) === "1";
   }
 
   /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。 */
@@ -1667,7 +1674,7 @@ export class IssueFlowService {
 
   /** skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时由
    * 工具层调用。现读现判五条件:固定流程 + 注册表声明本阶段有入口闸
-   * + 月光关 + 台账未圈选过 + 盘上无其他闸;再扫描已拉仓的
+   * + 自动节奏关 + 台账未圈选过 + 盘上无其他闸;再扫描已拉仓的
    * `.cac/skills/` 与 `.agents/skills/`(.cac 同名优先,见扫描处),
    * 非空才真举。同名跳过/扫描为空都留一行转移账(现场可查),不举卡
    * ——浪费用户一次点击的卡不是好卡。返回是否举了(工具回执据此叫
@@ -1762,7 +1769,7 @@ export class IssueFlowService {
    * 模块从发布库选取并只读投影(.mae-flow-work/business-modules/),
    * 清单落台账——重启/续聊按台账渲染地图,版本不随发布库中途更新
    * 漂移(与需求侧"按任务固定版本"同一纪律)。与 skill 圈选闸同一
-   * 扫描点但**不分介入档**:它不举卡、不等人,月光开档照常定格。
+   * 扫描点但**不分介入档**:它不举卡、不等人,自动档照常定格。
    * 没绑模块=静默缺席;模块库故障 fail-open(知识旁路不能卡会话),
    * 留一行转移账。返回是否定格到了资产。 */
   private freezeBusinessKnowledge(live: LiveIssue): boolean {
@@ -1814,36 +1821,37 @@ export class IssueFlowService {
     }
   }
 
-  /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
-   * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
-   * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
-   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答;
-   * push_confirm 是用户显式开启的过目意志,同样永不代答(ADR-0009);
-   * pipeline_unfixable/pipeline_evidence 问的是"人是否已在交付平台
-   * 处理/豁免"与"报错原文"——都是只有人拿得到的人工事实(票 03),
-   * 与 env_needed/env_verify 同类,永不代答。
+  /** 介入档位的闸代答(ADR-0006 口径,ADR-0019 收进一档「全自动」):
+   * 只代答"确认类"闸——analysis_confirm 全量(推荐码表定死 confirm);
+   * conclude 仅提案 non_issue 且自报高置信(闭环无下游闸,分级保守)。
+   * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),一/
+   * 二档根本不举、三档等人,永不代答;push_confirm 三档「全程把控」
+   * 才举,同样永不代答(ADR-0009);pipeline_unfixable/pipeline_evidence
+   * 问的是"人是否已在交付平台处理/豁免"与"报错原文"——都是只有人
+   * 拿得到的人工事实(票 03),任何档位永不代答。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
    * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
   private maybeAutoAnswerGate(live: LiveIssue): void {
     const { state } = live;
     const gate = state.gate;
     if (!gate) return;
-    // push_confirm 永不代答(ADR-0009,显式裁定):推送过目是用户显式
-    // 开启的"我要亲自看一眼"——更具体的意志赢过月光的免审批,与需求
-    // 流 push 前确认同一裁定。守卫放在月光判定之前:这条路径连"读
-    // 设置"都不必,过目卡在任何介入档位都只等真人。
+    // push_confirm 永不代答(ADR-0009,显式裁定):推送过目是用户
+    // 选「全程把控」时要的"我要亲自看一眼"——更具体的意志赢过档位的
+    // 免审批。守卫放在档位判定之前:这条路径连"读档位"都不必,过目卡
+    // 在任何介入档位都只等真人。
     if (gate.kind === "push_confirm") return;
-    // skill_select 永不代答(ADR-0011):多选圈选卡只在月光关时举起,
-    // 推荐项代答只认单选选项题(ADR-0006 整卡纪律)——这里显式守卫,
-    // 防月光中途打开时把已挂起的圈选卡追溯代答掉。
+    // skill_select 永不代答(ADR-0011;闸本身已被 ADR-0014 封存):
+    // 这里显式守卫,防任何档位把已挂起的圈选卡追溯代答掉。
     if (gate.kind === "skill_select") return;
     // 流水线人工闸永不代答(票 03):不可修卡问的是"人处理/豁免了没"
-    // ——答"已处理"就是人工事实声明,月光代答等于机器替人声明平台侧
-    // 已处理;证据回灌卡的报错原文只有人粘贴得出来。两类都放在月光
+    // ——答"已处理"就是人工事实声明,机器代答等于替人声明平台侧
+    // 已处理;证据回灌卡的报错原文只有人粘贴得出来。两类都放在档位
     // 判定之前,任何介入档位都只等真人(与 push_confirm 同款守卫位)。
     if (gate.kind === "pipeline_unfixable") return;
     if (gate.kind === "pipeline_evidence") return;
-    if (!this.moonlightOn(live)) return;
+    // 一档「全自动」才代答确认类闸(ADR-0019);二档的停靠点恰是
+    // 这张卡——分析结论等人检视,永不代答。
+    if (!this.fullAutoOn(live)) return;
     // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
     // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
     // 检视闭环被架空。普通流程(无检视回合)不受影响。
@@ -1857,29 +1865,30 @@ export class IssueFlowService {
     const issueId = live.id;
     const version = gate.state_version;
     const kind = gate.kind;
-    this.log(`[issue-flow] ${issueId} 月光免审批:闸 ${kind} 自动作答(${code})`);
+    this.log(`[issue-flow] ${issueId} 介入档位免审批:闸 ${kind} 自动作答(${code})`);
     setTimeout(() => {
       try {
         const summary = this.answer(issueId, {
           state_version: version,
           code,
-          decision: `月光免审批自动确认(${gateOptionLabel(kind, code)})`,
+          decision: `介入档位免审批自动确认(${gateOptionLabel(kind, code)})`,
         });
         void this.options.notifier?.notifyOutcome({
           taskId: issueId,
           account: state.account,
           status: summary.status,
-          summary: `月光免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
+          summary: `介入档位免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
           link: this.issueLink(issueId),
         }).catch(() => undefined);
       } catch (error) {
-        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+        this.log(`[issue-flow] ${issueId} 档位自动作答失败(旁路,卡留待人): `
           + String(error instanceof Error ? error.message : error));
       }
     }, 0);
   }
 
-  /** 月光免审批的 Agent 卡代答(ADR-0006 口径从平台闸扩至问答卡):
+  /** 介入档位免审批的 Agent 卡代答(ADR-0006 口径从平台闸扩至问答卡,
+   * ADR-0019 收进一/二档的自动节奏):
    * Agent 自举的 AskUserQuestion 卡,卡上每题都是选项题且都带
    * recommended(ADR-0004 的「AI 推荐」——校验层保证选项题必带、
    * trim 后逐字命中)时,按推荐项的决策码整卡代答。整卡纪律:含
@@ -1887,10 +1896,10 @@ export class IssueFlowService {
    * 整卡等人,不做半卡代答——机器只复述 AI 明示的推荐,不替人拼凑
    * 方案;开放题与"问用户事实"的闸同则,永不代答。
    * 守卫顺序:平台闸优先(盘上有闸走 maybeAutoAnswerGate,与 answer()
-   * 的作答分派同一优先级)→ 月光现读现判 → 检视回合整段跳过
+   * 的作答分派同一优先级)→ 档位现读现判 → 检视回合整段跳过
    * (ADR-0007 口径延伸:检视回合的卡是"意见是否被吸收"的复核点)。
-   * 只在卡落地的 settle 时刻判定一次:已挂起的卡不追溯代答,月光
-   * 中途打开对存量卡无效(与需求流同口径)。作答走 answer() 同一
+   * 只在卡落地的 settle 时刻判定一次:已挂起的卡不追溯代答,档位
+   * 中途切换对存量卡无效(与需求流同口径)。作答走 answer() 同一
    * 通道——状态版本先到生效、decodeAgentDecision 还原选项原文入账、
    * 续跑、事后可经现有回退推翻;defer 到回合收口(turning 释放)之后,
    * 失败旁路 fail-open,卡留待人。留痕落 notes:decision 位被 answers
@@ -1899,7 +1908,8 @@ export class IssueFlowService {
   private maybeAutoAnswerAgentCard(live: LiveIssue): void {
     const { state } = live;
     if (state.gate) return;
-    if (!this.moonlightOn(live)) return;
+    // 一/二档自动(ADR-0019):纯选项问答卡按推荐整卡代答,三档把控等人。
+    if (!this.autoModeOn(live)) return;
     if (state.review_active === true) return;
     const record = live.humanGate.pending()[0];
     if (!record) return;
@@ -1921,8 +1931,8 @@ export class IssueFlowService {
     }
     const issueId = live.id;
     const version = record.state_version;
-    const trace = `月光免审批自动作答(推荐项:${recommended.join("、")})`;
-    this.log(`[issue-flow] ${issueId} 月光免审批:问题卡 ${record.waiting_id}`
+    const trace = `介入档位免审批自动作答(推荐项:${recommended.join("、")})`;
+    this.log(`[issue-flow] ${issueId} 介入档位免审批:问题卡 ${record.waiting_id}`
       + ` 按推荐项自动作答(${recommended.join("、")})`);
     setTimeout(() => {
       try {
@@ -1935,12 +1945,12 @@ export class IssueFlowService {
           taskId: issueId,
           account: state.account,
           status: summary.status,
-          summary: `月光免审批:问题卡已按推荐项自动作答`
+          summary: `介入档位免审批:问题卡已按推荐项自动作答`
             + `(${recommended.join("、")})`,
           link: this.issueLink(issueId),
         }).catch(() => undefined);
       } catch (error) {
-        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+        this.log(`[issue-flow] ${issueId} 档位自动作答失败(旁路,卡留待人): `
           + String(error instanceof Error ? error.message : error));
       }
     }, 0);
@@ -2448,12 +2458,12 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
-      // 推送前过目(交付轴,现读现判):工具执行点读当下设置,用户改
-      // 设置即刻生效(与月光同一纪律)。
-      pushConfirmation: () =>
-        this.options.pushConfirmation?.(live.state.account) === true,
-      // 月光现值(过程轴,现读现判):skill 圈选入口闸的举卡条件之一。
-      moonlight: () => this.moonlightOn(live),
+      // 推送前过目(ADR-0019 档位派生,现读现判):只有三档「全程
+      // 把控」过目,一/二档直推;改档即刻生效。
+      pushConfirmation: () => this.tierOf(live) === "3",
+      // 介入档位现值:env 闸的举卡条件之一(一/二档不向用户索取环境,
+      // 缺口写进分析报告,见 tools 侧守卫)。
+      interventionTier: () => this.tierOf(live),
       // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
       // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。
       raiseSkillSelection: () => this.raiseSkillSelectionGate(live),
@@ -2624,7 +2634,7 @@ export class IssueFlowService {
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
         this.environmentCredentials(live),
-        { moonlight: this.moonlightOn(live), workspace: live.root }));
+        { tier: this.tierOf(live), workspace: live.root }));
     });
     return summarize(live.state);
   }

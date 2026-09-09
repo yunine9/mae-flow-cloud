@@ -13,6 +13,7 @@ import {
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
+import { TeamDomainSwitchPrototype } from "./prototype/TeamDomainSwitch";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -23,6 +24,7 @@ import {
   getMoonlightPreview,
   putMoonlight,
   putPersonalPushConfirmation,
+  putIssueInterventionTier,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
 import { orderHierarchyBy, orderTaskHierarchy, keepFamiliesTogether } from "./taskHierarchy";
@@ -185,11 +187,12 @@ function initialView(user: AuthUser): View {
 }
 
 /** 人工介入程度(用户拍板:一个旋钮说清,不做任务粒度设置)。
- * 两个正交轴合成四档:过程节点停不停(分析报告确认、无单结论确认、
- * 网管环境补配——卡面统称"过程"),推送前给不给人看变更清单(卡面
- * 统称"推送")。每档卡面就是一行两轴状态,细节在上方 summary 讲一次。
- * 月光转开仍走预览/是否处理当前待办的既有流程;推送过目默认开,
- * 只落显式的关。MR 人工合入与流水线绑 SHA 不归此旋钮,始终生效。 */
+ * 两个正交轴合成四档:过程节点停不停,推送前给不给人看变更清单。
+ * 2026-09 按流剥离:需求交付与问题处理各一对轴、独立取值互不带动,
+ * 同一张四档卡在设置页各渲染一份。需求侧月光转开仍走预览/是否处理
+ * 当前待办的既有流程(存量待办可一并清扫);问题侧闸卡现读现判,
+ * 开闸不追溯,已在等待的卡仍等真人。MR 人工合入与流水线绑 SHA 不归
+ * 此旋钮,始终生效。 */
 const INTERVENTION_PRESETS = [
   { key: "full", moonlight: false, push: true, title: "全程把关", isDefault: true,
     detail: "过程问你 · 推送问你" },
@@ -199,6 +202,17 @@ const INTERVENTION_PRESETS = [
     detail: "过程自动 · 推送问你" },
   { key: "auto", moonlight: true, push: false, title: "全自动", isDefault: false,
     detail: "过程自动 · 推送直走" },
+] as const;
+
+/** 问题处理介入档位(ADR-0019):三档,与需求交付四档互不带动,
+ * 缺省二档。 */
+const ISSUE_INTERVENTION_TIERS = [
+  { key: "1", title: "全自动", isDefault: false,
+    detail: "零介入 · 一路跑到 MR 变绿才提醒" },
+  { key: "2", title: "仅分析报告", isDefault: true,
+    detail: "只在报告检视停一次 · 其余直达变绿" },
+  { key: "3", title: "全程把控", isDefault: false,
+    detail: "对齐、结论、环境、推送过目全保留" },
 ] as const;
 
 function InterventionSetting({
@@ -272,11 +286,11 @@ function InterventionSetting({
   return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
     <header className="approval-setting-head">
       <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><h2 id="approval-setting-title">人工介入程度</h2></div>
+      <div><h2 id="approval-setting-title">人工介入程度 · 需求交付</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡;"推送"指每次 push 前先给你看变更清单(确认一次放行一次)。无论选哪档,MR 人工合入、流水线绑 SHA 等门禁始终生效;人工检视意见引发的修改一定回到意见作者复检。</p>
-    <div className="approval-options" role="group" aria-label="人工介入程度">
+    <p className="approval-setting-summary">一处设定，需求交付的任务全程生效（问题处理在下方单独设定）。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡；"推送"指每次 push 前先给你看变更清单（确认一次放行一次）。无论选哪档，MR 人工合入、流水线绑 SHA 等门禁始终生效；人工检视意见引发的修改一定回到意见作者复检。</p>
+    <div className="approval-options" role="group" aria-label="人工介入程度 · 需求交付">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
         onClick={() => void select(preset)}>
@@ -288,6 +302,63 @@ function InterventionSetting({
             {preset.isDefault && <i className="approval-option-default">默认</i>}
           </strong>
           <small>{preset.detail}</small>
+        </span>
+      </button>)}
+    </div>
+    {note && <p className="approval-setting-note" role="status">{note}</p>}
+  </section>;
+}
+
+function IssueInterventionSetting({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged: (patch: Partial<AuthUser>) => Promise<void>;
+}) {
+  const [tier, setTier] = useState(session.issue_intervention_tier ?? "2");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const current = ISSUE_INTERVENTION_TIERS
+    .find((item) => item.key === tier)!;
+  async function select(next: typeof ISSUE_INTERVENTION_TIERS[number]) {
+    if (busy || next.key === tier) return;
+    setBusy(true);
+    try {
+      // 现读现判:切档即刻生效,不追溯已挂起的卡(ADR-0019)。
+      const user = await putIssueInterventionTier(next.key);
+      const applied = user.issue_intervention_tier ?? "2";
+      setTier(applied);
+      setNote(applied === "1"
+        ? "问题处理已切到全自动:不再向你提问,一路跑到 MR 变绿(或办不了停下)才提醒你"
+        : applied === "2"
+          ? "问题处理只在分析报告检视时停一次,其余直达变绿"
+          : "问题处理恢复全程把控:现象对齐、结论确认、环境闸、推送过目全保留");
+      await onChanged({ issue_intervention_tier: applied });
+    } catch (cause) {
+      setNote(String((cause as Error).message ?? cause));
+    } finally { setBusy(false); }
+  }
+  return <section className="approval-setting" aria-labelledby="issue-intervention-title">
+    <header className="approval-setting-head">
+      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
+      <div><h2 id="issue-intervention-title">人工介入程度 · 问题处理</h2></div>
+      <span className="approval-setting-state">当前：{current.title}</span>
+    </header>
+    <p className="approval-setting-summary">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。</p>
+    <div className="approval-options" role="group" aria-label="人工介入程度 · 问题处理">
+      {ISSUE_INTERVENTION_TIERS.map((item) => <button type="button" key={item.key}
+        className={current.key === item.key ? "on" : ""} disabled={busy}
+        onClick={() => void select(item)}>
+        <i aria-hidden>{item.key === "3"
+          ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
+          : item.key === "1" ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 1 1 7.5 4.5a6.5 6.5 0 0 0 8 8Zm-6 .5 3.5 3.5L18 8" /></svg>
+          : "✓"}</i>
+        <span>
+          <strong>{item.title}
+            {item.isDefault && <i className="approval-option-default">默认</i>}
+          </strong>
+          <small>{item.detail}</small>
         </span>
       </button>)}
     </div>
@@ -357,7 +428,9 @@ function TaskSyncIndicator({
   );
 }
 
-function PersonalSettingsPage({
+/** 导出供预览脚本 SSR 截图(组件统一化同款纪律:样式集中,不在
+ * 组件里 import CSS,node 可导入)。 */
+export function PersonalSettingsPage({
   session,
   onSessionPatch,
   onTasksChanged,
@@ -368,6 +441,10 @@ function PersonalSettingsPage({
 }) {
   return <div className="personal-settings-page">
     <InterventionSetting session={session} onChanged={async (patch) => {
+      onSessionPatch(patch);
+      await onTasksChanged();
+    }} />
+    <IssueInterventionSetting session={session} onChanged={async (patch) => {
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
@@ -1063,6 +1140,9 @@ export function App() {
       <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
+          {/* 【原型 · 用后即弃】领域切换(标题位下拉;迭代中,定稿后折进正式实现) */}
+          <TeamDomainSwitchPrototype tasks={tasks} issues={teamIssues}
+            onOpenIssue={openIssueSession} />
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
             <button type="button" role="tab" id="team-task-current-tab"
               aria-controls="team-task-current-panel"
@@ -1629,7 +1709,7 @@ function TeamDashboard({
         (item) => item.teamTask.id,
         (item) => item.task?.parent_task_id,
       ).map((item) => item.issue
-        ? <TeamIssueCard compact key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
+        ? <TeamIssueCard key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
         : item.task ? <TaskCard compact relatedTasks={tasks} key={item.teamTask.id} task={item.task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />
         : null)}</div>
     </section>

@@ -7,7 +7,7 @@
  * - 月光开着也不代这张闸(显式守卫);令牌随 issue.json 持久化,
  *   服务重启后未消费的令牌仍放行下一次推送。
  *
- * 范式与 issueMoonlight.test.ts / issueFlowService.test.ts 同款:
+ * 范式与 issueInterventionTiers.test.ts / issueFlowService.test.ts 同款:
  * ScriptedModelServer 剧本 + 本地裸仓,只走公开 API 断言。推送用例走
  * 固定流程种子(fix 阶段收口后的返工续推:阶段门禁放行 push_branch,
  * 收口态不牵催办——与本闸正交)。
@@ -114,7 +114,7 @@ function pushReceipts(dataDir: string, id: string): Array<{
     .map((event) => event.payload);
 }
 
-test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成功→令牌消费→再推重新被拦", async () => {
+test("三档把控(过目):首推被拒举卡(带变更摘要),确认→令牌→重试成功→令牌消费→再推重新被拦", async () => {
   const dataDir = mfcTemp("mfc-issue-pushconfirm-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
@@ -132,7 +132,7 @@ test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成�
   const created = seedFixedIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    pushConfirmation: () => true,
+    interventionTier: () => "3",
   });
   try {
     const gated = await until(() => {
@@ -233,7 +233,7 @@ test("过目开:首推被拒举卡(带变更摘要),确认→令牌→重试成�
   }
 });
 
-test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立卡面)", async () => {
+test("三档把控(过目):答「暂不推送」不产令牌、续跑、决策入账(独立卡面)", async () => {
   const dataDir = mfcTemp("mfc-issue-pushhold-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
@@ -248,7 +248,7 @@ test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立
   const created = seedFixedIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    pushConfirmation: () => true,
+    interventionTier: () => "3",
   });
   try {
     const gated = await until(() => {
@@ -281,8 +281,8 @@ test("过目开:答「暂不推送」不产令牌、续跑、决策入账(独立
   }
 });
 
-test("过目关/回调缺席:push_branch 直推,行为与现状一致", async () => {
-  for (const label of ["回调缺席", "显式关"] as const) {
+test("一/二档直推:push_branch 不过目直接推(ADR-0019 过目并进三档)", async () => {
+  for (const label of ["二档缺省", "一档全自动"] as const) {
     const dataDir = mfcTemp(`mfc-issue-pushoff-${label}-`);
     const origin = bareOrigin(dataDir);
     const script: Scene[] = [
@@ -297,7 +297,7 @@ test("过目关/回调缺席:push_branch 直推,行为与现状一致", async ()
     const created = seedFixedIssue(dataDir, origin);
     const service = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      ...(label === "显式关" ? { pushConfirmation: () => false } : {}),
+      ...(label === "一档全自动" ? { interventionTier: () => "1" } : {}),
     });
     try {
       const idle = await until(() => {
@@ -316,7 +316,7 @@ test("过目关/回调缺席:push_branch 直推,行为与现状一致", async ()
   }
 });
 
-test("月光开:push_confirm 闸不被自动作答(显式守卫,永等真人)", async () => {
+test("三档把控:push_confirm 闸等真人(档位守卫永不代答)", async () => {
   const dataDir = mfcTemp("mfc-issue-pushmoon-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
@@ -330,8 +330,7 @@ test("月光开:push_confirm 闸不被自动作答(显式守卫,永等真人)", 
   const created = seedFixedIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => true,
-    pushConfirmation: () => true,
+    interventionTier: () => "3",
   });
   try {
     await until(() => {
@@ -369,7 +368,7 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
   const created = seedFixedIssue(dataDir, origin);
   const first = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    pushConfirmation: () => true,
+    interventionTier: () => "3",
   });
   let second: IssueFlowService | undefined;
   try {
@@ -384,7 +383,7 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
     // 重建(recover 不清闸、不清令牌):卡原样等家人。
     second = new IssueFlowService({
       ...baseOptions(dataDir, model),
-      pushConfirmation: () => true,
+      interventionTier: () => "3",
     });
     const recovered = second.get(created.id);
     assert.equal(recovered.status, "waiting_user", "重启不吞推送过目卡");
@@ -415,7 +414,7 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
   }
 });
 
-test("过目开:确认后又有新提交,重推对不上过目 tip 即作废重举(防盲签完整形态)", async () => {
+test("三档把控(过目):确认后又有新提交,重推对不上过目 tip 即作废重举(防盲签完整形态)", async () => {
   const dataDir = mfcTemp("mfc-issue-pushstale-");
   const origin = bareOrigin(dataDir);
   // 第二笔提交:不再建分支(首笔已建),直接在 BRANCH 上加新文件。
@@ -440,7 +439,7 @@ test("过目开:确认后又有新提交,重推对不上过目 tip 即作废重�
   const created = seedFixedIssue(dataDir, origin);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    pushConfirmation: () => true,
+    interventionTier: () => "3",
   });
   try {
     const gated = await until(() => {

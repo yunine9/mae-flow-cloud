@@ -495,11 +495,16 @@ test("帮助中心单一流程化(#98):设置页契约无探索方式卡片", ()
 test("团队看板问题卡片入口行为不变:点击即进,不含归属判断", () => {
   const teamCard = readFileSync(
     resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
+  const overviewRow = readFileSync(
+    resolve("web/src/TaskOverviewRow.tsx"), "utf-8");
   // 入口语义(spec 拍板):纯 onOpen 回调,文案与行为不因身份变化;
   // 非归属人点开即达,查看模式在会话工作台内部呈现,卡片不做归属裁剪。
+  // 卡片已收敛为 TaskOverviewRow 单形态(与任务行同款,整行可点即进)。
   assert.match(teamCard, /onOpen: \(\) => void/);
-  assert.match(teamCard, /onClick=\{onOpen\}/);
-  assert.match(teamCard, /进入问题工作台/);
+  assert.match(teamCard, /<TaskOverviewRow issue /);
+  assert.match(teamCard, /onOpen=\{onOpen\}/);
+  assert.match(overviewRow, /onClick=\{onOpen\}/);
+  assert.match(overviewRow, /打开\$\{issue \? "问题" : "任务"\}工作台/);
   // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
   assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
 });

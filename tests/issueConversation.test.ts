@@ -233,6 +233,8 @@ test("服务级:等待中的 Agent 卡流内只有一条投影,waiting_id 是真
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
+    // 等「等人卡」的管道测试:显式三档把控(ADR-0019 缺省二档会代答)。
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({
@@ -285,6 +287,8 @@ test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 等 env 闸的管道测试:三档把控 env 闸照举(一/二档不举)。
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({

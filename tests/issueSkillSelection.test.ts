@@ -7,7 +7,7 @@
  * - 存量挂起的圈选卡仍可作答(封存不删码):清单外 selection 拒绝、
  *   正式勾选落台账清闸;旧台账的必读清单仍随 analyze 开场词注入。
  *
- * 范式与 issueMoonlight.test.ts 同款:ScriptedModelServer 剧本,只走
+ * 范式与 issueInterventionTiers.test.ts 同款:ScriptedModelServer 剧本,只走
  * 公开 API 断言。
  */
 
@@ -128,14 +128,14 @@ function chainScenes(origin: string): Scene[] {
   ];
 }
 
-async function runToAnalysisConfirm(origin: string, moonlight: boolean) {
+async function runToAnalysisConfirm(origin: string, tier: "1" | "3") {
   const dataDir = mfcTemp("mfc-issue-skill-find-");
   const script = chainScenes(origin);
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => moonlight,
+    interventionTier: () => tier,
   });
   const created = service.create({
     account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
@@ -154,7 +154,7 @@ test("月光关+仓内有 skill:入口不举卡,扫描清单留痕转移账,直�
   const dataDir = mfcTemp("mfc-issue-skill-note-");
   const origin = bareOrigin(dataDir, true);
   const { model, service, id, confirmed } =
-    await runToAnalysisConfirm(origin, false);
+    await runToAnalysisConfirm(origin, "3");
   try {
     // 全程没有 skill_select 卡:确认闸是第一张也是唯一一张等待卡。
     assert.equal(confirmed.gate?.kind, "analysis_confirm");
@@ -177,7 +177,7 @@ test("扫描为空:留「未发现」账,不举卡", async () => {
   const dataDir = mfcTemp("mfc-issue-skill-empty-");
   const origin = bareOrigin(dataDir, false);
   const { model, service, id, confirmed } =
-    await runToAnalysisConfirm(origin, false);
+    await runToAnalysisConfirm(origin, "3");
   try {
     assert.ok((confirmed.transitions ?? []).some((entry) =>
       entry.note.includes("未发现业务 skill")),
@@ -192,7 +192,7 @@ test("两目录同名:.cac 胜出,同名跳过留告警", async () => {
   const dataDir = mfcTemp("mfc-issue-skill-dup-");
   const origin = bareOriginWithSkills(dataDir, ["login-triage"], ["login-triage"]);
   const { model, service, confirmed } =
-    await runToAnalysisConfirm(origin, false);
+    await runToAnalysisConfirm(origin, "3");
   try {
     const transitions = confirmed.transitions ?? [];
     assert.ok(transitions.some((entry) =>
@@ -212,7 +212,7 @@ test("仅 .agents/skills 有技能:补位进扫描账", async () => {
   const dataDir = mfcTemp("mfc-issue-skill-agents-");
   const origin = bareOriginWithSkills(dataDir, [], ["agents-only"]);
   const { model, service, confirmed } =
-    await runToAnalysisConfirm(origin, false);
+    await runToAnalysisConfirm(origin, "3");
   try {
     assert.ok((confirmed.transitions ?? []).some((entry) =>
       entry.note.includes("扫描到 1 个业务 skill(agents-only)")),
@@ -256,7 +256,7 @@ test("存量挂起圈选卡仍可作答:清单外拒绝,正式勾选落台账清
   await model.start();
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
-    moonlight: () => false,
+    interventionTier: () => "3",
   });
   try {
     const resumed = service.get("issue-1");
@@ -304,15 +304,15 @@ test("提示层:存量台账的必读清单仍随 analyze 开场词注入", () =
   } as unknown as IssueSessionState;
   const analyze = { ...base, stage: "analyze" } as IssueSessionState;
   const prep = { ...base, stage: "prep_repo" } as IssueSessionState;
-  const withSelection = issueFixedOpeningPrompt(analyze, {}, { moonlight: false });
+  const withSelection = issueFixedOpeningPrompt(analyze, {}, { tier: "3" });
   assert.match(withSelection, /必读 skill\(用户圈选,分析前先读;/);
   assert.match(withSelection, new RegExp(SKILL_PATH.replace(/[/.]/g, "\\$&")));
   assert.match(withSelection, /登录链路五步排障/);
-  const noInjection = issueFixedOpeningPrompt(prep, {}, { moonlight: false });
+  const noInjection = issueFixedOpeningPrompt(prep, {}, { tier: "3" });
   assert.doesNotMatch(noInjection, /必读 skill/, "非分析阶段不注入");
   const untouched = issueFixedOpeningPrompt(
     { ...base, stage: "analyze", skill_selection: undefined } as IssueSessionState,
-    {}, { moonlight: false });
+    {}, { tier: "3" });
   assert.doesNotMatch(untouched, /必读 skill/, "未圈选不注入");
 });
 
