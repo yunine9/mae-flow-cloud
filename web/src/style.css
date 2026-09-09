@@ -11493,6 +11493,18 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   min-height: 0;
   overflow-y: auto;
 }
+/* 对话现场的流壳(event-workspace:无详情=裸流,有详情=流+详情双栏
+   grid)是 panel-body 与流之间的中间层——旧直接子选择器的拉伸链在
+   它这里断掉,壳不生长,流再怎么 flex 也只是内容高(2026-09-09
+   下半屏留白的真正断点)。壳吃满面板体余量,流撑满壳。 */
+.issue-workspace.task-workspace-v2 .issue-main-pane .event-workspace {
+  flex: 1;
+  min-height: 0;
+}
+.issue-workspace.task-workspace-v2 .issue-main-pane .event-workspace > .event-stream {
+  height: 100%;
+  max-height: none;
+}
 .issue-workspace.task-workspace-v2 .ws-side {
   display: flex;
   flex-direction: column;

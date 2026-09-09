@@ -29,15 +29,21 @@ test("问题工作台 v2:四个材料页签根节点同构拉伸并自滚", () =
   assert.match(rule[0], /overflow-y:\s*auto/, "材料根自滚,长文档不撑破面板");
 });
 
-test("对话现场的直播流保持内滚链:面板体与流都是 flex 且流不设帽", () => {
+test("对话现场的直播流保持内滚链:面板体、流壳、流三层都吃满", () => {
   const body = style.match(
     /\.issue-main-pane > \.event-panel-body \{[^}]*\}/);
   assert.ok(body, "event-panel-body 规则必须在场");
   assert.match(body[0], /flex:\s*1/, "面板体吃满左栏");
+  // 流壳 event-workspace 是 panel-body 与流之间的中间层:壳不生长,
+  // 流再 flex 也只是内容高(2026-09-09 下半屏留白的真正断点)。
+  const shell = style.match(
+    /\.issue-workspace\.task-workspace-v2 \.issue-main-pane \.event-workspace \{[^}]*\}/);
+  assert.ok(shell, "v2 里流壳的拉伸规则必须在场");
+  assert.match(shell[0], /flex:\s*1/, "流壳吃满面板体");
   const stream = style.match(
-    /\.issue-main-pane > \.event-panel-body > \.event-stream \{[^}]*\}/);
-  assert.ok(stream, "event-stream 规则必须在场");
-  assert.match(stream[0], /flex:\s*1/, "直播流吃满面板体");
+    /\.issue-workspace\.task-workspace-v2 \.issue-main-pane \.event-workspace > \.event-stream \{[^}]*\}/);
+  assert.ok(stream, "v2 里流的撑满规则必须在场");
+  assert.match(stream[0], /height:\s*100%/, "流撑满流壳");
   assert.match(stream[0], /max-height:\s*none/,
     "工作台内直播流不设 540px 帽(贴底跟随依赖吃满)");
 });
