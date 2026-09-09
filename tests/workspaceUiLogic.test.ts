@@ -488,7 +488,8 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   const html = renderToStaticMarkup(React.createElement(taskCard.ExecutionPanel, {
     task: task("live"),
   }));
-  assert.match(html, /实时执行日志，自动跟随/);
+  // 2026-09-08 拍板:面板默认只看对话,文案随之更新——依旧不漏 SSE 等术语。
+  assert.match(html, /只看对话，可切全部\/工具\/异常/);
   assert.doesNotMatch(html, /SSE/);
 
   for (const state of ["repairing", "blocked", "passed", "user_skipped"]) {

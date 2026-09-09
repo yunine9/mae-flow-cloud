@@ -23,11 +23,19 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { randomUUID } from "node:crypto";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import { pipelineHeaders } from "../pipelineClient.ts";
+import {
+  fetchMrDiscussions,
+  type MrDiscussionItem,
+  type MrReviewReplyOutboxItem,
+} from "./mrDiscussions.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
@@ -480,6 +488,10 @@ export interface IssueFlowOptions {
    *  改代码解决不了(要人在交付平台处理/豁免)——不派回合,停表请人。
    *  缺席=不分诊,红灯照旧派修,行为与现状一致。 */
   unfixableTools?: string[];
+  /** 发布检视回复时代点"已解决"(--resolve-discussions,与需求交付
+   *  同一面旗):默认关——resolve 归检视人,代点是越权;平台/团队
+   *  明确允许的部署才开。 */
+  resolveDiscussions?: boolean;
   /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
    * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
    * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
@@ -575,6 +587,11 @@ const NUDGE_BUDGET = 2;
  * 重启这件事在会话时间线里可查,不落 stage_note(那是显示层的现场
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
 const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
+
+/** MR 检视回复的草稿文件(AI 按注入清单写)与出站信箱(宿主投递账),
+ * 都在会话工作区根;草稿即消费,信箱是投递的唯一真相。 */
+const MR_REPLY_DRAFT_FILE = "mr-review-replies.json";
+const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
@@ -3457,6 +3474,9 @@ export class IssueFlowService {
     const { state } = live;
     const platformUrl = this.options.platformUrl;
     if (!platformUrl) return;
+    // MR 检视意见监看(票 01:发现与落账)与流水线监看并行点火;
+    // 自身单例、fail-open,详见 watchMrDiscussions。
+    this.watchMrDiscussions(live);
     const { pollMs } = this.pipelineKnobs();
     const call = () => ({
       platformUrl,
@@ -3542,6 +3562,306 @@ export class IssueFlowService {
           + `提交 ${sha.slice(0, 12)}),流水线在预算内迟迟未出结果,`
           + "自动监看已停止。请人工查看 MR/流水线,处理后发消息继续");
     }
+  }
+
+  /** MR 检视意见监看(票 01:发现与落账;票 02:注入与闭环;票 03:
+   * 回复发布,2026-09-08 立项):mr_green 期内随流水线监看的节奏逐仓
+   * 拉 CodeHub 检视讨论,新意见落问题域反馈账并注入 AI 修复;检视人
+   * 在 CodeHub 解决讨论后,对应意见闭环标注。
+   * - 单例:每会话至多一个循环,重复点火(申报/重推/重新监看)只记一次;
+   * - fail-open:适配层未配置/拉取失败等下一轮,绝不拖垮流水线主监看;
+   * - 生命周期:stage 留在 mr_green 且会话未终态;关停/终态/取消即止。
+   *   发现半场在验绿收口即停(收口后新意见不追);回复投递的下半场
+   *   继续跑到投完或会话终态。 */
+  private readonly reviewWatchers = new Set<string>();
+  /** 待注入的检视意见(会话忙时挂起,闲时补发):存会话 id,内容现查
+   *  反馈账里该会话的全部 open 意见——每次点火都带全量,不靠增量拼。 */
+  private readonly reviewNotifyPending = new Set<string>();
+
+  private watchMrDiscussions(live: LiveIssue): void {
+    if (!this.options.platformUrl || this.reviewWatchers.has(live.id)) return;
+    this.reviewWatchers.add(live.id);
+    // fail-open 兜底:循环体内任何一步(如反馈账读爆)都不许击穿进程
+    // ——记日志、退出、下轮点火(申报/重推)自然重来。
+    void this.pollMrDiscussions(live)
+      .catch((error) =>
+        this.log(`[issue-flow] ${live.id} 检视意见监看异常退出: `
+          + String(error instanceof Error ? error.message : error)))
+      .finally(() => {
+        this.reviewWatchers.delete(live.id);
+      });
+  }
+
+  private async pollMrDiscussions(live: LiveIssue): Promise<void> {
+    const { pollMs } = this.pipelineKnobs();
+    const credential = this.options.gitCredential?.(live.state.account);
+    let unavailableReason: string | undefined;
+    for (;;) {
+      if (this.shuttingDown || isTerminal(live.state.status)
+          || live.state.stage !== "mr_green"
+          || !live.state.mrs?.length) {
+        return;
+      }
+      // 发现半场只在验绿收口前跑;回复投递收口后继续跑到投完。
+      if (!this.mrGreenClosed(live.state)) {
+        for (const mr of live.state.mrs) {
+          const fetched = await fetchMrDiscussions({
+            platformUrl: this.options.platformUrl!,
+            repo: mr.repo,
+            mr: mr.iid ?? mr.url,
+            ...(credential ? { credential } : {}),
+          });
+          if (fetched.kind !== "unavailable") {
+            unavailableReason = undefined;
+          } else {
+            // 明细暂不可用:等下一轮(降级日志只在原因变化时记,别刷屏)。
+            if (fetched.reason !== unavailableReason) {
+              unavailableReason = fetched.reason;
+              this.log(`[issue-flow] ${live.id} ${mr.repo} 检视明细暂不可用,`
+                + `等下一轮:${fetched.reason}`);
+            }
+            continue;
+          }
+          const fresh = this.absorbMrDiscussions(live, mr.repo, fetched.items);
+          if (!fresh.length) continue;
+          // 修复预算=0(关自动修):意见标待人工,不注入。
+          if (repairBudget(this.options.settings) === 0) {
+            const store = this.feedbackStore(live);
+            for (const item of fresh) {
+              store.resolve(`mr-discussion:${mr.repo}:${item.id}`,
+                "needs_human",
+                "自动修复已关闭(repair_rounds=0),请人工处理");
+            }
+            this.log(`[issue-flow] ${live.id} 检视意见 ${fresh.length} 条`
+              + `标待人工(自动修已关)`);
+          } else {
+            this.reviewNotifyPending.add(live.id);
+          }
+        }
+      }
+      this.notifyMrReviewPending(live);
+      this.stageMrReviewReplies(live);
+      await this.flushMrReviewReplies(live);
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, pollMs);
+        timer.unref?.();
+      });
+    }
+  }
+
+  /** 新意见落反馈账,返回本轮新出现的(调用方决定注入还是标待人工);
+   *  已落账且仍 open 的意见这轮没再出现 = 检视人已在 CodeHub 解决,
+   *  闭环标注。 */
+  private absorbMrDiscussions(
+    live: LiveIssue,
+    repo: string,
+    items: MrDiscussionItem[],
+  ): MrDiscussionItem[] {
+    const recordPrefix = `mr-discussion:${repo}:`;
+    const store = this.feedbackStore(live);
+    const records = store.list()
+      .filter((record) => record.source === "mr_discussion"
+        && record.id.startsWith(recordPrefix));
+    const known = new Set(records.map((record) => record.source_id));
+    const fresh = items.filter((item) => !known.has(item.id));
+    if (fresh.length) {
+      // 观察基准:该仓最近一次推送——检视意见是对哪版代码提的,账上
+      // 要能对回去;还没有推送收据(理论不可达,申报前置了推送)留空。
+      const observedSha = live.state.pushes
+        ?.find((push) => push.repo === repo)?.sha ?? "";
+      store.upsert(fresh.map((item) => ({
+        id: `${recordPrefix}${item.id}`,
+        batch_id: `mr-discussion:${repo}`,
+        source: "mr_discussion",
+        source_id: item.id,
+        source_revision: item.revision ?? 0,
+        observed_sha: observedSha,
+        summary: (item.severity ? `[${item.severity}] ` : "")
+          + String(item.body ?? "MR 检视意见").slice(0, 1000 - 12),
+        ...(item.file ? { file: item.file } : {}),
+        ...(item.line !== undefined ? { line: item.line } : {}),
+        ...(item.author ? { author: item.author.slice(0, 120) } : {}),
+        verification: "reviewer",
+        status: "open" as const,
+        updated_at: new Date().toISOString(),
+      })));
+      this.log(`[issue-flow] ${live.id} 收到 MR 检视意见 ${fresh.length} 条`
+        + `(${repo})`);
+    }
+    const openIds = new Set(items.map((item) => item.id));
+    for (const record of records.filter((row) => row.status === "open")) {
+      if (!openIds.has(record.source_id)) {
+        store.resolve(record.id, "closed", "检视人已在 CodeHub 解决该讨论");
+      }
+    }
+    return fresh;
+  }
+
+  /** 注入点火:会话空闲才开平台回合(忙时等下一拍——startPlatformTurn
+   *  的挂便签会把清单压缩成一句,不如等闲了把全量清单当面交给 AI);
+   *  内容恒为当前全部 open 意见,不靠增量拼。 */
+  private notifyMrReviewPending(live: LiveIssue): void {
+    if (!this.reviewNotifyPending.has(live.id)) return;
+    if (this.turning.has(live.id) || live.state.status !== "idle") return;
+    this.reviewNotifyPending.delete(live.id);
+    const open = this.feedbackStore(live).list()
+      .filter((record) => record.source === "mr_discussion"
+        && record.status === "open");
+    if (!open.length) return;
+    const list = open.map((record) => {
+      const where = record.file
+        ? `${record.file}${record.line !== undefined ? `:${record.line}` : ""}`
+        : "(无位置)";
+      return `- ${where} ${record.summary}(意见 id: ${record.source_id})`;
+    }).join("\n");
+    this.startPlatformTurn(live, promptCopy("notices", "mr_review", {
+      count: open.length,
+      list,
+    }));
+  }
+
+  /** 检视回复草稿(AI 按注入清单写的工作区文件)→ 出站信箱。每条绑定
+   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。 */
+  private stageMrReviewReplies(live: LiveIssue): void {
+    const draftPath = join(live.root, MR_REPLY_DRAFT_FILE);
+    if (!existsSync(draftPath)) return;
+    let draft: unknown;
+    try {
+      draft = JSON.parse(readFileSync(draftPath, "utf-8"));
+    } catch {
+      return; // 可能还在写:整文件 JSON 读不动就下一拍再读
+    }
+    if (!Array.isArray(draft) || !draft.length) return;
+    const records = this.feedbackStore(live).list()
+      .filter((record) => record.source === "mr_discussion");
+    const outbox = this.readMrReviewOutbox(live);
+    let staged = 0;
+    for (const entry of draft) {
+      const discussionId = String(
+        (entry as Record<string, unknown>)?.discussion_id ?? "").trim();
+      const body = String(
+        (entry as Record<string, unknown>)?.body ?? "").trim();
+      if (!discussionId || !body) continue;
+      const record = records.find(
+        (candidate) => candidate.source_id === discussionId);
+      if (!record) {
+        this.log(`[issue-flow] ${live.id} 检视回复草稿引用未知意见 `
+          + `${discussionId},跳过`);
+        continue;
+      }
+      if (outbox.items.some((item) =>
+        item.discussion_id === discussionId && item.status !== "failed")) {
+        continue; // 已在箱(投过/投递中),不重复入箱
+      }
+      const repo = record.id.slice(
+        "mr-discussion:".length,
+        record.id.length - discussionId.length - 1);
+      outbox.items.push({
+        id: `mrr-${randomUUID()}`,
+        repo,
+        discussion_id: discussionId,
+        body,
+        resolve: this.options.resolveDiscussions === true,
+        expected_sha: live.state.pushes
+          ?.find((push) => push.repo === repo)?.sha ?? "",
+        status: "pending",
+        attempts: 0,
+        created_at: new Date().toISOString(),
+      });
+      staged += 1;
+    }
+    // 草稿即消费:空稿/全部重复都删,不再逐拍解析。
+    rmSync(draftPath, { force: true });
+    if (!staged) return;
+    this.writeMrReviewOutbox(live, outbox);
+    this.log(`[issue-flow] ${live.id} 检视回复待发布 ${staged} 条`);
+  }
+
+  /** 出站信箱投递:SHA 不匹配保持 pending(绝不能借另一版代码说
+   *  "已修");投递带 Idempotency-Key,重放不产生第二条 CodeHub 回复;
+   *  重试超限标 failed 交人工。 */
+  private async flushMrReviewReplies(live: LiveIssue): Promise<void> {
+    const outbox = this.readMrReviewOutbox(live);
+    const pending = outbox.items.filter((item) => item.status === "pending");
+    if (!pending.length) return;
+    const platformUrl = this.options.platformUrl!;
+    const credential = this.options.gitCredential?.(live.state.account);
+    let dirty = false;
+    for (const item of pending) {
+      const receipt = live.state.pushes
+        ?.find((push) => push.repo === item.repo)?.sha ?? "";
+      if (!receipt || receipt !== item.expected_sha) {
+        const reason = !receipt
+          ? "该仓还没有推送收据,等推送后投递"
+          : `回复绑定 ${item.expected_sha.slice(0, 12)},当前推送收据 `
+            + `${receipt.slice(0, 12)}——SHA 漂移,暂不投递`;
+        if (item.last_error !== reason) {
+          item.last_error = reason;
+          dirty = true;
+          this.log(`[issue-flow] ${live.id} 检视回复暂缓: ${reason}`);
+        }
+        continue;
+      }
+      if (item.attempts >= 5) {
+        item.status = "failed";
+        item.last_error = "投递重试超限,请人工在 CodeHub 回复";
+        dirty = true;
+        continue;
+      }
+      item.attempts += 1;
+      try {
+        const response = await fetch(
+          `${platformUrl.replace(/\/+$/, "")}/mr/discussions/`
+          + `${encodeURIComponent(item.discussion_id)}/reply`, {
+            method: "POST",
+            headers: {
+              ...pipelineHeaders(credential),
+              "content-type": "application/json",
+              "Idempotency-Key": item.id,
+            },
+            body: JSON.stringify({
+              repo: item.repo,
+              body: item.body,
+              resolve: item.resolve,
+              idempotency_key: item.id,
+            }),
+          });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        item.status = "delivered";
+        item.delivered_at = new Date().toISOString();
+        delete item.last_error;
+        dirty = true;
+        this.log(`[issue-flow] ${live.id} 检视回复已发布(${item.discussion_id})`);
+      } catch (error) {
+        item.last_error = String(
+          error instanceof Error ? error.message : error);
+        dirty = true;
+      }
+    }
+    if (dirty) this.writeMrReviewOutbox(live, outbox);
+  }
+
+  private readMrReviewOutbox(live: LiveIssue): {
+    items: MrReviewReplyOutboxItem[];
+  } {
+    try {
+      const parsed = JSON.parse(readFileSync(
+        join(live.root, MR_REPLY_OUTBOX_FILE), "utf-8")) as {
+          items?: MrReviewReplyOutboxItem[];
+        };
+      if (Array.isArray(parsed.items)) return { items: parsed.items };
+    } catch {
+      // 缺席/读不动:空箱,投递是旁路不拖主链路。
+    }
+    return { items: [] };
+  }
+
+  private writeMrReviewOutbox(
+    live: LiveIssue,
+    outbox: { items: MrReviewReplyOutboxItem[] },
+  ): void {
+    writeFileSync(join(live.root, MR_REPLY_OUTBOX_FILE),
+      JSON.stringify(outbox, null, 1), "utf-8");
   }
 
   private async settlePipeline(

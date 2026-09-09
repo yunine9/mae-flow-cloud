@@ -37,6 +37,7 @@ import {
   eventWindow,
   filterEvents,
   isErrorEvent,
+  type EventDetailSelection,
   type EventFilter,
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
@@ -1661,21 +1662,13 @@ function FollowPaused({ behind, onResume }: {
   );
 }
 
-interface EventDetailSelection {
-  key: string;
-  eventId: number;
-  eventLabel: string;
-  fieldLabel: string;
-  content: string;
-  structured: boolean;
-  timestamp: string;
-}
-
 function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   const PAGE_SIZE = 120;
   const [events, setEvents] = useState<SemanticEvent[]>([]);
   const [connection, setConnection] = useState<SseConnectionState>("connecting");
-  const [filter, setFilter] = useState<EventFilter>("all");
+  // 默认只看对话(2026-09-08 用户拍板:展开卡片要的是聊天,不是工具
+  // 调用噪音);原始事件流用筛选器一键可达,备查不丢。
+  const [filter, setFilter] = useState<EventFilter>("messages");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [detail, setDetail] = useState<EventDetailSelection>();
   const filtered = filterEvents(events, filter);
@@ -1686,7 +1679,7 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   useEffect(() => {
     setEvents([]);
     setConnection("connecting");
-    setFilter("all");
+    setFilter("messages");
     setVisibleLimit(PAGE_SIZE);
     setDetail(undefined);
   }, [taskId]);
@@ -1795,6 +1788,8 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
 
 /** 执行现场=实时执行日志,一种读法(2026-08-26 用户拍板:心流
  * 摘要定位不清晰,干掉;筛选器 + 贴底跟随已足够扫读与取证)。
+ * 2026-09-08 二次拍板:默认筛选从"全部"改为"消息"——展开卡片要看的
+ * 是聊天,不是工具调用噪音;原始流切筛选器即达,备查不丢。
  * 展开才建立实时连接。 */
 export function ExecutionPanel({
   task,
@@ -1816,7 +1811,7 @@ export function ExecutionPanel({
         onClick={() => setExpanded((current) => !current)}>
         <span>
           <strong>执行现场</strong>
-          <small>{task.focus?.headline ?? "实时执行日志，自动跟随"}</small>
+          <small>{task.focus?.headline ?? "只看对话，可切全部/工具/异常"}</small>
         </span>
         <i aria-hidden />
       </button>

@@ -1567,18 +1567,8 @@ svg {
 }
 .wish-quick-trigger span { font-size: 16px; }
 .wish-quick-trigger strong { font-size: 12px; writing-mode: horizontal-tb; letter-spacing: 0; }
-.wish-quick-backdrop { position: fixed; z-index: 800; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(5, 9, 18, .58); }
-.wish-quick-dialog { width: min(460px, 100%); padding: 22px; display: grid; gap: 16px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 80px rgba(0, 0, 0, .45); }
-.wish-quick-dialog header, .wish-quick-dialog footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.wish-quick-dialog header small { color: var(--accent); font-weight: 700; letter-spacing: 0; }
-.wish-quick-dialog h2 { margin: 3px 0 0; }
-.wish-quick-dialog header > button { width: 32px; height: 32px; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; }
-.wish-quick-dialog label { display: grid; gap: 7px; }
-.wish-quick-dialog label > span { color: var(--muted); font-size: 13px; font-weight: 700; }
-.wish-quick-dialog input, .wish-quick-dialog textarea { padding: 10px 11px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
-.wish-quick-dialog > p { margin: 0; color: var(--accent); font-size: 13px; }
-.wish-quick-dialog footer button { padding: 9px 13px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
-.wish-quick-dialog footer .primary { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+/* 快速提问题的弹层已迁 <Modal>/ui-*(组件统一化波次 0),backdrop 与
+ * dialog 配方随之退役;触发按钮(wish-quick-*)保留。 */
 
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
@@ -11315,7 +11305,9 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   120),问题流会话视图里也能正常叠上来。 ---- */
 .confirm-backdrop {
   position: fixed;
-  z-index: 300;
+  /* 确认必须压过一切弹层(含统一化后的 <Modal>,--z-modal 950):
+   * 从全屏工作台里发起的确认曾被压在弹层下面。 */
+  z-index: var(--z-topmost);
   inset: 0;
   display: grid;
   place-items: center;
@@ -11530,14 +11522,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 
 /* ---- #124 右栏协作:会话流接聚合接口 + 输入区分派(只追加,不动上行) ---- */
-/* 回合步骤一行(任务侧点开去「工作过程」;问题域没有该视图,只读计数)。 */
-.issue-workspace.task-workspace-v2 .issue-conv-steps {
-  color: var(--muted);
-  font-size: var(--fs-12);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 回合步骤一行已换任务侧同款 conv-act 按钮(样式在 conversation.css,
+ * 问题侧白拿);原 issue-conv-steps 只读计数样式随 2026-09-08 对齐删除。 */
 
 /* ---- #127 右栏侧栏拆除:归档/终止入头部、挂起转正卡入协作流顶部;
    「更多操作」details 与 rail 布局规则随拆除清零 ---- */

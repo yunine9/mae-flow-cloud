@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ClampedText } from "./ClampedText";
 import { Markdown } from "./markdown";
 import { atBottom } from "./follow";
 import { displayPersonName } from "./AnnotationPanel";
@@ -161,33 +162,8 @@ function stepsLine(steps: ConversationSteps): string {
   return parts.length ? `${parts.join(" · ")} · ${tail}` : tail;
 }
 
-/** 长话按渲染高度折叠,不按字数切(工作过程页签踩过切坏 Markdown 的坑)。
- * 超过约 12 行收成固定高度加"展开全文";静态渲染(测试)下量不到高度,原样摊开。 */
-const CLAMP_PX = 260;
-function ClampedText({ text }: { text: string }) {
-  const body = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  useEffect(() => {
-    const node = body.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
-    const measure = () => setOverflows(node.scrollHeight > CLAMP_PX + 24);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [text]);
-  return (
-    <div className={`conv-text${overflows && !expanded ? " clamped" : ""}`}>
-      <div className="conv-text-window"><div ref={body}><Markdown text={text} /></div></div>
-      {overflows && (
-        <button type="button" className="conv-expand" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? "收起" : "展开全文"}
-        </button>
-      )}
-    </div>
-  );
-}
+/** 长话按渲染高度折叠——组件本体抽到 ClampedText.tsx,问题侧协作流
+ * 同用一份(2026-09-08 对齐拍板),这里只 import。 */
 
 /** 举卡前那段话就是卡的"决策背景",两处同一段字只留卡里那份。投影把话
  * 裁到 1600 字,比较按较短的一方对齐。 */

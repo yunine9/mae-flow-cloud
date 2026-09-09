@@ -24,6 +24,18 @@ const CEILING = {
   important: 55,
   studioOverride: 285,
   duplicateTopLevelClass: 23,
+  // 组件统一化(2026-09-08)的三根新钉: primitives(ui.css + <Modal>)
+  // 落地后,存量页面逐页迁移时这三个数只许降——
+  // accentRecipe:css 里 --accent-fg 的引用数(主色按钮配方按容器复制
+  //   的代理指标,recipe 归一到 .ui-btn 后应持续下降);
+  // zIndexLiteral:z-index 字面量的去重个数(手搓弹层各养各的层级,
+  //   新弹层一律取 tokens 的层叠阶梯,var() 引用不算字面量);
+  // fixedOverlay:position: fixed 的规则数(手搓 backdrop/overlay 的
+  //   代理指标,迁 <Modal> 后应减少)。
+  // 数字是 2026-09-08 main@0c10f9a 工作区的实测。
+  accentRecipe: 37,
+  zIndexLiteral: 25,
+  fixedOverlay: 18,
 };
 
 test("CSS 棘轮:!important 只许减少", () => {
@@ -52,6 +64,35 @@ test("CSS 棘轮:同名顶层类规则跨文件重复只许减少", () => {
   assert.ok(duplicated.length <= CEILING.duplicateTopLevelClass,
     `跨文件重复定义的顶层类从 ${CEILING.duplicateTopLevelClass} 涨到 ${duplicated.length}:`
     + duplicated.slice(0, 8).map(([cls, owners]) => `.${cls}(${[...owners].join(",")})`).join(" "));
+});
+
+test("CSS 棘轮:accent 按钮配方引用只许减少(归一到 .ui-btn)", () => {
+  const count = Object.values(css).reduce((sum, text) =>
+    sum + (text.match(/--accent-fg/g) ?? []).length, 0);
+  assert.ok(count <= CEILING.accentRecipe,
+    `--accent-fg 引用从 ${CEILING.accentRecipe} 涨到 ${count};`
+    + "新按钮一律 .ui-btn(ui.css),别再按容器复制主色配方");
+});
+
+test("CSS 棘轮:z-index 字面量去重个数只许减少(新弹层取 tokens 层叠阶梯)", () => {
+  const values = new Set<string>();
+  for (const text of Object.values(css)) {
+    for (const match of text.matchAll(/z-index:\s*([^;}\n]+)/g)) {
+      const value = match[1].trim();
+      if (!value.startsWith("var(")) values.add(value);
+    }
+  }
+  assert.ok(values.size <= CEILING.zIndexLiteral,
+    `z-index 字面量去重从 ${CEILING.zIndexLiteral} 涨到 ${values.size}:`
+    + `新弹层的层级一律用 var(--z-*)(${[...values].slice(0, 8).join(",")}…)`);
+});
+
+test("CSS 棘轮:fixed 弹层规则只许减少(手搓 backdrop 迁 <Modal>)", () => {
+  const count = Object.values(css).reduce((sum, text) =>
+    sum + (text.match(/position: fixed/g) ?? []).length, 0);
+  assert.ok(count <= CEILING.fixedOverlay,
+    `position: fixed 规则从 ${CEILING.fixedOverlay} 涨到 ${count};`
+    + "新的表单/面板弹层用 <Modal>,别再手搓 backdrop");
 });
 
 test("CSS 叠层:现有样式全在 legacy 一层,覆盖只走 fixes 层,不再新开层", () => {

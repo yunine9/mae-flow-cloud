@@ -155,8 +155,12 @@ test("回执:平台工具的 tool_finished 投影为 receipts 条目(成功失�
   const items = issueConversation([
     ev("tool_finished", { call_id: "c3", name: "push_branch",
       is_error: false, result: "已推送 master_dev_D1 @ abc" }),
+    // request_env 举配置卡是成功收口(2026-09-08):发起请求本身完成了,
+    // 不再借错误通道——回执画 ✓ 不画 ✕。
     ev("tool_finished", { call_id: "c4", name: "request_env",
-      is_error: true, result: "已向用户发起网管环境配置请求" }),
+      is_error: false, result: "已向用户发起网管环境配置请求,等待填写" }),
+    ev("tool_finished", { call_id: "c6", name: "pull_repo",
+      is_error: true, result: "远端不可达:克隆失败" }),
     // bash 是过程性调用:进回合 steps,不单列回执。
     ev("tool_finished", { call_id: "c5", name: "bash",
       is_error: false, result: "ok" }),
@@ -164,9 +168,11 @@ test("回执:平台工具的 tool_finished 投影为 receipts 条目(成功失�
   const receipts = items.find((item) => item.kind === "receipts") as
     Extract<typeof items[number], { kind: "receipts" }>;
   assert.ok(receipts, "回执条目在场");
-  assert.equal(receipts.items.length, 2, "bash 不进回执");
+  assert.equal(receipts.items.length, 3, "bash 不进回执");
   assert.equal(receipts.items[0].outcome, "success");
-  assert.equal(receipts.items[1].outcome, "error");
+  assert.equal(receipts.items[1].outcome, "success",
+    "举配置卡是成功收口,不是失败");
+  assert.equal(receipts.items[2].outcome, "error");
 });
 
 test("在场闸:未作答的平台闸投影为 waiting 卡,排在流末尾", () => {

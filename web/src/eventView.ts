@@ -1,5 +1,18 @@
 export type EventFilter = "all" | "messages" | "tools" | "errors";
 
+/** 「右侧查看」选中的一项长内容(任务侧 EventTail 与问题侧现场页签
+ * 同款交互,2026-09-08 对齐):长文本/结构化内容默认只在事件行里给
+ * 预览按钮,点开在流旁的详情面板看全文。 */
+export interface EventDetailSelection {
+  key: string;
+  eventId: number;
+  eventLabel: string;
+  fieldLabel: string;
+  content: string;
+  structured: boolean;
+  timestamp: string;
+}
+
 export function executionEventKey(event: { eventId: number; sessionId?: string;
   execution?: { attempt: string } }): string {
   return `${event.execution?.attempt ?? "main"}:${event.sessionId ?? "main"}:${event.eventId}`;
