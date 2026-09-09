@@ -23,8 +23,7 @@ import {
   getMoonlightPreview,
   putMoonlight,
   putPersonalPushConfirmation,
-  putIssueMoonlight,
-  putIssuePushConfirmation,
+  putIssueInterventionTier,
 } from "./api";
 import { byNewest, byUrgency } from "./taskTime";
 import { orderHierarchyBy, orderTaskHierarchy, keepFamiliesTogether } from "./taskHierarchy";
@@ -204,36 +203,28 @@ const INTERVENTION_PRESETS = [
     detail: "过程自动 · 推送直走" },
 ] as const;
 
-/** 每个作用域一份说明:过程/推送在两侧指的卡不同,分开讲才不混淆。 */
-const INTERVENTION_SCOPE_COPY = {
-  requirement: {
-    title: "人工介入程度 · 需求交付",
-    summary: "一处设定，需求交付的任务全程生效。\"过程\"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡；\"推送\"指每次 push 前先给你看变更清单（确认一次放行一次）。无论选哪档，MR 人工合入、流水线绑 SHA 等门禁始终生效；人工检视意见引发的修改一定回到意见作者复检。",
-  },
-  issue: {
-    title: "人工介入程度 · 问题处理",
-    summary: "一处设定，问题处理全程生效，与需求交付的档位互不影响。\"过程\"指分析结论确认、纯选项问答卡这些等你的卡；\"推送\"指推送代码前先给你看变更清单（确认一次放行一次）。检视回合确认卡、流水线人工闸、环境信息闸这些只有真人能答的卡不受档位影响，始终等你。",
-  },
-} as const;
+/** 问题处理介入档位(ADR-0019):三档,与需求交付四档互不带动,
+ * 缺省二档。 */
+const ISSUE_INTERVENTION_TIERS = [
+  { key: "1", title: "全自动", isDefault: false,
+    detail: "零介入 · 一路跑到 MR 变绿才提醒" },
+  { key: "2", title: "仅分析报告", isDefault: true,
+    detail: "只在报告检视停一次 · 其余直达变绿" },
+  { key: "3", title: "全程把控", isDefault: false,
+    detail: "对齐、结论、环境、推送过目全保留" },
+] as const;
 
 function InterventionSetting({
   session,
-  scope,
   onChanged,
 }: {
   session: AuthUser;
-  scope: "requirement" | "issue";
   onChanged: (patch: Partial<AuthUser>) => Promise<void>;
 }) {
-  const issueScope = scope === "issue";
-  const [moon, setMoon] = useState(issueScope
-    ? !!session.issue_moonlight : !!session.moonlight);
-  const [push, setPush] = useState(issueScope
-    ? session.issue_push_confirmation !== false
-    : session.push_confirmation !== false);
+  const [moon, setMoon] = useState(!!session.moonlight);
+  const [push, setPush] = useState(session.push_confirmation !== false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const copy = INTERVENTION_SCOPE_COPY[scope];
   const current = INTERVENTION_PRESETS
     .find((preset) => preset.moonlight === moon && preset.push === push)!;
   async function select(preset: typeof INTERVENTION_PRESETS[number]) {
@@ -244,83 +235,61 @@ function InterventionSetting({
       let nextMoon = moon;
       let nextPush = push;
       if (preset.moonlight !== moon) {
-        if (issueScope) {
-          // 问题侧现读现判:开闸只对后续生效,没有存量待办可清扫。
-          const user = await putIssueMoonlight(preset.moonlight);
-          nextMoon = user.issue_moonlight === true;
-          setMoon(nextMoon);
-          notes.push(nextMoon
-            ? "问题处理的过程闸对后续生效；已在等待的卡仍需你处理"
-            : "问题处理的过程闸恢复等你拍板");
-        } else {
-          let includeCurrent = false;
-          let expectedEligible: number | undefined;
-          if (preset.moonlight) {
-            const preview = await getMoonlightPreview();
-            expectedEligible = preview.eligible;
-            if (preview.eligible > 0) {
-              // 二选一不是真假确认:两个语义化按钮直接说清各自后果,
-              // 不再借浏览器框的"确定/取消"让人读小字猜(spec #52/T3)。
-              includeCurrent = await confirmDialog({
-                title: "切换到「月光」档",
-                message: <>过程自动放行默认仅对后续节点生效。当前有
-                  {" "}{preview.eligible} 项可自动处理
-                  {preview.blocked_annotations > 0
-                    ? <>，另有 {preview.blocked_annotations}
-                      项因存在检视意见不会自动放行</>
-                    : null}。</>,
-                cancelLabel: "仅对后续节点生效",
-                confirmLabel: "连当前待办一起处理",
-              });
-            }
+        let includeCurrent = false;
+        let expectedEligible: number | undefined;
+        if (preset.moonlight) {
+          const preview = await getMoonlightPreview();
+          expectedEligible = preview.eligible;
+          if (preview.eligible > 0) {
+            // 二选一不是真假确认:两个语义化按钮直接说清各自后果,
+            // 不再借浏览器框的"确定/取消"让人读小字猜(spec #52/T3)。
+            includeCurrent = await confirmDialog({
+              title: "切换到「月光」档",
+              message: <>过程自动放行默认仅对后续节点生效。当前有
+                {" "}{preview.eligible} 项可自动处理
+                {preview.blocked_annotations > 0
+                  ? <>，另有 {preview.blocked_annotations}
+                    项因存在检视意见不会自动放行</>
+                  : null}。</>,
+              cancelLabel: "仅对后续节点生效",
+              confirmLabel: "连当前待办一起处理",
+            });
           }
-          const result = await putMoonlight(
-            preset.moonlight, includeCurrent, expectedEligible);
-          nextMoon = result.moonlight;
-          setMoon(result.moonlight);
-          notes.push(result.moonlight
-            ? (result.swept > 0
-                ? `过程节点已自动放行，并处理 ${result.swept} 项当前待办`
-                : result.blocked_annotations > 0
-                  ? `过程节点对后续生效；${result.blocked_annotations} 项含检视意见的待办仍需人工处理`
-                  : "过程节点对后续生效，当前待办保持不变")
-            : "过程节点恢复等你拍板");
         }
+        const result = await putMoonlight(
+          preset.moonlight, includeCurrent, expectedEligible);
+        nextMoon = result.moonlight;
+        setMoon(result.moonlight);
+        notes.push(result.moonlight
+          ? (result.swept > 0
+              ? `过程节点已自动放行，并处理 ${result.swept} 项当前待办`
+              : result.blocked_annotations > 0
+                ? `过程节点对后续生效；${result.blocked_annotations} 项含检视意见的待办仍需人工处理`
+                : "过程节点对后续生效，当前待办保持不变")
+          : "过程节点恢复等你拍板");
       }
       if (preset.push !== push) {
-        if (issueScope) {
-          const user = await putIssuePushConfirmation(preset.push);
-          nextPush = user.issue_push_confirmation !== false;
-          setPush(nextPush);
-          notes.push(nextPush
-            ? "问题处理后续每次推送前会先给你看变更清单,确认一次放行一次"
-            : "问题处理后续推送不再等待清单确认;已在等过目的卡点一下确认即可");
-        } else {
-          const user = await putPersonalPushConfirmation(preset.push);
-          nextPush = user.push_confirmation !== false;
-          setPush(nextPush);
-          notes.push(nextPush
-            ? "后续每次推送前会先给你看变更清单,确认一次放行一次"
-            : "后续推送不再等待清单确认;已在等确认的任务点一下确认即可");
-        }
+        const user = await putPersonalPushConfirmation(preset.push);
+        nextPush = user.push_confirmation !== false;
+        setPush(nextPush);
+        notes.push(nextPush
+          ? "后续每次推送前会先给你看变更清单,确认一次放行一次"
+          : "后续推送不再等待清单确认;已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
-      await onChanged(issueScope
-        ? { issue_moonlight: nextMoon, issue_push_confirmation: nextPush }
-        : { moonlight: nextMoon, push_confirmation: nextPush });
+      await onChanged({ moonlight: nextMoon, push_confirmation: nextPush });
     } catch (cause) {
       setNote(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
   }
-  const headingId = `approval-setting-title-${scope}`;
-  return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby={headingId}>
+  return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
     <header className="approval-setting-head">
       <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><h2 id={headingId}>{copy.title}</h2></div>
+      <div><h2 id="approval-setting-title">人工介入程度 · 需求交付</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">{copy.summary}</p>
-    <div className="approval-options" role="group" aria-label={copy.title}>
+    <p className="approval-setting-summary">一处设定，需求交付的任务全程生效（问题处理在下方单独设定）。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡；"推送"指每次 push 前先给你看变更清单（确认一次放行一次）。无论选哪档，MR 人工合入、流水线绑 SHA 等门禁始终生效；人工检视意见引发的修改一定回到意见作者复检。</p>
+    <div className="approval-options" role="group" aria-label="人工介入程度 · 需求交付">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
         onClick={() => void select(preset)}>
@@ -332,6 +301,63 @@ function InterventionSetting({
             {preset.isDefault && <i className="approval-option-default">默认</i>}
           </strong>
           <small>{preset.detail}</small>
+        </span>
+      </button>)}
+    </div>
+    {note && <p className="approval-setting-note" role="status">{note}</p>}
+  </section>;
+}
+
+function IssueInterventionSetting({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged: (patch: Partial<AuthUser>) => Promise<void>;
+}) {
+  const [tier, setTier] = useState(session.issue_intervention_tier ?? "2");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const current = ISSUE_INTERVENTION_TIERS
+    .find((item) => item.key === tier)!;
+  async function select(next: typeof ISSUE_INTERVENTION_TIERS[number]) {
+    if (busy || next.key === tier) return;
+    setBusy(true);
+    try {
+      // 现读现判:切档即刻生效,不追溯已挂起的卡(ADR-0019)。
+      const user = await putIssueInterventionTier(next.key);
+      const applied = user.issue_intervention_tier ?? "2";
+      setTier(applied);
+      setNote(applied === "1"
+        ? "问题处理已切到全自动:不再向你提问,一路跑到 MR 变绿(或办不了停下)才提醒你"
+        : applied === "2"
+          ? "问题处理只在分析报告检视时停一次,其余直达变绿"
+          : "问题处理恢复全程把控:现象对齐、结论确认、环境闸、推送过目全保留");
+      await onChanged({ issue_intervention_tier: applied });
+    } catch (cause) {
+      setNote(String((cause as Error).message ?? cause));
+    } finally { setBusy(false); }
+  }
+  return <section className="approval-setting" aria-labelledby="issue-intervention-title">
+    <header className="approval-setting-head">
+      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
+      <div><h2 id="issue-intervention-title">人工介入程度 · 问题处理</h2></div>
+      <span className="approval-setting-state">当前：{current.title}</span>
+    </header>
+    <p className="approval-setting-summary">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。</p>
+    <div className="approval-options" role="group" aria-label="人工介入程度 · 问题处理">
+      {ISSUE_INTERVENTION_TIERS.map((item) => <button type="button" key={item.key}
+        className={current.key === item.key ? "on" : ""} disabled={busy}
+        onClick={() => void select(item)}>
+        <i aria-hidden>{item.key === "3"
+          ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
+          : item.key === "1" ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 1 1 7.5 4.5a6.5 6.5 0 0 0 8 8Zm-6 .5 3.5 3.5L18 8" /></svg>
+          : "✓"}</i>
+        <span>
+          <strong>{item.title}
+            {item.isDefault && <i className="approval-option-default">默认</i>}
+          </strong>
+          <small>{item.detail}</small>
         </span>
       </button>)}
     </div>
@@ -412,11 +438,12 @@ export function PersonalSettingsPage({
   onSessionPatch: (patch: Partial<AuthUser>) => void;
   onTasksChanged: () => Promise<void>;
 }) {
-  return <div className="personal-settings-page">    <InterventionSetting scope="requirement" session={session} onChanged={async (patch) => {
+  return <div className="personal-settings-page">
+    <InterventionSetting session={session} onChanged={async (patch) => {
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
-    <InterventionSetting scope="issue" session={session} onChanged={async (patch) => {
+    <IssueInterventionSetting session={session} onChanged={async (patch) => {
       onSessionPatch(patch);
       await onTasksChanged();
     }} />

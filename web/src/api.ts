@@ -70,9 +70,9 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
-  /** 问题处理侧的人工介入轴(按流剥离):与需求侧同义、独立取值。 */
-  issue_moonlight?: boolean;
-  issue_push_confirmation?: boolean;
+  /** 问题处理介入档位(ADR-0019 按流剥离):三档缺省二档,与需求侧
+   * 两轴互不带动。 */
+  issue_intervention_tier?: "1" | "2" | "3";
 }
 
 /** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
@@ -216,22 +216,15 @@ export async function putPersonalPushConfirmation(
   return parseJson(response);
 }
 
-/** 问题处理侧的月光免审批(按流剥离)。现读现判、开闸不追溯:
- * 已在等待的卡仍等真人,所以没有预览/清扫动作。 */
-export async function putIssueMoonlight(on: boolean): Promise<AuthUser> {
-  const response = await fetch("/auth/me/issue-moonlight", {
+/** 问题处理介入档位(ADR-0019 按流剥离):一档全自动、二档仅分析
+ * 报告(缺省)、三档全程把控。现读现判、切换即刻生效,不追溯已
+ * 挂起的卡,没有需求侧月光的预览/清扫动作。 */
+export async function putIssueInterventionTier(
+  tier: "1" | "2" | "3",
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-intervention", {
     method: "PUT",
-    body: JSON.stringify({ on }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-/** 问题处理侧的 push 前过目(缺省即开)。 */
-export async function putIssuePushConfirmation(on: boolean): Promise<AuthUser> {
-  const response = await fetch("/auth/me/issue-push-confirmation", {
-    method: "PUT",
-    body: JSON.stringify({ on }),
+    body: JSON.stringify({ tier }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);

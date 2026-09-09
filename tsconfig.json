@@ -31,6 +31,7 @@
     "tests/issueFlowContract.test.ts",
     "tests/rootErrorBoundary.test.ts",
     "tests/uiModal.test.ts",
-    "scripts/ui-preview.ts"
+    "scripts/ui-preview.ts",
+    "scripts/settings-preview.ts"
   ]
 }

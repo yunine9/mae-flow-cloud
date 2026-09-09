@@ -27,11 +27,11 @@ const assets = resolve("web/dist/assets");
 const css = readFileSync(join(assets,
   readdirSync(assets).find((name) => /^index-.*\.css$/.test(name))!), "utf-8");
 
-// 两节各落一档,证明互不带动:需求侧"只问推送",问题侧"全程把关"。
+// 两节各落一档,证明互不带动:需求侧"只问推送",问题侧"仅分析报告"。
 const session = {
   username: "dev", role: "developer" as const,
   moonlight: true, push_confirmation: true,
-  issue_moonlight: false, issue_push_confirmation: true,
+  issue_intervention_tier: "2" as const,
 };
 
 const markup = renderToStaticMarkup(

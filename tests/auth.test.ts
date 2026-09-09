@@ -133,9 +133,8 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       moonlight: true,
       // push 前清单过目:真人缺省即开(2026-08-26 拍板)。
       push_confirmation: true,
-      // 按流剥离(2026-09-09):问题侧独立取值,setMoonlight 不带动。
-      issue_moonlight: false,
-      issue_push_confirmation: true,
+      // 按流剥离(2026-09-09):问题处理介入档位独立,缺省二档。
+      issue_intervention_tier: "2",
     });
     // 自由探索入口已下线(#97):会话视图不再携带 issue_flow 字段。
     assert.equal("issue_flow" in aliceView, false,
@@ -162,8 +161,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       luban_token_hint: "••••cret",
       moonlight: false,
       push_confirmation: true,
-      issue_moonlight: false,
-      issue_push_confirmation: true,
+      issue_intervention_tier: "2",
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
@@ -223,8 +221,41 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
   }
 });
 
-test("人工介入按流剥离:v1 账号文件迁移时问题侧一次性继承现值", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-intervention-"));
+test("介入档位:问题处理缺省二档,存取稀疏落盘,需求侧轴不受影响", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-tier-"));
+  const file = join(dir, "auth.json");
+  const auth = new LocalAuth(file);
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("alice", "alice-password-1", "developer");
+  // 缺省二档(仅分析报告),无账号/禁用账号也按缺省。
+  assert.equal(auth.issueInterventionTier("alice"), "2");
+  assert.equal(auth.issueInterventionTier(undefined), "2");
+  // 设一档/三档落盘,重启后保持。
+  auth.setIssueInterventionTier("alice", "1");
+  assert.equal(auth.issueInterventionTier("alice"), "1");
+  auth.setIssueInterventionTier("alice", "3");
+  assert.equal(auth.issueInterventionTier("alice"), "3");
+  assert.equal(new LocalAuth(file).issueInterventionTier("alice"), "3");
+  // 稀疏存储:缺省档删字段,不落显式 "2"。
+  auth.setIssueInterventionTier("alice", "2");
+  const raw = JSON.parse(readFileSync(file, "utf-8")) as {
+    users: Array<{ username: string; issue_intervention_tier?: string }>;
+  };
+  assert.equal(
+    raw.users.find((user) => user.username === "alice")!
+      .issue_intervention_tier, undefined);
+  // 需求侧月光/过目与档位互不带动。
+  auth.setMoonlight("alice", true);
+  auth.setPushConfirmation("alice", false);
+  assert.equal(auth.moonlightEnabled("alice"), true);
+  assert.equal(auth.pushConfirmationEnabled("alice"), false);
+  assert.equal(auth.issueInterventionTier("alice"), "2");
+  // 非法档位拒绝。
+  assert.throws(() => auth.setIssueInterventionTier("alice", "4" as "1"));
+});
+
+test("介入档位:v1 账号文件升级不继承——问题处理全员从二档起步", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-tier-mig-"));
   const file = join(dir, "auth.json");
   // 造一份真实 scrypt 哈希,手写 v1 文件(剥离前夜的存量部署快照)。
   const seed = new LocalAuth(join(dir, "seed.json"));
@@ -244,30 +275,17 @@ test("人工介入按流剥离:v1 账号文件迁移时问题侧一次性继承�
   }), { encoding: "utf-8", mode: 0o600 });
 
   const auth = new LocalAuth(file);
-  // 继承不改变现状:问题侧初值=剥离时刻需求侧的值。
-  assert.equal(auth.issueMoonlightEnabled("alice"), true);
-  assert.equal(auth.issuePushConfirmationEnabled("alice"), false);
+  // 升级不继承:问题处理档位全员缺省二档(ADR-0019 拍板),需求侧原值不动。
+  assert.equal(auth.issueInterventionTier("alice"), "2");
   assert.equal(auth.moonlightEnabled("alice"), true);
   assert.equal(auth.pushConfirmationEnabled("alice"), false);
-  // 迁移即落盘 v2:下一次进程不再重放继承。
+  // 升级即落盘 v2。
   const raw = JSON.parse(readFileSync(file, "utf-8")) as { version: number };
   assert.equal(raw.version, 2);
-  // 此后两边独立演化:关需求侧月光不带动问题侧。
-  auth.setMoonlight("alice", false);
-  assert.equal(auth.moonlightEnabled("alice"), false);
-  assert.equal(auth.issueMoonlightEnabled("alice"), true);
-  // 新用户走缺省:问题侧月光关、过目开(与需求侧同纪律)。
-  auth.createUser("bob", "bob-password-123", "developer");
-  assert.equal(auth.issueMoonlightEnabled("bob"), false);
-  assert.equal(auth.issuePushConfirmationEnabled("bob"), true);
-  auth.setIssuePushConfirmation("bob", false);
-  assert.equal(auth.issuePushConfirmationEnabled("bob"), false);
-  assert.equal(auth.pushConfirmationEnabled("bob"), true,
-    "问题侧过目开关不得带动需求侧");
 });
 
-test("人工介入按流剥离:issue 路由只动问题侧轴", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-routes-"));
+test("介入档位:issue 路由写档位,需求侧轴不动", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-issue-tier-routes-"));
   const file = join(dir, "auth.json");
   const auth = new LocalAuth(file);
   auth.bootstrapAdmin("admin", "administrator-pass");
@@ -288,24 +306,22 @@ test("人工介入按流剥离:issue 路由只动问题侧轴", async () => {
     assert.equal(login.status, 200);
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
 
-    const moon = await fetch(`${base}/auth/me/issue-moonlight`, {
-      method: "PUT", headers: { cookie }, body: JSON.stringify({ on: true }),
+    const put = await fetch(`${base}/auth/me/issue-intervention`, {
+      method: "PUT", headers: { cookie }, body: JSON.stringify({ tier: "1" }),
     });
-    assert.equal(moon.status, 200);
-    const moonView = await moon.json() as Record<string, unknown>;
-    assert.equal(moonView.issue_moonlight, true);
-    assert.equal(moonView.moonlight, false, "问题侧月光不得带动需求侧");
+    assert.equal(put.status, 200);
+    const view = await put.json() as Record<string, unknown>;
+    assert.equal(view.issue_intervention_tier, "1");
+    assert.equal(view.moonlight, false, "档位不得带动需求侧月光");
+    assert.equal(view.push_confirmation, true, "档位不得带动需求侧过目");
 
-    const push = await fetch(`${base}/auth/me/issue-push-confirmation`, {
-      method: "PUT", headers: { cookie }, body: JSON.stringify({ on: false }),
+    const bad = await fetch(`${base}/auth/me/issue-intervention`, {
+      method: "PUT", headers: { cookie }, body: JSON.stringify({ tier: "9" }),
     });
-    assert.equal(push.status, 200);
-    const pushView = await push.json() as Record<string, unknown>;
-    assert.equal(pushView.issue_push_confirmation, false);
-    assert.equal(pushView.push_confirmation, true, "问题侧过目不得带动需求侧");
+    assert.equal(bad.status, 400, "非法档位拒绝");
 
-    const anon = await fetch(`${base}/auth/me/issue-moonlight`, {
-      method: "PUT", body: JSON.stringify({ on: true }),
+    const anon = await fetch(`${base}/auth/me/issue-intervention`, {
+      method: "PUT", body: JSON.stringify({ tier: "1" }),
     });
     assert.equal(anon.status, 401, "未登录不得改个人设置");
   } finally {

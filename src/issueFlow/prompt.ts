@@ -29,6 +29,7 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IssueSessionState } from "./state.ts";
+import type { IssueInterventionTier } from "../auth.ts";
 import { issueRepoWorkspaces } from "./state.ts";
 import {
   FIXED_STAGE_LABELS,
@@ -279,10 +280,11 @@ export function skillSelectionLines(state: IssueSessionState): string[] {
 export function issueFixedOpeningPrompt(
   state: IssueSessionState,
   credentials: IssueEnvCredentials = {},
-  /** 月光免审批档的节奏渲染(现读现判):开=少问、不中间简报、
-   * 报告会被自动确认;关=高把关,主动问与对齐(ADR-0006)。
+  /** 介入档位的节奏渲染(ADR-0019,现读现判):一档=全自动(报告
+   * 会被代答确认);二档=仅分析报告(报告是唯一停靠点);三档=全程
+   * 把控,主动问与对齐(ADR-0006)。
    * workspace 供业务知识地图现扫仓内 docs/(ADR-0012);缺席不注入。 */
-  options: { moonlight?: boolean; workspace?: string } = {},
+  options: { tier?: IssueInterventionTier; workspace?: string } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
@@ -306,9 +308,10 @@ export function issueFixedOpeningPrompt(
     skill_lines: skillLines.length ? skillLines.join("\n") + "\n" : "",
     knowledge_lines: knowledgeLines.length
       ? knowledgeLines.join("\n") + "\n" : "",
-    intervention: promptCopy("opening", options.moonlight
-      ? "fixed.intervention.moonlight"
-      : "fixed.intervention.guard"),
+    intervention: promptCopy("opening",
+      options.tier === "3" ? "fixed.intervention.guard"
+        : options.tier === "1" ? "fixed.intervention.full_auto"
+        : "fixed.intervention.report_review"),
   });
   return [
     promptCopy("opening", "fixed.header"),
@@ -375,7 +378,7 @@ export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
   credentials: IssueEnvCredentials = {},
-  options: { moonlight?: boolean; workspace?: string } = {},
+  options: { tier?: IssueInterventionTier; workspace?: string } = {},
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
@@ -389,9 +392,10 @@ export function issueResumePrompt(
     ...(options.workspace
       ? businessKnowledgeLines(state, options.workspace)
       : []),
-    promptCopy("opening", options.moonlight
-      ? "resume.intervention.moonlight"
-      : "resume.intervention.guard"),
+    promptCopy("opening",
+      options.tier === "3" ? "resume.intervention.guard"
+        : options.tier === "1" ? "resume.intervention.full_auto"
+        : "resume.intervention.report_review"),
     state.pushes?.length
       ? `- 已推送: ${state.pushes.map((push) =>
           `${push.branch} @ ${push.sha.slice(0, 12)}`).join(";")}` : "",

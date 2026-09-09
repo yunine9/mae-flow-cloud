@@ -51,12 +51,15 @@ function makeNotifier(luban: FakeLubanServer): Notifier {
 }
 
 function baseOptions(dataDir: string, model: ScriptedModelServer) {
+  // 本文件测的是「等人卡」的通知管道:显式三档把控,防止缺省二档
+  // 把纯选项卡自动代答(ADR-0019)。
   return {
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
+    interventionTier: () => "3" as const,
   };
 }
 

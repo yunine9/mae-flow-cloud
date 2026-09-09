@@ -730,6 +730,8 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   const first = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 等「等人卡」的管道测试:显式三档把控(缺省二档会把纯选项卡代答)。
+    interventionTier: () => "3",
   });
   let second: IssueFlowService | undefined;
   try {
@@ -758,6 +760,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
     second = new IssueFlowService({
       dataDir, provider: "maeflow", model: "scripted-v1",
       modelsJson: model.modelsJson(),
+      interventionTier: () => "3",
     });
     const recovered = second.get(created.id);
     assert.equal(recovered.status, "waiting_user",
@@ -1053,6 +1056,8 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 归码/还原契约是「等人卡」的作答协议:显式三档把控。
+    interventionTier: () => "3",
   });
   try {
     createBusinessModule(dataDir, {

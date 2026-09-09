@@ -54,6 +54,7 @@ import {
 } from "../pipelineClient.ts";
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
+import type { IssueInterventionTier } from "../auth.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
 import {
   applyTicketImageRewrites,
@@ -90,14 +91,13 @@ export interface IssueToolContext {
    * 上下文);环境未配页面凭据(如 env_needed 闸补配)时为 undefined。 */
   pagePassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
-  /** 推送前过目(个人设置的交付轴,ADR-0009,现读现判):开着时
-   * push_branch 没有一次性确认令牌即拒绝并举 push_confirm 闸。回调
-   * 缺席=直推(裸构造兼容缺省,与 moonlight「回调缺席按关闭」同一
-   * 纪律;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
+  /** 推送前过目(ADR-0019 档位派生,现读现判):开着(=三档「全程
+   * 把控」)时 push_branch 没有一次确认令牌即拒绝并举 push_confirm
+   * 闸。回调缺席=直推(裸构造兼容缺省)。 */
   pushConfirmation?: () => boolean;
-  /** 月光现值(个人设置的过程轴,ADR-0006,现读现判):回调
-   * 缺席按关闭。 */
-  moonlight?: () => boolean;
+  /** 介入档位现值(ADR-0019,现读现判):env 闸的举卡条件——一/
+   * 二档不向用户索取环境,缺口写进分析报告;缺席按缺省二档。 */
+  interventionTier?: () => IssueInterventionTier;
   /** skill 圈选闸已封存(ADR-0014):complete_stage 推进进 analyze 时
    * 调用,现在只做扫描留痕(发现清单进转移账),恒返回 false。回调
    * 名保留——存量挂起的圈选卡作答口径不变。 */
@@ -154,10 +154,29 @@ function raiseEnvNeededGate(
   ctx: IssueToolContext,
   scope: IssueGateScope,
 ): string {
+  // 硬拒绝在先(票 93):用户已在 env_needed 卡上裁定这一用途不需要
+  // 环境——具体的用户意志赢过档位的一般策略,任何档位都不再举闸纠缠。
   if (ctx.state.env_declined?.scopes.includes(scope)) {
     fail(`用户已确认无需此操作(${ENV_SCOPE_LABELS[scope]}),`
       + "请基于现有证据继续;确有必要可在结论中说明证据局限,"
       + "不要再次请求环境");
+  }
+  // 介入档位旁路(ADR-0019):一/二档不向用户索取环境——自动/仅报告
+  // 档用已有信息继续,缺口写进分析报告。这是档位免审批的硬边:提示词
+  // 劝不动的索取动作在工具层拦死。
+  if ((ctx.interventionTier?.() ?? "2") !== "3") {
+    // 缺口记台账(ADR-0019):现场可查"当时要过环境",报告里的说明有账可对。
+    recordTransition(ctx.state, {
+      source: "platform",
+      note: `介入档位不向用户索取环境(${ENV_SCOPE_LABELS[scope]}),AI 用已有信息继续`,
+    });
+    ctx.persist();
+    return scope === "deploy"
+      ? "当前介入档位不向用户索取环境信息,无法换库部署——继续其余工作"
+        + "(流水线验绿是交付终点),并在分析报告中说明未做换库部署验证"
+        + "及其影响。"
+      : `当前介入档位不向用户索取环境信息(${ENV_SCOPE_LABELS[scope]}),`
+        + "请用已有信息继续分析,并在分析报告的「证据链」说明这一证据局限。";
   }
   if (ctx.state.gate?.kind === "env_needed") {
     // 已有一张配置卡在等:幂等回报,不覆盖闸——覆盖会换 gate id,
@@ -450,16 +469,24 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `换库部署完成:${result.summary.split("\n")[0]}`,
       });
-      raiseGate(
-        ctx.state,
-        "env_verify",
-        "换库部署已完成,请在目标环境验证问题是否修复",
-        undefined,
-        result.summary.split("\n")[0],
-      );
-      ctx.persist();
+      // env_verify 问"目标环境是否真修好"——只有用户知道的人工事实
+      // (票 03)。一/二档(ADR-0019)不举这张卡:AI 自行核对部署输出
+      // 并在报告里记录验证情况,流水线验绿仍是交付终点。
+      if ((ctx.interventionTier?.() ?? "2") === "3") {
+        raiseGate(
+          ctx.state,
+          "env_verify",
+          "换库部署已完成,请在目标环境验证问题是否修复",
+          undefined,
+          result.summary.split("\n")[0],
+        );
+        ctx.persist();
+        return ok(result.summary
+          + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
+      }
       return ok(result.summary
-        + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
+        + "\n当前介入档位不举验证卡:请自行核对以上部署输出,"
+        + "并在分析报告中记录验证情况与结果。");
     },
   }));
 
@@ -837,8 +864,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         )),
         confidence: Type.Optional(Type.Union(
           [Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")],
-          { description: "结论置信度自报(无单场景消费:non_issue 且 high 在月光"
-            + "免审批档自动闭环归档;缺省按置信度不足处理,人工裁决)" },
+          { description: "结论置信度自报(无单场景消费:non_issue 且 high 在"
+            + "全自动档自动闭环归档;缺省按置信度不足处理,人工裁决)" },
         )),
         summary: Type.String({
           description: "一段话结论摘要:根因与方向(或非问题的判定依据),会展示给用户",
