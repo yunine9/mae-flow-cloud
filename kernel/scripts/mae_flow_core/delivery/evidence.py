@@ -1,6 +1,7 @@
 """Delivery Evidence policies with explicit repository ports."""
 
 import re
+from .archive_commit import committed_archive_receipt
 from dataclasses import dataclass
 
 from ..foundation.models import EvidenceResult
@@ -99,12 +100,17 @@ def _unchanged_manifest_result(
         manifest.get("no_changes") is True
         and manifest.get("confirmed") is True
         and archive.get("status") == "applied"
-        and archive.get("result") == "unchanged"
-        and not (archive.get("applied_paths") or ())
     )
     if not valid:
         return EvidenceResult(
             False, "尚未生成精确交付清单；先执行 manifest set")
+
+    try:
+        receipt = committed_archive_receipt(archive)
+    except ValueError as exc:
+        return EvidenceResult(False, str(exc))
+    if receipt != (manifest.get("committed_archive_receipt") or {}):
+        return EvidenceResult(False, "归档提交内容已变化；执行 manifest set --unchanged 更新已提交文件凭证")
 
     def normalize(path):
         return str(path).replace("\\", "/").casefold()
@@ -123,7 +129,7 @@ def _unchanged_manifest_result(
         return EvidenceResult(
             False, "空交付清单之后仍有新增未提交文件: "
             + "、".join(leaked[:8]))
-    return EvidenceResult(True, "领域归档 unchanged，无需创建空提交")
+    return EvidenceResult(True, "归档文件已就绪，无需创建空提交；已有提交继续交付")
 
 
 class DeliveryEvidenceRules:
