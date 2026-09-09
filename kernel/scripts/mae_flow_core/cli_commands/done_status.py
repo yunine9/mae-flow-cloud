@@ -1,11 +1,13 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    WORKFLOW_LABELS, json, os, sys, time, workflow_completion,
+    STATE_PATH, WORKFLOW_LABELS, json, os, sys, time, workflow_completion,
     workflow_transitions,
 )
 from .wiring import api
 from mae_flow_core.cli_commands.approval_subject import subject_matches
+from mae_flow_core.workflow.authority import ADVISORY_EVIDENCE, advisory_message
+from mae_flow_core.workflow.advisories import record_advisory
 
 
 def _done_save_die(st, message):
@@ -64,9 +66,12 @@ def _done_validate_choice_and_ack(step, st, args, sid):
     error = workflow_completion.choice_error(step, args.choice)
     if error:
         api.die(error, 2)
-    if (sid == "config_confirm" or not step.get("user_ack")
-            or api._moonlight(st)):
+    if (sid == "config_confirm" or api._moonlight(st)
+            or not (step.get("user_ack") or step.get("confirmation_answers"))):
         return
+    if (sid == "delivery_review"
+            and (st.get("delivery_manifest") or {}).get("confirmed") is True):
+        return  # Reuse the actual file-selection approval, not another question.
     if step.get("choice_key"):
         ok, why = api._choice_verified(step, st, args.choice)
     elif step.get("confirmation_answers"):
@@ -105,7 +110,25 @@ def _done_guard_branch(st, sid):
                 st, f"当前分支 {cur or '未知'} != 本单约定分支 {want}。先切回正确分支，禁止在别的分支推进。")
 
 def _done_require_evidence(step, st, args, sid):
-    fails = api.check_evidence(step, st)
+    required = dict(step)
+    required["evidence"] = [spec for spec in step.get("evidence", ())
+                            if spec.get("type") not in ADVISORY_EVIDENCE]
+    for spec in step.get("evidence", ()):
+        if spec.get("type") not in ADVISORY_EVIDENCE:
+            continue
+        try:
+            findings = api.check_evidence({"evidence": [spec]}, st)
+        except Exception as exc:
+            findings = ["检查未完成: " + str(exc)]
+        for finding in findings:
+            text = advisory_message(finding)
+            try:
+                record_advisory(STATE_PATH, sid, "quality:" + spec["type"], text,
+                                time.strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception as exc:
+                print("提示记录未落盘（不影响推进）: " + str(exc))
+            print(text)
+    fails = api.check_evidence(required, st)
     if not fails:
         api._evidence_failure_count(sid, success=True)
         return

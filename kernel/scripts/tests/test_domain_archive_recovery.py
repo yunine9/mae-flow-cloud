@@ -124,8 +124,7 @@ class RecoveryTests(unittest.TestCase):
         self.state["domain_archive"]["result"] = "unchanged"
         self.state["domain_archive"].pop("reapply_paths", None)
         self.assertEqual(paths, self.command("apply", "--message-id", "m1")["applied_paths"])
-        with self.assertRaisesRegex(ValueError, "领域文档必须"):
-            validate_delivery_document_boundary(["docs/specs/other.md"], paths)
+        self.assertTrue(validate_delivery_document_boundary(["docs/specs/other.md"], paths))
 
     def test_later_round_keeps_other_domains_and_rechecks_all_candidates(self):
         (self.specs / "billing.md").write_text(document("真实计费业务规则与已经验证的长期事实。"))
@@ -205,14 +204,15 @@ class RecoveryTests(unittest.TestCase):
             self.prepare()
         self.assertEqual([], self.saved)
 
-    def test_invalid_selection_is_actionable_not_uncaught_value_error(self):
-        payload = {"head": "sha", "paths": ["docs/specs/cross-rat.md"], "excluded_paths": []}
-        with self.assertRaisesRegex(RuntimeError, "adopt-existing"):
+    def test_human_selection_does_not_require_archive_provenance(self):
+        payload = {"head": "sha", "paths": ["docs/specs/cross-rat.md"], "excluded_paths": [],
+                   "task_id": "task-3", "waiting_id": "w", "actor": "owner"}
+        with mock.patch.object(selection, "save_with_host_proof"):
             selection.reconcile_selection(self.state, SimpleNamespace(file="receipt"),
                 load_payload=lambda *_: payload, verify_host_proof=lambda *_: "nonce",
                 capability=lambda *_: None, head=lambda: "sha", history=lambda *_: None,
                 state_schema="schema")
-        self.assertNotIn("delivery_selection", self.state)
+        self.assertEqual(payload["paths"], self.state["delivery_selection"]["paths"])
 
 
 if __name__ == "__main__":

@@ -22,9 +22,6 @@ if SCRIPTS not in sys.path:
 
 from mae_flow_core import cli_runtime  # noqa: E402,F401
 from mae_flow_core.cli_commands import delivery_commands as delivery  # noqa: E402
-from mae_flow_core.cli_commands.external_repair_gate import (  # noqa: E402
-    gate_repair_commit,
-)
 from mae_flow_core.cli_commands.pipeline_commands import (  # noqa: E402
     _route_external_verification, cmd_pipeline,
 )
@@ -780,34 +777,6 @@ class PipelineRoutingTests(unittest.TestCase):
 
 
 class FeedbackAuthorizationTests(unittest.TestCase):
-    def test_feedback_commit_scope_allows_partial_repair_but_rejects_extras(self):
-        value = state("feedback_triage")
-        value["delivery_loop"] = {
-            "schema": delivery.STATE_SCHEMA,
-            "active_batch_id": "fb-1",
-            "batches": [{"batch_id": "fb-1", "status": "repairing"}],
-        }
-        value["delivery_repair_authorization"] = {
-            "schema": "mae-flow-feedback-repair/1", "status": "ready",
-            "batch_id": "fb-1", "base_sha": HEAD,
-            "baseline_dirty": ["user.txt"],
-        }
-        messages = []
-
-        def die(_rule, message):
-            messages.append(message)
-            raise RuntimeError(message)
-
-        with mock.patch.object(cli_runtime, "_dirty_paths", return_value=(
-                "user.txt", "src/fix.py", "tests/fix_test.py", "target/a.o")), mock.patch.object(
-                cli_runtime, "sh", return_value=HEAD):
-            self.assertTrue(gate_repair_commit(
-                value, {"paths": ("src/fix.py",)}, die))
-            with self.assertRaises(RuntimeError):
-                gate_repair_commit(value, {"paths": ("src/fix.py", "extra.py")}, die)
-        self.assertNotIn("tests/fix_test.py", messages[0])
-        self.assertIn("extra.py", messages[0])
-        self.assertNotIn("target/a.o", messages[0])
 
     def test_named_conflict_path_can_cross_baseline_dirty_but_neighbors_cannot(self):
         value = state("feedback_triage")

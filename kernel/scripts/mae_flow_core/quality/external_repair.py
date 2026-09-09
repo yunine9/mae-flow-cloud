@@ -15,7 +15,6 @@ HEAD 即静默失效——Agent 漏提交一个文件想补第二刀时,直接�
 from mae_flow_core.foundation.source_paths import repository_path_identity
 from mae_flow_core.guard.manifest import (
     is_process_document, validate_delivery_document_boundary)
-import subprocess
 
 
 def _exact_paths(paths):
@@ -183,17 +182,4 @@ def eligible_repair_paths(state, head, dirty_paths, repository_root=None):
     # applied_paths 收据可跨 baseline_dirty，不能把整个 docs/specs 放开。
     eligible = [path for path in dirty_paths if _eligible_path(
         path, excluded, allowed, archive_ids, archive_paths)]
-    # A tracked process file may have leaked into an earlier commit. Removing
-    # it from the index is a repair, not delivery of its contents. Read Git's
-    # deletion facts separately: the normal dirty view hides runtime files.
-    # Never infer deletion from a missing worktree file or from allowed_paths.
-    cleanup = {path for path in allowed if is_process_document(path)}
-    if cleanup and repository_root:
-        result = subprocess.run(
-            ["git", "-C", repository_root, "diff", "--cached", "--name-only",
-             "--diff-filter=D", "--no-renames", "-z", "HEAD", "--"],
-            check=True, capture_output=True)
-        eligible.extend(path for path in result.stdout.decode(
-            "utf-8", errors="surrogateescape").split("\0")
-            if path and _identity(path) in cleanup)
     return tuple(dict.fromkeys(eligible))

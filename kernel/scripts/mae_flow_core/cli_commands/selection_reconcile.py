@@ -76,12 +76,14 @@ def _domain_archive_unchanged(state, rejected_paths, payload):
          package.implementation, package.decisions),
         git_facts, (),
     )
+    remaining_paths = [path for path in applied if path.casefold() not in rejected_ids]
     state["domain_archive"] = {
         "status": "applied",
-        "result": "unchanged",
-        "domains": [],
+        "result": "changes" if remaining_paths else "unchanged",
+        "domains": [entry for entry in archive.get("domains") or ()
+                    if str(entry.get("target_path", "")).casefold() not in rejected_ids],
         "input_sha256": digest,
-        "applied_paths": [],
+        "applied_paths": remaining_paths,
         "declined_paths": list(rejected),
         "authorization": {
             "mode": "cloud-delivery-selection",
@@ -115,8 +117,6 @@ def _archive_rejections(state, paths, excluded):
     excluded_ids = _path_ids(excluded)
     rejected = [path for path in applied
                 if str(path).replace("\\", "/").casefold() in excluded_ids]
-    if rejected and _path_ids(paths) & _path_ids(applied):
-        _die("领域归档是一个原子组；不能只勾选其中一部分")
     return rejected
 
 
@@ -178,12 +178,9 @@ def reconcile_selection(state, args, *, load_payload, verify_host_proof,
     declined = _domain_archive_unchanged(state, rejected, payload)
     archive_paths = ((state.get("domain_archive") or {}).get("applied_paths")
                      or ())
-    try:
-        validate_delivery_document_boundary(paths, archive_paths)
-    except ValueError as exc:
-        _die(str(exc) + "；若是应交付的已有领域文档，执行 domain-archive prepare "
-             "--domain <领域> --adopt-existing --keyword <领域关键词>，"
-             "show 核对后 apply，再提交决定。")
+    findings = validate_delivery_document_boundary(paths, archive_paths)
+    for finding in findings:
+        history(state, str(state.get("current") or ""), "delivery-advisory", finding)
     _write_manifest(state, payload, paths)
     state["delivery_selection"] = {
         "schema": SELECTION_SCHEMA,
