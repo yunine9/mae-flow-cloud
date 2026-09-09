@@ -361,7 +361,7 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
       </button>
       {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
           工作台头部「终止会话」同款。终态卡不渲染。 */}
-      {terminatable && <button type="button" className="ui-btn danger ghost sm"
+      {terminatable && <button type="button" className="ui-btn flat danger"
         disabled={stopping} onClick={() => void terminate()}>
         {stopping ? "终止中…" : "终止"}</button>}
       {stopError && <span className="form-message error">{stopError}</span>}
