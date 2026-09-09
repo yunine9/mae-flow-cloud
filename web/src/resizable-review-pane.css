@@ -1,3 +1,4 @@
+@layer legacy {
 .workspace-studio .ws-review-resizer {
   order: 2;
   flex: 0 0 8px;
@@ -16,4 +17,5 @@
   background: var(--accent-soft);
   border-color: var(--accent);
   outline: none;
+}
 }
