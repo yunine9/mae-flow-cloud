@@ -157,9 +157,8 @@ class CommitOwnershipTests(unittest.TestCase):
         mf.save_state(self.cleanup_state([path]))
         git(self.repo, "rm", "--cached", "--", path)
         self.assertNotIn(path, mf._dirty_paths())
-        # A normal business repair may share the same corrective commit.
+        # Other unfinished business changes must not be forced into cleanup.
         write(self.repo, "README.md", "fixed\n")
-        git(self.repo, "add", "README.md")
         command = 'git commit -m "[REQ123][fix]remove runtime tracking" 2>&1 | head'
         result = self.gate_bash(command)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -168,6 +167,7 @@ class CommitOwnershipTests(unittest.TestCase):
         git(self.repo, "commit", "-qm", "[REQ123][fix]remove runtime tracking")
         self.assertTrue(os.path.isfile(os.path.join(self.repo, path)))
         self.assertEqual("", git(self.repo, "ls-files", "--", path))
+        self.assertIn("README.md", git(self.repo, "diff", "--name-only"))
         # Keeping the local runtime file never authorizes adding it again.
         result = self.gate_bash('git add -f -- ' + path)
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
