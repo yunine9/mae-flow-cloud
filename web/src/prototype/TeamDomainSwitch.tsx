@@ -51,8 +51,9 @@ function issueBreakdown(issues: IssueSummary[]) {
 }
 
 /** 问题域世界:与真实页面同位同款——概览/队列复用现有 class 与真实卡片。 */
-function IssueWorld({ issues, filter, onFilter }: {
+function IssueWorld({ issues, filter, onFilter, onOpenIssue }: {
   issues: IssueSummary[]; filter: string; onFilter: (next: string) => void;
+  onOpenIssue: (id: string) => void;
 }) {
   const stats = issueBreakdown(issues);
   const live = issues.filter((issue) => issue.status !== "canceled");
@@ -123,14 +124,15 @@ function IssueWorld({ issues, filter, onFilter }: {
             <p>可以切回「全部」继续查看,会话没有丢。</p></div></div>
         : <div className="task-list">{visible.map((issue) => (
             <TeamIssueCard compact key={issue.id} issue={issue}
-              onOpen={() => { /* 原型:跳转不接 */ }} />
+              onOpen={() => onOpenIssue(issue.id)} />
           ))}</div>}
     </section>
   </div>;
 }
 
-export function TeamDomainSwitchPrototype({ tasks, issues }: {
+export function TeamDomainSwitchPrototype({ tasks, issues, onOpenIssue }: {
   tasks: TaskSummary[]; issues: IssueSummary[];
+  onOpenIssue: (id: string) => void;
 }) {
   const [domain, setDomain] = useState<Domain>("req");
   const [filter, setFilter] = useState("");
@@ -158,14 +160,19 @@ export function TeamDomainSwitchPrototype({ tasks, issues }: {
     };
   }, [domain]);
   // 领域选择器就是页面标题:接管 workspace-header 的 h1(离开时恢复原文)。
+  // 【教训】绝不能动 React 管理的节点(textContent="" 会删掉它的文本子节点,
+  // 之后任何视图切换的 commit 都会 removeChild 崩进错误边界)。只插自己
+  // 的宿主元素 + 用 CSS 隐藏 h1——React 的节点原样保留。
   useEffect(() => {
     const h1 = document.querySelector<HTMLElement>(".workspace-header h1");
     if (!h1) return;
-    const original = h1.textContent ?? "";
-    h1.textContent = "";
-    setTitleHost(h1);
+    const host = document.createElement("span");
+    h1.insertAdjacentElement("afterend", host);
+    h1.style.display = "none";
+    setTitleHost(host);
     return () => {
-      if (h1.textContent === "") h1.textContent = original;
+      h1.style.display = "";
+      host.remove();
       setTitleHost(null);
     };
   }, []);
@@ -265,6 +272,7 @@ export function TeamDomainSwitchPrototype({ tasks, issues }: {
         </div>}
       </span>, titleHost)}
     {portalTarget && createPortal(<IssueWorld
-      issues={issues} filter={filter} onFilter={setFilter} />, portalTarget)}
+      issues={issues} filter={filter} onFilter={setFilter}
+      onOpenIssue={onOpenIssue} />, portalTarget)}
   </>;
 }
