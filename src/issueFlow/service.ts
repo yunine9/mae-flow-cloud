@@ -28,6 +28,7 @@ import {
 } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import { fetchMrDiscussions } from "./mrDiscussions.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
@@ -3457,6 +3458,9 @@ export class IssueFlowService {
     const { state } = live;
     const platformUrl = this.options.platformUrl;
     if (!platformUrl) return;
+    // MR 检视意见监看(票 01:发现与落账)与流水线监看并行点火;
+    // 自身单例、fail-open,详见 watchMrDiscussions。
+    this.watchMrDiscussions(live);
     const { pollMs } = this.pipelineKnobs();
     const call = () => ({
       platformUrl,
@@ -3541,6 +3545,95 @@ export class IssueFlowService {
           + `(第 ${state.pipelines[repo].round ?? 1} 轮验证,`
           + `提交 ${sha.slice(0, 12)}),流水线在预算内迟迟未出结果,`
           + "自动监看已停止。请人工查看 MR/流水线,处理后发消息继续");
+    }
+  }
+
+  /** MR 检视意见监看(票 01:发现与落账,2026-09-08 立项):mr_green
+   * 期内随流水线监看的节奏逐仓拉 CodeHub 检视讨论,新意见落问题域
+   * 反馈账(工作台反馈面板可见,来源标 mr_discussion)。
+   * - 单例:每会话至多一个循环,重复点火(申报/重推/重新监看)只记一次;
+   * - fail-open:适配层未配置/拉取失败等下一轮,绝不拖垮流水线主监看;
+   * - 生命周期:stage 留在 mr_green 且会话未终态;关停/终态/取消即止。 */
+  private readonly reviewWatchers = new Set<string>();
+
+  private watchMrDiscussions(live: LiveIssue): void {
+    if (!this.options.platformUrl || this.reviewWatchers.has(live.id)) return;
+    this.reviewWatchers.add(live.id);
+    // fail-open 兜底:循环体内任何一步(如反馈账读爆)都不许击穿进程
+    // ——记日志、退出、下轮点火(申报/重推)自然重来。
+    void this.pollMrDiscussions(live)
+      .catch((error) =>
+        this.log(`[issue-flow] ${live.id} 检视意见监看异常退出: `
+          + String(error instanceof Error ? error.message : error)))
+      .finally(() => {
+        this.reviewWatchers.delete(live.id);
+      });
+  }
+
+  private async pollMrDiscussions(live: LiveIssue): Promise<void> {
+    const { pollMs } = this.pipelineKnobs();
+    const credential = this.options.gitCredential?.(live.state.account);
+    let unavailableReason: string | undefined;
+    for (;;) {
+      if (this.shuttingDown || isTerminal(live.state.status)
+          || live.state.stage !== "mr_green"
+          || this.mrGreenClosed(live.state)
+          || !live.state.mrs?.length) {
+        return;
+      }
+      for (const mr of live.state.mrs) {
+        const fetched = await fetchMrDiscussions({
+          platformUrl: this.options.platformUrl!,
+          repo: mr.repo,
+          mr: mr.iid ?? mr.url,
+          ...(credential ? { credential } : {}),
+        });
+        if (fetched.kind !== "unavailable") {
+          unavailableReason = undefined;
+        } else {
+          // 明细暂不可用:等下一轮(降级日志只在原因变化时记,别刷屏)。
+          if (fetched.reason !== unavailableReason) {
+            unavailableReason = fetched.reason;
+            this.log(`[issue-flow] ${live.id} ${mr.repo} 检视明细暂不可用,`
+              + `等下一轮:${fetched.reason}`);
+          }
+          continue;
+        }
+        // 增量按仓内 discussion id 对账(两仓撞号不能互相吞账)。
+        const recordPrefix = `mr-discussion:${mr.repo}:`;
+        const known = new Set(this.feedbackStore(live).list()
+          .filter((record) => record.source === "mr_discussion"
+            && record.id.startsWith(recordPrefix))
+          .map((record) => record.source_id));
+        const fresh = fetched.items.filter((item) => !known.has(item.id));
+        if (!fresh.length) continue;
+        // 观察基准:该仓最近一次推送——检视意见是对哪版代码提的,账上
+        // 要能对回去;还没有推送收据(理论不可达,申报前置了推送)留空。
+        const observedSha = live.state.pushes
+          ?.find((push) => push.repo === mr.repo)?.sha ?? "";
+        this.feedbackStore(live).upsert(fresh.map((item) => ({
+          id: `${recordPrefix}${item.id}`,
+          batch_id: `mr-discussion:${mr.repo}`,
+          source: "mr_discussion",
+          source_id: item.id,
+          source_revision: item.revision ?? 0,
+          observed_sha: observedSha,
+          summary: (item.severity ? `[${item.severity}] ` : "")
+            + String(item.body ?? "MR 检视意见").slice(0, 1000 - 12),
+          ...(item.file ? { file: item.file } : {}),
+          ...(item.line !== undefined ? { line: item.line } : {}),
+          ...(item.author ? { author: item.author.slice(0, 120) } : {}),
+          verification: "reviewer",
+          status: "open" as const,
+          updated_at: new Date().toISOString(),
+        })));
+        this.log(`[issue-flow] ${live.id} 收到 MR 检视意见 ${fresh.length} 条`
+          + `(${mr.repo})`);
+      }
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, pollMs);
+        timer.unref?.();
+      });
     }
   }
 
