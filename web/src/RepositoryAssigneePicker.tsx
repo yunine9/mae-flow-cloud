@@ -4,6 +4,8 @@ import {
   type CollaborationAssignee,
 } from "./api";
 import { UserPicker } from "./UserPicker";
+import { chainStages } from "./RequirementGraph";
+import "./module-assignment.css";
 
 export interface RepositoryAssigneeSelection {
   assignments: Record<string, string>;
@@ -17,6 +19,14 @@ export const EMPTY_REPOSITORY_ASSIGNEE_SELECTION: RepositoryAssigneeSelection = 
   assignments: {}, tickets: {}, ready: false, loading: true,
 };
 
+/** 无依赖不等于同时执行：展示必须尊重平台当前的同仓串行规则。 */
+export function assignmentStageLabel(stage: ReadonlyArray<{ url: string }>, index: number): string {
+  if (stage.length <= 1) return `第 ${index + 1} 步 · ${index === 0 ? "先做" : "接着做"}`;
+  const repositories = new Set(stage.map((item) => item.url));
+  return `第 ${index + 1} 组 · ${repositories.size === 1 ? "同仓依次执行"
+    : repositories.size < stage.length ? "不同仓可并行" : "可并行"}`;
+}
+
 export function RepositoryAssigneePicker({
   taskId,
   repositories,
@@ -25,6 +35,9 @@ export function RepositoryAssigneePicker({
   selection,
   onSelectionChange,
   saveState = "idle",
+  dependencies = [],
+  onOpenStory,
+  onOpenModule,
 }: {
   taskId: string;
   repositories: Array<{
@@ -37,6 +50,9 @@ export function RepositoryAssigneePicker({
   selection: RepositoryAssigneeSelection;
   onSelectionChange: (selection: RepositoryAssigneeSelection) => void;
   saveState?: "idle" | "saving" | "saved" | "error";
+  dependencies?: Array<{ from: string; to: string; reason?: string }>;
+  onOpenStory?: () => void;
+  onOpenModule?: (id: string) => void;
 }) {
   const [people, setPeople] = useState<CollaborationAssignee[]>([]);
   const draftKey = JSON.stringify([taskId, repositories.map((item) => [item.id, item.url])]);
@@ -125,16 +141,6 @@ export function RepositoryAssigneePicker({
   }, [draftKey, initialAssignments, initialTickets]);
 
   const peopleByName = new Map(people.map((person) => [person.username, person]));
-  // 同一个 url 出现多行 = 该仓拆成了多个交付单元。这用于判断旧任务
-  // 的单号是否也必须逐行补录；执行人无论几仓都只在最终单元形成后选。
-  const urlRowCounts = new Map<string, number>();
-  for (const repository of repositories) {
-    urlRowCounts.set(repository.url,
-      (urlRowCounts.get(repository.url) ?? 0) + 1);
-  }
-  const isUnitRow = (repository: { url: string }) =>
-    (urlRowCounts.get(repository.url) ?? 0) > 1;
-  const hasDeliveryUnits = repositories.some(isUnitRow);
   function chooseAssignee(repositoryId: string, value: string) {
     edits.current.assignments[repositoryId] = value;
     const nextAssignments = { ...selection.assignments, [repositoryId]: value };
@@ -155,13 +161,16 @@ export function RepositoryAssigneePicker({
       error: undefined });
   }
 
-  return <section className="repository-assignees" aria-label="交付单元安排">
+  const stages = chainStages({ repositories, dependencies });
+  return <section className="repository-assignees module-assignment" aria-label="任务分工">
     <header>
-      <div><span>交付单元</span><strong>拆分后怎么执行</strong></div>
-      <small>确认拆分前可修改执行人和 AR 单号，修改自动保存</small>
+      <div><strong>任务分工</strong></div>
+      {onOpenStory && <button type="button" onClick={onOpenStory}>查看完整方案</button>}
     </header>
-    <div className="repository-assignee-list">
-      {repositories.map((repository) => {
+    <div className="module-assignment-stages">
+      {stages.map((stage, stageIndex) => <section key={stageIndex} className="module-assignment-stage">
+        <h4>{assignmentStageLabel(stage, stageIndex)}</h4>
+      {stage.map((repository) => {
         const selected = selection.assignments[repository.id] ?? "";
         const person = peopleByName.get(selected);
         const ticket = selection.tickets[repository.id] ?? "";
@@ -171,11 +180,27 @@ export function RepositoryAssigneePicker({
           : /\s/.test(ticket.trim()) ? "AR 单号无效"
           : duplicate ? `单号与「${unitLabel(duplicate)}」重复` : "";
         const rowLabel = unitLabel(repository);
-        return <label key={repository.id}>
-          <span><strong>{rowLabel}</strong>
-            <small>{repository.responsibility ?? repository.url}</small></span>
-          <span className="repository-assignee-editable">
-            <small>该单元的执行人</small>
+        const prerequisites = dependencies.filter((edge) => edge.from === repository.id);
+        // 兼容旧的三项摘要，只取完整“做什么”一句；冗长技术原文留在 Story，
+        // 不截出半句话冒充摘要，也不在决策卡再次展开整段实现说明。
+        const brief = repository.responsibility?.split(/\r?\n/).find((line) => line.trim())
+          ?.replace(/^\s*[-*]\s*(?:做什么[：:]\s*)?/, "").trim();
+        return <article key={repository.id} className="module-assignment-unit">
+          <header><div className="module-assignment-title"><strong>{repository.scope?.name ?? repository.name}</strong>
+            {onOpenModule && <button type="button" aria-label={`查看${repository.scope?.name ?? repository.name}详情`}
+              onClick={() => onOpenModule(repository.id)}>查看详情 ↗</button>}
+          </div><small>仓库：{repository.name}</small></header>
+          {brief && brief.length <= 160 && <p className="module-assignment-brief">{brief}</p>}
+          {prerequisites.length > 0 && <div className="module-assignment-dependency">
+            {prerequisites.map((edge) => {
+              const prerequisite = repositories.find((item) => item.id === edge.to);
+              return <p key={edge.to}>等待「{prerequisite?.scope?.name ?? prerequisite?.name ?? edge.to}」
+                完成</p>;
+            })}
+          </div>}
+          <div className="module-assignment-fields">
+          <div className="repository-assignee-editable">
+            <small>负责人</small>
             <UserPicker value={selected}
               ariaLabel={`${rowLabel}的执行人`}
               emptyLabel="请选择执行人"
@@ -192,29 +217,28 @@ export function RepositoryAssigneePicker({
                       ? `未就绪：${candidate.missing.join("、")}` : undefined,
                   };
                 })} />
-          </span>
-          <span className="repository-ticket-editable">
-            <small>该单元的 AR 单号</small>
+          </div>
+          <label className="repository-ticket-editable">
+            <small>任务单号</small>
             <input type="text" value={ticket}
               aria-label={`${rowLabel}的 AR 单号`}
               aria-invalid={Boolean(ticketProblem)}
               placeholder="例如：REQ2026xxxx"
               onChange={(event) => chooseTicket(repository.id, event.target.value)} />
-          </span>
+          </label>
+          </div>
           <em className={person?.ready && !ticketProblem ? "ready" : "missing"}>
             {ticketProblem || (person?.ready ? "可委派"
               : person ? `未就绪：${person.missing.join("、")}` : "待选择")}
           </em>
-        </label>;
-      })}
+        </article>;
+      })}</section>)}
     </div>
     {selection.error && <p className="repository-assignee-error">
       {selection.error}
     </p>}
     <footer>
-      <p>{hasDeliveryUnits
-        ? "为每个单元选定执行人并填写 AR 单号（同仓同执行人的单元不能同号）；确认后将按依赖顺序生成子任务。"
-        : "确认方案后，系统会按上面的执行人、单号和依赖关系生成交付任务。"}</p>
+      <p>负责人和单号的修改会自动保存。</p>
       <small className={`repository-assignee-save ${saveState}`}>
         {saveState === "saving" ? "正在保存…"
           : saveState === "saved" ? "已自动保存"

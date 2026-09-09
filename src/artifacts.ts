@@ -51,6 +51,10 @@ export const PIPELINE_EVIDENCE_GAP_ARTIFACT =
 export interface ArtifactSources {
   /** 任务级流水线材料目录。调用方必须显式传入，不能从代码仓路径猜。 */
   pipelineRoot?: string;
+  /** 主任务分析 Story 的稳定阅读入口，发布后沿用同一批注标识。 */
+  analysisStory?: string;
+  /** 发布后不能在版本库损坏时偷偷退回分析旧稿。 */
+  publishedStory?: boolean;
   /** 拆分子任务的只读材料保存在任务根，不属于业务仓过程产物。只读取
    * 平台固定文件名，不能把任务根开放成任意文件浏览器。 */
   taskMaterialRoot?: string;
@@ -353,11 +357,19 @@ function collectReadableDocs(
   cwd: string | undefined,
   sources: ArtifactSources,
 ): DocEntry[] {
-  return [
-    ...(cwd ? collectDocs(cwd) : []),
-    ...collectTaskMaterialDocs(sources.taskMaterialRoot),
-    ...collectPipelineDocs(sources.pipelineRoot),
-  ];
+  const workspace = cwd ? collectDocs(cwd) : [];
+  const materials = collectTaskMaterialDocs(sources.taskMaterialRoot);
+  if (sources.analysisStory) {
+    const draft = workspace.find((doc) => doc.meta.name === sources.analysisStory);
+    if (draft) {
+      workspace.splice(workspace.indexOf(draft), 1);
+      if (!sources.publishedStory && !materials.some((doc) => doc.meta.name === OVERALL_STORY_ARTIFACT)) {
+        materials.push({ ...draft, meta: { ...draft.meta, name: OVERALL_STORY_ARTIFACT,
+          label: "全局 Story", purpose: "overall_story" } });
+      }
+    }
+  }
+  return [...workspace, ...materials, ...collectPipelineDocs(sources.pipelineRoot)];
 }
 
 /** 打包主任务工作台“过程文档”。集合与列表/单篇读取共用同一白名单，

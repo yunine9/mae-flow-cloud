@@ -63,9 +63,11 @@ const isDivider = (line: string) => /^\s*\|[\s:|-]+\|\s*$/.test(line);
 export function Markdown({
   text,
   resolveImage,
+  onOpenArchitecture,
 }: {
   text: string;
   resolveImage?: (path: string) => string | undefined;
+  onOpenArchitecture?: (line: number) => void;
 }) {
   // 需求正文不一定只带 Unix 换行。从工单、富文本或旧系统粘贴时，
   // 可能混入裸 CR、Unicode line/paragraph separator。若只按 \n 切，
@@ -100,6 +102,19 @@ export function Markdown({
         index += 1;
       }
       if (index < lines.length) index += 1;
+      if (language === "archify") {
+        let title = "架构图";
+        try {
+          const diagram = JSON.parse(source.join("\n"));
+          if (typeof diagram?.meta?.title === "string") title = diagram.meta.title;
+        } catch { /* 未完成或坏图源也保留原文供检视。 */ }
+        blocks.push(<section key={key++} className="md-architecture-reference" data-l={at} data-line-end={index}>
+          <div><strong>{title}</strong>{onOpenArchitecture && <button type="button"
+            onClick={() => onOpenArchitecture(at)}>查看架构图</button>}</div>
+          <details><summary>查看图源</summary><pre className="md-block-code"><code>{source.join("\n")}</code></pre></details>
+        </section>);
+        continue;
+      }
       blocks.push(language === "plantuml"
         ? <div key={key++} className="md-uml" data-l={at} data-line-end={index}>
             <PlantUml source={source.join("\n")} />

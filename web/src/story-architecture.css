@@ -1,0 +1,53 @@
+@layer legacy {
+.ws-doc.is-chain > .story-architecture { padding: 0; overflow: visible; }
+.story-architecture { padding: 20px; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.story-architecture-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: start; justify-content: space-between; }
+.story-architecture-header strong { font-size: 18px; }
+.story-view-notice { padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.story-view-notice button { border: 0; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+.story-architecture-header p, .story-architecture-version { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.story-architecture-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.story-architecture button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; cursor: pointer; }
+/* 五个视角共享一块画布，入口只承载名称与覆盖状态。 */
+.story-view-coverage { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 20px 0 0; border-bottom: 1px solid var(--line); }
+.story-view-coverage .story-view-entry { display: grid; justify-items: start; gap: 5px; min-width: 0; padding: 12px 10px 14px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; text-align: left; }
+.story-view-coverage .story-view-entry[aria-pressed="true"] { border-bottom-color: var(--accent); background: var(--surface-soft); }
+.story-view-entry strong { font-size: 14px; color: var(--text); line-height: 1.5; text-wrap: balance; }
+.story-view-number { font-size: 10px; letter-spacing: .08em; color: var(--muted); }
+.story-view-status { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.story-view-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.story-view-status.pending { color: var(--attention); }
+.story-view-status.complete { color: var(--success, #278464); }
+.story-view-detail { padding-top: 18px; }
+.story-view-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.story-view-detail-heading > div:first-child { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.story-view-detail-heading strong { font-size: 15px; }
+.story-view-detail-heading span { font-size: 11px; color: var(--muted); }
+.story-view-actions { display: flex; gap: 14px; flex-wrap: wrap; }
+.story-view-actions button { padding: 0; border: 0; color: var(--accent); background: transparent; font-size: 12px; }
+.story-view-reason { font-size: 12px; color: var(--muted); line-height: 1.65; margin: 10px 0 16px; overflow-wrap: anywhere; }
+.story-diagram-picker { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.story-diagram-picker select { min-width: 0; max-width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+.story-view-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 48px 24px; min-height: 280px; border-radius: 10px; background: var(--surface-soft); }
+.story-view-empty > span { font-size: 32px; font-weight: 300; color: var(--muted); margin-bottom: 12px; }
+.story-view-empty strong { font-size: 15px; }
+.story-view-empty p, .story-view-empty small { max-width: 380px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.story-view-empty small { margin-top: 16px; }
+.story-view-loading { min-height: 320px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.story-architecture-diagnostics { font-size: 11px; color: var(--muted); margin-top: 12px; }
+.story-architecture-diagnostics summary { cursor: pointer; }
+.story-architecture-warning { color: var(--attention); font-size: 12px; overflow-wrap: anywhere; }
+.story-architecture-failure { border: 1px solid var(--line); border-radius: 10px; padding: 16px; line-height: 1.7; }
+.story-architecture-failure details { margin-top: 12px; }
+.story-architecture-failure summary { cursor: pointer; color: var(--muted); }
+.story-architecture-failure pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.story-architecture iframe { display: block; width: 100%; height: max(560px, 65vh); border: 1px solid var(--line); border-radius: 10px; background: #101620; }
+.story-architecture iframe.is-presenting { position: fixed; inset: 0; z-index: 10000; width: 100vw; height: 100dvh; max-width: none; border: 0; border-radius: 0; }
+.md-architecture-reference { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.md-architecture-reference > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.md-architecture-reference button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent); cursor: pointer; }
+.md-architecture-reference details { margin-top: 10px; font-size: 12px; }
+.md-architecture-reference summary { color: var(--muted); cursor: pointer; }
+.md-architecture-reference .md-block-code { max-height: 320px; overflow: auto; color: var(--text); }
+@media (max-width: 600px) { .story-architecture { padding: 12px; } .story-architecture iframe { height: 65vh; min-height: 460px; } }
+}

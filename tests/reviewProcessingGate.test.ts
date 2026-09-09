@@ -67,18 +67,18 @@ test("Agent 的待办集:只有送到它眼前、没有当前版本 fixed 回执
     note({ id: "verified", status: "verified" }),
     ...(["requirement_queue", "requirement_review", "overall_story_queue", "overall_story_processing", "overall_story"] as const)
       .map((sent_via) => note({ id: sent_via, sent_via })),
-    note({ id: "story-owner-decision", artifact: OVERALL_STORY_ARTIFACT, sent_via: "decision" }),
+    note({ id: "analysis-story-decision", artifact: OVERALL_STORY_ARTIFACT, sent_via: "decision" }),
   ];
   assert.deepEqual(agentReviewAnnotations(items).map((item) => item.id), [
     "sent-no-receipt", "sent-fixed", "sent-not-fixed", "sent-asking",
-    "sent-old-fixed", "decision-owner",
+    "sent-old-fixed", "decision-owner", "analysis-story-decision",
   ]);
   assert.deepEqual(pendingReviewProcessing(items).map((item) => item.id), [
     "sent-no-receipt", "sent-not-fixed", "sent-asking", "sent-old-fixed",
-    "decision-owner",
+    "decision-owner", "analysis-story-decision",
   ], "收到了/回了一句都不算:not_fixed、needs_clarification、旧版本回执一律未完成");
   assert.equal(reviewProcessingKey(pendingReviewProcessing(items)),
-    "decision-owner:r0,sent-asking:r0,sent-no-receipt:r0,sent-not-fixed:r0,sent-old-fixed:r1");
+    "analysis-story-decision:r0,decision-owner:r0,sent-asking:r0,sent-no-receipt:r0,sent-not-fixed:r0,sent-old-fixed:r1");
 });
 
 test("同文件坏回执不连坐有效项；重复 id 不取任意一条，重复 evidence 不反复写账", async () => {

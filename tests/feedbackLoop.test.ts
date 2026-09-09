@@ -84,7 +84,7 @@ test("反馈索引中间或完整坏账必须点名失败，不能静默隐藏�
   })]), FeedbackStoreCorruptionError);
 });
 
-test("重启对账只关闭已撤回批注，fixed 仍等待提出人确认", () => {
+test("重启对账保留旧撤回记录，fixed 仍等待责任人逐条处置", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-feedback-annotation-reconcile-"));
   const workspace = join(root, "task-1");
   mkdirSync(workspace, { recursive: true });
@@ -134,7 +134,7 @@ test("重启对账只关闭已撤回批注，fixed 仍等待提出人确认", ()
   const byId = new Map(store.list().map((item) => [item.source_id, item]));
   assert.equal(byId.get(dropped.id)?.status, "closed");
   assert.equal(byId.get(fixed.id)?.status, "awaiting_verification");
-  assert.match(byId.get(fixed.id)?.resolution ?? "", /等待.*确认/);
+  assert.match(byId.get(fixed.id)?.resolution ?? "", /等待.*责任人逐条处置/);
   assert.equal(task.summary.delivery.loop.workspace_review_recheck_required, true,
     "反馈索引对账不能替意见作者签字");
 });

@@ -23,7 +23,9 @@ test("内容页签与阅读检视工具是独立区域，检视仍随时可开�
 
 test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
   const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
-  assert.match(workspace, /className="ws-review-canvas"/);
+  const reviewPane = readFileSync(join(process.cwd(), "web/src/ResizableReviewPane.tsx"), "utf8");
+  assert.match(workspace, /<ResizableReviewPane open=\{reviewPanelOpen\}>/);
+  assert.match(reviewPane, /className="ws-review-canvas"/);
   assert.match(workspace, /className="ws-material-stage"/);
   assert.match(workspace, /className="ws-material-content">/);
   assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);

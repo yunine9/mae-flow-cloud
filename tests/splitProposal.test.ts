@@ -13,13 +13,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { requirementArtifacts } from "./requirementGraphFixture.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -134,6 +135,10 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     assert.equal(parent.requirement_graph?.stage, "confirmed");
     const internal = service as any;
     const state = internal.tasks.get(parent.id);
+    new EventLog(join(state.summary.workspace, "events.jsonl")).append({
+      eventId: 1, taskId: parent.id, sessionId: "main", ts: new Date().toISOString(),
+      kind: "user_message", payload: { via: "interrupt", text: "[责任人 cloudbot 插话] 同步采用 upsert；重复 id 整批拒绝。" },
+    });
     assert.equal(internal.splitTools(state).length, 1,
       "单仓直接开发的主任务挂 propose_split");
 
@@ -194,7 +199,7 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     assert.equal(state.driver, undefined);
     assert.equal(state.cwd, undefined, "旧编码现场作废,分析单重新只读克隆");
     assert.equal(state.mission, undefined);
-    assert.match(queued.detail ?? "", /已转为先分析再拆分:要改 14 处/);
+    assert.match(queued.detail ?? "", /已转为全局分析:要改 14 处/);
     assert.equal(internal.splitTools(state).length, 0, "分析单不再挂 propose_split");
     assert.match(await internal.proposeSplit(state, PROPOSAL, "call-split-3"),
       /已经是分析拆分单/);
@@ -211,12 +216,24 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     assert.deepEqual(card.requirement_graph!.repositories.map((node) => node.scope?.name),
       ["契约骨架", "过滤实现"]);
     assert.match(String(state.cwd), /repositories$/, "分析现场在 workspace/repositories");
+    const oldArtifacts = join(state.summary.workspace, "a-old-coding-clone", ".mae-flow-work", ticket);
+    mkdirSync(oldArtifacts, { recursive: true });
+    writeFileSync(join(oldArtifacts, "story.md"), "旧编码仓遗留 Story");
+    assert.equal(service.artifactRoot(parent.id), state.cwd,
+      "转拆分后的全局分析产物不能被旧编码仓的遗留文件抢先命中");
     // 分析提示词把上一位 Agent 的判断当起点,不当结论。
     const prompt = internal.requirementAnalysisPrompt(state, String(state.cwd));
-    assert.match(prompt, /上一位 Agent.*判断改动面过大/);
+    assert.match(prompt, /上一位 Agent.*结合需求和模块边界提议拆分/);
     assert.match(prompt, /偏好存储 3 个文件/);
     assert.match(prompt, /它建议的切法:\n1\. 契约骨架:接口与注册占位\n2\. 过滤实现/);
     assert.match(prompt, /切法可以推翻/);
+    assert.match(prompt, /inherited-decisions\.json/);
+    const inherited = JSON.parse(readFileSync(join(String(state.cwd), ".mae-flow-work", ticket,
+      "inherited-decisions.json"), "utf8"));
+    assert.ok(inherited.records.some((item: any) => item.kind === "supplement"
+      && item.text.includes("同步采用 upsert；重复 id 整批拒绝")), "转入分析不能丢掉已读过的责任人插话");
+    assert.ok(inherited.records.some((item: any) => item.kind === "decision"
+      && item.actor === "cloudbot" && item.text.includes(ACCEPT)), "人工答复原文与身份必须一同传递");
 
     // 人确认:单号逐单元定(父单号不下传),同仓两单元串行。
     const confirmed = await service.confirmRequirementGraph(parent.id, {

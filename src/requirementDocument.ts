@@ -101,7 +101,7 @@ export function materializeRequirementDocument(
  * 业务仓预埋同名软链让宿主把已确认方案写到任务边界之外。 */
 export function materializeDeliveryDocument(
   workspace: string,
-  name: ".mae-flow-chain.md" | ".mae-flow-unit.md",
+  name: ".mae-flow-chain.md" | ".mae-flow-unit.md" | "chain-plan.md",
   content: string,
 ): string {
   writeNoFollow(join(workspace, name), content);

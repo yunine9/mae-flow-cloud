@@ -35,11 +35,12 @@ const BARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
  * 历史语义事件的裸串来自 `toISOString()` 去掉 T/Z,实际是 UTC;
  * 内核 Python 的裸串来自 `time.strftime()`——写的是**执行进程所在
  * 时区**,所以 bareMeans 必须按写入方逐路判定,不能一刀切:
- * - history:Agent 经 Bash 在容器里跑内核 CLI 写入,容器 TZ=UTC
- *   (实测耗时整体偏移 8 小时,MFC-016)→ 按 UTC 补全;
+ * - history:新记录的 at_iso 自带时区;旧 at 按服务器本地时区兼容。
+ *   容器可透传 TZ,不能假定一定是 UTC。无时区旧记录若跨时区迁移,
+ *   必须按原写入环境恢复,无法仅凭裸串推断。
  * - 质量台账:宿主上的 dispatch 进程写入(hook_quality_execution),
  *   跟随服务器本地时区 → 按 local 补全。
- * 长期解法是内核直接写带偏移量的 ISO,这里的分路才可以退役。
+ * 带 Z/偏移量的串直接解析,不再套用读取进程的时区。
  */
 function normalizeTimestamp(
   value: unknown,
@@ -246,8 +247,8 @@ function fromKernel(cwd: string): TimelineEntry[] {
     const step = clip(item.step, 40) || "?";
     const result = clip(item.result, 20);
     entries.push({
-      // 内核 history 由容器内 python 写,容器 TZ=UTC(见文件头注释)。
-      ts: normalizeTimestamp(item.at, "utc"),
+      // at_iso 为写入方记录的绝对时间;旧 at 保留本地时间兼容。
+      ts: normalizeTimestamp(item.at_iso || item.at, "local"),
       kind: "phase",
       title: `完成步骤「${step}」`,
       detail: [result && `结果 ${result}`, clip(item.note, 60)]

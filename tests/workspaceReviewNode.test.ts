@@ -76,7 +76,7 @@ test("修复轮中途举卡:读回执、认出确认项就自动交卷;歧义题
     const kernelNode = await (service as any).workspaceReviewNodeAnswer(internal);
     assert.deepEqual(kernelNode?.answers,
       { "修改范围是否确认?": "修改范围无需再调整，确认进入编码" });
-    assert.match(kernelNode.notes, /不是意见作者的验收/);
+    assert.match(kernelNode.notes, /每条意见仍需任务责任人逐条处置/);
     assert.match(kernelNode.why, /1 条需意见作者补充说明/);
     const after = service.listAnnotations(id).items;
     assert.equal(after.find((item) => item.id === second.id)?.response?.outcome, "fixed",

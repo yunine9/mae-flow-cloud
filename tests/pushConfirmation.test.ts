@@ -974,7 +974,7 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     const waiting = service.get(id)!.waiting!;
     assert.notEqual(waiting.waiting_id, "old-confirmation");
     assert.match(String(waiting.context), /人工意见修改后的复检/);
-    assert.match(String(waiting.context), /还有 2 条待提出人确认/);
+    assert.match(String(waiting.context), /还有 2 条待责任人逐条处置/);
     const question = (waiting.question as any).questions[0].question;
     const accept = {
       waiting_id: waiting.waiting_id,
@@ -984,13 +984,13 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
 
     await assert.rejects(service.decide(id, accept),
       (error) => error instanceof TaskControlError
-        && /责任人的“继续提交”不能代替意见提出人确认/.test(error.message));
+        && /继续提交.*不能代替逐条处置/.test(error.message));
     assert.equal(service.get(id)!.waiting!.waiting_id, waiting.waiting_id,
       "越权放行必须零副作用，不能把原卡改旧造成后续假死");
     assert.equal(service.get(id)!.delivery_selection?.waiting_id,
       "old-confirmation", "拒绝前不能先改交付清单收据");
-    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
-      /只能由他裁决/);
+    assert.throws(() => service.verifyAnnotation(id, first.id, "reviewer-a"),
+      /只有当前任务责任人/);
     assert.throws(() => service.setPushConfirmation(id, false),
       /不能关闭确认绕过/);
 
@@ -998,8 +998,8 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
       outcome: "needs_clarification", summary: "空值指的是入参还是返回值？",
       evidence: [],
     });
-    assert.throws(() => service.verifyAnnotation(id, first.id, "reviewer-a"),
-      /仍有歧义/,
+    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
+      /处理依据/,
       "Agent 明确说没理解时不能让人误点成已修复");
     (service as any).annotations(internal).respond(first.id, {
       outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
@@ -1007,11 +1007,12 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     (service as any).annotations(internal).respond(second.id, {
       outcome: "fixed", summary: "已补边界测试", evidence: ["src/feature.ts:1"],
     });
-    service.verifyAnnotation(id, first.id, "reviewer-a");
+    service.verifyAnnotation(id, first.id, "owner");
     await assert.rejects(service.decide(id, accept),
       (error) => error instanceof TaskControlError && /仍有 1 条/.test(error.message));
-    service.verifyAnnotation(id, second.id, "reviewer-b");
+    service.verifyAnnotation(id, second.id, "owner");
     assert.match(String(service.get(id)!.detail), /已全部闭环/);
+    await assert.rejects(service.decide(id, { ...accept, actor: "reviewer-a" }), /只有主责任人 owner/);
 
     let deliveries = 0;
     (service as any).tryDeliver = async () => { deliveries += 1; };

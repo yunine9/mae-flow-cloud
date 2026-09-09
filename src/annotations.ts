@@ -83,6 +83,14 @@ export interface AnnotationOwnerReply {
   replied_at: string;
 }
 
+export interface AnnotationResolution {
+  revision: number;
+  outcome: "fixed" | "not_adopted" | "deferred" | "accepted_risk";
+  reason: string;
+  by: string;
+  at: string;
+}
+
 export interface Annotation {
   id: string;
   author: string;
@@ -121,7 +129,11 @@ export interface Annotation {
   response?: AnnotationResponse;
   owner_reply?: AnnotationOwnerReply;
   verified_at?: string;
-  /** 非作者(管理员)代确认时记谁点的;作者本人裁决不填。 */
+  resolution?: AnnotationResolution;
+  /** 已提交后修改或撤回表达，仍须责任人逐条处置。 */
+  needs_owner_closure?: boolean;
+  withdrawal_requested?: { by: string; at: string };
+  /** 实际确认者；旧作者本人确认记录可缺席，新责任人处置总是填写。 */
   verified_by?: string;
   /** 这条意见正文的版本号(0 = 首版):人退回返工、或作者改字重提都
    * 会加一。Agent 回执必须带同一个 revision 才算数——旧版本的回执不能
@@ -168,7 +180,9 @@ export const ANNOTATION_QUOTE_MAX = 1500;
 
 type Operation =
   | { op: "add"; record: Annotation }
-  | { op: "edit"; id: string; note: string; at: string }
+  | { op: "edit"; id: string; note: string; at: string; owner_controlled?: boolean }
+  | { op: "owner_resolution"; id: string; resolution: AnnotationResolution }
+  | { op: "withdraw_request"; id: string; by: string; at: string }
   /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
   | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string; by?: string }
@@ -178,7 +192,7 @@ type Operation =
   | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply;
       via?: "owner_pending" }
   | { op: "verify"; id: string; at: string; by?: string }
-  | { op: "reopen"; id: string; at: string;
+  | { op: "reopen"; id: string; at: string; by?: string; owner_controlled?: boolean;
       line?: number; anchor?: string; note?: string }
   | { op: "delivery_reset"; id: string; at: string; reason: string }
   /** 人在澄清卡上答了 Agent 的追问:追问留档带答复,回执清空等新回执。 */
@@ -190,6 +204,7 @@ export type AnnotationOperation = Operation;
 
 export class AnnotationError extends Error {}
 export class AnnotationPermissionError extends AnnotationError {}
+export class AnnotationConflictError extends AnnotationError {}
 
 /** 锚点还在不在:送出前问一次,答案摊给人看,不替人决定。 */
 export type AnchorState = "hit" | "moved" | "gone" | "ambiguous";
@@ -208,7 +223,7 @@ export interface AnchorCheck {
 }
 
 export class AnnotationStore {
-  constructor(readonly path: string) {}
+  constructor(readonly path: string, private readonly ownerControlled = false) {}
 
   /** 回放得到当前状态。坏行跳过不炸整页——旁路一律 fail-open。 */
   list(): Annotation[] {
@@ -232,6 +247,25 @@ export class AnnotationStore {
         byId.set(operation.record.id, operation.record);
         continue;
       }
+      if (operation.op === "owner_resolution") {
+        const found = byId.get(operation.id);
+        if (found && (found.rework ?? 0) === operation.resolution.revision) {
+          found.status = "verified";
+          found.resolution = operation.resolution;
+          found.verified_by = operation.resolution.by;
+          found.verified_at = operation.resolution.at;
+          found.needs_owner_closure = false;
+        }
+        continue;
+      }
+      if (operation.op === "withdraw_request") {
+        const found = byId.get(operation.id);
+        if (found && !["verified", "dropped"].includes(found.status)) {
+          found.withdrawal_requested = { by: operation.by, at: operation.at };
+          found.needs_owner_closure = true;
+        }
+        continue;
+      }
       if (operation.op === "drop") {
         const found = byId.get(operation.id);
         if (found) found.status = "dropped";
@@ -244,7 +278,10 @@ export class AnnotationStore {
         found.edited_at = operation.at;
         // 已送出的意见一旦改字，就不能继续冒充“这版已提交”。退回草稿，
         // 由责任人重新送出；旧内容和送出记录仍完整保留在 jsonl 中。
-        if (found.status !== "draft") {
+        if (found.status !== "draft" || found.needs_owner_closure) {
+          if (operation.owner_controlled) found.needs_owner_closure = true;
+          found.resolution = undefined;
+          found.withdrawal_requested = undefined;
           // 改字就是新版本:盘上残留的旧回执(同 id、旧 revision)不能再
           // 被读成"新文字已处理"。返工次数(returned)不动——这不是退回。
           found.rework = (found.rework ?? 0) + 1;
@@ -264,13 +301,14 @@ export class AnnotationStore {
           found.response = undefined;
           found.owner_reply = undefined;
           found.verified_at = undefined;
+          found.verified_by = undefined;
         }
         continue;
       }
       if (operation.op === "sent") {
         for (const id of operation.ids ?? []) {
           const found = byId.get(id);
-          if (!found) continue;
+          if (!found || found.resolution) continue;
           found.status = "sent";
           found.sent_at = operation.at;
           found.sent_via = operation.via;
@@ -280,7 +318,7 @@ export class AnnotationStore {
       }
       if (operation.op === "respond") {
         const found = byId.get(operation.id);
-        if (!found || found.status === "draft" || found.status === "dropped") {
+        if (!found || found.resolution || found.status === "draft" || found.status === "dropped") {
           continue;
         }
         // 晚到的旧轮回执不能覆盖新一轮返工。revision=0 兼容首轮。
@@ -336,6 +374,9 @@ export class AnnotationStore {
       if (operation.op === "reopen" || operation.op === "delivery_reset") {
         const found = byId.get(operation.id);
         if (!found) continue;
+        found.resolution = undefined;
+        found.withdrawal_requested = undefined;
+        if (operation.op === "reopen" && operation.owner_controlled) found.needs_owner_closure = true;
         found.status = "draft";
         found.rework = (found.rework ?? 0) + 1;
         if (operation.op === "reopen") found.returned = (found.returned ?? 0) + 1;
@@ -355,7 +396,12 @@ export class AnnotationStore {
         if (operation.note) found.note = operation.note;
       }
     }
-    return [...byId.values()];
+    // 需求侧旧现场中，返工/改字后的 draft 已经是团队意见，不能通过
+    // 删除草稿绕过责任人；只补读侧事实，保留旧账与 Issue 侧原有语义。
+    return [...byId.values()].map((item) => this.ownerControlled
+      && item.status === "draft" && (item.rework ?? 0) > 0
+      && item.needs_owner_closure === undefined
+      ? { ...item, needs_owner_closure: true } : item);
   }
 
   /** 原始操作按落账顺序(坏行跳过)。它是给投影读时刻用的,业务状态一律
@@ -466,7 +512,7 @@ export class AnnotationStore {
 
   /** 改意见只认作者，不认任务角色。已提交/已确认的意见修改后退回待提交，
    * 避免清单显示的是新文字，Agent 实际收到的却还是旧文字。 */
-  edit(id: string, note: string, by: string): Annotation {
+  edit(id: string, note: string, by: string, ownerControlled = false): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
     if (found.author !== by) {
@@ -478,7 +524,7 @@ export class AnnotationStore {
     const normalized = String(note ?? "").trim();
     if (!normalized) throw new AnnotationError("批注内容不能为空");
     const at = new Date().toISOString();
-    this.append({ op: "edit", id, note: normalized, at });
+    this.append({ op: "edit", id, note: normalized, at, owner_controlled: ownerControlled });
     return this.list().find((item) => item.id === id)!;
   }
 
@@ -606,6 +652,43 @@ export class AnnotationStore {
     return found;
   }
 
+  /** 服务层先核对当前任务责任人；这里原子校对意见版本并追加真实处置。 */
+  resolveAsOwner(id: string, by: string, decision: Omit<AnnotationResolution, "by" | "at">): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (!Number.isInteger(decision.revision) || decision.revision !== (found.rework ?? 0)) {
+      throw new AnnotationConflictError("意见版本已变化，请刷新后逐条处理");
+    }
+    if (found.resolution) {
+      if (found.resolution.by === by && found.resolution.outcome === decision.outcome
+          && found.resolution.reason === decision.reason.trim()) return found;
+      throw new AnnotationError("这条意见已处置，请刷新查看记录");
+    }
+    if (found.status !== "sent" && !(found.status === "draft" && found.needs_owner_closure)) {
+      throw new AnnotationError("这条意见尚未提交或已经闭环");
+    }
+    if (!["fixed", "not_adopted", "deferred", "accepted_risk"].includes(decision.outcome)) {
+      throw new AnnotationError("请选择有效的逐条处置结果");
+    }
+    const reason = decision.reason.trim();
+    const response = found.response?.revision === decision.revision ? found.response : undefined;
+    if (!reason && (decision.outcome !== "fixed" || !(response?.outcome === "fixed" || (found.route === "owner_reply" && found.owner_reply)))) {
+      throw new AnnotationError("请填写这条意见的处理依据；不采纳、延期或接受风险必须说明理由");
+    }
+    this.append({ op: "owner_resolution", id, resolution: { ...decision, reason, by, at: new Date().toISOString() } });
+    return this.list().find((item) => item.id === id)!;
+  }
+
+  requestWithdrawal(id: string, by: string): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.author !== by) throw new AnnotationPermissionError("只能撤回自己提出的表达");
+    if (found.status === "verified" || found.status === "dropped") throw new AnnotationError("已闭环意见保留历史，请新增补充意见");
+    if (found.status === "draft" && !found.needs_owner_closure) return this.drop(id, by);
+    if (!found.withdrawal_requested) this.append({ op: "withdraw_request", id, by, at: new Date().toISOString() });
+    return this.list().find((item) => item.id === id)!;
+  }
+
   /** 确认通过:人看过那处改动,认了。检视闭环的收口一步。 */
   verify(id: string, by: string, override = false): Annotation {
     const found = this.judgeable(id, by, override);
@@ -633,13 +716,14 @@ export class AnnotationStore {
    */
   reopen(id: string, by: string, update?: {
     line?: number; anchor?: string; note?: string;
-  }): Annotation {
-    const current = this.judgeable(id, by);
+  }, ownerOverride = false): Annotation {
+    const current = this.judgeable(id, by, ownerOverride);
     if (["overall_story_queue", "overall_story_processing"].includes(current.sent_via ?? "")) {
       throw new AnnotationError("整体 Story 仍在处理，请停止本轮后再调整意见");
     }
     this.append({
       op: "reopen", id, at: new Date().toISOString(),
+      ...(ownerOverride ? { by, owner_controlled: true } : {}),
       line: update?.line, anchor: update?.anchor?.trim() || undefined,
       note: update?.note?.trim() || undefined,
     });
@@ -694,7 +778,7 @@ export function renderAnnotations(
     "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
     ...(hasGraphAnnotations ? [
       "- 标为“方案结构”的意见来自模块拆分图。按方案整体、模块 id 或依赖边定位，"
-        + "不要拿展示行号去猜 JSON 行号。处理后必须同时更新 CHAIN 文档和"
+        + "不要拿展示行号去猜 JSON 行号。处理后必须同时更新当前设计文档（新任务 story.md，旧现场 CHAIN）和"
         + " requirement-graph.json，并为两份产物换同一个新 plan_revision。",
     ] : []),
     "",

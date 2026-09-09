@@ -45,6 +45,38 @@ function fixture() {
     runner: (next: typeof runner) => { runner = next; }, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+test("新 Story 输入跟踪模块职责；升级不改变历史汇总稿的摘要形态", () => {
+  const f = fixture();
+  try {
+    const old = collectStoryInput(f.task, f.options).fingerprint;
+    f.task.summary.requirement_graph!.repositories[0].responsibility = "查询模块的完整功能与测试";
+    assert.equal(collectStoryInput(f.task, f.options).fingerprint, old);
+    f.task.summary.requirement_graph!.source_document = "story.md";
+    const current = collectStoryInput(f.task, f.options).fingerprint;
+    f.task.summary.requirement_graph!.repositories[0].responsibility = "查询模块增加分页契约";
+    assert.notEqual(collectStoryInput(f.task, f.options).fingerprint, current);
+  } finally { f.dispose(); }
+});
+
+test("发布后的子任务同步失败保留文档和已处理回执，不把意见重新送回草稿", async () => {
+  const f = fixture();
+  const coordinator = new OverallStoryCoordinator({ ...f.options,
+    published() { throw new Error("子任务材料暂时不可写"); } });
+  try {
+    coordinator.generate("parent", "owner");
+    await coordinator.settled("parent");
+    const first = readStoryState(f.task.summary.workspace).current;
+    const note = f.note();
+    coordinator.submit("parent", [note], "reviewer");
+    await coordinator.settled("parent");
+    assert.notEqual(readStoryState(f.task.summary.workspace).current, first);
+    const updated = f.store.list().find((item) => item.id === note.id)!;
+    assert.equal(updated.sent_via, "overall_story");
+    assert.equal(updated.response?.outcome, "fixed");
+    assert.match(coordinator.status("parent").error!, /子任务材料暂时不可写/);
+  } finally { await coordinator.shutdown(); f.dispose(); }
+});
+
 test("子任务即使携带已确认拆分方案也不能生成、更新、确认或派送整体 Story 意见", () => {
   const f = fixture();
   try {

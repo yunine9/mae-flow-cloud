@@ -1,3 +1,4 @@
+import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
@@ -23,19 +24,22 @@ export const REQUIREMENT_REVIEW_SESSION_POLICY = {
 } as const;
 
 /** 分析开始后原文是输入基线；后续意见落实到分析产物或实现。 */
-export function requirementAnnotationInstructions(annotations: Annotation[]): string | undefined {
+export function requirementAnnotationInstructions(annotations: Annotation[], storyPath?: string): string | undefined {
   const instructions: string[] = [];
   if (annotations.some((item) => item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
     instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
       + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
   }
-  if (annotations.some((item) => item.artifact === REQUIREMENT_GRAPH_ARTIFACT)) {
-    instructions.push("这些意见直接锚在模块拆分图上。不要只改图或只改说明："
-      + "请同步修订 CHAIN 文档与 requirement-graph.json，为两份产物换用"
-      + "同一个全新 plan_revision，最后重新计算并写入 chain_sha256。"
+  if (annotations.some((item) => [REQUIREMENT_GRAPH_ARTIFACT, OVERALL_STORY_ARTIFACT].includes(item.artifact))) {
+    instructions.push("这些意见锚在模块拆分图或全局 Story 上。不要只改图或只改说明："
+      + "请同步修订当前设计文档（新任务 story.md，旧现场沿用 CHAIN）与 requirement-graph.json，为两份产物换用"
+      + "同一个全新 plan_revision，最后按真实字节重新计算 story_sha256（旧 CHAIN 用 chain_sha256）。"
       + "方案级意见作用于整体切法，模块级意见作用于指定模块，依赖级意见"
       + "作用于指定边；如果人的意见仍有多种会导致不同拆法的理解，再用一张"
       + "明确的问题卡说明差异，否则按最直接的理解落实。");
+  }
+  if (storyPath && annotations.some((item) => item.artifact === OVERALL_STORY_ARTIFACT)) {
+    instructions.push(`整体 Story 的批注标识是阅读入口，实际编辑文件为 ${storyPath}。不要创建另一份设计文档。`);
   }
   return instructions.length ? instructions.join("\n\n") : undefined;
 }

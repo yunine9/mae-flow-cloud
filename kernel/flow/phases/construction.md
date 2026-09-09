@@ -8,6 +8,8 @@ The main Agent implements and finalizes the whole approved change directly from 
 
 Read the confirmed behavior, design boundaries, affected code, repository build configuration, and intended test seam.
 
+Treat testability as a core coding principle: separate directly testable logic from external effects, reuse replaceable dependency boundaries, and keep module internals real in tests. Function-level UT remains foundational alongside module and integration verification; follow the construction guidance without adding abstraction or gates merely to reduce mocks.
+
 ## Stop for the user
 
 Only for real ambiguity or a plan-level gap. There is no mid-flow mandatory review: humans review asynchronously via workbench annotations during the run and formally on the merge request afterwards.

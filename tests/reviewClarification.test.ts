@@ -64,7 +64,7 @@ test("需要补充说明:是结论不是失败;作者重提前不再要它的回
 
     // reviewer-b 确认通过;reviewer-a 还没补充。此时又送一条新意见:
     // 欠回执的只有新意见,Agent 不该再被要求答 first;它多写一条也不算多出。
-    service.verifyAnnotation(id, second.id, "reviewer-b");
+    service.verifyAnnotation(id, second.id, service.get(id)?.luban_account ?? "本地用户");
     const third = store.add({
       author: "reviewer-b", artifact: "本任务变更", file: "src/c.ts", line: 1,
       anchor: "init", note: "初始化顺序", kind: "code",

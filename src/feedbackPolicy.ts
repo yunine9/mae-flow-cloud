@@ -21,6 +21,7 @@ export function blockingAnnotations(
   taskOwner: string | undefined,
 ): Annotation[] {
   return items.filter((item) => item.status === "sent"
+    || (item.status === "draft" && item.needs_owner_closure)
     // 无认证/旧任务没有 owner 时维持单用户语义：它的草稿就是当前
     // 操作者自己的草稿。只有明确知道“这是别人的任务”时才排除路人草稿。
     || (item.status === "draft" && (!taskOwner || item.author === taskOwner)));
@@ -46,7 +47,6 @@ export function submittedAnnotations(items: Annotation[]): Annotation[] {
 export function agentReviewAnnotations(items: Annotation[]): Annotation[] {
   return items.filter((item) => item.status === "sent"
     // 专项文档会话在发布新正文时登记自己的回执，不归主编码会话处理。
-    && item.artifact !== OVERALL_STORY_ARTIFACT
     && !["requirement_queue", "requirement_review", "overall_story_queue",
       "overall_story_processing", "overall_story"].includes(item.sent_via ?? "")
     && item.sent_via !== "pipeline_evidence"
@@ -291,6 +291,8 @@ export type AnnotationBucket = "mine" | "agent" | "closed";
 /** 判定要用的任务侧事实。全是现成字段,这里不查库、不猜。 */
 export interface AnnotationClosureFacts {
   task_status: string;
+  task_owner?: string;
+  owner_controlled?: boolean;
   /** 工作台复检卡已到:MR 修复轮的逐条裁决只在这时开放。 */
   review_ready: boolean;
   /** 本轮复检卡点名的意见;管理员代办白名单也用它。 */
@@ -320,6 +322,8 @@ export interface AnnotationClosure {
   /** 当前这位看的人能不能亲自裁决(作者到点,或管理员代办)。 */
   actionable: boolean;
   can_verify: boolean;
+  owner_controlled?: boolean;
+  can_resolve?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
   /** 别人的草稿,这位看的人可以代为转交/提交。 */
@@ -602,10 +606,34 @@ export function annotationClosure(
 ): AnnotationClosure {
   if (item.artifact === OVERALL_STORY_ARTIFACT) facts = { ...facts, archival: false };
   const personName = options.person_name ?? ((username: string) => username);
+  if (facts.owner_controlled && annotationRoute(item) !== "memory") {
+    const pending = item.status === "sent" || (item.status === "draft" && !!item.needs_owner_closure);
+    const owner = facts.task_owner ?? "本地用户";
+    const mine = viewer.username === owner;
+    const canResolve = pending && mine && facts.task_status !== "canceled"
+      && (!facts.archival || item.artifact === OVERALL_STORY_ARTIFACT);
+    const response = currentResponse(item);
+    const labels = { fixed: "责任人确认已修复", not_adopted: "责任人不采纳", deferred: "责任人决定延期", accepted_risk: "责任人接受风险继续" };
+    const resolution = item.resolution;
+    // 没有新处置事件的旧闭环保留原操作者和原含义。
+    if (pending || resolution) return {
+      id: item.id, tone: resolution ? "done" : "review",
+      text: resolution ? labels[resolution.outcome] : mine ? "待你逐条处置" : "待责任人逐条处置",
+      hint: resolution ? `${personName(resolution.by)}：${resolution.reason || response?.summary || item.owner_reply?.text || "已核对处理结果"}`
+        : item.withdrawal_requested ? "提出人申请撤回表达，仍需责任人逐条处置。"
+        : `由任务责任人 ${personName(owner)} 核对回执及最新材料后逐条决定。`,
+      bucket: resolution ? "closed" : mine ? "mine" : "agent",
+      delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : deliveryTextOf(item, facts, personName),
+      verdict_ready: pending, actionable: canResolve, can_resolve: canResolve, owner_controlled: true,
+      can_verify: canResolve && (response?.outcome === "fixed" || (item.route === "owner_reply" && !!item.owner_reply)),
+      can_override_verify: false, can_override_drop: false, can_route: canRouteDraft(item, facts, viewer),
+      needs_clarification: response?.outcome === "needs_clarification", receipt_missing: pending && mine && !response,
+    };
+  }
   const ready = annotationVerdictReady(item, facts);
-  const override = annotationOverrideAccess(item, facts, viewer);
+  const override = facts.owner_controlled ? { can_drop: false, can_verify: false } : annotationOverrideAccess(item, facts, viewer);
   const isAuthor = item.author === viewer.username;
-  const canVerify = isAuthor && ready;
+  const canVerify = !facts.owner_controlled && isAuthor && ready;
   const actionable = canVerify || override.can_verify;
   const progress = progressOf(item, facts, Boolean(options.anchor_gone),
     actionable, ready, personName, isAuthor);
@@ -617,6 +645,7 @@ export function annotationClosure(
       : override.can_verify ? "mine" : "agent";
   return {
     id: item.id,
+    owner_controlled: facts.owner_controlled,
     tone: progress.tone,
     text: progress.text,
     ...(progress.hint ? { hint: progress.hint } : {}),

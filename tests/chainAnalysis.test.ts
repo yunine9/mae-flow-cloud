@@ -220,8 +220,8 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     assert.equal(webChild.repo_url, webRepo);
     assert.equal(service.list().filter((item) => item.parent_task_id === parent.id).length,
       2, "无需修改的 audit 仓只留分析结论，不生成子任务");
-    assert.equal(apiChild.delivery_scope?.name, "订单接口");
-    assert.equal(webChild.delivery_scope?.name, "订单页面");
+    assert.equal(apiChild.delivery_scope, undefined);
+    assert.equal(webChild.delivery_scope, undefined);
     assert.deepEqual(webChild.blocked_by, [apiChild.id]);
     assert.equal(apiChild.blocked_by, undefined);
     assert.equal(apiChild.parent_task_id, parent.id);
@@ -437,7 +437,7 @@ test("CHAIN 与机读图强同步；图上模块批注复用统一批注账", ()
   assert.equal(service.listAnnotations(parent.id).checks[0]?.state, "hit",
     "图批注要按模块 id 命中当前图，不依赖 JSON 行号");
   assert.match(service.previewAnnotations(parent.id, [annotation.id]), /方案结构/);
-  assert.match(requirementAnnotationInstructions([annotation])!, /同步修订 CHAIN 文档与 requirement-graph\.json/);
+  assert.match(requirementAnnotationInstructions([annotation])!, /同步修订当前设计文档.*旧现场沿用 CHAIN.*requirement-graph\.json/);
 
   // 只改人看的文档：版本标记和 JSON 都没动，真实字节摘要必须立即失配。
   writeFileSync(join(artifactDir, `CHAIN-${ticket}.md`),

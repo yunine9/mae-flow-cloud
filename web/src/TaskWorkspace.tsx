@@ -1,4 +1,8 @@
 import { PersonName } from "./People";
+import { StoryArchitecture } from "./StoryArchitecture";
+import { StoryViewNotice } from "./StoryViewNotice";
+import { STORY_VIEWS, storyViewCoverage } from "../../src/storyViewCoverage";
+import { moduleStoryLine } from "./moduleStoryLocation";
 import { ResizableReviewPane } from "./ResizableReviewPane";
 import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 import "./overall-story.css";
@@ -26,7 +30,6 @@ import { TaskWaitingFacts } from "./TaskWaitingFacts";
 import { Annotatable } from "./Annotatable";
 import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
-import { RequirementGraph } from "./RequirementGraph";
 import { requirementGraphVisible } from "./taskHierarchy";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
@@ -42,14 +45,12 @@ import {
   RepositoryAssigneePicker,
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
-import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import { UserPicker } from "./UserPicker";
 import {
   addAnnotation,
   completeReview,
   controlTask,
   getConversation,
-  decideScopeViolation,
   deleteHistoryTask,
   listAnnotations,
   listArtifactChangeDirectory,
@@ -263,55 +264,6 @@ function DiagnosticsLink({ taskId }: { taskId: string }) {
   );
 }
 
-/** 越界裁决卡(单仓拆分):交付单元的提交越出负责文件面时停摆留痕,
- * 这里给主责任人两个出口——放行(记豁免续推)或打回(派修复撤出)。
- * 卡对所有能看到任务的人可见(方便一起看现场),裁决权在服务端钉死为
- * 主任务责任人,403 的解释原样露出。 */
-function ScopeViolationCard({ task, onChanged }: {
-  task: TaskSummary;
-  onChanged: () => void;
-}) {
-  const violation = task.delivery?.scope_violation;
-  const [busy, setBusy] = useState<"allow" | "revert" | null>(null);
-  const [error, setError] = useState("");
-  if (!violation?.paths.length) return null;
-  async function decide(decision: "allow" | "revert") {
-    setBusy(decision);
-    setError("");
-    const result = await decideScopeViolation(task.id, decision);
-    setBusy(null);
-    if (result.error) setError(result.error);
-    else onChanged();
-  }
-  return (
-    <div className="scope-violation-card" role="alert">
-      <strong>请裁决越界改动</strong>
-      <p>
-        本单元{task.delivery_scope?.name ? `(${task.delivery_scope.name})` : ""}
-        的提交改动越出了负责文件面。可能是实现确有需要(比如动到接口契约),
-        也可能是拆分方案有误。
-      </p>
-      <ul className="scope-violation-paths">
-        {violation.paths.map((path) => <li key={path}><code>{path}</code></li>)}
-      </ul>
-      <div className="scope-violation-actions">
-        <button type="button" disabled={busy !== null}
-          onClick={() => decide("allow")}
-          title="这些文件记入豁免名单,改动随本单元 MR 一起检视">
-          {busy === "allow" ? "正在放行…" : "放行,随本单元交付"}
-        </button>
-        <button type="button" className="scope-violation-revert"
-          disabled={busy !== null} onClick={() => decide("revert")}
-          title="派修复把这些文件从提交中撤出,负责面内的实现保留">
-          {busy === "revert" ? "正在下发撤出令…" : "打回,撤出越界改动"}
-        </button>
-      </div>
-      <small>裁决人是主任务责任人；其他成员点击后会提示应联系的具体账号。</small>
-      {error && <small role="alert" className="scope-violation-error">{error}</small>}
-    </div>
-  );
-}
-
 /** await_merge 的右栏行:默认一行状态,点开只展开一句说明 + MR 链接
  * (MFC-039 用户拍板:去掉与右栏标题重复的大卡)。MR 被关闭是需要人
  * 处理的例外,直接展示不折叠。 */
@@ -440,7 +392,7 @@ function feedbackStatusLabel(item: FeedbackRecord): string {
     if (item.status === "closed") return "检视人已确认";
   }
   if (item.source === "workspace" && item.status === "awaiting_verification") {
-    return "等批注作者确认";
+    return "等责任人逐条处置";
   }
   return FEEDBACK_STATUS_LABEL[item.status];
 }
@@ -604,7 +556,7 @@ export function TaskWorkspace({
   task: TaskSummary;
   viewerUsername: string;
   viewerDisplayName?: string;
-  /** 管理员仅可代删或代确认别人的批注；默认裁决权仍归作者。 */
+  /** 兼容旧调用参数；批注闭环权限以服务端当前责任人结论为准。 */
   canOverride: boolean;
   canOperate: boolean;
   /** 主任务责任人或已被逐仓分工邀请的协作者。最终决定仍看 canOperate。 */
@@ -634,6 +586,9 @@ export function TaskWorkspace({
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
     useState<MaterialView>(recommendedMaterialView);
+  const [architectureLine, setArchitectureLine] = useState<number>();
+  const [moduleLocation, setModuleLocation] = useState<{ taskId: string; id: string; name: string; request: number }>();
+  const [moduleLocationRetry, setModuleLocationRetry] = useState<string>();
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -847,8 +802,22 @@ export function TaskWorkspace({
 
   // 工作区内切换材料、检视和运行记录；右栏只承接决定与回复。
   function openMaterial(view: MaterialView) {
+    if (view !== "doc") {
+      setModuleLocation(undefined); setModuleLocationRetry(undefined);
+      setLocationNotice("");
+    }
     if (workspaceView === "execution" || workspaceView === "knowledge") selectWorkspaceView("materials");
     setMaterialView(view);
+  }
+  function openModuleStory(id: string) {
+    const view = id === "view:logical-class" ? { label: "类图" } : id.startsWith("view:") ? STORY_VIEWS.find((item) => item.id === id.slice(5)) : undefined;
+    const module = view ? { name: view.label, scope: undefined } : task.requirement_graph?.repositories.find((item) => item.id === id);
+    const request = ++locationRequest.current;
+    setPendingLocation(undefined); setModuleLocation(undefined); setModuleLocationRetry(undefined);
+    openMaterial("doc"); setActive(OVERALL_STORY_ARTIFACT);
+    setContent(""); setLoading(true); setMaterialReload(request);
+    setLocationNotice(module ? "正在定位设计说明…" : "模块分工已更新，已打开完整 Story，请核对最新方案。");
+    if (module) setModuleLocation({ taskId: task.id, id, name: module.scope?.name ?? module.name, request });
   }
   function materialTabOn(view: MaterialView): boolean {
     return (workspaceView === "focus" || workspaceView === "materials") && materialView === view;
@@ -871,6 +840,7 @@ export function TaskWorkspace({
     artifactTask.current = "";
     openedEvidenceGap.current = "";
     setItems(undefined);
+    setModuleLocation(undefined); setModuleLocationRetry(undefined); setLocationNotice("");
     setActive("");
     setContent("");
     setSelectedDiffPath("");
@@ -1326,6 +1296,7 @@ export function TaskWorkspace({
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
+    setModuleLocation(undefined); setModuleLocationRetry(undefined);
     const request = ++locationRequest.current;
     setPendingLocation(undefined);
     setWorkspaceView("materials");
@@ -1412,6 +1383,43 @@ export function TaskWorkspace({
     window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
   }, [pendingLocation, materialView, active, content, loading, diffFileLoading,
     loadedMaterialReload, materialReadError, task.requirement, task.requirement_graph]);
+  // 定位等待有上限；超时后不再执行迟到的滚动，用户可主动重试。
+  useEffect(() => {
+    if (!moduleLocation) return;
+    const timer = window.setTimeout(() => {
+      setModuleLocation(undefined); setModuleLocationRetry(moduleLocation.id);
+      setLoading(false); setContent("");
+      setLocationNotice("Story 加载超时，请重试定位；你可以继续查看分工。");
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [moduleLocation]);
+  useEffect(() => {
+    if (!moduleLocation) return;
+    if (moduleLocation.taskId !== task.id || materialView !== "doc" || active !== OVERALL_STORY_ARTIFACT) {
+      setModuleLocation(undefined); return;
+    }
+    if (loading || loadedMaterialReload !== moduleLocation.request) return;
+    setModuleLocation(undefined);
+    const reader = workspaceRoot.current?.querySelector<HTMLElement>(".ws-doc");
+    const line = materialReadError ? undefined : moduleLocation.id === "view:logical-class"
+      ? storyViewCoverage(content).find((view) => view.id === "logical")?.classDiagram?.line
+      : moduleLocation.id.startsWith("view:")
+      ? storyViewCoverage(content).find((view) => view.id === moduleLocation.id.slice(5))?.line
+      : moduleStoryLine(content, moduleLocation);
+    const row = line && reader ? annotationLocationRow([...reader.querySelectorAll<HTMLElement>("[data-l]")], line) : undefined;
+    reader?.querySelectorAll(".annot-flash").forEach((node) => node.classList.remove("annot-flash"));
+    if (!row) {
+      setModuleLocationRetry(moduleLocation.id);
+      setLocationNotice(materialReadError ? "Story 读取失败，请重试。" : `已打开最新 Story，未找到「${moduleLocation.name}」的唯一对应段落，请在正文中核对。`);
+      reader?.scrollTo({ top: 0 });
+      return;
+    }
+    setModuleLocationRetry(undefined);
+    setLocationNotice("");
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.add("annot-flash");
+    window.setTimeout(() => row.classList.remove("annot-flash"), 2500);
+  }, [moduleLocation, task.id, materialView, active, loading, loadedMaterialReload, content, materialReadError]);
   const activeMeta = items?.find((item) => item.name === active);
   const materialPriority = (item: ArtifactMeta): number =>
     item.purpose === "delivery_unit_brief" ? 0
@@ -1465,12 +1473,12 @@ export function TaskWorkspace({
     : changes.length;
   const untrackedDirectoryCount = changes.reduce((sum, item) =>
     sum + (item.untracked_directories?.length ?? 0), 0);
-  // 与 RequirementGraph 组件同一个判定:页签露出而组件返回 null 就是空白面板。
+  // 全局 Story 的设计图入口沿用主任务的分析可见性。
   const hasRequirementGraph = requirementGraphVisible(task);
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "需求原文" }
     : materialView === "chain"
-    ? { kicker: "DELIVERY PLAN", title: "模块拆分与依赖" }
+    ? { kicker: "DELIVERY PLAN", title: "架构视图" }
     : materialView === "diff"
       ? pushReview
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
@@ -1578,6 +1586,7 @@ export function TaskWorkspace({
     && !(task.delivery?.mr_url
       && task.delivery.mr_state !== "已关闭"
       && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
+  const overallStoryPublished = !task.parent_task_id && task.requirement_graph?.stage === "confirmed";
   const annotationCanSend = canContributeReview
     && (task.status === "running" || task.status === "waiting_for_human"
       || Boolean(task.delivery?.evidence_gap?.missing_dimensions.length)
@@ -1594,9 +1603,9 @@ export function TaskWorkspace({
   const clarificationRespondent = !!waiting && isClarificationWaiting(task)
     && notes.some((item) => item.author === viewerUsername
       && (task.waiting?.question?.annotation_ids ?? []).includes(item.id));
-  const decides = canOperate
-    || (canCollaborate && !isOwnerOnlyWaiting(task))
-    || clarificationRespondent;
+  const decides = isOwnerOnlyWaiting(task)
+    ? viewerUsername === (task.luban_account ?? "本地用户")
+    : canOperate || canCollaborate || clarificationRespondent;
   // 检视卡上的返工选项,交给批注面板做"提交并返工"一步到位。
   const reworkChoiceRaw = waiting ? reworkChoiceOf(task) : undefined;
   const workspaceReworkChoice = reworkChoiceRaw && task.waiting
@@ -1671,15 +1680,11 @@ export function TaskWorkspace({
   ];
   // 非决定态的收口块:失败原因与重跑、验证中卡在哪、等合入、子任务清单。
   // 它们是流的"最后一条",不是第二个面板。
-  const streamTailVisible = Boolean(task.delivery?.scope_violation)
-    || ["failed", "canceled"].includes(task.status)
+  const streamTailVisible = ["failed", "canceled"].includes(task.status)
     || (!waiting && ["await_merge", "verifying", "coordinating"].includes(task.status))
     || Boolean(task.parent_task_id);
   const streamTail = streamTailVisible ? (
     <>
-      {task.delivery?.scope_violation && (
-        <ScopeViolationCard task={task} onChanged={onChanged} />
-      )}
       {task.status === "failed" && (
         <>
           {task.detail && (
@@ -1753,6 +1758,7 @@ export function TaskWorkspace({
           reply={inline ? undefined : reply}
           canOperate={canContributeReview}
           taskStatus={task.status}
+          overallStoryPublished={overallStoryPublished}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
           requirementReview={requirementAnalysisConfirmation}
@@ -2014,11 +2020,9 @@ export function TaskWorkspace({
                     <span>产出文档</span><i>{documents.length}</i>
                   </button>
                 </>}
-                {hasRequirementGraph && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
+                {(hasRequirementGraph || (!task.parent_task_id && documents.some((item) => item.purpose === "overall_story"))) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
                   onClick={() => openMaterial("chain")}>
-                  <span>模块与依赖</span><i>{task.requirement_graph!.projection_state === "ready"
-                    || task.requirement_graph!.stage === "confirmed"
-                    ? task.requirement_graph!.repositories.length : "…"}</i>
+                  <span>架构视图</span>
                 </button>}
                 <button type="button" role="tab" aria-selected={materialTabOn("diff")}
                   className={materialTabOn("diff") ? "on" : ""}
@@ -2150,12 +2154,12 @@ export function TaskWorkspace({
               </button>
             </section>
           )}
-          {materialView === "doc" && !task.parent_task_id
+          {materialView === "doc" && active === OVERALL_STORY_ARTIFACT && !task.parent_task_id
             && task.requirement_graph?.stage === "confirmed"
-            && task.requirement_graph.repositories.length > 0 && (
+            && (task.requirement_graph.source_document === "story.md"
+              || task.requirement_graph.repositories.length > 0) && (
             <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate}
-              canceled={task.status === "canceled"} active={active === OVERALL_STORY_ARTIFACT}
-              onOpen={() => setActive(OVERALL_STORY_ARTIFACT)} onOpenTask={onOpenTask}
+              canceled={task.status === "canceled"} onOpenTask={onOpenTask}
               onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />
           )}
           <div className={`ws-material-reader${materialView === "doc" && documents.length > 0 ? " with-documents" : ""}`}>
@@ -2180,13 +2184,14 @@ export function TaskWorkspace({
           {documentsDownloadError && <div className="utility-note" role="alert">
             打包下载失败：{documentsDownloadError}
           </div>}
-          <div className={`ws-doc${materialView === "diff" ? " is-diff" : ""}`}
+          <div className={`ws-doc${materialView === "diff" ? " is-diff" : materialView === "chain" ? " is-chain" : ""}`}
             data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT
               : materialView === "chain" ? REQUIREMENT_GRAPH_ARTIFACT : active}
             data-loading={materialView !== "source" && loading ? "true" : "false"}>
             {locationNotice && (
               <div className="annotation-location-notice" role="status">
-                <div><strong>批注定位</strong><span>{locationNotice}</span></div>
+                <div><strong>{moduleLocation || moduleLocationRetry ? "设计定位" : "批注定位"}</strong><span>{locationNotice}</span></div>
+                {moduleLocationRetry && <button className="module-location-retry" type="button" onClick={() => openModuleStory(moduleLocationRetry)}>重试定位</button>}
                 <button type="button" aria-label="关闭定位提示"
                   onClick={() => setLocationNotice("")}>×</button>
               </div>
@@ -2269,64 +2274,9 @@ export function TaskWorkspace({
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
-              <>
-                {/* 结构意见直接在图上按整体/模块/依赖批注；需要引用详细措辞
-                    时仍可直达 CHAIN 文档逐行圈选。两种入口共用一套批注账。 */}
-                {canCreateAnnotation && task.requirement_graph?.stage === "analysis"
-                  && (() => {
-                    const chainDoc = documents.find((item) =>
-                      /(^|\/)CHAIN-[^/]*\.md$/.test(item.name));
-                    return (
-                      <div className="chain-review-entry" role="note">
-                        <div>
-                          <strong>需要针对方案文字提意见？</strong>
-                          <small>{chainDoc
-                            ? "整体切法、模块和依赖可直接在下方图上批注；具体文字可打开方案文档圈选。"
-                            : "方案文档还没生成，生成后可在产出文档里圈选批注。"}</small>
-                        </div>
-                        <button type="button" disabled={!chainDoc}
-                          onClick={() => {
-                            if (!chainDoc) return;
-                            setMaterialView("doc");
-                            setActive(chainDoc.name);
-                          }}>
-                          打开方案文档逐行批注
-                        </button>
-                      </div>
-                    );
-                  })()}
-                {/* 讨论参与人是澄清期的事,不是确认拆分时要定的:原来到了
-                    方案确认卡它整块搬进右栏,和"拆分后怎么执行"摞成 730px,
-                    卡里还多出一个绿色"保存并邀请"按钮和紫色"提交决定"打架。
-                    现在长在图里"主任务团队"那一块的按钮后面,想拉人就点开。 */}
-                <RequirementGraph task={task} onOpenTask={onOpenTask}
-                  annotationEnabled={canCreateAnnotation
-                    && task.requirement_graph?.stage === "analysis"}
-                  annotations={notes}
-                  onAnnotationAdded={() => setNotesPulse((tick) => tick + 1)}
-                  teamInvite={canOperate && task.requirement_graph?.stage === "analysis"
-                    ? <RequirementTeamPicker
-                        taskId={task.id}
-                        owner={task.luban_account}
-                        collaborators={task.collaborators}
-                        onSaved={onChanged}
-                      />
-                    : undefined} />
-                {!chainReview && canOperate
-                  && task.requirement_graph?.stage === "analysis"
-                  && task.requirement_graph.projection_state === "ready"
-                  && task.requirement_graph.repositories.length > 0 && (
-                    <RepositoryAssigneePicker
-                      taskId={task.id}
-                      repositories={task.requirement_graph.repositories}
-                      defaultAssignee={task.luban_account}
-                      defaultTicket={task.ticket}
-                      selection={repositoryAssignees}
-                      onSelectionChange={changeRepositoryAssignees}
-                      saveState={repositoryAssigneeSave}
-                    />
-                )}
-              </>
+              <StoryArchitecture key={task.id} taskId={task.id} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+                openMaterial("doc"); setActive(OVERALL_STORY_ARTIFACT);
+              }} />
             ) : <>
               {materialView === "diff" && pushReview && (
                 <div className="push-review-scope" aria-label="代码检视范围">
@@ -2398,8 +2348,8 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend || (active === OVERALL_STORY_ARTIFACT && canContributeReview && task.status !== "canceled") ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={active !== OVERALL_STORY_ARTIFACT && annotationQueueWithDecision}
+                onSendDraft={annotationCanSend || (overallStoryPublished && active === OVERALL_STORY_ARTIFACT && canContributeReview && task.status !== "canceled") ? (id) => sendAnnotations(task.id, [id]) : undefined}
+                queueWithDecision={!(overallStoryPublished && active === OVERALL_STORY_ARTIFACT) && annotationQueueWithDecision}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser
@@ -2437,7 +2387,8 @@ export function TaskWorkspace({
                           ? task.delivery_selection.paths : undefined)}
                       onSelectionChange={setDeliverySelection}
                       focusRequest={diffReviewRequest} />
-                  : <Markdown text={content} />}
+                  : <Markdown text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT
+                    ? (line) => { setArchitectureLine(line); openMaterial("chain"); } : undefined} />}
               </Annotatable>
               )}
             </>}
@@ -2531,7 +2482,7 @@ export function TaskWorkspace({
                 <WaitingCard
                   task={task}
                   presentation="studio"
-                  footerTarget={decisionFooterTarget}
+                  footerTarget={chainReview ? undefined : decisionFooterTarget}
                   participant={!canOperate}
                   onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
                   annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
@@ -2565,14 +2516,17 @@ export function TaskWorkspace({
                     ? diffScope : undefined}
                   attachment={requirementAnalysisConfirmation ? undefined :
                     <>
-                      {/* 卡上只放这次决定真正要填的:每个单元谁执行、用哪个
-                          单号。讨论参与人留在左侧图下面。 */}
+                      {/* 分工和依赖随确认卡直接展示，不要求用户另找架构图。 */}
+                      {chainReview && <StoryViewNotice taskId={task.id} onOpen={() => openMaterial("chain")} />}
                       {chainReview && canOperate
                         && task.requirement_graph?.projection_state === "ready"
                         && task.requirement_graph.repositories.length > 0 && (
                         <RepositoryAssigneePicker
                           taskId={task.id}
                           repositories={task.requirement_graph!.repositories}
+                          dependencies={task.requirement_graph!.dependencies}
+                          onOpenStory={() => { openMaterial("doc"); setActive(OVERALL_STORY_ARTIFACT); }}
+                          onOpenModule={openModuleStory}
                           defaultAssignee={task.luban_account}
                           defaultTicket={task.ticket}
                           selection={repositoryAssignees}
@@ -2608,7 +2562,7 @@ export function TaskWorkspace({
             }}
             onOpenSteps={() => selectWorkspaceView("execution")}
           />
-          {canCollaborate || decides ? (
+          {chainReview && decides ? null : canCollaborate || decides ? (
             <Composer task={task}
               crossRepository={Boolean(task.parent_task_id)}
               steerOnly={task.requirement_graph?.stage === "analysis"}

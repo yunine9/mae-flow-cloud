@@ -30,7 +30,7 @@ type StreamModule = {
   itemAnnotationIds: (item: ConversationItem) => string[];
   visibleConversationItems: (
     items: readonly ConversationItem[],
-    options: { filter: "all" | "mine"; thread?: string; viewer: string; settled?: ReadonlySet<string> },
+    options: { filter: "all" | "mine"; thread?: string; viewer: string; settled?: ReadonlySet<string>; owner?: string },
   ) => ConversationItem[];
 };
 const {
@@ -249,4 +249,15 @@ test("责任人回答前，查看者能读当前题目/选项/背景，但没有
   assert.match(html, /是否保留旧接口？/);
   assert.match(html, /等待答复/);
   assert.doesNotMatch(html, /<em class="conv-tag att">等你决定<\/em>/);
+});
+
+
+test("责任人接收所有当前回执待办，检视人不能被提示承担最终处置", () => {
+  assert.deepEqual(visibleConversationItems(items, { filter: "mine", viewer: "zhou", owner: "lin" }), []);
+  assert.deepEqual(visibleConversationItems(items, { filter: "mine", viewer: "lin", owner: "lin" }).map((row) => row.id), ["receipts-1"]);
+  const html = render({ items: [{ kind: "verified", id: "resolution", ts: T3, annotation: ref,
+    by: "lin", resolution: { revision: 0, outcome: "accepted_risk", reason: "外部环境缺失，后续补验", by: "lin", at: T3 } }] });
+  assert.match(html, /责任人接受风险继续/);
+  assert.match(html, /外部环境缺失，后续补验/);
+  assert.doesNotMatch(html, /确认 1 条意见已修好/);
 });

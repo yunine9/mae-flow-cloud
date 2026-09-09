@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import "./composer-decision.css";
 import {
   getBusinessModules,
   getDeveloperAssistant,
@@ -101,6 +102,7 @@ export function Composer({
   // 默认档跟着"哪边真能用"走,不按状态硬猜(2026-09-02 实测:不在运行就
   // 落到灰掉的开发助手)。人自己点过档位后不再替他换。
   const [mode, setMode] = useState<CollaborationMode>("steer");
+  const [decisionToolsOpen, setDecisionToolsOpen] = useState(false);
   const modePicked = useRef(false);
   const [syncText, setSyncText] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
@@ -148,10 +150,12 @@ export function Composer({
   useEffect(() => {
     modePicked.current = false;
     setMode("steer");
+    setDecisionToolsOpen(false);
     setSent(false);
   }, [task.id, steerOnly]);
 
   const takeoverActive = takeoverActiveOf(assistant);
+  useEffect(() => { setDecisionToolsOpen(false); }, [task.waiting?.waiting_id]);
   useEffect(() => {
     if (takeoverActive) setMode("assistant");
   }, [takeoverActive]);
@@ -340,12 +344,20 @@ export function Composer({
   const assistantAvailable = assistant.availability.available;
   const canReturn = task.status === "paused"
     && !["acquiring", "working", "returning", "running"].includes(assistant.state);
-  const showAssistant = mode === "assistant" && !steerOnly;
-  const showSync = mode === "sync" && crossRepository && !steerOnly;
+  const compactDecision = decisionDock && !takeoverActive && !decisionToolsOpen;
+  const showAssistant = mode === "assistant" && !steerOnly && !compactDecision;
+  const showSync = mode === "sync" && crossRepository && !steerOnly && !compactDecision;
 
   return (
-    <section className="ws-composer" aria-label="回复与提交">
-      <div className="ws-composer-ctx">
+    <section className={`ws-composer${decisionDock && !takeoverActive ? " is-deciding" : ""}`} aria-label="回复与提交">
+      {decisionDock && !takeoverActive && <div className="decision-tools-toggle">
+        <span>回复上方决定</span>
+        {!steerOnly && <button type="button" aria-expanded={decisionToolsOpen}
+          onClick={() => { setDecisionToolsOpen(!decisionToolsOpen); modePicked.current = true; setMode("assistant"); }}>
+          {decisionToolsOpen ? "收起接手操作" : "需要接手排查？"}
+        </button>}
+      </div>}
+      <div className="ws-composer-ctx" hidden={compactDecision}>
         {!steerOnly && (
           <div className="ws-composer-modes" role="tablist" aria-label="对谁说">
             <button type="button" role="tab" aria-selected={!showAssistant}
@@ -415,10 +427,9 @@ export function Composer({
         )}
       </div>
 
-      {/* 决定卡的提交区挂在这里:选项在流里的卡上,附言与提交按钮在输入区。
-          takeover 档不让位——接管中没有卡可答。 */}
+      {/* 切换输入模式不等于已接管。待确认卡仍须可提交；只有实际接管后才隐藏。 */}
       <div className="ws-reply-dock" ref={dockRef} role="region" aria-label="决定的附言与提交"
-        hidden={!decisionDock || showAssistant || showSync} />
+        hidden={!decisionDock || takeoverActive} />
 
       {showSync && (
         <>
@@ -576,7 +587,7 @@ export function Composer({
           </div>
           {/* 边界要在接管前说清:它不是本地那种想 commit 就 commit 的 CLI,
               第一次撞上"不能 git commit"的人会以为坏了(2026-09-02 定的)。 */}
-          <details className="assistant-bounds-details" open={!takeoverActive}>
+          <details className="assistant-bounds-details">
             <summary>开发助手的边界</summary>
             <ul className="assistant-bounds" aria-label="开发助手的边界">
               <li><strong>Git 只读</strong>:不能 commit、push、切分支或 reset,改动只留在工作树。</li>

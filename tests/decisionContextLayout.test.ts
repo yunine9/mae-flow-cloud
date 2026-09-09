@@ -192,10 +192,10 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
   assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
     "讨论参与人不进确认卡");
-  assert.match(workspace, /teamInvite=\{canOperate && task\.requirement_graph\?\.stage === "analysis"/,
-    "参与人入口长在图里'主任务团队'那一块,不另起一条");
-  const graph = readFileSync(join(process.cwd(), "web/src/RequirementGraph.tsx"), "utf8");
-  assert.match(graph, /className="requirement-team-invite"/);
+  assert.match(workspace, /邀请他人检视/,
+    "移除旧依赖图后，邀请检视仍可由任务头进入");
+  assert.match(workspace, /<RepositoryAssigneePicker/,
+    "模块负责人和单号仍在右侧确认卡填写");
 
   const picker = readFileSync(
     join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
@@ -408,25 +408,19 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   assert.match(box, /交回后由 Agent 接着做/);
 });
 
-test("材料全屏铺满需求原文与依赖图;图可按整体/模块/依赖批注;退回时有提示", () => {
-  // 用户 2026-09-02 实测三处:依赖图全屏后仍卡 900px、需求原文全屏仍卡
-  // 860px、分析阶段看起来提不了检视意见(图圈不了,入口没露出)。
+test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开检视", () => {
   const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
-  assert.match(workspace, /className="chain-review-entry" role="note"/);
-  assert.match(workspace, /CHAIN-\[\^\/\]\*\\\.md\$/, "入口指向内核产出的方案文档");
-  assert.match(workspace, /setMaterialView\("doc"\);\s*setActive\(chainDoc\.name\);/);
-  const graph = readFileSync(new URL("../web/src/RequirementGraph.tsx", import.meta.url), "utf8");
-  assert.match(graph, /对整体方案提意见/);
-  assert.match(graph, /模块 \$\{repository\.id\}：/,
-    "模块批注用稳定单元 id 做锚，不依赖展示行号");
-  assert.match(graph, /依赖 \$\{edge\.from\} -> \$\{edge\.to\}/,
-    "依赖批注用边的两端 id 做锚");
-  assert.match(graph, /artifact: REQUIREMENT_GRAPH_ARTIFACT/,
-    "图批注进入统一任务批注账，不另造状态机");
-  assert.match(graph, /不需要为了批注去找文档中的某一行/);
+  assert.match(workspace, /<StoryArchitecture/);
+  assert.doesNotMatch(workspace, /<RequirementGraph\b/,
+    "用户要求架构页只保留 Story 的架构展示，不再叠加任务拓扑图");
+  assert.match(workspace, /setActive\(OVERALL_STORY_ARTIFACT\)/,
+    "阅读与反馈返回唯一全局 Story");
+  const architecture = readFileSync(new URL("../web/src/StoryArchitecture.tsx", import.meta.url), "utf8");
+  assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
+  assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
   // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。当时

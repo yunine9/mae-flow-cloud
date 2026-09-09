@@ -119,30 +119,51 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
   assert.equal(find(entries, "开始执行")?.tone, "info");
 });
 
-// 裸时间戳的时区语义按写入方分路,是双轮实测(MFC-016)换来的结论:
-// history 由容器内内核 CLI 写(TZ=UTC),质量台账由宿主 dispatch 写
-// (跟服务器本地时区)。用 UTC+8 模拟生产服务器,钉死两路不许一刀切。
-test("裸时间戳分路:history 按 UTC,质量台账按宿主本地时区", () => {
+test("CST 旧 history 与真实 UTC 事件按发生顺序排列，不偏移八小时", () => {
   const prevTZ = process.env.TZ;
   process.env.TZ = "Asia/Shanghai";
   try {
     const { workspace, cwd } = makeSite({
+      events: [
+        { ts: "2026-09-08T01:53:05.495Z", kind: "session_started", payload: {} },
+        { ts: "2026-09-08T01:56:00Z", kind: "human_decision", payload: { decision: "继续" } },
+      ],
       state: {
         current: "build",
         history: [{ step: "build", result: "done", note: "",
-          at: "2026-08-15 10:00:00" }],
+          at: "2026-09-08 09:55:43" }],
       },
       ledger: {
         executions: [{ kind: "COMPILE", step: "build", succeeded: true,
-          command: "make", at: "2026-08-15 10:00:00" }],
+          command: "make", at: "2026-09-08 09:55:43" }],
       },
     });
     const entries = buildTimeline(workspace, cwd);
     const history = entries.find((entry) => entry.kind === "phase");
     const quality = entries.find((entry) => entry.kind === "quality");
-    // 同一串裸时间,容器写的就是这一刻的 UTC,宿主写的要回退 8 小时。
-    assert.equal(history?.ts, "2026-08-15T10:00:00.000Z");
-    assert.equal(quality?.ts, "2026-08-15T02:00:00.000Z");
+    assert.equal(history?.ts, "2026-09-08T01:55:43.000Z");
+    assert.equal(quality?.ts, "2026-09-08T01:55:43.000Z");
+    assert.deepEqual(entries.map((entry) => entry.kind), ["session", "phase", "quality", "decision"]);
+  } finally {
+    if (prevTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTZ;
+  }
+});
+
+test("带时区的内核时间跨 UTC/CST 读取保持不变，并兼容 at 中的 ISO", () => {
+  const prevTZ = process.env.TZ;
+  try {
+    for (const tz of ["UTC", "Asia/Shanghai"]) {
+      process.env.TZ = tz;
+      const { workspace, cwd } = makeSite({ state: { history: [
+        { step: "config_confirm", at: "2026-09-08 09:55:43", at_iso: "2026-09-08T09:55:43+08:00" },
+        { step: "workflow_select", at: "2026-09-08T01:56:00Z" },
+        { step: "open", at: "2026-09-08T09:57:00+08:00" },
+      ] } });
+      assert.deepEqual(buildTimeline(workspace, cwd).map((e) => e.ts), [
+        "2026-09-08T01:55:43.000Z", "2026-09-08T01:56:00.000Z", "2026-09-08T01:57:00.000Z",
+      ], tz);
+    }
   } finally {
     if (prevTZ === undefined) delete process.env.TZ;
     else process.env.TZ = prevTZ;

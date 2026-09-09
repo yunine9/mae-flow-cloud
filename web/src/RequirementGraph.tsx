@@ -189,11 +189,11 @@ export function RequirementGraph({
               : `确认方案后创建 ${graph.repositories.length} 个模块任务`}</span>
         {/* 从直接开发转过来的单子:说清是谁、在哪个阶段、为什么提议拆分,
             人才知道这张确认卡从哪来。 */}
-        {task.split_escalation && <small className="requirement-split-escalation"
-          title={task.split_escalation.reason}>
-          由 Agent{task.split_escalation.phase
-            ? `在「${task.split_escalation.phase}」` : ""}提议拆分：{
-            task.split_escalation.reason}</small>}
+        {task.split_escalation && <details className="requirement-split-escalation">
+          <summary>查看拆分依据{task.split_escalation.phase
+            ? ` · ${task.split_escalation.phase}` : ""}</summary>
+          <p>{task.split_escalation.reason}</p>
+        </details>}
       </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>
@@ -271,7 +271,7 @@ export function RequirementGraph({
                         quote: [
                           requirementNodeLabel(repository),
                           `职责：${repository.responsibility ?? "未说明"}`,
-                          `负责面：${repository.scope?.paths.join("、") ?? "未说明"}`,
+                          `参考位置：${repository.scope?.paths.join("、") ?? "未说明"}`,
                         ].join("\n"),
                       })}>
                       批注{annotationCount(anchor) > 0
@@ -297,9 +297,11 @@ export function RequirementGraph({
                 </span>
                 {repository.scope && repository.scope.paths.length > 0 &&
                   <span className="repo-scope-paths" title={repository.scope.paths.join("\n")}>
-                    负责面 · {repository.scope.paths.join("、")}
+                    参考位置 · {repository.scope.paths.join("、")}
                   </span>}
-                {repository.responsibility && <p>{repository.responsibility}</p>}
+                {repository.responsibility && (repository.responsibility.length > 160
+                  ? <details className="repo-responsibility"><summary>职责与验收详情</summary><p>{repository.responsibility}</p></details>
+                  : <p>{repository.responsibility}</p>)}
                 {parents.length > 0 && <span className="repo-prerequisite">
                   等待 {parents.map((edge) => repoName(edge.to, task)).join("、")}
                 </span>}

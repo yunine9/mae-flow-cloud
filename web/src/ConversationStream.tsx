@@ -61,6 +61,7 @@ export function itemAnnotationIds(item: ConversationItem): string[] {
       return item.items.map((entry) => entry.id);
     case "owner_reply":
     case "clarified":
+    case "withdrawal_requested":
     case "verified":
     case "reopened":
     case "delivery_reset":
@@ -80,6 +81,7 @@ function concernsViewer(
   item: ConversationItem,
   viewer: string,
   settled: ReadonlySet<string>,
+  owner?: string,
 ): boolean {
   switch (item.kind) {
     case "card":
@@ -87,7 +89,7 @@ function concernsViewer(
     case "sync":
       return item.direction === "received";
     case "receipts":
-      return item.items.some((entry) => entry.current && entry.author === viewer
+      return item.items.some((entry) => entry.current && (owner ?? entry.author) === viewer
         && !settled.has(entry.id));
     default:
       return false;
@@ -100,6 +102,7 @@ export function visibleConversationItems(
     filter: StreamFilter; thread?: string; viewer: string;
     /** 已闭环(确认通过 / 删除)的意见 id:它们的回执不再需要我。 */
     settled?: ReadonlySet<string>;
+    owner?: string;
   },
 ): ConversationItem[] {
   if (options.thread) {
@@ -108,7 +111,7 @@ export function visibleConversationItems(
   }
   if (options.filter === "mine") {
     const settled = options.settled ?? new Set<string>();
-    return items.filter((item) => concernsViewer(item, options.viewer, settled));
+    return items.filter((item) => concernsViewer(item, options.viewer, settled, options.owner));
   }
   return [...items];
 }
@@ -272,8 +275,8 @@ export function ConversationStream({
     .filter((item) => item.status === "verified" || item.status === "dropped")
     .map((item) => item.id)), [annotations]);
   const visible = useMemo(() => visibleConversationItems(items, {
-    filter, thread, viewer: viewerUsername, settled,
-  }), [items, filter, thread, viewerUsername, settled]);
+    filter, thread, viewer: viewerUsername, settled, owner: task.luban_account ?? "本地用户",
+  }), [items, filter, thread, viewerUsername, settled, task.luban_account]);
   const decisions = useMemo(() => {
     const map = new Map<string, Extract<ConversationItem, { kind: "decision" }>>();
     for (const item of items) if (item.kind === "decision") map.set(item.waiting_id, item);
@@ -646,20 +649,28 @@ export function ConversationStream({
           </>,
         });
       }
+      case "withdrawal_requested":
+        return message({
+          key: item.id, who: item.by === viewerUsername ? "you" : "person",
+          name: nameOf(item.by), ts: item.ts, ids: [item.annotation.id],
+          children: <><p>申请撤回这条表达，等待责任人逐条处置。</p>{threadButton(item.annotation.id)}</>,
+        });
       case "verified": {
+        const label = item.resolution ? ({ fixed: "责任人确认已修复", not_adopted: "责任人不采纳",
+          deferred: "责任人决定延期", accepted_risk: "责任人接受风险继续" })[item.resolution.outcome] : "确认通过";
         const who = item.by ?? item.annotation.author;
         if (!thread) {
           return message({
             key: item.id, who: who === viewerUsername ? "you" : "person",
             name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
-            children: digest("确认 1 条意见已修好", [item.annotation.id]),
+            children: <>{digest(item.resolution ? label : "确认 1 条意见已修好", [item.annotation.id])}{item.resolution?.reason && <p>{item.resolution.reason}</p>}</>,
           });
         }
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: nameOf(who) || "意见作者", ts: item.ts, ids: [item.annotation.id],
-          tag: <em className="conv-tag ok">确认通过</em>,
-          children: <>{annotationChip(item.annotation)}{threadButton(item.annotation.id)}</>,
+          tag: <em className="conv-tag ok">{label}</em>,
+          children: <>{annotationChip(item.annotation)}{item.resolution?.reason && <p>{item.resolution.reason}</p>}{threadButton(item.annotation.id)}</>,
         });
       }
       case "delivery_reset":
@@ -674,7 +685,7 @@ export function ConversationStream({
           </>,
         });
       case "reopened": {
-        const who = item.annotation.author;
+        const who = item.by ?? item.annotation.author;
         if (!thread) {
           return message({
             key: item.id, who: who === viewerUsername ? "you" : "person",

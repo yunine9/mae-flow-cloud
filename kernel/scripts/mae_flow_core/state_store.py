@@ -11,6 +11,7 @@ import json
 import os
 import tempfile
 import time
+from datetime import datetime
 
 
 CURRENT_SCHEMA_VERSION = 2
@@ -195,6 +196,31 @@ def normalize_document(data, kind):
     return out
 
 
+def _stamp_appended_history(document, previous):
+    """Capture the writer's timezone for appended history without rewriting at.
+
+    Legacy CLI consumers compare/parse at as local wall time. Keep it intact,
+    and add an absolute instant for readers on other hosts. Never backfill old
+    rows: the current process may not share their original writer's timezone.
+    Only an unchanged prefix followed by new rows is a known append.
+    """
+    old = (previous or {}).get("history", [])
+    rows = document.get("history", [])
+    if not isinstance(old, list) or not isinstance(rows, list):
+        return
+    if rows[:len(old)] != old:
+        return
+    for row in rows[len(old):]:
+        if not isinstance(row, dict) or row.get("at_iso"):
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(row.get("at", "")).replace("Z", "+00:00"))
+            row["at_iso"] = stamp.astimezone().isoformat()
+        except (ValueError, OverflowError, OSError):
+            # Invalid optional display metadata must not break state writes.
+            continue
+
+
 def save_versioned_json(path, data, kind, project_root=None, expected_revision=None):
     """Save a complete versioned document with optional compare-and-swap."""
     if (kind == "flow" and isinstance(data, dict)
@@ -220,6 +246,8 @@ def save_versioned_json(path, data, kind, project_root=None, expected_revision=N
                 "%s revision 已从 %s 变为 %s，拒绝用旧快照覆盖新状态" %
                 (kind, wanted, current_revision))
         saved = normalize_document(data, kind)
+        if kind == "flow":
+            _stamp_appended_history(saved, current)
         saved["revision"] = current_revision + 1
         saved["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         atomic_write_json(path, saved)
@@ -272,6 +300,7 @@ def update_versioned_json(path, kind, mutator, default=None, project_root=None):
                 and current.get("engine") == "lean-v1"):
             raise ValueError("lean-v1 test-only 状态不能使用 schema-v2 writer")
         current = normalize_document(current, kind)
+        previous = copy.deepcopy(current) if kind == "flow" else None
         revision = int(current.get("revision", 0) or 0)
         result = mutator(current)
         if result is None:
@@ -280,6 +309,8 @@ def update_versioned_json(path, kind, mutator, default=None, project_root=None):
                 and result.get("engine") == "lean-v1"):
             raise ValueError("lean-v1 test-only 状态不能使用 schema-v2 writer")
         result = normalize_document(result, kind)
+        if kind == "flow":
+            _stamp_appended_history(result, previous)
         result["revision"] = revision + 1
         result["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         atomic_write_json(path, result)

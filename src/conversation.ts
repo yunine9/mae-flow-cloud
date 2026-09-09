@@ -13,7 +13,7 @@
  * 不参与任何判定——阶段真相在 .mae-flow.json,意见处境在 feedbackPolicy。
  */
 
-import type { Annotation, AnnotationOperation } from "./annotations.ts";
+import type { Annotation, AnnotationOperation, AnnotationResolution } from "./annotations.ts";
 import type { FeedbackRecord } from "./feedbackStore.ts";
 import type { WaitingRecord } from "./humanGate.ts";
 
@@ -92,11 +92,12 @@ export type ConversationItem =
       kind: "clarified"; id: string; ts: string; annotation: AnnotationRef;
       by?: string; question: string; answer: string;
     }
-  | { kind: "verified"; id: string; ts: string; annotation: AnnotationRef; by?: string }
+  | { kind: "verified"; id: string; ts: string; annotation: AnnotationRef; by?: string; resolution?: AnnotationResolution }
   | {
       kind: "reopened"; id: string; ts: string; annotation: AnnotationRef;
-      note?: string; returned: number;
+      note?: string; returned: number; by?: string;
     }
+  | { kind: "withdrawal_requested"; id: string; ts: string; annotation: AnnotationRef; by: string }
   | { kind: "revised"; id: string; ts: string; annotation: AnnotationRef }
   | { kind: "delivery_reset"; id: string; ts: string; annotation: AnnotationRef; reason: string }
   | {
@@ -413,6 +414,8 @@ function fromAnnotations(
   const revision = new Map<string, number>();
   const returned = new Map<string, number>();
   const wasSent = new Set<string>();
+  const ownerPending = new Set<string>();
+  const ownerClosed = new Set<string>();
   const items: ConversationItem[] = [];
   type Receipt = Extract<ConversationItem, { kind: "receipts" }>;
   let lastReceipt: Receipt | undefined;
@@ -422,15 +425,17 @@ function fromAnnotations(
     if (operation.op === "add") {
       revision.set(operation.record.id, operation.record.rework ?? 0);
       returned.set(operation.record.id, operation.record.returned ?? 0);
+      if (operation.record.needs_owner_closure) ownerPending.add(operation.record.id);
+      if (operation.record.resolution) ownerClosed.add(operation.record.id);
       return;
     }
     if (operation.op === "sent") {
       const ts = normalizeTs(operation.at);
-      const refs = (operation.ids ?? [])
+      const refs = (operation.ids ?? []).filter((id) => !ownerClosed.has(id))
         .map((id) => byId.get(id)).filter((item): item is Annotation => !!item)
         .map(annotationRef);
       if (!refs.length) return;
-      for (const id of operation.ids ?? []) wasSent.add(id);
+      for (const ref of refs) wasSent.add(ref.id);
       const item: Sent = {
         kind: "annotations_sent", id: `sent-${index}`, ts,
         ...(operation.by ? { by: operation.by } : {}),
@@ -443,7 +448,8 @@ function fromAnnotations(
       const target = byId.get(operation.id);
       if (!target) return;
       const ts = normalizeTs(operation.response?.responded_at);
-      const current = (operation.response?.revision ?? 0) === (revision.get(operation.id) ?? 0);
+      const current = !ownerClosed.has(operation.id)
+        && (operation.response?.revision ?? 0) === (revision.get(operation.id) ?? 0);
       const row = {
         ...annotationRef(target),
         outcome: String(operation.response?.outcome ?? ""),
@@ -484,6 +490,25 @@ function fromAnnotations(
       });
       return;
     }
+    if (operation.op === "owner_resolution" || operation.op === "withdraw_request") {
+      const target = byId.get(operation.id);
+      if (!target) return;
+      if (operation.op === "owner_resolution") {
+        ownerClosed.add(operation.id);
+        ownerPending.delete(operation.id);
+        items.push({
+        kind: "verified", id: `resolution-${index}`, ts: normalizeTs(operation.resolution.at),
+        annotation: annotationRef(target), by: operation.resolution.by, resolution: operation.resolution,
+        });
+      } else {
+        ownerPending.add(operation.id);
+        items.push({
+        kind: "withdrawal_requested", id: `withdrawal-${index}`, ts: normalizeTs(operation.at),
+        annotation: annotationRef(target), by: operation.by,
+        });
+      }
+      return;
+    }
     if (operation.op === "verify") {
       const target = byId.get(operation.id);
       if (!target) return;
@@ -503,12 +528,15 @@ function fromAnnotations(
       return;
     }
     if (operation.op === "reopen") {
+      ownerClosed.delete(operation.id);
+      if (operation.owner_controlled) ownerPending.add(operation.id);
       const target = byId.get(operation.id);
       revision.set(operation.id, (revision.get(operation.id) ?? 0) + 1);
       returned.set(operation.id, (returned.get(operation.id) ?? 0) + 1);
       if (!target) return;
       items.push({
         kind: "reopened", id: `reopened-${index}`, ts: normalizeTs(operation.at),
+        ...(operation.by ? { by: operation.by } : {}),
         annotation: annotationRef(target),
         ...(operation.note ? { note: clip(operation.note, NOTE_LIMIT).text } : {}),
         returned: returned.get(operation.id) ?? 1,
@@ -518,7 +546,10 @@ function fromAnnotations(
     if (operation.op === "edit") {
       const target = byId.get(operation.id);
       // 改的是已送出的意见才算"改字重提"(版本 +1);草稿改字不进流。
-      if (!wasSent.has(operation.id)) return;
+      if (!wasSent.has(operation.id) && !ownerPending.has(operation.id)
+          && !(operation.owner_controlled && (revision.get(operation.id) ?? 0) > 0)) return;
+      if (operation.owner_controlled) ownerPending.add(operation.id);
+      ownerClosed.delete(operation.id);
       revision.set(operation.id, (revision.get(operation.id) ?? 0) + 1);
       wasSent.delete(operation.id);
       if (!target) return;
@@ -586,7 +617,7 @@ export function buildConversation(sources: ConversationSources): ConversationVie
   const rank: Record<ConversationItem["kind"], number> = {
     session: 0, turn: 1, steer: 2, external: 3, card: 4, decision: 5,
     annotations_sent: 6, receipts: 6, owner_reply: 6, clarified: 6,
-    verified: 6, reopened: 6, revised: 6, delivery_reset: 6, assistant: 8, sync: 3,
+    withdrawal_requested: 6, verified: 6, reopened: 6, revised: 6, delivery_reset: 6, assistant: 8, sync: 3,
   };
   items.sort((left, right) =>
     (instant(left.ts) - instant(right.ts)) || (rank[left.kind] - rank[right.kind]));
