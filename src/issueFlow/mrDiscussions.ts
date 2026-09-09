@@ -29,6 +29,23 @@ export interface MrDiscussionsCredential {
   password: string;
 }
 
+/** 检视回复出站信箱的一条投递(问题域简版,票 03)。两条不变量:
+ * Idempotency-Key=id 稳定防重放;expected_sha 绑定起草时的推送收据,
+ * SHA 漂移绝不投递——不能借另一版代码说"已修"。 */
+export interface MrReviewReplyOutboxItem {
+  id: string;
+  repo: string;
+  discussion_id: string;
+  body: string;
+  resolve: boolean;
+  expected_sha: string;
+  status: "pending" | "delivered" | "failed";
+  attempts: number;
+  last_error?: string;
+  created_at: string;
+  delivered_at?: string;
+}
+
 export async function fetchMrDiscussions(input: {
   platformUrl: string;
   repo: string;

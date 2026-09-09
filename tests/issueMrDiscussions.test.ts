@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -88,6 +88,17 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "MR 已申报,等待流水线与检视。" },
+    // ── 检视意见注入(票 02)后的修复回合:写回复草稿 → 修 → 推 → 重建 MR → 重新申报。 ──
+    { tool: { name: "bash", input: { command:
+      "printf '%s' '[{\"discussion_id\":\"D1\",\"body\":\"已修复:补充了连接池超时回收逻辑\"}]' > mr-review-replies.json" } } },
+    { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 检视意见修复:超时回收`) } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "检视意见已修复,重新申报", mrs: [origin] } } },
+    { text: "检视意见已修复,重新申报完成。" },
+    // 备用回合(增量意见 D2/D3 各触发一次注入,一回合一句收嘴)。
+    { text: "收到,继续处理。" },
+    { text: "收到,继续处理。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -158,9 +169,63 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     assert.equal(service.get(created.id).status !== "failed", true,
       "拉取失败不拖垮会话");
 
+    // ── 票 02:注入。平台通知把意见清单喂给 AI(不举卡),修复回合照剧本跑。 ──
+    await until(() =>
+      JSON.stringify(model.requests).includes("mr-review-replies.json"),
+    "注入通知到达模型");
+    assert.match(JSON.stringify(model.requests), /连接池没有超时回收/,
+      "通知携带意见正文清单");
+
+    // ── 票 03:草稿 → 出站信箱 → 投递 CodeHub。 ──
+    const d1Discussion = platform.discussions.find((item) => item.id === "D1")!;
+    await until(() => d1Discussion.replies.length > 0, "D1 回复已投递 CodeHub");
+    assert.match(d1Discussion.replies[0], /已修复/);
+    // 幂等:继续轮询几拍,已投递的不重发。
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(d1Discussion.replies.length, 1, "重放不得产生第二条回复");
+
+    // 检视人解决讨论 → 意见闭环标注。
+    d1Discussion.resolved = true;
+    await until(() => {
+      const record = (service.get(created.id).feedback ?? [])
+        .find((item) => item.source_id === "D1");
+      return record?.status === "closed";
+    }, "D1 闭环标注");
+
+    // SHA 漂移拒投:直写信箱构造"绑定旧提交"的 pending(绕开真实投递
+    // 竞态)——漂移期间绝不投递,绑定修回当前收据后照常投递。
+    const issueDir = join(dataDir, "issues", created.id);
+    const outboxPath = join(issueDir, "mr-review-outbox.json");
+    const currentSha = service.get(created.id).pushes!.at(-1)!.sha;
+    writeFileSync(outboxPath, JSON.stringify({ items: [{
+      id: "mrr-drift-test", repo: origin, discussion_id: "D2",
+      body: "已补监控埋点", resolve: false,
+      expected_sha: "0".repeat(40), status: "pending", attempts: 0,
+      created_at: new Date().toISOString(),
+    }] }));
+    const d2 = platform.discussions.find((item) => item.id === "D2")!;
+    await until(() => {
+      const outbox = JSON.parse(readFileSync(outboxPath, "utf-8"));
+      const item = outbox.items.find((entry: any) =>
+        entry.discussion_id === "D2");
+      return item?.last_error?.includes("SHA 漂移") === true;
+    }, "SHA 漂移被拒投");
+    assert.equal(d2.replies.length, 0, "漂移期间绝不投递");
+    // 恢复绑定(修回当前收据)→ 投递。
+    const restore = () => {
+      const outbox = JSON.parse(readFileSync(outboxPath, "utf-8"));
+      const item = outbox.items.find((entry: any) =>
+        entry.discussion_id === "D2");
+      item.expected_sha = currentSha;
+      writeFileSync(outboxPath, JSON.stringify(outbox));
+    };
+    restore();
+    await until(() => d2.replies.length > 0, "绑定恢复后 D2 投递");
+    assert.match(d2.replies[0], /监控埋点/);
+
     // 收口即停(票 01 范围边界):验绿收口后监看退出,收口后的新意见
     // 不再追——修它的责任在 T2 的门禁注入,不在发现器。
-    const pushedSha = service.get(created.id).pushes?.[0]?.sha ?? "";
+    const pushedSha = service.get(created.id).pushes!.at(-1)!.sha;
     platform.finishPipeline(pushedSha, "success");
     await until(() => {
       const transitions = service.get(created.id).transitions ?? [];
@@ -175,6 +240,87 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       (service.get(created.id).feedback ?? [])
         .filter((record) => record.source_id === "D4").length, 0,
       "收口后监看应已退出,不再落账");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("关自动修(repair_rounds=0):检视意见标待人工,不注入模型", async () => {
+  const dataDir = mfcTemp("mfc-issue-disc-ro-");
+  const platform = new FakeGitPlatform();
+  platform.nextPipelineStatus = "running";
+  const sourceDir = join(dataDir, "source");
+  execFileSync("git", ["init", "-q", sourceDir]);
+  execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
+    "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
+  const origin = platform.initBare(sourceDir, dataDir);
+  await platform.start();
+  platform.seedDiscussion({
+    id: "D1", author: "检视人老王", body: "这里的连接池没有超时回收",
+  });
+  const script: Scene[] = [
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command: report() } } },
+    { tool: { name: "submit_analysis",
+      input: { summary: "根因=连接池耗尽" } } },
+    { text: "分析报告已提交,等待用户确认。" },
+    { tool: { name: "complete_stage", input: { note: "修复完成" } } },
+    { tool: { name: "bash", input: { command:
+      `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复'` } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "MR 已申报。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir,
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: {
+      models: () => ({}),
+      runtime: () => ({
+        poll_interval_s: 1, poll_timeout_s: 120,
+        evidence_retry_minutes: 0, repair_rounds: 0,
+      }),
+    },
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET,
+      source: "dts", repoUrl: origin,
+    });
+    await until(() => {
+      const snapshot = service.get(created.id);
+      return snapshot.status === "waiting_user"
+        && snapshot.gate?.kind === "analysis_confirm";
+    }, "分析确认闸收口");
+    service.answer(created.id, {
+      state_version: service.get(created.id).gate!.state_version,
+      code: "confirm",
+    });
+    await until(() => {
+      const record = (service.get(created.id).feedback ?? [])
+        .find((item) => item.source_id === "D1");
+      return record?.status === "needs_human";
+    }, "意见标待人工");
+    const record = (service.get(created.id).feedback ?? [])
+      .find((item) => item.source_id === "D1")!;
+    assert.match(record.resolution ?? "", /repair_rounds=0/);
+    // 不注入:模型从未收到检视意见通知(以草稿文件指引为标记——开场词
+    // 与简报里"检视意见"一词本就常见,不能当注入证据)。
+    assert.equal(
+      JSON.stringify(model.requests).includes("mr-review-replies.json"),
+      false, "关自动修时不得把意见清单喂给模型");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
