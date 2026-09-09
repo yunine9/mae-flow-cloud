@@ -780,7 +780,7 @@ class PipelineRoutingTests(unittest.TestCase):
 
 
 class FeedbackAuthorizationTests(unittest.TestCase):
-    def test_feedback_commit_scope_remains_exact_and_names_both_sides(self):
+    def test_feedback_commit_scope_allows_partial_repair_but_rejects_extras(self):
         value = state("feedback_triage")
         value["delivery_loop"] = {
             "schema": delivery.STATE_SCHEMA,
@@ -801,9 +801,11 @@ class FeedbackAuthorizationTests(unittest.TestCase):
         with mock.patch.object(cli_runtime, "_dirty_paths", return_value=(
                 "user.txt", "src/fix.py", "tests/fix_test.py", "target/a.o")), mock.patch.object(
                 cli_runtime, "sh", return_value=HEAD):
+            self.assertTrue(gate_repair_commit(
+                value, {"paths": ("src/fix.py",)}, die))
             with self.assertRaises(RuntimeError):
                 gate_repair_commit(value, {"paths": ("src/fix.py", "extra.py")}, die)
-        self.assertIn("tests/fix_test.py", messages[0])
+        self.assertNotIn("tests/fix_test.py", messages[0])
         self.assertIn("extra.py", messages[0])
         self.assertNotIn("target/a.o", messages[0])
 
