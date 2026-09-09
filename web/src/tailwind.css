@@ -1,0 +1,147 @@
+/* Tailwind v4 入口(#148 铺轨)——新 UI 的工具类轨道,存量零伤。
+   层序契约:legacy(存量,声明在 tokens.css)< fixes < theme < utilities。
+   顺序靠本文件在 main.tsx 中排于所有存量 css 之后引入 + 下面两行 @import 的
+   layer() 注记按出现次序注册来保序,utilities 恒压过 legacy;不写裸 @layer
+   语句,守住 cssOverrideRatchet 对层声明的既有钉。刻意不引 preflight(全局
+   reset 会动存量像素),新页面根挂 .tw-root 做 Scoped 归一(文件尾)。
+   令牌纪律(#146):颜色/字号/圆角只从 tokens.css 经 @theme 映射出的工具类
+   消费,禁止 bg-[#fff] 式硬编码绕过令牌。 */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+/* tw-animate-css:shadcn 弹层的进出场工具类(animate-in、fade-in-0、
+   zoom-in-95 这一类),全文件是 @property/@theme/@utility 指令,由 Tailwind
+   归入 utilities 层。 */
+@import "tw-animate-css";
+
+/* 本站暗色是 html[data-theme="dark"] 属性,不是媒体查询——把 dark: 变体
+   指到属性上,组件皮随全站主题切换(tokens.css 的暗色令牌同源)。 */
+@custom-variant dark (&:where(:root[data-theme="dark"], :root[data-theme="dark"] *));
+
+/* 守卫:theme.css 默认刻度里与 tokens.css 同名的键(--font-*、--radius*、
+   --shadow-*)若放任 emission,会从更高层压过存量令牌(含暗色覆盖)。这里
+   用与令牌等值的定义钉回去;阴影刻度整体弃用——它的值不出自令牌,新页面用
+   shadow-(--shadow-md) 这类 var() 简写直接引用令牌。 */
+@theme {
+  --font-sans: var(--font-ui);
+  --font-mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace; /* 手抄自 tokens.css --font-mono,改名即同步 */
+  --radius: 8px; /* 对齐 tokens --radius */
+  --radius-sm: calc(var(--radius) - 2px);  /* 6px = tokens --radius-sm(控件) */
+  --radius-md: calc(var(--radius) - 2px);  /* shadcn 组件皮用 md 当控件圆角 */
+  --radius-lg: calc(var(--radius) + 4px);  /* 12px = tokens --radius-lg(浮层) */
+  --radius-xl: calc(var(--radius) + 8px);  /* 16px = tokens --radius-xl */
+  --shadow-*: initial;
+}
+
+/* 令牌桥:inline 让工具类直接内联 var(),暗色/密度切换在元素上即时生效。
+   shadcn 语义与存量令牌同名不同义的只有 accent 与 muted(存量 --accent 是
+   主动作紫、--muted 是灰字;shadcn 两者都是弱化底色)——这两个名字不进
+   :root 桥,直接映射到语义对应的存量令牌,绝不动存量变量的值。 */
+@theme inline {
+  /* 表面 / 文字 / 线 */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-overlay: var(--overlay);
+  --color-text-strong: var(--text-strong);
+  --color-text: var(--text);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  /* 主动作(存量叫 ink;shadcn 叫 primary,两者在这里会师) */
+  --color-ink: var(--ink);
+  --color-ink-hover: var(--ink-hover);
+  --color-ink-fg: var(--ink-fg);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  /* 状态色 */
+  --color-active: var(--active);
+  --color-active-soft: var(--active-soft);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-merge: var(--merge);
+  --color-merge-soft: var(--merge-soft);
+  --color-focus: var(--focus);
+  /* shadcn 组件皮约定名 */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--surface-3);          /* shadcn accent = 悬停弱化底 */
+  --color-accent-foreground: var(--text-strong);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  /* 字阶映射(--text-* 是 Tailwind 字号命名空间,与存量颜色 --text 无冲突) */
+  --text-xs: var(--fs-12);
+  --text-sm: var(--fs-13);
+  --text-base: var(--fs-14);
+  --text-lg: var(--fs-17);
+  --text-xl: var(--fs-20);
+  --text-2xl: var(--fs-24);
+  --text-3xl: var(--fs-30);
+  --text-xs--line-height: var(--lh-body);
+  --text-sm--line-height: var(--lh-body);
+  --text-base--line-height: var(--lh-body);
+  --text-lg--line-height: var(--lh-body);
+  --text-xl--line-height: var(--lh-body);
+  --text-2xl--line-height: var(--lh-body);
+  --text-3xl--line-height: var(--lh-body);
+}
+
+/* shadcn 组件的 CSS 变量桥:只收与存量令牌零碰撞的名字,全部指向
+   tokens.css(--accent/--muted/--border 这三个存量已占用的名字不在此列,
+   其中 --border 存量别名恰好就是 shadcn 语义,直接沿用)。 */
+:root {
+  --background: var(--main-bg);
+  --foreground: var(--text-strong);
+  --card: var(--surface);
+  --card-foreground: var(--text-strong);
+  --popover: var(--overlay);
+  --popover-foreground: var(--text-strong);
+  --primary: var(--ink);
+  --primary-foreground: var(--ink-fg);
+  --secondary: var(--surface-3);
+  --secondary-foreground: var(--text-strong);
+  --accent-foreground: var(--text-strong);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff; /* 危险底上的白字,令牌表无对应 */
+  --input: var(--line);
+  --ring: var(--focus);
+}
+
+@layer fixes {
+  /* .tw-root:新页面根上的 scoped 归一,顶替 preflight,只作用于该子树。
+     放 fixes 层:压得过 legacy 的全局默认,又低于 utilities——任何工具类
+     都能覆盖这里的条目。 */
+  .tw-root,
+  .tw-root *,
+  .tw-root ::before,
+  .tw-root ::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid var(--border);
+  }
+  .tw-root button,
+  .tw-root input,
+  .tw-root textarea,
+  .tw-root select {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+  }
+}
