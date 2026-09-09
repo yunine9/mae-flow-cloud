@@ -93,7 +93,7 @@ class DeliveryConfirmationTests(unittest.TestCase):
             ({"status": "prepared", "result": "unchanged",
               "applied_paths": []}, (), "尚未应用"),
             ({"status": "applied", "result": "changes",
-              "applied_paths": ["docs/specs/radio.md"]}, (), "不是 unchanged"),
+              "applied_paths": ["docs/specs/radio.md"]}, (), "无法核对"),
             ({"status": "applied", "result": "unchanged",
               "applied_paths": []}, ("src/leak.cpp",), "新增未提交"),
         )

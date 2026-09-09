@@ -3,6 +3,8 @@
 import copy
 import shlex
 
+from mae_flow_core.delivery.archive_commit import committed_archive_receipt
+
 from mae_flow_core.guard.manifest import (
     DeliveryManifest,
     validate_delivery_document_boundary,
@@ -212,11 +214,7 @@ def build_unchanged_delivery_manifest(
     archive = (state or {}).get("domain_archive") or {}
     if archive.get("status") != "applied":
         raise ValueError("领域归档尚未应用，不能生成 unchanged 交付清单")
-    if (
-        archive.get("result") != "unchanged"
-        or bool(archive.get("applied_paths") or ())
-    ):
-        raise ValueError("领域归档不是 unchanged，必须提交真实归档增量")
+    archive_receipt = committed_archive_receipt(archive, repository_root)
     target = str(target or "").strip()
     if not target:
         raise ValueError("交付清单缺少目标分支")
@@ -264,6 +262,7 @@ def build_unchanged_delivery_manifest(
         "adopted_dirty": {},
         "confirmed": True,
         "no_changes": True,
+        "committed_archive_receipt": archive_receipt,
         "unchanged_initial_dirty": sorted(preserved, key=str.casefold),
         # 路径+指纹一起落盘：只豁免 manifest 当下那份编译现场。之后同路径
         # 被改成源码或资源时指纹会失配，done 仍会明确拦住。
@@ -322,7 +321,7 @@ def _print_manifest(manifest):
         for path in files:
             print("- " + path)
     else:
-        print("- 无（领域归档 unchanged，本步骤无需新提交）")
+        print("- 无新增待提交文件（已有提交仍须继续交付）")
     adopted = manifest.get("adopted_dirty") or {}
     if adopted:
         print("启动时已有修改的采用决定:")
@@ -370,7 +369,7 @@ def cmd_delivery_manifest(state, args):
         api.save_state(updated)
         _print_manifest(manifest)
         if manifest.get("no_changes"):
-            print("下一步: 领域归档无增量，不要提交；直接执行 done。")
+            print("下一步: 无需创建新提交；执行 done，已有提交继续进入交付流程。")
         elif not manifest["confirmed"]:
             print("下一步: 请向用户展示以上清单；收到回答后执行 "
                   + render_display("messages") + "，再执行 "

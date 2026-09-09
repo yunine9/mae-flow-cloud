@@ -94,7 +94,10 @@ def _fresh_digest(root, package, entries):
 def _show(record, root):
     print("[mae-flow] 领域归档状态: " + str(record.get("status", "未准备")))
     domains = record.get("domains") or ()
-    if record.get("reapply_paths"):
+    print("- 归档结果: " + str(record.get("result", "未判定")))
+    if record.get("applied_paths"):
+        print("- 已认领归档文件（不代表仍需新提交）: " + "、".join(record["applied_paths"]))
+    if record.get("reapply_paths") and record.get("status") != "applied":
         print("- 本次将由 apply 重新写入并接纳已有领域文档与索引；候选已冻结，请核对正文。")
     if not domains:
         if record.get("result") == "unchanged":
@@ -104,7 +107,7 @@ def _show(record, root):
         return
     for value in domains:
         entry = candidate_from_dict(root, value)
-        print("- %s: %s -> %s" % (entry.domain, entry.action, entry.target_path))
+        print("- %s: 候选内容 %s（相对当前文档） -> %s" % (entry.domain, entry.action, entry.target_path))
         target = os.path.join(root, *entry.target_path.split("/"))
         try:
             with open(target, encoding="utf-8") as stream:
