@@ -23,8 +23,10 @@ test("任务进展只展示过程，日志在用户主动打开时加载", () =>
 
 test("批注检视停靠工作区，材料保持可见，决定栏不承载意见", () => {
   assert.match(workspace, /aria-controls="ws-review-canvas"/);
-  assert.match(workspace, /className="ws-review-canvas"[\s\S]*?role="complementary"/);
-  assert.match(workspace, /hidden=\{!reviewPanelOpen\}/);
+  const reviewPane = readFileSync(resolve("web/src/ResizableReviewPane.tsx"), "utf8");
+  assert.match(reviewPane, /className="ws-review-canvas"[\s\S]*?role="complementary"/);
+  assert.match(reviewPane, /hidden=\{!open\}/);
+  assert.match(workspace, /<ResizableReviewPane open=\{reviewPanelOpen\}>/);
   assert.doesNotMatch(workspace, /className="workspace-review-drawer"/);
   const side = workspace.slice(workspace.indexOf('<section className="ws-side"'),
     workspace.indexOf('{reviewInviteOpen &&'));
