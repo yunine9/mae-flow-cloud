@@ -60,6 +60,19 @@ function tableCells(row: string): string[] {
 const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
 const isDivider = (line: string) => /^\s*\|[\s:|-]+\|\s*$/.test(line);
 
+function architectureSummary(title: string): string {
+  if (/时序|流程|链路/.test(title)) {
+    return "查看请求如何依次执行，以及并发操作如何避免互相覆盖。";
+  }
+  if (/类图|领域|对象/.test(title)) {
+    return "查看核心对象各自负责什么，以及它们之间如何协作。";
+  }
+  if (/部署|物理|运行环境/.test(title)) {
+    return "查看服务运行在哪里，以及它依赖哪些外部系统。";
+  }
+  return "查看这个模块包含什么、依赖谁，以及它们如何连接。";
+}
+
 export function Markdown({
   text,
   resolveImage,
@@ -109,9 +122,12 @@ export function Markdown({
           if (typeof diagram?.meta?.title === "string") title = diagram.meta.title;
         } catch { /* 未完成或坏图源也保留原文供检视。 */ }
         blocks.push(<section key={key++} className="md-architecture-reference" data-l={at} data-line-end={index}>
-          <div><strong>{title}</strong>{onOpenArchitecture && <button type="button"
-            onClick={() => onOpenArchitecture(at)}>查看架构图</button>}</div>
-          <details><summary>查看图源</summary><pre className="md-block-code"><code>{source.join("\n")}</code></pre></details>
+          <div className="md-architecture-reference-main">
+            <div><strong>{title}</strong><p>{architectureSummary(title)}</p></div>
+            {onOpenArchitecture && <button type="button"
+              onClick={() => onOpenArchitecture(at)}>打开大图 ↗</button>}
+          </div>
+          <details><summary>技术信息（排障）</summary><pre className="md-block-code"><code>{source.join("\n")}</code></pre></details>
         </section>);
         continue;
       }

@@ -2387,7 +2387,7 @@ export function TaskWorkspace({
                           ? task.delivery_selection.paths : undefined)}
                       onSelectionChange={setDeliverySelection}
                       focusRequest={diffReviewRequest} />
-                  : <Markdown text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT
+                  : <Markdown text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT || /(^|\/)story\.md$/.test(active)
                     ? (line) => { setArchitectureLine(line); openMaterial("chain"); } : undefined} />}
               </Annotatable>
               )}

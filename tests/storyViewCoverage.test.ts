@@ -32,3 +32,38 @@ test("代码中的覆盖声明不采纳，类图略过也必须明确说明", ()
   assert.match(views[0].classDiagram!.reason, /类图不涉及：仅静态资源/);
   assert.equal(storyViewCoverage("新增一行\n" + source)[0].line, views[0].line! + 1);
 });
+
+test("原 Story 章节中的显式视图段落可定位，模块图和部署图不被误标为缺失", () => {
+  const source = [
+    "| 逻辑视图 | 已完成 | 见 2.2.1 类图 |",
+    "| 开发视图 | 已完成 | 见 2.2.1 模块架构 |",
+    "| 物理视图 | 已完成 | 见 2.2.4 部署图 |",
+    "#### 2.2.1 逻辑模型设计", "开发视图：仓库内代码模块", "```archify", "{}", "```",
+    "逻辑视图——关键类图", "```plantuml", "class Order", "```",
+    "#### 2.2.4 运行视图设计", "物理视图——部署", "```plantuml", "node Server", "```",
+    "#### 2.2.5 UI交互设计", "不涉及",
+  ].join("\n");
+  const views = storyViewCoverage(source);
+  assert.deepEqual([views[0], views[1], views[3]].map((v) => v.status), ["已完成", "已完成", "已完成"]);
+  assert.equal(views[0].classDiagram?.line, 10);
+  assert.equal(views[1].line, 5);
+  assert.equal(views[1].endLine, 8, "模块范围不包含后面的类图段落");
+  assert.equal(views[3].line, 14);
+  assert.equal(views[3].endLine, 17);
+  assert.equal(storyViewCoverage(source + "\n开发视图：另一份\n内容")[1].status, "待补充", "重复标记不能猜测");
+  assert.equal(storyViewCoverage("| 物理视图 | 已完成 | 见其他章节 |\n普通引用物理视图：部署")[3].status, "待补充");
+  const sequences = storyViewCoverage("| 进程视图 | 已完成 | 两张时序 |\n#### 运行视图设计\n进程视图：同步\n同步时序\n进程视图：查询\n查询时序");
+  assert.equal(sequences[2].status, "已完成");
+  assert.equal(sequences[2].line, 2);
+  assert.equal(sequences[2].endLine, 6);
+});
+
+test("设计内容已完成与已完成等价，渲染状态不混入设计覆盖结论", () => {
+  const source = [
+    "| 进程视图 | 设计内容已完成 | 并发互斥时序见运行设计 |",
+    "#### 运行视图设计", "进程视图：存储事务互斥时序", "事务 A 与事务 B 串行进入临界区",
+  ].join("\n");
+  const process = storyViewCoverage(source)[2];
+  assert.equal(process.status, "已完成");
+  assert.match(process.reason, /并发互斥时序/);
+});

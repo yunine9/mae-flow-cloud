@@ -2946,16 +2946,27 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "architecture" && parts.length <= 4) {
           const load = async () => {
             const target = service.get(id);
-            if (!target || target.parent_task_id) return undefined;
-            return readArtifactAsync(service.artifactRoot(id), "task-materials/overall-story.md", {
+            if (!target) return undefined;
+            // 主任务展示已发布的全局 Story；子任务展示自己的模块 Story。
+            // 两者仍通过 artifacts 的白名单读取，客户端不能借这个接口
+            // 指定任意路径。模块正文里的“打开大图”因此能落到同一份图源。
+            const artifact = target.parent_task_id
+              ? `${target.ticket ?? target.id}/story.md`
+              : "task-materials/overall-story.md";
+            return readArtifactAsync(service.artifactRoot(id), artifact, {
               pipelineRoot: join(target.workspace, "pipeline"), taskMaterialRoot: target.workspace,
               publishedStory: target.requirement_graph?.source_document === "story.md"
                 && target.requirement_graph.stage === "confirmed",
-              analysisStory: target.requirement_graph ? `${target.ticket ?? target.id}/story.md` : undefined,
+              analysisStory: target.requirement_graph && !target.parent_task_id
+                ? `${target.ticket ?? target.id}/story.md` : undefined,
             });
           };
           const artifact = await load();
-          if (!artifact) return json(response, 404, { error: "尚无全局 Story，请先完成主任务分析" });
+          if (!artifact) return json(response, 404, {
+            error: service.get(id)?.parent_task_id
+              ? "尚无模块 Story，请先完成当前模块设计"
+              : "尚无全局 Story，请先完成主任务分析",
+          });
           if (artifact.truncated) return json(response, 413, { error: "Story 超过读取上限，请先阅读完整文档" });
           const projection = storyArchitecture(artifact.content);
           response.setHeader("cache-control", "no-store");
