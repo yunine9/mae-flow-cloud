@@ -11481,6 +11481,29 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   display: flex;
   flex-direction: column;
   min-height: 320px;
+  /* 吃满 ws-evidence 余量:ws-evidence 是滚动容器,面板不生长时短内容
+     下方整段留白(对话现场只占上半屏,2026-09-09 用户报告)。生长后
+     内容短=面板贴底,内容长=证据区整体滚动,与旧 issue-two-pane 同语义。 */
+  flex: 1 1 auto;
+}
+/* 四个材料页签(DTS/过程文档/工作区变更/拾取日志)同构拉伸:根节点
+   吃满面板并自滚,不随内容半截断(与对话现场同一契约)。 */
+.issue-workspace.task-workspace-v2 .issue-main-pane > .issue-materials {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 对话现场的流壳(event-workspace:无详情=裸流,有详情=流+详情双栏
+   grid)是 panel-body 与流之间的中间层——旧直接子选择器的拉伸链在
+   它这里断掉,壳不生长,流再怎么 flex 也只是内容高(2026-09-09
+   下半屏留白的真正断点)。壳吃满面板体余量,流撑满壳。 */
+.issue-workspace.task-workspace-v2 .issue-main-pane .event-workspace {
+  flex: 1;
+  min-height: 0;
+}
+.issue-workspace.task-workspace-v2 .issue-main-pane .event-workspace > .event-stream {
+  height: 100%;
+  max-height: none;
 }
 .issue-workspace.task-workspace-v2 .ws-side {
   display: flex;
