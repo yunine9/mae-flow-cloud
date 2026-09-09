@@ -93,6 +93,10 @@ test("build playbook: 识别 C++ Maven DT 与定向覆盖参数", (t) => {
   // 命令口径以 mcde 的 mae-remote-build skill 真件为准:没有 -DDT_run,
   // 增量/全量只差一个 clean(用户 2026-09-04 提供)。
   assert.match(guidance, /mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT/);
+  assert.match(guidance, /mvn generate-sources -DDT_test=UT/);
+  assert.match(guidance, /首编成功不代表 UT 依赖已准备/);
+  assert.match(guidance, /binmock.hpp/);
+  assert.match(guidance, /不能一律归因缓存/);
   assert.doesNotMatch(guidance, /mvn clean compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT/);
   assert.match(guidance, /必须从输出确认 UT 进程确实执行/);
   assert.match(guidance, /ctest --output-on-failure/);

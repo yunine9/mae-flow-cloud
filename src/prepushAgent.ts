@@ -11,6 +11,7 @@ import {
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
 import { DEFAULT_COMMIT_CONVENTION } from "./commitPolicy.ts";
+import { withoutShellRedirections } from "./shellRedirections.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -123,6 +124,7 @@ function unsafeDiscardPath(path: string): boolean {
 
 /** 精确文件回退是修复能力；全树/通配回退才是现场销毁。 */
 function unsafeGitWorktreeDiscard(segment: string): boolean {
+  segment = withoutShellRedirections(segment);
   const checkout = segment.match(/\bcheckout\b([\s\S]*)/i);
   if (checkout) {
     const words = shellWords(checkout[1]);
@@ -329,7 +331,8 @@ export function prePushSecurityDecision(
   // 拦所有 rm -rf,自相矛盾):目标**全部**是公认构建产物路径时放行。
   // 判不了的(变量/反引号/绝对路径/..)一律按拒处理,fail-closed。
   // 同时拦住 find -delete，防止工作区被不可恢复地批量清空。
-  const rmCommands = source.match(/(?:\bsudo\s+)?\brm\s+[^;&|\n]*/gi) ?? [];
+  const rmCommands = withoutShellRedirections(source)
+    .match(/(?:\bsudo\s+)?\brm\s+[^;&|\n]*/gi) ?? [];
   for (const command of rmCommands) {
     const hasRecursive = /(?:^|\s)-(?!-)[^\s]*[rR][^\s]*|--recursive\b/.test(command);
     const hasForce = /(?:^|\s)-(?!-)[^\s]*f[^\s]*|--force\b/.test(command);

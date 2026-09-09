@@ -355,6 +355,14 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
     ["Bash", "rm -rf /workspace/target"],
     ["Bash", "rm -rf ${SUB_DIR}/build"],
     ["Bash", "rm -rf target src/main"],
+    ["Bash", "rm -rf target 2>&1 src/main | head"],
+    ["Bash", "rm -rf target >clean.log ../other"],
+    ["Bash", "rm -rf target2>clean.log"],
+    ["Bash", "rm -rf target '2>'"],
+    ["Bash", "rm -rf target 2 >clean.log"],
+    ["Bash", "sudo rm -rf target 2>&1 | head"],
+    ["Bash", "rm -rf target 2>&1; rm -rf src 2>&1"],
+    ["Bash", "rm -rf target >$(echo clean.log)"],
   ]) {
     assert.equal(prePushSecurityDecision(tool, value)?.action, "deny", `${tool}: ${value}`);
   }
@@ -366,6 +374,15 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
     "rm -rf website/node_modules",
     "rm -rf target/build/CMakeFiles target/build/CMakeCache.txt",
     "rm -rf cmake-build-debug",
+    "rm -rf target/build/CMakeFiles 2>&1 | head",
+    "rm -rf target/build/CMakeFiles 2>clean.log",
+    "rm -rf target/build/CMakeFiles >clean.log 2>&1",
+    "rm -rf target/build/CMakeFiles &>clean.log",
+    "rm -rf target/build/CMakeFiles &>>clean.log",
+    "rm -rf target/build/CMakeFiles 2>&-",
+    "rm -rf target/build/CMakeFiles < /dev/null",
+    "rm -rf target/build/CMakeFiles >> 'build log.txt'",
+    "rm -rf target/build/CMakeFiles 2>&1 && rm -rf target/build/CMakeCache.txt",
   ]) {
     assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
   }
@@ -373,6 +390,8 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
   // 精确 pathspec；否则第一次 commit 边界错了，后续永远背着错误文件。
   for (const command of [
     "git restore src/unwanted.ts",
+    "git restore src/unwanted.ts >/tmp/build-fix-restore.log 2>&1",
+    "git checkout HEAD -- src/unwanted.ts 2>/tmp/build-fix-checkout.log",
     "git restore --source=master -- src/unwanted.ts tests/unwanted.test.ts",
     "git checkout HEAD^ -- src/unwanted.ts",
     "git restore --staged .",
@@ -382,6 +401,8 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
   }
   for (const command of [
     "git checkout HEAD -- .",
+    "git checkout HEAD -- . 2>/tmp/build-fix-checkout.log",
+    "git restore --worktree . >/tmp/build-fix-restore.log 2>&1",
     "git restore --worktree .",
     "git restore --worktree 'src/*.ts'",
     "git restore --pathspec-from-file=paths.txt",

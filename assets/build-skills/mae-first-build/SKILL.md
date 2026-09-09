@@ -58,3 +58,5 @@ pre_build.sh 写只读位置失败不代表所有错误都可忽略：平台只�
 成功后将真实命令、执行目录、语言入口、增量条件、生成目录和工具链注意事项写入 `.mae-flow-work/build-notes.md`（问题流按仓分节）。之后使用对应语言 Skill；未安装专项 Skill 时按这些已验证笔记与仓库配置继续，不猜不存在的命令。
 
 预热只验证基线，不修业务代码、不跑 UT。Build-Fix 仍可修本次相关代码并运行定向 UT；`-DskipTests` 的成功只算编译，绝不能代替 UT 或远端流水线。不要因“推送前收口”每次都重新全量。
+
+首次编译跳过测试时，UT SDK 可能尚未下载；`ready_for_incremental` 不保证 UT 依赖就绪。Build-Fix 转入语言 Skill 后，先按本仓 POM/Skill 准备测试依赖。采用 MAE C++ UT 配方的仓可在其规定目录执行 `mvn generate-sources -DDT_test=UT`（沿用实际 Maven 缓存/settings 参数），核对 cbbdevtest SDK 和所需头文件实际存在，再进入子模块 configure/定向 UT。依赖已经就绪则不重复下载；失败要报告真实原因，不通过反复 clean 或全仓 reconfigure 掩盖。
