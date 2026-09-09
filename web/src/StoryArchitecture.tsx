@@ -135,7 +135,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
           <button type="button" onClick={onOpenStory}>打开 Story 提意见</button>
           <details><summary>查看失败详情</summary><pre>{current.error}</pre></details>
         </div> : current?.html ? <iframe key={key} ref={frame} title={diagram.title} srcDoc={current.html}
-          className={presenting === key ? "is-presenting" : undefined}
+          className={presenting === key ? "is-presenting ui-viewport-layer" : undefined}
           allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
           : <p className="story-view-loading" role="status">正在生成架构图…</p>}
       </section>

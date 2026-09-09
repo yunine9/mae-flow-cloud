@@ -42,7 +42,7 @@
 .story-architecture-failure summary { cursor: pointer; color: var(--muted); }
 .story-architecture-failure pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .story-architecture iframe { display: block; width: 100%; height: max(560px, 65vh); border: 1px solid var(--line); border-radius: 10px; background: #101620; }
-.story-architecture iframe.is-presenting { position: fixed; inset: 0; z-index: 10000; width: 100vw; height: 100dvh; max-width: none; border: 0; border-radius: 0; }
+.story-architecture iframe.is-presenting { z-index: var(--z-modal); width: 100vw; height: 100dvh; max-width: none; border: 0; border-radius: 0; }
 .md-architecture-reference { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
 .md-architecture-reference > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .md-architecture-reference button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent); cursor: pointer; }

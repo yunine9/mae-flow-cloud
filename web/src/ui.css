@@ -151,10 +151,14 @@
   .ui-empty > * { margin: 0; }
 
   /* ---- 弹层(配 <Modal> 组件;层级走 tokens 的层叠阶梯) ---- */
-  .ui-modal-backdrop {
+  /* Shared viewport positioning. Embedded presentations keep their iframe
+     mounted; form dialogs continue to use Modal for focus and dismissal. */
+  .ui-viewport-layer, .ui-modal-backdrop {
     position: fixed;
-    z-index: var(--z-modal);
     inset: 0;
+  }
+  .ui-modal-backdrop {
+    z-index: var(--z-modal);
     display: grid;
     place-items: center;
     padding: 20px;
