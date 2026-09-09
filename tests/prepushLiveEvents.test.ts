@@ -13,7 +13,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createTaskServer } from "../src/server.ts";
 import { TaskService } from "../src/taskService.ts";
-import { ExecutionEventReader } from "../src/executionEvents.ts";
+import { createServer } from "node:http";
+import { ExecutionEventReader, streamExecutionEvents } from "../src/executionEvents.ts";
 import { buildTimeline } from "../src/timeline.ts";
 
 function eventLine(eventId: number, command: string): string {
@@ -142,4 +143,39 @@ test("汇总读取保留跨会话同号事件、同轮不同 SHA、半行与损�
     ts: "2026-09-08T10:30:00Z", kind: "session_started", payload: { resume: false } }) + "\n");
   const timeline = buildTimeline(workspace);
   assert.ok(timeline.some((entry) => entry.title === "Build-Fix · 第 1 轮开始"));
+});
+
+test("大日志按预算分段读取，长行与跨仓日志完整保留", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-execution-budget-"));
+  const round = join(workspace, "prepush", "round-1-many");
+  mkdirSync(round, { recursive: true });
+  writeFileSync(join(workspace, "events.jsonl"), Array.from({ length: 3000 }, (_, i) => eventLine(i, "读取".repeat(100))).join(""));
+  writeFileSync(join(round, "events.jsonl"), eventLine(1, "长日志".repeat(30000)));
+  const reader = new ExecutionEventReader(workspace);
+  const all = reader.read(64 * 1024);
+  assert.ok(all.length < 3000 && reader.hasMore);
+  let chunks = 1;
+  while (reader.hasMore && chunks++ < 1000) all.push(...reader.read(64 * 1024));
+  assert.equal(all.length, 3001);
+  assert.ok(chunks > 1 && chunks < 1000);
+  assert.equal(new Set(all.map(e => `${e.execution.attempt}:${e.eventId}`)).size, 3001);
+  assert.equal(reader.read(64 * 1024).length, 0);
+});
+
+
+test("已结束任务的大历史分段发送到最后一条后才结束 SSE", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-execution-terminal-"));
+  writeFileSync(join(workspace, "events.jsonl"), Array.from({ length: 4000 }, (_, i) => eventLine(i, "构建输出".repeat(100))).join(""));
+  const server = createServer((_request, response) => streamExecutionEvents(response, workspace, { follow: false, terminal: () => true }));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`, { signal: AbortSignal.timeout(10000) });
+    const text = await response.text();
+    const events = text.split("\n").filter(line => line.startsWith("data: ") && line !== "data: {}").map(line => JSON.parse(line.slice(6)));
+    assert.equal(events.length, 4000);
+    assert.deepEqual(events.map(e => e.eventId), Array.from({ length: 4000 }, (_, i) => i));
+    assert.ok(text.endsWith('event: end\ndata: {}\n\n'));
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 });

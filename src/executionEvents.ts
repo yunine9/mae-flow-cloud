@@ -12,7 +12,10 @@ export class ExecutionEventReader {
   private cursors = new Map<string, { offset: number; carry: Buffer; inode: number }>();
   constructor(private workspace: string, private buildFixOnly = false) {}
 
-  read(): ExecutionEvent[] {
+  hasMore = false;
+
+  read(byteBudget = Number.POSITIVE_INFINITY): ExecutionEvent[] {
+    this.hasMore = false;
     const sources: Array<{ path: string; execution: ExecutionEvent["execution"] }> = [];
     if (!this.buildFixOnly) sources.push({ path: join(this.workspace, "events.jsonl"),
       execution: { source: "main", attempt: "main" } });
@@ -27,6 +30,7 @@ export class ExecutionEventReader {
     } catch { /* 尚未进入构建；主会话照常展示。 */ }
     const result: ExecutionEvent[] = [];
     for (const source of sources) {
+      if (byteBudget <= 0) { this.hasMore = true; break; }
       let fd: number | undefined;
       try {
         fd = openSync(source.path, "r");
@@ -37,11 +41,12 @@ export class ExecutionEventReader {
           this.cursors.set(source.path, cursor);
         }
         // 固定块增量读，避免一次为整份编译日志分配内存。
-        while (cursor.offset < stat.size) {
-          const chunk = Buffer.alloc(Math.min(64 * 1024, stat.size - cursor.offset));
+        while (cursor.offset < stat.size && byteBudget > 0) {
+          const chunk = Buffer.alloc(Math.min(64 * 1024, stat.size - cursor.offset, byteBudget));
           const count = readSync(fd, chunk, 0, chunk.length, cursor.offset);
           if (!count) break;
           cursor.offset += count;
+          byteBudget -= count;
           cursor.carry = Buffer.concat([cursor.carry, chunk.subarray(0, count)]);
           const cut = cursor.carry.lastIndexOf(10);
           if (cut < 0) continue;
@@ -57,6 +62,7 @@ export class ExecutionEventReader {
             } catch { /* 损坏单行不遮住其他事件；未写完的尾行留待下次。 */ }
           }
         }
+        if (cursor.offset < stat.size) this.hasMore = true;
       } catch { /* 日志缺席或已回收，不影响其他来源。 */ }
       finally { if (fd !== undefined) closeSync(fd); }
     }
@@ -75,16 +81,37 @@ export function streamExecutionEvents(response: ServerResponse, workspace: strin
   const reader = new ExecutionEventReader(workspace, options.buildFixOnly);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
-  response.on("close", () => { closed = true; clearTimeout(timer); });
+  let pending: ExecutionEvent[] = [];
+  let next = 0;
+  response.on("close", () => {
+    closed = true;
+    clearTimeout(timer);
+    response.removeListener("drain", send);
+    pending = [];
+  });
   const send = () => {
     if (closed) return;
-    for (const event of reader.read()) response.write(`data: ${JSON.stringify(event)}\n\n`);
-    if (!options.follow || options.terminal()) {
+    if (next >= pending.length) {
+      pending = reader.read(256 * 1024);
+      next = 0;
+    }
+    while (next < pending.length) {
+      const event = pending[next++];
+      if (!response.write(`data: ${JSON.stringify(event)}\n\n`)) {
+        response.once("drain", send);
+        return;
+      }
+    }
+    pending = [];
+    next = 0;
+    // Even a finished task must drain its history before emitting end.
+    if (!reader.hasMore && (!options.follow || options.terminal())) {
       response.end('event: end\ndata: {}\n\n');
       return;
     }
-    response.write(": heartbeat\n\n");
-    timer = setTimeout(send, 300);
+    if (!reader.hasMore) response.write(": heartbeat\n\n");
+    // Yield between historical chunks so other requests and UI interactions run.
+    timer = setTimeout(send, reader.hasMore ? 0 : 300);
   };
   send();
 }

@@ -1,10 +1,11 @@
 import { PersonName } from "./People";
+import { ExecutionEventBuffer } from "./executionEventBuffer";
 /**
  * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { memo, useMemo, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
@@ -1671,9 +1672,9 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   const [filter, setFilter] = useState<EventFilter>("messages");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [detail, setDetail] = useState<EventDetailSelection>();
-  const filtered = filterEvents(events, filter);
-  const visible = eventWindow(filtered, visibleLimit);
-  const counts = eventFilterCounts(events);
+  const filtered = useMemo(() => filterEvents(events, filter), [events, filter]);
+  const visible = useMemo(() => eventWindow(filtered, visibleLimit), [filtered, visibleLimit]);
+  const counts = useMemo(() => eventFilterCounts(events), [events]);
   const follow = useStickyBottom<HTMLDivElement>(filtered.length);
 
   useEffect(() => {
@@ -1688,16 +1689,23 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
 
   useEffect(() => {
     if (!active) return;
-    const stop = tailExecutionEvents(
-      taskId,
-      (event: SemanticEvent) => {
-        setEvents((previous) => previous.some((item) => (
-          executionEventKey(item) === executionEventKey(event)
-        )) ? previous : [...previous, event].sort((a, b) => instantMs(a.ts) - instantMs(b.ts)));
-      },
-      setConnection,
-    );
-    return stop;
+    const buffer = new ExecutionEventBuffer();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      timer = undefined;
+      setEvents(buffer.flush());
+    };
+    const stop = tailExecutionEvents(taskId, event => {
+      if (buffer.add(event) && timer === undefined) timer = setTimeout(flush, 100);
+    }, state => {
+      if (state === "ended") {
+        clearTimeout(timer);
+        flush();
+      }
+      setConnection(state);
+    });
+    return () => { stop(); clearTimeout(timer); };
+
   }, [active, taskId]);
 
   return (
@@ -1879,18 +1887,17 @@ function EventValue({ value, onInspect }: {
   if (value === null || value === undefined || typeof value === "number") {
     return <code className="event-value-atom">{String(value)}</code>;
   }
-  const structured = JSON.stringify(value, null, 2);
   return <button type="button" className="event-value-preview structured"
-    onClick={() => onInspect(structured, true)}>
+    onClick={() => onInspect(JSON.stringify(value, null, 2), true)}>
     <span>
       <span>结构化内容</span>
-      <small>{structured.split("\n").length} 行</small>
+      <small>{Array.isArray(value) ? `${value.length} 项` : `${Object.keys(value).length} 个字段`}</small>
     </span>
     <strong>右侧查看 <i aria-hidden>→</i></strong>
   </button>;
 }
 
-function EventRecord({ event, selectedDetail, onInspect }: {
+const EventRecord = memo(function EventRecord({ event, selectedDetail, onInspect }: {
   event: SemanticEvent;
   selectedDetail?: string;
   onInspect: (selection: EventDetailSelection) => void;
@@ -1942,4 +1949,4 @@ function EventRecord({ event, selectedDetail, onInspect }: {
       )}
     </article>
   );
-}
+});
