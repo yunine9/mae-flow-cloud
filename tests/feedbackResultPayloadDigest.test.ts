@@ -20,6 +20,7 @@ import { join } from "node:path";
 import {
   openKernelFeedback,
   recordKernelFeedbackResult,
+  type KernelFeedbackBatch,
 } from "../src/kernelDelivery.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 
@@ -58,9 +59,7 @@ test("回执条目不带 evidence(undefined 键)也能过内核载荷摘要,登�
     history: [], initial_dirty: [],
   }));
   sealPipelineLifecycle({ cwd, workspace, taskId, kernelRoot: KERNEL_ROOT });
-  openKernelFeedback({
-    host: HOST, cwd, workspace,
-    batch: {
+  const request: KernelFeedbackBatch = {
       schema: "mae-flow-feedback-batch/1",
       batch_id: "fb-digest", task_id: taskId, base_sha: head,
       opened_at: new Date().toISOString(),
@@ -70,14 +69,20 @@ test("回执条目不带 evidence(undefined 键)也能过内核载荷摘要,登�
         { id: "pipe:2", source: "pipeline", source_id: "job-2", source_revision: 0,
           kind: "pipeline_red", summary: "CodeCheck 告警", verification: "pipeline" },
       ],
-    },
-  });
+  };
+  // A valid long source identity must remain intact through both commands.
+  request.items[0].source_id = "job-" + "x".repeat(185);
+  request.items[0].id = `pipeline:${request.items[0].source_id}:r0@${head}`;
+  openKernelFeedback({ host: HOST, cwd, workspace, batch: request });
+  const reopened = openKernelFeedback({ host: HOST, cwd, workspace,
+    batch: { ...request, items: [...request.items].reverse() } });
+  assert.equal(reopened.idempotent, true, "列表重排仍是同一批，不能重新派工");
   // 与 taskService.recordActiveFeedbackResult 拼出来的形状一致:没有证据
   // 的条目 evidence 字段是 undefined,不是缺省。
   const record = recordKernelFeedbackResult({
     host: HOST, cwd, workspace, taskId, batchId: "fb-digest", changed: false,
     results: [
-      { id: "pipe:1", status: "explained", summary: "环境问题，已说明", evidence: undefined },
+      { id: request.items[0].id, status: "explained", summary: "环境问题，已说明", evidence: undefined },
       { id: "pipe:2", status: "explained", summary: "误报", evidence: "见 job 日志" },
     ],
   });
@@ -86,4 +91,12 @@ test("回执条目不带 evidence(undefined 键)也能过内核载荷摘要,登�
   const batch = state.delivery_loop.batches.find((item: any) => item.batch_id === "fb-digest");
   assert.ok(batch.result_digest, "内核已登记本批回执");
   assert.equal(batch.results.length, 2);
+  const replayed = recordKernelFeedbackResult({ host: HOST, cwd, workspace, taskId,
+    batchId: "fb-digest", changed: false, results: [
+      { id: "pipe:2", status: "explained", summary: "误报", evidence: "见 job 日志" },
+      { id: request.items[0].id, status: "explained", summary: "环境问题，已说明", evidence: undefined },
+    ] });
+  assert.equal(replayed.idempotent, true, "回执重排不能作废结果或生成新一轮");
+  const after = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+  assert.deepEqual(after.delivery_loop, state.delivery_loop, "保留原记录、摘要与轮次");
 });

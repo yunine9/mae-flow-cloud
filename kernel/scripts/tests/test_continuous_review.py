@@ -249,6 +249,58 @@ class DeliveryCommandTests(TempProject):
                 delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
                     delivery_action="feedback-result", file=result_path))
 
+    def test_batch_replay_accepts_reordering_but_not_changed_content(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        payload["items"].append({**payload["items"][0], "id": "workspace:an-2", "source_id": "an-2"})
+        args = SimpleNamespace(delivery_action="feedback-open", file=self.write_json("batch.json", payload))
+        delivery.cmd_delivery({}, value, args)
+        before = without_host_nonces(value)
+        payload["items"].reverse()
+        self.write_json("batch.json", payload)
+        delivery.cmd_delivery({}, value, args)
+        self.assertEqual(before, without_host_nonces(value))
+        payload["items"][0]["summary"] = "本次改了意见正文"
+        self.write_json("batch.json", payload)
+        with self.assertRaises(SystemExit):
+            delivery.cmd_delivery({}, value, args)
+
+    def test_result_replay_accepts_reordering_but_not_changed_answer(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        payload["items"].append({**payload["items"][0], "id": "workspace:an-2", "source_id": "an-2"})
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-open",
+            file=self.write_json("batch.json", payload)))
+        receipt = {"schema": delivery.RESULT_SCHEMA, "batch_id": "fb-1", "changed": False,
+                   "results": [{"id": item["id"], "status": "explained", "summary": "已核对现有实现"}
+                               for item in payload["items"]]}
+        args = SimpleNamespace(delivery_action="feedback-result", file=self.write_json("result.json", receipt))
+        delivery.cmd_delivery({}, value, args)
+        before = without_host_nonces(value)
+        receipt["results"].reverse()
+        self.write_json("result.json", receipt)
+        delivery.cmd_delivery({}, value, args)
+        self.assertEqual(before, without_host_nonces(value))
+        receipt["results"][0]["status"] = "needs_human"
+        self.write_json("result.json", receipt)
+        with self.assertRaises(SystemExit):
+            delivery.cmd_delivery({}, value, args)
+
+    def test_composite_feedback_identity_preserves_long_valid_source_id(self):
+        value = self.live_state()
+        payload = batch(base=self.head)
+        source_id = "discussion-" + "x" * 180
+        identity = "mr_discussion:" + source_id + ":r0@" + self.head
+        payload["items"] = [{**payload["items"][0], "source": "mr_discussion",
+                             "source_id": source_id, "id": identity}]
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-open",
+            file=self.write_json("batch.json", payload)))
+        delivery.cmd_delivery({}, value, SimpleNamespace(delivery_action="feedback-result",
+            file=self.write_json("result.json", {"schema": delivery.RESULT_SCHEMA,
+                "batch_id": "fb-1", "changed": False, "results": [
+                    {"id": identity, "status": "explained", "summary": "现有实现已覆盖"}]})))
+        self.assertEqual(identity, value["delivery_loop"]["batches"][0]["results"][0]["id"])
+
     def test_red_feedback_replaces_awaiting_writer_and_later_pass_closes_both(self):
         value = self.live_state("external_verify")
         value["delivery_loop"] = {

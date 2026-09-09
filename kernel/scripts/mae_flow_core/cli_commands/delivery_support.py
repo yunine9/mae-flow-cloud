@@ -5,6 +5,14 @@ import re
 from .wiring import api
 
 
+def original_feedback_order(rows, previous):
+    """Ignore display order on replay while preserving every field and ID."""
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return rows
+    order = {str(row.get("id", "")): index for index, row in enumerate(previous or ())}
+    return sorted(rows, key=lambda row: order.get(str(row.get("id", "")).strip(), len(order)))
+
+
 def unpushed_commits(verified_sha, local_head, die):
     if local_head == verified_sha:
         return []

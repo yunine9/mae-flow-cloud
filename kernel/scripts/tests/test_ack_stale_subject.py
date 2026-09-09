@@ -112,7 +112,7 @@ class StaleSubjectAckTests(unittest.TestCase):
         self.assertEqual("", receipt_choice(step, receipt, "不存在的方案，执行"))
 
     def test_direct_human_reply_does_not_need_to_repeat_standard_button(self):
-        for answer in ("可以", "确认并继续", "没问题"):
+        for answer in ("可以", "确认并继续", "没问题", "确认 并继续", "确认\n并继续", " 没 问题 "):
             row = ledger_row("n" * 64)
             row["text"] = answer
             self._write_ledger([row])

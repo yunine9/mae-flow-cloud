@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -192,6 +194,45 @@ class ApprovalSubjectTests(unittest.TestCase):
         state["delivery_manifest"]["files"] = ["a.txt", "b.txt"]
         second = build_subject(self.root, state, "delivery_review", step)
         self.assertNotEqual(first["sha256"], second["sha256"])
+
+    def test_artifact_order_keeps_existing_answer_binding(self):
+        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
+        os.makedirs(folder)
+        for name in ("spec", "story"):
+            with open(os.path.join(folder, name + ".md"), "w") as out:
+                out.write(name + " content\n")
+        state = {"config": {"单号": "REQ-1"}}
+        step = {"approval_subject": {"kind": "artifacts", "artifacts": ["spec", "story"]}}
+        original = build_subject(self.root, state, "story", step)
+        # An existing card may have persisted these pairs in a different order.
+        original["paths"].reverse()
+        original["fingerprints"].reverse()
+        unsigned = {key: value for key, value in original.items() if key not in ("id", "sha256")}
+        original["sha256"] = hashlib.sha256(json.dumps(unsigned, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        original["id"] = original["sha256"][:16]
+        self.assertNotEqual(original["sha256"], build_subject(self.root, state, "story", step)["sha256"])
+        state["approval_subject"] = original
+        step["approval_subject"]["artifacts"].reverse()
+        self.assertEqual((True, ""), subject_matches(self.root, state, "story", step))
+        self.assertEqual(original, state["approval_subject"])
+        with open(os.path.join(folder, "spec.md"), "w") as out:
+            out.write("different requirement\n")
+        self.assertFalse(subject_matches(self.root, state, "story", step)[0])
+
+    def test_rebound_diff_base_keeps_review_of_same_selected_bytes(self):
+        state = {"implementation_base_head": self.head, "delivery_manifest": {"files": ["a.txt"]}}
+        step = {"approval_subject": {"kind": "worktree"}}
+        with open(os.path.join(self.root, "a.txt"), "w") as out:
+            out.write("reviewed bytes\n")
+        original = build_subject(self.root, state, "delivery_review", step)
+        state["approval_subject"] = original
+        subprocess.run(["git", "-C", self.root, "add", "a.txt"], check=True)
+        subprocess.run(["git", "-C", self.root, "commit", "-qm", "same reviewed bytes"], check=True)
+        state["implementation_base_head"] = subprocess.check_output(
+            ["git", "-C", self.root, "rev-parse", "HEAD"], text=True).strip()
+        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
+        self.assertEqual(original, state["approval_subject"])
 
     def test_stale_subject_is_rotated_without_agent_rework(self):
         state = {"implementation_base_head": self.head}

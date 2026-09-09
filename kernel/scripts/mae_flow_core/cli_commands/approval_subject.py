@@ -57,7 +57,7 @@ def _package_paths(root, state, names):
 
 
 def _artifact_payload(root, state, spec):
-    paths = _package_paths(root, state, spec.get("artifacts") or ())
+    paths = sorted(set(_package_paths(root, state, spec.get("artifacts") or ())))
     missing = [path for path in paths if not os.path.isfile(path)]
     if missing:
         raise RuntimeError("待审批产物尚未生成: " + "、".join(
@@ -156,6 +156,15 @@ def build_subject(root, state, step_id, step):
     return payload
 
 
+def _reviewed_files(subject):
+    paths = subject.get("paths")
+    key = "fingerprints" if subject.get("kind") == "artifacts" else "path_fingerprints"
+    fingerprints = subject.get(key)
+    if not isinstance(paths, list) or not isinstance(fingerprints, list) or len(paths) != len(fingerprints):
+        return None
+    return dict(zip(paths, fingerprints)) if len(set(paths)) == len(paths) else None
+
+
 def subject_matches(root, state, step_id, step):
     stored = (state or {}).get("approval_subject") or {}
     try:
@@ -177,13 +186,13 @@ def subject_matches(root, state, step_id, step):
         return False, (
             "绑定当前内容的新审批卡已自动生成；直接重新展示并取得一次决定，"
             "无需重新解释或重做已经完成的工作")
-    # Upgrade old moving-HEAD subjects without asking again when the exact
-    # reviewed paths and bytes are unchanged. Preserve the receipt's ID/hash.
-    if (current and stored.get("kind") == current.get("kind") == "worktree"
-            and stored.get("base") == "HEAD"
-            and stored.get("path_fingerprints")
-            and all(stored.get(key) == current.get(key) for key in
-                    ("scope", "paths", "path_fingerprints"))):
+    # People approve files, not list ordering or an internal diff base. Keep
+    # the original answer binding when those mechanics change but files do not.
+    if (current and stored.get("kind") == current.get("kind")
+            and stored.get("kind") in ("worktree", "artifacts")
+            and stored.get("scope") == current.get("scope")
+            and _reviewed_files(stored) is not None
+            and _reviewed_files(stored) == _reviewed_files(current)):
         return True, ""
     if not current or current.get("sha256") != stored.get("sha256"):
         if current:
