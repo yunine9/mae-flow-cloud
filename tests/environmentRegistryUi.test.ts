@@ -2,7 +2,9 @@
  * 环境管理页签的 UI 契约(票 #149;先例:issueUiContracts.test.ts)。
  *
  * 只断言源码里外部可见的结构与交互锚点:导航入口、深链路由、列表列、
- * 表单字段、密码不回显语义、409 引导、删除二次确认、标签筛选与空态。
+ * 表单字段、密码不回显语义、409 引导、删除二次确认、标签筛选与空态;
+ * #151 追加探活半边:状态列三态与色语义、失败原因二分、弹层「测试连接」
+ * 的调用分野(新增态 /test vs 编辑态 /:id/probe)、行内探活与 api 接线。
  * 不测样式实现细节;样式纪律(#146)由断言"全工具类、不 import css、
  * 不硬编码色值"表达,css 层不新增任何东西由 cssOverrideRatchet 兜底。
  */
@@ -156,4 +158,71 @@ test("环境管理:数据加载沿视图自取惯例——挂载拉取,增改删
       `api.ts 缺少 ${name}`);
     assert.match(page, new RegExp(`\\b${name}\\(`), `页面未使用 ${name}`);
   }
+});
+
+test("环境管理:状态列三态点亮——正常绿/异常红/未验证中性灰,色语义走令牌桥", () => {
+  // 三态码表已在既有锚点;这里钉 #151 的色语义:ok 用 success 系、failed 用
+  // danger 系、unverified 保持中性灰——全部是 tailwind.css @theme 桥映射出的
+  // 令牌工具类(--color-success/--color-danger 系),硬编码色值另有兜底断言。
+  assert.match(page,
+    /if \(state === "ok"\) return "border-success\/40 bg-success-soft text-success";/,
+    "正常态缺 success 系令牌工具类");
+  assert.match(page,
+    /if \(state === "failed"\) return "border-danger\/40 bg-danger-soft text-danger";/,
+    "异常态缺 danger 系令牌工具类");
+  assert.match(page, /return "text-muted-foreground";/, "未验证态应保持中性灰");
+  // 状态列单元格消费该色语义(三态徽标 + 原因 + 最近探活时间)。
+  assert.match(page, /<ProbeStateCell probe=\{entry\.probe\} \/>/);
+  assert.match(page, /<Badge variant="outline" className=\{probeToneClass\(probe\.state\)\}>/);
+});
+
+test("环境管理:异常原因二分文案(认证失败/不可达)与最近探活时间", () => {
+  assert.match(page, /auth: "认证失败",/);
+  assert.match(page, /unreachable: "不可达",/);
+  // 异常条目才展示原因;探过的条目附最近探活时间(相对时间,项目现成工具)。
+  assert.match(page, /probe\.state === "failed" && probe\.reason/);
+  assert.match(page, /relativeTime\(probe\.at\)/);
+});
+
+test("环境管理:弹层「测试连接」调用分野——新增态 /test(表单值+密码已填),编辑态 /:id/probe", () => {
+  assert.match(page, /async function runTestConnection\(\)/);
+  assert.match(page, /探测中…/, "缺少探测中 loading 态");
+  // 新增态:用表单当前值走 /environments/test,后台密码未填当场拦下。
+  assert.match(page, /testEnvironmentConnection\(\{/);
+  assert.match(page, /ip: ip\.trim\(\),/);
+  assert.match(page, /backend_password: backendPassword,/);
+  assert.match(page, /setTestError\("后台密码不能为空"\)/);
+  // 编辑态:前端无密码,直接对已存条目探活(/:id/probe,结论持久化,
+  // 状态列随 onProbed 就地刷新)。
+  assert.match(page, /probeEnvironment\(existing\.id\)/);
+  assert.match(page, /onProbed\(updated\)/);
+  assert.match(page, /onProbed=\{applyProbeUpdate\}/);
+  // api 接线:两个类型化函数与两条端点路径。
+  assert.match(api, /export async function testEnvironmentConnection\(/);
+  assert.match(api, /export async function probeEnvironment\(/);
+  assert.match(api, /fetch\("\/environments\/test"/);
+  assert.match(api,
+    /fetch\(\s*`\/environments\/\$\{encodeURIComponent\(id\)\}\/probe`/);
+});
+
+test("环境管理:测试结果就地内联(连接正常/连接异常+原因),不关弹层", () => {
+  assert.match(page, /连接正常/);
+  assert.match(page, /连接异常:/);
+  // 结论内联展示在按钮旁,测试路径不触碰弹层关闭(onClose 只由取消/保存走)。
+  const handler = page.slice(
+    page.indexOf("async function runTestConnection"),
+    page.indexOf("return <Dialog"));
+  assert.ok(handler.length > 0, "缺少测试连接处理器");
+  assert.doesNotMatch(handler, /onClose\(/);
+});
+
+test("环境管理:行内探活——操作列「探活」,行内 loading,完成后状态列就地刷新", () => {
+  assert.match(page, /async function probeRow\(entry: EnvironmentView\)/);
+  assert.match(page, /probeEnvironment\(entry\.id\)/);
+  // 行内 loading 与禁用;完成后用返回视图就地合并进列表(不整页轮询,
+  // 后台已有约 10 分钟一轮的定时探活)。
+  assert.match(page, /probingId === entry\.id \? "探活中…" : "探活"/);
+  assert.match(page, /setEnvironments\(\(prev\) =>/);
+  assert.match(page,
+    /prev\.map\(\(item\) => \(item\.id === updated\.id \? updated : item\)\)/);
 });

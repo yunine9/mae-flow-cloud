@@ -4717,3 +4717,35 @@ export async function deleteEnvironment(id: string): Promise<void> {
   });
   if (!response.ok) throw new Error(await errorText(response));
 }
+
+/** 测试连接/探活的结论:探测失败是正常结论不是 HTTP 错误——一律 200 带
+ * ok,失败时 reason 二分(auth=认证失败,unreachable=不可达);缺参才 400。 */
+export type EnvironmentTestOutcome =
+  | { ok: true }
+  | { ok: false; reason: "auth" | "unreachable" };
+
+/** 测试连接(#151):对表单当前值(新增/编辑弹层里现输的)当场验一次,
+ * 只探测、不落任何存储;密码是现输的,必须已填。 */
+export async function testEnvironmentConnection(payload: {
+  ip: string;
+  port?: number;
+  backend_password: string;
+}): Promise<EnvironmentTestOutcome> {
+  const response = await fetch("/environments/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw await environmentError(response);
+  return parseJson(response);
+}
+
+/** 探活已存条目(#151):用台账后台密码对主 IP 探一次并持久化三态,
+ * 返回更新后的视图(行内探活与编辑态测试连接都走这里);未知条目 404。 */
+export async function probeEnvironment(id: string): Promise<EnvironmentView> {
+  const response = await fetch(
+    `/environments/${encodeURIComponent(id)}/probe`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw await environmentError(response);
+  return parseJson(response);
+}

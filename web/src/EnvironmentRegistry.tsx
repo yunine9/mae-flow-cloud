@@ -16,14 +16,17 @@ import {
   createEnvironment,
   deleteEnvironment,
   listEnvironments,
+  probeEnvironment,
+  testEnvironmentConnection,
   updateEnvironment,
   EnvironmentIpConflictError,
   type EnvironmentForm,
+  type EnvironmentTestOutcome,
   type EnvironmentView,
 } from "./api";
 import { PersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
-import { formatLocalDateTime } from "./time";
+import { formatLocalDateTime, relativeTime } from "./time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,6 +66,43 @@ const PROBE_TEXT: Record<EnvironmentView["probe"]["state"], string> = {
   failed: "异常",
 };
 
+/** 探活失败原因二分(#151):auth=密码改了,unreachable=机器关了。 */
+const PROBE_REASON_TEXT: Record<
+  NonNullable<EnvironmentView["probe"]["reason"]>,
+  string
+> = {
+  auth: "认证失败",
+  unreachable: "不可达",
+};
+
+/** 状态列徽标的色语义(#151):正常绿系、异常红系、未验证中性灰——
+ * 全走 tailwind.css @theme 桥映射出的令牌工具类(--color-success/--color-danger
+ * 系),不硬编码色值。 */
+function probeToneClass(state: EnvironmentView["probe"]["state"]): string {
+  if (state === "ok") return "border-success/40 bg-success-soft text-success";
+  if (state === "failed") return "border-danger/40 bg-danger-soft text-danger";
+  return "text-muted-foreground";
+}
+
+/** 状态列单元格(#151):三态徽标,异常条目附原因二分,探过的条目附
+ * 最近探活时间(相对时间,悬浮看绝对时刻)。 */
+function ProbeStateCell({ probe }: { probe: EnvironmentView["probe"] }) {
+  return <div className="flex flex-col items-start gap-0.5">
+    <Badge variant="outline" className={probeToneClass(probe.state)}>
+      {PROBE_TEXT[probe.state] ?? "未验证"}
+    </Badge>
+    {probe.state === "failed" && probe.reason && (
+      <span className="text-xs text-danger">
+        {PROBE_REASON_TEXT[probe.reason] ?? probe.reason}
+      </span>
+    )}
+    {probe.at && <span className="text-xs text-muted-foreground"
+      title={`探活于 ${formatLocalDateTime(probe.at)}`}>
+      {relativeTime(probe.at)}探活
+    </span>}
+  </div>;
+}
+
 /** Radix Select 不收空串 value,"全部标签"用哨兵值。 */
 const ALL_TAGS = "__all";
 
@@ -79,6 +119,29 @@ export function EnvironmentRegistry() {
   const [activeTag, setActiveTag] = useState("");
   /** 弹层状态:undefined = 关;existing 缺席 = 新增,有值 = 编辑该条。 */
   const [editor, setEditor] = useState<{ existing?: EnvironmentView }>();
+  /** 行内探活进行中的条目 id(空串 = 空闲;一次探一条)。 */
+  const [probingId, setProbingId] = useState("");
+
+  /** 探活返回更新后的视图:就地合并进列表,状态列即时刷新(不整页轮询,
+   * 后台已有约 10 分钟一轮的定时探活)。 */
+  function applyProbeUpdate(updated: EnvironmentView) {
+    setEnvironments((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
+  /** 行内探活(#151):对已存条目用台账后台密码探一次并持久化三态。 */
+  async function probeRow(entry: EnvironmentView) {
+    if (probingId) return;
+    setProbingId(entry.id);
+    try {
+      applyProbeUpdate(await probeEnvironment(entry.id));
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "环境探活失败");
+    } finally {
+      setProbingId("");
+    }
+  }
 
   async function refreshEnvironments() {
     try {
@@ -197,14 +260,17 @@ export function EnvironmentRegistry() {
                     : <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline">
-                    {PROBE_TEXT[entry.probe.state] ?? "未验证"}
-                  </Badge>
+                  <ProbeStateCell probe={entry.probe} />
                 </TableCell>
                 <TableCell><PersonName account={entry.updated_by} /></TableCell>
                 <TableCell>{formatLocalDateTime(entry.updated_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="xs"
+                      disabled={probingId === entry.id}
+                      onClick={() => void probeRow(entry)}>
+                      {probingId === entry.id ? "探活中…" : "探活"}
+                    </Button>
                     <Button variant="ghost" size="xs"
                       onClick={() => setEditor({ existing: entry })}>编辑</Button>
                     <Button variant="ghost" size="xs"
@@ -234,6 +300,7 @@ export function EnvironmentRegistry() {
         setEditor(undefined);
         void refreshEnvironments();
       }}
+      onProbed={applyProbeUpdate}
       onSwitchTo={(entry) => setEditor({ existing: entry })}
     />}
   </section>;
@@ -244,18 +311,23 @@ const tagChipRemoveClass =
 
 /** 新增/编辑弹层。existing 有值 = 编辑:密码字段不回显,后台密码留空 =
  * 不变,root 密码留空 = 不改继承关系。IP 撞车(409)在表单内报错并引导
- * 去编辑既有条目。 */
+ * 去编辑既有条目。「测试连接」按钮(#151)两种调用分野:新增态用表单
+ * 当前值走 /environments/test(只探测不落库,后台密码必须已填);编辑态
+ * 前端无密码,直接对已存条目探活走 /:id/probe(结果持久化进台账)。
+ * 结果就地内联展示,不关弹层。 */
 function EnvironmentEditorDialog({
   existing,
   environments,
   onClose,
   onSaved,
+  onProbed,
   onSwitchTo,
 }: {
   existing?: EnvironmentView;
   environments: EnvironmentView[];
   onClose: () => void;
   onSaved: () => void;
+  onProbed: (entry: EnvironmentView) => void;
   onSwitchTo: (entry: EnvironmentView) => void;
 }) {
   const [ip, setIp] = useState(existing?.ip ?? "");
@@ -271,6 +343,11 @@ function EnvironmentEditorDialog({
   const [formError, setFormError] = useState("");
   /** 409 命中的既有条目(表单内报"该 IP 已存在于台账"并引导编辑)。 */
   const [conflict, setConflict] = useState<EnvironmentView>();
+  /** 测试连接三态:outcome 空缺 = 空闲;testing = 探测中;有 outcome = 有
+   * 结论(就地内联展示,不关弹层)。 */
+  const [testing, setTesting] = useState(false);
+  const [testOutcome, setTestOutcome] = useState<EnvironmentTestOutcome>();
+  const [testError, setTestError] = useState("");
   /** 编辑时若已单独配置 root 密码,给标记与清除入口(非密布尔,可展示)。 */
   const hasExplicitRoot = !!existing && !existing.root_password_inherited;
 
@@ -339,6 +416,54 @@ function EnvironmentEditorDialog({
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** 测试连接(#151)的调用分野:新增态用表单当前值走 /environments/test
+   * (只探测不落库,后台密码必须已填);编辑态前端无密码,直接对已存条目
+   * 探活走 /:id/probe,结论持久化进台账、状态列随 onProbed 就地刷新。
+   * 探测失败是结论不是错误:正常/异常+原因都内联展示,弹层不关。 */
+  async function runTestConnection() {
+    if (testing) return;
+    setTestOutcome(undefined);
+    setTestError("");
+    let port: number | undefined;
+    if (!existing) {
+      const trimmedIp = ip.trim();
+      if (!trimmedIp) {
+        setTestError("主 IP 不能为空");
+        return;
+      }
+      port = portDraft.trim() === "" ? undefined : Number(portDraft);
+      if (port !== undefined
+          && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+        setTestError("端口必须是 1-65535");
+        return;
+      }
+      if (!backendPassword) {
+        setTestError("后台密码不能为空");
+        return;
+      }
+    }
+    setTesting(true);
+    try {
+      if (existing) {
+        const updated = await probeEnvironment(existing.id);
+        onProbed(updated);
+        setTestOutcome(updated.probe.state === "failed"
+          ? { ok: false, reason: updated.probe.reason ?? "unreachable" }
+          : { ok: true });
+      } else {
+        setTestOutcome(await testEnvironmentConnection({
+          ip: ip.trim(),
+          ...(port !== undefined ? { port } : {}),
+          backend_password: backendPassword,
+        }));
+      }
+    } catch (cause) {
+      setTestError(cause instanceof Error ? cause.message : "测试连接失败");
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -432,6 +557,22 @@ function EnvironmentEditorDialog({
               </button>
             </Badge>)}
           </div>}
+        </div>
+        {/* 测试连接(#151):结果就地内联展示(正常/异常+原因),不关弹层;
+             编辑态走台账已存密码探活,结论顺带持久化进台账。 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm"
+            disabled={testing}
+            onClick={() => void runTestConnection()}>
+            {testing ? "探测中…" : "测试连接"}
+          </Button>
+          {testOutcome?.ok && <Badge variant="outline"
+            className={probeToneClass("ok")}>连接正常</Badge>}
+          {testOutcome && !testOutcome.ok && <span
+            className="text-sm text-danger">
+            连接异常:{PROBE_REASON_TEXT[testOutcome.reason] ?? testOutcome.reason}
+          </span>}
+          {testError && <span className="text-sm text-danger">{testError}</span>}
         </div>
         {(formError || conflict) && <div role="alert"
           className="rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger">
