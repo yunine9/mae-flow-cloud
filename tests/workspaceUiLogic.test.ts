@@ -374,6 +374,29 @@ test("await_merge 的右栏明确给出合入行动，关闭 MR 给出异常行�
   }, false).title, "MR 已关闭，需要处理");
 });
 
+test("普通 Diff 的默认勾选可用于当前决定，换卡与换 HEAD 不复用旧选择", () => {
+  const key = JSON.stringify(["task-3", "new-card", undefined]);
+  const selection = {
+    selectedPaths: ["src/a.ts"], committedPaths: ["src/a.ts"],
+    allPaths: ["src/a.ts", "src/local.ts"],
+  };
+  const state = { key, selection };
+  assert.equal(workspace.usablePushReviewSelection(false, { kind: "idle" },
+    workspace.deliverySelectionForCard(state, key)), selection);
+  for (const next of [
+    ["task-3", "next-card", undefined],
+    ["task-4", "new-card", undefined],
+    ["task-3", "new-card", "new-head"],
+  ]) {
+    assert.equal(workspace.deliverySelectionForCard(state, JSON.stringify(next)),
+      undefined);
+  }
+  assert.equal(workspace.deliverySelectionForCard(undefined, key), undefined);
+  const empty = { ...selection, selectedPaths: [] };
+  assert.deepEqual(workspace.deliverySelectionForCard({ key, selection: empty },
+    key)?.selectedPaths, []);
+});
+
 test("过期 push diff 不进入 GitDiff 内容，并撤销可提交的文件选择", () => {
   const stale = workspace.normalizePushReviewDiffResult({
     unavailable: "这张检视卡对应的代码已经变化，请刷新查看最新版本",

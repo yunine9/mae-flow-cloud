@@ -384,6 +384,13 @@ export function normalizePushReviewDiffResult(result: {
   };
 }
 
+export function deliverySelectionForCard(
+  state: { key: string; selection: GitDiffSelection | undefined } | undefined,
+  key: string,
+): GitDiffSelection | undefined {
+  return state?.key === key ? state.selection : undefined;
+}
+
 export function usablePushReviewSelection(
   pushReviewActive: boolean,
   state: PushReviewDiffLoadState,
@@ -669,8 +676,18 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [repositoryAssigneeSave, setRepositoryAssigneeSave] =
     useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [deliverySelection, setDeliverySelection] =
-    useState<GitDiffSelection>();
+  // 换卡立即隔离旧选择；不要在父层 effect 里清空子文件树刚回传的
+  // 默认勾选。普通 Diff 没有 push_review，也必须能初始化决定卡。
+  const deliverySelectionKey = JSON.stringify([
+    task.id, task.waiting?.waiting_id, pushReview?.head_sha,
+  ]);
+  const [deliverySelectionState, setDeliverySelectionState] = useState<{
+    key: string; selection: GitDiffSelection | undefined;
+  }>();
+  const deliverySelection = deliverySelectionForCard(
+    deliverySelectionState, deliverySelectionKey);
+  const setDeliverySelection = (selection: GitDiffSelection | undefined) =>
+    setDeliverySelectionState({ key: deliverySelectionKey, selection });
   const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
     pushReview ? { kind: "checking" } : { kind: "idle" },
   );
@@ -877,7 +894,6 @@ export function TaskWorkspace({
     setRepositoryAssigneeSave("idle");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setRevisionDiff(null);
-    setDeliverySelection(undefined);
     setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
     setDiffReviewRequest(0);
@@ -885,7 +901,6 @@ export function TaskWorkspace({
 
   useEffect(() => {
     if (!pushReview) {
-      setDeliverySelection(undefined);
       setPushDiffState({ kind: "idle" });
       setDiffScope("full");
       return;
@@ -900,7 +915,7 @@ export function TaskWorkspace({
     setPushDiffState({ kind: "checking" });
     setContent("");
     setDiffScope(pushReview.has_focused_changes ? "changes" : "full");
-  }, [task.waiting?.waiting_id, pushReview?.head_sha]);
+  }, [deliverySelectionKey]);
 
   useEffect(() => {
     const waitingId = task.waiting?.waiting_id;
@@ -2415,7 +2430,7 @@ export function TaskWorkspace({
                         && task.status === "waiting_for_human"
                         && task.waiting?.recommended_view === "diff"
                         && (!pushReview || diffScope === "full")}
-                      selectionKey={task.waiting?.waiting_id}
+                      selectionKey={deliverySelectionKey}
                       initialSelectedPaths={deliverySelection?.selectedPaths
                         ?? (task.delivery_selection?.status === "requested"
                           ? task.delivery_selection.paths : undefined)}

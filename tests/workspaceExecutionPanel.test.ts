@@ -82,7 +82,7 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   // 跨仓子任务(有 parent_task_id)才出现;收到/发出的通知仍作为 sync 条目进流。
   assert.doesNotMatch(workspace, /CrossRepositorySync/, "独立的跨仓同步块已并入输入区");
   assert.match(workspace, /crossRepository=\{Boolean\(task\.parent_task_id\)\}/);
-  assert.match(composer, /通知上下游\n/, "第三档页签");
+  assert.match(composer, /通知所有子任务\n/, "第三档页签");
   assert.match(composer, /const showSync = mode === "sync" && crossRepository && !steerOnly;/);
   assert.match(composer, /publishCrossRepositoryUpdate\(task\.id, message\)/);
   assert.match(composer, /hidden=\{!decisionDock \|\| showAssistant \|\| showSync\}/,
