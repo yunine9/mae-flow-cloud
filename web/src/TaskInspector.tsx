@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { statusText, type TaskSummary } from "./api";
@@ -44,7 +45,7 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
       {kind === "details" && <div className="inspector-facts">
         <h3 className="inspector-task-title">{task.title ?? task.requirement}</h3>
         <dl className="inspector-fact-grid">
-          <div><dt>负责人</dt><dd>{task.luban_account ?? "未指定"}</dd></div>
+          <div><dt>负责人</dt><dd><PersonName account={task.luban_account} /></dd></div>
           <div><dt>任务状态</dt><dd>{statusText(task)}</dd></div>
           <div><dt>任务编号</dt><dd><code>{task.id}</code></dd></div>
           <div><dt>创建时间</dt><dd>{formatLocalDateTime(task.created_at, { year: true })}</dd></div>

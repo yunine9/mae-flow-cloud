@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { useEffect, useMemo, useState } from "react";
 import {
   listCollaborationAssignees,
@@ -95,7 +96,7 @@ export function RequirementTeamPicker({
     </header>
     <div className="requirement-team-owner">
       <i aria-hidden>主</i>
-      <span><strong>{owner ?? "本地主责任人"}</strong>
+      <span><strong><PersonName account={owner} fallback="本地主责任人" /></strong>
         <small>主责任人 · 最终确认、拆单和任务控制</small></span>
     </div>
     {!loading && people.length > 6 && <label className="requirement-team-search">

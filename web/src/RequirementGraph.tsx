@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { requirementGraphVisible } from "./taskHierarchy";
 import { useState, type ReactNode } from "react";
 import {
@@ -204,7 +205,7 @@ export function RequirementGraph({
           </button>}
         </div>
         <div className="requirement-team-pills">
-          <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
+          <strong><PersonName account={task.luban_account} fallback="本地主责任人" /><i>主责任人</i></strong>
           {participantNames.map((account) => <span key={account}>{account}
             <i>{task.collaborators?.includes(account) ? "参与讨论" : "单元执行"}</i>
           </span>)}
@@ -286,7 +287,7 @@ export function RequirementGraph({
                   {repository.current_phase ? ` · ${repository.current_phase}` : ""}
                 </span>}
                 <span className="repo-assignee">
-                  {repository.assignee ? `负责人 · ${repository.assignee}` : "负责人待确认"}
+                  {repository.assignee ? <>负责人 · <PersonName account={repository.assignee} /></> : "负责人待确认"}
                 </span>
                 <span className="repo-ticket">
                   {/* 一仓拆多单元时单号逐单元填,父任务单号不是任何一块的
@@ -349,7 +350,7 @@ export function RequirementGraph({
           <ol>{task.cross_repository_updates!.slice(-10).reverse().map((update) => (
             <li key={update.id}>
               <div><strong>{update.source_repository ?? update.source_task_id}</strong>
-                <span>{update.author}</span></div>
+                <span><PersonName account={update.author} /></span></div>
               <p>{update.text}</p>
             </li>
           ))}</ol>

@@ -1,3 +1,4 @@
+import { PeopleProvider, PersonName, usePersonName } from "./People";
 /**
  * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
@@ -462,8 +463,8 @@ export function buildPersonalActionItems({
       kicker: "Committer 检视",
       title: review.task_title,
       detail: task
-        ? `${review.requester} 邀请你检视代码与交付材料`
-        : `${review.requester} 邀请你检视；任务详情暂未同步，请稍后刷新`,
+        ? `$<PersonName account={review.requester} /> 邀请你检视代码与交付材料`
+        : `$<PersonName account={review.requester} /> 邀请你检视；任务详情暂未同步，请稍后刷新`,
       action: task ? "开始检视" : "任务暂不可用",
     });
   }
@@ -1022,7 +1023,7 @@ export function App() {
     setKnowledgeFocus(undefined);
     history.pushState(appHistoryState("knowledge", next), "", "/");
   };
-  return <div className="app-shell">
+  return <PeopleProvider key={session.username} known={[...teamUsers, session]}><div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
       <nav className="sidebar-nav" aria-label="视图切换">
@@ -1059,7 +1060,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
@@ -1292,7 +1293,7 @@ export function App() {
     />}
     {/* 页内确认弹框宿主:全站 confirmDialog 的唯一渲染点(spec #52)。 */}
     <ConfirmDialogHost />
-  </div>;
+  </div></PeopleProvider>;
 }
 
 function PersonalActionInbox({
@@ -1359,7 +1360,7 @@ function CommitterInbox({
           return <button type="button" key={review.id} disabled={!task}
             onClick={() => task && onOpen(task)}>
             <span className="committer-inbox-mark" aria-hidden>审</span>
-            <span className="committer-inbox-copy"><strong>{review.task_title}</strong><small>{review.requester} 邀请 · {formatLocalDateTime(review.created_at)}</small></span>
+            <span className="committer-inbox-copy"><strong>{review.task_title}</strong><small><PersonName account={review.requester} /> 邀请 · {formatLocalDateTime(review.created_at)}</small></span>
             <span className={`delivery-state${review.delivered ? " ok" : " warning"}`}>{review.delivered ? "通知已送达" : "通知未送达"}</span>
             <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
           </button>;
@@ -1549,6 +1550,7 @@ function TeamDashboard({
   onOpenArtifacts: (task: TaskSummary) => void;
   onOpenIssue: (id: string) => void;
 }) {
+  const nameOf = usePersonName();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<TeamScope>("all");
   const [responsible, setResponsible] = useState("");
@@ -1576,7 +1578,7 @@ function TeamDashboard({
   };
   const visible = useMemo(() => currentItems.filter((item) => {
     const tt = item.teamTask;
-    const words = `${tt.id} ${item.task?.title ?? ""} ${tt.requirement} ${responsibleOf(tt) ?? ""}`
+    const words = `${tt.id} ${item.task?.title ?? ""} ${tt.requirement} ${responsibleOf(tt) ?? ""} ${nameOf(responsibleOf(tt))}`
       .toLowerCase();
     if (query.trim() && !words.includes(query.trim().toLowerCase())) return false;
     if (responsible === "__unassigned" && responsibleOf(tt)) return false;
@@ -1591,7 +1593,7 @@ function TeamDashboard({
     if (taskStatus && item.task && teamDeliveryStatusGroup(item.task.status) !== taskStatus) return false;
     return true;
   }).sort((a, b) => byTeamAttention(a.teamTask, b.teamTask)),
-    [currentItems, query, scope, responsible, phase, taskStatus]);
+    [currentItems, query, scope, responsible, phase, taskStatus, nameOf]);
 
   function selectPhase(next: string) {
     setPhase((current) => current === next ? "" : next);

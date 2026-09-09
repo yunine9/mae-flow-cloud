@@ -1,3 +1,4 @@
+import { PersonName } from "./People";
 import { ResizableReviewPane } from "./ResizableReviewPane";
 import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 import "./overall-story.css";
@@ -1731,7 +1732,7 @@ export function TaskWorkspace({
               disabled={!repository.task_id || !onOpenTask}
               onClick={() => repository.task_id && onOpenTask?.(repository.task_id)}>
               <span><strong>{repository.name}</strong>
-                <small>{repository.assignee ?? "未指定负责人"}</small></span>
+                <small><PersonName account={repository.assignee} fallback="未指定负责人" /></small></span>
               <em className={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}
               </em>
@@ -2625,7 +2626,7 @@ export function TaskWorkspace({
               onAssistant={setAssistantView} />
           ) : (
             <div className="ws-composer-readonly">
-              你可以查看全部记录与材料；提交决定和插话由责任人 {task.luban_account ?? "或协作者"} 处理。
+              你可以查看全部记录与材料；提交决定和插话由责任人 <PersonName account={task.luban_account} fallback="或协作者" /> 处理。
             </div>
           )}
         </section>
