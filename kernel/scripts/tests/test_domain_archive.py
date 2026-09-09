@@ -74,20 +74,19 @@ class DomainArchiveTests(unittest.TestCase):
             self.assertIn("| billing | invoice | docs/specs/billing.md |",
                           self._read(os.path.join(specs, "index.md")))
 
-    def test_invalid_candidate_and_stale_input_are_rejected(self):
+    def test_template_is_advisory_and_unrelated_inputs_do_not_expire_archive(self):
         with tempfile.TemporaryDirectory() as root:
             candidate = os.path.join(root, "candidate.md")
             self._write(candidate, "# 空文档\n")
-            with self.assertRaisesRegex(ValueError, "缺少章节"):
-                domain_archive.prepare_candidate(
-                    root, candidate, "radio", ("SUL",))
+            prepared = domain_archive.prepare_candidate(root, candidate, "radio", ())
+            self.assertEqual("new", prepared.action)
+            self.assertEqual(("radio",), prepared.keywords)
             source = os.path.join(root, "story.md")
             self._write(source, "v1")
             frozen = domain_archive.input_digest(root, (source,), "diff-v1", ())
             self._write(source, "v2")
             current = domain_archive.input_digest(root, (source,), "diff-v1", ())
-            with self.assertRaisesRegex(ValueError, "候选已过期"):
-                domain_archive.require_fresh(frozen, current)
+            self.assertEqual(frozen, current)
 
     def test_candidate_edit_invalidates_prepared_archive_digest(self):
         with tempfile.TemporaryDirectory() as root:

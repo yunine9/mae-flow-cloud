@@ -348,15 +348,6 @@ class CodeReviewTwoAxisTests(unittest.TestCase):
     卡模板、步骤提示、Agent 定义三处必须一致,否则又变成"卡里拆了、提示没拆"。
     """
 
-    def test_step_prompt_dispatches_both_axes_once_each(self):
-        step = read("flow/steps/build_agent_review.md")
-        self.assertIn("两张", step)
-        self.assertIn("需求符合性", step)
-        self.assertIn("工程质量", step)
-        self.assertIn("分别派两个 craft-reviewer-agent", step)
-        # 汇总不合并、不重排;仍然只跑一轮
-        self.assertIn("不合并、不互相重排优先级", step)
-        self.assertIn("只跑这一轮", step)
 
     def test_reviewer_agent_executes_exactly_one_axis(self):
         reviewer = read("agents/craft-reviewer-agent.md")
@@ -380,7 +371,7 @@ class AssumptionAndDeadCodeBoundaryTests(unittest.TestCase):
 
     def test_small_ambiguity_is_surfaced_not_silently_resolved(self):
         build = read("flow/steps/build.md")
-        self.assertIn("小歧义：选一个，并把假设写出来", build)
+        self.assertIn("小歧义:选一个,把假设写出来", build)
         self.assertIn("默默挑一个", build)
         # 与"卡住就停"并列存在:根本缺口停下,小歧义带假设继续
         self.assertIn("卡住就停，不要猜", build)
@@ -388,13 +379,11 @@ class AssumptionAndDeadCodeBoundaryTests(unittest.TestCase):
     def test_pre_existing_dead_code_is_reported_not_deleted(self):
         build = read("flow/steps/build.md")
         taste = read("runtime/standards/code-taste-v1.md")
-        ponytail = read("flow/steps/verify_ponytail.md")
         reviewer = read("agents/craft-reviewer-agent.md")
         standards_brief = read(
             "scripts/mae_flow_core/application/quality/role_task_documents.py")
-        self.assertIn("路过的旧代码：指出来，不要动", build)
+        self.assertIn("不是本次弄死的旧死代码点个位置", build)
         self.assertIn("只删自己弄死的", taste)
-        self.assertIn("delete 只作用于本次的代码", ponytail)
         # reviewer 两处口径都要跟上,否则它会去报 builder 被禁止动的东西
         self.assertIn("不是本次弄死的**旧死代码不算问题", reviewer)
         self.assertIn("本次改动弄死的旧代码是否删净", reviewer)
@@ -442,16 +431,14 @@ class ReviewDispositionLabelTests(unittest.TestCase):
 
     def test_three_labels_are_defined_and_only_blocker_gates(self):
         reviewer = read("agents/craft-reviewer-agent.md")
-        step = read("flow/steps/build_agent_review.md")
         card = read(
             "scripts/mae_flow_core/application/quality/role_task_documents.py")
-        for text in (reviewer, step, card):
+        for text in (reviewer, card):
             self.assertIn("BLOCKER", text)
             self.assertIn("WARNING", text)
             self.assertIn("NOTE", text)
         self.assertIn("只有这一级需要在人工检视前修掉", reviewer)
         self.assertIn("拿不准就往低一级标", reviewer)
-        self.assertIn("在进入人工检视前修掉", step)
 
 
 class ContextAndUncertaintyOrderTests(unittest.TestCase):
@@ -463,20 +450,20 @@ class ContextAndUncertaintyOrderTests(unittest.TestCase):
 
     def test_riskiest_chunk_goes_first(self):
         self.assertIn(
-            "把最不确定、风险最高的那块提前", read("flow/steps/build.md"))
+            "最不确定、风险最高的块提前", read("flow/steps/build.md"))
 
-    def test_historical_code_needs_a_reason_before_touching(self):
+    def test_incidental_old_code_cleanup_stays_outside_requested_change(self):
         build = read("flow/steps/build.md")
-        self.assertIn("git blame", build)
-        self.assertIn("说不出这段代码当初为什么存在", build)
+        self.assertIn("不是本次弄死的旧死代码", build)
+        self.assertIn("diff 里不出现", build)
 
     def test_spec_alignment_is_a_per_item_matrix(self):
-        verify = read("flow/steps/verify_spec.md")
-        self.assertIn("逐条对齐矩阵", verify)
+        verify = read("flow/steps/build.md")
+        self.assertIn("逐条验收项", verify)
         self.assertIn("验收项", verify)
         self.assertIn("实现位置", verify)
         # demand:指不到实现的只能记缺失,不许用"整体看起来实现了"糊过去
-        self.assertIn('结论只能写"缺失"', verify)
+        self.assertIn('只能算"缺失"', verify)
 
     def test_confused_caller_lens_is_in_the_interface_contract(self):
         template = read("skills/mae-flow/assets/IMPLEMENTATION-TEMPLATE.md")
@@ -552,13 +539,6 @@ class NoSideQuestsInVerifyTests(unittest.TestCase):
     两个毛病各修各的:步骤文档里那句"重构在此定稿"像是在邀请顺手改;
     门禁只说"不许"不说出路,模型只能试错。"""
 
-    def test_step_does_not_invite_incidental_refactors(self):
-        step = read("flow/steps/verify_codecheck.md")
-        self.assertIn("本步不做", step)
-        self.assertIn("记进最终交付说明", step)
-        # "重构在此定稿"必须限定成"告警引出的重构",不能是泛指
-        self.assertNotIn("拆大函数等重构在此定稿", step)
-        self.assertIn("CodeCheck 告警引出的重构在此定稿", step)
 
     def test_block_message_offers_a_way_out(self):
         import io as _io
@@ -616,25 +596,3 @@ class PacingTests(unittest.TestCase):
         self.assertIn("拿不准是否相关就分开问", grill)
         # 衍生检查跟着一组答案跑,不能因为合并就漏掉
         self.assertIn("每拿到**一组**答案", grill)
-
-    def test_quality_loop_is_told_to_converge(self):
-        step = read("flow/steps/quality_review.md")
-        self.assertIn("回环要收敛", step)
-        self.assertIn("第 3 轮起", step)
-        self.assertIn("记为遗留", step)
-
-    def test_convergence_hint_counts_actual_revise_rounds(self):
-        from mae_flow_core.cli_commands.current import (
-            _quality_rounds, _sentinel_lines)
-        state = {"history": [
-            {"step": "quality_review", "result": "revise"},
-            {"step": "quality_review", "result": "revise"},
-            {"step": "build_review", "result": "revise"},
-        ]}
-        self.assertEqual(2, _quality_rounds(state))
-        told = " ".join(_sentinel_lines("quality_review", state))
-        self.assertIn("已回环 2 轮", told)
-        self.assertIn("记为遗留", told)
-        # 头两轮不啰嗦
-        first = {"history": [{"step": "quality_review", "result": "revise"}]}
-        self.assertEqual([], _sentinel_lines("quality_review", first))

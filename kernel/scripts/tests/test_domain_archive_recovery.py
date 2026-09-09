@@ -80,8 +80,7 @@ class RecoveryTests(unittest.TestCase):
         package = cli.ensure_work_package(str(self.root), "REQ-4")
         self.state["domain_archive"]["input_sha256"] = cli._fresh_digest(str(self.root), package, ())
         before = self.target.read_bytes()
-        with self.assertRaisesRegex(RuntimeError, "领域归档记录与实际文档不一致"):
-            self.command("prepare", "--unchanged")
+        self.assertEqual("unchanged", self.command("prepare", "--unchanged")["result"])
         prepared = self.prepare()
         self.assertEqual("prepared", prepared["status"])
         self.assertEqual([], prepared["applied_paths"])
@@ -158,10 +157,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual("unchanged", applied["result"])
         self.assertEqual([], applied["applied_paths"])
 
-    def test_untracked_domain_docs_cannot_claim_unchanged(self):
-        with self.assertRaisesRegex(RuntimeError, "adopt-existing"):
-            self.command("prepare", "--unchanged")
-        self.assertEqual([], self.saved)
+    def test_no_further_archive_edits_preserves_existing_documents(self):
+        before = self.target.read_bytes()
+        record = self.command("prepare", "--unchanged")
+        self.assertEqual("unchanged", record["result"])
+        self.assertEqual(before, self.target.read_bytes())
 
     def test_unchanged_is_still_valid_without_domain_changes(self):
         self.git("add", "docs")
@@ -171,13 +171,13 @@ class RecoveryTests(unittest.TestCase):
         result = self.command("prepare", "--unchanged")
         self.assertEqual("unchanged", result["result"])
 
-    def test_candidate_changed_after_prepare_needs_recheck(self):
+    def test_candidate_changed_after_prepare_is_applied_from_current_content(self):
         prepared = self.prepare()
         candidate = self.root / prepared["domains"][0]["candidate_path"]
         candidate.write_text(document("候选在确认后变化。"))
-        with self.assertRaisesRegex(RuntimeError, "候选已过期"):
-            self.command("apply", "--message-id", "m1")
-        self.assertEqual([], self.state["domain_archive"]["applied_paths"])
+        applied = self.command("apply")
+        self.assertEqual(candidate.read_bytes(), self.target.read_bytes())
+        self.assertIn("docs/specs/cross-rat.md", applied["changed_paths"])
 
     def test_reprepare_preserves_explicit_adoption(self):
         prepared = self.prepare()
@@ -198,11 +198,47 @@ class RecoveryTests(unittest.TestCase):
             self.command("apply", "--message-id", "no")
         self.assertEqual([], self.state["domain_archive"]["applied_paths"])
 
-    def test_invalid_document_cannot_be_adopted(self):
+    def test_template_gaps_are_advisory_not_adoption_authority(self):
         self.target.write_text("# 空文档")
-        with self.assertRaisesRegex(RuntimeError, "缺少章节"):
-            self.prepare()
-        self.assertEqual([], self.saved)
+        record = self.prepare()
+        self.assertEqual("prepared", record["status"])
+        self.assertEqual("# 空文档", self.target.read_text())
+
+    def test_repeated_apply_preserves_bytes_and_uses_current_candidate_after_restart(self):
+        from mae_flow_core.orchestration.behavior_baseline import render_domain_index
+        index = self.specs / "index.md"
+        index.write_text(render_domain_index(index.read_text(), [("cross-rat", ("RAT",))]))
+        self.prepare()
+        before = self.target.stat().st_mtime_ns
+        applied = self.command("apply")
+        self.assertEqual("unchanged", applied["result"])
+        self.assertEqual([], applied["changed_paths"])
+        self.assertTrue(applied["applied_paths"])
+        self.assertEqual(before, self.target.stat().st_mtime_ns)
+        self.git("add", "docs")
+        self.git("commit", "-m", "code and docs are ordinary commits")
+        (self.root / "cpp_sdk_repository").mkdir()
+        (self.root / "cpp_sdk_repository/generated.hpp").write_text("build output")
+        self.assertEqual(applied, self.command("apply"))
+        self.assertEqual(applied, self.command("prepare", "--domain", "cross-rat", "--keyword", "RAT"))
+        # JSON roundtrip simulates a restarted process; no ephemeral permission.
+        import json
+        self.state = json.loads(json.dumps(self.state))
+        candidate = self.root / applied["domains"][0]["candidate_path"]
+        candidate.write_text("# Updated by Agent\nActual new domain knowledge\n")
+        result = self.command("apply")
+        self.assertEqual("changes", result["result"])
+        self.assertEqual(candidate.read_text(), self.target.read_text())
+        self.assertIn("docs/specs/cross-rat.md", result["changed_paths"])
+
+    def test_missing_candidate_does_not_erase_target_and_status_remains_readable(self):
+        prepared = self.prepare()
+        before = self.target.read_bytes()
+        (self.root / prepared["domains"][0]["candidate_path"]).unlink()
+        self.command("status")
+        with self.assertRaisesRegex(RuntimeError, "领域归档失败"):
+            self.command("apply")
+        self.assertEqual(before, self.target.read_bytes())
 
     def test_human_selection_does_not_require_archive_provenance(self):
         payload = {"head": "sha", "paths": ["docs/specs/cross-rat.md"], "excluded_paths": [],

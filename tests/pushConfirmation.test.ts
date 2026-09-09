@@ -1332,7 +1332,8 @@ test("push 检视返工用 feedback-open 进入持续检视，不倒退到开发
   }
 });
 
-test("最终清单拒绝领域归档：恢复正式文件并与内核原子对账，不再死锁", async () => {
+for (const keepDomain of [false, true]) {
+test(`最终清单${keepDomain ? "部分" : "全部"}拒绝领域归档：严格保留人的选择`, async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const state = continuousReviewState(repo) as any;
@@ -1353,7 +1354,7 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
     writeFileSync(join(repo.cwd, "docs", "specs", "softwarepackage.md"),
       "# generated domain archive\n");
     writeFileSync(join(repo.cwd, ".git", "info", "exclude"),
-      "/docs/specs/index.md\n/docs/specs/softwarepackage.md\n");
+      keepDomain ? "" : "/docs/specs/index.md\n/docs/specs/softwarepackage.md\n");
     writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify(state));
     (service as any).options.host = {
       kernelRoot: join(process.cwd(), "kernel"), python: "python3",
@@ -1378,21 +1379,21 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
       selected_options: {
         [(waiting.question as any).questions[0].question]: "确认按清单推送",
       },
-      delivery_paths: ["src/feature.ts"],
+      delivery_paths: keepDomain ? ["src/feature.ts", "docs/specs/softwarepackage.md"] : ["src/feature.ts"],
       delivery_compile_action: "skip",
       actor: "owner.liao",
     });
 
     assert.equal(existsSync(join(repo.cwd, "docs", "specs", "index.md")), false);
     assert.equal(existsSync(join(repo.cwd, "docs", "specs",
-      "softwarepackage.md")), false);
+      "softwarepackage.md")), keepDomain);
     const reconciled = JSON.parse(readFileSync(
       join(repo.cwd, ".mae-flow.json"), "utf-8"));
-    assert.equal(reconciled.domain_archive.result, "unchanged");
-    assert.deepEqual(reconciled.domain_archive.applied_paths, []);
-    assert.deepEqual(reconciled.delivery_manifest.files, ["src/feature.ts"]);
-    assert.deepEqual(service.get(id)?.delivery_selection?.paths,
-      ["src/feature.ts"]);
+    assert.equal(reconciled.domain_archive.result, keepDomain ? "changes" : "unchanged");
+    assert.deepEqual(reconciled.domain_archive.applied_paths, keepDomain ? ["docs/specs/softwarepackage.md"] : []);
+    const expected = keepDomain ? ["docs/specs/softwarepackage.md", "src/feature.ts"] : ["src/feature.ts"];
+    assert.deepEqual(reconciled.delivery_manifest.files, expected);
+    assert.deepEqual(service.get(id)?.delivery_selection?.paths, expected);
     const excludes = readFileSync(join(repo.cwd, ".git", "info", "exclude"),
       "utf-8");
     assert.doesNotMatch(excludes, /docs\/specs/,
@@ -1401,6 +1402,8 @@ test("最终清单拒绝领域归档：恢复正式文件并与内核原子对�
     await model.stop();
   }
 });
+
+}
 
 test("feedback-open 失败时决定原样保留，修好内核后同一提交可重试", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();

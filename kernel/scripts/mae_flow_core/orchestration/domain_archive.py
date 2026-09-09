@@ -62,15 +62,19 @@ def initialize_candidate(project_root, archive_root, domain, template_content):
 
 
 def prepare_candidate(project_root, candidate_path, domain, keywords):
-    content = _read(candidate_path)
+    # Missing input must never silently become an empty overwrite. Formatting
+    # is guidance; the Agent and reviewer own the content.
+    with open(candidate_path, encoding="utf-8") as stream:
+        content = stream.read()
     errors = validate_domain_document(content)
     if errors:
-        raise ValueError("；".join(errors))
+        print("提示（不阻断）: " + "；".join(errors))
     result = plan_domain_reconciliation(project_root, domain, content)
     words = tuple(dict.fromkeys(
         str(keyword).strip() for keyword in keywords if str(keyword).strip()))
     if result.action == "new" and not words:
-        raise ValueError("新领域 %s 至少需要一个索引关键词" % result.domain)
+        words = (result.domain,)
+        print("提示（不阻断）: 未提供索引关键词，先使用领域名 " + result.domain)
     return ArchiveCandidate(
         result.domain, words, os.path.abspath(candidate_path),
         result.path, result.action, False)
@@ -95,8 +99,10 @@ def candidate_from_dict(project_root, value):
 def input_digest(project_root, input_paths, git_facts, candidates):
     root = os.path.abspath(os.fspath(project_root))
     digest = hashlib.sha256()
-    digest.update(str(git_facts or "").encode("utf-8"))
-    paths = [os.path.abspath(os.fspath(path)) for path in input_paths]
+    # Only the files this operation reads/writes define its revision. Unrelated
+    # builds, Git staging/commits, Story edits and reports cannot expire it.
+    del input_paths, git_facts
+    paths = []
     paths.append(os.path.join(root, "docs", "specs", "index.md"))
     for entry in candidates:
         paths.append(os.path.abspath(entry.candidate_path))
@@ -173,15 +179,18 @@ def apply_candidates(project_root, candidates, replacer=os.replace, reapply_path
         if prepared.action == "unchanged" and prepared.target_path not in reapply_paths:
             continue
         target = os.path.join(root, *prepared.target_path.split("/"))
-        contents[target] = _read(prepared.candidate_path)
+        content = _read(prepared.candidate_path)
+        if not os.path.exists(target) or _read(target) != content:
+            contents[target] = content
         changed.append(prepared.target_path)
         additions.append((prepared.domain, prepared.keywords))
     if additions:
         index = os.path.join(root, "docs", "specs", "index.md")
         current_index = _read(index)
         rendered_index = render_domain_index(current_index, additions)
-        if rendered_index != current_index or reapply_paths:
+        if rendered_index != current_index:
             contents[index] = rendered_index
+        if rendered_index != current_index or reapply_paths:
             changed.append("docs/specs/index.md")
     if contents:
         _transaction_write(contents, replacer=replacer)

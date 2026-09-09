@@ -116,7 +116,9 @@ def advance(flow, st, sid, step, tag, note=""):
         try:
             review_text = read_text(review_doc, errors="replace")
         except OSError as exc:
-            api.die("无法冻结评审裁决快照:" + str(exc), 2)
+            print("提示（不阻断）: 无法读取评审文档快照: " + str(exc))
+            review_text = ""
+            st["review_snapshot_unavailable"] = str(exc)
         st["review_triage_statuses"] = review_statuses(review_text)
         st["review_triage_transfer_count"] = review_status_count(
             review_text, "转规格轮次(已确认)")

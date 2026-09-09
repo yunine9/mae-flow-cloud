@@ -269,7 +269,7 @@ def build_parser():
     archive_actions.add_parser("status")
     archive_apply = archive_actions.add_parser("apply")
     archive_apply_choice = archive_apply.add_mutually_exclusive_group(
-        required=True)
+        required=False)
     archive_apply_choice.add_argument("--message-id")
     archive_apply_choice.add_argument("--auto", "--moonlight-auto", dest="moonlight_auto", action="store_true")
     manifest = sub.add_parser("manifest")
