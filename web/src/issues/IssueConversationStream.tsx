@@ -5,9 +5,9 @@
  * 与任务域的批注账、线程视图、人员名录、开发助手耦合过深;问题域协作流
  * 只有六类成员(session/turn/card/decision/steer/review/receipts),且
  * 本票全部只读回放,所以在 issues 域落一个轻量适配器:消息气泡复用
- * conv-* 与 ws-stream 全套类(主题走 .issue-workspace 的问题域变量,同构
- * 不同色),渲染纪律与任务侧一致——所有事实来自聚合接口,这里不推断
- * 状态,只排版。
+ * conv-* 与 ws-stream 全套类(样式与任务侧同一份;长文量高折叠、步骤
+ * 查看入口、流内筛选 2026-09-08 起也对齐同款),渲染纪律与任务侧一致
+ * ——所有事实来自聚合接口,这里不推断状态,只排版。
  *
  * 数据:GET /issues/:id/conversation(getIssueConversation),会话视图
  * 可见时每 4 秒轮询一次(任务侧同款节奏),换会话重置(序号作废半拍
@@ -50,6 +50,7 @@ import {
 } from "../api";
 import { atBottom } from "../follow";
 import { conversationCardTitle } from "../ConversationStream";
+import { ClampedText } from "../ClampedText";
 import { Markdown } from "../markdown";
 import { formatLocalClock, formatLocalDate, formatLocalDateTime } from "../time";
 import { startVisiblePolling } from "../visiblePolling";
@@ -75,17 +76,8 @@ function stepsLine(steps: IssueConversationSteps): string {
   return parts.length ? `${parts.join(" · ")} · ${tail}` : tail;
 }
 
-/** 长交接语按字数收折(轻量适配器不做任务侧的量高 ResizeObserver;
- * 短文直出,超过约 1200 字给展开全文,渲染与阅读成本都可控)。 */
-function TurnText({ text }: { text: string }) {
-  if (text.length <= 1200) {
-    return <div className="conv-text"><Markdown text={text} /></div>;
-  }
-  return <details className="conv-earlier">
-    <summary>展开全文(约 {Math.round(text.length / 100) / 10}k 字)</summary>
-    <div className="conv-text"><Markdown text={text} /></div>
-  </details>;
-}
+/** 长交接语收折——直接用任务侧同款量高组件(ClampedText),折叠观感
+ * 与任务侧一致;原按字数的简化版(2026-09-08 对齐拍板)已删。 */
 
 export function IssueConversationStream({
   issueId,
@@ -106,6 +98,7 @@ export function IssueConversationStream({
   onTakeover,
   onTakeoverNote,
   onResumeTakeover,
+  onOpenEvents,
 }: {
   issueId: string;
   /** 会话状态:输入区的插话/续聊/禁用分派只看它和 waiting。 */
@@ -146,12 +139,16 @@ export function IssueConversationStream({
   onTakeoverNote: (text: string) => Promise<void>;
   /** 交还:AI 带着人工记录继续;入参是可选的交还说明。 */
   onResumeTakeover: (note?: string) => Promise<boolean>;
+  /** 「查看过程」入口(任务侧同款 conv-act):把左栏切到「对话现场」
+   * 标签看每一步的原始事件(问题域没有「工作过程」视图)。 */
+  onOpenEvents: () => void;
 }) {
   const [view, setView] = useState<{
     items: IssueConversationItem[]; truncated: boolean;
     loaded: boolean; unavailable?: string;
   }>({ items: [], truncated: false, loaded: false });
   const [limit, setLimit] = useState(INITIAL_LIMIT);
+  const [filter, setFilter] = useState<"all" | "mine">("all");
   const [hasNew, setHasNew] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -199,7 +196,12 @@ export function IssueConversationStream({
         !(item.kind === "card" && item.waiting_id === waitingId))
     : view.items;
   const hidden = Math.max(0, chronological.length - limit);
-  const shown = hidden ? chronological.slice(hidden) : chronological;
+  const limited = hidden ? chronological.slice(hidden) : chronological;
+  // 「需要我的」= 此刻还等我动手的事(口径与任务侧 concernsViewer 一致):
+  // 问题域里只有还开着的卡。当前卡本来钉在流末尾,不受筛选影响。
+  const shown = filter === "mine"
+    ? limited.filter((item) => item.kind === "card" && item.status === "waiting")
+    : limited;
 
   // 新条目到达:贴底就跟着滚,离开底部就亮「有新消息」,不抢人正在读的位置。
   const streamKey = `${shown.at(-1)?.id ?? ""}:${shown.length}:${waitingId ?? ""}`;
@@ -275,9 +277,10 @@ export function IssueConversationStream({
           </div>
         );
       case "turn": {
-        // 交接语摊开(最后一段全文,此前的折叠);全是过程话时把最后一段
-        // 当交接语;过程话折成一行计数。工具步骤只留一行只读计数——问题
-        // 域没有「工作过程」视图,原始事件在「对话现场」标签。
+        // 交接语摊开(最后一段走任务侧同款量高折叠,此前的折叠);全是
+        // 过程话时把最后一段当交接语;过程话折成一行计数。工具步骤是
+        // conv-act 按钮(任务侧同款),点开切到左栏「对话现场」标签看
+        // 每一步的原始事件(问题域没有「工作过程」视图)。
         const handoffs = item.texts.filter((text) => text.role === "handoff");
         const narrations = item.texts.filter((text) => text.role === "narration");
         const spoken = handoffs.length ? handoffs
@@ -309,12 +312,12 @@ export function IssueConversationStream({
                 ))}
               </details>
             )}
-            {last && <TurnText text={last.text} />}
+            {last && <ClampedText text={last.text} />}
             {(item.steps.calls > 0 || item.steps.agents > 0) && (
-              <span className="issue-conv-steps"
-                title="工具步骤的流内计数;每一步的原始事件在左栏「对话现场」标签">
-                {stepsLine(item.steps)}
-              </span>
+              <button type="button" className="conv-act" onClick={onOpenEvents}
+                title="到「对话现场」看每一步">
+                <span aria-hidden>▸</span>{stepsLine(item.steps)}
+              </button>
             )}
           </>,
         });
@@ -374,12 +377,16 @@ export function IssueConversationStream({
           children: <p className="conv-answer">{item.text}</p>,
         });
       case "review":
-        // 检视提交 = 整体打回重跑分析(ADR-0007):count 条修订意见随事件入账。
+        // 检视提交 = 整体打回重跑分析(ADR-0007):count 条修订意见随事件
+        // 入账。渲染对齐任务侧批注批次卡(conv-lead 导语 + 正文)。
         return message({
           key: item.id, who: isViewer ? "person" : "you",
           name: isViewer ? (owner || "归属人") : "你", ts: item.ts,
-          tag: <em className="conv-tag neutral">提交 {item.count} 条检视意见</em>,
-          children: <p className="conv-answer">{item.text}</p>,
+          tag: <em className="conv-tag neutral">整体打回</em>,
+          children: <>
+            <p className="conv-lead">提交了 {item.count} 条检视意见给 Agent</p>
+            <p className="conv-answer">{item.text}</p>
+          </>,
         });
       case "receipts":
         // 平台工具回执(拉仓/推分支/建 MR/申报…)聚成一组留痕,不刷屏。
@@ -421,6 +428,18 @@ export function IssueConversationStream({
     <div className="ws-stream-shell">
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
+        {/* 流内筛选(任务侧同款 UI):阅读筛选,不是权限判断。 */}
+        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
+          {([["all", "全部"], ["mine", "需要我的"]] as const)
+            .map(([key, label]) => (
+              <button type="button" key={key} role="tab"
+                aria-selected={filter === key}
+                className={filter === key ? "on" : ""}
+                onClick={() => setFilter(key)}>
+                {label}
+              </button>
+            ))}
+        </div>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
       {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进

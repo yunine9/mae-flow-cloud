@@ -11514,14 +11514,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 
 /* ---- #124 右栏协作:会话流接聚合接口 + 输入区分派(只追加,不动上行) ---- */
-/* 回合步骤一行(任务侧点开去「工作过程」;问题域没有该视图,只读计数)。 */
-.issue-workspace.task-workspace-v2 .issue-conv-steps {
-  color: var(--muted);
-  font-size: var(--fs-12);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 回合步骤一行已换任务侧同款 conv-act 按钮(样式在 conversation.css,
+ * 问题侧白拿);原 issue-conv-steps 只读计数样式随 2026-09-08 对齐删除。 */
 
 /* ---- #127 右栏侧栏拆除:归档/终止入头部、挂起转正卡入协作流顶部;
    「更多操作」details 与 rail 布局规则随拆除清零 ---- */

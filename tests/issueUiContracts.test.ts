@@ -1002,3 +1002,43 @@ test("人工接管:徽标/下传 takeover/三回调接线/composer 记录+交还
     takeoverBlock.includes(".issue-takeover-actions > .issue-takeover-resume {"),
     "交还主档按钮规则必须在人工接管追加块内");
 });
+
+// ---- 协作流对齐任务侧会话流(2026-09-08 走查拍板四点):长文量高折叠
+// ---- (ClampedText 两域共用一份)、工具步骤 conv-act 按钮切「对话现场」、
+// ---- 栏头「全部/需要我的」筛选、检视提交 conv-lead 批次卡。
+
+test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内筛选/批次卡", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const stream = readFileSync(
+    resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
+  const taskStream = readFileSync(
+    resolve("web/src/ConversationStream.tsx"), "utf-8");
+  const clamped = readFileSync(resolve("web/src/ClampedText.tsx"), "utf-8");
+  // 长文折叠:量高版抽成 ClampedText.tsx,两域同用一份;按字数的旧
+  // TurnText 已删(残字数阈值=两域折叠观感漂移的根源)。
+  assert.match(clamped, /ResizeObserver/);
+  assert.match(taskStream, /import \{ ClampedText \} from "\.\/ClampedText";/);
+  assert.match(stream, /import \{ ClampedText \} from "\.\.\/ClampedText";/);
+  assert.match(stream, /\{last && <ClampedText text=\{last\.text\} \/\>\}/);
+  assert.doesNotMatch(stream, /text\.length <= 1200/,
+    "按字数收折的旧 TurnText 必须删干净");
+  // 工具步骤:conv-act 按钮(任务侧同款)点开切「对话现场」;只读计数
+  // 行(issue-conv-steps)连同样式已删。
+  assert.match(stream,
+    /<button type="button" className="conv-act" onClick=\{onOpenEvents\}/);
+  assert.match(sessionView, /onOpenEvents=\{\(\) => setTab\("events"\)\}/);
+  assert.doesNotMatch(stream, /issue-conv-steps/);
+  assert.doesNotMatch(readFileSync(resolve("web/src/style.css"), "utf-8"),
+    /\.issue-conv-steps \{/);
+  // 流内筛选:栏头「全部/需要我的」(任务侧同款 ws-stream-filters),
+  // 「需要我的」口径=还开着的卡;钉在流末的当前卡不受筛选影响。
+  assert.match(stream, /<div className="ws-stream-filters" role="tablist"/);
+  assert.match(stream, /\["all", "全部"\], \["mine", "需要我的"\]/);
+  assert.match(stream,
+    /filter === "mine"\s*\n\s*\? limited\.filter\(\(item\) => item\.kind === "card" && item\.status === "waiting"\)/);
+  // 检视提交:conv-lead 批次卡导语(任务侧 annotations_sent 同款视觉),
+  // 不再是无导语的裸正文。
+  assert.match(stream,
+    /<p className="conv-lead">提交了 \{item\.count\} 条检视意见给 Agent<\/p>/);
+});

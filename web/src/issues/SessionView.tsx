@@ -421,6 +421,7 @@ export function IssueSessionView({
           onTakeover={takeoverNow}
           onTakeoverNote={sendTakeoverNote}
           onResumeTakeover={resumeTakeover}
+          onOpenEvents={() => setTab("events")}
         />
       </section>
     </div>
