@@ -328,6 +328,7 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  repositoryResourceBlocks?: () => string[];
   /** 用任务固定的模块/仓库/语言画像筛选尚未定格的团队 Skill；新任务
    * 已在创建现场生成精确快照，后续会话不应重复匹配。 */
   knowledgeContext?: {
@@ -998,9 +999,15 @@ export class CloudSession {
       this.options.log?.(
         `[host-skill] 任务 ${this.options.taskId}: ${warning}`);
     }
+    const resourceBlocks = this.options.repositoryResourceBlocks?.() ?? [];
+    const allowedRepositoryPath = (path: string) => {
+      const source = this.options.repositorySkillResources?.find(item => item.actual_path === path)?.path ?? path;
+      return !resourceBlocked(source, resourceBlocks);
+    };
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
-        if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
+        if (!allowedRepositoryPath(path)
+            || basename(path) !== "SKILL.md" || !existsSync(path)) return false;
         try {
           return statSync(path).isFile();
         } catch {
@@ -1822,3 +1829,4 @@ export class CloudSession {
     });
   }
 }
+import { resourceBlocked } from "./repositoryResourcePolicy.ts";
