@@ -347,9 +347,10 @@ export function Annotatable({
             {draft.quote}</blockquote>}
           <textarea
             autoFocus
-            rows={4}
+            rows={2}
+            className="min-h-16"
             value={note}
-            placeholder="这里要改什么？例如：这个重试应该只对网关失败生效"
+            placeholder="写下检视意见…"
             onChange={(event) => setNote(event.target.value)}
             onPaste={(event) => {
               const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
@@ -373,11 +374,10 @@ export function Annotatable({
                     onClick={() => setImages((current) => current.filter((item) => item.path !== image.path))}>×</button>
                 </span>
               ))}
-              <button type="button" className="annot-image-add" disabled={busy}
+              <button type="button" className="annot-image-add" title="添加参考图片，也可以直接粘贴截图" disabled={busy}
                 onClick={() => fileInput.current?.click()}>
-                {uploading > 0 ? "上传中…" : images.length ? "再加一张图" : "加一张图给 Agent 看"}
+                {uploading > 0 ? "上传中…" : images.length ? "继续添加图片" : "添加图片"}
               </button>
-              <small>可直接把截图粘贴进上面的文字框;Agent 会用视觉工具看图</small>
               <input ref={fileInput} type="file" accept="image/*" multiple hidden
                 onChange={(event) => {
                   void attachFiles(event.target.files ?? []);
