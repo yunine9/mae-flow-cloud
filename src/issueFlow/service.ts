@@ -35,6 +35,7 @@ import {
   type Outcome,
 } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
+import { fetchMrGates } from "../mrGateClient.ts";
 import {
   fetchMrDiscussions,
   type MrDiscussionItem,
@@ -854,6 +855,12 @@ export class IssueFlowService {
         ...(resuming ? { resumeMessage: RESTART_RESUME_NOTICE } : {}),
       };
       this.live.set(state.id, live);
+      // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
+      // 重启后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
+      if (state.stage === "mr_green" && state.mrs?.length
+          && !isTerminal(state.status)) {
+        this.watchMergeStates(live);
+      }
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
       for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
@@ -3622,10 +3629,20 @@ export class IssueFlowService {
     if (input.action === "cancel") {
       live.state.status = "canceled";
     } else {
+      // 竞态核对(ADR-0022):监看循环之外现扫一次平台事实——防
+      // "点归档瞬间平台恰好合入"的窗口错账;平台不可得则沿用上次
+      // 观测,不堵归档(软闸)。
+      if (live.state.mrs?.length) await this.syncMergeFacts(live);
+      // 结论按合入事实记(ADR-0022,软闸):全部 MR merged 才是
+      // delivered;建了 MR 未全合=已推送未合入(fixed)。挂起转正、
+      // 纯推送、纯分析的语义不变。
+      const mrs = live.state.mrs ?? [];
+      const allMerged = mrs.length > 0
+        && mrs.every((mr) => Boolean(mr.merged_at));
       const kind = input.kind
         ?? (live.state.status === "suspended" ? "issue"
-          : live.state.mrs?.length ? "delivered"
-          : live.state.pushes?.length ? "fixed" : "non_issue");
+          : allMerged ? "delivered"
+          : mrs.length || live.state.pushes?.length ? "fixed" : "non_issue");
       live.state.conclusion = {
         kind,
         summary: input.summary?.trim() || live.state.last_reply
@@ -3806,6 +3823,122 @@ export class IssueFlowService {
   /** 待注入的检视意见(会话忙时挂起,闲时补发):存会话 id,内容现查
    *  反馈账里该会话的全部 open 意见——每次点火都带全量,不靠增量拼。 */
   private readonly reviewNotifyPending = new Set<string>();
+  /** 合入事实监看(ADR-0022):单例;stage 留在 mr_green 且未终态期间
+   *  逐仓轮询 /mr/gates 记 merged_at/merged_sha/closed_at,全合入/被
+   *  关闭各通知一次。归档与 merge-status 端点另有竞态核对兜底。 */
+  private readonly mergeWatchers = new Set<string>();
+
+  /** 点火合入事实监看:mr_green 收口(即时/滞后两路都汇到
+   *  notifyMrGreenClosed)与重启恢复调用;重复点火单例挡掉。 */
+  private watchMergeStates(live: LiveIssue): void {
+    if (!this.options.platformUrl || this.mergeWatchers.has(live.id)) return;
+    this.mergeWatchers.add(live.id);
+    void this.pollMergeStates(live)
+      .catch((error) =>
+        this.log(`[issue-flow] ${live.id} 合入事实监看异常退出: `
+          + String(error instanceof Error ? error.message : error)))
+      .finally(() => {
+        this.mergeWatchers.delete(live.id);
+      });
+  }
+
+  private async pollMergeStates(live: LiveIssue): Promise<void> {
+    const { pollMs } = this.pipelineKnobs();
+    for (;;) {
+      if (this.shuttingDown || isTerminal(live.state.status)
+          || live.state.stage !== "mr_green" || !live.state.mrs?.length) {
+        return;
+      }
+      await this.syncMergeFacts(live);
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, pollMs);
+        timer.unref?.();
+      });
+    }
+  }
+
+  /** 逐仓向平台读合入事实并记账(ADR-0022):时刻=首次观测,不冒充
+   *  平台动作时间;merged_sha 照平台返回记,不要求与验绿 SHA 相同。
+   *  平台不可得保留上次观测等下一轮——监看循环、归档核对、
+   *  merge-status 端点三方共用这一扫。 */
+  async syncMergeFacts(live: LiveIssue): Promise<{ all_merged: boolean }> {
+    const state = live.state;
+    const credential = this.options.gitCredential?.(state.account);
+    let changed = false;
+    for (const mr of state.mrs ?? []) {
+      const view = await fetchMrGates({
+        platformUrl: this.options.platformUrl,
+        repo: mr.repo,
+        headers: pipelineHeaders(credential),
+        delivery: {
+          source_branch: mr.branch,
+          target_branch: mr.target ?? "master",
+          ...(mr.url ? { mr_url: mr.url } : {}),
+          ...(mr.iid !== undefined ? { mr_id: mr.iid } : {}),
+        },
+      });
+      if (!view) continue;
+      const now = new Date().toISOString();
+      if (view.mrState === "merged" && !mr.merged_at) {
+        mr.merged_at = now;
+        if (view.sourceSha) mr.merged_sha = view.sourceSha;
+        changed = true;
+      } else if (view.mrState === "closed" && !mr.closed_at && !mr.merged_at) {
+        mr.closed_at = now;
+        changed = true;
+      }
+    }
+    const mrs = state.mrs ?? [];
+    const allMerged = mrs.length > 0 && mrs.every((mr) => Boolean(mr.merged_at));
+    const anyClosed = mrs.some((mr) => Boolean(mr.closed_at));
+    if (allMerged && !state.merge_noted) {
+      state.merge_noted = true;
+      state.stage_note = "全部 MR 已合入——可归档收口";
+      changed = true;
+      this.notifyMergeFact(live,
+        `全部 MR 已合入(${mrs.length} 个)——可归档收口`);
+    }
+    if (anyClosed && !state.mr_closed_noted) {
+      state.mr_closed_noted = true;
+      changed = true;
+      this.notifyMergeFact(live,
+        "有 MR 被关闭——可续聊返工(重推重报),或直接归档收口");
+    }
+    if (changed) saveState(live.root, state);
+    return { all_merged: allMerged };
+  }
+
+  private notifyMergeFact(live: LiveIssue, summary: string): void {
+    void this.options.notifier?.notifyOutcome({
+      taskId: live.id,
+      account: live.state.account,
+      // 状态词与验绿通知("待归档")分开:小鲁班按 taskId:outcome:状态
+      // 幂等,同词会被验绿那条吞掉。
+      status: summary.includes("已合入") ? "已合入" : "MR被关闭",
+      summary,
+      link: this.issueLink(live.id),
+    }).catch(() => undefined);
+  }
+
+  /** 归档对话框的合入事实快照(现扫现答,与归档核对同一兜底)。 */
+  async mergeStatus(id: string): Promise<{
+    mrs: Array<{ repo: string; url?: string;
+      state: "merged" | "closed" | "opened"; merged_sha?: string }>;
+    all_merged: boolean;
+  }> {
+    const live = this.require(id);
+    await this.syncMergeFacts(live);
+    const mrs = live.state.mrs ?? [];
+    return {
+      mrs: mrs.map((mr) => ({
+        repo: mr.repo,
+        ...(mr.url ? { url: mr.url } : {}),
+        state: mr.merged_at ? "merged" : mr.closed_at ? "closed" : "opened",
+        ...(mr.merged_sha ? { merged_sha: mr.merged_sha } : {}),
+      })),
+      all_merged: mrs.length > 0 && mrs.every((mr) => Boolean(mr.merged_at)),
+    };
+  }
 
   private watchMrDiscussions(live: LiveIssue): void {
     if (!this.options.platformUrl || this.reviewWatchers.has(live.id)) return;
@@ -4686,6 +4819,9 @@ export class IssueFlowService {
   /** mr_green 收口的用户通知(即时收口与监看器滞后收口共用)。 */
   private notifyMrGreenClosed(live: LiveIssue): void {
     const { state } = live;
+    // 收口即点火合入事实监看(ADR-0022):两条收口路都汇到这里,
+    // 单例防重入;重启恢复由 recover() 补挂。
+    this.watchMergeStates(live);
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: state.account,

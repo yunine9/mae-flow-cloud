@@ -407,6 +407,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       mrs: [{
         repo: origin, branch: `master_dev_${TICKET}`, title: `[${TICKET}] 修复登录超时`,
         url: "http://loop.test/mr/1", iid: "1", at: "2026-08-28T00:00:00Z",
+        // 合入事实(ADR-0022)可选字段:显式报到,实际可缺席。
+        target: undefined, merged_at: undefined,
+        merged_sha: undefined, closed_at: undefined,
       }],
       transitions: [{
         at: "2026-08-28T00:00:00Z", source: "platform",
@@ -577,7 +580,9 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     pushes: [{ repo, branch: "master_dev_DTS-2026-1003", sha, at: now }],
     mrs: [{ repo, branch: "master_dev_DTS-2026-1003",
       title: "[DTS-2026-1003] 不可修闸卡契约夹具",
-      url: "http://loop.test/mr/1", at: now }],
+      url: "http://loop.test/mr/1", at: now,
+      target: undefined, merged_at: undefined,
+      merged_sha: undefined, closed_at: undefined }],
     pipelines: {
       [repo]: {
         sha, status: "running", watching: true,

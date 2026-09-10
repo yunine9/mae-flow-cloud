@@ -3796,8 +3796,8 @@ export interface IssueSummary {
   };
   /** 推送账(按仓,一仓一分支)。 */
   pushes?: Array<{ repo: string; branch: string; sha: string; at: string }>;
-  /** MR 账(按仓,一仓一 MR)。 */
-  mrs?: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
+  /** MR 账(按仓,一仓一 MR;merged_*=合入事实,ADR-0022)。 */
+  mrs?: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
   /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
   transitions?: Array<{
     at: string; source: "agent" | "platform"; stage?: FixedIssueStage; note: string;
@@ -4115,6 +4115,19 @@ export function controlIssue(id: string, input: {
   });
 }
 
+/** 合入事实快照(ADR-0022):归档对话框现扫现答,每仓 MR 状态+是否全合入。 */
+export interface IssueMergeStatus {
+  mrs: Array<{ repo: string; url?: string;
+    state: "merged" | "closed" | "opened"; merged_sha?: string }>;
+  all_merged: boolean;
+}
+
+export function issueMergeStatus(id: string): Promise<IssueMergeStatus> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/merge-status`, {
+    method: "POST",
+  });
+}
+
 export async function listDtsTickets(): Promise<{
   tickets: DtsTicketBrief[];
   /** 外部开发模式(--dts-mock):单据为模拟数据,页面要挂 DEV 徽标。 */
@@ -4161,7 +4174,7 @@ export interface IssueManualEdit {
 export interface IssueMaterials {
   ticket?: string;
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
-  mrs: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
+  mrs: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
   changes: IssueWorkspaceChange[];
   logs: IssueLogListing;
   manual_edits: IssueManualEdit[];
