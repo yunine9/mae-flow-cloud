@@ -17,6 +17,7 @@ import {
   probeEnvironment,
   type EnvironmentView,
 } from "./api";
+import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { PersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
 import { formatLocalDateTime, relativeTime } from "./time";
@@ -83,6 +84,45 @@ function ProbeStateCell({ probe }: { probe: EnvironmentView["probe"] }) {
 
 /** Radix Select 不收空串 value,"全部标签"用哨兵值。 */
 const ALL_TAGS = "__all";
+/** Radix Select 同理,"全部状态"用哨兵值。 */
+const ALL_STATES = "__all_states";
+
+/** 可排序列(标签是多值不排,操作列非数据)。 */
+type SortKey = "ip" | "form" | "port" | "state" | "updated_by" | "updated_at";
+
+/** 状态排序档:升序=异常最前、正常最后——最需要处理的排最上。 */
+const STATE_RANK: Record<EnvironmentView["probe"]["state"], number> = {
+  failed: 0,
+  unverified: 1,
+  ok: 2,
+};
+
+/** IP 比较:双方都是 IPv4 时按数值逐段比(字典序会让 10.0.0.9 排到
+ * 10.0.0.10 之后),IPv6/其他形态退回字典序。 */
+function compareIp(a: string, b: string): number {
+  const octets = (ip: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)
+    ? ip.split(".").map(Number)
+    : null;
+  const av = octets(a);
+  const bv = octets(b);
+  if (av && bv) {
+    for (let i = 0; i < 4; i += 1) {
+      if (av[i] !== bv[i]) return av[i] - bv[i];
+    }
+    return 0;
+  }
+  return a.localeCompare(b);
+}
+
+/** 表头排序标记:未排序给双箭头提示可点,激活后给方向单箭头。 */
+function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
+  if (!active) {
+    return <ChevronsUpDown aria-hidden className="size-3 text-muted-foreground" />;
+  }
+  return dir === 1
+    ? <ArrowUp aria-hidden className="size-3" />
+    : <ArrowDown aria-hidden className="size-3" />;
+}
 
 export function EnvironmentRegistry() {
   const [environments, setEnvironments] = useState<EnvironmentView[]>([]);
@@ -94,6 +134,12 @@ export function EnvironmentRegistry() {
   const [editor, setEditor] = useState<{ existing?: EnvironmentView }>();
   /** 行内探活进行中的条目 id(空串 = 空闲;一次探一条)。 */
   const [probingId, setProbingId] = useState("");
+  /** 列排序:点表头 升→降→取消 三态循环;null = 保持登记顺序。 */
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
+  /** 搜索:IP/标签/形态/更新人 子串,大小写不敏感,与下拉筛选叠乘。 */
+  const [search, setSearch] = useState("");
+  /** 状态筛选(空串 = 全部):探活三态,异常条目一眼可捞。 */
+  const [stateFilter, setStateFilter] = useState("");
 
   /** 探活返回更新后的视图:就地合并进列表,状态列即时刷新(不整页轮询,
    * 后台已有约 10 分钟一轮的定时探活)。 */
@@ -131,9 +177,48 @@ export function EnvironmentRegistry() {
   const allTags = useMemo(() =>
     [...new Set(environments.flatMap((entry) => entry.tags))].sort(),
     [environments]);
-  const visible = useMemo(() => activeTag
-    ? environments.filter((entry) => entry.tags.includes(activeTag))
-    : environments, [environments, activeTag]);
+
+  function toggleSort(key: SortKey) {
+    setSort((cur) => cur?.key === key
+      ? (cur.dir === 1 ? { key, dir: -1 } : null)
+      : { key, dir: 1 });
+  }
+
+  const query = search.trim().toLowerCase();
+  const visible = useMemo(() => {
+    const filtered = environments.filter((entry) => {
+      if (activeTag && !entry.tags.includes(activeTag)) return false;
+      if (stateFilter && entry.probe.state !== stateFilter) return false;
+      if (!query) return true;
+      return entry.ip.toLowerCase().includes(query)
+        || entry.tags.some((tag) => tag.toLowerCase().includes(query))
+        || (ENVIRONMENT_FORM_TEXT[entry.form] ?? entry.form).toLowerCase().includes(query)
+        || entry.updated_by.toLowerCase().includes(query);
+    });
+    if (!sort) return filtered;
+    const { key, dir } = sort;
+    const cmp = (a: EnvironmentView, b: EnvironmentView): number => {
+      if (key === "ip") return compareIp(a.ip, b.ip);
+      if (key === "port") return a.port - b.port;
+      if (key === "state") {
+        return STATE_RANK[a.probe.state] - STATE_RANK[b.probe.state];
+      }
+      if (key === "updated_at") return a.updated_at.localeCompare(b.updated_at);
+      if (key === "form") {
+        return (ENVIRONMENT_FORM_TEXT[a.form] ?? a.form)
+          .localeCompare(ENVIRONMENT_FORM_TEXT[b.form] ?? b.form);
+      }
+      return a.updated_by.localeCompare(b.updated_by);
+    };
+    return [...filtered].sort((a, b) => dir * cmp(a, b));
+  }, [environments, activeTag, stateFilter, query, sort]);
+
+  /** 表头排序钮的 aria-sort 值(未排序列不给属性)。 */
+  function ariaSortOf(key: SortKey) {
+    if (sort?.key !== key) return undefined;
+    return sort.dir === 1 ? "ascending" : "descending";
+  }
+  const filtersActive = Boolean(activeTag || stateFilter || search.trim());
 
   /** 删除走全站既有 confirmDialog 二次确认(spec #52),不用裸 window.confirm;
    * 台账删除不影响已选入会话的快照(ADR-0020),确认卡里说破。 */
@@ -158,11 +243,18 @@ export function EnvironmentRegistry() {
     aria-label="环境管理台账"
   >
     <div className="flex flex-wrap items-center gap-2">
+      <input
+        className="h-8 w-52 rounded-md border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        placeholder="搜 IP、标签、形态、更新人…"
+        aria-label="搜索环境"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
       <Select
         value={activeTag || ALL_TAGS}
         onValueChange={(next) => setActiveTag(next === ALL_TAGS ? "" : next)}
       >
-        <SelectTrigger size="sm" className="w-44" aria-label="按标签筛选">
+        <SelectTrigger size="sm" className="w-40" aria-label="按标签筛选">
           <SelectValue placeholder="按标签筛选" />
         </SelectTrigger>
         <SelectContent position="popper">
@@ -170,8 +262,26 @@ export function EnvironmentRegistry() {
           {allTags.map((tag) => <SelectItem key={tag} value={tag}>{tag}</SelectItem>)}
         </SelectContent>
       </Select>
-      {activeTag && <Button variant="ghost" size="sm"
-        onClick={() => setActiveTag("")}>清除筛选</Button>}
+      <Select
+        value={stateFilter || ALL_STATES}
+        onValueChange={(next) => setStateFilter(next === ALL_STATES ? "" : next)}
+      >
+        <SelectTrigger size="sm" className="w-32" aria-label="按状态筛选">
+          <SelectValue placeholder="按状态筛选" />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value={ALL_STATES}>全部状态</SelectItem>
+          <SelectItem value="ok">正常</SelectItem>
+          <SelectItem value="failed">异常</SelectItem>
+          <SelectItem value="unverified">未验证</SelectItem>
+        </SelectContent>
+      </Select>
+      {filtersActive && <Button variant="ghost" size="sm"
+        onClick={() => {
+          setActiveTag("");
+          setStateFilter("");
+          setSearch("");
+        }}>清除筛选</Button>}
       <div className="grow" />
       <Button variant="outline" size="sm"
         onClick={() => void refreshEnvironments()}>刷新</Button>
@@ -199,13 +309,49 @@ export function EnvironmentRegistry() {
           <Table aria-label="环境台账列表">
             <TableHeader>
               <TableRow>
-                <TableHead>主 IP</TableHead>
-                <TableHead>形态</TableHead>
-                <TableHead>端口</TableHead>
+                <TableHead aria-sort={ariaSortOf("ip")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("ip")}>
+                    主 IP<SortMark active={sort?.key === "ip"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
+                <TableHead aria-sort={ariaSortOf("form")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("form")}>
+                    形态<SortMark active={sort?.key === "form"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
+                <TableHead aria-sort={ariaSortOf("port")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("port")}>
+                    端口<SortMark active={sort?.key === "port"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
                 <TableHead>标签</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>更新人</TableHead>
-                <TableHead>更新时间</TableHead>
+                <TableHead aria-sort={ariaSortOf("state")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("state")}>
+                    状态<SortMark active={sort?.key === "state"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
+                <TableHead aria-sort={ariaSortOf("updated_by")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("updated_by")}>
+                    更新人<SortMark active={sort?.key === "updated_by"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
+                <TableHead aria-sort={ariaSortOf("updated_at")}>
+                  <button type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => toggleSort("updated_at")}>
+                    更新时间<SortMark active={sort?.key === "updated_at"} dir={sort?.dir} />
+                  </button>
+                </TableHead>
                 <TableHead className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -254,10 +400,18 @@ export function EnvironmentRegistry() {
               </TableRow>)}
               {visible.length === 0 && <TableRow>
                 <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
-                  没有打了标签「{activeTag}」的环境。
+                  {activeTag
+                    ? <>没有打了标签「{activeTag}」的环境。</>
+                    : search.trim()
+                      ? <>没有匹配「{search.trim()}」的环境。</>
+                      : "没有符合条件的环境。"}
                   <button type="button"
                     className="ml-1 text-ink underline underline-offset-4"
-                    onClick={() => setActiveTag("")}>清除筛选</button>
+                    onClick={() => {
+                      setActiveTag("");
+                      setStateFilter("");
+                      setSearch("");
+                    }}>清除筛选</button>
                 </TableCell>
               </TableRow>}
             </TableBody>
