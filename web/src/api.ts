@@ -4782,3 +4782,9 @@ export async function probeEnvironment(id: string): Promise<EnvironmentView> {
   if (!response.ok) throw await environmentError(response);
   return parseJson(response);
 }
+
+export async function syncTaskSkills(taskId: string): Promise<{ added: string[]; warnings: string[]; receipt: string }> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/skills/sync`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}

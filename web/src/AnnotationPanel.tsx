@@ -111,10 +111,7 @@ function OwnerResolution({ item, canVerify, busy, onResolve, onReopen }: {
     if (event.key === "Escape" && expanded) { event.stopPropagation(); close(); }
   }}>
     <div className="annot-resolution-actions">
-      <Button type="button" size="sm" disabled={busy} onClick={() => {
-        if (canVerify) onResolve("fixed", "");
-        else { setOutcome("fixed"); setExpanded(true); }
-      }}>确认通过</Button>
+      <Button type="button" size="sm" disabled={busy} onClick={() => onResolve("fixed", "")}>确认通过</Button>
       {item.status === "sent" && <Button type="button" size="sm" variant="outline" disabled={busy}
         onClick={onReopen}>仍需调整</Button>}
       <Button type="button" size="sm" variant="outline" disabled={busy} aria-expanded={expanded}
@@ -136,12 +133,12 @@ function OwnerResolution({ item, canVerify, busy, onResolve, onReopen }: {
           <SelectItem value="accepted_risk">接受未解决风险继续</SelectItem>
         </SelectContent>
       </Select>
-      {outcome === "fixed" && !canVerify && <small>当前没有可直接确认的处理回执。如果你已核对最新内容，请说明确认依据。</small>}
+      {outcome === "fixed" && !canVerify && <small>当前没有 Agent 修复回执；确认仅记录你的人工结论，不会补造回执。</small>}
       <textarea aria-label="这条意见的处理依据" value={reason} rows={2} onChange={(event) => setReason(event.target.value)}
-        placeholder="说明处理依据；延期时写清后续安排，接受风险时写清影响" />
+        placeholder={outcome === "fixed" ? "补充说明（选填）" : "说明处理依据；延期时写清后续安排，接受风险时写清影响"} />
       <div>
         <Button type="button" size="sm" variant="outline" onClick={close}>取消</Button>
-        <Button type="button" size="sm" disabled={busy || !outcome || (!(outcome === "fixed" && canVerify) && !reason.trim())}
+        <Button type="button" size="sm" disabled={busy || !outcome || (outcome !== "fixed" && !reason.trim())}
           onClick={() => onResolve(outcome, reason.trim())}>{busy ? "保存中…" : "保存处理结果"}</Button>
       </div>
     </div>}

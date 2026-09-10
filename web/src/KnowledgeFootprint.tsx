@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { Button } from "./components/ui/button";
 import { OverlayDialog } from "./WarmupPanel";
 import { KnowledgeSource } from "./KnowledgeSource";
 import { knowledgeOrigin } from "./knowledgeOrigin";
 import { memoryPreparation } from "./memoryPresentation";
 import {
+  syncTaskSkills,
   listTaskMemories,
   listTaskMemoryUsage,
   readTaskMemory,
@@ -33,12 +35,25 @@ function time(value: string): string {
   });
 }
 
-export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
+export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyncSkills, onChanged }: {
   usage?: TaskKnowledgeUsage;
   utMethod?: string;
   taskId: string;
   taskStatus: string;
+  canSyncSkills?: boolean;
+  onChanged?: () => void;
 }) {
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState("");
+  async function supplementSkills() {
+    setSyncBusy(true); setSyncFeedback("");
+    try {
+      const result = await syncTaskSkills(taskId);
+      setSyncFeedback([result.added.length ? `已补充：${result.added.join("、")}` : "", result.receipt, ...result.warnings].filter(Boolean).join("；"));
+      onChanged?.();
+    } catch (error) { setSyncFeedback(error instanceof Error ? error.message : "补充失败，请重试"); }
+    finally { setSyncBusy(false); }
+  }
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState<TaskKnowledgeResource>();
   const [feedback, setFeedback] = useState("");
@@ -109,8 +124,12 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus }: {
         <span><strong>{resources.length}</strong><small>本任务可用</small></span>
         <button type="button" className="knowledge-catalog-badge"
           onClick={() => { setCatalogOpen(true); setFeedback(""); }}>提醒 Agent 用这条</button>
+        {canSyncSkills && !["completed", "canceled"].includes(taskStatus) && <Button type="button" variant="outline" size="sm"
+          disabled={syncBusy} title="补充新上架且适用的团队技能，保留已加入技能的版本"
+          onClick={() => void supplementSkills()}>{syncBusy ? "正在补充…" : "补充新技能"}</Button>}
       </div>
     </header>
+    {syncFeedback && <p className="knowledge-workbench-feedback" role="status">{syncFeedback}</p>}
 
     {catalogOpen && <OverlayDialog ariaLabel="本任务可用知识"
       title="本任务可用知识" onClose={() => setCatalogOpen(false)}>

@@ -683,8 +683,7 @@ export class AnnotationStore {
       throw new AnnotationError("请选择有效的逐条处置结果");
     }
     const reason = decision.reason.trim();
-    const response = found.response?.revision === decision.revision ? found.response : undefined;
-    if (!reason && (decision.outcome !== "fixed" || !(response?.outcome === "fixed" || (found.route === "owner_reply" && found.owner_reply)))) {
+    if (!reason && decision.outcome !== "fixed") {
       throw new AnnotationError("请填写这条意见的处理依据；不采纳、延期或接受风险必须说明理由");
     }
     this.append({ op: "owner_resolution", id, resolution: { ...decision, reason, by, at: new Date().toISOString() } });

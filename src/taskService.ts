@@ -46,7 +46,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
 import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
@@ -11815,8 +11815,72 @@ export class TaskService {
    * 人拆小资产或减少项数,静默截断等于让人以为 Agent 读了全文。 */
   private static readonly STEER_KNOWLEDGE_BUDGET = 48_000;
 
-  /** 解析 @ 引用并在**发送时固定版本**:插话说"用 X",指的是此刻
-   * 货架上的 X,不是未来某个版本。解析失败当场报错,不静默丢项。 */
+  /** 只补充当前货架中新出现的技能名，已有任务版本不被热替换。 */
+  async syncTaskSkills(id: string, actor: string): Promise<{ added: string[]; warnings: string[]; receipt: string }> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (actor !== (task.summary.luban_account ?? "本地用户")) throw new AnnotationPermissionError("只有当前任务责任人可以补充技能");
+    if (["completed", "canceled"].includes(task.summary.status)) throw new TaskControlError("任务已结束，不能补充执行技能");
+    const root = join(task.summary.workspace, "host-skill-snapshot");
+    const existing = listHostSkillShelfRoot(root).skills;
+    const names = new Set(existing.map((skill) => skill.name));
+    const shelf = listHostSkillShelf(this.options.dataDir);
+    const snapshot = materializeHostSkills({
+      sourceRoot: join(this.options.dataDir, "skills"), workspaceRoot: task.summary.workspace,
+      snapshotRoot: root, selectedSourcePaths: shelf.skills.filter((skill) => !names.has(skill.name)).map((skill) => skill.path),
+      context: { repositories: task.summary.repositories ?? [],
+        technologies: [...new Set((task.summary.repository_profiles ?? []).flatMap((profile) => profile.technologies))],
+        businessModuleIds: (task.summary.business_modules ?? []).map((module) => module.id) },
+    });
+    task.summary.host_skills_pinned = true;
+    task.summary.team_skills = listHostSkillShelfRoot(root).skills;
+    const warnings = [...shelf.warnings, ...snapshot.warnings];
+    const pendingFile = join(task.summary.workspace, "pending-skill-sync.json");
+    const pending: string[] = existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, "utf8")) : [];
+    const added = [...new Set([...pending, ...snapshot.names])];
+    if (added.length) {
+      writeFileSync(pendingFile, JSON.stringify(added));
+      this.persist(task);
+      const cwd = task.cwd ?? task.summary.workspace;
+      const runtime = materializeHostSkills({ sourceRoot: root, workspaceRoot: cwd,
+        snapshotRoot: join(cwd, ".mae-flow-work", "host-skills") });
+      warnings.push(...runtime.warnings);
+      const entries = runtime.paths.map((path, index) => ({ path, name: runtime.names[index] })).filter((entry) => added.includes(entry.name));
+      if (entries.length !== added.length) throw new TaskControlError(`技能已加入任务快照，但运行目录装载失败，可重试：${runtime.warnings.join("；") || "有技能未成功装载"}`);
+      const message = "[补充团队技能] 责任人新增了以下可用技能。请按当前工作需要读取 SKILL.md 并使用，同目录中的脚本和资料也已就绪：\n"
+        + entries.map(({ path, name }) => `- ${name}: ${relative(cwd, path).split(sep).join("/")}`).join("\n");
+      if (task.summary.status === "waiting_for_human") {
+        task.pendingDecisionKnowledge = [...(task.pendingDecisionKnowledge ?? []), message];
+      } else task.pendingMainSteers = [...(task.pendingMainSteers ?? []), message];
+      try {
+        const trace = this.knowledgeTrace(task, cwd);
+        for (const { path, name } of entries) trace.record("available", "host-skill-sync", {
+          id: `host-skill-sync:${path}`, kind: "skill", name,
+          path, scope: "team", description: "责任人中途补充的团队技能（尚未确认读取）",
+        });
+      } catch (error) { this.options.log?.(`补充技能足迹暂未记录: ${String(error)}`); }
+      this.recordDeferredInterrupt(task, message, task.summary.status === "waiting_for_human" ? "decision" : "mission",
+        { display: `补充团队技能：${added.join("、")}`, references: added });
+      this.persist(task);
+      rmSync(pendingFile, { force: true });
+    }
+    this.persist(task);
+    // 先持久化再送入会话，发送失败时保留补充内容，重试或重建会话可继续。
+    let delivered = false;
+    if (task.summary.status === "running" && task.driver) {
+      for (const message of (task.pendingMainSteers ?? []).filter((text) => text.startsWith("[补充团队技能]"))) {
+        await task.driver.steer(message);
+        task.pendingMainSteers = task.pendingMainSteers?.filter((text) => text !== message);
+        this.persist(task);
+        delivered = true;
+      }
+    }
+    return { added, warnings,
+      receipt: delivered ? "新技能已补充，Agent 将在当前工具执行结束后收到。"
+        : added.length ? "新技能已加入任务，继续执行时会交给 Agent。" : "没有新的匹配技能；原有技能版本保持不变。" };
+  }
+
+  /** 解析 @ 引用并在发送时固定版本，失败当场报错，不静默丢项。 */
   private resolveSteerKnowledge(
     references: SteerKnowledgeReference[],
   ): { text: string; footprints: KnowledgeResourceRef[]; labels: string[] } {

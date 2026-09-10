@@ -101,7 +101,6 @@ test("当前 owner 可以明确处置缺回执意见，旧闭环保持原操作�
   const pending = annotationClosure(store.list()[0], facts, viewer);
   assert.equal(pending.can_resolve, true);
   assert.equal(pending.can_verify, false);
-  assert.throws(() => store.resolveAsOwner(item.id, "owner", { revision: 0, outcome: "fixed", reason: "" }), /依据/);
   store.verify(item.id, "reviewer"); // 旧账只记录作者确认。
   const closed = annotationClosure(store.list()[0], facts, viewer);
   assert.equal(closed.can_resolve, undefined);
@@ -110,13 +109,14 @@ test("当前 owner 可以明确处置缺回执意见，旧闭环保持原操作�
 });
 
 
-test("责任人作出实现决策不等于 Agent 已执行；无修复回执仍需明确依据", () => {
+test("责任人直接确认无需重复填写结论，也不伪造 Agent 回执", () => {
   const { store } = fixture();
   const decision = store.add({ author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
     file: "需求原文", line: 1, anchor: "同步", note: "决定超时策略", kind: "doc", route: "owner_decision", assignee: "owner" });
   store.replyAsOwner(decision.id, "owner", "超时重试两次");
-  assert.throws(() => store.resolveAsOwner(decision.id, "owner", { revision: 0, outcome: "fixed", reason: "" }), /依据/);
-  store.resolveAsOwner(decision.id, "owner", { revision: 0, outcome: "accepted_risk", reason: "尚未执行，接受当前风险并记录后续安排" });
+  const closed = store.resolveAsOwner(decision.id, "owner", { revision: 0, outcome: "fixed", reason: "" });
+  assert.equal(closed.status, "verified");
+  assert.equal(closed.resolution?.by, "owner");
   assert.equal(store.list().find((a) => a.id === decision.id)?.response, undefined);
 });
 
@@ -180,5 +180,10 @@ for (const artifact of [TASK_REQUIREMENT_ARTIFACT, "diff", "design.md"]) {
       { revision: 0, outcome: "not_adopted", reason: "重试策略已在接口约定中说明" });
     assert.equal(resolved.status, "verified");
     assert.equal(resolved.resolution?.by, "owner");
+    store.markSent([foreign.id], "interrupt", "another");
+    const confirmed = service.verifyAnnotation(task.id, foreign.id, "owner", false,
+      { revision: 0, outcome: "fixed", reason: "" });
+    assert.equal(confirmed.status, "verified", "责任人的确认本身足以闭环，无需重复输入结论");
+    assert.equal(confirmed.response, undefined, "不伪造 Agent 回执");
   });
 }

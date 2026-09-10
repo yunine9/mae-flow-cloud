@@ -2099,7 +2099,8 @@ export function TaskWorkspace({
           {workspaceView === "knowledge" ? (
             <div className="ws-primary-scroll ws-knowledge-view">
               <KnowledgeFootprint usage={task.knowledge_usage} utMethod={task.ut_generation_method}
-                taskId={task.id} taskStatus={task.status} />
+                taskId={task.id} taskStatus={task.status}
+                canSyncSkills={viewerUsername === (task.luban_account ?? "本地用户")} onChanged={onChanged} />
             </div>
           ) : workspaceView === "execution" ? (
             <div className="ws-primary-scroll ws-execution-view">
