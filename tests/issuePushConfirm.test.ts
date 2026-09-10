@@ -23,6 +23,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import type { IssueFlowOptions } from "../src/issueFlow/service.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS2026082001317";
@@ -497,4 +498,120 @@ test("三档把控(过目):确认后又有新提交,重推对不上过目 tip �
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+// ---- issue-14 收口(2026-09-10):并发竞态与连环举卡(免模型直调) ----
+// 生产事故形态:AI 同毫秒并发调两个仓的 push_branch——一次性令牌是
+// 会话级单例,交错读删要么 TypeError 崩溃(reading 'head')、要么一次
+// 确认放行两次推送(过目闸被绕过);同回合连环重调则反复顶掉用户还
+// 没答的卡(单卡槽重举)。收口:在途互斥 + 已举卡快速打回 + 令牌快照。
+
+/** 双仓直调现场:两个裸仓远端 + 各自克隆(修复分支上各一笔提交)。 */
+function seedTwinRepos(dataDir: string): { alpha: string; beta: string } {
+  const make = (name: string): string => {
+    const seed = join(dataDir, `seed-${name}`);
+    execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
+    execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
+      "-m", "init"], { env: GIT_ENV });
+    const origin = join(dataDir, `${name}.git`);
+    execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
+    const clone = join(dataDir, "repo", name);
+    execFileSync("git", ["clone", "-q", origin, clone], { env: GIT_ENV });
+    execFileSync("git", ["-C", clone, "checkout", "-q", "-b", BRANCH],
+      { env: GIT_ENV });
+    execFileSync("git", ["-C", clone, "commit", "-q", "--allow-empty",
+      "-m", `[${TICKET}][fix] ${name}`], { env: GIT_ENV });
+    return origin;
+  };
+  return { alpha: make("alpha"), beta: make("beta") };
+}
+
+/** 过目开着(三档)的直调工具上下文 + push_branch。 */
+function directPushTools(state: IssueSessionState, dataDir: string): {
+  push: { execute: (id: string, params: any) => Promise<unknown> };
+} {
+  const ctx: IssueToolContext = {
+    state,
+    workspace: dataDir,
+    dataRoot: dataDir,
+    persist: () => undefined,
+    pushConfirmation: () => true,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(40),
+    }),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const push = tools.find((tool) => tool.name === "push_branch");
+  assert.ok(push, "应注册 push_branch");
+  return { push: push! };
+}
+
+function raceState(alpha: string, beta: string, now: string): IssueSessionState {
+  return {
+    id: "issue-race", account: "dev", created_at: now, updated_at: now,
+    title: "推送竞态", description: "", source: "dts", ticket: TICKET,
+    repo_url: alpha, repo_urls: [alpha, beta],
+    scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "done", "pending"],
+    status: "idle", stage: "fix", stage_note: "", stage_at: now,
+  };
+}
+
+test("issue-14 收口:同毫秒双 push_branch——一个举卡一个在途打回,不崩溃不绕过", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushrace-");
+  const { alpha, beta } = seedTwinRepos(dataDir);
+  const state = raceState(alpha, beta, new Date().toISOString());
+  const { push } = directPushTools(state, dataDir);
+  // 并发双调(生产同毫秒形态):无论谁先拿到在途锁,恰好一个走举卡
+  // 路径、一个收"一次只推一个仓";谁都不许读空令牌崩溃。
+  const settled = await Promise.allSettled([
+    push.execute("a", { branch: BRANCH, repo: alpha }),
+    push.execute("b", { branch: BRANCH, repo: beta }),
+  ]);
+  const reasons = settled.map((item) => item.status === "rejected"
+    ? String((item.reason as Error)?.message ?? item.reason) : "");
+  assert.equal(reasons.filter((reason) => reason.length > 0).length, 2,
+    `并发双调都应被拒(一个举卡一个在途打回),实际:${reasons}`);
+  assert.equal(reasons.filter((reason) => /一次只推一个仓/.test(reason)).length, 1,
+    `恰一个收在途打回:${reasons}`);
+  assert.equal(reasons.filter((reason) => /推送确认卡/.test(reason)).length, 1,
+    `恰一个走举卡路径:${reasons}`);
+  for (const reason of reasons) {
+    assert.ok(!/Cannot read properties/.test(reason),
+      `并发不得读空令牌崩溃(实际:${reason})`);
+  }
+  const raised = reasons.find((reason) => /推送确认卡/.test(reason))!;
+  assert.match(raised, /逐仓/, "举卡回执要教多仓串行节奏");
+  assert.equal(state.gate?.kind, "push_confirm", "过目卡在场");
+  assert.equal(state.pushes, undefined, "被拦的推送不得有台账");
+  assert.equal((state.transitions ?? []).filter((entry) =>
+    /平台举闸/.test(entry.note ?? "")).length, 1,
+    "只举了一次卡(并发另一个没有再举)");
+});
+
+test("issue-14 收口:卡已在等作答时连环重调——快速打回,不顶掉旧卡", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushchain-");
+  const { alpha, beta } = seedTwinRepos(dataDir);
+  const state = raceState(alpha, beta, new Date().toISOString());
+  const { push } = directPushTools(state, dataDir);
+  // 第一调:正常举卡收尾。
+  await assert.rejects(
+    () => push.execute("a", { branch: BRANCH, repo: alpha }),
+    /推送确认卡/);
+  const firstGate = state.gate!;
+  assert.equal(firstGate.kind, "push_confirm");
+  // 同回合连环重调(另一仓与同仓形态相同):不再重举,快速打回教节奏。
+  const second = await push.execute("b", { branch: BRANCH, repo: beta })
+    .then(() => "", (error: Error) => error.message);
+  assert.match(second, /已在等用户作答/, "连环调要收等作答回执");
+  assert.match(second, /逐仓/, "回执要教多仓串行节奏");
+  await assert.rejects(
+    () => push.execute("c", { branch: BRANCH, repo: alpha }),
+    /已在等用户作答/);
+  assert.equal(state.gate?.id, firstGate.id, "旧卡不被顶掉(单卡槽)");
+  assert.equal((state.transitions ?? []).filter((entry) =>
+    /平台举闸/.test(entry.note ?? "")).length, 1, "全程只举一次卡");
 });

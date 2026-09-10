@@ -589,6 +589,106 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
 
   // ---- 推送(自问题修改阶段起;机械单号门禁全程同在) ----
 
+  // issue-14 推送反复失败收口(2026-09-10):执行器会并行跑同一消息里
+  // 的多个工具调用(生产实测同毫秒双 push_branch)。一次性令牌是会话
+  // 级单例,并发交错读删要么 TypeError 崩溃、要么一次确认放行两次
+  // 推送(过目闸被绕过)——两个都不可接受。三道收口:①在途互斥,推送
+  // 串行化,并发第二个直接打回;②过目卡已在等作答时快速打回——
+  // state.gate 是单卡槽,重举会顶掉用户还没答的那张,连环重举正是
+  // 循环被拦的放大器;③令牌读快照——检查与使用之间有 await,快照
+  // 防令牌被并发消费后读空崩溃。多仓节奏=逐仓「举卡→等作答→推本仓
+  // →下一仓」,节奏教给回执(push.*)与工具说明。
+  let pushInFlight = false;
+  const runPush = async (params: any) => {
+    gateStage("push_branch");
+    const state = ctx.state;
+    if (!state.ticket) {
+      fail(promptCopy("receipts", "push.no_ticket"));
+    }
+    const repo = locateRepo(params.repo);
+    if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送(先 pull_repo)");
+    const branch = String(params.branch ?? "").trim()
+      || await currentBranch(repo.dir);
+    if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
+    const expected = expectedBranch(state);
+    if (branch !== expected) {
+      fail(promptCopy("receipts", "push.branch_mismatch",
+        { expected, branch }));
+    }
+    // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
+    // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
+    // 出厂,不如在这里点破并给出该做的事。
+    const dirty = await dirtyWorktree(repo.dir);
+    // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
+    // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
+    // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
+    // 变更摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
+    // 那道门管"什么阶段能推",这道管"推之前给不给人过目"。
+    // 拒绝与 raiseEnvNeededGate 同款收口:工具如实
+    // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
+    // 令牌绑定过目那一刻的分支 tip(push_review_head→push_token.head):
+    // 确认之后又有新提交,重推对不上 tip 即作废重举——人看过的是
+    // 哪份变更,放行的就是哪份,防盲签才是完整的。
+    const raisePushReviewGate = async (why: string) => {
+      const summary = await pushChangeSummary({
+        repoDir: repo.dir,
+        ...(state.baseline ? { baseline: state.baseline } : {}),
+      });
+      const head = await currentHead(repo.dir);
+      if (head) state.push_review_head = head;
+      else delete state.push_review_head;
+      raiseGate(
+        ctx.state,
+        "push_confirm",
+        `推送前过目:${why}以下变更将推送到远端,请过目后确认`,
+        undefined,
+        summary,
+      );
+      ctx.persist();
+      fail(promptCopy("receipts", "push.review.raised", {
+        lead: why ? `${why.replace(/,$/, "")}——已重新` : "",
+      }));
+    };
+    if (ctx.pushConfirmation?.() === true) {
+      const token = state.push_token;
+      if (!token) {
+        await raisePushReviewGate("");
+      } else {
+        const head = await currentHead(repo.dir);
+        if (token.head && head && head !== token.head) {
+          delete state.push_token;
+          await raisePushReviewGate("分支在上次确认后又有新提交,");
+        }
+      }
+    }
+    const receipt = await pushFromIssueWorkspace({
+      dataDir: ctx.dataRoot,
+      repoDir: repo.dir,
+      repoUrl: repo.url,
+      branch,
+      credential: ctx.gitCredential?.(),
+    });
+    // 令牌一次性(ADR-0009):成功即消费,下次推送重新过目(防盲签
+    // ——变更变了就要再看)。留痕进转移账,盘上不留已消费的令牌。
+    const reviewed = Boolean(state.push_token);
+    delete state.push_token;
+    // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
+    const pushes = state.pushes ??= [];
+    const record = {
+      repo: repo.url, branch: receipt.branch,
+      sha: receipt.sha, at: new Date().toISOString(),
+    };
+    const slot = pushes.findIndex((item) => item.repo === repo.url);
+    if (slot >= 0) pushes[slot] = record; else pushes.push(record);
+    recordTransition(state, {
+      source: "platform",
+      note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
+        + (reviewed ? "(推送确认令牌已用掉)" : ""),
+    });
+    ctx.persist();
+    return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
+      + `(仓 ${repo.url})${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`);
+  };
   tools.push(defineTool({
     name: "push_branch",
     label: "Push Branch (Host)",
@@ -600,7 +700,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "调用本工具之前,先在该仓把单元测试完整跑一遍(按仓的实际构建"
       + "体系选回归命令,如 mvn test、npm test):改动相关用例必跑,时间"
       + "允许就跑全量回归；失败或条件缺失须如实说明，由责任人兜底，"
-      + "已有阶段性交付授权时可推送当前成果，不把测试红灯当作推送禁令。推送后返回 SHA。",
+      + "已有阶段性交付授权时可推送当前成果，不把测试红灯当作推送禁令。"
+      + "推送后返回 SHA。多仓交付串行推送:同一时刻只推一个仓,过目"
+      + "确认也是逐仓一次——推完一个仓再发起下一个,不要并发调用"
+      + "多个 push_branch。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -612,94 +715,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStage("push_branch");
-      const state = ctx.state;
-      if (!state.ticket) {
-        fail(promptCopy("receipts", "push.no_ticket"));
+      if (pushInFlight) fail(promptCopy("receipts", "push.busy"));
+      if (ctx.pushConfirmation?.() === true
+        && ctx.state.gate?.kind === "push_confirm") {
+        fail(promptCopy("receipts", "push.gate_pending"));
       }
-      const repo = locateRepo(params.repo);
-      if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送(先 pull_repo)");
-      const branch = String(params.branch ?? "").trim()
-        || await currentBranch(repo.dir);
-      if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
-      const expected = expectedBranch(state);
-      if (branch !== expected) {
-        fail(promptCopy("receipts", "push.branch_mismatch",
-          { expected, branch }));
+      pushInFlight = true;
+      try {
+        return await runPush(params);
+      } finally {
+        pushInFlight = false;
       }
-      // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
-      // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
-      // 出厂,不如在这里点破并给出该做的事。
-      const dirty = await dirtyWorktree(repo.dir);
-      // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
-      // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
-      // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
-      // 变更摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
-      // 那道门管"什么阶段能推",这道管"推之前给不给人过目"。
-      // 拒绝与 raiseEnvNeededGate 同款收口:工具如实
-      // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
-      // 令牌绑定过目那一刻的分支 tip(push_review_head→push_token.head):
-      // 确认之后又有新提交,重推对不上 tip 即作废重举——人看过的是
-      // 哪份变更,放行的就是哪份,防盲签才是完整的。
-      const raisePushReviewGate = async (why: string) => {
-        const summary = await pushChangeSummary({
-          repoDir: repo.dir,
-          ...(state.baseline ? { baseline: state.baseline } : {}),
-        });
-        const head = await currentHead(repo.dir);
-        if (head) state.push_review_head = head;
-        else delete state.push_review_head;
-        raiseGate(
-          ctx.state,
-          "push_confirm",
-          `推送前过目:${why}以下变更将推送到远端,请过目后确认`,
-          undefined,
-          summary,
-        );
-        ctx.persist();
-        fail(promptCopy("receipts", "push.review.raised", {
-          lead: why ? `${why.replace(/,$/, "")}——已重新` : "",
-        }));
-      };
-      if (ctx.pushConfirmation?.() === true) {
-        if (!state.push_token) {
-          await raisePushReviewGate("");
-        } else {
-          const head = await currentHead(repo.dir);
-          if (state.push_token.head && head
-            && head !== state.push_token.head) {
-            delete state.push_token;
-            await raisePushReviewGate("分支在上次确认后又有新提交,");
-          }
-        }
-      }
-      const receipt = await pushFromIssueWorkspace({
-        dataDir: ctx.dataRoot,
-        repoDir: repo.dir,
-        repoUrl: repo.url,
-        branch,
-        credential: ctx.gitCredential?.(),
-      });
-      // 令牌一次性(ADR-0009):成功即消费,下次推送重新过目(防盲签
-      // ——变更变了就要再看)。留痕进转移账,盘上不留已消费的令牌。
-      const reviewed = Boolean(state.push_token);
-      delete state.push_token;
-      // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
-      const pushes = state.pushes ??= [];
-      const record = {
-        repo: repo.url, branch: receipt.branch,
-        sha: receipt.sha, at: new Date().toISOString(),
-      };
-      const slot = pushes.findIndex((item) => item.repo === repo.url);
-      if (slot >= 0) pushes[slot] = record; else pushes.push(record);
-      recordTransition(state, {
-        source: "platform",
-        note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
-          + (reviewed ? "(推送确认令牌已用掉)" : ""),
-      });
-      ctx.persist();
-      return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
-        + `(仓 ${repo.url})${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`);
     },
   }));
 
