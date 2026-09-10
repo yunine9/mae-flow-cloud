@@ -62,7 +62,8 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.doesNotMatch(side, /ws-focus-collaboration|<SteerBox|ws-decision|ws-idle/);
   assert.match(side, /currentCard=\{waiting \? \(decides \? \(\s*<WaitingCard/,
     "当前决定卡渲在流里");
-  assert.match(side, /footerTarget=\{decisionFooterTarget\}/);
+  assert.match(side, /footerTarget=\{chainReview \? undefined : decisionFooterTarget\}/,
+    "决定卡的提交区经 portal 挂到输入框(链式检视留在卡内由卡自己收口)");
   assert.match(composer, /className="ws-reply-dock" ref=\{dockRef\}/,
     "决定卡的提交区经 portal 挂到输入框");
   assert.match(composer, /说给 Agent/);
@@ -85,10 +86,11 @@ test("右栏是一条会话流加一个输入框:卡在流里、提交区在输�
   assert.doesNotMatch(workspace, /CrossRepositorySync/, "独立的跨仓同步块已并入输入区");
   assert.match(workspace, /crossRepository=\{Boolean\(task\.parent_task_id\)\}/);
   assert.match(composer, /通知所有子任务\n/, "第三档页签");
-  assert.match(composer, /const showSync = mode === "sync" && crossRepository && !steerOnly;/);
+  assert.match(composer,
+    /const showSync = mode === "sync" && crossRepository && !steerOnly && !compactDecision;/);
   assert.match(composer, /publishCrossRepositoryUpdate\(task\.id, message\)/);
-  assert.match(composer, /hidden=\{!decisionDock \|\| showAssistant \|\| showSync\}/,
-    "通知档下决定卡的提交区让位");
+  assert.match(composer, /hidden=\{!decisionDock \|\| takeoverActive\}/,
+    "决定卡提交区只在接管时让位;通知档经 showSync 走自己的渲染分支");
   // 定位靠 id 双向跳:抽屉 → 流线程,流 → 材料原位 + 抽屉那条卡。
   assert.match(workspace, /onShowThread=\{showThread\}/);
   assert.match(stream, /onThreadChange\(id\)/);
@@ -260,7 +262,7 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
 
 test("需求确认复用标准决定卡，并收成一个明确的通过按钮", () => {
   assert.match(taskCard,
-    /requirementAnalysisConfirmation[^]*<section className="decision-card"/,
+    /requirementAnalysisConfirmation[^]*<section className=\{\`decision-card/,
     "需求确认应沿用现有决定卡，不另造一套布局");
   assert.match(taskCard, /需求已确认，进入需求分析/);
   assert.match(taskCard,

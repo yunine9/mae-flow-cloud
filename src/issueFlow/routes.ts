@@ -946,6 +946,16 @@ export async function handleIssueRoutes(
       }));
     }
 
+    // 合入事实快照(ADR-0022):归档对话框现扫现答,与归档核对同一
+    // 兜底——软闸不堵归档,但把每仓 MR 状态摆给人看。
+    if (method === "POST" && parts[2] === "merge-status"
+        && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能核对合入事实" });
+      }
+      return done(200, await issueFlow.mergeStatus(id));
+    }
+
     return done(404, { error: "未知问题接口" });
   } catch (error) {
     // 单点映射(#9):域错误族 → 状态码 + 对外消息,错误族与口径见

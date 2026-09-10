@@ -19,7 +19,6 @@ import { AnnotationStore } from "../src/annotations.ts";
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
-  createKernelHostProof,
   ensureKernelHostCapability,
   openKernelFeedback,
   recordKernelFeedbackResult,
@@ -335,6 +334,11 @@ test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或�
   }).trim();
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
     current: "feedback_triage",
+    execution_contract: {
+      schema: "mae-flow-execution/1", host: "cloud",
+      compile: "pipeline", ut_write: "agent",
+      ut_run: "pipeline", codecheck: "pipeline",
+    },
     delivery_loop: {
       active_batch_id: "fb-task-1-pipeline",
       batches: [{
