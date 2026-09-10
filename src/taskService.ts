@@ -4614,7 +4614,6 @@ export class TaskService {
       workspace: task.cwd,
       agentDir,
       hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-      repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
       knowledgeContext: task.summary.host_skills_pinned ? undefined : {
         repositories: task.summary.repositories ?? [],
         technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -12398,7 +12397,6 @@ export class TaskService {
         // 人在接管,提醒是给自动跑的主 Agent 的。
         extraTools: this.memoryTools(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -14387,7 +14385,6 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -15549,7 +15546,6 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])

@@ -115,4 +115,4 @@ export const MAE_EXEC_ENVIRONMENT = [
   'if [ -n "$mfc_mae_registry" ]; then export npm_config_registry="$mfc_mae_registry" NPM_CONFIG_REGISTRY="$mfc_mae_registry"; fi; fi',
 ].join("\n");
 
-export const MAE_FIRST_BUILD_GUIDANCE = "MAE 构建：若能力目录包含 mae-first-build，首次编译前必须读取；先检查首编状态，准备有效则使用语言构建 Skill 与 build-notes 增量验证。首编记录不能替代当前代码编译、UT 或流水线。";
+export const MAE_FIRST_BUILD_GUIDANCE = "MAE 构建：若能力目录包含 mae-first-build，首次编译前必须读取；C++ 首编必须先准备 UT 依赖，再通过带 DT_test=UT 的 compile 完成编译和全量 UT，不得添加定向筛选；准备有效后使用语言构建 Skill 与 build-notes 增量验证。首编记录不能替代当前代码编译、UT 或流水线。";
