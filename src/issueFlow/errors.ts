@@ -46,6 +46,11 @@ export class IssueNotFoundError extends Error {
  * 收拢至此。 */
 export class IssueControlError extends Error {}
 
+/** 基础设施瞬断(Docker daemon 不可达、容器启动失败等,票 #159 对齐
+ *  拍板 2026-09-10):时间可恢复,回合 catch 据此落 idle 交还人工,
+ *  不判死整单。配置类错误(模型名/凭据错)不用它——那是 failed。 */
+export class IssueInfraError extends Error {}
+
 /** DTS/MCP 网关失败:网关不可达、上游应答异常、查无此单等。路由层
  * 回 502(上游故障)。原先定义在 gateways.ts,收拢至此。 */
 export class McpGatewayError extends Error {}

@@ -18,6 +18,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { durableWriteFileSync } from "../durableWrite.ts";
 import { join } from "node:path";
 import type { FeedbackRecord } from "../feedbackStore.ts";
 import { IssueControlError } from "./errors.ts";
@@ -599,9 +600,7 @@ export function saveState(root: string, state: IssueSessionState): void {
   mkdirSync(root, { recursive: true });
   state.updated_at = new Date().toISOString();
   const path = join(root, "issue.json");
-  const temporary = `${path}.tmp`;
-  writeFileSync(temporary, JSON.stringify(state, null, 1), "utf-8");
-  renameSync(temporary, path);
+  durableWriteFileSync(path, JSON.stringify(state, null, 1));
 }
 
 export function isTerminal(status: IssueStatus): boolean {

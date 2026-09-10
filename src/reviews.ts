@@ -15,6 +15,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -181,15 +182,11 @@ export class ReviewStore {
 
   private load(): void {
     if (!existsSync(this.path)) return;
-    for (const line of readFileSync(this.path, "utf-8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line) as ReviewRequest;
-        if (record.id && record.task_id && record.committer) {
-          this.records.set(record.id, record);
-        }
-      } catch {
-        // 进程退出留下半行时只丢半行；前面已经落袋的记录仍可用。
+    // 断写尾巴读口自愈(票 #160):pending 邀请账不能再被崩溃半行吞掉。
+    for (const record of readAppendOnlyJsonl<ReviewRequest>(this.path,
+      { middleCorrupt: "skip" })) {
+      if (record.id && record.task_id && record.committer) {
+        this.records.set(record.id, record);
       }
     }
   }

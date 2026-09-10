@@ -177,7 +177,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             <button type="button" className="knowledge-memory-row"
               aria-expanded={memoryOpen?.id === item.id}
               onClick={() => void openMemory(item)}>
-              <i aria-hidden>{item.source === "user_note" ? "记"
+              <i aria-hidden>{["user_note", "agent_note"].includes(item.source) ? "记"
                 : item.source === "prepush_fix" ? "修" : "议"}</i>
               <span>
                 <strong>{item.trigger}
@@ -188,7 +188,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
                   {item.archived && <b className="knowledge-memory-scope is-archived" title={item.archive_reason}>已沉底</b>}
                 </strong>
                 <em>{gone ? "已撤回" : item.conclusion}</em>
-                <small>{item.source === "user_note" ? `${item.author ?? "有人"} 圈选记下`
+                <small>{item.source === "agent_note" ? "Agent 主动记录" : item.source === "user_note" ? `${item.author ?? "有人"} 圈选记下`
                   : item.source === "prepush_fix" ? "Build-Fix 失败后修好"
                     : "检视意见闭环"}
                   {item.paths[0] ? ` · ${item.paths[0]}${item.line ? `:${item.line}` : ""}` : ""}

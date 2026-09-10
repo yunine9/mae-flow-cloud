@@ -3908,3 +3908,220 @@ test("环境预热 fail-open:执行器异常落基建收据,主流程照走", as
     await model.stop();
   }
 });
+
+// ---- 催办延续的互斥与忙撞(issue-20 复盘,2026-09-09) ----
+
+/** 模拟 pi 的截断工具错误:报错文本同时携带"output token limit"与
+ *  "was not executed"两个判据,驱动 fatalToolExecutionError 的真实
+ *  检测链路(tool_execution_end → turnTerminalError → 自愈)。 */
+const TRUNCATED_TOOL_BASH = "echo 'Tool call was not executed: "
+  + "the response hit the output token limit' >&2; "
+  + "echo 'Tool call was not executed: "
+  + "the response hit the output token limit'; exit 1";
+
+test("催办延续握住回合互斥:催办进行中归档被 409,平台通知 steer 进当拍回合而非另开回合", async () => {
+  const dataDir = mfcTemp("mfc-issue-nudge-mutex-");
+  const origin = bareOrigin(dataDir);
+  let releaseNudge!: () => void;
+  const nudgeGated = new Promise<void>((resolve) => { releaseNudge = resolve; });
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { text: "先研究到这,稍后继续。" },
+    { text: "收到,继续推进。" },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:pool exhausted。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "根因=连接池耗尽" } } },
+    { text: "分析已提交,等确认。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", {
+    linear: true,
+    beforeScene: async ({ requestNumber }) => {
+      if (requestNumber === 4) await nudgeGated;
+    },
+  });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏",
+      repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    await until(() => model.requests.length >= 4 ? true : undefined,
+      "催办回合已发出并被扣住");
+    await assert.rejects(
+      () => service.control(created.id, { action: "archive" }),
+      /请先取消会话/);
+    service.attachEnvironment(created.id, NO_TICKET_ENV);
+    assert.equal(service.get(created.id).status, "running",
+      "催办进行中,通知不得改变运行状态");
+    releaseNudge();
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "催办+插话送达后举结论卡");
+    assert.equal(waiting.nudges, 1, "催办计数入账");
+    assert.equal(model.requests.length, 7,
+      "通知要在催办回合内送达,不得另开回合");
+    const delivered = JSON.stringify(model.requests[4]);
+    assert.match(delivered, /网管环境已配置/, "steer 的通知要进模型上下文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("忙撞不炸单:催办撞上会话收尾窗口,重投一次仍忙则留话落 idle,会话还能继续", async () => {
+  const dataDir = mfcTemp("mfc-issue-busy-collision-");
+  const origin = bareOrigin(dataDir);
+  const BUSY = "Agent is already processing. Specify streamingBehavior"
+    + " ('steer' or 'followUp') to queue the message.";
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { text: "先研究到这,稍后继续。" },
+    { text: "(占位,被网关错误顶掉)" },
+    { text: "(占位,被网关错误顶掉)" },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:pool exhausted。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "根因=连接池耗尽" } } },
+    { text: "分析已提交,等确认。" },
+  ];
+  // 武装时机钉在钩子里(轮询武装会 flake):第 3 请求(收嘴幕)应答前
+  // 生效,接下来两次(催办首投+让拍重投)都以 issue-20 的原文忙拒。
+  const model = new ScriptedModelServer(script, "scripted-v1", {
+    linear: true,
+    beforeScene: ({ requestNumber }) => {
+      if (requestNumber === 3) model.failWith(BUSY, 2);
+    },
+  });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏",
+      repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    const settled = await until(() => {
+      const issue = service.get(created.id);
+      return issue.status === "idle" && /相撞/.test(issue.stage_note ?? "")
+        ? issue : undefined;
+    }, "重投仍忙,留话落 idle");
+    assert.notEqual(settled.status, "failed", "忙撞不是会话失败");
+    assert.equal(settled.error, undefined, "不落错误账");
+    assert.equal(model.requests.length, 5,
+      "开场三幕+催办首投+让一拍重投,只补一次");
+    const replied = service.reply(created.id, "继续,把分析做完");
+    assert.equal(replied.status, "running");
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "忙撞后续聊照常举卡");
+    assert.equal(model.requests.length, 8, "续聊恰好一个新回合");
+    assert.match(JSON.stringify(model.requests[5]), /继续,把分析做完/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+// ---- 输出超限截断的自愈(issue-12 复盘,2026-09-10) ----
+
+test("输出超限自愈:截断后纠偏重试,模型精简重发举卡成功,会话不判死", async () => {
+  const dataDir = mfcTemp("mfc-issue-truncation-heal-");
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "bash", input: { command: TRUNCATED_TOOL_BASH } } },
+    { text: "我想一次性说明两个阻塞,但调用太长被截断了。" },
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "远端旧分支挡住推送:删除后重推,还是换分支名?",
+    }] } } },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏",
+      repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
+    }, "纠偏后精简重发举卡");
+    assert.ok(waiting.waiting, "问题卡在场");
+    assert.equal(model.requests.length, 3, "纠偏恰好一次");
+    assert.match(JSON.stringify(model.requests[2]), /平台纠偏\(第 1\/2 次\)/,
+      "纠偏词要进模型上下文");
+    assert.match(JSON.stringify(model.requests[2]), /大幅精简/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("输出超限自愈穷尽:连续三次截断后落 idle 留话,不标 failed 不杀会话", async () => {
+  const dataDir = mfcTemp("mfc-issue-truncation-exhaust-");
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "bash", input: { command: TRUNCATED_TOOL_BASH } } },
+    { text: "(第一次截断后的文本说明)" },
+    { tool: { name: "bash", input: { command: TRUNCATED_TOOL_BASH } } },
+    { text: "(第二次截断后的文本说明)" },
+    { tool: { name: "bash", input: { command: TRUNCATED_TOOL_BASH } } },
+    { text: "(第三次截断后的文本说明)" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏",
+      repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    const settled = await until(() => {
+      const issue = service.get(created.id);
+      return issue.status === "idle" && /输出超限/.test(issue.stage_note ?? "")
+        ? issue : undefined;
+    }, "纠偏穷尽后落 idle 留话");
+    assert.notEqual(settled.status, "failed", "截断不是会话失败");
+    assert.equal(settled.error, undefined, "不落错误账");
+    assert.equal(model.requests.length, 6, "首投+纠偏两次,不多不少");
+    assert.match(JSON.stringify(model.requests[2]), /平台纠偏\(第 1\/2 次\)/);
+    assert.match(JSON.stringify(model.requests[4]), /平台纠偏\(第 2\/2 次\)/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});

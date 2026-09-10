@@ -13,7 +13,7 @@ import {
 } from "./api";
 
 const SOURCE = {
-  annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
+  agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
 } as const;
 const SCOPE = { one_off: "一次性", local: "局部", general: "通用" } as const;
 
@@ -136,7 +136,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
         return <li key={row.id} className={`source-${row.source}${gone ? " is-gone" : ""}`}>
           <button type="button" className="memory-board-row" aria-expanded={open?.id === row.id}
             onClick={() => void toggle(row)}>
-            <i aria-hidden>{row.source === "user_note" ? "记" : row.source === "prepush_fix" ? "修" : "议"}</i>
+            <i aria-hidden>{["user_note", "agent_note"].includes(row.source) ? "记" : row.source === "prepush_fix" ? "修" : "议"}</i>
             <span className="memory-board-main">
               <strong>{row.trigger}
                 <b className={`memory-board-tag scope-${row.scope}`}>{SCOPE[row.scope]}</b>
@@ -147,7 +147,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
                 {row.superseded_by && <b className="memory-board-tag is-archived">被覆盖</b>}
               </strong>
               <em>{row.conclusion}</em>
-              <small>{row.repo} · {SOURCE[row.source]} · {row.judged_by === "human" ? "人确认" : "流水线"}
+              <small>{row.repo} · {SOURCE[row.source]} · {row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线"}
                 {row.paths[0] ? ` · ${row.paths[0]}${row.line ? `:${row.line}` : ""}` : ""}
                 {` · ${day(row.at)}`}
               </small>

@@ -444,3 +444,27 @@ test("重启读取已持久化的模板记忆，没有作业时仍如实显示�
     assert.equal(insights.memories.find((row) => row.id === record.id)?.draft, "template");
   } finally { await second.svc.shutdown(); }
 });
+
+test("Agent 无 sidecar 也能写记忆并展开；归属和来源由宿主固定", async () => {
+  const { svc } = fakeService();
+  const { id, internal } = liveTask(svc);
+  const tools = (svc as any).memoryTools(internal) as any[];
+  const write = tools.find(tool => tool.name === "corpus_write");
+  assert.ok(write);
+  await write.execute("call-memory-1", { trigger: "首次编译", conclusion: "先加载仓库环境脚本。",
+    repo: "another-repo", task: "another-task", judged_by: "human" });
+  const records = svc.listTaskMemories(id);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].repo, "notify-service");
+  assert.equal(records[0].task, id);
+  assert.equal(records[0].source, "agent_note");
+  assert.equal(records[0].judged_by, "agent");
+  assert.equal(records[0].evidence, "agent:call-memory-1");
+  assert.equal(records[0].drafting, false);
+  const expand = tools.find(tool => tool.name === "corpus_expand");
+  const result = await expand.execute("expand-1", { memory_id: records[0].id });
+  assert.match(result.content[0].text, /先加载仓库环境脚本/);
+  internal.summary.repo_url = "git@example.com:demo/other.git";
+  const denied = await expand.execute("expand-2", { memory_id: records[0].id });
+  assert.match(denied.content[0].text, /取不到/);
+});

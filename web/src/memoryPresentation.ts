@@ -15,6 +15,7 @@ export function memoryPreparation(row: {
   draft?: "template" | "model" | "failed";
   drafting?: boolean;
 }): { label: string; title: string } {
+  if (row.source === "agent_note") return { label: "已记录", title: "Agent 主动保存的经验，未经人工或流水线确认。" };
   if (row.source === "user_note") {
     return { label: "已记录", title: "已按你写下的内容入库，无需模型整理。" };
   }

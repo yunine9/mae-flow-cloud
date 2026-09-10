@@ -15,6 +15,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { durableWriteFileSync } from "./durableWrite.ts";
 import { dirname } from "node:path";
 
 export class StateConflictError extends Error {}
@@ -72,9 +73,8 @@ export class HumanGate {
 
   private save(store: Store): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = this.path + ".tmp";
-    writeFileSync(temporary, JSON.stringify(store, null, 1), "utf-8");
-    renameSync(temporary, this.path);
+    // 耐久写(票 #163):人工决定是权威账,tmp fsync 后再 rename。
+    durableWriteFileSync(this.path, JSON.stringify(store, null, 1));
   }
 
   /** 同一 call_id 幂等返回已有记录:恢复重放不得生成第二张待办。 */

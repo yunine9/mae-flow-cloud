@@ -1,20 +1,13 @@
-/**
- * 给 Agent 的记忆检索工具(docs/knowledge-memory-design.md §8)。
- *
- * 宿主替 Agent 在三个时刻推送记忆;这两个工具只给它追问用——不指望它
- * 记得主动查,所以 promptGuidelines 写的是动作锚定的触发("改一个没改过的
- * 目录之前"),不是"需要时使用"。
- *
- * 边界:repo 由宿主按任务固定,Agent 传不了;结果封顶;检索不可用时如实
- * 说"暂不可用",绝不空转等待(sidecar 自带预算)。
- */
+/** Agent 的仓库记忆检索、展开和主动记录。仓库由宿主固定，索引不可用不阻断正本读写。 */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { MemoryScope } from "./taskMemory.ts";
 import type { MemorySearchHit } from "./memorySidecar.ts";
 
 export interface MemoryToolBackend {
   repo: string;
+  write?(input: { trigger: string; conclusion: string; paths: string[]; scope: MemoryScope }, callId: string): Promise<{ id: string }> | { id: string };
   search(input: { query: string; pathPrefix?: string; limit?: number })
     : Promise<MemorySearchHit[] | undefined>;
   expand(memoryId: string): Promise<string | undefined>;
@@ -29,7 +22,7 @@ function ok(text: string) {
 export function renderMemoryHits(hits: MemorySearchHit[]): string {
   if (!hits.length) return "没有命中的记忆。";
   return hits.map((hit) => {
-    const who = hit.judged_by === "human" ? "人确认" : "流水线";
+    const who = hit.judged_by === "human" ? "人确认" : hit.judged_by === "agent" ? "Agent 记录" : hit.judged_by === "pipeline" ? "流水线" : "来源未注明";
     const where = hit.paths?.[0]
       ? `${hit.paths[0]}${hit.line ? `:${hit.line}` : ""}` : "本仓";
     const when = (hit.at ?? "").slice(0, 10);
@@ -44,8 +37,8 @@ export function createMemoryTools(backend: MemoryToolBackend) {
     name: "corpus_search",
     label: "Corpus Search",
     description:
-      "检索本仓的任务记忆:过去的单子里被人或流水线关掉的环(闭环的检视意见、"
-      + "修好的构建失败、人圈选记下的约定)。返回最多 8 条,每条带记忆 id、"
+      "检索本仓的任务记忆:闭环经验与主动记录(闭环的检视意见、"
+      + "修好的构建失败、人或 Agent 记下的约定)。返回最多 8 条,每条带记忆 id、"
       + "判定者、日期、位置和一句结论。它们是线索不是规则,与现状冲突以现状和"
       + "内核指令为准。想看整条记录用 corpus_expand。",
     promptSnippet: "corpus_search:查本仓历史记忆(闭环意见/构建坑/人记下的约定)",
@@ -92,5 +85,22 @@ export function createMemoryTools(backend: MemoryToolBackend) {
     },
   });
 
-  return [search, expand];
+  const write = defineTool({
+    name: "corpus_write", label: "记录仓库记忆",
+    description: "保存当前仓库可复用的经验、构建方法或约定。直接入库，标记为 Agent 记录，不代表人工确认或验证通过。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
+    parameters: Type.Object({
+      trigger: Type.String({ minLength: 1, maxLength: 80, description: "什么情况下用这条经验" }),
+      conclusion: Type.String({ minLength: 1, maxLength: 1900, description: "经验结论及适用条件；未验证的猜测请明确说明" }),
+      paths: Type.Optional(Type.Array(Type.String(), { maxItems: 20 })),
+      scope: Type.Optional(Type.Union([Type.Literal("one_off"), Type.Literal("local"), Type.Literal("general")])),
+    }),
+    async execute(callId: string, params: any) {
+      if (!backend.write) return ok("当前会话未配置记忆写入。");
+      const record = await backend.write({ trigger: String(params.trigger ?? "").trim(),
+        conclusion: String(params.conclusion ?? "").trim(), paths: params.paths ?? [],
+        scope: params.scope ?? "local" }, callId);
+      return ok(`已保存记忆 ${record.id}（Agent 记录）。可用 corpus_expand 读取；语义索引异步更新。`);
+    },
+  });
+  return backend.write ? [search, expand, write] : [search, expand];
 }

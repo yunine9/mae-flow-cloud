@@ -50,7 +50,7 @@ export interface MemorySearchHit {
   snippet?: string;
   file?: string;
   repo?: string;
-  judged_by?: "human" | "pipeline";
+  judged_by?: "human" | "pipeline" | "agent";
   source?: string;
   scope?: string;
   at?: string;

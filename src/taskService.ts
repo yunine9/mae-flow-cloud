@@ -1,3 +1,4 @@
+import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
 import type { PipelineRun } from "./pipelineClient.ts";
@@ -48,7 +49,8 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-} from "node:fs";
+  openSync, fsyncSync, closeSync,} from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -1273,8 +1275,7 @@ export interface TaskServiceOptions {
    * 平台/prepush 不加载,create() 直接拒绝,launchOptions 摆出明面
    * 的 blocker。历史任务台账仍可读(管理/兜底不受影响)。 */
   requirementDisabled?: boolean;
-  /** 任务记忆检索旁路(docs/knowledge-memory-design.md §7)。缺席=没有
-   * sidecar:开局推送退回索引级、Agent 没有 corpus_search 工具,任务照跑。 */
+  /** 可选语义索引；未配置时记忆仍能写入、展开和按索引推送。 */
   memory?: {
     python: string;
     script: string;
@@ -4584,9 +4585,7 @@ export class TaskService {
       + (result.message ? ` — ${result.message.slice(0, 120)}` : ""));
   }
 
-  /** 预热原生执行器:编码容器里的独立 Pi 会话。与 prepush 同构但更简
-   * ——不修复、不建容器、不产证据。同一容器两个会话不违反"两个容器
-   * 不写同一工作区";此刻主 Agent 还在需求澄清,工作区没人写。 */
+  /** 基线预热独立会话：复用编码容器，不修改源码、不产交付证据。 */
   private async runCloudWarmupAgent(
     task: TaskState,
     request: WarmupRunRequest,
@@ -5567,13 +5566,13 @@ export class TaskService {
       task.memoryBriefingIds = rows.map((row) => row.id);
       this.logMemoryUsage(task, { moment: "launch", ids: task.memoryBriefingIds });
       const lines = rows.map((row) => {
-        const who = row.judged_by === "human" ? "人确认" : "流水线";
+        const who = row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线";
         const where = row.paths[0]
           ? `${row.paths[0]}${row.line ? `:${row.line}` : ""}` : "本仓";
         return `- [${who} · ${row.at.slice(0, 10)} · ${where}] ${row.trigger}:`
           + `${row.conclusion.replace(/\s+/g, " ").slice(0, 200)}`;
       });
-      return `本仓的任务记忆(过去的单子里被人或流水线关掉的环;是线索不是规则,`
+      return `本仓的任务记忆(含闭环经验和主动记录;是线索不是规则,`
         + `改到对应位置时先看一眼,与现状冲突以现状和内核指令为准):\n`
         + lines.join("\n");
     } catch (error) {
@@ -5627,7 +5626,6 @@ export class TaskService {
     return this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
   }
 
-  /** 给 Agent 的检索工具;没有 sidecar 就不给(索引级没法回答自然语言)。 */
   /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
   private splitTools(task: TaskState): unknown[] {
     const summary = task.summary;
@@ -5813,48 +5811,27 @@ export class TaskService {
   }
 
   private memoryTools(task: TaskState): unknown[] | undefined {
-    if (!this.memorySidecar) return undefined;
     return createMemoryTools({
       repo: this.memoryRepo(task),
       search: (input) => this.memorySearch(task, input),
-      expand: (id) => this.memorySidecar!.expand(id),
+      expand: async (id) => this.memories().find(id)?.repo === this.memoryRepo(task)
+        ? this.memories().read(id) : undefined,
+      write: (input, callId) => this.recordMemory(task, { ...input,
+        source: "agent_note", judged_by: "agent", repo: this.memoryRepo(task),
+        task: task.summary.id, evidence: `agent:${callId}`, author: "Agent" }),
       onUse: (event) => this.logMemoryUsage(task, event),
     });
   }
 
-  /** 这单用到的记忆足迹:旁路,写失败只记日志。 */
-  private logMemoryUsage(task: TaskState, event: {
-    moment: "launch" | "phase" | "edit" | "search" | "expand";
-    ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
-  }): void {
-    try {
-      appendFileSync(join(task.summary.workspace, "memory-usage.jsonl"),
-        JSON.stringify({ ts: new Date().toISOString(), ...event }) + "\n", "utf-8");
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 记忆足迹写入失败: ${String(error)}`);
-    }
-    // 台账是跨任务的账(排序、沉底都看它),足迹是这单的账;两边都记。
-    try {
-      const kind = event.moment === "search" || event.moment === "expand"
-        ? event.moment : "push";
-      for (const id of event.ids) {
-        this.memories().ledger.append({ kind, id, task: task.summary.id,
-          note: event.moment === "edit" ? event.dir : event.phase ?? event.moment });
-      }
-    } catch (error) {
-      this.options.log?.(`记忆台账写入失败: ${String(error)}`);
-    }
+  private logMemoryUsage(task: TaskState, event: MemoryUsageEvent): void {
+    recordMemoryUsage({ workspace: task.summary.workspace, taskId: task.summary.id,
+      store: () => this.memories(), log: this.options.log }, event);
   }
 
   listTaskMemoryUsage(id: string): Array<Record<string, unknown>> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const path = join(task.summary.workspace, "memory-usage.jsonl");
-    if (!existsSync(path)) return [];
-    return readFileSync(path, "utf-8").split("\n").filter((line) => line.trim())
-      .flatMap((line) => {
-        try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
-      });
+    return readMemoryUsage(task.summary.workspace);
   }
 
   /** §8-3 首次改某目录:该目录有记忆且本会话没提过,插一句。每目录一次。 */
@@ -5995,10 +5972,9 @@ export class TaskService {
     });
   }
 
-  /** §5 起草 trigger/scope:入库后异步补一版,预算 90 s(旁路,给宽),失败保留模板并
-   * 标 failed。user_note 不过这道(人写的那句话就是 trigger,固定 general)。 */
+  /** 闭环事件异步整理；人和 Agent 主动记录的内容直接保存。 */
   private queueMemoryDraft(task: TaskState, record: MemoryRecord): void {
-    if (record.source === "user_note") return;
+    if (record.source === "user_note" || record.source === "agent_note") return;
     const drafter = this.memoryDrafter(task);
     if (!drafter) return;
     const job = (async () => {
@@ -8383,6 +8359,16 @@ export class TaskService {
         token_usage_state: task.tokenUsage,
         notify_record: task.notifyRecord,
       }, null, 1));
+      // 状态权威文件耐久写(票 #163):tmp 内容 fsync 后再 rename——
+      // 硬断电最坏退回上一版,不再是全零块。代价 3.2ms/次,可忽略。
+      {
+        const fd = openSync(path + ".tmp", "r");
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      }
       renameSync(path + ".tmp", path);
       return true;
     } catch (error) {
@@ -11797,7 +11783,22 @@ export class TaskService {
     task.summary.team_skills = listHostSkillShelfRoot(root).skills;
     const warnings = [...shelf.warnings, ...snapshot.warnings];
     const pendingFile = join(task.summary.workspace, "pending-skill-sync.json");
-    const pending: string[] = existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, "utf8")) : [];
+    let pending: string[] = [];
+    if (existsSync(pendingFile)) {
+      try {
+        pending = JSON.parse(readFileSync(pendingFile, "utf-8"));
+      } catch (error) {
+        // 崩溃断写隔离(票 #162 同族):坏文件不炸接口也不再永 500——
+        // 隔离改名保留现场供排查,本次按空清单继续(文件随后重写自愈)。
+        const quarantined = `${pendingFile}.corrupt`;
+        try {
+          renameSync(pendingFile, quarantined);
+        } catch { /* 隔离失败就原地忽略,别让旁路挡主链路 */ }
+        this.options.log?.(`pending-skill-sync.json 损坏,已按空清单继续`
+          + `(现场保留于 ${quarantined}): `
+          + `${error instanceof Error ? error.message : error}`);
+      }
+    }
     const added = [...new Set([...pending, ...snapshot.names])];
     if (added.length) {
       writeFileSync(pendingFile, JSON.stringify(added));
