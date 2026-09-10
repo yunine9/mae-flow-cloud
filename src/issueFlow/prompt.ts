@@ -295,8 +295,8 @@ export function issueFixedOpeningPrompt(
     : "";
   const meta = issueRegistrationMeta(state, credentials);
   const skillLines = skillSelectionLines(state, options.blockedPaths);
-  // docs 置信度分层(ADR-0021)与资产库地图(ADR-0012)是两段独立文案:
-  // 前者全阶段在场(契约文件就全阶段在场),后者只在 analyze 注入。
+  // 资产库地图(ADR-0012)只在 analyze 注入;docs 置信度分层已挪技能
+  // repo-docs(ADR-0021 同日修订),不再随开场/续聊常驻。
   const knowledgeLines = businessKnowledgeLines(state);
   const contract = promptCopy("opening", "fixed.contract", {
     stage_brief:
@@ -329,7 +329,6 @@ export function issueFixedOpeningPrompt(
   return [
     promptCopy("opening", "fixed.header"),
     `## 问题事实\n\n${facts}`,
-    `## 仓内业务知识(docs/)\n${promptCopy("opening", "fixed.docs_confidence")}`,
     `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})\n${stages}`,
     `## 阶段机契约(平台机械执行,说了算)\n${contract}`,
     promptCopy("opening", "fixed.kickoff"),
@@ -386,7 +385,6 @@ export function issueResumePrompt(
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
     ...skillSelectionLines(state, options.blockedPaths),
     ...businessKnowledgeLines(state),
-    promptCopy("opening", "fixed.docs_confidence"),
     promptCopy("opening",
       options.tier === "3" ? "resume.intervention.guard"
         : options.tier === "1" ? "resume.intervention.full_auto"

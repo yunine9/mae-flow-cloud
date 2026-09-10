@@ -29,7 +29,8 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
   // 改),与平台自有技能同一张清单注册。
   const expected = [
     "code-review", "codebase-design", "diagnosing-bugs", "grilling",
-    "implement", "issue-analysis", "issue-delivery", "issue-ops", "tdd",
+    "implement", "issue-analysis", "issue-delivery", "issue-ops",
+    "repo-docs", "tdd",
   ];
   const workspace = mfcTemp("mfc-issue-skills-");
   const first = materializeIssueSkills(workspace);

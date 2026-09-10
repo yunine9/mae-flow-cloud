@@ -16,7 +16,7 @@
 
 ## gate.analysis_confirm.confirm
 
-用户已确认问题分析报告,进入「{{stage}}」阶段。{{supplement}}请按已确认的方案实施修复,完成后调用 complete_stage。
+用户已确认问题分析报告,进入「{{stage}}」阶段,按已确认的方案实施修复。{{supplement}}
 
 ## gate.analysis_confirm.supplement
 
