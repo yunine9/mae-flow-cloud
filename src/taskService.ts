@@ -1,3 +1,5 @@
+import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
+import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
 import { materializeArchifyReferences } from "./archifyReferences.ts";
@@ -94,7 +96,7 @@ import { createSplitProposalTool, type SplitProposalInput } from "./splitProposa
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
-import { TaskHostLedger, type HostOperation, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, type TaskHostRuntime } from "./taskHostTools.ts";
+import { TaskHostLedger, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, type TaskHostRuntime } from "./taskHostTools.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -1946,49 +1948,8 @@ export interface DecisionSubmission {
   actor?: string;
 }
 
-function orderedRecord(
-  value: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!value) return undefined;
-  return Object.fromEntries(Object.entries(value)
-    .map(([key, item]) => [key, String(item)] as const)
-    .sort(([left], [right]) => left.localeCompare(right)));
-}
-
-/** 浏览器重试/双击的稳定身份。它只判断“是不是完全同一份提交”，
- * 不承担业务校验；业务校验仍由 normalizeDecisionSubmission 完成。 */
-function decisionRequestDigest(
-  waitingId: string,
-  input: DecisionSubmission,
-): string {
-  const normalized = {
-    waiting_id: waitingId,
-    state_version: input.state_version,
-    selected_options: orderedRecord(input.selected_options),
-    free_responses: orderedRecord(input.free_responses),
-    comment: input.comment?.trim() || undefined,
-    decision: input.decision?.trim() || undefined,
-    answers: orderedRecord(input.answers),
-    notes: input.notes?.trim() || undefined,
-    annotation_ids: input.annotation_ids
-      ? [...new Set(input.annotation_ids.map(String))].sort() : undefined,
-    repository_skill_catalog_token:
-      input.repository_skill_catalog_token || undefined,
-    selected_repository_skill_ids: input.selected_repository_skill_ids
-      ? [...new Set(input.selected_repository_skill_ids.map(String))].sort()
-      : undefined,
-    repository_assignees: orderedRecord(input.repository_assignees),
-    repository_tickets: orderedRecord(input.repository_tickets),
-    delivery_paths: input.delivery_paths
-      ? [...new Set(input.delivery_paths.map(String))].sort() : undefined,
-    delivery_compile_action: input.delivery_compile_action,
-  };
-  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
-}
-
 /** push 前确认卡的云端原生步骤名与选项原文。步骤不在内核流程里,
  * stepReviewSurface 对未知步骤默认给 "diff",勾选 UI 自动开放。 */
-const HOST_PUSH_CONFIRM_STEP = "host_push_confirm";
 const CLOUD_PUSH_CONFIRM_STEP = "cloud_push_confirm";
 const PUSH_CONFIRM_ACCEPT = "确认按清单推送";
 const PUSH_CONFIRM_REWORK = "需要调整代码（按清单返工）";
@@ -13669,40 +13630,6 @@ export class TaskService {
     }
   }
 
-  /** 增量推送只确认本次内容，不借用最终检视的反馈闭环条件。
-   * 确认保存在宿主操作上，操作已绑定分支和 SHA；网络重试复用确认。
-   */
-  private async confirmHostPush(task: TaskState, operation: HostOperation, assertActive: () => void): Promise<boolean> {
-    const required = task.summary.push_confirmation
-      ?? this.options.pushConfirmation?.(task.summary.luban_account) ?? false;
-    if (!required || operation.push_confirmed) return true;
-    const previouslyConfirmed = new TaskHostLedger(task.summary).read().operations.some(item =>
-      item.push_confirmed && item.sha === operation.sha && item.branch === operation.branch);
-    if (previouslyConfirmed) return true;
-    const snapshot = task.cwd ? await deliveryChangeSnapshot(task.cwd) : undefined;
-    if (!snapshot || snapshot.head !== operation.sha) {
-      throw new TaskControlError("待推送内容已变化，请重新整理本次推送");
-    }
-    if (task.summary.waiting?.step === HOST_PUSH_CONFIRM_STEP
-        && task.summary.waiting.call_id === operation.id) return false;
-    const paths = snapshot.baseline
-      ? (await this.deliveryContribution(task, snapshot)).paths : [];
-    assertActive();
-    task.summary.waiting = task.humanGate.createWaiting({
-      taskId: task.summary.id, step: HOST_PUSH_CONFIRM_STEP, callId: operation.id,
-      questionInput: { questions: [{ question: `推送到 ${operation.branch}？`,
-        options: ["确认推送", "先调整"] }] },
-      context: [operation.input.reason.slice(0, 500),
-        paths.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
-        "完整改动可在「交付材料 → 工作区变更」查看。调整范围请选「先调整」并说明。未处理的意见保持原状。"].join("\n\n"),
-    });
-    task.summary.status = "waiting_for_human";
-    task.summary.detail = "等待确认本次推送";
-    this.persist(task);
-    this.notifyWaiting(task);
-    return false;
-  }
-
   private finishHostPushDecision(task: TaskState, waiting: WaitingRecord): void {
     const ledger = new TaskHostLedger(task.summary);
     const operation = ledger.read().operations.find(item => item.id === waiting.call_id);
@@ -13784,7 +13711,12 @@ export class TaskService {
         [target ? `[责任人调整后的目标]\n${target}\n不再执行已暂缓事项。` : task.mission,
           message].filter(Boolean).join("\n\n"), "宿主操作已返回，继续当前目标"),
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
-      confirmPush: operation => this.confirmHostPush(task, operation, () => {
+      confirmPush: operation => confirmHostPush({
+        summary: task.summary, cwd: task.cwd, humanGate: task.humanGate,
+        accountDefault: () => this.options.pushConfirmation?.(task.summary.luban_account),
+        contribution: snapshot => this.deliveryContribution(task, snapshot),
+        persist: () => this.persist(task), notifyWaiting: () => this.notifyWaiting(task),
+      }, operation, () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化");
       }),
       push: (branch, sha) => this.pushFromHost(task, branch, sha),
