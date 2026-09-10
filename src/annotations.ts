@@ -533,6 +533,18 @@ export class AnnotationStore {
     this.append({ op: "sent", ids, via, at: new Date().toISOString(), by });
   }
 
+  /** 异步发送/执行只登记实际处理的那版。期间退回、改字或闭环的意见保留现状。 */
+  markSentFor(snapshot: readonly Annotation[], via: SentVia, by?: string): string[] {
+    const current = new Map(this.list().map((item) => [item.id, item]));
+    const ids = snapshot.filter((item) => {
+      const latest = current.get(item.id);
+      return latest && !latest.resolution && ["draft", "sent"].includes(latest.status)
+        && (latest.rework ?? 0) === (item.rework ?? 0) && latest.note === item.note;
+    }).map((item) => item.id);
+    this.markSent(ids, via, by);
+    return ids;
+  }
+
   /** 系统处理失败或重启恢复，不代表作者否定结果；只更新回执版本。 */
   resetRequirementDelivery(id: string, reason: string): void {
     const found = this.list().find((item) => item.id === id);
@@ -718,7 +730,7 @@ export class AnnotationStore {
     line?: number; anchor?: string; note?: string;
   }, ownerOverride = false): Annotation {
     const current = this.judgeable(id, by, ownerOverride);
-    if (["overall_story_queue", "overall_story_processing"].includes(current.sent_via ?? "")) {
+    if (!ownerOverride && ["overall_story_queue", "overall_story_processing"].includes(current.sent_via ?? "")) {
       throw new AnnotationError("整体 Story 仍在处理，请停止本轮后再调整意见");
     }
     this.append({

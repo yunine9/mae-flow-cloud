@@ -20,7 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
-import { TaskService } from "../src/taskService.ts";
+import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
 import { closeKernelDelivery } from "../src/kernelDelivery.ts";
 import {
   KERNEL_ROOT,

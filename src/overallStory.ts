@@ -218,8 +218,9 @@ export class OverallStoryCoordinator<T extends Owner> {
           annotation_ids: batch.map((a) => a.id), additions: diff.additions, deletions: diff.deletions });
         current.current = jobId; current.job = undefined; current.confirmed = undefined;
         writeStoryState(task.summary.workspace, current);
+        const applied = new Set(store.markSentFor(batch, "overall_story"));
         for (const receipt of receipts) {
-          store.markSent([receipt.annotation_id], "overall_story");
+          if (!applied.has(receipt.annotation_id)) continue;
           store.respond(receipt.annotation_id, { ...receipt, evidence: receipt.evidence ?? [] });
         }
         // 子任务同步是发布后的副作用；失败可重试，但不能抹掉已经发布的处理回执。

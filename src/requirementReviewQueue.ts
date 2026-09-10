@@ -4,6 +4,7 @@ import { auxiliarySessionEpoch } from "./auxiliarySessions.ts";
 
 // 锁只管同进程串行；队列以批注账里的 requirement_queue 持久化。
 const writers = new WeakMap<object, Set<string>>();
+const versionKey = (item: Annotation) => JSON.stringify([item.id, item.rework ?? 0, item.note]);
 
 export function interruptRequirementReviews(task: {
   summary: { requirement_revision?: { state: string; error?: string; finished_at?: string } };
@@ -53,8 +54,8 @@ export async function submitRequirementReview(
   const active = writers.get(task);
   if (active) {
     // 重复点击同一批不重跑；新意见先持久化，HTTP 无需等待当前 Agent。
-    store.markSent(annotations.filter((item) => !active.has(item.id))
-      .map((item) => item.id), "requirement_queue", sentBy);
+    store.markSentFor(annotations.filter((item) => !active.has(versionKey(item))),
+      "requirement_queue", sentBy);
     return;
   }
   const current = new Set<string>();
@@ -84,7 +85,7 @@ async function drainRequirementReviews(
     while (batch.length) {
       if (auxiliarySessionEpoch(task) !== epoch) return;
       current.clear();
-      batch.forEach((item) => current.add(item.id));
+      batch.forEach((item) => current.add(versionKey(item)));
       // 第一批也必须先登记“处理中”，否则页面仍把它当草稿反复提交。
       const senders = new Map<string | undefined, string[]>();
       for (const item of batch) {
@@ -101,7 +102,7 @@ async function drainRequirementReviews(
         const reason = `需求修订未完成：${String(error instanceof Error ? error.message : error).slice(0, 500)}`;
         // 只恢复实际执行过的这一批。后续意见尚未执行，不能连带报失败。
         for (const item of store.list()) {
-          if (current.has(item.id) && item.status === "sent"
+          if (current.has(versionKey(item)) && item.status === "sent"
               && item.sent_via === "requirement_review") {
             store.resetRequirementDelivery(item.id, reason);
           }

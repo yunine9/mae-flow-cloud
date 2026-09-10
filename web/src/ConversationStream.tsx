@@ -124,6 +124,7 @@ export function conversationCardTitle(
   if (item.purpose === "clarification") return "需要补充信息";
   if (item.step === "cloud_requirement_analysis_confirm") return "确认需求";
   if (item.step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
+  if (item.step === "cloud_mr_description") return "填写 AR 描述，用于 MR 标题";
   return item.questions[0]?.question || "需要你的决策";
 }
 
@@ -564,7 +565,7 @@ export function ConversationStream({
             <p className="conv-lead">{item.items.length} 条意见的处理回执</p>
             <ul className="conv-receipts">
               {item.items.map((entry) => (
-                <li key={`${entry.id}:${entry.revision}`} className={entry.outcome}>
+                <li key={`${entry.id}:${entry.revision}`} className={`outcome-${entry.outcome}`}>
                   <i aria-hidden>{entry.outcome === "fixed" ? "✓"
                     : entry.outcome === "not_fixed" ? "✕" : "?"}</i>
                   <div>

@@ -1487,7 +1487,7 @@ export function TaskWorkspace({
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "需求原文" }
     : materialView === "chain"
-    ? { kicker: "DELIVERY PLAN", title: "架构视图" }
+    ? { kicker: "ARCHITECTURE", title: "架构图" }
     : materialView === "diff"
       ? pushReview
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
@@ -2031,7 +2031,7 @@ export function TaskWorkspace({
                 </>}
                 {(hasRequirementGraph || hasArchitectureStory) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
                   onClick={() => openMaterial("chain")}>
-                  <span>架构视图</span>
+                  <span>架构图</span>
                 </button>}
                 <button type="button" role="tab" aria-selected={materialTabOn("diff")}
                   className={materialTabOn("diff") ? "on" : ""}

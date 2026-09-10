@@ -187,3 +187,27 @@ test("暂停恢复后，旧队列收尾不能解开新队列的串行锁或重�
   assert.equal(calls, 2);
   assert.ok(store.list().every((item) => item.sent_via === "interrupt"));
 });
+
+test("同一条意见退回重提时按版本入队，旧轮失败不能吞掉新轮", async () => {
+  const store = new AnnotationStore(join(mkdtempSync(join(tmpdir(), "mfc-rq-revision-")), "annotations.jsonl"));
+  const note = store.add({ author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "原文", note: "第一版", kind: "doc" });
+  const task = { summary: { status: "waiting_for_human", waiting: { step: "cloud_requirement_analysis_confirm" } } };
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const revisions: number[] = [];
+  const run = async (batch: typeof note[]) => {
+    revisions.push(batch[0].rework ?? 0);
+    if (revisions.length === 1) { await hold; throw new Error("旧轮失败"); }
+  };
+  const first = submitRequirementReview(task, store, [note], run);
+  const finished = assert.rejects(first, /旧轮失败/);
+  try {
+    store.reopen(note.id, "owner");
+    await submitRequirementReview(task, store, store.drafts(), run);
+    assert.equal(store.list()[0].sent_via, "requirement_queue", "新版本必须真正落盘排队，不能按相同 id 忽略");
+  } finally { release(); await finished; }
+  assert.deepEqual(revisions, [0, 1]);
+  assert.equal(store.list()[0].rework, 1);
+  assert.equal(store.list()[0].sent_via, "requirement_review");
+});

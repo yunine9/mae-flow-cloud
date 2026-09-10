@@ -125,8 +125,8 @@ export function Markdown({
           <div className="md-architecture-reference-main">
             <div><strong>{title}</strong><p>{architectureSummary(title)}</p></div>
             {onOpenArchitecture && <button type="button"
-              title="在当前任务的架构视图中打开这张图"
-              onClick={() => onOpenArchitecture(at)}>转到架构视图 ↗</button>}
+              title="在当前任务的架构图页签中打开这张图"
+              onClick={() => onOpenArchitecture(at)}>打开大图 ↗</button>}
           </div>
           <details><summary>技术信息（排障）</summary><pre className="md-block-code"><code>{source.join("\n")}</code></pre></details>
         </section>);
@@ -134,6 +134,9 @@ export function Markdown({
       }
       blocks.push(language === "plantuml"
         ? <div key={key++} className="md-uml" data-l={at} data-line-end={index}>
+            {onOpenArchitecture && <button type="button" className="md-diagram-open"
+              title="在当前任务的架构图页签中打开这张图"
+              onClick={() => onOpenArchitecture(at)}>打开大图 ↗</button>}
             <PlantUml source={source.join("\n")} />
           </div>
         : language === "mermaid"

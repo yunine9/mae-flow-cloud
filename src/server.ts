@@ -3007,7 +3007,9 @@ export function createTaskServer(
           }
           const diagram = projection.diagrams.find((item) => item.id === parts[3]);
           if (!diagram) return json(response, 404, { error: "当前 Story 中没有这张图" });
-          const result = await renderArchify(diagram.source);
+          const result = diagram.renderer === "plantuml"
+            ? await renderPlantUml(diagram.source, { cacheDir: join(service.options.dataDir, "diagram-cache") })
+            : await renderArchify(diagram.source);
           const after = await load();
           if (!after || after.content !== artifact.content) {
             return json(response, 409, { error: "生成期间 Story 已更新，请刷新架构图" });

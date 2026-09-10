@@ -764,6 +764,10 @@ test("批注随决定提交:只送决定者自己的草稿,旁观记录不越权
       annotation_ids: [one.id],
       actor: "liaoxiang",
     });
+    const durable = (service as any).tasks.get(id).humanGate.get(waiting.waiting_id);
+    assert.deepEqual(durable.continuation.annotation_versions,
+      [{ id: one.id, revision: 0, note: one.note }],
+      "真实决定须落盘本次送达的正文版本，不能只保存可重复使用的意见 id");
     await until(() => service.get(id)?.status === "completed", "任务收口");
 
     const seen = model.requests

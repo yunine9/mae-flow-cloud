@@ -2,7 +2,8 @@ import { readJson } from "./jsonBody.ts";
 import type { GateItem, GateView } from "./mergeWatch.ts";
 
 /** 查询指定 MR 的平台事实。监控允许缺失生命周期字段；再次交付必须
- * 严格核对。平台不可得返回 undefined，由调用方决定重试还是停止写入。 */
+ * 严格核对。不可得仍返回 undefined，但失败原因必须交给调用方分类，
+ * 不能让一次网络抖动和确定性鉴权错误都变成直接停摆。 */
 export async function fetchMrGates(options: {
   platformUrl?: string;
   repo: string;
@@ -11,12 +12,18 @@ export async function fetchMrGates(options: {
     mr_id?: string | number; mr_url?: string };
   requireExisting?: boolean;
   log?: (error: string) => void;
+  onFailure?: (reason: string) => void;
 }): Promise<GateView | undefined> {
   const { platformUrl, delivery, requireExisting } = options;
-  if (!platformUrl || !delivery
-      || (!requireExisting && (!delivery.source_branch || !delivery.target_branch))) {
+  const failed = (reason: string): undefined => {
+    options.log?.(reason);
+    options.onFailure?.(reason);
     return undefined;
+  };
+  if (!platformUrl || !delivery) {
+    return failed("交付平台响应不完整：MR 查询缺少平台地址或交付信息");
   }
+  if (!requireExisting && (!delivery.source_branch || !delivery.target_branch)) return undefined;
   try {
     const params = new URLSearchParams({ repo: options.repo,
       source_branch: delivery.source_branch ?? "",
@@ -36,11 +43,21 @@ export async function fetchMrGates(options: {
     const response = await fetch(`${platformUrl}/mr/gates?${params}`, {
       headers: options.headers, signal: AbortSignal.timeout(10_000),
     });
-    if (response.status === 404) return undefined;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const body = await readJson(response);
+    let body;
+    try {
+      body = await readJson(response);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        return failed("交付平台响应不完整：MR 状态响应不是合法 JSON");
+      }
+      throw error; // Response-body timeout/disconnect is still a transport failure.
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return failed("交付平台响应不完整：MR 状态响应不是对象");
+    }
     if (requireExisting && !["opened", "merged", "closed"].includes(body.mr_state)) {
-      throw new Error("已有 MR 的生命周期状态缺失或无效");
+      return failed("交付平台响应不完整：已有 MR 的生命周期状态缺失或无效");
     }
     const gates: GateItem[] = (Array.isArray(body.gates) ? body.gates : [])
       .filter((gate: any) => typeof gate?.name === "string"
@@ -53,7 +70,6 @@ export async function fetchMrGates(options: {
       ? body.sha.trim() : undefined;
     return { mrState, gates, ...(sourceSha ? { sourceSha } : {}) };
   } catch (error) {
-    options.log?.(String(error));
-    return undefined;
+    return failed(error instanceof Error ? error.message : String(error));
   }
 }

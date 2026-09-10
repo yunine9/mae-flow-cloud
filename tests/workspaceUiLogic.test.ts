@@ -882,13 +882,32 @@ test("责任人逐条处置表单保留缺回执事实，检视人和管理员�
     items: [pending], checks: [], taskStatus: "waiting_for_human", reviewReady: true,
     reviewAnnotationIds: [pending.id], onChanged: () => undefined };
   const html = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername: "owner" }));
-  assert.match(html, /确认这条处置/);
-  assert.match(html, /这条意见的处理依据/);
+  assert.match(html, /确认通过/);
+  assert.match(html, /其他处理/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /这条意见的处理依据|保存处理结果/, "处置表单不能在阅读批注时自动展开");
   assert.match(html, /当前轮逐条回执尚未就绪/);
   assert.doesNotMatch(html, /Agent 已处理本轮|Agent 已处理你提出/);
   for (const viewerUsername of ["reviewer", "admin"]) {
     const readonly = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername, canOverride: true }));
-    assert.doesNotMatch(readonly, /确认这条处置|管理员代确认|管理员代删/);
+    assert.doesNotMatch(readonly, /确认通过|其他处理|管理员代确认|管理员代删/);
     assert.match(readonly, /待责任人逐条处置/);
+  }
+});
+
+
+test("责任人核对 Agent 修复后直接确认通过，不再自动展开处置表单", () => {
+  for (const artifact of ["requirement", "diff", "design.md"]) {
+    const html = renderToStaticMarkup(React.createElement(Panel, {
+      taskId: "owner-review", taskOwner: "owner", ownerControlled: true,
+      viewerUsername: "owner", items: [annotation({ artifact, author: "reviewer" })],
+      checks: [], taskStatus: "waiting_for_human", onChanged: () => undefined,
+    }));
+    assert.match(html, />确认通过<\/button>/);
+    assert.match(html, />仍需调整<\/button>/);
+    assert.match(html, /aria-expanded="false"/);
+    assert.doesNotMatch(html, /role="combobox"|<textarea/);
+    assert.match(html, /annot-response outcome-fixed/);
+    assert.doesNotMatch(html, /class="annot-response fixed"/);
   }
 });
