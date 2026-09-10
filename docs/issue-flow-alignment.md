@@ -26,7 +26,13 @@ fetchMrDiscussions 凭据链、state.mrs/pushes 账目。
   ⑥IssueMrRecord 逐 MR 增 merged_at/merged_sha/closed_at,SHA 漂移接受
   (合入的是 merge/squash 产物,不必等于验绿 SHA);⑦团队看板问题域
   "已交付"口径同步按 delivered(全 merged)计,fixed 单列。
-- [ ] 实施
+- [x] 实施(2026-09-10,c5b5b07):IssueMrRecord 增 target/merged_at/
+  merged_sha/closed_at;closeMrGreen 点火合入监看(fetchMrGates 首次接入
+  问题流,双轨:监看循环+归档竞态核对);归档软闸结论按事实记(全
+  merged→delivered,未全合→fixed);POST /issues/:id/merge-status;
+  归档对话框逐仓摆明;看板文案收紧(delivered=已交付);ADR-0022+
+  契约样例;测试 issueMergeFact 3 场景。注:当日曾被 b1e9f46 误剔,
+  已恢复(见事故记录)。
 
 ## ② 检视回执三连修对照自查(源:6ee679c/2a26c64/0c10f9a)
 
@@ -161,12 +167,5 @@ service.ts 我的区块为源,在 HEAD 上重放(A~P 清单见会话记录);并�
 在途的页面凭据重构(sessionDriver/semanticEvents/page_account 一串)
 属其自有工作,不卷入。
 
-## ⑤原始条目
-
-问题侧环境预热(warmup)不直播编译过程;若接,复用需求侧
-executionEventBuffer 分批回放模式(EventsPane 已有分批装载底子)。
-UT 聚焦提示词(816e51b):问题侧 briefs.md 已有 TDD 节奏,最多补一句
-"聚焦函数与模块 UT 不跑全量"。
-
-- [ ] 拍板(grill)
-- [ ] 实施(可能拍板为暂不做)
+按需求侧验收标准自查问题侧重启恢复——已并入③同轮体检(③的"判定
+通过/修复/遗留"三节即本项产出)。拍板与实施均并入③。
