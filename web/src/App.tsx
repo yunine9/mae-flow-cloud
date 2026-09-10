@@ -26,6 +26,7 @@ import {
   putPersonalPushConfirmation,
   putIssueInterventionTier,
 } from "./api";
+import { EnvironmentRegistry } from "./EnvironmentRegistry";
 import { byNewest, byUrgency } from "./taskTime";
 import { orderHierarchyBy, orderTaskHierarchy, keepFamiliesTogether } from "./taskHierarchy";
 import {
@@ -74,7 +75,7 @@ const HelpCenter = lazy(() =>
 // 两侧各退役一个视图,取并集:"business" 并入团队资产页签(modules,
 // 本地);"history" 并入团队任务的档案页签(origin)。
 type View = "team" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "knowledge" | "wishes" | "help";
+  | "settings" | "knowledge" | "wishes" | "help" | "environments";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -83,7 +84,7 @@ type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights" | "memori
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
-  "wishes", "help",
+  "wishes", "help", "environments",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
   "knowledge", "modules", "workflows", "insights", "memories",
@@ -154,6 +155,12 @@ function readIssueRoute(): string {
   try { return decodeURIComponent(match[1]); } catch { return ""; }
 }
 
+/** 环境管理深链(/environments):台账是全局团队资源,链接可以直接发给
+ * 同事,登录后落到页签本身(台账没有单条详情页,整页即深链落点)。 */
+function readEnvironmentRoute(): boolean {
+  return /^\/environments\/?$/.test(location.pathname);
+}
+
 export type WorkspaceTargetResolution =
   | { kind: "pending" }
   | { kind: "missing" }
@@ -177,6 +184,8 @@ export function resolveWorkspaceTarget(
 function initialView(user: AuthUser): View {
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
+  // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
+  if (readEnvironmentRoute()) return "environments";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -469,6 +478,7 @@ function NavIcon({ name }: { name: View }) {
   if (name === "wishes") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20.25s-7.25-4.1-7.25-10.1A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 7.25 3.35c0 6-7.25 10.1-7.25 10.1Z" /><path d="m17.5 3.75.45 1.3 1.3.45-1.3.45-.45 1.3-.45-1.3-1.3-.45 1.3-.45.45-1.3Z" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
+  if (name === "environments") return <svg viewBox="0 0 24 24" aria-hidden><rect x="4.75" y="4.75" width="14.5" height="5.75" rx="1.25" /><rect x="4.75" y="13.5" width="14.5" height="5.75" rx="1.25" /><path d="M8.25 7.6h.01M8.25 16.4h.01" /></svg>;
   if (name === "help") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="8.25" /><path d="M9.7 9.1a2.5 2.5 0 0 1 4.8.9c0 1.8-2.5 2-2.5 3.7M12 17.3v.15" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
@@ -692,6 +702,23 @@ export function App() {
     };
     addEventListener("popstate", syncHelpRoute);
     return () => removeEventListener("popstate", syncHelpRoute);
+  }, [session?.username, session?.role]);
+
+  // 环境管理深链(/environments)与 FAQ 同一纪律:浏览器前进/后退要真的
+  // 切页;离开 /environments 后回到该角色的默认首页(或历史项里记住的视图)。
+  useEffect(() => {
+    if (!session) return;
+    const syncEnvironmentRoute = (event: PopStateEvent) => {
+      if (readEnvironmentRoute()) {
+        setView("environments");
+        return;
+      }
+      const restoredView = viewFromHistoryState(event.state);
+      setView((current) => current === "environments"
+        ? restoredView ?? initialView(session) : current);
+    };
+    addEventListener("popstate", syncEnvironmentRoute);
+    return () => removeEventListener("popstate", syncEnvironmentRoute);
   }, [session?.username, session?.role]);
 
   useEffect(() => {
@@ -1045,6 +1072,7 @@ export function App() {
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
+    environments: { title: "环境管理", description: "团队共用的网管环境台账：录入一次，登记与会话随时快选；密码加密保存、永不回显。" },
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   const relevantWaiting = view === "mine"
@@ -1058,6 +1086,14 @@ export function App() {
     if (target === "issues") return;
     normalizeIssueRoute(target);
   };
+  /** 离开环境管理页签的归位人:URL 若还挂在 /environments(深链直达后
+   * 又点了别的页签),带回根路径并记住目标视图——与 leaveIssueRoute 同
+   * 职责,两条深链路径互不重叠,各管各的归位。 */
+  const leaveEnvironmentRoute = (target: View) => {
+    if (!readEnvironmentRoute()) return;
+    history.pushState(appHistoryState(target,
+      target === "knowledge" ? teamAssetTab : undefined), "", "/");
+  };
   const selectView = (next: View) => {
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
@@ -1068,6 +1104,12 @@ export function App() {
           view === "knowledge" ? teamAssetTab : undefined), "",
           location.pathname + location.search);
         history.pushState(appHistoryState("help"), "", nextPath);
+      }
+    } else if (next === "environments") {
+      // 台账深链:进页签就换地址(可复制、可后退),后退回上一视图;
+      // 已在 /environments(刷新/直连)不重复压栈。
+      if (location.pathname !== "/environments") {
+        history.pushState(appHistoryState("environments"), "", "/environments");
       }
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
       history.pushState(appHistoryState(next,
@@ -1081,6 +1123,7 @@ export function App() {
         location.pathname + location.search);
     } else {
       leaveIssueRoute(next);
+      leaveEnvironmentRoute(next);
     }
     // 不变量对表:进出页签、history 同步写完后按当前 URL 重读快照——
     // 进入问题处理拿到深链 id(有则直达工作台),离开则随归位清成空串。
@@ -1112,6 +1155,9 @@ export function App() {
           <NavButton view="issues" current={view} onSelect={selectView} label="问题处理（Beta）" beta />
           <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+          {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
+              管理),与团队资产同进「管理视角」组。 */}
+          <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={selectView} label="账号管理" />
           <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
@@ -1124,6 +1170,9 @@ export function App() {
           <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
           <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+          {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
+              同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}
+          <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
         </>}
       </nav>
       <div className="sidebar-bottom">
@@ -1283,6 +1332,7 @@ export function App() {
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
+        {view === "environments" && <EnvironmentRegistry />}
         {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
           <HelpCenter viewer={session}
             initialArticleId={helpArticleId}

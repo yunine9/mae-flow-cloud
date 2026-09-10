@@ -9,7 +9,11 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "noUnusedLocals": true
+    "noUnusedLocals": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }

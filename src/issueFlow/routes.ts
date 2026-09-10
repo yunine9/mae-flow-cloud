@@ -40,8 +40,9 @@
  *   GET  /issues/:id/events           → SSE:事件流尾随
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
- *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口;
- *                                      decline:true=拒绝,票 93)
+ *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的
+ *                                      作答口;decline:true=拒绝,票 93;
+ *                                      environment_id=台账快照,#150)
  *   POST /issues/:id/interrupt        → 补充(运行中送达 AI)
  *   POST /issues/:id/takeover         → 人工接管(打断 AI,现场交由人工)
  *   POST /issues/:id/takeover/note    → 接管期人工操作记录(只记账不投喂)
@@ -363,6 +364,47 @@ export async function handleIssueRoutes(
           // 匹配失败不阻断发起,留给 Agent 处理。
         }
       }
+      // 环境段(#150,ADR-0020 快照语义):environment_id 在场即从台账
+      // 快照——前端永远没有密码,值由服务端解密取用;与手填字段互斥,
+      // 同给 400 打回。页面凭据不入台账,登记快照仍随手填带上。
+      let environmentInput: Record<string, unknown> | undefined;
+      if (body.environment) {
+        if (body.environment.environment_id !== undefined
+            && body.environment.environment_id !== null) {
+          if (body.environment.hosts !== undefined
+              || body.environment.backend_password !== undefined
+              || body.environment.env_type !== undefined
+              || body.environment.port !== undefined) {
+            return done(400, {
+              error: "台账快照与手工填写互斥:选了环境管理里的环境,"
+                + "就不要再填地址、端口、形态或密码",
+            });
+          }
+          environmentInput = {
+            environmentId: String(body.environment.environment_id),
+            ...(body.environment.page_account !== undefined
+              ? { pageAccount: String(body.environment.page_account) } : {}),
+            ...(body.environment.page_password !== undefined
+              ? { pagePassword: String(body.environment.page_password) } : {}),
+          };
+        } else {
+          environmentInput = {
+            name: body.environment.name === undefined
+              ? undefined : String(body.environment.name),
+            hosts: Array.isArray(body.environment.hosts)
+              ? body.environment.hosts.map(String) : [],
+            ...(body.environment.port !== undefined
+              ? { port: Number(body.environment.port) } : {}),
+            ...(body.environment.page_account !== undefined
+              ? { pageAccount: String(body.environment.page_account) } : {}),
+            ...(body.environment.page_password !== undefined
+              ? { pagePassword: String(body.environment.page_password) } : {}),
+            ...(body.environment.env_type !== undefined
+              ? { envType: String(body.environment.env_type) as IssueEnvType } : {}),
+            backendPassword: String(body.environment.backend_password ?? ""),
+          };
+        }
+      }
       const created = issueFlow.create({
         account: String(body.account ?? viewer?.username ?? ""),
         title: String(body.title ?? ""),
@@ -380,23 +422,7 @@ export async function handleIssueRoutes(
         ...(body.module_id
           ? { moduleId: String(body.module_id), moduleLocked: true } : {}),
         ...(autoModuleId ? { moduleId: autoModuleId } : {}),
-        ...(body.environment ? {
-          environment: {
-            name: body.environment.name === undefined
-              ? undefined : String(body.environment.name),
-            hosts: Array.isArray(body.environment.hosts)
-              ? body.environment.hosts.map(String) : [],
-            ...(body.environment.port !== undefined
-              ? { port: Number(body.environment.port) } : {}),
-            ...(body.environment.page_account !== undefined
-              ? { pageAccount: String(body.environment.page_account) } : {}),
-            ...(body.environment.page_password !== undefined
-              ? { pagePassword: String(body.environment.page_password) } : {}),
-            ...(body.environment.env_type !== undefined
-              ? { envType: String(body.environment.env_type) as IssueEnvType } : {}),
-            backendPassword: String(body.environment.backend_password ?? ""),
-          },
-        } : {}),
+        ...(environmentInput ? { environment: environmentInput } : {}),
       });
       return done(201, created);
     }
@@ -790,14 +816,40 @@ export async function handleIssueRoutes(
     // 登记同一条存储路径),状态/事件里永远只有引用——成功即清闸并开
     // 平台回合让 Agent 重试。闸只收地址+后台密码:页面凭据是登记侧的
     // 四件套,现场补配的流程(抓日志/换库)碰不到网管页面。
+    // 快照语义(#150,ADR-0020):environment_id 在场即从环境台账快照,
+    // 服务端解密取值(前端零密码),与手填同一条 storeEnvironment 路径;
+    // 与 decline 互斥、与手填字段互斥,同给一律 400。
     // decline 分支(票 93)是同一提交口上的拒绝路:归属人认定这一动作
     // 不需要网管环境,硬拒绝+可解锢(配置成功自动解除);闸不在场由
-    // 服务层如实打回。
+    // 服务层如实打回。手填路另带可选 root 密码与「存入环境管理」沉淀。
     if (method === "POST" && parts[2] === "environment" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能作答网管环境卡(填写或拒绝)" });
       }
       const body = await readBody(request);
+      if (body.environment_id !== undefined
+          && body.environment_id !== null) {
+        if (body.decline === true) {
+          return done(400, {
+            error: "台账快照与拒绝互斥:要么从环境管理选环境提交,"
+              + "要么拒绝这张卡",
+          });
+        }
+        if (body.hosts !== undefined
+            || body.backend_password !== undefined
+            || body.port !== undefined
+            || body.env_type !== undefined
+            || body.root_password !== undefined
+            || body.save_to_registry !== undefined) {
+          return done(400, {
+            error: "台账快照与手工填写互斥:要么从环境管理选环境提交,"
+              + "要么手动填写(含 root 密码与存入环境管理)",
+          });
+        }
+        return done(200, issueFlow.attachEnvironment(id, {
+          environmentId: String(body.environment_id),
+        }));
+      }
       if (body.decline === true) {
         // note 只收字符串:null/数字等脏输入不当理由入账转 AI。
         const note = typeof body.note === "string" && body.note.trim()
@@ -810,7 +862,11 @@ export async function handleIssueRoutes(
         ...(body.env_type !== undefined
           ? { envType: String(body.env_type) as IssueEnvType } : {}),
         backendPassword: String(body.backend_password ?? ""),
-      }));
+        // 手填可选 root 密码(空串 = 留空,与后台密码相同,不落独立凭据)。
+        ...(typeof body.root_password === "string"
+            && body.root_password.trim()
+          ? { rootPassword: body.root_password.trim() } : {}),
+      }, { saveToRegistry: body.save_to_registry === true }));
     }
 
     if (method === "POST" && parts[2] === "interrupt" && parts.length === 3) {

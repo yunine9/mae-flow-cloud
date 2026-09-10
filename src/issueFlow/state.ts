@@ -108,6 +108,14 @@ export interface IssueEnvironmentConfig {
   /** 页面凭据组的 vault 引用(页面密码本体只在 vault;纯记录,本期
    * 无消费方,为页面自动化预留)。 */
   page_credential_ref?: string;
+  /** 独立 root 密码组的 vault 引用(ADR-0020/#150:台账条目显式设置
+   * root 密码时快照才有;缺席=继承后台密码,消费面与手填时代的会话
+   * 行为完全一致,不落独立凭据)。 */
+  root_credential_ref?: string;
+  /** 快照来源(ADR-0020「选入即快照」,非密):登记/env_needed 闸从
+   * 环境台账选入时记录选定时点的台账主 IP,展示"来自环境管理 x.x.x.x"
+   * 用;手填环境整字段缺席,前端与 AI 消费不受影响。 */
+  environment_source_ip?: string;
   /** 环境形态(虚拟化/容器化 K8s,登记页面或 env_needed 卡人工选定;
    * 缺席=形态未登记的存量环境,AI 举卡补配时一并补齐)。 */
   env_type?: IssueEnvType;

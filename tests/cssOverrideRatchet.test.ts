@@ -107,9 +107,14 @@ test("CSS 叠层:现有样式全在 legacy 一层,覆盖只走 fixes 层,不再�
   for (const [name, text] of Object.entries(css)) {
     const body = text.replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^@layer [^{;]+;$/m, "").trim();
-    assert.ok(body.startsWith("@layer legacy {"),
-      `${name} 的样式必须整体包在 @layer legacy { … } 里(新文件也一样)`);
-    assert.ok(body.endsWith("}"), `${name} 的 legacy 层没有闭合`);
+    // 2026-09-09 豁免(issue #148):tailwind.css 是 Tailwind v4 新世界入口,
+    // 层序经 @import layer() 注记在构建期落位(legacy < fixes < theme < utilities,
+    // dist 已验),结构上不属于 legacy 存量,不包 legacy 层;未登记层的禁令对它照常生效。
+    if (name !== "tailwind.css") {
+      assert.ok(body.startsWith("@layer legacy {"),
+        `${name} 的样式必须整体包在 @layer legacy { … } 里(新文件也一样)`);
+      assert.ok(body.endsWith("}"), `${name} 的 legacy 层没有闭合`);
+    }
     const layers = [...text.matchAll(/@layer\s+([a-zA-Z-]+)\s*\{/g)].map((match) => match[1]);
     assert.deepEqual([...new Set(layers)].filter((layer) => layer !== "legacy" && layer !== "fixes"), [],
       `${name} 用了未登记的层;要新开层先过一遍截图裁判再来改这里`);

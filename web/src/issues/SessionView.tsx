@@ -293,8 +293,11 @@ export function IssueSessionView({
               现场;ADR-0003:账号非密可上屏,密码本体只在 vault)。闸现场
               补配的环境没有页面凭据,页面账号缺席就不占位。 */}
           {detail.environment && <span className="issue-stage"
-            title="登记元信息里的网管环境(密码在平台加密保管,不上屏)">
-            网管环境 {detail.environment.hosts.join("、")}
+            title={detail.environment.environment_source_ip
+              ? "来自环境管理台账的选定时点快照(密码在平台加密保管,不上屏)"
+              : "登记元信息里的网管环境(密码在平台加密保管,不上屏)"}>
+            {detail.environment.environment_source_ip ? "来自环境管理" : "网管环境"}
+            {` ${detail.environment.hosts.join("、")}`}
             {` · 端口 ${detail.environment.port}`}
             {detail.environment.page_account
               ? ` · 页面账号 ${detail.environment.page_account}` : ""}

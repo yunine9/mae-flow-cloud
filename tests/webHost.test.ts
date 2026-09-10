@@ -133,6 +133,17 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
     assert.equal(issueApi.status, 404);
     assert.match(issueApi.headers.get("content-type") ?? "", /application\/json/);
 
+    // 环境管理页签深链(#149):同款判别式——浏览器导航(text/html)拿
+    // SPA 入口,程序 fetch(默认 Accept:*/*)照旧拿台账 JSON,契约零变化。
+    const envPage = await fetch(base + "/environments", {
+      headers: { accept: "text/html" },
+    });
+    assert.equal(envPage.status, 200);
+    assert.match(envPage.headers.get("content-type") ?? "", /text\/html/);
+    assert.match(await envPage.text(), /正式前端/);
+    const envApi = await fetch(base + "/environments");
+    assert.match(envApi.headers.get("content-type") ?? "", /application\/json/);
+
     // 穿越:fetch 会在客户端就规范化 "..",测不到服务端——
     // 用裸 socket 发未规范化路径,断言真属性:秘密永不泄露。
     const raw = await rawGet(base, "/assets/../../secret.txt");

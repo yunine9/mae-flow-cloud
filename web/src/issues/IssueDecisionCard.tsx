@@ -14,8 +14,12 @@
  * 后果提示(choice_effects)是任务侧的服务端能力,问题域没有对应账目,
  * 这里不伪造。
  *
- * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
- * 端口+网管后台密码),提交走 onEnvironment(由会话视图接到
+ * 例外是 env_needed 闸(2026-08-28;#150 起默认台账快选):通用选项卡
+ * 换成语义化表单。默认视图是环境管理台账快选列表(EnvironmentPicker,
+ * 展示 IP/形态/标签,选中提交 environment_id——服务端从台账解密快照进
+ * 会话 vault,ADR-0020「选入即快照」,前端永远没有密码);「手动填写」
+ * 回退保留原表单(地址+端口+网管后台密码,另加可选 root 密码与
+ * 「存入环境管理」沉淀勾选)。提交走 onEnvironment(由会话视图接到
  * attachIssueEnvironment——密码不进浏览器草稿,在服务端 vault 加密
  * 保存;配置后会按 ADR-0003 进入本问题会话的 AI 上下文供工具消费,
  * 但不出现在会话列表、状态摘要或事件流)。闸只收 地址+后台密码:现场补配的流程(拉日志/换库)
@@ -53,6 +57,8 @@
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { IssueEnvironmentForm, IssueSkillChoice, IssueWaitingCard } from "../api";
+import { EnvironmentPicker } from "../EnvironmentPicker";
+import type { EnvironmentView } from "../api";
 import { toggleDecisionChoice } from "../decisionSelection";
 import { Markdown } from "../markdown";
 
@@ -152,16 +158,37 @@ export function IssueDecisionCard({ waiting, busy, footerTarget, onAnswer, onEnv
     footerTarget={footerTarget} onAnswer={onAnswer} />;
 }
 
-/** 网管环境表单:环境形态(虚拟化/容器化 K8s,决定日志抓取引擎)+
- * 网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)+ 网管后台密码。
+/** 网管环境表单(票 #150 起,默认台账快选 + 手动回退):
+ * - 快选(默认视图):EnvironmentPicker 列台账条目(IP/形态/标签),
+ *   选中提交 environment_id——服务端从台账解密快照进会话 vault
+ *   (ADR-0020 选入即快照),前端永远没有密码,凭据区一个都不填。
+ * - 手动填写(回退):环境形态 + IP + 端口 + 网管后台密码(与旧版
+ *   一字不差),另带可选 root 密码(留空 = 与后台密码相同)与
+ *   「存入环境管理」沉淀勾选(ADR-0020:手填顺带沉淀成团队资产)。
  * 密码经 POST 进服务端 vault(AES-GCM 加密文件),前端不存草稿;之后会
  * 进入本问题会话的 AI 上下文,让拉日志工具能够消费,但不出现在会话
  * 列表、状态摘要或事件流。次要出路是拒绝(票 93):AI 误判要日志/要
  * 部署时,人可以不填环境直接拒绝——按闸 scope 显示拍板文案,选填一句
  * 理由随平台通知转给 AI。
+ * 样式(#146 触碰即迁):本表单区块已迁 Tailwind 工具类(根挂 .tw-root,
+ * 颜色/字号/圆角走令牌桥),视觉与交互保持原效果;提交区容器
+ * (issue-decision-dock-foot/issue-decision-submit)与 custom-input 是
+ * 四类卡共用的卡座/dock 双上下文皮肤,样式随挂载位置分叉(卡内 vs
+ * 输入区 dock),工具类表达不了上下文选择器,按 #146 例外保留 legacy。
  * 卡座分工(#125):表单字段留在卡上;附言(拒绝理由)与提交/拒绝按钮
  * 经 IssueDecisionFooterMount 挂进输入区 dock——提交未成功提示与理由
  * 草稿的状态仍归本组件,portal 只搬 DOM。 */
+
+/** 迁移块的令牌化样式(#146):字段与控件的工具类配方,块内复用。 */
+const ENV_FIELD = "grid gap-[5px] text-sm text-muted-foreground";
+const ENV_CONTROL =
+  "w-full rounded-[8px] border border-line bg-surface-3 px-[10px] py-2 "
+  + "text-sm text-text-strong";
+const ENV_NOTE = "text-sm text-muted-foreground";
+const ENV_MANUAL_LINK =
+  "self-start rounded-md border border-line px-2 py-1 text-xs "
+  + "text-muted-foreground hover:text-foreground";
+
 function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
   busy: boolean;
   /** 闸的用途面(logs=拉日志 / deploy=换库部署),拒绝文案按它分叉。 */
@@ -170,10 +197,15 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
   footerTarget?: HTMLElement | null;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
+  /** 作答面:picker=台账快选(默认)/ manual=手动回退。 */
+  const [mode, setMode] = useState<"picker" | "manual">("picker");
+  const [picked, setPicked] = useState<EnvironmentView | null>(null);
   const [envType, setEnvType] = useState<"" | "virtualized" | "k8s">("");
   const [hosts, setHosts] = useState("");
   const [port, setPort] = useState("22");
   const [backendPassword, setBackendPassword] = useState("");
+  const [rootPassword, setRootPassword] = useState("");
+  const [saveToRegistry, setSaveToRegistry] = useState(false);
   const [declineNote, setDeclineNote] = useState("");
   const [error, setError] = useState("");
   const host = hosts.trim();
@@ -183,17 +215,41 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
     && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
+  function pickEnvironment(entry: EnvironmentView) {
+    setPicked(entry);
+    setError("");
+  }
+
   async function submit() {
-    if (!ready || busy || !onSubmit) return;
+    if (busy || !onSubmit) return;
+    if (mode === "picker") {
+      // 快选:只上送条目 id,值由服务端从台账解密快照(前端零密码)。
+      if (!picked) return;
+      const ok = await onSubmit({ environment_id: picked.id });
+      if (ok) {
+        setPicked(null);
+        setError("");
+      } else {
+        setError("提交未成功,请稍后重试");
+      }
+      return;
+    }
+    if (!ready) return;
     const ok = await onSubmit({
       hosts: [host],
       ...(port !== "22" ? { port: portNumber } : {}),
       env_type: envType,
       backend_password: backendPassword,
+      // 可选 root 密码:留空 = 与后台密码相同(服务端不落独立凭据)。
+      ...(rootPassword.trim() ? { root_password: rootPassword.trim() } : {}),
+      // 手填沉淀(ADR-0020):把这次手填存进团队台账。
+      ...(saveToRegistry ? { save_to_registry: true } : {}),
     });
     if (ok) {
       setEnvType("");
       setBackendPassword("");
+      setRootPassword("");
+      setSaveToRegistry(false);
       setError("");
     } else {
       setError("提交未成功,请稍后重试");
@@ -214,39 +270,68 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
     setError(ok ? "" : "提交未成功,请稍后重试");
   }
 
-  return <div className="issue-decision-env">
-    <label className="issue-field">
-      <span>环境形态</span>
-      <select value={envType}
-        onChange={(event) => setEnvType(event.target.value as "" | "virtualized" | "k8s")}>
-        <option value="" disabled>请选择</option>
-        <option value="virtualized">虚拟化</option>
-        <option value="k8s">容器化(K8s)</option>
-      </select>
-    </label>
-    <label className="issue-field wide">
-      <span>网管环境IP</span>
-      <input value={hosts} spellCheck={false}
-        placeholder="60.14.46.16"
-        onChange={(event) => setHosts(event.target.value)} />
-    </label>
-    <label className="issue-field">
-      <span>端口</span>
-      <input type="number" min={1} max={65535} value={port}
-        onChange={(event) => setPort(event.target.value)} />
-    </label>
-    <label className="issue-field">
-      <span>网管后台密码</span>
-      <input type="password" value={backendPassword} autoComplete="new-password"
-        onChange={(event) => setBackendPassword(event.target.value)} />
-    </label>
-    {invalidHost && <p className="issue-decision-note" role="alert">
-      网管环境IP一次只填一个，请不要输入逗号、空格或换行。
-    </p>}
-    <p className="issue-decision-note">
-      口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
-      但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
-    </p>
+  const submitDisabled = busy || (mode === "picker" ? !picked : !ready);
+
+  return <div className={`tw-root grid gap-[10px] px-[15px] pt-[13px] text-base text-foreground${footerTarget ? " pb-[15px]" : ""}`}>
+    {mode === "picker" ? <>
+      <EnvironmentPicker selectedId={picked?.id ?? null}
+        onPick={pickEnvironment}
+        onManual={() => { setMode("manual"); setError(""); }} />
+      {picked && <p className={ENV_NOTE} role="status">
+        将提交「来自环境管理 {picked.ip}」:服务端以选定时点的台账值快照进
+        本会话,之后台账怎么改、删都不影响本会话,凭据无需在此填写。
+      </p>}
+    </> : <>
+      <button type="button" className={ENV_MANUAL_LINK}
+        onClick={() => { setMode("picker"); setError(""); }}>
+        从环境管理选
+      </button>
+      <label className={ENV_FIELD}>
+        <span>环境形态</span>
+        <select value={envType} className={ENV_CONTROL}
+          onChange={(event) => setEnvType(event.target.value as "" | "virtualized" | "k8s")}>
+          <option value="" disabled>请选择</option>
+          <option value="virtualized">虚拟化</option>
+          <option value="k8s">容器化(K8s)</option>
+        </select>
+      </label>
+      <label className={ENV_FIELD}>
+        <span>网管环境IP</span>
+        <input value={hosts} spellCheck={false} className={ENV_CONTROL}
+          placeholder="60.14.46.16"
+          onChange={(event) => setHosts(event.target.value)} />
+      </label>
+      {invalidHost && <p className={`${ENV_NOTE} text-attention`} role="alert">
+        网管环境IP一次只填一个，请不要输入逗号、空格或换行。
+      </p>}
+      <label className={ENV_FIELD}>
+        <span>端口</span>
+        <input type="number" min={1} max={65535} value={port}
+          className={ENV_CONTROL}
+          onChange={(event) => setPort(event.target.value)} />
+      </label>
+      <label className={ENV_FIELD}>
+        <span>网管后台密码</span>
+        <input type="password" value={backendPassword} autoComplete="new-password"
+          className={ENV_CONTROL}
+          onChange={(event) => setBackendPassword(event.target.value)} />
+      </label>
+      <label className={ENV_FIELD}>
+        <span>root 密码(可选)</span>
+        <input type="password" value={rootPassword} autoComplete="new-password"
+          placeholder="留空时与后台密码相同" className={ENV_CONTROL}
+          onChange={(event) => setRootPassword(event.target.value)} />
+      </label>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input type="checkbox" checked={saveToRegistry}
+          onChange={(event) => setSaveToRegistry(event.target.checked)} />
+        <span>存入环境管理(团队台账按 IP 幂等沉淀,不覆盖已配置的密码)</span>
+      </label>
+      <p className={ENV_NOTE}>
+        口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
+        但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
+      </p>
+    </>}
     <IssueDecisionFooterMount target={footerTarget}>
       <div className="issue-decision-dock-foot">
         <label className="issue-field wide">
@@ -258,8 +343,8 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
         </label>
         {error && <p className="issue-decision-note" role="alert">{error}</p>}
         <div className="issue-decision-submit">
-          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
-            {busy ? "提交中…" : "保存并继续"}
+          <button type="button" disabled={submitDisabled} onClick={() => void submit()}>
+            {busy ? "提交中…" : mode === "picker" ? "使用所选环境,继续" : "保存并继续"}
           </button>
           <button type="button" className="issue-decline" disabled={busy}
             onClick={() => void decline()}>

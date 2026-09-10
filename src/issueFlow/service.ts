@@ -48,6 +48,10 @@ import {
   type IssueEnvironmentInput as VaultEnvironmentInput,
 } from "../issueEnvironment.ts";
 import {
+  EnvironmentRegistry,
+  contributeEnvironmentByIp,
+} from "../environmentRegistry.ts";
+import {
   TaskContainer,
   taskContainerInstance,
   type TaskContainerLimits,
@@ -289,24 +293,40 @@ function decodeAgentDecision(
 }
 
 export interface IssueEnvironmentInput {
+  /** 从环境台账快照(ADR-0020/#150):给 environment_id 时地址/端口/
+   * 形态/后台密码一概不收(互斥,同给打回),由服务端从台账解密取值——
+   * 前端永远没有密码。页面凭据不在台账,登记快照仍可随手填带上。 */
+  environmentId?: string;
   name?: string;
-  hosts: string[];
+  hosts?: string[];
   port?: number;
   /** 页面账号(网管页面登录名;缺省 admin,非密随配置落 issue.json)。 */
   pageAccount?: string;
   /** 页面密码(vault 加密落盘,并按 ADR-0003 进入当前问题的 AI 上下文;
    * 不出现在会话列表、状态摘要或事件流)。 */
   pagePassword?: string;
+  /** 独立 root 密码(手填可选字段,留空 = 与后台密码相同;快照路径在
+   * 台账显式设置时由服务端解析带入)。缺席/空 = 不落独立 root 凭据,
+   * 会话行为与现状完全一致(ADR-0020)。 */
+  rootPassword?: string;
   /** 网管后台密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
-  backendPassword: string;
+  backendPassword?: string;
   /** 环境形态(虚拟化/容器化 K8s):登记页面下拉或 env_needed 卡下拉
    * 人工选定,决定日志抓取走哪套引擎;AI 只读不猜。 */
   envType?: IssueEnvType;
 }
 
+/** 快照解析结果:resolved 与手填同形(同一把尺校验、同一条 vault 路径
+ * 落盘),sourceIp 是选定时点的台账主 IP(非密,进会话状态作来源展示)。 */
+interface ResolvedEnvironmentInput {
+  resolved: IssueEnvironmentInput;
+  sourceIp?: string;
+}
+
 /** 四件套的机械校验与归一(登记与 env_needed 闸作答共用同一把尺,差别
  * 只在页面密码是否必填:闸是拉日志/换库的现场补配,那些流程碰不到
- * 网管页面)。归一在落盘前跑,半截登记不许烧掉会话号。 */
+ * 网管页面)。归一在落盘前跑,半截登记不许烧掉会话号。快照路径解析出
+ * 的输入与手填同形,过的是同一把尺。 */
 function normalizeEnvironmentInput(
   input: IssueEnvironmentInput,
   withPage: boolean,
@@ -316,10 +336,11 @@ function normalizeEnvironmentInput(
   port: number;
   pageAccount: string;
   pagePassword?: string;
+  rootPassword?: string;
   backendPassword: string;
   envType?: IssueEnvType;
 } {
-  const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
+  const hosts = (input.hosts ?? []).map((host) => host.trim()).filter(Boolean);
   if (!hosts.length) {
     throw new IssueControlError("网管环境至少要有一个服务器地址");
   }
@@ -335,12 +356,14 @@ function normalizeEnvironmentInput(
       && input.envType !== "virtualized" && input.envType !== "k8s") {
     throw new IssueControlError("环境形态只能是虚拟化或容器化(K8s)");
   }
+  const rootPassword = input.rootPassword?.trim();
   return {
     hosts,
     name: input.name?.trim() || hosts[0],
     port: input.port ?? 22,
     pageAccount: input.pageAccount?.trim() || "admin",
     ...(pagePassword ? { pagePassword } : {}),
+    ...(rootPassword ? { rootPassword } : {}),
     backendPassword,
     ...(input.envType ? { envType: input.envType } : {}),
   };
@@ -400,6 +423,26 @@ function pageVaultRow(
     host,
     port,
     username: account,
+    password,
+  };
+}
+
+/** vault 行·独立 root 凭据(#150,ADR-0020):purpose=root 单账号成组,
+ * 形状仿照 page 组。只在 root 密码显式存在时落(台账显式设置的快照、
+ * 或闸手填显式给了 root);继承后台密码的会话不落这一组,消费面按
+ * "没有独立 root"处理——与手填时代的会话行为完全一致。 */
+function rootVaultRow(
+  name: string,
+  host: string,
+  port: number,
+  password: string,
+): VaultEnvironmentInput {
+  return {
+    name: `${name}·root`,
+    purpose: "root",
+    host,
+    port,
+    username: "root",
     password,
   };
 }
@@ -511,6 +554,10 @@ export interface IssueFlowOptions {
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
   vault?: IssueEnvironmentVault;
+  /** 环境台账(ADR-0020/#150 快照语义):登记与 env_needed 闸从台账
+   * 选环境时解密取值。缺省按 dataDir 自建(与 vault 同一数据目录的
+   * 独立台账文件);测试可注入。 */
+  environmentRegistry?: EnvironmentRegistry;
   /** 回合并发额度的部署缺省(--issue-max-turns):泵先读管理页运行时
    *  旋钮 issue_max_turns,缺席才用这里;两边都缺省时是 5。 */
   maxConcurrentTurns?: number;
@@ -720,6 +767,7 @@ export class IssueFlowService {
    *  (与 TaskService.options 公开同一理由)。 */
   readonly options: IssueFlowOptions;
   private readonly vault: IssueEnvironmentVault;
+  private readonly environmentRegistry: EnvironmentRegistry;
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
@@ -736,6 +784,8 @@ export class IssueFlowService {
     this.dataDir = options.dataDir;
     this.vault = options.vault
       ?? new IssueEnvironmentVault(options.dataDir);
+    this.environmentRegistry = options.environmentRegistry
+      ?? new EnvironmentRegistry(options.dataDir);
     this.issuesRoot = join(options.dataDir, "issues");
     mkdirSync(this.issuesRoot, { recursive: true });
     if (!options.deferRecovery) this.start();
@@ -1094,8 +1144,12 @@ export class IssueFlowService {
     // 这道门,用户进了工作台才在拉仓期撞上报错;现在门关在发起按钮上。
     // 拉仓期 requireGitIdentity 仍逐仓复查,双保险各守各的口。
     this.requireGitAccount(account);
-    // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。
-    if (input.environment) normalizeEnvironmentInput(input.environment, true);
+    // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。快照
+    // (environment_id)与手填都先解析过同一把尺——解析即完成互斥校验
+    // 与台账取值,登记烧号之前一切打回。
+    const envResolution = input.environment
+      ? this.resolveEnvironmentInput(input.environment) : undefined;
+    if (envResolution) normalizeEnvironmentInput(envResolution.resolved, true);
 
     const id = this.nextId();
     const root = join(this.issuesRoot, id);
@@ -1112,8 +1166,9 @@ export class IssueFlowService {
         log: (message) => this.log(message),
       });
     }
-    const environment = input.environment
-      ? this.storeEnvironment(id, input.environment, true)
+    const environment = envResolution
+      ? this.storeEnvironment(id, envResolution.resolved, true,
+        envResolution.sourceIp)
       : undefined;
     const now = new Date().toISOString();
     const firstStage: FixedStage = fixedStages(scenario)[0];
@@ -1201,17 +1256,68 @@ export class IssueFlowService {
     this.requireGitAccount(account);
   }
 
+  /** 台账快照解析(ADR-0020「选入即快照」,票 #150):environment_id
+   * 在场时从台账解密取值,产出与手填同形的输入——两个消费端点(登记/
+   * env_needed 闸)走同一条 storeEnvironment 落盘路径,秘密纪律只有
+   * 一份;值是选定时点的拷贝,台账后续改/删都不影响本会话。与手填字段
+   * 互斥(同给打回);root 密码只在台账显式设置(root_password_inherited
+   * =false)时把解析值一并带入,继承态不带独立凭据——会话与"只填后台
+   * 密码"完全同构。前端永远没有密码:值只在此处(服务端)现解现用。 */
+  private resolveEnvironmentInput(
+    input: IssueEnvironmentInput,
+  ): ResolvedEnvironmentInput {
+    if (input.environmentId === undefined) return { resolved: input };
+    const mixed = Boolean(input.hosts?.length)
+      || Boolean(input.backendPassword?.trim())
+      || input.envType !== undefined
+      || input.port !== undefined
+      || Boolean(input.rootPassword?.trim());
+    if (mixed) {
+      throw new IssueControlError(
+        "台账快照与手工填写互斥:选了环境管理里的环境,就不要再填"
+          + "地址、端口、形态或密码");
+    }
+    const entry = this.environmentRegistry.get(input.environmentId)
+      ?? undefined;
+    const secrets = entry
+      ? this.environmentRegistry.secrets(input.environmentId) : undefined;
+    if (!entry || !secrets) {
+      throw new IssueControlError(
+        `环境台账条目不存在或已被删除(${input.environmentId}),请刷新后重选`);
+    }
+    return {
+      resolved: {
+        hosts: [entry.ip],
+        port: entry.port,
+        envType: entry.form,
+        backendPassword: secrets.backendPassword,
+        // 显式 root 才一并快照(ADR-0020);继承态不落独立凭据。
+        ...(entry.root_password_inherited
+          ? {} : { rootPassword: secrets.rootPassword }),
+        // 页面凭据不入台账(ADR-0020):登记快照仍按手填带上。
+        ...(input.pageAccount?.trim()
+          ? { pageAccount: input.pageAccount.trim() } : {}),
+        ...(input.pagePassword?.trim()
+          ? { pagePassword: input.pagePassword.trim() } : {}),
+      },
+      sourceIp: entry.ip,
+    };
+  }
+
   /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的
    * 加密文件),issue.json/公开 API/事件只有引用；随后
    * environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文。
    * 后台凭据(both)供日志抓取(技能 issue-ops)/build_deploy 消费；页面凭据(page)供
-   * 页面操作消费,两组各自成行、可分别解出。登记(withPage)与
+   * 页面操作消费,独立 root 凭据(root,显式存在时)供 get_issue_meta
+   * 元信息出口,各组自成行、可分别解出。登记(withPage)与
    * env_needed 闸作答(只收地址+后台密码,页面字段即便递了也不认)
-   * 共用本路径,秘密纪律只有一份。 */
+   * 共用本路径,秘密纪律只有一份。sourceIp 在场=本次配置来自台账快照,
+   * 会话状态记下选定时点的台账主 IP(非密来源展示)。 */
   private storeEnvironment(
     id: string,
     input: IssueEnvironmentInput,
     withPage: boolean,
+    sourceIp?: string,
   ): IssueEnvironmentConfig {
     const parts = normalizeEnvironmentInput(input, withPage);
     const rows = [
@@ -1221,20 +1327,32 @@ export class IssueFlowService {
         ? [pageVaultRow(parts.name, parts.hosts[0], parts.port,
           parts.pageAccount, parts.pagePassword)]
         : []),
+      ...(parts.rootPassword
+        ? [rootVaultRow(parts.name, parts.hosts[0], parts.port,
+          parts.rootPassword)]
+        : []),
     ];
     const refs = this.vault.store(id, rows);
+    // 凭据组按 purpose 定位:页面组缺席时 root 组的落盘位置会前移,
+    // 位置序号不可靠,名字才是身份。
+    const refByPurpose = (purpose: string) =>
+      refs.find((ref) => ref.purpose === purpose)?.id ?? "";
     return {
-      credential_ref: refs[0]?.id ?? "",
+      credential_ref: refByPurpose("both"),
       name: parts.name,
       hosts: parts.hosts,
       port: parts.port,
       ...(parts.pagePassword
         ? {
           page_account: parts.pageAccount,
-          page_credential_ref: refs[1]?.id ?? "",
+          page_credential_ref: refByPurpose("page"),
         }
         : {}),
+      ...(parts.rootPassword
+        ? { root_credential_ref: refByPurpose("root") }
+        : {}),
       ...(parts.envType ? { env_type: parts.envType } : {}),
+      ...(sourceIp ? { environment_source_ip: sourceIp } : {}),
     };
   }
 
@@ -1251,23 +1369,51 @@ export class IssueFlowService {
     const page = env.page_credential_ref
       ? this.vault.credential(live.id, env.page_credential_ref)?.password
       : undefined;
+    // 独立 root 凭据只在显式存在时解出(继承后台密码的会话没有这一组,
+    // 元信息出口自然不带——按 page_password 的先例,缺席即缺省)。
+    const root = env.root_credential_ref
+      ? this.vault.credential(live.id, env.root_credential_ref, "root")
+        ?.password
+      : undefined;
     return {
       ...(backend ? { backend } : {}),
       ...(page ? { page } : {}),
+      ...(root ? { root } : {}),
     };
   }
 
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
    * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
-   * 平台回合,让 Agent 重试刚才的操作。 */
+   * 平台回合,让 Agent 重试刚才的操作。快照语义(票 #150,ADR-0020):
+   * input.environmentId 在场即从台账解密取值(服务端快照,前端零密码),
+   * 与手填同一条落盘路径。options.saveToRegistry:手填作答顺带沉淀——
+   * 把这次手填用 contributeEnvironmentByIp 幂等存进团队台账(创建者/
+   * 更新人=作答人,即会话归属人),合并不覆盖台账已显式配置的密码;
+   * 沉淀在环境落盘之前做,校验失败整体打回,不留半截现场。 */
   attachEnvironment(
     id: string,
     input: IssueEnvironmentInput,
+    options?: { saveToRegistry?: boolean },
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    const environment = this.storeEnvironment(id, input, false);
+    const { resolved, sourceIp } = this.resolveEnvironmentInput(input);
+    if (options?.saveToRegistry) {
+      const parts = normalizeEnvironmentInput(resolved, false);
+      if (!parts.envType) {
+        throw new IssueControlError(
+          "存入环境管理需要先选定环境形态(虚拟化或容器化)");
+      }
+      contributeEnvironmentByIp(this.environmentRegistry, {
+        ip: parts.hosts[0],
+        port: parts.port,
+        form: parts.envType,
+        backendPassword: parts.backendPassword,
+        ...(parts.rootPassword ? { rootPassword: parts.rootPassword } : {}),
+      }, state.account);
+    }
+    const environment = this.storeEnvironment(id, resolved, false, sourceIp);
     state.environment = environment;
     // 解锢(票 93):配置成功即整册清除拒绝台账——用户对环境的新裁定
     // 覆盖旧裁定,日志抓取(技能 issue-ops)/build_deploy 恢复正常举闸路径。
@@ -2454,6 +2600,15 @@ export class IssueFlowService {
         const ref = live.state.environment?.page_credential_ref;
         return ref
           ? service.vault.credential(live.id, ref)?.password
+          : undefined;
+      },
+      // 独立 root 密码(#150,ADR-0003 同一条明文进上下文的口):只在
+      // 显式凭据组在场时解出;继承后台密码的会话缺省,消费面按
+      // "root 与后台密码相同"理解。
+      rootPassword: () => {
+        const ref = live.state.environment?.root_credential_ref;
+        return ref
+          ? service.vault.credential(live.id, ref, "root")?.password
           : undefined;
       },
       gitCredential: () =>
@@ -4657,9 +4812,10 @@ export class IssueFlowService {
       cpSync(join(live.root, "issue-analysis.md"),
         join(newRoot, "issue-analysis.md"));
     }
-    // 环境凭据:两组各自解出、各自给新会话存一份自己的(vault 按会话 id
+    // 环境凭据:各组各自解出、各自给新会话存一份自己的(vault 按会话 id
     // 隔离;先复制后销毁旧的,顺序不能反)。解不出的组优雅缺省——后台
-    // 是消费方在场的依据,页面只是记录,谁解不出来就只缺谁,不炸转正。
+    // 是消费方在场的依据,页面/独立 root 只是记录,谁解不出来就只缺谁,
+    // 不炸转正。快照来源 IP 随值走(值已拷贝,来源事实保持)。
     const oldEnvironment = state.environment;
     let environment: IssueEnvironmentConfig | undefined;
     if (oldEnvironment) {
@@ -4667,6 +4823,9 @@ export class IssueFlowService {
         id, oldEnvironment.credential_ref, "sopuser")?.password;
       const page = oldEnvironment.page_credential_ref
         ? this.vault.credential(id, oldEnvironment.page_credential_ref)
+        : undefined;
+      const root = oldEnvironment.root_credential_ref
+        ? this.vault.credential(id, oldEnvironment.root_credential_ref, "root")
         : undefined;
       const rows: VaultEnvironmentInput[] = [];
       if (backendPassword) {
@@ -4677,19 +4836,28 @@ export class IssueFlowService {
         rows.push(pageVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
           oldEnvironment.port, page.username, page.password));
       }
+      if (root) {
+        rows.push(rootVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
+          oldEnvironment.port, root.password));
+      }
       if (rows.length) {
         const refs = this.vault.store(newId, rows);
+        const refByPurpose = (purpose: string) =>
+          refs.find((ref) => ref.purpose === purpose)?.id ?? "";
         environment = {
-          credential_ref: backendPassword ? refs[0]?.id ?? "" : "",
+          credential_ref: backendPassword ? refByPurpose("both") : "",
           name: oldEnvironment.name,
           hosts: oldEnvironment.hosts,
           port: oldEnvironment.port,
           ...(page
             ? {
               page_account: page.username,
-              page_credential_ref:
-                refs[backendPassword ? 1 : 0]?.id ?? "",
+              page_credential_ref: refByPurpose("page"),
             }
+            : {}),
+          ...(root ? { root_credential_ref: refByPurpose("root") } : {}),
+          ...(oldEnvironment.environment_source_ip
+            ? { environment_source_ip: oldEnvironment.environment_source_ip }
             : {}),
         };
       }
