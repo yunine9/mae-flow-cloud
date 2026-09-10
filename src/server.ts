@@ -2766,6 +2766,10 @@ export function createTaskServer(
             }));
           }
         }
+        // 任务责任人显式补充新上架的团队技能，保留原快照版本。
+        if (request.method === "POST" && parts.length === 4 && parts[2] === "skills" && parts[3] === "sync") {
+          return json(response, 200, await service.syncTaskSkills(id, viewer?.username ?? "本地用户"));
+        }
         // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头
         // 这一轮做完就收到。权限同决定——插话也是在指挥这一单,不是围观。
         if (request.method === "POST" && parts[2] === "interrupt") {

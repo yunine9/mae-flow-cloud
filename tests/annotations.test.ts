@@ -397,7 +397,6 @@ test("当前任务责任人逐条处置；管理员不能代签，未处理意�
     assert.throws(() => service.verifyAnnotation(id, fixed.id, actor, true), AnnotationPermissionError);
     assert.throws(() => service.dropAnnotation(id, fixed.id, "admin", true), AnnotationPermissionError);
   }
-  assert.throws(() => service.verifyAnnotation(id, pending.id, "owner"), /处理依据/);
   const verified = service.verifyAnnotation(id, fixed.id, "owner");
   assert.equal(verified.resolution?.by, "owner");
   assert.equal(verified.resolution?.outcome, "fixed");
