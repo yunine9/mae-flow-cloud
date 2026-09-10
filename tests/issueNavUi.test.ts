@@ -18,6 +18,7 @@ const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
+const legacyCss = readFileSync(resolve("web/src/style.css"), "utf-8");
 
 /** 侧边栏导航区(视图切换)整段,角色分支再切片。 */
 function navSlices(): { nav: string; admin: string; developer: string } {
@@ -119,6 +120,16 @@ test("子页签选择持久化:localStorage 与历史快照双轨,前进/后退�
   // selectView 的闭包读不到同 tick 的新状态:子页签当前值必须走 ref。
   assert.match(app, /activeIssueChildRef\.current = tab;/,
     "选择要同步进 ref(selectView 快照不落后)");
+});
+
+test("DTS 列表子页签全宽:页面平铺屏幕,其余子页签维持书页宽", () => {
+  // 表格横向信息密(spec #171 评审后追加):DTS 子页签下主区放开
+  // max-width,其余子页签(登记/问题会话)不放宽。
+  assert.match(app,
+    /workspace-main\$\{view === "issues" && activeIssueChild === "dts" \? " is-wide" : ""\}/,
+    "主区宽度应随 DTS 子页签切换");
+  assert.match(legacyCss, /\.workspace-main\.is-wide \{ max-width: none; \}/,
+    "css 层要有全宽规则(旧轨道层叠优先级高于工具类层)");
 });
 
 test("子页签区零硬编码色值:色彩一律走令牌桥(theme inline 映射存量变量)", () => {
