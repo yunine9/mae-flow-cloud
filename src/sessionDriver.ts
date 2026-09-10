@@ -1,3 +1,4 @@
+import { resourceBlocked, resourceBlockNotice } from "./repositoryResourcePolicy.ts";
 /**
  * 进程内会话驱动(详设 §7 pi_session 的 TS 形态)。
  *
@@ -290,6 +291,7 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  repositoryResourceBlocks?: () => string[];
   /** 用任务固定的模块/仓库/语言画像筛选尚未定格的团队 Skill；新任务
    * 已在创建现场生成精确快照，后续会话不应重复匹配。 */
   knowledgeContext?: {
@@ -935,9 +937,14 @@ export class CloudSession {
       this.options.log?.(
         `[host-skill] 任务 ${this.options.taskId}: ${warning}`);
     }
+    const resourceBlocks = this.options.repositoryResourceBlocks?.() ?? [];
+    const allowedRepositoryPath = (path: string) => {
+      const source = this.options.repositorySkillResources?.find(item => item.actual_path === path)?.path ?? path;
+      return !resourceBlocked(source, resourceBlocks);
+    };
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
-        if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
+        if (!allowedRepositoryPath(path) || basename(path) !== "SKILL.md" || !existsSync(path)) return false;
         try {
           return statSync(path).isFile();
         } catch {
@@ -1013,7 +1020,7 @@ export class CloudSession {
       this.options.knowledgeTrace?.record(
         "available", config.sessionId, resource);
     }
-    for (const item of this.options.repositorySkillResources ?? []) {
+    for (const item of (this.options.repositorySkillResources ?? []).filter(item => allowedRepositoryPath(item.actual_path))) {
       this.options.knowledgeTrace?.register(item.actual_path, {
         id: item.id,
         kind: item.kind,
@@ -1045,7 +1052,7 @@ export class CloudSession {
     }
     // 仓契约注入同款一行事(2026-09-03):提示词里多了什么必须能在
     // 日志里对账,只记 repo/ 下的相对路径,不贴正文。
-    const repoContextFiles = this.options.repoContextFiles ?? [];
+    const repoContextFiles = (this.options.repoContextFiles ?? []).filter(file => !resourceBlocked(file.path, resourceBlocks));
     if (repoContextFiles.length) {
       this.options.log?.(`任务 ${this.options.taskId} 注入仓契约: ${
         repoContextFiles.map((file) => {
@@ -1070,17 +1077,17 @@ export class CloudSession {
       // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
-          ...current.agentsFiles,
+          ...current.agentsFiles.filter(file => !resourceBlocked(file.path, resourceBlocks)),
           ...(knowledgeIndex.path && knowledgeIndex.content
             ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
             : []),
-          ...(this.options.repoContextFiles ?? []),
+          ...repoContextFiles,
         ],
       }),
       // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
-      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
-        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
-      } : {}),
+      appendSystemPromptOverride: (base: string[]) => [...base,
+        ...(this.options.humanFacing && config.sessionId === this.sessionId ? [HUMAN_FACING_STYLE] : []),
+        ...resourceBlockNotice(resourceBlocks)],
       extensionFactories: [
         {
           name: "mae-flow-gate",

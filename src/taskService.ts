@@ -1,3 +1,4 @@
+import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
 import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
@@ -49,7 +50,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { hostSkillNames } from "./hostSkillRuntime.ts";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
 import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
 import { resetQueuedRequirementReviews, submitRequirementReview, interruptRequirementReviews } from "./requirementReviewQueue.ts";
@@ -756,26 +757,6 @@ const CLOUD_EXECUTION_CONTRACT = {
   codecheck: "pipeline",
   git_push: "host",
 } as const;
-
-/** 找到本次会话真正能装载的宿主 Skill 名。名称必须由 Pi 自己解析：
- * frontmatter name 可以和目录名不同；缺 name 时 Pi 才以目录名兜底，
- * 解析失败/缺 description 时则与运行时一样不算可加载 Skill。
- * CloudSession 也把整个宿主 skills 根交给同一个 loader，因此这里会
- * 同样覆盖递归、ignore、符号链接和根目录 Markdown 的发现语义。 */
-function hostSkillNames(dataDir: string): string[] {
-  const root = join(dataDir, "skills");
-  try {
-    return loadSkills({
-      cwd: dataDir,
-      agentDir: dataDir,
-      skillPaths: [root],
-      includeDefaults: false,
-    }).skills.map((skill) => skill.name);
-  } catch {
-    // Skill 装载本身是 fail-open；catalog 同样不因宿主目录损坏而失败。
-    return [];
-  }
-}
 
 function taskHostSkillsDir(dataDir: string, summary: TaskSummary): string {
   return summary.host_skills_pinned
@@ -4632,6 +4613,7 @@ export class TaskService {
       workspace: task.cwd,
       agentDir,
       hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+      repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
       knowledgeContext: task.summary.host_skills_pinned ? undefined : {
         repositories: task.summary.repositories ?? [],
         technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -7265,6 +7247,7 @@ export class TaskService {
       for (const repository of repositories) {
         const discovered = await discoverRepositorySkills({
           repository,
+          blockedPaths: readResourceBlocks(this.options.dataDir),
           baseline,
           credentialHelper: prepared?.helper,
           credentialArgs: prepared?.args,
@@ -12377,6 +12360,7 @@ export class TaskService {
           bindings: [{ repository, workspace: task.cwd }],
           snapshotRoot: join(task.cwd, ".mae-flow-work", "repository-skills"),
           reservedNames: hostSkillNames(this.options.dataDir),
+          blockedPaths: readResourceBlocks(this.options.dataDir),
         });
         this.freezeRepositoryNativeSkills(task, materialized);
         repositorySkillPaths = materialized.paths;
@@ -12412,6 +12396,7 @@ export class TaskService {
         // 人在接管,提醒是给自动跑的主 Agent 的。
         extraTools: this.memoryTools(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -13845,6 +13830,7 @@ export class TaskService {
           bindings,
           snapshotRoot: join(analysisRoot, ".mae-flow-work", "repository-skills"),
           reservedNames: hostSkillNames(this.options.dataDir),
+          blockedPaths: readResourceBlocks(this.options.dataDir),
         });
         this.freezeRepositoryNativeSkills(task, materialized);
         repositorySkillPaths = materialized.paths;
@@ -13917,6 +13903,7 @@ export class TaskService {
             bindings: [{ repository: activeRepository, workspace: cwd }],
             snapshotRoot: join(cwd, ".mae-flow-work", "repository-skills"),
             reservedNames: hostSkillNames(this.options.dataDir),
+            blockedPaths: readResourceBlocks(this.options.dataDir),
           });
           this.freezeRepositoryNativeSkills(task, materialized);
           repositorySkillPaths = materialized.paths;
@@ -14396,6 +14383,7 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -15373,6 +15361,7 @@ export class TaskService {
         bindings: [{ repository: activeRepository, workspace: task.cwd }],
         snapshotRoot: join(task.cwd, ".mae-flow-work", "repository-skills"),
         reservedNames: hostSkillNames(this.options.dataDir),
+        blockedPaths: readResourceBlocks(this.options.dataDir),
       });
       this.freezeRepositoryNativeSkills(task, materialized);
       repositorySkillPaths = materialized.paths;
@@ -15557,6 +15546,7 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])

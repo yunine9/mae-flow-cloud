@@ -1,3 +1,4 @@
+import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "../auxiliarySessions.ts";
 import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
@@ -1559,7 +1560,7 @@ export class IssueFlowService {
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
       this.environmentCredentials(live),
-      { tier: this.tierOf(live) }));
+      { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
@@ -1584,7 +1585,7 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(issueFixedOpeningPrompt(live.state,
           this.environmentCredentials(live),
-          { tier: this.tierOf(live) }));
+          { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
       });
     }
   }
@@ -1963,6 +1964,7 @@ export class IssueFlowService {
         for (const skillDir of discoverBusinessSkillDirs(skillsRoot)) {
           const name = basename(skillDir);
           const skillFile = join(skillDir, "SKILL.md");
+          if (resourceBlocked(relative(repo.dir, skillFile), readResourceBlocks(this.options.dataDir))) continue;
           if (claimed.has(name)) {
             warnings.push(`技能 ${name} 在 ${root.label}`
               + ` 有同名定义,按 .cac 优先已跳过`
@@ -2554,7 +2556,7 @@ export class IssueFlowService {
     const driver = await CloudSession.create({
       taskId: `${live.id}:warmup`,
       knowledgeContext: issueKnowledgeContext(live.state),
-      hostSkillsDir: join(this.options.dataDir, "skills"),
+      hostSkillsDir: join(this.options.dataDir, "skills"), repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
       knowledgeScope: "issue",
       workspace: live.root,
       agentDir,
@@ -2742,7 +2744,7 @@ export class IssueFlowService {
       // 改编版 playbook 技能(精确到 SKILL.md 文件的 allowlist 形态)。
       repositorySkillPaths: skillPaths,
       // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
-      hostSkillsDir: join(this.options.dataDir, "skills"),
+      hostSkillsDir: join(this.options.dataDir, "skills"), repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
       knowledgeContext,
       knowledgeScope: "issue",
       provider: model.provider,
@@ -2860,7 +2862,7 @@ export class IssueFlowService {
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
         this.environmentCredentials(live),
-        { tier: this.tierOf(live) }));
+        { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
     });
     return summarize(live.state);
   }

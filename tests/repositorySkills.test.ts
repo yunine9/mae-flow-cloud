@@ -250,3 +250,13 @@ test("克隆失败也清理临时目录，错误不泄露成未处理异常", as
   const leaked = [...after].filter((name) => !before.has(name));
   assert.deepEqual(leaked, [], "克隆失败的临时目录必须清干净");
 });
+
+test("仓库技能目录发现过滤平台屏蔽项", async () => {
+  const repo = makeRepo();
+  writeSkill(repo, ".cac/skills", "department", "department", "部门规则");
+  writeSkill(repo, ".agents/skills", "business", "business", "业务知识");
+  commit(repo, "skills");
+  const catalog = await discoverRepositorySkills({ repository: repo, baseline: "main", blockedPaths: [".cac"] });
+  assert.equal(catalog.error, undefined);
+  assert.deepEqual(catalog.skills.map(skill => skill.name), ["business"]);
+});

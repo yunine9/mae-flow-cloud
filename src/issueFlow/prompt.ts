@@ -1,3 +1,4 @@
+import { resourceBlocked } from "../repositoryResourcePolicy.ts";
 /**
  * 问题会话的首轮提示词与 playbook 改编技能。
  *
@@ -277,8 +278,8 @@ export function stageLabelOf(state: IssueSessionState): string {
 /** 必读 skill 清单行(ADR-0011,已封存——ADR-0014 起不再产生新台账):
  * 仅存量会话的 skill_selection 在场时随 analyze 简报注入,开场词与
  * 续聊词共用,重启重建的上下文同样看得见历史圈选结果。 */
-export function skillSelectionLines(state: IssueSessionState): string[] {
-  const skills = state.skill_selection?.skills ?? [];
+export function skillSelectionLines(state: IssueSessionState, blockedPaths: string[] = []): string[] {
+  const skills = (state.skill_selection?.skills ?? []).filter(skill => !resourceBlocked(skill.path, blockedPaths));
   if (state.stage !== "analyze" || !skills.length) return [];
   return [
     "必读 skill(用户圈选,分析前先读;路径相对会话工作区):",
@@ -293,7 +294,7 @@ export function issueFixedOpeningPrompt(
   /** 介入档位的节奏渲染(ADR-0019,现读现判):一档=全自动(报告
    * 会被代答确认);二档=仅分析报告(报告是唯一停靠点);三档=全程
    * 把控,主动问与对齐(ADR-0006)。 */
-  options: { tier?: IssueInterventionTier } = {},
+  options: { tier?: IssueInterventionTier; blockedPaths?: string[] } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
@@ -305,7 +306,7 @@ export function issueFixedOpeningPrompt(
       { from: state.converted_from })
     : "";
   const meta = issueRegistrationMeta(state, credentials);
-  const skillLines = skillSelectionLines(state);
+  const skillLines = skillSelectionLines(state, options.blockedPaths);
   // docs 置信度分层(ADR-0021)与资产库地图(ADR-0012)是两段独立文案:
   // 前者全阶段在场(契约文件就全阶段在场),后者只在 analyze 注入。
   const knowledgeLines = businessKnowledgeLines(state);
@@ -390,7 +391,7 @@ export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
   credentials: IssueEnvCredentials = {},
-  options: { tier?: IssueInterventionTier; workspace?: string } = {},
+  options: { tier?: IssueInterventionTier; workspace?: string; blockedPaths?: string[] } = {},
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
@@ -400,7 +401,7 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
-    ...skillSelectionLines(state),
+    ...skillSelectionLines(state, options.blockedPaths),
     ...businessKnowledgeLines(state),
     promptCopy("opening", "fixed.docs_confidence"),
     promptCopy("opening",

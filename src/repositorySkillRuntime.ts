@@ -1,3 +1,4 @@
+import { resourceBlocked } from "./repositoryResourcePolicy.ts";
 /**
  * 业务仓 Skill 的运行时装配。
  *
@@ -343,6 +344,7 @@ export function materializeRepositorySkills(options: {
   bindings: RepositoryWorkspaceBinding[];
   snapshotRoot: string;
   reservedNames?: Iterable<string>;
+  blockedPaths?: string[];
 }): MaterializedRepositorySkills {
   const warnings: string[] = [];
   const reserved = new Set(
@@ -354,7 +356,7 @@ export function materializeRepositorySkills(options: {
   const names: string[] = [];
   const entries: Array<{ path: string; skill: SelectedRepositorySkill }> = [];
   const seen = new Set<string>();
-  for (const skill of candidates.slice(0, MAX_SELECTED)) {
+  for (const skill of candidates.filter(skill => !resourceBlocked(skill.relative_path, options.blockedPaths ?? [])).slice(0, MAX_SELECTED)) {
     if (seen.has(skill.id)) continue;
     seen.add(skill.id);
     const binding = options.bindings.find(
