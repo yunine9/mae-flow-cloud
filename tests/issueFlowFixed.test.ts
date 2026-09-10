@@ -397,11 +397,13 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const closed1 = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" && issue.stage_states?.[4] === "done"
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "一轮:流水线红转绿后收口待归档");
+    }, "一轮:流水线红转绿后收口,举环境验证闸");
     assert.equal(closed1.stage, "mr_green", "收口在终点阶段");
-    assert.match(closed1.stage_note ?? "", /确认合入后可归档/);
+    assert.match(closed1.stage_note ?? "", /环境验证/);
     assert.equal(closed1.pipelines?.[origin]?.status, "success", "监看账应记全绿");
     assert.equal(closed1.mrs?.[0]?.url, firstMrUrl,
       "流水线反馈修复后必须更新同一个 MR，不能另建一张");
@@ -430,8 +432,14 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.match(JSON.stringify(model.requests), /失败产物全文已镜像/,
       "修复回合指令应指引 AI 读镜像产物");
 
-    // ④ 收口后返工(ADR-0013):用户续聊说没修好,重开 mr_green 继续修
-    // ——不是回退,轮次账不动;修完重推,同 MR 更新后再申报再收口。
+    // ④ 收口后返工(ADR-0013):用户验证通过后再续聊说没修好,重开
+    // mr_green 继续修——不是回退,轮次账不动;修完重推,同 MR 更新后
+    // 再申报再收口(再次举验证闸)。
+    service.answer(created.id, {
+      state_version: closed1.gate!.state_version, code: "pass",
+    });
+    await until(() => service.get(created.id).status === "idle" ? 1 : undefined,
+      "验证通过后落待归档");
     const shaBefore = closed1.pushes![0].sha;
     const reopened = service.reply(created.id, "并发场景仍偶发超时,继续修");
     assert.equal(reopened.stage_states?.[4], "in_progress", "收口态续聊重开本阶段");
@@ -439,9 +447,11 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const reopenedRound2 = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" && issue.stage_states?.[4] === "done"
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "返工再申报后再次收口");
+    }, "返工再申报后再次收口(再次举验证闸)");
     assert.equal(reopenedRound2.round, 1, "第二轮仍是返工,无回退轮次");
     assert.equal(reopenedRound2.mrs?.[0]?.url, firstMrUrl,
       "返工修复仍延用同一 MR");
@@ -1221,13 +1231,14 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     const done = await until(() => {
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "mr_green"
-        && issue.stage_states?.[4] === "done" && issue.status === "idle"
+      return issue.stage === "mr_green" && issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "恢复监看并在跑绿后收口待归档");
+    }, "恢复监看并在跑绿后收口,举环境验证闸");
     assert.equal(done.pipelines?.[origin]?.status, "success");
     assert.equal(done.pipelines?.[origin]?.watching, false);
-    assert.match(done.stage_note ?? "", /确认合入后可归档/);
+    assert.match(done.stage_note ?? "", /环境验证/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -4123,5 +4134,193 @@ test("输出超限自愈穷尽:连续三次截断后落 idle 留话,不标 faile
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
+  }
+});
+
+// ---- 环境验证闸(2026-09-10 A 方案拍板):全绿≠修好,验证的是用户 ----
+
+/** 直播一个"MR 跑绿监看中"的现场(恢复监看同款夹具,聚焦验证闸)。 */
+function seedGreenWatch(dataDir: string, origin: string, sha: string): void {
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: "DTS-2026-1002",
+    repo_url: origin, repo_urls: [origin], scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "done", "in_progress"],
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+    pushes: [{ repo: origin, branch: "master_dev_DTS-2026-1002", sha, at: now }],
+    mrs: [{ repo: origin, branch: "master_dev_DTS-2026-1002",
+      title: "[DTS-2026-1002] t", at: now }],
+    mr_gate: { mrs: [origin], at: now },
+    pipelines: {
+      [origin]: {
+        sha, status: "running", watching: true, started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(), round: 1,
+      },
+    },
+  }));
+}
+
+/** 绿表头:与恢复监看测试同款取法。 */
+function headSha(origin: string): string {
+  return spawnSync("git", ["--git-dir", origin, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).stdout.trim();
+}
+
+test("环境验证闸·通过:作答后落待归档,归档结论按合入事实", async () => {
+  const dataDir = mfcTemp("mfc-issue-verify-pass-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  seedGreenWatch(dataDir, origin, headSha(origin));
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), settings: fastPoll,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "g", email: "d@e" }),
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify" ? issue : undefined;
+    }, "全绿举验证闸");
+    service.answer("issue-1", {
+      state_version: gated.gate!.state_version, code: "pass",
+    });
+    const idle = await until(() =>
+      service.get("issue-1").status === "idle" ? 1 : undefined, "通过后待归档");
+    assert.match(service.get("issue-1").stage_note ?? "", /归档/);
+    const archived = await service.control("issue-1", { action: "archive" });
+    assert.equal(archived.status, "archived");
+    assert.equal(archived.conclusion?.kind, "fixed",
+      "仅验绿未合入,按事实记已修复");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 redo,回退回合先对齐再重写", async () => {
+  const dataDir = mfcTemp("mfc-issue-verify-fail-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  // 回退回合+两次催办都吃文本幕(线性钳到末幕)。
+  const model = new ScriptedModelServer([
+    { text: "收到,先与用户对齐问题理解。" },
+    { text: "(催办一)继续对齐中。" },
+    { text: "(催办二)仍在推进。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  seedGreenWatch(dataDir, origin, headSha(origin));
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), settings: fastPoll,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "g", email: "d@e" }),
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify" ? issue : undefined;
+    }, "全绿举验证闸");
+    service.answer("issue-1", {
+      state_version: gated.gate!.state_version, code: "fail",
+      notes: "环境里订单导出仍然超时,截图 issue-images/0123456789abcdef.png",
+    });
+    // 回退回合收口后:预算内催办再跑,最终落 idle(停机交还人工)。
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" && issue.stage === "analyze"
+        ? issue : undefined;
+    }, "回退分析并停机等对齐");
+    assert.equal(settled.round, 2, "回退轮次+1");
+    assert.deepEqual(
+      settled.stage_states?.slice(0, 5),
+      ["done", "done", "in_progress", "redo", "redo"],
+      "分析重开,修复与交付标 redo");
+    assert.equal(settled.gate, undefined, "验证闸已随作答清面");
+    const rollbackTurn = JSON.stringify(model.requests[0]);
+    assert.match(rollbackTurn, /环境验证发现问题/, "回退事实要带给 AI");
+    assert.match(rollbackTurn, /订单导出仍然超时/, "用户描述要带给 AI");
+    assert.match(rollbackTurn, /对齐/, "回退指令要求先对齐再重写");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("环境验证闸·不锁死:未作答也可直接归档(闸随终态清面)", async () => {
+  const dataDir = mfcTemp("mfc-issue-verify-escape-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  seedGreenWatch(dataDir, origin, headSha(origin));
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), settings: fastPoll,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "g", email: "d@e" }),
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify" ? issue : undefined;
+    }, "全绿举验证闸");
+    const archived = await service.control("issue-1", { action: "archive" });
+    assert.equal(archived.status, "archived", "未答验证也能归档(不锁死)");
+    const saved = loadState(join(dataDir, "issues", "issue-1"))!;
+    assert.equal(saved.gate, undefined, "终态不携闸");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("环境验证闸·月光不代答:一档全自动下验证卡仍只等真人", async () => {
+  const dataDir = mfcTemp("mfc-issue-verify-moonlight-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  seedGreenWatch(dataDir, origin, headSha(origin));
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), settings: fastPoll,
+    platformUrl: platform.baseUrl,
+    interventionTier: () => "1",
+    gitCredential: () => ({ username: "dev", password: "g", email: "d@e" }),
+  });
+  try {
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify" ? issue : undefined;
+    }, "全绿举验证闸");
+    // 直接驱动代答入口(一档全自动):env_verify 必须原地不动。
+    const live = (service as any).live.get("issue-1");
+    (service as any).maybeAutoAnswerGate(live);
+    const after = service.get("issue-1");
+    assert.equal(after.status, "waiting_user", "验证卡不被代答");
+    assert.equal(after.gate?.kind, "env_verify", "闸仍在场");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
   }
 });

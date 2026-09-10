@@ -2141,6 +2141,10 @@ export class IssueFlowService {
     // skill_select 永不代答(ADR-0011;闸本身已被 ADR-0014 封存):
     // 这里显式守卫,防任何档位把已挂起的圈选卡追溯代答掉。
     if (gate.kind === "skill_select") return;
+    // 环境验证闸永不代答(2026-09-10 A 方案拍板):验证结果只有用户
+    // 知道,代答"通过"等于替用户宣布修好了——与流水线人工闸同款
+    // 纪律,任何介入档位都只等真人。
+    if (gate.kind === "env_verify") return;
     // 流水线人工闸永不代答(票 03):不可修卡问的是"人处理/豁免了没"
     // ——答"已处理"就是人工事实声明,机器代答等于替人声明平台侧
     // 已处理;证据回灌卡的报错原文只有人粘贴得出来。两类都放在档位
@@ -2794,9 +2798,10 @@ export class IssueFlowService {
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
       onMrCreated: (repo: string) => service.armPipelineWatch(live, repo),
-      // mr_green 即时收口(complete_stage 验绿当场全绿/空清单)的用户
-      // 通知;监看器滞后收口走 settlePipeline 的 closeMrGreen 同款。
-      notifyMrGreen: () => this.notifyMrGreenClosed(live),
+      // mr_green 即时收口(complete_stage 验绿当场全绿/空清单)的收口
+      // 动作:阶段已 done,这里举环境验证闸(与监看器滞后收口的
+      // closeMrGreen 同款);监看器滞后收口走 settlePipeline。
+      notifyMrGreen: () => this.awaitEnvVerify(live),
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -2910,6 +2915,9 @@ export class IssueFlowService {
       throw new IssueControlError(
         `当前状态 ${live.state.status} 没有等待中的问题卡`);
     }
+    this.promoteMessageImages(live, input.decision ?? "",
+      ...(input.notes ? [input.notes] : []),
+      ...Object.values(input.answers ?? {}));
     // 平台闸(固定流程的人工硬闸)优先于 Agent 问题卡:闸在 state 里,
     // 分派语义在服务,不进模型。
     if (live.state.gate) {
@@ -2950,6 +2958,25 @@ export class IssueFlowService {
         { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
     });
     return summarize(live.state);
+  }
+
+  /** 会话消息内嵌截图(2026-09-10 验证闸配套):消息文本里的
+   * issue-images/<hash> 引用从 staging 提升到会话工作区——AI 侧
+   * inspect_image 按工作区相对路径识图。与登记 create() 的同步
+   * 同款 fail-open:单图缺席只跳过,不阻断消息。 */
+  private promoteMessageImages(live: LiveIssue, ...texts: string[]): void {
+    const text = texts.join("\n");
+    if (!text.includes("issue-images/")) return;
+    const result = syncIssueImagesToWorkspace({
+      description: text,
+      dataDir: this.options.dataDir,
+      workspace: live.root,
+      log: (message) => this.log(message),
+    });
+    if (result.copied || result.missing) {
+      this.log(`[issue-flow] ${live.id} 消息截图提升: `
+        + `复制 ${result.copied},缺席 ${result.missing}`);
+    }
   }
 
   /** 会话事件补记:服务侧发生的事实(如闸作答)落进事件账本,与
@@ -3387,6 +3414,7 @@ export class IssueFlowService {
     }
     const content = text?.trim();
     if (!content) throw new IssueControlError("消息内容不能为空");
+    this.promoteMessageImages(live, content);
     // 收口后返工(ADR-0013):流程终点是 MR 跑绿,收口态(idle+阶段
     // done)下用户续聊 = "还没修好",重开当前阶段让 AI 继续修——归档
     // 之前都能继续,可多轮(修完重推再申报,验绿门重新受理)。不在
@@ -3413,6 +3441,7 @@ export class IssueFlowService {
     const live = this.require(id);
     const content = text?.trim();
     if (!content) throw new IssueControlError("补充内容不能为空");
+    this.promoteMessageImages(live, content);
     if (live.state.status !== "running" || !live.driver) {
       throw new IssueControlError("会话不在运行中,补充无处送达");
     }
@@ -3695,6 +3724,9 @@ export class IssueFlowService {
     const previousStatus = live.state.status;
     live.controlEpoch += 1;
     delete live.state.takeover; // 接管中收口:人工驾驶标记不残留进终态
+    // 验证未答就归档/取消:闸随终态清面——"没答"本身是有效选择,
+    // 终态不再挂待办(2026-09-10 A 方案拍板的"不锁死"半边)。
+    delete live.state.gate;
     try {
       const stopped = await Promise.allSettled([live.driver?.abort(), this.stopContainer(live)]);
       const errors = stopped.flatMap((item) => item.status === "rejected" ? [item.reason] : []);
@@ -5028,27 +5060,42 @@ export class IssueFlowService {
    * AI 修完重推再申报,可多轮。状态保持 idle——收口是"等人拍板归档",
    * 不是终态。 */
   private closeMrGreen(live: LiveIssue, note: string): void {
-    const { state } = live;
-    fixedComplete(state, note);
-    state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
-    saveState(live.root, state);
-    this.notifyMrGreenClosed(live);
+    fixedComplete(live.state, note);
+    this.awaitEnvVerify(live);
   }
 
-  /** mr_green 收口的用户通知(即时收口与监看器滞后收口共用)。 */
-  private notifyMrGreenClosed(live: LiveIssue): void {
+  /** mr_green 全绿后的环境验证闸(2026-09-10 拍板,ADR-0013 修订:
+   *  全绿≠修好,真实验证的是用户)。通过→待归档;发现问题→回退
+   *  「问题分析」(轮次+1,fixedRollback),回退回合先与用户对齐问题
+   *  理解与修改方向再重写报告。卡不锁死:未反馈仍可归档/取消
+   *  (control 不设闸守卫,终态清闸);月光永不代答——验证是人工事实
+   *  (与流水线闸同款纪律)。回合中举闸只落闸,收口时 settle 的
+   *  闸分支定格 waiting_user 并发等待卡通知。 */
+  private awaitEnvVerify(live: LiveIssue): void {
     const { state } = live;
+    raiseGate(state, "env_verify",
+      "全部 MR 流水线已跑绿。请到目标环境验证修复效果:通过则可归档"
+      + "收口;发现问题请选「验证发现问题」并描述现象(补充说明支持"
+      + "粘贴截图)。未反馈也可直接归档或取消。");
+    state.stage_note
+      = "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析";
+    const settling = this.turning.has(live.id);
+    if (!settling) state.status = "waiting_user";
+    saveState(live.root, state);
     // 收口即点火合入事实监看(ADR-0022):两条收口路都汇到这里,
     // 单例防重入;重启恢复由 recover() 补挂。
     this.watchMergeStates(live);
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: state.account,
-      status: "待归档",
+      status: "待环境验证",
       summary: `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
-        + "——确认合入后可归档收口",
+        + "——请到目标环境验证后在卡上作答(未反馈也可直接归档/取消)",
       link: this.issueLink(live.id),
     }).catch(() => undefined);
+    if (!settling) this.notifyWaitingCard(live);
+    this.log(`[issue-flow] ${live.id} MR 全绿,举环境验证闸`
+      + "(通过待归档/发现问题回退分析)");
   }
 
   /** mr_green 是否已收口(本阶段 stage_states=done)。监看器的滞后结算

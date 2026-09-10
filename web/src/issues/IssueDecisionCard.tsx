@@ -1,5 +1,6 @@
 /**
- * 问题卡的决策卡:任务侧 WaitingCard(TaskCard.tsx)anatomy 的问题域移植。
+
+import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste.ts"; * 问题卡的决策卡:任务侧 WaitingCard(TaskCard.tsx)anatomy 的问题域移植。
  *
  * 提交语义与旧版完全一致——同一个 answerIssue 接口、同一个 state_version。
  * 区别只在交互:旧版"点选项立即提交",这里改成"先选/先填,统一按提交",
@@ -376,6 +377,10 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
   const evidence = waiting.gate_kind === "pipeline_evidence";
   const [text, setText] = useState("");
   const [notes, setNotes] = useState("");
+  // 补充说明截图粘贴(2026-09-10 验证闸配套):环境验证发现问题时贴
+  // 现场截图,引用随作答提升进工作区,AI inspect_image 识图。
+  const notesRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesPaste = useIssueImagePaste();
   const [error, setError] = useState("");
   const ready = evidence ? !!text.trim() : true;
   // 码与文案来自服务端下发的 options 镜像(前端不推断状态);单码闸,
@@ -430,6 +435,15 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
           <label className="issue-field wide">
             <span>补充说明(可选):在平台做了什么处理</span>
             <textarea rows={3} className="custom-input"
+              ref={notesRef}
+              onPaste={(event) => notesPaste.onPaste(event, (markdown) => {
+                const { next, caret } = insertMarkdownAtCursor(notesRef.current, notes, markdown);
+                setNotes(next);
+                window.requestAnimationFrame(() => {
+                  notesRef.current?.focus();
+                  notesRef.current?.setSelectionRange(caret, caret);
+                });
+              })}
               placeholder="如:已豁免规则 R1 / 已处理 SuperChecker 告警…"
               value={notes}
               onChange={(event) => setNotes(event.target.value)} />
