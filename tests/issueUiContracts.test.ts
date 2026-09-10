@@ -406,14 +406,14 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.match(sessionView, /<IssueConversationStream[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
   // 信息面不收:现场直播(SSE)不带任何归属条件。耗时卡点已随走查
-  // 反馈移出工作台(2026-09-07,只保留在列表卡展开态);逐仓交付收编
-  // 为「逐仓交付」页签。
+  // 反馈移出工作台(2026-09-07),又随列表卡展开态退役整个删除
+  // (2026-09-11);逐仓交付收编为「逐仓交付」页签。
   // (#123 拍平后对话现场是标签之首,直挂默认分支。)
   assert.match(sessionView, /\? <IssueEventsPane id=\{detail\.id\} active \/>/);
   assert.match(sessionView, /<IssueWorkspaceRepos detail=\{detail\} \/>/);
   assert.doesNotMatch(sessionView,
     /<IssueCostPanel id=\{detail\.id\} \/>/,
-    "耗时卡点不再占工作台纵向空间(列表卡展开态仍可用)");
+    "耗时卡点不再占工作台纵向空间(面板已整个退役)");
   // 右栏:作答卡(问题卡+平台闸+env 表单)只在归属分支,查看模式渲染
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
   assert.match(sessionView,
@@ -1157,4 +1157,45 @@ test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 envi
   // 页面凭据两个输入面仍在(不入台账,逐单手填)。
   assert.match(registration, /页面账号 <i className="req">\*<\/i>/);
   assert.match(registration, /页面密码 <i className="req">\*<\/i>/);
+});
+
+test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役(2026-09-11)", () => {
+  const ui = readFileSync(resolve("web/src/components/ui/card.tsx"), "utf-8");
+  // 整卡=进工作台的按钮(summary 按钮改语义,不再带 aria-expanded 开关),
+  // 悬停提示去向;展开体/展开箭头/展开状态机清零。
+  assert.match(issueBoard,
+    /<button type="button" className="task-summary" onClick=\{onOpen\}/);
+  assert.match(issueBoard, /title="进入问题工作台"/);
+  assert.doesNotMatch(issueBoard,
+    /aria-expanded|setExpanded|task-detail-body|task-chevron/);
+  // 文字入口「进入问题工作台」删除——点击即达,不留第二入口;
+  // 直达终止(2026-09-08)保留,终态卡不渲染终止钮的口径不变。
+  assert.doesNotMatch(issueBoard, /panel-link/);
+  assert.match(issueBoard, /terminatable && <button type="button" className="ui-btn flat danger"/);
+  assert.match(issueBoard, /action: "cancel"/);
+  // 皮肤换 shadcn Card;现场直播(SSE)与耗时卡点(时间线拉取)不再被
+  // 列表引用——这两类请求只属于工作台,列表不得回流。
+  assert.match(issueBoard, /import \{ Card \} from "\.\.\/components\/ui\/card";/);
+  assert.doesNotMatch(issueBoard, /IssueEventsPane|IssueCostPanel/);
+  // 轮询边界:列表 5s 可见轮询保留(列表活性唯一来源),工作台内 10s
+  // 详情跟随保留;除此之外没有别的循环请求。
+  assert.match(issueBoard, /startVisiblePolling\(refreshList, 5000, document\)/);
+  assert.match(issueBoard, /if \(!openId\) return;/);
+  // 状态轨走令牌工具类;suspended 旧内联色收编为令牌 --suspended
+  // (tokens.css 定义)。卡片轨道与状态胶囊不得再写裸色值(工作台
+  // 页签等处的同名存量字面量另有专项,不在本契约)。
+  assert.match(issueBoard, /suspended: "bg-suspended"/);
+  const tokens = readFileSync(resolve("web/src/tokens.css"), "utf-8");
+  assert.match(tokens, /--suspended: #3b83d5/);
+  assert.doesNotMatch(css, /status-suspended \.task-status-rail/);
+  assert.doesNotMatch(css, /\.pill\.suspended \{ color: #3b83d5/);
+  // 等待/闲置光效必须住在非分层附录(层序里只有非分层规则能压过卡片皮
+  // 的 bg-card/border-* 工具类);在 legacy 层会被静默压掉,不许回流。
+  const annex = css.indexOf("非分层附录");
+  const halo = css.indexOf(".issue-card-large.status-waiting_user {");
+  assert.ok(annex > -1, "非分层附录标记缺失");
+  assert.ok(halo > annex, "光效应住在附录里");
+  // Card 基座显式 border-solid:legacy DOM 没有 .tw-root 归一,
+  // border-width 不带 style 会落到初始值 none。
+  assert.match(ui, /rounded-lg border border-solid/);
 });

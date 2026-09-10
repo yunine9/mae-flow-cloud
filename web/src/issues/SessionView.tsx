@@ -5,14 +5,14 @@
  * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
  * #98 单路径化:不再感知"模式",自由旅程线已删)。左栏(#123 拍平)
  * 是五个一级标签直排——页签条在本文件,四个材料子视图内容免壳直渲自
- * MaterialsPane.tsx、现场直播在 EventsPane.tsx。耗时卡点(IssueCostPanel)
- * 同时被列表卡的展开态复用,也从这里出。右栏旧 NEXT ACTION 侧栏已随
- * #127 整体拆除:归档/终止入头部控件区、挂起转正卡入协作流顶部、
+ * MaterialsPane.tsx、现场直播在 EventsPane.tsx。右栏旧 NEXT ACTION 侧栏
+ * 已随 #127 整体拆除:归档/终止入头部控件区、挂起转正卡入协作流顶部、
  * 状态说明由头部徽标与协作流承载。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
- * 耗时卡点)完整保留,全部操作控件不渲染(不是点了报错),顶部一条
+ * 耗时卡点——已随 2026-09-11 拍板退役,见文件尾注释)完整保留,全部
+ * 操作控件不渲染(不是点了报错),顶部一条
  * 「查看模式」标识。归属人打开自己的会话零行为变化。
  */
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +26,6 @@ import {
   controlIssue,
   fixedStageList,
   getIssue,
-  getIssueTimeline,
   issueMergeStatus,
   issueStageText,
   replyIssue,
@@ -38,10 +37,7 @@ import {
   type IssueEnvironmentForm,
   type IssueStageState,
   type IssueSummary,
-  type IssueTimeline,
 } from "../api";
-import { formatWait } from "../taskTime";
-import { formatLocalClock } from "../time";
 import { confirmDialog } from "../ConfirmDialog";
 import {
   repoDeliveryRows,
@@ -676,96 +672,8 @@ function IssueWorkspaceProgress({ issue }: { issue: IssueSummary }) {
   </span>;
 }
 
-/** 耗时与卡点:问题域版的 CostBreakdown。服务端(sessionView.ts)已经
- * 把消息账与转移账归纳成结论,前端只呈现,不再二次解读;展开才查,
- * 视觉分量压低——它是仪表,不是流水账。 */
-export function IssueCostPanel({ id }: { id: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const [timeline, setTimeline] = useState<IssueTimeline | undefined>();
-  const [note, setNote] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const result = await getIssueTimeline(id);
-      setNote(result.unavailable ?? "");
-      setTimeline(result.timeline);
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function toggle() {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && !timeline) void load();
-  }
-
-  const share = timeline?.human_wait_share ?? 0;
-  const waits = timeline?.longest_waits ?? [];
-  const events = (timeline?.events ?? []).slice(-12).reverse();
-
-  return <section className={`issue-tl${expanded ? " is-open" : ""}`}>
-    <button type="button" className="issue-tl-toggle" aria-expanded={expanded}
-      onClick={toggle}>
-      <span>
-        <strong>耗时与卡点</strong>
-        <small>时间去哪了 · 卡在谁身上</small>
-      </span>
-      <i aria-hidden />
-    </button>
-    {expanded && <div className="issue-tl-body">
-      {loading && <div className="issue-tl-note">正在读取会话账本…</div>}
-      {!loading && note && <div className="issue-tl-note">{note}</div>}
-      {!loading && timeline && <>
-        <div className="issue-tl-metrics">
-          <div><span>总耗时</span><strong>{formatWait(timeline.span.ms)}</strong></div>
-          <div><span>等人工</span><strong>{share}%</strong></div>
-          <div><span>决策次数</span><strong>{timeline.decisions}</strong></div>
-        </div>
-        <div className="issue-tl-bar"
-          role="img"
-          aria-label={`人等待占 ${share}%`}>
-          <span style={{ width: `${share}%` }} />
-        </div>
-        {(timeline.blocker || timeline.span.start) && <div className="issue-tl-blocker">
-          {timeline.blocker
-            ? <>当前卡点:{timeline.blocker}</>
-            : <>时间区间 {formatLocalClock(timeline.span.start)}
-              → {formatLocalClock(timeline.span.end)}(当前没有等待中的问题卡)</>}
-        </div>}
-        {waits.length > 0 && <ol className="issue-tl-waits">
-          {waits.map((wait, index) => <li key={index}
-            className={wait.open_ended ? "open" : ""}>
-            <span className="issue-tl-rank">{String(index + 1).padStart(2, "0")}</span>
-            <span className="issue-tl-question">{wait.question}</span>
-            <span className="issue-tl-ms">
-              {formatWait(wait.ms)}{wait.open_ended ? "(仍在等)" : ""}
-            </span>
-          </li>)}
-        </ol>}
-        {events.length > 0 && <ul className="issue-tl-events">
-          {events.map((event, index) => <li key={index}
-            className={`kind-${event.kind}`}>
-            <time dateTime={event.ts}>{formatLocalClock(event.ts)}</time>
-            {event.kind === "stage" && <em className={`src-${event.source}`}>
-              {event.source === "platform" ? "平台" : "AI 上报"}
-            </em>}
-            <span>{event.kind === "stage"
-              ? `阶段:${STAGE(event)}${event.detail ? ` · ${event.detail}` : ""}`
-              : event.title}</span>
-          </li>)}
-        </ul>}
-      </>}
-    </div>}
-  </section>;
-}
-
-/** 阶段事件标题出人话:标题是词表键(如 verify),认得就翻,不认识的
- * (未来词表扩充前的旧现场)原样示人——前端不猜。 */
-function STAGE(event: { title: string }): string {
-  return issueStageText({ stage: event.title as never });
-}
+/** 耗时与卡点面板(2026-09-11 退役):原是工作台的耗时仪表,2026-09-07
+ * 走查反馈迁到列表卡展开态;展开交互随「点击直达工作台」拍板移除后,
+ * 它失去最后一个使用点,连面板一起删。数据面 timeline 接口(服务端投影)
+ * 仍在,api.getIssueTimeline 是它的客户端镜像;以后要在工作台补看耗时,
+ * 接回它即可。 */

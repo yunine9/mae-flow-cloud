@@ -124,8 +124,8 @@ function teamAssetTabFromHistoryState(
 }
 
 /** 问题处理子页签(spec #171):问题登记/DTS列表/问题会话。选择记住
- * localStorage + 浏览器历史快照,与团队任务子页签同口径;admin 恒为
- * 问题会话(不发起,登记/DTS 入口对 admin 不渲染)。 */
+ * localStorage + 浏览器历史快照,与团队需求页的现场/档案页签同口径;
+ * admin 恒为问题会话(不发起,登记/DTS 入口对 admin 不渲染)。 */
 const ISSUE_CHILD_TABS = new Set<IssueChildTab>([
   "register", "dts", "sessions",
 ]);

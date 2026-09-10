@@ -68,6 +68,7 @@
   --color-danger-soft: var(--danger-soft);
   --color-merge: var(--merge);
   --color-merge-soft: var(--merge-soft);
+  --color-suspended: var(--suspended);
   --color-focus: var(--focus);
   /* shadcn 组件皮约定名 */
   --color-background: var(--background);
