@@ -95,6 +95,15 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
   const directory = join(internal.cwd, ".mae-flow-work", "REQ-ARCH");
   mkdirSync(directory, { recursive: true });
   const path = join(directory, "story.md"); writeFileSync(path, "# Story" + block(source));
+  const child = service.create("模块设计", { account: "owner", ticket: "REQ-ARCH-U1", parentTaskId: task.id });
+  const childInternal = (service as any).tasks.get(child.id);
+  childInternal.cwd = join(child.workspace, "repo");
+  childInternal.summary.requirement_graph = { stage: "confirmed", repositories: [], dependencies: [] };
+  const childDirectory = join(childInternal.cwd, ".mae-flow-work", "REQ-ARCH-U1");
+  mkdirSync(childDirectory, { recursive: true });
+  writeFileSync(join(childDirectory, "story.md"), "# 模块 Story" + block({
+    ...source, meta: { ...source.meta, title: "模块事务时序" },
+  }));
   const server = createTaskServer(service, { auth });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
@@ -109,6 +118,12 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
     const response = await fetch(`${url}/diagram-1?revision=${list.revision}`, { headers });
     assert.equal(response.status, 200);
     assert.match((await response.json() as { html: string }).html, /订单同步模块/);
+    const childUrl = `${base}/tasks/${child.id}/architecture`;
+    const childList = await fetch(childUrl, { headers }).then((r) => r.json()) as { revision: string; diagrams: Array<{ title: string }> };
+    assert.equal(childList.diagrams[0].title, "模块事务时序");
+    const childResponse = await fetch(`${childUrl}/diagram-1?revision=${childList.revision}`, { headers });
+    assert.equal(childResponse.status, 200);
+    assert.match((await childResponse.json() as { html: string }).html, /模块事务时序/);
     writeFileSync(path, "# Story\n职责改变" + block(source));
     assert.equal((await fetch(`${url}/diagram-1?revision=${list.revision}`, { headers })).status, 409);
     assert.equal((await fetch(`${url}/diagram-1`, { headers })).status, 409);

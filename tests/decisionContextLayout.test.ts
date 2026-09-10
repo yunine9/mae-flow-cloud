@@ -414,6 +414,12 @@ test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开�
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /<StoryArchitecture/);
+  assert.match(workspace, /const architectureStory = task\.parent_task_id[\s\S]{0,220}?story\\\.md\$[\s\S]{0,220}?purpose === "overall_story"/,
+    "主任务与子任务都必须有稳定的架构 Story 来源");
+  assert.match(workspace, /hasRequirementGraph \|\| hasArchitectureStory/,
+    "子任务有模块 Story 时也必须显示正式架构视图页签");
+  assert.match(workspace, /onOpenStory=\{\(\) => \{\s*openMaterial\("doc"\); if \(architectureStoryName\) setActive\(architectureStoryName\)/,
+    "架构页返回当前任务自己的 Story");
   assert.doesNotMatch(workspace, /<RequirementGraph\b/,
     "用户要求架构页只保留 Story 的架构展示，不再叠加任务拓扑图");
   assert.match(workspace, /setActive\(OVERALL_STORY_ARTIFACT\)/,

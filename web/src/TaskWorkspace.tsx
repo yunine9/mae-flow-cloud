@@ -809,12 +809,20 @@ export function TaskWorkspace({
     if (workspaceView === "execution" || workspaceView === "knowledge") selectWorkspaceView("materials");
     setMaterialView(view);
   }
+  // 架构图和“阅读 Story”必须回到同一份设计来源：主任务用整体 Story，
+  // 子任务用自己的模块 story.md。子任务没有 requirement graph 页签，不能
+  // 再借 requirementGraphVisible 决定是否显示架构入口。
+  const architectureStory = task.parent_task_id
+    ? items?.find((item) => item.kind === "doc" && /(^|\/)story\.md$/.test(item.name))
+    : items?.find((item) => item.kind === "doc" && item.purpose === "overall_story");
+  const architectureStoryName = architectureStory?.name;
+  const hasArchitectureStory = Boolean(architectureStoryName);
   function openModuleStory(id: string) {
     const view = id === "view:logical-class" ? { label: "类图" } : id.startsWith("view:") ? STORY_VIEWS.find((item) => item.id === id.slice(5)) : undefined;
     const module = view ? { name: view.label, scope: undefined } : task.requirement_graph?.repositories.find((item) => item.id === id);
     const request = ++locationRequest.current;
     setPendingLocation(undefined); setModuleLocation(undefined); setModuleLocationRetry(undefined);
-    openMaterial("doc"); setActive(OVERALL_STORY_ARTIFACT);
+    openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
     setContent(""); setLoading(true); setMaterialReload(request);
     setLocationNotice(module ? "正在定位设计说明…" : "模块分工已更新，已打开完整 Story，请核对最新方案。");
     if (module) setModuleLocation({ taskId: task.id, id, name: module.scope?.name ?? module.name, request });
@@ -1395,7 +1403,7 @@ export function TaskWorkspace({
   }, [moduleLocation]);
   useEffect(() => {
     if (!moduleLocation) return;
-    if (moduleLocation.taskId !== task.id || materialView !== "doc" || active !== OVERALL_STORY_ARTIFACT) {
+    if (moduleLocation.taskId !== task.id || materialView !== "doc" || active !== architectureStoryName) {
       setModuleLocation(undefined); return;
     }
     if (loading || loadedMaterialReload !== moduleLocation.request) return;
@@ -1419,7 +1427,8 @@ export function TaskWorkspace({
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     row.classList.add("annot-flash");
     window.setTimeout(() => row.classList.remove("annot-flash"), 2500);
-  }, [moduleLocation, task.id, materialView, active, loading, loadedMaterialReload, content, materialReadError]);
+  }, [moduleLocation, task.id, materialView, active, architectureStoryName,
+    loading, loadedMaterialReload, content, materialReadError]);
   const activeMeta = items?.find((item) => item.name === active);
   const materialPriority = (item: ArtifactMeta): number =>
     item.purpose === "delivery_unit_brief" ? 0
@@ -2020,7 +2029,7 @@ export function TaskWorkspace({
                     <span>产出文档</span><i>{documents.length}</i>
                   </button>
                 </>}
-                {(hasRequirementGraph || (!task.parent_task_id && documents.some((item) => item.purpose === "overall_story"))) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
+                {(hasRequirementGraph || hasArchitectureStory) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
                   onClick={() => openMaterial("chain")}>
                   <span>架构视图</span>
                 </button>}
@@ -2275,7 +2284,7 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               <StoryArchitecture key={task.id} taskId={task.id} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
-                openMaterial("doc"); setActive(OVERALL_STORY_ARTIFACT);
+                openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>
               {materialView === "diff" && pushReview && (
@@ -2387,7 +2396,7 @@ export function TaskWorkspace({
                           ? task.delivery_selection.paths : undefined)}
                       onSelectionChange={setDeliverySelection}
                       focusRequest={diffReviewRequest} />
-                  : <Markdown text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT
+                  : <Markdown text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT || /(^|\/)story\.md$/.test(active)
                     ? (line) => { setArchitectureLine(line); openMaterial("chain"); } : undefined} />}
               </Annotatable>
               )}

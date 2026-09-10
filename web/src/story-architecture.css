@@ -44,8 +44,11 @@
 .story-architecture iframe { display: block; width: 100%; height: max(560px, 65vh); border: 1px solid var(--line); border-radius: 10px; background: #101620; }
 .story-architecture iframe.is-presenting { z-index: var(--z-modal); width: 100vw; height: 100dvh; max-width: none; border: 0; border-radius: 0; }
 .md-architecture-reference { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
-.md-architecture-reference > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.md-architecture-reference button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent); cursor: pointer; }
+.md-architecture-reference-main { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
+.md-architecture-reference-main > div { min-width: 0; }
+.md-architecture-reference-main strong { display: block; margin-bottom: 5px; color: var(--text); font-size: 14px; }
+.md-architecture-reference-main p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.md-architecture-reference button { padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 7px; background: var(--surface); color: var(--accent); cursor: pointer; white-space: nowrap; }
 .md-architecture-reference details { margin-top: 10px; font-size: 12px; }
 .md-architecture-reference summary { color: var(--muted); cursor: pointer; }
 .md-architecture-reference .md-block-code { max-height: 320px; overflow: auto; color: var(--text); }

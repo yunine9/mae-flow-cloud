@@ -85,12 +85,24 @@ test("Story 图源收起仍保留源码行号与原文，标题不执行 HTML", 
   const text = `前文\n\`\`\`archify\n${source}\n\`\`\`\n后文`;
   const html = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenArchitecture: () => {} }));
   assert.match(html, /class="md-architecture-reference" data-l="2" data-line-end="4"/);
-  assert.match(html, /<details><summary>查看图源<\/summary>/);
-  assert.match(html, /查看架构图<\/button>/);
+  assert.match(html, /<details><summary>技术信息（排障）<\/summary>/);
+  assert.match(html, /title="在当前任务的架构视图中打开这张图"/);
+  assert.match(html, /转到架构视图 ↗<\/button>/);
+  assert.match(html, /查看这个模块包含什么、依赖谁，以及它们如何连接。/);
   assert.match(html, /&lt;script&gt;图标题&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /data-l="5">后文/);
   const malformed = renderToStaticMarkup(React.createElement(Markdown, { text: "```archify\n{broken\n```" }));
   assert.match(malformed, /\{broken/);
   assert.doesNotMatch(malformed, /查看架构图<\/button>/);
+});
+
+test("Story 架构入口用业务语言解释常见图，不把图名直接甩给用户", () => {
+  const render = (title: string) => renderToStaticMarkup(React.createElement(Markdown, {
+    text: `\`\`\`archify\n${JSON.stringify({ meta: { title } })}\n\`\`\``,
+    onOpenArchitecture: () => {},
+  }));
+  assert.match(render("存储事务互斥时序"), /并发操作如何避免互相覆盖/);
+  assert.match(render("订单领域类图"), /核心对象各自负责什么/);
+  assert.match(render("订单服务部署图"), /服务运行在哪里/);
 });
