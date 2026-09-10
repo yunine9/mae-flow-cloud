@@ -36,8 +36,8 @@
 
 ## push.dirty
 
-工作区有未提交改动,push 只推送已提交的历史——现在推只会推出旧提交(MR 将没有 diff)。先提交再重推:
-  git add -A && git commit -m "[{{ticket}}] <改动说明>"
+工作区有未提交改动,push 只推送已提交的历史——现在推只会推出旧提交(MR 将没有 diff)。先提交再重推:只 add 本次范围的文件(local-logs/ 等过程产物留在工作区),提交格式含类型槽——
+  git add <本次范围的文件> && git commit -m "[{{ticket}}][fix] <改动说明>"
 未提交的文件({{count}} 条):
 {{files}}
 
