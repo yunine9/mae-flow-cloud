@@ -180,6 +180,7 @@ function RuntimeCard({ view, onSaved }: {
 function ExecutionPolicyCard({ view, onSaved }: {
   view: Settings; onSaved: (next: Settings) => void;
 }) {
+  const [blocks, setBlocks] = useState((view.execution_policy.blocked_repository_resources ?? []).join("\n"));
   const [instructions, setInstructions] = useState(
     view.execution_policy.team_instructions ?? "");
   const [busy, setBusy] = useState(false);
@@ -191,12 +192,11 @@ function ExecutionPolicyCard({ view, onSaved }: {
     try {
       onSaved(await putExecutionPolicySettings({
         team_instructions: instructions.trim(),
+        blocked_repository_resources: blocks.split("\n").map(value => value.trim()).filter(Boolean),
       }));
       setMessage({
         kind: "success",
-        text: instructions.trim()
-          ? "团队执行约定已保存；只影响之后新建的任务，运行中与历史任务保持原快照。"
-          : "团队执行约定已清空；之后新建的任务只使用平台默认与任务补充。",
+        text: "设置已保存。团队约定用于新任务；资源屏蔽在下次会话启动或恢复时生效，已运行的会话需重启。",
       });
     } catch (error) {
       setMessage({ kind: "error", text: String((error as Error).message ?? error) });
@@ -222,10 +222,16 @@ function ExecutionPolicyCard({ view, onSaved }: {
         </small>
         <em className="settings-char-count">{instructions.length}/2000</em>
       </label>
+      <label className="ui-field">
+        <span>屏蔽仓库 Skill 与指令文件</span>
+        <textarea rows={4} value={blocks} placeholder={".cac\nAGENTS.md\n.agents/skills/conflicting-skill"}
+          onChange={event => setBlocks(event.target.value)} />
+        <small className="knob-note">每行一个文件名或相对路径，目录包含全部子项；不支持通配符。统一作用于需求流和问题流，不删除仓库文件。留空表示不屏蔽。</small>
+      </label>
       {/* 团队各阶段勾选增强已随 v1 退役(2026-08-29):想定制阶段
           结构请到「团队资产 → 工作流」建团队工作流资产。 */}
       <button type="submit" className="ui-btn primary" disabled={busy}>
-        {busy ? "正在保存…" : "保存团队执行约定"}
+        {busy ? "正在保存…" : "保存设置"}
       </button>
       <Feedback message={message} />
     </form>
@@ -642,7 +648,7 @@ function SettingsOverview({ view, check, checkError }: {
       <button type="button" onClick={() => go("settings-policy")}>
         <span>03</span><strong>团队统一约定</strong>
         <small>{view.execution_policy.team_instructions?.trim()
-          ? "已设置 · 仅影响之后新建的任务" : "未设置 · 使用平台默认约定"}</small>
+          ? "已设置团队约定" : "使用平台默认约定"}{` · ${view.execution_policy.blocked_repository_resources?.length ?? 0} 条资源屏蔽规则`}</small>
         <em>进入团队约定</em>
       </button>
       <button type="button" onClick={() => go("settings-runtime")}>
@@ -685,7 +691,7 @@ export function SettingsBoard() {
       key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
       view={view} onSaved={setView} />
     <ExecutionPolicyCard
-      key={`p${view.execution_policy.team_instructions ?? ""}`}
+      key={`p${JSON.stringify(view.execution_policy)}`}
       view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}:${JSON.stringify(view.defaults.runtime)}`}
       view={view} onSaved={setView} />

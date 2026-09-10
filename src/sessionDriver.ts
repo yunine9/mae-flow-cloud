@@ -107,15 +107,53 @@ export function fatalToolExecutionError(
  * 类型与 request_id；这些对开发者没有行动价值，反而把真正的恢复时间
  * 淹没。只收敛已明确识别的 429/额度错误，其他故障仍保留原文供排查。 */
 export function userFacingModelFailure(detail: string): string {
+  if (!looksLikeRateLimited(detail)) return detail.trim();
   const raw = detail.trim();
-  if (!/(?:\b429\b|rate[_ ]limit|使用上限|限额.*重置|quota exhausted)/i
-      .test(raw)) return raw;
   const reset = raw.match(/限额将在\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s*重置/)?.[1];
   return reset
     ? `模型额度已用完，将于 ${reset} 恢复。任务已停在可恢复位置；`
       + "额度恢复后点“重跑续推”，已有数据不会丢失。"
     : "模型服务当前限流（429）。任务已停在可恢复位置；稍后点“重跑续推”，"
       + "已有数据不会丢失。";
+}
+
+/** 限流/额度类失败(429 家族,票 #159):时间可恢复——问题流对这类
+ *  session_ended 落「停机待恢复」而不是判死。判据与
+ *  userFacingModelFailure 同源(含它改写后的友好文案,判别要在映射
+ *  两侧都成立),别处不要另写第三份正则。 */
+export function looksLikeRateLimited(detail: string): boolean {
+  return /(?:\b429\b|rate[_ ]limit|使用上限|额度已用完|限额.*重置|quota exhausted)/i
+    .test(detail);
+}
+
+/** pi 的"忙撞"拒答(issue-20 实锤):prompt 允诺已回、会话还自认忙的
+ *  收尾窗口里再 prompt,pi 原文就是这一句。识别它不是为了吞——是让
+ *  调用方区分"会话坏了"和"递早了一拍",后者让一拍重投即可。 */
+export function looksLikeBusyCollision(detail: string): boolean {
+  return /already processing/i.test(detail);
+}
+
+/** 忙撞重投前让出的节拍:pi 收尾是微任务+流关闭级别的活,250ms 足够
+ *  它走完;再长就是在猜网络,不该在这层猜。 */
+const BUSY_RETRY_DELAY_MS = 250;
+
+/** 输出超限截断(issue-12 实锤)的识别:fatalToolExecutionError 的产出
+ *  形状。导出给宿主(问题流 settle)做同款"可恢复"落点判断——工具没
+ *  执行≠任务失败,代码与证据都还在。 */
+export function looksLikeOutputTruncation(detail: string): boolean {
+  return detail.includes("模型回复超过输出上限")
+    && detail.includes("没有真正执行");
+}
+
+/** 输出超限纠偏重试预算:与催办预算同一哲学——纠偏不是永动机,模型
+ *  连续无视精简指令就该交还人工,而不是无限烧请求。 */
+const OUTPUT_TRUNCATION_RETRIES = 2;
+
+function outputTruncationRepairNotice(attempt: number): string {
+  return `平台纠偏(第 ${attempt}/${OUTPUT_TRUNCATION_RETRIES} 次):`
+    + "上一条回复超出模型输出上限,工具调用的参数被截断,没有真正执行。"
+    + "请重新发起同一意图的调用,这次必须大幅精简:正文每段两三句、"
+    + "选项只留关键词,内容多就拆成多次短调用。已有工作都在,不要重做。";
 }
 
 export function validateAskUserQuestionInput(input: unknown): string | undefined {
@@ -475,7 +513,7 @@ export class CloudSession {
 
   async start(userMessage: string): Promise<Outcome> {
     this.emit("session_started", this.sessionId, { resume: false });
-    return this.turnWithOverflowRepair(userMessage);
+    return this.turnWithRepairs(userMessage);
   }
 
   /** 服务重启后的重建会话:pi 侧上下文不可恢复(inMemory),
@@ -484,7 +522,7 @@ export class CloudSession {
   async startResume(userMessage: string): Promise<Outcome> {
     await this.reconcileInterruptedWork();
     this.emit("session_started", this.sessionId, { resume: true });
-    return this.turnWithOverflowRepair(userMessage);
+    return this.turnWithRepairs(userMessage);
   }
 
   /** Close the lifecycle gap left by a process crash.
@@ -630,9 +668,12 @@ export class CloudSession {
     return failures.join("；");
   }
 
-  /** 发一条用户消息并跑完本轮,统一收口判定。 */
-  private promptTurn(userMessage: string): Promise<Outcome> {
-    this.emit("user_message", this.sessionId, { text: userMessage });
+  /** 发一条用户消息并跑完本轮,统一收口判定。announce=false 的重投
+   *  (忙撞让一拍那次)不再记一遍用户消息账——首投已经记过。 */
+  private promptTurn(userMessage: string, announce = true): Promise<Outcome> {
+    if (announce) {
+      this.emit("user_message", this.sessionId, { text: userMessage });
+    }
     this.turnActivity = 0;
     this.turnError = "";
     this.turnTerminalError = "";
@@ -745,7 +786,35 @@ export class CloudSession {
    * 模型提前收嘴(run3 实测:拿到 message-id 后直接 end_turn)不等于
    * 任务完成——阶段真相只看内核状态,宿主负责把会话推回流程。 */
   async continueWith(text: string): Promise<Outcome> {
-    return this.turnWithOverflowRepair(text);
+    return this.turnWithRepairs(text);
+  }
+
+  /** 回合级自愈总口(2026-09-10,issue-12/issue-20 复盘):收尾窗口
+   *  忙撞让拍重投、输出超限截断纠偏重试,叠加在上下文超限压缩重发
+   *  (turnWithOverflowRepair)之上。三条共用一套纪律:每类只补有限次,
+   *  补不动就如实上抛——自愈是纠偏不是永动机,绝不停在"看起来在
+   *  推进"的假循环里,也不把可恢复的失败装成会话死亡(落点语义交
+   *  宿主,问题流 settle 按 looksLike* 落 idle 而非 failed)。 */
+  private async turnWithRepairs(userMessage: string): Promise<Outcome> {
+    let outcome = await this.turnWithOverflowRepair(userMessage);
+    if (outcome.status === "session_ended"
+        && looksLikeBusyCollision(outcome.detail ?? "")) {
+      // 首投被拒时消息没进队列,重投不会重复;仍忙就如实上交。
+      await new Promise((done) => {
+        const timer = setTimeout(done, BUSY_RETRY_DELAY_MS);
+        timer.unref?.();
+      });
+      outcome = await this.promptTurn(userMessage, false);
+    }
+    for (let attempt = 1; attempt <= OUTPUT_TRUNCATION_RETRIES; attempt++) {
+      if (outcome.status !== "session_ended"
+          || !looksLikeOutputTruncation(outcome.detail ?? "")) break;
+      this.options.log?.(`任务 ${this.options.taskId} 输出超限截断,`
+        + `第 ${attempt}/${OUTPUT_TRUNCATION_RETRIES} 次纠偏重试`);
+      outcome = await this.turnWithOverflowRepair(
+        outputTruncationRepairNotice(attempt));
+    }
+    return outcome;
   }
 
   /**

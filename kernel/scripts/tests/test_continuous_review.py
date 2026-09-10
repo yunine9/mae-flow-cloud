@@ -143,6 +143,43 @@ class DeliveryCommandTests(TempProject):
         value["quality"]["external_verification"]["sha"] = self.head
         return value
 
+    def control(self, value, **changes):
+        from mae_flow_core.cli_commands.feedback_control import control_feedback
+        payload = {"operation_id": "op-1", "target": "先处理 B", "actor": "owner",
+                   "request_id": "message-1", "reason": "A 暂缓"}
+        payload.update(changes)
+        with mock.patch.object(host_receipts, "has_host_receipt", return_value=False), \
+                mock.patch.object(host_receipts, "save_with_host_proof"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            control_feedback(value, payload, {})
+
+    def test_defer_promotes_next_batch_without_falsifying_pipeline(self):
+        value = self.live_state()
+        first = batch(base=self.head)
+        second = batch("fb-2", self.head)
+        second["items"][0]["id"] = "workspace:an-2"
+        with contextlib.redirect_stdout(io.StringIO()):
+            delivery._open({}, value, SimpleNamespace(file=self.write_json("first.json", first)))
+            delivery._open({}, value, SimpleNamespace(file=self.write_json("second.json", second)))
+        original_quality = json.loads(json.dumps(value["quality"]))
+        self.control(value, feedback_id="workspace:an-1")
+        self.assertEqual(value["delivery_loop"]["active_batch_id"], "fb-2")
+        self.assertEqual(value["delivery_loop"]["batches"][0]["status"], "deferred")
+        self.assertEqual(value["quality"], original_quality)
+        self.control(value, feedback_id="workspace:an-1")
+        self.assertEqual(len(value["delivery_loop"]["controls"]), 1)
+        with self.assertRaises(SystemExit):
+            self.control(value, target="改写相同操作", feedback_id="workspace:an-1")
+
+    def test_target_alone_does_not_silently_defer_feedback(self):
+        value = self.live_state()
+        with contextlib.redirect_stdout(io.StringIO()):
+            delivery._open({}, value, SimpleNamespace(file=self.write_json("first.json", batch(base=self.head))))
+        self.control(value)
+        self.assertEqual(value["delivery_loop"]["active_batch_id"], "fb-1")
+        self.assertFalse(value["delivery_loop"].get("deferred_feedback"))
+        self.assertEqual(value["delivery_loop"]["target"]["target"], "先处理 B")
+
     def test_panel_command_rewrites_pulse_with_current_phase_vocabulary(self):
         """阶段词表升级后,老任务的脉冲还是旧名字;宿主跑一次 panel 就该
         按当前词表重写脉冲(Cloud 靠它自愈),不用等下一个 Hook 事件。"""
@@ -549,6 +586,28 @@ class DeliveryHostProofTests(TempProject):
                 projection,
                 host_receipts.host_projection(tampered, "pipeline-record", {}))
 
+    def test_current_feedback_text_separates_deferred_items_from_actionable_receipts(self):
+        from mae_flow_core.cli_commands.delivery_support import render_delivery_feedback
+        value = state("feedback_triage")
+        value["delivery_loop"] = {
+            "active_batch_id": "fb-1",
+            "target": {"target": "先处理 B"},
+            "deferred_feedback": {"A": {"reason": "本轮延期"}},
+            "batches": [{"batch_id": "fb-1", "status": "repairing", "items": [
+                {"id": "A", "summary": "不应再次派修的旧问题"},
+                {"id": "B", "summary": "需要执行的新问题"},
+            ]}],
+        }
+        rendered = render_delivery_feedback(value)
+        self.assertIn("当前优先目标：先处理 B", rendered)
+        self.assertIn("已由责任人暂缓自动修复：A", rendered)
+        self.assertNotIn("不应再次派修的旧问题", rendered)
+        self.assertIn('"id": "B"', rendered)
+        self.assertNotIn('"id": "A"', rendered)
+        value["delivery_loop"]["active_batch_id"] = ""
+        self.assertIn("先处理 B", render_delivery_feedback(value))
+        self.assertNotIn("写回执时", render_delivery_feedback(value))
+
     def test_receipt_size_stays_constant_under_heavy_feedback(self):
         """一轮量大但完全合法的检视不得把收据撑过读取上限。
 
@@ -785,6 +844,74 @@ class DeliveryHostProofTests(TempProject):
                 rewritten, active_batch="feedback-open")["active_batch"])
             self.assertEqual(before, sorted(os.listdir(trust)), "attest 不落任何文件")
             self.assertFalse(os.path.exists(".mae-flow.json"))
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_unrelated_host_actions_cannot_resign_forged_owner_controls(self):
+        root, old, trust, authority = self.trusted_layout()
+        try:
+            value = state("feedback_triage")
+            value["delivery_loop"] = {
+                "active_batch_id": "fb-1",
+                "batches": [{"batch_id": "fb-1", "status": "repairing"}],
+            }
+            self._receipt(trust, "feedback-open",
+                          host_receipts.host_projection(value, "feedback-open", {}))
+            # The active batch is unchanged. The formerly accepted successor
+            # would seal this fabricated decision in an otherwise normal event.
+            value["delivery_loop"]["deferred_feedback"] = {
+                "mr:1": {"reason": "FORGED owner decision"}}
+            value["delivery_loop"]["target"] = {"target": "FORGED target"}
+            for action in ("feedback-open", "feedback-result", "pipeline-record",
+                           "close", "selection-reconcile", "intervention-reconcile"):
+                with self.subTest(action=action):
+                    proof = {
+                        "schema": host_capability.PROOF_SCHEMA,
+                        "task_id": "task-7", "action": action,
+                        "payload_digest": host_receipts._digest({}),
+                        "nonce": "new-" + action,
+                        "issued_at": int(delivery.time.time()), "signature": "signed",
+                    }
+                    with mock.patch.object(host_capability, "_proof_payload",
+                                           return_value=(proof, trust)), \
+                            mock.patch.object(host_capability, "_verify_rsa_sha256", return_value=True), \
+                            mock.patch.object(host_receipts, "_verify_rsa_sha256", return_value=True), \
+                            self.assertRaises(SystemExit):
+                        verify_host_proof(value, "unused", action, {})
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_owner_controls_survive_workflow_movement_but_not_deletion_or_rollback(self):
+        root, old, trust, _authority = self.trusted_layout()
+        try:
+            legacy = state("feedback_triage")
+            self.assertNotIn("feedback_control_digest",
+                             host_receipts.host_projection(legacy, "feedback-open", {}))
+            value = state("feedback_triage")
+            value["delivery_loop"] = {
+                "controls": [{"operation_id": "decision-1"}],
+                "target": {"target": "B"},
+                "deferred_feedback": {"A": {"reason": "延期"}},
+            }
+            older = json.loads(json.dumps(value))
+            self._receipt(trust, "feedback-open",
+                          host_receipts.host_projection(older, "feedback-open", {}))
+            value["delivery_loop"]["controls"].append({"operation_id": "decision-2"})
+            value["delivery_loop"]["target"] = {"target": "C"}
+            self._receipt(trust, "pipeline-record",
+                          host_receipts.host_projection(value, "pipeline-record", {}))
+            with mock.patch.object(host_receipts, "_verify_rsa_sha256", return_value=True):
+                moved = json.loads(json.dumps(value))
+                moved["current"] = "build"
+                moved["delivery_loop"]["batches"] = [{"status": "awaiting_verification"}]
+                host_receipts.verify_feedback_control_predecessor(moved)
+                rewritten = json.loads(json.dumps(value))
+                rewritten["delivery_loop"]["deferred_feedback"]["B"] = {"reason": "假的"}
+                for forged in (legacy, older, rewritten):
+                    with self.assertRaises(SystemExit):
+                        host_receipts.verify_feedback_control_predecessor(forged)
         finally:
             os.chdir(old)
             root.cleanup()

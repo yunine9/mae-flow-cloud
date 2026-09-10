@@ -835,7 +835,7 @@ export interface PushReviewPresentation {
 export type FeedbackSource = "workspace" | "build_fix" | "pipeline"
   | "mr_discussion" | "conflict" | "scope" | "push_confirmation";
 export type FeedbackStatus = "open" | "repairing" | "addressed"
-  | "awaiting_verification" | "closed" | "needs_human";
+  | "awaiting_verification" | "closed" | "needs_human" | "deferred";
 export interface FeedbackRecord {
   id: string;
   batch_id: string;
@@ -3257,6 +3257,7 @@ export interface SettingsView {
     build_cache_max_gb?: number;
   };
   execution_policy: {
+    blocked_repository_resources?: string[];
     /** 只影响保存后新建任务；每单会固定快照(编译为 team 层补充)。 */
     team_instructions?: string;
   };
@@ -3396,6 +3397,7 @@ export function putRuntimeSettings(
 }
 
 export function putExecutionPolicySettings(body: {
+  blocked_repository_resources?: string[];
   team_instructions: string;
 }): Promise<SettingsView> {
   return putSettings("execution-policy", body);

@@ -250,3 +250,26 @@ test("克隆失败也清理临时目录，错误不泄露成未处理异常", as
   const leaked = [...after].filter((name) => !before.has(name));
   assert.deepEqual(leaked, [], "克隆失败的临时目录必须清干净");
 });
+
+test("仓库技能目录发现过滤平台屏蔽项", async () => {
+  const repo = makeRepo();
+  writeSkill(repo, ".cac/skills", "department", "department", "部门规则");
+  writeSkill(repo, ".agents/skills", "business", "business", "业务知识");
+  commit(repo, "skills");
+  const catalog = await discoverRepositorySkills({ repository: repo, baseline: "main", blockedPaths: [".cac"] });
+  assert.equal(catalog.error, undefined);
+  assert.deepEqual(catalog.skills.map(skill => skill.name), ["business"]);
+});
+
+test("屏蔽详情读取真实 Git 原文，但不进入可选 Skill 清单", async () => {
+  const repo = makeRepo();
+  writeSkill(repo, ".cac/skills", "department", "department", "部门规则原文");
+  writeFileSync(join(repo, "AGENTS.md"), "# 被屏蔽的仓库指令\n");
+  commit(repo, "blocked resources");
+  const result = await discoverRepositorySkills({ repository: repo, baseline: "main", blockedPaths: [".cac", "AGENTS.md"], previewBlocked: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.skills.length, 0);
+  assert.equal(result.blocked_resources?.files.length, 2);
+  assert.match(result.blocked_resources!.files.find(file => file.path === "AGENTS.md")!.content!, /被屏蔽的仓库指令/);
+  assert.deepEqual(result.blocked_resources!.files.find(file => file.path === "AGENTS.md")!.rules, ["AGENTS.md"]);
+});

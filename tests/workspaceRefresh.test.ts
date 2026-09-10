@@ -42,6 +42,7 @@ test("工作台后台轮询保留文档、图表和差异正文，真实改动�
       assert.equal(value.error, undefined, `${mode}: ${value.error}`);
       assert.equal(value.stable, true);
       assert.equal(value.updated, true);
+      if (mode === "doc") assert.equal(value.storyFullscreen, true);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

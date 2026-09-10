@@ -450,10 +450,10 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.ok(reopenedRound2.pushes![0].sha !== shaBefore,
       "返工产生新推送(同分支追加)");
 
-    // ⑤ 手动归档:有 MR 记录,结论=已交付。
+    // ⑤ 手动归档:MR 仅验绿、尚未合入，按实际事实记已修复。
     const archived = await service.control(created.id, { action: "archive" });
     assert.equal(archived.status, "archived");
-    assert.equal(archived.conclusion?.kind, "delivered");
+    assert.equal(archived.conclusion?.kind, "fixed");
     assert.equal(archived.stage, "mr_green", "归档不改写固定流程阶段词表");
     // 登记元信息进上下文(ADR-0003):网管口令是现场公开默认值,明文
     // 随元信息块出现;平台凭据(git 令牌)的铁律不变。
@@ -850,7 +850,7 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
   assert.equal(tools.some((tool) => tool.name === "submit_analysis"), true);
   // fix 阶段:建 MR 仍被阶段门禁拒;report_ut 在本阶段开放,complete_stage 是出口。
   await assert.rejects(() => byName("create_mr").execute("x", {}),
-    /阶段门禁/, "fix 阶段建 MR 必须被拒");
+    (error: Error) => !/阶段门禁/.test(error.message), "fix 阶段建 MR 只核对真实前置条件");
   // mr_green 阶段:没有 UT 记录不再挡建 MR(UT 降级为事实上报)——
   // 门禁放行,卡在机械前置(平台未配置),而不是任何 UT/阶段闸。
   base.stage = "mr_green";

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OverallStoryCoordinator, collectStoryInput, type StoryRun } from "../src/overallStory.ts";
-import { OVERALL_STORY_ARTIFACT, readStoryState, writeStoryState, currentStoryFile, readCurrentStory } from "../src/overallStoryStore.ts";
+import { OVERALL_STORY_ARTIFACT, readStoryState, writeStoryState, currentStoryFile, readCurrentStory, readCurrentStoryArchitecture } from "../src/overallStoryStore.ts";
 import { AnnotationStore, reanchor } from "../src/annotations.ts";
 import { annotationClosure } from "../src/feedbackPolicy.ts";
 import { readArtifact, listArtifactDocuments } from "../src/artifacts.ts";
@@ -44,6 +44,78 @@ function fixture() {
   return { task, child, childDoc, root, store, coordinator, options, note, calls: () => calls,
     runner: (next: typeof runner) => { runner = next; }, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("架构图可从无到有并更新，失败保留旧图，正文和确认不变", async () => {
+  const f = fixture();
+  try {
+    f.coordinator.adoptAnalysis("parent", "# Story\n完整设计\n```archify\n{}\n```", "owner");
+    const before = readCurrentStory(f.task.summary.workspace);
+    const confirmed = readStoryState(f.task.summary.workspace).confirmed;
+    let title = "首版模块";
+    f.runner(async (_task, job) => {
+      assert.equal(job.architectureOnly, true);
+      assert.match(f.coordinator.status("parent").job?.progress ?? "", /正在准备/);
+      job.onProgress?.("Agent 正在依据完整 Story 生成架构图");
+      assert.match(f.coordinator.status("parent").job?.progress ?? "", /完整 Story/);
+      assert.equal(job.before, before);
+      const event = {} as import("../src/semanticEvents.ts").SemanticEvent;
+      assert.equal(overallStoryGate(job.root, true)("Write", "story.md", event)?.action, "deny");
+      assert.equal(overallStoryGate(job.root, true)("Write", "architecture.json", event)?.action, "allow");
+      assert.match(overallStoryMission(job), /整个 story.md/);
+      writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
+        id: "module", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title },
+          components: [{ id: "api", type: "backend", label: title, pos: [40, 40], size: [180, 64] }], connections: [] },
+      }] }));
+    });
+    f.coordinator.generateArchitecture("parent", "owner");
+    assert.throws(() => f.coordinator.generateArchitecture("parent", "owner"), /正在更新/);
+    await f.coordinator.settled("parent");
+    assert.equal(f.coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace)!, /首版模块/);
+    title = "更新模块";
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    const updated = readCurrentStoryArchitecture(f.task.summary.workspace)!;
+    assert.match(updated, /更新模块/);
+    f.runner(async () => { throw new Error("模型暂时不可用"); });
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    assert.match(f.coordinator.status("parent").error!, /模型暂时不可用/);
+    assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace), updated);
+    assert.equal(readCurrentStory(f.task.summary.workspace), before);
+    assert.deepEqual(readStoryState(f.task.summary.workspace).confirmed, confirmed);
+  } finally { await f.coordinator.shutdown(); f.dispose(); }
+});
+
+test("未登记全局版本的分析 Story 也能更新架构图，生成期间正文变化不发布旧图", async () => {
+  const f = fixture();
+  const coordinator = new OverallStoryCoordinator({ ...f.options,
+    artifactRoot: (id) => id === "parent" ? f.task.summary.workspace : f.options.artifactRoot(id) });
+  try {
+    const graph = f.task.summary.requirement_graph!;
+    graph.stage = "analyzing" as typeof graph.stage;
+    const path = join(f.task.summary.workspace, ".mae-flow-work/parent/story.md");
+    mkdirSync(join(f.task.summary.workspace, ".mae-flow-work/parent"), { recursive: true });
+    writeFileSync(path, "# 现有分析 Story\n完整模块说明");
+    let drift = false;
+    f.runner(async (_task, job) => {
+      assert.match(job.before, /现有分析 Story/);
+      writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
+        id: "api", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title: "模块架构" },
+          components: [{ id: "api", type: "backend", label: "API", pos: [40, 40], size: [180, 64] }], connections: [] },
+      }] }));
+      if (drift) writeFileSync(path, "# 现有分析 Story\n职责已经变化");
+    });
+    coordinator.generateArchitecture("parent", "owner"); await coordinator.settled("parent");
+    assert.equal(coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace, readFileSync(path, "utf8"))!, /模块架构/);
+    assert.equal(readStoryState(f.task.summary.workspace).current, undefined);
+    assert.equal(readStoryState(f.task.summary.workspace).confirmed, undefined);
+    graph.stage = "confirmed"; graph.source_document = "story.md";
+    drift = true;
+    coordinator.generateArchitecture("parent", "owner"); await coordinator.settled("parent");
+    assert.match(coordinator.status("parent").error!, /Story 已更新/);
+    assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace, readFileSync(path, "utf8")), undefined);
+  } finally { await coordinator.shutdown(); f.dispose(); }
+});
 
 test("新 Story 输入跟踪模块职责；升级不改变历史汇总稿的摘要形态", () => {
   const f = fixture();
@@ -207,16 +279,18 @@ test("文件边界禁止链接逃逸；缺失或歧义的子任务 Story 不被�
     const contract = overallStoryGate("/workspace");
     const gate = (tool: string, value: string) => contract(tool, value, {} as import("../src/semanticEvents.ts").SemanticEvent);
     assert.equal(gate("Write", "story.md")?.action, "allow");
+    assert.equal(gate("Write", "architecture.json")?.action, "allow");
     for (const path of ["inputs/requirement.md", "../story.md", "/tmp/escape"]) assert.equal(gate("Write", path)?.action, "deny");
     assert.equal(gate("Bash", "pwd")?.action, "deny");
   } finally { f.dispose(); }
 });
 
-test("真实文档会话沿用内核 Story 模板、文件工具与主任务日志，无需主 Agent 或 Bash", async () => {
+test("真实文档会话沿用内核 Story 模板并单独生成平台图源，无需主 Agent 或 Bash", async () => {
   const f = fixture();
   const model = new ScriptedModelServer([
     { tool: { name: "read", input: { path: "inputs/template.md" } } },
     { tool: { name: "write", input: { path: "story.md", content: "# 整体 Story\n待补充接口 Story" } } },
+    { tool: { name: "write", input: { path: "architecture.json", content: '{"schema_version":1,"diagrams":[]}' } } },
     { text: "整理完成，缺少接口子任务 Story。" },
   ]);
   await model.start();
@@ -226,12 +300,41 @@ test("真实文档会话沿用内核 Story 模板、文件工具与主任务日�
         kernelRoot: KERNEL_ROOT, model: { provider: "maeflow", model: "scripted-v1" }, models: model.modelsJson() });
       assert.equal(readFileSync(join(job.root, "inputs/template.md"), "utf8"), readFileSync(join(KERNEL_ROOT, "skills/mae-flow/assets/STORY-TEMPLATE.md"), "utf8"));
       assert.match(overallStoryMission(job), /无权修改子任务/);
+      assert.match(overallStoryMission(job), /不得把 Archify JSON 写进 story\.md/);
     });
     f.coordinator.generate("parent", "owner"); await f.coordinator.settled("parent");
     assert.equal(f.coordinator.status("parent").error, undefined);
     assert.match(readCurrentStory(f.task.summary.workspace), /整体 Story/);
+    const architecture = JSON.parse(readCurrentStoryArchitecture(f.task.summary.workspace)!);
+    assert.match(architecture.story_sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(architecture.diagrams, []);
     assert.ok(new EventLog(join(f.task.summary.workspace, "events.jsonl")).replay().some((e) => e.kind === "tool_requested"));
   } finally { await model.stop(); f.dispose(); }
+});
+
+test("架构更新真实会话在渲染失败后继续修复并发布，Story 保持不变", async () => {
+  const f = fixture();
+  const valid = JSON.stringify({ schema_version: 1, diagrams: [{ id: "api", view: "logical", source: {
+    schema_version: 1, diagram_type: "architecture", meta: { title: "订单模块" },
+    components: [{ id: "api", type: "backend", label: "API", pos: [40, 40], size: [180, 64] }], connections: [],
+  } }] });
+  const model = new ScriptedModelServer([
+    { tool: { name: "read", input: { path: "inputs/archify/README.md" } } },
+    { tool: { name: "write", input: { path: "architecture.json", content: "bad json" } } },
+    { text: "初稿完成" },
+    { tool: { name: "write", input: { path: "architecture.json", content: valid } } },
+    { text: "已按诊断修复" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  try {
+    f.coordinator.adoptAnalysis("parent", "# Story\n订单模块负责处理订单", "owner");
+    f.runner(async (task, job) => runOverallStorySession(task, job, { taskId: "parent", workspace: task.summary.workspace,
+      kernelRoot: KERNEL_ROOT, model: { provider: "maeflow", model: "scripted-v1" }, models: model.modelsJson() }));
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    assert.equal(f.coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace)!, /订单模块/);
+    assert.equal(readCurrentStory(f.task.summary.workspace), "# Story\n订单模块负责处理订单");
+  } finally { await f.coordinator.shutdown(); await model.stop(); f.dispose(); }
 });
 
 test("TaskService 转交整体 Story：completed 可提交，普通原文仍禁止、重复提交幂等", async () => {
@@ -272,9 +375,9 @@ test("HTTP：受邀检视人能读整体 Story，只有责任人能生成和确�
   auth.createUser("reviewer", "reviewer-password", "developer");
   const service = new TaskService({ dataDir: join(root, "tasks"), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const task = service.create("需求", { account: "owner", collaborators: ["reviewer"], requirementAnalysis: true });
-  let generated = 0, confirmed = 0;
+  let generated = 0, confirmed = 0, architecture = 0;
   (service as any).overallStories = { status: () => ({ current: "one", label: "待检视" }),
-    generate: () => { generated++; return {}; }, confirm: () => { confirmed++; return {}; }, shutdown: async () => {} };
+    generate: () => { generated++; return {}; }, generateArchitecture: () => { architecture++; return {}; }, confirm: () => { confirmed++; return {}; }, shutdown: async () => {} };
   const server = createTaskServer(service, { auth });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
@@ -284,6 +387,9 @@ test("HTTP：受邀检视人能读整体 Story，只有责任人能生成和确�
     const url = `${base}/tasks/${task.id}/overall-story`;
     assert.equal((await fetch(url, { headers: { cookie: reviewer } })).status, 200);
     assert.equal((await fetch(url, { method: "POST", headers: { cookie: reviewer }, body: "{}" })).status, 403);
+    assert.equal((await fetch(url + "/architecture", { method: "POST", headers: { cookie: reviewer } })).status, 403);
+    assert.equal((await fetch(url + "/architecture", { method: "POST", headers: { cookie: owner } })).status, 202);
+    assert.equal(architecture, 1);
     assert.equal((await fetch(url + "/confirm", { method: "POST", headers: { cookie: reviewer }, body: '{"revision":"one"}' })).status, 403);
     assert.equal((await fetch(url, { method: "POST", headers: { cookie: owner }, body: "{}" })).status, 202);
     assert.equal((await fetch(url + "/confirm", { method: "POST", headers: { cookie: owner }, body: '{"revision":"one"}' })).status, 200);

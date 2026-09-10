@@ -16,7 +16,7 @@ export interface StoryState {
   current?: string;
   revisions: StoryRevision[];
   confirmed?: { revision: string; by: string; at: string };
-  job?: { id: string; started_at: string; by: string };
+  job?: { id: string; started_at: string; by: string; kind?: "architecture"; progress?: string };
   error?: string;
 }
 export const storyHash = (content: string) => createHash("sha256").update(content).digest("hex");
@@ -48,7 +48,7 @@ export function writeStoryState(workspace: string, state: StoryState): void {
   renameSync(temporary, path);
 }
 export function storyRevisionPath(workspace: string, id: string, file = "story.md"): string {
-  if (!/^[\da-f-]{36}$/.test(id) || !["story.md", "diff.patch"].includes(file)) throw new Error("非法 Story 修订");
+  if (!/^[\da-f-]{36}$/.test(id) || !["story.md", "architecture.json", "diff.patch"].includes(file)) throw new Error("非法 Story 修订");
   return storyPath(workspace, `revisions/${id}/${file}`);
 }
 export function currentStoryFile(workspace: string): string | undefined {
@@ -59,4 +59,17 @@ export function currentStoryFile(workspace: string): string | undefined {
 export function readCurrentStory(workspace: string): string {
   const path = currentStoryFile(workspace);
   return path ? readFileSync(path, "utf8") : "";
+}
+export function readCurrentStoryArchitecture(workspace: string, story = readCurrentStory(workspace)): string | undefined {
+  const updated = storyPath(workspace, "architecture.json");
+  if (existsSync(updated)) {
+    try {
+      const value = readFileSync(updated, "utf8");
+      if (JSON.parse(value).story_sha256 === storyHash(story)) return value;
+    } catch { /* 不采用损坏或已过期的图源，继续读取随 Story 发布的图。 */ }
+  }
+  const state = readStoryState(workspace);
+  if (!state.current || !state.revisions.some((item) => item.id === state.current)) return undefined;
+  const path = storyRevisionPath(workspace, state.current, "architecture.json");
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }

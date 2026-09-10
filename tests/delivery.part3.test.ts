@@ -59,7 +59,7 @@ test("修复环:红→专职会话修复→推新提交→新流水线绿→等�
       .flatMap((request) => (request as any).messages ?? [])
       .map((message: any) => JSON.stringify(message.content ?? ""))
       .join("\n");
-    assert.match(seen, /唯一的使命/);
+    assert.match(seen, /当前目标是处理本轮流水线失败/);
     assert.match(seen, /NotifyServiceTest 断言失败/);
     // 反向守卫:短但真实的失败原文(平台就给这么多,没有链接)不许被
     // "无证据"判据误伤——那条判据是给"链接替内容站岗"准备的。

@@ -1,3 +1,4 @@
+import { RepositoryResourceNotice } from "./RepositoryResourceNotice";
 import { PersonName } from "./People";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -980,6 +981,7 @@ export function LaunchWorkspace({
             )}
 
             <form className="composer launch-composer" onSubmit={submit}>
+              <RepositoryResourceNotice repositories={repositoriesToProbe} baseline={baseline} />
               <section className="launch-form-section launch-requirement-section">
                 <div className="launch-section-head"><i>1</i><div><strong>任务与需求</strong><small>说清目标、范围和完成标准即可</small></div><em>必填</em></div>
                 <label className="account-field launch-title-field">

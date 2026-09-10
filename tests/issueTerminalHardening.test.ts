@@ -161,7 +161,7 @@ test("收口清面:等待中的会话取消后,闸与未决卡不再投影", asy
   }
 });
 
-test("wire 不漏机制账:module_locked 与 pipelines 重试/刹车子字段不上投影", () => {
+test("wire 契约:module_locked 机制账不上投影;pipelines 重试/刹车字段按镜像可见", () => {
   const state = {
     id: "issue-x", account: "dev", title: "t", status: "idle",
     created_at: "2026-09-10T00:00:00.000Z", updated_at: "2026-09-10T00:00:00.000Z",
@@ -186,8 +186,10 @@ test("wire 不漏机制账:module_locked 与 pipelines 重试/刹车子字段不
   assert.equal("module_locked" in wire, false, "module_locked 不上 wire");
   const watch = wire.pipelines["http://r.git"];
   assert.equal(watch.sha, "a".repeat(40), "流水线主体照常投影");
+  // 2026-09-10 勘定(C-H7 复议):重试窗/刹车五字段是测试与后续 UI 的
+  // 可观察面——补前端镜像(api.ts)而非剥投影,整条记录按 wire 可见。
   for (const key of ["evidence_retry_deadline", "evidence_retry_attempts",
     "evidence_failure_log", "last_repair_sha", "last_failure_summary"]) {
-    assert.equal(key in watch, false, `${key} 不上 wire`);
+    assert.ok(key in watch, `${key} 在投影(镜像已补)`);
   }
 });

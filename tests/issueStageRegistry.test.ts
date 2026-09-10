@@ -95,30 +95,30 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   // 出口/出厂工具各归其位(权威层矩阵,值与单源化前逐项一致)。
   assert.deepEqual(stagesAllowingTool("ticket", "submit_analysis"), ["analyze"]);
   assert.deepEqual(stagesAllowingTool("no_ticket", "submit_analysis"), ["analyze"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["fix"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
+  assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), [...STAGE_ROUTES.ticket]);
+  assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), [...STAGE_ROUTES.ticket]);
   // build_deploy 封存(ADR-0013):无阶段开放,阶段门禁恒拒。
   assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), []);
   // complete_stage 是四个自报阶段(拉单/拉仓/修复/提交MR)的出口;
   // 两个举卡阶段(分析/无单结论)卡工具即出口,不含它。
   assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
     ["dts_info", "prep_repo", "fix", "mr_green"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), ["prep_repo", "analyze"]);
+  assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), [...STAGE_ROUTES.ticket]);
   // 自 prep_repo 起常开:拉仓与改绑,越往后越不收回。
   const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");
-  assert.deepEqual(stagesAllowingTool("ticket", "pull_repo"), fromPrep);
+  assert.deepEqual(stagesAllowingTool("ticket", "pull_repo"), [...STAGE_ROUTES.ticket]);
   assert.deepEqual(stagesAllowingTool("ticket", "bind_module"), fromPrep);
   // 自 fix 起常开:推送。
   assert.deepEqual(stagesAllowingTool("ticket", "push_branch"),
-    ["fix", "mr_green"]);
+    [...STAGE_ROUTES.ticket]);
   // 无单 conclude:提交与跳过不再开放,拉仓/改绑/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "pull_repo"), true);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "bind_module"), true);
   // 无单场景没有 fix 阶段:push_branch 无处开放(阶段门禁必拒)。
-  assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), []);
-  assert.equal(stageAllowsTool("no_ticket", "conclude", "push_branch"), false);
+  assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), [...STAGE_ROUTES.no_ticket]);
+  assert.equal(stageAllowsTool("no_ticket", "conclude", "push_branch"), true);
   // 不在路线里的阶段(异常现场)一律拒绝,不放空子。
   assert.equal(stageAllowsTool("no_ticket", "dts_info", "request_env"), false);
 });

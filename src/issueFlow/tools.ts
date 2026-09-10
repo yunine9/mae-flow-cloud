@@ -292,6 +292,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       : String(state.stage);
 
   const gateStage = (tool: string): void => {
+    // 只读检索不需要等待历史圈选卡；它不改变阶段或替人作答。
+    if (tool === "lookup_modules" && scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) return;
     // 存量 skill 圈选闸在场(ADR-0011 举起的历史卡;ADR-0014 起新卡
     // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
     // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
@@ -597,12 +599,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "把当前修复分支经宿主推送到远端(git push 在容器里是禁用的,必须走"
       + "本工具)。机械门禁:会话必须已绑定单号,分支名必须是 "
-      + "master_<工号>_<单号>,且工作区不能有未提交改动(push 只推已提交"
-      + "的历史——改完先 git add -A && git commit 再推)。推送前 UT 纪律:"
+      + "master_<工号>_<单号>,工作区可以保留未提交改动(push 只推已提交"
+      + "的历史——明确要交付的修改先提交)。推送前 UT 纪律:"
       + "调用本工具之前,先在该仓把单元测试完整跑一遍(按仓的实际构建"
       + "体系选回归命令,如 mvn test、npm test):改动相关用例必跑,时间"
-      + "允许就跑全量回归;跑过的用例全绿才推,有挂测继续修,"
-      + "不许跳过测试直接推。推送后返回 SHA。",
+      + "允许就跑全量回归；失败或条件缺失须如实说明，由责任人兜底，"
+      + "已有阶段性交付授权时可推送当前成果，不把测试红灯当作推送禁令。推送后返回 SHA。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -633,14 +635,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
       // 出厂,不如在这里点破并给出该做的事。
       const dirty = await dirtyWorktree(repo.dir);
-      if (dirty.length) {
-        fail(promptCopy("receipts", "push.dirty", {
-          ticket: state.ticket,
-          count: dirty.length,
-          files: dirty.slice(0, 10).map((line) => `  ${line}`).join("\n")
-            + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""),
-        }));
-      }
       // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
       // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
       // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
@@ -709,7 +703,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       ctx.persist();
       return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
-        + `(仓 ${repo.url})`);
+        + `(仓 ${repo.url})${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`);
     },
   }));
 
@@ -1077,7 +1071,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         delete state.mr_gate;
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后即可归档";
+        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.all_green", {

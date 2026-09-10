@@ -268,6 +268,11 @@ def verify_host_proof(state, proof_path, action, payload):
     if authority.get("alg") != "RS256" or not _verify_rsa_sha256(
             authority, _canonical(unsigned).encode("utf-8"), signature):
         _die("宿主凭据签名无效")
+    # Every host mutation shares this admission point. Owner scheduling cannot
+    # be changed by editing task JSON and waiting for the next unrelated host
+    # event to re-sign it. Import lazily: receipt verification uses this module.
+    from .host_receipts import verify_feedback_control_predecessor
+    verify_feedback_control_predecessor(state)
     return {
         "root": root,
         "proof": {**unsigned, "signature": signature},

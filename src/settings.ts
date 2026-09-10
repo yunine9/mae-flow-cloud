@@ -1,3 +1,4 @@
+import { normalizeResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 运行时服务设置(管理页的后端)——部署配置之上的一层"运行时覆盖"。
  *
@@ -58,6 +59,7 @@ export interface ModelsSettings {
 }
 
 export interface ExecutionPolicySettings {
+  blocked_repository_resources?: string[];
   /** 新任务采用并固定；运行中与历史任务不漂移。编译为 workflow_profile
    * 的 team 层 supplement。(团队阶段勾选定制 stage_customizations 已
    * 随 v1 退役——想定制阶段结构请建团队工作流资产。) */
@@ -145,10 +147,16 @@ export class RuntimeSettings {
           patch.team_instructions == null
             ? undefined : String(patch.team_instructions))
       : this.executionPolicy().team_instructions;
+    let blocks = this.executionPolicy().blocked_repository_resources;
+    if ("blocked_repository_resources" in patch) {
+      try { blocks = normalizeResourceBlocks(patch.blocked_repository_resources); }
+      catch (error) { throw new SettingsError(String((error as Error).message)); }
+    }
     this.save({
       ...this.load(),
       execution_policy: {
         team_instructions: teamInstructions,
+        blocked_repository_resources: blocks,
       },
     });
   }

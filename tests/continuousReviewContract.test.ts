@@ -29,6 +29,8 @@ import {
   createKernelHostProof,
   openKernelFeedback,
   recordKernelFeedbackResult,
+  controlKernelFeedback,
+  attestKernelHost,
 } from "../src/kernelDelivery.ts";
 
 const KERNEL_ROOT = discoverKernelRoot(process.cwd());
@@ -459,4 +461,58 @@ test("外部新 SHA 的可信 close 解锁终态，旧流水线不伪造为新 S
   writeFileSync(join(scene.cwd, ".mae-flow.json"), JSON.stringify(state));
   assert.equal(inspectKernelTaskCompletion(scene.cwd, KERNEL_ROOT!, true, trust).complete, false,
     "Agent 改写合入 SHA 后宿主签名必须失效");
+});
+
+test("目标调整：暂缓 A 后提升 B，真实收据可恢复且不伪造质量结论", async () => {
+  const scene = await reproduceTerminalRollover();
+  const host = { kernelRoot: KERNEL_ROOT!, python: "python3" };
+  const before = readState(scene.cwd);
+  const second = { ...scene.batch, batch_id: "fb-next-target", items: [{
+    ...scene.batch.items[0], id: "mr:d-2", source_id: "d-2", summary: "修复 B",
+  }] };
+  openKernelFeedback({ host, cwd: scene.cwd, workspace: dirname(scene.cwd), batch: second });
+  const input = { host, cwd: scene.cwd, workspace: dirname(scene.cwd), taskId: scene.batch.task_id,
+    operationId: "owner-target-1", target: "修复 B，先推送", actor: "owner", requestId: "owner-message-7",
+    reason: "A 本轮不需要修复", feedbackId: "mr:d-1" };
+  const result = controlKernelFeedback(input);
+  const after = readState(scene.cwd);
+  assert.equal(result.status, "target-updated");
+  assert.equal(after.delivery_loop.active_batch_id, second.batch_id);
+  assert.equal(after.delivery_loop.batches[0].status, "deferred");
+  assert.equal(after.delivery_loop.batches[0].result_digest, undefined);
+  assert.deepEqual(after.quality, before.quality);
+  assert.equal(controlKernelFeedback(input).idempotent, true);
+  assert.equal(readState(scene.cwd).delivery_loop.controls.length, 1);
+  assert.throws(() => controlKernelFeedback({ ...input, target: "暗改原决定" }), /同一目标调整操作/);
+  const attest = (state: any) => attestKernelHost({ host, cwd: scene.cwd, state,
+    lifecycle: ["feedback-open"], feedbackLoop: true });
+  assert.equal(attest(after).feedbackLoop, true);
+  assert.equal(attest({ ...after, current: "build" }).feedbackLoop, true,
+    "正常工作阶段前移不应让已登记的暂缓失效");
+  const forged = structuredClone(after);
+  forged.delivery_loop.deferred_feedback["mr:d-2"] = forged.delivery_loop.target;
+  assert.equal(attest(forged).feedbackLoop, false, "不能手改 JSON 夹带忽略另一条");
+});
+
+test("目标调整：仅暂缓一条不吞同批其他意见，也不要求 Agent 假造被暂缓项的回执", async () => {
+  const scene = await reproduceTerminalRollover();
+  const host = { kernelRoot: KERNEL_ROOT!, python: "python3" };
+  const second = { ...scene.batch, batch_id: "fb-two-items", items: [
+    { ...scene.batch.items[0], id: "mr:d-2", source_id: "d-2" },
+    { ...scene.batch.items[0], id: "mr:d-3", source_id: "d-3" },
+  ] };
+  openKernelFeedback({ host, cwd: scene.cwd, workspace: dirname(scene.cwd), batch: second });
+  const common = { host, cwd: scene.cwd, workspace: dirname(scene.cwd), taskId: scene.batch.task_id,
+    target: "处理剩余意见", actor: "owner", requestId: "message", reason: "此项延期" };
+  controlKernelFeedback({ ...common, operationId: "defer-first", feedbackId: "mr:d-1" });
+  controlKernelFeedback({ ...common, operationId: "defer-second", feedbackId: "mr:d-2" });
+  assert.equal(readState(scene.cwd).delivery_loop.active_batch_id, second.batch_id);
+  assert.throws(() => recordKernelFeedbackResult({ host, cwd: scene.cwd, workspace: dirname(scene.cwd),
+    taskId: scene.batch.task_id, batchId: second.batch_id, changed: false, results: [] }), /mr:d-3/);
+  recordKernelFeedbackResult({ host, cwd: scene.cwd, workspace: dirname(scene.cwd),
+    taskId: scene.batch.task_id, batchId: second.batch_id, changed: false,
+    results: [{ id: "mr:d-3", status: "explained", summary: "已核对 B 无需改动" }] });
+  const final = readState(scene.cwd).delivery_loop.batches[1];
+  assert.equal(final.results.find((row: any) => row.id === "mr:d-2").status, "explained");
+  assert.match(final.results.find((row: any) => row.id === "mr:d-2").summary, /责任人暂缓/);
 });

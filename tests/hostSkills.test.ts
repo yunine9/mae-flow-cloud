@@ -86,6 +86,7 @@ async function runDirect(
   script: Scene[] = SCRIPT,
   linear = false,
   hostSkillsDir?: string,
+  resourceOptions: Partial<import("../src/sessionDriver.ts").CloudSessionOptions> = {},
 ): Promise<Array<Record<string, unknown>>> {
   const model = new ScriptedModelServer(
     script, "scripted-v1", linear ? { linear: true } : {});
@@ -106,6 +107,7 @@ async function runDirect(
     humanGate: new HumanGate(join(workspace, "waiting.json")),
     hostSkillsDir,
     repositorySkillPaths,
+    ...resourceOptions,
   });
   try {
     const outcome = await session.start("开始");
@@ -458,4 +460,20 @@ test("子 Agent 与主 Agent 使用同一仓库 Skill allowlist", async () => {
   assert.match(childRequest, /CHILD-SKILL-CHECK/);
   assert.match(childRequest, /REPO-A-MARKER/);
   assert.ok(!childRequest.includes("REPO-B-MARKER"));
+});
+
+
+test("平台屏蔽实际模型上下文中的仓库 Skill 与 AGENTS，保留未屏蔽资源", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-resource-block-"));
+  const blocked = writeSkill(join(workspace, ".cac", "skills"), "department", "BLOCKED_SKILL_SENTINEL");
+  const allowed = writeSkill(join(workspace, ".agents", "skills"), "business", "ALLOWED_SKILL_SENTINEL");
+  writeFileSync(join(workspace, "AGENTS.md"), "BLOCKED_AGENT_SENTINEL");
+  const options = { repositoryResourceBlocks: () => [".cac", "AGENTS.md"],
+    repoContextFiles: [{ path: join(workspace, "repo", "service", "AGENTS.md"), content: "BLOCKED_MULTI_REPO_SENTINEL" }] };
+  const requests = await runDirect(workspace, [blocked, allowed], SCRIPT, false, undefined, options);
+  const seen = JSON.stringify(requests);
+  assert.doesNotMatch(seen, /BLOCKED_SKILL_SENTINEL|BLOCKED_AGENT_SENTINEL|BLOCKED_MULTI_REPO_SENTINEL/);
+  assert.match(seen, /ALLOWED_SKILL_SENTINEL/);
+  assert.match(seen, /平台已屏蔽/);
+  assert.ok(readFileSync(join(workspace, "AGENTS.md"), "utf8").includes("BLOCKED_AGENT_SENTINEL"));
 });

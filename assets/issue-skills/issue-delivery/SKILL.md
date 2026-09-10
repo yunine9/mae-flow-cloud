@@ -1,6 +1,6 @@
 ---
 name: issue-delivery
-description: 交付流程。进入「问题修复」「提交 MR·跑绿」阶段要动代码时使用:分支核实、提交格式、push_branch 推送、一仓一 MR 与 complete_stage 申报验绿(流程收口出口);多仓逐仓各走一遍。
+description: 交付流程。需要阶段性推送或提 MR 时使用，不限工作阶段:分支核实、提交格式、push_branch 推送、一仓一 MR 与 complete_stage 申报验绿(流程收口出口);多仓逐仓各走一遍。
 metadata:
   tags: [issue, delivery, branch, commit, mr, codehub, multi-repo]
 ---
@@ -22,11 +22,11 @@ implement 是 vendor 技能(原封照搬,不本地改),环境适配在这里点�
 提交信息**必须**精确匹配 `[单号][类型] 描述`(CodeHub pre-receive 钩子会拒收不合规提交):
 - 类型白名单:feat/fix/refactor/test/chore/docs/style(修 bug 用 fix);
 - 例:`[DTS2026082001317][fix] 修复登录超时`;
-- `git add` 只加本次范围的文件——范围外的改动混进提交会污染 MR;工作区有未提交改动时推送会被熔断拦下。
+- `git add` 只加本次范围的文件。工作区可以保留未提交改动，推送仅发布已提交历史；如实说明本次没有包含的改动。
 
 ## 3. 推送(平台工具,逐仓调)
 
-`git push` 在容器里被禁用(pushurl 指向 /dev/null)——推送必须调 `push_branch` 工具。多仓时**改过的仓各自调一次**,`repo` 参数传该仓地址;平台校验分支名与 UT 纪律(见工具说明),从宿主完成传输并复核远端 SHA。
+`git push` 在容器里被禁用(pushurl 指向 /dev/null)——推送调用 `push_branch` 工具，不受当前阶段限制。多仓时**改过的仓各自调一次**,`repo` 参数传该仓地址;平台核对任务分支，从宿主完成传输并复核远端 SHA。优先完成并运行相关 UT，无法运行或失败时如实说明，由用户兜底决策；不把旧反馈全部修完作为阶段性推送的前提。用户已开启的推送过目设置继续有效。
 
 ## 4. 提 MR(一仓一 MR,repo 参数别漏)
 

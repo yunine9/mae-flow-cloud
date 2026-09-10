@@ -46,6 +46,58 @@ def _active_batch(loop):
                  and str(item.get("batch_id") or "") == active_id), None)
 
 
+def _feedback_control_projection(state):
+    """Owner decisions have their own stable digest across normal batch work.
+
+    Omit the fields entirely for pre-feature tasks, so historical lifecycle
+    receipts retain their original projection shape. Control operations append
+    to controls; the count also prevents restoring an older signed decision.
+    """
+    loop = state.get("delivery_loop") or {}
+    keys = ("controls", "target", "deferred_feedback")
+    control = {key: loop[key] for key in keys if key in loop}
+    if not control:
+        return {}
+    controls = control.get("controls")
+    return {
+        "feedback_control_digest": _digest(control),
+        "feedback_control_count": len(controls) if isinstance(controls, list) else 0,
+    }
+
+
+def verify_feedback_control_predecessor(state):
+    """Never re-sign Agent-written owner decisions during an unrelated action.
+
+    This runs centrally when a host proof is admitted, before any command can
+    mutate state. Checking only the active batch would miss target/deferred
+    fields beside that batch and silently give those edits a fresh signature.
+    """
+    current = _feedback_control_projection(state)
+    latest_count = 0
+    latest_digests = set()
+    for authority, record in _scan_receipts(state):
+        stored = record.get("projection")
+        if not isinstance(stored, dict):
+            continue
+        count = stored.get("feedback_control_count")
+        digest = stored.get("feedback_control_digest")
+        if not isinstance(count, int) or count < 1 or not isinstance(digest, str):
+            continue
+        action = str((record.get("proof") or {}).get("action") or "")
+        if not _valid_stored_receipt(authority, record, action, stored):
+            continue
+        if count > latest_count:
+            latest_count, latest_digests = count, {digest}
+        elif count == latest_count:
+            latest_digests.add(digest)
+    if not current and latest_count == 0:
+        return
+    if (current.get("feedback_control_count") == latest_count
+            and current.get("feedback_control_digest") in latest_digests):
+        return
+    _die("责任人目标或暂缓决定与最新宿主收据不一致，拒绝重新签署被改写的决定")
+
+
 def host_projection(state, action, payload):
     """Seal the complete lifecycle produced by one host mutation.
 
@@ -76,6 +128,7 @@ def host_projection(state, action, payload):
         "active_batch_digest": _digest(_active_batch(loop)),
         "external_verification_digest": _digest(external_facts(state)),
         "user_intervention_digest": _digest(state.get("user_intervention")),
+        **_feedback_control_projection(state),
     }
 
 
@@ -307,6 +360,21 @@ def trusted_pipeline_projection(state, projection):
     return False
 
 
+def trusted_feedback_loop(state, actions):
+    """Scheduling survives legitimate workflow movement, but not loop edits."""
+    wanted = _digest(state.get("delivery_loop"))
+    for authority, record in _scan_receipts(state):
+        stored = record.get("projection")
+        if not isinstance(stored, dict):
+            continue
+        action = str((record.get("proof") or {}).get("action") or "")
+        if (action in actions
+                and hmac.compare_digest(str(stored.get("delivery_loop_digest") or ""), wanted)
+                and _valid_stored_receipt(authority, record, action, stored)):
+            return True
+    return False
+
+
 def trusted_active_batch(state, actions):
     """Verify active_batch_id and the complete active batch against a receipt.
 
@@ -374,6 +442,8 @@ def attest_host_receipts(state, args):
         "active_batch": (trusted_active_batch(snapshot, active)
                          if active else None),
     }
+    if getattr(args, "feedback_loop", False):
+        record["feedback_loop"] = trusted_feedback_loop(snapshot, lifecycle)
     print(json.dumps(record, ensure_ascii=False))
     return record
 

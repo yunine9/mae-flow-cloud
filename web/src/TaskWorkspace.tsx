@@ -381,6 +381,7 @@ const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
   awaiting_verification: "待核验",
   closed: "已完成",
   needs_human: "需要你决定",
+  deferred: "已暂缓，未解决",
 };
 
 /** 状态文案按来源说人话:同一个 awaiting_verification,对 CodeHub 意见
@@ -1534,7 +1535,7 @@ export function TaskWorkspace({
   };
   const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
     item.status === "closed" ? "closed"
-      : item.status === "needs_human" ? "mine" : "agent";
+      : ["needs_human", "deferred"].includes(item.status) ? "mine" : "agent";
   // 归档也照服务端结论:页面不再按 status/sent_via 自己分档。
   const closureOf = (id: string) => closures.find((one) => one.id === id);
   const noteCategory = (item: Annotation): Exclude<ReviewFilter, "all"> =>
@@ -2284,7 +2285,7 @@ export function TaskWorkspace({
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
-              <StoryArchitecture key={task.id} taskId={task.id} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate && !task.parent_task_id} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>

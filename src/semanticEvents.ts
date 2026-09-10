@@ -10,8 +10,9 @@
  * 这是从 Python 版(多进程 Hook 场景)迁移时被删掉的机制,不是遗漏。
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 
 export type SemanticEventKind =
   | "session_started"
@@ -76,16 +77,27 @@ export class EventLogError extends Error {}
  * - eventId > last:写入,返回 true;
  * - eventId <= last:重放,no-op 返回 false(恢复时安全重灌);
  * - 畸形事件:抛 EventLogError——静默丢事件会让投影缺页还查不出来。
+ *
+ * 崩溃残迹自愈(issue-31/32/33 复盘,2026-09-10):进程/文件系统在
+ * appendFileSync 落盘瞬间死掉会留下断写的尾巴——全零块(元数据已扩、
+ * 数据块未刷,WSL2/虚拟盘硬停机的典型形状)或半行。恢复读到这里不再
+ * 判死整个任务:末行残迹截断修复并大声记账;**文件中间**的坏行仍
+ * fail-loud——那是真丢数据,静默跳过正是本类最初要防的"投影缺页还
+ * 查不出来"。修复挂在 rows() 里,lastEventId() 是每次 append 的必经
+ * 之路,保证崩溃后任何新写入之前尾巴已修掉——否则新事件追加在残迹
+ * 后面,残迹变成中间损坏,就修不了了(WAL 重放的标准纪律)。
  */
 export class EventLog {
   private last: number | null = null;
 
   /** mirror:每条新写入事件的旁路投影(PostgreSQL 等)。只在真正
    * 追加成功后调用;重放 no-op 不触发。旁路自己 fail-open,
-   * 这里不 await——投影永远不能拖慢或拖垮事件落盘。 */
+   * 这里不 await——投影永远不能拖慢或拖垮事件落盘。
+   * log:修复记账通道;缺席退 console.error,永不静默。 */
   constructor(
     readonly path: string,
     private mirror?: (event: SemanticEvent) => void,
+    private log?: (message: string) => void,
   ) {}
 
   lastEventId(): number {
@@ -117,18 +129,23 @@ export class EventLog {
     return this.rows() as unknown as SemanticEvent[];
   }
 
+  private note(message: string): void {
+    (this.log ?? console.error)(message);
+  }
+
   private rows(): Array<Record<string, unknown>> {
     if (!existsSync(this.path)) return [];
-    return readFileSync(this.path, "utf-8")
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line, index) => {
-        try {
-          return JSON.parse(line) as Record<string, unknown>;
-        } catch (cause) {
-          throw new EventLogError(
-            `事件日志损坏(${this.path} 第 ${index + 1} 行): ${cause}`);
-        }
+    try {
+      return readAppendOnlyJsonl<Record<string, unknown>>(this.path, {
+        middleCorrupt: "throw",
+        log: (message) => this.note(message),
       });
+    } catch (cause) {
+      // 通用层的"账本损坏"在本域必须以 EventLogError 露面——调用方
+      // 按类型分拣(恢复路径对它有专门处置)。
+      if (cause instanceof EventLogError) throw cause;
+      throw new EventLogError(
+        cause instanceof Error ? cause.message : String(cause));
+    }
   }
 }

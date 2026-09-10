@@ -252,3 +252,12 @@ test("软链接、越界路径、错误仓归属和常驻同名都不会交给 P
   assert.equal(validRepositorySkillPath(".cac/skills/ok/SKILL.md"), true);
   assert.equal(validRepositorySkillPath(".agents/skills/team/ok/SKILL.md"), false);
 });
+
+
+test("平台屏蔽优先于已选 Skill 和旧快照，解除屏蔽可恢复装配", () => {
+  const item = fixture();
+  const options = { selected: [item.selected], bindings: [{ repository: item.selected.repository, workspace: item.workspace }], snapshotRoot: item.snapshot };
+  assert.equal(materializeRepositorySkills(options).paths.length, 1);
+  assert.equal(materializeRepositorySkills({ ...options, blockedPaths: [".agents/skills/domain-api"] }).paths.length, 0);
+  assert.equal(materializeRepositorySkills(options).paths.length, 1);
+});

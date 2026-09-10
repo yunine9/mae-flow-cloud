@@ -408,7 +408,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   assert.match(box, /交回后由 Agent 接着做/);
 });
 
-test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开检视", () => {
+test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML 可原地全屏", () => {
   const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
@@ -427,8 +427,8 @@ test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开�
   const architecture = readFileSync(new URL("../web/src/StoryArchitecture.tsx", import.meta.url), "utf8");
   assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
-  assert.match(architecture, /className="story-view-coverage" role="tablist"/,
-    "4+1 每个视角必须是明确页签");
+  assert.match(architecture, /availableViews\.map/,
+    "架构页只为实际存在的图片生成视角页签");
   assert.match(architecture, /className="story-diagram-tabs" role="tablist"/,
     "具体图片必须由图名页签承载");
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
@@ -496,7 +496,7 @@ test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发�
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
   // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
   // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
-  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
+  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\), \.\.\.createTaskHostTools\(this\.taskHostRuntime\(task, epoch\)\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
     "主会话同时挂检索工具、拆分提议与首改目录提醒");
   assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
     "开发助手只挂记忆工具");

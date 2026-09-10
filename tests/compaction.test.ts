@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { looksLikeContextOverflow } from "../src/sessionDriver.ts";
+import { looksLikeBusyCollision, looksLikeContextOverflow } from "../src/sessionDriver.ts";
 import { TaskService } from "../src/taskService.ts";
 
 async function until(
@@ -55,6 +55,13 @@ test("事件量过阈值 → 回合间隙触发压缩;小会话被拒也不伤�
       `压缩没被触发,日志: ${logs.join(" | ")}`);
   } finally {
     await model.stop();
+  }
+});
+
+test("忙会话判据仅识别 Pi 拒收 prompt，不吞工具或服务忙错误", () => {
+  assert.equal(looksLikeBusyCollision("Error: Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."), true);
+  for (const detail of ["database is busy", "503 server busy", "Agent is already processing a broken file", "context_length_exceeded"]) {
+    assert.equal(looksLikeBusyCollision(detail), false, detail);
   }
 });
 

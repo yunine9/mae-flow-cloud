@@ -134,9 +134,6 @@ export function Markdown({
       }
       blocks.push(language === "plantuml"
         ? <div key={key++} className="md-uml" data-l={at} data-line-end={index}>
-            {onOpenArchitecture && <button type="button" className="md-diagram-open"
-              title="在当前任务的架构图页签中打开这张图"
-              onClick={() => onOpenArchitecture(at)}>打开大图 ↗</button>}
             <PlantUml source={source.join("\n")} />
           </div>
         : language === "mermaid"

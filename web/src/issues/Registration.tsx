@@ -1,3 +1,4 @@
+import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
 /**
  * 登记域:发起问题会话的两个页签(登记问题 / DTS 列表)。
  *
@@ -470,6 +471,7 @@ function ManualRegister({
   }
 
   return <form className="issue-form" onSubmit={submit}>
+    <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
     <div className="issue-group wide">
       <span className="issue-group-title">问题信息</span>
       <div className="issue-group-body">

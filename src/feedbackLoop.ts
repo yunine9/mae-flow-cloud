@@ -38,6 +38,7 @@ export function feedbackCounts(records: FeedbackRecord[]): Record<FeedbackStatus
     awaiting_verification: 0,
     closed: 0,
     needs_human: 0,
+    deferred: 0,
   };
   for (const record of records) counts[record.status] += 1;
   return counts;

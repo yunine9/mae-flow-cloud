@@ -21,6 +21,7 @@ import {
 } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
+import { probeKernelCapabilities } from "./kernelCapabilities.ts";
 import { createSafeGitView } from "./safeGit.ts";
 
 export interface KernelDeliveryHost {
@@ -554,7 +555,8 @@ export function attestKernelHost(input: {
   state?: Record<string, any>;
   lifecycle?: KernelHostAction[];
   activeBatch?: KernelHostAction[];
-}): { lifecycle: boolean; activeBatch: boolean } {
+  feedbackLoop?: boolean;
+}): { lifecycle: boolean; activeBatch: boolean; feedbackLoop: boolean } {
   let state: Record<string, any>;
   try {
     state = input.state ?? JSON.parse(readFileSync(
@@ -575,6 +577,7 @@ export function attestKernelHost(input: {
     host_capability_nonces: state.host_capability_nonces,
   };
   const args = ["attest", "--snapshot-stdin"];
+  if (input.feedbackLoop) args.push("--feedback-loop");
   if (input.lifecycle?.length) args.push("--lifecycle", input.lifecycle.join(","));
   if (input.activeBatch?.length) {
     args.push("--active-batch", input.activeBatch.join(","));
@@ -588,7 +591,8 @@ export function attestKernelHost(input: {
   const record = lastJsonLine(result.stdout);
   if (result.status !== 0 || record?.schema !== "mae-flow-host-attest/1"
       || (input.lifecycle?.length && typeof record.lifecycle !== "boolean")
-      || (input.activeBatch?.length && typeof record.active_batch !== "boolean")) {
+      || (input.activeBatch?.length && typeof record.active_batch !== "boolean")
+      || (input.feedbackLoop && typeof record.feedback_loop !== "boolean")) {
     const detail = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
     throw new KernelUnavailableError(
       `${KERNEL_UNAVAILABLE}：收据核验未完成：${detail || "没有有效的结构化结果"}`);
@@ -596,6 +600,7 @@ export function attestKernelHost(input: {
   return {
     lifecycle: record.lifecycle === true,
     activeBatch: record.active_batch === true,
+    feedbackLoop: record.feedback_loop === true,
   };
 }
 
@@ -700,6 +705,23 @@ export function adoptKernelDeliveryWatch(input: {
     taskId: input.taskId, action: "feedback-open", payload,
     args: ["feedback-open", "--file", path],
   });
+}
+
+/** Owner-directed scheduling uses the existing signed feedback writer. */
+export function controlKernelFeedback(input: {
+  host: KernelDeliveryHost; cwd: string; workspace: string; taskId: string;
+  operationId: string; target: string; actor: string; requestId: string;
+  reason: string; feedbackId?: string;
+}): KernelDeliveryRecord {
+  const capability = probeKernelCapabilities({ kernelRoot: input.host.kernelRoot, python: input.host.python, cwd: input.cwd });
+  if (!capability.agent_host_control) throw new KernelDeliveryError("当前内核版本尚不支持 Agent 目标调整，请同步部署 Cloud 配套内核；未改变原目标");
+  const payload = { schema: "mae-flow-feedback-batch/1", mode: "control",
+    operation_id: input.operationId, target: input.target, actor: input.actor,
+    request_id: input.requestId, reason: input.reason, feedback_id: input.feedbackId ?? "" };
+  const path = factsPath(input.workspace, "feedback-control", payload);
+  return invokeAfterRevisionConflict({ host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.taskId, action: "feedback-open", payload,
+    args: ["feedback-open", "--file", path] });
 }
 
 export function recordKernelFeedbackResult(input: {

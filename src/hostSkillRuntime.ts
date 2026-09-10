@@ -396,3 +396,23 @@ export function materializeHostSkills(options: {
   }
   return { paths, names, warnings };
 }
+
+/** 找到本次会话真正能装载的宿主 Skill 名。名称必须由 Pi 自己解析：
+ * frontmatter name 可以和目录名不同；缺 name 时 Pi 才以目录名兜底，
+ * 解析失败/缺 description 时则与运行时一样不算可加载 Skill。
+ * CloudSession 也把整个宿主 skills 根交给同一个 loader，因此这里会
+ * 同样覆盖递归、ignore、符号链接和根目录 Markdown 的发现语义。 */
+export function hostSkillNames(dataDir: string): string[] {
+  const root = join(dataDir, "skills");
+  try {
+    return loadSkills({
+      cwd: dataDir,
+      agentDir: dataDir,
+      skillPaths: [root],
+      includeDefaults: false,
+    }).skills.map((skill) => skill.name);
+  } catch {
+    // Skill 装载本身是 fail-open；catalog 同样不因宿主目录损坏而失败。
+    return [];
+  }
+}

@@ -1,3 +1,5 @@
+import { previewBlockedResources } from "./blockedResourcePreview.ts";
+import { resourceBlocked } from "./repositoryResourcePolicy.ts";
 /**
  * 业务仓 Skill 的只读发现器。
  *
@@ -38,6 +40,7 @@ export interface RepositorySkillDescriptor {
 }
 
 export interface RepositorySkillCatalog {
+  blocked_resources?: Awaited<ReturnType<typeof previewBlockedResources>>;
   repository: string;
   revision: string;
   skills: RepositorySkillDescriptor[];
@@ -45,6 +48,8 @@ export interface RepositorySkillCatalog {
 }
 
 export interface DiscoverRepositorySkillsOptions {
+  blockedPaths?: string[];
+  previewBlocked?: boolean;
   repository: string;
   baseline?: string;
   /** 宿主创建的短生命周期 Git credential helper；不会写入 clone config。 */
@@ -345,6 +350,7 @@ export async function discoverRepositorySkills(
     const skills: RepositorySkillDescriptor[] = [];
     for (let index = 0; index < candidates.length; index += 1) {
       const { root, directory, relPath } = candidates[index];
+      if (resourceBlocked(relPath, options.blockedPaths ?? [])) continue;
       const skillFile = (await listTree(cloneDir, directory.oid, deadline))
         .find((entry) => entry.name === "SKILL.md");
       // 100644/100755 是普通 blob；120000 符号链接、160000 submodule
@@ -401,7 +407,10 @@ export async function discoverRepositorySkills(
       if (skills.length >= MAX_SKILLS) break;
     }
 
-    return { repository: displayRepository, revision, skills };
+    const blocked_resources = options.previewBlocked
+      ? await previewBlockedResources(options.blockedPaths ?? [], revision,
+          args => runGit(args, { cwd: cloneDir, deadline, maxBuffer: MAX_TREE_BYTES })) : undefined;
+    return { repository: displayRepository, revision, skills, ...(blocked_resources ? { blocked_resources } : {}) };
   } catch (error) {
     return {
       repository: displayRepository,

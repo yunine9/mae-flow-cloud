@@ -36,19 +36,32 @@ def unpushed_commits(verified_sha, local_head, die):
 
 
 def render_delivery_feedback(state):
+    from .feedback_control import deferred_feedback, scheduled_items
+
     loop = (state or {}).get("delivery_loop") or {}
+    lines = []
+    target = (loop.get("target") or {}).get("target")
+    if target:
+        lines.append("当前优先目标：%s。未暂缓的其他反馈仍保留。" % target)
+    deferred = deferred_feedback(state)
+    if deferred:
+        lines.append("已由责任人暂缓自动修复：%s。保留原问题，不要求为这些条目补处理回执。"
+                     % "、".join(deferred))
     active_id = str(loop.get("active_batch_id") or "")
     batch = next((item for item in loop.get("batches", [])
                   if isinstance(item, dict)
                   and item.get("batch_id") == active_id), None)
     if not batch:
-        return ""
-    lines = ["──── 持续检视第 %s 轮（%s） ────" % (
-        batch.get("round", "?"), batch.get("status", "open"))]
+        return "\n".join(lines)
+    items = scheduled_items(state, batch)
+    if not items:
+        return "\n".join(lines)
+    lines.append("──── 持续检视第 %s 轮（%s） ────" % (
+        batch.get("round", "?"), batch.get("status", "open")))
     lines.append("反馈 ID 与正文分开列出；写回执时原样使用 id，不拼接摘要或状态：")
     lines.append(json.dumps([
         {key: item[key] for key in ("id", "source", "source_id", "summary", "material")
          if key in item}
-        for item in batch.get("items", [])
+        for item in items
     ], ensure_ascii=False, indent=2))
     return "\n".join(lines)

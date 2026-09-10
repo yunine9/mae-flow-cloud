@@ -1,3 +1,4 @@
+import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
  *
@@ -66,6 +67,8 @@ import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
+import { readCurrentStoryArchitecture } from "./overallStoryStore.ts";
+import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
@@ -956,6 +959,11 @@ export function createTaskServer(
         });
       }
 
+      if (request.method === "GET" && url.pathname === "/repository-resource-policy") {
+        if (options.auth && !viewer) return json(response, 401, { error: "请先登录" });
+        return json(response, 200, { rules: readResourceBlocks(service.options.dataDir) });
+      }
+
       // 仓库 Skill 目录属于下单前的显式只读动作：用户填好仓和基线后
       // 才触发，服务端用本人的 Git 凭据读取；不把路径/正文交给浏览器
       // 决定。管理员没有下单入口，也不替开发者读取私仓。
@@ -984,6 +992,7 @@ export function createTaskServer(
           return json(response, 200, await service.scanRepositorySkills({
             repositories,
             baseline,
+            previewBlocked: body.preview_blocked === true,
             account: viewer?.username,
           }));
         } catch (error) {
@@ -2650,6 +2659,7 @@ export function createTaskServer(
               return json(response, 403, { error: "只有责任人可以生成、更新或确认整体 Story；受邀者可提交检视意见" });
             }
             const actor = viewer?.username ?? "本地用户";
+            if (parts[3] === "architecture") return json(response, 202, service.overallStories.generateArchitecture(id, actor));
             if (parts[3] === "stop") return json(response, 200, await service.overallStories.stop(id));
             if (parts[3] === "confirm") {
               const body = await readBody(request);
@@ -2974,24 +2984,28 @@ export function createTaskServer(
           }
           return json(response, 200, comparison);
         }
-        // 架构展示复用文档的取源和任务读取权限，不接受客户端提供任意图源或文件路径。
+        // Story 只提供版本和设计定位；架构页只读平台内部 architecture.json，
+        // 不接受客户端提供任意图源或文件路径。
         if (request.method === "GET" && parts[2] === "architecture" && parts.length <= 4) {
           const load = async () => {
             const target = service.get(id);
             if (!target) return undefined;
-            // 主任务展示已发布的全局 Story；子任务展示自己的模块 Story。
-            // 两者仍通过 artifacts 的白名单读取，客户端不能借这个接口
-            // 指定任意路径。模块正文里的“打开大图”因此能落到同一份图源。
-            const artifact = target.parent_task_id
-              ? `${target.ticket ?? target.id}/story.md`
-              : "task-materials/overall-story.md";
-            return readArtifactAsync(service.artifactRoot(id), artifact, {
-              pipelineRoot: join(target.workspace, "pipeline"), taskMaterialRoot: target.workspace,
-              publishedStory: target.requirement_graph?.source_document === "story.md"
-                && target.requirement_graph.stage === "confirmed",
-              analysisStory: target.requirement_graph && !target.parent_task_id
-                ? `${target.ticket ?? target.id}/story.md` : undefined,
-            });
+            return readArchitectureStory(target, service.artifactRoot(id));
+          };
+          const loadArchify = (): string | undefined => {
+            const target = service.get(id);
+            if (!target) return undefined;
+            if (!target.parent_task_id) {
+              const published = readCurrentStoryArchitecture(target.workspace, readArchitectureStory(target, service.artifactRoot(id))?.content ?? "");
+              if (published) return published;
+            }
+            const root = service.artifactRoot(id);
+            if (!root) return undefined;
+            const path = join(root, ".mae-flow-work", target.ticket ?? target.id, "architecture.json");
+            if (!existsSync(path)) return undefined;
+            const stat = statSync(path);
+            if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return undefined;
+            return readFileSync(path, "utf8");
           };
           const artifact = await load();
           if (!artifact) return json(response, 404, {
@@ -3000,7 +3014,8 @@ export function createTaskServer(
               : "尚无全局 Story，请先完成主任务分析",
           });
           if (artifact.truncated) return json(response, 413, { error: "Story 超过读取上限，请先阅读完整文档" });
-          const projection = storyArchitecture(artifact.content);
+          const architecture = loadArchify();
+          const projection = storyArchitecture(artifact.content, architecture);
           response.setHeader("cache-control", "no-store");
           if (parts.length === 3) return json(response, 200, {
             ...projection, renderer: ARCHIFY_COMMIT,
@@ -3011,12 +3026,10 @@ export function createTaskServer(
           }
           const diagram = projection.diagrams.find((item) => item.id === parts[3]);
           if (!diagram) return json(response, 404, { error: "当前 Story 中没有这张图" });
-          const result = diagram.renderer === "plantuml"
-            ? await renderPlantUml(diagram.source, { cacheDir: join(service.options.dataDir, "diagram-cache") })
-            : await renderArchify(diagram.source);
+          const result = await renderArchify(diagram.source);
           const after = await load();
-          if (!after || after.content !== artifact.content) {
-            return json(response, 409, { error: "生成期间 Story 已更新，请刷新架构图" });
+          if (!after || after.content !== artifact.content || loadArchify() !== architecture) {
+            return json(response, 409, { error: "生成期间 Story 或平台图源已更新，请刷新架构图" });
           }
           return json(response, 200, { ...result, revision: projection.revision });
         }

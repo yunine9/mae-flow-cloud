@@ -1,7 +1,5 @@
-来源: mae-flow@2b7e8eaf3b05fa88bd8bca619c46ab23e7beecf8
+来源: mae-flow@a10d5370684e7c7ebe459e8780ddeb401035cc3b
 分支: cloud/workflow-customization
 基线: mae-flow@ad5b92af3e19766558dbca476389dda5cd80d076
-收编时间: 2026-09-09
+收编时间: 2026-09-10
 纪律: 此目录是快照,不许手改;更新跑 harness/sync-kernel.sh
-增量同步: mae-flow@85d7fad（运行忽略规则改写本地 exclude，发布探针对齐已撤销的分类门禁）
-增量同步: mae-flow@8ff8f09（中断收据可恢复，任务快照不再受 512 KiB 误拦）
