@@ -53,10 +53,10 @@ function readIssueListFilter(): IssueListFilter {
   return "active";
 }
 
-/** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题登记/DTS列表
- * 是发起域的两个面板,问题会话是会话列表。App 侧边栏展开组持有选择,
- * 本组件按它承接右侧页面。 */
-export type IssueChildTab = "register" | "dts" | "sessions";
+/** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题会话是缺省
+ * 落点、排导航首位;问题登记/DTS 列表是发起域的两个面板。App 侧边栏
+ * 展开组持有选择,本组件按它承接右侧页面。 */
+export type IssueChildTab = "sessions" | "register" | "dts";
 
 export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   onOpenIssue, onCloseIssue, childTab, onChildTabChange }: {

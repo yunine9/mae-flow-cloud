@@ -443,8 +443,8 @@ svg {
   padding: 0 40px 72px;
 }
 /* DTS 列表子页签全宽(spec #171):表格横向信息密,页面即表格,
-   平铺屏幕不收书页宽;标题条维持书页宽,与数据区分层。 */
-.workspace-main.is-wide { max-width: none; }
+   平铺屏幕不收书页宽;标题条同步放开,左边缘与内容对齐(不悬空)。 */
+.workspace-header.is-wide, .workspace-main.is-wide { max-width: none; }
 /* Shared section furniture:分区靠标题与间距,不靠边框与背景。 */
 .section-head {
   display: flex;
