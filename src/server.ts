@@ -1,3 +1,4 @@
+import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
  *
@@ -956,6 +957,11 @@ export function createTaskServer(
         });
       }
 
+      if (request.method === "GET" && url.pathname === "/repository-resource-policy") {
+        if (options.auth && !viewer) return json(response, 401, { error: "请先登录" });
+        return json(response, 200, { rules: readResourceBlocks(service.options.dataDir) });
+      }
+
       // 仓库 Skill 目录属于下单前的显式只读动作：用户填好仓和基线后
       // 才触发，服务端用本人的 Git 凭据读取；不把路径/正文交给浏览器
       // 决定。管理员没有下单入口，也不替开发者读取私仓。
@@ -984,6 +990,7 @@ export function createTaskServer(
           return json(response, 200, await service.scanRepositorySkills({
             repositories,
             baseline,
+            previewBlocked: body.preview_blocked === true,
             account: viewer?.username,
           }));
         } catch (error) {

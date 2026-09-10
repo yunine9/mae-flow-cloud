@@ -7223,7 +7223,7 @@ export class TaskService {
    * 浏览器自报路径或正文。
    */
   async scanRepositorySkills(input: {
-    repositories: string[];
+    repositories: string[]; previewBlocked?: boolean;
     baseline?: string;
     account?: string;
   }): Promise<RepositorySkillCatalogResponse> {
@@ -7247,7 +7247,7 @@ export class TaskService {
       for (const repository of repositories) {
         const discovered = await discoverRepositorySkills({
           repository,
-          blockedPaths: readResourceBlocks(this.options.dataDir),
+          blockedPaths: readResourceBlocks(this.options.dataDir), previewBlocked: input.previewBlocked,
           baseline,
           credentialHelper: prepared?.helper,
           credentialArgs: prepared?.args,

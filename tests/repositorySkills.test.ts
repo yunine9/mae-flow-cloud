@@ -260,3 +260,16 @@ test("仓库技能目录发现过滤平台屏蔽项", async () => {
   assert.equal(catalog.error, undefined);
   assert.deepEqual(catalog.skills.map(skill => skill.name), ["business"]);
 });
+
+test("屏蔽详情读取真实 Git 原文，但不进入可选 Skill 清单", async () => {
+  const repo = makeRepo();
+  writeSkill(repo, ".cac/skills", "department", "department", "部门规则原文");
+  writeFileSync(join(repo, "AGENTS.md"), "# 被屏蔽的仓库指令\n");
+  commit(repo, "blocked resources");
+  const result = await discoverRepositorySkills({ repository: repo, baseline: "main", blockedPaths: [".cac", "AGENTS.md"], previewBlocked: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.skills.length, 0);
+  assert.equal(result.blocked_resources?.files.length, 2);
+  assert.match(result.blocked_resources!.files.find(file => file.path === "AGENTS.md")!.content!, /被屏蔽的仓库指令/);
+  assert.deepEqual(result.blocked_resources!.files.find(file => file.path === "AGENTS.md")!.rules, ["AGENTS.md"]);
+});
