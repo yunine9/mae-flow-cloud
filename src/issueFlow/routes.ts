@@ -173,7 +173,19 @@ function streamIssueEvents(
   id: string,
   response: ServerResponse,
 ): void {
-  const path = join(issueFlow.session(id).root, "events.jsonl");
+  streamIssueJsonl(issueFlow, id, response,
+    () => join(issueFlow.session(id).root, "events.jsonl"));
+}
+
+/** 问题域 JSONL 尾随 SSE(主会话事件流与预热直播⑤共用):路径按拍
+ *  解析——预热文件点火前不存在,先只发心跳,出现后从头重放(断线重连
+ *  天然幂等,客户端按事件锚去重)。终态即收流。 */
+function streamIssueJsonl(
+  issueFlow: IssueFlowService,
+  id: string,
+  response: ServerResponse,
+  pathOf: () => string,
+): void {
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -184,6 +196,7 @@ function streamIssueEvents(
   response.on("close", () => (closed = true));
   const push = () => {
     if (closed) return;
+    const path = pathOf();
     if (existsSync(path) && statSync(path).size > offset) {
       const fd = openSync(path, "r");
       let read = 0;
@@ -382,10 +395,6 @@ export async function handleIssueRoutes(
           }
           environmentInput = {
             environmentId: String(body.environment.environment_id),
-            ...(body.environment.page_account !== undefined
-              ? { pageAccount: String(body.environment.page_account) } : {}),
-            ...(body.environment.page_password !== undefined
-              ? { pagePassword: String(body.environment.page_password) } : {}),
           };
         } else {
           environmentInput = {
@@ -395,10 +404,6 @@ export async function handleIssueRoutes(
               ? body.environment.hosts.map(String) : [],
             ...(body.environment.port !== undefined
               ? { port: Number(body.environment.port) } : {}),
-            ...(body.environment.page_account !== undefined
-              ? { pageAccount: String(body.environment.page_account) } : {}),
-            ...(body.environment.page_password !== undefined
-              ? { pagePassword: String(body.environment.page_password) } : {}),
             ...(body.environment.env_type !== undefined
               ? { envType: String(body.environment.env_type) as IssueEnvType } : {}),
             backendPassword: String(body.environment.backend_password ?? ""),
@@ -770,6 +775,15 @@ export async function handleIssueRoutes(
           + `; filename*=UTF-8''${encodeURIComponent(record.filename)}`,
       });
       response.end(record.markdown);
+      return true;
+    }
+
+    // 环境预热直播(对齐清单⑤):预热会话事件尾随,读 <会话根>/warmup/
+    // events.jsonl;读路由登录即可(查看模式同款),凭据与内容不涉密。
+    if (method === "GET" && parts.length === 4
+        && parts[2] === "warmup" && parts[3] === "events") {
+      streamIssueJsonl(issueFlow, id, response,
+        () => join(issueFlow.session(id).root, "warmup", "events.jsonl"));
       return true;
     }
 

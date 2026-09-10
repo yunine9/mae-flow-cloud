@@ -51,6 +51,7 @@ import {
   type RepoLedgerInput,
 } from "./perRepo";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
+import { IssueWarmupLive } from "./IssueWarmupLive";
 import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
@@ -309,8 +310,7 @@ export function IssueSessionView({
             {detail.stage_note ? ` · ${detail.stage_note}` : ""}
           </span>
           {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
-              现场;ADR-0003:账号非密可上屏,密码本体只在 vault)。闸现场
-              补配的环境没有页面凭据,页面账号缺席就不占位。 */}
+              现场;密码本体只在 vault)。 */}
           {detail.environment && <span className="issue-stage"
             title={detail.environment.environment_source_ip
               ? "来自环境管理台账的选定时点快照(密码在平台加密保管,不上屏)"
@@ -318,8 +318,6 @@ export function IssueSessionView({
             {detail.environment.environment_source_ip ? "来自环境管理" : "网管环境"}
             {` ${detail.environment.hosts.join("、")}`}
             {` · 端口 ${detail.environment.port}`}
-            {detail.environment.page_account
-              ? ` · 页面账号 ${detail.environment.page_account}` : ""}
           </span>}
           {detail.ticket
             ? <span className="issue-ticket">{detail.ticket}</span>
@@ -406,7 +404,10 @@ export function IssueSessionView({
             </div>
           </div>
           {tab === "events"
-            ? <IssueEventsPane id={detail.id} active />
+            ? <>
+              <IssueWarmupLive id={detail.id} warmup={detail.warmup} />
+              <IssueEventsPane id={detail.id} active />
+            </>
             : tab === "repos"
             ? <IssueWorkspaceRepos detail={detail} />
             : <IssueMaterialsPane detail={detail} busy={busy} view={tab}

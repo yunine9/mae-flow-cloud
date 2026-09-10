@@ -130,7 +130,7 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
   仓,时长假设无依据;SSE 语义与组件共享,成本低);UT 聚焦一句补
   briefs.md;遗留六洞全修(决定回灌/associate收尾重查/正文兜底/信箱
   离场作废/vault启动对账/代答恢复+孤儿卡)。
-- [ ] 实施。**平移清单(子 Agent 已核实,数据已在盘上)**:
+- [x] 实施(2026-09-10):SSE 端点 GET /issues/:id/warmup/events(streamIssueJsonl 参数化尾随,文件未建先心跳/建了重放/终态收流);warmup 会话开 streamBashOutput;收据停剥上 wire(api.ts 镜像);前端 tailIssueWarmupEvents + IssueWarmupLive(对话现场页签顶部,running 直播/结束折叠,基线红点名与本单无关);UT 聚焦句已落(84f0e14)。原平移清单(存档):
   1. routes.ts:注册 GET /issues/:id/warmup/events;streamIssueEvents
      (:171)路径改 per-tick resolver(文件未建先心跳、建了从头重放),
      读 session(id).root/warmup/events.jsonl;
@@ -145,7 +145,9 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
   python 补丁因锚点被 b1e9f46 破坏未打入,待恢复后重打;H2(associate
   收尾重查)未动。
 
-## ⚠️ 事故记录(2026-09-10):b1e9f46 误剔已提交实现
+## ⚠️ 事故记录(2026-09-10):b1e9f46 误剔已提交实现(已恢复)
+
+**已恢复**(同日):恢复 Agent 以 43f59ab 为源在 HEAD 重放全部误剔区块+六洞(H1 决定回灌/H2 associate 收尾重查/H3 正文兜底随恢复块带回/H4 信箱离场作废/H5 vault 启动对账+ids()/H6 代答恢复+孤儿卡清扫);四套专项 14/14+契约/鉴权/通知/档位 24/24 全绿。
 
 并行会话提交 b1e9f46("剔除 #155 误卷入的协作者在途改动")时,把本清单
 ①②③④已提交(c5b5b07/5f74607/43f59ab)的 service.ts 实现整块回退

@@ -15,6 +15,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -113,9 +114,9 @@ function normalize(
   }
   const rows: StoredIssueEnvironment[] = inputs.map((input, index) => {
     const purpose = input.purpose;
-    // page = 网管页面凭据组(问题流 v2 登记四件套):单账号走旧形状
-    // (username/password,不经三账号校验)。它没有 SSH 消费方；问题流
-    // 会在服务层按 ADR-0003 解密到当前问题的 AI 上下文。
+    // page = 网管页面凭据组,legacy 只读:2026-09-10 页面凭据整体
+    // 废弃(登记页已摘,新路径不再写入),联合类型保留只为旧会话
+    // vault 载入兼容。它没有 SSH 消费方。
     if (!(["logs", "deploy", "both", "page", "root"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
     }
@@ -259,6 +260,21 @@ export class IssueEnvironmentVault {
   remove(taskId: string): void {
     this.validTaskId(taskId);
     rmSync(this.taskPath(taskId), { force: true });
+  }
+
+  /** 在册任务/会话 id 清单(问题流重启的孤儿凭据对账用):root 下全部
+   *  <id>.json 去掉扩展名;key.bin 不是 .json,atomicWrite 崩溃残留的
+   *  *.tmp 也天然不在列。root 读不动(尚未创建等)按空清单。 */
+  ids(): string[] {
+    let names: string[];
+    try {
+      names = readdirSync(this.root);
+    } catch {
+      return [];
+    }
+    return names
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -".json".length));
   }
 
   private read(taskId: string): StoredIssueEnvironment[] {
