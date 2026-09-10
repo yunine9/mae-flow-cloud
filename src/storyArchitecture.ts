@@ -4,10 +4,10 @@ import { storyViewCoverage, type StoryViewCoverage } from "./storyViewCoverage.t
 export const ARCHIFY_TYPES = ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] as const;
 export type ArchifyType = typeof ARCHIFY_TYPES[number];
 export const ARCHIFY_SOURCE_LIMIT = 256 * 1024;
-export interface StoryDiagram {
-  id: string; title: string; type: ArchifyType; line: number;
-  source: Record<string, unknown>;
-}
+export type StoryDiagram = { id: string; title: string; line: number } & (
+  { renderer: "archify"; type: ArchifyType; source: Record<string, unknown> }
+  | { renderer: "plantuml"; type: "plantuml"; source: string }
+);
 export interface StoryArchitecture {
   revision: string; diagrams: StoryDiagram[]; warnings: string[];
   views: StoryViewCoverage[];
@@ -20,25 +20,40 @@ export function storyArchitecture(story: string): StoryArchitecture {
   };
   const lines = story.split(/\r?\n/);
   let count = 0;
+  let heading = "";
   for (let i = 0; i < lines.length; i++) {
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
-    if (!fence) continue;
+    if (!fence) {
+      const title = /^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(lines[i]);
+      if (title) heading = title[1];
+      continue;
+    }
     const start = i;
     const close = new RegExp(`^ {0,3}${fence[1][0]}{${fence[1].length},}\\s*$`);
     while (++i < lines.length && !close.test(lines[i])) { /* 跳过其他代码块中的示例。 */ }
-    if (fence[2].trim().toLowerCase() !== "archify") continue;
+    const language = fence[2].trim().toLowerCase();
+    if (language !== "archify" && language !== "plantuml") continue;
     if (++count > 12) { result.warnings.push("最多展示 12 张图；其余内容请阅读 Story。"); break; }
     try {
       if (i === lines.length) throw new Error("代码块尚未闭合");
       const text = lines.slice(start + 1, i).join("\n");
       if (Buffer.byteLength(text) > ARCHIFY_SOURCE_LIMIT) throw new Error("单图超过 256 KB");
+      if (language === "plantuml") {
+        if (!text.trim()) throw new Error("没有 PlantUML 图源");
+        // 标题只用于导航，图语法交给 PlantUML 正式实现，不能在平台重造解析器。
+        const title = /^\s*title[ \t]+(.+)$/mi.exec(text)?.[1]?.trim()
+          || /^\s*@startuml[ \t]+(.+)$/mi.exec(text)?.[1]?.trim();
+        result.diagrams.push({ id: `diagram-${count}`, line: start + 1, renderer: "plantuml",
+          type: "plantuml", source: text, title: title || heading || `设计图 ${count}` });
+        continue;
+      }
       const source = JSON.parse(text);
       if (!source || Array.isArray(source) || typeof source !== "object") throw new Error("图源必须是 JSON 对象");
       if (!ARCHIFY_TYPES.includes(source.diagram_type)) throw new Error("Archify 不支持此图类型，请阅读 Story 中的完整设计");
       assertOfflineDiagram(source);
       result.diagrams.push({ id: `diagram-${count}`, line: start + 1,
         title: typeof source.meta?.title === "string" ? source.meta.title : `图 ${count}`,
-        type: source.diagram_type, source });
+        renderer: "archify", type: source.diagram_type, source });
     } catch (error) {
       result.warnings.push(`Story 第 ${start + 1} 行：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -69,10 +84,10 @@ export const STORY_ARCHITECTURE_GUIDANCE = [
   "沿用 Story 原章节，在对应内容前增加含视图名称的小标题，方便定位；已完成必须有实际设计支撑。逻辑视图要明确关键类图，有类图保留 PlantUML，无类图需单列‘类图 | 不涉及 | 具体原因’或‘类图 | 待补充 | 原因’，不能用模块拓扑代替。",
   "提交方案确认时，用简短提示集中知会哪些视图不涉及及原因、哪些待补充；责任人可提出异议并决定补充，不为此另建确认卡或 hook 门禁。不把已完成声明当作自动验收通过。",
   "架构可视化：完整 4+1、类图和设计说明仍在 Story 既有章节，PlantUML 保留公司评审兼容性。",
-  "对于 Archify 支持且能够准确表达的设计图，在对应章节同时提供 ```archify 代码块，内容是 Archify 原生 JSON，供架构页直接展示；更新设计时同步更新该块，不另建图源文件。类图等不支持的类型保留 PlantUML，不能假冒成支持的类型。",
+  "对于 Archify 支持且能够准确表达的设计图，在对应章节同时提供 ```archify 代码块，内容是 Archify 原生 JSON，供架构页直接展示；PlantUML 图也会在同一架构页按视图展示；更新设计时同步更新该块，不另建图源文件。类图等不支持的类型保留 PlantUML，不能假冒成支持的类型。",
   "涉及却尚未画出设计图时标为待补充，说明缺口并在方案确认时知会用户；图源已有但不能渲染时分别说明设计状态和展示失败原因，不能伪称可展示或改称不涉及。责任人决定后续处理，不新增 hook 门禁。",
   "上述格式与渲染约定仅供生成时使用，不写入 Story 正文。图标题使用业务名称（如‘模块架构’、‘订单同步时序’），说明只解释职责、契约和交互；不要出现‘Archify 投影’、‘供平台独立展示’、‘与正文同步更新’等平台实现说明。",
-  "只支持 diagram_type=architecture/workflow/sequence/dataflow/lifecycle。不要用拓扑冒充类图。图中模块、接口、场景和关系必须与正文一致。",
+  "Archify 只支持 diagram_type=architecture/workflow/sequence/dataflow/lifecycle。不要用拓扑冒充类图。图中模块、接口、场景和关系必须与正文一致。",
   "图源必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。不得使用 brand、repository、sources 外部读取字段。",
   'architecture 最小示例：{"schema_version":1,"diagram_type":"architecture","meta":{"title":"模块依赖","locale":"zh-CN"},"components":[{"id":"module","type":"backend","label":"业务模块","pos":[40,40],"size":[160,64]}],"connections":[]}',
   "提交检视前用提供的固定离线渲染器逐图试渲染；JSON 合法不代表布局可展示。修复端点方向与标签遮挡后写回 Story，不关闭布局校验，不以示例图的成功替代当前设计验证。",
