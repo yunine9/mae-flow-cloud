@@ -1101,12 +1101,13 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(launch, /const ticketsDeferred = analysisTeamVisible/);
   assert.match(launch,
     /const repositoryTicketBlocked = Boolean\(options\?\.ticket\.enabled\)[\s\S]*?&& !ticketsDeferred/);
-  assert.match(picker, /拆分后怎么执行/);
+  // 拆分说明上移为下单表单仓区注记(2026-09 Story 检视);Picker 只管逐单元编辑。
+  assert.match(launch, /拆分后再逐单元填写执行人与 AR 单号/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
   // 执行人与 AR 都属于最终交付单元；执行人始终可选，免单号的分析
   // 主任务在同一确认区补齐 AR。
-  assert.match(picker, /<span className="repository-assignee-editable">/);
-  assert.match(picker, /该单元的执行人/);
+  assert.match(picker, /<div className="repository-assignee-editable">/);
+  assert.match(picker, /ariaLabel=\{\`\$\{rowLabel\}的执行人\`\}/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
   assert.match(picker, /<input type="text" value=\{ticket\}/);
   assert.doesNotMatch(picker, /repository-ticket-readonly|isUnitRow\(repository\) \|\| !ticket\.trim\(\)/,

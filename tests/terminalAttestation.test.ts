@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,16 @@ function fixture(current: string, external = false): {
   const kernelRoot = join(root, "kernel");
   mkdirSync(cwd);
   mkdirSync(join(kernelRoot, "flow"), { recursive: true });
+  // 收据裁决已收口进内核 `delivery attest`(2026-09-02),Cloud 只问不判——
+  // 假内核也得能被拉起:把真实内核的 CLI 入口与 core 链进来,状态仍是夹具的。
+  const realKernel = discoverKernelRoot(process.cwd());
+  if (realKernel) {
+    mkdirSync(join(kernelRoot, "scripts"));
+    symlinkSync(join(realKernel, "scripts", "mae-flow.py"),
+      join(kernelRoot, "scripts", "mae-flow.py"));
+    symlinkSync(join(realKernel, "scripts", "mae_flow_core"),
+      join(kernelRoot, "scripts", "mae_flow_core"), "dir");
+  }
   writeFileSync(join(kernelRoot, "flow", "flow.json"), JSON.stringify({
     steps: {
       grill: { terminal: false },

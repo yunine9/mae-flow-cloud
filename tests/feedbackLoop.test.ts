@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -334,6 +334,11 @@ test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或�
   }).trim();
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
     current: "feedback_triage",
+    execution_contract: {
+      schema: "mae-flow-execution/1", host: "cloud",
+      compile: "pipeline", ut_write: "agent",
+      ut_run: "pipeline", codecheck: "pipeline",
+    },
     delivery_loop: {
       active_batch_id: "fb-task-1-pipeline",
       batches: [{
@@ -346,6 +351,22 @@ test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或�
       }],
     },
   }));
+  // 收据裁决收口进内核 attest(2026-09-02)后,假内核也要能被拉起:
+  // 链真实内核的 CLI 入口与 core,核验的状态仍是本夹具的。
+  const realKernel = discoverKernelRoot(process.cwd());
+  if (realKernel) {
+    mkdirSync(join(root, "kernel", "scripts"), { recursive: true });
+    symlinkSync(join(realKernel, "scripts", "mae-flow.py"),
+      join(root, "kernel", "scripts", "mae-flow.py"));
+    symlinkSync(join(realKernel, "scripts", "mae_flow_core"),
+      join(root, "kernel", "scripts", "mae_flow_core"), "dir");
+  }
+  // attest 只认宿主信任根(绑定与私钥都在 Agent 工作区外);按生产路径
+  // 先走一次 proof 建立任务绑定与公钥锚,再让被测方法拿不到收据时拒绝。
+  const proof = createKernelHostProof({
+    cwd, workspace, taskId: "task-1", action: "pipeline-record", payload: {},
+  });
+  proof.cleanup();
   const service = new TaskService({
     dataDir: join(root, "tasks"), provider: "unused", model: "unused",
     modelsJson: {}, maxConcurrent: 0,
