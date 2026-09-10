@@ -16,7 +16,7 @@ export interface StoryState {
   current?: string;
   revisions: StoryRevision[];
   confirmed?: { revision: string; by: string; at: string };
-  job?: { id: string; started_at: string; by: string; kind?: "architecture" };
+  job?: { id: string; started_at: string; by: string; kind?: "architecture"; progress?: string };
   error?: string;
 }
 export const storyHash = (content: string) => createHash("sha256").update(content).digest("hex");

@@ -11,7 +11,7 @@ const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
 window.fetch = async (input, options) => {
   const url = String(input);
   if (url.endsWith("/overall-story/architecture") && options?.method === "POST") {
-    updates++; return new Response(JSON.stringify({ job: { kind: "architecture" } }));
+    updates++; return new Response(JSON.stringify({ job: { kind: "architecture", started_at: new Date(Date.now() - 65000).toISOString(), progress: "正在校验渲染 2/3：订单模块" } }));
   }
   if (url.endsWith("/overall-story")) return new Response(JSON.stringify({}));
   if (url.includes("?revision=")) {
@@ -66,6 +66,8 @@ async function run() {
   document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.click();
   await until(() => updates === 1, "刷新按钮没有发起架构图生成");
   await until(() => !!document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.disabled, "生成期间未禁用重复提交");
+  await until(() => !!document.querySelector(".story-architecture-progress")?.textContent?.includes("正在校验渲染 2/3：订单模块"), "真实阶段没有显示");
+  if (!document.querySelector(".story-architecture-progress")?.textContent?.includes("已用时 1 分")) throw Error("没有展示服务端开始时间对应的耗时");
   return { onlyArchify: true, missingTabsHidden: true, raceProtected: true, staleRemoved: true, failureReadable: true, emptyReadable: true, opened };
 }
 run().then((result) => document.getElementById("result")!.textContent = JSON.stringify(result))

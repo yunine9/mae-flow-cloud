@@ -98,6 +98,7 @@ export async function runOverallStorySession(owner: object, job: StoryRun, optio
     trackAuxiliarySession(owner, driver, epoch);
     if (job.signal.aborted) throw new Error("整体 Story 会话已停止");
     job.signal.addEventListener("abort", abort, { once: true });
+    if (job.architectureOnly) job.onProgress?.("Agent 正在依据完整 Story 生成架构图");
     const result = await driver.start(overallStoryMission(job));
     if (result.status === "session_ended" && result.reason === "failed") throw new Error(result.detail ?? "Story Agent 执行失败");
   } finally {

@@ -20,6 +20,7 @@ import { OVERALL_STORY_ARTIFACT, readStoryState, readCurrentStory, storyHash,
 export interface StoryInput extends StorySnapshot { files: Record<string, string> }
 export interface StoryRun {
   architectureOnly?: boolean;
+  onProgress?(message: string): void;
   root: string; id: string; before: string; input: StoryInput; annotations: Annotation[]; signal: AbortSignal;
 }
 export interface StoryStatus extends StoryState {
@@ -182,20 +183,28 @@ export class OverallStoryCoordinator<T extends Owner> {
     this.options.ready();
     const revision = state.current, jobId = randomUUID(), controller = new AbortController();
     const epoch = auxiliarySessionEpoch(task), root = storyPath(task.summary.workspace, `jobs/${jobId}`);
-    state.job = { id: jobId, by, started_at: new Date().toISOString(), kind: "architecture" };
+    state.job = { id: jobId, by, started_at: new Date().toISOString(), kind: "architecture", progress: "正在准备 Story 与绘图资料" };
     state.error = undefined; writeStoryState(task.summary.workspace, state);
+    const progress = (message: string) => {
+      if (controller.signal.aborted || this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
+      const current = readStoryState(task.summary.workspace);
+      if (current.job?.id !== jobId) return;
+      current.job.progress = message; writeStoryState(task.summary.workspace, current);
+    };
     const promise = Promise.resolve().then(async () => {
       mkdirSync(root, { recursive: true });
       const previous = storyPath(task.summary.workspace, "architecture.json");
       const reference = existsSync(previous) ? previous : revision ? storyRevisionPath(task.summary.workspace, revision, "architecture.json") : undefined;
       if (reference && existsSync(reference)) writeFileSync(join(root, "architecture.json"), readFileSync(reference));
       await this.options.run(task, { id: jobId, root, before, input: collectStoryInput(task, this.options),
-        annotations: [], signal: controller.signal, architectureOnly: true });
+        annotations: [], signal: controller.signal, architectureOnly: true, onProgress: progress });
+      progress("图源已生成，正在检查格式");
       const artifact = bindArchifyArtifact(before, readStoryOutput(join(root, "architecture.json"), 2 * 1024 * 1024));
       const projection = storyArchitecture(before, artifact);
       const errors = projection.warnings.filter((message) => message.startsWith("平台架构产物"));
       if (!projection.diagrams.length || errors.length) throw new Error(errors.join("；") || "未生成可展示的架构图，原图已保留");
-      for (const diagram of projection.diagrams) {
+      for (const [index, diagram] of projection.diagrams.entries()) {
+        progress(`正在校验渲染 ${index + 1}/${projection.diagrams.length}：${diagram.title}`);
         const result = await renderArchify(diagram.source);
         if (!result.html || result.error) throw new Error(result.error || "架构图渲染失败，原图已保留");
       }
@@ -204,6 +213,7 @@ export class OverallStoryCoordinator<T extends Owner> {
       const current = readStoryState(task.summary.workspace);
       if (current.current !== revision || load()?.content !== before) throw new Error("Story 已更新，请重新补充架构图");
       const temporary = `${previous}.${jobId}.tmp`;
+      progress(`已通过 ${projection.diagrams.length} 张图的渲染校验，正在发布`);
       writeFileSync(temporary, artifact, { mode: 0o600 }); renameSync(temporary, previous);
       current.job = undefined; current.error = undefined; writeStoryState(task.summary.workspace, current);
     }).catch((error) => {

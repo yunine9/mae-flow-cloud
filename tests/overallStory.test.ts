@@ -54,6 +54,9 @@ test("架构图可从无到有并更新，失败保留旧图，正文和确认�
     let title = "首版模块";
     f.runner(async (_task, job) => {
       assert.equal(job.architectureOnly, true);
+      assert.match(f.coordinator.status("parent").job?.progress ?? "", /正在准备/);
+      job.onProgress?.("Agent 正在依据完整 Story 生成架构图");
+      assert.match(f.coordinator.status("parent").job?.progress ?? "", /完整 Story/);
       assert.equal(job.before, before);
       const event = {} as import("../src/semanticEvents.ts").SemanticEvent;
       assert.equal(overallStoryGate(job.root, true)("Write", "story.md", event)?.action, "deny");

@@ -57,4 +57,6 @@
 .md-architecture-reference .md-block-code { max-height: 320px; overflow: auto; color: var(--text); }
 @media (max-width: 600px) { .story-architecture { padding: 12px; } .story-architecture iframe { height: 65vh; min-height: 460px; } }
 
+.story-architecture-progress { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--text-muted, #667085); }
+.story-architecture-progress small { white-space: nowrap; }
 }

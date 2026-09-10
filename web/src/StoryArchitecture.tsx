@@ -9,6 +9,7 @@ interface Projection {
   diagrams: Array<{ id: string; title: string; type: string; renderer?: string; line?: number; view?: StoryViewCoverage["id"] }>;
   views?: StoryViewCoverage[];
 }
+interface GenerationJob { started_at?: string; progress?: string; kind?: string }
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal });
   const body = await response.json();
@@ -23,7 +24,14 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
   const [activeView, setActiveView] = useState("logical");
   const [error, setError] = useState("");
   const [pulse, refresh] = useState(0);
-  const [job, setJob] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  const [job, setJob] = useState<{ busy: boolean; error?: string; detail?: GenerationJob }>({ busy: false });
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!job.busy) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [job.busy]);
   const [submitting, setSubmitting] = useState(false);
   const generationBase = `/tasks/${encodeURIComponent(taskId)}/overall-story`;
   useEffect(() => {
@@ -33,13 +41,13 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     let wasBusy = false;
     async function poll() {
       try {
-        const state = await read<{ job?: unknown; error?: string }>(generationBase, controller.signal);
+        const state = await read<{ job?: GenerationJob; error?: string }>(generationBase, controller.signal);
         if (controller.signal.aborted) return;
-        setJob({ busy: !!state.job, error: state.error });
+        setJob({ busy: !!state.job, error: state.error, detail: state.job });
         if (wasBusy && !state.job) refresh((n) => n + 1);
         wasBusy = !!state.job;
       } catch (reason) {
-        if (!controller.signal.aborted) setJob({ busy: false, error: reason instanceof Error ? reason.message : String(reason) });
+        if (!controller.signal.aborted) setJob((previous) => ({ ...previous, error: `进度暂时无法读取：${reason instanceof Error ? reason.message : String(reason)}` }));
       }
       if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
     }
@@ -52,7 +60,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
       const response = await fetch(`${generationBase}/architecture`, { method: "POST" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "更新失败");
-      setJob({ busy: !!body.job });
+      setJob({ busy: !!body.job, detail: body.job });
     } catch (reason) { setJob({ busy: false, error: reason instanceof Error ? reason.message : String(reason) }); }
     finally { setSubmitting(false); }
   }
@@ -139,6 +147,12 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
           aria-label="更新架构图" title="根据当前 Story 生成或更新架构图">{submitting || job.busy ? "更新中…" : "↻"}</button>}
       </div>
     </header>
+    {job.busy && <p className="story-architecture-progress" role="status" aria-live="polite">
+      <span>{job.detail?.progress || (job.detail?.kind === "architecture" ? "Agent 正在更新架构图" : "Story 正在更新，请稍候")}</span>
+      {job.detail?.started_at && Number.isFinite(Date.parse(job.detail.started_at)) && <small aria-live="off">
+        已用时 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 60000)} 分 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 1000) % 60} 秒
+      </small>}
+    </p>}
     {job.error && <p className="story-architecture-warning" role="status">{job.error}</p>}
     {error ? <p role="status">{error}</p> : !projection ? <p role="status">正在读取 Story…</p> : <>
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
