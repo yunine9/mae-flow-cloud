@@ -32,6 +32,7 @@ import { randomBytes } from "node:crypto";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync,
 } from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type MemorySource = "annotation" | "prepush_fix" | "user_note";
@@ -145,17 +146,9 @@ export function memoryWeight(
 }
 
 export function readJsonlRows<T>(path: string): T[] {
-  if (!existsSync(path)) return [];
-  const rows: T[] = [];
-  for (const line of readFileSync(path, "utf-8").split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      rows.push(JSON.parse(line) as T);
-    } catch {
-      continue;                                   // 半行只丢它自己
-    }
-  }
-  return rows;
+  // 断写尾巴读口自愈(票 #160):半行不清,下一次 append 粘行,一次
+  // 崩溃最多吞两条账——读时修掉就不会发生。
+  return readAppendOnlyJsonl<T>(path, { middleCorrupt: "skip" });
 }
 
 export class MemoryError extends Error {}

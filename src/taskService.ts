@@ -48,7 +48,8 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-} from "node:fs";
+  openSync, fsyncSync, closeSync,} from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -5851,10 +5852,8 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const path = join(task.summary.workspace, "memory-usage.jsonl");
     if (!existsSync(path)) return [];
-    return readFileSync(path, "utf-8").split("\n").filter((line) => line.trim())
-      .flatMap((line) => {
-        try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
-      });
+    return readAppendOnlyJsonl<Record<string, unknown>>(path,
+      { middleCorrupt: "skip" });
   }
 
   /** §8-3 首次改某目录:该目录有记忆且本会话没提过,插一句。每目录一次。 */
@@ -8383,6 +8382,16 @@ export class TaskService {
         token_usage_state: task.tokenUsage,
         notify_record: task.notifyRecord,
       }, null, 1));
+      // 状态权威文件耐久写(票 #163):tmp 内容 fsync 后再 rename——
+      // 硬断电最坏退回上一版,不再是全零块。代价 3.2ms/次,可忽略。
+      {
+        const fd = openSync(path + ".tmp", "r");
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      }
       renameSync(path + ".tmp", path);
       return true;
     } catch (error) {
@@ -11797,7 +11806,22 @@ export class TaskService {
     task.summary.team_skills = listHostSkillShelfRoot(root).skills;
     const warnings = [...shelf.warnings, ...snapshot.warnings];
     const pendingFile = join(task.summary.workspace, "pending-skill-sync.json");
-    const pending: string[] = existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, "utf8")) : [];
+    let pending: string[] = [];
+    if (existsSync(pendingFile)) {
+      try {
+        pending = JSON.parse(readFileSync(pendingFile, "utf-8"));
+      } catch (error) {
+        // 崩溃断写隔离(票 #162 同族):坏文件不炸接口也不再永 500——
+        // 隔离改名保留现场供排查,本次按空清单继续(文件随后重写自愈)。
+        const quarantined = `${pendingFile}.corrupt`;
+        try {
+          renameSync(pendingFile, quarantined);
+        } catch { /* 隔离失败就原地忽略,别让旁路挡主链路 */ }
+        this.options.log?.(`pending-skill-sync.json 损坏,已按空清单继续`
+          + `(现场保留于 ${quarantined}): `
+          + `${error instanceof Error ? error.message : error}`);
+      }
+    }
     const added = [...new Set([...pending, ...snapshot.names])];
     if (added.length) {
       writeFileSync(pendingFile, JSON.stringify(added));
