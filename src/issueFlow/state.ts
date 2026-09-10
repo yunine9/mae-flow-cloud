@@ -532,9 +532,23 @@ export function summarize(state: IssueSessionState): IssueSummary {
     push_review_head: _pushReviewHead, env_declined: _envDeclined,
     warmup: _warmup,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
+    module_locked: _moduleLocked,
     ...rest } = state;
   return {
     ...rest,
+    // pipelines 的重试/刹车子字段是服务端流程机制状态(证据重试窗、
+    // 同提交刹车),效力只在监看与派修口——不上 wire,与 mr_gate 同罪
+    // 同罚(体检 C-H7:前端镜像没有这五个键,投影多出即契约漂移)。
+    ...(state.pipelines ? { pipelines: Object.fromEntries(
+      Object.entries(state.pipelines).map(([repo, watch]) => {
+        const { evidence_retry_deadline: _erd,
+          evidence_retry_attempts: _era,
+          evidence_failure_log: _efl,
+          last_repair_sha: _lrs,
+          last_failure_summary: _lfs, ...visible } = watch;
+        return [repo, visible];
+      }),
+    ) } : {}),
     // takeover(人工接管标记)与上面的机制账不同:它要上 wire——头部
     // 徽标与输入区 takeover 模式都靠它分派,缺席=不在接管中。
     ...(state.takeover ? { takeover: state.takeover } : {}),

@@ -1428,6 +1428,15 @@ export class IssueFlowService {
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
+    // 状态守卫(体检 C-H3):挂起(等关联转正)与终态会话不接受补配
+    // 环境——补配会开平台回合,把挂起/已收口的会话悄悄复活成 running。
+    if (isTerminal(state.status)) {
+      throw new IssueControlError(`会话已处于终态 ${state.status},不能补配环境`);
+    }
+    if (state.status === "suspended") {
+      throw new IssueControlError(
+        "会话已挂起(等关联单号转正),不能补配环境——先归档或完成转正");
+    }
     const { resolved, sourceIp } = this.resolveEnvironmentInput(input);
     if (options?.saveToRegistry) {
       const parts = normalizeEnvironmentInput(resolved, false);
@@ -2097,7 +2106,7 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${issueId} 介入档位免审批:闸 ${kind} 自动作答(${code})`);
     setTimeout(() => {
       try {
-        const summary = this.answer(issueId, {
+        this.answer(issueId, {
           state_version: version,
           code,
           decision: `介入档位免审批自动确认(${gateOptionLabel(kind, code)})`,
@@ -2105,7 +2114,9 @@ export class IssueFlowService {
         void this.options.notifier?.notifyOutcome({
           taskId: issueId,
           account: state.account,
-          status: summary.status,
+          // 独立状态词(体检 B-H4):summary.status 在两路代答里都是
+          // running,共用幂等键会把第二次代答的通知吞掉。
+          status: "已代答",
           summary: `介入档位免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
           link: this.issueLink(issueId),
         }).catch(() => undefined);
@@ -2165,7 +2176,7 @@ export class IssueFlowService {
       + ` 按推荐项自动作答(${recommended.join("、")})`);
     setTimeout(() => {
       try {
-        const summary = this.answer(issueId, {
+        this.answer(issueId, {
           state_version: version,
           answers,
           notes: trace,
@@ -2173,7 +2184,7 @@ export class IssueFlowService {
         void this.options.notifier?.notifyOutcome({
           taskId: issueId,
           account: state.account,
-          status: summary.status,
+          status: "已代答",
           summary: `介入档位免审批:问题卡已按推荐项自动作答`
             + `(${recommended.join("、")})`,
           link: this.issueLink(issueId),
@@ -3666,6 +3677,24 @@ export class IssueFlowService {
       fixedComplete(live.state, "会话已归档收口(用户操作)");
     }
     saveState(live.root, live.state);
+    // 收口清面(体检 C-H6):闸与未决 Agent 卡不随终态残留——不然
+    // 已取消/归档的会话还投影着一张永远答不了的卡。平台闸直接删;
+    // Agent 卡逐条 supersede(作废留痕,decision 空串=无人答过)。
+    if (live.state.gate) {
+      delete live.state.gate;
+      saveState(live.root, live.state);
+    }
+    for (const record of live.humanGate.pending()) {
+      try {
+        live.humanGate.supersede(record.waiting_id, {
+          stateVersion: record.state_version,
+          notes: `会话已${input.action === "cancel" ? "取消" : "归档"},待办作废`,
+        });
+      } catch (error) {
+        this.log(`[issue-flow] ${id} 终态作废待办 ${record.waiting_id} 失败: `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
     return summarize(live.state);
@@ -3789,7 +3818,8 @@ export class IssueFlowService {
         timer.unref?.();
       });
       if (state.pipelines?.[repo]?.sha !== sha
-          || !state.pipelines[repo].watching) return;
+          || !state.pipelines[repo].watching
+          || isTerminal(state.status)) return;
       try {
         const status = await getPipelineStatus(call());
         // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
@@ -3804,7 +3834,10 @@ export class IssueFlowService {
       }
     }
     // 预算耗尽:如实停表,不阻塞会话——用户可人工查看后发消息继续。
-    if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching) {
+    // 终态会话不写不算不喊(体检 C-H2):循环因 isTerminal 退出时也落
+    // 到这里,不能给已取消/归档的会话改 stage_note、发"请人工"通知。
+    if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching
+        && !isTerminal(state.status)) {
       state.pipelines[repo].watching = false;
       state.pipelines[repo].last_error = "轮询预算耗尽,请人工查看流水线";
       state.stage_note = "流水线轮询预算耗尽——请人工查看 MR/流水线,再发消息继续";
@@ -3875,6 +3908,14 @@ export class IssueFlowService {
    *  merge-status 端点三方共用这一扫。 */
   async syncMergeFacts(live: LiveIssue): Promise<{ all_merged: boolean }> {
     const state = live.state;
+    // 终态复核(体检 C-H1/C-H2 同族):取消/归档落在轮询迭代内时,
+    // 不再写终态会话的账与通知;归档竞态核对路(control)在终态前调用,
+    // 不受影响。
+    if (isTerminal(state.status)) {
+      const frozen = state.mrs ?? [];
+      return { all_merged: frozen.length > 0
+        && frozen.every((mr) => Boolean(mr.merged_at)) };
+    }
     const credential = this.options.gitCredential?.(state.account);
     let changed = false;
     for (const mr of state.mrs ?? []) {
@@ -4024,8 +4065,10 @@ export class IssueFlowService {
   }
 
   /** 待注入标志(内存 Set + 落盘标记,检视闭环 ②-Q1):重启恢复靠
-   *  MR_REVIEW_NOTIFY_FILE;注入完成后两处一起清。 */
+   *  MR_REVIEW_NOTIFY_FILE;注入完成后两处一起清。终态会话不落标志
+   *  (体检 C-H5:不留孤儿标记文件)。 */
   private armReviewNotify(live: LiveIssue): void {
+    if (isTerminal(live.state.status)) return;
     this.reviewNotifyPending.add(live.id);
     try {
       writeFileSync(join(live.root, MR_REVIEW_NOTIFY_FILE),
@@ -4204,6 +4247,9 @@ export class IssueFlowService {
    *  无限循环)。投递成功→意见转 addressed(Agent 已回复,待检视人
    *  核验,②-Q3:处理≠验收)。 */
   private async flushMrReviewReplies(live: LiveIssue): Promise<void> {
+    // 终态复核(体检 C-H5):取消/归档落在迭代内,不再向平台投递
+    // 已装箱回复——终态会话不该再产生外部副作用。
+    if (isTerminal(live.state.status)) return;
     const outbox = this.readMrReviewOutbox(live);
     const pending = outbox.items.filter((item) => item.status === "pending");
     if (!pending.length) return;
@@ -4316,6 +4362,9 @@ export class IssueFlowService {
     run: PipelineRun,
   ): Promise<void> {
     const { state } = live;
+    // 终态复核(体检 C-H1):取消/归档可能落在监看迭代的 sleep/fetch
+    // 窗口内——结算与它触发的举闸都不得再写已终态会话的状态。
+    if (isTerminal(state.status)) return;
     const watch = state.pipelines?.[repo];
     if (watch?.sha !== sha) return;
     watch.status = run.status;
@@ -4997,6 +5046,9 @@ export class IssueFlowService {
   ): boolean {
     const { state } = live;
     if (state.gate) return false;
+    // 终态复核(体检 C-H1):取消/归档后不再把状态定格回 waiting_user
+    // ——那等于把人的取消决定掀翻,还能借 answer 把会话复活成 running。
+    if (isTerminal(state.status)) return false;
     raiseGate(state, kind, question, undefined, context, undefined, undefined,
       { repo, sha });
     // waiting_user 的定格与 raiseGate 纪律一致:回合还在收尾(turning

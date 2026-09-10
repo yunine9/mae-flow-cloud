@@ -572,7 +572,7 @@ export async function handleIssueRoutes(
     }
     if (method === "PUT" && parts[2] === "materials"
         && parts[3] === "file" && parts.length === 4) {
-      if (brief && !own(brief.account)) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只能修改自己会话的工作区" });
       }
       const body = await readBody(request);
@@ -636,7 +636,7 @@ export async function handleIssueRoutes(
     // 失败 400 带人话——解压是写,错误必须让人知道发生了什么。
     if (method === "POST" && parts[2] === "materials"
         && parts[3] === "log-extract" && parts.length === 4) {
-      if (brief && !own(brief.account)) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只能解压自己会话的日志" });
       }
       const body = await readBody(request);

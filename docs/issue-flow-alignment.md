@@ -68,20 +68,61 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 - "排队期间重启、回执已落盘但投影未更新、决定已执行但响应丢失,都能
   续接且不重复执行"——LiveIssue 重启重建路径。
 
-附带:61a1a6f "reduced kernel authority" 解释了 2026-09-10 遗留的
-5 个红测试(kernelCommitRedirect 拦截可能是被有意裁掉的内核权限),
-需与廖翔对契约后再定测试归宿。
+附带(2026-09-10 勘定):kernelCommitRedirect 与 mrLoop 四条红测试是
+**需求侧**的债(测的是需求流程的内核宿主守卫与交付环),不属于本
+清单处置范围——待与内核同步(61a1a6f)的行为取舍对齐后另行处理。
 
-- [ ] 拍板(grill)
-- [ ] 实施(或纯自查结论)
+- [x] 拍板(2026-09-10):与④合并一轮体检,小洞顺手修、大洞回 grill;
+  范围锁死 src/issueFlow(需求侧红测试已勘定出清)。
+- [x] 实施(2026-09-10,三子 Agent 深扫+高洞亲验):
+
+**判定通过(证据在代码,不复述)**:重启续跑副作用幂等(容器/克隆/
+推送/建 MR 先查后建);waiting_user 卡与 state_version 跨重启连续;
+闸通知不重复轰炸;warmup fail-open;两类 deadline(证据重试窗/流水线
+预算)重启后正确结算;vault 取回与三路终态清理;takeover 落盘可续;
+saveState 原子写+serve 实例锁防双进程;决定卡/reply 双击被状态闸+同步
+beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
+(push_confirm 三档才举是 ADR-0009 刻意保留);权限面 18 写路由全 own()
++admin 403。
+
+**本轮修复(带测试,tests/issueTerminalHardening)**:
+- 高(C-H1/C-H2):取消撞监看迭代→settlePipeline 入口/raisePipelineGate/
+  睡眠后复查/预算块全补终态守卫——canceled 不再被覆写成 waiting_user
+  (原可经 answer 复活已取消会话),不再给终态会话写停机 note/发催人通知;
+- C-H3:attachEnvironment 补终态/挂起守卫(防 API 级复活);
+- C-H5:armReviewNotify/flushMrReviewReplies/syncMergeFacts 终态守卫
+  (不投递、不落孤儿标记);
+- C-H6:control 收口清面——平台闸删除、未决 Agent 卡逐条 supersede,
+  终态不再投影死卡;
+- B-H4:两路档位代答通知换独立状态词"已代答"(原共用 running 幂等键,
+  第二次代答通知被吞);
+- C-H9:materials/file 与 log-extract 补 admin 403(与其余写路由同款);
+- C-H7:wire 剥离 module_locked 与 pipelines 五个重试/刹车子字段。
+
+**遗留(按严重度,回 grill 排期)**:
+- A-H1(中)作答内容跨重启丢失:answer 落账后、送达前崩溃,恢复回合
+  不回灌决定文本——涉续聊提示词结构,单独立项;
+- B-H1(中)associate 并发竞态可建两个转正会话:需互斥设计拍板;
+- B-H2(中)追问检测单点押平台递增 revision;body 变 revision 不变时
+  静默丢——updated_at 兜底,需先核实适配层配置是否映射 revision;
+- A-H5(低中)检视回复信箱与 mr_green 阶段绑死:回退/非 mr_green 重启
+  时 pending 停投——投不投是设计决策;
+- A-H2/A-H3(低)全自动档代答不重启恢复、孤儿 Agent 卡(与 A-H1 同片
+  代码,合并处理);
+- C-H8(低)vault.remove 无兜底(两行间崩溃留孤儿密文),recover 无
+  孤儿对账;
+- 低危杂项登记不修:真平台 mr_lookup 未配时建 MR 幂等依赖平台(B-H3,
+  部署配置项)、收口后重建 MR 的误导通知(A-H8)、注入标志删除与开
+  回合间崩溃窗(B-H9)、environment 重复 POST 无害(B-H7)、live Map
+  与终态磁盘无回收(长期卫生)。
 
 ## ④ 恢复健壮性自查(源:4e51c0d/f207475)
 
-按需求侧验收标准自查问题侧重启恢复:核验故障不误报无授权、收据/
-账目中断可恢复、排除项不阻断恢复。
+按需求侧验收标准自查问题侧重启恢复——已并入③同轮体检(③的"判定
+通过/修复/遗留"三节即本项产出;重启续接专项见③判定通过节前六条)。
 
-- [ ] 拍板(grill)
-- [ ] 实施(或纯自查结论)
+- [x] 拍板(并入③)
+- [x] 实施(并入③)
 
 ## ⑤ 构建日志直播+分批回放按需取用(源:f0bde69/0c47a1c)
 
