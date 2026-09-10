@@ -17660,20 +17660,27 @@ export class TaskService {
     setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
-  /** 已有关联 MR 时，只允许权威 opened 状态进入续推；查询不可得
-   * 留在可重跑的停机态，合入/关闭则复用现有生命周期收口。 */
+  /** 已有关联 MR 时只查同一个 MR。瞬时查询失败走既有交付自愈，
+   * 确定性鉴权/契约错误才停摆；合入/关闭复用现有生命周期收口。 */
   private async existingMergeRequestAllowsDelivery(
     task: TaskState, epoch: number,
   ): Promise<boolean> {
     if (!this.current(task, epoch)) return false;
     const delivery = task.summary.delivery;
     if (!delivery?.mr_url && delivery?.mr_id === undefined) return true;
-    const view = await this.fetchGates(task, true);
+    let failure = "交付平台暂时连接不上";
+    const view = await this.fetchGates(task, true, reason => { failure = reason; });
     if (!this.current(task, epoch)) return false;
     if (!view) {
-      this.markVerificationStalled(task,
-        "无法确认已有 MR 的远端状态，已停止续推；请恢复平台连接后重跑，避免重复创建 MR",
-        "infrastructure");
+      const verdict = classifyDeliveryFailure(failure);
+      if (verdict.disposition === "retry") {
+        this.holdWithRecovery(task,
+          `已有 MR 状态查询暂未完成，系统正在自动重试，暂时无需操作：${failure}`, epoch);
+      } else {
+        this.markVerificationStalled(task,
+          `无法确认已有 MR 的远端状态，已停止续推：${failure}；请检查个人凭据或平台接口后重跑`,
+          verdict.stall_class);
+      }
       return false;
     }
     if (view.mrState === "merged" || view.mrState === "closed") {
@@ -17685,8 +17692,9 @@ export class TaskService {
     return true;
   }
 
-  private fetchGates(task: TaskState, requireExisting = false): Promise<GateView | undefined> {
-    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(),
+  private fetchGates(task: TaskState, requireExisting = false,
+    onFailure?: (reason: string) => void): Promise<GateView | undefined> {
+    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(), onFailure,
       delivery: task.summary.delivery, requireExisting,
       repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
       headers: this.platformIdentity(task),
