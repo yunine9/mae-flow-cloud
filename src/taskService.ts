@@ -1,3 +1,4 @@
+import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
 import type { PipelineRun } from "./pipelineClient.ts";
@@ -1274,8 +1275,7 @@ export interface TaskServiceOptions {
    * 平台/prepush 不加载,create() 直接拒绝,launchOptions 摆出明面
    * 的 blocker。历史任务台账仍可读(管理/兜底不受影响)。 */
   requirementDisabled?: boolean;
-  /** 任务记忆检索旁路(docs/knowledge-memory-design.md §7)。缺席=没有
-   * sidecar:开局推送退回索引级、Agent 没有 corpus_search 工具,任务照跑。 */
+  /** 可选语义索引；未配置时记忆仍能写入、展开和按索引推送。 */
   memory?: {
     python: string;
     script: string;
@@ -5823,37 +5823,15 @@ export class TaskService {
     });
   }
 
-  /** 这单用到的记忆足迹:旁路,写失败只记日志。 */
-  private logMemoryUsage(task: TaskState, event: {
-    moment: "launch" | "phase" | "edit" | "search" | "expand";
-    ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
-  }): void {
-    try {
-      appendFileSync(join(task.summary.workspace, "memory-usage.jsonl"),
-        JSON.stringify({ ts: new Date().toISOString(), ...event }) + "\n", "utf-8");
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 记忆足迹写入失败: ${String(error)}`);
-    }
-    // 台账是跨任务的账(排序、沉底都看它),足迹是这单的账;两边都记。
-    try {
-      const kind = event.moment === "search" || event.moment === "expand"
-        ? event.moment : "push";
-      for (const id of event.ids) {
-        this.memories().ledger.append({ kind, id, task: task.summary.id,
-          note: event.moment === "edit" ? event.dir : event.phase ?? event.moment });
-      }
-    } catch (error) {
-      this.options.log?.(`记忆台账写入失败: ${String(error)}`);
-    }
+  private logMemoryUsage(task: TaskState, event: MemoryUsageEvent): void {
+    recordMemoryUsage({ workspace: task.summary.workspace, taskId: task.summary.id,
+      store: () => this.memories(), log: this.options.log }, event);
   }
 
   listTaskMemoryUsage(id: string): Array<Record<string, unknown>> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const path = join(task.summary.workspace, "memory-usage.jsonl");
-    if (!existsSync(path)) return [];
-    return readAppendOnlyJsonl<Record<string, unknown>>(path,
-      { middleCorrupt: "skip" });
+    return readMemoryUsage(task.summary.workspace);
   }
 
   /** §8-3 首次改某目录:该目录有记忆且本会话没提过,插一句。每目录一次。 */
