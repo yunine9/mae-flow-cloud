@@ -150,7 +150,11 @@ test("使命写清三件事与红线;报告解析只认合法结构、后写者�
   const mission = warmupMission({
     taskId: "t1", workspace: "/tmp/repo", sha: "a".repeat(40),
   });
-  assert.match(mission, /只做编译,不跑 UT/);
+  assert.match(mission, /C\+\+ 仓首次编译必须先执行 `mvn generate-sources -DDT_test=UT`/);
+  assert.match(mission, /mvn compile -U -DDEBUG_FLAG=DEBUG -DDT_test=UT/);
+  assert.match(mission, /后一条命令会同时\s*完成编译并执行全量 UT/);
+  assert.match(mission, /不允许去掉 DT_test=UT/);
+  assert.match(mission, /必须把 UT 全部跑一遍/);
   assert.ok(mission.includes(WARMUP_NOTES_PATH),
     "构建入口沉淀路径必须写进使命——编码期子 Agent 与 prepush 靠它复用");
   assert.match(mission, /不执行任何 git 写操作/);
