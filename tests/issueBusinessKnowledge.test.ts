@@ -1,9 +1,10 @@
 /**
- * 业务知识地图(ADR-0012)的契约测试:
+ * 业务知识地图(ADR-0012,2026-09-10 起单源化,ADR-0021)的契约测试:
  * - 资产库定格:进入 analyze 时按绑定模块从发布库选取并只读投影,
  *   台账落账;月光开档照样定格(地图不分介入档);未绑定模块静默缺席;
- * - 仓内 docs/ 索引:一层扫描、40 条上限超限折叠、缺席静默;
- * - 注入点:开场词在 analyze 阶段注入业务知识地图。
+ * - 仓内 docs/ 不再平台扫描注入(ADR-0021):发现权归仓,提示词只
+ *   承载全局置信度分层段(全阶段在场,不随 analyze 门控);
+ * - 注入点:开场词在 analyze 阶段注入业务知识地图(只剩资产库一源)。
  *
  * 范式与 issueInterventionTiers.test.ts 同款:ScriptedModelServer 剧本,只走
  * 公开 API 断言;地图渲染为纯函数单元断言。
@@ -26,7 +27,6 @@ import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import {
   businessKnowledgeLines,
-  REPO_DOCS_INDEX_LIMIT,
 } from "../src/issueFlow/businessKnowledge.ts";
 import { issueFixedOpeningPrompt } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
@@ -209,7 +209,7 @@ test("模块没有已发布资产:台账为空,流程照走(旁路不卡会话)"
   }
 });
 
-test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分组", () => {
+test("docs 不再进地图(ADR-0021):平台不扫描仓内 docs/,资产是唯一注入源", () => {
   const workspace = mfcTemp("mfc-issue-biz-docs-");
   const repoDir = join(workspace, "repo", "origin");
   mkdirSync(join(repoDir, "docs", "手册"), { recursive: true });
@@ -219,50 +219,56 @@ test("docs 索引:一层扫描、40 条上限折叠、缺席静默、多仓分�
     scenario: "no_ticket", stage: "analyze",
     repo_urls: ["http://example.com/origin.git"],
   } as unknown as IssueSessionState;
-  const lines = businessKnowledgeLines(state, workspace);
+  // 只有 docs、没有资产台账 → 整段缺席:docs 的存在性靠 AGENTS.md
+  // 标准句声明,不靠平台扫描。
+  assert.deepEqual(businessKnowledgeLines(state), []);
+  // 有资产台账 → 只出资产条目,不混入任何 docs/ 路径。
+  const withAssets = {
+    ...state,
+    business_knowledge: {
+      at: "2026-09-10T00:00:00.000Z",
+      entries: [{
+        id: "settlement-faq", module_id: MODULE_ID, module_name: "支付核心",
+        title: "清结算 FAQ", summary: "对账差异排查",
+        when_to_use: "排查对账差异时", form: "markdown", version: 1,
+        relative_path: ".mae-flow-work/business-modules/pay-core/settlement-faq.md",
+      }],
+    },
+  } as unknown as IssueSessionState;
+  const lines = businessKnowledgeLines(withAssets);
   assert.ok(lines.some((line) => line.includes("业务知识地图")));
-  assert.ok(lines.some((line) => line.includes("repo/origin/docs/总览.md")));
-  assert.ok(lines.some((line) => line.includes("repo/origin/docs/手册/")),
-    "一级子目录折叠为 dir/ 形式");
-  assert.doesNotMatch(lines.join("\n"), /细节\.md/,
-    "子目录内容不进地图,交给按需自查");
-
-  // 超限折叠:45 个文件超过 40 条上限,只保留 40 条并注明折叠。
-  const big = mfcTemp("mfc-issue-biz-big-");
-  const bigDocs = join(big, "repo", "origin", "docs");
-  mkdirSync(bigDocs, { recursive: true });
-  for (let index = 0; index < 45; index += 1) {
-    writeFileSync(join(bigDocs, `f${index}.md`), "# x\n");
-  }
-  const bigLines = businessKnowledgeLines(
-    { ...state, business_knowledge: undefined } as IssueSessionState, big);
-  const pathLines = bigLines.filter((line) => line.includes("repo/origin/docs/f"));
-  assert.equal(pathLines.length, REPO_DOCS_INDEX_LIMIT);
-  assert.ok(bigLines.some((line) => line.includes("已折叠")));
-
-  // 缺席静默:没有 docs/ 也没有台账 → 整段缺席。
-  const empty = mfcTemp("mfc-issue-biz-empty-");
-  assert.deepEqual(businessKnowledgeLines(
-    { ...state, business_knowledge: undefined } as IssueSessionState, empty), []);
+  assert.ok(lines.some((line) => line.includes("清结算 FAQ")));
+  assert.doesNotMatch(lines.join("\n"), /docs\//,
+    "仓内 docs/ 路径不得出现在地图里(ADR-0021)");
 });
 
-test("提示层:开场词只在 analyze 阶段注入业务知识地图", () => {
-  const workspace = mfcTemp("mfc-issue-biz-prompt-");
-  const repoDir = join(workspace, "repo", "origin", "docs");
-  mkdirSync(repoDir, { recursive: true });
-  writeFileSync(join(repoDir, "对账流程.md"), "# 对账流程\n");
+test("提示层:开场词 analyze 注入资产地图;docs 置信度段全阶段在场", () => {
   const base = {
     id: "issue-1", scenario: "no_ticket", stage: "analyze",
     title: "对账差异", description: "", account: "dev",
     repo_urls: ["http://example.com/origin.git"],
+    business_knowledge: {
+      at: "2026-09-10T00:00:00.000Z",
+      entries: [{
+        id: "settlement-faq", module_id: MODULE_ID, module_name: "支付核心",
+        title: "清结算 FAQ", summary: "对账差异排查",
+        when_to_use: "排查对账差异时", form: "markdown", version: 1,
+        relative_path: ".mae-flow-work/business-modules/pay-core/settlement-faq.md",
+      }],
+    },
   } as unknown as IssueSessionState;
-  const prompt = issueFixedOpeningPrompt(base, {},
-    { tier: "3", workspace });
+  const prompt = issueFixedOpeningPrompt(base, {}, { tier: "3" });
   assert.match(prompt, /业务知识地图/);
-  assert.match(prompt, /repo\/origin\/docs\/对账流程\.md/);
-  // 非 analyze 阶段不注入(地图跟着 analyze 简报走)。
+  assert.match(prompt, /清结算 FAQ/);
+  assert.match(prompt, /置信度中等/,
+    "docs 置信度分层段在场(ADR-0021)");
+  assert.doesNotMatch(prompt, /repo\/origin\/docs\//,
+    "docs 路径不再由平台注入");
+  // 非 analyze 阶段:地图不注入(跟着 analyze 简报走),置信度段
+  // 不门控——契约文件全阶段在场,分层规则同寿(ADR-0021 Q4)。
   const prep = { ...base, stage: "prep_repo" } as IssueSessionState;
-  assert.doesNotMatch(
-    issueFixedOpeningPrompt(prep, {}, { tier: "3", workspace }),
-    /业务知识地图/);
+  const prepPrompt = issueFixedOpeningPrompt(prep, {}, { tier: "3" });
+  assert.doesNotMatch(prepPrompt, /业务知识地图/);
+  assert.match(prepPrompt, /置信度中等/,
+    "prep_repo 阶段置信度段仍在场(不随 analyze 门控)");
 });

@@ -292,9 +292,8 @@ export function issueFixedOpeningPrompt(
   credentials: IssueEnvCredentials = {},
   /** 介入档位的节奏渲染(ADR-0019,现读现判):一档=全自动(报告
    * 会被代答确认);二档=仅分析报告(报告是唯一停靠点);三档=全程
-   * 把控,主动问与对齐(ADR-0006)。
-   * workspace 供业务知识地图现扫仓内 docs/(ADR-0012);缺席不注入。 */
-  options: { tier?: IssueInterventionTier; workspace?: string } = {},
+   * 把控,主动问与对齐(ADR-0006)。 */
+  options: { tier?: IssueInterventionTier } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
@@ -307,9 +306,9 @@ export function issueFixedOpeningPrompt(
     : "";
   const meta = issueRegistrationMeta(state, credentials);
   const skillLines = skillSelectionLines(state);
-  const knowledgeLines = options.workspace
-    ? businessKnowledgeLines(state, options.workspace)
-    : [];
+  // docs 置信度分层(ADR-0021)与资产库地图(ADR-0012)是两段独立文案:
+  // 前者全阶段在场(契约文件就全阶段在场),后者只在 analyze 注入。
+  const knowledgeLines = businessKnowledgeLines(state);
   const contract = promptCopy("opening", "fixed.contract", {
     stage_brief:
       `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:`
@@ -339,6 +338,9 @@ export function issueFixedOpeningPrompt(
       : []),
     ...environmentLines(meta),
     inheritedNote,
+    "",
+    "## 仓内业务知识(docs/)",
+    promptCopy("opening", "fixed.docs_confidence"),
     "",
     `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})`,
     stages,
@@ -399,9 +401,8 @@ export function issueResumePrompt(
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
     ...skillSelectionLines(state),
-    ...(options.workspace
-      ? businessKnowledgeLines(state, options.workspace)
-      : []),
+    ...businessKnowledgeLines(state),
+    promptCopy("opening", "fixed.docs_confidence"),
     promptCopy("opening",
       options.tier === "3" ? "resume.intervention.guard"
         : options.tier === "1" ? "resume.intervention.full_auto"

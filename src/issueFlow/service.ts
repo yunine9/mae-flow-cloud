@@ -29,7 +29,11 @@ import {
 } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import {
+  CloudSession,
+  looksLikeBusyCollision,
+  type Outcome,
+} from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
 import {
   fetchMrDiscussions,
@@ -609,8 +613,12 @@ interface LiveIssue {
    * 幂等。 */
   warmupActive?: boolean;
   /** 重启续跑的待递话:恢复路径把会话重新入队时放上平台通知,泵点火
-   * 时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
+   *  时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
   resumeMessage?: string;
+  /** turning 占位的代币(issue-20):settle 的催办/补发延续接棒时领取
+   *  新号,外层回合收口见号易主即让位——互斥位与并发额度因此横跨整条
+   *  延续链,而不是在催办一开始就裸奔。 */
+  turnToken?: number;
 }
 
 export interface IssueMessage {
@@ -771,6 +779,9 @@ export class IssueFlowService {
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
+  /** 回合代币发放器:每次点火/接棒发新号,收口方凭号判断自己还是不是
+   *  槽位主人。纯内存计数,进程内唯一即可。 */
+  private turnSeq = 0;
   private recoveryStarted = false;
   private shuttingDown = false;
   /** 证据重试窗的在途定时器(键=会话 id+仓地址,票 82):一仓一表,
@@ -1482,18 +1493,44 @@ export class IssueFlowService {
    * 作答/闸门裁决/续聊/平台通知)只保留差异部分:开场词、续聊词、
    * 作答重放。入口冲突判守(409 打回/挂便签/排队跳过)留在调用点:
    * 出路语义各不相同,收进来反而要改行为。settle 里的催办/补发续跑
-   * 不走这里——那是同一回合的延续,turning 还握着,预算也不清。 */
+   * 走 beginContinuationTurn——同一回合的延续,预算不清,turning 由
+   * 代币接棒跨回合持有(2026-09-09,issue-20 复盘)。 */
   private beginTurn(live: LiveIssue, body: () => Promise<Outcome>): void {
     if (this.shuttingDown) return;
     const epoch = live.controlEpoch;
+    const token = ++this.turnSeq;
+    live.turnToken = token;
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
     saveState(live.root, live.state);
-    void this.runTurn(live, body, epoch).finally(() => {
-      this.turning.delete(live.id);
-      void this.pump();
-    });
+    void this.runTurn(live, body, epoch).finally(() =>
+      this.endTurnSlot(live, token));
+  }
+
+  /** 回合槽位收口:代币仍在本棒手里才释放 turning 并再泵;延续回合
+   *  已接棒(号易主)就让位。互斥位与并发额度因此横跨整条延续链——
+   *  过去外层收口把占位提前删掉,催办期间忙时守卫全盲,平台通知撞进
+   *  忙会话反把整单标 failed(issue-20 实锤)。 */
+  private endTurnSlot(live: LiveIssue, token: number): void {
+    if (live.turnToken !== token) return;
+    this.turning.delete(live.id);
+    void this.pump();
+  }
+
+  /** settle 里的催办/补发续跑入口:同一回合的延续——不重置催办预算、
+   *  不改 status(调用方已置 running 并落盘),但必须接棒 turning 占位,
+   *  让 startPlatformTurn/answer/control 的忙时守卫看得见它。 */
+  private beginContinuationTurn(
+    live: LiveIssue,
+    body: () => Promise<Outcome>,
+  ): void {
+    const epoch = live.controlEpoch;
+    const token = ++this.turnSeq;
+    live.turnToken = token;
+    this.turning.add(live.id);
+    void this.runTurn(live, body, epoch).finally(() =>
+      this.endTurnSlot(live, token));
   }
 
   /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
@@ -1515,7 +1552,7 @@ export class IssueFlowService {
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
       this.environmentCredentials(live),
-      { tier: this.tierOf(live), workspace: live.root }));
+      { tier: this.tierOf(live) }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
@@ -1540,7 +1577,7 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(issueFixedOpeningPrompt(live.state,
           this.environmentCredentials(live),
-          { tier: this.tierOf(live), workspace: live.root }));
+          { tier: this.tierOf(live) }));
       });
     }
   }
@@ -1704,46 +1741,73 @@ export class IssueFlowService {
         state.last_reply = live.driver?.finalReply() ?? state.last_reply;
       } else {
         // 撞在回合间隙的插话可能没送进模型——收口前补发一次。
-        const late = live.driver?.takeUndeliveredSteers() ?? [];
-        if (late.length) {
+        const driver = live.driver;
+        const late = driver?.takeUndeliveredSteers() ?? [];
+        if (driver && late.length) {
           this.log(`[issue-flow] ${live.id} 补发未送达插话 ${late.length} 条`);
           live.state.status = "running";
           saveState(live.root, live.state);
-          void this.runTurn(live, async () =>
-            live.driver!.continueWith(late.join("\n\n")), live.controlEpoch);
+          // 现场引用收进闭包:settle 到延续体之间没有空档,driver 不可能
+          // 易主;若真被停(取消/关停),abort 会让它如实失败交 epoch 守卫。
+          this.beginContinuationTurn(live, () =>
+            driver.continueWith(late.join("\n\n")));
           return;
         }
         // 催办续跑(2026-08-28 拍板 A):模型提前收嘴不等于阶段完成,
         // 阶段真相在平台——没走到出口就把阶段简报砸回去推它继续,
         // 预算内自动续跑,耗尽才落 idle 交还人工。需求流同款机制的移植。
-        if (shouldNudgeFixed(state)) {
+        // driver 缺席(现场刚被停)时催办无从谈起,直接落 idle:
+        // 过去这里靠 ! 断言硬闯,releaseDriver 后就是 undefined 崩溃
+        // (issue-20 实锤)。
+        if (driver && shouldNudgeFixed(state)) {
           state.nudges = (state.nudges ?? 0) + 1;
-          if (state.nudges <= NUDGE_BUDGET) {
+          const nudge = state.nudges;
+          if (nudge <= NUDGE_BUDGET) {
             this.log(`[issue-flow] ${live.id} 模型提前收嘴,`
-              + `第 ${state.nudges}/${NUDGE_BUDGET} 次催办续跑(阶段 ${state.stage})`);
+              + `第 ${nudge}/${NUDGE_BUDGET} 次催办续跑(阶段 ${state.stage})`);
             state.status = "running";
             saveState(live.root, live.state);
-            void this.runTurn(live, async () => {
+            this.beginContinuationTurn(live, async () => {
               await this.ensureContainer(live);
-              return live.driver!.continueWith(
-                fixedNudgeNotice(state, state.nudges!, NUDGE_BUDGET));
-            }, live.controlEpoch);
+              // ensureContainer 的空档里现场可能被停/清(取消、关停),
+              // 如实放弃本拍催办:交给 epoch 守卫或 idle 收口,不拿
+              // 断言硬闯(issue-20 的崩溃点就在这一行)。
+              const liveDriver = live.driver;
+              if (!liveDriver) return { status: "turn_finished" };
+              return liveDriver.continueWith(
+                fixedNudgeNotice(state, nudge, NUDGE_BUDGET));
+            });
             return;
           }
           state.status = "idle";
           state.stage_note = `模型连续 ${NUDGE_BUDGET} 次提前收嘴,已停机`
             + "——发送「继续」或补充指示,平台才会再推进";
-          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+          state.last_reply = driver.finalReply() ?? state.last_reply;
           this.log(`[issue-flow] ${live.id} 催办预算耗尽,转人工(阶段 ${state.stage})`);
         } else {
+          if (!driver && shouldNudgeFixed(state)) {
+            this.log(`[issue-flow] ${live.id} 想催办但现场已不在,直接交还人工`);
+          }
           state.status = "idle";
-          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+          state.last_reply = driver?.finalReply() ?? state.last_reply;
         }
       }
     } else {
-      state.status = "failed";
-      state.error = outcome.detail ?? outcome.reason ?? "会话异常结束";
-      this.releaseDriver(live);
+      const detail = outcome.detail ?? outcome.reason ?? "会话异常结束";
+      if (outcome.status === "session_ended"
+          && looksLikeBusyCollision(detail)) {
+        // 忙撞(issue-20 复盘):消息没递进忙会话,但会话现场毫发无伤。
+        // 标 failed + 释放 driver 会把一条健康会话陪葬——留话待补投。
+        state.status = "idle";
+        state.stage_note =
+          "平台消息与进行中的回合相撞,未能送达——发送「继续」即可补投";
+        this.log(`[issue-flow] ${live.id} 消息撞上忙会话被拒,`
+          + `留话待补投(不标失败): ${detail}`);
+      } else {
+        state.status = "failed";
+        state.error = detail;
+        this.releaseDriver(live);
+      }
     }
     saveState(live.root, live.state);
     // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
@@ -2628,10 +2692,10 @@ export class IssueFlowService {
       // 业务知识资产定格(ADR-0012):进 analyze 时按绑定模块定格资产
       // 库知识并落台账;不分介入档,缺席静默(见 freezeBusinessKnowledge)。
       freezeBusinessKnowledge: () => this.freezeBusinessKnowledge(live),
-      // 业务知识地图(ADR-0012):analyze 回执注入段——台账资产 + 仓内
-      // docs/ 现扫,两源皆空为空串。
+      // 业务知识地图(ADR-0012 单源化,ADR-0021):analyze 回执注入段
+      // ——只剩台账资产;仓内 docs/ 由 AGENTS.md 标准句声明,不再现扫。
       businessKnowledgeBrief: () =>
-        businessKnowledgeLines(live.state, live.root).join("\n"),
+        businessKnowledgeLines(live.state).join("\n"),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
@@ -2789,7 +2853,7 @@ export class IssueFlowService {
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
         this.environmentCredentials(live),
-        { tier: this.tierOf(live), workspace: live.root }));
+        { tier: this.tierOf(live) }));
     });
     return summarize(live.state);
   }
@@ -4738,17 +4802,33 @@ export class IssueFlowService {
       : {};
   }
 
-  /** 平台侧开回合(闸门裁决/流水线结果的交接词)。会话正忙(等用户/
-   * 运行中/终态)时不抢方向盘:通知挂到 stage_note,续聊提示词会带上。 */
+  /** 平台侧开回合(闸门裁决/流水线结果的交接词)。空闲照常点火;会话
+   *  在跑回合时不抢方向盘,但也不干等:能 steer 就把话递进正在跑的
+   *  回合(2026-09-09 改,issue-20 复盘——过去忙时一概挂便签,守卫又
+   *  看不见催办延续,通知直接撞进忙会话炸掉整单),收口前没送达的由
+   *  settle 的补发分支接力;现场不在(排队窗口)或等人/终态才落
+   *  stage_note 等续聊带上。 */
   private startPlatformTurn(live: LiveIssue, message: string): void {
     const { state } = live;
+    if (this.turning.has(live.id) && live.driver
+        && !isTerminal(state.status) && state.status !== "waiting_user") {
+      // steer 只入队不抛错;旁路 fail-open,递不进去就退回挂便签。
+      void live.driver.steer(message)
+        .catch(() => this.parkPlatformNotice(live, message));
+      return;
+    }
     if (isTerminal(state.status) || this.turning.has(live.id)
         || state.status === "waiting_user") {
-      state.stage_note = message.split("\n")[0].slice(0, 120);
-      saveState(live.root, state);
+      this.parkPlatformNotice(live, message);
       return;
     }
     this.continueTurn(live, message);
+  }
+
+  /** 平台通知的落便签口:不抢回合,首行进 stage_note,续聊提示词带上。 */
+  private parkPlatformNotice(live: LiveIssue, message: string): void {
+    live.state.stage_note = message.split("\n")[0].slice(0, 120);
+    saveState(live.root, live.state);
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
