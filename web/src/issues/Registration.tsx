@@ -258,18 +258,15 @@ function ManualRegister({
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
   const [moduleLoadError, setModuleLoadError] = useState("");
   const [moduleLoadAttempt, setModuleLoadAttempt] = useState(0);
-  // 网管环境常开必填(不再折叠):环境形态(虚拟化/容器化)/单个 IP/
-  // 页面账号(预填 admin 可改)/页面密码/网管后台密码。两个密码不进草稿。
-  const [envType, setEnvType] = useState<"" | "virtualized" | "k8s">("");
-  const [envHosts, setEnvHosts] = useState("");
+  // 网管环境(2026-09-10 走查裁定「只选不手填」):唯一作答面是台账
+  // 快选(EnvironmentPicker 可搜索下拉,搜不到弹框新建并自动选中),
+  // 后台密码用台账已存值(前端永远拿不到);页面凭据不入台账,仍逐单
+  // 手填(页面账号预填 admin 可改)。两个密码不进草稿。
   const [envPageAccount, setEnvPageAccount] = useState("admin");
   const [envPagePassword, setEnvPagePassword] = useState("");
-  const [envBackendPassword, setEnvBackendPassword] = useState("");
-  // 从环境管理选(#150,ADR-0020):选中台账条目后 IP/形态回填供人确认,
-  // 后台密码用台账已存值(前端永远拿不到),提交只带 environment_id——
-  // 服务端以选定时点的台账值快照进会话。改 IP/形态即回退全手填。
+  // 从环境管理选(#150,ADR-0020):选中即定,提交只带 environment_id——
+  // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
-  const [envPickerOpen, setEnvPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
@@ -292,8 +289,8 @@ function ManualRegister({
       });
     return () => { alive = false; };
   }, [moduleLoadAttempt]);
-  // 草稿纪律(spec #15):只存 标题/现象/模块/hosts/页面账号;两个密码
-  // 绝不进 localStorage——刷新或换机后密码框为空,共机不残留凭据。
+  // 草稿纪律(spec #15):只存 标题/现象/模块/页面账号;两个密码绝不进
+  // localStorage——刷新或换机后密码框为空,共机不残留凭据。
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
@@ -301,7 +298,6 @@ function ManualRegister({
         setTitle(saved.title ?? "");
         setDescription(saved.description ?? "");
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
-        setEnvHosts(typeof saved.hosts === "string" ? saved.hosts : "");
         if (saved.pageAccount) setEnvPageAccount(String(saved.pageAccount));
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
@@ -310,13 +306,12 @@ function ManualRegister({
     const timer = window.setTimeout(() => {
       try {
         localStorage.setItem(draftKey, JSON.stringify({
-          title, description, moduleId,
-          hosts: envHosts, pageAccount: envPageAccount,
+          title, description, moduleId, pageAccount: envPageAccount,
         }));
       } catch { /* 同上 */ }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draftKey, title, description, moduleId, envHosts, envPageAccount]);
+  }, [draftKey, title, description, moduleId, envPageAccount]);
 
   // 现象描述内嵌截图:粘贴/拖拽图片 → 上传落 staging → 在光标处插入
   // ![截图](issue-images/<hash>.<ext>) 引用。图片本体不进 description,
@@ -415,19 +410,14 @@ function ManualRegister({
   const submitDisabled = busy || credentialBlocked
     || moduleCatalog.length === 0 || !selectedModule;
 
-  // 从环境管理选(#150):选中即回填非密字段(IP/形态)供人确认;
-  // 改 IP 或形态视为要手填,台账选择当场清除(回退全手填,后台密码
-  // 恢复必填)。
+  // 从环境管理选(#150):选中即定,不再有手填回退——IP 即名字,
+  // 搜不到走选择器内置的「新增环境」弹框(录完自动选中)。
   function pickEnv(entry: EnvironmentView) {
     setPickedEnv(entry);
-    setEnvHosts(entry.ip);
-    setEnvType(entry.form);
-    setEnvPickerOpen(false);
   }
 
   function clearPickedEnv() {
     setPickedEnv(null);
-    setEnvPickerOpen(false);
   }
 
   async function submit(event: React.FormEvent) {
@@ -441,21 +431,9 @@ function ManualRegister({
       onError("现象描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
-    const host = envHosts.trim();
     if (!pickedEnv) {
-      // 全手填路(原契约原样):环境侧字段逐一必填。
-      if (!host) {
-        onError("网管环境IP必填");
-        return;
-      }
-      if (/[\s,，、]/.test(host)) {
-        onError("网管环境IP一次只填一个，请不要输入逗号、空格或换行");
-        return;
-      }
-      if (!envType) {
-        onError("环境形态必选——按现场实际选虚拟化或容器化(K8s),AI 按它决定日志抓取方式");
-        return;
-      }
+      onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
+      return;
     }
     if (!envPageAccount.trim()) {
       onError("页面账号必填——默认 admin 可改,请填写网管页面登录名");
@@ -465,10 +443,6 @@ function ManualRegister({
       onError("页面密码必填");
       return;
     }
-    if (!pickedEnv && !envBackendPassword.trim()) {
-      onError("网管后台密码必填");
-      return;
-    }
     setBusy(true);
     try {
       const created = await createIssue({
@@ -476,25 +450,16 @@ function ManualRegister({
         description: description.trim(),
         module_id: moduleId,
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码);
-        // 页面凭据不入台账,仍手填随行。手填路保持原 wire。
-        environment: pickedEnv
-          ? {
-            environment_id: pickedEnv.id,
-            page_account: envPageAccount.trim(),
-            page_password: envPagePassword,
-          }
-          : {
-            hosts: [host],
-            env_type: envType as "virtualized" | "k8s",
-            page_account: envPageAccount.trim(),
-            page_password: envPagePassword,
-            backend_password: envBackendPassword,
-          },
+        // 页面凭据不入台账,仍手填随行。
+        environment: {
+          environment_id: pickedEnv.id,
+          page_account: envPageAccount.trim(),
+          page_password: envPagePassword,
+        },
       });
       setTitle(""); setDescription(""); setModuleId("");
-      setEnvHosts(""); setEnvType("");
       setEnvPageAccount("admin");
-      setEnvPagePassword(""); setEnvBackendPassword("");
+      setEnvPagePassword("");
       clearPickedEnv();
       onCreated(created);
     } catch (reason) {
@@ -576,47 +541,18 @@ function ManualRegister({
     <div className="issue-group wide">
       <span className="issue-group-title">网管环境</span>
       <div className="issue-group-body">
-        {/* 从环境管理选(#150,ADR-0020):新 UI 一律 Tailwind(#146)。
-            展开共用选择器(EnvironmentPicker)挑一条;选中后 IP/形态回填
-            供人确认,后台密码用台账已存值(前端拿不到,不必填)。 */}
-        <div className="col-span-full flex flex-col gap-2">
-          <button type="button"
-            className="self-start rounded-md border border-line px-2.5 py-1.5 text-xs text-muted-foreground hover:border-line-strong hover:text-foreground"
-            aria-expanded={envPickerOpen}
-            onClick={() => setEnvPickerOpen((open) => !open)}>
-            {envPickerOpen ? "收起环境列表" : "从环境管理选"}
-          </button>
-          {envPickerOpen && <EnvironmentPicker
-            selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />}
-          {pickedEnv && <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" role="status">
-            <span className="font-mono">来自环境管理 {pickedEnv.ip}</span>
-            <span>· 端口 {pickedEnv.port} · 提交后将使用台账中该环境的已存密码</span>
-            <button type="button"
-              className="rounded-md border border-line px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
-              onClick={clearPickedEnv}>清除,改用手动填写</button>
-          </p>}
+        {/* 从环境管理选(#150,ADR-0020;2026-09-10 走查裁定「只选不
+            手填」):可搜索下拉挑台账条目,搜不到点「新增环境」弹共用
+            表单、录完自动选中;后台密码用台账已存值(前端拿不到),
+            页面凭据不入台账,仍逐单手填。 */}
+        <div className="col-span-full">
+          <EnvironmentPicker
+            selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />
         </div>
-        <label className="issue-field">
-          <span>环境形态 <i className="req">*</i></span>
-          <select value={envType} required
-            onChange={(event) => {
-              setPickedEnv(null);
-              setEnvType(event.target.value as "" | "virtualized" | "k8s");
-            }}>
-            <option value="" disabled>请选择</option>
-            <option value="virtualized">虚拟化</option>
-            <option value="k8s">容器化(K8s)</option>
-          </select>
-        </label>
-        <label className="issue-field">
-          <span>网管环境IP <i className="req">*</i></span>
-          <input value={envHosts} spellCheck={false}
-            placeholder="60.14.46.16"
-            onChange={(event) => {
-              setPickedEnv(null);
-              setEnvHosts(event.target.value);
-            }} />
-        </label>
+        {pickedEnv && <small className="issue-group-note col-span-full" role="status">
+          将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
+          (以选定时为准),无需在此填写。
+        </small>}
         <label className="issue-field">
           <span>页面账号 <i className="req">*</i></span>
           <input value={envPageAccount} placeholder="admin" required
@@ -627,19 +563,6 @@ function ManualRegister({
           <PasswordCombo name="页面密码" value={envPagePassword}
             onChange={setEnvPagePassword} />
         </div>
-        {pickedEnv
-          ? <div className="issue-field">
-            <span>网管后台密码 <i className="req">*</i></span>
-            <small className="issue-group-note" role="status">
-              将使用台账中该环境的已存密码(选定时点快照),无需在此填写;
-              改动 IP 或形态即回退手动填写。
-            </small>
-          </div>
-          : <div className="issue-field">
-            <span>网管后台密码 <i className="req">*</i></span>
-            <PasswordCombo name="网管后台密码" value={envBackendPassword}
-              onChange={setEnvBackendPassword} />
-          </div>}
         <small className="issue-group-note issue-privacy-note">
           口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
           但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。

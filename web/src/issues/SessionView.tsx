@@ -27,6 +27,7 @@ import {
   fixedStageList,
   getIssue,
   getIssueTimeline,
+  issueMergeStatus,
   issueStageText,
   replyIssue,
   resumeIssueTakeover,
@@ -240,9 +241,27 @@ export function IssueSessionView({
     }
   }
   async function archive() {
+    let message = "归档后会话收口不可续聊，凭据将清理。";
+    // 合入事实摆明(ADR-0022):有 MR 的会话先现扫一次平台事实,结论
+    // 按合入记账——全合入=已交付,未全合=已推送未合入。平台暂不可得
+    // 不堵归档(软闸),用通用文案;服务端归档时仍会核对。
+    if (detail.mrs?.length) {
+      try {
+        const status = await issueMergeStatus(detail.id);
+        const lines = status.mrs.map((mr) => {
+          const name = mr.repo.split("/").pop() || mr.repo;
+          return mr.state === "merged"
+            ? `✓ 已合入 ${name}${mr.merged_sha ? `（${mr.merged_sha.slice(0, 8)}）` : ""}`
+            : mr.state === "closed"
+              ? `✗ 被关闭 ${name}——可续聊返工，或直接归档`
+              : `… 合入中 ${name}`;
+        });
+        message = `归档后会话收口不可续聊，凭据将清理。\n逐仓 MR 合入状态：\n${lines.join("\n")}\n结论将记为：${status.all_merged ? "已交付（全部 MR 已合入）" : "已修复（推送/建 MR 未全部合入）"}`;
+      } catch { /* 平台暂不可得:软闸不堵,交服务端归档时核对 */ }
+    }
     if (!await confirmDialog({
       title: "归档会话",
-      message: "归档后会话收口不可续聊，凭据将清理。",
+      message,
       confirmLabel: "归档",
     })) return;
     void perform(() => controlIssue(detail.id, { action: "archive" }));

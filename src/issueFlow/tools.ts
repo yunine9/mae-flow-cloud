@@ -762,7 +762,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       const mrs = state.mrs ??= [];
       const record = {
-        repo: repo.url, branch: pushRecord.branch, title,
+        repo: repo.url, branch: pushRecord.branch, target,
+        title,
         url: receipt.url,
         ...(receipt.id !== undefined ? { iid: String(receipt.id) } : {}),
         at: new Date().toISOString(),

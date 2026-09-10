@@ -131,10 +131,18 @@ export interface IssueMrRecord {
   /** MR 所属仓(地址);多仓会话一仓一 MR,各记各的。 */
   repo: string;
   branch: string;
+  /** 目标分支(create_mr 申报,缺省 master):合入事实核对要成对分支。 */
+  target?: string;
   title: string;
   url?: string;
   iid?: string;
   at: string;
+  /** 合入事实(ADR-0022,监听轮询向平台读取):时刻为首次观测,
+   * 不冒充平台动作时间;merged_sha 照平台返回记,不要求与验绿 SHA
+   * 相同——合入的是 merge/squash 产物。 */
+  merged_at?: string;
+  merged_sha?: string;
+  closed_at?: string;
 }
 
 export interface IssuePushRecord {
@@ -411,8 +419,13 @@ export interface IssueSessionState {
   conclusion?: IssueConclusion;
   /** 推送账(按仓,一仓一分支):只增不删,重推同分支覆盖同仓旧账。 */
   pushes?: IssuePushRecord[];
-  /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录。 */
+  /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录;
+   *  merged_at/merged_sha/closed_at 是合入事实(ADR-0022)。 */
   mrs?: IssueMrRecord[];
+  /** 合入事实通知账(ADR-0022):全合入/被关闭的通知各只发一次,
+   *  重启不重发;重开返工不重置——note 是事实陈述不是状态。 */
+  merge_noted?: boolean;
+  mr_closed_noted?: boolean;
   /** MR 验绿门的申报账(受理路):complete_stage 申报时流水线在跑则
    * 记账停等,监看器全绿后凭它在场放行(见 IssueMrGateRecord)。 */
   mr_gate?: IssueMrGateRecord;
@@ -517,7 +530,9 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // 读 build-notes,前端不需要渲染它。
   const { mr_gate: _gate, push_token: _pushToken,
     push_review_head: _pushReviewHead, env_declined: _envDeclined,
-    warmup: _warmup, ...rest } = state;
+    warmup: _warmup,
+    merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
+    ...rest } = state;
   return {
     ...rest,
     // takeover(人工接管标记)与上面的机制账不同:它要上 wire——头部

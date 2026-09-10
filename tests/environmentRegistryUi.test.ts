@@ -16,6 +16,9 @@ import test from "node:test";
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
 const page = readFileSync(resolve("web/src/EnvironmentRegistry.tsx"), "utf-8");
+// 新增/编辑弹层 2026-09-10 抽成共用件(台账页签与环境快选的「找不到就
+// 新建」共用),表单侧锚点随组件走。
+const editor = readFileSync(resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 
 test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admin 专属系统管理)", () => {
   const nav = app.slice(app.indexOf('aria-label="视图切换"'), app.indexOf("</nav>"));
@@ -71,30 +74,30 @@ test("环境管理:列表列锚点(主 IP/形态/端口/标签/状态/更新人/
 });
 
 test("环境管理:表单字段锚点(形态下拉、root 密码 placeholder、标签回车成签)", () => {
-  assert.match(page, /虚拟化\(经网管节点\)/);
-  assert.match(page, /<SelectItem value="k8s">容器化\(经 OM 节点\)<\/SelectItem>/);
+  assert.match(editor, /虚拟化\(经网管节点\)/);
+  assert.match(editor, /<SelectItem value="k8s">容器化\(经 OM 节点\)<\/SelectItem>/);
   // root 密码:placeholder 引导"留空时与后台密码相同"(数据层恒有有效值)。
-  assert.match(page,
+  assert.match(editor,
     /root 密码\(可选\)[\s\S]*?placeholder="留空时与后台密码相同"/);
   // 标签:自由输入,回车成标签;输入法组词中的回车不算提交。
-  assert.match(page, /function commitTagDraft\(event: KeyboardEvent<HTMLInputElement>\)/);
-  assert.match(page, /if \(event\.key !== "Enter" \|\| event\.nativeEvent\.isComposing\) return;/);
+  assert.match(editor, /function commitTagDraft\(event: KeyboardEvent<HTMLInputElement>\)/);
+  assert.match(editor, /if \(event\.key !== "Enter" \|\| event\.nativeEvent\.isComposing\) return;/);
 });
 
 test("环境管理:密码永不回显——编辑显示已配置占位,留空=不变(不进 payload)", () => {
   // 编辑态占位:只说"已配置",值永远不回填进表单。
-  assert.match(page, /placeholder=\{existing \? "已配置——留空表示不变" : "[^"]*"\}/);
-  assert.match(page, /后台密码[\s\S]*?type="password"/);
+  assert.match(editor, /placeholder=\{existing \? "已配置——留空表示不变" : "[^"]*"\}/);
+  assert.match(editor, /后台密码[\s\S]*?type="password"/);
   // 留空 = 不变的 wire 语义:空串根本不进 PUT payload(缺席,而非空串)。
-  assert.match(page,
+  assert.match(editor,
     /\.\.\.\(backendPassword \? \{ backend_password: backendPassword \} : \{\}\)/);
-  assert.match(page, /type="password"[\s\S]*?autoComplete="new-password"/);
+  assert.match(editor, /type="password"[\s\S]*?autoComplete="new-password"/);
   // api 镜像:patch 类型明确"缺席 = 不变"的可选形状。
   assert.match(api, /backend_password\?: string;/);
   assert.match(api, /root_password\?: string \| null;/);
   // 清显式 root 密码回落继承:PUT 送 null(缺席 = 不变,null = 清除)。
-  assert.match(page, /\.\.\.\(clearRoot \? \{ root_password: null \}/);
-  assert.match(page, /清除并回落继承/);
+  assert.match(editor, /\.\.\.\(clearRoot \? \{ root_password: null \}/);
+  assert.match(editor, /清除并回落继承/);
 });
 
 test("环境管理:视图零密码字段——机密只出两个非密布尔", () => {
@@ -109,10 +112,10 @@ test("环境管理:视图零密码字段——机密只出两个非密布尔", (
 });
 
 test("环境管理:IP 撞车 409 在表单内报「该 IP 已存在于台账」并引导编辑既有条目", () => {
-  assert.match(page, /该 IP 已存在于台账/);
-  assert.match(page, /编辑既有条目\(\{conflict\.ip\}\)/);
-  assert.match(page, /cause instanceof EnvironmentIpConflictError/);
-  assert.match(page,
+  assert.match(editor, /该 IP 已经登记过/);
+  assert.match(editor, /编辑既有条目\(\{conflict\.ip\}\)/);
+  assert.match(editor, /cause instanceof EnvironmentIpConflictError/);
+  assert.match(editor,
     /environments\.find\(\(entry\) => entry\.id === cause\.existingId\)/);
   // api:409 带 existing_id,映射成带既有条目 id 的类型化错误。
   assert.match(api, /export class EnvironmentIpConflictError extends Error/);
@@ -127,7 +130,7 @@ test("环境管理:删除走全站 confirmDialog 二次确认,并交代快照不
   assert.match(removal, /await confirmDialog\(\{/);
   assert.match(removal, /danger: true/);
   assert.match(removal, /删除环境 \$\{entry\.ip\}/);
-  assert.match(removal, /快照/);
+  assert.match(removal, /正在进行的问题不受影响/);
   assert.match(removal, /await deleteEnvironment\(entry\.id\);/);
 });
 
@@ -145,18 +148,24 @@ test("环境管理:空态引导(还没有环境,点新增录入第一个)", () =
     page.indexOf("<Table "));
   assert.match(empty, /还没有环境/);
   assert.match(empty, /新增环境/);
-  assert.match(empty, /录入第一个网管环境/);
+  assert.match(empty, /录入第一台网管环境/);
 });
 
 test("环境管理:数据加载沿视图自取惯例——挂载拉取,增改删后刷新台账", () => {
   assert.match(page, /useEffect\(\(\) => \{ void refreshEnvironments\(\); \}, \[\]\);/);
   assert.match(page, /setEnvironments\(await listEnvironments\(\)\);/);
   assert.match(page, /onSaved=\{\(\) => \{[\s\S]*?refreshEnvironments\(\)/);
-  // 四个 API 函数都从 api.ts 取(api.ts 里存在类型化函数,形状由服务端测试兜底)。
+  // 四个 API 函数都从 api.ts 取(api.ts 里存在类型化函数,形状由服务端测试兜底);
+  // 增改在共用弹框里,页签只管列/删与刷新。
   for (const name of ["listEnvironments", "createEnvironment", "updateEnvironment", "deleteEnvironment"]) {
     assert.match(api, new RegExp(`export async function ${name}\\(`),
       `api.ts 缺少 ${name}`);
+  }
+  for (const name of ["listEnvironments", "deleteEnvironment"]) {
     assert.match(page, new RegExp(`\\b${name}\\(`), `页面未使用 ${name}`);
+  }
+  for (const name of ["createEnvironment", "updateEnvironment", "probeEnvironment", "testEnvironmentConnection"]) {
+    assert.match(editor, new RegExp(`\\b${name}\\(`), `弹框未使用 ${name}`);
   }
 });
 
@@ -177,25 +186,25 @@ test("环境管理:状态列三态点亮——正常绿/异常红/未验证中�
 });
 
 test("环境管理:异常原因二分文案(认证失败/不可达)与最近探活时间", () => {
-  assert.match(page, /auth: "认证失败",/);
-  assert.match(page, /unreachable: "不可达",/);
+  assert.match(editor, /auth: "认证失败",/);
+  assert.match(editor, /unreachable: "不可达",/);
   // 异常条目才展示原因;探过的条目附最近探活时间(相对时间,项目现成工具)。
   assert.match(page, /probe\.state === "failed" && probe\.reason/);
   assert.match(page, /relativeTime\(probe\.at\)/);
 });
 
 test("环境管理:弹层「测试连接」调用分野——新增态 /test(表单值+密码已填),编辑态 /:id/probe", () => {
-  assert.match(page, /async function runTestConnection\(\)/);
-  assert.match(page, /探测中…/, "缺少探测中 loading 态");
+  assert.match(editor, /async function runTestConnection\(\)/);
+  assert.match(editor, /探测中…/, "缺少探测中 loading 态");
   // 新增态:用表单当前值走 /environments/test,后台密码未填当场拦下。
-  assert.match(page, /testEnvironmentConnection\(\{/);
-  assert.match(page, /ip: ip\.trim\(\),/);
-  assert.match(page, /backend_password: backendPassword,/);
-  assert.match(page, /setTestError\("后台密码不能为空"\)/);
+  assert.match(editor, /testEnvironmentConnection\(\{/);
+  assert.match(editor, /ip: ip\.trim\(\),/);
+  assert.match(editor, /backend_password: backendPassword,/);
+  assert.match(editor, /setTestError\("后台密码不能为空"\)/);
   // 编辑态:前端无密码,直接对已存条目探活(/:id/probe,结论持久化,
   // 状态列随 onProbed 就地刷新)。
-  assert.match(page, /probeEnvironment\(existing\.id\)/);
-  assert.match(page, /onProbed\(updated\)/);
+  assert.match(editor, /probeEnvironment\(existing\.id\)/);
+  assert.match(editor, /onProbed\?\.\(updated\)/);
   assert.match(page, /onProbed=\{applyProbeUpdate\}/);
   // api 接线:两个类型化函数与两条端点路径。
   assert.match(api, /export async function testEnvironmentConnection\(/);
@@ -206,12 +215,12 @@ test("环境管理:弹层「测试连接」调用分野——新增态 /test(表
 });
 
 test("环境管理:测试结果就地内联(连接正常/连接异常+原因),不关弹层", () => {
-  assert.match(page, /连接正常/);
-  assert.match(page, /连接异常:/);
+  assert.match(editor, /连接正常/);
+  assert.match(editor, /连接异常:/);
   // 结论内联展示在按钮旁,测试路径不触碰弹层关闭(onClose 只由取消/保存走)。
-  const handler = page.slice(
-    page.indexOf("async function runTestConnection"),
-    page.indexOf("return <Dialog"));
+  const handler = editor.slice(
+    editor.indexOf("async function runTestConnection"),
+    editor.indexOf("return <Dialog"));
   assert.ok(handler.length > 0, "缺少测试连接处理器");
   assert.doesNotMatch(handler, /onClose\(/);
 });
