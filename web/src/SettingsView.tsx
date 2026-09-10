@@ -110,6 +110,8 @@ function RuntimeCard({ view, onSaved }: {
   const text = (value?: number) => value === undefined ? "" : String(value);
   const [concurrent, setConcurrent] = useState(text(runtime.max_concurrent));
   const [issueTurns, setIssueTurns] = useState(text(runtime.issue_max_turns));
+  const [issueCompact, setIssueCompact] = useState(
+    text(runtime.issue_compact_every_events));
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
@@ -129,6 +131,7 @@ function RuntimeCard({ view, onSaved }: {
       onSaved(await putRuntimeSettings({
         max_concurrent: concurrent.trim(),
         issue_max_turns: issueTurns.trim(),
+        issue_compact_every_events: issueCompact.trim(),
         repair_rounds: repair.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
@@ -154,6 +157,11 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="问题单并发数" defaultText={`${defaults.issue_max_turns} 个`}
         note="同时推进的问题会话回合上限，改完即生效"
         value={issueTurns} onChange={setIssueTurns} />
+      <KnobField label="问题单压缩事件阈值"
+        defaultText={defaults.issue_compact_every_events === 0
+          ? "关闭" : `${defaults.issue_compact_every_events} 条`}
+        note="问题会话事件每累积该数量，续聊前压缩一次上下文；0 表示关闭（分析→修复边界仍会压缩）"
+        value={issueCompact} onChange={setIssueCompact} />
       <KnobField label="自动修复轮数上限"
         defaultText={defaults.repair_rounds === null ? "不限轮" : `${defaults.repair_rounds} 轮`}
         note="0 表示关闭自动修复；生效于下一次流水线失败"

@@ -17,6 +17,10 @@
 ## gate.analysis_confirm.confirm
 
 用户已确认问题分析报告,进入「{{stage}}」阶段,按已确认的方案实施修复。{{supplement}}
+修复以落盘报告为权威(上下文可能已压缩,过程性排查细节以报告为准):
+报告: {{report_path}}
+修改方案要点:
+{{plan}}
 
 ## gate.analysis_confirm.supplement
 
