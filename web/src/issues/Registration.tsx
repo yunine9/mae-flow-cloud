@@ -7,7 +7,16 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  * DTS 文本/版本/候选纯函数在 dtsText.ts,单据 HTML 的图片代理重写与
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { ChevronRight } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -852,114 +861,163 @@ function DtsRegister({
         {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
         "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
       </div>}
-      <div className="issue-dts-list" role="table">
-        {display.length > 0 && <div className="issue-dts-row issue-dts-selectall">
-          <label className="issue-dts-selectall-main">
-            <input type="checkbox" checked={allDisplayedSelected}
-              ref={(node) => {
-                if (node) node.indeterminate =
-                  displayedSelectedCount > 0 && !allDisplayedSelected;
-              }}
-              onChange={toggleSelectAll} />
-            <span className="issue-dts-selectall-label">全选</span>
-            <span className="issue-dts-selectall-count">
-              已选 {displayedSelectedCount} / {displayedTickets.length} 张
-            </span>
-          </label>
-          {moduleCol && <span className="issue-dts-module-head">所属模块</span>}
-        </div>}
-        {display.length > 0
-          ? display.map((ticket) => {
-            const isRemote = remote.tickets.some((item) => item.ticket === ticket.ticket);
-            const isExpanded = expandedTicket === ticket.ticket;
-            const detail = detailCache[ticket.ticket];
-            const detailId = `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-            return <div key={ticket.ticket}
-              className={`issue-dts-row${selected.includes(ticket.ticket) ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
-              <div className="issue-dts-row-control">
-                {/* 单号在勾选 label 之外:拖选复制单号不会误勾选——单号
-                    是绑单/推送分支名的关键操作对象,复制是高频动作。 */}
-                <span className="issue-dts-identity">
-                  <span className="issue-dts-ticket">{ticket.ticket}</span>
-                  {isRemote && <span className="issue-dts-remote">远程</span>}
-                </span>
-                <label className="issue-dts-row-main">
-                  <input type="checkbox" checked={selected.includes(ticket.ticket)}
-                    onChange={(event) => setSelected((current) => event.target.checked
-                      ? [...current, ticket.ticket]
-                      : current.filter((item) => item !== ticket.ticket))} />
-                  <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
-                  {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
-                </label>
-                <button type="button" className="issue-dts-expand"
-                  aria-expanded={isExpanded}
-                  aria-controls={detailId}
-                  aria-label={`${isExpanded ? "收起" : "展开"} ${ticket.ticket} 详情`}
-                  onClick={() => void toggleExpand(ticket.ticket)}>
-                  <svg viewBox="0 0 16 16" aria-hidden className={isExpanded ? "open" : undefined}>
-                    <path d="m6 4 4 4-4 4" />
-                  </svg>
-                </button>
-              </div>
-              {moduleCol && <div className="issue-dts-module-cell">
-                <select
-                  value={bindings[ticket.ticket]?.module_id ?? ""}
-                  disabled={bindingTicket === ticket.ticket}
-                  aria-label={`${ticket.ticket} 所属业务模块`}
-                  title="人工预绑这张单所属的业务模块;发起分析时直接带出,AI 不再识别"
-                  onChange={(event) =>
-                    void bindModule(ticket.ticket, event.target.value)}>
-                  <option value="">未选择(AI 运行时识别)</option>
-                  {moduleCatalog.map((module) => (
-                    <option key={module.id} value={module.id}>
-                      {module.name}
-                    </option>))}
-                </select>
-                {bindFail?.ticket === ticket.ticket
-                  && <span className="issue-dts-module-fail" role="alert">
-                    {bindFail.message}
-                  </span>}
-              </div>}
-              {isExpanded && <div id={detailId} className="issue-dts-detail">
-                {detailLoading && <span className="issue-dts-detail-loading">加载详情…</span>}
-                <dl className="issue-dts-detail-fields">
-                  <div>
-                    <dt>问题级别</dt>
-                    <dd>{detail?.severity || ticket.severity || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>问题版本</dt>
-                    <dd>{detail?.version || ticket.version || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>问题链接</dt>
-                    <dd>{(detail?.url || ticket.url)
-                      ? <a href={detail?.url || ticket.url} target="_blank" rel="noreferrer">
-                          {detail?.url || ticket.url}
-                        </a>
-                      : "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>提单人</dt>
-                    <dd>{detail?.submitter || ticket.submitter || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>问题描述</dt>
-                    <dd className="issue-dts-detail-html"
-                      dangerouslySetInnerHTML={{
-                        __html: prepareDtsHtml(detail?.description || ticket.description)
-                          || "(暂无描述)",
-                      }}
-                    />
-                  </div>
-                </dl>
-              </div>}
-            </div>;
-          })
-          : remote.loading
+      {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
+          旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
+          在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
+      <div className="tw-root">
+        {display.length === 0
+          ? (remote.loading
             ? <p className="issue-dts-hint">远程查单中…</p>
-            : <p className="issue-dts-hint">没有匹配的问题单。</p>
-        }
+            : <p className="issue-dts-hint">没有匹配的问题单。</p>)
+          : <Table aria-label="名下问题单">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-28">
+                  <div className="flex items-center gap-2">
+                    <Checkbox aria-label="全选展示中的问题单"
+                      checked={displayedTickets.length > 0
+                        && allDisplayedSelected
+                        ? true
+                        : displayedSelectedCount > 0 ? "indeterminate" : false}
+                      onCheckedChange={() => toggleSelectAll()} />
+                    <span className="whitespace-nowrap text-xs font-normal
+                      text-muted-foreground">
+                      已选 {displayedSelectedCount} / {displayedTickets.length} 张
+                    </span>
+                  </div>
+                </TableHead>
+                <TableHead>单号</TableHead>
+                <TableHead>标题</TableHead>
+                <TableHead>状态</TableHead>
+                {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
+                <TableHead className="w-12" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {display.map((ticket) => {
+                const isRemote = remote.tickets.some((item) =>
+                  item.ticket === ticket.ticket);
+                const isExpanded = expandedTicket === ticket.ticket;
+                const detail = detailCache[ticket.ticket];
+                const detailId =
+                  `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
+                const colCount = moduleCol ? 6 : 5;
+                return <Fragment key={ticket.ticket}>
+                  <TableRow
+                    data-state={selected.includes(ticket.ticket)
+                      ? "selected" : undefined}>
+                    <TableCell>
+                      <Checkbox checked={selected.includes(ticket.ticket)}
+                        aria-label={`选择 ${ticket.ticket}`}
+                        onCheckedChange={(checked) => setSelected((current) =>
+                          checked
+                            ? [...current, ticket.ticket]
+                            : current.filter((item) => item !== ticket.ticket))} />
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {/* 单号独立成格(勾选在首格):拖选复制单号不会误
+                          勾选——单号是绑单/推送分支名的关键操作对象,
+                          复制是高频动作。 */}
+                      <span className="issue-dts-ticket font-mono text-sm
+                        font-medium text-primary">
+                        {ticket.ticket}
+                      </span>
+                      {isRemote && <Badge variant="outline" className="ml-1.5">
+                        远程
+                      </Badge>}
+                    </TableCell>
+                    <TableCell className="max-w-0">
+                      <span className="block truncate"
+                        title={ticket.title || undefined}>
+                        {ticket.title || "(无标题)"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {ticket.status
+                        && <Badge variant="secondary">{ticket.status}</Badge>}
+                    </TableCell>
+                    {moduleCol && <TableCell>
+                      <Select
+                        value={bindings[ticket.ticket]?.module_id ?? "__none"}
+                        disabled={bindingTicket === ticket.ticket}
+                        onValueChange={(value) =>
+                          void bindModule(ticket.ticket,
+                            value === "__none" ? "" : value)}>
+                        <SelectTrigger
+                          className="h-8 w-full text-xs"
+                          aria-label={`${ticket.ticket} 所属业务模块`}
+                          title="人工预绑这张单所属的业务模块;发起分析时直接带出,AI 不再识别">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="tw-root">
+                          <SelectItem value="__none">
+                            未选择(AI 运行时识别)
+                          </SelectItem>
+                          {moduleCatalog.map((module) => (
+                            <SelectItem key={module.id} value={module.id}>
+                              {module.name}
+                            </SelectItem>))}
+                        </SelectContent>
+                      </Select>
+                      {bindFail?.ticket === ticket.ticket
+                        && <p className="mt-1 text-xs text-destructive" role="alert">
+                          {bindFail.message}
+                        </p>}
+                    </TableCell>}
+                    <TableCell className="text-right">
+                      <button type="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={detailId}
+                        aria-label={`${isExpanded ? "收起" : "展开"} ${ticket.ticket} 详情`}
+                        onClick={() => void toggleExpand(ticket.ticket)}
+                        className="inline-flex size-9 items-center justify-center
+                          rounded-sm text-muted-foreground transition-colors
+                          hover:bg-accent hover:text-foreground">
+                        <ChevronRight aria-hidden
+                          className={`size-4 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                  {isExpanded && <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={colCount} className="bg-muted/30 p-0">
+                      <div id={detailId} className="px-10 py-3">
+                        {detailLoading
+                          && <span className="text-xs text-muted-foreground">
+                            加载详情…
+                          </span>}
+                        <dl className="grid grid-cols-[max-content_1fr]
+                          items-baseline gap-x-4 gap-y-1 text-sm">
+                          <dt className="text-muted-foreground">问题级别</dt>
+                          <dd>{detail?.severity || ticket.severity || "—"}</dd>
+                          <dt className="text-muted-foreground">问题版本</dt>
+                          <dd className="font-mono text-xs">
+                            {detail?.version || ticket.version || "—"}</dd>
+                          <dt className="text-muted-foreground">问题链接</dt>
+                          <dd>{(detail?.url || ticket.url)
+                            ? <a className="text-primary underline underline-offset-2"
+                                href={detail?.url || ticket.url}
+                                target="_blank" rel="noreferrer">
+                              {detail?.url || ticket.url}
+                            </a>
+                            : "—"}</dd>
+                          <dt className="text-muted-foreground">提单人</dt>
+                          <dd>{detail?.submitter || ticket.submitter || "—"}</dd>
+                          <dt className="text-muted-foreground">问题描述</dt>
+                          <dd className="issue-dts-detail-html"
+                            dangerouslySetInnerHTML={{
+                              __html: prepareDtsHtml(
+                                detail?.description || ticket.description)
+                                || "(暂无描述)",
+                            }}
+                          />
+                        </dl>
+                      </div>
+                    </TableCell>
+                  </TableRow>}
+                </Fragment>;
+              })}
+            </TableBody>
+          </Table>}
         <p className="issue-dts-hint">
           勾选要发起的问题单(可多选,每单一个独立工作流)。
         </p>

@@ -2648,23 +2648,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .issue-dts-version-option, .issue-dts-version-clear-all {
     min-height: 44px; padding: 10px 8px;
   }
-  .issue-dts-row .issue-dts-row-main {
-    grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px;
-  }
-  .issue-dts-row .issue-dts-row-main > input {
-    grid-column: 1; grid-row: 1 / span 2;
-  }
-  .issue-dts-row .issue-dts-title {
-    grid-column: 2; grid-row: 1; white-space: normal; overflow-wrap: anywhere;
-  }
-  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 2; }
 }
 .issue-dts-search-count.remote { color: var(--attention); }
-.issue-dts-remote {
-  padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
-  background: color-mix(in srgb, #3b83d5 12%, transparent); color: #3b83d5;
-  white-space: nowrap;
-}
 .issue-dts-search {
   display: flex; align-items: center; gap: 10px; margin-top: 10px;
 }
@@ -2678,83 +2663,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-search-count {
   color: var(--faint); font-size: var(--font-size-assist); white-space: nowrap;
 }
-.issue-dts-list { margin-top: 10px; display: grid; gap: 6px; }
-/* 全选表头行(三态复选框):作用于当前展示列表(搜索+版本过滤后),
-   计数右对齐,与单据行同框线视觉。 */
-.issue-dts-selectall-main {
-  display: flex; align-items: center; gap: 10px;
-  min-width: 0; padding: 8px 12px; cursor: pointer;
-}
-.issue-dts-selectall-label { color: var(--text-strong); font-weight: 600; }
-.issue-dts-selectall-count {
-  margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums;
-}
-.issue-dts-row {
-  display: grid; gap: 0;
-  padding: 0; border: 1px solid var(--line); border-radius: 9px;
-  background: var(--surface-muted); font-size: var(--font-size-assist);
-  overflow: hidden;
-}
-.issue-dts-row.on { border-color: var(--accent); }
-.issue-dts-row.expanded { border-color: var(--accent); }
-.issue-dts-row-control {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) 44px; align-items: stretch;
-}
-.issue-dts-row-main {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center; gap: 10px;
-  min-width: 0; padding: 8px 6px 8px 10px; cursor: pointer;
-}
-.issue-dts-row-control > .issue-dts-identity {
-  align-self: center; padding: 8px 0 8px 12px;
-}
-.issue-dts-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.issue-dts-ticket { color: var(--accent); font: 700 var(--font-size-assist) var(--font-mono); }
 /* 单号是同事间要抄的关键对象(绑单、推送分支名都以它为键):所有出现
-   单号的地方放开文本选中。button(会话卡片 summary)与 label(DTS 行)
-   内的拖选被浏览器默认禁掉,这里强制开启——DTS 行单号已挪出勾选
-   label,拖选不会误勾;卡片内拖选可能顺带展开卡片,属可接受代价。 */
+   单号的地方放开文本选中。button(会话卡片 summary)内拖选被浏览器
+   默认禁掉,这里强制开启——DTS 表格化后单号独立成格(勾选在首格),
+   拖选不会误勾;卡片内拖选可能顺带展开卡片,属可接受代价。 */
 .task-ticket, .issue-dts-ticket, .issue-ticket {
   user-select: text; -webkit-user-select: text;
 }
-.issue-dts-title { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.issue-dts-status { color: var(--faint); }
-.issue-dts-expand {
-  display: grid; place-items: center; min-width: 44px; min-height: 44px;
-  background: none; border: 0; border-left: 1px solid var(--line); color: var(--muted);
-  cursor: pointer; padding: 0; line-height: 1;
-}
-.issue-dts-expand svg {
-  width: 14px; height: 14px; fill: none; stroke: currentColor;
-  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
-  transition: transform var(--ease);
-}
-.issue-dts-expand svg.open { transform: rotate(90deg); }
-.issue-dts-expand:hover { background: var(--surface); color: var(--accent); }
-.issue-dts-expand:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: -3px;
-  background: var(--surface); color: var(--accent);
-}
-.issue-dts-detail {
-  padding: 10px 14px 12px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-.issue-dts-detail-loading { color: var(--faint); font-size: var(--font-size-assist); }
-.issue-dts-detail-fields { display: grid; gap: 6px; margin: 0; }
-.issue-dts-detail-fields > div {
-  display: grid; grid-template-columns: 80px 1fr; gap: 6px;
-  align-items: baseline;
-}
-.issue-dts-detail-fields dt {
-  color: var(--muted); font-weight: 600; font-size: var(--font-size-dense);
-}
-.issue-dts-detail-fields dd {
-  margin: 0; color: var(--text-strong); font-size: var(--font-size-assist);
-  word-break: break-word;
-}
-.issue-dts-detail-fields a { color: var(--accent); text-decoration: none; }
-.issue-dts-detail-fields a:hover { text-decoration: underline; }
 .issue-dts-detail-html { line-height: 1.6; word-break: break-word; }
 .issue-dts-detail-html p { margin: 0 0 6px; }
 .issue-dts-detail-html br { display: block; content: ""; margin-top: 4px; }
@@ -11360,44 +11275,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .confirm-dialog footer button.danger:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
 @keyframes confirmFade { from { opacity: 0; } }
 @keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
-/* ---- DTS 列表「所属模块」人工预绑列(spec #57):行右侧一列下拉,
-   选即存;可用工具栏开关整体隐藏(开关本体样式在工具条段,按压 chip)。 ---- */
-.issue-dts-row:has(> .issue-dts-module-cell) {
-  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
-}
-.issue-dts-module-cell {
-  grid-column: 2; grid-row: 1;
-  display: grid; gap: 3px; align-content: center;
-  padding: 8px 12px 8px 0; min-width: 0;
-}
-.issue-dts-module-cell select {
-  appearance: none; -webkit-appearance: none;
-  width: 100%; min-width: 0; min-height: 30px; padding: 0 24px 0 10px;
-  border: 1px solid var(--line); border-radius: 7px;
-  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center;
-  color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-dts-module-cell select:focus-visible {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.issue-dts-module-cell select:disabled { opacity: .6; }
-.issue-dts-module-fail { color: var(--danger); font-size: var(--fs-12); line-height: 1.4; }
-.issue-dts-row.issue-dts-selectall { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.issue-dts-row.issue-dts-selectall > .issue-dts-module-head {
-  display: block; padding: 8px 12px 8px 0; color: var(--muted);
-  font-size: 12px; font-weight: 600; text-align: right;
-}
-.issue-dts-selectall:has(> .issue-dts-module-head) .issue-dts-selectall-count {
-  margin-left: 0;
-}
-.issue-dts-row > .issue-dts-detail { grid-column: 1 / -1; }
-@media (max-width: 760px) {
-  .issue-dts-row:has(> .issue-dts-module-cell) { grid-template-columns: minmax(0, 1fr); }
-  .issue-dts-module-cell { grid-column: 1; grid-row: auto; padding: 0 12px 10px; }
-  .issue-dts-row > .issue-dts-detail { grid-column: 1; }
-}
-
 /* 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表,一行一条,
    点开看 md 原文;人圈的可撤回。不做编辑——改就是再圈一次。 */
 .knowledge-memories { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
