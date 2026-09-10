@@ -397,3 +397,48 @@ test("轻量推送确认：关闭设置直接推送，同 SHA 的传输重试复
   assert.equal(s.task.summary.waiting, undefined);
   assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), later.sha);
 });
+
+function excludedFilesScene(t: any) {
+  const s = scene(t);
+  s.host.kernel = { kernelRoot: join(process.cwd(), "kernel"), python: "python3" };
+  for (const path of ["test-a.ts", "test-b.ts"]) writeFileSync(join(s.host.cwd!, path), "export const restored = true;\n");
+  s.git("add", "test-a.ts", "test-b.ts"); s.git("commit", "-qm", "restore tests");
+  const statePath = join(s.host.cwd!, ".mae-flow.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  state.execution_contract = { host: "cloud", continuous_review: true, git_push: "host" };
+  state.current = "delivery_watch"; state.history = []; state.revision = 1;
+  writeFileSync(statePath, JSON.stringify(state));
+  s.host.summary.delivery_selection = { paths: ["main.txt"], excluded_paths: ["test-a.ts", "test-b.ts", "keep-excluded.txt"],
+    observed_paths: ["main.txt", "test-a.ts", "test-b.ts", "keep-excluded.txt"], status: "confirmed", head: s.git("rev-parse", "HEAD~1"),
+    baseline: state.step_heads.branch_create, waiting_id: "old-selection", updated_at: new Date().toISOString() };
+  const requestId = recordTaskHostInstruction(s.host.summary, "刚才误取消了两个测试文件，请恢复 test-a.ts 和 test-b.ts 并推送", "owner")!;
+  return { ...s, requestId, statePath };
+}
+
+test("误取消文件可按用户新指令恢复：真实内核和 Cloud 同步，其他排除项保留并可推送", async t => {
+  const s = excludedFilesScene(t);
+  await assert.rejects(queueTaskHostOperation(s.host, "before-restore", { action: "push", reason: "推送恢复测试" }), /restore_delivery_paths/);
+  await queueTaskHostOperation(s.host, "restore-tests", { action: "restore_delivery_paths", reason: "按用户要求恢复误取消的测试",
+    request_id: s.requestId, paths: ["test-a.ts", "test-b.ts"] });
+  await finishTaskHostOperation(s.host);
+  const operation = new TaskHostLedger(s.host.summary).read().operations[0];
+  assert.equal(operation.state, "succeeded", operation.result);
+  assert.deepEqual(s.host.summary.delivery_selection!.excluded_paths, ["keep-excluded.txt"]);
+  const kernel = JSON.parse(readFileSync(s.statePath, "utf8"));
+  assert.deepEqual(kernel.delivery_selection.excluded_paths, ["keep-excluded.txt"]);
+  assert.deepEqual(new Set(kernel.delivery_manifest.files), new Set(["main.txt", "test-a.ts", "test-b.ts"]));
+  const push = await queueTaskHostOperation(s.host, "after-restore", { action: "push", reason: "推送恢复测试" });
+  await finishTaskHostOperation(s.host);
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), push.sha);
+});
+
+test("恢复交付文件不能伪造用户授权，内核失败不先放宽 Cloud 清单", async t => {
+  const s = excludedFilesScene(t);
+  await assert.rejects(queueTaskHostOperation(s.host, "no-owner", { action: "restore_delivery_paths", reason: "恢复", paths: ["test-a.ts"] }));
+  await queueTaskHostOperation(s.host, "restore-error", { action: "restore_delivery_paths", reason: "恢复",
+    request_id: s.requestId, paths: ["test-a.ts"] });
+  s.host.kernel = { kernelRoot: join(s.host.cwd!, "missing-kernel") };
+  await finishTaskHostOperation(s.host);
+  assert.deepEqual(s.host.summary.delivery_selection!.excluded_paths, ["test-a.ts", "test-b.ts", "keep-excluded.txt"]);
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "failed");
+});

@@ -1,3 +1,4 @@
+import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -16,7 +17,7 @@ import { getPipelineStatus, triggerPipeline, type PipelineCredential } from "./p
 import { createMergeRequest } from "./mrClient.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
 
-const HOST_ACTIONS = ["set_target", "defer_feedback", "push", "create_mr", "retry_verification", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
+const HOST_ACTIONS = ["set_target", "defer_feedback", "restore_delivery_paths", "push", "create_mr", "retry_verification", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
 export type HostAction = typeof HOST_ACTIONS[number];
 export interface HostRequest {
   action: HostAction;
@@ -24,6 +25,7 @@ export interface HostRequest {
   request_id?: string;
   target?: string;
   feedback_id?: string;
+  paths?: string[];
   repo?: string;
 }
 export interface HostOperation {
@@ -181,6 +183,11 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
     if (!host.kernel || !host.cwd) throw new Error("当前任务尚无可登记目标调整的内核现场");
     if (input.action === "defer_feedback" && !input.feedback_id) throw new Error("请指定一条反馈的完整 ID，不能批量忽略");
   }
+  if (input.action === "restore_delivery_paths") {
+    ownerInstruction(host, input.request_id);
+    if (!host.kernel || !host.cwd || !host.summary.delivery_selection) throw new Error("当前没有可恢复的交付清单或内核现场");
+    if (!input.paths?.length) throw new Error("请指定要恢复交付的文件路径");
+  }
   const operation: HostOperation = { id, input, state: "queued", at: new Date().toISOString() };
   if (input.action === "push" || input.action === "create_mr") {
     const state = kernelState(host);
@@ -194,10 +201,15 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
     const snapshot = await deliveryChangeSnapshot(host.cwd!);
     if (!snapshot) throw new Error("无法确定本次提交 SHA");
     const excluded = new Set(host.summary.delivery_selection?.excluded_paths ?? []);
-    if (snapshot.committed_paths.some(path => excluded.has(path))) throw new Error("提交包含责任人明确排除的文件，请先整理提交");
+    if (snapshot.committed_paths.some(path => excluded.has(path))) throw new Error("提交包含此前排除的文件；若责任人要求恢复，请引用原始指令调用 restore_delivery_paths，再推送");
     operation.sha = snapshot.head;
     operation.branch = branch;
     operation.target_branch = baseline;
+  }
+  if (input.action === "restore_delivery_paths") {
+    const snapshot = await deliveryChangeSnapshot(host.cwd!);
+    if (!snapshot) throw new Error("无法确定当前提交");
+    operation.sha = snapshot.head;
   }
   if (input.action === "trigger_pipeline") {
     operation.sha = host.summary.delivery?.git_push?.sha ?? host.summary.delivery?.sha;
@@ -257,6 +269,8 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       host.syncFeedback();
       if (feedback?.source === "workspace") host.deferAnnotation?.(feedback.source_id, feedback.source_revision, instruction.actor, input.reason);
       operation.result = `当前目标：${target}。${input.feedback_id ? `已暂缓 ${input.feedback_id} 的自动修复；原失败和意见仍保留。` : "未取消其他反馈。"}`;
+    } else if (input.action === "restore_delivery_paths") {
+      operation.result = await restoreDeliveryPaths(host, operation, ownerInstruction(host, input.request_id).actor);
     } else if (input.action === "push") {
       if (!operation.push_receipt && !await host.allowPush()) throw new Error("当前 MR 或推送授权不允许发布，请查看任务现场的具体原因");
       if (!operation.push_receipt && host.confirmPush && !await host.confirmPush(operation)) return true;
@@ -367,7 +381,7 @@ export function taskHostGoal(host: TaskHostRuntime): string {
   return `${operations}\n[责任人已登记的目标] ${target.target}\n较新的责任人消息可更新此目标，以新消息为准。set_target 仅调整优先级；明确本轮不处理的旧反馈应逐条 defer_feedback。已暂缓的反馈不再自动修复，新反馈按实际要求处理。`;
 }
 
-const GUIDANCE = "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。需要平台能力时直接调用宿主工具。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
+const GUIDANCE = "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,
@@ -407,6 +421,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
     defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE,
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
+        paths: Type.Optional(Type.Array(Type.String(), { description: "恢复交付时指定原清单内的准确文件路径" })),
         target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "拉取任务关联仓地址，或引用责任人给出该地址的指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),
