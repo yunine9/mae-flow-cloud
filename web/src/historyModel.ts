@@ -9,7 +9,7 @@ interface HistoryTaskFields {
   last_progress_at?: string;
 }
 
-/** 交付档案只收已经形成结果的任务。failed 同时是团队现场的异常
+/** 成果档案只收已经形成结果的任务。failed 同时是团队现场的异常
  * 信号和这里的历史事实，这是刻意保留的唯一重叠。 */
 export function isDeliveryArchiveStatus(status: string): boolean {
   return ["completed", "failed", "canceled"].includes(status);
