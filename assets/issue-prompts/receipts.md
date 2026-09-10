@@ -67,7 +67,7 @@
 
 ## analysis.no_report
 
-分析报告还没写出来:请先把报告写到工作区根目录 issue-analysis.md(问题现象/问题根因/修改方案/证据链/置信度五章节,首行一句话总结,模板见技能 issue-analysis),再提交
+分析报告还没写出来:请先把报告写到工作区根目录 issue-analysis.md——五章节齐全、首行一句话总结,模板见技能 issue-analysis——写好再提交
 
 ## analysis.missing_sections
 
