@@ -11222,7 +11222,7 @@ export class TaskService {
       delete task.summary.delivery.skipped;
     }
     this.enqueueRepair(task, [
-      "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
+      "用户在 push 前确认交付清单时要求按清单返工；按当前要求整理提交，较新的责任人要求可调整目标:",
       review
         ? "- 用户本次确认的交付范围、补充说明与检视批注（完整原文）：\n"
           + review
@@ -14244,10 +14244,8 @@ export class TaskService {
       if (task.summary.workflow_profile_warning) {
         prompt = `${prompt}\n\n⚠ ${task.summary.workflow_profile_warning}`;
       }
-      // 2026-08-25 编排瘦身:编码期不再禁止编译/自测——用户给了容器
-      // 构建环境,就让 agent 自由用起来验证自己;但本地绿不构成交付
-      // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
-      // MR 检视),这个口径必须开场钉死,防模型拿自测结果顶账。
+      // 本地 UT、宿主验证和流水线各自记事实。阶段性发布可以独立发起，
+      // 不把正常交付流程的验证顺序误写成所有宿主工具的使用前提。
       if (this.options.host && !analysisOnly) {
         const utGenerationMethod = availableUtGenerationMethod([
           ...(task.summary.team_skills ?? []).map((skill) => skill.name),
@@ -14257,15 +14255,15 @@ export class TaskService {
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):你的 Bash 在隔离容器中执行,`
           + `容器里可以自由编译、运行单测来验证自己的改动——有构建链就`
           + `尽管用,没有就如实说明留给流水线,不要为编译环境卡住。`
-          + `这些本地结果只用于自查,**不构成任何交付证据**。真验收有三道:`
-          + `每次 push 前 Cloud 另起专项 Agent 在构建容器完成编译、UT 与`
-          + `必要修复;权威流水线绑提交 SHA 复核(编译、UT 运行、CodeCheck);`
-          + `MR 检视人裁决。可用的 UT 编写方式是「${utGenerationMethod}」,`
+          + `本地 UT、宿主 Build-Fix 和绑定 SHA 的权威流水线结果分别如实记录,`
+          + `不能互相冒充;反馈最终处置由责任人决定。可用的 UT 编写方式是「${utGenerationMethod}」,`
           + `写测试前先按它读取对应 skill 或仓内写法。不要编造命令、结果、`
-          + `数量或绿灯。完成实现与 UT 编写后按内核流程提交;不要读取或`
-          + `索要个人 Git 令牌,也不要 push,Agent 会话释放后由 Cloud 宿主`
-          + `统一推送并复核远端 SHA。流水线失败时,只依据该次流水线证据`
-          + `定位并修复。`;
+          + `数量或绿灯。代码提交用任务容器的 Git;已有任务授权内可随时用`
+          + `task_control push/create_mr 阶段性发布,无需先修完所有旧问题。`
+          + `验证可用 retry_verification,流水线用 task_pipeline;缺少能力如实说明。`
+          + `宿主工具 queued 后结束本轮,由 Cloud 释放会话、执行并带回真实结果。`
+          + `不要读取或索要 Git 令牌。较新的责任人要求优先,明确不再处理的`
+          + `反馈逐条 defer_feedback;保留失败事实,不把暂缓或推送当成验证通过。`;
       }
       if (hasDependencyHandoff) {
         prompt = `${prompt}\n\n本任务有跨仓前置交付。开始设计、改接口或实现前，`
@@ -17692,10 +17690,10 @@ export class TaskService {
         ...(check.details ?? []).map((defect) => defect.tool ?? ""),
       ].some((tool) => unfixableSet.has(tool.toLowerCase())));
     task.mission = [
-      `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
+      `当前目标是处理本轮流水线失败(${roundText}修复)；较新的责任人要求可调整目标或逐条暂缓:`,
       ...(failedDimensions.length ? [
         `- 本轮失败的维度(平台逐项事实,权威):`
-        + `${failedDimensions.join("、")}。**每一维都要收拾**,`
+        + `${failedDimensions.join("、")}。尚未暂缓的每一维都要有明确处理结果,`
         + `不要只修下面日志里讲得细的那一维就交差——日志的详细程度`
         + `按维度不均,讲得少不等于没红。某一维在日志和 ${resolve(task.summary.workspace, "pipeline")} 里`
         + `都找不到细节时,不许猜改,把"缺哪一维的失败原文"写进收口发言。`,
@@ -17762,7 +17760,7 @@ export class TaskService {
       ] : []),
       `- 先分诊再动手:通读日志,列出本轮暴露的全部问题类别`
       + `(编译报错/编译告警/UT 失败/UT 覆盖率不够/CodeCheck/其他),`
-      + `一轮把能修的全修完,不留尾巴等下一轮。`,
+      + `在本轮当前目标范围内充分修复；责任人明确暂缓的事项保留记录。`,
       // 定位先于修改(Agentless 的固定管线在修 bug 上打赢自由 agent
       // 循环):逼一句"依据"出来,是为了让定位错当场暴露——说不出
       // 依据的定位多半是猜的,猜着改就是拿流水线当调试器。
@@ -18719,7 +18717,7 @@ export class TaskService {
     this.enqueueRepair(task,
       [
         `MR 上有 ${pending.length} 条检视意见待处理,`
-        + `逐条处理它们是你此刻唯一的使命:`,
+        + `按当前责任人要求逐条处理；较新的要求可调整目标或逐条暂缓:`,
         ...lines,
         ...(discussions.length > pending.length ? [
           `- 另有 ${discussions.length - pending.length} 条此前已答复、`
@@ -18731,14 +18729,14 @@ export class TaskService {
         `- 原始数据在 ${resolve(task.summary.workspace, "reviews", "discussions.json")}(仓库外),需要完整`
         + `上下文时自己读。`,
         `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
-        + `不许含糊带过;不确定的按意见改(检视人对本仓比你熟)。`,
+        + `不许含糊带过;与需求有冲突或无法确定时说明依据，由责任人裁定。`,
         `- 把逐条回复写到绝对路径 ${JSON.stringify(resolve(task.summary.workspace, "review_replies.md"))}(仓库外,不会进提交),`
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${pending[0][1].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
         `- 改动在 build 步收口前如实 commit(按 current 的指引),`
-        + `不要自己另起一套；不要读取或索要个人 Git 令牌,也不要 push,`
-        + `Cloud 宿主会在会话释放后统一推送。`,
+        + `已有授权内可用 task_control push 阶段性推送，不必等所有意见处理完；`
+        + `工具排队后结束本轮，宿主执行并返回结果；不要读取或索要 Git 令牌。`,
         `- 全部是解释、没有代码改动也是正常结局:照样按 current 走完,`
         + `在对应步骤如实说明本轮无代码改动,不要为了凑步骤改代码。`,
         `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
@@ -18832,7 +18830,7 @@ export class TaskService {
       : [];
     this.enqueueRepair(task, [
       `任务责任人在工作台明确提交了 ${annotations.length} 条当前 MR 检视意见。`
-        + "逐条落实并更新原 MR，是你此刻唯一的使命：",
+        + "按当前责任人要求逐条落实并更新原 MR；较新的要求可调整目标或逐条暂缓：",
       rendered,
       "- Cloud 宿主已把本批意见登记到当前任务的持续检视流程。不要 init，"
         + "不要 exit/goto/skip；先执行 current，按当前反馈步骤继续。",
@@ -18847,8 +18845,8 @@ export class TaskService {
       ...priorPipeline,
       this.reviewReceiptInstructionsFor(task, annotations),
       "- 在当前 MR 分支修改必要的源码和测试，遵守 current 的提交清单与 commit 指引。"
-        + "不要读取或索要个人 Git 令牌，不要自行 push；Cloud 会统一推送到原分支、"
-        + "更新原 MR，并对新 SHA 重新执行 Build-Fix 与权威流水线。",
+        + "不要读取或索要个人 Git 令牌；可用 task_control push 阶段性推送到原分支、"
+        + "更新原 MR；Build-Fix 与权威流水线分别记录新 SHA 的真实结果。",
     ].join("\n"), `收到 ${annotations.length} 条本地检视意见，正在修改当前 MR`);
   }
 
@@ -19179,15 +19177,15 @@ export class TaskService {
       loop.state = "repairing";
       this.enqueueRepair(task,
         [
-          `MR 与目标分支 ${target} 冲突,解决它是你此刻唯一的使命:`,
+          `当前目标是解决 MR 与目标分支 ${target} 的冲突；较新的责任人要求可调整目标:`,
           `- 宿主已在安全 Git 沙箱中准备 origin/${target} 的真实冲突现场,`,
           `  冲突标记(<<<<<<< ======= >>>>>>>)位于:`,
           ...conflicted.map((file) => `  ${file}`),
           `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
           + `读两边的提交历史(git log)再定,不许无脑选一边。`,
           `- 解完 git add 全部冲突文件,git commit 完成合并提交`
-          + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌，也不要`
-          + ` push；Cloud 宿主会在会话释放后统一推送。`,
+          + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌；可用`
+          + ` task_control push 请求宿主在释放会话后推送。`,
           `- 不要 rebase、不要 force push、不要动无关文件。`,
         ].join("\n"),
         `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);

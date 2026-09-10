@@ -61,6 +61,9 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
     assert.match(opening, /Cloud 执行契约/);
     assert.match(opening, /权威流水线/);
+    assert.match(opening, /task_control push\/create_mr.*无需先修完所有旧问题/,
+      "真实开场应告知已开放阶段性发布，不能只注册工具而仍提示禁止推送");
+    assert.doesNotMatch(opening, /也不要 push|真验收有三道|每次 push 前 Cloud 另起/);
     assert.match(opening, /\.claude.*\.cac.*本地忽略.*push 前复核/s,
       "主 Agent 开场必须知道平台注入目录不属于交付");
   } finally {
@@ -173,9 +176,11 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
     // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
     assert.match(firstUser(0), /Cloud 执行契约/);
     assert.match(firstUser(2), /Cloud 执行契约/);
-    assert.match(firstUser(2), /不构成任何交付证据/);
+    assert.match(firstUser(2), /分别如实记录.*不能互相冒充/);
+    assert.match(firstUser(2), /无需先修完所有旧问题/);
+    assert.doesNotMatch(firstUser(2), /也不要 push/);
     assert.match(firstUser(2), /不要编造命令、结果、数量或绿灯/);
-    assert.match(firstUser(2), /唯一的使命/, "修复使命也在场");
+    assert.match(firstUser(2), /当前目标是处理本轮流水线失败/, "修复使命也在场");
   } finally {
     await model.stop();
     await platform.stop();

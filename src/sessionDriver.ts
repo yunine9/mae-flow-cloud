@@ -359,6 +359,12 @@ export function looksLikeContextOverflow(detail: string): boolean {
     .test(detail);
 }
 
+/** Pi 拒收忙会话的新 prompt 时的确切错误。不能用泛化的 busy 匹配，
+ * 否则会把网络、数据库或工具执行失败错误地当成可补投的消息。 */
+export function looksLikeBusyCollision(detail: string): boolean {
+  return /Agent is already processing\. Specify streamingBehavior \('steer' or 'followUp'\) to queue the message\./.test(detail);
+}
+
 /** 主动压缩的指令模板:摘要以内核锚点为纲——注意力飘不飘,锚说了算。 */
 export function compactionInstructions(anchor: string): string {
   return [

@@ -396,8 +396,9 @@ export function createTaskHostTools(host: TaskHostRuntime) {
             mr: host.summary.delivery?.mr_url, pipeline: host.summary.delivery?.pipeline, prepush: host.summary.delivery?.prepush?.state },
           instructions: [{ id: "requirement", text: host.summary.requirement }, ...ledger.instructions.slice(-15)],
           target: taskHostGoal(host), operations: ledger.operations.slice(-5),
-          capabilities: { read: ["task_context", "task_pipeline"], control: HOST_ACTIONS,
-            code_and_ut: "通过任务容器的文件/Bash 工具执行；Story、Spec、架构图均可按授权修订", feedback: "task_feedback_reply；责任人最终验收不由 Agent 代签",
+          capabilities: { read: ["task_context", "task_pipeline", "task_knowledge", ...(host.document ? ["task_document"] : []), ...(host.diagnostics ? ["task_diagnostics"] : [])], control: HOST_ACTIONS,
+            code_and_ut: "通过任务容器的文件/Bash 工具执行；Story、Spec、架构图均可按授权修订", feedback: ["task_feedback_reply", ...(host.activeFeedback ? ["task_feedback_result"] : [])],
+            collaboration: host.collaborate ? "task_collaborate" : "未配置", acceptance: "责任人最终验收不由 Agent 代签",
             kernel_configured: Boolean(host.kernel), platform_configured: Boolean(host.platformUrl) } };
       }) }),
     defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE,

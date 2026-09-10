@@ -19,6 +19,7 @@ import { AnnotationStore } from "../src/annotations.ts";
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
+  createKernelHostProof,
   ensureKernelHostCapability,
   openKernelFeedback,
   recordKernelFeedbackResult,

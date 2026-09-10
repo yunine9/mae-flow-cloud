@@ -450,10 +450,10 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.ok(reopenedRound2.pushes![0].sha !== shaBefore,
       "返工产生新推送(同分支追加)");
 
-    // ⑤ 手动归档:有 MR 记录,结论=已交付。
+    // ⑤ 手动归档:MR 仅验绿、尚未合入，按实际事实记已修复。
     const archived = await service.control(created.id, { action: "archive" });
     assert.equal(archived.status, "archived");
-    assert.equal(archived.conclusion?.kind, "delivered");
+    assert.equal(archived.conclusion?.kind, "fixed");
     assert.equal(archived.stage, "mr_green", "归档不改写固定流程阶段词表");
     // 登记元信息进上下文(ADR-0003):网管口令是现场公开默认值,明文
     // 随元信息块出现;平台凭据(git 令牌)的铁律不变。

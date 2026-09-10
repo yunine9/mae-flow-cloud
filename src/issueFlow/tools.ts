@@ -1071,7 +1071,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         delete state.mr_gate;
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后即可归档";
+        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.all_green", {

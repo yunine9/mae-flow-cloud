@@ -271,7 +271,7 @@ EOF` } } },
       .flatMap((request) => (request as any).messages ?? [])
       .map((message: any) => JSON.stringify(message.content ?? ""))
       .join("\n");
-    assert.match(seen, /逐条处理它们是你此刻唯一的使命/, "检视使命在场");
+    assert.match(seen, /按当前责任人要求逐条处理/, "检视使命在场");
     assert.match(seen, /review_replies\.md/, "回复文件契约在使命里");
     assert.match(seen, /pipeline\/build_log_101\.txt/,
       "落盘路径要交给修复会话");
@@ -865,7 +865,8 @@ test("日志只详细到一维时:失败维度逐项点名,不许修完细的那
     assert.match(seen, /COMPILE\(CloudBuild2\.0\)/, "点名要带 job 便于定位");
     assert.match(seen, /CODECHECK\(CodeCCP2\.0\)/);
     assert.ok(!seen.includes("UT(unit-test)"), "过了的维度不许混进来");
-    assert.match(seen, /每一维都要收拾/, "得堵死'修细的那维就交差'");
+    assert.match(seen, /尚未暂缓的每一维都要有明确处理结果/,
+      "未暂缓的维度不能因为日志较少而漏掉，也不能重启责任人已暂缓的修复");
     // 日志本身有真内容,不该被"无证据"判据误伤
     assert.match(seen, /失败详情\(平台原文\)/);
     // 使命不许指挥内核没有的动作(2026-08-21 内网实锤,2026-08-25 瘦身

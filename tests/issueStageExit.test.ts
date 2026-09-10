@@ -421,7 +421,7 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     assert.equal(done.stage, "mr_green", "终点阶段不动,收口在本阶段");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
-    assert.match(done.stage_note ?? "", /确认合入后即可归档/);
+    assert.match(done.stage_note ?? "", /确认合入后.*归档/);
     // 当场收口没有停等:受理账不在场。
     assert.equal(chain.saved().mr_gate, undefined);
     // 回执与台账:验绿通过 + 收口话术进现场。
