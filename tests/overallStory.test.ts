@@ -290,3 +290,46 @@ test("HTTP：受邀检视人能读整体 Story，只有责任人能生成和确�
     assert.equal(generated, 1); assert.equal(confirmed, 1);
   } finally { await new Promise<void>((r) => server.close(() => r())); await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const action of ["reopen", "resubmit", "edit", "resolve"] as const) {
+ test(`整体 Story 旧轮完成保留人工 ${action}，不污染新版本`, async () => {
+  const f = fixture();
+  let release!: () => void;
+  try {
+    f.coordinator.generate("parent", "owner");
+    await f.coordinator.settled("parent");
+    const note = f.note();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    f.runner(async (_task, job) => {
+      entered(); await hold;
+      mkdirSync(job.root, { recursive: true });
+      writeFileSync(join(job.root, "story.md"), `${job.before}\n旧轮完成的改动`);
+      writeFileSync(join(job.root, "receipts.json"), JSON.stringify(job.annotations.map((a) => ({
+        annotation_id: a.id, revision: a.rework ?? 0, outcome: "fixed", summary: "已在整体 Story 中补充本轮要求的验收说明", evidence: ["story.md:5"],
+      }))));
+    });
+    f.coordinator.submit("parent", [note], "reviewer");
+    await started;
+    if (action === "edit") f.store.edit(note.id, "新的验收口径说明", "reviewer", true);
+    else if (action === "resolve") f.store.resolveAsOwner(note.id, "owner",
+      { revision: 0, outcome: "deferred", reason: "下一轮补充约定" });
+    else {
+      f.store.reopen(note.id, "owner", undefined, true);
+      if (action === "resubmit") f.coordinator.submit("parent", f.store.drafts(), "owner");
+    }
+    release();
+    await f.coordinator.settled("parent");
+    const saved = f.store.list()[0];
+    assert.equal(saved.status, action === "resolve" ? "verified" : action === "resubmit" ? "sent" : "draft");
+    assert.equal(saved.rework ?? 0, action === "resolve" ? 0 : 1);
+    if (action === "resubmit") {
+      assert.equal(saved.response?.revision, 1);
+      assert.equal(f.calls(), 3, "生成、旧轮修订、新轮修订分别执行");
+    } else assert.equal(saved.response, undefined);
+    assert.equal(f.coordinator.status("parent").error, undefined, "旧回执不适用不代表已发布的文档修订失败");
+  } finally { release?.(); await f.coordinator.shutdown(); f.dispose(); }
+});
+
+}

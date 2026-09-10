@@ -3364,8 +3364,9 @@ export class TaskService {
       // 恢复后也只会要求重提，不会拿半份文档冒充已经闭环。
       this.persist(task);
       const store = this.annotations(task);
-      store.markSent(annotations.map((item) => item.id), "interrupt");
+      const applied = new Set(store.markSentFor(annotations, "interrupt"));
       for (const receipt of receipts) {
+        if (!applied.has(receipt.annotation_id)) continue;
         store.respond(receipt.annotation_id, {
           revision: receipt.revision,
           outcome: receipt.outcome,
@@ -6458,7 +6459,9 @@ export class TaskService {
     return {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
-      receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent) : undefined,
+      receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent)
+        : delivered.sent.length < picked.length
+          ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。" : undefined,
     };
   }
 
@@ -6535,14 +6538,13 @@ export class TaskService {
         throw new NotFoundError(
           `任务 ${task.summary.id} 当前是 ${task.summary.status}，不能恢复流水线修复`);
       }
-      this.annotations(task).markSent(
-        picked.map((item) => item.id), "pipeline_evidence", sentBy);
+      const sent = this.annotations(task).markSentFor(picked, "pipeline_evidence", sentBy);
       this.persist(task);
-      return { sent: picked.map((item) => item.id), text };
+      return { sent, text };
     }
     if (queueAtHumanGate && task.summary.status === "waiting_for_human") {
-      this.annotations(task).markSent(
-        picked.map((item) => item.id), "queued_decision", sentBy);
+      this.annotations(task).markSentFor(
+        picked, "queued_decision", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
@@ -6554,8 +6556,8 @@ export class TaskService {
     // (MFC-022)。此时先把意见转成团队事实(sent,阻塞关闭检视),
     // 正文由下一次决定的 continuation 送达 Agent。
     if (task.summary.status === "waiting_for_human") {
-      this.annotations(task).markSent(
-        picked.map((item) => item.id), "queued_decision", sentBy);
+      this.annotations(task).markSentFor(
+        picked, "queued_decision", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
@@ -6564,9 +6566,8 @@ export class TaskService {
     this.ensureReviewsDir(task);
     await this.interrupt(task.summary.id,
       [text, this.reviewReceiptInstructionsFor(task, picked)].join("\n\n"));
-    this.annotations(task).markSent(
-      picked.map((item) => item.id), "interrupt", sentBy);
-    return { sent: picked.map((item) => item.id), text };
+    const sent = this.annotations(task).markSentFor(picked, "interrupt", sentBy);
+    return { sent, text };
   }
 
   /** MR 已经存在但尚未合入时，本地批注不是“给旧会话插句话”，而是
@@ -6694,9 +6695,8 @@ export class TaskService {
       task.controlEpoch += 1;
       this.dispatchWorkspaceReviewRepair(task, picked, text);
     }
-    this.annotations(task).markSent(
-      picked.map((item) => item.id), "review_repair", sentBy);
-    return { sent: picked.map((item) => item.id), text };
+    const sent = this.annotations(task).markSentFor(picked, "review_repair", sentBy);
+    return { sent, text };
   }
 
   private hasOpenMergeRequest(task: TaskState): boolean {

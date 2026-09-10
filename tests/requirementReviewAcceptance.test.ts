@@ -65,3 +65,42 @@ test("需求意见可连带修改三个未圈选表格，保留全部 diff 与�
     await model.stop();
   }
 });
+
+for (const action of ["reopen", "edit", "resolve"] as const) {
+  test(`真实需求修订完成时保留期间的人工 ${action}，旧回执不造成整轮失败`, async () => {
+    let service: TaskService;
+    let taskId = "", annotationId = "";
+    const model = new ScriptedModelServer([
+      { tool: { name: "edit", input: { path: "requirement.md", edits: [{ oldText: "返回值说明待补充。", newText: "返回值包含错误码和明确说明。" }] } } },
+      { tool: { name: "write", input: { path: "receipts.json", content: "[]" } } },
+      { text: "已补充返回值约定，请核对修改。" },
+    ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
+      if (index !== 2) return;
+      if (action === "reopen") await service.reopenAnnotation(taskId, annotationId, "owner", 0);
+      else if (action === "edit") service.editAnnotation(taskId, annotationId, "请再补充返回值的具体示例", "owner");
+      else service.verifyAnnotation(taskId, annotationId, "owner", false,
+        { revision: 0, outcome: "deferred", reason: "已确认后续版本补充该约定" });
+    } });
+    await model.start();
+    try {
+      service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "mfc-review-late-")),
+        provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), maxConcurrent: 0 });
+      const task = service.create("# 接口要求\n返回值说明待补充。", {
+        account: "owner", requirementAnalysis: true, requirementAnalysisConfirmation: true });
+      taskId = task.id;
+      const item = service.addAnnotation(taskId, { author: "owner", artifact: TASK_REQUIREMENT_ARTIFACT,
+        file: "需求原文", line: 2, anchor: "返回值说明待补充。", note: "补充返回值说明", kind: "doc" });
+      annotationId = item.id;
+      model.script[1].tool!.input.content = JSON.stringify([{ annotation_id: item.id, revision: 0,
+        outcome: "fixed", summary: "已补充返回值必须包含错误码和明确说明的约定", evidence: ["requirement.md:2"] }]);
+      await service.sendAnnotations(taskId, [item.id], "owner");
+      const saved = service.listAnnotations(taskId).items[0];
+      assert.equal(saved.status, action === "resolve" ? "verified" : "draft");
+      assert.equal(saved.response, undefined);
+      assert.equal(saved.rework ?? 0, action === "resolve" ? 0 : 1);
+      assert.equal(service.get(taskId)!.requirement_revision, undefined);
+      assert.match(service.get(taskId)!.requirement, /错误码和明确说明/);
+      if (action === "resolve") assert.equal(saved.resolution?.outcome, "deferred");
+    } finally { await model.stop(); }
+  });
+}
