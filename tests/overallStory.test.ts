@@ -312,6 +312,31 @@ test("真实文档会话沿用内核 Story 模板并单独生成平台图源，�
   } finally { await model.stop(); f.dispose(); }
 });
 
+test("架构更新真实会话在渲染失败后继续修复并发布，Story 保持不变", async () => {
+  const f = fixture();
+  const valid = JSON.stringify({ schema_version: 1, diagrams: [{ id: "api", view: "logical", source: {
+    schema_version: 1, diagram_type: "architecture", meta: { title: "订单模块" },
+    components: [{ id: "api", type: "backend", label: "API", pos: [40, 40], size: [180, 64] }], connections: [],
+  } }] });
+  const model = new ScriptedModelServer([
+    { tool: { name: "read", input: { path: "inputs/archify/README.md" } } },
+    { tool: { name: "write", input: { path: "architecture.json", content: "bad json" } } },
+    { text: "初稿完成" },
+    { tool: { name: "write", input: { path: "architecture.json", content: valid } } },
+    { text: "已按诊断修复" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  try {
+    f.coordinator.adoptAnalysis("parent", "# Story\n订单模块负责处理订单", "owner");
+    f.runner(async (task, job) => runOverallStorySession(task, job, { taskId: "parent", workspace: task.summary.workspace,
+      kernelRoot: KERNEL_ROOT, model: { provider: "maeflow", model: "scripted-v1" }, models: model.modelsJson() }));
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    assert.equal(f.coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace)!, /订单模块/);
+    assert.equal(readCurrentStory(f.task.summary.workspace), "# Story\n订单模块负责处理订单");
+  } finally { await f.coordinator.shutdown(); await model.stop(); f.dispose(); }
+});
+
 test("TaskService 转交整体 Story：completed 可提交，普通原文仍禁止、重复提交幂等", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-story-service-"));
   const service = new TaskService({ dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });

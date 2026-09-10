@@ -115,13 +115,14 @@ export const STORY_ARCHITECTURE_GUIDANCE = [
   "上述格式约定只供生成时使用，不写入 Story 正文。图标题使用业务名称（如‘模块架构’、‘订单同步时序’），说明只解释职责、契约和交互。",
 ].join("\n");
 
-export function archifyArtifactGuidance(path: string, references = "archify-reference/"): string {
+export function archifyArtifactGuidance(path: string, references = "archify-reference/", hostValidation = false): string {
   return [
     `平台架构图是 Story 的内部派生产物，单独写到 ${path}；不得把 Archify JSON 写进 story.md。`,
     "先通读整个 Story，根据需求场景、模块职责、接口契约、依赖及运行部署关系组织架构图；不能只把某张 PlantUML 翻译成 Archify。已有图源只作参考，以全文设计为准。",
     `读取 ${references.replace(/\/?$/, "/")}README.md、对应 schema 和示例，为 Archify 能准确表达且确实需要展示的设计生成图；类图等不支持的内容只留在 Story 的 PlantUML 中，不冒充受支持类型。`,
     "产物格式：{\"schema_version\":1,\"story_sha256\":\"story.md 的真实 SHA-256\",\"diagrams\":[{\"id\":\"稳定短标识\",\"view\":\"logical|development|process|physical|scenarios\",\"story_line\":对应设计在 Story 中的起始行,\"source\":{Archify 原生 JSON}}]}。没有适合 Archify 的图时仍写空 diagrams 数组。",
     "source 必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。只支持 architecture/workflow/sequence/dataflow/lifecycle，不得使用 brand、repository、sources 外部读取字段。",
-    "每张图须与 Story 的职责、契约和交互一致。提交前使用固定离线渲染器实际试渲染并修复布局问题；无法成功渲染的图从 diagrams 中删除并如实报告，不生成空占位图。",
+    "选图按设计内容：模块依赖用 architecture，业务分支用 workflow，调用顺序用 sequence，数据转换用 dataflow，状态迁移用 lifecycle。view 表示 4+1 设计视角，不等于图类型；只选能准确表达全文设计的图。",
+    hostValidation ? "平台负责实际渲染并绑定 story_sha256（可省略此字段，无需计算哈希）；写好图源后结束本轮，收到错误反馈时在原图源中修复。不要运行命令或写临时文件，不靠删除失败图规避验证。" : "每张图须与 Story 的职责、契约和交互一致。提交前使用固定离线渲染器实际试渲染并修复布局问题；无法成功渲染的图从 diagrams 中删除并如实报告，不生成空占位图。",
   ].join("\n");
 }
