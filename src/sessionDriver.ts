@@ -156,6 +156,30 @@ function outputTruncationRepairNotice(attempt: number): string {
     + "选项只留关键词,内容多就拆成多次短调用。已有工作都在,不要重做。";
 }
 
+/** AskUserQuestion 的工具描述(模型决定提问的那一刻必读,是方法级
+ * 拦截位)。问题会话(knowledgeScope=issue)追加 grilling 指路:
+ * vendor 技能的索引描述是"用户发起"口径,AI 自发对齐在渐进发现里
+ * 匹配不到,成组对齐只能靠这里与介入节奏文本常驻点名(2026-09-11
+ * 触发链诊断)。任务会话不物化该技能,不追加。 */
+export function askToolDescription(scope?: "task" | "issue"): string {
+  const base = "向用户提出结构化问题并等待决定。需要用户确认或选择时必须调用本工具,"
+    + "不要在正文里描述问题然后自行假设答案。一张卡可含多个问题"
+    + "(如配置确认 + 交付方式合并成一次提问)。"
+    + "context 会原样显示为网页和小鲁班的‘决策背景’，请填写用户看得懂的"
+    + "事实、证据或影响摘要；禁止填写 apply/git/Bash 等内部操作过程。"
+    + "决策卡只保留做决定所必需的最少信息：问题一句话、选项简短清楚，"
+    + "背景只解释关键差异或影响，不平铺长段说明、不复述整份方案。"
+    + "设计、验收和技术细节放在对应文档，卡片先给必要事实，最后请用户确认。"
+    // 实战实测:正文预告"两个衍生题一次问完",工具调用只带了一题,
+    // 另一题要么多花一轮补问,要么被自行拍板。预告即契约。
+    + "正文预告了几个问题,questions 就必须带几个——预告了却不发,"
+    + "等于把没问过的事当已确认。";
+  return scope === "issue"
+    ? base + "成组对齐(现象/方案多问题)按技能 grilling"
+      + "(skills/grilling/SKILL.md)的设计树组织:先现象后方案、一轮一卡。"
+    : base;
+}
+
 export function validateAskUserQuestionInput(input: unknown): string | undefined {
   if (!input || typeof input !== "object") return "缺少 questions";
   const request = input as Record<string, unknown>;
@@ -1484,19 +1508,7 @@ export class CloudSession {
     return defineTool({
       name: "AskUserQuestion",
       label: "Ask User Question",
-      description:
-        "向用户提出结构化问题并等待决定。需要用户确认或选择时必须调用本工具," +
-        "不要在正文里描述问题然后自行假设答案。一张卡可含多个问题" +
-        "(如配置确认 + 交付方式合并成一次提问)。" +
-        "context 会原样显示为网页和小鲁班的‘决策背景’，请填写用户看得懂的" +
-        "事实、证据或影响摘要；禁止填写 apply/git/Bash 等内部操作过程。" +
-        "决策卡只保留做决定所必需的最少信息：问题一句话、选项简短清楚，"
-        + "背景只解释关键差异或影响，不平铺长段说明、不复述整份方案。"
-        + "设计、验收和技术细节放在对应文档，卡片先给必要事实，最后请用户确认。" +
-        // 实战实测:正文预告"两个衍生题一次问完",工具调用只带了一题,
-        // 另一题要么多花一轮补问,要么被自行拍板。预告即契约。
-        "正文预告了几个问题,questions 就必须带几个——预告了却不发,"  +
-        "等于把没问过的事当已确认。",
+      description: askToolDescription(this.options.knowledgeScope),
       // 形状对齐旧宿主(步骤文档假设的就是它):questions 数组,每项
       // question + options。回答按问题分开记录——内核"整份背书"判定
       // 依赖这个结构。
