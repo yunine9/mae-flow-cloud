@@ -29,14 +29,8 @@ import {
 } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import {
-  CloudSession,
-  looksLikeBusyCollision,
-  looksLikeOutputTruncation,
-  type Outcome,
-} from "../sessionDriver.ts";
+import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
-import { fetchMrGates } from "../mrGateClient.ts";
 import {
   fetchMrDiscussions,
   type MrDiscussionItem,
@@ -615,12 +609,8 @@ interface LiveIssue {
    * 幂等。 */
   warmupActive?: boolean;
   /** 重启续跑的待递话:恢复路径把会话重新入队时放上平台通知,泵点火
-   *  时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
+   * 时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
   resumeMessage?: string;
-  /** turning 占位的代币(issue-20):settle 的催办/补发延续接棒时领取
-   *  新号,外层回合收口见号易主即让位——互斥位与并发额度因此横跨整条
-   *  延续链,而不是在催办一开始就裸奔。 */
-  turnToken?: number;
 }
 
 export interface IssueMessage {
@@ -644,9 +634,6 @@ const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
  * 都在会话工作区根;草稿即消费,信箱是投递的唯一真相。 */
 const MR_REPLY_DRAFT_FILE = "mr-review-replies.json";
 const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
-/** 待注入标志的落盘件(检视闭环 ②-Q1):进程重启不丢——已落账未注入
- *  的意见重启后仍要交给 AI;注入完成后删除。 */
-const MR_REVIEW_NOTIFY_FILE = "mr-review-notify.json";
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
@@ -784,9 +771,6 @@ export class IssueFlowService {
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
-  /** 回合代币发放器:每次点火/接棒发新号,收口方凭号判断自己还是不是
-   *  槽位主人。纯内存计数,进程内唯一即可。 */
-  private turnSeq = 0;
   private recoveryStarted = false;
   private shuttingDown = false;
   /** 证据重试窗的在途定时器(键=会话 id+仓地址,票 82):一仓一表,
@@ -859,20 +843,6 @@ export class IssueFlowService {
         ...(resuming ? { resumeMessage: RESTART_RESUME_NOTICE } : {}),
       };
       this.live.set(state.id, live);
-      // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
-      // 重启后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
-      // 检视监看续挂(②-Q1):原点火链(MR 建成→流水线监看)重启后
-      // 不再触发——流水线已结算(watching=false)的会话,意见发现、
-      // 注入与回复投递会全部停摆,凡 mr_green 且有 MR 一律续挂;
-      // 待注入标志(mr-review-notify.json)落盘件在场则一并恢复。
-      if (state.stage === "mr_green" && state.mrs?.length
-          && !isTerminal(state.status)) {
-        this.watchMergeStates(live);
-        this.watchMrDiscussions(live);
-        if (existsSync(join(root, MR_REVIEW_NOTIFY_FILE))) {
-          this.reviewNotifyPending.add(state.id);
-        }
-      }
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
       for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
@@ -1428,15 +1398,6 @@ export class IssueFlowService {
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    // 状态守卫(体检 C-H3):挂起(等关联转正)与终态会话不接受补配
-    // 环境——补配会开平台回合,把挂起/已收口的会话悄悄复活成 running。
-    if (isTerminal(state.status)) {
-      throw new IssueControlError(`会话已处于终态 ${state.status},不能补配环境`);
-    }
-    if (state.status === "suspended") {
-      throw new IssueControlError(
-        "会话已挂起(等关联单号转正),不能补配环境——先归档或完成转正");
-    }
     const { resolved, sourceIp } = this.resolveEnvironmentInput(input);
     if (options?.saveToRegistry) {
       const parts = normalizeEnvironmentInput(resolved, false);
@@ -1521,44 +1482,18 @@ export class IssueFlowService {
    * 作答/闸门裁决/续聊/平台通知)只保留差异部分:开场词、续聊词、
    * 作答重放。入口冲突判守(409 打回/挂便签/排队跳过)留在调用点:
    * 出路语义各不相同,收进来反而要改行为。settle 里的催办/补发续跑
-   * 走 beginContinuationTurn——同一回合的延续,预算不清,turning 由
-   * 代币接棒跨回合持有(2026-09-09,issue-20 复盘)。 */
+   * 不走这里——那是同一回合的延续,turning 还握着,预算也不清。 */
   private beginTurn(live: LiveIssue, body: () => Promise<Outcome>): void {
     if (this.shuttingDown) return;
     const epoch = live.controlEpoch;
-    const token = ++this.turnSeq;
-    live.turnToken = token;
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
     saveState(live.root, live.state);
-    void this.runTurn(live, body, epoch).finally(() =>
-      this.endTurnSlot(live, token));
-  }
-
-  /** 回合槽位收口:代币仍在本棒手里才释放 turning 并再泵;延续回合
-   *  已接棒(号易主)就让位。互斥位与并发额度因此横跨整条延续链——
-   *  过去外层收口把占位提前删掉,催办期间忙时守卫全盲,平台通知撞进
-   *  忙会话反把整单标 failed(issue-20 实锤)。 */
-  private endTurnSlot(live: LiveIssue, token: number): void {
-    if (live.turnToken !== token) return;
-    this.turning.delete(live.id);
-    void this.pump();
-  }
-
-  /** settle 里的催办/补发续跑入口:同一回合的延续——不重置催办预算、
-   *  不改 status(调用方已置 running 并落盘),但必须接棒 turning 占位,
-   *  让 startPlatformTurn/answer/control 的忙时守卫看得见它。 */
-  private beginContinuationTurn(
-    live: LiveIssue,
-    body: () => Promise<Outcome>,
-  ): void {
-    const epoch = live.controlEpoch;
-    const token = ++this.turnSeq;
-    live.turnToken = token;
-    this.turning.add(live.id);
-    void this.runTurn(live, body, epoch).finally(() =>
-      this.endTurnSlot(live, token));
+    void this.runTurn(live, body, epoch).finally(() => {
+      this.turning.delete(live.id);
+      void this.pump();
+    });
   }
 
   /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
@@ -1769,73 +1704,46 @@ export class IssueFlowService {
         state.last_reply = live.driver?.finalReply() ?? state.last_reply;
       } else {
         // 撞在回合间隙的插话可能没送进模型——收口前补发一次。
-        const driver = live.driver;
-        const late = driver?.takeUndeliveredSteers() ?? [];
-        if (driver && late.length) {
+        const late = live.driver?.takeUndeliveredSteers() ?? [];
+        if (late.length) {
           this.log(`[issue-flow] ${live.id} 补发未送达插话 ${late.length} 条`);
           live.state.status = "running";
           saveState(live.root, live.state);
-          // 现场引用收进闭包:settle 到延续体之间没有空档,driver 不可能
-          // 易主;若真被停(取消/关停),abort 会让它如实失败交 epoch 守卫。
-          this.beginContinuationTurn(live, () =>
-            driver.continueWith(late.join("\n\n")));
+          void this.runTurn(live, async () =>
+            live.driver!.continueWith(late.join("\n\n")), live.controlEpoch);
           return;
         }
         // 催办续跑(2026-08-28 拍板 A):模型提前收嘴不等于阶段完成,
         // 阶段真相在平台——没走到出口就把阶段简报砸回去推它继续,
         // 预算内自动续跑,耗尽才落 idle 交还人工。需求流同款机制的移植。
-        // driver 缺席(现场刚被停)时催办无从谈起,直接落 idle:
-        // 过去这里靠 ! 断言硬闯,releaseDriver 后就是 undefined 崩溃
-        // (issue-20 实锤)。
-        if (driver && shouldNudgeFixed(state)) {
+        if (shouldNudgeFixed(state)) {
           state.nudges = (state.nudges ?? 0) + 1;
-          const nudge = state.nudges;
-          if (nudge <= NUDGE_BUDGET) {
+          if (state.nudges <= NUDGE_BUDGET) {
             this.log(`[issue-flow] ${live.id} 模型提前收嘴,`
-              + `第 ${nudge}/${NUDGE_BUDGET} 次催办续跑(阶段 ${state.stage})`);
+              + `第 ${state.nudges}/${NUDGE_BUDGET} 次催办续跑(阶段 ${state.stage})`);
             state.status = "running";
             saveState(live.root, live.state);
-            this.beginContinuationTurn(live, async () => {
+            void this.runTurn(live, async () => {
               await this.ensureContainer(live);
-              // ensureContainer 的空档里现场可能被停/清(取消、关停),
-              // 如实放弃本拍催办:交给 epoch 守卫或 idle 收口,不拿
-              // 断言硬闯(issue-20 的崩溃点就在这一行)。
-              const liveDriver = live.driver;
-              if (!liveDriver) return { status: "turn_finished" };
-              return liveDriver.continueWith(
-                fixedNudgeNotice(state, nudge, NUDGE_BUDGET));
-            });
+              return live.driver!.continueWith(
+                fixedNudgeNotice(state, state.nudges!, NUDGE_BUDGET));
+            }, live.controlEpoch);
             return;
           }
           state.status = "idle";
           state.stage_note = `模型连续 ${NUDGE_BUDGET} 次提前收嘴,已停机`
             + "——发送「继续」或补充指示,平台才会再推进";
-          state.last_reply = driver.finalReply() ?? state.last_reply;
+          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
           this.log(`[issue-flow] ${live.id} 催办预算耗尽,转人工(阶段 ${state.stage})`);
         } else {
-          if (!driver && shouldNudgeFixed(state)) {
-            this.log(`[issue-flow] ${live.id} 想催办但现场已不在,直接交还人工`);
-          }
           state.status = "idle";
-          state.last_reply = driver?.finalReply() ?? state.last_reply;
+          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
         }
       }
     } else {
-      const detail = outcome.detail ?? outcome.reason ?? "会话异常结束";
-      if (outcome.status === "session_ended"
-          && looksLikeBusyCollision(detail)) {
-        // 忙撞(issue-20 复盘):消息没递进忙会话,但会话现场毫发无伤。
-        // 标 failed + 释放 driver 会把一条健康会话陪葬——留话待补投。
-        state.status = "idle";
-        state.stage_note =
-          "平台消息与进行中的回合相撞,未能送达——发送「继续」即可补投";
-        this.log(`[issue-flow] ${live.id} 消息撞上忙会话被拒,`
-          + `留话待补投(不标失败): ${detail}`);
-      } else {
-        state.status = "failed";
-        state.error = detail;
-        this.releaseDriver(live);
-      }
+      state.status = "failed";
+      state.error = outcome.detail ?? outcome.reason ?? "会话异常结束";
+      this.releaseDriver(live);
     }
     saveState(live.root, live.state);
     // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
@@ -2106,7 +2014,7 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${issueId} 介入档位免审批:闸 ${kind} 自动作答(${code})`);
     setTimeout(() => {
       try {
-        this.answer(issueId, {
+        const summary = this.answer(issueId, {
           state_version: version,
           code,
           decision: `介入档位免审批自动确认(${gateOptionLabel(kind, code)})`,
@@ -2114,9 +2022,7 @@ export class IssueFlowService {
         void this.options.notifier?.notifyOutcome({
           taskId: issueId,
           account: state.account,
-          // 独立状态词(体检 B-H4):summary.status 在两路代答里都是
-          // running,共用幂等键会把第二次代答的通知吞掉。
-          status: "已代答",
+          status: summary.status,
           summary: `介入档位免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
           link: this.issueLink(issueId),
         }).catch(() => undefined);
@@ -2176,7 +2082,7 @@ export class IssueFlowService {
       + ` 按推荐项自动作答(${recommended.join("、")})`);
     setTimeout(() => {
       try {
-        this.answer(issueId, {
+        const summary = this.answer(issueId, {
           state_version: version,
           answers,
           notes: trace,
@@ -2184,7 +2090,7 @@ export class IssueFlowService {
         void this.options.notifier?.notifyOutcome({
           taskId: issueId,
           account: state.account,
-          status: "已代答",
+          status: summary.status,
           summary: `介入档位免审批:问题卡已按推荐项自动作答`
             + `(${recommended.join("、")})`,
           link: this.issueLink(issueId),
@@ -3652,20 +3558,10 @@ export class IssueFlowService {
     if (input.action === "cancel") {
       live.state.status = "canceled";
     } else {
-      // 竞态核对(ADR-0022):监看循环之外现扫一次平台事实——防
-      // "点归档瞬间平台恰好合入"的窗口错账;平台不可得则沿用上次
-      // 观测,不堵归档(软闸)。
-      if (live.state.mrs?.length) await this.syncMergeFacts(live);
-      // 结论按合入事实记(ADR-0022,软闸):全部 MR merged 才是
-      // delivered;建了 MR 未全合=已推送未合入(fixed)。挂起转正、
-      // 纯推送、纯分析的语义不变。
-      const mrs = live.state.mrs ?? [];
-      const allMerged = mrs.length > 0
-        && mrs.every((mr) => Boolean(mr.merged_at));
       const kind = input.kind
         ?? (live.state.status === "suspended" ? "issue"
-          : allMerged ? "delivered"
-          : mrs.length || live.state.pushes?.length ? "fixed" : "non_issue");
+          : live.state.mrs?.length ? "delivered"
+          : live.state.pushes?.length ? "fixed" : "non_issue");
       live.state.conclusion = {
         kind,
         summary: input.summary?.trim() || live.state.last_reply
@@ -3677,24 +3573,6 @@ export class IssueFlowService {
       fixedComplete(live.state, "会话已归档收口(用户操作)");
     }
     saveState(live.root, live.state);
-    // 收口清面(体检 C-H6):闸与未决 Agent 卡不随终态残留——不然
-    // 已取消/归档的会话还投影着一张永远答不了的卡。平台闸直接删;
-    // Agent 卡逐条 supersede(作废留痕,decision 空串=无人答过)。
-    if (live.state.gate) {
-      delete live.state.gate;
-      saveState(live.root, live.state);
-    }
-    for (const record of live.humanGate.pending()) {
-      try {
-        live.humanGate.supersede(record.waiting_id, {
-          stateVersion: record.state_version,
-          notes: `会话已${input.action === "cancel" ? "取消" : "归档"},待办作废`,
-        });
-      } catch (error) {
-        this.log(`[issue-flow] ${id} 终态作废待办 ${record.waiting_id} 失败: `
-          + String(error instanceof Error ? error.message : error));
-      }
-    }
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
     return summarize(live.state);
@@ -3818,8 +3696,7 @@ export class IssueFlowService {
         timer.unref?.();
       });
       if (state.pipelines?.[repo]?.sha !== sha
-          || !state.pipelines[repo].watching
-          || isTerminal(state.status)) return;
+          || !state.pipelines[repo].watching) return;
       try {
         const status = await getPipelineStatus(call());
         // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
@@ -3834,10 +3711,7 @@ export class IssueFlowService {
       }
     }
     // 预算耗尽:如实停表,不阻塞会话——用户可人工查看后发消息继续。
-    // 终态会话不写不算不喊(体检 C-H2):循环因 isTerminal 退出时也落
-    // 到这里,不能给已取消/归档的会话改 stage_note、发"请人工"通知。
-    if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching
-        && !isTerminal(state.status)) {
+    if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching) {
       state.pipelines[repo].watching = false;
       state.pipelines[repo].last_error = "轮询预算耗尽,请人工查看流水线";
       state.stage_note = "流水线轮询预算耗尽——请人工查看 MR/流水线,再发消息继续";
@@ -3868,130 +3742,6 @@ export class IssueFlowService {
   /** 待注入的检视意见(会话忙时挂起,闲时补发):存会话 id,内容现查
    *  反馈账里该会话的全部 open 意见——每次点火都带全量,不靠增量拼。 */
   private readonly reviewNotifyPending = new Set<string>();
-  /** 合入事实监看(ADR-0022):单例;stage 留在 mr_green 且未终态期间
-   *  逐仓轮询 /mr/gates 记 merged_at/merged_sha/closed_at,全合入/被
-   *  关闭各通知一次。归档与 merge-status 端点另有竞态核对兜底。 */
-  private readonly mergeWatchers = new Set<string>();
-
-  /** 点火合入事实监看:mr_green 收口(即时/滞后两路都汇到
-   *  notifyMrGreenClosed)与重启恢复调用;重复点火单例挡掉。 */
-  private watchMergeStates(live: LiveIssue): void {
-    if (!this.options.platformUrl || this.mergeWatchers.has(live.id)) return;
-    this.mergeWatchers.add(live.id);
-    void this.pollMergeStates(live)
-      .catch((error) =>
-        this.log(`[issue-flow] ${live.id} 合入事实监看异常退出: `
-          + String(error instanceof Error ? error.message : error)))
-      .finally(() => {
-        this.mergeWatchers.delete(live.id);
-      });
-  }
-
-  private async pollMergeStates(live: LiveIssue): Promise<void> {
-    const { pollMs } = this.pipelineKnobs();
-    for (;;) {
-      if (this.shuttingDown || isTerminal(live.state.status)
-          || live.state.stage !== "mr_green" || !live.state.mrs?.length) {
-        return;
-      }
-      await this.syncMergeFacts(live);
-      await new Promise<void>((done) => {
-        const timer = setTimeout(done, pollMs);
-        timer.unref?.();
-      });
-    }
-  }
-
-  /** 逐仓向平台读合入事实并记账(ADR-0022):时刻=首次观测,不冒充
-   *  平台动作时间;merged_sha 照平台返回记,不要求与验绿 SHA 相同。
-   *  平台不可得保留上次观测等下一轮——监看循环、归档核对、
-   *  merge-status 端点三方共用这一扫。 */
-  async syncMergeFacts(live: LiveIssue): Promise<{ all_merged: boolean }> {
-    const state = live.state;
-    // 终态复核(体检 C-H1/C-H2 同族):取消/归档落在轮询迭代内时,
-    // 不再写终态会话的账与通知;归档竞态核对路(control)在终态前调用,
-    // 不受影响。
-    if (isTerminal(state.status)) {
-      const frozen = state.mrs ?? [];
-      return { all_merged: frozen.length > 0
-        && frozen.every((mr) => Boolean(mr.merged_at)) };
-    }
-    const credential = this.options.gitCredential?.(state.account);
-    let changed = false;
-    for (const mr of state.mrs ?? []) {
-      const view = await fetchMrGates({
-        platformUrl: this.options.platformUrl,
-        repo: mr.repo,
-        headers: pipelineHeaders(credential),
-        delivery: {
-          source_branch: mr.branch,
-          target_branch: mr.target ?? "master",
-          ...(mr.url ? { mr_url: mr.url } : {}),
-          ...(mr.iid !== undefined ? { mr_id: mr.iid } : {}),
-        },
-      });
-      if (!view) continue;
-      const now = new Date().toISOString();
-      if (view.mrState === "merged" && !mr.merged_at) {
-        mr.merged_at = now;
-        if (view.sourceSha) mr.merged_sha = view.sourceSha;
-        changed = true;
-      } else if (view.mrState === "closed" && !mr.closed_at && !mr.merged_at) {
-        mr.closed_at = now;
-        changed = true;
-      }
-    }
-    const mrs = state.mrs ?? [];
-    const allMerged = mrs.length > 0 && mrs.every((mr) => Boolean(mr.merged_at));
-    const anyClosed = mrs.some((mr) => Boolean(mr.closed_at));
-    if (allMerged && !state.merge_noted) {
-      state.merge_noted = true;
-      state.stage_note = "全部 MR 已合入——可归档收口";
-      changed = true;
-      this.notifyMergeFact(live,
-        `全部 MR 已合入(${mrs.length} 个)——可归档收口`);
-    }
-    if (anyClosed && !state.mr_closed_noted) {
-      state.mr_closed_noted = true;
-      changed = true;
-      this.notifyMergeFact(live,
-        "有 MR 被关闭——可续聊返工(重推重报),或直接归档收口");
-    }
-    if (changed) saveState(live.root, state);
-    return { all_merged: allMerged };
-  }
-
-  private notifyMergeFact(live: LiveIssue, summary: string): void {
-    void this.options.notifier?.notifyOutcome({
-      taskId: live.id,
-      account: live.state.account,
-      // 状态词与验绿通知("待归档")分开:小鲁班按 taskId:outcome:状态
-      // 幂等,同词会被验绿那条吞掉。
-      status: summary.includes("已合入") ? "已合入" : "MR被关闭",
-      summary,
-      link: this.issueLink(live.id),
-    }).catch(() => undefined);
-  }
-
-  /** 归档对话框的合入事实快照(现扫现答,与归档核对同一兜底)。 */
-  async mergeStatus(id: string): Promise<{
-    mrs: Array<{ repo: string; url?: string;
-      state: "merged" | "closed" | "opened"; merged_sha?: string }>;
-    all_merged: boolean;
-  }> {
-    const live = this.require(id);
-    await this.syncMergeFacts(live);
-    const mrs = live.state.mrs ?? [];
-    return {
-      mrs: mrs.map((mr) => ({
-        repo: mr.repo,
-        ...(mr.url ? { url: mr.url } : {}),
-        state: mr.merged_at ? "merged" : mr.closed_at ? "closed" : "opened",
-        ...(mr.merged_sha ? { merged_sha: mr.merged_sha } : {}),
-      })),
-      all_merged: mrs.length > 0 && mrs.every((mr) => Boolean(mr.merged_at)),
-    };
-  }
 
   private watchMrDiscussions(live: LiveIssue): void {
     if (!this.options.platformUrl || this.reviewWatchers.has(live.id)) return;
@@ -4050,7 +3800,7 @@ export class IssueFlowService {
             this.log(`[issue-flow] ${live.id} 检视意见 ${fresh.length} 条`
               + `标待人工(自动修已关)`);
           } else {
-            this.armReviewNotify(live);
+            this.reviewNotifyPending.add(live.id);
           }
         }
       }
@@ -4064,27 +3814,9 @@ export class IssueFlowService {
     }
   }
 
-  /** 待注入标志(内存 Set + 落盘标记,检视闭环 ②-Q1):重启恢复靠
-   *  MR_REVIEW_NOTIFY_FILE;注入完成后两处一起清。终态会话不落标志
-   *  (体检 C-H5:不留孤儿标记文件)。 */
-  private armReviewNotify(live: LiveIssue): void {
-    if (isTerminal(live.state.status)) return;
-    this.reviewNotifyPending.add(live.id);
-    try {
-      writeFileSync(join(live.root, MR_REVIEW_NOTIFY_FILE),
-        JSON.stringify({ at: new Date().toISOString() }) + "\n");
-    } catch (error) {
-      // 落盘失败不挡本次注入(内存标志还在);极端下重启丢一次提醒,
-      // 下一条新意见/追问会重新点火。
-      this.log(`[issue-flow] ${live.id} 待注入标志落盘失败(继续用内存标志): `
-        + String(error instanceof Error ? error.message : error));
-    }
-  }
-
-  /** 新意见/追问落反馈账,返回需要处置的(调用方决定注入还是标待人工);
-   *  已落账且未了结(open/addressed)的意见这轮没再出现 = 讨论在平台
-   *  已解决,闭环标注——归因按投递账分家(②-Q3):Agent 自己 resolve
-   *  的不许记成"检视人已解决"。 */
+  /** 新意见落反馈账,返回本轮新出现的(调用方决定注入还是标待人工);
+   *  已落账且仍 open 的意见这轮没再出现 = 检视人已在 CodeHub 解决,
+   *  闭环标注。 */
   private absorbMrDiscussions(
     live: LiveIssue,
     repo: string,
@@ -4095,34 +3827,17 @@ export class IssueFlowService {
     const records = store.list()
       .filter((record) => record.source === "mr_discussion"
         && record.id.startsWith(recordPrefix));
-    const known = new Map(records.map((record) => [record.source_id, record]));
-    const fresh: MrDiscussionItem[] = [];
-    const followedUp: MrDiscussionItem[] = [];
-    for (const item of items) {
-      const record = known.get(item.id);
-      const revision = item.revision ?? 0;
-      if (!record) {
-        fresh.push(item);
-        continue;
-      }
-      // 同讨论、版本号变且未了结 = 检视人追问(②-Q4):刷新账并重新
-      // 注入,不能让追问石沉大海。closed/needs_human 已了结,不追。
-      if (revision !== record.source_revision
-          && (record.status === "open" || record.status === "addressed")) {
-        followedUp.push(item);
-      }
-    }
-    if (fresh.length || followedUp.length) {
+    const known = new Set(records.map((record) => record.source_id));
+    const fresh = items.filter((item) => !known.has(item.id));
+    if (fresh.length) {
       // 观察基准:该仓最近一次推送——检视意见是对哪版代码提的,账上
       // 要能对回去;还没有推送收据(理论不可达,申报前置了推送)留空。
       const observedSha = live.state.pushes
         ?.find((push) => push.repo === repo)?.sha ?? "";
-      const toRecord = (item: MrDiscussionItem) => ({
+      store.upsert(fresh.map((item) => ({
         id: `${recordPrefix}${item.id}`,
-        // batch_id 带版本号:upsert 按同 id+同 batch 跳过——版本变了
-        // 换 batch 即整体刷新,追问的新正文才能落到账上。
-        batch_id: `mr-discussion:${repo}:${item.id}:${item.revision ?? 0}`,
-        source: "mr_discussion" as const,
+        batch_id: `mr-discussion:${repo}`,
+        source: "mr_discussion",
         source_id: item.id,
         source_revision: item.revision ?? 0,
         observed_sha: observedSha,
@@ -4134,24 +3849,17 @@ export class IssueFlowService {
         verification: "reviewer",
         status: "open" as const,
         updated_at: new Date().toISOString(),
-      });
-      store.upsert([...fresh, ...followedUp].map(toRecord));
+      })));
       this.log(`[issue-flow] ${live.id} 收到 MR 检视意见 ${fresh.length} 条`
-        + `${followedUp.length ? `,追问 ${followedUp.length} 条` : ""}(${repo})`);
+        + `(${repo})`);
     }
     const openIds = new Set(items.map((item) => item.id));
-    const outbox = this.readMrReviewOutbox(live);
-    for (const record of records.filter((row) =>
-      row.status === "open" || row.status === "addressed")) {
-      if (openIds.has(record.source_id)) continue;
-      const agentResolved = outbox.items.some((item) =>
-        item.discussion_id === record.source_id
-        && item.status === "delivered" && item.resolve);
-      store.resolve(record.id, "closed", agentResolved
-        ? "Agent 回复并解决(AI 在回复时标记,待检视人知悉)"
-        : "检视人已在 CodeHub 解决该讨论");
+    for (const record of records.filter((row) => row.status === "open")) {
+      if (!openIds.has(record.source_id)) {
+        store.resolve(record.id, "closed", "检视人已在 CodeHub 解决该讨论");
+      }
     }
-    return [...fresh, ...followedUp];
+    return fresh;
   }
 
   /** 注入点火:会话空闲才开平台回合(忙时等下一拍——startPlatformTurn
@@ -4161,7 +3869,6 @@ export class IssueFlowService {
     if (!this.reviewNotifyPending.has(live.id)) return;
     if (this.turning.has(live.id) || live.state.status !== "idle") return;
     this.reviewNotifyPending.delete(live.id);
-    rmSync(join(live.root, MR_REVIEW_NOTIFY_FILE), { force: true });
     const open = this.feedbackStore(live).list()
       .filter((record) => record.source === "mr_discussion"
         && record.status === "open");
@@ -4179,12 +3886,8 @@ export class IssueFlowService {
   }
 
   /** 检视回复草稿(AI 按注入清单写的工作区文件)→ 出站信箱。每条绑定
-   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。回合进行中
-   *  不装箱:AI 常在修完同一回合里"写草稿→再推送",回合中装箱会把
-   *  expected_sha 绑到推送前的旧版本,下一拍就误判漂移——等回合收口
-   *  绑稳定版本。 */
+   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。 */
   private stageMrReviewReplies(live: LiveIssue): void {
-    if (this.turning.has(live.id)) return;
     const draftPath = join(live.root, MR_REPLY_DRAFT_FILE);
     if (!existsSync(draftPath)) return;
     let draft: unknown;
@@ -4239,17 +3942,10 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${live.id} 检视回复待发布 ${staged} 条`);
   }
 
-  /** 出站信箱投递:SHA 不匹配说明回复绑定的那版代码已不是当前版本
-   *  (②-Q2)——直接标失败("请针对当前代码重写"),不能永远 pending
-   *  (旧实现不计重试、还挡新草稿,永久卡死);失败不挡新草稿,并重挂
-   *  注入让 AI 重写。投递带 Idempotency-Key,重放不产生第二条 CodeHub
-   *  回复;HTTP 重试超限标 failed 交人工(不再注入,防平台持续故障下
-   *  无限循环)。投递成功→意见转 addressed(Agent 已回复,待检视人
-   *  核验,②-Q3:处理≠验收)。 */
+  /** 出站信箱投递:SHA 不匹配保持 pending(绝不能借另一版代码说
+   *  "已修");投递带 Idempotency-Key,重放不产生第二条 CodeHub 回复;
+   *  重试超限标 failed 交人工。 */
   private async flushMrReviewReplies(live: LiveIssue): Promise<void> {
-    // 终态复核(体检 C-H5):取消/归档落在迭代内,不再向平台投递
-    // 已装箱回复——终态会话不该再产生外部副作用。
-    if (isTerminal(live.state.status)) return;
     const outbox = this.readMrReviewOutbox(live);
     const pending = outbox.items.filter((item) => item.status === "pending");
     if (!pending.length) return;
@@ -4260,22 +3956,14 @@ export class IssueFlowService {
       const receipt = live.state.pushes
         ?.find((push) => push.repo === item.repo)?.sha ?? "";
       if (!receipt || receipt !== item.expected_sha) {
-        item.status = "failed";
-        item.last_error = !receipt
-          ? "该仓没有推送收据,回复作废——重推后请重写回复草稿"
-          : `代码已更新(回复绑定 ${item.expected_sha.slice(0, 12)},`
-            + `当前推送 ${receipt.slice(0, 12)})——请针对当前代码重写回复草稿`;
-        dirty = true;
-        this.log(`[issue-flow] ${live.id} 检视回复作废(${item.discussion_id}): `
-          + item.last_error);
-        // 自愈闭环:意见仍是未了结状态时重新注入,AI 会拿到最新清单
-        // 重写回复;推送稳定后必然收敛,不会无限循环。
-        const record = this.feedbackStore(live).list().find((row) =>
-          row.source === "mr_discussion"
-          && row.source_id === item.discussion_id);
-        if (record && (record.status === "open"
-          || record.status === "addressed")) {
-          this.armReviewNotify(live);
+        const reason = !receipt
+          ? "该仓还没有推送收据,等推送后投递"
+          : `回复绑定 ${item.expected_sha.slice(0, 12)},当前推送收据 `
+            + `${receipt.slice(0, 12)}——SHA 漂移,暂不投递`;
+        if (item.last_error !== reason) {
+          item.last_error = reason;
+          dirty = true;
+          this.log(`[issue-flow] ${live.id} 检视回复暂缓: ${reason}`);
         }
         continue;
       }
@@ -4309,16 +3997,6 @@ export class IssueFlowService {
         delete item.last_error;
         dirty = true;
         this.log(`[issue-flow] ${live.id} 检视回复已发布(${item.discussion_id})`);
-        // 记账分家(②-Q3):投递成功只代表"Agent 已回复",检视人核验
-        // 前不算了结;账失败不回滚投递事实(平台已有回复)。
-        try {
-          this.feedbackStore(live).resolve(
-            `mr-discussion:${item.repo}:${item.discussion_id}`,
-            "addressed", "Agent 已回复,待检视人核验");
-        } catch (error) {
-          this.log(`[issue-flow] ${live.id} 检视回复入账失败(投递事实保留): `
-            + String(error instanceof Error ? error.message : error));
-        }
       } catch (error) {
         item.last_error = String(
           error instanceof Error ? error.message : error);
@@ -4331,18 +4009,14 @@ export class IssueFlowService {
   private readMrReviewOutbox(live: LiveIssue): {
     items: MrReviewReplyOutboxItem[];
   } {
-    const path = join(live.root, MR_REPLY_OUTBOX_FILE);
-    if (!existsSync(path)) return { items: [] };
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      const parsed = JSON.parse(readFileSync(
+        join(live.root, MR_REPLY_OUTBOX_FILE), "utf-8")) as {
           items?: MrReviewReplyOutboxItem[];
         };
       if (Array.isArray(parsed.items)) return { items: parsed.items };
-    } catch (error) {
-      // 读不动不拖垮监看(fail-open),但不再无声(②-Q6):回复是承诺过
-      // 的动作,静默当空箱等于悄悄丢回复——记错误日志引人来修。
-      this.log(`[issue-flow] ${live.id} 检视回复信箱读不动,按空箱继续`
-        + `(投递暂缓): ${String(error instanceof Error ? error.message : error)}`);
+    } catch {
+      // 缺席/读不动:空箱,投递是旁路不拖主链路。
     }
     return { items: [] };
   }
@@ -4362,9 +4036,6 @@ export class IssueFlowService {
     run: PipelineRun,
   ): Promise<void> {
     const { state } = live;
-    // 终态复核(体检 C-H1):取消/归档可能落在监看迭代的 sleep/fetch
-    // 窗口内——结算与它触发的举闸都不得再写已终态会话的状态。
-    if (isTerminal(state.status)) return;
     const watch = state.pipelines?.[repo];
     if (watch?.sha !== sha) return;
     watch.status = run.status;
@@ -4951,9 +4622,6 @@ export class IssueFlowService {
   /** mr_green 收口的用户通知(即时收口与监看器滞后收口共用)。 */
   private notifyMrGreenClosed(live: LiveIssue): void {
     const { state } = live;
-    // 收口即点火合入事实监看(ADR-0022):两条收口路都汇到这里,
-    // 单例防重入;重启恢复由 recover() 补挂。
-    this.watchMergeStates(live);
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: state.account,
@@ -5046,9 +4714,6 @@ export class IssueFlowService {
   ): boolean {
     const { state } = live;
     if (state.gate) return false;
-    // 终态复核(体检 C-H1):取消/归档后不再把状态定格回 waiting_user
-    // ——那等于把人的取消决定掀翻,还能借 answer 把会话复活成 running。
-    if (isTerminal(state.status)) return false;
     raiseGate(state, kind, question, undefined, context, undefined, undefined,
       { repo, sha });
     // waiting_user 的定格与 raiseGate 纪律一致:回合还在收尾(turning
@@ -5073,33 +4738,17 @@ export class IssueFlowService {
       : {};
   }
 
-  /** 平台侧开回合(闸门裁决/流水线结果的交接词)。空闲照常点火;会话
-   *  在跑回合时不抢方向盘,但也不干等:能 steer 就把话递进正在跑的
-   *  回合(2026-09-09 改,issue-20 复盘——过去忙时一概挂便签,守卫又
-   *  看不见催办延续,通知直接撞进忙会话炸掉整单),收口前没送达的由
-   *  settle 的补发分支接力;现场不在(排队窗口)或等人/终态才落
-   *  stage_note 等续聊带上。 */
+  /** 平台侧开回合(闸门裁决/流水线结果的交接词)。会话正忙(等用户/
+   * 运行中/终态)时不抢方向盘:通知挂到 stage_note,续聊提示词会带上。 */
   private startPlatformTurn(live: LiveIssue, message: string): void {
     const { state } = live;
-    if (this.turning.has(live.id) && live.driver
-        && !isTerminal(state.status) && state.status !== "waiting_user") {
-      // steer 只入队不抛错;旁路 fail-open,递不进去就退回挂便签。
-      void live.driver.steer(message)
-        .catch(() => this.parkPlatformNotice(live, message));
-      return;
-    }
     if (isTerminal(state.status) || this.turning.has(live.id)
         || state.status === "waiting_user") {
-      this.parkPlatformNotice(live, message);
+      state.stage_note = message.split("\n")[0].slice(0, 120);
+      saveState(live.root, state);
       return;
     }
     this.continueTurn(live, message);
-  }
-
-  /** 平台通知的落便签口:不抢回合,首行进 stage_note,续聊提示词带上。 */
-  private parkPlatformNotice(live: LiveIssue, message: string): void {
-    live.state.stage_note = message.split("\n")[0].slice(0, 120);
-    saveState(live.root, live.state);
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
