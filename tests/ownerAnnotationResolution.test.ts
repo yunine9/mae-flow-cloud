@@ -148,3 +148,37 @@ test("责任人直接确认当前 fixed 回执，无需重复填写理由，重�
   assert.equal(saved.response?.summary, "已补超时处理");
   assert.equal(blockingAnnotations([saved], "owner").length, 0);
 });
+
+
+for (const artifact of [TASK_REQUIREMENT_ARTIFACT, "diff", "design.md"]) {
+  test(`${artifact}：提出人可提交自己的意见，但管理员和提出人都不能代责任人闭环`, async () => {
+    const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "owner-policy-")),
+      provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+    const task = service.create("核对接口", { account: "owner" });
+    const state = (service as any).tasks.get(task.id);
+    state.summary.status = "waiting_for_human";
+    const store = (service as any).annotations(state) as AnnotationStore;
+    const own = service.addAnnotation(task.id, { author: "reviewer", artifact,
+      file: "spec.md", line: 1, anchor: "核对接口", note: "补充重试说明", kind: "doc" });
+    const foreign = service.addAnnotation(task.id, { author: "another", artifact,
+      file: "spec.md", line: 1, anchor: "核对接口", note: "补充超时说明", kind: "doc" });
+    const sent = await service.sendAnnotations(task.id, [own.id], "reviewer");
+    assert.deepEqual(sent.sent, [own.id]);
+    await assert.rejects(service.sendAnnotations(task.id, [foreign.id], "reviewer"));
+    assert.equal(store.list().find((one) => one.id === foreign.id)?.status, "draft");
+    for (const actor of ["reviewer", "admin", "another"]) {
+      for (const outcome of ["fixed", "not_adopted", "deferred", "accepted_risk"] as const) {
+        assert.throws(() => service.verifyAnnotation(task.id, own.id, actor, true,
+          { revision: 0, outcome, reason: "直接调用接口" }), AnnotationPermissionError);
+      }
+      await assert.rejects(service.reopenAnnotation(task.id, own.id, actor, 0), AnnotationPermissionError);
+    }
+    service.dropAnnotation(task.id, own.id, "reviewer");
+    assert.equal(store.list().find((one) => one.id === own.id)?.status, "sent", "撤回表达不是闭环");
+    assert.equal(blockingAnnotations(store.list(), "owner").length, 1);
+    const resolved = service.verifyAnnotation(task.id, own.id, "owner", false,
+      { revision: 0, outcome: "not_adopted", reason: "重试策略已在接口约定中说明" });
+    assert.equal(resolved.status, "verified");
+    assert.equal(resolved.resolution?.by, "owner");
+  });
+}

@@ -11100,8 +11100,25 @@ export class TaskService {
             && waiting.notes.includes(item.note)
             && waiting.notes.includes(item.anchor)).map((item) => item.id);
       if (!ids.length) return;
-      const draftIds = new Set(drafts.map((item) => item.id));
-      const pending = ids.filter((id) => draftIds.has(id));
+      const versions = waiting.continuation?.annotation_versions;
+      const history = Array.isArray(versions) ? [] : this.annotations(task).history();
+      const pending = drafts.filter((item) => {
+        if (!ids.includes(item.id)) return false;
+        if (Array.isArray(versions)) {
+          // 同一个 id 会在退回、改字后继续使用；旧决定只授权当时那版正文。
+          return versions.some((version) => version?.id === item.id
+            && version.revision === (item.rework ?? 0) && version.note === item.note);
+        }
+        // 在途旧决定没有版本快照，只补从未完成的投影。决定之后已有送达、
+        // 退回、改字或系统重置记录，就不能再拿它覆盖后来的人工作业。
+        return !history.some((operation) => {
+          if (operation.op === "sent") return operation.ids.includes(item.id)
+            && operation.at >= waiting.resolved_at;
+          return (operation.op === "edit" || operation.op === "reopen"
+            || operation.op === "delivery_reset" || operation.op === "clarified")
+            && operation.id === item.id && operation.at >= waiting.resolved_at;
+        });
+      }).map((item) => item.id);
       if (pending.length) this.annotations(task).markSent(pending, "decision");
     } catch (error) {
       // waiting.json 已经把决定、批注 id 和完整原文一起落袋。批注账只是
@@ -11692,7 +11709,10 @@ export class TaskService {
         ...(deliverySelection
           ? { delivery_selection: deliverySelection.record } : {}),
         ...(picked.length
-          ? { annotation_ids: picked.map((item) => item.id) } : {}),
+          ? { annotation_ids: picked.map((item) => item.id),
+              annotation_versions: picked.map((item) => ({
+                id: item.id, revision: item.rework ?? 0, note: item.note,
+              })) } : {}),
       },
     });
     // 引用已随本次决定送达;不清会在下一张决定卡重复注入同一份正文。
