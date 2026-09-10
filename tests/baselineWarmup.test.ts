@@ -116,7 +116,7 @@ test("runner 抛错按基础设施故障记账,任务照常", async () => {
   }
 });
 
-test("恢复续跑与脏工作区都不预热:预热只评判基线,不出冤案", async () => {
+test("恢复时基线不明或工作区脏，不把半成品当基线", async () => {
   // 内网实锤:恢复单的预热把 Agent 写了一半的类编了,报"基线缺
   // import"——责任切分反向误导。
   const { service, model, id, internal, repo } = await completedTask();
@@ -131,7 +131,7 @@ test("恢复续跑与脏工作区都不预热:预热只评判基线,不出冤案
     internal.resume = true;
     (service as any).startBaselineWarmup(internal, 0);
     await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(calls, 0, "恢复续跑不预热");
+    assert.equal(calls, 0, "无法核对恢复基线时不预热");
     assert.equal(service.get(id)?.baseline_build, undefined);
 
     internal.resume = false;
@@ -233,4 +233,53 @@ test("子任务出队即预编译，主会话初始化和写文档不等待编�
     t.mock.restoreAll();
     await model.stop();
   }
+});
+
+test("分析时跳过，转开发即使 resume 也补跑；中断后的基线编译可重试", async () => {
+  const { service, model, id, internal, repo } = await completedTask();
+  try {
+    let calls = 0;
+    (service as any).options.warmup = { runner: async () => {
+      calls++;
+      return { status: "passed", message: "基线通过" };
+    } };
+    const sha = repo.git("rev-parse", "HEAD");
+    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({ step_heads: { branch_create: sha } }));
+    internal.summary.requirement_analysis_requested = true;
+    (service as any).startBaselineWarmup(internal, 0);
+    assert.equal(internal.warmupActive, undefined);
+    internal.summary.requirement_analysis_requested = false;
+    internal.resume = true;
+    (service as any).startBaselineWarmup(internal, 0);
+    // launch 会清 resume；检查必须使用启动时快照，不能异步重读。
+    internal.resume = false;
+    await until(() => service.get(id)?.baseline_build?.status === "passed" ? true : undefined, "恢复后首次预热");
+    await until(() => internal.warmupActive === false ? true : undefined, "预热已退出");
+    assert.equal(calls, 1);
+    internal.summary.baseline_build = { status: "infrastructure_failure", sha,
+      started_at: new Date().toISOString(), finished_at: new Date().toISOString(), detail: "重启中断" };
+    internal.resume = true;
+    (service as any).startBaselineWarmup(internal, 0);
+    await until(() => service.get(id)?.baseline_build?.status === "passed" ? true : undefined, "中断编译补跑");
+    assert.equal(calls, 2);
+  } finally { await model.stop(); }
+});
+
+test("恢复时 HEAD 已提交业务修改，即使工作区干净也不能冒充基线", async () => {
+  const { service, model, internal, repo } = await completedTask();
+  try {
+    let calls = 0;
+    (service as any).options.warmup = { runner: async () => { calls++; return { status: "passed" }; } };
+    const baseline = repo.git("rev-parse", "HEAD");
+    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({ step_heads: { branch_create: baseline } }));
+    writeFileSync(join(repo.cwd, "README.md"), "changed\n");
+    repo.git("add", "README.md");
+    repo.git("commit", "-m", "business change");
+    internal.resume = true;
+    (service as any).startBaselineWarmup(internal, 0);
+    internal.resume = false;
+    await until(() => internal.warmupActive === false ? true : undefined, "核对恢复基线");
+    assert.equal(calls, 0);
+    assert.equal(internal.summary.baseline_build, undefined);
+  } finally { await model.stop(); }
 });

@@ -1,3 +1,4 @@
+import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
 import type { PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
@@ -4490,10 +4491,8 @@ export class TaskService {
     return existsSync(path) ? path : undefined;
   }
 
-  /** 环境预热编译(观测旁路,fail-open):现场就绪即后台开跑,与主
-   * Agent 的需求澄清并行——那段时间没人动代码,墙钟是免费的。任何
-   * 失败只记账+留日志,绝不影响任务状态;"不许卡死"红线下它连等待
-   * 都不引入。 */
+  /** 基线现场就绪即后台预编译；恢复需核对基线，不以会话次数判断。
+   * 编译失败只记事实，不阻断主任务。 */
   private startBaselineWarmup(task: TaskState, epoch: number): void {
     try {
       const configured = this.options.warmup;
@@ -4502,16 +4501,11 @@ export class TaskService {
       if (!configured.runner && !this.options.isolation) return;
       if (this.isRequirementAnalysis(task)) return; // 分析单没有可编译的仓
       if (!task.cwd || task.warmupActive) return;
-      // 恢复续跑的单不预热:Agent 可能已经在写代码,此时编译的是
-      // 半成品,报出来的"基线红"是冤案(内网实锤:恢复单把 Agent
-      // 在写的 ProbeTestService 编了,报基线缺 import)。缓存反正
-      // 已在此前的编译里焐热,恢复场景预热没有增量价值。
-      if (task.resume) return;
-      // 收过口的收据不重跑(重启恢复同理:缓存已经热了);
-      // "running" 而无 finished_at 是崩溃残留,重跑并覆盖。
-      if (task.summary.baseline_build?.finished_at) return;
+      // 中断/基础设施失败不等于编译完成；恢复时按真实基线核对后补跑。
+      if (task.summary.baseline_build?.finished_at
+          && task.summary.baseline_build.status !== "infrastructure_failure") return;
       task.warmupActive = true;
-      void this.performBaselineWarmup(task, epoch)
+      void this.performBaselineWarmup(task, task.resume === true)
         .catch((error) => this.options.log?.(
           `任务 ${task.summary.id} 环境预热异常(fail-open): ${String(error)}`))
         .finally(() => { task.warmupActive = false; });
@@ -4521,7 +4515,7 @@ export class TaskService {
     }
   }
 
-  private async performBaselineWarmup(task: TaskState, _epoch: number): Promise<void> {
+  private async performBaselineWarmup(task: TaskState, resuming: boolean): Promise<void> {
     const sessionEpoch = auxiliarySessionEpoch(task);
     const head = await runSafeWorktreeGitAsync(
       task.cwd!, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
@@ -4535,6 +4529,11 @@ export class TaskService {
         started_at: startedAt, finished_at: new Date().toISOString(),
       };
       this.persist(task);
+      return;
+    }
+    if (resuming && !await resumedWarmupBaselineMatches(task.cwd!, sha,
+        task.summary.baseline_build?.sha, task.summary.baseline)) {
+      this.options.log?.(`任务 ${task.summary.id} 未补跑基线预编译：当前 HEAD 已变化或基线无法确认`);
       return;
     }
     // 工作区已有业务改动 = 这不再是基线,预热收据会把半成品的编译错
