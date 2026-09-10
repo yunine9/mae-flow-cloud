@@ -21,7 +21,7 @@
 
 ## stage.analyze
 
-按证据链定位:方法论取用、分流与取证规范见技能 issue-analysis(grilling 对齐、diagnosing-bugs 诊断回路的取用时机也在其取用次序里);能自行推断的不要问,写进分析报告让用户基于报告自行反馈。
+按证据链定位:方法论取用、分流与取证规范见技能 issue-analysis(grilling 对齐、diagnosing-bugs 诊断回路的取用时机也在其取用次序里);事实自己查不问用户,对齐与决策类提问按开场「介入节奏」的档位执行。
 
 ## stage.fix
 
