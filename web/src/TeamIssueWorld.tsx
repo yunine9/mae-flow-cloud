@@ -1,11 +1,11 @@
 /**
- * 团队问题页(2026-09-10 拍板:团队任务按域拆导航,本组件即「团队问题」
- * 条目的页面正文;原型五稿确认形态折入)。
+ * 团队问题页·当前现场面板(2026-09-11 排版对齐:两域共用 App 的
+ * TeamWorldTabs 页签骨架,本组件=概览+现场,成果档案拆到下方
+ * TeamIssueArchive 由页签挂载;原型五稿确认形态折入)。
  *
- * 三段式:问题处理概览 → 问题队列 → 成果档案·问题闭环。概览/队列复用
- * 需求侧 team-delivery-overview / task-section / task-filters 的既有
- * class 体系(用户确认的形态:两域同一套版式,视觉零新债);卡片复用
- * TeamIssueCard(TaskOverviewRow 行形态)。概览数据走 teamOps 的
+ * 概览/队列复用需求侧 team-delivery-overview / task-section /
+ * task-filters 的既有 class 体系(两域同一套版式,视觉零新债);卡片
+ * 复用 TeamIssueCard(TaskOverviewRow 行形态)。概览数据走 teamOps 的
  * issueDeliveryBreakdown(与需求侧 teamDeliveryBreakdown 同构口径),
  * 阶段格出注册表全集、0 计数置灰(与需求侧同规则)。
  *
@@ -127,21 +127,12 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
     </button>
   );
 
-  // 成果档案·问题闭环:conclusion 维度归档统计(已闭环 + 已取消)。
-  const closed = useMemo(() => issues.filter((issue) =>
-    issue.status === "archived" || issue.status === "canceled"), [issues]);
-  const conclusionCount = (kind: string) => kind === ""
-    ? closed.length
-    : kind === "canceled"
-      ? closed.filter((issue) => issue.status === "canceled").length
-      : closed.filter((issue) => issue.conclusion?.kind === kind).length;
-
   return <>
     <section className="team-delivery-overview" aria-label="问题处理概览">
       <header className="team-delivery-overview-head">
         <div className="team-delivery-overview-copy">
           <h2>问题处理概览</h2>
-          <p>点击阶段或状态可筛选下方现场；已取消会话仅保留在档案。</p>
+          <p>点击阶段或状态可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="team-delivery-summary"
           aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
@@ -201,39 +192,63 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
           onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}
       </div>
-      {visible.length === 0
-        ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-            <strong>没有匹配的问题会话</strong>
-            <p>换关键词或清除筛选再看，会话没有丢。</p></div></div>
-        : <div className="task-list">{visible.map((issue) => (
-            <TeamIssueCard key={issue.id} issue={issue}
-              onOpen={() => onOpenIssue(issue.id)} />
-          ))}</div>}
-    </section>
-
-    <section className="task-section" aria-labelledby="team-issue-archive-title">
-      <div className="section-head"><div>
-        <h2 id="team-issue-archive-title">成果档案·问题闭环</h2></div>
-        <span className="section-count">{closed.length} 项</span>
-      </div>
-      {closed.length === 0
-        ? <div className="review-clear compact"><span aria-hidden>✓</span><div>
-            <strong>还没有闭环的问题会话</strong>
-            <p>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</p></div></div>
-        : <>
-          <div className="history-metrics" aria-label="问题闭环结论统计">
-            {CONCLUSION_TILES.map((tile) => (
-              <div className={`history-metric ${tile.tone}`} key={tile.kind || "all"}>
-                <span><i aria-hidden />{tile.label}</span>
-                <strong>{conclusionCount(tile.kind)}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="task-list">{closed.map((issue) => (
-            <TeamIssueCard key={issue.id} issue={issue}
-              onOpen={() => onOpenIssue(issue.id)} />
-          ))}</div>
-        </>}
+      {visible.length === 0 && <div className="empty-state">
+        <span className="empty-visual" aria-hidden><i /><i /><i /></span>
+        <strong>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</strong>
+        <p>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</p>
+      </div>}
+      <div className="task-list">{visible.map((issue) => (
+        <TeamIssueCard key={issue.id} issue={issue}
+          onOpen={() => onOpenIssue(issue.id)} />
+      ))}</div>
     </section>
   </>;
+}
+
+/** 成果档案·问题闭环(2026-09-11 排版对齐:骨架镜像需求侧 HistoryBoard
+ * ——history-board + history-intro + history-metrics + 空态同款
+ * board-empty;行仍用 TeamIssueCard,需求侧档案是逐任务表格行、问题侧
+ * 是会话卡,内容差异,版式同构)。 */
+export function TeamIssueArchive({ issues, onOpenIssue }: {
+  issues: IssueSummary[];
+  onOpenIssue: (id: string) => void;
+}) {
+  // 成果档案·问题闭环:conclusion 维度归档统计(已闭环 + 已取消)。
+  const closed = useMemo(() => issues.filter((issue) =>
+    issue.status === "archived" || issue.status === "canceled"), [issues]);
+  const conclusionCount = (kind: string) => kind === ""
+    ? closed.length
+    : kind === "canceled"
+      ? closed.filter((issue) => issue.status === "canceled").length
+      : closed.filter((issue) => issue.conclusion?.kind === kind).length;
+
+  return <section className="history-board" aria-label="成果档案·问题闭环">
+    <div className="history-intro">
+      <div>
+        <span className="section-kicker">ISSUE ARCHIVE</span>
+        <h2>成果档案·问题闭环</h2>
+        <p>这里保存已闭环与已取消的问题会话；处理中的回到「当前现场」查看。</p>
+      </div>
+    </div>
+    {closed.length === 0
+      ? <div className="board-empty">
+          <span className="empty-database" aria-hidden><i /><i /><i /></span>
+          <strong>还没有闭环的问题会话</strong>
+          <p>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</p>
+        </div>
+      : <>
+        <div className="history-metrics" aria-label="问题闭环结论统计">
+          {CONCLUSION_TILES.map((tile) => (
+            <div className={`history-metric ${tile.tone}`} key={tile.kind || "all"}>
+              <span><i aria-hidden />{tile.label}</span>
+              <strong>{conclusionCount(tile.kind)}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="task-list">{closed.map((issue) => (
+          <TeamIssueCard key={issue.id} issue={issue}
+            onOpen={() => onOpenIssue(issue.id)} />
+        ))}</div>
+      </>}
+  </section>;
 }

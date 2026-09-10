@@ -1,9 +1,10 @@
 /**
- * 团队域拆分导航(2026-09-10 拍板)的契约:侧栏「团队需求/团队问题」
- * 两条目互斥、页内领域切换器退场、需求板净化(问题会话不再混进需求
- * 队列)、问题世界三段齐备、问题侧交付概览口径纯函数、档案措辞。
- * 纯文本源码锚点(同 issueUiContracts 模式)+ teamOps 纯函数直跑
- * (同 teamOps.test.ts 模式)。
+ * 团队域拆分导航(2026-09-10 拍板)与两域排版同构(2026-09-11 拍板)
+ * 的契约:侧栏「团队需求/团队问题」两条目互斥、页内领域切换器退场、
+ * 需求板净化(问题会话不再混进需求队列)、两域共用 TeamWorldTabs 页签
+ * 骨架、问题页概览+现场/档案面板两面板、问题侧交付概览口径纯函数、
+ * 档案措辞。纯文本源码锚点(同 issueUiContracts 模式)+ teamOps 纯函数
+ * 直跑(同 teamOps.test.ts 模式)。
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -58,12 +59,32 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   assert.doesNotMatch(app, /issueToTeamTask/);
   // 适配器随拆分成死代码,teamOps 里一并移除(口径唯一,不留双入口)。
   assert.doesNotMatch(teamOps, /issueToTeamTask/);
-  // 问题会话的团队全景有且只有一个家:TeamIssueWorld。
-  assert.match(app,
-    /view === "teamIssues" && <section className="team-tasks-workspace">\n          <TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>\n        <\/section>/);
+  // 问题会话的团队全景有且只有一个家:「团队问题」页签页。
+  assert.match(app, /view === "teamIssues" && <section className="team-tasks-workspace">/);
+  assert.match(app, /<TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
 });
 
-test("团队问题页三段齐备,概览复用需求侧类名体系与既有卡片", () => {
+test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)", () => {
+  // 单一定义,两页各挂一次(需求/问题)。
+  assert.match(app, /function TeamWorldTabs\(/);
+  assert.equal((app.match(/<TeamWorldTabs domain=/g) ?? []).length, 2,
+    "团队需求与团队问题必须共用同一个页签组件");
+  // 骨架:role=tablist + 两张大卡(当前现场/成果档案),卡内 strong+small。
+  assert.match(app,
+    /<nav className="team-task-tabs" aria-label=\{copy\.label\} role="tablist">/);
+  assert.match(app, /<strong>当前现场<\/strong><small>\{copy\.currentSmall\}<\/small>/);
+  assert.match(app, /<strong>成果档案<\/strong><small>\{copy\.archiveSmall\}<\/small>/);
+  // 两域各自的副标题与 aria 标注。
+  assert.match(app, /label: "团队需求视图"/);
+  assert.match(app, /label: "团队问题视图"/);
+  assert.match(app, /哪个问题在推进、谁需要答复/);
+  assert.match(app, /闭环结论与取消记录/);
+  // 两页都按 current/archive 两面板切换,页签状态共用同一 state。
+  assert.match(app, /<TeamWorldTabs domain="requirement" tab=\{teamTaskTab\}/);
+  assert.match(app, /<TeamWorldTabs domain="issue" tab=\{teamTaskTab\}/);
+});
+
+test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {
   // 概览:team-delivery-overview 同一套类名;阶段/状态两组格。
   assert.match(issueWorld, /className="team-delivery-overview"/);
   assert.match(issueWorld, /id="issue-delivery-stage-title"/);
@@ -76,11 +97,30 @@ test("团队问题页三段齐备,概览复用需求侧类名体系与既有卡�
   assert.match(issueWorld, /aria-label="责任人"/);
   assert.match(issueWorld, /placeholder="搜索问题、单号或负责人"/);
   assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\}/);
-  // 档案分区:成果档案·问题闭环(conclusion 维度归档统计)。
-  assert.match(issueWorld, /成果档案·问题闭环/);
-  assert.match(issueWorld, /conclusion\?\.kind === kind/);
   // 概览格 0 计数置灰禁用与需求侧同规则(disabled 随 count)。
   assert.match(issueWorld, /disabled=\{count === 0\}/);
+  // 空态与需求队列同一个 empty-state 视觉(不再用 review-clear 简块)。
+  assert.match(issueWorld, /className="empty-state"/);
+  assert.match(issueWorld, /className="empty-visual"/);
+  assert.doesNotMatch(issueWorld, /review-clear/);
+  // 档案措辞:概览说明句与需求侧同构(已取消…仅保留在成果档案)。
+  assert.match(issueWorld, /已取消会话仅保留在成果档案/);
+});
+
+test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", () => {
+  // 骨架四件套与需求侧成果档案同款。
+  assert.match(issueWorld, /className="history-board"/);
+  assert.match(issueWorld, /className="history-intro"/);
+  assert.match(issueWorld, /<h2>成果档案·问题闭环<\/h2>/);
+  assert.match(issueWorld, /className="history-metrics"/);
+  assert.match(issueWorld, /className="board-empty"/);
+  assert.match(issueWorld, /conclusion\?\.kind === kind/);
+  // 档案列表仍用会话卡(内容差异),不再与现场平铺在同一页。
+  const worldBody = issueWorld.split("/** 成果档案·问题闭环")[0];
+  assert.doesNotMatch(worldBody, /history-board/,
+    "TeamIssueWorld 本体只出概览+现场;档案必须由页签面板 TeamIssueArchive 承载");
+  assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\}/);
+  assert.match(app, /<TeamIssueArchive issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
 });
 
 test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格计数正确", () => {

@@ -12,7 +12,7 @@ import {
 } from "./api";
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
-import { TeamIssueWorld } from "./TeamIssueWorld";
+import { TeamIssueArchive, TeamIssueWorld } from "./TeamIssueWorld";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -1199,22 +1199,8 @@ export function App() {
       <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : view === "teamIssues" ? " 项问题等你答复" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
-          <nav className="team-task-tabs" aria-label="团队需求视图" role="tablist">
-            <button type="button" role="tab" id="team-task-current-tab"
-              aria-controls="team-task-current-panel"
-              aria-selected={teamTaskTab === "current"}
-              className={teamTaskTab === "current" ? "active" : ""}
-              onClick={() => setTeamTaskTab("current")}>
-              <strong>当前现场</strong><small>谁在推进、哪里卡住、谁需要行动</small>
-            </button>
-            <button type="button" role="tab" id="team-task-archive-tab"
-              aria-controls="team-task-archive-panel"
-              aria-selected={teamTaskTab === "archive"}
-              className={teamTaskTab === "archive" ? "active" : ""}
-              onClick={() => setTeamTaskTab("archive")}>
-              <strong>成果档案</strong><small>待合入、完成、失败与取消记录</small>
-            </button>
-          </nav>
+          <TeamWorldTabs domain="requirement" tab={teamTaskTab}
+            onSelect={setTeamTaskTab} />
           {teamTaskTab === "current" ? <div role="tabpanel"
             id="team-task-current-panel" aria-labelledby="team-task-current-tab">
             <TeamDashboard
@@ -1234,10 +1220,18 @@ export function App() {
           </div>}
         </section>}
 
-        {/* 团队问题(2026-09-10 拆分拍板):问题会话的团队全景,
-            复用五稿确认的三段式世界;操作台仍在「问题处理」。 */}
+        {/* 团队问题(2026-09-10 拆分拍板):问题会话的团队全景;页签骨架
+            与团队需求同构(2026-09-11 排版对齐),操作台仍在「问题处理」。 */}
         {view === "teamIssues" && <section className="team-tasks-workspace">
-          <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+          <TeamWorldTabs domain="issue" tab={teamTaskTab}
+            onSelect={setTeamTaskTab} />
+          {teamTaskTab === "current" ? <div role="tabpanel"
+            id="team-issue-current-panel" aria-labelledby="team-issue-current-tab">
+            <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+          </div> : <div role="tabpanel"
+            id="team-issue-archive-panel" aria-labelledby="team-issue-archive-tab">
+            <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
+          </div>}
         </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
@@ -1667,6 +1661,37 @@ function UsersBoard({ me }: { me: string }) {
   </section>;
 }
 
+/** 两域共用的页签骨架(2026-09-11 排版对齐):「当前现场/成果档案」两张
+ * 大卡,团队需求与团队问题两页必须用这同一个组件,防版式漂移;域差异
+ * 只有副标题文案与 aria 标注。 */
+function TeamWorldTabs({ domain, tab, onSelect }: {
+  domain: "requirement" | "issue";
+  tab: TeamTaskTab;
+  onSelect: (tab: TeamTaskTab) => void;
+}) {
+  const copy = domain === "requirement"
+    ? { label: "团队需求视图", currentSmall: "谁在推进、哪里卡住、谁需要行动",
+        archiveSmall: "待合入、完成、失败与取消记录", prefix: "team-task" }
+    : { label: "团队问题视图", currentSmall: "哪个问题在推进、谁需要答复",
+        archiveSmall: "闭环结论与取消记录", prefix: "team-issue" };
+  return <nav className="team-task-tabs" aria-label={copy.label} role="tablist">
+    <button type="button" role="tab" id={`${copy.prefix}-current-tab`}
+      aria-controls={`${copy.prefix}-current-panel`}
+      aria-selected={tab === "current"}
+      className={tab === "current" ? "active" : ""}
+      onClick={() => onSelect("current")}>
+      <strong>当前现场</strong><small>{copy.currentSmall}</small>
+    </button>
+    <button type="button" role="tab" id={`${copy.prefix}-archive-tab`}
+      aria-controls={`${copy.prefix}-archive-panel`}
+      aria-selected={tab === "archive"}
+      className={tab === "archive" ? "active" : ""}
+      onClick={() => onSelect("archive")}>
+      <strong>成果档案</strong><small>{copy.archiveSmall}</small>
+    </button>
+  </nav>;
+}
+
 /** 团队看板列表项:TeamTask 稳定字段投影 + 原始任务对象。
  * teamTask 用于过滤/排序(纯函数 isCurrentTeamTask/matchesTeamScope/
  * byTeamAttention 只读稳定字段);task 用于渲染。 */
@@ -1865,6 +1890,11 @@ function TeamDeliveryOverview({
   </section>;
 }
 
-function TaskEmpty({ personal }: { personal: boolean }) {
-  return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{personal ? "还没有分配给你的其他任务" : "还没有当前任务"}</strong><p>{personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。"}</p></div>;
+function TaskEmpty({ personal, title, detail }: {
+  personal: boolean;
+  /** 问题域等复用时给的自定文案;缺省仍是两角色默认话术。 */
+  title?: string;
+  detail?: string;
+}) {
+  return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{title ?? (personal ? "还没有分配给你的其他任务" : "还没有当前任务")}</strong><p>{detail ?? (personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。")}</p></div>;
 }
