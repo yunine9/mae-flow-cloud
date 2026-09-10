@@ -331,13 +331,25 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       state_version: analysisGate.gate!.state_version,
       code: "confirm",
     });
-    await until(() => {
+    const verifyGate = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage === "mr_green"
+        && issue.stage_states?.[4] === "done"
+        ? issue : undefined;
+    }, "全链跑到 MR 跑绿收口,举环境验证闸");
+    // 快照取"验证通过后"的待归档态(与旧行为同形:无闸、idle)。
+    service.answer(created.id, {
+      state_version: verifyGate.gate!.state_version, code: "pass",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
       return issue.status === "idle" && issue.stage === "mr_green"
         && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "全链跑到 MR 跑绿收口(账齐的终点)");
+    }, "验证通过后落待归档");
 
     // 期望侧:按 web/src/api.ts 的 IssueSummary 手写,undefined 键 = 可选;
     // 环境对象也直接写成镜像类型的字面量——页面凭据两键让 tsc 的多属性
@@ -395,7 +407,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       inherited_accounts: undefined,
       status: "idle",
       stage: "mr_green",
-      stage_note: "全部 MR 流水线已跑绿——确认合入后可归档收口",
+      stage_note: "环境验证通过——确认 MR 合入后可归档收口",
       stage_at: "2026-08-28T00:00:00Z",
       has_environment: true,
       nudges: undefined,

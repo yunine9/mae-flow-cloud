@@ -40,7 +40,8 @@
 ## gate.verify.fail
 
 用户在环境验证发现问题,已退回「问题分析」阶段(第 {{round}} 轮)。{{reason}}
-请基于新一轮的情况重新分析(前几轮的修复还在分支上,不要推倒重来),分析完成后重新 submit_analysis。
+先就问题理解与修改方向与用户对齐——有疑点用 AskUserQuestion 提问,不要自行猜;对齐后再重写分析报告并 submit_analysis。
+前几轮的修复还在分支上,除非新分析推翻,否则不要推倒重来。
 
 ## gate.evidence.header
 

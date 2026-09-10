@@ -414,14 +414,15 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     const done = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "mr_green"
-        && issue.stage_states?.[4] === "done" && issue.status === "idle"
+      return issue.stage === "mr_green" && issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "全绿当场收口待归档");
+    }, "全绿当场收口,举环境验证闸");
     assert.equal(done.stage, "mr_green", "终点阶段不动,收口在本阶段");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
-    assert.match(done.stage_note ?? "", /确认合入后.*归档/);
+    assert.match(done.stage_note ?? "", /环境验证/);
     // 当场收口没有停等:受理账不在场。
     assert.equal(chain.saved().mr_gate, undefined);
     // 回执与台账:验绿通过 + 收口话术进现场。
@@ -486,10 +487,11 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
     const done = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "mr_green"
+      return issue.stage === "mr_green" && issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
         && issue.stage_states?.[4] === "done" ? issue : undefined;
-    }, "监看器等绿后收口");
-    assert.equal(done.status, "idle", "收口待归档");
+    }, "监看器等绿后收口,举环境验证闸");
+    assert.equal(done.status, "waiting_user", "收口停等环境验证");
     assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
     const notice = await until(() =>
       chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
@@ -574,10 +576,11 @@ test("MR 验绿门·陈灯防御:窗口期旧 SHA 红灯不冤枉重推的申报
     const done = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "mr_green"
+      return issue.stage === "mr_green" && issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
         && issue.stage_states?.[4] === "done" ? issue : undefined;
-    }, "监看器等真绿后收口");
-    assert.equal(done.status, "idle", "收口待归档");
+    }, "监看器等真绿后收口,举环境验证闸");
+    assert.equal(done.status, "waiting_user", "收口停等环境验证");
     assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
     assert.equal(chain.saved().pipelines?.[chain.origin]?.status, "success");
     const notice = await until(() =>
@@ -662,10 +665,11 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     const done = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "mr_green"
-        && issue.stage_states?.[4] === "done" && issue.status === "idle"
+      return issue.stage === "mr_green" && issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "空=空收口待归档");
+    }, "空=空收口,举环境验证闸");
     assert.equal(done.mrs, undefined, "零 MR 交付");
     assert.equal(done.stage, "mr_green", "收口在终点阶段");
     const saved = loadState(join(dataDir, "issues", created.id))!;
@@ -765,18 +769,27 @@ test("收口后返工:续聊重开 mr_green,再申报再收口;通知不重复�
     steps: (origin) => [[origin]],
   });
   try {
-    // 第一轮:全绿即时收口(申报即验绿),通知用户待归档。
-    await until(() => {
+    // 第一轮:全绿即时收口(申报即验绿),举环境验证闸等用户。
+    const verifyGate = await until(() => {
       const issue = chain.service.get(chain.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" && issue.stage_states?.[4] === "done"
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify"
+        && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "第一轮收口");
+    }, "第一轮收口,举环境验证闸");
     const closed = chain.service.get(chain.id);
     assert.equal(closed.stage, "mr_green", "收口在终点阶段");
     await until(() =>
-      chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
+      chain.notifier.list().find((record) => /归档|验证/.test(record.summary ?? "")),
       "第一轮收口通知");
+    // 验证通过落待归档,返工语义照旧(ADR-0013)。
+    chain.service.answer(chain.id, {
+      state_version: verifyGate.gate!.state_version, code: "pass",
+    });
+    await until(() =>
+      chain.service.get(chain.id).status === "idle" ? 1 : undefined,
+      "验证通过后落待归档");
 
     // 收口后用户说没修好:重开 mr_green 返工(不是回退,轮次账不动)。
     const reopened = chain.service.reply(chain.id, "还是超时,继续修");
