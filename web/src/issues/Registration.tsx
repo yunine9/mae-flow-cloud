@@ -74,6 +74,8 @@ export function IssueRegistration({
   onCreated,
   onError,
   onNavigateProfile,
+  panel: controlledPanel,
+  onPanelChange,
 }: {
   viewer: AuthUser;
   /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦)。 */
@@ -81,8 +83,17 @@ export function IssueRegistration({
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
+  /** 面板受控态:传入后内部页签状态失效,由父层(导航子页签)决定
+   * 当前面板;onPanelChange 随内部切换上报。缺省时维持自持状态。 */
+  panel?: "dts" | "manual";
+  onPanelChange?: (panel: "dts" | "manual") => void;
 }) {
-  const [tab, setTab] = useState<"dts" | "manual">("manual");
+  const [ownPanel, setOwnPanel] = useState<"dts" | "manual">("manual");
+  const tab = controlledPanel ?? ownPanel;
+  const setTab = (next: "dts" | "manual") => {
+    setOwnPanel(next);
+    onPanelChange?.(next);
+  };
   // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
   // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
   return <section className="issue-section" aria-label="发起问题会话">
