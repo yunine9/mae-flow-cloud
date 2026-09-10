@@ -76,15 +76,15 @@ test("口令选择器可用键盘操作，窄屏不会溢出", () => {
     /@media \(max-width: 680px\) \{[\s\S]*\.issue-password-menu \{[\s\S]*position: static;/);
 });
 
-test("DTS 详情按钮不嵌在勾选标签内，窄屏下拉与触控目标可达", () => {
-  const rowLabel = registration.match(
-    /<label className="issue-dts-row-main">([\s\S]*?)<\/label>/)?.[1] ?? "";
-  assert.ok(rowLabel, "必须保留可点击的单据勾选标签");
-  assert.doesNotMatch(rowLabel, /<button/);
-  assert.match(registration, /className="issue-dts-expand"[\s\S]*aria-controls=\{detailId\}/);
+test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", () => {
+  // shadcn 表格化(2026-09-11)后:勾选 Checkbox 独占首格,展开按钮
+  // 独占尾格——两个命中目标互不嵌套;旧勾选 label 行退役。
+  assert.doesNotMatch(registration, /<label className="issue-dts-row-main">/,
+    "旧勾选 label 行应已退役(勾选改 Checkbox 独立格)");
+  assert.match(registration, /aria-controls=\{detailId\}/);
   assert.match(registration, /aria-label=\{`\$\{isExpanded \? "收起" : "展开"\}/);
-  assert.match(css,
-    /\.issue-dts-expand \{[\s\S]*min-width: 44px; min-height: 44px;/);
+  // 触控目标:展开按钮 36px 见方(size-9),不再依赖旧 css 的 44px 规则。
+  assert.match(registration, /size-9 items-center justify-center/);
   assert.match(css,
     /@media \(max-width: 680px\) \{[\s\S]*\.issue-dts-version-menu \{[\s\S]*position: static;[\s\S]*max-width: 100%/);
   assert.match(css,
@@ -337,15 +337,16 @@ test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(
   assert.match(apiTypes, /putDtsModuleBinding/);
   assert.match(apiTypes, /"\/issues\/dts-bindings"/);
   assert.match(apiTypes, /dts-bindings\/\$\{encodeURIComponent\(ticket\)\}/);
-  // 列渲染:每行原生 select + 「未选择」解绑项 + aria 标注。
-  assert.match(registration, /issue-dts-module-cell/);
+  // 列渲染:每行 shadcn Select + 「未选择」解绑项 + aria 标注。
   assert.match(registration,
-    /<option value="">未选择\(AI 运行时识别\)<\/option>/);
+    /<Select[\s\S]{0,80}value=\{bindings\[ticket\.ticket\]\?\.module_id \?\? "__none"\}/);
+  assert.match(registration,
+    /<SelectItem value="__none">[\s\S]{0,40}未选择\(AI 运行时识别\)/);
   assert.match(registration, /aria-label=\{\`\$\{ticket\.ticket\} 所属业务模块\`\}/);
   // 选即存:乐观更新失败回滚,反馈落在行内。
   assert.match(registration, /async function bindModule\(/);
   assert.match(registration, /putDtsModuleBinding\(ticketNo, moduleId \|\| null\)/);
-  assert.match(registration, /issue-dts-module-fail/);
+  assert.match(registration, /text-destructive" role="alert"/);
   // 显隐:工具栏开关 + localStorage 按用户记忆。
   assert.match(registration, /issue-dts-module-toggle/);
   assert.match(registration,
@@ -541,24 +542,22 @@ test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发
     /const canOperate = !viewerUsername \|\| viewerUsername === detail\.account/);
 });
 
-test("单号处处可选中复制:DTS 行单号独立于勾选 label,user-select 强制放开", () => {
+test("单号处处可选中复制:DTS 表格单号独立成格,user-select 强制放开", () => {
   // 单号是绑单/推送分支名的关键操作对象,复制是高频动作;button(会话
-  // 卡片)与 label(DTS 行)内的拖选被浏览器默认禁掉,CSS 强制放开。
+  // 卡片)内的拖选被浏览器默认禁掉,CSS 强制放开。
   assert.match(css,
     /\.task-ticket,\s*\.issue-dts-ticket,\s*\.issue-ticket\s*\{[^}]*user-select:\s*text/);
-  // DTS 行:单号(含远程徽标)是 row-control 的直接子元素,排在勾选
-  // label 之前——拖选单号不会误勾选。
-  const rowSlice = registration.slice(
-    registration.indexOf('className="issue-dts-row-control"'),
-    registration.indexOf("issue-dts-expand"));
-  assert.ok(rowSlice.includes("issue-dts-identity"),
-    "DTS 行模板应包含单号容器");
-  assert.ok(
-    rowSlice.indexOf("issue-dts-identity") < rowSlice.indexOf("issue-dts-row-main"),
-    "单号容器必须在勾选 label 之前(独立可拖选)");
-  const labelSlice = rowSlice.slice(rowSlice.indexOf("issue-dts-row-main"));
-  assert.equal(labelSlice.includes("issue-dts-identity"), false,
-    "勾选 label 内不得再含单号容器");
+  // shadcn 表格化后:勾选 Checkbox 在首格,单号在第二个 TableCell——
+  // 单号独立成格,拖选复制不会误勾选。
+  const rowTemplate = registration.slice(
+    registration.indexOf("display.map((ticket)"),
+    registration.indexOf("issue-dts-detail-html"));
+  const checkboxCell = rowTemplate.indexOf("<Checkbox");
+  const ticketCell = rowTemplate.indexOf("issue-dts-ticket");
+  assert.ok(checkboxCell > -1, "行模板应有勾选 Checkbox");
+  assert.ok(ticketCell > checkboxCell, "勾选在前,单号在后");
+  assert.ok(rowTemplate.slice(checkboxCell, ticketCell).includes("</TableCell>"),
+    "单号必须独立成格(与勾选不同格)——拖选复制不误勾选");
 });
 
 test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻判定", () => {

@@ -32,17 +32,26 @@ import type { IssueSessionState } from "../src/issueFlow/state.ts";
 const SKILL_DIR = join(
   fileURLToPath(import.meta.url), "..", "..", "assets", "issue-skills");
 
+/** 货架内置种源目录(assets/host-skills,如有)同样进 Agent 上下文
+ * (渐进式发现读到),漂移对账一并覆盖——2026-09-11 全局审查发现它
+ * 曾漏网(禁词与伪工具名都在正文里活着)。目录缺席=当前无内置种,
+ * 静默跳过;哪天再放进来,对账自动生效。 */
+const HOST_SKILL_DIR = join(
+  fileURLToPath(import.meta.url), "..", "..", "assets", "host-skills");
+
 function skillFiles(): Array<{ name: string; text: string }> {
-  return readdirSync(SKILL_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((dir) => {
-      const path = join(SKILL_DIR, dir.name, "SKILL.md");
-      try {
-        return [{ name: dir.name, text: readFileSync(path, "utf-8") }];
-      } catch {
-        return []; // 缺 SKILL.md 由 materializeIssueSkills 的 fail-loud 把关
-      }
-    });
+  return [SKILL_DIR, HOST_SKILL_DIR]
+    .filter((root) => existsSync(root))
+    .flatMap((root) => readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((dir) => {
+        const path = join(root, dir.name, "SKILL.md");
+        try {
+          return [{ name: dir.name, text: readFileSync(path, "utf-8") }];
+        } catch {
+          return []; // 缺 SKILL.md 由 materializeIssueSkills 的 fail-loud 把关
+        }
+      }));
 }
 
 function minimalState(): IssueSessionState {

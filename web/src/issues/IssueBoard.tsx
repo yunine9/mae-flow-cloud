@@ -53,8 +53,13 @@ function readIssueListFilter(): IssueListFilter {
   return "active";
 }
 
+/** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题登记/DTS列表
+ * 是发起域的两个面板,问题会话是会话列表。App 侧边栏展开组持有选择,
+ * 本组件按它承接右侧页面。 */
+export type IssueChildTab = "register" | "dts" | "sessions";
+
 export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
-  onOpenIssue, onCloseIssue }: {
+  onOpenIssue, onCloseIssue, childTab, onChildTabChange }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
   /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):作 openId 初值,
@@ -65,9 +70,16 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
    * history——App 快照、Board openId、URL 三处状态由此保持一致。 */
   onOpenIssue: (id: string) => void;
   onCloseIssue: () => void;
+  /** 当前子页签(App 持有并持久化;admin 恒为 sessions)。 */
+  childTab: IssueChildTab;
+  /** 子页签选择上报(App 写状态/持久化/历史快照)。 */
+  onChildTabChange?: (tab: IssueChildTab) => void;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
+  // App 快照是工作台开关的唯一真相:URL 侧关闭(点子页签离开、浏览器
+  // 后退)同步收掉本地 openId,导航与右侧内容不错位。
+  useEffect(() => { setOpenId(initialOpenId); }, [initialOpenId]);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   /** 详情拉取是否失败过(当前 openId):失败只置横幅不清输入,加载
    * 指示停转;再点同一张卡由 detailRetry 强制重试。 */
@@ -203,10 +215,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       <button type="button" onClick={() => setError("")}>知道了</button>
     </div>}
     {/* 发起入口仅开发者:管理员不发起问题会话(服务端对 admin POST 直接
-        403),管理视角的这块板只读——列表全员可见,会话点开落查看模式。 */}
+        403),管理视角的这块板只读——列表全员可见,会话点开落查看模式。
+        两面板常驻(visible 隐藏切换):「问题会话」子页签下也不卸载,
+        表单/勾选/搜索状态跨子页签驻留(spec #171)。 */}
     {viewer.role !== "admin" && <IssueRegistration
       viewer={viewer}
       issues={issues}
+      visible={childTab !== "sessions"}
+      panel={childTab === "dts" ? "dts" : "manual"}
       onCreated={(created) => {
         refreshList();
         openIssue(created.id);
@@ -214,7 +230,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       onError={setError}
       onNavigateProfile={onNavigateProfile}
     />}
-    <section className="issue-section" aria-labelledby="issue-mine-title">
+    <section className="issue-section" aria-labelledby="issue-mine-title"
+      hidden={childTab !== "sessions"}>
       <div className="section-head">
         <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。 */}

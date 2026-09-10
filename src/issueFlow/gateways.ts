@@ -602,9 +602,9 @@ export class MockDtsGateway implements DtsGateway {
   /** content 在位则原样作为详情正文(自带现象描述的单子),缺省走罐头模板。 */
   private readonly tickets: Array<DtsTicketBrief & { content?: string }> = [
     { ticket: "DTS-2026-1001", title: "【DEV·模拟】订单列表导出超时(数据量大时必现)", status: "打开" },
-    { ticket: "DTS-2026-1002", title: "【DEV·模拟】消息中心未读数偶发不清零", status: "打开" },
+    { ticket: "DTS-2026-1002", title: "【DEV·模拟】消息中心未读数偶发不清零", status: "开发人员实施修改" },
     { ticket: "DTS-2026-1003", title: "【DEV·模拟】移动端审批页白屏(iOS 17.4)", status: "处理中" },
-    { ticket: "DTS-2026-1004", title: "【DEV·模拟】批量删除用户报唯一约束冲突", status: "打开" },
+    { ticket: "DTS-2026-1004", title: "【DEV·模拟】批量删除用户报唯一约束冲突", status: "开发人员实施修改" },
     { ticket: "DTS-2026-1005", title: "【DEV·模拟】流水线产物下载 404", status: "处理中" },
     {
       ticket: "DTS-2026-1006",

@@ -21,7 +21,6 @@ import { SKILL_SOURCE_DIR } from "../src/issueFlow/prompt.ts";
 import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
 import {
   knowledgeMatchesIssueSession,
-  readSkillKnowledgeMetadata,
 } from "../src/knowledgeAssetModel.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import { mfcTemp } from "./mfcTmp.ts";
@@ -187,47 +186,3 @@ test("编排层技能源:issue-analysis 在源目录,报告模板含五章节标
     "提交前收敛:submit_analysis 交的是结论版,不是过程回放");
 });
 
-test("货架通用定位 skill 源(dts-diagnose):engineering 不限作用域,报告对齐五章节", () => {
-  const path = join(SKILL_SOURCE_DIR, "..", "host-skills",
-    "dts-diagnose", "SKILL.md");
-  const body = readFileSync(path, "utf-8");
-  assert.match(body, /^---\nname: dts-diagnose\ndescription: [^\n]+\n/,
-    "frontmatter 必须带 name+description(货架验收要求 pi 装载器认它)");
-  assert.match(body, /^knowledge_nature: engineering$/m,
-    "货架发布必须标 engineering(验收拒收 unclassified)");
-  assert.match(body, /^technologies: \[/m,
-    "engineering 知识必须带适用语言(发布校验必填)");
-  assert.doesNotMatch(body, /^business_modules:/m,
-    "不得限定业务模块——加了作用域就会被 knowledgeMatchesTask 过滤,"
-    + "ADR-0005 的通用豁免要求未限定仓库/模块");
-  assert.doesNotMatch(body, /^repositories:/m, "同上,不得限定仓库");
-  // 端到端:真实解析器+真实匹配器证明它以通用豁免进所有问题会话
-  // (空上下文=没有任何作用域可命中,还为 true 就是真的通用)。
-  assert.equal(knowledgeMatchesIssueSession(
-    readSkillKnowledgeMetadata(body),
-    { repositories: [], businessModuleIds: [] }), true);
-  for (const section of ANALYSIS_REPORT_SECTIONS) {
-    assert.match(body, new RegExp(`^## ${section}`, "m"),
-      `报告模板必须含「${section}」——货架方法论与 submit_analysis 门票同源`);
-  }
-  assert.doesNotMatch(body, /每步确认/,
-    "适配钉死:不得保留「每步确认」——analyze 阶段唯一出口是 submit_analysis");
-  assert.doesNotMatch(body, /\bcurl\b/,
-    "适配钉死:截图走 dts_get_ticket/inspect_image,不走 curl 拉外链");
-  assert.match(body, /轻量 4\/4 通过/,
-    "质量检查必须标适用范围——轻量路径免穷举类检查,不与执行纪律打架");
-  assert.match(body, /定位结论只对分析时的代码基线负责/,
-    "版本分支推导必须有落点:差异写进「置信度」,结论只对分析基线负责");
-  // 与编排层模板同序同密度(2026-09-03):一句话总结先行/节名即问题/证据指针化/结论版。
-  assert.ok(body.indexOf("一句话总结") < body.indexOf("## 问题现象")
-    && body.indexOf("## 问题根因") < body.indexOf("## 修改方案")
-    && body.indexOf("## 修改方案") < body.indexOf("## 证据链"),
-    "模板同序:总结先行,节序=现象→根因→方案→证据链");
-  assert.match(body, /一句话总结/,
-    "首行=一句话总结(串联 现象→根因→方案),与编排层模板同源");
-  assert.match(body, /出处指针/,
-    "日志证据指针化:时间戳+目录+关键字,不贴整段原文");
-  assert.match(body, /结论版/,
-    "五步法中间产物不整块进报告,提交的是结论版");
-  assert.ok(Buffer.byteLength(body) <= 128 * 1024, "货架单文件上限 128KiB");
-});

@@ -170,10 +170,13 @@ done/inherited/redo);阶段转移账进 events,事件流可回放。真相链:
 
 ## 宿主工具与会话技能
 
-会话工具:`fetch_logs`(宿主跑
-fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
-(宿主跑 build-deploy,成功哨兵校验;换库验证封存期间无阶段开放,调用
-一律被门禁拒绝)/ `dts_get_ticket` / `push_branch`
+会话工具:日志抓取不是工具——引擎是平台技能 issue-ops 的 bin
+(fetch-logs/fetch-logs-k8s,随技能物化,Agent 经 Bash 按技能用法调,
+产物落工作区 grep 真实文件)/ `build_deploy`(宿主跑 build-deploy,
+成功哨兵校验;换库验证封存期间无阶段开放,调用
+一律被门禁拒绝)/ `dts_get_ticket` / `get_issue_meta`(登记元信息)/
+`request_env`(网管环境配置卡)/ `lookup_modules` / `bind_module` /
+`pull_repo` / `push_branch`
 / `create_mr`(经公共 mrClient → 交付平台适配层 → codehub CLI,
 单号自动关联)/ `submit_analysis`(提交分析/
 结论,以报告在场且五章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
@@ -187,13 +190,15 @@ bash 但**没有业务工具**(complete_stage/push_branch 等只在主会话),
 写进任务卡)由适配技能约束。
 
 阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
-的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),
-create_mr 仅 mr_green,push_branch 自 fix 起,submit_analysis 仅
-analyze,report_ut 仅 fix;build_deploy 因换库验证封存(ADR-0013)无
+的 tools 列为唯一事实源:工读类(dts_get_ticket/get_issue_meta/
+request_env)全程开放;调查取证(lookup_modules/pull_repo)与阶段性
+交付(push_branch/create_mr/report_ut)是跨阶段通用能力——阶段只组织
+出口、不禁止工具,无单场景的交付由单号门禁拦截;submit_analysis 仅
+analyze/conclude 出口;build_deploy 因换库验证封存(ADR-0013)无
 阶段开放,调用一律被阶段门禁拒绝,执行体原地保留待重启。
 
 技能(每次会话物化到 `skills/`):issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
-规范/报告五章节)、issue-research(研究方法与非问题出口,方法论兜底)、
+规范/报告五章节/非问题出口)、
 issue-delivery(分支/提交格式 `[单号][类型] 描述`/推送/MR)、
 issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 
@@ -211,12 +216,9 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
    经只读快照(`.mae-flow-work/host-skills`,GateService 账本拒写)进
    会话;匹配走 `knowledgeMatchesIssueSession`——任务口径上一处豁免:
    未限定仓库/模块的 engineering 通用知识进所有问题会话,技术栈维度
-   不参与,未分类维持不进。首个通用定位 skill 的仓内发布源:
-   `assets/host-skills/dts-diagnose/SKILL.md`(五步诊断法,已经平台
-   适配:报告对齐五章节门票、无逐步确认、截图走 dts_get_ticket/
-   inspect_image;经管理面上传发布)。
-3. **仓内 issue-research**:兜底方法论;都没有则 Agent 按取证规范自行
-   定位。
+   不参与,未分类维持不进。货架方法论经管理面发布,仓内不内置种源。
+3. **通用诊断回路 diagnosing-bugs**:兜底方法论(vendor 技能,物化在
+   `skills/diagnosing-bugs/`);都没有则 Agent 按取证规范自行定位。
 
 报告门票:`submit_analysis` 机械校验 issue-analysis.md 含五章节
 (问题现象/问题根因/修改方案/证据链/置信度),缺章节整单打回——轻量路径的简版

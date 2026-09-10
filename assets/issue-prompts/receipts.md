@@ -6,7 +6,7 @@
 
 ## pull.guide.prep
 
-拉仓指引:还有要用的仓继续调 pull_repo;都拉齐了就调 complete_stage 申报完成本阶段。
+拉仓指引——
 {{stage_brief}}
 
 ## pull.baseline_miss
@@ -23,8 +23,7 @@
 
 ## dts.briefing
 
-单据详情已获取——通读单据后调 complete_stage 申报完成,进入拉取代码仓:
-{{stage_brief}}
+单据详情已获取——通读单据后调 complete_stage 申报完成(材料到位不会自动推进)。
 
 ## push.no_ticket
 
@@ -75,11 +74,11 @@
 
 ## analysis.no_report
 
-分析报告还没写出来:请先把报告写到工作区根目录 issue-analysis.md——五章节齐全、首行一句话总结,模板见技能 issue-analysis——写好再提交
+分析报告还没写:先把结论版写到工作区根目录 issue-analysis.md(五章节模板见技能 issue-analysis)再提交。
 
 ## analysis.missing_sections
 
-分析报告缺必备章节:{{missing}}。按技能 issue-analysis 的模板补齐五章节再提交;轻量路径的简版报告也必须五章节齐全(内容可简,要素不缺)。
+分析报告缺必备章节:{{missing}}。按技能 issue-analysis 的模板补齐再提交(轻量路径内容可简、要素不缺)。
 
 ## analysis.submitted.no_ticket
 

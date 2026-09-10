@@ -21,11 +21,11 @@
 
 ## stage.analyze
 
-按证据链定位:方法论取用、分流与取证规范见技能 issue-analysis。现象或方案存在模糊、分歧或多假设难裁决时,按 grilling 技能先对齐问题现象、再对齐修改方案——能自行推断的不要问,写进分析报告让用户基于报告自行反馈。疑难杂症按 diagnosing-bugs 的诊断回路定位。
+按证据链定位:方法论取用、分流与取证规范见技能 issue-analysis(grilling 对齐、diagnosing-bugs 诊断回路的取用时机也在其取用次序里);能自行推断的不要问,写进分析报告让用户基于报告自行反馈。
 
 ## stage.fix
 
-要求按 implement 技能的方法实施修复(读 `skills/implement/SKILL.md` 取实现骨架;TDD 节奏与多仓口径的适配点名见技能 issue-delivery)。开改前可读 .mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略)。每轮 UT 结果如实上报,平台只记账;验证聚焦:先跑与本修改直接相关的函数/模块级测试,通过即收——全量回归交给平台流水线,不要每轮手跑全套。完成后自检,再按 code-review 双轴(Standards=仓规,Spec=分析报告的修改方案)过一遍自己的 diff,测试可接受再收口。
+要求按 implement 技能的方法实施修复(读 `skills/implement/SKILL.md` 取实现骨架;TDD 节奏与多仓口径的适配点名见技能 issue-delivery)。开改前可读 .mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略)。每轮 UT 结果如实上报;验证聚焦:先跑与本修改直接相关的函数/模块级测试,通过即收——全量回归交给平台流水线,不要每轮手跑全套。完成后自检,再按 code-review 双轴(Standards=仓规,Spec=分析报告的修改方案)过一遍自己的 diff,测试可接受再收口。
 
 ## stage.mr_green
 

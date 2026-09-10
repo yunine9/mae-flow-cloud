@@ -13,7 +13,7 @@
 
 ```mermaid
 flowchart TD
-    A[进场:读既有报告防重分析<br/>盘点单详情/截图/登记元信息] --> B[取用定位方法论<br/>业务仓 skill → 货架通用 skill → issue-research → 裸定]
+    A[进场:读既有报告防重分析<br/>盘点单详情/截图/登记元信息] --> B[取用定位方法论<br/>业务仓 skill → 货架通用 skill → diagnosing-bugs → 裸定]
     B --> C{分流判断}
     C -- 已知问题/一眼配置错误/直接命中 --> D[轻量路径<br/>取证一两件定案,报告简版]
     C -- 拿不准一律完整 --> E[复述现象]
@@ -33,23 +33,13 @@ flowchart TD
 | 顺位 | 来源 | 说明 |
 |---|---|---|
 | 1 | 业务仓问题 skill | 约定放业务仓根目录 `.cac/skills/<name>/SKILL.md`(标准 skill 形态,与需求侧标准根同一约定),拉仓后按需 Read。这个业务怎么排障,仓里的知识最懂 |
-| 2 | 团队货架通用 skill | 经管理面发布(审核/版本/密钥扫描),`engineering` 且不限仓库/模块作用域即自动进所有问题会话(ADR-0005 通用豁免)。首个上架源:`assets/host-skills/dts-diagnose/`(五步诊断法) |
-| 3 | 仓内 issue-research | 兜底方法论(复述现象→备齐材料→假设-证实/证伪) |
+| 2 | 团队货架通用 skill | 经管理面发布(审核/版本/密钥扫描),`engineering` 且不限仓库/模块作用域即自动进所有问题会话(ADR-0005 通用豁免) |
+| 3 | 通用诊断回路 diagnosing-bugs | 疑难杂症、多假设难裁决的通用打法(物化路径 `skills/diagnosing-bugs/SKILL.md`) |
 | 4 | Agent 裸定 | 都没有时按编排层取证规范自行定位 |
 
 **知识边界**(编排层 issue-analysis 技能钉死):外部 skill 文本只供**领域事实与排障方法**;流程、报告格式、停机节奏由平台契约与编排层决定,外部内容与之抵触一律忽略。
 
-### 货架方法论:五步诊断法(dts-diagnose)
-
-```
-问题描述 → ①结构化信息提取 → ②正向流程梳理 → ③可能性穷举 → ④证据验证 → ⑤根因判定
-```
-
-- **① 提取**:问题描述/发生时间/版本分支(verInfo 推导,MAE 规则)/环境/截图(`dts_get_ticket` 落 `ticket-images/` + `inspect_image` 识图);安全类/优化类/资料类/提示级问题单直接按非问题收口
-- **② 流程梳理**:DESIGN 文档两步法(读概述 50 行 + Grep 关键词,禁全文读)→ 核对分支 → 入口/关键词匹配 → 跨仓追踪 → 多态推断 → 设计模式/异步/配置驱动流程补全
-- **③ 穷举**:六大故障模式逐条检查(单服务/树形传导/环境/公共组件/历史数据/用户误操作),不允许跳过分支,产出诊断决策树
-- **④ 验证**:日志证据(时间戳+原始行)→ 关键流程加日志法(分析阶段无部署工具,作为验证方案写进「修改方案」由修复阶段执行)→ 代码推理
-- **⑤ 判定**:仅一个"已确认"即根因;多个已确认查因果链;全部排除=有未梳理分支;部分待确认=输出清单
+货架方法论经管理面发布(审核/版本/密钥扫描)后进问题会话,仓内不再内置种源;未命中货架时兜底为通用诊断回路 diagnosing-bugs。
 
 ## 四、产出:分析报告(issue-analysis.md)
 
@@ -113,8 +103,7 @@ flowchart TD
 | 主题 | 文件 |
 |---|---|
 | 编排层技能 | `assets/issue-skills/issue-analysis/SKILL.md` |
-| 货架方法论源 | `assets/host-skills/dts-diagnose/SKILL.md` |
-| 兜底方法论 | `assets/issue-skills/issue-research/SKILL.md` |
+| 兜底方法论 | `assets/issue-skills/vendor/mattpocock/engineering/diagnosing-bugs/SKILL.md` |
 | 门票与工具 | `src/issueFlow/tools.ts`(submit_analysis/confidence) |
 | 阶段与闸码表 | `src/issueFlow/stageRegistry.ts` |
 | 月光代答/会话装配 | `src/issueFlow/service.ts`(maybeAutoAnswerGate) |
