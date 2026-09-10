@@ -4,12 +4,15 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Collapsible } from "radix-ui";
+import { ChevronDown } from "lucide-react";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
   type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
+import type { IssueChildTab } from "./issues/IssueBoard";
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
@@ -115,6 +118,24 @@ function teamAssetTabFromHistoryState(
   return typeof candidate === "string"
       && TEAM_ASSET_TABS.has(candidate as TeamAssetTab)
     ? candidate as TeamAssetTab : undefined;
+}
+
+/** 问题处理子页签(spec #171):问题登记/DTS列表/问题会话。选择记住
+ * localStorage + 浏览器历史快照,与团队任务子页签同口径;admin 恒为
+ * 问题会话(不发起,登记/DTS 入口对 admin 不渲染)。 */
+const ISSUE_CHILD_TABS = new Set<IssueChildTab>([
+  "register", "dts", "sessions",
+]);
+const ISSUE_CHILD_STORAGE_KEY = "mae-flow:issue-child-tab";
+
+function readIssueChildTab(): IssueChildTab {
+  try {
+    const saved = localStorage.getItem(ISSUE_CHILD_STORAGE_KEY);
+    if (saved && ISSUE_CHILD_TABS.has(saved as IssueChildTab)) {
+      return saved as IssueChildTab;
+    }
+  } catch { /* localStorage 不可用(隐私模式等)就回默认,不拦导航 */ }
+  return "sessions";
 }
 
 interface WorkspaceRoute {
@@ -646,6 +667,10 @@ export function App() {
   // closeIssueSession/selectView 对表),快照与 URL 同生共死——不变量:
   // issueRouteId 非空 ⇔ 当前 URL 是 /issues/:id。
   const [issueRouteId, setIssueRouteId] = useState(readIssueRoute);
+  /** 问题处理子页签选择(持久化见票 #171):默认问题会话;admin 强制。 */
+  const [issueChildTab, setIssueChildTab] =
+    useState<IssueChildTab>(readIssueChildTab);
+  const issueChild = session?.role === "admin" ? "sessions" : issueChildTab;
 
   useEffect(() => {
     const syncRoute = () => {
@@ -656,7 +681,11 @@ export function App() {
       // 浏览器在别的页签后退/前进到 /issues/X:除更新快照外还要真的切
       // 回问题处理页签(以前只改状态不切页,按后退像没反应)。admin 也进
       // 问题处理(#103,查看模式只读);/work 深链照旧只恢复任务。
-      if (issueId) setView("issues");
+      // 子页签随深链落「问题会话」——深链指的就是一个会话。
+      if (issueId) {
+        setView("issues");
+        setIssueChildTab("sessions");
+      }
       if (!next.taskId) {
         setArtifactTaskId("");
         setArtifactTaskSnapshot(undefined);
@@ -724,7 +753,11 @@ export function App() {
   useEffect(() => {
     void getSession().then((user) => {
       setSession(user);
-      if (user) setView(initialView(user));
+      if (user) {
+        setView(initialView(user));
+        // 问题会话深链直达:子页签一并落「问题会话」(首启/刷新同理)。
+        if (readIssueRoute()) setIssueChildTab("sessions");
+      }
     }).catch(() => setSession(null));
   }, []);
 
@@ -1028,6 +1061,8 @@ export function App() {
   const openIssueSession = (id: string) => {
     setView("issues");
     setIssueRouteId(id);
+    // 深链/点开都指向一个会话:子页签一并落「问题会话」。
+    setIssueChildTab("sessions");
     const next = `/issues/${encodeURIComponent(id)}`;
     if (location.pathname !== next) {
       history.pushState(appHistoryState("issues"), "", next);
@@ -1085,6 +1120,12 @@ export function App() {
   const leaveIssueRoute = (target: View) => {
     if (target === "issues") return;
     normalizeIssueRoute(target);
+  };
+  /** 子页签选择:写状态 + 切到问题处理(点子页签即进该页面;已在
+   * 问题处理只换右侧内容,不重复推历史)。 */
+  const selectIssueChild = (tab: IssueChildTab) => {
+    setIssueChildTab(tab);
+    if (view !== "issues") selectView("issues");
   };
   /** 离开环境管理页签的归位人:URL 若还挂在 /environments(深链直达后
    * 又点了别的页签),带回根路径并记住目标视图——与 leaveIssueRoute 同
@@ -1150,9 +1191,11 @@ export function App() {
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
           <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
-          {/* 问题处理对 admin 只读开放(#103):板内发起入口隐藏,
-              会话工作台自动落查看模式(写口仅归属人)。 */}
-          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理（Beta）" beta />
+          {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
+              登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
+          <IssueNavGroup view="issues" current={view} admin
+            childTab={issueChild} onSelectChild={selectIssueChild}
+            onSelect={selectView} />
           <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
           {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
@@ -1164,7 +1207,9 @@ export function App() {
         </> : <>
           <span className="nav-section-label">个人工作台</span>
           <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
-          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理（Beta）" beta />
+          <IssueNavGroup view="issues" current={view}
+            childTab={issueChild} onSelectChild={selectIssueChild}
+            onSelect={selectView} />
           <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
@@ -1323,7 +1368,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} allTasks={tasks} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} /></Suspense>}
+        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} childTab={issueChild} onChildTabChange={selectIssueChild} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -1498,12 +1543,65 @@ function CommitterInbox({
   </section>;
 }
 
-/** beta 只作用于提示语:Beta 已并入标签文字(问题处理（Beta）),不再
- * 另挂徽标,避免"（Beta）beta"重复。悬停/读屏仍能听到"能力建设中"。 */
-function NavButton({ view, current, onSelect, label, badge = 0, personal = false, beta = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean; beta?: boolean }) {
+/** 问题处理导航组(spec #171):父行=展开/收起开关(radix Collapsible,
+ * 点击不跳页;首次展开而右侧不在问题处理时落默认子页签),子行=子页签
+ * (问题登记/DTS列表/问题会话;admin 只见问题会话)。子行走新 Tailwind
+ * 轨道(tw-root 归一,色彩一律令牌桥工具类),父行沿用 nav-item 家族,
+ * 存量侧边栏视觉零跳变。进入问题处理视图自动展开(深链同理)。 */
+function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, onSelect }: {
+  view: View;
+  current: View;
+  /** admin 只见「问题会话」子页签(不发起,登记入口不渲染)。 */
+  admin?: boolean;
+  childTab: IssueChildTab;
+  onSelectChild: (tab: IssueChildTab) => void;
+  onSelect: (view: View) => void;
+}) {
+  const [open, setOpen] = useState(current === view);
+  useEffect(() => {
+    if (current === view) setOpen(true);
+  }, [current, view]);
+  const children: Array<{ tab: IssueChildTab; label: string }> = admin
+    ? [{ tab: "sessions", label: "问题会话" }]
+    : [{ tab: "register", label: "问题登记" },
+      { tab: "dts", label: "DTS列表" },
+      { tab: "sessions", label: "问题会话" }];
+  return <Collapsible.Root open={open} onOpenChange={(next) => {
+    setOpen(next);
+    if (next && current !== view) onSelect(view);
+  }}>
+    <Collapsible.Trigger asChild>
+      <button type="button"
+        className={`nav-item ${current === view ? "on" : ""}`}
+        aria-label="问题处理">
+        <NavIcon name={view} /><span>问题处理</span>
+        <ChevronDown aria-hidden
+          className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+      </button>
+    </Collapsible.Trigger>
+    <Collapsible.Content>
+      <div className="tw-root mt-0.5 mb-1 flex flex-col gap-0.5">
+        {children.map((child) => {
+          const active = current === view && childTab === child.tab;
+          return <button key={child.tab} type="button"
+            aria-current={active ? "true" : undefined}
+            onClick={() => onSelectChild(child.tab)}
+            className={`flex h-7 items-center rounded-sm pl-[33px] pr-2
+              text-left text-[13px] ${active
+                ? "bg-surface text-text-strong shadow-[0_0_0_1px_var(--line)]"
+                : "text-faint hover:bg-surface-3 hover:text-text"}`}>
+            {child.label}
+          </button>;
+        })}
+      </div>
+    </Collapsible.Content>
+  </Collapsible.Root>;
+}
+
+function NavButton({ view, current, onSelect, label, badge = 0, personal = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean }) {
   return <button className={`nav-item ${current === view ? "on" : ""}`}
-    aria-label={beta ? `${label}(能力建设中)` : label}
-    title={beta ? `${label}——能力建设中,尚不保证可用,慎重选择` : label}
+    aria-label={label}
+    title={label}
     onClick={() => onSelect(view)}>
     <NavIcon name={view} /><span>{label}</span>{badge > 0
       && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}

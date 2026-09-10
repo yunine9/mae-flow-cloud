@@ -74,8 +74,8 @@ export function IssueRegistration({
   onCreated,
   onError,
   onNavigateProfile,
-  panel: controlledPanel,
-  onPanelChange,
+  panel,
+  visible = true,
 }: {
   viewer: AuthUser;
   /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦)。 */
@@ -83,32 +83,18 @@ export function IssueRegistration({
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
-  /** 面板受控态:传入后内部页签状态失效,由父层(导航子页签)决定
-   * 当前面板;onPanelChange 随内部切换上报。缺省时维持自持状态。 */
-  panel?: "dts" | "manual";
-  onPanelChange?: (panel: "dts" | "manual") => void;
+  /** 面板受控态(必传):当前面板由导航子页签决定——「问题登记/DTS列表」
+   * 两个子页签各接管一个面板,内部不再自持页签按钮。 */
+  panel: "dts" | "manual";
+  /** 整域显隐(默认可见):导航切到「问题会话」时隐藏但**不卸载**——
+   * 表单、勾选与搜索状态跨子页签驻留。 */
+  visible?: boolean;
 }) {
-  const [ownPanel, setOwnPanel] = useState<"dts" | "manual">("manual");
-  const tab = controlledPanel ?? ownPanel;
-  const setTab = (next: "dts" | "manual") => {
-    setOwnPanel(next);
-    onPanelChange?.(next);
-  };
+  const tab = panel;
   // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
   // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
-  return <section className="issue-section" aria-label="发起问题会话">
-    {/* 页签即区块头:两个页签各自表意(登记问题/DTS 列表),上面再压
-        一层"发起会话/登记问题"标题是三重冗余,且对 DTS 页签名不副实。 */}
-    <div className="section-head">
-      <div className="issue-register-tabs" role="tablist">
-        <button type="button" role="tab" aria-selected={tab === "manual"}
-          className={tab === "manual" ? "on" : ""}
-          onClick={() => setTab("manual")}>登记问题</button>
-        <button type="button" role="tab" aria-selected={tab === "dts"}
-          className={tab === "dts" ? "on" : ""}
-          onClick={() => setTab("dts")}>DTS 列表</button>
-      </div>
-    </div>
+  return <section className="issue-section" aria-label="发起问题会话"
+    hidden={!visible}>
     <div hidden={tab !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
         onNavigateProfile={onNavigateProfile} />
