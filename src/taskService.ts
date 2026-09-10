@@ -1,7 +1,7 @@
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
 import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
-import { STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
+import { archifyArtifactGuidance, readAnalysisArchitecture, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
 import { materializeArchifyReferences } from "./archifyReferences.ts";
 import type { AnnotationResolution } from "./annotations.ts";
@@ -10276,9 +10276,8 @@ export class TaskService {
           !== task.summary.requirement_graph.chain_sha256) {
       throw new TaskControlError("分析 Story 已偏离确认版本，保留现有任务材料，请恢复已确认文档后重试发布");
     }
-    this.overallStories.adoptAnalysis(task.summary.id, plan.content, task.summary.luban_account ?? "责任人");
+    this.overallStories.adoptAnalysis(task.summary.id, plan.content, task.summary.luban_account ?? "责任人", readAnalysisArchitecture(task.cwd, task.summary.ticket ?? task.summary.id));
   }
-
   /** 派生材料随发布版本更新；通知使用已有持久账本，不改变任务编排。 */
   private syncPublishedStory(parent: TaskState, content: string, revision: string): void {
     if (parent.summary.requirement_graph?.source_document !== "story.md") return;
@@ -20562,6 +20561,7 @@ export class TaskService {
         + "具体函数 UT 和模块测试由子任务 Spec 细化，不新增全局 Spec。尚未执行的自检项如实保留。",
       STORY_ARCHITECTURE_GUIDANCE,
       materializeArchifyReferences(join(artifactDir, "archify-reference")),
+      archifyArtifactGuidance(join(artifactDir, "architecture.json")),
       `将唯一全局设计写到 ${join(artifactDir, "story.md")}；不再生成独立 CHAIN 文档。`
         + "第一行保留不可见的 <!-- mae-flow-plan-revision: r1 --> 修订标记，返工换新修订。"
         + "需求理解、已确认行为和设计结论归入模板已有章节；仓库排查证据、任务分工与启动提示写入机读投影。"

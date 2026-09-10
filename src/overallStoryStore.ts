@@ -48,7 +48,7 @@ export function writeStoryState(workspace: string, state: StoryState): void {
   renameSync(temporary, path);
 }
 export function storyRevisionPath(workspace: string, id: string, file = "story.md"): string {
-  if (!/^[\da-f-]{36}$/.test(id) || !["story.md", "diff.patch"].includes(file)) throw new Error("非法 Story 修订");
+  if (!/^[\da-f-]{36}$/.test(id) || !["story.md", "architecture.json", "diff.patch"].includes(file)) throw new Error("非法 Story 修订");
   return storyPath(workspace, `revisions/${id}/${file}`);
 }
 export function currentStoryFile(workspace: string): string | undefined {
@@ -59,4 +59,10 @@ export function currentStoryFile(workspace: string): string | undefined {
 export function readCurrentStory(workspace: string): string {
   const path = currentStoryFile(workspace);
   return path ? readFileSync(path, "utf8") : "";
+}
+export function readCurrentStoryArchitecture(workspace: string): string | undefined {
+  const state = readStoryState(workspace);
+  if (!state.current || !state.revisions.some((item) => item.id === state.current)) return undefined;
+  const path = storyRevisionPath(workspace, state.current, "architecture.json");
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }

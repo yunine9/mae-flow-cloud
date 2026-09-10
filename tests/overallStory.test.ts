@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OverallStoryCoordinator, collectStoryInput, type StoryRun } from "../src/overallStory.ts";
-import { OVERALL_STORY_ARTIFACT, readStoryState, writeStoryState, currentStoryFile, readCurrentStory } from "../src/overallStoryStore.ts";
+import { OVERALL_STORY_ARTIFACT, readStoryState, writeStoryState, currentStoryFile, readCurrentStory, readCurrentStoryArchitecture } from "../src/overallStoryStore.ts";
 import { AnnotationStore, reanchor } from "../src/annotations.ts";
 import { annotationClosure } from "../src/feedbackPolicy.ts";
 import { readArtifact, listArtifactDocuments } from "../src/artifacts.ts";
@@ -207,16 +207,18 @@ test("文件边界禁止链接逃逸；缺失或歧义的子任务 Story 不被�
     const contract = overallStoryGate("/workspace");
     const gate = (tool: string, value: string) => contract(tool, value, {} as import("../src/semanticEvents.ts").SemanticEvent);
     assert.equal(gate("Write", "story.md")?.action, "allow");
+    assert.equal(gate("Write", "architecture.json")?.action, "allow");
     for (const path of ["inputs/requirement.md", "../story.md", "/tmp/escape"]) assert.equal(gate("Write", path)?.action, "deny");
     assert.equal(gate("Bash", "pwd")?.action, "deny");
   } finally { f.dispose(); }
 });
 
-test("真实文档会话沿用内核 Story 模板、文件工具与主任务日志，无需主 Agent 或 Bash", async () => {
+test("真实文档会话沿用内核 Story 模板并单独生成平台图源，无需主 Agent 或 Bash", async () => {
   const f = fixture();
   const model = new ScriptedModelServer([
     { tool: { name: "read", input: { path: "inputs/template.md" } } },
     { tool: { name: "write", input: { path: "story.md", content: "# 整体 Story\n待补充接口 Story" } } },
+    { tool: { name: "write", input: { path: "architecture.json", content: '{"schema_version":1,"diagrams":[]}' } } },
     { text: "整理完成，缺少接口子任务 Story。" },
   ]);
   await model.start();
@@ -226,10 +228,14 @@ test("真实文档会话沿用内核 Story 模板、文件工具与主任务日�
         kernelRoot: KERNEL_ROOT, model: { provider: "maeflow", model: "scripted-v1" }, models: model.modelsJson() });
       assert.equal(readFileSync(join(job.root, "inputs/template.md"), "utf8"), readFileSync(join(KERNEL_ROOT, "skills/mae-flow/assets/STORY-TEMPLATE.md"), "utf8"));
       assert.match(overallStoryMission(job), /无权修改子任务/);
+      assert.match(overallStoryMission(job), /不得把 Archify JSON 写进 story\.md/);
     });
     f.coordinator.generate("parent", "owner"); await f.coordinator.settled("parent");
     assert.equal(f.coordinator.status("parent").error, undefined);
     assert.match(readCurrentStory(f.task.summary.workspace), /整体 Story/);
+    const architecture = JSON.parse(readCurrentStoryArchitecture(f.task.summary.workspace)!);
+    assert.match(architecture.story_sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(architecture.diagrams, []);
     assert.ok(new EventLog(join(f.task.summary.workspace, "events.jsonl")).replay().some((e) => e.kind === "tool_requested"));
   } finally { await model.stop(); f.dispose(); }
 });

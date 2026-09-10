@@ -1,67 +1,94 @@
 import { createHash } from "node:crypto";
-import { storyViewCoverage, type StoryViewCoverage } from "./storyViewCoverage.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { STORY_VIEWS, storyViewCoverage, type StoryViewCoverage, type StoryViewId } from "./storyViewCoverage.ts";
 
 export const ARCHIFY_TYPES = ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] as const;
 export type ArchifyType = typeof ARCHIFY_TYPES[number];
 export const ARCHIFY_SOURCE_LIMIT = 256 * 1024;
-export type StoryDiagram = { id: string; title: string; line: number } & (
-  { renderer: "archify"; type: ArchifyType; source: Record<string, unknown> }
-  | { renderer: "plantuml"; type: "plantuml"; source: string }
-);
+export type StoryDiagram = { id: string; title: string; line?: number; view: StoryViewId;
+  renderer: "archify"; type: ArchifyType; source: Record<string, unknown> };
 export interface StoryArchitecture {
   revision: string; diagrams: StoryDiagram[]; warnings: string[];
   views: StoryViewCoverage[];
 }
+interface ArchifyArtifactDiagram { id?: unknown; view?: unknown; story_line?: unknown; source?: unknown }
 
-/** 图源随 Story 一起检视、修订；正文任何变化都换版本，避免旧图背书新设计。 */
-export function storyArchitecture(story: string): StoryArchitecture {
+/** Story 只提供版本和 4+1 定位；架构页仅消费平台内部 Archify 产物。 */
+export function storyArchitecture(story: string, archifyArtifact?: string): StoryArchitecture {
   const result: StoryArchitecture = {
-    revision: createHash("sha256").update(story).digest("hex"), diagrams: [], warnings: [], views: storyViewCoverage(story),
+    revision: createHash("sha256").update(story).update("\0").update(archifyArtifact ?? "").digest("hex"),
+    diagrams: [], warnings: [], views: storyViewCoverage(story),
   };
   const lines = story.split(/\r?\n/);
-  let count = 0;
-  let heading = "";
   for (let i = 0; i < lines.length; i++) {
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
-    if (!fence) {
-      const title = /^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(lines[i]);
-      if (title) heading = title[1];
-      continue;
-    }
+    if (!fence) continue;
     const start = i;
     const close = new RegExp(`^ {0,3}${fence[1][0]}{${fence[1].length},}\\s*$`);
     while (++i < lines.length && !close.test(lines[i])) { /* 跳过其他代码块中的示例。 */ }
     const language = fence[2].trim().toLowerCase();
-    if (language !== "archify" && language !== "plantuml") continue;
-    if (++count > 12) { result.warnings.push("最多展示 12 张图；其余内容请阅读 Story。"); break; }
-    try {
-      if (i === lines.length) throw new Error("代码块尚未闭合");
-      const text = lines.slice(start + 1, i).join("\n");
-      if (Buffer.byteLength(text) > ARCHIFY_SOURCE_LIMIT) throw new Error("单图超过 256 KB");
-      if (language === "plantuml") {
-        if (!text.trim()) throw new Error("没有 PlantUML 图源");
-        // 标题只用于导航，图语法交给 PlantUML 正式实现，不能在平台重造解析器。
-        const title = /^\s*title[ \t]+(.+)$/mi.exec(text)?.[1]?.trim()
-          || /^\s*@startuml[ \t]+(.+)$/mi.exec(text)?.[1]?.trim();
-        result.diagrams.push({ id: `diagram-${count}`, line: start + 1, renderer: "plantuml",
-          type: "plantuml", source: text, title: title || heading || `设计图 ${count}` });
-        continue;
-      }
-      const source = JSON.parse(text);
-      if (!source || Array.isArray(source) || typeof source !== "object") throw new Error("图源必须是 JSON 对象");
-      if (!ARCHIFY_TYPES.includes(source.diagram_type)) throw new Error("Archify 不支持此图类型，请阅读 Story 中的完整设计");
-      assertOfflineDiagram(source);
-      result.diagrams.push({ id: `diagram-${count}`, line: start + 1,
-        title: typeof source.meta?.title === "string" ? source.meta.title : `图 ${count}`,
-        renderer: "archify", type: source.diagram_type, source });
-    } catch (error) {
-      result.warnings.push(`Story 第 ${start + 1} 行：${error instanceof Error ? error.message : String(error)}`);
+    if (language === "archify") {
+      result.warnings.push(i === lines.length
+        ? `Story 第 ${start + 1} 行：代码块尚未闭合`
+        : `Story 第 ${start + 1} 行包含旧版 Archify 图源；请迁移到平台内部 architecture.json。`);
     }
   }
+  if (archifyArtifact?.trim()) appendArchifyArtifact(result, story, archifyArtifact);
   return result;
 }
 
-/** 此入口只读 Story JSON。拒绝上游的远程品牌捕获和仓库取证，不能由图源启动网络或 Git。 */
+function appendArchifyArtifact(result: StoryArchitecture, story: string, text: string): void {
+  try {
+    if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error("平台架构产物超过 2 MB");
+    const artifact = JSON.parse(text) as { schema_version?: unknown; story_sha256?: unknown; diagrams?: unknown };
+    if (artifact.schema_version !== 1 || !Array.isArray(artifact.diagrams)) throw new Error("缺少 schema_version=1 或 diagrams 数组");
+    const actual = createHash("sha256").update(story).digest("hex");
+    if (artifact.story_sha256 !== actual) throw new Error("图源对应的 Story 版本已经变化");
+    const ids = new Set<string>();
+    for (const [index, raw] of artifact.diagrams.entries()) {
+      if (result.diagrams.length >= 12) { result.warnings.push("最多展示 12 张图；其余内容请阅读 Story。"); break; }
+      try {
+        const item = raw as ArchifyArtifactDiagram;
+        const id = typeof item.id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(item.id)
+          ? `archify-${item.id}` : `archify-${index + 1}`;
+        if (ids.has(id)) throw new Error("id 重复");
+        ids.add(id);
+        if (!STORY_VIEWS.some((view) => view.id === item.view)) throw new Error("缺少合法 view");
+        if (!item.source || Array.isArray(item.source) || typeof item.source !== "object") throw new Error("source 不是对象");
+        const source = item.source as Record<string, unknown> & { diagram_type?: unknown; meta?: { title?: unknown } };
+        if (!ARCHIFY_TYPES.includes(source.diagram_type as ArchifyType)) throw new Error("使用了不支持的类型");
+        if (Buffer.byteLength(JSON.stringify(source)) > ARCHIFY_SOURCE_LIMIT) throw new Error("超过 256 KB");
+        assertOfflineDiagram(source);
+        const storyLine = Number.isInteger(item.story_line) && Number(item.story_line) > 0 ? Number(item.story_line) : undefined;
+        result.diagrams.push({ id, view: item.view as StoryViewId, line: storyLine,
+          title: typeof source.meta?.title === "string" ? source.meta.title : `架构图 ${index + 1}`,
+          renderer: "archify", type: source.diagram_type as ArchifyType, source });
+      } catch (error) {
+        result.warnings.push(`平台架构产物第 ${index + 1} 张图：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  } catch (error) {
+    result.warnings.push(`平台架构产物：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** 发布时由宿主绑定 Story 摘要，Agent 无需自行伪造版本关系。 */
+export function bindArchifyArtifact(story: string, artifact: string): string {
+  const value = JSON.parse(artifact) as { schema_version?: unknown; diagrams?: unknown; story_sha256?: unknown };
+  if (value.schema_version !== 1 || !Array.isArray(value.diagrams)) throw new Error("平台架构产物缺少 schema_version=1 或 diagrams 数组");
+  value.story_sha256 = createHash("sha256").update(story).digest("hex");
+  return JSON.stringify(value, null, 2);
+}
+
+/** 读取分析阶段独立生成的平台架构产物；缺失时不影响 Story 采用。 */
+export function readAnalysisArchitecture(cwd: string | undefined, ticket: string): string | undefined {
+  if (!cwd) return undefined;
+  const path = join(cwd, ".mae-flow-work", ticket, "architecture.json");
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+}
+
+/** 此入口只读 JSON，图源不能启动远程品牌捕获、仓库取证或网络读取。 */
 export function assertOfflineDiagram(source: Record<string, unknown>): void {
   const pending: unknown[] = [source];
   while (pending.length) {
@@ -83,13 +110,17 @@ export const STORY_ARCHITECTURE_GUIDANCE = [
   "4+1 必须逐项分析并知会用户：在 Story‘4+1 视图覆盖’表中保留逻辑视图、开发视图、进程视图、物理视图、场景视图（+1）五行，列为‘视图 | 状态 | 说明’。状态只用‘设计内容已完成 / 待补充 / 不涉及’。不涉及必须说明具体依据，不能静默删去；无法渲染不等于不涉及。",
   "沿用 Story 原章节，在对应内容前增加含视图名称的小标题，方便定位；已完成必须有实际设计支撑。逻辑视图要明确关键类图，有类图保留 PlantUML，无类图需单列‘类图 | 不涉及 | 具体原因’或‘类图 | 待补充 | 原因’，不能用模块拓扑代替。",
   "提交方案确认时，用简短提示集中知会哪些视图不涉及及原因、哪些待补充；责任人可提出异议并决定补充，不为此另建确认卡或 hook 门禁。不把已完成声明当作自动验收通过。",
-  "架构可视化：完整 4+1、类图和设计说明仍在 Story 既有章节，PlantUML 保留公司评审兼容性。",
-  "对于 Archify 支持且能够准确表达的设计图，在对应章节同时提供 ```archify 代码块，内容是 Archify 原生 JSON，供架构页直接展示；PlantUML 图也会在同一架构页按视图展示；更新设计时同步更新该块，不另建图源文件。类图等不支持的类型保留 PlantUML，不能假冒成支持的类型。",
-  "涉及却尚未画出设计图时标为待补充，说明缺口并在方案确认时知会用户；图源已有但不能渲染时分别说明设计状态和展示失败原因，不能伪称可展示或改称不涉及。责任人决定后续处理，不新增 hook 门禁。",
-  "上述格式与渲染约定仅供生成时使用，不写入 Story 正文。图标题使用业务名称（如‘模块架构’、‘订单同步时序’），说明只解释职责、契约和交互；不要出现‘Archify 投影’、‘供平台独立展示’、‘与正文同步更新’等平台实现说明。",
-  "Archify 只支持 diagram_type=architecture/workflow/sequence/dataflow/lifecycle。不要用拓扑冒充类图。图中模块、接口、场景和关系必须与正文一致。",
-  "图源必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。不得使用 brand、repository、sources 外部读取字段。",
-  'architecture 最小示例：{"schema_version":1,"diagram_type":"architecture","meta":{"title":"模块依赖","locale":"zh-CN"},"components":[{"id":"module","type":"backend","label":"业务模块","pos":[40,40],"size":[160,64]}],"connections":[]}',
-  "提交检视前用提供的固定离线渲染器逐图试渲染；JSON 合法不代表布局可展示。修复端点方向与标签遮挡后写回 Story，不关闭布局校验，不以示例图的成功替代当前设计验证。",
-  "其他类型应先查阅提供的 Archify schema 与示例；无法可靠表达或渲染时如实说明，保留完整 Story，不阻断分析、编码或交付。",
+  "Story 是可移植的设计正本：完整 4+1、类图和设计说明都写在既有章节，所有图只使用 PlantUML，确保上传到公司评审平台后仍能渲染。Story 正文和代码块中不得出现 Archify JSON、平台图源路径或‘Archify 投影’等平台实现说明。",
+  "涉及却尚未画出设计图时标为待补充，说明缺口并在方案确认时知会用户。责任人决定后续处理，不新增 hook 门禁。",
+  "上述格式约定只供生成时使用，不写入 Story 正文。图标题使用业务名称（如‘模块架构’、‘订单同步时序’），说明只解释职责、契约和交互。",
 ].join("\n");
+
+export function archifyArtifactGuidance(path: string, references = "archify-reference/"): string {
+  return [
+    `平台架构图是 Story 的内部派生产物，单独写到 ${path}；不得把 Archify JSON 写进 story.md。`,
+    `读取 ${references.replace(/\/?$/, "/")}README.md、对应 schema 和示例，为 Archify 能准确表达且确实需要展示的设计生成图；类图等不支持的内容只留在 Story 的 PlantUML 中，不冒充受支持类型。`,
+    "产物格式：{\"schema_version\":1,\"story_sha256\":\"story.md 的真实 SHA-256\",\"diagrams\":[{\"id\":\"稳定短标识\",\"view\":\"logical|development|process|physical|scenarios\",\"story_line\":对应设计在 Story 中的起始行,\"source\":{Archify 原生 JSON}}]}。没有适合 Archify 的图时仍写空 diagrams 数组。",
+    "source 必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。只支持 architecture/workflow/sequence/dataflow/lifecycle，不得使用 brand、repository、sources 外部读取字段。",
+    "每张图须与 Story 的职责、契约和交互一致。提交前使用固定离线渲染器实际试渲染并修复布局问题；无法成功渲染的图从 diagrams 中删除并如实报告，不生成空占位图。",
+  ].join("\n");
+}

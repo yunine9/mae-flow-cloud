@@ -9,11 +9,19 @@
  * 出不了图(没有 Java、超时)原样显示源码并说明原因;语法错误时显示 PlantUML
  * 自己画的错误图(标出错行),源码折在下面方便对照。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { renderPlantUml, type PlantUmlRender } from "./api";
 
 /** 同一份源码在一次页面生命周期里只出一次图(切换材料、滚动都会重挂组件)。 */
 const memo = new Map<string, Promise<PlantUmlRender>>();
+type FullscreenDocument = {
+  fullscreenElement?: unknown;
+  addEventListener(type: string, listener: (event: { key?: string }) => void): void;
+  removeEventListener(type: string, listener: (event: { key?: string }) => void): void;
+  exitFullscreen(): Promise<void>;
+};
+type FullscreenElement = HTMLElement & { requestFullscreen?: () => Promise<void> };
+const fullscreenDocument = () => (globalThis as unknown as { document: FullscreenDocument }).document;
 
 function render(source: string): Promise<PlantUmlRender> {
   let pending = memo.get(source);
@@ -29,12 +37,29 @@ function render(source: string): Promise<PlantUmlRender> {
 
 export function PlantUml({ source }: { source: string }) {
   const [result, setResult] = useState<PlantUmlRender | undefined>();
+  const root = useRef<FullscreenElement>(null);
+  const [presenting, setPresenting] = useState(false);
   useEffect(() => {
     let alive = true;
     setResult(undefined);
     void render(source).then((value) => { if (alive) setResult(value); });
     return () => { alive = false; };
   }, [source]);
+  useEffect(() => {
+    const doc = fullscreenDocument();
+    const fullscreenChanged = () => { if (!doc.fullscreenElement) setPresenting(false); };
+    const escape = (event: { key?: string }) => {
+      if (event.key !== "Escape" || !presenting) return;
+      setPresenting(false);
+      if (doc.fullscreenElement === root.current) void doc.exitFullscreen().catch(() => {});
+    };
+    doc.addEventListener("fullscreenchange", fullscreenChanged);
+    doc.addEventListener("keydown", escape);
+    return () => {
+      doc.removeEventListener("fullscreenchange", fullscreenChanged);
+      doc.removeEventListener("keydown", escape);
+    };
+  }, [presenting]);
 
   if (!result) {
     return <div className="plantuml-unsupported" role="status"><span>正在出图…</span></div>;
@@ -47,7 +72,21 @@ export function PlantUml({ source }: { source: string }) {
     </div>;
   }
   const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(result.svg)))}`;
-  return <figure className={`plantuml-figure${result.syntax_error ? " syntax-error" : ""}`}>
+  const togglePresentation = () => {
+    const doc = fullscreenDocument();
+    if (presenting) {
+      setPresenting(false);
+      if (doc.fullscreenElement === root.current) void doc.exitFullscreen().catch(() => {});
+      return;
+    }
+    setPresenting(true);
+    void root.current?.requestFullscreen?.().catch(() => { /* 页面内全屏仍可用。 */ });
+  };
+  return <figure ref={root} className={`plantuml-figure${result.syntax_error ? " syntax-error" : ""}${presenting ? " is-presenting ui-viewport-layer" : ""}`}>
+    <div className="plantuml-toolbar">
+      <span>PlantUML</span>
+      <button type="button" onClick={togglePresentation}>{presenting ? "退出全屏" : "查看大图 ⛶"}</button>
+    </div>
     <div className="plantuml-viewport" role="region" aria-label="PlantUML 图，可滚动查看完整内容" tabIndex={0}>
       <img src={dataUrl} alt={result.syntax_error ? "PlantUML 语法错误提示图" : "PlantUML 图"} />
     </div>

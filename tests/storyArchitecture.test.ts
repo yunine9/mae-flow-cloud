@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { storyArchitecture } from "../src/storyArchitecture.ts";
 import { ARCHIFY_ROOT, renderArchify } from "../src/archifyRender.ts";
 import { TaskService } from "../src/taskService.ts";
@@ -14,28 +15,31 @@ import { materializeArchifyReferences } from "../src/archifyReferences.ts";
 const source = { schema_version: 1, diagram_type: "architecture", meta: { title: "订单同步模块", locale: "zh-CN" },
   components: [{ id: "sync", type: "backend", label: "同步与校验", pos: [40, 40], size: [180, 64] }], connections: [] };
 const block = (value: unknown) => `\n\`\`\`archify\n${JSON.stringify(value)}\n\`\`\`\n`;
+const artifact = (story: string, diagrams: Array<Record<string, unknown>> = [{ id: "sync", view: "logical", story_line: 2, source }]) => JSON.stringify({
+  schema_version: 1, story_sha256: createHash("sha256").update(story).digest("hex"), diagrams,
+});
 
-test("Story 图源按原文版本投影，保留行号，忽略普通代码块中的嵌套示例", () => {
+test("架构投影不读取 Story PlantUML，平台内部 Archify 产物按 Story 版本绑定", () => {
   const text = "# Story\n```plantuml\nclass Order\n```\n" + block(source);
-  const a = storyArchitecture(text);
-  assert.equal(a.diagrams[0].renderer, "plantuml");
-  assert.equal(a.diagrams[0].line, 2);
-  assert.equal(a.diagrams[1].title, "订单同步模块");
-  assert.equal(a.diagrams[1].line, 6);
-  assert.deepEqual(a.warnings, []);
-  assert.notEqual(storyArchitecture(text + "\n更新职责").revision, a.revision);
+  const a = storyArchitecture(text, artifact(text));
+  assert.equal(a.diagrams.length, 1);
+  assert.equal(a.diagrams[0].title, "订单同步模块");
+  assert.equal(a.diagrams[0].view, "logical");
+  assert.match(a.warnings[0], /旧版 Archify/);
+  assert.notEqual(storyArchitecture(text + "\n更新职责", artifact(text)).revision, a.revision);
   assert.equal(storyArchitecture("````text\n" + block(source) + "````").diagrams.length, 0);
-  assert.equal(storyArchitecture("~~~archify\n" + JSON.stringify(source) + "\n~~~").diagrams.length, 1);
+  assert.equal(storyArchitecture("~~~archify\n" + JSON.stringify(source) + "\n~~~").diagrams.length, 0);
 });
 
 test("缺失、未完成、不支持或坏图源提供诊断，其他正常图仍可展示", () => {
   assert.deepEqual(storyArchitecture("# 老 Story\n只有类图").diagrams, []);
-  const projection = storyArchitecture("```archify\n{bad}\n```" + block({ diagram_type: "class" }) + block(source));
-  assert.equal(projection.warnings.length, 2);
+  const story = "# Story";
+  const projection = storyArchitecture(story, artifact(story));
+  assert.equal(projection.warnings.length, 0);
   assert.equal(projection.diagrams.length, 1);
-  assert.equal(projection.diagrams[0].id, "diagram-3");
+  assert.equal(projection.diagrams[0].id, "archify-sync");
   assert.match(storyArchitecture("```archify\n{}").warnings[0], /未闭合/);
-  assert.match(storyArchitecture(block({ ...source, extra: "a".repeat(256 * 1024) })).warnings[0], /超过/);
+  assert.match(storyArchitecture(story, artifact(story, [{ id: "large", view: "logical", source: { ...source, extra: "a".repeat(256 * 1024) } }])).warnings[0], /超过/);
 });
 
 test("真实 Archify 五种类型零安装渲染，中文与交互脚本保留，页面禁止联网", async () => {
@@ -57,7 +61,7 @@ test("真实 Archify 五种类型零安装渲染，中文与交互脚本保留�
 test("图源不能让渲染器读取外部品牌、仓库或写出指定路径；坏关系不冒充成功", async () => {
   for (const field of ["brand", "sources", "repository"]) {
     const unsafe = { ...source, [field]: "https://example.invalid/private" };
-    assert.equal(storyArchitecture(block(unsafe)).diagrams.length, 0);
+    assert.equal(storyArchitecture("# Story", artifact("# Story", [{ id: field, view: "logical", source: unsafe }])).diagrams.length, 0);
     assert.match((await renderArchify(unsafe)).error!, /不读取外部/);
   }
   const result = await renderArchify({ ...source, connections: [{ from: "sync", to: "missing" }] });
@@ -96,16 +100,20 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
   internal.summary.requirement_graph = { stage: "analysis", repositories: [], dependencies: [] };
   const directory = join(internal.cwd, ".mae-flow-work", "REQ-ARCH");
   mkdirSync(directory, { recursive: true });
-  const path = join(directory, "story.md"); writeFileSync(path, "# Story" + block(source) + "\n## 逻辑视图\n```plantuml\n@startuml\ntitle 订单类关系\ninterface Store\nclass OrderStore\nStore <|.. OrderStore\n@enduml\n```\n");
+  const story = "# Story\n## 逻辑视图\n```plantuml\n@startuml\ntitle 订单类关系\ninterface Store\nclass OrderStore\nStore <|.. OrderStore\n@enduml\n```\n";
+  const path = join(directory, "story.md"); writeFileSync(path, story);
+  writeFileSync(join(directory, "architecture.json"), artifact(story));
   const child = service.create("模块设计", { account: "owner", ticket: "REQ-ARCH-U1", parentTaskId: task.id });
   const childInternal = (service as any).tasks.get(child.id);
   childInternal.cwd = join(child.workspace, "repo");
   childInternal.summary.requirement_graph = { stage: "confirmed", repositories: [], dependencies: [] };
   const childDirectory = join(childInternal.cwd, ".mae-flow-work", "REQ-ARCH-U1");
   mkdirSync(childDirectory, { recursive: true });
-  writeFileSync(join(childDirectory, "story.md"), "# 模块 Story" + block({
+  const childStory = "# 模块 Story\n## 进程视图\n模块运行设计。\n";
+  writeFileSync(join(childDirectory, "story.md"), childStory);
+  writeFileSync(join(childDirectory, "architecture.json"), artifact(childStory, [{ id: "transaction", view: "process", story_line: 2, source: {
     ...source, meta: { ...source.meta, title: "模块事务时序" },
-  }));
+  } }]));
   const server = createTaskServer(service, { auth });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
@@ -115,27 +123,20 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
     const login = await fetch(`${base}/auth/login`, { method: "POST", body: JSON.stringify({ username: "owner", password: "owner-password" }) });
     const headers = { cookie: login.headers.get("set-cookie")!.split(";")[0] };
     const list = await fetch(url, { headers }).then((r) => r.json()) as { revision: string; diagrams: Array<{ source?: unknown }> };
-    assert.equal(list.diagrams.length, 2);
+    assert.equal(list.diagrams.length, 1);
     assert.equal(list.diagrams[0].source, undefined);
-    const response = await fetch(`${url}/diagram-1?revision=${list.revision}`, { headers });
+    const response = await fetch(`${url}/archify-sync?revision=${list.revision}`, { headers });
     assert.equal(response.status, 200);
     assert.match((await response.json() as { html: string }).html, /订单同步模块/);
-    const umlResponse = await fetch(`${url}/diagram-2?revision=${list.revision}`, { headers });
-    assert.equal(umlResponse.status, 200);
-    const uml = await umlResponse.json() as { svg?: string; error?: string; syntax_error?: boolean };
-    assert.equal(uml.error, undefined);
-    assert.ok(uml.svg?.includes("OrderStore"));
-    assert.equal(uml.syntax_error, undefined);
     const childUrl = `${base}/tasks/${child.id}/architecture`;
     const childList = await fetch(childUrl, { headers }).then((r) => r.json()) as { revision: string; diagrams: Array<{ title: string }> };
     assert.equal(childList.diagrams[0].title, "模块事务时序");
-    const childResponse = await fetch(`${childUrl}/diagram-1?revision=${childList.revision}`, { headers });
+    const childResponse = await fetch(`${childUrl}/archify-transaction?revision=${childList.revision}`, { headers });
     assert.equal(childResponse.status, 200);
     assert.match((await childResponse.json() as { html: string }).html, /模块事务时序/);
-    writeFileSync(path, "# Story\n职责改变" + block(source));
-    assert.equal((await fetch(`${url}/diagram-1?revision=${list.revision}`, { headers })).status, 409);
-    assert.equal((await fetch(`${url}/diagram-1`, { headers })).status, 409);
-    assert.equal((await fetch(`${url}/diagram-2?revision=${list.revision}`, { headers })).status, 409);
+    writeFileSync(path, "# Story\n职责改变");
+    assert.equal((await fetch(`${url}/archify-sync?revision=${list.revision}`, { headers })).status, 409);
+    assert.equal((await fetch(`${url}/archify-sync`, { headers })).status, 409);
     assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify(source) })).status, 404);
   } finally {
     await new Promise<void>((done) => server.close(() => done())); await service.shutdown(); rmSync(root, { recursive: true, force: true });
@@ -143,15 +144,13 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
 });
 
 
-test("PlantUML 与 Archify 混合文档保留标题、类型、行号并隔离坏图源", () => {
+test("架构页只采用独立 Archify 产物，Story 中的 PlantUML 与旧 Archify 都不混入", () => {
   const story = "## 逻辑视图\n~~~plantuml\n@startuml\ntitle 订单职责与接口\nclass Order\n@enduml\n~~~\n"
     + block(source) + "\n## 物理视图\n```plantuml\nnode Server\n```\n```plantuml\n";
-  const result = storyArchitecture(story);
+  const result = storyArchitecture(story, artifact(story, [{ id: "sync", view: "logical", story_line: 9, source }]));
   assert.deepEqual(result.diagrams.map(({ title, renderer, line }) => ({ title, renderer, line })), [
-    { title: "订单职责与接口", renderer: "plantuml", line: 2 },
     { title: "订单同步模块", renderer: "archify", line: 9 },
-    { title: "物理视图", renderer: "plantuml", line: 14 },
   ]);
-  assert.match(result.warnings[0], /未闭合/);
-  assert.match(storyArchitecture("```plantuml\n```\n").warnings[0], /没有 PlantUML/);
+  assert.match(result.warnings.join("\n"), /旧版 Archify/);
+  assert.equal(storyArchitecture("```plantuml\n```\n").warnings.length, 0);
 });

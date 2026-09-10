@@ -1,4 +1,4 @@
-import { STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
+import { archifyArtifactGuidance, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { materializeArchifyReferences } from "./archifyReferences.ts";
 import { materializeReviewAssets, isReviewAssetPath } from "./reviewAssets.ts";
 import { materializeRequirementAssets } from "./requirementBundle.ts";
@@ -18,9 +18,9 @@ import { type StoryRun } from "./overallStory.ts";
 export function overallStoryGate(root: string): GateContract {
   return (tool, value) => {
     const path = relative(root, resolve(root, value)).replaceAll("\\", "/");
-    if (tool === "Read" && (path === "story.md" || path === "receipts.json" || isReviewAssetPath(path) || path.startsWith("inputs/"))) return { action: "allow" };
-    if (["Edit", "Write", "MultiEdit"].includes(tool) && ["story.md", "receipts.json"].includes(path)) return { action: "allow" };
-    return { action: "deny", reason: "本会话只读取 inputs/，编辑 story.md 并写 receipts.json；不执行命令，不修改子任务或代码。" };
+    if (tool === "Read" && (["story.md", "architecture.json", "receipts.json"].includes(path) || isReviewAssetPath(path) || path.startsWith("inputs/"))) return { action: "allow" };
+    if (["Edit", "Write", "MultiEdit"].includes(tool) && ["story.md", "architecture.json", "receipts.json"].includes(path)) return { action: "allow" };
+    return { action: "deny", reason: "本会话只读取 inputs/，编辑 story.md、architecture.json 和 receipts.json；不执行命令，不修改子任务或代码。" };
   };
 }
 export function overallStoryMission(job: StoryRun): string {
@@ -30,10 +30,10 @@ export function overallStoryMission(job: StoryRun): string {
     ...Object.keys(job.input.files).filter((p) => p.startsWith("children/")).map((p) => `inputs/${p}`),
     "已有整体 Story 是全局设计依据，不是事后汇总稿。沿用原模板，重点维护 4+1：关键类与接口、模块与仓库组件映射、运行时序及部署关系，并用业务场景贯通验收。子 Story 用于反馈实现细化及偏离，尚未产出不能成为推翻全局设计的理由。",
     STORY_ARCHITECTURE_GUIDANCE,
-    "Archify 离线资料与渲染器在 inputs/archify/；先读 README.md 和对应 schema/示例，提交前实际试渲染每张图并修复布局错误；无法验证时如实说明。",
+    archifyArtifactGuidance("architecture.json", "inputs/archify"),
     "按模板把跨模块用户流程、接口依赖、异常边界和整体验收贯通；不能只是串接子任务全文。保留来源任务编号，便于人核对。",
     "缺失的 Story、来源冲突、尚未确认的设计必须明确列为待补充；绝不补造实现、测试结论或替用户确认。子任务 Story 存在不代表设计已确认或代码已完成。",
-    "只写 story.md。首次生成用 Write；后续优先 Edit，保留已经检视过的内容与稳定段落。子任务本轮无关部分不要重排。",
+    "正文只写 story.md；平台图源只写 architecture.json。首次生成用 Write；后续优先 Edit，保留已经检视过的内容与稳定段落。子任务本轮无关部分不要重排。",
     job.before ? "已有 story.md 是前一版。将来源变化和本轮意见合入它，保留人工修改意图。" : "当前尚无整体 Story，请创建 story.md。",
     "涉及子任务设计或代码的问题不能仅修改整体 Story 就宣称完成：本会话无权修改子任务。回执用 not_fixed 或 needs_clarification，写清相关子任务、需要的修改或补充信息。从分析 Story 建单的新任务会同步发布的设计给子任务，不自动修改其代码或重启任务；历史 CHAIN 任务仍由责任人协调处理。",
     "引用图片时不要编造可用路径；未能读取的附图要明确指出，保留来源任务与原图引用供人核对。",

@@ -67,6 +67,7 @@ import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
+import { readCurrentStoryArchitecture } from "./overallStoryStore.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
@@ -2981,14 +2982,13 @@ export function createTaskServer(
           }
           return json(response, 200, comparison);
         }
-        // 架构展示复用文档的取源和任务读取权限，不接受客户端提供任意图源或文件路径。
+        // Story 只提供版本和设计定位；架构页只读平台内部 architecture.json，
+        // 不接受客户端提供任意图源或文件路径。
         if (request.method === "GET" && parts[2] === "architecture" && parts.length <= 4) {
           const load = async () => {
             const target = service.get(id);
             if (!target) return undefined;
-            // 主任务展示已发布的全局 Story；子任务展示自己的模块 Story。
-            // 两者仍通过 artifacts 的白名单读取，客户端不能借这个接口
-            // 指定任意路径。模块正文里的“打开大图”因此能落到同一份图源。
+            // 主任务用已发布的全局 Story 绑定图源版本；子任务用模块 Story。
             const artifact = target.parent_task_id
               ? `${target.ticket ?? target.id}/story.md`
               : "task-materials/overall-story.md";
@@ -3000,6 +3000,20 @@ export function createTaskServer(
                 ? `${target.ticket ?? target.id}/story.md` : undefined,
             });
           };
+          const loadArchify = (): string | undefined => {
+            const target = service.get(id);
+            if (!target) return undefined;
+            if (!target.parent_task_id && target.requirement_graph?.stage === "confirmed") {
+              return readCurrentStoryArchitecture(target.workspace);
+            }
+            const root = service.artifactRoot(id);
+            if (!root) return undefined;
+            const path = join(root, ".mae-flow-work", target.ticket ?? target.id, "architecture.json");
+            if (!existsSync(path)) return undefined;
+            const stat = statSync(path);
+            if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return undefined;
+            return readFileSync(path, "utf8");
+          };
           const artifact = await load();
           if (!artifact) return json(response, 404, {
             error: service.get(id)?.parent_task_id
@@ -3007,7 +3021,8 @@ export function createTaskServer(
               : "尚无全局 Story，请先完成主任务分析",
           });
           if (artifact.truncated) return json(response, 413, { error: "Story 超过读取上限，请先阅读完整文档" });
-          const projection = storyArchitecture(artifact.content);
+          const architecture = loadArchify();
+          const projection = storyArchitecture(artifact.content, architecture);
           response.setHeader("cache-control", "no-store");
           if (parts.length === 3) return json(response, 200, {
             ...projection, renderer: ARCHIFY_COMMIT,
@@ -3018,12 +3033,10 @@ export function createTaskServer(
           }
           const diagram = projection.diagrams.find((item) => item.id === parts[3]);
           if (!diagram) return json(response, 404, { error: "当前 Story 中没有这张图" });
-          const result = diagram.renderer === "plantuml"
-            ? await renderPlantUml(diagram.source, { cacheDir: join(service.options.dataDir, "diagram-cache") })
-            : await renderArchify(diagram.source);
+          const result = await renderArchify(diagram.source);
           const after = await load();
-          if (!after || after.content !== artifact.content) {
-            return json(response, 409, { error: "生成期间 Story 已更新，请刷新架构图" });
+          if (!after || after.content !== artifact.content || loadArchify() !== architecture) {
+            return json(response, 409, { error: "生成期间 Story 或平台图源已更新，请刷新架构图" });
           }
           return json(response, 200, { ...result, revision: projection.revision });
         }

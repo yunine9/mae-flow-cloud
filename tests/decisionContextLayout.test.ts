@@ -408,7 +408,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
   assert.match(box, /交回后由 Agent 接着做/);
 });
 
-test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开检视", () => {
+test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML 可原地全屏", () => {
   const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
@@ -427,8 +427,8 @@ test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开�
   const architecture = readFileSync(new URL("../web/src/StoryArchitecture.tsx", import.meta.url), "utf8");
   assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
-  assert.match(architecture, /className="story-view-coverage" role="tablist"/,
-    "4+1 每个视角必须是明确页签");
+  assert.match(architecture, /availableViews\.map/,
+    "架构页只为实际存在的图片生成视角页签");
   assert.match(architecture, /className="story-diagram-tabs" role="tablist"/,
     "具体图片必须由图名页签承载");
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");

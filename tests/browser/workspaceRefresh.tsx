@@ -69,8 +69,21 @@ async function run() {
   changed = true;
   for (let i = 0; i < 20 && !document.querySelector(".ws-doc")?.textContent?.includes("new-version"); i++) await pause(80);
   if (!document.querySelector(".ws-doc")?.textContent?.includes("new-version")) throw new Error("real update did not reach reader");
+  let storyFullscreen: boolean | undefined;
+  if (mode === "doc") {
+    const open = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("查看大图"));
+    if (!open) throw new Error("Story PlantUML 缺少原地查看大图入口");
+    open.click();
+    await pause(50);
+    storyFullscreen = Boolean(document.querySelector(".plantuml-figure.is-presenting"));
+    if (!storyFullscreen) throw new Error("Story PlantUML 未原地进入全屏");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await pause(50);
+    if (document.querySelector(".plantuml-figure.is-presenting")) throw new Error("Story PlantUML 无法退出全屏");
+  }
   if (errors.length) throw new Error(errors.join(";"));
-  return { mode, reads, conversations, stable: true, updated: true };
+  return { mode, reads, conversations, stable: true, updated: true, ...(storyFullscreen ? { storyFullscreen } : {}) };
 }
 run().then((value) => { document.getElementById("result")!.textContent = JSON.stringify(value); })
   .catch((error) => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });

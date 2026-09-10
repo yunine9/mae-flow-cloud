@@ -1,4 +1,5 @@
 import { StateConflictError } from "./humanGate.ts";
+import { bindArchifyArtifact } from "./storyArchitecture.ts";
 import { requirementDiff } from "./documentDiff.ts";
 import { readStoryOutput } from "./overallStoryAgent.ts";
 import { randomUUID } from "node:crypto";
@@ -77,7 +78,7 @@ export class OverallStoryCoordinator<T extends Owner> {
     && (task.summary.requirement_graph.source_document === "story.md"
       || Boolean(task.summary.requirement_graph.repositories.length)); }
   /** 分析 Agent 的 Story 直接进入现有版本库，不再等待子任务后另写汇总。 */
-  adoptAnalysis(id: string, content: string, by: string): void {
+  adoptAnalysis(id: string, content: string, by: string, architecture?: string): void {
     const task = this.owner(id);
     if (this.active.has(id)) throw new TaskControlError("整体 Story 正在更新，请稍后重试");
     const state = this.recover(task);
@@ -91,6 +92,12 @@ export class OverallStoryCoordinator<T extends Owner> {
     const diff = requirementDiff("", content);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, { mode: 0o600 });
+    if (architecture?.trim()) {
+      try {
+        writeFileSync(storyRevisionPath(task.summary.workspace, revision, "architecture.json"),
+          bindArchifyArtifact(content, architecture), { mode: 0o600 });
+      } catch (error) { this.options.log?.(`分析 Story 的平台架构产物未采用：${String(error)}`); }
+    }
     writeFileSync(join(dirname(path), "inputs.json"), JSON.stringify(input), { mode: 0o600 });
     writeFileSync(join(dirname(path), "receipts.json"), "[]", { mode: 0o600 });
     writeFileSync(storyRevisionPath(task.summary.workspace, revision, "diff.patch"), diff.text, { mode: 0o600 });
@@ -209,6 +216,13 @@ export class OverallStoryCoordinator<T extends Owner> {
         const path = storyRevisionPath(task.summary.workspace, jobId);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, after, { mode: 0o600 });
+        const architecturePath = join(root, "architecture.json");
+        if (existsSync(architecturePath)) {
+          try {
+            writeFileSync(storyRevisionPath(task.summary.workspace, jobId, "architecture.json"),
+              bindArchifyArtifact(after, readStoryOutput(architecturePath, 2 * 1024 * 1024)), { mode: 0o600 });
+          } catch (error) { this.options.log?.(`整体 Story 的平台架构产物未采用：${String(error)}`); }
+        }
         writeFileSync(join(dirname(path), "inputs.json"), JSON.stringify(input), { mode: 0o600 });
         writeFileSync(storyRevisionPath(task.summary.workspace, jobId, "diff.patch"), diff.text, { mode: 0o600 });
         writeFileSync(join(dirname(path), "receipts.json"), JSON.stringify(receipts), { mode: 0o600 });
