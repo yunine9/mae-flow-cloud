@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: 问题分析工作流。进入「问题分析」「确定结论」阶段时使用:定位方法论的取用次序(业务仓 skill→货架→自力定位)、轻量/完整分流、取证规范、报告五章节模板与 submit_analysis 门票。
+description: 问题分析工作流。进入「问题分析」「确定结论」阶段时使用:定位方法论的取用次序(业务仓 skill→货架→通用诊断回路→自力定位)、轻量/完整分流、取证规范、报告五章节模板与 submit_analysis 门票。
 metadata:
   tags: [issue, analysis, workflow, evidence, root-cause]
 ---
