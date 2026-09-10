@@ -961,7 +961,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
         `${id} 的续跑回合开场是平台通知口径`);
     }
     assert.ok(requests.some((r) => r.includes("标题-issue-2")
-      && r.includes("固定流程")), "queued 原样走固定流程开场词");
+      && r.includes("## 问题事实")), "queued 原样走登记开场词");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

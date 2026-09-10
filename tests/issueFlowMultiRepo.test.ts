@@ -312,14 +312,13 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
       /代码仓已拉取/.test(entry.note ?? "")).length >= 3,
     "逐仓拉取各留转移账");
 
-    // 提示词把仓清单连同工作区路径讲清楚:开场时未拉的仓如实标注
-    // "待拉取"并指路 pull_repo;本地路径仓必须显式声明克隆源不可直接
-    // 读(issue-24 踩坑)。
+    // 提示词仓清单走精简结构:每行 = 工作区路径 + 克隆源地址;克隆状态
+    // 不复述(契约已要求逐仓 pull_repo,幂等)。本地路径仓必须显式声明
+    // 不可直读(issue-24 踩坑)。
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /repo\/origin-2\//);
-    assert.match(requestText, /待拉取\(调 pull_repo 拉它\)/);
-    assert.match(requestText, /一律平铺在 repo\/ 下/);
-    assert.match(requestText, /克隆自本地路径 [^"]*origin\.git\(那是工作区外的源,不可直接读/);
+    assert.match(requestText, /平铺在 repo\/ 下,使用工作区相对路径/);
+    assert.match(requestText, /本地路径源 [^"]*origin\.git\(工作区外不可直读/);
 
     service.answer(created.id, {
       state_version: gate.gate!.state_version,

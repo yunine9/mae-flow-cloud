@@ -230,26 +230,22 @@ function moduleLine(meta: IssueRegistrationMeta): string {
 }
 
 /** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。
- * 路径相对会话工作区(Agent 的 cwd 就是工作区根)。清单以可读的工作区
- * 路径开头——登记地址(尤其本地路径仓)只作"克隆自"注脚:本地路径与
- * 本机真实目录同名同在,放前面会被 Agent 当可读路径去撞工作区护栏
- * (实测 issue-24 踩坑)。克隆由 Agent 自己调 pull_repo 完成,所以这里
- * 如实标注每个仓"已克隆/待拉取"。空清单返回空串,由调用方给"未登记"
- * 文案。 */
+ * 路径相对会话工作区(Agent 的 cwd 就是工作区根),每行 = 工作区路径 +
+ * 克隆源地址。本地路径仓补一句不可直读:源路径与本机真实目录同名同在,
+ * 被当可读路径会撞工作区护栏(实测 issue-24 踩坑)。克隆状态不标注——
+ * 契约已要求登记在册的仓逐个 pull_repo 落地(幂等),不必在此复述。
+ * 空清单返回空串,由调用方给"未登记"文案。 */
 function repoLines(state: IssueSessionState): string {
   const repos = issueRepoWorkspaces(state, "");
   if (!repos.length) return "";
   const lines = repos.map((repo) => {
-    const cloned = existsSync(join(repo.dir, ".git"));
-    const source = /^https?:\/\//i.test(repo.url)
-      ? `克隆自 ${repo.url}`
-      : `克隆自本地路径 ${repo.url}(那是工作区外的源,不可直接读,`
-        + `读代码用 repo/<仓名>/ 下的相对路径)`;
     const rel = repo.dir.replace(/^[\\/]/, "");
-    return `  - ${rel}/ —— ${cloned ? "已克隆,可读写" : "待拉取(调 pull_repo 拉它)"};${source}`;
+    const source = /^https?:\/\//i.test(repo.url)
+      ? repo.url
+      : `本地路径源 ${repo.url}(工作区外不可直读,读代码用 ${rel}/ 相对路径)`;
+    return `  - ${rel}/ —— ${source}`;
   });
-  return `- 代码仓(${repos.length} 个,一律平铺在 repo/ 下,读改均走工作区`
-    + `相对路径):\n${lines.join("\n")}`;
+  return `- 代码仓(平铺在 repo/ 下,使用工作区相对路径):\n${lines.join("\n")}`;
 }
 
 /** 阶段名(固定流程词表;无场景的存量现场按原始键兜底显示)。 */
@@ -315,10 +311,7 @@ export function issueFixedOpeningPrompt(
         : options.tier === "1" ? "fixed.intervention.full_auto"
         : "fixed.intervention.report_review"),
   });
-  return [
-    promptCopy("opening", "fixed.header"),
-    "",
-    "## 问题事实",
+  const facts = [
     `- 标题: ${meta.title}`,
     `- 描述: ${meta.description || "(无补充描述)"}`,
     moduleLine(meta),
@@ -327,22 +320,20 @@ export function issueFixedOpeningPrompt(
     repoLines(state)
       || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     ...(scenario === "ticket" && state.ticket
-      ? [`- 修复分支 master_${state.account}_${state.ticket}:pull_repo 拉每个仓时由平台自动切好`]
+      ? [`- 修复分支 master_${state.account}_${state.ticket}`]
       : []),
     ...environmentLines(meta),
     inheritedNote,
-    "",
-    "## 仓内业务知识(docs/)",
-    promptCopy("opening", "fixed.docs_confidence"),
-    "",
-    `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})`,
-    stages,
-    "",
-    "## 阶段机契约(平台机械执行,说了算)",
-    contract,
-    "",
-    promptCopy("opening", "fixed.kickoff"),
   ].filter(Boolean).join("\n");
+  // 段落间空行是渲染结构(filter(Boolean) 会吞 "" 占位,空行随段块拼接)。
+  return [
+    promptCopy("opening", "fixed.header"),
+    `## 问题事实\n\n${facts}`,
+    `## 仓内业务知识(docs/)\n${promptCopy("opening", "fixed.docs_confidence")}`,
+    `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})\n${stages}`,
+    `## 阶段机契约(平台机械执行,说了算)\n${contract}`,
+    promptCopy("opening", "fixed.kickoff"),
+  ].filter(Boolean).join("\n\n");
 }
 
 /** 固定流程的平台推进通知(continueWith 注入):带上下文的阶段交接词。 */
