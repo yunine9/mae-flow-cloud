@@ -680,7 +680,13 @@ export function App() {
   /** 问题处理子页签选择(持久化见票 #171):默认问题会话;admin 强制。 */
   const [issueChildTab, setIssueChildTab] =
     useState<IssueChildTab>(readIssueChildTab);
-  const issueChild = session?.role === "admin" ? "sessions" : issueChildTab;
+  /** admin 强制「问题会话」后的生效值;issueChildTab 是持久化原值。 */
+  const activeIssueChild = session?.role === "admin"
+    ? "sessions" : issueChildTab;
+  /** selectView 闭包里读子页签要最新值:setIssueChildTab 后同一 tick
+   * 调 selectView 时,状态还没落地,快照会落后一次点击。 */
+  const activeIssueChildRef = useRef(activeIssueChild);
+  activeIssueChildRef.current = activeIssueChild;
   // 子页签选择持久化:localStorage(刷新还原)+ 浏览器历史快照
   // (前进/后退还原,写入点见各 pushState/replaceState)。
   useEffect(() => {
@@ -1142,10 +1148,19 @@ export function App() {
     normalizeIssueRoute(target);
   };
   /** 子页签选择:写状态 + 切到问题处理(点子页签即进该页面;已在
-   * 问题处理只换右侧内容,不重复推历史)。 */
+   * 问题处理只换右侧内容,不重复推历史)。工作台开着时点子页签=离开
+   * 工作台回到所选页面(导航与内容一一对应);已在问题处理时以
+   * replaceState 原地改写快照,前进/后退还原到最新选择。 */
   const selectIssueChild = (tab: IssueChildTab) => {
+    activeIssueChildRef.current = tab;
     setIssueChildTab(tab);
-    if (view !== "issues") selectView("issues");
+    if (issueRouteId) closeIssueSession();
+    if (view !== "issues") {
+      selectView("issues");
+    } else if (location.pathname === "/") {
+      history.replaceState(appHistoryState("issues", undefined, tab), "",
+        location.pathname + location.search);
+    }
   };
   /** 离开环境管理页签的归位人:URL 若还挂在 /environments(深链直达后
    * 又点了别的页签),带回根路径并记住目标视图——与 leaveIssueRoute 同
@@ -1175,15 +1190,15 @@ export function App() {
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
       history.pushState(appHistoryState(next,
         next === "knowledge" ? teamAssetTab : undefined,
-        next === "issues" ? issueChild : undefined), "", "/");
+        next === "issues" ? activeIssueChildRef.current : undefined), "", "/");
     } else if (leavingKnowledgeFocus) {
       history.pushState(appHistoryState(next,
         next === "knowledge" ? teamAssetTab : undefined,
-        next === "issues" ? issueChild : undefined), "", "/");
+        next === "issues" ? activeIssueChildRef.current : undefined), "", "/");
     } else if (location.pathname === "/") {
       history.replaceState(appHistoryState(next,
         next === "knowledge" ? teamAssetTab : undefined,
-        next === "issues" ? issueChild : undefined), "",
+        next === "issues" ? activeIssueChildRef.current : undefined), "",
         location.pathname + location.search);
     } else {
       leaveIssueRoute(next);
@@ -1217,7 +1232,7 @@ export function App() {
           {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
               登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
           <IssueNavGroup view="issues" current={view} admin
-            childTab={issueChild} onSelectChild={selectIssueChild}
+            childTab={activeIssueChild} onSelectChild={selectIssueChild}
             onSelect={selectView} />
           <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
@@ -1231,7 +1246,7 @@ export function App() {
           <span className="nav-section-label">个人工作台</span>
           <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
           <IssueNavGroup view="issues" current={view}
-            childTab={issueChild} onSelectChild={selectIssueChild}
+            childTab={activeIssueChild} onSelectChild={selectIssueChild}
             onSelect={selectView} />
           <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
@@ -1391,7 +1406,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} allTasks={tasks} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} childTab={issueChild} onChildTabChange={selectIssueChild} /></Suspense>}
+        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} childTab={activeIssueChild} onChildTabChange={selectIssueChild} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -1587,7 +1602,7 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
   const children: Array<{ tab: IssueChildTab; label: string }> = admin
     ? [{ tab: "sessions", label: "问题会话" }]
     : [{ tab: "register", label: "问题登记" },
-      { tab: "dts", label: "DTS列表" },
+      { tab: "dts", label: "DTS 列表" },
       { tab: "sessions", label: "问题会话" }];
   return <Collapsible.Root open={open} onOpenChange={(next) => {
     setOpen(next);
@@ -1610,8 +1625,8 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
             aria-current={active ? "true" : undefined}
             onClick={() => onSelectChild(child.tab)}
             className={`flex h-7 items-center rounded-sm pl-[33px] pr-2
-              text-left text-[13px] ${active
-                ? "bg-surface text-text-strong shadow-[0_0_0_1px_var(--line)]"
+              text-left text-sm ${active
+                ? "bg-surface text-text-strong ring-1 ring-line"
                 : "text-faint hover:bg-surface-3 hover:text-text"}`}>
             {child.label}
           </button>;

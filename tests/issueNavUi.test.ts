@@ -66,7 +66,7 @@ test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见�
     /admin\s*\?\s*\[\{ tab: "sessions", label: "问题会话" \}\]/,
     "admin 分支只应有问题会话一个子页签");
   for (const [tab, label] of [
-    ["register", "问题登记"], ["dts", "DTS列表"], ["sessions", "问题会话"],
+    ["register", "问题登记"], ["dts", "DTS 列表"], ["sessions", "问题会话"],
   ] as const) {
     assert.ok(group.includes(`{ tab: "${tab}", label: "${label}" }`),
       `开发侧子页签缺「${label}」`);
@@ -111,6 +111,14 @@ test("子页签选择持久化:localStorage 与历史快照双轨,前进/后退�
   assert.match(app, /maeFlowIssueChildTab/, "历史快照要带子页签字段");
   assert.match(app, /issueChildTabFromHistoryState\(event\.state\)/,
     "popstate 后退/前进要还原子页签");
+  // 已在问题处理时点子页签:不推新历史条目,但必须原地改写快照——
+  // 否则快照落后一次点击,前进/后退还原到过期子页签。
+  assert.match(app,
+    /replaceState\(appHistoryState\("issues", undefined, tab\)/,
+    "子页签选择要写进历史快照(经 selectIssueChild 的 replaceState)");
+  // selectView 的闭包读不到同 tick 的新状态:子页签当前值必须走 ref。
+  assert.match(app, /activeIssueChildRef\.current = tab;/,
+    "选择要同步进 ref(selectView 快照不落后)");
 });
 
 test("子页签区零硬编码色值:色彩一律走令牌桥(theme inline 映射存量变量)", () => {

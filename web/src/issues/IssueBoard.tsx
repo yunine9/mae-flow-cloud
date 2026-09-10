@@ -77,6 +77,9 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
+  // App 快照是工作台开关的唯一真相:URL 侧关闭(点子页签离开、浏览器
+  // 后退)同步收掉本地 openId,导航与右侧内容不错位。
+  useEffect(() => { setOpenId(initialOpenId); }, [initialOpenId]);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   /** 详情拉取是否失败过(当前 openId):失败只置横幅不清输入,加载
    * 指示停转;再点同一张卡由 detailRetry 强制重试。 */

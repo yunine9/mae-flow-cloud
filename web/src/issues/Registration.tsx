@@ -90,17 +90,16 @@ export function IssueRegistration({
    * 表单、勾选与搜索状态跨子页签驻留。 */
   visible?: boolean;
 }) {
-  const tab = panel;
   // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
   // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
   return <section className="issue-section" aria-label="发起问题会话"
     hidden={!visible}>
-    <div hidden={tab !== "manual"}>
+    <div hidden={panel !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
         onNavigateProfile={onNavigateProfile} />
     </div>
-    <div hidden={tab !== "dts"}>
-      <DtsRegister viewer={viewer} issues={issues} active={tab === "dts"}
+    <div hidden={panel !== "dts"}>
+      <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
         onCreated={onCreated} onError={onError} />
     </div>
   </section>;
