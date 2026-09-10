@@ -90,7 +90,7 @@ test("子 Agent 派发:Task 落账不阻断主流程,业务工具不进子会话
       account: "dev", title: "列表导出超时", repoUrl: origin,
       moduleId: MODULE_ID,
       environment: {
-        hosts: ["10.0.0.8"], pagePassword: "p", backendPassword: "b",
+        hosts: ["10.0.0.8"], backendPassword: "b",
       },
     });
     // 派发不阻断主流程:分析照常提交,结论闸照常升起。

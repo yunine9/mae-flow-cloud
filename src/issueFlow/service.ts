@@ -1629,7 +1629,7 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(issueFixedOpeningPrompt(live.state,
           this.environmentCredentials(live),
-          { tier: this.tierOf(live), workspace: live.root }));
+          { tier: this.tierOf(live) }));
       });
     }
   }
@@ -2787,7 +2787,7 @@ export class IssueFlowService {
       // 业务知识地图(ADR-0012):analyze 回执注入段——台账资产 + 仓内
       // docs/ 现扫,两源皆空为空串。
       businessKnowledgeBrief: () =>
-        businessKnowledgeLines(live.state, live.root).join("\n"),
+        businessKnowledgeLines(live.state).join("\n"),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
