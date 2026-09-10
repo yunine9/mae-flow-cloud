@@ -124,7 +124,42 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
 - [x] 拍板(并入③)
 - [x] 实施(并入③)
 
-## ⑤ 构建日志直播+分批回放按需取用(源:f0bde69/0c47a1c)
+## ⑤ 预热直播+UT 提示词(源:f0bde69/816e51b)
+
+- [x] 拍板(2026-09-10):(c) 全套直播+回看(用户裁定——两侧编译同样的
+  仓,时长假设无依据;SSE 语义与组件共享,成本低);UT 聚焦一句补
+  briefs.md;遗留六洞全修(决定回灌/associate收尾重查/正文兜底/信箱
+  离场作废/vault启动对账/代答恢复+孤儿卡)。
+- [ ] 实施。**平移清单(子 Agent 已核实,数据已在盘上)**:
+  1. routes.ts:注册 GET /issues/:id/warmup/events;streamIssueEvents
+     (:171)路径改 per-tick resolver(文件未建先心跳、建了从头重放),
+     读 session(id).root/warmup/events.jsonl;
+  2. service.ts:warmup CloudSession.create(~:2613)加 streamBashOutput:
+     true(否则直播无命令输出);
+  3. state.ts:summarize 停剥 warmup 收据+web api.ts IssueSummary 补
+     warmup 镜像+契约样例;
+  4. web:tailIssueWarmupEvents(克隆 api.ts:3078);SessionView events
+     页签(:408)内 running 时嵌 PrepushLiveLog(source 注入,域中立,
+     无需改);仿 WarmupPanel 收口折叠。
+  六洞实施进度:H1(决定回灌)已落工作树未提交;H3/H4/H5/H6 的
+  python 补丁因锚点被 b1e9f46 破坏未打入,待恢复后重打;H2(associate
+  收尾重查)未动。
+
+## ⚠️ 事故记录(2026-09-10):b1e9f46 误剔已提交实现
+
+并行会话提交 b1e9f46("剔除 #155 误卷入的协作者在途改动")时,把本清单
+①②③④已提交(c5b5b07/5f74607/43f59ab)的 service.ts 实现整块回退
+(421 行):合入监看全套(watchMergeStates/syncMergeFacts/mergeStatus/
+notifyMrGreenClosed 点火/recover 续挂)、检视闭环六项(armReviewNotify/
+漂移终态/归因分家/追问/回合不装箱守卫/信箱日志)、体检守卫
+(settlePipeline/raisePipelineGate/watchPipeline/attachEnvironment/
+收口清面/已代答通知词)。state.ts/tools.ts/routes.ts/web 未受影响
+(routes 仍调 mergeStatus → HEAD 类型红)。**恢复计划**:以 43f59ab 的
+service.ts 我的区块为源,在 HEAD 上重放(A~P 清单见会话记录);并行会话
+在途的页面凭据重构(sessionDriver/semanticEvents/page_account 一串)
+属其自有工作,不卷入。
+
+## ⑤原始条目
 
 问题侧环境预热(warmup)不直播编译过程;若接,复用需求侧
 executionEventBuffer 分批回放模式(EventsPane 已有分批装载底子)。
