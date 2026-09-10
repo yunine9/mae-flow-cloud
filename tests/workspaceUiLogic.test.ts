@@ -652,7 +652,7 @@ test("待处理意见不展示旧路由选项，责任人可答复或交给 Agen
     assert.doesNotMatch(readonly, />删除<\/button>|>交给 Agent<\/button>|>自行答复<\/button>/);
   }
   const closed = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername: "owner", items: [annotation({ ...item, status: "verified" })] }));
-  assert.match(closed, />重新处理这条意见<\/button>/);
+  assert.match(closed, />重新处理<\/button>/);
 });
 
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {

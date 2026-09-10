@@ -37,9 +37,9 @@ async function run() {
   button("保存答复")!.click(); await pause();
   if (!button("确认闭环")) throw Error("答复后未出现闭环");
   button("确认闭环")!.click(); await pause();
-  if (!button("重新处理这条意见")) throw Error("闭环后不能变卦");
-  button("重新处理这条意见")!.click(); await pause();
-  if (!button("交给 Agent") || button("确认闭环")) throw Error("重新处理这条意见未回到待处理");
+  if (!button("重新处理")) throw Error("闭环后不能变卦");
+  button("重新处理")!.click(); await pause();
+  if (!button("交给 Agent") || button("确认闭环")) throw Error("重新处理未回到待处理");
   viewer = "reviewer"; refresh(); await pause();
   if (button("删除") || button("自行答复") || button("交给 Agent")) throw Error("非责任人出现操作入口");
   viewer = "owner"; refresh(); await pause();

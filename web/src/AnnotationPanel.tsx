@@ -760,8 +760,8 @@ export function AnnotationPanel({
                           onClick={() => onShowThread(item.id)}>看处理记录</button>
                 )}
                 {closure.can_reopen && item.status === "verified" && (
-                  <button type="button" disabled={!!mutationBusy} onClick={() => void mutateAnnotation(item.id,
-                    () => judgeAnnotation(taskId, item.id, "reopen", { revision: item.rework ?? 0 }))}>重新处理这条意见</button>
+                  <button type="button" className="ghost" disabled={!!mutationBusy} onClick={() => void mutateAnnotation(item.id,
+                    () => judgeAnnotation(taskId, item.id, "reopen", { revision: item.rework ?? 0 }))}>重新处理</button>
                 )}
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
