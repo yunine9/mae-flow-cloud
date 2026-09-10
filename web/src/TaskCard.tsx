@@ -949,7 +949,7 @@ export function WaitingCard({
             <span>{task.requirement_graph.dependencies.length > 0
               ? <><b>{chainStages(task.requirement_graph).length}</b>个执行阶段</>
               : <><b>可并行</b>无硬依赖</>}</span>
-            <small>模块职责与依赖关系见全局 Story 和「架构视图」；这里确认各模块的负责人和单号。</small>
+            <small>模块职责与依赖关系见全局 Story 和「架构图」；这里确认各模块的负责人和单号。</small>
           </> : <>
             <span><b>未就绪</b>不能创建任务</span>
             <small>{task.requirement_graph.projection_error

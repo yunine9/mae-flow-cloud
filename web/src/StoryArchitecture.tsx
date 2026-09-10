@@ -92,25 +92,29 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     return () => controller.abort();
   }, [key, base, diagram, projection]);
   const current = rendered?.key === key ? rendered : undefined;
+  const viewPanelId = `story-architecture-${taskId}-${view.id}`.replace(/[^a-zA-Z0-9_-]/g, "-");
   return <section className="story-architecture" aria-label="Story 架构图">
     <header className="story-architecture-header">
-      <div><strong>4+1 架构视图</strong><p>从结构到运行，查看完整设计</p></div>
+      <div><strong>4+1 架构图</strong><p>每个页签对应一个设计视角，图名页签打开具体大图</p></div>
       <div className="story-architecture-actions">
         <button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button>
         <button type="button" onClick={() => refresh((n) => n + 1)} aria-label="刷新图源" title="刷新图源">↻</button>
       </div>
     </header>
     {error ? <p role="status">{error}</p> : !projection ? <p role="status">正在读取 Story…</p> : <>
-      <nav className="story-view-coverage" aria-label="4+1 视图覆盖">
+      <nav className="story-view-coverage" role="tablist" aria-label="4+1 架构图">
         {views.map((item, index) => <button type="button" key={item.id} className="story-view-entry"
-          aria-pressed={item.id === view.id} title={`${item.label}：${item.reason}`}
+          id={`story-architecture-tab-${item.id}`} role="tab" aria-selected={item.id === view.id}
+          aria-controls={`story-architecture-${taskId}-${item.id}`.replace(/[^a-zA-Z0-9_-]/g, "-")}
+          title={`${item.label}：${item.reason}`}
           onClick={() => { setActiveView(item.id); setSelected(""); }}>
           <span className="story-view-number">{index === 4 ? "+1" : `0${index + 1}`}</span>
           <strong>{storyViewTitles[item.id]}</strong>
           <span className={`story-view-status ${item.status === "不涉及" ? "omitted" : item.status === "待补充" ? "pending" : "complete"}`}>{item.status}</span>
         </button>)}
       </nav>
-      <section className="story-view-detail" aria-label={view.label}>
+      <section className="story-view-detail" id={viewPanelId} role="tabpanel"
+        aria-labelledby={`story-architecture-tab-${view.id}`} aria-label={view.label}>
         <div className="story-view-detail-heading">
           <div><strong>{storyViewTitles[view.id]}</strong><span>{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
           <div className="story-view-actions">
@@ -119,11 +123,10 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
           </div>
         </div>
         <p className="story-view-reason">{view.reason}</p>
-        {diagrams.length > 1 && <label className="story-diagram-picker">图示
-          <select aria-label="选择架构图" value={diagram?.id ?? ""} onChange={(event) => setSelected(event.target.value)}>
-            {diagrams.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
-          </select>
-        </label>}
+        {diagrams.length > 0 && <nav className="story-diagram-tabs" role="tablist" aria-label={`${storyViewTitles[view.id]}的图片`}>
+          {diagrams.map((item) => <button type="button" role="tab" key={item.id}
+            aria-selected={item.id === diagram?.id} onClick={() => setSelected(item.id)}>{item.title}</button>)}
+        </nav>}
         {!diagram ? <div className="story-view-empty">
           <span aria-hidden="true">{view.status === "不涉及" ? "—" : "◇"}</span>
           <strong>{view.status === "不涉及" ? "本次不涉及" : view.line ? "设计已记录在 Story" : "设计说明待补充"}</strong>

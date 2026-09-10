@@ -417,7 +417,7 @@ test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开�
   assert.match(workspace, /const architectureStory = task\.parent_task_id[\s\S]{0,220}?story\\\.md\$[\s\S]{0,220}?purpose === "overall_story"/,
     "主任务与子任务都必须有稳定的架构 Story 来源");
   assert.match(workspace, /hasRequirementGraph \|\| hasArchitectureStory/,
-    "子任务有模块 Story 时也必须显示正式架构视图页签");
+    "子任务有模块 Story 时也必须显示正式架构图页签");
   assert.match(workspace, /onOpenStory=\{\(\) => \{\s*openMaterial\("doc"\); if \(architectureStoryName\) setActive\(architectureStoryName\)/,
     "架构页返回当前任务自己的 Story");
   assert.doesNotMatch(workspace, /<RequirementGraph\b/,
@@ -427,6 +427,10 @@ test("架构只展示 Story 图，意见回到同一 Story；全屏仍可打开�
   const architecture = readFileSync(new URL("../web/src/StoryArchitecture.tsx", import.meta.url), "utf8");
   assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
+  assert.match(architecture, /className="story-view-coverage" role="tablist"/,
+    "4+1 每个视角必须是明确页签");
+  assert.match(architecture, /className="story-diagram-tabs" role="tablist"/,
+    "具体图片必须由图名页签承载");
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
   // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。当时
