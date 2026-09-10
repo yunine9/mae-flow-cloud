@@ -80,7 +80,6 @@ function seedModule(dataDir: string, repoUrl: string): void {
 
 const NO_TICKET_ENV = {
   hosts: ["10.0.0.8"],
-  pagePassword: "page-secret",
   backendPassword: "env-shared-secret",
 };
 
@@ -332,7 +331,6 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       repoUrl: origin,
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -459,7 +457,6 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     // 随元信息块出现;平台凭据(git 令牌)的铁律不变。
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /env-shared-secret/);
-    assert.match(requestText, /page-secret/);
     assert.doesNotMatch(requestText, /git-token/);
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -549,7 +546,6 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
       moduleId: MODULE_ID,
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -713,7 +709,6 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
       moduleId: MODULE_ID,
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -768,11 +763,6 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     assert.equal(newVault.credential(converted!.id,
       converted!.environment!.credential_ref, "sopuser")?.password,
       "env-shared-secret", "后台凭据在新会话解出");
-    assert.deepEqual(
-      newVault.credentials(converted!.id,
-        converted!.environment!.page_credential_ref!),
-      [{ username: "admin", password: "page-secret" }],
-      "页面凭据随后台一起复制,账号缺省 admin");
     const old = service.get(created.id);
     assert.equal(old.status, "archived");
     assert.equal(old.conclusion?.kind, "converted");
@@ -1520,7 +1510,6 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
       moduleId: "entry-mod",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -1733,7 +1722,7 @@ test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值�
       ticket: "DTS-2026-1001", source: "dts",
       environment: {
         hosts: ["10.0.0.8"], backendPassword: "env-shared-secret",
-        pagePassword: "page-secret", envType: "virtualized",
+        envType: "virtualized",
       },
     });
     assert.equal(service.get(registered.id).environment?.env_type,
@@ -2228,31 +2217,30 @@ function metaState(overrides: Partial<IssueSessionState> = {}): IssueSessionStat
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
       port: 22,
-      page_account: "admin",
-      page_credential_ref: "page-1",
       env_type: "virtualized",
     },
     ...overrides,
   });
 }
 
-const META_CREDENTIALS = { backend: "env-shared-secret", page: "page-secret" };
+const META_CREDENTIALS = { backend: "env-shared-secret" };
 
-test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文与模块/多仓;无环境会话整段缺席", () => {
+test("登记元信息块(ADR-0003):开场/续聊词渲染环境明文与模块/多仓;无环境会话整段缺席", () => {
   const fixed = issueFixedOpeningPrompt(metaState(), META_CREDENTIALS);
-  // 四件套明文:密码字面量就出现在渲染结果里(不脱敏)。
+  // 凭据明文:密码字面量就出现在渲染结果里(不脱敏)。页面凭据已
+  // 废弃(2026-09-10),渲染行不再出现。
   assert.match(fixed, /服务器地址: 10\.0\.0\.8, 10\.0\.0\.9/);
   assert.match(fixed, /环境形态: 虚拟化/);
-  assert.match(fixed, /页面账号: admin/);
-  assert.match(fixed, /页面密码: page-secret/);
   assert.match(fixed, /网管后台密码.*: env-shared-secret/);
+  assert.doesNotMatch(fixed, /页面账号/);
+  assert.doesNotMatch(fixed, /页面密码/);
   // 模块与多仓清单随登记渲染(仓走工作区相对路径)。
   assert.match(fixed, /业务模块: 支付核心\(id: pay-core\)/);
   assert.match(fixed, /repo\/x\//);
   assert.match(fixed, /repo\/y\//);
   // 续聊词(重启重建上下文)也不让元信息断档。
   const resume = issueResumePrompt(metaState(), "继续", META_CREDENTIALS);
-  assert.match(resume, /页面密码: page-secret/);
+  assert.match(resume, /网管后台密码/);
   assert.match(resume, /业务模块: 支付核心/);
 
   // DTS 页签发起的会话:无模块无环境,段落整段缺席,不渲染空壳。
@@ -2262,7 +2250,7 @@ test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文�
   assert.doesNotMatch(bare, /服务器地址/);
   assert.doesNotMatch(bare, /page-secret/);
 
-  // env_needed 闸补配的环境只有后台凭据组:页面字段缺席,后台密码在场。
+  // env_needed 闸补配的环境只有后台凭据组:后台密码在场。
   const gateOnly = issueFixedOpeningPrompt(metaState({
     environment: {
       credential_ref: "cred-1", name: "10.0.0.8",
@@ -2282,7 +2270,6 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
     state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
     persist: () => undefined,
     environmentPassword: () => META_CREDENTIALS.backend,
-    pagePassword: () => META_CREDENTIALS.page,
     pullRepo: async (url) => ({ dir: url, cloned: false, head: "a".repeat(12) }),
   }) as Array<{
     name: string;
@@ -2297,8 +2284,8 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
     "工具描述要写明与 dts_get_ticket 的分工");
 
   const receipt = textOf(await tool.execute("x", {}));
-  // 密码在返回值里(不脱敏),且与提示词同源(issueRegistrationMeta)。
-  assert.match(receipt, /page-secret/);
+  // 密码在返回值里(不脱敏),且与提示词同源(issueRegistrationMeta);
+  // 页面凭据已废弃,回执不再带页面字段。
   assert.match(receipt, /env-shared-secret/);
   assert.deepEqual(JSON.parse(receipt), issueRegistrationMeta(state, META_CREDENTIALS));
   assert.deepEqual(JSON.parse(receipt), {
@@ -2310,8 +2297,6 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
       env_type: "virtualized",
-      page_account: "admin",
-      page_password: "page-secret",
       backend_password: "env-shared-secret",
     },
   });
@@ -2333,7 +2318,7 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.deepEqual(bare.repos, ["/tmp/x.git"]);
 });
 
-test("登记元信息进开场上下文(service 接线):vault 解出的四件套明文进模型请求,get_issue_meta 回执同源", async () => {
+test("登记元信息进开场上下文(service 接线):vault 解出的凭据明文进模型请求,get_issue_meta 回执同源", async () => {
   const dataDir = mfcTemp("mfc-issue-meta-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
@@ -2358,16 +2343,14 @@ test("登记元信息进开场上下文(service 接线):vault 解出的四件套
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
     }, "首轮收口");
-    // 开场词带着 vault 解出的四件套明文与模块行(ADR-0003)。
+    // 开场词带着 vault 解出的凭据明文与模块行(ADR-0003)。
     const opening = JSON.stringify(model.requests[0]);
-    assert.match(opening, /页面密码: page-secret/);
     assert.match(opening, /env-shared-secret/);
     assert.match(opening, /业务模块: 支付核心\(id: pay-core\)/);
     // get_issue_meta 的回执进了第二个请求(工具结果回模型),密码在场。
     const followup = JSON.stringify(model.requests[1]);
     assert.match(followup, /get_issue_meta/);
     assert.match(followup, /backend_password.*env-shared-secret/);
-    assert.match(followup, /page_password.*page-secret/);
     assert.match(followup, /module.*pay-core/);
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -3857,8 +3840,8 @@ test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上
     assert.equal(receipt.status, "passed");
     assert.equal(receipt.detail, "基线全绿");
     assert.equal(receipt.build_command, "mvn compile");
-    // 收据是服务端流程状态:不上 wire(前端镜像没有这个字段)。
-    assert.equal("warmup" in service.get(created.id), false);
+    // 收据上 wire(对齐清单⑤):前端判"预热在跑/结果"决定直播面板。
+    assert.ok("warmup" in service.get(created.id));
     // 幂等:收过收据不再重跑(闸作答推进后计数不变)。
     service.answer(created.id, {
       state_version: gate.gate!.state_version, code: "issue",

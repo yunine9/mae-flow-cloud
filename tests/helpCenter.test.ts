@@ -64,7 +64,7 @@ test("问题 FAQ 使用当前登记入口和真实口令边界", () => {
   assert.match(source, /手工登记（无单）/);
   assert.match(source, /团队资产 → 业务模块/);
   assert.match(source, /DTS 列表（已有单）/);
-  assert.match(source, /页面账号默认 admin/);
+  assert.match(source, /从环境管理选择环境 IP/);
   assert.match(source, /AI 上下文/);
   assert.match(source, /不会出现在会话列表、状态摘要或事件流中/);
   assert.match(source, /个人复用或生产口令/);

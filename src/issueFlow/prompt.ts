@@ -135,8 +135,6 @@ function copyPackage(from: string, to: string): void {
 export interface IssueEnvCredentials {
   /** 网管后台密码(sopuser/ossuser/ossadm 共用)。 */
   backend?: string;
-  /** 网管页面密码。 */
-  page?: string;
   /** 独立 root 密码(#150,ADR-0020):只在显式凭据组在场时由服务层
    * 解出;继承后台密码的会话缺席,出口按"没有独立 root"处理。 */
   root?: string;
@@ -156,8 +154,6 @@ export interface IssueRegistrationMeta {
     /** 环境形态(虚拟化/容器化 K8s):日志抓取引擎的选择依据;
      * 登记或配置卡没选时缺席,AI 举卡补齐,不自行猜。 */
     env_type?: "virtualized" | "k8s";
-    page_account?: string;
-    page_password?: string;
     backend_password?: string;
     /** 独立 root 密码:显式设置时才有(留空语义 = 与后台密码相同,
      * 那种会话这里缺席)。 */
@@ -190,8 +186,6 @@ export function issueRegistrationMeta(
         name: env.name,
         hosts: [...env.hosts],
         ...(env.env_type ? { env_type: env.env_type } : {}),
-        ...(env.page_account ? { page_account: env.page_account } : {}),
-        ...(credentials.page ? { page_password: credentials.page } : {}),
         ...(credentials.backend
           ? { backend_password: credentials.backend }
           : {}),
@@ -213,8 +207,6 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
     ...(env.env_type
       ? [`    - 环境形态: ${ENV_TYPE_LABELS[env.env_type]}(决定日志抓取用哪套引擎,见技能 issue-ops)`]
       : []),
-    ...(env.page_account ? [`    - 页面账号: ${env.page_account}`] : []),
-    ...(env.page_password ? [`    - 页面密码: ${env.page_password}`] : []),
     ...(env.backend_password
       ? [`    - 网管后台密码(sopuser/ossuser/ossadm 共用): ${env.backend_password}`]
       : []),
