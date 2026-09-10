@@ -1,111 +1,251 @@
 /**
- * 环境快选(票 #150,ADR-0020):从环境管理台账选一条环境的共用选择器
- * ——登记页「从环境管理选」与 env_needed 闸卡的台账快选列表共用本组件。
+ * 环境快选(票 #150,ADR-0020;2026-09-10 走查重铸):从环境管理选一条
+ * 网管环境的共用选择器——登记页「网管环境」与 env_needed 闸卡共用。
  *
- * 零密码契约:台账视图(EnvironmentView)没有任何密码字段,这里展示与
+ * 交互口径(走查裁定):只选不手填。可搜索下拉最适合作「选择」这件事:
+ * 触发器显示当前选中(IP 即名字,等宽体),展开是搜索框 + 环境清单,
+ * 按 IP/标签/形态模糊过滤,方向键高亮、回车选中、Esc 关闭;搜不到时
+ * 「新增环境」弹共用表单(EnvironmentEditorDialog),录入成功后自动
+ * 选中新条目——选择和新建是同一条路径的两端,不再并存两套输入面。
+ *
+ * 零密码契约:列表视图(EnvironmentView)没有任何密码字段,这里展示与
  * 提交的只有非密元信息(IP/形态/标签/端口);选中后只上送条目 id,值由
- * 服务端从台账解密快照进会话 vault(选入即快照,台账后续改/删不影响
+ * 服务端解密留档进会话(选入即定,之后环境管理里怎么改/删都不影响
  * 已进行的会话)。新 UI 一律 Tailwind(#146):根元素挂 .tw-root 做
- * scoped 归一,颜色/字号/圆角全走 @theme 桥映射出的令牌工具类。
+ * scoped 归一——注意下拉弹层经 portal 挂到 body,不在根的子树里,
+ * PopoverContent 必须自带 .tw-root,否则 UA 默认的 p 边距/button 底色
+ * 会在弹层里漏出来(2026-09-10 走查实测)。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { Check, ChevronDown, Plus } from "lucide-react";
+import { listEnvironments, type EnvironmentView } from "./api";
 import {
-  listEnvironments,
-  type EnvironmentForm,
-  type EnvironmentView,
-} from "./api";
+  ENVIRONMENT_FORM_TEXT,
+  EnvironmentEditorDialog,
+} from "./EnvironmentEditorDialog";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
-/** 环境形态的页面文案(与登记表单/闸卡下拉同词)。 */
-const FORM_TEXT: Record<EnvironmentForm, string> = {
-  virtualized: "虚拟化",
-  k8s: "容器化(K8s)",
-};
-
-const pickRowClass =
-  "flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm "
-  + "transition-colors focus-visible:outline-none focus-visible:ring-[3px] "
+/** 搜索框与触发器共用的控件皮(shadcn input 同款配方)。 */
+const envControlClass =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm "
+  + "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] "
   + "focus-visible:ring-ring/50";
-/** 未选中行:中性描边,悬停亮起;选中行:主动作描边 + 弱化底。 */
-const rowIdleClass = "border-line bg-transparent hover:border-line-strong hover:bg-surface-2";
-const rowPickedClass = "border-ink bg-surface-2";
 
-export function EnvironmentPicker({ selectedId, onPick, onManual }: {
-  /** 当前选中的台账条目 id(受控;空 = 未选)。 */
+function formText(entry: EnvironmentView): string {
+  return ENVIRONMENT_FORM_TEXT[entry.form] ?? entry.form;
+}
+
+/** 模糊匹配:IP / 标签 / 形态文案,大小写不敏感(IP 即名字,主键)。 */
+function matches(entry: EnvironmentView, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return entry.ip.toLowerCase().includes(q)
+    || entry.tags.some((tag) => tag.toLowerCase().includes(q))
+    || formText(entry).toLowerCase().includes(q);
+}
+
+export function EnvironmentPicker({ selectedId, onPick }: {
+  /** 当前选中的环境条目 id(受控;空 = 未选)。 */
   selectedId?: string | null;
-  /** 选中一条台账环境(上送 environment_id,值由服务端快照)。 */
+  /** 选中一条环境(上送条目 id,值由服务端留档)。 */
   onPick: (entry: EnvironmentView) => void;
-  /** 「手动填写」回退入口(闸卡用);缺席不渲染。 */
-  onManual?: () => void;
 }) {
-  const [environments, setEnvironments] = useState<EnvironmentView[]>();
+  const [environments, setEnvironments] = useState<EnvironmentView[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [loadingId, setLoadingId] = useState("");
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  /** 键盘高亮行(过滤后清单的下标;-1 = 无)。 */
+  const [highlighted, setHighlighted] = useState(-1);
+  /** 「找不到就新建」弹层:undefined = 关;existing 缺席 = 新增。 */
+  const [editor, setEditor] = useState<{ existing?: EnvironmentView }>();
 
   async function load() {
-    setLoadingId("list");
+    setLoading(true);
     try {
       setEnvironments(await listEnvironments());
       setError("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "环境台账加载失败");
+      // 加载失败给人话,不把服务端/网络的原始报错(如「未知路径」)
+      // 原样上屏;细节进 console 供排查。
+      console.error("环境列表加载失败", cause);
+      setError("环境列表暂时加载不了,请稍后重试。");
     } finally {
-      setLoadingId("");
+      setLoading(false);
     }
   }
   useEffect(() => { void load(); }, []);
 
-  return <div className="tw-root flex flex-col gap-2 text-base text-foreground"
-    aria-label="从环境管理选择">
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-sm font-medium text-foreground">从环境管理选</span>
-      <div className="flex items-center gap-1">
+  const filtered = useMemo(
+    () => environments.filter((entry) => matches(entry, query)),
+    [environments, query]);
+  const selected = environments.find((entry) => entry.id === selectedId) ?? null;
+
+  function toggleOpen(next: boolean) {
+    setOpen(next);
+    if (next) {
+      // 每次展开都重拉列表:别处刚登记的环境立刻可见,不需要手动刷新。
+      setQuery("");
+      setHighlighted(-1);
+      void load();
+    }
+  }
+
+  function pick(entry: EnvironmentView) {
+    onPick(entry);
+    toggleOpen(false);
+  }
+
+  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      setHighlighted((current) => {
+        const total = filtered.length;
+        if (!total) return -1;
+        return (current + delta + total) % total;
+      });
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setHighlighted(filtered.length ? 0 : -1);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setHighlighted(filtered.length ? filtered.length - 1 : -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const entry = filtered[highlighted];
+      if (entry) pick(entry);
+      return;
+    }
+    // 输入法组词中的按键不当作导航(回车选字不是提交)。
+    if (event.nativeEvent.isComposing) event.preventDefault();
+  }
+
+  /** 新建保存:合入列表;新建出的条目自动选中(走查裁定的闭环)。 */
+  function saved(entry?: EnvironmentView) {
+    setEditor(undefined);
+    if (!entry) {
+      void load();
+      return;
+    }
+    setEnvironments((prev) => [...prev, entry]);
+    onPick(entry);
+  }
+
+  return <div className="tw-root" aria-label="从环境管理选择">
+    <Popover open={open} onOpenChange={toggleOpen}>
+      <PopoverTrigger asChild>
         <button type="button"
-          className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => void load()} disabled={loadingId === "list"}>
-          {loadingId === "list" ? "刷新中…" : "刷新"}
-        </button>
-        {onManual && <button type="button"
-          className="rounded-md border border-line px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-          onClick={onManual}>
-          手动填写
-        </button>}
-      </div>
-    </div>
-
-    {error && <p className="rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
-      {error}
-    </p>}
-
-    {environments === undefined
-      ? <p className="text-sm text-muted-foreground">环境台账加载中…</p>
-      : environments.length === 0
-        ? <div className="flex flex-col items-start gap-1 rounded-lg border border-dashed border-line px-4 py-4">
-          <p className="text-sm text-foreground">台账里还没有环境</p>
-          <p className="text-sm text-muted-foreground">
-            先到「环境管理」页签录入环境(IP、形态、端口、后台密码),
-            之后这里就能快选;也可以{onManual ? "点右上「手动填写」直接填。" : "在登记表单里手动填写。"}
-          </p>
-        </div>
-        : <div className="flex flex-col gap-1.5" role="radiogroup"
-          aria-label="环境台账快选列表">
-          {environments.map((entry) => {
-            const picked = entry.id === selectedId;
-            return <button type="button" key={entry.id} role="radio"
-              aria-checked={picked}
-              className={`${pickRowClass} ${picked ? rowPickedClass : rowIdleClass}`}
-              onClick={() => onPick(entry)}>
-              <span className="font-mono text-sm text-foreground"
-                title={`端口 ${entry.port}`}>{entry.ip}</span>
-              <span className="text-xs text-muted-foreground">
-                {FORM_TEXT[entry.form] ?? entry.form} · {entry.port}
+          className={`${envControlClass} flex items-center justify-between gap-2 text-left`}
+          aria-expanded={open}
+          aria-label={selected ? `已选环境 ${selected.ip}` : "选择网管环境"}>
+          {selected
+            ? <span className="flex min-w-0 items-center gap-2">
+              <span className="font-mono text-sm font-medium text-foreground">
+                {selected.ip}
               </span>
-              {entry.tags.map((tag) => <span key={tag}
-                className="rounded-full border border-line px-2 py-0.5 text-xs text-muted-foreground">
-                {tag}
-              </span>)}
-              {picked && <span className="ml-auto text-xs text-ink">已选</span>}
-            </button>;
-          })}
-        </div>}
+              <span className="text-xs text-muted-foreground">
+                {formText(selected)} · {selected.port}
+              </span>
+            </span>
+            : <span className="truncate text-sm text-muted-foreground">
+              从环境管理选择环境…
+            </span>}
+          <ChevronDown aria-hidden
+            className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />
+        </button>
+      </PopoverTrigger>
+      {/* 弹层 portal 到 body:必须自带 .tw-root 归一(见文件头说明)。 */}
+      <PopoverContent align="start"
+        className="tw-root w-[var(--radix-popover-trigger-width)] p-0">
+        <div className="border-b border-line p-2">
+          <input value={query} autoFocus
+            className={envControlClass}
+            placeholder="搜索 IP、标签或形态…"
+            aria-label="搜索环境"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setHighlighted(-1);
+            }}
+            onKeyDown={onSearchKeyDown} />
+        </div>
+        <div className="max-h-60 overflow-y-auto p-1" role="listbox"
+          aria-label="环境清单">
+          {error && <p className="m-1 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
+            {error}
+          </p>}
+          {loading
+            ? <p className="px-3 py-3 text-sm text-muted-foreground">环境列表加载中…</p>
+            : filtered.map((entry, index) => {
+              const picked = entry.id === selectedId;
+              return <button type="button" key={entry.id} role="option"
+                aria-selected={picked}
+                className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm${index === highlighted ? " bg-accent" : ""}`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(entry)}>
+                <span className="flex w-full items-center gap-2">
+                  <span className="font-mono font-medium text-foreground"
+                    title={`端口 ${entry.port}`}>{entry.ip}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {formText(entry)} · {entry.port}
+                  </span>
+                  {picked && <Check aria-hidden className="ml-auto size-4 text-ink" />}
+                </span>
+                {entry.tags.length > 0 && <span className="flex flex-wrap gap-1">
+                  {entry.tags.map((tag) => <span key={tag}
+                    className="rounded-full border border-line px-1.5 text-xs text-muted-foreground">
+                    {tag}
+                  </span>)}
+                </span>}
+              </button>;
+            })}
+          {!loading && filtered.length === 0 && <div
+            className="flex flex-col gap-0.5 px-3 py-2.5">
+            <p className="text-sm text-foreground">
+              {environments.length === 0
+                ? "还没有登记过任何环境"
+                : <>没有匹配「{query.trim()}」的环境</>}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {environments.length === 0
+                ? "在「环境管理」里登记一台网管环境,以后在这里直接选。"
+                : "换个关键词,或者直接新增一台。"}
+            </p>
+          </div>}
+        </div>
+        <div className="border-t border-line p-1">
+          <Button type="button" variant="ghost" size="sm"
+            className="w-full justify-start text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setOpen(false);
+              setEditor({});
+            }}>
+            <Plus aria-hidden />新增环境…
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+    {editor && <EnvironmentEditorDialog
+      key={editor.existing?.id ?? "create"}
+      existing={editor.existing}
+      environments={environments}
+      onClose={() => setEditor(undefined)}
+      onSaved={saved}
+      onProbed={(updated) => setEnvironments((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item)))}
+      onSwitchTo={(entry) => setEditor({ existing: entry })}
+    />}
   </div>;
 }

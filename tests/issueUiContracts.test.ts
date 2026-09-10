@@ -5,6 +5,8 @@ import test from "node:test";
 
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const editor = readFileSync(
+  resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 const decisions = readFileSync(
   resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
 const annotations = readFileSync(
@@ -49,10 +51,9 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
   assert.match(registration,
     /页面账号 <i className="req">\*<\/i>[\s\S]*placeholder="admin" required/);
-  assert.match(registration,
-    /网管环境IP一次只填一个，请不要输入逗号、空格或换行/);
-  assert.match(decisions,
-    /invalidHost = host !== "" && \/\[\\s,，、\]\//);
+  // 环境侧(2026-09-10 走查裁定「只选不手填」):登记页不再手填 IP,
+  // 未选台账条目就在提交时给指路文案。
+  assert.match(registration, /请从环境管理选择网管环境/);
   assert.match(registration, /if \(!envPageAccount\.trim\(\)\)/);
   assert.match(registration, /团队资产 → 业务模块/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
@@ -117,7 +118,10 @@ test("问题决策卡的给定选项和自定义答复都能再次点击取消",
 
 test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", () => {
   assert.match(registration, /不会出现在会话[\s\S]*事件流[\s\S]*明文进入[\s\S]*AI 上下文/);
-  assert.match(decisions, /不会出现在会话列表、[\s\S]*事件流[\s\S]*AI 上下文/);
+  // 闸卡(2026-09-10 只选不手填)不再有密码输入面:以"台账快照、凭据
+  // 无需在此填写"的说明替代;密码的唯一输入处是共用新建/编辑弹框。
+  assert.match(decisions, /密码以选定时为准[\s\S]*密码无需在此填写/);
+  assert.match(editor, /密码加密保存在服务端[\s\S]*不用重复填写/);
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
   // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
@@ -294,7 +298,7 @@ test("过程文档可原位全屏，退出后保留当前页签", () => {
   assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
 });
 
-test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择靠它(AI 不试错)", () => {
+test("环境形态字段:唯一落点是共用新建弹框,登记与闸卡只选不手填(AI 不试错)", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   const decisionCard = readFileSync(
@@ -302,23 +306,25 @@ test("环境形态字段:登记表单与 env_needed 卡都有下拉,引擎选择
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 登记表单:形态下拉(虚拟化/容器化)必选,随 environment 上送。
-  assert.match(registration, /环境形态 <i className="req">\*<\/i>/);
-  assert.match(registration, /<option value="virtualized">虚拟化<\/option>/);
-  assert.match(registration, /<option value="k8s">容器化\(K8s\)<\/option>/);
-  assert.match(registration, /env_type: envType/);
-  // env_needed 卡:同款下拉,未选形态不得提交,提交 wire 带形态。
-  assert.match(decisionCard, /<span>环境形态<\/span>/);
-  assert.match(decisionCard, /<option value="k8s">容器化\(K8s\)<\/option>/);
-  assert.match(decisionCard, /envType !== ""/, "未选形态不得提交");
-  assert.match(decisionCard, /env_type: envType/);
-  // 拒绝口(票 93)文案直说拒绝(2026-09-08 走查:"无需拉日志"没人认出)。
+  // 形态下拉(虚拟化/容器化)只在共用弹框(EnvironmentEditorDialog):
+  // 形态随新建录入台账;登记页与 env 卡不再有手填面。
+  assert.match(editor, /<SelectItem value="virtualized">虚拟化\(经网管节点\)<\/SelectItem>/);
+  assert.match(editor, /<SelectItem value="k8s">容器化\(经 OM 节点\)<\/SelectItem>/);
+  assert.doesNotMatch(registration, /环境形态/);
+  assert.doesNotMatch(registration, /env_type/);
+  assert.match(registration, /environment_id: pickedEnv\.id/);
+  // env_needed 卡:同样只选,提交 wire 只带 environment_id。
+  assert.doesNotMatch(decisionCard, /env_type/);
+  assert.doesNotMatch(decisionCard, /<option value="k8s">/);
+  assert.match(decisionCard, /environment_id: picked\.id/);
+  // 拒绝口(票 93)文案直说拒绝;两段式:第一段展开理由框,第二段确认。
   assert.match(decisionCard, /拒绝填写,继续分析/);
   assert.match(decisionCard, /拒绝填写,继续/);
+  assert.match(decisionCard, /确认拒绝,继续分析/);
   // 环境卡中途即显(2026-09-08):闸在场即出卡,不等 waiting_user——
   // 模型收口后继续不需要环境的工作,用户填卡与它并行。
   assert.match(sessionView, /const envGateLive = detail\.gate\?\.kind === "env_needed"/);
-  // wire 类型:形态字段在册(提交必带语义见注释)。
+  // wire 类型:形态字段仍在册(台账/弹框消费,服务端契约不变)。
   assert.match(apiTypes, /env_type\?: "virtualized" \| "k8s"/);
 });
 
@@ -828,12 +834,12 @@ test("卡座(#125):dock portal 接线——提交区挂输入区 dock,表单状�
     /function IssueDecisionFooterMount\(\{ target, children \}/);
   assert.match(decisions, /return target \? createPortal\(children, target\) : children;/);
   assert.match(decisions, /footerTarget\?: HTMLElement \| null/);
-  // env 卡(本票走通的卡):附言(拒绝理由)+错误提示+提交/拒绝按钮
-  // 整块进 dock(挂载器包住 dock-foot);字段语义零变化——形态下拉必选、
-  // 拒绝 wire 复用 /environment(decline:true + note)。
+  // env 卡(本票走通的卡):拒绝理由(两段式展开)+错误提示+提交/拒绝
+  // 按钮整块进 dock(挂载器包住 dock-foot);未选环境不得提交、拒绝
+  // wire 复用 /environment(decline:true + note)。
   assert.match(decisions,
     /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?issue-decision-dock-foot[\s\S]*?<\/IssueDecisionFooterMount>/);
-  assert.match(decisions, /const ready = envType !== "" && host !== "" && !invalidHost/);
+  assert.match(decisions, /busy \|\| !picked/, "未选环境不得提交");
   assert.match(decisions, /decline: true,/);
   // 输入区侧:dock 容器(与任务侧同一 ws-reply-dock 形状,aria 同名)
   // 只在等卡分支预留,由 dock=waiting && canOperate 门控。
@@ -1080,65 +1086,71 @@ test("现场页签对齐(2026-09-08):长内容/结构化内容右侧查看,不�
     "任务侧应从 eventView 导入共享选中类型");
 });
 
-// ---- 环境快选接入(票 #150,ADR-0020):闸卡与登记页从环境管理台账
-// ---- 快选环境,选中提交 environment_id,服务端以选定时点快照进会话
-// ---- vault(前端永远没有密码);闸卡被触碰的表单区块按 #146 当场迁
-// ---- Tailwind,锚点随迁移同提交更新。
+// ---- 环境快选接入(票 #150,ADR-0020;2026-09-10 走查重铸):闸卡与
+// ---- 登记页「只选不手填」——可搜索下拉挑台账条目,搜不到弹共用表单
+// ---- 新建并自动选中;选中提交 environment_id,服务端以选定时点快照进
+// ---- 会话 vault(前端永远没有密码)。被触碰的区块按 #146 迁 Tailwind。
 
-test("环境闸卡台账快选(#150):默认快选列表,手动回退带 root 密码与沉淀勾选;触迁 Tailwind", () => {
+test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹框+两段式拒绝;触迁 Tailwind", () => {
   const decisionCard = readFileSync(
     resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
   const picker = readFileSync(
     resolve("web/src/EnvironmentPicker.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
-  // 默认视图=台账快选:EnvironmentPicker 进场,选中提交 environment_id
-  // (服务端从台账解密快照,前端零密码),卡面给「来自环境管理 x.x.x.x」
-  // 的来源展示。
-  assert.match(decisionCard, /useState<"picker" | "manual">\("picker"\)/);
+  // 唯一作答面=可搜索下拉:EnvironmentPicker 进场,选中提交
+  // environment_id(服务端从台账解密快照,前端零密码),卡面给
+  // 「将使用「环境管理」中的 x.x.x.x」的快照说明;手动表单整体退役。
   assert.match(decisionCard,
     /<EnvironmentPicker selectedId=\{picked\?\.id \?\? null\}/);
   assert.match(decisionCard, /environment_id: picked\.id/);
-  assert.match(decisionCard, /来自环境管理 \{picked\.ip\}/);
-  // 手动回退:可选 root 密码(placeholder:留空时与后台密码相同)与
-  // 「存入环境管理」沉淀勾选,随手填 wire 上送。
-  assert.match(decisionCard, /留空时与后台密码相同/);
-  assert.match(decisionCard, /root_password: rootPassword\.trim\(\)/);
-  assert.match(decisionCard, /save_to_registry: true/);
-  assert.match(decisionCard, /存入环境管理/);
+  assert.match(decisionCard, /「环境管理」中的 \{picked\.ip\}/);
+  assert.doesNotMatch(decisionCard, /"picker" \| "manual"/);
+  assert.doesNotMatch(decisionCard, /存入环境管理/);
+  assert.doesNotMatch(decisionCard, /backend_password: backendPassword/);
+  // 拒绝两段式(票 93):第一段展开理由框,第二段「确认拒绝」才提交
+  //(硬拒绝:同 scope 工具再调不再举卡,值得一步确认)。
+  assert.match(decisionCard, /declineOpen/);
+  assert.match(decisionCard, /确认拒绝,继续分析/);
+  assert.match(decisionCard, /decline: true,/);
   // #146 触碰即迁:表单区块根挂 .tw-root 走工具类;提交区容器
   // (issue-decision-dock-foot)是四类卡共用的卡座/dock 双上下文皮肤,
   // 按 #146 例外保留 legacy(迁移块内有注释说明)。
   assert.match(decisionCard,
     /tw-root grid gap-\[10px\] px-\[15px\] pt-\[13px\]/);
   assert.match(decisionCard, /issue-decision-dock-foot/);
-  // 共用选择器(EnvironmentPicker):零密码展示(IP/形态/标签),只
-  // 上送条目 id;新 UI 一律 Tailwind(.tw-root)。
+  // 共用选择器:可搜索下拉(listbox/option + 搜索框,方向键+回车),
+  // 「找不到就新建」弹共用表单,保存回传新条目自动选中(onPick)。
   assert.match(picker, /listEnvironments/);
   assert.match(picker, /onPick: \(entry: EnvironmentView\) => void/);
+  assert.match(picker, /role="listbox"/);
+  assert.match(picker, /role="option"/);
+  assert.match(picker, /EnvironmentEditorDialog/);
+  assert.match(picker, /onPick\(entry\)/);
   assert.match(picker, /tw-root/);
   assert.match(picker, /entry\.ip/);
   assert.doesNotMatch(picker, /password/i, "台账视图零密码字段");
-  // wire 镜像(#150 新键):environment_id / root_password / save_to_registry。
+  // wire 镜像(#150 新键仍在册;root_password/save_to_registry 只服务
+  // 登记弹框,服务端契约不变)。
   assert.match(apiTypes, /environment_id\?: string/);
-  assert.match(apiTypes, /root_password\?: string/);
-  assert.match(apiTypes, /save_to_registry\?: boolean/);
 });
 
-test("登记页从环境管理选(#150):入口/回填确认/密码占位/提交 environment_id;其余区域不迁移", () => {
+test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 environment_id/页面凭据仍手填", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
-  // 入口 + 共用选择器 + 选中回填非密字段(IP/形态)供人确认。
-  assert.match(registration, /从环境管理选/);
+  // 常驻快选(可搜索下拉,自带「找不到就新建」弹框):不再有展开/收起
+  // 开关,更没有手填回退。
   assert.match(registration,
     /<EnvironmentPicker\s*\n\s*selectedId=\{pickedEnv\?\.id \?\? null\} onPick=\{pickEnv\} \/>/);
-  assert.match(registration, /setEnvHosts\(entry\.ip\)/);
-  assert.match(registration, /setEnvType\(entry\.form\)/);
-  // 密码区显示台账占位(「将使用台账中该环境的已存密码」),提交走
-  // environment_id;页面账号/页面密码不入台账,仍手填随行。
-  assert.match(registration, /将使用台账中该环境的已存密码/);
+  assert.doesNotMatch(registration, /收起环境列表/);
+  assert.doesNotMatch(registration, /清除,改用手动填写/);
+  // 选中给台账快照说明(已存后台密码),提交只带 environment_id;
+  // 页面账号/页面密码不入台账,仍手填随行。
+  assert.match(registration, /将使用「环境管理」里/);
   assert.match(registration, /environment_id: pickedEnv\.id/);
   assert.match(registration, /page_password: envPagePassword/);
-  // 手动回退:改动 IP/形态清除台账选择,旧手填 wire 原样。
-  assert.match(registration, /setPickedEnv\(null\)/);
-  assert.match(registration, /backend_password: envBackendPassword/);
+  // 未选环境提交被拦,文案指路下拉里的「新增环境」。
+  assert.match(registration, /请从环境管理选择网管环境/);
+  // 页面凭据两个输入面仍在(不入台账,逐单手填)。
+  assert.match(registration, /页面账号 <i className="req">\*<\/i>/);
+  assert.match(registration, /页面密码 <i className="req">\*<\/i>/);
 });
