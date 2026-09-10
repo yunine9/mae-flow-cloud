@@ -616,6 +616,7 @@ export function isOwnerOnlyWaiting(task: TaskSummary): boolean {
   const step = task.waiting?.step;
   return step === "cloud_requirement_analysis_confirm"
     || step === "cloud_split_proposal"
+    || step === "cloud_mr_description"
     || step === "cloud_push_confirm";
 }
 
@@ -627,6 +628,7 @@ export function isClarificationWaiting(task: TaskSummary): boolean {
 
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
+  if (step === "cloud_mr_description") return "填写 AR 描述，用于 MR 标题";
   if (step === "cloud_requirement_analysis_confirm") {
     return "确认需求";
   }
@@ -716,9 +718,10 @@ export function WaitingCard({
   const requirementAnalysisConfirmation = task.waiting?.step
     === "cloud_requirement_analysis_confirm";
   const clarification = isClarificationWaiting(task);
+  const mrDescription = task.waiting?.step === "cloud_mr_description";
   const clarificationTargets = task.waiting?.question?.annotation_ids?.length ?? 0;
   const chainReview = isChainReviewWaiting(task);
-  const unifiedReply = presentation === "studio" && questions.length === 1
+  const unifiedReply = (presentation === "studio" || mrDescription) && questions.length === 1
     && !requirementAnalysisConfirmation;
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const closingAnswers = new Set(choiceEffects
@@ -884,6 +887,7 @@ export function WaitingCard({
   }
 
   const submitLabel = submitting ? "正在提交…"
+    : mrDescription ? "保存描述并继续创建 MR"
     : clarification ? "发送答复"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
@@ -913,7 +917,7 @@ export function WaitingCard({
       <header className="decision-head">
         <div>
           {presentation !== "studio" && <span className="decision-kicker">
-            {clarification ? "Agent 在追问" : "需要你决定"}
+            {mrDescription ? "创建 MR 前需要补充" : clarification ? "Agent 在追问" : "需要你决定"}
           </span>}
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
@@ -1166,13 +1170,13 @@ export function WaitingCard({
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
         {unifiedReply && <label className="decision-unified-reply">
-          <span>{chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
-            : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{chainReview
+          <span>{mrDescription ? "AR 单上的准确描述" : chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
+            : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
               ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
               : picked[questions[0].question] ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
           <textarea value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
-            placeholder={picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
+            placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
         </label>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">

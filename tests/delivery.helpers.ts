@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";

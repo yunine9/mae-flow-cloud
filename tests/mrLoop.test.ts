@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { DeliveryOutbox } from "../src/deliveryOutbox.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
 import type { PrePushRunner } from "../src/prepushAgent.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { workflowChoices, workflowLabel } from "../src/kernelChoices.ts";

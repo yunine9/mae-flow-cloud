@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import type {
   PrePushRunRequest,
@@ -272,10 +272,8 @@ test("prepush 代码验证失败时禁止 push、MR 与流水线", async () => {
   }
 });
 
-test("失败后人工跳过的交付,MR 标题带「未经本地编译验证」标记", async () => {
-  // 检视人在 CodeHub 里看不见云端工作台;不打标,他就在不知情下背书
-  // 一份从未编译过的代码(2026-08-30 审计)。清单整理的 user_skipped
-  // 不打标——判据是 skipped_by,只有失败跳过路落它。
+test("失败后人工跳过的交付：MR 标题仍精确匹配 AR 描述，跳过事实留在台账", async () => {
+  // 标题匹配 AR 描述；不能再用附加后缀破坏平台的合入要求。
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
@@ -319,9 +317,8 @@ test("失败后人工跳过的交付,MR 标题带「未经本地编译验证」�
       },
     };
     await until(() => platform.mergeRequests.length > 0, "跳过后照常建 MR");
-    assert.match(platform.mergeRequests[0].title,
-      /【未经本地编译验证,zhangsan跳过】/,
-      "跳过的事实必须跟着 MR 标题走到平台上");
+    assert.equal(platform.mergeRequests[0].title, "测试 AR 单的准确描述");
+    assert.equal(service.get(id)!.delivery?.prepush?.skipped_by, "zhangsan");
   } finally {
     await model.stop();
     await platform.stop();

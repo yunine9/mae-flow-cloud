@@ -552,6 +552,7 @@ import {
 } from "./taskFocus.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
 import { createMergeRequest } from "./mrClient.ts";
+import { MR_DESCRIPTION_STEP, askMrDescription, savedMrDescription } from "./mrDescription.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
   appendDeveloperAssistantMessage,
@@ -3918,6 +3919,7 @@ export class TaskService {
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
       summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
         || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
+        || summary.waiting?.step === MR_DESCRIPTION_STEP
         ? "source"
       : this.isRequirementAnalysis(task)
       ? "chain"
@@ -11244,7 +11246,8 @@ export class TaskService {
   /** 拍板类卡:只认责任人,受邀参与人只读、也不通知。 */
   private ownerOnlyWaiting(waiting: { step: string }): boolean {
     return waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
-      || waiting.step === CLOUD_SPLIT_PROPOSAL_STEP;
+      || waiting.step === CLOUD_SPLIT_PROPOSAL_STEP
+      || waiting.step === MR_DESCRIPTION_STEP;
   }
 
   /** 分析期能回答问题卡的人:协作者 + 逐仓责任人,去掉责任人自己。
@@ -11280,6 +11283,14 @@ export class TaskService {
     // 正常卡和 push 卡都可能死在 waiting.json 已落袋、批注投影尚未
     // markSent 的窗口。恢复动作首先对账，不能只让 Agent 收到正文却在
     // 页面继续显示“待提交”。失败会由 helper 记日志并保持流程可继续。
+    if (waiting.step === MR_DESCRIPTION_STEP) {
+      task.summary.waiting = undefined;
+      task.summary.status = "verifying";
+      task.summary.detail = "AR 描述已保存，继续创建 MR";
+      this.persist(task);
+      this.bypass(task, "填写 AR 描述后继续交付", this.tryDeliver(task, task.controlEpoch));
+      return;
+    }
     this.markResolvedDecisionAnnotations(task, waiting);
     if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       this.finishRequirementAnalysisEntryDecision(task, waiting);
@@ -11427,6 +11438,20 @@ export class TaskService {
     }
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
+    if (waiting.step === MR_DESCRIPTION_STEP) {
+      this.assertOwnerDecides(task, input.actor, "填写 AR 描述");
+      const description = String(Object.values(answers)[0] ?? decision).trim();
+      if (!description || /[\r\n]/.test(description)) {
+        throw new TaskControlError("请填写 AR 单上的准确描述，使用一行文字作为 MR 标题");
+      }
+      const resolved = task.humanGate.resolve(waiting.waiting_id, {
+        stateVersion: input.state_version, decision: description,
+        answers: Object.keys(answers).length ? answers : undefined,
+        notes: normalized.notes, requestDigest, decidedBy: input.actor,
+      });
+      await this.resumeResolvedDecision(task, resolved);
+      return { ...task.summary };
+    }
     if (waiting.step === CLOUD_SPLIT_PROPOSAL_STEP) {
       this.assertOwnerDecides(task, input.actor, "决定拆不拆");
       const submitted = [...Object.values(answers), decision];
@@ -16691,6 +16716,17 @@ export class TaskService {
       if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task, branch)) return;
+      const arTicket = String(task.summary.ticket ?? state?.config?.["单号"] ?? branch).trim();
+      const mrDescription = savedMrDescription(task.humanGate, task.summary.id, arTicket);
+      if (!mrDescription && !task.summary.delivery?.mr_url
+          && task.summary.delivery?.mr_id === undefined) {
+        task.summary.waiting = askMrDescription(task.humanGate, task.summary.id, arTicket);
+        task.summary.status = "waiting_for_human";
+        task.summary.detail = "创建 MR 前，请填写 AR 单对应的准确描述";
+        this.persist(task);
+        this.notifyWaiting(task);
+        return;
+      }
       // 推送前最后一道基线复核:Build-Fix/确认期间若历史又被改写,
       // 只如实停下(fail-closed),不在这个时点做任何机械改写。
       if (await this.reconcileFrozenBaselineAncestry(task, false)
@@ -16749,30 +16785,15 @@ export class TaskService {
       const ledger = (action: Omit<ExternalAction, "taskId">) =>
         this.bypass(task, "投影动作", this.options.projection?.recordAction(
           { taskId: task.summary.id, ...action }));
-      const prePushState = task.summary.delivery?.prepush;
-      const skippedAfterBuildFailure = prePushState?.state === "user_skipped"
-        && Boolean(prePushState.skipped_by)
-        // 兼容旧收据：修复前没有 skip_reason，但 skipped_by 只会在失败
-        // 后跳过时出现，因此仍按风险放行处理。
-        && prePushState.skip_reason !== "delivery_selection";
       const mrRequest = {
         // 任务级仓进了场,适配层必须知道这单落在哪个仓——
         // repo 字段随 MR/流水线请求走,假件(单仓)忽略它无害。
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
         source_branch: branch,
         target_branch: baseline,
-        // 编译失败后人工跳过的交付,标记必须跟着 MR 走到平台上:检视
-        // 人在 CodeHub 里看不见云端工作台,不标就是让他在不知情下背书
-        // 一份从未编译过的代码(云端契约里编译全托给流水线,2026-08-30
-        // 审计)。清单调整后不重编是已经看过旧编译结果的普通取舍，任务
-        // 台账留痕即可，不用在 MR 标题制造“整份代码从未编译”的误解。
-        // MR 幂等复用时旧标题不更新,尽力而为。
-        title: `${state?.config?.["单号"] ?? branch}: ${
-          task.summary.title ?? taskTitle(task.summary.requirement)}${
-          skippedAfterBuildFailure
-            ? `【未经本地编译验证,${
-              prePushState.skipped_by}跳过】`
-            : ""}`,
+        // AR 描述是合入标题契约，不能再拼单号或编译状态后缀。
+        // 已有 MR 只复用，不要求补填或改写其远端标题。
+        title: mrDescription ?? task.summary.title ?? taskTitle(task.summary.requirement),
         // E2E 单号关联(内网诉求 2026-08-19):单号只拼进 title 平台看
         // 不见,要走 codehub-cli 的 --e2e-issues 才可追踪。取值优先
         // **用户下单填的需求号**(用户拍板"直接关联开始填入的那个"),
