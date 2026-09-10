@@ -29,7 +29,11 @@ import {
 } from "node:crypto";
 import { join } from "node:path";
 
-export type IssueEnvironmentPurpose = "logs" | "deploy" | "both" | "page";
+/** root = 独立 root 密码组(ADR-0020/#150:台账快照在条目显式设置 root
+ * 密码时一并入会话;单账号 legacy 形状,与 page 组同构;继承后台密码的
+ * 会话不落这一组,行为与手填时代完全一致)。 */
+export type IssueEnvironmentPurpose = "logs" | "deploy" | "both" | "page"
+  | "root";
 
 export interface IssueEnvironmentAccountInput {
   username: string;
@@ -84,7 +88,7 @@ interface Envelope {
   ciphertext: string;
 }
 
-const MAX_ENVIRONMENTS = 2;
+const MAX_ENVIRONMENTS = 3;
 const MAX_ACCOUNTS_PER_ENVIRONMENT = 8;
 const STANDARD_ENVIRONMENT_USERS = ["sopuser", "ossuser", "ossadm"] as const;
 const KEY_BYTES = 32;
@@ -105,14 +109,14 @@ function normalize(
   inputs: IssueEnvironmentInput[],
 ): StoredIssueEnvironment[] {
   if (inputs.length > MAX_ENVIRONMENTS) {
-    throw new Error("每个问题单最多配置一个日志环境和一个换库环境");
+    throw new Error("每个问题单最多配置后台、页面与 root 三组环境凭据");
   }
   const rows: StoredIssueEnvironment[] = inputs.map((input, index) => {
     const purpose = input.purpose;
     // page = 网管页面凭据组(问题流 v2 登记四件套):单账号走旧形状
     // (username/password,不经三账号校验)。它没有 SSH 消费方；问题流
     // 会在服务层按 ADR-0003 解密到当前问题的 AI 上下文。
-    if (!(["logs", "deploy", "both", "page"] as const).includes(purpose)) {
+    if (!(["logs", "deploy", "both", "page", "root"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
     }
     // "both"(单一共用环境)只有问题流 v2 会提交:playbook 的

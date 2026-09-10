@@ -33,6 +33,8 @@ import {
 } from "./taskService.ts";
 import { humanBytes } from "./workspaceReclaim.ts";
 import { reclaimIssueWorkspaces } from "./issueFlowWorkspaceReclaim.ts";
+import { EnvironmentRegistry } from "./environmentRegistry.ts";
+import { startEnvironmentProbePolling } from "./environmentProbe.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
@@ -1112,6 +1114,17 @@ async function main(): Promise<void> {
   if (retentionDays === 0) {
     console.log("[serve] 现场保留期配置为 0:永不回收,dataDir 需自行看管");
   }
+
+  // 环境台账探活(#151,ADR-0020):约 10 分钟一轮全量扫描(环境变量
+  // MFC_ENVIRONMENT_PROBE_INTERVAL_MS 可覆盖),按条目后台密码以
+  // sopuser 发起 SSH 认证,三态写回。与现场回收同一套旁路纪律:逐条
+  // 串行、单条失败只记日志不抛;unref() 不阻进程退出。定时器只接在
+  // 正式入口 serve.ts——createTaskServer(测试/旁路直连形态)不带任何
+  // 定时器,测试环境永不起新轮询。
+  startEnvironmentProbePolling({
+    registry: new EnvironmentRegistry(dataDir),
+    log: (message) => console.log(`  [env-probe] ${message}`),
+  });
 
   // 正式前端:--web <dist> 显式指定;web/dist 存在时自动接上
   // (构建过就用正式版,没构建就是零构建演示页,永远有页面可开)。

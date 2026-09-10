@@ -1,8 +1,10 @@
 @layer legacy {
-/* Mae-Flow Cloud Console —— 全站基础与遗留页面样式。
+/* Mae-Flow Cloud Console —— 全站基础与遗留页面样式(legacy 层)。
    设计令牌只在 tokens.css(必须先于本文件加载);本文件不再定义颜色。
-   遗留区域按"触碰即收敛"迁移:改到哪块,把那块的硬编码尺寸与颜色换成
-   令牌;新页面样式不得继续追加到这里。 */
+   方针(自 Tailwind 基建合入起生效,见 issue #146):新 UI 一律用 Tailwind
+   工具类(组件皮用 shadcn,入口 src/tailwind.css),不得再向 legacy 层追加;
+   改到存量 UI 时,触碰到的组件/区块当场迁 Tailwind(触碰即迁),以视觉与
+   交互效果不变为准,不夹带美化。 */
 
 @font-face {
   font-family: "Inter Variable";
