@@ -14366,6 +14366,7 @@ export class TaskService {
         }
       }
       if (await finishTaskHostOperation(this.taskHostRuntime(task, epoch))) return;
+      if (task.summary.parent_task_id) this.startBaselineWarmup(task, epoch);
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
         workspace: cwd,
@@ -14471,8 +14472,7 @@ export class TaskService {
         await this.finishPause(task, "running");
         return;
       }
-      // 环境预热与主 Agent 并行:此刻它在需求澄清,没人动代码。
-      this.startBaselineWarmup(task, epoch);
+      if (!task.summary.parent_task_id) this.startBaselineWarmup(task, epoch);
       // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
       // tool_use 行 join,答案进内核台账),再从内核 current 续跑。
       // 内核模式下克隆丢失=现场没了,决定无处可注,只能从头来。
