@@ -17,33 +17,6 @@ import {
 } from "./annotateTargets";
 import "./annotate.css";
 
-type AnnotationRoute = "agent" | "owner_reply" | "owner_decision" | "memory";
-
-const ROUTE_COPY: Record<AnnotationRoute, { label: string; hint: string; action: string }> = {
-  agent: {
-    label: "Agent 处理",
-    hint: "由 Agent 处理这条意见，并在原处提供处理结果。",
-    action: "发送给 Agent",
-  },
-  owner_reply: {
-    label: "责任人答复",
-    hint: "由任务责任人回答，Agent 不会代替责任人表态。",
-    action: "请责任人答复",
-  },
-  owner_decision: {
-    label: "决策后处理",
-    hint: "责任人先给结论，系统再把结论交给 Agent 执行。",
-    action: "请责任人决策",
-  },
-  // 第四个去向不是"交给谁",是"记住":不发给任何人、不进决定卡。圈选
-  // 让记忆自带原文和位置,比空口一句"记下来"有用得多(用户拍板)。
-  memory: {
-    label: "记为记忆",
-    hint: "不发给任何人，只记住这段原文和你的一句话；以后有人改到这里时提醒 Agent。",
-    action: "记为记忆",
-  },
-};
-
 interface Draft {
   file: string;
   line: number;
@@ -112,16 +85,6 @@ export function Annotatable({
     setReceipt("");
   }, [taskId, artifact]);
   const [note, setNote] = useState("");
-  const [route, setRoute] = useState<AnnotationRoute>("agent");
-  const sendLabel = route === "agent" && queueWithDecision
-    ? "随决定交给 Agent" : ROUTE_COPY[route].action;
-  const deliveryHint = route === "agent"
-    ? queueWithDecision
-      ? "当前任务正等你决定。这里先登记意见，提交当前决定后送达；不会让 Agent 提前继续。"
-      : "现在就发送给 Agent，无需等最终决定；送达状态和处理结果会显示在这条批注下。"
-    : route === "owner_reply"
-      ? "发送后，等待任务责任人在这条批注中答复。"
-      : "发送后，先等责任人给出结论，再交给 Agent 执行。";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 附图是给 Agent 看的(设计稿、期望效果):先上传成检视图片资产拿路径,
@@ -222,7 +185,6 @@ export function Annotatable({
     setReceipt("");
     setSelected(undefined);
     setNote("");
-    setRoute("agent");
     setDraft({
       file: row.closest<HTMLElement>("[data-file]")?.dataset.file
         ?? fallbackFile,
@@ -252,11 +214,10 @@ export function Annotatable({
     line: Number(hovered.dataset.l),
   }) : [];
 
-  async function save(deliver = false) {
+  async function save() {
     if (!draft || busy) return;
     const text = note.trim();
-    // 记为记忆可以只圈不写:原文本身就是要记的东西。
-    if (!text && route !== "memory") return;
+    if (!text) return;
     setBusy(true);
     setError("");
     try {
@@ -270,7 +231,7 @@ export function Annotatable({
           anchor: draft.anchor,
           note: text,
           kind: draft.kind,
-          route,
+          route: "owner_reply",
           ...(draft.quote ? { quote: draft.quote, line_end: draft.lineEnd } : {}),
           ...(images.length ? { images: images.map(({ path, label }) => ({ path, ...(label ? { label } : {}) })) } : {}),
         });
@@ -282,16 +243,7 @@ export function Annotatable({
       if (annotation && typeof annotation === "object" && "id" in annotation) {
         const id = String(annotation.id);
         if (renderInlineReview) setThread({ ids: [id], host: draft.host });
-        if (deliver && onSendDraft && route !== "memory") {
-          try {
-            const sent = await onSendDraft(id);
-            setReceipt(sent.error
-              ? `意见已保存，但发送未完成：${sent.error}。可在下方重试。`
-              : sent.receipt ?? "意见已登记；送达状态和处理结果会显示在下方。");
-          } catch (reason) {
-            setReceipt(`意见已保存，发送未完成：${reason instanceof Error ? reason.message : String(reason)}。可在下方重试。`);
-          }
-        } else setReceipt(route === "memory" ? "已记为记忆。" : "草稿已保存，尚未发送。");
+        setReceipt("已记下，责任人可在待处理中查看。");
       }
       setDraft(undefined);
       setNote("");
@@ -397,9 +349,7 @@ export function Annotatable({
             autoFocus
             rows={4}
             value={note}
-            placeholder={route === "memory"
-              ? "可不写：只记这段原文；想补一句结论也行"
-              : "这里要改什么？例如：这个重试应该只对网关失败生效"}
+            placeholder="这里要改什么？例如：这个重试应该只对网关失败生效"
             onChange={(event) => setNote(event.target.value)}
             onPaste={(event) => {
               const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
@@ -411,25 +361,10 @@ export function Annotatable({
               if (event.key === "Escape") setDraft(undefined);
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 event.preventDefault();
-                void save(Boolean(onSendDraft) && route !== "memory");
+                void save();
               }
             }}
           />
-          {!addDraft && (
-            <div className="annot-route-picker" role="radiogroup"
-                 aria-label="这条意见交给谁">
-              {(Object.keys(ROUTE_COPY) as AnnotationRoute[]).map((value) => (
-                <button key={value} type="button" role="radio"
-                        aria-checked={route === value}
-                        className={route === value ? "active" : ""}
-                        onClick={() => setRoute(value)}>
-                  {ROUTE_COPY[value].label}
-                </button>
-              ))}
-              <small>{ROUTE_COPY[route].hint}</small>
-            </div>
-          )}
-          {route !== "memory" && (
             <div className="annot-editor-images">
               {images.map((image) => (
                 <span key={image.path} className="annot-image-chip" title={image.path}>
@@ -449,18 +384,15 @@ export function Annotatable({
                   event.target.value = "";
                 }} />
             </div>
-          )}
           {error && <div className="alert">{error}</div>}
           <div className="annot-editor-actions">
-            <span>{onSendDraft && route !== "memory" ? deliveryHint : "⌘/Ctrl + Enter 记下 · Esc 取消"}</span>
+            <span>⌘/Ctrl + Enter 记下 · Esc 取消</span>
             <button type="button" className="ghost"
                     onClick={() => { setDraft(undefined); setImages([]); }}>取消</button>
-            {onSendDraft && route !== "memory" && <button type="button"
-              disabled={busy || !note.trim()} onClick={() => void save()}>存为草稿</button>}
             <button type="button" className="primary"
-                    disabled={busy || (!note.trim() && route !== "memory")}
-                    onClick={() => void save(Boolean(onSendDraft) && route !== "memory")}>
-              {busy ? "保存中…" : onSendDraft && route !== "memory" ? sendLabel : "记下"}
+                    disabled={busy || !note.trim()}
+                    onClick={() => void save()}>
+              {busy ? "保存中…" : "记下"}
             </button>
           </div>
         </div>

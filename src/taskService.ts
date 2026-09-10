@@ -5450,10 +5450,8 @@ export class TaskService {
     }
     const route = input.route ?? "agent";
     const needsOwner = route !== "agent" && route !== "memory";
-    const assignee = needsOwner ? task.summary.luban_account : undefined;
-    if (needsOwner && !assignee) {
-      throw new TaskControlError("当前任务没有责任人，暂时不能创建需要责任人答复的意见");
-    }
+    const assignee = needsOwner ? task.summary.luban_account ?? "本地用户" : undefined;
+
     const record = this.annotations(task).add({ ...input, route, assignee });
     // 效果账(§6):推过的记忆所在文件又被人提了意见 → 那条记忆记一笔返工。
     if (route === "agent" && record.kind === "code" && record.file) {
@@ -6210,14 +6208,6 @@ export class TaskService {
           }));
       }
     }
-    if (replied.route === "owner_decision") {
-      if (replied.sent_via !== "owner_pending") return replied;
-      await this.deliverAgentAnnotations(task, [replied], [
-        "[责任人已作出明确决策]",
-        `责任人 ${replied.owner_reply?.author ?? by} 的决定：${replied.owner_reply?.text ?? text}`,
-        "请以这份决定为准处理对应检视意见；不要再向 Agent 猜测责任人的意图。",
-      ].join("\n"), true, by);
-    }
     return this.annotations(task).list().find((item) => item.id === annotationId)!;
   }
 
@@ -6230,10 +6220,13 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const annotations = this.annotations(task);
-    const dropped = annotations.requestWithdrawal(annotationId, by);
+    this.assertAnnotationOwner(task, by);
+    const item = annotations.list().find((entry) => entry.id === annotationId);
+    if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending") || item?.status === "verified") throw new TaskControlError("已交给 Agent 或已闭环的意见不能删除");
+    const dropped = annotations.drop(annotationId, by, true);
     if (dropped.status === "dropped") this.resolveFeedbackRecords(task, (record) =>
       record.source === "workspace" && record.source_id === dropped.id,
-      "closed", "作者删除未提交草稿");
+      "closed", "责任人删除待处理意见");
     this.refreshWorkspaceReviewClosure(task);
     return dropped;
   }
@@ -6248,6 +6241,7 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const store = this.annotations(task);
     const item = store.list().find((one) => one.id === annotationId);
+    this.assertAnnotationOwner(task, by);
     if (item?.status === "verified") throw new TaskControlError("已闭环意见保留历史；如有新意见请另行提出");
     return store.edit(annotationId, note, by, true);
   }
@@ -6267,6 +6261,7 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     if (task.summary.status === "completed" && item?.artifact !== OVERALL_STORY_ARTIFACT) throw new TaskControlError("任务已归档，代码检视记录只读");
     if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    if (!(item.response && item.response.revision === (item.rework ?? 0)) && !(item.owner_reply && item.sent_via === "owner_pending")) throw new TaskControlError("请先交给 Agent 处理或自行答复，再确认闭环");
     const verified = annotations.resolveAsOwner(annotationId, by, decision ?? {
       revision: item.rework ?? 0, outcome: "fixed", reason: "",
     });
@@ -6320,7 +6315,8 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     const current = store.list().find((one) => one.id === annotationId);
     if (expectedRevision !== undefined && expectedRevision !== (current?.rework ?? 0)) throw new TaskControlError("意见版本已变化，请刷新后处理");
-    if (current?.status !== "sent") throw new TaskControlError("这条意见已处置或已退回，请刷新查看记录");
+    if (current?.status !== "sent" && current?.status !== "verified") throw new TaskControlError("这条意见已退回，请刷新查看记录");
+    if (current.status === "sent" && current.sent_via !== "owner_pending" && !current.response) throw new TaskControlError("Agent 尚在处理，请等待答复后继续处理");
     return store.reopen(annotationId, by, update, true);
   }
 
@@ -6342,12 +6338,19 @@ export class TaskService {
     actor?: string,
     allowForeign = false,
     backgroundRequirementReview = false,
+    context = "",
   ): Promise<{
     sent: string[]; text: string; receipt?: string;
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.summary.status === "canceled") throw new TaskControlError("任务已由用户停止，不能再提交批注");
+    this.assertAnnotationOwner(task, actor ?? "本地用户");
+    if (context.trim() && ids?.length !== 1) throw new TaskControlError("请逐条补充并发送检视意见");
+    allowForeign = !!ids?.length;
+    for (const item of this.annotations(task).list().filter((entry) => ids ? ids.includes(entry.id) : entry.status === "draft" && (!task.summary.luban_account || entry.author === actor))) {
+      if (item.route !== "memory") this.annotations(task).assignToAgent(item.id, actor ?? "本地用户", context);
+    }
     const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
     const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
     const overall = allPicked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);

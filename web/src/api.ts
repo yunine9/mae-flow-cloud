@@ -2704,6 +2704,8 @@ export interface Annotation {
   route?: "agent" | "owner_reply" | "owner_decision" | "memory";
   assignee?: string;
   status: "draft" | "sent" | "verified" | "dropped";
+  agent_assigned?: boolean;
+  agent_context?: { text: string; by: string; at: string; revision: number };
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
     | "queued_decision" | "owner_pending" | "overall_story_queue" | "overall_story_processing" | "overall_story" | "requirement_queue" | "requirement_review";
@@ -2770,6 +2772,8 @@ export interface AnnotationClosure {
   can_verify: boolean;
   owner_controlled?: boolean;
   can_resolve?: boolean;
+  can_delete?: boolean;
+  can_reopen?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
   can_route: boolean;
@@ -2977,11 +2981,12 @@ export async function judgeAnnotation(
 export async function sendAnnotations(
   taskId: string,
   ids?: string[],
+  context?: string,
 ): Promise<{ sent?: string[]; receipt?: string; error?: string }> {
   const response = await fetch(`/tasks/${taskId}/annotations/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(ids ? { ids } : {}),
+    body: JSON.stringify({ ...(ids ? { ids } : {}), ...(context ? { context } : {}) }),
   });
   if (!response.ok) {
     const body = await errorBody(response);

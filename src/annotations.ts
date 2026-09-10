@@ -129,6 +129,10 @@ export interface Annotation {
   /** Agent 对当前 rework revision 的逐条回应。 */
   response?: AnnotationResponse;
   owner_reply?: AnnotationOwnerReply;
+  /** 一旦交给 Agent 即保留，重新打开也不能删除已经进入处理流程的意见。 */
+  agent_assigned?: boolean;
+  /** 转交时责任人的补充说明，与原意见分开保存。 */
+  agent_context?: { text: string; by: string; at: string; revision: number };
   verified_at?: string;
   resolution?: AnnotationResolution;
   /** 已提交后修改或撤回表达，仍须责任人逐条处置。 */
@@ -188,6 +192,7 @@ type Operation =
   | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string; by?: string }
   | { op: "respond"; id: string; response: AnnotationResponse }
+  | { op: "route_agent"; id: string; by: string; at: string; context?: string }
   /** via 只在责任人直接接住 draft 并答复时出现，使“接收 + 答复”成为
    * 一条原子台账操作；旧记录缺少 via 时仍按原语义回放。 */
   | { op: "owner_reply"; id: string; reply: AnnotationOwnerReply;
@@ -235,6 +240,12 @@ export class AnnotationStore {
       { middleCorrupt: "skip" })) {
       if (operation.op === "add" && operation.record?.id) {
         byId.set(operation.record.id, operation.record);
+        continue;
+      }
+      if (operation.op === "route_agent") {
+        const found = byId.get(operation.id);
+        if (found) { found.route = "agent"; found.status = "draft"; found.agent_assigned = true; found.needs_owner_closure = true;
+          found.agent_context = operation.context ? { text: operation.context, by: operation.by, at: operation.at, revision: found.rework ?? 0 } : undefined; }
         continue;
       }
       if (operation.op === "owner_resolution") {
@@ -302,6 +313,7 @@ export class AnnotationStore {
           found.status = "sent";
           found.sent_at = operation.at;
           found.sent_via = operation.via;
+          if (operation.via !== "owner_pending") found.agent_assigned = true;
           if (operation.by) found.sent_by = operation.by;
         }
         continue;
@@ -594,9 +606,7 @@ export class AnnotationStore {
   ): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if ((found.route ?? "agent") === "agent") {
-      throw new AnnotationError("这条意见是交给 Agent 处理的，不需要责任人答复");
-    }
+    if (found.status === "sent" && found.sent_via !== "owner_pending") throw new AnnotationError("意见已交给 Agent，请等待答复后处理");
     if (found.status !== "draft" && found.status !== "sent") {
       throw new AnnotationError("这条意见当前不能答复");
     }
@@ -663,6 +673,13 @@ export class AnnotationStore {
     }
     this.append({ op: "owner_resolution", id, resolution: { ...decision, reason, by, at: new Date().toISOString() } });
     return this.list().find((item) => item.id === id)!;
+  }
+
+  assignToAgent(id: string, by: string, context = ""): void {
+    const found = this.list().find((item) => item.id === id);
+    if (!found || (found.status !== "draft" && !(found.status === "sent" && found.sent_via === "owner_pending"))) throw new AnnotationError("这条意见已经交付处理或已闭环，请刷新");
+    if (context.trim().length > 4000) throw new AnnotationError("补充说明最多 4000 字");
+    this.append({ op: "route_agent", id, by, at: new Date().toISOString(), context: context.trim() || undefined });
   }
 
   requestWithdrawal(id: string, by: string): Annotation {
@@ -793,6 +810,7 @@ export function renderAnnotations(
       lines.push(`   ${label}:${item.anchor}`);
     }
     lines.push(`   要求:${item.note}`);
+    if (item.agent_context?.revision === (item.rework ?? 0)) lines.push(`   责任人补充（${item.agent_context.by}）：${item.agent_context.text}`);
     // 附图是意见的一部分:设计稿、期望效果截图。不看图就动手等于没读意见。
     if (item.images?.length) {
       lines.push(`   附图 ${item.images.length} 张,先用 inspect_image 逐张看清再动手(工作区相对路径):`);

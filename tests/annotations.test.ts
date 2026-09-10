@@ -95,8 +95,8 @@ test("决策后处理：先等责任人，责任人落结论后排进当前人�
   const replied = await service.replyToAnnotation(
     id, note.id, "owner", "重试耗尽后停止交付，不允许自动降级");
   assert.equal(replied.owner_reply?.text, "重试耗尽后停止交付，不允许自动降级");
-  assert.equal(replied.sent_via, "queued_decision",
-    "已有人工卡时不越权跳过审批，而是把责任人结论排入当前决定");
+  assert.equal(replied.sent_via, "owner_pending",
+    "自行答复不自动派给 Agent，由责任人后续明确选择");
 });
 
 test("责任人答复只通知意见提出人；责任人决策直接交 Agent 不发中间通知", async () => {
@@ -154,6 +154,7 @@ test("责任人代转必须显式点中意见，旧的无 ids 提交只发送自
     author: "reviewer", artifact: "spec.md", file: "spec.md", line: 2,
     anchor: "b", note: "别人的问题", kind: "doc", route: "owner_reply",
   });
+  (service as any).tasks.get(id).summary.status = "waiting_for_human";
   await service.sendAnnotations(id, undefined, "owner", true);
   const items = service.listAnnotations(id).items;
   assert.equal(items.find((item) => item.id === own.id)?.status, "sent");
@@ -263,6 +264,7 @@ test("需求原文批注直接锚定任务快照，现场不存在也能跟随�
 
   const store = (service as any).annotations(internal) as AnnotationStore;
   store.markSent([note.id], "review_repair");
+  store.respond(note.id, { outcome: "not_fixed", summary: "请责任人核对当前位置", evidence: [] });
   const reopened = await service.reopenAnnotation(id, note.id, "本地用户");
   assert.equal(reopened.line, 3, "返工应把需求原文批注更新到当前行号");
 });
@@ -282,7 +284,7 @@ test("终态批注合同：已交付可留档但不能再送，已停止仍禁�
   });
   assert.equal(service.listAnnotations(id).items[0].id, archived.id);
   await assert.rejects(
-    service.sendAnnotations(id, [archived.id], "reviewer"),
+    service.sendAnnotations(id, [archived.id], "本地用户"),
     (error) => error instanceof TaskControlError
       && /任务已经结束，不能再提交批注/.test(error.message),
   );
@@ -401,11 +403,13 @@ test("当前任务责任人逐条处置；管理员不能代签，未处理意�
   assert.equal(verified.resolution?.by, "owner");
   assert.equal(verified.resolution?.outcome, "fixed");
   assert.equal(annotations.list().find((a) => a.id === pending.id)?.status, "sent", "没有批量闭环副作用");
+  assert.throws(() => service.verifyAnnotation(id, pending.id, "owner"), /先交给 Agent/);
+  annotations.respond(pending.id, { outcome: "not_fixed", summary: "依赖环境未就绪，需要延期", evidence: [] });
   const decided = service.verifyAnnotation(id, pending.id, "owner", false, {
     revision: 0, outcome: "deferred", reason: "依赖环境未就绪，安排下一版本验证",
   });
   assert.equal(decided.resolution?.outcome, "deferred");
-  assert.equal(decided.response, undefined, "人工延期不伪造 Agent 回执");
+  assert.equal(decided.response?.outcome, "not_fixed", "人工延期保留原始 Agent 回执");
 });
 
 test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直接答复", async () => {
@@ -508,8 +512,8 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
         method: "PATCH", headers: { cookie: committer },
         body: JSON.stringify({ note: "Committer 修改后的意见" }),
       });
-    assert.equal(committerEditsOwn.status, 200,
-      "Committer 即使不是任务责任人也能编辑自己的批注");
+    assert.equal(committerEditsOwn.status, 403,
+      "记下后的意见由责任人统一处理");
 
     const developerCannotEdit = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
@@ -521,7 +525,7 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
         method: "DELETE", headers: { cookie: developer },
       });
-    assert.equal(developerCannotDelete.status, 403);
+    assert.equal(developerCannotDelete.status, 409, "已交给 Agent 后责任人也不能删除");
 
     const committerCannotEdit = await fetch(
       `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
@@ -603,7 +607,7 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
     const staleResolution = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}/resolve`, {
         method: "POST", headers: { cookie: developer },
-        body: JSON.stringify({ revision: 0, outcome: "fixed", reason: "旧页面的处理" }),
+        body: JSON.stringify({ revision: 99, outcome: "fixed", reason: "旧页面的处理" }),
       });
     assert.equal(staleResolution.status, 409, "提交后已改字，旧页面不得处置新意见");
     const currentRevision = annotations.list().find((item) => item.id === committerNote.id)!.rework ?? 0;
@@ -621,7 +625,7 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
       `${base}/tasks/${created.id}/annotations/${committerOwn.id}`, {
         method: "DELETE", headers: { cookie: committer },
       });
-    assert.equal(committerDeletesOwn.status, 200);
+    assert.equal(committerDeletesOwn.status, 403);
     const listed = await fetch(`${base}/tasks/${created.id}/annotations`, {
       headers: { cookie: developer },
     }).then((response) => readJson(response)) as { items: Annotation[] };

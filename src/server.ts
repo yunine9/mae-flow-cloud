@@ -2698,8 +2698,7 @@ export function createTaskServer(
               line_end: Number(body.line_end ?? 0),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",
-              route: body.route === "owner_reply" || body.route === "owner_decision"
-                || body.route === "memory" ? body.route : "agent",
+              route: "owner_reply",
               images: Array.isArray(body.images) ? body.images : undefined,
             }));
           }
@@ -2717,7 +2716,7 @@ export function createTaskServer(
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
               await service.sendAnnotations(id, ids, author,
-                canOperate(viewer, target.luban_account, !!options.auth), true));
+                canOperate(viewer, target.luban_account, !!options.auth), true, String(body.context ?? "")));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,

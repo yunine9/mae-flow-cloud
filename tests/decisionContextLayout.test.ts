@@ -132,7 +132,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.match(note, /className="annot-speaker person"[\s\S]*?<b>\{isAuthor \? "你" : personName\(item\.author\)\}<\/b>/,
     "意见块的说话人行:作者本人看到\"你\",别人看到名字");
   assert.match(note, /提的意见 · \{relativeTime\(item\.created_at\)\}/);
-  assert.match(note, /<em className=\{`annot-route-badge \$\{routeOf\(item\)\}`\}>/, "去向标在说话人行末尾");
+  assert.doesNotMatch(note, /annot-route-badge/, "批注不再展示处理去向选择");
   assert.ok(note.indexOf("<p>{item.note") < note.indexOf("annot-anchor"), "圈的原文跟在意见正文后面");
   assert.match(note,
     /className=\{`annot-anchor\$\{item\.quote \? " has-quote" : ""\}`\}\s*\n?\s*title=\{item\.quote \?\? item\.anchor\}/,
@@ -456,21 +456,17 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
     "只喂抽屉的两个量高副作用一起删了,别留只写不读的变量");
 });
 
-test("任务记忆第一期契约:记为记忆去向、面板只读列表、服务端只读路由", () => {
+test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列表和接口", () => {
   // docs/knowledge-memory-design.md §4.1/§9:圈选是唯一的人工入口;可见但不可管。
   const annotatable = readFileSync(join(process.cwd(), "web/src/Annotatable.tsx"), "utf-8");
-  assert.match(annotatable, /memory: \{\s*label: "记为记忆"/,
-    "批注框第四个去向:记为记忆");
-  assert.match(annotatable, /不发给任何人/);
+  assert.doesNotMatch(annotatable, /label: "记为记忆"|不发给任何人/, "统一记下，不提供记忆去向");
   const panel = readFileSync(join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf-8");
-  assert.match(panel, /memory: "记忆"/);
+  assert.doesNotMatch(panel, /memory: "记忆"/, "不展示旧去向标签");
   // 状态词已经收敛到服务端唯一判定处(feedbackPolicy),这里按结论断言。
   const policy = readFileSync(
     join(process.cwd(), "src/feedbackPolicy.ts"), "utf-8");
   assert.match(policy, /annotationRoute\(item\) === "memory"\) \{\s*return \{ tone: "done", text: "已记为记忆"/,
     "记忆条目直接是闭环态,没有送出/回执/确认三站");
-  assert.match(panel, /routeOf\(item\) !== "memory"\s*&& \(isAuthor \|\| closure\.can_override_drop\)/,
-    "记忆条目不露编辑/删除:改就是再圈一次,撤回在本任务知识里");
   assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
     "记忆是快照,不参与重锚定提示");
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
