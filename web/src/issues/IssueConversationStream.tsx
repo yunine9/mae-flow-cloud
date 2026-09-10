@@ -409,7 +409,7 @@ export function IssueConversationStream({
           children: <ul className="conv-receipts">
             {item.items.map((entry, index) => (
               <li key={index}
-                className={entry.outcome === "success" ? "fixed" : "not_fixed"}>
+                className={entry.outcome === "success" ? "outcome-fixed" : "outcome-not_fixed"}>
                 <i aria-hidden>{entry.outcome === "success" ? "✓" : "✕"}</i>
                 <div>
                   <b>{entry.name}</b>

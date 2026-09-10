@@ -682,7 +682,7 @@ export function AnnotationPanel({
                 </div>
               )}
               {item.response && (
-                <div className={`annot-response ${item.response.outcome}`}>
+                <div className={`annot-response outcome-${item.response.outcome}`}>
                   <div className="annot-speaker agent">
                     <i aria-hidden>A</i>
                     <b>Agent</b>

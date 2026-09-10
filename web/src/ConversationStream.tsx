@@ -565,7 +565,7 @@ export function ConversationStream({
             <p className="conv-lead">{item.items.length} 条意见的处理回执</p>
             <ul className="conv-receipts">
               {item.items.map((entry) => (
-                <li key={`${entry.id}:${entry.revision}`} className={entry.outcome}>
+                <li key={`${entry.id}:${entry.revision}`} className={`outcome-${entry.outcome}`}>
                   <i aria-hidden>{entry.outcome === "fixed" ? "✓"
                     : entry.outcome === "not_fixed" ? "✕" : "?"}</i>
                   <div>
