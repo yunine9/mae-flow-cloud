@@ -2646,7 +2646,7 @@ export class IssueFlowService {
     const driver = await CloudSession.create({
       taskId: `${live.id}:warmup`,
       knowledgeContext: issueKnowledgeContext(live.state),
-      hostSkillsDir: join(this.options.dataDir, "skills"), repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
+      hostSkillsDir: join(this.options.dataDir, "skills"),
       knowledgeScope: "issue",
       workspace: live.root,
       agentDir,
@@ -2829,7 +2829,7 @@ export class IssueFlowService {
       // 改编版 playbook 技能(精确到 SKILL.md 文件的 allowlist 形态)。
       repositorySkillPaths: skillPaths,
       // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
-      hostSkillsDir: join(this.options.dataDir, "skills"), repositoryResourceBlocks: () => readResourceBlocks(this.options.dataDir),
+      hostSkillsDir: join(this.options.dataDir, "skills"),
       knowledgeContext,
       knowledgeScope: "issue",
       provider: model.provider,

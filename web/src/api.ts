@@ -3782,6 +3782,13 @@ export interface IssueSummary {
     reds?: number;
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
+    /** 证据重试窗(票 82)与同提交刹车的可观察字段(2026-09-10 勘定:
+     *  补镜像而非剥投影,整条流水线记录按 wire 可见)。 */
+    evidence_retry_deadline?: string;
+    evidence_retry_attempts?: number;
+    evidence_failure_log?: string;
+    last_repair_sha?: string;
+    last_failure_summary?: string;
   }>;
   /** 建 MR 后与需求交付共用的持续检视索引。 */
   feedback?: FeedbackRecord[];

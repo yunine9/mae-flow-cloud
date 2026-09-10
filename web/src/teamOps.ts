@@ -218,55 +218,70 @@ export function median(values: number[]): number | undefined {
     : (ordered[middle - 1] + ordered[middle]) / 2;
 }
 
-function mapIssueStatus(status: string): string {
-  switch (status) {
-    case "waiting_user": return "waiting_for_human";
-    case "idle": return "running";
-    case "suspended": return "paused";
-    case "archived": return "completed";
-    default: return status;
-  }
+// ---- 问题域交付概览口径(团队页领域切换,与需求侧 teamDeliveryBreakdown 同构) ----
+
+/** 问题流阶段全集(注册表镜像:有单五阶段 ∪ 无单三节点的 conclude,按
+ * 流程固定顺序)。镜像源是 src/issueFlow/stageRegistry.ts 的
+ * FIXED_TICKET_STAGES ∪ FIXED_NO_TICKET_STAGES(web 侧 api.ts 同源镜像);
+ * 本文件刻意不 import api.ts(见文件头注释),所以这里只出键——显示名
+ * 由渲染层用 api.ts 的 issueStageText 取,不让文案出现第二真相源。 */
+export const ISSUE_DELIVERY_STAGES = [
+  "dts_info", "prep_repo", "analyze", "fix", "mr_green", "conclude",
+] as const;
+
+/** 概览状态格全集(展示归一口径:idle 并入 waiting_user——2026-09-08
+ * 拍板,卡片/计数/筛选同一归一;archived/canceled 是收口终态,只进
+ * 档案不进概览格)。标签同样由渲染层取 ISSUE_STATUS_TEXT。 */
+export const ISSUE_DELIVERY_STATUSES = [
+  "queued", "running", "waiting_user", "suspended", "failed",
+] as const;
+
+export interface IssueDeliveryBreakdown {
+  /** 问题总数:不含已取消(已取消只进档案,与需求侧"已取消仅保留在档案"同口径)。 */
+  total: number;
+  /** 处理中:再剔除已闭环(archived)。 */
+  active: number;
+  /** 等你答复:waiting_user+idle 归一计数。 */
+  waiting: number;
+  /** 异常(需介入)。 */
+  failed: number;
+  /** 已闭环(archived)。 */
+  closed: number;
+  /** 阶段格:注册表全集,0 计数也出(渲染层置灰禁用,与需求侧"阶段格
+   * 全量出、0 禁用"同一规则)——概览始终呈现问题流的完整流程形状。 */
+  stages: Array<{ key: string; count: number }>;
+  /** 状态格:归一后五状态,0 计数也出(同上)。 */
+  statuses: Array<{ key: string; count: number }>;
 }
 
-/** 把 IssueSummary 适配成 TeamTask,让团队看板的过滤/排序/渲染纯函数
- * 直接复用。只填 TeamTask 的稳定字段——看板扫描态只关心 id/状态/处理人/
- * 阶段线/更新时间,不需要 IssueSummary 的决策卡/检视/流水线等重字段。 */
-export function issueToTeamTask(issue: {
-  id: string;
-  title: string;
-  status: string;
-  account: string;
-  created_at: string;
-  updated_at: string;
-  stage?: string;
-  stage_note?: string;
-  stage_at?: string;
-}): TeamTask {
-  const status = mapIssueStatus(issue.status);
-  const needsAttention = issue.status === "waiting_user"
-    || issue.status === "failed";
-  const kind = issue.status === "failed" ? "blocked"
-    : issue.status === "waiting_user" ? "waiting"
-    : "progress";
-  const nextAction = issue.status === "waiting_user" ? "需要答复"
-    : issue.status === "failed" ? "需要介入"
-    : issue.status === "idle" ? "等待续聊"
-    : issue.status === "suspended" ? "已挂起"
-    : "AI 推进中";
+/** 问题域交付概览口径:概览规模数字与阶段/状态格共用同一批会话,与
+ * 需求侧 teamDeliveryBreakdown 同构(规模 × 阶段格 × 状态格,供概览格
+ * 筛选联动)。输入是 IssueSummary 的稳定字段投影(自包含约束,根级
+ * typecheck 不必拖进浏览器 fetch 客户端)。 */
+export function issueDeliveryBreakdown(
+  issues: ReadonlyArray<{ status: string; stage?: string }>,
+): IssueDeliveryBreakdown {
+  const live = issues.filter((issue) => issue.status !== "canceled");
+  const active = live.filter((issue) => issue.status !== "archived");
+  const waitingOf = (items: ReadonlyArray<{ status: string }>) =>
+    items.filter((issue) =>
+      issue.status === "waiting_user" || issue.status === "idle").length;
   return {
-    id: issue.id,
-    requirement: issue.title,
-    status,
-    created_at: issue.created_at,
-    updated_at: issue.updated_at,
-    last_progress_at: issue.stage_at || issue.updated_at,
-    luban_account: issue.account,
-    focus: {
-      kind,
-      headline: issue.stage_note || issue.stage || "",
-      next_action: nextAction,
-      needs_attention: needsAttention,
-      priority: needsAttention ? 1 : 0,
-    },
+    total: live.length,
+    active: active.length,
+    waiting: waitingOf(active),
+    failed: active.filter((issue) => issue.status === "failed").length,
+    closed: live.filter((issue) => issue.status === "archived").length,
+    stages: ISSUE_DELIVERY_STAGES.map((key) => ({
+      key,
+      count: active.filter((issue) => issue.stage === key).length,
+    })),
+    statuses: ISSUE_DELIVERY_STATUSES.map((key) => ({
+      key,
+      count: key === "waiting_user"
+        ? waitingOf(active)
+        : active.filter((issue) => issue.status === key).length,
+    })),
   };
 }
+
