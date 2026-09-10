@@ -1,3 +1,4 @@
+import { HumanGate } from "../src/humanGate.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readTaskHostDocument } from "../src/taskHostDocuments.ts";
@@ -313,4 +314,86 @@ test("设计材料短名称能定位单号目录，找不到时返回真实可�
     read: async (name: string) => (await readArtifactAsync(s.host.cwd, name))?.content };
   assert.match((await readTaskHostDocument(input))!, /同步模块与查询模块/);
   await assert.rejects(readTaskHostDocument({ ...input, name: "spec.md" }), /可用文档.*REQ-1\/story.md/);
+});
+
+function confirmationScene(t: any) {
+  const s = scene(t), service = s.service as any;
+  s.host.summary.push_confirmation = true;
+  const task: any = { summary: s.host.summary, cwd: s.host.cwd, controlEpoch: 0,
+    humanGate: new HumanGate(join(s.host.summary.workspace, "waiting.json")) };
+  service.tasks.set(task.summary.id, task);
+  service.persist = () => {};
+  service.notifyWaiting = () => {};
+  service.stopTaskContainer = async () => undefined;
+  let resumed = 0;
+  service.enqueueRepair = () => { resumed++; };
+  service.reviewProcessingGap = () => { throw new Error("不应进入旧意见闭环检查"); };
+  let pending: Promise<unknown> | undefined;
+  service.bypass = (_task: unknown, _label: string, promise: Promise<unknown>) => { pending = promise; };
+  return { ...s, task, runtime: () => service.taskHostRuntime(task),
+    finish: () => pending, repairCount: () => resumed };
+}
+
+test("轻量推送确认：先等待，责任人确认即推送，不走旧反馈门禁，重复答复不重推", async t => {
+  const s = confirmationScene(t);
+  const operation = await queueTaskHostOperation(s.runtime(), "light-push", { action: "push", reason: "修复 B 并补充 UT" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  assert.equal(waiting.step, "host_push_confirm");
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 0, "等待用户时不自动重启 Agent");
+  const input = { waiting_id: waiting.waiting_id, state_version: waiting.state_version, actor: "owner", decision: "确认推送" };
+  await assert.rejects(s.service.decide("task-1", { ...input, actor: "other" }));
+  await s.service.decide("task-1", input);
+  await s.finish();
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), operation.sha);
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "succeeded");
+  await s.service.decide("task-1", input);
+  assert.equal(s.repairCount(), 1);
+});
+
+test("轻量推送确认：补充范围要求交回 Agent，不按全量推送", async t => {
+  const s = confirmationScene(t);
+  await queueTaskHostOperation(s.runtime(), "light-adjust", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", decision: "确认推送", notes: "只推 UT" });
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 1);
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].push_confirmed, undefined);
+});
+
+test("轻量推送确认：确认期间提交变化，不能推送未确认的新版本", async t => {
+  const s = confirmationScene(t);
+  await queueTaskHostOperation(s.runtime(), "light-stale", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  writeFileSync(join(s.host.cwd!, "new.txt"), "new"); s.git("add", "new.txt"); s.git("commit", "-qm", "new");
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", decision: "确认推送" });
+  await s.finish();
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "failed");
+});
+
+
+test("轻量推送确认：关闭设置直接推送，同 SHA 的传输重试复用人工确认", async t => {
+  const s = confirmationScene(t);
+  const runtime = s.runtime();
+  const op = await queueTaskHostOperation(runtime, "failed-transport", { action: "push", reason: "推送 B" });
+  op.push_confirmed = true;
+  op.state = "failed";
+  op.result = "网络失败";
+  new TaskHostLedger(s.host.summary).update(op);
+  await queueTaskHostOperation(s.runtime(), "retry-transport", { action: "push", reason: "重试网络传输" });
+  await finishTaskHostOperation(s.runtime());
+  assert.equal(s.task.summary.waiting, undefined);
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), op.sha);
+  s.host.summary.push_confirmation = false;
+  writeFileSync(join(s.host.cwd!, "later.txt"), "later"); s.git("add", "later.txt"); s.git("commit", "-qm", "later");
+  const later = await queueTaskHostOperation(s.runtime(), "no-confirm", { action: "push", reason: "推送新提交" });
+  await finishTaskHostOperation(s.runtime());
+  assert.equal(s.task.summary.waiting, undefined);
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), later.sha);
 });

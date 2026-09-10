@@ -35,6 +35,7 @@ export interface HostOperation {
   branch?: string;
   target_branch?: string;
   result?: string;
+  push_confirmed?: boolean;
   push_receipt?: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>;
   mr_receipt?: { url: string; id?: string | number };
   trigger_started?: boolean;
@@ -107,6 +108,7 @@ export interface TaskHostRuntime {
   document?(taskId: string, artifact: string): Promise<string | undefined>;
   activeFeedback?(): { batchId: string; items: any[]; path: string } | undefined;
   allowPush(): Promise<boolean>;
+  confirmPush?(operation: HostOperation): Promise<boolean>;
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
@@ -257,6 +259,7 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       operation.result = `当前目标：${target}。${input.feedback_id ? `已暂缓 ${input.feedback_id} 的自动修复；原失败和意见仍保留。` : "未取消其他反馈。"}`;
     } else if (input.action === "push") {
       if (!operation.push_receipt && !await host.allowPush()) throw new Error("当前 MR 或推送授权不允许发布，请查看任务现场的具体原因");
+      if (!operation.push_receipt && host.confirmPush && !await host.confirmPush(operation)) return true;
       host.assertActive();
       const receipt = operation.push_receipt ?? await host.push(operation.branch!, operation.sha!);
       // Save the remote fact before updating the task projection. A retry of a
