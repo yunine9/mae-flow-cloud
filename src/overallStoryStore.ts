@@ -60,7 +60,14 @@ export function readCurrentStory(workspace: string): string {
   const path = currentStoryFile(workspace);
   return path ? readFileSync(path, "utf8") : "";
 }
-export function readCurrentStoryArchitecture(workspace: string): string | undefined {
+export function readCurrentStoryArchitecture(workspace: string, story = readCurrentStory(workspace)): string | undefined {
+  const updated = storyPath(workspace, "architecture.json");
+  if (existsSync(updated)) {
+    try {
+      const value = readFileSync(updated, "utf8");
+      if (JSON.parse(value).story_sha256 === storyHash(story)) return value;
+    } catch { /* 不采用损坏或已过期的图源，继续读取随 Story 发布的图。 */ }
+  }
   const state = readStoryState(workspace);
   if (!state.current || !state.revisions.some((item) => item.id === state.current)) return undefined;
   const path = storyRevisionPath(workspace, state.current, "architecture.json");

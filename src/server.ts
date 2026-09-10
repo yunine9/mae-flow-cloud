@@ -68,6 +68,7 @@ import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
 import { readCurrentStoryArchitecture } from "./overallStoryStore.ts";
+import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
@@ -2989,23 +2990,14 @@ export function createTaskServer(
           const load = async () => {
             const target = service.get(id);
             if (!target) return undefined;
-            // 主任务用已发布的全局 Story 绑定图源版本；子任务用模块 Story。
-            const artifact = target.parent_task_id
-              ? `${target.ticket ?? target.id}/story.md`
-              : "task-materials/overall-story.md";
-            return readArtifactAsync(service.artifactRoot(id), artifact, {
-              pipelineRoot: join(target.workspace, "pipeline"), taskMaterialRoot: target.workspace,
-              publishedStory: target.requirement_graph?.source_document === "story.md"
-                && target.requirement_graph.stage === "confirmed",
-              analysisStory: target.requirement_graph && !target.parent_task_id
-                ? `${target.ticket ?? target.id}/story.md` : undefined,
-            });
+            return readArchitectureStory(target, service.artifactRoot(id));
           };
           const loadArchify = (): string | undefined => {
             const target = service.get(id);
             if (!target) return undefined;
-            if (!target.parent_task_id && target.requirement_graph?.stage === "confirmed") {
-              return readCurrentStoryArchitecture(target.workspace);
+            if (!target.parent_task_id) {
+              const published = readCurrentStoryArchitecture(target.workspace, readArchitectureStory(target, service.artifactRoot(id))?.content ?? "");
+              if (published) return published;
             }
             const root = service.artifactRoot(id);
             if (!root) return undefined;

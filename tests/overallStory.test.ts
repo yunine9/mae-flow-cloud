@@ -82,6 +82,38 @@ test("架构图可从无到有并更新，失败保留旧图，正文和确认�
   } finally { await f.coordinator.shutdown(); f.dispose(); }
 });
 
+test("未登记全局版本的分析 Story 也能更新架构图，生成期间正文变化不发布旧图", async () => {
+  const f = fixture();
+  const coordinator = new OverallStoryCoordinator({ ...f.options,
+    artifactRoot: (id) => id === "parent" ? f.task.summary.workspace : f.options.artifactRoot(id) });
+  try {
+    const graph = f.task.summary.requirement_graph!;
+    graph.stage = "analyzing" as typeof graph.stage;
+    const path = join(f.task.summary.workspace, ".mae-flow-work/parent/story.md");
+    mkdirSync(join(f.task.summary.workspace, ".mae-flow-work/parent"), { recursive: true });
+    writeFileSync(path, "# 现有分析 Story\n完整模块说明");
+    let drift = false;
+    f.runner(async (_task, job) => {
+      assert.match(job.before, /现有分析 Story/);
+      writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
+        id: "api", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title: "模块架构" },
+          components: [{ id: "api", type: "backend", label: "API", pos: [40, 40], size: [180, 64] }], connections: [] },
+      }] }));
+      if (drift) writeFileSync(path, "# 现有分析 Story\n职责已经变化");
+    });
+    coordinator.generateArchitecture("parent", "owner"); await coordinator.settled("parent");
+    assert.equal(coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace, readFileSync(path, "utf8"))!, /模块架构/);
+    assert.equal(readStoryState(f.task.summary.workspace).current, undefined);
+    assert.equal(readStoryState(f.task.summary.workspace).confirmed, undefined);
+    graph.stage = "confirmed"; graph.source_document = "story.md";
+    drift = true;
+    coordinator.generateArchitecture("parent", "owner"); await coordinator.settled("parent");
+    assert.match(coordinator.status("parent").error!, /Story 已更新/);
+    assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace, readFileSync(path, "utf8")), undefined);
+  } finally { await coordinator.shutdown(); f.dispose(); }
+});
+
 test("新 Story 输入跟踪模块职责；升级不改变历史汇总稿的摘要形态", () => {
   const f = fixture();
   try {

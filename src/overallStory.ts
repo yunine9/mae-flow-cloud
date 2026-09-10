@@ -1,6 +1,7 @@
 import { StateConflictError } from "./humanGate.ts";
 import { bindArchifyArtifact, storyArchitecture } from "./storyArchitecture.ts";
 import { renderArchify } from "./archifyRender.ts";
+import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { requirementDiff } from "./documentDiff.ts";
 import { readStoryOutput } from "./overallStoryAgent.ts";
 import { randomUUID } from "node:crypto";
@@ -168,10 +169,16 @@ export class OverallStoryCoordinator<T extends Owner> {
   }
   /** 图源更新共用文档会话互斥，但不修改正文、确认状态或检视回执。 */
   generateArchitecture(id: string, by: string): StoryStatus {
-    const task = this.owner(id); this.mutable(task); this.recover(task);
+    const task = this.owner(id);
+    if (task.summary.parent_task_id) throw new TaskControlError("请在主任务中更新架构图");
+    if (this.stopped || task.summary.status === "canceled") throw new TaskControlError("任务已停止，不能更新架构图");
+    this.recover(task);
     if (this.active.has(id)) throw new TaskControlError("Story 或架构图正在更新，请稍后重试");
-    const before = readCurrentStory(task.summary.workspace), state = readStoryState(task.summary.workspace);
-    if (!before.trim() || !state.current) throw new TaskControlError("请先生成全局 Story，再补充架构图");
+    const load = () => readArchitectureStory(task.summary, this.options.artifactRoot(id));
+    const document = load(), state = readStoryState(task.summary.workspace);
+    if (!document?.content.trim()) throw new TaskControlError("尚未找到可读取的 Story，请先完成主任务分析");
+    if (document.truncated) throw new TaskControlError("Story 超过读取上限，无法完整生成架构图");
+    const before = document.content;
     this.options.ready();
     const revision = state.current, jobId = randomUUID(), controller = new AbortController();
     const epoch = auxiliarySessionEpoch(task), root = storyPath(task.summary.workspace, `jobs/${jobId}`);
@@ -179,8 +186,9 @@ export class OverallStoryCoordinator<T extends Owner> {
     state.error = undefined; writeStoryState(task.summary.workspace, state);
     const promise = Promise.resolve().then(async () => {
       mkdirSync(root, { recursive: true });
-      const previous = storyRevisionPath(task.summary.workspace, revision, "architecture.json");
-      if (existsSync(previous)) writeFileSync(join(root, "architecture.json"), readFileSync(previous));
+      const previous = storyPath(task.summary.workspace, "architecture.json");
+      const reference = existsSync(previous) ? previous : revision ? storyRevisionPath(task.summary.workspace, revision, "architecture.json") : undefined;
+      if (reference && existsSync(reference)) writeFileSync(join(root, "architecture.json"), readFileSync(reference));
       await this.options.run(task, { id: jobId, root, before, input: collectStoryInput(task, this.options),
         annotations: [], signal: controller.signal, architectureOnly: true });
       const artifact = bindArchifyArtifact(before, readStoryOutput(join(root, "architecture.json"), 2 * 1024 * 1024));
@@ -194,7 +202,7 @@ export class OverallStoryCoordinator<T extends Owner> {
       if (controller.signal.aborted || this.stopped || auxiliarySessionEpoch(task) !== epoch
         || this.options.task(id) !== task) throw new Error("架构图生成已停止");
       const current = readStoryState(task.summary.workspace);
-      if (current.current !== revision || readCurrentStory(task.summary.workspace) !== before) throw new Error("Story 已更新，请重新补充架构图");
+      if (current.current !== revision || load()?.content !== before) throw new Error("Story 已更新，请重新补充架构图");
       const temporary = `${previous}.${jobId}.tmp`;
       writeFileSync(temporary, artifact, { mode: 0o600 }); renameSync(temporary, previous);
       current.job = undefined; current.error = undefined; writeStoryState(task.summary.workspace, current);
