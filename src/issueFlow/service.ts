@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import {
   CloudSession,
   looksLikeBusyCollision,
+  looksLikeOutputTruncation,
   type Outcome,
 } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
@@ -643,6 +644,9 @@ const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
  * 都在会话工作区根;草稿即消费,信箱是投递的唯一真相。 */
 const MR_REPLY_DRAFT_FILE = "mr-review-replies.json";
 const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
+/** 待注入标志的落盘件(检视闭环 ②-Q1):进程重启不丢——已落账未注入
+ *  的意见重启后仍要交给 AI;注入完成后删除。 */
+const MR_REVIEW_NOTIFY_FILE = "mr-review-notify.json";
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
@@ -857,9 +861,17 @@ export class IssueFlowService {
       this.live.set(state.id, live);
       // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
       // 重启后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
+      // 检视监看续挂(②-Q1):原点火链(MR 建成→流水线监看)重启后
+      // 不再触发——流水线已结算(watching=false)的会话,意见发现、
+      // 注入与回复投递会全部停摆,凡 mr_green 且有 MR 一律续挂;
+      // 待注入标志(mr-review-notify.json)落盘件在场则一并恢复。
       if (state.stage === "mr_green" && state.mrs?.length
           && !isTerminal(state.status)) {
         this.watchMergeStates(live);
+        this.watchMrDiscussions(live);
+        if (existsSync(join(root, MR_REVIEW_NOTIFY_FILE))) {
+          this.reviewNotifyPending.add(state.id);
+        }
       }
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
@@ -3997,7 +4009,7 @@ export class IssueFlowService {
             this.log(`[issue-flow] ${live.id} 检视意见 ${fresh.length} 条`
               + `标待人工(自动修已关)`);
           } else {
-            this.reviewNotifyPending.add(live.id);
+            this.armReviewNotify(live);
           }
         }
       }
@@ -4011,9 +4023,25 @@ export class IssueFlowService {
     }
   }
 
-  /** 新意见落反馈账,返回本轮新出现的(调用方决定注入还是标待人工);
-   *  已落账且仍 open 的意见这轮没再出现 = 检视人已在 CodeHub 解决,
-   *  闭环标注。 */
+  /** 待注入标志(内存 Set + 落盘标记,检视闭环 ②-Q1):重启恢复靠
+   *  MR_REVIEW_NOTIFY_FILE;注入完成后两处一起清。 */
+  private armReviewNotify(live: LiveIssue): void {
+    this.reviewNotifyPending.add(live.id);
+    try {
+      writeFileSync(join(live.root, MR_REVIEW_NOTIFY_FILE),
+        JSON.stringify({ at: new Date().toISOString() }) + "\n");
+    } catch (error) {
+      // 落盘失败不挡本次注入(内存标志还在);极端下重启丢一次提醒,
+      // 下一条新意见/追问会重新点火。
+      this.log(`[issue-flow] ${live.id} 待注入标志落盘失败(继续用内存标志): `
+        + String(error instanceof Error ? error.message : error));
+    }
+  }
+
+  /** 新意见/追问落反馈账,返回需要处置的(调用方决定注入还是标待人工);
+   *  已落账且未了结(open/addressed)的意见这轮没再出现 = 讨论在平台
+   *  已解决,闭环标注——归因按投递账分家(②-Q3):Agent 自己 resolve
+   *  的不许记成"检视人已解决"。 */
   private absorbMrDiscussions(
     live: LiveIssue,
     repo: string,
@@ -4024,17 +4052,34 @@ export class IssueFlowService {
     const records = store.list()
       .filter((record) => record.source === "mr_discussion"
         && record.id.startsWith(recordPrefix));
-    const known = new Set(records.map((record) => record.source_id));
-    const fresh = items.filter((item) => !known.has(item.id));
-    if (fresh.length) {
+    const known = new Map(records.map((record) => [record.source_id, record]));
+    const fresh: MrDiscussionItem[] = [];
+    const followedUp: MrDiscussionItem[] = [];
+    for (const item of items) {
+      const record = known.get(item.id);
+      const revision = item.revision ?? 0;
+      if (!record) {
+        fresh.push(item);
+        continue;
+      }
+      // 同讨论、版本号变且未了结 = 检视人追问(②-Q4):刷新账并重新
+      // 注入,不能让追问石沉大海。closed/needs_human 已了结,不追。
+      if (revision !== record.source_revision
+          && (record.status === "open" || record.status === "addressed")) {
+        followedUp.push(item);
+      }
+    }
+    if (fresh.length || followedUp.length) {
       // 观察基准:该仓最近一次推送——检视意见是对哪版代码提的,账上
       // 要能对回去;还没有推送收据(理论不可达,申报前置了推送)留空。
       const observedSha = live.state.pushes
         ?.find((push) => push.repo === repo)?.sha ?? "";
-      store.upsert(fresh.map((item) => ({
+      const toRecord = (item: MrDiscussionItem) => ({
         id: `${recordPrefix}${item.id}`,
-        batch_id: `mr-discussion:${repo}`,
-        source: "mr_discussion",
+        // batch_id 带版本号:upsert 按同 id+同 batch 跳过——版本变了
+        // 换 batch 即整体刷新,追问的新正文才能落到账上。
+        batch_id: `mr-discussion:${repo}:${item.id}:${item.revision ?? 0}`,
+        source: "mr_discussion" as const,
         source_id: item.id,
         source_revision: item.revision ?? 0,
         observed_sha: observedSha,
@@ -4046,17 +4091,24 @@ export class IssueFlowService {
         verification: "reviewer",
         status: "open" as const,
         updated_at: new Date().toISOString(),
-      })));
+      });
+      store.upsert([...fresh, ...followedUp].map(toRecord));
       this.log(`[issue-flow] ${live.id} 收到 MR 检视意见 ${fresh.length} 条`
-        + `(${repo})`);
+        + `${followedUp.length ? `,追问 ${followedUp.length} 条` : ""}(${repo})`);
     }
     const openIds = new Set(items.map((item) => item.id));
-    for (const record of records.filter((row) => row.status === "open")) {
-      if (!openIds.has(record.source_id)) {
-        store.resolve(record.id, "closed", "检视人已在 CodeHub 解决该讨论");
-      }
+    const outbox = this.readMrReviewOutbox(live);
+    for (const record of records.filter((row) =>
+      row.status === "open" || row.status === "addressed")) {
+      if (openIds.has(record.source_id)) continue;
+      const agentResolved = outbox.items.some((item) =>
+        item.discussion_id === record.source_id
+        && item.status === "delivered" && item.resolve);
+      store.resolve(record.id, "closed", agentResolved
+        ? "Agent 回复并解决(AI 在回复时标记,待检视人知悉)"
+        : "检视人已在 CodeHub 解决该讨论");
     }
-    return fresh;
+    return [...fresh, ...followedUp];
   }
 
   /** 注入点火:会话空闲才开平台回合(忙时等下一拍——startPlatformTurn
@@ -4066,6 +4118,7 @@ export class IssueFlowService {
     if (!this.reviewNotifyPending.has(live.id)) return;
     if (this.turning.has(live.id) || live.state.status !== "idle") return;
     this.reviewNotifyPending.delete(live.id);
+    rmSync(join(live.root, MR_REVIEW_NOTIFY_FILE), { force: true });
     const open = this.feedbackStore(live).list()
       .filter((record) => record.source === "mr_discussion"
         && record.status === "open");
@@ -4083,8 +4136,12 @@ export class IssueFlowService {
   }
 
   /** 检视回复草稿(AI 按注入清单写的工作区文件)→ 出站信箱。每条绑定
-   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。 */
+   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。回合进行中
+   *  不装箱:AI 常在修完同一回合里"写草稿→再推送",回合中装箱会把
+   *  expected_sha 绑到推送前的旧版本,下一拍就误判漂移——等回合收口
+   *  绑稳定版本。 */
   private stageMrReviewReplies(live: LiveIssue): void {
+    if (this.turning.has(live.id)) return;
     const draftPath = join(live.root, MR_REPLY_DRAFT_FILE);
     if (!existsSync(draftPath)) return;
     let draft: unknown;
@@ -4139,9 +4196,13 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${live.id} 检视回复待发布 ${staged} 条`);
   }
 
-  /** 出站信箱投递:SHA 不匹配保持 pending(绝不能借另一版代码说
-   *  "已修");投递带 Idempotency-Key,重放不产生第二条 CodeHub 回复;
-   *  重试超限标 failed 交人工。 */
+  /** 出站信箱投递:SHA 不匹配说明回复绑定的那版代码已不是当前版本
+   *  (②-Q2)——直接标失败("请针对当前代码重写"),不能永远 pending
+   *  (旧实现不计重试、还挡新草稿,永久卡死);失败不挡新草稿,并重挂
+   *  注入让 AI 重写。投递带 Idempotency-Key,重放不产生第二条 CodeHub
+   *  回复;HTTP 重试超限标 failed 交人工(不再注入,防平台持续故障下
+   *  无限循环)。投递成功→意见转 addressed(Agent 已回复,待检视人
+   *  核验,②-Q3:处理≠验收)。 */
   private async flushMrReviewReplies(live: LiveIssue): Promise<void> {
     const outbox = this.readMrReviewOutbox(live);
     const pending = outbox.items.filter((item) => item.status === "pending");
@@ -4153,14 +4214,22 @@ export class IssueFlowService {
       const receipt = live.state.pushes
         ?.find((push) => push.repo === item.repo)?.sha ?? "";
       if (!receipt || receipt !== item.expected_sha) {
-        const reason = !receipt
-          ? "该仓还没有推送收据,等推送后投递"
-          : `回复绑定 ${item.expected_sha.slice(0, 12)},当前推送收据 `
-            + `${receipt.slice(0, 12)}——SHA 漂移,暂不投递`;
-        if (item.last_error !== reason) {
-          item.last_error = reason;
-          dirty = true;
-          this.log(`[issue-flow] ${live.id} 检视回复暂缓: ${reason}`);
+        item.status = "failed";
+        item.last_error = !receipt
+          ? "该仓没有推送收据,回复作废——重推后请重写回复草稿"
+          : `代码已更新(回复绑定 ${item.expected_sha.slice(0, 12)},`
+            + `当前推送 ${receipt.slice(0, 12)})——请针对当前代码重写回复草稿`;
+        dirty = true;
+        this.log(`[issue-flow] ${live.id} 检视回复作废(${item.discussion_id}): `
+          + item.last_error);
+        // 自愈闭环:意见仍是未了结状态时重新注入,AI 会拿到最新清单
+        // 重写回复;推送稳定后必然收敛,不会无限循环。
+        const record = this.feedbackStore(live).list().find((row) =>
+          row.source === "mr_discussion"
+          && row.source_id === item.discussion_id);
+        if (record && (record.status === "open"
+          || record.status === "addressed")) {
+          this.armReviewNotify(live);
         }
         continue;
       }
@@ -4194,6 +4263,16 @@ export class IssueFlowService {
         delete item.last_error;
         dirty = true;
         this.log(`[issue-flow] ${live.id} 检视回复已发布(${item.discussion_id})`);
+        // 记账分家(②-Q3):投递成功只代表"Agent 已回复",检视人核验
+        // 前不算了结;账失败不回滚投递事实(平台已有回复)。
+        try {
+          this.feedbackStore(live).resolve(
+            `mr-discussion:${item.repo}:${item.discussion_id}`,
+            "addressed", "Agent 已回复,待检视人核验");
+        } catch (error) {
+          this.log(`[issue-flow] ${live.id} 检视回复入账失败(投递事实保留): `
+            + String(error instanceof Error ? error.message : error));
+        }
       } catch (error) {
         item.last_error = String(
           error instanceof Error ? error.message : error);
@@ -4206,14 +4285,18 @@ export class IssueFlowService {
   private readMrReviewOutbox(live: LiveIssue): {
     items: MrReviewReplyOutboxItem[];
   } {
+    const path = join(live.root, MR_REPLY_OUTBOX_FILE);
+    if (!existsSync(path)) return { items: [] };
     try {
-      const parsed = JSON.parse(readFileSync(
-        join(live.root, MR_REPLY_OUTBOX_FILE), "utf-8")) as {
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
           items?: MrReviewReplyOutboxItem[];
         };
       if (Array.isArray(parsed.items)) return { items: parsed.items };
-    } catch {
-      // 缺席/读不动:空箱,投递是旁路不拖主链路。
+    } catch (error) {
+      // 读不动不拖垮监看(fail-open),但不再无声(②-Q6):回复是承诺过
+      // 的动作,静默当空箱等于悄悄丢回复——记错误日志引人来修。
+      this.log(`[issue-flow] ${live.id} 检视回复信箱读不动,按空箱继续`
+        + `(投递暂缓): ${String(error instanceof Error ? error.message : error)}`);
     }
     return { items: [] };
   }

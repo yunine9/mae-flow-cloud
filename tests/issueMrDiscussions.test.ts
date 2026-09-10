@@ -184,19 +184,23 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     await new Promise((resolve) => setTimeout(resolve, 1500));
     assert.equal(d1Discussion.replies.length, 1, "重放不得产生第二条回复");
 
-    // 检视人解决讨论 → 意见闭环标注。
+    // 检视人解决讨论 → 意见闭环标注(投递未带 resolve,归因=检视人)。
     d1Discussion.resolved = true;
     await until(() => {
       const record = (service.get(created.id).feedback ?? [])
         .find((item) => item.source_id === "D1");
       return record?.status === "closed";
     }, "D1 闭环标注");
+    assert.match(
+      (service.get(created.id).feedback ?? [])
+        .find((item) => item.source_id === "D1")!.resolution ?? "",
+      /检视人已在 CodeHub 解决/);
 
-    // SHA 漂移拒投:直写信箱构造"绑定旧提交"的 pending(绕开真实投递
-    // 竞态)——漂移期间绝不投递,绑定修回当前收据后照常投递。
+    // SHA 漂移终态(检视闭环 ② 改语义):直写信箱构造"绑定旧提交"的
+    // pending——版本对不上直接标失败("请重写"),不再永远 pending;
+    // 失败不挡新草稿,重写后照常投递。
     const issueDir = join(dataDir, "issues", created.id);
     const outboxPath = join(issueDir, "mr-review-outbox.json");
-    const currentSha = service.get(created.id).pushes!.at(-1)!.sha;
     writeFileSync(outboxPath, JSON.stringify({ items: [{
       id: "mrr-drift-test", repo: origin, discussion_id: "D2",
       body: "已补监控埋点", resolve: false,
@@ -208,20 +212,15 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       const outbox = JSON.parse(readFileSync(outboxPath, "utf-8"));
       const item = outbox.items.find((entry: any) =>
         entry.discussion_id === "D2");
-      return item?.last_error?.includes("SHA 漂移") === true;
-    }, "SHA 漂移被拒投");
-    assert.equal(d2.replies.length, 0, "漂移期间绝不投递");
-    // 恢复绑定(修回当前收据)→ 投递。
-    const restore = () => {
-      const outbox = JSON.parse(readFileSync(outboxPath, "utf-8"));
-      const item = outbox.items.find((entry: any) =>
-        entry.discussion_id === "D2");
-      item.expected_sha = currentSha;
-      writeFileSync(outboxPath, JSON.stringify(outbox));
-    };
-    restore();
-    await until(() => d2.replies.length > 0, "绑定恢复后 D2 投递");
-    assert.match(d2.replies[0], /监控埋点/);
+      return item?.status === "failed"
+        && /代码已更新|重写/.test(String(item.last_error ?? ""));
+    }, "SHA 漂移直接标失败(不再永远 pending)");
+    assert.equal(d2.replies.length, 0, "漂移条目绝不投递");
+    // 失败不挡新草稿:AI 重写 D2 回复 → 新条目入箱绑当前收据 → 投递。
+    writeFileSync(join(issueDir, "mr-review-replies.json"),
+      JSON.stringify([{ discussion_id: "D2", body: "已补监控埋点(重写)" }]));
+    await until(() => d2.replies.length > 0, "重写草稿后 D2 投递");
+    assert.match(d2.replies.at(-1)!, /重写/);
 
     // 收口即停(票 01 范围边界):验绿收口后监看退出,收口后的新意见
     // 不再追——修它的责任在 T2 的门禁注入,不在发现器。
