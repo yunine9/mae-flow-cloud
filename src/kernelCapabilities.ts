@@ -6,6 +6,7 @@ import { join } from "node:path";
 export interface KernelCapabilityCheck {
   ready: boolean;
   continuous_review: boolean;
+  agent_host_control?: boolean;
   detail: string;
   schema?: string;
 }
@@ -49,7 +50,7 @@ export function probeKernelCapabilities(input: {
     const lines = String(result.stdout ?? "").trim().split("\n").filter(Boolean);
     const value = JSON.parse(lines.at(-1) ?? "") as {
       schema?: unknown;
-      capabilities?: { continuous_review?: unknown };
+      capabilities?: { continuous_review?: unknown; agent_host_control?: unknown };
     };
     const schema = String(value.schema ?? "");
     const continuous = value.capabilities?.continuous_review === true;
@@ -64,6 +65,7 @@ export function probeKernelCapabilities(input: {
     return {
       ready: true,
       continuous_review: true,
+      agent_host_control: value.capabilities?.agent_host_control === true,
       schema,
       detail: "内核 continuous_review 能力已确认",
     };

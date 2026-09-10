@@ -582,8 +582,8 @@ test("推送前 UT 纪律:push_branch 描述写明先跑测试全绿再推,开�
   assert.match(source, /推送前 UT 纪律/, "缺推送前 UT 纪律引导");
   assert.match(source, /用例必跑/, "缺「改动相关用例必跑」口径");
   assert.match(source, /全量回归/, "缺「时间允许跑全量回归」口径");
-  assert.match(source, /全绿才推/, "缺「全绿才推」标准");
-  assert.match(source, /不许跳过测试直接推/, "缺「挂测不许硬推」红线");
+  assert.match(source, /失败或条件缺失须如实说明/, "必须报告验证不足");
+  assert.match(source, /不把测试红灯当作推送禁令/, "阶段性交付不受质量门禁阻断");
   // 纪律必须落在 push_branch 工具定义的 description 里(name 与
   // parameters 之间),不是 tools.ts 里随便哪个角落。
   const pushBranchDesc = issueTools.match(

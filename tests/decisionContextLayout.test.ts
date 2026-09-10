@@ -496,7 +496,7 @@ test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发�
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
   // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
   // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
-  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
+  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\), \.\.\.createTaskHostTools\(this\.taskHostRuntime\(task, epoch\)\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
     "主会话同时挂检索工具、拆分提议与首改目录提醒");
   assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
     "开发助手只挂记忆工具");

@@ -180,7 +180,7 @@ def cmd_capability(args):
         if bool(getattr(args, "json", False)):
             document = {
                 "schema": "mae-flow-capabilities/1",
-                "capabilities": {"continuous_review": True},
+                "capabilities": {"continuous_review": True, "agent_host_control": True},
                 "checks": checks,
             }
             print(json.dumps(document, ensure_ascii=False))

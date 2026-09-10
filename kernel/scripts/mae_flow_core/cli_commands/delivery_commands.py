@@ -179,6 +179,9 @@ def _open(flow, state, args):
     proof_nonce = _verify_host_proof(state, args, "feedback-open", payload)
     if payload.get("mode") == "adopt-watch":
         return _adopt_watch(state, payload, proof_nonce)
+    if payload.get("mode") == "control":
+        from .feedback_control import control_feedback
+        return control_feedback(state, payload, proof_nonce)
     _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     if host_managed_continuous_review():
@@ -357,6 +360,16 @@ def _result(flow, state, args):
     if not isinstance(raw_results, list):
         _die("results 必须是数组")
     results = []
+    from .feedback_control import deferred_feedback
+    deferred = deferred_feedback(state)
+    # A host-recorded defer is a scheduling decision, not an Agent response.
+    # Supply its explanation only for omitted entries; real replies stay intact.
+    present = {item.get("id") for item in raw_results if isinstance(item, dict)}
+    raw_results = list(raw_results) + [
+        {"id": item["id"], "status": "explained",
+         "summary": "责任人暂缓自动修复：" + deferred[item["id"]]["reason"]}
+        for item in batch.get("items", [])
+        if item.get("id") in deferred and item.get("id") not in present]
     for raw in raw_results:
         if not isinstance(raw, dict):
             _die("results 每一项必须是 JSON object")

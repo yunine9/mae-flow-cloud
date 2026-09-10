@@ -206,7 +206,14 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
 };
 
-/** 场景 → 阶段路线(顺序即流程)。 */
+// 调查、测试取证和阶段性交付是通用能力；阶段只组织出口，不禁止工具。
+// 无单仍不交付代码；仓、分支、真实推送和用户已选择的过目策略仍由工具核对。
+for (const spec of Object.values(FIXED_STAGE_SPECS)) {
+  for (const name of ["lookup_modules", "pull_repo", "report_ut", "push_branch", "create_mr"]) {
+    if (!spec.tools.some(tool => tool.name === name)) spec.tools = [...spec.tools, { name }];
+  }
+}
+
 export const STAGE_ROUTES: Record<IssueScenario, readonly FixedStage[]> = {
   ticket: FIXED_TICKET_STAGES,
   no_ticket: FIXED_NO_TICKET_STAGES,

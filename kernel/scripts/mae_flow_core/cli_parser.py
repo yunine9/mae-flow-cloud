@@ -89,6 +89,7 @@ def build_parser():
     delivery_attest = delivery_actions.add_parser("attest")
     delivery_attest.add_argument("--lifecycle", default="")
     delivery_attest.add_argument("--active-batch", default="")
+    delivery_attest.add_argument("--feedback-loop", action="store_true")
     delivery_attest.add_argument("--snapshot-stdin", action="store_true")
     migrate = sub.add_parser(
         "migrate-flow",

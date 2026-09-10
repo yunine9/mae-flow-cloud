@@ -733,7 +733,7 @@ test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模�
   }
 });
 
-test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放行", async () => {
+test("push_branch 阶段性交付:未提交改动保留并明确告知，提交后推送新 SHA", async () => {
   const dataDir = mfcTemp("mfc-issue-exit-dirty-");
   const origin = bareOrigin(dataDir);
   const repoDir = join(dataDir, "repo", "origin");
@@ -744,13 +744,12 @@ test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放�
   state.repo_urls = [origin];
   state.repo_url = origin;
   const { byName, textOf } = directTools(state, dataDir);
-  // 改文件不提交就推:点破"推的是旧提交、MR 没有 diff",给出该做的事。
+  // 阶段性推送只发布 HEAD，不能暗中提交其他在途工作。
   writeFileSync(join(repoDir, "fix.txt"), "changed", "utf-8");
-  await assert.rejects(
-    () => byName("push_branch").execute("x", {}),
-    /未提交[\s\S]*旧提交[\s\S]*git commit/,
-    "脏工作区推送要被熔断(否则静默推出空 diff 的 MR)");
-  assert.equal((state.pushes ?? []).length, 0, "熔断不产生推送账");
+  const partial = textOf(await byName("push_branch").execute("x", {}));
+  assert.match(partial, /未提交改动.*未包含/);
+  assert.equal((state.pushes ?? []).length, 1);
+  assert.equal(execFileSync("git", ["-C", repoDir, "status", "--porcelain"], { encoding: "utf8" }).trim(), "?? fix.txt");
   // 提交后放行:真推到裸仓远端,推送账落位。
   execFileSync("git", ["-C", repoDir, "add", "-A"], { env: GIT_ENV });
   execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "[T] fix"],

@@ -20,6 +20,7 @@ import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
   createKernelHostProof,
+  ensureKernelHostCapability,
   openKernelFeedback,
   recordKernelFeedbackResult,
 } from "../src/kernelDelivery.ts";
@@ -346,10 +347,11 @@ test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或�
       }],
     },
   }));
+  ensureKernelHostCapability({ workspace, taskId: "task-1", cwd });
   const service = new TaskService({
     dataDir: join(root, "tasks"), provider: "unused", model: "unused",
     modelsJson: {}, maxConcurrent: 0,
-    host: { kernelRoot: join(root, "kernel"), continuousReview: true },
+    host: { kernelRoot: join(process.cwd(), "kernel"), continuousReview: true },
   });
   const task = {
     summary: {
@@ -380,5 +382,6 @@ test("前端状态统计覆盖待处理、修复、核验、闭环与人工停�
     awaiting_verification: 1,
     closed: 1,
     needs_human: 1,
+    deferred: 0,
   });
 });

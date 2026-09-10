@@ -147,8 +147,8 @@ test("插话与接管边界:暂停不得伪造已读，恢复后必须补送", a
       "旧主会话销毁后，取回的补充仍必须显示待读");
     const saved = JSON.parse(readFileSync(
       join(dataDir, id, "task.json"), "utf-8"));
-    assert.deepEqual(saved.pending_main_steers,
-      ["这条补充必须在交还后继续处理"]);
+    assert.equal(saved.pending_main_steers.length, 1);
+    assert.match(saved.pending_main_steers[0], /^\[责任人指令编号 [^\]]+\]\n这条补充必须在交还后继续处理$/);
 
     await service.shutdown();
     const recovered = new TaskService({
