@@ -95,7 +95,7 @@ export function HistoryBoard({
       <div className="history-intro">
         <div>
           <span className="section-kicker">DELIVERY ARCHIVE</span>
-          <h2>交付档案</h2>
+          <h2>成果档案</h2>
           <p>这里保存待合入、完成、失败和取消的任务；进行中的工作回到“当前现场”查看。</p>
         </div>
         <button className="refresh-button" onClick={() => void load()}>
@@ -130,7 +130,7 @@ export function HistoryBoard({
           <span className="empty-database" aria-hidden>
             <i /><i /><i />
           </span>
-          <strong>{usingWorkspace ? "当前没有交付档案" : "交付档案里还没有记录"}</strong>
+          <strong>{usingWorkspace ? "当前没有成果档案" : "成果档案里还没有记录"}</strong>
           <p>
             任务进入待合入、完成、失败或取消后，会在这里留下记录。
           </p>

@@ -144,7 +144,7 @@ function RuntimeCard({ view, onSaved }: {
     <div className="user-create-copy">
       <span className="section-kicker">RUNTIME</span>
       <h2>运行参数</h2>
-      <p>这里调整全团队任务的默认运行节奏。每项都明确显示当前服务默认值；
+      <p>这里调整全团队需求任务的默认运行节奏。每项都明确显示当前服务默认值；
         留空即可恢复默认，无需了解部署命令。</p>
     </div>
     <form className="user-create-form settings-form runtime-settings-form" onSubmit={submit}>
@@ -416,7 +416,7 @@ function ModelsCard({ view, onSaved }: {
     <div className="user-create-copy">
       <span className="section-kicker">MODEL GATEWAY</span>
       <h2>模型网关</h2>
-      <p>团队任务统一使用这一套模型。只需填写网关地址、API Key 和模型名称；
+      <p>团队需求任务统一使用这一套模型。只需填写网关地址、API Key 和模型名称；
         API Key 保存后不会回显明文。</p>
       <span className={`settings-state ${models.configured || defaults.configured ? "ok" : "missing"}`}>
         <i aria-hidden />{models.configured
