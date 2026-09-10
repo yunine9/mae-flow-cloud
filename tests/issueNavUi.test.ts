@@ -72,6 +72,10 @@ test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见�
     assert.ok(group.includes(`{ tab: "${tab}", label: "${label}" }`),
       `开发侧子页签缺「${label}」`);
   }
+  // 默认子页签排第一(拍板:缺省落点在首位,与选择直觉一致)。
+  assert.ok(group.indexOf('{ tab: "sessions"') < group.indexOf('{ tab: "register"')
+    && group.indexOf('{ tab: "register"') < group.indexOf('{ tab: "dts"'),
+    "子页签顺序应为 问题会话 → 问题登记 → DTS 列表");
   // 子页签行走新 Tailwind 轨道:tw-root 归一(与台账页同纪律)。
   assert.match(group, /tw-root/, "子页签区挂 tw-root(scoped 归一)");
 });

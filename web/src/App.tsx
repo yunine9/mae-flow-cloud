@@ -1616,11 +1616,13 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
   useEffect(() => {
     if (current === view) setOpen(true);
   }, [current, view]);
+  // 默认子页签排第一(2026-09-11 拍板):问题会话既是缺省落点,
+  // 就该在子页签区首位,与选择直觉一致;发起两兄弟跟在后面。
   const children: Array<{ tab: IssueChildTab; label: string }> = admin
     ? [{ tab: "sessions", label: "问题会话" }]
-    : [{ tab: "register", label: "问题登记" },
-      { tab: "dts", label: "DTS 列表" },
-      { tab: "sessions", label: "问题会话" }];
+    : [{ tab: "sessions", label: "问题会话" },
+      { tab: "register", label: "问题登记" },
+      { tab: "dts", label: "DTS 列表" }];
   return <Collapsible.Root open={open} onOpenChange={(next) => {
     setOpen(next);
     if (next && current !== view) onSelect(view);
