@@ -31,6 +31,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { readAppendOnlyJsonl } from "../jsonlTailRepair.ts";
 import { join, resolve, sep, basename, dirname } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
 import {
@@ -433,13 +434,10 @@ export function recordManualEdit(root: string, rel: string, size: number): void 
 export function listManualEdits(root: string): ManualEditRecord[] {
   const path = join(root, "manual-edits.jsonl");
   if (!existsSync(path)) return [];
-  try {
-    return readFileSync(path, "utf-8").split("\n")
-      .filter(Boolean).map((line) => JSON.parse(line) as ManualEditRecord)
-      .slice(-100);
-  } catch {
-    return [];
-  }
+  // 断写尾巴读口自愈(票 #160):过去整链单 try,一行断写让审计台账
+  // 从此读成 []——人工修改记录无声蒸发。
+  return readAppendOnlyJsonl<ManualEditRecord>(path,
+    { middleCorrupt: "skip" }).slice(-100);
 }
 
 // ---- 拉取日志(#47):递归清单 + 任意深度读 + 压缩包解压 ----

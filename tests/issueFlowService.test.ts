@@ -1882,3 +1882,94 @@ test("env_needed 闸快照与手动沉淀(#150):environment_id 作答即台账�
     await model.stop();
   }
 });
+// ---- 崩溃一致性/可恢复停机(票 #158/#159 首批,2026-09-10) ----
+
+test("容器基础设施瞬断不判死:Docker 起不来落 idle 留话,现场保留可重试", async () => {
+  const dataDir = mfcTemp("mfc-issue-infra-idle-");
+  seedRecoverableIssue(dataDir, "issue-1", { status: "idle" });
+  let attempts = 0;
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: { providers: {} },
+    isolation: {
+      image: "unused", volumes: [], memory: "2g", cpus: "2",
+      pidsLimit: 512, network: "none",
+      containerFactory: () => {
+        attempts += 1;
+        throw new Error("Cannot connect to the Docker daemon at "
+          + "unix:///var/run/docker.sock");
+      },
+    },
+  });
+  try {
+    const replied = service.reply("issue-1", "继续推进");
+    assert.equal(replied.status, "running");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" && /容器未能启动/.test(issue.stage_note ?? "")
+        ? issue : undefined;
+    }, "容器瞬断落 idle 留话");
+    assert.notEqual(settled.status, "failed", "基础设施瞬断不是会话失败");
+    assert.equal(settled.error, undefined, "不落错误账");
+    assert.equal(attempts, 1);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("恢复单目录隔离:一个损坏的 issue.json 不砖死服务启动,邻居照常在册", async () => {
+  const dataDir = mfcTemp("mfc-issue-recover-iso-");
+  seedRecoverableIssue(dataDir, "issue-ok1", { status: "waiting_user" });
+  seedRecoverableIssue(dataDir, "issue-ok2", { status: "idle" });
+  // 损坏现场:硬断电留下的全零块形状(票 #158 的事故形状)。
+  const corruptRoot = join(dataDir, "issues", "issue-corrupt");
+  mkdirSync(corruptRoot, { recursive: true });
+  writeFileSync(join(corruptRoot, "issue.json"), "\u0000".repeat(300));
+  const logs: string[] = [];
+  const service = new IssueFlowService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+    deferRecovery: true,
+    log: (message) => logs.push(message),
+  });
+  try {
+    service.start();
+    assert.equal(service.list().length, 2, "坏邻居只隔离自己,不带走服务");
+    assert.ok(service.get("issue-ok1").title, "完好会话在册可查");
+    assert.ok(logs.some((line) => /issue-corrupt 恢复失败/.test(line)),
+      "隔离要大声记账");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("限流/额度不判死:429 落 idle 留话,额度恢复后发「继续」可续推", async () => {
+  const dataDir = mfcTemp("mfc-issue-ratelimit-");
+  const origin = bareOrigin(dataDir);
+  const model = new ScriptedModelServer([
+    { text: "(被限流顶掉)" },
+  ], "scripted-v1");
+  await model.start();
+  seedRecoverableIssue(dataDir, "issue-1", { status: "idle" });
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    // 配额给足 5(> pi 自动重试 3 次),让限流穿透成终态模型错误。
+    model.failWith("HTTP 429 rate limit exceeded: 使用上限,限额将在 "
+      + "2026-09-10 18:00:00 重置(request_id=xyz)", 5);
+    const replied = service.reply("issue-1", "继续推进");
+    assert.equal(replied.status, "running");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" && /额度|限流|429/.test(issue.stage_note ?? "")
+        ? issue : undefined;
+    }, "429 落 idle 留话");
+    assert.notEqual(settled.status, "failed", "限流不是会话失败");
+    assert.equal(settled.error, undefined, "不落错误账");
+    assert.match(settled.stage_note ?? "", /发送「继续」/, "留话要给出路");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});;

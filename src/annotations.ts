@@ -17,6 +17,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { isReviewAssetPath } from "./reviewAssets.ts";
 import { annotationDiffLines } from "./annotationDiffLines.ts";
 
@@ -225,24 +226,13 @@ export interface AnchorCheck {
 export class AnnotationStore {
   constructor(readonly path: string, private readonly ownerControlled = false) {}
 
-  /** 回放得到当前状态。坏行跳过不炸整页——旁路一律 fail-open。 */
+  /** 回放得到当前状态。中段坏行跳过不炸整页(旁路 fail-open,大声
+ *  记账);断写尾巴由读口自愈——崩溃半行不再吞掉下一次追加的账。 */
   list(): Annotation[] {
     if (!existsSync(this.path)) return [];
     const byId = new Map<string, Annotation>();
-    let text = "";
-    try {
-      text = readFileSync(this.path, "utf-8");
-    } catch {
-      return [];
-    }
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let operation: Operation;
-      try {
-        operation = JSON.parse(line) as Operation;
-      } catch {
-        continue;                 // 半行 JSON(崩在写一半)只丢它自己
-      }
+    for (const operation of readAppendOnlyJsonl<Operation>(this.path,
+      { middleCorrupt: "skip" })) {
       if (operation.op === "add" && operation.record?.id) {
         byId.set(operation.record.id, operation.record);
         continue;
@@ -408,25 +398,10 @@ export class AnnotationStore {
    * 走 list() 的回放结论——两处口径分家就会出现"流里说已确认、面板说还等"。 */
   history(): AnnotationOperation[] {
     if (!existsSync(this.path)) return [];
-    let text = "";
-    try {
-      text = readFileSync(this.path, "utf-8");
-    } catch {
-      return [];
-    }
-    const operations: AnnotationOperation[] = [];
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const operation = JSON.parse(line) as AnnotationOperation;
-        if (operation && typeof operation === "object" && "op" in operation) {
-          operations.push(operation);
-        }
-      } catch {
-        // 半行 JSON 只丢它自己
-      }
-    }
-    return operations;
+    return readAppendOnlyJsonl<AnnotationOperation>(this.path,
+      { middleCorrupt: "skip" })
+      .filter((operation) =>
+        operation && typeof operation === "object" && "op" in operation);
   }
 
   /** 还没送出去的:决定卡与插话都取这一批。 */

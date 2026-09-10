@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -133,17 +134,14 @@ export class WishWallStore {
     this.imageDir = join(root, "images");
   }
 
-  /** 坏行只跳过自身：许愿墙是协作旁路，不能因半行写入拖垮工作台。 */
-  list(): WishRecord[] {
+    list(): WishRecord[] {
     if (!existsSync(this.logPath)) return [];
-    let text = "";
-    try { text = readFileSync(this.logPath, "utf-8"); } catch { return []; }
     const records = new Map<string, WishRecord>();
     const deleted = new Set<string>();
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let operation: WishOperation;
-      try { operation = JSON.parse(line) as WishOperation; } catch { continue; }
+    // 中段坏行跳过(协作旁路 fail-open);断写尾巴读口自愈(票 #160)
+    //  ——崩溃半行不再吞掉下一次追加的愿望/点赞账。
+    for (const operation of readAppendOnlyJsonl<WishOperation>(this.logPath,
+      { middleCorrupt: "skip" })) {
       if (operation.op === "create" && operation.record?.id) {
         records.set(operation.record.id, {
           ...operation.record,

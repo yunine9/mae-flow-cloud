@@ -33,6 +33,8 @@ import { randomUUID } from "node:crypto";
 import {
   CloudSession,
   looksLikeBusyCollision,
+  looksLikeOutputTruncation,
+  looksLikeRateLimited,
   type Outcome,
 } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
@@ -139,6 +141,7 @@ import { parseWarmupReport } from "../warmupAgent.ts";
 import {
   DtsGatewayUnconfiguredError,
   IssueControlError,
+  IssueInfraError,
   IssueNotFoundError,
 } from "./errors.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
@@ -629,6 +632,15 @@ export interface IssueMessage {
   ts: string;
 }
 
+/** 基础设施瞬断的统一包装(票 #159 对齐拍板 2026-09-10):Docker
+ * daemon 不可达/镜像拉取失败这类时间可恢复的失败,标哨兵交 runTurn
+ * 落 idle 交还人工,不再走"整单 failed"——下一回合 ensureContainer
+ * 本就会按 isAlive 重建。 */
+function issueInfraFailure(cause: unknown): IssueInfraError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new IssueInfraError(`容器启动失败(基础设施): ${detail}`);
+}
+
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /** 催办续跑预算:每个用户/平台回合最多自动推回模型这么多次,再收嘴就
@@ -830,7 +842,19 @@ export class IssueFlowService {
     for (const name of readdirSync(this.issuesRoot)) {
       if (!name.startsWith("issue-")) continue;
       const root = join(this.issuesRoot, name);
-      const state = loadState(root);
+      // 单目录隔离(票 #158,issue-31/32/33 复盘):一个损坏的 issue.json
+      // 不许把整个服务启动拖死——全场唯一"死的是所有会话"的路径。
+      // 隔离只救邻居不救自己:该目录跳过并大声记账,列表可见的「现场
+      // 损坏」投影另行拍板(见票)。
+      let state: IssueSessionState | undefined;
+      try {
+        state = loadState(root);
+      } catch (error) {
+        this.log(`[issue-flow] ${name} 恢复失败,已隔离跳过(服务继续启动;`
+          + `现场文件损坏?路径 ${join(root, "issue.json")}): `
+          + String(error instanceof Error ? error.message : error));
+        continue;
+      }
       if (!state) continue;
       if (interruptWarmupReceipt(state.warmup)) saveState(root, state);
       // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
@@ -1721,9 +1745,20 @@ export class IssueFlowService {
           saveState(live.root, live.state);
           return;
         }
-        live.state.status = "failed";
-        live.state.error = detail;
-        this.releaseDriver(live);
+        if (error instanceof IssueInfraError) {
+          // 基础设施瞬断(票 #159):Docker 抖动时间可恢复,容器下回合
+          // 本就会按 isAlive 重建——落 idle 交还人工,发「继续」即续推;
+          // 现场保留(不 releaseDriver),配置类错误才落 failed。
+          live.state.status = "idle";
+          live.state.stage_note =
+            "基础设施暂不可用(容器未能启动)——稍后发送「继续」即可重试";
+          this.log(`[issue-flow] ${live.id} 容器基础设施瞬断,停机待恢复`
+            + `(不标失败): ${detail}`);
+        } else {
+          live.state.status = "failed";
+          live.state.error = detail;
+          this.releaseDriver(live);
+        }
       }
       saveState(live.root, live.state);
       this.log(`[issue-flow] ${live.id} 回合失败: ${detail}`);
@@ -1811,6 +1846,29 @@ export class IssueFlowService {
           "平台消息与进行中的回合相撞,未能送达——发送「继续」即可补投";
         this.log(`[issue-flow] ${live.id} 消息撞上忙会话被拒,`
           + `留话待补投(不标失败): ${detail}`);
+      } else if (outcome.status === "session_ended"
+          && looksLikeOutputTruncation(detail)) {
+        // 输出超限兜底(issue-12 复盘):driver 已纠偏重试两次仍超限。
+        // 截断的工具没执行≠任务失败——代码修复、分析、证据都还在,
+        // 模型甚至已用纯文本把阻塞说清了。落 idle 交还人工,发「继续」
+        // 即可再推进;标 failed 是把健康会话逼进只能取消的死胡同。
+        state.status = "idle";
+        state.stage_note = "模型连续输出超限,已停机——发送「继续」并要求"
+          + "精简输出(正文短、选项只留关键词、内容多就拆多次调用),"
+          + "平台会再推进";
+        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+        this.log(`[issue-flow] ${live.id} 输出超限纠偏穷尽,转人工(不标失败)`);
+      } else if (outcome.status === "session_ended"
+          && looksLikeRateLimited(detail)) {
+        // 限流/额度(2026-09-10,票 #159 首批):时间可恢复的模型侧失败。
+        // 过去落 failed——问题流的 failed 只有取消一条出路,文案还让人
+        // 「点重跑续推」,那个按钮问题流根本没有。落 idle:额度恢复后
+        // 发「继续」即原地续推。
+        state.status = "idle";
+        state.stage_note = detail.split("\n")[0].slice(0, 100)
+          + "——额度恢复后发送「继续」,平台会原地续推";
+        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+        this.log(`[issue-flow] ${live.id} 模型限流/额度,停机待恢复(不标失败)`);
       } else {
         state.status = "failed";
         state.error = detail;
@@ -2392,10 +2450,15 @@ export class IssueFlowService {
         },
       },
     };
-    const container = isolation.containerFactory
-      ? isolation.containerFactory(build)
-      : new TaskContainer(build.image, build.workspace, build.name,
-          build.log, build.volumes, build.limits, build.options);
+    let container: TaskContainer;
+    try {
+      container = isolation.containerFactory
+        ? isolation.containerFactory(build)
+        : new TaskContainer(build.image, build.workspace, build.name,
+            build.log, build.volumes, build.limits, build.options);
+    } catch (cause) {
+      throw issueInfraFailure(cause);
+    }
     // root 守护进程 + 非 root 容器用户时,把工作区属主在 docker run
     // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。
     const prepared = prepareContainerHostPaths({
@@ -2431,7 +2494,11 @@ export class IssueFlowService {
         }
       }
     }
-    await container.start();
+    try {
+      await container.start();
+    } catch (cause) {
+      throw issueInfraFailure(cause);
+    }
     live.container = container;
     if (this.shuttingDown || live.controlEpoch !== epoch) {
       await this.stopContainer(live);
@@ -2562,7 +2629,7 @@ export class IssueFlowService {
       agentDir,
       provider: model.provider,
       model: model.model,
-      eventLog: new EventLog(join(runRoot, "events.jsonl")),
+      eventLog: new EventLog(join(runRoot, "events.jsonl"), undefined, this.log),
       transcript: new TranscriptStore(join(runRoot, "transcript.jsonl"), "main"),
       // 与主会话同一份可达边界:台账文件与只读投影目录同罪。
       gate: new GateService({
@@ -2749,7 +2816,7 @@ export class IssueFlowService {
       knowledgeScope: "issue",
       provider: model.provider,
       model: model.model,
-      eventLog: new EventLog(join(live.root, "events.jsonl")),
+      eventLog: new EventLog(join(live.root, "events.jsonl"), undefined, this.log),
       transcript: new TranscriptStore(join(live.root, "transcript.jsonl"), "main"),
       gate: new GateService({
         // 问题会话的可达边界=整个会话工作区(代码仓 + local-logs +
@@ -2875,7 +2942,8 @@ export class IssueFlowService {
     payload: Record<string, unknown>,
   ): void {
     try {
-      const eventLog = new EventLog(join(live.root, "events.jsonl"));
+      const eventLog = new EventLog(join(live.root, "events.jsonl"),
+        undefined, this.log);
       eventLog.append({
         eventId: eventLog.lastEventId() + 1,
         taskId: live.id,
