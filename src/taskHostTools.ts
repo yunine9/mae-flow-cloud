@@ -1,3 +1,4 @@
+import { confirmedPipelineRun, historicalPipelineFeedback } from "./pipelineHandoff.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
@@ -13,7 +14,7 @@ import type { Annotation } from "./annotations.ts";
 import { deliveryChangeSnapshot } from "./artifacts.ts";
 import { FeedbackStore } from "./feedbackStore.ts";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
-import { getPipelineStatus, triggerPipeline, type PipelineCredential } from "./pipelineClient.ts";
+import { getPipelineStatus, triggerPipeline, type PipelineCredential, type PipelineRun } from "./pipelineClient.ts";
 import { createMergeRequest } from "./mrClient.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
 
@@ -41,6 +42,7 @@ export interface HostOperation {
   push_receipt?: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>;
   mr_receipt?: { url: string; id?: string | number };
   trigger_started?: boolean;
+  pipeline_receipt?: PipelineRun;
 }
 interface Instruction { id: string; actor: string; text: string; at: string }
 interface Ledger { instructions: Instruction[]; operations: HostOperation[] }
@@ -114,6 +116,7 @@ export interface TaskHostRuntime {
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
+  acceptPipeline(sha: string, run: PipelineRun): Promise<void>;
   syncFeedback(): void;
   cloneReference?(url: string): Promise<string>;
   collaborate?(text: string): Promise<unknown>;
@@ -236,7 +239,21 @@ export async function finishTaskHostOperation(host: TaskHostRuntime): Promise<bo
 
 async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean> {
   const ledger = new TaskHostLedger(host.summary), operation = ledger.pending();
-  if (!operation) return false;
+  if (!operation) {
+    const loop = host.summary.delivery?.loop;
+    const latest = ledger.read().operations.at(-1);
+    if (loop?.kind !== "ci" || loop.state !== "repairing"
+        || latest?.input.action !== "trigger_pipeline" || latest.state !== "succeeded"
+        || !latest.sha || latest.sha === loop.last_sha
+        || latest.sha !== host.summary.delivery?.git_push?.sha) return false;
+    host.assertActive();
+    await host.release();
+    const response = await getPipelineStatus({ platformUrl: host.platformUrl!, sha: latest.sha,
+      repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential });
+    host.assertActive();
+    await host.acceptPipeline(latest.sha, confirmedPipelineRun(latest.sha, response));
+    return true;
+  }
   host.assertActive();
   try {
     if (operation.input.action === "stop_verification") await host.stopVerification?.();
@@ -305,15 +322,20 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       operation.result = `关联仓已就绪：${await host.cloneReference!(input.repo!)}。用于本任务分析，不改变交付仓或分支。`;
     } else if (input.action === "trigger_pipeline") {
       const call = { platformUrl: host.platformUrl!, sha: operation.sha!, repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
-      if (operation.trigger_started) {
-        // A response may have been lost after the platform accepted the run.
-        // Query it on recovery; never blindly start a duplicate pipeline.
-        operation.result = `上次触发返回中断，本次仅核对 ${operation.sha} 的状态：${safeMessage(host, JSON.stringify(await getPipelineStatus(call)))}；如未触发，可发起新操作。`;
-      } else {
+      if (!operation.pipeline_receipt) {
+        const recovering = operation.trigger_started;
         operation.trigger_started = true;
         ledger.update(operation);
-        operation.result = `流水线触发结果（${operation.sha}）：${safeMessage(host, JSON.stringify(await triggerPipeline(call)))}。未改变旧反馈或工作目标。`;
+        const response = recovering ? await getPipelineStatus(call) : await triggerPipeline(call);
+        host.assertActive();
+        operation.pipeline_receipt = confirmedPipelineRun(operation.sha!, response);
+        ledger.update(operation);
       }
+      operation.result = `流水线结果（${operation.sha}）：${safeMessage(host, JSON.stringify(operation.pipeline_receipt))}。旧 SHA 告警仅作历史，等待本次验证结果，不要重复修复旧告警。`;
+      await host.acceptPipeline(operation.sha!, operation.pipeline_receipt);
+      operation.state = "succeeded";
+      ledger.update(operation);
+      return true; // 已交给验证/新失败调度，不能再用旧 mission 重启 Agent。
     } else if (input.action === "stop_verification") {
       operation.result = "验证已停止；未跳过测试、未推送，按当前要求继续。";
     } else if (input.action === "restart_session") {
@@ -323,8 +345,10 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     }
     operation.state = "succeeded";
   } catch (error) {
-    if (operation.push_receipt || operation.mr_receipt) {
-      operation.result = `远端操作已有收据，本地状态更新未完成：${safeMessage(host, error)}`;
+    if (operation.push_receipt || operation.mr_receipt || operation.trigger_started) {
+      operation.result = operation.push_receipt || operation.mr_receipt || operation.pipeline_receipt
+        ? `远端操作已有收据，本地状态更新未完成：${safeMessage(host, error)}`
+        : `流水线触发或状态核对未完成，重试将先查询本次 SHA，不重开旧修复：${safeMessage(host, error)}`;
       ledger.update(operation);
       try { host.assertActive(); host.fail?.(operation.result); } catch { /* Do not revive a canceled task. */ }
       return true;
@@ -343,7 +367,7 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
 function feedback(host: TaskHostRuntime) {
   const deferred = taskDeferredFeedback(host);
   return { feedback: new FeedbackStore(join(host.summary.workspace, "feedback", "index.jsonl")).list()
-    .map(row => ({ ...row, scheduling: deferred[row.id] ? "deferred" : "active", defer_reason: deferred[row.id]?.reason })),
+    .map(row => ({ ...row, scheduling: deferred[row.id] ? "deferred" : historicalPipelineFeedback(host.summary, row) ? "historical" : "active", defer_reason: deferred[row.id]?.reason })),
   annotations: host.annotations() };
 }
 
@@ -371,7 +395,9 @@ export function deferredSourceVersions(host: Pick<TaskHostRuntime, "cwd" | "kern
 export function taskHostGoal(host: TaskHostRuntime): string {
   const recent = new TaskHostLedger(host.summary).read().operations.slice(-5)
     .map(op => `${op.id} (${op.input.action}) ${op.state}: ${op.result ?? "尚无执行结果"}`).join("\n");
-  const operations = recent ? `[最近宿主操作，按记录核对结果]\n${recent}` : "";
+  const verification = host.summary.delivery?.loop?.kind === "ci" && host.summary.delivery.loop.state === "verifying"
+    ? `当前正在验证提交 ${host.summary.delivery.sha}；旧 SHA 失败只作历史，不能据此重复修复。流水线的新结果由宿主监听，完成其他明确要求后结束本轮。` : "";
+  const operations = [verification, recent ? `[最近宿主操作，按记录核对结果]\n${recent}` : ""].filter(Boolean).join("\n");
   if (!host.cwd || !host.kernel || !existsSync(join(host.cwd, ".mae-flow.json"))) return operations;
   const state = kernelState(host);
   const target = state.delivery_loop?.target;
@@ -431,7 +457,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
         const sha = host.summary.delivery?.git_push?.sha ?? host.summary.delivery?.sha;
         if (!sha || !host.platformUrl) throw new Error("尚无已推送提交或未配置流水线平台");
         const call = { platformUrl: host.platformUrl, sha, repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
-        if (input.action === "status") return { sha, ...await getPipelineStatus(call) };
+        if (input.action === "status") return confirmedPipelineRun(sha, await getPipelineStatus(call));
         if (input.action !== "trigger") throw new Error("未知流水线操作");
         return { ...await queueTaskHostOperation(host, id, { action: "trigger_pipeline", reason: "触发当前已推送提交的流水线" }), next: "立即结束本轮，由宿主执行并带回结果；queued 不等于成功。" };
       }) }),

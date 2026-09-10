@@ -1,3 +1,5 @@
+import { confirmedPipelineRun, historicalPipelineFeedback } from "./pipelineHandoff.ts";
+import type { PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
 import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
@@ -1688,6 +1690,7 @@ interface TaskState {
   mergeSettlement?: Promise<void>;
   /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
   pipelinePollSha?: string;
+  pipelinePollEpoch?: number;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
   /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
@@ -13710,6 +13713,7 @@ export class TaskService {
         return { ready: await this.preparePush(task, state.config?.["分支名"], state.config?.["基线分支"], actionEpoch, false), prepush: task.summary.delivery?.prepush };
       },
       watch: () => this.ensureMergeWatch(task),
+      acceptPipeline: (sha, run) => this.acceptPipelineRun(task, sha, run, actionEpoch),
       syncFeedback: () => this.syncFeedbackStoreFromKernel(task),
       deferAnnotation: (id, revision, actor, reason) => { this.verifyAnnotation(task.summary.id, id, actor, false, { revision, outcome: "deferred", reason }); },
       cloneReference: async url => {
@@ -16952,7 +16956,7 @@ export class TaskService {
       // MR 一创建就落盘并监听，不能等流水线请求成功，更不能等到绿灯。
       task.summary.delivery = { ...task.summary.delivery,
         mr_url: mr.url, mr_id: mr.id, source_branch: branch,
-        target_branch: baseline, git_push: pushReceipt, sha };
+        target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
       this.ensureMergeWatch(task);
       const runKey = `pipeline:${sha}`;
@@ -16969,6 +16973,9 @@ export class TaskService {
       if (!["success", "failed", "running"].includes(String(run.status))) {
         throw new Error(`流水线返回未知状态: ${String(run.status ?? "(empty)")}`);
       }
+      confirmedPipelineRun(sha, { status: run.status as PipelineRun["status"],
+        ...(typeof run.sha === "string" ? { sha: run.sha } : {}),
+        ...(typeof run.is_valid === "boolean" ? { is_valid: run.is_valid } : {}) });
       const checks = parsePipelineChecks(run.checks);
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
@@ -16994,15 +17001,11 @@ export class TaskService {
         ...(checks !== undefined ? { checks } : {}),
         sha,
       };
-      task.summary.status = "verifying";
-      // 终态当场裁决;running 不是结局,由带预算的轮询收敛后再裁。
-      if (run.status === "running") {
-        this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
-      } else {
-        await this.pipelineVerdict(task, sha,
-          run.status === "success" ? "success" : "failed",
-          String(run.log ?? ""), checks, epoch);
-      }
+      await this.acceptPipelineRun(task, sha, { status: run.status as PipelineRun["status"],
+        log: String(run.log ?? ""), checks,
+        ...(typeof run.sha === "string" ? { sha: run.sha } : {}),
+        ...(typeof run.is_valid === "boolean" ? { is_valid: run.is_valid } : {}),
+      }, epoch);
     } catch (error) {
       if (!this.current(task, epoch)) return;
       // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
@@ -17057,6 +17060,27 @@ export class TaskService {
     this.options.log?.(`任务 ${task.summary.id} ${reason}`);
   }
 
+  /** Agent 主动触发与正常交付共用验证接棒，触发成功后不再重开旧修复使命。 */
+  private async acceptPipelineRun(task: TaskState, sha: string, response: PipelineRun, epoch: number): Promise<void> {
+    if (!this.current(task, epoch)) return;
+    const run = confirmedPipelineRun(sha, response);
+    if (task.summary.delivery?.git_push?.sha !== sha) throw new TaskControlError("流水线提交与当前已推送提交不一致");
+    task.summary.delivery = { ...task.summary.delivery, sha, pipeline: run.status,
+      checks: run.checks, stalled: undefined, waiting_on: undefined, evidence_gap: undefined };
+    const loop = task.summary.delivery.loop;
+    if (loop?.kind === "ci") {
+      loop.state = "verifying";
+      // last_sha/failure 保留本轮的原始失败快照，不伪造已修好或已通过。
+      task.mission = undefined;
+    }
+    task.summary.status = "verifying";
+    task.summary.detail = `正在验证提交 ${sha.slice(0, 8)}，旧提交的告警保留为历史记录`;
+    this.persist(task);
+    this.ensureMergeWatch(task);
+    if (run.status === "running") this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
+    else await this.pipelineVerdict(task, sha, run.status, run.log ?? "", run.checks, epoch);
+  }
+
   /** 修复会话 → 修复结果验证的唯一状态交接。
    *
    * mission 仍在表示专职修复 Agent 尚未完成，绝不能提前切；没有 mission
@@ -17082,8 +17106,9 @@ export class TaskService {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
     if (!this.effectivePlatformUrl() || !sha) return;
-    if (task.pipelinePollSha === sha) return;
+    if (task.pipelinePollSha === sha && task.pipelinePollEpoch === epoch) return;
     task.pipelinePollSha = sha;
+    task.pipelinePollEpoch = epoch;
     try {
     if (task.summary.delivery?.pipeline?.startsWith("running(")) {
       // 旧版本可能留下“预算耗尽”的求助台词；现在监听跟任务同寿命，
@@ -17166,7 +17191,10 @@ export class TaskService {
       return;
     }
     } finally {
-      if (task.pipelinePollSha === sha) task.pipelinePollSha = undefined;
+      if (task.pipelinePollSha === sha && task.pipelinePollEpoch === epoch) {
+        task.pipelinePollSha = undefined;
+        task.pipelinePollEpoch = undefined;
+      }
     }
   }
 
@@ -18285,7 +18313,8 @@ export class TaskService {
       ? state.delivery_loop.batches.find((item: any) => item?.batch_id === batchId)
       : undefined;
     const deferred = taskDeferredFeedback(this.taskHostRuntime(task));
-    const items = (Array.isArray(batch?.items) ? batch.items : []).filter((item: any) => !deferred[item.id]);
+    const items = (Array.isArray(batch?.items) ? batch.items : []).filter((item: any) => !deferred[item.id]
+      && !historicalPipelineFeedback(task.summary, item));
     if (!batchId || batch?.result_digest || !items.length
         || items.every((item: any) => ["workspace", "mr_discussion"]
           .includes(String(item?.source ?? "")))) return undefined;
@@ -18353,6 +18382,10 @@ export class TaskService {
     const batch = Array.isArray(loop?.batches)
       ? loop.batches.find((item: any) => item?.batch_id === batchId) : undefined;
     if (!batchId || !batch) return undefined;
+    // 新 SHA 已交给流水线，旧批次可保留未填回执的历史事实；不能在
+    // 人的新插话/会话恢复收口时，再把旧批次派成一次补交或修复任务。
+    if (batch.items?.length && batch.items.every((item: any) =>
+      historicalPipelineFeedback(task.summary, item))) return undefined;
     const host = this.options.host;
     // 内核暂时不可用 ≠ 收据缺失:前者返回以 KERNEL_UNAVAILABLE 开头的
     // 原因,调用方据此挂起自愈、不叫 Agent 补回执也不停摆。

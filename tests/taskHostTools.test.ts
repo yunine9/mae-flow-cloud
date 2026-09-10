@@ -45,6 +45,10 @@ function scene(t: any) {
     },
     verify: async () => { verificationRuns++; return { status: "passed" }; },
     watch() {}, syncFeedback() {},
+    acceptPipeline: async (sha, run) => {
+      host.summary.delivery = { ...host.summary.delivery, sha, pipeline: run.status };
+      host.summary.status = "verifying";
+    },
   };
   return { host, service, git, remote, facts, cancel: () => { active = false; },
     resumed: () => resumed, verificationRuns: () => verificationRuns };
@@ -251,7 +255,8 @@ test("流水线触发排队并绑定推送 SHA，执行中断恢复只查状态�
   assert.equal(p.requests.length, 0);
   await finishTaskHostOperation(s.host);
   assert.equal(p.requests[0].body.sha, "new-sha");
-  assert.equal(s.host.summary.delivery.sha, "old");
+  assert.equal(s.host.summary.delivery.sha, "new-sha");
+  assert.equal(s.resumed(), 0, "触发后由验证接棒，不能重开旧使命");
   const op = await queueTaskHostOperation(s.host, "recover", { action: "trigger_pipeline", reason: "核对中断的触发" });
   new TaskHostLedger(s.host.summary).update({ ...op, state: "running", trigger_started: true });
   await finishTaskHostOperation(s.host);
@@ -441,4 +446,46 @@ test("恢复交付文件不能伪造用户授权，内核失败不先放宽 Clou
   await finishTaskHostOperation(s.host);
   assert.deepEqual(s.host.summary.delivery_selection!.excluded_paths, ["test-a.ts", "test-b.ts", "keep-excluded.txt"]);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "failed");
+});
+
+test("触发新流水线后移交验证，不再恢复旧修复会话；登记中断可按收据恢复", async t => {
+  const s = scene(t), p = await platform(t);
+  s.host.platformUrl = p.url;
+  s.host.summary.delivery = { sha: "old", pipeline: "failed", git_push: { sha: "new-sha", ref: "refs/heads/work", remote: "origin" } };
+  let attempts = 0;
+  s.host.fail = () => {};
+  s.host.acceptPipeline = async (sha, run) => {
+    attempts++;
+    assert.equal(sha, "new-sha"); assert.equal(run.status, "running");
+    if (attempts === 1) throw new Error("模拟登记中断");
+    s.host.summary.status = "verifying";
+    s.host.summary.delivery = { ...s.host.summary.delivery, sha, pipeline: run.status };
+  };
+  await queueTaskHostOperation(s.host, "trigger-new", { action: "trigger_pipeline", reason: "验证修复" });
+  await finishTaskHostOperation(s.host);
+  assert.equal(s.resumed(), 0);
+  assert.equal(new TaskHostLedger(s.host.summary).pending()?.pipeline_receipt?.sha, "new-sha");
+  await finishTaskHostOperation(s.host);
+  assert.equal(s.resumed(), 0);
+  assert.equal(s.host.summary.delivery.sha, "new-sha");
+  assert.equal(p.requests.length, 1, "登记恢复不重复触发远端流水线");
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "succeeded");
+});
+
+test("升级前成功触发但仍 repairing 的任务，恢复只查询新 SHA 并退出旧使命", async t => {
+  const s = scene(t), p = await platform(t);
+  s.host.platformUrl = p.url;
+  s.host.summary.delivery = { sha: "old", pipeline: "failed", loop: { kind: "ci", round: 1, state: "repairing", last_sha: "old", failure: "旧告警" }, git_push: { sha: "new-sha", ref: "refs/heads/work", remote: "origin" } };
+  const op = await queueTaskHostOperation(s.host, "old-trigger", { action: "trigger_pipeline", reason: "旧版本触发" });
+  new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", trigger_started: true });
+  s.host.acceptPipeline = async (sha, run) => {
+    s.host.summary.delivery!.sha = sha;
+    s.host.summary.delivery!.pipeline = run.status;
+    s.host.summary.delivery!.loop!.state = "verifying";
+  };
+  assert.equal(await finishTaskHostOperation(s.host), true);
+  assert.equal(p.requests.length, 1); assert.match(p.requests[0].url, /status\?sha=new-sha/);
+  assert.equal(s.resumed(), 0);
+  assert.equal(await finishTaskHostOperation(s.host), false);
+  assert.equal(s.host.summary.delivery.loop!.failure, "旧告警");
 });
