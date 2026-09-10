@@ -134,3 +134,17 @@ test("需求侧旧返工草稿仍需责任人处置，兼容读取不改写旧�
   migrated.resolveAsOwner(item.id, "owner", { revision: 1, outcome: "not_adopted", reason: "核对原意见后不再调整" });
   assert.equal(migrated.list()[0].status, "verified");
 });
+
+
+test("责任人直接确认当前 fixed 回执，无需重复填写理由，重读后保持闭环", () => {
+  const { path, store, item } = fixture();
+  store.respond(item.id, { outcome: "fixed", summary: "已补超时处理", evidence: ["requirement.md:1"] });
+  const decision = { revision: 0, outcome: "fixed" as const, reason: "" };
+  store.resolveAsOwner(item.id, "owner", decision);
+  store.resolveAsOwner(item.id, "owner", decision);
+  const saved = new AnnotationStore(path).list()[0];
+  assert.equal(saved.status, "verified");
+  assert.equal(saved.resolution?.by, "owner");
+  assert.equal(saved.response?.summary, "已补超时处理");
+  assert.equal(blockingAnnotations([saved], "owner").length, 0);
+});

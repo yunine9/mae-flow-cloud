@@ -18,6 +18,8 @@ import { OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Button } from "./components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { resolvedAnnotationRange } from "./annotateTargets";
 import {
   dropAnnotation,
@@ -96,24 +98,53 @@ export function displayPersonName(
     ?.display_name?.trim() || username;
 }
 
-/** 逐条处置使用该意见当前版本，结果与 Agent 回执分别展示。 */
+/** 常用确认直接可见；其他处理按需展开，不能让权限投影自动弹出表单。 */
 function OwnerResolution({ item, canVerify, busy, onResolve, onReopen }: {
   item: Annotation; canVerify: boolean; busy: boolean;
   onResolve(outcome: string, reason: string): void; onReopen(): void;
 }) {
-  const [outcome, setOutcome] = useState(canVerify ? "fixed" : "");
+  const [expanded, setExpanded] = useState(false);
+  const [outcome, setOutcome] = useState("");
   const [reason, setReason] = useState("");
-  return <div className="annot-owner-reply-editor">
-    <label>处置这条意见 <select aria-label="这条意见的处置结果" value={outcome} onChange={(event) => setOutcome(event.target.value)}>
-      <option value="">选择处置结果</option><option value="fixed">已修复 / 已解答</option>
-      <option value="not_adopted">不采纳</option><option value="deferred">延期处理</option>
-      <option value="accepted_risk">接受未解决风险继续</option>
-    </select></label>
-    <textarea aria-label="这条意见的处理依据" value={reason} rows={2} onChange={(event) => setReason(event.target.value)}
-      placeholder={outcome === "fixed" && canVerify ? "已有当前回执，可直接核对确认；也可补充依据" : "说明处理依据；延期时写清后续安排，接受风险时写清影响"} />
-    <div><button type="button" className="ghost" disabled={busy || item.status !== "sent"} onClick={onReopen}>仍需调整</button>
-      <button type="button" className="primary" disabled={busy || !outcome || (!(outcome === "fixed" && canVerify) && !reason.trim())}
-        onClick={() => onResolve(outcome, reason.trim())}>确认这条处置</button></div>
+  const close = () => { setExpanded(false); setOutcome(""); setReason(""); };
+  return <div className="annot-resolution" onKeyDown={(event) => {
+    if (event.key === "Escape" && expanded) { event.stopPropagation(); close(); }
+  }}>
+    <div className="annot-resolution-actions">
+      <Button type="button" size="sm" disabled={busy} onClick={() => {
+        if (canVerify) onResolve("fixed", "");
+        else { setOutcome("fixed"); setExpanded(true); }
+      }}>确认通过</Button>
+      {item.status === "sent" && <Button type="button" size="sm" variant="outline" disabled={busy}
+        onClick={onReopen}>仍需调整</Button>}
+      <Button type="button" size="sm" variant="outline" disabled={busy} aria-expanded={expanded}
+        onClick={() => { if (expanded) close(); else { setOutcome(""); setExpanded(true); } }}>
+        {expanded ? "收起其他处理" : "其他处理"}
+      </Button>
+    </div>
+    {expanded && <div className="annot-owner-reply-editor">
+      <span>处理方式</span>
+      <Select value={outcome} onValueChange={setOutcome} disabled={busy}>
+        <SelectTrigger className="w-full bg-background" aria-label="这条意见的处置结果">
+          <SelectValue placeholder="选择处理方式" />
+        </SelectTrigger>
+        <SelectContent position="popper" align="start" style={{ zIndex: 400 }}
+          onEscapeKeyDown={(event) => event.stopPropagation()}>
+          <SelectItem value="fixed">确认已修复 / 已解答</SelectItem>
+          <SelectItem value="not_adopted">不采纳</SelectItem>
+          <SelectItem value="deferred">延期处理</SelectItem>
+          <SelectItem value="accepted_risk">接受未解决风险继续</SelectItem>
+        </SelectContent>
+      </Select>
+      {outcome === "fixed" && !canVerify && <small>当前没有可直接确认的处理回执。如果你已核对最新内容，请说明确认依据。</small>}
+      <textarea aria-label="这条意见的处理依据" value={reason} rows={2} onChange={(event) => setReason(event.target.value)}
+        placeholder="说明处理依据；延期时写清后续安排，接受风险时写清影响" />
+      <div>
+        <Button type="button" size="sm" variant="outline" onClick={close}>取消</Button>
+        <Button type="button" size="sm" disabled={busy || !outcome || (!(outcome === "fixed" && canVerify) && !reason.trim())}
+          onClick={() => onResolve(outcome, reason.trim())}>{busy ? "保存中…" : "保存处理结果"}</Button>
+      </div>
+    </div>}
   </div>;
 }
 

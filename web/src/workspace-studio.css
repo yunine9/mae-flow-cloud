@@ -125,7 +125,7 @@
 .workspace-studio .is-embedded .delivery-selection-bar { padding: 10px 18px; font-size: var(--fs-12); }
 .workspace-studio .is-embedded .delivery-selection-bar > div { flex-wrap: wrap; }
 .workspace-studio .workspace-inline-review { z-index: 280; max-height: min(620px,75vh); overflow: auto; border: 1px solid var(--studio-accent); background: var(--surface); padding: 14px; box-shadow: var(--shadow-lg); }
-.workspace-studio .workspace-inline-review-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.workspace-studio .workspace-inline-review-head { position: sticky; top: -14px; z-index: 1; background: var(--surface); padding: 8px 0; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .workspace-studio .workspace-inline-review-head strong { flex: 1; font-size: var(--fs-13); }
 .workspace-studio .workspace-inline-review-head button { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--surface); font: inherit; font-size: var(--fs-12); cursor: pointer; }
 .workspace-studio .annotation-delivery-receipt { color: var(--muted); font-size: var(--fs-12); line-height: 1.6; }

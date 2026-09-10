@@ -160,7 +160,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.match(annotate, /annot-progress[^{]*\{[^}]*border-radius: 999px/);
   assert.match(annotate, /\.annot-speaker > i \{[^}]*border-radius: 50%/);
   assert.match(annotate, /\.annot-item \.annot-response \{ border-left-color: var\(--success\)/);
-  assert.match(annotate, /\.annot-item \.annot-response\.needs_clarification \{ border-left-color: var\(--danger\)/);
+  assert.match(annotate, /\.annot-item \.annot-response\.outcome-needs_clarification \{ border-left-color: var\(--danger\)/);
   const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
   assert.doesNotMatch(studio, /\.annot-item-head \{[^}]*flex-direction: column/);
 });

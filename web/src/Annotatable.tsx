@@ -367,6 +367,7 @@ export function Annotatable({
       {thread && renderInlineReview && !draft && (
         <section className="workspace-inline-review annot-editor"
           aria-label="当前位置的反馈与回应"
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setThread(undefined); } }}
           style={editorPosition(thread.host, host.current)}
           onClick={(event) => event.stopPropagation()}>
           <header className="workspace-inline-review-head">
