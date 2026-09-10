@@ -1136,6 +1136,22 @@ export function App() {
     environments: { title: "环境管理", description: "团队共用的网管环境台账：录入一次，登记与会话随时快选；密码加密保存、永不回显。" },
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
+  // 问题处理域页头随子页签换文案(spec #171 评审拍板):整域的静态说明
+  // 对子页签没有信息量,每个子页签讲自己真正有用的一句。
+  const issueChildHeaders: Record<IssueChildTab, { title: string; description: string }> = {
+    register: { title: "问题登记",
+      description: "手工登记一个问题:说清现象、选业务模块;要处理 DTS 单,去「DTS 列表」勾选发起。" },
+    dts: { title: "DTS 列表",
+      description: "拉取名下处于可实施状态的问题单;勾选多张可批量发起,每单一个独立工作流。" },
+    sessions: { title: "问题会话", description: session.role === "admin"
+      ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
+      : "你的问题会话进展一览;点开进入工作台,分析报告检视与返工都在这里。" },
+  };
+  const viewHeader = view === "issues"
+    ? issueChildHeaders[activeIssueChild]
+    : header;
+  // DTS 列表子页签全宽:标题条与内容区一起放开书页宽,左边缘对齐。
+  const dtsWide = view === "issues" && activeIssueChild === "dts";
   const relevantWaiting = view === "mine"
     ? personalActionItems.length
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
@@ -1269,10 +1285,9 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
-      {/* DTS 列表子页签全宽:表格横向信息密,整页即表格,不收书页宽
-          (spec #171 评审后追加);其余子页签维持 1200px 书页宽。 */}
-      <main className={`workspace-main${view === "issues" && activeIssueChild === "dts" ? " is-wide" : ""}`}>
+      <header className={`workspace-header${dtsWide ? " is-wide" : ""}`}><div><h1>{viewHeader.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p></div><div className="workspace-header-actions">{(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
+      <main className={`workspace-main${dtsWide ? " is-wide" : ""}`}>
         {view === "team" && <section className="team-tasks-workspace">
           {/* 【原型 · 用后即弃】领域切换(标题位下拉;迭代中,定稿后折进正式实现) */}
           <TeamDomainSwitchPrototype tasks={tasks} issues={teamIssues}

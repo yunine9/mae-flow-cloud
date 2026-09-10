@@ -122,14 +122,26 @@ test("子页签选择持久化:localStorage 与历史快照双轨,前进/后退�
     "选择要同步进 ref(selectView 快照不落后)");
 });
 
-test("DTS 列表子页签全宽:页面平铺屏幕,其余子页签维持书页宽", () => {
-  // 表格横向信息密(spec #171 评审后追加):DTS 子页签下主区放开
-  // max-width,其余子页签(登记/问题会话)不放宽。
-  assert.match(app,
-    /workspace-main\$\{view === "issues" && activeIssueChild === "dts" \? " is-wide" : ""\}/,
-    "主区宽度应随 DTS 子页签切换");
-  assert.match(legacyCss, /\.workspace-main\.is-wide \{ max-width: none; \}/,
+test("DTS 列表子页签全宽:页面平铺屏幕,标题条同步对齐,其余子页签维持书页宽", () => {
+  // 表格横向信息密(spec #171 评审后追加):DTS 子页签下主区与标题条
+  // 一起放开 max-width——标题条不随内容全宽就会悬在书页宽上错位。
+  assert.match(app, /const dtsWide = view === "issues" && activeIssueChild === "dts";/,
+    "全宽判据只认 DTS 子页签");
+  assert.match(app, /workspace-header\$\{dtsWide \? " is-wide" : ""\}/,
+    "标题条随全宽切换(左边缘与内容对齐)");
+  assert.match(app, /workspace-main\$\{dtsWide \? " is-wide" : ""\}/,
+    "主区随 DTS 子页签切换");
+  assert.match(legacyCss, /\.workspace-header\.is-wide, \.workspace-main\.is-wide \{ max-width: none; \}/,
     "css 层要有全宽规则(旧轨道层叠优先级高于工具类层)");
+  // 页头随子页签换文案:整域静态说明对子页签无信息量。
+  assert.match(app, /issueChildHeaders/,
+    "问题处理域页头文案按子页签取");
+  // 任务同步指示器是需求域的:问题处理页头不显示(张冠李戴)。
+  assert.doesNotMatch(app,
+    /view !== "wishes" && view !== "help" && <TaskSyncIndicator/,
+    "旧的全视图条件应退役");
+  assert.match(app, /\(view === "mine" \|\| view === "team"\) && <TaskSyncIndicator/,
+    "任务同步指示器只在需求域视图显示");
 });
 
 test("子页签区零硬编码色值:色彩一律走令牌桥(theme inline 映射存量变量)", () => {
