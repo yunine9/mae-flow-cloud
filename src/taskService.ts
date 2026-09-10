@@ -1696,6 +1696,8 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  /** 交付检查和后台监听可能同时看到合入，只允许一次停止 writer / close。 */
+  mergeSettlement?: Promise<void>;
   /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
   pipelinePollSha?: string;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
@@ -8950,12 +8952,6 @@ export class TaskService {
           this.bypass(task, "验证恢复对账",
             this.tryDeliver(task, task.controlEpoch));
         }
-        // 合入监控同理续:重启前在等合入/等审批的接着盯(平台不支持
-        // 门禁契约的,watchMerge 一轮就退,行为与旧版完全一致)。
-        if (summary.status === "await_merge") {
-          this.bypass(task, "合入监控",
-            this.watchMerge(task, task.controlEpoch));
-        }
         // 旧版本可能把一个已经 resolved 的 WaitingRecord 再次写成
         // waiting_for_human(重建会话重放同 call_id 时发生)。这是矛盾
         // 状态:人已经答过,页面却还在催人。恢复时以 waiting.json 的
@@ -9020,6 +9016,8 @@ export class TaskService {
         this.options.log?.(`任务编号水位落盘失败: ${String(error)}`);
       }
     }
+    // 独立于恢复分支；修复排队、prepush 恢复的 continue 也不能漏掉 MR。
+    for (const task of this.tasks.values()) this.ensureMergeWatch(task);
     if (requeued) this.bypass(undefined, "任务泵", this.pump());
     return { restored, requeued };
   }
@@ -9516,7 +9514,7 @@ export class TaskService {
     }
     if (task.driver || task.container || task.containerReopen
         || task.prepushActive || task.assistantActive
-        || task.mergeWatchActive || task.evidenceRetryActive
+        || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
         || task.deliveryRecoveryActive || task.reviewOutboxFlush) {
       throw new TaskControlError(
@@ -9649,7 +9647,7 @@ export class TaskService {
     }
     if (task && (task.driver || task.container || task.containerReopen
         || task.prepushActive || task.assistantActive
-        || task.mergeWatchActive || task.evidenceRetryActive
+        || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
         || task.deliveryRecoveryActive || task.reviewOutboxFlush)) {
       throw new TaskControlError(
@@ -16806,6 +16804,12 @@ export class TaskService {
                // "先查远端真实状态"的底账,裁字段等于自断证据。
                result: mr.raw,
                finishedAt: new Date().toISOString() });
+      // MR 一创建就落盘并监听，不能等流水线请求成功，更不能等到绿灯。
+      task.summary.delivery = { ...task.summary.delivery,
+        mr_url: mr.url, mr_id: mr.id, source_branch: branch,
+        target_branch: baseline, git_push: pushReceipt, sha };
+      this.persist(task);
+      this.ensureMergeWatch(task);
       const runKey = `pipeline:${sha}`;
       const runStarted = new Date().toISOString();
       const runRequest = { sha, repo: mrRequest.repo };
@@ -17121,10 +17125,7 @@ export class TaskService {
       task.summary.status = "await_merge";
       task.summary.detail = "编译、UT 运行与 CodeCheck 均已由权威流水线核销";
       this.persist(task);
-      // 流水线绿≠赢了:九项门禁全过 + 合入才是终点(内网既有框架的
-      // 实证)。支持门禁契约的平台接着盯;不支持的(fetchGates 回
-      // undefined)保持旧语义——await_merge 即收口,一字不变。
-      this.bypass(task, "合入监控", this.watchMerge(task, epoch));
+      this.ensureMergeWatch(task);
       return;
     }
     // 红灯也过证据口：先留绑定 SHA 的逐项物证，再进同一轻量修复环。
@@ -17687,8 +17688,10 @@ export class TaskService {
       // 复用合入事实收口，不能伪造一次 pipeline success；SHA 与内核
       // close 的原有核对仍保留，异常时停下也绝不另建 MR。
       await this.settleMergeState(task, view.mrState, view.sourceSha);
+      this.ensureMergeWatch(task);
       return false;
     }
+    this.ensureMergeWatch(task);
     return true;
   }
 
@@ -17709,6 +17712,19 @@ export class TaskService {
     state: "merged" | "closed",
     observedSourceSha?: string,
   ): Promise<void> {
+    if (task.mergeSettlement) return task.mergeSettlement;
+    if (["completed", "canceled"].includes(task.summary.status)) return;
+    const settlement = this.applyMergeState(task, state, observedSourceSha);
+    task.mergeSettlement = settlement;
+    try { await settlement; }
+    finally { if (task.mergeSettlement === settlement) task.mergeSettlement = undefined; }
+  }
+
+  private async applyMergeState(
+    task: TaskState,
+    state: "merged" | "closed",
+    observedSourceSha?: string,
+  ): Promise<void> {
     const delivery = task.summary.delivery!;
     if (state === "merged") {
       const observed = observedSourceSha?.trim();
@@ -17716,6 +17732,8 @@ export class TaskService {
       delivery.merged_sha = observed;
       delivery.stalled = undefined;
       delivery.stall_class = undefined;
+      task.summary.status = "verifying";
+      task.summary.detail = "MR 已合入，正在停止本地修复并登记完成";
       this.persist(task);
       // 合入是最终抢占事件：先让任何在途 writer 失去写状态权并停止，
       // 再由可信宿主 close。工作区若仍有未推送变化，内核 close 会把
@@ -17740,13 +17758,13 @@ export class TaskService {
       }
       if (task.prepushActive === activePrepush) task.prepushActive = undefined;
       if (task.prepushAbort === abort) task.prepushAbort = undefined;
+      if (this.shuttingDown || ["canceled"].includes(task.summary.status)) return;
       const failures = stopFailures(cleanup);
       if (failures.length) {
         this.markVerificationStalled(task,
           `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
         return;
       }
-      if (task.summary.status === "canceled") return;
       if (this.continuousReviewTask(task)) {
         if (!observed) {
           this.markVerificationStalled(task,
@@ -17821,11 +17839,16 @@ export class TaskService {
     if (changed) this.persist(task);
   }
 
-  /** 合入监控环:流水线绿之后接着盯门禁与 MR 状态,直到合入、用户取消
-   * 或出现可修失败。内网既有框架的"挂起等待"语义在这里:
-   * 等审批/投票不是异常,保持监控、告诉人卡在哪,不空转不扣重试。
-   * 绿灯不是终态：目标分支、检视或平台状态随后变化，都要重新响应。 */
-  private async watchMerge(task: TaskState, _epoch: number): Promise<void> {
+  private ensureMergeWatch(task: TaskState): void {
+    if (this.shuttingDown || !this.effectivePlatformUrl()
+        || (process.env.MAE_FLOW_UI_FIXTURE_MODE === "1" && task.summary.ui_fixture === true)
+        || ["completed", "canceled"].includes(task.summary.status)
+        || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+    this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
+  }
+
+  /** MR 生命周期监听：修复中也看合入事实，只有 await_merge 才按门禁派单。 */
+  private async watchMerge(task: TaskState, _epoch: number, deferFirst = false): Promise<void> {
     if (task.mergeWatchActive) return; // 防重入:一任务一环
     task.mergeWatchActive = true;
     try {
@@ -17833,16 +17856,22 @@ export class TaskService {
       const interval = (knobs.poll_interval_s !== undefined
         ? knobs.poll_interval_s * 1000 : undefined)
         ?? this.options.delivery?.pollIntervalMs ?? 10_000;
+      // 交付入口已经查过一次；后台下一拍接棒，避免立即重复请求。
+      if (deferFirst) await new Promise((tick) => setTimeout(tick, interval).unref());
       watch: while (true) {
         // 合入监听属于任务生命周期，不属于某一轮 writer 的 controlEpoch。
         // 人工反馈抢占 Build-Fix 会换 epoch，但 MR 仍可能在这段时间被合入；
         // 监听若随旧 epoch 退出，就再也没人停止在途 Agent 或执行 close。
         if (this.shuttingDown
+            || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)
-            || !task.summary.delivery?.mr_url) return;
-        const view = await this.fetchGates(task);
+            || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+        const mrKey = JSON.stringify([task.summary.delivery.mr_url, task.summary.delivery.mr_id]);
+        const view = await this.fetchGates(task, true);
         if (this.shuttingDown
+            || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)) return;
+        if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (!view) {
           // 平台暂不可得也不能永久丢掉监听；等待下一拍。timer unref，
           // 服务退出时不会被后台监控吊住，重启恢复会重新挂环。
