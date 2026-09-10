@@ -3088,6 +3088,22 @@ export function tailWarmupEvents(
   return () => source.close();
 }
 
+/** 问题侧环境预热的实时事件流(⑤):与需求侧同一 SSE 语义,预热会话
+ *  的事件落 <会话根>/warmup/events.jsonl,服务端尾随吐出。 */
+export function tailIssueWarmupEvents(
+  issueId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(
+    `/issues/${encodeURIComponent(issueId)}/warmup/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 export function tailBuildFixEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
@@ -3710,18 +3726,15 @@ export interface IssueSummary {
   /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
   baseline?: string;
   /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
-   * page_account/page_credential_ref 只在登记配了页面凭据时在场——env_needed
-   * 闸现场补配的环境没有页面凭据,两键一并缺席。root_credential_ref 只在
-   * 独立 root 密码显式存在时在场(ADR-0020:继承后台密码的会话不落独立
-   * 凭据)。environment_source_ip 在场=本环境来自环境管理台账的选定时点
-   * 快照(#150,非密来源展示用);手填环境没有这个字段。 */
+   * root_credential_ref 只在独立 root 密码显式存在时在场(ADR-0020:继承
+   * 后台密码的会话不落独立凭据)。environment_source_ip 在场=本环境来自
+   * 环境管理台账的选定时点快照(#150,非密来源展示用);手填环境没有
+   * 这个字段。 */
   environment?: {
     credential_ref: string;
     name: string;
     hosts: string[];
     port: number;
-    page_account?: string;
-    page_credential_ref?: string;
     root_credential_ref?: string;
     /** 快照来源(#150):选定时点的台账主 IP(非密),展示「来自环境管理」用。 */
     environment_source_ip?: string;
@@ -3800,6 +3813,14 @@ export interface IssueSummary {
   pushes?: Array<{ repo: string; branch: string; sha: string; at: string }>;
   /** MR 账(按仓,一仓一 MR;merged_*=合入事实,ADR-0022)。 */
   mrs?: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
+  /** 环境预热收据(对齐清单⑤):running 时工作台直播编译,结束折叠。 */
+  warmup?: {
+    status: "running" | "passed" | "infrastructure_failure" | "skipped";
+    started_at: string;
+    finished_at?: string;
+    detail?: string;
+    build_command?: string;
+  };
   /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
   transitions?: Array<{
     at: string; source: "agent" | "platform"; stage?: FixedIssueStage; note: string;
@@ -3935,23 +3956,19 @@ export function getIssue(id: string): Promise<IssueDetail> {
 }
 
 /** 登记侧网管环境(wire 形,与服务端 service.ts 的 normalizeEnvironmentInput
- * 同一把尺):两个密码只进服务端 vault,任何接口不回显。无单登记服务端
+ * 同一把尺):密码只进服务端 vault,任何接口不回显。无单登记服务端
  * 强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。
  * 快照语义(#150,ADR-0020):从环境管理选中提交只带 environment_id——
- * 服务端从台账解密快照进会话 vault(前端永远没有密码);页面账号/密码
- * 不入台账,仍手填随行。手填路保持原契约(与 environment_id 互斥)。 */
+ * 服务端从台账解密快照进会话 vault(前端永远没有密码)。
+ * 页面凭据已整体废弃(2026-09-10:流程不登录网管页面)。 */
 export interface IssueRegistrationEnvironmentSnapshot {
   environment_id: string;
-  page_account?: string;
-  page_password: string;
 }
 
 export interface IssueRegistrationEnvironmentManual {
   hosts: string[];
   /** 环境形态(虚拟化/容器化 K8s),决定日志抓取引擎。 */
   env_type: "virtualized" | "k8s";
-  page_account?: string;
-  page_password: string;
   backend_password: string;
 }
 

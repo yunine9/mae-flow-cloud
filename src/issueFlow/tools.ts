@@ -87,9 +87,6 @@ export interface IssueToolContext {
   platformUrl?: string;
   /** 宿主侧解密后的环境密码;未配置环境时为 undefined。 */
   environmentPassword?(): string | undefined;
-  /** 宿主侧解密后的网管页面密码(登记元信息用,ADR-0003 允许进
-   * 上下文);环境未配页面凭据(如 env_needed 闸补配)时为 undefined。 */
-  pagePassword?(): string | undefined;
   /** 宿主侧解密后的独立 root 密码(#150):只在显式凭据组在场时有值;
    * 继承后台密码的会话为 undefined(root 与后台密码相同,不重复出)。 */
   rootPassword?(): string | undefined;
@@ -574,9 +571,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Get Issue Meta",
     description:
       "获取本会话的登记元信息——手工登记时**人填的输入**全量:标题、现象"
-      + "描述、业务模块、带出的代码仓、网管环境(地址/页面账号/页面密码/"
-      + "网管后台密码/独立 root 密码(仅显式设置时),现场公开默认值,明文"
-      + "返回)。只读且不改任何状态;"
+      + "描述、业务模块、带出的代码仓、网管环境(地址/网管后台密码/独立 "
+      + "root 密码(仅显式设置时),现场公开默认值,明文返回)。只读且不改"
+      + "任何状态;"
       + "任意阶段都可调用,长会话里随时重查,不必翻找历史上下文。与 "
       + "dts_get_ticket 的分工:登记元信息是人填的输入,查它用本工具;"
       + "按单号拉 DTS 单据详情(平台拉的)用 dts_get_ticket,两者不可混用。",
@@ -584,7 +581,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     async execute() {
       const meta = issueRegistrationMeta(state, {
         backend: ctx.environmentPassword?.(),
-        page: ctx.pagePassword?.(),
         root: ctx.rootPassword?.(),
       });
       return ok(JSON.stringify(meta, null, 2));

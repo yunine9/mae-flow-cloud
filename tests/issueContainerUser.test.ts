@@ -122,7 +122,6 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
       moduleId: "smoke-mod",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });

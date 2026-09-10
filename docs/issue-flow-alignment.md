@@ -43,8 +43,20 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 验收句照抄:"同一意见重复出现不新增处理轮次""回执发布失败不阻止
 读取平台事实"。
 
-- [ ] 拍板(grill)
-- [ ] 实施
+- [x] 拍板(grill,2026-09-10):①recover() 续挂检视监看 + 待注入标志
+  落盘化(重启不丢);②版本对不上的回复条目直接标失败("代码已更新,
+  请重写回复"),失败不挡新草稿自愈;③记账分家——回复投递成功→意见
+  转"已回复,待检视人核验"(addressed);讨论消失时按投递记录归因
+  (AI resolve=true →"Agent 回复并解决",否则"检视人已解决");
+  平台自身的 MR 合入规则不归我们管;④同讨论编号、版本号变了且未了结
+  = 新追问,重新通知;⑤AI 一次通知后不自动再催(与需求侧"不重复续跑"
+  对齐,人是驱动源);⑥投递队列文件读不动记错误日志,行为照旧。
+- [x] 实施(2026-09-10):recover 续挂检视监看+标志落盘(mr-review-notify.
+  json);漂移即 failed+重挂注入自愈;投递成功→addressed、消失归因分家
+  (投递账查 resolve=true);追问=版本号变化重触发(batch_id 带版本,
+  upsert 刷新);staging 加"回合中不装箱"守卫(绑稳定 SHA);信箱损坏
+  记日志+新草稿自愈重写。测试:issueReviewLoopHardening 5 场景 +
+  issueMrDiscussions 漂移块改语义,回归 32/32+6/6+3/3 全绿。
 
 ## ③ ADR-0020 验收标准当问题侧体检表(源:cf4e063)
 
@@ -56,22 +68,100 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 - "排队期间重启、回执已落盘但投影未更新、决定已执行但响应丢失,都能
   续接且不重复执行"——LiveIssue 重启重建路径。
 
-附带:61a1a6f "reduced kernel authority" 解释了 2026-09-10 遗留的
-5 个红测试(kernelCommitRedirect 拦截可能是被有意裁掉的内核权限),
-需与廖翔对契约后再定测试归宿。
+附带(2026-09-10 勘定):kernelCommitRedirect 与 mrLoop 四条红测试是
+**需求侧**的债(测的是需求流程的内核宿主守卫与交付环),不属于本
+清单处置范围——待与内核同步(61a1a6f)的行为取舍对齐后另行处理。
 
-- [ ] 拍板(grill)
-- [ ] 实施(或纯自查结论)
+- [x] 拍板(2026-09-10):与④合并一轮体检,小洞顺手修、大洞回 grill;
+  范围锁死 src/issueFlow(需求侧红测试已勘定出清)。
+- [x] 实施(2026-09-10,三子 Agent 深扫+高洞亲验):
+
+**判定通过(证据在代码,不复述)**:重启续跑副作用幂等(容器/克隆/
+推送/建 MR 先查后建);waiting_user 卡与 state_version 跨重启连续;
+闸通知不重复轰炸;warmup fail-open;两类 deadline(证据重试窗/流水线
+预算)重启后正确结算;vault 取回与三路终态清理;takeover 落盘可续;
+saveState 原子写+serve 实例锁防双进程;决定卡/reply 双击被状态闸+同步
+beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
+(push_confirm 三档才举是 ADR-0009 刻意保留);权限面 18 写路由全 own()
++admin 403。
+
+**本轮修复(带测试,tests/issueTerminalHardening)**:
+- 高(C-H1/C-H2):取消撞监看迭代→settlePipeline 入口/raisePipelineGate/
+  睡眠后复查/预算块全补终态守卫——canceled 不再被覆写成 waiting_user
+  (原可经 answer 复活已取消会话),不再给终态会话写停机 note/发催人通知;
+- C-H3:attachEnvironment 补终态/挂起守卫(防 API 级复活);
+- C-H5:armReviewNotify/flushMrReviewReplies/syncMergeFacts 终态守卫
+  (不投递、不落孤儿标记);
+- C-H6:control 收口清面——平台闸删除、未决 Agent 卡逐条 supersede,
+  终态不再投影死卡;
+- B-H4:两路档位代答通知换独立状态词"已代答"(原共用 running 幂等键,
+  第二次代答通知被吞);
+- C-H9:materials/file 与 log-extract 补 admin 403(与其余写路由同款);
+- C-H7:wire 剥离 module_locked 与 pipelines 五个重试/刹车子字段。
+
+**遗留(按严重度,回 grill 排期)**:
+- A-H1(中)作答内容跨重启丢失:answer 落账后、送达前崩溃,恢复回合
+  不回灌决定文本——涉续聊提示词结构,单独立项;
+- B-H1(中)associate 并发竞态可建两个转正会话:需互斥设计拍板;
+- B-H2(中)追问检测单点押平台递增 revision;body 变 revision 不变时
+  静默丢——updated_at 兜底,需先核实适配层配置是否映射 revision;
+- A-H5(低中)检视回复信箱与 mr_green 阶段绑死:回退/非 mr_green 重启
+  时 pending 停投——投不投是设计决策;
+- A-H2/A-H3(低)全自动档代答不重启恢复、孤儿 Agent 卡(与 A-H1 同片
+  代码,合并处理);
+- C-H8(低)vault.remove 无兜底(两行间崩溃留孤儿密文),recover 无
+  孤儿对账;
+- 低危杂项登记不修:真平台 mr_lookup 未配时建 MR 幂等依赖平台(B-H3,
+  部署配置项)、收口后重建 MR 的误导通知(A-H8)、注入标志删除与开
+  回合间崩溃窗(B-H9)、environment 重复 POST 无害(B-H7)、live Map
+  与终态磁盘无回收(长期卫生)。
 
 ## ④ 恢复健壮性自查(源:4e51c0d/f207475)
 
-按需求侧验收标准自查问题侧重启恢复:核验故障不误报无授权、收据/
-账目中断可恢复、排除项不阻断恢复。
+按需求侧验收标准自查问题侧重启恢复——已并入③同轮体检(③的"判定
+通过/修复/遗留"三节即本项产出;重启续接专项见③判定通过节前六条)。
 
-- [ ] 拍板(grill)
-- [ ] 实施(或纯自查结论)
+- [x] 拍板(并入③)
+- [x] 实施(并入③)
 
-## ⑤ 构建日志直播+分批回放按需取用(源:f0bde69/0c47a1c)
+## ⑤ 预热直播+UT 提示词(源:f0bde69/816e51b)
+
+- [x] 拍板(2026-09-10):(c) 全套直播+回看(用户裁定——两侧编译同样的
+  仓,时长假设无依据;SSE 语义与组件共享,成本低);UT 聚焦一句补
+  briefs.md;遗留六洞全修(决定回灌/associate收尾重查/正文兜底/信箱
+  离场作废/vault启动对账/代答恢复+孤儿卡)。
+- [x] 实施(2026-09-10):SSE 端点 GET /issues/:id/warmup/events(streamIssueJsonl 参数化尾随,文件未建先心跳/建了重放/终态收流);warmup 会话开 streamBashOutput;收据停剥上 wire(api.ts 镜像);前端 tailIssueWarmupEvents + IssueWarmupLive(对话现场页签顶部,running 直播/结束折叠,基线红点名与本单无关);UT 聚焦句已落(84f0e14)。原平移清单(存档):
+  1. routes.ts:注册 GET /issues/:id/warmup/events;streamIssueEvents
+     (:171)路径改 per-tick resolver(文件未建先心跳、建了从头重放),
+     读 session(id).root/warmup/events.jsonl;
+  2. service.ts:warmup CloudSession.create(~:2613)加 streamBashOutput:
+     true(否则直播无命令输出);
+  3. state.ts:summarize 停剥 warmup 收据+web api.ts IssueSummary 补
+     warmup 镜像+契约样例;
+  4. web:tailIssueWarmupEvents(克隆 api.ts:3078);SessionView events
+     页签(:408)内 running 时嵌 PrepushLiveLog(source 注入,域中立,
+     无需改);仿 WarmupPanel 收口折叠。
+  六洞实施进度:H1(决定回灌)已落工作树未提交;H3/H4/H5/H6 的
+  python 补丁因锚点被 b1e9f46 破坏未打入,待恢复后重打;H2(associate
+  收尾重查)未动。
+
+## ⚠️ 事故记录(2026-09-10):b1e9f46 误剔已提交实现(已恢复)
+
+**已恢复**(同日):恢复 Agent 以 43f59ab 为源在 HEAD 重放全部误剔区块+六洞(H1 决定回灌/H2 associate 收尾重查/H3 正文兜底随恢复块带回/H4 信箱离场作废/H5 vault 启动对账+ids()/H6 代答恢复+孤儿卡清扫);四套专项 14/14+契约/鉴权/通知/档位 24/24 全绿。
+
+并行会话提交 b1e9f46("剔除 #155 误卷入的协作者在途改动")时,把本清单
+①②③④已提交(c5b5b07/5f74607/43f59ab)的 service.ts 实现整块回退
+(421 行):合入监看全套(watchMergeStates/syncMergeFacts/mergeStatus/
+notifyMrGreenClosed 点火/recover 续挂)、检视闭环六项(armReviewNotify/
+漂移终态/归因分家/追问/回合不装箱守卫/信箱日志)、体检守卫
+(settlePipeline/raisePipelineGate/watchPipeline/attachEnvironment/
+收口清面/已代答通知词)。state.ts/tools.ts/routes.ts/web 未受影响
+(routes 仍调 mergeStatus → HEAD 类型红)。**恢复计划**:以 43f59ab 的
+service.ts 我的区块为源,在 HEAD 上重放(A~P 清单见会话记录);并行会话
+在途的页面凭据重构(sessionDriver/semanticEvents/page_account 一串)
+属其自有工作,不卷入。
+
+## ⑤原始条目
 
 问题侧环境预热(warmup)不直播编译过程;若接,复用需求侧
 executionEventBuffer 分批回放模式(EventsPane 已有分批装载底子)。

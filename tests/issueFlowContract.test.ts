@@ -313,7 +313,6 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       repoUrl: origin,
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -362,8 +361,6 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
         name: "10.0.0.8",
         hosts: ["10.0.0.8"],
         port: 22,
-        page_account: "admin",
-        page_credential_ref: "vault-page-ref",
       },
       scenario: "ticket",
       stage_states: ["done", "done", "done", "done", "done"],
@@ -464,7 +461,6 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -669,7 +665,6 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -833,7 +828,7 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
   }
 });
 
-test("契约快照:POST /issues 登记新 wire 形(四件套过线,页面账号回执、密码只回引用)", async () => {
+test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 vault;页面凭据字段不收)", async () => {
   const dataDir = mfcTemp("mfc-issue-contract5-");
   createBusinessModule(dataDir, {
     id: "pay-core", name: "支付核心", description: "收单与清结算",
@@ -852,15 +847,14 @@ test("契约快照:POST /issues 登记新 wire 形(四件套过线,页面账号�
       account: "dev", title: "下单超时", module_id: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        page_password: "page-pw",
         backend_password: "",
       },
     }, service);
     assert.equal(noBackend.status, 409);
     assert.match(noBackend.body.error, /网管后台密码/);
 
-    // 全量过线:页面账号显式传入,环境回执只有引用与非密账号,两个
-    // 密码本体永不过线。
+    // 全量过线:环境回执只有引用与非密元信息,密码本体永不过线;
+    // 页面凭据已废弃(2026-09-10)——递了也不收,回执不出。
     const created = await issuePost(["issues"], {
       account: "dev", title: "下单超时", module_id: "pay-core",
       environment: {
@@ -873,14 +867,13 @@ test("契约快照:POST /issues 登记新 wire 形(四件套过线,页面账号�
     assert.equal(created.status, 201);
     assert.equal(created.body.module_id, "pay-core", "模块留痕上投影");
     assert.equal(created.body.module, "支付核心", "模块名由服务端派生");
-    assert.equal(created.body.environment?.page_account, "ops");
+    assert.equal(created.body.environment?.page_account, undefined,
+      "页面账号不再入回执");
     assertWireShape({
       credential_ref: "vault-ref",
       name: "10.0.0.8",
       hosts: ["10.0.0.8"],
       port: 22,
-      page_account: "ops",
-      page_credential_ref: "vault-page-ref",
     }, created.body.environment, "POST /issues .environment");
     const receipt = JSON.stringify(created.body);
     assert.ok(!receipt.includes("page-pw"), "页面密码本体不过线");

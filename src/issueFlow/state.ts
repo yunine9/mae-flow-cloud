@@ -103,12 +103,6 @@ export interface IssueEnvironmentConfig {
   /** 网管服务器地址列表(playbook 二进制支持多台串行)。 */
   hosts: string[];
   port: number;
-  /** 页面账号(登记元信息的一部分,非密;env_needed 闸现场补配的
-   * 环境没有页面凭据,两键一并缺席,消费面按"没有"处理)。 */
-  page_account?: string;
-  /** 页面凭据组的 vault 引用(页面密码本体只在 vault;纯记录,本期
-   * 无消费方,为页面自动化预留)。 */
-  page_credential_ref?: string;
   /** 独立 root 密码组的 vault 引用(ADR-0020/#150:台账条目显式设置
    * root 密码时快照才有;缺席=继承后台密码,消费面与手填时代的会话
    * 行为完全一致,不落独立凭据)。 */
@@ -527,15 +521,28 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // 它们的效力只在服务端 push_branch 消费口,不是前端要渲染的状态。
   // env_declined(环境拒绝台账,票 93)同理:效力只在服务端工具层
   // (同 scope 不再举闸),前端镜像没有这个字段。warmup(环境预热
-  // 收据,2026-09-04)也是服务端流程机制状态:修复 Agent 经文件系统
-  // 读 build-notes,前端不需要渲染它。
+  // 收据)2026-09-10 起上 wire(对齐清单⑤):前端要判"预热在跑/结果"
+  // 决定直播面板;build-notes 仍由修复 Agent 从文件系统读,不走投影。
   const { mr_gate: _gate, push_token: _pushToken,
     push_review_head: _pushReviewHead, env_declined: _envDeclined,
-    warmup: _warmup,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
+    module_locked: _moduleLocked,
     ...rest } = state;
   return {
     ...rest,
+    // pipelines 的重试/刹车子字段是服务端流程机制状态(证据重试窗、
+    // 同提交刹车),效力只在监看与派修口——不上 wire,与 mr_gate 同罪
+    // 同罚(体检 C-H7:前端镜像没有这五个键,投影多出即契约漂移)。
+    ...(state.pipelines ? { pipelines: Object.fromEntries(
+      Object.entries(state.pipelines).map(([repo, watch]) => {
+        const { evidence_retry_deadline: _erd,
+          evidence_retry_attempts: _era,
+          evidence_failure_log: _efl,
+          last_repair_sha: _lrs,
+          last_failure_summary: _lfs, ...visible } = watch;
+        return [repo, visible];
+      }),
+    ) } : {}),
     // takeover(人工接管标记)与上面的机制账不同:它要上 wire——头部
     // 徽标与输入区 takeover 模式都靠它分派,缺席=不在接管中。
     ...(state.takeover ? { takeover: state.takeover } : {}),

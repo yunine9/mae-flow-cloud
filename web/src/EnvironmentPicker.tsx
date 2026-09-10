@@ -16,7 +16,7 @@
  * PopoverContent 必须自带 .tw-root,否则 UA 默认的 p 边距/button 底色
  * 会在弹层里漏出来(2026-09-10 走查实测)。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import { listEnvironments, type EnvironmentView } from "./api";
@@ -144,6 +144,16 @@ export function EnvironmentPicker({ selectedId, onPick }: {
     onPick(entry);
   }
 
+  // 键盘高亮跟随:方向键把高亮推到可视区外时,把那一行滚回清单视口
+  // (block:nearest 只滚清单容器本身,不动页面)。纯鼠标用户看不到高亮,
+  // 行另有 hover 底色反馈。
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (highlighted < 0) return;
+    listRef.current?.querySelector<HTMLElement>('[data-highlighted="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [highlighted]);
+
   return <div className="tw-root" aria-label="从环境管理选择">
     <Popover open={open} onOpenChange={toggleOpen}>
       <PopoverTrigger asChild>
@@ -181,7 +191,7 @@ export function EnvironmentPicker({ selectedId, onPick }: {
             }}
             onKeyDown={onSearchKeyDown} />
         </div>
-        <div className="max-h-60 overflow-y-auto p-1" role="listbox"
+        <div ref={listRef} className="max-h-60 overflow-y-auto p-1" role="listbox"
           aria-label="环境清单">
           {error && <p className="m-1 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
             {error}
@@ -192,7 +202,8 @@ export function EnvironmentPicker({ selectedId, onPick }: {
               const picked = entry.id === selectedId;
               return <button type="button" key={entry.id} role="option"
                 aria-selected={picked}
-                className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm${index === highlighted ? " bg-accent" : ""}`}
+                data-highlighted={index === highlighted ? "true" : undefined}
+                className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent${index === highlighted ? " bg-accent" : ""}`}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => pick(entry)}>
                 <span className="flex w-full items-center gap-2">

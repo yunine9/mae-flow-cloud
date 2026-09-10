@@ -1124,6 +1124,11 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   assert.match(picker, /onPick: \(entry: EnvironmentView\) => void/);
   assert.match(picker, /role="listbox"/);
   assert.match(picker, /role="option"/);
+  // 键盘高亮跟随:高亮行滚回清单视口(block:nearest 只滚容器),行有
+  // hover 底色给纯鼠标用户反馈。
+  assert.match(picker, /data-highlighted=\{index === highlighted \? "true" : undefined\}/);
+  assert.match(picker, /scrollIntoView\(\{ block: "nearest" \}\)/);
+  assert.match(picker, /hover:bg-accent/);
   assert.match(picker, /EnvironmentEditorDialog/);
   assert.match(picker, /onPick\(entry\)/);
   assert.match(picker, /tw-root/);

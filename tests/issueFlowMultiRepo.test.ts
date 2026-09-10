@@ -134,7 +134,7 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeli
   assert.equal((ledger as { push?: unknown }).push, undefined, "单数字段退役");
 });
 
-test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;四件套缺一打回;有单不拦", () => {
+test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;环境缺项打回;有单不拦", () => {
   const dataDir = mfcTemp("mfc-issue-mr-");
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({
@@ -192,29 +192,23 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
     assert.throws(
       () => service.create({
         account: "dev", title: "t", moduleId: "empty-mod",
-        environment: { hosts: ["10.0.0.8"], pagePassword: "p", backendPassword: "b" },
+        environment: { hosts: ["10.0.0.8"], backendPassword: "b" },
       }),
       /先补绑定/,
     );
-    // 四件套缺一:缺地址 / 缺页面密码 / 缺后台密码各有其文案。
+    // 环境缺项打回:缺地址 / 缺后台密码各有其文案(页面凭据已废弃,
+    // 2026-09-10:不再有"缺页面密码"这道闸)。
     assert.throws(
       () => service.create({
         account: "dev", title: "t", moduleId: "pay-core",
-        environment: { hosts: [], pagePassword: "p", backendPassword: "b" },
+        environment: { hosts: [], backendPassword: "b" },
       }),
       /服务器地址/,
     );
     assert.throws(
       () => service.create({
         account: "dev", title: "t", moduleId: "pay-core",
-        environment: { hosts: ["10.0.0.8"], pagePassword: " ", backendPassword: "b" },
-      }),
-      /页面密码/,
-    );
-    assert.throws(
-      () => service.create({
-        account: "dev", title: "t", moduleId: "pay-core",
-        environment: { hosts: ["10.0.0.8"], pagePassword: "p", backendPassword: "" },
+        environment: { hosts: ["10.0.0.8"], backendPassword: "" },
       }),
       /后台密码/,
     );
@@ -289,7 +283,6 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -438,7 +431,6 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });

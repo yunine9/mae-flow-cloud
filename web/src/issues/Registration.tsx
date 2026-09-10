@@ -7,7 +7,7 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  * DTS 文本/版本/候选纯函数在 dtsText.ts,单据 HTML 的图片代理重写与
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createIssue,
   getBusinessModules,
@@ -59,135 +59,6 @@ function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
   </div>;
 }
 
-/** 网管常见默认口令(现场公开默认值,ADR-0003 裁定允许进上下文;与
- * 平台凭据是两回事):写死前端常量不做配置面(spec #15),PasswordCombo
- * 下拉一键填,特殊口令仍可自由手输。 */
-const NETMAN_COMMON_PASSWORDS = [
-  "Huawei_123",
-  "Changeme_456",
-  "Changeme_123",
-  "Changeme_789",
-  "Huawei_456",
-  "Huawei_789",
-  "Aa@12345678",
-];
-
-/** PasswordCombo:密码输入框 + 常见口令下拉,点选即填、也可自由手输。
- * 展开态交互沿 DTS 版本多选框的成熟模式:面板锚定在 wrapper 上,点
- * 面板外或 Esc 收起。零外部依赖;页面密码与后台密码各用一套实例,
- * 值由父级受控——父级保证密码不进草稿(共机不残留凭据)。 */
-function PasswordCombo({ value, onChange, name }: {
-  value: string;
-  onChange: (next: string) => void;
-  /** 无障碍名:输入框与触发钮的 aria-label 共用。 */
-  name: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  const toggleRef = useRef<HTMLButtonElement | null>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const listId = useId();
-
-  function openAndFocus(index: number) {
-    const next = Math.max(0, Math.min(index, NETMAN_COMMON_PASSWORDS.length - 1));
-    setActiveIndex(next);
-    setOpen(true);
-    window.requestAnimationFrame(() => optionRefs.current[next]?.focus());
-  }
-
-  function closeAndFocusTrigger() {
-    setOpen(false);
-    window.requestAnimationFrame(() => toggleRef.current?.focus());
-  }
-
-  // 点面板外、Tab 到组件外或 Esc 收起(与 DTS 版本下拉同一套交互)。
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (event: MouseEvent) => {
-      if (!boxRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    const onFocus = (event: FocusEvent) => {
-      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("focusin", onFocus);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("focusin", onFocus);
-    };
-  }, [open]);
-  return <div className="issue-password-combo" ref={boxRef}>
-    <div className="issue-password-row">
-      <input type="password" value={value} aria-label={name}
-        aria-controls={listId} aria-expanded={open} aria-haspopup="listbox"
-        autoComplete="new-password" placeholder="下拉选常见口令,或直接输入"
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            openAndFocus(event.key === "ArrowDown" ? 0
-              : NETMAN_COMMON_PASSWORDS.length - 1);
-          }
-        }}
-        onChange={(event) => onChange(event.target.value)} />
-      <button ref={toggleRef} type="button" className="issue-password-toggle"
-        aria-label={`${name}常见口令`} aria-expanded={open}
-        aria-controls={listId} aria-haspopup="listbox" title="常见默认口令"
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            openAndFocus(event.key === "ArrowDown" ? 0
-              : NETMAN_COMMON_PASSWORDS.length - 1);
-          }
-        }}
-        onClick={() => {
-          if (open) setOpen(false);
-          else openAndFocus(Math.max(0, NETMAN_COMMON_PASSWORDS.indexOf(value)));
-        }}>▾</button>
-    </div>
-    {open && <div id={listId} className="issue-password-menu" role="listbox"
-      aria-label={`${name}的常见口令`}>
-      {NETMAN_COMMON_PASSWORDS.map((password, index) => (
-        <button type="button" key={password} role="option"
-          ref={(node) => { optionRefs.current[index] = node; }}
-          aria-selected={value === password}
-          className={`issue-password-option${value === password ? " on" : ""}`}
-          tabIndex={index === activeIndex ? 0 : -1}
-          onFocus={() => setActiveIndex(index)}
-          onKeyDown={(event) => {
-            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-              event.preventDefault();
-              const next = event.key === "Home" ? 0
-                : event.key === "End" ? NETMAN_COMMON_PASSWORDS.length - 1
-                  : event.key === "ArrowDown"
-                    ? (index + 1) % NETMAN_COMMON_PASSWORDS.length
-                    : (index - 1 + NETMAN_COMMON_PASSWORDS.length)
-                      % NETMAN_COMMON_PASSWORDS.length;
-              setActiveIndex(next);
-              optionRefs.current[next]?.focus();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              closeAndFocusTrigger();
-            }
-          }}
-          onClick={() => {
-            onChange(password);
-            closeAndFocusTrigger();
-          }}>
-          {password}
-        </button>
-      ))}
-    </div>}
-  </div>;
-}
 
 /** 只读仓清单行的短名:剥协议取末段再去 .git(file:// 演示仓同样适用);
  * 全 URL 挂 title,悬停可见。 */
@@ -261,10 +132,8 @@ function ManualRegister({
   const [moduleLoadAttempt, setModuleLoadAttempt] = useState(0);
   // 网管环境(2026-09-10 走查裁定「只选不手填」):唯一作答面是台账
   // 快选(EnvironmentPicker 可搜索下拉,搜不到弹框新建并自动选中),
-  // 后台密码用台账已存值(前端永远拿不到);页面凭据不入台账,仍逐单
-  // 手填(页面账号预填 admin 可改)。两个密码不进草稿。
-  const [envPageAccount, setEnvPageAccount] = useState("admin");
-  const [envPagePassword, setEnvPagePassword] = useState("");
+  // 后台密码用台账已存值(前端永远拿不到)。页面凭据已整体废弃
+  // (2026-09-10:流程不登录网管页面,登记不再收页面账号/密码)。
   // 从环境管理选(#150,ADR-0020):选中即定,提交只带 environment_id——
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
@@ -290,8 +159,8 @@ function ManualRegister({
       });
     return () => { alive = false; };
   }, [moduleLoadAttempt]);
-  // 草稿纪律(spec #15):只存 标题/现象/模块/页面账号;两个密码绝不进
-  // localStorage——刷新或换机后密码框为空,共机不残留凭据。
+  // 草稿纪律(spec #15):只存 标题/现象/模块;密码绝不进 localStorage
+  // ——共机不残留凭据。
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
@@ -299,7 +168,6 @@ function ManualRegister({
         setTitle(saved.title ?? "");
         setDescription(saved.description ?? "");
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
-        if (saved.pageAccount) setEnvPageAccount(String(saved.pageAccount));
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
   }, [draftKey]);
@@ -307,12 +175,12 @@ function ManualRegister({
     const timer = window.setTimeout(() => {
       try {
         localStorage.setItem(draftKey, JSON.stringify({
-          title, description, moduleId, pageAccount: envPageAccount,
+          title, description, moduleId,
         }));
       } catch { /* 同上 */ }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draftKey, title, description, moduleId, envPageAccount]);
+  }, [draftKey, title, description, moduleId]);
 
   // 现象描述内嵌截图:粘贴/拖拽图片 → 上传落 staging → 在光标处插入
   // ![截图](issue-images/<hash>.<ext>) 引用。图片本体不进 description,
@@ -436,31 +304,16 @@ function ManualRegister({
       onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
       return;
     }
-    if (!envPageAccount.trim()) {
-      onError("页面账号必填——默认 admin 可改,请填写网管页面登录名");
-      return;
-    }
-    if (!envPagePassword.trim()) {
-      onError("页面密码必填");
-      return;
-    }
     setBusy(true);
     try {
       const created = await createIssue({
         title: title.trim(),
         description: description.trim(),
         module_id: moduleId,
-        // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码);
-        // 页面凭据不入台账,仍手填随行。
-        environment: {
-          environment_id: pickedEnv.id,
-          page_account: envPageAccount.trim(),
-          page_password: envPagePassword,
-        },
+        // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
+        environment: { environment_id: pickedEnv.id },
       });
       setTitle(""); setDescription(""); setModuleId("");
-      setEnvPageAccount("admin");
-      setEnvPagePassword("");
       clearPickedEnv();
       onCreated(created);
     } catch (reason) {
@@ -545,8 +398,7 @@ function ManualRegister({
       <div className="issue-group-body">
         {/* 从环境管理选(#150,ADR-0020;2026-09-10 走查裁定「只选不
             手填」):可搜索下拉挑台账条目,搜不到点「新增环境」弹共用
-            表单、录完自动选中;后台密码用台账已存值(前端拿不到),
-            页面凭据不入台账,仍逐单手填。 */}
+            表单、录完自动选中;后台密码用台账已存值(前端拿不到)。 */}
         <div className="col-span-full">
           <EnvironmentPicker
             selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />
@@ -555,20 +407,7 @@ function ManualRegister({
           将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
           (以选定时为准),无需在此填写。
         </small>}
-        <label className="issue-field">
-          <span>页面账号 <i className="req">*</i></span>
-          <input value={envPageAccount} placeholder="admin" required
-            onChange={(event) => setEnvPageAccount(event.target.value)} />
-        </label>
-        <div className="issue-field">
-          <span>页面密码 <i className="req">*</i></span>
-          <PasswordCombo name="页面密码" value={envPagePassword}
-            onChange={setEnvPagePassword} />
-        </div>
-        <small className="issue-group-note issue-privacy-note">
-          口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
-          但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
-        </small>
+
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}

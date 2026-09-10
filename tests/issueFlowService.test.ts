@@ -473,7 +473,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   }
 });
 
-test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧", async () => {
+test("创建:固定流程登记回执、vault 与开场上下文照旧", async () => {
   const dataDir = mfcTemp("mfc-issue-create-fixed-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [{ text: "收到,先做初步排查。" }];
@@ -496,7 +496,6 @@ test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -508,16 +507,16 @@ test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧
     // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
     assert.equal(created.status, "running");
     assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
-    // 四件套落盘形状:页面账号是非密的登记元信息,回执可见;密码本体
-    // 只在 vault,状态文件与回执都搜不到。
-    assert.equal(created.environment?.page_account, "admin",
-      "页面账号未传缺省 admin");
-    assert.ok(created.environment?.page_credential_ref);
+    // 环境落盘形状:回执只有凭据引用与非密元信息(页面凭据已废弃,
+    // 2026-09-10:登记不收页面账号/密码);密码本体只在 vault,状态
+    // 文件与回执都搜不到。
+    assert.ok(!("page_account" in (created.environment ?? {})),
+      "页面凭据已废弃,回执不再带页面账号");
     assert.ok(!JSON.stringify(created).includes("page-secret"));
     assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
       "问题会话不初始化内核(与需求流分属两个范式)");
 
-    // vault 两组凭据各自成组、可分别解出:后台三账号同密码,页面单账号。
+    // vault 后台凭据自成组可解出:后台三账号同密码。
     const vault = new IssueEnvironmentVault(dataDir);
     assert.deepEqual(
       vault.credentials(created.id, created.environment!.credential_ref)
@@ -526,19 +525,14 @@ test("创建:固定流程登记回执、四件套 vault 与开场上下文照旧
     assert.equal(vault.credential(created.id,
       created.environment!.credential_ref, "sopuser")?.password,
       "env-shared-secret");
-    assert.deepEqual(vault.credential(created.id,
-      created.environment!.page_credential_ref!),
-      { username: "admin", password: "page-secret" });
     const stateFile = readFileSync(
       join(dataDir, "issues", created.id, "issue.json"), "utf-8");
     assert.doesNotMatch(stateFile, /env-shared-secret/);
-    assert.doesNotMatch(stateFile, /page-secret/);
 
     // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
     await until(() => model.requests.length ? 1 : undefined, "首轮请求");
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /env-shared-secret/);
-    assert.match(requestText, /页面密码: page-secret/);
     assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
     // 开场问题应作为用户消息入账(等首回合收口再查线程)。
     await until(() =>
@@ -747,7 +741,6 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -1070,7 +1063,6 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -1135,7 +1127,6 @@ test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题
       moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        pagePassword: "page-secret",
         backendPassword: "env-shared-secret",
       },
     });
@@ -1403,8 +1394,8 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
     assert.match(noPassword.body.error, /网管后台密码/);
 
     // 正常配置:状态只有 credential_ref,密码在 vault 加密文件里,
-    // issue.json 原文永远搜不到明文;闸只收地址+后台密码,body 里即便
-    // 递了页面凭据也不认(env_needed 现场补配碰不到网管页面)。
+    // issue.json 原文永远搜不到明文;页面凭据已废弃(2026-09-10),
+    // body 里即便递了也不收。
     const ok = await issuePost(["issues", "issue-1", "environment"],
       { hosts: ["10.0.0.8", "10.0.0.9"], port: 2222,
         backend_password: "env-shared-secret",
@@ -1414,7 +1405,7 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
     assert.equal(ok.body.gate ?? undefined, undefined, "没有闸在场就不凭空造闸");
     assert.deepEqual(ok.body.environment?.hosts, ["10.0.0.8", "10.0.0.9"]);
     assert.equal(ok.body.environment?.port, 2222);
-    assert.equal(ok.body.environment?.page_account, undefined,
+    assert.ok(!("page_account" in (ok.body.environment ?? {})),
       "闸内补配没有页面凭据,消费面按缺席优雅处理");
     assert.ok(existsSync(join(dataDir, ".issue-environments", "issue-1.json")),
       "密码落在 vault 加密文件");
@@ -1678,7 +1669,6 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
       account: "dev", title: "播放器偶发黑屏", moduleId: "pay-core",
       environment: {
         environmentId: explicit.id,
-        pagePassword: "page-secret",
       },
     });
     assert.deepEqual(created.environment?.hosts, ["10.0.0.8"]);
@@ -1686,8 +1676,6 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
     assert.equal(created.environment?.env_type, "k8s");
     assert.equal(created.environment?.environment_source_ip, "10.0.0.8",
       "快照来源(选定时点的台账主 IP)进会话状态");
-    assert.equal(created.environment?.page_account, "admin",
-      "页面凭据不入台账,登记快照仍按手填带上");
     assert.ok(created.environment?.root_credential_ref,
       "台账显式设置 root 时,快照带独立 root 凭据组");
     assert.ok(!JSON.stringify(created).includes("backend-explicit"));
@@ -1698,8 +1686,6 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
     assert.deepEqual(vault.credential(created.id,
       created.environment!.root_credential_ref!),
       { username: "root", password: "root-explicit" });
-    assert.equal(vault.credential(created.id,
-      created.environment!.page_credential_ref!)?.password, "page-secret");
     const stateFile = readFileSync(
       join(dataDir, "issues", created.id, "issue.json"), "utf-8");
     assert.doesNotMatch(stateFile, /backend-explicit|root-explicit/);
@@ -1707,7 +1693,7 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
     // 继承 root 的快照登记:没有独立 root 凭据组,后台密码即解析值。
     const second = service.create({
       account: "dev", title: "继承 root 的会话", moduleId: "pay-core",
-      environment: { environmentId: inherited.id, pagePassword: "page-secret-2" },
+      environment: { environmentId: inherited.id },
     });
     assert.equal(second.environment?.root_credential_ref, undefined,
       "继承态不落独立 root 凭据,会话行为与现状一致");
@@ -1716,7 +1702,7 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
       second.environment!.credential_ref, "sopuser")?.password,
       "backend-inherit");
 
-    // 元信息出口(root_password 按 page_password 先例,只在显式存在时):
+    // 元信息出口(root_password 只在显式存在时):
     // 开场上下文带独立 root 明文行(ADR-0003)。
     await until(() => model.requests.length ? 1 : undefined, "首轮请求");
     assert.match(JSON.stringify(model.requests),
@@ -1882,6 +1868,7 @@ test("env_needed 闸快照与手动沉淀(#150):environment_id 作答即台账�
     await model.stop();
   }
 });
+
 // ---- 崩溃一致性/可恢复停机(票 #158/#159 首批,2026-09-10) ----
 
 test("容器基础设施瞬断不判死:Docker 起不来落 idle 留话,现场保留可重试", async () => {

@@ -134,12 +134,66 @@ test("环境管理:删除走全站 confirmDialog 二次确认,并交代快照不
   assert.match(removal, /await deleteEnvironment\(entry\.id\);/);
 });
 
-test("环境管理:标签筛选(下拉 + 点行内标签徽标)与清除筛选", () => {
-  assert.match(page, /aria-label="按标签筛选"/);
-  assert.match(page, /<SelectItem value=\{ALL_TAGS\}>全部标签<\/SelectItem>/);
+test("环境管理:标签筛选(列头漏斗 + 点行内标签徽标)与清除筛选", () => {
+  // 标签筛选住在标签列头的漏斗弹层里(选项 = 全部标签 + 已有标签),
+  // 与行内标签徽标共用同一个 activeTag 状态,点徽标即筛。
+  assert.match(page,
+    /<HeaderFilter label="标签" active=\{!!activeTag\}/);
+  assert.match(page,
+    /onPick=\{\(v\) => \{ setActiveTag\(v\); close\(\); \}\}/);
   assert.match(page,
     /onClick=\{\(\) => setActiveTag\(tag === activeTag \? "" : tag\)\}/);
   assert.match(page, /清除筛选/);
+});
+
+test("环境管理:列头排序(升/降/取消三态)与列头漏斗过滤(2026-09-10 走查追问)", () => {
+  // 七个数据列全部可排(含标签:按排序后的标签串比);表头是按钮,
+  // 带 aria-sort 与方向标记;点表头 升→降→取消。
+  for (const key of ["ip", "form", "port", "tags", "state", "updated_by", "updated_at"]) {
+    assert.match(page, new RegExp(`aria-sort=\\{ariaSortOf\\("${key}"\\)\\}`),
+      `缺少 ${key} 列排序`);
+    assert.match(page, new RegExp(`onClick=\\{\\(\\) => toggleSort\\("${key}"\\)\\}`),
+      `缺少 ${key} 列排序点击`);
+  }
+  assert.match(page, /function toggleSort\(key: SortKey\)/);
+  assert.match(page, /cur\.dir === 1 \? \{ key, dir: -1 \} : null/);
+  assert.match(page, /function SortMark/);
+  assert.match(page, /<ChevronsUpDown aria-hidden/);
+  // IP 按数值逐段比(10.0.0.9 排在 10.0.0.10 前),非 IPv4 退回字典序。
+  assert.match(page, /function compareIp\(a: string, b: string\): number/);
+  assert.match(page, /if \(av\[i\] !== bv\[i\]\) return av\[i\] - bv\[i\];/);
+  // 标签排序:按排序后的标签串比,不搞多值魔法定序。
+  assert.match(page, /const joined = \(e: EnvironmentView\) => \[\.\.\.e\.tags\]\.sort\(\)\.join\(" "\);/);
+  // 状态列按三态档排序:升序异常最前(最需要处理的排最上)。
+  assert.match(page, /const STATE_RANK: Record<EnvironmentView\["probe"\]\["state"\], number>/);
+  assert.match(page, /failed: 0,/);
+  // 过滤住列头漏斗里(壳自带 tw-root:弹层 portal 到 body):主 IP 文本
+  // 包含、形态/标签/状态 单选清单;工具栏不再有筛选下拉。
+  assert.match(page, /function HeaderFilter/);
+  assert.match(page, /aria-label=\{`筛选 \$\{label\}`\}/);
+  assert.match(page, /function FilterOptions/);
+  assert.match(page, /<HeaderFilter label="主 IP" active=\{!!ipFilter\.trim\(\)\}/);
+  assert.match(page, /<HeaderFilter label="形态" active=\{!!formFilter\}/);
+  assert.match(page, /<HeaderFilter label="状态" active=\{!!stateFilter\}/);
+  assert.match(page, /aria-label="按 IP 过滤"/);
+  assert.match(page, /formFilter && entry\.form !== formFilter/);
+  assert.match(page, /stateFilter && entry\.probe\.state !== stateFilter/);
+  assert.doesNotMatch(page, /aria-label="搜索环境"/, "全局搜索框已由列头筛选取代");
+  // 清除筛选一键清空四路筛选(有任一激活才出现)。
+  assert.match(page, /const filtersActive = Boolean\(activeTag \|\| formFilter \|\| stateFilter[\s\S]*?updaterFilter\);/);
+  assert.match(page, /function clearFilters\(\)/);
+  // 更新人列头漏斗:筛的是账号值,选项标签用显示名(usePersonName),
+  // 与表格列的呈现一致——不出现「显示名搜不到」的坑。
+  assert.match(page, /<HeaderFilter label="更新人" active=\{!!updaterFilter\}/);
+  assert.match(page, /updaterFilter && entry\.updated_by !== updaterFilter/);
+  assert.match(page, /value: account, label: nameOf\(account\),/);
+  // 激活的漏斗有 accent 小底块(哪列在筛一眼可辨);每个漏斗都能就地
+  // 「清除此列筛选」。
+  assert.match(page, /rounded-sm bg-accent px-0\.5 text-ink/);
+  assert.match(page, /清除此列筛选/);
+  // 过滤后空态换成整块空态卡(表不再渲染):列宽不随有无内容跳变。
+  assert.match(page, /data-testid="environment-registry-filtered-empty"/);
+  assert.doesNotMatch(page, /colSpan=\{8\}/);
 });
 
 test("环境管理:空态引导(还没有环境,点新增录入第一个)", () => {

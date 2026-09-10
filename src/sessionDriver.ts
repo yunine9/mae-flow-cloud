@@ -1,4 +1,3 @@
-import { resourceBlocked, resourceBlockNotice } from "./repositoryResourcePolicy.ts";
 /**
  * 进程内会话驱动(详设 §7 pi_session 的 TS 形态)。
  *
@@ -125,6 +124,13 @@ export function userFacingModelFailure(detail: string): string {
 export function looksLikeRateLimited(detail: string): boolean {
   return /(?:\b429\b|rate[_ ]limit|使用上限|额度已用完|限额.*重置|quota exhausted)/i
     .test(detail);
+}
+
+/** pi 的"忙撞"拒答(issue-20 实锤):prompt 允诺已回、会话还自认忙的
+ *  收尾窗口里再 prompt,pi 原文就是这一句。识别它不是为了吞——是让
+ *  调用方区分"会话坏了"和"递早了一拍",后者让一拍重投即可。 */
+export function looksLikeBusyCollision(detail: string): boolean {
+  return /already processing/i.test(detail);
 }
 
 /** 忙撞重投前让出的节拍:pi 收尾是微任务+流关闭级别的活,250ms 足够
@@ -322,7 +328,6 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
-  repositoryResourceBlocks?: () => string[];
   /** 用任务固定的模块/仓库/语言画像筛选尚未定格的团队 Skill；新任务
    * 已在创建现场生成精确快照，后续会话不应重复匹配。 */
   knowledgeContext?: {
@@ -390,12 +395,6 @@ function deferred<T>(): Deferred<T> {
 export function looksLikeContextOverflow(detail: string): boolean {
   return /input too long|exceed(s)? max input length|context[_ ]length|maximum context|prompt is too long|too many tokens/i
     .test(detail);
-}
-
-/** Pi 拒收忙会话的新 prompt 时的确切错误。不能用泛化的 busy 匹配，
- * 否则会把网络、数据库或工具执行失败错误地当成可补投的消息。 */
-export function looksLikeBusyCollision(detail: string): boolean {
-  return /Agent is already processing\. Specify streamingBehavior \('steer' or 'followUp'\) to queue the message\./.test(detail);
 }
 
 /** 主动压缩的指令模板:摘要以内核锚点为纲——注意力飘不飘,锚说了算。 */
@@ -669,7 +668,6 @@ export class CloudSession {
     return failures.join("；");
   }
 
-  /** 发一条用户消息并跑完本轮,统一收口判定。 */
   /** 发一条用户消息并跑完本轮,统一收口判定。announce=false 的重投
    *  (忙撞让一拍那次)不再记一遍用户消息账——首投已经记过。 */
   private promptTurn(userMessage: string, announce = true): Promise<Outcome> {
@@ -1000,14 +998,9 @@ export class CloudSession {
       this.options.log?.(
         `[host-skill] 任务 ${this.options.taskId}: ${warning}`);
     }
-    const resourceBlocks = this.options.repositoryResourceBlocks?.() ?? [];
-    const allowedRepositoryPath = (path: string) => {
-      const source = this.options.repositorySkillResources?.find(item => item.actual_path === path)?.path ?? path;
-      return !resourceBlocked(source, resourceBlocks);
-    };
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
-        if (!allowedRepositoryPath(path) || basename(path) !== "SKILL.md" || !existsSync(path)) return false;
+        if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
         try {
           return statSync(path).isFile();
         } catch {
@@ -1083,7 +1076,7 @@ export class CloudSession {
       this.options.knowledgeTrace?.record(
         "available", config.sessionId, resource);
     }
-    for (const item of (this.options.repositorySkillResources ?? []).filter(item => allowedRepositoryPath(item.actual_path))) {
+    for (const item of this.options.repositorySkillResources ?? []) {
       this.options.knowledgeTrace?.register(item.actual_path, {
         id: item.id,
         kind: item.kind,
@@ -1115,7 +1108,7 @@ export class CloudSession {
     }
     // 仓契约注入同款一行事(2026-09-03):提示词里多了什么必须能在
     // 日志里对账,只记 repo/ 下的相对路径,不贴正文。
-    const repoContextFiles = (this.options.repoContextFiles ?? []).filter(file => !resourceBlocked(file.path, resourceBlocks));
+    const repoContextFiles = this.options.repoContextFiles ?? [];
     if (repoContextFiles.length) {
       this.options.log?.(`任务 ${this.options.taskId} 注入仓契约: ${
         repoContextFiles.map((file) => {
@@ -1140,17 +1133,17 @@ export class CloudSession {
       // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
-          ...current.agentsFiles.filter(file => !resourceBlocked(file.path, resourceBlocks)),
+          ...current.agentsFiles,
           ...(knowledgeIndex.path && knowledgeIndex.content
             ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
             : []),
-          ...repoContextFiles,
+          ...(this.options.repoContextFiles ?? []),
         ],
       }),
       // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
-      appendSystemPromptOverride: (base: string[]) => [...base,
-        ...(this.options.humanFacing && config.sessionId === this.sessionId ? [HUMAN_FACING_STYLE] : []),
-        ...resourceBlockNotice(resourceBlocks)],
+      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
+        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
+      } : {}),
       extensionFactories: [
         {
           name: "mae-flow-gate",
