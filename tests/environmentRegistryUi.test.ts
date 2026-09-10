@@ -138,7 +138,7 @@ test("环境管理:标签筛选(列头漏斗 + 点行内标签徽标)与清除�
   // 标签筛选住在标签列头的漏斗弹层里(选项 = 全部标签 + 已有标签),
   // 与行内标签徽标共用同一个 activeTag 状态,点徽标即筛。
   assert.match(page,
-    /<HeaderFilter label="标签" active=\{!!activeTag\}>/);
+    /<HeaderFilter label="标签" active=\{!!activeTag\}/);
   assert.match(page,
     /onPick=\{\(v\) => \{ setActiveTag\(v\); close\(\); \}\}/);
   assert.match(page,
@@ -172,16 +172,28 @@ test("环境管理:列头排序(升/降/取消三态)与列头漏斗过滤(2026-
   assert.match(page, /function HeaderFilter/);
   assert.match(page, /aria-label=\{`筛选 \$\{label\}`\}/);
   assert.match(page, /function FilterOptions/);
-  assert.match(page, /<HeaderFilter label="主 IP" active=\{!!ipFilter\}>/);
-  assert.match(page, /<HeaderFilter label="形态" active=\{!!formFilter\}>/);
-  assert.match(page, /<HeaderFilter label="状态" active=\{!!stateFilter\}>/);
+  assert.match(page, /<HeaderFilter label="主 IP" active=\{!!ipFilter\.trim\(\)\}/);
+  assert.match(page, /<HeaderFilter label="形态" active=\{!!formFilter\}/);
+  assert.match(page, /<HeaderFilter label="状态" active=\{!!stateFilter\}/);
   assert.match(page, /aria-label="按 IP 过滤"/);
   assert.match(page, /formFilter && entry\.form !== formFilter/);
   assert.match(page, /stateFilter && entry\.probe\.state !== stateFilter/);
   assert.doesNotMatch(page, /aria-label="搜索环境"/, "全局搜索框已由列头筛选取代");
   // 清除筛选一键清空四路筛选(有任一激活才出现)。
-  assert.match(page, /const filtersActive = Boolean\(activeTag \|\| formFilter \|\| stateFilter \|\| ipFilter\.trim\(\)\)/);
+  assert.match(page, /const filtersActive = Boolean\(activeTag \|\| formFilter \|\| stateFilter[\s\S]*?updaterFilter\);/);
   assert.match(page, /function clearFilters\(\)/);
+  // 更新人列头漏斗:筛的是账号值,选项标签用显示名(usePersonName),
+  // 与表格列的呈现一致——不出现「显示名搜不到」的坑。
+  assert.match(page, /<HeaderFilter label="更新人" active=\{!!updaterFilter\}/);
+  assert.match(page, /updaterFilter && entry\.updated_by !== updaterFilter/);
+  assert.match(page, /value: account, label: nameOf\(account\),/);
+  // 激活的漏斗有 accent 小底块(哪列在筛一眼可辨);每个漏斗都能就地
+  // 「清除此列筛选」。
+  assert.match(page, /rounded-sm bg-accent px-0\.5 text-ink/);
+  assert.match(page, /清除此列筛选/);
+  // 过滤后空态换成整块空态卡(表不再渲染):列宽不随有无内容跳变。
+  assert.match(page, /data-testid="environment-registry-filtered-empty"/);
+  assert.doesNotMatch(page, /colSpan=\{8\}/);
 });
 
 test("环境管理:空态引导(还没有环境,点新增录入第一个)", () => {

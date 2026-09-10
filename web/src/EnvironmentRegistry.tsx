@@ -19,7 +19,7 @@ import {
   type EnvironmentView,
 } from "./api";
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Filter } from "lucide-react";
-import { PersonName } from "./People";
+import { PersonName, usePersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
 import { formatLocalDateTime, relativeTime } from "./time";
 import {
@@ -122,21 +122,36 @@ function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
 /** 列头筛选钮 + 弹层壳:漏斗着色 = 该列筛选激活;children 拿 close(),
  * 选项类选完即关,文本输入类忽略。弹层 portal 到 body,必须自带
  * .tw-root 归一(同 EnvironmentPicker 的教训)。 */
-function HeaderFilter({ label, active, children }: {
+function HeaderFilter({ label, active, onClear, children }: {
   label: string;
   active: boolean;
+  /** 本列的清除动作:给了才在弹层底部出「清除此列筛选」。 */
+  onClear?: () => void;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
-      <button type="button" aria-label={`筛选 ${label}`} title={`筛选 ${label}`}
-        className={active ? "text-ink" : "text-muted-foreground hover:text-foreground"}>
+      {/* 激活的漏斗给 accent 小底块:哪列在筛,一眼可辨。 */}
+      <button type="button" aria-label={`筛选 ${label}`}
+        title={active ? `筛选 ${label}(生效中,点开可清除)` : `筛选 ${label}`}
+        aria-pressed={active}
+        className={active
+          ? "rounded-sm bg-accent px-0.5 text-ink"
+          : "text-muted-foreground hover:text-foreground"}>
         <Filter aria-hidden className="size-3.5" />
       </button>
     </PopoverTrigger>
     <PopoverContent align="start" className="tw-root w-40 p-1">
       {children(() => setOpen(false))}
+      {active && onClear && <div className="border-t border-line pt-1 mt-1">
+        <button type="button"
+          className="w-full rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+          onClick={() => {
+            onClear();
+            setOpen(false);
+          }}>清除此列筛选</button>
+      </div>}
     </PopoverContent>
   </Popover>;
 }
@@ -175,6 +190,9 @@ export function EnvironmentRegistry() {
   const [ipFilter, setIpFilter] = useState("");
   const [formFilter, setFormFilter] = useState<EnvironmentForm | "">("");
   const [stateFilter, setStateFilter] = useState<EnvironmentView["probe"]["state"] | "">("");
+  /** 更新人筛选用账号值,选项标签用显示名(与表格列一致,不见账号黑话)。 */
+  const [updaterFilter, setUpdaterFilter] = useState("");
+  const nameOf = usePersonName();
 
   /** 探活返回更新后的视图:就地合并进列表,状态列即时刷新(不整页轮询,
    * 后台已有约 10 分钟一轮的定时探活)。 */
@@ -212,6 +230,9 @@ export function EnvironmentRegistry() {
   const allTags = useMemo(() =>
     [...new Set(environments.flatMap((entry) => entry.tags))].sort(),
     [environments]);
+  const allUpdaters = useMemo(() =>
+    [...new Set(environments.map((entry) => entry.updated_by))].sort(),
+    [environments]);
 
   function toggleSort(key: SortKey) {
     setSort((cur) => cur?.key === key
@@ -226,6 +247,7 @@ export function EnvironmentRegistry() {
       if (formFilter && entry.form !== formFilter) return false;
       if (stateFilter && entry.probe.state !== stateFilter) return false;
       if (needle && !entry.ip.toLowerCase().includes(needle)) return false;
+      if (updaterFilter && entry.updated_by !== updaterFilter) return false;
       return true;
     });
     if (!sort) return filtered;
@@ -248,20 +270,22 @@ export function EnvironmentRegistry() {
       return a.updated_by.localeCompare(b.updated_by);
     };
     return [...filtered].sort((a, b) => dir * cmp(a, b));
-  }, [environments, activeTag, formFilter, stateFilter, ipFilter, sort]);
+  }, [environments, activeTag, formFilter, stateFilter, ipFilter, updaterFilter, sort]);
 
   /** 表头排序钮的 aria-sort 值(未排序列不给属性)。 */
   function ariaSortOf(key: SortKey) {
     if (sort?.key !== key) return undefined;
     return sort.dir === 1 ? "ascending" : "descending";
   }
-  const filtersActive = Boolean(activeTag || formFilter || stateFilter || ipFilter.trim());
+  const filtersActive = Boolean(activeTag || formFilter || stateFilter
+    || ipFilter.trim() || updaterFilter);
 
   function clearFilters() {
     setActiveTag("");
     setFormFilter("");
     setStateFilter("");
     setIpFilter("");
+    setUpdaterFilter("");
   }
 
   /** 删除走全站既有 confirmDialog 二次确认(spec #52),不用裸 window.confirm;
@@ -312,7 +336,14 @@ export function EnvironmentRegistry() {
           </p>
           <Button size="sm" onClick={() => setEditor({})}>新增环境</Button>
         </div>
-        : <div className="overflow-x-auto rounded-lg border border-line">
+        : visible.length === 0
+          ? <div
+              data-testid="environment-registry-filtered-empty"
+              className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-line px-6 py-10 text-center">
+            <p className="text-sm text-muted-foreground">没有符合当前筛选条件的环境。</p>
+            <Button variant="outline" size="sm" onClick={clearFilters}>清除筛选</Button>
+          </div>
+          : <div className="overflow-x-auto rounded-lg border border-line">
           <Table aria-label="环境台账列表">
             <TableHeader>
               <TableRow>
@@ -323,7 +354,7 @@ export function EnvironmentRegistry() {
                       onClick={() => toggleSort("ip")}>
                       主 IP<SortMark active={sort?.key === "ip"} dir={sort?.dir} />
                     </button>
-                    <HeaderFilter label="主 IP" active={!!ipFilter}>
+                    <HeaderFilter label="主 IP" active={!!ipFilter.trim()} onClear={() => setIpFilter("")}>
                       {() => <input autoFocus
                         className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                         placeholder="包含 IP 片段…" aria-label="按 IP 过滤"
@@ -339,7 +370,7 @@ export function EnvironmentRegistry() {
                       onClick={() => toggleSort("form")}>
                       形态<SortMark active={sort?.key === "form"} dir={sort?.dir} />
                     </button>
-                    <HeaderFilter label="形态" active={!!formFilter}>
+                    <HeaderFilter label="形态" active={!!formFilter} onClear={() => setFormFilter("")}>
                       {(close) => <FilterOptions value={formFilter}
                         onPick={(v) => { setFormFilter(v as EnvironmentForm | ""); close(); }}
                         options={[{ value: "", label: "全部形态" },
@@ -362,7 +393,7 @@ export function EnvironmentRegistry() {
                       onClick={() => toggleSort("tags")}>
                       标签<SortMark active={sort?.key === "tags"} dir={sort?.dir} />
                     </button>
-                    <HeaderFilter label="标签" active={!!activeTag}>
+                    <HeaderFilter label="标签" active={!!activeTag} onClear={() => setActiveTag("")}>
                       {(close) => <FilterOptions value={activeTag}
                         onPick={(v) => { setActiveTag(v); close(); }}
                         options={[{ value: "", label: "全部标签" },
@@ -377,7 +408,7 @@ export function EnvironmentRegistry() {
                       onClick={() => toggleSort("state")}>
                       状态<SortMark active={sort?.key === "state"} dir={sort?.dir} />
                     </button>
-                    <HeaderFilter label="状态" active={!!stateFilter}>
+                    <HeaderFilter label="状态" active={!!stateFilter} onClear={() => setStateFilter("")}>
                       {(close) => <FilterOptions value={stateFilter}
                         onPick={(v) => {
                           setStateFilter(v as EnvironmentView["probe"]["state"] | "");
@@ -391,11 +422,22 @@ export function EnvironmentRegistry() {
                   </span>
                 </TableHead>
                 <TableHead aria-sort={ariaSortOf("updated_by")}>
-                  <button type="button"
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => toggleSort("updated_by")}>
-                    更新人<SortMark active={sort?.key === "updated_by"} dir={sort?.dir} />
-                  </button>
+                  <span className="inline-flex items-center gap-1">
+                    <button type="button"
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                      onClick={() => toggleSort("updated_by")}>
+                      更新人<SortMark active={sort?.key === "updated_by"} dir={sort?.dir} />
+                    </button>
+                    <HeaderFilter label="更新人" active={!!updaterFilter}
+                      onClear={() => setUpdaterFilter("")}>
+                      {(close) => <FilterOptions value={updaterFilter}
+                        onPick={(v) => { setUpdaterFilter(v); close(); }}
+                        options={[{ value: "", label: "全部更新人" },
+                          ...allUpdaters.map((account) => ({
+                            value: account, label: nameOf(account),
+                          }))]} />}
+                    </HeaderFilter>
+                  </span>
                 </TableHead>
                 <TableHead aria-sort={ariaSortOf("updated_at")}>
                   <button type="button"
@@ -450,14 +492,6 @@ export function EnvironmentRegistry() {
                   </div>
                 </TableCell>
               </TableRow>)}
-              {visible.length === 0 && <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
-                  没有符合当前筛选条件的环境。
-                  <button type="button"
-                    className="ml-1 text-ink underline underline-offset-4"
-                    onClick={clearFilters}>清除筛选</button>
-                </TableCell>
-              </TableRow>}
             </TableBody>
           </Table>
         </div>}
