@@ -887,7 +887,7 @@ function DtsRegister({
                   </div>
                 </TableHead>
                 <TableHead>单号</TableHead>
-                <TableHead>标题</TableHead>
+                <TableHead className="w-full">标题</TableHead>
                 <TableHead>状态</TableHead>
                 {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
                 <TableHead className="w-12" />
