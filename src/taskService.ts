@@ -1,4 +1,4 @@
-import { confirmedPipelineRun, historicalPipelineFeedback } from "./pipelineHandoff.ts";
+import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
 import type { PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
@@ -8753,7 +8753,7 @@ export class TaskService {
         // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
         // 消费完，真实当前动作其实是 prepush/流水线验证；恢复时同步
         // 校正，不能让重新部署后的老任务继续同时显示两种当前阶段。
-        if (this.enterRepairVerification(task)) this.persist(task);
+        if (enterRepairVerification(task)) this.persist(task);
         const assistantSnapshot = readDeveloperAssistant(workspace);
         if (assistantSnapshot.handoff?.id
             && assistantSnapshot.handoff.state !== "returned"
@@ -16693,7 +16693,7 @@ export class TaskService {
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
     // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
-    if (this.enterRepairVerification(task)) this.persist(task);
+    if (enterRepairVerification(task)) this.persist(task);
     // 本地 prepush 不依赖 MR/流水线服务。部署窗口里外部平台暂未就绪时
     // 仍应先把被重启打断的本地验证接回来，不能卡在 preparing 假装在跑。
     const platformUrl = this.effectivePlatformUrl();
@@ -16970,13 +16970,8 @@ export class TaskService {
         body: JSON.stringify(runRequest),
       }).then((r) => readJson(r));
       if (!this.current(task, epoch)) return;
-      if (!["success", "failed", "running"].includes(String(run.status))) {
-        throw new Error(`流水线返回未知状态: ${String(run.status ?? "(empty)")}`);
-      }
-      confirmedPipelineRun(sha, { status: run.status as PipelineRun["status"],
-        ...(typeof run.sha === "string" ? { sha: run.sha } : {}),
-        ...(typeof run.is_valid === "boolean" ? { is_valid: run.is_valid } : {}) });
-      const checks = parsePipelineChecks(run.checks);
+      const acceptedRun = parseTriggeredPipelineRun(sha, run);
+      const checks = acceptedRun.checks;
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
@@ -17001,11 +16996,7 @@ export class TaskService {
         ...(checks !== undefined ? { checks } : {}),
         sha,
       };
-      await this.acceptPipelineRun(task, sha, { status: run.status as PipelineRun["status"],
-        log: String(run.log ?? ""), checks,
-        ...(typeof run.sha === "string" ? { sha: run.sha } : {}),
-        ...(typeof run.is_valid === "boolean" ? { is_valid: run.is_valid } : {}),
-      }, epoch);
+      await this.acceptPipelineRun(task, sha, acceptedRun, epoch);
     } catch (error) {
       if (!this.current(task, epoch)) return;
       // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
@@ -17063,39 +17054,11 @@ export class TaskService {
   /** Agent 主动触发与正常交付共用验证接棒，触发成功后不再重开旧修复使命。 */
   private async acceptPipelineRun(task: TaskState, sha: string, response: PipelineRun, epoch: number): Promise<void> {
     if (!this.current(task, epoch)) return;
-    const run = confirmedPipelineRun(sha, response);
-    if (task.summary.delivery?.git_push?.sha !== sha) throw new TaskControlError("流水线提交与当前已推送提交不一致");
-    task.summary.delivery = { ...task.summary.delivery, sha, pipeline: run.status,
-      checks: run.checks, stalled: undefined, waiting_on: undefined, evidence_gap: undefined };
-    const loop = task.summary.delivery.loop;
-    if (loop?.kind === "ci") {
-      loop.state = "verifying";
-      // last_sha/failure 保留本轮的原始失败快照，不伪造已修好或已通过。
-      task.mission = undefined;
-    }
-    task.summary.status = "verifying";
-    task.summary.detail = `正在验证提交 ${sha.slice(0, 8)}，旧提交的告警保留为历史记录`;
+    const run = projectPipelineRun(task, sha, response);
     this.persist(task);
     this.ensureMergeWatch(task);
     if (run.status === "running") this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
     else await this.pipelineVerdict(task, sha, run.status, run.log ?? "", run.checks, epoch);
-  }
-
-  /** 修复会话 → 修复结果验证的唯一状态交接。
-   *
-   * mission 仍在表示专职修复 Agent 尚未完成，绝不能提前切；没有 mission
-   * 且任务仍在活动交付态时，repairing 已经是旧版遗留或刚收口的陈旧值。
-   * 返回是否发生转换，由调用方在自己的原子边界持久化。 */
-  private enterRepairVerification(task: TaskState): boolean {
-    const loop = task.summary.delivery?.loop;
-    if (loop?.state !== "repairing" || task.mission) return false;
-    if (!["queued", "running", "pausing", "verifying"]
-      .includes(task.summary.status)) return false;
-    loop.state = "verifying";
-    task.summary.detail = task.summary.delivery?.prepush
-      ? "修复会话已完成，正在验证修复后的提交"
-      : "修复会话已完成，等待验证修复后的提交";
-    return true;
   }
 
   /** 流水线异步收敛:轮询 status?sha= 直到终态或任务真正结束。
