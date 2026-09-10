@@ -93,13 +93,15 @@ const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
   "knowledge", "modules", "workflows", "insights", "memories",
 ]);
 
-function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
+function appHistoryState(view: View, teamAssetTab?: TeamAssetTab,
+  issueChildTab?: IssueChildTab) {
   const current = history.state && typeof history.state === "object"
     ? history.state as Record<string, unknown> : {};
   return {
     ...current,
     maeFlowView: view,
     maeFlowTeamAssetTab: teamAssetTab,
+    maeFlowIssueChildTab: issueChildTab,
   };
 }
 
@@ -136,6 +138,14 @@ function readIssueChildTab(): IssueChildTab {
     }
   } catch { /* localStorage 不可用(隐私模式等)就回默认,不拦导航 */ }
   return "sessions";
+}
+
+function issueChildTabFromHistoryState(state: unknown): IssueChildTab | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const candidate = (state as Record<string, unknown>).maeFlowIssueChildTab;
+  return typeof candidate === "string"
+      && ISSUE_CHILD_TABS.has(candidate as IssueChildTab)
+    ? candidate as IssueChildTab : undefined;
 }
 
 interface WorkspaceRoute {
@@ -671,6 +681,12 @@ export function App() {
   const [issueChildTab, setIssueChildTab] =
     useState<IssueChildTab>(readIssueChildTab);
   const issueChild = session?.role === "admin" ? "sessions" : issueChildTab;
+  // 子页签选择持久化:localStorage(刷新还原)+ 浏览器历史快照
+  // (前进/后退还原,写入点见各 pushState/replaceState)。
+  useEffect(() => {
+    try { localStorage.setItem(ISSUE_CHILD_STORAGE_KEY, issueChildTab); }
+    catch { /* 存不进就算了,会话内仍然可用 */ }
+  }, [issueChildTab]);
 
   useEffect(() => {
     const syncRoute = () => {
@@ -702,8 +718,11 @@ export function App() {
       if (!focus) {
         const restoredView = viewFromHistoryState(event.state);
         const restoredTab = teamAssetTabFromHistoryState(event.state);
+        const restoredIssueChild = issueChildTabFromHistoryState(event.state);
         if (restoredView) setView(restoredView);
         if (restoredTab) setTeamAssetTab(restoredTab);
+        // 后退/前进还原问题处理子页签;admin 的强制口径在渲染处兜底。
+        if (restoredIssueChild) setIssueChildTab(restoredIssueChild);
         return;
       }
       setTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
@@ -1065,7 +1084,8 @@ export function App() {
     setIssueChildTab("sessions");
     const next = `/issues/${encodeURIComponent(id)}`;
     if (location.pathname !== next) {
-      history.pushState(appHistoryState("issues"), "", next);
+      history.pushState(appHistoryState("issues", undefined, "sessions"),
+        "", next);
     }
   };
   /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
@@ -1154,13 +1174,16 @@ export function App() {
       }
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
       history.pushState(appHistoryState(next,
-        next === "knowledge" ? teamAssetTab : undefined), "", "/");
+        next === "knowledge" ? teamAssetTab : undefined,
+        next === "issues" ? issueChild : undefined), "", "/");
     } else if (leavingKnowledgeFocus) {
       history.pushState(appHistoryState(next,
-        next === "knowledge" ? teamAssetTab : undefined), "", "/");
+        next === "knowledge" ? teamAssetTab : undefined,
+        next === "issues" ? issueChild : undefined), "", "/");
     } else if (location.pathname === "/") {
       history.replaceState(appHistoryState(next,
-        next === "knowledge" ? teamAssetTab : undefined), "",
+        next === "knowledge" ? teamAssetTab : undefined,
+        next === "issues" ? issueChild : undefined), "",
         location.pathname + location.search);
     } else {
       leaveIssueRoute(next);

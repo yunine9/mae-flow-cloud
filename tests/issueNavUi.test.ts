@@ -104,6 +104,15 @@ test("深链 /issues/:id:进入即子页签落问题会话(通知点开直达工
     `深链两路(打开会话/前进后退)都应落问题会话,实际 ${hits.length} 处`);
 });
 
+test("子页签选择持久化:localStorage 与历史快照双轨,前进/后退可还原", () => {
+  assert.match(app, /mae-flow:issue-child-tab/, "localStorage 存储键");
+  assert.match(app, /localStorage\.setItem\(ISSUE_CHILD_STORAGE_KEY/,
+    "选择变化要写回 localStorage(刷新还原)");
+  assert.match(app, /maeFlowIssueChildTab/, "历史快照要带子页签字段");
+  assert.match(app, /issueChildTabFromHistoryState\(event\.state\)/,
+    "popstate 后退/前进要还原子页签");
+});
+
 test("子页签区零硬编码色值:色彩一律走令牌桥(theme inline 映射存量变量)", () => {
   // 新 Tailwind 轨道的样式纪律:hex/rgb 色值不进 className,统一用
   // text-faint/bg-surface-3 这类令牌工具类(定义见 tailwind.css 桥)。
