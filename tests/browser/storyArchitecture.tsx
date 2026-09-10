@@ -6,9 +6,14 @@ import { storyViewCoverage } from "../../src/storyViewCoverage";
 declare const ARCHIFY_HTML_ONE: string;
 declare const ARCHIFY_HTML_TWO: string;
 let revision = "one", mode = "ready", opened = false, requests = 0;
+let updates = 0;
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
-window.fetch = async (input) => {
+window.fetch = async (input, options) => {
   const url = String(input);
+  if (url.endsWith("/overall-story/architecture") && options?.method === "POST") {
+    updates++; return new Response(JSON.stringify({ job: { kind: "architecture" } }));
+  }
+  if (url.endsWith("/overall-story")) return new Response(JSON.stringify({}));
   if (url.includes("?revision=")) {
     requests++;
     if (mode === "render-error") return new Response(JSON.stringify({ error: "layout validation failed: label overlaps module" }), { status: 422 });
@@ -22,13 +27,15 @@ window.fetch = async (input) => {
     views: storyViewCoverage("| 物理视图 | 不涉及 | 沿用现有部署，本次无部署变更 |\n## 逻辑视图\n```plantuml\nclass Order\n```"),
     diagrams: mode === "empty" ? [] : [{ id: "diagram-1", title: `版本 ${revision}`, type: "architecture", view: "logical", line: 7 }] }));
 };
-function Harness() { return <StoryArchitecture taskId="task" onOpenStory={() => { opened = true; }} />; }
-createRoot(document.getElementById("app")!).render(<Harness />);
+function Harness() { return <StoryArchitecture taskId="task" canUpdate onOpenStory={() => { opened = true; }} />; }
+const root = createRoot(document.getElementById("app")!);
+let mount = 0;
+root.render(<Harness key={mount} />);
 async function until(check: () => boolean, label: string) {
   for (let i = 0; i < 80; i++) { if (check()) return; await pause(20); }
   throw Error(label);
 }
-function refresh() { document.querySelector<HTMLButtonElement>('button[aria-label="刷新图源"]')!.click(); }
+function refresh() { root.render(<Harness key={++mount} />); }
 async function run() {
   await until(() => requests > 0, "首版图未请求");
   revision = "two"; refresh();
@@ -56,6 +63,9 @@ async function run() {
   if (!opened) throw Error("无法返回完整 Story");
   mode = "ready"; revision = "four"; refresh();
   await until(() => !!document.querySelector("iframe"), "Archify 图无法恢复");
+  document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.click();
+  await until(() => updates === 1, "刷新按钮没有发起架构图生成");
+  await until(() => !!document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.disabled, "生成期间未禁用重复提交");
   return { onlyArchify: true, missingTabsHidden: true, raceProtected: true, staleRemoved: true, failureReadable: true, emptyReadable: true, opened };
 }
 run().then((result) => document.getElementById("result")!.textContent = JSON.stringify(result))

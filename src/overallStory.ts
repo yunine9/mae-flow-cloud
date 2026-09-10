@@ -1,9 +1,10 @@
 import { StateConflictError } from "./humanGate.ts";
-import { bindArchifyArtifact } from "./storyArchitecture.ts";
+import { bindArchifyArtifact, storyArchitecture } from "./storyArchitecture.ts";
+import { renderArchify } from "./archifyRender.ts";
 import { requirementDiff } from "./documentDiff.ts";
 import { readStoryOutput } from "./overallStoryAgent.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AnnotationStore, type Annotation } from "./annotations.ts";
 import { listArtifactDocuments, readArtifact } from "./artifacts.ts";
@@ -17,6 +18,7 @@ import { OVERALL_STORY_ARTIFACT, readStoryState, readCurrentStory, storyHash,
 
 export interface StoryInput extends StorySnapshot { files: Record<string, string> }
 export interface StoryRun {
+  architectureOnly?: boolean;
   root: string; id: string; before: string; input: StoryInput; annotations: Annotation[]; signal: AbortSignal;
 }
 export interface StoryStatus extends StoryState {
@@ -153,7 +155,7 @@ export class OverallStoryCoordinator<T extends Owner> {
       || (input.sources.length > 0 && input.sources.every((s) => !s.missing));
     return { ...state, eligible: this.eligible(task), sources: input.sources, stale, pending_reviews: pending,
       can_confirm: Boolean(this.eligible(task) && current && complete && !stale && !this.active.has(id) && !state.job && !pending && task.summary.status !== "canceled"),
-      label: this.active.has(id) || state.job ? "Agent 正在整理整体 Story" : !current ? "尚未生成整体 Story"
+      label: this.active.has(id) || state.job ? state.job?.kind === "architecture" ? "Agent 正在更新架构图" : "Agent 正在整理整体 Story" : !current ? "尚未生成整体 Story"
         : stale ? "子任务或需求已变化 · 待同步" : !complete ? "部分 Story 尚未产出"
           : pending ? "有检视意见待闭环" : state.confirmed?.revision === current.id ? "责任人已确认" : "待检视与确认" };
   }
@@ -162,6 +164,47 @@ export class OverallStoryCoordinator<T extends Owner> {
     if (this.active.has(id)) return this.status(id);
     this.options.ready();
     this.launch(task, by, true);
+    return this.status(id);
+  }
+  /** 图源更新共用文档会话互斥，但不修改正文、确认状态或检视回执。 */
+  generateArchitecture(id: string, by: string): StoryStatus {
+    const task = this.owner(id); this.mutable(task); this.recover(task);
+    if (this.active.has(id)) throw new TaskControlError("Story 或架构图正在更新，请稍后重试");
+    const before = readCurrentStory(task.summary.workspace), state = readStoryState(task.summary.workspace);
+    if (!before.trim() || !state.current) throw new TaskControlError("请先生成全局 Story，再补充架构图");
+    this.options.ready();
+    const revision = state.current, jobId = randomUUID(), controller = new AbortController();
+    const epoch = auxiliarySessionEpoch(task), root = storyPath(task.summary.workspace, `jobs/${jobId}`);
+    state.job = { id: jobId, by, started_at: new Date().toISOString(), kind: "architecture" };
+    state.error = undefined; writeStoryState(task.summary.workspace, state);
+    const promise = Promise.resolve().then(async () => {
+      mkdirSync(root, { recursive: true });
+      const previous = storyRevisionPath(task.summary.workspace, revision, "architecture.json");
+      if (existsSync(previous)) writeFileSync(join(root, "architecture.json"), readFileSync(previous));
+      await this.options.run(task, { id: jobId, root, before, input: collectStoryInput(task, this.options),
+        annotations: [], signal: controller.signal, architectureOnly: true });
+      const artifact = bindArchifyArtifact(before, readStoryOutput(join(root, "architecture.json"), 2 * 1024 * 1024));
+      const projection = storyArchitecture(before, artifact);
+      const errors = projection.warnings.filter((message) => message.startsWith("平台架构产物"));
+      if (!projection.diagrams.length || errors.length) throw new Error(errors.join("；") || "未生成可展示的架构图，原图已保留");
+      for (const diagram of projection.diagrams) {
+        const result = await renderArchify(diagram.source);
+        if (!result.html || result.error) throw new Error(result.error || "架构图渲染失败，原图已保留");
+      }
+      if (controller.signal.aborted || this.stopped || auxiliarySessionEpoch(task) !== epoch
+        || this.options.task(id) !== task) throw new Error("架构图生成已停止");
+      const current = readStoryState(task.summary.workspace);
+      if (current.current !== revision || readCurrentStory(task.summary.workspace) !== before) throw new Error("Story 已更新，请重新补充架构图");
+      const temporary = `${previous}.${jobId}.tmp`;
+      writeFileSync(temporary, artifact, { mode: 0o600 }); renameSync(temporary, previous);
+      current.job = undefined; current.error = undefined; writeStoryState(task.summary.workspace, current);
+    }).catch((error) => {
+      if (this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
+      const current = readStoryState(task.summary.workspace);
+      current.job = undefined; current.error = error instanceof Error ? error.message : String(error);
+      writeStoryState(task.summary.workspace, current);
+    }).finally(() => { this.active.delete(id); });
+    this.active.set(id, { promise, controller });
     return this.status(id);
   }
   submit(id: string, picked: Annotation[], by?: string) {

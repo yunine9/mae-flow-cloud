@@ -17,12 +17,45 @@ async function read<T>(path: string, signal: AbortSignal): Promise<T> {
 }
 
 /** Story 与平台图源由服务端绑定版本；这里只保存选择状态，不显示过期图。 */
-export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void }) {
+export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView, canUpdate = false }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void; canUpdate?: boolean }) {
   const [projection, setProjection] = useState<Projection>();
   const [selected, setSelected] = useState("");
   const [activeView, setActiveView] = useState("logical");
   const [error, setError] = useState("");
   const [pulse, refresh] = useState(0);
+  const [job, setJob] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  const [submitting, setSubmitting] = useState(false);
+  const generationBase = `/tasks/${encodeURIComponent(taskId)}/overall-story`;
+  useEffect(() => {
+    if (!canUpdate) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let wasBusy = false;
+    async function poll() {
+      try {
+        const state = await read<{ job?: unknown; error?: string }>(generationBase, controller.signal);
+        if (controller.signal.aborted) return;
+        setJob({ busy: !!state.job, error: state.error });
+        if (wasBusy && !state.job) refresh((n) => n + 1);
+        wasBusy = !!state.job;
+      } catch (reason) {
+        if (!controller.signal.aborted) setJob({ busy: false, error: reason instanceof Error ? reason.message : String(reason) });
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
+    }
+    setJob({ busy: false }); void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [generationBase, canUpdate]);
+  async function updateArchitecture() {
+    setSubmitting(true);
+    try {
+      const response = await fetch(`${generationBase}/architecture`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "更新失败");
+      setJob({ busy: !!body.job });
+    } catch (reason) { setJob({ busy: false, error: reason instanceof Error ? reason.message : String(reason) }); }
+    finally { setSubmitting(false); }
+  }
   const [rendered, setRendered] = useState<{ key: string; html?: string; error?: string }>();
   const frame = useRef<HTMLIFrameElement>(null);
   const [presenting, setPresenting] = useState("");
@@ -102,9 +135,11 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
       <div><strong>架构图</strong><p>这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
       <div className="story-architecture-actions">
         <button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button>
-        <button type="button" onClick={() => refresh((n) => n + 1)} aria-label="刷新图源" title="刷新图源">↻</button>
+        {canUpdate && <button type="button" onClick={() => void updateArchitecture()} disabled={submitting || job.busy}
+          aria-label="更新架构图" title="根据当前 Story 生成或更新架构图">{submitting || job.busy ? "更新中…" : "↻"}</button>}
       </div>
     </header>
+    {job.error && <p className="story-architecture-warning" role="status">{job.error}</p>}
     {error ? <p role="status">{error}</p> : !projection ? <p role="status">正在读取 Story…</p> : <>
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
         <p className="story-architecture-warning" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}

@@ -45,6 +45,43 @@ function fixture() {
     runner: (next: typeof runner) => { runner = next; }, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+test("架构图可从无到有并更新，失败保留旧图，正文和确认不变", async () => {
+  const f = fixture();
+  try {
+    f.coordinator.adoptAnalysis("parent", "# Story\n完整设计\n```archify\n{}\n```", "owner");
+    const before = readCurrentStory(f.task.summary.workspace);
+    const confirmed = readStoryState(f.task.summary.workspace).confirmed;
+    let title = "首版模块";
+    f.runner(async (_task, job) => {
+      assert.equal(job.architectureOnly, true);
+      assert.equal(job.before, before);
+      const event = {} as import("../src/semanticEvents.ts").SemanticEvent;
+      assert.equal(overallStoryGate(job.root, true)("Write", "story.md", event)?.action, "deny");
+      assert.equal(overallStoryGate(job.root, true)("Write", "architecture.json", event)?.action, "allow");
+      assert.match(overallStoryMission(job), /整个 story.md/);
+      writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
+        id: "module", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title },
+          components: [{ id: "api", type: "backend", label: title, pos: [40, 40], size: [180, 64] }], connections: [] },
+      }] }));
+    });
+    f.coordinator.generateArchitecture("parent", "owner");
+    assert.throws(() => f.coordinator.generateArchitecture("parent", "owner"), /正在更新/);
+    await f.coordinator.settled("parent");
+    assert.equal(f.coordinator.status("parent").error, undefined);
+    assert.match(readCurrentStoryArchitecture(f.task.summary.workspace)!, /首版模块/);
+    title = "更新模块";
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    const updated = readCurrentStoryArchitecture(f.task.summary.workspace)!;
+    assert.match(updated, /更新模块/);
+    f.runner(async () => { throw new Error("模型暂时不可用"); });
+    f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
+    assert.match(f.coordinator.status("parent").error!, /模型暂时不可用/);
+    assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace), updated);
+    assert.equal(readCurrentStory(f.task.summary.workspace), before);
+    assert.deepEqual(readStoryState(f.task.summary.workspace).confirmed, confirmed);
+  } finally { await f.coordinator.shutdown(); f.dispose(); }
+});
+
 test("新 Story 输入跟踪模块职责；升级不改变历史汇总稿的摘要形态", () => {
   const f = fixture();
   try {
@@ -278,9 +315,9 @@ test("HTTP：受邀检视人能读整体 Story，只有责任人能生成和确�
   auth.createUser("reviewer", "reviewer-password", "developer");
   const service = new TaskService({ dataDir: join(root, "tasks"), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const task = service.create("需求", { account: "owner", collaborators: ["reviewer"], requirementAnalysis: true });
-  let generated = 0, confirmed = 0;
+  let generated = 0, confirmed = 0, architecture = 0;
   (service as any).overallStories = { status: () => ({ current: "one", label: "待检视" }),
-    generate: () => { generated++; return {}; }, confirm: () => { confirmed++; return {}; }, shutdown: async () => {} };
+    generate: () => { generated++; return {}; }, generateArchitecture: () => { architecture++; return {}; }, confirm: () => { confirmed++; return {}; }, shutdown: async () => {} };
   const server = createTaskServer(service, { auth });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
@@ -290,6 +327,9 @@ test("HTTP：受邀检视人能读整体 Story，只有责任人能生成和确�
     const url = `${base}/tasks/${task.id}/overall-story`;
     assert.equal((await fetch(url, { headers: { cookie: reviewer } })).status, 200);
     assert.equal((await fetch(url, { method: "POST", headers: { cookie: reviewer }, body: "{}" })).status, 403);
+    assert.equal((await fetch(url + "/architecture", { method: "POST", headers: { cookie: reviewer } })).status, 403);
+    assert.equal((await fetch(url + "/architecture", { method: "POST", headers: { cookie: owner } })).status, 202);
+    assert.equal(architecture, 1);
     assert.equal((await fetch(url + "/confirm", { method: "POST", headers: { cookie: reviewer }, body: '{"revision":"one"}' })).status, 403);
     assert.equal((await fetch(url, { method: "POST", headers: { cookie: owner }, body: "{}" })).status, 202);
     assert.equal((await fetch(url + "/confirm", { method: "POST", headers: { cookie: owner }, body: '{"revision":"one"}' })).status, 200);

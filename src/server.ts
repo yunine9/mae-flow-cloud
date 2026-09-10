@@ -2658,6 +2658,7 @@ export function createTaskServer(
               return json(response, 403, { error: "只有责任人可以生成、更新或确认整体 Story；受邀者可提交检视意见" });
             }
             const actor = viewer?.username ?? "本地用户";
+            if (parts[3] === "architecture") return json(response, 202, service.overallStories.generateArchitecture(id, actor));
             if (parts[3] === "stop") return json(response, 200, await service.overallStories.stop(id));
             if (parts[3] === "confirm") {
               const body = await readBody(request);

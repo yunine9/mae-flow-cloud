@@ -118,6 +118,7 @@ export const STORY_ARCHITECTURE_GUIDANCE = [
 export function archifyArtifactGuidance(path: string, references = "archify-reference/"): string {
   return [
     `平台架构图是 Story 的内部派生产物，单独写到 ${path}；不得把 Archify JSON 写进 story.md。`,
+    "先通读整个 Story，根据需求场景、模块职责、接口契约、依赖及运行部署关系组织架构图；不能只把某张 PlantUML 翻译成 Archify。已有图源只作参考，以全文设计为准。",
     `读取 ${references.replace(/\/?$/, "/")}README.md、对应 schema 和示例，为 Archify 能准确表达且确实需要展示的设计生成图；类图等不支持的内容只留在 Story 的 PlantUML 中，不冒充受支持类型。`,
     "产物格式：{\"schema_version\":1,\"story_sha256\":\"story.md 的真实 SHA-256\",\"diagrams\":[{\"id\":\"稳定短标识\",\"view\":\"logical|development|process|physical|scenarios\",\"story_line\":对应设计在 Story 中的起始行,\"source\":{Archify 原生 JSON}}]}。没有适合 Archify 的图时仍写空 diagrams 数组。",
     "source 必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。只支持 architecture/workflow/sequence/dataflow/lifecycle，不得使用 brand、repository、sources 外部读取字段。",
