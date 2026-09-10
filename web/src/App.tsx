@@ -13,7 +13,8 @@ import {
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
-import { TeamDomainSwitchPrototype } from "./prototype/TeamDomainSwitch";
+import { TeamDomainSwitch, persistTeamDomain, readTeamDomain, type TeamDomain } from "./TeamDomainSwitch";
+import { TeamIssueWorld } from "./TeamIssueWorld";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -609,6 +610,13 @@ export function App() {
     return next;
   });
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
+  // 领域即标题(原型五稿确认折入):团队页在「需求交付/问题处理」两域间
+  // 整页切换,选择记在本机沿用;问题域页面卸载即回需求域原样。
+  const [teamDomain, setTeamDomain] = useState<TeamDomain>(readTeamDomain);
+  const selectTeamDomain = (next: TeamDomain) => {
+    setTeamDomain(next);
+    persistTeamDomain(next);
+  };
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
@@ -1062,7 +1070,7 @@ export function App() {
       ? (session.role === "admin"
         ? "查看团队当前推进、负责人和阻塞风险；需要时进入任务工作台兜底。"
         : "了解团队此刻正在推进什么；你的操作仍留在个人工作台。")
-      : "回看已经形成结果的交付档案、MR 和事件记录。" },
+      : "回看已经形成结果的成果档案、MR 和事件记录。" },
     mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
     issues: { title: "问题处理", description: session.role === "admin"
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
@@ -1189,9 +1197,14 @@ export function App() {
       <header className="workspace-header"><div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
-          {/* 【原型 · 用后即弃】领域切换(标题位下拉;迭代中,定稿后折进正式实现) */}
-          <TeamDomainSwitchPrototype tasks={tasks} issues={teamIssues}
-            onOpenIssue={openIssueSession} />
+          {/* 领域即标题(原型五稿确认折入正式实现):页头 h1 位下拉切
+              「需求交付/问题处理」;切到问题域=整页换成问题世界(不是叠加),
+              需求域=真实页面原样。 */}
+          <TeamDomainSwitch domain={teamDomain} onSelect={selectTeamDomain}
+            tasks={tasks} issues={teamIssues} />
+          {teamDomain === "issue"
+            ? <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+            : <>
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
             <button type="button" role="tab" id="team-task-current-tab"
               aria-controls="team-task-current-panel"
@@ -1205,7 +1218,7 @@ export function App() {
               aria-selected={teamTaskTab === "archive"}
               className={teamTaskTab === "archive" ? "active" : ""}
               onClick={() => setTeamTaskTab("archive")}>
-              <strong>交付档案</strong><small>待合入、完成、失败与取消记录</small>
+              <strong>成果档案</strong><small>待合入、完成、失败与取消记录</small>
             </button>
           </nav>
           {teamTaskTab === "current" ? <div role="tabpanel"
@@ -1227,6 +1240,7 @@ export function App() {
               onOpenTask={openArtifacts}
             />
           </div>}
+            </>}
         </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
@@ -1817,7 +1831,7 @@ function TeamDeliveryOverview({
       <div className="team-delivery-overview-copy">
         
         <h2>交付概览</h2>
-        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在交付档案。</p>
+        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
       </div>
       <div className="team-delivery-summary"
         aria-label={`需求总数 ${stats.requirements} 项（仅主任务），全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
