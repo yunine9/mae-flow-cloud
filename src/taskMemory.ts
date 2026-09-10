@@ -35,8 +35,8 @@ import {
 import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type MemorySource = "annotation" | "prepush_fix" | "user_note";
-export type MemoryJudge = "human" | "pipeline";
+export type MemorySource = "annotation" | "prepush_fix" | "user_note" | "agent_note";
+export type MemoryJudge = "human" | "pipeline" | "agent";
 /** one_off 只进全文检索;local/general 才进推送与目录摘要(§5)。 */
 export type MemoryScope = "one_off" | "local" | "general";
 
@@ -136,7 +136,7 @@ export function memoryWeight(
   stats: MemoryStats = EMPTY_STATS,
   now = Date.now(),
 ): number {
-  const base = record.judged_by === "human" ? 1 : 0.6;
+  const base = record.judged_by === "human" ? 1 : record.judged_by === "agent" ? 0.4 : 0.6;
   const ageDays = Math.max(0, (now - new Date(record.at).getTime()) / DAY_MS);
   const decay = Number.isFinite(ageDays) ? Math.pow(0.5, ageDays / 365) : 0.5;
   const used = Math.min(0.5, stats.hits * 0.1);

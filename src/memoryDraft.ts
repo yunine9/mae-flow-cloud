@@ -87,7 +87,7 @@ export function buildDirectoryDigestPrompt(
   ].join("\n");
   const user = [
     `目录:${dir || "仓库根"}(共 ${rows.length} 条)`,
-    ...rows.map((row) => `- (${row.id}) [${row.judged_by === "human" ? "人确认" : "流水线"}`
+    ...rows.map((row) => `- (${row.id}) [${row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线"}`
       + ` · ${row.at.slice(0, 10)} · ${row.paths[0] ?? ""}] ${row.trigger}:`
       + `${row.conclusion.replace(/\s+/g, " ").slice(0, 200)}`),
   ].join("\n");

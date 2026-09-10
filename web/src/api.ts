@@ -2812,8 +2812,8 @@ export async function addAnnotation(
 /** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
 export interface MemoryRecord {
   id: string;
-  source: "annotation" | "prepush_fix" | "user_note";
-  judged_by: "human" | "pipeline";
+  source: "annotation" | "prepush_fix" | "user_note" | "agent_note";
+  judged_by: "human" | "pipeline" | "agent";
   scope: "one_off" | "local" | "general";
   repo: string;
   paths: string[];

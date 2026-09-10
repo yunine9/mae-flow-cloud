@@ -4585,9 +4585,7 @@ export class TaskService {
       + (result.message ? ` — ${result.message.slice(0, 120)}` : ""));
   }
 
-  /** 预热原生执行器:编码容器里的独立 Pi 会话。与 prepush 同构但更简
-   * ——不修复、不建容器、不产证据。同一容器两个会话不违反"两个容器
-   * 不写同一工作区";此刻主 Agent 还在需求澄清,工作区没人写。 */
+  /** 基线预热独立会话：复用编码容器，不修改源码、不产交付证据。 */
   private async runCloudWarmupAgent(
     task: TaskState,
     request: WarmupRunRequest,
@@ -5568,13 +5566,13 @@ export class TaskService {
       task.memoryBriefingIds = rows.map((row) => row.id);
       this.logMemoryUsage(task, { moment: "launch", ids: task.memoryBriefingIds });
       const lines = rows.map((row) => {
-        const who = row.judged_by === "human" ? "人确认" : "流水线";
+        const who = row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线";
         const where = row.paths[0]
           ? `${row.paths[0]}${row.line ? `:${row.line}` : ""}` : "本仓";
         return `- [${who} · ${row.at.slice(0, 10)} · ${where}] ${row.trigger}:`
           + `${row.conclusion.replace(/\s+/g, " ").slice(0, 200)}`;
       });
-      return `本仓的任务记忆(过去的单子里被人或流水线关掉的环;是线索不是规则,`
+      return `本仓的任务记忆(含闭环经验和主动记录;是线索不是规则,`
         + `改到对应位置时先看一眼,与现状冲突以现状和内核指令为准):\n`
         + lines.join("\n");
     } catch (error) {
@@ -5628,7 +5626,6 @@ export class TaskService {
     return this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
   }
 
-  /** 给 Agent 的检索工具;没有 sidecar 就不给(索引级没法回答自然语言)。 */
   /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
   private splitTools(task: TaskState): unknown[] {
     const summary = task.summary;
@@ -5814,11 +5811,14 @@ export class TaskService {
   }
 
   private memoryTools(task: TaskState): unknown[] | undefined {
-    if (!this.memorySidecar) return undefined;
     return createMemoryTools({
       repo: this.memoryRepo(task),
       search: (input) => this.memorySearch(task, input),
-      expand: (id) => this.memorySidecar!.expand(id),
+      expand: async (id) => this.memories().find(id)?.repo === this.memoryRepo(task)
+        ? this.memories().read(id) : undefined,
+      write: (input, callId) => this.recordMemory(task, { ...input,
+        source: "agent_note", judged_by: "agent", repo: this.memoryRepo(task),
+        task: task.summary.id, evidence: `agent:${callId}`, author: "Agent" }),
       onUse: (event) => this.logMemoryUsage(task, event),
     });
   }
@@ -5994,10 +5994,9 @@ export class TaskService {
     });
   }
 
-  /** §5 起草 trigger/scope:入库后异步补一版,预算 90 s(旁路,给宽),失败保留模板并
-   * 标 failed。user_note 不过这道(人写的那句话就是 trigger,固定 general)。 */
+  /** 闭环事件异步整理；人和 Agent 主动记录的内容直接保存。 */
   private queueMemoryDraft(task: TaskState, record: MemoryRecord): void {
-    if (record.source === "user_note") return;
+    if (record.source === "user_note" || record.source === "agent_note") return;
     const drafter = this.memoryDrafter(task);
     if (!drafter) return;
     const job = (async () => {
