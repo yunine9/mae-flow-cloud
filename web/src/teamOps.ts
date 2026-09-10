@@ -256,8 +256,8 @@ export interface IssueDeliveryBreakdown {
 
 /** 问题域交付概览口径:概览规模数字与阶段/状态格共用同一批会话,与
  * 需求侧 teamDeliveryBreakdown 同构(规模 × 阶段格 × 状态格,供概览格
- * 筛选联动)。输入是 IssueSummary 的稳定字段投影(与 issueToTeamTask
- * 同款自包含约束,根级 typecheck 不必拖进浏览器 fetch 客户端)。 */
+ * 筛选联动)。输入是 IssueSummary 的稳定字段投影(自包含约束,根级
+ * typecheck 不必拖进浏览器 fetch 客户端)。 */
 export function issueDeliveryBreakdown(
   issues: ReadonlyArray<{ status: string; stage?: string }>,
 ): IssueDeliveryBreakdown {
@@ -285,55 +285,3 @@ export function issueDeliveryBreakdown(
   };
 }
 
-function mapIssueStatus(status: string): string {
-  switch (status) {
-    case "waiting_user": return "waiting_for_human";
-    case "idle": return "running";
-    case "suspended": return "paused";
-    case "archived": return "completed";
-    default: return status;
-  }
-}
-
-/** 把 IssueSummary 适配成 TeamTask,让团队看板的过滤/排序/渲染纯函数
- * 直接复用。只填 TeamTask 的稳定字段——看板扫描态只关心 id/状态/处理人/
- * 阶段线/更新时间,不需要 IssueSummary 的决策卡/检视/流水线等重字段。 */
-export function issueToTeamTask(issue: {
-  id: string;
-  title: string;
-  status: string;
-  account: string;
-  created_at: string;
-  updated_at: string;
-  stage?: string;
-  stage_note?: string;
-  stage_at?: string;
-}): TeamTask {
-  const status = mapIssueStatus(issue.status);
-  const needsAttention = issue.status === "waiting_user"
-    || issue.status === "failed";
-  const kind = issue.status === "failed" ? "blocked"
-    : issue.status === "waiting_user" ? "waiting"
-    : "progress";
-  const nextAction = issue.status === "waiting_user" ? "需要答复"
-    : issue.status === "failed" ? "需要介入"
-    : issue.status === "idle" ? "等待续聊"
-    : issue.status === "suspended" ? "已挂起"
-    : "AI 推进中";
-  return {
-    id: issue.id,
-    requirement: issue.title,
-    status,
-    created_at: issue.created_at,
-    updated_at: issue.updated_at,
-    last_progress_at: issue.stage_at || issue.updated_at,
-    luban_account: issue.account,
-    focus: {
-      kind,
-      headline: issue.stage_note || issue.stage || "",
-      next_action: nextAction,
-      needs_attention: needsAttention,
-      priority: needsAttention ? 1 : 0,
-    },
-  };
-}

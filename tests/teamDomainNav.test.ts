@@ -1,8 +1,9 @@
 /**
- * 团队任务页「领域即标题」切换(原型五稿确认后的正式实现)的契约:
- * 切换器存在与标题位接管方式、两域互斥渲染、问题侧交付概览口径纯函数、
- * 档案措辞「成果档案」。纯文本源码锚点(同 issueUiContracts 模式)+
- * teamOps 纯函数直跑(同 teamOps.test.ts 模式)。
+ * 团队域拆分导航(2026-09-10 拍板)的契约:侧栏「团队需求/团队问题」
+ * 两条目互斥、页内领域切换器退场、需求板净化(问题会话不再混进需求
+ * 队列)、问题世界三段齐备、问题侧交付概览口径纯函数、档案措辞。
+ * 纯文本源码锚点(同 issueUiContracts 模式)+ teamOps 纯函数直跑
+ * (同 teamOps.test.ts 模式)。
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,67 +16,54 @@ import {
 } from "../web/src/teamOps.ts";
 
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
-const switcher = readFileSync(resolve("web/src/TeamDomainSwitch.tsx"), "utf-8");
+const teamOps = readFileSync(resolve("web/src/teamOps.ts"), "utf-8");
 const issueWorld = readFileSync(
   resolve("web/src/TeamIssueWorld.tsx"), "utf-8");
 const historyBoard = readFileSync(
   resolve("web/src/HistoryBoard.tsx"), "utf-8");
 const helpCenter = readFileSync(resolve("web/src/HelpCenter.tsx"), "utf-8");
 
-test("领域切换器挂在团队页标题位,原型已退场", () => {
-  // 团队页挂正式切换器,原型文件与挂载点都不在了。
-  assert.match(app, /<TeamDomainSwitch domain=\{teamDomain\} onSelect=\{selectTeamDomain\}/);
-  assert.doesNotMatch(app, /TeamDomainSwitchPrototype/);
+test("导航按域拆两条:团队需求(view=team)+团队问题(view=teamIssues)", () => {
+  // View 类型与路由白名单都认 teamIssues,历史恢复不会把它丢成根视图。
+  assert.match(app, /type View = "team" \| "teamIssues"/);
+  assert.match(app, /"team", "teamIssues", "mine"/);
+  // 两条导航都在,徽章各算各的域(需求等决策/问题等答复含 idle)。
+  assert.match(app,
+    /view="team" current=\{view\} onSelect=\{selectView\} label="团队需求" badge=\{waitingCount\}/);
+  assert.match(app,
+    /view="teamIssues" current=\{view\} onSelect=\{selectView\} label="团队问题" badge=\{issueWaitingCount\}/);
+  assert.match(app,
+    /issueWaitingCount = teamIssues\.filter\(\(issue\) =>\n    issue\.status === "waiting_user" \|\| issue\.status === "idle"\)\.length/);
+  // 「团队任务」作为页面名退役(源码不再出现;历史提交里留着)。
+  assert.doesNotMatch(app, /团队任务/);
+  // 头部两域各有标题与一句话说明。
+  assert.match(app, /team: \{ title: "团队需求"/);
+  assert.match(app, /teamIssues: \{ title: "团队问题"/);
+});
+
+test("页内领域切换器退场:组件与挂载点、localStorage 键全都不在了", () => {
+  assert.equal(existsSync(resolve("web/src/TeamDomainSwitch.tsx")), false,
+    "切换器应从本分支删除(提交留在 git 历史)");
   assert.equal(existsSync(resolve("web/src/prototype/TeamDomainSwitch.tsx")),
-    false, "原型文件应从本分支删除(五稿提交留在 git 历史)");
-  // 弹层两行选项:领域名与统计行都在切换器里。
-  assert.match(switcher, /aria-haspopup="listbox"/);
-  assert.match(switcher, /"需", "需求交付"/);
-  assert.match(switcher, /"问", "问题处理"/);
-  // 领域选择持久化:localStorage 键 + App 侧读/写都接上。
-  assert.match(switcher, /mae-flow:team-domain/);
-  assert.match(switcher, /export function readTeamDomain/);
-  assert.match(switcher, /export function persistTeamDomain/);
-  assert.match(app, /useState<TeamDomain>\(readTeamDomain\)/);
-  assert.match(app, /persistTeamDomain\(next\)/);
+    false, "原型文件应保持退场");
+  assert.doesNotMatch(app, /TeamDomainSwitch/);
+  assert.doesNotMatch(app, /teamDomain/);
+  assert.doesNotMatch(app, /mae-flow:team-domain/);
 });
 
-test("h1 接管必须是隐藏+自有宿主,绝不清空 React 管理的节点(9f926bf 教训)", () => {
-  // 安全方式三要素:隐藏 h1、在它后面插入自有宿主、卸载恢复。
-  assert.match(switcher, /querySelector<HTMLElement>\("\.workspace-header h1"\)/);
-  assert.match(switcher, /h1\.insertAdjacentElement\("afterend", host\)/);
-  assert.match(switcher, /h1\.style\.display = "none"/);
-  assert.match(switcher, /h1\.style\.display = ""/);
-  assert.match(switcher, /host\.remove\(\)/);
-  // 红线:不许对 React 管理的节点做 textContent/innerHTML 写操作
-  // (曾删掉 h1 的文本子节点,视图切换 commit 时 removeChild 崩页)。
-  assert.doesNotMatch(switcher, /textContent\s*=/);
-  assert.doesNotMatch(switcher, /innerHTML\s*=/);
+test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进队列", () => {
+  // 组件签名不再收 issues/onOpenIssue,队列不再渲染问题卡。
+  assert.match(app, /function TeamDashboard\(\{\n  tasks,\n  users,/);
+  assert.doesNotMatch(app, /<TeamIssueCard/);
+  assert.doesNotMatch(app, /issueToTeamTask/);
+  // 适配器随拆分成死代码,teamOps 里一并移除(口径唯一,不留双入口)。
+  assert.doesNotMatch(teamOps, /issueToTeamTask/);
+  // 问题会话的团队全景有且只有一个家:TeamIssueWorld。
+  assert.match(app,
+    /view === "teamIssues" && <section className="team-tasks-workspace">\n          <TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>\n        <\/section>/);
 });
 
-test("切换器样式守 #146:Tailwind+shadcn,自带 tw-root,不硬编码色值", () => {
-  assert.match(switcher, /@\/components\/ui\/popover/);
-  assert.match(switcher, /tw-root/);
-  // 不新增 legacy css:不 import 任何 css 文件;颜色只出令牌工具类。
-  assert.doesNotMatch(switcher, /from "\.[^"]*\.css"/);
-  assert.doesNotMatch(switcher, /#[0-9a-fA-F]{6}\b/);
-  // 领域色走令牌桥:需求域=ink,问题域=success。
-  assert.match(switcher, /bg-ink/);
-  assert.match(switcher, /bg-success/);
-});
-
-test("两域互斥渲染:问题域整页换成问题世界,需求域原页面原样", () => {
-  // App 以 teamDomain 分支:issue → TeamIssueWorld;否则原样渲染
-  // 页签导航 + TeamDashboard/HistoryBoard(需求域真实页面)。
-  assert.match(app, /teamDomain === "issue"\s*\n\s*\? <TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
-  assert.match(app, /<nav className="team-task-tabs"/);
-  assert.match(app, /<TeamDashboard/);
-  assert.match(app, /<HistoryBoard/);
-  // 问题世界不渲染需求域页签(整页换掉,不是叠加)。
-  assert.doesNotMatch(issueWorld, /team-task-tabs/);
-});
-
-test("问题域页面三段齐备,概览复用需求侧类名体系与既有卡片", () => {
+test("团队问题页三段齐备,概览复用需求侧类名体系与既有卡片", () => {
   // 概览:team-delivery-overview 同一套类名;阶段/状态两组格。
   assert.match(issueWorld, /className="team-delivery-overview"/);
   assert.match(issueWorld, /id="issue-delivery-stage-title"/);
