@@ -11,7 +11,7 @@ import { PlantUml } from "./PlantUml";
 
 /** 待补充令牌(#184):润色稿对缺失信息的标注约定——最基本的加粗语法。
  * 自有渲染面(润色确认弹窗等)染红显眼;编辑器内不做特殊处理。 */
-export const PENDING_MARK = "【待补充";
+const PENDING_MARK = "【待补充";
 
 export function hasPendingMark(text: string): boolean {
   return text.includes(PENDING_MARK);

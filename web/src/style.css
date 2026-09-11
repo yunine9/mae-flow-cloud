@@ -2389,12 +2389,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-field-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.issue-polish-btn {
-  padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px;
-  background: transparent; color: var(--accent); font: inherit; cursor: pointer;
-}
-.issue-polish-btn:hover:not(:disabled) { border-color: var(--accent); }
-.issue-polish-btn:disabled { color: var(--faint); cursor: not-allowed; }
 .issue-polish-note {
   margin: 0; padding: 8px 10px; border-radius: 8px;
   background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));

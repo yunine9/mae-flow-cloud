@@ -9,6 +9,7 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
@@ -321,12 +322,12 @@ function ManualRegister({
           <span className="issue-field-head">
             <span>现象描述 <i className="req">*</i></span>
             {/* AI 润色(#184):描述为空不可点,润色中防重复提交。 */}
-            <button type="button" className="issue-polish-btn"
+            <Button type="button" variant="outline" size="xs"
               disabled={!description.trim() || polishing}
               title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
               onClick={() => void polish()}>
               {polishing ? "润色中…" : "AI 润色"}
-            </button>
+            </Button>
           </span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
@@ -428,10 +429,11 @@ function ManualRegister({
             resolveImage={(path) => issueImageUrl(path)} />
         </div>
         <DialogFooter>
-          <button type="button" onClick={() => setPolishResult(null)}>放弃</button>
-          <button type="button" className="primary" onClick={adoptPolish}>
+          <Button type="button" variant="outline" size="sm"
+            onClick={() => setPolishResult(null)}>放弃</Button>
+          <Button type="button" size="sm" onClick={adoptPolish}>
             替换原稿
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>}

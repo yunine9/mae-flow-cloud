@@ -440,14 +440,11 @@ export async function handleIssueRoutes(
       if (viewer?.role === "admin") {
         return done(403, { error: "管理员不发起问题会话" });
       }
+      // 空描述的 409 人话单点在 polish.ts(IssueControlError),这里不重复。
       const body = await readBody(request);
-      const description = String(body.description ?? "");
-      if (!description.trim()) {
-        return done(409, { error: "描述为空,无需润色——先写几句现象再点润色" });
-      }
       const outcome = await issueFlow.polishDescription({
         title: String(body.title ?? ""),
-        description,
+        description: String(body.description ?? ""),
         ...(body.module !== undefined ? { module: String(body.module) } : {}),
         ...(body.environment !== undefined
           ? { environmentName: String(body.environment) } : {}),

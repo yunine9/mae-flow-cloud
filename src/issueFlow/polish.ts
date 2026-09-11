@@ -20,7 +20,9 @@ import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   describeImageBytes,
+  safeError,
   type VisionModelChoice,
+  type VisionRuntime,
 } from "../visionCapability.ts";
 import { IssueControlError, PolishModelError } from "./errors.ts";
 import { extractIssueImagePaths, readStagedImage } from "./issueImages.ts";
@@ -40,21 +42,31 @@ export interface PolishModelChoice {
   json: Record<string, unknown>;
 }
 
-/** 一次性模型通路的结构最小面(与 visionCapability.VisionRuntime 同
- * 形):生产是 pi-coding-agent 的 ModelRuntime,测试注入假件。 */
-export interface PolishRuntime {
-  getModel(provider: string, model: string): unknown;
-  completeSimple(
-    model: unknown,
-    context: unknown,
-    options?: unknown,
-  ): Promise<any>;
+/** 运行时句柄:dispose 负责临时 models.json 目录的清理(密钥不残留)。
+ * 通路结构面直接用 visionCapability 的 VisionRuntime(生产为
+ * pi-coding-agent 的 ModelRuntime,测试注入假件)。 */
+export interface PolishRuntimeHandle {
+  runtime: VisionRuntime;
+  dispose(): void;
 }
 
-/** 运行时句柄:dispose 负责临时 models.json 目录的清理(密钥不残留)。 */
-export interface PolishRuntimeHandle {
-  runtime: PolishRuntime;
-  dispose(): void;
+/** 润色识图熔断(与 inspect_image 的 CIRCUIT_FAILURES 同口径):连续
+ * 失败 2 次即暂停识图尝试,一次成功复位。inspect_image 的熔断是会话
+ * 工具层状态;润色是一次性(非会话)通路,门挂在服务实例上按进程记忆。
+ * 测试可经 deps 注入自己的门。 */
+export interface PolishVisionGate {
+  allow(): boolean;
+  record(ok: boolean): void;
+}
+
+export function createVisionGate(failures = 2): PolishVisionGate {
+  let consecutive = 0;
+  return {
+    allow: () => consecutive < failures,
+    record: (ok) => {
+      consecutive = ok ? 0 : consecutive + 1;
+    },
+  };
 }
 
 export interface PolishDeps {
@@ -62,6 +74,8 @@ export interface PolishDeps {
   mainModel: PolishModelChoice;
   /** 识图角色:缺席 = 润色不看图(vision_used=false + 明示)。 */
   visionChoice?: VisionModelChoice;
+  /** 识图熔断门:缺席 = 每次请求都尝试(调用方自担频次)。 */
+  visionGate?: PolishVisionGate;
   log?: (message: string) => void;
   /** 测试注入点:假件运行时工厂;生产默认临时目录物化 models.json。 */
   createRuntime?: (
@@ -95,20 +109,13 @@ async function defaultRuntimeHandle(
     chmodSync(modelsPath, 0o600);
     const runtime = await ModelRuntime.create({
       modelsPath,
-    }) as unknown as PolishRuntime;
+    }) as unknown as VisionRuntime;
     return { runtime, dispose: () => rmSync(dir, { recursive: true, force: true }) };
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw new PolishModelError(
-      `润色模型运行时初始化失败：${redactSecrets(String(error))}`);
+      `润色模型运行时初始化失败：${safeError(String(error))}`);
   }
-}
-
-/** 错误消息出域前的密钥擦除(与 visionCapability.safeError 同款正则)。 */
-function redactSecrets(message: string): string {
-  return String(message)
-    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9._~-]{8,}\b/g, "[REDACTED]");
 }
 
 /** 用户内容里的 {{ 会与 promptCopy 的占位符判定相撞(用户贴过模板
@@ -178,14 +185,22 @@ export async function polishIssueDescription(
     let visionUsed = false;
     let visionNote: string | undefined;
     let observations = "（无截图，未参考图片内容。）";
+    const gate = deps.visionGate;
+    const gateAllows = !gate || gate.allow();
     if (images.length) {
       if (!deps.visionChoice) {
         visionNote = "识图服务未配置，本次润色未参考截图内容";
+      } else if (!gateAllows) {
+        visionNote = "识图连续失败已熔断，本次润色未参考截图内容";
+        deps.log?.("识图熔断中,跳过识图(fail-open)");
       } else {
         try {
           observations = await describeImageBytes({
             runtime: handle.runtime,
             choice: deps.visionChoice,
+            // 缓存格式与键口径与 inspect_image 同款(schema 1),但登记
+            // 前无会话工作区,缓存落数据目录——只在润色通路内自命中,
+            // 不与各会话 workspace/vision-cache 共仓。
             cacheDir: join(deps.dataDir, "vision-cache"),
             images,
             question: promptCopy("polish", "vision-question"),
@@ -193,10 +208,12 @@ export async function polishIssueDescription(
             sessionId: "issues:polish:vision",
           });
           visionUsed = true;
+          gate?.record(true);
         } catch (error) {
+          gate?.record(false);
           visionNote = "识图失败，本次润色未参考截图内容";
           observations = "（截图存在但未识读：识图服务不可用。）";
-          deps.log?.(`识图失败(fail-open): ${redactSecrets(String(error))}`);
+          deps.log?.(`识图失败(fail-open): ${safeError(error)}`);
         }
       }
       if (missing > 0) {
@@ -237,11 +254,11 @@ export async function polishIssueDescription(
         sessionId: "issues:polish",
       });
     } catch (error) {
-      throw new PolishModelError(`润色请求失败：${redactSecrets(String(error))}`);
+      throw new PolishModelError(`润色请求失败：${safeError(String(error))}`);
     }
     if (response?.stopReason === "error" || response?.stopReason === "aborted") {
       throw new PolishModelError(
-        `润色请求失败：${redactSecrets(String(response.errorMessage || response.stopReason))}`);
+        `润色请求失败：${safeError(String(response.errorMessage || response.stopReason))}`);
     }
     const text = (response?.content ?? [])
       .filter((item: any) => item?.type === "text")

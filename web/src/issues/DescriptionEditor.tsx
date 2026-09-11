@@ -33,8 +33,10 @@ export function DescriptionEditor({
   value: string;
   /** 内容变更(已映射回相对引用,可直接进 description)。 */
   onChange: (next: string) => void;
-  /** 图片上传:落 staging,返回 issue-images/ 相对引用。 */
+  /** 图片上传:落 staging,返回 issue-images/ 相对引用。上传失败由
+   * 钩子自行向用户报告(编辑器只跳过该图,不代发第二遍)。 */
   onUploadImage: (file: File) => Promise<string>;
+  /** 仅编辑器初始化失败时上报(上传路径不走这里)。 */
   onError?: (message: string) => void;
   placeholderText?: string;
 }) {
@@ -76,9 +78,9 @@ export function DescriptionEditor({
                   src: issueImageUrl(ref), alt: "截图",
                 });
                 if (node) nodes.push(node);
-              } catch (reason) {
-                errorRef.current?.(`图片上传失败:${
-                  String(reason instanceof Error ? reason.message : reason)}`);
+              } catch {
+                // 上传失败的用户提示归上传钩子所有(它自己 onError);
+                // 这里只跳过该图,不让单图失败中断整批插入。
               }
             }
             return nodes;

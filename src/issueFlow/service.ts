@@ -225,10 +225,12 @@ import {
 } from "../pipelineEvidence.ts";
 import { syncIssueImagesToWorkspace } from "./issueImages.ts";
 import {
+  createVisionGate,
   polishIssueDescription,
   type PolishInput,
   type PolishOutcome,
   type PolishRuntimeHandle,
+  type PolishVisionGate,
 } from "./polish.ts";
 import { FeedbackStore, type FeedbackRecord } from "../feedbackStore.ts";
 
@@ -1178,11 +1180,15 @@ export class IssueFlowService {
    * 主模型选择、识图角色(管理页 settings.vision 优先于部署旗标,与
    * visionCapability 同一优先级);润色运行时工厂可经 options 注入
    * 假件(契约测试不真调网关)。 */
+  /** 润色识图熔断门(进程级):一次性通路没有会话 state,按实例记。 */
+  private readonly polishVisionGate: PolishVisionGate = createVisionGate();
+
   polishDescription(input: PolishInput): Promise<PolishOutcome> {
     return polishIssueDescription({
       dataDir: this.dataDir,
       mainModel: this.modelChoice(),
       visionChoice: this.options.settings?.models().vision ?? this.options.vision,
+      visionGate: this.polishVisionGate,
       log: (message) => this.log(`[issue-polish] ${message}`),
       ...(this.options.polishRuntimeFactory
         ? { createRuntime: this.options.polishRuntimeFactory }

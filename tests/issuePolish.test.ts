@@ -325,6 +325,48 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   assert.match(registration, /issue-polish-note/, "识图明示条");
   const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
   assert.match(api, /issues\/polish-description/);
+  // UI 轨道纪律(CONTEXT.md 2026-09-11):新轨页面的按钮只准 ui/ 包装层。
+  assert.match(registration, /@\/components\/ui\/button/,
+    "润色按钮与弹窗按钮走 ui/button");
+  const css = readFileSync(resolve("web/src/style.css"), "utf-8");
+  assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
+});
+
+test("识图熔断门:连续失败 2 次暂停尝试,不烧第三次调用", async () => {
+  const { createVisionGate } = await import("../src/issueFlow/polish.ts");
+  const gate = createVisionGate(2);
+  assert.equal(gate.allow(), true);
+  gate.record(false);
+  assert.equal(gate.allow(), true, "第 1 次失败后仍允许");
+  gate.record(false);
+  assert.equal(gate.allow(), false, "连续 2 失败即熔断");
+  gate.record(true);
+  assert.equal(gate.allow(), true, "一次成功复位");
+});
+
+test("真路由契约:识图熔断后第三次请求不再调识图,回执仍明示", async () => {
+  const dataDir = mfcTemp("mfc-issue-polish-circuit-");
+  const ref = stageIssueImage({
+    data: visionProbePng(), contentType: "image/png", dataDir,
+  }).path;
+  const scene: PolishScene = {
+    mainText: "标题：A\n\n正文",
+    visionFail: true,
+    calls: { vision: 0, main: 0 },
+  };
+  const service = polishService(dataDir, { vision: true, scene });
+  try {
+    const payload = { title: "T", description: `白屏 ![截图](${ref})` };
+    for (let round = 1; round <= 3; round += 1) {
+      const detail = await issuePost(["issues", "polish-description"],
+        payload, service);
+      assert.equal(detail.status, 200, `第 ${round} 轮仍放行润色`);
+    }
+    assert.equal(scene.calls.vision, 2, "熔断前恰好尝试 2 次");
+    assert.equal(scene.calls.main, 3, "润色主调用全程不被熔断阻塞");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
 });
 
 test("待补充令牌染红:加粗含令牌才带 md-pending,普通加粗不带", () => {

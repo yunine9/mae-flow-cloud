@@ -8,9 +8,6 @@
  * 正则形态与 issueImages 的 parseIssueImagePath 同款(16 位 hex + 扩展名)。
  */
 
-/** 相对引用形态(与 issueImages.parseIssueImagePath 同口径)。 */
-export const ISSUE_IMAGE_REF_PATTERN = /issue-images\/[0-9a-f]{16}\.[a-z]+/gi;
-
 /** markdown(存储世界)→ 编辑器默认值:引用换成可显示的预览 URL。 */
 export function refToDisplayUrl(
   markdown: string,

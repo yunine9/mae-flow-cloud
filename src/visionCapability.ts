@@ -79,13 +79,14 @@ function toolObservation(text: string): string {
   ].join("\n");
 }
 
-function safeError(error: unknown): string {
+/** 错误消息出域前的密钥擦除(润色等非会话通路同样消费)。 */
+export function safeError(error: unknown): string {
   return String(error)
     .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
     .replace(/\bsk-[A-Za-z0-9._~-]{8,}\b/g, "[REDACTED]");
 }
 
-interface VisionRuntime {
+export interface VisionRuntime {
   getModel(provider: string, model: string): any;
   completeSimple(model: any, context: any, options?: any): Promise<any>;
 }
