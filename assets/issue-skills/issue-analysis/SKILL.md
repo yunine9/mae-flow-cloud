@@ -48,6 +48,6 @@ metadata:
 
 ## 产出与提交
 
-报告按共用模板 `skills/issue-analysis/report-template.md` 写:五章节骨架、证据链规则、`submit_analysis` 门票全在模板里,本篇不复述。轻量路径的报告同样五章节,只是更短。
+报告按模板文件 `skills/issue-analysis/report-template.md` 写:成品范例、各章要求、关键决策条件章节、`submit_analysis` 门票全在模板里,本篇不复述。轻量路径的报告同样五章节,只是更短。
 
 过程节奏(提问密度、中间简报)以开场说明的「介入节奏」为准,本 skill 不另设确认点;月光免审批档(开场有说明)下报告会被平台自动确认,更要写到无需补充即可执行的自足程度。
