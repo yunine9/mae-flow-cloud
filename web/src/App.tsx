@@ -18,6 +18,7 @@ import { ChevronDown } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import { Input } from "@/components/ui/input";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -1722,7 +1723,7 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
     catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败，请重试"); }
     finally { setBusy(false); }
   }
-  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
+  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
 }
 
 function LoadingScreen() {
@@ -1805,9 +1806,9 @@ function UsersBoard({ me }: { me: string }) {
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
       <form className="user-create-form" onSubmit={submit}>
-        <label><span>登录账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
-        <label><span>姓名</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
-        <label><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
+        <label><span>登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
+        <label><span>姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
+        <label><span>初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
         <label><span>账号角色</span><Select value={role}
           items={[{ value: "developer", label: "开发成员" }, { value: "admin", label: "管理员" }]}
           onValueChange={(value) => setRole((value ?? "developer") as UserRole)}>
@@ -1853,13 +1854,13 @@ function UsersBoard({ me }: { me: string }) {
             </span>
           </div>
           {resetFor === user.username && <form className="user-reset-row" onSubmit={submitReset}>
-            <input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
+            <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
               onChange={(event) => setResetPassword(event.target.value)} />
             <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
             <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
           </form>}
           {nameFor === user.username && <form className="user-reset-row" onSubmit={saveDisplayName}>
-            <input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
+            <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
               maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
             <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
             <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
@@ -1993,7 +1994,7 @@ function TeamDashboard({
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
       <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
+        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
         <Select value={scope}
           items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞任务" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等待决策" }]}
           onValueChange={(value) => setScope((value ?? "all") as TeamScope)}>

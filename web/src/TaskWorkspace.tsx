@@ -54,6 +54,7 @@ import {
 import { UserPicker } from "./UserPicker";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogClose,
@@ -2153,7 +2154,8 @@ export function TaskWorkspace({
           {materialSearchOpen && materialView !== "chain" && (
             <div className="material-search-bar" role="search">
               <span className="material-search-icon" aria-hidden>⌕</span>
-              <input ref={materialSearchInput}
+              <Input ref={materialSearchInput}
+                className="min-w-45"
                 value={materialSearchQuery}
                 aria-label="搜索当前内容"
                 placeholder={materialView === "diff"

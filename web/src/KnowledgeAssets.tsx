@@ -68,6 +68,8 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertAction, AlertDescription } from "@/components/Alert";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
   { kind: "engineering" }>;
@@ -645,7 +647,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
     <div className="ka-bar">
       <div className="ka-search">
         <svg viewBox="0 0 16 16" aria-hidden><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-        <input type="search" value={search} placeholder="搜名称、描述、提交人"
+        <Input type="search" className="pl-7" value={search} placeholder="搜名称、描述、提交人"
           aria-label="搜索知识资产"
           onChange={(event) => setSearch(event.target.value)} />
       </div>
@@ -986,7 +988,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
           {admin && selectedSubmission.status === "pending" && <div
             className="ka-actions">
             {rejectFor === selectedSubmission.id ? <>
-              <input type="text" placeholder="驳回原因(可留空)"
+              <Input type="text" className="min-w-55 flex-1" placeholder="驳回原因(可留空)"
                 value={rejectReason}
                 onChange={(event) => setRejectReason(event.target.value)} />
               <button type="button" className="ka-primary" disabled={busy}
@@ -1074,7 +1076,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
             {selectedCandidate.status === "pending"
               && canManageCandidate(selectedCandidate) && (
               rejectFor === selectedCandidate.id ? <>
-                <input value={rejectReason}
+                <Input className="min-w-55 flex-1" value={rejectReason}
                   onChange={(event) => setRejectReason(event.target.value)}
                   placeholder="必须说明原因，便于提交人修订" />
                 <button type="button" className="ka-primary"
@@ -1345,7 +1347,7 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
 
     <div className="ka-form-row">
       <label><span className="ka-field-label">目录名</span>
-        <input type="text" placeholder="如 order-rules" value={name}
+        <Input type="text" placeholder="如 order-rules" value={name}
           onChange={(event) => onName(event.target.value.trim())} /></label>
       <button type="button" onClick={onPick}>选技能包目录</button>
       <button type="button" className="ka-primary"
@@ -1384,14 +1386,14 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
           你没权限的仓,平台也不替你看。</p>
         <div className="ka-form-grid">
           <label><span className="ka-field-label">参考仓地址(必填)</span>
-            <input type="text" value={repo} placeholder="git@… 或 https://…"
+            <Input type="text" value={repo} placeholder="git@… 或 https://…"
               onChange={(event) => onRepo(event.target.value)} /></label>
           <label><span className="ka-field-label">提取意图(必填,一句话)</span>
-            <input type="text" value={intent}
+            <Input type="text" value={intent}
               placeholder="如:他们的重试与限流是怎么实现的"
               onChange={(event) => onIntent(event.target.value)} /></label>
           <label><span className="ka-field-label">路径提示(可选,只是起点)</span>
-            <input type="text" value={hint} placeholder="如:src/main/java/…/retry"
+            <Input type="text" value={hint} placeholder="如:src/main/java/…/retry"
               onChange={(event) => onHint(event.target.value)} /></label>
         </div>
         <div className="ka-form-row">
@@ -1410,7 +1412,7 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
         {job?.status === "done" && <>
           <label className="ka-draft">
             <span className="ka-field-label">草稿(可编辑;{verb}前请抽查论断与文件出处)</span>
-            <textarea rows={16} value={draft}
+            <Textarea rows={16} className="min-h-60 resize-y font-mono text-xs" value={draft}
               onChange={(event) => onDraft(event.target.value)} /></label>
           {job.notes && <p className="ka-hint">提取会话自述:{job.notes}</p>}
           <div className="ka-form-row">

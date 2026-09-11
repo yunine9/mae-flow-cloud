@@ -24,6 +24,7 @@ import {
 } from "./api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -55,8 +56,6 @@ export const PROBE_REASON_TEXT: Record<
   unreachable: "不可达",
 };
 
-export const environmentInputClass =
-  "h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 const fieldLabelClass = "text-sm font-medium text-foreground";
 const fieldWrapClass = "grid gap-1.5";
 
@@ -238,13 +237,13 @@ export function EnvironmentEditorDialog({
         <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
           <label className={fieldWrapClass}>
             <span className={fieldLabelClass}>主 IP</span>
-            <input className={environmentInputClass} value={ip}
+            <Input value={ip}
               onChange={(event) => setIp(event.target.value)}
               placeholder="例如 10.66.1.12" autoFocus required />
           </label>
           <label className={fieldWrapClass}>
             <span className={fieldLabelClass}>端口</span>
-            <input className={environmentInputClass} type="number" min={1}
+            <Input type="number" min={1}
               max={65535} value={portDraft}
               onChange={(event) => setPortDraft(event.target.value)}
               placeholder="22" />
@@ -270,7 +269,7 @@ export function EnvironmentEditorDialog({
         <label className={fieldWrapClass}>
           <span className={fieldLabelClass}>后台密码</span>
           {/* 永不回显:编辑时只给"已配置"占位,值永远不进 value/URL/列表。 */}
-          <input className={environmentInputClass} type="password"
+          <Input type="password"
             value={backendPassword}
             onChange={(event) => setBackendPassword(event.target.value)}
             autoComplete="new-password"
@@ -279,7 +278,7 @@ export function EnvironmentEditorDialog({
         </label>
         <label className={fieldWrapClass}>
           <span className={fieldLabelClass}>root 密码(可选)</span>
-          <input className={environmentInputClass} type="password"
+          <Input type="password"
             value={clearRoot ? "" : rootPassword}
             onChange={(event) => {
               setRootPassword(event.target.value);
@@ -302,7 +301,7 @@ export function EnvironmentEditorDialog({
         </p>}
         <div className={fieldWrapClass}>
           <span className={fieldLabelClass}>标签</span>
-          <input className={environmentInputClass} value={tagDraft}
+          <Input value={tagDraft}
             onChange={(event) => setTagDraft(event.target.value)}
             onKeyDown={commitTagDraft}
             placeholder="自由输入,回车成标签(如 华为云、v6版本)" />

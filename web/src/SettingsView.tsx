@@ -27,6 +27,8 @@ import {
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -106,7 +108,7 @@ function KnobField({ label, note, defaultText, value, onChange }: {
 }) {
   return <label className="ui-field">
     <span className="setting-label-row"><span>{label}</span><em>默认 {defaultText}</em></span>
-    <input inputMode="numeric" value={value} placeholder={`使用默认值：${defaultText}`}
+    <Input inputMode="numeric" value={value} placeholder={`使用默认值：${defaultText}`}
       onChange={(event) => onChange(event.target.value)} />
     <small className="knob-note">留空即使用默认值 · {note}</small>
   </label>;
@@ -246,7 +248,7 @@ function ExecutionPolicyCard({ view, onSaved }: {
       onSubmit={submit}>
       <label className="ui-field">
         <span>新任务默认补充</span>
-        <textarea rows={7} maxLength={2000} value={instructions}
+        <Textarea rows={7} maxLength={2000} className="min-h-[138px]" value={instructions}
           placeholder="例如：涉及存量接口时先核对兼容性；不确定的外部行为明确说明，不要猜；公共契约变更必须点名影响方。"
           onChange={(event) => setInstructions(event.target.value)} />
         <small className="knob-note">
@@ -256,7 +258,7 @@ function ExecutionPolicyCard({ view, onSaved }: {
       </label>
       <label className="ui-field">
         <span>屏蔽仓库 Skill 与指令文件</span>
-        <textarea rows={4} value={blocks} placeholder={".cac\nAGENTS.md\n.agents/skills/conflicting-skill"}
+        <Textarea rows={4} value={blocks} placeholder={".cac\nAGENTS.md\n.agents/skills/conflicting-skill"}
           onChange={event => setBlocks(event.target.value)} />
         <small className="knob-note">每行一个文件名或相对路径，目录包含全部子项；不支持通配符。统一作用于需求流和问题流，不删除仓库文件。留空表示不屏蔽。</small>
       </label>
@@ -461,7 +463,7 @@ function ModelsCard({ view, onSaved }: {
     <form className="user-create-form settings-form" onSubmit={submit}>
       <label className="ui-field span-2">
         <span>模型网关地址</span>
-        <input value={url} type="url" required spellCheck={false}
+        <Input value={url} type="url" required spellCheck={false}
           placeholder={apiFormat === "anthropic-messages"
             ? "例如：https://model-gateway.internal/api/anthropic"
             : "例如：https://model-gateway.internal/v1"}
@@ -474,7 +476,7 @@ function ModelsCard({ view, onSaved }: {
       </label>
       <label className="ui-field span-2">
         <span>API Key</span>
-        <input value={apiKey} type="password" autoComplete="new-password"
+        <Input value={apiKey} type="password" autoComplete="new-password"
           required={!models.configured}
           placeholder={models.configured
             ? `已保存 ${models.key_hint ?? "密钥"}，留空保持不变`
@@ -485,7 +487,7 @@ function ModelsCard({ view, onSaved }: {
       </label>
       <label className="ui-field">
         <span>模型名称</span>
-        <input value={model} required spellCheck={false}
+        <Input value={model} required spellCheck={false}
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
       </label>
@@ -592,7 +594,7 @@ function VisionModelsCard({ view, onSaved }: {
     <form className="user-create-form settings-form" onSubmit={submit}>
       <label className="ui-field span-2">
         <span>图片识别网关地址</span>
-        <input value={url} type="url" required spellCheck={false}
+        <Input value={url} type="url" required spellCheck={false}
           placeholder="例如：https://qwen-vl.internal/v1"
           onChange={(event) => setUrl(event.target.value)} />
       </label>
@@ -613,13 +615,13 @@ function VisionModelsCard({ view, onSaved }: {
       </label>
       <label className="ui-field">
         <span>模型名称</span>
-        <input value={model} required spellCheck={false}
+        <Input value={model} required spellCheck={false}
           placeholder="例如：qwen2.5-vl-72b-instruct"
           onChange={(event) => setModel(event.target.value)} />
       </label>
       <label className="ui-field span-2">
         <span>API Key</span>
-        <input value={apiKey} type="password" autoComplete="new-password"
+        <Input value={apiKey} type="password" autoComplete="new-password"
           required={!configured}
           placeholder={vision.configured
             ? `已保存 ${vision.key_hint ?? "密钥"}，留空保持不变`

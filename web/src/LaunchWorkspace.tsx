@@ -36,6 +36,8 @@ import {
 } from "./workflows";
 import { Markdown } from "./markdown";
 import { Empty, EmptyDescription } from "@/components/Empty";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
@@ -987,7 +989,7 @@ export function LaunchWorkspace({
                 <div className="launch-section-head"><i>1</i><div><strong>任务与需求</strong><small>说清目标、范围和完成标准即可</small></div><em>必填</em></div>
                 <label className="account-field launch-title-field">
                   <span>任务名称</span>
-                  <input type="text" value={title} maxLength={80}
+                  <Input type="text" value={title} maxLength={80}
                     onChange={(event) => setTitle(event.target.value)}
                     placeholder="例如：修复通知模板变量缺失"
                     autoFocus required />
@@ -1022,8 +1024,9 @@ export function LaunchWorkspace({
                       选择 .md / .zip
                     </label>
                   </div>
-                  {!requirementBundle && <textarea
+                  {!requirementBundle && <Textarea
                     id="launch-requirement"
+                    className="min-h-65 resize-y"
                     value={requirement}
                     onChange={(event) => {
                       setRequirement(event.target.value);
@@ -1080,7 +1083,7 @@ export function LaunchWorkspace({
                   {!options.repo.enabled && <div className="repo-field" role="status">
                     <label className="account-field">
                       <span>代码仓</span>
-                      <input type="text" disabled placeholder="当前部署不支持逐单选择代码仓"
+                      <Input type="text" disabled placeholder="当前部署不支持逐单选择代码仓"
                         aria-describedby="launch-repository-unavailable" />
                     </label>
                     <p id="launch-repository-unavailable" className="repo-field-note">
@@ -1103,7 +1106,7 @@ export function LaunchWorkspace({
                             options.ticket.enabled && !ticketsDeferred
                               ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
-                            <input type="text" value={value}
+                            <Input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
                               placeholder="https://codehub…/team/project.git"
                               aria-label={`第 ${index + 1} 个代码仓地址`}
@@ -1115,7 +1118,7 @@ export function LaunchWorkspace({
                                   ?.reachable === false)}
                               required={options.repo.required} />
                             {options.ticket.enabled && !ticketsDeferred
-                              && <input type="text"
+                              && <Input type="text"
                               value={repositoryTickets[index] ?? ""}
                               onChange={(event) => changeRepositoryTicket(
                                 index, event.target.value)}
@@ -1186,7 +1189,7 @@ export function LaunchWorkspace({
                         <label className="account-field">
                           <span>AR 对应的 REQ 单号
                             {options.ticket.required ? "（必填）" : ""}</span>
-                          <input type="text" value={ticket}
+                          <Input type="text" value={ticket}
                             onChange={(event) => setTicket(event.target.value)}
                             placeholder="例如：REQ2026xxxx"
                             spellCheck={false}
@@ -1200,7 +1203,7 @@ export function LaunchWorkspace({
                       {options.baseline.enabled && (
                         <label className="account-field">
                           <span>基线分支（必填）</span>
-                          <input type="text" value={baseline}
+                          <Input type="text" value={baseline}
                             onChange={(event) => changeBaseline(event.target.value)}
                             placeholder={options.baseline.default} spellCheck={false}
                             required />
@@ -1421,7 +1424,7 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-settings-grid">
                       <label className="account-field repair-field">
                         <span>修复轮预算</span>
-                        <input type="text" inputMode="numeric" pattern="[0-9]*"
+                        <Input type="text" inputMode="numeric" pattern="[0-9]*"
                           value={repairRounds}
                           onChange={(event) => {
                             const value = event.target.value.trim();
@@ -1438,7 +1441,8 @@ export function LaunchWorkspace({
                       </label>
                       {!workflowSelection && <label className="account-field task-instructions-field">
                         <span>给标准方案的补充提醒</span>
-                        <textarea value={taskInstructions} maxLength={2000}
+                        <Textarea value={taskInstructions} maxLength={2000}
+                          className="min-h-21 resize-y"
                           onChange={(event) => setTaskInstructions(event.target.value)}
                           placeholder="例如：不确定时明确说明，不要猜；优先兼容旧数据。" />
                         <small>选择定制工作流后不再叠加，避免两套指令摩擦。</small>
