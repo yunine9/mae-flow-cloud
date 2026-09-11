@@ -604,7 +604,7 @@ export function reworkChoiceOf(
     if (exact) return { question: item.question, option: exact };
     const nonClosing = options.filter((option) => !closingAnswers.has(option));
     const option = nonClosing.find((candidate) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(candidate)) ?? nonClosing[0];
+      /需要.*(?:调整|修改)|返工|补充/.test(candidate));
     if (option) return { question: item.question, option };
   }
   return undefined;
@@ -1045,7 +1045,7 @@ export function WaitingCard({
                   const effect = choiceEffects.find((candidate) =>
                     candidate.answers.includes(option));
                   const inferredAdjustment = !effect && reviewQuestion
-                    && !closingAnswers.has(option);
+                    && !closingAnswers.has(option) && /需要.*(?:调整|修改)|返工|补充/.test(option);
                   const consequence = effect?.closes_feedback
                     ? "将关闭本轮检视并进入下一步"
                     : effect?.handles_feedback && effect.allows_source_edit

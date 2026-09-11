@@ -1793,8 +1793,8 @@ export function TaskWorkspace({
             }] : []),
             ...reviewPeople.filter((person) => person.username !== viewerUsername),
           ]}
-          reworkChoice={materialsFullscreen && !inline ? workspaceReworkChoice : undefined}
-          canDecide={materialsFullscreen && !inline && canOperate}
+          reworkChoice={workspaceReworkChoice}
+          canDecide={canOperate}
           onLocate={locate}
           onShowThread={showThread}
           onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}

@@ -615,6 +615,7 @@ export function annotationClosure(
     const canManage = mine && facts.task_status !== "canceled"
       && (!facts.archival || item.artifact === OVERALL_STORY_ARTIFACT);
     const response = currentResponse(item);
+    const queuedDecision = item.status === "sent" && item.sent_via === "queued_decision" && !response;
     const waitingForAgent = item.status === "sent" && item.sent_via !== "owner_pending" && !response;
     const answered = !!response || (!!item.owner_reply && item.sent_via === "owner_pending");
     const canResolve = pending && canManage && answered;
@@ -623,18 +624,19 @@ export function annotationClosure(
     // 没有新处置事件的旧闭环保留原操作者和原含义。
     if (pending || resolution || item.status === "verified") return {
       id: item.id, tone: resolution ? "done" : "review",
-      text: item.status === "verified" ? "已闭环" : waitingForAgent ? "等待 Agent 答复" : answered ? "待责任人确认闭环" : "待处理",
+      text: item.status === "verified" ? "已闭环" : queuedDecision ? "已排队，等当前决定" : waitingForAgent ? "等待 Agent 答复" : answered ? "待责任人确认闭环" : "待处理",
       hint: resolution ? `${personName(resolution.by)}：${resolution.reason || response?.summary || item.owner_reply?.text || "已核对处理结果"}`
+        : queuedDecision ? "尚未送到 Agent；请提交当前决定卡，意见会随答复一起送达。"
         : item.withdrawal_requested ? "提出人申请撤回表达，仍需责任人逐条处置。"
         : `由任务责任人 ${personName(owner)} 核对回执及最新材料后逐条决定。`,
-      bucket: item.status === "verified" ? "closed" : mine ? "mine" : "agent",
+      bucket: item.status === "verified" ? "closed" : mine && (!waitingForAgent || queuedDecision) ? "mine" : "agent",
       delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : item.status === "draft" ? "已记下，等待责任人处理" : deliveryTextOf(item, facts, personName),
-      verdict_ready: answered, actionable: pending && canManage, can_resolve: canResolve, owner_controlled: true,
+      verdict_ready: answered, actionable: pending && canManage && (!waitingForAgent || queuedDecision), can_resolve: canResolve, owner_controlled: true,
       can_delete: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
       can_reopen: canManage && (item.status === "verified" || (item.status === "sent" && answered)),
       can_verify: canResolve && (response?.outcome === "fixed" || (item.route === "owner_reply" && !!item.owner_reply)),
       can_override_verify: false, can_override_drop: false, can_route: canManage && pending && !answered && (item.status === "draft" || item.sent_via === "owner_pending"),
-      needs_clarification: response?.outcome === "needs_clarification", receipt_missing: waitingForAgent && mine,
+      needs_clarification: response?.outcome === "needs_clarification", receipt_missing: waitingForAgent && !queuedDecision && mine,
     };
   }
   const ready = annotationVerdictReady(item, facts);
