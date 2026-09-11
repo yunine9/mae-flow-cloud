@@ -93,8 +93,8 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     // 模型照抄清单序号提问(内网实锤):卡上必须已经换成仓库名。
     { tool: { name: "AskUserQuestion", input: { questions: [
         { question: "repo-1 与 repo-2 的接口契约方案是否确认?",
-          options: ["确认并生成任务", "需要修改"],
-          recommended: "确认并生成任务" }] } } },
+          options: ["确认,按7单元+依赖顺序生成任务", "需要修改"],
+          recommended: "确认,按7单元+依赖顺序生成任务" }] } } },
     { text: "方案已确认,分析收口。" },
   ];
   const model = new ScriptedModelServer(script);
@@ -172,7 +172,18 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
       return accounts.length >= 2 ? accounts : undefined;
     }, "参与人通知");
     assert.deepEqual(recipients, ["alice", "cloudbot"]);
-    const confirmed = await service.confirmRequirementGraph(parent.id);
+    assert.deepEqual((card.waiting!.question as any).questions[0].options, ["确认并生成任务", "需要修改"]);
+    // 模拟升级前留下的空 step、自由文案待答卡；展示与提交必须同一契约。
+    const pending = (service as any).tasks.get(parent.id).summary.waiting;
+    pending.step = "";
+    pending.question = { questions: [{ question: asked,
+      options: ["确认,按7单元+依赖顺序生成任务", "需要修改"] }] };
+    assert.deepEqual((service.get(parent.id)!.waiting!.question as any).questions[0].options,
+      ["确认并生成任务", "需要修改"]);
+    const confirmed = await service.decide(parent.id, {
+      actor: "cloudbot", state_version: card.waiting!.state_version,
+      selected_options: { [asked]: "确认并生成任务" },
+    });
     // 分析会话同步收口，但跨仓主任务要继续汇总各仓交付；不能把
     // “拆单成功”冒充为“整个需求完成”。
     assert.equal(confirmed.status, "coordinating",
