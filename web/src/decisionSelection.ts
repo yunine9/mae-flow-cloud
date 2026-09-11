@@ -52,3 +52,12 @@ export function isDecisionTextDrag(
 ): boolean {
   return !!start && hasSelection && Math.hypot(end.x - start.x, end.y - start.y) > 4;
 }
+
+/** 以服务端的排队事实为准，包含责任人转交的他人意见，排除已送达项。 */
+export function queuedDecisionAnnotationIds(items: readonly {
+  id: string; status: string; sent_via?: string;
+  response?: { revision: number }; rework?: number;
+}[]): string[] {
+  return items.filter(item => item.status === "sent" && item.sent_via === "queued_decision"
+    && item.response?.revision !== (item.rework ?? 0)).map(item => item.id);
+}

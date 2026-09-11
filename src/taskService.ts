@@ -1,5 +1,5 @@
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
-import { reviewDecisionContract } from "./reviewDecisionContract.ts";
+import { reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
@@ -10982,7 +10982,11 @@ export class TaskService {
             && operation.id === item.id && operation.at >= waiting.resolved_at;
         });
       }).map((item) => item.id);
-      if (pending.length) this.annotations(task).markSent(pending, "decision");
+      for (const id of pending) {
+        const item = drafts.find(item => item.id === id)!;
+        if (unassignedReviewDraft(item)) this.annotations(task).assignToAgent(id, waiting.decided_by ?? task.summary.luban_account ?? "本地用户");
+      }
+      if (pending.length) this.annotations(task).markSent(pending, "decision", waiting.decided_by);
     } catch (error) {
       // waiting.json 已经把决定、批注 id 和完整原文一起落袋。批注账只是
       // 展示投影，写坏不能把已经生效的决定伪装成“提交失败”；重启或
@@ -11526,16 +11530,19 @@ export class TaskService {
       throw new TaskControlError(
         "push 前确认必须基于当前变更快照,请刷新后重试");
     }
-    // 决定只能携带决定者自己的草稿。旁观者可以先记，但“记录权”不能
-    // 在手机端/月光模式或返工卡里悄悄升级为“送达 Agent 的权力”。
+    // 责任人明确选择按检视意见修复时，可统一转交待处理草稿。
+    // 其他答复仍只携带自己的草稿与已由责任人排队的意见。
     // 无 actor 的旧回调按任务责任人收口；旧单也没有责任人时才保留
     // 原单用户兼容语义。
     const draftAuthor = input.actor ?? task.summary.luban_account;
     const allDrafts = this.annotations(task).drafts();
+    const reviewDrafts = handlesFeedback && draftAuthor === (task.summary.luban_account ?? "本地用户")
+      ? allDrafts.filter(item => unassignedReviewDraft(item)
+        && !(task.summary.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const ownDrafts = draftAuthor
       ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
     const ownerDrafts = ownDrafts.filter((item) =>
-      (item.route ?? "agent") !== "agent");
+      (item.route ?? "agent") !== "agent" && !reviewDrafts.some(review => review.id === item.id));
     const drafts = ownDrafts.filter((item) =>
       (item.route ?? "agent") === "agent");
     const deliverableUnresolved = unresolved.filter((item) =>
@@ -11555,7 +11562,7 @@ export class TaskService {
       // 普通检视仍回到同一会话，sent 已经在上下文里，不重复送；push
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
-      ? pushConfirmCard ? deliverableUnresolved : [...queued, ...drafts]
+      ? [...new Map([...(pushConfirmCard ? deliverableUnresolved : [...queued, ...drafts]), ...reviewDrafts].map(item => [item.id, item])).values()]
       // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
       // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
       : localReviewRound ? [...queued, ...drafts]

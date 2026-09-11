@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearDecisionChoice,
+  queuedDecisionAnnotationIds,
   isDecisionTextDrag,
   unifiedDecisionReply,
   toggleDecisionChoice,
@@ -82,4 +83,15 @@ test("误选后转自定义保留文字，只提交自由答复而不夹带旧�
   assert.deepEqual(unifiedDecisionReply(changed["问题"], "改用另一种处理方式"), {
     freeResponse: "改用另一种处理方式", notes: "",
   });
+});
+
+
+test("决定卡待发送清单只统计真实排队项，包含责任人转交的他人意见", () => {
+  assert.deepEqual(queuedDecisionAnnotationIds([
+    { id: "draft", status: "draft" },
+    { id: "queued-1", status: "sent", sent_via: "queued_decision" },
+    { id: "queued-2", status: "sent", sent_via: "queued_decision", rework: 2, response: { revision: 1 } },
+    { id: "delivered", status: "sent", sent_via: "decision" },
+    { id: "answered", status: "sent", sent_via: "queued_decision", response: { revision: 0 } },
+  ]), ["queued-1", "queued-2"]);
 });

@@ -1,3 +1,4 @@
+import { Button } from "./components/ui/button";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
 /**
@@ -651,6 +652,8 @@ export function WaitingCard({
   onDecided,
   annotationIds,
   unresolvedAnnotationCount,
+  queuedAnnotationIds = [],
+  pendingReviewAnnotationIds = [],
   attachment,
   repositorySkillSelection,
   repositoryAssigneeSelection,
@@ -670,6 +673,8 @@ export function WaitingCard({
   annotationIds?: string[];
   /** 尚未闭环的 draft + sent 数量，用于检视引导和关闭分支门禁提示。 */
   unresolvedAnnotationCount?: number;
+  queuedAnnotationIds?: string[];
+  pendingReviewAnnotationIds?: string[];
   /** 批注块。挂在提交按钮正上方而不是卡片外面:选项标签是内核的
    * (它按标签给这次选择记账,前端改写会让记下的选择对不上用户点的),
    * 所以"这次会带上哪几处"只能摆在人按下提交的那一眼里。 */
@@ -733,6 +738,13 @@ export function WaitingCard({
   const allChoiceAnswers = new Set(choiceEffects.flatMap((effect) => effect.answers));
   const reworkChoice = reworkChoiceOf(task);
   const feedbackOption = reworkChoice?.option;
+  // 第一条入队时预选返工；保留用户已有选择及自定义草稿，刷新不反复改选。
+  const queuedKey = queuedAnnotationIds.join("\0");
+  useEffect(() => {
+    if (!queuedKey || !reworkChoice || replyText.trim() || Object.values(custom).some(value => value.trim())) return;
+    setPicked(current => Object.values(current).some(Boolean) ? current
+      : { ...current, [reworkChoice.question]: reworkChoice.option });
+  }, [queuedKey, task.waiting?.waiting_id]);
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;
@@ -906,7 +918,7 @@ export function WaitingCard({
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
-          ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "提交返工意见"
+          ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "发送并继续修改"
           : requiresDeliverySelection && deliverySelection
             ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
             : requiresDeliverySelection
@@ -1183,12 +1195,7 @@ export function WaitingCard({
           <span>{mrDescription ? "AR 单上的准确描述" : chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
             : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
               ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
-              : picked[questions[0].question] ? "随所选决定提交，可改为自定义答复" : "也可以选择上方选项"}</small></span>
-          {picked[questions[0].question] && <button type="button" className="link"
-            onClick={() => {
-              setPicked(current => clearDecisionChoice(current, questions[0].question));
-              replyInput.current?.focus();
-            }}>改为自定义答复</button>}
+              : picked[questions[0].question] ? "再次点击已选项可取消，改填自定义答复" : "也可以选择上方选项"}</small></span>
           <textarea ref={replyInput} value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
             placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
@@ -1221,9 +1228,9 @@ export function WaitingCard({
         {footerTarget && (reviewChoiceConflict || (requirementAnalysisConfirmation && attachmentCount > 0)) && (
           <p className="decision-dock-notice" role="status">还有 {attachmentCount} 条检视意见未闭环，请先处理后再确认通过。</p>
         )}
-        {footerTarget && !reviewChoiceConflict && (annotationIds?.length ?? 0) > 0 && (
-          <p className="decision-dock-notice">将附带你的 {annotationIds!.length} 条未发送反馈。</p>
-        )}
+        {pendingReviewAnnotationIds.length > 0 && <div className="decision-dock-notice flex items-center gap-2" role="status">
+          <span>{selectedHandlesFeedback ? `将提交 ${pendingReviewAnnotationIds.length} 条检视意见` : `${pendingReviewAnnotationIds.length} 条检视意见待处理`}{queuedAnnotationIds.length > 0 ? ` · 已选 ${queuedAnnotationIds.length} 条交给 Agent` : ""}</span>
+        </div>}
         {conflict && <div className="alert" role="alert">{conflict}</div>}
         {showDeliveryCompileActions ? (
           <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
@@ -1240,17 +1247,9 @@ export function WaitingCard({
             </button>
           </div>
         ) : (
-          <button
-            type="button"
-            className="submit-decision"
-            disabled={!ready}
-            onClick={() => submit()}
-          >
-            {submitLabel}
-            <svg viewBox="0 0 20 20" aria-hidden>
-              <path d="m4 10 3.2 3.2L16 5.5" />
-            </svg>
-          </button>
+          <div className="flex justify-end">
+            <Button type="button" disabled={!ready} onClick={() => submit()}>{submitLabel}</Button>
+          </div>
         )}
       </footer>
       </DecisionFooterMount>
