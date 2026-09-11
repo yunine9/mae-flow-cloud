@@ -658,6 +658,10 @@ export function AnnotationPanel({
                 </div>
               )}
               <div className="tw-root flex flex-wrap items-center gap-2 pt-3">
+              {closure.can_edit && !editing && (
+                <Button type="button" size="sm" variant="ghost" disabled={!!mutationBusy}
+                  onClick={() => { setEditingId(item.id); setEditingNote(item.note); }}>修改 / 补充</Button>
+              )}
               {closure.owner_controlled && closure.can_route && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (
                 replyingId === item.id ? <div className="annot-owner-reply-editor w-full rounded-md border border-border bg-muted/30 p-3">

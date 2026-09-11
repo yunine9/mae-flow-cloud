@@ -6165,6 +6165,7 @@ export class TaskService {
     const item = store.list().find((one) => one.id === annotationId);
     this.assertAnnotationOwner(task, by);
     if (item?.status === "verified") throw new TaskControlError("已闭环意见保留历史；如有新意见请另行提出");
+    if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending")) throw new TaskControlError("已交给 Agent 的意见请等待答复后重新处理，再修改或补充");
     return store.edit(annotationId, note, by, true);
   }
 

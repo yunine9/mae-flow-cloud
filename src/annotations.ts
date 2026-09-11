@@ -189,7 +189,7 @@ export const ANNOTATION_QUOTE_MAX = 1500;
 
 type Operation =
   | { op: "add"; record: Annotation }
-  | { op: "edit"; id: string; note: string; at: string; owner_controlled?: boolean }
+  | { op: "edit"; id: string; note: string; at: string; by?: string; owner_controlled?: boolean }
   | { op: "owner_resolution"; id: string; resolution: AnnotationResolution }
   | { op: "withdraw_request"; id: string; by: string; at: string }
   /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
@@ -382,7 +382,12 @@ export class AnnotationStore {
         if (!found) continue;
         found.resolution = undefined;
         found.withdrawal_requested = undefined;
-        if (operation.op === "reopen" && operation.owner_controlled) found.needs_owner_closure = true;
+        if (operation.op === "reopen") {
+          // 重新处理开启新一轮；上一轮的送达事实留在事件历史，不能锁住新草稿。
+          found.agent_assigned = undefined;
+          found.agent_context = undefined;
+          if (operation.owner_controlled) found.needs_owner_closure = true;
+        }
         found.status = "draft";
         found.rework = (found.rework ?? 0) + 1;
         if (operation.op === "reopen") found.returned = (found.returned ?? 0) + 1;
@@ -503,12 +508,13 @@ export class AnnotationStore {
     return { ...found, status: "dropped" };
   }
 
-  /** 改意见只认作者，不认任务角色。已提交/已确认的意见修改后退回待提交，
+  /** 普通调用只认作者；责任人模式由服务层核验后允许修改，原文保留在事件历史。
+   * 已提交/已确认的意见修改后退回待提交，
    * 避免清单显示的是新文字，Agent 实际收到的却还是旧文字。 */
   edit(id: string, note: string, by: string, ownerControlled = false): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if (found.author !== by) {
+    if (found.author !== by && !ownerControlled) {
       throw new AnnotationPermissionError(`这条是 ${found.author} 写的,不能替他改`);
     }
     if (found.status === "dropped") {
@@ -517,7 +523,7 @@ export class AnnotationStore {
     const normalized = String(note ?? "").trim();
     if (!normalized) throw new AnnotationError("批注内容不能为空");
     const at = new Date().toISOString();
-    this.append({ op: "edit", id, note: normalized, at, owner_controlled: ownerControlled });
+    this.append({ op: "edit", id, note: normalized, at, by, owner_controlled: ownerControlled });
     return this.list().find((item) => item.id === id)!;
   }
 
