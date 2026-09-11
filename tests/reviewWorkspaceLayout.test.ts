@@ -74,14 +74,15 @@ test("邀请他人检视在任务头独立可见，不依赖打开批注面板",
   assert.match(workspace, /reviewBusy \? "发送中…" : "发送邀请"/);
 });
 
-test("人员下拉保持紧凑并原位展开，不遮住邀请和交付信息", () => {
+test("人员下拉保持紧凑并悬浮展开，宽度跟随触发器", () => {
   assert.match(userPicker, /const searchable = options\.length > 6/,
     "成员很少时不应再用搜索框占掉一整行");
-  assert.match(css,
-    /\.user-picker-options\s*\{[^}]*max-height:\s*min\(176px, 32vh\)/s);
-  assert.match(css,
-    /\.workspace-review-invite-action \.user-picker-popover,[\s\S]*?\.repository-assignee-editable \.user-picker-popover\s*\{[^}]*position:\s*static/s,
-    "当前选人场景应由名单撑开当前区域，而不是悬浮遮挡下面的信息");
+  assert.match(userPicker,
+    /<CommandList[^>]*className="max-h-44"/,
+    "选项列表换 CommandList 后仍钉住紧凑高度(176px),不整页撑开");
+  assert.match(userPicker,
+    /<PopoverContent[^>]*w-\(--anchor-width\)/,
+    "弹层随 Popover portal 悬浮展开,宽度锚定触发器而非写死 260px");
   assert.match(css,
     /\.workspace-review-invite-action\s*\{[^}]*grid-template-columns:\s*minmax\(180px, 260px\) auto/s,
     "Committer 选择框不应横向吞满整个邀请弹层");
