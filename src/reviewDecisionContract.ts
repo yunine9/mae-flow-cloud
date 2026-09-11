@@ -1,5 +1,5 @@
 import type { StepChoiceEffect } from "./kernelChoices.ts";
-export { pendingReviewAnnotation } from "./annotationPending.ts";
+export { pendingReviewAnnotation } from "./annotationPending";
 
 export const REVIEW_ADJUST = "需要调整，按检视意见继续处理";
 export const REVIEW_HOLD = "暂不确认，我先核对";
