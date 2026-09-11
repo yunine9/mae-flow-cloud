@@ -42,6 +42,7 @@ import {
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { Markdown } from "../markdown";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
@@ -135,7 +136,6 @@ function ManualRegister({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [imageUploading, setImageUploading] = useState(false);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -199,87 +199,24 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
 
-  // 现象描述内嵌截图:粘贴/拖拽图片 → 上传落 staging → 在光标处插入
-  // ![截图](issue-images/<hash>.<ext>) 引用。图片本体不进 description,
-  // 进的只有工作区相对路径引用(与 ticketImages 同款架构红线)。
-  const ISSUE_IMAGE_PATTERN =
-    /issue-images\/[0-9a-f]{16}\.[a-z]+/gi;
-
-  function insertImageRef(ref: string) {
-    const textarea = descriptionRef.current;
-    const markdown = `![截图](${ref})`;
-    if (!textarea) {
-      setDescription((prev) => `${prev}${prev ? "\n" : ""}${markdown}`);
-      return;
-    }
-    const start = textarea.selectionStart ?? description.length;
-    const end = textarea.selectionEnd ?? description.length;
-    const before = description.slice(0, start);
-    const after = description.slice(end);
-    const needPrefix = before.length > 0 && !before.endsWith("\n");
-    const insert = `${needPrefix ? "\n" : ""}${markdown}${after.startsWith("\n") || after.length === 0 ? "" : "\n"}`;
-    setDescription(before + insert + after);
-    window.requestAnimationFrame(() => {
-      const pos = (before + insert).length;
-      textarea.focus();
-      textarea.setSelectionRange(pos, pos);
-    });
-  }
-
-  async function uploadAndInsert(file: File) {
-    if (!file.type.startsWith("image/")) return;
+  // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
+  // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
+  // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
+  // ticketImages 同款架构红线)。
+  async function uploadIssueFile(file: File): Promise<string> {
     setImageUploading(true);
     try {
       const result = await uploadIssueImage(file);
-      insertImageRef(result.path);
+      return result.path;
     } catch (reason) {
-      onError(`图片上传失败:${String(reason instanceof Error ? reason.message : reason)}`);
+      const message = `图片上传失败:${
+        String(reason instanceof Error ? reason.message : reason)}`;
+      onError(message);
+      throw reason;
     } finally {
       setImageUploading(false);
     }
   }
-
-  function handleDescriptionPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) {
-          event.preventDefault();
-          void uploadAndInsert(file);
-          return;
-        }
-      }
-    }
-  }
-
-  function handleDescriptionDrop(event: React.DragEvent<HTMLTextAreaElement>) {
-    const files = event.dataTransfer?.files;
-    if (!files || !files.length) return;
-    const image = Array.from(files).find((file) => file.type.startsWith("image/"));
-    if (image) {
-      event.preventDefault();
-      void uploadAndInsert(image);
-    }
-  }
-
-  // description 里的图片引用(缩略图条预览用)。
-  const descriptionImages = useMemo(() => {
-    if (!description) return [];
-    const paths: string[] = [];
-    const seen = new Set<string>();
-    let match: RegExpExecArray | null;
-    const pattern = new RegExp(ISSUE_IMAGE_PATTERN.source, "gi");
-    while ((match = pattern.exec(description)) !== null) {
-      const path = match[0];
-      if (!seen.has(path)) {
-        seen.add(path);
-        paths.push(path);
-      }
-    }
-    return paths;
-  }, [description]);
 
   // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
   // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
@@ -391,19 +328,12 @@ function ManualRegister({
               {polishing ? "润色中…" : "AI 润色"}
             </button>
           </span>
-          <textarea rows={3} value={description} ref={descriptionRef}
-            placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来,粘贴或拖拽图片自动上传"
-            onPaste={handleDescriptionPaste}
-            onDrop={handleDescriptionDrop}
-            onChange={(event) => setDescription(event.target.value)} />
-          {(imageUploading || descriptionImages.length > 0) && (
+          <DescriptionEditor value={description} onChange={setDescription}
+            onUploadImage={uploadIssueFile} onError={onError}
+            placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+          {imageUploading && (
             <div className="issue-image-bar">
-              {imageUploading && <span className="issue-image-uploading">上传中…</span>}
-              {descriptionImages.map((path) => (
-                <img key={path} className="issue-image-thumb"
-                  src={issueImageUrl(path)} alt="现象截图"
-                  draggable={false} />
-              ))}
+              <span className="issue-image-uploading">上传中…</span>
             </div>
           )}
         </label>

@@ -29,6 +29,10 @@ import {
 } from "../src/issueFlow/polish.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
 import { Markdown, hasPendingMark } from "../web/src/markdown.tsx";
+import {
+  displayUrlToRef,
+  refToDisplayUrl,
+} from "../web/src/issues/issueImageRef.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 // markdown.tsx 走经典 JSX 运行时(React 全局),同 markdownRenderer 先挂。
@@ -331,4 +335,54 @@ test("待补充令牌染红:加粗含令牌才带 md-pending,普通加粗不带"
     }));
   assert.match(html, /<b class="md-pending">/, "含令牌的加粗染红");
   assert.match(html, /<b>普通加粗<\/b>/, "普通加粗不受牵连");
+});
+
+
+// ---- 票2:所见即所得编辑器(milkdown)与引用两个世界的映射 ----
+
+test("截图引用映射:存储相对引用与编辑器预览 URL 双向收敛", () => {
+  const ref = "issue-images/abcd1234ef567890.png";
+  const url = `/issues/issue-image?path=${encodeURIComponent(ref)}`;
+  const markdown = `前文\n\n![截图](${ref})\n\n后文 **【待补充】**`;
+  const displayed = refToDisplayUrl(markdown, (r) =>
+    `/issues/issue-image?path=${encodeURIComponent(r)}`);
+  assert.match(displayed, new RegExp(`!\\[截图\\]\\(${url.replace(/[?]/g, "\\?")}\\)`),
+    "进编辑器:引用换成可显示的预览 URL");
+  const serialized = `前文\n\n![截图](${url})\n\n后文`;
+  assert.equal(displayUrlToRef(serialized),
+    `前文\n\n![截图](${ref})\n\n后文`,
+    "出编辑器:序列化文本换回相对引用,管线不见预览 URL");
+  assert.equal(displayUrlToRef(markdown), markdown,
+    "本来就相对引用的文本原样通过");
+});
+
+test("登记页接线锚点:描述框是 milkdown 编辑器,粘贴上传走原接口", () => {
+  const registration = readFileSync(
+    resolve("web/src/issues/Registration.tsx"), "utf-8");
+  assert.match(registration,
+    /<DescriptionEditor value=\{description\} onChange=\{setDescription\}/,
+    "描述框换成所见即所得编辑器,值回路接 description");
+  assert.match(registration, /onUploadImage=\{uploadIssueFile\}/,
+    "编辑器上传钩子接登记上传");
+  assert.match(registration, /uploadIssueImage\(file\)/,
+    "上传仍走既有 staging 接口");
+  assert.doesNotMatch(registration, /<textarea/,
+    "裸 textarea 退役——描述框是它的最后据点");
+  const editor = readFileSync(
+    resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+  assert.match(editor, /@milkdown\/kit\/core/, "milkdown(ProseMirror 内核)");
+  assert.match(editor, /preset\/commonmark/);
+  assert.match(editor, /preset\/gfm/, "表格/任务列表");
+  assert.match(editor, /@milkdown\/kit\/plugin\/upload/, "粘贴/拖拽上传插件");
+  assert.match(editor, /uploader: async \(files: FileList, schema: any\)/,
+    "自定义上传器:上传后插入光标位置");
+  assert.match(editor, /issueImageUrl\(ref\)/, "插入的是预览 URL(显示世界)");
+  assert.match(editor, /displayUrlToRef\(markdown\)/, "出场即映射回相对引用");
+  assert.match(editor, /replaceAll\(refToDisplayUrl\(value, issueImageUrl\)\)/,
+    "外部值变更(润色替换回填)整体重排");
+  assert.match(editor, /【待补充】/, "令牌约定留痕:编辑器内不做特殊化");
+  const refModule = readFileSync(
+    resolve("web/src/issues/issueImageRef.ts"), "utf-8");
+  assert.match(refModule, /issue-images\\\/\[0-9a-f\]\{16\}/,
+    "引用形态与 issueImages.parseIssueImagePath 同口径");
 });
