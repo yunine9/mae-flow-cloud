@@ -1,0 +1,26 @@
+@layer legacy {
+/* 行号使用原文位置，不参与正文复制、搜索和批注取文。多行块显示范围。 */
+.md-numbered { padding-inline-start: 4rem; }
+.md-numbered-block { position: relative; min-width: 0; }
+.md-numbered-block::before,
+.md-numbered > .md-list > li::after {
+  position: absolute;
+  inset-inline-start: calc(-5rem - 24px);
+  top: 0;
+  width: 3.25rem;
+  color: var(--muted);
+  font: 11px/1.8 var(--font-mono);
+  text-align: end;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  content: attr(data-source-lines);
+}
+.md.md-numbered > .md-list { padding-inline-start: 22px; }
+.md.md-numbered > .md-list > li { position: relative; padding-inline-start: 0; }
+.md-numbered > .md-list > li::after {
+  content: attr(data-l);
+  inset-inline-start: calc(-5rem - 46px);
+}
+.md-numbered-block > :first-child { margin-block-start: 0; }
+}

@@ -2692,6 +2692,8 @@ export interface Annotation {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   /** 划选一块时的整块原文与末行;定位仍靠 anchor。 */
   quote?: string;
   line_end?: number;
@@ -2704,6 +2706,8 @@ export interface Annotation {
   route?: "agent" | "owner_reply" | "owner_decision" | "memory";
   assignee?: string;
   status: "draft" | "sent" | "verified" | "dropped";
+  agent_assigned?: boolean;
+  agent_context?: { text: string; by: string; at: string; revision: number };
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
     | "queued_decision" | "owner_pending" | "overall_story_queue" | "overall_story_processing" | "overall_story" | "requirement_queue" | "requirement_review";
@@ -2770,6 +2774,8 @@ export interface AnnotationClosure {
   can_verify: boolean;
   owner_controlled?: boolean;
   can_resolve?: boolean;
+  can_delete?: boolean;
+  can_reopen?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
   can_route: boolean;
@@ -2977,11 +2983,12 @@ export async function judgeAnnotation(
 export async function sendAnnotations(
   taskId: string,
   ids?: string[],
+  context?: string,
 ): Promise<{ sent?: string[]; receipt?: string; error?: string }> {
   const response = await fetch(`/tasks/${taskId}/annotations/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(ids ? { ids } : {}),
+    body: JSON.stringify({ ...(ids ? { ids } : {}), ...(context ? { context } : {}) }),
   });
   if (!response.ok) {
     const body = await errorBody(response);
@@ -4380,6 +4387,8 @@ export function getIssueDialogue(id: string): Promise<{
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
 export interface IssueReview {
+  quote?: string;
+  line_end?: number;
   id: string;
   author: string;
   created_at: string;
@@ -4387,6 +4396,8 @@ export interface IssueReview {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   note: string;
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
@@ -4398,6 +4409,7 @@ export interface IssueReview {
 /** 锚点检测(送出后原文还在吗):gone = 已被改动(唯一判据),
  * moved = 仅漂移,ambiguous = 多处命中。 */
 export interface IssueReviewCheck {
+  location_verified?: boolean;
   id: string;
   state: "hit" | "moved" | "gone" | "ambiguous";
   line?: number;
@@ -4413,8 +4425,12 @@ export function getIssueReviews(id: string): Promise<{
 }
 
 export function addIssueReview(id: string, input: {
+  quote?: string;
+  line_end?: number;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   note: string;
 }): Promise<IssueReview> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews`, {

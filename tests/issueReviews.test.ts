@@ -131,7 +131,7 @@ test("意见清单渲染:四条护栏原文沿用;逐条带稳定 id/行号/原�
   assert.match(text, /只按这些意见修订/);
   assert.match(text, /以原文为准定位/);
   assert.match(text, /说明理由,别默默跳过/);
-  assert.match(text, new RegExp(`\\[${first.id}\\] 第 3 行`), "稳定 id 入清单");
+  assert.match(text, new RegExp(`\\[${first.id}\\] 历史第 3 行`), "稳定 id 入清单");
   assert.match(text, /原文:根因:重试无上限/);
   assert.match(text, /要求:加重试上限/);
   assert.match(text, /第 2 轮/);

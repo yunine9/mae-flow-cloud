@@ -1053,7 +1053,7 @@ export function LaunchWorkspace({
                   </div>}
                   {requirementBundle && <div className="requirement-bundle-preview">
                     <div><strong>材料包预览</strong><small>图片能正常显示后再发起任务</small></div>
-                    <Markdown text={requirementBundle.preview.requirement}
+                    <Markdown showLineNumbers text={requirementBundle.preview.requirement}
                       resolveImage={(path) => {
                         const asset = requirementBundle.preview.assets.find(
                           (item) => item.path === path);

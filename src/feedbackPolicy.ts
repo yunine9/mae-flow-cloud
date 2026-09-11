@@ -324,6 +324,8 @@ export interface AnnotationClosure {
   can_verify: boolean;
   owner_controlled?: boolean;
   can_resolve?: boolean;
+  can_delete?: boolean;
+  can_reopen?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
   /** 别人的草稿,这位看的人可以代为转交/提交。 */
@@ -607,27 +609,32 @@ export function annotationClosure(
   if (item.artifact === OVERALL_STORY_ARTIFACT) facts = { ...facts, archival: false };
   const personName = options.person_name ?? ((username: string) => username);
   if (facts.owner_controlled && annotationRoute(item) !== "memory") {
-    const pending = item.status === "sent" || (item.status === "draft" && !!item.needs_owner_closure);
+    const pending = item.status === "sent" || item.status === "draft";
     const owner = facts.task_owner ?? "本地用户";
     const mine = viewer.username === owner;
-    const canResolve = pending && mine && facts.task_status !== "canceled"
+    const canManage = mine && facts.task_status !== "canceled"
       && (!facts.archival || item.artifact === OVERALL_STORY_ARTIFACT);
     const response = currentResponse(item);
+    const waitingForAgent = item.status === "sent" && item.sent_via !== "owner_pending" && !response;
+    const answered = !!response || (!!item.owner_reply && item.sent_via === "owner_pending");
+    const canResolve = pending && canManage && answered;
     const labels = { fixed: "责任人确认已修复", not_adopted: "责任人不采纳", deferred: "责任人决定延期", accepted_risk: "责任人接受风险继续" };
     const resolution = item.resolution;
     // 没有新处置事件的旧闭环保留原操作者和原含义。
-    if (pending || resolution) return {
+    if (pending || resolution || item.status === "verified") return {
       id: item.id, tone: resolution ? "done" : "review",
-      text: resolution ? labels[resolution.outcome] : mine ? "待你逐条处置" : "待责任人逐条处置",
+      text: item.status === "verified" ? "已闭环" : waitingForAgent ? "等待 Agent 答复" : answered ? "待责任人确认闭环" : "待处理",
       hint: resolution ? `${personName(resolution.by)}：${resolution.reason || response?.summary || item.owner_reply?.text || "已核对处理结果"}`
         : item.withdrawal_requested ? "提出人申请撤回表达，仍需责任人逐条处置。"
         : `由任务责任人 ${personName(owner)} 核对回执及最新材料后逐条决定。`,
-      bucket: resolution ? "closed" : mine ? "mine" : "agent",
-      delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : deliveryTextOf(item, facts, personName),
-      verdict_ready: pending, actionable: canResolve, can_resolve: canResolve, owner_controlled: true,
+      bucket: item.status === "verified" ? "closed" : mine ? "mine" : "agent",
+      delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : item.status === "draft" ? "已记下，等待责任人处理" : deliveryTextOf(item, facts, personName),
+      verdict_ready: answered, actionable: pending && canManage, can_resolve: canResolve, owner_controlled: true,
+      can_delete: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
+      can_reopen: canManage && (item.status === "verified" || (item.status === "sent" && answered)),
       can_verify: canResolve && (response?.outcome === "fixed" || (item.route === "owner_reply" && !!item.owner_reply)),
-      can_override_verify: false, can_override_drop: false, can_route: canRouteDraft(item, facts, viewer),
-      needs_clarification: response?.outcome === "needs_clarification", receipt_missing: pending && mine && !response,
+      can_override_verify: false, can_override_drop: false, can_route: canManage && pending && !answered && (item.status === "draft" || item.sent_via === "owner_pending"),
+      needs_clarification: response?.outcome === "needs_clarification", receipt_missing: waitingForAgent && mine,
     };
   }
   const ready = annotationVerdictReady(item, facts);

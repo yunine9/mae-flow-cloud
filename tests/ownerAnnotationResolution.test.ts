@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AnnotationStore, AnnotationPermissionError, TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
+import { AnnotationStore, AnnotationPermissionError, TASK_REQUIREMENT_ARTIFACT, renderAnnotations } from "../src/annotations.ts";
 import { annotationClosure, blockingAnnotations } from "../src/feedbackPolicy.ts";
 import { buildConversation } from "../src/conversation.ts";
 import { TaskService } from "../src/taskService.ts";
@@ -82,6 +82,7 @@ test("闭环权限随当前子任务责任人变化，不继承主任务或管�
       revision: 0, outcome: "not_adopted", reason: "直接请求 API",
     }), AnnotationPermissionError);
   }
+  store.respond(item.id, { outcome: "not_fixed", summary: "接口已有声明，请责任人确认", evidence: [] });
   const viewer = { username: "new-owner", can_override: false, can_route_others: true };
   assert.equal((await service.listAnnotationsAsync(task.id, viewer)).closures[0].can_resolve, true);
   assert.equal((await service.listAnnotationsAsync(task.id, { ...viewer, username: "reviewer" })).closures[0].can_resolve, false);
@@ -89,8 +90,8 @@ test("闭环权限随当前子任务责任人变化，不继承主任务或管�
     revision: 0, outcome: "not_adopted", reason: "接口已经声明相同约定",
   });
   assert.equal(resolved.resolution?.by, "new-owner");
-  await assert.rejects(service.reopenAnnotation(task.id, item.id, "new-owner", 0), /已处置/);
-  assert.throws(() => service.editAnnotation(task.id, item.id, "改掉已闭环的原话", "reviewer"), /保留历史/);
+  assert.equal((await service.reopenAnnotation(task.id, item.id, "new-owner", 0)).status, "draft");
+  assert.throws(() => service.editAnnotation(task.id, item.id, "改掉已闭环的原话", "reviewer"), AnnotationPermissionError);
 });
 
 test("当前 owner 可以明确处置缺回执意见，旧闭环保持原操作者语义", () => {
@@ -99,11 +100,11 @@ test("当前 owner 可以明确处置缺回执意见，旧闭环保持原操作�
     review_ready: true, review_annotation_ids: [item.id], archival: false };
   const viewer = { username: "owner", can_override: false, can_route_others: true };
   const pending = annotationClosure(store.list()[0], facts, viewer);
-  assert.equal(pending.can_resolve, true);
+  assert.equal(pending.can_resolve, false);
   assert.equal(pending.can_verify, false);
   store.verify(item.id, "reviewer"); // 旧账只记录作者确认。
   const closed = annotationClosure(store.list()[0], facts, viewer);
-  assert.equal(closed.can_resolve, undefined);
+  assert.equal(closed.can_resolve, false);
   assert.equal(closed.can_override_verify, false);
   assert.equal(store.list()[0].resolution, undefined);
 });
@@ -151,39 +152,43 @@ test("责任人直接确认当前 fixed 回执，无需重复填写理由，重�
 
 
 for (const artifact of [TASK_REQUIREMENT_ARTIFACT, "diff", "design.md"]) {
-  test(`${artifact}：提出人可提交自己的意见，但管理员和提出人都不能代责任人闭环`, async () => {
+  test(`${artifact}：统一记下、责任人答复闭环和重新打开、删除权限`, async () => {
     const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "owner-policy-")),
       provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
-    const task = service.create("核对接口", { account: "owner" });
-    const state = (service as any).tasks.get(task.id);
-    state.summary.status = "waiting_for_human";
-    const store = (service as any).annotations(state) as AnnotationStore;
-    const own = service.addAnnotation(task.id, { author: "reviewer", artifact,
-      file: "spec.md", line: 1, anchor: "核对接口", note: "补充重试说明", kind: "doc" });
-    const foreign = service.addAnnotation(task.id, { author: "another", artifact,
-      file: "spec.md", line: 1, anchor: "核对接口", note: "补充超时说明", kind: "doc" });
-    const sent = await service.sendAnnotations(task.id, [own.id], "reviewer");
-    assert.deepEqual(sent.sent, [own.id]);
-    await assert.rejects(service.sendAnnotations(task.id, [foreign.id], "reviewer"));
-    assert.equal(store.list().find((one) => one.id === foreign.id)?.status, "draft");
-    for (const actor of ["reviewer", "admin", "another"]) {
-      for (const outcome of ["fixed", "not_adopted", "deferred", "accepted_risk"] as const) {
-        assert.throws(() => service.verifyAnnotation(task.id, own.id, actor, true,
-          { revision: 0, outcome, reason: "直接调用接口" }), AnnotationPermissionError);
+    try {
+      const task = service.create("核对接口", { account: "owner" });
+      const state = (service as any).tasks.get(task.id);
+      state.summary.status = "waiting_for_human";
+      const store = (service as any).annotations(state) as AnnotationStore;
+      const own = service.addAnnotation(task.id, { author: "reviewer", artifact,
+        file: "spec.md", line: 1, anchor: "核对接口", note: "补充重试说明", kind: "doc", route: "owner_reply" });
+      for (const actor of ["reviewer", "admin"]) {
+        await assert.rejects(service.sendAnnotations(task.id, [own.id], actor), AnnotationPermissionError);
+        assert.throws(() => service.dropAnnotation(task.id, own.id, actor), AnnotationPermissionError);
+        await assert.rejects(service.replyToAnnotation(task.id, own.id, actor, "答复"), AnnotationPermissionError);
       }
-      await assert.rejects(service.reopenAnnotation(task.id, own.id, actor, 0), AnnotationPermissionError);
-    }
-    service.dropAnnotation(task.id, own.id, "reviewer");
-    assert.equal(store.list().find((one) => one.id === own.id)?.status, "sent", "撤回表达不是闭环");
-    assert.equal(blockingAnnotations(store.list(), "owner").length, 1);
-    const resolved = service.verifyAnnotation(task.id, own.id, "owner", false,
-      { revision: 0, outcome: "not_adopted", reason: "重试策略已在接口约定中说明" });
-    assert.equal(resolved.status, "verified");
-    assert.equal(resolved.resolution?.by, "owner");
-    store.markSent([foreign.id], "interrupt", "another");
-    const confirmed = service.verifyAnnotation(task.id, foreign.id, "owner", false,
-      { revision: 0, outcome: "fixed", reason: "" });
-    assert.equal(confirmed.status, "verified", "责任人的确认本身足以闭环，无需重复输入结论");
-    assert.equal(confirmed.response, undefined, "不伪造 Agent 回执");
+      assert.throws(() => service.verifyAnnotation(task.id, own.id, "owner"), /先交给 Agent/);
+      await service.replyToAnnotation(task.id, own.id, "owner", "本轮不修改，原因是已有接口约定");
+      assert.equal(service.verifyAnnotation(task.id, own.id, "owner").status, "verified");
+      assert.equal((await service.reopenAnnotation(task.id, own.id, "owner", 0)).status, "draft");
+      assert.equal(store.list()[0].rework, 1);
+      assert.equal(service.dropAnnotation(task.id, own.id, "owner").status, "dropped");
+      const delegated = service.addAnnotation(task.id, { author: "owner", artifact,
+        file: "spec.md", line: 1, anchor: "核对接口", note: "补充超时说明", kind: "doc", route: "owner_reply" });
+      const sent = await service.sendAnnotations(task.id, [delegated.id], "owner", false, false, "保持现有接口兼容");
+      assert.match(sent.text, /补充超时说明[\s\S]*责任人补充（owner）：保持现有接口兼容/);
+      const delivered = store.list().find((row) => row.id === delegated.id)!;
+      assert.equal(delivered.note, "补充超时说明");
+      assert.equal(delivered.agent_context?.text, "保持现有接口兼容");
+      assert.equal(store.list().find((row) => row.id === delegated.id)?.agent_assigned, true);
+      assert.throws(() => service.dropAnnotation(task.id, delegated.id, "owner"), /不能删除/);
+      store.respond(delegated.id, { outcome: "fixed", summary: "已经补齐超时处理", evidence: ["spec.md:1"] });
+      service.verifyAnnotation(task.id, delegated.id, "owner");
+      await service.reopenAnnotation(task.id, delegated.id, "owner", 0);
+      assert.doesNotMatch(renderAnnotations([store.list().find((row) => row.id === delegated.id)!], "test"), /保持现有接口兼容/, "旧轮补充不应默默带入新一轮");
+      assert.throws(() => service.dropAnnotation(task.id, delegated.id, "owner"), /不能删除/);
+      await service.replyToAnnotation(task.id, delegated.id, "owner", "重新核对后，维持原有约定");
+      assert.equal(service.verifyAnnotation(task.id, delegated.id, "owner").status, "verified");
+    } finally { await service.shutdown(); }
   });
 }

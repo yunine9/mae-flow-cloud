@@ -4,7 +4,7 @@ import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineR
 import type { PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
-import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
+import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { archifyArtifactGuidance, readAnalysisArchitecture, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
 import { materializeArchifyReferences } from "./archifyReferences.ts";
@@ -1824,10 +1824,10 @@ function recoverTaskCwd(
     }
     return existsSync(join(actual, ".git")) ? presented : undefined;
   };
-  if (typeof saved === "string") {
-    // 明确保存过的 cwd 可以是老部署的外置现场，保持向后兼容；但它
-    // 一旦消失就不猜别的目录。只有 cwd 缺失(null/undefined)才执行
-    // 下面的安全发现，这可区分“旧版漏存索引”和“现场确实被删”。
+  if (typeof saved === "string" && location(saved, false)?.actual !== root) {
+    // 明确保存过的仓库可以是外置现场，消失后不猜别的目录。
+    // cwd 缺失或等于启动中的任务根目录占位值，才继续安全发现；
+    // 区分“索引未落盘”和“现场确实被删”。
     return valid(saved, false);
   }
   if (analysis) return valid(join(root, "repositories"));
@@ -3832,12 +3832,10 @@ export class TaskService {
     }
     const contractStep = this.reviewContractStep(task, summary.waiting);
     // cloud_push_confirm 是 Cloud 自己生成的卡，不在内核 flow.json 里。
-    // 之前这里只问内核要效果，结果这张卡永远没有 choice_effects：页面
-    // 明明看得到“需要调整”，却不知道它是返工分支，只能错误提示用户
-    // 去写自定义答复。云端原生卡的选项与服务端处理本就由本文件定义，
+    // 云端原生卡隔离内核脉冲，不继承当前内核步骤的检视与选项语义。
     // 在同一处把关闭/返工语义投影出去，历史待办读取时也能立即恢复。
-    const choiceEffects: StepChoiceEffect[] =
-      summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
+    const choiceEffects: StepChoiceEffect[] = summary.waiting?.step === HOST_PUSH_CONFIRM_STEP
+      ? HOST_PUSH_CHOICE_EFFECTS : summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         ? [{
             key: "split",
             answers: [SPLIT_PROPOSAL_ACCEPT],
@@ -3870,7 +3868,8 @@ export class TaskService {
             contractStep,
           );
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
-      summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
+      : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
         || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         || summary.waiting?.step === MR_DESCRIPTION_STEP
         ? "source"
@@ -3927,7 +3926,7 @@ export class TaskService {
       waiting: summary.waiting
         ? {
             ...summary.waiting,
-            ...(recommendedView ? { recommended_view: recommendedView } : {}),
+            ...(summary.waiting.step === HOST_PUSH_CONFIRM_STEP ? { recommended_view: undefined } : recommendedView ? { recommended_view: recommendedView } : {}),
             ...(choiceEffects.length ? {
               choice_effects: choiceEffects.map((effect) => ({
                 key: effect.key,
@@ -4046,7 +4045,7 @@ export class TaskService {
     task: TaskState,
     waiting: Pick<WaitingRecord, "step"> | undefined,
   ): string | undefined {
-    return this.taskProgress(task)?.step_id ?? waiting?.step;
+    return waiting?.step === HOST_PUSH_CONFIRM_STEP ? waiting.step : this.taskProgress(task)?.step_id ?? waiting?.step;
   }
 
   /** 内核没给脉冲时按任务状态占一段。占哪一段由 flow/phases.json 的
@@ -5450,10 +5449,8 @@ export class TaskService {
     }
     const route = input.route ?? "agent";
     const needsOwner = route !== "agent" && route !== "memory";
-    const assignee = needsOwner ? task.summary.luban_account : undefined;
-    if (needsOwner && !assignee) {
-      throw new TaskControlError("当前任务没有责任人，暂时不能创建需要责任人答复的意见");
-    }
+    const assignee = needsOwner ? task.summary.luban_account ?? "本地用户" : undefined;
+
     const record = this.annotations(task).add({ ...input, route, assignee });
     // 效果账(§6):推过的记忆所在文件又被人提了意见 → 那条记忆记一笔返工。
     if (route === "agent" && record.kind === "code" && record.file) {
@@ -6210,14 +6207,6 @@ export class TaskService {
           }));
       }
     }
-    if (replied.route === "owner_decision") {
-      if (replied.sent_via !== "owner_pending") return replied;
-      await this.deliverAgentAnnotations(task, [replied], [
-        "[责任人已作出明确决策]",
-        `责任人 ${replied.owner_reply?.author ?? by} 的决定：${replied.owner_reply?.text ?? text}`,
-        "请以这份决定为准处理对应检视意见；不要再向 Agent 猜测责任人的意图。",
-      ].join("\n"), true, by);
-    }
     return this.annotations(task).list().find((item) => item.id === annotationId)!;
   }
 
@@ -6230,10 +6219,13 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const annotations = this.annotations(task);
-    const dropped = annotations.requestWithdrawal(annotationId, by);
+    this.assertAnnotationOwner(task, by);
+    const item = annotations.list().find((entry) => entry.id === annotationId);
+    if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending") || item?.status === "verified") throw new TaskControlError("已交给 Agent 或已闭环的意见不能删除");
+    const dropped = annotations.drop(annotationId, by, true);
     if (dropped.status === "dropped") this.resolveFeedbackRecords(task, (record) =>
       record.source === "workspace" && record.source_id === dropped.id,
-      "closed", "作者删除未提交草稿");
+      "closed", "责任人删除待处理意见");
     this.refreshWorkspaceReviewClosure(task);
     return dropped;
   }
@@ -6248,6 +6240,7 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const store = this.annotations(task);
     const item = store.list().find((one) => one.id === annotationId);
+    this.assertAnnotationOwner(task, by);
     if (item?.status === "verified") throw new TaskControlError("已闭环意见保留历史；如有新意见请另行提出");
     return store.edit(annotationId, note, by, true);
   }
@@ -6267,6 +6260,7 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     if (task.summary.status === "completed" && item?.artifact !== OVERALL_STORY_ARTIFACT) throw new TaskControlError("任务已归档，代码检视记录只读");
     if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    if (!(item.response && item.response.revision === (item.rework ?? 0)) && !(item.owner_reply && item.sent_via === "owner_pending")) throw new TaskControlError("请先交给 Agent 处理或自行答复，再确认闭环");
     const verified = annotations.resolveAsOwner(annotationId, by, decision ?? {
       revision: item.rework ?? 0, outcome: "fixed", reason: "",
     });
@@ -6320,7 +6314,8 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     const current = store.list().find((one) => one.id === annotationId);
     if (expectedRevision !== undefined && expectedRevision !== (current?.rework ?? 0)) throw new TaskControlError("意见版本已变化，请刷新后处理");
-    if (current?.status !== "sent") throw new TaskControlError("这条意见已处置或已退回，请刷新查看记录");
+    if (current?.status !== "sent" && current?.status !== "verified") throw new TaskControlError("这条意见已退回，请刷新查看记录");
+    if (current.status === "sent" && current.sent_via !== "owner_pending" && !current.response) throw new TaskControlError("Agent 尚在处理，请等待答复后继续处理");
     return store.reopen(annotationId, by, update, true);
   }
 
@@ -6342,12 +6337,19 @@ export class TaskService {
     actor?: string,
     allowForeign = false,
     backgroundRequirementReview = false,
+    context = "",
   ): Promise<{
     sent: string[]; text: string; receipt?: string;
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.summary.status === "canceled") throw new TaskControlError("任务已由用户停止，不能再提交批注");
+    this.assertAnnotationOwner(task, actor ?? "本地用户");
+    if (context.trim() && ids?.length !== 1) throw new TaskControlError("请逐条补充并发送检视意见");
+    allowForeign = !!ids?.length;
+    for (const item of this.annotations(task).list().filter((entry) => ids ? ids.includes(entry.id) : entry.status === "draft" && (!task.summary.luban_account || entry.author === actor))) {
+      if (item.route !== "memory") this.annotations(task).assignToAgent(item.id, actor ?? "本地用户", context);
+    }
     const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
     const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
     const overall = allPicked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
@@ -10925,8 +10927,10 @@ export class TaskService {
   }
 
   private pushConfirmationAccepted(waiting: WaitingRecord): boolean {
-    return [waiting.decision, ...Object.values(waiting.answers ?? {})]
-      .some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+    const answers = Object.values(waiting.answers ?? {});
+    // 已发出的卡片文案是历史契约；只认明确确认原文，绝不做包含匹配。
+    return (answers.length ? answers : [waiting.decision]).every((answer) =>
+      answer === PUSH_CONFIRM_ACCEPT || answer === "确认推送并进入检视");
   }
 
   private continuationDeliverySelection(
@@ -11124,7 +11128,7 @@ export class TaskService {
         this.tryDeliver(task, task.controlEpoch));
       return;
     }
-    const review = waiting.notes.trim();
+    const review = [waiting.decision, ...Object.values(waiting.answers ?? {}), waiting.notes].filter(Boolean).join("\n").trim();
     const annotationIds = Array.isArray(waiting.continuation?.annotation_ids)
       ? waiting.continuation.annotation_ids.map(String) : [];
     const annotations = this.annotations(task).list().filter((item) =>
@@ -11542,7 +11546,7 @@ export class TaskService {
     // 关闭语义由选项原文判定;确认视同关闭检视——未闭环批注同样拦。
     const pushConfirmCard = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
     const confirmingPush = pushConfirmCard
-      && submitted.some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+      && this.pushConfirmationAccepted({ ...waiting, answers, decision });
     if (pushConfirmCard || closesFeedback) this.assertOwnerDecides(task, input.actor, "决定最终提交或检视通过");
     if (input.delivery_compile_action
         && !["rerun", "skip"].includes(input.delivery_compile_action)) {
@@ -13620,9 +13624,9 @@ export class TaskService {
     const operation = ledger.read().operations.find(item => item.id === waiting.call_id);
     if (!operation || operation.input.action !== "push") throw new TaskControlError("未找到待确认的推送");
     if (operation.state === "succeeded" || operation.state === "failed") return;
-    // 自定义要求优先交给 Agent 理解，不能把“确认，但只推 A”当作全量授权。
-    const accepted = [...Object.values(waiting.answers ?? {}), waiting.decision].includes("确认推送")
-      && !waiting.notes?.trim();
+    // 按明确选项裁决；备注可能是审批渠道信息，不能将其当作“先调整”。
+    const selections = [...Object.values(waiting.answers ?? {}), waiting.decision];
+    const accepted = selections.includes("确认推送") && !selections.includes("先调整");
     task.summary.waiting = undefined;
     if (accepted) {
       operation.push_confirmed = true;
@@ -13746,14 +13750,14 @@ export class TaskService {
         this.options.gitCredential?.(task.summary.luban_account);
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
-      // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
-      // 晚一步读就是把重建会话跑进任务根目录(实测:内核找不到
+      // savedCwd 必须先恢复；后续准备失败也要保留仓库路径，
+      // 不能把重建会话跑进任务根目录(实测:内核找不到
       // 状态文件,messages 报"未初始化")。
-      const savedCwd = task.cwd;
+      const savedCwd = this.options.host ? recoverTaskCwd(task.summary, workspace, task.cwd) : task.cwd;
       const requirementAnalysis = this.isRequirementAnalysis(task);
       const analysisOnly = requirementAnalysis;
-      const resuming = task.resume === true
-        && !!savedCwd && savedCwd !== workspace && existsSync(savedCwd);
+      // 仓库复用取决于实际现场，queued 恢复的会话标志不能触发重复 clone。
+      const resuming = !!savedCwd && savedCwd !== workspace && existsSync(savedCwd);
       let cwd = workspace;
       let requirementPath = task.summary.requirement_document?.context_mode === "file"
         ? STORED_REQUIREMENT_DOCUMENT : undefined;
@@ -13778,7 +13782,7 @@ export class TaskService {
       let activeWorkflowProfile = task.summary.workflow_profile;
       let workflowProfileMaterialized = !activeWorkflowProfile;
       let promptSteerCount = 0;
-      task.cwd = cwd;
+      task.cwd = savedCwd ?? cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
         if (!resuming) {

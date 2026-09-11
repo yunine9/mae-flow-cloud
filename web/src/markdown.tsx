@@ -5,7 +5,7 @@
  * 段落展示,渲染器绝不吞内容。
  */
 
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
 import { MermaidFlow } from "./MermaidFlow";
 import { PlantUml } from "./PlantUml";
 
@@ -77,8 +77,11 @@ export function Markdown({
   text,
   resolveImage,
   onOpenArchitecture,
+  showLineNumbers = false,
 }: {
   text: string;
+  /** 仅文档阅读入口开启；对话与决策卡沿用普通 Markdown。 */
+  showLineNumbers?: boolean;
   resolveImage?: (path: string) => string | undefined;
   onOpenArchitecture?: (line: number) => void;
 }) {
@@ -268,5 +271,15 @@ export function Markdown({
     blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line, resolveImage)}</p>);
     index += 1;
   }
-  return <div className="md">{blocks}</div>;
+  if (!showLineNumbers) return <div className="md">{blocks}</div>;
+  return <div className="md md-numbered">{blocks.map((block, i) => {
+    if (!isValidElement<{ "data-l"?: number; "data-line-end"?: number }>(block)) return block;
+    const start = block.props["data-l"];
+    if (!start) return block; // 列表逐项显示源行号，保留原有列表语义。
+    const end = block.props["data-line-end"];
+    const label = end && end > start ? `${start}–${end}` : String(start);
+    return <div key={i} className="md-numbered-block" data-source-lines={label}>
+      {block}
+    </div>;
+  })}</div>;
 }

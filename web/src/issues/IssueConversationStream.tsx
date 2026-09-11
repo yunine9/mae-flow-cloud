@@ -563,6 +563,10 @@ function IssueCollaborationComposer({
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  // 截图粘贴(2026-09-10):插话/续聊/接管记录都支持,引用随消息提升
+  // 进工作区,AI 用 inspect_image 识图。
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const imagePaste = useIssueImagePaste(setError);
 
   type Mode =
     | { kind: "readonly" }
@@ -649,6 +653,15 @@ function IssueCollaborationComposer({
         </span>
       </div>
       <textarea className="steer-input" value={text} rows={3}
+        ref={textRef}
+        onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
+          const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);
+          setText(next);
+          window.requestAnimationFrame(() => {
+            textRef.current?.focus();
+            textRef.current?.setSelectionRange(caret, caret);
+          });
+        })}
         disabled={sending || busy}
         placeholder="记录你的人工操作,交还时 AI 会看到这些记录"
         onChange={(event) => { setText(event.target.value); if (sent) setSent(false); }}
@@ -735,6 +748,15 @@ function IssueCollaborationComposer({
       </button>}
     </div>
     <textarea className="steer-input" value={text} rows={3}
+      ref={textRef}
+      onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
+        const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);
+        setText(next);
+        window.requestAnimationFrame(() => {
+          textRef.current?.focus();
+          textRef.current?.setSelectionRange(caret, caret);
+        });
+      })}
       disabled={sending || busy}
       placeholder={steer
         ? "例如:日志先只拉网管侧,先别动库…"
@@ -761,3 +783,4 @@ function IssueCollaborationComposer({
     {error && <div className="alert" role="alert">{error}</div>}
   </section>;
 }
+import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste";

@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
+import { clearDecisionChoice, isAdjustmentAnswer, needsDeliverySelection, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -419,7 +419,7 @@ export function TaskCard({
           )}
           {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
-            task.waiting.recommended_view === "diff" ? (
+            needsDeliverySelection(task.waiting) ? (
               /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
                  「本任务变更」里。列表页若直接渲决策表单,提交键会永远
                  停在"正在读取交付文件清单"(push 确认卡实锤死锁),
@@ -636,8 +636,9 @@ function waitingStepTitle(task: TaskSummary): string | undefined {
   // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
   // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
   if (isChainReviewWaiting(task)) return "确认拆分方案";
+  if (step === "host_push_confirm") return "确认本次推送";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
-  if (task.waiting?.recommended_view === "diff") return "代码检视";
+  if (needsDeliverySelection(task.waiting)) return "代码检视";
   return undefined;
 }
 
@@ -723,7 +724,7 @@ export function WaitingCard({
   const chainReview = isChainReviewWaiting(task);
   const unifiedReply = (presentation === "studio" || mrDescription) && questions.length === 1
     && !requirementAnalysisConfirmation;
-  const choiceEffects = task.waiting?.choice_effects ?? [];
+  const choiceEffects = task.waiting?.step === "host_push_confirm" ? [] : task.waiting?.choice_effects ?? [];
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
     .flatMap((effect) => effect.answers));
@@ -733,7 +734,7 @@ export function WaitingCard({
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;
-  const requiresDeliverySelection = task.waiting?.recommended_view === "diff";
+  const requiresDeliverySelection = needsDeliverySelection(task.waiting);
   const deliverySelectionChanged = !!deliverySelection
     && (deliverySelection.selectedPaths.length
       !== deliverySelection.committedPaths.length
@@ -770,8 +771,8 @@ export function WaitingCard({
   // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
   // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
-    || (requiresDeliverySelection && selectedAnswers.some((answer) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(answer)));
+    || ((requiresDeliverySelection || task.waiting?.step === "host_push_confirm")
+      && selectedAnswers.some(isAdjustmentAnswer));
   const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
@@ -888,6 +889,8 @@ export function WaitingCard({
 
   const submitLabel = submitting ? "正在提交…"
     : mrDescription ? "保存描述并继续创建 MR"
+    : task.waiting?.step === "host_push_confirm"
+      ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : selectedAnswers.includes("确认推送") ? "确认推送" : "提交决定"
     : clarification ? "发送答复"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
@@ -901,7 +904,7 @@ export function WaitingCard({
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
-          ? "提交返工意见"
+          ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "提交返工意见"
           : requiresDeliverySelection && deliverySelection
             ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
             : requiresDeliverySelection

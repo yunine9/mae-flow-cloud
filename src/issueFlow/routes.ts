@@ -747,6 +747,8 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.addReview(id, {
         line: Number(body.line),
         anchor: String(body.anchor ?? ""),
+        quote: String(body.quote ?? ""), line_end: Number(body.line_end ?? 0),
+        context_before: String(body.context_before ?? ""), context_after: String(body.context_after ?? ""),
         note: String(body.note ?? ""),
       }));
     }

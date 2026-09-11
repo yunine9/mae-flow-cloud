@@ -14,6 +14,7 @@ import "./rootError.css";
 import "./task-journey.css";
 import "./surface-finish.css";
 import "./ui.css";
+import "./markdown-lines.css";
 import "./tailwind.css"; // 必须排在存量 css 之后:层序靠 import 顺序,utilities 恒压过 legacy
 
 // 主题:URL 仅用于截图/核查;日常选择持久化。第一次访问才跟随系统，

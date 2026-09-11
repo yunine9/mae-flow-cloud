@@ -620,7 +620,7 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
     Panel,
     { ...common, items: [ordinary] },
   ));
-  assert.match(html, /请核对最新材料与处理依据/);
+  assert.match(html, /请核对处理结果/);
   assert.match(html, />仍需调整<\/button>/);
   assert.match(html, />确认已修复<\/button>/);
 
@@ -641,88 +641,18 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
   "MR 修复缺逐条回执时不能误开放通过");
 });
 
-test("三类检视意见显示各自责任与动作，旧意见仍按 Agent 处理", () => {
-  const common = {
-    taskId: "task-routing",
-    checks: [],
-    canOperate: true,
-    canOverride: false,
-    taskStatus: "running",
-    reviewReady: false,
-    reviewAnnotationIds: [],
-    mergeRequestOpen: false,
-    onChanged: () => undefined,
-  };
-  const waitingOwner = annotation({
-    id: "owner-question", author: "reviewer", route: "owner_reply",
-    assignee: "owner", sent_via: "owner_pending", response: undefined,
-  });
-  const ownerHtml = renderToStaticMarkup(React.createElement(
-    Panel,
-    { ...common, viewerUsername: "owner", items: [waitingOwner] },
-  ));
-  assert.match(ownerHtml, /责任人答复 · owner/);
-  assert.match(ownerHtml, /等待责任人答复/);
-  assert.match(ownerHtml, />回答这条意见<\/button>/);
-  assert.doesNotMatch(ownerHtml, /Agent：已处理/);
-
-  const answered = annotation({
-    ...waitingOwner,
-    owner_reply: {
-      author: "owner", text: "旧接口不支持多通道",
-      replied_at: "2026-08-30T00:02:00.000Z",
-    },
-  });
-  assert.equal(verdictReady(
-    answered, "running", false), true,
-  "责任人已经答复时，提出人不必等任务进入人工阶段即可确认");
-  const reviewerHtml = renderToStaticMarkup(React.createElement(
-    Panel,
-    { ...common, viewerUsername: "reviewer", items: [answered] },
-  ));
-  assert.match(reviewerHtml, /旧接口不支持多通道/);
-  assert.match(reviewerHtml, />仍有疑问<\/button>/);
-  assert.match(reviewerHtml, />确认已解答<\/button>/);
-
-  const decisionHtml = renderToStaticMarkup(React.createElement(
-    Panel,
-    { ...common, viewerUsername: "owner", items: [annotation({
-      id: "owner-decision", author: "reviewer", route: "owner_decision",
-      assignee: "owner", sent_via: "owner_pending", response: undefined,
-    })] },
-  ));
-  assert.match(decisionHtml, /决策后处理 · owner/);
-  assert.match(decisionHtml, />作出决定<\/button>/);
-
-  const foreignDraftsHtml = renderToStaticMarkup(React.createElement(
-    Panel,
-    {
-      ...common,
-      viewerUsername: "owner",
-      canRouteOthers: true,
-      items: [
-        annotation({
-          id: "foreign-agent", author: "reviewer", status: "draft",
-          response: undefined,
-        }),
-        annotation({
-          id: "foreign-owner", author: "reviewer", status: "draft",
-          route: "owner_reply", assignee: "owner", response: undefined,
-        }),
-      ],
-    },
-  ));
-  assert.match(foreignDraftsHtml, />原样交给 Agent<\/button>/);
-  assert.match(foreignDraftsHtml, />回答这条意见<\/button>/,
-    "责任人应能直接接住尚未提交的提问并答复");
-  const foreignDraft = annotation({
-    author: "reviewer", status: "draft", response: undefined,
-  }) as unknown as Annotation;
-  assert.equal(annotationClosure(foreignDraft,
-    { task_status: "running", review_ready: false,
-      review_annotation_ids: [], archival: false },
-    { username: "owner", can_override: false, can_route_others: true },
-  ).bucket, "mine", "别人留下的待路由意见应进入责任人的待办筛选");
+test("待处理意见不展示旧路由选项，责任人可答复或交给 Agent，闭环后可重开", () => {
+  const item = annotation({ status: "draft", response: undefined, route: "owner_reply", author: "reviewer", assignee: "owner" });
+  const common = { taskId: "task", taskOwner: "owner", ownerControlled: true, items: [item], checks: [], taskStatus: "running", onChanged() {} };
+  const html = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername: "owner" }));
+  assert.match(html, />交给 Agent<\/button>/); assert.match(html, />自行答复<\/button>/); assert.match(html, />删除<\/button>/);
+  assert.doesNotMatch(html, />确认闭环<\/button>|决策后处理|记为记忆|申请撤回表达/);
+  for (const viewerUsername of ["reviewer", "admin"]) {
+    const readonly = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername }));
+    assert.doesNotMatch(readonly, />删除<\/button>|>交给 Agent<\/button>|>自行答复<\/button>/);
+  }
+  const closed = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername: "owner", items: [annotation({ ...item, status: "verified" })] }));
+  assert.match(closed, />重新处理<\/button>/);
 });
 
 test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {
@@ -798,7 +728,7 @@ test("批注面板显示受限管理员入口和实际代确认审计", () => {
     Panel,
     { ...common, items: [current], reviewAnnotationIds: [current.id] },
   ));
-  assert.match(eligibleHtml, />管理员代删<\/button>/);
+  assert.doesNotMatch(eligibleHtml, />管理员代删<\/button>/);
   assert.match(eligibleHtml, />管理员代确认<\/button>/);
   assert.match(eligibleHtml, /第一次点击只会进入确认/);
 
@@ -882,16 +812,15 @@ test("责任人逐条处置表单保留缺回执事实，检视人和管理员�
     items: [pending], checks: [], taskStatus: "waiting_for_human", reviewReady: true,
     reviewAnnotationIds: [pending.id], onChanged: () => undefined };
   const html = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername: "owner" }));
-  assert.match(html, /确认通过/);
-  assert.match(html, /其他处理/);
-  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, />确认闭环<\/button>/);
+  assert.doesNotMatch(html, /其他处理/);
   assert.doesNotMatch(html, /这条意见的处理依据|保存处理结果/, "处置表单不能在阅读批注时自动展开");
   assert.match(html, /当前轮逐条回执尚未就绪/);
   assert.doesNotMatch(html, /Agent 已处理本轮|Agent 已处理你提出/);
   for (const viewerUsername of ["reviewer", "admin"]) {
     const readonly = renderToStaticMarkup(React.createElement(Panel, { ...props, viewerUsername, canOverride: true }));
     assert.doesNotMatch(readonly, /确认通过|其他处理|管理员代确认|管理员代删/);
-    assert.match(readonly, /待责任人逐条处置/);
+    assert.match(readonly, /等待 Agent 答复/);
   }
 });
 
@@ -903,9 +832,8 @@ test("责任人核对 Agent 修复后直接确认通过，不再自动展开处�
       viewerUsername: "owner", items: [annotation({ artifact, author: "reviewer" })],
       checks: [], taskStatus: "waiting_for_human", onChanged: () => undefined,
     }));
-    assert.match(html, />确认通过<\/button>/);
-    assert.match(html, />仍需调整<\/button>/);
-    assert.match(html, /aria-expanded="false"/);
+    assert.match(html, />确认闭环<\/button>/);
+    assert.doesNotMatch(html, />退回待处理<\/button>/);
     assert.doesNotMatch(html, /role="combobox"|<textarea/);
     assert.match(html, /annot-response outcome-fixed/);
     assert.doesNotMatch(html, /class="annot-response fixed"/);
