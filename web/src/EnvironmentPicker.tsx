@@ -156,30 +156,31 @@ export function EnvironmentPicker({ selectedId, onPick }: {
 
   return <div className="tw-root" aria-label="从环境管理选择">
     <Popover open={open} onOpenChange={toggleOpen}>
-      <PopoverTrigger asChild>
-        <button type="button"
-          className={`${envControlClass} flex items-center justify-between gap-2 text-left`}
-          aria-expanded={open}
-          aria-label={selected ? `已选环境 ${selected.ip}` : "选择网管环境"}>
-          {selected
-            ? <span className="flex min-w-0 items-center gap-2">
-              <span className="font-mono text-sm font-medium text-foreground">
-                {selected.ip}
+      <PopoverTrigger
+        render={
+          <button type="button"
+            className={`${envControlClass} flex items-center justify-between gap-2 text-left`}
+            aria-expanded={open}
+            aria-label={selected ? `已选环境 ${selected.ip}` : "选择网管环境"}>
+            {selected
+              ? <span className="flex min-w-0 items-center gap-2">
+                <span className="font-mono text-sm font-medium text-foreground">
+                  {selected.ip}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {formText(selected)} · {selected.port}
+                </span>
               </span>
-              <span className="text-xs text-muted-foreground">
-                {formText(selected)} · {selected.port}
-              </span>
-            </span>
-            : <span className="truncate text-sm text-muted-foreground">
-              从环境管理选择环境…
-            </span>}
-          <ChevronDown aria-hidden
-            className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />
-        </button>
-      </PopoverTrigger>
+              : <span className="truncate text-sm text-muted-foreground">
+                从环境管理选择环境…
+              </span>}
+            <ChevronDown aria-hidden
+              className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />
+          </button>
+        } />
       {/* 弹层 portal 到 body:必须自带 .tw-root 归一(见文件头说明)。 */}
       <PopoverContent align="start"
-        className="tw-root w-[var(--radix-popover-trigger-width)] p-0">
+        className="tw-root w-(--anchor-width) p-0">
         <div className="border-b border-line p-2">
           <input value={query} autoFocus
             className={envControlClass}

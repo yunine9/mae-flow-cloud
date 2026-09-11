@@ -4,7 +4,7 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { Collapsible } from "radix-ui";
+import { Collapsible } from "@base-ui/react/collapsible";
 import { ChevronDown } from "lucide-react";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
@@ -1603,7 +1603,7 @@ function CommitterInbox({
   </section>;
 }
 
-/** 问题处理导航组(spec #171):父行=展开/收起开关(radix Collapsible,
+/** 问题处理导航组(spec #171):父行=展开/收起开关(Base UI Collapsible,
  * 点击不跳页;首次展开而右侧不在问题处理时落默认子页签),子行=子页签
  * (问题登记/DTS列表/问题会话;admin 只见问题会话)。子行走新 Tailwind
  * 轨道(tw-root 归一,色彩一律令牌桥工具类),父行沿用 nav-item 家族,
@@ -1632,16 +1632,17 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
     setOpen(next);
     if (next && current !== view) onSelect(view);
   }}>
-    <Collapsible.Trigger asChild>
-      <button type="button"
-        className={`nav-item ${current === view ? "on" : ""}`}
-        aria-label="问题处理">
-        <NavIcon name={view} /><span>问题处理</span>
-        <ChevronDown aria-hidden
-          className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
-      </button>
-    </Collapsible.Trigger>
-    <Collapsible.Content>
+    <Collapsible.Trigger
+      render={
+        <button type="button"
+          className={`nav-item ${current === view ? "on" : ""}`}
+          aria-label="问题处理">
+          <NavIcon name={view} /><span>问题处理</span>
+          <ChevronDown aria-hidden
+            className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+        </button>
+      } />
+    <Collapsible.Panel>
       <div className="tw-root mt-0.5 mb-1 flex flex-col gap-0.5">
         {children.map((child) => {
           const active = current === view && childTab === child.tab;
@@ -1656,7 +1657,7 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
           </button>;
         })}
       </div>
-    </Collapsible.Content>
+    </Collapsible.Panel>
   </Collapsible.Root>;
 }
 
