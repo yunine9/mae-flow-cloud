@@ -34,13 +34,16 @@ Radix 上,radix-ui 依赖已卸,web 构建绿(与基线同款存量 chunk 体积
 - 动画 idiom:`data-[state=x]:animate-in/out + fade/zoom/slide` 家族全部重述为
   `transition-[opacity,transform] + data-starting-style:/data-ending-style:`(tw-animate-css 保留在依赖里,存量 App.tsx 其他区域自用不受影响)。
 
-## ⚠ FLAG:风格名仍是 radix 侧的(用户决定,未擅动)
+## ✅ FLAG 已了结(2026-09-11 用户拍板):base-nova 皮融进
 
-`components.json` 的 `style: "new-york"` 没有 base 对应物(不存在 base-new-york,
-强行换 base-<别的风格> 会重绘全站外观)。后果:**今后 `shadcn add <组件>` 仍会拉到
-radix 变体**——新组件要么手工按本仓 7 个已迁包装层的形态照猫画虎,要么在 add 后
-立即按 `.migration/` 对应参考重接。想根治需整体切到某个 base-<style>(外观会变),
-由你拍板。
+`components.json` style 已从 legacy `new-york` 翻为 **`base-nova`**——今后
+`shadcn add <组件>` 拉到的就是 Base UI 版 nova 变体,FLAG 不复存在。七个
+交互/弹层组件(button/badge/checkbox/dialog/popover/select/tooltip)的类形
+逐字换装 nova;`tw-animate-css` 因此回归(nova 的动画契约依赖 animate-in
+家族,此前"迁移后退役"的结论随选型作废)。card/table 维持有意本地化的
+扁平变体不动(文件头注释即设计决策);nova 的 `cn-*` 伴生类按"纯
+Tailwind 项目跳过"规矩丢弃;`IconPlaceholder` 换 lucide 直引。UI 轨道纪律
+三条已入 CONTEXT.md Workflow。
 
 ## 验证
 

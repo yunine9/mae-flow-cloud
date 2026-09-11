@@ -171,6 +171,14 @@ _Avoid_: 提示词工程(那含工具 schema 与用户卡面,都不在此列)、
 
 ## Workflow
 
+**UI 轨道纪律**(2026-09-11 拍板:shadcn base-nova 皮融进,模型写 UI 不许自由发挥):
+`web/` 新轨界面写 UI 只有三条路,没有第四条:
+1. **只准用 `web/src/components/ui/` 现有包装层**(button/dialog/select/popover/…);缺组件先 `npx shadcn add`(style 已是 base-nova,拉下来的就是 Base UI 版),复制后按需改,不许手搓同功能件。
+2. **颜色/圆角/字号只从令牌工具类拼**(bg-primary、text-muted-foreground、rounded-lg 这类)——禁 `bg-[#hex]` 式硬编码、禁在页面里自造组件皮;tokens.css 经 tailwind.css @theme 桥出的语义类是唯一色彩词汇。
+3. **交互/弹层一律走 ui/ 包装层**:焦点圈、键盘导航、进出场动画都已在皮里(nova 类 + tw-animate-css),页面只管排版(flex/gap/padding),不做视觉设计。
+存量 legacy 轨(手写 CSS、nav-item 家族)不强制改写,但新页面禁再入那条轨。card/table 是有意本地化的扁平变体(见文件头注释),是其作者拍板的例外,不照 nova 重绘。
+_Avoid_: 在 tw-root 轨道裸写 `<button>`/弹层、给同一页面混用两条轨道的类名、改 ui/ 包装层里 nova 的类形(要改先在 project.md 记录理由)
+
 **pr**:
 用户说「pr」「pr合并」「pr 合入 main」的既定语义:推送当前分支后建 PR 并直接合入 main,一气呵成,不必再等第二次确认。「pr 合并到 main」与「pr合并」同义;只建不合说「建 PR 不合」。
 _Avoid_: 建 PR 后停下等拍板(那是「建 PR 不合」的显式要求)、本地直接 push main(永远走 PR)
