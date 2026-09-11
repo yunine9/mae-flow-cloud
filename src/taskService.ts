@@ -1,6 +1,6 @@
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
-import { reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
+import { isReviewAdjustmentAnswer, reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
@@ -11477,8 +11477,16 @@ export class TaskService {
     // 它们拦"关闭",责任人确认不了、作者闭不了环,只剩"需要调整"能点
     // (内网实锤 2026-09-04:9 条意见、Agent 说全闭环、卡上过不去)。所以
     // 拦截只放在人能闭环的地方——push 确认卡仍是硬闸,中途卡不计它们。
-    const unresolved = this.unresolvedAnnotations(task).filter((item) =>
-      pushConfirmCard || item.sent_via !== "review_repair");
+    const responsibilityDrafts = (input.actor ?? task.summary.luban_account)
+        === (task.summary.luban_account ?? "本地用户")
+      ? this.annotations(task).drafts().filter(item => unassignedReviewDraft(item)
+        && !(task.summary.requirement_graph?.stage === "confirmed"
+          && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
+    const unresolved = [...new Map([
+      ...this.unresolvedAnnotations(task).filter((item) =>
+        pushConfirmCard || item.sent_via !== "review_repair"),
+      ...responsibilityDrafts,
+    ].map(item => [item.id, item])).values()];
     if (unresolved.length && (closesFeedback || confirmingPush)) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
         ? waiting.question.questions as Array<{ options?: string[] }> : [];
@@ -11490,7 +11498,7 @@ export class TaskService {
       const nonClosing = menuOptions.filter((option) =>
         !closingEffects.some((effect) => matchesStepChoice(effect, option)));
       const recommended = handled
-        ?? nonClosing.find((option) => /需要.*(?:调整|修改)|返工|补充/.test(option))
+        ?? nonClosing.find(isReviewAdjustmentAnswer)
         ?? nonClosing[0]
         ?? "需要调整";
       // 必须在整理提交、消费待办之前拒绝。旧顺序先机械改 commit 再报
@@ -15142,6 +15150,10 @@ export class TaskService {
     const prepush = delivery?.prepush;
     if (!prepush || ["passed", "user_skipped", "blocked", "environment_error"]
       .includes(prepush.state)) return "none";
+    // 宿主操作可能已经把这一 SHA 真实推到远端。此时本地 Build-Fix
+    // 已失去“push 前验证”的时序意义，恢复应接着核对权威流水线，不能
+    // 因旧 preparing 快照再次启动验证。远端收据只豁免同一个 SHA。
+    if (delivery?.git_push?.sha === prepush.sha) return "none";
     if (delivery?.pipeline === "running"
         || (delivery?.pipeline === "success" && delivery.sha)
         || delivery?.evidence_gap) return "none";
@@ -15867,18 +15879,25 @@ export class TaskService {
   ): Promise<boolean> {
     if (!this.options.prepush?.enabled) return true;
     if (task.prepushActive) return task.prepushActive;
-    // 用户显式拍板跳过本地验证:绑 HEAD 放行,交由权威流水线裁决。
-    // HEAD 变了(修复/新提交)跳过即失效,重新走真验证——旧拍板不
-    // 背书新代码,与收据同一条纪律。
-    const skipped = task.summary.delivery?.prepush;
-    if (skipped?.state === "user_skipped") {
-      const revision = await this.prePushRevision(task);
-      if (sameRevision(skipped, revision)) {
+    const revision = await this.prePushRevision(task);
+    // 已通过或用户显式跳过都绑定 SHA + 工作区指纹复用。此前这里只认
+    // user_skipped，重启会把真实 PASS 当成没跑过再起一轮 Build-Fix。
+    const completed = task.summary.delivery?.prepush;
+    if (completed && ["passed", "user_skipped"].includes(completed.state)
+        && sameRevision(completed, revision)) {
+      if (completed.state === "user_skipped") {
         this.options.log?.(
           `任务 ${task.summary.id} 按用户决定跳过 Build-Fix`
           + `(HEAD ${revision.sha.slice(0, 12)}),交由流水线裁决`);
-        return true;
       }
+      return true;
+    }
+    // Agent 通过宿主能力提前完成了同一 SHA 的远端推送时，不伪造
+    // Build-Fix PASS；直接让既有流水线事实接管验证。新 SHA 仍重验。
+    if (task.summary.delivery?.git_push?.sha === revision.sha) {
+      this.options.log?.(`任务 ${task.summary.id} 的 HEAD ${revision.sha.slice(0, 12)}`
+        + " 已有宿主推送收据，跳过补跑 Build-Fix并继续核对流水线");
+      return true;
     }
     const running = this.performPrePush(task, branch, baseline, epoch, dispatchRepair);
     task.prepushActive = running;
@@ -16081,17 +16100,20 @@ export class TaskService {
     // 已经存在 selection，就维持既有的保守复检语义。
     const required = force || policy.required;
     if (!required || !task.cwd) return true;
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) {
+      this.markVerificationStalled(task,
+        "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单", "contract");
+      return false;
+    }
+    // 同一 SHA 已有宿主推送收据时，推送已是远端事实；不得再问用户
+    // “要不要推送”。恢复链直接进入 MR / 流水线核对，新 HEAD 才重走卡。
+    if (task.summary.delivery?.git_push?.sha === snapshot.head) return true;
     // 最终卡出现之前,所有已提交意见必须处理完成(2026-09-05):还没处理完
     // 就先不举卡,让 Agent 接着处理;派过一轮仍未完成才按现状举卡。
     const reviewGap = await this.reviewProcessingGap(task);
     if (reviewGap.pending.length
         && this.dispatchReviewProcessing(task, reviewGap.pending) !== "exhausted") {
-      return false;
-    }
-    const snapshot = await deliveryChangeSnapshot(task.cwd);
-    if (!snapshot?.baseline) {
-      this.markVerificationStalled(task,
-        "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单", "contract");
       return false;
     }
     const committed = (await this.deliveryContribution(task, snapshot)).paths;
@@ -16755,10 +16777,13 @@ export class TaskService {
           && authorizedPrePush?.sha
           && ["passed", "user_skipped"].includes(authorizedPrePush.state)
         ? authorizedPrePush.sha : observedRevision.sha;
+      const existingPushReceipt = task.summary.delivery?.git_push?.sha
+        === expectedPushSha ? task.summary.delivery.git_push : undefined;
       // Build-Fix 可能运行很久，期间 MR 也可能合入；写远端前再核对。
       if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
-      if (!await this.deliverySelectionAllowsPush(task, branch)) return;
+      if (!existingPushReceipt
+          && !await this.deliverySelectionAllowsPush(task, branch)) return;
       const arTicket = String(task.summary.ticket ?? state?.config?.["单号"] ?? branch).trim();
       const mrDescription = savedMrDescription(task.humanGate, task.summary.id, arTicket);
       if (!mrDescription && !task.summary.delivery?.mr_url
@@ -16772,10 +16797,11 @@ export class TaskService {
       }
       // 推送前最后一道基线复核:Build-Fix/确认期间若历史又被改写,
       // 只如实停下(fail-closed),不在这个时点做任何机械改写。
-      if (await this.reconcileFrozenBaselineAncestry(task, false)
+      if (!existingPushReceipt
+          && await this.reconcileFrozenBaselineAncestry(task, false)
           === "blocked") return;
       const previous = task.summary.delivery;
-      const pushReceipt = await this.pushFromHost(
+      const pushReceipt = existingPushReceipt ?? await this.pushFromHost(
         task, branch, expectedPushSha);
       const sha = pushReceipt.sha;
       if (previous) previous.git_push = pushReceipt;
@@ -21067,13 +21093,20 @@ export class TaskService {
         }
         if (stalled && task.driver && (task.nudgeCount ?? 0) < 5) {
           task.nudgeCount = (task.nudgeCount ?? 0) + 1;
+          const confirmationAnswers = stepChoiceEffects(
+            this.options.host?.kernelRoot, stalled)
+            .filter(effect => effect.closesFeedback)
+            .flatMap(effect => effect.answers);
+          const reviewCardInstruction = confirmationAnswers.length
+            ? `这是必须由责任人决定的检视步骤。材料准备好后必须调用 AskUserQuestion；确认选项原样使用“${confirmationAnswers[0]}”，另一项明确写“仍需调整（按当前检视意见修改）”。不要用普通文本代替卡片。`
+            : "";
           this.options.log?.(
             `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
           await this.settle(task, task.driver.continueWith(
             `本轮工作尚未走完:内核当前步骤是 ${stalled},还没到宿主等待点。` +
             `尚未 init 就按开工引导先执行 init;否则执行 current ` +
             `查看本步指引并继续,直到流程进入 external_verify 或 delivery_watch。` +
-            `已答复过的确认项不要重复提问。`), epoch);
+            `已答复过的确认项不要重复提问。${reviewCardInstruction}`), epoch);
           break;
         }
         const beforeDelivery = this.deliveryReadyAttestation(task);

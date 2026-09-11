@@ -82,6 +82,11 @@ test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () =
     "意见未闭环只能阻止放行，不能替用户默认选择返工或确认推送");
 });
 
+test("检视卡说明先由责任人收口无需修改的意见，剩余项随调整决定批量送达", () => {
+  assert.match(taskCard, /请先删除无效意见，或自行答复无需改动的意见/);
+  assert.match(taskCard, /随本次决定一并送给 Agent/);
+});
+
 test("旧代码锚点消失时在材料侧给出明确反馈", () => {
   assert.match(workspace, /check\?\.state === "gone"/);
   assert.match(workspace, /批注定位/);
