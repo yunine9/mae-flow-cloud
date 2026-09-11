@@ -21,6 +21,18 @@ const badgeVariants = cva(
         ghost:
           "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
         link: "text-primary underline-offset-4 hover:underline",
+        /* #216 徽标动物园收编(.pill/.ui-badge/warmup-badge 等):状态语义
+         * soft 底 variant,配方对齐 destructive(soft 底 + 同族深字),颜色
+         * 全部经 tailwind.css @theme 桥指向 tokens.css 状态令牌。brand =
+         * 存量 --accent(主动作紫;问题"闲置"、心愿"已采纳"原色),
+         * neutral = 灰态(排队/暂停/取消/无信号),suspended 沿用 12% 弱底。 */
+        info: "bg-active-soft text-active",
+        success: "bg-success-soft text-success",
+        warning: "bg-attention-soft text-attention",
+        merge: "bg-merge-soft text-merge",
+        neutral: "bg-muted text-muted-foreground",
+        brand: "bg-accent text-primary",
+        suspended: "bg-suspended/10 text-suspended",
       },
     },
     defaultVariants: {
