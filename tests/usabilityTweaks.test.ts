@@ -43,9 +43,12 @@ test("决策选项原文可拖选复制,拖选松手不选中选项", () => {
   // 用户拍板:不要复制按钮,能选中就行。
   assert.match(css, /\.option-body \{[^}]*user-select:\s*text/s);
   assert.doesNotMatch(taskCard, /option-copy/);
-  assert.match(taskCard,
-    /const selection = window\.getSelection\(\);\s*if \(selection && !selection\.isCollapsed[\s\S]{0,200}return;\s*\}\s*pickOption\(item\.question, option\);/,
-    "拖选松手浏览器照样派 click,不拦一下就把选项选上了");
+  assert.match(taskCard, /onPointerDown=/);
+  assert.match(taskCard, /const dragged = isDecisionTextDrag/);
+  assert.match(taskCard, /if \(dragged\) \{\s*return;/);
+  assert.match(taskCard, /改为自定义答复/);
+  assert.match(taskCard, /setPicked\(current => clearDecisionChoice\(current, questions\[0\].question\)\)/);
+
 });
 
 test("任务决策卡选项可取消，自定义答复入口不会在打开后消失", () => {

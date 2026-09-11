@@ -5,12 +5,12 @@ import { ExecutionEventBuffer } from "./executionEventBuffer";
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { memo, useMemo, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { memo, useMemo, useEffect, useState, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, isAdjustmentAnswer, needsDeliverySelection, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
+import { clearDecisionChoice, isDecisionTextDrag, isAdjustmentAnswer, needsDeliverySelection, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -699,6 +699,8 @@ export function WaitingCard({
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
   const [replyText, setReplyText] = useState("");
+  const optionPress = useRef<{ x: number; y: number } | undefined>(undefined);
+  const replyInput = useRef<HTMLTextAreaElement>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [conflict, setConflict] = useState("");
@@ -1067,14 +1069,19 @@ export function WaitingCard({
                       title={locked ? "由责任人确认"
                         : chosen ? "再次点击取消选择" : undefined}
                       disabled={locked}
+                      onPointerDown={(event) => { optionPress.current = { x: event.clientX, y: event.clientY }; }}
+                      onPointerCancel={() => { optionPress.current = undefined; }}
                       onClick={(event) => {
                         if (locked) return;
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
                         const selection = window.getSelection();
-                        if (selection && !selection.isCollapsed
-                            && selection.anchorNode
-                            && event.currentTarget.contains(selection.anchorNode)) {
+                        const dragged = isDecisionTextDrag(optionPress.current,
+                          { x: event.clientX, y: event.clientY }, event.detail > 0
+                            && !!selection && !selection.isCollapsed
+                            && !!selection.anchorNode && event.currentTarget.contains(selection.anchorNode));
+                        optionPress.current = undefined;
+                        if (dragged) {
                           return;
                         }
                         pickOption(item.question, option);
@@ -1172,16 +1179,21 @@ export function WaitingCard({
       <DecisionFooterMount target={footerTarget}>
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
-        {unifiedReply && <label className="decision-unified-reply">
+        {unifiedReply && <div className="decision-unified-reply">
           <span>{mrDescription ? "AR 单上的准确描述" : chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
             : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
               ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
-              : picked[questions[0].question] ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
-          <textarea value={replyText} aria-label="决定回复"
+              : picked[questions[0].question] ? "随所选决定提交，可改为自定义答复" : "也可以选择上方选项"}</small></span>
+          {picked[questions[0].question] && <button type="button" className="link"
+            onClick={() => {
+              setPicked(current => clearDecisionChoice(current, questions[0].question));
+              replyInput.current?.focus();
+            }}>改为自定义答复</button>}
+          <textarea ref={replyInput} value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
             placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
-        </label>}
+        </div>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>

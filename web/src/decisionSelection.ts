@@ -43,3 +43,12 @@ export function isAdjustmentAnswer(answer: string): boolean {
 export function needsDeliverySelection(waiting?: { step?: string; recommended_view?: string }): boolean {
   return waiting?.step !== "host_push_confirm" && waiting?.recommended_view === "diff";
 }
+
+/** 只有这次手势确实拖动并选中文字才忽略 click，旧选区不能锁死选项。 */
+export function isDecisionTextDrag(
+  start: { x: number; y: number } | undefined,
+  end: { x: number; y: number },
+  hasSelection: boolean,
+): boolean {
+  return !!start && hasSelection && Math.hypot(end.x - start.x, end.y - start.y) > 4;
+}

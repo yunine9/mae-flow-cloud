@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearDecisionChoice,
+  isDecisionTextDrag,
   unifiedDecisionReply,
   toggleDecisionChoice,
 } from "../web/src/decisionSelection";
@@ -64,4 +65,21 @@ test("旧 API 错投 diff 时宿主推送仍不启用文件清单，普通 diff 
   assert.equal(needsDeliverySelection({ step: "cloud_push_confirm", recommended_view: "diff" }), true);
   assert.equal(needsDeliverySelection({ step: "delivery_review", recommended_view: "diff" }), true);
   assert.equal(needsDeliverySelection(undefined), false);
+});
+
+
+test("文字选区残留不阻止取消；真实拖选仍不触发选择", () => {
+  assert.equal(isDecisionTextDrag({ x: 10, y: 10 }, { x: 10, y: 10 }, true), false);
+  assert.equal(isDecisionTextDrag({ x: 10, y: 10 }, { x: 70, y: 10 }, true), true);
+  assert.equal(isDecisionTextDrag(undefined, { x: 10, y: 10 }, true), false);
+  assert.equal(isDecisionTextDrag({ x: 10, y: 10 }, { x: 70, y: 10 }, false), false);
+});
+
+test("误选后转自定义保留文字，只提交自由答复而不夹带旧选项", () => {
+  const selected = toggleDecisionChoice({}, "问题", "方案 A");
+  const changed = clearDecisionChoice(selected, "问题");
+  assert.deepEqual(changed, {});
+  assert.deepEqual(unifiedDecisionReply(changed["问题"], "改用另一种处理方式"), {
+    freeResponse: "改用另一种处理方式", notes: "",
+  });
 });
