@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: 问题分析工作流。进入「问题分析」「确定结论」阶段时使用:定位方法论的取用次序(业务仓 skill→货架→通用诊断回路→自力定位)、轻量/完整分流、取证规范;报告模板与提问纪律见本技能包内 report-template.md / questioning.md。
+description: 问题分析工作流(各介入档位统一技能)。进入「问题分析」「确定结论」阶段时使用:定位方法论的取用次序(业务仓 skill→货架→通用诊断回路→自力定位)、轻量/完整分流、取证规范;报告模板见本技能包内 report-template.md(关键决策章节按介入档位条件书写)。
 metadata:
   tags: [issue, analysis, workflow, evidence, root-cause]
 ---
@@ -44,7 +44,7 @@ metadata:
 
 ## 提问纪律
 
-提问与对齐口径见共用文件 `skills/issue-analysis/questioning.md`——一句话:拿不准就问,选项必带推荐(平台机械校验)。
+拿不准就问:AskUserQuestion 一轮一卡(一次≤4题),先对齐现象再对齐方案;**选项必带推荐**(平台机械校验,推荐依据写进问题正文);事实自己查,决策才问用户。
 
 ## 产出与提交
 

@@ -179,8 +179,18 @@ test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含
     "必须有知识边界节——外部 skill 只供领域知识,不定流程/格式/节奏");
   assert.match(body, /report-template\.md/,
     "SKILL.md 必须指向独立模板文件(不再内嵌复述)");
-  assert.match(body, /questioning\.md/,
-    "SKILL.md 必须指向共用提问纪律文件");
+  // 归一拍板(2026-09-11):一个技能提示词+一份模板,guard 分身与独立
+  // 提问文件删除,关键决策章节进模板(自动档必写)。
+  assert.equal(existsSync(join(SKILL_SOURCE_DIR, "issue-analysis-guard")),
+    false, "分析档技能已归一,不许再有 guard 分身");
+  assert.equal(existsSync(join(SKILL_SOURCE_DIR, "issue-analysis", "questioning.md")),
+    false, "提问纪律已收回 SKILL.md 内联,独立文件不许回潮");
+  assert.match(template, /## 关键决策/,
+    "模板含条件章节「关键决策」");
+  assert.match(template, /自动档[^\n]*必须写/,
+    "自动档必须写关键决策(用户复盘 AI 决策的唯一入口)");
+  assert.match(template, /只写选中项/,
+    "关键决策只写 AI 选中的答案,未选选项不写");
   assert.match(template, /报告确认即本工作流完成/,
     "生命周期钉死:报告提交即完成,交付纪律归 issue-delivery");
   // 报告可读性纪律(2026-09-03):一句话总结先行/节名即问题/证据指针化/提交前收敛。
