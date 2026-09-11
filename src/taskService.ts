@@ -1,3 +1,5 @@
+import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
+import { reviewDecisionContract } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
@@ -1771,81 +1773,6 @@ interface TaskState {
   /** 交付失败日志聚合:同一指纹只全文记一次,其后按计数聚合
    * (MFC-020:同文 MR-400 曾刷 86 条)。进程内即可,不持久化。 */
   deliveryFailureLog?: { fingerprint: string; count: number };
-}
-
-/**
- * 从单号目录恢复真实代码现场。task.json 里的 cwd 是加速索引，不是真相：
- * 老版本没写、目录整体搬迁或服务在 clone 落盘与 task.json 落盘之间退出，
- * 都不能让一座仍完整存在的仓库从此变成“现场不存在”。
- *
- * 只在本任务 workspace 内寻找，正式开发仓必须是真 Git worktree；分析单
- * 则只认固定的 repositories 聚合目录。候选不唯一时宁可不猜，避免把
- * pi-agent、缓存或另一座仓误当成当前代码仓。
- */
-function recoverTaskCwd(
-  summary: TaskSummary,
-  workspace: string,
-  saved: unknown,
-): string | undefined {
-  if (summary.workspace_reclaimed_at) return undefined;
-  let root: string;
-  try { root = realpathSync(workspace); } catch { return undefined; }
-  const location = (
-    candidate: string,
-    mustBeInside: boolean,
-  ): { actual: string; presented: string } | undefined => {
-    try {
-      const actual = realpathSync(candidate);
-      if (mustBeInside
-          && actual !== root && !actual.startsWith(`${root}${pathSep}`)) {
-        return undefined;
-      }
-      // realpath 只用于防越界与去重；运行路径沿用 task.json 原始拼法。
-      // macOS 会把 /var 改写成 /private/var，替换它会让既有任务、挂载
-      // 表和测试夹具拿到一个“同目录但不同字符串”的 cwd。
-      return { actual, presented: resolve(candidate) };
-    } catch { return undefined; }
-  };
-  const analysis = ((summary.repositories?.length ?? 0) > 1
-      || summary.requirement_analysis_requested === true)
-    && !summary.parent_task_id;
-  const valid = (candidate: string, mustBeInside = true): string | undefined => {
-    const found = location(candidate, mustBeInside);
-    if (!found) return undefined;
-    const { actual, presented } = found;
-    if (analysis) {
-      if (basename(actual) !== "repositories") return undefined;
-      return existsSync(join(actual, ".mae-flow-work"))
-          || (summary.repositories ?? []).some((repository, index) =>
-            existsSync(join(actual,
-              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
-              ".git")))
-        ? presented : undefined;
-    }
-    return existsSync(join(actual, ".git")) ? presented : undefined;
-  };
-  if (typeof saved === "string" && location(saved, false)?.actual !== root) {
-    // 明确保存过的仓库可以是外置现场，消失后不猜别的目录。
-    // cwd 缺失或等于启动中的任务根目录占位值，才继续安全发现；
-    // 区分“索引未落盘”和“现场确实被删”。
-    return valid(saved, false);
-  }
-  if (analysis) return valid(join(root, "repositories"));
-
-  const repo = summary.repo_url
-    ?? (summary.repositories?.length === 1 ? summary.repositories[0] : undefined);
-  if (repo) {
-    const expected = valid(join(root,
-      basename(repo).replace(/\.git$/, "") || "repo"));
-    if (expected) return expected;
-  }
-  try {
-    const candidates = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => valid(join(root, entry.name)))
-      .filter((entry): entry is string => !!entry);
-    return candidates.length === 1 ? candidates[0] : undefined;
-  } catch { return undefined; }
 }
 
 interface PrePushBuildWaiter {
@@ -3867,6 +3794,7 @@ export class TaskService {
             this.options.host?.kernelRoot,
             contractStep,
           );
+    const reviewContract = summary.waiting ? reviewDecisionContract(summary.waiting.question, choiceEffects) : undefined;
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
       summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
       : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
@@ -3926,9 +3854,10 @@ export class TaskService {
       waiting: summary.waiting
         ? {
             ...summary.waiting,
+            question: reviewContract!.question,
             ...(summary.waiting.step === HOST_PUSH_CONFIRM_STEP ? { recommended_view: undefined } : recommendedView ? { recommended_view: recommendedView } : {}),
             ...(choiceEffects.length ? {
-              choice_effects: choiceEffects.map((effect) => ({
+              choice_effects: reviewContract!.effects.map((effect) => ({
                 key: effect.key,
                 answers: effect.answers,
                 allows_source_edit: effect.allowsSourceEdit,
@@ -6388,6 +6317,8 @@ export class TaskService {
       sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
       text: delivered.text,
       receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent)
+        : this.annotations(task).list().some(item => delivered.sent.includes(item.id) && item.sent_via === "queued_decision")
+          ? "意见已排队，尚未送达 Agent。请提交当前决定卡，意见将随答复一起送达。"
         : delivered.sent.length < picked.length
           ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。" : undefined,
     };
@@ -6476,7 +6407,7 @@ export class TaskService {
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
-    if (this.hasOpenMergeRequest(task)) {
+    if (this.hasOpenMergeRequest(task) && task.summary.status !== "waiting_for_human") {
       return this.sendMergeRequestReview(task, picked, text, sentBy);
     }
     // 任务正等人决定时,插话通道不可用——但检视人(批注作者≠决定人)
@@ -8354,6 +8285,7 @@ export class TaskService {
         assistant_handoff: task.pendingAssistantHandoff,
         pending_main_steers: task.pendingMainSteers,
         pending_decision_knowledge: task.pendingDecisionKnowledge,
+        pending_resume_waiting_id: task.pendingResume?.waiting_id,
         applied_developer_intervention_id:
           task.appliedDeveloperInterventionId,
         obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
@@ -8587,6 +8519,11 @@ export class TaskService {
             ? saved.notify_record as NotifyRecord : undefined,
           controlEpoch: 0,
         };
+        // 决定已落袋但重建会话尚未启动：只保存权威账的 ID，重启仍带回原话。
+        if (typeof saved.pending_resume_waiting_id === "string") {
+          const pending = task.humanGate.get(saved.pending_resume_waiting_id);
+          if (pending?.status === "resolved") task.pendingResume = pending;
+        }
         this.tasks.set(summary.id, task);
         if (interruptWarmupReceipt(summary.baseline_build)) this.writeTaskState(task);
         // 本地视觉回归需要同一批排队/运行/验证/待合入样本跨重启保持
@@ -10628,6 +10565,8 @@ export class TaskService {
     record: NonNullable<TaskSummary["delivery_selection"]>;
     note: string;
   } | undefined> {
+    // 阅读 diff 不代表授权整理提交；旧客户端夹带的清单也不能改变现场。
+    if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP) return undefined;
     const explicit = input.delivery_paths !== undefined;
     const previous = task.summary.delivery_selection;
     const values = explicit
@@ -10635,18 +10574,6 @@ export class TaskService {
       : previous?.status === "requested" ? previous.paths
         : defaultToCommitted ? "committed" as const : undefined;
     if (values === undefined) return undefined;
-    const surface = waiting.step === CLOUD_PUSH_CONFIRM_STEP
-      ? "diff"
-      : stepReviewSurface(
-          this.options.host?.kernelRoot,
-          this.reviewContractStep(task, waiting),
-        );
-    if (surface !== "diff") {
-      if (explicit) {
-        throw new TaskControlError("只有代码变更检视可以提交交付文件清单");
-      }
-      return undefined;
-    }
     if (!task.cwd) {
       throw new TaskControlError("代码现场尚未就绪，不能确认交付文件");
     }
@@ -11385,7 +11312,7 @@ export class TaskService {
     requestDigest: string,
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id)!;
-    const waiting = task.summary.waiting;
+    let waiting = task.summary.waiting;
     if (task.summary.status !== "waiting_for_human" || !waiting) {
       throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
     }
@@ -11393,6 +11320,10 @@ export class TaskService {
       throw new StateConflictError(
         `任务状态已变化:当前待办是 ${waiting.waiting_id},不是 ${waitingId}`);
     }
+    const reviewContract = reviewDecisionContract(waiting.question,
+      waiting.step.startsWith("cloud_") || waiting.step === HOST_PUSH_CONFIRM_STEP ? []
+        : stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, waiting)));
+    waiting = { ...waiting, question: reviewContract.question };
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
     if (waiting.step === MR_DESCRIPTION_STEP) {
@@ -11532,10 +11463,7 @@ export class TaskService {
     // 待修改批注与“确认关闭检视”是矛盾事实。结构化返工从内核
     // next → clear_hint/allow_source_edit 推导；Spec/Story 等原步修改则
     // 以 confirmation_answers 识别关闭答案。Cloud 不认识任何步骤名。
-    const effects = stepChoiceEffects(
-      this.options.host?.kernelRoot,
-      this.reviewContractStep(task, waiting),
-    );
+    const effects = reviewContract.effects;
     const closingEffects = effects.filter((effect) => effect.closesFeedback);
     const submitted = Object.keys(answers).length
       ? Object.values(answers) : [decision];
@@ -11650,6 +11578,7 @@ export class TaskService {
     ].filter(Boolean).join("\n\n") || undefined;
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
+      question: waiting.question,
       decision,
       answers: Object.keys(answers).length ? answers : undefined,
       notes,
@@ -14384,6 +14313,7 @@ export class TaskService {
           : undefined,
         // 举卡前核对(2026-09-05):检视意见没处理完不许举确认卡,只放行
         // 合规的澄清卡;拦下的话作为工具错误回给模型,原会话继续。
+        prepareHumanQuestion: (input) => reviewDecisionContract(input, stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, undefined))).question,
         beforeHumanQuestion: (input) => this.beforeReviewQuestion(task, input),
         humanFacing: true,
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
@@ -14488,6 +14418,7 @@ export class TaskService {
         this.options.log?.(
           `任务 ${task.summary.id} 工作区丢失,决定无法回注,从头执行`);
       }
+      if (pending) this.persist(task);
       // 持久化使命可能来自旧版本；开场再次下发当前唯一回执地址。
       const pendingReviews = pendingReviewProcessing(this.annotations(task).list());
       if (pendingReviews.length) prompt += `\n\n${this.reviewReceiptInstructionsFor(task, pendingReviews)}`;

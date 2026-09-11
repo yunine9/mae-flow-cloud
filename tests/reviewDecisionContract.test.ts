@@ -1,0 +1,120 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { TaskService } from "../src/taskService.ts";
+import { HumanGate } from "../src/humanGate.ts";
+import { reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
+import { stepChoiceEffects } from "../src/kernelChoices.ts";
+import { needsDeliverySelection } from "../web/src/decisionSelection.ts";
+
+const kernelRoot = join(process.cwd(), "kernel");
+const effects = stepChoiceEffects(kernelRoot, "delivery_review");
+const raw = { questions: [{ question: "是否按当前范围推送？", options: ["推送至远端 master_ABC 并发起 MR", "暂不推送,我先本地核对"], recommended: "推送至远端 master_ABC 并发起 MR" }] };
+
+test("模型自造正式检视选项归一为真实确认契约，暂缓没有返工或确认效果", () => {
+  const contract = reviewDecisionContract(raw, effects);
+  const options = (contract.question as typeof raw).questions[0].options;
+  assert.deepEqual(options, [effects[0].answers[0], REVIEW_ADJUST, REVIEW_HOLD]);
+  assert.equal(contract.effects.some(effect => effect.answers.includes(REVIEW_HOLD)), false);
+  assert.equal(contract.effects.find(effect => effect.handlesFeedback)?.answers[0], REVIEW_ADJUST);
+  assert.deepEqual(reviewDecisionContract(contract.question, effects), contract, "重复读取不会换选项或重复添加效果");
+  assert.equal(raw.questions[0].options[0], "推送至远端 master_ABC 并发起 MR", "不得修改原始历史问题");
+  assert.deepEqual(reviewDecisionContract({ ...raw, purpose: "clarification" }, effects).question, { ...raw, purpose: "clarification" });
+  assert.equal(reviewDecisionContract({ questions: [...raw.questions, ...raw.questions] }, effects).effects, effects);
+});
+
+function fixture(mr = false) {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-task19-review-"));
+  const workspace = join(dataDir, "task-19"), cwd = join(workspace, "repo");
+  mkdirSync(cwd, { recursive: true });
+  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  git("init", "--quiet", "-b", "main"); git("config", "user.name", "test"); git("config", "user.email", "test@example.test");
+  writeFileSync(join(cwd, "a.ts"), "export const value = 1;\n"); git("add", "."); git("commit", "--quiet", "-m", "initial");
+  const head = git("rev-parse", "HEAD");
+  mkdirSync(join(cwd, ".mae-flow-work"));
+  writeFileSync(join(cwd, ".mae-flow-work", "panel-pulse.js"), JSON.stringify({ step: "delivery_review", step_title: "最终代码增量检视", revision: 2 }));
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({ current: "delivery_review", config: { "基线分支": "main" }, step_heads: { branch_create: head } }));
+  const gate = new HumanGate(join(workspace, "waiting.json"));
+  const waiting = gate.createWaiting({ taskId: "task-19", step: "最终代码增量检视", callId: "ask", questionInput: raw });
+  const delivery = { sha: head, git_push: { sha: head }, ...(mr ? { mr_url: "https://example.test/mr/1", mr_id: 1 } : {}) };
+  const selection = { paths: ["a.ts"], excluded_paths: [], observed_paths: ["a.ts"], status: "requested", head, waiting_id: "old", updated_at: new Date().toISOString() };
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({ cwd, summary: { id: "task-19", workspace, requirement: "检视交互", status: "waiting_for_human", created_at: new Date().toISOString(), luban_account: "owner", waiting, delivery, delivery_selection: selection } }));
+  const service = new TaskService({ dataDir, provider: "unused", model: "unused", modelsJson: {}, maxConcurrent: 0, host: { kernelRoot, python: "python3", continuousReview: false } });
+  service.recover();
+  const api = service as any, task = api.tasks.get("task-19");
+  return { service, api, task, gate, cwd, git, head, selection };
+}
+
+test("旧卡仍可查看 diff，但暂不确认不消费旧清单、不推送、不改提交", async () => {
+  const f = fixture();
+  const card = f.service.get("task-19")!.waiting!;
+  assert.equal(card.recommended_view, "diff");
+  assert.equal(needsDeliverySelection(card), false);
+  let pushes = 0; f.api.tryDeliver = async () => { pushes++; };
+  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_HOLD }, delivery_paths: [] });
+  assert.equal(pushes, 0);
+  assert.equal(f.git("rev-parse", "HEAD"), f.head);
+  assert.deepEqual(f.task.summary.delivery_selection, f.selection);
+  assert.equal(f.task.summary.delivery.sha, f.head);
+  assert.equal(f.task.pendingResume.decision, REVIEW_HOLD);
+  assert.equal(f.gate.get(card.waiting_id)!.decision, REVIEW_HOLD);
+  assert.equal((f.gate.get(card.waiting_id)!.question as typeof raw).questions[0].options.includes(REVIEW_HOLD), true);
+});
+
+for (const mr of [false, true]) test(`意见排队与决定送达完整链路（已有 MR=${mr}），责任人附言不丢`, async () => {
+  const f = fixture(mr);
+  const first = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "补边界测试" });
+  const second = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "补异常处理" });
+  const sent = await f.service.sendAnnotations("task-19", [first.id], "owner", true, false, "保留接口兼容性");
+  assert.match(sent.receipt!, /已排队，尚未送达/);
+  const projection = await f.service.listAnnotationsAsync("task-19", { username: "owner", can_override: false, can_route_others: true });
+  assert.equal(projection.closures.find(item => item.id === first.id)?.text, "已排队，等当前决定");
+  assert.equal(projection.closures.find(item => item.id === first.id)?.receipt_missing, false);
+  const card = f.service.get("task-19")!.waiting!;
+  await assert.rejects(f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: effects[0].answers[0] } }), /未闭环/);
+  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_ADJUST } });
+  const resolved = f.gate.get(card.waiting_id)!;
+  assert.match(resolved.notes, /补边界测试/); assert.match(resolved.notes, /保留接口兼容性/);
+  assert.doesNotMatch(resolved.notes, /补异常处理/, "未交给 Agent 的另一条草稿不能夹带");
+  assert.equal(f.api.annotations(f.task).list().find((item: any) => item.id === first.id).sent_via, "decision");
+  assert.equal(f.api.annotations(f.task).list().find((item: any) => item.id === second.id).status, "draft");
+  assert.equal(f.task.pendingResume.decision, REVIEW_ADJUST);
+  const recovered = new TaskService({ dataDir: f.api.options.dataDir, provider: "unused", model: "unused", modelsJson: {}, maxConcurrent: 0 });
+  recovered.recover();
+  assert.match((recovered as any).tasks.get("task-19").pendingResume.notes, /保留接口兼容性/);
+});
+
+test("真实会话举卡与回注：模型自由文案变成流程选项，用户所选原文交回模型和内核钩子", async () => {
+  const { CloudSession } = await import("../src/sessionDriver.ts");
+  const { ScriptedModelServer } = await import("../src/scriptedModel.ts");
+  const { EventLog } = await import("../src/semanticEvents.ts");
+  const { TranscriptStore } = await import("../src/transcriptStore.ts");
+  const { GateService } = await import("../src/gateService.ts");
+  const model = new ScriptedModelServer([{ tool: { name: "AskUserQuestion", input: raw } }, { text: "已收到，继续处理。" }]);
+  await model.start();
+  const dir = mkdtempSync(join(tmpdir(), "mfc-review-card-session-")), agentDir = join(dir, "agent");
+  mkdirSync(agentDir); writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.modelsJson()));
+  const gate = new HumanGate(join(dir, "waiting.json"));
+  const hookAnswers: unknown[] = [];
+  const session = await CloudSession.create({ taskId: "T-review", workspace: dir, agentDir,
+    provider: "maeflow", model: "scripted-v1", humanGate: gate,
+    gate: new GateService(), eventLog: new EventLog(join(dir, "events.jsonl")),
+    transcript: new TranscriptStore(join(dir, "transcript.jsonl"), "main"),
+    currentStep: () => "最终代码增量检视",
+    prepareHumanQuestion: question => reviewDecisionContract(question, effects).question,
+    hostHooks: { postTool: async event => { if ((event.payload as any)?.answers) hookAnswers.push((event.payload as any).answers); } },
+  });
+  try {
+    const outcome = await session.start("开始检视");
+    assert.equal(outcome.status, "waiting_for_human");
+    const waiting = outcome.waiting!;
+    assert.deepEqual((waiting.question as typeof raw).questions[0].options, [effects[0].answers[0], REVIEW_ADJUST, REVIEW_HOLD]);
+    const resolved = gate.resolve(waiting.waiting_id, { stateVersion: waiting.state_version, decision: effects[0].answers[0], answers: { [raw.questions[0].question]: effects[0].answers[0] }, notes: "按当前确认范围执行" });
+    await session.resumeWithDecision(resolved);
+    assert.equal(hookAnswers.some(value => JSON.stringify(value).includes(effects[0].answers[0])), true);
+    assert.match(JSON.stringify(model.requests), /按当前确认范围执行/);
+  } finally { session.dispose(); await model.stop(); }
+});

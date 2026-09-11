@@ -39,9 +39,9 @@ export function isAdjustmentAnswer(answer: string): boolean {
   return /先调整|需要.*(?:调整|修改)|返工|补充/.test(answer);
 }
 
-/** 宿主确认只批准当前提交，不消费文件勾选；兼容旧服务遗留的 diff 投影。 */
+/** diff 只表示阅读代码。只有 Cloud 清单卡消费文件勾选、执行清单推送。 */
 export function needsDeliverySelection(waiting?: { step?: string; recommended_view?: string }): boolean {
-  return waiting?.step !== "host_push_confirm" && waiting?.recommended_view === "diff";
+  return waiting?.step === "cloud_push_confirm";
 }
 
 /** 只有这次手势确实拖动并选中文字才忽略 click，旧选区不能锁死选项。 */

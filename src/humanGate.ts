@@ -155,6 +155,7 @@ export class HumanGate {
     waitingId: string,
     options: {
       stateVersion: number;
+      question?: Record<string, unknown>;
       decision: string;
       answers?: Record<string, string>;
       notes?: string;
@@ -179,6 +180,7 @@ export class HumanGate {
       throw new StateConflictError(
         `任务状态已变化:待办 ${waitingId} 版本不匹配`);
     }
+    if (options.question) record.question = options.question;
     record.status = "resolved";
     record.decision = String(options.decision);
     if (options.answers && Object.keys(options.answers).length) {

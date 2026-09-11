@@ -404,11 +404,24 @@ export function AnnotationPanel({
     }
   }
 
+  async function continueReview() {
+    if (!reworkChoice || !oneStepRework) return { conflict: "请先在当前决定卡填写答复。" };
+    return decide(taskId, reworkChoice.stateVersion,
+      { [reworkChoice.question]: reworkChoice.option }, {}, undefined,
+      undefined, undefined, undefined, undefined, undefined, reworkChoice.waitingId);
+  }
+
   async function routeDraftToAgent(item: Annotation) {
     setSubmissionNotice("");
     await mutateAnnotation(item.id, async () => {
       const result = await sendAnnotations(taskId, [item.id], routingContext.trim());
       if (!result.error) { setRoutingId(""); setRoutingContext(""); }
+      if (!result.error && oneStepRework && !isPublishedStory(item)) {
+        const continued = await continueReview();
+        if (continued.conflict) return { error: `意见已排队，但当前决定未提交：${continued.conflict}` };
+        setSubmissionNotice("意见与补充说明已随返工决定送达，Agent 将继续修改。");
+        return {};
+      }
       if (!result.error) setSubmissionNotice(result.receipt
         ?? "已提交这条意见，请查看下方处理状态。");
       return { error: result.error };
@@ -541,7 +554,7 @@ export function AnnotationPanel({
                 : `有 ${drafts.length} 条批注待提交；当前没有可接收意见的执行会话。`}
         </p>
       )}
-      {submissionNotice && !closures.some((entry) => entry.owner_controlled) && <p className="annot-panel-note" role="status">{submissionNotice}</p>}
+      {submissionNotice && <p className="annot-panel-note" role="status">{submissionNotice}</p>}
       {error && <div className="alert" role="alert">{error}</div>}
 
       {filter !== "all" && !visibleItems.length && items.length > 0 && (
@@ -708,14 +721,21 @@ export function AnnotationPanel({
                     maxLength={4000} autoFocus value={routingContext} placeholder="例如：按这条意见修改，同时保留现有接口兼容性。"
                     onChange={(event) => setRoutingContext(event.target.value)} />
                   <div className="mt-2 flex items-center justify-end gap-2">
-                    <span className="mr-auto text-xs text-muted-foreground">原意见与补充说明会一起发送</span>
+                    <span className="mr-auto text-xs text-muted-foreground">{oneStepRework && !isPublishedStory(item) ? "会提交当前返工决定，原意见与补充说明一起送达" : queueable && !requirementReview && !isPublishedStory(item) ? "先排队，提交当前决定后一起送达" : "原意见与补充说明会一起发送"}</span>
                     <Button type="button" size="sm" variant="ghost" disabled={!!mutationBusy} onClick={() => setRoutingId("")}>取消</Button>
-                    <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy} onClick={() => void routeDraftToAgent(item)}>{mutationBusy === item.id ? "发送中…" : "发送给 Agent"}</Button>
+                    <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy} onClick={() => void routeDraftToAgent(item)}>{mutationBusy === item.id ? "发送中…" : oneStepRework && !isPublishedStory(item) ? "发送并继续修改" : queueable && !requirementReview && !isPublishedStory(item) ? "加入待发送意见" : "发送给 Agent"}</Button>
                   </div>
                 </div>
               ) : <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy}
                 title={canSendItem(item) ? undefined : "当前没有可接收意见的执行会话"}
                 onClick={() => { setRoutingId(item.id); setRoutingContext(""); setReplyingId(""); }}>交给 Agent</Button>)}
+              {closure.owner_controlled && item.sent_via === "queued_decision" && !item.response && oneStepRework && (
+                <Button type="button" size="sm" disabled={!!mutationBusy}
+                  onClick={() => void mutateAnnotation(item.id, async () => {
+                    const result = await continueReview();
+                    return { error: result.conflict };
+                  })}>提交决定并继续修改</Button>
+              )}
               {closure.owner_controlled && closure.can_route && routingId !== item.id && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (
                 replyingId === item.id ? <div className="annot-owner-reply-editor w-full rounded-md border border-border bg-muted/30 p-3">

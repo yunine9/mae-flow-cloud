@@ -318,6 +318,8 @@ export interface CloudSessionOptions {
    * 写的 repo-N 序号换成仓库名——序号只在 prompt 清单里有意义,落到卡上
    * 人看不懂(内网实锤)。选项与 recommended 过同一个函数,逐字关系不破。 */
   humanizeQuestionText?: (text: string) => string;
+  /** 正式检视的选项取自流程契约，不新增提问门禁。 */
+  prepareHumanQuestion?: (input: Record<string, unknown>) => Record<string, unknown>;
   /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
    * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
    * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
@@ -1613,10 +1615,10 @@ export class CloudSession {
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
-          questionInput: { questions,
+          questionInput: (driver.options.prepareHumanQuestion ?? ((input) => input))({ questions,
             ...(params.purpose ? { purpose: params.purpose } : {}),
             ...(params.annotation_ids ? { annotation_ids: params.annotation_ids } : {}),
-          },
+          }),
           context: explicitContext ?? lastSaid,
           // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
           // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻

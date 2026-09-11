@@ -318,8 +318,8 @@ export function ConversationStream({
     if (awaitingYou > 0) {
       return {
         tone: "attention" as const,
-        text: `${awaitingYou} 条意见等你逐条确认`,
-        detail: "Agent 已登记回执，是否修好由你判断",
+        text: `${awaitingYou} 条意见待你处理`,
+        detail: "查看逐条状态，转交 Agent 或核对答复后闭环",
         action: { label: "打开检视意见", onClick: () => onOpenReview([]) },
       };
     }
