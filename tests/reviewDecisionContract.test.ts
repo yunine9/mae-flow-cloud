@@ -6,13 +6,27 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { TaskService } from "../src/taskService.ts";
 import { HumanGate } from "../src/humanGate.ts";
-import { isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
+import { explicitlyRequestsReviewFeedback, unassignedReviewDraft, isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
 import { stepChoiceEffects } from "../src/kernelChoices.ts";
 import { needsDeliverySelection } from "../web/src/decisionSelection.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 const effects = stepChoiceEffects(kernelRoot, "delivery_review");
 const raw = { questions: [{ question: "是否按当前范围推送？", options: ["推送至远端 master_ABC 并发起 MR", "暂不推送,我先本地核对"], recommended: "推送至远端 master_ABC 并发起 MR" }] };
+
+test("批注是否待处理只看状态，明确修改意见与暂缓答复分开", () => {
+  for (const route of [undefined, "agent", "owner_reply", "owner_decision", "legacy"]) {
+    assert.equal(unassignedReviewDraft({ status: "draft", route }), true);
+    assert.equal(unassignedReviewDraft({ status: "draft", route, owner_reply: {} }), false);
+    assert.equal(unassignedReviewDraft({ status: "verified", route }), false);
+  }
+  for (const text of ["需要调整,按检视意见继续处理", "处理下当前的检视意见", "按当前检视意见修改"]) {
+    assert.equal(explicitlyRequestsReviewFeedback(text), true);
+  }
+  for (const text of ["先调整", "不按检视意见修改", "暂不处理检视意见", "是否处理检视意见？", "稍后修改检视意见"]) {
+    assert.equal(explicitlyRequestsReviewFeedback(text), false);
+  }
+});
 
 test("模型自造正式检视选项归一为真实确认契约，暂缓没有返工或确认效果", () => {
   const contract = reviewDecisionContract(raw, effects);
@@ -79,6 +93,40 @@ function fixture(mr = false, cardRaw: Record<string, unknown> = raw, pulseStep =
   const api = service as any, task = api.tasks.get("task-19");
   return { service, api, task, gate, cwd, git, head, selection };
 }
+
+for (const answer of ["需要调整,按检视意见继续处理", "处理下当前的检视意见", "暂不处理检视意见"]) test(`无内核检视契约的自由举卡：${answer}`, async () => {
+  const question = "Story 联合检视 CLEAR，是否进入编码？";
+  const f = fixture(false, { questions: [{ question, options: ["进入编码", answer] }] }, "coding");
+  const store = f.api.annotations(f.task);
+  const ids: string[] = [];
+  for (const [index, route] of ["owner_reply", "owner_decision", "agent", undefined].entries()) {
+    const item = f.service.addAnnotation("task-19", { author: index % 2 ? "reviewer" : "owner",
+      artifact: "story", file: "story.md", line: index + 1, anchor: "设计",
+      kind: index % 2 ? "code" : "doc", route: route as any, note: `待处理意见${index}` });
+    ids.push(item.id);
+  }
+  const answered = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "story", file: "story.md", line: 8, anchor: "约定", kind: "doc", note: "责任人已答复内容" });
+  await f.service.replyToAnnotation("task-19", answered.id, "owner", "无需修改，等待逐条闭环");
+  const card = f.service.get("task-19")!.waiting!;
+  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version,
+    actor: "owner", selected_options: { [question]: answer } });
+  const resolved = f.gate.get(card.waiting_id)!;
+  const sends = !answer.startsWith("暂不");
+  for (const [index, id] of ids.entries()) {
+    assert.equal(String(resolved.notes ?? "").includes(`待处理意见${index}`), sends);
+    assert.equal(store.list().find((item: any) => item.id === id).status, sends ? "sent" : "draft");
+  }
+  assert.doesNotMatch(resolved.notes ?? "", /责任人已答复内容/);
+  if (sends) {
+    const sentIds = resolved.continuation?.annotation_ids;
+    assert.ok(Array.isArray(sentIds));
+    assert.deepEqual(new Set(sentIds), new Set(ids));
+    const recovered = new TaskService({ dataDir: f.api.options.dataDir, provider: "unused", model: "unused", modelsJson: {}, maxConcurrent: 0 });
+    recovered.recover();
+    const projection = await recovered.listAnnotationsAsync("task-19", { username: "owner", can_override: false, can_route_others: true });
+    for (const id of ids) assert.equal(projection.closures.find(item => item.id === id)?.text, "等待 Agent 答复");
+  }
+});
 
 test("旧卡仍可查看 diff，但暂不确认不消费旧清单、不推送、不改提交", async () => {
   const f = fixture();

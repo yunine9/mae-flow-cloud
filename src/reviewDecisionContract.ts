@@ -10,6 +10,15 @@ export function isReviewAdjustmentAnswer(answer: string): boolean {
   return /先调整|仍需(?:调整|修改)|需要.*(?:调整|修改)|按(?:当前)?检视意见.*(?:调整|修改|处理)|返工/.test(value);
 }
 
+/** 自由举卡可能没有内核步骤。责任人明确要求处理检视意见时仍须携带
+ * 意见正文；普通“需要调整”和否定/暂缓回答不能擅自触发批量发送。 */
+export function explicitlyRequestsReviewFeedback(answer: string): boolean {
+  const value = answer.replace(/\s+/g, "");
+  return /检视意见/.test(value)
+    && /处理|修改|修复|调整/.test(value)
+    && !/不|别|勿|暂缓|稍后|先核对|先看看|是否|要不要|[?？]/.test(value);
+}
+
 /** 正式单题检视由流程契约提供动作。澄清、多题和已有分支保持原样。
  * 只修正完全对不上契约的模型选项，绝不把历史回答翻译成“同意”。 */
 export function reviewDecisionContract(
@@ -38,10 +47,9 @@ export function reviewDecisionContract(
     : effects };
 }
 
-/** 整卡“按检视意见修复”接手全部尚未处置的意见。owner_reply 只是记下
- * 时的默认责任人队列；责任人尚未答复时，同样可随检视卡改交 Agent。 */
+/** 发送只看处理状态，不再让旧 route 决定某条待处理意见是否可见。
+ * 已自行答复的意见留给责任人闭环，不能混进 Agent 修改清单。 */
 export function unassignedReviewDraft(item: { status: string; route?: string; owner_reply?: unknown; resolution?: unknown }): boolean {
   return item.status === "draft"
-    && !item.owner_reply && !item.resolution
-    && ["agent", "owner_decision", "owner_reply"].includes(item.route ?? "agent");
+    && !item.owner_reply && !item.resolution;
 }
