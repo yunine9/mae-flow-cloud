@@ -152,9 +152,27 @@ async function prepareImage(
     throw new Error(`图片超过 20 MB 上限：${requested}`);
   }
   const bytes = readFileSync(canonical);
+  const prepared = await prepareImageBytes(
+    String(input.label ?? basename(canonical)).trim() || basename(canonical),
+    bytes,
+  );
+  return {
+    path: relative(canonicalRoot, canonical).split(sep).join("/"),
+    label: String(input.label ?? basename(canonical)).trim() || basename(canonical),
+    ...prepared,
+  };
+}
+
+/** 把图片字节压裁到模型可吃的形态(魔数认格式、2048 边长、5MB 上限)。
+ * prepareImage(工作区路径版)与 describeImageBytes(字节直入版,#184
+ * 登记润色)共用的原子步骤;失败人话指向来源标签。 */
+async function prepareImageBytes(
+  label: string,
+  bytes: Buffer,
+): Promise<Pick<PreparedImage, "digest" | "data" | "mimeType">> {
   const mimeType = mimeOf(bytes);
   if (!mimeType) {
-    throw new Error(`不支持或无法确认图片格式：${requested}（支持 PNG/JPEG/GIF/WebP/BMP）`);
+    throw new Error(`不支持或无法确认图片格式：${label}（支持 PNG/JPEG/GIF/WebP/BMP）`);
   }
   const resized = await resizeImage(bytes, mimeType, {
     maxWidth: 2048,
@@ -163,11 +181,9 @@ async function prepareImage(
     jpegQuality: 88,
   });
   if (!resized && bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new Error(`图片压缩后仍超过 5 MB：${requested}`);
+    throw new Error(`图片压缩后仍超过 5 MB：${label}`);
   }
   return {
-    path: relative(canonicalRoot, canonical).split(sep).join("/"),
-    label: String(input.label ?? basename(canonical)).trim() || basename(canonical),
     digest: createHash("sha256").update(bytes).digest("hex"),
     data: resized?.data ?? bytes.toString("base64"),
     mimeType: resized?.mimeType ?? mimeType,
@@ -450,4 +466,55 @@ export async function probeVisionCapability(input: {
   } finally {
     rmSync(agentDir, { recursive: true, force: true });
   }
+}
+
+/** 识图薄包装(#184 登记润色等非会话通路):图片字节直入,不走工作区
+ * 路径——调用方(如 issueFlow/polish)自己负责从 staging 读出字节。
+ * 与 inspect_image 同一套纪律:模型必须声明 input 含 image、压裁上限
+ * 同款、sha256 内容寻址缓存同仓共用(同 provider+question+同图直接命中),
+ * 防指令注入的系统提示同款。熔断/in-flight 去重是会话工具层的状态,
+ * 这里不做——一次性调用由调用方 fail-open 兜底。 */
+export async function describeImageBytes(input: {
+  runtime: VisionRuntime;
+  choice: VisionModelChoice;
+  cacheDir: string;
+  images: Array<{ label: string; data: Buffer; mimeType: string }>;
+  question: string;
+  timeoutMs?: number;
+  sessionId: string;
+}): Promise<string> {
+  if (!input.images.length) throw new Error("没有可识别的图片");
+  const images: PreparedImage[] = await Promise.all(
+    input.images.map(async (image) => {
+      if (image.data.byteLength > MAX_SOURCE_BYTES) {
+        throw new Error(`图片超过 20 MB 上限：${image.label}`);
+      }
+      return {
+        path: image.label,
+        label: image.label,
+        ...(await prepareImageBytes(image.label, image.data)),
+      };
+    }));
+  const question = input.question.trim();
+  if (!question) throw new Error("识图问题不能为空");
+  const key = createHash("sha256").update(JSON.stringify({
+    provider: input.choice.provider,
+    model: input.choice.model,
+    question,
+    images: images.map((image) => ({
+      digest: image.digest, path: image.path, label: image.label,
+    })),
+  })).digest("hex");
+  const cached = readCache(input.cacheDir, key);
+  if (cached) return cached;
+  const text = await analyzePreparedImages({
+    runtime: input.runtime,
+    choice: input.choice,
+    images,
+    question,
+    timeoutMs: input.timeoutMs,
+    sessionId: input.sessionId,
+  });
+  writeCache(input.cacheDir, key, text, input.choice);
+  return text;
 }

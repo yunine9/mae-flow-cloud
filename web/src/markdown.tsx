@@ -9,6 +9,14 @@ import { isValidElement, type ReactNode } from "react";
 import { MermaidFlow } from "./MermaidFlow";
 import { PlantUml } from "./PlantUml";
 
+/** 待补充令牌(#184):润色稿对缺失信息的标注约定——最基本的加粗语法。
+ * 自有渲染面(润色确认弹窗等)染红显眼;编辑器内不做特殊处理。 */
+export const PENDING_MARK = "【待补充";
+
+export function hasPendingMark(text: string): boolean {
+  return text.includes(PENDING_MARK);
+}
+
 /** 行内:**加粗**、`代码`、[文字](链接),以及帮助中心用的少量重点色:
  * {{blue|操作重点}} / {{green|成功结果}} / {{red|风险警告}}。颜色语法
  * 仍由 React 拼元素,不开放任意 HTML 或 CSS。链接只认站内路径与
@@ -22,7 +30,10 @@ function inline(
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
-        return <b key={index}>{piece.slice(2, -2)}</b>;
+        const inner = piece.slice(2, -2);
+        return <b key={index} className={hasPendingMark(inner) ? "md-pending" : undefined}>
+          {inner}
+        </b>;
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {
         return <code key={index} className="md-code">{piece.slice(1, -1)}</code>;

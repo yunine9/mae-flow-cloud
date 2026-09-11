@@ -4033,6 +4033,31 @@ export function issueImageUrl(path: string): string {
   return `/issues/issue-image?path=${encodeURIComponent(path)}`;
 }
 
+/** 登记描述 AI 润色(#184)的回执:润色稿只存在于前端确认流,服务端
+ * 不落库。vision_used=false 时 vision_note 说明原因(未配置/识图失败),
+ * 前端明示「未参考截图」。 */
+export interface IssuePolishResult {
+  title: string;
+  description: string;
+  vision_used: boolean;
+  vision_note?: string;
+}
+
+/** 描述润色:一次性(非会话)调用——识图观察(有图时)+ 主模型生成
+ * 标题与结构化描述。替换与否由用户在确认弹窗里决定。 */
+export function polishIssueDescription(input: {
+  title: string;
+  description: string;
+  module?: string;
+  environment?: string;
+}): Promise<IssuePolishResult> {
+  return issueFetch("/issues/polish-description", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export function replyIssue(id: string, text: string): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reply`, {
     method: "POST",

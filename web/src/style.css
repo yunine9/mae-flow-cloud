@@ -2385,6 +2385,28 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
 .issue-field span i.req { color: var(--danger); font-weight: 700; }
+/* AI 润色(#184):字段头右探针 + 确认弹窗。 */
+.issue-field-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.issue-polish-btn {
+  padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--accent); font: inherit; cursor: pointer;
+}
+.issue-polish-btn:hover:not(:disabled) { border-color: var(--accent); }
+.issue-polish-btn:disabled { color: var(--faint); cursor: not-allowed; }
+.issue-polish-note {
+  margin: 0; padding: 8px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));
+  color: var(--attention); font-size: var(--font-size-dense);
+}
+.issue-polish-preview {
+  max-height: 46vh; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-muted); color: var(--text-strong);
+  font-size: var(--font-size-assist); line-height: 1.65;
+}
+.issue-polish-preview img { max-width: 100%; border-radius: 6px; }
 .issue-group-note {
   grid-column: 1 / -1; margin: 0; color: var(--faint);
   font-size: var(--font-size-dense); line-height: 1.5;
@@ -5035,6 +5057,8 @@ pre {
   line-height: 1.6;
 }
 .md-block-code .md-code { padding: 0; background: transparent; font-size: inherit; }
+/* 待补充令牌(#184):润色稿的缺失信息标注,自有渲染面染红显眼。 */
+.md-pending { color: var(--danger); }
 .md-table {
   width: 100%;
   margin: .9em 0;

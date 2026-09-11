@@ -11,6 +11,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
@@ -24,6 +28,7 @@ import {
   getDtsTicketDetail,
   issueImageUrl,
   listDtsTickets,
+  polishIssueDescription,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
@@ -32,9 +37,11 @@ import {
   type DtsTicketBrief,
   type DtsTicketDetail,
   type EnvironmentView,
+  type IssuePolishResult,
   type IssueSummary,
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
+import { Markdown } from "../markdown";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
@@ -143,6 +150,11 @@ function ManualRegister({
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
   const [busy, setBusy] = useState(false);
+  // AI 润色(#184):润色请求进行态 + 确认弹窗的润色稿(服务端不落库,
+  // 放弃即丢弃)。建议标题在弹窗内可改,替换时随描述一起写回。
+  const [polishing, setPolishing] = useState(false);
+  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(null);
+  const [adoptTitle, setAdoptTitle] = useState("");
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
@@ -294,6 +306,36 @@ function ManualRegister({
     setPickedEnv(null);
   }
 
+  /** AI 润色(#184):把随意的 标题+描述 整理成标准提单格式。识图观察由
+   * 服务端组装(截图内容补充进润色稿);结果只进确认弹窗——替换前
+   * 原稿一动不动。 */
+  async function polish() {
+    if (polishing || !description.trim()) return;
+    setPolishing(true);
+    try {
+      const result = await polishIssueDescription({
+        title: title.trim(),
+        description,
+        ...(selectedModule ? { module: selectedModule.name } : {}),
+        ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
+      });
+      setAdoptTitle(result.title);
+      setPolishResult(result);
+    } catch (reason) {
+      onError(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setPolishing(false);
+    }
+  }
+
+  /** 弹窗里「替换」:标题(可改)与描述一起写回;「放弃」只关弹窗。 */
+  function adoptPolish() {
+    if (!polishResult) return;
+    if (adoptTitle.trim()) setTitle(adoptTitle.trim());
+    setDescription(polishResult.description);
+    setPolishResult(null);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (busy || submitDisabled) return;
@@ -339,7 +381,16 @@ function ManualRegister({
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         <label className="issue-field wide">
-          <span>现象描述 <i className="req">*</i></span>
+          <span className="issue-field-head">
+            <span>现象描述 <i className="req">*</i></span>
+            {/* AI 润色(#184):描述为空不可点,润色中防重复提交。 */}
+            <button type="button" className="issue-polish-btn"
+              disabled={!description.trim() || polishing}
+              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
+              onClick={() => void polish()}>
+              {polishing ? "润色中…" : "AI 润色"}
+            </button>
+          </span>
           <textarea rows={3} value={description} ref={descriptionRef}
             placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来,粘贴或拖拽图片自动上传"
             onPaste={handleDescriptionPaste}
@@ -422,6 +473,38 @@ function ManualRegister({
         {busy ? "分析中…" : "开始分析"}
       </button>
     </div>
+    {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
+        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。 */}
+    {polishResult && <Dialog open onOpenChange={(open) => {
+      if (!open) setPolishResult(null);
+    }}>
+      <DialogContent className="issue-polish-dialog">
+        <DialogHeader>
+          <DialogTitle>AI 润色预览</DialogTitle>
+          <DialogDescription>
+            核对润色稿后选择替换或放弃;红色「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
+          </DialogDescription>
+        </DialogHeader>
+        {polishResult.vision_note && <p className="issue-polish-note" role="alert">
+          {polishResult.vision_note}
+        </p>}
+        <label className="issue-field">
+          <span>建议标题</span>
+          <input value={adoptTitle}
+            onChange={(event) => setAdoptTitle(event.target.value)} />
+        </label>
+        <div className="issue-polish-preview" aria-label="润色后描述预览">
+          <Markdown text={polishResult.description}
+            resolveImage={(path) => issueImageUrl(path)} />
+        </div>
+        <DialogFooter>
+          <button type="button" onClick={() => setPolishResult(null)}>放弃</button>
+          <button type="button" className="primary" onClick={adoptPolish}>
+            替换原稿
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </form>;
 }
 

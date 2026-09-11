@@ -224,6 +224,12 @@ import {
   type PipelineEvidenceAssessment,
 } from "../pipelineEvidence.ts";
 import { syncIssueImagesToWorkspace } from "./issueImages.ts";
+import {
+  polishIssueDescription,
+  type PolishInput,
+  type PolishOutcome,
+  type PolishRuntimeHandle,
+} from "./polish.ts";
 import { FeedbackStore, type FeedbackRecord } from "../feedbackStore.ts";
 
 // ---- 举卡作答的机器可读协议 ----
@@ -569,6 +575,11 @@ export interface IssueFlowOptions {
    * 组装会话时按同款逻辑变成 VisionCapabilityConfig,主会话由此获得
    * inspect_image 工具;缺席则工具不出现,行为照旧。 */
   vision?: VisionModelChoice;
+  /** 登记润色(#184)的一次性运行时工厂注入点:契约测试给假件,生产
+   * 缺席走 polish.ts 的默认实现(临时 models.json + ModelRuntime)。 */
+  polishRuntimeFactory?: (
+    modelsJson: Record<string, unknown>,
+  ) => Promise<PolishRuntimeHandle>;
   /** 小鲁班通知(公共能力,与需求侧同一实例):AI 举卡等决策时提醒
    * 归属用户。缺席(演示形态)不通知,流程照走——通知是旁路,不是
    * 问题流的启动依赖。 */
@@ -1161,6 +1172,23 @@ export class IssueFlowService {
   }
 
   // ---- 登记 ----
+
+  /** 登记描述 AI 润色(#184):一次性(非会话)主模型组装,细节在
+   * polish.ts。依赖只此三样——数据目录(staging 识图源 + 识图缓存)、
+   * 主模型选择、识图角色(管理页 settings.vision 优先于部署旗标,与
+   * visionCapability 同一优先级);润色运行时工厂可经 options 注入
+   * 假件(契约测试不真调网关)。 */
+  polishDescription(input: PolishInput): Promise<PolishOutcome> {
+    return polishIssueDescription({
+      dataDir: this.dataDir,
+      mainModel: this.modelChoice(),
+      visionChoice: this.options.settings?.models().vision ?? this.options.vision,
+      log: (message) => this.log(`[issue-polish] ${message}`),
+      ...(this.options.polishRuntimeFactory
+        ? { createRuntime: this.options.polishRuntimeFactory }
+        : {}),
+    }, input);
+  }
 
   create(input: IssueCreateInput): IssueSummary {
     const account = input.account?.trim();

@@ -26,8 +26,9 @@ export const PROMPT_SOURCE_DIR = resolve(
   "assets", "issue-prompts");
 
 /** 文案文件(按消费方分类,命名即治理):opening=会话入口词,
- * notices=平台主动通知,receipts=工具回执。 */
-const FILES = ["opening", "notices", "receipts", "briefs"] as const;
+ * notices=平台主动通知,receipts=工具回执,polish=登记描述一次性润色
+ * (spec #184:系统指令/用户消息模板/识图提问)。 */
+const FILES = ["opening", "notices", "receipts", "briefs", "polish"] as const;
 export type PromptFile = (typeof FILES)[number];
 
 /** 模块加载即读:锚点 → 段文。key = "<file>.<anchor>"。 */

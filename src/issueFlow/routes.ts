@@ -432,6 +432,29 @@ export async function handleIssueRoutes(
       return done(201, created);
     }
 
+    // 登记描述 AI 润色(#184):一次性(非会话)主模型组装,细节在
+    // polish.ts。角色边界同 POST /issues(管理员不发起问题会话);
+    // 服务端不落库,润色稿只存在于前端确认流——替换前原稿不动。
+    if (method === "POST" && parts[1] === "polish-description"
+        && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不发起问题会话" });
+      }
+      const body = await readBody(request);
+      const description = String(body.description ?? "");
+      if (!description.trim()) {
+        return done(409, { error: "描述为空,无需润色——先写几句现象再点润色" });
+      }
+      const outcome = await issueFlow.polishDescription({
+        title: String(body.title ?? ""),
+        description,
+        ...(body.module !== undefined ? { module: String(body.module) } : {}),
+        ...(body.environment !== undefined
+          ? { environmentName: String(body.environment) } : {}),
+      });
+      return done(200, outcome);
+    }
+
     if (method === "GET" && parts[1] === "dts" && parts.length === 2) {
       if (viewer?.role === "admin") {
         return done(403, { error: "管理员不处理问题单" });
