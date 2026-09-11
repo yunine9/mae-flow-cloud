@@ -26,13 +26,8 @@
 .story-view-actions button { padding: 0; border: 0; color: var(--accent); background: transparent; font-size: 12px; }
 .story-view-reason { font-size: 12px; color: var(--muted); line-height: 1.65; margin: 10px 0 16px; overflow-wrap: anywhere; }
 /* (#210)story-diagram-tabs 随 base-ui Tabs 迁移删除;图页签改 shadcn
-   默认皮(语义令牌 utility,见 StoryArchitecture.tsx)。 */
-.story-view-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 48px 24px; min-height: 280px; border-radius: 10px; background: var(--surface-soft); }
-.story-view-empty-only { min-height: 180px; margin-top: 20px; }
-.story-view-empty > span { font-size: 32px; font-weight: 300; color: var(--muted); margin-bottom: 12px; }
-.story-view-empty strong { font-size: 15px; }
-.story-view-empty p, .story-view-empty small { max-width: 380px; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.story-view-empty small { margin-top: 16px; }
+   默认皮(语义令牌 utility,见 StoryArchitecture.tsx)。空态已收编为
+   components/Empty(#217),story-view-empty 家族随之零引用删除(#219)。 */
 .story-view-loading { min-height: 320px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .story-architecture-diagnostics { font-size: 11px; color: var(--muted); margin-top: 12px; }
 .story-architecture-diagnostics summary { cursor: pointer; }

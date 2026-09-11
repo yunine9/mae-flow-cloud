@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -51,9 +52,9 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
   if (policyError) return <small role="status">暂未读到平台资源屏蔽配置，不影响下单。</small>;
   if (!rules.length) return null;
   return <>
-    <button type="button" className="ui-btn ghost" style={{ fontSize: 13, justifyContent: "flex-start", maxWidth: "100%", whiteSpace: "normal" }} onClick={() => setOpen(true)}>
+    <Button type="button" variant="ghost" style={{ fontSize: 13, justifyContent: "flex-start", maxWidth: "100%", whiteSpace: "normal" }} onClick={() => setOpen(true)}>
       本任务将按平台 {rules.length} 条规则屏蔽仓库 Skill／指令文件 · 查看详情
-    </button>
+    </Button>
     <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
       <DialogContent className="tw-root sm:max-w-3xl">
         <DialogHeader>
@@ -62,9 +63,9 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
         </DialogHeader>
         <div className="max-h-[65vh] overflow-auto flex flex-col gap-2">
           <ul className="flex flex-col gap-1">{rules.map(rule => <li key={rule}><code>{rule}</code></li>)}</ul>
-        <button type="button" className="ui-btn" disabled={busy || JSON.parse(repoKey).length === 0} onClick={() => void inspect()}>
+        <Button type="button" variant="outline" className="self-start" disabled={busy || JSON.parse(repoKey).length === 0} onClick={() => void inspect()}>
           {busy ? "正在读取…" : "查看当前仓库中被屏蔽的内容"}
-        </button>
+        </Button>
         {JSON.parse(repoKey).length === 0 && <p>填写代码仓或选择业务模块后，可查看命中文件。</p>}
         <p><small>读取所选基线的远端仓库内容；拉取后才注入的文件无法在下单前预览，但仍按上述规则屏蔽。</small></p>
         {error && <p role="alert">{error}，可重试；不影响下单。</p>}

@@ -32,6 +32,9 @@ import {
 } from "@/components/ui/dialog";
 import { XIcon } from "lucide-react";
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   nextWishImageDraftKey,
   WISH_IMAGE_TYPES,
   wishImageFilesFromClipboard,
@@ -449,8 +452,18 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
                 onClick={() => setExpandedId(expanded ? "" : item.id)}>{expanded ? "收起" : "查看详情"}</button>
               {item.can_manage && <button type="button" className="wish-manage"
                 onClick={() => setManage({ id: item.id, status: item.status, note: item.decision_note ?? "" })}>回应</button>}
-              {item.can_delete && <button type="button" className="wish-remove"
-                disabled={busyId === item.id} onClick={() => void remove(item)} aria-label={`移除 ${item.title}`}>•••</button>}
+              {/* #220 ••• 直删钮换 DropdownMenu:菜单只承载现场原有的
+                  「移除」一个动作,confirmDialog 确认链与 busy 门原样;
+                  触发钮经 render 仍是真 button,••• 与 aria-label 不变。 */}
+              {item.can_delete && <DropdownMenu>
+                <DropdownMenuTrigger render={
+                  <button type="button" className="wish-remove"
+                    disabled={busyId === item.id} aria-label={`移除 ${item.title}`} />
+                }>•••</DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-24">
+                  <DropdownMenuItem variant="destructive" onClick={() => void remove(item)}>移除</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>}
               </div>
             </aside>
             {expanded && <div className="wish-card-expanded">
@@ -502,7 +515,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
             <i /> <span><strong>{STATUS_COPY[status].label}</strong><small>{STATUS_COPY[status].hint}</small></span>
           </button>)}
         </div>
-        <label className="ui-field"><span>给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
+        <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
           <Textarea className="min-h-24 resize-y" value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
             placeholder={manage.status === "declined" ? "请说明现在为什么不做，或者什么条件下会重新考虑" : "例如：已纳入下个迭代；已上线，可在个人设置中体验"} /></label>
         <DialogFooter>

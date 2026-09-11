@@ -32,6 +32,8 @@ import { IssueRegistration } from "./Registration";
 import { IssueStatusBadge } from "../StatusBadge";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { Card } from "../components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/Empty";
 import { cn } from "cn";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
@@ -294,20 +296,22 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           <span>正在打开问题工作台…</span>
         </div>}
       {issues.length === 0
-        ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-            <strong>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</strong>
-            <p>{viewer.role === "admin"
+        ? <Empty className="min-h-40 border">
+            <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
+            <EmptyTitle>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
+            <EmptyDescription>{viewer.role === "admin"
               ? "开发成员从各自的问题处理页发起后,这里会汇总全员会话供查看。"
-              : "从上方登记一个\"我的问题\",或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</p>
-          </div></div>
+              : "从上方登记一个\"我的问题\",或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
+          </Empty>
         : visibleIssues.length === 0
-          ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-              <strong>{statusFilter === "active"
-                ? "没有进行中的问题会话" : "这个状态下没有问题会话"}</strong>
-              <p>{statusFilter === "active"
+          ? <Empty className="min-h-40 border">
+              <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
+              <EmptyTitle>{statusFilter === "active"
+                ? "没有进行中的问题会话" : "这个状态下没有问题会话"}</EmptyTitle>
+              <EmptyDescription>{statusFilter === "active"
                 ? "已归档与已取消默认收起;要翻历史,把上方状态切到对应标签或「全部」。"
-                : "可以切回「全部」继续查看,会话没有丢。"}</p>
-            </div></div>
+                : "可以切回「全部」继续查看,会话没有丢。"}</EmptyDescription>
+            </Empty>
           : <div className="task-list">
             {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
@@ -423,9 +427,10 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
     <div className="task-meta">
       {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
           工作台头部「终止会话」同款。终态卡不渲染。 */}
-      {terminatable && <button type="button" className="ui-btn flat danger"
+      {terminatable && <Button type="button" variant="ghost" size="sm"
+        className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
-        {stopping ? "终止中…" : "终止"}</button>}
+        {stopping ? "终止中…" : "终止"}</Button>}
       {stopError && <span className="form-message error">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}

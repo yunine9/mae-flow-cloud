@@ -51,7 +51,8 @@
 .task-journey .journey-expand:hover { background: none; text-decoration: underline; }
 .journey-empty { color: var(--muted); font-size: 13px; padding: 20px 0; line-height: 1.7; }
 .journey-empty strong { font-weight: 500; color: var(--text); }
-.journey-warning { border-left: 2px solid var(--danger); padding: 8px 12px; font-size: 13px; }
+/* journey-warning 零引用删除(#219 前票孤儿);journey-empty 仍由
+   TaskJourney 的加载/错误态使用,保留。 */
 /* 检查器壳层(#209 迁 Sheet):旧弹层框/遮罩/头尾规则已随手写 portal
    删除;`.task-inspector` 只剩内层存量内容的样式钩子(toggle 折叠、
    执行面板布局、focus 圈),类名仍由 TaskInspector 的 SheetContent 挂。 */
@@ -99,6 +100,6 @@
 .workspace-studio.task-workspace-v2 .ws-progress .task-progress-preparation { display: inline-flex; }
 .workspace-studio.task-workspace-v2 .ws-progress .task-progress-count { margin-left: auto; }
 /* warmup-badge 已收编为 shadcn Badge(#216,见 WarmupPanel.tsx):studio
-   位的专属缩小配方与 is-* 色板随迁移撤销,统一吃 Badge 全局皮。 */
-.warmup-empty { margin: 0; padding: 24px; font-size: 14px; line-height: 1.8; color: var(--muted); }
+   位的专属缩小配方与 is-* 色板随迁移撤销,统一吃 Badge 全局皮。
+   warmup-empty 随 WarmupPanel 空态收编零引用删除(#219)。 */
 }

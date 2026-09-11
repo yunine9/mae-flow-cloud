@@ -35,7 +35,6 @@
     "tests/issueFlowContract.test.ts",
     "tests/rootErrorBoundary.test.ts",
     "tests/uiDialogSmoke.test.ts",
-    "scripts/ui-preview.ts",
     "scripts/settings-preview.ts"
   ]
 }

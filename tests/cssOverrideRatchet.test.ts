@@ -27,7 +27,7 @@ const CEILING = {
   // 组件统一化(2026-09-08)的三根新钉: primitives(ui.css + <Modal>)
   // 落地后,存量页面逐页迁移时这三个数只许降——
   // accentRecipe:css 里 --accent-fg 的引用数(主色按钮配方按容器复制
-  //   的代理指标,recipe 归一到 .ui-btn 后应持续下降);
+  //   的代理指标,配方归一到 shadcn Button 后应持续下降);
   // zIndexLiteral:z-index 字面量的去重个数(手搓弹层各养各的层级,
   //   新弹层一律取 tokens 的层叠阶梯,var() 引用不算字面量);
   // fixedOverlay:position: fixed 的规则数(手搓 backdrop/overlay 的
@@ -66,12 +66,12 @@ test("CSS 棘轮:同名顶层类规则跨文件重复只许减少", () => {
     + duplicated.slice(0, 8).map(([cls, owners]) => `.${cls}(${[...owners].join(",")})`).join(" "));
 });
 
-test("CSS 棘轮:accent 按钮配方引用只许减少(归一到 .ui-btn)", () => {
+test("CSS 棘轮:accent 按钮配方引用只许减少(归一到 shadcn Button)", () => {
   const count = Object.values(css).reduce((sum, text) =>
     sum + (text.match(/--accent-fg/g) ?? []).length, 0);
   assert.ok(count <= CEILING.accentRecipe,
     `--accent-fg 引用从 ${CEILING.accentRecipe} 涨到 ${count};`
-    + "新按钮一律 .ui-btn(ui.css),别再按容器复制主色配方");
+    + "新按钮一律 shadcn Button(components/ui/button),别再按容器复制主色配方");
 });
 
 test("CSS 棘轮:z-index 字面量去重个数只许减少(新弹层取 tokens 层叠阶梯)", () => {

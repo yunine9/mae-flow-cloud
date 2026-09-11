@@ -231,7 +231,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio .ws-document-tabs .ws-tab::after { display: none; }
 .workspace-studio .ws-source-switch button { white-space: nowrap; }
 
-.workspace-studio .ws-reply-dock .steer-input { min-height: 64px; }
 
 @media (max-width:600px) {
  .workspace-studio.task-workspace-v2 .ws-head { padding-left: 12px; }
@@ -245,8 +244,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
   .workspace-studio.task-workspace-v2 .ws-evidence { min-height: 260px; flex-basis: 42vh; }
 }
 
-.workspace-studio .ws-reply-dock .steer-input { background: var(--surface); color: var(--text); }
-.workspace-studio .ws-reply-dock .steer-input:disabled { background: var(--surface-2); }
 
 .workspace-studio .ws-feedback-home:focus { outline: 2px solid var(--studio-accent); outline-offset: 3px; border-radius: 8px; }
 

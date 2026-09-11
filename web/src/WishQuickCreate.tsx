@@ -45,11 +45,11 @@ export function QuickWishButton({ onOpenWall, inline = false }: { onOpenWall: ()
             <DialogTitle>快速提个问题</DialogTitle>
             <DialogDescription>快速反馈</DialogDescription>
           </DialogHeader>
-          <label className="ui-field"><span>一句话说明问题</span>
+          <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">一句话说明问题</span>
             <Input autoFocus required maxLength={100} value={title}
               placeholder="哪里不好用，或者哪里不符合预期？"
               onChange={(event) => setTitle(event.target.value)} /></label>
-          <label className="ui-field"><span>补充现场 <small>（可选）</small></span>
+          <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">补充现场 <small>（可选）</small></span>
             <Textarea className="min-h-24 resize-y" rows={4} maxLength={2000} value={detail}
               placeholder="刚才做了什么、希望变成什么样"
               onChange={(event) => setDetail(event.target.value)} /></label>

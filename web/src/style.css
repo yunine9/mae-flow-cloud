@@ -185,18 +185,6 @@ svg {
   border-radius: 50%;
   background: var(--success);
 }
-.account-avatar {
-  width: 24px;
-  height: 24px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--text-strong);
-  background: var(--surface-3);
-  font-size: var(--fs-12);
-  font-weight: 600;
-}
 .sidebar-account {
   min-width: 0;
   flex: 1;
@@ -911,29 +899,9 @@ svg {
   font-size: 13px;
   font-weight: 700;
 }
-.composer textarea, .composer input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  outline: none;
-  background: var(--surface-soft);
-  color: var(--text);
-  transition: border-color var(--ease), box-shadow var(--ease), background var(--ease);
-}
-.composer textarea {
-  min-height: 72px;
-  padding: 12px 13px;
-  resize: vertical;
-  line-height: 1.55;
-}
-.composer input { height: 40px; padding: 0 12px; }
-.composer input:read-only { color: var(--muted); cursor: default; }
-.composer :is(textarea, input)::placeholder { color: var(--faint); }
-.composer :is(textarea, input):focus {
-  border-color: var(--accent);
-  background: var(--surface);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
+/* 下单表单的输入控件已换 shadcn Input/Textarea(#214 票决删除容器配方):
+   唯一的原生 input 是视觉隐藏的 file 上传(.markdown-upload-action 自带
+   隐藏规则),这组 input/textarea 配方零效引用,随之退役。 */
 .launch-composer { padding: 0; display: grid; gap: 12px; }
 .launch-form-section {
   min-width: 0; padding: 17px 18px 18px; border: 1px solid var(--line);
@@ -1107,16 +1075,8 @@ svg {
   border-color: var(--accent); background: var(--accent-soft);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
 }
-.delivery-mode-option > input {
-  position: absolute; width: 1px; height: 1px; opacity: 0;
-}
-.delivery-mode-radio {
-  width: 16px; height: 16px; margin-top: 2px; border: 1.5px solid var(--line-strong);
-  border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 3px var(--surface);
-}
-.delivery-mode-option.selected .delivery-mode-radio {
-  border-color: var(--accent); background: var(--accent);
-}
+/* 手搓 radio 皮及其视觉隐藏 input 已随 RadioGroup/RadioGroupItem 迁移
+   (#215 票决删除):原生 input 不再渲染,选中皮由 RadioGroupItem 自带。 */
 .delivery-mode-option > span:last-child { min-width: 0; display: grid; gap: 5px; }
 .delivery-mode-option strong { color: var(--text-strong); font-size: 14px; }
 .delivery-mode-option small {
@@ -5049,13 +5009,10 @@ pre {
 .user-list-card { padding: 24px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .user-list-card .section-head h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 21px; }
 .section-note { margin: 6px 0 0; color: var(--muted); font-size: var(--font-size-assist); }
+/* #220 表体换 Table 原语:表头底色/行分隔/内距迁到组件工具类(令牌桥),
+   这里只留外框与单元格内的存量控件样式(.user-action/.committer-toggle/
+   .user-reset-row);窄屏不再折卡,横向滚动交给 Table 容器。 */
 .user-table { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
-.user-table-head, .user-row { display: grid; grid-template-columns: minmax(160px, 1.5fr) minmax(100px, .65fr) minmax(90px, .6fr) minmax(112px, .7fr) minmax(150px, .9fr); align-items: center; gap: 16px; padding: 12px 16px; }
-.user-table-head { color: var(--muted); background: var(--surface-soft); border-bottom: 1px solid var(--line); font-size: var(--font-size-assist); font-weight: 700; }
-/* 行外多了一层 .user-block(为了挂行内重置表单),分隔线随之挂到块上。 */
-.user-block { border-bottom: 1px solid var(--line); }
-.user-block:last-child { border-bottom: none; }
-.user-row { min-height: 58px; }
 .user-actions { display: inline-flex; gap: 8px; }
 .user-action {
   padding: 7px 10px; color: var(--muted); border: 1px solid var(--line);
@@ -5078,7 +5035,7 @@ pre {
 .user-reset-row button:disabled { opacity: .5; cursor: not-allowed; }
 .user-reset-row small { color: var(--muted); font-size: var(--font-size-assist); }
 .user-cell { display: flex; align-items: center; gap: 10px; }
-.user-cell i { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--accent); background: var(--accent-soft); font-size: 13px; font-style: normal; font-weight: 700; }
+/* 首字圆换 Avatar 原语(#220),底色/字号走组件工具类,只剩文字样式。 */
 .user-cell strong { color: var(--text-strong); font-size: 14.5px; }
 .user-entry { color: var(--muted); font-size: 13.5px; }
 .committer-toggle {
@@ -5095,14 +5052,10 @@ pre {
 .settings-form.runtime-settings-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-form.build-cache-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-form .span-2 { grid-column: 1 / -1; }
-.settings-form textarea {
-  padding: 10px 12px; color: var(--text); background: var(--surface-soft);
-  border: 1px solid var(--line); border-radius: 9px; resize: vertical;
-  font: 13.5px/1.6 var(--font-mono);
-}
-.settings-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+/* 表单 textarea 已换 shadcn Textarea(#219):字体/边框/底色由组件皮自
+   带,这里只留 preflight 拿不走的行为;原 mono 配方随 .ui-field 退役。 */
+.settings-form textarea { resize: vertical; }
 .execution-policy-form > label { position: relative; }
-.execution-policy-form textarea { min-height: 138px; font-family: var(--font-ui); }
 .execution-policy-form .knob-note {
   max-width: calc(100% - 82px); color: var(--muted);
   font-size: var(--font-size-assist); line-height: 1.55;
@@ -5552,10 +5505,6 @@ pre {
   .login-card { min-height: 100vh; padding: 30px 22px; border-radius: 0; }
   .login-heading h1 { font-size: 30px; }
   .user-create-copy, .user-create-form, .user-list-card { padding: 19px; }
-  .user-table-head { display: none; }
-  .user-row { grid-template-columns: 1fr auto; gap: 8px; }
-  .user-entry { padding-left: 40px; }
-  .user-actions { grid-column: 1 / -1; }
   .user-reset-row { flex-wrap: wrap; }
 }
 
@@ -8681,12 +8630,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 .ka-search { position: relative; min-width: 210px; flex: 1 1 240px; display: flex; align-items: center; }
 .ka-search svg { position: absolute; left: 10px; width: 14px; height: 14px; fill: none; stroke: var(--faint); stroke-width: 1.6; stroke-linecap: round; pointer-events: none; }
-.ka-search input {
-  width: 100%; min-height: 32px; padding: 0 10px 0 30px; color: var(--text);
-  border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--surface-soft); font: inherit; font-size: var(--font-size-assist);
-}
-.ka-search input:focus-visible { border-color: var(--accent); background: var(--surface); outline: none; }
+/* 搜索框已换 shadcn Input(pl-7 补图标位,#214 票决删除容器配方)。 */
 .ka-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .ka-filters > label { display: flex; align-items: center; gap: 7px; }
 .ka-field-label { color: var(--muted); font-size: var(--font-size-assist); font-weight: 700; white-space: nowrap; }
@@ -8849,12 +8793,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ka-revision-body summary { color: var(--accent); font-size: var(--font-size-assist); cursor: pointer; }
 
 .ka-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.ka-actions input {
-  min-width: 220px; flex: 1 1 220px; min-height: 30px; padding: 0 10px;
-  color: var(--text); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); background: var(--surface); font: inherit;
-  font-size: var(--font-size-assist);
-}
+/* 行内输入已换 shadcn Input(min-w-55 flex-1,#214 票决删除容器配方)。 */
 
 /* 表单:字段不再通栏。单行输入最宽 420px,读起来才像一个字段而不是一条横杠。 */
 .ka-form-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 9px; }
@@ -8863,14 +8802,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px 14px; }
 .ka label { min-width: 0; display: grid; gap: 4px; }
 .ka-form-row > label { flex: 0 1 260px; }
-.ka-form-grid input, .ka-form-row input, .ka-draft textarea {
-  width: 100%; min-height: 32px; padding: 6px 10px; color: var(--text);
-  border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--surface); font: inherit; font-size: var(--font-size-assist);
-  box-sizing: border-box;
-}
 .ka-draft { display: grid; gap: 5px; }
-.ka-draft textarea { min-height: 240px; font: 12px/1.65 var(--font-mono); resize: vertical; }
 .ka-extract { padding-top: 12px; display: grid; gap: 10px; border-top: 1px dashed var(--line); }
 .ka-extract > .ka-ghost { justify-self: start; }
 .ka-extract .ka-hint { max-width: 74ch; padding: 0; }
@@ -9872,14 +9804,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .wish-title-field, .wish-detail-field { position: relative; display: grid; gap: 7px; }
 .wish-title-field > span, .wish-detail-field > span { color: var(--text); font-size: var(--font-size-assist); font-weight: 750; }
 .wish-detail-field > span small { color: var(--faint); font-weight: 500; }
-.wish-title-field input, .wish-detail-field textarea {
-  width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 11px;
-  outline: none; color: var(--text-strong); background: var(--surface-soft); font: inherit;
-  transition: border-color var(--ease), box-shadow var(--ease), background var(--ease);
-}
-.wish-title-field input { height: 46px; padding: 0 53px 0 14px; font-size: 15px; font-weight: 600; }
-.wish-detail-field textarea { min-height: 84px; padding: 12px 14px; resize: vertical; line-height: 1.6; }
-.wish-title-field input:focus, .wish-detail-field textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* 控件已换 shadcn Input(h-11 pr-[53px] font-semibold)/Textarea
+   (min-h-21 resize-y,#214 票决删除容器配方);计数 small 的锚位保留。 */
 .wish-title-field > small { position: absolute; right: 12px; bottom: 14px; color: var(--faint); font-size: var(--fs-12); }
 .wish-image-drafts { display: grid; grid-template-columns: repeat(4, minmax(0, 150px)); gap: 10px; }
 .wish-image-drafts figure { position: relative; aspect-ratio: 4 / 3; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-soft); }
