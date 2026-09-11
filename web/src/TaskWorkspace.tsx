@@ -21,6 +21,7 @@ import "./overall-story.css";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
+import { needsDeliverySelection } from "./decisionSelection";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
@@ -579,7 +580,7 @@ export function TaskWorkspace({
   // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
   // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
   // 成 0。审批权仍由 waiting + delivery_selection 单独判断。
-  const pushReview = (task.waiting?.recommended_view === "diff"
+  const pushReview = (needsDeliverySelection(task.waiting)
       || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
@@ -2390,7 +2391,7 @@ export function TaskWorkspace({
                         // waiting 键)不得再开勾选:必须真的在等这张卡
                         // (MFC-009)。
                         && task.status === "waiting_for_human"
-                        && task.waiting?.recommended_view === "diff"
+                        && needsDeliverySelection(task.waiting)
                         && (!pushReview || diffScope === "full")}
                       selectionKey={deliverySelectionKey}
                       initialSelectedPaths={deliverySelection?.selectedPaths
@@ -2502,10 +2503,10 @@ export function TaskWorkspace({
                     && task.requirement_graph?.projection_state === "ready"
                     && task.requirement_graph.repositories.length > 0
                     ? repositoryAssignees : undefined}
-                  deliverySelection={task.waiting?.recommended_view === "diff"
+                  deliverySelection={needsDeliverySelection(task.waiting)
                     ? decisionDeliverySelection : undefined}
                   pushReview={pushReview}
-                  onLocateDelivery={task.waiting?.recommended_view === "diff"
+                  onLocateDelivery={needsDeliverySelection(task.waiting)
                     ? (scope) => {
                         setWorkspaceView("materials");
                         setMaterialView("diff");
@@ -2523,7 +2524,7 @@ export function TaskWorkspace({
                         if (first) setActive(first.name);
                       }
                     : undefined}
-                  activeDeliveryScope={task.waiting?.recommended_view === "diff"
+                  activeDeliveryScope={needsDeliverySelection(task.waiting)
                     ? diffScope : undefined}
                   attachment={requirementAnalysisConfirmation ? undefined :
                     <>

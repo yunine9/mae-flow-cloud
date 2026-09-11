@@ -4,7 +4,7 @@ import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineR
 import type { PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
-import { confirmHostPush, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
+import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { archifyArtifactGuidance, readAnalysisArchitecture, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
 import { materializeArchifyReferences } from "./archifyReferences.ts";
@@ -3832,12 +3832,10 @@ export class TaskService {
     }
     const contractStep = this.reviewContractStep(task, summary.waiting);
     // cloud_push_confirm 是 Cloud 自己生成的卡，不在内核 flow.json 里。
-    // 之前这里只问内核要效果，结果这张卡永远没有 choice_effects：页面
-    // 明明看得到“需要调整”，却不知道它是返工分支，只能错误提示用户
-    // 去写自定义答复。云端原生卡的选项与服务端处理本就由本文件定义，
+    // 云端原生卡隔离内核脉冲，不继承当前内核步骤的检视与选项语义。
     // 在同一处把关闭/返工语义投影出去，历史待办读取时也能立即恢复。
-    const choiceEffects: StepChoiceEffect[] =
-      summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
+    const choiceEffects: StepChoiceEffect[] = summary.waiting?.step === HOST_PUSH_CONFIRM_STEP
+      ? HOST_PUSH_CHOICE_EFFECTS : summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         ? [{
             key: "split",
             answers: [SPLIT_PROPOSAL_ACCEPT],
@@ -3870,7 +3868,8 @@ export class TaskService {
             contractStep,
           );
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
-      summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
+      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
+      : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
         || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         || summary.waiting?.step === MR_DESCRIPTION_STEP
         ? "source"
@@ -3927,7 +3926,7 @@ export class TaskService {
       waiting: summary.waiting
         ? {
             ...summary.waiting,
-            ...(recommendedView ? { recommended_view: recommendedView } : {}),
+            ...(summary.waiting.step === HOST_PUSH_CONFIRM_STEP ? { recommended_view: undefined } : recommendedView ? { recommended_view: recommendedView } : {}),
             ...(choiceEffects.length ? {
               choice_effects: choiceEffects.map((effect) => ({
                 key: effect.key,
@@ -4046,7 +4045,7 @@ export class TaskService {
     task: TaskState,
     waiting: Pick<WaitingRecord, "step"> | undefined,
   ): string | undefined {
-    return this.taskProgress(task)?.step_id ?? waiting?.step;
+    return waiting?.step === HOST_PUSH_CONFIRM_STEP ? waiting.step : this.taskProgress(task)?.step_id ?? waiting?.step;
   }
 
   /** 内核没给脉冲时按任务状态占一段。占哪一段由 flow/phases.json 的

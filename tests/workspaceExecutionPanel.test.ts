@@ -160,7 +160,7 @@ test("push 检视先给这次修改入口，同时保留完整交付与文件选
   assert.match(taskCard, />\s*看全部改动\s*</);
   assert.match(taskCard, /activeDeliveryScope === "full"[^]*正在看全部改动/,
     "已经摆在左侧的完整交付必须是状态，不得保留成点击无反馈的假按钮");
-  assert.match(workspace, /activeDeliveryScope=\{task\.waiting[^]*diffScope/,
+  assert.match(workspace, /activeDeliveryScope=\{needsDeliverySelection\(task\.waiting\)[^]*diffScope/,
     "决策卡必须知道左侧当前显示的范围，不能只拿到一个盲跳回调");
   assert.match(workspace,
     /readPushReviewDiff\(task\.id, diffScope\)/,

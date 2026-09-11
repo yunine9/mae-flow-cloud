@@ -3,6 +3,10 @@ import { TaskHostLedger, type HostOperation } from "./taskHostTools.ts";
 import type { TaskSummary } from "./taskService.ts";
 import type { HumanGate } from "./humanGate.ts";
 
+export const HOST_PUSH_CHOICE_EFFECTS = [
+  { key: "confirm", answers: ["确认推送"], allowsSourceEdit: false, handlesFeedback: false, closesFeedback: false },
+  { key: "adjust", answers: ["先调整"], allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false },
+];
 export const HOST_PUSH_CONFIRM_STEP = "host_push_confirm";
 interface PushConfirmationHost {
   summary: TaskSummary;

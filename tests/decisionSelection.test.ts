@@ -57,3 +57,11 @@ test("推送调整选项不能落入推送按钮分支", async () => {
   }
   assert.equal(isAdjustmentAnswer("确认按清单推送"), false);
 });
+
+test("旧 API 错投 diff 时宿主推送仍不启用文件清单，普通 diff 不受影响", async () => {
+  const { needsDeliverySelection } = await import("../web/src/decisionSelection.ts");
+  assert.equal(needsDeliverySelection({ step: "host_push_confirm", recommended_view: "diff" }), false);
+  assert.equal(needsDeliverySelection({ step: "cloud_push_confirm", recommended_view: "diff" }), true);
+  assert.equal(needsDeliverySelection({ step: "delivery_review", recommended_view: "diff" }), true);
+  assert.equal(needsDeliverySelection(undefined), false);
+});

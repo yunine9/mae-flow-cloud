@@ -531,3 +531,44 @@ test("清单确认只认明确确认选项，自定义否定和矛盾答案均�
   assert.equal(accepts({ decision: "确认按清单推送" }), true);
   assert.equal(accepts({ answers: { q: "确认按清单推送" }, notes: "先调整过，现在确认" }), true);
 });
+
+
+test("原始复现场景：只点击先调整，无备注，取消本次宿主推送", async t => {
+  const s = confirmationScene(t);
+  const operation = await queueTaskHostOperation(s.runtime(), "plain-adjust", { action: "push", reason: "阶段性推送" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  const question = waiting.question.questions[0].question;
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", selected_options: { [question]: "先调整" }, free_responses: {}, delivery_paths: ["feature.txt"] });
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 1);
+  const cancelled = new TaskHostLedger(s.host.summary).read().operations.find(row => row.id === operation.id)!;
+  assert.equal(cancelled.state, "failed");
+  assert.equal(cancelled.push_confirmed, undefined);
+  assert.equal(cancelled.push_receipt, undefined);
+  await finishTaskHostOperation(s.runtime());
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "", "重试也不能执行已取消的推送");
+});
+
+test("宿主推送卡不继承 delivery_review 脉冲的 diff 与检视分支", async t => {
+  const s = confirmationScene(t), service = s.service as any;
+  const kernelRoot = join(s.host.summary.workspace, "pulse-kernel");
+  mkdirSync(join(kernelRoot, "flow"), { recursive: true });
+  writeFileSync(join(kernelRoot, "flow", "flow.json"), JSON.stringify({ steps: {
+    delivery_review: { approval_subject: { kind: "worktree" }, confirmation_answers: ["内核确认"], next: "done" }, done: {},
+  } }));
+  service.options.host = { kernelRoot, python: "python3" };
+  service.taskProgress = () => ({ step_id: "delivery_review", step: "代码检视", phases: [], current_index: 0 });
+  await queueTaskHostOperation(s.runtime(), "pulse-confirm", { action: "push", reason: "阶段性推送" });
+  await finishTaskHostOperation(s.runtime());
+  // 兼容历史概要里残留的错误投影，必须清掉，而非 spread 后继续保留。
+  s.task.summary.waiting.recommended_view = "diff";
+  const projected = service.project(s.task);
+  assert.equal(projected.waiting.step, "host_push_confirm");
+  assert.equal(projected.waiting.recommended_view, undefined);
+  assert.deepEqual(projected.waiting.question.questions[0].options, ["确认推送", "先调整"]);
+  assert.deepEqual(projected.waiting.choice_effects.map((effect: any) => effect.answers), [["确认推送"], ["先调整"]]);
+  assert.equal(projected.waiting.choice_effects[0].closes_feedback, false);
+  assert.equal(projected.waiting.choice_effects[1].handles_feedback, true);
+});

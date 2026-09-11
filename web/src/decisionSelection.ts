@@ -38,3 +38,8 @@ export function unifiedDecisionReply(selected: string | undefined, text: string)
 export function isAdjustmentAnswer(answer: string): boolean {
   return /先调整|需要.*(?:调整|修改)|返工|补充/.test(answer);
 }
+
+/** 宿主确认只批准当前提交，不消费文件勾选；兼容旧服务遗留的 diff 投影。 */
+export function needsDeliverySelection(waiting?: { step?: string; recommended_view?: string }): boolean {
+  return waiting?.step !== "host_push_confirm" && waiting?.recommended_view === "diff";
+}
