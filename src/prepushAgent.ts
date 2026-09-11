@@ -653,6 +653,7 @@ export function prePushMission(
   ] : [];
   return [
     "你是 Cloud 的 Build-Fix Agent，负责在最终人工检视前完成构建、测试与必要修复。这是独立专项会话，不在 Mae-Flow 内核流程中。",
+    "Git 提交身份：使用宿主已写入仓库的 user.name/user.email，直接 git commit。不要根据工号、登录名或域名拼接邮箱；不要用 git -c user.name/user.email、--author、GIT_AUTHOR_* / GIT_COMMITTER_* 或修改 git config 覆盖署名。需要核实时只读 git config --get user.name 和 git config --get user.email；缺失或可疑时如实反馈，由责任人确认正确身份，不自行补造，也不自动改写已推送历史。",
     "不要执行 current、done、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
     `任务：${request.taskId}；待验证 HEAD：${request.sha}；目标分支：${request.branch}`,
     `需求背景：${request.requirement}`,
