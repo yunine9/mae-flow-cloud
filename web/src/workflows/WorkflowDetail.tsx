@@ -1,5 +1,8 @@
 import { PersonName } from "../People";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList,
+} from "@/components/ui/breadcrumb";
 import type { WorkflowAssetDetail } from "../api";
 import { statusLabels } from "./model";
 
@@ -38,9 +41,18 @@ export function WorkflowDetail({
   const { asset, draft, versions } = detail;
   return <section className="wf-detail" aria-labelledby="wf-detail-title">
     <header className="wf-detail-head">
-      <div><button type="button" className="wf-breadcrumb-back" onClick={onBack}>
-        <svg viewBox="0 0 20 20" aria-hidden><path d="m12 5-5 5 5 5" /></svg>
-        <span>工作流资产</span></button>
+      <div>{/* #220 返回钮套进 Breadcrumb 原语:nav/列表语义归位,而
+        「返回」的按钮语义经 render 原样保留(仍是真 button+onClick)。 */}
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<button type="button" className="wf-breadcrumb-back" onClick={onBack} />}>
+                <svg viewBox="0 0 20 20" aria-hidden><path d="m12 5-5 5 5 5" /></svg>
+                <span>工作流资产</span>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
         <span><small>{asset.scope === "team" ? "团队工作流" : "个人工作流"}</small>
           <h2 id="wf-detail-title">{asset.name}</h2><p>{asset.description || "暂无说明"}</p></span></div>
       <em className={`status-${asset.status}`}>{statusLabels[asset.status]}</em>

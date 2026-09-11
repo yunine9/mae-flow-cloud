@@ -19,6 +19,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { XIcon } from "lucide-react";
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 
 export type HelpGroup = "快速开始" | "需求与问题" | "团队协作" | "团队资产" | "设置与排障";
 
@@ -661,7 +664,15 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
 
       <article className="help-article">
         <header className="help-article-head">
-          <div className="help-breadcrumb"><span>{article.group}</span><i>／</i><span>{article.audience}</span></div>
+          {/* #220 面包屑换 Breadcrumb 原语:nav>ol 语义归位,原 .help-breadcrumb
+              色彩字阶迁为令牌工具类;「／」分隔符随 BreadcrumbSeparator 保留。 */}
+          <Breadcrumb>
+            <BreadcrumbList className="gap-[5px] text-xs font-extrabold text-(--accent)">
+              <BreadcrumbItem>{article.group}</BreadcrumbItem>
+              <BreadcrumbSeparator className="text-(--faint)">／</BreadcrumbSeparator>
+              <BreadcrumbItem>{article.audience}</BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
           <h2>{article.title}</h2>
           <p>{article.summary}</p>
           <div className="help-meta"><span>{article.minutes} 分钟读完</span><span>{article.steps.length} 个关键步骤</span></div>

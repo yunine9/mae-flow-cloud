@@ -10,6 +10,7 @@ import {
 import { OverlayDialog } from "./WarmupPanel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "cn";
 import { formatLocalDateTime } from "./time";
@@ -217,16 +218,22 @@ export function PrepushBadge({
         : prepush.state === "user_skipped" ? view.label : `Build-Fix · ${view.label}`;
   return (
     <>
-      <Badge variant={PREPUSH_TRIGGER_VARIANT[cls]} render={
-          <button type="button" onClick={() => setOpen(true)}
-            title={`Build-Fix：${badgeDetail}`} />
-        }
-        className="cursor-pointer outline-none hover:border-current">
-        <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
-          (cls === "is-running" || cls === "is-repair")
-            && "animate-pulse motion-reduce:animate-none")} />
-        {label}
-      </Badge>
+      {/* #220 触发徽标的悬停描述由原生 title 换 Tooltip 原语(文案原样进
+         浮层);开浮层的点击仍归 render 出的真 button。 */}
+      <Tooltip>
+        <TooltipTrigger render={
+          <Badge variant={PREPUSH_TRIGGER_VARIANT[cls]} render={
+              <button type="button" onClick={() => setOpen(true)} />
+            }
+            className="cursor-pointer outline-none hover:border-current">
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
+              (cls === "is-running" || cls === "is-repair")
+                && "animate-pulse motion-reduce:animate-none")} />
+            {label}
+          </Badge>
+        } />
+        <TooltipContent className="max-w-72 text-left whitespace-normal">{`Build-Fix：${badgeDetail}`}</TooltipContent>
+      </Tooltip>
       {open && (
         <OverlayDialog ariaLabel="Build-Fix 详情" title="Build-Fix"
           onClose={() => setOpen(false)}>

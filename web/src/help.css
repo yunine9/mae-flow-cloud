@@ -223,16 +223,7 @@
   box-shadow: var(--shadow-xs);
 }
 .help-article-head { padding: 34px 38px 25px; }
-.help-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--accent);
-  font-size: var(--fs-12);
-  font-weight: 800;
-  letter-spacing: 0;
-}
-.help-breadcrumb i { color: var(--faint); font-style: normal; }
+/* 面包屑换 Breadcrumb 原语(#220),色彩字阶随组件工具类,此处不再有。 */
 .help-article-head h2 {
   margin: 10px 0 8px;
   color: var(--help-ink);

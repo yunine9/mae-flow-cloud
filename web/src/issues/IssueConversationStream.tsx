@@ -58,6 +58,15 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert } from "@/components/Alert";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { Textarea } from "@/components/ui/textarea";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+
+/** 发言人头像底色(#220 从 .conv-avatar CSS 迁为令牌工具类,口径与
+ * 任务侧 ConversationStream 的 CONV_AVATAR_TONE 一致;问题域只有三角色)。 */
+const CONV_AVATAR_TONE = {
+  agent: "bg-(--ink)",
+  you: "bg-(--text-strong)",
+  person: "bg-(--muted)",
+} as const;
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -254,7 +263,9 @@ export function IssueConversationStream({
     return (
       <article className={`conv-msg ${options.who}`} key={options.key}
         id={`conv-${options.key}`}>
-        <span className={`conv-avatar ${options.who}`} aria-hidden>{avatar}</span>
+        <Avatar size="sm" aria-hidden className="after:hidden">
+          <AvatarFallback className={`rounded-[7px] text-[11px] font-bold text-white ${CONV_AVATAR_TONE[options.who]}`}>{avatar}</AvatarFallback>
+        </Avatar>
         <div className="conv-body">
           <div className="conv-who">
             <b>{options.name}</b>

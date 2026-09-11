@@ -3,7 +3,7 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
@@ -20,6 +20,10 @@ import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -1339,7 +1343,7 @@ export function App() {
           </SidebarMenu>
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
-        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+        <div className="sidebar-foot session-foot"><Avatar size="sm" aria-hidden className="after:hidden"><AvatarFallback className="bg-(--surface-3) text-xs font-semibold text-(--text-strong)">{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
         {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
       </SidebarFooter>
     </Sidebar>
@@ -1835,44 +1839,74 @@ function UsersBoard({ me }: { me: string }) {
         <div><h2 id="user-list-title">现有账号</h2><p className="section-note">Committer 只在开发主动邀请检视时收到通知。</p></div>
         <span className="section-count">{users.length} 人</span>
       </div>
+      {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
+          列结构(成员/角色/默认入口/Committer/操作)与行内操作、角色徽标
+          原样;行外重置/改名表单落成 colSpan 扩展行。 */}
       <div className="user-table">
-        <div className="user-table-head"><span>成员</span><span>角色</span><span>默认入口</span><span>Committer</span><span>操作</span></div>
-        {users.map((user) => <div className="user-block" key={user.username}>
-          <div className="user-row">
-            <span className="user-cell"><i>{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</i><strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong></span>
-            <span><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></span>
-            <span className="user-entry">{user.role === "admin" ? "团队需求" : "我的需求"}</span>
-            {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
-                交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
-            <span><label className={`committer-toggle${user.committer ? " on" : ""}`}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></span>
-            <span className="user-actions">
-              <button type="button" className="user-action" onClick={() => {
-                setResetFor(resetFor === user.username ? "" : user.username);
-                setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
-              }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
-              <button type="button" className="user-action" onClick={() => {
-                setNameFor(nameFor === user.username ? "" : user.username);
-                setNameDraft(user.display_name ?? ""); setResetFor("");
-                setDeleteArm(""); setMessage(""); setError("");
-              }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
-              {user.username === me
-                ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
-                : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
-            </span>
-          </div>
-          {resetFor === user.username && <form className="user-reset-row" onSubmit={submitReset}>
-            <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
-              onChange={(event) => setResetPassword(event.target.value)} />
-            <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
-            <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
-          </form>}
-          {nameFor === user.username && <form className="user-reset-row" onSubmit={saveDisplayName}>
-            <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
-              maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
-            <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
-            <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
-          </form>}
-        </div>)}
+        <Table>
+          <TableHeader>
+            <TableRow className="border-(--line)">
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">成员</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">角色</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">默认入口</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">Committer</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users.map((user) => <Fragment key={user.username}>
+              <TableRow className="h-[58px] border-(--line)">
+                <TableCell className="px-4 py-3">
+                  <span className="user-cell">
+                    <Avatar aria-hidden className="after:hidden">
+                      <AvatarFallback className="size-[30px] rounded-[8px] bg-(--accent-soft) text-[13px] font-bold text-(--accent)">{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong>
+                  </span>
+                </TableCell>
+                <TableCell className="px-4 py-3"><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></TableCell>
+                <TableCell className="user-entry px-4 py-3">{user.role === "admin" ? "团队需求" : "我的需求"}</TableCell>
+                {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
+                    交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
+                <TableCell className="px-4 py-3"><label className={`committer-toggle${user.committer ? " on" : ""}`}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
+                <TableCell className="px-4 py-3"><span className="user-actions">
+                  <button type="button" className="user-action" onClick={() => {
+                    setResetFor(resetFor === user.username ? "" : user.username);
+                    setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
+                  }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
+                  <button type="button" className="user-action" onClick={() => {
+                    setNameFor(nameFor === user.username ? "" : user.username);
+                    setNameDraft(user.display_name ?? ""); setResetFor("");
+                    setDeleteArm(""); setMessage(""); setError("");
+                  }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
+                  {user.username === me
+                    ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
+                    : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
+                </span></TableCell>
+              </TableRow>
+              {resetFor === user.username && <TableRow className="border-(--line)">
+                <TableCell colSpan={5} className="px-4 pb-3">
+                  <form className="user-reset-row" onSubmit={submitReset}>
+                    <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
+                      onChange={(event) => setResetPassword(event.target.value)} />
+                    <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
+                    <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
+                  </form>
+                </TableCell>
+              </TableRow>}
+              {nameFor === user.username && <TableRow className="border-(--line)">
+                <TableCell colSpan={5} className="px-4 pb-3">
+                  <form className="user-reset-row" onSubmit={saveDisplayName}>
+                    <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
+                      maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
+                    <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
+                    <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
+                  </form>
+                </TableCell>
+              </TableRow>}
+            </Fragment>)}
+          </TableBody>
+        </Table>
       </div>
     </section>
   </section>;

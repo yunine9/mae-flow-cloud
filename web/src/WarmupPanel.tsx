@@ -7,6 +7,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { cn } from "cn";
 import { PrepushLiveLog } from "./PrepushLiveLog";
@@ -100,16 +101,21 @@ export function WarmupBadge({ task, onOpen }: { task: TaskSummary; onOpen: () =>
   };
   /* #216 收编为 Badge(render 成 button 保留点击开浮层);原 is-* 色板
    * 映射:running=info(呼吸点)、passed=success、failed=destructive、
-   * infrastructure_failure=warning、unknown/reclaimed=neutral。 */
-  return <Badge variant={WARMUP_VARIANT[state]} render={
-      <button type="button" aria-haspopup="dialog" onClick={onOpen}
-        title={descriptions[state]} />
-    }
-    className="cursor-pointer outline-none hover:border-current">
-    <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
-      state === "running" && "animate-pulse motion-reduce:animate-none")} />
-    <span>开工前编译</span><b className="font-semibold">{labels[state]}</b><span aria-hidden>↗</span>
-  </Badge>;
+   * infrastructure_failure=warning、unknown/reclaimed=neutral。#220 悬停
+   * 描述由原生 title 换 Tooltip 原语(文案原样进浮层)。 */
+  return <Tooltip>
+    <TooltipTrigger render={
+      <Badge variant={WARMUP_VARIANT[state]} render={
+          <button type="button" aria-haspopup="dialog" onClick={onOpen} />
+        }
+        className="cursor-pointer outline-none hover:border-current">
+        <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
+          state === "running" && "animate-pulse motion-reduce:animate-none")} />
+        <span>开工前编译</span><b className="font-semibold">{labels[state]}</b><span aria-hidden>↗</span>
+      </Badge>
+    } />
+    <TooltipContent className="max-w-72 text-left whitespace-normal">{descriptions[state]}</TooltipContent>
+  </Tooltip>;
 }
 
 export function WarmupPanel({ task }: { task: TaskSummary }) {
