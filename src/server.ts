@@ -765,7 +765,7 @@ export function createTaskServer(
                 // 还可能被管理页运行时旋钮 issue_max_turns 覆盖,
                 // 与 max_concurrent 同一展示口径:这里只给部署层缺省。
                 issue_max_turns: options.issueFlow?.options.maxConcurrentTurns
-                  ?? 5,
+                  ?? 10,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
