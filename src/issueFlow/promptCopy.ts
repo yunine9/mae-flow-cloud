@@ -27,8 +27,10 @@ export const PROMPT_SOURCE_DIR = resolve(
 
 /** 文案文件(按消费方分类,命名即治理):opening=会话入口词,
  * notices=平台主动通知,receipts=工具回执,polish=登记描述一次性润色
- * (spec #184:系统指令/用户消息模板/识图提问)。 */
-const FILES = ["opening", "notices", "receipts", "briefs", "polish"] as const;
+ * 的提示词,polish-template=润色的参考模板(标准提单成品范例——
+ * 模板与提示词分文件维护,2026-09-11 拍板)。 */
+const FILES = ["opening", "notices", "receipts", "briefs", "polish",
+  "polish-template"] as const;
 export type PromptFile = (typeof FILES)[number];
 
 /** 模块加载即读:锚点 → 段文。key = "<file>.<anchor>"。 */

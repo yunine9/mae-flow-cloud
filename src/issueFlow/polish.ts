@@ -229,6 +229,8 @@ export async function polishIssueDescription(
       environment: neutralizeTemplateMarks(input.environmentName || "未提供"),
       now: new Date().toLocaleString("zh-CN", { hour12: false }),
       image_observations: neutralizeTemplateMarks(observations),
+      // 参考模板与提示词分文件(2026-09-11 拍板),此处只做注入。
+      template: promptCopy("polish-template", "example"),
     });
 
     const model = handle.runtime.getModel(
