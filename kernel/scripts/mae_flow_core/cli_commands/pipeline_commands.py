@@ -15,6 +15,7 @@ from .host_capability import (
     verify_host_proof,
 )
 from .host_receipts import save_with_host_proof, trusted_active_batch
+from .delivery_commands import complete_superseded_pipeline_feedback
 from mae_flow_core.quality.external_verification import (
     PipelineDecision,
     adjudicate_pipeline,
@@ -76,6 +77,14 @@ def _legacy_record(st, facts, head, at):
 
 
 def _route_external_verification(flow, st, record):
+    if (st.get("current") == "feedback_triage" and record.get("verdict") == "PASS"
+            and (host_managed_continuous_review() or continuous_review_enabled(st))):
+        queued = complete_superseded_pipeline_feedback(st, str(record.get("sha") or ""))
+        if queued is not None:
+            api.advance(flow, st, "feedback_triage",
+                        {"next": "feedback_triage" if queued else "delivery_watch"},
+                        "pipeline:superseded", str(record.get("reason") or ""))
+        return
     if st.get("current") != "external_verify":
         return
     verdict = record.get("verdict")

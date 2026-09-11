@@ -2,6 +2,17 @@ import { parsePipelineChecks } from "./pipelineContract.ts";
 import type { PipelineRun, PipelineStatus } from "./pipelineClient.ts";
 import type { TaskSummary } from "./taskService.ts";
 
+/** 两条推送入口共用投影：新 SHA 只代表已推送，不继承旧运行的红绿灯。
+ * last_sha 是上次派修锚，必须保留；在实际派出下一轮修复时才更新。 */
+export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
+  const previous = summary.delivery;
+  summary.delivery = { ...previous, git_push: receipt, sha: receipt.sha,
+    ...(previous?.sha !== receipt.sha ? {
+      pipeline: undefined, checks: undefined, attested: undefined,
+      evidence_gap: undefined, verify_deadline: undefined, waiting_on: undefined,
+    } : {}) };
+}
+
 /** A request for a new SHA must not adopt an old run returned by the adapter. */
 export function confirmedPipelineRun(sha: string, result: PipelineRun | PipelineStatus): PipelineRun {
   const runs = "runs" in result ? result.runs : [result];

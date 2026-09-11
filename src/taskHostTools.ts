@@ -1,4 +1,4 @@
-import { confirmedPipelineRun, historicalPipelineFeedback } from "./pipelineHandoff.ts";
+import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "./pipelineHandoff.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
@@ -88,6 +88,18 @@ export function recordTaskHostInstruction(summary: TaskSummary, text: string, ac
   data.instructions.push({ id, actor: owner, text, at: new Date().toISOString() });
   ledger.write(data);
   return id;
+}
+
+/** 恢复“远端收据已落盘、任务投影未落盘”的窗口；完成后的旧操作不能覆盖更新的正常推送。 */
+export function recoverHostPushProjection(summary: TaskSummary): boolean {
+  if (["completed", "canceled"].includes(summary.status)) return false;
+  const ledger = new TaskHostLedger(summary);
+  const pending = ledger.pending();
+  const receipt = pending?.push_receipt ?? summary.delivery?.git_push
+    ?? ledger.read().operations.filter(op => op.push_receipt).at(-1)?.push_receipt;
+  if (!receipt || (summary.delivery?.sha === receipt.sha && summary.delivery.git_push?.sha === receipt.sha)) return false;
+  projectPushReceipt(summary, receipt);
+  return true;
 }
 
 export interface TaskHostRuntime {
@@ -309,9 +321,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       operation.push_receipt = receipt;
       ledger.update(operation);
       // Persist the transport fact even when cancellation races the response.
-      host.summary.delivery = { ...host.summary.delivery, git_push: receipt };
+      projectPushReceipt(host.summary, receipt);
       host.persist();
-      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。这是阶段性推送，未改变旧流水线结论或关闭反馈；未提交改动不包含在内。`;
+      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
