@@ -113,6 +113,8 @@ export interface TaskHostRuntime {
   activeFeedback?(): { batchId: string; items: any[]; path: string } | undefined;
   allowPush(): Promise<boolean>;
   confirmPush?(operation: HostOperation): Promise<boolean>;
+  /** 缺少已确认 AR 描述时举起现有填写卡，返回 undefined 暂停本操作。 */
+  mrTitle?(operation: HostOperation): string | undefined;
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
@@ -317,9 +319,14 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       } else {
         if (host.summary.delivery?.git_push?.sha !== operation.sha) throw new Error("当前提交尚未取得真实推送收据，请先推送");
         if (!operation.target_branch) throw new Error("旧操作缺少固定的 MR 目标分支，请重新发起创建 MR");
+        const title = operation.mr_receipt ? undefined : host.mrTitle?.(operation);
+        if (!operation.mr_receipt && !title) {
+          if (!host.mrTitle) throw new Error("缺少 AR 描述确认入口，不能以任务标题代替");
+          return true;
+        }
         const receipt = operation.mr_receipt ?? await createMergeRequest({ platformUrl: host.platformUrl,
           repo: host.summary.repo_url, sourceBranch: operation.branch!, targetBranch: operation.target_branch,
-          title: host.summary.title ?? host.summary.requirement.split("\n")[0], dtsNo: host.summary.ticket, credential: host.credential });
+          title: title!, dtsNo: host.summary.ticket, credential: host.credential });
         operation.mr_receipt = { url: receipt.url, id: receipt.id };
         ledger.update(operation);
         host.summary.delivery = { ...host.summary.delivery, mr_url: receipt.url, mr_id: receipt.id, source_branch: operation.branch, target_branch: operation.target_branch };

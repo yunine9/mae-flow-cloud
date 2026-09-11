@@ -11152,7 +11152,9 @@ export class TaskService {
       task.summary.status = "verifying";
       task.summary.detail = "AR 描述已保存，继续创建 MR";
       this.persist(task);
-      this.bypass(task, "填写 AR 描述后继续交付", this.tryDeliver(task, task.controlEpoch));
+      const pendingHost = new TaskHostLedger(task.summary).pending();
+      this.bypass(task, "填写 AR 描述后继续交付", pendingHost?.input.action === "create_mr"
+        ? finishTaskHostOperation(this.taskHostRuntime(task)) : this.tryDeliver(task, task.controlEpoch));
       return;
     }
     if (waiting.step === HOST_PUSH_CONFIRM_STEP) {
@@ -13615,6 +13617,17 @@ export class TaskService {
         if (failure) throw new TaskControlError(failure);
       },
       persist: () => this.persist(task, true),
+      mrTitle: (operation) => {
+        const state = JSON.parse(readFileSync(join(task.cwd!, ".mae-flow.json"), "utf8"));
+        const ticket = String(task.summary.ticket ?? state.config?.["单号"] ?? operation.branch).trim();
+        const title = savedMrDescription(task.humanGate, task.summary.id, ticket);
+        if (title) return title;
+        task.summary.waiting = askMrDescription(task.humanGate, task.summary.id, ticket);
+        task.summary.status = "waiting_for_human";
+        task.summary.detail = "创建 MR 前，请填写 AR 单对应的准确描述";
+        this.persist(task); this.notifyWaiting(task);
+        return undefined;
+      },
       fail: message => { task.controlEpoch += 1; actionEpoch = task.controlEpoch; task.summary.status = "failed"; task.summary.detail = message; this.persist(task); this.notifyOutcome(task); },
       stopVerification: async () => {
         if (task.prepushActive) { task.controlEpoch += 1; actionEpoch = task.controlEpoch; await this.stopPrePush(task.summary.id, task.summary.luban_account, false); }

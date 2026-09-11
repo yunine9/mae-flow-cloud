@@ -1,9 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HumanGate } from "../src/humanGate.ts";
+import { TaskHostLedger, type HostOperation } from "../src/taskHostTools.ts";
+
+test("宿主 MR 复用 AR 填写卡，答复后恢复原宿主操作而非重跑交付", async t => {
+  const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "host-mr-description-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const id = service.create("不能当作 AR 名称的任务标题", { ticket: "REQ9", account: "owner" }).id;
+  const task = (service as any).tasks.get(id);
+  task.cwd = task.summary.workspace;
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ config: { 单号: "REQ9" } }));
+  const op: HostOperation = { id: "host-mr", input: { action: "create_mr", reason: "阶段交付" }, state: "running", at: new Date().toISOString(), branch: "work" };
+  const runtime = (service as any).taskHostRuntime(task);
+  assert.equal(runtime.mrTitle(op), undefined);
+  const waiting = task.summary.waiting;
+  assert.equal(waiting.step, MR_DESCRIPTION_STEP);
+  new TaskHostLedger(task.summary).update(op);
+  // 模拟远端收据已恢复；本例验证填写后的恢复路由，不重复创建远端对象。
+  task.summary.delivery = { mr_url: "https://example.test/mr/1" };
+  let resumed = 0, ordinaryDelivery = 0;
+  (service as any).taskHostRuntime = () => ({ ...runtime, platformUrl: "https://example.test",
+    assertActive() {}, release: async () => {}, watch() {}, resume() { resumed++; } });
+  (service as any).tryDeliver = async () => { ordinaryDelivery++; };
+  await service.decide(id, { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", decision: "AR 上的真实名称" });
+  await until(() => resumed === 1, "恢复原宿主操作");
+  assert.equal(ordinaryDelivery, 0);
+  assert.equal(runtime.mrTitle(op), "AR 上的真实名称");
+  assert.equal(new TaskHostLedger(task.summary).pending(), undefined);
+  assert.equal(task.humanGate.all().filter((r: any) => r.step === MR_DESCRIPTION_STEP).length, 1);
+});
 import { TaskService } from "../src/taskService.ts";
 import { askMrDescription, savedMrDescription, MR_DESCRIPTION_STEP } from "../src/mrDescription.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
