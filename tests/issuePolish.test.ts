@@ -376,6 +376,8 @@ test("登记页接线锚点:描述框是 milkdown 编辑器,粘贴上传走原�
   assert.match(editor, /@milkdown\/kit\/plugin\/upload/, "粘贴/拖拽上传插件");
   assert.match(editor, /uploader: async \(files: FileList, schema: any\)/,
     "自定义上传器:上传后插入光标位置");
+  assert.match(editor, /createAndFill\?\.\(\{/, 
+    "图片节点用 ProseMirror 标准构造(createAndFill)");
   assert.match(editor, /issueImageUrl\(ref\)/, "插入的是预览 URL(显示世界)");
   assert.match(editor, /displayUrlToRef\(markdown\)/, "出场即映射回相对引用");
   assert.match(editor, /replaceAll\(refToDisplayUrl\(value, issueImageUrl\)\)/,

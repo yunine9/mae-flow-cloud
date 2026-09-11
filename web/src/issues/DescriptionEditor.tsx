@@ -72,9 +72,10 @@ export function DescriptionEditor({
             for (const file of Array.from(files)) {
               try {
                 const ref = await uploadRef.current(file);
-                nodes.push(schema.nodes.image.createNode({
+                const node = schema.nodes.image?.createAndFill?.({
                   src: issueImageUrl(ref), alt: "截图",
-                }));
+                });
+                if (node) nodes.push(node);
               } catch (reason) {
                 errorRef.current?.(`图片上传失败:${
                   String(reason instanceof Error ? reason.message : reason)}`);
