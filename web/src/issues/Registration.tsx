@@ -53,6 +53,7 @@ import {
   isActionableDts,
   sortDtsVersionsDesc,
 } from "./dtsText";
+import { dtsTicketUrl } from "./dtsTicket";
 
 /** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
  * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
@@ -933,10 +934,15 @@ function DtsRegister({
                       {/* 单号独立成格(勾选在首格):拖选复制单号不会误
                           勾选——单号是绑单/推送分支名的关键操作对象,
                           复制是高频动作。 */}
-                      <span className="issue-dts-ticket font-mono text-sm
-                        font-medium text-primary">
+                      {/* 单号直达 DTS 门户(a { color: inherit } 全局兜底,
+                          外观与原文字一致;新开页签,不带走列表现场)。 */}
+                      <a className="issue-dts-ticket font-mono text-sm
+                        font-medium text-primary underline-offset-2
+                        hover:underline"
+                        href={dtsTicketUrl(ticket.ticket)}
+                        target="_blank" rel="noreferrer">
                         {ticket.ticket}
-                      </span>
+                      </a>
                       {isRemote && <Badge variant="outline" className="ml-1.5">
                         远程
                       </Badge>}

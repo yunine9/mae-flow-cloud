@@ -338,14 +338,13 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
   const origin = bareOrigin(dataDir);
   const state = directState(dataDir, "ticket", "dts_info");
   const { byName, textOf } = directTools(state, dataDir);
-  // a. 拉单:阶段原地不动;回执 = 单据详情 + 注册表生成的下一阶段简报。
+  // a. 拉单:阶段原地不动;回执提醒出口(2026-09-11 起不再预渲染下一
+  // 阶段简报——交接简报归 complete_stage 收口回执,见下)。
   const ticketReceipt = textOf(await byName("dts_get_ticket").execute("x", {}));
   assert.equal(state.stage, "dts_info", "拉单成功不再机械推进");
   assert.match(ticketReceipt, /MOCK 单据/);
-  assert.match(ticketReceipt, /complete_stage 申报完成/);
-  assert.match(ticketReceipt, /当前阶段「拉取代码仓·建分支」/,
-    "回执的交接文案出自注册表简报");
-  assert.match(ticketReceipt, /怎么算完/);
+  assert.match(ticketReceipt, /通读单据后调 complete_stage 申报完成/,
+    "回执提醒本阶段出口");
   // complete_stage 才进 prep_repo,收口回执同样出自注册表。
   const enterPrep = textOf(
     await byName("complete_stage").execute("x", { note: "单据已通读" }));
@@ -358,7 +357,8 @@ test("出口回归(免模型):拉单/拉仓不再机械推进,回执带注册表
     await byName("pull_repo").execute("x", { url: origin }));
   assert.equal(state.stage, "prep_repo", "拉仓落地不再机械推进");
   assert.match(pullReceipt, /代码仓就绪/);
-  assert.match(pullReceipt, /都拉齐了就调 complete_stage/);
+  assert.match(pullReceipt, /要用的仓都 pull_repo 拉齐/,
+    "拉齐的出口文案出自注册表简报");
   assert.match(pullReceipt, /当前阶段「拉取代码仓·建分支」/);
   const enterAnalyze = textOf(
     await byName("complete_stage").execute("x", { note: "仓已拉齐" }));
