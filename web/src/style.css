@@ -2385,6 +2385,70 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
 .issue-field span i.req { color: var(--danger); font-weight: 700; }
+/* AI 润色(#184):字段头右探针 + 确认弹窗。 */
+.issue-field-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.issue-polish-note {
+  margin: 0; padding: 8px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));
+  color: var(--attention); font-size: var(--font-size-dense);
+}
+.issue-polish-preview {
+  max-height: 46vh; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-muted); color: var(--text-strong);
+  font-size: var(--font-size-assist); line-height: 1.65;
+}
+.issue-polish-preview img { max-width: 100%; border-radius: 6px; }
+/* 登记描述所见即所得编辑器(#184 票2):milkdown/ProseMirror 容器,
+   样式全走令牌(明暗主题自适应);内容样式对齐 .md-* 渲染面口径。 */
+.issue-desc-editor { position: relative; }
+.issue-desc-editor .ProseMirror {
+  min-height: 96px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface-muted);
+  color: var(--text-strong); font: inherit; line-height: 1.65;
+  outline: none; overflow-wrap: anywhere;
+}
+.issue-desc-editor:focus-within .ProseMirror { border-color: var(--accent); }
+.issue-desc-editor .ProseMirror p { margin: 0 0 .5em; }
+.issue-desc-editor .ProseMirror p:last-child,
+.issue-desc-editor .ProseMirror :last-child { margin-bottom: 0; }
+.issue-desc-editor .ProseMirror h1,
+.issue-desc-editor .ProseMirror h2,
+.issue-desc-editor .ProseMirror h3 { margin: .6em 0 .4em; line-height: 1.3; }
+.issue-desc-editor .ProseMirror ul,
+.issue-desc-editor .ProseMirror ol { margin: 0 0 .5em; padding-left: 1.4em; }
+.issue-desc-editor .ProseMirror img {
+  max-width: 100%; border: 1px solid var(--line); border-radius: 6px;
+}
+.issue-desc-editor .ProseMirror blockquote {
+  margin: .5em 0; padding-left: .8em; border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.issue-desc-editor .ProseMirror code {
+  padding: .1em .35em; border-radius: 4px; background: var(--surface-3);
+  font-family: var(--font-mono); font-size: .88em;
+}
+.issue-desc-editor .ProseMirror pre {
+  margin: .5em 0; padding: 10px 12px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface-2); font-size: .86em; line-height: 1.6;
+}
+.issue-desc-editor .ProseMirror pre code { padding: 0; background: transparent; }
+.issue-desc-editor .ProseMirror table {
+  border-collapse: collapse; margin: .5em 0;
+}
+.issue-desc-editor .ProseMirror th,
+.issue-desc-editor .ProseMirror td {
+  border: 1px solid var(--line); padding: 4px 8px; text-align: left;
+}
+.issue-desc-editor .ProseMirror a { color: var(--accent); }
+/* 空内容占位(无 placeholder 插件的纯覆盖层,不挡编辑交互)。 */
+.issue-desc-editor-placeholder {
+  position: absolute; top: 9px; left: 11px; color: var(--faint);
+  pointer-events: none; font-size: var(--font-size-assist);
+}
 .issue-group-note {
   grid-column: 1 / -1; margin: 0; color: var(--faint);
   font-size: var(--font-size-dense); line-height: 1.5;
@@ -5035,6 +5099,8 @@ pre {
   line-height: 1.6;
 }
 .md-block-code .md-code { padding: 0; background: transparent; font-size: inherit; }
+/* 待补充令牌(#184):润色稿的缺失信息标注,自有渲染面染红显眼。 */
+.md-pending { color: var(--danger); }
 .md-table {
   width: 100%;
   margin: .9em 0;

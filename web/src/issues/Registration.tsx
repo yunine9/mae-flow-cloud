@@ -9,7 +9,12 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -24,6 +29,7 @@ import {
   getDtsTicketDetail,
   issueImageUrl,
   listDtsTickets,
+  polishIssueDescription,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
@@ -32,9 +38,12 @@ import {
   type DtsTicketBrief,
   type DtsTicketDetail,
   type EnvironmentView,
+  type IssuePolishResult,
   type IssueSummary,
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
+import { Markdown } from "../markdown";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
@@ -128,7 +137,6 @@ function ManualRegister({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [imageUploading, setImageUploading] = useState(false);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -143,6 +151,11 @@ function ManualRegister({
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
   const [busy, setBusy] = useState(false);
+  // AI 润色(#184):润色请求进行态 + 确认弹窗的润色稿(服务端不落库,
+  // 放弃即丢弃)。建议标题在弹窗内可改,替换时随描述一起写回。
+  const [polishing, setPolishing] = useState(false);
+  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(null);
+  const [adoptTitle, setAdoptTitle] = useState("");
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
@@ -187,87 +200,24 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
 
-  // 现象描述内嵌截图:粘贴/拖拽图片 → 上传落 staging → 在光标处插入
-  // ![截图](issue-images/<hash>.<ext>) 引用。图片本体不进 description,
-  // 进的只有工作区相对路径引用(与 ticketImages 同款架构红线)。
-  const ISSUE_IMAGE_PATTERN =
-    /issue-images\/[0-9a-f]{16}\.[a-z]+/gi;
-
-  function insertImageRef(ref: string) {
-    const textarea = descriptionRef.current;
-    const markdown = `![截图](${ref})`;
-    if (!textarea) {
-      setDescription((prev) => `${prev}${prev ? "\n" : ""}${markdown}`);
-      return;
-    }
-    const start = textarea.selectionStart ?? description.length;
-    const end = textarea.selectionEnd ?? description.length;
-    const before = description.slice(0, start);
-    const after = description.slice(end);
-    const needPrefix = before.length > 0 && !before.endsWith("\n");
-    const insert = `${needPrefix ? "\n" : ""}${markdown}${after.startsWith("\n") || after.length === 0 ? "" : "\n"}`;
-    setDescription(before + insert + after);
-    window.requestAnimationFrame(() => {
-      const pos = (before + insert).length;
-      textarea.focus();
-      textarea.setSelectionRange(pos, pos);
-    });
-  }
-
-  async function uploadAndInsert(file: File) {
-    if (!file.type.startsWith("image/")) return;
+  // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
+  // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
+  // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
+  // ticketImages 同款架构红线)。
+  async function uploadIssueFile(file: File): Promise<string> {
     setImageUploading(true);
     try {
       const result = await uploadIssueImage(file);
-      insertImageRef(result.path);
+      return result.path;
     } catch (reason) {
-      onError(`图片上传失败:${String(reason instanceof Error ? reason.message : reason)}`);
+      const message = `图片上传失败:${
+        String(reason instanceof Error ? reason.message : reason)}`;
+      onError(message);
+      throw reason;
     } finally {
       setImageUploading(false);
     }
   }
-
-  function handleDescriptionPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) {
-          event.preventDefault();
-          void uploadAndInsert(file);
-          return;
-        }
-      }
-    }
-  }
-
-  function handleDescriptionDrop(event: React.DragEvent<HTMLTextAreaElement>) {
-    const files = event.dataTransfer?.files;
-    if (!files || !files.length) return;
-    const image = Array.from(files).find((file) => file.type.startsWith("image/"));
-    if (image) {
-      event.preventDefault();
-      void uploadAndInsert(image);
-    }
-  }
-
-  // description 里的图片引用(缩略图条预览用)。
-  const descriptionImages = useMemo(() => {
-    if (!description) return [];
-    const paths: string[] = [];
-    const seen = new Set<string>();
-    let match: RegExpExecArray | null;
-    const pattern = new RegExp(ISSUE_IMAGE_PATTERN.source, "gi");
-    while ((match = pattern.exec(description)) !== null) {
-      const path = match[0];
-      if (!seen.has(path)) {
-        seen.add(path);
-        paths.push(path);
-      }
-    }
-    return paths;
-  }, [description]);
 
   // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
   // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
@@ -292,6 +242,36 @@ function ManualRegister({
 
   function clearPickedEnv() {
     setPickedEnv(null);
+  }
+
+  /** AI 润色(#184):把随意的 标题+描述 整理成标准提单格式。识图观察由
+   * 服务端组装(截图内容补充进润色稿);结果只进确认弹窗——替换前
+   * 原稿一动不动。 */
+  async function polish() {
+    if (polishing || !description.trim()) return;
+    setPolishing(true);
+    try {
+      const result = await polishIssueDescription({
+        title: title.trim(),
+        description,
+        ...(selectedModule ? { module: selectedModule.name } : {}),
+        ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
+      });
+      setAdoptTitle(result.title);
+      setPolishResult(result);
+    } catch (reason) {
+      onError(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setPolishing(false);
+    }
+  }
+
+  /** 弹窗里「替换」:标题(可改)与描述一起写回;「放弃」只关弹窗。 */
+  function adoptPolish() {
+    if (!polishResult) return;
+    if (adoptTitle.trim()) setTitle(adoptTitle.trim());
+    setDescription(polishResult.description);
+    setPolishResult(null);
   }
 
   async function submit(event: React.FormEvent) {
@@ -339,20 +319,22 @@ function ManualRegister({
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         <label className="issue-field wide">
-          <span>现象描述 <i className="req">*</i></span>
-          <textarea rows={3} value={description} ref={descriptionRef}
-            placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来,粘贴或拖拽图片自动上传"
-            onPaste={handleDescriptionPaste}
-            onDrop={handleDescriptionDrop}
-            onChange={(event) => setDescription(event.target.value)} />
-          {(imageUploading || descriptionImages.length > 0) && (
+          <span className="issue-field-head">
+            <span>现象描述 <i className="req">*</i></span>
+            {/* AI 润色(#184):描述为空不可点,润色中防重复提交。 */}
+            <Button type="button" variant="outline" size="xs"
+              disabled={!description.trim() || polishing}
+              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
+              onClick={() => void polish()}>
+              {polishing ? "润色中…" : "AI 润色"}
+            </Button>
+          </span>
+          <DescriptionEditor value={description} onChange={setDescription}
+            onUploadImage={uploadIssueFile} onError={onError}
+            placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+          {imageUploading && (
             <div className="issue-image-bar">
-              {imageUploading && <span className="issue-image-uploading">上传中…</span>}
-              {descriptionImages.map((path) => (
-                <img key={path} className="issue-image-thumb"
-                  src={issueImageUrl(path)} alt="现象截图"
-                  draggable={false} />
-              ))}
+              <span className="issue-image-uploading">上传中…</span>
             </div>
           )}
         </label>
@@ -422,6 +404,39 @@ function ManualRegister({
         {busy ? "分析中…" : "开始分析"}
       </button>
     </div>
+    {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
+        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。 */}
+    {polishResult && <Dialog open onOpenChange={(open) => {
+      if (!open) setPolishResult(null);
+    }}>
+      <DialogContent className="issue-polish-dialog">
+        <DialogHeader>
+          <DialogTitle>AI 润色预览</DialogTitle>
+          <DialogDescription>
+            核对润色稿后选择替换或放弃;红色「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
+          </DialogDescription>
+        </DialogHeader>
+        {polishResult.vision_note && <p className="issue-polish-note" role="alert">
+          {polishResult.vision_note}
+        </p>}
+        <label className="issue-field">
+          <span>建议标题</span>
+          <input value={adoptTitle}
+            onChange={(event) => setAdoptTitle(event.target.value)} />
+        </label>
+        <div className="issue-polish-preview" aria-label="润色后描述预览">
+          <Markdown text={polishResult.description}
+            resolveImage={(path) => issueImageUrl(path)} />
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" size="sm"
+            onClick={() => setPolishResult(null)}>放弃</Button>
+          <Button type="button" size="sm" onClick={adoptPolish}>
+            替换原稿
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </form>;
 }
 
