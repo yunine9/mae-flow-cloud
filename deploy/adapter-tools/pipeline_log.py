@@ -411,6 +411,27 @@ def resolve_mr(data: PipelineData, ctx: Context) -> None:
             ctx.log(f'get_project_info 失败: {error}')
 
 
+def require_pipeline_identity(data, value, *, bound_pipeline=False):
+    """MR 的最新结果可能仍属于上个提交；请求里的 SHA 本身不是证据。"""
+    row = unwrap_data(value)
+    if not isinstance(row, dict) or row.get('is_valid') is False:
+        raise StrategySkipped('流水线材料未提供有效的版本归属')
+    nested = row.get('pipeline') or row.get('head_pipeline') or {}
+    commit = row.get('commit') or {}
+    actual = str(row.get('sha') or row.get('commit_id') or row.get('commitId')
+                 or row.get('lastCommitId') or (nested.get('sha') if isinstance(nested, dict) else '')
+                 or (commit.get('id') if isinstance(commit, dict) else '') or '')
+    if actual:
+        if actual != data.sha:
+            raise StrategySkipped(f'材料属于旧提交 {actual}，请求版本 {data.sha}，不送修复')
+        return
+    pipeline_id = row.get('pipeline_id') or row.get('pipelineId') or row.get('id')
+    if (bound_pipeline and data.commit_id == data.sha and data.pipeline_id is not None
+            and pipeline_id is not None and str(pipeline_id) == str(data.pipeline_id)):
+        return
+    raise StrategySkipped('材料缺少可核验的 SHA 或已绑定流水线 ID，不作为本版失败证据')
+
+
 def strategy_pipeline_info(data: PipelineData, ctx: Context) -> None:
     """SSE 网关 get_mr_pipeline_info → pipeline_info.json(无降级)。
 
@@ -422,6 +443,7 @@ def strategy_pipeline_info(data: PipelineData, ctx: Context) -> None:
     info = ctx.sse_client().get_mr_pipeline_info(data.mr_url)
     if not info:
         raise RuntimeError('get_mr_pipeline_info 返回空')
+    require_pipeline_identity(data, info, bound_pipeline=True)
     ctx.write_json('pipeline_info.json', info)
     data.defects = info.get('defects', []) or []
     data.ut_job_ids = list(info.get('utJobIds') or [])
@@ -451,6 +473,12 @@ def strategy_pipeline_detail(data: PipelineData, ctx: Context) -> None:
         except Exception as error:
             ctx.log(f'actual_head_pipeline 失败,转 REST 降级: {error}')
     if detail:
+        try:
+            require_pipeline_identity(data, detail)
+        except StrategySkipped as error:
+            ctx.log(f'actual_head_pipeline 版本不符或不明，转按 SHA 查询: {error}')
+            detail = None
+    if detail:
         ctx.write_json('pipeline_detail.json', detail)
         if isinstance(detail, dict):
             data.pipeline_id = detail.get('id') or detail.get('pipeline_id')
@@ -471,6 +499,8 @@ def strategy_pipeline_detail(data: PipelineData, ctx: Context) -> None:
     # 有完整数字 id 时再取最大值归一。绝不能跨过最新 running 去挑历史
     # failed/success，否则 artifacts 会把旧失败现场冒充成当前流水线。
     chosen = None
+    pipelines = [item for item in pipelines if isinstance(item, dict)
+                 and item.get('sha') == data.sha and item.get('is_valid') is not False]
     if pipelines:
         chosen = pipelines[0]
         try:
@@ -695,6 +725,7 @@ def strategy_codecheck(data: PipelineData, ctx: Context) -> None:
             detail = ctx.mcp_call('codeccp', 'query_mr_info',
                                   {'url': data.mr_url})
             if detail:
+                require_pipeline_identity(data, detail, bound_pipeline=True)
                 ctx.write_json('codecheck_detail.json', detail)
                 return
         except Exception as error:
@@ -784,8 +815,8 @@ def strategy_ai_review_tips(data: PipelineData, ctx: Context) -> None:
 
 
 STRATEGIES = [
-    ('pipeline-info', strategy_pipeline_info),
     ('pipeline-detail', strategy_pipeline_detail),
+    ('pipeline-info', strategy_pipeline_info),
     ('mergeable-state', strategy_mergeable_state),
     ('pipeline-quality', strategy_pipeline_quality),
     ('build-logs', strategy_build_logs),
@@ -824,6 +855,7 @@ def run(project_path: str, sha: str, token: str, out_dir: str,
                 ctx.log(f'{name}: failed — {note}')
         summary = {
             'sha': sha,
+            'observed_sha': data.commit_id,
             'mr_url': data.mr_url,
             'pipeline_id': data.pipeline_id,
             'pipeline_status': data.pipeline_status,

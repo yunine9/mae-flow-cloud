@@ -1,4 +1,6 @@
 import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "./pipelineHandoff.ts";
+import { remainingCiMission } from "./ciMission.ts";
+import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
@@ -97,7 +99,9 @@ export function recoverHostPushProjection(summary: TaskSummary): boolean {
   const pending = ledger.pending();
   const receipt = pending?.push_receipt ?? summary.delivery?.git_push
     ?? ledger.read().operations.filter(op => op.push_receipt).at(-1)?.push_receipt;
-  if (!receipt || (summary.delivery?.sha === receipt.sha && summary.delivery.git_push?.sha === receipt.sha)) return false;
+  if (!receipt) return false;
+  scopePipelineArtifacts(join(summary.workspace, "pipeline"), receipt.sha);
+  if (summary.delivery?.sha === receipt.sha && summary.delivery.git_push?.sha === receipt.sha) return false;
   projectPushReceipt(summary, receipt);
   return true;
 }
@@ -113,6 +117,9 @@ export interface TaskHostRuntime {
   annotations(): Annotation[];
   related(): unknown;
   gates(): Promise<unknown>;
+  /** 纯 CI 使命已发布修复版本时直接交给宿主验证，保留其他人工目标。 */
+  resumePipelineAfterPush?: (sha: string) => boolean;
+  recordPublishedPush?: (receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>) => void;
   reviews?(): Promise<unknown>;
   reply(id: string, revision: number, outcome: "fixed" | "not_fixed" | "needs_clarification", summary: string, evidence: string[]): void;
   release(): Promise<void>;
@@ -242,7 +249,9 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
 /** Runs only after the model turn has finished. It never waits for its own tool
  * call, and recovery can replay a running record using its pinned SHA/op ID. */
 /** 成功收据只结束旧推送调整指令；其他目标、失败与会话重建仍保留原使命。 */
-export function hostResumeMission(mission: string | undefined, message: string, target?: string, operation?: HostOperation): string {
+export function hostResumeMission(mission: string | undefined, message: string, target?: string, operation?: HostOperation, summary?: TaskSummary): string {
+  if (summary && operation?.input.action === "push" && operation.state === "succeeded" && operation.push_receipt)
+    mission = remainingCiMission(mission, summary);
   const completedAdjustment = operation?.input.action === "push" && operation.state === "succeeded"
     && !!operation.push_receipt && mission?.startsWith("用户要求调整推送，请整理后重新发起：");
   return [target ? `[责任人调整后的目标]\n${target}\n不再执行已暂缓事项。`
@@ -265,6 +274,12 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
   if (!operation) {
     const loop = host.summary.delivery?.loop;
     const latest = ledger.read().operations.at(-1);
+    if (latest?.input.action === "push" && latest.state === "succeeded" && latest.push_receipt
+        && latest.sha === host.summary.delivery?.git_push?.sha && host.platformUrl
+        && host.resumePipelineAfterPush?.(latest.sha!)) {
+      host.assertActive(); await host.release();
+      await verifyPublishedCi(host, latest, ledger); return true;
+    }
     if (loop?.kind !== "ci" || loop.state !== "repairing"
         || latest?.input.action !== "trigger_pipeline" || latest.state !== "succeeded"
         || !latest.sha || latest.sha === loop.last_sha
@@ -323,7 +338,13 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       // Persist the transport fact even when cancellation races the response.
       projectPushReceipt(host.summary, receipt);
       host.persist();
+      scopePipelineArtifacts(join(host.summary.workspace, "pipeline"), receipt.sha);
+      host.recordPublishedPush?.(receipt);
       operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      if (host.platformUrl && host.resumePipelineAfterPush?.(receipt.sha)) {
+        await verifyPublishedCi(host, operation, ledger);
+        operation.state = "succeeded"; ledger.update(operation); return true;
+      }
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
@@ -390,6 +411,24 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
   try { host.resume(`[宿主操作 ${operation.id} ${operation.state}]\n${operation.result}\n按当前目标继续；失败不代表旧问题已通过。`, target, operation); }
   catch (error) { host.fail?.(`宿主操作已记账，但会话续接失败：${safeMessage(host, error)}`); }
   return true;
+}
+
+async function verifyPublishedCi(host: TaskHostRuntime, operation: HostOperation, ledger: TaskHostLedger): Promise<void> {
+  const sha = operation.push_receipt!.sha;
+  const call = { platformUrl: host.platformUrl!, sha, repo: host.summary.repo_url,
+    mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
+  host.assertActive();
+  // 先查同 SHA，已有运行不重复触发；触发响应丢失时只查询，不重启旧修复。
+  const observed = await getPipelineStatus(call);
+  host.assertActive();
+  if (observed.runs.length) operation.pipeline_receipt = confirmedPipelineRun(sha, observed);
+  else if (operation.trigger_started) throw new Error(`提交 ${sha} 的流水线触发结果尚未可查询，请稍后重试验证`);
+  else {
+    operation.trigger_started = true; ledger.update(operation);
+    operation.pipeline_receipt = confirmedPipelineRun(sha, await triggerPipeline(call));
+  }
+  host.assertActive(); ledger.update(operation);
+  await host.acceptPipeline(sha, operation.pipeline_receipt);
 }
 
 function feedback(host: TaskHostRuntime) {

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -234,6 +235,24 @@ class ApprovalSubjectTests(unittest.TestCase):
         self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
         self.assertEqual(original, state["approval_subject"])
 
+    def test_registering_same_reviewed_files_as_manifest_keeps_approval(self):
+        state = {"implementation_base_head": self.head}
+        step = {"approval_subject": {"kind": "worktree"}}
+        with open(os.path.join(self.root, "a.txt"), "w") as out:
+            out.write("reviewed change\n")
+        original = build_subject(self.root, state, "delivery_review", step)
+        state["approval_subject"] = original
+        state["delivery_manifest"] = {"files": ["a.txt"]}
+        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
+        self.assertEqual(original, state["approval_subject"], "保留原回答绑定，清单登记不等于内容变化")
+        for change in ("content", "paths"):
+            with self.subTest(change=change):
+                state["approval_subject"] = original
+                with open(os.path.join(self.root, "a.txt"), "w") as out:
+                    out.write("unreviewed change\n" if change == "content" else "reviewed change\n")
+                state["delivery_manifest"] = {"files": ["a.txt", "new.txt"] if change == "paths" else ["a.txt"]}
+                self.assertFalse(subject_matches(self.root, state, "delivery_review", step)[0])
+
     def test_stale_subject_is_rotated_without_agent_rework(self):
         state = {"implementation_base_head": self.head}
         step = {"approval_subject": {"kind": "worktree"}}
@@ -246,9 +265,25 @@ class ApprovalSubjectTests(unittest.TestCase):
         ok, reason = subject_matches(
             self.root, state, "build_review", step)
         self.assertFalse(ok)
-        self.assertIn("新审批卡已自动生成", reason)
+        self.assertIn("新审批对象已登记", reason)
         self.assertNotEqual(old_id, state["approval_subject"]["id"])
         self.assertEqual(old_id, state["approval_subject"]["supersedes"])
+
+    def test_done_records_explicit_host_review_request_before_rejecting(self):
+        from mae_flow_core.cli_commands import done_status
+        state = {"current": "delivery_review", "implementation_base_head": self.head}
+        step = {"approval_subject": {"kind": "worktree"}}
+        state["approval_subject"] = build_subject(self.root, state, "delivery_review", step)
+        with open(os.path.join(self.root, "a.txt"), "w") as out:
+            out.write("changed after decision\n")
+        with mock.patch.object(done_status, "api") as api, mock.patch.object(done_status.os, "getcwd", return_value=self.root):
+            api._moonlight.return_value = False
+            api.die.side_effect = SystemExit(2)
+            with self.assertRaises(SystemExit):
+                done_status._done_validate_choice_and_ack(step, state, SimpleNamespace(choice="", ack=""), "delivery_review")
+            self.assertEqual({"step": "delivery_review", "subject_id": state["approval_subject"]["id"]}, state["approval_request"])
+            api.save_state.assert_called_once_with(state)
+            self.assertEqual("delivery_review", state["current"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import type { StepChoiceEffect } from "./kernelChoices.ts";
+export { pendingReviewAnnotation } from "./annotationPending.ts";
 
 export const REVIEW_ADJUST = "需要调整，按检视意见继续处理";
 export const REVIEW_HOLD = "暂不确认，我先核对";
@@ -45,11 +46,4 @@ export function reviewDecisionContract(
     ? [...effects, { key: "review_adjust", answers: adjustmentAnswers,
       allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false }]
     : effects };
-}
-
-/** 发送只看处理状态，不再让旧 route 决定某条待处理意见是否可见。
- * 已自行答复的意见留给责任人闭环，不能混进 Agent 修改清单。 */
-export function unassignedReviewDraft(item: { status: string; route?: string; owner_reply?: unknown; resolution?: unknown }): boolean {
-  return item.status === "draft"
-    && !item.owner_reply && !item.resolution;
 }

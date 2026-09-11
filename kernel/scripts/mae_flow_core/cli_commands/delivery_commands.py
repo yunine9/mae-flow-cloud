@@ -182,6 +182,9 @@ def _open(flow, state, args):
     if payload.get("mode") == "control":
         from .feedback_control import control_feedback
         return control_feedback(state, payload, proof_nonce)
+    if payload.get("mode") == "published":
+        from .published_feedback import record_publication
+        return record_publication(state, payload, proof_nonce)
     _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     if host_managed_continuous_review():
@@ -413,7 +416,10 @@ def _result(flow, state, args):
             "evidence": _text(raw.get("evidence"), "results.evidence", 4000,
                               required=False),
         })
-    expected = {item["id"] for item in batch.get("items", [])}
+    from .published_feedback import historical_pipeline_item
+    historical = {item["id"] for item in batch.get("items", []) if historical_pipeline_item(state, item)}
+    results = [item for item in results if item["id"] not in historical]
+    expected = {item["id"] for item in batch.get("items", [])} - historical
     actual = {item["id"] for item in results}
     if len(actual) != len(results) or actual != expected:
         _die("逐条回执必须精确覆盖本批反馈。缺少: %s；夹带: %s"
