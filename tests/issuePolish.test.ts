@@ -41,7 +41,8 @@ import { mfcTemp } from "./mfcTmp.ts";
 // ---- 文案契约:polish.md 挂载与条款(#184 拍板的模板适配) ----
 
 test("润色文案:三锚点在册,system 段含图片引用保留与待补充条款", () => {
-  for (const anchor of ["polish.system", "polish.user", "polish.vision-question"]) {
+  for (const anchor of ["polish.system", "polish.user", "polish.vision-question",
+    "polish-template.example"]) {
     assert.ok(mountedPromptAnchors().includes(anchor), `锚点未挂载: ${anchor}`);
   }
   const system = promptCopy("polish", "system");
@@ -58,12 +59,37 @@ test("润色文案:三锚点在册,system 段含图片引用保留与待补充�
   assert.doesNotMatch(source, /Read 工具/);
   const user = promptCopy("polish", "user", {
     title: "T", description: "D", module: "M", environment: "E",
-    now: "N", image_observations: "O",
+    now: "N", image_observations: "O", template: "TPL",
   });
+  assert.match(user, /### 参考模板/, "模板注入槽在位");
   for (const [name, value] of [["标题", "T"], ["D", "D"], ["M", "M"],
     ["E", "E"], ["N", "N"], ["O", "O"]] as const) {
     assert.ok(user.includes(String(value)), `user 模板缺变量占位: ${name}`);
   }
+});
+
+test("参考模板独立成档:polish-template.md 与提示词分文件,注入进 user", () => {
+  const templatePath = resolve("assets/issue-prompts/polish-template.md");
+  const template = readFileSync(templatePath, "utf-8");
+  const promptSource = readFileSync(
+    resolve("assets/issue-prompts/polish.md"), "utf-8");
+  // 分文件拍板(2026-09-11):模板不在提示词 md 里,提示词有注入槽。
+  assert.ok(promptSource.includes("{{template}}"),
+    "polish.md 有 {{template}} 注入槽");
+  assert.doesNotMatch(promptSource, /## 基本信息/, 
+    "成品范例不在提示词 md 里维护");
+  assert.match(template, /## example/);
+  assert.match(template, /^标题：/m, "模板含标题行示例");
+  for (const section of ["基本信息", "问题描述", "预期结果", "环境信息"]) {
+    assert.ok(template.includes(section), `模板缺章节: ${section}`);
+  }
+  assert.match(template, /【待补充/, "模板示范待补充令牌");
+  assert.doesNotMatch(template, /issue-images\/[0-9a-f]{16}/,
+    "模板不得出现可被照抄的图片哈希");
+  assert.doesNotMatch(template, /attachment:\/\//);
+  // polish.ts 注入链在位。
+  const polish = readFileSync(resolve("src/issueFlow/polish.ts"), "utf-8");
+  assert.match(polish, /promptCopy\("polish-template", "example"\)/);
 });
 
 // ---- 纯函数:输出解析 / 占位符中和 / staging 取图 ----
@@ -87,7 +113,7 @@ test("占位符中和:用户内容里的 {{ 不再撞 promptCopy 残留检查", 
     "贴个模板 {\u200b{a}} 或 {\u200b{b}}");
   const vars = {
     title: "T", module: "M", environment: "E", now: "N",
-    image_observations: "O",
+    image_observations: "O", template: "TPL",
   };
   assert.throws(() => promptCopy("polish", "user", {
     ...vars, description: "用户贴了 {{evil}} 模板",
@@ -310,6 +336,8 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   assert.match(registration, /polishing \? "润色中…" : "AI 润色"/);
+  assert.match(registration, /问题描述 <i className="req">\*<\/i><\/span>/,
+    "字段名拍板:现象描述→问题描述");
   assert.match(registration,
     /disabled=\{!description\.trim\(\) \|\| polishing\}/,
     "描述为空不可点,润色中防重复");
@@ -328,7 +356,30 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   // UI 轨道纪律(CONTEXT.md 2026-09-11):新轨页面的按钮只准 ui/ 包装层。
   assert.match(registration, /@\/components\/ui\/button/,
     "润色按钮与弹窗按钮走 ui/button");
+  // 回归锚(2026-09-11 用户实测):润色按钮不许住进 label——label 的
+  // 激活转发会把点进描述区的动作转给按钮,改成描述就"自动润色"。
+  const btnAt = registration.indexOf("AI 润色");
+  const beforeBtn = registration.slice(0, btnAt);
+  assert.ok(
+    beforeBtn.lastIndexOf("<div") > beforeBtn.lastIndexOf("<label"),
+    "润色按钮最近的容器开标签必须是 div,不能是 label");
+  // 交互位置拍板(2026-09-11):按钮在描述区下方右下角,魔法星星前缀。
+  assert.match(registration, /issue-desc-foot/);
+  assert.match(registration, /<Sparkles aria-hidden \/>/);
+  // 大图拍板(2026-09-11 方案1):编辑器限高成缩略 + 点击灯箱看原图,
+  // 不往 description 里写尺寸标记。
+  const editor = readFileSync(
+    resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+  assert.match(editor, /issue-image-lightbox/);
+  assert.match(editor, /setZoom\(target\.getAttribute\("src"\)\)/);
   const css = readFileSync(resolve("web/src/style.css"), "utf-8");
+  assert.match(css,
+    /\.issue-desc-editor \.ProseMirror img \{[^}]*max-height: 200px/,
+    "编辑器图片限高 200px");
+  assert.match(css,
+    /\.issue-polish-preview img \{[^}]*max-height: 200px/,
+    "润色预览图片限高 200px");
+  assert.match(css, /\.issue-image-lightbox \{/);
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });
 

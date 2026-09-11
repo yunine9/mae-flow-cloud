@@ -52,6 +52,8 @@ export function DescriptionEditor({
   const errorRef = useRef(onError);
   errorRef.current = onError;
   const [empty, setEmpty] = useState(!value.trim());
+  // 灯箱(#184 拍板方案1):编辑区内图片限高成缩略,点击看原图。
+  const [zoom, setZoom] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -123,10 +125,22 @@ export function DescriptionEditor({
   }, [value]);
 
   return <div className="issue-desc-editor">
-    <div ref={rootRef} />
+    <div ref={rootRef}
+      onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.tagName === "IMG") {
+          setZoom(target.getAttribute("src"));
+        }
+      }}>
+    </div>
     {empty && placeholderText
       && <span className="issue-desc-editor-placeholder" aria-hidden="true">
         {placeholderText}
       </span>}
+    {zoom && <div className="issue-image-lightbox" role="dialog"
+      aria-label="截图原图"
+      onClick={() => setZoom(null)}>
+      <img src={zoom} alt="截图原图" />
+    </div>}
   </div>;
 }

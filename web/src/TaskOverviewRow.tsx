@@ -24,7 +24,7 @@ export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
       <span className="task-overview-id" title={`${ticket ?? ""} ${id}`}>{ticket || id}</span>
       <strong className="task-overview-title" title={title}>{child && <small>子任务 · </small>}{issue && <small>问题 · </small>}{title}</strong>
       <span className={`task-overview-status ${status}`} title={detail || statusLabel}><i aria-hidden />{statusLabel}</span>
-      <span className="task-overview-owner" title={`负责人：$<PersonName account={owner} />`}><PersonName account={owner} /></span>
+      <span className="task-overview-owner" title={`负责人：${owner ?? "未分配"}`}><PersonName account={owner} /></span>
       <time className="task-overview-time" dateTime={updatedAt} title={formatLocalDateTime(updatedAt)}>{relativeTime(updatedAt) || "刚刚"}</time>
       <span className="task-overview-arrow" aria-hidden>›</span>
     </button>

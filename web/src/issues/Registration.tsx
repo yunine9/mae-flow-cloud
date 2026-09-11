@@ -21,7 +21,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -53,6 +53,7 @@ import {
   isActionableDts,
   sortDtsVersionsDesc,
 } from "./dtsText";
+import { dtsTicketUrl } from "./dtsTicket";
 
 /** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
  * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
@@ -282,7 +283,7 @@ function ManualRegister({
       return;
     }
     if (!description.trim()) {
-      onError("现象描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
+      onError("问题描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
     if (!pickedEnv) {
@@ -318,26 +319,26 @@ function ManualRegister({
           <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
             onChange={(event) => setTitle(event.target.value)} />
         </label>
-        <label className="issue-field wide">
-          <span className="issue-field-head">
-            <span>现象描述 <i className="req">*</i></span>
-            {/* AI 润色(#184):描述为空不可点,润色中防重复提交。 */}
-            <Button type="button" variant="outline" size="xs"
-              disabled={!description.trim() || polishing}
-              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
-              onClick={() => void polish()}>
-              {polishing ? "润色中…" : "AI 润色"}
-            </Button>
-          </span>
+        {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
+            的动作转给区内第一个可激活元素(= 润色按钮),造成"改个描述
+            就自动润色"(2026-09-11 用户实测)。 */}
+        <div className="issue-field wide">
+          <span>问题描述 <i className="req">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
-          {imageUploading && (
-            <div className="issue-image-bar">
-              <span className="issue-image-uploading">上传中…</span>
-            </div>
-          )}
-        </label>
+          <div className="issue-desc-foot">
+            {imageUploading && <span className="issue-image-uploading">截图上传中…</span>}
+            {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
+            <Button type="button" variant="ghost" size="xs"
+              disabled={!description.trim() || polishing}
+              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
+              onClick={() => void polish()}>
+              <Sparkles aria-hidden />
+              {polishing ? "润色中…" : "AI 润色"}
+            </Button>
+          </div>
+        </div>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
             收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
             要增删仓去「团队资产 → 业务模块」维护绑定,登记页不改。 */}
@@ -933,10 +934,15 @@ function DtsRegister({
                       {/* 单号独立成格(勾选在首格):拖选复制单号不会误
                           勾选——单号是绑单/推送分支名的关键操作对象,
                           复制是高频动作。 */}
-                      <span className="issue-dts-ticket font-mono text-sm
-                        font-medium text-primary">
+                      {/* 单号直达 DTS 门户(a { color: inherit } 全局兜底,
+                          外观与原文字一致;新开页签,不带走列表现场)。 */}
+                      <a className="issue-dts-ticket font-mono text-sm
+                        font-medium text-primary underline-offset-2
+                        hover:underline"
+                        href={dtsTicketUrl(ticket.ticket)}
+                        target="_blank" rel="noreferrer">
                         {ticket.ticket}
-                      </span>
+                      </a>
                       {isRemote && <Badge variant="outline" className="ml-1.5">
                         远程
                       </Badge>}

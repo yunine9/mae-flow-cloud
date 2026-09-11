@@ -571,31 +571,23 @@ test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻�
   assert.match(sticky, /setTop\.current = node\.scrollHeight/);
 });
 
-test("推送前 UT 纪律:push_branch 描述写明先跑测试全绿再推,开场契约指路(#83)", () => {
-  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。ADR-0016 文案
-  // 外置后,纪律本体钉在 push_branch 的 description(调用时刻的权威
-  // 表面,Agent 常驻可见):跑什么(改动相关必跑+时间允许全量)、什么
-  // 标准(全绿才推)、不过怎么办(继续修,不许跳过测试直接推);开场
-  // 契约(assets/issue-prompts/opening.md)只留指路,不复述机制。
-  const opening = readFileSync(
-    resolve("assets/issue-prompts/opening.md"), "utf-8");
-  assert.match(opening, /推送、提 MR 与清单申报的纪律/,
-    "开场契约缺推送/申报纪律的指路句");
-  assert.match(opening, /写在对应工具的说明里/,
-    "开场契约应把机制让给工具说明(单一权威源)");
-  const source = issueTools;
-  assert.match(source, /推送前 UT 纪律/, "缺推送前 UT 纪律引导");
-  assert.match(source, /用例必跑/, "缺「改动相关用例必跑」口径");
-  assert.match(source, /全量回归/, "缺「时间允许跑全量回归」口径");
-  assert.match(source, /失败或条件缺失须如实说明/, "必须报告验证不足");
-  assert.match(source, /不把测试红灯当作推送禁令/, "阶段性交付不受质量门禁阻断");
-  // 纪律必须落在 push_branch 工具定义的 description 里(name 与
-  // parameters 之间),不是 tools.ts 里随便哪个角落。
+test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#83)", () => {
+  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。2026-09-11 减负
+  // 收口:UT 口径曾双写——push_branch 描述"时间允许就跑全量回归"与 fix
+  // 阶段简报"全量回归交给平台流水线,不要每轮手跑全套"直接矛盾。现单源
+  // 住 fix 简报(briefs.md stage.fix);push_branch 描述只写平台机械校验
+  // (单号/分支名/串行),不再教测试——工具描述教了就会和简报漂移。
+  const briefs = readFileSync(resolve("assets/issue-prompts/briefs.md"), "utf-8");
+  assert.match(briefs, /每轮 UT 结果如实上报/, "fix 简报缺 UT 上报口径");
+  assert.match(briefs, /先跑与本修改直接相关的函数\/模块级测试,通过即收/,
+    "fix 简报缺验证聚焦口径");
+  assert.match(briefs, /全量回归交给平台流水线,不要每轮手跑全套/,
+    "fix 简报缺全量回归口径");
   const pushBranchDesc = issueTools.match(
     /name: "push_branch"[\s\S]*?parameters: Type\.Object/)?.[0] ?? "";
   assert.ok(pushBranchDesc, "push_branch 工具定义必须存在");
-  assert.match(pushBranchDesc, /推送前 UT 纪律/,
-    "push_branch 的 description 必须自带推送前跑 UT 的纪律");
+  assert.doesNotMatch(pushBranchDesc, /UT|全量回归|测试/,
+    "push_branch 描述不得再教 UT——单源在 fix 简报,双写必漂移");
 });
 
 // ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签)
@@ -1198,4 +1190,22 @@ test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役
   // Card 基座显式 border-solid:legacy DOM 没有 .tw-root 归一,
   // border-width 不带 style 会落到初始值 none。
   assert.match(ui, /rounded-lg border border-solid/);
+});
+
+test("DTS 单号在两个列表里都是门户超链接", () => {
+  // URL 构造器单源:dtsTicket.ts 是前端唯一拼写处;示例即用户给的
+  // 真实门户地址形态,拼错一个字符就该红。
+  const dtsTicket = readFileSync(
+    resolve("web/src/issues/dtsTicket.ts"), "utf-8");
+  assert.match(dtsTicket, /dts-szv\.clouddragon\.huawei\.com/);
+  assert.match(dtsTicket, /\/DTSPortal\/ticket\/\$\{encodeURIComponent\(ticket\)\}/);
+  // DTS 列表:单号格是真锚点(新开页签),不再是纯文字 span。
+  assert.match(registration,
+    /href=\{dtsTicketUrl\(ticket\.ticket\)\}\s*target="_blank" rel="noreferrer"/);
+  assert.match(registration, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
+  // 问题会话列表卡:单号在 task-summary 按钮内,必须 stopPropagation
+  // 拦冒泡——点单号开 DTS,不能顺带打开工作台。
+  assert.match(issueBoard,
+    /href=\{dtsTicketUrl\(issue\.ticket\)\}[\s\S]{0,120}onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(issueBoard, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
 });

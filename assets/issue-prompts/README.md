@@ -12,6 +12,8 @@
 | `notices.md` | 平台主动通知:催办、闸门裁决后的交接词、流水线结果、环境通知 | `nudge.body`、`pipeline.green.remind` |
 | `receipts.md` | 工具回执与门禁拒绝的返回人话 | `push.no_ticket`、`mrgate.awaiting` |
 | `briefs.md` | 阶段简报的自由引导语(进入阶段时随简报注入) | `stage.analyze`、`stage.fix` |
+| `polish.md` | 登记描述一次性润色的**提示词**(系统指令/用户消息/识图提问,#184) | `polish.system`、`polish.user` |
+| `polish-template.md` | 润色的**参考模板**:标准提单成品范例,给 AI 照着看(与提示词分文件,#184) | `polish-template.example` |
 
 ## 放哪的判据(新写一段话,按顺序问)
 

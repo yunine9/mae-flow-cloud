@@ -26,6 +26,7 @@ import { confirmDialog } from "../ConfirmDialog";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
+import { dtsTicketUrl } from "./dtsTicket";
 import { IssueRegistration } from "./Registration";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { Card } from "../components/ui/card";
@@ -372,8 +373,16 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
       title="进入问题工作台">
       <span className="task-summary-body">
         <span className="task-overline">
+          {/* 单号直达 DTS 门户:React 走 DOM API 建树,a 嵌在 button 里
+              可用(HTML 解析禁令只管字符串建档);stopPropagation 拦住
+              冒泡,点单号不会顺带打开工作台。 */}
           {issue.ticket
-            ? <span className="task-ticket">{issue.ticket}</span>
+            ? <a className="task-ticket" href={dtsTicketUrl(issue.ticket)}
+                target="_blank" rel="noreferrer"
+                title={`在 DTS 门户打开 ${issue.ticket}`}
+                onClick={(event) => event.stopPropagation()}>
+              {issue.ticket}
+            </a>
             : <span className="task-ticket empty">未绑单</span>}
           <span className="task-id" title="会话编号">{issue.id}</span>
           <span className={`pill ${issue.status}`}>
