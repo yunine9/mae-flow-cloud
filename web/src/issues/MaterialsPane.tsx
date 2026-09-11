@@ -690,13 +690,14 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   async function load() {
     try {
       // 聚合 diff 一次拿全(合并视图用);逐仓切片由下面的 effect 按
-      // 选仓独立取,两份数据互不依赖。
-      const [materials, diff] = await Promise.all([
-        getIssueMaterials(detail.id),
-        getIssueFileDiff(detail.id),
-      ]);
+      // 选仓独立取,两份数据互不依赖。现场已回收(磁盘治理)时 diff
+      // 以 repo 为源必失败——只跳它,拉取日志等其余数据源照常加载。
+      const materials = await getIssueMaterials(detail.id);
       setData(materials);
-      setAllDiff(diff.diff);
+      if (!detail.repo_reclaimed_at) {
+        const diff = await getIssueFileDiff(detail.id);
+        setAllDiff(diff.diff);
+      }
       // 缺省展开第一层(顶层目录):只在首次清单到手时补,之后不动。
       if (!defaultExpandedDone.current) {
         defaultExpandedDone.current = true;

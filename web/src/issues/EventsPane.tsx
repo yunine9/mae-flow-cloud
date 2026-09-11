@@ -30,6 +30,7 @@ const ISSUE_EVENT_KIND_LABEL: Record<string, string> = {
   turn_finished: "本轮结束",
   session_ended: "会话结束",
   human_decision: "人工决策",
+  workspace_reclaimed: "现场回收",
   task_status_changed: "状态变化",
 };
 

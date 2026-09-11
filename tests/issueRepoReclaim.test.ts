@@ -4,7 +4,7 @@
  *
  * 钉的机械事实:
  * - 终态(canceled/archived)→ repo/ 整树消失,repo_reclaimed_at 落
- *   state,事件账有 repo_reclaimed(bytes/scope),其余文件原样;
+ *   state,事件账有 workspace_reclaimed(bytes/scope),其余文件原样;
  * - failed 不在回收范围(可恢复态,用户拍板);
  * - idle 单构建产物:mtime 冷却过期才删(源码保留),没冷却的不动,
  *   build_products_reclaimed_at + 事件(scope=products)落账;
@@ -88,7 +88,7 @@ test("终态回收:canceled/archived 的 repo 整树消失,标记与事件账落
 
   const events = readFileSync(join(canceled, "events.jsonl"), "utf-8")
     .split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  const reclaim = events.find((event) => event.kind === "repo_reclaimed");
+  const reclaim = events.find((event) => event.kind === "workspace_reclaimed");
   assert.ok(reclaim, "回收事件入账");
   assert.equal(reclaim.payload.scope, "repo");
   assert.ok(reclaim.payload.bytes > 0);
@@ -103,7 +103,7 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
     { oldProducts: true });
 
   const result = await service.sweepTerminalRepos();
-  assert.ok(result.bytes > 0, "有产物被回收");
+  assert.ok(result.productBytes > 0, "有产物被回收");
 
   assert.ok(!existsSync(join(stale, "repo", "demo", "target")),
     "冷却过期的 target 已删");
@@ -119,21 +119,22 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
   assert.ok(state.build_products_reclaimed_at, "标记落 state");
   const events = readFileSync(join(stale, "events.jsonl"), "utf-8")
     .split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  const reclaim = events.find((event) => event.kind === "repo_reclaimed");
+  const reclaim = events.find((event) => event.kind === "workspace_reclaimed");
   assert.equal(reclaim.payload.scope, "products", "事件 scope=products");
 });
 
-test("旋钮关:issue_repo_reclaim=0 时一切不动(行为与现状全等)", async () => {
+test("旋钮解耦:issue_repo_reclaim=0 只关整仓回收,产物清理按自己的旋钮走", async () => {
   const { service, issuesRoot } = makeService({ issue_repo_reclaim: 0 });
-  const canceled = fabricateIssue(issuesRoot, "issue-1", "canceled",
-    { oldProducts: true });
-  const idle = fabricateIssue(issuesRoot, "issue-2", "idle",
+  const canceled = fabricateIssue(issuesRoot, "issue-1", "canceled");
+  const idleStale = fabricateIssue(issuesRoot, "issue-2", "idle",
     { oldProducts: true });
 
   const result = await service.sweepTerminalRepos();
-  assert.deepEqual(result, { reclaimed: 0, bytes: 0 });
+  assert.equal(result.reclaimed, 0, "整仓回收被旋钮关掉");
   assert.ok(existsSync(join(canceled, "repo")), "终态现场保留");
-  assert.ok(existsSync(join(idle, "repo", "demo", "target")), "产物保留");
+  assert.ok(!existsSync(join(idleStale, "repo", "demo", "target")),
+    "产物清理独立生效(自己的冷却旋钮,不被整仓旋钮连带)");
+  assert.equal(result.productBytes > 0, true, "产物回收字节照记");
 });
 
 test("状态守卫:running 与 waiting_user 的单子即使产物冷却也不清理", async () => {
@@ -157,6 +158,6 @@ test("幂等:已回收(repo/ 不在场)的单子重扫不炸、不重复记账",
   const events = readFileSync(
     join(issuesRoot, "issue-1", "events.jsonl"), "utf-8")
     .split("\n").filter(Boolean)
-    .filter((line) => JSON.parse(line).kind === "repo_reclaimed");
+    .filter((line) => JSON.parse(line).kind === "workspace_reclaimed");
   assert.equal(events.length, 1, "事件只记一次");
 });

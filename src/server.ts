@@ -134,6 +134,10 @@ import {
   RequirementBundleError,
 } from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
+import {
+  ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
+  ISSUE_REPO_RECLAIM_DEFAULT,
+} from "./issueFlow/service.ts";
 import { EnvironmentRegistry } from "./environmentRegistry.ts";
 import { handleEnvironmentRoutes } from "./environmentRegistryRoutes.ts";
 import {
@@ -773,8 +777,10 @@ export function createTaskServer(
                   options.issueFlow?.options.compactEveryEvents ?? 0,
                 // 终态现场回收缺省开(磁盘治理票 01),管理页旋钮
                 // issue_repo_reclaim 可关;构建产物冷却期缺省 48h(票 03)。
-                issue_repo_reclaim: 1,
-                issue_build_products_cooldown_hours: 48,
+                // 缺省值从 service 导入,两处不许漂移。
+                issue_repo_reclaim: ISSUE_REPO_RECLAIM_DEFAULT,
+                issue_build_products_cooldown_hours:
+                  ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,

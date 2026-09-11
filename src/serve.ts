@@ -1137,9 +1137,10 @@ async function main(): Promise<void> {
   // issueFlow.sweepTerminalRepos()。
   const issueDiskSweep = () => {
     void issueFlow.sweepTerminalRepos().then((result) => {
-      if (result.reclaimed > 0) {
-        console.log(`  [issue-disk] 清扫回收 ${result.reclaimed} 个终态现场`
-          + ` + 构建产物,共 ${(result.bytes / 1024 ** 3).toFixed(2)} GB`);
+      if (result.reclaimed > 0 || result.productBytes > 0) {
+        console.log(`  [issue-disk] 清扫回收终态现场 ${result.reclaimed} 个`
+          + `(${(result.bytes / 1024 ** 3).toFixed(2)} GB),构建产物 `
+          + `${(result.productBytes / 1024 ** 2).toFixed(0)} MB`);
       }
     }).catch((error) => {
       console.error(`  [issue-disk] 清扫失败: ${String(error)}`);
