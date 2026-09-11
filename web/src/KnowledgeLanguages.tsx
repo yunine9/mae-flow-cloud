@@ -1,3 +1,7 @@
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+
 export const KNOWLEDGE_LANGUAGE_OPTIONS = [
   { id: "agnostic", label: "通用 / 语言无关" },
   { id: "java", label: "Java" },
@@ -73,13 +77,24 @@ export function KnowledgeLanguageFilter({ value, onChange, counts }: {
 }) {
   return <label className="knowledge-language-filter">
     <span>工程语境</span>
-    <select value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="all">全部语言</option>
-      <option value="untagged">未标注</option>
-      {KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => <option
-        value={option.id} key={option.id}>{option.label}{
-          counts?.has(option.id) ? `（${counts.get(option.id)}）` : ""}</option>)}
-    </select>
+    <Select value={value}
+      items={[{ value: "all", label: "全部语言" }, { value: "untagged", label: "未标注" },
+        ...KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => ({
+          value: option.id,
+          label: `${option.label}${counts?.has(option.id) ? `（${counts.get(option.id)}）` : ""}`,
+        }))]}
+      onValueChange={(next) => onChange(next ?? "all")}>
+      <SelectTrigger aria-label="工程语境"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          <SelectItem value="all">全部语言</SelectItem>
+          <SelectItem value="untagged">未标注</SelectItem>
+          {KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => <SelectItem
+            value={option.id} key={option.id}>{option.label}{
+              counts?.has(option.id) ? `（${counts.get(option.id)}）` : ""}</SelectItem>)}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   </label>;
 }
 

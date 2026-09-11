@@ -11,6 +11,9 @@ import {
   getMemoryInsights, readMemoryInsight,
   type MemoryInsightRow, type MemoryInsights,
 } from "./api";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 const SOURCE = {
   agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
@@ -111,19 +114,45 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
       <div className={totals.reworks ? "is-warn" : ""}><strong>{totals.reworks}</strong><span>推后返工</span></div>
     </div>
     <div className="memory-board-filters">
-      <select value={repo} onChange={(event) => setRepo(event.target.value)} aria-label="按仓库筛选">
-        <option value="">全部仓库</option>
-        {(insights?.repos ?? []).map((item) => <option key={item.repo} value={item.repo}>
-          {item.repo}（{item.active} 在用）</option>)}
-      </select>
-      <select value={scope} onChange={(event) => setScope(event.target.value)} aria-label="按范围筛选">
-        <option value="">全部范围</option>
-        {Object.entries(SCOPE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select>
-      <select value={source} onChange={(event) => setSource(event.target.value)} aria-label="按来源筛选">
-        <option value="">全部来源</option>
-        {Object.entries(SOURCE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select>
+      <Select value={repo}
+        items={[{ value: "", label: "全部仓库" },
+          ...(insights?.repos ?? []).map((item) => ({
+            value: item.repo, label: `${item.repo}（${item.active} 在用）`,
+          }))]}
+        onValueChange={(value) => setRepo(value ?? "")}>
+        <SelectTrigger aria-label="按仓库筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部仓库</SelectItem>
+            {(insights?.repos ?? []).map((item) => <SelectItem key={item.repo} value={item.repo}>
+              {item.repo}（{item.active} 在用）</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select value={scope}
+        items={[{ value: "", label: "全部范围" },
+          ...Object.entries(SCOPE).map(([key, label]) => ({ value: key, label }))]}
+        onValueChange={(value) => setScope(value ?? "")}>
+        <SelectTrigger aria-label="按范围筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部范围</SelectItem>
+            {Object.entries(SCOPE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select value={source}
+        items={[{ value: "", label: "全部来源" },
+          ...Object.entries(SOURCE).map(([key, label]) => ({ value: key, label }))]}
+        onValueChange={(value) => setSource(value ?? "")}>
+        <SelectTrigger aria-label="按来源筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部来源</SelectItem>
+            {Object.entries(SOURCE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       <input value={needle} onChange={(event) => setNeedle(event.target.value)}
         placeholder="按触发条件、结论或路径找" aria-label="搜索记忆" />
       <label><input type="checkbox" checked={withGone}

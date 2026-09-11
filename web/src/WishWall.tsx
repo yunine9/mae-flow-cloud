@@ -16,6 +16,9 @@ import { Spinner } from "@/components/Spinner";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { Button } from "@/components/ui/button";
 import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -378,8 +381,17 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
                 : `问题 ${scopedItems.filter((item) => item.kind === "issue").length}`}
             </button>)}
           </div>
-          <select value={sort} onChange={(event) => setSort(event.target.value as Sort)}
-            aria-label="排序方式"><option value="recent">最新发布</option><option value="popular">最多点亮</option></select>
+          <Select value={sort}
+            items={[{ value: "recent", label: "最新发布" }, { value: "popular", label: "最多点亮" }]}
+            onValueChange={(value) => setSort((value ?? "recent") as Sort)}>
+            <SelectTrigger aria-label="排序方式"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="recent">最新发布</SelectItem>
+                <SelectItem value="popular">最多点亮</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       {notice && <p className="wish-notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="关闭提示">×</button></p>}

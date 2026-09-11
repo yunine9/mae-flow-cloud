@@ -32,6 +32,9 @@ import { IssueRegistration } from "./Registration";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { Card } from "../components/ui/card";
 import { cn } from "cn";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 /** 列表状态筛选:默认"进行中"(只藏已归档/已取消两个收口终态——failed
  * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。
@@ -244,20 +247,31 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         <span className="current-work-counts">
           <label className="issue-list-filter">
             <span>状态</span>
-            <select value={statusFilter} aria-label="按状态筛选问题会话"
-              onChange={(event) =>
-                changeStatusFilter(event.target.value as IssueListFilter)}>
-              <option value="active">
-                进行中({issues.length - (statusCounts.get("archived") ?? 0)
-                  - (statusCounts.get("canceled") ?? 0)})
-              </option>
-              {ISSUE_FILTER_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
-                </option>
-              ))}
-              <option value="all">全部({issues.length})</option>
-            </select>
+            <Select value={statusFilter}
+              items={[{ value: "active", label: `进行中(${issues.length - (statusCounts.get("archived") ?? 0)
+                - (statusCounts.get("canceled") ?? 0)})` },
+                ...ISSUE_FILTER_STATUSES.map((status) => ({
+                  value: status, label: `${ISSUE_STATUS_TEXT[status]}(${filterOptionCount(status)})`,
+                })),
+                { value: "all", label: `全部(${issues.length})` }]}
+              onValueChange={(value) =>
+                changeStatusFilter((value ?? "active") as IssueListFilter)}>
+              <SelectTrigger aria-label="按状态筛选问题会话"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="active">
+                    进行中({issues.length - (statusCounts.get("archived") ?? 0)
+                      - (statusCounts.get("canceled") ?? 0)})
+                  </SelectItem>
+                  {ISSUE_FILTER_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="all">全部({issues.length})</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </label>
           {waitingCount > 0 && <span className="section-count attention">
             {waitingCount} 项待答复</span>}

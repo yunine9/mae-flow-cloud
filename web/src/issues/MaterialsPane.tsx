@@ -51,6 +51,9 @@ import { GitDiff } from "../GitDiff";
 import { confirmDialog } from "../ConfirmDialog";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 /** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
  * 只用它认页签)。 */
@@ -868,15 +871,24 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         {canOperate && <div className="issue-materials-editor">
           <div className="issue-materials-editor-bar">
             <strong>快速修改</strong>
-            <select value={activeFile ?? ""}
-              onChange={(event) => {
-                const path = event.target.value;
+            <Select value={activeFile ?? ""}
+              items={[{ value: "", label: "选择要修改的文件…" },
+                ...changes.map((change) => ({ value: change.path, label: change.path }))]}
+              onValueChange={(value) => {
+                const path = value ?? "";
                 if (path) void editFile(path);
               }}>
-              <option value="">选择要修改的文件…</option>
-              {changes.map((change) => <option key={change.path}
-                value={change.path}>{change.path}</option>)}
-            </select>
+              <SelectTrigger className="min-w-44 max-w-72" aria-label="选择要修改的文件">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="">选择要修改的文件…</SelectItem>
+                  {changes.map((change) => <SelectItem key={change.path}
+                    value={change.path}>{change.path}</SelectItem>)}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             <button type="button" className="primary" disabled={saving
               || !activeFile || content === undefined} onClick={save}>
               {saving ? "保存中…" : "保存修改"}

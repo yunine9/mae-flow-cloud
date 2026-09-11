@@ -10,6 +10,9 @@ import {
   SidebarMenuButton, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
   SidebarMenuItem, SidebarProvider,
 } from "@/components/ui/sidebar";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import {
@@ -1801,7 +1804,17 @@ function UsersBoard({ me }: { me: string }) {
         <label><span>登录账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
         <label><span>姓名</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
         <label><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
-        <label><span>账号角色</span><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="developer">开发成员</option><option value="admin">管理员</option></select></label>
+        <label><span>账号角色</span><Select value={role}
+          items={[{ value: "developer", label: "开发成员" }, { value: "admin", label: "管理员" }]}
+          onValueChange={(value) => setRole((value ?? "developer") as UserRole)}>
+          <SelectTrigger className="w-full" aria-label="账号角色"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="developer">开发成员</SelectItem>
+              <SelectItem value="admin">管理员</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
         <button type="submit" disabled={busy}>{busy ? "正在创建…" : "创建账号"}</button>
         {message && <div className="form-message success">{message}</div>}
         {error && <div className="form-message error">{error}</div>}
@@ -1972,8 +1985,33 @@ function TeamDashboard({
       <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
-        <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
-        <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{userLabel(user)}</option>)}</select>
+        <Select value={scope}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞任务" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等待决策" }]}
+          onValueChange={(value) => setScope((value ?? "all") as TeamScope)}>
+          <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">全部现场</SelectItem>
+              <SelectItem value="action">需要处理</SelectItem>
+              <SelectItem value="stale">停滞任务</SelectItem>
+              <SelectItem value="wip">正在推进</SelectItem>
+              <SelectItem value="waiting">等待决策</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select value={responsible}
+          items={[{ value: "", label: "全部责任人" }, { value: "__unassigned", label: "未指定" },
+            ...users.map((user) => ({ value: user.username, label: userLabel(user) }))]}
+          onValueChange={(value) => setResponsible(value ?? "")}>
+          <SelectTrigger className="min-w-28" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="">全部责任人</SelectItem>
+              <SelectItem value="__unassigned">未指定</SelectItem>
+              {users.map((user) => <SelectItem value={user.username} key={user.username}>{userLabel(user)}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}

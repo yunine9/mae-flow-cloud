@@ -20,7 +20,7 @@ import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -349,16 +349,28 @@ function ManualRegister({
         <label className="issue-field wide">
           <span>业务模块 <i className="req">*</i></span>
           <span className="issue-module-wrap">
-            <select value={moduleId}
+            <Select value={moduleId}
               disabled={modules === undefined || !!moduleLoadError}
-              onChange={(event) => setModuleId(event.target.value)}>
-              <option value="" disabled>选择业务模块——决定关联代码仓</option>
-              {moduleCatalog.map((module) => (
-                <option key={module.id} value={module.id}>
-                  {module.name}(绑 {module.repositories.length} 个仓)
-                </option>
-              ))}
-            </select>
+              items={[{ value: "", label: "选择业务模块——决定关联代码仓" },
+                ...moduleCatalog.map((module) => ({
+                  value: module.id,
+                  label: `${module.name}(绑 ${module.repositories.length} 个仓)`,
+                }))]}
+              onValueChange={(value) => setModuleId(value ?? "")}>
+              <SelectTrigger className="w-full" aria-label="业务模块">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="tw-root">
+                <SelectGroup>
+                  <SelectItem value="" disabled>选择业务模块——决定关联代码仓</SelectItem>
+                  {moduleCatalog.map((module) => (
+                    <SelectItem key={module.id} value={module.id}>
+                      {module.name}(绑 {module.repositories.length} 个仓)
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             {selectedModule && <>
               <small className="issue-module-hint">
                 已带出 {selectedModule.repositories.length} 个代码仓,悬停查看

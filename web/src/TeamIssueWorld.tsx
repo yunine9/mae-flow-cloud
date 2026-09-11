@@ -24,6 +24,9 @@ import {
 } from "./api";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { STALE_AFTER_MS, issueDeliveryBreakdown } from "./teamOps";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 /** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
 type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
@@ -175,19 +178,32 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
       </div>
       <div className="task-filters" aria-label="筛选问题现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" /></label>
-        <select aria-label="现场范围" value={scope}
-          onChange={(event) => setScope(event.target.value as IssueScope)}>
-          <option value="all">全部现场</option>
-          <option value="action">需要处理</option>
-          <option value="stale">停滞中</option>
-          <option value="wip">正在推进</option>
-          <option value="waiting">等你答复</option>
-        </select>
-        <select aria-label="责任人" value={owner}
-          onChange={(event) => setOwner(event.target.value)}>
-          <option value="">全部责任人</option>
-          {owners.map((name) => <option key={name} value={name}>{name}</option>)}
-        </select>
+        <Select value={scope}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
+          onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
+          <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">全部现场</SelectItem>
+              <SelectItem value="action">需要处理</SelectItem>
+              <SelectItem value="stale">停滞中</SelectItem>
+              <SelectItem value="wip">正在推进</SelectItem>
+              <SelectItem value="waiting">等你答复</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select value={owner}
+          items={[{ value: "", label: "全部责任人" },
+            ...owners.map((name) => ({ value: name, label: name }))]}
+          onValueChange={(value) => setOwner(value ?? "")}>
+          <SelectTrigger className="min-w-28" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="">全部责任人</SelectItem>
+              {owners.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {anyFilter && <button type="button" className="filter-reset"
           onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}

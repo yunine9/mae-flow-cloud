@@ -26,6 +26,9 @@ import {
   type VisionProbeResult,
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 type Message = { kind: "success" | "error"; text: string } | null;
 
@@ -481,11 +484,17 @@ function ModelsCard({ view, onSaved }: {
       </label>
       <label className="ui-field">
         <span>接口格式</span>
-        <select value={apiFormat}
-          onChange={(event) => setApiFormat(event.target.value)}>
-          <option value="openai-completions">OpenAI Chat</option>
-          <option value="anthropic-messages">Anthropic</option>
-        </select>
+        <Select value={apiFormat}
+          items={[{ value: "openai-completions", label: "OpenAI Chat" }, { value: "anthropic-messages", label: "Anthropic" }]}
+          onValueChange={(value) => setApiFormat(value ?? "openai-completions")}>
+          <SelectTrigger className="w-full" aria-label="接口格式"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="openai-completions">OpenAI Chat</SelectItem>
+              <SelectItem value="anthropic-messages">Anthropic</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         <small className="knob-note">按网关实际提供的接口协议选择</small>
       </label>
       <div className="settings-form-actions">
@@ -580,11 +589,18 @@ function VisionModelsCard({ view, onSaved }: {
       </label>
       <label className="ui-field">
         <span>接口协议</span>
-        <select value={api} onChange={(event) => setApi(event.target.value)}>
-          <option value="openai-completions">OpenAI Chat Completions</option>
-          <option value="openai-responses">OpenAI Responses</option>
-          <option value="anthropic-messages">Anthropic Messages</option>
-        </select>
+        <Select value={api}
+          items={[{ value: "openai-completions", label: "OpenAI Chat Completions" }, { value: "openai-responses", label: "OpenAI Responses" }, { value: "anthropic-messages", label: "Anthropic Messages" }]}
+          onValueChange={(value) => setApi(value ?? "openai-completions")}>
+          <SelectTrigger className="w-full" aria-label="接口协议"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="openai-completions">OpenAI Chat Completions</SelectItem>
+              <SelectItem value="openai-responses">OpenAI Responses</SelectItem>
+              <SelectItem value="anthropic-messages">Anthropic Messages</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
       </label>
       <label className="ui-field">
         <span>模型名称</span>

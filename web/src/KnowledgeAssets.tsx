@@ -64,6 +64,9 @@ import {
   knowledgeAssetElementId,
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
   { kind: "engineering" }>;
@@ -647,24 +650,39 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
       </div>
       <div className="ka-filters">
         <label><span className="ka-field-label">性质</span>
-          <select value={natureFilter} onChange={(event) => {
-            setNatureFilter(event.target.value as "all" | KnowledgeNature);
-            setDetailFilter("all");
-          }}>
-            <option value="all">全部性质</option>
-            <option value="business">业务知识</option>
-            <option value="engineering">工程知识</option>
-            <option value="unclassified">待补属性（历史）</option>
-          </select></label>
+          <Select value={natureFilter}
+            items={[{ value: "all", label: "全部性质" }, { value: "business", label: "业务知识" }, { value: "engineering", label: "工程知识" }, { value: "unclassified", label: "待补属性（历史）" }]}
+            onValueChange={(value) => {
+              setNatureFilter((value ?? "all") as "all" | KnowledgeNature);
+              setDetailFilter("all");
+            }}>
+            <SelectTrigger aria-label="性质"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部性质</SelectItem>
+                <SelectItem value="business">业务知识</SelectItem>
+                <SelectItem value="engineering">工程知识</SelectItem>
+                <SelectItem value="unclassified">待补属性（历史）</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>
         {natureFilter === "business" && <label>
           <span className="ka-field-label">业务模块</span>
-          <select value={detailFilter}
-            onChange={(event) => setDetailFilter(event.target.value)}>
-            <option value="all">全部业务模块</option>
-            {businessModules.filter((module) => module.status === "active")
-              .map((module) => <option value={module.id} key={module.id}>
-                {module.name}</option>)}
-          </select></label>}
+          <Select value={detailFilter}
+            items={[{ value: "all", label: "全部业务模块" },
+              ...businessModules.filter((module) => module.status === "active")
+                .map((module) => ({ value: module.id, label: module.name }))]}
+            onValueChange={(value) => setDetailFilter(value ?? "all")}>
+            <SelectTrigger aria-label="业务模块"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部业务模块</SelectItem>
+                {businessModules.filter((module) => module.status === "active")
+                  .map((module) => <SelectItem value={module.id} key={module.id}>
+                    {module.name}</SelectItem>)}
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>}
         {natureFilter === "engineering" && <KnowledgeLanguageFilter
           value={detailFilter} onChange={setDetailFilter}
           counts={languageCounts} />}

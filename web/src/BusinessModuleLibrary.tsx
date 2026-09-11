@@ -18,6 +18,9 @@ import {
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
 import { confirmDialog } from "./ConfirmDialog";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 type BusinessAssetFocus = Extract<KnowledgeAssetFocus, { kind: "business" }>;
 
@@ -65,11 +68,17 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
       <label><span>模块名称</span><input value={name}
         onChange={(event) => setName(event.target.value)} required /></label>
       <label><span>责任人</span>
-        {admin ? <select value={owner}
-          onChange={(event) => setOwner(event.target.value)} required>
-          {users.map((user) => <option key={user.username}
-            value={user.username}>{user.username}</option>)}
-        </select> : <input value={owner} disabled title="只有管理员可以转移责任人" />}
+        {admin ? <Select value={owner} name="module-owner" required
+          items={users.map((user) => ({ value: user.username, label: user.username }))}
+          onValueChange={(value) => setOwner(value ?? "")}>
+          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {users.map((user) => <SelectItem key={user.username}
+                value={user.username}>{user.username}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select> : <input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
     <label><span>业务语义说明</span><textarea rows={2} value={description}
@@ -80,11 +89,17 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
     <label><span>关联仓库</span><textarea rows={3} value={repositories}
       onChange={(event) => setRepositories(event.target.value)}
       placeholder="每行一个仓库地址，用于下单时推荐，不会自动勾选" /></label>
-    {admin && <label><span>模块状态</span><select value={status}
-      onChange={(event) => setStatus(event.target.value as "active" | "archived")}>
-      <option value="active">启用（可供新任务选择）</option>
-      <option value="archived">归档（历史任务保留）</option>
-    </select></label>}
+    {admin && <label><span>模块状态</span><Select value={status}
+      items={[{ value: "active", label: "启用（可供新任务选择）" }, { value: "archived", label: "归档（历史任务保留）" }]}
+      onValueChange={(value) => setStatus((value ?? "active") as "active" | "archived")}>
+      <SelectTrigger className="w-full" aria-label="模块状态"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          <SelectItem value="active">启用（可供新任务选择）</SelectItem>
+          <SelectItem value="archived">归档（历史任务保留）</SelectItem>
+        </SelectGroup>
+      </SelectContent>
+    </Select></label>}
     {error && <p className="business-module-error" role="alert">{error}</p>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
@@ -133,13 +148,19 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
     <label><span>什么时候应该读</span><textarea rows={2} value={whenToUse}
       onChange={(event) => setWhenToUse(event.target.value)} required /></label>
     <div className="business-module-form-grid">
-      <label><span>知识形态</span><select value={form}
-        onChange={(event) => setForm(event.target.value as typeof form)}>
-        <option value="document">文档</option>
-        <option value="skill">Skill</option>
-        <option value="rule">规则</option>
-        <option value="example">示例</option>
-      </select></label>
+      <label><span>知识形态</span><Select value={form}
+        items={[{ value: "document", label: "文档" }, { value: "skill", label: "Skill" }, { value: "rule", label: "规则" }, { value: "example", label: "示例" }]}
+        onValueChange={(value) => setForm((value ?? form) as typeof form)}>
+        <SelectTrigger className="w-full" aria-label="知识形态"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="document">文档</SelectItem>
+            <SelectItem value="skill">Skill</SelectItem>
+            <SelectItem value="rule">规则</SelectItem>
+            <SelectItem value="example">示例</SelectItem>
+          </SelectGroup>
+        </SelectContent>
+      </Select></label>
       <div className="business-asset-language-field">
         <span>适用代码仓（可选）</span>
         <small>不选表示适用于该模块关联的全部仓库。</small>
@@ -315,12 +336,19 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
         <label><span>模块 ID</span><input value={create.id}
           onChange={(event) => setCreate({ ...create, id: event.target.value })}
           placeholder="例如 payment-core" required /></label>
-        <label><span>责任人</span><select value={create.owner}
-          onChange={(event) => setCreate({ ...create, owner: event.target.value })} required>
-          <option value="" disabled>选择现有账号</option>
-          {users.map((user) => <option key={user.username}
-            value={user.username}>{user.username}</option>)}
-        </select></label>
+        <label><span>责任人</span><Select value={create.owner} name="module-create-owner" required
+          items={[{ value: "", label: "选择现有账号" },
+            ...users.map((user) => ({ value: user.username, label: user.username }))]}
+          onValueChange={(value) => setCreate({ ...create, owner: value ?? "" })}>
+          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="" disabled>选择现有账号</SelectItem>
+              {users.map((user) => <SelectItem key={user.username}
+                value={user.username}>{user.username}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
       </div>
       <label><span>模块名称</span><input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}

@@ -17,6 +17,9 @@ import {
 import { StagePlan } from "./StagePlan";
 import { StageRail } from "./StageRail";
 import { DependencyView, FinalPlanView, WorkflowDiffView } from "./WorkflowViews";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 type EditorView = "edit" | "final" | "changes" | "dependencies";
 
@@ -205,20 +208,35 @@ function EditInspector({
       </div>
       <fieldset disabled={!editable} className="wf-configure-panel">
         <legend>配置使用方式</legend>
-        <label><span>使用时机</span><select value={mode}
-          onChange={(event) => setMode(event.target.value as typeof mode)}>
-          <option value="available">全程可用，由 Agent 判断</option>
-          <option value="when_needed">本阶段需要时使用</option>
-          <option value="on_stage_enter">进入本阶段时立即使用</option>
-          <option value="before_item">在指定执行项之前使用</option>
-        </select></label>
+        <label><span>使用时机</span><Select value={mode}
+          items={[{ value: "available", label: "全程可用，由 Agent 判断" }, { value: "when_needed", label: "本阶段需要时使用" }, { value: "on_stage_enter", label: "进入本阶段时立即使用" }, { value: "before_item", label: "在指定执行项之前使用" }]}
+          onValueChange={(value) => setMode((value ?? mode) as typeof mode)}>
+          <SelectTrigger className="w-full" aria-label="使用时机"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="available">全程可用，由 Agent 判断</SelectItem>
+              <SelectItem value="when_needed">本阶段需要时使用</SelectItem>
+              <SelectItem value="on_stage_enter">进入本阶段时立即使用</SelectItem>
+              <SelectItem value="before_item">在指定执行项之前使用</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
         {mode === "before_item" && <label><span>目标执行项</span>
-          <select value={anchor} onChange={(event) => setAnchor(event.target.value)}>
-            <option value="">请选择</option>
-            {stageItems.filter((candidate) => candidate.id !== item.id)
-              .map((candidate) => <option key={candidate.id}
-                value={candidate.id}>{candidate.title}</option>)}
-          </select></label>}
+          <Select value={anchor}
+            items={[{ value: "", label: "请选择" },
+              ...stageItems.filter((candidate) => candidate.id !== item.id)
+                .map((candidate) => ({ value: candidate.id, label: candidate.title }))]}
+            onValueChange={(value) => setAnchor(value ?? "")}>
+            <SelectTrigger className="w-full" aria-label="目标执行项"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="">请选择</SelectItem>
+                {stageItems.filter((candidate) => candidate.id !== item.id)
+                  .map((candidate) => <SelectItem key={candidate.id}
+                    value={candidate.id}>{candidate.title}</SelectItem>)}
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>}
         <label><span>明确指令（可选）</span><textarea rows={4} value={instructions}
           placeholder="写清楚 Agent 在此处要做什么、产出什么；不要写模糊的能力偏好。"
           onChange={(event) => setInstructions(event.target.value)} /></label>
