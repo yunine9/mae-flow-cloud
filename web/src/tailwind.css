@@ -8,10 +8,9 @@
    消费,禁止 bg-[#fff] 式硬编码绕过令牌。 */
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
-/* tw-animate-css:shadcn 弹层的进出场工具类(animate-in、fade-in-0、
-   zoom-in-95 这一类),全文件是 @property/@theme/@utility 指令,由 Tailwind
-   归入 utilities 层。 */
-@import "tw-animate-css";
+/* tw-animate-css 已随 radix→Base UI 迁移退役(2026-09-11):弹层进出场
+   统一改由 data-starting-style/data-ending-style 过渡表达,不再有
+   animate-in/fade-in-0 家族的消费者。 */
 
 /* 本站暗色是 html[data-theme="dark"] 属性,不是媒体查询——把 dark: 变体
    指到属性上,组件皮随全站主题切换(tokens.css 的暗色令牌同源)。 */
