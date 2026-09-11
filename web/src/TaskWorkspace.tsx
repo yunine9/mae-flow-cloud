@@ -2287,7 +2287,7 @@ export function TaskWorkspace({
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
-              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate && !task.parent_task_id} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>

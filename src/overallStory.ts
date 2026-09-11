@@ -171,13 +171,13 @@ export class OverallStoryCoordinator<T extends Owner> {
   /** 图源更新共用文档会话互斥，但不修改正文、确认状态或检视回执。 */
   generateArchitecture(id: string, by: string): StoryStatus {
     const task = this.owner(id);
-    if (task.summary.parent_task_id) throw new TaskControlError("请在主任务中更新架构图");
     if (this.stopped || task.summary.status === "canceled") throw new TaskControlError("任务已停止，不能更新架构图");
     this.recover(task);
     if (this.active.has(id)) throw new TaskControlError("Story 或架构图正在更新，请稍后重试");
     const load = () => readArchitectureStory(task.summary, this.options.artifactRoot(id));
     const document = load(), state = readStoryState(task.summary.workspace);
-    if (!document?.content.trim()) throw new TaskControlError("尚未找到可读取的 Story，请先完成主任务分析");
+    if (!document?.content.trim()) throw new TaskControlError(task.summary.parent_task_id
+      ? "尚未找到可读取的模块 Story，请先完成当前模块设计" : "尚未找到可读取的 Story，请先完成主任务分析");
     if (document.truncated) throw new TaskControlError("Story 超过读取上限，无法完整生成架构图");
     const before = document.content;
     this.options.ready();

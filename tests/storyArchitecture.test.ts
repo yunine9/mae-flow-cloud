@@ -10,6 +10,7 @@ import { ARCHIFY_ROOT, renderArchify } from "../src/archifyRender.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
+import { storyPath } from "../src/overallStoryStore.ts";
 import { materializeArchifyReferences } from "../src/archifyReferences.ts";
 
 const source = { schema_version: 1, diagram_type: "architecture", meta: { title: "订单同步模块", locale: "zh-CN" },
@@ -134,6 +135,13 @@ test("架构 API 复用真实分析 Story、鉴权与版本检查，不接收任
     const childResponse = await fetch(`${childUrl}/archify-transaction?revision=${childList.revision}`, { headers });
     assert.equal(childResponse.status, 200);
     assert.match((await childResponse.json() as { html: string }).html, /模块事务时序/);
+    const published = storyPath(child.workspace, "architecture.json");
+    mkdirSync(join(published, ".."), { recursive: true });
+    writeFileSync(published, artifact(childStory, [{ id: "updated", view: "process", source: {
+      ...source, meta: { ...source.meta, title: "刷新后的模块图" },
+    } }]));
+    const refreshed = await fetch(childUrl, { headers }).then(r => r.json()) as { diagrams: Array<{ title: string }> };
+    assert.equal(refreshed.diagrams[0].title, "刷新后的模块图", "子任务优先展示刷新发布的图，而非仓内旧图");
     writeFileSync(path, "# Story\n职责改变");
     assert.equal((await fetch(`${url}/archify-sync?revision=${list.revision}`, { headers })).status, 409);
     assert.equal((await fetch(`${url}/archify-sync`, { headers })).status, 409);
