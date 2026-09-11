@@ -1,9 +1,7 @@
 /* Tailwind v4 入口(#148 铺轨)——新 UI 的工具类轨道,存量零伤。
-   层序契约:legacy(存量,声明在 tokens.css)< fixes < theme < utilities。
-   顺序靠本文件在 main.tsx 中排于所有存量 css 之后引入 + 下面两行 @import 的
-   layer() 注记按出现次序注册来保序,utilities 恒压过 legacy;不写裸 @layer
-   语句,守住 cssOverrideRatchet 对层声明的既有钉。刻意不引 preflight(全局
-   reset 会动存量像素),新页面根挂 .tw-root 做 Scoped 归一(文件尾)。
+   层序由 tokens.css 统一声明:base < legacy < fixes < theme < utilities。
+   全局 preflight 进入最底层 base，兼容补丁随后同层加载；存量规则仍在
+   legacy，工具类在 utilities。新页面的 .tw-root 局部归一见文件尾。
    令牌纪律(#146):颜色/字号/圆角只从 tokens.css 经 @theme 映射出的工具类
    消费,禁止 bg-[#fff] 式硬编码绕过令牌。 */
 @import "tailwindcss/preflight.css" layer(base);
