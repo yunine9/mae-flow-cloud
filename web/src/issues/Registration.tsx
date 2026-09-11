@@ -876,9 +876,9 @@ function DtsRegister({
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
                       checked={displayedTickets.length > 0
-                        && allDisplayedSelected
-                        ? true
-                        : displayedSelectedCount > 0 ? "indeterminate" : false}
+                        && allDisplayedSelected}
+                      indeterminate={!allDisplayedSelected
+                        && displayedSelectedCount > 0}
                       onCheckedChange={() => toggleSelectAll()} />
                     <span className="whitespace-nowrap text-xs font-normal
                       text-muted-foreground">
