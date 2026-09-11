@@ -52,17 +52,10 @@
 .journey-empty { color: var(--muted); font-size: 13px; padding: 20px 0; line-height: 1.7; }
 .journey-empty strong { font-weight: 500; color: var(--text); }
 .journey-warning { border-left: 2px solid var(--danger); padding: 8px 12px; font-size: 13px; }
-.task-inspector { display: flex; flex-direction: column; width: min(1040px, 90vw); max-width: none; max-height: 84vh; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 24px 90px #17113144; }
-.task-inspector-backdrop { position: fixed; inset: 0; z-index: 350; display: flex; align-items: center; justify-content: center; background: #17132d55; backdrop-filter: blur(3px); }
-.task-inspector > header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--line); }
-.task-inspector > header small { color: var(--muted); font: 11px var(--font-mono); }
-.task-inspector h2 { margin: 5px 0 0; font-size: 18px; }
-.task-inspector .inspector-close { width: 30px; height: 30px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 20px; cursor: pointer; }
-.task-inspector .inspector-back { display: block; border: 0; background: none; color: var(--accent); padding: 0; margin-bottom: 12px; font: inherit; font-size: 12px; cursor: pointer; }
-.task-inspector .inspector-back:hover { text-decoration: underline; }
-.task-inspector-body { padding: 24px; min-height: 0; overflow: auto; }
+/* 检查器壳层(#209 迁 Sheet):旧弹层框/遮罩/头尾规则已随手写 portal
+   删除;`.task-inspector` 只剩内层存量内容的样式钩子(toggle 折叠、
+   执行面板布局、focus 圈),类名仍由 TaskInspector 的 SheetContent 挂。 */
 .task-inspector .execution-panel > .utility-toggle, .task-inspector.inspector-timing .utility-toggle { display: none; }
-.task-inspector .execution-panel { border: 0; padding: 0; margin: 0; }
 .task-inspector .execution-body { display: flex; flex-direction: column; min-height: 420px; }
 .inspector-note { margin: 0 0 20px; color: var(--muted); line-height: 1.7; font-size: 13px; }
 @media (max-width: 1440px) { .workspace-studio.task-workspace-v2 .ws-execution-view { padding: 26px; } .journey-heading { flex-wrap: wrap; gap: 14px; } }
@@ -79,7 +72,6 @@
 .workspace-studio .ws-knowledge-view { flex: 1; min-height: 0; overflow: auto; padding: 28px; }
 .workspace-studio .ws-task-details-trigger { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--accent); padding: 3px 8px; font: inherit; font-size: 12px; line-height: 1.4; white-space: nowrap; cursor: pointer; }
 .workspace-studio .ws-task-details-trigger:hover { border-color: var(--accent); background: var(--surface-2); }
-.task-inspector.inspector-details { width: min(760px, 90vw); }
 .inspector-task-title { margin: 0 0 20px; font-size: 18px; line-height: 1.6; overflow-wrap: anywhere; }
 .inspector-fact-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 24px; margin: 0 0 20px; }
 .inspector-facts dt { color: var(--muted); font-size: 12px; line-height: 1.6; }

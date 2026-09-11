@@ -148,10 +148,7 @@
 .journey-heading h2 { color: var(--text-strong); font-size: 22px; font-weight: 650; letter-spacing: -.025em; }
 .journey-entry-mark { box-shadow: var(--shadow-xs); }
 .journey-event-meta time { color: var(--faint); }
-.task-inspector { box-shadow: var(--shadow-lg); border-color: var(--line); }
-.task-inspector > header { background: linear-gradient(110deg, var(--surface), var(--surface-2)); }
 .task-inspector .inspector-task-title { color: var(--text-strong); font-weight: 650; }
-.task-inspector-backdrop { background: #17132d45; backdrop-filter: blur(5px); }
 .warmup-dialog { border: 1px solid var(--line); box-shadow: var(--shadow-lg); background: var(--surface); }
 .warmup-dialog > header { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .workspace-studio .repository-assignees { border-color: var(--line); background: var(--surface); }
