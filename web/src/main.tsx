@@ -16,6 +16,7 @@ import "./surface-finish.css";
 import "./ui.css";
 import "./markdown-lines.css";
 import "./tailwind.css"; // 必须排在存量 css 之后:层序靠 import 顺序,utilities 恒压过 legacy
+import "./preflight-compat.css"; // 必须紧随 tailwind.css:同在 base 层,后到者胜过 preflight
 
 // 主题:URL 仅用于截图/核查;日常选择持久化。第一次访问才跟随系统，
 // 之后由用户明确选择，避免刷新时在明暗之间闪烁。

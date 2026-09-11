@@ -1,0 +1,30 @@
+/* preflight 兼容补丁(2026-09-11,全局 preflight 引入的配套):
+   存量 CSS 按 UA 默认值写,这几处对 preflight 抹掉的默认行为有真实依赖。
+   放 base 层且在 tailwind.css(含 preflight)之后导入——同层后到者胜,
+   压得住 preflight,又仍低于 utilities(工具类随时可覆盖这些条目)。 */
+
+@layer base {
+  /* 行内图标:preflight 把 svg/img 拍成 block,存量大量行内 svg
+     (header-unlock、logout、launch 等)会在文字流里折行。 */
+  svg,
+  img {
+    display: inline-block;
+    vertical-align: middle;
+  }
+
+  /* 列表标记:存量渲染器(.md-list/.annot-list/.journey-events/
+     .overall-story-sources)依赖浏览器圆点/序号,preflight 全抹了。
+     无类列表补回 UA 的标记与缩进;有类的(含 sidebar 菜单)由各自
+     类/工具类决定。 */
+  ul {
+    list-style: disc;
+  }
+  ol {
+    list-style: decimal;
+  }
+  ul:not([class]),
+  ol:not([class]) {
+    margin-block: 1em;
+    padding-inline-start: 40px;
+  }
+}

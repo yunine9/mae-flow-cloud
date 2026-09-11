@@ -6,6 +6,7 @@
    reset 会动存量像素),新页面根挂 .tw-root 做 Scoped 归一(文件尾)。
    令牌纪律(#146):颜色/字号/圆角只从 tokens.css 经 @theme 映射出的工具类
    消费,禁止 bg-[#fff] 式硬编码绕过令牌。 */
+@import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 /* tw-animate-css:base-nova 皮(2026-09-11 融进)的进出场契约——组件类
@@ -134,9 +135,11 @@
 }
 
 @layer fixes {
-  /* .tw-root:新页面根上的 scoped 归一,顶替 preflight,只作用于该子树。
-     放 fixes 层:压得过 legacy 的全局默认,又低于 utilities——任何工具类
-     都能覆盖这里的条目。 */
+  /* .tw-root:scoped 归一。2026-09-11 起全局 preflight 已引入(用户拍板:
+     目标是对齐 shadcn,细枝末节的存量视觉偏移可接受),本块与 preflight
+     等值故冗余但无害,保留——scoped 形态对局部移植仍有用。放 fixes 层:
+     压得过 legacy 的全局默认,又低于 utilities——任何工具类都能覆盖
+     这里的条目。 */
   .tw-root,
   .tw-root *,
   .tw-root ::before,
