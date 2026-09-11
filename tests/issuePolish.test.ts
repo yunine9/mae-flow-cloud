@@ -340,7 +340,20 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   // 交互位置拍板(2026-09-11):按钮在描述区下方右下角,魔法星星前缀。
   assert.match(registration, /issue-desc-foot/);
   assert.match(registration, /<Sparkles aria-hidden \/>/);
+  // 大图拍板(2026-09-11 方案1):编辑器限高成缩略 + 点击灯箱看原图,
+  // 不往 description 里写尺寸标记。
+  const editor = readFileSync(
+    resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+  assert.match(editor, /issue-image-lightbox/);
+  assert.match(editor, /setZoom\(target\.getAttribute\("src"\)\)/);
   const css = readFileSync(resolve("web/src/style.css"), "utf-8");
+  assert.match(css,
+    /\.issue-desc-editor \.ProseMirror img \{[^}]*max-height: 200px/,
+    "编辑器图片限高 200px");
+  assert.match(css,
+    /\.issue-polish-preview img \{[^}]*max-height: 200px/,
+    "润色预览图片限高 200px");
+  assert.match(css, /\.issue-image-lightbox \{/);
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });
 
