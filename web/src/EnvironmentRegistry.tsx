@@ -131,17 +131,18 @@ function HeaderFilter({ label, active, onClear, children }: {
 }) {
   const [open, setOpen] = useState(false);
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild>
-      {/* 激活的漏斗给 accent 小底块:哪列在筛,一眼可辨。 */}
-      <button type="button" aria-label={`筛选 ${label}`}
-        title={active ? `筛选 ${label}(生效中,点开可清除)` : `筛选 ${label}`}
-        aria-pressed={active}
-        className={active
-          ? "rounded-sm bg-accent px-0.5 text-ink"
-          : "text-muted-foreground hover:text-foreground"}>
-        <Filter aria-hidden className="size-3.5" />
-      </button>
-    </PopoverTrigger>
+    <PopoverTrigger
+      render={
+        /* 激活的漏斗给 accent 小底块:哪列在筛,一眼可辨。 */
+        <button type="button" aria-label={`筛选 ${label}`}
+          title={active ? `筛选 ${label}(生效中,点开可清除)` : `筛选 ${label}`}
+          aria-pressed={active}
+          className={active
+            ? "rounded-sm bg-accent px-0.5 text-ink"
+            : "text-muted-foreground hover:text-foreground"}>
+          <Filter aria-hidden className="size-3.5" />
+        </button>
+      } />
     <PopoverContent align="start" className="tw-root w-40 p-1">
       {children(() => setOpen(false))}
       {active && onClear && <div className="border-t border-line pt-1 mt-1">
