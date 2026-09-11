@@ -21,7 +21,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -282,7 +282,7 @@ function ManualRegister({
       return;
     }
     if (!description.trim()) {
-      onError("现象描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
+      onError("问题描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
     if (!pickedEnv) {
@@ -322,24 +322,21 @@ function ManualRegister({
             的动作转给区内第一个可激活元素(= 润色按钮),造成"改个描述
             就自动润色"(2026-09-11 用户实测)。 */}
         <div className="issue-field wide">
-          <span className="issue-field-head">
-            <span>现象描述 <i className="req">*</i></span>
-            {/* AI 润色(#184):描述为空不可点,润色中防重复提交。 */}
-            <Button type="button" variant="outline" size="xs"
-              disabled={!description.trim() || polishing}
-              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
-              onClick={() => void polish()}>
-              {polishing ? "润色中…" : "AI 润色"}
-            </Button>
-          </span>
+          <span>问题描述 <i className="req">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
-          {imageUploading && (
-            <div className="issue-image-bar">
-              <span className="issue-image-uploading">上传中…</span>
-            </div>
-          )}
+          <div className="issue-desc-foot">
+            {imageUploading && <span className="issue-image-uploading">截图上传中…</span>}
+            {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
+            <Button type="button" variant="ghost" size="xs"
+              disabled={!description.trim() || polishing}
+              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
+              onClick={() => void polish()}>
+              <Sparkles aria-hidden />
+              {polishing ? "润色中…" : "AI 润色"}
+            </Button>
+          </div>
         </div>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
             收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;

@@ -2385,10 +2385,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
 .issue-field span i.req { color: var(--danger); font-weight: 700; }
-/* AI 润色(#184):字段头右探针 + 确认弹窗。 */
-.issue-field-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+/* AI 润色(#184):描述区底部动作行(右对齐文字按钮) + 确认弹窗。 */
+.issue-desc-foot {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; min-height: 24px;
 }
+.issue-desc-foot .issue-image-uploading { margin-right: auto; color: var(--muted); }
 .issue-polish-note {
   margin: 0; padding: 8px 10px; border-radius: 8px;
   background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));

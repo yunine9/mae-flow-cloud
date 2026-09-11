@@ -310,6 +310,8 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   assert.match(registration, /polishing \? "润色中…" : "AI 润色"/);
+  assert.match(registration, /问题描述 <i className="req">\*<\/i><\/span>/,
+    "字段名拍板:现象描述→问题描述");
   assert.match(registration,
     /disabled=\{!description\.trim\(\) \|\| polishing\}/,
     "描述为空不可点,润色中防重复");
@@ -330,12 +332,14 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
     "润色按钮与弹窗按钮走 ui/button");
   // 回归锚(2026-09-11 用户实测):润色按钮不许住进 label——label 的
   // 激活转发会把点进描述区的动作转给按钮,改成描述就"自动润色"。
-  const headAt = registration.indexOf("issue-field-head");
-  const beforeHead = registration.slice(0, headAt);
+  const btnAt = registration.indexOf("AI 润色");
+  const beforeBtn = registration.slice(0, btnAt);
   assert.ok(
-    beforeHead.lastIndexOf('<div className="issue-field wide">')
-      > beforeHead.lastIndexOf("<label"),
-    "描述字段头(含润色按钮)最近的容器开标签必须是 div,不能是 label");
+    beforeBtn.lastIndexOf("<div") > beforeBtn.lastIndexOf("<label"),
+    "润色按钮最近的容器开标签必须是 div,不能是 label");
+  // 交互位置拍板(2026-09-11):按钮在描述区下方右下角,魔法星星前缀。
+  assert.match(registration, /issue-desc-foot/);
+  assert.match(registration, /<Sparkles aria-hidden \/>/);
   const css = readFileSync(resolve("web/src/style.css"), "utf-8");
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });
