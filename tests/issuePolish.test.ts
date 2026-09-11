@@ -328,6 +328,14 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   // UI 轨道纪律(CONTEXT.md 2026-09-11):新轨页面的按钮只准 ui/ 包装层。
   assert.match(registration, /@\/components\/ui\/button/,
     "润色按钮与弹窗按钮走 ui/button");
+  // 回归锚(2026-09-11 用户实测):润色按钮不许住进 label——label 的
+  // 激活转发会把点进描述区的动作转给按钮,改成描述就"自动润色"。
+  const headAt = registration.indexOf("issue-field-head");
+  const beforeHead = registration.slice(0, headAt);
+  assert.ok(
+    beforeHead.lastIndexOf('<div className="issue-field wide">')
+      > beforeHead.lastIndexOf("<label"),
+    "描述字段头(含润色按钮)最近的容器开标签必须是 div,不能是 label");
   const css = readFileSync(resolve("web/src/style.css"), "utf-8");
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });
