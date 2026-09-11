@@ -13,6 +13,16 @@ import {
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
 import { formatLocalDateTime, relativeTime } from "./time";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "lucide-react";
 import {
   nextWishImageDraftKey,
   WISH_IMAGE_TYPES,
@@ -435,15 +445,28 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </div>
     </section>
 
-    {lightbox && <div className="wish-lightbox" role="dialog" aria-modal="true" aria-label={lightbox.title}
-      onClick={() => setLightbox(undefined)}>
-      <button type="button" onClick={() => setLightbox(undefined)} aria-label="关闭图片">×</button>
-      <img src={lightbox.url} alt={lightbox.title} onClick={(event) => event.stopPropagation()} />
-    </div>}
-    {manage && <div className="wish-manage-backdrop" role="dialog" aria-modal="true" aria-labelledby="wish-manage-title"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) setManage(undefined); }}>
-      <section className="wish-manage-dialog">
-        <header><div><span className="section-kicker">MAKE IT CLEAR</span><h2 id="wish-manage-title">给这件事一个明确下文</h2></div><button type="button" onClick={() => setManage(undefined)} aria-label="关闭">×</button></header>
+    {lightbox && <Dialog open onOpenChange={(next) => { if (!next) setLightbox(undefined); }}>
+      <DialogContent showCloseButton={false}
+        className="tw-root w-auto max-w-[min(1100px,94vw)] gap-2 p-2 sm:max-w-[min(1100px,94vw)]">
+        <DialogTitle className="sr-only">{lightbox.title}</DialogTitle>
+        <img src={lightbox.url} alt={lightbox.title}
+          className="max-h-[88vh] w-full rounded-lg object-contain" />
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭图片"
+          className="absolute top-3 right-3 bg-background/70" />}>
+          <XIcon />
+        </DialogClose>
+      </DialogContent>
+    </Dialog>}
+    {manage && <Dialog open onOpenChange={(next) => { if (!next) setManage(undefined); }}>
+      <DialogContent showCloseButton={false} className="tw-root sm:max-w-[560px]">
+        <DialogHeader>
+          <span className="section-kicker">MAKE IT CLEAR</span>
+          <DialogTitle>给这件事一个明确下文</DialogTitle>
+        </DialogHeader>
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭"
+          className="absolute top-2 right-2" />}>
+          <XIcon />
+        </DialogClose>
         <div className="wish-status-options" role="group" aria-label="处理状态">
           {(["open", "accepted", "done", "declined"] as WishStatus[]).map((status) => <button
             type="button" key={status} className={manage.status === status ? `on is-${status}` : ""}
@@ -451,12 +474,15 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
             <i /> <span><strong>{STATUS_COPY[status].label}</strong><small>{STATUS_COPY[status].hint}</small></span>
           </button>)}
         </div>
-        <label><span>给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
+        <label className="ui-field"><span>给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
           <textarea value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
             placeholder={manage.status === "declined" ? "请说明现在为什么不做，或者什么条件下会重新考虑" : "例如：已纳入下个迭代；已上线，可在个人设置中体验"} /></label>
-        <footer><button type="button" onClick={() => setManage(undefined)}>取消</button><button type="button"
-          className="primary" disabled={busyId === manage.id} onClick={() => void saveStatus()}>{busyId === manage.id ? "保存中…" : "确认并公开回应"}</button></footer>
-      </section>
-    </div>}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setManage(undefined)}>取消</Button>
+          <Button type="button" disabled={busyId === manage.id} onClick={() => void saveStatus()}>
+            {busyId === manage.id ? "保存中…" : "确认并公开回应"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </div>;
 }

@@ -185,22 +185,6 @@
 
 /* 真实资产工作台接入与明确的生命周期确认。 */
 .wf-asset-workspace{position:relative;min-width:980px}
-.wf-dialog-backdrop{position:fixed;z-index:120;inset:0;display:grid;place-items:center;
-  padding:32px;background:color-mix(in srgb,#07101d 68%,transparent);backdrop-filter:blur(5px)}
-.wf-dialog{display:flex;width:min(560px,calc(100vw - 64px));flex-direction:column;gap:16px;
-  padding:22px;border:1px solid var(--line-strong);border-radius:16px;background:var(--surface);
-  box-shadow:0 24px 80px rgba(0,0,0,.34);color:var(--text)}
-.wf-dialog.compact{width:min(500px,calc(100vw - 64px))}.wf-dialog header>span{color:var(--accent);
-  font-size:10px;font-weight:800;letter-spacing:.14em}.wf-dialog h3{margin:4px 0 6px;color:var(--text-strong);font-size:20px}
-.wf-dialog header p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}.wf-dialog>label{display:flex;flex-direction:column;gap:6px}
-.wf-dialog-error{margin:0;padding:9px 11px;border:1px solid color-mix(in srgb,var(--danger) 25%,transparent);
-  border-radius:8px;color:var(--danger);background:var(--danger-soft);font-size:12px;line-height:1.5}
-.wf-dialog>label>span,.wf-dialog legend{color:var(--text);font-size:12px;font-weight:750}.wf-dialog input,.wf-dialog textarea{
-  width:100%;padding:10px 11px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface-soft);color:var(--text);font:inherit;resize:vertical}
-.wf-dialog fieldset{display:flex;gap:18px;margin:0;padding:12px;border:1px solid var(--line);border-radius:9px}.wf-dialog fieldset label{
-  display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}.wf-dialog fieldset input{width:auto}
-.wf-dialog footer{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}.wf-dialog button{padding:9px 14px;border:1px solid var(--line-strong);
-  border-radius:8px;background:var(--surface);color:var(--text);font:inherit;cursor:pointer}.wf-dialog button:disabled{cursor:not-allowed;opacity:.5}
 /* 四个页签(2026-09-02 起把「使用效能」拆出来单列)要挤进一行,所以
    比原来窄一档;高度也收了 4px——页签条上面还有整条页头,竖向每省
    一点,下面的主从两栏就多一点。 */
@@ -242,8 +226,7 @@
 .wf-library-grid article>footer>span{max-width:155px;text-align:right;line-height:1.4}.wf-library-grid article>footer div{margin-top:6px}
 .wf-library-grid article>footer button{border-color:transparent;background:transparent}.wf-library-grid article>footer button:hover{border-color:var(--line)}
 .wf-library-grid article>footer .wf-text-danger{color:var(--danger)}.wf-library-skeleton{grid-template-columns:1fr;gap:8px}
-.wf-library-skeleton i{height:94px;border-radius:11px}.wf-confirm-danger{color:#fff!important;border-color:var(--danger)!important;background:var(--danger)!important}
-.wf-confirm-danger:hover{background:color-mix(in srgb,var(--danger) 84%,#000)!important}
+.wf-library-skeleton i{height:94px;border-radius:11px}
 
 /* 返回只表达“上一层是什么”，不用无标签的孤立箭头。 */
 .wf-detail-head>div{align-items:center}.wf-breadcrumb-back{height:34px;padding:0 10px!important;display:inline-flex;align-items:center;gap:6px;

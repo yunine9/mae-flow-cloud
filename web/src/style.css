@@ -1190,15 +1190,6 @@ svg {
   font-size: 15px;
   line-height: 1;
 }
-.workspace-review-backdrop {
-  position: fixed;
-  z-index: 950;
-  inset: 0;
-  padding: 28px;
-  display: grid;
-  place-items: center;
-  background: rgba(5, 9, 18, .54);
-}
 .workspace-review-dialog {
   width: min(1280px, 100%);
   max-height: min(860px, calc(100vh - 56px));
@@ -1339,49 +1330,6 @@ svg {
 }
 .workspace-review-opinions { min-width: 0; }
 .workspace-review-opinions .annot-panel { margin-top: 0; }
-.workspace-invite-dialog {
-  width: min(460px, 100%);
-  max-height: min(680px, calc(100vh - 56px));
-  overflow: hidden;
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, .4);
-}
-.workspace-invite-dialog > header {
-  min-height: 76px;
-  padding: 16px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--line);
-}
-.workspace-invite-dialog > header > div { min-width: 0; display: grid; gap: 3px; }
-.workspace-invite-dialog > header span {
-  color: var(--accent);
-  font: 750 12px var(--font-mono);
-  letter-spacing: 0;
-}
-.workspace-invite-dialog > header strong { color: var(--text-strong); font-size: 18px; }
-.workspace-invite-dialog > header p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--font-size-assist);
-  line-height: 1.45;
-}
-.workspace-invite-dialog > header > button {
-  width: 34px;
-  height: 34px;
-  flex: none;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-soft);
-  font-size: 20px;
-  cursor: pointer;
-}
 .workspace-invite-content {
   padding: 18px;
   display: grid;
@@ -1439,9 +1387,7 @@ svg {
   font-size: var(--font-size-assist);
 }
 @media (max-width: 900px) {
-  .workspace-review-backdrop { padding: 10px; }
   .workspace-review-dialog { max-height: calc(100vh - 20px); border-radius: 12px; }
-  .workspace-invite-dialog { max-height: calc(100vh - 20px); }
   .workspace-review-dialog > header { align-items: flex-start; }
   .workspace-review-dialog > header p { display: none; }
   .workspace-review-dialog-actions { align-items: flex-start; }
@@ -10401,15 +10347,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .wish-card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }.wish-card-actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); font: inherit; font-size: 12px; font-weight: 750; white-space: nowrap; cursor: pointer; }.wish-card-actions button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }.wish-card-actions button:disabled { opacity: .55; cursor: wait; }
 .wish-vote span { margin-right: 4px; color: var(--accent); font-size: 16px; }.wish-vote.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--accent-soft); }.wish-card-actions .wish-remove { width: 31px; padding: 0; letter-spacing: 1px; }
 
-.wish-lightbox, .wish-manage-backdrop { position: fixed; z-index: 1000; inset: 0; padding: 24px; display: grid; place-items: center; background: rgba(5, 8, 14, .77); backdrop-filter: blur(8px); }
-.wish-lightbox > img { max-width: min(1100px, 94vw); max-height: 88vh; border-radius: 12px; box-shadow: 0 24px 80px rgba(0,0,0,.45); }
-.wish-lightbox > button { position: fixed; top: 20px; right: 24px; width: 40px; height: 40px; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; color: #fff; background: rgba(0,0,0,.25); font-size: 25px; cursor: pointer; }
-.wish-manage-backdrop { z-index: 1001; }
-.wish-manage-dialog { width: min(560px, 100%); padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-md); }
-.wish-manage-dialog > header { display: flex; justify-content: space-between; gap: 14px; }.wish-manage-dialog h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 21px; }.wish-manage-dialog > header > button { width: 33px; height: 33px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--surface-soft); font-size: 20px; cursor: pointer; }
 .wish-status-options { margin: 20px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }.wish-status-options button { min-height: 64px; padding: 10px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--surface-soft); text-align: left; cursor: pointer; }.wish-status-options button > i { width: 10px; height: 10px; margin-top: 4px; flex: 0 0 10px; border: 2px solid var(--line-strong); border-radius: 50%; }.wish-status-options button span { display: grid; gap: 3px; }.wish-status-options strong { color: var(--text); font-size: var(--font-size-assist); }.wish-status-options small { color: var(--faint); font-size: var(--fs-12); line-height: 1.4; }.wish-status-options button.on { border-color: var(--accent); background: var(--accent-soft); }.wish-status-options button.on > i { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px var(--surface); }.wish-status-options button.on.is-done { border-color: var(--success); background: var(--success-soft); }.wish-status-options button.on.is-done > i { border-color: var(--success); background: var(--success); }.wish-status-options button.on.is-declined { border-color: var(--faint); background: var(--surface-muted); }.wish-status-options button.on.is-declined > i { border-color: var(--faint); background: var(--faint); }
-.wish-manage-dialog > label { display: grid; gap: 7px; }.wish-manage-dialog > label > span { color: var(--text); font-size: var(--font-size-assist); font-weight: 750; }.wish-manage-dialog textarea { padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; outline: none; color: var(--text); background: var(--surface-soft); font: inherit; line-height: 1.55; resize: vertical; }.wish-manage-dialog textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.wish-manage-dialog > footer { margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px; }.wish-manage-dialog > footer button { min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--surface-soft); font: inherit; font-size: var(--font-size-assist); font-weight: 750; cursor: pointer; }.wish-manage-dialog > footer button.primary { border-color: var(--accent); color: var(--accent-fg); background: var(--accent); }.wish-manage-dialog > footer button:disabled { opacity: .6; cursor: wait; }
 
 @media (max-width: 840px) {
   .wish-hero { min-height: 0; padding: 27px; }.wish-hero-orbit { width: 120px; height: 120px; flex-basis: 120px; }.wish-hero-orbit i { width: 76px; height: 76px; font-size: 13px; }
@@ -10424,7 +10362,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .wish-composer { padding: 18px; border-radius: 15px; }.wish-composer-head { align-items: flex-start; flex-direction: column; }.wish-kind-toggle { width: 100%; box-sizing: border-box; }.wish-kind-toggle button { flex: 1; padding: 0 7px; }.wish-image-drafts { grid-template-columns: repeat(2, minmax(0, 1fr)); }.wish-paste-hint { order: 3; min-width: 100%; line-height: 1.55; }.wish-submit { margin-left: auto; }
   .wish-board-toolbar { align-items: flex-start; flex-direction: column; }.wish-filters { width: 100%; }.wish-filters > div { flex: 1; }.wish-filters button { flex: 1; padding: 0 8px; }.wish-filters select { max-width: 120px; }
   .wish-card { padding: 15px; grid-template-columns: 38px minmax(0, 1fr); }.wish-card-mark { width: 36px; height: 36px; }.wish-card-side { grid-column: 2; min-width: 0; align-items: flex-start; }.wish-card-actions { justify-content: flex-start; flex-wrap: wrap; }.wish-card-expanded { grid-column: 2; }.wish-card-images { grid-template-columns: repeat(2, minmax(0, 1fr)); }.wish-status-path { gap: 4px; }.wish-status-path span { font-size: var(--fs-12); }
-  .wish-manage-backdrop { padding: 12px; align-items: end; }.wish-manage-dialog { max-height: 88vh; padding: 19px; overflow: auto; border-radius: 16px 16px 8px 8px; }.wish-status-options { grid-template-columns: 1fr; }
+  .wish-status-options { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -11155,56 +11093,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   user-select: text;
 }
 
-/* ---- 页内确认弹框(spec #52):window.confirm 的全站替代。卡片语言
-  与 wf-dialog 同观感;z-index 压过全屏工作区弹层(workspace-overlay
-  120),问题流会话视图里也能正常叠上来。 ---- */
-.confirm-backdrop {
-  position: fixed;
-  /* 确认必须压过一切弹层(含统一化后的 <Modal>,--z-modal 950):
-   * 从全屏工作台里发起的确认曾被压在弹层下面。 */
-  z-index: var(--z-topmost);
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 32px;
-  background: color-mix(in srgb, #07101d 68%, transparent);
-  backdrop-filter: blur(5px);
-  animation: confirmFade 140ms ease-out;
-}
-.confirm-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  width: min(460px, calc(100vw - 64px));
-  padding: 22px;
-  border: 1px solid var(--line-strong);
-  border-radius: 16px;
-  background: var(--surface);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
-  color: var(--text);
-  animation: confirmPop 160ms ease-out;
-}
-.confirm-dialog h3 { margin: 0; color: var(--text-strong); font-size: 18px; }
-.confirm-message { color: var(--muted); font-size: 13px; line-height: 1.65; white-space: pre-line; }
-.confirm-message ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-.confirm-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
-.confirm-dialog footer button {
-  padding: 9px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-}
-.confirm-dialog footer button:hover { background: var(--surface-soft); }
-.confirm-dialog footer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.confirm-dialog footer button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
-.confirm-dialog footer button.primary:hover { background: var(--accent-hover); }
-.confirm-dialog footer button.danger { border-color: var(--danger); background: var(--danger); color: #fff; }
-.confirm-dialog footer button.danger:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
-@keyframes confirmFade { from { opacity: 0; } }
-@keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
 /* 这单记下的记忆(docs/knowledge-memory-design.md §9):只读列表,一行一条,
    点开看 md 原文;人圈的可撤回。不做编辑——改就是再圈一次。 */
 .knowledge-memories { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }

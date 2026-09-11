@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AuthUser } from "./api";
 import {
   canViewHelpItem,
@@ -8,6 +8,16 @@ import {
   type HelpAudience,
 } from "./helpAccess";
 import { Markdown } from "./markdown";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "lucide-react";
 
 export type HelpGroup = "快速开始" | "需求与问题" | "团队协作" | "团队资产" | "设置与排障";
 
@@ -520,32 +530,6 @@ function SearchIcon() {
 function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
   const [failed, setFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const openButtonRef = useRef<HTMLButtonElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!expanded) return;
-    const previousOverflow = document.body.style.overflow;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setExpanded(false);
-      } else if (event.key === "Tab") {
-        // 预览里只有一个可操作控件；把焦点留在关闭按钮上，避免键盘
-        // 用户误入被遮罩的页面内容。
-        event.preventDefault();
-        closeButtonRef.current?.focus();
-      }
-    }
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", handleKeyDown);
-    closeButtonRef.current?.focus();
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleKeyDown);
-      openButtonRef.current?.focus();
-    };
-  }, [expanded]);
 
   function hideOnError() {
     setExpanded(false);
@@ -555,7 +539,7 @@ function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
   if (failed) return null;
   return <>
     <figure className="help-shot">
-      <button ref={openButtonRef} type="button" className="help-shot-frame"
+      <button type="button" className="help-shot-frame"
         onClick={() => setExpanded(true)} aria-label={`放大查看：${shot.alt}`}>
         <img src={shot.src} alt={shot.alt} loading="lazy" onError={hideOnError} />
         <span className="help-shot-zoom" aria-hidden>放大查看</span>
@@ -563,23 +547,27 @@ function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
       <figcaption><span aria-hidden>↳</span>{shot.caption}</figcaption>
     </figure>
 
-    {expanded && <div className="help-lightbox-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) setExpanded(false);
-      }}>
-      <section className="help-lightbox" role="dialog" aria-modal="true"
-        aria-label={`图片预览：${shot.alt}`}>
-        <header>
-          <div><strong>图片预览</strong><small>点击背景或按 Esc 关闭</small></div>
-          <button ref={closeButtonRef} type="button" className="help-lightbox-close"
-            onClick={() => setExpanded(false)} aria-label="关闭图片预览">×</button>
-        </header>
-        <div className="help-lightbox-image">
+    <Dialog open={expanded} onOpenChange={(next) => { if (!next) setExpanded(false); }}>
+      <DialogContent showCloseButton={false}
+        className="tw-root w-full max-w-[min(1440px,100%)] gap-0 overflow-hidden p-0 sm:max-w-[min(1440px,100%)]">
+        <DialogHeader className="flex-row items-start justify-between gap-4 border-b bg-muted/40 px-4 py-2">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <DialogTitle>图片预览</DialogTitle>
+            <DialogDescription>点击背景或按 Esc 关闭</DialogDescription>
+          </div>
+          <DialogClose render={<Button variant="outline" size="icon-sm" aria-label="关闭图片预览"
+            className="shrink-0" />}>
+            <XIcon />
+          </DialogClose>
+        </DialogHeader>
+        <div className="help-lightbox-image h-[min(70vh,640px)]">
           <img src={shot.src} alt={shot.alt} onError={hideOnError} />
         </div>
-        <p>{shot.caption}</p>
-      </section>
-    </div>}
+        <p className="m-0 border-t bg-muted/40 px-4 py-2.5 text-xs leading-relaxed break-words text-muted-foreground">
+          {shot.caption}
+        </p>
+      </DialogContent>
+    </Dialog>
   </>;
 }
 

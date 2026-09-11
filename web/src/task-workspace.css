@@ -1020,50 +1020,6 @@
 .task-workspace-v2 .workspace-review-dialog-actions .workspace-review-invite-button:hover { color: var(--text-strong); border-color: var(--text-strong); }
 .task-workspace-v2 .workspace-review-dialog-actions .workspace-review-invite-button span { color: var(--muted); font: inherit; letter-spacing: 0; }
 
-.task-workspace-v2 .workspace-review-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 960;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, .32);
-}
-.task-workspace-v2 .workspace-invite-dialog {
-  width: min(460px, 100%);
-  max-height: min(680px, calc(100vh - 56px));
-  overflow: hidden;
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--overlay);
-  box-shadow: var(--shadow-lg);
-}
-.task-workspace-v2 .workspace-invite-dialog > header {
-  min-height: 0;
-  padding: 16px 12px 14px 18px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-}
-.task-workspace-v2 .workspace-invite-dialog > header strong { color: var(--text-strong); font-size: var(--fs-15); font-weight: 600; }
-.task-workspace-v2 .workspace-invite-dialog > header p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.5; }
-.task-workspace-v2 .workspace-invite-dialog > header > button {
-  width: 28px;
-  height: 28px;
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  color: var(--muted);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-size: var(--fs-17);
-}
-.task-workspace-v2 .workspace-invite-dialog > header > button:hover { color: var(--text-strong); background: var(--surface-3); }
 .task-workspace-v2 .workspace-invite-content { padding: 16px 18px 18px; display: grid; gap: 12px; }
 .task-workspace-v2 .workspace-review-invite-action { display: flex; gap: 8px; }
 .task-workspace-v2 .workspace-review-invite-action > button {

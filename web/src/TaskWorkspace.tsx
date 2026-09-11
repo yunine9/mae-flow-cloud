@@ -49,6 +49,16 @@ import {
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
 import { UserPicker } from "./UserPicker";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "lucide-react";
 import {
   addAnnotation,
   completeReview,
@@ -2600,19 +2610,17 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <div className="workspace-review-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setReviewInviteOpen(false);
-        }}>
-        <section className="workspace-invite-dialog" role="dialog" aria-modal="true"
-          aria-labelledby="workspace-invite-title">
-          <header>
-            <div><strong id="workspace-invite-title">邀请 Committer 检视</strong>
-              <p>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</p>
-            </div>
-            <button type="button" aria-label="关闭邀请检视"
-              autoFocus onClick={() => setReviewInviteOpen(false)}>×</button>
-          </header>
+      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <Dialog open
+        onOpenChange={(next) => { if (!next) setReviewInviteOpen(false); }}>
+        <DialogContent className="tw-root sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>邀请 Committer 检视</DialogTitle>
+            <DialogDescription>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</DialogDescription>
+          </DialogHeader>
+          <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭邀请检视"
+            className="absolute top-2 right-2" />}>
+            <XIcon />
+          </DialogClose>
           <div className="workspace-invite-content">
             {committers.length > 0 ? (
               <div className="workspace-review-invite-action">
@@ -2646,8 +2654,8 @@ export function TaskWorkspace({
               </div>
             )}
           </div>
-        </section>
-      </div>}
+        </DialogContent>
+      </Dialog>}
     </main>
   );
 }
