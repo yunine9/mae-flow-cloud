@@ -1,14 +1,11 @@
+"use client"
+
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
-import { XIcon } from "lucide-react"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
-
-/* shadcn base-nova 皮(2026-09-11 融进):类形逐字取官方注册表
- * (Attached footer、backdrop-blur 遮罩、ring 描边弹层);nova 的
- * cn-font-heading 伴生类按"纯 Tailwind 项目跳过"的规矩丢弃。
- * showCloseButton 是本项目扩展,沿用。 */
+import { XIcon } from "lucide-react"
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -73,7 +70,8 @@ function DialogContent({
               />
             }
           >
-            <XIcon />
+            <XIcon
+            />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         )}
@@ -123,7 +121,10 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-base leading-none font-medium", className)}
+      className={cn(
+        "text-base leading-none font-medium",
+        className
+      )}
       {...props}
     />
   )
