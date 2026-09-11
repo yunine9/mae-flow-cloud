@@ -54,6 +54,7 @@ import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
  * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
@@ -376,38 +377,50 @@ export function IssueSessionView({
             任务侧左栏同款 ws-pane-head > ws-source-switch(role=tablist),
             页签一签一色走问题域变量 --workspace-tab-color。 */}
         <section className="issue-main-pane" aria-label="会话内容">
-          <div className="ws-pane-head" aria-label="问题工作台视图">
-            <div><strong>{
-              ISSUE_MAIN_TABS.find((item) => item.key === tab)?.label
-            }</strong></div>
-            <div className="ws-source-switch" role="tablist"
-              aria-label="会话工作区内容">
-              {ISSUE_MAIN_TABS.map(({ key, label }) => (
-                <button type="button" key={key} role="tab"
-                  aria-selected={tab === key}
-                  className={tab === key ? "on" : ""}
-                  disabled={key === "dts" && !detail.ticket}
-                  title={key === "dts" && !detail.ticket
-                    ? "无单场景:还没有关联的 DTS 单据" : undefined}
-                  onClick={() => setTab(key)}>
-                  <span>{label}</span>
-                  {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
-                      入口要找得到(原材料页签的同一引导,随升格迁来)。 */}
-                  {key === "doc" && detail.has_analysis
-                    && <i className="ws-tab-dot" aria-hidden />}
-                </button>
-              ))}
+          {/* (#210)Tabs root 以 display:contents 作透明壳:同时罩住
+              ws-pane-head(页签条)与面板,DOM 盒子不变。 */}
+          <Tabs value={tab} className="contents"
+            onValueChange={(value) => setTab(value as IssueMainTab)}>
+            <div className="ws-pane-head" aria-label="问题工作台视图">
+              <div><strong>{
+                ISSUE_MAIN_TABS.find((item) => item.key === tab)?.label
+              }</strong></div>
+              {/* 手搓 role=tablist 换 base-ui Tabs 原语:键盘箭头、
+                  roving tabindex 归原语;五签一色 --workspace-tab-color 与
+                  脉冲点等旧皮肤类原样挂在 TabsList/TabsTrigger 上。 */}
+              <TabsList variant="line" aria-label="会话工作区内容"
+                className="ws-source-switch h-auto justify-start">
+                {ISSUE_MAIN_TABS.map(({ key, label }) => (
+                  <TabsTrigger key={key} value={key}
+                    className={`h-auto flex-none data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}
+                    disabled={key === "dts" && !detail.ticket}
+                    title={key === "dts" && !detail.ticket
+                      ? "无单场景:还没有关联的 DTS 单据" : undefined}>
+                    <span>{label}</span>
+                    {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
+                        入口要找得到(原材料页签的同一引导,随升格迁来)。 */}
+                    {key === "doc" && detail.has_analysis
+                      && <i className="ws-tab-dot" aria-hidden />}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
             </div>
-          </div>
-          {tab === "events"
-            ? <>
+            {/* 面板映射(#210):原条件渲染改 TabsPanel(keepMounted 默认
+                false,卸载语义与原实现一致);doc/dts/changes/logs 共用的
+                兜底分支用「值跟随当前签」的单面板承接,切签时元素位置稳定,
+                IssueMaterialsPane 内部状态不被重挂载清掉。 */}
+            {tab === "events" && <TabsContent value="events" className="contents">
               <IssueWarmupLive id={detail.id} warmup={detail.warmup} />
               <IssueEventsPane id={detail.id} active />
-            </>
-            : tab === "repos"
-            ? <IssueWorkspaceRepos detail={detail} />
-            : <IssueMaterialsPane detail={detail} busy={busy} view={tab}
-                onNotifyAI={notifyAI} canOperate={canOperate} />}
+            </TabsContent>}
+            {tab === "repos" && <TabsContent value="repos" className="contents">
+              <IssueWorkspaceRepos detail={detail} />
+            </TabsContent>}
+            {tab !== "events" && tab !== "repos" && <TabsContent value={tab} className="contents">
+              <IssueMaterialsPane detail={detail} busy={busy} view={tab}
+                onNotifyAI={notifyAI} canOperate={canOperate} />
+            </TabsContent>}
+          </Tabs>
         </section>
       </section>
       <section className="ws-side" aria-label="与 Agent 协作">

@@ -3202,11 +3202,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-materials-edits .p { color: var(--muted); font-family: var(--font-mono); }
 
 /* 过程文档正文:复用消息区滚动容器,内部换成 markdown 排版;多页签
-   复用任务侧 ws-tabs 的样式定义(类名同源,视觉与需求侧一致) */
+   (#210)已换 shadcn Tabs 原语,原 ws-tabs/ws-tab 覆盖随迁移删除 */
 .issue-thread.issue-doc { gap: 12px; }
-.issue-thread.issue-doc .ws-tabs { padding: 0; border-bottom: none; min-height: 0; background: none; }
-.issue-thread.issue-doc .ws-tab { border: 1px solid var(--line); border-radius: 8px; }
-.issue-thread.issue-doc .ws-tab.on { border-color: var(--accent); }
 /* 过程问答(复盘阅读面的对话气泡):用户与决策靠右,问答卡与检视意见靠左 */
 .issue-dialogue { display: flex; flex-direction: column; gap: 10px; padding: 2px; }
 .issue-dialogue-turn { display: flex; flex-direction: column; gap: 3px; max-width: 86%; }
@@ -6478,7 +6475,11 @@ pre {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.ws-pane-head > .ws-source-switch {
+/* (#210)ws-source-switch 换 base-ui Tabs 后,皮肤类挂在 TabsList 上,
+   页签条与 ws-pane-head 之间多了一层 display:contents 的 Tabs root
+   (data-slot="tabs"),直接子选择器随之补一条穿透。 */
+.ws-pane-head > .ws-source-switch,
+.ws-pane-head > [data-slot="tabs"] > .ws-source-switch {
   width: auto; min-width: 0; min-height: 0; padding: 0;
   flex: none; flex-direction: row; border: 0; background: transparent;
 }
@@ -8520,32 +8521,10 @@ pre {
 .team-tasks-workspace {
   min-width: 0;
 }
-.team-tasks-workspace > [role="tabpanel"] { min-width: 0; }
-.team-task-tabs {
-  margin-bottom: 18px; padding: 5px;
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px;
-  border: 1px solid var(--line); border-radius: 13px;
-  background: var(--surface-soft); box-shadow: var(--shadow-xs);
-}
-.team-task-tabs button {
-  min-width: 0; min-height: 58px; padding: 10px 14px;
-  display: grid; align-content: center; gap: 3px;
-  color: var(--muted); border: 1px solid transparent; border-radius: 9px;
-  background: transparent; text-align: left; font: inherit; cursor: pointer;
-  transition: color var(--ease), border-color var(--ease), background var(--ease), box-shadow var(--ease);
-}
-.team-task-tabs button:hover { color: var(--text); background: var(--surface); }
-.team-task-tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.team-task-tabs button.active {
-  color: var(--text-strong); border-color: var(--line-strong);
-  background: var(--surface); box-shadow: var(--shadow-xs);
-}
-.team-task-tabs button.active::before {
-  width: 24px; height: 3px; margin-bottom: 3px;
-  content: ""; border-radius: 999px; background: var(--accent);
-}
-.team-task-tabs strong { color: inherit; font-size: 14px; line-height: 1.3; }
-.team-task-tabs small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.4; }
+/* (#210)团队两域页签换 base-ui Tabs(shadcn 语义令牌重皮),原
+   .team-task-tabs 家族随迁移删除;面板最小宽约束改为后代选择器,
+   穿透 Tabs root 的 contents 壳。 */
+.team-tasks-workspace [role="tabpanel"] { min-width: 0; }
 
 .team-delivery-overview {
   margin-bottom: 22px;
@@ -8794,8 +8773,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 
 @media (max-width: 520px) {
-  .team-task-tabs { grid-template-columns: 1fr; }
-  .team-task-tabs button { min-height: 54px; }
   .team-delivery-overview-head { align-items: stretch; flex-direction: column; gap: 15px; }
   .team-delivery-summary { justify-content: space-between; gap: 10px; }
   .team-delivery-summary > span { min-width: 0; justify-items: start; }
@@ -10091,7 +10068,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .ws-pane-head { padding: 10px 14px; align-items: flex-start; flex-direction: column; }
   .ws-execution-subnav { padding-left: 12px; padding-right: 12px; overflow-x: auto; }
   .ws-execution-subnav button { min-width: 170px; flex: 1 0 170px; }
-  .ws-pane-head > .ws-source-switch { width: 100%; overflow-x: auto; }
+  .ws-pane-head > .ws-source-switch,
+  .ws-pane-head > [data-slot="tabs"] > .ws-source-switch { width: 100%; overflow-x: auto; }
   .ws-evidence-gap-callout {
     margin: 10px 12px 0;
     align-items: stretch;

@@ -54,6 +54,7 @@ import { ClampedText } from "../ClampedText";
 import { Markdown } from "../markdown";
 import { formatLocalClock, formatLocalDate, formatLocalDateTime } from "../time";
 import { startVisiblePolling } from "../visiblePolling";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -441,18 +442,21 @@ export function IssueConversationStream({
     <div className="ws-stream-shell">
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
-        {/* 流内筛选(任务侧同款 UI):阅读筛选,不是权限判断。 */}
-        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"]] as const)
-            .map(([key, label]) => (
-              <button type="button" key={key} role="tab"
-                aria-selected={filter === key}
-                className={filter === key ? "on" : ""}
-                onClick={() => setFilter(key)}>
-                {label}
-              </button>
-            ))}
-        </div>
+        {/* 流内筛选(任务侧同款 UI):阅读筛选,不是权限判断。
+            (#210)手搓 role=tablist 换 base-ui Tabs 原语,键盘箭头归原语;
+            旧 .ws-stream-filters 皮肤类挂在 TabsList 上,视觉原样。 */}
+        <Tabs value={filter} className="contents"
+          onValueChange={(value) => setFilter(value as "all" | "mine")}>
+          <TabsList variant="line" aria-label="会话流筛选" className="ws-stream-filters h-auto">
+            {([["all", "全部"], ["mine", "需要我的"]] as const)
+              .map(([key, label]) => (
+                <TabsTrigger key={key} value={key}
+                  className={`h-auto flex-none after:hidden${filter === key ? " on" : ""}`}>
+                  {label}
+                </TabsTrigger>
+              ))}
+          </TabsList>
+        </Tabs>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
       {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进

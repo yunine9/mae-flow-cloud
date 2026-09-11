@@ -50,6 +50,7 @@ import {
 } from "./RepositoryAssigneePicker";
 import { UserPicker } from "./UserPicker";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogClose,
@@ -1808,22 +1809,28 @@ export function TaskWorkspace({
 
   const reviewWorkspaceContent = (
     <div className="workspace-review-notes">
-      {reviewRecordCount > 0 && <div className="review-filter" role="tablist" aria-label="按处理归属筛选">
-        {([
-          ["all", "全部"],
-          ["mine", "等我确认"],
-          ["agent", "Agent 处理中"],
-          ["closed", "已完成"],
-        ] as const).map(([key, label]) => (
-          <button type="button" key={key} role="tab"
-            className={`${reviewFilter === key ? "active" : ""}${
-              key === "mine" && reviewCounts.mine > 0 ? " attention" : ""}`}
-            aria-selected={reviewFilter === key}
-            onClick={() => setReviewFilter(key)}>
-            {label}<i>{reviewCounts[key]}</i>
-          </button>
-        ))}
-      </div>}
+      {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头归原语);
+          旧 .review-filter 皮肤类(含 active/attention/计数徽标)挂在
+          TabsList/TabsTrigger 上,视觉与筛选语义原样。 */}
+      {reviewRecordCount > 0 && <Tabs value={reviewFilter} className="contents"
+          onValueChange={(value) => setReviewFilter(value as ReviewFilter)}>
+        <TabsList variant="line" aria-label="按处理归属筛选"
+            className="review-filter h-auto w-full">
+          {([
+            ["all", "全部"],
+            ["mine", "等我确认"],
+            ["agent", "Agent 处理中"],
+            ["closed", "已完成"],
+          ] as const).map(([key, label]) => (
+            <TabsTrigger key={key} value={key}
+              className={`h-auto flex-none after:hidden${reviewFilter === key ? " active" : ""}${
+                key === "mine" && reviewCounts.mine > 0
+                  ? " attention border-[color:color-mix(in_srgb,var(--attention)_50%,var(--line-strong))]" : ""}`}>
+              {label}<i>{reviewCounts[key]}</i>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>}
       {reviewAssignment?.status === "pending" && task.status !== "canceled" && (
         <section className="review-assignment" aria-labelledby="review-assignment-title">
           <div className="review-assignment-mark" aria-hidden>审</div>
@@ -2018,55 +2025,69 @@ export function TaskWorkspace({
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-material-toolbar">
-              <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
-                {task.parent_task_id ? <>
-                  {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
-                      spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
-                      (2026-09-06 实战用户实锤"这里不应该叫当前任务书")。 */}
-                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                    onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
-                    <span>文档</span><i>{documents.length}</i>
-                  </button>
-                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                    onClick={() => openMaterial("source")}>
-                    <span>原始需求</span>
-                  </button>
-                </> : <>
-                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                    onClick={() => openMaterial("source")}>
-                    <span>需求原文</span>
-                  </button>
-                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                    onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                    <span>产出文档</span><i>{documents.length}</i>
-                  </button>
-                </>}
-                {(hasRequirementGraph || hasArchitectureStory) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
-                  onClick={() => openMaterial("chain")}>
-                  <span>架构图</span>
-                </button>}
-                <button type="button" role="tab" aria-selected={materialTabOn("diff")}
-                  className={materialTabOn("diff") ? "on" : ""}
-                  title={untrackedDirectoryCount
-                    ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
-                    : `${changeFileCount} 个文件`}
-                  onClick={() => { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }}
-                  disabled={!changeFileCount && !untrackedDirectoryCount}>
-                  <span>代码改动</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
-                    ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
-                </button>
-                <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
-                  aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
-                  <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
-                </button>
-                <button type="button" role="tab" className={`ws-activity-tab${
-                    workspaceView === "execution" ? " on" : ""}`}
-                  aria-selected={workspaceView === "execution"}
-                  title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}
-                  onClick={() => selectWorkspaceView("execution")}>
-                  <span>工作过程</span>
-                </button>
-              </div>
+              {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头、
+                  roving tabindex 归原语)。选中值由 materialView/
+                  workspaceView 派生(与原 aria-selected 判据一致);切换
+                  回调逐键对应原 onClick(开材料/设活动文档/切视图);
+                  .ws-source-switch 皮肤类原样挂在 TabsList 上。纯页签条
+                  转换:面板仍是下方按 materialView/workspaceView 的条件
+                  渲染块(挂载/卸载语义原样)。 */}
+              <Tabs className="contents"
+                  value={workspaceView === "knowledge" ? "knowledge"
+                    : workspaceView === "execution" ? "execution" : materialView}
+                  onValueChange={(value) => {
+                    if (value === "doc") { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }
+                    else if (value === "source") openMaterial("source");
+                    else if (value === "chain") openMaterial("chain");
+                    else if (value === "diff") { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }
+                    else if (value === "knowledge") selectWorkspaceView("knowledge");
+                    else if (value === "execution") selectWorkspaceView("execution");
+                  }}>
+                <TabsList variant="line" aria-label="工作区内容"
+                    className="ws-source-switch h-auto">
+                  {task.parent_task_id ? <>
+                    {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
+                        spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
+                        (2026-09-06 实战用户实锤"这里不应该叫当前任务书")。 */}
+                    <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
+                      <span>文档</span><i>{documents.length}</i>
+                    </TabsTrigger>
+                    <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
+                      <span>原始需求</span>
+                    </TabsTrigger>
+                  </> : <>
+                    <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
+                      <span>需求原文</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
+                      <span>产出文档</span><i>{documents.length}</i>
+                    </TabsTrigger>
+                  </>}
+                  {(hasRequirementGraph || hasArchitectureStory) && <TabsTrigger value="chain"
+                    className={`h-auto flex-none${materialTabOn("chain") ? " on" : ""}`}>
+                    <span>架构图</span>
+                  </TabsTrigger>}
+                  <TabsTrigger value="diff"
+                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}`}
+                    title={untrackedDirectoryCount
+                      ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
+                      : `${changeFileCount} 个文件`}
+                    disabled={!changeFileCount && !untrackedDirectoryCount}>
+                    <span>代码改动</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
+                      ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
+                  </TabsTrigger>
+                  <TabsTrigger value="knowledge"
+                    className={`h-auto flex-none${workspaceView === "knowledge" ? " on" : ""}`}>
+                    <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
+                  </TabsTrigger>
+                  <TabsTrigger value="execution"
+                    className={`ws-activity-tab h-auto flex-none${
+                      workspaceView === "execution" ? " on" : ""}`}
+                    title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}>
+                    <span>工作过程</span>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
               <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}

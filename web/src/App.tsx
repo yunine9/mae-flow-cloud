@@ -3,7 +3,8 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu,
@@ -1341,38 +1342,39 @@ export function App() {
       <main className={`workspace-main${dtsWide ? " is-wide" : ""}`}>
         {view === "team" && <section className="team-tasks-workspace">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
-            onSelect={setTeamTaskTab} />
-          {teamTaskTab === "current" ? <div role="tabpanel"
-            id="team-task-current-panel" aria-labelledby="team-task-current-tab">
-            <TeamDashboard
-              tasks={tasks}
-              users={teamUsers}
-              onChanged={refresh}
-              onOpenArtifacts={openArtifacts}
-            />
-          </div> : <div role="tabpanel"
-            id="team-task-archive-panel" aria-labelledby="team-task-archive-tab">
-            <HistoryBoard
-              tasks={tasks}
-              viewer={session}
-              onChanged={refresh}
-              onOpenTask={openArtifacts}
-            />
-          </div>}
+            onSelect={setTeamTaskTab}>
+            {/* (#210)两块手绘面板换 TabsPanel(keepMounted 默认 false,
+                卸载语义与原三目条件渲染一致);手写 id/aria-controls/
+                aria-labelledby 关联交由原语接管。 */}
+            {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
+              <TeamDashboard
+                tasks={tasks}
+                users={teamUsers}
+                onChanged={refresh}
+                onOpenArtifacts={openArtifacts}
+              />
+            </TabsContent> : <TabsContent value="archive" className="contents">
+              <HistoryBoard
+                tasks={tasks}
+                viewer={session}
+                onChanged={refresh}
+                onOpenTask={openArtifacts}
+              />
+            </TabsContent>}
+          </TeamWorldTabs>
         </section>}
 
         {/* 团队问题(2026-09-10 拆分拍板):问题会话的团队全景;页签骨架
             与团队需求同构(2026-09-11 排版对齐),操作台仍在「问题处理」。 */}
         {view === "teamIssues" && <section className="team-tasks-workspace">
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
-            onSelect={setTeamTaskTab} />
-          {teamTaskTab === "current" ? <div role="tabpanel"
-            id="team-issue-current-panel" aria-labelledby="team-issue-current-tab">
-            <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
-          </div> : <div role="tabpanel"
-            id="team-issue-archive-panel" aria-labelledby="team-issue-archive-tab">
-            <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
-          </div>}
+            onSelect={setTeamTaskTab}>
+            {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
+              <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+            </TabsContent> : <TabsContent value="archive" className="contents">
+              <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
+            </TabsContent>}
+          </TeamWorldTabs>
         </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
@@ -1868,33 +1870,38 @@ function UsersBoard({ me }: { me: string }) {
 
 /** 两域共用的页签骨架(2026-09-11 排版对齐):「当前现场/成果档案」两张
  * 大卡,团队需求与团队问题两页必须用这同一个组件,防版式漂移;域差异
- * 只有副标题文案与 aria 标注。 */
-function TeamWorldTabs({ domain, tab, onSelect }: {
+ * 只有副标题文案与 aria 标注。(#210)手搓 role=tablist 换 base-ui Tabs
+ * 原语:面板(TabsPanel)由调用点作为 children 传入,键盘箭头、roving
+ * tabindex 与页签/面板关联全部归原语;双行大卡版式用 shadcn 语义令牌
+ * 重皮(网格两列,窄屏单列),文案原样。 */
+function TeamWorldTabs({ domain, tab, onSelect, children }: {
   domain: "requirement" | "issue";
   tab: TeamTaskTab;
   onSelect: (tab: TeamTaskTab) => void;
+  children?: ReactNode;
 }) {
   const copy = domain === "requirement"
     ? { label: "团队需求视图", currentSmall: "谁在推进、哪里卡住、谁需要行动",
-        archiveSmall: "待合入、完成、失败与取消记录", prefix: "team-task" }
+        archiveSmall: "待合入、完成、失败与取消记录" }
     : { label: "团队问题视图", currentSmall: "哪个问题在推进、谁需要答复",
-        archiveSmall: "闭环结论与取消记录", prefix: "team-issue" };
-  return <nav className="team-task-tabs" aria-label={copy.label} role="tablist">
-    <button type="button" role="tab" id={`${copy.prefix}-current-tab`}
-      aria-controls={`${copy.prefix}-current-panel`}
-      aria-selected={tab === "current"}
-      className={tab === "current" ? "active" : ""}
-      onClick={() => onSelect("current")}>
-      <strong>当前现场</strong><small>{copy.currentSmall}</small>
-    </button>
-    <button type="button" role="tab" id={`${copy.prefix}-archive-tab`}
-      aria-controls={`${copy.prefix}-archive-panel`}
-      aria-selected={tab === "archive"}
-      className={tab === "archive" ? "active" : ""}
-      onClick={() => onSelect("archive")}>
-      <strong>成果档案</strong><small>{copy.archiveSmall}</small>
-    </button>
-  </nav>;
+        archiveSmall: "闭环结论与取消记录" };
+  return <Tabs value={tab} className="block"
+    onValueChange={(value) => onSelect(value as TeamTaskTab)}>
+    <TabsList aria-label={copy.label}
+      className="mb-4.5 h-auto w-full grid grid-cols-2 gap-[5px] rounded-[13px] border border-border bg-muted/60 p-[5px] shadow-xs max-[520px]:grid-cols-1">
+      <TabsTrigger value="current"
+        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
+        <strong className="text-sm leading-tight">当前现场</strong>
+        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.currentSmall}</small>
+      </TabsTrigger>
+      <TabsTrigger value="archive"
+        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
+        <strong className="text-sm leading-tight">成果档案</strong>
+        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.archiveSmall}</small>
+      </TabsTrigger>
+    </TabsList>
+    {children}
+  </Tabs>;
 }
 
 /** 团队看板列表项:TeamTask 稳定字段投影 + 原始任务对象。

@@ -43,8 +43,10 @@
 .task-overview-arrow { color: var(--faint); }
 .task-overview-open:hover .task-overview-arrow { color: var(--accent); }
 .team-overview, .team-delivery-overview { box-shadow: var(--shadow-panel); border-radius: 12px; }
-.team-task-tabs, .team-assets-tabs { border-color: var(--line); }
-.team-task-tabs button.active, .team-assets-tabs button.active { box-shadow: var(--shadow-sm); }
+/* (#210).team-task-tabs 家族随 shadcn Tabs 迁移删除,.team-assets-tabs
+   (#222 后续票范围)仍在用,共享规则只保留后者。 */
+.team-assets-tabs { border-color: var(--line); }
+.team-assets-tabs button.active { box-shadow: var(--shadow-sm); }
 .team-overview-metrics { border-color: var(--line); background: var(--surface-2); border-radius: 9px; }
 .overview-metric > span { font-weight: 550; }
 .overview-metric > strong { font-weight: 600; letter-spacing: -.05em; }

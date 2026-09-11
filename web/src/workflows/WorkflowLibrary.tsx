@@ -1,6 +1,7 @@
 import { PersonName } from "../People";
 import { useMemo, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
 
@@ -50,12 +51,15 @@ export function WorkflowLibrary({
         <span aria-hidden>＋</span>新建工作流</button>}
     </header>
     <div className="wf-library-toolbar">
-      <div className="wf-library-scopes" role="tablist" aria-label="工作流范围">
-        <button type="button" role="tab" aria-selected={scope === "active"}
-          onClick={() => setScope("active")}>当前工作流 <b>{activeCount}</b></button>
-        <button type="button" role="tab" aria-selected={scope === "archived"}
-          onClick={() => setScope("archived")}>已归档 <b>{archivedCount}</b></button>
-      </div>
+      {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语;计数徽标 <b> 与
+          aria-selected 驱动的旧皮肤原样。 */}
+      <Tabs value={scope} className="contents"
+        onValueChange={(value) => setScope(value as "active" | "archived")}>
+        <TabsList aria-label="工作流范围" className="wf-library-scopes h-auto">
+          <TabsTrigger value="active" className="h-auto flex-none">当前工作流 <b>{activeCount}</b></TabsTrigger>
+          <TabsTrigger value="archived" className="h-auto flex-none">已归档 <b>{archivedCount}</b></TabsTrigger>
+        </TabsList>
+      </Tabs>
       <label className="wf-library-search">
         <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="4.5" />
           <path d="m12 12 4 4" /></svg>

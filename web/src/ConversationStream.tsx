@@ -25,6 +25,7 @@ import {
   type FeedbackSource,
   type TaskSummary,
 } from "./api";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export type StreamFilter = "all" | "mine";
 
@@ -794,17 +795,22 @@ export function ConversationStream({
           空间显示文字了")。 */}
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
-        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"]] as const)
-            .map(([key, label]) => (
-              <button type="button" key={key} role="tab"
-                aria-selected={!thread && filter === key}
-                className={!thread && filter === key ? "on" : ""}
-                onClick={() => { onThreadChange(undefined); onFilterChange(key); }}>
-                {label}
-              </button>
-            ))}
-        </div>
+        {/* shadcn 化(#210):页签条交给 base-ui Tabs 原语(键盘左右箭头、
+            roving tabindex 归原语);线程视图打开时两签都不算选中,用
+            value=null 表达「无选中签」。旧 .ws-stream-filters 皮肤类挂在
+            TabsList 上,视觉与切换语义原样。 */}
+        <Tabs value={!thread ? filter : null} className="contents"
+          onValueChange={(value) => { onThreadChange(undefined); onFilterChange(value as StreamFilter); }}>
+          <TabsList variant="line" aria-label="会话流筛选" className="ws-stream-filters h-auto">
+            {([["all", "全部"], ["mine", "需要我的"]] as const)
+              .map(([key, label]) => (
+                <TabsTrigger key={key} value={key}
+                  className={`h-auto flex-none after:hidden${!thread && filter === key ? " on" : ""}`}>
+                  {label}
+                </TabsTrigger>
+              ))}
+          </TabsList>
+        </Tabs>
       </header>
       <div className={`ws-anchor ${anchor.tone}`} role="status">
         <i aria-hidden />

@@ -27,9 +27,8 @@
 .story-view-actions { display: flex; gap: 14px; flex-wrap: wrap; }
 .story-view-actions button { padding: 0; border: 0; color: var(--accent); background: transparent; font-size: 12px; }
 .story-view-reason { font-size: 12px; color: var(--muted); line-height: 1.65; margin: 10px 0 16px; overflow-wrap: anywhere; }
-.story-diagram-tabs { display: flex; gap: 6px; margin: 0 0 12px; padding: 4px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
-.story-diagram-tabs button { flex: 0 0 auto; padding: 7px 11px; border-color: transparent; background: transparent; font-size: 12px; }
-.story-diagram-tabs button[aria-selected="true"] { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgb(16 24 40 / 6%); }
+/* (#210)story-diagram-tabs 随 base-ui Tabs 迁移删除;图页签改 shadcn
+   默认皮(语义令牌 utility,见 StoryArchitecture.tsx)。 */
 .story-view-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 48px 24px; min-height: 280px; border-radius: 10px; background: var(--surface-soft); }
 .story-view-empty-only { min-height: 180px; margin-top: 20px; }
 .story-view-empty > span { font-size: 32px; font-weight: 300; color: var(--muted); margin-bottom: 12px; }
