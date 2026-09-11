@@ -1256,7 +1256,7 @@ export function App() {
     {/* 侧栏(shadcn Sidebar 族,base-nova 皮,2026-09-11 迁移):列宽对齐
         旧 app-shell 的 228px,桌面观感延续;brand/主题/密度/会话脚沿用
         本站件,导航按钮换 nova 菜单语言。 */}
-    <Sidebar collapsible="none">
+    <Sidebar collapsible="none" className="sticky top-0 h-svh">
       <SidebarHeader>
         <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
       </SidebarHeader>
