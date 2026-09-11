@@ -26,7 +26,6 @@ import {
   judgeAnnotation,
   replyToAnnotation,
   sendAnnotations,
-  decide,
   TASK_REQUIREMENT_ARTIFACT,
   type Annotation,
   type AnchorCheck,
@@ -121,22 +120,10 @@ export function AnnotationPanel({
   filter = "all",
   focus,
   people = [],
-  reworkChoice,
-  canDecide = false,
   onChanged,
   onLocate,
   onShowThread,
 }: {
-  /** 当前决定卡上"需要调整"那一项。有它且 canDecide 时,提交就是一步到位
-   * 的"提交并返工"——直接以这个选项提交决定卡,意见随之送给 Agent。 */
-  reworkChoice?: {
-    waitingId: string;
-    stateVersion: number;
-    question: string;
-    option: string;
-  };
-  /** 提交人就是决定人(责任人/管理员)。检视人不是,只能排队等责任人返工。 */
-  canDecide?: boolean;
   /** 抽屉顶部筛选条选中的档;非 all 时只列该档的批注。 */
   filter?: ReviewFilter;
   /** 从文档/代码行反向定位过来；request 保证连续点同一行也会重新闪。 */
@@ -250,11 +237,6 @@ export function AnnotationPanel({
   // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
   // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
   const queueable = taskStatus === "waiting_for_human";
-  // 责任人自己提意见时,"抽屉里提交、再回卡上选返工"是同一个意图拆成两步
-  // (内网实锤:点了"提交给 Agent"以为送到了,其实要点返工才送)。决定人
-  // 在这里直接以返工选项提交决定卡,一步到位;检视人仍走排队。
-  const oneStepRework = queueable && !requirementReview && canDecide
-    && !!reworkChoice;
   const ordinaryCanSend = !["completed", "canceled"].includes(taskStatus)
     && (running || evidenceAwaiting || reviewSendable || queueable);
   const isPublishedStory = (item: Annotation) => overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT;
@@ -318,16 +300,7 @@ export function AnnotationPanel({
     setError("");
     setSubmissionNotice("");
     try {
-      if (oneStepRework && reworkChoice && !overallDrafts.length) {
-        // 服务端 decide 会把本人全部草稿 + 等待期排队的意见一并渲进
-        // 决定正文,再 resume Agent——和在卡上手点"需要调整"完全同一条路。
-        const result = await decide(taskId, reworkChoice.stateVersion,
-          { [reworkChoice.question]: reworkChoice.option }, {}, undefined,
-          drafts.map((item) => item.id), undefined, undefined, undefined,
-          undefined, reworkChoice.waitingId);
-        if (result.conflict) setError(result.conflict);
-        else setSubmissionNotice(`已提交 ${drafts.length} 条意见并请求返工。`);
-      } else {
+      {
         const groups = [overallDrafts, sendableDrafts.filter((item) => !isPublishedStory(item))];
         const notices: string[] = [];
         for (const group of groups) {
@@ -404,24 +377,11 @@ export function AnnotationPanel({
     }
   }
 
-  async function continueReview() {
-    if (!reworkChoice || !oneStepRework) return { conflict: "请先在当前决定卡填写答复。" };
-    return decide(taskId, reworkChoice.stateVersion,
-      { [reworkChoice.question]: reworkChoice.option }, {}, undefined,
-      undefined, undefined, undefined, undefined, undefined, reworkChoice.waitingId);
-  }
-
   async function routeDraftToAgent(item: Annotation) {
     setSubmissionNotice("");
     await mutateAnnotation(item.id, async () => {
       const result = await sendAnnotations(taskId, [item.id], routingContext.trim());
       if (!result.error) { setRoutingId(""); setRoutingContext(""); }
-      if (!result.error && oneStepRework && !isPublishedStory(item)) {
-        const continued = await continueReview();
-        if (continued.conflict) return { error: `意见已排队，但当前决定未提交：${continued.conflict}` };
-        setSubmissionNotice("意见与补充说明已随返工决定送达，Agent 将继续修改。");
-        return {};
-      }
       if (!result.error) setSubmissionNotice(result.receipt
         ?? "已提交这条意见，请查看下方处理状态。");
       return { error: result.error };
@@ -494,7 +454,6 @@ export function AnnotationPanel({
                   onClick={() => void send()}>
             {busy ? "提交中…"
               : overallDrafts.length ? `提交 ${sendableDrafts.length} 条给 Agent`
-              : oneStepRework ? `提交 ${drafts.length} 条并返工`
               : drafts.every((item) => routeOf(item) === "owner_reply")
               ? `提交 ${drafts.length} 条给责任人答复`
               : drafts.every((item) => routeOf(item) === "owner_decision")
@@ -519,9 +478,7 @@ export function AnnotationPanel({
               ? requirementRevisionRunning
                 ? "意见提交后会排队；当前修订完成后自动处理，无需重复提交。所有意见处理并复检后，才能最终确认需求。"
                 : "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
-              : oneStepRework
-                ? `会直接以「${reworkChoice!.option.replace(/[（(].*$/, "")}」提交当前决定卡，意见随之送给 Agent，不必再回卡上点返工。`
-                : `任务正等一张决定卡。提交只是先登记成待闭环事实（阻止直接放行），正文要等责任人在卡上选「${reworkChoice?.option.replace(/[（(].*$/, "") ?? "需要调整"}」后才随决定送给 Agent。`}</p>
+              : "先逐条加入待发送清单，再到决定卡统一发送。"}</p>
           )}
         </div>
       )}
@@ -721,21 +678,14 @@ export function AnnotationPanel({
                     maxLength={4000} autoFocus value={routingContext} placeholder="例如：按这条意见修改，同时保留现有接口兼容性。"
                     onChange={(event) => setRoutingContext(event.target.value)} />
                   <div className="mt-2 flex items-center justify-end gap-2">
-                    <span className="mr-auto text-xs text-muted-foreground">{oneStepRework && !isPublishedStory(item) ? "会提交当前返工决定，原意见与补充说明一起送达" : queueable && !requirementReview && !isPublishedStory(item) ? "先排队，提交当前决定后一起送达" : "原意见与补充说明会一起发送"}</span>
+                    <span className="mr-auto text-xs text-muted-foreground">{queueable && !requirementReview && !isPublishedStory(item) ? "先排队，提交当前决定后一起送达" : "原意见与补充说明会一起发送"}</span>
                     <Button type="button" size="sm" variant="ghost" disabled={!!mutationBusy} onClick={() => setRoutingId("")}>取消</Button>
-                    <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy} onClick={() => void routeDraftToAgent(item)}>{mutationBusy === item.id ? "发送中…" : oneStepRework && !isPublishedStory(item) ? "发送并继续修改" : queueable && !requirementReview && !isPublishedStory(item) ? "加入待发送意见" : "发送给 Agent"}</Button>
+                    <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy} onClick={() => void routeDraftToAgent(item)}>{mutationBusy === item.id ? "发送中…" : queueable && !requirementReview && !isPublishedStory(item) ? "加入待发送意见" : "发送给 Agent"}</Button>
                   </div>
                 </div>
               ) : <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy}
                 title={canSendItem(item) ? undefined : "当前没有可接收意见的执行会话"}
                 onClick={() => { setRoutingId(item.id); setRoutingContext(""); setReplyingId(""); }}>交给 Agent</Button>)}
-              {closure.owner_controlled && item.sent_via === "queued_decision" && !item.response && oneStepRework && (
-                <Button type="button" size="sm" disabled={!!mutationBusy}
-                  onClick={() => void mutateAnnotation(item.id, async () => {
-                    const result = await continueReview();
-                    return { error: result.conflict };
-                  })}>提交决定并继续修改</Button>
-              )}
               {closure.owner_controlled && closure.can_route && routingId !== item.id && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (
                 replyingId === item.id ? <div className="annot-owner-reply-editor w-full rounded-md border border-border bg-muted/30 p-3">

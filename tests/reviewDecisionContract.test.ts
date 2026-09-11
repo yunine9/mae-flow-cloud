@@ -78,13 +78,43 @@ for (const mr of [false, true]) test(`意见排队与决定送达完整链路（
   await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_ADJUST } });
   const resolved = f.gate.get(card.waiting_id)!;
   assert.match(resolved.notes, /补边界测试/); assert.match(resolved.notes, /保留接口兼容性/);
-  assert.doesNotMatch(resolved.notes, /补异常处理/, "未交给 Agent 的另一条草稿不能夹带");
+  assert.match(resolved.notes, /补异常处理/, "责任人选择按意见修复会统一提交另一条待处理意见");
   assert.equal(f.api.annotations(f.task).list().find((item: any) => item.id === first.id).sent_via, "decision");
-  assert.equal(f.api.annotations(f.task).list().find((item: any) => item.id === second.id).status, "draft");
+  assert.equal(f.api.annotations(f.task).list().find((item: any) => item.id === second.id).sent_via, "decision");
   assert.equal(f.task.pendingResume.decision, REVIEW_ADJUST);
   const recovered = new TaskService({ dataDir: f.api.options.dataDir, provider: "unused", model: "unused", modelsJson: {}, maxConcurrent: 0 });
   recovered.recover();
   assert.match((recovered as any).tasks.get("task-19").pendingResume.notes, /保留接口兼容性/);
+});
+
+test("逐条加入两条意见期间决定保持待答，最后一次决定携带各自附言且不重复", async () => {
+  const f = fixture(true);
+  const ids: string[] = [];
+  for (const [note, context] of [["第一条边界测试", "保留接口"], ["第二条异常处理", "覆盖失败分支"]]) {
+    const item = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note });
+    ids.push(item.id);
+    await f.service.sendAnnotations("task-19", [item.id], "owner", true, false, context);
+    assert.equal(f.service.get("task-19")!.status, "waiting_for_human");
+  }
+  const card = f.service.get("task-19")!.waiting!;
+  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_ADJUST } });
+  const notes = f.gate.get(card.waiting_id)!.notes!;
+  for (const phrase of ["第一条边界测试", "第二条异常处理", "保留接口", "覆盖失败分支"]) {
+    assert.equal(notes.split(phrase).length - 1, 1);
+  }
+  assert.equal(f.api.annotations(f.task).list().filter((item: any) => ids.includes(item.id) && item.sent_via === "decision").length, 2);
+});
+
+test("未逐条交给 Agent，责任人直接选择修复也会送达并联动状态", async () => {
+  const f = fixture();
+  const item = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "直接从决定卡处理" });
+  const card = f.service.get("task-19")!.waiting!;
+  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_ADJUST } });
+  assert.match(f.gate.get(card.waiting_id)!.notes!, /直接从决定卡处理/);
+  const sent = f.api.annotations(f.task).list().find((entry: any) => entry.id === item.id);
+  assert.equal(sent.sent_via, "decision"); assert.equal(sent.route, "agent"); assert.equal(sent.agent_assigned, true);
+  const projection = await f.service.listAnnotationsAsync("task-19", { username: "owner", can_override: false, can_route_others: true });
+  assert.equal(projection.closures.find(entry => entry.id === item.id)?.text, "等待 Agent 答复");
 });
 
 test("真实会话举卡与回注：模型自由文案变成流程选项，用户所选原文交回模型和内核钩子", async () => {

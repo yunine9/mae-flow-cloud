@@ -1,3 +1,4 @@
+import { unassignedReviewDraft } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
 import { StoryArchitecture } from "./StoryArchitecture";
 import { StoryViewNotice } from "./StoryViewNotice";
@@ -21,7 +22,7 @@ import "./overall-story.css";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
-import { needsDeliverySelection } from "./decisionSelection";
+import { needsDeliverySelection, queuedDecisionAnnotationIds } from "./decisionSelection";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
@@ -88,7 +89,6 @@ import {
   isChainReviewWaiting,
   isClarificationWaiting,
   isOwnerOnlyWaiting,
-  reworkChoiceOf,
   RetryButton,
   TaskProgress,
   WaitBadge,
@@ -175,7 +175,7 @@ export function decisionAnnotationIds(
   viewerUsername: string,
 ): string[] {
   return items.filter((item) => item.status === "draft"
-    && item.author === viewerUsername).map((item) => item.id);
+    && item.author === viewerUsername && (item.route ?? "agent") === "agent").map((item) => item.id);
 }
 
 /** 当前材料搜索只认正文行，不搜索页签、按钮等界面文案。 */
@@ -1305,6 +1305,9 @@ export function TaskWorkspace({
   // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
+  const queuedIds = queuedDecisionAnnotationIds(notes);
+  const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => unassignedReviewDraft(item)
+    && !(task.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
@@ -1622,12 +1625,6 @@ export function TaskWorkspace({
   const decides = isOwnerOnlyWaiting(task)
     ? viewerUsername === (task.luban_account ?? "本地用户")
     : canOperate || canCollaborate || clarificationRespondent;
-  // 检视卡上的返工选项,交给批注面板做"提交并返工"一步到位。
-  const reworkChoiceRaw = waiting ? reworkChoiceOf(task) : undefined;
-  const workspaceReworkChoice = reworkChoiceRaw && task.waiting
-    ? { ...reworkChoiceRaw, waitingId: task.waiting.waiting_id,
-        stateVersion: task.waiting.state_version }
-    : undefined;
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
@@ -1793,8 +1790,6 @@ export function TaskWorkspace({
             }] : []),
             ...reviewPeople.filter((person) => person.username !== viewerUsername),
           ]}
-          reworkChoice={workspaceReworkChoice}
-          canDecide={canOperate}
           onLocate={locate}
           onShowThread={showThread}
           onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
@@ -2505,6 +2500,8 @@ export function TaskWorkspace({
                   onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
                   annotationIds={requirementAnalysisConfirmation ? undefined : draftIds}
                   unresolvedAnnotationCount={unresolvedNotes.length}
+                  queuedAnnotationIds={queuedIds}
+                  pendingReviewAnnotationIds={pendingReviewIds}
                   repositoryAssigneeSelection={chainReview && canOperate
                     && task.requirement_graph?.projection_state === "ready"
                     && task.requirement_graph.repositories.length > 0

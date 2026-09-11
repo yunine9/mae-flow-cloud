@@ -26,3 +26,10 @@ export function reviewDecisionContract(
       allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false }]
     : effects };
 }
+
+/** 整卡“按检视意见修复”可接手尚未处置的意见，不重发已送达或自行答复项。 */
+export function unassignedReviewDraft(item: { status: string; route?: string; owner_reply?: unknown; resolution?: unknown }): boolean {
+  return item.status === "draft"
+    && !item.owner_reply && !item.resolution
+    && ["agent", "owner_decision"].includes(item.route ?? "agent");
+}

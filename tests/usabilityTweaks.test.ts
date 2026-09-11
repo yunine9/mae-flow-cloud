@@ -46,8 +46,8 @@ test("决策选项原文可拖选复制,拖选松手不选中选项", () => {
   assert.match(taskCard, /onPointerDown=/);
   assert.match(taskCard, /const dragged = isDecisionTextDrag/);
   assert.match(taskCard, /if \(dragged\) \{\s*return;/);
-  assert.match(taskCard, /改为自定义答复/);
-  assert.match(taskCard, /setPicked\(current => clearDecisionChoice\(current, questions\[0\].question\)\)/);
+  assert.doesNotMatch(taskCard, />改为自定义答复</);
+  assert.match(taskCard, /toggleDecisionChoice\(current, question, option\)/);
 
 });
 
