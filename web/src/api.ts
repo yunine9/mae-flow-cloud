@@ -3259,6 +3259,10 @@ export interface SettingsView {
     issue_max_turns?: number;
     /** 问题会话回合前压缩的事件量阈值;0=关(缺省)。 */
     issue_compact_every_events?: number;
+    /** 终态(取消/归档)问题单代码现场回收开关;0=关。 */
+    issue_repo_reclaim?: number;
+    /** 问题单构建产物冷却期(小时);0=关。 */
+    issue_build_products_cooldown_hours?: number;
     repair_rounds?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
@@ -3297,6 +3301,8 @@ export interface SettingsView {
       max_concurrent: number;
       issue_max_turns: number;
       issue_compact_every_events: number;
+      issue_repo_reclaim: number;
+      issue_build_products_cooldown_hours: number;
       repair_rounds: number | null;
       poll_interval_s: number;
       poll_timeout_s: number;
@@ -3845,6 +3851,11 @@ export interface IssueSummary {
   }>;
   error?: string;
   last_reply?: string;
+  /** 代码现场已回收的时刻(磁盘治理):终态单的 repo/ 被清扫器删除后
+   *  落此标记——工作区变更签据此如实降级。 */
+  repo_reclaimed_at?: string;
+  /** 构建产物已回收的时刻(磁盘治理):返工首编为全量(依赖缓存热)。 */
+  build_products_reclaimed_at?: string;
 }
 
 export interface IssueWaitingCard {

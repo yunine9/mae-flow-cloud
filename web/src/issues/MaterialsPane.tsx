@@ -690,13 +690,14 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   async function load() {
     try {
       // 聚合 diff 一次拿全(合并视图用);逐仓切片由下面的 effect 按
-      // 选仓独立取,两份数据互不依赖。
-      const [materials, diff] = await Promise.all([
-        getIssueMaterials(detail.id),
-        getIssueFileDiff(detail.id),
-      ]);
+      // 选仓独立取,两份数据互不依赖。现场已回收(磁盘治理)时 diff
+      // 以 repo 为源必失败——只跳它,拉取日志等其余数据源照常加载。
+      const materials = await getIssueMaterials(detail.id);
       setData(materials);
-      setAllDiff(diff.diff);
+      if (!detail.repo_reclaimed_at) {
+        const diff = await getIssueFileDiff(detail.id);
+        setAllDiff(diff.diff);
+      }
       // 缺省展开第一层(顶层目录):只在首次清单到手时补,之后不动。
       if (!defaultExpandedDone.current) {
         defaultExpandedDone.current = true;
@@ -716,6 +717,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   }
 
   useEffect(() => {
+    // 现场已回收(磁盘治理):materials/diff 都以 repo 为源,取了必失败
+    // ——不再发请求,页签上给如实降级文案。
+    if (detail.repo_reclaimed_at) return;
     void load();
     // 会话状态一动(AI 可能改了工作区)就刷新;id 变化由父层换页签兜底。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -824,7 +828,16 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   // 免壳直渲(#123):没有面板壳,失败备注顶格示人,其余按 view 出内容。
   return <div className="issue-materials">
     {note && <div className="utility-note">{note}</div>}
-      {view === "changes" && <>
+      {view === "changes" && detail.repo_reclaimed_at && <>
+        {/* 磁盘治理:终态单的代码现场已被清扫器回收(取消/归档后无
+            消费方)——如实说明,不给一个必然失败的文件视图。 */}
+        <div className="utility-note">
+          代码现场已回收（磁盘纪律：取消/归档的问题单不再保留 repo 克隆，
+          源码可随时重新拉取）。分析报告、过程对话与拉取日志不受影响，
+          在各自页签查看。
+        </div>
+      </>}
+      {view === "changes" && !detail.repo_reclaimed_at && <>
         {/* 编辑时机提醒只跟编辑器走:查看模式没有编辑器,也就不需要。 */}
         {canOperate && detail.status === "running" && <div className="utility-note">
           AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。

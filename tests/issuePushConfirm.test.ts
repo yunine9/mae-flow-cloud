@@ -11,6 +11,13 @@
  * ScriptedModelServer 剧本 + 本地裸仓,只走公开 API 断言。推送用例走
  * 固定流程种子(fix 阶段收口后的返工续推:阶段门禁放行 push_branch,
  * 收口态不牵催办——与本闸正交)。
+ *
+ * 强制覆盖(同单重跑,2026-09-11 增补)契约:force=true 与普通推送
+ * 同权跟随「推送前过目」设置——开着时举强制覆盖卡(卡面带远端旧
+ * 分支指向),令牌带 force/remote 才放行(重推不必再带参);关着时
+ * 直推。普通卡确认过的令牌放不了强制覆盖(防降级错位);确认后
+ * 远端又动了,租赁式核对拒绝并自动重举强制卡(覆盖对象变了,确认
+ * 作废)。
  */
 
 import { test } from "node:test";
@@ -614,4 +621,253 @@ test("issue-14 收口:卡已在等作答时连环重调——快速打回,不顶
   assert.equal(state.gate?.id, firstGate.id, "旧卡不被顶掉(单卡槽)");
   assert.equal((state.transitions ?? []).filter((entry) =>
     /平台举闸/.test(entry.note ?? "")).length, 1, "全程只举一次卡");
+});
+
+// ---- 强制覆盖(同单重跑,2026-09-11 增补)----
+
+/** 同单重跑现场:远端已有上次运行推过的同名分支(与本次重跑历史
+ * 分叉,普通推送必被 non-fast-forward 拒)。返回克隆目录与遗留 tip,
+ * 供"确认后远端又动"的用例续推。 */
+function seedLeftoverBranch(
+  root: string,
+  origin: string,
+): { dir: string; tip: string } {
+  const dir = join(root, "leftover");
+  execFileSync("git", ["clone", "-q", origin, dir], { env: GIT_ENV });
+  execFileSync("git", ["-C", dir, "checkout", "-q", "-b", BRANCH],
+    { env: GIT_ENV });
+  execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty",
+    "-m", `[${TICKET}][fix] 上次运行遗留提交`], { env: GIT_ENV });
+  execFileSync("git", ["-C", dir, "push", "-q", "origin", BRANCH],
+    { env: GIT_ENV });
+  const tip = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"],
+    { encoding: "utf-8", env: GIT_ENV }).trim();
+  return { dir, tip };
+}
+
+function remoteBranchSha(origin: string): string {
+  return execFileSync("git",
+    ["--git-dir", origin, "rev-parse", `refs/heads/${BRANCH}`],
+    { encoding: "utf-8", env: GIT_ENV }).trim();
+}
+
+test("强制覆盖(三档):举强制卡带远端指向,确认→令牌带 force/remote→重推覆盖成功(不必再带参)", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushforce-");
+  const origin = bareOrigin(dataDir);
+  const leftover = seedLeftoverBranch(dataDir, origin);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command: COMMIT } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH, force: true } } },
+    { text: "已举强制覆盖卡等待用户确认。" },
+    // 确认后重推不带 force:覆盖语义随令牌走。
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "强制覆盖完成。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const created = seedFixedIssue(dataDir, origin);
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    interventionTier: () => "3",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        ? issue : undefined;
+    }, "强制覆盖过目卡");
+    const question = gated.gate!.question.questions[0].question;
+    assert.match(question, /强制覆盖/);
+    assert.match(question, new RegExp(leftover.tip.slice(0, 8)),
+      `卡面要带远端旧分支指向(覆盖对象身份,实际:${question})`);
+    assert.equal(pushReceipts(dataDir, created.id).length, 1);
+    assert.match(String(pushReceipts(dataDir, created.id)[0].result),
+      /强制覆盖确认卡/);
+    assert.equal(remoteBranchSha(origin), leftover.tip, "举卡阶段远端不动");
+
+    service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      code: "push", decision: "确认推送",
+    });
+    const tokened = await until(() => {
+      const state = readStateFile(dataDir, created.id);
+      return state.push_token ?? undefined;
+    }, "确认令牌落盘");
+    assert.equal(tokened.force, true, "令牌带强制覆盖语义");
+    assert.equal(tokened.remote, leftover.tip, "令牌绑定确认时的远端旧 tip");
+
+    const pushed = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return (issue.pushes?.length ?? 0) > 0 ? issue : undefined;
+    }, "确认后强制覆盖成功");
+    assert.notEqual(remoteBranchSha(origin), leftover.tip, "远端旧 tip 被覆盖");
+    assert.equal(remoteBranchSha(origin), pushed.pushes![0].sha);
+    const receipts = pushReceipts(dataDir, created.id);
+    assert.equal(receipts.at(-1)?.is_error, false);
+    assert.match(String(receipts.at(-1)?.result), /强制覆盖/);
+    assert.ok(readStateFile(dataDir, created.id).transitions?.some((entry) =>
+      entry.note.includes("强制覆盖远端同名分支")), "覆盖要留痕(转移账)");
+    assert.equal(readStateFile(dataDir, created.id).push_token, undefined,
+      "令牌成功即消费");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("强制覆盖(一/二档直推):过目关着 force 与普通推送同权——直推覆盖,不举卡", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushforce-off-");
+  const origin = bareOrigin(dataDir);
+  const leftover = seedLeftoverBranch(dataDir, origin);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command: COMMIT } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH, force: true } } },
+    { text: "已直推强制覆盖。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const created = seedFixedIssue(dataDir, origin);
+  const service = new IssueFlowService({ ...baseOptions(dataDir, model) });
+  try {
+    const idle = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "直推覆盖回合收口");
+    assert.equal(idle.gate ?? undefined, undefined, "不举卡(跟随过目设置)");
+    assert.equal(idle.pushes?.length, 1);
+    assert.notEqual(remoteBranchSha(origin), leftover.tip, "遗留分支被覆盖");
+    assert.equal(remoteBranchSha(origin), idle.pushes![0].sha);
+    const receipt = pushReceipts(dataDir, created.id)[0];
+    assert.equal(receipt.is_error, false);
+    assert.match(String(receipt.result), /强制覆盖/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("防降级错位:普通卡确认过的令牌放不了强制覆盖——带 force 重推即作废旧令牌重举强制卡", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushforce-down-");
+  const origin = bareOrigin(dataDir);
+  seedLeftoverBranch(dataDir, origin);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command: COMMIT } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "已举普通推送过目卡。" },
+    // 普通确认后带 force 重推:令牌不含强制语义,作废重举强制卡。
+    { tool: { name: "push_branch", input: { branch: BRANCH, force: true } } },
+    { text: "普通确认不含强制语义,已重举强制覆盖卡。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const created = seedFixedIssue(dataDir, origin);
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    interventionTier: () => "3",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        ? issue : undefined;
+    }, "普通过目卡");
+    assert.doesNotMatch(gated.gate!.question.questions[0].question, /强制覆盖/);
+    service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      code: "push", decision: "确认推送",
+    });
+    const tokened = await until(() => {
+      const state = readStateFile(dataDir, created.id);
+      return state.push_token ?? undefined;
+    }, "普通确认令牌落盘");
+    assert.equal(tokened.force, undefined, "普通卡令牌不带强制语义");
+
+    const regated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        && issue.gate.id !== gated.gate!.id
+        ? issue : undefined;
+    }, "重举强制覆盖卡");
+    assert.match(regated.gate!.question.questions[0].question,
+      /上次确认未含强制覆盖/);
+    assert.match(regated.gate!.question.questions[0].question, /强制覆盖/);
+    assert.equal(readStateFile(dataDir, created.id).push_token, undefined,
+      "旧令牌作废不留盘");
+    assert.equal(regated.pushes?.length ?? 0, 0, "未放行不得记账");
+    const last = pushReceipts(dataDir, created.id).at(-1);
+    assert.equal(last?.is_error, true);
+    assert.match(String(last?.result), /强制覆盖确认卡/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("覆盖对象变了:确认后远端分支又被推送——租赁核对拒绝,自动重举强制卡", async () => {
+  const dataDir = mfcTemp("mfc-issue-pushforce-stale-");
+  const origin = bareOrigin(dataDir);
+  const leftover = seedLeftoverBranch(dataDir, origin);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command: COMMIT } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH, force: true } } },
+    { text: "已举强制覆盖卡。" },
+    // 确认后重推:远端已被他人推进,租赁核对应拒并重举。
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "远端又动了,已重举强制覆盖卡。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const created = seedFixedIssue(dataDir, origin);
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    interventionTier: () => "3",
+  });
+  try {
+    const gated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        ? issue : undefined;
+    }, "强制覆盖过目卡");
+    // 确认前把远端旧分支再推一笔(他人/另一会话形态):用户确认的
+    // 覆盖对象与推送时的实际对象分叉。
+    execFileSync("git", ["-C", leftover.dir, "commit", "-q", "--allow-empty",
+      "-m", "他人又推了一笔"], { env: GIT_ENV });
+    execFileSync("git", ["-C", leftover.dir, "push", "-q", "origin", BRANCH],
+      { env: GIT_ENV });
+    service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      code: "push", decision: "确认推送",
+    });
+    const regated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        && issue.gate.id !== gated.gate!.id
+        ? issue : undefined;
+    }, "覆盖对象变了重举强制卡");
+    const question = regated.gate!.question.questions[0].question;
+    assert.match(question, /又有变动/);
+    assert.match(question, /强制覆盖/);
+    assert.equal(readStateFile(dataDir, created.id).push_token, undefined,
+      "对不上确认对象的令牌作废");
+    assert.equal(regated.pushes?.length ?? 0, 0, "没推成不得记账");
+    assert.notEqual(remoteBranchSha(origin), leftover.tip,
+      "远端保持他人那笔(未被盲盖)");
+    const last = pushReceipts(dataDir, created.id).at(-1);
+    assert.equal(last?.is_error, true);
+    assert.match(String(last?.result), /又有变动/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
 });

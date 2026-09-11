@@ -1,9 +1,12 @@
 # 03: 构建产物 48h 冷却清理 + 返工通知
 
-**What to build:** 非活跃单的构建产物由同一每日清扫器回收:状态 ∈
-{running, queued, waiting_user} 的不碰;其余单子若 `repo/<仓>/` 下的
-target/build/node_modules/depend 的 mtime 已冷却 ≥48h(旋钮可调),删除
-这些产物目录,源码与 .git 保留——单体积从 ~4.4G 降到 ~1.9G。返工处理
+**What to build:** 构建产物由同一每日清扫器按冷却期回收。范围(2026-09-11
+拍板对齐):**只清 status=idle 的单子**——running/queued/waiting_user 被
+状态守卫挡住(随时会续跑);failed 全豁免(可恢复态,手动转取消是其
+出口,用户拍板"不用管");suspended 等转正,保守不碰;canceled/archived
+由票 01 整仓回收覆盖。满足"非运行中且产物 mtime 冷却 ≥48h(旋钮可调)"
+的 idle 单,删 `repo/<仓>/` 下 target/build/node_modules/depend,源码与
+.git 保留——单体积从 ~4.4G 降到 ~1.9G。返工处理
 拍板:**不走预热**(清理不碰分仓缓存,首编=全量但缓存热);改为返工
 重开阶段的回合提示词带一句平台通知:「构建产物已按磁盘纪律回收,首次
 编译为全量编译(依赖缓存热),按正常流程编译验证,勿当作环境故障排查」
