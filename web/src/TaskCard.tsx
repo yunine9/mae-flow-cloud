@@ -1,3 +1,4 @@
+import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requirementDecisionContract";
 import { Button } from "./components/ui/button";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
@@ -569,12 +570,6 @@ export function TaskProgress({
   </span>;
 }
 
-/** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
- * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
-function confirmsChainOption(option: string): boolean {
-  return option.includes("确认并生成任务") || option.includes("确认分析结论");
-}
-
 /** 这张卡是不是 Chain 的"拆分方案确认"。有模块时确认并生成任务；
  * 全部候选仓均无需修改时只确认分析结论。 */
 export function isChainReviewWaiting(task: TaskSummary): boolean {
@@ -604,8 +599,7 @@ export function reworkChoiceOf(
     const exact = options.find((option) => feedbackAnswers.has(option));
     if (exact) return { question: item.question, option: exact };
     const nonClosing = options.filter((option) => !closingAnswers.has(option));
-    const option = nonClosing.find((candidate) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(candidate));
+    const option = nonClosing.find(isAdjustmentAnswer);
     if (option) return { question: item.question, option };
   }
   return undefined;
@@ -1229,7 +1223,9 @@ export function WaitingCard({
           <p className="decision-dock-notice" role="status">还有 {attachmentCount} 条检视意见未闭环，请先处理后再确认通过。</p>
         )}
         {pendingReviewAnnotationIds.length > 0 && <div className="decision-dock-notice flex items-center gap-2" role="status">
-          <span>{selectedHandlesFeedback ? `将提交 ${pendingReviewAnnotationIds.length} 条检视意见` : `${pendingReviewAnnotationIds.length} 条检视意见待处理`}{queuedAnnotationIds.length > 0 ? ` · 已选 ${queuedAnnotationIds.length} 条交给 Agent` : ""}</span>
+          <span>{selectedHandlesFeedback
+            ? `将把剩余 ${pendingReviewAnnotationIds.length} 条检视意见随本次决定一并送给 Agent`
+            : `还有 ${pendingReviewAnnotationIds.length} 条意见：请先删除无效意见，或自行答复无需改动的意见；其余会在选择“仍需调整”后一起送给 Agent`}</span>
         </div>}
         {conflict && <div className="alert" role="alert">{conflict}</div>}
         {showDeliveryCompileActions ? (

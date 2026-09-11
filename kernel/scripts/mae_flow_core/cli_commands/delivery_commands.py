@@ -339,6 +339,36 @@ def complete_verified_feedback(state, verified_sha):
     return bool(_promote(state, loop))
 
 
+def complete_superseded_pipeline_feedback(state, verified_sha):
+    """Retire only a trusted, pipeline-only batch superseded by a newer PASS.
+
+    This is a host verification fact, not a fabricated Agent result. Human,
+    mixed, unknown-version and current-version feedback keeps its writer.
+    """
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", verified_sha):
+        return None
+    loop = state.get("delivery_loop") or {}
+    batch = _batch(loop, str(loop.get("active_batch_id") or ""))
+    items = (batch or {}).get("items") or []
+    if not batch or not items or batch.get("status") not in ("repairing", "needs_human"):
+        return None
+    for item in items:
+        source_sha = str(item.get("source_id") or "").split(":")[0]
+        if (item.get("source") != "pipeline" or item.get("verification") != "pipeline"
+                or not re.fullmatch(r"[0-9a-fA-F]{40,64}", source_sha)
+                or source_sha == verified_sha):
+            return None
+    if not trusted_active_batch(state, ("feedback-open", "pipeline-record", "selection-reconcile")):
+        return None
+    batch["status"] = "closed"
+    batch["verified_sha"] = verified_sha
+    batch["superseded_by_pipeline"] = verified_sha
+    batch["closed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _history(state, state.get("current", ""), "feedback-superseded:" + batch["batch_id"],
+             "新提交权威流水线通过 %s；旧失败保留历史" % verified_sha[:12])
+    return bool(_promote(state, loop))
+
+
 def _result(flow, state, args):
     del flow
     payload = _payload(args.file, RESULT_SCHEMA)

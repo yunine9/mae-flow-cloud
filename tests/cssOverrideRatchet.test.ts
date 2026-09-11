@@ -95,28 +95,46 @@ test("CSS 棘轮:fixed 弹层规则只许减少(手搓 backdrop 迁 <Modal>)", (
     + "新的表单/面板弹层用 <Modal>,别再手搓 backdrop");
 });
 
-test("CSS 叠层:现有样式全在 legacy 一层,覆盖只走 fixes 层,不再新开层", () => {
+test("CSS 叠层:固定五层顺序，存量保持 legacy，Preflight 兼容只在 base", () => {
   // 2026-09-06 决定:按文件分层被五档宽度截图裁判(scripts/visual-scenes.ts)
   // 否掉——480 张里 209 张变了,后面文件里被长选择器压住的规则一夜全赢,那是
   // 没人审过的改版。现有样式整体进 legacy 一层(与不分层逐像素一致);以后
   // 的覆盖写进 `@layer fixes { … }`,无条件赢,不用再堆长选择器或 !important。
-  const declarations = Object.values(css)
-    .flatMap((text) => text.match(/^@layer [^{;]+;$/gm) ?? []);
-  assert.deepEqual(declarations, ["@layer legacy, fixes;"],
-    "层顺序只在 tokens.css 声明一次,且只有 legacy、fixes 两层");
+  // 引入全局 Preflight 后，base 必须低于存量，工具类仍须高于 fixes。
+  // 固定声明的位置和完整顺序，不能靠加载先后偶然注册出正确层级。
+  const declarations = Object.entries(css).flatMap(([name, text]) =>
+    (text.replace(/\/\*[\s\S]*?\*\//g, "").match(/^@layer [^{;]+;$/gm) ?? [])
+      .map(declaration => ({ name, declaration })));
+  assert.deepEqual(declarations, [{ name: "tokens.css",
+    declaration: "@layer base, legacy, fixes, theme, utilities;" }],
+    "tokens.css 必须唯一声明 base < legacy < fixes < theme < utilities");
   for (const [name, text] of Object.entries(css)) {
     const body = text.replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^@layer [^{;]+;$/m, "").trim();
     // 2026-09-09 豁免(issue #148):tailwind.css 是 Tailwind v4 新世界入口,
     // 层序经 @import layer() 注记在构建期落位(legacy < fixes < theme < utilities,
     // dist 已验),结构上不属于 legacy 存量,不包 legacy 层;未登记层的禁令对它照常生效。
+    const containerLayer = name === "preflight-compat.css" ? "base" : "legacy";
     if (name !== "tailwind.css") {
-      assert.ok(body.startsWith("@layer legacy {"),
-        `${name} 的样式必须整体包在 @layer legacy { … } 里(新文件也一样)`);
-      assert.ok(body.endsWith("}"), `${name} 的 legacy 层没有闭合`);
+      assert.ok(body.startsWith(`@layer ${containerLayer} {`),
+        `${name} 的样式必须整体包在 @layer ${containerLayer} { … } 里`);
+      assert.ok(body.endsWith("}"), `${name} 的 ${containerLayer} 层没有闭合`);
     }
-    const layers = [...text.matchAll(/@layer\s+([a-zA-Z-]+)\s*\{/g)].map((match) => match[1]);
-    assert.deepEqual([...new Set(layers)].filter((layer) => layer !== "legacy" && layer !== "fixes"), [],
+    const layers = [...body.matchAll(/@layer\s+([a-zA-Z-]+)\s*\{/g)].map((match) => match[1]);
+    const allowed = name === "preflight-compat.css" ? ["base"] : ["legacy", "fixes"];
+    assert.deepEqual([...new Set(layers)].filter((layer) => !allowed.includes(layer)), [],
       `${name} 用了未登记的层;要新开层先过一遍截图裁判再来改这里`);
   }
+});
+
+test("Preflight 导入 base 且兼容补丁随后加载，主题和工具类使用各自层", () => {
+  const imports = [...css["tailwind.css"].matchAll(/@import\s+"tailwindcss\/([^"\n]+)"\s+layer\(([^)]+)\);/g)]
+    .map(match => [match[1], match[2]]);
+  assert.deepEqual(imports, [["preflight.css", "base"], ["theme.css", "theme"], ["utilities.css", "utilities"]]);
+  const main = readFileSync(join(dir, "main.tsx"), "utf8");
+  const positions = ["tokens.css", "tailwind.css", "preflight-compat.css"]
+    .map(name => main.indexOf(`import "./${name}";`));
+  assert.ok(positions.every(position => position >= 0)
+    && positions[0] < positions[1] && positions[1] < positions[2],
+  "先注册层序，再加载 Preflight，最后加载同层兼容补丁");
 });

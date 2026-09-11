@@ -1,4 +1,4 @@
-import { confirmedPipelineRun, historicalPipelineFeedback } from "./pipelineHandoff.ts";
+import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "./pipelineHandoff.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
@@ -90,6 +90,18 @@ export function recordTaskHostInstruction(summary: TaskSummary, text: string, ac
   return id;
 }
 
+/** 恢复“远端收据已落盘、任务投影未落盘”的窗口；完成后的旧操作不能覆盖更新的正常推送。 */
+export function recoverHostPushProjection(summary: TaskSummary): boolean {
+  if (["completed", "canceled"].includes(summary.status)) return false;
+  const ledger = new TaskHostLedger(summary);
+  const pending = ledger.pending();
+  const receipt = pending?.push_receipt ?? summary.delivery?.git_push
+    ?? ledger.read().operations.filter(op => op.push_receipt).at(-1)?.push_receipt;
+  if (!receipt || (summary.delivery?.sha === receipt.sha && summary.delivery.git_push?.sha === receipt.sha)) return false;
+  projectPushReceipt(summary, receipt);
+  return true;
+}
+
 export interface TaskHostRuntime {
   summary: TaskSummary;
   cwd?: string;
@@ -113,6 +125,8 @@ export interface TaskHostRuntime {
   activeFeedback?(): { batchId: string; items: any[]; path: string } | undefined;
   allowPush(): Promise<boolean>;
   confirmPush?(operation: HostOperation): Promise<boolean>;
+  /** 缺少已确认 AR 描述时举起现有填写卡，返回 undefined 暂停本操作。 */
+  mrTitle?(operation: HostOperation): string | undefined;
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
@@ -307,9 +321,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       operation.push_receipt = receipt;
       ledger.update(operation);
       // Persist the transport fact even when cancellation races the response.
-      host.summary.delivery = { ...host.summary.delivery, git_push: receipt };
+      projectPushReceipt(host.summary, receipt);
       host.persist();
-      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。这是阶段性推送，未改变旧流水线结论或关闭反馈；未提交改动不包含在内。`;
+      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
@@ -317,9 +331,14 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       } else {
         if (host.summary.delivery?.git_push?.sha !== operation.sha) throw new Error("当前提交尚未取得真实推送收据，请先推送");
         if (!operation.target_branch) throw new Error("旧操作缺少固定的 MR 目标分支，请重新发起创建 MR");
+        const title = operation.mr_receipt ? undefined : host.mrTitle?.(operation);
+        if (!operation.mr_receipt && !title) {
+          if (!host.mrTitle) throw new Error("缺少 AR 描述确认入口，不能以任务标题代替");
+          return true;
+        }
         const receipt = operation.mr_receipt ?? await createMergeRequest({ platformUrl: host.platformUrl,
           repo: host.summary.repo_url, sourceBranch: operation.branch!, targetBranch: operation.target_branch,
-          title: host.summary.title ?? host.summary.requirement.split("\n")[0], dtsNo: host.summary.ticket, credential: host.credential });
+          title: title!, dtsNo: host.summary.ticket, credential: host.credential });
         operation.mr_receipt = { url: receipt.url, id: receipt.id };
         ledger.update(operation);
         host.summary.delivery = { ...host.summary.delivery, mr_url: receipt.url, mr_id: receipt.id, source_branch: operation.branch, target_branch: operation.target_branch };

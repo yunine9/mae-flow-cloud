@@ -934,6 +934,29 @@ class DeliveryHostProofTests(TempProject):
 
 
 class PipelineRoutingTests(unittest.TestCase):
+    def test_new_pass_retires_only_trusted_old_pipeline_batch(self):
+        for mode in ("old", "mixed", "current", "untrusted", "red"):
+            with self.subTest(mode=mode):
+                value = state("feedback_triage")
+                items = [{"id": "old-ci", "source": "pipeline", "verification": "pipeline",
+                          "source_id": (HEAD if mode == "current" else "b" * 40) + ":COMPILE"}]
+                if mode == "mixed":
+                    items.append({"id": "review", "source": "workspace", "verification": "human"})
+                active = {"batch_id": "old", "status": "repairing", "items": items}
+                value["delivery_loop"] = {"active_batch_id": "old", "batches": [active]}
+                with mock.patch.object(delivery, "trusted_active_batch", return_value=mode != "untrusted"), \
+                        mock.patch.object(cli_runtime, "advance") as advance:
+                    _route_external_verification({"steps": {}}, value,
+                        {"verdict": "RED" if mode == "red" else "PASS", "sha": HEAD})
+                if mode == "old":
+                    self.assertEqual("closed", active["status"])
+                    self.assertEqual(HEAD, active["superseded_by_pipeline"])
+                    self.assertNotIn("results", active)
+                    self.assertEqual("delivery_watch", advance.call_args.args[3]["next"])
+                else:
+                    self.assertEqual("repairing", active["status"])
+                    advance.assert_not_called()
+
     def test_continuous_pass_enters_delivery_watch(self):
         value = state("external_verify")
         with mock.patch.object(

@@ -39,7 +39,7 @@ async function until<T>(
   }
 }
 
-test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+任务书+全局 Story 发布", async () => {
+test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 发布", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-unit-split-e2e-"));
   const repo = join(dataDir, "svc-core");
   execFileSync("git", ["init", "-q", "-b", "master", repo]);
@@ -116,8 +116,7 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       ["契约骨架", "过滤实现"]);
 
     // 骨架→实现属于串行接力，后续单元会在上游 MR 合入后从远端基准
-    // 分支重新建现场；父子目录重叠是合法的允许改动范围，不是文件
-    // 所有权冲突。用不同子单号绕开下方独立的分支名校验来单测它。
+    // 分支重新建现场；父子目录重叠、相同 AR 都是合法的交付安排。
     const parentState = (service as any).tasks.get(parent.id);
     const graphPath = join(parentState.cwd, artifactDir,
       "requirement-graph.json");
@@ -132,7 +131,7 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.doesNotThrow(() => (service as any).requirementGraphPlan(
       parentState,
       { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
-      { "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102" },
+      { "unit-contract": ticket, "unit-filter": ticket },
     ), "有序的同仓交付单元可以声明相同或互相包含的允许改动范围");
     writeStoryArtifacts(dirname(graphPath), ticket, chainBody,
       graphDefinition, "r3");
@@ -149,23 +148,13 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     parentState.summary.waiting = revisedReview;
     (service as any).sealRequirementGraphReview(parentState, revisedReview);
 
-    // 两个单元此刻同责任人、同单号(都继承父单):分支名会互相覆盖,
-    // 必须在确认时挡下,不能等克隆后才炸。
-    await assert.rejects(
-      () => service.confirmRequirementGraph(parent.id),
-      (error: unknown) => error instanceof TaskControlError
-        && /同仓、同责任人、同单号/.test((error as Error).message),
-      "同仓同人同单号必须在确认前被撞分支校验拒绝");
-
-    // 页面在同一次“确认并生成任务”提交里改子单号。计划校验必须
-    // 先按这批覆盖值判断撞分支，再原子保存分工；不能拿旧的父单号
-    // 先判一次红，把用户永远卡在确认卡上。
+    // 两个同仓单元由平台补串行边，可以由同一责任人共用同一 AR。
     const confirmed = await service.confirmRequirementGraph(parent.id, {
       repository_assignees: {
         "unit-contract": "cloudbot", "unit-filter": "cloudbot",
       },
       repository_tickets: {
-        "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102",
+        "unit-contract": ticket, "unit-filter": ticket,
       },
     });
     assert.equal(confirmed.status, "coordinating");
@@ -196,8 +185,12 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.equal(service.get(parent.id)!.cross_repository_updates?.length, 1);
     (service as any).adoptRequirementStory(parentState);
     assert.equal(service.get(parent.id)!.cross_repository_updates?.length, 1, "发布重试不重复广播");
-    assert.equal(contractChild.ticket, "REQ2026083101");
-    assert.equal(filterChild.ticket, "REQ2026083102");
+    assert.equal(contractChild.ticket, ticket);
+    assert.equal(filterChild.ticket, ticket);
+    assert.equal(contractChild.delivery, undefined,
+      "第一个子任务必须拥有独立交付状态");
+    assert.equal(filterChild.delivery, undefined,
+      "后续同分支子任务不能继承上一任务的 MR 或推送收据");
     assert.match(contractChild.title ?? "", /契约骨架/,
       "子任务标题要带单元名,列表里才分得清同仓的两单");
     // 需求原文保持原样；任务书独立且位于第一阅读入口，不再藏在长原文末尾。
@@ -518,7 +511,7 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
   }
 });
 
-test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不继承", async () => {
+test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号仍逐单元确认", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-unit-inherit-"));
   const repoA = join(dataDir, "svc-a");
   const repoB = join(dataDir, "svc-b");
@@ -570,7 +563,40 @@ test("同仓拆多单元:新节点继承该仓下单责任人为默认,单号不
     "拆分后单元默认继承该仓下单责任人,不得回落主责任人");
   assert.deepEqual(nodes.map((node: { ticket?: string }) => node.ticket),
     [undefined, undefined, "REQ2026090302"],
-    "同仓单元的单号不继承(逐单元填,继承同号会撞分支);单节点仓照旧");
+    "同仓单元的单号逐项确认但允许填相同 AR；单节点仓照旧");
   assert.equal(nodes[2].assignee, "bob",
     "未拆分的仓经 url 兜底完整保留下单事实");
+});
+
+test("同仓串行单元共用远端分支时，上一轮合入后下一轮可快进推送", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-unit-same-ticket-git-"));
+  const bare = join(root, "remote.git");
+  execFileSync("git", ["init", "--bare", "--quiet", bare]);
+  const branch = "master_owner_REQ-SAME";
+  const first = join(root, "first");
+  execFileSync("git", ["clone", "--quiet", bare, first]);
+  execFileSync("git", ["-C", first, "checkout", "--quiet", "-b", "master"]);
+  writeFileSync(join(first, "base.txt"), "base\n");
+  execFileSync("git", ["-C", first, "add", "."]);
+  execFileSync("git", ["-C", first, "commit", "--quiet", "-m", "base"], { env: GIT_ENV });
+  execFileSync("git", ["-C", first, "push", "--quiet", bare, "master"]);
+  execFileSync("git", ["-C", first, "checkout", "--quiet", "-b", branch]);
+  writeFileSync(join(first, "unit-1.txt"), "one\n");
+  execFileSync("git", ["-C", first, "add", "."]);
+  execFileSync("git", ["-C", first, "commit", "--quiet", "-m", "unit one"], { env: GIT_ENV });
+  execFileSync("git", ["-C", first, "push", "--quiet", bare, branch]);
+  execFileSync("git", ["--git-dir", bare, "update-ref", "refs/heads/master",
+    execFileSync("git", ["-C", first, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()]);
+
+  const second = join(root, "second");
+  execFileSync("git", ["clone", "--quiet", "--branch", "master", bare, second]);
+  execFileSync("git", ["-C", second, "checkout", "--quiet", "-b", branch]);
+  writeFileSync(join(second, "unit-2.txt"), "two\n");
+  execFileSync("git", ["-C", second, "add", "."]);
+  execFileSync("git", ["-C", second, "commit", "--quiet", "-m", "unit two"], { env: GIT_ENV });
+  execFileSync("git", ["-C", second, "push", "--quiet", bare, branch]);
+  assert.doesNotThrow(() => execFileSync("git", ["--git-dir", bare,
+    "merge-base", "--is-ancestor", "master", branch]));
+  assert.equal(execFileSync("git", ["--git-dir", bare, "rev-list", "--count",
+    "master.." + branch], { encoding: "utf8" }).trim(), "1");
 });

@@ -186,9 +186,11 @@ for (const artifact of [TASK_REQUIREMENT_ARTIFACT, "diff", "design.md"]) {
       service.verifyAnnotation(task.id, delegated.id, "owner");
       await service.reopenAnnotation(task.id, delegated.id, "owner", 0);
       assert.doesNotMatch(renderAnnotations([store.list().find((row) => row.id === delegated.id)!], "test"), /保持现有接口兼容/, "旧轮补充不应默默带入新一轮");
-      assert.throws(() => service.dropAnnotation(task.id, delegated.id, "owner"), /不能删除/);
+      assert.equal(store.list().find((row) => row.id === delegated.id)?.agent_assigned, undefined);
       await service.replyToAnnotation(task.id, delegated.id, "owner", "重新核对后，维持原有约定");
       assert.equal(service.verifyAnnotation(task.id, delegated.id, "owner").status, "verified");
+      await service.reopenAnnotation(task.id, delegated.id, "owner", 1);
+      assert.equal(service.dropAnnotation(task.id, delegated.id, "owner").status, "dropped");
     } finally { await service.shutdown(); }
   });
 }

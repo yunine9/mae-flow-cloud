@@ -325,6 +325,7 @@ export interface AnnotationClosure {
   owner_controlled?: boolean;
   can_resolve?: boolean;
   can_delete?: boolean;
+  can_edit?: boolean;
   can_reopen?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;
@@ -633,6 +634,7 @@ export function annotationClosure(
       delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : item.status === "draft" ? "已记下，等待责任人处理" : deliveryTextOf(item, facts, personName),
       verdict_ready: answered, actionable: pending && canManage && (!waitingForAgent || queuedDecision), can_resolve: canResolve, owner_controlled: true,
       can_delete: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
+      can_edit: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
       can_reopen: canManage && (item.status === "verified" || (item.status === "sent" && answered)),
       can_verify: canResolve && (response?.outcome === "fixed" || (item.route === "owner_reply" && !!item.owner_reply)),
       can_override_verify: false, can_override_drop: false, can_route: canManage && pending && !answered && (item.status === "draft" || item.sent_via === "owner_pending"),

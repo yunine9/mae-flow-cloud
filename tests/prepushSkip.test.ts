@@ -135,3 +135,33 @@ test("没有失败停机就不许跳:通过态/无验证都拒", async () => {
     await model.stop();
   }
 });
+
+test("同 SHA 已有宿主推送收据时不补跑 Build-Fix，恢复交给流水线", async () => {
+  const { service, model, internal, repo } = await failedTask();
+  try {
+    const revision = await (service as any).prePushRevision(internal);
+    internal.summary.delivery = {
+      git_push: { sha: revision.sha, ref: "refs/heads/work", remote: "origin" },
+      prepush: {
+        ...blockedPrepush(revision.sha),
+        state: "preparing",
+        workspace_fingerprint: revision.workspace_fingerprint,
+      },
+    };
+    (service as any).options.prepush = {
+      enabled: true,
+      runner: async () => { throw new Error("已推送 SHA 不应补跑 Build-Fix"); },
+    };
+    assert.equal(await (service as any).preparePush(
+      internal, "work", "master", internal.controlEpoch ?? 0), true);
+    assert.equal((service as any).reconcileInterruptedPrePush(internal), "none");
+
+    writeFileSync(join(repo.cwd, "README.md"), "next\n");
+    repo.git("add", "README.md");
+    repo.git("commit", "--quiet", "-m", "next revision");
+    const next = await (service as any).prePushRevision(internal);
+    assert.notEqual(next.sha, revision.sha, "新 SHA 不能复用旧推送收据");
+  } finally {
+    await model.stop();
+  }
+});

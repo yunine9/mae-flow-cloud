@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
-import { hostResumeMission, createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult } from "../src/taskHostTools.ts";
+import { hostResumeMission, createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult, recoverHostPushProjection } from "../src/taskHostTools.ts";
 
 function scene(t: any) {
   const root = mkdtempSync(join(tmpdir(), "mfc-host-tools-"));
@@ -54,7 +54,7 @@ function scene(t: any) {
     resumed: () => resumed, verificationRuns: () => verificationRuns };
 }
 
-test("Agent 请求推送经回合交接后写入真实远端，保留旧红灯且不取消旧目标", async t => {
+test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承旧红灯且不取消旧目标", async t => {
   const s = scene(t);
   s.host.summary.delivery = { sha: "old-ci-sha", pipeline: "failed" };
   const op = await queueTaskHostOperation(s.host, "push-1", { action: "push", reason: "先交付 B" });
@@ -65,8 +65,8 @@ test("Agent 请求推送经回合交接后写入真实远端，保留旧红灯�
   const completed = new TaskHostLedger(s.host.summary).read().operations[0];
   assert.equal(completed.state, "succeeded", completed.result);
   assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), op.sha);
-  assert.equal(s.host.summary.delivery.sha, "old-ci-sha");
-  assert.equal(s.host.summary.delivery.pipeline, "failed");
+  assert.equal(s.host.summary.delivery.sha, op.sha);
+  assert.equal(s.host.summary.delivery.pipeline, undefined);
   assert.equal(s.resumed(), 1);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "succeeded");
   assert.equal(await finishTaskHostOperation(s.host), false, "已完成操作不重新传输");
@@ -81,6 +81,22 @@ test("推送排队后 HEAD 改变时如实失败，不推错版本", async t => 
   assert.equal(op.state, "failed");
   assert.match(op.result!, /HEAD/);
   assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+});
+
+test("恢复宿主收据已落盘但投影未保存的窗口，不传输且不覆盖后来的正常推送", async t => {
+  const s = scene(t);
+  const op = await queueTaskHostOperation(s.host, "push-window", { action: "push", reason: "发布" });
+  const receipt = { sha: op.sha!, ref: "refs/heads/work", remote: "origin" };
+  new TaskHostLedger(s.host.summary).update({ ...op, state: "running", push_receipt: receipt });
+  s.host.summary.delivery = { sha: "old", pipeline: "success" };
+  assert.equal(recoverHostPushProjection(s.host.summary), true);
+  assert.equal(s.host.summary.delivery.sha, op.sha);
+  assert.equal(s.host.summary.delivery.pipeline, undefined);
+  assert.equal(s.facts.length, 0);
+  new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", push_receipt: receipt });
+  s.host.summary.delivery = { sha: "later", pipeline: "success", git_push: { ...receipt, sha: "later" } };
+  assert.equal(recoverHostPushProjection(s.host.summary), false);
+  assert.equal(s.host.summary.delivery.sha, "later");
 });
 
 test("推送成功但返回窗口取消，记真实收据且不重新启动 Agent", async t => {
@@ -270,13 +286,18 @@ test("MR 创建沿任务仓/分支/单号，已取得收据后恢复不再次创
   await queueTaskHostOperation(s.host, "push", { action: "push", reason: "阶段交付" });
   await finishTaskHostOperation(s.host);
   await queueTaskHostOperation(s.host, "mr", { action: "create_mr", reason: "提交检视" });
+  s.host.mrTitle = () => undefined;
+  await finishTaskHostOperation(s.host);
+  assert.equal(p.requests.length, 0, "尚未填写 AR 描述时不得创建 MR");
+  assert.equal(new TaskHostLedger(s.host.summary).pending()?.input.action, "create_mr");
+  s.host.mrTitle = () => "责任人填写的 AR 准确名称";
   s.host.persist = () => { throw new Error("保存失败"); }; s.host.fail = () => {};
   await finishTaskHostOperation(s.host);
   delete s.host.summary.delivery!.mr_url; delete s.host.summary.delivery!.mr_id;
   s.host.persist = () => {};
   await finishTaskHostOperation(s.host);
   assert.equal(p.requests.length, 1);
-  assert.deepEqual(p.requests[0].body, { repo: s.remote, source_branch: "work", target_branch: "main", title: "实现模块并推送", dts_no: "REQ-1" });
+  assert.deepEqual(p.requests[0].body, { repo: s.remote, source_branch: "work", target_branch: "main", title: "责任人填写的 AR 准确名称", dts_no: "REQ-1" });
   assert.equal(s.host.summary.delivery!.mr_id, 1);
 });
 

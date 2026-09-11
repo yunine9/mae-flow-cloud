@@ -94,14 +94,14 @@ test("单仓单元的 AR 已有值、清空、输入首字符后始终可编辑"
   }
 });
 
-test("AR 保持可编辑时仍校验同仓同执行人的重复单号和空白", () => {
+test("AR 保持可编辑时允许串行单元共用单号，仍校验空白", () => {
   const render = (tickets: Record<string, string>) => renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
     taskId: "duplicate-ar", repositories: [
       { id: "a", name: "模块一", url: "https://example.test/ui.git" },
       { id: "b", name: "模块二", url: "https://example.test/ui.git" },
     ], selection: { assignments: { a: "alice", b: "alice" }, tickets, ready: false, loading: false }, onSelectionChange() {},
   }));
-  assert.match(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号与「模块二」重复/);
+  assert.doesNotMatch(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号.*重复/);
   assert.match(render({ a: "REQ BAD", b: "REQ-OK" }), /AR 单号无效/);
   assert.doesNotMatch(render({ a: "REQ-ONE", b: "REQ-TWO" }), /单号.*重复|AR 单号无效|缺少 AR 单号/);
 });
@@ -641,11 +641,11 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
   "MR 修复缺逐条回执时不能误开放通过");
 });
 
-test("待处理意见不展示旧路由选项，责任人可答复或交给 Agent，闭环后可重开", () => {
+test("待处理意见由检视卡统一送达，责任人仍可自行答复或删除，闭环后可重开", () => {
   const item = annotation({ status: "draft", response: undefined, route: "owner_reply", author: "reviewer", assignee: "owner" });
   const common = { taskId: "task", taskOwner: "owner", ownerControlled: true, items: [item], checks: [], taskStatus: "running", onChanged() {} };
   const html = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername: "owner" }));
-  assert.match(html, />交给 Agent<\/button>/); assert.match(html, />自行答复<\/button>/); assert.match(html, />删除<\/button>/);
+  assert.doesNotMatch(html, />交给 Agent<\/button>/); assert.match(html, />自行答复<\/button>/); assert.match(html, />删除<\/button>/);
   assert.doesNotMatch(html, />确认闭环<\/button>|决策后处理|记为记忆|申请撤回表达/);
   for (const viewerUsername of ["reviewer", "admin"]) {
     const readonly = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername }));

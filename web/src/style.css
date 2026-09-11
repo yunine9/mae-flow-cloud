@@ -2453,7 +2453,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-desc-editor .ProseMirror a { color: var(--accent); }
 /* 截图灯箱:点编辑区缩略图看原图,点任意处关闭。 */
 .issue-image-lightbox {
-  position: fixed; inset: 0; z-index: 80;
+  z-index: 80;
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, .72); cursor: zoom-out;
 }
