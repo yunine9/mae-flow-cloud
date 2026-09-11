@@ -142,6 +142,103 @@ test("一档全自动:有单分析闸全量代答,自动确认进问题修改", 
   }
 });
 
+test("代答竞速守卫:一档不发可行动卡通知(小鲁班只见已代答),二档照发等卡", async () => {
+  // 用户实锤:通知先飞、代答紧随——用户按通知 /mfc 回复时卡已被平台
+  // 答掉,待办一查空。守卫=willAutoAnswer:会代答的卡不发等待卡通知,
+  // 告知由「已代答」收口通知承担;二档(闸是停靠点)照发等真人。
+  const scene = (dataDir: string, origin: string): Scene[] => [
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command: REPORT } } },
+    { tool: { name: "submit_analysis",
+      input: { summary: "非问题:时钟漂移" } } },
+    { text: "报告已提交。" },
+  ];
+  const CARD_MARK = "请查阅 issue-analysis.md 后确认";
+  const AUTO_MARK = "介入档位免审批:分析结论已自动确认";
+
+  // 一档:闸被代答,小鲁班只有「已代答」通知,没有邀人回复的卡通知。
+  {
+    const dataDir = mfcTemp("mfc-issue-tier-card-suppressed-");
+    const origin = bareOrigin(dataDir);
+    const luban = new FakeLubanServer();
+    await luban.start();
+    const model = new ScriptedModelServer(scene(dataDir, origin),
+      "scripted-v1", { linear: true });
+    await model.start();
+    const service = new IssueFlowService({
+      ...baseOptions(dataDir, model),
+      interventionTier: () => "1",
+      notifier: makeNotifier(luban),
+    });
+    try {
+      const created = service.create({
+        account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+        repoUrl: origin,
+      });
+      await until(() => {
+        const issue = service.get(created.id);
+        if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+        return issue.stage === "fix" ? issue : undefined;
+      }, "一档自动确认推进到问题修改");
+      const texts = () => luban.messages.map((message) =>
+        String(message.text ?? ""));
+      await until(() => texts().some((text) => text.includes(AUTO_MARK))
+        ? true : undefined, "已代答通知落袋");
+      assert.ok(texts().some((text) => text.includes(AUTO_MARK)),
+        "代答必须自带「已代答」收口通知");
+      assert.ok(!texts().some((text) => text.includes(CARD_MARK)),
+        "会被代答的卡不发等待卡通知——发了就是邀人回复一张已消失的卡");
+    } finally {
+      await service.shutdown().catch(() => undefined);
+      await model.stop();
+      await luban.stop();
+    }
+  }
+
+  // 二档:分析闸是停靠点,照发等待卡通知等真人,没有代答通知。
+  {
+    const dataDir = mfcTemp("mfc-issue-tier-card-kept-");
+    const origin = bareOrigin(dataDir);
+    const luban = new FakeLubanServer();
+    await luban.start();
+    const model = new ScriptedModelServer(scene(dataDir, origin),
+      "scripted-v1", { linear: true });
+    await model.start();
+    const service = new IssueFlowService({
+      ...baseOptions(dataDir, model),
+      interventionTier: () => "2",
+      notifier: makeNotifier(luban),
+    });
+    try {
+      const created = service.create({
+        account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+        repoUrl: origin,
+      });
+      await until(() => {
+        const issue = service.get(created.id);
+        if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+        return issue.status === "waiting_user"
+          && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+      }, "二档分析闸等真人");
+      const texts = () => luban.messages.map((message) =>
+        String(message.text ?? ""));
+      await until(() => texts().some((text) => text.includes(CARD_MARK))
+        ? true : undefined, "等待卡通知落袋");
+      assert.ok(texts().some((text) => text.includes(CARD_MARK)),
+        "二档不发代答,等待卡通知必须照发");
+      assert.ok(!texts().some((text) => text.includes(AUTO_MARK)),
+        "二档没有代答,不该有已代答通知");
+    } finally {
+      await service.shutdown().catch(() => undefined);
+      await model.stop();
+      await luban.stop();
+    }
+  }
+});
+
 test("一档全自动:无单 non_issue 且自报高置信,自动闭环归档", async () => {
   const dataDir = mfcTemp("mfc-issue-tier-close-");
   const origin = bareOrigin(dataDir);
