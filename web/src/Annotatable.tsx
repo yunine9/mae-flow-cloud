@@ -239,12 +239,9 @@ export function Annotatable({
         setError(result.error);
         return;
       }
-      const annotation = "annotation" in result ? result.annotation : undefined;
-      if (annotation && typeof annotation === "object" && "id" in annotation) {
-        const id = String(annotation.id);
-        if (renderInlineReview) setThread({ ids: [id], host: draft.host });
-        setReceipt("已记下，责任人可在待处理中查看。");
-      }
+      // 保存只落账，不自动打开处理面板或转交 Agent。
+      setThread(undefined);
+      setReceipt("已记下，可在批注与检视中统一处理。");
       setDraft(undefined);
       setNote("");
       onAdded();
@@ -265,6 +262,7 @@ export function Annotatable({
         if (event.key === "Escape") setSelected(undefined);
       }}
     >
+      {receipt && <p className="annotation-delivery-receipt" role="status">{receipt}</p>}
       {children}
       {enabled && selected && !draft ? (
         <button type="button" className="annot-fab annot-selection-fab"
@@ -327,7 +325,6 @@ export function Annotatable({
             {enabled && <button type="button" onClick={() => openRow(thread.host)}>补充批注</button>}
             <button type="button" aria-label="收起当前位置反馈" onClick={() => setThread(undefined)}>×</button>
           </header>
-          {receipt && <p className="annotation-delivery-receipt" role="status">{receipt}</p>}
           {renderInlineReview(thread.ids)}
         </section>
       )}
