@@ -16073,6 +16073,8 @@ export class TaskService {
     return {
       kind,
       ...copy[kind],
+      description: `${copy[kind].description} 未跟踪的 node_modules、.venv、`
+        + "__pycache__、.pytest_cache 目录不纳入清单；确需交付的文件请先暂存。",
       base_sha: base,
       baseline_sha: snapshot.baseline!,
       head_sha: snapshot.head,
