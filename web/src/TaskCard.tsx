@@ -1,3 +1,4 @@
+import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requirementDecisionContract";
 import { Button } from "./components/ui/button";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
@@ -567,12 +568,6 @@ export function TaskProgress({
       })}
     </span>
   </span>;
-}
-
-/** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
- * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
-function confirmsChainOption(option: string): boolean {
-  return option.includes("确认并生成任务") || option.includes("确认分析结论");
 }
 
 /** 这张卡是不是 Chain 的"拆分方案确认"。有模块时确认并生成任务；

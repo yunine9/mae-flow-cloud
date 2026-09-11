@@ -1,3 +1,4 @@
+import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
@@ -1885,13 +1886,6 @@ const SPLIT_PROPOSAL_ACCEPT = "先分析再拆分";
 const SPLIT_PROPOSAL_DECLINE = "不拆，一个任务干完";
 const REQUIREMENT_ANALYSIS_ACCEPT =
   "需求已确认，进入需求分析";
-const REQUIREMENT_GRAPH_CONFIRM = "确认并生成任务";
-const REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM = "确认分析结论";
-
-function confirmsRequirementGraph(answer: string): boolean {
-  return answer.includes(REQUIREMENT_GRAPH_CONFIRM)
-    || answer.includes(REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM);
-}
 
 function deliverySelectionNote(
   paths: string[],
@@ -3794,7 +3788,7 @@ export class TaskService {
             this.options.host?.kernelRoot,
             contractStep,
           );
-    const reviewContract = summary.waiting ? reviewDecisionContract(summary.waiting.question, choiceEffects) : undefined;
+    const reviewContract = summary.waiting ? reviewDecisionContract(requirementDecisionContract(summary.waiting.question, this.isRequirementAnalysis(task)), choiceEffects) : undefined;
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
       summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
       : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
@@ -3908,7 +3902,7 @@ export class TaskService {
     waiting: WaitingRecord | undefined = task.summary.waiting,
   ): boolean {
     if (!waiting || !this.isRequirementAnalysis(task)) return false;
-    const questions = ((waiting.question as any)?.questions ?? []) as Array<{
+    const questions = (requirementDecisionContract(waiting.question, true).questions ?? []) as Array<{
       options?: string[];
     }>;
     return questions.some((question) => (question.options ?? [])
@@ -10343,7 +10337,7 @@ export class TaskService {
     }
     if (task.summary.status === "waiting_for_human" && task.summary.waiting) {
       const questions = (
-        (task.summary.waiting.question as any)?.questions ?? []
+        requirementDecisionContract(task.summary.waiting.question, true).questions ?? []
       ) as Array<{ question?: string; options?: string[] }>;
       if (questions.length !== 1) {
         throw new NotFoundError(
@@ -11324,7 +11318,7 @@ export class TaskService {
       throw new StateConflictError(
         `任务状态已变化:当前待办是 ${waiting.waiting_id},不是 ${waitingId}`);
     }
-    const reviewContract = reviewDecisionContract(waiting.question,
+    const reviewContract = reviewDecisionContract(requirementDecisionContract(waiting.question, this.isRequirementAnalysis(task)),
       waiting.step.startsWith("cloud_") || waiting.step === HOST_PUSH_CONFIRM_STEP ? []
         : stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, waiting)));
     waiting = { ...waiting, question: reviewContract.question };
@@ -11408,9 +11402,8 @@ export class TaskService {
     }
     // 多仓确认的顺序纪律:图的体检放在决定落袋**之前**(图不完整就报
     // 错,决定不消费,agent 继续等,用户看得到原因);建任务放在落袋
-    // **之后**(乐观锁 409 时不许先把子任务生出来)。字符串匹配只是
-    // "模型把选项原文写对了"的顺路便车,正门是需求图面板的确认按钮
-    // (confirmRequirementGraph)——选项文字漂了也不丢单。
+    // **之后**(乐观锁 409 时不许先把子任务生出来)。举卡、展示与提交
+    // 共用平台确认选项；不把备注或自由答复中提及确认当作授权。
     const confirmingGraph = this.isRequirementAnalysis(task)
       && Object.values(answers).concat(decision).some((answer) =>
         confirmsRequirementGraph(answer));
@@ -14319,7 +14312,7 @@ export class TaskService {
           : undefined,
         // 举卡前核对(2026-09-05):检视意见没处理完不许举确认卡,只放行
         // 合规的澄清卡;拦下的话作为工具错误回给模型,原会话继续。
-        prepareHumanQuestion: (input) => reviewDecisionContract(input, stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, undefined))).question,
+        prepareHumanQuestion: (input) => reviewDecisionContract(requirementDecisionContract(input, this.isRequirementAnalysis(task)), stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, undefined))).question,
         beforeHumanQuestion: (input) => this.beforeReviewQuestion(task, input),
         humanFacing: true,
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
@@ -21055,9 +21048,9 @@ export class TaskService {
           if (task.driver && (task.nudgeCount ?? 0) < 5) {
             task.nudgeCount = (task.nudgeCount ?? 0) + 1;
             this.options.log?.(
-              `任务 ${task.summary.id} 催办继续需求分析（未举起人工确认卡）`);
+              `任务 ${task.summary.id} 催办继续需求分析（尚未完成确认与拆单）`);
             await this.settle(task, task.driver.continueWith(
-              "需求分析尚未通过 AskUserQuestion 进入人工确认。请继续当前分析，"
+              "需求分析尚未完成方案确认与拆单。先核对已有人工答复，不要重复追问已回答的问题。请继续当前分析，"
               + "不要执行任何 mae-flow/init/current/done 命令。若全局 Story（旧现场为 CHAIN）"
               + "和 requirement-graph.json 已经完整且同步，立即按开场要求举起"
               + "拆分方案确认卡；否则先补完分析产物再举卡。"), epoch);
@@ -21070,7 +21063,7 @@ export class TaskService {
           const cleanupFailure = await this.stopTaskContainer(
             task, "需求分析提前结束后");
           task.summary.status = "failed";
-          task.summary.detail = "Agent 连续结束需求分析但没有发起人工确认，"
+          task.summary.detail = "Agent 连续结束需求分析但方案确认与拆单尚未完成，"
             + "已保留分析产物，请重跑后从现有方案继续"
             + (cleanupFailure ? `；${cleanupFailure}` : "");
           this.persist(task);
