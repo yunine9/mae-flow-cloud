@@ -3,9 +3,9 @@
 .md-numbered { padding-inline-start: 4rem; }
 .md-numbered-block { position: relative; min-width: 0; }
 .md-numbered-block::before,
-.md-numbered > .md-list > li::before {
+.md-numbered > .md-list > li::after {
   position: absolute;
-  inset-inline-end: calc(100% + 12px);
+  inset-inline-start: -4rem;
   top: 0;
   width: 3.25rem;
   color: var(--muted);
@@ -16,10 +16,11 @@
   pointer-events: none;
   content: attr(data-source-lines);
 }
-.md-numbered > .md-list > li { position: relative; }
-.md-numbered > .md-list > li::before {
+.md.md-numbered > .md-list { padding-inline-start: 22px; }
+.md.md-numbered > .md-list > li { position: relative; padding-inline-start: 0; }
+.md-numbered > .md-list > li::after {
   content: attr(data-l);
-  inset-inline-end: calc(100% + 12px + 1.5em);
+  inset-inline-start: calc(-4rem - 22px);
 }
 .md-numbered-block > :first-child { margin-block-start: 0; }
 }
