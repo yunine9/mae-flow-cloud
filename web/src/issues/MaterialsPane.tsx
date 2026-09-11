@@ -1,3 +1,5 @@
+import { AnnotationExcerpt } from "../AnnotationExcerpt";
+import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTargets";
 /**
  * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更含快速修改 /
  * 拉取日志)。
@@ -273,6 +275,9 @@ function IssueProcessDocs({ detail, canOperate }: {
   // 检视账本(轻量):随会话动态重读——锚点检测按当前报告现算,
   // AI 一改报告,徽标就贴着 updated_at 的节奏刷新。
   const [reviews, setReviews] = useState<IssueReview[]>([]);
+  const locationRequest = useRef(0);
+  const [locationExcerpt, setLocationExcerpt] = useState<IssueReview>();
+  const [locationMessage, setLocationMessage] = useState("");
   const [checks, setChecks] = useState<IssueReviewCheck[]>([]);
   // 已加载基准 = 会话动态 + 激活页签:两者任一变化就重取;只在响应到手
   // 后记账,半路失败下次仍会重试。
@@ -382,19 +387,35 @@ function IssueProcessDocs({ detail, canOperate }: {
   }, [refreshKey]);
 
   /** 检视面板 → 分析报告的锚点定位:切页签、等渲染、滚动 + 闪烁。 */
-  async function locate(line: number) {
+  async function locate(item: IssueReview) {
+    const request = ++locationRequest.current;
     setActive(ANALYSIS_DOC);
+    setLocationExcerpt(item);
+    setLocationMessage("正在核对当前位置…");
+    let fresh;
+    try { fresh = await getIssueReviews(id); } catch {
+      if (request !== locationRequest.current) return;
+      setLocationMessage("暂时无法核对当前位置，先展示批注时原文。"); return;
+    }
+    if (request !== locationRequest.current) return;
+    const check = fresh.checks.find(row => row.id === item.id);
+    const range = resolvedAnnotationRange(item, check);
+    if (!range) {
+      setLocationMessage(check?.state === "ambiguous" ? "原文有多处匹配，先展示批注时原文。" : "原文已变化或暂不能定位，先展示批注时原文。"); return;
+    }
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise((done) => setTimeout(done, 150));
-      const node = document.querySelector<HTMLElement>(
-        `.issue-doc-body [data-l="${line}"]`);
+      if (request !== locationRequest.current) return;
+      const node = annotationLocationRow([...document.querySelectorAll<HTMLElement>(".issue-doc-body [data-l]")], range.line);
       if (node) {
+        setLocationExcerpt(undefined); setLocationMessage("");
         node.scrollIntoView({ block: "center" });
         node.classList.add("annot-flash");
         window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
         return;
       }
     }
+    setLocationMessage("当前版本没有对应位置，先展示批注时原文。");
   }
 
   // 检视入口的会话级门槛(与服务端 requireReviewable 同口径的显示面):
@@ -458,7 +479,7 @@ function IssueProcessDocs({ detail, canOperate }: {
     {!loading && !note && active === REVIEW_TAB
       && <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
         reviewEnabled={reviewEnabled}
-        onReload={() => void loadReviews()} onLocate={(line) => void locate(line)} />}
+        onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
     {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
       && content && <>
       {canOperate && draftCount > 0 && <div className="utility-note" role="status">
@@ -471,6 +492,7 @@ function IssueProcessDocs({ detail, canOperate }: {
         <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
         <button type="button" onClick={() => void loadActive()}>刷新</button>
       </div>
+      {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setActive(ANALYSIS_DOC); setLocationExcerpt(undefined); }} /></>}
       <article className="issue-doc-body">
         {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
             不给行尾 ✎。 */}
@@ -478,9 +500,9 @@ function IssueProcessDocs({ detail, canOperate }: {
           ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
               fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
               onAdded={() => void loadReviews()}
-              addDraft={async ({ line, anchor, note: text }) => {
+              addDraft={async (input) => {
                 try {
-                  await addIssueReview(id, { line, anchor, note: text });
+                  await addIssueReview(id, input);
                   void loadReviews();
                   return {};
                 } catch (reason) {
@@ -520,13 +542,13 @@ function IssueReviewBadge({ check }: { check?: IssueReviewCheck }) {
 function IssueReviewItem({ item, check, onLocate, onRemove }: {
   item: IssueReview;
   check?: IssueReviewCheck;
-  onLocate: (line: number) => void;
+  onLocate: (item: IssueReview) => void;
   onRemove?: () => void;
 }) {
   return <li className="issue-review-item">
     <div className="issue-review-item-head">
       <button type="button" className="link"
-        onClick={() => onLocate(item.line)}>第 {item.line} 行</button>
+        onClick={() => onLocate(item)}>查看原文</button>
       {item.status === "sent" && <IssueReviewBadge check={check} />}
       <time>{formatLocalDateTime(item.created_at, { seconds: true })}</time>
       {onRemove && <button type="button" className="ghost"
@@ -545,7 +567,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
   checks: IssueReviewCheck[];
   reviewEnabled: boolean;
   onReload: () => void;
-  onLocate: (line: number) => void;
+  onLocate: (item: IssueReview) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");

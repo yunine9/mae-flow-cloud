@@ -2700,6 +2700,8 @@ export function createTaskServer(
               line: Number(body.line ?? 0),
               anchor: String(body.anchor ?? ""),
               quote: String(body.quote ?? ""),
+              context_before: String(body.context_before ?? ""),
+              context_after: String(body.context_after ?? ""),
               line_end: Number(body.line_end ?? 0),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",

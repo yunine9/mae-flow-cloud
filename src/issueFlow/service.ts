@@ -3705,7 +3705,7 @@ export class IssueFlowService {
   /** 记一条检视草稿(悬停圈注的落账口)。作者恒为会话归属人——
    * 问题会话没有协作检视,谁的问题谁提意见。 */
   addReview(id: string, input: {
-    line: number; anchor: string; note: string;
+    line: number; anchor: string; note: string; quote?: string; line_end?: number; context_before?: string; context_after?: string;
   }): Annotation {
     const live = this.require(id);
     this.requireReviewable(live);
@@ -3716,6 +3716,7 @@ export class IssueFlowService {
     const line = Number(input.line);
     return addReview(live.root, {
       author: live.state.account,
+      quote: input.quote, line_end: input.line_end, context_before: input.context_before, context_after: input.context_after,
       line: Number.isFinite(line) ? Math.max(0, Math.trunc(line)) : 0,
       anchor,
       note,

@@ -51,6 +51,7 @@ function seed(
     file: over.file ?? "spec.md",
     line: over.line ?? 42,
     anchor: over.anchor ?? "手机号按后四位掩码",
+    context_before: over.context_before, context_after: over.context_after,
     note,
     kind: over.kind ?? "doc",
     route: over.route,
@@ -176,7 +177,7 @@ test("批注清单:那四条护栏一字不能少", () => {
   assert.match(text, /说明理由,别默默跳过/);
   // 三元组:坐标 + 原文 + 要求
   assert.match(text, /【spec\.md】/);
-  assert.match(text, /1\. \[an-[^\]]+\] 第 42 行/);
+  assert.match(text, /1\. \[an-[^\]]+\] 历史第 42 行/);
   assert.match(text, /原文:手机号按后四位掩码/);
   assert.match(text, /要求:掩码要保留后四位/);
 });
@@ -191,11 +192,11 @@ test("清单排序:按文件分组、组内按行号升序——人跳着圈,模
   assert.deepEqual(order, ["a.md:7", "a.md:30", "b.md:9"]);
 });
 
-test("代码批注抬的是「当前代码」,文档抬的是「原文」", () => {
+test("代码和文档都明确显示批注时原文，不能冒充当前内容", () => {
   const target = store();
   seed(target, "这个重试只该对网关失败生效",
        { kind: "code", file: "SmsHandler.java", anchor: "retry(3)" });
-  assert.match(renderAnnotations(target.drafts(), "T-1"), /当前代码:retry\(3\)/);
+  assert.match(renderAnnotations(target.drafts(), "T-1"), /批注时原文:retry\(3\)/);
 });
 
 test("重锚定:命中/偏移/消失/多处都如实报,不替人撤条目", () => {
@@ -1209,4 +1210,38 @@ test("批注附图:只认资产路径,随记录落盘,给 Agent 的材料引导 
   assert.match(text, /- \.mae-flow-work\/review-assets\/0123456789abcdef01234567\.png\(期望效果\)/);
   const plain = store.add({ ...base, note: "不带图" });
   assert.equal(plain.images, undefined);
+});
+
+test("代码定位保留运算符，不能把不同代码当成同一原文", () => {
+  const item = { id: "r1", artifact: "code", kind: "code" as const, anchor: "return a > b;", line: 1 };
+  assert.equal(reanchor([item], () => "return a  b;")[0].state, "gone");
+  assert.equal(reanchor([item], () => "// changed\nreturn a > b;")[0].line, 2);
+});
+
+test("重复代码用前后文区分，前一条修改造成行号漂移后仍重新定位", () => {
+  const item = { id: "r2", artifact: "code", kind: "code" as const, anchor: "return null;", line: 2,
+    context_before: "function second() {", context_after: "}" };
+  const current = "// inserted\nfunction first() {\nreturn null;\n}\nfunction second() {\nreturn null;\n}";
+  const check = reanchor([item], () => current)[0];
+  assert.equal(check.state, "moved"); assert.equal(check.line, 6);
+  assert.equal(reanchor([{ ...item, context_before: undefined, context_after: undefined }], () => current)[0].state, "ambiguous");
+});
+
+test("新增意见的上下文持久化并随 Agent 清单发送，明确历史与重新读取", () => {
+  const target = store();
+  seed(target, "补空值处理", { context_before: "function find() {", context_after: "}", anchor: "return value;", kind: "code" });
+  const saved = target.list()[0];
+  assert.equal(saved.context_before, "function find() {");
+  const prompt = renderAnnotations([saved], "T-context");
+  for (const text of ["批注时原文", "批注时前文", "批注时后文", "每条修改前读取当前文件", "不猜位置", "历史第"]) assert.ok(prompt.includes(text));
+  assert.doesNotMatch(prompt, /当前代码/);
+});
+
+test("跨行代码原文保留换行，重复首行通过整块原文定位", () => {
+  const item = { id: "multi", artifact: "code", kind: "code" as const, anchor: "if (ready) {", line: 1, line_end: 3,
+    quote: "if (ready) {\n  return a > b;\n}" };
+  const check = reanchor([item], () => "if (ready) {\n  return false;\n}\nif (ready) {\n  return a > b;\n}")[0];
+  assert.equal(check.state, "moved");
+  assert.equal(check.line, 4);
+  assert.equal(check.line_end, 6);
 });

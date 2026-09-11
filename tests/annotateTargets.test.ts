@@ -274,3 +274,17 @@ test("双栏代码差异的锚点取新代码，不误取左侧被替换的旧�
     selector === '[data-code-side="new"]' ? "new();" : "old();" });
   assert.equal(anchorOf(row, 10), "new();");
 });
+
+test("批注上下文只采集同一文件相邻内容，不带 diff 标记", async () => {
+  const { contextOfRow } = await import("../web/src/annotateTargets.ts");
+  const before = node({ line: 1, code: "if (a > b) {" });
+  const current = node({ line: 2, children: [node({ code: "  return  a;" })] });
+  const after = node({ line: 3, code: "}" });
+  const one = node({ file: "one.ts", children: [before, current, after] });
+  const other = node({ file: "other.ts", children: [node({ line: 1, code: "foreign" })] });
+  const root = node({ children: [one, other] });
+  const context = contextOfRow(root, current);
+  assert.equal(context.context_before, "if (a > b) {");
+  assert.equal(context.context_after, "}");
+  assert.equal(anchorOf(current, 2), "return  a;");
+});

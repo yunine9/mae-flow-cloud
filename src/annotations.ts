@@ -104,6 +104,8 @@ export interface Annotation {
   line: number;
   /** 原文快照——定位以它为准。内核那条经验在活靶子上更要紧。 */
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   /** 划选一块时的整块原文(≤ ANNOTATION_QUOTE_MAX):给人和模型看语境,
    * 不参与定位;按行点的没有。 */
   quote?: string;
@@ -171,6 +173,8 @@ export interface AnnotationInput {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   note: string;
   kind: AnnotationKind;
   route?: AnnotationRoute;
@@ -459,6 +463,8 @@ export class AnnotationStore {
       file: String(input.file ?? "").trim() || artifact,
       line,
       anchor,
+      ...(input.context_before ? { context_before: String(input.context_before).slice(-1200) } : {}),
+      ...(input.context_after ? { context_after: String(input.context_after).slice(0, 1200) } : {}),
       ...(quote ? { quote: quote.length > ANNOTATION_QUOTE_MAX
         ? quote.slice(0, ANNOTATION_QUOTE_MAX) + "…" : quote } : {}),
       ...(lineEnd > line ? { line_end: lineEnd } : {}),
@@ -776,8 +782,8 @@ export function renderAnnotations(
     options.allowRelatedChanges
       ? "- 围绕这些意见修改，必要的相关表格、定义和上下文一起调整，在回执中说明原因与位置，交由人检视。"
       : "- 只改这些地方。确实要连带改别处,先说清为什么,再动。",
-    "- 行号按你收到时的文件;你一改行号就会偏移,所以每条都附了原文,"
-    + "以原文为准定位。",
+    "- 行号仅为历史参考。每条修改前读取当前文件，以原文为准定位，结合批注时上下文核对；处理上一条后重新核对后续位置，不沿用旧行号。",
+    "- 找不到原文或匹配多处时，先检查当前实现与意见要求；无法确认就说明，不猜位置、不把原文消失当作已修复，可继续处理其他意见。",
     "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
     ...(hasGraphAnnotations ? [
       "- 标为“方案结构”的意见来自模块拆分图。按方案整体、模块 id 或依赖边定位，"
@@ -799,9 +805,9 @@ export function renderAnnotations(
     const graphAnnotation = item.artifact === REQUIREMENT_GRAPH_ARTIFACT;
     const span = graphAnnotation ? "方案结构"
       : item.line_end && item.line_end > item.line
-        ? `第 ${item.line}–${item.line_end} 行` : `第 ${item.line} 行`;
+        ? `历史第 ${item.line}–${item.line_end} 行` : `历史第 ${item.line} 行`;
     lines.push(`${index}. [${item.id}] ${span}`);
-    const label = item.kind === "code" ? "当前代码" : "原文";
+    const label = "批注时原文";
     if (item.quote) {
       // 划选了一块:整块给模型看语境;定位仍以首行原文(anchor)为准。
       lines.push(`   ${label}(选中整块):`);
@@ -809,6 +815,8 @@ export function renderAnnotations(
     } else {
       lines.push(`   ${label}:${item.anchor}`);
     }
+    if (item.context_before) lines.push(`   批注时前文:\n${item.context_before}`);
+    if (item.context_after) lines.push(`   批注时后文:\n${item.context_after}`);
     lines.push(`   要求:${item.note}`);
     if (item.agent_context?.revision === (item.rework ?? 0)) lines.push(`   责任人补充（${item.agent_context.by}）：${item.agent_context.text}`);
     // 附图是意见的一部分:设计稿、期望效果截图。不看图就动手等于没读意见。
@@ -873,7 +881,7 @@ function normalize(text: string): string {
 }
 
 export function reanchor(
-  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line" | "quote" | "line_end"> & { file?: string }>,
+  items: ReadonlyArray<Pick<Annotation, "id" | "artifact" | "anchor" | "line" | "quote" | "line_end"> & { file?: string; kind?: AnnotationKind; context_before?: string; context_after?: string }>,
   read: (artifact: string) => string | undefined,
 ): AnchorCheck[] {
   const cache = new Map<string, string[] | undefined>();
@@ -914,21 +922,24 @@ export function reanchor(
     if (/^第 \d+ 行$/.test(item.anchor)) {
       return { id: item.id, state: "hit", line: item.line, location_verified: false };
     }
-    const needle = normalize(item.anchor);
+    // 代码符号属于语义；只有文档才剥离渲染后的 Markdown 装饰。
+    const norm = item.kind === "code" ? (text: string) => text.replace(/\r\n/g, "\n").split("\n").map(line => line.trim()).join("\n").trim() : normalize;
+    const needle = norm(item.anchor);
     if (!needle) return { id: item.id, state: "hit", line: item.line, location_verified: false };
     // 表头在长文档里经常重复。划选正文能区分“哪张表”，不能只搜表头
     // 然后退回历史行号。分隔线不显示在页面上，全文匹配也必须跳过它。
-    const normalizedLines = lines.map((line) => /^\s*\|[\s:|-]+\|\s*$/.test(line) ? "" : normalize(line));
-    const joined = normalizedLines.join("");
+    const normalizedLines = lines.map((line) => item.kind !== "code" && /^\s*\|[\s:|-]+\|\s*$/.test(line) ? "" : norm(line));
+    const separator = item.kind === "code" ? "\n" : "";
+    const joined = normalizedLines.join(separator);
     const lineAt = (offset: number) => {
       let consumed = 0;
       for (const [at, content] of normalizedLines.entries()) {
-        consumed += content.length;
+        consumed += content.length + separator.length;
         if (offset < consumed) return at + 1;
       }
       return lines.length;
     };
-    const quote = normalize(item.quote?.replace(/…$/, "") ?? "");
+    const quote = norm(item.quote?.replace(/…$/, "") ?? "");
     const quoteAt = quote ? joined.indexOf(quote) : -1;
     if (quoteAt >= 0 && joined.indexOf(quote, quoteAt + 1) < 0) {
       const line = lineAt(quoteAt);
@@ -941,7 +952,7 @@ export function reanchor(
     }
     const hits: number[] = [];
     lines.forEach((line, at) => {
-      if (normalize(line).includes(needle)) hits.push(at + 1);
+      if (norm(line).includes(needle)) hits.push(at + 1);
     });
     if (!hits.length) {
       // 代码块、表格等一个 DOM 块可能跨多行；浏览器抓到的是整块
@@ -956,7 +967,7 @@ export function reanchor(
             line = at + 1;
             break;
           }
-          offset += content.length;
+          offset += content.length + separator.length;
         }
         const repeated = joined.indexOf(needle, first + 1) >= 0;
         return repeated
@@ -971,6 +982,15 @@ export function reanchor(
         state: "gone",
         now: now === undefined ? undefined : now.trim(),
       };
+    }
+    if (hits.length > 1 && (item.context_before || item.context_after)) {
+      const contextual = hits.filter((line) => {
+        const before = norm(lines.slice(Math.max(0, line - 5), line - 1).join("\n"));
+        const after = norm(lines.slice(line, line + 4).join("\n"));
+        return (!item.context_before || before.endsWith(norm(item.context_before)))
+          && (!item.context_after || after.startsWith(norm(item.context_after)));
+      });
+      if (contextual.length === 1) return { id: item.id, state: contextual[0] === item.line ? "hit" : "moved", line: contextual[0] };
     }
     if (hits.length > 1) return { id: item.id, state: "ambiguous", line: hits[0] };
     if (hits.includes(item.line)) return { id: item.id, state: "hit", line: item.line };

@@ -28,6 +28,7 @@ import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
 import { TaskWaitingFacts } from "./TaskWaitingFacts";
+import { AnnotationExcerpt } from "./AnnotationExcerpt";
 import { Annotatable } from "./Annotatable";
 import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
@@ -625,6 +626,7 @@ export function TaskWorkspace({
   const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
   const [completeBusy, setCompleteBusy] = useState(false);
   const [completeError, setCompleteError] = useState("");
+  const [locationExcerpt, setLocationExcerpt] = useState<Annotation>();
   const [locationNotice, setLocationNotice] = useState("");
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "delete" | "">("");
@@ -1306,6 +1308,7 @@ export function TaskWorkspace({
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
+    setLocationExcerpt(item);
     setModuleLocation(undefined); setModuleLocationRetry(undefined);
     const request = ++locationRequest.current;
     setPendingLocation(undefined);
@@ -1324,7 +1327,7 @@ export function TaskWorkspace({
       await onChanged();
       fresh = await listAnnotations(task.id);
     } catch {
-      if (request === locationRequest.current) setLocationNotice("无法核对批注的当前位置，请稍后重试；未跳转到旧行号。");
+      if (request === locationRequest.current) setLocationNotice("暂时无法核对当前位置，先展示批注时原文。");
       return;
     }
     if (request !== locationRequest.current) return;
@@ -1342,17 +1345,17 @@ export function TaskWorkspace({
     if (check?.state === "gone") {
       setLocationNotice(
         `“${item.anchor.slice(0, 46)}${item.anchor.length > 46 ? "…" : ""}”`
-        + " 已不在当前版本；左侧已打开最新材料，请结合差异和 Agent 回应核对。",
+        + " 已变化，下面保留批注时原文和意见。",
       );
       return;
     } else if (check?.state === "ambiguous") {
-      setLocationNotice("这段原文在当前材料中出现多次，已打开对应材料，请结合文件路径核对。");
+      setLocationNotice("原文有多处匹配，先展示批注时的片段，不跳转到不确定的位置。");
       return;
     } else if (!range) {
-      setLocationNotice("暂时无法确认这条批注的当前位置，请在已打开的材料中核对原文。");
+      setLocationNotice("暂时无法确认当前位置，先展示批注时原文。");
       return;
     } else {
-      setLocationNotice("");
+      setLocationNotice(""); setLocationExcerpt(undefined);
     }
     setPendingLocation({ request, item, view: targetView,
       artifact: targetArtifact, line: range.line });
@@ -1368,7 +1371,8 @@ export function TaskWorkspace({
       && (loading || diffFileLoading || loadedMaterialReload !== pending.request)) return;
     if (pending.view !== "source" && pending.view !== "chain" && materialReadError) {
       setPendingLocation(undefined);
-      setLocationNotice(`材料读取失败：${materialReadError}；未跳转到旧行号。`);
+      setLocationExcerpt(pending.item);
+      setLocationNotice("当前材料暂不可读，先展示批注时原文。");
       return;
     }
     const node = pending.view === "chain"
@@ -1378,6 +1382,7 @@ export function TaskWorkspace({
         pending.line!, pending.view === "diff" ? pending.item.file : undefined);
     setPendingLocation(undefined);
     if (!node) {
+      setLocationExcerpt(pending.item);
       setLocationNotice(`已打开 ${pending.item.file}，当前版本没有可定位的对应位置；请结合原文和 Agent 回应核对。`);
       return;
     }
@@ -2208,6 +2213,7 @@ export function TaskWorkspace({
                   onClick={() => setLocationNotice("")}>×</button>
               </div>
             )}
+            {locationNotice && locationExcerpt && !moduleLocation && !moduleLocationRetry && <AnnotationExcerpt item={locationExcerpt} onOpen={() => { setLocationNotice(""); setLocationExcerpt(undefined); }} />}
             {materialView === "source" ? (
               <Annotatable
                 taskId={task.id}
