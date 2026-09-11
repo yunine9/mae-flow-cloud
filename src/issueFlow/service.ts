@@ -5237,11 +5237,18 @@ export class IssueFlowService {
     // 收口即点火合入事实监看(ADR-0022):两条收口路都汇到这里,
     // 单例防重入;重启恢复由 recover() 补挂。
     this.watchMergeStates(live);
+    // 小鲁班通知的幂等键=(taskId,status)(防恢复重放/催办重发,同一事件
+    // 只收一条)。返工轮再达同名状态是**新事件**,不带轮次就会撞上一轮
+    // 已 settled 的记录被 deliverTracked 静默跳过(用户实锤:二轮全绿
+    // 无通知)——键与摘要都带轮次:键分事件,摘要让用户看出第几轮
+    // (outcome 模板只渲染 summary,不渲染 status)。
+    const round = state.round ?? 1;
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: state.account,
-      status: "待环境验证",
-      summary: `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
+      status: round > 1 ? `待环境验证(第 ${round} 轮)` : "待环境验证",
+      summary: (round > 1 ? `第 ${round} 轮:` : "")
+        + `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
         + "——请到目标环境验证后在卡上作答(未反馈也可直接归档/取消)",
       link: this.issueLink(live.id),
     }).catch(() => undefined);
