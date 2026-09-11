@@ -16,6 +16,7 @@ import {
   workspaceHistoryEntries,
 } from "./historyModel";
 import { confirmDialog } from "./ConfirmDialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
 
@@ -107,9 +108,10 @@ export function HistoryBoard({
       </div>
 
       {loading && (
-        <div className="history-skeleton" aria-label="加载中">
-          <div className="skeleton metric-skeleton" />
-          <div className="skeleton table-skeleton" />
+        <div className="grid gap-3" aria-label="加载中">
+          {/* #218:占位形状与旧 .metric-skeleton/.table-skeleton 等价 */}
+          <Skeleton className="h-[94px]" />
+          <Skeleton className="h-[280px]" />
         </div>
       )}
 

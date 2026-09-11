@@ -12,6 +12,7 @@ import {
   type WishWallItem,
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
+import { Spinner } from "@/components/Spinner";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { Button } from "@/components/ui/button";
 import {
@@ -383,7 +384,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </div>
       {notice && <p className="wish-notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="关闭提示">×</button></p>}
       {loadError && <div className="wish-load-state error"><strong>墙暂时没加载出来</strong><span>{loadError}</span><button type="button" onClick={() => void refresh()}>再试一次</button></div>}
-      {loading && <div className="wish-load-state"><span className="wish-loading-dot" />正在把大家的声音搬过来…</div>}
+      {loading && <div className="wish-load-state"><Spinner className="size-3" />正在把大家的声音搬过来…</div>}
       {!loading && !loadError && shown.length === 0 && <div className="wish-empty">
         <span aria-hidden>{scope === "issue" ? "🪁" : "🌱"}</span>
         <strong>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</strong>

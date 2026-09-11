@@ -11,6 +11,7 @@ import {
   SidebarMenuItem, SidebarProvider,
 } from "@/components/ui/sidebar";
 import { ChevronDown } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -1718,7 +1719,8 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
 }
 
 function LoadingScreen() {
-  return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span>正在进入工作台…</span></main>;
+  {/* #218:整屏结构与文案保留,加载动效统一走 Spinner(原先内部无动画)。 */}
+  return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><Spinner aria-hidden className="size-4 shrink-0" /><span>正在进入工作台…</span></main>;
 }
 
 function UsersBoard({ me }: { me: string }) {

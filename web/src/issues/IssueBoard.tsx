@@ -23,6 +23,7 @@ import {
   type IssueSummary,
 } from "../api";
 import { confirmDialog } from "../ConfirmDialog";
+import { Spinner } from "@/components/Spinner";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
@@ -274,7 +275,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           顶部错误横幅,再点同一张卡即可重试。 */}
       {openId && detail?.id !== openId && !detailFailed
         && <div className="issue-open-loading" role="status">
-          <i aria-hidden />
+          <Spinner aria-hidden className="size-3 shrink-0" />
           <span>正在打开问题工作台…</span>
         </div>}
       {issues.length === 0

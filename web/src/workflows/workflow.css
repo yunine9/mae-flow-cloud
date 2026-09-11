@@ -48,9 +48,7 @@
 .wf-workflow-owner{margin-top:auto;color:var(--faint);font-size:11px}.wf-library-grid article>footer{display:flex;
   align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-top:1px solid var(--line);background:var(--surface-soft)}
 .wf-library-grid article>footer>span{font-size:11px;color:var(--muted)}.wf-library-grid article>footer div{display:flex;gap:6px}
-.wf-library-grid article>footer button{padding:5px 9px;font-size:12px}.wf-library-skeleton{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.wf-library-skeleton i{height:220px;border-radius:14px;background:linear-gradient(105deg,var(--surface-muted),var(--surface-soft),var(--surface-muted));
-  background-size:220% 100%;animation:wf-shimmer 1.5s infinite}@keyframes wf-shimmer{to{background-position:-220% 0}}
+.wf-library-grid article>footer button{padding:5px 9px;font-size:12px}
 
 .wf-state-banner{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:9px;font-size:13px}
 .wf-state-banner strong{white-space:nowrap}.wf-state-banner span{flex:1}.wf-state-banner button{padding:5px 10px}
@@ -225,8 +223,7 @@
   justify-content:center;border-top:0;border-left:1px solid var(--line);background:var(--surface-soft)}
 .wf-library-grid article>footer>span{max-width:155px;text-align:right;line-height:1.4}.wf-library-grid article>footer div{margin-top:6px}
 .wf-library-grid article>footer button{border-color:transparent;background:transparent}.wf-library-grid article>footer button:hover{border-color:var(--line)}
-.wf-library-grid article>footer .wf-text-danger{color:var(--danger)}.wf-library-skeleton{grid-template-columns:1fr;gap:8px}
-.wf-library-skeleton i{height:94px;border-radius:11px}
+.wf-library-grid article>footer .wf-text-danger{color:var(--danger)}
 
 /* 返回只表达“上一层是什么”，不用无标签的孤立箭头。 */
 .wf-detail-head>div{align-items:center}.wf-breadcrumb-back{height:34px;padding:0 10px!important;display:inline-flex;align-items:center;gap:6px;

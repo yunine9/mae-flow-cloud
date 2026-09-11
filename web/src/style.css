@@ -2256,22 +2256,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-board { display: grid; gap: 18px; }
 .issue-board-loading { padding: 40px; color: var(--muted); }
 /* 打开工作台过渡态(openId 已设、匹配详情未到):与 issue-board-loading
- * 同语气(muted、assist 字号),加 wish-loading-dot 同款细环 spinner,
+ * 同语气(muted、assist 字号),spinner 统一走 Spinner 组件(#218),
  * 让"点了有效果"看得见;请求失败后组件停转,这里只管在途的样子。 */
 .issue-open-loading {
   display: flex; align-items: center; gap: 9px;
   padding: 10px 2px 2px;
   color: var(--muted); font-size: var(--font-size-assist);
-}
-.issue-open-loading > i {
-  width: 12px; height: 12px; flex: none;
-  border: 2px solid var(--line-strong); border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: issueOpenSpin .8s linear infinite;
-}
-@keyframes issueOpenSpin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .issue-open-loading > i { animation: none; }
 }
 /* 我的问题的状态筛选:胶囊 select,与右侧计数徽章同排同语气——
  * appearance:none 摘掉系统原生箭头,自绘 chevron(中灰,明暗两主题
@@ -3480,10 +3470,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-radius: 50%;
   background: currentColor;
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
-}
-.prepush-marker.busy > i { animation: prepushPulse 1.35s ease-in-out infinite; }
-@keyframes prepushPulse {
-  50% { opacity: .36; transform: scale(.78); }
 }
 .phase-passed .prepush-marker > i {
   width: 9px;
@@ -5208,16 +5194,8 @@ pre {
   font-size: var(--font-size-assist);
 }
 .board-empty small { margin-top: 10px; color: var(--faint); font-size: var(--font-size-assist); }
-.history-skeleton { display: grid; gap: 12px; }
-.skeleton {
-  border-radius: var(--radius);
-  background: linear-gradient(90deg, var(--surface-muted) 25%, var(--surface) 42%, var(--surface-muted) 60%);
-  background-size: 240% 100%;
-  animation: shimmer 1.25s linear infinite;
-}
-.metric-skeleton { height: 94px; }
-.table-skeleton { height: 280px; }
-@keyframes shimmer { to { background-position: -140% 0; } }
+/* #218:.history-skeleton/.skeleton/.metric-skeleton/.table-skeleton 与
+ * @keyframes shimmer 已由 <Skeleton> 组件取代,一并拆除。 */
 
 /* Empty current queue:空状态比有数据更简单——两行字,没有虚线框和图标盒。 */
 .empty-state {
@@ -10286,8 +10264,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .wish-notice button { border: 0; color: currentColor; background: transparent; font-size: 18px; cursor: pointer; }
 .wish-load-state, .wish-empty { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 8px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--muted); background: var(--surface-soft); text-align: center; }
 .wish-load-state.error { color: var(--danger); }.wish-load-state button { padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); cursor: pointer; }
-.wish-loading-dot { width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: wishSpin .8s linear infinite; }
-@keyframes wishSpin { to { transform: rotate(360deg); } }
 .wish-empty > span { font-size: 34px; }.wish-empty strong { color: var(--text-strong); font-size: 16px; }.wish-empty p { margin: 0; font-size: var(--font-size-assist); }
 .wish-card-list { display: grid; gap: 8px; }
 .wish-load-state + .wish-card-list, .wish-empty + .wish-card-list { margin-top: 15px; }
@@ -10366,7 +10342,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wish-hero-orbit, .wish-loading-dot { animation: none; }
+  .wish-hero-orbit { animation: none; }
   .wish-card, .wish-submit, .wish-card-images img { transition: none; }
 }
 

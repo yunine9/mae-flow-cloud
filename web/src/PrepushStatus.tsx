@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { OverlayDialog } from "./WarmupPanel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
+import { Spinner } from "@/components/Spinner";
 import { formatLocalDateTime } from "./time";
 
 type PrepushTone = "active" | "repair" | "danger" | "success" | "neutral";
@@ -300,8 +301,10 @@ export function PrepushStatus({
       role="status"
       title={titleHint}
     >
-      <span className={`prepush-marker${view.busy ? " busy" : ""}`} aria-hidden>
-        <i />
+      {/* #218:busy 呼吸点换统一 Spinner,吃 .prepush-status 的 tone 色;
+          非 busy 仍走 <i>(通过/环境两相的勾与叉由 CSS 变形)。 */}
+      <span className="prepush-marker" aria-hidden>
+        {view.busy ? <Spinner aria-hidden className="size-3" /> : <i />}
       </span>
       <span className="prepush-copy">
         <strong>{title}</strong>

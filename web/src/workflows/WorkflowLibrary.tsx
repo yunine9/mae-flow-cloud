@@ -1,5 +1,6 @@
 import { PersonName } from "../People";
 import { useMemo, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
 
@@ -74,8 +75,9 @@ export function WorkflowLibrary({
     </div>}
     {warnings.map((warning, index) => <div className="wf-state-banner warning"
       key={`${warning}-${index}`}><strong>部分资产暂不可见</strong><span>{warning}</span></div>)}
-    {loading && !workflows.length ? <div className="wf-library-skeleton" aria-label="正在读取工作流">
-      <i /><i /><i />
+    {loading && !workflows.length ? <div className="grid grid-cols-3 gap-3.5 max-sm:grid-cols-1 max-sm:gap-2" aria-label="正在读取工作流">
+      {/* #218:占位与旧 .wf-library-skeleton 等价——桌面三张 220px 卡,窄屏单列 94px */}
+      <Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" /><Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" /><Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" />
     </div> : visible.length ? <div className="wf-library-grid">
       {visible.map((workflow) => <article key={workflow.id}
         className={selectedId === workflow.id ? "selected" : ""}>
