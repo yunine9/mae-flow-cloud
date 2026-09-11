@@ -35,7 +35,7 @@ export function KnowledgeSource({ taskId, resource, onClose }: {
         <p className="knowledge-source-version">{source.version_changed
           ? "当前文件与任务记录的版本不同，以下展示当前原文。"
           : "当前可读取的原文；知识使用时间见工作台记录。"}</p>
-        <Markdown text={source.content} />
+        <Markdown showLineNumbers text={source.content} />
       </> : <p role="status">正在读取原文…</p>}
     </section>
   </OverlayDialog>;

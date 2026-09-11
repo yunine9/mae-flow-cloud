@@ -489,9 +489,9 @@ function IssueProcessDocs({ detail, canOperate }: {
                   };
                 }
               }}>
-              <Markdown text={content} />
+              <Markdown showLineNumbers text={content} />
             </Annotatable>
-          : <Markdown text={content} />}
+          : <Markdown showLineNumbers text={content} />}
       </article>
     </>}
   </div>;
