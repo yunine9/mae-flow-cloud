@@ -1,13 +1,7 @@
 /**
- * 问题会话接入小鲁班手机审批的契约测试(与需求侧同一网关、同一审批码):
- * - 等待卡(平台闸卡与 Agent 问题卡)经适配层进网关,手机纯文本回复
- *   (裸序号/审批码)能落账到问题会话,后续回合照常续跑;
- * - 通知里的审批码与网关侧派码同源(同 token、同四元组),回复即达;
- * - 卡被抢先作答/状态漂移回"审批码已过期"(stale),不是 500;
- * - 码表标注「填写补充说明」的选项,手机必须带说明(与页面同纪律)。
- *
- * 范式与 issueFlowNotify.test.ts 同款:ScriptedModelServer 剧本 +
- * FakeLubanServer 假小鲁班,只走公开 API 断言。
+ * issueLubanApproval part 2:平台闸快路径:手机确认落账/空补充打回/多来源合册。
+ * 共享夹具在 tests/issueLubanApproval.helpers.ts(拆分背景见其头注);
+ * 断言与测试行为零变化。
  */
 
 import { test } from "node:test";
@@ -27,133 +21,17 @@ import {
 } from "../src/lubanApproval.ts";
 import type { TaskSummary } from "../src/taskService.ts";
 import { mfcTemp } from "./mfcTmp.ts";
+import {
+  TICKET,
+  TOKEN,
+  until,
+  makeNotifier,
+  makeGateway,
+  reply,
+  makeService,
+  ANALYZE_SCRIPT,
+} from "./issueLubanApproval.helpers.ts";
 
-const TICKET = "DTS-2026-1001";
-const TOKEN = "test-luban-plugin-token-32-bytes-minimum";
-
-async function until<T>(
-  probe: () => T | undefined,
-  what: string,
-  timeoutMs = 60_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = probe();
-    if (value !== undefined) return value;
-    if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-/** 与 serve.ts 同一条派码路:通知与网关共用同一 token,审批码才对得上。 */
-function makeNotifier(luban: FakeLubanServer): Notifier {
-  return new Notifier({
-    endpoint: luban.endpoint,
-    mobileApproval: true,
-    approvalCode: (input) => lubanApprovalCode({ token: TOKEN, ...input }),
-    backoffMs: [0],
-  });
-}
-
-function makeGateway(
-  sources: LubanApprovalService | LubanApprovalService[],
-  notifier: Notifier,
-): LubanApprovalGateway {
-  return new LubanApprovalGateway(sources, {
-    token: TOKEN,
-    accountEnabled: () => true,
-    recentNotification: (account) => notifier.latestApproval(account),
-  });
-}
-
-function reply(gateway: LubanApprovalGateway, content: string) {
-  return gateway.handle({
-    rawBody: JSON.stringify({
-      message_id: `msg-${Math.random().toString(36).slice(2)}`,
-      sender: "dev",
-      content,
-    }),
-    token: TOKEN,
-  });
-}
-
-async function makeService(
-  model: ScriptedModelServer,
-  notifier: Notifier,
-) {
-  const service = new IssueFlowService({
-    dataDir: mfcTemp("mfc-issue-luban-"),
-    provider: "maeflow",
-    model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    dts: new MockDtsGateway(),
-    notifier,
-    linkBase: "https://mfc.example.com",
-  });
-  const created = service.create({
-    account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
-  });
-  return { service, id: created.id };
-}
-
-const ANALYZE_SCRIPT: Scene[] = [
-  { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
-  { tool: { name: "complete_stage", input: { note: "本单无需代码仓" } } },
-  { tool: { name: "bash", input: { command:
-    "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高:日志直接指向。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
-  { tool: { name: "submit_analysis",
-    input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
-  { text: "分析报告已提交,等待用户确认。" },
-];
-
-test("Agent 问题卡:通知审批码同源,手机裸序号回复落账并续跑", async () => {
-  const script: Scene[] = [
-    { tool: { name: "AskUserQuestion", input: {
-      context: "已对齐两个候选修复方案",
-      questions: [{
-        question: "采用哪个修复方案?",
-        options: ["方案A:超时回收", "方案B:扩容连接池"],
-        recommended: "方案A:超时回收",
-      }],
-    } } },
-    { text: "收到,按方案A处理完毕,本回合到此。" },
-  ];
-  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
-  await model.start();
-  const luban = new FakeLubanServer();
-  await luban.start();
-  const notifier = makeNotifier(luban);
-  let service: IssueFlowService | undefined;
-  try {
-    const made = await makeService(model, notifier);
-    service = made.service;
-    const { id } = made;
-    await until(() => service!.get(id).status === "waiting_user"
-      ? service!.get(id) : undefined, "Agent 卡举卡");
-    // 通知出卡,审批码与网关侧派码同源(同 token 同四元组)。
-    const approval = await until(() => notifier.latestApproval("dev"),
-      "等待卡通知");
-    const gateway = makeGateway(new IssueFlowLubanApproval(service), notifier);
-    const list = await reply(gateway, "mae-flow 待审批");
-    assert.ok(list.text.includes(`mae-flow 选择 ${approval.code}`),
-      "待办详情带审批码,用户可按码定位");
-    // 裸序号回复(唯一待办):适配层 decide → answer → 续跑。
-    const answer = await reply(gateway, "1");
-    assert.equal(answer.status, 200);
-    assert.match(answer.text, /已提交/);
-    const done = await until(() => {
-      const issue = service!.get(id);
-      return issue.status === "idle" ? issue : undefined;
-    }, "作答后续跑收口");
-    assert.equal(done.waiting, undefined, "卡已消费");
-    // 落的是用户选中的选项原文(Agent 看到自己的措辞)。
-    assert.ok((done.last_reply ?? "").length > 0);
-  } finally {
-    await service?.shutdown().catch(() => undefined);
-    await model.stop();
-    await luban.stop();
-  }
-});
 
 test("平台闸卡:手机回复确认落账,闸清阶段走;卡换了回审批码过期", async () => {
   const model = new ScriptedModelServer(ANALYZE_SCRIPT, "scripted-v1",
@@ -202,6 +80,8 @@ test("平台闸卡:手机回复确认落账,闸清阶段走;卡换了回审批�
   }
 });
 
+
+
 test("「填写补充说明」类选项:空补充打回并指引;带说明的补充回流分析", async () => {
   const model = new ScriptedModelServer(ANALYZE_SCRIPT, "scripted-v1",
     { linear: true });
@@ -243,6 +123,8 @@ test("「填写补充说明」类选项:空补充打回并指引;带说明的补
     await luban.stop();
   }
 });
+
+
 
 test("多来源合并:需求任务与问题卡同册,回复各归各家", async () => {
   const script: Scene[] = [
@@ -316,3 +198,4 @@ test("多来源合并:需求任务与问题卡同册,回复各归各家", async 
     await luban.stop();
   }
 });
+
