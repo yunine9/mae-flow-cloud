@@ -4,7 +4,12 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { Collapsible } from "@base-ui/react/collapsible";
+import {
+  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
+  SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu,
+  SidebarMenuButton, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
+  SidebarMenuItem, SidebarProvider,
+} from "@/components/ui/sidebar";
 import { ChevronDown } from "lucide-react";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
@@ -1246,54 +1251,86 @@ export function App() {
     setKnowledgeFocus(undefined);
     history.pushState(appHistoryState("knowledge", next), "", "/");
   };
-  return <PeopleProvider key={session.username} known={[...teamUsers, session]}><div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
-      <nav className="sidebar-nav" aria-label="视图切换">
+  return <PeopleProvider key={session.username} known={[...teamUsers, session]}><SidebarProvider
+    style={{ "--sidebar-width": "228px" } as React.CSSProperties}>
+    {/* 侧栏(shadcn Sidebar 族,base-nova 皮,2026-09-11 迁移):列宽对齐
+        旧 app-shell 的 228px,桌面观感延续;brand/主题/密度/会话脚沿用
+        本站件,导航按钮换 nova 菜单语言。 */}
+    <Sidebar collapsible="none">
+      <SidebarHeader>
+        <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
+      </SidebarHeader>
+      <SidebarContent aria-label="视图切换" className="sidebar-reset">
         {session.role === "admin" ? <>
-          <span className="nav-section-label">管理视角</span>
-          <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
-          <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
-          {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
-              登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
-          <IssueNavGroup view="issues" current={view} admin
-            childTab={activeIssueChild} onSelectChild={selectIssueChild}
-            onSelect={selectView} />
-          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
-          {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
-              管理),与团队资产同进「管理视角」组。 */}
-          <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
-          <span className="nav-section-label admin-tools">系统管理</span>
-          <NavButton view="users" current={view} onSelect={selectView} label="账号管理" />
-          <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
+          <SidebarGroup>
+            <SidebarGroupLabel>管理视角</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
+                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
+                {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
+                    登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
+                <IssueNavGroup view="issues" current={view} admin
+                  childTab={activeIssueChild} onSelectChild={selectIssueChild}
+                  onSelect={selectView} />
+                <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+                <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+                {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
+                    管理),与团队资产同进「管理视角」组。 */}
+                <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>系统管理</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavButton view="users" current={view} onSelect={selectView} label="账号管理" />
+                <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </> : <>
-          <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
-          <IssueNavGroup view="issues" current={view}
-            childTab={activeIssueChild} onSelectChild={selectIssueChild}
-            onSelect={selectView} />
-          <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
-          <span className="nav-section-label team-context">团队信息</span>
-          <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
-          <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
-          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
-          {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
-              同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}
-          <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
+          <SidebarGroup>
+            <SidebarGroupLabel>个人工作台</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
+                <IssueNavGroup view="issues" current={view}
+                  childTab={activeIssueChild} onSelectChild={selectIssueChild}
+                  onSelect={selectView} />
+                <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>团队信息</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
+                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
+                <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+                <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+                {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
+                    同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}
+                <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </>}
-      </nav>
-      <div className="sidebar-bottom">
-        <div className="sidebar-help-entry">
-          <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
+      </SidebarContent>
+      <SidebarFooter>
+        <div className="sidebar-reset">
+          <SidebarMenu>
+            <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
+          </SidebarMenu>
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
         {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
-      </div>
-    </aside>
-
+      </SidebarFooter>
+    </Sidebar>
+    <SidebarInset>
     <div className="workspace">
       <header className={`workspace-header${dtsWide ? " is-wide" : ""}`}><div><h1>{viewHeader.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p></div><div className="workspace-header-actions">{(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : view === "teamIssues" ? " 项问题等你答复" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
@@ -1528,7 +1565,8 @@ export function App() {
     />}
     {/* 页内确认弹框宿主:全站 confirmDialog 的唯一渲染点(spec #52)。 */}
     <ConfirmDialogHost />
-  </div></PeopleProvider>;
+    </SidebarInset>
+    </SidebarProvider></PeopleProvider>;
 }
 
 function PersonalActionInbox({
@@ -1603,11 +1641,12 @@ function CommitterInbox({
   </section>;
 }
 
-/** 问题处理导航组(spec #171):父行=展开/收起开关(Base UI Collapsible,
- * 点击不跳页;首次展开而右侧不在问题处理时落默认子页签),子行=子页签
- * (问题登记/DTS列表/问题会话;admin 只见问题会话)。子行走新 Tailwind
- * 轨道(tw-root 归一,色彩一律令牌桥工具类),父行沿用 nav-item 家族,
- * 存量侧边栏视觉零跳变。进入问题处理视图自动展开(深链同理)。 */
+/** 问题处理导航组(spec #171):父行=展开/收起开关(受控状态,点击不跳
+ * 页;首次展开而右侧不在问题处理时落默认子页签),子行=子页签(问题登记
+ * /DTS列表/问题会话;admin 只见问题会话)。2026-09-11 迁到 Sidebar 菜单
+ * 语言:父行 SidebarMenuButton,子行 SidebarMenuSub/SubButton——nova 皮
+ * 与令牌桥自动生效,不再依赖 nav-item 家族与手工缩进类。进入问题处理
+ * 视图自动展开(深链同理)。 */
 function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, onSelect }: {
   view: View;
   current: View;
@@ -1628,47 +1667,42 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
     : [{ tab: "sessions", label: "问题会话" },
       { tab: "register", label: "问题登记" },
       { tab: "dts", label: "DTS 列表" }];
-  return <Collapsible.Root open={open} onOpenChange={(next) => {
-    setOpen(next);
-    if (next && current !== view) onSelect(view);
-  }}>
-    <Collapsible.Trigger
-      render={
-        <button type="button"
-          className={`nav-item ${current === view ? "on" : ""}`}
-          aria-label="问题处理">
-          <NavIcon name={view} /><span>问题处理</span>
-          <ChevronDown aria-hidden
-            className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
-        </button>
-      } />
-    <Collapsible.Panel>
-      <div className="tw-root mt-0.5 mb-1 flex flex-col gap-0.5">
-        {children.map((child) => {
-          const active = current === view && childTab === child.tab;
-          return <button key={child.tab} type="button"
-            aria-current={active ? "true" : undefined}
-            onClick={() => onSelectChild(child.tab)}
-            className={`flex h-7 items-center rounded-sm pl-[33px] pr-2
-              text-left text-sm ${active
-                ? "bg-surface text-text-strong ring-1 ring-line"
-                : "text-faint hover:bg-surface-3 hover:text-text"}`}>
+  return <SidebarMenuItem>
+    <SidebarMenuButton isActive={current === view} aria-label="问题处理"
+      aria-expanded={open}
+      onClick={() => {
+        const next = !open;
+        setOpen(next);
+        if (next && current !== view) onSelect(view);
+      }}>
+      <NavIcon name={view} /><span>问题处理</span>
+      <ChevronDown aria-hidden
+        className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+    </SidebarMenuButton>
+    {open && <SidebarMenuSub>
+      {children.map((child) => {
+        const active = current === view && childTab === child.tab;
+        return <SidebarMenuSubItem key={child.tab}>
+          <SidebarMenuSubButton isActive={active} render={
+            <button type="button" aria-current={active ? "true" : undefined}
+              onClick={() => onSelectChild(child.tab)} />
+          }>
             {child.label}
-          </button>;
-        })}
-      </div>
-    </Collapsible.Panel>
-  </Collapsible.Root>;
+          </SidebarMenuSubButton>
+        </SidebarMenuSubItem>;
+      })}
+    </SidebarMenuSub>}
+  </SidebarMenuItem>;
 }
 
 function NavButton({ view, current, onSelect, label, badge = 0, personal = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean }) {
-  return <button className={`nav-item ${current === view ? "on" : ""}`}
-    aria-label={label}
-    title={label}
-    onClick={() => onSelect(view)}>
-    <NavIcon name={view} /><span>{label}</span>{badge > 0
-      && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}
-  </button>;
+  return <SidebarMenuItem>
+    <SidebarMenuButton isActive={current === view} aria-label={label} title={label}
+      onClick={() => onSelect(view)}>
+      <NavIcon name={view} /><span>{label}</span>{badge > 0
+        && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}
+    </SidebarMenuButton>
+  </SidebarMenuItem>;
 }
 
 function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {

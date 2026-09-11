@@ -4,8 +4,12 @@
    选择器多短都无条件赢,再也不用堆四段长的压制选择器或 important 标记。
    当天试过按文件分层(annotate/steer < tokens < style < … < surface-finish):480 张里
    209 张变了——后面文件里被更长选择器压住的规则一夜之间全赢了,那是一次没人审过的
-   改版,不是重构;要那么做得逐处对着截图审。 */
-@layer legacy, fixes;
+   改版,不是重构;要那么做得逐处对着截图审。
+   2026-09-11 追加:全局 preflight 进 base 层(用户拍板对齐 shadcn)。层序把 base
+   垫在最底——层序优先于选择器优先级,base 不垫底的话 preflight 的 `*` 重置会压过
+   legacy 的类规则,存量像素全面崩坏(实测:页头留白/卡片底全丢)。垫底后 legacy
+   照旧赢家,preflight 只在存量沉默处生效。 */
+@layer base, legacy, fixes, theme, utilities;
 @layer legacy {
 /* 全站紫白主题：导航、任务总览与工作台共享令牌。
  * 紫色用于主动作与选中态；琥珀、红、绿保留状态语义。

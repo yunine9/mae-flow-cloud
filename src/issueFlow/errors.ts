@@ -60,6 +60,11 @@ export class McpGatewayError extends Error {}
  * 凡按"网关类失败"处理的地方不必区分两档,映射时子类先判。 */
 export class DtsGatewayUnconfiguredError extends McpGatewayError {}
 
+/** 登记描述 AI 润色的上游失败(#184):运行时初始化/模型缺席/请求失败
+ * /空结果。与 DTS 网关同理是上游故障,路由层回 502;输入校验打回
+ * (如描述为空)不用它,走 IssueControlError 的 409。 */
+export class PolishModelError extends Error {}
+
 // ---- 单点映射 ----
 
 export interface HttpError {
@@ -84,6 +89,9 @@ export function toHttpError(error: unknown): HttpError | undefined {
   }
   if (error instanceof IssueControlError) {
     return { status: 409, message: error.message };
+  }
+  if (error instanceof PolishModelError) {
+    return { status: 502, message: error.message };
   }
   if (error instanceof StateConflictError) {
     return { status: 409, message: "问题卡状态已变化(先到决定生效)" };
