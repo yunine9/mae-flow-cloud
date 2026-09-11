@@ -1824,10 +1824,10 @@ function recoverTaskCwd(
     }
     return existsSync(join(actual, ".git")) ? presented : undefined;
   };
-  if (typeof saved === "string") {
-    // 明确保存过的 cwd 可以是老部署的外置现场，保持向后兼容；但它
-    // 一旦消失就不猜别的目录。只有 cwd 缺失(null/undefined)才执行
-    // 下面的安全发现，这可区分“旧版漏存索引”和“现场确实被删”。
+  if (typeof saved === "string" && location(saved, false)?.actual !== root) {
+    // 明确保存过的仓库可以是外置现场，消失后不猜别的目录。
+    // cwd 缺失或等于启动中的任务根目录占位值，才继续安全发现；
+    // 区分“索引未落盘”和“现场确实被删”。
     return valid(saved, false);
   }
   if (analysis) return valid(join(root, "repositories"));
@@ -10928,7 +10928,9 @@ export class TaskService {
 
   private pushConfirmationAccepted(waiting: WaitingRecord): boolean {
     const answers = Object.values(waiting.answers ?? {});
-    return (answers.length ? answers : [waiting.decision]).every((answer) => answer === PUSH_CONFIRM_ACCEPT);
+    // 已发出的卡片文案是历史契约；只认明确确认原文，绝不做包含匹配。
+    return (answers.length ? answers : [waiting.decision]).every((answer) =>
+      answer === PUSH_CONFIRM_ACCEPT || answer === "确认推送并进入检视");
   }
 
   private continuationDeliverySelection(
@@ -13748,14 +13750,14 @@ export class TaskService {
         this.options.gitCredential?.(task.summary.luban_account);
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
-      // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
-      // 晚一步读就是把重建会话跑进任务根目录(实测:内核找不到
+      // savedCwd 必须先恢复；后续准备失败也要保留仓库路径，
+      // 不能把重建会话跑进任务根目录(实测:内核找不到
       // 状态文件,messages 报"未初始化")。
-      const savedCwd = task.cwd;
+      const savedCwd = this.options.host ? recoverTaskCwd(task.summary, workspace, task.cwd) : task.cwd;
       const requirementAnalysis = this.isRequirementAnalysis(task);
       const analysisOnly = requirementAnalysis;
-      const resuming = task.resume === true
-        && !!savedCwd && savedCwd !== workspace && existsSync(savedCwd);
+      // 仓库复用取决于实际现场，queued 恢复的会话标志不能触发重复 clone。
+      const resuming = !!savedCwd && savedCwd !== workspace && existsSync(savedCwd);
       let cwd = workspace;
       let requirementPath = task.summary.requirement_document?.context_mode === "file"
         ? STORED_REQUIREMENT_DOCUMENT : undefined;
@@ -13780,7 +13782,7 @@ export class TaskService {
       let activeWorkflowProfile = task.summary.workflow_profile;
       let workflowProfileMaterialized = !activeWorkflowProfile;
       let promptSteerCount = 0;
-      task.cwd = cwd;
+      task.cwd = savedCwd ?? cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
         if (!resuming) {

@@ -1564,3 +1564,26 @@ test("自定义先调整中引用确认文案，不整理提交或进入推送",
     assert.match(String(internal.mission), /先调整，不要确认按清单推送，请补 UT/);
   } finally { await model.stop(); }
 });
+
+test("部署前已确认的旧推送卡按原决定续推，保留交付事实", async () => {
+  const { service, model, internal, repo } = await verifyingTask();
+  try {
+    const api = service as any;
+    const head = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = { sha: head, pipeline: "passed", git_push: { sha: head } };
+    const waiting = { waiting_id: "old-confirm", decision: "确认推送并进入检视", answers: {}, notes: "", step: "cloud_push_confirm" };
+    let pushes = 0;
+    api.tryDeliver = async () => { pushes++; };
+    api.openFeedbackBatch = () => { throw new Error("确认不得误入返工"); };
+    api.finishResolvedPushConfirmation(internal, waiting, { head, paths: ["src/feature.ts"], excluded_paths: [], observed_paths: ["src/feature.ts"], status: "confirmed" });
+    assert.equal(pushes, 1);
+    assert.equal(internal.summary.status, "verifying");
+    assert.equal(internal.summary.delivery.sha, head);
+    assert.equal(internal.summary.delivery.pipeline, "passed");
+    assert.equal(internal.summary.delivery.git_push.sha, head);
+    for (const decision of ["先调整", "不要确认推送并进入检视", "确认推送并进入检视，但是先别推", ""]) {
+      assert.equal(api.pushConfirmationAccepted({ ...waiting, decision }), false);
+    }
+    assert.equal(api.pushConfirmationAccepted({ ...waiting, answers: { q: "先调整" } }), false);
+  } finally { await model.stop(); }
+});

@@ -547,3 +547,39 @@ test("恢复:重启前没送到的插话,重建会话要捞回来", async () => 
   assert.match(seen, /掩码要保留后四位/, "没送到的插话必须随重建会话补上");
   await modelB.stop();
 });
+
+test("queued 恢复复用 Git 现场，cwd 根目录占位不会导致重新 clone", async () => {
+  for (const rootPlaceholder of [false, true]) {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-resume-existing-"));
+    const workspace = join(dataDir, "task-16");
+    const cwd = join(workspace, "FMEMateService");
+    mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "--quiet", cwd]);
+    writeFileSync(join(cwd, "pending.txt"), "未提交的修改");
+    writeFileSync(join(workspace, "task.json"), JSON.stringify({
+      summary: { id: "task-16", requirement: "恢复", workspace, status: "failed",
+        repo_url: "https://example.test/FMEMateService.git", created_at: new Date().toISOString() },
+      cwd: rootPlaceholder ? workspace : cwd,
+    }));
+    const service = new TaskService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {}, maxConcurrent: 0 });
+    service.recover();
+    const api = service as any;
+    const task = api.tasks.get("task-16");
+    assert.equal(realpathSync(task.cwd), realpathSync(cwd));
+    task.summary.status = "paused";
+    task.summary.control = { paused_from: "queued" };
+    const returned = await service.returnDeveloperAssistant("task-16", "owner");
+    assert.equal(returned.status, "queued");
+    assert.equal(task.resume, false, "复现接管交回后 queued 的会话标志");
+    if (rootPlaceholder) task.cwd = workspace; // 同进程失败也必须能重新发现。
+    api.options.host = { kernelRoot: "unused" };
+    let clones = 0, boundaries = 0;
+    api.cloneRepo = async () => { clones++; throw new Error("不应重复 clone"); };
+    api.hardenAgentGitBoundary = () => { if (++boundaries === 2) throw new Error("测试在复用仓库后停止，不启动模型或容器"); };
+    await api.launch(task, task.controlEpoch);
+    assert.equal(clones, 0);
+    assert.equal(boundaries, 2);
+    assert.equal(realpathSync(task.cwd), realpathSync(cwd));
+    assert.equal(readFileSync(join(cwd, "pending.txt"), "utf8"), "未提交的修改");
+  }
+});
