@@ -1,6 +1,6 @@
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
-import { isReviewAdjustmentAnswer, reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
+import { explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun } from "./pipelineHandoff.ts";
@@ -6279,37 +6279,14 @@ export class TaskService {
     const overall = allPicked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
     if (task.summary.requirement_graph?.stage === "confirmed" && overall.length && overall.length !== allPicked.length) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
     if (task.summary.status === "completed" && !overall.length) throw new TaskControlError("MR 已合入，任务已经结束，不能再提交批注");
-    const ownerPicked = allPicked.filter((item) =>
-      (item.route ?? "agent") !== "agent");
-    const picked = allPicked.filter((item) =>
-      (item.route ?? "agent") === "agent");
-    if (ownerPicked.length) {
-      this.annotations(task).markSent(
-        ownerPicked.map((item) => item.id), "owner_pending", actor);
-      this.persist(task);
-      const notifier = this.options.notifier;
-      const owner = task.summary.luban_account;
-      if (notifier && owner) {
-        this.bypass(task, "检视意见等待责任人", notifier.notifyOutcome({
-          taskId: task.summary.id,
-          account: owner,
-          status: `annotation-owner-pending:${ownerPicked.map((item) => item.id).join(",")}`,
-          summary: `${ownerPicked.length} 条检视意见需要你答复或决策，请打开任务处理。`,
-          link: personalTaskLink(
-            this.notificationLinkBase(), owner, task.summary.id),
-        }));
-      }
-    }
+    const picked = allPicked;
     if (!picked.length) {
-      return {
-        sent: ownerPicked.map((item) => item.id),
-        text: `已提交 ${ownerPicked.length} 条意见给任务责任人`,
-      };
+      return { sent: [], text: "没有待发送的检视意见" };
     }
     const delivered = await this.deliverAgentAnnotations(
       task, picked, undefined, false, actor, backgroundRequirementReview);
     return {
-      sent: [...ownerPicked.map((item) => item.id), ...delivered.sent],
+      sent: delivered.sent,
       text: delivered.text,
       receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent)
         : this.annotations(task).list().some(item => delivered.sent.includes(item.id) && item.sent_via === "queued_decision")
@@ -6824,7 +6801,7 @@ export class TaskService {
       throw new AnnotationPermissionError("只能随决定提交自己写的批注");
     }
     return items.filter((item) =>
-      item.status === "draft" && wanted.has(item.id)
+      unassignedReviewDraft(item) && wanted.has(item.id)
         && (!actor || item.author === actor));
   }
 
@@ -11476,7 +11453,9 @@ export class TaskService {
       // 云端 push 卡不在内核 effect 契约里；除明确确认外都意味着进入
       // 新修复会话。这里必须由服务端认定为“处理意见”，不能依赖网页
       // 携带 annotation_ids——小鲁班回复只有选项和说明。
-      || (pushConfirmCard && !confirmingPush);
+      || (pushConfirmCard && !confirmingPush)
+      || submitted.some(explicitlyRequestsReviewFeedback);
+    if (handlesFeedback) this.assertOwnerDecides(task, input.actor, "随决定送出检视意见");
     // MR 修复轮(review_repair)的意见只能在最终推送确认卡上闭环:逐条回执
     // 要等会话本轮结束才登记,作者中途点不了通过。内核中途的确认卡若也拿
     // 它们拦"关闭",责任人确认不了、作者闭不了环,只剩"需要调整"能点
@@ -11532,14 +11511,9 @@ export class TaskService {
         && !(task.summary.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const ownDrafts = draftAuthor
       ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
-    const ownerDrafts = ownDrafts.filter((item) =>
-      (item.route ?? "agent") !== "agent" && !reviewDrafts.some(review => review.id === item.id));
-    const drafts = ownDrafts.filter((item) =>
-      (item.route ?? "agent") === "agent");
+    const drafts = ownDrafts.filter(unassignedReviewDraft);
     const deliverableUnresolved = unresolved.filter((item) =>
-      ((item.route ?? "agent") === "agent"
-        || (item.route === "owner_decision"
-          && item.sent_via === "queued_decision"))
+      !item.owner_reply && !item.resolution
       && (item.status !== "draft" || !draftAuthor || item.author === draftAuthor));
     // 等待期间经 queued_decision 提交的意见:状态是 sent,但正文还没
     // 送到过任何 Agent——随这次决定一并送达,送完转正常 decision 账。
@@ -11566,6 +11540,7 @@ export class TaskService {
       crossRepositoryUpdateContext(task),
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
+      picked.length ? "以上是责任人随本次决定送出的待处理意见，请逐条处理并答复；此前联合检视的 CLEAR 不代表这些意见已解决。" : undefined,
       picked.length
         ? requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`) : undefined,
       // push 返工的使命里已经带了同一份回执契约,不重复。
@@ -11602,13 +11577,6 @@ export class TaskService {
     if (picked.length) this.ensureReviewsDir(task);
     // 澄清卡的答复落到被追问的意见上:回执清空,Agent 按答复继续处理。
     this.recordClarificationAnswers(task, waiting, resolved, input.actor);
-    // “问责任人 / 决策后处理”不能因为恰好随任务决定一并提交，就被
-    // 混进 Agent 修改清单。它们独立进入责任人待办；旧 agent 草稿仍
-    // 沿用 waiting continuation 的崩溃恢复合同。
-    if (ownerDrafts.length) {
-      this.annotations(task).markSent(
-        ownerDrafts.map((item) => item.id), "owner_pending");
-    }
     // 等待期入队的意见随这次决定完成送达:账目从 queued_decision 转
     // "decision",下一张卡不再重复携带同一份正文。
     const queuedDelivered = picked
