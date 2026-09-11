@@ -200,9 +200,8 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
 
   const picker = readFileSync(
     join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
-  assert.match(picker, /duplicateTicketOf\(repository, tickets, assignments\)/,
-    "同仓同执行人同号在填的时候就要标出来,不能等服务端拒");
-  assert.match(picker, /单号与「\$\{unitLabel\(duplicate\)\}」重复/);
+  assert.doesNotMatch(picker, /duplicateTicketOf|单号与「.*」重复/,
+    "同仓单元已由平台串行，同一 AR 不应在分工卡上报重复");
 
   assert.match(css, /\.ws-decision \{ padding-bottom: 84px; \}/,
     "右栏底部让开提问题浮钮");

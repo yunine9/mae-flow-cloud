@@ -94,14 +94,14 @@ test("单仓单元的 AR 已有值、清空、输入首字符后始终可编辑"
   }
 });
 
-test("AR 保持可编辑时仍校验同仓同执行人的重复单号和空白", () => {
+test("AR 保持可编辑时允许串行单元共用单号，仍校验空白", () => {
   const render = (tickets: Record<string, string>) => renderToStaticMarkup(React.createElement(repositoryPicker.RepositoryAssigneePicker, {
     taskId: "duplicate-ar", repositories: [
       { id: "a", name: "模块一", url: "https://example.test/ui.git" },
       { id: "b", name: "模块二", url: "https://example.test/ui.git" },
     ], selection: { assignments: { a: "alice", b: "alice" }, tickets, ready: false, loading: false }, onSelectionChange() {},
   }));
-  assert.match(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号与「模块二」重复/);
+  assert.doesNotMatch(render({ a: "REQ-SAME", b: "REQ-SAME" }), /单号.*重复/);
   assert.match(render({ a: "REQ BAD", b: "REQ-OK" }), /AR 单号无效/);
   assert.doesNotMatch(render({ a: "REQ-ONE", b: "REQ-TWO" }), /单号.*重复|AR 单号无效|缺少 AR 单号/);
 });

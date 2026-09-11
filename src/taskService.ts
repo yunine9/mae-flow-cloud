@@ -4157,8 +4157,8 @@ export class TaskService {
       // 责任人。同仓拆出多单元后新节点 id 对不上、url 兜底又因多节点
       // 关闭,责任人会整个丢掉——确认卡只读展示时全员回落主责任人
       // (2026-09-01 用户指出)。这里按"旧图该 url 唯一节点"继承责任人
-      // 作为**默认值**;单号不继承(逐单元填是拍板过的设计,同号还会
-      // 撞分支),task_id 绝不继承(会把别的单元的任务错认成自己)。
+      // 作为**默认值**;单号仍由确认卡逐单元填写（允许同仓串行单元
+      // 共用同一 AR），task_id 绝不继承(会把别的单元错认成自己)。
       const previousNodes = task.summary.requirement_graph?.repositories ?? [];
       const previousUrlCounts = new Map<string, number>();
       for (const node of previousNodes) {
@@ -9662,24 +9662,9 @@ export class TaskService {
           + "单号——下单时未填单号的需求,确认拆分时逐单元补齐");
       }
     }
-    // 同仓多单元的分支名由(责任人,单号)决定:同仓同责任人同单号的
-    // 两个单元会撞同一条分支,必须在确认前挡下,不能等克隆后才炸。
-    const branchKeys = new Map<string, string>();
-    for (const repository of graph.repositories) {
-      const owner = assignmentOverrides?.[repository.id]
-        ?? repository.assignee ?? task.summary.luban_account ?? "";
-      const unitTicket = ticketOverrides?.[repository.id]
-        ?? repository.ticket ?? ticket;
-      const key = `${repository.url}\0${owner}\0${unitTicket}`;
-      const clash = branchKeys.get(key);
-      if (clash) {
-        throw new TaskControlError(
-          `交付单元「${clash}」与「${repository.scope?.name ?? repository.name
-          }」同仓、同责任人、同单号,分支名会互相覆盖;请给其中一个换`
-          + "单号(子单号)或换责任人后再确认");
-      }
-      branchKeys.set(key, repository.scope?.name ?? repository.name);
-    }
+    // 同仓单元由下方依赖边强制串行：上游 MR 合入后，下游从最新基线
+    // 启动。同一责任人和 AR 可以沿用同一远端分支，后一次推送是基于已
+    // 合入祖先的快进；每个子任务仍有独立 delivery/MR 状态。
     const ids = new Set(graph.repositories.map((repository) => repository.id));
     const prerequisites = new Map<string, string[]>();
     for (const id of ids) prerequisites.set(id, []);
