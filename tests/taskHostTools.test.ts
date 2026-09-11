@@ -270,13 +270,18 @@ test("MR 创建沿任务仓/分支/单号，已取得收据后恢复不再次创
   await queueTaskHostOperation(s.host, "push", { action: "push", reason: "阶段交付" });
   await finishTaskHostOperation(s.host);
   await queueTaskHostOperation(s.host, "mr", { action: "create_mr", reason: "提交检视" });
+  s.host.mrTitle = () => undefined;
+  await finishTaskHostOperation(s.host);
+  assert.equal(p.requests.length, 0, "尚未填写 AR 描述时不得创建 MR");
+  assert.equal(new TaskHostLedger(s.host.summary).pending()?.input.action, "create_mr");
+  s.host.mrTitle = () => "责任人填写的 AR 准确名称";
   s.host.persist = () => { throw new Error("保存失败"); }; s.host.fail = () => {};
   await finishTaskHostOperation(s.host);
   delete s.host.summary.delivery!.mr_url; delete s.host.summary.delivery!.mr_id;
   s.host.persist = () => {};
   await finishTaskHostOperation(s.host);
   assert.equal(p.requests.length, 1);
-  assert.deepEqual(p.requests[0].body, { repo: s.remote, source_branch: "work", target_branch: "main", title: "实现模块并推送", dts_no: "REQ-1" });
+  assert.deepEqual(p.requests[0].body, { repo: s.remote, source_branch: "work", target_branch: "main", title: "责任人填写的 AR 准确名称", dts_no: "REQ-1" });
   assert.equal(s.host.summary.delivery!.mr_id, 1);
 });
 
