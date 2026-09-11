@@ -3001,10 +3001,9 @@ export function createTaskServer(
           const loadArchify = (): string | undefined => {
             const target = service.get(id);
             if (!target) return undefined;
-            if (!target.parent_task_id) {
-              const published = readCurrentStoryArchitecture(target.workspace, readArchitectureStory(target, service.artifactRoot(id))?.content ?? "");
-              if (published) return published;
-            }
+            // 主、子任务刷新都发布到各自工作区；优先读取与当前 Story 绑定的发布版本。
+            const published = readCurrentStoryArchitecture(target.workspace, readArchitectureStory(target, service.artifactRoot(id))?.content ?? "");
+            if (published) return published;
             const root = service.artifactRoot(id);
             if (!root) return undefined;
             const path = join(root, ".mae-flow-work", target.ticket ?? target.id, "architecture.json");

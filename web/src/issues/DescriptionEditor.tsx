@@ -137,7 +137,7 @@ export function DescriptionEditor({
       && <span className="issue-desc-editor-placeholder" aria-hidden="true">
         {placeholderText}
       </span>}
-    {zoom && <div className="issue-image-lightbox" role="dialog"
+    {zoom && <div className="issue-image-lightbox ui-viewport-layer" role="dialog"
       aria-label="截图原图"
       onClick={() => setZoom(null)}>
       <img src={zoom} alt="截图原图" />

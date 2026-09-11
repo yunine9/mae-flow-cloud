@@ -85,6 +85,34 @@ test("架构图可从无到有并更新，失败保留旧图，正文和确认�
   } finally { await f.coordinator.shutdown(); f.dispose(); }
 });
 
+test("子任务可以依据自己的完整 Story 从无到有刷新图，不修改主任务图源", async () => {
+  const f = fixture();
+  try {
+    f.child.summary.parent_task_id = "parent";
+    f.child.summary.ticket = "REQ-1";
+    const before = readFileSync(f.childDoc, "utf8");
+    let title = "模块首版";
+    f.runner(async (task, job) => {
+      assert.equal(task.summary.id, "child");
+      assert.equal(job.architectureOnly, true);
+      assert.equal(job.before, before);
+      writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
+        id: "module", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title },
+          components: [{ id: "api", type: "backend", label: title, pos: [40, 40], size: [180, 64] }], connections: [] },
+      }] }));
+    });
+    for (const name of ["模块首版", "模块更新版"]) {
+      title = name;
+      f.coordinator.generateArchitecture("child", "owner");
+      await f.coordinator.settled("child");
+      assert.equal(f.coordinator.status("child").error, undefined);
+      assert.match(readCurrentStoryArchitecture(f.child.summary.workspace, before)!, new RegExp(name));
+    }
+    assert.equal(readFileSync(f.childDoc, "utf8"), before);
+    assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace), undefined);
+  } finally { await f.coordinator.shutdown(); f.dispose(); }
+});
+
 test("未登记全局版本的分析 Story 也能更新架构图，生成期间正文变化不发布旧图", async () => {
   const f = fixture();
   const coordinator = new OverallStoryCoordinator({ ...f.options,
