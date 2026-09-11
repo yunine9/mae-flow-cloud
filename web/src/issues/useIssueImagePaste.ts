@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { uploadIssueImage } from "../api.ts";
+import { uploadIssueImage } from "../api";
 
 /** 在 textarea 光标处插入 markdown(无 ref 时追加到末尾),返回
  * 下一段文本与光标落点——受控组件拿 next 设值,ref 存在时再摆焦点。 */
@@ -32,7 +32,7 @@ export function useIssueImagePaste(onError?: (message: string) => void) {
   const [uploading, setUploading] = useState(false);
 
   const onPaste = useCallback((
-    event: { clipboardData?: { items?: Iterable<{ type: string; getAsFile(): File | null }> ; preventDefault(): void } },
+    event: { clipboardData?: { items?: Iterable<{ type: string; getAsFile(): File | null }> }; preventDefault(): void },
     insert: (markdown: string) => void,
   ) => {
     const items = event.clipboardData?.items;

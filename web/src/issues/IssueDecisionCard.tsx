@@ -1,6 +1,7 @@
-/**
+import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste";
 
-import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste.ts"; * 问题卡的决策卡:任务侧 WaitingCard(TaskCard.tsx)anatomy 的问题域移植。
+/**
+ * 问题卡的决策卡:任务侧 WaitingCard(TaskCard.tsx)anatomy 的问题域移植。
  *
  * 提交语义与旧版完全一致——同一个 answerIssue 接口、同一个 state_version。
  * 区别只在交互:旧版"点选项立即提交",这里改成"先选/先填,统一按提交",
