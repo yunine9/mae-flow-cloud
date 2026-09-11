@@ -105,7 +105,7 @@ export interface TaskHostRuntime {
   reply(id: string, revision: number, outcome: "fixed" | "not_fixed" | "needs_clarification", summary: string, evidence: string[]): void;
   release(): Promise<void>;
   persist(): void;
-  resume(message: string, target?: string): void;
+  resume(message: string, target?: string, operation?: HostOperation): void;
   fail?(message: string): void;
   stopVerification?(): Promise<void>;
   diagnostics?(): Promise<string>;
@@ -227,6 +227,15 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
 
 /** Runs only after the model turn has finished. It never waits for its own tool
  * call, and recovery can replay a running record using its pinned SHA/op ID. */
+/** 成功收据只结束旧推送调整指令；其他目标、失败与会话重建仍保留原使命。 */
+export function hostResumeMission(mission: string | undefined, message: string, target?: string, operation?: HostOperation): string {
+  const completedAdjustment = operation?.input.action === "push" && operation.state === "succeeded"
+    && !!operation.push_receipt && mission?.startsWith("用户要求调整推送，请整理后重新发起：");
+  return [target ? `[责任人调整后的目标]\n${target}\n不再执行已暂缓事项。`
+    : completedAdjustment ? "本次推送已成功，先前的推送调整指令已结束；依据责任人最新要求继续，不要重新询问旧的‘先调整’。" : mission,
+    message].filter(Boolean).join("\n\n");
+}
+
 export async function finishTaskHostOperation(host: TaskHostRuntime): Promise<boolean> {
   try { return await executeTaskHostOperation(host); }
   catch (error) {
@@ -359,7 +368,7 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
   ledger.update(operation);
   // A canceled/taken-over task retains receipts but must never resume itself.
   try { host.assertActive(); } catch { return true; }
-  try { host.resume(`[宿主操作 ${operation.id} ${operation.state}]\n${operation.result}\n按当前目标继续；失败不代表旧问题已通过。`, target); }
+  try { host.resume(`[宿主操作 ${operation.id} ${operation.state}]\n${operation.result}\n按当前目标继续；失败不代表旧问题已通过。`, target, operation); }
   catch (error) { host.fail?.(`宿主操作已记账，但会话续接失败：${safeMessage(host, error)}`); }
   return true;
 }

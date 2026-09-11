@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
-import { createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult } from "../src/taskHostTools.ts";
+import { hostResumeMission, createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult } from "../src/taskHostTools.ts";
 
 function scene(t: any) {
   const root = mkdtempSync(join(tmpdir(), "mfc-host-tools-"));
@@ -571,4 +571,23 @@ test("宿主推送卡不继承 delivery_review 脉冲的 diff 与检视分支", 
   assert.deepEqual(projected.waiting.choice_effects.map((effect: any) => effect.answers), [["确认推送"], ["先调整"]]);
   assert.equal(projected.waiting.choice_effects[0].closes_feedback, false);
   assert.equal(projected.waiting.choice_effects[1].handles_feedback, true);
+});
+
+
+test("推送成功恢复清除旧调整使命，保留独立新需求与失败重试使命", async t => {
+  const s = scene(t);
+  const stale = "用户要求调整推送，请整理后重新发起：\n先调整\n先调整";
+  let received: string | undefined;
+  s.host.resume = (message, target, operation) => { received = hostResumeMission(stale, message, target, operation); };
+  await queueTaskHostOperation(s.host, "resume-success", { action: "push", reason: "按责任人要求推送" });
+  await finishTaskHostOperation(s.host);
+  assert.ok(received); assert.doesNotMatch(received, /用户要求调整推送|先调整\n先调整/);
+  assert.match(received, /succeeded/);
+  const completed = new TaskHostLedger(s.host.summary).read().operations[0];
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), completed.sha);
+  assert.match(hostResumeMission("新需求：增加分页查询", "成功", undefined, completed), /增加分页查询/);
+  assert.match(hostResumeMission(stale, "失败", undefined, { ...completed, state: "failed" }), /用户要求调整推送/);
+  assert.match(hostResumeMission(stale, "重建", undefined, { ...completed, input: { action: "restart_session", reason: "重建" } }), /用户要求调整推送/);
+  assert.match(hostResumeMission(stale, "成功", "责任人新目标", completed), /责任人新目标/);
+  assert.doesNotMatch(hostResumeMission(stale, "成功", "责任人新目标", completed), /用户要求调整推送/);
 });

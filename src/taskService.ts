@@ -104,7 +104,7 @@ import { createSplitProposalTool, type SplitProposalInput } from "./splitProposa
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
-import { TaskHostLedger, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, type TaskHostRuntime } from "./taskHostTools.ts";
+import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, type TaskHostRuntime } from "./taskHostTools.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -13632,9 +13632,8 @@ export class TaskService {
       stopVerification: async () => {
         if (task.prepushActive) { task.controlEpoch += 1; actionEpoch = task.controlEpoch; await this.stopPrePush(task.summary.id, task.summary.luban_account, false); }
       },
-      resume: (message, target) => this.enqueueRepair(task,
-        [target ? `[责任人调整后的目标]\n${target}\n不再执行已暂缓事项。` : task.mission,
-          message].filter(Boolean).join("\n\n"), "宿主操作已返回，继续当前目标"),
+      resume: (message, target, operation) => this.enqueueRepair(task,
+        hostResumeMission(task.mission, message, target, operation), "宿主操作已返回，继续当前目标"),
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
       confirmPush: operation => confirmHostPush({
         summary: task.summary, cwd: task.cwd, humanGate: task.humanGate,
