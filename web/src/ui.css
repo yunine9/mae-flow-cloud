@@ -78,6 +78,9 @@
     background: transparent;
     font-weight: 600;
   }
+  /* flat+danger:透明底取消盒装后,.danger 的白字失去衬底,浅色主题
+   * 里白字白底不可见(2026-09-11 列表卡终止钮实锤)——字色收回危险色。 */
+  .ui-btn.flat.danger { color: var(--danger); }
   .ui-btn.flat:hover:not(:disabled) {
     background: transparent;
     text-decoration: underline;
