@@ -14824,9 +14824,16 @@ export class TaskService {
     if (!task.cwd) throw new CommitMessagePolicyError("任务代码现场不可用，无法检查提交说明");
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     const baseline = await frozenTaskBaseline(task.cwd) ?? snapshot?.baseline;
-    return baseline
-      ? [`${baseline}..${head}`, "--not", "--remotes"]
-      : [head, "--not", "--remotes"];
+    const range = baseline ? [`${baseline}..${head}`, "--not", "--remotes"] : [head, "--not", "--remotes"];
+    // 宿主从临时传输仓推送，不会刷新本工作区 refs/remotes；已发布祖先
+    // 以核验过的收据排除。仍保留 --remotes，避免改写合并进来的远端历史。
+    const published = task.summary.delivery?.git_push?.sha;
+    if (published && /^[0-9a-f]{40,64}$/i.test(published)) {
+      const object = await runSafeWorktreeGitAsync(task.cwd,
+        ["cat-file", "-e", `${published}^{commit}`], { timeoutMs: 30_000 });
+      if (object.status === 0) range.push(published);
+    }
+    return range;
   }
 
   private async invalidTaskCommitSubjects(
@@ -14990,6 +14997,8 @@ export class TaskService {
     if (!task.cwd) return this.commitPolicyFailure(
       task, "提交说明检查失败：任务代码现场不可用");
     const before = await this.prePushRevision(task);
+    // 该版本已由宿主核验推送，不再因历史标题阻断 MR/流水线结果收口。
+    if (task.summary.delivery?.git_push?.sha === before.sha) return "ok";
     let invalid: CommitSubjectRecord[];
     try {
       invalid = await this.invalidTaskCommitSubjects(task, before.sha);
@@ -14998,15 +15007,6 @@ export class TaskService {
         error instanceof Error ? error.message : String(error));
     }
     if (!invalid.length) return "ok";
-    const listed = invalid.slice(0, 3)
-      .map((item) => `${item.sha.slice(0, 12)}「${item.subject.slice(0, 80)}」`)
-      .join("、");
-    if (task.summary.delivery?.git_push?.sha === before.sha) {
-      return this.commitPolicyFailure(task,
-        `提交说明不符合仓库规范：${listed}${invalid.length > 3
-          ? ` 等 ${invalid.length} 条` : ""}。该版本已经有推送收据，系统不会改写远端历史。`);
-    }
-
     // 只用旧 commit 的 tree 重建对象并 update-ref；不读索引来生成提交。
     // 暂存内容原样保留，不应因无关本地改动阻断提交说明的机械修正。
     let rewrite: { after: PrePushRevision; repaired: string[]; tree: string };
