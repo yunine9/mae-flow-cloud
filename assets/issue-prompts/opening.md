@@ -23,6 +23,7 @@
 3. 代码仓由你调 pull_repo 拉取(登记的也要逐个拉),中途缺仓随时补;给哪些仓推送、提 MR 由你判断。
 4. issue-analysis.md 是本会话核心交付物,按技能 issue-analysis 持续维护。
 5. {{intervention}}
+6. Git 提交身份：使用宿主已写入仓库的 user.name/user.email，直接 git commit。不要根据工号、登录名或域名拼接邮箱；不要用 git -c user.name/user.email、--author、GIT_AUTHOR_* / GIT_COMMITTER_* 或修改 git config 覆盖署名。需要核实时只读 git config --get user.name 和 git config --get user.email；缺失或可疑时如实反馈，由责任人确认正确身份，不自行补造，也不自动改写已推送历史。
 
 ## fixed.intervention.full_auto
 

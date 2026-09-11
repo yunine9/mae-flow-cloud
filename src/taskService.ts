@@ -14215,6 +14215,7 @@ export class TaskService {
       // regular-expression"),而那时代码早已写完,重来一遍是纯浪费。
       // 规矩必须开场就给,每个会话都带:修复会话同样要提交。
       const convention = this.effectiveCommitConvention();
+      prompt += "\n\nGit 提交身份：使用宿主已写入仓库的 user.name/user.email，直接 git commit。不要根据工号、登录名或域名拼接邮箱；不要用 git -c user.name/user.email、--author、GIT_AUTHOR_* / GIT_COMMITTER_* 或修改 git config 覆盖署名。需要核实时只读 git config --get user.name 和 git config --get user.email；缺失或可疑时如实反馈，由责任人确认正确身份，不自行补造，也不自动改写已推送历史。";
       if (!analysisOnly && convention) {
         prompt = `${prompt}\n\n提交信息规范(平台钩子会按它校验,不合规`
           + `直接拒收 push,请第一次就写对):${convention}`;
