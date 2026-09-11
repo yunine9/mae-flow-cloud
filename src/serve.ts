@@ -888,6 +888,9 @@ async function main(): Promise<void> {
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "10"),
+    // 回合前压缩的事件量阈值(管理页旋钮 issue_compact_every_events 的
+    // 部署缺省):0=关,续聊回合行为与现状全等。
+    compactEveryEvents: Number(flag("--issue-compact-every-events") ?? "0"),
     // 环境预热与需求侧同条件启用(host + 统一任务容器):拉仓收口进
     // analyze 时后台编译基线、焐热分仓缓存,修复阶段少一次全量冷启。
     // fail-open 旁路,缺席(测试/无隔离形态)不预热,行为照旧。

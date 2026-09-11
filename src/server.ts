@@ -766,6 +766,11 @@ export function createTaskServer(
                 // 与 max_concurrent 同一展示口径:这里只给部署层缺省。
                 issue_max_turns: options.issueFlow?.options.maxConcurrentTurns
                   ?? 10,
+                // 问题流回合前压缩的事件量阈值缺省
+                // (--issue-compact-every-events);0=关。实际生效值还可能
+                // 被管理页运行时旋钮 issue_compact_every_events 覆盖。
+                issue_compact_every_events:
+                  options.issueFlow?.options.compactEveryEvents ?? 0,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
@@ -2695,6 +2700,8 @@ export function createTaskServer(
               line: Number(body.line ?? 0),
               anchor: String(body.anchor ?? ""),
               quote: String(body.quote ?? ""),
+              context_before: String(body.context_before ?? ""),
+              context_after: String(body.context_after ?? ""),
               line_end: Number(body.line_end ?? 0),
               note: String(body.note ?? ""),
               kind: body.kind === "code" ? "code" : "doc",

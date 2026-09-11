@@ -38,7 +38,7 @@ export function reviewStore(root: string): AnnotationStore {
 
 export function addReview(
   root: string,
-  input: { author: string; line: number; anchor: string; note: string },
+  input: { author: string; line: number; anchor: string; note: string; quote?: string; line_end?: number; context_before?: string; context_after?: string },
 ): Annotation {
   return reviewStore(root).add({
     author: input.author,
@@ -47,6 +47,7 @@ export function addReview(
     file: ANALYSIS_DOC_NAME,
     line: input.line,
     anchor: input.anchor,
+    quote: input.quote, line_end: input.line_end, context_before: input.context_before, context_after: input.context_after,
     note: input.note,
     kind: "doc",
   });
@@ -116,8 +117,8 @@ export function renderReviewNotes(
     "几点要求:",
     "- 这是检视结论,不是征求意见。逐条落实,不要只回复\"已知悉\"。",
     "- 只按这些意见修订。确实要连带改别处,先说清为什么,再动。",
-    "- 行号按你收到时的文件;你一改行号就会偏移,所以每条都附了原文,"
-      + "以原文为准定位。",
+    "- 行号仅为历史参考。每条修改前读取当前文件，以原文为准定位，结合批注时上下文核对；处理上一条后重新核对后续位置，不沿用旧行号。",
+    "- 找不到原文或匹配多处时先检查当前实现；无法确认就说明，不猜位置、不把原文消失当作已修复，可继续处理其他意见。",
     "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
     "",
   ];
@@ -125,8 +126,10 @@ export function renderReviewNotes(
   for (const item of ordered) {
     index += 1;
     // 稳定 id 沿用:它让用户与 Agent 能精确指回同一条意见,不靠猜。
-    lines.push(`${index}. [${item.id}] 第 ${item.line} 行`);
-    lines.push(`   原文:${item.anchor}`);
+    lines.push(`${index}. [${item.id}] 历史第 ${item.line} 行`);
+    lines.push(`   批注时原文:${item.quote || item.anchor}`);
+    if (item.context_before) lines.push(`   批注时前文:\n${item.context_before}`);
+    if (item.context_after) lines.push(`   批注时后文:\n${item.context_after}`);
     lines.push(`   要求:${item.note}`);
   }
   lines.push("");

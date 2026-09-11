@@ -783,4 +783,4 @@ function IssueCollaborationComposer({
     {error && <div className="alert" role="alert">{error}</div>}
   </section>;
 }
-import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste.ts";
+import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste";

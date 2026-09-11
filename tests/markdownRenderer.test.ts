@@ -106,3 +106,15 @@ test("Story 架构入口用业务语言解释常见图，不把图名直接甩�
   assert.match(render("订单领域类图"), /核心对象各自负责什么/);
   assert.match(render("订单服务部署图"), /服务运行在哪里/);
 });
+
+
+test("行号仅由文档入口开启，普通对话不显示且保留批注锚点", () => {
+  const text = "# 标题\n\n1. 第一项\n2. 第二项";
+  const message = renderToStaticMarkup(React.createElement(Markdown, { text }));
+  assert.doesNotMatch(message, /md-numbered|data-source-lines/);
+  assert.match(message, /data-l="3"/);
+  const document = renderToStaticMarkup(React.createElement(Markdown, { text, showLineNumbers: true }));
+  assert.match(document, /class="md md-numbered"/);
+  assert.match(document, /data-source-lines="1"/);
+  assert.match(document, /data-l="3"/);
+});

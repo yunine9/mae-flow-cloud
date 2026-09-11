@@ -85,7 +85,8 @@ export function annotationsAtRow<T extends MaterialAnnotation>(
  * 锚点退回"第 N 行"——人指的是位置,不一定是文字。 */
 export function anchorOf(row: RowNode, line: number): string {
   const content = row.querySelector('[data-code-side="new"]') ?? row.querySelector("[data-code]") ?? row;
-  const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
+  const raw = content.textContent ?? "";
+  const text = row.querySelector("[data-code]") ? raw.trim() : raw.replace(/\s+/g, " ").trim();
   if (!text) return `第 ${line} 行`;
   return text.length > ANCHOR_MAX ? text.slice(0, ANCHOR_MAX) : text;
 }
@@ -191,6 +192,7 @@ export function quoteOfSelection(
   if (!a || !b) return undefined;
   let quote = raw.split("\n").map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean).join("\n");
+  if (from.querySelector("[data-code]")) quote = raw.trim();
   if (quote.length > QUOTE_MAX) quote = quote.slice(0, QUOTE_MAX) + "…";
   return {
     quote,
@@ -198,4 +200,19 @@ export function quoteOfSelection(
     line: Math.min(a, b),
     lineEnd: Math.max(a, b),
   };
+}
+
+
+/** 只采集当前材料里同文件的邻近原文；不把行号、diff 标记或编辑框带入。 */
+export function contextOfRow(root: RowNode, row: RowNode, lineEnd?: number): { context_before?: string; context_after?: string } {
+  const file = row.closest("[data-file]")?.dataset.file;
+  const line = Number(row.dataset.l);
+  const end = lineEnd ?? Number(row.dataset.lineEnd ?? line);
+  const text = (node: RowNode) => (node.querySelector('[data-code-side="new"]') ?? node.querySelector("[data-code]") ?? node).textContent?.trim() ?? "";
+  const rows = Array.from(root.querySelectorAll("[data-l]")).filter(node =>
+    !node.closest(".annot-editor") && !node.querySelector("[data-l]")
+    && node.closest("[data-file]")?.dataset.file === file);
+  const before = rows.filter(node => Number(node.dataset.lineEnd ?? node.dataset.l) < line).slice(-2).map(text).join("\n").slice(-1200);
+  const after = rows.filter(node => Number(node.dataset.l) > end).slice(0, 2).map(text).join("\n").slice(0, 1200);
+  return { ...(before ? { context_before: before } : {}), ...(after ? { context_after: after } : {}) };
 }

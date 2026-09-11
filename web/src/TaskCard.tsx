@@ -5,12 +5,12 @@ import { ExecutionEventBuffer } from "./executionEventBuffer";
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { memo, useMemo, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { memo, useMemo, useEffect, useState, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
+import { clearDecisionChoice, isDecisionTextDrag, isAdjustmentAnswer, needsDeliverySelection, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -419,7 +419,7 @@ export function TaskCard({
           )}
           {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
-            task.waiting.recommended_view === "diff" ? (
+            needsDeliverySelection(task.waiting) ? (
               /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
                  「本任务变更」里。列表页若直接渲决策表单,提交键会永远
                  停在"正在读取交付文件清单"(push 确认卡实锤死锁),
@@ -636,8 +636,9 @@ function waitingStepTitle(task: TaskSummary): string | undefined {
   // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
   // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
   if (isChainReviewWaiting(task)) return "确认拆分方案";
+  if (step === "host_push_confirm") return "确认本次推送";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
-  if (task.waiting?.recommended_view === "diff") return "代码检视";
+  if (needsDeliverySelection(task.waiting)) return "代码检视";
   return undefined;
 }
 
@@ -698,6 +699,8 @@ export function WaitingCard({
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
   const [replyText, setReplyText] = useState("");
+  const optionPress = useRef<{ x: number; y: number } | undefined>(undefined);
+  const replyInput = useRef<HTMLTextAreaElement>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [conflict, setConflict] = useState("");
@@ -723,7 +726,7 @@ export function WaitingCard({
   const chainReview = isChainReviewWaiting(task);
   const unifiedReply = (presentation === "studio" || mrDescription) && questions.length === 1
     && !requirementAnalysisConfirmation;
-  const choiceEffects = task.waiting?.choice_effects ?? [];
+  const choiceEffects = task.waiting?.step === "host_push_confirm" ? [] : task.waiting?.choice_effects ?? [];
   const closingAnswers = new Set(choiceEffects
     .filter((effect) => effect.closes_feedback)
     .flatMap((effect) => effect.answers));
@@ -733,7 +736,7 @@ export function WaitingCard({
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;
-  const requiresDeliverySelection = task.waiting?.recommended_view === "diff";
+  const requiresDeliverySelection = needsDeliverySelection(task.waiting);
   const deliverySelectionChanged = !!deliverySelection
     && (deliverySelection.selectedPaths.length
       !== deliverySelection.committedPaths.length
@@ -770,8 +773,8 @@ export function WaitingCard({
   // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
   // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
-    || (requiresDeliverySelection && selectedAnswers.some((answer) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(answer)));
+    || ((requiresDeliverySelection || task.waiting?.step === "host_push_confirm")
+      && selectedAnswers.some(isAdjustmentAnswer));
   const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
@@ -888,6 +891,8 @@ export function WaitingCard({
 
   const submitLabel = submitting ? "正在提交…"
     : mrDescription ? "保存描述并继续创建 MR"
+    : task.waiting?.step === "host_push_confirm"
+      ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : selectedAnswers.includes("确认推送") ? "确认推送" : "提交决定"
     : clarification ? "发送答复"
     : requirementAnalysisConfirmation ? "需求已确认，进入需求分析"
     // 按钮说清楚按下去会发生什么：按模块建任务、确认无需改动，或退回。
@@ -901,7 +906,7 @@ export function WaitingCard({
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
-          ? "提交返工意见"
+          ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "提交返工意见"
           : requiresDeliverySelection && deliverySelection
             ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
             : requiresDeliverySelection
@@ -1064,14 +1069,19 @@ export function WaitingCard({
                       title={locked ? "由责任人确认"
                         : chosen ? "再次点击取消选择" : undefined}
                       disabled={locked}
+                      onPointerDown={(event) => { optionPress.current = { x: event.clientX, y: event.clientY }; }}
+                      onPointerCancel={() => { optionPress.current = undefined; }}
                       onClick={(event) => {
                         if (locked) return;
                         // 选项原文可拖选复制(用户拍板:能选中就行,不要按钮)。
                         // 拖选松手时浏览器照样派 click,不拦一下就把选项选上了。
                         const selection = window.getSelection();
-                        if (selection && !selection.isCollapsed
-                            && selection.anchorNode
-                            && event.currentTarget.contains(selection.anchorNode)) {
+                        const dragged = isDecisionTextDrag(optionPress.current,
+                          { x: event.clientX, y: event.clientY }, event.detail > 0
+                            && !!selection && !selection.isCollapsed
+                            && !!selection.anchorNode && event.currentTarget.contains(selection.anchorNode));
+                        optionPress.current = undefined;
+                        if (dragged) {
                           return;
                         }
                         pickOption(item.question, option);
@@ -1169,16 +1179,21 @@ export function WaitingCard({
       <DecisionFooterMount target={footerTarget}>
       <footer className={`decision-footer${
         showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
-        {unifiedReply && <label className="decision-unified-reply">
+        {unifiedReply && <div className="decision-unified-reply">
           <span>{mrDescription ? "AR 单上的准确描述" : chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
             : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
               ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
-              : picked[questions[0].question] ? "不会替代已选项；要自定义请先取消选择" : "也可以选择上方选项"}</small></span>
-          <textarea value={replyText} aria-label="决定回复"
+              : picked[questions[0].question] ? "随所选决定提交，可改为自定义答复" : "也可以选择上方选项"}</small></span>
+          {picked[questions[0].question] && <button type="button" className="link"
+            onClick={() => {
+              setPicked(current => clearDecisionChoice(current, questions[0].question));
+              replyInput.current?.focus();
+            }}>改为自定义答复</button>}
+          <textarea ref={replyInput} value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
             placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
-        </label>}
+        </div>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>

@@ -339,7 +339,7 @@ function confirmationScene(t: any) {
     finish: () => pending, repairCount: () => resumed };
 }
 
-test("轻量推送确认：先等待，责任人确认即推送，不走旧反馈门禁，重复答复不重推", async t => {
+for (const notes of [undefined, "小鲁班手机审批"]) test(`轻量推送确认：确认带备注 ${notes ?? "无"} 仍推送，重复答复不重推`, async t => {
   const s = confirmationScene(t);
   const operation = await queueTaskHostOperation(s.runtime(), "light-push", { action: "push", reason: "修复 B 并补充 UT" });
   await finishTaskHostOperation(s.runtime());
@@ -347,7 +347,7 @@ test("轻量推送确认：先等待，责任人确认即推送，不走旧反�
   assert.equal(waiting.step, "host_push_confirm");
   assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
   assert.equal(s.repairCount(), 0, "等待用户时不自动重启 Agent");
-  const input = { waiting_id: waiting.waiting_id, state_version: waiting.state_version, actor: "owner", decision: "确认推送" };
+  const input = { waiting_id: waiting.waiting_id, state_version: waiting.state_version, actor: "owner", decision: "确认推送", notes };
   await assert.rejects(s.service.decide("task-1", { ...input, actor: "other" }));
   await s.service.decide("task-1", input);
   await s.finish();
@@ -357,16 +357,34 @@ test("轻量推送确认：先等待，责任人确认即推送，不走旧反�
   assert.equal(s.repairCount(), 1);
 });
 
-test("轻量推送确认：补充范围要求交回 Agent，不按全量推送", async t => {
+test("轻量推送确认：选择先调整时，补充范围要求交回 Agent", async t => {
   const s = confirmationScene(t);
   await queueTaskHostOperation(s.runtime(), "light-adjust", { action: "push", reason: "修复 B" });
   await finishTaskHostOperation(s.runtime());
   const waiting = s.task.summary.waiting;
   await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
-    actor: "owner", decision: "确认推送", notes: "只推 UT" });
+    actor: "owner", decision: "先调整", notes: "只推 UT" });
   assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
   assert.equal(s.repairCount(), 1);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].push_confirmed, undefined);
+});
+
+test("轻量推送确认：恢复已落盘的带备注确认，继续推送而非要求调整", async t => {
+  const s = confirmationScene(t);
+  const operation = await queueTaskHostOperation(s.runtime(), "recover-confirm", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  s.task.humanGate.resolve(waiting.waiting_id, {
+    stateVersion: waiting.state_version, decision: "确认推送",
+    answers: { "0": "确认推送" }, notes: "小鲁班手机审批", decidedBy: "owner",
+  });
+  const resolved = JSON.parse(readFileSync(join(s.host.summary.workspace, "waiting.json"), "utf8")).records[waiting.waiting_id];
+  await (s.service as any).resumeResolvedDecision(s.task, resolved);
+  await s.finish();
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), operation.sha);
+  const completed = new TaskHostLedger(s.host.summary).read().operations[0];
+  assert.equal(completed.state, "succeeded");
+  assert.equal(completed.push_confirmed, true);
 });
 
 test("轻量推送确认：确认期间提交变化，不能推送未确认的新版本", async t => {
@@ -488,4 +506,69 @@ test("升级前成功触发但仍 repairing 的任务，恢复只查询新 SHA �
   assert.equal(s.resumed(), 0);
   assert.equal(await finishTaskHostOperation(s.host), false);
   assert.equal(s.host.summary.delivery.loop!.failure, "旧告警");
+});
+
+
+test("网页先调整附带确认文案也不推送远端", async t => {
+  const s = confirmationScene(t);
+  await queueTaskHostOperation(s.runtime(), "browser-adjust", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  const question = waiting.question.questions[0].question;
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", selected_options: { [question]: "先调整" }, free_responses: {},
+    comment: "先补 UT，不要确认推送", delivery_paths: [] });
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 1);
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].push_confirmed, undefined);
+});
+
+test("清单确认只认明确确认选项，自定义否定和矛盾答案均不放行", () => {
+  const accepts = (waiting: any) => (TaskService.prototype as any).pushConfirmationAccepted(waiting);
+  assert.equal(accepts({ decision: "先调整，不要确认按清单推送" }), false);
+  assert.equal(accepts({ decision: "确认按清单推送", answers: { q: "先调整" } }), false);
+  assert.equal(accepts({ decision: "确认按清单推送", answers: { q: "确认按清单推送", q2: "先调整" } }), false);
+  assert.equal(accepts({ decision: "确认按清单推送" }), true);
+  assert.equal(accepts({ answers: { q: "确认按清单推送" }, notes: "先调整过，现在确认" }), true);
+});
+
+
+test("原始复现场景：只点击先调整，无备注，取消本次宿主推送", async t => {
+  const s = confirmationScene(t);
+  const operation = await queueTaskHostOperation(s.runtime(), "plain-adjust", { action: "push", reason: "阶段性推送" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  const question = waiting.question.questions[0].question;
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", selected_options: { [question]: "先调整" }, free_responses: {}, delivery_paths: ["feature.txt"] });
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 1);
+  const cancelled = new TaskHostLedger(s.host.summary).read().operations.find(row => row.id === operation.id)!;
+  assert.equal(cancelled.state, "failed");
+  assert.equal(cancelled.push_confirmed, undefined);
+  assert.equal(cancelled.push_receipt, undefined);
+  await finishTaskHostOperation(s.runtime());
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "", "重试也不能执行已取消的推送");
+});
+
+test("宿主推送卡不继承 delivery_review 脉冲的 diff 与检视分支", async t => {
+  const s = confirmationScene(t), service = s.service as any;
+  const kernelRoot = join(s.host.summary.workspace, "pulse-kernel");
+  mkdirSync(join(kernelRoot, "flow"), { recursive: true });
+  writeFileSync(join(kernelRoot, "flow", "flow.json"), JSON.stringify({ steps: {
+    delivery_review: { approval_subject: { kind: "worktree" }, confirmation_answers: ["内核确认"], next: "done" }, done: {},
+  } }));
+  service.options.host = { kernelRoot, python: "python3" };
+  service.taskProgress = () => ({ step_id: "delivery_review", step: "代码检视", phases: [], current_index: 0 });
+  await queueTaskHostOperation(s.runtime(), "pulse-confirm", { action: "push", reason: "阶段性推送" });
+  await finishTaskHostOperation(s.runtime());
+  // 兼容历史概要里残留的错误投影，必须清掉，而非 spread 后继续保留。
+  s.task.summary.waiting.recommended_view = "diff";
+  const projected = service.project(s.task);
+  assert.equal(projected.waiting.step, "host_push_confirm");
+  assert.equal(projected.waiting.recommended_view, undefined);
+  assert.deepEqual(projected.waiting.question.questions[0].options, ["确认推送", "先调整"]);
+  assert.deepEqual(projected.waiting.choice_effects.map((effect: any) => effect.answers), [["确认推送"], ["先调整"]]);
+  assert.equal(projected.waiting.choice_effects[0].closes_feedback, false);
+  assert.equal(projected.waiting.choice_effects[1].handles_feedback, true);
 });

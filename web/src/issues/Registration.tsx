@@ -876,9 +876,9 @@ function DtsRegister({
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
                       checked={displayedTickets.length > 0
-                        && allDisplayedSelected
-                        ? true
-                        : displayedSelectedCount > 0 ? "indeterminate" : false}
+                        && allDisplayedSelected}
+                      indeterminate={!allDisplayedSelected
+                        && displayedSelectedCount > 0}
                       onCheckedChange={() => toggleSelectAll()} />
                     <span className="whitespace-nowrap text-xs font-normal
                       text-muted-foreground">
@@ -940,9 +940,16 @@ function DtsRegister({
                       <Select
                         value={bindings[ticket.ticket]?.module_id ?? "__none"}
                         disabled={bindingTicket === ticket.ticket}
+                        items={[
+                          { value: "__none", label: "未选择(AI 运行时识别)" },
+                          ...moduleCatalog.map((module) => ({
+                            value: module.id, label: module.name,
+                          })),
+                        ]}
                         onValueChange={(value) =>
                           void bindModule(ticket.ticket,
-                            value === "__none" ? "" : value)}>
+                            value === "__none" || value == null
+                              ? "" : value)}>
                         <SelectTrigger
                           className="h-8 w-full text-xs"
                           aria-label={`${ticket.ticket} 所属业务模块`}

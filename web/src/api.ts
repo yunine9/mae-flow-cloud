@@ -2692,6 +2692,8 @@ export interface Annotation {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   /** 划选一块时的整块原文与末行;定位仍靠 anchor。 */
   quote?: string;
   line_end?: number;
@@ -3254,6 +3256,8 @@ export interface SettingsView {
     max_concurrent?: number;
     /** 问题流回合并发额度(问题会话同时推进的回合上限)。 */
     issue_max_turns?: number;
+    /** 问题会话回合前压缩的事件量阈值;0=关(缺省)。 */
+    issue_compact_every_events?: number;
     repair_rounds?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
@@ -3291,6 +3295,7 @@ export interface SettingsView {
     runtime: {
       max_concurrent: number;
       issue_max_turns: number;
+      issue_compact_every_events: number;
       repair_rounds: number | null;
       poll_interval_s: number;
       poll_timeout_s: number;
@@ -4382,6 +4387,8 @@ export function getIssueDialogue(id: string): Promise<{
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
 export interface IssueReview {
+  quote?: string;
+  line_end?: number;
   id: string;
   author: string;
   created_at: string;
@@ -4389,6 +4396,8 @@ export interface IssueReview {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   note: string;
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
@@ -4400,6 +4409,7 @@ export interface IssueReview {
 /** 锚点检测(送出后原文还在吗):gone = 已被改动(唯一判据),
  * moved = 仅漂移,ambiguous = 多处命中。 */
 export interface IssueReviewCheck {
+  location_verified?: boolean;
   id: string;
   state: "hit" | "moved" | "gone" | "ambiguous";
   line?: number;
@@ -4415,8 +4425,12 @@ export function getIssueReviews(id: string): Promise<{
 }
 
 export function addIssueReview(id: string, input: {
+  quote?: string;
+  line_end?: number;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   note: string;
 }): Promise<IssueReview> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews`, {

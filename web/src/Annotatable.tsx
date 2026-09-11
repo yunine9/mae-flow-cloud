@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation, uploadAnnotationAsset, type AnnotationImage } from "./api";
 import {
-  anchorOf, annotationsAtRow, quoteOfSelection,
+  anchorOf, annotationsAtRow, contextOfRow, quoteOfSelection,
   type MaterialAnnotation, type RowNode, type SelectionQuote,
 } from "./annotateTargets";
 import "./annotate.css";
@@ -21,6 +21,8 @@ interface Draft {
   file: string;
   line: number;
   anchor: string;
+  context_before?: string;
+  context_after?: string;
   /** 划选了一块时的整块原文与末行;按行点的没有。 */
   quote?: string;
   lineEnd?: number;
@@ -69,6 +71,8 @@ export function Annotatable({
   addDraft?: (input: {
     line: number;
     anchor: string;
+  context_before?: string;
+  context_after?: string;
     note: string;
     quote?: string;
     line_end?: number;
@@ -193,6 +197,7 @@ export function Annotatable({
       // 点了什么都不发生——沉默比拒绝更难查。
       anchor: anchorOf(row as unknown as RowNode, line),
       ...(block ? { quote: block.quote, lineEnd: block.lineEnd } : {}),
+      ...(host.current ? contextOfRow(host.current as unknown as RowNode, row as unknown as RowNode, block?.lineEnd) : {}),
       kind,
       host: row,
     });
@@ -223,12 +228,14 @@ export function Annotatable({
     try {
       const result = addDraft
         ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text,
-            quote: draft.quote, line_end: draft.lineEnd })
+            quote: draft.quote, line_end: draft.lineEnd, context_before: draft.context_before, context_after: draft.context_after })
         : await addAnnotation(taskId, {
           artifact,
           file: draft.file,
           line: draft.line,
           anchor: draft.anchor,
+          context_before: draft.context_before,
+          context_after: draft.context_after,
           note: text,
           kind: draft.kind,
           route: "owner_reply",
@@ -239,12 +246,9 @@ export function Annotatable({
         setError(result.error);
         return;
       }
-      const annotation = "annotation" in result ? result.annotation : undefined;
-      if (annotation && typeof annotation === "object" && "id" in annotation) {
-        const id = String(annotation.id);
-        if (renderInlineReview) setThread({ ids: [id], host: draft.host });
-        setReceipt("已记下，责任人可在待处理中查看。");
-      }
+      // 保存只落账，不自动打开处理面板或转交 Agent。
+      setThread(undefined);
+      setReceipt("已记下，可在批注与检视中统一处理。");
       setDraft(undefined);
       setNote("");
       onAdded();
@@ -265,6 +269,7 @@ export function Annotatable({
         if (event.key === "Escape") setSelected(undefined);
       }}
     >
+      {receipt && <p className="annotation-delivery-receipt" role="status">{receipt}</p>}
       {children}
       {enabled && selected && !draft ? (
         <button type="button" className="annot-fab annot-selection-fab"
@@ -327,7 +332,6 @@ export function Annotatable({
             {enabled && <button type="button" onClick={() => openRow(thread.host)}>补充批注</button>}
             <button type="button" aria-label="收起当前位置反馈" onClick={() => setThread(undefined)}>×</button>
           </header>
-          {receipt && <p className="annotation-delivery-receipt" role="status">{receipt}</p>}
           {renderInlineReview(thread.ids)}
         </section>
       )}

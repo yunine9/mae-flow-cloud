@@ -27,8 +27,9 @@ import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
 import { IssueRegistration } from "./Registration";
-import { IssueCostPanel, IssueFixedProgress, IssueSessionView } from "./SessionView";
-import { IssueEventsPane } from "./EventsPane";
+import { IssueFixedProgress, IssueSessionView } from "./SessionView";
+import { Card } from "../components/ui/card";
+import { cn } from "cn";
 
 /** 列表状态筛选:默认"进行中"(只藏已归档/已取消两个收口终态——failed
  * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。
@@ -303,11 +304,13 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   </div>;
 }
 
-/** 问题列表卡:骨架/交互与任务侧 TaskCard 同款(状态轨 + overline +
- * 焦点行 + 阶段进度 + meta 动作行 + 展开态),为将来"我的问题 × 当前
- * 任务"混合列表留口子——两张卡共用 task-* 全局类,同列渲染视觉一致。
- * 点击卡片=展开摘要;进会话走 meta 行「进入问题工作台」。
- * 焦点行只复述 API 字段(stage/round/stage_note),前端不推断状态。 */
+/** 问题列表卡(2026-09-11 拍板):点击整卡直达问题工作台——列表不再
+ * 就地展开(现场直播/耗时卡点随展开移除,现场只在工作台看),右侧无
+ * 展开箭头,meta 行只留直达终止(2026-09-08)与 MR/推送事实。
+ * 皮肤换 shadcn Card + Tailwind 令牌工具类,与需求侧 task-card 骨架
+ * 分道(混合列表口子一并撤销);内部行(overline/焦点行/阶段条)沿用
+ * 既有独立类,issue-card-large 类保留作问题域胶囊配色与等待光效的
+ * 锚点。焦点行只复述 API 字段(stage/round/stage_note),前端不推断状态。 */
 function IssueCard({ issue, active, onOpen, onSettled }: {
   issue: IssueSummary;
   active?: boolean;
@@ -315,7 +318,6 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
   /** 终止成功后通知列表刷新(2026-09-08:列表卡直达终止,不再进工作台)。 */
   onSettled?: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState("");
   const stageLine = [
@@ -343,12 +345,31 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
     } finally { setStopping(false); }
   }
 
-  return <article id={`issue-${issue.id}`}
-    className={`task-card issue-card-large status-${issue.status}`
-      + `${expanded ? " expanded" : ""}${active ? " focused" : ""}`}>
-    <button type="button" className="task-summary"
-      onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
-      <span className="task-status-rail" aria-hidden />
+  // 状态轨颜色:问题域状态 → 令牌工具类(旧 .status-* rail 规则随
+  // task-card 皮退役;suspended 收编为令牌 --suspended,替代旧内联
+  // #3b83d5;queued/archived/canceled 无轨,与旧规则一致)。
+  const railClass = {
+    running: "bg-active",
+    waiting_user: "bg-attention",
+    idle: "bg-ink",
+    suspended: "bg-suspended",
+    failed: "bg-danger",
+  }[issue.status as "running" | "waiting_user" | "idle" | "suspended" | "failed"]
+    ?? "bg-transparent";
+
+  return <Card id={`issue-${issue.id}`}
+    className={cn(
+      "issue-card-large",
+      `status-${issue.status}`,
+      "relative overflow-hidden rounded-lg",
+      "transition-colors hover:border-line-strong",
+      // 边框色互斥二选一(cn 无 tailwind-merge,同类工具类不能共存,
+      // 谁赢看 emit 序):focused 用强线,常态用常规线。
+      active ? "border-text-strong" : "border-line",
+    )}>
+    <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", railClass)} />
+    <button type="button" className="task-summary" onClick={onOpen}
+      title="进入问题工作台">
       <span className="task-summary-body">
         <span className="task-overline">
           {issue.ticket
@@ -360,32 +381,21 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
           </span>
           <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
         </span>
-        <strong className="task-title">{issue.title}</strong>
+        <strong className="task-title line-clamp-1">{issue.title}</strong>
         <span className="task-ownership">
           <span>处理人 · {issue.account}</span>
           <span>{issue.source === "dts" ? "DTS 单" : "自研问题"}</span>
         </span>
         <span className={`task-focus task-focus-${issue.stage}`}>
           <i aria-hidden />
-          <strong>{stageLine}</strong>
+          <strong className="font-semibold">{stageLine}</strong>
           {issue.conclusion && <span>结论 · {issueConclusionText(issue)}</span>}
         </span>
         <IssueFixedProgress issue={issue} />
       </span>
-      <span className="task-chevron" aria-hidden>
-        <svg viewBox="0 0 20 20">
-          <path d="m7.5 5 5 5-5 5" />
-        </svg>
-      </span>
     </button>
 
     <div className="task-meta">
-      <button type="button" className="panel-link" onClick={onOpen}>
-        <span>进入问题工作台</span>
-        <svg viewBox="0 0 16 16" aria-hidden>
-          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
-        </svg>
-      </button>
       {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
           工作台头部「终止会话」同款。终态卡不渲染。 */}
       {terminatable && <button type="button" className="ui-btn flat danger"
@@ -413,24 +423,7 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
           : `已推送 · ${issue.pushes!.length} 个仓`}</span>}
       {issue.error && <span className="meta-fact">{issue.error.slice(0, 80)}</span>}
     </div>
-
-    {expanded && <div className="task-detail-body">
-      {issue.status === "failed" && issue.error && (
-        <div className="alert">
-          <strong>会话执行失败</strong>
-          <span>{issue.error}</span>
-        </div>
-      )}
-      {issue.status === "waiting_user" && <div className="verify-waiting">
-        <strong>等你处理</strong>
-        <span>进入问题工作台答复问题卡 / 平台闸,会话才会继续跑。</span>
-      </div>}
-      <div className="task-utilities">
-        <IssueEventsPane id={issue.id} active={expanded} />
-        <IssueCostPanel id={issue.id} />
-      </div>
-    </div>}
-  </article>;
+  </Card>;
 }
 
 function issueConclusionText(issue: IssueSummary): string {
