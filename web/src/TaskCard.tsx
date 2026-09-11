@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
+import { clearDecisionChoice, isAdjustmentAnswer, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -770,8 +770,8 @@ export function WaitingCard({
   // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
   // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
-    || (requiresDeliverySelection && selectedAnswers.some((answer) =>
-      /需要.*(?:调整|修改)|返工|补充/.test(answer)));
+    || ((requiresDeliverySelection || task.waiting?.step === "host_push_confirm")
+      && selectedAnswers.some(isAdjustmentAnswer));
   const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
@@ -901,7 +901,7 @@ export function WaitingCard({
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
-          ? "提交返工意见"
+          ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "提交返工意见"
           : requiresDeliverySelection && deliverySelection
             ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
             : requiresDeliverySelection

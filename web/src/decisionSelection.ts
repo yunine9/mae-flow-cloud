@@ -33,3 +33,8 @@ export function unifiedDecisionReply(selected: string | undefined, text: string)
   const reply = text.trim();
   return selected ? { freeResponse: "", notes: reply } : { freeResponse: reply, notes: "" };
 }
+
+/** 新旧推送卡的调整选项均走返工，不因清单加载或变化切回推送按钮。 */
+export function isAdjustmentAnswer(answer: string): boolean {
+  return /先调整|需要.*(?:调整|修改)|返工|补充/.test(answer);
+}

@@ -10928,8 +10928,8 @@ export class TaskService {
   }
 
   private pushConfirmationAccepted(waiting: WaitingRecord): boolean {
-    return [waiting.decision, ...Object.values(waiting.answers ?? {})]
-      .some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+    const answers = Object.values(waiting.answers ?? {});
+    return (answers.length ? answers : [waiting.decision]).every((answer) => answer === PUSH_CONFIRM_ACCEPT);
   }
 
   private continuationDeliverySelection(
@@ -11127,7 +11127,7 @@ export class TaskService {
         this.tryDeliver(task, task.controlEpoch));
       return;
     }
-    const review = waiting.notes.trim();
+    const review = [waiting.decision, ...Object.values(waiting.answers ?? {}), waiting.notes].filter(Boolean).join("\n").trim();
     const annotationIds = Array.isArray(waiting.continuation?.annotation_ids)
       ? waiting.continuation.annotation_ids.map(String) : [];
     const annotations = this.annotations(task).list().filter((item) =>
@@ -11545,7 +11545,7 @@ export class TaskService {
     // 关闭语义由选项原文判定;确认视同关闭检视——未闭环批注同样拦。
     const pushConfirmCard = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
     const confirmingPush = pushConfirmCard
-      && submitted.some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+      && this.pushConfirmationAccepted({ ...waiting, answers, decision });
     if (pushConfirmCard || closesFeedback) this.assertOwnerDecides(task, input.actor, "决定最终提交或检视通过");
     if (input.delivery_compile_action
         && !["rerun", "skip"].includes(input.delivery_compile_action)) {

@@ -1540,3 +1540,27 @@ test("feedback-open 失败时决定原样保留，修好内核后同一提交可
     await model.stop();
   }
 });
+
+test("自定义先调整中引用确认文案，不整理提交或进入推送", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const head = repo.git("rev-parse", "HEAD");
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries++; };
+    const answer = "先调整，不要确认按清单推送，请补 UT";
+    await service.decide(id, {
+      waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+      selected_options: {},
+      free_responses: { [(waiting.question as any).questions[0].question]: answer },
+      delivery_paths: ["src/feature.ts"],
+    });
+    assert.equal(deliveries, 0);
+    assert.equal(repo.git("rev-parse", "HEAD"), head);
+    assert.equal(service.get(id)!.delivery_selection?.status, "requested");
+    assert.equal(service.get(id)!.status, "queued");
+    assert.match(String(internal.mission), /先调整，不要确认按清单推送，请补 UT/);
+  } finally { await model.stop(); }
+});

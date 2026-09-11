@@ -507,3 +507,27 @@ test("升级前成功触发但仍 repairing 的任务，恢复只查询新 SHA �
   assert.equal(await finishTaskHostOperation(s.host), false);
   assert.equal(s.host.summary.delivery.loop!.failure, "旧告警");
 });
+
+
+test("网页先调整附带确认文案也不推送远端", async t => {
+  const s = confirmationScene(t);
+  await queueTaskHostOperation(s.runtime(), "browser-adjust", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  const question = waiting.question.questions[0].question;
+  await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    actor: "owner", selected_options: { [question]: "先调整" }, free_responses: {},
+    comment: "先补 UT，不要确认推送", delivery_paths: [] });
+  assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
+  assert.equal(s.repairCount(), 1);
+  assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].push_confirmed, undefined);
+});
+
+test("清单确认只认明确确认选项，自定义否定和矛盾答案均不放行", () => {
+  const accepts = (waiting: any) => (TaskService.prototype as any).pushConfirmationAccepted(waiting);
+  assert.equal(accepts({ decision: "先调整，不要确认按清单推送" }), false);
+  assert.equal(accepts({ decision: "确认按清单推送", answers: { q: "先调整" } }), false);
+  assert.equal(accepts({ decision: "确认按清单推送", answers: { q: "确认按清单推送", q2: "先调整" } }), false);
+  assert.equal(accepts({ decision: "确认按清单推送" }), true);
+  assert.equal(accepts({ answers: { q: "确认按清单推送" }, notes: "先调整过，现在确认" }), true);
+});

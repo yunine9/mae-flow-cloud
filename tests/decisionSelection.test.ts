@@ -48,3 +48,12 @@ test("取消选项后意见成为自由答复，不会丢失或重复附带", ()
     freeResponse: "", notes: "",
   });
 });
+
+
+test("推送调整选项不能落入推送按钮分支", async () => {
+  const { isAdjustmentAnswer } = await import("../web/src/decisionSelection.ts");
+  for (const answer of ["先调整", "需要调整代码（按清单返工）", "需要修改"]) {
+    assert.equal(isAdjustmentAnswer(answer), true);
+  }
+  assert.equal(isAdjustmentAnswer("确认按清单推送"), false);
+});
