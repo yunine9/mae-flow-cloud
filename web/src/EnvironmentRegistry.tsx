@@ -460,15 +460,15 @@ export function EnvironmentRegistry() {
                     ? <div className="flex flex-wrap gap-1">
                       {entry.tags.map((tag) => <Badge
                         key={tag}
-                        asChild
-                        variant={tag === activeTag ? "default" : "secondary"}>
-                        <button type="button" className="cursor-pointer"
-                          title={`筛选标签 ${tag}`}
-                          aria-pressed={tag === activeTag}
-                          onClick={() => setActiveTag(tag === activeTag ? "" : tag)}>
-                          {tag}
-                        </button>
-                      </Badge>)}
+                        variant={tag === activeTag ? "default" : "secondary"}
+                        render={
+                          <button type="button" className="cursor-pointer"
+                            title={`筛选标签 ${tag}`}
+                            aria-pressed={tag === activeTag}
+                            onClick={() => setActiveTag(tag === activeTag ? "" : tag)}>
+                            {tag}
+                          </button>
+                        } />)}
                     </div>
                     : <span className="text-muted-foreground">—</span>}
                 </TableCell>
