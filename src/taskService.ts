@@ -13623,9 +13623,9 @@ export class TaskService {
     const operation = ledger.read().operations.find(item => item.id === waiting.call_id);
     if (!operation || operation.input.action !== "push") throw new TaskControlError("未找到待确认的推送");
     if (operation.state === "succeeded" || operation.state === "failed") return;
-    // 自定义要求优先交给 Agent 理解，不能把“确认，但只推 A”当作全量授权。
-    const accepted = [...Object.values(waiting.answers ?? {}), waiting.decision].includes("确认推送")
-      && !waiting.notes?.trim();
+    // 按明确选项裁决；备注可能是审批渠道信息，不能将其当作“先调整”。
+    const selections = [...Object.values(waiting.answers ?? {}), waiting.decision];
+    const accepted = selections.includes("确认推送") && !selections.includes("先调整");
     task.summary.waiting = undefined;
     if (accepted) {
       operation.push_confirmed = true;

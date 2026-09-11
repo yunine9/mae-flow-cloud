@@ -339,7 +339,7 @@ function confirmationScene(t: any) {
     finish: () => pending, repairCount: () => resumed };
 }
 
-test("轻量推送确认：先等待，责任人确认即推送，不走旧反馈门禁，重复答复不重推", async t => {
+for (const notes of [undefined, "小鲁班手机审批"]) test(`轻量推送确认：确认带备注 ${notes ?? "无"} 仍推送，重复答复不重推`, async t => {
   const s = confirmationScene(t);
   const operation = await queueTaskHostOperation(s.runtime(), "light-push", { action: "push", reason: "修复 B 并补充 UT" });
   await finishTaskHostOperation(s.runtime());
@@ -347,7 +347,7 @@ test("轻量推送确认：先等待，责任人确认即推送，不走旧反�
   assert.equal(waiting.step, "host_push_confirm");
   assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
   assert.equal(s.repairCount(), 0, "等待用户时不自动重启 Agent");
-  const input = { waiting_id: waiting.waiting_id, state_version: waiting.state_version, actor: "owner", decision: "确认推送" };
+  const input = { waiting_id: waiting.waiting_id, state_version: waiting.state_version, actor: "owner", decision: "确认推送", notes };
   await assert.rejects(s.service.decide("task-1", { ...input, actor: "other" }));
   await s.service.decide("task-1", input);
   await s.finish();
@@ -357,16 +357,34 @@ test("轻量推送确认：先等待，责任人确认即推送，不走旧反�
   assert.equal(s.repairCount(), 1);
 });
 
-test("轻量推送确认：补充范围要求交回 Agent，不按全量推送", async t => {
+test("轻量推送确认：选择先调整时，补充范围要求交回 Agent", async t => {
   const s = confirmationScene(t);
   await queueTaskHostOperation(s.runtime(), "light-adjust", { action: "push", reason: "修复 B" });
   await finishTaskHostOperation(s.runtime());
   const waiting = s.task.summary.waiting;
   await s.service.decide("task-1", { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
-    actor: "owner", decision: "确认推送", notes: "只推 UT" });
+    actor: "owner", decision: "先调整", notes: "只推 UT" });
   assert.equal(s.git("--git-dir", s.remote, "branch", "--list", "work"), "");
   assert.equal(s.repairCount(), 1);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].push_confirmed, undefined);
+});
+
+test("轻量推送确认：恢复已落盘的带备注确认，继续推送而非要求调整", async t => {
+  const s = confirmationScene(t);
+  const operation = await queueTaskHostOperation(s.runtime(), "recover-confirm", { action: "push", reason: "修复 B" });
+  await finishTaskHostOperation(s.runtime());
+  const waiting = s.task.summary.waiting;
+  s.task.humanGate.resolve(waiting.waiting_id, {
+    stateVersion: waiting.state_version, decision: "确认推送",
+    answers: { "0": "确认推送" }, notes: "小鲁班手机审批", decidedBy: "owner",
+  });
+  const resolved = JSON.parse(readFileSync(join(s.host.summary.workspace, "waiting.json"), "utf8")).records[waiting.waiting_id];
+  await (s.service as any).resumeResolvedDecision(s.task, resolved);
+  await s.finish();
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), operation.sha);
+  const completed = new TaskHostLedger(s.host.summary).read().operations[0];
+  assert.equal(completed.state, "succeeded");
+  assert.equal(completed.push_confirmed, true);
 });
 
 test("轻量推送确认：确认期间提交变化，不能推送未确认的新版本", async t => {
