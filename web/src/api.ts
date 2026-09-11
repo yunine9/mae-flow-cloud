@@ -2775,6 +2775,7 @@ export interface AnnotationClosure {
   owner_controlled?: boolean;
   can_resolve?: boolean;
   can_delete?: boolean;
+  can_edit?: boolean;
   can_reopen?: boolean;
   can_override_verify: boolean;
   can_override_drop: boolean;

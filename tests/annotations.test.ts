@@ -521,7 +521,7 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
         method: "PATCH", headers: { cookie: developer },
         body: JSON.stringify({ note: "开发越权修改" }),
       });
-    assert.equal(developerCannotEdit.status, 403);
+    assert.equal(developerCannotEdit.status, 409, "Agent 已接手时不能修改本轮意见");
     const developerCannotDelete = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
         method: "DELETE", headers: { cookie: developer },
