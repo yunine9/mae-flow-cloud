@@ -15,13 +15,17 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight, Sparkles } from "lucide-react";
+import { ChevronRight, Columns3, Filter, RotateCw, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -488,9 +492,8 @@ function DtsRegister({
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
-  // 版本下拉多选框的展开态;点面板外或 Esc 关闭。
+  // 版本过滤弹层的展开态(shadcn Popover 受控;点外/Esc 关闭归它管)。
   const [versionOpen, setVersionOpen] = useState(false);
-  const versionBoxRef = useRef<HTMLDivElement | null>(null);
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -622,25 +625,6 @@ function DtsRegister({
         [...new Set([...current, ...displayedTickets])]);
     }
   }
-
-  // 版本下拉:点面板外或 Esc 收起。
-  useEffect(() => {
-    if (!versionOpen) return;
-    const onDoc = (event: MouseEvent) => {
-      if (!versionBoxRef.current?.contains(event.target as Node)) {
-        setVersionOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setVersionOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [versionOpen]);
 
   // 展开详情:同一张单只拉一次(缓存),失败不影响列表已有字段展示。
   const [expandedTicket, setExpandedTicket] = useState<string | null>(null);
@@ -790,102 +774,110 @@ function DtsRegister({
     }
   }
 
-  return <div className="issue-dts">
-    {dtsMock && <p className="issue-dts-mock-banner" role="note">
+  return <div className="tw-root flex flex-col gap-3 text-base text-foreground">
+    {dtsMock && <p className="rounded-md border border-attention/40 bg-attention-soft px-3 py-2 text-sm text-ink" role="note">
       DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-      <div className="issue-dts-toolbar">
-        <div className="issue-dts-toolbar-side">
-          <button type="button" className="issue-dts-refresh" onClick={load}
-            disabled={loading}
-            title="重新拉取名下问题单(勾选与搜索会重置)">
-            <svg viewBox="0 0 16 16" aria-hidden>
-              <path d="M13.5 8a5.5 5.5 0 1 1-1.62-3.9M13.5 1.5v3h-3" />
-            </svg>
-            <span>{loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}</span>
-          </button>
-          <button type="button" role="switch" aria-checked={moduleCol}
-            className={`issue-dts-module-toggle${moduleCol ? " on" : ""}`}
-            title="显示或隐藏「所属模块」列"
-            onClick={() => {
-              const next = !moduleCol;
-              setModuleCol(next);
+    {/* 工具栏与环境管理台账同款范式:搜索+筛选居左,刷新/主操作居右。 */}
+    <div className="flex flex-wrap items-center gap-2">
+      <Input type="search" className="h-9 w-full sm:w-80" value={query}
+        aria-label="搜索问题单"
+        placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
+        onChange={(e) => setQuery(e.target.value)} />
+      {versions.length > 0 && <Popover open={versionOpen} onOpenChange={setVersionOpen}>
+        <PopoverTrigger render={<Button type="button" variant="outline" size="sm"
+          aria-pressed={selectedVersions.length > 0}
+          title={selectedVersions.length
+            ? `按 ${selectedVersions.length} 个版本组过滤(组内全部 B 版都命中)`
+            : "按版本组过滤问题单"}>
+          <Filter aria-hidden className="size-3.5" />
+          {selectedVersions.length ? `版本(已选 ${selectedVersions.length})` : "版本过滤"}
+        </Button>} />
+        <PopoverContent align="start" className="w-72 p-1">
+          {versions.map((version) => <label key={version}
+            className="flex min-h-11 cursor-pointer items-center gap-2.5
+              rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+            <Checkbox checked={selectedVersions.includes(version)}
+              onCheckedChange={(checked) => setSelectedVersions((prev) => checked
+                ? [...prev, version]
+                : prev.filter((item) => item !== version))} />
+            <span className="font-mono text-xs">{version}</span>
+          </label>)}
+          {selectedVersions.length > 0 && <div className="mt-1 border-t border-line pt-1">
+            <button type="button"
+              className="w-full rounded-md px-2 py-1.5 text-left text-sm
+                text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => setSelectedVersions([])}>清除全部筛选</button>
+          </div>}
+        </PopoverContent>
+      </Popover>}
+      {/* 列显示/隐藏(shadcn 惯用法):表格原语本身不带列开关,这里按
+          Data Table 的列选择器形态用 Popover+Checkbox 承载,暂只有
+          「所属模块」一列可选,后续加列在这里长。localStorage 按用户
+          记忆(键沿用旧开关的,老用户偏好不丢)。 */}
+      <Popover>
+        <PopoverTrigger render={<Button type="button" variant="ghost" size="sm"
+          aria-label="列设置" aria-pressed={moduleCol}
+          title="显示或隐藏「所属模块」列">
+          <Columns3 aria-hidden className="size-3.5" />列
+        </Button>} />
+        <PopoverContent align="start" className="w-48 p-1">
+          <label className="flex min-h-9 cursor-pointer items-center
+            justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+            所属模块
+            <Checkbox checked={moduleCol} onCheckedChange={(checked) => {
+              setModuleCol(checked);
               try {
-                localStorage.setItem(moduleColKey, next ? "shown" : "hidden");
+                localStorage.setItem(moduleColKey, checked ? "shown" : "hidden");
               } catch { /* 旁路:存不下就本次会话内有效 */ }
-            }}>
-            模块列
-          </button>
-          {note && <span className="issue-dts-note">{note}</span>}
-        </div>
-      <button type="button" className="primary"
-        disabled={!selected.length || busy}
+            }} />
+          </label>
+        </PopoverContent>
+      </Popover>
+      {remote.loading
+        ? <span className="text-xs text-muted-foreground" role="status">远程查单中…</span>
+        : (query || selectedVersions.length > 0) && <span
+            className="text-xs text-muted-foreground">
+          {display.length} / {actionable?.length ?? 0} 条
+        </span>}
+      <div className="grow" />
+      {note && <span className="text-xs text-muted-foreground" role="status">{note}</span>}
+      <Button variant="outline" size="sm" onClick={load} disabled={loading}
+        title="重新拉取名下问题单(勾选与搜索会重置)">
+        <RotateCw aria-hidden className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+        {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}
+      </Button>
+      <Button size="sm" disabled={!selected.length || busy}
         title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
         onClick={launch}>
         {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
-      </button>
+      </Button>
     </div>
-    {tickets === undefined && loading && <p className="issue-dts-hint">
+    {tickets === undefined && loading && <p className="text-sm text-muted-foreground">
       正在拉取 {viewer.username} 名下的问题单…
     </p>}
+    {hiddenRemote.length > 0 && <p className="rounded-md border border-line
+      bg-muted/40 px-3 py-2 text-xs text-muted-foreground" role="note">
+      {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
+      "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
+    </p>}
     {tickets && tickets.length > 0 && <>
-      {versions.length > 0 && <div className="issue-dts-versions" ref={versionBoxRef}>
-        <button type="button"
-          className={`issue-dts-version-trigger${selectedVersions.length ? " on" : ""}`}
-          aria-expanded={versionOpen}
-          onClick={() => setVersionOpen((open) => !open)}>
-          <span>{selectedVersions.length
-            ? `版本过滤(已选 ${selectedVersions.length})` : "版本过滤(全部)"}</span>
-          <i aria-hidden className={versionOpen ? "open" : undefined}>
-            <svg viewBox="0 0 16 16"><path d="m4 6.5 4 4 4-4" /></svg>
-          </i>
-        </button>
-        {selectedVersions.length > 0 && <button type="button"
-          className="issue-dts-version-clear"
-          onClick={() => setSelectedVersions([])}>清除</button>}
-        {versionOpen && <div className="issue-dts-version-menu" role="group"
-          aria-label="选择要过滤的版本">
-          {versions.map((version) => <label key={version}
-            className={`issue-dts-version-option${selectedVersions.includes(version) ? " on" : ""}`}>
-            <input type="checkbox"
-              checked={selectedVersions.includes(version)}
-              onChange={(event) => setSelectedVersions((prev) => event.target.checked
-                ? [...prev, version]
-                : prev.filter((item) => item !== version))} />
-            <span>{version}</span>
-          </label>)}
-          {selectedVersions.length > 0 && <button type="button"
-            className="issue-dts-version-clear-all"
-            onClick={() => setSelectedVersions([])}>清除全部筛选</button>}
-        </div>}
-      </div>}
-      <div className="issue-dts-search">
-        <input
-          type="search"
-          value={query}
-          placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {remote.loading
-          ? <span className="issue-dts-search-count remote">远程查单中…</span>
-          : (query || selectedVersions.length > 0) && <span className="issue-dts-search-count">
-              {display.length} / {actionable?.length ?? 0} 条
-            </span>}
-      </div>
-      {hiddenRemote.length > 0 && <div className="issue-dts-note">
-        {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
-        "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
-      </div>}
       {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
           旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
           在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
-      <div className="tw-root">
-        {display.length === 0
-          ? (remote.loading
-            ? <p className="issue-dts-hint">远程查单中…</p>
-            : <p className="issue-dts-hint">没有匹配的问题单。</p>)
-          : <Table aria-label="名下问题单">
+      {display.length === 0
+        ? (remote.loading
+          ? <p className="text-sm text-muted-foreground" role="status">远程查单中…</p>
+          : <div className="flex flex-col items-center gap-2 rounded-lg border
+              border-dashed border-line px-6 py-10 text-center">
+            <p className="text-sm text-muted-foreground">没有匹配的问题单。</p>
+            <Button variant="outline" size="sm"
+              onClick={() => { setQuery(""); setSelectedVersions([]); }}>
+              清空搜索与版本过滤</Button>
+          </div>)
+        : <div className="overflow-x-auto rounded-lg border border-line">
+          <Table aria-label="名下问题单">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-28">
@@ -1045,18 +1037,23 @@ function DtsRegister({
                 </Fragment>;
               })}
             </TableBody>
-          </Table>}
-        <p className="issue-dts-hint">
-          勾选要发起的问题单(可多选,每单一个独立工作流)。
-        </p>
-      </div>
+          </Table>
+        </div>}
     </>}
-    {tickets && tickets.length === 0 && <p className="issue-dts-hint">
-      你的名下当前没有问题单。
-    </p>}
+    {tickets && tickets.length === 0 && <div className="flex flex-col items-center
+      gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">
+      <p className="text-base font-medium">你的名下当前没有问题单</p>
+      <p className="max-w-md text-sm text-muted-foreground">
+        有新单落到你名下后,点「刷新」拉取;发起过的单在「问题会话」页签可见。
+      </p>
+    </div>}
     {tickets && tickets.length > 0 && (actionable?.length ?? 0) === 0
-      && <p className="issue-dts-hint">
-        名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——其他状态不可发起。
-      </p>}
+      && <div className="flex flex-col items-center gap-2 rounded-lg border
+        border-dashed border-line px-6 py-10 text-center">
+        <p className="text-sm text-muted-foreground">
+          名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——只有该状态可发起,
+          其他状态不可拉取。
+        </p>
+      </div>}
   </div>;
 }

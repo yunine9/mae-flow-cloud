@@ -85,10 +85,12 @@ test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", (
   assert.match(registration, /aria-label=\{`\$\{isExpanded \? "收起" : "展开"\}/);
   // 触控目标:展开按钮 36px 见方(size-9),不再依赖旧 css 的 44px 规则。
   assert.match(registration, /size-9 items-center justify-center/);
-  assert.match(css,
-    /@media \(max-width: 680px\) \{[\s\S]*\.issue-dts-version-menu \{[\s\S]*position: static;[\s\S]*max-width: 100%/);
-  assert.match(css,
-    /\.issue-dts-version-option, \.issue-dts-version-clear-all \{[\s\S]*min-height: 44px/);
+  // 版本过滤改 shadcn Popover(2026-09-11 对齐环境管理台账):浮层碰撞
+  // 归 Base UI,旧 680px static 规则随 legacy 菜单退役;44px 触控目标
+  // 由选项行 min-h-11 保留在组件上,不再依赖页面 css。
+  assert.match(registration, /<PopoverContent align="start" className="w-72 p-1">/);
+  assert.match(registration, /min-h-11 cursor-pointer items-center gap-2\.5/);
+  assert.doesNotMatch(registration, /issue-dts-version-menu|issue-dts-version-trigger/);
 });
 
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
@@ -347,8 +349,8 @@ test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(
   assert.match(registration, /async function bindModule\(/);
   assert.match(registration, /putDtsModuleBinding\(ticketNo, moduleId \|\| null\)/);
   assert.match(registration, /text-destructive" role="alert"/);
-  // 显隐:工具栏开关 + localStorage 按用户记忆。
-  assert.match(registration, /issue-dts-module-toggle/);
+  // 显隐:工具栏「列」Popover(shadcn 列选择器形态)+ localStorage 按用户记忆。
+  assert.match(registration, /aria-label="列设置"/);
   assert.match(registration,
     /mae-flow:dts-module-col:\$\{viewer\.username\}/);
   assert.match(registration, /localStorage\.setItem\(moduleColKey/);

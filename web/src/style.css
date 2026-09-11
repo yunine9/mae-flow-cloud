@@ -2549,12 +2549,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   cursor: default; user-select: none;
 }
 .issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
-.issue-form-actions .primary, .issue-dts-toolbar .primary {
+.issue-form-actions .primary {
   min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
   background: var(--accent); color: var(--accent-fg); font-size: var(--font-size-assist);
   font-weight: 700; cursor: pointer;
 }
-.issue-form-actions .primary:disabled, .issue-dts-toolbar .primary:disabled { opacity: .55; cursor: not-allowed; }
+.issue-form-actions .primary:disabled { opacity: .55; cursor: not-allowed; }
 .annot-panel-note.admin-override {
   border-color: color-mix(in srgb, var(--attention) 35%, var(--line));
   background: color-mix(in srgb, var(--attention) 7%, var(--surface));
@@ -2576,44 +2576,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .issue-form-actions { align-items: stretch; flex-direction: column; }
   .issue-form-actions .primary { width: 100%; min-height: 44px; }
 }
-.issue-dts-mock-banner {
-  margin: 0 0 10px; padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, var(--attention) 45%, transparent);
-  border-radius: 9px; background: color-mix(in srgb, var(--attention) 8%, var(--surface));
-  color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.5;
-}
-/* 工具条左右分工:左=维护动作(刷新)+结果消息,右=本面板唯一主行动
-   (发起处理)。两钮不再同排同级抢视线——刷新是安静的幽灵钮,发起是
-   陶土色实心钮,层级一眼可辨。 */
-.issue-dts-toolbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap;
-}
-.issue-dts-toolbar-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.issue-dts-toolbar button {
-  display: inline-flex; align-items: center; gap: 6px;
-  min-height: 32px; padding: 0 14px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface-muted); color: var(--text-strong);
-  font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-dts-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
-.issue-dts-toolbar .issue-dts-refresh { color: var(--muted); }
-.issue-dts-toolbar .issue-dts-refresh svg {
-  width: 13px; height: 13px; fill: none; stroke: currentColor;
-  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
-}
-.issue-dts-toolbar .issue-dts-refresh:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-}
-/* 模块列开关升格为与刷新钮同规格的按压 chip(原裸 checkbox 浮在工具
-   条上,与 32px 幽灵钮并排不成一家);on 态与版本过滤触发钮同拍 accent。 */
-.issue-dts-toolbar .issue-dts-module-toggle { color: var(--muted); }
-.issue-dts-toolbar .issue-dts-module-toggle.on {
-  color: var(--accent); border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-}
-.issue-dts-note { color: var(--danger); font-size: var(--font-size-assist); }
 /* 问题域状态胶囊配色:词表是问题流自己的(waiting_user/idle/…),
  * 任务侧 pill 色板没覆盖,缺了它们状态标签就是裸文本。点动画沿用
  * 任务侧 statusBlink——只有 running(在跑)与 waiting_user(卡在你)
@@ -2629,90 +2591,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-card-large .pill.canceled { color: var(--faint); background: var(--surface-muted); }
 @media (prefers-reduced-motion: reduce) {
   .issue-card-large .pill.waiting_user i, .issue-card-large .pill.running i, .issue-card-large .pill.queued i { animation: none; }
-}
-/* 版本下拉多选框:触发钮 + 复选面板(面板锚定在 wrapper 上) */
-.issue-dts-versions { position: relative; display: inline-flex; margin-top: 10px; }
-.issue-dts-version-trigger {
-  display: inline-flex; align-items: center; gap: 8px;
-  min-height: 32px; padding: 0 12px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface-muted); color: var(--muted);
-  font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-dts-version-trigger:hover { color: var(--text-strong); border-color: var(--accent); }
-.issue-dts-version-trigger.on {
-  color: var(--accent); border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-}
-.issue-dts-version-trigger i { font-style: normal; color: var(--faint); display: grid; place-items: center; }
-.issue-dts-version-trigger i svg {
-  width: 12px; height: 12px; fill: none; stroke: currentColor;
-  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
-  transition: transform var(--ease);
-}
-.issue-dts-version-trigger i.open svg { transform: rotate(180deg); }
-/* 清除类动作:次级中的次级,裸文字链形态保留,但色从硬编码琥珀改为
-   muted(清除不是警告),hover 危险红——破坏性微动作的通用语气。 */
-.issue-dts-version-clear {
-  min-height: 32px; padding: 0 10px; border: 0; background: none;
-  color: var(--muted); font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-dts-version-clear:hover { color: var(--danger); text-decoration: underline; }
-.issue-dts-version-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
-  min-width: 320px; max-width: min(420px, calc(100vw - 32px));
-  max-height: 280px; overflow: auto;
-  display: grid; gap: 2px; padding: 6px;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
-}
-.issue-dts-version-option {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; border-radius: 7px; cursor: pointer;
-  color: var(--muted); font-size: var(--font-size-assist);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.issue-dts-version-option:hover { background: var(--surface-muted); color: var(--text-strong); }
-.issue-dts-version-option.on { color: var(--accent); }
-.issue-dts-version-clear-all {
-  margin-top: 4px; padding: 6px 8px; border: 0; border-radius: 7px;
-  background: none; color: var(--muted); font-size: var(--font-size-assist);
-  cursor: pointer; text-align: left;
-}
-.issue-dts-version-clear-all:hover { color: var(--danger); text-decoration: underline; }
-@media (max-width: 680px) {
-  .issue-dts-versions {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    width: 100%; max-width: 100%;
-  }
-  .issue-dts-version-trigger {
-    justify-content: space-between; min-width: 0; min-height: 44px;
-  }
-  .issue-dts-version-trigger span {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .issue-dts-version-clear { min-height: 44px; }
-  .issue-dts-version-menu {
-    position: static; grid-column: 1 / -1;
-    width: 100%; min-width: 0; max-width: 100%; max-height: min(280px, 45dvh);
-    box-shadow: none;
-  }
-  .issue-dts-version-option, .issue-dts-version-clear-all {
-    min-height: 44px; padding: 10px 8px;
-  }
-}
-.issue-dts-search-count.remote { color: var(--attention); }
-.issue-dts-search {
-  display: flex; align-items: center; gap: 10px; margin-top: 10px;
-}
-.issue-dts-search input {
-  flex: 1; min-height: 32px; padding: 0 12px;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong);
-  font-size: var(--font-size-assist);
-}
-.issue-dts-search input::placeholder { color: var(--faint); }
-.issue-dts-search-count {
-  color: var(--faint); font-size: var(--font-size-assist); white-space: nowrap;
 }
 /* 单号是同事间要抄的关键对象(绑单、推送分支名都以它为键):所有出现
    单号的地方放开文本选中。button(会话卡片 summary)内拖选被浏览器
@@ -2733,7 +2611,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border: 1px solid var(--line); padding: 3px 8px;
 }
 .issue-dts-detail-html img { max-width: 100%; }
-.issue-dts-hint { margin: 6px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
 .issue-status {
   padding: 2px 8px; border-radius: 999px; font-size: var(--font-size-dense);
   font-weight: 700; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
