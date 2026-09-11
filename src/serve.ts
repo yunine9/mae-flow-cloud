@@ -887,7 +887,7 @@ async function main(): Promise<void> {
     // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
-    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "5"),
+    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "10"),
     // 回合前压缩的事件量阈值(管理页旋钮 issue_compact_every_events 的
     // 部署缺省):0=关,续聊回合行为与现状全等。
     compactEveryEvents: Number(flag("--issue-compact-every-events") ?? "0"),

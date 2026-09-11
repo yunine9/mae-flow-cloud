@@ -558,7 +558,7 @@ export interface IssueFlowOptions {
    * 独立台账文件);测试可注入。 */
   environmentRegistry?: EnvironmentRegistry;
   /** 回合并发额度的部署缺省(--issue-max-turns):泵先读管理页运行时
-   *  旋钮 issue_max_turns,缺席才用这里;两边都缺省时是 5。 */
+   *  旋钮 issue_max_turns,缺席才用这里;两边都缺省时是 10。 */
   maxConcurrentTurns?: number;
   /** 回合前压缩的事件量阈值部署缺省(--issue-compact-every-events):
    *  续聊回合先读管理页运行时旋钮 issue_compact_every_events,缺席才
@@ -1719,11 +1719,11 @@ export class IssueFlowService {
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
    *  现读现判:管理页「问题单并发数」旋钮(issue_max_turns)每次点火
-   *  都读,改完即生效;缺席退回部署旗 --issue-max-turns,再退缺省 5。 */
+   *  都读,改完即生效;缺席退回部署旗 --issue-max-turns,再退缺省 10。 */
   private async pump(): Promise<void> {
     if (this.shuttingDown) return;
     const budget = this.options.settings?.runtime?.().issue_max_turns
-      ?? this.options.maxConcurrentTurns ?? 5;
+      ?? this.options.maxConcurrentTurns ?? 10;
     for (const live of this.live.values()) {
       if (this.turning.size >= budget) break;
       if (live.state.status !== "queued" || this.turning.has(live.id)) continue;
