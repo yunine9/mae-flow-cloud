@@ -38,6 +38,12 @@ const WORK_DIR = ".mae-flow-work";
 const MAX_BYTES = 512 * 1024;
 const MAX_UNTRACKED_DIFF_FILES = 50;
 const UNTRACKED_DIFF_CONCURRENCY = 4;
+/** 只作用于未跟踪文件。Git 在遍历时剪枝，避免依赖安装撑爆交付事实；
+ * 已暂存/已提交的文件不受影响。build/dist/target 可能是业务源码，不能猜。
+ * 特殊情况下需要交付依赖文件，可先显式 git add 后进入正常清单。 */
+const DELIVERY_UNTRACKED_EXCLUDES = [
+  "node_modules/", ".venv/", "__pycache__/", ".pytest_cache/",
+];
 const TRUNCATED_NOTE =
   "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见工作区文件)";
 /** Git 工作区差异的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
@@ -624,13 +630,15 @@ export async function deliveryChangeSnapshot(
     sameRoot = false;
   }
   if (!sameRoot) return undefined;
-  const [headText, status, baseline] = await Promise.all([
+  const [headText, status, baseline, untrackedText] = await Promise.all([
     gitAsync(cwd, ["rev-parse", "--verify", "HEAD"]),
-    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all"]),
+    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=no"]),
     taskBaselineAsync(cwd),
+    gitAsync(cwd, ["ls-files", "--others", "--exclude-standard", "-z",
+      ...DELIVERY_UNTRACKED_EXCLUDES.map((pattern) => `--exclude=${pattern}`)]),
   ]);
   const head = String(headText ?? "").trim();
-  if (!head || status === undefined) return undefined;
+  if (!head || status === undefined || untrackedText === undefined) return undefined;
   const [committedText, addedAgentText] = baseline
     ? await Promise.all([
         gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"]),
@@ -653,6 +661,7 @@ export async function deliveryChangeSnapshot(
     workspace_paths: uniqueBusinessPaths([
       ...committed,
       ...changedPaths(status),
+      ...untrackedText.split("\0").filter((path) => !isAgentPlatformPath(path)),
     ]),
     committed_paths: committed,
     added_agent_platform_paths: addedAgentPaths,

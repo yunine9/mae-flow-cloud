@@ -455,6 +455,45 @@ test("交付文件快照区分工作区可见项与 HEAD 真正会推送的文�
   assert.equal(snapshot?.head, run("rev-parse", "HEAD").trim());
 });
 
+test("缺少 gitignore 的依赖安装不膨胀交付事实，显式跟踪文件仍保留", async () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  const put = (path: string) => {
+    mkdirSync(join(cwd, path, ".."), { recursive: true });
+    writeFileSync(join(cwd, path), "content\n");
+  };
+  const tracked = "website/node_modules/vendor/maintained.js";
+  put(tracked);
+  run("add", tracked);
+  run("commit", "--quiet", "-m", "baseline vendor");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: run("rev-parse", "HEAD").trim() },
+  }));
+  writeFileSync(join(cwd, tracked), "changed\n");
+  for (let index = 0; index < 12000; index++) {
+    put(`website/node_modules/package/long-dependency-filename-${index}.js`);
+  }
+  for (const path of ["node_modules/root.js", "website/.venv/lib/a.py",
+    "website/__pycache__/a.pyc", "website/.pytest_cache/cache",
+    "website/src/new.ts", "build/script.ts", "dist/source.ts", "target/config.xml",
+    "website/node_modules/vendor/explicit.js"]) put(path);
+  const explicit = "website/node_modules/vendor/explicit.js";
+  run("add", explicit);
+  const raw = run("status", "--porcelain", "--untracked-files=all");
+  assert.ok(Buffer.byteLength(raw) > 512 * 1024, "复现旧路径超过内核事实限制");
+  const snapshot = await deliveryChangeSnapshot(cwd);
+  assert.ok(snapshot);
+  const expected = ["build/script.ts", "dist/source.ts", "target/config.xml",
+    explicit, tracked, "website/src/new.ts"].sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(snapshot.workspace_paths, expected);
+  const excluded = snapshot.workspace_paths.filter((path) => path !== explicit);
+  assert.ok(excluded.includes("website/src/new.ts"), "未勾选业务文件仍完整排除");
+  assert.ok(Buffer.byteLength(JSON.stringify({ paths: [explicit], excluded_paths: excluded })) < 4096);
+  run("commit", "--quiet", "-m", "explicit vendor");
+  assert.deepEqual((await deliveryChangeSnapshot(cwd))?.committed_paths, [explicit]);
+});
+
 test("提交比较只展示检视锚之后的修改，并把内容标成已提交", async () => {
   const cwd = makeSite({ git: true });
   const run = (...args: string[]) =>
