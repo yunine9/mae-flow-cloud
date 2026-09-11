@@ -222,8 +222,6 @@
   color: var(--faint);
   font: 400 var(--fs-12)/1 var(--font-mono);
 }
-.task-workspace-v2 .ws-identity-line .pill { font-size: var(--fs-13); font-weight: 500; }
-.task-workspace-v2 .ws-identity-line .prepush-status { min-height: 0; font-size: var(--fs-12); }
 .task-workspace-v2 .ws-parent-task {
   flex: none;
   height: 26px;
@@ -1088,7 +1086,6 @@
 @media (max-width: 900px) {
   .task-workspace-v2 .ws-head { padding-inline: 4px 8px; gap: 6px; }
   .task-workspace-v2 .ws-identity-line .wait-badge,
-  .task-workspace-v2 .ws-identity-line .prepush-status,
   .task-workspace-v2 .ws-parent-task { display: none; }
   .task-workspace-v2 .ws-progress .task-phase > span { display: none; }
   .task-workspace-v2 .ws-progress .task-phase.current > span { display: block; }
@@ -1099,8 +1096,7 @@
   .task-workspace-v2 .ws-identity { gap: 8px; }
   .task-workspace-v2 .ws-identity > strong { font-size: var(--fs-14); }
   .task-workspace-v2 .ws-business-id { display: none; }
-  .task-workspace-v2 .ws-identity-line .pill { font-size: 0; gap: 0; }
-  .task-workspace-v2 .ws-identity-line .pill i { width: 8px; height: 8px; }
+  /* 状态徽标的 ≤640px 收点行为(#216 迁 Badge 后改由组件工具类承担)。 */
   .task-workspace-v2 .ws-head-controls { gap: 4px; }
   .task-workspace-v2 .ws-head-controls > button:not(.primary) { padding-inline: 8px; }
   .task-workspace-v2 .ws-head-controls > button.delete { display: none; }
@@ -1127,7 +1123,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .task-workspace-v2 { animation: none; }
-  .task-workspace-v2 .pill i { animation: none !important; }
+  /* 徽标呼吸点的降级随迁移(#216)内建在 motion-reduce:animate-none。 */
   .task-workspace-v2 *,
   .task-workspace-v2 *::before,
   .task-workspace-v2 *::after { scroll-behavior: auto !important; }

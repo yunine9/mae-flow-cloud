@@ -401,7 +401,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio .wish-quick-inline:hover { background: var(--surface-2); border-color: var(--studio-accent); }
 .workspace-studio.task-workspace-v2 .ws-head-controls > button.delete { display: inline-flex; }
 .workspace-studio.task-workspace-v2 .ws-parent-task { display: flex; flex-wrap: wrap; }
-.workspace-studio.task-workspace-v2 .ws-identity-line .prepush-status { display: inline-flex; }
 
 /* State is visible across the entire row, with text labels retained. */
 .task-overview-row { --row-tone: var(--muted); background: color-mix(in srgb, var(--row-tone) 5%, var(--surface)); box-shadow: inset 3px 0 var(--row-tone); }

@@ -1,6 +1,7 @@
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
 export const KNOWLEDGE_LANGUAGE_OPTIONS = [
   { id: "agnostic", label: "通用 / 语言无关" },
@@ -37,7 +38,10 @@ export function KnowledgeLanguageTags({ languages, empty = "未标注语言" }: 
     return <span className="knowledge-language-empty">{empty}</span>;
   }
   return <span className="knowledge-language-tags">
-    {normalized.map((id) => <em key={id}>{knowledgeLanguageLabel(id)}</em>)}
+    {/* #216:原 .knowledge-language-tags em 徽标收编为 Badge brand(存量
+        --accent 紫原色),发丝描边一并保留。 */}
+    {normalized.map((id) => <Badge key={id} variant="brand"
+      className="border border-primary/30 font-semibold">{knowledgeLanguageLabel(id)}</Badge>)}
   </span>;
 }
 

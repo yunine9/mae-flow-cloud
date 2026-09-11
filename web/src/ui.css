@@ -88,23 +88,10 @@
 
   .ui-btn.sm { padding: 4px 9px; font-size: var(--fs-13); }
 
-  /* ---- 徽标:语义 soft 底 + 同族深字(收编 58 处前缀徽标) ---- */
-  .ui-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 8px;
-    border-radius: 999px;
-    font-size: var(--fs-12);
-    line-height: 1.6;
-    background: var(--surface-3);
-    color: var(--muted);
-  }
-  .ui-badge.active { background: var(--active-soft); color: var(--active); }
-  .ui-badge.success { background: var(--success-soft); color: var(--success); }
-  .ui-badge.danger { background: var(--danger-soft); color: var(--danger); }
-  .ui-badge.attention { background: var(--attention-soft); color: var(--attention); }
-  .ui-badge.merge { background: var(--merge-soft); color: var(--merge); }
+  /* (徽标族已并入 shadcn Badge:#216。原 .ui-badge 及其 active/success/
+     danger/attention/merge 五变体在迁移前就零引用(全仓 grep 仅此定义),
+     dead CSS 直接删除;对应语义现由 Badge variant
+     info/success/destructive/warning/merge 承担。) */
 
   /* ---- 表单字段:label 包裹式网格(收编 5 份重复配方) ---- */
   .ui-field {

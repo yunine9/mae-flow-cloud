@@ -48,6 +48,7 @@ import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
 import { chainStages } from "./RequirementGraph";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
+import { TaskStatusBadge } from "./StatusBadge";
 import { TokenUsage } from "./TokenUsage";
 import {
   formatLocalClock,
@@ -146,12 +147,11 @@ export function TaskCard({
                 ? <span className="task-level parent">主任务</span> : null}
             {task.ticket && <span className="task-ticket">{task.ticket}</span>}
             <span className="task-id" title="平台内部编号">{task.id}</span>
-            <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>
-              <i aria-hidden />
+            <TaskStatusBadge status={task.status}>
               {decisionMode === "signal" && task.status === "waiting_for_human"
                 ? "待拍板"
                 : statusText(task)}
-            </span>
+            </TaskStatusBadge>
             <WaitBadge task={task} personal={showDecisionForm} />
             <span className="task-created">{formatLocalDateTime(task.created_at)}</span>
           </span>

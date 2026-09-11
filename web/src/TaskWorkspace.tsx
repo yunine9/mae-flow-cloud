@@ -37,6 +37,7 @@ import { requirementGraphVisible } from "./taskHierarchy";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
+import { TaskStatusBadge } from "./StatusBadge";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
@@ -1897,9 +1898,14 @@ export function TaskWorkspace({
           </strong>
           <div className="ws-identity-line">
             <code title="平台内部编号">{task.id}</code>
-            <span className={`pill ${task.status}`}>
-              <i aria-hidden />{statusText(task)}
-            </span>
+            {/* 身份行徽标:#216 收编为 Badge;≤640px 沿用原 .pill 窄屏
+                行为(收成一颗放大的点,文字隐藏)。 */}
+            <TaskStatusBadge status={task.status}
+              className="text-sm max-[640px]:gap-0 max-[640px]:px-1"
+              dotClassName="max-[640px]:size-2"
+              textClassName="max-[640px]:hidden">
+              {statusText(task)}
+            </TaskStatusBadge>
             <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />

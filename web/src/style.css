@@ -553,21 +553,8 @@ svg {
 
 /* 我的需求:先看"待我处理"队列,再看任务列表。
    零值统计不再做成四张大卡,摘要收成一行可点的分段筛选(零值段由
-   App.tsx 不渲染);"当前已清空"是安静的一行字,不铺成功绿。 */
-.role-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border-radius: 0;
-  color: var(--muted);
-  font-size: var(--fs-12);
-  font-style: normal;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.role-chip.admin { color: var(--merge); background: transparent; }
-.role-chip.developer { color: var(--active); background: transparent; }
+   App.tsx 不渲染);"当前已清空"是安静的一行字,不铺成功绿。
+   (角色徽标已收编为 Badge:#216,admin=merge、developer=info。) */
 .personal-action-inbox {
   margin: 4px 0 32px;
   padding: 0;
@@ -824,7 +811,6 @@ svg {
 .artifact-workspace-title { min-width: 0; }
 .artifact-workspace-title > div { display: flex; align-items: center; gap: 8px; }
 .artifact-workspace-title code { color: #8994a7; font-size: var(--font-size-assist); }
-.artifact-workspace-title .pill { padding: 2px 7px; }
 .artifact-workspace-title > strong {
   margin-top: 4px;
   display: block;
@@ -2512,22 +2498,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .issue-form-actions { align-items: stretch; flex-direction: column; }
   .issue-form-actions .primary { width: 100%; min-height: 44px; }
 }
-/* 问题域状态胶囊配色:词表是问题流自己的(waiting_user/idle/…),
- * 任务侧 pill 色板没覆盖,缺了它们状态标签就是裸文本。点动画沿用
- * 任务侧 statusBlink——只有 running(在跑)与 waiting_user(卡在你)
- * 闪点,其余静态。 */
-.issue-card-large .pill.waiting_user { color: var(--attention); background: var(--attention-soft); }
-.issue-card-large .pill.waiting_user i { animation: statusBlink 1.35s ease-in-out infinite; }
-.issue-card-large .pill.idle { color: var(--accent); background: var(--accent-soft); }
-.issue-card-large .pill.running, .issue-card-large .pill.queued { color: var(--active); background: var(--active-soft); }
-.issue-card-large .pill.running i, .issue-card-large .pill.queued i { animation: statusBlink 1.35s ease-in-out infinite; }
-.issue-card-large .pill.suspended { color: var(--suspended); background: color-mix(in srgb, var(--suspended) 12%, var(--surface)); }
-.issue-card-large .pill.failed { color: var(--danger); background: var(--danger-soft); }
-.issue-card-large .pill.archived { color: var(--success); background: var(--success-soft); }
-.issue-card-large .pill.canceled { color: var(--faint); background: var(--surface-muted); }
-@media (prefers-reduced-motion: reduce) {
-  .issue-card-large .pill.waiting_user i, .issue-card-large .pill.running i, .issue-card-large .pill.queued i { animation: none; }
-}
+/* 问题域状态胶囊配色已随 .pill 一起收编进 Badge variant(#216,见
+   StatusBadge.tsx 的 ISSUE_STATUS_VARIANT 词典);呼吸点由
+   motion-reduce:animate-none 自带降级,原 reduced-motion 块同撤。 */
 /* 单号是同事间要抄的关键对象(绑单、推送分支名都以它为键):所有出现
    单号的地方放开文本选中。button(会话卡片 summary)内拖选被浏览器
    默认禁掉,这里强制开启——DTS 表格化后单号独立成格(勾选在首格),
@@ -3435,22 +3408,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .task-phase > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 推送前快检独立于内核主状态：列表卡片用一条轻量状态带，工作台
-   展开动作摘要与绑定 SHA；服务端未返回 prepush 时组件不占任何空间。 */
-.prepush-status {
-  --prepush-color: var(--muted);
-  --prepush-soft: var(--surface-muted);
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--prepush-color);
-  border: 1px solid color-mix(in srgb, var(--prepush-color) 19%, var(--line));
-  background: color-mix(in srgb, var(--prepush-soft) 72%, var(--surface));
-}
-.prepush-status.tone-active { --prepush-color: var(--active); --prepush-soft: var(--active-soft); }
-.prepush-status.tone-repair { --prepush-color: var(--attention); --prepush-soft: var(--attention-soft); }
-.prepush-status.tone-danger { --prepush-color: var(--danger); --prepush-soft: var(--danger-soft); }
-.prepush-status.tone-success { --prepush-color: var(--success); --prepush-soft: var(--success-soft); }
+   展开动作摘要与绑定 SHA；服务端未返回 prepush 时组件不占任何空间。
+   外层容器已收编为 Badge(#216):tone 色板由 variant 承担(.tone-*
+   规则删除),这里只留内部件的结构规则——点/勾/叉取 currentColor,
+   自动跟随 variant 的状态色。 */
 .prepush-marker {
   width: 22px;
   height: 22px;
@@ -3458,7 +3419,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   display: grid;
   place-items: center;
   border-radius: 7px;
-  background: var(--prepush-soft);
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 .prepush-marker > i {
   width: 7px;
@@ -3517,30 +3478,19 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  color: var(--muted);
+  /* 事实 chip 取 Badge variant 的状态色(currentColor),轮次软底随之同族;
+     SHA 编码仍单独压回 muted。 */
   font-size: var(--font-size-assist);
   white-space: nowrap;
 }
-.prepush-facts > span { padding: 2px 6px; border-radius: 999px; background: var(--prepush-soft); }
+.prepush-facts > span { padding: 2px 6px; border-radius: 999px; background: color-mix(in srgb, currentColor 10%, transparent); }
 .prepush-facts code {
   color: var(--muted);
   font: 700 12px var(--font-mono);
   letter-spacing: .02em;
 }
-.prepush-card {
-  width: min(100%, 720px);
-  min-height: 34px;
-  margin-top: 10px;
-  padding: 5px 9px;
-  border-radius: 9px;
-}
-.prepush-workspace {
-  min-height: 48px;
-  padding: 8px 24px;
-  border-width: 0 0 1px;
-  border-radius: 0;
-  box-shadow: var(--shadow-xs);
-}
+/* 卡/工作台两档摆位的外层尺寸改由组件上的工具类承担(#216);工作台
+   态的 copy 纵排结构规则仍按类挂在这里。 */
 .prepush-workspace .prepush-copy {
   flex: 1;
   align-items: flex-start;
@@ -3805,38 +3755,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   transition: transform var(--ease);
 }
 .task-card.expanded .task-chevron svg { transform: rotate(90deg); }
-/* 状态:一个点 + 一个词。不铺底色、不描边;颜色只跟状态走,运行态的点会呼吸。 */
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border-radius: 0;
-  color: var(--muted);
-  font-size: var(--fs-12);
-  font-weight: 500;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.pill i {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: currentColor;
-}
-.pill.queued { color: var(--muted); }
-.pill.running, .pill.coordinating { color: var(--active); }
-.pill.pausing { color: var(--attention); }
-.pill.paused { color: var(--muted); }
-.pill.waiting_for_human { color: var(--attention); }
-.pill.waiting_for_human.team-signal { color: var(--attention); }
-.pill.completed { color: var(--success); }
-.pill.verifying { color: var(--active); }
-.pill.await_merge { color: var(--merge); }
-.pill.canceled { color: var(--faint); }
-.pill.failed { color: var(--danger); }
-.pill.running i, .pill.coordinating i, .pill.pausing i, .pill.verifying i { animation: statusBlink 1.6s ease-in-out infinite; }
+/* 状态徽标 .pill 族已收编为 shadcn Badge(#216,状态→variant 词典在
+   StatusBadge.tsx)。statusBlink 键帧仍有其他消费者(issue-repo-badge 等),
+   留此。 */
 @keyframes statusBlink { 50% { opacity: .3; } }
 .task-meta {
   min-height: 34px;
@@ -5275,10 +5196,11 @@ pre {
   background: transparent; color: var(--text); border: 1px solid var(--line);
 }
 .settings-form-actions button + button:hover { background: var(--surface-soft); border-color: var(--accent); }
-/* 连通性测试的提示与结果区块横跨表单整行,不挤半列 */
+/* 连通性测试的提示与结果区块横跨表单整行,不挤半列
+   (check-summary 徽标已收编为 Badge:#216,ok=success/warning/
+   error=destructive;结论徽标是行内件,不再占整列。) */
 .settings-form .settings-form-actions,
 .settings-form > .knob-note,
-.settings-form > .check-summary,
 .settings-form > .system-check-grid,
 .settings-form > .settings-loading { grid-column: 1 / -1; }
 .settings-form > .system-check-grid { grid-template-columns: 1fr; margin-top: 4px; }
@@ -9140,48 +9062,11 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 /* push 前人工确认开关 */
 
 /* 推送前验证实时过程:命令与输出尾巴,全量在轮目录 bash 日志 */
-/* ---- 环境预热编译:进展要清楚可见,失败要说清是环境的锅 ---- */
-.warmup-badge {
-  padding: 2px 9px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  font: inherit;
-  font-size: var(--font-size-assist);
-  cursor: pointer;
-}
-.warmup-badge i {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 999px;
-  background: var(--muted);
-}
-.warmup-badge.is-running i {
-  background: var(--accent);
-  animation: warmup-pulse 1.2s ease-in-out infinite;
-}
-.warmup-badge.is-passed i { background: var(--success); }
-.warmup-badge.is-failed {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-.warmup-badge.is-failed i { background: var(--danger); }
-.warmup-badge.is-infrastructure_failure i { background: var(--attention); }
-.warmup-badge.is-repair {
-  color: var(--attention);
-  border-color: var(--attention);
-  background: var(--attention-soft);
-}
-.warmup-badge.is-repair i {
-  background: var(--attention);
-  animation: warmup-pulse 1.2s ease-in-out infinite;
-}
+/* ---- 环境预热编译:进展要清楚可见,失败要说清是环境的锅。
+   warmup-badge(预热与 Build-Fix 的头部触发钮)已收编为 shadcn
+   Badge(#216,见 WarmupPanel.tsx / PrepushStatus.tsx):is-* 色板
+   由 variant 承担,呼吸点 animate-pulse + motion-reduce 自带降级;
+   warmup-pulse 键帧仍被下方 .warmup-panel 使用,留此。 */
 /* 推送前编译浮层的统一操作栏(用户点名重设计:叠放的虚线盒子太丑)。
    分隔线+小标签定场,胶囊按钮按语义分色(危险=停止/警示=跳过/
    中性=重跑),确认收进一条内联确认条,不再层层叠盒子。 */
@@ -9443,7 +9328,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .knowledge-language-picker button { padding: 4px 9px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--font-size-assist); cursor: pointer; }
 .knowledge-language-picker button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 .knowledge-language-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.knowledge-language-tags em { padding: 1px 6px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: 999px; background: var(--accent-soft); font-size: var(--fs-12); font-style: normal; font-weight: 650; line-height: 1.5; }
+/* 语言标签徽标已收编为 Badge brand(#216,见 KnowledgeLanguages.tsx)。 */
 .knowledge-language-empty { display: inline-block; margin-top: 3px; color: var(--faint); font-size: var(--fs-12); }
 .knowledge-language-filter { display: flex; align-items: center; gap: 8px; flex: none; }
 .knowledge-language-filter > span { color: var(--muted); font-size: var(--font-size-assist); font-weight: 700; }
@@ -9982,10 +9867,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .system-check-actions { display: flex; align-items: center; gap: 10px; }
 .system-check-actions button { height: 34px; padding: 0 12px; color: var(--text-strong); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); font-size: var(--font-size-assist); cursor: pointer; }
 .system-check-actions button:disabled { opacity: .5; }
-.check-summary { padding: 6px 9px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; color: var(--attention); background: var(--attention-soft); font-size: var(--font-size-assist); font-weight: 700; }
-.check-summary i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.check-summary.ok { color: var(--success); background: var(--success-soft); }
-.check-summary.error { color: var(--danger); background: var(--danger-weak); }
+/* check-summary 结论徽标已收编为 Badge(#216,见 SettingsView.tsx)。 */
 .system-check-grid { margin-top: 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .system-check-item { min-width: 0; padding: 12px; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .check-icon { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; color: var(--attention); background: var(--attention-soft); font-size: 13px; font-weight: 800; }
@@ -10267,17 +10149,12 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .wish-card-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; background: color-mix(in srgb, var(--wish-tone) 10%, var(--surface-soft)); font-size: 18px; }
 .wish-card-body { min-width: 0; }
 .wish-card-body > header { display: flex; align-items: center; gap: 9px; }
-.wish-kind, .wish-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; }
-.wish-kind { color: var(--wish-tone); letter-spacing: .03em; }
+/* wish-status 徽标已收编为 Badge(#216,见 WishWall.tsx WISH_VARIANT):
+ * open=warning、accepted=brand、done=success、declined=neutral。 */
+.wish-kind { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: var(--wish-tone); letter-spacing: .03em; }
 .wish-card-meta { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--fs-12); }
 .wish-card-meta strong { max-width: 130px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .wish-card-meta i { font-style: normal; }
-.wish-status { padding: 4px 8px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); }
-.wish-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.wish-status.is-open { color: var(--attention); background: var(--attention-soft); }
-.wish-status.is-accepted { color: var(--accent); background: var(--accent-soft); }
-.wish-status.is-done { color: var(--success); background: var(--success-soft); }
-.wish-status.is-declined { color: var(--muted); background: var(--surface-muted); }
 .wish-card h3 { margin: 6px 0 4px; color: var(--text-strong); font-size: 16px; line-height: 1.42; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .wish-card-detail { margin: 0; display: -webkit-box; overflow: hidden; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .wish-image-count { margin-top: 6px; display: inline-block; color: var(--faint); font-size: var(--fs-12); }

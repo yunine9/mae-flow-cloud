@@ -26,11 +26,16 @@ import {
   type VisionProbeResult,
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
+import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 
 type Message = { kind: "success" | "error"; text: string } | null;
+
+/** 部署自检/连通性结论徽标(#216 收编为 Badge;原 .check-summary 色板):
+ * ok=success、warning=warning、error=destructive。 */
+const CHECK_VARIANT = { ok: "success", warning: "warning", error: "destructive" } as const;
 
 function useMessage(): [Message, (next: Message) => void] {
   const [message, setMessage] = useState<Message>(null);
@@ -82,7 +87,9 @@ function SystemCheckCard({ onResult }: {
     <div className="system-check-head">
       <div><span className="section-kicker">DEPLOYMENT CHECK</span><h2 id="system-check-title">部署自检</h2><p>只读检查当前服务，不发送消息、不创建任务。</p></div>
       <div className="system-check-actions">
-        {result && <span className={`check-summary ${result.overall}`}><i aria-hidden />{summary}</span>}
+        {result && <Badge variant={CHECK_VARIANT[result.overall]}>
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />{summary}
+        </Badge>}
         <button type="button" className="ui-btn" disabled={busy} onClick={() => void run()}>{busy ? "检查中…" : "重新检查"}</button>
       </div>
     </div>
@@ -509,9 +516,11 @@ function ModelsCard({ view, onSaved }: {
       {testing && !checkResult && !checkError
         && <div className="settings-loading">正在连通网关并等待模型回复…</div>}
       {checkResult && <>
-        <span className={`check-summary ${checkResult.overall}`}>
-          <i aria-hidden />{checkResult.overall === "ok"
-            ? "网络与模型问答均正常" : "存在问题，见下方明细"}</span>
+        <Badge variant={CHECK_VARIANT[checkResult.overall]}>
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+          {checkResult.overall === "ok"
+            ? "网络与模型问答均正常" : "存在问题，见下方明细"}
+        </Badge>
         <CheckItems result={checkResult} />
       </>}
     </form>

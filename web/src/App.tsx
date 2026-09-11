@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
+import { Badge } from "@/components/ui/badge";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -1832,7 +1833,7 @@ function UsersBoard({ me }: { me: string }) {
         {users.map((user) => <div className="user-block" key={user.username}>
           <div className="user-row">
             <span className="user-cell"><i>{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</i><strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong></span>
-            <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
+            <span><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></span>
             <span className="user-entry">{user.role === "admin" ? "团队需求" : "我的需求"}</span>
             <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
             <span className="user-actions">

@@ -29,6 +29,7 @@ import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
 import { dtsTicketUrl } from "./dtsTicket";
 import { IssueRegistration } from "./Registration";
+import { IssueStatusBadge } from "../StatusBadge";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { Card } from "../components/ui/card";
 import { cn } from "cn";
@@ -400,9 +401,9 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
             </a>
             : <span className="task-ticket empty">未绑单</span>}
           <span className="task-id" title="会话编号">{issue.id}</span>
-          <span className={`pill ${issue.status}`}>
-            <i aria-hidden />{ISSUE_STATUS_TEXT[issue.status]}
-          </span>
+          <IssueStatusBadge status={issue.status}>
+            {ISSUE_STATUS_TEXT[issue.status]}
+          </IssueStatusBadge>
           <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
         </span>
         <strong className="task-title line-clamp-1">{issue.title}</strong>

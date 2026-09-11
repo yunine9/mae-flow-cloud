@@ -6,8 +6,20 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "cn";
 import { PrepushLiveLog } from "./PrepushLiveLog";
 import { tailWarmupEvents, type TaskSummary } from "./api";
+
+/** 预热徽标状态→Badge variant(#216;原 .warmup-badge is-* 色板收编)。 */
+const WARMUP_VARIANT = {
+  running: "info",
+  passed: "success",
+  failed: "destructive",
+  infrastructure_failure: "warning",
+  unknown: "neutral",
+  reclaimed: "neutral",
+} as const;
 
 /** 可拖拽、可缩放的浮层(用户点名"能支持拖拽放大不"):标题栏拖动
  * 移动,右下角原生 resize 拉大;portal 到 body 逃出祖先层叠上下文
@@ -85,10 +97,18 @@ export function WarmupBadge({ task, onOpen }: { task: TaskSummary; onOpen: () =>
     unknown: "尚未收到开工前编译记录，暂时无法确认是否就绪。",
     reclaimed: "任务现场已回收，之前的编译记录仅供查看。",
   };
-  return <button type="button" className={`warmup-badge is-${state}`} aria-haspopup="dialog"
-    onClick={onOpen} title={descriptions[state]}>
-    <i aria-hidden /><span>开工前编译</span><b>{labels[state]}</b><span aria-hidden>↗</span>
-  </button>;
+  /* #216 收编为 Badge(render 成 button 保留点击开浮层);原 is-* 色板
+   * 映射:running=info(呼吸点)、passed=success、failed=destructive、
+   * infrastructure_failure=warning、unknown/reclaimed=neutral。 */
+  return <Badge variant={WARMUP_VARIANT[state]} render={
+      <button type="button" aria-haspopup="dialog" onClick={onOpen}
+        title={descriptions[state]} />
+    }
+    className="cursor-pointer outline-none hover:border-current">
+    <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
+      state === "running" && "animate-pulse motion-reduce:animate-none")} />
+    <span>开工前编译</span><b className="font-semibold">{labels[state]}</b><span aria-hidden>↗</span>
+  </Badge>;
 }
 
 export function WarmupPanel({ task }: { task: TaskSummary }) {

@@ -16,6 +16,7 @@ import {
   workspaceHistoryEntries,
 } from "./historyModel";
 import { confirmDialog } from "./ConfirmDialog";
+import { TaskStatusBadge } from "./StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
@@ -188,10 +189,9 @@ export function HistoryBoard({
                       <TokenUsage usage={entry.token_usage} placement="history" />
                     </div>
                     <div>
-                      <span className={`pill ${entry.status}`}>
-                        <i aria-hidden />
+                      <TaskStatusBadge status={entry.status}>
                         {STATUS_TEXT[entry.status] ?? entry.status}
-                      </span>
+                      </TaskStatusBadge>
                     </div>
                     <div className="history-delivery">
                       {entry.delivery?.mr_url ? (

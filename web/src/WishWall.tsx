@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
 import { Spinner } from "@/components/Spinner";
+import { Badge } from "@/components/ui/badge";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +61,16 @@ const STATUS_COPY: Record<WishStatus, { label: string; hint: string }> = {
   done: { label: "已闭环", hint: "已经处理完成，可以回来验收" },
   declined: { label: "暂不接纳", hint: "当前不处理，并附有原因" },
 };
+
+/** 心愿状态徽标→Badge variant(#216;原 .wish-status is-* 色板收编):
+ * 待回应=warning、已接纳=brand(存量 --accent 主动作紫原色)、
+ * 已闭环=success、暂不接纳=neutral。 */
+const WISH_VARIANT = {
+  open: "warning",
+  accepted: "brand",
+  done: "success",
+  declined: "neutral",
+} as const;
 
 function fileToUpload(file: File): Promise<WishImageUpload> {
   return new Promise((resolve, reject) => {
@@ -421,9 +432,10 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
               {item.images.length > 0 && !expanded && <span className="wish-image-count">▧ {item.images.length} 张图片</span>}
             </div>
             <aside className="wish-card-side">
-              <span className={`wish-status is-${item.status}`} title={STATUS_COPY[item.status].hint}>
-                <i />{STATUS_COPY[item.status].label}
-              </span>
+              <Badge variant={WISH_VARIANT[item.status]} title={STATUS_COPY[item.status].hint}>
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+                {STATUS_COPY[item.status].label}
+              </Badge>
               <div className="wish-card-actions">
               <button type="button" className={`wish-vote${item.viewer_voted ? " on" : ""}`}
                 disabled={busyId === item.id} aria-pressed={item.viewer_voted}
