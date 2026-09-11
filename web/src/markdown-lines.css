@@ -5,7 +5,7 @@
 .md-numbered-block::before,
 .md-numbered > .md-list > li::after {
   position: absolute;
-  inset-inline-start: -5rem;
+  inset-inline-start: calc(-5rem - 24px);
   top: 0;
   width: 3.25rem;
   color: var(--muted);
@@ -20,7 +20,7 @@
 .md.md-numbered > .md-list > li { position: relative; padding-inline-start: 0; }
 .md-numbered > .md-list > li::after {
   content: attr(data-l);
-  inset-inline-start: calc(-5rem - 22px);
+  inset-inline-start: calc(-5rem - 46px);
 }
 .md-numbered-block > :first-child { margin-block-start: 0; }
 }
