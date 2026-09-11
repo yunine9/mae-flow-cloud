@@ -641,11 +641,11 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
   "MR 修复缺逐条回执时不能误开放通过");
 });
 
-test("待处理意见不展示旧路由选项，责任人可答复或交给 Agent，闭环后可重开", () => {
+test("待处理意见由检视卡统一送达，责任人仍可自行答复或删除，闭环后可重开", () => {
   const item = annotation({ status: "draft", response: undefined, route: "owner_reply", author: "reviewer", assignee: "owner" });
   const common = { taskId: "task", taskOwner: "owner", ownerControlled: true, items: [item], checks: [], taskStatus: "running", onChanged() {} };
   const html = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername: "owner" }));
-  assert.match(html, />交给 Agent<\/button>/); assert.match(html, />自行答复<\/button>/); assert.match(html, />删除<\/button>/);
+  assert.doesNotMatch(html, />交给 Agent<\/button>/); assert.match(html, />自行答复<\/button>/); assert.match(html, />删除<\/button>/);
   assert.doesNotMatch(html, />确认闭环<\/button>|决策后处理|记为记忆|申请撤回表达/);
   for (const viewerUsername of ["reviewer", "admin"]) {
     const readonly = renderToStaticMarkup(React.createElement(Panel, { ...common, viewerUsername }));

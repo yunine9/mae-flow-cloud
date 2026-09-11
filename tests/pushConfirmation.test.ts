@@ -218,6 +218,22 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
   }
 });
 
+test("同一 HEAD 已有宿主推送收据时不再生成推送确认卡", async () => {
+  const { service, model, internal, repo } = await verifyingTask();
+  try {
+    const head = repo.git("rev-parse", "HEAD");
+    internal.summary.push_confirmation = true;
+    internal.summary.delivery = {
+      git_push: { sha: head, ref: "refs/heads/master_bot_REQ1", remote: "origin" },
+    };
+    assert.equal(await (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1"), true);
+    assert.equal(internal.summary.waiting, undefined);
+  } finally {
+    await model.stop();
+  }
+});
+
 test("持续检视卡复用绑定 HEAD 的 Diff，不再只认 cloud_push_confirm 步骤名", async () => {
   const { service, model, id, internal } = await verifyingTask();
   try {
@@ -1176,7 +1192,7 @@ test("缺回执停机后 retry 保留检视账并派补回执窄使命(MFC-003)"
   }
 });
 
-test("等决定期间检视人可提交批注:入队为团队事实,随返工决定送达(MFC-022)", async () => {
+test("等决定期间检视人只需记下批注，责任人返工时统一送达(MFC-022)", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     internal.summary.push_confirmation = true;
@@ -1190,13 +1206,10 @@ test("等决定期间检视人可提交批注:入队为团队事实,随返工决
       line: 1, anchor: "export const value = 1;",
       note: "检视人在等待窗口提的意见不能落空", kind: "code",
     });
-    // 曾经这里 404"请在决定卡里回答"——而决定卡对检视人是 403,死路。
-    const sent = await service.sendAnnotations(id, [note.id], "reviewer.wang");
-    assert.deepEqual(sent.sent, [note.id]);
+    // 检视人只负责记下；责任人无需逐条点“交给 Agent”。
     const queued = service.listAnnotations(id).items
       .find((item) => item.id === note.id)!;
-    assert.equal(queued.status, "sent");
-    assert.equal(queued.sent_via, "queued_decision");
+    assert.equal(queued.status, "draft");
 
     // 有未闭环意见时,责任人直接放行必须仍被拦住(护栏不因入队而松)。
     await assert.rejects(service.decide(id, {
@@ -1207,7 +1220,7 @@ test("等决定期间检视人可提交批注:入队为团队事实,随返工决
       },
     }), /未闭环/);
 
-    // 责任人选择返工:入队意见的完整原文必须进入返工使命。
+    // 责任人选择返工:剩余意见的完整原文必须进入返工使命。
     await service.decide(id, {
       waiting_id: waiting.waiting_id,
       state_version: waiting.state_version,

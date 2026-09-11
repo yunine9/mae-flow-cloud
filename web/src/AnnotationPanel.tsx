@@ -169,8 +169,6 @@ export function AnnotationPanel({
   const [ownerReply, setOwnerReply] = useState("");
   const [error, setError] = useState("");
   const [submissionNotice, setSubmissionNotice] = useState("");
-  const [routingId, setRoutingId] = useState("");
-  const [routingContext, setRoutingContext] = useState("");
   const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
   const listRef = useRef<HTMLOListElement>(null);
   const personName = (username: string) => displayPersonName(username, people);
@@ -375,17 +373,6 @@ export function AnnotationPanel({
     } finally {
       setMutationBusy("");
     }
-  }
-
-  async function routeDraftToAgent(item: Annotation) {
-    setSubmissionNotice("");
-    await mutateAnnotation(item.id, async () => {
-      const result = await sendAnnotations(taskId, [item.id], routingContext.trim());
-      if (!result.error) { setRoutingId(""); setRoutingContext(""); }
-      if (!result.error) setSubmissionNotice(result.receipt
-        ?? "已提交这条意见，请查看下方处理状态。");
-      return { error: result.error };
-    });
   }
 
   return (
@@ -671,22 +658,7 @@ export function AnnotationPanel({
                 </div>
               )}
               <div className="tw-root flex flex-wrap items-center gap-2 pt-3">
-              {closure.can_route && (routingId === item.id ? (
-                <div className="w-full rounded-md border border-border bg-muted/30 p-3">
-                  <label className="mb-2 block text-sm" htmlFor={`context-${item.id}`}>补充给 Agent 的话 <span className="text-muted-foreground">（选填）</span></label>
-                  <textarea id={`context-${item.id}`} className="w-full rounded-md border border-border bg-background p-3 text-sm" rows={2}
-                    maxLength={4000} autoFocus value={routingContext} placeholder="例如：按这条意见修改，同时保留现有接口兼容性。"
-                    onChange={(event) => setRoutingContext(event.target.value)} />
-                  <div className="mt-2 flex items-center justify-end gap-2">
-                    <span className="mr-auto text-xs text-muted-foreground">{queueable && !requirementReview && !isPublishedStory(item) ? "先排队，提交当前决定后一起送达" : "原意见与补充说明会一起发送"}</span>
-                    <Button type="button" size="sm" variant="ghost" disabled={!!mutationBusy} onClick={() => setRoutingId("")}>取消</Button>
-                    <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy} onClick={() => void routeDraftToAgent(item)}>{mutationBusy === item.id ? "发送中…" : queueable && !requirementReview && !isPublishedStory(item) ? "加入待发送意见" : "发送给 Agent"}</Button>
-                  </div>
-                </div>
-              ) : <Button type="button" size="sm" disabled={!canSendItem(item) || !!mutationBusy}
-                title={canSendItem(item) ? undefined : "当前没有可接收意见的执行会话"}
-                onClick={() => { setRoutingId(item.id); setRoutingContext(""); setReplyingId(""); }}>交给 Agent</Button>)}
-              {closure.owner_controlled && closure.can_route && routingId !== item.id && !item.resolution && !item.owner_reply
+              {closure.owner_controlled && closure.can_route && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (
                 replyingId === item.id ? <div className="annot-owner-reply-editor w-full rounded-md border border-border bg-muted/30 p-3">
                   <textarea className="w-full rounded-md border border-border bg-background p-3 text-sm" rows={3} autoFocus value={ownerReply} placeholder="写下处理说明"
@@ -709,7 +681,7 @@ export function AnnotationPanel({
                 onReopen={() => void mutateAnnotation(item.id, () => judgeAnnotation(taskId, item.id, "reopen", { revision: item.rework ?? 0 }))}
                 onResolve={(outcome, reason) => void mutateAnnotation(item.id,
                   () => judgeAnnotation(taskId, item.id, "resolve", { revision: item.rework ?? 0, outcome, reason }))} />}
-                {closure.can_delete && !editing && routingId !== item.id && (
+                {closure.can_delete && !editing && (
                   <Button type="button" size="sm" variant="ghost" className="ml-auto text-muted-foreground hover:text-destructive" disabled={!!mutationBusy}
                     onClick={() => void mutateAnnotation(item.id, () => dropAnnotation(taskId, item.id))}>删除</Button>
                 )}
