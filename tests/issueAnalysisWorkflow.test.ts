@@ -161,28 +161,47 @@ test("问题域知识上下文:关联仓清单+绑定模块,无模块不造空�
   });
 });
 
-test("编排层技能源:issue-analysis 在源目录,报告模板含五章节标题", () => {
+test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含五章节标题", () => {
+  // 2026-09-11 拍板:报告模板独立成 report-template.md(issue-analysis 与
+  // guard 共用),SKILL.md 只留指针——五章节锚点跟着搬进模板文件。
   const body = readFileSync(
     join(SKILL_SOURCE_DIR, "issue-analysis", "SKILL.md"), "utf-8");
+  const template = readFileSync(
+    join(SKILL_SOURCE_DIR, "issue-analysis", "report-template.md"), "utf-8");
   assert.match(body, /^---\nname: issue-analysis\ndescription: [^\n]+\n/,
     "frontmatter 必须带 name+description(pi 靠它进技能索引)");
+  // 模板文件:五章节与写作规则的单一定义源。
   for (const section of ANALYSIS_REPORT_SECTIONS) {
-    assert.match(body, new RegExp(`^## ${section}`, "m"),
+    assert.match(template, new RegExp(`^## ${section}`, "m"),
       `模板必须含「${section}」章节——工具门票与技能模板要同源`);
   }
   assert.match(body, /^## 知识边界/m,
     "必须有知识边界节——外部 skill 只供领域知识,不定流程/格式/节奏");
-  assert.match(body, /报告确认即本工作流完成/,
+  assert.match(body, /report-template\.md/,
+    "SKILL.md 必须指向独立模板文件(不再内嵌复述)");
+  // 归一拍板(2026-09-11):一个技能提示词+一份模板,guard 分身与独立
+  // 提问文件删除,关键决策章节进模板(自动档必写)。
+  assert.equal(existsSync(join(SKILL_SOURCE_DIR, "issue-analysis-guard")),
+    false, "分析档技能已归一,不许再有 guard 分身");
+  assert.equal(existsSync(join(SKILL_SOURCE_DIR, "issue-analysis", "questioning.md")),
+    false, "提问纪律已收回 SKILL.md 内联,独立文件不许回潮");
+  assert.match(template, /## 关键决策/,
+    "模板含条件章节「关键决策」");
+  assert.match(template, /自动档[^\n]*必须写/,
+    "自动档必须写关键决策(用户复盘 AI 决策的唯一入口)");
+  assert.match(template, /只写选中项/,
+    "关键决策只写 AI 选中的答案,未选选项不写");
+  assert.match(template, /报告确认即本工作流完成/,
     "生命周期钉死:报告提交即完成,交付纪律归 issue-delivery");
   // 报告可读性纪律(2026-09-03):一句话总结先行/节名即问题/证据指针化/提交前收敛。
-  assert.ok(body.indexOf("一句话总结") < body.indexOf("## 问题现象"),
+  assert.ok(template.indexOf("一句话总结") < template.indexOf("## 问题现象"),
     "一句话总结在所有章节之前——只读首行就能拍板");
-  assert.ok(body.indexOf("## 问题根因") < body.indexOf("## 修改方案")
-    && body.indexOf("## 修改方案") < body.indexOf("## 证据链"),
+  assert.ok(template.indexOf("## 问题根因") < template.indexOf("## 修改方案")
+    && template.indexOf("## 修改方案") < template.indexOf("## 证据链"),
     "节序=现象→根因→方案→证据链,节名即问题");
-  assert.match(body, /原文不进报告|原文不贴/,
+  assert.match(template, /原文不进报告|原文不贴/,
     "证据指针化:日志与代码原文不进报告,出处可核即可");
-  assert.match(body, /结论版/,
+  assert.match(template, /结论版/,
     "提交前收敛:submit_analysis 交的是结论版,不是过程回放");
 });
 

@@ -45,6 +45,7 @@ import type {
   IssueWaitingCard,
 } from "../web/src/api.ts";
 import { mfcTemp } from "./mfcTmp.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 
 // ---- 契约对比器 ----
 
@@ -443,6 +444,129 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     await service.shutdown().catch(() => undefined);
     await model.stop();
     await platform.stop();
+  }
+});
+
+test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的已结算记录", async () => {
+  // 用户实锤(2026-09-11):一轮全绿通知后答「验证发现问题」返工,二轮
+  // 再全绿却无通知——notifyOutcome 幂等键=(taskId,status),同名状态命中
+  // 一轮已 settled 的记录被 deliverTracked 静默跳过。修复:键带轮次,
+  // 二轮状态为「待环境验证(第 2 轮)」,重放保护只属于同一事件。
+  const dataDir = mfcTemp("mfc-issue-green-renotify-");
+  const origin = bareOrigin(dataDir);
+  const platform = new GreenPlatform();
+  await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const commit = (message: string) =>
+    `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
+  const report = (summary: string) =>
+    `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 证据链\\n日志:演示。\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
+  const script: Scene[] = [
+    // 一轮:拉单→拉仓→分析→确认→修复→推→MR→申报(全绿由平台假件结算)。
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
+    { tool: { name: "bash", input: { command: report("连接池耗尽") } } },
+    { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
+    { text: "分析报告已提交,等待用户确认。" },
+    { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
+    { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "UT 12/12 通过" } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "一轮 MR 已申报,等跑绿收口。" },
+    // 二轮:验证发现问题回退→重写报告→确认→修复→推→MR→再申报。
+    { tool: { name: "bash", input: { command: report("连接池回收缺竞态保护") } } },
+    { tool: { name: "submit_analysis", input: { summary: "二轮:回收竞态保护" } } },
+    { text: "二轮分析已提交,等待用户确认。" },
+    { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 回收竞态保护`) } } },
+    { tool: { name: "complete_stage", input: { note: "二轮修复完成" } } },
+    { tool: { name: "push_branch", input: {} } },
+    { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
+    { text: "二轮 MR 已申报,等跑绿再收口。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    opsTools: fakeOps,
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
+    notifier: new Notifier({
+      endpoint: luban.endpoint, backoffMs: [0],
+    }),
+  });
+  try {
+    const created = service.create({
+      account: "dev",
+      title: "登录超时",
+      description: "压测环境登录超时,疑似连接池耗尽",
+      ticket: TICKET,
+      source: "dts",
+      repoUrl: origin,
+    });
+    const analysisGate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
+        ? issue : undefined;
+    }, "一轮分析确认闸");
+    service.answer(created.id, {
+      state_version: analysisGate.gate!.state_version, code: "confirm",
+    });
+    const firstGate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
+        ? issue : undefined;
+    }, "一轮全绿举环境验证闸");
+    // 每轮全绿小鲁班收两条:outcome 收口通知 + 等待卡。outcome 的摘要
+    // 尾巴是「在卡上作答」,以此与卡消息区分;通知是异步旁路,断言前
+    // 等它落袋。
+    const outcomes = () => luban.messages.filter((message) =>
+      (message.text as string).includes("在卡上作答"));
+    await until(() => outcomes().length >= 1 ? true : undefined, "一轮收口通知落袋");
+    assert.equal(outcomes().length, 1, "一轮恰一条收口通知");
+    assert.doesNotMatch(outcomes()[0]!.text as string, /第 \d+ 轮/);
+    // 验证发现问题 → 回退分析(轮次+1)。
+    service.answer(created.id, {
+      state_version: firstGate.gate!.state_version, code: "fail",
+      notes: "订单导出仍然超时",
+    });
+    const secondAnalysis = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
+        ? issue : undefined;
+    }, "二轮分析确认闸");
+    service.answer(created.id, {
+      state_version: secondAnalysis.gate!.state_version, code: "confirm",
+    });
+    const secondGate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
+        ? issue : undefined;
+    }, "二轮全绿再举环境验证闸");
+    // 回归点:二轮必须再收到一条收口通知,状态带轮次(不再撞一轮
+    // 已结算记录被静默吞掉)。
+    await until(() => outcomes().length >= 2 ? true : undefined, "二轮收口通知落袋");
+    assert.equal(outcomes().length, 2, "二轮必须再发一条收口通知");
+    assert.match(outcomes()[1]!.text as string, /第 2 轮:全部 MR 流水线已跑绿/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
   }
 });
 

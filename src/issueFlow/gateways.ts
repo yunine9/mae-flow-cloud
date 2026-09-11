@@ -18,7 +18,10 @@
 
 // 错误类型住 errors.ts(#9 集中声明):本模块只负责抛,码由路由层的
 // toHttpError 单点译出。
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { deflateSync } from "node:zlib";
+import { fileURLToPath } from "node:url";
 import { DtsGatewayUnconfiguredError, McpGatewayError } from "./errors.ts";
 
 export interface McpGatewayConfig {
@@ -579,68 +582,69 @@ const MOCK_TICKET_IMAGES: Record<string, Buffer> = {
   "/v1/nfs/mock/2026-1007/topology.png": mockTicketPng("topology"),
 };
 
-/** 1007 号模拟单的描述 HTML(带 <img> 的形态与真实 detailDesc 一致:
- * 站内绝对路径,经前端代理重写展示、经 ticketImages 落工作区识图)。 */
-const MOCK_TICKET_1007_HTML =
-  '<p>现象:点击「导出」后接口报 500,页面截图如下。</p>'
-  + '<img src="/v1/nfs/mock/2026-1007/export-error.png">'
-  + '<p>对照:正常环境的模块拓扑图。</p>'
-  + '<img src="/v1/nfs/mock/2026-1007/topology.png">';
+/** mock 单据数据源:外置 JSON(assets/mock/dts-tickets.json,字段说明
+ * 见同目录 README)。改文件 → 列表页点「刷新」即生效,不用重启——
+ * 开发者"随心所欲造单"的入口。 */
+export const MOCK_DTS_SOURCE = resolve(
+  fileURLToPath(import.meta.url), "..", "..", "..",
+  "assets", "mock", "dts-tickets.json");
+
+type MockTicket = DtsTicketBrief & { content?: string };
+
+/** 现读现用:每次拉单/查单都重读 JSON(小文件,读盘开销可忽略)。
+ * 缺失、坏 JSON、条目缺 ticket/title 都 fail-loud 并带路径——模拟数据
+ * 静默变空列表看起来像"没单",会骗人。 */
+function loadMockTickets(source: string = MOCK_DTS_SOURCE): MockTicket[] {
+  let raw: string;
+  try {
+    raw = readFileSync(source, "utf-8");
+  } catch {
+    throw new McpGatewayError(`mock 单据文件读不到: ${source}(--dts-mock 需要它)`);
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error("应为非空 JSON 数组");
+    }
+    for (const item of parsed) {
+      const entry = item as Record<string, unknown>;
+      if (typeof entry.ticket !== "string" || !entry.ticket) {
+        throw new Error(`有条目缺 ticket 字段: ${JSON.stringify(item).slice(0, 80)}`);
+      }
+      if (typeof entry.title !== "string") {
+        throw new Error(`单 ${entry.ticket} 缺 title 字段`);
+      }
+    }
+    return parsed as MockTicket[];
+  } catch (cause) {
+    throw new McpGatewayError(`mock 单据文件不合法: ${source}(${
+      cause instanceof Error ? cause.message : String(cause)})`);
+  }
+}
 
 /** DTS MCP 未接入期间的确定性假单据(2026-08-27 拍板:真实网关完整
- * 实现在位等 URL,过渡期 mock 拉单/查单让全流程可测)。单据集固定
- * 可预期:七个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
- * 都给罐头内容——关联转正的"查无此单即拒"路径用乱编单号就能测。
- * 1007 号自带内嵌截图(#42):dts_get_ticket 的下载改写与 --dts-mock
- * 演示形态全链可走。与真实网关同接口,接线处一行替换;启动横幅会
- * 醒目标注 MOCK。 */
+ * 实现在位等 URL,过渡期 mock 拉单/查单让全流程可测)。单据集住在
+ * assets/mock/dts-tickets.json(字段说明见同目录 README),拉单按账号
+ * 哈希错开展示顺序,detail 对数据集里的单给正文,查无此单即拒——
+ * 关联转正的拒绝路径用乱编单号就能测。1007 号自带内嵌截图(#42):
+ * dts_get_ticket 的下载改写与 --dts-mock 演示形态全链可走。与真实
+ * 网关同接口,接线处一行替换;启动横幅会醒目标注 MOCK。 */
 export class MockDtsGateway implements DtsGateway {
   readonly mock = true;
 
   constructor(private readonly log?: (message: string) => void) {}
 
-  /** content 在位则原样作为详情正文(自带现象描述的单子),缺省走罐头模板。 */
-  private readonly tickets: Array<DtsTicketBrief & { content?: string }> = [
-    { ticket: "DTS-2026-1001", title: "【DEV·模拟】订单列表导出超时(数据量大时必现)", status: "打开" },
-    { ticket: "DTS-2026-1002", title: "【DEV·模拟】消息中心未读数偶发不清零", status: "开发人员实施修改" },
-    { ticket: "DTS-2026-1003", title: "【DEV·模拟】移动端审批页白屏(iOS 17.4)", status: "处理中" },
-    { ticket: "DTS-2026-1004", title: "【DEV·模拟】批量删除用户报唯一约束冲突", status: "开发人员实施修改" },
-    { ticket: "DTS-2026-1005", title: "【DEV·模拟】流水线产物下载 404", status: "处理中" },
-    {
-      ticket: "DTS-2026-1006",
-      title: "【DEV·模拟】开局飞跑",
-      status: "打开",
-      content:
-        "【MOCK 单据】开局飞跑\n\n"
-        + "单号: DTS-2026-1006\n状态: 打开\n"
-        + "现象: 开局在点击行军之后,第一次的时候会徒步到自己的首都;"
-        + "联网模式下只有在用户打开浏览器的时候,才会播放行军动画,"
-        + "会影响游戏的整体一致性。\n"
-        + "影响: 联网/离线两种模式下开局表现不一致,破坏整体体验一致性。",
-    },
-    {
-      ticket: "DTS-2026-1007",
-      title: "【DEV·模拟】报表导出失败(带内嵌截图)",
-      status: "打开",
-      description: MOCK_TICKET_1007_HTML,
-      // content 是 AI 看到的正文:截图以 img 形态内嵌在文本里,
-      // dts_get_ticket 的改写才有 URL 可换成本地相对路径。
-      content:
-        "【MOCK 单据】报表导出失败\n\n"
-        + `单号: DTS-2026-1007\n状态: 打开\n${MOCK_TICKET_1007_HTML}`,
-    },
-  ];
-
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
-    this.log?.(`[dts-mock] listByOwner(${account}) → ${this.tickets.length} 张`);
+    const tickets = loadMockTickets();
+    this.log?.(`[dts-mock] listByOwner(${account}) → ${tickets.length} 张`);
     // 稳定可预期:按账号哈希错开起点,人人在列表里都能看见单。
     const offset = [...account].reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
-      % this.tickets.length;
-    return [...this.tickets.slice(offset), ...this.tickets.slice(0, offset)];
+      % tickets.length;
+    return [...tickets.slice(offset), ...tickets.slice(0, offset)];
   }
 
   async detail(ticket: string): Promise<DtsTicketDetail> {
-    const known = this.tickets.find((item) => item.ticket === ticket);
+    const known = loadMockTickets().find((item) => item.ticket === ticket);
     if (known) {
       this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
       if (known.content) {
@@ -666,7 +670,7 @@ export class MockDtsGateway implements DtsGateway {
     }
     this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
     throw new McpGatewayError(
-      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1007)`);
+      `DTS 查无此单: ${ticket}(mock 数据集见 ${MOCK_DTS_SOURCE})`);
   }
 
   /** mock 的内嵌图按约定路径回取罐头 PNG(与真实网关的 proxyFile 同

@@ -2043,7 +2043,10 @@ export class IssueFlowService {
     // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
     // 结论后的动作与正常交还,不催人。
     if (state.status === "waiting_user") {
-      this.notifyWaitingCard(live);
+      // 代答在即的卡不发可行动卡通知(判据与代答同尺,见 willAutoAnswer)
+      // ——告知义务由代答自带的「已代答」收口通知承担;真人闸、开放题
+      // 卡、三档把控照常通知。
+      if (!this.willAutoAnswer(live)) this.notifyWaitingCard(live);
       this.maybeAutoAnswerGate(live);
       // 闸缺席才轮到 Agent 卡(闸优先,两路互斥不重复作答)。
       this.maybeAutoAnswerAgentCard(live);
@@ -2272,6 +2275,36 @@ export class IssueFlowService {
    * 拿得到的人工事实(票 03),任何档位永不代答。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
    * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
+  /** 这张等待卡会不会被介入档位代答(settle 通知守卫,与代答同拍):
+   * 会代答就不发可行动卡通知——通知先飞、代答紧随(settle 固定顺序),
+   * 用户拿到“请 /mfc 回复”的消息时卡已被平台自己答掉,/mfc 一查空,
+   * 比没有通知更误导(用户实锤:问题分析流程收卡即空)。判据与
+   * maybeAutoAnswerGate/AgentCard 逐条同尺:闸=一档+确认类(检视回合
+   * 除外);Agent 卡=一/二档+纯选项全带推荐。只在卡落地的 settle
+   * 时刻判定一次,与代答“不追溯存量卡”同一口径。 */
+  private willAutoAnswer(live: LiveIssue): boolean {
+    const { state } = live;
+    if (state.review_active === true) return false;
+    if (state.gate) {
+      if (!this.fullAutoOn(live)) return false;
+      const gate = state.gate;
+      if (gate.kind === "analysis_confirm") return true;
+      return gate.kind === "conclude"
+        && gate.proposal?.conclusion === "non_issue"
+        && gate.proposal?.confidence === "high";
+    }
+    if (!this.autoModeOn(live)) return false;
+    const record = live.humanGate.pending()[0];
+    if (!record) return false;
+    const questions = agentCardQuestions(record);
+    if (!questions.length) return false;
+    return questions.every((item) => {
+      const options = item.options ?? [];
+      if (!options.length) return false;
+      return recommendedIndex(item.options, item.recommended) >= 0;
+    });
+  }
+
   private maybeAutoAnswerGate(live: LiveIssue): void {
     const { state } = live;
     const gate = state.gate;
@@ -5237,11 +5270,18 @@ export class IssueFlowService {
     // 收口即点火合入事实监看(ADR-0022):两条收口路都汇到这里,
     // 单例防重入;重启恢复由 recover() 补挂。
     this.watchMergeStates(live);
+    // 小鲁班通知的幂等键=(taskId,status)(防恢复重放/催办重发,同一事件
+    // 只收一条)。返工轮再达同名状态是**新事件**,不带轮次就会撞上一轮
+    // 已 settled 的记录被 deliverTracked 静默跳过(用户实锤:二轮全绿
+    // 无通知)——键与摘要都带轮次:键分事件,摘要让用户看出第几轮
+    // (outcome 模板只渲染 summary,不渲染 status)。
+    const round = state.round ?? 1;
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: state.account,
-      status: "待环境验证",
-      summary: `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
+      status: round > 1 ? `待环境验证(第 ${round} 轮)` : "待环境验证",
+      summary: (round > 1 ? `第 ${round} 轮:` : "")
+        + `全部 MR 流水线已跑绿(${(state.mrs ?? []).length} 个 MR)`
         + "——请到目标环境验证后在卡上作答(未反馈也可直接归档/取消)",
       link: this.issueLink(live.id),
     }).catch(() => undefined);
