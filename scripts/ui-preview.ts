@@ -9,7 +9,6 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import React from "../web/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
-import { ModalSurface } from "../web/src/ui/Modal.tsx";
 
 const CHROME = process.env.MFC_VISUAL_BROWSER
   ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -34,17 +33,20 @@ const field = (label: string, control: React.ReactNode, opts: {
   h("span", null, label), control,
   opts.note ? h("small", { className: "knob-note" }, opts.note) : null);
 
-const modalForm = h("form", null,
-  h("header", { className: "ui-modal-head" },
+// ui/Modal 已退役(2026-09-11 迁 shadcn Dialog):Dialog 本体 portal 到
+// body,SSR 静态渲染为空串(实测),截图画面画不出弹层——这里平铺表单
+// 区做视觉参考,弹层真实观感(遮罩/居中/焦点)靠浏览器人工过目。
+const modalForm = h("form", { style: { display: "grid", gap: 14 } },
+  h("header", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 } },
     h("div", null,
       h("small", null, "快速反馈"),
-      h("h2", { id: "wish-quick-title" }, "快速提个问题")),
+      h("h2", { id: "wish-quick-title", style: { margin: "3px 0 0" } }, "快速提个问题")),
     h("button", { className: "ui-btn ghost sm", type: "button" }, "×")),
   field("一句话说明问题",
     h("input", { placeholder: "哪里不好用，或者哪里不符合预期？" })),
   field("补充现场（可选）",
     h("textarea", { rows: 3, placeholder: "刚才做了什么、希望变成什么样" })),
-  h("footer", { className: "ui-modal-foot" },
+  h("footer", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
     h("button", { className: "ui-btn", type: "button" }, "查看许愿墙"),
     h("button", { className: "ui-btn primary", type: "button" }, "提交问题")));
 
@@ -79,13 +81,12 @@ const board = h("div",
     h("div", { className: "ui-empty", style: { marginTop: 18, border: "1px dashed var(--line)", borderRadius: "var(--radius)" } },
       h("strong", null, "还没有任何记录"),
       h("span", null, "空态基座:.ui-empty(图标槽 + 文案)"))),
-  h("section", { style: { position: "relative", height: 430, transform: "translateZ(0)" } },
-    h("div", { style: { position: "absolute", inset: 0, display: "grid", placeItems: "center" } },
-      h(ModalSurface, { open: true, onClose: () => undefined, labelledBy: "wish-quick-title" },
-        modalForm)),
-    h("p", { style: { position: "absolute", bottom: 0, left: 0, right: 0,
-      textAlign: "center", color: "var(--faint)", fontSize: "var(--fs-12)", margin: 0 } },
-      "↑ WishQuickCreate 迁移后的打开态:<Modal> 组件 + .ui-field/.ui-btn")));
+  h("section", { className: "ui-card", style: { padding: 24 } },
+    h("h2", { style: { margin: "0 0 4px" } }, "快速提问表单"),
+    h("p", { style: { margin: "0 0 16px", color: "var(--muted)", fontSize: "var(--fs-13)" } },
+      "现居 shadcn Dialog 内(portal 弹层 SSR 截图画不出,此处平铺表单区)。"),
+    h("div", { style: { border: "1px dashed var(--line)", borderRadius: "var(--radius)", padding: 18 } },
+      modalForm)));
 
 function page(theme: string, body: string): string {
   return `<!doctype html><html lang="zh-CN" data-theme="${theme}" data-density="comfortable">`

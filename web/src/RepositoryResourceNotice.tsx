@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Modal } from "./ui/Modal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Preview = { path: string; rules: string[]; content?: string; note?: string };
 type Repository = { repository: string; revision: string; error?: string;
@@ -48,11 +54,14 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
     <button type="button" className="ui-btn ghost" style={{ fontSize: 13, justifyContent: "flex-start", maxWidth: "100%", whiteSpace: "normal" }} onClick={() => setOpen(true)}>
       本任务将按平台 {rules.length} 条规则屏蔽仓库 Skill／指令文件 · 查看详情
     </button>
-    <Modal open={open} onClose={close} ariaLabel="仓库资源屏蔽详情" width="min(800px, calc(100vw - 48px))">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}><h3 style={{ margin: 0 }}>仓库资源屏蔽</h3><button type="button" className="ui-btn ghost" onClick={close}>关闭</button></div>
-      <div style={{ maxHeight: "65vh", overflow: "auto" }}>
-        <p>以下资源不作为 Agent 执行指令加载，仓库文件仍保留。查看正文不会解除屏蔽。</p>
-        <ul>{rules.map(rule => <li key={rule}><code>{rule}</code></li>)}</ul>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
+      <DialogContent className="tw-root sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>仓库资源屏蔽</DialogTitle>
+          <DialogDescription>以下资源不作为 Agent 执行指令加载，仓库文件仍保留。查看正文不会解除屏蔽。</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[65vh] overflow-auto flex flex-col gap-2">
+          <ul className="flex flex-col gap-1">{rules.map(rule => <li key={rule}><code>{rule}</code></li>)}</ul>
         <button type="button" className="ui-btn" disabled={busy || JSON.parse(repoKey).length === 0} onClick={() => void inspect()}>
           {busy ? "正在读取…" : "查看当前仓库中被屏蔽的内容"}
         </button>
@@ -73,7 +82,8 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
             {repo.blocked_resources?.truncated && <p>命中较多，仅展示前 30 个文件。</p>}
           </>}
         </section>)}
-      </div>
-    </Modal>
+        </div>
+      </DialogContent>
+    </Dialog>
   </>;
 }

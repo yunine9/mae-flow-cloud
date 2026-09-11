@@ -153,45 +153,12 @@
   }
   .ui-empty > * { margin: 0; }
 
-  /* ---- 弹层(配 <Modal> 组件;层级走 tokens 的层叠阶梯) ---- */
+  /* ---- 弹层 ---- */
   /* Shared viewport positioning. Embedded presentations keep their iframe
-     mounted; form dialogs continue to use Modal for focus and dismissal. */
-  .ui-viewport-layer, .ui-modal-backdrop {
+     mounted. 2026-09-11 起页内弹窗改走 shadcn Dialog(portal 到 body,
+     层级/焦点/Esc 由组件自带),.ui-modal-* 家族随 ui/Modal.tsx 退役。 */
+  .ui-viewport-layer {
     position: fixed;
     inset: 0;
-  }
-  .ui-modal-backdrop {
-    z-index: var(--z-modal);
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: color-mix(in srgb, #07101d 62%, transparent);
-    backdrop-filter: blur(4px);
-  }
-  .ui-modal-dialog {
-    display: grid;
-    gap: 14px;
-    width: min(460px, calc(100vw - 48px));
-    padding: 22px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-xl);
-    background: var(--surface);
-    box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
-    color: var(--text);
-  }
-  .ui-modal-dialog > form { display: grid; gap: 14px; margin: 0; }
-  .ui-modal-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-  }
-  .ui-modal-head h2 { margin: 3px 0 0; color: var(--text-strong); font-size: var(--fs-17); }
-  .ui-modal-head small { color: var(--ink); font-weight: 700; }
-  .ui-modal-foot {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding-top: 2px;
   }
 }
