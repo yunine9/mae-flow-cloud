@@ -252,11 +252,16 @@ export function EnvironmentEditorDialog({
         </div>
         <label className={fieldWrapClass}>
           <span className={fieldLabelClass}>环境形态</span>
-          <Select value={form} onValueChange={(next) => setForm(next as EnvironmentForm)}>
+          <Select value={form}
+            items={{
+              virtualized: "虚拟化(经网管节点)",
+              k8s: "容器化(经 OM 节点)",
+            }}
+            onValueChange={(next) => setForm((next ?? "virtualized") as EnvironmentForm)}>
             <SelectTrigger className="w-full" aria-label="环境形态">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent position="popper">
+            <SelectContent alignItemWithTrigger={false}>
               <SelectItem value="virtualized">虚拟化(经网管节点)</SelectItem>
               <SelectItem value="k8s">容器化(经 OM 节点)</SelectItem>
             </SelectContent>

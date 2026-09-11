@@ -121,12 +121,19 @@ function OwnerResolution({ item, canVerify, busy, onResolve, onReopen }: {
     </div>
     {expanded && <div className="annot-owner-reply-editor">
       <span>处理方式</span>
-      <Select value={outcome} onValueChange={setOutcome} disabled={busy}>
+      <Select value={outcome || null} disabled={busy}
+        items={{
+          fixed: "确认已修复 / 已解答",
+          not_adopted: "不采纳",
+          deferred: "延期处理",
+          accepted_risk: "接受未解决风险继续",
+        }}
+        onValueChange={(next) => setOutcome(next ?? "")}>
         <SelectTrigger className="w-full bg-background" aria-label="这条意见的处置结果">
           <SelectValue placeholder="选择处理方式" />
         </SelectTrigger>
-        <SelectContent position="popper" align="start" style={{ zIndex: 400 }}
-          onEscapeKeyDown={(event) => event.stopPropagation()}>
+        <SelectContent alignItemWithTrigger={false} align="start"
+          style={{ zIndex: 400 }}>
           <SelectItem value="fixed">确认已修复 / 已解答</SelectItem>
           <SelectItem value="not_adopted">不采纳</SelectItem>
           <SelectItem value="deferred">延期处理</SelectItem>
