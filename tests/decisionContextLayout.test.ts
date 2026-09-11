@@ -237,7 +237,9 @@ test("工作台打开期间收起提问题浮钮,检视画布自己滚动", () =
 });
 
 test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
-  assert.match(workspace, /className="review-filter" role="tablist"/);
+  // (#210)手搓 role=tablist 换 base-ui Tabs 原语,.review-filter 皮肤类
+  // 挂在 TabsList 上,筛选语义原样。
+  assert.match(workspace, /className="review-filter h-auto w-full"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
   assert.match(workspace, /\["agent", "Agent 处理中"\]/);
   assert.match(workspace, /\["closed", "已完成"\]/);
@@ -434,7 +436,9 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
   assert.match(architecture, /availableViews\.map/,
     "架构页只为实际存在的图片生成视角页签");
-  assert.match(architecture, /className="story-diagram-tabs" role="tablist"/,
+  // (#210)图名页签换 base-ui Tabs 原语:diagrams 仍逐张映射成 TabsTrigger。
+  assert.match(architecture,
+    /\{diagrams\.map\(\(item\) => <TabsTrigger key=\{item\.id\} value=\{item\.id\}/,
     "具体图片必须由图名页签承载");
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);

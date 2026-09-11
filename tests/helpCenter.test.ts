@@ -112,24 +112,24 @@ test("帮助说大白话，重点色只使用蓝绿红三种固定意思", () =>
 test("真实截图可用键盘打开，并能通过关闭按钮、背景和 Esc 退出", () => {
   assert.match(source,
     /className="help-shot-frame"[\s\S]*onClick=\{\(\) => setExpanded\(true\)\}[\s\S]*aria-label=\{`放大查看：/);
+  // (#206)手搓 help-lightbox 换 base-ui Dialog 原语:role=dialog/aria-modal、
+  // 背景点击与 Esc 关闭、焦点圈与归还触发钮都归原语;页面只管开关状态,
+  // 三条退出路径(关闭钮/背景/Esc)统一汇入 onOpenChange(false)。
   assert.match(source,
-    /className="help-lightbox" role="dialog" aria-modal="true"/);
+    /<Dialog open=\{expanded\} onOpenChange=\{\(next\) => \{ if \(!next\) setExpanded\(false\); \}\}>/);
   assert.match(source, /aria-label="关闭图片预览"/);
-  assert.match(source,
-    /if \(event\.target === event\.currentTarget\) setExpanded\(false\)/);
-  assert.match(source,
-    /event\.key === "Escape"[\s\S]*setExpanded\(false\)/);
-  assert.match(source, /closeButtonRef\.current\?\.focus\(\)/);
-  assert.match(source, /openButtonRef\.current\?\.focus\(\)/);
 });
 
 test("截图预览锁住背景且限制在视口内，加载失败不留下破图", () => {
-  assert.match(source, /document\.body\.style\.overflow = "hidden"/);
+  // 背景滚动锁随 lightbox 一起交给 base-ui Dialog 原语(modal 打开即锁);
+  // 视口上限由 DialogContent 宽度上限与图容器高度上限承担。
+  assert.match(source, /<DialogContent showCloseButton=\{false\}/);
+  assert.match(source, /className="help-lightbox-image h-\[min\(70vh,640px\)\]"/);
   assert.match(source,
     /function hideOnError\(\) \{[\s\S]*setExpanded\(false\);[\s\S]*setFailed\(true\)/);
   assert.equal((source.match(/onError=\{hideOnError\}/g) ?? []).length, 2);
   assert.match(cssSource,
-    /\.help-lightbox-backdrop \{[\s\S]*max-width: 100vw;[\s\S]*height: 100dvh;[\s\S]*overflow: hidden;/);
+    /\.help-lightbox-image \{[\s\S]*overflow: hidden;/);
   assert.match(cssSource,
     /\.help-lightbox-image img \{[\s\S]*width: 100%;[\s\S]*max-width: 100%;[\s\S]*height: 100%;[\s\S]*max-height: 100%;[\s\S]*object-fit: contain;/);
 });
