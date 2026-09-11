@@ -1,4 +1,4 @@
-import { unassignedReviewDraft } from "../../src/reviewDecisionContract";
+import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
 import { StoryArchitecture } from "./StoryArchitecture";
 import { StoryViewNotice } from "./StoryViewNotice";
@@ -1306,7 +1306,7 @@ export function TaskWorkspace({
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
   const queuedIds = queuedDecisionAnnotationIds(notes);
-  const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => unassignedReviewDraft(item)
+  const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => pendingReviewAnnotation(item)
     && !(task.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */

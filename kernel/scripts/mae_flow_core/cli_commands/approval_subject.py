@@ -184,13 +184,13 @@ def subject_matches(root, state, step_id, step):
             state["approval_subject"] = current
             return True, ""
         return False, (
-            "绑定当前内容的新审批卡已自动生成；直接重新展示并取得一次决定，"
+            "需要展示绑定当前内容的审批问题；通过 AskUserQuestion 取得一次决定，"
             "无需重新解释或重做已经完成的工作")
-    # People approve files, not list ordering or an internal diff base. Keep
-    # the original answer binding when those mechanics change but files do not.
+    # People approve files, not list ordering, an internal diff base, or whether
+    # the same paths have since been registered in delivery_manifest. Preserve
+    # the answer only for the exact same file set and fingerprints.
     if (current and stored.get("kind") == current.get("kind")
             and stored.get("kind") in ("worktree", "artifacts")
-            and stored.get("scope") == current.get("scope")
             and _reviewed_files(stored) is not None
             and _reviewed_files(stored) == _reviewed_files(current)):
         return True, ""
@@ -199,6 +199,7 @@ def subject_matches(root, state, step_id, step):
             current["supersedes"] = str(stored.get("id") or "")
             state["approval_subject"] = current
         return False, (
-            "检视内容已经变化，旧决定已自动失效，新审批卡已自动生成；"
-            "直接重新展示并取得一次决定，无需让 Agent 反复解释或返工")
+            "检视内容已经变化，旧决定已自动失效，新审批对象已登记；"
+            "云端宿主会展示确认问题，本地使用 AskUserQuestion 重新确认。"
+            "messages 只查询已收到的回答，不会创建问题，无需反复查询或返工")
     return True, ""

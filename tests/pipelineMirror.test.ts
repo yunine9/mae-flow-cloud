@@ -1,8 +1,8 @@
 /**
  * 流水线红灯公共判定层(需求流/问题流单一来源)的契约:
  * - mirrorPipelineArtifacts:拉取+先清旧目录+落盘+返回清单;
- *   404/坏响应/网络失败 fail-open 返回空且不动目录;"成功查询但零
- *   产物也必须清空上一轮"是踩坑语义,单独钉住。
+ *   404/坏响应/网络失败 fail-open 返回空，旧材料移到历史目录；
+ *   根目录保持稳定，但不能在当前入口里展示上一轮材料。
  * - isBlindPipelineInput:盲输入三形态(裸链接/标签+链接/真内容)。
  *   标签+链接是内网实测原文形态——只认裸链接的第一版正好漏掉了它
  *   要防的那个场景(2026-08-21 读进场报告逮住)。
@@ -19,6 +19,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,42 @@ import {
   isBlindPipelineInput,
   mirrorPipelineArtifacts,
 } from "../src/pipelineMirror.ts";
+import { scopePipelineArtifacts } from "../src/pipelineArtifactScope.ts";
+
+test("镜像延迟返回不能覆盖新版本；错误 SHA 和超时不会留下旧证据", async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "mfc-mirror-race-")), "pipeline");
+  let reply: ((body: unknown) => void) | undefined;
+  let arrived!: () => void;
+  let pending = new Promise<void>(resolve => { arrived = resolve; });
+  const server = createServer((_request, response) => {
+    reply = body => response.end(JSON.stringify(body));
+    arrived();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const platformUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const input = { platformUrl, dir, repo: "repo", sha: "old" };
+  try {
+    const old = mirrorPipelineArtifacts(input);
+    await pending;
+    scopePipelineArtifacts(dir, "new");
+    writeFileSync(join(dir, "new.log"), "NEW_ONLY");
+    reply!({ sha: "old", files: [{ name: "old.log", text: "OLD_ONLY" }] });
+    assert.deepEqual(await old, []);
+    assert.equal(readFileSync(join(dir, "new.log"), "utf8"), "NEW_ONLY");
+    assert.equal(existsSync(join(dir, "old.log")), false);
+
+    pending = new Promise<void>(resolve => { arrived = resolve; });
+    const mismatch = mirrorPipelineArtifacts({ ...input, sha: "new" });
+    await pending;
+    reply!({ sha: "old", files: [{ name: "old.log", text: "OLD_ONLY" }] });
+    assert.deepEqual(await mismatch, []);
+    assert.equal(existsSync(join(dir, "old.log")), false);
+    assert.deepEqual(await mirrorPipelineArtifacts({ ...input, sha: "new", timeoutMs: 40 }), []);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
 
 /** 可编程的假平台:记录请求行与身份头,按配置回状态码与 JSON。 */
 async function fakePlatform(): Promise<{
@@ -126,7 +163,7 @@ test("镜像契约:落盘清单/先清旧目录/根目录 inode 不动/只读位
   }
 });
 
-test("镜像契约:404/坏响应/网络失败 fail-open 返回空,旧现场不动", async () => {
+test("镜像契约:404/坏响应/网络失败返回空，旧现场归档而不再作为当前证据", async () => {
   const platform = await fakePlatform();
   const dir = join(mkdtempSync(join(tmpdir(), "mfc-mirror-404-")), "pipeline");
   try {
@@ -136,13 +173,15 @@ test("镜像契约:404/坏响应/网络失败 fail-open 返回空,旧现场不�
     assert.deepEqual(await mirrorPipelineArtifacts({
       platformUrl: platform.url, sha: "a", repo: "r", dir,
     }), []);
-    assert.equal(existsSync(join(dir, "keep.log")), true,
-      "平台不支持(404)不许清掉仍可能的取证现场");
+    assert.equal(existsSync(join(dir, "keep.log")), false);
+    const history = join(dir, "..", "pipeline-history");
+    const archive = readdirSync(history)[0];
+    assert.equal(readFileSync(join(history, archive, "keep.log"), "utf8"), "上一轮现场");
     platform.setStatus(500);
     assert.deepEqual(await mirrorPipelineArtifacts({
       platformUrl: platform.url, sha: "a", repo: "r", dir,
     }), []);
-    assert.equal(existsSync(join(dir, "keep.log")), true);
+    assert.equal(existsSync(join(dir, "keep.log")), false);
     // 网络失败(连接拒收):红灯主链路不因镜像中断。
     const dead = await fakePlatform();
     const deadUrl = dead.url;
@@ -150,7 +189,7 @@ test("镜像契约:404/坏响应/网络失败 fail-open 返回空,旧现场不�
     assert.deepEqual(await mirrorPipelineArtifacts({
       platformUrl: deadUrl, sha: "a", repo: "r", dir,
     }), []);
-    assert.equal(existsSync(join(dir, "keep.log")), true);
+    assert.equal(existsSync(join(dir, "keep.log")), false);
   } finally {
     await platform.stop();
   }
@@ -183,4 +222,3 @@ test("镜像契约:成功查询但零产物也必须清空上一轮;穿越与超
     await platform.stop();
   }
 });
-

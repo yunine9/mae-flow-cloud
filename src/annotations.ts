@@ -18,6 +18,7 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
+import { pendingReviewAnnotation } from "./annotationPending.ts";
 import { isReviewAssetPath } from "./reviewAssets.ts";
 import { annotationDiffLines } from "./annotationDiffLines.ts";
 
@@ -425,9 +426,13 @@ export class AnnotationStore {
         operation && typeof operation === "object" && "op" in operation);
   }
 
-  /** 还没送出去的:决定卡与插话都取这一批。 */
+  /** 尚未提交的原始草稿；决定发送应使用 pendingReview，包含责任人队列。 */
   drafts(): Annotation[] {
     return this.list().filter((item) => item.status === "draft");
+  }
+
+  pendingReview(): Annotation[] {
+    return this.list().filter(pendingReviewAnnotation);
   }
 
   /** 页面要看的:草稿 + 已送出。软删的不再露面(留在文件里可查)。

@@ -320,6 +320,8 @@ export interface CloudSessionOptions {
   humanizeQuestionText?: (text: string) => string;
   /** 正式检视的选项取自流程契约，不新增提问门禁。 */
   prepareHumanQuestion?: (input: Record<string, unknown>) => Record<string, unknown>;
+  /** 内核已经登记的重确认请求复用 AskUserQuestion，不等模型读文字猜动作。 */
+  pendingHumanQuestion?: () => { callId: string; input: Record<string, unknown> } | undefined;
   /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
    * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
    * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
@@ -1182,6 +1184,16 @@ export class CloudSession {
                   name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
                   input: event.input ?? {},
                 });
+                if (this.options.pendingHumanQuestion && config.sessionId === this.sessionId && this.options.allowHumanQuestions !== false
+                    && (TOOL_NAME_MAP[event.toolName] ?? event.toolName) === "Bash") {
+                  const failure = await this.flushKernel();
+                  if (failure) throw new Error(failure);
+                  const question = this.options.pendingHumanQuestion?.();
+                  if (question) {
+                    const answer = await this.askUser(question.callId, question.input);
+                    return { content: [...event.content, ...(note ? [{ type: "text", text: note }] : []), ...answer.content] };
+                  }
+                }
                 if (note) return { content: [...event.content, { type: "text", text: note }] };
               } catch (error) {
                 this.kernelFailures.push(String(error));
@@ -1546,139 +1558,146 @@ export class CloudSession {
         }),
       }, { additionalProperties: false }),
       async execute(toolCallId: string, params: any) {
-        const callId = String(toolCallId);
-        driver.emit("tool_requested", driver.sessionId, {
-          call_id: callId, name: "AskUserQuestion", input: params ?? {},
-        });
-        const invalid = validateAskUserQuestionInput(params);
-        if (invalid) {
-          const text = "问题卡结构不完整，未向用户发送：" + invalid
-            + "。选择题必须提供至少两个非空、互不重复的选项；"
-            + "选项题必须带 recommended(所推荐选项的原文，须与选项逐字一致)；"
-            + "若确实要自由回答，请省略 options，页面会显示答复输入框。"
-            + "请修正后重试一次 AskUserQuestion，不要替用户猜答案。";
-          const finished = driver.emit("tool_finished", driver.sessionId, {
-            call_id: callId,
-            name: "AskUserQuestion",
-            input: params ?? {},
-            is_error: true,
-            result: text,
-          });
-          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
-          driver.hostAnswered.add(callId);
-          return {
-            content: [{ type: "text", text }],
-            details: {},
-            isError: true,
-          };
-        }
-        const humanize = driver.options.humanizeQuestionText
-          ?? ((text: string) => text);
-        const questions = (params.questions as Array<{
-          question: string; options?: string[]; recommended?: string;
-        }>).map((item) => ({
-          ...item,
-          question: humanize(item.question),
-          ...(item.options ? { options: item.options.map(humanize) } : {}),
-          ...(item.recommended !== undefined
-            ? { recommended: humanize(item.recommended) } : {}),
-        }));
-        const explicitContext =
-          typeof params.context === "string" && params.context.trim()
-            ? humanize(params.context.trim()) : undefined;
-        const lastSaidRaw = driver.lastAssistantText.get(driver.sessionId);
-        const lastSaid = lastSaidRaw === undefined
-          ? undefined : humanize(lastSaidRaw);
-        // 重放已决/已作废的旧卡不再核对(下面按记录原样回放);新卡先问
-        // 宿主。核对本身出错不能让卡消失也不能让会话死:按"没拦"处理,
-        // 交给回合结束与推送卡那两道后置检查兜底,错误记进日志。
-        const previous = driver.options.humanGate.get(`${driver.options.taskId}:${callId}`);
-        let blocked: string | undefined;
-        if (previous?.status !== "resolved" && previous?.status !== "superseded") {
-          try {
-            blocked = await driver.options.beforeHumanQuestion?.(params);
-          } catch (error) {
-            driver.options.log?.(
-              `任务 ${driver.options.taskId} 举卡前核对出错(按未拦处理): ${String(error)}`);
-          }
-        }
-        if (blocked) {
-          const finished = driver.emit("tool_finished", driver.sessionId, {
-            call_id: callId, name: "AskUserQuestion", input: params,
-            is_error: true, result: blocked,
-          });
-          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
-          driver.hostAnswered.add(callId);
-          return { content: [{ type: "text", text: blocked }], details: {}, isError: true };
-        }
-        const record = driver.options.humanGate.createWaiting({
-          taskId: driver.options.taskId,
-          step: driver.options.currentStep?.() ?? "",
-          callId,
-          questionInput: (driver.options.prepareHumanQuestion ?? ((input) => input))({ questions,
-            ...(params.purpose ? { purpose: params.purpose } : {}),
-            ...(params.annotation_ids ? { annotation_ids: params.annotation_ids } : {}),
-          }),
-          context: explicitContext ?? lastSaid,
-          // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
-          // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻
-          // 现场流水(MFC-028 盲签)。context 缺席时 lastSaid 已经当
-          // context 用了,不重复。
-          preface: explicitContext && lastSaid
-            && lastSaid !== explicitContext ? lastSaid : undefined,
-        });
-        // 重建会话可能把同一个工具调用重放出来。waiting_id 以
-        // task+call_id 幂等；若盘上的决定已经 resolved，就把原答案
-        // 直接作为本次工具结果回放，绝不能再把它包装成一张新待办。
-        // 用户实测的症状正是:子任务已生成，父分析单却又出现同一张卡。
-        if (record.status === "resolved") {
-          const finished = driver.emit("tool_finished", driver.sessionId, {
-            call_id: callId,
-            name: "AskUserQuestion",
-            input: params ?? {},
-            is_error: false,
-            result: renderDecision(record),
-            answers: answersOf(record, record),
-          });
-          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
-          driver.hostAnswered.add(callId);
-          driver.options.log?.(
-            `任务 ${driver.options.taskId} 重放已完成待办 ${record.waiting_id},不重复举卡`);
-          return {
-            content: [{ type: "text", text: renderDecision(record) }],
-            details: {},
-          };
-        }
-        if (record.status === "superseded") {
-          const text = "这张旧问题已因用户接管代码现场而失效。请重新读取 mae-flow current；"
-            + "如果当前步骤仍需要确认，请基于最新现场重新提问。";
-          const finished = driver.emit("tool_finished", driver.sessionId, {
-            call_id: callId,
-            name: "AskUserQuestion",
-            input: params ?? {},
-            is_error: true,
-            result: text,
-          });
-          driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
-          driver.hostAnswered.add(callId);
-          driver.options.log?.(
-            `任务 ${driver.options.taskId} 拒绝重放已失效待办 ${record.waiting_id}`);
-          return {
-            content: [{ type: "text", text }],
-            details: {},
-            isError: true,
-          };
-        }
-        driver.waitingRecord = record;
-        const decision = new Promise<string>((resolve) =>
-          driver.decisionResolvers.set(callId, resolve));
-        driver.waitingSignal.resolve({
-          status: "waiting_for_human", waiting: { ...record },
-        });
-        const text = await decision; // 会话挂起点:决定到达前 pi 停在这里
-        return { content: [{ type: "text", text }], details: {} };
+        return driver.askUser(toolCallId, params);
       },
     });
+  }
+
+  private async askUser(toolCallId: string, params: any): Promise<{
+    content: Array<{ type: "text"; text: string }>; details: Record<string, never>; isError?: boolean;
+  }> {
+    const driver = this;
+    const callId = String(toolCallId);
+    driver.emit("tool_requested", driver.sessionId, {
+      call_id: callId, name: "AskUserQuestion", input: params ?? {},
+    });
+    const invalid = validateAskUserQuestionInput(params);
+    if (invalid) {
+      const text = "问题卡结构不完整，未向用户发送：" + invalid
+        + "。选择题必须提供至少两个非空、互不重复的选项；"
+        + "选项题必须带 recommended(所推荐选项的原文，须与选项逐字一致)；"
+        + "若确实要自由回答，请省略 options，页面会显示答复输入框。"
+        + "请修正后重试一次 AskUserQuestion，不要替用户猜答案。";
+      const finished = driver.emit("tool_finished", driver.sessionId, {
+        call_id: callId,
+        name: "AskUserQuestion",
+        input: params ?? {},
+        is_error: true,
+        result: text,
+      });
+      driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
+      driver.hostAnswered.add(callId);
+      return {
+        content: [{ type: "text", text }],
+        details: {},
+        isError: true,
+      };
+    }
+    const humanize = driver.options.humanizeQuestionText
+      ?? ((text: string) => text);
+    const questions = (params.questions as Array<{
+      question: string; options?: string[]; recommended?: string;
+    }>).map((item) => ({
+      ...item,
+      question: humanize(item.question),
+      ...(item.options ? { options: item.options.map(humanize) } : {}),
+      ...(item.recommended !== undefined
+        ? { recommended: humanize(item.recommended) } : {}),
+    }));
+    const explicitContext =
+      typeof params.context === "string" && params.context.trim()
+        ? humanize(params.context.trim()) : undefined;
+    const lastSaidRaw = driver.lastAssistantText.get(driver.sessionId);
+    const lastSaid = lastSaidRaw === undefined
+      ? undefined : humanize(lastSaidRaw);
+    // 重放已决/已作废的旧卡不再核对(下面按记录原样回放);新卡先问
+    // 宿主。核对本身出错不能让卡消失也不能让会话死:按"没拦"处理,
+    // 交给回合结束与推送卡那两道后置检查兜底,错误记进日志。
+    const previous = driver.options.humanGate.get(`${driver.options.taskId}:${callId}`);
+    let blocked: string | undefined;
+    if (previous?.status !== "resolved" && previous?.status !== "superseded") {
+      try {
+        blocked = await driver.options.beforeHumanQuestion?.(params);
+      } catch (error) {
+        driver.options.log?.(
+          `任务 ${driver.options.taskId} 举卡前核对出错(按未拦处理): ${String(error)}`);
+      }
+    }
+    if (blocked) {
+      const finished = driver.emit("tool_finished", driver.sessionId, {
+        call_id: callId, name: "AskUserQuestion", input: params,
+        is_error: true, result: blocked,
+      });
+      driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
+      driver.hostAnswered.add(callId);
+      return { content: [{ type: "text", text: blocked }], details: {}, isError: true };
+    }
+    const record = driver.options.humanGate.createWaiting({
+      taskId: driver.options.taskId,
+      step: driver.options.currentStep?.() ?? "",
+      callId,
+      questionInput: (driver.options.prepareHumanQuestion ?? ((input) => input))({ questions,
+        ...(params.purpose ? { purpose: params.purpose } : {}),
+        ...(params.annotation_ids ? { annotation_ids: params.annotation_ids } : {}),
+      }),
+      context: explicitContext ?? lastSaid,
+      // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
+      // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻
+      // 现场流水(MFC-028 盲签)。context 缺席时 lastSaid 已经当
+      // context 用了,不重复。
+      preface: explicitContext && lastSaid
+        && lastSaid !== explicitContext ? lastSaid : undefined,
+    });
+    // 重建会话可能把同一个工具调用重放出来。waiting_id 以
+    // task+call_id 幂等；若盘上的决定已经 resolved，就把原答案
+    // 直接作为本次工具结果回放，绝不能再把它包装成一张新待办。
+    // 用户实测的症状正是:子任务已生成，父分析单却又出现同一张卡。
+    if (record.status === "resolved") {
+      const finished = driver.emit("tool_finished", driver.sessionId, {
+        call_id: callId,
+        name: "AskUserQuestion",
+        input: params ?? {},
+        is_error: false,
+        result: renderDecision(record),
+        answers: answersOf(record, record),
+      });
+      driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
+      driver.hostAnswered.add(callId);
+      driver.options.log?.(
+        `任务 ${driver.options.taskId} 重放已完成待办 ${record.waiting_id},不重复举卡`);
+      return {
+        content: [{ type: "text", text: renderDecision(record) }],
+        details: {},
+      };
+    }
+    if (record.status === "superseded") {
+      const text = "这张旧问题已因用户接管代码现场而失效。请重新读取 mae-flow current；"
+        + "如果当前步骤仍需要确认，请基于最新现场重新提问。";
+      const finished = driver.emit("tool_finished", driver.sessionId, {
+        call_id: callId,
+        name: "AskUserQuestion",
+        input: params ?? {},
+        is_error: true,
+        result: text,
+      });
+      driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
+      driver.hostAnswered.add(callId);
+      driver.options.log?.(
+        `任务 ${driver.options.taskId} 拒绝重放已失效待办 ${record.waiting_id}`);
+      return {
+        content: [{ type: "text", text }],
+        details: {},
+        isError: true,
+      };
+    }
+    driver.waitingRecord = record;
+    const decision = new Promise<string>((resolve) =>
+      driver.decisionResolvers.set(callId, resolve));
+    driver.waitingSignal.resolve({
+      status: "waiting_for_human", waiting: { ...record },
+    });
+    const text = await decision; // 会话挂起点:决定到达前 pi 停在这里
+    return { content: [{ type: "text", text }], details: {} };
   }
 
   // ---- 子 Agent(§6 平行会话;同进程) ----

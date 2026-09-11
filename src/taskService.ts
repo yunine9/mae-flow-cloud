@@ -1,10 +1,13 @@
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
-import { explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
+import { pendingKernelReview } from "./kernelReviewRequest.ts";
+import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
+import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
+import { explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
-import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun } from "./pipelineHandoff.ts";
-import { getPipelineStatus, type PipelineRun } from "./pipelineClient.ts";
+import { historicalPipelineFeedback, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun } from "./pipelineHandoff.ts";
+import { getPipelineStatus, triggerPipeline, type PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
 import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
@@ -328,6 +331,7 @@ import {
   KernelUnavailableError,
   openKernelFeedback,
   recordKernelFeedbackResult,
+  recordKernelPublishedPush,
   reconcileKernelDeliverySelection,
   refreshKernelPanel,
   trustedKernelHostActiveBatch,
@@ -6801,7 +6805,7 @@ export class TaskService {
       throw new AnnotationPermissionError("只能随决定提交自己写的批注");
     }
     return items.filter((item) =>
-      unassignedReviewDraft(item) && wanted.has(item.id)
+      pendingReviewAnnotation(item) && wanted.has(item.id)
         && (!actor || item.author === actor));
   }
 
@@ -8510,6 +8514,8 @@ export class TaskService {
           continue;
         }
         if (recoverHostPushProjection(summary)) this.writeTaskState(task);
+        if (!["completed", "canceled"].includes(summary.status) && summary.delivery?.git_push)
+          this.recordPublishedPush(task, summary.delivery.git_push);
         if (recoveredCwd !== savedCwd) {
           this.options.log?.(
             `任务 ${summary.id} 已从单号目录恢复代码现场: ${recoveredCwd ?? "未找到唯一候选"}`,
@@ -8702,6 +8708,14 @@ export class TaskService {
           }
         }
         this.replayProjection(task);
+        // 进程退出时可能只来得及留下 running，内核已明确交给宿主。
+        // 不再派一轮只会 current/done 的 Agent；未答卡、暂停和待执行的
+        // 宿主请求仍各走原入口，不能被这次恢复抢走。
+        if (["running", "queued"].includes(summary.status) && !task.mission && this.atExternalVerificationWait(task)
+            && authoritativeWaiting?.status !== "waiting" && !new TaskHostLedger(summary).pending()) {
+          summary.status = "verifying"; summary.detail = "Agent 已结束，宿主正在接续交付与流水线验证";
+          task.mission = undefined; this.persist(task);
+        }
         // annotations.jsonl 是工作台人工裁决的权威账。部署前若批注已被
         // 撤回/确认、进程却死在 FeedbackStore 核销前，不能在重启后把
         // 已关闭意见重新显示成进行中；反过来，Agent 仅回复 fixed 仍须
@@ -10907,7 +10921,7 @@ export class TaskService {
     waiting: WaitingRecord,
   ): void {
     try {
-      const drafts = this.annotations(task).drafts();
+      const drafts = this.annotations(task).pendingReview();
       const durableIds = waiting.continuation?.annotation_ids;
       const ids = Array.isArray(durableIds)
         ? durableIds.map(String)
@@ -10943,7 +10957,7 @@ export class TaskService {
       }).map((item) => item.id);
       for (const id of pending) {
         const item = drafts.find(item => item.id === id)!;
-        if (unassignedReviewDraft(item)) this.annotations(task).assignToAgent(id, waiting.decided_by ?? task.summary.luban_account ?? "本地用户");
+        if (pendingReviewAnnotation(item)) this.annotations(task).assignToAgent(id, waiting.decided_by ?? task.summary.luban_account ?? "本地用户");
       }
       if (pending.length) this.annotations(task).markSent(pending, "decision", waiting.decided_by);
     } catch (error) {
@@ -10959,7 +10973,7 @@ export class TaskService {
    * 恢复时对账。任务恢复和批注读侧都用全部 resolved 收据补投影。 */
   private reconcileResolvedDecisionAnnotations(task: TaskState): void {
     try {
-      if (!this.annotations(task).drafts().length) return;
+      if (!this.annotations(task).pendingReview().length) return;
       for (const waiting of task.humanGate.resolved()) {
         this.markResolvedDecisionAnnotations(task, waiting);
       }
@@ -11463,7 +11477,7 @@ export class TaskService {
     // 拦截只放在人能闭环的地方——push 确认卡仍是硬闸,中途卡不计它们。
     const responsibilityDrafts = (input.actor ?? task.summary.luban_account)
         === (task.summary.luban_account ?? "本地用户")
-      ? this.annotations(task).drafts().filter(item => unassignedReviewDraft(item)
+      ? this.annotations(task).pendingReview().filter(item => pendingReviewAnnotation(item)
         && !(task.summary.requirement_graph?.stage === "confirmed"
           && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const unresolved = [...new Map([
@@ -11505,13 +11519,13 @@ export class TaskService {
     // 无 actor 的旧回调按任务责任人收口；旧单也没有责任人时才保留
     // 原单用户兼容语义。
     const draftAuthor = input.actor ?? task.summary.luban_account;
-    const allDrafts = this.annotations(task).drafts();
+    const allDrafts = this.annotations(task).pendingReview();
     const reviewDrafts = handlesFeedback && draftAuthor === (task.summary.luban_account ?? "本地用户")
-      ? allDrafts.filter(item => unassignedReviewDraft(item)
+      ? allDrafts.filter(item => pendingReviewAnnotation(item)
         && !(task.summary.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const ownDrafts = draftAuthor
       ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
-    const drafts = ownDrafts.filter(unassignedReviewDraft);
+    const drafts = ownDrafts.filter(pendingReviewAnnotation);
     const deliverableUnresolved = unresolved.filter((item) =>
       !item.owner_reply && !item.resolution
       && (item.status !== "draft" || !draftAuthor || item.author === draftAuthor));
@@ -13277,9 +13291,7 @@ export class TaskService {
     const active = this.activeKernelFeedback(task);
     if (!active || active.current !== "feedback_triage"
         || task.mission?.includes(active.batchId)) return false;
-    const items = active.items.filter(item => !historicalPipelineFeedback(task.summary, item)
-      && !(item.source === "pipeline" && task.summary.delivery?.sha
-        && task.summary.delivery.git_push?.sha === task.summary.delivery.sha && !task.summary.delivery.pipeline));
+    const items = active.items.filter(item => !historicalPipelineFeedback(task.summary, item));
     if (!items.length) return false;
     const store = new FeedbackStore(
       join(task.summary.workspace, "feedback", "index.jsonl"));
@@ -13606,8 +13618,10 @@ export class TaskService {
       stopVerification: async () => {
         if (task.prepushActive) { task.controlEpoch += 1; actionEpoch = task.controlEpoch; await this.stopPrePush(task.summary.id, task.summary.luban_account, false); }
       },
+      recordPublishedPush: receipt => this.recordPublishedPush(task, receipt),
+      resumePipelineAfterPush: () => !!task.summary.delivery?.mr_url && !task.pendingMainSteers?.length && shouldVerifyCiPush(task.mission, task.summary),
       resume: (message, target, operation) => this.enqueueRepair(task,
-        hostResumeMission(task.mission, message, target, operation), "宿主操作已返回，继续当前目标"),
+        hostResumeMission(task.mission, message, target, operation, task.summary), "宿主操作已返回，继续当前目标"),
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
       confirmPush: operation => confirmHostPush({
         summary: task.summary, cwd: task.cwd, humanGate: task.humanGate,
@@ -14346,6 +14360,10 @@ export class TaskService {
           failClosed: Boolean(this.options.host),
         }),
         humanGate: task.humanGate,
+        pendingHumanQuestion: this.options.host && !analysisOnly
+          ? () => this.current(task, epoch) && !task.pauseRequested
+            ? pendingKernelReview(cwd, this.options.host!.kernelRoot, task.humanGate, task.summary.id) : undefined
+          : undefined,
         hostHooks: withLiveReviewReceipts(hostHooks, {
           current: () => this.current(task, epoch),
           list: () => this.annotations(task).list(),
@@ -14403,6 +14421,7 @@ export class TaskService {
       // 持久化使命可能来自旧版本；开场再次下发当前唯一回执地址。
       const pendingReviews = pendingReviewProcessing(this.annotations(task).list());
       if (pendingReviews.length) prompt += `\n\n${this.reviewReceiptInstructionsFor(task, pendingReviews)}`;
+      if (task.summary.delivery?.git_push?.sha) scopePipelineArtifacts(join(workspace, "pipeline"), task.summary.delivery.git_push.sha);
       prompt += `\n\n${taskAgentMaterialInstructions(workspace)}`;
       prompt += `\n\n${this.activeFeedbackReceiptInstructions(task)}`;
       const turn = rebuild
@@ -16610,12 +16629,21 @@ export class TaskService {
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
+  private recordPublishedPush(task: TaskState, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
+    if (this.options.host && task.cwd && this.continuousReviewTask(task)) recordKernelPublishedPush({
+      host: this.options.host, cwd: task.cwd, workspace: task.summary.workspace, taskId: task.summary.id, receipt });
+  }
+
   private async tryDeliver(
     task: TaskState,
     epoch: number,
   ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    if (this.current(task, epoch) && !task.driver && this.atExternalVerificationWait(task)
+        && ["running", "queued"].includes(task.summary.status)) {
+      task.summary.status = "verifying"; task.summary.detail = "宿主正在接续交付与流水线验证"; this.persist(task);
+    }
     // task-40：旧 MR 已被人在远端合入，本地却仍是“验证中”。必须先
     // 查同一个 MR，不能先 rebase/push 再靠创建接口猜它是否还存在。
     if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
@@ -16800,6 +16828,8 @@ export class TaskService {
       // push 已经发生就先落账；即使随后 MR/流水线接口抖动，恢复时也能
       // 复核同一 SHA，不会把传输事实误当成 Agent 自述。
       this.persist(task);
+      scopePipelineArtifacts(join(task.summary.workspace, "pipeline"), pushReceipt.sha);
+      this.recordPublishedPush(task, pushReceipt);
       // 检视回复只能在对应代码可从远端看见后投递。部分失败保留在
       // outbox，后续监控/重启继续；不重派 Agent、不删除失败项。
       if (!await this.flushReviewReplyOutbox(task)) {
@@ -16904,16 +16934,13 @@ export class TaskService {
       const runRequest = { sha, repo: mrRequest.repo };
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted });
-      const run = await fetch(`${platformUrl}/pipeline/trigger`, {
-        method: "POST",
-        headers: this.platformIdentity(task),
-        body: JSON.stringify(runRequest),
-      }).then((r) => readJson(r));
+      const run = await triggerPipeline({ platformUrl, sha, repo: mrRequest.repo,
+        credential: this.options.gitCredential?.(task.summary.luban_account) });
       if (!this.current(task, epoch)) return;
-      const acceptedRun = parseTriggeredPipelineRun(sha, run);
+      const acceptedRun = confirmedPipelineRun(sha, run);
       const checks = acceptedRun.checks;
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
-               request: runRequest, sha, startedAt: runStarted, result: run,
+               request: runRequest, sha, startedAt: runStarted, result: { ...run },
                finishedAt: new Date().toISOString() });
       task.summary.delivery = {
         ...(task.summary.delivery?.loop
@@ -17449,7 +17476,8 @@ export class TaskService {
     // 先采证再创建/累加 loop：若红灯的具体报错全缺，根本没有派 Agent，
     // 这一轮不能凭空扣掉修复预算。
     const artifacts = await this.mirrorPipelineArtifacts(task);
-    if (!this.current(task, epoch)) return;
+    if (!this.current(task, epoch) || task.summary.delivery !== delivery || delivery.sha !== sha
+        || (delivery.git_push && delivery.git_push.sha !== sha)) return;
     const previousGap = delivery.evidence_gap?.sha === sha
       ? delivery.evidence_gap : undefined;
     const humanEvidence = previousGap?.human_evidence?.trim()
@@ -17570,9 +17598,6 @@ export class TaskService {
       this.notifyRepairStopped(task);
       return;
     }
-    // 上一轮的失败详情留一份给新使命对比——"和上轮同一处打转"是
-    // 换思路/出诊断的触发条件,这个判断只有会话自己做得可靠。
-    const previousFailure = loop.round > 0 ? loop.failure : undefined;
     loop.round += 1;
     loop.last_sha = sha;
     loop.kind = "ci";
@@ -17672,12 +17697,6 @@ export class TaskService {
         + `分诊与定位先读它们,别只凭上面的摘要猜:`,
         ...artifacts.map((name) => `  ${resolve(task.summary.workspace, "pipeline", name)}`),
       ] : []),
-      ...(previousFailure ? [
-        `- 上一轮修复后流水线仍红,上一轮的失败详情如下,先对比再动手:`
-        + `若与本轮是同一处原地打转,说明上轮改法无效,必须换思路;`
-        + `换思路也解决不了的,走下面的诊断出口,不许重复同样的修改。`,
-        previousFailure,
-      ] : []),
       ...(task.summary.delivery_selection?.status === "confirmed" ? [
         "- 本轮继承用户已经确认的最终推送范围。修流水线不是重新选文件：",
         deliverySelectionNote(
@@ -17727,6 +17746,7 @@ export class TaskService {
       + `纠偏提示)照办；责任人改变目标时用 task_control 登记，不回到已暂缓的旧使命。收口如实说明流水线`
       + `失败的定位结论收尾——本轮确实没碰流水线,就明说"本轮未处理`
       + `流水线"及原因,不许拿无关的汇报顶替诊断。`,
+      CI_MISSION_END,
     ].join("\n");
     task.summary.status = "queued";
     task.summary.detail = assessment.missingDimensions.length
@@ -19525,6 +19545,7 @@ export class TaskService {
       return await mirrorPipelineArtifactsShared({
         platformUrl,
         sha,
+        current: () => task.summary.delivery?.sha === sha && !this.shuttingDown,
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
         // artifacts 编排器是 MR-first，第四参契约是完整 MR URL（SSE 的
         // query_mr_info 直接消费它），不是 status 主路使用的 MR iid。
@@ -21193,6 +21214,11 @@ export class TaskService {
             "写完后立即结束本轮。",
           ].join("\n\n")), epoch);
           break;
+        }
+        if (this.atExternalVerificationWait(task)) {
+          task.summary.status = "verifying";
+          task.summary.detail = "Agent 已结束，正在释放执行环境并交接宿主验证";
+          this.persist(task);
         }
         task.driver?.dispose();
         // host push 的硬前提：不仅调用 dispose，还要先从任务状态移除

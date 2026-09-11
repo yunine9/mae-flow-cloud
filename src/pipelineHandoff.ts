@@ -30,8 +30,7 @@ export function historicalPipelineFeedback(summary: TaskSummary, item: {
   const sha = delivery?.sha;
   const sourceSha = String(item.observed_sha || String(item.source_id ?? "").split(":")[0]);
   return item.source === "pipeline" && !!sha && !!sourceSha && sourceSha !== sha
-    && delivery?.git_push?.sha === sha
-    && /^(running|success|failed)(?:$|\()/.test(delivery.pipeline ?? "");
+    && delivery?.git_push?.sha === sha;
 }
 
 /** Project remote facts before handing control to the shared pipeline watcher. */

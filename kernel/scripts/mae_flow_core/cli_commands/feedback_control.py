@@ -15,9 +15,10 @@ def deferred_feedback(state):
 
 
 def scheduled_items(state, batch):
+    from .published_feedback import historical_pipeline_item
     deferred = deferred_feedback(state)
     return [item for item in batch.get("items", [])
-            if item.get("id") not in deferred]
+            if item.get("id") not in deferred and not historical_pipeline_item(state, item)]
 
 
 def control_feedback(state, payload, proof_nonce):

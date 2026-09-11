@@ -55,7 +55,11 @@ test("真实主会话在 build 阶段调用宿主推送，交接后收到远端�
   assert.equal(execFileSync("git", ["--git-dir", platform.barePath, "rev-parse", op.branch!], { encoding: "utf8" }).trim(), op.sha);
   assert.equal(task.delivery?.git_push?.sha, op.sha);
   assert.notEqual(task.status, "completed");
-  assert.equal(task.delivery?.sha, undefined, "阶段性推送不能冒充正常交付与验证快照");
+  assert.equal(task.delivery?.sha, op.sha, "实际推送必须同步交付版本，两条入口一致");
+  assert.equal(task.delivery?.pipeline, undefined, "推送事实不能冒充流水线通过");
+  const active = (service as any).tasks.get(id);
+  assert.equal(JSON.parse(readFileSync(join(active.cwd, ".mae-flow.json"), "utf8")).current, "build",
+    "阶段性推送不擅自推进内核");
   assert.equal(platform.mergeRequests.length, 0, "push 不隐含 MR 创建");
   assert.equal(new TaskHostLedger(task).read().operations.length, 1);
 });

@@ -40,6 +40,9 @@ def render_delivery_feedback(state):
 
     loop = (state or {}).get("delivery_loop") or {}
     lines = []
+    published = loop.get("published") or {}
+    if published.get("sha"):
+        lines.append("已推送版本：%s。旧 SHA 流水线告警不在当前修复清单，等待本版本验证；推送不表示通过。" % published["sha"])
     target = (loop.get("target") or {}).get("target")
     if target:
         lines.append("当前优先目标：%s。未暂缓的其他反馈仍保留。" % target)

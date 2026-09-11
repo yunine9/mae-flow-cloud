@@ -724,6 +724,17 @@ export function controlKernelFeedback(input: {
     args: ["feedback-open", "--file", path] });
 }
 
+/** 真实远端收据只撤出旧 CI 调度，不登记任何质量通过或人工闭环。 */
+export function recordKernelPublishedPush(input: {
+  host: KernelDeliveryHost; cwd: string; workspace: string; taskId: string;
+  receipt: { sha: string; ref: string; remote: string };
+}): KernelDeliveryRecord {
+  const payload = { schema: "mae-flow-feedback-batch/1", mode: "published", receipt: input.receipt };
+  const path = factsPath(input.workspace, "feedback-published", payload);
+  return invokeAfterRevisionConflict({ ...input, action: "feedback-open", payload,
+    args: ["feedback-open", "--file", path] });
+}
+
 export function recordKernelFeedbackResult(input: {
   host: KernelDeliveryHost;
   cwd: string;

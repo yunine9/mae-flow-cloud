@@ -18,10 +18,11 @@
  * 与 TaskService 无关的机械;执行层(修复会话/使命组装/派单通道)不
  * 在这条线上。
  */
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync }
+import { renameSync, writeFileSync }
   from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
+import { scopePipelineArtifacts, currentPipelineArtifactScope } from "./pipelineArtifactScope.ts";
 
 /** 平台不给失败详情时需求侧写入 loop.failure 的占位文本(判据的一部分,
  * 语义锁定,别改字面)。 */
@@ -59,7 +60,7 @@ export function isBlindPipelineInput(
  *   会话会按错误现场继续改代码。**成功查询但本轮零产物也必须清空
  *   上一轮**;但绝不删除目录本身——它是运行中 Coding 容器的只读
  *   bind 源,替换根目录会让容器继续看到旧 inode;
- * - fail-open:404/坏响应/网络失败一律返回空清单、不动目录——镜像
+ * - fail-open:404/坏响应/网络失败一律返回空清单，旧材料预先归档——镜像
  *   只是取证的增强,红灯主链路(账本+回合)不因它中断,调用方按返回
  *   清单决定给 AI 的指引文案(照常走摘要通道);
  * - 落盘走临时文件原子改名、只读位(0o444)、单文件截到 512KB;文件
@@ -79,23 +80,29 @@ export async function mirrorPipelineArtifacts(input: {
   /** 非 404 失败(网络断/5xx/坏响应)的人话告警口:fail-open 返回空,
    *  但调用方的日志要能看见"为什么没产物"。 */
   log?: (message: string) => void;
+  timeoutMs?: number;
+  current?: () => boolean;
 }): Promise<string[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
   try {
+    if (input.current && !input.current()) return [];
+    const generation = scopePipelineArtifacts(input.dir, input.sha, true);
     const repo = encodeURIComponent(input.repo);
     const response = await fetch(
       `${input.platformUrl}/pipeline/artifacts?sha=${input.sha}`
       + `&repo=${repo}`
       + (input.mrUrl
         ? `&mr=${encodeURIComponent(input.mrUrl)}` : ""),
-      { headers: input.headers });
+      { headers: input.headers, signal: controller.signal });
     if (response.status === 404) return [];
     if (!response.ok) {
       input.log?.(`流水线产物镜像失败(HTTP ${response.status}),走摘要通道`);
       return [];
     }
-    let body: { files?: unknown };
+    let body: { files?: unknown; sha?: string };
     try {
-      body = await response.json() as { files?: unknown };
+      body = await response.json() as { files?: unknown; sha?: string };
     } catch (error) {
       input.log?.(`流水线产物镜像失败(响应非 JSON),走摘要通道: ${
         String(error)}`);
@@ -104,10 +111,8 @@ export async function mirrorPipelineArtifacts(input: {
     const files = (Array.isArray(body.files) ? body.files : [])
       .filter((file: any) => typeof file?.name === "string"
         && typeof file?.text === "string");
-    mkdirSync(input.dir, { recursive: true });
-    for (const entry of readdirSync(input.dir)) {
-      rmSync(join(input.dir, entry), { recursive: true, force: true });
-    }
+    if ((body.sha && body.sha !== input.sha) || (input.current && !input.current())
+        || !currentPipelineArtifactScope(input.dir, generation)) return [];
     // 成功查询但本轮没有材料,也必须把上一轮清空;否则修复会话会
     // 在稳定挂载里读到旧 SHA 的日志,按错误现场继续改代码。
     if (!files.length) return [];
@@ -115,7 +120,7 @@ export async function mirrorPipelineArtifacts(input: {
     for (const file of files) {
       // 路径穿越防线:文件名只留基名,别让平台字段写出目录外。
       const name = basename(String(file.name));
-      if (!name || name === "." || name === "..") continue;
+      if (!name || name === "." || name === ".." || name === ".pipeline-context.json") continue;
       const target = join(input.dir, name);
       const temporary = join(
         input.dir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
@@ -133,5 +138,7 @@ export async function mirrorPipelineArtifacts(input: {
     input.log?.(`流水线产物镜像失败(网络/落盘异常),走摘要通道: ${
       String(error)}`);
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
