@@ -448,3 +448,38 @@ test("编译槽位排队真相进 prepush.message,出队后换成启动文案", 
     await model.stop();
   }
 });
+
+test("无远端跟踪分支时按真实推送收据排除历史，只修正推送后新增提交", async () => {
+  const { service, model, internal, repo } = await taskWithRepo();
+  try {
+    repo.git("checkout", "--quiet", "-b", "master_bot_REQ_RECEIPT");
+    writeFileSync(join(repo.cwd, "feature.txt"), "published\n");
+    repo.git("add", "feature.txt");
+    repo.git("commit", "--quiet", "-m", "[REQ_RECEIPT][docs]归档说明");
+    const published = repo.git("rev-parse", "HEAD");
+    const remote = mkdtempSync(join(tmpdir(), "mfc-receipt-remote-"));
+    repo.git("init", "--bare", "--quiet", remote);
+    internal.summary.repo_url = remote;
+    const receipt = await (service as any).pushFromHost(internal, "master_bot_REQ_RECEIPT", published);
+    internal.summary.delivery = { git_push: receipt, sha: published, pipeline: "running", mr_url: "https://example.test/mr/1" };
+    assert.equal(repo.git("for-each-ref", "--format=%(refname)", "refs/remotes"), "");
+    assert.deepEqual(await (service as any).taskCommitSubjects(internal, published), []);
+    assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "ok");
+    assert.equal(internal.summary.delivery.pipeline, "running");
+    assert.equal(internal.summary.delivery.stalled, undefined);
+    assert.equal(repo.git("rev-parse", "HEAD"), published);
+
+    writeFileSync(join(repo.cwd, "feature.txt"), "new code\n");
+    repo.git("add", "feature.txt"); repo.git("commit", "--quiet", "-m", "fix: new unpublished code");
+    const head = repo.git("rev-parse", "HEAD");
+    assert.deepEqual((await (service as any).taskCommitSubjects(internal, head)).map((item: any) => item.sha), [head]);
+    assert.equal(await (service as any).ensureCommitMessagePolicy(internal), "repaired");
+    assert.equal(repo.git("rev-parse", "HEAD^"), published, "已发布祖先不能被重新生成");
+    assert.equal(repo.git("--git-dir", remote, "rev-parse", "master_bot_REQ_RECEIPT"), published);
+    assert.equal(repo.git("show", "-s", "--format=%s", published), "[REQ_RECEIPT][docs]归档说明");
+
+    internal.summary.delivery.git_push.sha = "f".repeat(40);
+    const subjects = await (service as any).taskCommitSubjects(internal, repo.git("rev-parse", "HEAD"));
+    assert.ok(subjects.some((item: any) => item.sha === published), "不存在的收据对象不能虚构排除范围");
+  } finally { await model.stop(); }
+});
