@@ -154,4 +154,26 @@
     color: inherit;
     background: transparent;
   }
+
+  /* .sidebar-reset:侧栏专用归一(shadcn Sidebar 族假设 preflight 在场,
+     而侧栏不在任何 .tw-root 子树——没有它,ul 露浏览器圆点、按钮露
+     UA ButtonFace 灰底)。只挂 SidebarContent 与页脚菜单,不整树挂:
+     本层压过 legacy,整树挂会吃掉 brand 区/会话脚的类设边距。 */
+  .sidebar-reset,
+  .sidebar-reset * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid var(--border);
+  }
+  .sidebar-reset ul,
+  .sidebar-reset ol,
+  .sidebar-reset menu {
+    list-style: none;
+  }
+  .sidebar-reset button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+  }
 }

@@ -1260,7 +1260,7 @@ export function App() {
       <SidebarHeader>
         <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
       </SidebarHeader>
-      <SidebarContent aria-label="视图切换">
+      <SidebarContent aria-label="视图切换" className="sidebar-reset">
         {session.role === "admin" ? <>
           <SidebarGroup>
             <SidebarGroupLabel>管理视角</SidebarGroupLabel>
@@ -1320,9 +1320,11 @@ export function App() {
         </>}
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenu>
-          <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
-        </SidebarMenu>
+        <div className="sidebar-reset">
+          <SidebarMenu>
+            <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
+          </SidebarMenu>
+        </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
         {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
