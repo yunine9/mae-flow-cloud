@@ -20,6 +20,9 @@ import { WorkflowEditor } from "./WorkflowEditor";
 import { WorkflowLibrary } from "./WorkflowLibrary";
 import { confirmDialog } from "../ConfirmDialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Dialog,
   DialogContent,
@@ -436,19 +439,20 @@ function CreateWorkflowDialog({ value, busy, error, onChange, onClose, onSubmit 
         {error && <p role="alert"
           className="m-0 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-xs leading-relaxed text-danger">
           {error}</p>}
-        <label className="ui-field"><span>名称</span><input required autoFocus maxLength={120}
+        <label className="ui-field"><span>名称</span><Input required autoFocus maxLength={120}
           value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
-        <label className="ui-field"><span>说明</span><textarea rows={3} maxLength={500}
+        <label className="ui-field"><span>说明</span><Textarea className="min-h-17 resize-y" rows={3} maxLength={500}
           value={value.description}
           onChange={(event) => onChange({ ...value, description: event.target.value })} /></label>
         <fieldset className="flex gap-4 rounded-lg border border-input p-3">
           <legend className="text-xs font-medium text-foreground">保存范围</legend>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input type="radio" name="workflow-scope" checked={value.scope === "personal"}
-              onChange={() => onChange({ ...value, scope: "personal" })} />个人资产</label>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input type="radio" name="workflow-scope" checked={value.scope === "team"}
-              onChange={() => onChange({ ...value, scope: "team" })} />团队资产</label>
+          <RadioGroup className="flex gap-4" name="workflow-scope" value={value.scope}
+            onValueChange={(scope) => onChange({ ...value, scope })}>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <RadioGroupItem value="personal" />个人资产</label>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <RadioGroupItem value="team" />团队资产</label>
+          </RadioGroup>
         </fieldset>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>取消</Button>
@@ -481,7 +485,7 @@ function WorkflowActionDialog({ value, busy, error, onClose, onSubmit }: {
         {error && <p role="alert"
           className="m-0 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-xs leading-relaxed text-danger">
           {error}</p>}
-        {value.requireReason && <label className="ui-field"><span>调整说明</span><textarea autoFocus required
+        {value.requireReason && <label className="ui-field"><span>调整说明</span><Textarea className="min-h-24 resize-y" autoFocus required
           rows={4} value={reason} onChange={(event) => setReason(event.target.value)}
           placeholder="写清楚需要修改什么，避免只说“不通过”。" /></label>}
         <DialogFooter>

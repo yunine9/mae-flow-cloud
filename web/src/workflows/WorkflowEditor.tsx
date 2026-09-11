@@ -21,6 +21,7 @@ import { DependencyView, FinalPlanView, WorkflowDiffView } from "./WorkflowViews
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type EditorView = "edit" | "final" | "changes" | "dependencies";
@@ -245,7 +246,7 @@ function EditInspector({
               </SelectGroup>
             </SelectContent>
           </Select></label>}
-        <label><span>明确指令（可选）</span><textarea rows={4} value={instructions}
+        <label><span>明确指令（可选）</span><Textarea className="min-h-24 resize-y" rows={4} value={instructions}
           placeholder="写清楚 Agent 在此处要做什么、产出什么；不要写模糊的能力偏好。"
           onChange={(event) => setInstructions(event.target.value)} /></label>
         <button type="button" className="wf-primary"

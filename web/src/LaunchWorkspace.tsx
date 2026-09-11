@@ -38,6 +38,8 @@ import { Markdown } from "./markdown";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
@@ -228,9 +230,9 @@ function LaunchRequirementTeam({
         const checked = selected.includes(person.username);
         return <label key={person.username}
           className={`${checked ? "selected" : ""}${person.ready ? "" : " unready"}`}>
-          <input type="checkbox" checked={checked}
+          <Checkbox checked={checked}
             disabled={(!person.ready || selected.length >= 20) && !checked}
-            onChange={() => toggle(person.username)} />
+            onCheckedChange={() => toggle(person.username)} />
           <span><strong>{userLabel(person)}</strong>
             <small>{person.ready ? "个人设置已就绪，可参与讨论"
               : `暂不可邀请 · 缺 ${person.missing.join("、")}`}</small></span>
@@ -1235,14 +1237,15 @@ export function LaunchWorkspace({
                         const disabled = !selected && selectedBusinessModuleIds.length >= 4;
                         return <label key={module.id}
                           className={`business-module-option${selected ? " selected" : ""}${disabled ? " disabled" : ""}`}>
-                          <input type="checkbox" checked={selected} disabled={disabled}
-                            onChange={() => {
+                          {/* 勾选态:Checkbox 自带 data-checked 皮;卡片选中
+                              高亮仍由上面的 selected 类驱动。 */}
+                          <Checkbox className="mt-1" checked={selected} disabled={disabled}
+                            onCheckedChange={() => {
                               setModuleSelectionTouched(true);
                               setSelectedBusinessModuleIds((current) => selected
                                 ? current.filter((id) => id !== module.id)
                                 : [...current, module.id]);
                             }} />
-                          <span className="business-module-check" aria-hidden>{selected ? "✓" : ""}</span>
                           <span className="business-module-option-copy">
                             <span><strong>{module.name}</strong>
                               {selectedIndex === 0 && <em>主模块</em>}
@@ -1270,23 +1273,25 @@ export function LaunchWorkspace({
                   <div className="launch-section-head"><i>3</i><div><strong>交付方式</strong>
                     <small>选择最接近本次任务的交付规模</small></div><em>必填</em></div>
                   <fieldset className="delivery-mode-field">
-                    <div className="delivery-mode-options">
+                    {/* 原生 radio 换 RadioGroup:required/name 交由组级
+                        属性(表单校验语义不变),选中皮交 RadioGroupItem。 */}
+                    <RadioGroup
+                      className="delivery-mode-options"
+                      name="delivery-workflow"
+                      required
+                      value={lane || options.workflows[0].label}
+                      onValueChange={(value) => setLane(value)}>
                       {options.workflows.map((item) => (
                         <label key={item.key}
                           className={`delivery-mode-option${(lane
                             || options.workflows[0].label) === item.label
                             ? " selected" : ""}`}>
-                          <input type="radio" name="delivery-workflow"
-                            value={item.label}
-                            checked={(lane || options.workflows[0].label)
-                              === item.label}
-                            onChange={() => setLane(item.label)} required />
-                          <span className="delivery-mode-radio" aria-hidden />
+                          <RadioGroupItem value={item.label} />
                           <span><strong>{item.label}</strong>
                             {item.description && <small>{item.description}</small>}</span>
                         </label>
                       ))}
-                    </div>
+                    </RadioGroup>
                   </fieldset>
                 </section>}
 

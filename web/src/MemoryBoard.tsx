@@ -14,6 +14,8 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription } from "@/components/Empty";
 
 const SOURCE = {
@@ -154,10 +156,10 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           </SelectGroup>
         </SelectContent>
       </Select>
-      <input value={needle} onChange={(event) => setNeedle(event.target.value)}
+      <Input className="w-56" value={needle} onChange={(event) => setNeedle(event.target.value)}
         placeholder="按触发条件、结论或路径找" aria-label="搜索记忆" />
-      <label><input type="checkbox" checked={withGone}
-        onChange={(event) => setWithGone(event.target.checked)} />含已沉底 / 撤回 / 被覆盖</label>
+      <label className="flex items-center gap-2"><Checkbox checked={withGone}
+        onCheckedChange={(checked) => setWithGone(checked)} />含已沉底 / 撤回 / 被覆盖</label>
     </div>
     {rows.length ? <ol className="memory-board-list">
       {rows.map((row) => {

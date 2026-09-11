@@ -9,6 +9,7 @@ import {
 } from "./helpAccess";
 import { Markdown } from "./markdown";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogClose,
@@ -618,7 +619,7 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
       <label className="help-search">
         <SearchIcon />
         <span className="sr-only">搜索使用帮助</span>
-        <input value={query} onChange={(event) => setQuery(event.target.value)}
+        <Input className="h-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder="例如：暂停、/mfc、自动匹配、工作流…" />
         {query && <button type="button" onClick={() => setQuery("")}
           aria-label="清空搜索">×</button>}

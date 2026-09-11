@@ -14,6 +14,8 @@ import {
 import { confirmDialog } from "./ConfirmDialog";
 import { Spinner } from "@/components/Spinner";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
@@ -325,7 +327,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </div>
       <label className="wish-title-field">
         <span>一句话说清楚</span>
-        <input value={title} onChange={(event) => setTitle(event.target.value)}
+        <Input className="h-11 pr-[53px] font-semibold" value={title} onChange={(event) => setTitle(event.target.value)}
           maxLength={100} placeholder={kind === "issue"
             ? "例如：手机上看任务详情时，代码块会横向溢出"
             : "例如：希望任务完成后能一键生成复盘摘要"} />
@@ -333,7 +335,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </label>
       <label className="wish-detail-field">
         <span>再补充一点 <small>（可选）</small></span>
-        <textarea value={detail} onChange={(event) => setDetail(event.target.value)}
+        <Textarea className="min-h-21 resize-y" value={detail} onChange={(event) => setDetail(event.target.value)}
           maxLength={2000} rows={3} placeholder="什么场景下遇到的？你希望它变成什么样？不用写成正式需求。" />
       </label>
       {images.length > 0 && <div className="wish-image-drafts">
@@ -501,7 +503,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
           </button>)}
         </div>
         <label className="ui-field"><span>给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
-          <textarea value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
+          <Textarea className="min-h-24 resize-y" value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
             placeholder={manage.status === "declined" ? "请说明现在为什么不做，或者什么条件下会重新考虑" : "例如：已纳入下个迭代；已上线，可在个人设置中体验"} /></label>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => setManage(undefined)}>取消</Button>

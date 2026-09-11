@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/Alert";
 import { Empty, EmptyDescription } from "@/components/Empty";
+import { Checkbox } from "@/components/ui/checkbox";
 
 /** 与服务端 TaskService 的硬上限保持一致。页面先挡住，避免多仓全选后
  * 到“提交决定”才收到 400、让人回头猜该删哪些。 */
@@ -363,12 +364,14 @@ export function RepositorySkillPicker({
                         <label key={skill.id}
                           className={`repository-skill-card${disabled ? " disabled" : ""}${
                             limitDisabled ? " limit-disabled" : ""}`}>
-                          <input type="checkbox"
+                          {/* base-ui Checkbox 自带隐藏 input:卡片的
+                              :has(input:checked/:disabled:checked) 选中
+                              皮仍由 CSS 命中。 */}
+                          <Checkbox
                             checked={selected}
                             disabled={disabled}
-                            onChange={(event) => toggleSkill(
-                              skill.id, event.target.checked)} />
-                          <span className="repository-skill-check" aria-hidden />
+                            onCheckedChange={(checked) => toggleSkill(
+                              skill.id, checked)} />
                           <span className="repository-skill-copy">
                             <strong>{skill.name}</strong>
                             <span>{skill.description || "仓库未提供能力说明"}</span>

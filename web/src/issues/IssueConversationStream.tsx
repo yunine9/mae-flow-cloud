@@ -57,6 +57,7 @@ import { startVisiblePolling } from "../visiblePolling";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert } from "@/components/Alert";
 import { Empty, EmptyDescription } from "@/components/Empty";
+import { Textarea } from "@/components/ui/textarea";
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -658,7 +659,7 @@ function IssueCollaborationComposer({
           记录到现场的每一条,交还时都会交给 AI
         </span>
       </div>
-      <textarea className="steer-input" value={text} rows={3}
+      <Textarea className="min-h-13 resize-y bg-surface" value={text} rows={3}
         ref={textRef}
         onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
           const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);
@@ -753,7 +754,7 @@ function IssueCollaborationComposer({
         接管现场
       </button>}
     </div>
-    <textarea className="steer-input" value={text} rows={3}
+    <Textarea className="min-h-13 resize-y bg-surface" value={text} rows={3}
       ref={textRef}
       onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
         const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);

@@ -19,6 +19,7 @@ import { Spinner } from "@/components/Spinner";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -425,18 +426,20 @@ function ThemeSwitch({ theme, onChange }: {
   onChange: (theme: Theme) => void;
 }) {
   const light = theme === "light";
-  return <button type="button" className={`theme-switch${light ? " is-light" : ""}`}
-    onClick={() => onChange(light ? "dark" : "light")}
-    title={light ? "切换到深夜主题" : "切换到云昼主题"}
-    aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"}>
+  // 手搓 track 换 Switch 原语:role=switch/aria-checked 交原语,
+  // 受控状态(theme)与持久化逻辑原样;label 行包裹保持整行可点。
+  return <label className="theme-switch"
+    title={light ? "切换到深夜主题" : "切换到云昼主题"}>
     <span className="theme-switch-icon" aria-hidden>
       {light
         ? <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2" /><path d="M10 2.2v1.5M10 16.3v1.5M2.2 10h1.5M16.3 10h1.5M4.5 4.5l1 1M14.5 14.5l1 1M4.5 15.5l1-1M14.5 5.5l1-1" /></svg>
         : <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}
     </span>
     <span className="theme-switch-copy"><strong>{light ? "云昼主题" : "深夜主题"}</strong><small>{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
-    <span className="theme-switch-track" aria-hidden><i /></span>
-  </button>;
+    <Switch size="sm" className="theme-switch-track" checked={light}
+      onCheckedChange={(checked) => onChange(checked ? "light" : "dark")}
+      aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"} />
+  </label>;
 }
 
 function DensitySwitch({ density, onChange }: {
@@ -444,14 +447,16 @@ function DensitySwitch({ density, onChange }: {
   onChange: (density: Density) => void;
 }) {
   const compact = density === "compact";
-  return <button type="button" className="density-switch"
-    onClick={() => onChange(compact ? "comfortable" : "compact")}
-    title={compact ? "切换到舒适密度" : "切换到紧凑密度"}
-    aria-label={compact ? "当前为紧凑密度，切换到舒适密度" : "当前为舒适密度，切换到紧凑密度"}>
+  // 同 ThemeSwitch:开关态交 Switch 原语,受控状态原样。
+  return <label className="density-switch"
+    title={compact ? "切换到舒适密度" : "切换到紧凑密度"}>
     <span className="density-switch-icon" aria-hidden>
       <svg viewBox="0 0 20 20"><path d={compact ? "M4 5.5h12M4 10h12M4 14.5h12" : "M4 4.5h12M4 10h12M4 15.5h12"} /></svg>
     </span>
-  </button>;
+    <Switch size="sm" checked={compact}
+      onCheckedChange={(checked) => onChange(checked ? "compact" : "comfortable")}
+      aria-label={compact ? "当前为紧凑密度，切换到舒适密度" : "当前为舒适密度，切换到紧凑密度"} />
+  </label>;
 }
 
 function TaskSyncIndicator({
@@ -1837,7 +1842,9 @@ function UsersBoard({ me }: { me: string }) {
             <span className="user-cell"><i>{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</i><strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong></span>
             <span><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></span>
             <span className="user-entry">{user.role === "admin" ? "团队需求" : "我的需求"}</span>
-            <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
+            {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
+                交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
+            <span><label className={`committer-toggle${user.committer ? " on" : ""}`}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></span>
             <span className="user-actions">
               <button type="button" className="user-action" onClick={() => {
                 setResetFor(resetFor === user.username ? "" : user.username);

@@ -32,6 +32,8 @@ import {
 import { startVisiblePolling } from "./visiblePolling";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert } from "@/components/Alert";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import "./steer.css";
 
 /** sync=通知所有子任务:只有跨仓子任务有这一档。 */
@@ -438,7 +440,7 @@ export function Composer({
 
       {showSync && (
         <>
-          <textarea id={`sync-${task.id}`} className="steer-input"
+          <Textarea id={`sync-${task.id}`} className="min-h-13 resize-y bg-surface"
             value={syncText} disabled={syncBusy} rows={3}
             placeholder="说清楚:哪个接口或约定变了,影响什么,哪里还需要谁确认…"
             onChange={(event) => { setSyncText(event.target.value); if (syncFeedback) setSyncFeedback(""); }}
@@ -465,7 +467,7 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <textarea id={`steer-${task.id}`} className="steer-input"
+          <Textarea id={`steer-${task.id}`} className="min-h-13 resize-y bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}
@@ -516,7 +518,7 @@ export function Composer({
           </div>
           {refPickerOpen && <div className="steer-ref-picker"
             aria-label="选择要引用的知识">
-            <input type="text" value={refFilter} placeholder="筛选…"
+            <Input className="text-sm" type="text" value={refFilter} placeholder="筛选…"
               onChange={(event) => setRefFilter(event.target.value)} />
             {!refOptions && <small>读取知识清单…</small>}
             {refOptions && (() => {
@@ -628,7 +630,7 @@ export function Composer({
             </div>
           )}
 
-          <textarea id={`assistant-${task.id}`} className="steer-input cli"
+          <Textarea id={`assistant-${task.id}`} className="min-h-13 resize-y bg-surface font-mono text-sm"
             value={assistantText}
             disabled={assistantRequestBusy || !assistantAvailable
               || assistant.state === "returning"}

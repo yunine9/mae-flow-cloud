@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { graphAnnotationLocationKey } from "./annotateTargets";
 import { requirementNodeLabel } from "./requirementGraphLabel";
+import { Textarea } from "@/components/ui/textarea";
 
 interface GraphAnnotationTarget {
   label: string;
@@ -381,7 +382,7 @@ export function RequirementGraph({
               onClick={() => setAnnotationTarget(undefined)}>×</button>
           </header>
           <blockquote>{annotationTarget.quote}</blockquote>
-          <textarea autoFocus rows={5} value={annotationNote}
+          <Textarea className="min-h-[118px] resize-y bg-surface" autoFocus rows={5} value={annotationNote}
             placeholder="直接说明希望怎么调整；不需要为了批注去找文档中的某一行"
             onChange={(event) => setAnnotationNote(event.target.value)}
             onKeyDown={(event) => {

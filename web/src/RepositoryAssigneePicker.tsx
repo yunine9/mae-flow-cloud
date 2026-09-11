@@ -5,6 +5,7 @@ import {
 } from "./api";
 import { UserPicker } from "./UserPicker";
 import { chainStages } from "./RequirementGraph";
+import { Input } from "@/components/ui/input";
 import "./module-assignment.css";
 
 export interface RepositoryAssigneeSelection {
@@ -197,7 +198,7 @@ export function RepositoryAssigneePicker({
           </div>
           <label className="repository-ticket-editable">
             <small>任务单号</small>
-            <input type="text" value={ticket}
+            <Input type="text" className="min-h-[34px] font-mono text-xs font-semibold" value={ticket}
               aria-label={`${rowLabel}的 AR 单号`}
               aria-invalid={Boolean(ticketProblem)}
               placeholder="例如：REQ2026xxxx"

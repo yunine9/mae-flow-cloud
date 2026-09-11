@@ -29,6 +29,7 @@ import { STALE_AFTER_MS, issueDeliveryBreakdown } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 
 /** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
 type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
@@ -179,7 +180,7 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
         </span>
       </div>
       <div className="task-filters" aria-label="筛选问题现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" /></label>
+        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
         <Select value={scope}
           items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
           onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>

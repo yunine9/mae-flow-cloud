@@ -19,6 +19,7 @@ import { OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button";
+import { Textarea } from "./components/ui/textarea";
 import { Alert } from "./components/Alert";
 import { resolvedAnnotationRange } from "./annotateTargets";
 import {
@@ -543,7 +544,7 @@ export function AnnotationPanel({
               </div>
               {editing ? (
                 <div className="annot-inline-editor">
-                  <textarea value={editingNote} autoFocus rows={5}
+                  <Textarea className="min-h-[132px] max-h-[70vh] resize-y bg-surface" value={editingNote} autoFocus rows={5}
                             aria-label="修改批注意见"
                             onChange={(event) => setEditingNote(event.target.value)} />
                   <div>
@@ -666,7 +667,7 @@ export function AnnotationPanel({
               {closure.owner_controlled && closure.can_route && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (
                 replyingId === item.id ? <div className="annot-owner-reply-editor w-full rounded-md border border-border bg-muted/30 p-3">
-                  <textarea className="w-full rounded-md border border-border bg-background p-3 text-sm" rows={3} autoFocus value={ownerReply} placeholder="写下处理说明"
+                  <Textarea className="min-h-17 resize-y bg-surface" rows={3} autoFocus value={ownerReply} placeholder="写下处理说明"
                     onChange={(event) => setOwnerReply(event.target.value)} />
                   <Button type="button" size="sm" variant="ghost" onClick={() => { setReplyingId(""); setOwnerReply(""); }}>取消</Button>
                   <Button type="button" size="sm" disabled={!ownerReply.trim() || !!mutationBusy}

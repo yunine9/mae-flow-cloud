@@ -2,6 +2,8 @@ import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requi
 import { Button } from "./components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "./components/Alert";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
+import { Input } from "./components/ui/input";
+import { Textarea } from "./components/ui/textarea";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
 /**
@@ -1124,8 +1126,8 @@ export function WaitingCard({
               </div>
               {customOpen[item.question] && (
                 <div className="custom-answer">
-                  <textarea
-                    className={`custom-input${customActive ? " picked" : ""}`}
+                  <Textarea
+                    className={`min-h-24 resize-y${customActive ? " border-foreground" : ""}`}
                     placeholder={options.length
                       ? "写下选项之外的正确处理方式…"
                       : "写下你的答复…"}
@@ -1192,7 +1194,7 @@ export function WaitingCard({
             : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
               ? (picked[questions[0].question] ? "随所选决定提交" : "也可直接选择上方选项")
               : picked[questions[0].question] ? "再次点击已选项可取消，改填自定义答复" : "也可以选择上方选项"}</small></span>
-          <textarea ref={replyInput} value={replyText} aria-label="决定回复"
+          <Textarea ref={replyInput} className="min-h-0 resize-y" value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
             placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
@@ -1207,7 +1209,7 @@ export function WaitingCard({
               <span>{isReviewDecision
                 ? "检视说明（可选，不改变上方分支）"
                 : "决策备注（可选）"}</span>
-              <input
+              <Input
                 type="text"
                 placeholder={isReviewDecision
                   ? "补充修改原因或处理要求；流程走向以上方选项为准"

@@ -320,7 +320,7 @@ function ManualRegister({
       <div className="issue-group-body">
         <label className="issue-field wide">
           <span>问题标题 <i className="req">*</i></span>
-          <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
+          <Input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
@@ -438,7 +438,7 @@ function ManualRegister({
         </p>}
         <label className="issue-field">
           <span>建议标题</span>
-          <input value={adoptTitle}
+          <Input value={adoptTitle}
             onChange={(event) => setAdoptTitle(event.target.value)} />
         </label>
         <div className="issue-polish-preview" aria-label="润色后描述预览">

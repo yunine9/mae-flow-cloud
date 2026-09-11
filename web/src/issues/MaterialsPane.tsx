@@ -53,6 +53,7 @@ import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -912,7 +913,7 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
             </button>
           </div>
           {activeFile && (content !== undefined
-            ? <textarea value={content} spellCheck={false}
+            ? <Textarea className="min-h-[260px] max-h-[480px] resize-y bg-surface font-mono text-[13px]" value={content} spellCheck={false}
                 onChange={(event) => setContent(event.target.value)} />
             : <p className="issue-materials-empty">读取中…</p>)}
         </div>}

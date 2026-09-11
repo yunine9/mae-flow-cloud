@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { type DtsTicketDetail } from "../api";
+import { Input } from "@/components/ui/input";
 
 export function IssueAssociateCard({ busy, onAssociate }: {
   busy: boolean;
@@ -47,7 +48,7 @@ export function IssueAssociateCard({ busy, onAssociate }: {
     <p>去 DTS 提单后回来关联单号——转正生成有单流程,带着分析报告
       直接进入问题修改。</p>
     <div className="issue-associate-input">
-      <input value={ticket} placeholder="DTS 单号,如 DTS2026082001317"
+      <Input className="min-w-0 flex-1" value={ticket} placeholder="DTS 单号,如 DTS2026082001317"
         onChange={(event) => { setTicket(event.target.value); setChecked(undefined); }}
         onKeyDown={(event) => { if (event.key === "Enter") void check(); }} />
       <button type="button" disabled={!ticket.trim() || pending} onClick={() => void check()}>

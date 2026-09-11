@@ -214,8 +214,7 @@ svg {
 }
 .sidebar-account small { margin-top: 1px; color: var(--faint); font-size: var(--fs-12); }
 .session-foot { padding-right: 0; }
-.logout-button,
-.density-switch {
+.logout-button {
   width: 26px;
   height: 26px;
   padding: 0;
@@ -229,11 +228,27 @@ svg {
   cursor: pointer;
   transition: color var(--ease), background var(--ease);
 }
+/* 密度开关(2026-09-11 #215 换装):按钮换 label 行包 Switch 原语,
+   26px 图标盒改为图标+开关行内排布;hover 语义与原一致。 */
+.density-switch {
+  height: 26px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--ease), background var(--ease);
+}
 .logout-button:hover,
 .density-switch:hover { color: var(--text-strong); background: var(--surface-3); }
 .logout-button svg,
 .density-switch-icon svg { width: 15px; height: 15px; }
-.density-switch-icon { width: 100%; height: 100%; display: grid; place-items: center; }
+.density-switch-icon { width: 15px; height: 15px; display: grid; place-items: center; }
 .sidebar-bottom { margin-top: auto; display: grid; gap: 4px; }
 .sidebar-bottom .sidebar-foot { margin-top: 0; }
 .theme-switch {
@@ -5384,9 +5399,11 @@ pre {
   .brand-copy small, .sidebar-foot, .sidebar-build-hash { display: none; }
   .sidebar-bottom { margin: 0; display: block; flex: none; }
   .density-switch { display: none; }
-  .theme-switch { width: 36px; min-height: 36px; padding: 3px; display: grid; grid-template-columns: 1fr; border-radius: 9px; }
+  /* 主题开关窄栏态(#215 换装后):track 即 Switch 控件本体,不可再
+     display:none——改为收起文案、保留图标+开关的紧凑一行。 */
+  .theme-switch { width: auto; min-height: 36px; padding: 3px 6px; border-radius: 9px; }
   .theme-switch-icon { width: 28px; height: 28px; }
-  .theme-switch-copy, .theme-switch-track { display: none; }
+  .theme-switch-copy { display: none; }
   .sidebar-nav {
     margin-left: auto;
     display: flex;

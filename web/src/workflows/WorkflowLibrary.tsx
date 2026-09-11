@@ -2,6 +2,7 @@ import { PersonName } from "../People";
 import { useMemo, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
@@ -64,7 +65,7 @@ export function WorkflowLibrary({
       <label className="wf-library-search">
         <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="4.5" />
           <path d="m12 12 4 4" /></svg>
-        <input value={query} onChange={(event) => setQuery(event.target.value)}
+        <Input className="w-56" value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索名称、说明或 Owner" aria-label="搜索工作流" />
       </label>
       {onRefresh && <button type="button" className="wf-refresh" disabled={loading}

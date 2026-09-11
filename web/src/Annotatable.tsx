@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert } from "./components/Alert";
+import { Textarea } from "./components/ui/textarea";
 import { addAnnotation, uploadAnnotationAsset, type AnnotationImage } from "./api";
 import {
   anchorOf, annotationsAtRow, contextOfRow, quoteOfSelection,
@@ -350,10 +351,12 @@ export function Annotatable({
           </div>
           {draft.quote && <blockquote className="annot-editor-quote">
             {draft.quote}</blockquote>}
-          <textarea
+          {/* 旧皮 .annot-editor textarea 底色 var(--surface-soft)=var(--surface-2);
+              @theme 未桥 --color-surface-soft,用等价语义令牌 bg-surface-2。 */}
+          <Textarea
             autoFocus
             rows={2}
-            className="min-h-16"
+            className="min-h-16 max-h-[70vh] resize-y bg-surface-2"
             value={note}
             placeholder="写下检视意见…"
             onChange={(event) => setNote(event.target.value)}

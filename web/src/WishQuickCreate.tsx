@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { createWish } from "./api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -44,11 +46,11 @@ export function QuickWishButton({ onOpenWall, inline = false }: { onOpenWall: ()
             <DialogDescription>快速反馈</DialogDescription>
           </DialogHeader>
           <label className="ui-field"><span>一句话说明问题</span>
-            <input autoFocus required maxLength={100} value={title}
+            <Input autoFocus required maxLength={100} value={title}
               placeholder="哪里不好用，或者哪里不符合预期？"
               onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="ui-field"><span>补充现场 <small>（可选）</small></span>
-            <textarea rows={4} maxLength={2000} value={detail}
+            <Textarea className="min-h-24 resize-y" rows={4} maxLength={2000} value={detail}
               placeholder="刚才做了什么、希望变成什么样"
               onChange={(event) => setDetail(event.target.value)} /></label>
           {message && <p role="status">{message}</p>}
