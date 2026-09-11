@@ -4,7 +4,93 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
-import { confirmedPipelineRun, historicalPipelineFeedback } from "../src/pipelineHandoff.ts";
+import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "../src/pipelineHandoff.ts";
+
+test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果，上次派修锚不改", () => {
+  const summary: any = { delivery: { sha: "old", pipeline: "success", checks: [{ dimension: "UT", status: "success" }],
+    attested: "PASS@old", evidence_gap: { sha: "old" }, mr_url: "mr/1",
+    loop: { kind: "ci", round: 2, last_sha: "old", failure: "旧失败" } } };
+  const receipt = { sha: "new", ref: "work", remote: "origin" };
+  projectPushReceipt(summary, receipt);
+  assert.equal(summary.delivery.sha, "new");
+  assert.equal(summary.delivery.pipeline, undefined);
+  assert.equal(summary.delivery.checks, undefined);
+  assert.equal(summary.delivery.attested, undefined);
+  assert.equal(summary.delivery.evidence_gap, undefined);
+  assert.equal(summary.delivery.mr_url, "mr/1");
+  assert.deepEqual(summary.delivery.loop, { kind: "ci", round: 2, last_sha: "old", failure: "旧失败" });
+  summary.delivery.pipeline = "success";
+  projectPushReceipt(summary, receipt);
+  assert.equal(summary.delivery.pipeline, "success");
+});
+
+test("绿灯后的旧流水线反馈不派会话，混合批次中的检视意见仍接续处理", async t => {
+  const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "promoted-pipeline-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const task = service.create("检视与 CI");
+  const state = service.tasks.get(task.id);
+  state.summary.delivery = { sha: "new", pipeline: "success", git_push: { sha: "new", ref: "work", remote: "origin" } };
+  const items: any[] = [{ id: "old-ci", source: "pipeline", source_id: "old:COMPILE", summary: "旧失败" }];
+  service.activeKernelFeedback = () => ({ batchId: "batch", current: "feedback_triage", items });
+  const missions: string[] = [];
+  service.enqueueRepair = (_task: unknown, mission: string) => missions.push(mission);
+  assert.equal(service.dispatchPromotedFeedback(state), false);
+  items.push({ id: "review", source: "workspace", summary: "仍需修改接口" });
+  assert.equal(service.dispatchPromotedFeedback(state), true);
+  assert.match(missions[0], /仍需修改接口/);
+  assert.doesNotMatch(missions[0], /旧失败/);
+  state.summary.delivery.pipeline = undefined;
+  items.pop();
+  assert.equal(service.dispatchPromotedFeedback(state), false, "新推送尚未取到结果，先验证，不能继续派旧流水线反馈");
+});
+
+test("恢复已绿任务先核销流水线，不能抢先派反馈或重跑交付", async t => {
+  const options = { dataDir: mkdtempSync(join(tmpdir(), "green-recover-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 };
+  const before: any = new TaskService(options);
+  const task = before.create("已绿待核销");
+  const state = before.tasks.get(task.id);
+  state.summary.status = "verifying";
+  state.summary.delivery = { sha: "new", pipeline: "success", git_push: { sha: "new", ref: "work", remote: "origin" } };
+  before.persist(state);
+  await before.shutdown();
+  const after: any = new TaskService(options);
+  t.after(() => after.shutdown());
+  const calls: string[] = [];
+  after.dispatchPromotedFeedback = () => { calls.push("dispatch"); return true; };
+  after.tryDeliver = async () => calls.push("deliver");
+  after.pipelineVerdict = async (_task: unknown, sha: string, status: string) => calls.push(`${sha}:${status}`);
+  after.recover();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(calls, ["new:success"]);
+});
+
+test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 再失败刹车，迟到旧结果不影响新版本", async t => {
+  const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "ci-anchor-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const task = service.create("CI 修复");
+  const state = service.tasks.get(task.id);
+  state.summary.status = "verifying";
+  state.summary.delivery = { sha: "old", pipeline: "failed",
+    loop: { kind: "ci", round: 1, last_sha: "old", state: "repairing", failure: "旧失败" } };
+  projectPushReceipt(state.summary, { sha: "new", ref: "work", remote: "origin" });
+  state.summary.delivery.pipeline = "failed";
+  service.mirrorPipelineArtifacts = async () => [];
+  const opened: string[] = [];
+  service.openFeedbackBatch = (_task: unknown, _source: string, items: Array<{ source_id: string }>) => opened.push(items[0].source_id);
+  await service.dispatchCiRepair(state, "new", "Compile error at main.ts:10", 20, state.controlEpoch);
+  assert.equal(state.summary.delivery.loop.last_sha, "new");
+  assert.equal(state.summary.delivery.loop.round, 2);
+  assert.match(opened[0], /^new:/);
+  assert.equal(state.summary.delivery.loop.state, "repairing");
+  await service.dispatchCiRepair(state, "new", "same failure", 20, state.controlEpoch);
+  assert.equal(state.summary.delivery.loop.state, "halted");
+  assert.equal(state.summary.delivery.loop.round, 2);
+  projectPushReceipt(state.summary, { sha: "newer", ref: "work", remote: "origin" });
+  const before = JSON.stringify(state.summary.delivery);
+  await service.dispatchCiRepair(state, "new", "late failure", 20, state.controlEpoch);
+  await service.pipelineVerdict(state, "new", "success", "late success", undefined, state.controlEpoch);
+  assert.equal(JSON.stringify(state.summary.delivery), before);
+});
 
 test("流水线触发和恢复查询只采信指定 SHA，拒绝陈灯及空查询", () => {
   assert.equal(confirmedPipelineRun("new", { status: "failed", runs: [

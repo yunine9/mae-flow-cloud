@@ -3,8 +3,8 @@ import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { isReviewAdjustmentAnswer, reviewDecisionContract, unassignedReviewDraft } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
-import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification } from "./pipelineHandoff.ts";
-import type { PipelineRun } from "./pipelineClient.ts";
+import { parseTriggeredPipelineRun, historicalPipelineFeedback, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun } from "./pipelineHandoff.ts";
+import { getPipelineStatus, type PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
 import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
@@ -105,7 +105,7 @@ import { createSplitProposalTool, type SplitProposalInput } from "./splitProposa
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
-import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, type TaskHostRuntime } from "./taskHostTools.ts";
+import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -8532,6 +8532,7 @@ export class TaskService {
           restored += 1;
           continue;
         }
+        if (recoverHostPushProjection(summary)) this.writeTaskState(task);
         if (recoveredCwd !== savedCwd) {
           this.options.log?.(
             `任务 ${summary.id} 已从单号目录恢复代码现场: ${recoveredCwd ?? "未找到唯一候选"}`,
@@ -8775,6 +8776,7 @@ export class TaskService {
         }
         if (summary.status === "verifying"
             && !summary.delivery?.stalled
+            && summary.delivery?.pipeline !== "success"
             && this.dispatchPromotedFeedback(task)) {
           requeued += 1;
           continue;
@@ -8813,7 +8815,7 @@ export class TaskService {
           // 平台已绿但内核还没 PASS（进程可能死在登记窗口，或当时逐项
           // 结果不完整）：重启只重做核销，不重复触发同 SHA 流水线。
           this.bypass(task, "流水线证据核销",
-            this.tryDeliver(task, task.controlEpoch));
+            this.pipelineVerdict(task, summary.delivery.sha, "success", "", summary.delivery.checks, task.controlEpoch));
         } else if (summary.status === "verifying"
             && !summary.delivery?.stalled) {
           // 没有可续轮的旧平台状态也不能静默蹲住；让 tryDeliver 查远端
@@ -13307,22 +13309,26 @@ export class TaskService {
     const active = this.activeKernelFeedback(task);
     if (!active || active.current !== "feedback_triage"
         || task.mission?.includes(active.batchId)) return false;
+    const items = active.items.filter(item => !historicalPipelineFeedback(task.summary, item)
+      && !(item.source === "pipeline" && task.summary.delivery?.sha
+        && task.summary.delivery.git_push?.sha === task.summary.delivery.sha && !task.summary.delivery.pipeline));
+    if (!items.length) return false;
     const store = new FeedbackStore(
       join(task.summary.workspace, "feedback", "index.jsonl"));
     const records = new Map(store.list().map((item) => [item.id, item]));
-    for (const item of active.items) {
+    for (const item of items) {
       if (records.get(item.id)?.status === "open") {
         store.resolve(item.id, "repairing", "前一批已核验，开始处理本批");
       }
     }
-    const summaries = active.items.slice(0, 8)
+    const summaries = items.slice(0, 8)
       .map((item) => `- ${item.summary || item.id}`);
     this.enqueueRepair(task, [
-      `持续检视还有 ${active.items.length} 条已登记反馈需要接续处理。`,
+      `持续检视还有 ${items.length} 条已登记反馈需要接续处理。`,
       ...summaries,
       "沿用当前现场，先执行 current，并按内核当前反馈步骤逐条处理。",
       "每条都要给出处理结果；确实存在多种理解时明确停下说明歧义。",
-    ].join("\n"), `上一批已核验，继续处理 ${active.items.length} 条反馈`);
+    ].join("\n"), `上一批已核验，继续处理 ${items.length} 条反馈`);
     return true;
   }
 
@@ -15168,7 +15174,8 @@ export class TaskService {
     // 宿主操作可能已经把这一 SHA 真实推到远端。此时本地 Build-Fix
     // 已失去“push 前验证”的时序意义，恢复应接着核对权威流水线，不能
     // 因旧 preparing 快照再次启动验证。远端收据只豁免同一个 SHA。
-    if (delivery?.git_push?.sha === prepush.sha) return "none";
+    // 已推送版本由常规交付核对 HEAD；若 HEAD 又有新提交，preparePush 仍会重验。
+    if (delivery?.git_push && delivery.sha === delivery.git_push.sha) return "none";
     if (delivery?.pipeline === "running"
         || (delivery?.pipeline === "success" && delivery.sha)
         || delivery?.evidence_gap) return "none";
@@ -16819,8 +16826,7 @@ export class TaskService {
       const pushReceipt = existingPushReceipt ?? await this.pushFromHost(
         task, branch, expectedPushSha);
       const sha = pushReceipt.sha;
-      if (previous) previous.git_push = pushReceipt;
-      else task.summary.delivery = { git_push: pushReceipt };
+      projectPushReceipt(task.summary, pushReceipt);
       // push 已经发生就先落账；即使随后 MR/流水线接口抖动，恢复时也能
       // 复核同一 SHA，不会把传输事实误当成 Agent 自述。
       this.persist(task);
@@ -16916,6 +16922,14 @@ export class TaskService {
       this.persist(task);
       this.ensureMergeWatch(task);
       const runKey = `pipeline:${sha}`;
+      if (existingPushReceipt) {
+        const observed = await getPipelineStatus({ platformUrl, sha, repo: mrRequest.repo,
+          mr: mr.id === undefined ? undefined : String(mr.id), credential: this.options.gitCredential?.(task.summary.luban_account) });
+        if (!this.current(task, epoch)) return;
+        if (observed.runs.length) {
+          await this.acceptPipelineRun(task, sha, confirmedPipelineRun(sha, observed), epoch); return;
+        }
+      }
       const runStarted = new Date().toISOString();
       const runRequest = { sha, repo: mrRequest.repo };
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
@@ -17144,6 +17158,7 @@ export class TaskService {
     if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery;
     if (!delivery) return;
+    if (delivery.sha !== sha || (delivery.git_push && delivery.git_push.sha !== sha)) return;
     if (status === "success") {
       // 平台总体 success 绑定精确 SHA，且 execution_contract 已声明该
       // 权威流水线覆盖三项时可以聚合核销。typed checks 若存在则提供更
@@ -17424,6 +17439,7 @@ export class TaskService {
   ): Promise<void> {
     if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery!;
+    if (delivery.sha !== sha || (delivery.git_push && delivery.git_push.sha !== sha)) return;
     if (deferredPipeline(this.taskHostRuntime(task), sha)) {
       delivery.waiting_on = "责任人已暂缓这批流水线反馈的自动修复，失败事实保留";
       this.persist(task);
