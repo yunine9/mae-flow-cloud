@@ -771,6 +771,10 @@ export function createTaskServer(
                 // 被管理页运行时旋钮 issue_compact_every_events 覆盖。
                 issue_compact_every_events:
                   options.issueFlow?.options.compactEveryEvents ?? 0,
+                // 终态现场回收缺省开(磁盘治理票 01),管理页旋钮
+                // issue_repo_reclaim 可关;构建产物冷却期缺省 48h(票 03)。
+                issue_repo_reclaim: 1,
+                issue_build_products_cooldown_hours: 48,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,

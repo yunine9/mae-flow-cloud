@@ -112,6 +112,9 @@ function RuntimeCard({ view, onSaved }: {
   const [issueTurns, setIssueTurns] = useState(text(runtime.issue_max_turns));
   const [issueCompact, setIssueCompact] = useState(
     text(runtime.issue_compact_every_events));
+  const [repoReclaim, setRepoReclaim] = useState(text(runtime.issue_repo_reclaim));
+  const [productsCooldown, setProductsCooldown] = useState(
+    text(runtime.issue_build_products_cooldown_hours));
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
@@ -132,6 +135,8 @@ function RuntimeCard({ view, onSaved }: {
         max_concurrent: concurrent.trim(),
         issue_max_turns: issueTurns.trim(),
         issue_compact_every_events: issueCompact.trim(),
+        issue_repo_reclaim: repoReclaim.trim(),
+        issue_build_products_cooldown_hours: productsCooldown.trim(),
         repair_rounds: repair.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
@@ -162,6 +167,15 @@ function RuntimeCard({ view, onSaved }: {
           ? "关闭" : `${defaults.issue_compact_every_events} 条`}
         note="问题会话事件每累积该数量，续聊前压缩一次上下文；0 表示关闭（分析→修复边界仍会压缩）"
         value={issueCompact} onChange={setIssueCompact} />
+      <KnobField label="问题单现场回收"
+        defaultText={defaults.issue_repo_reclaim === 0 ? "保留现场" : "开启"}
+        note="取消/归档的问题单立即回收代码现场（repo），分析报告与过程记录保留；0 表示保留现场不回收"
+        value={repoReclaim} onChange={setRepoReclaim} />
+      <KnobField label="构建产物冷却期（小时）"
+        defaultText={defaults.issue_build_products_cooldown_hours === 0
+          ? "关闭" : `${defaults.issue_build_products_cooldown_hours} 小时`}
+        note="不在运行中的问题单，编译产物闲置超过该时长即回收（源码保留，返工时全量重编）；0 表示关闭"
+        value={productsCooldown} onChange={setProductsCooldown} />
       <KnobField label="自动修复轮数上限"
         defaultText={defaults.repair_rounds === null ? "不限轮" : `${defaults.repair_rounds} 轮`}
         note="0 表示关闭自动修复；生效于下一次流水线失败"

@@ -40,6 +40,13 @@ export interface RuntimeKnobs {
    *  该值,续聊回合先把上下文压一次。0 = 关(缺省);分析→修复边界
    *  的必压不受它管辖。 */
   issue_compact_every_events?: number;
+  /** 终态(取消/归档)问题单的代码现场回收开关:1=开(缺省,repo/ 由
+   *  每日清扫器回收,过程记录保留);0=关(行为与现状全等)。 */
+  issue_repo_reclaim?: number;
+  /** 问题单构建产物冷却期(小时):状态不在运行/排队/等人的单子,产物
+   *  mtime 冷却超过该值即删 target/build/node_modules/depend。缺省 48;
+   *  0=关闭。 */
+  issue_build_products_cooldown_hours?: number;
   repair_rounds?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
@@ -177,6 +184,14 @@ export class RuntimeSettings {
         knob(patch.issue_compact_every_events, "问题单压缩事件阈值")
         ?? (("issue_compact_every_events" in patch)
           ? undefined : this.runtime().issue_compact_every_events),
+      issue_repo_reclaim:
+        knob(patch.issue_repo_reclaim, "问题单现场回收开关")
+        ?? (("issue_repo_reclaim" in patch)
+          ? undefined : this.runtime().issue_repo_reclaim),
+      issue_build_products_cooldown_hours:
+        knob(patch.issue_build_products_cooldown_hours, "构建产物冷却期")
+        ?? (("issue_build_products_cooldown_hours" in patch)
+          ? undefined : this.runtime().issue_build_products_cooldown_hours),
       repair_rounds: knob(patch.repair_rounds, "修复轮预算")
         ?? (("repair_rounds" in patch) ? undefined : this.runtime().repair_rounds),
       poll_interval_s: knob(patch.poll_interval_s, "轮询间隔", 1)

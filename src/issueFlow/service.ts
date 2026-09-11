@@ -532,6 +532,13 @@ export interface IssueFlowOptions {
        *  镜像重评,到点仍缺才举 pipeline_evidence 卡。缺省 15;0=关闭
        *  (回到立即举卡的现状);允许小数(亚分钟窗口,测试用)。 */
       evidence_retry_minutes?: number;
+      /** 终态现场回收(磁盘治理票 01):canceled/archived 单的 repo/ 子树
+       *  由清扫器回收。缺省 1=开;0=关(行为与现状全等,现场保留)。 */
+      issue_repo_reclaim?: number;
+      /** 构建产物冷却期(磁盘治理票 03,小时):状态不在运行/排队/等人
+       *  且产物 mtime 冷却超过该值,删 repo/<仓>/{target,build,
+       *  node_modules,depend}。缺省 48;0=关闭。允许小数(测试用)。 */
+      issue_build_products_cooldown_hours?: number;
     };
   };
   /** 不可自动修复工具名单(--unfixable-tools,与需求交付同一面旗):
@@ -653,6 +660,58 @@ function issueCompactAnchor(state: IssueSessionState): string {
  * daemon 不可达/镜像拉取失败这类时间可恢复的失败,标哨兵交 runTurn
  * 落 idle 交还人工,不再走"整单 failed"——下一回合 ensureContainer
  * 本就会按 isAlive 重建。 */
+/** 目录递归字节数(磁盘治理清扫的回收量记账)。软链不跟随——与
+ * GateService 的账本纪律同款,绝不走到工作区外。 */
+function treeBytes(dir: string): number {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const current = stack.pop()!;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) stack.push(path);
+      else total += statSync(path).size;
+    }
+  }
+  return total;
+}
+
+/** 目录递归最新 mtime(构建产物冷却判据):编译在持续 touch 嵌套文件,
+ * 只看目录自身 mtime 会把活跃产物误判成冷的。异常条目按 0(=永不过
+ * 期,保守不删)处理。 */
+function treeNewestMtime(dir: string): number {
+  let newest = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const current = stack.pop()!;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const path = join(current, entry.name);
+      try {
+        const stat = statSync(path);
+        newest = Math.max(newest, stat.mtimeMs);
+        if (entry.isDirectory()) stack.push(path);
+      } catch {
+        continue;
+      }
+    }
+  }
+  return newest;
+}
+
 function issueInfraFailure(cause: unknown): IssueInfraError {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new IssueInfraError(`容器启动失败(基础设施): ${detail}`);
@@ -3157,7 +3216,7 @@ export class IssueFlowService {
   /** 会话事件补记:服务侧发生的事实(如闸作答)落进事件账本,与
    * driver 记的模型侧事件共用一个幂等序列。 */
   private appendSessionEvent(
-    live: LiveIssue,
+    live: Pick<LiveIssue, "root" | "id">,
     kind: SemanticEvent["kind"],
     payload: Record<string, unknown>,
   ): void {
@@ -3596,9 +3655,8 @@ export class IssueFlowService {
     if (isTerminal(status)) {
       throw new IssueControlError(`会话已${status === "archived" ? "归档" : "结束"},不能再续聊`);
     }
-    const content = text?.trim();
-    if (!content) throw new IssueControlError("消息内容不能为空");
-    this.promoteMessageImages(live, content);
+    let content = text?.trim();
+    if (!content) throw new IssueControlError("消息内容不能为空");    this.promoteMessageImages(live, content);
     // 收口后返工(ADR-0013):流程终点是 MR 跑绿,收口态(idle+阶段
     // done)下用户续聊 = "还没修好",重开当前阶段让 AI 继续修——归档
     // 之前都能继续,可多轮(修完重推再申报,验绿门重新受理)。不在
@@ -3616,6 +3674,13 @@ export class IssueFlowService {
         });
         saveState(live.root, live.state);
       }
+    }
+    // 构建产物已按冷却期回收过的单子(磁盘治理票 03):返工首编是全量
+    // 编译(依赖缓存热,不走出网下载)——提前说破,防模型把慢编译误诊
+    // 成环境故障去瞎排查。
+    if (live.state.build_products_reclaimed_at) {
+      content = `${content}\n\n`
+        + promptCopy("notices", "rework.products_reclaimed");
     }
     this.continueTurn(live, content);
     return summarize(live.state);
@@ -3979,7 +4044,133 @@ export class IssueFlowService {
     }
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
+    // 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方
+    // (不可续聊,过程记录全保留),当场后台回收——不阻塞响应(删 GB 级
+    // node_modules 可能要数秒)。旋钮关=行为与现状全等。
+    if (this.repoReclaimOn()) {
+      setImmediate(() => {
+        try {
+          const bytes = this.reclaimRepoDir(live.root, live.id, live.state);
+          if (bytes > 0) {
+            this.log(`[issue-flow] ${live.id} 终态现场已回收 `
+              + `(${(bytes / 1024 ** 3).toFixed(2)} GB)`);
+          }
+        } catch (error) {
+          this.log(`[issue-flow] ${live.id} 终态现场回收失败(下次清扫重试): `
+            + String(error instanceof Error ? error.message : error));
+        }
+      });
+    }
     return summarize(live.state);
+  }
+
+  // ---- 磁盘治理:终态现场回收与构建产物冷却清理(票 01/03) ----
+
+  private repoReclaimOn(): boolean {
+    return (this.options.settings?.runtime?.().issue_repo_reclaim ?? 1) !== 0;
+  }
+
+  private buildProductsCooldownMs(): number {
+    const hours = this.options.settings?.runtime?.()
+      ?.issue_build_products_cooldown_hours ?? 48;
+    return Math.max(0, hours) * 3_600_000;
+  }
+
+  /** 每日清扫(serve 启动后首跑 + 每 24h 一轮):终态(canceled/archived)
+   *  整仓回收 + idle 单构建产物冷却清理。failed 不在范围(可恢复态,
+   *  用户拍板);running/queued/waiting_user 被 status 守卫挡住。 */
+  async sweepTerminalRepos(): Promise<{ reclaimed: number; bytes: number }> {
+    if (!this.repoReclaimOn()) return { reclaimed: 0, bytes: 0 };
+    const productsCooldownMs = this.buildProductsCooldownMs();
+    let reclaimed = 0;
+    let bytes = 0;
+    for (const name of readdirSync(this.issuesRoot)) {
+      if (!name.startsWith("issue-")) continue;
+      const root = join(this.issuesRoot, name);
+      let state: IssueSessionState | undefined;
+      try {
+        state = loadState(root);
+      } catch {
+        continue; // 现场损坏的目录与 recover() 同款隔离,不清扫
+      }
+      if (!state) continue;
+      // 在场守卫:内存里有活容器或正回合的单子本轮跳过。
+      const live = this.live.get(name);
+      if (live?.container?.isAlive || this.turning.has(name)) continue;
+      try {
+        if (state.status === "canceled" || state.status === "archived") {
+          const size = this.reclaimRepoDir(root, name, state);
+          if (size > 0) {
+            reclaimed += 1;
+            bytes += size;
+            this.log(`[issue-flow] ${name} 清扫回收终态现场 `
+              + `(${(size / 1024 ** 3).toFixed(2)} GB)`);
+          }
+        } else if (state.status === "idle" && productsCooldownMs > 0) {
+          const size = this.reclaimBuildProducts(
+            root, name, state, productsCooldownMs);
+          if (size > 0) {
+            bytes += size;
+            this.log(`[issue-flow] ${name} 清扫回收构建产物 `
+              + `(${(size / 1024 ** 2).toFixed(0)} MB)`);
+          }
+        }
+      } catch (error) {
+        this.log(`[issue-flow] ${name} 清扫失败(下轮重试): `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }
+    return { reclaimed, bytes };
+  }
+
+  /** 回收 repo/ 整个子树:落 repo_reclaimed_at 标记 + 事件账,返回回收
+   *  字节数(目录不在场返回 0——幂等,重扫不炸)。 */
+  private reclaimRepoDir(root: string, id: string, state: IssueSessionState): number {
+    const repoDir = join(root, "repo");
+    if (!existsSync(repoDir)) return 0;
+    const bytes = treeBytes(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    state.repo_reclaimed_at = new Date().toISOString();
+    saveState(root, state);
+      this.appendSessionEvent({ root, id }, "repo_reclaimed",
+        { bytes, scope: "repo" });
+    return bytes;
+  }
+
+  /** 构建产物冷却清理:repo/<仓>/ 下的 target/build/node_modules/depend,
+   *  最新 mtime 冷却超过 cooldownMs 才删。源码与 .git 保留;落
+   *  build_products_reclaimed_at(返工通知的依据,票 03)。返回字节数。 */
+  private reclaimBuildProducts(
+    root: string,
+    id: string,
+    state: IssueSessionState,
+    cooldownMs: number,
+  ): number {
+    const repoRoot = join(root, "repo");
+    if (!existsSync(repoRoot)) return 0;
+    const products = ["target", "build", "node_modules", "depend"];
+    const cutoff = Date.now() - cooldownMs;
+    let bytes = 0;
+    let removed = 0;
+    for (const repoName of readdirSync(repoRoot)) {
+      const repoDir = join(repoRoot, repoName);
+      if (!statSync(repoDir).isDirectory()) continue;
+      for (const product of products) {
+        const dir = join(repoDir, product);
+        if (!existsSync(dir)) continue;
+        if (treeNewestMtime(dir) > cutoff) continue;
+        bytes += treeBytes(dir);
+        rmSync(dir, { recursive: true, force: true });
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      state.build_products_reclaimed_at = new Date().toISOString();
+      saveState(root, state);
+      this.appendSessionEvent({ root, id }, "repo_reclaimed",
+        { bytes, scope: "products" });
+    }
+    return bytes;
   }
 
   // ---- 固定流程:流水线监看(阶段6:已申报且全绿才放行换库) ----

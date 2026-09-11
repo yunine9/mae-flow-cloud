@@ -450,6 +450,15 @@ export interface IssueSessionState {
    * warmup 模块权威,前端镜像没有这个字段。类型与收据写入方共用
    * IssueWarmupReceipt,防两侧 status 联合各自漂移。 */
   warmup?: IssueWarmupReceipt;
+  /** 代码现场已回收的时刻(磁盘治理票 01):终态(canceled/archived)单的
+   * repo/ 子树被清扫器删除后落此标记——工作区变更签据此如实降级,
+   * 恢复/续跑路径据此不再触碰已回收现场。上 wire(前端降级文案)。 */
+  repo_reclaimed_at?: string;
+  /** 构建产物已回收的时刻(磁盘治理票 03):冷却期清理删掉
+   * repo/<仓>/{target,build,node_modules,depend} 后落此标记——返工
+   * 重开阶段的回合提示词据此带"首次编译为全量"通知,防模型把慢编译
+   * 误诊为环境故障。上 wire。 */
+  build_products_reclaimed_at?: string;
   error?: string;
   last_reply?: string;
 }

@@ -1130,6 +1130,26 @@ async function main(): Promise<void> {
     log: (message) => console.log(`  [env-probe] ${message}`),
   });
 
+  // 问题流磁盘清扫(磁盘治理票 01/03):启动 1 分钟后首跑(让恢复先
+  // 落定)回收存量,此后每 24h 一轮。终态(canceled/archived)回收
+  // repo/,idle 单按冷却期回收构建产物;旋钮关则空转。定时器只接在
+  // 正式入口 serve.ts——测试/旁路直连形态不起定时器,要清扫直接调
+  // issueFlow.sweepTerminalRepos()。
+  const issueDiskSweep = () => {
+    void issueFlow.sweepTerminalRepos().then((result) => {
+      if (result.reclaimed > 0) {
+        console.log(`  [issue-disk] 清扫回收 ${result.reclaimed} 个终态现场`
+          + ` + 构建产物,共 ${(result.bytes / 1024 ** 3).toFixed(2)} GB`);
+      }
+    }).catch((error) => {
+      console.error(`  [issue-disk] 清扫失败: ${String(error)}`);
+    });
+  };
+  const issueDiskSweepTimer = setTimeout(issueDiskSweep, 60_000);
+  const issueDiskSweepInterval = setInterval(issueDiskSweep, 24 * 3_600_000);
+  issueDiskSweepTimer.unref?.();
+  issueDiskSweepInterval.unref?.();
+
   // 正式前端:--web <dist> 显式指定;web/dist 存在时自动接上
   // (构建过就用正式版,没构建就是零构建演示页,永远有页面可开)。
   const webRoot = flag("--web")
