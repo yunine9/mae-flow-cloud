@@ -1,4 +1,5 @@
 import { PersonName } from "../People";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import type { WorkflowAssetDetail } from "../api";
 import { statusLabels } from "./model";
 
@@ -90,8 +91,8 @@ export function WorkflowDetail({
         {versions.length ? <ol className="wf-version-list">{[...versions].reverse().map((version) => <li key={version.version}>
           <strong>v{version.version}</strong><span><b>{shortDigest(version.digest)}</b>
             <small>{formatDate(version.published_at)} · {version.published_by}</small></span></li>)}</ol>
-          : <div className="wf-empty compact"><strong>还没有发布版本</strong>
-            <span>个人工作流由所有者发布；团队工作流需要管理员审核。</span></div>}
+          : <Empty className="border p-5"><EmptyTitle>还没有发布版本</EmptyTitle>
+            <EmptyDescription>个人工作流由所有者发布；团队工作流需要管理员审核。</EmptyDescription></Empty>}
       </article>
     </div>
     {asset.copied_from && <p className="wf-copy-source">复制来源：{asset.copied_from.id}

@@ -28,6 +28,8 @@ import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "./components/Alert";
+import { Empty, EmptyDescription } from "@/components/Empty";
 import { TaskWaitingFacts } from "./TaskWaitingFacts";
 import { AnnotationExcerpt } from "./AnnotationExcerpt";
 import { Annotatable } from "./Annotatable";
@@ -1713,10 +1715,10 @@ export function TaskWorkspace({
       {task.status === "failed" && (
         <>
           {task.detail && (
-            <div className="alert">
-              <strong>任务执行失败</strong>
-              <span>{task.detail}</span>
-            </div>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>任务执行失败</AlertTitle>
+              <AlertDescription>{task.detail}</AlertDescription>
+            </Alert>
           )}
           {canOperate && !waiting && (
             <div className="ws-failed-actions">
@@ -2485,18 +2487,21 @@ export function TaskWorkspace({
               </section>
             )}
 
-            {task.baseline_build?.status === "failed" && <div className="alert" role="status">
-              <strong>开工前编译失败</strong><span>开工前编译未通过，查看环境或上游问题。</span>
-              <button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button>
-            </div>}
-            {task.delivery?.skipped && <div className="alert" role="alert">
-              <strong>交付已阻止</strong><span>{task.delivery.skipped}</span>
-            </div>}
+            {task.baseline_build?.status === "failed" && <Alert variant="destructive" role="status" className="mb-3">
+              <AlertTitle>开工前编译失败</AlertTitle>
+              <AlertDescription>开工前编译未通过，查看环境或上游问题。</AlertDescription>
+              <AlertAction><button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button></AlertAction>
+            </Alert>}
+            {task.delivery?.skipped && <Alert variant="destructive" role="alert" className="mb-3">
+              <AlertTitle>交付已阻止</AlertTitle>
+              <AlertDescription>{task.delivery.skipped}</AlertDescription>
+            </Alert>}
             {task.notify?.settled && !task.notify.delivered && task.notify.attempts > 0 && (
-              <div className="alert" role="status"><strong>小鲁班通知未送达</strong>
-                <span>已尝试 {task.notify.attempts} 次{task.notify.last_error?.match(/HTTP\s+\d{3}/)?.[0]
-                  ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</span>
-              </div>
+              <Alert variant="destructive" role="status" className="mb-3">
+                <AlertTitle>小鲁班通知未送达</AlertTitle>
+                <AlertDescription>已尝试 {task.notify.attempts} 次{task.notify.last_error?.match(/HTTP\s+\d{3}/)?.[0]
+                  ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</AlertDescription>
+              </Alert>
             )}
             {task.status === "queued" && Boolean(task.blocked_by?.length) && (
               <div className="ws-focus-note"><strong>等待前置任务完成后自动开始</strong>
@@ -2659,9 +2664,9 @@ export function TaskWorkspace({
                   {reviewBusy ? "发送中…" : "发送邀请"}
                 </button>
               </div>
-            ) : <div className="committer-empty">
-              管理员尚未配置 Committer 名单
-            </div>}
+            ) : <Empty className="p-2.5">
+              <EmptyDescription>管理员尚未配置 Committer 名单</EmptyDescription>
+            </Empty>}
             {reviewResult && <small className="committer-result">
               {reviewResult}
             </small>}

@@ -18,6 +18,8 @@ import {
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
 import { confirmDialog } from "./ConfirmDialog";
+import { Alert } from "@/components/Alert";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -100,7 +102,7 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
         </SelectGroup>
       </SelectContent>
     </Select></label>}
-    {error && <p className="business-module-error" role="alert">{error}</p>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
       <button type="submit" className="primary" disabled={busy}>
@@ -181,7 +183,7 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
       rows={12} value={content}
       onChange={(event) => setContent(event.target.value)} required /></label>
     <p className="business-module-form-note">发布会产生新版本；已经发起的任务继续使用自己的固定快照。</p>
-    {error && <p className="business-module-error" role="alert">{error}</p>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
       <button type="submit" className="primary" disabled={busy}>
@@ -371,12 +373,13 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
       </div>
     </form>}
 
-    {error && <p className="business-module-error" role="alert">{error}</p>}
-    {!!catalog?.warnings.length && <p className="business-module-warning">
-      {catalog.warnings.join("；")}</p>}
-    {!loading && !catalog?.modules.length && <div className="business-module-empty">
-      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</span>
-    </div>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
+    {!!catalog?.warnings.length && <Alert variant="warning" className="mx-4 my-2.5">
+      {catalog.warnings.join("；")}</Alert>}
+    {!loading && !catalog?.modules.length && <Empty className="mx-3.5 my-3.5 border p-5.5">
+      <EmptyTitle>还没有业务模块</EmptyTitle>
+      <EmptyDescription>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</EmptyDescription>
+    </Empty>}
 
     <div className="business-module-list">
       {(catalog?.modules ?? []).map((module) => {
@@ -457,8 +460,8 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
                   }}>归档</button>
                 </div>}
               </div>)}
-              {!liveAssets.length && <div className="business-asset-empty">
-                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</div>}
+              {!liveAssets.length && <Empty className="border-t rounded-none py-4.5">
+                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</Empty>}
             </div>
             {document?.moduleId === module.id && <div
               id={`${knowledgeAssetElementId("business", document.moduleId,

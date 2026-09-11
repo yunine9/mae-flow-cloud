@@ -4,6 +4,7 @@ import "./story-architecture.css";
 import { storyViewCoverage, type StoryViewCoverage } from "../../src/storyViewCoverage";
 import { storyViewTitles } from "./storyViewTitles";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/Empty";
 
 interface Projection {
   revision: string; renderer: string; warnings: string[];
@@ -200,11 +201,12 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
             allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
             : <p className="story-view-loading" role="status">正在生成架构图…</p>}
         </TabsContent>}
-      </Tabs></> : <div className="story-view-empty story-view-empty-only">
-        <span aria-hidden="true">◇</span><strong>尚无可展示的架构图</strong>
-        <p>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</p>
-        <button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button>
-      </div>}
+      </Tabs></> : <Empty className="min-h-[280px]">
+        <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
+        <EmptyTitle>尚无可展示的架构图</EmptyTitle>
+        <EmptyDescription>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</EmptyDescription>
+        <EmptyContent><button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button></EmptyContent>
+      </Empty>}
       {(projection.warnings.length > 0) && <details className="story-architecture-diagnostics"><summary>{projection.warnings.length} 条图源提示</summary>
         {projection.warnings.map((warning, i) => <p className="story-architecture-warning" key={i}>{warning}</p>)}
       </details>}

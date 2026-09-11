@@ -1582,19 +1582,8 @@ svg {
 }
 .repository-skills-toolbar button:hover:not(:disabled) { color: var(--accent-fg); background: var(--accent); }
 .repository-skills-toolbar button:disabled { color: var(--faint); border-color: var(--line); background: var(--surface-soft); cursor: not-allowed; }
-.repository-skills-empty,
-.repository-skills-error {
-  margin-top: 12px; padding: 12px 13px; border: 1px dashed var(--line-strong);
-  border-radius: 9px; color: var(--muted); background: var(--surface);
-  font-size: var(--font-size-assist); line-height: 1.55;
-}
-.repository-skills-error {
-  display: grid; gap: 3px; border-style: solid;
-  border-color: color-mix(in srgb, var(--danger) 32%, var(--line));
-  background: color-mix(in srgb, var(--danger-soft) 58%, var(--surface));
-}
-.repository-skills-error strong { color: var(--danger); font-size: var(--font-size-assist); }
-.repository-skills-error small { color: var(--muted); }
+/* #217:.repository-skills-empty/.repository-skills-error 已由
+ * <Empty>/<Alert> 组件取代,一并拆除。 */
 .repository-skills-current {
   margin-top: 12px; padding: 12px 13px; display: grid; gap: 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
@@ -3232,13 +3221,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   min-height: 26px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px;
   background: var(--surface); color: var(--text-strong); font-size: var(--font-size-dense); cursor: pointer;
 }
-/* 文档未生成的空态:中性灰,不借成功绿(没文档不是好事也不是坏事) */
-.issue-doc-empty {
-  padding: 18px; border: 1px dashed var(--line); border-radius: 11px;
-  display: grid; gap: 4px;
-}
-.issue-doc-empty strong { color: var(--text-strong); font-size: var(--font-size-assist); }
-.issue-doc-empty p { margin: 0; color: var(--faint); font-size: var(--font-size-assist); }
+/* #217:.issue-doc-empty 已由 <Empty> 组件取代,一并拆除(中性灰语义
+   由 EmptyDescription 的 muted 字承担)。 */
 .issue-doc-body { color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.75; overflow-wrap: anywhere; }
 .task-created {
   margin-left: auto;
@@ -4301,7 +4285,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .decision-footer.has-submit-choices { flex-wrap: wrap; }
 .decision-footer.has-submit-choices .decision-notes { flex-basis: 100%; }
-.decision-footer.has-submit-choices > .alert { flex-basis: 100%; }
 .decision-submit-choices .submit-decision { flex: 1; }
 .submit-decision.secondary {
   color: var(--text-strong);
@@ -4313,35 +4296,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--text-strong);
   background: var(--surface-2);
   border-color: var(--text-strong);
-}
-/* Alerts and developer utilities
-   红只给失败。告警是一段带左线的文字,不是红色大块;恢复动作紧随其后。 */
-.alert {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--danger);
-  background: var(--danger-soft);
-  border: 0;
-  border-left: 2px solid var(--danger);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-size: var(--fs-13);
-  line-height: 1.55;
-}
-.alert strong { font-size: var(--fs-13); }
-.alert > span { color: var(--text); }
-/* 流水线失败原文:平台日志摘要,等宽 + 可换行,和诊断的叙述文字分开 */
-.alert-failure {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 .retry-row { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 .retry-row > button {
@@ -4369,7 +4323,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .retry-row > button:disabled { opacity: .55; cursor: wait; }
 .retry-row svg { width: 15px; height: 15px; }
-.retry-row > .alert { flex-basis: 100%; }
 .read-only-notice {
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -4595,26 +4548,8 @@ pre {
   font-size: 13px;
   line-height: 1.65;
 }
-.event-empty {
-  min-height: 116px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  text-align: center;
-}
-.event-empty > span {
-  width: 8px;
-  height: 8px;
-  margin-bottom: 9px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 0 5px var(--success-soft);
-}
-.event-empty strong { color: var(--text-strong); font-size: 13.5px; }
-.event-empty small { margin-top: 2px; font-size: var(--font-size-assist); }
-.event-empty.filtered { min-height: 96px; }
+/* #217:.event-empty(含直播状态点,迁 Empty 时以 success 圆点等价保留)
+ * 与 .event-record-empty 已由 <Empty> 组件取代,一并拆除。 */
 .event-load-earlier {
   padding: 8px 11px; display: flex; align-items: center; justify-content: center;
   gap: 8px; color: var(--accent); border: 1px dashed var(--line-strong);
@@ -4768,7 +4703,6 @@ pre {
   border-color: color-mix(in srgb, var(--active) 45%, var(--line));
 }
 .event-value-preview > strong i { font-style: normal; font-size: 14px; }
-.event-record-empty { padding: 11px; color: var(--muted); font-size: var(--font-size-assist); }
 @media (max-width: 900px) {
   .event-workspace.has-detail {
     height: auto;
@@ -5069,68 +5003,11 @@ pre {
   border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
 }
 .history-actions button:disabled { opacity: .55; cursor: wait; }
-.history-action-error { margin-bottom: 12px; }
-.board-empty {
-  min-height: 360px;
-  padding: 56px 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-.empty-database {
-  width: 58px;
-  height: 58px;
-  margin-bottom: 16px;
-  display: grid;
-  place-content: center;
-  gap: 5px;
-  border-radius: 18px;
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.empty-database i {
-  width: 25px;
-  height: 5px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-}
-.board-empty strong { color: var(--text-strong); font-size: 17px; }
-.board-empty p { max-width: 520px; margin: 7px 0 12px; color: var(--muted); font-size: 14px; }
-.board-empty code {
-  max-width: 100%;
-  padding: 7px 10px;
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-soft);
-  color: var(--text);
-  font-size: var(--font-size-assist);
-}
-.board-empty small { margin-top: 10px; color: var(--faint); font-size: var(--font-size-assist); }
+/* #217:.history-action-error/.board-empty/.empty-database 与
+ * .empty-state/.empty-visual 已由 <Alert>/<Empty> 组件取代,一并拆除。 */
 /* #218:.history-skeleton/.skeleton/.metric-skeleton/.table-skeleton 与
  * @keyframes shimmer 已由 <Skeleton> 组件取代,一并拆除。 */
 
-/* Empty current queue:空状态比有数据更简单——两行字,没有虚线框和图标盒。 */
-.empty-state {
-  min-height: 0;
-  padding: 44px 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  text-align: center;
-}
-.empty-visual { display: none; }
-.empty-state strong { color: var(--text); font-size: var(--fs-14); font-weight: 500; }
-.empty-state p { max-width: 40ch; margin: 4px 0 0; color: var(--muted); font-size: var(--fs-13); }
 /* Local login:一张居中的素卡,没有渐变海报。 */
 .login-shell {
   min-height: 100vh;
@@ -8868,17 +8745,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ka-ghost:hover { color: var(--text-strong); border-color: var(--line-strong); }
 .ka-ghost[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--accent-soft); }
 
-.ka-alert {
-  margin: 0; padding: 9px 12px; display: flex; align-items: center;
-  justify-content: space-between; gap: 12px; color: var(--muted);
-  border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--surface-soft); font-size: var(--font-size-assist);
-  line-height: 1.55; overflow-wrap: anywhere;
-}
-.ka-alert p { margin: 2px 0; }
-.ka-alert.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 38%, var(--line)); background: var(--danger-soft); }
-.ka-alert.warn { color: var(--attention); border-color: color-mix(in srgb, var(--attention) 34%, var(--line)); background: var(--attention-soft); display: block; }
-.ka-alert button { padding: 3px 9px; flex: none; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; font-size: var(--font-size-assist); }
+/* #217:.ka-alert(danger/warn/default)已由 <Alert> 的
+ * destructive/warning/default 三档语义 variant 取代,一并拆除。 */
 
 .ka-body {
   display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
@@ -9281,10 +9149,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .business-module-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .business-module-form-actions > span { margin-right: auto; color: var(--faint); font-size: var(--font-size-assist); }
 .business-module-form-note { margin: -2px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
-.business-module-error, .business-module-warning { margin: 10px 16px; padding: 9px 11px; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line)); border-radius: 8px; background: var(--danger-soft); font-size: 13px; line-height: 1.5; }
-.business-module-warning { color: var(--attention); border-color: color-mix(in srgb, var(--attention) 28%, var(--line)); background: var(--attention-soft); }
-.business-module-empty { margin: 14px 16px; padding: 22px; display: grid; place-items: center; gap: 5px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 9px; font-size: 13px; }
-.business-module-empty strong { color: var(--text-strong); }
+/* #217:.business-module-error/.business-module-warning(警示语义)由
+ * <Alert> destructive/warning 取代;.business-module-empty 由 <Empty> 取代。 */
 .business-module-list { display: grid; }
 .business-module-card { border-top: 1px solid var(--line); }
 .business-module-card:first-child { border-top: 0; }
@@ -9319,7 +9185,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .business-asset-title small { overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .business-asset-title em { color: var(--faint); font-size: var(--font-size-assist); font-style: normal; }
 .business-asset-row > div { display: flex; gap: 6px; flex: none; }
-.business-asset-empty { padding: 18px; color: var(--muted); border-top: 1px solid var(--line); font-size: 13px; text-align: center; }
 .business-asset-content { font-family: var(--font-mono); }
 .business-asset-language-field { display: grid; gap: 6px; }
 .business-asset-language-field > span { color: var(--muted); font-size: 13px; font-weight: 700; }
@@ -9389,7 +9254,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .repository-technology-first > div > small { color: var(--attention); font-size: var(--font-size-assist); }
 .repository-technology-state button, .repository-technology-first button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .repository-technology-first { display: grid; gap: 9px; }
-.repository-technology-warning, .repository-technology-note { margin: 0; color: var(--attention); font-size: var(--font-size-assist); line-height: 1.5; }
+.repository-technology-note { margin: 0; color: var(--attention); font-size: var(--font-size-assist); line-height: 1.5; }
 .repository-technology-note { color: var(--faint); }
 .engineering-knowledge-options { display: grid; gap: 8px; }
 .engineering-knowledge-option { padding: 11px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: flex-start; gap: 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
@@ -9415,11 +9280,9 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .knowledge-rank-group-head small { color: var(--faint); font-size: var(--font-size-assist); }
 .knowledge-rank-group-head span { margin-left: auto; color: var(--faint); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
 .knowledge-rank-thin { margin-left: 6px; padding: 0 5px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; font-size: var(--font-size-assist); font-style: normal; font-weight: 400; vertical-align: middle; }
-.knowledge-flywheel-empty, .knowledge-flywheel-error { margin: 20px; min-height: 110px; padding: 20px; display: flex; align-items: center; gap: 13px; border: 1px dashed var(--line-strong); border-radius: 11px; background: var(--surface-soft); }
-.knowledge-flywheel-empty > span { width: 36px; height: 36px; display: grid; place-items: center; flex: none; color: var(--accent); border-radius: 50%; background: var(--accent-soft); }
-.knowledge-flywheel-empty > div { display: grid; gap: 4px; }
-.knowledge-flywheel-empty strong, .knowledge-flywheel-error strong { color: var(--text-strong); font-size: 13.5px; }
-.knowledge-flywheel-empty p { margin: 0; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
+/* #217:.knowledge-flywheel-empty 已由 <Empty> 取代;error/loading 仍走原类。 */
+.knowledge-flywheel-error { margin: 20px; min-height: 110px; padding: 20px; display: flex; align-items: center; gap: 13px; border: 1px dashed var(--line-strong); border-radius: 11px; background: var(--surface-soft); }
+.knowledge-flywheel-error strong { color: var(--text-strong); font-size: 13.5px; }
 .knowledge-flywheel-error { align-items: flex-start; flex-direction: column; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 28%, var(--line)); background: var(--danger-soft); }
 .knowledge-flywheel-error span { color: var(--muted); font-size: var(--font-size-assist); }
 .knowledge-flywheel-error button { padding: 6px 9px; color: var(--danger); border: 1px solid currentColor; border-radius: 7px; background: var(--surface); font-size: var(--font-size-assist); cursor: pointer; }
@@ -9764,10 +9627,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 .task-canceled-note strong { color: var(--text-strong); font-size: 14px; }
 .task-canceled-note span { font-size: var(--font-size-assist); line-height: 1.5; }
-.committer-empty {
-  padding: 10px; color: var(--muted); border-radius: 8px;
-  background: var(--surface-soft); font-size: var(--font-size-assist);
-}
 .committer-result { color: var(--success); font-size: var(--font-size-assist); }
 
 /* Committer 检视：个人收件箱 + 工作台两态闭环。 */
@@ -10122,11 +9981,10 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .wish-filters select { min-height: 39px; padding: 0 29px 0 11px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface); font: inherit; font-size: var(--font-size-assist); outline: none; }
 .wish-notice { margin: 0 0 14px; padding: 10px 13px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid color-mix(in srgb, var(--success) 24%, var(--line)); border-radius: 10px; color: var(--success); background: var(--success-soft); font-size: var(--font-size-assist); }
 .wish-notice button { border: 0; color: currentColor; background: transparent; font-size: 18px; cursor: pointer; }
-.wish-load-state, .wish-empty { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 8px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--muted); background: var(--surface-soft); text-align: center; }
+.wish-load-state { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 8px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--muted); background: var(--surface-soft); text-align: center; }
 .wish-load-state.error { color: var(--danger); }.wish-load-state button { padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); cursor: pointer; }
-.wish-empty > span { font-size: 34px; }.wish-empty strong { color: var(--text-strong); font-size: 16px; }.wish-empty p { margin: 0; font-size: var(--font-size-assist); }
 .wish-card-list { display: grid; gap: 8px; }
-.wish-load-state + .wish-card-list, .wish-empty + .wish-card-list { margin-top: 15px; }
+.wish-load-state + .wish-card-list { margin-top: 15px; }
 .wish-card {
   --wish-tone: var(--accent);
   position: relative;
@@ -10508,8 +10366,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 .launch-knowledge-quick.degraded > header em { color: var(--attention); }
 .launch-knowledge-quick.blocked > header em { color: var(--danger); }
-.launch-knowledge-quick-loading,
-.launch-knowledge-quick-empty {
+.launch-knowledge-quick-loading {
   margin-top: 10px; padding: 10px 11px; color: var(--muted);
   border-radius: 9px; background: var(--surface); font-size: 12px;
 }
@@ -10777,10 +10634,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .launch-knowledge-scope em {
   color: var(--accent); font-size: 9px; font-style: normal; font-weight: 700;
 }
-.launch-knowledge-empty {
-  padding: 18px 12px; color: var(--muted); font-size: var(--fs-12);
-  line-height: 1.55; text-align: center;
-}
 .launch-resource-boundary {
   padding: 0 2px; display: flex; align-items: baseline; gap: 8px;
   color: var(--muted); font-size: var(--fs-12); line-height: 1.5;
@@ -10886,17 +10739,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 }
 .execution-plan-activities details > p { margin: 6px 0 2px; }
 
-/* ── 活方案对拍告警(审计 P0-1):呈现与实际不一致是最高级事故,
-   压在执行现场最上方,红得不容错过。 ── */
-.ws-plan-alert {
-  padding: 12px 14px;
-  border: 1px solid var(--danger);
-  border-left-width: 4px;
-  border-radius: 10px;
-  background: var(--danger-soft);
-}
-.ws-plan-alert strong { color: var(--danger); display: block; }
-.ws-plan-alert p { margin: 6px 0 0; font-size: .92em; }
+/* #217:.ws-plan-alert(活方案对拍告警,审计 P0-1)早已无消费者;
+ * 警示语义统一由 <Alert destructive> 承担,连同孤儿样式一并拆除。 */
 
 /* 窄屏专注审阅(MFC-008):focused 的三栏 grid 比通用窄屏规则更特异,
    399px 上仍保留 320px 文件树,代码列被挤出屏外。此处同特异度、
@@ -11162,14 +11006,6 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 /* ---- 走查反馈(2026-09-07):逐仓交付页签(第 6 签)与空态 ---- */
 .issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button:nth-child(6) {
   --workspace-tab-color: #7c5cd6;
-}
-.issue-repos-empty {
-  padding: 22px 16px;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
-  color: var(--muted);
-  font-size: var(--font-size-assist);
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
 }
 
 /* ---- 人工接管(2026-09-07 走查拍板):接管徽标 + 输入区 takeover 模式

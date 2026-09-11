@@ -26,6 +26,7 @@ import {
   type TaskSummary,
 } from "./api";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 export type StreamFilter = "all" | "mine";
 
@@ -847,11 +848,11 @@ export function ConversationStream({
         ))}
         {!loaded && !unavailable && <div className="conv-empty">正在读取记录…</div>}
         {loaded && !shown.length && !currentCard && (
-          <div className="conv-empty">
-            {thread ? "这条意见还没有处理记录。"
+          <Empty className="py-6" role="status">
+            <EmptyDescription>{thread ? "这条意见还没有处理记录。"
               : filter === "mine" ? "现在没有需要你处理的事。"
-              : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}
-          </div>
+              : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}</EmptyDescription>
+          </Empty>
         )}
         {rows}
         {pinnedCard && waiting && (

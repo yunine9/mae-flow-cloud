@@ -23,6 +23,8 @@ import {
   type IssueSummary,
 } from "./api";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import { Database } from "lucide-react";
 import { STALE_AFTER_MS, issueDeliveryBreakdown } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
@@ -208,11 +210,10 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
           onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}
       </div>
-      {visible.length === 0 && <div className="empty-state">
-        <span className="empty-visual" aria-hidden><i /><i /><i /></span>
-        <strong>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</strong>
-        <p>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</p>
-      </div>}
+      {visible.length === 0 && <Empty className="py-11" role="status">
+        <EmptyTitle>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</EmptyTitle>
+        <EmptyDescription>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</EmptyDescription>
+      </Empty>}
       <div className="task-list">{visible.map((issue) => (
         <TeamIssueCard key={issue.id} issue={issue}
           onOpen={() => onOpenIssue(issue.id)} />
@@ -247,11 +248,11 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
       </div>
     </div>
     {closed.length === 0
-      ? <div className="board-empty">
-          <span className="empty-database" aria-hidden><i /><i /><i /></span>
-          <strong>还没有闭环的问题会话</strong>
-          <p>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</p>
-        </div>
+      ? <Empty className="min-h-[360px] border" role="status">
+          <EmptyMedia variant="icon"><Database aria-hidden /></EmptyMedia>
+          <EmptyTitle>还没有闭环的问题会话</EmptyTitle>
+          <EmptyDescription>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</EmptyDescription>
+        </Empty>
       : <>
         <div className="history-metrics" aria-label="问题闭环结论统计">
           {CONCLUSION_TILES.map((tile) => (

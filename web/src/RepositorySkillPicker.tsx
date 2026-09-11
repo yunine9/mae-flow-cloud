@@ -10,6 +10,8 @@ import {
   type RepositorySkillCatalog,
   type SelectedRepositorySkill,
 } from "./api";
+import { Alert, AlertDescription, AlertTitle } from "@/components/Alert";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 /** 与服务端 TaskService 的硬上限保持一致。页面先挡住，避免多仓全选后
  * 到“提交决定”才收到 400、让人回头猜该删哪些。 */
@@ -253,9 +255,9 @@ export function RepositorySkillPicker({
       </div>
 
       {!hasRepository && (
-        <div className="repository-skills-empty">
-          先填写代码仓，再读取仓内 Skill；读取成功后默认勾选，不读取也可继续。
-        </div>
+        <Empty className="mt-3 border">
+          <EmptyDescription>先填写代码仓，再读取仓内 Skill；读取成功后默认勾选，不读取也可继续。</EmptyDescription>
+        </Empty>
       )}
       {!catalog && !scanError
         && initialNames.length > 0 && (
@@ -266,16 +268,18 @@ export function RepositorySkillPicker({
         </div>
       )}
       {scanError && (
-        <div className="repository-skills-error" role="alert">
-          <strong>本次读取未完成</strong>
-          <span>{scanError}</span>
-          <small>你可以重试，也可以不改已有选择直接提交决定。</small>
-        </div>
+        <Alert variant="destructive" role="alert" className="mt-3">
+          <AlertTitle>本次读取未完成</AlertTitle>
+          <AlertDescription>
+            {scanError}
+            <span className="block text-muted-foreground">你可以重试，也可以不改已有选择直接提交决定。</span>
+          </AlertDescription>
+        </Alert>
       )}
       {catalog && catalog.repositories.length === 0 && (
-        <div className="repository-skills-empty">
-          这些仓库没有可用的 Skill，不影响继续提交；Agent 仍会正常探索代码仓。
-        </div>
+        <Empty className="mt-3 border">
+          <EmptyDescription>这些仓库没有可用的 Skill，不影响继续提交；Agent 仍会正常探索代码仓。</EmptyDescription>
+        </Empty>
       )}
       {catalog && catalog.repositories.length > 0 && (
         <div className="repository-skill-groups">

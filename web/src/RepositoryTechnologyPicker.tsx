@@ -5,6 +5,7 @@ import {
   type RepositoryProfile,
 } from "./api";
 import { KnowledgeLanguagePicker, KnowledgeLanguageTags } from "./KnowledgeLanguages";
+import { Alert } from "@/components/Alert";
 
 export interface RepositoryTechnologyDraft {
   repository: string;
@@ -133,8 +134,8 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
           && value.every((item) => item.confirmed && item.technologies.length)
           ? "已确认" : "必须确认"}</em>
     </div>
-    {error && <p className="repository-technology-warning" role="status">
-      {error}。请核对上方当前选择状态；本单已确认的选择仍会保留。</p>}
+    {error && <Alert variant="warning" role="status" className="mb-2">
+      {error}。请核对上方当前选择状态；本单已确认的选择仍会保留。</Alert>}
     <div className="repository-technology-list">
       {value.map((item) => <article key={item.repository}>
         <header><span><strong>{label(item.repository)}</strong>

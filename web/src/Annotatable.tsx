@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Alert } from "./components/Alert";
 import { addAnnotation, uploadAnnotationAsset, type AnnotationImage } from "./api";
 import {
   anchorOf, annotationsAtRow, contextOfRow, quoteOfSelection,
@@ -388,7 +389,7 @@ export function Annotatable({
                   event.target.value = "";
                 }} />
             </div>
-          {error && <div className="alert">{error}</div>}
+          {error && <Alert variant="destructive" className="mb-3">{error}</Alert>}
           <div className="annot-editor-actions">
             <span>⌘/Ctrl + Enter 记下 · Esc 取消</span>
             <button type="button" className="ghost"

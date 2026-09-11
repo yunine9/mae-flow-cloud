@@ -31,6 +31,7 @@ import {
 } from "./api";
 import { startVisiblePolling } from "./visiblePolling";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert } from "@/components/Alert";
 import "./steer.css";
 
 /** sync=通知所有子任务:只有跨仓子任务有这一档。 */
@@ -673,7 +674,7 @@ export function Composer({
         </>
       )}
 
-      {error && <div className="alert" role="alert">{error}</div>}
+      {error && <Alert variant="destructive" role="alert">{error}</Alert>}
     </section>
   );
 }

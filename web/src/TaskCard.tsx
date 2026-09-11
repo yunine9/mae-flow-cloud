@@ -1,5 +1,7 @@
 import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requirementDecisionContract";
 import { Button } from "./components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "./components/Alert";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
 /**
@@ -331,45 +333,45 @@ export function TaskCard({
       {expanded && (
         <div className="task-detail-body">
           {task.status === "failed" && task.detail && (
-            <div className="alert">
-              <strong>任务执行失败</strong>
-              <span>{task.detail}</span>
-            </div>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>任务执行失败</AlertTitle>
+              <AlertDescription>{task.detail}</AlertDescription>
+            </Alert>
           )}
           {task.delivery?.skipped && task.detail !== task.delivery.skipped && (
-            <div className="alert">
-              <strong>交付已阻止</strong>
-              <span>{task.delivery.skipped}</span>
-            </div>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>交付已阻止</AlertTitle>
+              <AlertDescription>{task.delivery.skipped}</AlertDescription>
+            </Alert>
           )}
           {task.notify?.settled === true && !task.notify.delivered
             && task.notify.attempts > 0 && (
-            <div className="alert">
-              <strong>小鲁班通知未送达</strong>
-              <span>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>小鲁班通知未送达</AlertTitle>
+              <AlertDescription>
                 已完成 {task.notify.attempts} 次投递仍未送达
                 {notifyHttpError ? `（${notifyHttpError}）` : ""}。
                 待办仍然有效，请在本页处理。
-              </span>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
           {task.baseline_build?.status === "failed" && (
-            <div className="alert">
-              <strong>开工前编译失败(环境预热)</strong>
-              <span>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>开工前编译失败(环境预热)</AlertTitle>
+              <AlertDescription>
                 环境或上游问题,与本单增量无关;详情在工作台执行现场。
                 {task.baseline_build.detail
                   ? ` ${task.baseline_build.detail.slice(0, 160)}` : ""}
-              </span>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
           {repairStopped(task) && (
-            <div className="alert">
-              <strong>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>
                 {task.delivery?.stalled ? "自动验证已停，需要你介入"
                   : "自动修复已停，需要你介入"}
-              </strong>
-              <span>
+              </AlertTitle>
+              <AlertDescription>
                 {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
                 {/* 下一步来自服务端焦点(按停摆类别给):原来这里写死
@@ -378,15 +380,15 @@ export function TaskCard({
                 {task.focus?.next_action
                   ? ` ${task.focus.next_action}。`
                   : " 办完之后点「重跑续推」，机器接着干。"}
-              </span>
-              {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
-                  文档章节)。流水线到底红在哪必须单独亮,不靠诊断捎带。 */}
-              {task.delivery?.loop?.failure && (
-                <span className="alert-failure">
-                  流水线失败原文:{task.delivery.loop.failure}
-                </span>
-              )}
-            </div>
+                {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
+                    文档章节)。流水线到底红在哪必须单独亮,不靠诊断捎带。 */}
+                {task.delivery?.loop?.failure && (
+                  <span className="mt-1.5 block font-mono text-xs whitespace-pre-wrap break-all">
+                    流水线失败原文:{task.delivery.loop.failure}
+                  </span>
+                )}
+              </AlertDescription>
+            </Alert>
           )}
           {/* 还在等的时候也要说清在等什么。这行原来根本不渲染:页面只有
               "验证中"三个字,底下藏着的"某一项流水线结果一直没给"谁都
@@ -1227,7 +1229,10 @@ export function WaitingCard({
             ? `将把剩余 ${pendingReviewAnnotationIds.length} 条检视意见随本次决定一并送给 Agent`
             : `还有 ${pendingReviewAnnotationIds.length} 条意见：请先删除无效意见，或自行答复无需改动的意见；其余会在选择“仍需调整”后一起送给 Agent`}</span>
         </div>}
-        {conflict && <div className="alert" role="alert">{conflict}</div>}
+        {/* #217:has-submit-choices 时 footer 换行,警示占满整行(原
+            .decision-footer.has-submit-choices > .alert 的 flex-basis) */}
+        {conflict && <Alert variant="destructive" role="alert"
+          className={`mb-3${showDeliveryCompileActions ? " basis-full" : ""}`}>{conflict}</Alert>}
         {showDeliveryCompileActions ? (
           <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
             <button type="button" className="submit-decision secondary"
@@ -1436,7 +1441,7 @@ export function RetryButton({
           {busy === "rerun" ? "正在清空重跑…" : "清空并从头重跑"}
         </button>
       )}
-      {error && <div className="alert">{error}</div>}
+      {error && <Alert variant="destructive" className="basis-full">{error}</Alert>}
     </div>
   );
 }
@@ -1767,17 +1772,17 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
             </button>
           )}
           {events.length === 0 && (
-            <div className="event-empty">
-              <span aria-hidden />
-              <strong>{connection === "ended" ? "暂无执行记录" : "正在连接任务现场"}</strong>
-              <small>主 Agent 与 Build-Fix 的执行动作统一显示在这里。</small>
-            </div>
+            <Empty className="min-h-[116px]" role="status">
+              <span aria-hidden className="mb-2 size-2 rounded-full bg-success ring-[5px] ring-success-soft" />
+              <EmptyTitle>{connection === "ended" ? "暂无执行记录" : "正在连接任务现场"}</EmptyTitle>
+              <EmptyDescription>主 Agent 与 Build-Fix 的执行动作统一显示在这里。</EmptyDescription>
+            </Empty>
           )}
           {events.length > 0 && filtered.length === 0 && (
-            <div className="event-empty filtered">
-              <strong>这个筛选下没有事件</strong>
-              <small>原始事件没有丢失，可以切回“全部”继续查看。</small>
-            </div>
+            <Empty className="min-h-24" role="status">
+              <EmptyTitle>这个筛选下没有事件</EmptyTitle>
+              <EmptyDescription>原始事件没有丢失，可以切回“全部”继续查看。</EmptyDescription>
+            </Empty>
           )}
           {visible.items.map((event) => (
             <EventRecord event={event} key={executionEventKey(event)}
@@ -1938,7 +1943,7 @@ const EventRecord = memo(function EventRecord({ event, selectedDetail, onInspect
         </time>
       </header>
       {fields.length === 0 ? (
-        <div className="event-record-empty">本事件没有附加内容</div>
+        <Empty className="p-2.5"><EmptyDescription>本事件没有附加内容</EmptyDescription></Empty>
       ) : (
         <dl>
           {fields.map(([field, value]) => {

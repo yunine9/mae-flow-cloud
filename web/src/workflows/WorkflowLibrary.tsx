@@ -2,6 +2,7 @@ import { PersonName } from "../People";
 import { useMemo, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
 
@@ -111,15 +112,16 @@ export function WorkflowLibrary({
                 onClick={() => onRemoveDraft(workflow)}>删除草稿</button>}</div>
         </footer>
       </article>)}
-    </div> : !loading && !error && <div className="wf-empty large">
-      <strong>{query ? "没有匹配的工作流" : scope === "archived"
-        ? "没有已归档的工作流" : "还没有专业工作流"}</strong>
-      <span>{query ? "换一个关键词试试。" : scope === "archived"
+    </div> : !loading && !error && <Empty className="min-h-[220px]">
+      <EmptyTitle>{query ? "没有匹配的工作流" : scope === "archived"
+        ? "没有已归档的工作流" : "还没有专业工作流"}</EmptyTitle>
+      <EmptyDescription>{query ? "换一个关键词试试。" : scope === "archived"
         ? "删除的草稿和停止使用的方案会保留在这里。"
-        : "普通任务继续使用平台标准方案；有明确编排思路时再创建。"}</span>
-      {!query && scope === "active" && onCreate && <button type="button" className="wf-primary" onClick={onCreate}>
-        创建第一个工作流</button>}
-    </div>}
+        : "普通任务继续使用平台标准方案；有明确编排思路时再创建。"}</EmptyDescription>
+      {!query && scope === "active" && onCreate
+        && <EmptyContent><button type="button" className="wf-primary" onClick={onCreate}>
+        创建第一个工作流</button></EmptyContent>}
+    </Empty>}
   </section>;
 }
 

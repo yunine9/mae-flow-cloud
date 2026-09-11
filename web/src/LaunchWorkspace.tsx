@@ -35,6 +35,7 @@ import {
   type WorkflowSchemeSelection,
 } from "./workflows";
 import { Markdown } from "./markdown";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
@@ -1370,9 +1371,9 @@ export function LaunchWorkspace({
                       ))}
                     </div>
                   ) : (
-                    <div className="launch-knowledge-quick-empty">
-                      当前没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
-                    </div>
+                    <Empty className="mt-2.5 p-2.5">
+                      <EmptyDescription>当前没有匹配到 Mae-Flow 平台管理的知识；不影响发起。</EmptyDescription>
+                    </Empty>
                   )}
                 </>}
               </section>}
@@ -1552,10 +1553,10 @@ export function LaunchWorkspace({
                         }} />)}
                   </section>}
                   {!knowledgePreviewLoading && previewSettled
-                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
-                    className="launch-knowledge-empty">
-                    没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
-                  </div>}
+                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <Empty
+                    className="py-4.5">
+                    <EmptyDescription>没有匹配到 Mae-Flow 平台管理的知识；不影响发起。</EmptyDescription>
+                  </Empty>}
                 </div>
                 <div className="launch-resource-boundary">
                   <strong>{knowledgePreviewLoading || !previewSettled

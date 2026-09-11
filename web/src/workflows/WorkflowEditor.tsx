@@ -8,6 +8,7 @@ import type {
   WorkflowPlanItem,
 } from "../api";
 import { AssetPicker } from "./AssetPicker";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import {
   itemFromAsset,
   newEditId,
@@ -192,11 +193,11 @@ function EditInspector({
       {item ? item.title : "选择一个执行项"}</h3></header>
     {/* 五操作图例撤了:动作按钮自带符号+文字,常驻图例是重复
         (审计 P2-17)。 */}
-    {!item && <div className="wf-empty compact">
-      <strong>请选择中间的一项进行精确编辑</strong>
-      <span>也可以直接新增已经入库的知识、Skill、Agent 或工具。</span>
-      <button type="button" className="wf-primary" onClick={onStartAdd}>＋ 新增执行项</button>
-    </div>}
+    {!item && <Empty className="border p-5">
+      <EmptyTitle>请选择中间的一项进行精确编辑</EmptyTitle>
+      <EmptyDescription>也可以直接新增已经入库的知识、Skill、Agent 或工具。</EmptyDescription>
+      <EmptyContent><button type="button" className="wf-primary" onClick={onStartAdd}>＋ 新增执行项</button></EmptyContent>
+    </Empty>}
     {item && <>
       <div className={`wf-selected-summary${item.locked ? " locked" : ""}`}>
         <span><b>{item.kind}</b><b>{sourceLabel(item)}</b></span>

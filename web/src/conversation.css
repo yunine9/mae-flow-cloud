@@ -415,7 +415,6 @@
 .task-workspace-v2 .ws-composer .assistant-buttons { display: flex; gap: 8px; }
 .task-workspace-v2 .ws-composer .assistant-bounds-details > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
 .task-workspace-v2 .ws-composer .assistant-bounds { margin: 6px 0 0; font-size: var(--fs-12); }
-.task-workspace-v2 .ws-composer .alert { margin: 0; }
 .task-workspace-v2 .ws-composer-readonly {
   padding: 12px 18px 14px; border-top: 1px solid var(--line);
   background: var(--surface); color: var(--muted); font-size: var(--fs-13); line-height: 1.6;

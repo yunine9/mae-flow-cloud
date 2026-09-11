@@ -19,6 +19,7 @@ import { OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button";
+import { Alert } from "./components/Alert";
 import { resolvedAnnotationRange } from "./annotateTargets";
 import {
   dropAnnotation,
@@ -499,7 +500,7 @@ export function AnnotationPanel({
         </p>
       )}
       {submissionNotice && <p className="annot-panel-note" role="status">{submissionNotice}</p>}
-      {error && <div className="alert" role="alert">{error}</div>}
+      {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
 
       {filter !== "all" && !visibleItems.length && items.length > 0 && (
         <p className="annot-panel-note">这一档下没有批注；切回“全部”看完整清单。</p>

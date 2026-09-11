@@ -128,17 +128,8 @@
     color: var(--text);
   }
 
-  /* ---- 空态基座(收编 53 个空态类) ---- */
-  .ui-empty {
-    display: grid;
-    justify-items: center;
-    gap: 8px;
-    padding: 28px 16px;
-    color: var(--faint);
-    font-size: var(--fs-13);
-    text-align: center;
-  }
-  .ui-empty > * { margin: 0; }
+  /* ---- 空态基座:.ui-empty 零消费者(全仓 grep 佐证),空态统一由
+     #217 落地的 web/src/components/Empty.tsx 承担,基座随之退役。 ---- */
 
   /* ---- 弹层 ---- */
   /* Shared viewport positioning. Embedded presentations keep their iframe

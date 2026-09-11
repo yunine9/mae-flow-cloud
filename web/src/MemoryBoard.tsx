@@ -14,6 +14,7 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 const SOURCE = {
   agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
@@ -193,8 +194,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           {open?.id === row.id && <pre className="knowledge-memory-source">{open.content}</pre>}
         </li>;
       })}
-    </ol> : <div className="knowledge-flywheel-empty">
-      {insights ? "还没有符合条件的记忆。闭环的检视意见、修好的构建失败和圈选「记为记忆」会自动落在这里。" : "加载中…"}
-    </div>}
+    </ol> : <Empty className="mx-5 my-5 min-h-[110px] border" role="status">
+      <EmptyDescription>{insights ? "还没有符合条件的记忆。闭环的检视意见、修好的构建失败和圈选「记为记忆」会自动落在这里。" : "加载中…"}</EmptyDescription>
+    </Empty>}
   </section>;
 }

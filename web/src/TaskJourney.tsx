@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { Alert } from "@/components/Alert";
+import { Empty, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/Empty";
 import { listTimeline, type TaskSummary, type TimelineEntry } from "./api";
 import { formatLocalDateTime, formatLocalDate, formatLocalClock } from "./time";
 import { Markdown } from "./markdown";
@@ -83,7 +85,9 @@ export function TaskJourney({ task, onLogs, onTiming }: {
     </header>
     <div className={`journey-live-state ${current.tone}`}><i aria-hidden /><strong>{current.title}</strong>
       <span>{task.progress?.current_phase}</span></div>
-    {(task.execution_plan_alerts ?? []).map((line, index) => <p className="journey-warning" key={index}>{line}</p>)}
+    {(task.execution_plan_alerts ?? []).length > 0 && <Alert variant="warning" className="mb-2">
+      {(task.execution_plan_alerts ?? []).map((line, index) => <p className="m-0" key={index}>{line}</p>)}
+    </Alert>}
     {task.delivery?.prepush && <PrepushLiveLog taskId={task.id}
       active={prepushActive(task.delivery.prepush.state, task.delivery.prepush_runtime)}
       title={`Build-Fix · 编译与测试${task.delivery.prepush.round ? ` · 当前第 ${task.delivery.prepush.round} 轮` : ""}`}
@@ -92,8 +96,9 @@ export function TaskJourney({ task, onLogs, onTiming }: {
     {error && <div className="journey-empty" role="status"><strong>暂时无法更新进展</strong><p>{error}</p>
       {entries && <p>下方保留上次读取的记录。</p>}<button type="button" onClick={() => setReload((value) => value + 1)}>重新读取</button></div>}
     {!entries && !error && <p className="journey-empty" role="status">正在读取进展…</p>}
-    {entries?.length === 0 && ordered.length === 0 && <div className="journey-empty"><strong>还没有形成阶段记录</strong>
-      <p>当前状态见上方；需要查看启动或工具调用细节时，可以打开执行日志。</p><button type="button" onClick={onLogs}>查看执行日志</button></div>}
+    {entries?.length === 0 && ordered.length === 0 && <Empty className="py-5"><EmptyTitle>还没有形成阶段记录</EmptyTitle>
+      <EmptyDescription>当前状态见上方；需要查看启动或工具调用细节时，可以打开执行日志。</EmptyDescription>
+      <EmptyContent><button type="button" onClick={onLogs}>查看执行日志</button></EmptyContent></Empty>}
     <div className="journey-days">{days.map((day) => <section className="journey-day-group" key={day.date} aria-label={day.date}>
       <header className="journey-day-heading"><span>{day.date}</span><i aria-hidden /></header>
       <ol className="journey-events">{day.entries.map(({ entry, key }) => {

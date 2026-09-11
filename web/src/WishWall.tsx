@@ -16,6 +16,7 @@ import { Spinner } from "@/components/Spinner";
 import { Badge } from "@/components/ui/badge";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -408,11 +409,11 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       {notice && <p className="wish-notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="关闭提示">×</button></p>}
       {loadError && <div className="wish-load-state error"><strong>墙暂时没加载出来</strong><span>{loadError}</span><button type="button" onClick={() => void refresh()}>再试一次</button></div>}
       {loading && <div className="wish-load-state"><Spinner className="size-3" />正在把大家的声音搬过来…</div>}
-      {!loading && !loadError && shown.length === 0 && <div className="wish-empty">
-        <span aria-hidden>{scope === "issue" ? "🪁" : "🌱"}</span>
-        <strong>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</strong>
-        <p>{items.length ? "换个状态或类型看看，也可以把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</p>
-      </div>}
+      {!loading && !loadError && shown.length === 0 && <Empty className="min-h-[150px] border rounded-2xl" role="status">
+        <EmptyMedia className="text-3xl">{scope === "issue" ? "🪁" : "🌱"}</EmptyMedia>
+        <EmptyTitle>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</EmptyTitle>
+        <EmptyDescription>{items.length ? "换个状态或类型看看，也可以把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</EmptyDescription>
+      </Empty>}
       <div className="wish-card-list">
         {shown.map((item) => {
           const expanded = expandedId === item.id;

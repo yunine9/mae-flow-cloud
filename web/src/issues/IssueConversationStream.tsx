@@ -55,6 +55,8 @@ import { Markdown } from "../markdown";
 import { formatLocalClock, formatLocalDate, formatLocalDateTime } from "../time";
 import { startVisiblePolling } from "../visiblePolling";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert } from "@/components/Alert";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -479,9 +481,9 @@ export function IssueConversationStream({
           <div className="conv-empty">正在读取协作记录…</div>
         )}
         {view.loaded && !shown.length && !currentCard && (
-          <div className="conv-empty">
-            还没有协作记录。Agent 开始干活、举卡,或你插话、续聊之后,会按时间出现在这里。
-          </div>
+          <Empty className="py-6" role="status">
+            <EmptyDescription>还没有协作记录。Agent 开始干活、举卡,或你插话、续聊之后,会按时间出现在这里。</EmptyDescription>
+          </Empty>
         )}
         {rows}
         {/* 卡座(#125):当前等待卡永远钉在流末尾的 Agent 气泡内,举卡
@@ -695,7 +697,7 @@ function IssueCollaborationComposer({
           </button>
         </div>
       </div>
-      {error && <div className="alert" role="alert">{error}</div>}
+      {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
     </section>;
   }
 
@@ -784,7 +786,7 @@ function IssueCollaborationComposer({
         {sending ? "发送中…" : steer ? "发送插话" : "发送"}
       </button>
     </div>
-    {error && <div className="alert" role="alert">{error}</div>}
+    {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
   </section>;
 }
 import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste";

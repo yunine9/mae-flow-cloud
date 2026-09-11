@@ -3,8 +3,6 @@
 .story-architecture { padding: 20px; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .story-architecture-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: start; justify-content: space-between; }
 .story-architecture-header strong { font-size: 18px; }
-.story-view-notice { padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 9px; }
-.story-view-notice button { border: 0; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
 .story-architecture-header p, .story-architecture-version { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .story-architecture-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .story-architecture button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; cursor: pointer; }

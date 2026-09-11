@@ -55,6 +55,7 @@ import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 /** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
  * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
@@ -515,10 +516,10 @@ function useInheritedLedger(
  * (发起时登记的模块决定关联仓,这里不是登记入口)。 */
 function IssueWorkspaceRepos({ detail }: { detail: IssueDetail }) {
   if (!(detail.repo_urls?.length ?? 0) && !detail.repo_url) {
-    return <div className="issue-repos-empty">
-      会话没有登记代码仓——发起时登记的业务模块决定关联仓;
-      逐仓交付与流水线状态会在这里展示。
-    </div>;
+    return <Empty className="border">
+      <EmptyDescription>会话没有登记代码仓——发起时登记的业务模块决定关联仓;
+      逐仓交付与流水线状态会在这里展示。</EmptyDescription>
+    </Empty>;
   }
   return <IssueRepoDelivery detail={detail} />;
 }

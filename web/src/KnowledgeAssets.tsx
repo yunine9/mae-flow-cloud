@@ -67,6 +67,7 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Alert, AlertAction, AlertDescription } from "@/components/Alert";
 
 type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
   { kind: "engineering" }>;
@@ -698,12 +699,12 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
       </div>
     </div>
 
-    {error && <div className="ka-alert danger" role="alert">{error}</div>}
-    {note && <div className="ka-alert" role="status">{note}
-      <button type="button" onClick={() => setNote("")}>知道了</button></div>}
-    {!!shelf?.warnings.length && <div className="ka-alert warn" role="note">
-      {shelf.warnings.map((warning) => <p key={warning}>⚠ {warning}</p>)}
-    </div>}
+    {error && <Alert variant="destructive" role="alert">{error}</Alert>}
+    {note && <Alert role="status">{note}
+      <AlertAction><button type="button" onClick={() => setNote("")}>知道了</button></AlertAction></Alert>}
+    {!!shelf?.warnings.length && <Alert variant="warning" role="note">
+      {shelf.warnings.map((warning) => <p key={warning} className="m-0.5">⚠ {warning}</p>)}
+    </Alert>}
 
     <div className="ka-body">
       <div className="ka-list">
@@ -1059,10 +1060,12 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
           </dl>
           {engineeringFocus?.candidateId === selectedCandidate.id
             && engineeringFocus.digest !== selectedCandidate.digest
-            ? <p className="ka-alert danger" role="alert">
-              清单版本 {engineeringFocus.digest.slice(0, 8)} 与当前版本 {
-                selectedCandidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
-            </p>
+            ? <Alert variant="destructive" role="alert" className="my-2">
+              <AlertDescription>
+                清单版本 {engineeringFocus.digest.slice(0, 8)} 与当前版本 {
+                  selectedCandidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
+              </AlertDescription>
+            </Alert>
             : <pre className="ka-doc">{selectedCandidate.content}</pre>}
           <div className="ka-actions">
             <button type="button" onClick={() =>
@@ -1400,10 +1403,10 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
           {job?.status === "running" && <small>
             只读会话正在读仓起草;完成后草稿出现在下方,可离开本页稍后再来。</small>}
         </div>
-        {extractError && <div className="ka-alert danger" role="alert">
-          {extractError}</div>}
-        {job?.status === "failed" && <div className="ka-alert danger"
-          role="alert">提取失败:{job.error ?? "未知原因"}</div>}
+        {extractError && <Alert variant="destructive" role="alert" className="mb-2">
+          {extractError}</Alert>}
+        {job?.status === "failed" && <Alert variant="destructive"
+          role="alert" className="mb-2">提取失败:{job.error ?? "未知原因"}</Alert>}
         {job?.status === "done" && <>
           <label className="ka-draft">
             <span className="ka-field-label">草稿(可编辑;{verb}前请抽查论断与文件出处)</span>

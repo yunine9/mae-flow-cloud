@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "./components/ui/button";
+import { Empty, EmptyDescription } from "@/components/Empty";
 import { OverlayDialog } from "./WarmupPanel";
 import { KnowledgeSource } from "./KnowledgeSource";
 import { knowledgeOrigin } from "./knowledgeOrigin";
@@ -157,8 +158,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
               onClick={() => void remind(item)}>提醒 Agent 使用</button>
           </article>)}
         </div>)}
-        {!catalog.length && <div className="knowledge-footprint-empty">
-          本任务还没有可提醒的平台知识；下次发起时关联业务模块并确认技术画像即可。</div>}
+        {!catalog.length && <Empty className="mx-3.5 mb-3.5 border p-3">
+          <EmptyDescription>本任务还没有可提醒的平台知识；下次发起时关联业务模块并确认技术画像即可。</EmptyDescription></Empty>}
       </div>
     </OverlayDialog>}
 
@@ -201,8 +202,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
               onClick={() => void withdrawMemory(item)}>撤回</button>}
           </li>;
         })}
-      </ol> : <div className="knowledge-footprint-empty">
-        还没有记下任何东西。检视意见闭环、Build-Fix 修好失败，或在材料上圈选「记为记忆」后会出现在这里。</div>}
+      </ol> : <Empty className="mx-3.5 mb-3.5 border p-3">
+        <EmptyDescription>还没有记下任何东西。检视意见闭环、Build-Fix 修好失败，或在材料上圈选「记为记忆」后会出现在这里。</EmptyDescription></Empty>}
     </section>
     <section className="knowledge-memories knowledge-memories-used" aria-labelledby="knowledge-memory-usage-title">
       <header>
@@ -226,8 +227,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             </span>
           </div>
         </li>)}
-      </ol> : <div className="knowledge-footprint-empty">
-        还没有推送或检索。任务启动时会按仓推送历史记忆；Agent 也可以自己用 corpus_search 查。</div>}
+      </ol> : <Empty className="mx-3.5 mb-3.5 border p-3">
+        <EmptyDescription>还没有推送或检索。任务启动时会按仓推送历史记忆；Agent 也可以自己用 corpus_search 查。</EmptyDescription></Empty>}
     </section>
     {utMethod && <p className={`knowledge-ut-method${
       utMethod === "仓内既有写法" ? " is-fallback" : ""}`}>
@@ -245,8 +246,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
           onClick={() => setSourceOpen(item)}>{item.path} ↗</button>
         <small>{item.read_count > 0 ? `读取/检索 ${item.read_count} 次`
           : "开局已加载"}</small></article>)}</div>
-      : <div className="knowledge-footprint-empty">
-        尚无已消费知识；可用知识被加载、读取或检索后会在这里出现。</div>}
+      : <Empty className="mx-3.5 mb-3.5 border p-3">
+        <EmptyDescription>尚无已消费知识；可用知识被加载、读取或检索后会在这里出现。</EmptyDescription></Empty>}
     {!!usage?.events.length && <details className="knowledge-footprint-events">
       <summary>查看消费明细<span>{usage.events.length} 条</span></summary>
       <div>{usage.events.slice(0, 24).map((event, index) =>

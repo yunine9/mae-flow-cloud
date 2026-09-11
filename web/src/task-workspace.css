@@ -975,17 +975,8 @@
 .task-workspace-v2 .ws-activity-section .event-record > header { background: var(--surface); }
 .task-workspace-v2 .ws-activity-section .event-record.agent .event-record-dot { background: var(--active); }
 .task-workspace-v2 .ws-activity-section .execution-body { background: transparent; }
-.task-workspace-v2 .ws-alert.ws-plan-alert {
-  margin: 0 auto 4px;
-  padding: 12px 14px;
-  color: var(--danger);
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
-  border-left: 3px solid var(--danger);
-  border-radius: var(--radius);
-  background: var(--danger-soft);
-  font-size: var(--fs-14);
-}
-.task-workspace-v2 .ws-alert.ws-plan-alert p { margin: 4px 0 0; color: var(--text); font-size: var(--fs-13); }
+/* #217:.ws-alert.ws-plan-alert(活方案对拍告警)零消费者已拆除;
+ * 警示语义统一由 <Alert destructive> 承担。 */
 .task-workspace-v2 .ws-insight-empty { padding: 4px 0; color: var(--muted); font-size: var(--fs-13); }
 .task-workspace-v2 .workspace-review-dialog-actions { flex: none; display: flex; align-items: center; gap: 6px; }
 .task-workspace-v2 .workspace-review-dialog-actions > button[aria-label="关闭批注与检视"] {

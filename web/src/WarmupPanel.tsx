@@ -7,6 +7,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyDescription } from "@/components/Empty";
 import { cn } from "cn";
 import { PrepushLiveLog } from "./PrepushLiveLog";
 import { tailWarmupEvents, type TaskSummary } from "./api";
@@ -113,7 +114,7 @@ export function WarmupBadge({ task, onOpen }: { task: TaskSummary; onOpen: () =>
 
 export function WarmupPanel({ task }: { task: TaskSummary }) {
   const receipt = task.baseline_build;
-  if (!receipt) return <p className="warmup-empty" role="status">尚未收到开工前编译记录，暂时无法确认是否就绪。收到检查结果后，顶部状态会自动更新。</p>;
+  if (!receipt) return <Empty role="status" className="py-6"><EmptyDescription>尚未收到开工前编译记录，暂时无法确认是否就绪。收到检查结果后，顶部状态会自动更新。</EmptyDescription></Empty>;
   const running = receipt.status === "running";
   return (
     <section className={`warmup-panel is-${receipt.status}`}

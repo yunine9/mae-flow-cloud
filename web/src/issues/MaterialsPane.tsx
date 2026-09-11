@@ -49,6 +49,7 @@ import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
 import { confirmDialog } from "../ConfirmDialog";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -191,10 +192,10 @@ function IssueDialogue({ turns, truncated }: {
   truncated: boolean;
 }) {
   if (turns.length === 0) {
-    return <div className="issue-doc-empty">
-      <strong>还没有问答</strong>
-      <p>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</p>
-    </div>;
+    return <Empty className="border py-4.5">
+      <EmptyTitle>还没有问答</EmptyTitle>
+      <EmptyDescription>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</EmptyDescription>
+    </Empty>;
   }
   return <div className="issue-dialogue">
     {truncated && <div className="utility-note">回合较多,只显示最近的 500 条。</div>}
@@ -478,10 +479,10 @@ function IssueProcessDocs({ detail, canOperate }: {
         ))}
       </TabsList>}
       {loading && <p className="issue-thread-empty">正在读取…</p>}
-      {!loading && note && <div className="issue-doc-empty">
-        <strong>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</strong>
-        <p>{note}</p>
-      </div>}
+      {!loading && note && <Empty className="border py-4.5">
+        <EmptyTitle>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</EmptyTitle>
+        <EmptyDescription>{note}</EmptyDescription>
+      </Empty>}
       {!loading && !note && active === DIALOGUE_TAB
         && <TabsContent value={DIALOGUE_TAB} className="contents">
           <IssueDialogue turns={turns} truncated={turnsTruncated} />
@@ -628,11 +629,11 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
     {detail.review_active && <div className="utility-note">
       上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
     </div>}
-    {drafts.length === 0 && sent.length === 0 && <div className="issue-doc-empty">
-      <strong>还没有检视意见</strong>
-      <p>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
-      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</p>
-    </div>}
+    {drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
+      <EmptyTitle>还没有检视意见</EmptyTitle>
+      <EmptyDescription>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
+      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
+    </Empty>}
     {note && <div className="utility-note">{note}</div>}
     {drafts.length > 0 && <section className="issue-review-group">
       <h4>待提交({drafts.length})</h4>
@@ -917,9 +918,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         </div>}
       <section className="issue-materials-block">
         <h4>人工修改记录({data?.manual_edits.length ?? 0})</h4>
-        {data?.manual_edits.length === 0 && <p className="issue-materials-empty">
+        {data?.manual_edits.length === 0 && <Empty className="py-2 text-left">
           还没有人工改动——从上方选择文件编辑保存后会记在这里。
-        </p>}
+        </Empty>}
         <ul className="issue-materials-edits">
           {data?.manual_edits.slice().reverse().map((edit, index) => <li
             key={`${edit.ts}-${index}`}>

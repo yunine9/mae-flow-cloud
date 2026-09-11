@@ -8,6 +8,8 @@
  */
 
 import { useMemo, useState } from "react";
+import { Database, Check } from "lucide-react";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import type {
   KnowledgeInsightResource,
   KnowledgeKind,
@@ -160,7 +162,7 @@ export function KnowledgeInsightsBoard({
 
     {error && !insights && <div className="knowledge-flywheel-error" role="alert"><strong>知识效能暂时不可用</strong><span>{error}</span><button type="button" onClick={onRetry}>重新读取</button></div>}
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
-    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</p></div></div>}
+    {insights && insights.summary.tracked_tasks === 0 && <Empty className="mx-5 my-5 min-h-[110px] border" role="status"><EmptyMedia variant="icon"><Database aria-hidden /></EmptyMedia><EmptyTitle>知识飞轮正在等待第一批数据</EmptyTitle><EmptyDescription>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</EmptyDescription></Empty>}
 
     {insights && insights.summary.tracked_tasks > 0 && <>
       <div className="knowledge-flywheel-metrics" aria-label="知识效能摘要">
@@ -188,7 +190,7 @@ export function KnowledgeInsightsBoard({
                 ? "Owner 显式发布的模块知识，按任务真实读取统计"
                 : group.repo ? "组内按消费率排,受本仓单量影响,不跨仓比较" : undefined}
               items={group.items} />)}
-            {total === 0 && <div className="knowledge-ranking-empty">当前筛选下还没有知识使用记录。</div>}
+            {total === 0 && <Empty className="border bg-muted/40"><EmptyDescription>当前筛选下还没有知识使用记录。</EmptyDescription></Empty>}
           </div>
         </div>
 
@@ -199,7 +201,7 @@ export function KnowledgeInsightsBoard({
               <i aria-hidden>{item.tone === "positive" ? "✓" : item.tone === "attention" ? "!" : "i"}</i>
               <div><strong>{item.title}</strong><p>{item.evidence}</p><small>{item.action}</small>{!!item.task_ids?.length && <div className="knowledge-task-links"><span>相关任务</span>{item.task_ids.map((taskId) => <button type="button" key={taskId} onClick={() => onOpenTask(taskId)}>{taskId}</button>)}</div>}</div>
             </article>)}
-            {insights.recommendations.length === 0 && <div className="knowledge-opportunity-empty"><span aria-hidden>✓</span><div><strong>暂时没有足够样本形成建议</strong><small>继续积累真实任务，不用为了填满面板制造结论。</small></div></div>}
+            {insights.recommendations.length === 0 && <Empty className="min-h-[114px] border text-left md:items-start md:text-left"><EmptyMedia variant="icon" className="text-success"><Check aria-hidden /></EmptyMedia><EmptyTitle>暂时没有足够样本形成建议</EmptyTitle><EmptyDescription>继续积累真实任务，不用为了填满面板制造结论。</EmptyDescription></Empty>}
           </div>
         </aside>
       </div>

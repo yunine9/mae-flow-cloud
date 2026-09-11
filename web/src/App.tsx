@@ -17,6 +17,7 @@ import {
 import { ChevronDown } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -2134,5 +2135,7 @@ function TaskEmpty({ personal, title, detail }: {
   title?: string;
   detail?: string;
 }) {
-  return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{title ?? (personal ? "还没有分配给你的其他任务" : "还没有当前任务")}</strong><p>{detail ?? (personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。")}</p></div>;
+  /* #217 空态收编:原 empty-state 本就是"两行字、无虚线框、图标隐藏"
+     的极简空态,Empty + 标题/描述即可,legacy 的 empty-visual 不再带出。 */
+  return <Empty className="py-11"><EmptyTitle>{title ?? (personal ? "还没有分配给你的其他任务" : "还没有当前任务")}</EmptyTitle><EmptyDescription>{detail ?? (personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。")}</EmptyDescription></Empty>;
 }
