@@ -202,9 +202,11 @@ function raiseEnvNeededGate(
 }
 
 /** 分析报告的既定落点(prompt 行为契约要求 Agent 维护它,闸门以它
- * 为门票——报告不在场就举闸等于让用户对着空气确认)。 */
+ *  为门票——报告不在场就举闸等于让用户对着空气确认)。 */
+export const ANALYSIS_REPORT_FILENAME = "issue-analysis.md";
+
 function analysisReportPath(ctx: IssueToolContext): string {
-  return join(ctx.workspace, "issue-analysis.md");
+  return join(ctx.workspace, ANALYSIS_REPORT_FILENAME);
 }
 
 /** 分析报告五章节(CONTEXT.md「分析报告」词条,模板在技能
@@ -222,6 +224,18 @@ export const ANALYSIS_REPORT_SECTIONS = [
 export function missingAnalysisSections(content: string): string[] {
   return ANALYSIS_REPORT_SECTIONS.filter((section) =>
     !new RegExp(`^#{1,4}\\s*${section}`, "m").test(content));
+}
+
+/** 摘出报告某一章节的正文(标题行到下一标题行为止),给分析→修复
+ *  边界的压缩锚点用——锚只拿方案要点,不整份进。截到 2000 字:方案
+ *  章按仓一行一条,正常远小于它;病态长报告也不许把锚撑爆。 */
+export function analysisSectionOf(content: string, section: string): string {
+  const match = content.match(new RegExp(`^#{1,4}\\s*${section}\\s*$`, "m"));
+  if (!match || match.index === undefined) return "";
+  const rest = content.slice(match.index + match[0].length);
+  const next = rest.match(/^#{1,4}\s/m);
+  return (next && next.index !== undefined
+    ? rest.slice(0, next.index) : rest).trim().slice(0, 2000);
 }
 
 /** MR 标题的权威解出(2026-09-07 拍板):CodeHub 要求 MR 标题与问题单

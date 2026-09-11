@@ -298,10 +298,12 @@ export function issueFixedOpeningPrompt(
   // 资产库地图(ADR-0012)只在 analyze 注入;docs 置信度分层已挪技能
   // repo-docs(ADR-0021 同日修订),不再随开场/续聊常驻。
   const knowledgeLines = businessKnowledgeLines(state);
+  const brief = promptCopy("briefs", `stage.${current}`);
   const contract = promptCopy("opening", "fixed.contract", {
     stage_brief:
       `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:`
-      + `${promptCopy("briefs", `stage.${current}`)}。`
+      // 简报锚点自带收尾句号时不再补,修"。。"双句号(2026-09-11 实锤)。
+      + `${brief.replace(/。+$/, "")}。`
       + `怎么算完:${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     skill_lines: skillLines.length ? skillLines.join("\n") + "\n" : "",
     knowledge_lines: knowledgeLines.length

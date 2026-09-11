@@ -27,6 +27,8 @@ import {
   issueFixedOpeningPrompt,
   issueResumePrompt,
 } from "../src/issueFlow/prompt.ts";
+import { promptCopy } from "../src/issueFlow/promptCopy.ts";
+import { askToolDescription } from "../src/sessionDriver.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -258,6 +260,34 @@ test("提示层:开场词与续聊词按介入档位渲染三种节奏", () => {
   assert.match(resumeFull, /介入节奏:全自动档/);
   assert.match(resumeReport, /介入节奏:仅分析报告档/);
   assert.match(resumeGuard, /介入节奏:全程把控档/);
+});
+
+test("grilling 触发链:把控档节奏文本常驻点名方法,简报反问条款让位档位", () => {
+  // 病根(2026-09-11 诊断):vendor grilling 的索引描述是"用户发起"
+  // 口径,AI 自发对齐匹配不到渐进发现;常驻触发位只剩介入节奏文本与
+  // AskUserQuestion 工具描述(模型决定问的那一刻必读)。
+  const state = {
+    id: "issue-1", scenario: "ticket", stage: "analyze",
+    title: "登录超时", description: "", account: "dev", ticket: TICKET,
+  } as unknown as IssueSessionState;
+  const guard = issueFixedOpeningPrompt(state, {}, { tier: "3" });
+  assert.match(guard, /grilling/, "把控档节奏文本要点名 grilling(常驻触发位)");
+  assert.match(guard, /skills\/grilling\/SKILL\.md/, "点名要带可达路径");
+  assert.match(issueResumePrompt(state, "继续", {}, { tier: "3" }),
+    /grilling/, "续聊重建的上下文同样要点名");
+  assert.doesNotMatch(issueFixedOpeningPrompt(state, {}, { tier: "1" }),
+    /skills\/grilling\/SKILL\.md/, "不问的档位不给方法路径——方法论地图的裸点名可留,方法骨架与路径归把控档");
+  assert.doesNotMatch(issueFixedOpeningPrompt(state, {}, { tier: "2" }),
+    /skills\/grilling\/SKILL\.md/);
+  // 简报是无档公共文案:反问条款必须让位给档位,不得与把控档顶牛。
+  const analyzeBrief = promptCopy("briefs", "stage.analyze");
+  assert.doesNotMatch(analyzeBrief, /能自行推断的不要问/,
+    "tier 无关的'不要问'是把控档的对立面");
+  assert.match(analyzeBrief, /介入节奏/, "问不问交给档位文本裁决");
+  // 次级拦截点:问题会话的 AskUserQuestion 描述带 grilling 指路,
+  // 任务会话不带(该技能不在任务工作区物化)。
+  assert.match(askToolDescription("issue"), /grilling/);
+  assert.doesNotMatch(askToolDescription("task"), /grilling/);
 });
 
 // ---- Agent 卡代答(T2,ADR-0006 口径扩展) ----

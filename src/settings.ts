@@ -34,8 +34,12 @@ import {
 export interface RuntimeKnobs {
   max_concurrent?: number;
   /** 问题流回合并发额度:同时推进的问题会话回合上限(等待用户/闲置/
-   * 挂起的会话不占额度)。泵每次点火现读,改完即生效,无需重启。 */
+   *  挂起的会话不占额度)。泵每次点火现读,改完即生效,无需重启。 */
   issue_max_turns?: number;
+  /** 问题会话回合前压缩的事件量阈值:events.jsonl 增量自上次压缩每过
+   *  该值,续聊回合先把上下文压一次。0 = 关(缺省);分析→修复边界
+   *  的必压不受它管辖。 */
+  issue_compact_every_events?: number;
   repair_rounds?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
@@ -169,6 +173,10 @@ export class RuntimeSettings {
       issue_max_turns: knob(patch.issue_max_turns, "问题单并发", 1)
         ?? (("issue_max_turns" in patch)
           ? undefined : this.runtime().issue_max_turns),
+      issue_compact_every_events:
+        knob(patch.issue_compact_every_events, "问题单压缩事件阈值")
+        ?? (("issue_compact_every_events" in patch)
+          ? undefined : this.runtime().issue_compact_every_events),
       repair_rounds: knob(patch.repair_rounds, "修复轮预算")
         ?? (("repair_rounds" in patch) ? undefined : this.runtime().repair_rounds),
       poll_interval_s: knob(patch.poll_interval_s, "轮询间隔", 1)
