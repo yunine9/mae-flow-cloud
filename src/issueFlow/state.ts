@@ -428,10 +428,21 @@ export interface IssueSessionState {
    * 写入(带确认时刻与决策留痕),push_branch 成功即消费(删除)——
    * 下一次推送重新过目,防盲签。head=过目那一刻的分支 tip:确认的
    * 对象是"当时看到的那份变更",重推时 tip 变了(过目后又有新提交)
-   * 令牌即作废重新举卡。随 issue.json 持久化,重启恢复路径(recover)
-   * 不清它:已过目的确认不因重启要求重复点。summarize 不上 wire(与
-   * mr_gate 同为流程机制状态,前端镜像没有这个字段)。 */
-  push_token?: { at: string; decision: string; head?: string };
+   * 令牌即作废重新举卡。force/remote 是强制覆盖(同单重跑,2026-09-11
+   * 增补)的过目语义:force=确认的卡是"强制覆盖远端同名分支"卡——
+   * 普通卡确认过的令牌放不了强制覆盖,反之强制卡确认过的重推不再
+   * 要求带参;remote=举强制卡时远端同名分支的 tip,推送以租赁式
+   * (--force-with-lease)按它核对——确认后远端又动了即作废重举。
+   * 随 issue.json 持久化,重启恢复路径(recover)不清它:已过目的
+   * 确认不因重启要求重复点。summarize 不上 wire(与 mr_gate 同为
+   * 流程机制状态,前端镜像没有这个字段)。 */
+  push_token?: {
+    at: string;
+    decision: string;
+    head?: string;
+    force?: boolean;
+    remote?: string;
+  };
   /** 人工接管标记(2026-09-07 走查拍板):字段在场=AI 已暂停、人工作业
    * 中——接管即打断 AI 当前回合(abort 只掐回合,现场保留),状态定格
    * idle;期间的人工操作以 via=takeover 的 user_message 记事件账,交还
@@ -442,6 +453,13 @@ export interface IssueSessionState {
   /** 举 push_confirm 闸时记下的待推送 tip(过目对象的身份):确认时
    * 并进 push_token.head。不上 wire,与 push_token 同罪同罚。 */
   push_review_head?: string;
+  /** 举的是强制覆盖卡(远端同名分支将被覆盖,同单重跑场景):确认时
+   * 并进 push_token.force。不上 wire,与 push_token 同罪同罚。 */
+  push_review_force?: boolean;
+  /** 举强制覆盖卡时探测的远端同名分支 tip(覆盖对象的身份):确认时
+   * 并进 push_token.remote,推送时按它做租赁式核对。不上 wire,与
+   * push_token 同罪同罚。 */
+  push_review_remote?: string;
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -533,7 +551,10 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // 收据)2026-09-10 起上 wire(对齐清单⑤):前端要判"预热在跑/结果"
   // 决定直播面板;build-notes 仍由修复 Agent 从文件系统读,不走投影。
   const { mr_gate: _gate, push_token: _pushToken,
-    push_review_head: _pushReviewHead, env_declined: _envDeclined,
+    push_review_head: _pushReviewHead,
+    push_review_force: _pushReviewForce,
+    push_review_remote: _pushReviewRemote,
+    env_declined: _envDeclined,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
     ...rest } = state;

@@ -404,17 +404,34 @@ export interface PushReceipt {
   branch: string;
   sha: string;
   url: string;
+  /** 本次推送按强制覆盖执行(租赁式核对过远端旧 tip)。 */
+  forced?: boolean;
 }
+
+/** 强制覆盖的租赁核对失败(2026-09-11 增补):过目确认时记的远端
+ * tip 与推送时实测不一致——覆盖对象变了,确认作废。单独成类是给
+ * 工具层认领重举闸用的,不吃字符串匹配。 */
+export class IssuePushStaleRemoteError extends Error {}
 
 /** 宿主唯一一次传输:从工作区经 safeGit 只读视图读对象,在临时 bare
  * 仓里 push 到显式远端,再 ls-remote 复核 SHA。分支名单由调用方
- * (单号门禁)先行校验,这里只管传输与复核的可靠性。 */
+ * (单号门禁)先行校验,这里只管传输与复核的可靠性。
+ *
+ * force(同单重跑强制覆盖,2026-09-11 增补):不用裸 --force,而是先
+ * ls-remote 探远端同名分支 tip,再 --force-with-lease=ref:tip 推——
+ * 探测到推送之间远端又动了(他人/另一会话推送),租赁核对失败拒推,
+ * 不会盲盖。expectedRemoteTip 是过目确认时记的旧 tip(强制卡场景):
+ * 推送前先核对它,对不上直接抛 IssuePushStaleRemoteError(确认对象
+ * 变了,作废重举),把"人看过的是哪份远端,放行的就是哪份"从本地
+ * tip 扩到远端 tip。远端还没有同名分支时无从覆盖,按普通推送走。 */
 export async function pushFromIssueWorkspace(options: {
   dataDir: string;
   repoDir: string;
   repoUrl: string;
   branch: string;
   credential?: GitCredential;
+  force?: boolean;
+  expectedRemoteTip?: string;
 }): Promise<PushReceipt> {
   if (!existsSync(join(options.repoDir, ".git"))) {
     throw new Error(`代码克隆不存在: ${options.repoDir}`);
@@ -453,9 +470,33 @@ export async function pushFromIssueWorkspace(options: {
       ...sandbox.args, `--git-dir=${staging}`, "cat-file", "-e", `${sha}^{commit}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 30_000 });
     if (objectCheck.code !== 0) throw new Error("待推送 HEAD 不是可读取的提交对象");
+    const probeRemoteTip = async (): Promise<string | undefined> => {
+      const probed = await runGit([
+        ...sandbox.args, `--git-dir=${staging}`,
+        "ls-remote", "--heads", remoteUrl, ref,
+      ], { env: sandbox.env, timeoutMs: 60_000 });
+      const tip = probed.code === 0 ? probed.stdout.trim().split(/\s+/)[0] : "";
+      return /^[0-9a-f]{40}$/i.test(tip) ? tip : undefined;
+    };
+    let forceLease: string[] = [];
+    if (options.force === true) {
+      const remoteTip = await probeRemoteTip();
+      if (options.expectedRemoteTip) {
+        if (remoteTip !== options.expectedRemoteTip) {
+          throw new IssuePushStaleRemoteError(
+            `远端同名分支在过目确认后又有变动(确认时 ${options.expectedRemoteTip.slice(0, 8)}…`
+            + `,现在 ${remoteTip ? remoteTip.slice(0, 8) : "缺失"})——覆盖对象变了,`
+            + "请重新发起 force=true 推送,让用户对新的远端状态再过目一次。");
+        }
+        forceLease = [`--force-with-lease=${ref}:${options.expectedRemoteTip}`];
+      } else if (remoteTip) {
+        forceLease = [`--force-with-lease=${ref}:${remoteTip}`];
+      }
+      // 远端还没有同名分支:无从覆盖,按普通推送走(不带租赁参数)。
+    }
     const pushed = await runGit([
       ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
-      "--porcelain", remoteUrl, `${sha}:${ref}`,
+      "--porcelain", ...forceLease, remoteUrl, `${sha}:${ref}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: GIT_TRANSFER_TIMEOUT_MS });
     if (pushed.code !== 0) {
       // porcelain 的拒收摘要(! [rejected] (non-fast-forward))走 stdout,
@@ -465,13 +506,18 @@ export async function pushFromIssueWorkspace(options: {
       const raw = stderrText || stdoutText;
       // 同单重跑撞远端遗留分支(2026-08-28 事故):分支名带单号,上次
       // 停止的运行推过同名分支,本地从基线另起必然非快进。光透 git
-      // 原文等于让 AI 猜——点名原因与处置。
-      const staleBranch = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
-        .test(`${stderrText}\n${stdoutText}`)
-        ? " 远端同名分支已存在且非快进(常见于同单重跑:上次运行推过"
-          + "该分支)——请与用户确认处置(在代码平台删除远端旧分支后"
-          + "重推,或沿用旧分支),再重试。"
-        : "";
+      // 原文等于让 AI 猜——点名原因与处置(2026-09-11 增补:处置从
+      // "请用户去平台删远端分支"改为指路 force=true 重推,过目闸保
+      // 证覆盖前用户知情;强制尝试被拒则提示核对远端,不教盲目重试)。
+      const rejected = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
+        .test(`${stderrText}\n${stdoutText}`);
+      const staleBranch = !rejected ? "" : options.force === true
+        ? " 强制覆盖被拒:远端分支状态与推送时不一致,或受平台分支保护"
+          + "限制——先与用户核对远端分支状态再决定,不要盲目重试。"
+        : " 远端同名分支已存在且非快进(常见于同单重跑:上次运行推过"
+          + "该分支)——确认是本单遗留后带 force=true 重推即可覆盖"
+          + "(过目开启时会举强制覆盖确认卡;该分支已有 MR 时覆盖后"
+          + "原 MR 随之更新,不要重复创建)。";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
         ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
@@ -484,9 +530,35 @@ export async function pushFromIssueWorkspace(options: {
       throw new Error(`远端 SHA 复核失败: 本地 ${sha.slice(0, 12)},`
         + `远端 ${remoteSha ? remoteSha.slice(0, 12) : "缺失"}`);
     }
-    return { branch: options.branch, sha, url: remoteUrl };
+    return {
+      branch: options.branch, sha, url: remoteUrl,
+      ...(options.force === true ? { forced: true } : {}),
+    };
   } finally {
     view?.cleanup();
+    sandbox.cleanup();
+  }
+}
+
+/** 远端同名分支的当前 tip(强制覆盖过目卡的"覆盖对象身份"):取不到
+ * (网络/权限)返回 undefined——卡照样举,只是不带远端指向,与
+ * pushChangeSummary 同一哲学:摘要不可得不拦闸。 */
+export async function remoteBranchTip(options: {
+  dataDir: string;
+  repoUrl: string;
+  branch: string;
+  credential?: GitCredential;
+}): Promise<string | undefined> {
+  const remoteUrl = validateRepoUrl(options.repoUrl);
+  const sandbox = prepareSandbox(options.dataDir, options.credential);
+  try {
+    const probed = await runGit([
+      ...sandbox.args, "ls-remote", "--heads", remoteUrl,
+      `refs/heads/${options.branch}`,
+    ], { env: sandbox.env, timeoutMs: 60_000 });
+    const tip = probed.code === 0 ? probed.stdout.trim().split(/\s+/)[0] : "";
+    return /^[0-9a-f]{40}$/i.test(tip) ? tip : undefined;
+  } finally {
     sandbox.cleanup();
   }
 }

@@ -3404,13 +3404,22 @@ export class IssueFlowService {
       // 重推时 tip 变了令牌即作废重举),随 issue.json 持久化,recover
       // 不清它。闸已在上面落掉、原阶段续跑——Agent 重试 push_branch 即
       // 放行,成功后令牌被消费,再推重新过目(每次过目,防盲签)。
+      // 强制覆盖卡(2026-09-11 增补)多带两样:force=确认的是"强制
+      // 覆盖远端同名分支"卡(普通卡确认过的令牌放不了强制覆盖),
+      // remote=举卡时远端旧分支 tip——推送按它做租赁式核对,确认后
+      // 远端又动了即作废重举。
       state.push_token = {
         at: new Date().toISOString(),
         decision,
         ...(state.push_review_head
           ? { head: state.push_review_head } : {}),
+        ...(state.push_review_force ? { force: true } : {}),
+        ...(state.push_review_remote
+          ? { remote: state.push_review_remote } : {}),
       };
       delete state.push_review_head;
+      delete state.push_review_force;
+      delete state.push_review_remote;
       saveState(live.root, state);
       this.continueTurn(live,
         promptCopy("notices", "gate.push.grant", { supplement }));
@@ -3420,6 +3429,11 @@ export class IssueFlowService {
     if (verdict === "hold_push") {
       // 暂不推送(含自由作答):不产令牌,原阶段续跑。决策与意见已在
       // 上面入账(human_decision 事件+转移账),Agent 能看到用户意见。
+      // 举闸镜像(head/force/remote)一并清掉:没换来令牌,留着只会
+      // 让下一张卡捡到旧语义。
+      delete state.push_review_head;
+      delete state.push_review_force;
+      delete state.push_review_remote;
       saveState(live.root, state);
       this.continueTurn(live,
         promptCopy("notices", "gate.push.hold", { decision, supplement }));
