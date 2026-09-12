@@ -208,8 +208,8 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 }
 ```
 
-MR 闭环的可选端点(mr_gates/mr_discussions/discussion_reply/
-pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对报告
+MR 闭环端点(mr_gates/mr_discussions/discussion_reply/
+pipeline_artifacts；启用 MR 持续检视时必须配置讨论查询和回复，不配会明确报查询/投递失败并重试)与按能力核对报告
 钉出来的 adapter.json 参考填法(mergeable_state 平铺布尔、先查后建、
 两步回复/解决、MCP 日志桥),见 **docs/mr-loop-adaptation.md §3/§11**。
 检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);

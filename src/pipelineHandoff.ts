@@ -2,6 +2,12 @@ import { parsePipelineChecks } from "./pipelineContract.ts";
 import type { PipelineRun, PipelineStatus } from "./pipelineClient.ts";
 import type { TaskSummary } from "./taskService.ts";
 
+export function validPushReceipt(value: unknown): value is NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]> {
+  const row = value as { sha?: unknown; ref?: unknown; remote?: unknown } | undefined;
+  return !!row && typeof row.sha === "string" && /^[a-f0-9]{40,64}$/i.test(row.sha)
+    && typeof row.ref === "string" && row.ref.startsWith("refs/heads/") && typeof row.remote === "string" && !!row.remote;
+}
+
 /** 两条推送入口共用投影：新 SHA 只代表已推送，不继承旧运行的红绿灯。
  * last_sha 是上次派修锚，必须保留；在实际派出下一轮修复时才更新。 */
 export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {

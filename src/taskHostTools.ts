@@ -1,4 +1,4 @@
-import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "./pipelineHandoff.ts";
+import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt, validPushReceipt } from "./pipelineHandoff.ts";
 import { remainingCiMission } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
@@ -97,8 +97,8 @@ export function recoverHostPushProjection(summary: TaskSummary): boolean {
   if (["completed", "canceled"].includes(summary.status)) return false;
   const ledger = new TaskHostLedger(summary);
   const pending = ledger.pending();
-  const receipt = pending?.push_receipt ?? summary.delivery?.git_push
-    ?? ledger.read().operations.filter(op => op.push_receipt).at(-1)?.push_receipt;
+  const receipt = [pending?.push_receipt, summary.delivery?.git_push,
+    ...ledger.read().operations.slice().reverse().map(op => op.push_receipt)].find(validPushReceipt);
   if (!receipt) return false;
   scopePipelineArtifacts(join(summary.workspace, "pipeline"), receipt.sha);
   if (summary.delivery?.sha === receipt.sha && summary.delivery.git_push?.sha === receipt.sha) return false;

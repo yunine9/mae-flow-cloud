@@ -186,7 +186,9 @@ test("MR 讨论接口失败时明确显示自动重试，不能误报门禁全�
 test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI 接棒;合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  platform.statusQueue.push("failed", "success"); // 首跑红;CI 修后绿
+  // 检视交付本身也会产生新 SHA；CI 接棒必须基于这版真实失败，
+  // 不能让测试依赖“新提交已绿仍拿首版红灯派修复”的旧错误。
+  platform.statusQueue.push("failed", "failed", "success");
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "张三", body: "这里要判空,别让缺失变量把模板炸了",
@@ -241,9 +243,10 @@ EOF` } } },
       (service.get(id)!.delivery?.loop?.kind ?? "") === "ci", "CI 接棒");
     assert.equal(service.get(id)!.delivery?.loop?.round, 1);
     const workspace = service.get(id)!.workspace;
-    await until(() => existsSync(
-      join(workspace, "pipeline", "build_log_101.txt")),
-      "失败材料镜像到 pipeline/");
+    await until(() => existsSync(join(workspace, "pipeline", "build_log_101.txt"))
+      || (existsSync(join(workspace, "pipeline-history")) && readdirSync(join(workspace, "pipeline-history"))
+        .some(dir => existsSync(join(workspace, "pipeline-history", dir, "build_log_101.txt")))),
+      "失败材料确实镜像，换 SHA 后可已归档");
     const artifactsCall = platform.seenIdentity.find(
       (request) => request.path === "/pipeline/artifacts");
     assert.equal(new URLSearchParams(artifactsCall?.query).get("mr"),
@@ -925,7 +928,7 @@ test("失败详情只是个链接:不派 Agent、不扣修复轮次并明确等�
 test("检视意见沿用原交付事实:feedback-open 接续且不换单", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  platform.statusQueue.push("failed", "success"); // 首跑红;修后绿
+  platform.statusQueue.push("failed", "failed", "success"); // 检视交付的新 SHA 仍红，才派 CI 修复
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "李四", body: "这里的空指针要判一下",

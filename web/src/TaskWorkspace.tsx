@@ -1,5 +1,6 @@
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
+import { RefreshMrButton } from "./RefreshMrButton";
 import { StoryArchitecture } from "./StoryArchitecture";
 import { StoryViewNotice } from "./StoryViewNotice";
 import { STORY_VIEWS, storyViewCoverage } from "../../src/storyViewCoverage";
@@ -1886,6 +1887,8 @@ export function TaskWorkspace({
             <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />
+            {canOperate && !task.requirement_graph && !["completed", "canceled"].includes(task.status)
+              && <RefreshMrButton key={task.id} taskId={task.id} onChanged={onChanged} />}
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>
