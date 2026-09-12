@@ -96,6 +96,10 @@ export async function makeService(
     dts: new MockDtsGateway(),
     notifier,
     linkBase: "https://mfc.example.com",
+    // 这些用例验证的是“真人收到小鲁班审批卡并作答”的通路。默认
+    // 二档会代答带推荐项的纯选择题，并有意抑制即将失效的通知；
+    // 显式使用三档，避免把自动节奏和人工审批混在同一用例里。
+    interventionTier: () => "3",
   });
   const created = service.create({
     account: "dev", title: "登录超时", ticket: TICKET, source: "dts",

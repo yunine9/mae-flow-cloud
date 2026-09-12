@@ -66,7 +66,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { hostSkillNames } from "./hostSkillRuntime.ts";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
-import { pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
+import { annotationMutationAccess, annotationSubmissionPlan, pickAnnotationSubmission, requirementSubmissionReceipt } from "./annotationSubmission.ts";
 import { resetQueuedRequirementReviews, submitRequirementReview, interruptRequirementReviews } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
@@ -546,6 +546,7 @@ import {
 } from "./safeGit.ts";
 import {
   AGENT_PLATFORM_LOCAL_EXCLUDES,
+  FLOW_RUNTIME_LOCAL_EXCLUDES,
   AGENT_PLATFORM_PATHSPECS,
   describeAgentPlatformRoots,
   isAgentPlatformPath,
@@ -2903,6 +2904,8 @@ export class TaskService {
         taskId: `knowledge-extract:${record.id}`,
         workspace: cloneDir,
         agentDir,
+        repositoryResourceBlocks: () =>
+          readResourceBlocks(this.options.dataDir),
         provider: active.provider,
         model: active.model,
         eventLog: new EventLog(join(root, "events.jsonl")),
@@ -3113,6 +3116,8 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: reviewRoot,
         agentDir,
+        repositoryResourceBlocks: () =>
+          readResourceBlocks(this.options.dataDir),
         provider: model.provider,
         model: model.model,
         eventLog: new EventLog(this.eventLogPath(task.summary.id)),
@@ -4506,6 +4511,8 @@ export class TaskService {
       taskId: `${task.summary.id}:warmup`,
       workspace: task.cwd,
       agentDir,
+      repositoryResourceBlocks: () =>
+        readResourceBlocks(this.options.dataDir),
       hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
       knowledgeContext: task.summary.host_skills_pinned ? undefined : {
         repositories: task.summary.repositories ?? [],
@@ -6118,13 +6125,15 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const annotations = this.annotations(task);
-    this.assertAnnotationOwner(task, by);
     const item = annotations.list().find((entry) => entry.id === annotationId);
+    if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    const ownerControlled = annotationMutationAccess(
+      item, by, task.summary.luban_account ?? "本地用户");
     if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending") || item?.status === "verified") throw new TaskControlError("已交给 Agent 或已闭环的意见不能删除");
-    const dropped = annotations.drop(annotationId, by, true);
+    const dropped = annotations.drop(annotationId, by, ownerControlled);
     if (dropped.status === "dropped") this.resolveFeedbackRecords(task, (record) =>
       record.source === "workspace" && record.source_id === dropped.id,
-      "closed", "责任人删除待处理意见");
+      "closed", ownerControlled ? "责任人删除待处理意见" : "提出人删除未提交意见");
     this.refreshWorkspaceReviewClosure(task);
     return dropped;
   }
@@ -6139,10 +6148,12 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const store = this.annotations(task);
     const item = store.list().find((one) => one.id === annotationId);
-    this.assertAnnotationOwner(task, by);
+    if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
+    const ownerControlled = annotationMutationAccess(
+      item, by, task.summary.luban_account ?? "本地用户");
     if (item?.status === "verified") throw new TaskControlError("已闭环意见保留历史；如有新意见请另行提出");
     if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending")) throw new TaskControlError("已交给 Agent 的意见请等待答复后重新处理，再修改或补充");
-    return store.edit(annotationId, note, by, true);
+    return store.edit(annotationId, note, by, ownerControlled);
   }
 
   /** 当前任务责任人逐条处置；保留 override 参数兼容旧调用，但不再授予代签权限。 */
@@ -6160,7 +6171,7 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     if (task.summary.status === "completed" && item?.artifact !== OVERALL_STORY_ARTIFACT) throw new TaskControlError("任务已归档，代码检视记录只读");
     if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
-    if (!(item.response && item.response.revision === (item.rework ?? 0)) && !(item.owner_reply && item.sent_via === "owner_pending")) throw new TaskControlError("请先交给 Agent 处理或自行答复，再确认闭环");
+    if (!(item.response && item.response.revision === (item.rework ?? 0)) && !(item.owner_reply && item.sent_via === "owner_pending")) throw new TaskControlError("请先交给 Agent 处理并取得处理依据，或由责任人自行答复后再确认闭环");
     const verified = annotations.resolveAsOwner(annotationId, by, decision ?? {
       revision: item.rework ?? 0, outcome: "fixed", reason: "",
     });
@@ -6244,14 +6255,25 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.summary.status === "canceled") throw new TaskControlError("任务已由用户停止，不能再提交批注");
-    this.assertAnnotationOwner(task, actor ?? "本地用户");
+    const sender = actor ?? "本地用户";
+    const owner = task.summary.luban_account ?? "本地用户";
     if (context.trim() && ids?.length !== 1) throw new TaskControlError("请逐条补充并发送检视意见");
-    allowForeign = !!ids?.length;
-    for (const item of this.annotations(task).list().filter((entry) => ids ? ids.includes(entry.id) : entry.status === "draft" && (!task.summary.luban_account || entry.author === actor))) {
-      if (item.route !== "memory") this.annotations(task).assignToAgent(item.id, actor ?? "本地用户", context);
+    const requirementReview = task.summary.waiting?.step
+      === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
+    const { selected, maySendForeign } = annotationSubmissionPlan({
+      items: this.annotations(task).list(), ids, sender, owner,
+      allowForeign, requirementReview,
+    });
+    for (const item of selected) {
+      const route = item.route ?? "agent";
+      if (route !== "memory" && (route !== "agent" || context.trim())
+          && (item.status === "draft"
+          || (item.status === "sent" && item.sent_via === "owner_pending"))) {
+        this.annotations(task).assignToAgent(item.id, sender, context);
+      }
     }
-    const requirementReview = task.summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP;
-    const allPicked = this.pickDrafts(task, ids, actor, allowForeign, requirementReview);
+    // assignToAgent 会把责任人转交的意见切回 agent 路由，重新读取快照后再投递。
+    const allPicked = this.pickDrafts(task, ids, sender, maySendForeign, requirementReview);
     const overall = allPicked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
     if (task.summary.requirement_graph?.stage === "confirmed" && overall.length && overall.length !== allPicked.length) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
     if (task.summary.status === "completed" && !overall.length) throw new TaskControlError("MR 已合入，任务已经结束，不能再提交批注");
@@ -12304,6 +12326,8 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: task.cwd,
         agentDir,
+        repositoryResourceBlocks: () =>
+          readResourceBlocks(this.options.dataDir),
         humanFacing: true,
         // 开发助手也能查记忆(§8:所有会话同有);不挂首改目录提醒——
         // 人在接管,提醒是给自动跑的主 Agent 的。
@@ -13063,6 +13087,39 @@ export class TaskService {
     if (!this.current(task, epoch)
         || task.summary.status === "paused"
         || task.summary.status === "pausing") return;
+
+    // Build-Fix 是本地阶段，恢复它不能先依赖 MR / 远端分支查询。
+    // 旧实现直接进入 tryDeliver，而 tryDeliver 为防止已合入 MR 被重复推送，
+    // 第一件事会核对远端；平台部署中或网络暂不可用时，本地 runner 因而
+    // 永远没有机会启动，task.json 却一直显示“正在恢复”。先仅凭任务现场
+    // 恢复并收口同一轮 Build-Fix，成功后再进入完整交付链；tryDeliver
+    // 会按同 SHA 收据幂等复用，不会重复编译。
+    if (!task.cwd) {
+      this.failPendingPrePush(task, "代码现场路径缺失");
+      return;
+    }
+    const statePath = join(task.cwd, ".mae-flow.json");
+    if (!existsSync(statePath)) {
+      this.failPendingPrePush(task, "流程未初始化，无可恢复的分支配置");
+      return;
+    }
+    let branch = "";
+    let baseline = "";
+    try {
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      branch = String(state?.config?.["分支名"] ?? "");
+      baseline = String(state?.config?.["基线分支"] ?? "");
+    } catch (error) {
+      this.failPendingPrePush(task,
+        `流程配置无法读取：${String(error).slice(0, 500)}`);
+      return;
+    }
+    if (!branch || !baseline) {
+      this.failPendingPrePush(task, "流程配置缺少分支名或基线分支");
+      return;
+    }
+    if (!await this.preparePush(task, branch, baseline, epoch)) return;
+    if (!this.current(task, epoch)) return;
     await this.tryDeliver(task, epoch);
   }
 
@@ -14019,8 +14076,7 @@ export class TaskService {
               AGENT_DELIVERY_UNIT,
               ".mae-flow-dependencies.md", ".mae-flow-issue.md",
               AGENT_REQUIREMENT_DOCUMENT,
-              ".mae-flow.json", ".mae-flow.json.exited",
-              ".mae-flow-history.jsonl", ".mae-flow-work/",
+              ...FLOW_RUNTIME_LOCAL_EXCLUDES,
               "openspec/config.yaml",
             ]
               .filter((entry) => !current.includes(entry));
@@ -14308,6 +14364,8 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: cwd,
         agentDir,
+        repositoryResourceBlocks: () =>
+          readResourceBlocks(this.options.dataDir),
         // 任务记忆(§8):检索工具 + 首次改目录提醒。没有 sidecar 就都不挂。
         // 拆分提议:只给单仓直接开发的主任务。
         extraTools: [...(this.memoryTools(task) ?? []), ...this.splitTools(task), ...createTaskHostTools(this.taskHostRuntime(task, epoch))],
@@ -15496,6 +15554,8 @@ export class TaskService {
         taskId: `${task.summary.id}:prepush:${request.round}`,
         workspace: task.cwd,
         agentDir,
+        repositoryResourceBlocks: () =>
+          readResourceBlocks(this.options.dataDir),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
@@ -16658,9 +16718,14 @@ export class TaskService {
         && ["running", "queued"].includes(task.summary.status)) {
       task.summary.status = "verifying"; task.summary.detail = "宿主正在接续交付与流水线验证"; this.persist(task);
     }
-    // task-40：旧 MR 已被人在远端合入，本地却仍是“验证中”。必须先
-    // 查同一个 MR，不能先 rebase/push 再靠创建接口猜它是否还存在。
-    if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
+    // task-40：已知 MR 可能已被人在远端合入，本地却仍是“验证中”。
+    // 这类必须先查同一个 MR，不能先 rebase/push。首次交付尚无 MR 时
+    // 则先完成本地 Build-Fix；否则一次远端抖动会让完全本地的编译也
+    // 无法启动。首次交付仍会在真正推送之前做同样的远端发现与核验。
+    const knownMr = Boolean(task.summary.delivery?.mr_url?.trim()
+      || String(task.summary.delivery?.mr_id ?? "").trim());
+    if (knownMr
+        && !await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
     // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
@@ -16762,6 +16827,11 @@ export class TaskService {
         if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       }
       if (!await this.agentPlatformChangesAllowPush(task)) return;
+      // 首次交付没有已知 MR：本地验证已经收口，现在才访问平台发现
+      // 可能存在的同分支 MR、核对远端分支，并在必要时接续已有事实。
+      // 该检查仍早于人工确认和 push，安全边界没有放宽。
+      if (!knownMr
+          && !await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       await this.inheritWorkspaceReviewDeliverySelection(task);
       if (!this.current(task, epoch)) return;
       // 平台检视回复必须在 Build-Fix 以及交付范围机械整理全部收敛后
@@ -16834,6 +16904,12 @@ export class TaskService {
           && await this.reconcileFrozenBaselineAncestry(task, false)
           === "blocked") return;
       const previous = task.summary.delivery;
+      // 自动恢复时，同 SHA 必须复用既有流水线，避免无故烧钱；但任务已
+      // 因外部配置/权限问题停机、责任人明确点“重跑续推”时，旧红灯正是
+      // 人要重新验证的对象。此时不能先查询到旧 failed 又原样停机，应该
+      // 触发一条新的同 SHA 流水线。retry() 写入的标记只活到本次交付。
+      const manualPipelineRetry = previous?.pipeline
+        === "人工重跑,待重新验证";
       const pushReceipt = existingPushReceipt ?? await this.pushFromHost(
         task, branch, expectedPushSha);
       const sha = pushReceipt.sha;
@@ -16936,7 +17012,7 @@ export class TaskService {
       this.persist(task);
       this.ensureMergeWatch(task);
       const runKey = `pipeline:${sha}`;
-      if (existingPushReceipt) {
+      if (existingPushReceipt && !manualPipelineRetry) {
         const observed = await getPipelineStatus({ platformUrl, sha, repo: mrRequest.repo,
           mr: mr.id === undefined ? undefined : String(mr.id), credential: this.options.gitCredential?.(task.summary.luban_account) });
         if (!this.current(task, epoch)) return;
@@ -17628,6 +17704,11 @@ export class TaskService {
       ].some((tool) => unfixableSet.has(tool.toLowerCase())));
     task.mission = [
       `当前目标是处理本轮流水线失败(${roundText}修复)；较新的责任人要求可调整目标或逐条暂缓:`,
+      ...(loop.round > 1 ? [
+        `- 上一轮修复后流水线仍红，这是新一轮权威结果；`
+          + `先对比本轮证据与上轮改动，判断是原因未解决、新回归还是证据变化，`
+          + `不要无分析地重复上一轮做法。`,
+      ] : []),
       ...(failedDimensions.length ? [
         `- 本轮失败的维度(平台逐项事实,权威):`
         + `${failedDimensions.join("、")}。尚未暂缓的每一维都要有明确处理结果,`
@@ -17756,9 +17837,18 @@ export class TaskService {
       return result.proceed;
     } catch (error) {
       if (this.current(task, epoch)) {
-        const failure = `远端交付核验未完成：${String(error)}`, verdict = classifyDeliveryFailure(failure);
-        if (verdict.disposition === "retry") this.holdWithRecovery(task, failure, epoch);
-        else this.markVerificationStalled(task, failure, verdict.stall_class);
+        // 分类必须看平台原始原因。若先拼“远端交付核验未完成”，
+        // startsWith 型契约判据会失效，把响应残缺等确定性问题误当成
+        // 瞬时故障无限重试。
+        const cause = String(error).replace(/^(Error:\s*)+/, "");
+        const verdict = classifyDeliveryFailure(cause);
+        if (verdict.disposition === "retry") {
+          this.holdWithRecovery(task,
+            `远端交付核验未完成：${cause}；系统正在自动重试`, epoch);
+        } else {
+          this.markVerificationStalled(task,
+            `无法确认已有 MR：${cause}；已停止续推`, verdict.stall_class);
+        }
       }
       return false;
     }
@@ -20228,6 +20318,7 @@ export class TaskService {
         .map((path) => `/${path}`);
       const missing = [
         ...AGENT_PLATFORM_LOCAL_EXCLUDES,
+        ...FLOW_RUNTIME_LOCAL_EXCLUDES,
         "docs/req/",
         ...deliveryExcludes,
       ]

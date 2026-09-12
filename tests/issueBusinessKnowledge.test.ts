@@ -242,7 +242,7 @@ test("docs 不再进地图(ADR-0021):平台不扫描仓内 docs/,资产是唯一
     "仓内 docs/ 路径不得出现在地图里(ADR-0021)");
 });
 
-test("提示层:开场词 analyze 注入资产地图;docs 置信度段全阶段在场", () => {
+test("提示层:开场词 analyze 只注入资产地图，repo-docs 规则不再重复注入", () => {
   const base = {
     id: "issue-1", scenario: "no_ticket", stage: "analyze",
     title: "对账差异", description: "", account: "dev",
@@ -260,15 +260,14 @@ test("提示层:开场词 analyze 注入资产地图;docs 置信度段全阶段�
   const prompt = issueFixedOpeningPrompt(base, {}, { tier: "3" });
   assert.match(prompt, /业务知识地图/);
   assert.match(prompt, /清结算 FAQ/);
-  assert.match(prompt, /置信度中等/,
-    "docs 置信度分层段在场(ADR-0021)");
+  assert.doesNotMatch(prompt, /置信度中等/,
+    "docs 分层已收口到 repo-docs skill，避免每回合重复注入");
   assert.doesNotMatch(prompt, /repo\/origin\/docs\//,
     "docs 路径不再由平台注入");
-  // 非 analyze 阶段:地图不注入(跟着 analyze 简报走),置信度段
-  // 不门控——契约文件全阶段在场,分层规则同寿(ADR-0021 Q4)。
+  // 非 analyze 阶段:地图不注入，docs 分层仍由按需装载的
+  // repo-docs skill 承担，不在开场词常驻。
   const prep = { ...base, stage: "prep_repo" } as IssueSessionState;
   const prepPrompt = issueFixedOpeningPrompt(prep, {}, { tier: "3" });
   assert.doesNotMatch(prepPrompt, /业务知识地图/);
-  assert.match(prepPrompt, /置信度中等/,
-    "prep_repo 阶段置信度段仍在场(不随 analyze 门控)");
+  assert.doesNotMatch(prepPrompt, /置信度中等/);
 });

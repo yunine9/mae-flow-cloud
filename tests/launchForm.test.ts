@@ -1057,7 +1057,8 @@ test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比�
   assert.match(source, /正在检查仓库地址/);
   // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色:退出图标的颜色
   // 来自令牌,浅/深两套令牌各自定义 --faint,对比度在令牌层保证。
-  assert.match(style, /\.logout-button,\n\.density-switch \{[\s\S]*?color: var\(--faint\)/);
+  assert.match(style, /\.logout-button \{[\s\S]*?color: var\(--faint\)/);
+  assert.match(style, /\.density-switch \{[\s\S]*?color: var\(--faint\)/);
   assert.doesNotMatch(style, /data-theme="light"\] \.logout-button/);
   assert.match(tokens, /:root \{[\s\S]*?--faint: #[0-9a-f]{6}/);
   assert.match(tokens, /:root\[data-theme="dark"\] \{[\s\S]*?--faint: #[0-9a-f]{6}/);
@@ -1109,7 +1110,7 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(picker, /<div className="repository-assignee-editable">/);
   assert.match(picker, /ariaLabel=\{\`\$\{rowLabel\}的执行人\`\}/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
-  assert.match(picker, /<input type="text" value=\{ticket\}/);
+  assert.match(picker, /<Input type="text"[^>]*value=\{ticket\}/);
   assert.doesNotMatch(picker, /repository-ticket-readonly|isUnitRow\(repository\) \|\| !ticket\.trim\(\)/,
     "已有单号与输入首字符都不能把编辑框变回只读");
   assert.match(picker, /chooseAssignee/);
@@ -1122,7 +1123,7 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
 
 test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  assert.match(source, /\{!requirementBundle && <textarea/);
+  assert.match(source, /\{!requirementBundle && <Textarea/);
   assert.doesNotMatch(source, /readOnly=\{Boolean\(requirementBundle\)\}/);
   assert.match(source, /requirementBundle && <div className="requirement-bundle-preview">/);
 });
@@ -1157,7 +1158,7 @@ test("修复轮手刹只恢复当前草稿，不会从上一张任务偷偷带�
   assert.match(source, /repairRounds === "0"[\s\S]*?"自动修复已关闭"/,
     "0 必须按关闭能力告警，不能只写成机械的 0 轮");
   assert.match(source,
-    /<input type="text" inputMode="numeric" pattern="\[0-9\]\*"/,
+    /<Input type="text" inputMode="numeric" pattern="\[0-9\]\*"/,
     "修复轮手刹不能用 number spinner，空值误触会直接变 0");
   assert.match(source, /留空=平台默认 20 轮；填 0=关闭/,
     "placeholder 要把默认与关闭的区别说明白");

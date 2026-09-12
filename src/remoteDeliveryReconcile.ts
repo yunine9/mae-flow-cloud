@@ -77,6 +77,11 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
       return done(view.mrState === "merged" ? "MR 已合入，已接续任务收口" : "MR 已关闭，任务尚未完成", false);
     }
     host.watch();
+    // 已知 MR 的生命周期已经由指定 MR 接口核验。继续掉到下面再用
+    // 本地工作区 + ls-remote 猜一次“是否发布”，不仅重复 I/O，还会在
+    // 工作区暂不可用时把一个明确 opened 的 MR 误判成无法继续交付。
+    // 分支观察只负责“没有 MR/收据的旧现场”恢复事实。
+    return done("已有 MR 仍打开，继续原交付链");
   }
   if (!source || !host.cwd) return done("尚未确认任务分支，无法核验远端推送");
   const observed = await host.observe(source);

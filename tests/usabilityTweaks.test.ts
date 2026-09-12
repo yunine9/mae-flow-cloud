@@ -16,8 +16,10 @@ const taskTime = read("web/src/taskTime.ts");
 const taskHierarchy = read("web/src/taskHierarchy.ts");
 
 test("批注编辑框默认更高,且能竖向拖到大半屏", () => {
-  assert.match(annotatable, /<textarea\s+autoFocus\s+rows=\{4\}/);
-  assert.match(annotationPanel, /<textarea value=\{editingNote\} autoFocus rows=\{5\}/);
+  assert.match(annotatable,
+    /<Textarea\s+autoFocus[\s\S]*?className="min-h-16 max-h-\[70vh\] resize-y/);
+  assert.match(annotationPanel,
+    /<Textarea className="min-h-\[132px\] max-h-\[70vh\] resize-y[^\"]*" value=\{editingNote\} autoFocus rows=\{5\}/);
   assert.match(annotateCss,
     /\.annot-editor textarea \{[^}]*min-height:\s*108px[^}]*max-height:\s*70vh[^}]*resize:\s*vertical/s);
   assert.match(annotateCss,

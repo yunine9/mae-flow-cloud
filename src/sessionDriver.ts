@@ -57,6 +57,10 @@ import {
   createVisionToolState,
   type VisionCapabilityConfig,
 } from "./visionCapability.ts";
+import {
+  resourceBlocked,
+  resourceBlockNotice,
+} from "./repositoryResourcePolicy.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -131,7 +135,10 @@ export function looksLikeRateLimited(detail: string): boolean {
  *  收尾窗口里再 prompt,pi 原文就是这一句。识别它不是为了吞——是让
  *  调用方区分"会话坏了"和"递早了一拍",后者让一拍重投即可。 */
 export function looksLikeBusyCollision(detail: string): boolean {
-  return /already processing/i.test(detail);
+  // 只认 Pi 拒收 prompt 的完整特征。普通工具报错里也可能出现
+  // “already processing”，把它误判成可重投会吞掉真正的失败。
+  return /Agent is already processing\.\s*Specify streamingBehavior\b/i
+    .test(detail);
 }
 
 /** 忙撞重投前让出的节拍:pi 收尾是微任务+流关闭级别的活,250ms 足够
@@ -374,6 +381,9 @@ export interface CloudSessionOptions {
   /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
    * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
   repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
+  /** 管理员屏蔽的仓库行为资源。每次组装主/子会话时现读，确保设置修改
+   * 对恢复中的任务也生效；只影响仓内 Skill/AGENTS，不屏蔽平台 Skill。 */
+  repositoryResourceBlocks?: () => readonly string[];
   /** 多仓契约文件(spec #131 / issue #132,2026-09-03):问题流会话的
    * 代码仓平铺在 <workspace>/repo/<仓名>/ 下,而会话 cwd 是 workspace——
    * SDK 的祖先目录发现从 cwd 往上走,永远望不到仓根的 AGENTS.md。
@@ -1000,6 +1010,13 @@ export class CloudSession {
     extraTools?: unknown[];
   }) {
     const { workspace, agentDir, provider, model } = this.options;
+    const blockedRepositoryResources = [
+      ...(this.options.repositoryResourceBlocks?.() ?? []),
+    ];
+    const repositoryResourceBlocked = (path: string) => resourceBlocked(
+      relative(workspace, path).split(sep).join("/"),
+      blockedRepositoryResources,
+    );
     // Skill=写法指南(团队那两个 UT skill 只负责"单测怎么写"),云端照用:
     // Pi 只把 name/description/location 组成轻量可用 Skill 索引；模型判断
     // 相关后再用 Read 读取 SKILL.md 正文。它不承担 UT 运行，也不构成
@@ -1029,6 +1046,7 @@ export class CloudSession {
     }
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
+        if (repositoryResourceBlocked(path)) return false;
         if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
         try {
           return statSync(path).isFile();
@@ -1105,7 +1123,9 @@ export class CloudSession {
       this.options.knowledgeTrace?.record(
         "available", config.sessionId, resource);
     }
-    for (const item of this.options.repositorySkillResources ?? []) {
+    const repositorySkillResources = (this.options.repositorySkillResources ?? [])
+      .filter((item) => !repositoryResourceBlocked(item.actual_path));
+    for (const item of repositorySkillResources) {
       this.options.knowledgeTrace?.register(item.actual_path, {
         id: item.id,
         kind: item.kind,
@@ -1137,7 +1157,8 @@ export class CloudSession {
     }
     // 仓契约注入同款一行事(2026-09-03):提示词里多了什么必须能在
     // 日志里对账,只记 repo/ 下的相对路径,不贴正文。
-    const repoContextFiles = this.options.repoContextFiles ?? [];
+    const repoContextFiles = (this.options.repoContextFiles ?? [])
+      .filter((file) => !repositoryResourceBlocked(file.path));
     if (repoContextFiles.length) {
       this.options.log?.(`任务 ${this.options.taskId} 注入仓契约: ${
         repoContextFiles.map((file) => {
@@ -1147,6 +1168,11 @@ export class CloudSession {
             : basename(file.path);
         }).join(", ")}`);
     }
+    const appendedSystemPrompt = [
+      ...resourceBlockNotice(blockedRepositoryResources),
+      ...(this.options.humanFacing && config.sessionId === this.sessionId
+        ? [HUMAN_FACING_STYLE] : []),
+    ];
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
@@ -1162,16 +1188,19 @@ export class CloudSession {
       // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
-          ...current.agentsFiles,
+          ...current.agentsFiles.filter((file) =>
+            !repositoryResourceBlocked(file.path)),
           ...(knowledgeIndex.path && knowledgeIndex.content
             ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
             : []),
-          ...(this.options.repoContextFiles ?? []),
+          ...repoContextFiles,
         ],
       }),
       // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
-      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
-        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
+      ...(appendedSystemPrompt.length ? {
+        appendSystemPromptOverride: (base: string[]) => [
+          ...base, ...appendedSystemPrompt,
+        ],
       } : {}),
       extensionFactories: [
         {

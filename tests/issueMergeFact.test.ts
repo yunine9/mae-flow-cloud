@@ -50,7 +50,10 @@ async function greenFixture() {
   const dataDir = mfcTemp("mfc-issue-merge-");
   const platform = new FakeGitPlatform();
   const sourceDir = join(dataDir, "source");
-  execFileSync("git", ["init", "-q", sourceDir]);
+  // 问题流当前的内网交付契约缺省目标分支是 master。测试机的
+  // init.defaultBranch 可能是 main；显式建 master，避免假平台拿一条
+  // 根本不存在的目标 ref 做合入事实判断。
+  execFileSync("git", ["init", "-q", "-b", "master", sourceDir]);
   execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
     "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
   const origin = platform.initBare(sourceDir, dataDir);
@@ -103,17 +106,27 @@ async function greenFixture() {
   }, "分析确认闸收口");
   const gateVersion = service.get(created.id).gate!.state_version;
   service.answer(created.id, { state_version: gateVersion, code: "confirm" });
+  // 全绿之后先由用户确认真实环境结果；合入事实监听与环境验证闸并行
+  // 点火。这个测试关心的是闸通过后的合入/归档，不应绕过当前流程。
   await until(() => {
     const snapshot = service.get(created.id);
-    // 等 stage_note 且回合收口(idle):竞态测试要立刻 control,
-    // 回合进行中(turning)会被 control 正确拒绝。
+    return snapshot.status === "waiting_user"
+      && snapshot.gate?.kind === "env_verify";
+  }, "mr_green 验绿后环境验证闸");
+  const envVersion = service.get(created.id).gate!.state_version;
+  service.answer(created.id, { state_version: envVersion, code: "pass" });
+  await until(() => {
+    const snapshot = service.get(created.id);
+    // 等环境闸作答收口(idle):竞态测试要立刻 control，回合进行中
+    // (turning)会被 control 正确拒绝。
     return snapshot.stage_note
-      === "全部 MR 流水线已跑绿——确认合入后可归档收口"
+      === "环境验证通过——确认 MR 合入后可归档收口"
       && snapshot.status === "idle";
-  }, "mr_green 验绿收口");
+  }, "环境验证通过后待合入");
   return {
     id: created.id, service, platform, luban, model,
     stop: async () => {
+      await service.shutdown();
       await model.stop();
       await platform.stop();
       await luban.stop();

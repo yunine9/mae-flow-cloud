@@ -239,7 +239,8 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
       onPick={pickEnvironment} />
     {picked && <p className={ENV_NOTE} role="status">
       将使用「环境管理」中的 {picked.ip}:密码以选定时为准,之后环境
-      管理里的改动不影响本次处理;密码无需在此填写。
+      管理里的改动不影响本次处理;密码无需在此填写，不会出现在页面或事件流，
+      但会在执行问题处理时明文进入当前 AI 上下文。
     </p>}
     <IssueDecisionFooterMount target={footerTarget}>
       <div className="issue-decision-dock-foot">

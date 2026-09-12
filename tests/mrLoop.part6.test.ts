@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  appendFileSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
@@ -21,6 +22,7 @@ import {
   walkScript,
   feedbackReceiptCommand,
   buildService,
+  git,
   mrModel,
   until,
 } from "./mrLoop.helpers.ts";
@@ -153,9 +155,21 @@ test("MR 外部合入新 SHA：可信收口且不改写旧验证", async () => {
     await until(() => service.get(id)!.status === "await_merge", "先绿");
     const verified = service.get(id)!.delivery?.sha ?? "";
     assert.ok(verified, "前置:等待合入时必须已有验证 SHA");
-    // 模拟平台侧改写:MR 指向另一个提交并被合入(codex 第二轮实证:
-    // 夹具重放出 ef83355 合入,MFC 仍拿旧验证 4806f99 宣告完成)。
-    const swapped = "f".repeat(40);
+    // 模拟平台侧真实改写：外部开发者在同一来源分支追加一笔可从远端
+    // 取证的提交。不能只捏造 40 位字符串；远端事实对账会（也应该）
+    // 拒绝一个仓库里根本不存在的对象。
+    const externalRoot = mkdtempSync(join(tmpdir(), "mfc-mrl-external-"));
+    const external = join(externalRoot, "repo");
+    git(externalRoot, "clone", "--quiet", platform.barePath, external);
+    git(external, "config", "user.email", "external@test");
+    git(external, "config", "user.name", "external");
+    git(external, "checkout", "--quiet", "master_bot_REQ9");
+    appendFileSync(join(external, "a.txt"), "external change\n");
+    git(external, "add", "a.txt");
+    git(external, "commit", "--quiet", "-m", "[REQ9][fix]外部补充提交");
+    const swapped = git(external, "rev-parse", "HEAD");
+    git(external, "push", "--quiet", "origin",
+      "HEAD:refs/heads/master_bot_REQ9");
     platform.mergeRequests[0].sha = swapped;
     await until(() => Boolean(service.get(id)!.delivery?.stalled), "外部推送后先暂停旧版交付");
     platform.mergeRequests[0].merge_state = "merged";

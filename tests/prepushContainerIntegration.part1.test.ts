@@ -14,7 +14,7 @@ import { dockerAvailable } from "../src/containerRuntime.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
 import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 import {
@@ -241,4 +241,3 @@ test("容器 npm 源(#75):isolation.environment 进需求侧创建环境,缺省�
     "缺省不注入:没配 registry 时容器创建环境不得出现该键");
   for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
-

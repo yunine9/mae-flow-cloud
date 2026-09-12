@@ -326,19 +326,44 @@ def complete_verified_feedback(state, verified_sha):
     """Close an addressed code-changing batch after authoritative PASS."""
     loop = state.get("delivery_loop") or {}
     batch = _batch(loop, str(loop.get("active_batch_id") or ""))
-    if not batch or batch.get("status") != "awaiting_verification":
-        return False
-    batch["status"] = "closed"
-    batch["verified_sha"] = str(verified_sha or "")
-    batch["closed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    verified_sha = str(verified_sha or "")
+    closed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    closed_batch_id = ""
+    if batch and batch.get("status") == "awaiting_verification":
+        batch["status"] = "closed"
+        batch["verified_sha"] = verified_sha
+        batch["closed_at"] = closed_at
+        closed_batch_id = str(batch.get("batch_id") or "")
     for previous in loop.get("batches", []):
         if isinstance(previous, dict) and previous.get("status") == "addressed":
             previous["status"] = "closed"
-            previous["verified_sha"] = str(verified_sha or "")
-            previous["closed_at"] = batch["closed_at"]
-    _history(state, state.get("current", ""),
-             "feedback-verified:" + batch["batch_id"],
-             "权威验证通过 %s" % str(verified_sha or "")[:12])
+            previous["verified_sha"] = verified_sha
+            previous["closed_at"] = closed_at
+        # 发布新 SHA 时，旧流水线失败批次会先退出 writer 并标记为
+        # superseded。后续新 SHA 的权威 PASS 正是它的来源方核验事件；
+        # 若不在这里闭环，Cloud 投影会永久停在 awaiting_verification。
+        # 只接受由该次 push 淘汰、且全部来自 pipeline 的机器反馈，绝不
+        # 用流水线 PASS 代替工作台批注或 MR 检视人的人工确认。
+        if (isinstance(previous, dict)
+                and previous.get("status") == "superseded"
+                and previous.get("superseded_by_push") == verified_sha):
+            items = previous.get("items") or []
+            pipeline_only = bool(items) and all(
+                isinstance(item, dict)
+                and item.get("source") == "pipeline"
+                and item.get("verification") == "pipeline"
+                for item in items)
+            if pipeline_only:
+                previous["status"] = "closed"
+                previous["verified_sha"] = verified_sha
+                previous["superseded_by_pipeline"] = verified_sha
+                previous["closed_at"] = closed_at
+                closed_batch_id = closed_batch_id or str(
+                    previous.get("batch_id") or "")
+    if closed_batch_id:
+        _history(state, state.get("current", ""),
+                 "feedback-verified:" + closed_batch_id,
+                 "权威验证通过 %s" % verified_sha[:12])
     return bool(_promote(state, loop))
 
 

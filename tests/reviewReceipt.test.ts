@@ -53,6 +53,9 @@ test("检视完成回执:committer 点完成,发起人收到通知", async () =>
     assert.throws(() => service.completeReview(review.id, "bob"),
       /已提交意见尚未确认闭环/,
       "意见交给 Agent 后也不能直接把检视邀请点完成");
+    (service as any).annotations(internal).respond(draft.id, {
+      outcome: "not_fixed", summary: "已核对，本轮暂缓", evidence: [],
+    });
     service.verifyAnnotation(id, draft.id, "本地用户", false, { revision: 0, outcome: "deferred", reason: "下次迭代补充" });
     service.completeReview(review.id, "bob");
     await until(() => luban.messages.length > invites, "完成回执投递");

@@ -4,7 +4,7 @@
  * 事故:会话 A 跑得不对被取消,重跑同单的会话 B 执行到中途,AI 说了句
  * "仓库已存在本地且修复分支已经存在"让人摸不着头脑。诊断结论:
  * - 目录隔离本身成立——每次登记都开新目录 issue-<N>,仓落在各自
- *   repo/<仓名>/,取消不清现场。这里把这条机械事实钉死。
+ *   repo/<仓名>/。取消后按当前磁盘治理契约回收旧现场；重跑仍是全新克隆。
  * - 真正的缺口:修复分支名烧死 master_工号_单号,A 停止前推过的话,
  *   B 的新克隆把旧分支带成 origin/<branch>,本地却从基线另起同名
  *   分支——分叉要一路憋到 push 才以非快进炸掉,中途 AI 只能即兴
@@ -136,7 +136,8 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     // A 的遗留提交(遗留只作为 origin/<branch> 旁挂在远端跟踪上)。
     const repoB = join(dataDir, "issues", second.id, "repo", "origin");
     assert.ok(existsSync(join(repoB, ".git")), "B 是全新克隆");
-    assert.ok(existsSync(join(repoA, ".git")), "取消不清 A 的现场");
+    assert.equal(existsSync(join(repoA, ".git")), false,
+      "取消终态应回收 A 的仓库现场");
     assert.equal(git(repoB, "branch", "--show-current"), BRANCH,
       "B 的修复分支仍按 master_工号_单号 切好");
     assert.equal(git(repoB, "rev-parse", "HEAD"), git(repoB, "rev-parse", "master"),

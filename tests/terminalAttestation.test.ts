@@ -158,7 +158,7 @@ test("持续检视就绪与任务完成均拒绝仅靠 Agent 可写状态伪造"
   let result = inspectKernelDeliveryReady(cwd, kernelRoot);
   assert.equal(result.complete, false,
     "即使状态自称流水线 PASS，没有 Cloud 宿主收据也不能等待合入");
-  assert.match(result.reason, /宿主权威收据/);
+  assert.match(result.reason, /宿主(?:任务绑定|权威收据)|无法核对宿主收据/);
   assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
     "MR 未合入、内核未 close 时绝不能 completed");
   state.current = "end";
@@ -218,7 +218,7 @@ test("宿主外绑定不可被 false 降级，真 PASS 收据也不能拼接假 
   });
   assert.equal(result.complete, false,
     "外置 capability 仍应强制验签，且 build 时的真 PASS 不能拼成假就绪态");
-  assert.match(result.reason, /宿主权威收据/);
+  assert.match(result.reason, /宿主(?:任务绑定|权威收据)|无法核对宿主收据/);
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

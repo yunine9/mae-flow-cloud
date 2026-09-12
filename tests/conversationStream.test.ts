@@ -140,7 +140,7 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.doesNotMatch(html, /按字数还是按任务\?/, "回执正文不在流里重复");
   assert.doesNotMatch(html, /class="conv-receipts"/, "逐条回执列表只在线程视图");
   assert.match(html, /CodeHub 检视/);
-  assert.match(html, /提了 1 条意见，1 条还没闭环/);
+  assert.match(html, /提了 1 条意见，1 条待闭环/);
   assert.doesNotMatch(html, /移动端入口别竖排/, "外部意见正文也只在抽屉");
   assert.ok((html.match(/打开检视意见/g) ?? []).length >= 3);
   assert.doesNotMatch(html, /看这条的处理记录/, "非线程视图不再逐条给入口");
@@ -158,7 +158,8 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
 
 test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各占一行", () => {
   const html = render({ statusText: "执行中", actor: "由你负责" });
-  assert.match(html, /<header class="ws-collaboration-head"><strong>与 Agent 协作<\/strong><div class="ws-stream-filters"/,
+  assert.match(html,
+    /<header class="ws-collaboration-head">[\s\S]*?<strong>与 Agent 协作<\/strong>[\s\S]*?ws-stream-filters[\s\S]*?<\/header>/,
     "筛选进栏头,不再单独一行");
   assert.match(html, /<small>执行中 · 由你负责 · 写完后会举卡请你检视<\/small>/,
     "状态、责任、下一步并成锚条的一行小字");
@@ -170,7 +171,7 @@ test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各
   assert.match(attention, /<strong>等你决定<\/strong><small>等你 [^<]* · 由你负责<\/small>/);
 });
 
-test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲在流末尾", () => {
+test("锚条:等你决定 / N 条意见待你处理;当前卡由父级传入渲在流末尾", () => {
   const waitingTask = { ...task, status: "waiting_for_human",
     waiting: { waiting_id: "w2", state_version: 1, created_at: T3,
       question: { questions: [{ question: "确认?" }] } } } as unknown as TaskSummary;
@@ -180,7 +181,8 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   assert.match(html, /跳到卡片/);
   assert.match(html, /conv-card current"><div class="probe-card">决定卡本体/);
   const confirm = render({ awaitingYou: 3 });
-  assert.match(confirm, /3 条意见等你逐条确认/);
+  assert.match(confirm, /3 条意见待你处理/);
+  assert.match(confirm, /转交 Agent 或核对答复后闭环/);
   assert.match(confirm, /打开检视意见/);
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
   // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。

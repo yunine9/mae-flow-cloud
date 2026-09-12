@@ -224,15 +224,17 @@ test("现场回收过的单封存台账,不再重新裁决——更不许重新�
   }
 });
 
-test("宿主推送失败 → 不硬造 MR,停在验证中并说明原因", async () => {
+test("交付传输失败 → 不硬造 MR,停在验证中并说明原因", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
   try {
     const { task } = await runTask(platform, false);
     assert.equal(task.status, "verifying");
-    assert.match(task.delivery?.skipped ?? "", /宿主推送失败/);
-    assert.match(task.delivery?.waiting_on ?? "", /尚未逐项通过|权威流水线/);
+    const failure = [task.delivery?.skipped, task.delivery?.waiting_on,
+      task.detail].filter(Boolean).join("\n");
+    assert.match(failure, /远端交付核验未完成|宿主推送失败/);
+    assert.match(task.delivery?.waiting_on ?? "", /自动重试|权威流水线/);
     assert.equal(platform.mergeRequests.length, 0);
   } finally {
     await platform.stop();
@@ -345,7 +347,8 @@ test("交付失败先自愈、预算耗尽如实停摆,人拿得回控制权", a
       "自愈预算耗尽后如实停摆");
     const stalled = service.get(task.id)!;
     assert.equal(stalled.status, "verifying"); // 代码确实提交了,不假装 failed
-    assert.match(stalled.delivery!.stalled!, /宿主推送失败/);
+    assert.match(stalled.delivery!.stalled!,
+      /远端交付核验未完成|宿主推送失败/);
     assert.match(stalled.detail ?? "", /自动验证已停,需要你介入/);
     // 回程票:停摆之后人点得动「重跑续推」,且账本被清干净重新开表。
     const again = service.retry(task.id);

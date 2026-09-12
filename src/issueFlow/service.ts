@@ -1500,7 +1500,7 @@ export class IssueFlowService {
         : []),
     ];
     const refs = this.vault.store(id, rows);
-    // 凭据组按 purpose 定位:页面组缺席时 root 组的落盘位置会前移,
+    // 凭据组按 purpose 定位:root 组缺席时后续位置会前移,
     // 位置序号不可靠,名字才是身份。
     const refByPurpose = (purpose: string) =>
       refs.find((ref) => ref.purpose === purpose)?.id ?? "";
@@ -1518,9 +1518,9 @@ export class IssueFlowService {
   }
 
   /** 登记元信息的网管凭据明文(ADR-0003:网管口令允许进 AI 上下文):
-   * 开场词/续聊词的渲染与 get_issue_meta 工具共用同一解密路——后台
-   * 凭据按 sopuser 解、页面凭据按组首账号解;解不出(闸未补配/缺组)
-   * 按缺省,字段不出现。 */
+   * 开场词/续聊词的渲染与 get_issue_meta 工具共用同一解密路。
+   * 当前台账只保存后台 sopuser 与可选 root 凭据，不再采集网管页面账号；
+   * 老数据若在同一凭据组里还有其他账号，只在与 backend 不同时以 page 兼容带入。 */
   private environmentCredentials(live: LiveIssue): IssueEnvCredentials {
     const env = live.state.environment;
     if (!env) return {};
@@ -1533,8 +1533,8 @@ export class IssueFlowService {
       ? this.vault.credential(live.id, env.root_credential_ref, "root")
         ?.password
       : undefined;
-    // 页面凭据按组首账号解(无用户名调用=accounts[0]);组里只有后台
-    // 账号的 legacy 环境,解出的与 backend 同一条,按同值去重不重复带。
+    // 老凭据组的兼容口：无用户名时取 accounts[0]。新台账组里只有
+    // sopuser，解出的与 backend 相同，按同值去重后不会伪造 page 凭据。
     const page = this.vault.credential(live.id, env.credential_ref)?.password;
     return {
       ...(backend ? { backend } : {}),
@@ -2873,6 +2873,8 @@ export class IssueFlowService {
       JSON.stringify(model.json), { mode: 0o600 });
     const driver = await CloudSession.create({
       taskId: `${live.id}:warmup`,
+      repositoryResourceBlocks: () =>
+        readResourceBlocks(this.options.dataDir),
       knowledgeContext: issueKnowledgeContext(live.state),
       hostSkillsDir: join(this.options.dataDir, "skills"),
       knowledgeScope: "issue",
@@ -3014,8 +3016,8 @@ export class IssueFlowService {
       // 业务知识资产定格(ADR-0012):进 analyze 时按绑定模块定格资产
       // 库知识并落台账;不分介入档,缺席静默(见 freezeBusinessKnowledge)。
       freezeBusinessKnowledge: () => this.freezeBusinessKnowledge(live),
-      // 业务知识地图(ADR-0012):analyze 回执注入段——台账资产 + 仓内
-      // docs/ 现扫,两源皆空为空串。
+      // 业务知识地图(ADR-0012/0021):analyze 只注入按模块定格的
+      // 资产台账；仓内 docs 的发现权归仓内契约/skill。
       businessKnowledgeBrief: () =>
         businessKnowledgeLines(live.state).join("\n"),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
@@ -3040,6 +3042,8 @@ export class IssueFlowService {
       taskId: live.id,
       workspace: live.root,
       agentDir,
+      repositoryResourceBlocks: () =>
+        readResourceBlocks(this.options.dataDir),
       // 多仓契约文件进系统提示词(spec #131 / issue #132,2026-09-03):
       // 会话 cwd 是 live.root,repo/<仓名>/ 下的 AGENTS.md 不在 SDK 祖先
       // 发现链上,平台按 SDK 同款候选序收好递进去。收集点=上下文构建:

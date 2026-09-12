@@ -7,6 +7,8 @@ const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const editor = readFileSync(
   resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
+const environmentPicker = readFileSync(
+  resolve("web/src/EnvironmentPicker.tsx"), "utf-8");
 const decisions = readFileSync(
   resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
 const annotations = readFileSync(
@@ -49,12 +51,13 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   assert.match(registration, /重试加载/);
   assert.doesNotMatch(registration,
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
-  assert.match(registration,
-    /页面账号 <i className="req">\*<\/i>[\s\S]*placeholder="admin" required/);
   // 环境侧(2026-09-10 走查裁定「只选不手填」):登记页不再手填 IP,
-  // 未选台账条目就在提交时给指路文案。
+  // 未选台账条目就在提交时给指路文案；页面账号/密码已随
+  // 「流程不登录网管页面」契约退役。
   assert.match(registration, /请从环境管理选择网管环境/);
-  assert.match(registration, /if \(!envPageAccount\.trim\(\)\)/);
+  assert.match(registration, /environment_id: pickedEnv\.id/);
+  assert.doesNotMatch(registration,
+    /const \[envPage(?:Account|Password)|page_(?:account|password):/);
   assert.match(registration, /团队资产 → 业务模块/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
   // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
@@ -65,15 +68,17 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   assert.match(css, /\.issue-module-wrap:hover \.issue-module-tip,[\s\S]*focus-within/);
 });
 
-test("口令选择器可用键盘操作，窄屏不会溢出", () => {
-  for (const key of ["ArrowDown", "ArrowUp", "Home", "End", "Escape"]) {
-    assert.ok(registration.includes(`\"${key}\"`), `缺少 ${key} 键盘行为`);
-  }
-  assert.match(registration, /aria-haspopup="listbox"/);
-  assert.match(css,
-    /@media \(max-width: 680px\) \{[\s\S]*\.issue-form, \.issue-group-body \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(css,
-    /@media \(max-width: 680px\) \{[\s\S]*\.issue-password-menu \{[\s\S]*position: static;/);
+test("环境选择器可用键盘操作，清单在自身视口滚动", () => {
+  // 方向键/Home/End/Enter 由 Command(cmdk) 统一接管，Esc 由 Popover
+  // 收口；业务组件不重复实现一套容易漂移的 roving focus。
+  assert.match(environmentPicker, /<Popover open=\{open\} onOpenChange=\{toggleOpen\}>/);
+  assert.match(environmentPicker, /<Command shouldFilter=\{false\}/);
+  assert.match(environmentPicker, /<CommandInput[\s\S]*?<CommandList className="max-h-60"/);
+  assert.match(environmentPicker, /<CommandItem[\s\S]*?onSelect=\{\(\) => pick\(entry\)\}/);
+  assert.match(readFileSync(resolve("web/src/components/ui/command.tsx"), "utf-8"),
+    /CommandPrimitive\.List[\s\S]*overflow-y-auto/,
+    "环境清单应在 CommandList 自己的视口滚动");
+  assert.match(environmentPicker, /PopoverContent align="start"/);
 });
 
 test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", () => {
@@ -119,18 +124,17 @@ test("问题决策卡的给定选项和自定义答复都能再次点击取消",
 });
 
 test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", () => {
-  assert.match(registration, /不会出现在会话[\s\S]*事件流[\s\S]*明文进入[\s\S]*AI 上下文/);
+  assert.match(registration, /不会出现在页面或事件流[\s\S]*明文进入当前 AI 上下文/);
   // 闸卡(2026-09-10 只选不手填)不再有密码输入面:以"台账快照、凭据
   // 无需在此填写"的说明替代;密码的唯一输入处是共用新建/编辑弹框。
   assert.match(decisions, /密码以选定时为准[\s\S]*密码无需在此填写/);
-  assert.match(editor, /密码加密保存在服务端[\s\S]*不用重复填写/);
+  assert.match(editor, /密码加密保存在服务端[\s\S]*明文提供给当前 AI 会话/);
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
   // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
   // 结论开按钮;入口本身仍必须在面板上明确存在。
-  assert.match(annotations, /closure\.can_override_drop/);
-  assert.match(annotations, /closure\.can_override_verify/);
-  assert.match(annotations, /管理员代删/);
+  assert.match(annotations, /closureOf\(item\)\.can_override_drop/);
+  assert.match(annotations, /closureOf\(item\)\.can_override_verify/);
   assert.match(annotations, /管理员代确认/);
   assert.match(annotations, /完整内容见“执行现场”/);
 });
@@ -141,7 +145,7 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
   assert.doesNotMatch(environmentVault, /不(?:进|进入).*Agent 上下文/);
   assert.match(issueService,
     /environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文/);
-  assert.match(issueService, /不出现在会话列表、状态摘要或事件流/);
+  assert.match(issueService, /issue\.json\/公开 API\/事件只有引用/);
   assert.doesNotMatch(issueService, /提示词永远只有引用|无消费方,为页面自动化/);
 });
 
@@ -412,7 +416,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 反馈移出工作台(2026-09-07),又随列表卡展开态退役整个删除
   // (2026-09-11);逐仓交付收编为「逐仓交付」页签。
   // (#123 拍平后对话现场是标签之首,直挂默认分支。)
-  assert.match(sessionView, /\? <IssueEventsPane id=\{detail\.id\} active \/>/);
+  assert.match(sessionView, /<IssueEventsPane id=\{detail\.id\} active \/>/);
   assert.match(sessionView, /<IssueWorkspaceRepos detail=\{detail\} \/>/);
   assert.doesNotMatch(sessionView,
     /<IssueCostPanel id=\{detail\.id\} \/>/,
@@ -1142,7 +1146,7 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   assert.match(apiTypes, /environment_id\?: string/);
 });
 
-test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 environment_id/页面凭据仍手填", () => {
+test("登记页从环境管理选(#150;只选不手填):常驻快选/只提交 environment_id", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   // 常驻快选(可搜索下拉,自带「找不到就新建」弹框):不再有展开/收起
@@ -1151,16 +1155,13 @@ test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 envi
     /<EnvironmentPicker\s*\n\s*selectedId=\{pickedEnv\?\.id \?\? null\} onPick=\{pickEnv\} \/>/);
   assert.doesNotMatch(registration, /收起环境列表/);
   assert.doesNotMatch(registration, /清除,改用手动填写/);
-  // 选中给台账快照说明(已存后台密码),提交只带 environment_id;
-  // 页面账号/页面密码不入台账,仍手填随行。
+  // 选中给台账快照说明(已存后台密码),提交只带 environment_id。
+  // 流程不登录网管页面，所以页面账号/密码不再采集。
   assert.match(registration, /将使用「环境管理」里/);
   assert.match(registration, /environment_id: pickedEnv\.id/);
-  assert.match(registration, /page_password: envPagePassword/);
   // 未选环境提交被拦,文案指路下拉里的「新增环境」。
   assert.match(registration, /请从环境管理选择网管环境/);
-  // 页面凭据两个输入面仍在(不入台账,逐单手填)。
-  assert.match(registration, /页面账号 <i className="req">\*<\/i>/);
-  assert.match(registration, /页面密码 <i className="req">\*<\/i>/);
+  assert.doesNotMatch(registration, /page_password|envPagePassword|envPageAccount/);
 });
 
 test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役(2026-09-11)", () => {

@@ -57,13 +57,17 @@ for (const status of ["running", "success", "failed"] as const) test(`真实 CI 
   assert.doesNotMatch(state.mission ?? "", /OLD_ONLY/);
   const kernel = JSON.parse(readFileSync(join(state.cwd, ".mae-flow.json"), "utf8"));
   const original = kernel.delivery_loop.batches.find((b: any) => b.base_sha === old);
-  assert.equal(original.status, "superseded");
-  assert.equal(original.verified_sha, undefined, "新推送不是旧反馈已通过");
+  assert.equal(original.status, status === "success" ? "closed" : "superseded");
+  assert.equal(original.verified_sha, status === "success" ? operation.sha : undefined,
+    "只有新 SHA 的权威绿灯才能核销旧流水线失败");
   assert.match(JSON.stringify(original.items), /OLD_ONLY/, "旧失败原文仍可追溯");
   const oldFeedback = service.get(task.id)!.feedback!.filter(row => row.observed_sha === old);
   assert.ok(oldFeedback.length > 0);
-  assert.ok(oldFeedback.every(row => row.status === "superseded"), "不能只修内核调度，API 还保留处理中");
-  assert.ok(oldFeedback.every(row => row.resolution?.includes("不代表验证通过")));
+  assert.ok(oldFeedback.every(row => row.status === (status === "success" ? "closed" : "superseded")),
+    "不能只修内核调度，API 还保留处理中");
+  assert.ok(oldFeedback.every(row => status === "success"
+    ? row.resolution?.includes("权威核验已通过")
+    : row.resolution?.includes("不代表验证通过")));
   assert.equal(platform.pipelines.filter(run => run.sha === operation.sha).length, 1);
   if (status === "failed") {
     assert.match(state.mission, /NEW_ONLY/);

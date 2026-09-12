@@ -333,8 +333,9 @@ export function EnvironmentEditorDialog({
           {testError && <span className="text-sm text-danger">{testError}</span>}
         </div>
         <p className="text-xs text-muted-foreground">
-          密码加密保存在服务端,不会明文出现在任何页面或会话记录里;
-          问题处理用到这台环境时会自动取用,不用重复填写。
+          密码加密保存在服务端,不会明文出现在页面或事件记录里;
+          问题处理用到这台环境时,会由服务端解密并明文提供给当前 AI 会话。
+          请仅使用现场专用或演示口令,不要使用个人复用或生产口令。
         </p>
         {(formError || conflict) && <div role="alert"
           className="rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger">

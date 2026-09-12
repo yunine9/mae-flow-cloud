@@ -38,7 +38,7 @@ import {
 } from "./prepushIntegration.helpers.ts";
 
 
-test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agent", async () => {
+test("prepush 已通过后交付传输重试同一 SHA 不重复调用 Agent", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
@@ -64,8 +64,8 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
     const id = service.create("REQ_PREPUSH：传输抖动复用预检", {
       ticket: "REQ_PREPUSH",
     }).id;
-    await until(() => (service.get(id)!.delivery?.skipped ?? "")
-      .includes("宿主推送失败"), "第一次 host push 失败");
+    await until(() => /远端交付核验未完成|宿主推送失败/.test(
+      JSON.stringify(service.get(id)!.delivery ?? {})), "第一次交付传输失败");
     assert.equal(calls.length, 1, "首次 push 前应完成一次 prepush");
 
     renameSync(`${platform.barePath}.offline`, platform.barePath);

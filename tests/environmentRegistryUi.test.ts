@@ -21,7 +21,8 @@ const page = readFileSync(resolve("web/src/EnvironmentRegistry.tsx"), "utf-8");
 const editor = readFileSync(resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 
 test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admin 专属系统管理)", () => {
-  const nav = app.slice(app.indexOf('aria-label="视图切换"'), app.indexOf("</nav>"));
+  const nav = app.slice(app.indexOf('<SidebarContent aria-label="视图切换"'),
+    app.indexOf("</SidebarContent>"));
   const adminNav = nav.slice(
     nav.indexOf('session.role === "admin" ? <>'), nav.indexOf("</> : <>"));
   const devNav = nav.slice(nav.indexOf("</> : <>"));
@@ -31,9 +32,9 @@ test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admi
     assert.ok(source.includes('label="环境管理"'), `${branch} 入口文案缺失`);
   }
   // 台账是全局团队资源:admin 在「管理视角」组(与团队资产并列),
-  // 排在 admin 专属的「系统管理」(admin-tools)之前;开发在「团队信息」组。
+  // 排在 admin 专属的「系统管理」分组之前;开发在「团队信息」组。
   assert.ok(adminNav.indexOf("环境管理") > adminNav.indexOf("管理视角")
-    && adminNav.indexOf("环境管理") < adminNav.indexOf("admin-tools"),
+    && adminNav.indexOf("环境管理") < adminNav.indexOf("系统管理"),
     "admin 侧环境管理应在管理视角组、系统管理之前");
   assert.ok(devNav.indexOf("环境管理") > devNav.indexOf("团队信息"),
     "开发侧环境管理应归团队信息组");
