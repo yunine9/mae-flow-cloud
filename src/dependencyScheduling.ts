@@ -10,7 +10,7 @@ import type { DependencyTaskRef, DependencyAdjustment, EarlyStartInput, EarlySta
 export type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "./dependencySchedulingTypes.ts";
 
 interface ScheduledTask {
-  summary: TaskSummary; cwd?: string; resume?: boolean; driver?: unknown; container?: unknown;
+  summary: TaskSummary; cwd?: string; driver?: unknown; container?: unknown;
   prepushActive?: unknown; assistantActive?: unknown; containerReopen?: unknown;
 }
 export interface DependencyHost<T extends ScheduledTask = ScheduledTask> {
@@ -55,7 +55,9 @@ function ancestors<T extends ScheduledTask>(host: DependencyHost<T>, id: string,
   return found;
 }
 function pristine(task: ScheduledTask): boolean {
-  return !task.cwd && !task.resume && !task.driver && !task.container && !task.containerReopen
+  // recover 会给所有任务设置 resume，包括一直在等前置的子任务。
+  // 恢复标记只决定续跑方式，不能当成已开工凭据；这里只检查真实现场。
+  return !task.cwd && !task.driver && !task.container && !task.containerReopen
     && !task.prepushActive && !task.assistantActive && !task.summary.baseline_build
     && !task.summary.delivery && !existsSync(join(task.summary.workspace, ".mae-flow.json"));
 }

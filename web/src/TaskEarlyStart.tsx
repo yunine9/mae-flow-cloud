@@ -76,6 +76,8 @@ export function TaskEarlyStart({ task, onChanged, onOpenTask }: {
           key={id} onClick={() => onOpenTask?.(id)} disabled={!onOpenTask}>{id}</button>)}
         {view && !view.can_operate && <span>由主任务责任人 {view.owner} 调整</span>}
       </div>
+      {view?.can_operate && !view.available && view.unavailable_reason &&
+        <p className="mt-1 text-xs text-muted-foreground" role="status">{view.unavailable_reason}</p>}
       {!open && error && <div className="mt-2 text-sm text-destructive" role="alert">{error}
         <button type="button" className="ml-2 underline" onClick={() => { setError(""); void load(undefined, true); }}>重试</button></div>}
     </div>}

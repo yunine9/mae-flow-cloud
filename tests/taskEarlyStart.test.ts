@@ -199,3 +199,49 @@ test("恢复出同号候选时不互锁：先就绪者占用 AR，其他任务�
   host.completed = (task: any) => task?.summary.id === x.id;
   assert.equal(concurrentTicketConflict(host, f.state(y.id), [y.id]), undefined);
 });
+
+
+test("解锁前部署重启：未开工子任务仍可提前开始，恢复标记不等于已有执行现场", async t => {
+  const f = fixture(); t.after(() => f.service.shutdown());
+  assert.equal(f.preview().available, true);
+  await f.service.shutdown();
+  const restored = new TaskService(f.options); t.after(() => restored.shutdown());
+  restored.recover();
+  const task = (restored as any).tasks.get(f.d.id);
+  assert.equal(task.resume, true, "恢复入口仍保留正常续跑语义");
+  assert.equal(task.cwd, undefined, "未开工子任务没有代码现场");
+  const view = restored.previewEarlyStart(f.d.id, "owner", { ticket: "REQ2" });
+  assert.equal(view.available, true, view.unavailable_reason);
+  const count = (restored as any).tasks.size;
+  const changed = restored.startTaskEarly(f.d.id, "owner", {
+    revision: view.revision, release_ids: view.release_ids, ticket: view.ticket,
+  });
+  assert.equal(changed.id, f.d.id);
+  assert.equal(changed.ticket, "REQ2");
+  assert.deepEqual(changed.blocked_by, []);
+  assert.equal((restored as any).tasks.size, count);
+  assert.deepEqual(restored.get(f.c.id)?.blocked_by, [f.b.id]);
+  const saved = JSON.parse(readFileSync(join(f.d.workspace, "task.json"), "utf8"));
+  assert.equal(saved.summary.ticket, "REQ2");
+  assert.deepEqual(saved.summary.blocked_by, []);
+});
+
+test("恢复标记可忽略，但真实现场、活动会话和交付事实仍禁止改号解锁", async t => {
+  const f = fixture(); t.after(() => f.service.shutdown());
+  const task = f.state(f.d.id); task.resume = true;
+  assert.equal(f.preview().available, true);
+  for (const field of ["cwd", "driver", "container", "containerReopen", "prepushActive", "assistantActive"]) {
+    task[field] = field === "cwd" ? join(f.d.workspace, "repo") : {};
+    assert.equal(f.preview().available, false, field);
+    assert.throws(() => f.apply(), /已有执行现场/);
+    delete task[field];
+  }
+  for (const field of ["baseline_build", "delivery"]) {
+    task.summary[field] = {};
+    assert.equal(f.preview().available, false, field);
+    assert.throws(() => f.apply(), /已有执行现场/);
+    delete task.summary[field];
+  }
+  assert.equal(task.summary.ticket, "REQ1");
+  assert.deepEqual(task.summary.blocked_by, [f.c.id]);
+});
