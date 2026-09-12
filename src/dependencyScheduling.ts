@@ -174,9 +174,9 @@ export function concurrentTicketConflict<T extends ScheduledTask>(host: Dependen
   if (!summary.ticket || !repo(summary) || !worker(summary)) return undefined;
   const upstream = ancestors(host, summary.id);
   return [...host.tasks.values()].find(other => other !== task && worker(other.summary)
-    && !host.completed(other) && repo(other.summary) === repo(summary)
-    && other.summary.ticket === summary.ticket && !upstream.has(other.summary.id)
-    && !ancestors(host, other.summary.id).has(summary.id)
+    && other.summary.ticket === summary.ticket && repo(other.summary) === repo(summary)
+    && !upstream.has(other.summary.id) && !ancestors(host, other.summary.id).has(summary.id)
+    && !host.completed(other)
     && (other.summary.status !== "queued" || (
       (other.summary.blocked_by ?? []).every(key => host.completed(host.tasks.get(key)))
       && queue.indexOf(other.summary.id) >= 0 && queue.indexOf(other.summary.id) < queue.indexOf(summary.id))));

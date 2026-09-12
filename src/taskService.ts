@@ -3788,7 +3788,7 @@ export class TaskService {
           );
     // 排队位次投影:status=queued 时人第一想知道的是"排到哪了"。
     const queueIndex = summary.status === "queued"
-      ? runnableQueueIndex(this.dependencyHost(), this.queue, summary.id) : -1;
+      ? runnableQueueIndex(this.dependencyHost(true), this.queue, summary.id) : -1;
     const projectedDelivery = summary.delivery
       ? {
           ...summary.delivery,
@@ -8421,6 +8421,7 @@ export class TaskService {
           || this.tasks.has(name)) {
         continue;
       }
+      this.options.log?.(`开始恢复任务 ${name}`);
       try {
         const saved = JSON.parse(readFileSync(path, "utf-8"));
         const summary = saved.summary as TaskSummary;
@@ -13166,7 +13167,8 @@ export class TaskService {
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
     // shared pipeline path must preserve their original terminal semantics.
     if (!task.cwd || !this.options.host || !this.continuousReviewTask(task)) return;
-    if (projectionOnly && !existsSync(join(task.cwd, ".mae-flow.json"))) return;
+    if (projectionOnly && (["completed", "canceled"].includes(task.summary.status)
+      || !existsSync(join(task.cwd, ".mae-flow.json")))) return;
     try {
       const state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
@@ -13454,9 +13456,16 @@ export class TaskService {
     this.activatePendingDeveloperAssistant(task);
   }
 
-  private dependencyHost() {
+  private dependencyHost(projectionOnly = false) {
+    // 列表/排队展示不能启动 Python 收据核验；真正出队继续走原有权威裁决。
+    const checked = new Map<TaskState, boolean>();
     return { tasks: this.tasks,
-      completed: (task: TaskState | undefined) => this.dependencyCompleted(task),
+      completed: (task: TaskState | undefined) => {
+        if (!task || task.summary.status !== "completed") return false;
+        if (projectionOnly) return true;
+        if (!checked.has(task)) checked.set(task, this.dependencyCompleted(task));
+        return checked.get(task)!;
+      },
       persist: (task: TaskState, strict = true) => this.persist(task, strict, false),
       wake: (task: TaskState) => {
         if (task.summary.status === "queued" && !this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
@@ -13481,15 +13490,15 @@ export class TaskService {
     if (this.options.requirementDisabled) return;
     const max = this.options.settings?.runtime().max_concurrent
       ?? this.options.maxConcurrent ?? 2;
-    const scheduling = this.dependencyHost();
-    refreshDependencyQueue(scheduling, this.queue);
+    refreshDependencyQueue(this.dependencyHost(), this.queue);
     while (this.runningCount < max && this.queue.length) {
+      const scheduling = this.dependencyHost(); // 不跨 await 沿用上一轮收据裁决。
       const readyIndex = this.queue.findIndex((queued) => {
         const candidate = this.tasks.get(queued);
         if (!candidate) return true;
         return !concurrentTicketConflict(scheduling, candidate, this.queue)
           && (candidate.summary.blocked_by ?? []).every((dependency) =>
-            this.dependencyCompleted(this.tasks.get(dependency)));
+            scheduling.completed(this.tasks.get(dependency)));
       });
       if (readyIndex < 0) {
         break;

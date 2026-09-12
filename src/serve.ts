@@ -1,3 +1,4 @@
+import { StartupRecovery } from "./startupRecovery.ts";
 /**
  * 启动任务服务。默认演示模式:内置剧本假模型,浏览器打开首页即可
  * 发任务→看进度→点审批走完整环。接真模型(GLM-5.1):
@@ -1016,33 +1017,36 @@ async function main(): Promise<void> {
     },
     recentLog: () => [...taskLogRing],
   });
-  const platformCheck = await service.refreshDeliveryPlatformCheck();
-  const runtimeLog = deploymentRuntime.status === "error"
-    ? console.error : console.log;
-  runtimeLog(`[serve] Linux 部署自检(${deploymentRuntime.status}): `
-    + deploymentRuntime.detail
-    + (deploymentRuntime.suggestion ? `；${deploymentRuntime.suggestion}` : ""));
-  if (platformCheck) {
-    const platformLog = platformCheck.ready ? console.log : console.error;
-    platformLog(`[serve] 交付平台预检(${platformCheck.ready ? "ok" : "error"}): `
-      + platformCheck.detail
-      + (platformCheck.suggestion ? `；${platformCheck.suggestion}` : ""));
-  }
-  // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check/
-  // issue 容器，再恢复两类任务。顺序不能反：recover 一旦入队就可能
-  // 启动新容器，随后清扫会把新旧现场混在一起。
-  const swept = await service.sweepOrphanContainers();
-  if (swept.removed.length) {
-    console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
-      + swept.removed.join(", "));
-  }
-  issueFlow.start();
-  // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
-  const recovered = service.recover();
-  if (recovered.restored) {
-    console.log(`[serve] 恢复任务 ${recovered.restored} 个`
-      + `(重新入队 ${recovered.requeued} 个)`);
-  }
+  const startup = new StartupRecovery();
+  const restoreTasks = async () => {
+    const platformCheck = await service.refreshDeliveryPlatformCheck();
+    const runtimeLog = deploymentRuntime.status === "error"
+      ? console.error : console.log;
+    runtimeLog(`[serve] Linux 部署自检(${deploymentRuntime.status}): `
+      + deploymentRuntime.detail
+      + (deploymentRuntime.suggestion ? `；${deploymentRuntime.suggestion}` : ""));
+    if (platformCheck) {
+      const platformLog = platformCheck.ready ? console.log : console.error;
+      platformLog(`[serve] 交付平台预检(${platformCheck.ready ? "ok" : "error"}): `
+        + platformCheck.detail
+        + (platformCheck.suggestion ? `；${platformCheck.suggestion}` : ""));
+    }
+    // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check/
+    // issue 容器，再恢复两类任务。顺序不能反：recover 一旦入队就可能
+    // 启动新容器，随后清扫会把新旧现场混在一起。
+    const swept = await service.sweepOrphanContainers();
+    if (swept.removed.length) {
+      console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
+        + swept.removed.join(", "));
+    }
+    issueFlow.start();
+    // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
+    const recovered = service.recover();
+    if (recovered.restored) {
+      console.log(`[serve] 恢复任务 ${recovered.restored} 个`
+        + `(重新入队 ${recovered.requeued} 个)`);
+    }
+  };
   const lubanApproval = lubanPluginToken
     ? new LubanApprovalGateway([
         // 需求任务与问题会话的等待卡同一部手机都能答:问题会话经
@@ -1113,8 +1117,7 @@ async function main(): Promise<void> {
       storageSweepActive = false;
     }
   };
-  void sweepStorage();
-  setInterval(() => void sweepStorage(), 24 * 60 * 60_000).unref();
+  // 回收首轮在任务恢复后再启动，不能把同步磁盘扫描夹在 HTTP 监听之前。
   if (retentionDays === 0) {
     console.log("[serve] 现场保留期配置为 0:永不回收,dataDir 需自行看管");
   }
@@ -1167,7 +1170,7 @@ async function main(): Promise<void> {
     // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
     dts: issueDtsGateway,
     log: issueLog,
-    buildHash,
+    buildHash, startup,
   });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
@@ -1241,7 +1244,7 @@ async function main(): Promise<void> {
     }
     process.exit(2);
   });
-  server.listen(port, bindHost, () => {
+  await new Promise<void>((listening) => server.listen(port, bindHost, () => {
     const actual = (server.address() as AddressInfo).port;
     console.log(`[serve] http://${bindHost}:${actual}  (数据目录 ${dataDir})`);
     if (publicUrl) console.log(`[serve] 通知访问地址:${publicUrl}`);
@@ -1251,7 +1254,12 @@ async function main(): Promise<void> {
     }
     console.log("[serve] 前台进程:关掉这个终端/断开 SSH 服务就没了。"
       + "长期跑请用 tmux 或 systemd(部署手册「启动与守护」)");
-  });
+    listening();
+  }));
+  if (await startup.run(restoreTasks, console.error) && !terminating) {
+    setImmediate(() => void sweepStorage());
+    setInterval(() => void sweepStorage(), 24 * 60 * 60_000).unref();
+  }
 }
 
 /** 前端构建过期就明说。

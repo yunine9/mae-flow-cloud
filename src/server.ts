@@ -367,6 +367,7 @@ export function createTaskServer(
     log?: (message: string) => void;
     /** 部署版本号(服务启动时间):页面侧边栏显示,部署后确认代码生效。 */
     buildHash?: string;
+    startup?: Pick<import("./startupRecovery.ts").StartupRecovery, "state">;
   } = {},
 ): Server {
   // TaskService 也可由测试、pilot 或嵌入式调用方直接构造。只要 HTTP
@@ -399,6 +400,15 @@ export function createTaskServer(
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
+      if (options.startup && request.method === "GET" && url.pathname === "/health") {
+        return json(response, options.startup.state === "ready" ? 200 : 503,
+          { status: options.startup.state });
+      }
+      if (options.startup && options.startup.state !== "ready") {
+        response.setHeader("Retry-After", "3");
+        return json(response, 503, { error: options.startup.state === "failed"
+          ? "服务恢复失败，请管理员检查启动日志" : "服务正在恢复任务，请稍后重试" });
+      }
       const sessionToken = cookieValue(
         request.headers.cookie,
         "mae_flow_session",
