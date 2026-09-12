@@ -1,39 +1,8 @@
 @layer legacy {
-/* Shared visual finish. Keep interaction placement and task-row density intact. */
-.workspace { background: var(--canvas); }
-.sidebar {
-  background: linear-gradient(170deg, var(--surface) 0%, var(--surface-2) 60%, var(--canvas) 100%);
-  padding-top: 22px;
-}
-.brand-lockup { margin-bottom: 24px; }
-.brand-symbol { width: 26px; height: 26px; border-radius: 8px; box-shadow: var(--shadow-primary); }
-.brand-copy strong { font-size: 15px; letter-spacing: -.025em; }
-.sidebar-nav { gap: 4px; }
-.nav-item { height: 36px; padding-inline: 10px; border: 1px solid transparent; border-radius: 8px; }
-.nav-item.on { color: var(--accent); background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-sm); }
-.nav-item.on svg { color: var(--accent); }
-.nav-section-label { margin-bottom: 8px; font-size: 11px; letter-spacing: .03em; }
-.sidebar-foot { padding-top: 14px; }
-.workspace-header { padding-top: 32px; padding-bottom: 26px; }
-.workspace-header h1 { font-size: 28px; font-weight: 650; letter-spacing: -.035em; margin-bottom: 8px; }
-.workspace-header p { font-size: 13px; }
-.workspace-header .header-attention { border: 1px solid color-mix(in srgb, var(--attention) 12%, transparent); border-radius: 8px; }
-
-/* A single raised surface for the immediate queue; regular task rows stay 44px. */
-.personal-action-inbox { margin-top: 0; margin-bottom: 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-panel); overflow: hidden; }
-.personal-action-head { padding: 16px 20px; background: linear-gradient(110deg, var(--surface), var(--surface-2)); }
-.personal-action-head h2 { font-size: 15px; font-weight: 650; }
-.personal-action-list article { padding: 13px 20px; gap: 14px; }
-.personal-action-list article > div { grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; }
-.personal-action-list article strong { grid-column: 1; grid-row: 1; font-size: 14px; }
-.personal-action-list article small { grid-column: 2; grid-row: 1; align-self: center; font-size: 11px; }
-.personal-action-list article p { grid-column: 1 / -1; font-size: 12px; }
-.personal-action-rank { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); font-size: 11px; }
-.personal-action-list article.primary .personal-action-rank { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 18%, var(--line)); background: var(--accent-soft); }
-.personal-action-more { padding: 10px 20px; background: var(--surface-2); border: 0; font-size: 12px; }
-.personal-action-clear { padding: 20px; }
-.personal-stat { border-radius: 7px; }
-.personal-action.selected { color: var(--accent); border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-sm); }
+/* Shared visual finish. Keep interaction placement and task-row density intact.
+   (#228)App 外壳家族(brand/侧栏脚/workspace-header/personal-action 清单/
+   header-launch/task-order-toggle/pulse chips)已随换装工具类化,finish 里
+   只剩跨组件共享段。 */
 .section-head h2 { font-weight: 650; font-size: 15px; }
 .task-list:has(> .task-overview-row) { border-radius: 12px; box-shadow: var(--shadow-panel); }
 .task-overview-row { border-bottom-color: color-mix(in srgb, var(--line) 75%, transparent); }
@@ -52,12 +21,6 @@
 .overview-metric > strong { font-weight: 600; letter-spacing: -.05em; }
 
 /* Controls have a light bevel; stronger depth is reserved for primary actions. */
-:is(.header-launch, .personal-action-list article.primary button):not(:disabled) {
-  color: var(--ink-fg); background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 90%, white), var(--ink));
-  border-color: color-mix(in srgb, var(--ink) 90%, black); border-radius: 8px; box-shadow: var(--shadow-primary);
-}
-:is(.header-launch, .personal-action-list article.primary button):hover:not(:disabled) { background: var(--ink-hover); }
-.personal-action-list button, .task-order-toggle { box-shadow: var(--shadow-control); border-color: var(--line); }
 :is(.workspace, .workspace-studio, .task-inspector) :is(textarea, input[type="text"], input[type="search"], input[type="password"]):not(:disabled) {
   border-color: var(--line-strong); background: var(--surface); transition: border-color var(--ease), box-shadow var(--ease);
 }

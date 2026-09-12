@@ -131,12 +131,12 @@ test("DTS 列表子页签全宽:页面平铺屏幕,标题条同步对齐,其余�
   // 一起放开 max-width——标题条不随内容全宽就会悬在书页宽上错位。
   assert.match(app, /const dtsWide = view === "issues" && activeIssueChild === "dts";/,
     "全宽判据只认 DTS 子页签");
-  assert.match(app, /workspace-header\$\{dtsWide \? " is-wide" : ""\}/,
+  // #228 换装:is-wide 修饰类退役,全宽改由条件工具类直译(max-w 二选一),
+  // 不再有 legacy css 全宽规则可钉。
+  assert.match(app, /dtsWide \? "max-w-none" : "max-w-\(--page-width\)"/,
     "标题条随全宽切换(左边缘与内容对齐)");
-  assert.match(app, /workspace-main\$\{dtsWide \? " is-wide" : ""\}/,
+  assert.match(app, /main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n?\s*dtsWide \? "max-w-none" : "max-w-\(--page-width\)"/,
     "主区随 DTS 子页签切换");
-  assert.match(legacyCss, /\.workspace-header\.is-wide, \.workspace-main\.is-wide \{ max-width: none; \}/,
-    "css 层要有全宽规则(旧轨道层叠优先级高于工具类层)");
   // 页头随子页签换文案:整域静态说明对子页签无信息量。
   assert.match(app, /issueChildHeaders/,
     "问题处理域页头文案按子页签取");

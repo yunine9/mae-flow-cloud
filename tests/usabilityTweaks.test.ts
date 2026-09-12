@@ -29,10 +29,11 @@ test("任务列表默认最新在上,开关可切回待核对在前并记在本�
   assert.match(app, /localStorage\.getItem\("mae-flow-task-order"\) === "attention"\s*\? "attention" : "newest"/);
   assert.match(app, /const visibleMyWork = taskOrder === "newest"\s*\? \[\.\.\.scopedMyWork\]\.sort\(byNewest\) : scopedMyWork/);
   assert.match(app, /tasks=\{visibleMyDelivered\}/, "等待合入分组也跟着同一个开关");
-  assert.match(app, /className="task-order-toggle"/);
+  // #228 换装:排序开关工具类化(胶囊描边钮),锚改钉 aria-pressed 语义,
+  // 不再钉 legacy 类名与其 css 规则。
+  assert.match(app, /aria-pressed=\{taskOrder === "newest"\}/);
   assert.match(app, /最新在上/);
   assert.match(app, /待核对在前/);
-  assert.match(css, /\.task-order-toggle\s*\{/);
   assert.match(taskHierarchy, /export function orderHierarchyBy/,
     "时间只排序任务组，主任务与子任务必须随后恢复成树形顺序");
   assert.match(app, /orderHierarchyBy\(visible,[\s\S]*item\.task\?\.parent_task_id/,

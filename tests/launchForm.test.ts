@@ -1055,10 +1055,10 @@ test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比�
   assert.match(source, /probeRepositories\(repositoriesToProbe/);
   assert.match(source, /repositoryProbeBlocked/);
   assert.match(source, /正在检查仓库地址/);
-  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色:退出图标的颜色
-  // 来自令牌,浅/深两套令牌各自定义 --faint,对比度在令牌层保证。
-  assert.match(style, /\.logout-button,\n\.density-switch \{[\s\S]*?color: var\(--faint\)/);
-  assert.doesNotMatch(style, /data-theme="light"\] \.logout-button/);
+  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色;#228 侧栏换装后
+  // 退出钮走 shadcn ghost 皮,对比色经 tailwind 桥取 tokens(--faint/
+  // --text-strong),legacy 的 .logout-button/.density-switch 规则已拆除。
+  assert.doesNotMatch(style, /\.logout-button|\.density-switch/);
   assert.match(tokens, /:root \{[\s\S]*?--faint: #[0-9a-f]{6}/);
   assert.match(tokens, /:root\[data-theme="dark"\] \{[\s\S]*?--faint: #[0-9a-f]{6}/);
 });
