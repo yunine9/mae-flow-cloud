@@ -58,11 +58,20 @@ import {
   sortDtsVersionsDesc,
 } from "./dtsText";
 import { dtsTicketUrl } from "./dtsTicket";
+import { cn } from "cn";
+
+/** #230 去 legacy:登记域皮肤类换工具类。字段行是全表单共用版式,先落
+ * 成一处词典;窄屏单列由 max-[680px] 变体直译旧 @media(原 680px 块随
+ * 家族退役)。 */
+const FIELD = "grid gap-[5px] text-[13px] text-muted-foreground max-[680px]:col-span-1 max-[680px]:min-w-0";
+const GROUP = "col-span-full grid gap-3 rounded-[10px] border border-line bg-surface p-3.5 max-[680px]:px-2.5 max-[680px]:py-3";
+const GROUP_BODY = "grid grid-cols-2 gap-3 max-[680px]:grid-cols-1";
 
 /** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
  * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
  * 平台归属。服务端 create 里机械拦(needRepo 判定同源),这里只把
- * 拦截面提前到表单:按钮禁用 + 指路个人设置,配完回来即解锁。 */
+ * 拦截面提前到表单:按钮禁用 + 指路个人设置,配完回来即解锁。
+ * (#230:琥珀警示壳换工具类,动作钮换 shadcn Button。) */
 function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
   viewer: AuthUser;
   needRepo: boolean;
@@ -73,12 +82,12 @@ function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
   if (!viewer.git_token_hint) missing.push("Git 令牌");
   else if (!viewer.git_email) missing.push("个人邮箱");
   if (!missing.length) return null;
-  return <div className="issue-credential-gate" role="alert">
-    <span>发起前先配置<b>{missing.join(" 与 ")}</b>(个人设置 → 个人接入):
+  return <div className="col-span-full mb-2.5 flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
+    <span>发起前先配置<b className="text-attention">{missing.join(" 与 ")}</b>(个人设置 → 个人接入):
       拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
-    {onNavigateProfile && <button type="button" onClick={onNavigateProfile}>
+    {onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
       去个人设置配置
-    </button>}
+    </Button>}
   </div>;
 }
 
@@ -115,7 +124,8 @@ export function IssueRegistration({
 }) {
   // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
   // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
-  return <section className="issue-section" aria-label="发起问题会话"
+  // (#230:.issue-section 卡壳换工具类;IssueBoard 侧同名壳不动。)
+  return <section className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-[13px]" aria-label="发起问题会话"
     hidden={!visible}>
     <div hidden={panel !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
@@ -313,26 +323,26 @@ function ManualRegister({
     }
   }
 
-  return <form className="issue-form" onSubmit={submit}>
+  return <form className="grid grid-cols-2 gap-3 max-[680px]:grid-cols-1" onSubmit={submit}>
     <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
-    <div className="issue-group wide">
-      <span className="issue-group-title">问题信息</span>
-      <div className="issue-group-body">
-        <label className="issue-field wide">
-          <span>问题标题 <i className="req">*</i></span>
+    <div className={GROUP}>
+      <span className="text-[13px] font-bold leading-tight text-primary">问题信息</span>
+      <div className={GROUP_BODY}>
+        <label className={cn(FIELD, "col-span-full")}>
+          <span>问题标题 <i className="font-bold not-italic text-danger">*</i></span>
           <Input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
             的动作转给区内第一个可激活元素(= 润色按钮),造成"改个描述
             就自动润色"(2026-09-11 用户实测)。 */}
-        <div className="issue-field wide">
-          <span>问题描述 <i className="req">*</i></span>
+        <div className={cn(FIELD, "col-span-full")}>
+          <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
-          <div className="issue-desc-foot">
-            {imageUploading && <span className="issue-image-uploading">截图上传中…</span>}
+          <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
+            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground">截图上传中…</span>}
             {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
             <Button type="button" variant="ghost" size="xs"
               disabled={!description.trim() || polishing}
@@ -346,9 +356,9 @@ function ManualRegister({
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
             收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
             要增删仓去「团队资产 → 业务模块」维护绑定,登记页不改。 */}
-        <label className="issue-field wide">
-          <span>业务模块 <i className="req">*</i></span>
-          <span className="issue-module-wrap">
+        <label className={cn(FIELD, "col-span-full")}>
+          <span>业务模块 <i className="font-bold not-italic text-danger">*</i></span>
+          <span className="issue-module-wrap group/mod relative grid gap-1.5">
             <Select value={moduleId}
               disabled={modules === undefined || !!moduleLoadError}
               items={[{ value: "", label: "选择业务模块——决定关联代码仓" },
@@ -372,34 +382,37 @@ function ManualRegister({
               </SelectContent>
             </Select>
             {selectedModule && <>
-              <small className="issue-module-hint">
+              <small className="cursor-help text-muted-foreground">
                 已带出 {selectedModule.repositories.length} 个代码仓,悬停查看
               </small>
-              <span className="issue-module-tip" role="tooltip">
-                <b>将拉取 {selectedModule.repositories.length} 个代码仓</b>
-                <ul>
+              {/* 悬浮卡(#230 换工具类):悬停/键盘聚焦经 group 变体弹出,
+                  键盘可达性不变;短名一行放下,全地址挂 title 悬停可见。 */}
+              <span className="issue-module-tip absolute left-0 top-[calc(100%+6px)] z-40 hidden min-w-[min(440px,100%)] gap-2 rounded-[10px] border border-line bg-surface p-3 shadow-(--shadow-md) group-hover/mod:grid group-focus-within/mod:grid" role="tooltip">
+                <b className="text-text-strong">将拉取 {selectedModule.repositories.length} 个代码仓</b>
+                <ul className="m-0 grid list-none gap-1.5 p-0">
                   {selectedModule.repositories.map((url) => (
-                    <li key={url} title={url}>{repoLabel(url)}</li>
+                    <li className="truncate rounded-lg border border-line bg-surface-muted px-2.5 py-1.5 font-mono text-xs text-text-strong" key={url} title={url}>{repoLabel(url)}</li>
                   ))}
                 </ul>
               </span>
             </>}
           </span>
-          {moduleLoadError && <small className="issue-module-load-error" role="alert">
+          {moduleLoadError && <small className="col-span-full flex items-center justify-between gap-2.5 rounded-lg border border-destructive/35 px-2.5 py-2 text-destructive max-[680px]:flex-col max-[680px]:items-stretch" role="alert">
             <span>业务模块加载失败：{moduleLoadError}</span>
-            <button type="button" onClick={() => setModuleLoadAttempt((value) => value + 1)}>
+            <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
+              onClick={() => setModuleLoadAttempt((value) => value + 1)}>
               重试加载
-            </button>
+            </Button>
           </small>}
-          {catalogEmpty && <small role="alert">
+          {catalogEmpty && <small className="col-span-full" role="alert">
             模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来发起。
           </small>}
         </label>
       </div>
     </div>
-    <div className="issue-group wide">
-      <span className="issue-group-title">网管环境</span>
-      <div className="issue-group-body">
+    <div className={GROUP}>
+      <span className="text-[13px] font-bold leading-tight text-primary">网管环境</span>
+      <div className={GROUP_BODY}>
         {/* 从环境管理选(#150,ADR-0020;2026-09-10 走查裁定「只选不
             手填」):可搜索下拉挑台账条目,搜不到点「新增环境」弹共用
             表单、录完自动选中;后台密码用台账已存值(前端拿不到)。 */}
@@ -407,7 +420,7 @@ function ManualRegister({
           <EnvironmentPicker
             selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />
         </div>
-        {pickedEnv && <small className="issue-group-note col-span-full" role="status">
+        {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
           将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
           (以选定时为准),无需在此填写。
         </small>}
@@ -416,32 +429,33 @@ function ManualRegister({
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
-    <div className="issue-form-actions">
-      <button type="submit" className="primary" disabled={submitDisabled}>
+    <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
+      <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
         {busy ? "分析中…" : "开始分析"}
-      </button>
+      </Button>
     </div>
     {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
-        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。 */}
+        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。
+        (Dialog 本体是原语,不动;#230 只把弹窗周边的皮肤类换工具类。) */}
     {polishResult && <Dialog open onOpenChange={(open) => {
       if (!open) setPolishResult(null);
     }}>
-      <DialogContent className="issue-polish-dialog">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>AI 润色预览</DialogTitle>
           <DialogDescription>
             核对润色稿后选择替换或放弃;红色「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
           </DialogDescription>
         </DialogHeader>
-        {polishResult.vision_note && <p className="issue-polish-note" role="alert">
+        {polishResult.vision_note && <p className="issue-polish-note m-0 rounded-lg border border-attention/35 bg-[color-mix(in_srgb,var(--attention)_9%,var(--surface-muted))] px-2.5 py-2 text-xs text-attention" role="alert">
           {polishResult.vision_note}
         </p>}
-        <label className="issue-field">
+        <label className={FIELD}>
           <span>建议标题</span>
           <Input value={adoptTitle}
             onChange={(event) => setAdoptTitle(event.target.value)} />
         </label>
-        <div className="issue-polish-preview" aria-label="润色后描述预览">
+        <div className="issue-polish-preview max-h-[46vh] overflow-auto rounded-lg border border-line bg-surface-muted px-3 py-2.5 text-[13px] leading-[1.65] text-text-strong [&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:rounded-md" aria-label="润色后描述预览">
           <Markdown text={polishResult.description}
             resolveImage={(path) => issueImageUrl(path)} />
         </div>

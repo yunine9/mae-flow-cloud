@@ -336,7 +336,8 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   assert.match(registration, /polishing \? "润色中…" : "AI 润色"/);
-  assert.match(registration, /问题描述 <i className="req">\*<\/i><\/span>/,
+  // #230 改锚:必填星号换工具类(i.req 皮肤类随登记家族退役)。
+  assert.match(registration, /问题描述 <i className="font-bold not-italic text-danger">\*<\/i><\/span>/,
     "字段名拍板:现象描述→问题描述");
   assert.match(registration,
     /disabled=\{!description\.trim\(\) \|\| polishing\}/,
@@ -376,9 +377,9 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   assert.match(css,
     /\.issue-desc-editor \.ProseMirror img \{[^}]*max-height: 200px/,
     "编辑器图片限高 200px");
-  assert.match(css,
-    /\.issue-polish-preview img \{[^}]*max-height: 200px/,
-    "润色预览图片限高 200px");
+  // #230 改锚:润色预览壳迁工具类,图片限高由 [&_img]:max-h-[200px]
+  // 直译(旧 .issue-polish-preview img 规则随家族退役)。
+  assert.match(registration, /\[&_img\]:max-h-\[200px\]/, "润色预览图片限高 200px");
   assert.match(css, /\.issue-image-lightbox \{/);
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });

@@ -50,6 +50,9 @@ import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
 import { confirmDialog } from "../ConfirmDialog";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { cn } from "cn";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -65,6 +68,15 @@ const ANALYSIS_DOC = "issue-analysis.md";
 const DIALOGUE_TAB = "dialogue";
 /** 检视面板的页签键(同上;ADR-0007)。 */
 const REVIEW_TAB = "review";
+
+/** #230 去 legacy:材料/检视域的皮肤类换工具类。树行/气泡/检视卡是
+ * 本域共用版式,先落成词典;颜色全部经语义令牌或 var() 简写取 tokens,
+ * 不再按家族复制配方。 */
+const LOG_ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border bg-surface px-2.5 py-1.5 text-left font-mono text-[13px] text-text-strong transition-colors";
+const DIALOGUE_TURN = "flex flex-col gap-[3px] max-w-[86%]";
+const DIALOGUE_BUBBLE = "rounded-[10px] border px-3 py-2 text-[13px] leading-[1.65] text-text-strong whitespace-pre-wrap [overflow-wrap:anywhere]";
+const REVIEW_ITEM = "rounded-[10px] border border-line bg-surface px-3 py-2 text-[13px] leading-[1.6]";
+const NOTE_HEAD = "m-0 text-[13px] font-bold text-muted-foreground";
 
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -153,11 +165,11 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate
     {nodes.map((node) => node.type === "dir"
       ? <Fragment key={node.path}>
           <button type="button" role="listitem"
-            className="issue-materials-file issue-log-dir"
+            className={`${LOG_ROW} cursor-pointer font-semibold hover:border-primary`}
             style={{ paddingLeft: 10 + depth * 18 }}
             aria-expanded={expanded.has(node.path)}
             onClick={() => onToggle(node.path)}>
-            <span className="p">{expanded.has(node.path) ? "▾" : "▸"} {node.name}/</span>
+            <span className="truncate">{expanded.has(node.path) ? "▾" : "▸"} {node.name}/</span>
           </button>
           {expanded.has(node.path) && <LogTreeRows
             nodes={node.children} depth={depth + 1} expanded={expanded}
@@ -165,21 +177,24 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate
             canOperate={canOperate}
             onToggle={onToggle} onOpen={onOpen} onExtract={onExtract} />}
         </Fragment>
-      : <div key={node.path} className="issue-log-row"
+      : <div key={node.path} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5"
           style={{ paddingLeft: 10 + depth * 18 }}>
           <button type="button" role="listitem"
-            className={`issue-materials-file${activeLog === node.path ? " on" : ""}`}
+            className={cn(LOG_ROW, "cursor-pointer",
+              activeLog === node.path
+                ? "border-primary shadow-[inset_0_0_0_1px_var(--accent)]"
+                : "border-line hover:border-primary")}
             onClick={() => onOpen(node.path)}>
-            <span className="p">{node.name}</span>
-            <span className="num">{sizeText(node.size)}</span>
+            <span className="truncate">{node.name}</span>
+            <span className="justify-self-end text-right">{sizeText(node.size)}</span>
           </button>
-          {canOperate && node.archive && <button type="button" className="issue-log-extract"
+          {canOperate && node.archive && <Button type="button" variant="outline" size="sm"
             disabled={extracting !== ""}
             title={`解压到同目录 ${node.name
               .replace(/\.(tar\.gz|tar\.bz2|tgz|tar|zip)$/i, "")}-extracted/`}
             onClick={() => onExtract(node.path)}>
             {extracting === node.path ? "解压中…" : "解压"}
-          </button>}
+          </Button>}
         </div>)}
   </>;
 }
@@ -198,7 +213,7 @@ function IssueDialogue({ turns, truncated }: {
       <EmptyDescription>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</EmptyDescription>
     </Empty>;
   }
-  return <div className="issue-dialogue">
+  return <div className="flex flex-col gap-2.5 px-0.5">
     {truncated && <div className="utility-note">回合较多,只显示最近的 500 条。</div>}
     {turns.map((turn, index) => <IssueDialogueTurnView key={index} turn={turn} />)}
   </div>;
@@ -207,55 +222,45 @@ function IssueDialogue({ turns, truncated }: {
 function IssueDialogueTurnView({ turn }: { turn: IssueDialogueTurn }) {
   const time = turn.ts
     ? formatLocalDateTime(turn.ts, { seconds: true }) : "";
-  if (turn.kind === "card") {
-    return <div className="issue-dialogue-turn card">
-      <span className="issue-dialogue-meta"><b>Agent 问答卡</b>
-        <time>{time}</time></span>
-      <div className="issue-dialogue-bubble">
-        {(turn.questions ?? []).map((question, index) => <div
-          key={index} className="issue-dialogue-q">
-          <p>{question.question}</p>
-          {question.options.length > 0 && <ul className="issue-dialogue-opts">
-            {question.options.map((option, index) => <li key={index}>{option}</li>)}
-          </ul>}
-        </div>)}
-      </div>
-    </div>;
-  }
-  if (turn.kind === "decision") {
-    return <div className="issue-dialogue-turn decision">
-      <span className="issue-dialogue-meta"><b>用户决策</b>
-        <time>{time}</time></span>
-      <div className="issue-dialogue-bubble">
-        {/* 平台闸的问句快照(闸答完即从状态里消失,只能随事件走);
-            Agent 卡的问在前一张问答卡里,不重复。 */}
-        {(turn.questions ?? []).map((question, index) => <div
-          key={index} className="issue-dialogue-q">
-          <p>{question.question}</p>
-          {question.options.length > 0 && <ul className="issue-dialogue-opts">
-            {question.options.map((option, index) => <li key={index}>{option}</li>)}
-          </ul>}
-        </div>)}
-        {turn.decision || "(无文字答复)"}
-        {turn.notes && <span className="issue-dialogue-notes">补充:{turn.notes}</span>}
-      </div>
-    </div>;
-  }
-  if (turn.kind === "review") {
-    return <div className="issue-dialogue-turn review">
-      <span className="issue-dialogue-meta"><b>检视意见({turn.count ?? 0} 条)</b>
-        <time>{time}</time></span>
-      <div className="issue-dialogue-bubble issue-dialogue-review">
-        <pre>{turn.text}</pre>
-      </div>
-    </div>;
-  }
-  return <div className="issue-dialogue-turn user">
-    <span className="issue-dialogue-meta">
-      <b>用户{turn.via === "interrupt" ? "(插话)" : ""}</b>
+  // 用户与决策靠右,问答卡与检视意见靠左(原 .issue-dialogue-turn 对齐规则)。
+  const align = turn.kind === "user" || turn.kind === "decision"
+    ? "self-end items-end" : "self-start items-start";
+  // 气泡底色按轮次角色:用户=accent 软底无框,决策=虚线框,卡与检视=软灰底。
+  const bubble = turn.kind === "user"
+    ? "border-transparent bg-(--accent-soft)"
+    : turn.kind === "decision"
+      ? "border-line border-dashed"
+      : "border-line bg-(--surface-soft)";
+  return <div className={`${DIALOGUE_TURN} ${align}`}>
+    <span className="flex items-baseline gap-1.5 text-[13px] text-faint">
+      <b className="font-semibold text-muted-foreground">
+        {turn.kind === "card" ? "Agent 问答卡"
+          : turn.kind === "decision" ? "用户决策"
+          : turn.kind === "review" ? `检视意见(${turn.count ?? 0} 条)`
+          : `用户${turn.via === "interrupt" ? "(插话)" : ""}`}
+      </b>
       <time>{time}</time>
     </span>
-    <div className="issue-dialogue-bubble">{turn.text}</div>
+    <div className={`${DIALOGUE_BUBBLE} ${bubble}`}>
+      {turn.kind === "review"
+        ? <pre className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] [font:inherit]">{turn.text}</pre>
+        : turn.kind === "user"
+          ? turn.text
+          : <>
+            {/* 平台闸的问句快照(闸答完即从状态里消失,只能随事件走);
+                Agent 卡的问在前一张问答卡里,不重复。 */}
+            {(turn.questions ?? []).map((question, index) => <div
+              key={index} className="group/q">
+              <p className="m-0 mb-1 font-semibold">{question.question}</p>
+              {question.options.length > 0 && <ul className="m-0 mb-2 list-disc pl-[18px] text-muted-foreground group-last/q:mb-0">
+                {question.options.map((option, index) => <li key={index}>{option}</li>)}
+              </ul>}
+            </div>)}
+            {turn.kind === "decision" && (turn.decision || "(无文字答复)")}
+            {turn.kind === "decision" && turn.notes
+              && <span className="mt-1 block text-muted-foreground">补充:{turn.notes}</span>}
+          </>}
+    </div>
   </div>;
 }
 
@@ -447,20 +452,25 @@ function IssueProcessDocs({ detail, canOperate }: {
       .map((doc) => ({ key: doc.name, label: doc.label, hint: sizeText(doc.bytes) })),
   ];
 
-  return <div className={`issue-thread issue-doc${fullscreen ? " is-fullscreen" : ""}`}>
-    <div className="issue-doc-view-actions">
-      <span>{fullscreen ? "全屏阅读过程文档" : ""}</span>
-      <button type="button" className="primary"
+  // #230:过程文档壳换工具类。常态=面板内自滚的网格(problem 域灰底);
+  // 全屏=固定定底盘的纵向 flex,正文/问答/检视三区接管余量自滚——
+  // 旧 .issue-thread/.is-fullscreen 后代选择器按分支直译成分支上的变体。
+  return <div
+    className={`issue-doc${fullscreen ? " is-fullscreen fixed inset-[14px] z-[720] flex flex-col overflow-hidden rounded-[14px] border border-line bg-surface p-[18px_22px] text-foreground shadow-[0_24px_90px_rgba(0,0,0,0.45)] max-[760px]:inset-1 max-[760px]:rounded-[9px] max-[760px]:p-3" : " grid content-start gap-3 overflow-y-auto rounded-xl border border-line bg-surface-muted p-3.5"}`}>
+    <div className="flex min-h-[30px] items-center justify-end gap-3">
+      <span className="mr-auto text-xs text-faint">{fullscreen ? "全屏阅读过程文档" : ""}</span>
+      <Button type="button" size="sm"
         disabled={!docs.length || downloading}
         title={docs.length
           ? `下载全部 ${docs.length} 份 Markdown 过程文档(完整原文件)`
           : "还没有可下载的过程文档"}
         onClick={() => void downloadDocuments()}>
         {downloading ? "打包中…" : "打包下载"}
-      </button>
-      <button type="button" onClick={() => setFullscreen((current) => !current)}>
+      </Button>
+      <Button type="button" variant="outline" size="sm"
+        onClick={() => setFullscreen((current) => !current)}>
         {fullscreen ? "退出全屏" : "全屏查看"}
-      </button>
+      </Button>
     </div>
     {downloadError && <div className="utility-note" role="alert">
       打包下载失败：{downloadError}
@@ -479,35 +489,42 @@ function IssueProcessDocs({ detail, canOperate }: {
           </TabsTrigger>
         ))}
       </TabsList>}
-      {loading && <p className="issue-thread-empty">正在读取…</p>}
+      {loading && <p className="m-0 text-[13px] text-faint">正在读取…</p>}
       {!loading && note && <Empty className="border py-4.5">
         <EmptyTitle>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</EmptyTitle>
         <EmptyDescription>{note}</EmptyDescription>
       </Empty>}
       {!loading && !note && active === DIALOGUE_TAB
         && <TabsContent value={DIALOGUE_TAB} className="contents">
-          <IssueDialogue turns={turns} truncated={turnsTruncated} />
+          <div className={cn(fullscreen && "flex min-h-0 flex-1 flex-col overflow-auto")}>
+            <IssueDialogue turns={turns} truncated={turnsTruncated} />
+          </div>
         </TabsContent>}
       {!loading && !note && active === REVIEW_TAB
         && <TabsContent value={REVIEW_TAB} className="contents">
-          <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
-            reviewEnabled={reviewEnabled}
-            onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
+          <div className={cn(fullscreen && "flex min-h-0 flex-1 flex-col overflow-auto")}>
+            <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
+              reviewEnabled={reviewEnabled}
+              onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
+          </div>
         </TabsContent>}
       {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
         && content && <TabsContent value={active} className="contents">
         {canOperate && draftCount > 0 && <div className="utility-note" role="status">
           已记下 {draftCount} 条意见，尚未提交。
-          <button type="button" onClick={() => setActive(REVIEW_TAB)}>
+          <Button type="button" variant="link" size="xs" className="h-auto px-0.5"
+            onClick={() => setActive(REVIEW_TAB)}>
             查看并提交意见
-          </button>
+          </Button>
         </div>}
-        <div className="issue-doc-toolbar">
+        <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
           <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
-          <button type="button" onClick={() => void loadActive()}>刷新</button>
+          <Button type="button" variant="outline" size="xs"
+            onClick={() => void loadActive()}>刷新</Button>
         </div>
         {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setActive(ANALYSIS_DOC); setLocationExcerpt(undefined); }} /></>}
-        <article className="issue-doc-body">
+        <article className={cn("issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]",
+          fullscreen && "mx-auto min-h-0 w-full max-w-[1760px] flex-1 overflow-auto px-[clamp(20px,3vw,48px)] pb-20 pt-[22px] [&_.mermaid-figure]:overflow-x-hidden [&_.mermaid-diagram]:w-full [&_.mermaid-diagram]:min-w-0 [&_.mermaid-diagram]:max-w-full [&_.puml-diagram]:w-full [&_.puml-diagram]:min-w-0 [&_.puml-diagram]:max-w-full")}>
           {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
               不给行尾 ✎。 */}
           {active === ANALYSIS_DOC && reviewEnabled && canOperate
@@ -535,23 +552,24 @@ function IssueProcessDocs({ detail, canOperate }: {
 }
 
 /** 锚点检测徽标(ADR-0007 Q13):gone = 已被改动(唯一判据),原文
- * 还在 = 黄灯提醒"这条可能还没被吸收"。人工改动引发的失配同理可见。 */
+ * 还在 = 黄灯提醒"这条可能还没被吸收"。人工改动引发的失配同理可见。
+ * (#230 换 Badge 皮:gone 保留主动作紫提请注意,其余中性灰。) */
 function IssueReviewBadge({ check }: { check?: IssueReviewCheck }) {
   if (!check) return null;
   if (check.state === "gone") {
-    return <span className="issue-review-badge gone">已被改动·请你确认</span>;
+    return <Badge variant="brand">已被改动·请你确认</Badge>;
   }
   if (check.state === "moved") {
-    return <span className="issue-review-badge warn"
-      title="原文还在,只是行号漂移">已移至第 {check.line} 行</span>;
+    return <Badge variant="neutral"
+      title="原文还在,只是行号漂移">已移至第 {check.line} 行</Badge>;
   }
   if (check.state === "ambiguous") {
-    return <span className="issue-review-badge warn"
-      title="原文多处命中,点行号自行核对">多处命中</span>;
+    return <Badge variant="neutral"
+      title="原文多处命中,点行号自行核对">多处命中</Badge>;
   }
-  return <span className="issue-review-badge hit"
+  return <Badge variant="neutral"
     title="这条意见对应的原文还在报告里——可能还没被吸收,点行号核对">
-    原文仍在</span>;
+    原文仍在</Badge>;
 }
 
 function IssueReviewItem({ item, check, onLocate, onRemove }: {
@@ -560,17 +578,17 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
   onLocate: (item: IssueReview) => void;
   onRemove?: () => void;
 }) {
-  return <li className="issue-review-item">
-    <div className="issue-review-item-head">
-      <button type="button" className="link"
-        onClick={() => onLocate(item)}>查看原文</button>
+  return <li className={REVIEW_ITEM}>
+    <div className="flex items-baseline gap-2">
+      <Button type="button" variant="link" size="xs" className="h-auto px-0"
+        onClick={() => onLocate(item)}>查看原文</Button>
       {item.status === "sent" && <IssueReviewBadge check={check} />}
-      <time>{formatLocalDateTime(item.created_at, { seconds: true })}</time>
-      {onRemove && <button type="button" className="ghost"
-        onClick={onRemove}>移除</button>}
+      <time className="text-xs text-faint">{formatLocalDateTime(item.created_at, { seconds: true })}</time>
+      {onRemove && <Button type="button" variant="ghost" size="xs" className="ml-auto"
+        onClick={onRemove}>移除</Button>}
     </div>
-    <blockquote className="issue-review-anchor">针对 {item.anchor}</blockquote>
-    <p className="issue-review-note">{item.note}</p>
+    <blockquote className="my-1 border-l-[3px] border-line pl-2 text-muted-foreground [overflow-wrap:anywhere]">针对 {item.anchor}</blockquote>
+    <p className="m-0 text-text-strong [overflow-wrap:anywhere]">{item.note}</p>
   </li>;
 }
 
@@ -626,7 +644,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
     }
   }
 
-  return <div className="issue-review">
+  return <div className="flex flex-col gap-3">
     {detail.review_active && <div className="utility-note">
       上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
     </div>}
@@ -636,15 +654,15 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
       攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
     </Empty>}
     {note && <div className="utility-note">{note}</div>}
-    {drafts.length > 0 && <section className="issue-review-group">
-      <h4>待提交({drafts.length})</h4>
-      <ul className="issue-review-list">
+    {drafts.length > 0 && <section>
+      <h4 className={NOTE_HEAD}>待提交({drafts.length})</h4>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {drafts.map((item) => <IssueReviewItem key={item.id} item={item}
           check={checkOf(item.id)} onLocate={onLocate}
           onRemove={reviewEnabled ? () => void remove(item.id) : undefined} />)}
       </ul>
-      <div className="issue-review-actions">
-        <button type="button" className="primary"
+      <div className="mt-2 flex items-center gap-2.5">
+        <Button type="button" size="sm"
           disabled={busy || !reviewEnabled || detail.status === "running"}
           title={!reviewEnabled
             ? "当前会话状态不能提交检视(转正继承/检视回合进行中/会话已结束)"
@@ -653,12 +671,12 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
               : "提交后工作流从问题分析重新执行"}
           onClick={() => void submit()}>
           {busy ? "提交中…" : `提交 ${drafts.length} 条意见并重跑分析`}
-        </button>
+        </Button>
       </div>
     </section>}
-    {sent.length > 0 && <section className="issue-review-group">
-      <h4>已提交({sent.length})</h4>
-      <ul className="issue-review-list">
+    {sent.length > 0 && <section>
+      <h4 className={NOTE_HEAD}>已提交({sent.length})</h4>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {sent.map((item) => <IssueReviewItem key={item.id} item={item}
           check={checkOf(item.id)} onLocate={onLocate} />)}
       </ul>
@@ -841,7 +859,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   const activeDiff = diffRepo ? repoDiff ?? "" : allDiff;
 
   // 免壳直渲(#123):没有面板壳,失败备注顶格示人,其余按 view 出内容。
-  return <div className="issue-materials">
+  // issue-materials 保留为与工作台面板的拉伸契约钩子(issueWorkspaceLayout),
+  // 自身配方已换工具类(#230)。
+  return <div className="issue-materials grid content-start gap-3.5">
     {note && <div className="utility-note">{note}</div>}
       {view === "changes" && detail.repo_reclaimed_at && <>
         {/* 磁盘治理:终态单的代码现场已被清扫器回收(取消/归档后无
@@ -857,13 +877,20 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         {canOperate && detail.status === "running" && <div className="utility-note">
           AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
         </div>}
-        {diffRepos.length > 1 && <div className="issue-diff-repo-switch" role="group"
+        {diffRepos.length > 1 && <div className="mb-2 flex flex-wrap gap-1.5" role="group"
             aria-label="按仓查看工作区变更">
-          <button type="button" className={diffRepo === "" ? "on" : ""}
+          <button type="button"
+            className={cn("cursor-pointer rounded-full border px-3 py-1 text-[13px] font-semibold transition-colors",
+              diffRepo === ""
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-line bg-surface text-muted-foreground hover:border-primary/40")}
             onClick={() => setDiffRepo("")}>全部合并</button>
           {diffRepos.map((name) => (
             <button type="button" key={name}
-              className={diffRepo === name ? "on" : ""}
+              className={cn("cursor-pointer rounded-full border px-3 py-1 text-[13px] font-semibold transition-colors",
+                diffRepo === name
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-line bg-surface text-muted-foreground hover:border-primary/40")}
               onClick={() => setDiffRepo(name)}>{name}</button>
           ))}
         </div>}
@@ -880,9 +907,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         </div>
         {/* 快速修改(问题流唯一的人工写口):查看模式整块不渲染——
             选文件/保存/请 AI 复核都是写路径。人工修改记录(账)照常示人。 */}
-        {canOperate && <div className="issue-materials-editor">
-          <div className="issue-materials-editor-bar">
-            <strong>快速修改</strong>
+        {canOperate && <div className="issue-materials-editor mt-1 grid gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <strong className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold text-text-strong">快速修改</strong>
             <Select value={activeFile ?? ""}
               items={[{ value: "", label: "选择要修改的文件…" },
                 ...changes.map((change) => ({ value: change.path, label: change.path }))]}
@@ -901,46 +928,47 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <button type="button" className="primary" disabled={saving
+            <Button type="button" size="sm" disabled={saving
               || !activeFile || content === undefined} onClick={save}>
               {saving ? "保存中…" : "保存修改"}
-            </button>
-            <button type="button" disabled={busy || saving || !activeFile}
+            </Button>
+            <Button type="button" variant="outline" size="sm"
+              disabled={busy || saving || !activeFile}
               title="把这次人工改动告知 AI,请它复核后继续"
               onClick={() => activeFile && onNotifyAI(
                 `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
               请 AI 复核
-            </button>
+            </Button>
           </div>
           {activeFile && (content !== undefined
             ? <Textarea className="min-h-[260px] max-h-[480px] resize-y bg-surface font-mono text-[13px]" value={content} spellCheck={false}
                 onChange={(event) => setContent(event.target.value)} />
-            : <p className="issue-materials-empty">读取中…</p>)}
+            : <p className="m-0 mt-1 text-[13px] text-faint">读取中…</p>)}
         </div>}
-      <section className="issue-materials-block">
-        <h4>人工修改记录({data?.manual_edits.length ?? 0})</h4>
+      <section className="grid gap-2 rounded-[10px] border border-line bg-surface-muted px-3.5 py-3">
+        <h4 className={NOTE_HEAD}>人工修改记录({data?.manual_edits.length ?? 0})</h4>
         {data?.manual_edits.length === 0 && <Empty className="py-2 text-left">
           还没有人工改动——从上方选择文件编辑保存后会记在这里。
         </Empty>}
-        <ul className="issue-materials-edits">
+        <ul className="m-0 grid list-none gap-1 p-0">
           {data?.manual_edits.slice().reverse().map((edit, index) => <li
-            key={`${edit.ts}-${index}`}>
+            key={`${edit.ts}-${index}`} className="grid grid-cols-[auto_1fr] items-baseline gap-2.5 text-xs text-faint">
             <span>{new Date(edit.ts).toLocaleTimeString()}</span>
-            <span className="p">{edit.path}</span>
+            <span className="truncate font-mono text-muted-foreground">{edit.path}</span>
           </li>)}
         </ul>
       </section>
     </>}
     {view === "dts" && <div className="ws-doc">
       {dtsDetail ? <>
-        <p className="issue-materials-dts-head">
+        <p className="m-0 flex flex-wrap items-baseline gap-3">
           <strong>{dtsDetail.title || "(无标题)"}</strong>
-          {dtsDetail.severity && <span>级别:{dtsDetail.severity}</span>}
-          {dtsDetail.version && <span>版本:{dtsDetail.version}</span>}
-          {dtsDetail.submitter && <span>提单:{dtsDetail.submitter}</span>}
-          {dtsDetail.url && <a href={dtsDetail.url} target="_blank" rel="noreferrer">原始单</a>}
+          {dtsDetail.severity && <span className="text-xs text-muted-foreground">级别:{dtsDetail.severity}</span>}
+          {dtsDetail.version && <span className="text-xs text-muted-foreground">版本:{dtsDetail.version}</span>}
+          {dtsDetail.submitter && <span className="text-xs text-muted-foreground">提单:{dtsDetail.submitter}</span>}
+          {dtsDetail.url && <a className="text-primary" href={dtsDetail.url} target="_blank" rel="noreferrer">原始单</a>}
         </p>
-        <div className="issue-materials-html issue-dts-detail-html"
+        <div className="issue-dts-detail-html"
           dangerouslySetInnerHTML={{
             __html: prepareDtsHtml(dtsDetail.description || dtsDetail.content)
               || "(无描述)",
@@ -960,7 +988,7 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
       {data?.logs.truncated && <div className="utility-note">
         日志条目超过上限(2000),清单已截断,可能不完整。
       </div>}
-      <div className="issue-materials-files" role="list">
+      <div className="grid gap-1" role="list">
         <LogTreeRows nodes={logTree} depth={0} expanded={expandedDirs}
           activeLog={logView?.path} extracting={extracting}
           canOperate={canOperate}
@@ -973,11 +1001,12 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
           onExtract={(path) => void extractArchive(path)} />
       </div>
       {logView && <>
-        <div className="issue-doc-toolbar">
+        <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
           <span>{logView.path}</span>
-          <button type="button" onClick={() => void openLog(logView.path)}>刷新</button>
+          <Button type="button" variant="outline" size="xs"
+            onClick={() => void openLog(logView.path)}>刷新</Button>
         </div>
-        <pre className="issue-materials-diff">{logView.content}</pre>
+        <pre className="m-0 max-h-80 overflow-auto whitespace-pre break-all rounded-lg border border-line bg-surface px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">{logView.content}</pre>
       </>}
     </div>}
   </div>;

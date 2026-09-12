@@ -49,31 +49,33 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   assert.match(registration, /重试加载/);
   assert.doesNotMatch(registration,
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
-  assert.match(registration,
-    /页面账号 <i className="req">\*<\/i>[\s\S]*placeholder="admin" required/);
-  // 环境侧(2026-09-10 走查裁定「只选不手填」):登记页不再手填 IP,
-  // 未选台账条目就在提交时给指路文案。
+  // 环境侧(2026-09-10 走查裁定「只选不手填」;#230 改锚):页面凭据
+  // 整体废弃,登记页不再有页面账号/页面密码采集面,未选台账条目就在
+  // 提交时给指路文案。
   assert.match(registration, /请从环境管理选择网管环境/);
-  assert.match(registration, /if \(!envPageAccount\.trim\(\)\)/);
+  assert.doesNotMatch(registration, /页面账号 <i|页面密码 <i|envPageAccount/);
   assert.match(registration, /团队资产 → 业务模块/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
   // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
   assert.doesNotMatch(registration, /将拉取的代码仓/);
   assert.match(registration, /issue-module-wrap/);
   assert.match(registration, /已带出 \{selectedModule\.repositories\.length\} 个代码仓,悬停查看/);
-  assert.match(registration, /issue-module-tip" role="tooltip"/);
-  assert.match(css, /\.issue-module-wrap:hover \.issue-module-tip,[\s\S]*focus-within/);
+  assert.match(registration, /issue-module-tip[^>]*role="tooltip"/);
+  // #230 改锚:悬浮卡的悬停/键盘聚焦弹出由 group 变体直译(旧
+  // .issue-module-wrap:hover/:focus-within 规则随家族退役)。
+  assert.match(registration,
+    /issue-module-tip[^"]*group-hover\/mod:grid group-focus-within\/mod:grid/);
 });
 
-test("口令选择器可用键盘操作，窄屏不会溢出", () => {
-  for (const key of ["ArrowDown", "ArrowUp", "Home", "End", "Escape"]) {
-    assert.ok(registration.includes(`\"${key}\"`), `缺少 ${key} 键盘行为`);
-  }
-  assert.match(registration, /aria-haspopup="listbox"/);
-  assert.match(css,
-    /@media \(max-width: 680px\) \{[\s\S]*\.issue-form, \.issue-group-body \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(css,
-    /@media \(max-width: 680px\) \{[\s\S]*\.issue-password-menu \{[\s\S]*position: static;/);
+test("登记表单窄屏单列,旧口令菜单不得回流(#230 改锚)", () => {
+  // 页面凭据(口令选择器)随「只选不手填」整体废弃:键盘纪律归
+  // base-ui Select/Popover 原语,页面不再自带键盘表;旧 .issue-password-menu
+  // 与 680px 静态规则随 #230 迁移退役,窄屏单列由 max-[680px] 变体直译。
+  assert.doesNotMatch(registration, /issue-password-menu/);
+  assert.doesNotMatch(css, /^\s*\.issue-password-menu/m);
+  assert.match(registration,
+    /className="grid grid-cols-2 gap-3 max-\[680px\]:grid-cols-1"/);
+  assert.match(registration, /max-\[680px\]:grid-cols-1/);
 });
 
 test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", () => {
@@ -119,7 +121,11 @@ test("问题决策卡的给定选项和自定义答复都能再次点击取消",
 });
 
 test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", () => {
-  assert.match(registration, /不会出现在会话[\s\S]*事件流[\s\S]*明文进入[\s\S]*AI 上下文/);
+  // #230 改锚:页面凭据废弃(2026-09-10)后,登记页不再有密码明文的
+  // 采集面——隐私承诺由「台账已存密码、页面无需填写」的快照说明承载,
+  // 契约全文在 docs/issue-flow.md(由下方 issueFlow 断言钉住)。
+  assert.doesNotMatch(registration, /page_password|页面密码/);
+  assert.match(registration, /的已存密码[\s\S]{0,80}无需在此填写/);
   // 闸卡(2026-09-10 只选不手填)不再有密码输入面:以"台账快照、凭据
   // 无需在此填写"的说明替代;密码的唯一输入处是共用新建/编辑弹框。
   assert.match(decisions, /密码以选定时为准[\s\S]*密码无需在此填写/);
@@ -127,10 +133,11 @@ test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", (
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
   // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
-  // 结论开按钮;入口本身仍必须在面板上明确存在。
-  assert.match(annotations, /closure\.can_override_drop/);
+  // 结论开按钮;入口本身仍必须在面板上明确存在。(#230 改锚:旁路已
+  // 统一成两段式「管理员代办」流程,代删口并入同一入口。)
+  assert.match(annotations, /closureOf\(item\)\.can_override_drop/);
   assert.match(annotations, /closure\.can_override_verify/);
-  assert.match(annotations, /管理员代删/);
+  assert.match(annotations, /管理员代办/);
   assert.match(annotations, /管理员代确认/);
   assert.match(annotations, /完整内容见“执行现场”/);
 });
@@ -295,10 +302,13 @@ test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog"
 });
 
 test("过程文档可原位全屏，退出后保留当前页签", () => {
-  assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen"/);
+  assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen fixed/);
   assert.match(materials, /fullscreen \? "退出全屏" : "全屏查看"/);
   assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
-  assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
+  // #230 改锚:全屏壳换工具类——定底盘(固定定位/层高/滚动)由
+  // is-fullscreen 分支的变体直译,旧 .is-fullscreen 规则随家族退役。
+  assert.match(materials,
+    /is-fullscreen fixed inset-\[14px\] z-\[720\] flex flex-col/);
 });
 
 test("环境形态字段:唯一落点是共用新建弹框,登记与闸卡只选不手填(AI 不试错)", () => {
@@ -441,9 +451,11 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
   // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
-  assert.match(materials, /\{canOperate && <div className="issue-materials-editor">/);
   assert.match(materials,
-    /\{canOperate && node\.archive && <button type="button" className="issue-log-extract"/);
+    /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
+  // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
+  assert.match(materials,
+    /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
   assert.match(materials,
     /canOperate\s*\?\s*\[\{ key: REVIEW_TAB/);
   assert.match(materials,
@@ -1142,7 +1154,7 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   assert.match(apiTypes, /environment_id\?: string/);
 });
 
-test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 environment_id/页面凭据仍手填", () => {
+test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 environment_id/页面凭据已废弃(#230 改锚)", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   // 常驻快选(可搜索下拉,自带「找不到就新建」弹框):不再有展开/收起
@@ -1152,15 +1164,12 @@ test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 envi
   assert.doesNotMatch(registration, /收起环境列表/);
   assert.doesNotMatch(registration, /清除,改用手动填写/);
   // 选中给台账快照说明(已存后台密码),提交只带 environment_id;
-  // 页面账号/页面密码不入台账,仍手填随行。
+  // 页面账号/页面密码整体废弃(2026-09-10),登记页不得回流采集面。
   assert.match(registration, /将使用「环境管理」里/);
   assert.match(registration, /environment_id: pickedEnv\.id/);
-  assert.match(registration, /page_password: envPagePassword/);
+  assert.doesNotMatch(registration, /page_password:|页面账号 <i|页面密码 <i/);
   // 未选环境提交被拦,文案指路下拉里的「新增环境」。
   assert.match(registration, /请从环境管理选择网管环境/);
-  // 页面凭据两个输入面仍在(不入台账,逐单手填)。
-  assert.match(registration, /页面账号 <i className="req">\*<\/i>/);
-  assert.match(registration, /页面密码 <i className="req">\*<\/i>/);
 });
 
 test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役(2026-09-11)", () => {

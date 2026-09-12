@@ -309,36 +309,9 @@ svg {
 }
 .annotation-location-notice > button:hover { background: var(--surface-muted); }
 
-/* ── 问题流过程文档：原位切成专注阅读，不丢当前页签与滚动。 ── */
-.issue-doc-view-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; min-height: 30px; }
-.issue-doc-view-actions span { margin-right: auto; color: var(--faint); font-size: 12px; }
-.issue-doc-view-actions button { padding: 7px 11px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
-.issue-doc-view-actions button.primary { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); font-weight: 650; }
-.issue-doc-view-actions button:hover:not(:disabled) { border-color: var(--accent); }
-.issue-doc-view-actions button:disabled { opacity: .48; cursor: not-allowed; }
-.issue-thread.issue-doc.is-fullscreen {
-  position: fixed; z-index: 720; inset: 14px; padding: 18px 22px;
-  display: flex; flex-direction: column; overflow: hidden;
-  color: var(--text); background: var(--surface); border: 1px solid var(--line);
-  border-radius: 14px; box-shadow: 0 24px 90px rgba(0, 0, 0, .45);
-}
-.issue-thread.issue-doc.is-fullscreen .issue-doc-body,
-.issue-thread.issue-doc.is-fullscreen .issue-dialogue,
-.issue-thread.issue-doc.is-fullscreen .issue-review-panel { flex: 1; min-height: 0; overflow: auto; }
-.issue-thread.issue-doc.is-fullscreen .issue-doc-body {
-  max-width: 1760px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 22px clamp(20px, 3vw, 48px) 80px;
-  box-sizing: border-box;
-}
-.issue-thread.issue-doc.is-fullscreen .mermaid-figure { overflow-x: hidden; }
-.issue-thread.issue-doc.is-fullscreen .puml-diagram,
-.issue-thread.issue-doc.is-fullscreen .mermaid-diagram {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-}
+/* #230:.issue-doc-view-actions/.issue-thread.issue-doc.is-fullscreen 家族
+   随过程文档壳换装退役(定底盘/宽画布直译成 MaterialsPane.tsx 全屏分支
+   上的工具类;mermaid/puml 的全屏视口约束随分支走)。 */
 
 /* ── 常驻快速反馈：窄侧签不抢主导航，点击才展开。 ── */
 .wish-quick-trigger {
@@ -354,7 +327,6 @@ svg {
  * dialog 配方随之退役;触发按钮(wish-quick-*)保留。 */
 
 @media (max-width: 760px) {
-  .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
   .wish-quick-trigger { right: 12px; top: auto; bottom: 76px; }
   .workspace-review-invite-action { grid-template-columns: 1fr; }
 }
@@ -870,54 +842,17 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: rgba(214, 69, 69, .08); color: #d64545; font-size: var(--font-size-assist);
 }
 .issue-error button { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; }
-.issue-register-tabs { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
-.issue-register-tabs button {
-  min-height: 30px; padding: 0 14px; border: 0; border-radius: 7px;
-  background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-register-tabs button:hover { color: var(--text-strong); }
-.issue-register-tabs button.on { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-xs); }
-.issue-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* #230:登记页独占家族(.issue-form、.issue-group、.issue-desc-foot、
+   .issue-polish 系、.issue-module 系、.issue-image-uploading、
+   .issue-form-actions、.issue-register-tabs、.issue-password-menu)
+   随 Registration 换 shadcn 默认皮退役(表单双栏/窄屏单列直译成
+   max-[680px] 变体);.issue-field 保留——问题闸卡(簇二)仍用。 */
 .issue-field { display: grid; gap: 5px; font-size: var(--font-size-assist); color: var(--muted); }
 .issue-field.wide { grid-column: 1 / -1; }
 .issue-field i { font-style: normal; color: var(--faint); }
 .issue-field input, .issue-field select, .issue-field textarea {
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong); font: inherit; width: 100%;
-}
-/* 登记表单的两段视觉分组(问题信息/网管环境):分组是给发起人的心理
-   分段——模块必选与凭据四件套常开不折叠,不再是"可选项"(spec #15)。 */
-.issue-group {
-  grid-column: 1 / -1; display: grid; gap: 12px; padding: 14px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
-}
-.issue-group-title {
-  display: block; color: var(--accent);
-  font-size: var(--font-size-assist); font-weight: 700; line-height: 1.2;
-}
-.issue-group-title i { font-style: normal; font-weight: 400; color: var(--faint); }
-.issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-/* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
-.issue-field span i.req { color: var(--danger); font-weight: 700; }
-/* AI 润色(#184):描述区底部动作行(右对齐文字按钮) + 确认弹窗。 */
-.issue-desc-foot {
-  display: flex; align-items: center; justify-content: flex-end;
-  gap: 10px; min-height: 24px;
-}
-.issue-desc-foot .issue-image-uploading { margin-right: auto; color: var(--muted); }
-.issue-polish-note {
-  margin: 0; padding: 8px 10px; border-radius: 8px;
-  background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));
-  color: var(--attention); font-size: var(--font-size-dense);
-}
-.issue-polish-preview {
-  max-height: 46vh; overflow: auto; padding: 10px 12px;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface-muted); color: var(--text-strong);
-  font-size: var(--font-size-assist); line-height: 1.65;
-}
-.issue-polish-preview img {
-  max-width: 100%; max-height: 200px; border-radius: 6px;
 }
 /* 登记描述所见即所得编辑器(#184 票2):milkdown/ProseMirror 容器,
    样式全走令牌(明暗主题自适应);内容样式对齐 .md-* 渲染面口径。 */
@@ -980,79 +915,16 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   position: absolute; top: 9px; left: 11px; color: var(--faint);
   pointer-events: none; font-size: var(--font-size-assist);
 }
-.issue-group-note {
-  grid-column: 1 / -1; margin: 0; color: var(--faint);
-  font-size: var(--font-size-dense); line-height: 1.5;
-}
-.issue-module-load-error {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 8px 10px; border: 1px solid color-mix(in srgb, #d64545 35%, var(--line));
-  border-radius: 8px; color: #d64545;
-}
-.issue-module-load-error button {
-  flex: none; min-height: 32px; padding: 0 10px; border: 1px solid currentColor;
-  border-radius: 7px; background: transparent; color: inherit; cursor: pointer;
-}
-/* 模块带仓(拍板 2026-08-31):仓清单不占版面——选中模块后悬停
-   选择器或提示行,悬浮卡列出将拉取的仓(键盘聚焦同样弹出,读屏走
-   role=tooltip);短名一行放下,全地址挂 title 悬停可见。要增删仓
-   去团队资产维护绑定,登记页只看不改。 */
-.issue-module-wrap { position: relative; display: grid; gap: 6px; }
-.issue-module-hint { color: var(--muted); cursor: help; }
-.issue-module-tip {
-  display: none; position: absolute; top: calc(100% + 6px); left: 0;
-  z-index: 40; min-width: min(440px, 100%); padding: 10px 12px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
-  box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
-}
-.issue-module-wrap:hover .issue-module-tip,
-.issue-module-wrap:focus-within .issue-module-tip { display: grid; gap: 8px; }
-.issue-module-tip b { color: var(--text-strong); }
-.issue-module-tip ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.issue-module-tip li {
-  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface-muted); color: var(--text-strong);
-  font-family: var(--font-mono); font-size: var(--font-size-dense);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/* PasswordCombo:密码输入框 + 常见默认口令下拉(可选可手输)。面板
-   交互沿 DTS 版本多选框的成熟模式:锚定 wrapper,点面板外或 Esc 收起。 */
-.issue-password-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
-  display: grid; gap: 2px; max-height: min(280px, 45dvh); padding: 6px;
-  overflow-y: auto; overscroll-behavior: contain;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
-}
-.issue-image-uploading {
-  font-size: var(--font-size-meta); color: var(--muted);
-  padding: 4px 8px;
-}
-.issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
-.issue-form-actions .primary {
-  min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
-  background: var(--accent); color: var(--accent-fg); font-size: var(--font-size-assist);
-  font-weight: 700; cursor: pointer;
-}
-.issue-form-actions .primary:disabled { opacity: .55; cursor: not-allowed; }
 .annot-panel-note.admin-override {
   border-color: color-mix(in srgb, var(--attention) 35%, var(--line));
   background: color-mix(in srgb, var(--attention) 7%, var(--surface));
 }
 @media (max-width: 680px) {
+  /* 问题闸卡的 issue-field(簇二)仍在窄屏收单列;登记页自己的窄屏
+     口径已直译成 Registration.tsx 里的 max-[680px] 变体(#230)。 */
   .issue-section { padding: 13px 12px; }
   .issue-section .section-head { align-items: stretch; flex-direction: column; }
-  .issue-register-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-  .issue-register-tabs button { min-height: 40px; }
-  .issue-form, .issue-group-body { grid-template-columns: minmax(0, 1fr); }
-  .issue-group { padding: 12px 10px; }
-  .issue-field, .issue-field.wide, .issue-group-note { grid-column: 1; min-width: 0; }
-    .issue-password-menu {
-    position: static; max-height: min(240px, 42dvh); box-shadow: none;
-  }
-    .issue-module-load-error { align-items: stretch; flex-direction: column; }
-  .issue-form-actions { align-items: stretch; flex-direction: column; }
-  .issue-form-actions .primary { width: 100%; min-height: 44px; }
+  .issue-field, .issue-field.wide { grid-column: 1; min-width: 0; }
 }
 /* 问题域状态胶囊配色已随 .pill 一起收编进 Badge variant(#216,见
    StatusBadge.tsx 的 ISSUE_STATUS_VARIANT 词典);呼吸点由
@@ -1175,23 +1047,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 .issue-repo-pipeline-error { display: grid; gap: 2px; color: var(--danger); overflow-wrap: anywhere; }
-/* 材料页签:工作区变更按仓分片的切换条(全部合并 = 旧视图)。 */
-.issue-diff-repo-switch { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-.issue-diff-repo-switch button {
-  padding: 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: var(--font-size-assist);
-  font-weight: 600;
-  cursor: pointer;
-}
-.issue-diff-repo-switch button.on {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
+/* #230:.issue-diff-repo-switch 随工作区变更的仓切换条换装退役(药丸
+ * 直译成 MaterialsPane.tsx 里的工具类;激活=primary 软底)。 */
 
 /* ---- 固定流程:阶段管道(计划线;固定模式下的唯一阶段条) ----
    视觉对齐需求工作台的 task-phase-track:节点在上、词签在下,细连线
@@ -1302,30 +1159,11 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: color-mix(in srgb, #d49b37 14%, transparent);
   border: 1px solid color-mix(in srgb, #d49b37 45%, transparent);
 }
-/* 发起前置门禁条(个人凭据缺项):黄底警示 + 一键跳个人设置 */
-.issue-credential-gate {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap;
-  padding: 10px 13px;
-  border: 1px solid color-mix(in srgb, #d49b37 45%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in srgb, #d49b37 10%, var(--surface));
-  color: #8a5a1f; font-size: var(--font-size-assist); line-height: 1.5;
-  margin-bottom: 10px;
-}
-.issue-credential-gate b { color: #a8541f; }
-.issue-credential-gate button {
-  min-height: 32px; padding: 0 14px; border: 0; border-radius: 8px;
-  background: #b97d2f; color: #fff; font: inherit; font-size: var(--font-size-dense);
-  font-weight: 700; cursor: pointer; white-space: nowrap;
-}
+/* #230:.issue-credential-gate 随发起前置门禁条换装退役(琥珀警示+
+ * 动作钮直译成 Registration.tsx 的工具类与 shadcn Button)。 */
+/* #230:.issue-thread/.issue-thread-empty 家族随过程文档壳换装退役
+ * (常态网格/全屏定底盘直译成 MaterialsPane.tsx 分支上的工具类)。 */
 
-.issue-thread {
-  overflow-y: auto; display: grid; gap: 10px; align-content: start;
-  padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-muted);
-}
-.issue-thread-empty { color: var(--faint); font-size: var(--font-size-assist); }
 /* ---- 决策-centric 双栏骨架 ----
    左栏 = 内容(页签 + 对话/文档),右栏 = NEXT ACTION 常驻栏。
    配比与任务工作台 ws-body 同源(minmax(0,1.55fr) / minmax(320px,.95fr)),
@@ -1352,7 +1190,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   min-width: 0;
 }
 /* 消息流/文档在左栏内吃满余量(自身仍是滚动容器) */
-.issue-main-pane > .issue-thread { flex: 1; }
+/* #230:.issue-main-pane > .issue-thread 随 issue-thread 家族退役——
+   #123 拍平后文档壳嵌在 issue-materials 之内,该直接子选择器早已空指。 */
 /* 现场面板体在左栏吃满余量:直播流撑到栏底(撑破 540px 帽),
    进场自动贴底才看得到意义;任务侧卡片里的同款面板无此上下文,
    仍是 540px 帽,不受影响(2026-09-03)。 */
@@ -1593,141 +1432,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* 折叠箭头:开合各转 90°,不引图标库(与 utility-panel 的 i 同思路) */
 /* 人等待占比条:同任务侧 cost-bar 的口径,等待段用 attention 色 */
 
-/* 会话材料页签:DTS 单据 / 工作区变更(含快速修改)/ 拉取日志 */
-.issue-materials { display: grid; gap: 14px; align-content: start; }
-.issue-materials-empty { margin: 4px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
-.issue-materials-block {
-  display: grid; gap: 8px; padding: 12px 14px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted);
-}
-.issue-materials-block h4 { margin: 0; font-size: var(--font-size-assist); color: var(--muted); }
-.issue-materials-dts-head { display: flex; gap: 12px; flex-wrap: wrap; margin: 0; align-items: baseline; }
-.issue-materials-dts-head span { color: var(--muted); font-size: var(--font-size-dense); }
-.issue-materials-dts-head a { color: var(--accent); }
-.issue-materials-files { display: grid; gap: 4px; }
-.issue-materials-file {
-  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
-  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong);
-  font: var(--font-size-assist) var(--font-mono); cursor: pointer; text-align: left;
-}
-.issue-materials-file:hover { border-color: var(--accent); }
-.issue-materials-file.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.issue-materials-file .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.issue-materials-file .num { display: grid; gap: 2px; justify-items: end; font-family: var(--font-mono); }
-.issue-materials-file .num em { font-style: normal; }
-.issue-materials-file .num em:first-child { color: #2f9e44; }
-.issue-materials-file .num em:last-child { color: #d64545; }
-.issue-materials-file .st {
-  padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
-  background: var(--surface-muted); color: var(--muted); white-space: nowrap;
-}
-/* 拉取日志树(#47):目录行加粗示层级;文件行 = 查看按钮 + 可选解压
-   按钮并排;解压是写操作入口,禁用态如实降透明度。 */
-.issue-log-dir { font-weight: 600; }
-.issue-log-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
-.issue-log-extract {
-  padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong); white-space: nowrap;
-  font: var(--font-size-assist) var(--font-sans); cursor: pointer;
-}
-.issue-log-extract:hover:not(:disabled) { border-color: var(--accent); }
-.issue-log-extract:disabled { opacity: 0.5; cursor: default; }
-.issue-materials-editor { display: grid; gap: 8px; margin-top: 4px; }
-.issue-materials-editor-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.issue-materials-editor-bar strong {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font: 600 var(--font-size-assist) var(--font-mono); color: var(--text-strong);
-}
-.issue-materials-editor-bar button {
-  min-height: 28px; padding: 0 12px; border: 1px solid var(--line);
-  border-radius: 7px; background: var(--surface); color: var(--text-strong);
-  font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-materials-editor-bar button.primary {
-  background: var(--accent); border-color: var(--accent); color: var(--accent-fg);
-}
-.issue-materials-editor-bar button:disabled { opacity: .5; cursor: not-allowed; }
-.issue-materials-editor textarea {
-  min-height: 260px; max-height: 480px; padding: 10px 12px; resize: vertical;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--text-strong);
-  font: var(--font-size-assist) var(--font-mono); line-height: 1.55;
-}
-.issue-materials-diff {
-  margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
-  font: var(--font-size-dense) var(--font-mono); line-height: 1.5;
-  color: var(--muted); white-space: pre; word-break: break-all;
-}
-.issue-materials-edits { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.issue-materials-edits li {
-  display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: baseline;
-  font-size: var(--font-size-dense); color: var(--faint);
-}
-.issue-materials-edits .p { color: var(--muted); font-family: var(--font-mono); }
-
-/* 过程文档正文:复用消息区滚动容器,内部换成 markdown 排版;多页签
-   (#210)已换 shadcn Tabs 原语,原 ws-tabs/ws-tab 覆盖随迁移删除 */
-.issue-thread.issue-doc { gap: 12px; }
-/* 过程问答(复盘阅读面的对话气泡):用户与决策靠右,问答卡与检视意见靠左 */
-.issue-dialogue { display: flex; flex-direction: column; gap: 10px; padding: 2px; }
-.issue-dialogue-turn { display: flex; flex-direction: column; gap: 3px; max-width: 86%; }
-.issue-dialogue-turn.user, .issue-dialogue-turn.decision { align-self: flex-end; align-items: flex-end; }
-.issue-dialogue-turn.card, .issue-dialogue-turn.review { align-self: flex-start; align-items: flex-start; }
-.issue-dialogue-meta { display: flex; gap: 6px; align-items: baseline; color: var(--faint); font-size: var(--font-size-assist); }
-.issue-dialogue-meta b { color: var(--muted); font-weight: 600; }
-.issue-dialogue-bubble {
-  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
-  background: var(--surface); color: var(--text-strong);
-  font-size: var(--font-size-assist); line-height: 1.65;
-  white-space: pre-wrap; overflow-wrap: anywhere;
-}
-.issue-dialogue-turn.user .issue-dialogue-bubble { background: var(--accent-soft); border-color: transparent; }
-.issue-dialogue-turn.decision .issue-dialogue-bubble { border-style: dashed; }
-.issue-dialogue-turn.card .issue-dialogue-bubble { background: var(--surface-soft); white-space: normal; }
-.issue-dialogue-q p { margin: 0 0 4px; font-weight: 600; }
-.issue-dialogue-q .issue-dialogue-opts { margin: 0 0 8px; padding-left: 18px; color: var(--muted); }
-.issue-dialogue-q:last-child .issue-dialogue-opts { margin-bottom: 0; }
-.issue-dialogue-notes { display: block; margin-top: 4px; color: var(--muted); }
-.issue-dialogue-turn.review .issue-dialogue-bubble { background: var(--surface-soft); }
-.issue-dialogue-review pre {
-  margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere;
-}
-/* 检视面板(材料页签「检视」子视图;ADR-0005) */
-.issue-review { display: flex; flex-direction: column; gap: 12px; }
-.issue-review-group h4 { margin: 0 0 6px; color: var(--muted); }
-.issue-review-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.issue-review-item {
-  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
-  background: var(--surface); font-size: var(--font-size-assist); line-height: 1.6;
-}
-.issue-review-item-head { display: flex; gap: 8px; align-items: baseline; }
-.issue-review-item-head time { color: var(--faint); font-size: var(--font-size-dense); }
-.issue-review-item-head .ghost { margin-left: auto; }
-.issue-review-anchor {
-  margin: 4px 0; padding: 2px 8px; border-left: 3px solid var(--line);
-  color: var(--muted); overflow-wrap: anywhere;
-}
-.issue-review-note { margin: 0; color: var(--text-strong); overflow-wrap: anywhere; }
-.issue-review-actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
-.issue-review-badge {
-  border-radius: 999px; padding: 0 8px; font-size: var(--font-size-dense);
-}
-.issue-review-badge.gone { background: var(--accent-soft); color: var(--accent); }
-.issue-review-badge.warn { background: var(--surface-muted); color: var(--muted); }
-.issue-review-badge.hit { background: var(--surface-muted); color: var(--muted); }
-/* 问答气泡里的 markdown(Agent 发言)贴回气泡排版 */
-.issue-dialogue-bubble .md > :first-child { margin-top: 0; }
-.issue-dialogue-bubble .md > :last-child { margin-bottom: 0; }
-.issue-doc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--faint); font-size: var(--font-size-dense); }
-.issue-doc-toolbar button {
-  min-height: 26px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px;
-  background: var(--surface); color: var(--text-strong); font-size: var(--font-size-dense); cursor: pointer;
-}
-/* #217:.issue-doc-empty 已由 <Empty> 组件取代,一并拆除(中性灰语义
-   由 EmptyDescription 的 muted 字承担)。 */
-.issue-doc-body { color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.75; overflow-wrap: anywhere; }
+/* #230:材料域家族(issue-materials 系、issue-log 系、issue-dialogue 系、
+   issue-review 系、issue-doc-toolbar、issue-doc-body)随 MaterialsPane
+   换装退役:树行/气泡/检视卡/工具行直译成组件内工具类词典。
+   issue-materials 根类保留为工作台面板的拉伸契约钩子(见下方
+   issue-workspace 段);issue-dts-detail-html(单据富文本)与
+   issue-doc-body(圈注定位 JS 钩子)两个内容钩子保留,配方随迁。
+   issue-fixed-step(列表/工作台计划线,簇二 SessionView 在用)不在本次范围。 */
 .task-created {
   margin-left: auto;
   color: var(--faint);

@@ -10,6 +10,8 @@ const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 const reviewPane = readFileSync(
   join(process.cwd(), "web/src/ResizableReviewPane.tsx"), "utf8");
+const materialsPane = readFileSync(
+  join(process.cwd(), "web/src/issues/MaterialsPane.tsx"), "utf8");
 
 test("内容页签与阅读检视工具是独立区域，检视仍随时可开关", () => {
   // #207 页签迁 base-ui Tabs 后 role=tablist 归原语,.ws-source-switch
@@ -62,8 +64,11 @@ test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () =>
   assert.match(css, /\.plantuml-viewport\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.puml-diagram,[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
-  assert.match(css,
-    /\.issue-thread\.issue-doc\.is-fullscreen \.issue-doc-body\s*\{[^}]*max-width:\s*1760px/s);
+  // #230 改锚:问题流过程文档的全屏壳迁工具类,宽画布上限由
+  // MaterialsPane 的 is-fullscreen 分支直译(max-w-[1760px]),
+  // 不再走 style.css 的 .is-fullscreen 后代选择器。
+  assert.match(materialsPane,
+    /fullscreen && "mx-auto min-h-0 w-full max-w-\[1760px\] flex-1 overflow-auto/);
 });
 
 test("快速提问题常驻右下角且使用横向小按钮", () => {
