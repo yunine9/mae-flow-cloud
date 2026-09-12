@@ -20,7 +20,7 @@ import "./overall-story.css";
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
 import { needsDeliverySelection, queuedDecisionAnnotationIds } from "./decisionSelection";
@@ -41,6 +41,8 @@ import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
 import { TaskStatusBadge } from "./StatusBadge";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "cn";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
@@ -284,41 +286,44 @@ function DiagnosticsLink({ taskId }: { taskId: string }) {
 
 /** await_merge 的右栏行:默认一行状态,点开只展开一句说明 + MR 链接
  * (MFC-039 用户拍板:去掉与右栏标题重复的大卡)。MR 被关闭是需要人
- * 处理的例外,直接展示不折叠。 */
+ * 处理的例外,直接展示不折叠。#227 换装:ws-merge-line 皮退役改工具类。 */
 function MergeWaitLine({ task, canOperate }: {
   task: TaskSummary;
   canOperate: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const mrLink = task.delivery?.mr_url
-    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
+    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
+        className="text-ink underline underline-offset-2 hover:text-ink-hover">
         打开合入请求 ↗
       </a>
-    : <em>平台尚未返回 MR 链接，请稍后刷新。</em>;
+    : <em className="not-italic text-faint">平台尚未返回 MR 链接，请稍后刷新。</em>;
   if (task.delivery?.mr_state === "已关闭") {
     return (
-      <div className="ws-merge-line is-closed" role="alert">
-        <strong>MR 已关闭，任务还没有结束</strong>
-        <p>{task.delivery?.waiting_on
+      <div role="alert"
+        className="grid gap-1 rounded-xl border border-danger/40 bg-danger-soft p-3 text-sm">
+        <strong className="text-danger">MR 已关闭，任务还没有结束</strong>
+        <p className="m-0 text-[13px] text-muted-foreground">{task.delivery?.waiting_on
           || "重新打开 MR 后系统自动恢复监听；不再继续可用右上角“取消”。"}
           {mrLink}</p>
       </div>
     );
   }
   return (
-    <div className="ws-merge-line">
+    <div className="grid gap-1 text-sm">
       <button type="button" aria-expanded={open}
+        className="flex w-fit cursor-pointer items-center gap-2 text-left text-text-strong hover:underline"
         onClick={() => setOpen((value) => !value)}>
-        <span className="ws-merge-line-dot" aria-hidden />
+        <span aria-hidden className="size-2 shrink-0 rounded-full bg-merge" />
         等待合入
         <svg viewBox="0 0 16 16" aria-hidden
-          className={open ? "is-open" : undefined}>
+          className={cn("size-3.5 text-faint transition-transform", open && "rotate-180")}>
           <path d="m5 6.5 3 3 3-3" /></svg>
       </button>
       {open && (
-        <p>{task.delivery?.waiting_on
+        <p className="m-0 text-xs leading-relaxed text-muted-foreground">{task.delivery?.waiting_on
           || "流水线与门禁已通过，请前往 MR 完成检视与合入。"}{mrLink}
-          {canOperate && <small>
+          {canOperate && <small className="block">
             不再继续这项任务时，可用右上角“取消”明确停止监听。
           </small>}
         </p>
@@ -424,8 +429,21 @@ function groupFeedback(feedback: FeedbackRecord[]) {
   return [...grouped];
 }
 
+/** 意见状态徽标词表(#227 换装:原 .feedback-state.{status} 色板收编为
+ * Badge variant;needs_human/awaiting 压在人或检视人手里=warning)。 */
+const FEEDBACK_BADGE: Record<FeedbackStatus, ComponentProps<typeof Badge>["variant"]> = {
+  open: "warning",
+  repairing: "info",
+  addressed: "success",
+  awaiting_verification: "info",
+  closed: "neutral",
+  needs_human: "warning",
+  deferred: "neutral",
+};
+
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
- * 和批注卡片同一套版式,放进「检视意见」里不违和。 */
+ * 和批注卡片同一套版式,放进「检视意见」里不违和。
+ * #227 换装:feedback-* 皮肤类退役,改 shadcn Badge/Button + 工具类。 */
 export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
   kicker: string;
   title: string;
@@ -453,50 +471,50 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
       setConverting("");
     }
   }
-  return <section className="feedback-list" aria-label={title}>
-    <header>
-      <div>
-        <span>{kicker}</span>
-        <strong>{title}</strong>
-        {hint && <p>{hint}</p>}
+  return <section className="grid gap-2 rounded-xl border border-line bg-surface p-3" aria-label={title}>
+    <header className="flex flex-wrap items-start justify-between gap-3">
+      <div className="grid min-w-0 gap-0.5">
+        <span className="font-mono text-xs font-bold tracking-wide text-ink">{kicker}</span>
+        <strong className="text-[15px] text-text-strong">{title}</strong>
+        {hint && <p className="m-0 max-w-[72ch] text-xs leading-relaxed text-muted-foreground">{hint}</p>}
       </div>
-      <div className="feedback-list-side">
-        <i>{items.length} 条</i>
-        {active > 0 && <em>{active} 进行中</em>}
-        {mrUrl && <a href={mrUrl} target="_blank" rel="noreferrer">打开 MR</a>}
+      <div className="flex items-center gap-1.5 text-xs">
+        <i className="rounded-full bg-surface-3 px-2 py-0.5 not-italic text-muted-foreground">{items.length} 条</i>
+        {active > 0 && <em className="rounded-full bg-attention-soft px-2 py-0.5 not-italic text-attention">{active} 进行中</em>}
+        {mrUrl && <a href={mrUrl} target="_blank" rel="noreferrer"
+          className="text-ink underline underline-offset-2 hover:text-ink-hover">打开 MR</a>}
       </div>
     </header>
-    <ol>
-      {items.map((item) => <li key={item.id} className={`feedback-item ${item.status}`}>
-        <div className="feedback-item-head">
+    <ol className="m-0 flex list-none flex-col gap-2 p-0">
+      {items.map((item) => <li key={item.id} className="grid gap-1.5 rounded-lg bg-surface-2 p-2.5 text-[13px]">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           {item.file
-            ? <code>{item.file}{item.line !== undefined ? `:${item.line}` : ""}</code>
-            : <code className="feedback-item-nofile">未指向具体文件</code>}
-          <span className={`feedback-state ${item.status}`}>
-            {feedbackStatusLabel(item)}
-          </span>
+            ? <code className="font-mono text-xs text-muted-foreground">{item.file}{item.line !== undefined ? `:${item.line}` : ""}</code>
+            : <code className="font-mono text-xs text-faint">未指向具体文件</code>}
+          <Badge variant={FEEDBACK_BADGE[item.status]}>{feedbackStatusLabel(item)}</Badge>
         </div>
-        <p className="feedback-body">{item.summary}</p>
-        {item.resolution && <div className="feedback-response">
-          <strong>{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
-          <p>{item.resolution}</p>
+        <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-text">{item.summary}</p>
+        {item.resolution && <div className="grid gap-1 border-l-2 border-l-line-strong pl-2.5">
+          <strong className="text-xs text-text-strong">{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
+          <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground">{item.resolution}</p>
         </div>}
-        <div className="feedback-item-foot">
-          <small>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <small className="text-xs text-muted-foreground">
             {FEEDBACK_SOURCE_LABEL[item.source]}
             {item.author && ` · 检视人 ${item.author}`}
             {` · ${relativeTime(item.updated_at) || item.updated_at}`}
           </small>
           {onConvert && item.status !== "closed" && !notices[item.id] && (
-            <button type="button" className="feedback-convert"
+            <Button type="button" variant="outline" size="xs"
               disabled={converting === item.id}
               title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
               onClick={() => void convert(item)}>
               {converting === item.id ? "生成中…" : "转成工作台批注"}
-            </button>
+            </Button>
           )}
         </div>
-        {notices[item.id] && <p className="feedback-convert-notice" role="status">
+        {notices[item.id] && <p role="status"
+          className="m-0 rounded-md bg-accent-soft px-2.5 py-1.5 text-xs leading-relaxed text-ink">
           {notices[item.id]}
         </p>}
       </li>)}
@@ -507,12 +525,15 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
 /** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
   const active = feedback.filter((item) => item.status !== "closed").length;
-  return <section className="feedback-panel" aria-label="持续检视反馈明细">
-    <header>
-      <span><strong>持续检视</strong><small>同一个任务、分支和 MR</small></span>
-      <em className={active ? "active" : "done"}>
+  return <section className="grid gap-2.5" aria-label="持续检视反馈明细">
+    <header className="flex items-center justify-between gap-3">
+      <span className="flex items-baseline gap-2">
+        <strong className="text-[13px] text-text-strong">持续检视</strong>
+        <small className="text-xs text-muted-foreground">同一个任务、分支和 MR</small>
+      </span>
+      <Badge variant={active ? "warning" : "success"}>
         {active ? `${active} 条进行中` : "全部已闭环"}
-      </em>
+      </Badge>
     </header>
     {groupFeedback(feedback).map(([source, items]) => (
       <FeedbackList key={source} kicker="持续检视"
@@ -1723,7 +1744,7 @@ export function TaskWorkspace({
             </Alert>
           )}
           {canOperate && !waiting && (
-            <div className="ws-failed-actions">
+            <div className="grid gap-2">
               <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />
               <DiagnosticsLink taskId={task.id} />
             </div>
@@ -1731,8 +1752,8 @@ export function TaskWorkspace({
         </>
       )}
       {task.status === "canceled" && (
-        <div className="task-canceled-note">
-          <strong>任务已取消</strong>
+        <div className="grid gap-1 text-[13px] text-muted-foreground">
+          <strong className="text-sm font-medium text-text">任务已取消</strong>
           <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
           {canOperate && <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />}
         </div>
@@ -1741,12 +1762,12 @@ export function TaskWorkspace({
         <MergeWaitLine task={task} canOperate={canOperate} />
       )}
       {!waiting && task.status === "verifying" && (
-        <div className="ws-verify-focus">
-          <strong>交付验证进行中</strong>
+        <div className="grid gap-2 rounded-xl border border-line bg-surface p-4">
+          <strong className="text-[15px] text-text-strong">交付验证进行中</strong>
           {task.delivery?.waiting_on ? (
-            <p className="ws-verify-focus-waiting">{task.delivery.waiting_on}</p>
+            <p className="min-w-0 max-w-full [overflow-wrap:anywhere] break-words text-sm text-text">{task.delivery.waiting_on}</p>
           ) : (
-            <p>{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
+            <p className="m-0 text-sm leading-relaxed text-muted-foreground">{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
           )}
           {canOperate && repairStopped(task) && (
             <RetryButton taskId={task.id} onDone={onChanged}
@@ -1758,18 +1779,21 @@ export function TaskWorkspace({
         </div>
       )}
       {!waiting && task.status === "coordinating" && (
-        <div className="ws-child-focus">
-          <strong>{task.focus?.needs_attention ? "有子任务需要处理" : "子任务正在推进"}</strong>
-          <p>{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
-          <div>{task.requirement_graph?.repositories.map((repository) => (
+        <div className="grid gap-2">
+          <strong className="text-sm text-text-strong">{task.focus?.needs_attention ? "有子任务需要处理" : "子任务正在推进"}</strong>
+          <p className="m-0 text-[13px] leading-relaxed text-muted-foreground">{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
+          <div className="grid gap-1.5">{task.requirement_graph?.repositories.map((repository) => (
             <button type="button" key={repository.id}
               disabled={!repository.task_id || !onOpenTask}
-              onClick={() => repository.task_id && onOpenTask?.(repository.task_id)}>
-              <span><strong>{repository.name}</strong>
-                <small><PersonName account={repository.assignee} fallback="未指定负责人" /></small></span>
-              <em className={repository.task_status ?? "queued"}>
+              onClick={() => repository.task_id && onOpenTask?.(repository.task_id)}
+              className="flex min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-2 disabled:cursor-default disabled:opacity-60 disabled:hover:border-line">
+              <span className="grid min-w-0 gap-px">
+                <strong className="truncate text-[13px] font-medium text-text-strong">{repository.name}</strong>
+                <small className="truncate text-xs text-muted-foreground"><PersonName account={repository.assignee} fallback="未指定负责人" /></small>
+              </span>
+              <TaskStatusBadge status={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}
-              </em>
+              </TaskStatusBadge>
             </button>
           ))}</div>
         </div>
@@ -1815,12 +1839,12 @@ export function TaskWorkspace({
   const reviewWorkspaceContent = (
     <div className="workspace-review-notes">
       {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头归原语);
-          旧 .review-filter 皮肤类(含 active/attention/计数徽标)挂在
-          TabsList/TabsTrigger 上,视觉与筛选语义原样。 */}
+          #227 换装:.review-filter 皮肤类退役,筛选档位改胶囊工具类
+          (选中=墨底、等我确认有积压=attention 描边),语义与词表原样。 */}
       {reviewRecordCount > 0 && <Tabs value={reviewFilter} className="contents"
           onValueChange={(value) => setReviewFilter(value as ReviewFilter)}>
         <TabsList variant="line" aria-label="按处理归属筛选"
-            className="review-filter h-auto w-full">
+            className="h-auto w-full justify-start gap-1.5 bg-transparent p-0">
           {([
             ["all", "全部"],
             ["mine", "等我确认"],
@@ -1828,39 +1852,43 @@ export function TaskWorkspace({
             ["closed", "已完成"],
           ] as const).map(([key, label]) => (
             <TabsTrigger key={key} value={key}
-              className={`h-auto flex-none after:hidden${reviewFilter === key ? " active" : ""}${
+              className={cn("h-auto flex-none gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium after:hidden",
+                reviewFilter === key
+                  ? "border-ink bg-accent-soft text-ink hover:text-ink"
+                  : "border-line text-muted-foreground",
                 key === "mine" && reviewCounts.mine > 0
-                  ? " attention border-[color:color-mix(in_srgb,var(--attention)_50%,var(--line-strong))]" : ""}`}>
-              {label}<i>{reviewCounts[key]}</i>
+                  && "border-attention/60 text-attention")}>
+              {label}<i className="inline-grid h-4 min-w-4 place-items-center rounded-full bg-muted px-1 font-mono text-[11px] not-italic tabular-nums">{reviewCounts[key]}</i>
             </TabsTrigger>
           ))}
         </TabsList>
       </Tabs>}
       {reviewAssignment?.status === "pending" && task.status !== "canceled" && (
-        <section className="review-assignment" aria-labelledby="review-assignment-title">
-          <div className="review-assignment-mark" aria-hidden>审</div>
-          <div>
-            <span>COMMITTER REVIEW</span>
-            <strong id="review-assignment-title">
+        <section aria-labelledby="review-assignment-title"
+          className="grid gap-2.5 rounded-xl border border-ink/30 bg-surface p-3.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+          <div aria-hidden className="grid size-9 place-items-center rounded-full bg-surface-3 text-sm font-bold text-ink">审</div>
+          <div className="grid min-w-0 gap-1">
+            <span className="font-mono text-xs font-bold tracking-wide text-ink">COMMITTER REVIEW</span>
+            <strong id="review-assignment-title" className="text-sm text-text-strong">
               {reviewPeople.find((person) =>
                 person.username === reviewAssignment.requester)
                 ?.display_name ?? reviewAssignment.requester} 邀请你检视
             </strong>
-            <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
-            {completeError && <small className="review-assignment-error">
+            <p className="m-0 text-xs leading-relaxed text-muted-foreground">看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
+            {completeError && <small className="text-xs text-danger">
               {completeError}
             </small>}
           </div>
-          <button type="button" disabled={completeBusy}
+          <Button type="button" size="sm" disabled={completeBusy}
             onClick={() => void finishReview()}>
             {completeBusy ? "正在完成…" : "完成检视"}
-          </button>
+          </Button>
         </section>
       )}
       <section className="workspace-review-opinions" aria-label="检视意见">
         {renderAnnotations(notes)}
         {!notes.length && (
-          <div className="ws-insight-empty">
+          <div className="px-1 py-1 text-[13px] text-muted-foreground">
             在原文、产出文档或代码上圈选，即可原位写下反馈。
           </div>
         )}
@@ -1896,8 +1924,9 @@ export function TaskWorkspace({
           <span>返回列表</span>
         </button>
         <div className="ws-identity">
-          {task.ticket && <span className="ws-business-id">{task.ticket}</span>}
-          <strong id="task-workspace-title" title={task.title ?? task.requirement}>
+          {task.ticket && <Badge variant="outline" className="font-mono tracking-wide">{task.ticket}</Badge>}
+          <strong id="task-workspace-title" title={task.title ?? task.requirement}
+            className="min-w-0 truncate text-[15px] leading-tight font-semibold tracking-tight text-text-strong">
             {task.title ?? task.requirement}
           </strong>
           <div className="ws-identity-line">
@@ -1910,19 +1939,21 @@ export function TaskWorkspace({
               textClassName="max-[640px]:hidden">
               {statusText(task)}
             </TaskStatusBadge>
-            <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
+            <button type="button"
+              className="inline-flex cursor-pointer items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-text-strong"
+              aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
-            <WaitBadge task={task} personal={canOperate} />
+            <WaitBadge task={task} personal={canOperate} className="max-[900px]:hidden" />
             {canOperate && !task.requirement_graph && !["completed", "canceled"].includes(task.status)
               && <RefreshMrButton key={task.id} taskId={task.id} onChanged={onChanged} />}
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>
-          {task.parent_task_id && <button type="button" className="ws-parent-task"
+          {task.parent_task_id && <button type="button"
+            className="inline-flex h-[26px] w-fit cursor-pointer items-center gap-1.5 rounded-full border border-line px-2 text-xs text-muted-foreground transition-colors hover:border-line-strong hover:text-text-strong"
             onClick={() => onOpenTask?.(task.parent_task_id!)}>
             <span>返回主任务</span>
-            <strong>{task.parent_task?.title ?? "跨仓大任务"}</strong>
-            <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
+            <strong className="max-w-[200px] truncate font-medium">{task.parent_task?.title ?? "跨仓大任务"}</strong>
           </button>}
         </div>
         <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
@@ -1956,57 +1987,60 @@ export function TaskWorkspace({
         </div>
         {(controllable || deletable || canRequestReview || onOpenFeedbackWall) && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {canRequestReview && task.status !== "canceled" && <button type="button" className="workspace-review-invite-button"
+            {/* #227 换装:头部控制钮换 shadcn Button(恢复/暂停=outline、
+                取消=ghost、删除=destructive、邀请=outline sm),确认态
+                是一枚危险软底胶囊;原 .ws-head-controls 按钮皮不再依赖。 */}
+            {canRequestReview && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
-              onClick={() => setReviewInviteOpen(true)}>邀请他人检视</button>}
+              onClick={() => setReviewInviteOpen(true)}>邀请他人检视</Button>}
             {onOpenFeedbackWall && <QuickWishButton inline onOpenWall={onOpenFeedbackWall} />}
             {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
-              <button type="button" className="primary" disabled={!!controlBusy}
+              <Button type="button" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
                 {controlBusy === "resume" ? "恢复中…" : "恢复"}
-              </button>
+              </Button>
             ) : task.status === "pausing" ? (
-              <button type="button" disabled title="当前操作结束后自动暂停">
+              <Button type="button" variant="outline" disabled title="当前操作结束后自动暂停">
                 正在暂停
-              </button>
+              </Button>
             ) : (
-              <button type="button" disabled={!!controlBusy}
+              <Button type="button" variant="outline" disabled={!!controlBusy}
                 title={task.status === "verifying"
                   ? "停止平台跟踪；外部流水线仍会继续" : "当前操作结束后安全暂停"}
                 onClick={() => void runControl("pause")}>
                 {controlBusy === "pause" ? "暂停中…" : "暂停"}
-              </button>
+              </Button>
             ))}
             {controllable && (!cancelArmed ? (
-              <button type="button" className="cancel" disabled={!!controlBusy}
+              <Button type="button" variant="ghost" disabled={!!controlBusy}
                 title="取消后不可恢复，已有文件和记录仍会保留"
-                onClick={() => setCancelArmed(true)}>取消</button>
+                onClick={() => setCancelArmed(true)}>取消</Button>
             ) : (
-              <div className="ws-cancel-confirm">
-                <span>取消后不可恢复</span>
-                <button type="button" disabled={!!controlBusy}
+              <div className="inline-flex h-8 items-center gap-1 rounded-lg border border-danger/40 bg-danger-soft pr-1 pl-2.5">
+                <span className="mr-1 text-xs font-medium whitespace-nowrap text-danger">取消后不可恢复</span>
+                <Button type="button" variant="destructive" size="xs" disabled={!!controlBusy}
                   onClick={() => void runControl("cancel")}>
                   {controlBusy === "cancel" ? "取消中…" : "确认"}
-                </button>
-                <button type="button" disabled={!!controlBusy}
-                  onClick={() => setCancelArmed(false)}>返回</button>
+                </Button>
+                <Button type="button" variant="ghost" size="xs" disabled={!!controlBusy}
+                  onClick={() => setCancelArmed(false)}>返回</Button>
               </div>
             ))}
             {deletable && (!deleteArmed ? (
-              <button type="button" className="delete" disabled={!!controlBusy}
+              <Button type="button" variant="destructive" disabled={!!controlBusy}
                 title="永久删除工作区、事件、批注与历史记录"
-                onClick={() => setDeleteArmed(true)}>删除任务</button>
+                onClick={() => setDeleteArmed(true)}>删除任务</Button>
             ) : (
-              <div className="ws-delete-confirm">
-                <span>工作区和记录将永久删除</span>
-                <button type="button" disabled={!!controlBusy}
+              <div className="inline-flex h-8 items-center gap-1 rounded-lg border border-danger/40 bg-danger-soft pr-1 pl-2.5">
+                <span className="mr-1 text-xs font-medium whitespace-nowrap text-danger">工作区和记录将永久删除</span>
+                <Button type="button" variant="destructive" size="xs" disabled={!!controlBusy}
                   onClick={() => void deleteTask()}>
                   {controlBusy === "delete" ? "删除中…" : "确认删除"}
-                </button>
-                <button type="button" disabled={!!controlBusy}
-                  onClick={() => setDeleteArmed(false)}>返回</button>
+                </Button>
+                <Button type="button" variant="ghost" size="xs" disabled={!!controlBusy}
+                  onClick={() => setDeleteArmed(false)}>返回</Button>
               </div>
             ))}
           </div>
@@ -2020,9 +2054,9 @@ export function TaskWorkspace({
       </OverlayDialog>}
 
       {task.feedback_error && (
-        <section className="feedback-panel feedback-panel-error" role="alert">
-          <h3>持续检视明细暂不可用</h3>
-          <p>{task.feedback_error}</p>
+        <section role="alert" className="flex-none border-b border-line bg-surface-2 px-(--ws-gutter) py-2.5">
+          <h3 className="m-0 text-sm font-semibold">持续检视明细暂不可用</h3>
+          <p className="m-0 mt-0.5 text-[13px] text-muted-foreground">{task.feedback_error}</p>
         </section>
       )}
       {/* 主区两栏(参照 Devin / Codex / Jules 的会话页):左边是"对话与决定"
@@ -2155,8 +2189,8 @@ export function TaskWorkspace({
             </div>
           ) : <>
           {materialSearchOpen && materialView !== "chain" && (
-            <div className="material-search-bar" role="search">
-              <span className="material-search-icon" aria-hidden>⌕</span>
+            <div className="flex min-h-11 flex-none items-center gap-2 border-b border-line bg-surface-2 px-5 py-1.5" role="search">
+              <span aria-hidden className="text-[17px] leading-none text-muted-foreground">⌕</span>
               <Input ref={materialSearchInput}
                 className="min-w-45"
                 value={materialSearchQuery}
@@ -2173,41 +2207,42 @@ export function TaskWorkspace({
                     moveMaterialSearch(event.shiftKey ? -1 : 1);
                   }
                 }} />
-              <span className={`material-search-count${materialSearchQuery.trim()
-                  && !materialSearchCount ? " empty" : ""}`}
-                aria-live="polite">
+              <span aria-live="polite"
+                className={cn("w-16 shrink-0 text-center text-xs tabular-nums",
+                  materialSearchQuery.trim() && !materialSearchCount ? "text-danger" : "text-muted-foreground")}>
                 {!materialSearchQuery.trim() ? "输入关键词"
                   : materialSearchCount
                     ? `${materialSearchIndex + 1} / ${materialSearchCount}`
                     : "没有找到"}
               </span>
-              <button type="button" title="上一处（Shift + Enter）"
+              <Button type="button" variant="outline" size="icon-sm" title="上一处（Shift + Enter）"
                 aria-label="上一个搜索结果" disabled={!materialSearchCount}
-                onClick={() => moveMaterialSearch(-1)}>↑</button>
-              <button type="button" title="下一处（Enter）"
+                onClick={() => moveMaterialSearch(-1)}>↑</Button>
+              <Button type="button" variant="outline" size="icon-sm" title="下一处（Enter）"
                 aria-label="下一个搜索结果" disabled={!materialSearchCount}
-                onClick={() => moveMaterialSearch(1)}>↓</button>
-              <button type="button" className="material-search-close"
-                aria-label="关闭搜索" onClick={toggleMaterialSearch}>×</button>
+                onClick={() => moveMaterialSearch(1)}>↓</Button>
+              <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground"
+                aria-label="关闭搜索" onClick={toggleMaterialSearch}>×</Button>
             </div>
           )}
           {evidenceGapActionable && evidenceGapArtifact && (
-            <section className="ws-evidence-gap-callout" role="status">
-              <div>
-                <span>流水线需要补充原文</span>
-                <strong>打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
-                <p>保存批注后会自动记入待处理反馈，点击“贴回报错”即可让 Agent 继续。</p>
+            <section role="status"
+              className="flex flex-none flex-wrap items-center justify-between gap-4 border-b border-line bg-attention-soft px-5 py-3">
+              <div className="grid gap-0.5">
+                <span className="text-xs font-medium text-attention">流水线需要补充原文</span>
+                <strong className="text-sm text-text-strong">打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
+                <p className="m-0 text-[13px] text-muted-foreground">保存批注后会自动记入待处理反馈，点击“贴回报错”即可让 Agent 继续。</p>
               </div>
-              <button type="button"
-                className={active === evidenceGapArtifact.name
-                    && materialView === "doc" ? "on" : ""}
+              <Button type="button" size="sm"
+                variant={active === evidenceGapArtifact.name
+                    && materialView === "doc" ? "secondary" : "default"}
                 onClick={() => {
                   setMaterialView("doc");
                   setActive(evidenceGapArtifact.name);
                 }}>
                 {active === evidenceGapArtifact.name && materialView === "doc"
                   ? "正在查看" : "打开材料"}
-              </button>
+              </Button>
             </section>
           )}
           {materialView === "doc" && active === OVERALL_STORY_ARTIFACT && !task.parent_task_id
@@ -2228,13 +2263,13 @@ export function TaskWorkspace({
                       ? "参考" : sizeText(item.bytes)}</i>
                 </button>
               ))}
-              <button type="button" className="ws-document-download"
+              <Button type="button" variant="outline" size="sm" className="my-auto ml-auto"
                 disabled={documentsDownloading}
                 title={`下载全部 ${documents.length} 份产出文档(完整原文件)`}
                 onClick={() => void downloadDocuments()}>
                 <span aria-hidden>⇩</span>
                 {documentsDownloading ? "打包中…" : "打包下载"}
-              </button>
+              </Button>
             </div>
           )}
           {documentsDownloadError && <div className="utility-note" role="alert">
@@ -2268,21 +2303,22 @@ export function TaskWorkspace({
                 queueWithDecision={annotationQueueWithDecision}
               >
                 <article className="requirement-source">
-                  <div className="requirement-source-label">
-                    <span>{task.requirement_document?.bundle_name
+                  <div className="mb-5 border-b border-line pb-2.5 text-xs text-muted-foreground">
+                    <span className="font-medium text-text">{task.requirement_document?.bundle_name
                       ?? task.requirement_document?.name
                       ?? "用户提交的完整内容"}
                       {task.requirement_document?.context_mode === "file"
-                        && <em>Agent 分段读取</em>}</span>
-                    <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
+                        && <em className="ml-1.5 rounded-full bg-surface-3 px-1.5 py-px not-italic text-muted-foreground">Agent 分段读取</em>}</span>
+                    <small className="block">{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                   </div>
                   {/* 上一轮修改被拒收或失败时,原来只有 API 里有原因,页面上人
                       只看到"文档没变"——这里把原因摆在正文上方。 */}
                   {task.requirement_revision?.state === "failed" && (
-                    <div className="requirement-revision-error" role="alert">
-                      <strong>上一轮修改没有生效</strong>
-                      <span>{task.requirement_revision.error ?? "Agent 没有给出原因"}</span>
-                      <small>意见仍在待提交，修正后可以重新提交</small>
+                    <div role="alert"
+                      className="mb-3 grid gap-1 rounded-lg border border-danger/40 border-l-[3px] border-l-danger bg-danger-soft p-3 text-[13px] leading-relaxed">
+                      <strong className="text-danger">上一轮修改没有生效</strong>
+                      <span className="break-words text-text">{task.requirement_revision.error ?? "Agent 没有给出原因"}</span>
+                      <small className="text-muted-foreground">意见仍在待提交，修正后可以重新提交</small>
                     </div>
                   )}
                   {/* Agent 每改一轮都留了改前全文和 diff。复检的人原来只能靠
@@ -2292,14 +2328,16 @@ export function TaskWorkspace({
                     const latest = revisions[revisions.length - 1];
                     const showing = revisionDiff?.id === latest.id;
                     return (
-                      <div className="requirement-revision-bar" role="status">
-                        <span>
+                      <div role="status"
+                        className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 text-xs">
+                        <span className="inline-flex flex-wrap items-center gap-1.5 text-text">
                           Agent 已修改 {revisions.length} 轮 · 最近一轮
-                          <b className="added">+{latest.additions}</b>
-                          <b className="deleted">-{latest.deletions}</b>
-                          <small>{relativeTime(latest.at)}</small>
+                          <b className="font-mono font-bold text-success">+{latest.additions}</b>
+                          <b className="font-mono font-bold text-danger">-{latest.deletions}</b>
+                          <small className="text-muted-foreground">{relativeTime(latest.at)}</small>
                         </span>
-                        <button type="button" className={showing ? "on" : ""}
+                        <Button type="button" size="xs"
+                          variant={showing ? "secondary" : "outline"}
                           onClick={() => {
                             if (showing) { setRevisionDiff(null); return; }
                             setRevisionDiff({ id: latest.id, text: "" });
@@ -2311,7 +2349,7 @@ export function TaskWorkspace({
                               }));
                           }}>
                           {showing ? "回到全文" : "看这一轮改了什么"}
-                        </button>
+                        </Button>
                       </div>
                     );
                   })()}
@@ -2336,39 +2374,47 @@ export function TaskWorkspace({
               }} />
             ) : <>
               {materialView === "diff" && pushReview && (
-                <div className="push-review-scope" aria-label="代码检视范围">
+                <div aria-label="代码检视范围"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-surface px-5 py-3">
                   {pushReview.has_focused_changes ? <>
                     <button type="button"
-                      className={diffScope === "changes" ? "on" : ""}
+                      className={cn("inline-flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-left transition-colors",
+                        diffScope === "changes"
+                          ? "border-ink bg-ink text-ink-fg"
+                          : "border-line-strong bg-surface text-text hover:border-text-strong")}
                       onClick={() => {
                         if (diffScope === "changes") return;
                         setContent("");
                         setPushDiffState({ kind: "checking" });
                         setDiffScope("changes");
                       }}>
-                      <strong>这次改的</strong>
-                      <span>{pushReview.title}</span>
+                      <strong className="text-[13px] font-medium">这次改的</strong>
+                      <span className={cn("text-xs", diffScope === "changes" ? "opacity-75" : "text-muted-foreground")}>{pushReview.title}</span>
                     </button>
                     <button type="button"
-                      className={diffScope === "full" ? "on" : ""}
+                      className={cn("inline-flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-left transition-colors",
+                        diffScope === "full"
+                          ? "border-ink bg-ink text-ink-fg"
+                          : "border-line-strong bg-surface text-text hover:border-text-strong")}
                       onClick={() => {
                         if (diffScope === "full") return;
                         setContent("");
                         setPushDiffState({ kind: "checking" });
                         setDiffScope("full");
                       }}>
-                      <strong>全部改动</strong>
-                      <span>从任务起点到当前待推送代码</span>
+                      <strong className="text-[13px] font-medium">全部改动</strong>
+                      <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前待推送代码</span>
                     </button>
                   </> : (
                     // 只有一个范围时不是"可切换":按钮外观点了没反应,
                     // 用户会当成坏了(MFC-035)。老实渲染成状态标签。
-                    <div className="on scope-single" role="note">
-                      <strong>全部改动</strong>
-                      <span>从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
+                    <div role="note"
+                      className="inline-flex h-8 min-w-0 cursor-default items-center gap-1.5 rounded-full border border-ink bg-ink px-3 text-ink-fg">
+                      <strong className="text-[13px] font-medium">全部改动</strong>
+                      <span className="text-xs opacity-75">从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
                     </div>
                   )}
-                  <p>{diffScope === "changes"
+                  <p className="m-0 min-w-[240px] flex-1 text-[13px] text-muted-foreground">{diffScope === "changes"
                     ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
                     : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
                 </div>
@@ -2468,26 +2514,28 @@ export function TaskWorkspace({
           <div className="ws-side-notices">
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
+          {/* #227 换装:控制反馈行改工具类皮(.task-control-feedback 容器
+              仍是任务头下的一条,壳样式由 task-workspace.css 承担)。 */}
           {pauseFeedback && (
-            <div className={`task-control-state ${pauseFeedback.state}`}
-              role="status">
-              <i aria-hidden />
-              <span><strong>{pauseFeedback.title}</strong>
-                <small>{pauseFeedback.detail}</small></span>
+            <div role="status" className="flex items-start gap-2 text-[13px] text-attention">
+              <i aria-hidden className="mt-1 size-2 shrink-0 rounded-full bg-attention" />
+              <span><strong className="font-semibold">{pauseFeedback.title}</strong>
+                <small className="block text-muted-foreground">{pauseFeedback.detail}</small></span>
             </div>
           )}
-          {controlError && <div className="task-control-error" role="alert">
-            <strong>操作没有完成</strong>
-            <span>{controlError}</span>
+          {controlError && <div role="alert" className="mt-1.5 grid gap-0.5 text-[13px] text-danger">
+            <strong className="font-semibold">操作没有完成</strong>
+            <span className="text-muted-foreground">{controlError}</span>
           </div>}
         </div>
       )}
 
             {(task.execution_plan_alerts ?? []).length > 0 && (
-              <section className="ws-focus-alert" role="alert">
-                <strong>执行方案与当前现场不一致</strong>
+              <section role="alert"
+                className="mt-5 grid gap-1 rounded-lg border border-danger/40 border-l-[3px] border-l-danger bg-danger-soft p-3 text-sm text-danger">
+                <strong className="font-semibold">执行方案与当前现场不一致</strong>
                 {task.execution_plan_alerts!.map((line, index) => (
-                  <p key={index}>{line.replace(/^⚠\s*/, "")}</p>
+                  <p key={index} className="m-0 text-[13px] text-text">{line.replace(/^⚠\s*/, "")}</p>
                 ))}
               </section>
             )}
@@ -2509,10 +2557,11 @@ export function TaskWorkspace({
               </Alert>
             )}
             {task.status === "queued" && Boolean(task.blocked_by?.length) && (
-              <div className="ws-focus-note"><strong>等待前置任务完成后自动开始</strong>
-                <div className="ws-dependency-links">{task.blocked_by!.map((id) => (
-                  <button type="button" key={id} disabled={!onOpenTask}
-                    onClick={() => onOpenTask?.(id)}>{id}</button>
+              <div className="mt-5 grid gap-1.5 rounded-lg border border-line bg-surface p-3 text-sm">
+                <strong className="font-semibold text-text-strong">等待前置任务完成后自动开始</strong>
+                <div className="flex flex-wrap gap-1.5">{task.blocked_by!.map((id) => (
+                  <Button type="button" key={id} variant="outline" size="xs" disabled={!onOpenTask}
+                    onClick={() => onOpenTask?.(id)}>{id}</Button>
                 ))}</div>
               </div>
             )}
@@ -2596,7 +2645,8 @@ export function TaskWorkspace({
                           saveState={repositoryAssigneeSave}
                         />
                       )}
-                      {draftIds.length > 0 && <div className="ws-attached-feedback" role="note">
+                      {draftIds.length > 0 && <div role="note"
+                        className="rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted-foreground">
                         本次决定将附带你的 {draftIds.length} 条未发送反馈；已发送意见不重复附带。
                       </div>}
                     </>
@@ -2641,7 +2691,7 @@ export function TaskWorkspace({
               }}
               onAssistant={setAssistantView} />
           ) : (
-            <div className="ws-composer-readonly">
+            <div className="rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-xs text-muted-foreground">
               你可以查看全部记录与材料；提交决定和插话由责任人 <PersonName account={task.luban_account} fallback="或协作者" /> 处理。
             </div>
           )}

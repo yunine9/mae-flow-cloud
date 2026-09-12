@@ -36,6 +36,22 @@ const TASK_BLINK = new Set<TaskStatus>([
   "running", "coordinating", "pausing", "verifying",
 ]);
 
+/** 卡片左缘状态细轨色(#227 换装:原 style.css .status-* .task-status-rail
+ * 色板 1:1 收编为工具类词典,任务列表卡与问题列表卡共用这一份)。 */
+export const TASK_STATUS_RAIL: Record<TaskStatus, string> = {
+  queued: "bg-line-strong",
+  running: "bg-active",
+  coordinating: "bg-active",
+  pausing: "bg-attention",
+  paused: "bg-line-strong",
+  waiting_for_human: "bg-attention",
+  completed: "bg-success",
+  verifying: "bg-active",
+  await_merge: "bg-merge",
+  canceled: "bg-transparent",
+  failed: "bg-danger",
+};
+
 /** 问题流词表(api.ts IssueStatus,原 issue-card-large 配色 1:1 收编)。 */
 const ISSUE_STATUS_VARIANT: Record<IssueStatus, StatusVariant> = {
   queued: "info",

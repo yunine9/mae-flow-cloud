@@ -1,5 +1,6 @@
 import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requirementDecisionContract";
 import { Button } from "./components/ui/button";
+import { Badge } from "./components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./components/Alert";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import { Input } from "./components/ui/input";
@@ -9,10 +10,16 @@ import { ExecutionEventBuffer } from "./executionEventBuffer";
 /**
  * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
+ *
+ * #227 去 legacy:卡片壳/utility-panel/task-child-links/cost/timeline 等
+ * 家族换 shadcn 默认皮 + 工具类;TaskProgress 相位轨与 EventTail 粘底
+ * 日志(与问题侧 EventsPane 共族)结构原样保留。
  */
 
 import { memo, useMemo, useEffect, useState, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { ChevronDownIcon } from "lucide-react";
+import { cn } from "cn";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
@@ -52,7 +59,7 @@ import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
 import { chainStages } from "./RequirementGraph";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
-import { TaskStatusBadge } from "./StatusBadge";
+import { TaskStatusBadge, TASK_STATUS_RAIL } from "./StatusBadge";
 import { TokenUsage } from "./TokenUsage";
 import {
   formatLocalClock,
@@ -134,52 +141,69 @@ export function TaskCard({
   return (
     <article
       id={`task-${task.id}`}
-      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}${task.parent_task_id ? " is-child-task" : ""}${childRepositories.length ? " is-parent-task" : ""}`}
+      className={cn(
+        "relative overflow-hidden rounded-xl border border-line bg-surface text-sm shadow-(--shadow-xs) transition-colors hover:border-line-strong",
+        expanded && "border-line-strong",
+        focused && "border-text-strong",
+        task.parent_task_id && "ml-7",
+      )}
     >
       <button
         type="button"
-        className="task-summary"
+        className="relative flex w-full cursor-pointer items-start gap-4 p-4 pl-5 text-left"
         onClick={() => setExpanded((open) => !open)}
         aria-expanded={expanded}
       >
-        <span className="task-status-rail" aria-hidden />
-        <span className="task-summary-body">
-          <span className="task-overline">
+        <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", TASK_STATUS_RAIL[task.status])} />
+        <span className="min-w-0 flex-1">
+          <span className="mb-1 flex flex-wrap items-center gap-2.5 text-xs">
             {task.parent_task_id
-              ? <span className="task-level child">子任务</span>
+              ? <span className="font-medium text-muted-foreground">子任务</span>
               : childRepositories.length > 0
-                ? <span className="task-level parent">主任务</span> : null}
-            {task.ticket && <span className="task-ticket">{task.ticket}</span>}
-            <span className="task-id" title="平台内部编号">{task.id}</span>
+                ? <span className="font-medium text-muted-foreground">主任务</span> : null}
+            {task.ticket && <span className="font-mono font-medium tracking-wide text-text-strong">{task.ticket}</span>}
+            <span className="font-mono text-xs text-faint" title="平台内部编号">{task.id}</span>
             <TaskStatusBadge status={task.status}>
               {decisionMode === "signal" && task.status === "waiting_for_human"
                 ? "待拍板"
                 : statusText(task)}
             </TaskStatusBadge>
             <WaitBadge task={task} personal={showDecisionForm} />
-            <span className="task-created">{formatLocalDateTime(task.created_at)}</span>
+            <span className="ml-auto tabular-nums text-faint">{formatLocalDateTime(task.created_at)}</span>
           </span>
-          <strong className="task-title">{task.title ?? task.requirement}</strong>
-          <span className="task-ownership">
+          <strong className={cn("block leading-relaxed font-semibold tracking-tight text-text-strong [overflow-wrap:anywhere]",
+            !expanded && "line-clamp-1")}>{task.title ?? task.requirement}</strong>
+          <span className="mt-0.5 block text-xs text-muted-foreground">
             <span>责任人 · <PersonName account={responsibleOf(task)} /></span>
           </span>
           {task.focus && (
-            <span className={`task-focus task-focus-${task.focus.kind}`}>
-              <i aria-hidden />
-              <strong>{task.focus.headline}</strong>
-              <span>下一步 · {task.focus.next_action}</span>
+            <span className="mt-2 grid grid-cols-[7px_minmax(0,1fr)] items-start gap-x-2 text-xs">
+              <i aria-hidden className={cn("mt-1 justify-self-center size-1.5 rounded-full",
+                task.focus.kind === "human_action" ? "bg-attention ring-3 ring-attention-soft"
+                  : task.focus.kind === "blocked" ? "bg-danger ring-3 ring-danger-soft"
+                  : task.focus.kind === "external" ? "bg-merge"
+                  : task.focus.kind === "done" ? "bg-success"
+                  : task.focus.kind === "inactive" ? "bg-faint" : "bg-active")} />
+              <strong className={cn("font-bold",
+                task.focus.kind === "human_action" ? "text-attention"
+                  : task.focus.kind === "blocked" ? "text-danger" : "text-text-strong")}>
+                {task.focus.headline}
+              </strong>
+              <span className="col-start-2 truncate text-muted-foreground">下一步 · {task.focus.next_action}</span>
             </span>
           )}
           {/* 收起态也要说清"为什么停/在等什么":原来失败原因和等待
               项都藏在展开区,列表上只剩一颗红/灰 pill,任务看着像在
               正常推进。一行摘要,点开看全文。 */}
           {!expanded && task.status === "failed" && task.detail && (
-            <span className="task-key-line danger">{task.detail}</span>
+            <span className="mt-2 block rounded-md bg-danger-soft px-2.5 py-1.5 text-xs text-danger [overflow-wrap:anywhere]">
+              {task.detail}
+            </span>
           )}
           {!expanded && task.status === "verifying"
             && !buildFixActive
             && (repairStopped(task) || task.delivery?.waiting_on) && (
-            <span className="task-key-line attention">
+            <span className="mt-2 block rounded-md bg-attention-soft px-2.5 py-1.5 text-xs text-attention [overflow-wrap:anywhere]">
               {repairStopped(task)
                 ? `自动修复已停，需要你介入：${task.delivery?.stalled
                   ?? task.delivery?.loop?.diagnosis ?? task.detail ?? ""}`
@@ -189,13 +213,13 @@ export function TaskCard({
           {task.requirement_graph?.stage === "analysis"
             && ((task.repositories?.length ?? 0) > 1
               || task.requirement_analysis_requested === true) && (
-            <span className="task-chain-overview">
-              <span className="task-graph-summary">
-                <b>{task.requirement_graph.projection_state === "ready"
+            <span className="mt-2 grid justify-start gap-1.5">
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-md bg-surface-2 px-2 py-1 text-xs text-muted-foreground">
+                <b className="text-ink">{task.requirement_graph.projection_state === "ready"
                   ? `${task.requirement_graph.repositories.length} 个模块任务`
                   : `${task.repositories?.length
                     ?? task.requirement_graph.repositories.length} 个候选仓`}</b>
-                <i aria-hidden>·</i>
+                <i aria-hidden className="text-faint">·</i>
                 <span>{task.requirement_graph.projection_state === "invalid"
                   ? "模块拆分与依赖图需要修正"
                   : task.requirement_graph.projection_state !== "ready"
@@ -207,15 +231,17 @@ export function TaskCard({
                       : "正在核对模块职责与依赖"}</span>
               </span>
               {task.requirement_graph.projection_state === "ready" && (
-                <span className="task-repo-list" aria-label="实际改动模块">
+                <span className="flex flex-wrap gap-1.5" aria-label="实际改动模块">
                   {task.requirement_graph.repositories.map((repository) => (
-                    <span key={repository.id} title={repository.url}>
-                      <i aria-hidden />{repository.scope?.name ?? repository.name}
-                      <small> · {repository.name}</small>
-                      {repository.assignee && <b>· <PersonName account={repository.assignee} /></b>}
-                      {repository.task_status && <em className={repository.task_status}>
-                        · {statusText({ status: repository.task_status })}
-                      </em>}
+                    <span key={repository.id} title={repository.url}
+                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
+                      <i aria-hidden className="size-[5px] shrink-0 rounded-full bg-ink" />
+                      <span className="truncate">{repository.scope?.name ?? repository.name}
+                        <small className="text-faint"> · {repository.name}</small></span>
+                      {repository.assignee && <b className="font-bold text-ink">· <PersonName account={repository.assignee} /></b>}
+                      {repository.task_status && <TaskStatusBadge status={repository.task_status}>
+                        {statusText({ status: repository.task_status })}
+                      </TaskStatusBadge>}
                     </span>
                   ))}
                 </span>
@@ -223,42 +249,51 @@ export function TaskCard({
             </span>
           )}
           {(task.blocked_by?.length ?? 0) > 0 && task.status === "queued" && (
-            <span className="task-dependency-wait">等待前置任务完成后自动开始</span>
+            <span className="mt-2 inline-flex w-fit items-center rounded-md bg-attention-soft px-2 py-1 text-xs text-attention">
+              等待前置任务完成后自动开始
+            </span>
           )}
-          {task.progress && (
-            <TaskProgress
-              progress={task.progress}
-              showDetailedStep={decisionMode === "form"}
-              status={task.status}
-            />
-          )}
-          <PrepushStatus prepush={task.delivery?.prepush}
-            runtime={task.delivery?.prepush_runtime} />
-          <TokenUsage usage={task.token_usage} />
+          {/* 收起时只藏阶段词签与 Token 遥测,相位轨(圆点)必须留着——
+              去词签不去进度条(decisionContextLayout 契约,#227 起由这组
+              条件工具类直接钉住,不再走 .task-card:not(.expanded) 规则)。 */}
+          <span className={cn("block", !expanded && "[&_.task-phase>span]:hidden [&_.token-usage]:hidden")}>
+            {task.progress && (
+              <TaskProgress
+                progress={task.progress}
+                showDetailedStep={decisionMode === "form"}
+                status={task.status}
+              />
+            )}
+            <PrepushStatus prepush={task.delivery?.prepush}
+              runtime={task.delivery?.prepush_runtime} />
+            <TokenUsage usage={task.token_usage} />
+          </span>
         </span>
-        <span className="task-chevron" aria-hidden>
-          <svg viewBox="0 0 20 20">
+        <span aria-hidden className={cn("mt-1 shrink-0 text-faint transition-transform", expanded && "rotate-90")}>
+          <svg viewBox="0 0 20 20" className="size-5">
             <path d="m7.5 5 5 5-5 5" />
           </svg>
         </span>
       </button>
 
       {task.parent_task_id && onOpenRelatedTask && (
-        <button type="button" className="task-parent-link"
+        <button type="button"
+          className="mx-4 -mt-1 mb-2.5 flex w-[calc(100%-2rem)] cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-line-strong hover:text-text-strong"
           onClick={() => onOpenRelatedTask(task.parent_task_id!)}>
-          <span>隶属于主任务</span>
-          <strong>{task.parent_task?.title ?? "跨仓大任务"}</strong>
-          <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
+          <span className="font-bold">隶属于主任务</span>
+          <strong className="min-w-0 truncate font-medium text-text-strong">{task.parent_task?.title ?? "跨仓大任务"}</strong>
+          <code className="ml-auto font-mono text-xs text-ink">{task.parent_task?.ticket ?? task.parent_task_id}</code>
         </button>
       )}
 
       {showChildLinks && childRepositories.length > 0 && (
-        <div className="task-child-links" aria-label="主任务下的子任务">
-          <span className="task-child-links-label">
+        <div aria-label="主任务下的子任务"
+          className="mx-4 mb-2.5 grid gap-2 rounded-lg border-l-2 border-l-ink/50 bg-ink/[0.03] px-3 py-2.5 sm:grid-cols-[minmax(0,58px)_minmax(0,1fr)]">
+          <span className="self-start text-xs font-extrabold text-muted-foreground">
             子任务
             {/* 交付单元拆分:主卡直接给"走到哪"——N/M 已合入 + 当前块。
                 completed=已合入(子任务只有 MR 合入才 completed)。 */}
-            <small className="task-child-progress">
+            <small className="mt-0.5 block text-xs font-semibold text-muted-foreground">
               {childRepositories.filter((repository) =>
                 repository.task_status === "completed").length}
               /{childRepositories.length} 已合入
@@ -271,48 +306,54 @@ export function TaskCard({
               })()}
             </small>
           </span>
-          <div>{childRepositories.map((repository, index) => (
+          <div className="grid min-w-0 gap-1.5">{childRepositories.map((repository, index) => (
             <button type="button" key={repository.id}
               disabled={!onOpenRelatedTask}
               onClick={() => repository.task_id
-                && onOpenRelatedTask?.(repository.task_id)}>
-              <i aria-hidden>{index + 1}</i>
-              <span><strong>{repository.scope
+                && onOpenRelatedTask?.(repository.task_id)}
+              className="grid min-w-0 cursor-pointer grid-cols-[21px_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1.5 text-left text-text transition-colors hover:border-ink hover:bg-surface-2 disabled:cursor-default disabled:opacity-60 disabled:hover:border-line">
+              <i aria-hidden className="grid size-[21px] place-items-center rounded-full bg-surface-3 font-mono text-xs font-extrabold text-ink">{index + 1}</i>
+              <span className="grid min-w-0 gap-px">
+                <strong className="truncate text-xs font-semibold text-text-strong">{repository.scope
                   ? `${repository.name} · ${repository.scope.name}`
                   : repository.name}</strong>
-                <small><PersonName account={repository.assignee} fallback="未指定负责人" /></small></span>
-              <em className={repository.task_status ?? "queued"}>
+                <small className="truncate text-xs text-muted-foreground"><PersonName account={repository.assignee} fallback="未指定负责人" /></small>
+              </span>
+              <TaskStatusBadge status={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}
-              </em>
+              </TaskStatusBadge>
             </button>
           ))}</div>
         </div>
       )}
 
       {decisionMode === "signal" && task.status === "waiting_for_human" && (
-        <div className="team-decision-signal">
-          <i aria-hidden />
-          <strong>等待负责人拍板</strong>
-          <span>
+        <div className="mx-4 mb-3 flex flex-wrap items-center gap-2.5 rounded-lg border border-line bg-surface-2 px-3 py-2">
+          <i aria-hidden className="size-2 shrink-0 rounded-full bg-attention" />
+          <strong className="text-sm">等待负责人拍板</strong>
+          <span className="text-xs text-muted-foreground">
             <PersonName account={task.luban_account} fallback="未分配负责人" />
             {waitingQuestions > 0 ? ` · ${waitingQuestions} 个决策项` : ""}
           </span>
         </div>
       )}
 
-      <div className="task-meta">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 pb-3 text-xs">
         {onOpenArtifacts && !chainReview && (
-          <button type="button" className="panel-link" onClick={onOpenArtifacts}>
+          <button type="button"
+            className="inline-flex cursor-pointer items-center gap-1 text-muted-foreground underline-offset-2 hover:text-text-strong hover:underline"
+            onClick={onOpenArtifacts}>
             <span>{chainReview ? "检视方案与依赖图" : "进入任务工作台"}</span>
-            <svg viewBox="0 0 16 16" aria-hidden>
+            <svg viewBox="0 0 16 16" aria-hidden className="size-3.5">
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>
           </button>
         )}
         {task.delivery?.mr_url && (
-          <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
+          <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
+            className="inline-flex items-center gap-1 text-muted-foreground underline-offset-2 hover:text-text-strong hover:underline">
             <span>合入请求 · {task.delivery.mr_state}</span>
-            <svg viewBox="0 0 16 16" aria-hidden>
+            <svg viewBox="0 0 16 16" aria-hidden className="size-3.5">
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>
           </a>
@@ -320,20 +361,20 @@ export function TaskCard({
         {task.delivery?.pipeline && !buildFixActive && (
           // 原始状态串形如 "running(轮询预算耗尽,请人工查看流水线)"——
           // 括号里的注记才是给人看的;外壳状态词翻成人话,原文进 title。
-          <span className="meta-fact" title={task.delivery.pipeline}>
+          <span title={task.delivery.pipeline} className="text-faint [overflow-wrap:anywhere]">
             流水线 · {pipelineLabel(task.delivery.pipeline)}</span>
         )}
         {/* 百字诊断不塞 meta chip(最重要的原因不该用最弱的视觉级):
             这里只留结论,全文在展开区的 alert 里。 */}
         {task.delivery?.skipped && (
-          <span className="meta-fact" title={task.delivery.skipped}>
+          <span title={task.delivery.skipped} className="text-faint [overflow-wrap:anywhere]">
             交付已阻止
           </span>
         )}
       </div>
 
       {expanded && (
-        <div className="task-detail-body">
+        <div className="grid gap-3 border-t border-line p-3">
           {task.status === "failed" && task.detail && (
             <Alert variant="destructive" className="mb-3">
               <AlertTitle>任务执行失败</AlertTitle>
@@ -397,9 +438,9 @@ export function TaskCard({
               看不到,任务看着像马上要成了。 */}
           {!repairStopped(task) && !buildFixActive && task.status === "verifying"
             && task.delivery?.waiting_on && (
-            <div className="verify-waiting">
-              <strong>正在等</strong>
-              <span>{task.delivery.waiting_on}</span>
+            <div className="mb-1 flex flex-col gap-1 rounded-lg border border-line border-l-[3px] border-l-ink bg-surface-2 px-3 py-2">
+              <strong className="text-[13px] text-text-strong">正在等</strong>
+              <span className="break-words text-xs text-muted-foreground">{task.delivery.waiting_on}</span>
             </div>
           )}
           {canOperate && (task.status === "failed"
@@ -416,11 +457,11 @@ export function TaskCard({
             />
           )}
           {chainReview && decides && (
-            <div className="chain-review-entry">
-              <span>跨仓方案</span>
-              <strong>跨仓方案已经生成，先看依赖再确认</strong>
-              <p>仓库职责、硬依赖和交付顺序都在任务工作台中；确认后才会拆成各仓交付任务。</p>
-              <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
+            <div className="grid gap-1.5 rounded-lg border border-line bg-surface-2 p-3 text-sm">
+              <span className="font-mono text-xs font-bold tracking-wide text-ink">跨仓方案</span>
+              <strong className="text-[15px] text-text-strong">跨仓方案已经生成，先看依赖再确认</strong>
+              <p className="m-0 text-xs leading-relaxed text-muted-foreground">仓库职责、硬依赖和交付顺序都在任务工作台中；确认后才会拆成各仓交付任务。</p>
+              <Button type="button" size="sm" className="w-fit" onClick={onOpenArtifacts}>检视方案与依赖图</Button>
             </div>
           )}
           {showDecisionForm && decides && !chainReview
@@ -430,14 +471,14 @@ export function TaskCard({
                  「本任务变更」里。列表页若直接渲决策表单,提交键会永远
                  停在"正在读取交付文件清单"(push 确认卡实锤死锁),
                  所以这里只给入口不给表单。 */
-              <div className="chain-review-entry">
-                <span>交付检视</span>
-                <strong>Build-Fix 已通过，请做最终代码检视</strong>
-                <p>这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
+              <div className="grid gap-1.5 rounded-lg border border-line bg-surface-2 p-3 text-sm">
+                <span className="font-mono text-xs font-bold tracking-wide text-ink">交付检视</span>
+                <strong className="text-[15px] text-text-strong">Build-Fix 已通过，请做最终代码检视</strong>
+                <p className="m-0 text-xs leading-relaxed text-muted-foreground">这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
                 {onOpenArtifacts && (
-                  <button type="button" onClick={onOpenArtifacts}>
+                  <Button type="button" size="sm" className="w-fit" onClick={onOpenArtifacts}>
                     去检视代码
-                  </button>
+                  </Button>
                 )}
               </div>
             ) : (
@@ -446,17 +487,17 @@ export function TaskCard({
             )
           )}
           {showDecisionForm && !decides && task.status === "waiting_for_human" && (
-            <div className="read-only-notice">
+            <div className="rounded-md bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
               {canDecide
                 ? `这一步由责任人 ${task.luban_account ?? "其他成员"} 拍板；你可以在工作台批注插话。`
                 : `该事项由 ${task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。`}
             </div>
           )}
-          <div className="task-utilities">
+          <div className="grid min-w-0 gap-2">
             {/* 现场回收后代码差异那类面板会空着,不说清楚人会以为坏了。
                 说明里必须点名"什么还在"——只写"已回收"像是历史没了。 */}
             {task.workspace_reclaimed_at && (
-              <div className="read-only-notice">
+              <div className="rounded-md bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
                 任务现场已于 {formatLocalDateTime(task.workspace_reclaimed_at)} 回收
                 （超过保留期，释放代码克隆等可再生的大件）。
                 过程记录、交付账本、流水线证据与批注都还在，代码差异不再可看。
@@ -475,16 +516,20 @@ export function TaskCard({
 }
 
 /** 等待时长:久等升红。父层每 1.5 秒刷新任务列表,这里跟着重算,
- * 不用自己挂计时器。 */
-export function WaitBadge({ task, personal }: { task: TaskSummary; personal: boolean }) {
+ * 不用自己挂计时器。#227 换装为 shadcn Badge(urgent=destructive)。 */
+export function WaitBadge({ task, personal, className }: {
+  task: TaskSummary;
+  personal: boolean;
+  className?: string;
+}) {
   const waited = waitedMs(task);
   if (waited < 0) return null;
   const urgent = waited >= URGENT_MINUTES * 60_000;
   return (
-    <span className={"wait-badge" + (urgent ? " urgent" : "")}>
-      <i aria-hidden />
+    <Badge variant={urgent ? "destructive" : "neutral"} className={cn("gap-1.5", className)}>
+      <span aria-hidden className="size-1.5 rounded-full bg-current" />
       {personal ? "等你" : "已等待"} {formatWait(waited)}
-    </span>
+    </Badge>
   );
 }
 
@@ -1097,7 +1142,14 @@ export function WaitingCard({
                         pickOption(item.question, option);
                       }}
                     >
-                      <span className={`radio${chosen ? " on" : ""}`} />
+                      {/* 选项点:RadioGroupItem 的同款皮(选中=primary 实底
+                          + 反白内点)。外层卡片本身就是 role=radio 的交互
+                          面(拖选复制护栏在上面),点只是它的指示器,所以
+                          用同款视觉的纯指示元素,不再嵌一颗可聚焦的钮。 */}
+                      <span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                        chosen ? "border-primary bg-primary" : "border-line-strong bg-background")}>
+                        {chosen && <span className="size-1.5 rounded-full bg-primary-foreground" />}
+                      </span>
                       <span className="option-body">
                         <span className="option-title">{title}</span>
                         {hint && <span className="option-hint">{hint}</span>}
@@ -1113,7 +1165,10 @@ export function WaitingCard({
                   title={customActive ? "再次点击取消自定义答复" : undefined}
                   onClick={() => toggleCustom(item.question)}
                 >
-                    <span className={`radio${customActive ? " on" : ""}`} />
+                    <span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                      customActive ? "border-primary bg-primary" : "border-line-strong bg-background")}>
+                      {customActive && <span className="size-1.5 rounded-full bg-primary-foreground" />}
+                    </span>
                     <span className="option-body">
                       <span className="option-title">{options.length
                         ? "自定义答复"
@@ -1398,8 +1453,8 @@ export function RetryButton({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"retry" | "rerun" | "">("");
   return (
-    <div className="retry-row">
-      <button type="button" disabled={Boolean(busy)} onClick={async () => {
+    <div className="flex flex-wrap items-start gap-2">
+      <Button type="button" size="sm" disabled={Boolean(busy)} onClick={async () => {
         setBusy("retry");
         try {
           const result = await retryTask(taskId);
@@ -1415,9 +1470,9 @@ export function RetryButton({
           <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
         </svg>
         {busy === "retry" ? "正在尝试…" : label}
-      </button>
+      </Button>
       {allowFromStart && (
-        <button className="destructive" type="button" disabled={Boolean(busy)}
+        <Button variant="destructive" size="sm" type="button" disabled={Boolean(busy)}
           onClick={async () => {
             if (!await confirmDialog({
               title: "清空并从头重跑",
@@ -1441,7 +1496,7 @@ export function RetryButton({
             <path d="M4 5h12M7 5V3h6v2m-7 3 .7 8h6.6L14 8M8.5 9.5v4m3-4v4" />
           </svg>
           {busy === "rerun" ? "正在清空重跑…" : "清空并从头重跑"}
-        </button>
+        </Button>
       )}
       {error && <Alert variant="destructive" className="basis-full">{error}</Alert>}
     </div>
@@ -1459,33 +1514,33 @@ export function ActionLedger({ taskId }: { taskId: string }) {
   }
 
   return (
-    <details className="utility-panel" onToggle={(toggle) => {
+    <details className="group/panel rounded-lg border border-line bg-surface" onToggle={(toggle) => {
       if ((toggle.target as HTMLDetailsElement).open) void load();
     }}>
-      <summary>
-        <span>
-          <strong>外部动作台账</strong>
-          <small>MR、流水线与幂等记录</small>
+      <summary className="flex w-full cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5 [&::-webkit-details-marker]:hidden">
+        <span className="grid gap-0.5">
+          <strong className="text-sm font-medium text-text">外部动作台账</strong>
+          <small className="text-xs text-muted-foreground">MR、流水线与幂等记录</small>
         </span>
-        <i aria-hidden />
+        <ChevronDownIcon className="size-4 shrink-0 text-faint transition-transform group-open/panel:rotate-180" />
       </summary>
       {unavailable && <div className="utility-note">{unavailable}</div>}
       {rows && rows.length === 0 && (
         <div className="utility-note">还没有外部动作。</div>
       )}
       {rows && rows.length > 0 && (
-        <div className="ledger-list">
+        <div className="grid gap-1.5 p-2">
           {rows.map((row) => (
-            <div className="ledger-row" key={row.idemKey}>
-              <div className="ledger-head">
-                <strong>{row.kind}</strong>
-                <span className={row.finishedAt ? "done" : "running"}>
+            <div className="rounded-lg bg-surface-2 p-2.5" key={row.idemKey}>
+              <div className="flex justify-between gap-2">
+                <strong className="text-[13.5px]">{row.kind}</strong>
+                <span className={cn("text-xs font-bold", row.finishedAt ? "text-success" : "text-active")}>
                   {row.finishedAt ? "已完成" : "进行中"}
                 </span>
               </div>
-              <code>{row.idemKey}</code>
-              {row.sha && <small>SHA · {row.sha.slice(0, 8)}</small>}
-              <pre>{JSON.stringify(row.result ?? "(未回填)", null, 2)}</pre>
+              <code className="mt-1 block break-all text-xs text-muted-foreground">{row.idemKey}</code>
+              {row.sha && <small className="mt-1 block text-xs text-muted-foreground">SHA · {row.sha.slice(0, 8)}</small>}
+              <pre className="mt-1 max-h-40 overflow-auto text-xs text-muted-foreground">{JSON.stringify(row.result ?? "(未回填)", null, 2)}</pre>
             </div>
           ))}
         </div>
@@ -1524,19 +1579,22 @@ export function TaskTimeline({
   }, [taskId, defaultOpen]);
 
   return (
-    <section className={`utility-panel${expanded ? " is-open" : ""}`}>
-      <button type="button" className="utility-toggle"
+    <section className={cn("rounded-lg border bg-surface transition-colors",
+      expanded ? "border-line-strong" : "border-line")}>
+      <button type="button"
+        className="flex w-full cursor-pointer items-center justify-between gap-3 px-3.5 py-2.5 text-left"
         aria-expanded={expanded}
         onClick={() => {
           const next = !expanded;
           setExpanded(next);
           if (next) void load();
         }}>
-        <span>
-          <strong>耗时与卡点</strong>
-          <small>时间去哪了 · 卡在谁身上</small>
+        <span className="grid gap-0.5">
+          <strong className="text-sm font-medium text-text">耗时与卡点</strong>
+          <small className="text-xs text-muted-foreground">时间去哪了 · 卡在谁身上</small>
         </span>
-        <i aria-hidden />
+        <ChevronDownIcon className={cn("size-4 shrink-0 text-faint transition-transform",
+          expanded && "rotate-180")} />
       </button>
       {expanded && <>
         {loading && <div className="utility-note">正在读取现场…</div>}
@@ -1583,86 +1641,106 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
   const pending = [...waits].reverse().find((item) => !item.answer);
   const latest = entries.at(-1)!;
 
+/** 时间线色点词表(原 .timeline-item.{tone} 色板 1:1 收编)。 */
+const TIMELINE_DOT: Record<string, string> = {
+  attention: "bg-attention",
+  success: "bg-success",
+  danger: "bg-danger",
+};
+
   return (
-    <div className="cost">
-      <section className={`cost-focus ${pending ? "blocked" : "clear"}`}>
-        <div className="cost-focus-copy">
-          <span>{pending ? "当前卡点" : "当前状态"}</span>
-          <strong>{pending
+    <div className="flex flex-col gap-3 p-3">
+      <section className={cn("grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-3.5",
+        pending ? "border-attention/40 bg-attention-soft" : "border-line border-l-[3px] border-l-success bg-surface-2")}>
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className={cn("text-xs font-bold", pending ? "text-attention" : "text-muted-foreground")}>
+            {pending ? "当前卡点" : "当前状态"}</span>
+          <strong className="line-clamp-2 text-sm leading-snug font-bold text-text-strong">{pending
             ? pending.ask.title.replace(/^请你决定[:：]/, "")
             : "当前没有人工卡点"}</strong>
-          <p>{pending
+          <p className="m-0 text-xs leading-snug text-muted-foreground">{pending
             ? "流程正在等待负责人完成决策"
             : `最近进展 · ${latest.title}`}</p>
         </div>
-        <div className="cost-focus-number">
-          <strong>{pending ? formatWait(pending.ms) : `${share}%`}</strong>
-          <span>{pending ? "已等待" : "时间用于等决策"}</span>
+        <div className="flex min-w-16 flex-col items-end gap-px">
+          <strong className={cn("text-[21px] font-bold tabular-nums", pending ? "text-attention" : "text-text-strong")}>
+            {pending ? formatWait(pending.ms) : `${share}%`}</strong>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">{pending ? "已等待" : "时间用于等决策"}</span>
         </div>
       </section>
 
-      <section className="cost-composition">
-        <header><strong>时间构成</strong><span>总历时 {formatWait(total)}</span></header>
-        <div className="cost-bar" aria-label={`人工等待 ${share}%，机器执行 ${100 - share}%`}>
-          <span className="human" style={{ width: `${share}%` }} />
-          <span className="machine" style={{ width: `${100 - share}%` }} />
+      <section className="px-0.5 pt-0.5">
+        <header className="mb-2 flex items-center justify-between gap-2">
+          <strong className="text-xs text-text-strong">时间构成</strong>
+          <span className="text-xs text-muted-foreground">总历时 {formatWait(total)}</span>
+        </header>
+        <div className="flex h-[7px] overflow-hidden rounded bg-surface-3" aria-label={`人工等待 ${share}%，机器执行 ${100 - share}%`}>
+          <span className="block min-w-[2px] bg-attention" style={{ width: `${share}%` }} />
+          <span className="block min-w-[2px] bg-ink" style={{ width: `${100 - share}%` }} />
         </div>
-        <div className="cost-legend">
-          <span><i className="human" />人工等待 <strong>{formatWait(waitedTotal)}</strong></span>
-          <span><i className="machine" />机器执行 <strong>{formatWait(machine)}</strong></span>
+        <div className="mt-1.5 flex justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1"><i className="size-1.5 rounded-full bg-attention not-italic" />人工等待 <strong className="font-semibold tabular-nums">{formatWait(waitedTotal)}</strong></span>
+          <span className="flex items-center gap-1"><i className="size-1.5 rounded-full bg-ink not-italic" />机器执行 <strong className="font-semibold tabular-nums">{formatWait(machine)}</strong></span>
         </div>
       </section>
 
-      <div className="cost-metrics">
-        <div><span>决策次数</span><strong>{waits.length}</strong></div>
-        <div><span>会话重建</span><strong>{rebuilds}</strong></div>
+      <div className="grid grid-cols-2 divide-x divide-line overflow-hidden rounded-lg border border-line">
+        <div className="flex items-center justify-between gap-2 px-3 py-2"><span className="text-xs text-muted-foreground">决策次数</span><strong className="text-[15px] tabular-nums text-text-strong">{waits.length}</strong></div>
+        <div className="flex items-center justify-between gap-2 px-3 py-2"><span className="text-xs text-muted-foreground">会话重建</span><strong className="text-[15px] tabular-nums text-text-strong">{rebuilds}</strong></div>
       </div>
 
       {problems.length > 0 && (
-        <div className="cost-problems">
-          <strong className="cost-section-title">异常记录</strong>
+        <div className="flex flex-col gap-1.5">
+          <strong className="text-xs text-text-strong">异常记录</strong>
           {problems.map((item, index) => (
-            <div key={index}><strong>{item.title}</strong>{item.detail && <span>{item.detail}</span>}</div>
+            <div key={index} className="flex flex-col rounded-lg bg-danger-soft px-2.5 py-2 text-xs text-danger">
+              <strong>{item.title}</strong>{item.detail && <span>{item.detail}</span>}
+            </div>
           ))}
         </div>
       )}
 
       {longest.length > 0 && (
-        <section className="cost-history">
-          <header><strong>历史等待</strong><span>耗时最长的 {longest.length} 次</span></header>
-          <ol className="cost-list">
+        <section className="pt-px">
+          <header className="mb-2 flex items-center justify-between gap-2">
+            <strong className="text-xs text-text-strong">历史等待</strong>
+            <span className="text-xs text-muted-foreground">耗时最长的 {longest.length} 次</span>
+          </header>
+          <ol className="m-0 flex list-none flex-col p-0">
             {longest.map((item, index) => (
-              <li key={index} className={item.answer ? "" : "pending"}>
-                <span className="cost-rank">{String(index + 1).padStart(2, "0")}</span>
-                <span className="cost-body">
-                  <strong>{item.ask.title.replace(/^请你决定[:：]/, "")}</strong>
-                  <span>{item.answer ? item.answer : "仍在等待负责人决定"}</span>
+              <li key={index} className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 border-t border-line px-0.5 py-2">
+                <span className={cn("font-mono text-xs", item.answer ? "text-faint" : "text-attention")}>{String(index + 1).padStart(2, "0")}</span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <strong className="line-clamp-2 text-xs font-semibold leading-tight text-text-strong">{item.ask.title.replace(/^请你决定[:：]/, "")}</strong>
+                  <span className="truncate text-xs text-muted-foreground">{item.answer ? item.answer : "仍在等待负责人决定"}</span>
                 </span>
-                <span className="cost-wait">{formatWait(item.ms)}</span>
+                <span className="self-start whitespace-nowrap pt-px text-xs font-bold tabular-nums text-attention">{formatWait(item.ms)}</span>
               </li>
             ))}
           </ol>
         </section>
       )}
 
-      <div className="cost-footer">
-        <span>{entries.length} 个关键节点</span>
-        <button type="button" className="cost-toggle" onClick={() => setShowAll((open) => !open)}>
+      <div className="flex items-center justify-between gap-2 pt-px">
+        <span className="text-xs text-muted-foreground">{entries.length} 个关键节点</span>
+        <Button type="button" variant="ghost" size="xs" className="text-ink" onClick={() => setShowAll((open) => !open)}>
           {showAll ? "收起明细" : "查看完整时间线"}
-        </button>
+        </Button>
       </div>
       {showAll && (
-        <ol className="timeline">
+        <ol className="m-0 flex list-none flex-col border-t border-line px-1 pb-0 pt-1">
           {entries.map((entry, index) => (
-            <li className={`timeline-item ${entry.tone}`} key={index}>
-              <span className="timeline-dot" aria-hidden />
-              <time className="timeline-time" dateTime={entry.ts}
+            <li key={index} className="relative grid grid-cols-[14px_42px_minmax(0,1fr)] items-start gap-2 py-1 before:absolute before:bottom-[-4px] before:left-[6px] before:top-[17px] before:w-px before:bg-line last:before:hidden">
+              <span aria-hidden className={cn("z-1 mt-1.5 size-[7px] rounded-full ring-3 ring-surface", TIMELINE_DOT[entry.tone] ?? "bg-muted-foreground")} />
+              <time className="pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground" dateTime={entry.ts}
                 title={formatLocalDateTime(entry.ts, { seconds: true, year: true })}>
                 {formatLocalClock(entry.ts)}
               </time>
-              <span className="timeline-body">
-                <strong>{entry.title}</strong>
-                {entry.detail && <span>{entry.detail}</span>}
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <strong className={cn("text-[13px] leading-normal font-semibold [overflow-wrap:anywhere]",
+                  entry.tone === "danger" && "text-danger",
+                  entry.tone === "attention" && "text-attention")}>{entry.title}</strong>
+                {entry.detail && <span className="text-xs leading-normal text-muted-foreground [overflow-wrap:anywhere]">{entry.detail}</span>}
               </span>
             </li>
           ))}
@@ -1834,18 +1912,21 @@ export function ExecutionPanel({
   }, [task.id, defaultOpen]);
 
   return (
-    <section className={`utility-panel execution-panel${expanded ? " is-open" : ""}`}>
-      <button type="button" className="utility-toggle"
+    <section className={cn("rounded-lg border bg-surface transition-colors",
+      expanded ? "border-line-strong" : "border-line")}>
+      <button type="button"
+        className="flex w-full cursor-pointer items-center justify-between gap-3 px-3.5 py-2.5 text-left"
         aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}>
-        <span>
-          <strong>执行现场</strong>
-          <small>{task.focus?.headline ?? "只看对话，可切全部/工具/异常"}</small>
+        <span className="grid gap-0.5">
+          <strong className="text-sm font-medium text-text">执行现场</strong>
+          <small className="text-xs text-muted-foreground">{task.focus?.headline ?? "只看对话，可切全部/工具/异常"}</small>
         </span>
-        <i aria-hidden />
+        <ChevronDownIcon className={cn("size-4 shrink-0 text-faint transition-transform",
+          expanded && "rotate-180")} />
       </button>
       {expanded && (
-        <div className="execution-body">
+        <div className="min-w-0 p-2 pt-0">
           <EventTail taskId={task.id} active={expanded} />
         </div>
       )}

@@ -81,15 +81,17 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
 test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
   const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
     workspace.indexOf('{task.feedback_error &&'));
-  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <button/,
+  // #227 换装:邀请入口换 shadcn Button,锚点从裸 <button> 与皮肤类改钉
+  // 组件与文案;可见性条件仍钉在头部权限上。
+  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <Button/,
     "邀请入口只对有权限者可见,且已取消任务不再提供");
-  assert.match(controls, /workspace-review-invite-button/);
+  assert.match(controls, /邀请他人检视/);
   assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
   assert.match(controls, /setReviewInviteOpen\(true\)/);
   assert.doesNotMatch(controls, /reviewPanelOpen/);
   const panel = workspace.slice(workspace.indexOf('<ResizableReviewPane open={reviewPanelOpen}>'),
     workspace.indexOf('<div className="ws-material-content"'));
-  assert.doesNotMatch(panel, /workspace-review-invite-button/);
+  assert.doesNotMatch(panel, /邀请他人检视/);
   // #207 邀请弹层迁 shadcn Dialog(portal 到 body,role=dialog/Esc/焦点
   // 归原语):锚点从手搓 workspace-invite-dialog 改钉现 Dialog DOM,
   // 入口条件仍钉在头部权限上。
@@ -124,10 +126,9 @@ test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对�
 });
 
 test("交付失败长文本在右侧行动栏内换行，不横向冲出工作台", () => {
-  assert.match(workspace, /className="ws-verify-focus-waiting"/);
-  assert.match(css,
-    /\.ws-verify-focus\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*calc\(100% - 28px\)/s);
-  assert.match(css,
-    /\.ws-verify-focus p\s*\{[^}]*max-width:\s*100%[^}]*overflow-wrap:\s*anywhere[^}]*word-break:\s*break-word/s,
+  // #227 换装:.ws-verify-focus/.ws-verify-focus-waiting 皮肤类退役,断行
+  // 契约改由工具类直接钉在元素上。
+  assert.match(workspace, /交付验证进行中/);
+  assert.match(workspace, /<p className="min-w-0 max-w-full \[overflow-wrap:anywhere\] break-words text-sm text-text">/,
     "远端 Hook 正则、commit SHA 和英文错误都必须在卡片内断行");
 });
