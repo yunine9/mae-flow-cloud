@@ -436,6 +436,13 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
     "架构页只为实际存在的图片生成视角页签");
   assert.match(architecture, /className="story-diagram-tabs" role="tablist"/,
     "具体图片必须由图名页签承载");
+  assert.match(architecture, /job\.errorKind === "architecture" && job\.error && <details/,
+    "架构图生成错误只在架构页以内展示，并默认折叠");
+  assert.match(architecture, /架构图暂时无法读取[\s\S]{0,300}?<details/,
+    "架构图读取错误使用可折叠详情，不把整段错误直接铺开");
+  const storyTools = readFileSync(new URL("../web/src/OverallStoryTools.tsx", import.meta.url), "utf8");
+  assert.match(storyTools, /status\?\.error_kind !== "architecture" && status\?\.error/,
+    "架构图错误不应重复出现在整体 Story 工具条");
   const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.match(card, /reworksChainChoice && \(\s*<small className="chain-rework-hint">/);
   // 2026-09-04 用户实锤:全屏看文档时右栏藏了,要开批注得先退全屏。当时

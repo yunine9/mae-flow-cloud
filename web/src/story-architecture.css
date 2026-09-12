@@ -39,6 +39,9 @@
 .story-view-loading { min-height: 320px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .story-architecture-diagnostics { font-size: 11px; color: var(--muted); margin-top: 12px; }
 .story-architecture-diagnostics summary { cursor: pointer; }
+.story-architecture-error { width: 100%; padding: 10px 12px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--attention) 32%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--attention) 5%, var(--surface)); }
+.story-architecture-error summary { color: var(--attention); font-size: 12px; overflow-wrap: anywhere; }
+.story-architecture-error pre { max-height: 240px; margin: 10px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .story-architecture-warning { color: var(--attention); font-size: 12px; overflow-wrap: anywhere; }
 .story-architecture-failure { border: 1px solid var(--line); border-radius: 10px; padding: 16px; line-height: 1.7; }
 .story-architecture-failure details { margin-top: 12px; }

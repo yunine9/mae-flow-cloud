@@ -10,6 +10,7 @@ interface Projection {
   views?: StoryViewCoverage[];
 }
 interface GenerationJob { started_at?: string; progress?: string; kind?: string }
+interface GenerationState { job?: GenerationJob; error?: string; error_kind?: "story" | "architecture" }
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal });
   const body = await response.json();
@@ -24,7 +25,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
   const [activeView, setActiveView] = useState("logical");
   const [error, setError] = useState("");
   const [pulse, refresh] = useState(0);
-  const [job, setJob] = useState<{ busy: boolean; error?: string; detail?: GenerationJob }>({ busy: false });
+  const [job, setJob] = useState<{ busy: boolean; error?: string; errorKind?: GenerationState["error_kind"]; detail?: GenerationJob }>({ busy: false });
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!job.busy) return;
@@ -41,13 +42,14 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     let wasBusy = false;
     async function poll() {
       try {
-        const state = await read<{ job?: GenerationJob; error?: string }>(generationBase, controller.signal);
+        const state = await read<GenerationState>(generationBase, controller.signal);
         if (controller.signal.aborted) return;
-        setJob({ busy: !!state.job, error: state.error, detail: state.job });
+        setJob({ busy: !!state.job, error: state.error, errorKind: state.error_kind, detail: state.job });
         if (wasBusy && !state.job) refresh((n) => n + 1);
         wasBusy = !!state.job;
       } catch (reason) {
-        if (!controller.signal.aborted) setJob((previous) => ({ ...previous, error: `进度暂时无法读取：${reason instanceof Error ? reason.message : String(reason)}` }));
+        if (!controller.signal.aborted) setJob((previous) => ({ ...previous, errorKind: "architecture",
+          error: `进度暂时无法读取：${reason instanceof Error ? reason.message : String(reason)}` }));
       }
       if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
     }
@@ -60,8 +62,9 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
       const response = await fetch(`${generationBase}/architecture`, { method: "POST" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "更新失败");
-      setJob({ busy: !!body.job, detail: body.job });
-    } catch (reason) { setJob({ busy: false, error: reason instanceof Error ? reason.message : String(reason) }); }
+      setJob({ busy: !!body.job, error: body.error, errorKind: body.error_kind, detail: body.job });
+    } catch (reason) { setJob({ busy: false, errorKind: "architecture",
+      error: reason instanceof Error ? reason.message : String(reason) }); }
     finally { setSubmitting(false); }
   }
   const [rendered, setRendered] = useState<{ key: string; html?: string; error?: string }>();
@@ -153,8 +156,16 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
         已用时 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 60000)} 分 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 1000) % 60} 秒
       </small>}
     </p>}
-    {job.error && <p className="story-architecture-warning" role="status">{job.error}</p>}
-    {error ? <p role="status">{error}</p> : !projection ? <p role="status">正在读取 Story…</p> : <>
+    {job.errorKind === "architecture" && job.error && <details className="story-architecture-diagnostics story-architecture-error">
+      <summary>上次架构图生成未完成 · 查看原因</summary><pre>{job.error}</pre>
+    </details>}
+    {error ? <div className="story-view-empty story-view-empty-only">
+      <span aria-hidden="true">◇</span><strong>架构图暂时无法读取</strong>
+      <p>错误只影响架构图展示，可以稍后重试。</p>
+      <details className="story-architecture-diagnostics story-architecture-error">
+        <summary>查看失败详情</summary><pre>{error}</pre>
+      </details>
+    </div> : !projection ? <p role="status">正在读取 Story…</p> : <>
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
         <p className="story-architecture-warning" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}
       {availableViews.length > 0 ? <>

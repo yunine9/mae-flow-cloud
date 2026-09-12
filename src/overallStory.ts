@@ -120,6 +120,9 @@ export class OverallStoryCoordinator<T extends Owner> {
   }
   private recover(task: T): StoryState {
     const state = readStoryState(task.summary.workspace);
+    // 兼容升级前没有错误归属的 state.json；新错误均由写入点精确标记。
+    if (state.error && !state.error_kind) state.error_kind = /架构图|图源|渲染|arch(?:itecture|ify)|diagram/i.test(state.error)
+      ? "architecture" : "story";
     if (!this.active.has(task.summary.id)) {
       const store = this.store(task);
       for (const item of store.list()) {
@@ -139,7 +142,12 @@ export class OverallStoryCoordinator<T extends Owner> {
         }
       }
       if (state.job) {
-        state.job = undefined; state.error = "上次整体 Story 会话已中断；已发布版本保留，可重新更新";
+        const interruptedKind = state.job.kind === "architecture" ? "architecture" : "story";
+        state.job = undefined;
+        state.error_kind = interruptedKind;
+        state.error = interruptedKind === "architecture"
+          ? "上次架构图生成会话已中断；已发布版本保留，可重新生成"
+          : "上次整体 Story 会话已中断；已发布版本保留，可重新更新";
         writeStoryState(task.summary.workspace, state);
       }
     }
@@ -184,7 +192,7 @@ export class OverallStoryCoordinator<T extends Owner> {
     const revision = state.current, jobId = randomUUID(), controller = new AbortController();
     const epoch = auxiliarySessionEpoch(task), root = storyPath(task.summary.workspace, `jobs/${jobId}`);
     state.job = { id: jobId, by, started_at: new Date().toISOString(), kind: "architecture", progress: "正在准备 Story 与绘图资料" };
-    state.error = undefined; writeStoryState(task.summary.workspace, state);
+    state.error = undefined; state.error_kind = undefined; writeStoryState(task.summary.workspace, state);
     const progress = (message: string) => {
       if (controller.signal.aborted || this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
       const current = readStoryState(task.summary.workspace);
@@ -215,11 +223,14 @@ export class OverallStoryCoordinator<T extends Owner> {
       const temporary = `${previous}.${jobId}.tmp`;
       progress(`已通过 ${projection.diagrams.length} 张图的渲染校验，正在发布`);
       writeFileSync(temporary, artifact, { mode: 0o600 }); renameSync(temporary, previous);
-      current.job = undefined; current.error = undefined; writeStoryState(task.summary.workspace, current);
+      current.job = undefined; current.error = undefined; current.error_kind = undefined;
+      writeStoryState(task.summary.workspace, current);
     }).catch((error) => {
       if (this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
       const current = readStoryState(task.summary.workspace);
-      current.job = undefined; current.error = error instanceof Error ? error.message : String(error);
+      current.job = undefined;
+      current.error = error instanceof Error ? error.message : String(error);
+      current.error_kind = "architecture";
       writeStoryState(task.summary.workspace, current);
     }).finally(() => { this.active.delete(id); });
     this.active.set(id, { promise, controller });
@@ -242,7 +253,7 @@ export class OverallStoryCoordinator<T extends Owner> {
     const epoch = auxiliarySessionEpoch(task);
     const starting = readStoryState(task.summary.workspace);
     starting.job = { id: randomUUID(), by, started_at: new Date().toISOString() };
-    starting.error = undefined;
+    starting.error = undefined; starting.error_kind = undefined;
     writeStoryState(task.summary.workspace, starting);
     // 在异步创建会话前占住写者位置，重复请求只返回已有工作。
     const promise = Promise.resolve().then(async () => {
@@ -262,7 +273,7 @@ export class OverallStoryCoordinator<T extends Owner> {
         const before = readCurrentStory(task.summary.workspace);
         const root = storyPath(task.summary.workspace, `jobs/${jobId}`);
         state.job = { id: jobId, by, started_at: new Date().toISOString() };
-        state.error = undefined;
+        state.error = undefined; state.error_kind = undefined;
         writeStoryState(task.summary.workspace, state);
         const store = this.store(task);
         store.markSent(batch.map((a) => a.id), "overall_story_processing");
@@ -292,6 +303,7 @@ export class OverallStoryCoordinator<T extends Owner> {
           fingerprint: input.fingerprint, sources: input.sources,
           annotation_ids: batch.map((a) => a.id), additions: diff.additions, deletions: diff.deletions });
         current.current = jobId; current.job = undefined; current.confirmed = undefined;
+        current.error = undefined; current.error_kind = undefined;
         writeStoryState(task.summary.workspace, current);
         const applied = new Set(store.markSentFor(batch, "overall_story"));
         for (const receipt of receipts) {
@@ -306,7 +318,9 @@ export class OverallStoryCoordinator<T extends Owner> {
       if (this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
       try {
         const state = readStoryState(task.summary.workspace);
-        state.job = undefined; state.error = error instanceof Error ? error.message : String(error);
+        state.job = undefined;
+        state.error = error instanceof Error ? error.message : String(error);
+        state.error_kind = "story";
         writeStoryState(task.summary.workspace, state);
         const store = this.store(task);
         for (const item of store.list()) {

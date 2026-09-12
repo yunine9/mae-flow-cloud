@@ -79,6 +79,7 @@ test("架构图可从无到有并更新，失败保留旧图，正文和确认�
     f.runner(async () => { throw new Error("模型暂时不可用"); });
     f.coordinator.generateArchitecture("parent", "owner"); await f.coordinator.settled("parent");
     assert.match(f.coordinator.status("parent").error!, /模型暂时不可用/);
+    assert.equal(f.coordinator.status("parent").error_kind, "architecture");
     assert.equal(readCurrentStoryArchitecture(f.task.summary.workspace), updated);
     assert.equal(readCurrentStory(f.task.summary.workspace), before);
     assert.deepEqual(readStoryState(f.task.summary.workspace).confirmed, confirmed);
@@ -174,6 +175,7 @@ test("发布后的子任务同步失败保留文档和已处理回执，不把�
     assert.equal(updated.sent_via, "overall_story");
     assert.equal(updated.response?.outcome, "fixed");
     assert.match(coordinator.status("parent").error!, /子任务材料暂时不可写/);
+    assert.equal(coordinator.status("parent").error_kind, "story");
   } finally { await coordinator.shutdown(); f.dispose(); }
 });
 
