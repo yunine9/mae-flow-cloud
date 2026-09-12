@@ -70,6 +70,9 @@ export function classifyDeliveryFailure(
   if (text.startsWith(KERNEL_UNAVAILABLE)) {
     return { disposition: "retry", why: "内核基础设施故障,重放有意义", stall_class: "infrastructure" };
   }
+  if (text.includes("缺少 Cloud 宿主权威收据") || text.startsWith("内核状态不可读")) {
+    return { disposition: "stall", why: "宿主可信状态异常，Agent 改写回复无法修复", stall_class: "safety" };
+  }
   if (text.startsWith(FEEDBACK_RESULT_MISSING)) {
     return { disposition: "dispatch", why: "本批反馈还没有被处理过", stall_class: "evidence_missing" };
   }

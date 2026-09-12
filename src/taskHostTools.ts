@@ -2,6 +2,7 @@ import { collectOwnerInstructions, submittedReviewInputs, readMrDiscussionInputs
 import type { WaitingRecord } from "./humanGate.ts";
 import { observedPipelineRun, historicalPipelineFeedback, projectPushReceipt, validPushReceipt } from "./pipelineHandoff.ts";
 import { remainingCiMission } from "./ciMission.ts";
+import { canHandoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
@@ -43,6 +44,7 @@ export interface HostOperation {
   target_branch?: string;
   result?: string;
   push_confirmed?: boolean;
+  review_handoff?: boolean;
   push_receipt?: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>;
   mr_receipt?: { url: string; id?: string | number };
   trigger_started?: boolean;
@@ -135,6 +137,8 @@ export interface TaskHostRuntime {
   activeFeedback?(): { batchId: string; items: any[]; path: string } | undefined;
   allowPush(): Promise<boolean>;
   confirmPush?(operation: HostOperation): Promise<boolean>;
+  preparePush?(operation: HostOperation): Promise<void>;
+  finishReviewAfterPush?(operation: HostOperation): Promise<boolean>;
   /** 缺少已确认 AR 描述时举起现有填写卡，返回 undefined 暂停本操作。 */
   mrTitle?(operation: HostOperation): string | undefined;
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
@@ -255,6 +259,10 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
  * call, and recovery can replay a running record using its pinned SHA/op ID. */
 /** 成功收据只结束旧推送调整指令；其他目标、失败与会话重建仍保留原使命。 */
 export function hostResumeMission(mission: string | undefined, message: string, target?: string, operation?: HostOperation, summary?: TaskSummary): string {
+  if (!target && summary && canHandoffReview(mission, summary)) {
+    // 机械执行结果属于本轮上下文，不是用户追加目标；分次推送后仍可自动交接。
+    return `${mission!.slice(0, mission!.lastIndexOf(REVIEW_MISSION_END)).trimEnd()}\n\n${message}\n\n${REVIEW_MISSION_END}`;
+  }
   if (summary && operation?.state === "succeeded"
       && ((operation.input.action === "push" && operation.push_receipt) || operation.input.action === "trigger_pipeline"))
     mission = remainingCiMission(mission, summary);
@@ -337,6 +345,10 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       operation.result = await restoreDeliveryPaths(host, operation, ownerInstruction(host, input.request_id).actor);
     } else if (input.action === "push") {
       if (!operation.push_receipt && !await host.allowPush()) throw new Error("当前 MR 或推送授权不允许发布，请查看任务现场的具体原因");
+      if (!operation.push_receipt && host.preparePush) {
+        await host.preparePush(operation);
+        host.assertActive(); ledger.update(operation);
+      }
       if (!operation.push_receipt && host.confirmPush && !await host.confirmPush(operation)) return true;
       host.assertActive();
       const receipt = operation.push_receipt ?? await host.push(operation.branch!, operation.sha!);
@@ -350,6 +362,12 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       scopePipelineArtifacts(join(host.summary.workspace, "pipeline"), receipt.sha);
       host.recordPublishedPush?.(receipt);
       operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      if (await host.finishReviewAfterPush?.(operation)) {
+        const handedOff = await verifyPublishedCi(host, operation, ledger);
+        operation.state = "succeeded"; ledger.update(operation);
+        if (!handedOff) host.resume("检视修改已推送，流水线继续监听；按新增要求继续。", undefined, operation);
+        return true;
+      }
       if (host.platformUrl && host.resumePipelineAfterPush?.(receipt.sha)) {
         const handedOff = await verifyPublishedCi(host, operation, ledger);
         operation.state = "succeeded"; ledger.update(operation);
@@ -568,7 +586,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
         paths: Type.Optional(Type.Array(Type.String(), { description: "恢复交付时指定原清单内的准确文件路径" })),
-        target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "拉取任务关联仓地址，或引用责任人给出该地址的指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
+        target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支由 push 自动同步远端。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),
     defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。可在编码中提前验证，宿主监听结果并续接尚未完成的工作。尚无运行记录不等于验证失败，不要反复触发或修复旧 SHA 告警。",

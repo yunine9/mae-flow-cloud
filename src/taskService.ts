@@ -115,6 +115,8 @@ import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
 import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
+import { prepareHostPush } from "./hostPushPreparation.ts";
+import { canHandoffReview, handoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -13619,6 +13621,27 @@ export class TaskService {
       resume: (message, target, operation) => this.enqueueRepair(task,
         hostResumeMission(task.mission, message, target, operation, task.summary), "宿主操作已返回，继续当前目标"),
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
+      preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
+        assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
+        operation, branch => this.absorbForeignRemoteCommits(task, branch)),
+      finishReviewAfterPush: operation => handoffReview({
+        eligible: () => canHandoffReview(task.mission, task.summary, operation.review_handoff)
+          && !task.pendingMainSteers?.length && !!this.effectivePlatformUrl(),
+        ready: async () => (await this.prePushRevision(task)).sha === operation.push_receipt?.sha
+          && !(await this.prePushDirtyPaths(task)).length,
+        stage: () => this.stageReviewReplies(task), record: () => this.recordActiveFeedbackResult(task),
+        canVerify: () => this.atHostDeliveryWait(task),
+        assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); },
+        flush: () => this.flushReviewReplyOutbox(task),
+        complete: () => { operation.review_handoff = true; new TaskHostLedger(task.summary).update(operation); },
+        wait: healthy => {
+          task.mission = undefined;
+          task.summary.status = "verifying";
+          if (healthy) task.summary.detail = "检视修改已推送，宿主继续投递回复并验证本次提交";
+          task.summary.delivery!.loop!.state = "verifying";
+          this.persist(task); this.ensureMergeWatch(task);
+        },
+      }),
       confirmPush: operation => confirmHostPush({
         summary: task.summary, cwd: task.cwd, humanGate: task.humanGate,
         accountDefault: () => this.options.pushConfirmation?.(task.summary.luban_account),
@@ -18557,12 +18580,22 @@ export class TaskService {
     // 答复过的讨论不因此变回未答复——原来换批清账重派,会对同一条讨论
     // 重复回复(2026-08-30 探针实锤:两条意见解决一条,另一条被复读),
     // 检视人视角就是机器人刷屏,还白烧一只修复会话。
-    const replied = new Set(
-      loop.kind === "review" && loop.review_source === "platform"
-        && loop.replied_ids
-        ? loop.replied_ids.split(",").filter(Boolean) : []);
+    // 投递账跨 CI/检视轮次保留，不能因 loop.kind 临时变成 ci 而丢失已答事实。
+    const replied = new Set([
+      ...(loop.review_source === "platform" ? loop.replied_ids?.split(",").filter(Boolean) ?? [] : []),
+      ...this.deliveryOutbox(task).list().filter(item => item.kind === "review_reply" && item.state === "delivered"
+        && item.payload.repo === (task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "")
+        && String(item.payload.mr) === String(delivery.mr_id))
+        .map(item => discussionKeyFromParts(item.payload.discussion_id, item.payload.source_revision)),
+    ]);
     const pending = [...identities]
       .filter(([identity]) => !replied.has(identity));
+    if (!pending.length) {
+      if (loop.review_source === "platform" && (loop.review_ids !== ids || loop.replied_ids !== ids)) {
+        loop.review_ids = ids; loop.replied_ids = ids; this.persist(task);
+      }
+      return "waiting";
+    }
     const pushedSha = task.summary.delivery?.git_push?.sha;
     const queuedReplyIds = new Set(this.deliveryOutbox(task)
       // 旧提交的 pending 回复不能让新提交永久停在“正在重试”。它仍
@@ -18597,15 +18630,6 @@ export class TaskService {
       this.persist(task);
       this.notifyRepairStopped(task);
       return "halted";
-    }
-    if (loop.kind === "review" && loop.review_source === "platform"
-        && !pending.length) {
-      // 集合变了但没有要新答的(检视人解决了部分):同步台账口径到
-      // 当前集合,继续等人——绝不重新派单。
-      loop.review_ids = ids;
-      loop.replied_ids = ids;
-      this.persist(task);
-      return "waiting";
     }
     // 先开内核反馈批次，再写 Cloud 的 repairing/queue 投影。命令失败时
     // 当前 watch 状态和唯一 writer 都不变，不会出现“Cloud 已派单、内核
@@ -18672,6 +18696,8 @@ export class TaskService {
         + `上下文时自己读。`,
         `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
         + `不许含糊带过;与需求有冲突或无法确定时说明依据，由责任人裁定。`,
+        `- 已明确且已授权的要求直接改，不再询问是否开工或重复确认方案。先完成无争议的意见，只对需要业务裁定的未决点集中提问；已经裁定的事项直接沿用。`,
+        `- 定位围绕意见涉及的文件、调用方和测试，只跑相关必要验证；通过后没有新变更就不重复验证，不反复全仓探索、重读回复或改无关文档。`,
         `- 把逐条回复写到绝对路径 ${JSON.stringify(resolve(task.summary.workspace, "review_replies.md"))}(仓库外,不会进提交),`
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${pending[0][1].id}]`,
@@ -18679,11 +18705,13 @@ export class TaskService {
         `- 改动在 build 步收口前如实 commit(按 current 的指引),`
         + `已有授权内可用 task_control push 阶段性推送，不必等所有意见处理完；`
         + `工具排队后结束本轮，宿主执行并返回结果；不要读取或索要 Git 令牌。`,
+        `- 宿主推送会先同步远端新增提交；pull_repo 用于拉取关联仓，不能用于更新当前 MR 分支。全部意见完成并留下回复后，宿主负责投递和等待检视人，不再让你反复补同一份回复。`,
         `- 全部是解释、没有代码改动也是正常结局:照样按 current 走完,`
         + `在对应步骤如实说明本轮无代码改动,不要为了凑步骤改代码。`,
         `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
         + `决定,默认留给检视人点),回复写给检视人看,说人话,`
         + `别写流程黑话。`,
+        REVIEW_MISSION_END,
       ].join("\n"),
       `检视意见 ${pending.length} 条,专职会话处理中`);
     return "dispatched";
@@ -21164,8 +21192,8 @@ export class TaskService {
         const feedbackResultFailure = this.recordActiveFeedbackResult(task);
         const activeFeedback = this.activeKernelFeedback(task);
         if (feedbackResultFailure && task.driver && activeFeedback && workspaceLoop
-            && classifyDeliveryFailure(feedbackResultFailure, "receipt")
-              .disposition !== "retry"
+            && ["evidence_missing", "evidence_invalid"].includes(
+              classifyDeliveryFailure(feedbackResultFailure, "receipt").stall_class)
             && workspaceLoop.review_source !== "workspace"
             && workspaceLoop.feedback_receipt_retry_for !== activeFeedback.batchId) {
           workspaceLoop.feedback_receipt_retry_for = activeFeedback.batchId;

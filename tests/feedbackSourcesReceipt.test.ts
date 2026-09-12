@@ -20,6 +20,9 @@ import { AnnotationStore } from "../src/annotations.ts";
 import { KERNEL_UNAVAILABLE, openKernelFeedback } from "../src/kernelDelivery.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import { withLiveReviewReceipts } from "../src/liveReviewReceipts.ts";
+import { createServer } from "node:http";
+import { REVIEW_MISSION_END } from "../src/reviewHandoff.ts";
+import { TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation } from "../src/taskHostTools.ts";
 
 const KERNEL_ROOT = join(process.cwd(), "kernel");
 const GIT_ENV = {
@@ -27,6 +30,91 @@ const GIT_ENV = {
   GIT_AUTHOR_NAME: "sources", GIT_AUTHOR_EMAIL: "s@example.com",
   GIT_COMMITTER_NAME: "sources", GIT_COMMITTER_EMAIL: "s@example.com",
 };
+
+test("完整 MR 修复经真实推送和内核登记后由宿主投递，不再唤醒 Agent；重启不重复推送/回复", async () => {
+  const s = await watchingService("review-handoff"), api = s.service as any;
+  const git = (...args: string[]) => execFileSync("git", ["-C", s.cwd, ...args], { encoding: "utf8", env: GIT_ENV }).trim();
+  let replies = 0, resumes = 0, watches = 0, pipelineStatus = "running";
+  const server = createServer((req, res) => {
+    if (req.url?.includes("/reply")) { replies++; req.resume(); res.end("{}"); }
+    else if (req.url?.startsWith("/pipeline/status")) res.end(JSON.stringify({ runs: [{
+      sha: s.internal.summary.delivery.git_push.sha, status: pipelineStatus, run_id: "new-run" }] }));
+    else { res.statusCode = 404; res.end(); }
+  });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  try {
+    const remote = join(s.workspace, "remote.git");
+    git("init", "--bare", "-q", remote); git("checkout", "-qb", "feature");
+    s.internal.summary.repo_url = remote;
+    s.internal.summary.status = "running";
+    s.internal.summary.delivery = { mr_url: "https://code/mr/1", mr_id: 1,
+      loop: { kind: "review", review_source: "platform", review_ids: "d1:r1", state: "repairing" } };
+    s.internal.mission = `MR 上有 1 条检视意见待处理\n${REVIEW_MISSION_END}`;
+    s.open("handoff", [{ id: "mr:d1", source: "mr_discussion", source_id: "d1", source_revision: 1,
+      kind: "code_review", summary: "补齐实现", verification: "reviewer" }]);
+    writeFileSync(join(s.cwd, "main.ts"), "export const ready = false;\n");
+    git("add", "main.ts"); git("commit", "-qm", "fix review");
+    const flow = readState(s.cwd); flow.current = "external_verify";
+    writeFileSync(join(s.cwd, ".mae-flow.json"), JSON.stringify(flow)); // 模拟 Agent 已完成本轮编码步骤。
+    writeFileSync(join(s.workspace, "review_replies.md"), "[d1]\n已补齐实现并核对调用方。\n");
+    api.options.delivery = { platformUrl: `http://127.0.0.1:${(server.address() as any).port}`, pollIntervalMs: 100_000 };
+    api.ensureMergeWatch = () => { watches++; };
+    api.enqueueRepair = () => { resumes++; };
+    const host = api.taskHostRuntime(s.internal);
+    host.allowPush = async () => true;
+    host.confirmPush = async () => true;
+    await queueTaskHostOperation(host, "review-push", { action: "push", reason: "完成检视修复" });
+    await finishTaskHostOperation(host);
+    const ledger = new TaskHostLedger(s.internal.summary), op = ledger.read().operations[0];
+    assert.equal(op.state, "succeeded", op.result);
+    assert.equal(op.review_handoff, true);
+    assert.equal(resumes, 0);
+    assert.equal(replies, 1);
+    assert.ok(watches > 0);
+    assert.equal(s.internal.summary.status, "verifying");
+    assert.equal(s.internal.summary.delivery.pipeline, "running");
+    assert.equal(s.internal.summary.delivery.pipeline_background, false);
+    assert.equal(s.internal.mission, undefined);
+    assert.equal(git("--git-dir", remote, "rev-parse", "feature"), op.sha);
+    const batch = readState(s.cwd).delivery_loop.batches.find((b: any) => b.batch_id === "handoff");
+    assert.ok(batch.result_digest, "清空草稿前已登记真实内核结果");
+    assert.equal(batch.status, "awaiting_verification", "仍由检视人验收");
+    assert.equal(readFileSync(join(s.workspace, "review_replies.md"), "utf8"), "");
+    ledger.update({ ...op, state: "running" }); // 崩溃在交接已落盘、操作尚未标成功的窗口。
+    pipelineStatus = "success";
+    const recovering = api.taskHostRuntime(s.internal);
+    recovering.push = async () => { throw new Error("不应重复传输"); };
+    await finishTaskHostOperation(recovering);
+    assert.equal(ledger.read().operations[0].state, "succeeded");
+    assert.equal(resumes, 0); assert.equal(replies, 1);
+    assert.equal(s.internal.summary.status, "await_merge", s.internal.summary.detail);
+    assert.equal(readState(s.cwd).current, "delivery_watch", "绿灯须经真实内核核销后才等待合入");
+  } finally { server.closeAllConnections(); server.close(); await s.stop(); }
+});
+
+test("跨 CI 轮次从投递历史识别已答讨论；新版本仍派单，其他 MR 的回复不算", async () => {
+  const s = await watchingService("review-history"), api = s.service as any;
+  try {
+    s.internal.summary.status = "await_merge";
+    s.internal.summary.repo_url = "repo";
+    s.internal.summary.delivery = { mr_id: 1, mr_url: "https://code/mr/1", loop: { kind: "ci", state: "verifying" } };
+    const outbox = api.deliveryOutbox(s.internal);
+    for (const [id, mr] of [["done", 1], ["other", 2]] as const) {
+      const entry = outbox.enqueueReviewReply({ discussion_id: id, source_revision: 1, body: "已处理",
+        repo: "repo", mr, resolve: false, expected_sha: "a".repeat(40) });
+      outbox.markDelivered(entry.id);
+    }
+    const dispatched: string[] = [];
+    api.enqueueRepair = (_task: unknown, mission: string) => dispatched.push(mission);
+    const dispatch = (id: string, revision: number) => api.dispatchReviewRepair(s.internal, 3, s.internal.controlEpoch,
+      { kind: "available", items: [{ id, revision, body: "补充要求" }] });
+    assert.equal(await dispatch("done", 1), "waiting"); assert.equal(dispatched.length, 0);
+    assert.equal(await dispatch("done", 2), "dispatched");
+    assert.equal(dispatched.length, 1);
+    assert.equal(await dispatch("other", 1), "dispatched");
+    assert.equal(dispatched.length, 2);
+  } finally { await s.stop(); }
+});
 
 async function until(probe: () => boolean, what: string, ms = 20_000) {
   const deadline = Date.now() + ms;

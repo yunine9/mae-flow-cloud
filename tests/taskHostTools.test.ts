@@ -1,4 +1,5 @@
 import { HumanGate } from "../src/humanGate.ts";
+import { prepareHostPush } from "../src/hostPushPreparation.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readTaskHostDocument } from "../src/taskHostDocuments.ts";
@@ -86,6 +87,46 @@ test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承
   assert.equal(s.resumed(), 1);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "succeeded");
   assert.equal(await finishTaskHostOperation(s.host), false, "已完成操作不重新传输");
+});
+
+for (const confirmed of [false, true]) test(`宿主推送同步远端新增提交，${confirmed ? "旧审批不复用" : "新审批绑定同步后 SHA"}`, async t => {
+  const s = scene(t), api = s.service as any;
+  api.options.host = {};
+  const base = s.git("rev-parse", "HEAD");
+  s.git("push", s.remote, "HEAD:refs/heads/work");
+  s.host.summary.delivery = { git_push: { sha: base, ref: "refs/heads/work", remote: "origin" } };
+  const peer = join(s.host.summary.workspace, "peer");
+  s.git("clone", "-q", "-b", "work", s.remote, peer);
+  s.git("-C", peer, "config", "user.name", "Peer"); s.git("-C", peer, "config", "user.email", "peer@test");
+  writeFileSync(join(peer, "peer.txt"), "owner update\n");
+  s.git("-C", peer, "add", "peer.txt"); s.git("-C", peer, "commit", "-qm", "peer change");
+  s.git("-C", peer, "push", "origin", "work");
+  const remoteHead = s.git("-C", peer, "rev-parse", "HEAD");
+  writeFileSync(join(s.host.cwd!, "local.txt"), "review fix\n");
+  s.git("add", "local.txt"); s.git("commit", "-qm", "review fix");
+  const op = await queueTaskHostOperation(s.host, "sync-push", { action: "push", reason: "检视修复" });
+  new TaskHostLedger(s.host.summary).update({ ...op, push_confirmed: confirmed });
+  const internal = { cwd: s.host.cwd, summary: s.host.summary };
+  api.persist = () => {};
+  s.host.preparePush = operation => prepareHostPush(s.host, operation,
+    branch => api.absorbForeignRemoteCommits(internal, branch));
+  let approved: string | undefined;
+  s.host.confirmPush = async operation => { approved = operation.sha; return true; };
+  await finishTaskHostOperation(s.host);
+  const result = new TaskHostLedger(s.host.summary).read().operations[0];
+  const rebased = s.git("rev-parse", "HEAD");
+  assert.notEqual(rebased, op.sha);
+  assert.equal(s.git("rev-parse", "HEAD^"), remoteHead);
+  assert.equal(readFileSync(join(s.host.cwd!, "local.txt"), "utf8"), "review fix\n");
+  if (confirmed) {
+    assert.equal(result.state, "failed"); assert.match(result.result!, /原确认 SHA 已变化/);
+    assert.equal(approved, undefined);
+    assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), remoteHead);
+  } else {
+    assert.equal(result.state, "succeeded", result.result);
+    assert.equal(approved, rebased);
+    assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), rebased);
+  }
 });
 
 test("推送排队后 HEAD 改变时如实失败，不推错版本", async t => {
