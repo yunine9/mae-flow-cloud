@@ -1,3 +1,5 @@
+import { failPrePushEnvironment, type PrePushVerificationState } from "./prePushVerification.ts";
+import { pendingReviewAnnotation } from "./annotationPending.ts";
 import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 import { AnnotationStore, AnnotationPermissionError, renderAnnotations, type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
@@ -71,7 +73,7 @@ export function pickAnnotationSubmission(
   items: Annotation[], ids?: string[], actor?: string,
   allowForeign = false, acceptRequirementSubmitted = false,
 ): Annotation[] {
-  const eligible = items.filter((item) => item.status === "draft"
+  const eligible = items.filter((item) => pendingReviewAnnotation(item)
     || (!!ids?.length && item.artifact === OVERALL_STORY_ARTIFACT
       && ["sent", "verified"].includes(item.status)
       && ["overall_story_queue", "overall_story_processing", "overall_story"].includes(item.sent_via ?? ""))
@@ -111,4 +113,38 @@ export function requirementSubmissionReceipt(items: Annotation[], ids: string[])
     queued ? `${queued} 条已排队，当前一批完成后自动处理` : "",
     processed ? `${processed} 条已有处理回执，请逐条复检` : "",
   ].filter(Boolean).join("；") + "。无需重复提交。";
+}
+
+/** 暂停只保存发送意图；恢复时先接续这批意见，再决定是否启动普通会话。 */
+export function resumeQueuedAnnotationSubmission(input: {
+  task: { summary: { status: string; waiting?: unknown; detail?: string; delivery?: { prepush?: PrePushVerificationState } }; resume?: boolean };
+  notes: Annotation[]; from: string; changed: boolean;
+  persist(): void; markReturned(): void; run(work: Promise<void>): void;
+  submitDecision(): Promise<boolean>; deliver(): Promise<unknown>; enqueue(): Promise<void>;
+}): boolean {
+  if (!input.notes.length || input.changed) return false;
+  input.task.summary.status = input.from === "waiting_for_human" && input.task.summary.waiting
+    ? "waiting_for_human" : "queued";
+  // 暂停已释放执行者；新意见接管后，旧验证不能在下一次部署时复活。
+  const verification = input.task.summary.delivery?.prepush;
+  if (verification?.active_attempt) input.task.summary.delivery!.prepush = failPrePushEnvironment(
+    verification, new Date().toISOString(), "原验证未完成；恢复后先处理责任人提交的修改意见");
+  input.task.resume = true;
+  input.task.summary.detail = "已恢复，正在接续已提交的修改意见";
+  input.persist(); input.markReturned();
+  input.run((async () => {
+    if (await input.submitDecision()) return;
+    await input.deliver();
+    if (input.task.summary.status === "queued") await input.enqueue();
+  })());
+  return true;
+}
+
+export function annotationSubmissionReceipt(items: Annotation[], sent: string[], requested: number, status: string): string | undefined {
+  if (items.some(item => sent.includes(item.id) && item.sent_via === "queued_decision")) {
+    return ["paused", "pausing"].includes(status) ? "意见已提交并排队，恢复任务后处理。"
+      : "意见已排队，尚未送达；等待当前问题答复后一起送达。";
+  }
+  return sent.length < requested
+    ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。" : undefined;
 }

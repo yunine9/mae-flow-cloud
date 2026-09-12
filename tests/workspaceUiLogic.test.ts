@@ -839,3 +839,25 @@ test("责任人核对 Agent 修复后直接确认通过，不再自动展开处�
     assert.doesNotMatch(html, /class="annot-response fixed"/);
   }
 });
+
+for (const status of ["running", "waiting_for_human", "await_merge", "paused"]) test(`统一修改意见按钮：${status} 使用相同文案并汇总他人意见`, () => {
+  const html = renderToStaticMarkup(React.createElement(Panel, {
+    taskId: "task-1", viewerUsername: "owner", taskOwner: "owner", ownerControlled: true,
+    canOperate: true, taskStatus: status, mergeRequestOpen: true, checks: [], onChanged() {},
+    items: [annotation({ id: "pending", author: "reviewer", status: "draft", response: undefined }),
+      annotation({ id: "answered", author: "reviewer", status: "draft", response: undefined,
+        owner_reply: { author: "owner", text: "无需修改", replied_at: "2026-09-12" } })],
+  }));
+  assert.match(html, /提交修改意见/);
+  assert.match(html, /1<!-- --> 条待提交|1 条待提交/);
+  assert.doesNotMatch(html, /交给 Agent|先逐条加入待发送清单/);
+});
+
+test("检视人只能记下，不能替责任人提交修改意见", () => {
+  const html = renderToStaticMarkup(React.createElement(Panel, {
+    taskId: "task-1", viewerUsername: "reviewer", taskOwner: "owner", ownerControlled: true,
+    canOperate: true, taskStatus: "await_merge", mergeRequestOpen: true, checks: [], onChanged() {},
+    items: [annotation({ author: "reviewer", status: "draft", response: undefined })],
+  }));
+  assert.doesNotMatch(html, /提交修改意见/);
+});

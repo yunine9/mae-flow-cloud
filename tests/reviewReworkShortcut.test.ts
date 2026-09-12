@@ -1,9 +1,4 @@
-/**
- * 检视意见在"等决定卡"期间提交的真相(内网实锤 2026-09-04):点"提交给
- * Agent"只是登记成团队事实,正文要等责任人在卡上选返工才随决定送达。
- * 改法:抽屉只登记待送意见，决定卡是唯一送达口；第一条意见入队时
- * 卡上预选"需要调整"，责任人仍可改选。静态契约。
- */
+/** 统一提交复用正式检视决定；澄清问题仍排队，不能代替用户回答。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,14 +7,15 @@ import { readFileSync } from "node:fs";
 const read = (path: string) =>
   readFileSync(new URL(`../${path}`, import.meta.url), "utf-8");
 
-test("等决定期间的提交:抽屉登记，决定卡统一送达并预选返工", () => {
+test("检视统一提交复用决定，澄清期间排队且不覆盖人的选择", () => {
   const panel = read("web/src/AnnotationPanel.tsx");
   assert.doesNotMatch(panel, /oneStepRework|await decide\(/,
     "抽屉不应再绕过当前决定卡自己代答");
   // 状态词已经收敛到服务端唯一判定处(feedbackPolicy),页面只渲染。
   assert.match(read("src/feedbackPolicy.ts"), /text: "已排队·等决定"/,
     "排队的意见不再冒充已提交");
-  assert.match(panel, /排队，等责任人返工时送达/, "检视人的按钮说清要等责任人");
+  assert.match(panel, /提交修改意见/, "责任人使用统一提交入口");
+  assert.match(read("src/reviewDecisionContract.ts"), /submitAnnotationReviewDecision/, "提交复用正式检视决定，澄清继续排队");
   const card = read("web/src/TaskCard.tsx");
   assert.match(card, /export function reworkChoiceOf/);
   assert.match(card, /const feedbackOption = reworkChoice\?\.option;/,
@@ -32,8 +28,7 @@ test("等决定期间的提交:抽屉登记，决定卡统一送达并预选返�
     "工作台要把已入队意见交给当前决定卡");
   assert.match(workspace, /pendingReviewAnnotationIds=\{pendingReviewIds\}/,
     "决定卡要展示本次会一并送达的意见");
-  // 服务端语义不变:等待期 send 仍只排队,决定时把排队的意见带上——这是
-  // 一步到位能成立的前提。
+  // 澄清期间保留排队，正式检视走已有决定处理链。
   const service = read("src/taskService.ts");
   assert.match(service, /markSentFor\(\s*picked, "queued_decision", sentBy\)/);
   // 回执登记前不再写"已提交/已被改动·请你确认":那时确认按钮根本不在。

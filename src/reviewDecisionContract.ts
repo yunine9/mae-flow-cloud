@@ -47,3 +47,42 @@ export function reviewDecisionContract(
       allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false }]
     : effects };
 }
+
+/** 统一提交只代填明确的单题检视返工选项；不回答澄清、多题或配置问题。 */
+export function annotationReviewAnswer(question: Record<string, unknown>, effects: StepChoiceEffect[],
+  pushConfirmation = false): Record<string, string> | undefined {
+  if (question.purpose === "clarification") return;
+  const contract = reviewDecisionContract(question, effects);
+  const items = contract.question.questions as Array<{ question: string; options?: string[] }>;
+  if (!Array.isArray(items) || items.length !== 1) return;
+  const item = items[0];
+  const answer = item.options?.find(option => pushConfirmation
+    ? isReviewAdjustmentAnswer(option)
+    : contract.effects.some(effect => effect.handlesFeedback && effect.answers.includes(option)));
+  return answer ? { [item.question]: answer } : undefined;
+}
+
+export function annotationReviewSubmission(waiting: {
+  question: Record<string, unknown>; waiting_id: string; state_version: number;
+}, effects: StepChoiceEffect[], push: boolean, ids: string[], actor: string, context: string) {
+  const selected = annotationReviewAnswer(waiting.question, effects, push);
+  return selected ? { waiting_id: waiting.waiting_id, state_version: waiting.state_version,
+    selected_options: selected, annotation_ids: ids, actor,
+    comment: ["责任人提交修改意见，请按本次检视意见修改并逐条答复。", context].filter(Boolean).join("\n") } : undefined;
+}
+
+export async function submitAnnotationReviewDecision(input: {
+  status: string;
+  waiting?: { step: string; question: Record<string, unknown>; waiting_id: string; state_version: number };
+  ids: string[]; actor: string; context: string;
+  effects(): StepChoiceEffect[];
+  decide(submission: NonNullable<ReturnType<typeof annotationReviewSubmission>>): Promise<unknown>;
+}): Promise<boolean> {
+  if (input.status !== "waiting_for_human" || !input.waiting) return false;
+  const push = ["cloud_push_confirm", "host_push_confirm"].includes(input.waiting.step);
+  const submission = annotationReviewSubmission(input.waiting, push ? [] : input.effects(),
+    push, input.ids, input.actor, input.context);
+  if (!submission) return false;
+  await input.decide(submission);
+  return true;
+}

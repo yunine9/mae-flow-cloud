@@ -185,10 +185,11 @@ export function AnnotationPanel({
       can_override_drop: false, can_route: false,
       needs_clarification: false, receipt_missing: false,
     };
-  // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
-  // 暗中锁住任务的全局门禁。
-  const drafts = items.filter((item) =>
-    item.status === "draft" && item.author === viewerUsername);
+  // 责任人统一提交仍待处理的意见；自行答复或闭环的条目不会夹带发送。
+  const ownerControlled = closures.some(entry => entry.owner_controlled);
+  const drafts = items.filter(item => ownerControlled
+    ? closureOf(item).can_route && (item.status === "draft" || item.sent_via === "owner_pending")
+    : item.status === "draft" && item.author === viewerUsername);
   const routedDrafts = items.filter((item) => closureOf(item).can_route);
   const overrideReviewCount = items.filter((item) =>
     closureOf(item).can_override_drop).length;
@@ -238,7 +239,7 @@ export function AnnotationPanel({
   // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
   const queueable = taskStatus === "waiting_for_human";
   const ordinaryCanSend = !["completed", "canceled"].includes(taskStatus)
-    && (running || evidenceAwaiting || reviewSendable || queueable);
+    && (running || evidenceAwaiting || reviewSendable || queueable || ["queued", "paused", "pausing"].includes(taskStatus));
   const isPublishedStory = (item: Annotation) => overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT;
   const canSendItem = (item: Annotation) => isPublishedStory(item)
     ? taskStatus !== "canceled" : ordinaryCanSend;
@@ -434,41 +435,12 @@ export function AnnotationPanel({
           <em>{actionableReviewCount} 项</em>
         </div>
       )}
-      {!closures?.some((entry) => entry.owner_controlled) && drafts.length > 0 && (taskStatus !== "completed" || overallDrafts.length > 0) && taskStatus !== "canceled" && (
-        <div className="annot-panel-actions">
-          <button type="button" className="primary"
-                  disabled={busy || !canOperate || !canSend}
-                  title={!canOperate ? "你目前只有记录权限，暂不能发送批注"
-                    : !canSend ? "意见已保存为草稿；当前无法发送，原因见下方说明" : undefined}
-                  onClick={() => void send()}>
-            {busy ? "提交中…"
-              : overallDrafts.length ? `提交 ${sendableDrafts.length} 条给 Agent`
-              : drafts.every((item) => routeOf(item) === "owner_reply")
-              ? `提交 ${drafts.length} 条给责任人答复`
-              : drafts.every((item) => routeOf(item) === "owner_decision")
-                ? `提交 ${drafts.length} 条给责任人决策`
-              : drafts.some((item) => routeOf(item) !== "agent")
-                ? `提交 ${drafts.length} 条检视意见`
-              : reviewSendable
-              ? `提交 ${drafts.length} 条并继续修改`
-              : evidenceAwaiting ? `贴回 ${drafts.length} 条报错`
-                : requirementReview ? requirementRevisionRunning
-                  ? `提交 ${drafts.length} 条，排队修改需求`
-                  : `提交 ${drafts.length} 条给 Agent 修改需求`
-                : queueable ? `提交 ${drafts.length} 条（排队，等责任人返工时送达）`
-                : `提交 ${drafts.length} 条批注`}
-          </button>
-          {reviewSendable && (
-            <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
-          )}
-          {overallDrafts.length > 0 && <p>整体 Story 意见会立即排队，Agent 修改后由意见作者复检；不会改动子任务代码。</p>}
-          {queueable && !reviewSendable && !overallDrafts.length && (
-            <p>{requirementReview
-              ? requirementRevisionRunning
-                ? "意见提交后会排队；当前修订完成后自动处理，无需重复提交。所有意见处理并复检后，才能最终确认需求。"
-                : "Agent 会按这些意见修改当前需求文档；完成后请在本工作台逐条复检，全部闭环后再确认进入需求分析。"
-              : "先逐条加入待发送清单，再到决定卡统一发送。"}</p>
-          )}
+      {canOperate && sendableDrafts.length > 0 && taskStatus !== "canceled" && (
+        <div className="tw-root my-3 flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
+          <span className="text-sm text-muted-foreground">{sendableDrafts.length} 条待提交</span>
+          <Button type="button" size="sm" disabled={busy || !canSend} onClick={() => void send()}>
+            {busy ? "提交中…" : "提交修改意见"}
+          </Button>
         </div>
       )}
 

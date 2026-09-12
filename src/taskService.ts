@@ -8,7 +8,7 @@ import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
 import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
-import { explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
+import { submitAnnotationReviewDecision, explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { historicalPipelineFeedback, observedPipelineRun, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun, validPushReceipt } from "./pipelineHandoff.ts";
@@ -69,7 +69,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { hostSkillNames } from "./hostSkillRuntime.ts";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
-import { assertAnnotationOwnerAccess, annotationSubmissionPlan, pickAnnotationSubmission, requirementSubmissionReceipt, submitAnnotationWithReceipts } from "./annotationSubmission.ts";
+import { annotationSubmissionReceipt, resumeQueuedAnnotationSubmission, assertAnnotationOwnerAccess, annotationSubmissionPlan, pickAnnotationSubmission, requirementSubmissionReceipt, submitAnnotationWithReceipts } from "./annotationSubmission.ts";
 import { resetQueuedRequirementReviews, submitRequirementReview, interruptRequirementReviews } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
@@ -6273,6 +6273,11 @@ export class TaskService {
     if (!picked.length) {
       return { sent: [], text: "没有待发送的检视意见" };
     }
+    if (task.summary.status === "waiting_for_human" && !overall.length && await this.submitAnnotationReviewDecision(task, picked, sender, context)) {
+      const sent = this.annotations(task).list().filter(item => picked.some(note => note.id === item.id)
+        && item.status !== "draft" && item.sent_via !== "owner_pending").map(item => item.id);
+      return { sent, text: renderAnnotations(picked, this.ticketOf(task)) };
+    }
     const delivered = await submitAnnotationWithReceipts(this.annotations(task), picked, sender, context,
       snapshot => this.deliverAgentAnnotations(task, snapshot, undefined, false, sender, backgroundRequirementReview),
       { requirementReview, ticket: this.ticketOf(task) });
@@ -6280,11 +6285,15 @@ export class TaskService {
       sent: delivered.sent,
       text: delivered.text,
       receipt: requirementReview ? requirementSubmissionReceipt(this.annotations(task).list(), delivered.sent)
-        : this.annotations(task).list().some(item => delivered.sent.includes(item.id) && item.sent_via === "queued_decision")
-          ? "意见已排队，尚未送达 Agent。请提交当前决定卡，意见将随答复一起送达。"
-        : delivered.sent.length < picked.length
-          ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。" : undefined,
+        : annotationSubmissionReceipt(this.annotations(task).list(), delivered.sent, picked.length, task.summary.status),
     };
+  }
+
+  private async submitAnnotationReviewDecision(task: TaskState, picked: Annotation[], actor: string, context = ""): Promise<boolean> {
+    return submitAnnotationReviewDecision({ status: task.summary.status, waiting: task.summary.waiting,
+      ids: picked.map(item => item.id), actor, context,
+      effects: () => stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, task.summary.waiting)),
+      decide: input => this.decide(task.summary.id, input) });
   }
 
   private async deliverAgentAnnotations(
@@ -6369,6 +6378,17 @@ export class TaskService {
         picked, "queued_decision", sentBy);
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
+    }
+    if (["paused", "pausing"].includes(task.summary.status)) {
+      const sent = this.annotations(task).markSentFor(picked, "queued_decision", sentBy);
+      this.persist(task);
+      return { sent, text };
+    }
+    if (task.summary.status === "queued" && !this.hasOpenMergeRequest(task)) {
+      task.pendingMainSteers = [...(task.pendingMainSteers ?? []), text, this.reviewReceiptInstructionsFor(task, picked)];
+      const sent = this.annotations(task).markSentFor(picked, "interrupt", sentBy);
+      this.persist(task);
+      return { sent, text };
     }
     if (this.hasOpenMergeRequest(task) && task.summary.status !== "waiting_for_human") {
       return this.sendMergeRequestReview(task, picked, text, sentBy);
@@ -9237,11 +9257,6 @@ export class TaskService {
     if (status === "failed" && failedPrePush
         && ["blocked", "environment_error"].includes(failedPrePush.state)
         && task.cwd) {
-      delivery.stalled = undefined;
-      delivery.stall_class = undefined;
-      delivery.waiting_on = undefined;
-      delivery.skipped = undefined;
-      delivery.verify_deadline = undefined;
       task.summary.status = "verifying";
       task.summary.detail = "继续交付；独立 Build-Fix 结果保留，不自动重跑";
       this.markBuildFixResuming(task);
@@ -12708,6 +12723,14 @@ export class TaskService {
       at: new Date().toISOString(),
       paused_from: from,
     };
+    const queuedNotes = this.annotations(task).list().filter(item => item.status === "sent"
+      && item.sent_via === "queued_decision" && !item.response);
+    if (resumeQueuedAnnotationSubmission({ task, notes: queuedNotes, from, changed: !!intervention?.changed,
+      persist: persistReturn, markReturned, run: work => this.bypass(task, "恢复修改意见", work),
+      submitDecision: () => this.submitAnnotationReviewDecision(task, queuedNotes, actor),
+      deliver: () => this.deliverAgentAnnotations(task, queuedNotes, undefined, false, actor),
+      enqueue: async () => { if (!this.queue.includes(id)) { this.queue.push(id); await this.pump(); } },
+    })) return { ...task.summary };
     if (from === "waiting_for_human" && task.summary.waiting) {
       if (intervention?.changed) {
         const obsoleteWaiting = { ...task.summary.waiting };
