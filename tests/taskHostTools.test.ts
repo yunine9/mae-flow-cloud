@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
+import { FeedbackStore, type FeedbackStatus } from "../src/feedbackStore.ts";
 import { hostResumeMission, createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult, recoverHostPushProjection } from "../src/taskHostTools.ts";
 
 function scene(t: any) {
@@ -53,6 +54,21 @@ function scene(t: any) {
   return { host, service, git, remote, facts, cancel: () => { active = false; },
     resumed: () => resumed, verificationRuns: () => verificationRuns };
 }
+
+test("Agent 读取反馈时已结束条目不再声明 active，与检视面板状态一致", async t => {
+  const s = scene(t);
+  const statuses: FeedbackStatus[] = ["repairing", "closed", "superseded", "superseded_by_merge"];
+  new FeedbackStore(join(s.host.summary.workspace, "feedback", "index.jsonl")).upsert(statuses.map(status => ({
+    id: status, batch_id: "batch", source: "build_fix", source_id: status, source_revision: 0,
+    observed_sha: "a".repeat(40), summary: "机器告警", verification: "pipeline", status,
+    updated_at: "2026-09-12T00:00:00Z",
+  })));
+  const tool: any = createTaskHostTools(s.host).find(tool => tool.name === "task_context");
+  const response = await tool.execute("read", { view: "feedback" });
+  assert.equal(response.isError, false);
+  const rows = JSON.parse(response.content[0].text).feedback;
+  assert.deepEqual(rows.map((row: any) => row.scheduling), ["active", "closed", "historical", "historical"]);
+});
 
 test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承旧红灯且不取消旧目标", async t => {
   const s = scene(t);

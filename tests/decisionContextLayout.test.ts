@@ -241,7 +241,7 @@ test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作�
   // 挂在 TabsList 上,筛选语义原样。
   assert.match(workspace, /className="review-filter h-auto w-full"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
-  assert.match(workspace, /\["agent", "Agent 处理中"\]/);
+  assert.match(workspace, /\["agent", "待处理／核验"\]/);
   assert.match(workspace, /\["closed", "已完成"\]/);
   assert.match(workspace, /filter=\{inline \? "all" : reviewFilter\}/, "批注面板吃同一个筛选档");
   assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
@@ -285,7 +285,8 @@ test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源
   assert.match(workspace, /FEEDBACK_SOURCE_LABEL/);
   assert.match(workspace, /item\.summary/,
     "界面必须展示反馈正文，不能只给数量");
-  assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
+  assert.match(workspace, /feedbackStatusLabel\(item\)/);
+  assert.match(readFileSync(join(process.cwd(), "web/src/feedbackPresentation.ts"), "utf8"), /FEEDBACK_STATUS_LABEL/);
 });
 
 test("持续检视意见:进度条下不再有摘要条,入口只留角标,正文按来源完整展示", () => {
@@ -312,7 +313,7 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   assert.match(panelSource, /<strong>来自 Cloud 工作台的检视意见<\/strong>/);
   assert.match(workspace, /item\.source !== "mr_discussion" && item\.source !== "workspace"/,
     "工作台批注已由批注卡片承载,不重复列");
-  assert.match(workspace, /已回复，等检视人确认/);
+  assert.match(readFileSync(join(process.cwd(), "web/src/feedbackPresentation.ts"), "utf8"), /已回复，等检视人确认/);
   assert.match(workspace, /检视人 \$\{item\.author\}/);
   assert.match(workspace, /className="feedback-body"/);
   assert.match(css, /\.feedback-list\s*\{/);

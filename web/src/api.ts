@@ -835,7 +835,8 @@ export interface PushReviewPresentation {
 export type FeedbackSource = "workspace" | "build_fix" | "pipeline"
   | "mr_discussion" | "conflict" | "scope" | "push_confirmation";
 export type FeedbackStatus = "open" | "repairing" | "addressed"
-  | "awaiting_verification" | "closed" | "needs_human" | "deferred";
+  | "awaiting_verification" | "closed" | "needs_human" | "deferred"
+  | "superseded" | "superseded_by_merge";
 export interface FeedbackRecord {
   id: string;
   batch_id: string;
