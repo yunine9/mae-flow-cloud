@@ -4309,8 +4309,8 @@ export class IssueFlowService {
     };
     // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
     try {
-      const first = await triggerPipeline(call());
-      if (first.status !== "running" && !rejectStale(first)) {
+      const first = (await triggerPipeline(call())).runs.at(-1);
+      if (first && first.status !== "running" && !rejectStale(first)) {
         await this.settlePipeline(live, repo, sha, first);
         return;
       }

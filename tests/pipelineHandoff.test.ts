@@ -105,7 +105,7 @@ for (const status of ["running", "success", "failed"] as const) test(`宿主接�
   const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "pipeline-handoff-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const task = service.create("验证新修复", { account: "owner" });
   const state = service.tasks.get(task.id);
-  state.mission = "修复 old 的告警";
+  state.mission = "当前目标是处理本轮流水线失败(1)。分支上提交 old 的权威流水线结果是 failed。[本轮流水线修复目标结束]";
   state.summary.status = "running";
   state.summary.delivery = { sha: "old", pipeline: "failed", checks: [{ dimension: "COMPILE", status: "failed" }],
     loop: { kind: "ci", round: 1, state: "repairing", last_sha: "old", failure: "旧失败原文" },

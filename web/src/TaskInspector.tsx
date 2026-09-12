@@ -1,3 +1,4 @@
+import { pipelineLabel } from "./pipelinePresentation";
 import { PersonName } from "./People";
 import { statusText, type TaskSummary } from "./api";
 import { formatLocalDateTime } from "./time";
@@ -61,7 +62,7 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
                 {task.progress.milestone.reason && ` · ${task.progress.milestone.reason}`}</dd></div>}
               <div><dt>合入请求</dt><dd>{task.delivery?.mr_url ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
                 打开合入请求 · {task.delivery.mr_state || "查看状态"} ↗</a> : "尚未记录合入请求"}</dd></div>
-              {task.delivery?.pipeline && <div><dt>流水线</dt><dd>{task.delivery.pipeline}</dd></div>}
+              {task.delivery?.pipeline && <div><dt>流水线</dt><dd>{pipelineLabel(task.delivery.pipeline)}</dd></div>}
               {task.delivery?.loop?.failure && <div><dt>流水线失败原文</dt><dd className="inspector-failure">{task.delivery.loop.failure}</dd></div>}
               {task.workspace_reclaimed_at && <div><dt>现场回收</dt><dd>{formatLocalDateTime(task.workspace_reclaimed_at, { year: true })}
                 <p className="mt-1">过程记录、交付账本、流水线证据与批注仍保留，代码差异不再可看。</p></dd></div>}

@@ -1,6 +1,6 @@
 import { collectOwnerInstructions, submittedReviewInputs, readMrDiscussionInputs, latestInstructionsText, projectOwnerInstructions, DECISION_SYNC_GUIDANCE, type OwnerInstruction } from "./ownerDecisionContext.ts";
 import type { WaitingRecord } from "./humanGate.ts";
-import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt, validPushReceipt } from "./pipelineHandoff.ts";
+import { observedPipelineRun, historicalPipelineFeedback, projectPushReceipt, validPushReceipt } from "./pipelineHandoff.ts";
 import { remainingCiMission } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
@@ -140,7 +140,9 @@ export interface TaskHostRuntime {
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
-  acceptPipeline(sha: string, run: PipelineRun): Promise<void>;
+  watchPush?(): void;
+  /** false 表示仅记录提前验证，调用者继续原目标；true/旧接口 void 表示交付接管。 */
+  acceptPipeline(sha: string, run?: PipelineRun): Promise<boolean | void>;
   syncFeedback(): void;
   cloneReference?(url: string): Promise<string>;
   collaborate?(text: string): Promise<unknown>;
@@ -253,7 +255,8 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
  * call, and recovery can replay a running record using its pinned SHA/op ID. */
 /** 成功收据只结束旧推送调整指令；其他目标、失败与会话重建仍保留原使命。 */
 export function hostResumeMission(mission: string | undefined, message: string, target?: string, operation?: HostOperation, summary?: TaskSummary): string {
-  if (summary && operation?.input.action === "push" && operation.state === "succeeded" && operation.push_receipt)
+  if (summary && operation?.state === "succeeded"
+      && ((operation.input.action === "push" && operation.push_receipt) || operation.input.action === "trigger_pipeline"))
     mission = remainingCiMission(mission, summary);
   const completedAdjustment = operation?.input.action === "push" && operation.state === "succeeded"
     && !!operation.push_receipt && mission?.startsWith("用户要求调整推送，请整理后重新发起：");
@@ -281,18 +284,21 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         && latest.sha === host.summary.delivery?.git_push?.sha && host.platformUrl
         && host.resumePipelineAfterPush?.(latest.sha!)) {
       host.assertActive(); await host.release();
-      await verifyPublishedCi(host, latest, ledger); return true;
+      if (!await verifyPublishedCi(host, latest, ledger)) host.resume("流水线监听已恢复，继续当前目标。", undefined, latest);
+      return true;
     }
     if (loop?.kind !== "ci" || loop.state !== "repairing"
         || latest?.input.action !== "trigger_pipeline" || latest.state !== "succeeded"
         || !latest.sha || latest.sha === loop.last_sha
-        || latest.sha !== host.summary.delivery?.git_push?.sha) return false;
+        || latest.sha !== host.summary.delivery?.git_push?.sha
+        || (host.resumePipelineAfterPush && !host.resumePipelineAfterPush(latest.sha))) return false;
     host.assertActive();
     await host.release();
     const response = await getPipelineStatus({ platformUrl: host.platformUrl!, sha: latest.sha,
       repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential });
     host.assertActive();
-    await host.acceptPipeline(latest.sha, confirmedPipelineRun(latest.sha, response));
+    const handedOff = await host.acceptPipeline(latest.sha, observedPipelineRun(latest.sha, response));
+    if (handedOff === false) host.resume("已恢复流水线监听，继续当前目标。", undefined, latest);
     return true;
   }
   host.assertActive();
@@ -345,9 +351,11 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       host.recordPublishedPush?.(receipt);
       operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
       if (host.platformUrl && host.resumePipelineAfterPush?.(receipt.sha)) {
-        await verifyPublishedCi(host, operation, ledger);
-        operation.state = "succeeded"; ledger.update(operation); return true;
+        const handedOff = await verifyPublishedCi(host, operation, ledger);
+        operation.state = "succeeded"; ledger.update(operation);
+        if (handedOff) return true;
       }
+      host.watchPush?.();
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
@@ -378,16 +386,27 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         const recovering = operation.trigger_started;
         operation.trigger_started = true;
         ledger.update(operation);
-        const response = recovering ? await getPipelineStatus(call) : await triggerPipeline(call);
+        let response;
+        try { response = recovering ? await getPipelineStatus(call) : await triggerPipeline(call); }
+        catch (error) {
+          host.assertActive();
+          operation.result = `流水线请求结果尚未核实：${safeMessage(host, error)}。继续查询该 SHA，不重复触发，也不阻塞当前工作。`;
+          operation.state = "failed"; ledger.update(operation);
+          const handedOff = await host.acceptPipeline(operation.sha!, undefined);
+          host.summary.delivery = { ...host.summary.delivery, pipeline: "查询失败，正在重试" }; host.persist();
+          if (handedOff === false) host.resume(operation.result, undefined, operation);
+          return true;
+        }
         host.assertActive();
-        operation.pipeline_receipt = confirmedPipelineRun(operation.sha!, response);
+        operation.pipeline_receipt = observedPipelineRun(operation.sha!, response);
         ledger.update(operation);
       }
       operation.result = `流水线结果（${operation.sha}）：${safeMessage(host, JSON.stringify(operation.pipeline_receipt))}。旧 SHA 告警仅作历史，等待本次验证结果，不要重复修复旧告警。`;
-      await host.acceptPipeline(operation.sha!, operation.pipeline_receipt);
+      if (!operation.pipeline_receipt) operation.result = `已查询提交 ${operation.sha}，尚未发现有效流水线；宿主将继续监听。推送不保证自动触发，MR 尚未创建时可按需要创建 MR。继续当前工作，不要重复修复旧 SHA 告警。`;
+      const handedOff = await host.acceptPipeline(operation.sha!, operation.pipeline_receipt);
       operation.state = "succeeded";
       ledger.update(operation);
-      return true; // 已交给验证/新失败调度，不能再用旧 mission 重启 Agent。
+      if (handedOff !== false) return true; // 正式验证接管；提前验证则继续走下方同一目标续接。
     } else if (input.action === "stop_verification") {
       operation.result = "验证已停止；未跳过测试、未推送，按当前要求继续。";
     } else if (input.action === "restart_session") {
@@ -416,22 +435,30 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
   return true;
 }
 
-async function verifyPublishedCi(host: TaskHostRuntime, operation: HostOperation, ledger: TaskHostLedger): Promise<void> {
+async function verifyPublishedCi(host: TaskHostRuntime, operation: HostOperation, ledger: TaskHostLedger): Promise<boolean> {
   const sha = operation.push_receipt!.sha;
   const call = { platformUrl: host.platformUrl!, sha, repo: host.summary.repo_url,
     mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
   host.assertActive();
   // 先查同 SHA，已有运行不重复触发；触发响应丢失时只查询，不重启旧修复。
-  const observed = await getPipelineStatus(call);
+  let queryError: unknown;
+  const observed = await getPipelineStatus(call).catch(error => { queryError = error; return undefined; });
   host.assertActive();
-  if (observed.runs.length) operation.pipeline_receipt = confirmedPipelineRun(sha, observed);
-  else if (operation.trigger_started) throw new Error(`提交 ${sha} 的流水线触发结果尚未可查询，请稍后重试验证`);
-  else {
+  operation.pipeline_receipt = observed && observedPipelineRun(sha, observed);
+  if (observed && !operation.pipeline_receipt && !operation.trigger_started) {
     operation.trigger_started = true; ledger.update(operation);
-    operation.pipeline_receipt = confirmedPipelineRun(sha, await triggerPipeline(call));
+    const triggered = await triggerPipeline(call).catch(error => { queryError = error; return undefined; });
+    operation.pipeline_receipt = triggered && observedPipelineRun(sha, triggered);
   }
   host.assertActive(); ledger.update(operation);
-  await host.acceptPipeline(sha, operation.pipeline_receipt);
+  const handedOff = (await host.acceptPipeline(sha, operation.pipeline_receipt)) !== false;
+  if (queryError) {
+    host.assertActive();
+    operation.result = `${operation.result ?? "推送已核实"} 流水线请求尚未核实：${safeMessage(host, queryError)}，继续查询，不重复推送或触发。`;
+    ledger.update(operation);
+    host.summary.delivery = { ...host.summary.delivery, pipeline: "查询失败，正在重试" }; host.persist();
+  }
+  return handedOff;
 }
 
 function feedback(host: TaskHostRuntime) {
@@ -544,13 +571,14 @@ export function createTaskHostTools(host: TaskHostRuntime) {
         target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "拉取任务关联仓地址，或引用责任人给出该地址的指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),
-    defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。旧 SHA 结果不用于当前代码。",
+    defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。可在编码中提前验证，宿主监听结果并续接尚未完成的工作。尚无运行记录不等于验证失败，不要反复触发或修复旧 SHA 告警。",
       parameters: Type.Object({ action: Type.Union([Type.Literal("status"), Type.Literal("trigger")]) }),
       execute: async (id: string, input: { action: string }) => guarded(async () => {
         const sha = host.summary.delivery?.git_push?.sha ?? host.summary.delivery?.sha;
         if (!sha || !host.platformUrl) throw new Error("尚无已推送提交或未配置流水线平台");
         const call = { platformUrl: host.platformUrl, sha, repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
-        if (input.action === "status") return confirmedPipelineRun(sha, await getPipelineStatus(call));
+        if (input.action === "status") return observedPipelineRun(sha, await getPipelineStatus(call))
+          ?? { sha, status: "not_found", message: "尚未发现本次提交的有效流水线；不代表运行中或失败。" };
         if (input.action !== "trigger") throw new Error("未知流水线操作");
         return { ...await queueTaskHostOperation(host, id, { action: "trigger_pipeline", reason: "触发当前已推送提交的流水线" }), next: "立即结束本轮，由宿主执行并带回结果；queued 不等于成功。" };
       }) }),
