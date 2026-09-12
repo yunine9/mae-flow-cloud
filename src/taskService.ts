@@ -6369,7 +6369,7 @@ export class TaskService {
     // 没有机器回执,平台无从判断处理完没有(举卡前那道闸要读它)。
     this.ensureReviewsDir(task);
     await this.interrupt(task.summary.id,
-      [text, this.reviewReceiptInstructionsFor(task, picked)].join("\n\n"));
+      [text, this.reviewReceiptInstructionsFor(task, picked)].join("\n\n"), undefined, undefined, "review_batch");
     const sent = this.annotations(task).markSentFor(picked, "interrupt", sentBy);
     return { sent, text };
   }
@@ -11814,6 +11814,7 @@ export class TaskService {
     text: string,
     actor?: string,
     references?: SteerKnowledgeReference[],
+    source: "user" | "review_batch" = "user",
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -11848,7 +11849,8 @@ export class TaskService {
     // 任务也走它。曾经无条件写"[跨仓协作 · x]",单仓插话被模型当成
     // 跨仓消息记进了交付件(spec 里出现"用户跨仓消息补充",MFC-021)。
     // 真正的跨仓同步走 /cross-repository-update,自带跨仓抬头。
-    const requestId = recordTaskHostInstruction(task.summary, combined, actor);
+    // 批注批次含平台生成的回执指令；其用户原文已在 annotations 账中，不能再冒充插话。
+    const requestId = source === "user" ? recordTaskHostInstruction(task.summary, combined, actor) : undefined;
     this.refreshOwnerInputs(task);
     const instructionRef = requestId ? `[责任人指令编号 ${requestId}]\n` : "";
     const delivered = actor

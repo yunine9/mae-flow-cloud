@@ -107,6 +107,24 @@ test('入口拒绝的插话不进入后续决定上下文', async t => {
   assert.deepEqual(taskOwnerInstructions((service as any).taskHostRuntime(task)).map(row => row.id), ['requirement']);
 });
 
+test('批注送达附带的平台回执指令不能冒充责任人插话', async t => {
+  const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), 'owner-review-batch-')), provider: 'test', model: 'test', modelsJson: {}, maxConcurrent: 0 });
+  const id = service.create('虚拟化行为').id;
+  const task = (service as any).tasks.get(id);
+  t.after(async () => { task.driver = undefined; await service.shutdown(); });
+  task.summary.status = 'running';
+  let delivered = '';
+  task.driver = { steer: async (text: string) => { delivered = text; } };
+  const store = (service as any).annotations(task) as AnnotationStore;
+  const item = store.add({ author: '本地用户', file: 'spec.md', artifact: 'spec', line: 1, anchor: 'BEH-4', note: '执行 queryENE.sh', kind: 'doc' });
+  const result = await service.sendAnnotations(id, [item.id], '本地用户');
+  assert.deepEqual(result.sent, [item.id]);
+  assert.match(delivered, /queryENE.sh/);
+  const rows = taskOwnerInstructions((service as any).taskHostRuntime(task));
+  assert.equal(rows.filter(row => row.source === 'message').length, 1, '原始需求之外没有伪造的用户插话');
+  assert.equal(rows.filter(row => row.source === 'review').length, 1);
+});
+
 test('协作者决定和未完成卡不取得责任人身份；阅读副本不可写也不形成门禁', () => {
   const rows = collectOwnerInstructions('owner', [], [{ status: 'resolved', decided_by: 'other', question: {}, decision: '建议修改', waiting_id: 'other-1', resolved_at: '2026-09-12T00:00:00Z' } as any, { status: 'waiting' } as any]);
   assert.equal(rows.length, 1); assert.equal(rows[0].actor, 'other'); assert.equal(rows[0].source, 'collaborator_decision');
