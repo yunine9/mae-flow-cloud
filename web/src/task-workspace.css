@@ -521,22 +521,8 @@
    surface 底 + 发丝线 + 12px 圆角;题头 48px、surface-2 底、左标题右动作。
    可折叠的用 <details>,收起时题头就是整块。 */
 
-.task-workspace-v2 .ws-activity-section,
-.task-workspace-v2 .ws-activity-disclosure {
-  margin: 20px 0 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
 
-.task-workspace-v2 .ws-activity-section > header small { flex: none; color: var(--faint); font-size: var(--fs-12); }
 
-.task-workspace-v2 .ws-activity-disclosure > div {
-  padding: 16px 18px 20px;
-  border: 0;
-  background: transparent;
-}
 
 /* ── 当前:一眼看清发生了什么、要不要我、下一步 ───────────────────── */
 
@@ -923,58 +909,9 @@
   margin: 0 auto;
 }
 .task-workspace-v2 .ws-execution-view > :first-child { margin-top: 0; }
-.task-workspace-v2 .ws-activity-section { margin: 20px auto 0; }
-.task-workspace-v2 .ws-activity-section > header > div { gap: 2px 10px; }
-.task-workspace-v2 .ws-activity-disclosure { margin: 12px auto 0; }
-.task-workspace-v2 .ws-activity-section + .ws-activity-disclosure { margin-top: 20px; }
 
 /* 面板里的遗留组件:去掉它们自带的外框,只留内容。 */
-.task-workspace-v2 .ws-activity-section > .utility-panel,
-.task-workspace-v2 .ws-activity-section .utility-panel { margin: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
-.task-workspace-v2 .ws-activity-section .utility-panel:last-child { border-bottom: 0; }
 /* 组件自己的折叠头藏起来,面板题头替它点(TaskWorkspace.toggleActivitySection)。 */
-.task-workspace-v2 .ws-activity-section > .utility-panel > .utility-toggle { display: none; }
-.task-workspace-v2 .ws-activity-section > header { cursor: pointer; user-select: none; }
-.task-workspace-v2 .ws-activity-section > header:hover { background: var(--surface-3); }
-.task-workspace-v2 .ws-activity-section > header:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.task-workspace-v2 .ws-activity-section > header > i {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  margin: -3px 8px 0 4px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: rotate(45deg);
-  transition: transform var(--ease);
-}
-.task-workspace-v2 .ws-activity-section:has(> .utility-panel.is-open) > header > i { transform: rotate(225deg); margin-top: 3px; }
-.task-workspace-v2 .ws-activity-section:not(:has(> .utility-panel.is-open)) > header { border-bottom: 0; }
-.task-workspace-v2 .ws-activity-section .utility-panel > summary { min-height: 44px; padding: 8px 18px; border-bottom: 1px solid var(--line); }
-.task-workspace-v2 .ws-activity-section .utility-note { padding: 14px 18px; }
-.task-workspace-v2 .ws-activity-section .cost { padding: 16px 18px 18px; gap: 14px; }
-.task-workspace-v2 .ws-activity-section .cost-focus {
-  min-height: 0;
-  padding: 12px 14px;
-  border: 0;
-  border-left: 3px solid var(--success);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  background: var(--surface-2);
-}
-.task-workspace-v2 .ws-activity-section .cost-focus.blocked { border-left-color: var(--attention); background: var(--attention-soft); }
-.task-workspace-v2 .ws-activity-section .cost-focus-copy > span { color: var(--muted); font-size: var(--fs-12); font-weight: 500; }
-.task-workspace-v2 .ws-activity-section .cost-focus.blocked .cost-focus-copy > span { color: var(--attention); }
-.task-workspace-v2 .ws-activity-section .cost-focus-copy > strong { font-size: var(--fs-14); font-weight: 600; }
-.task-workspace-v2 .ws-activity-section .cost-focus-number strong { font-size: var(--fs-20); font-weight: 600; }
-.task-workspace-v2 .ws-activity-section .cost-metrics { border-color: var(--line); border-radius: var(--radius); }
-.task-workspace-v2 .ws-activity-section .cost-bar .machine { background: var(--active); }
-.task-workspace-v2 .ws-activity-section .cost-legend i.machine { background: var(--active); }
-.task-workspace-v2 .ws-activity-section .timeline { padding: 4px 18px 12px; }
-.task-workspace-v2 .ws-activity-section .event-filters { padding: 10px 18px; background: var(--surface); }
-.task-workspace-v2 .ws-activity-section .event-stream { padding: 12px 18px 16px; background: var(--surface-2); }
-.task-workspace-v2 .ws-activity-section .event-record { border-color: var(--line); border-radius: var(--radius); }
-.task-workspace-v2 .ws-activity-section .event-record > header { background: var(--surface); }
-.task-workspace-v2 .ws-activity-section .event-record.agent .event-record-dot { background: var(--active); }
-.task-workspace-v2 .ws-activity-section .execution-body { background: transparent; }
 /* #217:.ws-alert.ws-plan-alert(活方案对拍告警)零消费者已拆除;
  * 警示语义统一由 <Alert destructive> 承担。 */
 .task-workspace-v2 .ws-insight-empty { padding: 4px 0; color: var(--muted); font-size: var(--fs-13); }
@@ -1023,8 +960,7 @@
   font-weight: 500;
 }
 .task-workspace-v2 .workspace-review-invite-action > button:disabled { opacity: .5; }
-.task-workspace-v2 .committer-empty,
-.task-workspace-v2 .committer-result { color: var(--muted); font-size: var(--fs-13); }
+.task-workspace-v2 .committer-result{ color: var(--muted); font-size: var(--fs-13); }
 .task-workspace-v2 .workspace-review-invite-history { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
 .task-workspace-v2 .workspace-review-invite-history > span { display: flex; align-items: center; gap: 8px; font-size: var(--fs-13); }
 .task-workspace-v2 .workspace-review-invite-history i { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
@@ -1101,8 +1037,7 @@
   .task-workspace-v2 .ws-doc { padding: 20px 16px 48px; }
   .task-workspace-v2 .push-review-scope { padding-inline: 16px; }
   .task-workspace-v2 .ws-execution-view { padding: 16px 12px 48px; }
-  .task-workspace-v2 .ws-activity-section > header > small { display: none; }
-  .task-workspace-v2 .workspace-review-dialog-actions .workspace-review-invite-button {
+    .task-workspace-v2 .workspace-review-dialog-actions .workspace-review-invite-button {
     width: 28px;
     padding: 0;
     justify-content: center;

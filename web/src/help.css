@@ -1,11 +1,5 @@
 @layer legacy {
 /* 使用帮助是独立信息界面，不把长文章样式继续塞进全站热点 style.css。 */
-.sidebar-help-entry {
-  margin-bottom: 2px;
-  padding-top: 6px;
-  border-top: 1px solid var(--line);
-}
-
 .help-center {
   --help-ink: var(--text-strong);
   display: grid;

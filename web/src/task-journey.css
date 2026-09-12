@@ -19,14 +19,12 @@
 .journey-entry::before { content: ""; position: absolute; top: 29px; bottom: 0; left: 13px; width: 1px; background: var(--line); }
 .journey-entry:last-child::before { display: none; }
 .journey-entry-mark { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: 17px; }
-.journey-entry.is-message .journey-entry-mark { background: var(--accent); color: white; border-color: var(--accent); font: 600 12px var(--font-mono); box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 18%, transparent); }
 .journey-entry.danger .journey-entry-mark { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, var(--line)); }
 .journey-entry.success .journey-entry-mark { color: var(--success, #26856a); }
 .journey-entry.attention .journey-entry-mark { color: var(--amber, #ad7b26); }
 .journey-entry > article { min-width: 0; padding-top: 4px; }
 .journey-event-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; line-height: 20px; }
 .journey-event-meta strong { color: var(--muted); font-weight: 500; }
-.journey-entry.is-message .journey-event-meta strong { color: var(--accent); font-weight: 600; }
 .journey-event-meta time { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .journey-entry > article > h4 { margin: 6px 0; font-size: 15px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
 .journey-detail { margin-top: 8px; }
