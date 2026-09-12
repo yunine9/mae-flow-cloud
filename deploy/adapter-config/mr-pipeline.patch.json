@@ -111,7 +111,8 @@
       "@REPO_DIR@/deploy/adapter-tools/pipeline-artifacts.sh",
       "{repo_path}",
       "{sha}",
-      "{token}"
+      "{token}",
+      "{mr}"
     ],
     "fields": {
       "name": {

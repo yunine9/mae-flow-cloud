@@ -4,6 +4,8 @@ node_modules/
 .tasks/
 .local/
 .pilot/
+.pi/
+.agents/
 .ui-fixtures/
 web/dist/
 web/*.tsbuildinfo

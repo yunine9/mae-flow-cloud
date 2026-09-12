@@ -412,7 +412,13 @@ def resolve_mr(data: PipelineData, ctx: Context) -> None:
 
 
 def require_pipeline_identity(data, value, *, bound_pipeline=False):
-    """MR 的最新结果可能仍属于上个提交；请求里的 SHA 本身不是证据。"""
+    """MR 的最新结果可能仍属于上个提交；请求里的 SHA 本身不是证据。
+
+    仅适用于返回 GitLab MR 结构(含 sha/commit_id/pipeline_id)的端点——
+    actual_head_pipeline、REST pipelines?sha= 等。CodeCCP 质量端点
+    (get_mr_pipeline_info/query_mr_info)返回 {pipelineStatus, defects}，
+    天然没有版本字段，由 require_codeccp_identity 单独把关。
+    """
     row = unwrap_data(value)
     if not isinstance(row, dict) or row.get('is_valid') is False:
         raise StrategySkipped('流水线材料未提供有效的版本归属')
@@ -432,6 +438,29 @@ def require_pipeline_identity(data, value, *, bound_pipeline=False):
     raise StrategySkipped('材料缺少可核验的 SHA 或已绑定流水线 ID，不作为本版失败证据')
 
 
+def require_codeccp_identity(data, value):
+    """CodeCCP 质量端点(get_mr_pipeline_info/query_mr_info)的版本归属把关。
+
+    这些端点按 MR URL 查询，返回 {pipelineStatus, defects}，天然没有
+    sha/pipeline_id 字段——拿 GitLab MR 字段去 guard 永远 skip(实测
+    b4141066 踩坑：用 require_pipeline_identity 检查 CodeCCP 质量信息，
+    pipeline-info/codecheck 从 9-12 起全 skip，build-logs 拿不到
+    record_ids 全 failed)。版本归属改由前置的 pipeline-detail 确认：
+    它跑通时 data.commit_id==data.sha，说明 MR HEAD 与请求 SHA 一致；
+    此时 CodeCCP 质量信息自然属于本版本。pipeline-detail 没确认过
+    版本时(commit_id!=sha)，CodeCCP 材料可能属于上个提交，如实 skip。
+    """
+    if data.commit_id != data.sha or data.pipeline_id is None:
+        raise StrategySkipped(
+            'CodeCCP 质量材料缺乏前置版本确认(pipeline-detail 未核验本 SHA)，'
+            '不作为本版失败证据')
+    row = unwrap_data(value)
+    if not isinstance(row, dict) or row.get('is_valid') is False:
+        raise StrategySkipped('CodeCCP 质量材料未提供有效内容')
+    if not row.get('pipelineStatus') and not row.get('defects'):
+        raise StrategySkipped('CodeCCP 质量材料缺少 pipelineStatus 与 defects')
+
+
 def strategy_pipeline_info(data: PipelineData, ctx: Context) -> None:
     """SSE 网关 get_mr_pipeline_info → pipeline_info.json(无降级)。
 
@@ -443,7 +472,7 @@ def strategy_pipeline_info(data: PipelineData, ctx: Context) -> None:
     info = ctx.sse_client().get_mr_pipeline_info(data.mr_url)
     if not info:
         raise RuntimeError('get_mr_pipeline_info 返回空')
-    require_pipeline_identity(data, info, bound_pipeline=True)
+    require_codeccp_identity(data, info)
     ctx.write_json('pipeline_info.json', info)
     data.defects = info.get('defects', []) or []
     data.ut_job_ids = list(info.get('utJobIds') or [])
@@ -725,7 +754,7 @@ def strategy_codecheck(data: PipelineData, ctx: Context) -> None:
             detail = ctx.mcp_call('codeccp', 'query_mr_info',
                                   {'url': data.mr_url})
             if detail:
-                require_pipeline_identity(data, detail, bound_pipeline=True)
+                require_codeccp_identity(data, detail)
                 ctx.write_json('codecheck_detail.json', detail)
                 return
         except Exception as error:
