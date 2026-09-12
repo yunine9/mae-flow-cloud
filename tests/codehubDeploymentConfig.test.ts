@@ -68,6 +68,34 @@ test("MR creation and lookup return the same iid, not global id", async () => {
   }
 });
 
+test("deployment discussion query uses CodeHub review list and flattens the first note", async () => {
+  const raw = [{
+    id: "discussion-3384-1",
+    notes: [{
+      updated_at: "2026-09-12T09:30:00Z",
+      position: { new_path: "src/Service.cpp", new_line: 42 },
+      author: { name: "检视人老王" },
+      body: "虚拟化场景应执行 queryENE.sh 获取等效数",
+    }],
+  }];
+  assert.deepEqual(config.mr_discussions.command, [
+    "codehub-cli", "mr", "review", "list", "--host", "yellow",
+    "--project", "{repo}", "{mr}", "--token", "{token}",
+    "--format", "json",
+  ]);
+  await fixture("mr_discussions", raw, async (adapter) => {
+    const result = await adapter.handle("GET", "/mr/discussions", query, {}, {});
+    assert.deepEqual(result.payload, { discussions: [{
+      id: "discussion-3384-1",
+      updated_at: "2026-09-12T09:30:00Z",
+      file: "src/Service.cpp",
+      line: 42,
+      author: "检视人老王",
+      body: "虚拟化场景应执行 queryENE.sh 获取等效数",
+    }] });
+  });
+});
+
 test("portable patch matches full configuration and every script is in this repo", () => {
   const patch = JSON.parse(readFileSync(join(directory, "mr-pipeline.patch.json"), "utf8"));
   const { port, ...endpoints } = config;

@@ -162,6 +162,44 @@
     ],
     "timeout_s": 10
   },
+  "mr_discussions": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "review",
+      "list",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "{mr}",
+      "--token",
+      "{token}",
+      "--format",
+      "json"
+    ],
+    "fields": {
+      "id": {
+        "json": "id"
+      },
+      "updated_at": {
+        "json": "notes.0.updated_at"
+      },
+      "file": {
+        "json": "notes.0.position.new_path"
+      },
+      "line": {
+        "json": "notes.0.position.new_line"
+      },
+      "author": {
+        "json": "notes.0.author.name"
+      },
+      "body": {
+        "json": "notes.0.body"
+      }
+    },
+    "timeout_s": 9
+  },
   "mr_gates": {
     "command": [
       "python3",

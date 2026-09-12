@@ -1,8 +1,8 @@
 # 内网 MR 流水线配置修复
 
 本目录以现场提供的六端点 adapter.json 为基础，修正配置并收编所有本次
-新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的六端点
-补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
+新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的 MR/流水线
+端点补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
 
 ## 内网 Agent 本次只负责部署和验收
 
@@ -43,6 +43,9 @@
   merge_status 或门禁布尔 state 推断。已合入/已关闭无需再查询门禁。
 - 详情 SHA 通过 adapter 的 mr_sha 抽取回传，供已有的合入版本核验使用。
   缺失/无效生命周期、SHA、iid 或查询失败均报错，不伪装 opened。
+- mr_discussions 使用 `codehub-cli mr review list` 查询未解决检视意见，
+  从每条 discussion 的 `notes[0]` 提取正文、作者、文件、行号与更新时间。
+  配置进入生产和测试 adapter 后，持续检视不再因端点缺席反复收到 404。
 - gate 整体预算 8 秒，adapter 超时 9 秒，与宿主 10 秒查询预算对齐。
 
 `mr-gates.py` 不是重跑脚本：它仅组合两个已有查询的字段。配置、查询桥、
