@@ -144,9 +144,11 @@ function fromEvents(workspace: string): TimelineEntry[] {
         entries.push({
           ts,
           kind: "session",
-          title: payload.resume ? "重建会话续跑" : "开始执行",
+          title: payload.resume ? (payload.context_restored ? "恢复原会话上下文" : "依据现场重建会话") : "开始执行",
           detail: payload.resume
-            ? "此前对话不在上下文里,以内核当前步骤为锚继续。"
+            ? (payload.context_restored
+              ? `已恢复 ${Number(payload.restored_messages) || 0} 条上下文消息，继续未完成工作；已完成工具结果可复用。`
+              : payload.recovery_reason || "原会话上下文不可用，依据已有文件、决定和流程事实恢复。")
             : undefined,
           tone: "info",
         });

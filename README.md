@@ -2066,9 +2066,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   构建缓存和 C++ 同级 SDK/父子拓扑。失败直接落为 environment_error，
   不消耗模型去 curl 盲找仓库；Host Git 的可执行 helper 已移到数据目录下
   0700 私有运行区，因此宿主 `/tmp` 可保持 noexec;
-- 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
-  重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
-  inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);
+- 运行连续性：[独立执行服务与 Pi 会话恢复](docs/execution-continuity.md)。
+  配置独立 runtime 后，Web/API 入口重启不终止 Pi、命令和任务容器；
+  执行器自身重启时恢复 Pi 原生消息、工具结果与压缩摘要，并核对最新决定。
+  老任务没有原生会话文件时明确降级为依据现场恢复，不声称恢复了旧上下文；
 - x86_64 Linux 构建容器的历史实验同样曾验证通过(2026-08-14)，仅保留
   为迁移记录，不作为内网部署前置或 Cloud 质量证据;
 - PostgreSQL 投影已接线(projection.ts + serve --pg,主 spec §11):

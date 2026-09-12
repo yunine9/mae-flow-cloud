@@ -14084,9 +14084,9 @@ export class TaskService {
           prompt = [
             requirementForAgent,
             guidance,
-            "云端服务重启,本会话为重建会话:此前对话不在上下文里," +
-            "流程真相以内核状态为准。执行 current 查看当前步骤;" +
-            "此前向用户的提问均已答复并录入台账(执行 messages 查看)," +
+            "执行会话继续，原上下文是否恢复以宿主的会话恢复说明为准。" +
+            "流程真相以内核状态为准。执行 current 核对当前步骤，不重做已经完成的工作;" +
+            "已登记的用户答复直接沿用(执行 messages 查看)，仍待答复的问题保留;" +
             (continuingFeedback
               ? "不要重复提问;沿用现有现场完成本轮反馈并交还宿主验证。"
               : "不要重复提问;继续推进首次交付流程。"),
@@ -14346,6 +14346,7 @@ export class TaskService {
           (event) => this.bypass(
             task, "投影事件", this.options.projection?.appendEvent(event))),
         transcript: new TranscriptStore(transcriptPath, "main"),
+        resumeSession: task.resume === true && (resuming || !this.options.host),
         gate: new GateService({
           contract: analysisOnly
             ? createRequirementAnalysisGateContract(

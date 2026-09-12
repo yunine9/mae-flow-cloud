@@ -521,7 +521,7 @@ test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发�
   const tools = readFileSync(join(process.cwd(), "src/memoryTools.ts"), "utf-8");
   assert.match(tools, /name: "corpus_search"/);
   assert.doesNotMatch(tools, /repo: Type\./, "repo 由宿主固定,Agent 传不了");
-  const serve = readFileSync(join(process.cwd(), "src/serve.ts"), "utf-8");
+  const serve = readFileSync(join(process.cwd(), "src/executionRuntime.ts"), "utf-8");
   assert.match(serve, /flag\("--memsearch"\)/);
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
   assert.match(footprint, /这单用到的/);

@@ -640,8 +640,8 @@ interface LiveIssue {
    *  新号,外层回合收口见号易主即让位——互斥位与并发额度因此横跨整条
    *  延续链,而不是在催办一开始就裸奔。 */
   turnToken?: number;
-  /** 回合前压缩的水位:上次压缩时的事件账序号。内存态——重启后首次
-   *  续跑走重建会话(新上下文),不需要压缩,水位清零无妨。 */
+  /** 回合前压缩水位保留在内存；重启时 Pi 自带压缩摘要和容量保护，
+   *  后续续聊重新建立事件水位，不影响原生上下文恢复。 */
   lastCompactEventId?: number;
 }
 
@@ -1767,7 +1767,7 @@ export class IssueFlowService {
 
   /** 回合前压缩的唯一咽喉(票 01/02):只挂在续聊回合把话递进在场
    *  会话之前——挂起通道(resumeWithDecision 原地续跑)与重启重建
-   *  (startResume 新上下文)结构性不经过这里。两路:
+   *  (startResume 恢复原生上下文，由 Pi 容量保护)不经过这里。两路:
    *  - 边界路(analysis_confirm 确认进 fix):必压,不受阈值管辖;
    *  - 阈值路:管理页旋钮 issue_compact_every_events 优先,缺席退
    *    部署旗 compactEveryEvents,再缺省 0=关,行为与现状全等。
@@ -3069,6 +3069,7 @@ export class IssueFlowService {
       model: model.model,
       eventLog: new EventLog(join(live.root, "events.jsonl"), undefined, this.log),
       transcript: new TranscriptStore(join(live.root, "transcript.jsonl"), "main"),
+      resumeSession: true,
       gate: new GateService({
         // 问题会话的可达边界=整个会话工作区(代码仓 + local-logs +
         // issue-analysis.md 都在里面)。台账类文件由 GateService 的

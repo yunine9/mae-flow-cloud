@@ -145,8 +145,8 @@ test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口
 });
 
 test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", async () => {
-  // Cloud 没有本地质量执行形态。重建/修复会话没有旧上下文，漏带一次
-  // 就可能越过宿主能力边界，所以断言两个会话都看到了同一份契约。
+  // 恢复会保留旧上下文，但最新执行契约与修复使命仍须重新下发，
+  // 检查最近的用户文本，不能把历史第一条开场当成当前输入。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed");
@@ -170,17 +170,18 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
   try {
     const id = service.create("交付 REQ9:流水线代行").id;
     await until(() => service.get(id)!.status === "await_merge", "修复后全绿");
-    const firstUser = (at: number) => JSON.stringify(
+    const latestUser = (at: number) => JSON.stringify(
       ((model.requests[at] as any).messages ?? [])
-        .filter((m: any) => m.role === "user")[0]?.content ?? "");
+        .filter((m: any) => m.role === "user" && (typeof m.content === "string"
+          || m.content?.some((block: any) => block.type === "text"))).at(-1)?.content ?? "");
     // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
-    assert.match(firstUser(0), /Cloud 执行契约/);
-    assert.match(firstUser(2), /Cloud 执行契约/);
-    assert.match(firstUser(2), /分别如实记录.*不能互相冒充/);
-    assert.match(firstUser(2), /无需先修完所有旧问题/);
-    assert.doesNotMatch(firstUser(2), /也不要 push/);
-    assert.match(firstUser(2), /不要编造命令、结果、数量或绿灯/);
-    assert.match(firstUser(2), /当前目标是处理本轮流水线失败/, "修复使命也在场");
+    assert.match(latestUser(0), /Cloud 执行契约/);
+    assert.match(latestUser(2), /Cloud 执行契约/);
+    assert.match(latestUser(2), /分别如实记录.*不能互相冒充/);
+    assert.match(latestUser(2), /无需先修完所有旧问题/);
+    assert.doesNotMatch(latestUser(2), /也不要 push/);
+    assert.match(latestUser(2), /不要编造命令、结果、数量或绿灯/);
+    assert.match(latestUser(2), /当前目标是处理本轮流水线失败/, "修复使命也在场");
   } finally {
     await model.stop();
     await platform.stop();

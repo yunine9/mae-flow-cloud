@@ -17,7 +17,8 @@
     "ui:preview": "MAE_FLOW_UI_FIXTURE_MODE=1 tsx src/serve.ts --data .ui-fixtures --port 8838",
     "serve": "tsx src/serve.ts",
     "adapter": "tsx src/platformAdapter.ts",
-    "pilot": "tsx src/pilot.ts"
+    "pilot": "tsx src/pilot.ts",
+    "runtime": "tsx src/executionRuntime.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",

@@ -1,4 +1,5 @@
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
+import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
 /**
  * 进程内会话驱动(详设 §7 pi_session 的 TS 形态)。
  *
@@ -18,7 +19,6 @@ import {
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
-  SessionManager,
   createEditToolDefinition,
   createWriteToolDefinition,
   type BashOperations,
@@ -345,6 +345,8 @@ export interface CloudSessionOptions {
   streamBashOutput?: boolean;
   /** 同一任务事件账里的会话身份；缺省 main，旁路助手使用独立身份。 */
   sessionId?: string;
+  /** 继续同一执行会话时打开明确绑定的原生记录；新任务/独立专项仍建立新会话。 */
+  resumeSession?: boolean;
   currentStep?: () => string;
   /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
@@ -491,6 +493,7 @@ export class CloudSession {
    * 一句旁白(cross-glm53-20260906c 实锤,连派两次各白等 5 分钟)。 */
   private modelErrors = new Map<string, string>();
   private childCount = 0;
+  private checkpoint?: SessionCheckpoint;
   private childSessions = new Map<string, any>();
   private pendingKernel = new Set<Promise<void>>();
   private kernelFailures: string[] = [];
@@ -551,17 +554,26 @@ export class CloudSession {
   // ---- 生命周期 ----
 
   async start(userMessage: string): Promise<Outcome> {
+    if (this.checkpoint?.restored) return this.startResume(userMessage);
     this.emit("session_started", this.sessionId, { resume: false });
     return this.turnWithRepairs(userMessage);
   }
 
-  /** 服务重启后的重建会话:pi 侧上下文不可恢复(inMemory),
-   * 流程真相在内核状态文件与事件日志里——重建会话从内核 current
-   * 续跑,这正是"裁决源在工作区"的红利。 */
+  /** 恢复原生上下文并补齐中断回执；流程与授权仍以宿主最新事实为准。 */
   async startResume(userMessage: string): Promise<Outcome> {
     await this.reconcileInterruptedWork();
-    this.emit("session_started", this.sessionId, { resume: true });
-    return this.turnWithRepairs(userMessage);
+    if (this.checkpoint?.restored) {
+      restorePendingToolResults(this.checkpoint.manager, this.options.eventLog.replay(), this.sessionId);
+      this.session.agent.state.messages = this.checkpoint.manager.buildSessionContext().messages;
+    }
+    this.emit("session_started", this.sessionId, { resume: true,
+      context_restored: Boolean(this.checkpoint?.restored),
+      restored_messages: this.checkpoint?.messageCount ?? 0,
+      recovery_reason: this.checkpoint?.reason });
+    const continuity = this.checkpoint?.restored
+      ? "原 Pi 会话上下文已恢复（含已返回的工具结果及压缩记录）。从实际未完成处继续，已完成的阅读、分析和子 Agent 报告可复用。"
+      : this.checkpoint?.reason ?? "原 Pi 会话不可用，请依据工作区已有材料和执行记录恢复，勿假定需要从头重做。";
+    return this.turnWithRepairs(`${continuity}\n以宿主本轮下发的最新用户决定、插话和批注为准；与历史上下文冲突时同步修订文档、测试和实现。旧执行目标不能推翻用户的新决定。current 只用于核对流程事实，不代表要重做整个步骤。未知结果先核实再重试。\n\n${userMessage}`);
   }
 
   /** Close the lifecycle gap left by a process crash.
@@ -572,6 +584,10 @@ export class CloudSession {
    * lets the new session consult the kernel current step and retry normally. */
   private async reconcileInterruptedWork(): Promise<void> {
     const events = this.options.eventLog.replay();
+    const nativeResults = new Map<string, any>();
+    if (this.checkpoint?.restored) for (const message of this.checkpoint.manager.buildSessionContext().messages as any[]) {
+      if (message.role === "toolResult") nativeResults.set(message.toolCallId, message);
+    }
     for (const event of events) {
       if (event.kind !== "agent_spawned") continue;
       const payload = event.payload as Record<string, any>;
@@ -600,9 +616,11 @@ export class CloudSession {
         const name = String(payload.name ?? "");
         if (!callId || name === "AskUserQuestion"
             || finishedTools.has(`${event.sessionId}:${callId}`)) continue;
+        const native = event.sessionId === this.sessionId ? nativeResults.get(callId) : undefined;
         const interrupted = this.emit("tool_finished", event.sessionId, {
-          call_id: callId, name, input: payload.input ?? {}, is_error: true,
-          result: "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记",
+          call_id: callId, name, input: payload.input ?? {}, is_error: native ? Boolean(native.isError) : true,
+          result: native ? native.content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n")
+            : "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记；先核实实际结果再决定是否重试",
         });
         this.trackKernelHook(this.options.hostHooks?.postTool?.(interrupted));
       }
@@ -1347,6 +1365,11 @@ export class CloudSession {
           onTokenUsage: this.options.onTokenUsage,
         })]
       : [];
+    const checkpoint = openSessionCheckpoint({ taskId: this.options.taskId,
+      sessionId: config.sessionId, transcriptPath: this.options.transcript.mainPath,
+      agentDir, cwd: workspace, resume: config.sessionId === this.sessionId && this.options.resumeSession === true,
+      log: this.options.log });
+    if (config.sessionId === this.sessionId) this.checkpoint = checkpoint;
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -1361,7 +1384,7 @@ export class CloudSession {
         ...ownedFileTools,
         ...isolatedTools,
       ] as any,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: checkpoint.manager,
     });
     // 被动保底:接近上下文上限时 pi 自动压缩(主动压缩另有节奏,
     // 见 compactAnchored/TaskService.maybeCompact)。

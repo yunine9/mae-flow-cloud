@@ -106,7 +106,7 @@ test("排队展示不触发内核收据核验，真正调度仍核验同仓同�
 });
 
 test("正式启动入口先监听后恢复，回收不抢在监听之前", () => {
-  const source = readFileSync(join(process.cwd(), "src/serve.ts"), "utf8");
+  const source = readFileSync(join(process.cwd(), "src/executionRuntime.ts"), "utf8");
   assert.ok(source.indexOf("server.listen(port") < source.indexOf("startup.run(restoreTasks"));
   assert.match(source, /const recovered = service\.recover\(\)/);
   assert.ok(source.indexOf("startup.run(restoreTasks") < source.indexOf("setImmediate(() => void sweepStorage())"));
