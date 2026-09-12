@@ -928,7 +928,7 @@ test("失败详情只是个链接:不派 Agent、不扣修复轮次并明确等�
 test("检视意见沿用原交付事实:feedback-open 接续且不换单", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  platform.statusQueue.push("failed", "success"); // 首跑红;修后绿
+  platform.statusQueue.push("failed", "failed", "success"); // 检视交付的新 SHA 仍红，才派 CI 修复
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "李四", body: "这里的空指针要判一下",
