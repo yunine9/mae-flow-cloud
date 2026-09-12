@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const source = readFileSync(resolve("web/src/LaunchWorkspace.tsx"), "utf-8");
-const css = readFileSync(resolve("web/src/style.css"), "utf-8");
 const appSource = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const businessSource = readFileSync(
   resolve("web/src/BusinessModuleLibrary.tsx"), "utf-8");
@@ -13,8 +12,8 @@ const pickerSource = readFileSync(
 const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");
 
 test("自动匹配知识必须展示逐项清单和匹配依据，不能退回只显示数量", () => {
-  const start = source.indexOf(
-    '<section className="launch-form-section launch-task-resources">');
+  // #229 去 legacy 后区块类名退役,锚改用区头文案(文案受控不变)。
+  const start = source.indexOf("仅展示业务知识、工程知识与平台团队 Skill");
   const end = source.indexOf("</details>}", start);
   assert.ok(start >= 0 && end > start, "找不到发起页知识区");
   const section = source.slice(start, end);
@@ -32,12 +31,12 @@ test("发起页只展示 Mae-Flow 平台管理的三类知识，不把仓库内�
   assert.match(source, /平台管理的本任务知识/);
   assert.match(source,
     /仅展示业务知识、工程知识与平台团队 Skill/);
-  assert.match(source, /<header><strong>业务知识<\/strong>/);
-  assert.match(source, /<header><strong>工程知识<\/strong>/);
-  assert.match(source, /<header><strong>平台团队 Skill<\/strong>/);
+  // #229 去 legacy 后分组头带工具类,锚放宽到"header 内的分组标题"。
+  assert.match(source, /<header[^>]*><strong[^>]*>业务知识<\/strong>/);
+  assert.match(source, /<header[^>]*><strong[^>]*>工程知识<\/strong>/);
+  assert.match(source, /<header[^>]*><strong[^>]*>平台团队 Skill<\/strong>/);
 
-  assert.match(source,
-    /className="business-module-picker-note launch-knowledge-boundary-note"/);
+  // 边界注记的排版随 #229 工具类化,消费其文案锚即可(下方已有)。
   assert.match(source,
     /下单页只展示 Mae-Flow 平台管理的业务知识、工程知识和 Skill/);
   assert.match(source,
@@ -69,12 +68,14 @@ test("发起页只展示 Mae-Flow 平台管理的三类知识，不把仓库内�
 });
 
 test("知识多时清单内部滚动，不把发起页无限撑长", () => {
-  assert.match(css,
-    /\.launch-knowledge-list \{[\s\S]*?max-height: 410px;[\s\S]*?overflow: auto;/);
+  // 契约随 #229 迁到清单壳的工具类上(max-h 限高 + 内部滚动)。
+  assert.match(source, /max-h-\[410px\] overflow-auto/);
 });
 
 test("清单行是真实深链，创建时绑定权威指纹且变化后强制刷新", () => {
-  assert.match(source, /<a className="launch-knowledge-row" href=\{href\}/);
+  // 行壳类名退役后,锚对准知识行组件的深链锚点(<a> + href 直传)。
+  assert.match(source, /<a className="grid w-full min-h-\[62px\]/);
+  assert.match(source, /href=\{href\}/);
   assert.match(source, /href=\{knowledgeAssetPath\(/);
   assert.match(source,
     /knowledgePreviewDigest: knowledgePreview\?\.selection_digest/);
@@ -103,7 +104,7 @@ test("查看全文前保存技术画像草稿，返回根路径恢复来源视�
 
 test("仓库技术栈是新任务必填项，直接跟随交付仓且不能藏在按需配置里", () => {
   const picker = source.indexOf("<RepositoryTechnologyPicker");
-  const advanced = source.indexOf('<details className="launch-advanced"');
+  const advanced = source.indexOf('<details className="group col-span-full');
   assert.ok(picker >= 0 && advanced > picker,
     "技术栈选择应在交付定位中先出现，不能藏进按需配置");
   assert.match(source, /repositoryTechnologyBlocked/);
