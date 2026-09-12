@@ -152,6 +152,17 @@
       "json": "0.iid"
     }
   },
+  "mr_discover": {
+    "command": [
+      "python3",
+      "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-discover.py",
+      "{repo_path}",
+      "{source_branch}",
+      "{target_branch}",
+      "{token}"
+    ],
+    "timeout_s": 10
+  },
   "mr_gates": {
     "command": [
       "python3",

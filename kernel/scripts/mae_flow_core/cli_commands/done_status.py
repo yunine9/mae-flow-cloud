@@ -60,6 +60,11 @@ def _done_validate_choice_and_ack(step, st, args, sid):
         # same bound identifier; no Agent loop through current/reasoning is
         # needed merely to mint another identifier.
         if st.get("approval_subject") != previous_subject:
+            if not ok and (st.get("approval_subject") or {}).get("id"):
+                st["approval_request"] = {
+                    "step": sid,
+                    "subject_id": st["approval_subject"]["id"],
+                }
             api.save_state(st)
         if not ok:
             api.die(why, 2)
@@ -149,6 +154,7 @@ def _done_resolve_moonlight_branch(flow, st, sid):
 
 
 def _done_finalize(flow, st, args, sid, step):
+    st.pop("approval_request", None)
     for event in workflow_completion.completion_events(
             sid, step, st, args.choice, args.ack or ""):
         if event.kind == "resolve_moonlight":

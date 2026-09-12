@@ -11,7 +11,8 @@ export interface OverallStoryStatus {
   sources: Source[]; pending_reviews: number; can_confirm: boolean;
   revisions: Array<{ id: string; at: string; by: string; additions: number; deletions: number }>;
   confirmed?: { revision: string; by: string; at: string };
-  job?: { id: string; started_at: string }; error?: string;
+  job?: { id: string; started_at: string; kind?: "architecture" }; error?: string;
+  error_kind?: "story" | "architecture";
 }
 async function requestStory(taskId: string, action = "", body?: object): Promise<OverallStoryStatus> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/overall-story${action}`, body ? {
@@ -84,7 +85,8 @@ export function OverallStoryTools({ taskId, canOperate, canceled, onUpdated, onO
           onClick={() => setExpanded(!expanded)}>来源与版本 {expanded ? "⌃" : "⌄"}</button>
       </div>
     </div>
-    {(error || status?.error) && <p className="overall-story-error" role="alert">{error || status?.error}</p>}
+    {(error || (status?.error_kind !== "architecture" && status?.error))
+      && <p className="overall-story-error" role="alert">{error || status?.error}</p>}
     {expanded && status && <div className="overall-story-detail">
       <p>维护全局设计、模块依赖和验收依据，子任务 Story 提供实现细化与变更反馈。子任务变化只提醒待同步，由责任人主动更新。可在正文划选批注，提交后由 Agent 修改整体 Story，再由意见作者复检。</p>
       <ul className="overall-story-sources">{status.sources.map((s) => <li key={s.id}>

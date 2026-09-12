@@ -259,7 +259,12 @@ def build_unchanged_delivery_manifest(
         )
     ]
     if unexpected:
-        raise ValueError("仍有新增未提交文件: " + "、".join(unexpected))
+        listed = "、".join(unexpected[:20])
+        suffix = " 等 %d 个" % len(unexpected) if len(unexpected) > 20 else ""
+        raise ValueError("仍有新增未提交文件: " + listed + suffix
+                         + "。--unchanged 不是已推送声明；请复用现有清单，或用"
+                         " manifest set --file 列出本次交付文件（可含已提交文件），"
+                         "其余残留保留，无需删除缓存或回退代码。")
 
     return {
         "files": [],

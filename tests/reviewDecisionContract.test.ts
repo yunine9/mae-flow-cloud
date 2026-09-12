@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { TaskService } from "../src/taskService.ts";
 import { HumanGate } from "../src/humanGate.ts";
-import { explicitlyRequestsReviewFeedback, unassignedReviewDraft, isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
+import { explicitlyRequestsReviewFeedback, pendingReviewAnnotation, isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
 import { stepChoiceEffects } from "../src/kernelChoices.ts";
 import { needsDeliverySelection } from "../web/src/decisionSelection.ts";
 
@@ -16,9 +16,9 @@ const raw = { questions: [{ question: "是否按当前范围推送？", options:
 
 test("批注是否待处理只看状态，明确修改意见与暂缓答复分开", () => {
   for (const route of [undefined, "agent", "owner_reply", "owner_decision", "legacy"]) {
-    assert.equal(unassignedReviewDraft({ status: "draft", route }), true);
-    assert.equal(unassignedReviewDraft({ status: "draft", route, owner_reply: {} }), false);
-    assert.equal(unassignedReviewDraft({ status: "verified", route }), false);
+    assert.equal(pendingReviewAnnotation({ status: "draft", route }), true);
+    assert.equal(pendingReviewAnnotation({ status: "draft", route, owner_reply: {} }), false);
+    assert.equal(pendingReviewAnnotation({ status: "verified", route }), false);
   }
   for (const text of ["需要调整,按检视意见继续处理", "处理下当前的检视意见", "按当前检视意见修改"]) {
     assert.equal(explicitlyRequestsReviewFeedback(text), true);
@@ -94,7 +94,7 @@ function fixture(mr = false, cardRaw: Record<string, unknown> = raw, pulseStep =
   return { service, api, task, gate, cwd, git, head, selection };
 }
 
-for (const answer of ["需要调整,按检视意见继续处理", "处理下当前的检视意见", "暂不处理检视意见"]) test(`无内核检视契约的自由举卡：${answer}`, async () => {
+for (const prior of ["draft", "owner_pending"]) for (const answer of ["需要调整,按检视意见继续处理", "处理下当前的检视意见", "暂不处理检视意见"]) test(`无内核检视契约的自由举卡（${prior}）：${answer}`, async () => {
   const question = "Story 联合检视 CLEAR，是否进入编码？";
   const f = fixture(false, { questions: [{ question, options: ["进入编码", answer] }] }, "coding");
   const store = f.api.annotations(f.task);
@@ -107,6 +107,8 @@ for (const answer of ["需要调整,按检视意见继续处理", "处理下当�
   }
   const answered = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "story", file: "story.md", line: 8, anchor: "约定", kind: "doc", note: "责任人已答复内容" });
   await f.service.replyToAnnotation("task-19", answered.id, "owner", "无需修改，等待逐条闭环");
+  if (prior === "owner_pending") store.markSent(ids, "owner_pending");
+  const beforeDecision = readFileSync(store.path, "utf8");
   const card = f.service.get("task-19")!.waiting!;
   await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version,
     actor: "owner", selected_options: { [question]: answer } });
@@ -114,13 +116,17 @@ for (const answer of ["需要调整,按检视意见继续处理", "处理下当�
   const sends = !answer.startsWith("暂不");
   for (const [index, id] of ids.entries()) {
     assert.equal(String(resolved.notes ?? "").includes(`待处理意见${index}`), sends);
-    assert.equal(store.list().find((item: any) => item.id === id).status, sends ? "sent" : "draft");
+    assert.equal(store.list().find((item: any) => item.id === id).status, sends || prior === "owner_pending" ? "sent" : "draft");
+    if (!sends) assert.equal(store.list().find((item: any) => item.id === id).sent_via, prior === "owner_pending" ? prior : undefined);
   }
   assert.doesNotMatch(resolved.notes ?? "", /责任人已答复内容/);
   if (sends) {
     const sentIds = resolved.continuation?.annotation_ids;
     assert.ok(Array.isArray(sentIds));
     assert.deepEqual(new Set(sentIds), new Set(ids));
+    // 决定已落盘、批注尚未投影时进程中断：从真实旧队列重放送达，不能
+    // 仅验证“新草稿已经成功发送后再重启”的正常路径。
+    writeFileSync(store.path, beforeDecision);
     const recovered = new TaskService({ dataDir: f.api.options.dataDir, provider: "unused", model: "unused", modelsJson: {}, maxConcurrent: 0 });
     recovered.recover();
     const projection = await recovered.listAnnotationsAsync("task-19", { username: "owner", can_override: false, can_route_others: true });

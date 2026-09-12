@@ -66,7 +66,7 @@ config = json.loads(source.read_text())
 patch = json.loads((root / 'deploy/adapter-config/mr-pipeline.patch.json').read_text())
 for key, spec in patch.items():
     spec['command'] = [part.replace('@REPO_DIR@', str(root.resolve())) for part in spec['command']]
-    if key in ('pipeline_status', 'pipeline_artifacts', 'mr_gates'):
+    if key in ('pipeline_status', 'pipeline_artifacts', 'mr_gates', 'mr_discover'):
         assert Path(spec['command'][1]).is_file(), spec['command'][1]
     existing = config.get(key, {})
     if key in ('pipeline_status', 'pipeline_artifacts'):

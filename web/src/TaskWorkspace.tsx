@@ -1,5 +1,6 @@
-import { unassignedReviewDraft } from "../../src/reviewDecisionContract";
+import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
+import { RefreshMrButton } from "./RefreshMrButton";
 import { StoryArchitecture } from "./StoryArchitecture";
 import { StoryViewNotice } from "./StoryViewNotice";
 import { STORY_VIEWS, storyViewCoverage } from "../../src/storyViewCoverage";
@@ -1321,7 +1322,7 @@ export function TaskWorkspace({
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
   const queuedIds = queuedDecisionAnnotationIds(notes);
-  const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => unassignedReviewDraft(item)
+  const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => pendingReviewAnnotation(item)
     && !(task.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
@@ -1912,6 +1913,8 @@ export function TaskWorkspace({
             <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />
+            {canOperate && !task.requirement_graph && !["completed", "canceled"].includes(task.status)
+              && <RefreshMrButton key={task.id} taskId={task.id} onChanged={onChanged} />}
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>

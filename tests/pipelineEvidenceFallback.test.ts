@@ -198,7 +198,7 @@ test("工作台批注可回灌缺失报错并自动恢复同一 SHA", async () =
       note: "平台原文：G.FUN.01-CPP，src/main.cpp:42，函数超过 80 行",
       kind: "code",
     });
-    await service.sendAnnotations(task.summary.id, [note.id]);
+    await service.sendAnnotations(task.summary.id, [note.id], "liaoxiang");
     await until(() => task.summary.status === "queued", "人工证据回灌后派修");
     assert.equal(task.summary.delivery.loop.round, 1);
     assert.match(task.mission, /人工从工作台贴回/);
@@ -238,7 +238,7 @@ test("部分证据会话先停下后，晚到人工证据可续同一修复轮",
       note: "平台原文：src/main.cpp:42 命中 G.FUN.01-CPP，函数过长",
       kind: "code",
     });
-    await service.sendAnnotations(task.summary.id, [note.id]);
+    await service.sendAnnotations(task.summary.id, [note.id], "liaoxiang");
     await until(() => task.summary.status === "queued", "晚到证据续修");
     assert.equal(task.summary.delivery.loop.round, 1,
       "补齐原输入不是新失败轮次");

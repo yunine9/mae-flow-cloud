@@ -35,6 +35,25 @@ test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
   assert.match(studio, /\.ws-review-canvas \{[^}]*overflow: auto/s);
 });
 
+test("嵌入工作台的文件树和代码变更各自独立滚动", () => {
+  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  assert.match(studio,
+    /\.workspace-studio\.task-workspace-v2 \.ws-doc\.is-diff\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/s);
+  assert.match(studio,
+    /\.workspace-studio :where\(\.ws-doc\.is-diff > \.annotatable\)\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s,
+    "高度链使用低权重选择器，不再增加工作台覆盖债务");
+  assert.match(studio,
+    /\.workspace-studio \.is-embedded \.git-change-browser\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+  assert.match(studio,
+    /\.workspace-studio \.is-embedded \.change-files\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s,
+    "左侧文件树应拥有自己的纵向滚动区域");
+  assert.match(studio,
+    /\.workspace-studio \.is-embedded \.change-file-detail\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/s);
+  assert.match(studio,
+    /\.workspace-studio \.is-embedded \.diff-review\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0[^}]*overflow:\s*auto/s,
+    "右侧代码区应独立滚动，不再带动文件树");
+});
+
 test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () => {
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.ws-doc \.md\s*\{[^}]*width:\s*min\(1600px, 100%\)/s);

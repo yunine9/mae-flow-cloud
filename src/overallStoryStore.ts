@@ -18,6 +18,8 @@ export interface StoryState {
   confirmed?: { revision: string; by: string; at: string };
   job?: { id: string; started_at: string; by: string; kind?: "architecture"; progress?: string };
   error?: string;
+  /** 失败归属必须跟错误一起持久化，避免架构图错误散落到 Story 等无关界面。 */
+  error_kind?: "story" | "architecture";
 }
 export const storyHash = (content: string) => createHash("sha256").update(content).digest("hex");
 

@@ -1,4 +1,5 @@
 import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
+import { pendingReviewAnnotation } from "./annotationPending.ts";
 /**
  * 反馈闭环的纯领域规则。
  *
@@ -633,11 +634,11 @@ export function annotationClosure(
       bucket: item.status === "verified" ? "closed" : mine && (!waitingForAgent || queuedDecision) ? "mine" : "agent",
       delivery_text: resolution ? `由责任人 ${personName(resolution.by)} 处置` : item.status === "draft" ? "已记下，等待责任人处理" : deliveryTextOf(item, facts, personName),
       verdict_ready: answered, actionable: pending && canManage && (!waitingForAgent || queuedDecision), can_resolve: canResolve, owner_controlled: true,
-      can_delete: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
-      can_edit: canManage && pending && !answered && !item.agent_assigned && (item.status === "draft" || item.sent_via === "owner_pending"),
+      can_delete: canManage && pendingReviewAnnotation(item) && !item.agent_assigned,
+      can_edit: canManage && pendingReviewAnnotation(item) && !item.agent_assigned,
       can_reopen: canManage && (item.status === "verified" || (item.status === "sent" && answered)),
       can_verify: canResolve && (response?.outcome === "fixed" || (item.route === "owner_reply" && !!item.owner_reply)),
-      can_override_verify: false, can_override_drop: false, can_route: canManage && pending && !answered && (item.status === "draft" || item.sent_via === "owner_pending"),
+      can_override_verify: false, can_override_drop: false, can_route: canManage && pendingReviewAnnotation(item),
       needs_clarification: response?.outcome === "needs_clarification", receipt_missing: waitingForAgent && !queuedDecision && mine,
     };
   }

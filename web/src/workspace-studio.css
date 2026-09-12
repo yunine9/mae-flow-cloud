@@ -103,21 +103,68 @@
 .workspace-studio.task-workspace-v2 .ws-document-download { margin: 12px 0 0; flex-shrink: 0; }
 .workspace-studio.task-workspace-v2 .with-documents .ws-doc { grid-column: 2; grid-row: 1; }
 .workspace-studio.task-workspace-v2 .ws-doc { padding: 28px clamp(20px,3vw,44px); background: var(--surface); min-width: 0; }
-.workspace-studio.task-workspace-v2 .ws-doc.is-diff { padding: 0; }
+.workspace-studio.task-workspace-v2 .ws-doc.is-diff {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-studio :where(.ws-doc.is-diff > .annotatable) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .workspace-studio.task-workspace-v2 .ws-doc .md { max-width: var(--doc-measure, 80ch); }
 /* 全屏是为了铺开看:80ch 的阅读宽度在全屏里两边空一大截(用户 2026-09-06
    第二次提)。用变量改量,不再叠更长的选择器去压上面那条。 */
 .materials-fullscreen { --doc-measure: min(120ch, 100%); }
-.workspace-studio .git-change-view.is-embedded { border: 0; border-radius: 0; margin: 0; }
+.workspace-studio .git-change-view.is-embedded {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
 .workspace-studio .is-embedded .git-change-summary { padding: 12px 18px; border-bottom: 1px solid var(--line); }
 .workspace-studio .is-embedded .git-change-summary > div > span { display: none; }
 .workspace-studio .is-embedded .git-change-summary strong { font-size: var(--fs-13); }
-.workspace-studio .is-embedded .git-change-browser { display: grid; grid-template-columns: minmax(150px,min(var(--change-tree-width),24%)) 5px minmax(0,1fr); }
-.workspace-studio .is-embedded .change-files { min-width: 0; background: var(--surface-2); }
-.workspace-studio .is-embedded .change-file-detail { min-width: 0; }
+.workspace-studio .is-embedded .git-change-browser {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(150px,min(var(--change-tree-width),24%)) 5px minmax(0,1fr);
+  overflow: hidden;
+}
+.workspace-studio .is-embedded .change-files {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: var(--surface-2);
+}
+.workspace-studio .is-embedded .change-file-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .workspace-studio .is-embedded .change-file-detail > header { flex-wrap: wrap; }
 .workspace-studio .is-embedded .change-detail-actions { flex-wrap: wrap; }
-.workspace-studio .is-embedded .diff-review { border-radius: 0; border: 0; }
+.workspace-studio .is-embedded .diff-review {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 0;
+  border: 0;
+}
 .workspace-studio .is-embedded .diff-review-row { min-height: 26px; }
 .workspace-studio .is-embedded .change-file-detail > header strong { white-space: normal; overflow-wrap: anywhere; }
 .workspace-studio .is-embedded .delivery-selection-bar { padding: 10px 18px; font-size: var(--fs-12); }
