@@ -2864,6 +2864,13 @@ export function createTaskServer(
           }
           return json(response, 200, service.retry(id, viewer?.username));
         }
+        if (request.method === "POST" && parts[2] === "refresh-mr" && parts.length === 3) {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) return json(response, 403, { error: "只能操作分配给自己的任务" });
+          const body = await readBody(request);
+          return json(response, 200, await service.refreshRemoteDelivery(id, viewer?.username, typeof body.mr_id === "string" ? body.mr_id : undefined));
+        }
         // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
         if (request.method === "POST"
             && ["build-fix", "prepush"].includes(parts[2])

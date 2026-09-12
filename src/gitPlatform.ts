@@ -251,6 +251,12 @@ export class FakeGitPlatform {
             reply(200, this.pipelineStatus(
               url.searchParams.get("sha") ?? "",
               url.searchParams.get("repo") ?? undefined));
+          } else if (request.method === "GET" && url.pathname === "/mr/discover") {
+            const repo = this.repositoryPath(url.searchParams.get("repo") ?? "");
+            reply(200, { mrs: this.mergeRequests.filter(mr => (mr.repo ?? this.barePath) === repo
+              && mr.source_branch === url.searchParams.get("source_branch")
+              && mr.target_branch === url.searchParams.get("target_branch"))
+              .map(mr => ({ id: mr.id, url: mr.url, source_branch: mr.source_branch, target_branch: mr.target_branch })) });
           } else if (request.method === "GET"
               && url.pathname === "/mr/gates") {
             reply(200, this.mergeGates(
