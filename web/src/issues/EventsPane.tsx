@@ -20,6 +20,7 @@ import {
 } from "../eventView";
 import { formatLocalDateTime } from "../time";
 import { useStickyBottom } from "../stickyBottom";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 
 const ISSUE_EVENT_KIND_LABEL: Record<string, string> = {
   session_started: "会话开始",
@@ -110,7 +111,7 @@ function IssueEventRecord({ event, selectedDetail, onInspect }: {
         </time>
       </header>
       {fields.length === 0 ? (
-        <div className="event-record-empty">本事件没有附加内容</div>
+        <Empty className="p-2.5"><EmptyDescription>本事件没有附加内容</EmptyDescription></Empty>
       ) : (
         <dl>
           {fields.map(([field, value]) => (
@@ -218,17 +219,17 @@ export function IssueEventsPane({ id, active }: { id: string; active: boolean })
           </button>
         )}
         {events.length === 0 && (
-          <div className="event-empty">
-            <span aria-hidden />
-            <strong>正在连接问题现场</strong>
-            <small>新的执行动作会实时出现在这里。</small>
-          </div>
+          <Empty className="min-h-[116px]" role="status">
+            <span aria-hidden className="mb-2 size-2 rounded-full bg-success ring-[5px] ring-success-soft" />
+            <EmptyTitle>正在连接问题现场</EmptyTitle>
+            <EmptyDescription>新的执行动作会实时出现在这里。</EmptyDescription>
+          </Empty>
         )}
         {events.length > 0 && filtered.length === 0 && (
-          <div className="event-empty filtered">
-            <strong>这个筛选下没有事件</strong>
-            <small>原始事件没有丢失,可以切回"全部"继续查看。</small>
-          </div>
+          <Empty className="min-h-24" role="status">
+            <EmptyTitle>这个筛选下没有事件</EmptyTitle>
+            <EmptyDescription>原始事件没有丢失,可以切回"全部"继续查看。</EmptyDescription>
+          </Empty>
         )}
         {visible.items.map((event) => (
           <IssueEventRecord event={event} key={event.eventId}

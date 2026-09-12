@@ -1,5 +1,9 @@
 import { PersonName } from "../People";
 import { useMemo, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
 
@@ -49,16 +53,19 @@ export function WorkflowLibrary({
         <span aria-hidden>＋</span>新建工作流</button>}
     </header>
     <div className="wf-library-toolbar">
-      <div className="wf-library-scopes" role="tablist" aria-label="工作流范围">
-        <button type="button" role="tab" aria-selected={scope === "active"}
-          onClick={() => setScope("active")}>当前工作流 <b>{activeCount}</b></button>
-        <button type="button" role="tab" aria-selected={scope === "archived"}
-          onClick={() => setScope("archived")}>已归档 <b>{archivedCount}</b></button>
-      </div>
+      {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语;计数徽标 <b> 与
+          aria-selected 驱动的旧皮肤原样。 */}
+      <Tabs value={scope} className="contents"
+        onValueChange={(value) => setScope(value as "active" | "archived")}>
+        <TabsList aria-label="工作流范围" className="wf-library-scopes h-auto">
+          <TabsTrigger value="active" className="h-auto flex-none">当前工作流 <b>{activeCount}</b></TabsTrigger>
+          <TabsTrigger value="archived" className="h-auto flex-none">已归档 <b>{archivedCount}</b></TabsTrigger>
+        </TabsList>
+      </Tabs>
       <label className="wf-library-search">
         <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="4.5" />
           <path d="m12 12 4 4" /></svg>
-        <input value={query} onChange={(event) => setQuery(event.target.value)}
+        <Input className="w-56" value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索名称、说明或 Owner" aria-label="搜索工作流" />
       </label>
       {onRefresh && <button type="button" className="wf-refresh" disabled={loading}
@@ -74,8 +81,9 @@ export function WorkflowLibrary({
     </div>}
     {warnings.map((warning, index) => <div className="wf-state-banner warning"
       key={`${warning}-${index}`}><strong>部分资产暂不可见</strong><span>{warning}</span></div>)}
-    {loading && !workflows.length ? <div className="wf-library-skeleton" aria-label="正在读取工作流">
-      <i /><i /><i />
+    {loading && !workflows.length ? <div className="grid grid-cols-3 gap-3.5 max-sm:grid-cols-1 max-sm:gap-2" aria-label="正在读取工作流">
+      {/* #218:占位与旧 .wf-library-skeleton 等价——桌面三张 220px 卡,窄屏单列 94px */}
+      <Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" /><Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" /><Skeleton className="h-[220px] rounded-2xl max-sm:h-[94px] max-sm:rounded-lg" />
     </div> : visible.length ? <div className="wf-library-grid">
       {visible.map((workflow) => <article key={workflow.id}
         className={selectedId === workflow.id ? "selected" : ""}>
@@ -105,15 +113,16 @@ export function WorkflowLibrary({
                 onClick={() => onRemoveDraft(workflow)}>删除草稿</button>}</div>
         </footer>
       </article>)}
-    </div> : !loading && !error && <div className="wf-empty large">
-      <strong>{query ? "没有匹配的工作流" : scope === "archived"
-        ? "没有已归档的工作流" : "还没有专业工作流"}</strong>
-      <span>{query ? "换一个关键词试试。" : scope === "archived"
+    </div> : !loading && !error && <Empty className="min-h-[220px]">
+      <EmptyTitle>{query ? "没有匹配的工作流" : scope === "archived"
+        ? "没有已归档的工作流" : "还没有专业工作流"}</EmptyTitle>
+      <EmptyDescription>{query ? "换一个关键词试试。" : scope === "archived"
         ? "删除的草稿和停止使用的方案会保留在这里。"
-        : "普通任务继续使用平台标准方案；有明确编排思路时再创建。"}</span>
-      {!query && scope === "active" && onCreate && <button type="button" className="wf-primary" onClick={onCreate}>
-        创建第一个工作流</button>}
-    </div>}
+        : "普通任务继续使用平台标准方案；有明确编排思路时再创建。"}</EmptyDescription>
+      {!query && scope === "active" && onCreate
+        && <EmptyContent><button type="button" className="wf-primary" onClick={onCreate}>
+        创建第一个工作流</button></EmptyContent>}
+    </Empty>}
   </section>;
 }
 

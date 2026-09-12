@@ -6,6 +6,7 @@ import type {
   WorkflowStandardBase,
   WorkflowStagePlan,
 } from "../api";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import {
   assetKey,
   operationLabels,
@@ -68,10 +69,10 @@ export function WorkflowDiffView({
     <header><div><span>变更清单</span><h3 id="wf-diff-title">相对平台标准方案的精确修改</h3></div>
       <em>{definition.edits.length} 项变更</em>
     </header>
-    {!definition.edits.length ? <div className="wf-empty">
-      <strong>当前与平台标准方案完全一致</strong>
-      <span>保存后仍可作为一个明确版本复用。</span>
-    </div> : <ol className="wf-diff-list">
+    {!definition.edits.length ? <Empty className="py-9">
+      <EmptyTitle>当前与平台标准方案完全一致</EmptyTitle>
+      <EmptyDescription>保存后仍可作为一个明确版本复用。</EmptyDescription>
+    </Empty> : <ol className="wf-diff-list">
       {definition.edits.map((edit) => {
         const stage = base.stages.find((candidate) => candidate.id === edit.stage_id);
         const targetId = "target_id" in edit ? edit.target_id : undefined;
@@ -122,9 +123,10 @@ export function DependencyView({
       下表状态是当前货架的实时可用性。下单时会按任务的仓库/技术栈/业务域
       重新解析并固定到任务里，届时的结果以任务详情为准。
     </p>}
-    {!dependencies.size ? <div className="wf-empty">
-      <strong>没有额外资产依赖</strong><span>当前方案只使用平台标准执行项。</span>
-    </div> : <div className="wf-dependency-table" role="table">
+    {!dependencies.size ? <Empty className="py-9">
+      <EmptyTitle>没有额外资产依赖</EmptyTitle>
+      <EmptyDescription>当前方案只使用平台标准执行项。</EmptyDescription>
+    </Empty> : <div className="wf-dependency-table" role="table">
       <div className="head" role="row"><b>资产</b><b>精确版本</b><b>使用阶段</b><b>状态</b></div>
       {[...dependencies.entries()].map(([key, dependency]) => {
         const asset = catalog.find((candidate) => assetKey(candidate.ref) === key);

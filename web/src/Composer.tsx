@@ -30,6 +30,10 @@ import {
   publishCrossRepositoryUpdate,
 } from "./api";
 import { startVisiblePolling } from "./visiblePolling";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert } from "@/components/Alert";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import "./steer.css";
 
 /** sync=通知所有子任务:只有跨仓子任务有这一档。 */
@@ -359,30 +363,33 @@ export function Composer({
       </div>}
       <div className="ws-composer-ctx" hidden={compactDecision}>
         {!steerOnly && (
-          <div className="ws-composer-modes" role="tablist" aria-label="对谁说">
-            <button type="button" role="tab" aria-selected={!showAssistant}
-              className={!showAssistant ? "on" : ""}
-              disabled={takeoverActive}
-              title={takeoverActive ? "先交回给 Agent" : undefined}
-              onClick={() => { modePicked.current = true; setMode("steer"); }}>
-              说给 Agent
-            </button>
-            <button type="button" role="tab" aria-selected={showAssistant}
-              className={showAssistant ? "on" : ""}
-              title={assistantAvailable || takeoverActive ? "你自己接手：查代码、跑命令、改文件"
-                : assistant.availability.reason}
-              onClick={() => { modePicked.current = true; setMode("assistant"); }}>
-              我来接手
-            </button>
-            {crossRepository && (
-              <button type="button" role="tab" aria-selected={showSync}
-                className={showSync ? "on" : ""}
-                title="接口或约定变了,告诉依赖你或你依赖的仓库"
-                onClick={() => { modePicked.current = true; setMode("sync"); }}>
-                通知所有子任务
-              </button>
-            )}
-          </div>
+          /* (#210)手搓 role=tablist 换 base-ui Tabs 原语;选中值由
+              mode 派生(原 aria-selected 语义:!showAssistant→说给
+              Agent),切换回调(modePicked + setMode)原样。 */
+          <Tabs className="contents"
+            value={showAssistant ? "assistant" : showSync ? "sync" : "steer"}
+            onValueChange={(value) => { modePicked.current = true; setMode(value as "steer" | "assistant" | "sync"); }}>
+            <TabsList variant="line" aria-label="对谁说" className="ws-composer-modes h-auto">
+              <TabsTrigger value="steer" disabled={takeoverActive}
+                title={takeoverActive ? "先交回给 Agent" : undefined}
+                className={`h-auto flex-none after:hidden${!showAssistant ? " on" : ""}`}>
+                说给 Agent
+              </TabsTrigger>
+              <TabsTrigger value="assistant"
+                title={assistantAvailable || takeoverActive ? "你自己接手：查代码、跑命令、改文件"
+                  : assistant.availability.reason}
+                className={`h-auto flex-none after:hidden${showAssistant ? " on" : ""}`}>
+                我来接手
+              </TabsTrigger>
+              {crossRepository && (
+                <TabsTrigger value="sync"
+                  title="接口或约定变了,告诉依赖你或你依赖的仓库"
+                  className={`h-auto flex-none after:hidden${showSync ? " on" : ""}`}>
+                  通知所有子任务
+                </TabsTrigger>
+              )}
+            </TabsList>
+          </Tabs>
         )}
         {showAssistant ? (
           <>
@@ -433,7 +440,7 @@ export function Composer({
 
       {showSync && (
         <>
-          <textarea id={`sync-${task.id}`} className="steer-input"
+          <Textarea id={`sync-${task.id}`} className="min-h-13 resize-y bg-surface"
             value={syncText} disabled={syncBusy} rows={3}
             placeholder="说清楚:哪个接口或约定变了,影响什么,哪里还需要谁确认…"
             onChange={(event) => { setSyncText(event.target.value); if (syncFeedback) setSyncFeedback(""); }}
@@ -460,7 +467,7 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <textarea id={`steer-${task.id}`} className="steer-input"
+          <Textarea id={`steer-${task.id}`} className="min-h-13 resize-y bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}
@@ -511,7 +518,7 @@ export function Composer({
           </div>
           {refPickerOpen && <div className="steer-ref-picker"
             aria-label="选择要引用的知识">
-            <input type="text" value={refFilter} placeholder="筛选…"
+            <Input className="text-sm" type="text" value={refFilter} placeholder="筛选…"
               onChange={(event) => setRefFilter(event.target.value)} />
             {!refOptions && <small>读取知识清单…</small>}
             {refOptions && (() => {
@@ -623,7 +630,7 @@ export function Composer({
             </div>
           )}
 
-          <textarea id={`assistant-${task.id}`} className="steer-input cli"
+          <Textarea id={`assistant-${task.id}`} className="min-h-13 resize-y bg-surface font-mono text-sm"
             value={assistantText}
             disabled={assistantRequestBusy || !assistantAvailable
               || assistant.state === "returning"}
@@ -669,7 +676,7 @@ export function Composer({
         </>
       )}
 
-      {error && <div className="alert" role="alert">{error}</div>}
+      {error && <Alert variant="destructive" role="alert">{error}</Alert>}
     </section>
   );
 }

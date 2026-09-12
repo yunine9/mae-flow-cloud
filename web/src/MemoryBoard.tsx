@@ -11,6 +11,12 @@ import {
   getMemoryInsights, readMemoryInsight,
   type MemoryInsightRow, type MemoryInsights,
 } from "./api";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription } from "@/components/Empty";
 
 const SOURCE = {
   agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
@@ -111,23 +117,49 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
       <div className={totals.reworks ? "is-warn" : ""}><strong>{totals.reworks}</strong><span>推后返工</span></div>
     </div>
     <div className="memory-board-filters">
-      <select value={repo} onChange={(event) => setRepo(event.target.value)} aria-label="按仓库筛选">
-        <option value="">全部仓库</option>
-        {(insights?.repos ?? []).map((item) => <option key={item.repo} value={item.repo}>
-          {item.repo}（{item.active} 在用）</option>)}
-      </select>
-      <select value={scope} onChange={(event) => setScope(event.target.value)} aria-label="按范围筛选">
-        <option value="">全部范围</option>
-        {Object.entries(SCOPE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select>
-      <select value={source} onChange={(event) => setSource(event.target.value)} aria-label="按来源筛选">
-        <option value="">全部来源</option>
-        {Object.entries(SOURCE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select>
-      <input value={needle} onChange={(event) => setNeedle(event.target.value)}
+      <Select value={repo}
+        items={[{ value: "", label: "全部仓库" },
+          ...(insights?.repos ?? []).map((item) => ({
+            value: item.repo, label: `${item.repo}（${item.active} 在用）`,
+          }))]}
+        onValueChange={(value) => setRepo(value ?? "")}>
+        <SelectTrigger aria-label="按仓库筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部仓库</SelectItem>
+            {(insights?.repos ?? []).map((item) => <SelectItem key={item.repo} value={item.repo}>
+              {item.repo}（{item.active} 在用）</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select value={scope}
+        items={[{ value: "", label: "全部范围" },
+          ...Object.entries(SCOPE).map(([key, label]) => ({ value: key, label }))]}
+        onValueChange={(value) => setScope(value ?? "")}>
+        <SelectTrigger aria-label="按范围筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部范围</SelectItem>
+            {Object.entries(SCOPE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select value={source}
+        items={[{ value: "", label: "全部来源" },
+          ...Object.entries(SOURCE).map(([key, label]) => ({ value: key, label }))]}
+        onValueChange={(value) => setSource(value ?? "")}>
+        <SelectTrigger aria-label="按来源筛选"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="">全部来源</SelectItem>
+            {Object.entries(SOURCE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Input className="w-56" value={needle} onChange={(event) => setNeedle(event.target.value)}
         placeholder="按触发条件、结论或路径找" aria-label="搜索记忆" />
-      <label><input type="checkbox" checked={withGone}
-        onChange={(event) => setWithGone(event.target.checked)} />含已沉底 / 撤回 / 被覆盖</label>
+      <label className="flex items-center gap-2"><Checkbox checked={withGone}
+        onCheckedChange={(checked) => setWithGone(checked)} />含已沉底 / 撤回 / 被覆盖</label>
     </div>
     {rows.length ? <ol className="memory-board-list">
       {rows.map((row) => {
@@ -164,8 +196,8 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           {open?.id === row.id && <pre className="knowledge-memory-source">{open.content}</pre>}
         </li>;
       })}
-    </ol> : <div className="knowledge-flywheel-empty">
-      {insights ? "还没有符合条件的记忆。闭环的检视意见、修好的构建失败和圈选「记为记忆」会自动落在这里。" : "加载中…"}
-    </div>}
+    </ol> : <Empty className="mx-5 my-5 min-h-[110px] border" role="status">
+      <EmptyDescription>{insights ? "还没有符合条件的记忆。闭环的检视意见、修好的构建失败和圈选「记为记忆」会自动落在这里。" : "加载中…"}</EmptyDescription>
+    </Empty>}
   </section>;
 }

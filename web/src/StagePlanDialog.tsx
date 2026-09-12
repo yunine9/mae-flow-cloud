@@ -24,6 +24,7 @@ import {
 } from "./api";
 import { ExecutionPlanCard } from "./ExecutionPlanCard";
 import { OverlayDialog } from "./WarmupPanel";
+import { Alert } from "@/components/Alert";
 import type { ExecutionPlanFeedbackDraft } from "./executionPlanFeedback";
 
 const ITEM_KIND: Record<WorkflowStagePlan["items"][number]["kind"], string> = {
@@ -144,15 +145,17 @@ export function StagePlanDialog({
                   + "实际执行方案在到达该阶段时结合定制编译产生。"}
             </span>
           </div>
-          {error && <p className="execution-plan-warning" role="status">
-            {error}</p>}
+          {/* #217:错误与“没有对应方案”是警示语义,收编 Alert warning;
+              “正在读取”只是一句话说明,保留原段落。 */}
+          {error && <Alert variant="warning" role="status" className="mx-5 mt-2.5">
+            {error}</Alert>}
           {!error && !catalog && <p className="execution-plan-warning">
             正在读取方案目录…</p>}
           {catalog?.length === 0 && (
-            <p className="execution-plan-warning">
+            <Alert variant="warning" className="mx-5 mt-2.5">
               该阶段没有对应的内核执行方案——阶段名与内核 flow/phases.json
               的词表对不上,不存在可预告的标准做法。
-            </p>
+            </Alert>
           )}
           {catalog?.map((playbook) => (
             <section key={playbook.id}>

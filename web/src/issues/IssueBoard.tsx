@@ -23,14 +23,21 @@ import {
   type IssueSummary,
 } from "../api";
 import { confirmDialog } from "../ConfirmDialog";
+import { Spinner } from "@/components/Spinner";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
 import { dtsTicketUrl } from "./dtsTicket";
 import { IssueRegistration } from "./Registration";
+import { IssueStatusBadge } from "../StatusBadge";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { Card } from "../components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/Empty";
 import { cn } from "cn";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 /** 列表状态筛选:默认"进行中"(只藏已归档/已取消两个收口终态——failed
  * 虽也是终态但属于"需介入",照常露面),另支持按单个状态标签过滤与全量。
@@ -243,20 +250,31 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         <span className="current-work-counts">
           <label className="issue-list-filter">
             <span>状态</span>
-            <select value={statusFilter} aria-label="按状态筛选问题会话"
-              onChange={(event) =>
-                changeStatusFilter(event.target.value as IssueListFilter)}>
-              <option value="active">
-                进行中({issues.length - (statusCounts.get("archived") ?? 0)
-                  - (statusCounts.get("canceled") ?? 0)})
-              </option>
-              {ISSUE_FILTER_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
-                </option>
-              ))}
-              <option value="all">全部({issues.length})</option>
-            </select>
+            <Select value={statusFilter}
+              items={[{ value: "active", label: `进行中(${issues.length - (statusCounts.get("archived") ?? 0)
+                - (statusCounts.get("canceled") ?? 0)})` },
+                ...ISSUE_FILTER_STATUSES.map((status) => ({
+                  value: status, label: `${ISSUE_STATUS_TEXT[status]}(${filterOptionCount(status)})`,
+                })),
+                { value: "all", label: `全部(${issues.length})` }]}
+              onValueChange={(value) =>
+                changeStatusFilter((value ?? "active") as IssueListFilter)}>
+              <SelectTrigger aria-label="按状态筛选问题会话"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="active">
+                    进行中({issues.length - (statusCounts.get("archived") ?? 0)
+                      - (statusCounts.get("canceled") ?? 0)})
+                  </SelectItem>
+                  {ISSUE_FILTER_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="all">全部({issues.length})</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </label>
           {waitingCount > 0 && <span className="section-count attention">
             {waitingCount} 项待答复</span>}
@@ -274,24 +292,26 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           顶部错误横幅,再点同一张卡即可重试。 */}
       {openId && detail?.id !== openId && !detailFailed
         && <div className="issue-open-loading" role="status">
-          <i aria-hidden />
+          <Spinner aria-hidden className="size-3 shrink-0" />
           <span>正在打开问题工作台…</span>
         </div>}
       {issues.length === 0
-        ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-            <strong>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</strong>
-            <p>{viewer.role === "admin"
+        ? <Empty className="min-h-40 border">
+            <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
+            <EmptyTitle>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
+            <EmptyDescription>{viewer.role === "admin"
               ? "开发成员从各自的问题处理页发起后,这里会汇总全员会话供查看。"
-              : "从上方登记一个\"我的问题\",或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</p>
-          </div></div>
+              : "从上方登记一个\"我的问题\",或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
+          </Empty>
         : visibleIssues.length === 0
-          ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
-              <strong>{statusFilter === "active"
-                ? "没有进行中的问题会话" : "这个状态下没有问题会话"}</strong>
-              <p>{statusFilter === "active"
+          ? <Empty className="min-h-40 border">
+              <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
+              <EmptyTitle>{statusFilter === "active"
+                ? "没有进行中的问题会话" : "这个状态下没有问题会话"}</EmptyTitle>
+              <EmptyDescription>{statusFilter === "active"
                 ? "已归档与已取消默认收起;要翻历史,把上方状态切到对应标签或「全部」。"
-                : "可以切回「全部」继续查看,会话没有丢。"}</p>
-            </div></div>
+                : "可以切回「全部」继续查看,会话没有丢。"}</EmptyDescription>
+            </Empty>
           : <div className="task-list">
             {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
@@ -385,9 +405,9 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
             </a>
             : <span className="task-ticket empty">未绑单</span>}
           <span className="task-id" title="会话编号">{issue.id}</span>
-          <span className={`pill ${issue.status}`}>
-            <i aria-hidden />{ISSUE_STATUS_TEXT[issue.status]}
-          </span>
+          <IssueStatusBadge status={issue.status}>
+            {ISSUE_STATUS_TEXT[issue.status]}
+          </IssueStatusBadge>
           <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
         </span>
         <strong className="task-title line-clamp-1">{issue.title}</strong>
@@ -407,9 +427,10 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
     <div className="task-meta">
       {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
           工作台头部「终止会话」同款。终态卡不渲染。 */}
-      {terminatable && <button type="button" className="ui-btn flat danger"
+      {terminatable && <Button type="button" variant="ghost" size="sm"
+        className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
-        {stopping ? "终止中…" : "终止"}</button>}
+        {stopping ? "终止中…" : "终止"}</Button>}
       {stopError && <span className="form-message error">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}

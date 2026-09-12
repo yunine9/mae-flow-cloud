@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "./components/Alert";
 import { storyViewCoverage, type StoryViewCoverage } from "../../src/storyViewCoverage";
 import { storyViewTitles } from "./storyViewTitles";
 
@@ -23,15 +24,21 @@ export function StoryViewNotice({ taskId, onOpen }: { taskId: string; onOpen(): 
   }, [taskId]);
   const omitted = views?.filter((view) => view.status === "不涉及") ?? [];
   const pending = views?.filter((view) => view.status === "待补充") ?? [];
-  return <aside className="story-view-notice" aria-label="4+1 方案提示">
-    <div><strong>4+1 视图</strong><button type="button" onClick={onOpen}>查看依据 / 提意见 ↗</button></div>
-    {error ? <p role="status">覆盖情况暂时无法读取，请在 Story 中核对。</p>
-      : !views ? <p role="status">正在读取覆盖情况…</p>
-      : <>
-        {omitted.map((view) => <p key={view.id}><b>{storyViewTitles[view.id]}不涉及：</b>{view.reason}</p>)}
-        {pending.length > 0 && <p>待补充：{pending.map((view) => storyViewTitles[view.id]).join("、")}。请核对后决定。</p>}
-        {!omitted.length && !pending.length && <p>五类视图均已声明完成，可查看设计依据。</p>}
-        {views.find((view) => view.classDiagram?.reason.startsWith("类图不涉及"))?.classDiagram?.reason && <p>{views.find((view) => view.id === "logical")!.classDiagram!.reason}</p>}
-      </>}
-  </aside>;
+  return <Alert aria-label="4+1 方案提示" className="mb-3">
+    <AlertTitle>4+1 视图</AlertTitle>
+    <AlertAction>
+      <button type="button" className="border-0 bg-transparent p-0 text-xs text-(--accent) cursor-pointer"
+        onClick={onOpen}>查看依据 / 提意见 ↗</button>
+    </AlertAction>
+    <AlertDescription>
+      {error ? <p role="status">覆盖情况暂时无法读取，请在 Story 中核对。</p>
+        : !views ? <p role="status">正在读取覆盖情况…</p>
+        : <>
+          {omitted.map((view) => <p key={view.id}><b>{storyViewTitles[view.id]}不涉及：</b>{view.reason}</p>)}
+          {pending.length > 0 && <p>待补充：{pending.map((view) => storyViewTitles[view.id]).join("、")}。请核对后决定。</p>}
+          {!omitted.length && !pending.length && <p>五类视图均已声明完成，可查看设计依据。</p>}
+          {views.find((view) => view.classDiagram?.reason.startsWith("类图不涉及"))?.classDiagram?.reason && <p>{views.find((view) => view.id === "logical")!.classDiagram!.reason}</p>}
+        </>}
+    </AlertDescription>
+  </Alert>;
 }

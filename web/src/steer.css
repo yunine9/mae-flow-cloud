@@ -2,32 +2,8 @@
 /* 插话框。单独一份而不是并进 style.css:那份正被隔壁大改,
    插话是自成一块的东西,分开放谁都不踩谁。色板复用同一套变量。 */
 
-.steer-input {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  font: inherit;
-  font-size: 15px;
-  line-height: 1.6;
-  padding: 11px 12px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-}
-
-.steer-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.steer-input:disabled {
-  resize: none;
-  color: var(--muted);
-  background: var(--surface-muted);
-  cursor: not-allowed;
-}
+/* .steer-input 三连规则已删(#214 票决):插话输入并入 ws-composer,
+   类零引用。 */
 
 .steer-hint {
   font-size: 14px;

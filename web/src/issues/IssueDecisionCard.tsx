@@ -64,6 +64,7 @@ import { EnvironmentPicker } from "../EnvironmentPicker";
 import type { EnvironmentView } from "../api";
 import { toggleDecisionChoice } from "../decisionSelection";
 import { Markdown } from "../markdown";
+import { Textarea } from "@/components/ui/textarea";
 
 /** 提交区的 dock 挂载器(#125,任务侧 TaskCard 的 DecisionFooterMount
  * 同款):target 在场时把提交区 portal 进输入区 dock,缺席时原位渲染。
@@ -181,11 +182,7 @@ export function IssueDecisionCard({ waiting, busy, footerTarget, onAnswer, onEnv
  * 经 IssueDecisionFooterMount 挂进输入区 dock——草稿与失败提示的状态
  * 仍归本组件,portal 只搬 DOM。 */
 
-/** 拒绝理由框的控件皮(shadcn input 同款配方;弹框/闸卡同一观感)。 */
-const ENV_INPUT =
-  "w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm "
-  + "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] "
-  + "focus-visible:ring-ring/50";
+/** 闸卡说明文字(拒绝理由框的皮已交 shadcn Textarea 原语)。 */
 const ENV_NOTE = "text-sm text-muted-foreground";
 
 function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
@@ -248,7 +245,7 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
       <div className="issue-decision-dock-foot">
         {declineOpen && <label className="grid gap-1.5 text-sm text-muted-foreground">
           <span>确定不需要?留一句理由帮 AI 调整方向(可选)</span>
-          <textarea rows={2} className={ENV_INPUT} autoFocus
+          <Textarea rows={2} autoFocus
             placeholder="如:问题在页面侧即可复现,与后台日志无关…"
             value={declineNote}
             onChange={(event) => setDeclineNote(event.target.value)} />
@@ -422,7 +419,7 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
     {evidence && <div className="issue-decision-env">
       <label className="issue-field wide">
         <span>报错原文(带文件/行号/堆栈)</span>
-        <textarea rows={8} className="custom-input"
+        <Textarea className="min-h-48 resize-y" rows={8}
           placeholder="把交付平台上失败项的报错原文粘贴到这里——它会作为人工证据注入下一修复回合…"
           value={text}
           onChange={(event) => setText(event.target.value)} />
@@ -435,7 +432,7 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
         {!evidence && <div className="issue-decision-env">
           <label className="issue-field wide">
             <span>补充说明(可选):在平台做了什么处理</span>
-            <textarea rows={3} className="custom-input"
+            <Textarea className="min-h-17 resize-y" rows={3}
               ref={notesRef}
               onPaste={(event) => notesPaste.onPaste(event, (markdown) => {
                 const { next, caret } = insertMarkdownAtCursor(notesRef.current, notes, markdown);
@@ -651,13 +648,13 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
               </button>;
             })()}
             {picked[index] === MANUAL_CODE && (
-              <textarea className="custom-input issue-decision-manual-input"
+              <Textarea className="mt-2 min-h-16"
                 placeholder="写下你对这道题的答案…"
                 value={custom[index] ?? ""}
                 onChange={(event) => setCustom({ ...custom, [index]: event.target.value })} />
             )}
           </div>
-        : <textarea className="custom-input issue-decision-free"
+        : <Textarea className="min-h-16"
             placeholder="这道题没有给定选项——写下你的具体答案…"
             value={custom[index] ?? ""}
             onChange={(event) => setCustom({ ...custom, [index]: event.target.value })} />}
@@ -674,7 +671,7 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
       <div className="issue-decision-dock-foot">
         {notesOpen
           ? <div className="custom-answer issue-decision-notes">
-              <textarea className="custom-input"
+              <Textarea
                 placeholder="补充说明(可选):原因、约束、现场信息…"
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)} />

@@ -3,6 +3,8 @@ import { withArchifyPresentation } from "./archifyPresentation";
 import "./story-architecture.css";
 import { storyViewCoverage, type StoryViewCoverage } from "../../src/storyViewCoverage";
 import { storyViewTitles } from "./storyViewTitles";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/Empty";
 
 interface Projection {
   revision: string; renderer: string; warnings: string[];
@@ -140,7 +142,6 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     return () => controller.abort();
   }, [key, base, diagram, projection]);
   const current = rendered?.key === key ? rendered : undefined;
-  const viewPanelId = view ? `story-architecture-${taskId}-${view.id}`.replace(/[^a-zA-Z0-9_-]/g, "-") : undefined;
   return <section className="story-architecture" aria-label="Story 架构图">
     <header className="story-architecture-header">
       <div><strong>架构图</strong><p>这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
@@ -159,51 +160,65 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     {job.errorKind === "architecture" && job.error && <details className="story-architecture-diagnostics story-architecture-error">
       <summary>上次架构图生成未完成 · 查看原因</summary><pre>{job.error}</pre>
     </details>}
-    {error ? <div className="story-view-empty story-view-empty-only">
-      <span aria-hidden="true">◇</span><strong>架构图暂时无法读取</strong>
-      <p>错误只影响架构图展示，可以稍后重试。</p>
-      <details className="story-architecture-diagnostics story-architecture-error">
+    {error ? <Empty className="min-h-[280px]">
+      <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
+      <EmptyTitle>架构图暂时无法读取</EmptyTitle>
+      <EmptyDescription>错误只影响架构图展示，可以稍后重试。</EmptyDescription>
+      <EmptyContent><details className="story-architecture-diagnostics story-architecture-error">
         <summary>查看失败详情</summary><pre>{error}</pre>
-      </details>
-    </div> : !projection ? <p role="status">正在读取 Story…</p> : <>
+      </details></EmptyContent>
+    </Empty> : !projection ? <p role="status">正在读取 Story…</p> : <>
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
         <p className="story-architecture-warning" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}
       {availableViews.length > 0 ? <>
-      <nav className="story-view-coverage" role="tablist" aria-label="已有架构图">
-        {availableViews.map((item) => <button type="button" key={item.id} className="story-view-entry"
-          id={`story-architecture-tab-${item.id}`} role="tab" aria-selected={item.id === view.id}
-          aria-controls={`story-architecture-${taskId}-${item.id}`.replace(/[^a-zA-Z0-9_-]/g, "-")}
-          title={item.label}
-          onClick={() => { setActiveView(item.id); setSelected(""); }}>
-          <strong>{storyViewTitles[item.id]}</strong>
-          <span>{projection.diagrams.filter((diagram) => diagramView(diagram) === item.id).length} 张</span>
-        </button>)}
-      </nav>
-      {view && <section className="story-view-detail" id={viewPanelId} role="tabpanel"
-        aria-labelledby={`story-architecture-tab-${view.id}`} aria-label={view.label}>
-        <div className="story-view-detail-heading">
-          <div><strong>{storyViewTitles[view.id]}</strong><span>{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
-          <div className="story-view-actions">
-            <button type="button" onClick={() => onOpenView ? onOpenView(view.id) : onOpenStory()}>设计与意见 ↗</button>
+      {/* (#210)两套手搓 role=tablist 换 base-ui Tabs 原语:视角页签
+          (story-view-coverage)与图页签(diagram)嵌套两层,键盘箭头、
+          roving tabindex 归原语;选中态由 aria-selected 驱动的旧皮肤
+          CSS 原样生效,计数/标题文案原样。外层面板由原手写
+          role=tabpanel 的 section 换成 TabsPanel(同位复用,值跟随
+          当前视角,内容随派生状态重渲染,iframe 仍由 key 控制重挂)。 */}
+      <Tabs value={view?.id ?? null} className="contents"
+        onValueChange={(value) => { setActiveView(String(value)); setSelected(""); }}>
+        <TabsList variant="line" aria-label="已有架构图"
+          className="story-view-coverage h-auto w-full justify-start gap-0 p-0">
+          {availableViews.map((item) => <TabsTrigger key={item.id} value={item.id}
+            className="story-view-entry after:hidden h-auto"
+            title={item.label}>
+            <strong>{storyViewTitles[item.id]}</strong>
+            <span>{projection.diagrams.filter((diagram) => diagramView(diagram) === item.id).length} 张</span>
+          </TabsTrigger>)}
+        </TabsList>
+        {view && <TabsContent value={view.id} className="story-view-detail"
+          aria-label={view.label}>
+          <div className="story-view-detail-heading">
+            <div><strong>{storyViewTitles[view.id]}</strong><span>{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
+            <div className="story-view-actions">
+              <button type="button" onClick={() => onOpenView ? onOpenView(view.id) : onOpenStory()}>设计与意见 ↗</button>
+            </div>
           </div>
-        </div>
-        {diagrams.length > 0 && <nav className="story-diagram-tabs" role="tablist" aria-label={`${storyViewTitles[view.id]}的图片`}>
-          {diagrams.map((item) => <button type="button" role="tab" key={item.id}
-            aria-selected={item.id === diagram?.id} onClick={() => setSelected(item.id)}>{item.title}</button>)}
-        </nav>}
-        {current?.error ? <div className="story-architecture-failure">
-          <p role="status">这张图暂时无法展示。请在完整 Story 中批注反馈；图源修订后会自动更新。</p>
-          <button type="button" onClick={onOpenStory}>打开 Story 提意见</button>
-          <details><summary>查看失败详情</summary><pre>{current.error}</pre></details>
-        </div> : current?.html ? <iframe key={key} ref={frame} title={diagram.title} srcDoc={current.html}
-          className={presenting === key ? "is-presenting ui-viewport-layer" : undefined}
-          allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
-          : <p className="story-view-loading" role="status">正在生成架构图…</p>}
-      </section>}</> : <div className="story-view-empty story-view-empty-only">
-        <span aria-hidden="true">◇</span><strong>尚无可展示的架构图</strong>
-        <p>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</p>
-        <button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button>
-      </div>}
+          {diagrams.length > 0 && <Tabs value={diagram?.id ?? null} className="contents"
+            onValueChange={(value) => { if (value !== null) setSelected(String(value)); }}>
+            <TabsList aria-label={`${storyViewTitles[view.id]}的图片`}
+              className="mb-3 h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-lg border border-border bg-muted/60 p-1">
+              {diagrams.map((item) => <TabsTrigger key={item.id} value={item.id}
+                className="h-auto flex-none px-3 py-1.5 text-xs">{item.title}</TabsTrigger>)}
+            </TabsList>
+          </Tabs>}
+          {current?.error ? <div className="story-architecture-failure">
+            <p role="status">这张图暂时无法展示。请在完整 Story 中批注反馈；图源修订后会自动更新。</p>
+            <button type="button" onClick={onOpenStory}>打开 Story 提意见</button>
+            <details><summary>查看失败详情</summary><pre>{current.error}</pre></details>
+          </div> : current?.html ? <iframe key={key} ref={frame} title={diagram.title} srcDoc={current.html}
+            className={presenting === key ? "is-presenting fixed inset-0" : undefined}
+            allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
+            : <p className="story-view-loading" role="status">正在生成架构图…</p>}
+        </TabsContent>}
+      </Tabs></> : <Empty className="min-h-[280px]">
+        <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
+        <EmptyTitle>尚无可展示的架构图</EmptyTitle>
+        <EmptyDescription>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</EmptyDescription>
+        <EmptyContent><button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button></EmptyContent>
+      </Empty>}
       {(projection.warnings.length > 0) && <details className="story-architecture-diagnostics"><summary>{projection.warnings.length} 条图源提示</summary>
         {projection.warnings.map((warning, i) => <p className="story-architecture-warning" key={i}>{warning}</p>)}
       </details>}

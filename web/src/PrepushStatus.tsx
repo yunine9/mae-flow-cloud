@@ -9,9 +9,32 @@ import {
 } from "./api";
 import { OverlayDialog } from "./WarmupPanel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Spinner } from "@/components/Spinner";
+import { cn } from "cn";
 import { formatLocalDateTime } from "./time";
 
 type PrepushTone = "active" | "repair" | "danger" | "success" | "neutral";
+
+/** Build-Fix 头部胶囊的状态→Badge variant(#216;原 .warmup-badge is-* 色
+ * 板收编,触发钮与 PrepushStatus 状态带共用同一套 tone 语义)。 */
+const PREPUSH_TRIGGER_VARIANT = {
+  "is-passed": "success",
+  "is-failed": "destructive",
+  "is-repair": "warning",
+  "is-running": "info",
+} as const;
+
+/** 状态带 tone→variant(#216;原 .prepush-status.tone-* 收编):
+ * 进行/恢复=info、修复=warning、失败=destructive、通过=success、中性=neutral。 */
+const PREPUSH_TONE_VARIANT: Record<PrepushTone, "info" | "warning" | "destructive" | "success" | "neutral"> = {
+  active: "info",
+  repair: "warning",
+  danger: "destructive",
+  success: "success",
+  neutral: "neutral",
+};
 
 interface PrepushView {
   phase: "preparing" | "compiling" | "testing" | "repairing" | "environment" | "passed" | "unknown";
@@ -150,7 +173,8 @@ function shortSha(sha: string): string {
 
 /** 工作台头部的小胶囊(与预热同款):头部只放一行式信号,状态卡与
  * 实时日志进浮层/执行现场——头部堆叠是各功能局部最优抢地盘的结果,
- * 2026-08-27 用户拍板立规矩收敛。样式复用 warmup-badge/overlay。 */
+ * 2026-08-27 用户拍板立规矩收敛。皮与预热徽标同源(#216 收编为 Badge),
+ * 浮层仍复用 overlay。 */
 export function PrepushBadge({
   task,
   canOperate = false,
@@ -185,17 +209,31 @@ export function PrepushBadge({
   const cls = view.tone === "success" ? "is-passed"
     : view.tone === "danger" ? "is-failed"
       : view.tone === "repair" ? "is-repair" : "is-running";
+  /* #216 收编为 Badge(render 成 button 保留点击开浮层);原 is-* 色板
+   * 映射:is-passed=success、is-failed=destructive、is-repair=warning、
+   * is-running=info。运行/修复两态沿用原 warmup-pulse 呼吸点。 */
   const label = view.phase === "passed" ? "Build-Fix · 通过"
     : view.generic ? "Build-Fix"
       : view.phase === "compiling" ? "编译中"
         : prepush.state === "user_skipped" ? view.label : `Build-Fix · ${view.label}`;
   return (
     <>
-      <button type="button" className={`warmup-badge ${cls}`}
-        onClick={() => setOpen(true)}
-        title={`Build-Fix：${badgeDetail}`}>
-        <i aria-hidden />{label}
-      </button>
+      {/* #220 触发徽标的悬停描述由原生 title 换 Tooltip 原语(文案原样进
+         浮层);开浮层的点击仍归 render 出的真 button。 */}
+      <Tooltip>
+        <TooltipTrigger render={
+          <Badge variant={PREPUSH_TRIGGER_VARIANT[cls]} render={
+              <button type="button" onClick={() => setOpen(true)} />
+            }
+            className="cursor-pointer outline-none hover:border-current">
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-current",
+              (cls === "is-running" || cls === "is-repair")
+                && "animate-pulse motion-reduce:animate-none")} />
+            {label}
+          </Badge>
+        } />
+        <TooltipContent className="max-w-72 text-left whitespace-normal">{`Build-Fix：${badgeDetail}`}</TooltipContent>
+      </Tooltip>
       {open && (
         <OverlayDialog ariaLabel="Build-Fix 详情" title="Build-Fix"
           onClose={() => setOpen(false)}>
@@ -294,14 +332,34 @@ export function PrepushStatus({
     ? `${title}（更新于 ${formatLocalDateTime(prepush.updated_at, { seconds: true })}）`
     : title;
 
+  /* #216:外层收编为 Badge,tone 色板交给 variant(原 .prepush-status
+     .tone-* CSS 删除);phase-* 类保留——通过勾/环境叉的点形变仍由
+     style.css 的结构规则承担。工作台态沿用原底部分隔发丝线。 */
+  const lineTone = {
+    active: "border-b-active/20",
+    repair: "border-b-attention/20",
+    danger: "border-b-destructive/20",
+    success: "border-b-success/20",
+    neutral: "border-b-line",
+  }[view.tone];
   return (
-    <span
-      className={`prepush-status prepush-${placement} tone-${view.tone} phase-${view.phase}`}
+    <Badge
+      variant={PREPUSH_TONE_VARIANT[view.tone]}
       role="status"
       title={titleHint}
+      className={cn(
+        `prepush-${placement} phase-${view.phase}`,
+        "h-auto min-w-0 gap-2.5",
+        placement === "card"
+          ? "mt-2.5 min-h-[34px] w-full max-w-[720px] rounded-[9px] px-2.5 py-[5px]"
+          : cn("min-h-12 w-full rounded-none border-x-0 border-t-0 px-6 py-2 shadow-(--shadow-xs)", lineTone),
+      )}
     >
-      <span className={`prepush-marker${view.busy ? " busy" : ""}`} aria-hidden>
-        <i />
+      {/* #218:busy 呼吸点换统一 Spinner,吃 Badge variant 的状态色
+          (currentColor);非 busy 仍走 <i>(通过/环境两相的勾与叉由
+          CSS 变形)。 */}
+      <span className="prepush-marker" aria-hidden>
+        {view.busy ? <Spinner aria-hidden className="size-3" /> : <i />}
       </span>
       <span className="prepush-copy">
         <strong>{title}</strong>
@@ -314,6 +372,6 @@ export function PrepushStatus({
         {prepush.sha && <code title="本次验证绑定的代码版本号(Git 提交)">
           SHA {shortSha(prepush.sha)}</code>}
       </span>
-    </span>
+    </Badge>
   );
 }

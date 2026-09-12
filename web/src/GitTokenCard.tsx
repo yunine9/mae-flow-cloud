@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { putGitToken, type AuthUser } from "./api";
+import { Input } from "@/components/ui/input";
 
 export function GitTokenCard({
   session,
@@ -84,13 +85,13 @@ export function GitTokenCard({
         void save();
       }}>
         <label><span>个人邮箱</span>
-          <input type="email" value={gitEmail} required autoComplete="off"
+          <Input type="email" value={gitEmail} required autoComplete="off"
             placeholder="name@company.com"
             onChange={(event) => setGitEmail(event.target.value)} />
           <small>用于 Git commit 署名和 CodeHub 归属。</small>
         </label>
         <label><span>CodeHub Token</span>
-          <input type="password" value={token} required autoComplete="new-password"
+          <Input type="password" value={token} required autoComplete="new-password"
             placeholder="粘贴 CodeHub 访问 Token"
             onChange={(event) => setToken(event.target.value)} />
           <small>仅用于代码仓访问；保存后不会回显完整内容。</small>

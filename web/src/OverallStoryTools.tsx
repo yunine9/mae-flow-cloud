@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RequirementDiff } from "./RequirementDiff";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 export const OVERALL_STORY_ARTIFACT = "task-materials/overall-story.md";
 interface Source { id: string; task_id?: string; name: string; missing?: string }
@@ -91,12 +94,23 @@ export function OverallStoryTools({ taskId, canOperate, canceled, onUpdated, onO
         <span className={s.missing ? "missing" : ""}>{s.missing ?? "Story 可读取"}</span>
       </li>)}</ul>
       <div className="overall-story-history">
-        <label>更新对比 <select value={revision} onChange={(e) => setRevision(e.target.value)}>
-          <option value="">选择版本</option>
-          {[...status.revisions].reverse().map((r, i) => <option key={r.id} value={r.id}>
-            第 {status.revisions.length - i} 版 · {new Date(r.at).toLocaleString()} · +{r.additions} −{r.deletions}
-          </option>)}
-        </select></label>
+        <label>更新对比 <Select value={revision}
+          items={[{ value: "", label: "选择版本" },
+            ...[...status.revisions].reverse().map((r, i) => ({
+              value: r.id,
+              label: `第 ${status.revisions.length - i} 版 · ${new Date(r.at).toLocaleString()} · +${r.additions} −${r.deletions}`,
+            }))]}
+          onValueChange={(value) => setRevision(value ?? "")}>
+          <SelectTrigger className="max-w-105" aria-label="更新对比版本"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="">选择版本</SelectItem>
+              {[...status.revisions].reverse().map((r, i) => <SelectItem key={r.id} value={r.id}>
+                第 {status.revisions.length - i} 版 · {new Date(r.at).toLocaleString()} · +{r.additions} −{r.deletions}
+              </SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
         {canOperate && status.current && status.confirmed?.revision !== status.current && <button type="button"
           disabled={busy || !status.can_confirm}
           title={!status.can_confirm ? "来源已同步、检视意见全部闭环后可以确认" : "确认当前版本的整体文档"}

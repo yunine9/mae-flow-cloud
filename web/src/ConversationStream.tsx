@@ -25,8 +25,23 @@ import {
   type FeedbackSource,
   type TaskSummary,
 } from "./api";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Empty, EmptyDescription } from "@/components/Empty";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 export type StreamFilter = "all" | "mine";
+
+/** 发言人头像底色(#220 从 .conv-avatar CSS 迁为令牌工具类):
+ * 默认 Agent=ink,你=text-strong,人=灰,系统=虚线透明,外部=active,
+ * 助手=success;文字色/字号随 AvatarFallback 传参覆盖。 */
+const CONV_AVATAR_TONE = {
+  agent: "bg-(--ink)",
+  you: "bg-(--text-strong)",
+  person: "bg-(--muted)",
+  system: "border border-dashed border-(--line-strong) bg-transparent text-(--faint)",
+  external: "bg-(--active)",
+  assistant: "bg-(--success)",
+} as const;
 
 /** 一屏先渲最近这些条;更早的按需展开(run7 真现场主会话 145 段话)。 */
 const INITIAL_LIMIT = 50;
@@ -369,7 +384,9 @@ export function ConversationStream({
       <article className={`conv-msg ${options.who}`} key={options.key}
         id={`conv-${options.key}`}
         data-annotation-ids={options.ids?.join(" ") || undefined}>
-        <span className={`conv-avatar ${options.who}`} aria-hidden>{avatar}</span>
+        <Avatar size="sm" aria-hidden className="after:hidden">
+          <AvatarFallback className={`rounded-[7px] text-[11px] font-bold text-white ${CONV_AVATAR_TONE[options.who]}`}>{avatar}</AvatarFallback>
+        </Avatar>
         <div className="conv-body">
           <div className="conv-who">
             <b>{options.name}</b>
@@ -794,17 +811,22 @@ export function ConversationStream({
           空间显示文字了")。 */}
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
-        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"]] as const)
-            .map(([key, label]) => (
-              <button type="button" key={key} role="tab"
-                aria-selected={!thread && filter === key}
-                className={!thread && filter === key ? "on" : ""}
-                onClick={() => { onThreadChange(undefined); onFilterChange(key); }}>
-                {label}
-              </button>
-            ))}
-        </div>
+        {/* shadcn 化(#210):页签条交给 base-ui Tabs 原语(键盘左右箭头、
+            roving tabindex 归原语);线程视图打开时两签都不算选中,用
+            value=null 表达「无选中签」。旧 .ws-stream-filters 皮肤类挂在
+            TabsList 上,视觉与切换语义原样。 */}
+        <Tabs value={!thread ? filter : null} className="contents"
+          onValueChange={(value) => { onThreadChange(undefined); onFilterChange(value as StreamFilter); }}>
+          <TabsList variant="line" aria-label="会话流筛选" className="ws-stream-filters h-auto">
+            {([["all", "全部"], ["mine", "需要我的"]] as const)
+              .map(([key, label]) => (
+                <TabsTrigger key={key} value={key}
+                  className={`h-auto flex-none after:hidden${!thread && filter === key ? " on" : ""}`}>
+                  {label}
+                </TabsTrigger>
+              ))}
+          </TabsList>
+        </Tabs>
       </header>
       <div className={`ws-anchor ${anchor.tone}`} role="status">
         <i aria-hidden />
@@ -841,11 +863,11 @@ export function ConversationStream({
         ))}
         {!loaded && !unavailable && <div className="conv-empty">正在读取记录…</div>}
         {loaded && !shown.length && !currentCard && (
-          <div className="conv-empty">
-            {thread ? "这条意见还没有处理记录。"
+          <Empty className="py-6" role="status">
+            <EmptyDescription>{thread ? "这条意见还没有处理记录。"
               : filter === "mine" ? "现在没有需要你处理的事。"
-              : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}
-          </div>
+              : "还没有记录。Agent 开始说话、举卡或你提交批注后，会按时间出现在这里。"}</EmptyDescription>
+          </Empty>
         )}
         {rows}
         {pinnedCard && waiting && (

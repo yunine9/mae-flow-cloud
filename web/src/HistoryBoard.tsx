@@ -16,6 +16,11 @@ import {
   workspaceHistoryEntries,
 } from "./historyModel";
 import { confirmDialog } from "./ConfirmDialog";
+import { TaskStatusBadge } from "./StatusBadge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert } from "@/components/Alert";
+import { Database } from "lucide-react";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
 
@@ -107,9 +112,10 @@ export function HistoryBoard({
       </div>
 
       {loading && (
-        <div className="history-skeleton" aria-label="加载中">
-          <div className="skeleton metric-skeleton" />
-          <div className="skeleton table-skeleton" />
+        <div className="grid gap-3" aria-label="加载中">
+          {/* #218:占位形状与旧 .metric-skeleton/.table-skeleton 等价 */}
+          <Skeleton className="h-[94px]" />
+          <Skeleton className="h-[280px]" />
         </div>
       )}
 
@@ -123,18 +129,16 @@ export function HistoryBoard({
         </div>
       )}
 
-      {actionError && <div className="alert history-action-error">{actionError}</div>}
+      {actionError && <Alert variant="destructive" className="mb-3">{actionError}</Alert>}
 
       {!loading && visibleEntries.length === 0 && (
-        <div className="board-empty">
-          <span className="empty-database" aria-hidden>
-            <i /><i /><i />
-          </span>
-          <strong>{usingWorkspace ? "当前没有成果档案" : "成果档案里还没有记录"}</strong>
-          <p>
+        <Empty className="min-h-[360px] border" role="status">
+          <EmptyMedia variant="icon"><Database aria-hidden /></EmptyMedia>
+          <EmptyTitle>{usingWorkspace ? "当前没有成果档案" : "成果档案里还没有记录"}</EmptyTitle>
+          <EmptyDescription>
             任务进入待合入、完成、失败或取消后，会在这里留下记录。
-          </p>
-        </div>
+          </EmptyDescription>
+        </Empty>
       )}
 
       {!loading && visibleEntries.length > 0 && (
@@ -186,10 +190,9 @@ export function HistoryBoard({
                       <TokenUsage usage={entry.token_usage} placement="history" />
                     </div>
                     <div>
-                      <span className={`pill ${entry.status}`}>
-                        <i aria-hidden />
+                      <TaskStatusBadge status={entry.status}>
                         {STATUS_TEXT[entry.status] ?? entry.status}
-                      </span>
+                      </TaskStatusBadge>
                     </div>
                     <div className="history-delivery">
                       {entry.delivery?.mr_url ? (

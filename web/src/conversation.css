@@ -140,21 +140,12 @@
   content: ""; flex: 1; height: 1px; background: var(--line);
 }
 
-/* 一条消息:头像 + 正文 */
+/* 一条消息:头像 + 正文(#220 头像换 Avatar/AvatarFallback 原语,底色
+   随角色迁为组件上的令牌工具类,此处只留版式)。 */
 .task-workspace-v2 .conv-msg {
   display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px;
   scroll-margin-top: 12px;
 }
-.task-workspace-v2 .conv-avatar {
-  width: 24px; height: 24px; border-radius: 7px;
-  display: grid; place-items: center;
-  font-size: 11px; font-weight: 700; color: #fff; background: var(--ink);
-}
-.task-workspace-v2 .conv-avatar.you { background: var(--text-strong); }
-.task-workspace-v2 .conv-avatar.person { background: var(--muted); }
-.task-workspace-v2 .conv-avatar.system { background: transparent; color: var(--faint); border: 1px dashed var(--line-strong); }
-.task-workspace-v2 .conv-avatar.external { background: var(--active); }
-.task-workspace-v2 .conv-avatar.assistant { background: var(--success); }
 .task-workspace-v2 .conv-body { min-width: 0; display: grid; gap: 6px; }
 .task-workspace-v2 .conv-who {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
@@ -291,8 +282,9 @@
 .task-workspace-v2 .conv-card.current .question-list { order: 2; padding: 8px 14px 0; }
 .task-workspace-v2 .conv-card.current .question { padding-block: 4px 10px; }
 .task-workspace-v2 .conv-card.current .question-text { font-size: var(--fs-14); line-height: 1.5; }
-.task-workspace-v2 .conv-card.current .review-decision-guidance,
-.task-workspace-v2 .conv-card.current .delivery-decision-guidance { order: 3; margin: 10px 14px 0; }
+/* delivery-decision-guidance 残留删除(#219):只有 review-decision-guidance
+   仍由 TaskCard 渲染。 */
+.task-workspace-v2 .conv-card.current .review-decision-guidance { order: 3; margin: 10px 14px 0; }
 .task-workspace-v2 .conv-card.current .decision-attachment { order: 4; margin: 10px 14px 0; padding: 0; border: 0; }
 .task-workspace-v2 .conv-card.current .decision-evidence { order: 6; margin: 8px 0 0; border-top: 1px solid var(--line); }
 .task-workspace-v2 .conv-card.current .decision-evidence > summary { padding: 8px 14px; color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
@@ -400,8 +392,6 @@
   background: var(--surface); color: var(--text-strong);
   font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer;
 }
-.task-workspace-v2 .ws-composer .steer-input { font-size: var(--fs-14); min-height: 52px; margin: 0; }
-.task-workspace-v2 .ws-composer .steer-input.cli { font-family: var(--font-mono); font-size: var(--fs-13); }
 .task-workspace-v2 .ws-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .task-workspace-v2 .ws-composer-left { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .task-workspace-v2 .ws-composer .steer-hint { font-size: var(--fs-12); color: var(--faint); }
@@ -415,7 +405,6 @@
 .task-workspace-v2 .ws-composer .assistant-buttons { display: flex; gap: 8px; }
 .task-workspace-v2 .ws-composer .assistant-bounds-details > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
 .task-workspace-v2 .ws-composer .assistant-bounds { margin: 6px 0 0; font-size: var(--fs-12); }
-.task-workspace-v2 .ws-composer .alert { margin: 0; }
 .task-workspace-v2 .ws-composer-readonly {
   padding: 12px 18px 14px; border-top: 1px solid var(--line);
   background: var(--surface); color: var(--muted); font-size: var(--fs-13); line-height: 1.6;

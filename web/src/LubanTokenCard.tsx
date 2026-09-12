@@ -13,6 +13,7 @@ import {
   testLubanConnection,
   type AuthUser,
 } from "./api";
+import { Input } from "@/components/ui/input";
 
 export function LubanTokenCard({
   session,
@@ -103,7 +104,7 @@ export function LubanTokenCard({
         void save();
       }}>
         <label><span>小鲁班 Token</span>
-          <input type="password" value={token} required autoComplete="new-password"
+          <Input type="password" value={token} required autoComplete="new-password"
             placeholder="粘贴小鲁班发送 Token"
             onChange={(event) => setToken(event.target.value)} />
           <small>保存后不会回显完整内容，仅显示末 4 位。</small>

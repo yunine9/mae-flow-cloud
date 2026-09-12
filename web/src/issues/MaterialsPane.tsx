@@ -12,7 +12,7 @@ import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTarge
  * (SessionView 直排),本组件改为免壳直渲——只按会话层下发的
  * view 渲染对应内容,四类内容与整包下载原样;过程文档
  * 子视图(IssueProcessDocs,原结论文档升级:多页签 = 分析报告 + 过程
- * 问答 + 检视 + Agent 落的其他 .md,页签样式同任务侧 ws-tabs)保留
+ * 问答 + 检视 + Agent 落的其他 .md,#210 起页签换 shadcn Tabs 皮)保留
  * 自己的子页签。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
@@ -49,8 +49,14 @@ import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
 import { confirmDialog } from "../ConfirmDialog";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 /** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
  * 只用它认页签)。 */
@@ -187,10 +193,10 @@ function IssueDialogue({ turns, truncated }: {
   truncated: boolean;
 }) {
   if (turns.length === 0) {
-    return <div className="issue-doc-empty">
-      <strong>还没有问答</strong>
-      <p>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</p>
-    </div>;
+    return <Empty className="border py-4.5">
+      <EmptyTitle>还没有问答</EmptyTitle>
+      <EmptyDescription>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</EmptyDescription>
+    </Empty>;
   }
   return <div className="issue-dialogue">
     {truncated && <div className="utility-note">回合较多,只显示最近的 500 条。</div>}
@@ -459,63 +465,72 @@ function IssueProcessDocs({ detail, canOperate }: {
     {downloadError && <div className="utility-note" role="alert">
       打包下载失败：{downloadError}
     </div>}
-    {tabs.length > 1 && <div className="ws-tabs" role="tablist"
-        aria-label="过程文档页签">
-      {tabs.map((tab) => (
-        <button key={tab.key} role="tab" aria-selected={active === tab.key}
-          className={"ws-tab" + (active === tab.key ? " on" : "")}
-          onClick={() => setActive(tab.key)}>
-          <span>{tab.label}</span>{tab.hint && <i>{tab.hint}</i>}
-        </button>
-      ))}
-    </div>}
-    {loading && <p className="issue-thread-empty">正在读取…</p>}
-    {!loading && note && <div className="issue-doc-empty">
-      <strong>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</strong>
-      <p>{note}</p>
-    </div>}
-    {!loading && !note && active === DIALOGUE_TAB
-      && <IssueDialogue turns={turns} truncated={turnsTruncated} />}
-    {!loading && !note && active === REVIEW_TAB
-      && <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
-        reviewEnabled={reviewEnabled}
-        onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
-    {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
-      && content && <>
-      {canOperate && draftCount > 0 && <div className="utility-note" role="status">
-        已记下 {draftCount} 条意见，尚未提交。
-        <button type="button" onClick={() => setActive(REVIEW_TAB)}>
-          查看并提交意见
-        </button>
-      </div>}
-      <div className="issue-doc-toolbar">
-        <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
-        <button type="button" onClick={() => void loadActive()}>刷新</button>
-      </div>
-      {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setActive(ANALYSIS_DOC); setLocationExcerpt(undefined); }} /></>}
-      <article className="issue-doc-body">
-        {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
-            不给行尾 ✎。 */}
-        {active === ANALYSIS_DOC && reviewEnabled && canOperate
-          ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
-              fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
-              onAdded={() => void loadReviews()}
-              addDraft={async (input) => {
-                try {
-                  await addIssueReview(id, input);
-                  void loadReviews();
-                  return {};
-                } catch (reason) {
-                  return {
-                    error: String(reason instanceof Error ? reason.message : reason),
-                  };
-                }
-              }}>
-              <Markdown showLineNumbers text={content} />
-            </Annotatable>
-          : <Markdown showLineNumbers text={content} />}
-      </article>
-    </>}
+    {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类
+        随家族退役,这里改用 shadcn 默认页签皮;下方三类内容分支映射为
+        TabsPanel(keepMounted 默认 false,卸载语义与原条件渲染一致;
+        文档分支是「按当前签取值」的动态面板,与原实现同位不重挂)。 */}
+    <Tabs value={active} className="contents"
+      onValueChange={(value) => setActive(value)}>
+      {tabs.length > 1 && <TabsList aria-label="过程文档页签"
+          className="h-auto max-w-full flex-wrap">
+        {tabs.map((tab) => (
+          <TabsTrigger key={tab.key} value={tab.key} className="h-auto flex-none">
+            <span>{tab.label}</span>{tab.hint && <i className="not-italic text-[0.7rem] font-normal text-muted-foreground">{tab.hint}</i>}
+          </TabsTrigger>
+        ))}
+      </TabsList>}
+      {loading && <p className="issue-thread-empty">正在读取…</p>}
+      {!loading && note && <Empty className="border py-4.5">
+        <EmptyTitle>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</EmptyTitle>
+        <EmptyDescription>{note}</EmptyDescription>
+      </Empty>}
+      {!loading && !note && active === DIALOGUE_TAB
+        && <TabsContent value={DIALOGUE_TAB} className="contents">
+          <IssueDialogue turns={turns} truncated={turnsTruncated} />
+        </TabsContent>}
+      {!loading && !note && active === REVIEW_TAB
+        && <TabsContent value={REVIEW_TAB} className="contents">
+          <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
+            reviewEnabled={reviewEnabled}
+            onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
+        </TabsContent>}
+      {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
+        && content && <TabsContent value={active} className="contents">
+        {canOperate && draftCount > 0 && <div className="utility-note" role="status">
+          已记下 {draftCount} 条意见，尚未提交。
+          <button type="button" onClick={() => setActive(REVIEW_TAB)}>
+            查看并提交意见
+          </button>
+        </div>}
+        <div className="issue-doc-toolbar">
+          <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
+          <button type="button" onClick={() => void loadActive()}>刷新</button>
+        </div>
+        {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setActive(ANALYSIS_DOC); setLocationExcerpt(undefined); }} /></>}
+        <article className="issue-doc-body">
+          {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
+              不给行尾 ✎。 */}
+          {active === ANALYSIS_DOC && reviewEnabled && canOperate
+            ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
+                fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
+                onAdded={() => void loadReviews()}
+                addDraft={async (input) => {
+                  try {
+                    await addIssueReview(id, input);
+                    void loadReviews();
+                    return {};
+                  } catch (reason) {
+                    return {
+                      error: String(reason instanceof Error ? reason.message : reason),
+                    };
+                  }
+                }}>
+                <Markdown showLineNumbers text={content} />
+              </Annotatable>
+            : <Markdown showLineNumbers text={content} />}
+        </article>
+      </TabsContent>}
+    </Tabs>
   </div>;
 }
 
@@ -615,11 +630,11 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
     {detail.review_active && <div className="utility-note">
       上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
     </div>}
-    {drafts.length === 0 && sent.length === 0 && <div className="issue-doc-empty">
-      <strong>还没有检视意见</strong>
-      <p>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
-      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</p>
-    </div>}
+    {drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
+      <EmptyTitle>还没有检视意见</EmptyTitle>
+      <EmptyDescription>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
+      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
+    </Empty>}
     {note && <div className="utility-note">{note}</div>}
     {drafts.length > 0 && <section className="issue-review-group">
       <h4>待提交({drafts.length})</h4>
@@ -868,15 +883,24 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         {canOperate && <div className="issue-materials-editor">
           <div className="issue-materials-editor-bar">
             <strong>快速修改</strong>
-            <select value={activeFile ?? ""}
-              onChange={(event) => {
-                const path = event.target.value;
+            <Select value={activeFile ?? ""}
+              items={[{ value: "", label: "选择要修改的文件…" },
+                ...changes.map((change) => ({ value: change.path, label: change.path }))]}
+              onValueChange={(value) => {
+                const path = value ?? "";
                 if (path) void editFile(path);
               }}>
-              <option value="">选择要修改的文件…</option>
-              {changes.map((change) => <option key={change.path}
-                value={change.path}>{change.path}</option>)}
-            </select>
+              <SelectTrigger className="min-w-44 max-w-72" aria-label="选择要修改的文件">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="">选择要修改的文件…</SelectItem>
+                  {changes.map((change) => <SelectItem key={change.path}
+                    value={change.path}>{change.path}</SelectItem>)}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             <button type="button" className="primary" disabled={saving
               || !activeFile || content === undefined} onClick={save}>
               {saving ? "保存中…" : "保存修改"}
@@ -889,15 +913,15 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
             </button>
           </div>
           {activeFile && (content !== undefined
-            ? <textarea value={content} spellCheck={false}
+            ? <Textarea className="min-h-[260px] max-h-[480px] resize-y bg-surface font-mono text-[13px]" value={content} spellCheck={false}
                 onChange={(event) => setContent(event.target.value)} />
             : <p className="issue-materials-empty">读取中…</p>)}
         </div>}
       <section className="issue-materials-block">
         <h4>人工修改记录({data?.manual_edits.length ?? 0})</h4>
-        {data?.manual_edits.length === 0 && <p className="issue-materials-empty">
+        {data?.manual_edits.length === 0 && <Empty className="py-2 text-left">
           还没有人工改动——从上方选择文件编辑保存后会记在这里。
-        </p>}
+        </Empty>}
         <ul className="issue-materials-edits">
           {data?.manual_edits.slice().reverse().map((edit, index) => <li
             key={`${edit.ts}-${index}`}>

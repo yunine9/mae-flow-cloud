@@ -19,6 +19,18 @@ import { WorkflowDetail } from "./WorkflowDetail";
 import { WorkflowEditor } from "./WorkflowEditor";
 import { WorkflowLibrary } from "./WorkflowLibrary";
 import { confirmDialog } from "../ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Page = "library" | "detail" | "editor";
 type CreateDialog = {
@@ -411,33 +423,45 @@ function CreateWorkflowDialog({ value, busy, error, onChange, onClose, onSubmit 
   onClose: () => void;
   onSubmit: () => void;
 }) {
-  return <div className="wf-dialog-backdrop" role="presentation">
-    <form className="wf-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="wf-create-title" onSubmit={(event) => {
+  return <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+    <DialogContent className="tw-root sm:max-w-[560px]">
+      <form className="grid gap-4" onSubmit={(event) => {
         event.preventDefault(); onSubmit();
       }}>
-      <header><span>{value.kind === "copy" ? "COPY WORKFLOW" : "NEW WORKFLOW"}</span>
-        <h3 id="wf-create-title">{value.kind === "copy" ? "复制为独立工作流" : "创建工作流草稿"}</h3>
-        <p>{value.kind === "copy"
-          ? "副本记录来源，但不会跟随原方案自动变化。"
-          : "从当前 Mae-Flow 标准方案开始，只保存你明确做出的结构化变更。"}</p></header>
-      {error && <p className="wf-dialog-error" role="alert">{error}</p>}
-      <label><span>名称</span><input required autoFocus maxLength={120}
-        value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
-      <label><span>说明</span><textarea rows={3} maxLength={500}
-        value={value.description}
-        onChange={(event) => onChange({ ...value, description: event.target.value })} /></label>
-      <fieldset><legend>保存范围</legend>
-        <label><input type="radio" name="workflow-scope" checked={value.scope === "personal"}
-          onChange={() => onChange({ ...value, scope: "personal" })} />个人资产</label>
-        <label><input type="radio" name="workflow-scope" checked={value.scope === "team"}
-          onChange={() => onChange({ ...value, scope: "team" })} />团队资产</label>
-      </fieldset>
-      <footer><button type="button" onClick={onClose} disabled={busy}>取消</button>
-        <button type="submit" className="wf-primary" disabled={busy || !value.name.trim()}>
-          {busy ? "正在保存…" : value.kind === "copy" ? "创建副本" : "创建草稿"}</button></footer>
-    </form>
-  </div>;
+        <DialogHeader>
+          <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">
+            {value.kind === "copy" ? "COPY WORKFLOW" : "NEW WORKFLOW"}</span>
+          <DialogTitle>{value.kind === "copy" ? "复制为独立工作流" : "创建工作流草稿"}</DialogTitle>
+          <DialogDescription>{value.kind === "copy"
+            ? "副本记录来源，但不会跟随原方案自动变化。"
+            : "从当前 Mae-Flow 标准方案开始，只保存你明确做出的结构化变更。"}</DialogDescription>
+        </DialogHeader>
+        {error && <p role="alert"
+          className="m-0 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-xs leading-relaxed text-danger">
+          {error}</p>}
+        <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">名称</span><Input required autoFocus maxLength={120}
+          value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
+        <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">说明</span><Textarea className="min-h-17 resize-y" rows={3} maxLength={500}
+          value={value.description}
+          onChange={(event) => onChange({ ...value, description: event.target.value })} /></label>
+        <fieldset className="flex gap-4 rounded-lg border border-input p-3">
+          <legend className="text-xs font-medium text-foreground">保存范围</legend>
+          <RadioGroup className="flex gap-4" name="workflow-scope" value={value.scope}
+            onValueChange={(scope) => onChange({ ...value, scope })}>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <RadioGroupItem value="personal" />个人资产</label>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <RadioGroupItem value="team" />团队资产</label>
+          </RadioGroup>
+        </fieldset>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>取消</Button>
+          <Button type="submit" disabled={busy || !value.name.trim()}>
+            {busy ? "正在保存…" : value.kind === "copy" ? "创建副本" : "创建草稿"}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>;
 }
 
 function WorkflowActionDialog({ value, busy, error, onClose, onSubmit }: {
@@ -448,23 +472,31 @@ function WorkflowActionDialog({ value, busy, error, onClose, onSubmit }: {
   onSubmit: (reason: string) => void;
 }) {
   const [reason, setReason] = useState("");
-  return <div className="wf-dialog-backdrop" role="presentation">
-    <form className="wf-dialog compact" role="dialog" aria-modal="true"
-      aria-labelledby="wf-action-title" onSubmit={(event) => {
+  return <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+    <DialogContent className="tw-root sm:max-w-[500px]">
+      <form className="grid gap-4" onSubmit={(event) => {
         event.preventDefault(); onSubmit(reason);
       }}>
-      <header><span>WORKFLOW ACTION</span><h3 id="wf-action-title">{value.title}</h3>
-        <p>{value.explanation}</p></header>
-      {error && <p className="wf-dialog-error" role="alert">{error}</p>}
-      {value.requireReason && <label><span>调整说明</span><textarea autoFocus required
-        rows={4} value={reason} onChange={(event) => setReason(event.target.value)}
-        placeholder="写清楚需要修改什么，避免只说“不通过”。" /></label>}
-      <footer><button type="button" onClick={onClose} disabled={busy}>取消</button>
-        <button type="submit" className={value.destructive ? "wf-confirm-danger" : "wf-primary"}
-          disabled={busy || (value.requireReason && !reason.trim())}>
-          {busy ? "正在处理…" : value.confirmLabel ?? "确认"}</button></footer>
-    </form>
-  </div>;
+        <DialogHeader>
+          <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">WORKFLOW ACTION</span>
+          <DialogTitle>{value.title}</DialogTitle>
+          <DialogDescription>{value.explanation}</DialogDescription>
+        </DialogHeader>
+        {error && <p role="alert"
+          className="m-0 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-xs leading-relaxed text-danger">
+          {error}</p>}
+        {value.requireReason && <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">调整说明</span><Textarea className="min-h-24 resize-y" autoFocus required
+          rows={4} value={reason} onChange={(event) => setReason(event.target.value)}
+          placeholder="写清楚需要修改什么，避免只说“不通过”。" /></label>}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>取消</Button>
+          <Button type="submit" variant={value.destructive ? "destructive" : "default"}
+            disabled={busy || (value.requireReason && !reason.trim())}>
+            {busy ? "正在处理…" : value.confirmLabel ?? "确认"}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>;
 }
 
 function messageOf(value: unknown): string {

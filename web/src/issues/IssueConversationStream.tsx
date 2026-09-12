@@ -54,6 +54,19 @@ import { ClampedText } from "../ClampedText";
 import { Markdown } from "../markdown";
 import { formatLocalClock, formatLocalDate, formatLocalDateTime } from "../time";
 import { startVisiblePolling } from "../visiblePolling";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert } from "@/components/Alert";
+import { Empty, EmptyDescription } from "@/components/Empty";
+import { Textarea } from "@/components/ui/textarea";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+
+/** 发言人头像底色(#220 从 .conv-avatar CSS 迁为令牌工具类,口径与
+ * 任务侧 ConversationStream 的 CONV_AVATAR_TONE 一致;问题域只有三角色)。 */
+const CONV_AVATAR_TONE = {
+  agent: "bg-(--ink)",
+  you: "bg-(--text-strong)",
+  person: "bg-(--muted)",
+} as const;
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -250,7 +263,9 @@ export function IssueConversationStream({
     return (
       <article className={`conv-msg ${options.who}`} key={options.key}
         id={`conv-${options.key}`}>
-        <span className={`conv-avatar ${options.who}`} aria-hidden>{avatar}</span>
+        <Avatar size="sm" aria-hidden className="after:hidden">
+          <AvatarFallback className={`rounded-[7px] text-[11px] font-bold text-white ${CONV_AVATAR_TONE[options.who]}`}>{avatar}</AvatarFallback>
+        </Avatar>
         <div className="conv-body">
           <div className="conv-who">
             <b>{options.name}</b>
@@ -441,18 +456,21 @@ export function IssueConversationStream({
     <div className="ws-stream-shell">
       <header className="ws-collaboration-head">
         <strong>与 Agent 协作</strong>
-        {/* 流内筛选(任务侧同款 UI):阅读筛选,不是权限判断。 */}
-        <div className="ws-stream-filters" role="tablist" aria-label="会话流筛选">
-          {([["all", "全部"], ["mine", "需要我的"]] as const)
-            .map(([key, label]) => (
-              <button type="button" key={key} role="tab"
-                aria-selected={filter === key}
-                className={filter === key ? "on" : ""}
-                onClick={() => setFilter(key)}>
-                {label}
-              </button>
-            ))}
-        </div>
+        {/* 流内筛选(任务侧同款 UI):阅读筛选,不是权限判断。
+            (#210)手搓 role=tablist 换 base-ui Tabs 原语,键盘箭头归原语;
+            旧 .ws-stream-filters 皮肤类挂在 TabsList 上,视觉原样。 */}
+        <Tabs value={filter} className="contents"
+          onValueChange={(value) => setFilter(value as "all" | "mine")}>
+          <TabsList variant="line" aria-label="会话流筛选" className="ws-stream-filters h-auto">
+            {([["all", "全部"], ["mine", "需要我的"]] as const)
+              .map(([key, label]) => (
+                <TabsTrigger key={key} value={key}
+                  className={`h-auto flex-none after:hidden${filter === key ? " on" : ""}`}>
+                  {label}
+                </TabsTrigger>
+              ))}
+          </TabsList>
+        </Tabs>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
       {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进
@@ -475,9 +493,9 @@ export function IssueConversationStream({
           <div className="conv-empty">正在读取协作记录…</div>
         )}
         {view.loaded && !shown.length && !currentCard && (
-          <div className="conv-empty">
-            还没有协作记录。Agent 开始干活、举卡,或你插话、续聊之后,会按时间出现在这里。
-          </div>
+          <Empty className="py-6" role="status">
+            <EmptyDescription>还没有协作记录。Agent 开始干活、举卡,或你插话、续聊之后,会按时间出现在这里。</EmptyDescription>
+          </Empty>
         )}
         {rows}
         {/* 卡座(#125):当前等待卡永远钉在流末尾的 Agent 气泡内,举卡
@@ -652,7 +670,7 @@ function IssueCollaborationComposer({
           记录到现场的每一条,交还时都会交给 AI
         </span>
       </div>
-      <textarea className="steer-input" value={text} rows={3}
+      <Textarea className="min-h-13 resize-y bg-surface" value={text} rows={3}
         ref={textRef}
         onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
           const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);
@@ -691,7 +709,7 @@ function IssueCollaborationComposer({
           </button>
         </div>
       </div>
-      {error && <div className="alert" role="alert">{error}</div>}
+      {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
     </section>;
   }
 
@@ -747,7 +765,7 @@ function IssueCollaborationComposer({
         接管现场
       </button>}
     </div>
-    <textarea className="steer-input" value={text} rows={3}
+    <Textarea className="min-h-13 resize-y bg-surface" value={text} rows={3}
       ref={textRef}
       onPaste={(event) => imagePaste.onPaste(event, (markdown) => {
         const { next, caret } = insertMarkdownAtCursor(textRef.current, text, markdown);
@@ -780,7 +798,7 @@ function IssueCollaborationComposer({
         {sending ? "发送中…" : steer ? "发送插话" : "发送"}
       </button>
     </div>
-    {error && <div className="alert" role="alert">{error}</div>}
+    {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
   </section>;
 }
 import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste";

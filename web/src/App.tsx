@@ -3,14 +3,27 @@ import { PeopleProvider, PersonName, usePersonName } from "./People";
  * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu,
   SidebarMenuButton, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
   SidebarMenuItem, SidebarProvider,
 } from "@/components/ui/sidebar";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
+import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import {
   createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
@@ -417,18 +430,20 @@ function ThemeSwitch({ theme, onChange }: {
   onChange: (theme: Theme) => void;
 }) {
   const light = theme === "light";
-  return <button type="button" className={`theme-switch${light ? " is-light" : ""}`}
-    onClick={() => onChange(light ? "dark" : "light")}
-    title={light ? "切换到深夜主题" : "切换到云昼主题"}
-    aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"}>
+  // 手搓 track 换 Switch 原语:role=switch/aria-checked 交原语,
+  // 受控状态(theme)与持久化逻辑原样;label 行包裹保持整行可点。
+  return <label className="theme-switch"
+    title={light ? "切换到深夜主题" : "切换到云昼主题"}>
     <span className="theme-switch-icon" aria-hidden>
       {light
         ? <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2" /><path d="M10 2.2v1.5M10 16.3v1.5M2.2 10h1.5M16.3 10h1.5M4.5 4.5l1 1M14.5 14.5l1 1M4.5 15.5l1-1M14.5 5.5l1-1" /></svg>
         : <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}
     </span>
     <span className="theme-switch-copy"><strong>{light ? "云昼主题" : "深夜主题"}</strong><small>{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
-    <span className="theme-switch-track" aria-hidden><i /></span>
-  </button>;
+    <Switch size="sm" className="theme-switch-track" checked={light}
+      onCheckedChange={(checked) => onChange(checked ? "light" : "dark")}
+      aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"} />
+  </label>;
 }
 
 function DensitySwitch({ density, onChange }: {
@@ -436,14 +451,16 @@ function DensitySwitch({ density, onChange }: {
   onChange: (density: Density) => void;
 }) {
   const compact = density === "compact";
-  return <button type="button" className="density-switch"
-    onClick={() => onChange(compact ? "comfortable" : "compact")}
-    title={compact ? "切换到舒适密度" : "切换到紧凑密度"}
-    aria-label={compact ? "当前为紧凑密度，切换到舒适密度" : "当前为舒适密度，切换到紧凑密度"}>
+  // 同 ThemeSwitch:开关态交 Switch 原语,受控状态原样。
+  return <label className="density-switch"
+    title={compact ? "切换到舒适密度" : "切换到紧凑密度"}>
     <span className="density-switch-icon" aria-hidden>
       <svg viewBox="0 0 20 20"><path d={compact ? "M4 5.5h12M4 10h12M4 14.5h12" : "M4 4.5h12M4 10h12M4 15.5h12"} /></svg>
     </span>
-  </button>;
+    <Switch size="sm" checked={compact}
+      onCheckedChange={(checked) => onChange(checked ? "compact" : "comfortable")}
+      aria-label={compact ? "当前为紧凑密度，切换到舒适密度" : "当前为舒适密度，切换到紧凑密度"} />
+  </label>;
 }
 
 function TaskSyncIndicator({
@@ -1326,7 +1343,7 @@ export function App() {
           </SidebarMenu>
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
-        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+        <div className="sidebar-foot session-foot"><Avatar size="sm" aria-hidden className="after:hidden"><AvatarFallback className="bg-(--surface-3) text-xs font-semibold text-(--text-strong)">{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
         {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
       </SidebarFooter>
     </Sidebar>
@@ -1337,38 +1354,39 @@ export function App() {
       <main className={`workspace-main${dtsWide ? " is-wide" : ""}`}>
         {view === "team" && <section className="team-tasks-workspace">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
-            onSelect={setTeamTaskTab} />
-          {teamTaskTab === "current" ? <div role="tabpanel"
-            id="team-task-current-panel" aria-labelledby="team-task-current-tab">
-            <TeamDashboard
-              tasks={tasks}
-              users={teamUsers}
-              onChanged={refresh}
-              onOpenArtifacts={openArtifacts}
-            />
-          </div> : <div role="tabpanel"
-            id="team-task-archive-panel" aria-labelledby="team-task-archive-tab">
-            <HistoryBoard
-              tasks={tasks}
-              viewer={session}
-              onChanged={refresh}
-              onOpenTask={openArtifacts}
-            />
-          </div>}
+            onSelect={setTeamTaskTab}>
+            {/* (#210)两块手绘面板换 TabsPanel(keepMounted 默认 false,
+                卸载语义与原三目条件渲染一致);手写 id/aria-controls/
+                aria-labelledby 关联交由原语接管。 */}
+            {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
+              <TeamDashboard
+                tasks={tasks}
+                users={teamUsers}
+                onChanged={refresh}
+                onOpenArtifacts={openArtifacts}
+              />
+            </TabsContent> : <TabsContent value="archive" className="contents">
+              <HistoryBoard
+                tasks={tasks}
+                viewer={session}
+                onChanged={refresh}
+                onOpenTask={openArtifacts}
+              />
+            </TabsContent>}
+          </TeamWorldTabs>
         </section>}
 
         {/* 团队问题(2026-09-10 拆分拍板):问题会话的团队全景;页签骨架
             与团队需求同构(2026-09-11 排版对齐),操作台仍在「问题处理」。 */}
         {view === "teamIssues" && <section className="team-tasks-workspace">
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
-            onSelect={setTeamTaskTab} />
-          {teamTaskTab === "current" ? <div role="tabpanel"
-            id="team-issue-current-panel" aria-labelledby="team-issue-current-tab">
-            <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
-          </div> : <div role="tabpanel"
-            id="team-issue-archive-panel" aria-labelledby="team-issue-archive-tab">
-            <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
-          </div>}
+            onSelect={setTeamTaskTab}>
+            {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
+              <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+            </TabsContent> : <TabsContent value="archive" className="contents">
+              <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
+            </TabsContent>}
+          </TeamWorldTabs>
         </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
@@ -1714,11 +1732,12 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
     catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败，请重试"); }
     finally { setBusy(false); }
   }
-  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
+  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
 }
 
 function LoadingScreen() {
-  return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span>正在进入工作台…</span></main>;
+  {/* #218:整屏结构与文案保留,加载动效统一走 Spinner(原先内部无动画)。 */}
+  return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><Spinner aria-hidden className="size-4 shrink-0" /><span>正在进入工作台…</span></main>;
 }
 
 function UsersBoard({ me }: { me: string }) {
@@ -1796,10 +1815,20 @@ function UsersBoard({ me }: { me: string }) {
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
       <form className="user-create-form" onSubmit={submit}>
-        <label><span>登录账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
-        <label><span>姓名</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
-        <label><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
-        <label><span>账号角色</span><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="developer">开发成员</option><option value="admin">管理员</option></select></label>
+        <label><span>登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
+        <label><span>姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
+        <label><span>初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
+        <label><span>账号角色</span><Select value={role}
+          items={[{ value: "developer", label: "开发成员" }, { value: "admin", label: "管理员" }]}
+          onValueChange={(value) => setRole((value ?? "developer") as UserRole)}>
+          <SelectTrigger className="w-full" aria-label="账号角色"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="developer">开发成员</SelectItem>
+              <SelectItem value="admin">管理员</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
         <button type="submit" disabled={busy}>{busy ? "正在创建…" : "创建账号"}</button>
         {message && <div className="form-message success">{message}</div>}
         {error && <div className="form-message error">{error}</div>}
@@ -1810,42 +1839,74 @@ function UsersBoard({ me }: { me: string }) {
         <div><h2 id="user-list-title">现有账号</h2><p className="section-note">Committer 只在开发主动邀请检视时收到通知。</p></div>
         <span className="section-count">{users.length} 人</span>
       </div>
+      {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
+          列结构(成员/角色/默认入口/Committer/操作)与行内操作、角色徽标
+          原样;行外重置/改名表单落成 colSpan 扩展行。 */}
       <div className="user-table">
-        <div className="user-table-head"><span>成员</span><span>角色</span><span>默认入口</span><span>Committer</span><span>操作</span></div>
-        {users.map((user) => <div className="user-block" key={user.username}>
-          <div className="user-row">
-            <span className="user-cell"><i>{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</i><strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong></span>
-            <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
-            <span className="user-entry">{user.role === "admin" ? "团队需求" : "我的需求"}</span>
-            <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
-            <span className="user-actions">
-              <button type="button" className="user-action" onClick={() => {
-                setResetFor(resetFor === user.username ? "" : user.username);
-                setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
-              }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
-              <button type="button" className="user-action" onClick={() => {
-                setNameFor(nameFor === user.username ? "" : user.username);
-                setNameDraft(user.display_name ?? ""); setResetFor("");
-                setDeleteArm(""); setMessage(""); setError("");
-              }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
-              {user.username === me
-                ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
-                : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
-            </span>
-          </div>
-          {resetFor === user.username && <form className="user-reset-row" onSubmit={submitReset}>
-            <input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
-              onChange={(event) => setResetPassword(event.target.value)} />
-            <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
-            <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
-          </form>}
-          {nameFor === user.username && <form className="user-reset-row" onSubmit={saveDisplayName}>
-            <input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
-              maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
-            <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
-            <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
-          </form>}
-        </div>)}
+        <Table>
+          <TableHeader>
+            <TableRow className="border-(--line)">
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">成员</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">角色</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">默认入口</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">Committer</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users.map((user) => <Fragment key={user.username}>
+              <TableRow className="h-[58px] border-(--line)">
+                <TableCell className="px-4 py-3">
+                  <span className="user-cell">
+                    <Avatar aria-hidden className="after:hidden">
+                      <AvatarFallback className="size-[30px] rounded-[8px] bg-(--accent-soft) text-[13px] font-bold text-(--accent)">{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong>
+                  </span>
+                </TableCell>
+                <TableCell className="px-4 py-3"><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></TableCell>
+                <TableCell className="user-entry px-4 py-3">{user.role === "admin" ? "团队需求" : "我的需求"}</TableCell>
+                {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
+                    交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
+                <TableCell className="px-4 py-3"><label className={`committer-toggle${user.committer ? " on" : ""}`}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
+                <TableCell className="px-4 py-3"><span className="user-actions">
+                  <button type="button" className="user-action" onClick={() => {
+                    setResetFor(resetFor === user.username ? "" : user.username);
+                    setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
+                  }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
+                  <button type="button" className="user-action" onClick={() => {
+                    setNameFor(nameFor === user.username ? "" : user.username);
+                    setNameDraft(user.display_name ?? ""); setResetFor("");
+                    setDeleteArm(""); setMessage(""); setError("");
+                  }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
+                  {user.username === me
+                    ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
+                    : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
+                </span></TableCell>
+              </TableRow>
+              {resetFor === user.username && <TableRow className="border-(--line)">
+                <TableCell colSpan={5} className="px-4 pb-3">
+                  <form className="user-reset-row" onSubmit={submitReset}>
+                    <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
+                      onChange={(event) => setResetPassword(event.target.value)} />
+                    <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
+                    <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
+                  </form>
+                </TableCell>
+              </TableRow>}
+              {nameFor === user.username && <TableRow className="border-(--line)">
+                <TableCell colSpan={5} className="px-4 pb-3">
+                  <form className="user-reset-row" onSubmit={saveDisplayName}>
+                    <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
+                      maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
+                    <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
+                    <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
+                  </form>
+                </TableCell>
+              </TableRow>}
+            </Fragment>)}
+          </TableBody>
+        </Table>
       </div>
     </section>
   </section>;
@@ -1853,33 +1914,38 @@ function UsersBoard({ me }: { me: string }) {
 
 /** 两域共用的页签骨架(2026-09-11 排版对齐):「当前现场/成果档案」两张
  * 大卡,团队需求与团队问题两页必须用这同一个组件,防版式漂移;域差异
- * 只有副标题文案与 aria 标注。 */
-function TeamWorldTabs({ domain, tab, onSelect }: {
+ * 只有副标题文案与 aria 标注。(#210)手搓 role=tablist 换 base-ui Tabs
+ * 原语:面板(TabsPanel)由调用点作为 children 传入,键盘箭头、roving
+ * tabindex 与页签/面板关联全部归原语;双行大卡版式用 shadcn 语义令牌
+ * 重皮(网格两列,窄屏单列),文案原样。 */
+function TeamWorldTabs({ domain, tab, onSelect, children }: {
   domain: "requirement" | "issue";
   tab: TeamTaskTab;
   onSelect: (tab: TeamTaskTab) => void;
+  children?: ReactNode;
 }) {
   const copy = domain === "requirement"
     ? { label: "团队需求视图", currentSmall: "谁在推进、哪里卡住、谁需要行动",
-        archiveSmall: "待合入、完成、失败与取消记录", prefix: "team-task" }
+        archiveSmall: "待合入、完成、失败与取消记录" }
     : { label: "团队问题视图", currentSmall: "哪个问题在推进、谁需要答复",
-        archiveSmall: "闭环结论与取消记录", prefix: "team-issue" };
-  return <nav className="team-task-tabs" aria-label={copy.label} role="tablist">
-    <button type="button" role="tab" id={`${copy.prefix}-current-tab`}
-      aria-controls={`${copy.prefix}-current-panel`}
-      aria-selected={tab === "current"}
-      className={tab === "current" ? "active" : ""}
-      onClick={() => onSelect("current")}>
-      <strong>当前现场</strong><small>{copy.currentSmall}</small>
-    </button>
-    <button type="button" role="tab" id={`${copy.prefix}-archive-tab`}
-      aria-controls={`${copy.prefix}-archive-panel`}
-      aria-selected={tab === "archive"}
-      className={tab === "archive" ? "active" : ""}
-      onClick={() => onSelect("archive")}>
-      <strong>成果档案</strong><small>{copy.archiveSmall}</small>
-    </button>
-  </nav>;
+        archiveSmall: "闭环结论与取消记录" };
+  return <Tabs value={tab} className="block"
+    onValueChange={(value) => onSelect(value as TeamTaskTab)}>
+    <TabsList aria-label={copy.label}
+      className="mb-4.5 h-auto w-full grid grid-cols-2 gap-[5px] rounded-[13px] border border-border bg-muted/60 p-[5px] shadow-xs max-[520px]:grid-cols-1">
+      <TabsTrigger value="current"
+        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
+        <strong className="text-sm leading-tight">当前现场</strong>
+        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.currentSmall}</small>
+      </TabsTrigger>
+      <TabsTrigger value="archive"
+        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
+        <strong className="text-sm leading-tight">成果档案</strong>
+        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.archiveSmall}</small>
+      </TabsTrigger>
+    </TabsList>
+    {children}
+  </Tabs>;
 }
 
 /** 团队看板列表项:TeamTask 稳定字段投影 + 原始任务对象。
@@ -1969,9 +2035,34 @@ function TeamDashboard({
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
       <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
-        <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
-        <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{userLabel(user)}</option>)}</select>
+        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
+        <Select value={scope}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞任务" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等待决策" }]}
+          onValueChange={(value) => setScope((value ?? "all") as TeamScope)}>
+          <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">全部现场</SelectItem>
+              <SelectItem value="action">需要处理</SelectItem>
+              <SelectItem value="stale">停滞任务</SelectItem>
+              <SelectItem value="wip">正在推进</SelectItem>
+              <SelectItem value="waiting">等待决策</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select value={responsible}
+          items={[{ value: "", label: "全部责任人" }, { value: "__unassigned", label: "未指定" },
+            ...users.map((user) => ({ value: user.username, label: userLabel(user) }))]}
+          onValueChange={(value) => setResponsible(value ?? "")}>
+          <SelectTrigger className="min-w-28" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="">全部责任人</SelectItem>
+              <SelectItem value="__unassigned">未指定</SelectItem>
+              {users.map((user) => <SelectItem value={user.username} key={user.username}>{userLabel(user)}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
@@ -2086,5 +2177,7 @@ function TaskEmpty({ personal, title, detail }: {
   title?: string;
   detail?: string;
 }) {
-  return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{title ?? (personal ? "还没有分配给你的其他任务" : "还没有当前任务")}</strong><p>{detail ?? (personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。")}</p></div>;
+  /* #217 空态收编:原 empty-state 本就是"两行字、无虚线框、图标隐藏"
+     的极简空态,Empty + 标题/描述即可,legacy 的 empty-visual 不再带出。 */
+  return <Empty className="py-11"><EmptyTitle>{title ?? (personal ? "还没有分配给你的其他任务" : "还没有当前任务")}</EmptyTitle><EmptyDescription>{detail ?? (personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。")}</EmptyDescription></Empty>;
 }

@@ -20,7 +20,7 @@ import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -320,7 +320,7 @@ function ManualRegister({
       <div className="issue-group-body">
         <label className="issue-field wide">
           <span>问题标题 <i className="req">*</i></span>
-          <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
+          <Input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
@@ -349,16 +349,28 @@ function ManualRegister({
         <label className="issue-field wide">
           <span>业务模块 <i className="req">*</i></span>
           <span className="issue-module-wrap">
-            <select value={moduleId}
+            <Select value={moduleId}
               disabled={modules === undefined || !!moduleLoadError}
-              onChange={(event) => setModuleId(event.target.value)}>
-              <option value="" disabled>选择业务模块——决定关联代码仓</option>
-              {moduleCatalog.map((module) => (
-                <option key={module.id} value={module.id}>
-                  {module.name}(绑 {module.repositories.length} 个仓)
-                </option>
-              ))}
-            </select>
+              items={[{ value: "", label: "选择业务模块——决定关联代码仓" },
+                ...moduleCatalog.map((module) => ({
+                  value: module.id,
+                  label: `${module.name}(绑 ${module.repositories.length} 个仓)`,
+                }))]}
+              onValueChange={(value) => setModuleId(value ?? "")}>
+              <SelectTrigger className="w-full" aria-label="业务模块">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="tw-root">
+                <SelectGroup>
+                  <SelectItem value="" disabled>选择业务模块——决定关联代码仓</SelectItem>
+                  {moduleCatalog.map((module) => (
+                    <SelectItem key={module.id} value={module.id}>
+                      {module.name}(绑 {module.repositories.length} 个仓)
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             {selectedModule && <>
               <small className="issue-module-hint">
                 已带出 {selectedModule.repositories.length} 个代码仓,悬停查看
@@ -426,7 +438,7 @@ function ManualRegister({
         </p>}
         <label className="issue-field">
           <span>建议标题</span>
-          <input value={adoptTitle}
+          <Input value={adoptTitle}
             onChange={(event) => setAdoptTitle(event.target.value)} />
         </label>
         <div className="issue-polish-preview" aria-label="润色后描述预览">

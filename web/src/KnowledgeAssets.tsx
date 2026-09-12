@@ -64,6 +64,12 @@ import {
   knowledgeAssetElementId,
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertAction, AlertDescription } from "@/components/Alert";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
   { kind: "engineering" }>;
@@ -641,30 +647,45 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
     <div className="ka-bar">
       <div className="ka-search">
         <svg viewBox="0 0 16 16" aria-hidden><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-        <input type="search" value={search} placeholder="搜名称、描述、提交人"
+        <Input type="search" className="pl-7" value={search} placeholder="搜名称、描述、提交人"
           aria-label="搜索知识资产"
           onChange={(event) => setSearch(event.target.value)} />
       </div>
       <div className="ka-filters">
         <label><span className="ka-field-label">性质</span>
-          <select value={natureFilter} onChange={(event) => {
-            setNatureFilter(event.target.value as "all" | KnowledgeNature);
-            setDetailFilter("all");
-          }}>
-            <option value="all">全部性质</option>
-            <option value="business">业务知识</option>
-            <option value="engineering">工程知识</option>
-            <option value="unclassified">待补属性（历史）</option>
-          </select></label>
+          <Select value={natureFilter}
+            items={[{ value: "all", label: "全部性质" }, { value: "business", label: "业务知识" }, { value: "engineering", label: "工程知识" }, { value: "unclassified", label: "待补属性（历史）" }]}
+            onValueChange={(value) => {
+              setNatureFilter((value ?? "all") as "all" | KnowledgeNature);
+              setDetailFilter("all");
+            }}>
+            <SelectTrigger aria-label="性质"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部性质</SelectItem>
+                <SelectItem value="business">业务知识</SelectItem>
+                <SelectItem value="engineering">工程知识</SelectItem>
+                <SelectItem value="unclassified">待补属性（历史）</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>
         {natureFilter === "business" && <label>
           <span className="ka-field-label">业务模块</span>
-          <select value={detailFilter}
-            onChange={(event) => setDetailFilter(event.target.value)}>
-            <option value="all">全部业务模块</option>
-            {businessModules.filter((module) => module.status === "active")
-              .map((module) => <option value={module.id} key={module.id}>
-                {module.name}</option>)}
-          </select></label>}
+          <Select value={detailFilter}
+            items={[{ value: "all", label: "全部业务模块" },
+              ...businessModules.filter((module) => module.status === "active")
+                .map((module) => ({ value: module.id, label: module.name }))]}
+            onValueChange={(value) => setDetailFilter(value ?? "all")}>
+            <SelectTrigger aria-label="业务模块"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部业务模块</SelectItem>
+                {businessModules.filter((module) => module.status === "active")
+                  .map((module) => <SelectItem value={module.id} key={module.id}>
+                    {module.name}</SelectItem>)}
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>}
         {natureFilter === "engineering" && <KnowledgeLanguageFilter
           value={detailFilter} onChange={setDetailFilter}
           counts={languageCounts} />}
@@ -680,12 +701,12 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
       </div>
     </div>
 
-    {error && <div className="ka-alert danger" role="alert">{error}</div>}
-    {note && <div className="ka-alert" role="status">{note}
-      <button type="button" onClick={() => setNote("")}>知道了</button></div>}
-    {!!shelf?.warnings.length && <div className="ka-alert warn" role="note">
-      {shelf.warnings.map((warning) => <p key={warning}>⚠ {warning}</p>)}
-    </div>}
+    {error && <Alert variant="destructive" role="alert">{error}</Alert>}
+    {note && <Alert role="status">{note}
+      <AlertAction><button type="button" onClick={() => setNote("")}>知道了</button></AlertAction></Alert>}
+    {!!shelf?.warnings.length && <Alert variant="warning" role="note">
+      {shelf.warnings.map((warning) => <p key={warning} className="m-0.5">⚠ {warning}</p>)}
+    </Alert>}
 
     <div className="ka-body">
       <div className="ka-list">
@@ -967,7 +988,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
           {admin && selectedSubmission.status === "pending" && <div
             className="ka-actions">
             {rejectFor === selectedSubmission.id ? <>
-              <input type="text" placeholder="驳回原因(可留空)"
+              <Input type="text" className="min-w-55 flex-1" placeholder="驳回原因(可留空)"
                 value={rejectReason}
                 onChange={(event) => setRejectReason(event.target.value)} />
               <button type="button" className="ka-primary" disabled={busy}
@@ -1041,10 +1062,12 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
           </dl>
           {engineeringFocus?.candidateId === selectedCandidate.id
             && engineeringFocus.digest !== selectedCandidate.digest
-            ? <p className="ka-alert danger" role="alert">
-              清单版本 {engineeringFocus.digest.slice(0, 8)} 与当前版本 {
-                selectedCandidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
-            </p>
+            ? <Alert variant="destructive" role="alert" className="my-2">
+              <AlertDescription>
+                清单版本 {engineeringFocus.digest.slice(0, 8)} 与当前版本 {
+                  selectedCandidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
+              </AlertDescription>
+            </Alert>
             : <pre className="ka-doc">{selectedCandidate.content}</pre>}
           <div className="ka-actions">
             <button type="button" onClick={() =>
@@ -1053,7 +1076,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
             {selectedCandidate.status === "pending"
               && canManageCandidate(selectedCandidate) && (
               rejectFor === selectedCandidate.id ? <>
-                <input value={rejectReason}
+                <Input className="min-w-55 flex-1" value={rejectReason}
                   onChange={(event) => setRejectReason(event.target.value)}
                   placeholder="必须说明原因，便于提交人修订" />
                 <button type="button" className="ka-primary"
@@ -1324,7 +1347,7 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
 
     <div className="ka-form-row">
       <label><span className="ka-field-label">目录名</span>
-        <input type="text" placeholder="如 order-rules" value={name}
+        <Input type="text" placeholder="如 order-rules" value={name}
           onChange={(event) => onName(event.target.value.trim())} /></label>
       <button type="button" onClick={onPick}>选技能包目录</button>
       <button type="button" className="ka-primary"
@@ -1363,14 +1386,14 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
           你没权限的仓,平台也不替你看。</p>
         <div className="ka-form-grid">
           <label><span className="ka-field-label">参考仓地址(必填)</span>
-            <input type="text" value={repo} placeholder="git@… 或 https://…"
+            <Input type="text" value={repo} placeholder="git@… 或 https://…"
               onChange={(event) => onRepo(event.target.value)} /></label>
           <label><span className="ka-field-label">提取意图(必填,一句话)</span>
-            <input type="text" value={intent}
+            <Input type="text" value={intent}
               placeholder="如:他们的重试与限流是怎么实现的"
               onChange={(event) => onIntent(event.target.value)} /></label>
           <label><span className="ka-field-label">路径提示(可选,只是起点)</span>
-            <input type="text" value={hint} placeholder="如:src/main/java/…/retry"
+            <Input type="text" value={hint} placeholder="如:src/main/java/…/retry"
               onChange={(event) => onHint(event.target.value)} /></label>
         </div>
         <div className="ka-form-row">
@@ -1382,14 +1405,14 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
           {job?.status === "running" && <small>
             只读会话正在读仓起草;完成后草稿出现在下方,可离开本页稍后再来。</small>}
         </div>
-        {extractError && <div className="ka-alert danger" role="alert">
-          {extractError}</div>}
-        {job?.status === "failed" && <div className="ka-alert danger"
-          role="alert">提取失败:{job.error ?? "未知原因"}</div>}
+        {extractError && <Alert variant="destructive" role="alert" className="mb-2">
+          {extractError}</Alert>}
+        {job?.status === "failed" && <Alert variant="destructive"
+          role="alert" className="mb-2">提取失败:{job.error ?? "未知原因"}</Alert>}
         {job?.status === "done" && <>
           <label className="ka-draft">
             <span className="ka-field-label">草稿(可编辑;{verb}前请抽查论断与文件出处)</span>
-            <textarea rows={16} value={draft}
+            <Textarea rows={16} className="min-h-60 resize-y font-mono text-xs" value={draft}
               onChange={(event) => onDraft(event.target.value)} /></label>
           {job.notes && <p className="ka-hint">提取会话自述:{job.notes}</p>}
           <div className="ka-form-row">

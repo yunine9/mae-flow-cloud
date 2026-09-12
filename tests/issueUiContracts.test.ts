@@ -223,17 +223,18 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
   // 组件本体:promise 单例宿主 + FIFO 排队 + 无障碍 + 键盘纪律。
   assert.match(confirmDialog, /export function confirmDialog\(/);
   assert.match(confirmDialog, /export function ConfirmDialogHost\(\)/);
-  assert.match(confirmDialog, /role="dialog"/);
-  assert.match(confirmDialog, /aria-modal="true"/);
-  assert.match(confirmDialog, /aria-labelledby="confirm-dialog-title"/);
-  assert.match(confirmDialog, /event\.key === "Escape"/);
-  assert.match(confirmDialog, /event\.key === "Tab"/);
-  assert.match(confirmDialog, /event\.target === event\.currentTarget/);
+  // 视觉壳与键盘纪律(#219 收尾)走 shadcn AlertDialog(base-ui 原语):
+  // role=alertdialog/aria-modal/aria-labelledby、Esc=取消、Tab 困笼、
+  // 点背板=取消、关闭归还焦点全由原语接管;页面只留 promise 单例、
+  // FIFO 队列、危险档焦点落位与取消汇流(onOpenChange(false))。
+  assert.match(confirmDialog,
+    /<AlertDialog open=\{current != null\}\s*\n\s*onOpenChange=\{\(open\) => \{ if \(!open\) settle\(false\); \}\}>/);
   assert.match(confirmDialog, /queue\[0\]/, "FIFO 排队:同一时刻只渲染队首");
   assert.match(confirmDialog, /options\.danger \? cancelRef : confirmRef/,
     "危险档默认焦点落「取消」,普通档落「确认」");
-  assert.match(confirmDialog, /triggerRef\.current\?\.focus\(\)/,
-    "关闭后焦点归还触发元素");
+  assert.match(confirmDialog,
+    /initialFocus=\{current\.options\.danger \? cancelRef : confirmRef\}/,
+    "首卡打开由 initialFocus 落位危险档口径");
   // 问题流三处接入:取消会话(危险档)/归档会话/提交检视意见。
   for (const [name, source] of [["SessionView", sessionView],
     ["MaterialsPane", materialsPane]] as const) {
@@ -608,11 +609,13 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
       .map(([, key, label]) => `${key}:${label}`),
     ["events:对话现场", "dts:DTS单据", "doc:过程文档",
       "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
-  // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(role=tablist),
-  // 页签按钮 role=tab + aria-selected。
+  // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
+  // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
+  // (#210)手搓 role=tablist 换原语:键盘箭头、roving tabindex 归原语。
   assert.match(sessionView,
-    /className="ws-pane-head" aria-label="问题工作台视图">[\s\S]*?className="ws-source-switch" role="tablist"/);
-  assert.match(sessionView, /role="tab"\s*\n\s*aria-selected=\{tab === key\}/);
+    /className="ws-pane-head" aria-label="问题工作台视图">[\s\S]*?className="ws-source-switch h-auto justify-start"/);
+  assert.match(sessionView,
+    /<TabsTrigger key=\{key\} value=\{key\}[\s\S]*?tab === key \? " on" : ""/);
   // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
   assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
   assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
@@ -636,7 +639,9 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   assert.match(materials, /\{view === "doc" && /);
   assert.match(materials, /\{view === "changes" && /);
   assert.match(materials, /\{view === "logs" && /);
-  assert.match(materials, /"ws-tabs" role="tablist"/);
+  // (#210)doc 子页签换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类随家族退役,
+  // 改用 shadcn 默认页签皮,页签语义(键盘箭头/roving)归原语。
+  assert.match(materials, /<TabsList aria-label="过程文档页签"/);
   // 页签一签一色:#123 追加块按页签序发 --workspace-tab-color(五签
   // 五色),激活态样式走该变量;问题域默认值已在 .issue-workspace 定义。
   assert.match(css, /\/\* #123 左栏标签/);
@@ -867,7 +872,9 @@ test("卡座(#125):无卡时输入区恢复普通输入,查看模式只读不出
   // 无卡分支:插话/续聊的普通输入(steer-input)段没有 dock——dock 只
   // 在等卡的 blocked 分支;无卡时 dock 容器不渲染,输入区恢复普通输入。
   const steerBranch = stream.slice(stream.indexOf('const steer = mode.kind === "steer"'));
-  assert.ok(steerBranch.includes("steer-input"), "插话/续聊输入在场");
+  // 旧 textarea.steer-input 换 shadcn Textarea:插话/续聊共用同一输入
+  // 组件,由 steer 布尔切换文案;无卡时 dock 容器不渲染。
+  assert.ok(steerBranch.includes("<Textarea"), "插话/续聊输入在场");
   assert.doesNotMatch(steerBranch, /ws-reply-dock/, "无卡时不得出 dock");
   // dock 门:归属人 + 有卡才为真;查看者(waiting 也在场)拿不到 dock。
   assert.match(stream, /dock=\{waiting && canOperate\}/);
@@ -1051,7 +1058,10 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
     /\.issue-conv-steps \{/);
   // 流内筛选:栏头「全部/需要我的」(任务侧同款 ws-stream-filters),
   // 「需要我的」口径=还开着的卡;钉在流末的当前卡不受筛选影响。
-  assert.match(stream, /<div className="ws-stream-filters" role="tablist"/);
+  // (#210)手搓 role=tablist 换 base-ui Tabs 原语,ws-stream-filters
+  // 皮肤类挂在 TabsList 上,键盘箭头归原语,视觉原样。
+  assert.match(stream,
+    /<TabsList variant="line" aria-label="会话流筛选" className="ws-stream-filters h-auto">/);
   assert.match(stream, /\["all", "全部"\], \["mine", "需要我的"\]/);
   assert.match(stream,
     /filter === "mine"\s*\n\s*\? limited\.filter\(\(item\) => item\.kind === "card" && item\.status === "waiting"\)/);
@@ -1115,13 +1125,13 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   // 「找不到就新建」弹共用表单,保存回传新条目自动选中(onPick)。
   assert.match(picker, /listEnvironments/);
   assert.match(picker, /onPick: \(entry: EnvironmentView\) => void/);
-  assert.match(picker, /role="listbox"/);
-  assert.match(picker, /role="option"/);
-  // 键盘高亮跟随:高亮行滚回清单视口(block:nearest 只滚容器),行有
-  // hover 底色给纯鼠标用户反馈。
-  assert.match(picker, /data-highlighted=\{index === highlighted \? "true" : undefined\}/);
-  assert.match(picker, /scrollIntoView\(\{ block: "nearest" \}\)/);
-  assert.match(picker, /hover:bg-accent/);
+  // #212 起内层清单换 Command(cmdk):listbox/option 语义、方向键高亮、
+  // 高亮行滚入视口与行 hover 底色全归原语;页面保留搜索过滤与选中
+  // 标记(onSelect → onPick,data-checked 勾选态)。
+  assert.match(picker, /<CommandList className="max-h-60" aria-label="环境清单">/);
+  assert.match(picker, /<CommandItem key=\{entry\.id\} value=\{entry\.id\}/);
+  assert.match(picker, /data-checked=\{picked \|\| undefined\}/);
+  assert.match(picker, /onSelect=\{\(\) => pick\(entry\)\}/);
   assert.match(picker, /EnvironmentEditorDialog/);
   assert.match(picker, /onPick\(entry\)/);
   assert.match(picker, /tw-root/);
@@ -1165,7 +1175,10 @@ test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役
   // 文字入口「进入问题工作台」删除——点击即达,不留第二入口;
   // 直达终止(2026-09-08)保留,终态卡不渲染终止钮的口径不变。
   assert.doesNotMatch(issueBoard, /panel-link/);
-  assert.match(issueBoard, /terminatable && <button type="button" className="ui-btn flat danger"/);
+  // #219 终止钮随 ui.css 退役换 shadcn Button:ghost 皮 + 危险字色 +
+  // hover 下划线,零盒感混排 task-meta 的形态原样保留。
+  assert.match(issueBoard,
+    /terminatable && <Button type="button" variant="ghost" size="sm"\s*\r?\n\s*className="h-auto px-0 font-semibold text-destructive/);
   assert.match(issueBoard, /action: "cancel"/);
   // 皮肤换 shadcn Card;现场直播(SSE)与耗时卡点(时间线拉取)不再被
   // 列表引用——这两类请求只属于工作台,列表不得回流。

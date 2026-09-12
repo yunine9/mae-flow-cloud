@@ -4,11 +4,24 @@
  * 调用侧只 import confirmDialog(promise 风格,返回是否确认)：
  *   if (!await confirmDialog({ title: "终止会话", danger: true })) return;
  * App 根部挂一次 ConfirmDialogHost 负责渲染;并发调用 FIFO 排队,
- * 同一时刻最多一张卡。视觉与键盘纪律(Esc=取消、Tab 困笼、危险档
- * 默认焦点在取消、关闭归还焦点)都在这一处,调用点不必关心。
+ * 同一时刻最多一张卡。视觉壳走 shadcn AlertDialog(base-ui 原语):
+ * Esc=取消(原语在 document 层拦下并不再冒泡到 window——全屏工作台
+ * 把 Escape 绑在 window 当"返回"的纪律不破)、点背板=取消、Tab 困笼
+ * 与关闭归还焦点都由原语接管;危险档打开时焦点落在「取消」,防手滑
+ * 连按回车。调用点不必关心这些,只声明 title/message/danger 即可。
  */
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export interface ConfirmDialogOptions {
   title: string;
@@ -16,7 +29,7 @@ export interface ConfirmDialogOptions {
   message?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** 危险档:红色确认按钮,打开时焦点落在「取消」,防手滑连按回车。 */
+  /** 危险档:破坏性确认按钮,打开时焦点落在「取消」,防手滑连按回车。 */
   danger?: boolean;
 }
 
@@ -54,63 +67,46 @@ function subscribe(listener: () => void): () => void {
 
 export function ConfirmDialogHost() {
   const current = useSyncExternalStore(subscribe, () => queue[0] ?? null);
-  const triggerRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
 
+  // 危险档默认焦点在「取消」。首卡打开由 initialFocus 落位;FIFO 换卡
+  // (上一张确认后队列里还有下一张)时弹层不重挂、initialFocus 不重放,
+  // 这里按当前 head 把焦点钉回正确按钮。
   useEffect(() => {
-    if (!current) return;
-    triggerRef.current = document.activeElement as HTMLElement | null;
-    (current.options.danger ? cancelRef : confirmRef).current?.focus();
-    return () => { triggerRef.current?.focus(); };
+    (current?.options.danger ? cancelRef : confirmRef).current?.focus();
   }, [current]);
 
-  if (!current) return null;
-  const { options } = current;
-  // Escape 在这里拦下就地取消,不再冒泡到 window——会话工作台等全屏
-  // 视图把 Escape 绑在 window 上当"返回",不拦会连视图一起关掉。
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      settle(false);
-      return;
-    }
-    if (event.key === "Tab") {
-      // 焦点困笼:框内只有取消/确认两个按钮,首尾循环即可。
-      const focusables = [cancelRef.current, confirmRef.current]
-        .filter((button): button is HTMLButtonElement => button !== null);
-      if (focusables.length === 0) return;
-      const [first, last] = [focusables[0], focusables[focusables.length - 1]];
-      const active = document.activeElement;
-      const inside = focusables.includes(active as HTMLButtonElement);
-      if (event.shiftKey ? active === first || !inside
-        : active === last || !inside) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      }
-    }
-  };
-  return <div className="confirm-backdrop" role="presentation"
-    onKeyDown={onKeyDown}
-    onClick={(event) => {
-      if (event.target === event.currentTarget) settle(false);
-    }}>
-    <section className="confirm-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="confirm-dialog-title">
-      <h3 id="confirm-dialog-title">{options.title}</h3>
-      {options.message != null
-        && <div className="confirm-message">{options.message}</div>}
-      <footer>
-        <button type="button" ref={cancelRef}
-          onClick={() => settle(false)}>
-          {options.cancelLabel ?? "取消"}
-        </button>
-        <button type="button" ref={confirmRef}
-          className={options.danger ? "danger" : "primary"}
+  // 取消路径统一走 onOpenChange(false):Esc、点背板、以及取消按钮
+  // (AlertDialogCancel 是 base-ui Close,自动经 onOpenChange 关闭)。
+  return <AlertDialog open={current != null}
+    onOpenChange={(open) => { if (!open) settle(false); }}>
+    {current && <AlertDialogContent
+      // z-(--z-topmost):确认必须压过一切弹层(全屏工作区 60、
+      // Modal 950),背板随弹层一起抬,从全屏工作台发起的确认不被压住。
+      className="tw-root z-(--z-topmost) [&_[data-slot=alert-dialog-overlay]]:z-(--z-topmost)"
+      initialFocus={current.options.danger ? cancelRef : confirmRef}>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{current.options.title}</AlertDialogTitle>
+        {current.options.message != null && (
+          <AlertDialogDescription
+            render={<div className="whitespace-pre-line
+              [&_ul]:my-0 [&_ul]:list-disc [&_ul]:pl-5
+              [&_ul]:grid [&_ul]:gap-1" />}>
+            {current.options.message}
+          </AlertDialogDescription>
+        )}
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel ref={cancelRef}>
+          {current.options.cancelLabel ?? "取消"}
+        </AlertDialogCancel>
+        <AlertDialogAction variant={current.options.danger ? "destructive" : "default"}
+          ref={confirmRef}
           onClick={() => settle(true)}>
-          {options.confirmLabel ?? "确认"}
-        </button>
-      </footer>
-    </section>
-  </div>;
+          {current.options.confirmLabel ?? "确认"}
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>}
+  </AlertDialog>;
 }

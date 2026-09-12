@@ -35,6 +35,11 @@ import {
   type WorkflowSchemeSelection,
 } from "./workflows";
 import { Markdown } from "./markdown";
+import { Empty, EmptyDescription } from "@/components/Empty";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
@@ -225,9 +230,9 @@ function LaunchRequirementTeam({
         const checked = selected.includes(person.username);
         return <label key={person.username}
           className={`${checked ? "selected" : ""}${person.ready ? "" : " unready"}`}>
-          <input type="checkbox" checked={checked}
+          <Checkbox checked={checked}
             disabled={(!person.ready || selected.length >= 20) && !checked}
-            onChange={() => toggle(person.username)} />
+            onCheckedChange={() => toggle(person.username)} />
           <span><strong>{userLabel(person)}</strong>
             <small>{person.ready ? "个人设置已就绪，可参与讨论"
               : `暂不可邀请 · 缺 ${person.missing.join("、")}`}</small></span>
@@ -986,7 +991,7 @@ export function LaunchWorkspace({
                 <div className="launch-section-head"><i>1</i><div><strong>任务与需求</strong><small>说清目标、范围和完成标准即可</small></div><em>必填</em></div>
                 <label className="account-field launch-title-field">
                   <span>任务名称</span>
-                  <input type="text" value={title} maxLength={80}
+                  <Input type="text" value={title} maxLength={80}
                     onChange={(event) => setTitle(event.target.value)}
                     placeholder="例如：修复通知模板变量缺失"
                     autoFocus required />
@@ -1021,8 +1026,9 @@ export function LaunchWorkspace({
                       选择 .md / .zip
                     </label>
                   </div>
-                  {!requirementBundle && <textarea
+                  {!requirementBundle && <Textarea
                     id="launch-requirement"
+                    className="min-h-65 resize-y"
                     value={requirement}
                     onChange={(event) => {
                       setRequirement(event.target.value);
@@ -1079,7 +1085,7 @@ export function LaunchWorkspace({
                   {!options.repo.enabled && <div className="repo-field" role="status">
                     <label className="account-field">
                       <span>代码仓</span>
-                      <input type="text" disabled placeholder="当前部署不支持逐单选择代码仓"
+                      <Input type="text" disabled placeholder="当前部署不支持逐单选择代码仓"
                         aria-describedby="launch-repository-unavailable" />
                     </label>
                     <p id="launch-repository-unavailable" className="repo-field-note">
@@ -1102,7 +1108,7 @@ export function LaunchWorkspace({
                             options.ticket.enabled && !ticketsDeferred
                               ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
-                            <input type="text" value={value}
+                            <Input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
                               placeholder="https://codehub…/team/project.git"
                               aria-label={`第 ${index + 1} 个代码仓地址`}
@@ -1114,7 +1120,7 @@ export function LaunchWorkspace({
                                   ?.reachable === false)}
                               required={options.repo.required} />
                             {options.ticket.enabled && !ticketsDeferred
-                              && <input type="text"
+                              && <Input type="text"
                               value={repositoryTickets[index] ?? ""}
                               onChange={(event) => changeRepositoryTicket(
                                 index, event.target.value)}
@@ -1185,7 +1191,7 @@ export function LaunchWorkspace({
                         <label className="account-field">
                           <span>AR 对应的 REQ 单号
                             {options.ticket.required ? "（必填）" : ""}</span>
-                          <input type="text" value={ticket}
+                          <Input type="text" value={ticket}
                             onChange={(event) => setTicket(event.target.value)}
                             placeholder="例如：REQ2026xxxx"
                             spellCheck={false}
@@ -1199,7 +1205,7 @@ export function LaunchWorkspace({
                       {options.baseline.enabled && (
                         <label className="account-field">
                           <span>基线分支（必填）</span>
-                          <input type="text" value={baseline}
+                          <Input type="text" value={baseline}
                             onChange={(event) => changeBaseline(event.target.value)}
                             placeholder={options.baseline.default} spellCheck={false}
                             required />
@@ -1231,14 +1237,15 @@ export function LaunchWorkspace({
                         const disabled = !selected && selectedBusinessModuleIds.length >= 4;
                         return <label key={module.id}
                           className={`business-module-option${selected ? " selected" : ""}${disabled ? " disabled" : ""}`}>
-                          <input type="checkbox" checked={selected} disabled={disabled}
-                            onChange={() => {
+                          {/* 勾选态:Checkbox 自带 data-checked 皮;卡片选中
+                              高亮仍由上面的 selected 类驱动。 */}
+                          <Checkbox className="mt-1" checked={selected} disabled={disabled}
+                            onCheckedChange={() => {
                               setModuleSelectionTouched(true);
                               setSelectedBusinessModuleIds((current) => selected
                                 ? current.filter((id) => id !== module.id)
                                 : [...current, module.id]);
                             }} />
-                          <span className="business-module-check" aria-hidden>{selected ? "✓" : ""}</span>
                           <span className="business-module-option-copy">
                             <span><strong>{module.name}</strong>
                               {selectedIndex === 0 && <em>主模块</em>}
@@ -1266,23 +1273,25 @@ export function LaunchWorkspace({
                   <div className="launch-section-head"><i>3</i><div><strong>交付方式</strong>
                     <small>选择最接近本次任务的交付规模</small></div><em>必填</em></div>
                   <fieldset className="delivery-mode-field">
-                    <div className="delivery-mode-options">
+                    {/* 原生 radio 换 RadioGroup:required/name 交由组级
+                        属性(表单校验语义不变),选中皮交 RadioGroupItem。 */}
+                    <RadioGroup
+                      className="delivery-mode-options"
+                      name="delivery-workflow"
+                      required
+                      value={lane || options.workflows[0].label}
+                      onValueChange={(value) => setLane(value)}>
                       {options.workflows.map((item) => (
                         <label key={item.key}
                           className={`delivery-mode-option${(lane
                             || options.workflows[0].label) === item.label
                             ? " selected" : ""}`}>
-                          <input type="radio" name="delivery-workflow"
-                            value={item.label}
-                            checked={(lane || options.workflows[0].label)
-                              === item.label}
-                            onChange={() => setLane(item.label)} required />
-                          <span className="delivery-mode-radio" aria-hidden />
+                          <RadioGroupItem value={item.label} />
                           <span><strong>{item.label}</strong>
                             {item.description && <small>{item.description}</small>}</span>
                         </label>
                       ))}
-                    </div>
+                    </RadioGroup>
                   </fieldset>
                 </section>}
 
@@ -1370,9 +1379,9 @@ export function LaunchWorkspace({
                       ))}
                     </div>
                   ) : (
-                    <div className="launch-knowledge-quick-empty">
-                      当前没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
-                    </div>
+                    <Empty className="mt-2.5 p-2.5">
+                      <EmptyDescription>当前没有匹配到 Mae-Flow 平台管理的知识；不影响发起。</EmptyDescription>
+                    </Empty>
                   )}
                 </>}
               </section>}
@@ -1420,7 +1429,7 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-settings-grid">
                       <label className="account-field repair-field">
                         <span>修复轮预算</span>
-                        <input type="text" inputMode="numeric" pattern="[0-9]*"
+                        <Input type="text" inputMode="numeric" pattern="[0-9]*"
                           value={repairRounds}
                           onChange={(event) => {
                             const value = event.target.value.trim();
@@ -1437,7 +1446,8 @@ export function LaunchWorkspace({
                       </label>
                       {!workflowSelection && <label className="account-field task-instructions-field">
                         <span>给标准方案的补充提醒</span>
-                        <textarea value={taskInstructions} maxLength={2000}
+                        <Textarea value={taskInstructions} maxLength={2000}
+                          className="min-h-21 resize-y"
                           onChange={(event) => setTaskInstructions(event.target.value)}
                           placeholder="例如：不确定时明确说明，不要猜；优先兼容旧数据。" />
                         <small>选择定制工作流后不再叠加，避免两套指令摩擦。</small>
@@ -1552,10 +1562,10 @@ export function LaunchWorkspace({
                         }} />)}
                   </section>}
                   {!knowledgePreviewLoading && previewSettled
-                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
-                    className="launch-knowledge-empty">
-                    没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
-                  </div>}
+                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <Empty
+                    className="py-4.5">
+                    <EmptyDescription>没有匹配到 Mae-Flow 平台管理的知识；不影响发起。</EmptyDescription>
+                  </Empty>}
                 </div>
                 <div className="launch-resource-boundary">
                   <strong>{knowledgePreviewLoading || !previewSettled

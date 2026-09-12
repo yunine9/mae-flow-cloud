@@ -8,6 +8,7 @@ import type {
   WorkflowPlanItem,
 } from "../api";
 import { AssetPicker } from "./AssetPicker";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import {
   itemFromAsset,
   newEditId,
@@ -17,6 +18,11 @@ import {
 import { StagePlan } from "./StagePlan";
 import { StageRail } from "./StageRail";
 import { DependencyView, FinalPlanView, WorkflowDiffView } from "./WorkflowViews";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type EditorView = "edit" | "final" | "changes" | "dependencies";
 
@@ -111,42 +117,48 @@ export function WorkflowEditor({
           onClick={onSave}>{busy ? "保存中…" : "保存草稿"}</button>}
       </div>
     </header>
-    <div className="wf-editor-tabs" role="tablist" aria-label="工作流查看方式">
-      {([ ["edit", "编排"],
-        ["final", profile ? "最终方案" : "最终方案（预览）"],
-        ["changes", "变更清单"],
-        ["dependencies", "依赖与版本"] ] as const).map(([id, label]) =>
-        <button type="button" role="tab" aria-selected={view === id} key={id}
-          onClick={() => setView(id)}>{label}</button>)}
-      <span>保存的是相对平台标准方案的精确变更；执行时只产生一个最终方案。</span>
-    </div>
-    {!profile && <p className="wf-editor-preview-note">这里是即时编排预览；保存和下单时由服务端重新校验并编译，无法安全应用的单项会明确降级，不会影响其余定制。</p>}
-    {error && <p className="wf-error" role="alert"><strong>当前修改未保存</strong>{error}</p>}
-    {view === "edit" && stage && <div className="wf-editor-grid">
-      <StageRail stages={stages} definition={definition} selectedStageId={stage.id}
-        onSelect={(next) => { setStageId(next); setItemId(undefined); setPicker(undefined); }} />
-      <StagePlan stage={stage} selectedItemId={itemId}
-        onSelectItem={(next) => { setItemId(next); setPicker(undefined); }}
-        onAdd={() => { setPicker("add"); setItemId(undefined); }} />
-      {picker ? <AssetPicker assets={catalog} title={picker === "add"
-        ? `向“${stage.title}”新增资产` : `替换“${item?.title ?? "执行项"}”`}
-        onSelect={chooseAsset} onClose={() => setPicker(undefined)} />
-        : <EditInspector item={item} stageItems={stage.items}
-          onStartAdd={() => { setPicker("add"); setItemId(undefined); }}
-          onRemove={removeSelected}
-          onReplace={() => item && !item.locked && setPicker("replace")}
-          onMove={moveSelected}
-          onConfigure={(use, instructions) => {
-            if (!item || item.locked) return;
-            addEdit({ edit_id: newEditId("configure"), stage_id: stage.id,
-              op: "configure", target_id: item.id, use, instructions });
-          }} />}
-    </div>}
-    {view === "final" && <FinalPlanView stages={profile?.final_snapshot?.stages ?? stages}
-      diagnostics={profile?.diagnostics} preview={!profile} />}
-    {view === "changes" && <WorkflowDiffView definition={definition} base={base} />}
-    {view === "dependencies" && <DependencyView stages={stages} catalog={catalog}
-      manifest={profile?.asset_manifest} preview={!profile} />}
+    {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语:键盘箭头归原语;
+        尾部说明 span 原地保留(仍随 .wf-editor-tabs 靠右);下方四个
+        view 分支映射为 TabsPanel(keepMounted 默认 false,卸载语义与
+        原条件渲染一致);「编排」面板保留 stage 的前置条件。 */}
+    <Tabs value={view} className="contents"
+      onValueChange={(value) => setView(value as EditorView)}>
+      <TabsList aria-label="工作流查看方式" className="wf-editor-tabs h-auto w-full">
+        {([ ["edit", "编排"],
+          ["final", profile ? "最终方案" : "最终方案（预览）"],
+          ["changes", "变更清单"],
+          ["dependencies", "依赖与版本"] ] as const).map(([id, label]) =>
+          <TabsTrigger key={id} value={id} className="h-auto flex-none">{label}</TabsTrigger>)}
+        <span>保存的是相对平台标准方案的精确变更；执行时只产生一个最终方案。</span>
+      </TabsList>
+      {!profile && <p className="wf-editor-preview-note">这里是即时编排预览；保存和下单时由服务端重新校验并编译，无法安全应用的单项会明确降级，不会影响其余定制。</p>}
+      {error && <p className="wf-error" role="alert"><strong>当前修改未保存</strong>{error}</p>}
+      {view === "edit" && stage && <TabsContent value="edit" className="contents"><div className="wf-editor-grid">
+        <StageRail stages={stages} definition={definition} selectedStageId={stage.id}
+          onSelect={(next) => { setStageId(next); setItemId(undefined); setPicker(undefined); }} />
+        <StagePlan stage={stage} selectedItemId={itemId}
+          onSelectItem={(next) => { setItemId(next); setPicker(undefined); }}
+          onAdd={() => { setPicker("add"); setItemId(undefined); }} />
+        {picker ? <AssetPicker assets={catalog} title={picker === "add"
+          ? `向“${stage.title}”新增资产` : `替换“${item?.title ?? "执行项"}”`}
+          onSelect={chooseAsset} onClose={() => setPicker(undefined)} />
+          : <EditInspector item={item} stageItems={stage.items}
+            onStartAdd={() => { setPicker("add"); setItemId(undefined); }}
+            onRemove={removeSelected}
+            onReplace={() => item && !item.locked && setPicker("replace")}
+            onMove={moveSelected}
+            onConfigure={(use, instructions) => {
+              if (!item || item.locked) return;
+              addEdit({ edit_id: newEditId("configure"), stage_id: stage.id,
+                op: "configure", target_id: item.id, use, instructions });
+            }} />}
+      </div></TabsContent>}
+      {view === "final" && <TabsContent value="final" className="contents"><FinalPlanView stages={profile?.final_snapshot?.stages ?? stages}
+        diagnostics={profile?.diagnostics} preview={!profile} /></TabsContent>}
+      {view === "changes" && <TabsContent value="changes" className="contents"><WorkflowDiffView definition={definition} base={base} /></TabsContent>}
+      {view === "dependencies" && <TabsContent value="dependencies" className="contents"><DependencyView stages={stages} catalog={catalog}
+        manifest={profile?.asset_manifest} preview={!profile} /></TabsContent>}
+    </Tabs>
   </section>;
 }
 
@@ -182,11 +194,11 @@ function EditInspector({
       {item ? item.title : "选择一个执行项"}</h3></header>
     {/* 五操作图例撤了:动作按钮自带符号+文字,常驻图例是重复
         (审计 P2-17)。 */}
-    {!item && <div className="wf-empty compact">
-      <strong>请选择中间的一项进行精确编辑</strong>
-      <span>也可以直接新增已经入库的知识、Skill、Agent 或工具。</span>
-      <button type="button" className="wf-primary" onClick={onStartAdd}>＋ 新增执行项</button>
-    </div>}
+    {!item && <Empty className="border p-5">
+      <EmptyTitle>请选择中间的一项进行精确编辑</EmptyTitle>
+      <EmptyDescription>也可以直接新增已经入库的知识、Skill、Agent 或工具。</EmptyDescription>
+      <EmptyContent><button type="button" className="wf-primary" onClick={onStartAdd}>＋ 新增执行项</button></EmptyContent>
+    </Empty>}
     {item && <>
       <div className={`wf-selected-summary${item.locked ? " locked" : ""}`}>
         <span><b>{item.kind}</b><b>{sourceLabel(item)}</b></span>
@@ -205,21 +217,36 @@ function EditInspector({
       </div>
       <fieldset disabled={!editable} className="wf-configure-panel">
         <legend>配置使用方式</legend>
-        <label><span>使用时机</span><select value={mode}
-          onChange={(event) => setMode(event.target.value as typeof mode)}>
-          <option value="available">全程可用，由 Agent 判断</option>
-          <option value="when_needed">本阶段需要时使用</option>
-          <option value="on_stage_enter">进入本阶段时立即使用</option>
-          <option value="before_item">在指定执行项之前使用</option>
-        </select></label>
+        <label><span>使用时机</span><Select value={mode}
+          items={[{ value: "available", label: "全程可用，由 Agent 判断" }, { value: "when_needed", label: "本阶段需要时使用" }, { value: "on_stage_enter", label: "进入本阶段时立即使用" }, { value: "before_item", label: "在指定执行项之前使用" }]}
+          onValueChange={(value) => setMode((value ?? mode) as typeof mode)}>
+          <SelectTrigger className="w-full" aria-label="使用时机"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="available">全程可用，由 Agent 判断</SelectItem>
+              <SelectItem value="when_needed">本阶段需要时使用</SelectItem>
+              <SelectItem value="on_stage_enter">进入本阶段时立即使用</SelectItem>
+              <SelectItem value="before_item">在指定执行项之前使用</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
         {mode === "before_item" && <label><span>目标执行项</span>
-          <select value={anchor} onChange={(event) => setAnchor(event.target.value)}>
-            <option value="">请选择</option>
-            {stageItems.filter((candidate) => candidate.id !== item.id)
-              .map((candidate) => <option key={candidate.id}
-                value={candidate.id}>{candidate.title}</option>)}
-          </select></label>}
-        <label><span>明确指令（可选）</span><textarea rows={4} value={instructions}
+          <Select value={anchor}
+            items={[{ value: "", label: "请选择" },
+              ...stageItems.filter((candidate) => candidate.id !== item.id)
+                .map((candidate) => ({ value: candidate.id, label: candidate.title }))]}
+            onValueChange={(value) => setAnchor(value ?? "")}>
+            <SelectTrigger className="w-full" aria-label="目标执行项"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="">请选择</SelectItem>
+                {stageItems.filter((candidate) => candidate.id !== item.id)
+                  .map((candidate) => <SelectItem key={candidate.id}
+                    value={candidate.id}>{candidate.title}</SelectItem>)}
+              </SelectGroup>
+            </SelectContent>
+          </Select></label>}
+        <label><span>明确指令（可选）</span><Textarea className="min-h-24 resize-y" rows={4} value={instructions}
           placeholder="写清楚 Agent 在此处要做什么、产出什么；不要写模糊的能力偏好。"
           onChange={(event) => setInstructions(event.target.value)} /></label>
         <button type="button" className="wf-primary"

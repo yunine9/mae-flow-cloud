@@ -82,7 +82,7 @@ export function PlantUml({ source }: { source: string }) {
     setPresenting(true);
     void root.current?.requestFullscreen?.().catch(() => { /* 页面内全屏仍可用。 */ });
   };
-  return <figure ref={root} className={`plantuml-figure${result.syntax_error ? " syntax-error" : ""}${presenting ? " is-presenting ui-viewport-layer" : ""}`}>
+  return <figure ref={root} className={`plantuml-figure${result.syntax_error ? " syntax-error" : ""}${presenting ? " is-presenting fixed inset-0" : ""}`}>
     <div className="plantuml-toolbar">
       <span>PlantUML</span>
       <button type="button" onClick={togglePresentation}>{presenting ? "退出全屏" : "查看大图 ⛶"}</button>

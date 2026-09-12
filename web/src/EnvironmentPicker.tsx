@@ -1,12 +1,17 @@
 /**
- * 环境快选(票 #150,ADR-0020;2026-09-10 走查重铸):从环境管理选一条
- * 网管环境的共用选择器——登记页「网管环境」与 env_needed 闸卡共用。
+ * 环境快选(票 #150,ADR-0020;2026-09-10 走查重铸;票 #212 shadcn 化):
+ * 从环境管理选一条网管环境的共用选择器——登记页「网管环境」与
+ * env_needed 闸卡共用。
  *
  * 交互口径(走查裁定):只选不手填。可搜索下拉最适合作「选择」这件事:
  * 触发器显示当前选中(IP 即名字,等宽体),展开是搜索框 + 环境清单,
  * 按 IP/标签/形态模糊过滤,方向键高亮、回车选中、Esc 关闭;搜不到时
  * 「新增环境」弹共用表单(EnvironmentEditorDialog),录入成功后自动
  * 选中新条目——选择和新建是同一条路径的两端,不再并存两套输入面。
+ * #212 起内层清单换 Command(cmdk):搜索框/清单/键盘导航/空态全部
+ * 由 CommandInput/CommandList/CommandItem/CommandEmpty 接管,手写的
+ * 高亮下标、方向键与滚动跟随代码删除;匹配口径(IP/标签/形态)不变,
+ * shouldFilter=false 仍由 matches 自己过滤。
  *
  * 零密码契约:列表视图(EnvironmentView)没有任何密码字段,这里展示与
  * 提交的只有非密元信息(IP/形态/标签/端口);选中后只上送条目 id,值由
@@ -16,9 +21,8 @@
  * PopoverContent 必须自带 .tw-root,否则 UA 默认的 p 边距/button 底色
  * 会在弹层里漏出来(2026-09-10 走查实测)。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
-import { Check, ChevronDown, Plus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Plus } from "lucide-react";
 import { listEnvironments, type EnvironmentView } from "./api";
 import {
   ENVIRONMENT_FORM_TEXT,
@@ -30,6 +34,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 /** 搜索框与触发器共用的控件皮(shadcn input 同款配方)。 */
 const envControlClass =
@@ -61,8 +72,6 @@ export function EnvironmentPicker({ selectedId, onPick }: {
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  /** 键盘高亮行(过滤后清单的下标;-1 = 无)。 */
-  const [highlighted, setHighlighted] = useState(-1);
   /** 「找不到就新建」弹层:undefined = 关;existing 缺席 = 新增。 */
   const [editor, setEditor] = useState<{ existing?: EnvironmentView }>();
 
@@ -92,7 +101,6 @@ export function EnvironmentPicker({ selectedId, onPick }: {
     if (next) {
       // 每次展开都重拉列表:别处刚登记的环境立刻可见,不需要手动刷新。
       setQuery("");
-      setHighlighted(-1);
       void load();
     }
   }
@@ -100,37 +108,6 @@ export function EnvironmentPicker({ selectedId, onPick }: {
   function pick(entry: EnvironmentView) {
     onPick(entry);
     toggleOpen(false);
-  }
-
-  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      setHighlighted((current) => {
-        const total = filtered.length;
-        if (!total) return -1;
-        return (current + delta + total) % total;
-      });
-      return;
-    }
-    if (event.key === "Home") {
-      event.preventDefault();
-      setHighlighted(filtered.length ? 0 : -1);
-      return;
-    }
-    if (event.key === "End") {
-      event.preventDefault();
-      setHighlighted(filtered.length ? filtered.length - 1 : -1);
-      return;
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const entry = filtered[highlighted];
-      if (entry) pick(entry);
-      return;
-    }
-    // 输入法组词中的按键不当作导航(回车选字不是提交)。
-    if (event.nativeEvent.isComposing) event.preventDefault();
   }
 
   /** 新建保存:合入列表;新建出的条目自动选中(走查裁定的闭环)。 */
@@ -143,16 +120,6 @@ export function EnvironmentPicker({ selectedId, onPick }: {
     setEnvironments((prev) => [...prev, entry]);
     onPick(entry);
   }
-
-  // 键盘高亮跟随:方向键把高亮推到可视区外时,把那一行滚回清单视口
-  // (block:nearest 只滚清单容器本身,不动页面)。纯鼠标用户看不到高亮,
-  // 行另有 hover 底色反馈。
-  const listRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (highlighted < 0) return;
-    listRef.current?.querySelector<HTMLElement>('[data-highlighted="true"]')
-      ?.scrollIntoView({ block: "nearest" });
-  }, [highlighted]);
 
   return <div className="tw-root" aria-label="从环境管理选择">
     <Popover open={open} onOpenChange={toggleOpen}>
@@ -180,63 +147,56 @@ export function EnvironmentPicker({ selectedId, onPick }: {
         } />
       {/* 弹层 portal 到 body:必须自带 .tw-root 归一(见文件头说明)。 */}
       <PopoverContent align="start"
-        className="tw-root w-(--anchor-width) p-0">
-        <div className="border-b border-line p-2">
-          <input value={query} autoFocus
-            className={envControlClass}
+        className="tw-root w-(--anchor-width) gap-0 p-0">
+        <Command shouldFilter={false} className="rounded-lg!">
+          <CommandInput value={query} onValueChange={setQuery} autoFocus
             placeholder="搜索 IP、标签或形态…"
-            aria-label="搜索环境"
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setHighlighted(-1);
-            }}
-            onKeyDown={onSearchKeyDown} />
-        </div>
-        <div ref={listRef} className="max-h-60 overflow-y-auto p-1" role="listbox"
-          aria-label="环境清单">
-          {error && <p className="m-1 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
-            {error}
-          </p>}
-          {loading
-            ? <p className="px-3 py-3 text-sm text-muted-foreground">环境列表加载中…</p>
-            : filtered.map((entry, index) => {
-              const picked = entry.id === selectedId;
-              return <button type="button" key={entry.id} role="option"
-                aria-selected={picked}
-                data-highlighted={index === highlighted ? "true" : undefined}
-                className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent${index === highlighted ? " bg-accent" : ""}`}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => pick(entry)}>
-                <span className="flex w-full items-center gap-2">
-                  <span className="font-mono font-medium text-foreground"
-                    title={`端口 ${entry.port}`}>{entry.ip}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {formText(entry)} · {entry.port}
+            aria-label="搜索环境" />
+          <CommandList className="max-h-60" aria-label="环境清单">
+            {error && <p className="m-1 rounded-md border border-destructive/40 bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
+              {error}
+            </p>}
+            {loading
+              ? <p className="px-3 py-3 text-sm text-muted-foreground">环境列表加载中…</p>
+              : filtered.map((entry) => {
+                const picked = entry.id === selectedId;
+                return <CommandItem key={entry.id} value={entry.id}
+                  data-checked={picked || undefined}
+                  onSelect={() => pick(entry)}
+                  className="py-2">
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono font-medium text-foreground"
+                        title={`端口 ${entry.port}`}>{entry.ip}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {formText(entry)} · {entry.port}
+                      </span>
+                    </span>
+                    {entry.tags.length > 0 && <span className="flex flex-wrap gap-1">
+                      {entry.tags.map((tag) => <span key={tag}
+                        className="rounded-full border border-line px-1.5 text-xs text-muted-foreground">
+                        {tag}
+                      </span>)}
+                    </span>}
                   </span>
-                  {picked && <Check aria-hidden className="ml-auto size-4 text-ink" />}
+                </CommandItem>;
+              })}
+            {!loading && <CommandEmpty>
+              <span className="flex flex-col items-center gap-0.5">
+                <span className="text-sm text-foreground">
+                  {environments.length === 0
+                    ? "还没有登记过任何环境"
+                    : <>没有匹配「{query.trim()}」的环境</>}
                 </span>
-                {entry.tags.length > 0 && <span className="flex flex-wrap gap-1">
-                  {entry.tags.map((tag) => <span key={tag}
-                    className="rounded-full border border-line px-1.5 text-xs text-muted-foreground">
-                    {tag}
-                  </span>)}
-                </span>}
-              </button>;
-            })}
-          {!loading && filtered.length === 0 && <div
-            className="flex flex-col gap-0.5 px-3 py-2.5">
-            <p className="text-sm text-foreground">
-              {environments.length === 0
-                ? "还没有登记过任何环境"
-                : <>没有匹配「{query.trim()}」的环境</>}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {environments.length === 0
-                ? "在「环境管理」里登记一台网管环境,以后在这里直接选。"
-                : "换个关键词,或者直接新增一台。"}
-            </p>
-          </div>}
-        </div>
+                <span className="text-xs text-muted-foreground">
+                  {environments.length === 0
+                    ? "在「环境管理」里登记一台网管环境,以后在这里直接选。"
+                    : "换个关键词,或者直接新增一台。"}
+                </span>
+              </span>
+            </CommandEmpty>}
+          </CommandList>
+        </Command>
         <div className="border-t border-line p-1">
           <Button type="button" variant="ghost" size="sm"
             className="w-full justify-start text-muted-foreground hover:text-foreground"

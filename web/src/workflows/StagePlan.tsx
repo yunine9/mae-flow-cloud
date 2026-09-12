@@ -1,5 +1,6 @@
 import type { WorkflowPlanItem, WorkflowStagePlan } from "../api";
 import { registryLabels, sourceLabel } from "./model";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
 
 export function StagePlan({
   stage,
@@ -25,9 +26,10 @@ export function StagePlan({
         index={index} active={selectedItemId === item.id}
         onSelect={() => onSelectItem(item.id)} />)}
     </ol>
-    {!stage.items.length && <div className="wf-empty compact">
-      <strong>本阶段还没有执行项</strong><span>可新增知识、Skill、Agent 或工具。</span>
-    </div>}
+    {!stage.items.length && <Empty className="border p-5">
+      <EmptyTitle>本阶段还没有执行项</EmptyTitle>
+      <EmptyDescription>可新增知识、Skill、Agent 或工具。</EmptyDescription>
+    </Empty>}
   </section>;
 }
 

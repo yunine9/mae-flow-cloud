@@ -23,7 +23,13 @@ import {
   type IssueSummary,
 } from "./api";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import { Database } from "lucide-react";
 import { STALE_AFTER_MS, issueDeliveryBreakdown } from "./teamOps";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 
 /** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
 type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
@@ -174,29 +180,41 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
         </span>
       </div>
       <div className="task-filters" aria-label="筛选问题现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" /></label>
-        <select aria-label="现场范围" value={scope}
-          onChange={(event) => setScope(event.target.value as IssueScope)}>
-          <option value="all">全部现场</option>
-          <option value="action">需要处理</option>
-          <option value="stale">停滞中</option>
-          <option value="wip">正在推进</option>
-          <option value="waiting">等你答复</option>
-        </select>
-        <select aria-label="责任人" value={owner}
-          onChange={(event) => setOwner(event.target.value)}>
-          <option value="">全部责任人</option>
-          {owners.map((name) => <option key={name} value={name}>{name}</option>)}
-        </select>
+        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
+        <Select value={scope}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
+          onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
+          <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">全部现场</SelectItem>
+              <SelectItem value="action">需要处理</SelectItem>
+              <SelectItem value="stale">停滞中</SelectItem>
+              <SelectItem value="wip">正在推进</SelectItem>
+              <SelectItem value="waiting">等你答复</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select value={owner}
+          items={[{ value: "", label: "全部责任人" },
+            ...owners.map((name) => ({ value: name, label: name }))]}
+          onValueChange={(value) => setOwner(value ?? "")}>
+          <SelectTrigger className="min-w-28" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="">全部责任人</SelectItem>
+              {owners.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {anyFilter && <button type="button" className="filter-reset"
           onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}
       </div>
-      {visible.length === 0 && <div className="empty-state">
-        <span className="empty-visual" aria-hidden><i /><i /><i /></span>
-        <strong>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</strong>
-        <p>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</p>
-      </div>}
+      {visible.length === 0 && <Empty className="py-11" role="status">
+        <EmptyTitle>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</EmptyTitle>
+        <EmptyDescription>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</EmptyDescription>
+      </Empty>}
       <div className="task-list">{visible.map((issue) => (
         <TeamIssueCard key={issue.id} issue={issue}
           onOpen={() => onOpenIssue(issue.id)} />
@@ -231,11 +249,11 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
       </div>
     </div>
     {closed.length === 0
-      ? <div className="board-empty">
-          <span className="empty-database" aria-hidden><i /><i /><i /></span>
-          <strong>还没有闭环的问题会话</strong>
-          <p>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</p>
-        </div>
+      ? <Empty className="min-h-[360px] border" role="status">
+          <EmptyMedia variant="icon"><Database aria-hidden /></EmptyMedia>
+          <EmptyTitle>还没有闭环的问题会话</EmptyTitle>
+          <EmptyDescription>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</EmptyDescription>
+        </Empty>
       : <>
         <div className="history-metrics" aria-label="问题闭环结论统计">
           {CONCLUSION_TILES.map((tile) => (

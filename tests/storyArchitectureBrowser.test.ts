@@ -23,7 +23,7 @@ test("架构视图真实浏览器：迟到旧图不能覆盖新版，读取失�
       format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"),
       define: { "process.env.NODE_ENV": '"production"', ARCHIFY_HTML_ONE: JSON.stringify(html[0]), ARCHIFY_HTML_TWO: JSON.stringify(html[1]) } });
     const path = join(dir, "test.html");
-    writeFileSync(path, '<!doctype html><meta charset="utf-8"><style>:root { --line:#e3e3ef; --surface:#fff; --surface-soft:#f7f7fc; --text:#292a40; --muted:#777b91; --accent:#6256df; --attention:#b87910; --z-modal:100; } body { margin:0; font:14px system-ui; color:var(--text); } .ui-viewport-layer { position:fixed; inset:0; } #result, #jump-class { display:none; }</style><style>' + readFileSync(resolve("web/src/story-architecture.css"), "utf8") + '</style><div id="app"></div><pre id="result"></pre><script>'
+    writeFileSync(path, '<!doctype html><meta charset="utf-8"><style>:root { --line:#e3e3ef; --surface:#fff; --surface-soft:#f7f7fc; --text:#292a40; --muted:#777b91; --accent:#6256df; --attention:#b87910; --z-modal:100; } body { margin:0; font:14px system-ui; color:var(--text); } #result, #jump-class { display:none; }</style><style>' + readFileSync(resolve("web/src/story-architecture.css"), "utf8") + '</style><div id="app"></div><pre id="result"></pre><script>'
       + result.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
     if (process.env.MFC_ARCHITECTURE_EVIDENCE) writeFileSync(process.env.MFC_ARCHITECTURE_EVIDENCE, readFileSync(path));
     const dump = join(dir, "dump.html"), fd = openSync(dump, "w");

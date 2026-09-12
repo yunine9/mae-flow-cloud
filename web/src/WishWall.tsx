@@ -12,7 +12,28 @@ import {
   type WishWallItem,
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
+import { Spinner } from "@/components/Spinner";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { formatLocalDateTime, relativeTime } from "./time";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   nextWishImageDraftKey,
   WISH_IMAGE_TYPES,
@@ -46,6 +67,16 @@ const STATUS_COPY: Record<WishStatus, { label: string; hint: string }> = {
   done: { label: "已闭环", hint: "已经处理完成，可以回来验收" },
   declined: { label: "暂不接纳", hint: "当前不处理，并附有原因" },
 };
+
+/** 心愿状态徽标→Badge variant(#216;原 .wish-status is-* 色板收编):
+ * 待回应=warning、已接纳=brand(存量 --accent 主动作紫原色)、
+ * 已闭环=success、暂不接纳=neutral。 */
+const WISH_VARIANT = {
+  open: "warning",
+  accepted: "brand",
+  done: "success",
+  declined: "neutral",
+} as const;
 
 function fileToUpload(file: File): Promise<WishImageUpload> {
   return new Promise((resolve, reject) => {
@@ -299,7 +330,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </div>
       <label className="wish-title-field">
         <span>一句话说清楚</span>
-        <input value={title} onChange={(event) => setTitle(event.target.value)}
+        <Input className="h-11 pr-[53px] font-semibold" value={title} onChange={(event) => setTitle(event.target.value)}
           maxLength={100} placeholder={kind === "issue"
             ? "例如：手机上看任务详情时，代码块会横向溢出"
             : "例如：希望任务完成后能一键生成复盘摘要"} />
@@ -307,7 +338,7 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </label>
       <label className="wish-detail-field">
         <span>再补充一点 <small>（可选）</small></span>
-        <textarea value={detail} onChange={(event) => setDetail(event.target.value)}
+        <Textarea className="min-h-21 resize-y" value={detail} onChange={(event) => setDetail(event.target.value)}
           maxLength={2000} rows={3} placeholder="什么场景下遇到的？你希望它变成什么样？不用写成正式需求。" />
       </label>
       {images.length > 0 && <div className="wish-image-drafts">
@@ -367,18 +398,27 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
                 : `问题 ${scopedItems.filter((item) => item.kind === "issue").length}`}
             </button>)}
           </div>
-          <select value={sort} onChange={(event) => setSort(event.target.value as Sort)}
-            aria-label="排序方式"><option value="recent">最新发布</option><option value="popular">最多点亮</option></select>
+          <Select value={sort}
+            items={[{ value: "recent", label: "最新发布" }, { value: "popular", label: "最多点亮" }]}
+            onValueChange={(value) => setSort((value ?? "recent") as Sort)}>
+            <SelectTrigger aria-label="排序方式"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="recent">最新发布</SelectItem>
+                <SelectItem value="popular">最多点亮</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       {notice && <p className="wish-notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="关闭提示">×</button></p>}
       {loadError && <div className="wish-load-state error"><strong>墙暂时没加载出来</strong><span>{loadError}</span><button type="button" onClick={() => void refresh()}>再试一次</button></div>}
-      {loading && <div className="wish-load-state"><span className="wish-loading-dot" />正在把大家的声音搬过来…</div>}
-      {!loading && !loadError && shown.length === 0 && <div className="wish-empty">
-        <span aria-hidden>{scope === "issue" ? "🪁" : "🌱"}</span>
-        <strong>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</strong>
-        <p>{items.length ? "换个状态或类型看看，也可以把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</p>
-      </div>}
+      {loading && <div className="wish-load-state"><Spinner className="size-3" />正在把大家的声音搬过来…</div>}
+      {!loading && !loadError && shown.length === 0 && <Empty className="min-h-[150px] border rounded-2xl" role="status">
+        <EmptyMedia className="text-3xl">{scope === "issue" ? "🪁" : "🌱"}</EmptyMedia>
+        <EmptyTitle>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</EmptyTitle>
+        <EmptyDescription>{items.length ? "换个状态或类型看看，也可以把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</EmptyDescription>
+      </Empty>}
       <div className="wish-card-list">
         {shown.map((item) => {
           const expanded = expandedId === item.id;
@@ -398,9 +438,10 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
               {item.images.length > 0 && !expanded && <span className="wish-image-count">▧ {item.images.length} 张图片</span>}
             </div>
             <aside className="wish-card-side">
-              <span className={`wish-status is-${item.status}`} title={STATUS_COPY[item.status].hint}>
-                <i />{STATUS_COPY[item.status].label}
-              </span>
+              <Badge variant={WISH_VARIANT[item.status]} title={STATUS_COPY[item.status].hint}>
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+                {STATUS_COPY[item.status].label}
+              </Badge>
               <div className="wish-card-actions">
               <button type="button" className={`wish-vote${item.viewer_voted ? " on" : ""}`}
                 disabled={busyId === item.id} aria-pressed={item.viewer_voted}
@@ -411,8 +452,18 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
                 onClick={() => setExpandedId(expanded ? "" : item.id)}>{expanded ? "收起" : "查看详情"}</button>
               {item.can_manage && <button type="button" className="wish-manage"
                 onClick={() => setManage({ id: item.id, status: item.status, note: item.decision_note ?? "" })}>回应</button>}
-              {item.can_delete && <button type="button" className="wish-remove"
-                disabled={busyId === item.id} onClick={() => void remove(item)} aria-label={`移除 ${item.title}`}>•••</button>}
+              {/* #220 ••• 直删钮换 DropdownMenu:菜单只承载现场原有的
+                  「移除」一个动作,confirmDialog 确认链与 busy 门原样;
+                  触发钮经 render 仍是真 button,••• 与 aria-label 不变。 */}
+              {item.can_delete && <DropdownMenu>
+                <DropdownMenuTrigger render={
+                  <button type="button" className="wish-remove"
+                    disabled={busyId === item.id} aria-label={`移除 ${item.title}`} />
+                }>•••</DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-24">
+                  <DropdownMenuItem variant="destructive" onClick={() => void remove(item)}>移除</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>}
               </div>
             </aside>
             {expanded && <div className="wish-card-expanded">
@@ -435,15 +486,28 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
       </div>
     </section>
 
-    {lightbox && <div className="wish-lightbox" role="dialog" aria-modal="true" aria-label={lightbox.title}
-      onClick={() => setLightbox(undefined)}>
-      <button type="button" onClick={() => setLightbox(undefined)} aria-label="关闭图片">×</button>
-      <img src={lightbox.url} alt={lightbox.title} onClick={(event) => event.stopPropagation()} />
-    </div>}
-    {manage && <div className="wish-manage-backdrop" role="dialog" aria-modal="true" aria-labelledby="wish-manage-title"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) setManage(undefined); }}>
-      <section className="wish-manage-dialog">
-        <header><div><span className="section-kicker">MAKE IT CLEAR</span><h2 id="wish-manage-title">给这件事一个明确下文</h2></div><button type="button" onClick={() => setManage(undefined)} aria-label="关闭">×</button></header>
+    {lightbox && <Dialog open onOpenChange={(next) => { if (!next) setLightbox(undefined); }}>
+      <DialogContent showCloseButton={false}
+        className="tw-root w-auto max-w-[min(1100px,94vw)] gap-2 p-2 sm:max-w-[min(1100px,94vw)]">
+        <DialogTitle className="sr-only">{lightbox.title}</DialogTitle>
+        <img src={lightbox.url} alt={lightbox.title}
+          className="max-h-[88vh] w-full rounded-lg object-contain" />
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭图片"
+          className="absolute top-3 right-3 bg-background/70" />}>
+          <XIcon />
+        </DialogClose>
+      </DialogContent>
+    </Dialog>}
+    {manage && <Dialog open onOpenChange={(next) => { if (!next) setManage(undefined); }}>
+      <DialogContent showCloseButton={false} className="tw-root sm:max-w-[560px]">
+        <DialogHeader>
+          <span className="section-kicker">MAKE IT CLEAR</span>
+          <DialogTitle>给这件事一个明确下文</DialogTitle>
+        </DialogHeader>
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭"
+          className="absolute top-2 right-2" />}>
+          <XIcon />
+        </DialogClose>
         <div className="wish-status-options" role="group" aria-label="处理状态">
           {(["open", "accepted", "done", "declined"] as WishStatus[]).map((status) => <button
             type="button" key={status} className={manage.status === status ? `on is-${status}` : ""}
@@ -451,12 +515,15 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
             <i /> <span><strong>{STATUS_COPY[status].label}</strong><small>{STATUS_COPY[status].hint}</small></span>
           </button>)}
         </div>
-        <label><span>给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
-          <textarea value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
+        <label className="grid gap-1.5"><span className="text-sm font-medium text-foreground">给提出人的反馈 {manage.status === "declined" ? "（必填）" : "（可选）"}</span>
+          <Textarea className="min-h-24 resize-y" value={manage.note} maxLength={500} rows={4} onChange={(event) => setManage({ ...manage, note: event.target.value })}
             placeholder={manage.status === "declined" ? "请说明现在为什么不做，或者什么条件下会重新考虑" : "例如：已纳入下个迭代；已上线，可在个人设置中体验"} /></label>
-        <footer><button type="button" onClick={() => setManage(undefined)}>取消</button><button type="button"
-          className="primary" disabled={busyId === manage.id} onClick={() => void saveStatus()}>{busyId === manage.id ? "保存中…" : "确认并公开回应"}</button></footer>
-      </section>
-    </div>}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setManage(undefined)}>取消</Button>
+          <Button type="button" disabled={busyId === manage.id} onClick={() => void saveStatus()}>
+            {busyId === manage.id ? "保存中…" : "确认并公开回应"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </div>;
 }

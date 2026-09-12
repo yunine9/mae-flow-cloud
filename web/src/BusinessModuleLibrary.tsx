@@ -18,6 +18,13 @@ import {
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
 import { confirmDialog } from "./ConfirmDialog";
+import { Alert } from "@/components/Alert";
+import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 type BusinessAssetFocus = Extract<KnowledgeAssetFocus, { kind: "business" }>;
 
@@ -62,30 +69,42 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
     } finally { setBusy(false); }
   }}>
     <div className="business-module-form-grid">
-      <label><span>模块名称</span><input value={name}
+      <label><span>模块名称</span><Input value={name}
         onChange={(event) => setName(event.target.value)} required /></label>
       <label><span>责任人</span>
-        {admin ? <select value={owner}
-          onChange={(event) => setOwner(event.target.value)} required>
-          {users.map((user) => <option key={user.username}
-            value={user.username}>{user.username}</option>)}
-        </select> : <input value={owner} disabled title="只有管理员可以转移责任人" />}
+        {admin ? <Select value={owner} name="module-owner" required
+          items={users.map((user) => ({ value: user.username, label: user.username }))}
+          onValueChange={(value) => setOwner(value ?? "")}>
+          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {users.map((user) => <SelectItem key={user.username}
+                value={user.username}>{user.username}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select> : <Input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
-    <label><span>业务语义说明</span><textarea rows={2} value={description}
+    <label><span>业务语义说明</span><Textarea rows={2} value={description}
       onChange={(event) => setDescription(event.target.value)} required /></label>
-    <label><span>维护者账号</span><input value={maintainers}
+    <label><span>维护者账号</span><Input value={maintainers}
       onChange={(event) => setMaintainers(event.target.value)}
       placeholder="多个账号用逗号分隔" /></label>
-    <label><span>关联仓库</span><textarea rows={3} value={repositories}
+    <label><span>关联仓库</span><Textarea rows={3} value={repositories}
       onChange={(event) => setRepositories(event.target.value)}
       placeholder="每行一个仓库地址，用于下单时推荐，不会自动勾选" /></label>
-    {admin && <label><span>模块状态</span><select value={status}
-      onChange={(event) => setStatus(event.target.value as "active" | "archived")}>
-      <option value="active">启用（可供新任务选择）</option>
-      <option value="archived">归档（历史任务保留）</option>
-    </select></label>}
-    {error && <p className="business-module-error" role="alert">{error}</p>}
+    {admin && <label><span>模块状态</span><Select value={status}
+      items={[{ value: "active", label: "启用（可供新任务选择）" }, { value: "archived", label: "归档（历史任务保留）" }]}
+      onValueChange={(value) => setStatus((value ?? "active") as "active" | "archived")}>
+      <SelectTrigger className="w-full" aria-label="模块状态"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          <SelectItem value="active">启用（可供新任务选择）</SelectItem>
+          <SelectItem value="archived">归档（历史任务保留）</SelectItem>
+        </SelectGroup>
+      </SelectContent>
+    </Select></label>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
       <button type="submit" className="primary" disabled={busy}>
@@ -122,24 +141,30 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
     } finally { setBusy(false); }
   }}>
     <div className="business-module-form-grid">
-      <label><span>资产 ID</span><input value={id} disabled={!!asset}
+      <label><span>资产 ID</span><Input value={id} disabled={!!asset}
         onChange={(event) => setId(event.target.value)}
         placeholder="例如 release-checklist" required /></label>
-      <label><span>标题</span><input value={title}
+      <label><span>标题</span><Input value={title}
         onChange={(event) => setTitle(event.target.value)} required /></label>
     </div>
-    <label><span>一句话摘要</span><textarea rows={2} value={summary}
+    <label><span>一句话摘要</span><Textarea rows={2} value={summary}
       onChange={(event) => setSummary(event.target.value)} required /></label>
-    <label><span>什么时候应该读</span><textarea rows={2} value={whenToUse}
+    <label><span>什么时候应该读</span><Textarea rows={2} value={whenToUse}
       onChange={(event) => setWhenToUse(event.target.value)} required /></label>
     <div className="business-module-form-grid">
-      <label><span>知识形态</span><select value={form}
-        onChange={(event) => setForm(event.target.value as typeof form)}>
-        <option value="document">文档</option>
-        <option value="skill">Skill</option>
-        <option value="rule">规则</option>
-        <option value="example">示例</option>
-      </select></label>
+      <label><span>知识形态</span><Select value={form}
+        items={[{ value: "document", label: "文档" }, { value: "skill", label: "Skill" }, { value: "rule", label: "规则" }, { value: "example", label: "示例" }]}
+        onValueChange={(value) => setForm((value ?? form) as typeof form)}>
+        <SelectTrigger className="w-full" aria-label="知识形态"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="document">文档</SelectItem>
+            <SelectItem value="skill">Skill</SelectItem>
+            <SelectItem value="rule">规则</SelectItem>
+            <SelectItem value="example">示例</SelectItem>
+          </SelectGroup>
+        </SelectContent>
+      </Select></label>
       <div className="business-asset-language-field">
         <span>适用代码仓（可选）</span>
         <small>不选表示适用于该模块关联的全部仓库。</small>
@@ -156,11 +181,11 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
         </div> : <small>模块尚未关联仓库，当前知识默认对模块内全部任务适用。</small>}
       </div>
     </div>
-    <label><span>知识正文（Markdown）</span><textarea className="business-asset-content"
+    <label><span>知识正文（Markdown）</span><Textarea className="business-asset-content"
       rows={12} value={content}
       onChange={(event) => setContent(event.target.value)} required /></label>
     <p className="business-module-form-note">发布会产生新版本；已经发起的任务继续使用自己的固定快照。</p>
-    {error && <p className="business-module-error" role="alert">{error}</p>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
       <button type="submit" className="primary" disabled={busy}>
@@ -312,27 +337,34 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
       } finally { setCreateBusy(false); }
     }}>
       <div className="business-module-form-grid">
-        <label><span>模块 ID</span><input value={create.id}
+        <label><span>模块 ID</span><Input value={create.id}
           onChange={(event) => setCreate({ ...create, id: event.target.value })}
           placeholder="例如 payment-core" required /></label>
-        <label><span>责任人</span><select value={create.owner}
-          onChange={(event) => setCreate({ ...create, owner: event.target.value })} required>
-          <option value="" disabled>选择现有账号</option>
-          {users.map((user) => <option key={user.username}
-            value={user.username}>{user.username}</option>)}
-        </select></label>
+        <label><span>责任人</span><Select value={create.owner} name="module-create-owner" required
+          items={[{ value: "", label: "选择现有账号" },
+            ...users.map((user) => ({ value: user.username, label: user.username }))]}
+          onValueChange={(value) => setCreate({ ...create, owner: value ?? "" })}>
+          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="" disabled>选择现有账号</SelectItem>
+              {users.map((user) => <SelectItem key={user.username}
+                value={user.username}>{user.username}</SelectItem>)}
+            </SelectGroup>
+          </SelectContent>
+        </Select></label>
       </div>
-      <label><span>模块名称</span><input value={create.name}
+      <label><span>模块名称</span><Input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}
         placeholder="例如 支付核心" required /></label>
-      <label><span>业务语义说明</span><textarea rows={2} value={create.description}
+      <label><span>业务语义说明</span><Textarea rows={2} value={create.description}
         onChange={(event) => setCreate({ ...create, description: event.target.value })}
         placeholder="说清领域概念、核心规则、流程和边界" required /></label>
       <div className="business-module-form-grid">
-        <label><span>维护者账号（可选）</span><input value={create.maintainers}
+        <label><span>维护者账号（可选）</span><Input value={create.maintainers}
           onChange={(event) => setCreate({ ...create, maintainers: event.target.value })}
           placeholder="多个账号用逗号分隔" /></label>
-        <label><span>关联仓库（可选）</span><textarea rows={2} value={create.repositories}
+        <label><span>关联仓库（可选）</span><Textarea rows={2} value={create.repositories}
           onChange={(event) => setCreate({ ...create, repositories: event.target.value })}
           placeholder="每行一个仓库地址" /></label>
       </div>
@@ -343,12 +375,13 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
       </div>
     </form>}
 
-    {error && <p className="business-module-error" role="alert">{error}</p>}
-    {!!catalog?.warnings.length && <p className="business-module-warning">
-      {catalog.warnings.join("；")}</p>}
-    {!loading && !catalog?.modules.length && <div className="business-module-empty">
-      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</span>
-    </div>}
+    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
+    {!!catalog?.warnings.length && <Alert variant="warning" className="mx-4 my-2.5">
+      {catalog.warnings.join("；")}</Alert>}
+    {!loading && !catalog?.modules.length && <Empty className="mx-3.5 my-3.5 border p-5.5">
+      <EmptyTitle>还没有业务模块</EmptyTitle>
+      <EmptyDescription>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</EmptyDescription>
+    </Empty>}
 
     <div className="business-module-list">
       {(catalog?.modules ?? []).map((module) => {
@@ -429,8 +462,8 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
                   }}>归档</button>
                 </div>}
               </div>)}
-              {!liveAssets.length && <div className="business-asset-empty">
-                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</div>}
+              {!liveAssets.length && <Empty className="border-t rounded-none py-4.5">
+                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</Empty>}
             </div>
             {document?.moduleId === module.id && <div
               id={`${knowledgeAssetElementId("business", document.moduleId,

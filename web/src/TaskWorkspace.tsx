@@ -29,6 +29,8 @@ import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
 import { Composer, takeoverActiveOf } from "./Composer";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "./components/Alert";
+import { Empty, EmptyDescription } from "@/components/Empty";
 import { TaskWaitingFacts } from "./TaskWaitingFacts";
 import { AnnotationExcerpt } from "./AnnotationExcerpt";
 import { Annotatable } from "./Annotatable";
@@ -38,6 +40,7 @@ import { requirementGraphVisible } from "./taskHierarchy";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
+import { TaskStatusBadge } from "./StatusBadge";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
@@ -50,6 +53,18 @@ import {
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
 import { UserPicker } from "./UserPicker";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "lucide-react";
 import {
   addAnnotation,
   completeReview,
@@ -1702,10 +1717,10 @@ export function TaskWorkspace({
       {task.status === "failed" && (
         <>
           {task.detail && (
-            <div className="alert">
-              <strong>任务执行失败</strong>
-              <span>{task.detail}</span>
-            </div>
+            <Alert variant="destructive" className="mb-3">
+              <AlertTitle>任务执行失败</AlertTitle>
+              <AlertDescription>{task.detail}</AlertDescription>
+            </Alert>
           )}
           {canOperate && !waiting && (
             <div className="ws-failed-actions">
@@ -1799,22 +1814,28 @@ export function TaskWorkspace({
 
   const reviewWorkspaceContent = (
     <div className="workspace-review-notes">
-      {reviewRecordCount > 0 && <div className="review-filter" role="tablist" aria-label="按处理归属筛选">
-        {([
-          ["all", "全部"],
-          ["mine", "等我确认"],
-          ["agent", "Agent 处理中"],
-          ["closed", "已完成"],
-        ] as const).map(([key, label]) => (
-          <button type="button" key={key} role="tab"
-            className={`${reviewFilter === key ? "active" : ""}${
-              key === "mine" && reviewCounts.mine > 0 ? " attention" : ""}`}
-            aria-selected={reviewFilter === key}
-            onClick={() => setReviewFilter(key)}>
-            {label}<i>{reviewCounts[key]}</i>
-          </button>
-        ))}
-      </div>}
+      {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头归原语);
+          旧 .review-filter 皮肤类(含 active/attention/计数徽标)挂在
+          TabsList/TabsTrigger 上,视觉与筛选语义原样。 */}
+      {reviewRecordCount > 0 && <Tabs value={reviewFilter} className="contents"
+          onValueChange={(value) => setReviewFilter(value as ReviewFilter)}>
+        <TabsList variant="line" aria-label="按处理归属筛选"
+            className="review-filter h-auto w-full">
+          {([
+            ["all", "全部"],
+            ["mine", "等我确认"],
+            ["agent", "Agent 处理中"],
+            ["closed", "已完成"],
+          ] as const).map(([key, label]) => (
+            <TabsTrigger key={key} value={key}
+              className={`h-auto flex-none after:hidden${reviewFilter === key ? " active" : ""}${
+                key === "mine" && reviewCounts.mine > 0
+                  ? " attention border-[color:color-mix(in_srgb,var(--attention)_50%,var(--line-strong))]" : ""}`}>
+              {label}<i>{reviewCounts[key]}</i>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>}
       {reviewAssignment?.status === "pending" && task.status !== "canceled" && (
         <section className="review-assignment" aria-labelledby="review-assignment-title">
           <div className="review-assignment-mark" aria-hidden>审</div>
@@ -1881,9 +1902,14 @@ export function TaskWorkspace({
           </strong>
           <div className="ws-identity-line">
             <code title="平台内部编号">{task.id}</code>
-            <span className={`pill ${task.status}`}>
-              <i aria-hidden />{statusText(task)}
-            </span>
+            {/* 身份行徽标:#216 收编为 Badge;≤640px 沿用原 .pill 窄屏
+                行为(收成一颗放大的点,文字隐藏)。 */}
+            <TaskStatusBadge status={task.status}
+              className="text-sm max-[640px]:gap-0 max-[640px]:px-1"
+              dotClassName="max-[640px]:size-2"
+              textClassName="max-[640px]:hidden">
+              {statusText(task)}
+            </TaskStatusBadge>
             <button type="button" className="ws-task-details-trigger" aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
             <WaitBadge task={task} personal={canOperate} />
@@ -2011,55 +2037,69 @@ export function TaskWorkspace({
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-material-toolbar">
-              <div className="ws-source-switch" role="tablist" aria-label="工作区内容">
-                {task.parent_task_id ? <>
-                  {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
-                      spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
-                      (2026-09-06 实战用户实锤"这里不应该叫当前任务书")。 */}
-                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                    onClick={() => { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }}>
-                    <span>文档</span><i>{documents.length}</i>
-                  </button>
-                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                    onClick={() => openMaterial("source")}>
-                    <span>原始需求</span>
-                  </button>
-                </> : <>
-                  <button type="button" role="tab" aria-selected={materialTabOn("source")} className={materialTabOn("source") ? "on" : ""}
-                    onClick={() => openMaterial("source")}>
-                    <span>需求原文</span>
-                  </button>
-                  <button type="button" role="tab" aria-selected={materialTabOn("doc")} className={materialTabOn("doc") ? "on" : ""}
-                    onClick={() => { openMaterial("doc"); if (documents[0]) setActive(documents[0].name); }}>
-                    <span>产出文档</span><i>{documents.length}</i>
-                  </button>
-                </>}
-                {(hasRequirementGraph || hasArchitectureStory) && <button type="button" role="tab" aria-selected={materialTabOn("chain")} className={materialTabOn("chain") ? "on" : ""}
-                  onClick={() => openMaterial("chain")}>
-                  <span>架构图</span>
-                </button>}
-                <button type="button" role="tab" aria-selected={materialTabOn("diff")}
-                  className={materialTabOn("diff") ? "on" : ""}
-                  title={untrackedDirectoryCount
-                    ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
-                    : `${changeFileCount} 个文件`}
-                  onClick={() => { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }}
-                  disabled={!changeFileCount && !untrackedDirectoryCount}>
-                  <span>代码改动</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
-                    ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
-                </button>
-                <button type="button" role="tab" className={workspaceView === "knowledge" ? "on" : ""}
-                  aria-selected={workspaceView === "knowledge"} onClick={() => selectWorkspaceView("knowledge")}>
-                  <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
-                </button>
-                <button type="button" role="tab" className={`ws-activity-tab${
-                    workspaceView === "execution" ? " on" : ""}`}
-                  aria-selected={workspaceView === "execution"}
-                  title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}
-                  onClick={() => selectWorkspaceView("execution")}>
-                  <span>工作过程</span>
-                </button>
-              </div>
+              {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头、
+                  roving tabindex 归原语)。选中值由 materialView/
+                  workspaceView 派生(与原 aria-selected 判据一致);切换
+                  回调逐键对应原 onClick(开材料/设活动文档/切视图);
+                  .ws-source-switch 皮肤类原样挂在 TabsList 上。纯页签条
+                  转换:面板仍是下方按 materialView/workspaceView 的条件
+                  渲染块(挂载/卸载语义原样)。 */}
+              <Tabs className="contents"
+                  value={workspaceView === "knowledge" ? "knowledge"
+                    : workspaceView === "execution" ? "execution" : materialView}
+                  onValueChange={(value) => {
+                    if (value === "doc") { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }
+                    else if (value === "source") openMaterial("source");
+                    else if (value === "chain") openMaterial("chain");
+                    else if (value === "diff") { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }
+                    else if (value === "knowledge") selectWorkspaceView("knowledge");
+                    else if (value === "execution") selectWorkspaceView("execution");
+                  }}>
+                <TabsList variant="line" aria-label="工作区内容"
+                    className="ws-source-switch h-auto">
+                  {task.parent_task_id ? <>
+                    {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
+                        spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
+                        (2026-09-06 实战用户实锤"这里不应该叫当前任务书")。 */}
+                    <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
+                      <span>文档</span><i>{documents.length}</i>
+                    </TabsTrigger>
+                    <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
+                      <span>原始需求</span>
+                    </TabsTrigger>
+                  </> : <>
+                    <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
+                      <span>需求原文</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
+                      <span>产出文档</span><i>{documents.length}</i>
+                    </TabsTrigger>
+                  </>}
+                  {(hasRequirementGraph || hasArchitectureStory) && <TabsTrigger value="chain"
+                    className={`h-auto flex-none${materialTabOn("chain") ? " on" : ""}`}>
+                    <span>架构图</span>
+                  </TabsTrigger>}
+                  <TabsTrigger value="diff"
+                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}`}
+                    title={untrackedDirectoryCount
+                      ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
+                      : `${changeFileCount} 个文件`}
+                    disabled={!changeFileCount && !untrackedDirectoryCount}>
+                    <span>代码改动</span>{Boolean(changeFileCount || untrackedDirectoryCount) && <i>{changeFileCount}{untrackedDirectoryCount
+                      ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
+                  </TabsTrigger>
+                  <TabsTrigger value="knowledge"
+                    className={`h-auto flex-none${workspaceView === "knowledge" ? " on" : ""}`}>
+                    <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
+                  </TabsTrigger>
+                  <TabsTrigger value="execution"
+                    className={`ws-activity-tab h-auto flex-none${
+                      workspaceView === "execution" ? " on" : ""}`}
+                    title={`查看 Agent 的进展、决定与验证结果（${viewShortcutHint("execution")}）`}>
+                    <span>工作过程</span>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
               <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
@@ -2117,7 +2157,8 @@ export function TaskWorkspace({
           {materialSearchOpen && materialView !== "chain" && (
             <div className="material-search-bar" role="search">
               <span className="material-search-icon" aria-hidden>⌕</span>
-              <input ref={materialSearchInput}
+              <Input ref={materialSearchInput}
+                className="min-w-45"
                 value={materialSearchQuery}
                 aria-label="搜索当前内容"
                 placeholder={materialView === "diff"
@@ -2451,18 +2492,21 @@ export function TaskWorkspace({
               </section>
             )}
 
-            {task.baseline_build?.status === "failed" && <div className="alert" role="status">
-              <strong>开工前编译失败</strong><span>开工前编译未通过，查看环境或上游问题。</span>
-              <button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button>
-            </div>}
-            {task.delivery?.skipped && <div className="alert" role="alert">
-              <strong>交付已阻止</strong><span>{task.delivery.skipped}</span>
-            </div>}
+            {task.baseline_build?.status === "failed" && <Alert variant="destructive" role="status" className="mb-3">
+              <AlertTitle>开工前编译失败</AlertTitle>
+              <AlertDescription>开工前编译未通过，查看环境或上游问题。</AlertDescription>
+              <AlertAction><button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button></AlertAction>
+            </Alert>}
+            {task.delivery?.skipped && <Alert variant="destructive" role="alert" className="mb-3">
+              <AlertTitle>交付已阻止</AlertTitle>
+              <AlertDescription>{task.delivery.skipped}</AlertDescription>
+            </Alert>}
             {task.notify?.settled && !task.notify.delivered && task.notify.attempts > 0 && (
-              <div className="alert" role="status"><strong>小鲁班通知未送达</strong>
-                <span>已尝试 {task.notify.attempts} 次{task.notify.last_error?.match(/HTTP\s+\d{3}/)?.[0]
-                  ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</span>
-              </div>
+              <Alert variant="destructive" role="status" className="mb-3">
+                <AlertTitle>小鲁班通知未送达</AlertTitle>
+                <AlertDescription>已尝试 {task.notify.attempts} 次{task.notify.last_error?.match(/HTTP\s+\d{3}/)?.[0]
+                  ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</AlertDescription>
+              </Alert>
             )}
             {task.status === "queued" && Boolean(task.blocked_by?.length) && (
               <div className="ws-focus-note"><strong>等待前置任务完成后自动开始</strong>
@@ -2603,19 +2647,17 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <div className="workspace-review-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setReviewInviteOpen(false);
-        }}>
-        <section className="workspace-invite-dialog" role="dialog" aria-modal="true"
-          aria-labelledby="workspace-invite-title">
-          <header>
-            <div><strong id="workspace-invite-title">邀请 Committer 检视</strong>
-              <p>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</p>
-            </div>
-            <button type="button" aria-label="关闭邀请检视"
-              autoFocus onClick={() => setReviewInviteOpen(false)}>×</button>
-          </header>
+      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <Dialog open
+        onOpenChange={(next) => { if (!next) setReviewInviteOpen(false); }}>
+        <DialogContent className="tw-root sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>邀请 Committer 检视</DialogTitle>
+            <DialogDescription>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</DialogDescription>
+          </DialogHeader>
+          <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭邀请检视"
+            className="absolute top-2 right-2" />}>
+            <XIcon />
+          </DialogClose>
           <div className="workspace-invite-content">
             {committers.length > 0 ? (
               <div className="workspace-review-invite-action">
@@ -2627,9 +2669,9 @@ export function TaskWorkspace({
                   {reviewBusy ? "发送中…" : "发送邀请"}
                 </button>
               </div>
-            ) : <div className="committer-empty">
-              管理员尚未配置 Committer 名单
-            </div>}
+            ) : <Empty className="p-2.5">
+              <EmptyDescription>管理员尚未配置 Committer 名单</EmptyDescription>
+            </Empty>}
             {reviewResult && <small className="committer-result">
               {reviewResult}
             </small>}
@@ -2649,8 +2691,8 @@ export function TaskWorkspace({
               </div>
             )}
           </div>
-        </section>
-      </div>}
+        </DialogContent>
+      </Dialog>}
     </main>
   );
 }

@@ -28,6 +28,7 @@ import {
   PROBE_REASON_TEXT,
 } from "./EnvironmentEditorDialog";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -356,8 +357,8 @@ export function EnvironmentRegistry() {
                       主 IP<SortMark active={sort?.key === "ip"} dir={sort?.dir} />
                     </button>
                     <HeaderFilter label="主 IP" active={!!ipFilter.trim()} onClear={() => setIpFilter("")}>
-                      {() => <input autoFocus
-                        className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      {() => <Input autoFocus
+                        className="h-8 w-full rounded-md px-2 text-sm"
                         placeholder="包含 IP 片段…" aria-label="按 IP 过滤"
                         value={ipFilter}
                         onChange={(event) => setIpFilter(event.target.value)} />}
