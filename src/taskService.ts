@@ -18311,7 +18311,8 @@ export class TaskService {
       if (!(batch.result_digest ? trustedKernelHostLifecycle({
         host,
         cwd: task.cwd,
-        actions: ["feedback-result", "pipeline-record", "selection-reconcile"],
+        // published 由 feedback-open 签署；它可更新生命周期而不改本批结果。
+        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile"],
         state,
       }) : trustedKernelHostActiveBatch({
         host,
@@ -18322,14 +18323,6 @@ export class TaskService {
         return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
       }
       if (batch.result_digest) {
-        if (!trustedKernelHostLifecycle({
-          host,
-          cwd: task.cwd,
-          actions: ["feedback-result", "pipeline-record", "selection-reconcile"],
-          state,
-        })) {
-          return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;
-        }
         // 内核可能已成功落 result，但进程死在 Cloud 索引 resolve 之前。
         // 幂等重试必须先从内核补齐投影，不能因 result_digest 早退而永久
         // 留下一批 repairing/open 的假现场。

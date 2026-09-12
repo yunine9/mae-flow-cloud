@@ -317,3 +317,62 @@ test("流水线摘要误拼进 ID 必须拒收；模板保留原 ID，准确回�
     assert.ok(readState(cwd).delivery_loop.batches[0].result_digest);
   } finally { await stop(); }
 });
+
+test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改结果必须拒绝", async () => {
+  const { service, internal, workspace, cwd, open, stop } =
+    await watchingService("published-result-replay");
+  const statePath = join(cwd, ".mae-flow.json");
+  try {
+    const api = service as any;
+    const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args],
+      { encoding: "utf8", env: GIT_ENV }).trim();
+    const store = new AnnotationStore(join(workspace, "annotations.jsonl"));
+    const note = store.add({ author: "owner", artifact: "main.ts", file: "main.ts",
+      line: 1, anchor: "ready", note: "补齐逻辑", kind: "code" });
+    store.markSent([note.id], "interrupt");
+    open("published-result-replay", [{ id: `ws:${note.id}`, source: "workspace",
+      source_id: note.id, source_revision: 0, kind: "code", summary: note.note,
+      verification: "author" }]);
+    writeFileSync(join(cwd, "main.ts"), "export const ready = false;\n");
+    git("add", "main.ts"); git("commit", "-qm", "fix A");
+    const resultHead = git("rev-parse", "HEAD");
+    store.respond(note.id, { outcome: "fixed", summary: "已修复", evidence: ["main.ts:1"] });
+    assert.equal(readState(cwd).delivery_loop.published, undefined);
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined,
+      "首次结果登记无需推送收据，必须发生在交付之前");
+    const originalBatch = readState(cwd).delivery_loop.batches[0];
+    assert.equal(originalBatch.result_head, resultHead);
+
+    // 模拟宿主整理交付产生新提交；登记发布事实不会重写 Agent 的处理版本。
+    writeFileSync(join(cwd, "extra.txt"), "delivery adjustment\n");
+    git("add", "extra.txt"); git("commit", "-qm", "fix B");
+    const publishedHead = git("rev-parse", "HEAD");
+    assert.notEqual(resultHead, publishedHead);
+    api.recordPublishedPush(internal,
+      { sha: publishedHead, ref: "refs/heads/feature", remote: "origin" });
+    const published = readState(cwd);
+    assert.equal(published.delivery_loop.published.sha, publishedHead);
+    for (let replay = 0; replay < 2; replay++) {
+      assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+      assert.deepEqual(readState(cwd).delivery_loop.batches[0], originalBatch,
+        "重放只补投影，不重写结果或冒充最终质量闭环");
+    }
+
+    for (const field of ["result_head", "result_digest", "summary"]) {
+      const altered = JSON.parse(JSON.stringify(published));
+      const batch = altered.delivery_loop.batches[0];
+      if (field === "summary") batch.results[0].summary = "伪造处理结论";
+      else batch[field] = field === "result_head" ? publishedHead : "forged";
+      writeFileSync(statePath, JSON.stringify(altered));
+      try {
+        assert.match(api.recordActiveFeedbackResult(internal), /缺少 Cloud 宿主权威收据/,
+          `${field} 被篡改时不能因认可发布收据而放行`);
+      } finally {
+        writeFileSync(statePath, JSON.stringify(published));
+      }
+    }
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+  } finally {
+    await stop();
+  }
+});
