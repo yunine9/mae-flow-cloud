@@ -184,16 +184,17 @@ export function routeReceiptFailure(
 }
 
 /** 证据核销重试的定时器到点时,现场还得是排它时的那个现场:同纪元、仍在
- * 验证中、同 SHA、流水线总体仍是 success(INCOMPLETE/STALE 才有得重试)。 */
+ * 验证中、同 SHA；过期的红绿结果都可重验，普通核销重试只接受绿灯。 */
 export function evidenceRetryStillValid(snapshot: {
   current: boolean;
   status: string;
   sha: string | undefined;
   expectedSha: string;
   pipeline: string | undefined;
+  stale?: boolean;
 }): boolean {
   return snapshot.current
     && snapshot.status === "verifying"
     && snapshot.sha === snapshot.expectedSha
-    && snapshot.pipeline === "success";
+    && (snapshot.pipeline === "success" || (snapshot.stale === true && snapshot.pipeline === "failed"));
 }

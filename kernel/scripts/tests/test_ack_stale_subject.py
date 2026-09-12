@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""印章过期的答案要报"内容变了",不许误诊成"没回答过"。
-
-2026-08-26 定位 story 二次确认问题时补:用户确认之后审批产物又被
-修改时,印章过滤会清空账本,旧报错说"尚未捕获到选择"——把"内容变了
-该重看"和"根本没问过"混为一谈,模型和人都无从排障。"""
+"""真实回答按步骤复用，遗留内容指纹不再作废用户决定。"""
 
 import contextlib
 import json
@@ -71,15 +67,18 @@ class StaleSubjectAckTests(unittest.TestCase):
                   "w", encoding="utf-8") as out:
             json.dump(rows, out, ensure_ascii=False)
 
-    def test_stale_stamp_reports_content_change_not_missing_answer(self):
+    def test_changed_content_keeps_actual_confirmation(self):
         self._write_ledger([ledger_row("o" * 64)])
         with in_directory(self.temp.name):
-            ok, why = _implicit_ack_verified(self.step, self.state)
-        self.assertFalse(ok)
-        self.assertIn("确认之后审批内容", why)
-        self.assertIn("story.md", why)
-        self.assertNotIn("尚未捕获到本步骤", why,
-                         "内容变了不是没回答,不许误诊")
+            self.assertEqual((True, ""), _implicit_ack_verified(self.step, self.state))
+
+    def test_no_answer_or_another_step_cannot_supply_confirmation(self):
+        row = ledger_row("o" * 64)
+        row["step"] = "open"
+        for rows in ([], [row]):
+            self._write_ledger(rows)
+            with in_directory(self.temp.name):
+                self.assertFalse(_implicit_ack_verified(self.step, self.state)[0])
 
     def test_halfwidth_comma_and_fullwidth_comma_are_the_same_confirmation(self):
         for standard, answer in ((CONFIRM, CONFIRM.replace("，", ",")),
@@ -92,9 +91,8 @@ class StaleSubjectAckTests(unittest.TestCase):
                 with in_directory(self.temp.name):
                     self.assertEqual((True, ""), _implicit_ack_verified(self.step, self.state))
 
-    def test_punctuation_compatibility_does_not_accept_refusal_or_stale_approval(self):
+    def test_punctuation_compatibility_does_not_accept_refusal_or_empty_answer(self):
         for answer, sha in (("不确认,需要修改", "n" * 64),
-                            (CONFIRM.replace("，", ","), "o" * 64),
                             (",", "n" * 64)):
             row = ledger_row(sha)
             row["text"] = json.dumps({"answers": {"Story 是否确认": answer}}, ensure_ascii=False)

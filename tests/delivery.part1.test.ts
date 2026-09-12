@@ -164,7 +164,7 @@ test("external_verify 是宿主等待点：不催办 Agent，直接触发并核�
   }
 });
 
-test("旧 SHA 总体绿但 HEAD 已变化 → 先 STALE，再由宿主推新 HEAD 自动再验", async () => {
+for (const oldStatus of ["success", "failed"] as const) test(`旧 SHA ${oldStatus} 但 HEAD 已变化 → 先 STALE，再由宿主推新 HEAD 自动再验`, async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.nextPipelineStatus = "running";
@@ -191,7 +191,7 @@ test("旧 SHA 总体绿但 HEAD 已变化 → 先 STALE，再由宿主推新 HEA
     // 旧 SHA 先收敛成 success；宿主发现 STALE 后推新 HEAD，新 SHA
     // 必须触发自己的流水线，测试明确让第二条同步变绿。
     platform.nextPipelineStatus = "success";
-    platform.finishPipeline(before.delivery!.sha!, "success");
+    platform.finishPipeline(before.delivery!.sha!, oldStatus);
     await until(() => Boolean(service.get(created.id)!.delivery?.waiting_on),
       "内核拒绝旧 SHA");
     const task = service.get(created.id)!;

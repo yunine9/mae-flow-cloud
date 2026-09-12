@@ -1,12 +1,14 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    CONFIG_CONFIRM_ACK, EXIT_PATH, HISTORY_PATH, ORDER_PATH, hashlib, json,
+    CONFIG_CONFIRM_ACK, EXIT_PATH, HISTORY_PATH, ORDER_PATH, json,
     load_order_facts, os, re, read_lines,
     read_text, resolve_order_workflow, review_status_count, review_statuses,
     sys, tempfile, time,
     workflow_advancement, workflow_transitions,
 )
+from uuid import uuid4
+
 from .wiring import api
 from mae_flow_core.foundation.git_excludes import append_local_excludes
 from mae_flow_core.orchestration.work_package import ensure_work_package
@@ -120,7 +122,7 @@ def advance(flow, st, sid, step, tag, note=""):
             review_text, "转规格轮次(已确认)")
     st.pop("unlock", None)   # 源码解锁仅限本步实例,推进即失效
     st.pop("risk_acceptances", None)   # 风险放行同样只属于当前步骤实例
-    st.pop("approval_subject", None)   # 人工决定只绑定本步展示的内容
+    st.pop("approval_subject", None)   # 清理旧版本遗留的审批指纹
     st.pop("user_intervention", None)  # 下一步已承接，避免旧介入说明反复刷屏
     st["history"].append({"step": sid, "result": tag, "note": note, "at": time.strftime("%Y-%m-%d %H:%M:%S")})
     try:
@@ -275,8 +277,7 @@ def _print_config_review(review, step, st=None):
     }
     effective_keys = effective_config_keys(
         step, contract_state, host_env.host_kind())
-    print("[mae-flow] 完整配置确认单（收据 %s，指纹 %s）" % (
-        review.get("id", "?"), str(review.get("sha256", ""))[:12]))
+    print("[mae-flow] 完整配置确认单（收据 %s）" % review.get("id", "?"))
     for key in effective_keys:
         label = "UT 编写方式" if key == "UT生成方式" else key
         print("  %s: %s" % (label, pending.get(key, "")))
@@ -302,16 +303,12 @@ def cmd_config_review(flow, st, args):
         api.die("月光宝盒不询问用户，不需要 config-review；按 current 指令保守补齐配置后直接 done。", 2)
     step = flow["steps"]["config_confirm"]
     pending = _validated_pending_config(step, st, args.set or [])
-    requirement_sha = api._requirement_sha256(pending.get("需求文档", ""))
-    digest = api._config_sha256(pending, requirement_sha)
-    review_id = hashlib.sha256(
-        (digest + "\0" + str(time.time_ns())).encode("utf-8")).hexdigest()[:16]
+    # 展示同一步配置不另起审批轮次；ID 只用于通知去重。
+    review_id = (st.get("config_review") or {}).get("id") or uuid4().hex[:16]
     st["config_review"] = {
         "step": "config_confirm",
         "id": review_id,
-        "sha256": digest,
         "config": pending,
-        "requirement_sha256": requirement_sha,
         "head": api.sh("git rev-parse --verify HEAD"),
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "execution_contract": contract_for_state(
@@ -337,7 +334,7 @@ def cmd_config_review(flow, st, args):
           "(含分支名、需求摘录%s),再提问——只发一张没有配置内容"
           "的确认卡,用户无从确认。"
           % ("与现场面板路径" if local else ""))
-    print("然后用**一次** AskUserQuestion 同时问完这两项开场决策"
+    print("已有完整配置确认时直接沿用；尚未确认时用**一次** AskUserQuestion 问完开场决策"
           "（合并成一张卡，避免连着打断用户两次）：")
     print("Q1 上述完整配置是否正确？")
     print("  - " + CONFIG_CONFIRM_ACK)

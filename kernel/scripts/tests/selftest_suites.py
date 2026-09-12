@@ -129,7 +129,7 @@ REFACTOR_SAFETY_SUITES = (
      ("scripts/tests/test_external_repair.py",), 90, 3000),
     ("Cloud 持续检视内核契约",
      ("scripts/tests/test_continuous_review.py",), 90, 5000),
-    ("人工审批对象绑定稳定内容且可自动换卡",
+    ("人工确认复用真实回答且不因内容变化自动换卡",
      ("scripts/tests/test_approval_subject.py",), 90, 3000),
     ("宿主契约:steps --json 的交付方式目录与真流程一致",
      ("scripts/tests/test_steps_catalog.py",), 90, 3000),

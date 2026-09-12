@@ -371,10 +371,6 @@ def cmd_messages(st, args):
         ]
         if extracted:
             print("    提取答案: " + " | ".join(extracted))
-        if m.get("config_review_sha256"):
-            print("    绑定配置: 收据 %s / 指纹 %s" % (
-                m.get("config_review_id", "?"),
-                m["config_review_sha256"][:12]))
 
 def cmd_direct_messages(args):
     """Show Direct-mode prompts/answers that may authorize a safe re-entry."""

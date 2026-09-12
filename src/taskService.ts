@@ -5,7 +5,7 @@ import { fetchMrDiscussions, observeMrDiscussions, discussionRevision, discussio
 import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
-import { pendingKernelReview } from "./kernelReviewRequest.ts";
+import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
 import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
@@ -4708,9 +4708,8 @@ export class TaskService {
     return resolveArtifactRoot(task.summary.workspace, cwd);
   }
 
-  /** 当前 push 检视卡的代码比较。scope 只在服务端已经固化的两个锚中
-   * 二选一，浏览器不能提交任意 Git ref；HEAD 一旦变化，旧链接立即
-   * 失效并等新卡，避免人在旧 diff 上签新代码。 */
+  /** 检视卡展示当前代码；浏览器不能提交任意 Git ref。
+   * SHA 用于定位内容，变更不会让阅读入口失效或自动要求新确认。 */
   async pushReviewDiff(
     id: string,
     scope: "changes" | "full",
@@ -4732,10 +4731,10 @@ export class TaskService {
     }
     if (review) {
       const snapshot = await deliveryChangeSnapshot(task.cwd);
-      if (!snapshot || snapshot.head !== review.head_sha) return undefined;
+      if (!snapshot) return undefined;
       if (scope === "changes") {
         return compareDeliveryRevisions(
-          task.cwd, review.base_sha, review.head_sha);
+          task.cwd, review.base_sha, snapshot.head);
       }
     }
     // 持续检视轮不一定有 Cloud push_review 导航卡，但它仍然是内核明确
@@ -8608,6 +8607,14 @@ export class TaskService {
         this.annotations(task).resetUnsentAssignments(this.annotations(task).list());
         let authoritativeWaiting = summary.waiting
           ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
+        if (summary.status === "waiting_for_human"
+            && retireKernelReviewRequest(task.humanGate, authoritativeWaiting)) {
+          summary.waiting = undefined;
+          summary.status = "queued";
+          task.resume = true;
+          authoritativeWaiting = undefined;
+          this.persist(task);
+        }
         if (this.recoverMisroutedRequirementAnalysisWaiting(
           task, authoritativeWaiting)) {
           authoritativeWaiting = undefined;
@@ -14395,10 +14402,6 @@ export class TaskService {
           failClosed: Boolean(this.options.host),
         }),
         humanGate: task.humanGate,
-        pendingHumanQuestion: this.options.host && !analysisOnly
-          ? () => this.current(task, epoch) && !task.pauseRequested
-            ? pendingKernelReview(cwd, this.options.host!.kernelRoot, task.humanGate, task.summary.id) : undefined
-          : undefined,
         hostHooks: withLiveReviewReceipts(hostHooks, {
           current: () => this.current(task, epoch),
           list: () => this.annotations(task).list(),
@@ -14734,6 +14737,7 @@ export class TaskService {
         sha: task.summary.delivery?.sha,
         expectedSha: sha,
         pipeline: task.summary.delivery?.pipeline,
+        stale,
       })) return;
       this.bypass(task, "流水线证据自动重试", stale
         ? this.tryDeliver(task, epoch)
@@ -16156,8 +16160,7 @@ export class TaskService {
         "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单", "contract");
       return false;
     }
-    // 同一 SHA 已有宿主推送收据时，推送已是远端事实；不得再问用户
-    // “要不要推送”。恢复链直接进入 MR / 流水线核对，新 HEAD 才重走卡。
+    // 已推送的 SHA 直接核对 MR/流水线；未推送版本沿用既有人工决定。
     if (task.summary.delivery?.git_push?.sha === snapshot.head) return true;
     // 最终卡出现之前,所有已提交意见必须处理完成(2026-09-05):还没处理完
     // 就先不举卡,让 Agent 接着处理;派过一轮仍未完成才按现状举卡。
@@ -16177,14 +16180,15 @@ export class TaskService {
     }
     const cycleToken = selection?.status === "requested"
       ? selection.waiting_id
-      : recheckRequired ? loop?.review_ids : undefined;
+      : recheckRequired ? loop?.review_ids : selection?.waiting_id;
     const callId = pushReviewCallId({
       head: snapshot.head,
       paths: committed,
     }, cycleToken);
     const waiting = task.summary.waiting;
     if (waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
-      if (waiting.call_id === callId) return false; // 同一集合的卡已在等人
+      if (waiting.call_id === callId || samePaths(
+        normalizedDeliveryPaths(task.summary.delivery?.push_review?.committed_paths ?? []), committed)) return false; // 同范围旧版本卡也继续等原回答
       task.humanGate.supersede(waiting.waiting_id, {
         stateVersion: waiting.state_version,
         notes: "交付文件集合已变化,旧确认卡作废,按最新范围重新确认",
@@ -16198,9 +16202,8 @@ export class TaskService {
     const deltaLines = deltaLine ? [deltaLine] : [];
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
-    // 只在 Build-Fix 收敛后举卡。卡同时固化最终 HEAD 与文件集合：
-    // 后续任何修复都会产生新 HEAD，因此一律重新检视；同一 HEAD 的
-    // 传输重试才幂等复用，不按“第一次/后续”另开两套规则。
+    // 只在 Build-Fix 收敛后举卡。HEAD 用于展示，不能作废用户决定；
+    // 文件范围或用户明确打回才形成新的待办。
     const reviewAnnotationIds = new Set(
       loop?.workspace_review_annotation_ids ?? []);
     const reviewItems = recheckRequired
@@ -17139,13 +17142,14 @@ export class TaskService {
     const delivery = task.summary.delivery;
     if (!delivery) return;
     if (delivery.sha !== sha || (delivery.git_push && delivery.git_push.sha !== sha)) return;
-    if (status === "success") {
+    // 红绿结果都先核对版本，过期红灯也只能重验，不能派修旧代码。
+    const attestation = await this.recordPipelineEvidence(task, sha, status, checks);
+    if (!this.current(task, epoch) || task.summary.delivery?.sha !== sha
+        || (task.summary.delivery.git_push && task.summary.delivery.git_push.sha !== sha)) return;
+    if (status === "success" || attestation?.verdict === "STALE") {
       // 平台总体 success 绑定精确 SHA，且 execution_contract 已声明该
       // 权威流水线覆盖三项时可以聚合核销。typed checks 若存在则提供更
       // 精确裁决；登记失败、pending、STALE 仍一律不放行。
-      const attestation = await this.recordPipelineEvidence(
-        task, sha, status, checks);
-      if (!this.current(task, epoch)) return;
       // 只有登记成功才有新收据可对账。持续检视里每一轮改码修复都以
       // Agent 停在 external_verify、生命周期暂无收据背书结尾——正是这条
       // pipeline record 重新封印。它若失败一次(30 秒预算、内核拒收),
@@ -17215,9 +17219,6 @@ export class TaskService {
       this.ensureMergeWatch(task);
       return;
     }
-    // 红灯也过证据口：先留绑定 SHA 的逐项物证，再进同一轻量修复环。
-    await this.recordPipelineEvidence(task, sha, status, checks);
-    if (!this.current(task, epoch)) return;
     await this.handlePipelineRed(task, sha, log, epoch);
   }
 

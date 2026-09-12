@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""捕获即盖章(2026-08-26 单次确认修复):答案落账的瞬间,若当前步
-该有审批卡而 state 尚未绑定、产物已就绪,钩子按此刻内容现算指纹给
-这条消息盖章——模型"定稿即问"的自然次序由此一次通过,不再必现
-背靠背双确认(run8b/run9 实测)。产物未就绪时保持无印章,done 仍按
-老路径要求展示确认;钩子对状态文件一个字节不落盘。"""
+"""捕获真实人工回答不再计算、绑定内容指纹。"""
 
 import contextlib
 import json
@@ -21,7 +17,6 @@ if SCRIPTS not in sys.path:
 
 from mae_flow_core import save_versioned_json  # noqa: E402
 from mae_flow_core.adapters.hook_runtime import HookRuntimeAdapter  # noqa: E402
-from mae_flow_core.cli_commands.approval_subject import build_subject  # noqa: E402
 from mae_flow_core.state_store import safe_read_json  # noqa: E402
 
 
@@ -79,12 +74,7 @@ class HookUsermsgApprovalBindingTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _spec_step(self):
-        # 与 flow/flow.json 的 open 步保持同形;这里只为独立算期望指纹。
-        return {"approval_subject": {
-            "kind": "artifacts", "artifacts": ["spec"]}}
-
-    def test_answer_is_stamped_with_current_content_when_card_missing(self):
+    def test_answer_is_captured_without_content_binding(self):
         folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
         os.makedirs(folder)
         with open(os.path.join(folder, "spec.md"), "w",
@@ -93,20 +83,19 @@ class HookUsermsgApprovalBindingTests(unittest.TestCase):
         runtime = runtime_for(self.root)
         with in_directory(self.root):
             runtime._capture_usermsg("Spec 无需再调整，确认生成 Story")
-            expected = build_subject(
-                self.root, dict(self.state), "open", self._spec_step())
         rows = message_rows(os.path.join(self.root, ".mae-flow.json.usermsg"))
         self.assertTrue(rows, "答案必须落账")
         row = rows[-1]
-        self.assertEqual(expected["sha256"], row.get("approval_subject_sha256"),
-                         "印章必须等于捕获瞬间的内容指纹,ack 过滤才认它")
-        self.assertEqual(expected["id"], row.get("approval_subject_id"))
+        self.assertEqual("open", row["step"])
+        self.assertIn("确认生成 Story", row["text"])
+        self.assertNotIn("approval_subject_sha256", row)
+        self.assertNotIn("approval_subject_id", row)
         state_raw, err = safe_read_json(
             os.path.join(self.root, ".mae-flow.json"))
         self.assertFalse(err)
         text = json.dumps(state_raw, ensure_ascii=False)
         self.assertNotIn("approval_subject", text,
-                         "钩子只在内存绑卡,状态文件的写入权只归 CLI")
+                         "捕获回答不创建审批指纹")
 
     def test_missing_artifacts_leave_answer_unstamped(self):
         logs = []
@@ -116,7 +105,7 @@ class HookUsermsgApprovalBindingTests(unittest.TestCase):
         rows = message_rows(os.path.join(self.root, ".mae-flow.json.usermsg"))
         self.assertTrue(rows)
         self.assertNotIn("approval_subject_sha256", rows[-1],
-                         "产物未就绪不许伪造印章;done 会按老路径要求展示确认")
+                         "缺少产物也不影响捕获真实回答")
 
 
 if __name__ == "__main__":

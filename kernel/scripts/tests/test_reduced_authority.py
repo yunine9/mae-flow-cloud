@@ -13,7 +13,6 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 from mae_flow_core.cli_commands.delivery_manifest import build_delivery_manifest, build_unchanged_delivery_manifest
 from mae_flow_core.cli_commands import done_status
-from mae_flow_core.cli_commands.approval_subject import build_subject
 from mae_flow_core.workflow.advisories import pending_advisories
 
 
@@ -112,32 +111,6 @@ class ReducedAuthorityTests(unittest.TestCase):
         findings = pending_advisories(state_path, 'build')
         self.assertEqual(3, len(findings))
         self.assertTrue(any('receipt unavailable' in item['message'] for item in findings))
-
-    def test_same_content_add_and_commit_do_not_invalidate_human_review(self):
-        base = self.git('rev-parse', 'HEAD')
-        (self.root/'a.txt').write_text('changed\n')
-        (self.root/'new.txt').write_text('new\n')
-        state = {'implementation_base_head':base}
-        step = {'approval_subject':{'kind':'worktree'}}
-        before = build_subject(str(self.root), state, 'delivery_review', step)
-        self.git('add', 'a.txt', 'new.txt')
-        self.assertEqual(before, build_subject(str(self.root), state, 'delivery_review', step))
-        self.git('commit', '-qm', 'same content')
-        self.assertEqual(before, build_subject(str(self.root), state, 'delivery_review', step))
-        (self.root/'a.txt').write_text('actually different\n')
-        self.assertNotEqual(before, build_subject(str(self.root), state, 'delivery_review', step))
-
-    def test_delivery_approval_without_recorded_base_survives_commit(self):
-        self.state.pop("implementation_base_head", None)
-        self.state["delivery_manifest"] = {"files": ["a.txt"], "confirmed": True}
-        (self.root / "a.txt").write_text("new content\n")
-        step = {"approval_subject": {"kind": "worktree"}}
-        subject = build_subject(str(self.root), self.state, "delivery_review", step)
-        self.git("add", "a.txt")
-        self.git("commit", "-qm", "local commit after selection")
-        self.assertEqual(subject, build_subject(str(self.root), self.state, "delivery_review", step))
-        (self.root / "a.txt").write_text("different content\n")
-        self.assertNotEqual(subject, build_subject(str(self.root), self.state, "delivery_review", step))
 
     def test_done_advances_without_domain_archive_bookkeeping(self):
         self.state['current'] = 'domain_archive'; self.save()

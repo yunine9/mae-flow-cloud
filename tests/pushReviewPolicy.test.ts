@@ -5,7 +5,7 @@ import {
   pushReviewReceiptCovers,
 } from "../src/pushReviewPolicy.ts";
 
-test("push 检视收据同时绑定 HEAD 与文件集合", () => {
+test("push 确认保留文件范围，不因 SHA 变化作废", () => {
   const receipt = {
     status: "confirmed" as const,
     head: "head-a",
@@ -16,7 +16,7 @@ test("push 检视收据同时绑定 HEAD 与文件集合", () => {
   }), true);
   assert.equal(pushReviewReceiptCovers(receipt, {
     head: "head-b", paths: ["src/a.ts"],
-  }), false, "同一批文件的新提交也必须重新检视");
+  }), true, "同一批文件的新提交沿用确认");
   assert.equal(pushReviewReceiptCovers(receipt, {
     head: "head-a", paths: ["src/a.ts", "src/b.ts"],
   }), false);
@@ -25,10 +25,10 @@ test("push 检视收据同时绑定 HEAD 与文件集合", () => {
   }), false);
 });
 
-test("同一 HEAD 的卡键幂等，HEAD 或明确返工轮次变化就换卡", () => {
+test("同范围的卡键不因 HEAD 换卡，明确返工才开新轮", () => {
   const snapshot = { head: "head-a", paths: ["src/a.ts"] };
   assert.equal(pushReviewCallId(snapshot), pushReviewCallId(snapshot));
-  assert.notEqual(pushReviewCallId(snapshot), pushReviewCallId({
+  assert.equal(pushReviewCallId(snapshot), pushReviewCallId({
     ...snapshot, head: "head-b",
   }));
   assert.notEqual(pushReviewCallId(snapshot, "round-1"),
@@ -80,8 +80,8 @@ test("到了推送点:精确授权放行；同范围依既定设置续推，不�
   selectionPushDecision({ ...base, policy: () => { policyAsked += 1; return on(); } });
   assert.equal(policyAsked, 0, "精确收据放行时不算策略(原来也不读批注)");
   assert.deepEqual(selectionPushDecision({ ...base, head: "h2", policy: off }),
-    { kind: "auto_confirm", reason: "按既定推送设置续推；当前 SHA 未改变已选交付文件范围" },
-    "同范围续推遵从责任人设置，不把编译收据当授权，也不伪报编译通过");
+    { kind: "allow" },
+    "同范围沿用真实确认，不把编译收据当授权，也不伪报编译通过");
   const grown = selectionPushDecision({ ...base, head: "h2", current: ["a.ts", "b.ts", "c.ts"], policy: off });
   assert.deepEqual(grown, { kind: "recard", reason: "新增了未确认文件 c.ts" }, "范围变了:全自动也必须出卡,月光不能代答");
   assert.deepEqual(selectionPushDecision({ ...base, head: "h2", current: ["a.ts"], policy: off }),
@@ -89,8 +89,8 @@ test("到了推送点:精确授权放行；同范围依既定设置续推，不�
   assert.deepEqual(selectionPushDecision({ ...base, selectionStatus: "requested", head: "h2" }),
     { kind: "recard", reason: "交付文件清单已整理完成，等待确认当前改动" });
   assert.deepEqual(selectionPushDecision({ ...base, head: "h2" }),
-    { kind: "recard", reason: "交付清单确认绑定的是 h1，当前待推送提交是 h2" }, "常规过目开着:新 SHA 重新过目");
-  assert.match(recardDetail("x"), /^最终确认后现场又发生变化：x。旧确认已自动作废.*不用重跑任务。$/);
+    { kind: "allow" }, "常规过目开着也不因新 SHA 重问");
+  assert.match(recardDetail("x"), /^需要核对交付范围：x。.*不用重跑任务。$/);
 });
 
 test("给人看的话:范围变化一行、等待文案、脏路径与越界清单的截断", () => {

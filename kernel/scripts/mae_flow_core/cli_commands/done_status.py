@@ -5,7 +5,6 @@ from .shared import (
     workflow_transitions,
 )
 from .wiring import api
-from mae_flow_core.cli_commands.approval_subject import subject_matches
 from mae_flow_core.workflow.authority import ADVISORY_EVIDENCE, advisory_message
 from mae_flow_core.workflow.advisories import record_advisory
 
@@ -18,56 +17,26 @@ def _done_pending_config(step, st, args, sid):
     review = st.get("config_review") if sid == "config_confirm" else None
     if sid != "config_confirm" or api._moonlight(st):
         return api._validated_pending_config(step, st, args.set or [])
-    if not isinstance(review, dict) or not review.get("sha256"):
+    if not isinstance(review, dict) or not isinstance(review.get("config"), dict):
         api.die(
             "尚未生成完整配置确认单。先按 current 输出执行 config-review --set ...；"
             "脚本会校验并展示全部配置，再让用户只做一次最终确认。"
             "不要直接拿基线分支、单号等局部回答调用 done。", 2)
     if args.set:
         pending_config = api._validated_pending_config(step, st, args.set)
-        current_requirement_sha = api._requirement_sha256(
-            pending_config.get("需求文档", ""))
-        if api._config_sha256(
-                pending_config, current_requirement_sha) != review.get("sha256"):
-            api.die(
-                "done 携带的配置与用户看到的确认单不一致。禁止确认 A、提交 B；"
-                "请用新配置重新执行 config-review。", 2)
     else:
         review_state = dict(st)
         review_state["config"] = dict(review.get("config") or {})
         pending_config = api._validated_pending_config(step, review_state, [])
-        current_requirement_sha = api._requirement_sha256(
-            pending_config.get("需求文档", ""))
-        if api._config_sha256(
-                pending_config,
-                current_requirement_sha) != review.get("sha256"):
-            api.die("配置或需求文档在呈现后发生变化，旧确认单已自动失效。"
-                "重新执行 config-review 即可恢复，无需退出流程。", 2)
     ok, why = api._config_ack_verified(
-        st, args.ack or "", review.get("sha256"), review.get("id", ""))
+        st, args.ack or "")
     if not ok:
         api.die(why, 2)
     return pending_config
 
 
 def _done_validate_choice_and_ack(step, st, args, sid):
-    if step.get("approval_subject") and not api._moonlight(st):
-        previous_subject = dict(st.get("approval_subject") or {})
-        ok, why = subject_matches(os.getcwd(), st, sid, step)
-        # subject_matches rotates a missing/stale subject in-memory.  Persist
-        # every rotation — including the first-bind pass-through path (2026-08-26
-        # 单次确认修复) — so the ledger filter and any later card render see the
-        # same bound identifier; no Agent loop through current/reasoning is
-        # needed merely to mint another identifier.
-        if st.get("approval_subject") != previous_subject:
-            if not ok and (st.get("approval_subject") or {}).get("id"):
-                st["approval_request"] = {
-                    "step": sid,
-                    "subject_id": st["approval_subject"]["id"],
-                }
-            api.save_state(st)
-        if not ok:
-            api.die(why, 2)
+    # 内容变化由 Agent 说明并遵循用户授权，不用文件指纹作废真实回答。
     error = workflow_completion.choice_error(step, args.choice)
     if error:
         api.die(error, 2)

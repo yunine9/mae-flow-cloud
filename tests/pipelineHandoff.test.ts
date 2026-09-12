@@ -168,3 +168,40 @@ test("新验证接棒后，旧流水线批次不再生成回执补交任务；�
   assert.equal(service.recordActiveFeedbackResult(state), undefined);
   assert.equal(readFileSync(file, "utf8"), original);
 });
+
+for (const status of ["success", "failed"] as const) test(`HEAD 已前进时旧 ${status} 只重验，不派旧代码修复`, async t => {
+  const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "stale-verdict-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const task = service.create("旧结果不重复派修");
+  const state = service.tasks.get(task.id);
+  state.summary.status = "verifying";
+  state.summary.delivery = { sha: "old", pipeline: status, git_push: { sha: "old", ref: "work", remote: "origin" } };
+  service.recordPipelineEvidence = async () => ({ verdict: "STALE", reason: "HEAD 已变" });
+  service.syncFeedbackStoreFromKernel = () => {};
+  const retries: boolean[] = [];
+  service.schedulePipelineEvidenceRetry = (_task: unknown, _sha: string, _epoch: number, stale: boolean) => retries.push(stale);
+  service.handlePipelineRed = async () => assert.fail("不应派修旧 SHA");
+  await service.pipelineVerdict(state, "old", status, "旧编译错误", undefined, state.controlEpoch);
+  assert.deepEqual(retries, [true]);
+  assert.equal(state.summary.status, "verifying");
+});
+
+for (const status of ["success", "failed"] as const) test(`登记 ${status} 期间新推送接棒，迟到返回不派修或推进新版本`, async t => {
+  const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "late-attestation-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const task = service.create("核销期间新推送");
+  const state = service.tasks.get(task.id);
+  state.summary.status = "verifying";
+  state.summary.delivery = { sha: "old", pipeline: status };
+  service.recordPipelineEvidence = async () => {
+    await Promise.resolve();
+    projectPushReceipt(state.summary, { sha: "new", ref: "work", remote: "origin" });
+    return { verdict: status === "success" ? "PASS" : "RED" };
+  };
+  service.syncFeedbackStoreFromKernel = () => assert.fail("不能核销旧提交");
+  service.handlePipelineRed = async () => assert.fail("不能派修旧提交");
+  await service.pipelineVerdict(state, "old", status, "旧结果", undefined, state.controlEpoch);
+  assert.equal(state.summary.delivery.sha, "new");
+  assert.equal(state.summary.status, "verifying");
+  assert.equal(state.summary.delivery.pipeline, undefined);
+});

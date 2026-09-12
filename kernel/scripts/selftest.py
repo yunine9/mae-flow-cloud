@@ -555,14 +555,13 @@ if flow:
             mf.cmd_config_review(
                 flow, mf.load_state(), types.SimpleNamespace(set=config_sets))
             reviewed = mf.load_state()
-            review_sha = reviewed.get("config_review", {}).get("sha256", "")
+            review_sha = "legacy-digest"
             review_id = reviewed.get("config_review", {}).get("id", "")
             resumed_output = io.StringIO()
             with contextlib.redirect_stdout(resumed_output):
                 mf.print_current(flow, reviewed)
             check("配置确认单可在清空会话后由 current 原样恢复",
                   review_id in resumed_output.getvalue()
-                  and review_sha[:12] in resumed_output.getvalue()
                   and mf.CONFIG_CONFIRM_ACK in resumed_output.getvalue())
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
                 json.dump([{
@@ -578,7 +577,7 @@ if flow:
                     "config_review_id": review_id,
                 }], f, ensure_ascii=False)
             partial_ok, partial_why = mf._config_ack_verified(
-                reviewed, "确认 master", review_sha, review_id)
+                reviewed, "确认 master")
             check("配置单项回答不能替整份配置背书",
                   not partial_ok and "完整配置" in partial_why)
 
@@ -593,7 +592,7 @@ if flow:
             except SystemExit as exc:
                 changed_doc_blocked = exc.code == 2
             open(good_path, "w", encoding="utf-8").write(original_requirement)
-            check("需求文档呈现后变化会让旧配置确认单失效",
+            check("需求文档变化仍不能把单项回答当作完整确认",
                   changed_doc_blocked)
 
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
@@ -611,15 +610,14 @@ if flow:
                     "config_review_id": review_id,
                 }], f, ensure_ascii=False)
             stale_ok, stale_why = mf._config_ack_verified(
-                reviewed, mf.CONFIG_CONFIRM_ACK, review_sha, "old-review")
-            check("旧配置确认收据不能复用到新一轮呈现",
-                  not stale_ok and "绑定" in stale_why)
+                reviewed, mf.CONFIG_CONFIRM_ACK)
+            check("完整配置确认不受遗留内容指纹影响", stale_ok)
             mf.cmd_done(
                 flow, reviewed,
                 types.SimpleNamespace(
                     ack=None, choice=None, set=None))
             completed_config = mf.load_state()
-            check("配置按钮结果绑定指纹后可直接推进且无需再输入 ACK",
+            check("配置按钮结果可直接推进且无需再输入 ACK",
                   completed_config.get("current") == "workflow_select"
                   and completed_config.get("config", {}).get("单号") == "REQ1"
                   and not completed_config.get("config_review"))
@@ -2192,8 +2190,8 @@ with _TmpDir() as td:
           captured.returncode == 0
           and messages[-1]["text"] == "我确认中文需求：支持基站名称查询"
           and messages[-1].get("input_encoding") == "utf-8-sig"
-          and messages[-1].get("config_review_sha256") == review_sha
-          and messages[-1].get("config_review_id") == review_id)
+          and "config_review_sha256" not in messages[-1]
+          and "config_review_id" not in messages[-1])
     answer_payload = json.dumps({
         "cwd": td,
         "tool_name": "AskUserQuestion",
@@ -2207,10 +2205,10 @@ with _TmpDir() as td:
         cwd=td, input=answer_payload.encode("utf-8"), capture_output=True,
         timeout=10, env=env)
     messages = json.load(open(os.path.join(td, ".mae-flow.json.usermsg"), encoding="utf-8"))
-    check("AskUserQuestion 多回答结构绑定当前配置指纹",
+    check("AskUserQuestion 保留多回答结构但不绑定配置指纹",
           answer_capture.returncode == 0
-          and messages[-1].get("config_review_sha256") == review_sha
-          and messages[-1].get("config_review_id") == review_id
+          and "config_review_sha256" not in messages[-1]
+          and "config_review_id" not in messages[-1]
           and mf.CONFIG_CONFIRM_ACK in messages[-1].get("text", ""))
 
 with _TmpDir() as td:

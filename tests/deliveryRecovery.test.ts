@@ -138,5 +138,7 @@ test("证据核销重试到点:必须还是排它时的那个现场", () => {
   assert.ok(!evidenceRetryStillValid({ ...ok, current: false }));
   assert.ok(!evidenceRetryStillValid({ ...ok, status: "completed" }));
   assert.ok(!evidenceRetryStillValid({ ...ok, sha: "def" }), "HEAD 变了:那是新流水线的事");
+  assert.ok(evidenceRetryStillValid({ ...ok, pipeline: "failed", stale: true }), "过期红灯必须能接续新 HEAD 验证");
+  assert.ok(!evidenceRetryStillValid({ ...ok, pipeline: "failed" }), "当前红灯不能冒充绿灯核销重试");
   assert.ok(!evidenceRetryStillValid({ ...ok, pipeline: "running" }), "总体不是 success 就没有'逐项核销'可重试");
 });

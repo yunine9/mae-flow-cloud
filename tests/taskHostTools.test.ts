@@ -89,7 +89,7 @@ test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承
   assert.equal(await finishTaskHostOperation(s.host), false, "已完成操作不重新传输");
 });
 
-for (const confirmed of [false, true]) test(`宿主推送同步远端新增提交，${confirmed ? "旧审批不复用" : "新审批绑定同步后 SHA"}`, async t => {
+for (const confirmed of [false, true]) test(`宿主推送同步远端新增提交，${confirmed ? "沿用本次确认" : "同步后首次确认"}`, async t => {
   const s = scene(t), api = s.service as any;
   api.options.host = {};
   const base = s.git("rev-parse", "HEAD");
@@ -118,15 +118,10 @@ for (const confirmed of [false, true]) test(`宿主推送同步远端新增提�
   assert.notEqual(rebased, op.sha);
   assert.equal(s.git("rev-parse", "HEAD^"), remoteHead);
   assert.equal(readFileSync(join(s.host.cwd!, "local.txt"), "utf8"), "review fix\n");
-  if (confirmed) {
-    assert.equal(result.state, "failed"); assert.match(result.result!, /原确认 SHA 已变化/);
-    assert.equal(approved, undefined);
-    assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), remoteHead);
-  } else {
-    assert.equal(result.state, "succeeded", result.result);
-    assert.equal(approved, rebased);
-    assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), rebased);
-  }
+  assert.equal(result.state, "succeeded", result.result);
+  assert.equal(approved, rebased);
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), rebased);
+  assert.equal(result.push_confirmed, confirmed, "同步远端不作废本次人工决定");
 });
 
 test("推送排队后 HEAD 改变时如实失败，不推错版本", async t => {

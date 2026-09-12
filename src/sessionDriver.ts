@@ -328,8 +328,6 @@ export interface CloudSessionOptions {
   humanizeQuestionText?: (text: string) => string;
   /** 正式检视的选项取自流程契约，不新增提问门禁。 */
   prepareHumanQuestion?: (input: Record<string, unknown>) => Record<string, unknown>;
-  /** 内核已经登记的重确认请求复用 AskUserQuestion，不等模型读文字猜动作。 */
-  pendingHumanQuestion?: () => { callId: string; input: Record<string, unknown> } | undefined;
   /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
    * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
    * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
@@ -1232,16 +1230,6 @@ export class CloudSession {
                   name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
                   input: event.input ?? {},
                 });
-                if (this.options.pendingHumanQuestion && config.sessionId === this.sessionId && this.options.allowHumanQuestions !== false
-                    && (TOOL_NAME_MAP[event.toolName] ?? event.toolName) === "Bash") {
-                  const failure = await this.flushKernel();
-                  if (failure) throw new Error(failure);
-                  const question = this.options.pendingHumanQuestion?.();
-                  if (question) {
-                    const answer = await this.askUser(question.callId, question.input);
-                    return { content: [...event.content, ...(note ? [{ type: "text", text: note }] : []), ...answer.content] };
-                  }
-                }
                 if (note) return { content: [...event.content, { type: "text", text: note }] };
               } catch (error) {
                 this.kernelFailures.push(String(error));
@@ -1724,8 +1712,8 @@ export class CloudSession {
       };
     }
     if (record.status === "superseded") {
-      const text = "这张旧问题已因用户接管代码现场而失效。请重新读取 mae-flow current；"
-        + "如果当前步骤仍需要确认，请基于最新现场重新提问。";
+      const text = `这张旧问题已失效：${record.notes || "现场已更新"}。请读取 mae-flow current 和已记录的用户回答，`
+        + "按当前要求继续；不要重复询问已获回答的问题。";
       const finished = driver.emit("tool_finished", driver.sessionId, {
         call_id: callId,
         name: "AskUserQuestion",
