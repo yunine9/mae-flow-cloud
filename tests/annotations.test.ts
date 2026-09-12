@@ -413,7 +413,7 @@ test("当前任务责任人逐条处置；管理员不能代签，未处理意�
   assert.equal(decided.response?.outcome, "not_fixed", "人工延期保留原始 Agent 回执");
 });
 
-test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直接答复", async () => {
+test("批注 HTTP 权限:成员记下意见后由责任人统一处理，管理员不代签", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-anno-auth-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("admin", "administrator-pass");
@@ -493,6 +493,16 @@ test("批注 HTTP 权限:内容归作者管理，责任人可原样转交并直�
       "普通成员可以先圈注，但不能因此获得指挥 Agent 的权限");
 
     const internal = (service as any).tasks.get(created.id);
+    internal.summary.collaborators = ["committer"];
+    const adminForSend = await login("admin", "administrator-pass");
+    for (const cookie of [committer, adminForSend]) {
+      for (const body of [{}, { ids: [] }, { ids: [committerNote.id] }]) {
+        const rejected = await fetch(`${base}/tasks/${created.id}/annotations/send`, {
+          method: "POST", headers: { cookie }, body: JSON.stringify(body),
+        });
+        assert.equal(rejected.status, 403, "受邀和管理员身份不能越过责任人，省略 ID 也一样");
+      }
+    }
     internal.summary.status = "waiting_for_human";
     internal.summary.waiting = undefined;
     const ownerRoutesForeignDraft = await fetch(

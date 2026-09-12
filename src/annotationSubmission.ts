@@ -1,19 +1,11 @@
 import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
-import { AnnotationPermissionError, type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
-import { NotFoundError } from "./errors.ts";
+import { AnnotationStore, AnnotationPermissionError, type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
+import { NotFoundError, TaskControlError } from "./errors.ts";
 
-/** 返回 true 表示调用者是任务责任人，可在落账时标记 owner_controlled。 */
-export function annotationMutationAccess(
-  item: Annotation, actor: string, owner: string,
-): boolean {
-  const ownerControlled = actor === owner;
-  const authorControlled = item.author === actor
-    && (item.route ?? "agent") === "agent" && !item.needs_owner_closure;
-  if (!ownerControlled && !authorControlled) {
-    throw new AnnotationPermissionError(
-      `这条意见只能由提出人 ${item.author} 或当前任务责任人处理`);
-  }
-  return ownerControlled;
+/** 记下即为团队意见。旧 route、作者身份和管理员身份均不代替当前责任人。 */
+export function assertAnnotationOwnerAccess(actor: string, owner: string, status: string): void {
+  if (actor !== owner) throw new AnnotationPermissionError(`只有当前任务责任人 ${owner} 可以处理检视意见`);
+  if (status === "canceled") throw new TaskControlError("任务已停止，检视记录保留，不再处置");
 }
 
 /** 计算提交权限与第一份稳定快照。allowForeign 只是调用意图，不能越过责任人身份。 */
@@ -21,18 +13,38 @@ export function annotationSubmissionPlan(input: {
   items: Annotation[]; ids?: string[]; sender: string; owner: string;
   allowForeign: boolean; requirementReview: boolean;
 }): { selected: Annotation[]; maySendForeign: boolean } {
-  const ownerSubmitting = input.sender === input.owner;
-  const maySendForeign = ownerSubmitting && (input.allowForeign || !!input.ids?.length);
-  const requested = input.ids?.length
-    ? input.items.filter((item) => input.ids!.includes(item.id)) : [];
-  if (!ownerSubmitting && requested.some((item) =>
-    !["agent", "memory"].includes(item.route ?? "agent")
-    && item.artifact !== OVERALL_STORY_ARTIFACT && !input.requirementReview)) {
-    throw new AnnotationPermissionError(
-      `这条意见需要当前任务责任人 ${input.owner} 处理`);
-  }
+  assertAnnotationOwnerAccess(input.sender, input.owner, "active");
+  const maySendForeign = !!input.ids?.length;
   return { maySendForeign, selected: pickAnnotationSubmission(
     input.items, input.ids, input.sender, maySendForeign, input.requirementReview) };
+}
+
+// TaskService 每次读取会新建 Store，锁按同一个账本路径共享。
+const submitting = new Map<string, Set<string>>();
+
+/** 先登记当前版本交接再做异步发送。失败只退回尚未送出的版本，不能撤销真回执。 */
+export async function submitAnnotationSnapshot<T>(store: AnnotationStore, selected: Annotation[],
+  sender: string, context: string, deliver: (snapshot: Annotation[]) => Promise<T>): Promise<T> {
+  if (context.trim().length > 4000) throw new TaskControlError("补充说明最多 4000 字");
+  const active = submitting.get(store.path) ?? new Set<string>();
+  if (selected.some(item => active.has(item.id))) throw new TaskControlError("这些意见正在发送，请等待本次提交完成");
+  submitting.set(store.path, active);
+  selected.forEach(item => active.add(item.id));
+  try {
+    for (const item of selected) {
+      if (item.status === "draft" || (item.status === "sent" && item.sent_via === "owner_pending")) {
+        store.assignToAgent(item.id, sender, context);
+      }
+    }
+    const current = new Map(store.list().map(item => [item.id, item]));
+    return await deliver(selected.map(item => current.get(item.id)!));
+  } catch (error) {
+    store.resetUnsentAssignments(selected);
+    throw error;
+  } finally {
+    selected.forEach(item => active.delete(item.id));
+    if (!active.size) submitting.delete(store.path);
+  }
 }
 
 export function pickAnnotationSubmission(

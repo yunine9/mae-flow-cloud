@@ -6,6 +6,8 @@ import type { TaskSummary } from "./taskService.ts";
 import type { GateView } from "./mergeWatch.ts";
 import { projectPushReceipt } from "./pipelineHandoff.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
+import { classifyDeliveryFailure } from "./deliveryFailure.ts";
+import type { StallClass } from "./stallPolicy.ts";
 
 export interface RemoteMr { id: string | number; url: string; source_branch: string; target_branch: string }
 export interface RemoteReconcileResult { message: string; candidates?: RemoteMr[]; proceed: boolean }
@@ -26,6 +28,27 @@ export async function reconcileRemoteDelivery(host: RemoteReconcileHost, selecte
   while (inFlight.has(host.summary)) { await inFlight.get(host.summary); if (!host.current()) return { message: "任务已发生变化", proceed: false }; }
   const work = reconcile(host, selected); inFlight.set(host.summary, work);
   try { return await work; } finally { if (inFlight.get(host.summary) === work) inFlight.delete(host.summary); }
+}
+
+/** 查询失败沿用既有恢复预算。先分类原始错误，避免展示前缀破坏契约判据。 */
+export async function remoteDeliveryAllowsProceed(host: RemoteReconcileHost, recovery: {
+  retry(message: string): void;
+  stall(message: string, kind: StallClass): void;
+}): Promise<boolean> {
+  if (!host.current()) return false;
+  try {
+    const result = await reconcileRemoteDelivery(host);
+    if (result.candidates?.length) recovery.stall(result.message + "，请点击刷新 MR 状态选择", "contract");
+    return result.proceed;
+  } catch (error) {
+    if (host.current()) {
+      const cause = String(error).replace(/^(Error:\s*)+/, "");
+      const verdict = classifyDeliveryFailure(cause);
+      if (verdict.disposition === "retry") recovery.retry(`远端交付核验未完成：${cause}；系统正在自动重试`);
+      else recovery.stall(`无法确认已有 MR：${cause}；已停止续推`, verdict.stall_class);
+    }
+    return false;
+  }
 }
 
 export function needsRemoteRecovery(summary: TaskSummary, cwd?: string, mission?: string): boolean {
@@ -77,13 +100,13 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
       return done(view.mrState === "merged" ? "MR 已合入，已接续任务收口" : "MR 已关闭，任务尚未完成", false);
     }
     host.watch();
-    // 已知 MR 的生命周期已经由指定 MR 接口核验。继续掉到下面再用
-    // 本地工作区 + ls-remote 猜一次“是否发布”，不仅重复 I/O，还会在
-    // 工作区暂不可用时把一个明确 opened 的 MR 误判成无法继续交付。
-    // 分支观察只负责“没有 MR/收据的旧现场”恢复事实。
-    return done("已有 MR 仍打开，继续原交付链");
   }
-  if (!source || !host.cwd) return done("尚未确认任务分支，无法核验远端推送");
+  // MR 打开只证明生命周期，不能证明当前 HEAD 已发布。旧收据丢失、
+  // 外部追加推送或刚找回 MR 时，仍需对账；否则旧确认卡会一直催人推送。
+  // 只有 MR 信息的台账也能查询生命周期，不要求它凭空补出本地 Git 现场。
+  if (!source || !host.cwd || !host.repo) return done(hasMr()
+    ? "MR 尚未合入；缺少仓库或本地现场，尚未核验推送版本"
+    : "尚未确认任务分支或仓库，无法核验远端推送");
   const observed = await host.observe(source);
   if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
   if (observed.sha && observed.sha === observed.head) {
