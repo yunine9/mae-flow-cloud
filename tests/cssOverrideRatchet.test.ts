@@ -95,6 +95,24 @@ test("CSS 棘轮:fixed 弹层规则只许减少(手搓 backdrop 迁 <Modal>)", (
     + "新的表单/面板弹层用 <Modal>,别再手搓 backdrop");
 });
 
+test("公共 Portal 根层级使用平台 tokens，不能被工作台或全屏文档遮挡", () => {
+  // CSS 扫描看不到 TSX 的 Tailwind 类；只检查全局根，保留 Popup 内部的局部层级。
+  for (const name of ["popover", "select", "dropdown-menu", "tooltip"]) {
+    const source = readFileSync(join(dir, `components/ui/${name}.tsx`), "utf8");
+    const roots = [...source.matchAll(/<\w+\.Positioner\b[\s\S]*?className="([^"]*)"/g)];
+    assert.ok(roots.length, `${name} 必须检查到 Positioner`);
+    for (const [, classes] of roots) assert.match(classes, /z-\(--z-topmost\)/, `${name} 必须高于模态框`);
+  }
+  for (const [name, token] of [["dialog", "modal"], ["sheet", "modal"], ["alert-dialog", "topmost"]]) {
+    const source = readFileSync(join(dir, `components/ui/${name}.tsx`), "utf8");
+    for (const part of ["Backdrop", "Popup"]) {
+      const root = source.match(new RegExp(`<\\w+\\.${part}\\b[\\s\\S]*?className=\\{cn\\(\\s*"([^"]*)"`));
+      assert.ok(root, `${name}.${part} 必须检查到根层级`);
+      assert.ok(root[1].includes(`z-(--z-${token})`), `${name}.${part} 必须使用平台层级`);
+    }
+  }
+});
+
 test("CSS 叠层:固定五层顺序，存量保持 legacy，Preflight 兼容只在 base", () => {
   // 2026-09-06 决定:按文件分层被五档宽度截图裁判(scripts/visual-scenes.ts)
   // 否掉——480 张里 209 张变了,后面文件里被长选择器压住的规则一夜全赢,那是

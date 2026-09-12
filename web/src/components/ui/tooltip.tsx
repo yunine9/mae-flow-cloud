@@ -44,7 +44,7 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        className="isolate z-50"
+        className="isolate z-(--z-topmost)"
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"
