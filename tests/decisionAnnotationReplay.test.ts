@@ -39,6 +39,8 @@ for (const versioned of [false, true]) {
     service.listAnnotations(task.id); // 补齐决定落盘、sent 尚未落盘的崩溃窗口。
     assert.ok(store.list().every((item) => item.status === "sent"));
     for (const item of items) {
+      // 已接手的意见先有 Agent 回执，责任人才可按现有规则重新处理。
+      store.respond(item.id, { revision: 0, outcome: "fixed", summary: "本轮已修改", evidence: [] });
       await service.reopenAnnotation(task.id, item.id, "owner", 0);
       service.listAnnotations(task.id);
       await service.listAnnotationsAsync(task.id);

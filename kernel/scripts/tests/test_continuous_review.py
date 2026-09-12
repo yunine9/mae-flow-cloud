@@ -599,7 +599,7 @@ class DeliveryHostProofTests(TempProject):
             ]}],
         }
         rendered = render_delivery_feedback(value)
-        self.assertIn("当前优先目标：先处理 B", rendered)
+        self.assertIn("执行目标摘要（不是最终需求决定）：先处理 B", rendered)
         self.assertIn("已由责任人暂缓自动修复：A", rendered)
         self.assertNotIn("不应再次派修的旧问题", rendered)
         self.assertIn('"id": "B"', rendered)

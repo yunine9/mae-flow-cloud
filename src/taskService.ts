@@ -110,7 +110,7 @@ import { createSplitProposalTool, type SplitProposalInput } from "./splitProposa
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
-import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
+import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -4738,9 +4738,14 @@ export class TaskService {
     return this.memoryStore ??= new MemoryStore(this.options.dataDir);
   }
 
+  private refreshOwnerInputs(task: TaskState): void {
+    try { refreshOwnerInputProjection(this.taskHostRuntime(task)); }
+    catch (error) { this.options.log?.(`用户输入已落账，阅读副本更新失败：${String(error)}`); }
+  }
+
   private annotations(task: TaskState): AnnotationStore {
     return new AnnotationStore(
-      join(task.summary.workspace, "annotations.jsonl"), true);
+      join(task.summary.workspace, "annotations.jsonl"), true, () => this.refreshOwnerInputs(task));
   }
 
   /* ---------------------------------------------------------------- *
@@ -9839,7 +9844,7 @@ export class TaskService {
       ? this.tasks.get(task.summary.parent_task_id) : task;
     if (!parent) return;
     try {
-      syncCrossRepositoryGroup(parent, this.tasks.values(), (member) => this.persist(member));
+      syncCrossRepositoryGroup(parent, this.tasks.values(), (member) => { this.persist(member); this.refreshOwnerInputs(member); });
     } catch (error) {
       this.options.log?.(`[cross-repo-update] ${task.summary.id} 历史通知补齐失败，保留已有记录: ${error}`);
     }
@@ -9876,7 +9881,7 @@ export class TaskService {
       created_at: new Date().toISOString(),
     };
     const recorded = syncCrossRepositoryGroup(parent, this.tasks.values(),
-      (member) => this.persist(member), update).find((item) => item.id === update.id)!;
+      (member) => { this.persist(member); this.refreshOwnerInputs(member); }, update).find((item) => item.id === update.id)!;
     // 先落盘再并行入队，一个 Agent 的即时投递失败不影响其他任务。
     await Promise.all([parent.summary.id, ...recorded.target_task_ids].map(async (targetId) => {
       const target = this.tasks.get(targetId);
@@ -10173,7 +10178,7 @@ export class TaskService {
     };
     // 同一版本只记一条消息；恢复时仍补齐新增子任务和落盘失败的材料。
     const recorded = syncCrossRepositoryGroup(parent, this.tasks.values(),
-      (member) => this.persist(member), alreadyRecorded ? undefined : update)
+      (member) => { this.persist(member); this.refreshOwnerInputs(member); }, alreadyRecorded ? undefined : update)
       .find((item) => item.id === id);
     if (alreadyRecorded || !recorded) return;
     this.bypass(parent, "全局 Story 更新提示", Promise.all(recorded.target_task_ids.map(async (targetId) => {
@@ -11561,6 +11566,7 @@ export class TaskService {
     if (picked.length) this.ensureReviewsDir(task);
     // 澄清卡的答复落到被追问的意见上:回执清空,Agent 按答复继续处理。
     this.recordClarificationAnswers(task, waiting, resolved, input.actor);
+    this.refreshOwnerInputs(task);
     // 等待期入队的意见随这次决定完成送达:账目从 queued_decision 转
     // "decision",下一张卡不再重复携带同一份正文。
     const queuedDelivered = picked
@@ -11824,11 +11830,26 @@ export class TaskService {
         + resolved.text
       : undefined;
     const combined = [message, knowledgeBlock].filter(Boolean).join("\n\n");
+    // 先核对入口是否接受；被拒绝的插话不能在恢复时冒充已送出的新决定。
+    const ownerMayResume = (actor ?? "本地用户") === (task.summary.luban_account ?? "本地用户")
+      && (task.prepushActive || ["verifying", "await_merge", "failed"].includes(task.summary.status));
+    if (task.summary.status === "waiting_for_human") {
+      if (!resolved) throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
+    } else if (!(task.summary.status === "queued" && resolved)) {
+      if (ownerMayResume) {
+        if (((task.driver || task.container) && !task.prepushActive) || task.assistantActive) {
+          throw new TaskControlError("原执行者尚未释放现场，请先完成暂停或交回");
+        }
+      } else if (task.summary.status !== "running" || !task.driver) {
+        throw new TaskControlError(`任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
+      }
+    }
     // 前缀只标"谁在说话",不标"什么场景":这里是普通插话通道,单仓
     // 任务也走它。曾经无条件写"[跨仓协作 · x]",单仓插话被模型当成
     // 跨仓消息记进了交付件(spec 里出现"用户跨仓消息补充",MFC-021)。
     // 真正的跨仓同步走 /cross-repository-update,自带跨仓抬头。
-    const requestId = recordTaskHostInstruction(task.summary, message, actor);
+    const requestId = recordTaskHostInstruction(task.summary, combined, actor);
+    this.refreshOwnerInputs(task);
     const instructionRef = requestId ? `[责任人指令编号 ${requestId}]\n` : "";
     const delivered = actor
       ? (actor === task.summary.luban_account
@@ -11842,17 +11863,14 @@ export class TaskService {
       ...(resolved ? { references: resolved.labels } : {}),
     };
     if (task.summary.status === "waiting_for_human") {
-      if (!resolved) {
-        throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
-      }
       // 决定窗口不开插话通道(同一件事不能有两个入口),但引用的知识
       // 版本已固定,压进决定的 continuation,决定提交时一并送达。
       task.pendingDecisionKnowledge = [
         ...(task.pendingDecisionKnowledge ?? []), delivered];
-      this.recordSteerKnowledge(task, resolved.footprints);
+      this.recordSteerKnowledge(task, resolved!.footprints);
       this.persist(task);
       this.recordDeferredInterrupt(task, delivered, "decision", receipt);
-      this.options.log?.(`任务 ${id} 引用了 ${resolved.labels.join("、")}`
+      this.options.log?.(`任务 ${id} 引用了 ${resolved!.labels.join("、")}`
         + ",将随下一次决定送达");
       return { ...task.summary };
     }
@@ -11874,12 +11892,9 @@ export class TaskService {
       this.recordDeferredInterrupt(task, delivered, "mission", receipt);
       return { ...task.summary };
     }
-    if (requestId && (task.prepushActive || ["verifying", "await_merge", "failed"].includes(task.summary.status))) {
+    if (ownerMayResume) {
       // 人的新要求要有接收者。先撤回旧执行权，停净验证，再恢复主会话；
       // 仅收到插话不取消反馈，具体目标由 Agent 读取原话后登记。
-      if (((task.driver || task.container) && !task.prepushActive) || task.assistantActive) {
-        throw new TaskControlError("原执行者尚未释放现场，请先完成暂停或交回");
-      }
       task.controlEpoch += 1;
       const steerEpoch = task.controlEpoch;
       task.pendingMainSteers = [...(task.pendingMainSteers ?? []), delivered];
@@ -11896,11 +11911,7 @@ export class TaskService {
       this.enqueueRepair(task, task.mission ?? "", "已收到责任人的新要求，继续当前任务");
       return this.project(task);
     }
-    if (task.summary.status !== "running" || !task.driver) {
-      throw new TaskControlError(
-        `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
-    }
-    await task.driver.steer(delivered, receipt);
+    await task.driver!.steer(delivered, receipt);
     if (resolved) this.recordSteerKnowledge(task, resolved.footprints);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
@@ -12038,6 +12049,8 @@ export class TaskService {
 
     if (["working", "running"].includes(previous.state)) {
       appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      recordTaskHostInstruction(task.summary, message, actor);
+      this.refreshOwnerInputs(task);
       // 首轮容器/会话还在启动时先落盘；mission 会在会话
       // 真正就绪后读到它。会话已就绪则直接 steer。
       if (task.assistantActive && !task.driver) {
@@ -12060,6 +12073,8 @@ export class TaskService {
 
     if (previous.state === "acquiring") {
       appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      recordTaskHostInstruction(task.summary, message, actor);
+      this.refreshOwnerInputs(task);
       return this.developerAssistant(id);
     }
 
@@ -12068,6 +12083,8 @@ export class TaskService {
     // 不能当成开发助手残留而拒绝。
     if (task.summary.status !== "paused") {
       appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      recordTaskHostInstruction(task.summary, message, actor);
+      this.refreshOwnerInputs(task);
       this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
       void this.pause(id, actor).then(() => {
         this.activatePendingDeveloperAssistant(task);
@@ -12081,6 +12098,8 @@ export class TaskService {
 
     if (task.driver && task.container) {
       appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      recordTaskHostInstruction(task.summary, message, actor);
+      this.refreshOwnerInputs(task);
       this.launchDeveloperAssistantTurn(task, message, true);
       return this.developerAssistant(id);
     }
@@ -12090,6 +12109,8 @@ export class TaskService {
     }
 
     appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+    recordTaskHostInstruction(task.summary, message, actor);
+    this.refreshOwnerInputs(task);
     this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
     this.activatePendingDeveloperAssistant(task);
     return this.developerAssistant(id);
@@ -13537,6 +13558,7 @@ export class TaskService {
         }
       },
       annotations: () => this.annotations(task).list(),
+      decisions: () => task.humanGate.all(),
       related: () => this.list().filter(item => relatedHostTask(task.summary, item))
         .map(item => ({ id: item.id, title: item.title, status: item.status, detail: item.detail })),
       gates: () => this.fetchGates(task),
@@ -17986,6 +18008,7 @@ export class TaskService {
         if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (discussions?.kind === "available") {
           observeMrDiscussions(task.summary.workspace, view.sourceSha ?? task.summary.delivery?.sha, discussions.items);
+          this.refreshOwnerInputs(task);
         }
         if (!await this.flushReviewReplyOutbox(task)) {
           await new Promise((tick) => setTimeout(tick, interval).unref());

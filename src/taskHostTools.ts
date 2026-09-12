@@ -1,3 +1,5 @@
+import { collectOwnerInstructions, submittedReviewInputs, readMrDiscussionInputs, latestInstructionsText, projectOwnerInstructions, DECISION_SYNC_GUIDANCE, type OwnerInstruction } from "./ownerDecisionContext.ts";
+import type { WaitingRecord } from "./humanGate.ts";
 import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt, validPushReceipt } from "./pipelineHandoff.ts";
 import { remainingCiMission } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
@@ -46,7 +48,7 @@ export interface HostOperation {
   trigger_started?: boolean;
   pipeline_receipt?: PipelineRun;
 }
-interface Instruction { id: string; actor: string; text: string; at: string }
+type Instruction = OwnerInstruction;
 interface Ledger { instructions: Instruction[]; operations: HostOperation[] }
 
 /** This ledger is outside the Agent's mounted task directory. It records host
@@ -84,12 +86,12 @@ export class TaskHostLedger {
 
 export function recordTaskHostInstruction(summary: TaskSummary, text: string, actor?: string): string | undefined {
   const owner = summary.luban_account ?? "本地用户";
-  if ((actor ?? "本地用户") !== owner) return undefined;
+  const isOwner = (actor ?? "本地用户") === owner;
   const ledger = new TaskHostLedger(summary), data = ledger.read();
   const id = randomUUID();
-  data.instructions.push({ id, actor: owner, text, at: new Date().toISOString() });
+  data.instructions.push({ id, actor: actor ?? "本地用户", text, at: new Date().toISOString(), source: isOwner ? "message" : "collaboration" });
   ledger.write(data);
-  return id;
+  return isOwner ? id : undefined; // 协作者原话可读，但不能取得责任人操作授权。
 }
 
 /** 恢复“远端收据已落盘、任务投影未落盘”的窗口；完成后的旧操作不能覆盖更新的正常推送。 */
@@ -115,6 +117,7 @@ export interface TaskHostRuntime {
   credential?: PipelineCredential;
   assertActive(): void;
   annotations(): Annotation[];
+  decisions?(): WaitingRecord[];
   related(): unknown;
   gates(): Promise<unknown>;
   /** 纯 CI 使命已发布修复版本时直接交给宿主验证，保留其他人工目标。 */
@@ -172,8 +175,8 @@ function ownerInstruction(host: TaskHostRuntime, id?: string): Instruction {
   const owner = host.summary.luban_account ?? "本地用户";
   const instruction = id === "requirement"
     ? { id, actor: owner, text: host.summary.requirement, at: host.summary.created_at }
-    : new TaskHostLedger(host.summary).read().instructions.find(row => row.id === id);
-  if (!instruction || instruction.actor !== owner) throw new Error("未找到对应的责任人原始指令");
+    : taskOwnerInstructions(host).find(row => row.id === id);
+  if (!instruction || instruction.actor !== owner || ["cross_repository_update", "mr_discussion", "context_unavailable"].includes(instruction.source ?? "")) throw new Error("未找到对应的责任人原始指令");
   return instruction;
 }
 
@@ -459,22 +462,42 @@ export function deferredSourceVersions(host: Pick<TaskHostRuntime, "cwd" | "kern
     .map(row => `${row.source_id}:r${row.source_revision}`));
 }
 
+export function taskOwnerInstructions(host: TaskHostRuntime): OwnerInstruction[] {
+  const owner = host.summary.luban_account ?? "本地用户";
+  return [...collectOwnerInstructions(owner,
+    [{ id: "requirement", actor: owner, text: host.summary.requirement, at: host.summary.created_at ?? "" },
+      ...new TaskHostLedger(host.summary).read().instructions], host.decisions?.() ?? []),
+    ...submittedReviewInputs(host.annotations()), ...readMrDiscussionInputs(host.summary.workspace),
+    ...(host.summary.cross_repository_updates ?? []).map(update => ({ id: update.id, actor: update.author,
+      at: update.created_at, source: "cross_repository_update",
+      text: `需求协作通知，来自 ${update.source_task_id}：${update.text}\n按原文判断对本任务的影响，不自动成为本任务责任人的授权。` }))]
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+export function refreshOwnerInputProjection(host: TaskHostRuntime): string {
+  return projectOwnerInstructions(host.cwd, host.summary.id, taskOwnerInstructions(host));
+}
+
 export function taskHostGoal(host: TaskHostRuntime): string {
   const recent = new TaskHostLedger(host.summary).read().operations.slice(-5)
     .map(op => `${op.id} (${op.input.action}) ${op.state}: ${op.result ?? "尚无执行结果"}`).join("\n");
   const verification = host.summary.delivery?.loop?.kind === "ci" && host.summary.delivery.loop.state === "verifying"
     ? `当前正在验证提交 ${host.summary.delivery.sha}；旧 SHA 失败只作历史，不能据此重复修复。流水线的新结果由宿主监听，完成其他明确要求后结束本轮。` : "";
-  const operations = [verification, recent ? `[最近宿主操作，按记录核对结果]\n${recent}` : ""].filter(Boolean).join("\n");
+  const inputs = taskOwnerInstructions(host);
+  const operations = [DECISION_SYNC_GUIDANCE, latestInstructionsText(inputs),
+    projectOwnerInstructions(host.cwd, host.summary.id, inputs), verification, recent ? `[最近宿主操作，按记录核对结果]\n${recent}` : ""].filter(Boolean).join("\n");
   if (!host.cwd || !host.kernel || !existsSync(join(host.cwd, ".mae-flow.json"))) return operations;
   const state = kernelState(host);
   const target = state.delivery_loop?.target;
   if (!target) return operations;
   if (!attestKernelHost({ host: host.kernel, cwd: host.cwd, state, feedbackLoop: true,
     lifecycle: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"] }).feedbackLoop) throw new Error("当前目标记录未通过宿主收据核对");
-  return `${operations}\n[责任人已登记的目标] ${target.target}\n较新的责任人消息可更新此目标，以新消息为准。set_target 仅调整优先级；明确本轮不处理的旧反馈应逐条 defer_feedback。已暂缓的反馈不再自动修复，新反馈按实际要求处理。`;
+  const source = inputs.findIndex(row => row.id === target.request_id);
+  const newer = source < 0 || source < inputs.length - 1;
+  return `${operations}\n[${newer ? "先前执行目标，需结合后续答复判断是否仍适用" : "执行目标摘要，不替代需求决定"}] ${target.target}\n来源指令：${target.request_id}；这是 Agent 登记的概括，不能据此重新解释用户原话。无关目标可保留，明确被新答复推翻的内容先同步文档再实施。已暂缓的反馈不自动恢复。`;
 }
 
-const GUIDANCE = "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
+const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,
@@ -489,9 +512,10 @@ export function createTaskHostTools(host: TaskHostRuntime) {
   };
   return [
     defineTool({ name: "task_context", label: "任务现场", description: "随时查询任务、反馈、平台、关联任务、知识和宿主操作；不受阶段限制。", promptGuidelines: [GUIDANCE],
-      parameters: Type.Object({ view: Type.Union(["overview", "feedback", "platform", "related", "knowledge", "operations", "reviews"].map(value => Type.Literal(value))), keyword: Type.Optional(Type.String()) }),
+      parameters: Type.Object({ view: Type.Union(["overview", "instructions", "feedback", "platform", "related", "knowledge", "operations", "reviews"].map(value => Type.Literal(value))), keyword: Type.Optional(Type.String()) }),
       execute: async (_id: string, input: { view: string; keyword?: string }) => guarded(async () => {
         const ledger = new TaskHostLedger(host.summary).read();
+        if (input.view === "instructions") return taskOwnerInstructions(host).filter(row => !input.keyword || `${row.id} ${row.text}`.includes(input.keyword));
         if (input.view === "feedback") return feedback(host);
         if (input.view === "platform") return host.gates();
         if (input.view === "reviews") return host.reviews ? host.reviews() : { unavailable: "未配置 MR 讨论读取接口" };
@@ -504,7 +528,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
         return { task: host.summary.id, status: host.summary.status, detail: host.summary.detail,
           owner: host.summary.luban_account, delivery: { sha: host.summary.delivery?.sha, push: host.summary.delivery?.git_push,
             mr: host.summary.delivery?.mr_url, pipeline: host.summary.delivery?.pipeline, prepush: host.summary.delivery?.prepush?.state },
-          instructions: [{ id: "requirement", text: host.summary.requirement }, ...ledger.instructions.slice(-15)],
+          instructions: taskOwnerInstructions(host).slice(-15),
           target: taskHostGoal(host), operations: ledger.operations.slice(-5),
           capabilities: { read: ["task_context", "task_pipeline", "task_knowledge", ...(host.document ? ["task_document"] : []), ...(host.diagnostics ? ["task_diagnostics"] : [])], control: HOST_ACTIONS,
             code_and_ut: "通过任务容器的文件/Bash 工具执行；Story、Spec、架构图均可按授权修订", feedback: ["task_feedback_reply", ...(host.activeFeedback ? ["task_feedback_result"] : [])],

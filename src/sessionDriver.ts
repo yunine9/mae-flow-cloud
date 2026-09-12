@@ -1,3 +1,4 @@
+import { renderAgentDecision } from "./ownerDecisionContext.ts";
 /**
  * 进程内会话驱动(详设 §7 pi_session 的 TS 形态)。
  *
@@ -36,7 +37,7 @@ import {
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
-import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
+import { HumanGate, type WaitingRecord } from "./humanGate.ts";
 import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
 import { MAE_BUILD_SKILLS, maeBuildRoot } from "./maeBuildSupport.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
@@ -634,7 +635,7 @@ export class CloudSession {
       name: "AskUserQuestion",
       input: record.question,
       is_error: false,
-      result: renderDecision(record),
+      result: renderAgentDecision(record),
       answers: answersOf(record, record),
     });
     this.trackKernelHook(this.options.hostHooks?.postTool?.(finished));
@@ -895,7 +896,7 @@ export class CloudSession {
    * 与 AskUserQuestion 完全同款。区别在回注时:不给内核补回执(内核没见过
    * 这次提问),也不替 pi 补回声(pi 自己会给这个工具发 tool_finished)。 */
   awaitHostDecision(record: WaitingRecord): Promise<string> {
-    if (record.status === "resolved") return Promise.resolve(renderDecision(record));
+    if (record.status === "resolved") return Promise.resolve(renderAgentDecision(record));
     if (record.status === "superseded") {
       return Promise.resolve("这张卡已因用户接管代码现场而失效,按最新现场继续。");
     }
@@ -932,7 +933,7 @@ export class CloudSession {
         name: "AskUserQuestion",
         input: waiting.question,
         is_error: false,
-        result: renderDecision(record),
+        result: renderAgentDecision(record),
         answers: answersOf(record, waiting),
       });
       // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
@@ -942,7 +943,7 @@ export class CloudSession {
     this.decisionResolvers.delete(waiting.call_id);
     this.waitingRecord = undefined;
     this.waitingSignal = deferred<Outcome>();
-    resolver(renderDecision(record));
+    resolver(renderAgentDecision(record));
     return Promise.race([this.pendingTurn!, this.waitingSignal.promise]);
   }
 
@@ -1658,7 +1659,7 @@ export class CloudSession {
         name: "AskUserQuestion",
         input: params ?? {},
         is_error: false,
-        result: renderDecision(record),
+        result: renderAgentDecision(record),
         answers: answersOf(record, record),
       });
       driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
@@ -1666,7 +1667,7 @@ export class CloudSession {
       driver.options.log?.(
         `任务 ${driver.options.taskId} 重放已完成待办 ${record.waiting_id},不重复举卡`);
       return {
-        content: [{ type: "text", text: renderDecision(record) }],
+        content: [{ type: "text", text: renderAgentDecision(record) }],
         details: {},
       };
     }

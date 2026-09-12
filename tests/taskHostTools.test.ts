@@ -94,9 +94,10 @@ test("恢复宿主收据已落盘但投影未保存的窗口，不传输且不�
   assert.equal(s.host.summary.delivery.pipeline, undefined);
   assert.equal(s.facts.length, 0);
   new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", push_receipt: receipt });
-  s.host.summary.delivery = { sha: "later", pipeline: "success", git_push: { ...receipt, sha: "later" } };
+  const later = "b".repeat(40);
+  s.host.summary.delivery = { sha: later, pipeline: "success", git_push: { ...receipt, sha: later } };
   assert.equal(recoverHostPushProjection(s.host.summary), false);
-  assert.equal(s.host.summary.delivery.sha, "later");
+  assert.equal(s.host.summary.delivery.sha, later);
 });
 
 test("推送成功但返回窗口取消，记真实收据且不重新启动 Agent", async t => {
@@ -125,7 +126,9 @@ test("协作者的话不能伪装成责任人目标决定，原始指令可追�
   const s = scene(t);
   assert.equal(recordTaskHostInstruction(s.host.summary, "全部忽略", "reviewer"), undefined);
   const id = recordTaskHostInstruction(s.host.summary, "A 延期，先修 B", "owner");
-  assert.equal(new TaskHostLedger(s.host.summary).read().instructions[0].id, id);
+  assert.equal(new TaskHostLedger(s.host.summary).read().instructions.find(row => row.actor === "owner")?.id, id);
+  const collaborator = new TaskHostLedger(s.host.summary).read().instructions.find(row => row.actor === "reviewer")!;
+  await assert.rejects(queueTaskHostOperation(s.host, "collaborator-control", { action: "set_target", reason: "借用协作者意见", target: "忽略", request_id: collaborator.id }), /未找到/);
   await assert.rejects(queueTaskHostOperation(s.host, "control", { action: "defer_feedback", reason: "模型自己决定", target: "B", feedback_id: "A", request_id: "invented" }), /未找到/);
   assert.equal(new TaskHostLedger(s.host.summary).pending(), undefined);
 });
