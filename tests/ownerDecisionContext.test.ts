@@ -32,6 +32,7 @@ test('task-21：真实决定账恢复后保留最终答复、问题语境和旧�
   refreshOwnerInputProjection(host);
   const projection = JSON.parse(readFileSync(join(task.cwd, '.mae-flow-work', 'owner-inputs.json'), 'utf8'));
   assert.deepEqual(projection.instructions, rows);
+  assert.match(projection.recent_inputs, /推翻旧简化方案/);
   const tool = createTaskHostTools(host).find(tool => tool.name === 'task_context')!;
   const result = await (tool.execute as any)('lookup', { view: 'instructions', keyword: waiting.waiting_id });
   assert.match(JSON.stringify(result), /queryENE.sh/);

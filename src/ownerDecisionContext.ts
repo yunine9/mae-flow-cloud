@@ -109,7 +109,8 @@ export function projectOwnerInstructions(cwd: string | undefined, taskId: string
     assertTaskReadRoot(cwd, path);
     mkdirSync(join(cwd, ".mae-flow-work"), { recursive: true });
     const content = JSON.stringify({ task_id: taskId,
-      note: "宿主从原始消息、waiting 与 annotations 账重建的阅读副本；正文不由 Agent 改写。来源是原记录，不是新审批或新状态机。", instructions: rows }, null, 2);
+      note: "宿主从原账重建的阅读副本，不是新审批或状态机。先看最近输入，再按编号查 instructions 中完整原文；节选不代替原话，正文不由 Agent 改写。",
+      recent_inputs: latestInstructionsText(rows), instructions: rows }, null, 2);
     if (!existsSync(path) || readFileSync(path, "utf8") !== content) {
       const temporary = `${path}.${randomUUID()}.tmp`;
       try {
