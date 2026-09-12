@@ -7,7 +7,7 @@ import { TokenUsage } from "./TokenUsage";
 import { WorkflowProfileCard } from "./WorkflowProfileCard";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export type TaskInspectorKind = "details" | "usage" | "workflow" | "logs" | "timing";
 const titles: Record<TaskInspectorKind, string> = {
@@ -17,35 +17,32 @@ const titles: Record<TaskInspectorKind, string> = {
 };
 
 /**
- * 任务检查器(#209 shadcn 化):旧手写 portal 弹层改右侧 Sheet(base-ui
- * Dialog 皮)。挂载即开,Esc 关闭、焦点圈、焦点归还都交给 Sheet;对外
- * props 与关闭回调语义不变(TaskWorkspace 的挂载条件照旧)。
- * `task-inspector`/`inspector-${kind}` 仍是样式钩子:执行面板自带开关的
- * 折叠、耗时页 cost-focus 的隐藏等存量规则挂在 .task-inspector 作用域下。
- * 弹层在 tw-root 归一子树内,存量类的盒模型(边距/边框)被剥,这里用
- * 工具类就地补齐;颜色、字阶只走令牌工具类(text-ink=旧 --accent 等)。
+ * 五个任务信息面板沿用居中弹窗，日志等长内容在正文区域滚动。
+ * 统一 Dialog 负责模态层级、Esc 和焦点管理；组件迁移不改变弹出位置。
+ * 保留 task-inspector 样式钩子，供执行面板折叠和耗时页内容使用。
+ * tw-root 只归一已迁移的头部和详情，避免清掉日志、用量等存量内容的间距。
  */
 export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }: {
   task: TaskSummary; kind: TaskInspectorKind; onClose: () => void;
   onInspect: (kind: TaskInspectorKind) => void; onOpenProcess: () => void;
 }) {
-  return <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-    <SheetContent side="right" showCloseButton={false}
-      className={`tw-root task-inspector inspector-${kind} gap-0 data-[side=right]:sm:max-w-2xl`}>
-      <SheetHeader className="flex flex-row items-start justify-between gap-4 border-b border-line p-5">
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent showCloseButton={false}
+      className={`task-inspector inspector-${kind} flex w-[90vw] max-h-[84dvh] flex-col gap-0 overflow-hidden p-0 ${kind === "details" ? "sm:max-w-[760px]" : "sm:max-w-[1040px]"}`}>
+      <DialogHeader className="tw-root flex shrink-0 flex-row items-start justify-between gap-4 border-b border-line p-5">
         <div className="min-w-0">
           {(kind === "usage" || kind === "workflow") && <button type="button"
             className="mb-2 block text-xs text-ink hover:underline"
             onClick={() => onInspect("details")}>← 返回任务详情</button>}
           <small className="block font-mono text-xs text-muted-foreground">{task.ticket || task.id}</small>
-          <SheetTitle className="mt-1 text-lg">{titles[kind]}</SheetTitle>
+          <DialogTitle className="mt-1 text-lg">{titles[kind]}</DialogTitle>
         </div>
-        <SheetClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭任务详情" />}>
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label={`关闭${titles[kind]}`} />}>
           <XIcon />
-        </SheetClose>
-      </SheetHeader>
+        </DialogClose>
+      </DialogHeader>
       <div className="min-h-0 flex-1 overflow-y-auto p-6">
-        {kind === "details" && <div className="inspector-facts">
+        {kind === "details" && <div className="tw-root inspector-facts">
           <h3 className="inspector-task-title mb-5">{task.title ?? task.requirement}</h3>
           <dl className="inspector-fact-grid mb-5">
             <div><dt>负责人</dt><dd className="mt-1"><PersonName account={task.luban_account} /></dd></div>
@@ -90,6 +87,6 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
           {(task.execution_plan_alerts ?? []).map((line, index) => <p className="inspector-note mb-5" key={index}>{line}</p>)}
         </>}
       </div>
-    </SheetContent>
-  </Sheet>;
+    </DialogContent>
+  </Dialog>;
 }

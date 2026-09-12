@@ -51,9 +51,7 @@
 .journey-empty strong { font-weight: 500; color: var(--text); }
 /* journey-warning 零引用删除(#219 前票孤儿);journey-empty 仍由
    TaskJourney 的加载/错误态使用,保留。 */
-/* 检查器壳层(#209 迁 Sheet):旧弹层框/遮罩/头尾规则已随手写 portal
-   删除;`.task-inspector` 只剩内层存量内容的样式钩子(toggle 折叠、
-   执行面板布局、focus 圈),类名仍由 TaskInspector 的 SheetContent 挂。 */
+/* 检查器由统一 Dialog 居中展示；此处只保留内层执行面板与焦点样式。 */
 .task-inspector .execution-panel > .utility-toggle, .task-inspector.inspector-timing .utility-toggle { display: none; }
 .task-inspector .execution-body { display: flex; flex-direction: column; min-height: 420px; }
 .inspector-note { margin: 0 0 20px; color: var(--muted); line-height: 1.7; font-size: 13px; }
