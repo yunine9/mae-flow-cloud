@@ -279,7 +279,9 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       true,
     );
   }
-  if (prepush?.state === "environment_error" || prepush?.state === "blocked") {
+  // 已继续交付或结束的任务保留历史失败，但历史记录不再阻塞当前状态。
+  if (!["verifying", "await_merge", "completed", "canceled"].includes(task.status)
+      && (prepush?.state === "environment_error" || prepush?.state === "blocked")) {
     return focus(
       "blocked",
       prepush.message?.trim() || "Build-Fix 暂时无法继续",
@@ -330,7 +332,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       return focus(
         "machine",
         "Agent 正在按检视意见修改",
-        "修改完成并通过 Build-Fix 后重新出检视卡",
+        "修改完成后重新出检视卡",
         "agent",
         60,
       );
@@ -367,7 +369,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
         ? (delivery.prepush_runtime.message || "服务正在恢复 Build-Fix")
         : prepush.message?.trim()
         || `正在进行 Build-Fix${prepush.round ? `（第 ${prepush.round} 轮）` : ""}`,
-      "两项通过后才会推送代码",
+      "记录本次验证结果后继续当前工作",
       "agent",
       58,
     );

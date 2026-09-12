@@ -117,11 +117,10 @@ export function pushReviewPolicyFor(input: {
 }
 
 /** 已有交付清单、又到了推送点:精确收据放行;"全自动"只在同一文件集合
- * 内且有 Build-Fix 收据时代为确认;没收据如实停下;其余重新出卡。 */
+ * 内按责任人既有设置续推；编译结果不代替授权，也不构成额外门禁。 */
 export type SelectionPushDecision =
   | { kind: "allow" }
   | { kind: "auto_confirm"; reason: string }
-  | { kind: "stall"; reason: string }
   | { kind: "recard"; reason: string };
 
 export function selectionPushDecision(input: {
@@ -131,9 +130,6 @@ export function selectionPushDecision(input: {
   expected: string[];
   current: string[];
   head: string;
-  prepushEnabled: boolean;
-  prepushSha: string | undefined;
-  prepushState: string | undefined;
   /** 惰性取:精确收据放行时原来根本不算策略(不读批注)。 */
   policy: () => PushReviewPolicy;
 }): SelectionPushDecision {
@@ -146,20 +142,9 @@ export function selectionPushDecision(input: {
   // 集合内修出新 SHA 时可以按既定范围自动续推;新增/移除文件是范围冲突,
   // 必须强制出卡,月光也不能代答。
   const policy = input.policy();
-  const verified = !input.prepushEnabled
-    || Boolean(input.prepushSha === input.head
-      && ["passed", "user_skipped"].includes(input.prepushState ?? ""));
   if (!policy.ordinaryReviewEnabled && !policy.recheckRequired
-      && !policy.hasHumanFeedback && sameScope && verified) {
-    return { kind: "auto_confirm",
-      reason: input.prepushState === "user_skipped"
-        ? "用户已跳过 Build-Fix；当前 SHA 未改变已选交付文件范围"
-        : "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围" };
-  }
-  if (!verified) {
-    return { kind: "stall",
-      reason: `当前 HEAD ${input.head.slice(0, 12)} 尚无有效 Build-Fix 收据，`
-        + "不能自动确认交付范围" };
+      && !policy.hasHumanFeedback && sameScope) {
+    return { kind: "auto_confirm", reason: "按既定推送设置续推；当前 SHA 未改变已选交付文件范围" };
   }
   if (!sameScope) {
     const unexpected = input.current.filter((path) => !input.expected.includes(path));
@@ -172,7 +157,7 @@ export function selectionPushDecision(input: {
     ].filter(Boolean).join("；") || "提交文件集合已经变化" };
   }
   if (input.selectionStatus !== "confirmed") {
-    return { kind: "recard", reason: "交付文件清单已整理完成，等待确认最新 Build-Fix 结果" };
+    return { kind: "recard", reason: "交付文件清单已整理完成，等待确认当前改动" };
   }
   return { kind: "recard",
     reason: `交付清单确认绑定的是 ${(input.selectionHead ?? "").slice(0, 12)}，`

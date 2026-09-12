@@ -68,34 +68,27 @@ test("要不要人过目:三个来源任一成立;任务级设置压过个人默
     false, "只有工作台意见返工才算复检");
 });
 
-test("到了推送点:精确收据放行;全自动只在同集合+有 Build-Fix 收据时代确认;没收据停;其余重新出卡", () => {
+test("到了推送点:精确授权放行；同范围依既定设置续推，不依赖独立编译收据", () => {
   const off = () => ({ required: false, ordinaryReviewEnabled: false, recheckRequired: false, hasHumanFeedback: false });
   const on = () => ({ required: true, ordinaryReviewEnabled: true, recheckRequired: false, hasHumanFeedback: false });
   const base = {
     selectionStatus: "confirmed", selectionHead: "h1", expected: ["a.ts", "b.ts"], current: ["a.ts", "b.ts"],
-    head: "h1", prepushEnabled: true, prepushSha: "h1", prepushState: "passed", policy: on,
+    head: "h1", policy: on,
   };
   assert.deepEqual(selectionPushDecision(base), { kind: "allow" }, "同 HEAD 同集合的确认收据:幂等放行");
   let policyAsked = 0;
   selectionPushDecision({ ...base, policy: () => { policyAsked += 1; return on(); } });
   assert.equal(policyAsked, 0, "精确收据放行时不算策略(原来也不读批注)");
-  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", prepushSha: "h2", policy: off }),
-    { kind: "auto_confirm", reason: "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围" },
-    "全自动 + 同集合新 SHA + Build-Fix 收据:代为确认续推");
-  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", prepushSha: "h2", prepushState: "user_skipped", policy: off }),
-    { kind: "auto_confirm", reason: "用户已跳过 Build-Fix；当前 SHA 未改变已选交付文件范围" });
-  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", prepushEnabled: false, prepushSha: undefined, prepushState: undefined, policy: off }),
-    { kind: "auto_confirm", reason: "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围" }, "没开 Build-Fix 的部署视为已验");
-  const stall = selectionPushDecision({ ...base, head: "h2", prepushSha: "h1", policy: off });
-  assert.equal(stall.kind, "stall");
-  assert.match(stall.kind === "stall" ? stall.reason : "", /尚无有效 Build-Fix 收据/, "全自动也不能拿旧收据背书新 SHA");
-  const grown = selectionPushDecision({ ...base, head: "h2", prepushSha: "h2", current: ["a.ts", "b.ts", "c.ts"], policy: off });
+  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", policy: off }),
+    { kind: "auto_confirm", reason: "按既定推送设置续推；当前 SHA 未改变已选交付文件范围" },
+    "同范围续推遵从责任人设置，不把编译收据当授权，也不伪报编译通过");
+  const grown = selectionPushDecision({ ...base, head: "h2", current: ["a.ts", "b.ts", "c.ts"], policy: off });
   assert.deepEqual(grown, { kind: "recard", reason: "新增了未确认文件 c.ts" }, "范围变了:全自动也必须出卡,月光不能代答");
-  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", prepushSha: "h2", current: ["a.ts"], policy: off }),
+  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", current: ["a.ts"], policy: off }),
     { kind: "recard", reason: "已确认文件不再提交 b.ts" });
-  assert.deepEqual(selectionPushDecision({ ...base, selectionStatus: "requested", head: "h2", prepushSha: "h2" }),
-    { kind: "recard", reason: "交付文件清单已整理完成，等待确认最新 Build-Fix 结果" });
-  assert.deepEqual(selectionPushDecision({ ...base, head: "h2", prepushSha: "h2" }),
+  assert.deepEqual(selectionPushDecision({ ...base, selectionStatus: "requested", head: "h2" }),
+    { kind: "recard", reason: "交付文件清单已整理完成，等待确认当前改动" });
+  assert.deepEqual(selectionPushDecision({ ...base, head: "h2" }),
     { kind: "recard", reason: "交付清单确认绑定的是 h1，当前待推送提交是 h2" }, "常规过目开着:新 SHA 重新过目");
   assert.match(recardDetail("x"), /^最终确认后现场又发生变化：x。旧确认已自动作废.*不用重跑任务。$/);
 });

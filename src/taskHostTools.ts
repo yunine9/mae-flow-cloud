@@ -526,7 +526,7 @@ export function taskHostGoal(host: TaskHostRuntime): string {
   return `${operations}\n[${newer ? "先前执行目标，需结合后续答复判断是否仍适用" : "执行目标摘要，不替代需求决定"}] ${target.target}\n来源指令：${target.request_id}；这是 Agent 登记的概括，不能据此重新解释用户原话。无关目标可保留，明确被新答复推翻的内容先同步文档再实施。已暂缓的反馈不自动恢复。`;
 }
 
-const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
+const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后立即结束本轮，由平台交接执行并带回结果；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,

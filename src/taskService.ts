@@ -1146,9 +1146,8 @@ export interface TaskSummary {
       /** `<短 SHA> <标题>`,只用于对人/对 Agent 披露。 */
       subjects: string[];
     };
-    /** Cloud 在每次新 HEAD 推送前运行的独立编译/UT 会话。它不是
-     * Mae-Flow 步骤或审批门禁；PASS 收据只负责避免把明显红灯送去慢
-     * 流水线，并按 SHA + 工作区指纹支持纯网络重试复用。 */
+    /** Cloud 按需运行的独立编译/UT 会话，不是必经步骤或审批门禁。
+     * 真实结果按 SHA + 工作区指纹记录，不由推送成功推断编译通过。 */
     prepush?: PrePushVerificationState;
     /** 读侧活性事实，不落盘。prepush.state=preparing 只表示领域阶段，
      * 不能再被页面误当成当前进程确实持有 runner/容器。 */
@@ -1375,9 +1374,9 @@ export interface TaskServiceOptions {
     /** 专员会话墙钟预算,超时如实记 infrastructure_failure(默认 25 分钟)。 */
     attemptTimeoutMs?: number;
   };
-  /** 推送前的 Cloud-native 编译/UT Agent。生产 serve 默认启用；测试、
-   * pilot 或渐进部署不配时保持旧交付路径。runner 是窄测试/私有执行器
-   * 注入口，缺席时使用独立 Pi 会话，明确不挂 Mae-Flow Hooks。 */
+  /** 按需调用的 Cloud-native 编译/UT Agent；enabled 仅表示能力可用，
+   * 不在交付前自动执行。Agent/责任人主动请求时使用独立 Pi 会话；
+   * 基线预热由 warmup 独立启用，二者结果不互相替代。 */
   prepush?: {
     enabled?: boolean;
     runner?: PrePushRunner;
@@ -3642,7 +3641,7 @@ export class TaskService {
             detail: "已启用，但任务构建环境未通过真实自检",
             suggestion: containerProbe.suggestion }
         : { key: "prepush", label: "Build-Fix", status: "ok",
-            detail: "已启用；每次 push 前在独立容器执行编译与 UT，构建槽位 "
+            detail: "按需可用；主动请求时独立执行编译与 UT，不在交付前自动补跑，构建槽位 "
               + `${this.prePushBuildSlotCount()}` });
 
     if (!this.options.isolation) {
@@ -9223,10 +9222,8 @@ export class TaskService {
         + "请先取消重试或重启服务触发 ownership 清扫",
       );
     }
-    // 页面上的“重跑续推”是失败任务的唯一主入口。若失败事实明确来自
-    // Build-Fix，本次动作只该重跑 Build-Fix 并续接交付，不能把已经
-    // 走到 external_verify/end 的内核重新唤醒成一轮普通编码会话。
-    // 后者既白烧模型额度，也会在页面上出现“上一单已完成”的怪回复。
+    // 常规“重跑续推”只续接交付，不因旧 Build-Fix 失败强制再烧一轮。
+    // 原结果保留；真正重跑独立验证仍由 retryPrePush / retry_verification 发起。
     const failedPrePush = delivery?.prepush;
     if (status === "failed" && failedPrePush
         && ["blocked", "environment_error"].includes(failedPrePush.state)
@@ -9237,12 +9234,10 @@ export class TaskService {
       delivery.skipped = undefined;
       delivery.verify_deadline = undefined;
       task.summary.status = "verifying";
-      task.summary.detail = actor
-        ? `人工重跑 Build-Fix(${actor})` : "人工重跑 Build-Fix";
+      task.summary.detail = "继续交付；独立 Build-Fix 结果保留，不自动重跑";
       this.markBuildFixResuming(task);
       this.persist(task);
-      this.bypass(task, "Build-Fix 人工重跑",
-        this.resumePrePushVerification(task, task.controlEpoch));
+      this.bypass(task, "交付重试", this.tryDeliver(task, task.controlEpoch));
       return { ...task.summary };
     }
     if (status === "verifying" && evidenceStopped && delivery?.evidence_gap) {
@@ -14184,7 +14179,11 @@ export class TaskService {
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):你的 Bash 在隔离容器中执行,`
           + `容器里可以自由编译、运行单测来验证自己的改动——有构建链就`
           + `尽管用,没有就如实说明留给流水线,不要为编译环境卡住。`
-          + `本地 UT、宿主 Build-Fix 和绑定 SHA 的权威流水线结果分别如实记录,`
+          + `你可以自主编译和运行 UT，无需等待审批；编译和 UT 应在编码过程中按改动影响及时执行，复用仍有效的验证，`
+          + `不要等最终交付。平台保留基线预热，但交付前不会自动补跑 Build-Fix；`
+          + `需要独立验证时才主动调用 retry_verification。记录命令、范围、版本和结果，`
+          + `改动影响已有结论时补验；未执行、失败或环境缺失如实说明。`
+          + `基线预热、本次改动的 UT、按需 Build-Fix 和绑定 SHA 的权威流水线结果分别如实记录,`
           + `不能互相冒充;反馈最终处置由责任人决定。可用的 UT 编写方式是「${utGenerationMethod}」,`
           + `写测试前先按它读取对应 skill 或仓内写法。不要编造命令、结果、`
           + `数量或绿灯。代码提交用任务容器的 Git;已有任务授权内可随时用`
@@ -15171,7 +15170,7 @@ export class TaskService {
     // 宿主操作可能已经把这一 SHA 真实推到远端。此时本地 Build-Fix
     // 已失去“push 前验证”的时序意义，恢复应接着核对权威流水线，不能
     // 因旧 preparing 快照再次启动验证。远端收据只豁免同一个 SHA。
-    // 已推送版本由常规交付核对 HEAD；若 HEAD 又有新提交，preparePush 仍会重验。
+    // 已推送版本由常规交付核对 HEAD；新提交也不会自动补跑 Build-Fix。
     if (delivery?.git_push?.sha) return "none";
     if (delivery?.pipeline === "running"
         || (delivery?.pipeline === "success" && delivery.sha)
@@ -15929,8 +15928,8 @@ export class TaskService {
     }
   }
 
-  /** push 前人工确认不区分“第一次/后续”：每个待推送 HEAD 都先完成
-   * Build-Fix，再拿最终代码给人检视。人工意见还要先由任务责任人逐条裁决；
+  /** push 前人工确认不区分“第一次/后续”：按当前设置拿最终代码给人
+   * 检视，不要求 Build-Fix。人工意见还要先由任务责任人逐条裁决；
    * 任务责任人只在逐条闭环后签本次 HEAD。完全相同 HEAD 的网络重试
    * 幂等复用，HEAD 变化则旧收据立即失效。 */
   private concisePushReviewNote(task: TaskState): string | undefined {
@@ -16063,7 +16062,7 @@ export class TaskService {
     const base = targetAdvanced
       ? contribution.base_sha : focused?.from ?? snapshot.baseline!;
     const prepush = delivery?.prepush;
-    const verification = prepush?.state === "passed"
+    const verification = prepush?.sha !== snapshot.head ? undefined : prepush?.state === "passed"
       ? "Build-Fix 已通过"
       : prepush?.state === "user_skipped"
         ? "本轮已按决定跳过 Build-Fix"
@@ -16265,16 +16264,12 @@ export class TaskService {
         // 放行/代确认/停下/重新出卡由决策表定(pushReviewPolicy.
         // selectionPushDecision):"全自动"关闭的是常规最终过目,不是交付
         // 白名单——同集合新 SHA 可代确认续推,范围变了月光也不能代答。
-        const prepush = task.summary.delivery?.prepush;
         const decision = selectionPushDecision({
           selectionStatus: selection.status,
           selectionHead: selection.head,
           expected,
           current,
           head: snapshot.head,
-          prepushEnabled: Boolean(this.options.prepush?.enabled),
-          prepushSha: prepush?.sha,
-          prepushState: prepush?.state,
           policy: () => this.pushReviewPolicy(task),
         });
         if (decision.kind === "allow") return true;
@@ -16291,10 +16286,6 @@ export class TaskService {
             `任务 ${task.summary.id} 全自动续推：HEAD ${snapshot.head.slice(0, 12)}`
             + ` 未改变已选交付范围(${current.length} 个文件)`);
           return true;
-        }
-        if (decision.kind === "stall") {
-          this.markVerificationStalled(task, decision.reason, "evidence_missing");
-          return false;
         }
         reason = decision.reason;
       }
@@ -16655,30 +16646,26 @@ export class TaskService {
   ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    if (task.prepushActive && !await task.prepushActive) return;
+    if (!this.current(task, epoch)) return;
     if (this.current(task, epoch) && !task.driver && this.atExternalVerificationWait(task)
         && ["running", "queued"].includes(task.summary.status)) {
       task.summary.status = "verifying"; task.summary.detail = "宿主正在接续交付与流水线验证"; this.persist(task);
     }
     // task-40：已知 MR 可能已被人在远端合入，本地却仍是“验证中”。
     // 这类必须先查同一个 MR，不能先 rebase/push。首次交付尚无 MR 时
-    // 则先完成本地 Build-Fix；否则一次远端抖动会让完全本地的编译也
-    // 无法启动。首次交付仍会在真正推送之前做同样的远端发现与核验。
+    // 则在真正推送前做同样的远端发现与核验。按需编译通过独立入口执行。
     const knownMr = Boolean(task.summary.delivery?.mr_url?.trim()
       || String(task.summary.delivery?.mr_id ?? "").trim());
     if (knownMr
         && !await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
-    // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
+    // 的是修复结果验证，不再是“Agent 正在修复”；远端访问可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
     if (enterRepairVerification(task)) this.persist(task);
-    // 本地 prepush 不依赖 MR/流水线服务。部署窗口里外部平台暂未就绪时
-    // 仍应先把被重启打断的本地验证接回来，不能卡在 preparing 假装在跑。
+    // 按需验证由独立入口恢复；常规交付等待外部平台就绪。
     const platformUrl = this.effectivePlatformUrl();
-    const prepush = task.summary.delivery?.prepush;
-    const pendingPrePush = Boolean(prepush
-      && !["passed", "user_skipped", "blocked", "environment_error"]
-        .includes(prepush.state));
-    if ((!platformUrl || !this.options.host) && !pendingPrePush) {
+    if (!platformUrl || !this.options.host) {
       if (this.atExternalVerificationWait(task)) {
         this.holdWithRecovery(
           task, "等待权威流水线：MR / 流水线服务未就绪", epoch);
@@ -16728,14 +16715,14 @@ export class TaskService {
         return;
       }
       // 远端分支被人推过就先把自己的提交接到它后面。这必须走在最前:
-      // 后面的 Build-Fix、范围整理、推送确认全都绑 HEAD,接续换了 HEAD
+      // 后面的范围整理、推送确认全都绑 HEAD,接续换了 HEAD
       // 就得整条链重来一遍(task-40 实锤:不接续只会拿同一个 SHA 撞
       // non-fast-forward 一百多次)。
       if (await this.absorbForeignRemoteCommits(task, branch) === "blocked") {
         return;
       }
       if (!this.current(task, epoch)) return;
-      // 定格基线祖先门禁必须走在一切交付动作(Build-Fix/范围整理/推送)
+      // 定格基线祖先门禁必须走在一切交付动作(范围整理/推送)
       // 之前:历史脱离基线时后面每一步都在错的合同上白烧。
       const baselineGate =
         await this.reconcileFrozenBaselineAncestry(task, true);
@@ -16744,38 +16731,18 @@ export class TaskService {
       if (!await this.deliveryScopeAllowsPush(task)) return;
       // 流水线修复若只把用户明确排除的过程件带回提交，宿主先机械收口，
       // 不新增一道让 Agent 反复碰撞的门禁；真正的新业务文件仍在后面的
-      // 最终范围卡确认。第一遍也避免在已知污染 HEAD 上白烧编译。
-      const beforePrePush = await this.reconcileConfirmedDeliveryBoundary(task);
-      if (beforePrePush === "blocked") return;
+      // 最终范围卡确认。避免把已排除文件带入后续推送。
+      if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") return;
       if (!await this.agentPlatformChangesAllowPush(task)) return;
-      // 内核外的 Build-Fix/历史 Cloud 版本可能产生 `fix: ...` / `chore: ...` 提交。
-      // 在烧构建前重建尚未推送的提交链，只修标题并保留每个提交的代码树，
-      // 避免中间坏提交最终被远端 hook 拒收。
       if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
-      if (!await this.preparePush(task, branch, baseline, epoch)) return;
-      if (!this.current(task, epoch)) return;
-      // Build-Fix 本身也允许本地 commit，收口后必须再用同一机器规则复核。
-      // 仅标题重建时 tree 不变，ensure 会迁移 PASS 收据而不重跑全量 UT。
-      if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
-      // prepush Agent 本身可能修代码并产生新提交。若它误带回的仍只是既有
-      // 排除项，机械重组后需要让新 SHA 再验一次；最多这一次回补，不循环。
-      const afterPrePush = await this.reconcileConfirmedDeliveryBoundary(task);
-      if (afterPrePush === "blocked") return;
-      if (afterPrePush === "changed") {
-        if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
-        if (!await this.preparePush(task, branch, baseline, epoch)) return;
-        if (!this.current(task, epoch)) return;
-        if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
-      }
-      if (!await this.agentPlatformChangesAllowPush(task)) return;
-      // 首次交付没有已知 MR：本地验证已经收口，现在才访问平台发现
-      // 可能存在的同分支 MR、核对远端分支，并在必要时接续已有事实。
-      // 该检查仍早于人工确认和 push，安全边界没有放宽。
+      // 独立 Build-Fix 仅由显式验证请求启动。交付不再补跑编译或 UT，
+      // 已有按需验证的结果保留供人判断，不能当成推送授权的前提。
+      // 首次交付仍须在人工确认和 push 前核对远端 MR/分支事实。
       if (!knownMr
           && !await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
       await this.inheritWorkspaceReviewDeliverySelection(task);
       if (!this.current(task, epoch)) return;
-      // 平台检视回复必须在 Build-Fix 以及交付范围机械整理全部收敛后
+      // 平台检视回复必须在已有按需验证以及交付范围机械整理全部收敛后
       // 才绑定最终 HEAD 入 outbox。此前在普通 Agent 收口时就入队，
       // prepush 若继续修码产生新提交，回复会错误地借后一个 SHA 投递。
       if (task.summary.delivery?.loop?.kind === "review"
@@ -16810,21 +16777,11 @@ export class TaskService {
         }
         return;
       }
-      // 人工只看 prepush 收敛后的最终范围，避免“刚确认就因验证修复
-      // 换了 HEAD 又确认一次”。之后仍由实时路径复核守住白名单；若
-      // 自动修复越界增删/重命名文件，下一次续推会重新举卡。
-      // 把已通过的 Build-Fix/人工确认绑定到一个不可变 SHA。后续门禁
-      // 与真实 push 之间即便有外部进程移动工作区 HEAD，pushFromHost
-      // 也只接受这里钉死的提交，不会把未检视的新 HEAD 顺手送上远端。
+      // 推送授权绑定当前工作区 HEAD，而不是可能属于旧版本的 Build-Fix
+      // 收据。远端推送仍复核此 SHA，避免确认后悄悄带走未检视的新提交。
       const observedRevision = await this.prePushRevision(task);
-      const authorizedPrePush = task.summary.delivery?.prepush;
-      const expectedPushSha = this.options.prepush?.enabled
-          && authorizedPrePush?.sha
-          && ["passed", "user_skipped"].includes(authorizedPrePush.state)
-        ? authorizedPrePush.sha : observedRevision.sha;
-      // Build-Fix 可能运行很久，期间 MR 也可能合入；写远端前再核对。
+      const expectedPushSha = observedRevision.sha;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
-      // 上面的远端对账可能刚补回丢失的收据，必须读取最新投影再决定是否推送。
       const existingPushReceipt = task.summary.delivery?.git_push?.sha
         === expectedPushSha ? task.summary.delivery.git_push : undefined;
       if (!existingPushReceipt

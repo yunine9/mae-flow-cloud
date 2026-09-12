@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
+import { RequestedBuildFixService as TaskService } from "./support/requestedBuildFix.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import type {
   PrePushRunRequest,

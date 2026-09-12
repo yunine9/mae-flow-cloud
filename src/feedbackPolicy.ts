@@ -388,7 +388,7 @@ export function annotationVerdictReady(
   if (["queued_decision", "requirement_queue", "requirement_review"].includes(item.sent_via ?? "")) return false;
   // 流水线证据用于恢复取证,不是代码/文档检视闭环。
   if (item.sent_via === "pipeline_evidence") return false;
-  // MR 工作区修复必须等 Build-Fix 收敛并生成当前复检卡;有总回复也
+  // MR 工作区修复必须生成当前复检卡;有总回复也
   // 不能绕过逐条回执与 HEAD 绑定。
   if (item.sent_via === "review_repair") {
     const current = currentResponse(item);

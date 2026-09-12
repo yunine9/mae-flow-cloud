@@ -247,7 +247,7 @@ test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", asy
   }
 });
 
-test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会话", async () => {
+test("失败页重跑续推保留旧验证失败，只续交付、不重跑 Build-Fix 或普通编码", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {
     const head = repo.git("rev-parse", "HEAD");
@@ -272,10 +272,14 @@ test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会
         workspace_review_annotation_ids: ["an-await-author"],
       },
     };
-    (service as any).resumePrePushVerification = async () => {};
+    let deliveries = 0;
+    (service as any).resumePrePushVerification = async () => { throw new Error("不应重复编译"); };
+    (service as any).tryDeliver = async () => { deliveries++; };
 
     const summary = service.retry(id, "owner");
     assert.equal(summary.status, "verifying");
+    assert.equal(deliveries, 1);
+    assert.equal(internal.summary.delivery.prepush.state, "environment_error");
     assert.notEqual(internal.resume, true,
       "不得重新入普通 Agent 队列唤醒已结束的内核流程");
     assert.equal(internal.summary.delivery.stalled, undefined);

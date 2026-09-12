@@ -14,7 +14,7 @@ import { dockerAvailable } from "../src/containerRuntime.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { MrDescriptionReplyService as TaskService } from "./support/mrDescriptionReply.ts";
+import { RequestedBuildFixService as TaskService } from "./support/requestedBuildFix.ts";
 import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 import {

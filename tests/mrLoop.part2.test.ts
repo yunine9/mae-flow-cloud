@@ -1,3 +1,4 @@
+import { requestBuildFixBeforeDelivery } from "./support/requestedBuildFix.ts";
 /**
  * MR 闭环 part 2/6:回复入队与回执:部分失败续投、Build-Fix 后入队绑 SHA、台账跨批继承、漏回执补交与只催一次。
  * 共享夹具在 tests/mrLoop.helpers.ts(拆分背景见其头注);
@@ -72,6 +73,7 @@ REPLY` } } },
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "故障恢复后合入收口");
   } finally {
+    await service.shutdown();
     await model.stop();
     await platform.stop();
   }
@@ -124,6 +126,7 @@ REPLY` } } },
   };
   const service = buildService(platform, dataDir, model.modelsJson(),
     { resolveDiscussions: true }, runner);
+  requestBuildFixBeforeDelivery(service);
   try {
     const id = service.create("交付 REQ9:回复绑定最终 SHA").id;
     await until(() => existsSync(join(
@@ -165,6 +168,7 @@ REPLY` } } },
     assert.notEqual(enqueued[0].item.payload.expected_sha, shaBeforeBuildFix,
       "普通 Agent 收口时的中间 SHA 不得提前入队");
   } finally {
+    await service.shutdown();
     await model.stop();
     await platform.stop();
   }
@@ -244,6 +248,7 @@ REPLY` } } },
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "合入收口");
   } finally {
+    await service.shutdown();
     await model.stop();
     await platform.stop();
   }
@@ -294,6 +299,7 @@ test("本地检视首次漏回执时原会话自动补交，不直接停机", as
     assert.match(seen, /现在只补回执，不要重新修改代码/,
       "自动恢复必须是窄使命，不能让 Agent 重做检视修改");
   } finally {
+    await service.shutdown();
     await model.stop();
     await platform.stop();
   }
@@ -335,6 +341,7 @@ test("自动补回执仍失败时只催一次并保留现场", async () => {
     assert.equal(existsSync(join(summary.workspace, "reviews",
       "local-annotations.json")), true, "停机后仍保留检视现场");
   } finally {
+    await service.shutdown();
     await model.stop();
     await platform.stop();
   }

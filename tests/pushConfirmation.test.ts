@@ -527,7 +527,7 @@ for (const dirtyKind of ["excluded-unstaged", "excluded-staged", "excluded-both"
   });
 }
 
-test("交付范围确认只在 prepush 收敛后执行", async () => {
+test("交付直接进入范围确认，不自动补跑独立 Build-Fix", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
     const order: string[] = [];
@@ -537,12 +537,8 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
     internal.mission = undefined;
     (service as any).options.host = {};
     (service as any).effectivePlatformUrl = () => "https://git.example.test";
-    (service as any).preparePush = async () => {
-      assert.equal(internal.summary.delivery.loop.state, "verifying",
-        "修复会话收口后必须先退出 repairing 再进入 prepush");
-      order.push("prepush");
-      return true;
-    };
+    (service as any).options.prepush = { enabled: true };
+    (service as any).preparePush = async () => { throw new Error("常规交付不得自动编译"); };
     (service as any).existingMergeRequestAllowsDelivery = async () => true;
     (service as any).pushConfirmationSatisfied = async () => {
       order.push("confirm");
@@ -554,8 +550,7 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
     };
 
     await (service as any).tryDeliver(internal, internal.controlEpoch);
-    assert.deepEqual(order, ["prepush", "confirm"],
-      "不得在 prepush 之前先举一次确认卡");
+    assert.deepEqual(order, ["confirm"], "能力已启用也不代表交付必跑");
     assert.equal(internal.summary.delivery.loop.state, "verifying");
   } finally {
     await model.stop();
@@ -888,7 +883,7 @@ test("全自动:Build-Fix 新 SHA 未改变已选范围时按策略续推，不�
     assert.equal(summary.delivery_selection?.confirmation_mode, "policy",
       "自动续推必须留 policy 审计，不能冒充人工确认");
     assert.match(summary.delivery_selection?.confirmation_reason ?? "",
-      /Build-Fix 已覆盖当前 SHA/);
+      /按既定推送设置续推/);
   } finally {
     await model.stop();
   }
