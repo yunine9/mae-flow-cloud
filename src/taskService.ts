@@ -8690,6 +8690,7 @@ export class TaskService {
         // 已关闭意见重新显示成进行中；反过来，Agent 仅回复 fixed 仍须
         // 等提出人确认，绝不能趁恢复自动关闭。
         try {
+          this.syncFeedbackStoreFromKernel(task, true);
           this.reconcileWorkspaceFeedbackAuthority(task);
         } catch (error) {
           const detail = `持续检视索引损坏或不可写，已停止自动闭环，不能静默隐藏反馈：${
@@ -13152,16 +13153,18 @@ export class TaskService {
     }
   }
 
-  private syncFeedbackStoreFromKernel(task: TaskState): void {
+  private syncFeedbackStoreFromKernel(task: TaskState, projectionOnly = false): void {
     // Legacy/local-plugin tasks never opted into the Cloud delivery-loop
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
     // shared pipeline path must preserve their original terminal semantics.
     if (!task.cwd || !this.options.host || !this.continuousReviewTask(task)) return;
+    if (projectionOnly && !existsSync(join(task.cwd, ".mae-flow.json"))) return;
     try {
       const state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
+      if (projectionOnly && !batches.length) return;
       if (!trustedKernelHostLifecycle({
         host: this.options.host,
         cwd: task.cwd,
@@ -13189,6 +13192,7 @@ export class TaskService {
       }
       projectKernelFeedback(state, store, existing);
       this.reconcileWorkspaceFeedbackAuthority(task, store);
+      if (projectionOnly) return;
       const stalled = task.summary.delivery?.stalled;
       if (stalled?.startsWith("持续检视索引损坏或不可写")) {
         delete task.summary.delivery!.stalled;
@@ -13202,6 +13206,8 @@ export class TaskService {
         this.persist(task);
       }
     } catch (error) {
+      // 发布、合入、恢复只补展示索引，失败不能倒退已经成立的交付事实。
+      if (projectionOnly) { this.options.log?.(`任务 ${task.summary.id} 反馈状态同步未完成：${String(error)}`); return; }
       // 内核根本没答(起不来且重试用尽)不是索引损坏:交给调用方按
       // 基础设施故障挂起重试。原来这里一把抓,一次抖动就被判成"索引
       // 损坏"停摆叫人,而且下面 pipelineVerdict 的对账兜底永远跑不到。
@@ -16628,6 +16634,7 @@ export class TaskService {
   private recordPublishedPush(task: TaskState, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
     if (this.options.host && task.cwd && this.continuousReviewTask(task)) recordKernelPublishedPush({
       host: this.options.host, cwd: task.cwd, workspace: task.summary.workspace, taskId: task.summary.id, receipt });
+    this.syncFeedbackStoreFromKernel(task, true);
   }
 
   private async tryDeliver(
@@ -17913,6 +17920,7 @@ export class TaskService {
         return;
       }
       if (delivery.loop) delivery.loop.state = "merged";
+      this.syncFeedbackStoreFromKernel(task, true);
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
       delivery.stalled = undefined;

@@ -1,3 +1,4 @@
+import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
 import { RefreshMrButton } from "./RefreshMrButton";
@@ -97,7 +98,6 @@ import {
   type DeveloperAssistantView,
   type FeedbackRecord,
   type FeedbackSource,
-  type FeedbackStatus,
   type ReviewRequest,
   type TaskSummary,
 } from "./api";
@@ -392,30 +392,6 @@ const FEEDBACK_SOURCE_LABEL: Record<FeedbackSource, string> = {
   push_confirmation: "推送前复检",
 };
 
-const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
-  open: "待处理",
-  repairing: "处理中",
-  addressed: "已处理",
-  awaiting_verification: "待核验",
-  closed: "已完成",
-  needs_human: "需要你决定",
-  deferred: "已暂缓，未解决",
-};
-
-/** 状态文案按来源说人话:同一个 awaiting_verification,对 CodeHub 意见
- * 是"Agent 已回复、等检视人在 MR 里确认",对工作台批注是"等批注作者
- * 确认"。状态本身仍来自任务 API,这里只挑措辞,不推断。 */
-function feedbackStatusLabel(item: FeedbackRecord): string {
-  if (item.source === "mr_discussion") {
-    if (item.status === "awaiting_verification") return "已回复，等检视人确认";
-    if (item.status === "closed") return "检视人已确认";
-  }
-  if (item.source === "workspace" && item.status === "awaiting_verification") {
-    return "等责任人逐条处置";
-  }
-  return FEEDBACK_STATUS_LABEL[item.status];
-}
-
 function groupFeedback(feedback: FeedbackRecord[]) {
   const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
   for (const item of feedback) {
@@ -437,7 +413,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
    * 返回错误文案;成功返回 undefined。 */
   onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
 }) {
-  const active = items.filter((item) => item.status !== "closed").length;
+
   const [converting, setConverting] = useState("");
   const [notices, setNotices] = useState<Record<string, string>>({});
   async function convert(item: FeedbackRecord) {
@@ -462,7 +438,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
       </div>
       <div className="feedback-list-side">
         <i>{items.length} 条</i>
-        {active > 0 && <em>{active} 进行中</em>}
+        <em>{feedbackSummary(items)}</em>
         {mrUrl && <a href={mrUrl} target="_blank" rel="noreferrer">打开 MR</a>}
       </div>
     </header>
@@ -487,7 +463,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             {item.author && ` · 检视人 ${item.author}`}
             {` · ${relativeTime(item.updated_at) || item.updated_at}`}
           </small>
-          {onConvert && item.status !== "closed" && !notices[item.id] && (
+          {onConvert && !feedbackEnded(item) && !notices[item.id] && (
             <button type="button" className="feedback-convert"
               disabled={converting === item.id}
               title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
@@ -506,12 +482,12 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
 
 /** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
-  const active = feedback.filter((item) => item.status !== "closed").length;
+  const active = feedback.some(item => !feedbackEnded(item));
   return <section className="feedback-panel" aria-label="持续检视反馈明细">
     <header>
       <span><strong>持续检视</strong><small>同一个任务、分支和 MR</small></span>
       <em className={active ? "active" : "done"}>
-        {active ? `${active} 条进行中` : "全部已闭环"}
+        {feedbackSummary(feedback)}
       </em>
     </header>
     {groupFeedback(feedback).map(([source, items]) => (
@@ -1558,9 +1534,6 @@ export function TaskWorkspace({
     setReviewFocus({ ids, request: reviewFocusRequest.current });
     setReviewPanelOpen(true);
   };
-  const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
-    item.status === "closed" ? "closed"
-      : ["needs_human", "deferred"].includes(item.status) ? "mine" : "agent";
   // 归档也照服务端结论:页面不再按 status/sent_via 自己分档。
   const closureOf = (id: string) => closures.find((one) => one.id === id);
   const noteCategory = (item: Annotation): Exclude<ReviewFilter, "all"> =>
@@ -1824,7 +1797,7 @@ export function TaskWorkspace({
           {([
             ["all", "全部"],
             ["mine", "等我确认"],
-            ["agent", "Agent 处理中"],
+            ["agent", "待处理／核验"],
             ["closed", "已完成"],
           ] as const).map(([key, label]) => (
             <TabsTrigger key={key} value={key}

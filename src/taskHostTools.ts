@@ -437,7 +437,9 @@ async function verifyPublishedCi(host: TaskHostRuntime, operation: HostOperation
 function feedback(host: TaskHostRuntime) {
   const deferred = taskDeferredFeedback(host);
   return { feedback: new FeedbackStore(join(host.summary.workspace, "feedback", "index.jsonl")).list()
-    .map(row => ({ ...row, scheduling: deferred[row.id] ? "deferred" : historicalPipelineFeedback(host.summary, row) ? "historical" : "active", defer_reason: deferred[row.id]?.reason })),
+    .map(row => ({ ...row, scheduling: row.status === "closed" ? "closed"
+      : ["superseded", "superseded_by_merge"].includes(row.status) ? "historical"
+      : deferred[row.id] ? "deferred" : historicalPipelineFeedback(host.summary, row) ? "historical" : "active", defer_reason: deferred[row.id]?.reason })),
   annotations: host.annotations() };
 }
 

@@ -335,16 +335,17 @@ test("假平台 E2E：同一 MR 经工作台意见与流水线反馈两轮后合
     });
     await until(() => Boolean(service.get(id)!.status === "await_merge"
       && service.get(id)!.feedback?.some((item) =>
-        item.source === "pipeline" && item.status === "closed")),
-    "两类反馈均完成核验");
+        item.source === "pipeline" && item.status === "superseded")),
+    "人工意见已闭环，旧流水线反馈随新推送归档");
 
     const beforeMerge = service.get(id)!;
     assert.equal(beforeMerge.delivery?.mr_url, originalMr, "全程只更新原 MR");
     assert.equal(platform.mergeRequests.length, 1, "不能为返工创建第二张 MR");
     assert.deepEqual(new Set(beforeMerge.feedback?.map((item) => item.source)),
       new Set(["workspace", "pipeline"]));
-    assert.ok(beforeMerge.feedback?.every((item) => item.status === "closed"),
-      "合入前每条来源反馈都必须闭环");
+    assert.ok(beforeMerge.feedback?.every((item) => item.status === (item.source === "pipeline" ? "superseded" : "closed")),
+      "新推送不能冒充旧告警的 PASS；人工意见仍须真实闭环");
+    assert.equal(beforeMerge.delivery?.pipeline, "success", "当前提交仍须取得自己的验证结果");
 
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "MR 合入后终态");
