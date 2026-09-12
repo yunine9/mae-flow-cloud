@@ -1102,7 +1102,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail("交付平台未配置(部署需 --platform 接适配层),无法验绿 MR 流水线");
       }
       // 逐 MR 查最新推送 SHA 的流水线(验绿事实源,不新增按 MR id 查)。
-      const runs: Array<{ repo: string; sha: string; run: PipelineRun }> = [];
+      const runs: Array<{ repo: string; sha: string; run: PipelineRun | { status: "not_found" } }> = [];
       const staleRepos: string[] = [];
       for (const record of ledger) {
         const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
@@ -1138,7 +1138,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         runs.push({
           repo: record.repo,
           sha,
-          run: stale ? { status: "running" } : latest ?? { status: status.status },
+          run: stale ? { status: "not_found" } : latest ?? { status: "not_found" },
         });
       }
       const failed = runs.filter((item) => item.run.status === "failed");

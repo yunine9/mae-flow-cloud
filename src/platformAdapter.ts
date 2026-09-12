@@ -92,6 +92,8 @@ import {
 type Extract = { json?: string; regex?: string; const?: string };
 
 interface CommandSpec {
+  /** 平台通过 push/MR 自动触发时，只观察现有运行；空查询不伪造 running。 */
+  observe_only?: boolean;
   command: string[];
   timeout_s?: number;
   /** 命令输出**就是宿主契约 JSON**(pipeline_status: {runs:[...]})——
@@ -717,6 +719,12 @@ export class PlatformAdapter {
     }
     if (method === "POST" && path === "/pipeline/trigger") {
       const spec = this.config.pipeline_trigger;
+      if (spec.observe_only) {
+        const result = await this.handle("GET", "/pipeline/status", new URLSearchParams({
+          sha: String(body.sha ?? ""), repo: String(body.repo ?? ""), mr: String(body.mr ?? ""),
+        }), {}, headers);
+        return { ...result, status: 201 };
+      }
       const stdout = await this.run(spec, this.values(body, headers));
       let parsedCache: unknown;
       const parsed = () => parsedCache ??= JSON.parse(stdout);

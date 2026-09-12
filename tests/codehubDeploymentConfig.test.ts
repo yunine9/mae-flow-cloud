@@ -44,16 +44,17 @@ test("deployment gate lifecycle, SHA and failed gate stay independent", async ()
   });
 });
 
-test("trigger only enters polling, including empty list and historical failed run", async () => {
+test("自动触发入口查询真实流水线，空记录不伪造 running", async () => {
   assert(!config.pipeline_trigger.command.includes("rerun"));
   assert(!config.pipeline_trigger.command.includes("{mr}"));
   assert(config.pipeline_trigger.command.includes("--fail"));
   assert(config.pipeline_trigger.command.at(-1).includes("?sha={sha}"));
-  for (const output of [[], [{sha, id: 1, status: "failed"}], [{sha, id: 1, status: "success"}]]) {
-    await fixture("pipeline_trigger", output, async (adapter) => {
+  for (const output of [[], [{sha, id: 1, status: "failed", checks: []}], [{sha, id: 1, status: "success", checks: []}]]) {
+    await fixture("pipeline_status", output, async (adapter) => {
       const result = await adapter.handle("POST", "/pipeline/trigger", query,
         {sha, repo: "https://codehub-y.huawei.com/g/r.git"}, {});
-      assert.equal((result.payload as {status: string}).status, "running");
+      const runs = (result.payload as { runs: Array<{ status: string }> }).runs;
+      assert.deepEqual(runs.map(run => run.status), output.map(run => run.status));
     });
   }
 });

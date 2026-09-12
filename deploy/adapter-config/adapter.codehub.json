@@ -33,6 +33,7 @@
     }
   },
   "pipeline_trigger": {
+    "observe_only": true,
     "command": [
       "curl",
       "--fail",

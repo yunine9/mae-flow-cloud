@@ -49,7 +49,8 @@ export interface PipelineRun {
   is_valid?: boolean;
 }
 
-export interface PipelineStatus extends PipelineRun {
+export interface PipelineStatus extends Omit<PipelineRun, "status"> {
+  status: PipelineRun["status"] | "not_found";
   /** 查询命中的 run 记录(按 SHA 精确匹配,同体里的原样形状)。 */
   runs: PipelineRun[];
 }
@@ -102,7 +103,7 @@ function contractStatus(raw: unknown, what: string): PipelineRun["status"] {
 /** 触发流水线。返回可能是终态(假件当场出结果)也可能 running。 */
 export async function triggerPipeline(
   call: TriggerPipelineCall,
-): Promise<PipelineRun> {
+): Promise<PipelineStatus> {
   const base = call.platformUrl.replace(/\/+$/, "");
   const headers = {
     "content-type": "application/json",
@@ -116,23 +117,13 @@ export async function triggerPipeline(
       body: JSON.stringify({
         sha: call.sha,
         ...(call.repo ? { repo: call.repo } : {}),
+        ...(call.mr ? { mr: call.mr } : {}),
       }),
     },
     call.timeoutMs ?? 30_000,
     "流水线触发",
   );
-  const status = contractStatus(body.status, "流水线触发");
-  const checks = parsePipelineChecks(body.checks);
-  return {
-    status,
-    ...(typeof body.log === "string" && body.log
-      ? { log: body.log } : {}),
-    ...(typeof body.sha === "string" && body.sha
-      ? { sha: body.sha } : {}),
-    ...(typeof body.is_valid === "boolean"
-      ? { is_valid: body.is_valid } : {}),
-    ...(checks !== undefined ? { checks } : {}),
-  };
+  return parsePipelineStatus(body);
 }
 
 /** 按 SHA 查流水线状态。SHA 精确匹配——旧绿灯不背书新提交。 */
@@ -149,6 +140,12 @@ export async function getPipelineStatus(
     call.timeoutMs ?? 30_000,
     "流水线状态查询",
   );
+  return parsePipelineStatus(body);
+}
+
+/** 显式空 runs 是没有运行记录；不能用顶层 running 覆盖它。 */
+export function parsePipelineStatus(body: Record<string, unknown>): PipelineStatus {
+  if (body.runs !== undefined && !Array.isArray(body.runs)) throw new Error("流水线 runs 必须是数组");
   const runsRaw = Array.isArray(body.runs) ? body.runs : [];
   const runs: PipelineRun[] = [];
   for (const raw of runsRaw) {
@@ -169,7 +166,7 @@ export async function getPipelineStatus(
   }
   // 顶层字段(单 run 形态)与 runs 数组并存时以 runs 为准;顶层只在
   // runs 缺席时兜底,避免适配层两种回形造成语义分叉。
-  if (runs.length === 0 && body.status !== undefined) {
+  if (!Array.isArray(body.runs) && body.status !== undefined) {
     const status = contractStatus(body.status, "流水线状态");
     const checks = parsePipelineChecks(body.checks);
     return {
@@ -188,17 +185,17 @@ export async function getPipelineStatus(
   }
   const last = runs.at(-1);
   return {
-    status: last?.status ?? "running",
+    status: last?.status ?? "not_found",
     runs,
     ...(last?.checks !== undefined ? { checks: last.checks } : {}),
   };
 }
 
 /** 给"喂给 AI 的失败摘要"用的格式化:红项逐条列出,绿项一句带过。 */
-export function describePipelineRun(run: PipelineRun): string {
+export function describePipelineRun(run: PipelineRun | PipelineStatus | { status: "not_found" }): string {
   const lines = [`流水线状态: ${run.status}`];
-  if (run.log) lines.push(`日志(截断): ${run.log.slice(0, 1_500)}`);
-  if (run.checks?.length) {
+  if ("log" in run && run.log) lines.push(`日志(截断): ${run.log.slice(0, 1_500)}`);
+  if ("checks" in run && run.checks?.length) {
     for (const check of run.checks) {
       lines.push(`- ${check.dimension} ${check.status}`
         + (check.url ? ` (${check.url})` : ""));

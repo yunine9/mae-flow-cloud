@@ -47,7 +47,7 @@ function scene(t: any) {
     verify: async () => { verificationRuns++; return { status: "passed" }; },
     watch() {}, syncFeedback() {},
     acceptPipeline: async (sha, run) => {
-      host.summary.delivery = { ...host.summary.delivery, sha, pipeline: run.status };
+      host.summary.delivery = { ...host.summary.delivery, sha, pipeline: run?.status ?? "not_found" };
       host.summary.status = "verifying";
     },
   };
@@ -275,7 +275,7 @@ async function platform(t: any) {
     requests.push({ url: req.url!, body: text ? JSON.parse(text) : undefined });
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(req.url === "/mr" ? { url: "http://platform.test/mr/1", id: 1 }
-      : { status: "running", runs: [], log: "验证已排队" }));
+      : { status: "running", runs: [{ status: "running" }], log: "验证已排队" }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
@@ -514,10 +514,10 @@ test("触发新流水线后移交验证，不再恢复旧修复会话；登记�
   s.host.fail = () => {};
   s.host.acceptPipeline = async (sha, run) => {
     attempts++;
-    assert.equal(sha, "new-sha"); assert.equal(run.status, "running");
+    assert.equal(sha, "new-sha"); assert.equal(run?.status, "running");
     if (attempts === 1) throw new Error("模拟登记中断");
     s.host.summary.status = "verifying";
-    s.host.summary.delivery = { ...s.host.summary.delivery, sha, pipeline: run.status };
+    s.host.summary.delivery = { ...s.host.summary.delivery, sha, pipeline: run?.status ?? "not_found" };
   };
   await queueTaskHostOperation(s.host, "trigger-new", { action: "trigger_pipeline", reason: "验证修复" });
   await finishTaskHostOperation(s.host);
@@ -538,7 +538,7 @@ test("升级前成功触发但仍 repairing 的任务，恢复只查询新 SHA �
   new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", trigger_started: true });
   s.host.acceptPipeline = async (sha, run) => {
     s.host.summary.delivery!.sha = sha;
-    s.host.summary.delivery!.pipeline = run.status;
+    s.host.summary.delivery!.pipeline = run?.status ?? "not_found";
     s.host.summary.delivery!.loop!.state = "verifying";
   };
   assert.equal(await finishTaskHostOperation(s.host), true);

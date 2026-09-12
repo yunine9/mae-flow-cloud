@@ -101,3 +101,17 @@ CODEHUB_TOKEN 支持）、原有 MCP 客户端及 token 配置。查询桥 API �
 `https://codehub-y.huawei.com/api/v4`，可用 MFC_CODEHUB_API 覆盖；CLI host
 可用 MFC_CODEHUB_CLI_HOST 覆盖。REST 使用系统 TLS 校验并绕过代理，
 与原 pipeline-status.sh 一致。密钥及现场刷新程序不写进配置样例。
+
+
+### 提前推送与流水线观察
+
+`pipeline_trigger.observe_only: true` 用于 CodeHub 由 push/MR 自动触发的部署。
+此时 `/pipeline/trigger` 复用已有的状态查询链，不执行额外 rerun，原样返回
+实际运行记录；空结果表示尚未发现流水线，不再固定返回 `running`。
+需要真正执行触发命令的其他适配层继续使用原配置，不设置此字段。
+部署时同步本目录配置补丁并重启 adapter；仅升级 serve 也会在状态轮询返回
+空记录后纠正旧版 `running` 显示。
+
+Cloud 在编码阶段允许提前推送、创建 MR 和验证。提前验证只记录提交状态，
+同时续接当前目标；只有内核交接或纯 CI 修复目标已完成后才由验证接管。
+重启会恢复现有代码现场和监听，不清空推送收据；暂停和待答复保持原状态。

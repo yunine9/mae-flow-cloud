@@ -1045,6 +1045,8 @@ export interface TaskSummary {
     mr_state?: string;
     merged_sha?: string;
     pipeline?: string;
+    /** 当前 SHA 的验证是否只是编码期间的旁路观察，重启时据此续接。 */
+    pipeline_background?: boolean;
     skipped?: string;
     /** Cloud 原生 Build-Fix；缺席表示服务端尚未开始或不支持该能力。 */
     prepush?: PrepushVerification;
