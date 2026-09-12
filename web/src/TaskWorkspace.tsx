@@ -1,3 +1,4 @@
+import { TaskEarlyStart } from "./TaskEarlyStart";
 import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
@@ -2481,14 +2482,7 @@ export function TaskWorkspace({
                   ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</AlertDescription>
               </Alert>
             )}
-            {task.status === "queued" && Boolean(task.blocked_by?.length) && (
-              <div className="ws-focus-note"><strong>等待前置任务完成后自动开始</strong>
-                <div className="ws-dependency-links">{task.blocked_by!.map((id) => (
-                  <button type="button" key={id} disabled={!onOpenTask}
-                    onClick={() => onOpenTask?.(id)}>{id}</button>
-                ))}</div>
-              </div>
-            )}
+            <TaskEarlyStart task={task} onChanged={onChanged} onOpenTask={onOpenTask} />
           </div>
           {/* 右栏 = 一条会话流 + 一个输入框(2026-09-05 用户拍板):卡上的选项就是
               动作,输入框只写附言/自定义/插话;工具步骤留在「工作过程」,流里只有

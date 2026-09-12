@@ -1,3 +1,5 @@
+import { repositoryIdentity } from "./knowledgeAssetModel.ts";
+import { applyEarlyStart, previewEarlyStart, refreshDependencyQueue, concurrentTicketConflict, scheduledGraphDependencies, runnableQueueIndex, dependencyScheduleContext, type DependencyAdjustment, type EarlyStartInput } from "./dependencyScheduling.ts";
 import { resumePrePushVerification } from "./prepushRecovery.ts";
 import { fetchMrDiscussions, observeMrDiscussions, discussionRevision, discussionKey, type DiscussionItem, type DiscussionFetch } from "./mrDiscussions.ts";
 import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
@@ -1061,6 +1063,7 @@ export interface TaskSummary {
     status: TaskStatus;
   };
   blocked_by?: string[];
+  dependency_adjustments?: DependencyAdjustment[];
   /** 分工后的接口/契约变化回流主任务，并复制给直接相关上下游子任务。 */
   cross_repository_updates?: CrossRepositoryUpdate[];
   /** 交付方式(用户拍板:下单就选好,不让 agent 来问)。取值是**内核
@@ -3686,11 +3689,13 @@ export class TaskService {
     const requirementGraph = summary.requirement_graph
       ? {
           ...summary.requirement_graph,
+          dependencies: scheduledGraphDependencies(this.dependencyHost(), summary.requirement_graph),
           repositories: summary.requirement_graph.repositories.map((repository) => {
             const child = repository.task_id
               ? this.tasks.get(repository.task_id) : undefined;
             return child ? {
               ...repository,
+              ticket: child.summary.ticket,
               task_status: child.summary.status,
               current_phase: this.taskProgress(child)?.current_phase,
             } : { ...repository };
@@ -3783,7 +3788,7 @@ export class TaskService {
           );
     // 排队位次投影:status=queued 时人第一想知道的是"排到哪了"。
     const queueIndex = summary.status === "queued"
-      ? this.queue.indexOf(summary.id) : -1;
+      ? runnableQueueIndex(this.dependencyHost(), this.queue, summary.id) : -1;
     const projectedDelivery = summary.delivery
       ? {
           ...summary.delivery,
@@ -5600,7 +5605,7 @@ export class TaskService {
         "",
         `选「${SPLIT_PROPOSAL_ACCEPT}」:当前编码会话终止,以只读分析现场重新启动,`
         + "走澄清→改动面盘点→划分方向卡→拆分方案→确认→按单元建子任务;"
-        + "单号在确认卡上逐单元填,同仓单元串行。",
+        + "单号在确认卡上逐单元填,同仓单元默认串行，可在待启动子任务上提前开始。",
         `选「${SPLIT_PROPOSAL_DECLINE}」:Agent 原地继续,按一个任务做完,不再提议。`,
       ].join("\n"),
     });
@@ -7590,34 +7595,28 @@ export class TaskService {
         );
       }
     }
-    // 同(单号,归属人,仓)重复下单会派生出**同名分支**:第二单非快进
-    // 推送失败烧完预算 stalled,报错还是裸 git stderr;同分支对的 MR
-    // 又是幂等复用,两单互相污染检视与门禁(2026-08-30 审计,"跑挂了
-    // 不管旧单直接重下"是最常见操作)。在途旧单存在时如实拒绝并指路;
-    // 终态(completed/failed/canceled)不拦——重来是合法的。内部创建
-    // (跨仓拆单/原位重跑)豁免:父单在途是拆单的前提,不是撞单。
+    // 同仓并行不允许共用 AR，不能靠换责任人绕过。内部拆单允许串行复用，
+    // 调度与提前开始时还会按实际依赖关系复核。不同仓不占用彼此的单号。
     if (ticket && !options.internalRequirement) {
-      const account = options.account?.trim() || undefined;
       const duplicate = [...this.tasks.values()].find((existing) => {
         const summary = existing.summary;
         if (["completed", "failed", "canceled"].includes(summary.status)) {
           return false;
         }
         if ((summary.ticket ?? "") !== ticket) return false;
-        if ((summary.luban_account ?? "") !== (account ?? "")) return false;
         const existingRepositories = [...new Set([
           ...(summary.repositories ?? []),
           ...(summary.repo_url ? [summary.repo_url] : []),
         ].map((item) => String(item).trim()).filter(Boolean))];
         return existingRepositories.length === 0 || repositories.length === 0
           || existingRepositories.some((repository) =>
-            repositories.includes(repository));
+            repositories.some(candidate => repositoryIdentity(candidate) === repositoryIdentity(repository)));
       });
       if (duplicate) {
         throw new TaskControlError(
           `单号 ${ticket} 已有在途任务 ${duplicate.summary.id}`
-          + `(状态 ${duplicate.summary.status})。同单号重复下单会派生`
-          + "同名分支互相覆盖;请在旧任务上继续(重跑/答卡),或先取消"
+          + `(状态 ${duplicate.summary.status})。同仓并行任务不能使用相同 AR，以免同名分支或交付记录混淆`
+          + "；请更换单号，或在旧任务上继续(重跑/答卡)，或先取消"
           + "它再重新发起");
       }
     }
@@ -9645,7 +9644,7 @@ export class TaskService {
           + "单号——下单时未填单号的需求,确认拆分时逐单元补齐");
       }
     }
-    // 同仓单元由下方依赖边强制串行：上游 MR 合入后，下游从最新基线
+    // 同仓单元默认通过下方依赖边串行：上游 MR 合入后，下游从最新基线
     // 启动。同一责任人和 AR 可以沿用同一远端分支，后一次推送是基于已
     // 合入祖先的快进；每个子任务仍有独立 delivery/MR 状态。
     const ids = new Set(graph.repositories.map((repository) => repository.id));
@@ -9666,7 +9665,7 @@ export class TaskService {
       if (!ready.length) throw new NotFoundError("仓库依赖存在循环，不能生成任务");
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
-    // 单仓拆分纪律(设计拍板):同仓多单元第一版一律串行——按拓扑序
+    // 同仓多单元默认串行；建单后责任人可用“提前开始”调整。按拓扑序
     // 给同仓相邻单元补隐式前置边。在拓扑序**之后**补而不是之前:
     // 补边方向与显式依赖同向,不可能制造环;若按图产物的数组序补,
     // 与显式边矛盾时会把合法图误判成循环。
@@ -13455,6 +13454,26 @@ export class TaskService {
     this.activatePendingDeveloperAssistant(task);
   }
 
+  private dependencyHost() {
+    return { tasks: this.tasks,
+      completed: (task: TaskState | undefined) => this.dependencyCompleted(task),
+      persist: (task: TaskState, strict = true) => this.persist(task, strict, false),
+      wake: (task: TaskState) => {
+        if (task.summary.status === "queued" && !this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
+        this.bypass(undefined, "提前开始任务", this.pump());
+      },
+    };
+  }
+
+  previewEarlyStart(id: string, actor: string, input: EarlyStartInput = {}) {
+    return previewEarlyStart(this.dependencyHost(), id, actor, input);
+  }
+
+  startTaskEarly(id: string, actor: string, input: EarlyStartInput): TaskSummary {
+    applyEarlyStart(this.dependencyHost(), id, actor, input);
+    return this.get(id)!;
+  }
+
   private async pump(): Promise<void> {
     if (this.shuttingDown) return;
     // 问题流专用部署:需求任务一律不拉起。恢复的单子留在队列里
@@ -13462,59 +13481,17 @@ export class TaskService {
     if (this.options.requirementDisabled) return;
     const max = this.options.settings?.runtime().max_concurrent
       ?? this.options.maxConcurrent ?? 2;
-    // 前置死透的排队任务先清账,不许无限等(哪怕队列里还有别的活可干,
-    // 也不能让它静默蹲着):
-    // - 前置**已取消**是用户意志的终态,等它=永远等——本任务如实
-    //   failed,说明白是替谁陪葬;
-    // - 前置**失败**还有救(可重试),继续排队但把话写在 detail 上,
-    //   人知道该去修谁或者干脆取消本单。
-    for (const queued of [...this.queue]) {
-      const candidate = this.tasks.get(queued);
-      if (!candidate?.summary.blocked_by?.length) continue;
-      const gone = candidate.summary.blocked_by.filter((dependency) => {
-        const status = this.tasks.get(dependency)?.summary.status;
-        // 不存在的前置和取消一样是死透:没人能把它变回 completed。
-        return status === "canceled" || status === undefined;
-      });
-      if (gone.length) {
-        this.queue.splice(this.queue.indexOf(queued), 1);
-        candidate.summary.status = "failed";
-        candidate.summary.detail =
-          `前置任务 ${gone.join("、")} 已取消或不存在,本任务不会启动`;
-        this.persist(candidate);
-        continue;
-      }
-      const stuck = candidate.summary.blocked_by.filter((dependency) =>
-        this.tasks.get(dependency)?.summary.status === "failed");
-      if (stuck.length) {
-        const detail = `前置任务 ${stuck.join("、")} 失败,`
-          + "重试它后本任务自动启动;不打算修就取消本任务";
-        if (candidate.summary.detail !== detail) {
-          candidate.summary.detail = detail;
-          this.persist(candidate);
-        }
-      }
-    }
+    const scheduling = this.dependencyHost();
+    refreshDependencyQueue(scheduling, this.queue);
     while (this.runningCount < max && this.queue.length) {
       const readyIndex = this.queue.findIndex((queued) => {
         const candidate = this.tasks.get(queued);
         if (!candidate) return true;
-        return (candidate.summary.blocked_by ?? []).every((dependency) =>
-          this.dependencyCompleted(this.tasks.get(dependency)));
+        return !concurrentTicketConflict(scheduling, candidate, this.queue)
+          && (candidate.summary.blocked_by ?? []).every((dependency) =>
+            this.dependencyCompleted(this.tasks.get(dependency)));
       });
       if (readyIndex < 0) {
-        for (const queued of this.queue) {
-          const candidate = this.tasks.get(queued);
-          if (!candidate?.summary.blocked_by?.length) continue;
-          const waiting = candidate.summary.blocked_by.filter((dependency) =>
-            !this.dependencyCompleted(this.tasks.get(dependency)));
-          const detail = `等待前置任务 ${waiting.join("、")} 完成`;
-          if (candidate.summary.detail !== detail
-              && !candidate.summary.detail?.startsWith("前置任务")) {
-            candidate.summary.detail = detail;
-            this.persist(candidate);
-          }
-        }
         break;
       }
       const [id] = this.queue.splice(readyIndex, 1);
@@ -14000,7 +13977,7 @@ export class TaskService {
           }
           if (existsSync(unitSource)) {
             materializeDeliveryDocument(cwd, AGENT_DELIVERY_UNIT,
-              readFileSync(unitSource, "utf-8"));
+              [dependencyScheduleContext(task.summary), readFileSync(unitSource, "utf-8")].filter(Boolean).join("\n\n"));
             order["需求文档"] = AGENT_DELIVERY_UNIT;
             deliveryUnitReady = existsSync(planSource)
               && Boolean(requirementPath);
@@ -14291,6 +14268,7 @@ export class TaskService {
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
       // 清账在 settle 收口处,会话真做完了才算消费掉。
       if (task.mission) prompt = `${prompt}\n\n${task.mission}`;
+      prompt = [prompt, dependencyScheduleContext(task.summary)].filter(Boolean).join("\n\n");
       prompt += `\n\n${taskHostGoal(this.taskHostRuntime(task, epoch))}`;
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。

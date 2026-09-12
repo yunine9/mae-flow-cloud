@@ -2683,6 +2683,23 @@ export function createTaskServer(
             return json(response, 202, service.overallStories.generate(id, actor));
           }
         }
+        if (request.method === "POST" && parts[2] === "early-start"
+            && (parts.length === 3 || (parts.length === 4 && parts[3] === "preview"))) {
+          const body = await readBody(request);
+          if (body.release_ids !== undefined && (!Array.isArray(body.release_ids)
+              || body.release_ids.some((value: unknown) => typeof value !== "string"))) {
+            return json(response, 400, { error: "前置任务清单格式不正确" });
+          }
+          if ([body.ticket, body.revision].some(value => value !== undefined && typeof value !== "string")) {
+            return json(response, 400, { error: "单号和预览版本必须为文本" });
+          }
+          const input = { release_ids: body.release_ids as string[] | undefined,
+            ticket: body.ticket === undefined ? undefined : String(body.ticket),
+            revision: body.revision === undefined ? undefined : String(body.revision) };
+          const actor = viewer?.username ?? "本地用户";
+          return json(response, 200, parts[3] === "preview"
+            ? service.previewEarlyStart(id, actor, input) : service.startTaskEarly(id, actor, input));
+        }
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
