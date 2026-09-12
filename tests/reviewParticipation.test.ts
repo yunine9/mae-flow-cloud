@@ -23,7 +23,7 @@ test("前后端共用检视参与权限：没有分析图也能提交，分析�
   }
 });
 
-test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代交或替责任人确认需求", async () => {
+test("受邀协作者可记下意见，仅责任人经 HTTP 交给 Agent 和确认需求", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-review-participant-"));
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -37,6 +37,7 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
   await model.start();
   const auth = new LocalAuth(join(root, "auth.json"));
   auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("owner", "owner-password-1", "developer");
   auth.createUser("guest", "guest-password-1", "developer");
   auth.createUser("outsider", "outsider-password-1", "developer");
   const service = new TaskService({ dataDir: join(root, "tasks"), maxConcurrent: 0,
@@ -54,6 +55,7 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
     return response.headers.get("set-cookie")!.split(";")[0];
   };
   try {
+    const owner = await login("owner");
     const guest = await login("guest");
     const outsider = await login("outsider");
     const annotation = (author: string) => service.addAnnotation(task.id, { author,
@@ -69,18 +71,19 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
     const denied = await send(outsider, outsideNote.id);
     assert.equal(denied.status, 403);
     const cannotForward = await send(guest, foreign.id);
-    assert.equal(cannotForward.status, 404);
-    assert.match(JSON.stringify(await readJson(cannotForward)), /不是你写的/);
+    assert.equal(cannotForward.status, 403);
+    assert.match(JSON.stringify(await readJson(cannotForward)), /只有当前任务责任人/);
     model.script[1].tool!.input.content = JSON.stringify([{ annotation_id: mine.id,
       outcome: "fixed", summary: "按邀请人的意见更新口径", evidence: ["requirement.md:1"] }]);
-    const sent = await send(guest, mine.id);
+    assert.equal((await send(guest, mine.id)).status, 403, "作者身份不能代替责任人");
+    const sent = await send(owner, mine.id);
     const result = await readJson(sent) as { sent: string[]; receipt?: string };
     assert.equal(sent.status, 200, JSON.stringify(result));
     assert.deepEqual(result.sent, [mine.id]);
     assert.match(result.receipt ?? "", /正在由 Agent 处理/);
     assert.equal(service.get(task.id)?.requirement, "旧口径", "Agent 尚未处理完，HTTP 就应返回回执");
     assert.equal(service.listAnnotations(task.id).items.find((item) => item.id === mine.id)?.sent_via, "requirement_review");
-    const repeated = await send(guest, mine.id);
+    const repeated = await send(owner, mine.id);
     assert.equal(repeated.status, 200, "第一轮仍在处理时，重复提交也立即回执");
     release();
     const deadline = Date.now() + 5000;
@@ -90,6 +93,7 @@ test("受邀协作者在需求预检可经 HTTP 提交本人意见，不能代�
     assert.equal(service.get(task.id)?.requirement, "新口径");
     const own = service.listAnnotations(task.id).items.find((item) => item.id === mine.id)!;
     assert.equal(own.author, "guest");
+    assert.equal(own.sent_by, "owner");
     assert.equal(own.response?.outcome, "fixed");
     const decide = await fetch(`${base}/tasks/${task.id}/decision`, { method: "POST",
       headers: { cookie: guest }, body: JSON.stringify({}) });

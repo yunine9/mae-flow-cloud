@@ -9,12 +9,12 @@ const errors: string[] = [];
 const storyRequests: string[] = [];
 window.addEventListener("error", (e) => errors.push(e.message));
 window.addEventListener("unhandledrejection", (e) => errors.push(String(e.reason)));
-const status = () => ({ eligible: true, current: generated ? "revision-1" : undefined,
-  revisions: generated ? [{ id: "revision-1", at: "2026-09-08T10:00:00Z", by: "dev", additions: 12, deletions: 0 }] : [],
+const status = () => ({ eligible: true, current: generated ? `revision-${generated}` : undefined,
+  revisions: Array.from({ length: generated }, (_, i) => ({ id: `revision-${i + 1}`, at: "2026-09-08T10:00:00Z", by: "dev", additions: 12, deletions: 0 })),
   label: !generated ? "尚未生成整体 Story" : sourceChanged ? "子任务或需求已变化 · 待同步" : confirmed ? "责任人已确认" : "待检视与确认",
   sources: [{ id: "frontend", name: "用户工作台", task_id: "child-1" }, { id: "backend", name: "服务接口", task_id: "child-2" }],
   stale: sourceChanged, can_confirm: generated > 0 && !sourceChanged, pending_reviews: 0,
-  confirmed: confirmed ? { revision: "revision-1", by: "dev" } : undefined,
+  confirmed: confirmed ? { revision: `revision-${generated}`, by: "dev" } : undefined,
 });
 window.fetch = async (input, init) => {
   const path = String(input);
@@ -52,16 +52,21 @@ async function run() {
   if (document.querySelector(".overall-story-tools") || storyRequests.length) {
     throw new Error("child task exposed overall Story generation or requested its API");
   }
+  generated = 1; // 主任务分析已产出全局 Story；页面只维护已有文档。
   renderTask();
   for (let i = 0; i < 50 && document.querySelector(".ws-parent-task"); i++) await pause(20);
   (await button("产出文档")).click();
-  (await button("生成整体 Story")).click();
+  (await button("更新 Story")).click();
+  for (let i = 0; i < 40 && generated !== 2; i++) await pause(50);
   for (let i = 0; i < 40 && !document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story"); i++) await pause(50);
-  if (!document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story")) throw new Error("generated Story did not reach reader");
+  if (!document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story")) throw new Error("updated Story did not reach reader");
   (await button("来源与版本")).click();
   (await button("确认这版整体 Story")).click();
-  const select = document.querySelector<HTMLSelectElement>(".overall-story-history select")!;
-  select.value = "revision-1"; select.dispatchEvent(new Event("change", { bubbles: true }));
+  const select = document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="更新对比版本"]')!;
+  select.click(); await pause(100);
+  const version = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes("第 2 版"));
+  if (!version) throw new Error("revision option missing");
+  version.click();
   await pause(100);
   if (!document.querySelector(".overall-story-diff")?.textContent?.includes("整体验收口径")) throw new Error("diff missing");
   const reader = document.querySelector(".ws-doc")!;
@@ -71,7 +76,7 @@ async function run() {
   sourceChanged = true;
   for (let i = 0; i < 130 && !document.querySelector(".overall-story-tools")?.textContent?.includes("待同步"); i++) await pause(50);
   observer.disconnect();
-  if (generated !== 1 || detached) throw new Error("source changes triggered generation or unmounted reader");
+  if (generated !== 2 || detached) throw new Error("source changes triggered generation or unmounted reader");
   if (!document.querySelector(".overall-story-tools")?.textContent?.includes("待同步")) throw new Error("stale warning missing");
   if (document.documentElement.scrollWidth > window.innerWidth + 1) throw new Error("page overflow");
   if (errors.length) throw new Error(errors.join(";"));

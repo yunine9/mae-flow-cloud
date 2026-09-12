@@ -543,6 +543,7 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
       order.push("prepush");
       return true;
     };
+    (service as any).existingMergeRequestAllowsDelivery = async () => true;
     (service as any).pushConfirmationSatisfied = async () => {
       order.push("confirm");
       return false;
@@ -1074,9 +1075,8 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
       outcome: "needs_clarification", summary: "空值指的是入参还是返回值？",
       evidence: [],
     });
-    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
-      /处理依据/,
-      "Agent 明确说没理解时不能让人误点成已修复");
+    assert.equal(service.listAnnotations(id).items.find(item => item.id === first.id)?.status, "sent",
+      "Agent 请求澄清不能自动闭环，最终仍由责任人核对答复并处置");
     (service as any).annotations(internal).respond(first.id, {
       outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
     });

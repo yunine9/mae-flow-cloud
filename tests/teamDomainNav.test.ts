@@ -69,11 +69,11 @@ test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)
   assert.match(app, /function TeamWorldTabs\(/);
   assert.equal((app.match(/<TeamWorldTabs domain=/g) ?? []).length, 2,
     "团队需求与团队问题必须共用同一个页签组件");
-  // 骨架:role=tablist + 两张大卡(当前现场/成果档案),卡内 strong+small。
+  // 页签语义由共用 Tabs 提供，切换值与标签不绑定旧 HTML/CSS。
   assert.match(app,
-    /<nav className="team-task-tabs" aria-label=\{copy\.label\} role="tablist">/);
-  assert.match(app, /<strong>当前现场<\/strong><small>\{copy\.currentSmall\}<\/small>/);
-  assert.match(app, /<strong>成果档案<\/strong><small>\{copy\.archiveSmall\}<\/small>/);
+    /<TabsList aria-label=\{copy\.label\}/);
+  assert.match(app, /<TabsTrigger value="current"[\s\S]*?<strong[^>]*>当前现场<\/strong>[\s\S]*?<small[^>]*>\{copy\.currentSmall\}<\/small>/);
+  assert.match(app, /<TabsTrigger value="archive"[\s\S]*?<strong[^>]*>成果档案<\/strong>[\s\S]*?<small[^>]*>\{copy\.archiveSmall\}<\/small>/);
   // 两域各自的副标题与 aria 标注。
   assert.match(app, /label: "团队需求视图"/);
   assert.match(app, /label: "团队问题视图"/);
@@ -99,9 +99,9 @@ test("团队问题页:概览+现场在当前面板,队列空态与需求侧同�
   assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\}/);
   // 概览格 0 计数置灰禁用与需求侧同规则(disabled 随 count)。
   assert.match(issueWorld, /disabled=\{count === 0\}/);
-  // 空态与需求队列同一个 empty-state 视觉(不再用 review-clear 简块)。
-  assert.match(issueWorld, /className="empty-state"/);
-  assert.match(issueWorld, /className="empty-visual"/);
+  // 空态使用共用 Empty 组件，保留可访问状态与明确说明。
+  assert.match(issueWorld, /<Empty[^>]*role="status"/);
+  assert.match(issueWorld, /<EmptyTitle>/);
   assert.doesNotMatch(issueWorld, /review-clear/);
   // 档案措辞:概览说明句与需求侧同构(已取消…仅保留在成果档案)。
   assert.match(issueWorld, /已取消会话仅保留在成果档案/);
@@ -113,7 +113,7 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
   assert.match(issueWorld, /className="history-intro"/);
   assert.match(issueWorld, /<h2>成果档案·问题闭环<\/h2>/);
   assert.match(issueWorld, /className="history-metrics"/);
-  assert.match(issueWorld, /className="board-empty"/);
+  assert.match(issueWorld, /<EmptyTitle>还没有闭环的问题会话<\/EmptyTitle>/);
   assert.match(issueWorld, /conclusion\?\.kind === kind/);
   // 档案列表仍用会话卡(内容差异),不再与现场平铺在同一页。
   const worldBody = issueWorld.split("/** 成果档案·问题闭环")[0];
@@ -181,7 +181,7 @@ test("问题侧概览口径:空集合也出全集格子(0 展示但不虚报)", 
 });
 
 test("档案措辞:需求侧「交付档案」统一改为「成果档案」,两域并列", () => {
-  assert.match(app, /<strong>成果档案<\/strong>/);
+  assert.match(app, /<strong[^>]*>成果档案<\/strong>/);
   assert.match(historyBoard, /<h2>成果档案<\/h2>/);
   for (const [name, source] of [["App", app],
     ["HistoryBoard", historyBoard], ["HelpCenter", helpCenter]] as const) {

@@ -69,7 +69,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { hostSkillNames } from "./hostSkillRuntime.ts";
 import { launchRepositoryOptions } from "./launchRepositoryOptions.ts";
-import { assertAnnotationOwnerAccess, annotationSubmissionPlan, pickAnnotationSubmission, requirementSubmissionReceipt, submitAnnotationSnapshot } from "./annotationSubmission.ts";
+import { assertAnnotationOwnerAccess, annotationSubmissionPlan, pickAnnotationSubmission, requirementSubmissionReceipt, submitAnnotationWithReceipts } from "./annotationSubmission.ts";
 import { resetQueuedRequirementReviews, submitRequirementReview, interruptRequirementReviews } from "./requirementReviewQueue.ts";
 import {
   AnnotationPermissionError,
@@ -6273,8 +6273,9 @@ export class TaskService {
     if (!picked.length) {
       return { sent: [], text: "没有待发送的检视意见" };
     }
-    const delivered = await submitAnnotationSnapshot(this.annotations(task), picked, sender, context,
-      snapshot => this.deliverAgentAnnotations(task, snapshot, undefined, false, sender, backgroundRequirementReview));
+    const delivered = await submitAnnotationWithReceipts(this.annotations(task), picked, sender, context,
+      snapshot => this.deliverAgentAnnotations(task, snapshot, undefined, false, sender, backgroundRequirementReview),
+      { requirementReview, ticket: this.ticketOf(task) });
     return {
       sent: delivered.sent,
       text: delivered.text,
@@ -13167,7 +13168,7 @@ export class TaskService {
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
     // shared pipeline path must preserve their original terminal semantics.
     if (!task.cwd || !this.options.host || !this.continuousReviewTask(task)) return;
-    if (projectionOnly && (["completed", "canceled"].includes(task.summary.status)
+    if (projectionOnly && (task.summary.status === "canceled"
       || !existsSync(join(task.cwd, ".mae-flow.json")))) return;
     try {
       const state = JSON.parse(readFileSync(
@@ -13175,6 +13176,11 @@ export class TaskService {
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
       if (projectionOnly && !batches.length) return;
+      // 历史手动完成但内核仍在反馈阶段的任务不启动收据核验，避免重启
+      // 为无效终态反复等待 Python。真正已有 close 事件的任务仍须核验
+      // 完整收据后补齐索引；不能把合入时遗漏的“处理中”永久封存。
+      if (projectionOnly && task.summary.status === "completed"
+          && (state.current !== "end" || !state.delivery_loop?.close_events?.length)) return;
       if (!trustedKernelHostLifecycle({
         host: this.options.host,
         cwd: task.cwd,
@@ -15166,7 +15172,7 @@ export class TaskService {
     // 已失去“push 前验证”的时序意义，恢复应接着核对权威流水线，不能
     // 因旧 preparing 快照再次启动验证。远端收据只豁免同一个 SHA。
     // 已推送版本由常规交付核对 HEAD；若 HEAD 又有新提交，preparePush 仍会重验。
-    if (delivery?.git_push && delivery.sha === delivery.git_push.sha) return "none";
+    if (delivery?.git_push?.sha) return "none";
     if (delivery?.pipeline === "running"
         || (delivery?.pipeline === "success" && delivery.sha)
         || delivery?.evidence_gap) return "none";

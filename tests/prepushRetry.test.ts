@@ -411,9 +411,11 @@ test("停止并直推:排队中的轮出队收口,随即绑 HEAD 跳过续跑", 
     assert.ok(["queued", "running", "completed"].includes(summary.status),
       `跳过后任务应回队续跑而不是躺平,实际 ${summary.status}`);
     (service as any).activePrePushBuilds = 0;
-    // 续跑会话收口,别让后台泵在测试退出后裸奔。
-    await until(() => service.get(id)?.status === "completed"
-      ? true : undefined, "停止并直推后的续跑收口");
+    // 此夹具没有远端平台，停止 Build-Fix 不能冒充交付完成。
+    await until(() => service.get(id)?.status === "verifying"
+      && !internal.driver ? true : undefined, "停止并直推后等待权威验证");
+    assert.match(service.get(id)!.detail ?? "", /MR.*流水线服务未就绪/);
+    await service.shutdown();
   } finally {
     await model.stop();
   }

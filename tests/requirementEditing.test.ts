@@ -66,18 +66,21 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     assert.equal(processing.sent_via, "requirement_review");
     const repeated = await service.sendAnnotations(task.id, [a.id], "owner");
     assert.match(repeated.receipt ?? "", /1 条正在由 Agent 处理/);
-    await assert.rejects(service.sendAnnotations(task.id, [a.id], "reviewer"), /不是你写的/);
+    await assert.rejects(service.sendAnnotations(task.id, [a.id], "reviewer"), /只有当前任务责任人/);
     await assert.rejects(service.sendAnnotations(task.id, ["missing-id"], "owner"), /不存在/);
     const liveEvents = new EventLog(service.eventLogPath(task.id)).replay();
     assert.ok(liveEvents.some((event) => event.kind === "tool_requested"),
       "Agent 仍在处理时，执行日志接口读取的主日志里就应有工具调用");
     assert.ok(liveEvents.every((event) => event.taskId === task.id));
-    const queued = await service.sendAnnotations(task.id, [b.id], "reviewer");
-    assert.deepEqual(queued.sent, [b.id], "第一批仍被挂起时，第二批就能返回接收成功");
+    await assert.rejects(service.sendAnnotations(task.id, [a.id], "owner", false, false, "后补的新要求"),
+      /已经送出/, "重试不能把新增说明静默丢掉");
+    const queued = await service.sendAnnotations(task.id, [a.id, b.id], "owner");
+    assert.deepEqual(queued.sent, [a.id, b.id], "混合重试只把新意见入队，旧意见复用回执");
+    assert.match(queued.receipt ?? "", /1 条正在由 Agent 处理.*1 条已排队/);
     const queuedNote = service.listAnnotations(task.id).items.find((item) => item.id === b.id)!;
     assert.equal(queuedNote.sent_via, "requirement_queue");
     assert.equal(queuedNote.status, "sent");
-    const repeatedQueue = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    const repeatedQueue = await service.sendAnnotations(task.id, [b.id], "owner");
     assert.match(repeatedQueue.receipt ?? "", /1 条已排队/);
     assert.throws(() => service.verifyAnnotation(task.id, b.id, "owner"), /处理依据/);
     const confirm = () => service.decide(task.id, {
@@ -91,7 +94,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     assert.deepEqual((model.requests[0].tools as Array<{ name: string }>).map((tool) => tool.name).sort(),
       ["edit", "read", "write"], "未配置视觉模型时只有三种文件工具，不影响排队修订");
     assert.doesNotMatch(JSON.stringify(model.requests[0].system), /Use bash for file operations like ls, rg, find/);
-    const repeatedDone = await service.sendAnnotations(task.id, [b.id], "reviewer");
+    const repeatedDone = await service.sendAnnotations(task.id, [b.id], "owner");
     assert.match(repeatedDone.receipt ?? "", /已有处理回执/);
     assert.equal(service.get(task.id)?.requirement, "第一段新口径\n新增一行说明\n\n第二段新口径");
     assert.match(JSON.stringify(model.requests[3]), /第 4 行/,
@@ -269,7 +272,7 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
       && /1 条意见尚未提交/.test(error.message),
     "受邀参与者留下的草稿也不能被责任人越过");
 
-    await service.sendAnnotations(created.id, [reviewerNote.id], "reviewer");
+    await service.sendAnnotations(created.id, [reviewerNote.id], "owner");
     assert.equal(service.get(created.id)?.requirement,
       "# 用户需求\n已补充验收口径\n已明确异常场景");
     await assert.rejects(service.decide(created.id, {

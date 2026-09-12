@@ -117,4 +117,14 @@ test("真实发布与合入后机器反馈立即结束，重启从内核重建�
   rmSync(path);
   (revived as any).syncFeedbackStoreFromKernel(restored, true);
   assert.equal(revived.get(task.id)!.feedback!.find(r => r.id === row.id)!.status, "superseded_by_merge");
+  const kernelPath = join(restored.cwd, ".mae-flow.json");
+  const signed = readFileSync(kernelPath, "utf8");
+  const tampered = JSON.parse(signed);
+  tampered.delivery_loop.batches[0].items[0].summary = "未获收据背书的新内容";
+  writeFileSync(kernelPath, JSON.stringify(tampered));
+  const indexBefore = readFileSync(path, "utf8");
+  (revived as any).syncFeedbackStoreFromKernel(restored, true);
+  assert.equal(readFileSync(path, "utf8"), indexBefore, "仅有 end 和 close 事件不能绕过完整收据核验");
+  assert.equal(revived.get(task.id)!.status, "completed", "投影失败不能倒退既有合入事实");
+  writeFileSync(kernelPath, signed);
 });

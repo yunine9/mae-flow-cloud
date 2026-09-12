@@ -9,7 +9,7 @@ import { build } from "../web/node_modules/esbuild/lib/main.js";
 const chrome = process.env.MFC_TEST_CHROME
   ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-test("整体 Story 浏览器：生成、阅读、版本对比、确认和待同步提示", {
+test("整体 Story 浏览器：阅读已有文档、更新、版本对比、确认和待同步提示", {
   skip: !existsSync(chrome) && "需要真实 Chrome；设置 MFC_TEST_CHROME 后运行",
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-overall-browser-"));
@@ -43,6 +43,7 @@ test("整体 Story 浏览器：生成、阅读、版本对比、确认和待同�
       const value = JSON.parse(result);
       assert.equal(value.error, undefined, `${mode}: ${value.error}`);
       assert.equal(value.childEntryHidden, true);
+      assert.equal(value.generated, 2, "只进行一次显式更新");
       assert.equal(value.readerStable, true);
       assert.equal(value.stale, true);
       assert.equal(value.confirmed, true);

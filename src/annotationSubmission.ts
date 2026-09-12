@@ -1,5 +1,5 @@
 import { OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
-import { AnnotationStore, AnnotationPermissionError, type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
+import { AnnotationStore, AnnotationPermissionError, renderAnnotations, type Annotation, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
 
 /** 记下即为团队意见。旧 route、作者身份和管理员身份均不代替当前责任人。 */
@@ -17,6 +17,26 @@ export function annotationSubmissionPlan(input: {
   const maySendForeign = !!input.ids?.length;
   return { maySendForeign, selected: pickAnnotationSubmission(
     input.items, input.ids, input.sender, maySendForeign, input.requirementReview) };
+}
+
+/** 需求修订在 Agent 收轮前就持久化回执。重复请求直接复用回执，
+ * 同次提交中的新意见仍经过发送锁；首个长请求不会把重试或新意见锁死。
+ * 输入须经过 annotationSubmissionPlan 的权限、版本与回执筛选。 */
+export async function submitAnnotationWithReceipts(
+  store: AnnotationStore, selected: Annotation[], sender: string, context: string,
+  deliver: (snapshot: Annotation[]) => Promise<{ sent: string[]; text: string }>,
+  options: { requirementReview: boolean; ticket: string },
+): Promise<{ sent: string[]; text: string }> {
+  const accepted = new Set(options.requirementReview ? selected.filter(item =>
+    item.artifact === TASK_REQUIREMENT_ARTIFACT && item.status !== "draft").map(item => item.id) : []);
+  const pending = selected.filter(item => !accepted.has(item.id));
+  // 新一轮意见会恢复 draft；已送出时的新增说明不能被幂等处理静默吞掉。
+  if (context.trim() && accepted.size) throw new TaskControlError("意见已经送出，请等答复后重新处理再补充说明");
+  const delivered = pending.length
+    ? await submitAnnotationSnapshot(store, pending, sender, context, deliver)
+    : { sent: [], text: renderAnnotations(selected, options.ticket) };
+  return { ...delivered, sent: selected.filter(item =>
+    accepted.has(item.id) || delivered.sent.includes(item.id)).map(item => item.id) };
 }
 
 // TaskService 每次读取会新建 Store，锁按同一个账本路径共享。

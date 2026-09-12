@@ -114,14 +114,14 @@ test("开工前编译准备常驻显示，缺记录及已回收不声称就绪",
   for (const [status, label] of [["running", "准备中"], ["passed", "已就绪"], ["failed", "失败"], ["infrastructure_failure", "准备中断"]]) {
     const html = render({ baseline_build: { ...receipt, status } });
     assert.match(html, /aria-haspopup="dialog"/);
-    assert.ok(html.includes(`<b>${label}</b>`));
+    assert.match(html, new RegExp(`<b[^>]*>${label}</b>`));
   }
   const missing = render();
-  assert.match(missing, /<b>暂无记录<\/b>/);
-  assert.doesNotMatch(missing, /is-passed|<b>已就绪/);
+  assert.match(missing, /<b[^>]*>暂无记录<\/b>/);
+  assert.doesNotMatch(missing, /is-passed|<b[^>]*>已就绪/);
   const reclaimed = render({ baseline_build: { ...receipt, status: "passed" }, workspace_reclaimed_at: "2026-09-05T01:00:00Z" });
-  assert.match(reclaimed, /<b>现场已回收<\/b>/);
-  assert.doesNotMatch(reclaimed, /is-passed|<b>已就绪/);
+  assert.match(reclaimed, /<b[^>]*>现场已回收<\/b>/);
+  assert.doesNotMatch(reclaimed, /is-passed|<b[^>]*>已就绪/);
 });
 
 function review(id: string, taskId: string) {
