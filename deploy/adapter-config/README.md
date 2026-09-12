@@ -4,6 +4,10 @@
 新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的 MR/流水线
 端点补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
 
+`adapter.codehub.json` 的绝对路径是生产示例，不能直接复制给测试环境。
+新装和升级均通过下文的生成器应用补丁，传入当前环境的仓库根目录；
+所有仓内脚本（包括 `mr_discover`）都会替换成该目录，已有生产路径也会纠正。
+
 ## 内网 Agent 本次只负责部署和验收
 
 这里的修复实现已经提交完成，下面不是让内网 Agent 再实现一遍的开发任务。
@@ -44,7 +48,13 @@
 - 详情 SHA 通过 adapter 的 mr_sha 抽取回传，供已有的合入版本核验使用。
   缺失/无效生命周期、SHA、iid 或查询失败均报错，不伪装 opened。
 - mr_discussions 使用 `codehub-cli mr review list` 查询未解决检视意见，
-  从每条 discussion 的 `notes[0]` 提取正文、作者、文件、行号与更新时间。
+  按 2026-09-12 内网实测反馈，从根数组读取 discussion；`revision` 取
+  `notes.0.id`，`severity` 取顶层同名字段，文件、行号、作者分别取
+  `notes.0.file_path`、`notes.0.line`、`notes.0.author.username`；正文及
+  更新时间仍取 `notes[0]`。命令保留内网所需 `-k`，超时为 15 秒。
+  需求宿主查询预算同步调整为 20 秒，避免 CLI 尚在预算内就被外层提前中断。
+  此前配置及测试误用了 `position.new_path/new_line` 和 `author.name`，已纠正；
+  本地回归使用上述反馈结构，未在本机连接内网重跑 CLI。
   配置进入生产和测试 adapter 后，持续检视不再因端点缺席反复收到 404。
 - gate 整体预算 8 秒，adapter 超时 9 秒，与宿主 10 秒查询预算对齐。
 

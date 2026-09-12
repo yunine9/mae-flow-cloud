@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, cpSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -72,26 +72,30 @@ test("MR creation and lookup return the same iid, not global id", async () => {
 test("deployment discussion query uses CodeHub review list and flattens the first note", async () => {
   const raw = [{
     id: "discussion-3384-1",
+    severity: "major",
     notes: [{
       updated_at: "2026-09-12T09:30:00Z",
-      position: { new_path: "src/Service.cpp", new_line: 42 },
-      author: { name: "检视人老王" },
+      id: 12345,
+      file_path: "src/Service.cpp", line: 42,
+      author: { username: "w30009735", name: "显示名不能代替账号" },
       body: "虚拟化场景应执行 queryENE.sh 获取等效数",
     }],
   }];
   assert.deepEqual(config.mr_discussions.command, [
     "codehub-cli", "mr", "review", "list", "--host", "yellow",
     "--project", "{repo}", "{mr}", "--token", "{token}",
-    "--format", "json",
+    "--format", "json", "-k",
   ]);
+  assert.equal(config.mr_discussions.timeout_s, 15);
+  assert.deepEqual(config.mr_discussions.items, { json: "" });
   await fixture("mr_discussions", raw, async (adapter) => {
     const result = await adapter.handle("GET", "/mr/discussions", query, {}, {});
     assert.deepEqual(result.payload, { discussions: [{
-      id: "discussion-3384-1",
+      id: "discussion-3384-1", revision: 12345, severity: "major",
       updated_at: "2026-09-12T09:30:00Z",
       file: "src/Service.cpp",
       line: 42,
-      author: "检视人老王",
+      author: "w30009735",
       body: "虚拟化场景应执行 queryENE.sh 获取等效数",
     }] });
   });
@@ -102,10 +106,23 @@ test("portable patch matches full configuration and every script is in this repo
   const { port, ...endpoints } = config;
   assert.equal(port, 8790);
   assert.deepEqual(JSON.parse(JSON.stringify(patch).replaceAll("@REPO_DIR@", "/data/mae-flow-cloud/repo")), endpoints);
-  for (const name of ["pipeline_status", "pipeline_artifacts", "mr_gates"]) {
+  for (const name of ["pipeline_status", "pipeline_artifacts", "mr_discover", "mr_gates"]) {
     const script = config[name].command[1].replace("/data/mae-flow-cloud/repo/", "");
     assert(readFileSync(script).length > 0);
   }
+});
+
+test("discussion host timeout leaves room for the configured CLI budget", async (t) => {
+  const { fetchMrDiscussions } = await import("../src/mrDiscussions.ts");
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    assert(milliseconds > config.mr_discussions.timeout_s * 1000,
+      "the host must not abort before the adapter command budget expires");
+    return timeout(milliseconds);
+  });
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ discussions: [] })));
+  assert.deepEqual(await fetchMrDiscussions({ platformUrl: "http://adapter", repo: "g/r",
+    delivery: { mr_id: 3384 } }), { kind: "available", items: [] });
 });
 
 test("deployment merge tool cannot produce a config missing MR discovery or discussions", () => {
@@ -141,6 +158,34 @@ test("one-click deployment installs the validated adapter candidate into every s
   assert.match(deployment, /install -m 600 "\\\$CANDIDATE" "\\\$CURRENT_ADAPTER"/);
   assert(deployment.indexOf("merge-adapter-config.py") < deployment.indexOf('install -m 600 "\\$CANDIDATE"'),
     "validated candidate must be generated before the live adapter config is replaced");
+});
+
+test("prod and test installations replace all old production script paths with their own repo", () => {
+  const temp = mkdtempSync(join(tmpdir(), "adapter-env-paths-"));
+  try {
+    for (const environment of ["mae-flow-cloud", "mae-flow-cloud-test"]) {
+      const root = join(temp, environment, "repo");
+      mkdirSync(root, { recursive: true });
+      cpSync(resolve("deploy"), join(root, "deploy"), { recursive: true });
+      const source = join(temp, `${environment}.json`);
+      const destination = join(temp, `${environment}.candidate.json`);
+      // 故意从包含生产绝对路径的旧配置升级，测试环境也必须全部改写。
+      writeFileSync(source, JSON.stringify({ ...config, port: 9988 }));
+      const result = spawnSync("python3", [join(root, "deploy/adapter-tools/merge-adapter-config.py"),
+        source, destination, root], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const candidate = JSON.parse(readFileSync(destination, "utf8"));
+      assert.equal(candidate.port, 9988);
+      for (const name of ["pipeline_status", "pipeline_artifacts", "mr_discover", "mr_gates"]) {
+        assert.equal(candidate[name].command[1], config[name].command[1].replace("/data/mae-flow-cloud/repo", realpathSync(root)));
+      }
+      assert.deepEqual(candidate.mr_discussions, config.mr_discussions);
+      assert(!JSON.stringify(candidate).includes("@REPO_DIR@"));
+      assert(!JSON.stringify(candidate).includes("/data/mae-flow-cloud/repo"));
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 test("real MR gate bridge validates lifecycle and fails closed on upstream errors", () => {
