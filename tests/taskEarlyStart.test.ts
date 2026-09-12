@@ -77,9 +77,36 @@ test("不同仓可复用单号，同仓冲突不受父任务或责任人边界�
   f.state(other.id).summary.luban_account = "another-owner";
   assert.deepEqual(f.preview("REQ2").conflicts.map(item => item.id), [other.id]);
   f.state(other.id).summary.status = "completed";
-  assert.equal(f.preview("REQ2").conflicts.length, 1, "仅写 completed 不能冒充内核已完成");
+  const projected = f.preview("REQ2");
+  assert.equal(projected.conflicts.length, 0, "预览只读取持久化完成投影，不同步启动内核");
+  assert.throws(() => f.service.startTaskEarly(f.d.id, "owner", {
+    revision: projected.revision,
+    ticket: projected.ticket,
+    release_ids: projected.release_ids,
+  }), /重新查看影响/, "仅写 completed 不能通过确认时的权威核验");
   (f.service as any).taskCompletionAttestation = (task: any) => task.summary.id === other.id ? { complete: true } : undefined;
   assert.equal(f.preview("REQ2").conflicts.length, 0, "核验完成的历史任务不占 AR");
+});
+
+test("提前开始预览只读完成投影，真正确认时仍执行权威完成核验", async t => {
+  const f = fixture(); t.after(() => f.service.shutdown());
+  f.state(f.a.id).summary.status = "completed";
+  f.persist(f.a.id);
+  let attestations = 0;
+  (f.service as any).dependencyCompleted = () => {
+    attestations += 1;
+    return true;
+  };
+
+  const view = f.service.previewEarlyStart(f.d.id, "owner", { ticket: "REQ2" });
+  assert.equal(attestations, 0, "列表预览不能启动 Python 内核验签");
+
+  f.service.startTaskEarly(f.d.id, "owner", {
+    revision: view.revision,
+    ticket: view.ticket,
+    release_ids: view.release_ids,
+  });
+  assert.ok(attestations > 0, "真正改变执行安排前必须重新做权威核验");
 });
 
 test("越权、过期预览、空单号和已开工均不改变任何安排", async t => {

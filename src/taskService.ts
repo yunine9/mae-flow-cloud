@@ -13478,7 +13478,10 @@ export class TaskService {
   }
 
   previewEarlyStart(id: string, actor: string, input: EarlyStartInput = {}) {
-    return previewEarlyStart(this.dependencyHost(), id, actor, input);
+    // 预览会被任务列表批量请求，只读取已持久化的完成投影；不能为每个
+    // 祖先任务同步启动 Python 内核验签。用户真正确认时 startTaskEarly
+    // 仍使用权威 dependencyHost() 重新核验，投影过期也会由 revision 拒绝。
+    return previewEarlyStart(this.dependencyHost(true), id, actor, input);
   }
 
   startTaskEarly(id: string, actor: string, input: EarlyStartInput): TaskSummary {
