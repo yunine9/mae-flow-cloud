@@ -2869,7 +2869,12 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) return json(response, 403, { error: "只能操作分配给自己的任务" });
           const body = await readBody(request);
-          return json(response, 200, await service.refreshRemoteDelivery(id, viewer?.username, typeof body.mr_id === "string" ? body.mr_id : undefined));
+          return json(response, 200, await service.refreshRemoteDelivery(
+            id,
+            viewer?.username,
+            typeof body.mr_id === "string" ? body.mr_id : undefined,
+            { administrator: !options.auth || viewer?.role === "admin" },
+          ));
         }
         // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
         if (request.method === "POST"

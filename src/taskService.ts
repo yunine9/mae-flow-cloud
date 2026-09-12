@@ -17805,9 +17805,13 @@ export class TaskService {
     };
   }
 
-  async refreshRemoteDelivery(id: string, actor?: string, selected?: string) {
+  async refreshRemoteDelivery(id: string, actor?: string, selected?: string,
+    access?: { administrator?: boolean }) {
     const task = this.tasks.get(id); if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    this.assertAnnotationOwner(task, actor ?? "本地用户");
+    const owner = task.summary.luban_account ?? "本地用户";
+    if (owner !== (actor ?? "本地用户") && access?.administrator !== true) {
+      throw new AnnotationPermissionError(`只有任务责任人 ${owner} 或管理员可以刷新 MR 状态`);
+    }
     const epoch = task.controlEpoch;
     const result = await reconcileRemoteDelivery(this.remoteDeliveryHost(task, epoch), selected);
     if (this.current(task, epoch) && result.proceed && !task.driver && task.summary.status === "verifying")

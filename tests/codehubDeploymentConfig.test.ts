@@ -107,6 +107,41 @@ test("portable patch matches full configuration and every script is in this repo
   }
 });
 
+test("deployment merge tool cannot produce a config missing MR discovery or discussions", () => {
+  const temp = mkdtempSync(join(tmpdir(), "adapter-merge-test-"));
+  try {
+    const source = join(temp, "adapter.json");
+    const destination = join(temp, "adapter.candidate.json");
+    writeFileSync(source, JSON.stringify({ port: 9988, token_file: "/run/secrets/codehub", local_extension: { enabled: true } }));
+    const script = resolve("deploy/adapter-tools/merge-adapter-config.py");
+    const result = spawnSync("python3", [script, source, destination, resolve(".")], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const candidate = JSON.parse(readFileSync(destination, "utf8"));
+    assert.equal(candidate.port, 9988);
+    assert.equal(candidate.token_file, "/run/secrets/codehub");
+    assert.deepEqual(candidate.local_extension, { enabled: true });
+    for (const endpoint of ["mr_discover", "mr_discussions", "mr_gates"]) {
+      assert(Array.isArray(candidate[endpoint]?.command) && candidate[endpoint].command.length > 0,
+        `${endpoint} must be installed with a command`);
+    }
+    assert.equal(candidate.mr_discover.command[1], resolve("deploy/adapter-tools/mr-discover.py"));
+    const overwrite = spawnSync("python3", [script, source, destination, resolve(".")], { encoding: "utf8" });
+    assert.notEqual(overwrite.status, 0, "candidate creation must never overwrite an existing file");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("one-click deployment installs the validated adapter candidate into every selected environment", () => {
+  const deployment = readFileSync(resolve("scripts/deploy.sh"), "utf8");
+  assert.match(deployment, /merge-adapter-config\.py/);
+  assert.match(deployment, /CURRENT_ADAPTER=.*adapter\.json/);
+  assert.match(deployment, /cp -p "\\\$CURRENT_ADAPTER" "\\\$ADAPTER_BACKUP"/);
+  assert.match(deployment, /install -m 600 "\\\$CANDIDATE" "\\\$CURRENT_ADAPTER"/);
+  assert(deployment.indexOf("merge-adapter-config.py") < deployment.indexOf('install -m 600 "\\$CANDIDATE"'),
+    "validated candidate must be generated before the live adapter config is replaced");
+});
+
 test("real MR gate bridge validates lifecycle and fails closed on upstream errors", () => {
   const result = spawnSync("python3", ["-c", String.raw`
 import contextlib, io, json, pathlib, runpy, subprocess, sys, urllib.error

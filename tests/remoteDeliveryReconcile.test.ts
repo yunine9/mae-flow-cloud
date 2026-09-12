@@ -63,5 +63,7 @@ test("已发布当前 HEAD 可补收据；本地新 HEAD 不冒充发布，多 M
   platform.mergeRequests.push({ ...platform.mergeRequests[0], id: 999, url: platform.baseUrl + "/mr/999" });
   const multiple = await api.refreshRemoteDelivery(task.summary.id, task.summary.luban_account);
   assert.equal(multiple.candidates.length, 2); assert.equal(task.summary.delivery.mr_url, undefined);
-  await assert.rejects(() => api.refreshRemoteDelivery(task.summary.id, "not-owner"), /责任人/);
+  await assert.rejects(() => api.refreshRemoteDelivery(task.summary.id, "not-owner"), /责任人.*管理员/);
+  const admin = await api.refreshRemoteDelivery(task.summary.id, "team-admin", undefined, { administrator: true });
+  assert.equal(admin.candidates.length, 2, "管理员可以为任意责任人的任务触发远端核验");
 });

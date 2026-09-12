@@ -56,44 +56,22 @@
 必须先把**同一个提交的代码、deploy 目录全部同步**到内网；只换 JSON
 会缺少 mr-gates.py 或 mr_sha 支持。下面命令在测试仓库根目录执行，按实际
 位置替换配置路径。本节只操作测试环境；生产升级在测试验收后另行执行。
+仓库的 `scripts/deploy.sh` 已自动执行同一生成、备份和安装流程；手工部署
+时才需要执行下面的命令。
 
 生成候选文件（保留现场端口、token_file、其他端点及已有候选链）：
 
 ```bash
-python3 - /etc/mae-flow-cloud-test/adapter.json \
-  /etc/mae-flow-cloud-test/adapter.candidate.json "$PWD" <<'PY'
-import json, os, sys
-from pathlib import Path
-source, destination, root = map(Path, sys.argv[1:])
-config = json.loads(source.read_text())
-patch = json.loads((root / 'deploy/adapter-config/mr-pipeline.patch.json').read_text())
-for key, spec in patch.items():
-    spec['command'] = [part.replace('@REPO_DIR@', str(root.resolve())) for part in spec['command']]
-    if key in ('pipeline_status', 'pipeline_artifacts', 'mr_gates', 'mr_discover'):
-        assert Path(spec['command'][1]).is_file(), spec['command'][1]
-    existing = config.get(key, {})
-    if key in ('pipeline_status', 'pipeline_artifacts'):
-        if 'timeout_s' in existing:
-            spec['timeout_s'] = existing['timeout_s']
-        candidates = existing.get('candidates')
-        if candidates:
-            name = Path(spec['command'][1]).name
-            matches = [i for i, c in enumerate(candidates) if any(name in str(p) for p in c.get('command', []))]
-            position = matches[0] if matches else min(1, len(candidates))
-            retained = [c for i, c in enumerate(candidates) if i not in matches]
-            retained.insert(position, spec)
-            patch[key] = dict(existing, candidates=retained)
-config.update(patch)
-fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w') as output:
-    json.dump(config, output, ensure_ascii=False, indent=2)
-    output.write('\n')
-print('候选已生成:', destination)
-PY
+python3 deploy/adapter-tools/merge-adapter-config.py \
+  /etc/mae-flow-cloud-test/adapter.json \
+  /etc/mae-flow-cloud-test/adapter.candidate.json "$PWD"
 ```
 
-候选独占创建，不会覆盖已有文件。该补丁依据本次贴出的 MR 创建参数；若
-现场有额外参数而候选会丢失，回传差异，不要自行改源码或猜映射。
+候选独占创建，不会覆盖已有文件；生成器会一次合入全部 MR/流水线端点，
+并在落盘前检查 `mr_discover`、`mr_discussions`、`mr_gates` 等必备端点和
+仓内脚本。配置不完整时部署会当场失败并点名缺项，不再等任务运行后以 404
+暴露。该补丁依据本次贴出的 MR 创建参数；若现场有额外参数而候选会丢失，
+回传差异，不要自行改源码或猜映射。
 检查候选后安装并重启对应服务：
 
 ```bash

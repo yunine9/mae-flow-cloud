@@ -247,6 +247,28 @@ for ROOT in ${SYNC_ROOTS[@]}; do
     echo "  web build (node24)"
     npx vite build 2>&1 | tail -3
 
+    # adapter.json 是现场配置，rsync 不会覆盖；每次部署都用当前仓库的完整
+    # 端点补丁生成候选并校验，避免代码已升级但 mr_discover 等端点仍缺席。
+    if [ "\$ROOT" = "$PROD_ROOT" ]; then
+        CONFIG_DIR="$PROD_CONFIG"
+    else
+        CONFIG_DIR="$TEST_CONFIG"
+    fi
+    CURRENT_ADAPTER="\$CONFIG_DIR/adapter.json"
+    if [ ! -f "\$CURRENT_ADAPTER" ]; then
+        echo "  adapter 配置不存在: \$CURRENT_ADAPTER"
+        exit 1
+    fi
+    CANDIDATE_DIR=\$(mktemp -d "\$CONFIG_DIR/.adapter-candidate.XXXXXX")
+    CANDIDATE="\$CANDIDATE_DIR/adapter.json"
+    python3 "\$ROOT/repo/deploy/adapter-tools/merge-adapter-config.py" \
+      "\$CURRENT_ADAPTER" "\$CANDIDATE" "\$ROOT/repo"
+    ADAPTER_BACKUP="\$CONFIG_DIR/adapter.json.bak.\$(date +%Y%m%d-%H%M%S)-$LOCAL_COMMIT"
+    cp -p "\$CURRENT_ADAPTER" "\$ADAPTER_BACKUP"
+    install -m 600 "\$CANDIDATE" "\$CURRENT_ADAPTER"
+    rmdir "\$CANDIDATE_DIR"
+    echo "  adapter 完整端点已校验并安装，备份: \$ADAPTER_BACKUP"
+
     echo "  确保日志目录存在"
     mkdir -p \$ROOT/logs
     touch \$ROOT/logs/serve.log \$ROOT/logs/adapter.log \$ROOT/logs/luban-bridge.log
