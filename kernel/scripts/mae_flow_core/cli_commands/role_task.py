@@ -52,8 +52,9 @@ def _story_context(state, role, document="", axis=""):
         for item in domain.documents
     ]
     paths = [
-        config.get("需求文档", ""), package.spec, package.grill,
-        package.decisions, survey, os.path.join("docs", "specs", "index.md"),
+        os.path.join(os.getcwd(), ".mae-flow-work", "owner-inputs.json"),
+        config.get("需求文档", ""), package.decisions, package.spec, package.grill,
+        survey, os.path.join("docs", "specs", "index.md"),
         *domain_paths,
     ]
     if role == "story-generate":

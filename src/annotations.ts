@@ -151,6 +151,8 @@ export interface Annotation {
   /** 人点过几次"仍需调整"(0/缺省 = 没退回过)。只用于人话与提示——
    * 作者补充说明重提不算返工,不能把它说成"上一轮改坏了"。 */
   returned?: number;
+  /** 从既有 reopen 事件投影，避免恢复时把重新处理误排到意见创建时。 */
+  reopened?: { at: string; by?: string };
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
   anchor_was?: string;
   /** Agent 问过什么(needs_clarification 的回执),作者改字重提时留档:
@@ -234,7 +236,8 @@ export interface AnchorCheck {
 }
 
 export class AnnotationStore {
-  constructor(readonly path: string, private readonly ownerControlled = false) {}
+  constructor(readonly path: string, private readonly ownerControlled = false,
+    private readonly onChanged?: () => void) {}
 
   /** 回放得到当前状态。中段坏行跳过不炸整页(旁路 fail-open,大声
  *  记账);断写尾巴由读口自愈——崩溃半行不再吞掉下一次追加的账。 */
@@ -384,6 +387,7 @@ export class AnnotationStore {
         found.resolution = undefined;
         found.withdrawal_requested = undefined;
         if (operation.op === "reopen") {
+          found.reopened = { at: operation.at, by: operation.by ?? found.author };
           // 重新处理开启新一轮；上一轮的送达事实留在事件历史，不能锁住新草稿。
           found.agent_assigned = undefined;
           found.agent_context = undefined;
@@ -743,7 +747,7 @@ export class AnnotationStore {
     }
     this.append({
       op: "reopen", id, at: new Date().toISOString(),
-      ...(ownerOverride ? { by, owner_controlled: true } : {}),
+      by, ...(ownerOverride ? { owner_controlled: true } : {}),
       line: update?.line, anchor: update?.anchor?.trim() || undefined,
       note: update?.note?.trim() || undefined,
     });
@@ -753,6 +757,7 @@ export class AnnotationStore {
 
   private append(operation: Operation): void {
     appendFileSync(this.path, JSON.stringify(operation) + "\n", "utf-8");
+    if (operation.op !== "respond") this.onChanged?.();
   }
 }
 

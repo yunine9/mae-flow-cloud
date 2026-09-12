@@ -1,9 +1,11 @@
 本步骤只生成本单本地 Spec，不创建或提交 OpenSpec 产物。
 
 1. 执行 `python "{MAEFLOW_PATH}" local-spec init`，取得 `.mae-flow-work/{单号}/spec.md`。
-2. 读取 `.mae-flow-work/{单号}/grill.md`、需求原文和 `.mae-flow-work/{单号}/survey.md`。
+2. 先读取 `.mae-flow-work/owner-inputs.json`（如有；没有时读取本轮已提交原话或 task_context instructions，不等待占位副本）、`.mae-flow-work/{单号}/decisions.md`，再读取 `.mae-flow-work/{单号}/grill.md`、需求原文和 `.mae-flow-work/{单号}/survey.md`。
 3. 从需求原文提取 1～3 个领域关键词，分别执行 `python "{MAEFLOW_PATH}" domain-docs context --term "<需求关键词>"`，只读取输出列出的相关 `docs/specs/*.md`；不得用单号代替关键词，也不得全量加载领域文档。
 4. 填写范围、可观察行为、验收条件、不在范围和 Grill 决策。每条 Grill 决定必须在 Spec 中可追踪。
+   由 Agent 判断已提交的新答复/插话/批注是补充、推翻、疑问还是调整顺序。改变需求时先同步 decisions.md 的当前结论、原始答复编号和取代关系，再落实到对应 BEH/TC；无关决定保留。一个决定一行说明“依据哪条原话 → 影响哪些行为/用例”，无需新增版本注册表或额外过程件。
+   decisions.md 也可能过时；与较新的用户原话冲突时先修正文档。set_target 是 Agent 的执行摘要，回执是 Agent 自述，都不能替代用户原话。明确矛盾直接修，只有真实歧义才合并追问；不因为格式、摘要或编号不一致循环校验。
    在“验收条件”内落实本模块测试设计：先统一写明被测入口、真实执行范围、外部依赖替身与环境；每个用例仅一行 `[TC-01｜函数 UT/模块 UT] **条件：**…；**操作：**…；**预期：**…`，不逐条标优先级。引用全局 Story 的职责、接口与相关场景，不复制整份需求级测试清单。编号稳定，供后续测试代码与执行证据对应。
    当前只开展函数级 UT 和模块级 UT。函数 UT 验证具体逻辑，模块 UT 经模块入口真实执行内部协作，按验证目标隔离外部依赖。单独 REST 接口调试、跨模块集成、MST 和部署后验证为后续预留，不自动列成本轮任务或验收缺口。UT 无法证明的真实环境行为说明证据边界，不扩展验证范围；已确认 UT 场景的环境缺失或自动化困难如实说明原因和影响，不能删掉场景或标为通过。设计供检视，不新增 hook、覆盖率阈值或用例编号门禁。
 5. 执行 `python "{MAEFLOW_PATH}" local-spec validate`。校验失败时修改本地 Spec 后重试，不提交该文件。
