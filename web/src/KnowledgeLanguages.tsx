@@ -2,6 +2,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "cn";
 
 export const KNOWLEDGE_LANGUAGE_OPTIONS = [
   { id: "agnostic", label: "通用 / 语言无关" },
@@ -35,9 +36,9 @@ export function KnowledgeLanguageTags({ languages, empty = "未标注语言" }: 
     ? languages.filter((id): id is string => typeof id === "string" && !!id)
     : [];
   if (!normalized.length) {
-    return <span className="knowledge-language-empty">{empty}</span>;
+    return <span className="inline-block text-xs text-faint">{empty}</span>;
   }
-  return <span className="knowledge-language-tags">
+  return <span className="flex flex-wrap gap-1">
     {/* #216:原 .knowledge-language-tags em 徽标收编为 Badge brand(存量
         --accent 紫原色),发丝描边一并保留。 */}
     {normalized.map((id) => <Badge key={id} variant="brand"
@@ -66,10 +67,14 @@ export function KnowledgeLanguagePicker({ value, onChange,
   const options = !includeAgnostic
     ? KNOWLEDGE_LANGUAGE_OPTIONS.filter((item) => item.id !== "agnostic")
     : KNOWLEDGE_LANGUAGE_OPTIONS;
-  return <div className="knowledge-language-picker"
+  return <div className="flex flex-wrap gap-1.5"
     role="group" aria-label="适用语言，可多选">
     {options.map((option) => <button type="button"
       key={option.id} aria-pressed={value.includes(option.id)}
+      className={cn("rounded-full border px-2.5 py-1 text-sm transition-colors",
+        value.includes(option.id)
+          ? "border-primary bg-primary/5 font-bold text-primary"
+          : "border-line bg-surface text-muted-foreground hover:border-line-strong")}
       onClick={() => toggle(option.id)}>{option.label}</button>)}
   </div>;
 }
@@ -79,8 +84,8 @@ export function KnowledgeLanguageFilter({ value, onChange, counts }: {
   onChange: (value: string) => void;
   counts?: Map<string, number>;
 }) {
-  return <label className="knowledge-language-filter">
-    <span>工程语境</span>
+  return <label className="flex flex-none items-center gap-2">
+    <span className="text-sm font-bold text-muted-foreground">工程语境</span>
     <Select value={value}
       items={[{ value: "all", label: "全部语言" }, { value: "untagged", label: "未标注" },
         ...KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => ({

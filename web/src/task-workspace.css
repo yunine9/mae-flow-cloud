@@ -56,7 +56,6 @@
 .task-workspace-v2 .focus-review,
 .task-workspace-v2 .delivery-locate,
 .task-workspace-v2 .feedback-convert,
-.task-workspace-v2 .knowledge-catalog-badge,
 .task-workspace-v2 .workspace-review-invite-button {
   height: var(--control-h);
   padding: 0 12px;
@@ -86,7 +85,6 @@
 .task-workspace-v2 .focus-review:hover:not(:disabled),
 .task-workspace-v2 .delivery-locate:hover:not(:disabled),
 .task-workspace-v2 .feedback-convert:hover:not(:disabled),
-.task-workspace-v2 .knowledge-catalog-badge:hover,
 .task-workspace-v2 .workspace-review-invite-button:hover {
   color: var(--text-strong);
   border-color: var(--text-strong);
@@ -97,7 +95,6 @@
 /* 小号次级(28):卡片内的动作。 */
 .task-workspace-v2 .delivery-locate,
 .task-workspace-v2 .feedback-convert,
-.task-workspace-v2 .knowledge-catalog-badge,
 .task-workspace-v2 .workspace-review-invite-button,
 .task-workspace-v2 .ws-document-download { height: var(--control-h-sm); padding: 0 10px; font-size: var(--fs-12); border-radius: var(--radius-sm); }
 /* 文本按钮:无边无底,悬停变深。 */

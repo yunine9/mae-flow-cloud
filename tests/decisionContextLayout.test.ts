@@ -486,7 +486,9 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
     "记忆是快照,不参与重锚定提示");
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
-  assert.match(footprint, /className="knowledge-memories"/);
+  // #226 去 legacy:"这单记下的"记忆卡随 knowledge-memories 类退役改为
+  // 工具类卡壳;契约锚转向 aria-labelledby(仍是同一块记忆区)。
+  assert.match(footprint, /aria-labelledby="knowledge-memories-title"/);
   assert.match(footprint, /这单记下的/);
   assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
   assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");
