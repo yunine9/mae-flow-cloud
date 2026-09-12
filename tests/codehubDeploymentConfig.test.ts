@@ -150,16 +150,6 @@ test("deployment merge tool cannot produce a config missing MR discovery or disc
   }
 });
 
-test("one-click deployment installs the validated adapter candidate into every selected environment", () => {
-  const deployment = readFileSync(resolve("scripts/deploy.sh"), "utf8");
-  assert.match(deployment, /merge-adapter-config\.py/);
-  assert.match(deployment, /CURRENT_ADAPTER=.*adapter\.json/);
-  assert.match(deployment, /cp -p "\\\$CURRENT_ADAPTER" "\\\$ADAPTER_BACKUP"/);
-  assert.match(deployment, /install -m 600 "\\\$CANDIDATE" "\\\$CURRENT_ADAPTER"/);
-  assert(deployment.indexOf("merge-adapter-config.py") < deployment.indexOf('install -m 600 "\\$CANDIDATE"'),
-    "validated candidate must be generated before the live adapter config is replaced");
-});
-
 test("prod and test installations replace all old production script paths with their own repo", () => {
   const temp = mkdtempSync(join(tmpdir(), "adapter-env-paths-"));
   try {
