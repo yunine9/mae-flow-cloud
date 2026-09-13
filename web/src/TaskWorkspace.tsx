@@ -7,7 +7,6 @@ import { STORY_VIEWS, storyViewCoverage } from "../../src/storyViewCoverage";
 import { moduleStoryLine } from "./moduleStoryLocation";
 import { ResizableReviewPane } from "./ResizableReviewPane";
 import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
-import "./overall-story.css";
 /**
  * 任务工作台:决策发生在哪里,证据就在哪里。
  *

@@ -1,21 +1,9 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { RootErrorBoundary } from "./RootErrorBoundary";
-import "./tokens.css";
-import "./style.css";
-import "./task-workspace.css";
-import "./conversation.css";
-import "./workspace-studio.css";
-import "./help.css";
-// 错误页样式单独一个文件,不并进 style.css:那是全站共享的热点文件,
-// 几路改动同时往文件尾追加会互相踩(实测撞过一次)。样式在这里引,
-// 不在组件里引——组件要能被 node 测试直接 import,而 node 加载不了 .css。
-import "./rootError.css";
-import "./task-journey.css";
-import "./surface-finish.css";
-import "./markdown-lines.css";
-import "./tailwind.css"; // 必须排在存量 css 之后:层序靠 import 顺序,utilities 恒压过 legacy
-import "./preflight-compat.css"; // 必须紧随 tailwind.css:同在 base 层,后到者胜过 preflight
+// #233 收官:16 个 legacy CSS 文件与 preflight-compat 已全部退役,
+// 手写样式只剩 tailwind.css 唯一入口(层序声明在其头部,与加载顺序无关)。
+import "./tailwind.css";
 
 // 主题:URL 仅用于截图/核查;日常选择持久化。第一次访问才跟随系统，
 // 之后由用户明确选择，避免刷新时在明暗之间闪烁。

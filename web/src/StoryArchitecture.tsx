@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { withArchifyPresentation } from "./archifyPresentation";
-import "./story-architecture.css";
 import { storyViewCoverage, type StoryViewCoverage } from "../../src/storyViewCoverage";
 import { storyViewTitles } from "./storyViewTitles";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -142,34 +141,37 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     return () => controller.abort();
   }, [key, base, diagram, projection]);
   const current = rendered?.key === key ? rendered : undefined;
-  return <section className="story-architecture" aria-label="Story 架构图">
-    <header className="story-architecture-header">
-      <div><strong>架构图</strong><p>这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
-      <div className="story-architecture-actions">
-        <button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button>
-        {canUpdate && <button type="button" onClick={() => void updateArchitecture()} disabled={submitting || job.busy}
+  // 皮(#233 收官):原 story-architecture.css 换装为工具类(按钮/错误盒配方见 btn/errbox)。
+  const btn = "cursor-pointer rounded-[7px] border border-line bg-surface px-3 py-[7px] transition-colors hover:border-primary hover:text-primary";
+  const errbox = "w-full rounded-lg border border-attention/30 bg-attention/5 p-2.5 text-left [&_summary]:cursor-pointer [&_summary]:text-xs [&_summary]:text-attention [&_summary]:[overflow-wrap:anywhere] [&_pre]:mt-2.5 [&_pre]:max-h-60 [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:font-mono [&_pre]:text-xs [&_pre]:leading-[1.65] [&_pre]:text-text";
+  return <section className="flex-1 min-w-0 min-h-0 overflow-auto p-5 max-[600px]:p-3" aria-label="Story 架构图">
+    <header className="flex flex-wrap items-start justify-between gap-3">
+      <div><strong className="text-[18px]">架构图</strong><p className="text-xs leading-[1.7] text-muted-foreground">这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={btn} onClick={onOpenStory}>阅读完整 Story ↗</button>
+        {canUpdate && <button type="button" className={btn} onClick={() => void updateArchitecture()} disabled={submitting || job.busy}
           aria-label="更新架构图" title="根据当前 Story 生成或更新架构图">{submitting || job.busy ? "更新中…" : "↻"}</button>}
       </div>
     </header>
-    {job.busy && <p className="story-architecture-progress" role="status" aria-live="polite">
+    {job.busy && <p className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-[13px] text-muted-foreground" role="status" aria-live="polite">
       <span>{job.detail?.progress || (job.detail?.kind === "architecture" ? "Agent 正在更新架构图" : "Story 正在更新，请稍候")}</span>
       {job.detail?.started_at && Number.isFinite(Date.parse(job.detail.started_at)) && <small aria-live="off">
         已用时 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 60000)} 分 {Math.floor(Math.max(0, now - Date.parse(job.detail.started_at)) / 1000) % 60} 秒
       </small>}
     </p>}
-    {job.errorKind === "architecture" && job.error && <details className="story-architecture-diagnostics story-architecture-error">
+    {job.errorKind === "architecture" && job.error && <details className={errbox}>
       <summary>上次架构图生成未完成 · 查看原因</summary><pre>{job.error}</pre>
     </details>}
     {error ? <Empty className="min-h-[280px]">
       <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
       <EmptyTitle>架构图暂时无法读取</EmptyTitle>
       <EmptyDescription>错误只影响架构图展示，可以稍后重试。</EmptyDescription>
-      <EmptyContent><details className="story-architecture-diagnostics story-architecture-error">
+      <EmptyContent><details className={errbox + " mt-3"}>
         <summary>查看失败详情</summary><pre>{error}</pre>
       </details></EmptyContent>
     </Empty> : !projection ? <p role="status">正在读取 Story…</p> : <>
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
-        <p className="story-architecture-warning" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}
+        <p className="text-xs text-attention [overflow-wrap:anywhere]" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}
       {availableViews.length > 0 ? <>
       {/* (#210)两套手搓 role=tablist 换 base-ui Tabs 原语:视角页签
           (story-view-coverage)与图页签(diagram)嵌套两层,键盘箭头、
@@ -180,20 +182,20 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
       <Tabs value={view?.id ?? null} className="contents"
         onValueChange={(value) => { setActiveView(String(value)); setSelected(""); }}>
         <TabsList variant="line" aria-label="已有架构图"
-          className="story-view-coverage h-auto w-full justify-start gap-0 p-0">
+          className="mt-5 grid h-auto w-full grid-cols-[repeat(auto-fit,minmax(160px,1fr))] justify-start gap-0 border-b border-line p-0">
           {availableViews.map((item) => <TabsTrigger key={item.id} value={item.id}
-            className="story-view-entry after:hidden h-auto"
+            className="grid h-auto min-w-0 justify-items-start gap-[5px] rounded-none border-0 border-b-2 border-transparent bg-transparent px-2.5 pb-3.5 pt-3 text-left after:hidden aria-selected:border-primary aria-selected:bg-surface-soft"
             title={item.label}>
-            <strong>{storyViewTitles[item.id]}</strong>
-            <span>{projection.diagrams.filter((diagram) => diagramView(diagram) === item.id).length} 张</span>
+            <strong className="text-sm leading-normal text-text [text-wrap:balance]">{storyViewTitles[item.id]}</strong>
+            <span className="text-[11px] text-muted-foreground">{projection.diagrams.filter((diagram) => diagramView(diagram) === item.id).length} 张</span>
           </TabsTrigger>)}
         </TabsList>
-        {view && <TabsContent value={view.id} className="story-view-detail"
+        {view && <TabsContent value={view.id} className="pt-[18px]"
           aria-label={view.label}>
-          <div className="story-view-detail-heading">
-            <div><strong>{storyViewTitles[view.id]}</strong><span>{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
-            <div className="story-view-actions">
-              <button type="button" onClick={() => onOpenView ? onOpenView(view.id) : onOpenStory()}>设计与意见 ↗</button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5"><strong className="text-[15px]">{storyViewTitles[view.id]}</strong><span className="text-[11px] text-muted-foreground">{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
+            <div className="flex flex-wrap gap-3.5">
+              <button type="button" className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline" onClick={() => onOpenView ? onOpenView(view.id) : onOpenStory()}>设计与意见 ↗</button>
             </div>
           </div>
           {diagrams.length > 0 && <Tabs value={diagram?.id ?? null} className="contents"
@@ -204,14 +206,16 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
                 className="h-auto flex-none px-3 py-1.5 text-xs">{item.title}</TabsTrigger>)}
             </TabsList>
           </Tabs>}
-          {current?.error ? <div className="story-architecture-failure">
+          {current?.error ? <div className="rounded-[10px] border border-line p-4 leading-[1.7] [&_details]:mt-3 [&_summary]:cursor-pointer [&_summary]:text-muted-foreground [&_pre]:max-h-70 [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:text-xs [overflow-wrap:anywhere]">
             <p role="status">这张图暂时无法展示。请在完整 Story 中批注反馈；图源修订后会自动更新。</p>
-            <button type="button" onClick={onOpenStory}>打开 Story 提意见</button>
+            <button type="button" className="mt-1 cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline" onClick={onOpenStory}>打开 Story 提意见</button>
             <details><summary>查看失败详情</summary><pre>{current.error}</pre></details>
           </div> : current?.html ? <iframe key={key} ref={frame} title={diagram.title} srcDoc={current.html}
-            className={presenting === key ? "is-presenting fixed inset-0" : undefined}
+            className={presenting === key
+              ? "fixed inset-0 z-(--z-modal) h-dvh w-screen max-w-none rounded-none border-0 bg-[#101620]"
+              : "block h-[max(560px,65vh)] w-full rounded-[10px] border border-line bg-[#101620] max-[600px]:h-[65vh] max-[600px]:min-h-[460px]"}
             allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
-            : <p className="story-view-loading" role="status">正在生成架构图…</p>}
+            : <p className="grid min-h-80 place-items-center text-[13px] text-muted-foreground" role="status">正在生成架构图…</p>}
         </TabsContent>}
       </Tabs></> : <Empty className="min-h-[280px]">
         <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
@@ -219,10 +223,10 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
         <EmptyDescription>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</EmptyDescription>
         <EmptyContent><button type="button" onClick={onOpenStory}>阅读完整 Story ↗</button></EmptyContent>
       </Empty>}
-      {(projection.warnings.length > 0) && <details className="story-architecture-diagnostics"><summary>{projection.warnings.length} 条图源提示</summary>
-        {projection.warnings.map((warning, i) => <p className="story-architecture-warning" key={i}>{warning}</p>)}
+      {(projection.warnings.length > 0) && <details className="mt-3 text-[11px] text-muted-foreground [&_summary]:cursor-pointer"><summary>{projection.warnings.length} 条图源提示</summary>
+        {projection.warnings.map((warning, i) => <p className="text-xs text-attention [overflow-wrap:anywhere]" key={i}>{warning}</p>)}
       </details>}
-      <details className="story-architecture-diagnostics"><summary>版本信息</summary>
+      <details className="mt-3 text-[11px] text-muted-foreground [&_summary]:cursor-pointer"><summary>版本信息</summary>
         <p>版本 {projection.revision.slice(0, 12)} · Archify {projection.renderer.slice(0, 8)}{diagram?.line && ` · Story 第 ${diagram.line} 行`}</p>
       </details>
     </>}

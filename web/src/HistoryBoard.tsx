@@ -60,6 +60,15 @@ interface HistoryBoardProps {
   onOpenTask?: (task: TaskSummary) => void;
 }
 
+/** 指标瓦片语调(原 .history-metric.{neutral,active,attention,success,danger})。 */
+const TONE = {
+  neutral: "text-muted-foreground",
+  active: "text-active",
+  attention: "text-attention",
+  success: "text-success",
+  danger: "text-danger",
+} as const;
+
 export function HistoryBoard({
   tasks,
   viewer,
@@ -96,15 +105,17 @@ export function HistoryBoard({
   const currentTasks = new Map(tasks.map((task) => [task.id, task]));
 
   return (
-    <section className="history-board">
-      <div className="history-intro">
+    <section className="grid gap-4">
+      <div className="flex items-center justify-between gap-6 rounded-xl border border-line
+        bg-surface px-6 py-[22px] shadow-xs">
         <div>
-          <span className="section-kicker">DELIVERY ARCHIVE</span>
-          <h2>成果档案</h2>
-          <p>这里保存待合入、完成、失败和取消的任务；进行中的工作回到“当前现场”查看。</p>
+          <h2 className="text-lg font-bold text-text-strong">成果档案</h2>
+          <p className="mt-[7px] text-sm text-muted-foreground">这里保存待合入、完成、失败和取消的任务；进行中的工作回到“当前现场”查看。</p>
         </div>
-        <button className="refresh-button" onClick={() => void load()}>
-          <svg viewBox="0 0 20 20" aria-hidden>
+        <button className="inline-flex h-[38px] cursor-pointer items-center gap-[7px] rounded-lg
+          border border-line-strong bg-surface px-[13px] text-[13.5px] font-bold text-text
+          hover:border-primary hover:text-primary" onClick={() => void load()}>
+          <svg viewBox="0 0 20 20" aria-hidden className="size-4 fill-none stroke-current stroke-[1.6]">
             <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
           </svg>
           刷新数据
@@ -120,11 +131,13 @@ export function HistoryBoard({
       )}
 
       {!loading && usingWorkspace && visibleEntries.length > 0 && (
-        <div className="history-source-note" role="status" title={unavailable}>
-          <span className="history-source-icon" aria-hidden>◎</span>
-          <span>
-            <strong>当前使用本服务保留的交付结果</strong>
-            <small>历史投影暂不可用；这里只展示已经形成结果的任务，恢复后会自动切换。</small>
+        <div className="-mt-2 mb-4 flex items-center gap-[11px] rounded-lg border border-primary/20
+          bg-primary/5 px-3.5 py-[11px]" role="status" title={unavailable}>
+          <span aria-hidden className="grid size-[26px] flex-none place-items-center rounded-lg
+            bg-surface text-base font-bold text-primary shadow-[inset_0_0_0_1px_var(--line)]">◎</span>
+          <span className="grid min-w-0 gap-0.5">
+            <strong className="text-[13px] text-text-strong">当前使用本服务保留的交付结果</strong>
+            <small className="text-[13px] leading-[1.45] text-muted-foreground">历史投影暂不可用；这里只展示已经形成结果的任务，恢复后会自动切换。</small>
           </span>
         </div>
       )}
@@ -143,19 +156,23 @@ export function HistoryBoard({
 
       {!loading && visibleEntries.length > 0 && (
         <>
-          <div className="history-metrics">
+          <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-4">
             {TILES.map((tile) => (
-              <div className={`history-metric ${tile.tone}`} key={tile.label}>
-                <span><i aria-hidden />{tile.label}</span>
-                <strong>
+              <div key={tile.label}
+                className={`flex min-h-[94px] flex-col justify-between rounded-lg border border-line bg-surface px-[15px] py-3.5 shadow-xs ${TONE[tile.tone]}`}>
+                <span className="flex items-center gap-[7px] text-[13px] font-semibold">
+                  <i aria-hidden className="size-2 rounded-full bg-current" />{tile.label}</span>
+                <strong className="text-[27px] leading-none tabular-nums">
                   {visibleEntries.filter((entry) => tile.match(entry.status)).length}
                 </strong>
               </div>
             ))}
           </div>
 
-          <div className="history-table">
-            <div className="history-table-head" aria-hidden>
+          <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-xs">
+            <div aria-hidden className="grid items-center gap-4 border-b border-line bg-surface-2 px-[15px] py-2.5
+              text-[13px] font-bold text-muted-foreground
+              [grid-template-columns:minmax(260px,2.25fr)_minmax(140px,1fr)_minmax(120px,0.8fr)_90px_100px_minmax(100px,0.7fr)]">
               <span>任务</span>
               <span>状态</span>
               <span>交付</span>
@@ -163,7 +180,7 @@ export function HistoryBoard({
               <span>最近更新</span>
               <span>操作</span>
             </div>
-            <div className="history-rows">
+            <div>
               {visibleEntries.map((entry) => {
                 const currentTask = currentTasks.get(entry.id);
                 const title = historyTaskTitle(entry);
@@ -174,19 +191,21 @@ export function HistoryBoard({
                 const canDelete = terminal && (viewer.role === "admin"
                   || entry.luban_account === viewer.username);
                 return (
-                  <div className="history-row" key={entry.id}>
-                    <div className="history-task">
-                      <span className="task-id">{entry.id}</span>
+                  <div key={entry.id} className="grid min-h-[70px] items-center gap-4 border-b border-line
+                    px-[15px] py-[11px] transition-colors last:border-b-0 hover:bg-surface-2
+                    [grid-template-columns:minmax(260px,2.25fr)_minmax(140px,1fr)_minmax(120px,0.8fr)_90px_100px_minmax(100px,0.7fr)]">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="w-fit rounded bg-surface-3 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{entry.id}</span>
                       {currentTask && onOpenTask ? (
                         <button
-                          className="history-task-button"
+                          className="group grid min-w-0 cursor-pointer justify-items-start gap-[3px] border-0 bg-none p-0 text-left focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-focus"
                           title={`${title} · 打开工作台`}
                           onClick={() => onOpenTask(currentTask)}
                         >
-                          <strong>{title}</strong>
-                          <span>打开工作台 <i aria-hidden>→</i></span>
+                          <strong className="max-w-full truncate text-sm font-bold text-text-strong group-hover:text-primary">{title}</strong>
+                          <span className="text-[13px] font-semibold text-muted-foreground group-hover:text-primary">打开工作台 <i aria-hidden className="not-italic">→</i></span>
                         </button>
-                      ) : <strong title={title}>{title}</strong>}
+                      ) : <strong title={title} className="truncate text-sm font-bold text-text-strong">{title}</strong>}
                       <TokenUsage usage={entry.token_usage} placement="history" />
                     </div>
                     <div>
@@ -194,31 +213,33 @@ export function HistoryBoard({
                         {STATUS_TEXT[entry.status] ?? entry.status}
                       </TaskStatusBadge>
                     </div>
-                    <div className="history-delivery">
+                    <div>
                       {entry.delivery?.mr_url ? (
                         <a
                           href={entry.delivery.mr_url}
                           target="_blank"
                           rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[13px] font-bold text-primary hover:underline"
                         >
                           MR · {entry.delivery.mr_state ?? "查看"}
-                          <svg viewBox="0 0 16 16" aria-hidden>
+                          <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 fill-none stroke-current stroke-[1.5]">
                             <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
                           </svg>
                         </a>
-                      ) : <span>—</span>}
+                      ) : <span className="text-faint">—</span>}
                     </div>
-                    <div className={`history-events${usingWorkspace ? " current" : ""}`}>
+                    <div className="flex flex-col">
                       {usingWorkspace ? (
-                        <><strong>现场</strong><span>查看详情</span></>
+                        <><strong className="text-[13px] text-primary">现场</strong><span className="text-[13px] text-muted-foreground">查看详情</span></>
                       ) : (
-                        <><strong>{entry.event_count}</strong><span>个事件</span></>
+                        <><strong className="text-[15px] text-text-strong">{entry.event_count}</strong><span className="text-[13px] text-muted-foreground">个事件</span></>
                       )}
                     </div>
-                    <time dateTime={entry.updated_at}>{timeAgo(entry.updated_at)}</time>
-                    <div className="history-actions">
+                    <time dateTime={entry.updated_at} className="text-[13px] text-muted-foreground">{timeAgo(entry.updated_at)}</time>
+                    <div className="flex flex-wrap justify-end gap-[5px]">
                       {canRerun && (
                         <button type="button" disabled={Boolean(busy)}
+                          className="min-h-[30px] cursor-pointer rounded-[7px] border border-line-strong bg-surface px-[9px] text-[13px] font-bold text-text hover:border-primary hover:text-primary disabled:cursor-wait disabled:opacity-55"
                           onClick={async () => {
                             if (!await confirmDialog({
                               title: "清空重跑",
@@ -247,7 +268,8 @@ export function HistoryBoard({
                         </button>
                       )}
                       {canDelete && (
-                        <button type="button" className="danger"
+                        <button type="button"
+                          className="min-h-[30px] cursor-pointer rounded-[7px] border border-line-strong bg-surface px-[9px] text-[13px] font-bold text-text hover:border-danger/55 hover:text-danger disabled:cursor-wait disabled:opacity-55"
                           disabled={Boolean(busy)} onClick={async () => {
                             if (!await confirmDialog({
                               title: "彻底删除任务",
@@ -276,7 +298,7 @@ export function HistoryBoard({
                           {busy === entry.id ? "删除中…" : "彻底删除"}
                         </button>
                       )}
-                      {!canRerun && !canDelete && <span>—</span>}
+                      {!canRerun && !canDelete && <span className="text-[13px] text-faint">—</span>}
                     </div>
                   </div>
                 );

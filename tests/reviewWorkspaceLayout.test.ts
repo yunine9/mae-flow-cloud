@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 const userPicker = readFileSync(
@@ -28,7 +28,7 @@ test("内容页签与阅读检视工具是独立区域，检视仍随时可开�
 });
 
 test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   // 检视画布已抽成 ResizableReviewPane(可拖宽),类名与滚动语义随组件走。
   assert.match(workspace, /<ResizableReviewPane open=\{reviewPanelOpen\}>/);
   assert.match(reviewPane, /className="ws-review-canvas"/);
@@ -38,7 +38,7 @@ test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
 });
 
 test("嵌入工作台的文件树和代码变更各自独立滚动", () => {
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(studio,
     /\.workspace-studio\.task-workspace-v2 \.ws-doc\.is-diff\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/s);
   assert.match(studio,
@@ -72,15 +72,12 @@ test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () =>
 });
 
 test("快速提问题常驻右下角且使用横向小按钮", () => {
-  const trigger = css.indexOf(".wish-quick-trigger {");
-  assert.ok(trigger >= 0);
-  const rule = css.slice(trigger, trigger + 700);
-  assert.match(rule, /right:\s*18px;/);
-  assert.match(rule, /bottom:\s*18px;/);
-  assert.match(rule, /top:\s*auto;/);
-  assert.match(rule, /display:\s*inline-flex;/);
-  assert.match(rule, /border-radius:\s*999px;/);
-  assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
+  // #233 收官:原 .wish-quick-trigger 皮肤类换装为 WishQuickCreate 工具类,
+  // 布局契约(fixed 右下 18px、胶囊、横排小按钮)钉在工具类串上。
+  const fab = readFileSync(join(process.cwd(), "web/src/WishQuickCreate.tsx"), "utf8");
+  assert.match(fab, /wish-quick-fab fixed right-\[18px\] bottom-\[18px\] z-\[650\] inline-flex/);
+  assert.match(fab, /rounded-full border-0 bg-primary px-3\.5 text-primary-foreground shadow-lg max-\[760px\]:bottom-\[76px\] max-\[760px\]:right-3/);
+  assert.match(fab, /<strong className="text-xs">提问题<\/strong>/);
 });
 
 test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
@@ -125,7 +122,7 @@ test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对�
   assert.match(workspace, /className="workspace-review-notes"/);
   assert.match(workspace, /className="workspace-review-opinions"/);
   assert.match(css, /\.workspace-review-notes\s*\{[^}]*width:\s*min\(1220px, 100%\)/s);
-  const annotate = readFileSync(join(process.cwd(), "web/src/annotate.css"), "utf8");
+  const annotate = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(annotate,
     /\.workspace-review-notes \.annot-item:has\(\.annot-response\)[^{]*\{[^}]*grid-template-columns:/s);
 });

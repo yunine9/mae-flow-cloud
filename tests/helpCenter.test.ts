@@ -6,7 +6,7 @@ import test from "node:test";
 const source = readFileSync(resolve("web/src/HelpCenter.tsx"), "utf-8");
 const appSource = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const markdownSource = readFileSync(resolve("web/src/markdown.tsx"), "utf-8");
-const cssSource = readFileSync(resolve("web/src/help.css"), "utf-8");
+const cssSource = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 const lubanSource = readFileSync(resolve("web/src/LubanTokenCard.tsx"), "utf-8");
 const settingsSource = readFileSync(resolve("web/src/SettingsView.tsx"), "utf-8");
 
@@ -42,7 +42,7 @@ test("帮助文章能搜动作和提示，不要求用户记住内部功能名",
 
 test("个人设置的小鲁班卡直接说明 /mfc 激活前置条件", () => {
   assert.match(lubanSource, /手机回复/);
-  assert.match(lubanSource, /<code>\/mfc<\/code> 激活 Mae-Flow 插件/);
+  assert.match(lubanSource, /<code[^>]*>\/mfc<\/code> 激活 Mae-Flow 插件/);
   assert.match(lubanSource, /测试连通性/);
   assert.match(lubanSource, /testLubanConnection/);
 });
@@ -111,7 +111,7 @@ test("帮助说大白话，重点色只使用蓝绿红三种固定意思", () =>
 
 test("真实截图可用键盘打开，并能通过关闭按钮、背景和 Esc 退出", () => {
   assert.match(source,
-    /className="help-shot-frame"[\s\S]*onClick=\{\(\) => setExpanded\(true\)\}[\s\S]*aria-label=\{`放大查看：/);
+    /className="help-shot-frame[\s\S]*onClick=\{\(\) => setExpanded\(true\)\}[\s\S]*aria-label=\{`放大查看：/);
   // (#206)手搓 help-lightbox 换 base-ui Dialog 原语:role=dialog/aria-modal、
   // 背景点击与 Esc 关闭、焦点圈与归还触发钮都归原语;页面只管开关状态,
   // 三条退出路径(关闭钮/背景/Esc)统一汇入 onOpenChange(false)。
@@ -124,7 +124,7 @@ test("截图预览锁住背景且限制在视口内，加载失败不留下破�
   // 背景滚动锁随 lightbox 一起交给 base-ui Dialog 原语(modal 打开即锁);
   // 视口上限由 DialogContent 宽度上限与图容器高度上限承担。
   assert.match(source, /<DialogContent showCloseButton=\{false\}/);
-  assert.match(source, /className="help-lightbox-image h-\[min\(70vh,640px\)\]"/);
+  assert.match(source, /className="help-lightbox-image [\s\S]*?h-\[min\(70vh,640px\)\]/);
   assert.match(source,
     /function hideOnError\(\) \{[\s\S]*setExpanded\(false\);[\s\S]*setFailed\(true\)/);
   assert.equal((source.match(/onError=\{hideOnError\}/g) ?? []).length, 2);

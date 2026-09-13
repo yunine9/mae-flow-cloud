@@ -25,7 +25,7 @@ test("批注真实浏览器：责任人答复、闭环、重开、交给 Agent �
     if (process.env.MFC_ANNOTATION_SCREENSHOT) assert.ok(existsSync(assets), "截图前请运行 npm --prefix web run build");
     const css = existsSync(assets) ? readdirSync(assets).filter((name) => name.endsWith(".css"))
       .map((name) => readFileSync(join(assets, name), "utf8")).join("\n")
-      : readFileSync(resolve("web/src/annotate.css"), "utf8");
+      : readFileSync(resolve("web/src/tailwind.css"), "utf8");
     writeFileSync(path, '<!doctype html><html data-theme="light"><meta charset="utf-8"><style>' + css
       + '</style><style>body { padding:32px; } #app { max-width:880px; margin:auto; } #result { display:none; }</style><div class="workspace-studio task-workspace-v2"><div id="app" class="workspace-review-notes"></div></div><pre id="result"></pre><script>'
       + result.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>");

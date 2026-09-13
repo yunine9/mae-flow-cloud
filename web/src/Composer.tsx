@@ -13,7 +13,6 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import "./composer-decision.css";
 import {
   getBusinessModules,
   getDeveloperAssistant,
@@ -34,7 +33,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert } from "@/components/Alert";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import "./steer.css";
 
 /** sync=通知所有子任务:只有跨仓子任务有这一档。 */
 export type CollaborationMode = "steer" | "assistant" | "sync";

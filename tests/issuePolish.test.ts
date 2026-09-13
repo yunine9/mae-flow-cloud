@@ -375,7 +375,7 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   // 簇二退役),图片限高与灯箱行为断言改钉组件源码。
   assert.match(editor, /z-\[80\] flex cursor-zoom-out items-center justify-center bg-black\/70/);
   assert.match(editor, /setZoom\(target\.getAttribute\("src"\)\)/);
-  const css = readFileSync(resolve("web/src/style.css"), "utf-8");
+  const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
   assert.match(editor,
     /\[&_img\]:max-h-\[200px\]/,
     "编辑器图片限高 200px(ProseMirror 生成节点用任意变体直译)");

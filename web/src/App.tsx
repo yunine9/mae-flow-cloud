@@ -1554,10 +1554,10 @@ export function App() {
             tasks={tasks}
             onOpen={openArtifacts}
           />}
-          <section className="task-section mt-0 mb-8" aria-labelledby="current-work-title">
-            <div className="section-head"><div><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="inline-flex h-7 items-center gap-[5px] rounded-full border border-(--line) px-2.5 text-xs font-medium text-(--muted) shadow-[var(--shadow-control)] transition-colors hover:border-(--line-strong) hover:text-(--text-strong)" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden className="not-italic text-(--faint)">⇅</i></button></div></div>
+          <section className="mt-0 mb-8" aria-labelledby="current-work-title">
+            <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="text-[13px] font-medium tabular-nums text-attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">{myIntervention.length} 项需介入</span>}<span className="text-[13px] font-medium tabular-nums text-muted-foreground">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="inline-flex h-7 items-center gap-[5px] rounded-full border border-(--line) px-2.5 text-xs font-medium text-(--muted) shadow-[var(--shadow-control)] transition-colors hover:border-(--line-strong) hover:text-(--text-strong)" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden className="not-italic text-(--faint)">⇅</i></button></div></div>
             {visibleMyWork.length === 0 && <div className="flex items-center gap-2.5 border-b border-(--line) px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p className="mt-px text-sm text-(--muted)">{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard compact relatedTasks={tasks} key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
+            <div className="grid gap-2">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard compact relatedTasks={tasks} key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} allTasks={tasks} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
@@ -1727,9 +1727,9 @@ function CommitterInbox({
   onOpen: (task: TaskSummary) => void;
 }) {
   return <section className="rounded-[14px] border border-(--accent)/25 bg-[color-mix(in_srgb,var(--accent-soft)_18%,var(--surface))] p-5" aria-labelledby="committer-inbox-title">
-    <div className="section-head">
+    <div className="mb-3 flex items-baseline justify-between gap-4">
       <div><h2 id="committer-inbox-title">待我检视</h2></div>
-      <span className="section-count attention">{reviews.length} 项</span>
+      <span className="text-[13px] font-medium tabular-nums text-attention">{reviews.length} 项</span>
     </div>
     {reviews.length === 0
       ? <div className="flex items-center gap-2.5 px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">当前没有待检视任务</strong><p className="mt-px text-sm text-(--muted)">责任人主动邀请后会出现在这里。</p></div></div>
@@ -1895,18 +1895,18 @@ function UsersBoard({ me }: { me: string }) {
       setError(reason instanceof Error ? reason.message : "账号删除失败");
     }
   }
-  return <section className="user-admin">
-    <div className="user-create-card">
-      <div className="user-create-copy">
+  return <section className="grid gap-6">
+    <div className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+      <div className="bg-surface-2 p-7 text-muted-foreground">
         
         <h2>添加团队成员</h2>
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
-      <form className="user-create-form" onSubmit={submit}>
-        <label><span>登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
-        <label><span>姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
-        <label><span>初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
-        <label><span>账号角色</span><Select value={role}
+      <form className="grid content-start items-end gap-[15px] p-[26px] sm:grid-cols-2" onSubmit={submit}>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">账号角色</span><Select value={role}
           items={[{ value: "developer", label: "开发成员" }, { value: "admin", label: "管理员" }]}
           onValueChange={(value) => setRole((value ?? "developer") as UserRole)}>
           <SelectTrigger className="w-full" aria-label="账号角色"><SelectValue /></SelectTrigger>
@@ -1918,14 +1918,14 @@ function UsersBoard({ me }: { me: string }) {
           </SelectContent>
         </Select></label>
         <button type="submit" disabled={busy}>{busy ? "正在创建…" : "创建账号"}</button>
-        {message && <div className="form-message success">{message}</div>}
-        {error && <div className="form-message error">{error}</div>}
+        {message && <div className="rounded-lg bg-success/10 px-[11px] py-[9px] text-[13.5px] text-success">{message}</div>}
+        {error && <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{error}</div>}
       </form>
     </div>
     <section className="rounded-[12px] border border-(--line) bg-(--surface) p-6 shadow-xs" aria-labelledby="user-list-title">
-      <div className="section-head">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
         <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知。</p></div>
-        <span className="section-count">{users.length} 人</span>
+        <span className="text-[13px] font-medium tabular-nums text-muted-foreground">{users.length} 人</span>
       </div>
       {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
           列结构(成员/角色/默认入口/Committer/操作)与行内操作、角色徽标
@@ -2121,10 +2121,10 @@ function TeamDashboard({
       selectedStatus={taskStatus} onSelectPhase={selectPhase}
       onSelectStatus={selectTaskStatus} />
 
-    <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
-      <div className="task-filters" aria-label="筛选当前现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
+    <section id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
+      <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={cn("text-[13px] font-medium tabular-nums", phase || taskStatus ? "text-primary" : "text-muted-foreground")}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
+      <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选当前现场">
+        <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
         <Select value={scope}
           items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞任务" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等待决策" }]}
           onValueChange={(value) => setScope((value ?? "all") as TeamScope)}>
@@ -2152,10 +2152,10 @@ function TeamDashboard({
             </SelectGroup>
           </SelectContent>
         </Select>
-        {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
+        {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="h-[34px] cursor-pointer rounded-[7px] border-0 bg-primary/10 px-[11px] text-[13px] font-bold text-primary" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{orderHierarchyBy(visible,
+      <div className="grid gap-2">{orderHierarchyBy(visible,
         (item) => item.teamTask.id,
         (item) => item.task?.parent_task_id,
       ).map((item) => <TaskCard compact relatedTasks={tasks} key={item.teamTask.id} task={item.task!} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />)}</div>
@@ -2184,10 +2184,10 @@ function TaskGroup({
   empty?: string;
   tone?: string;
 }) {
-  return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
-    <div className="section-head"><div><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
+  return <section>
+    <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2>{title}</h2></div><span className={cn("text-[13px] font-medium tabular-nums text-muted-foreground", tone === "attention" && "text-attention", tone === "danger" && "text-danger", tone === "active" && "text-active")}>{tasks.length} 项</span></div>
     {tasks.length === 0 && <div className="flex items-center gap-2.5 border-b border-(--line) px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">{empty ?? "当前没有任务"}</strong></div></div>}
-    <div className="task-list">{orderTaskHierarchy(tasks).map((task) => <TaskCard compact relatedTasks={allTasks} key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
+    <div className="grid gap-2">{orderTaskHierarchy(tasks).map((task) => <TaskCard compact relatedTasks={allTasks} key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
       const related = allTasks.find((item) => item.id === taskId);
       if (related) onOpenArtifacts(related);
     }} />)}</div>
@@ -2196,6 +2196,10 @@ function TaskGroup({
 
 /** 总览只保留一层规模摘要；阶段与状态作为轻量筛选项呈现。
  * 规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
+/** 概览格按钮配方(原 .delivery-breakdown-cells button 家族,与问题侧同款)。 */
+const CELL_BASE = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-line bg-surface px-[11px] py-1.5 text-left text-text transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:cursor-default disabled:opacity-55";
+const CELL_SELECTED = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-primary/60 bg-primary/10 px-[11px] py-1.5 text-left text-primary transition-colors";
+
 function TeamDeliveryOverview({
   stats,
   selectedPhase,
@@ -2209,51 +2213,51 @@ function TeamDeliveryOverview({
   onSelectPhase: (phase: string) => void;
   onSelectStatus: (status: string) => void;
 }) {
-  return <section className="team-delivery-overview" aria-label="团队需求统计">
-    <header className="team-delivery-overview-head">
-      <div className="team-delivery-overview-copy">
+  return <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="团队需求统计">
+    <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
+      <div className="grid min-w-0 gap-[3px]">
         
-        <h2>交付概览</h2>
-        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
+        <h2 className="m-0 text-lg text-text-strong">交付概览</h2>
+        <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
       </div>
-      <div className="team-delivery-summary"
+      <div className="flex flex-none items-center gap-[18px]"
         aria-label={`需求总数 ${stats.requirements} 项（仅主任务），全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
-        <span className="summary-total" title="主任务数量，不含子任务和已取消任务"><strong>{stats.requirements}</strong><small>需求总数</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5" title="主任务数量，不含子任务和已取消任务"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-text-strong">{stats.requirements}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">需求总数</small></span>
         <i aria-hidden />
-        <span className="summary-total"><strong>{stats.total}</strong><small>全部任务</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-text-strong">{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">全部任务</small></span>
         <i aria-hidden />
-        <span className="summary-active"><strong>{stats.delivering}</strong><small>交付中</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.delivering}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">交付中</small></span>
         <i aria-hidden />
-        <span className="summary-complete"><strong>{stats.delivered}</strong><small>已交付</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.delivered}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已交付</small></span>
       </div>
     </header>
-    <div className="team-delivery-breakdown">
-      <section aria-labelledby="delivery-stage-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">阶段</strong>
-          <small>当前所处流程</small></div>
-        <div className="delivery-breakdown-cells">
+    <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
+      <section aria-labelledby="delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid gap-0.5"><strong id="delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
+          <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
           {stats.stages.map((entry) => <button type="button" key={entry.key}
-            className={selectedPhase === entry.key ? "selected" : ""}
+            className={selectedPhase === entry.key ? CELL_SELECTED : CELL_BASE}
             disabled={entry.count === 0} aria-pressed={selectedPhase === entry.key}
             aria-controls="team-queue" onClick={() => onSelectPhase(entry.key)}>
             <span>{entry.key}</span><strong>{entry.count}</strong>
           </button>)}
-          {!stats.stages.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+          {!stats.stages.length && <div className="col-span-full text-[13px] text-faint">暂无交付中任务</div>}
         </div>
       </section>
-      <section aria-labelledby="delivery-status-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-status-title">任务状态</strong>
-          <small>当前运行情况</small></div>
-        <div className="delivery-breakdown-cells status-cells">
+      <section aria-labelledby="delivery-status-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid gap-0.5"><strong id="delivery-status-title" className="text-[13.5px] text-text-strong">任务状态</strong>
+          <small className="text-[13px] text-muted-foreground">当前运行情况</small></div>
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
           {stats.statuses.map((entry) => <button type="button" key={entry.key}
-            className={selectedStatus === entry.key ? "selected" : ""}
+            className={selectedStatus === entry.key ? CELL_SELECTED : CELL_BASE}
             disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
             <span>{entry.label}</span>
             <strong>{entry.count}</strong>
           </button>)}
-          {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+          {!stats.statuses.length && <div className="col-span-full text-[13px] text-faint">暂无交付中任务</div>}
         </div>
       </section>
     </div>

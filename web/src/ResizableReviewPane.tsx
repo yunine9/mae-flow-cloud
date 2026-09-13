@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import "./resizable-review-pane.css";
 
 const WIDTH_KEY = "mae-flow:review-pane-width";
 

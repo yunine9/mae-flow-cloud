@@ -1,4 +1,3 @@
-import "./workflow.css";
 
 export { AssetPicker } from "./AssetPicker";
 export { SchemeSelector, type WorkflowSchemeSelection } from "./SchemeSelector";

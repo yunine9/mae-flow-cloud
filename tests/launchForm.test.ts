@@ -1050,8 +1050,8 @@ test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话
 
 test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比色来自主题令牌", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
-  const tokens = readFileSync(join(process.cwd(), "web/src/tokens.css"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
+  const tokens = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
   assert.match(source, /probeRepositories\(repositoriesToProbe/);
   assert.match(source, /repositoryProbeBlocked/);
   assert.match(source, /正在检查仓库地址/);
@@ -1073,7 +1073,7 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
 
 test("分析主任务先选讨论参与人，拆分后再逐单元填写执行人和 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
   const api = readFileSync(join(process.cwd(), "web/src/api.ts"), "utf-8");
@@ -1106,7 +1106,8 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
   // 执行人与 AR 都属于最终交付单元；执行人始终可选，免单号的分析
   // 主任务在同一确认区补齐 AR。
-  assert.match(picker, /<div className="repository-assignee-editable">/);
+  // #233 收官:皮肤类换装为工具类,负责人栏保持 grid 小标签 + UserPicker。
+  assert.match(picker, /<div className="grid min-w-0 gap-\[3px\]">\s*<small className="text-xs text-muted-foreground">负责人<\/small>/);
   assert.match(picker, /ariaLabel=\{\`\$\{rowLabel\}的执行人\`\}/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
   // #214 输入簇换装后,单号编辑框是 shadcn Input(属性逐一保真)。

@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 
-const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 const taskCard = readFileSync(
   join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
 const studio = readFileSync(
-  join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const stream = readFileSync(
   join(process.cwd(), "web/src/ConversationStream.tsx"), "utf8");
 
@@ -158,7 +158,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.doesNotMatch(foot, /批注作者/, "作者与时间已在说话人行,页脚不重复");
 
   const annotate = readFileSync(
-    join(process.cwd(), "web/src/annotate.css"), "utf8");
+    join(process.cwd(), "web/src/tailwind.css"), "utf8");
   // 宽抽屉的两列网格:锚点已并进意见块,不再单独占一行、不再点名区域。
   assert.match(annotate,
     /grid-template-areas:\s*"head head"\s*"note response"\s*"foot foot"/s);
@@ -168,7 +168,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.match(annotate, /\.annot-speaker > i \{[^}]*border-radius: 50%/);
   assert.match(annotate, /\.annot-item \.annot-response \{ border-left-color: var\(--success\)/);
   assert.match(annotate, /\.annot-item \.annot-response\.outcome-needs_clarification \{ border-left-color: var\(--danger\)/);
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.doesNotMatch(studio, /\.annot-item-head \{[^}]*flex-direction: column/);
 });
 
@@ -213,12 +213,15 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   // #227:ws-decision 死家族退役,原"右栏底部让开提问题浮钮"的 84px 死白
   // 一并删除——浮钮现在在工作台打开期间整体收起(studio 规则),画布自己
   // 滚,不再需要躲避留白。
-  assert.match(studio, /body:has\(\.workspace-studio\) \.wish-quick-trigger \{ display: none; \}/,
+  // #233 收官:浮钮收起规则迁非分层附录(宿主类随换装改为 wish-quick-fab)。
+  assert.match(css, /body:has\(\.workspace-studio\) \.wish-quick-fab \{\s*display: none;/,
     "提问题浮钮在工作台打开期间收起,右栏不再留死白躲避");
   assert.match(css, /\.options\.compact \.custom-entry \{ grid-column: 1 \/ -1;/,
     "逃生口选项降成通栏一行");
-  assert.match(css, /\.repository-assignee-list > label \{[^}]*grid-template-columns: minmax\(150px, 1fr\) minmax\(140px, \.65fr\) minmax\(125px, \.5fr\) auto/s,
-    "分工行保持 名字/负责人/单号/状态 四列栅格(不再借道死掉的 .ws-decision 前缀)");
+  // #233 收官:只读分工行已随 RepositoryAssigneePicker 化退役;确认卡上
+  // 执行人/单号两列表单的布局契约钉在 Picker 的工具类上。
+  assert.match(picker, /mt-3 grid grid-cols-2 gap-3 max-\[600px\]:grid-cols-1/,
+    "分工表单保持 负责人/单号 两列栅格");
 });
 
 test("检视画布标题栏按自己的高度占位,副标题不被裁", () => {
@@ -341,7 +344,7 @@ test("检视意见弹层里的批注面板默认展开", () => {
   assert.doesNotMatch(panel, /useState\(drafts\.length > 0/);
   // Agent 对批注的回应也是多行正文,换行要保住(用户实锤"只显示一行")。
   const annotateCss = readFileSync(
-    join(process.cwd(), "web/src/annotate.css"), "utf8");
+    join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(annotateCss,
     /\.annot-response p \{[^}]*white-space:\s*pre-wrap/);
 });
@@ -431,7 +434,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
 });
 
 test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML 可原地全屏", () => {
-  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../web/src/tailwind.css", import.meta.url), "utf8");
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
@@ -476,7 +479,7 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
   assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
   assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
   assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
-  const studioCss = readFileSync(new URL("../web/src/workspace-studio.css", import.meta.url), "utf8");
+  const studioCss = readFileSync(new URL("../web/src/tailwind.css", import.meta.url), "utf8");
   assert.match(studioCss,
     /\.ws-material-stage \{ display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; \}/,
     "材料舞台是一行 flex:画布开着时材料内容自己收窄,不靠 padding 让位");

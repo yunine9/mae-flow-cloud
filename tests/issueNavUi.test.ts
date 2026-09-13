@@ -18,7 +18,7 @@ const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
-const legacyCss = readFileSync(resolve("web/src/style.css"), "utf-8");
+const legacyCss = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
 /** 侧边栏导航区(视图切换)整段,角色分支再切片。 */
 function navSlices(): { nav: string; admin: string; developer: string } {
@@ -40,11 +40,13 @@ test("Beta 全摘:标签文字、悬停/读屏提示、导航按钮 beta 分支�
   assert.ok(developer.includes('view="issues"'), "开发侧栏缺问题处理入口");
 });
 
-test("父行=展开/收起开关:Collapsible 承载,箭头旋转指示,点击不跳页", () => {
-  assert.match(app, /from "radix-ui"/, "折叠原语应来自 radix-ui(已在依赖)");
+test("父行=展开/收起开关:本地 open 态承载,箭头旋转指示,点击不跳页", () => {
+  // #233 收官前改锚:折叠不再借 radix Collapsible,由 IssueNavGroup 本地
+  // open 状态承担(shadcn SidebarMenuButton + aria-expanded),语义不变。
+  assert.match(app, /const \[open, setOpen\] = useState\(current === view\)/,
+    "父行开关是本地展开态");
+  assert.match(app, /aria-expanded=\{open\}/, "展开态进 aria");
   assert.match(app, /ChevronDown/, "展开指示箭头(lucide)");
-  assert.match(app, /Collapsible\.Trigger/, "父行是触发器");
-  assert.match(app, /Collapsible\.Content/, "子页签区是折叠内容");
   assert.match(app, /rotate-180/, "展开态箭头旋转 180°");
   // 父行沿用存量 nav-item 家族(视觉零跳变),但不再走 onSelect 跳页。
   const { nav } = navSlices();
@@ -76,8 +78,9 @@ test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见�
   assert.ok(group.indexOf('{ tab: "sessions"') < group.indexOf('{ tab: "register"')
     && group.indexOf('{ tab: "register"') < group.indexOf('{ tab: "dts"'),
     "子页签顺序应为 问题会话 → 问题登记 → DTS 列表");
-  // 子页签行走新 Tailwind 轨道:tw-root 归一(与台账页同纪律)。
-  assert.match(group, /tw-root/, "子页签区挂 tw-root(scoped 归一)");
+  // 子页签行走 shadcn SidebarMenuSubButton 轨道(原 tw-root scoped 归一随
+  // preflight 全局化退役,见 tailwind.css base 层)。
+  assert.match(group, /SidebarMenuSubButton/, "子页签是 shadcn Sidebar 子按钮");
 });
 
 test("子页签状态:默认落问题会话,选择经父层驱动右侧页面", () => {

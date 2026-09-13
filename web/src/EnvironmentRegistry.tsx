@@ -10,7 +10,7 @@
  * 占位,留空 = 不变;root 密码留空 = 继承后台密码,已单独配置的条目可一键
  * 清除回落继承。台账全员可读写,写操作 updated_by 由服务端记。
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   deleteEnvironment,
   listEnvironments,
@@ -18,9 +18,10 @@ import {
   type EnvironmentForm,
   type EnvironmentView,
 } from "./api";
-import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Filter } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown } from "lucide-react";
 import { PersonName, usePersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
+import { HeaderFilter } from "./HeaderFilter";
 import { formatLocalDateTime, relativeTime } from "./time";
 import {
   ENVIRONMENT_FORM_TEXT,
@@ -29,11 +30,6 @@ import {
 } from "./EnvironmentEditorDialog";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -120,45 +116,7 @@ function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
     : <ArrowDown aria-hidden className="size-3" />;
 }
 
-/** 列头筛选钮 + 弹层壳:漏斗着色 = 该列筛选激活;children 拿 close(),
- * 选项类选完即关,文本输入类忽略。弹层 portal 到 body,必须自带
- * .tw-root 归一(同 EnvironmentPicker 的教训)。 */
-function HeaderFilter({ label, active, onClear, children }: {
-  label: string;
-  active: boolean;
-  /** 本列的清除动作:给了才在弹层底部出「清除此列筛选」。 */
-  onClear?: () => void;
-  children: (close: () => void) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger
-      render={
-        /* 激活的漏斗给 accent 小底块:哪列在筛,一眼可辨。 */
-        <button type="button" aria-label={`筛选 ${label}`}
-          title={active ? `筛选 ${label}(生效中,点开可清除)` : `筛选 ${label}`}
-          aria-pressed={active}
-          className={active
-            ? "rounded-sm bg-accent px-0.5 text-ink"
-            : "text-muted-foreground hover:text-foreground"}>
-          <Filter aria-hidden className="size-3.5" />
-        </button>
-      } />
-    <PopoverContent align="start" className="tw-root w-40 p-1">
-      {children(() => setOpen(false))}
-      {active && onClear && <div className="border-t border-line pt-1 mt-1">
-        <button type="button"
-          className="w-full rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-          onClick={() => {
-            onClear();
-            setOpen(false);
-          }}>清除此列筛选</button>
-      </div>}
-    </PopoverContent>
-  </Popover>;
-}
-
-/** 列头筛选的单选选项清单:选中行打勾。 */
+/** 列头筛选的单选选项清单:选中行打勾。(壳在 HeaderFilter,两页共用) */
 function FilterOptions({ value, options, onPick }: {
   value: string;
   options: Array<{ value: string; label: string }>;

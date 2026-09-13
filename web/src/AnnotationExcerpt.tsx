@@ -1,4 +1,3 @@
-import "./annotate.css";
 
 /** 定位失效仍展示已有证据；历史片段不是完整版本，也不是当前内容。 */
 export function AnnotationExcerpt({ item, onOpen }: {

@@ -66,21 +66,22 @@ export class RootErrorBoundary extends Component<
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
-    return <div className="root-error-screen" role="alert">
-      <div className="root-error-card">
-        <span className="section-kicker">PAGE ERROR</span>
-        <h1>页面出错了，不是你的操作有问题</h1>
-        <p>
+    // 皮(#233 收官):原 rootError.css 换装为工具类,该文件已退役。
+    return <div className="grid min-h-screen place-items-center bg-canvas px-5 py-8" role="alert">
+      <div className="grid w-full max-w-[760px] gap-3 rounded-xl border border-line border-l-4 border-l-danger bg-surface p-6">
+        <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-primary">PAGE ERROR</span>
+        <h1 className="m-0 text-lg font-bold text-text-strong">页面出错了，不是你的操作有问题</h1>
+        <p className="m-0 text-[13px] leading-relaxed text-muted-foreground">
           界面某一处渲染失败。你的数据没有丢——服务端状态不受影响，
           刷新后可以继续。下面是给排查用的原文，请连同「你刚点了什么」
           一起反馈。
         </p>
-        <pre className="root-error-detail">{this.report()}</pre>
-        <div className="root-error-actions">
-          <button type="button" onClick={() => location.reload()}>
+        <pre className="m-0 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-surface-2 p-3 font-mono text-xs leading-relaxed text-text">{this.report()}</pre>
+        <div className="flex gap-2.5">
+          <button type="button" className="cursor-pointer rounded-lg border border-line bg-surface-2 px-4 py-2 text-[13px] text-text-strong transition-colors hover:border-primary" onClick={() => location.reload()}>
             刷新页面
           </button>
-          <button type="button" onClick={() => {
+          <button type="button" className="cursor-pointer rounded-lg border border-line bg-surface-2 px-4 py-2 text-[13px] text-text-strong transition-colors hover:border-primary" onClick={() => {
             // 内网 http 下 clipboard API 可能不可用;失败就让用户手选,
             // 不弹错误盖住正文。
             void navigator.clipboard?.writeText(this.report()).catch(

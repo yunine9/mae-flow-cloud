@@ -249,13 +249,13 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     <section aria-labelledby="issue-mine-title"
       hidden={childTab !== "sessions"}
       className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-3">
-      <div className="section-head max-[680px]:flex-col max-[680px]:items-stretch">
+      <div className="mb-3 flex items-baseline justify-between gap-4 max-[680px]:flex-col max-[680px]:items-stretch">
         <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。 */}
           <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
-        <span className="current-work-counts">
+        <span className="flex flex-wrap items-center justify-end gap-3">
           <label className="inline-flex items-center gap-1.5">
             <span className="text-[13px] font-bold text-muted-foreground">状态</span>
             <Select value={statusFilter}
@@ -284,13 +284,13 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               </SelectContent>
             </Select>
           </label>
-          {waitingCount > 0 && <span className="section-count attention">
+          {waitingCount > 0 && <span className="text-[13px] font-medium tabular-nums text-attention">
             {waitingCount} 项待答复</span>}
-          {interventionCount > 0 && <span className="section-count danger">
+          {interventionCount > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">
             {interventionCount} 项需介入</span>}
-          <span className="section-count">共 {visibleIssues.length} 个</span>
+          <span className="text-[13px] font-medium tabular-nums text-muted-foreground">共 {visibleIssues.length} 个</span>
           {statusFilter === "active" && issues.length > visibleIssues.length
-            && <span className="section-count"
+            && <span className="text-[13px] font-medium tabular-nums text-muted-foreground"
               title="已归档/已取消默认收起,把状态切到对应标签或「全部」可查看">
               已收起 {issues.length - visibleIssues.length} 个</span>}
         </span>
@@ -321,7 +321,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
                 ? "已归档与已取消默认收起;要翻历史,把上方状态切到对应标签或「全部」。"
                 : "可以切回「全部」继续查看,会话没有丢。"}</EmptyDescription>
             </Empty>
-          : <div className="task-list">
+          : <div className="grid gap-2">
             {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
               issue={issue}
@@ -440,7 +440,7 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
         className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
         {stopping ? "终止中…" : "终止"}</Button>}
-      {stopError && <span className="form-message error">{stopError}</span>}
+      {stopError && <span className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}
       {issue.mrs?.map((mr) => {

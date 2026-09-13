@@ -204,7 +204,7 @@ export function KnowledgeInsightsBoard({
         <span aria-hidden className="grid size-[42px] flex-none
           place-items-center rounded-xl bg-linear-[145deg,var(--merge),var(--ink)]
           text-[17px] font-extrabold text-(--ink-fg)">效</span>
-        <div className="min-w-0"><span className="section-kicker">KNOWLEDGE FLYWHEEL</span><h2 id="knowledge-flywheel-title" className="mt-1 mb-0.5 text-xl font-semibold tracking-tight text-foreground">团队知识效能</h2><p className="m-0 text-sm/relaxed text-muted-foreground">只观察经过沉淀、能跨任务复用的团队资产；任务需求文档留在各自现场。</p></div>
+        <div className="min-w-0"><h2 id="knowledge-flywheel-title" className="mt-1 mb-0.5 text-xl font-semibold tracking-tight text-foreground">团队知识效能</h2><p className="m-0 text-sm/relaxed text-muted-foreground">只观察经过沉淀、能跨任务复用的团队资产；任务需求文档留在各自现场。</p></div>
       </div>
       <div className="flex flex-none items-center gap-2.5">
         {insights && <small className="text-sm text-faint">更新于 {latest(insights.generated_at).replace("最近 ", "")}</small>}

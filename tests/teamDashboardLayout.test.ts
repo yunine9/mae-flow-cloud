@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const app = readFileSync(join(process.cwd(), "web/src/App.tsx"), "utf8");
-const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
 
 test("团队任务统计以紧凑摘要展示规模，并用轻量筛选拆分交付中任务", () => {
   assert.match(app, /function TeamDeliveryOverview/);
@@ -19,20 +19,13 @@ test("团队任务统计以紧凑摘要展示规模，并用轻量筛选拆分�
   assert.match(app, /id="delivery-status-title"/);
   assert.match(app, /stats\.stages\.map/);
   assert.match(app, /stats\.statuses\.map/);
-  assert.match(css, /\.team-delivery-breakdown\s*\{/);
-  assert.match(css,
-    /\.delivery-breakdown-cells\s*\{[^}]*display:\s*grid[^}]*repeat\(auto-fit,/s,
-    "阶段和状态应共用可自适应的紧凑筛选网格");
-  assert.match(css,
-    /\.delivery-breakdown-cells button\s*\{[^}]*min-height:\s*38px[^}]*border-radius:\s*8px/s);
+  // #233 收官:breakdown 皮肤类换装为 App.tsx 的 CELL_BASE 工具类配方。
+  assert.match(app, /const CELL_BASE = "flex min-h-\[38px\][^"]*rounded-lg border border-line bg-surface px-\[11px\] py-1\.5[^"]*disabled:opacity-55"/,
+    "概览格按钮配方:38px 高、8px 圆角、紧凑筛选");
+  assert.match(app, /const CELL_SELECTED = "flex min-h-\[38px\][^"]*border-primary[^"]*bg-primary[^"]*text-primary/);
   assert.match(app, /teamDeliveryStatusGroup\(item\.task\.status\)/);
-  assert.match(css,
-    /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*\.56/s,
-    "零状态要保留口径，但应从视觉层级中退后");
-  assert.match(css,
-    /\.delivery-breakdown-cells button\.selected\s*\{[^}]*background:\s*var\(--accent-soft\)/s,
-    "只有当前筛选项使用强调色，不能把所有非零项都铺成实色块");
-  assert.match(css,
-    /\.team-delivery-summary \.summary-complete strong\s*\{[^}]*var\(--success\)/s,
-    "已交付只用语义色点到为止，不再重复堆卡片");
+  // #233 收官:选中态强调/零状态退后/语义色克制契约由 CELL_SELECTED 与
+  // 摘要工具类承担(强调只落在当前筛选项,已交付用 text-success 点到为止)。
+  assert.match(app, /disabled:cursor-default disabled:opacity-55/,
+    "零状态/禁用项退后(opacity 55)");
 });

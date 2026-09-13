@@ -8,16 +8,18 @@ import test from "node:test";
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 const annotatable = read("web/src/Annotatable.tsx");
 const annotationPanel = read("web/src/AnnotationPanel.tsx");
-const annotateCss = read("web/src/annotate.css");
+const annotateCss = read("web/src/tailwind.css");
 const app = read("web/src/App.tsx");
 const taskCard = read("web/src/TaskCard.tsx");
-const css = read("web/src/style.css");
+const css = read("web/src/tailwind.css");
 const taskTime = read("web/src/taskTime.ts");
 const taskHierarchy = read("web/src/taskHierarchy.ts");
 
 test("批注编辑框默认更高,且能竖向拖到大半屏", () => {
-  assert.match(annotatable, /<textarea\s+autoFocus\s+rows=\{4\}/);
-  assert.match(annotationPanel, /<textarea value=\{editingNote\} autoFocus rows=\{5\}/);
+  // #233 收官:手写 textarea 换 shadcn Textarea 原语,高度契约钉在工具类。
+  assert.match(annotatable, /<Textarea\s+autoFocus\s+rows=\{2\}/);
+  assert.match(annotatable, /min-h-16 max-h-\[70vh\] resize-y/);
+  assert.match(annotationPanel, /<Textarea className="min-h-\[132px\] max-h-\[70vh\] resize-y bg-surface" value=\{editingNote\} autoFocus rows=\{5\}/);
   assert.match(annotateCss,
     /\.annot-editor textarea \{[^}]*min-height:\s*108px[^}]*max-height:\s*70vh[^}]*resize:\s*vertical/s);
   assert.match(annotateCss,
