@@ -25,6 +25,8 @@ import {
   addIssueReview,
   dropIssueReview,
   getDtsTicketDetail,
+  getIssueAnalysisVersion,
+  getIssueAnalysisVersions,
   getIssueDocument,
   getIssueDocuments,
   getIssueFileDiff,
@@ -35,6 +37,7 @@ import {
   saveIssueWorkspaceFile,
   sendIssueReviews,
   type DtsTicketDetail,
+  type IssueAnalysisVersion,
   type IssueDetail,
   type IssueDocMeta,
   type IssueLogEntry,
@@ -194,6 +197,10 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate
  * 行尾,草稿与提交链路内联到正文下方。状态一动(updated_at 变化)
  * 自动重读,让 AI 续写的内容能贴着节奏刷新;其他 .md 不再单页呈现,
  * 仍可整包下载。
+ * 版本(#262,ADR-0025):平台在检视提交时冻结快照,报告按「初版/
+ * 修订N」出版本页签条(多版才渲染),缺省选中最新版;最新版是干净
+ * 纸面(已提交意见不再标记在 live 上,行尾只剩草稿),冻结版只读、
+ * 该批提交意见的锚点标记画在它的冻结版上。
  * 检视(ADR-0007):报告按行悬停圈注意见(交互与需求流批注同一套),
  * 草稿攒在正文下方、一次提交触发整体回退重跑——都是写操作,查看
  * 模式(canOperate=false)下整块不渲染,文档照读。 */
@@ -214,6 +221,14 @@ function IssueAnalysisReport({ detail, canOperate }: {
   const [locationExcerpt, setLocationExcerpt] = useState<IssueReview>();
   const [locationMessage, setLocationMessage] = useState("");
   const [checks, setChecks] = useState<IssueReviewCheck[]>([]);
+  // 版本页签(#262,ADR-0025):清单推导自检视提交时平台冻结的快照,
+  // live 恒为最新版。activeName="" 是"最新版"哨兵(缺省,即默认选中
+  // 最新);选了冻结版就按需取那份快照内容,冻结稿永不随会话动态重读。
+  const [versions, setVersions] = useState<IssueAnalysisVersion[]>([]);
+  const [activeName, setActiveName] = useState("");
+  const [frozen, setFrozen] = useState<{ content: string; truncated: boolean }>();
+  const [frozenNote, setFrozenNote] = useState("");
+  const versionRequest = useRef(0);
   // 已加载基准 = 会话动态:状态一动就重取;只在响应到手后记账,半路
   // 失败下次仍会重试。
   const refreshKey = detail.updated_at;
@@ -247,6 +262,42 @@ function IssueAnalysisReport({ detail, canOperate }: {
       setChecks(result.checks ?? []);
     } catch {
       // 检视数据缺席只让它自己空着,不拖垮文档页。
+    }
+  }
+
+  async function loadVersions() {
+    try {
+      const result = await getIssueAnalysisVersions(id);
+      const list = result.versions ?? [];
+      setVersions(list);
+      // 选中项消失(新一轮提交使序号重排/同文去重折并)就回最新版;
+      // "" 本就是最新版哨兵,原样保留。
+      setActiveName((current) =>
+        current && list.some((entry) => entry.name === current) ? current : "");
+    } catch {
+      // 版本清单缺席只让页签条空着:材料域 fail-open,不给会话页添堵。
+    }
+  }
+
+  /** 切版本页签("" = 回最新版/live):冻结稿按需取,响应竞态用请求号
+      压住——快速连点页签时旧响应不得覆盖新选中版。 */
+  async function openVersion(name: string) {
+    const request = ++versionRequest.current;
+    setActiveName(name);
+    setFrozen(undefined);
+    setFrozenNote("");
+    if (!name) return;
+    try {
+      const result = await getIssueAnalysisVersion(id, name);
+      if (request !== versionRequest.current) return;
+      if (result.unavailable) setFrozenNote(result.unavailable);
+      else setFrozen({
+        content: result.content ?? "",
+        truncated: result.truncated === true,
+      });
+    } catch (reason) {
+      if (request !== versionRequest.current) return;
+      setFrozenNote(String(reason instanceof Error ? reason.message : reason));
     }
   }
 
@@ -300,6 +351,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
   useEffect(() => {
     void loadList();
     void loadReviews();
+    void loadVersions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.updated_at]);
   useEffect(() => {
@@ -348,6 +400,17 @@ function IssueAnalysisReport({ detail, canOperate }: {
     && !detail.stage_states?.some((state) => state === "inherited")
     && detail.review_active !== true;
 
+  // 版本页签的选中态(#262):""=最新版。最新版是干净纸面——已提交
+  // (sent)的意见不再画在 live 上,行尾只剩草稿标记;冻结版(该批意见
+  // 提交时冻结的快照)按版本清单给的 review_ids 画该批的提交意见标记,
+  // 纯只读(Annotatable enabled=false 只剩标记层,无任何写口)。
+  const viewingLatest = !versions.some(
+    (entry) => entry.name === activeName && !entry.latest);
+  const drafts = reviews.filter((item) => item.status === "draft");
+  const frozenReviews = viewingLatest ? [] : reviews.filter((item) =>
+    versions.find((entry) => entry.name === activeName)?.review_ids
+      .includes(item.id) ?? false);
+
   // #230:报告壳换工具类。常态=面板内自滚的网格(problem 域灰底);
   // 全屏=固定定底盘的纵向 flex,正文+内联检视区接管余量自滚——
   // 旧 .issue-thread/.is-fullscreen 后代选择器按分支直译成分支上的变体。
@@ -378,39 +441,74 @@ function IssueAnalysisReport({ detail, canOperate }: {
     </Empty>}
     {!loading && !note && content && <div className={cn("flex flex-col gap-3",
       fullscreen && "mx-auto min-h-0 w-full max-w-[1760px] flex-1 overflow-auto px-[clamp(20px,3vw,48px)] pb-20 pt-[22px] [&_.mermaid-figure]:overflow-x-hidden [&_.mermaid-diagram]:w-full [&_.mermaid-diagram]:min-w-0 [&_.mermaid-diagram]:max-w-full [&_.puml-diagram]:w-full [&_.puml-diagram]:min-w-0 [&_.puml-diagram]:max-w-full")}>
+      {/* 版本页签条(#262):多版才渲染,缺省选中最新版;只有初版时
+          不出条,正文即全部。样式与材料域的逐仓切换同款药丸。 */}
+      {versions.length > 1 && <div className="flex flex-wrap gap-1.5"
+          role="group" aria-label="分析报告版本">
+        {versions.map((entry) => (
+          <button type="button" key={entry.name}
+            className={cn("cursor-pointer rounded-full border px-3 py-1 text-[13px] font-semibold transition-colors",
+              (entry.latest ? viewingLatest : activeName === entry.name)
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-line bg-surface text-muted-foreground hover:border-primary/40")}
+            title={entry.latest
+              ? "最新版:AI 的当前稿,干净纸面"
+              : "检视提交时冻结的快照,只读"}
+            onClick={() => void openVersion(entry.latest ? "" : entry.name)}>
+            {entry.name}
+          </button>
+        ))}
+      </div>}
       <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
-        <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
-        <Button type="button" variant="outline" size="xs"
-          onClick={() => void loadActive()}>刷新</Button>
+        <span>{viewingLatest
+          ? `研究现场落盘的 markdown · 即写即读${truncated ? " · 内容超长已截断" : ""}`
+          : `检视提交时冻结的快照 · 只读${frozen?.truncated ? " · 内容超长已截断" : ""}`}</span>
+        {viewingLatest && <Button type="button" variant="outline" size="xs"
+          onClick={() => void loadActive()}>刷新</Button>}
       </div>
       {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setLocationExcerpt(undefined); }} /></>}
-      <article className="issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]">
-        {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
-            不给行尾 ✎。 */}
-        {reviewEnabled && canOperate
-          ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
-              fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
-              onAdded={() => void loadReviews()}
-              addDraft={async (input) => {
-                try {
-                  await addIssueReview(id, input);
-                  void loadReviews();
-                  return {};
-                } catch (reason) {
-                  return {
-                    error: String(reason instanceof Error ? reason.message : reason),
-                  };
-                }
-              }}>
-              <Markdown showLineNumbers text={content} />
-            </Annotatable>
-          : <Markdown showLineNumbers text={content} />}
-      </article>
-      {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):草稿清单与
-          提交按钮不再藏在页签后;写口整体挂 canOperate。 */}
-      {canOperate && <IssueReviewPanel detail={detail} reviews={reviews}
-        checks={checks} reviewEnabled={reviewEnabled}
-        onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
+      {viewingLatest ? <>
+        <article className="issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]">
+          {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
+              不给行尾 ✎。items 只带草稿:最新版是干净纸面,已提交的
+              意见不再标记在 live 上(它们锚在自己批次的冻结版上)。 */}
+          {reviewEnabled && canOperate
+            ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
+                fallbackFile={ANALYSIS_DOC} kind="doc" items={drafts}
+                onAdded={() => void loadReviews()}
+                addDraft={async (input) => {
+                  try {
+                    await addIssueReview(id, input);
+                    void loadReviews();
+                    return {};
+                  } catch (reason) {
+                    return {
+                      error: String(reason instanceof Error ? reason.message : reason),
+                    };
+                  }
+                }}>
+                <Markdown showLineNumbers text={content} />
+              </Annotatable>
+            : <Markdown showLineNumbers text={content} />}
+        </article>
+        {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):草稿清单与
+            提交按钮不再藏在页签后;写口整体挂 canOperate。只随最新版
+            出现——冻结版是历史纸面,不收新意见(#262)。 */}
+        {canOperate && <IssueReviewPanel detail={detail} reviews={reviews}
+          checks={checks} reviewEnabled={reviewEnabled}
+          onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
+      </> : <article className="issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]">
+        {frozenNote && <div className="utility-note mb-2" role="alert">{frozenNote}</div>}
+        {frozen ? <>
+          {/* 该批已提交意见的锚点标记画在它们的冻结版上:Annotatable
+              关着(enabled=false)只剩标记层,悬停无写口。 */}
+          <Annotatable taskId={id} artifact={ANALYSIS_DOC}
+            fallbackFile={ANALYSIS_DOC} kind="doc" enabled={false}
+            items={frozenReviews} onAdded={() => {}}>
+            <Markdown showLineNumbers text={frozen.content} />
+          </Annotatable>
+        </> : <p className="m-0 text-[13px] text-faint">正在读取该版快照…</p>}
+      </article>}
     </div>}
   </div>;
 }
@@ -444,6 +542,11 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
 }) {
   return <li className={REVIEW_ITEM}>
     <div className="flex items-baseline gap-2">
+      {/* 「意见N」是唯一对外标识(#261):台账 an- id 不出面;旧账没有
+          号时如实降级,不给假号。 */}
+      <span className="shrink-0 text-[13px] font-bold text-text-strong">
+        {item.seq === undefined ? "意见" : `意见${item.seq}`}
+      </span>
       <Button type="button" variant="link" size="xs" className="h-auto px-0"
         onClick={() => onLocate(item)}>查看原文</Button>
       {item.status === "sent" && <IssueReviewBadge check={check} />}

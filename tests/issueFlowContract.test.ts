@@ -41,6 +41,8 @@ import type {
   DtsTicketDetail,
   IssueDetail,
   IssueGateCard,
+  IssueReview,
+  IssueReviewCheck,
   IssueSummary,
   IssueWaitingCard,
 } from "../web/src/api.ts";
@@ -1033,6 +1035,72 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
     const receipt = JSON.stringify(created.body);
     assert.ok(!receipt.includes("page-pw"), "页面密码本体不过线");
     assert.ok(!receipt.includes("backend-pw"), "后台密码本体不过线");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+// ---- 检视意见 wire(#261):GET /issues/:id/reviews 投出的 Annotation
+// ---- 与 web/src/api.ts 的 IssueReview 逐键对账;意见号(seq)过线。
+
+test("契约快照:检视意见投影(意见号 seq 过线;reviews+checks 全形状)", async () => {
+  const dataDir = mfcTemp("mfc-issue-contract6-");
+  createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "收单与清结算",
+    owner: "dev", repositories: ["/tmp/fixture.git"],
+  }, "tester");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const created = await issuePost(["issues"], {
+      account: "dev", title: "下单超时", module_id: "pay-core",
+      environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
+    }, service);
+    assert.equal(created.status, 201);
+    const id = created.body.id as string;
+
+    const added = await issuePost(["issues", id, "reviews"], {
+      line: 3, anchor: "根因:重试无上限", note: "加重试上限",
+      quote: "根因:重试无上限。", line_end: 4,
+    }, service);
+    assert.equal(added.status, 200);
+    assert.equal(added.body.seq, 1, "意见号在落账口分配并过线(#261)");
+
+    // 期望侧按 web/src/api.ts 的 IssueReview 手写;undefined 键 = 可选。
+    const sample: IssueReview = {
+      quote: "根因:重试无上限。",
+      line_end: 4,
+      id: "an-x",
+      seq: 1,
+      author: "dev",
+      created_at: "2026-09-13T00:00:00.000Z",
+      artifact: "issue-analysis.md",
+      file: "issue-analysis.md",
+      line: 3,
+      anchor: "根因:重试无上限",
+      context_before: undefined,
+      context_after: undefined,
+      note: "加重试上限",
+      kind: "doc",
+      status: "draft",
+      sent_at: undefined,
+      sent_via: undefined,
+      edited_at: undefined,
+    };
+    // 报告还没生成:锚点检测按 fail-open 全 hit(位置未验证)。
+    const checkSample: IssueReviewCheck = {
+      location_verified: false,
+      id: "an-x",
+      state: "hit",
+      line: 3,
+      now: undefined,
+    };
+    const list = await issueGet(["issues", id, "reviews"], service);
+    assert.equal(list.status, 200);
+    assert.equal(list.body.review_active, false);
+    assertWireShape({ reviews: [sample], checks: [checkSample], review_active: false },
+      list.body, "GET /issues/:id/reviews");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

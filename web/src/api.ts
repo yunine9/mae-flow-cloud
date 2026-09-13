@@ -4415,6 +4415,45 @@ export async function getIssueDocument(
   };
 }
 
+// ---- 分析报告版本(#262,ADR-0025:平台冻结快照,版本页签初版/修订N) ----
+
+/** 服务端 analysisVersions.ts 的 wire 镜像:第 j 份快照 = 第 j 批检视
+ * 提交时冻结的报告,live 恒为最新版;相邻同文去重后按时间序命名
+ * (初版/修订1/修订2…)。review_ids = 该批提交的意见 id,画冻结版的
+ * 锚点标记用;最新版的干净纸面只有草稿标记,故恒为空。 */
+export interface IssueAnalysisVersion {
+  index: number;
+  name: string;
+  bytes: number;
+  modified_at: string;
+  latest: boolean;
+  review_ids: string[];
+  snapshot?: string;
+}
+
+/** 分析报告版本清单(没有检视过的会话只有 live 一版)。 */
+export function getIssueAnalysisVersions(id: string): Promise<{
+  versions: IssueAnalysisVersion[];
+}> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/analysis-versions`);
+}
+
+/** 读一个版本的内容(?name=版本名,如 初版/修订1)。缺失为 200
+ * {unavailable},404 只在问题号未知时出现。 */
+export async function getIssueAnalysisVersion(
+  id: string,
+  name: string,
+): Promise<{ name?: string; content?: string; truncated?: boolean; unavailable?: string }> {
+  const body = await issueFetch(
+    `/issues/${encodeURIComponent(id)}/analysis-versions/read?name=${encodeURIComponent(name)}`);
+  return {
+    name: body.name ? String(body.name) : undefined,
+    content: body.content ? String(body.content) : undefined,
+    truncated: body.truncated === true ? true : undefined,
+    unavailable: body.unavailable ? String(body.unavailable) : undefined,
+  };
+}
+
 // ---- 检视(分析报告正文下方的检视区;ADR-0007,服务端 reviews.ts) ----
 
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
@@ -4423,6 +4462,9 @@ export interface IssueReview {
   quote?: string;
   line_end?: number;
   id: string;
+  /** 意见号(#261,ADR-0025):会话内单调分配、永不复用、跨批次连续,
+   * 检视区以「意见N」为主键标识;功能上线前的旧账可能缺席。 */
+  seq?: number;
   author: string;
   created_at: string;
   artifact: string;

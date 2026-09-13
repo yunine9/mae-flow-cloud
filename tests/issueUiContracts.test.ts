@@ -497,6 +497,24 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
     /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
 });
 
+// ---- 意见号(#261,ADR-0025):检视区以「意见N」为主键标识,台账
+// ---- an- id 不出面;行号与原文照旧。
+
+test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id 不出面", () => {
+  // 行卡首格 = 意见号:seq 过线即「意见N」;旧账无号如实降级,不给假号。
+  assert.match(materials,
+    /item\.seq === undefined \? "意见" : `意见\$\{item\.seq\}`/);
+  // 行号/原文照旧:查看原文与锚定原文的既有呈现不动。
+  assert.match(materials, />查看原文<\/Button>/);
+  assert.match(materials, /针对 \{item\.anchor\}/);
+  // 台账 id 不再作为 UI 标识:意见卡本体不渲染 item.id(an- id 只准
+  // 留在 React key/勾稽里,不上屏)。
+  const reviewCard = materials.slice(
+    materials.indexOf("function IssueReviewItem"),
+    materials.indexOf("function IssueReviewPanel"));
+  assert.doesNotMatch(reviewCard, /item\.id/);
+});
+
 // ---- 问题会话单路径化(#98):前端不再感知"模式"概念,任意会话一律
 // ---- 按固定流程渲染;自由旅程线与模式徽标整体退场。后端仍会在会话
 // ---- 数据里带 mode:"fixed"(#99 删字段),前端不再读它。
