@@ -5,7 +5,9 @@ from .shared import (
     workflow_transitions,
 )
 from .wiring import api
-from mae_flow_core.workflow.authority import ADVISORY_EVIDENCE, advisory_message
+from mae_flow_core.workflow.authority import (
+    ADVISORY_EVIDENCE, PROMPT_ONLY_EVIDENCE, advisory_message,
+)
 from mae_flow_core.workflow.advisories import record_advisory
 
 
@@ -88,7 +90,8 @@ def _done_require_evidence(step, st, args, sid):
     required["evidence"] = [spec for spec in step.get("evidence", ())
                             if spec.get("type") not in ADVISORY_EVIDENCE]
     for spec in step.get("evidence", ()):
-        if spec.get("type") not in ADVISORY_EVIDENCE:
+        if (spec.get("type") not in ADVISORY_EVIDENCE
+                or spec.get("type") in PROMPT_ONLY_EVIDENCE):
             continue
         try:
             findings = api.check_evidence({"evidence": [spec]}, st)

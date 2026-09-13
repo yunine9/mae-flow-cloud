@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 
+from .authority import PROMPT_ONLY_EVIDENCE
 from .workflow_profile import (
     WORKFLOW_PROFILE_SCHEMA,
     has_final_plan,
@@ -259,6 +260,8 @@ def _evidence_contract(step):
     seen = set()
     for evidence in step.get("evidence") or ():
         kind = str(evidence.get("type") or "unknown")
+        if kind in PROMPT_ONLY_EVIDENCE:
+            continue
         label = _EVIDENCE_LABELS.get(kind, "内核要求的 %s 证据" % kind)
         key = (kind, label)
         if key not in seen:

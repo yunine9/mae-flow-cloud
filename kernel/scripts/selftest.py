@@ -2109,12 +2109,6 @@ hook_active_adapter = open(
         "hook_active_events.py"),
     encoding="utf-8",
 ).read()
-hook_event_policies = open(
-    os.path.join(
-        ROOT, "scripts", "mae_flow_core", "application", "hooks",
-        "event_policies.py"),
-    encoding="utf-8",
-).read()
 for f in sorted(os.listdir(os.path.join(ROOT, "agents"))):
     if f.endswith(".md"):
         name = f[:-3]
@@ -2452,10 +2446,6 @@ check("外部引擎透传只保留在 capability 子命令里且不再扩张",
       len(capability_calls) <= 3
       and all(hit.endswith("(cmd_capability)") for hit in capability_calls),
       str(capability_calls))
-
-# 6.5 模板与 Hook 应用策略同步(posttooluse 路由必须引用同名模板)
-for tpl in ("STORY-TEMPLATE.md", "CHAIN-TEMPLATE.md", "GRILL-PREP-TEMPLATE.md", "REVIEW-TEMPLATE.md"):
-    check(f"Hook 模板校验引用 {tpl}", tpl in hook_event_policies)
 
 # 6.6 PostToolUse matcher 必须覆盖令牌/校验所需工具(漏了 = ASKUSER/UTRUN 令牌静默失效)
 if hooks:

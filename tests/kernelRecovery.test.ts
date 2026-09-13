@@ -127,6 +127,11 @@ test("内核模式恢复:跨进程决定进内核台账,重建会话可见", {
   const transcript = readFileSync(
     join(dataDir, created.id, "transcript.jsonl"), "utf-8");
   assert.match(transcript, /messages/);
+  for (const model of [modelA, modelB]) {
+    assert.match(JSON.stringify(model.requests[0]),
+      /local-spec validate 仅作按需结构诊断/,
+      "新建和恢复的真实模型请求都收到文档自查指引");
+  }
   } finally {
     // 断言失败也要收摊:留着 HTTP 服务器会吊死整个测试进程(实测)。
     await modelA.stop();

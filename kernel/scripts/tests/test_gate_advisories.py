@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 
 TESTS = os.path.abspath(os.path.dirname(__file__))
@@ -60,6 +61,20 @@ class AdvisoryChannelTests(unittest.TestCase):
             with open(advisory_path(state), encoding="utf-8") as stream:
                 stored = json.load(stream)["advisories"]
             self.assertEqual(1, len(stored))
+
+    def test_recovery_does_not_replay_retired_form_notices_or_delete_quality_findings(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, ".mae-flow.json")
+            kinds = ["template", "quality:glob", "quality:content_free",
+                     "quality:local_spec_valid", "lightcheck", "quality:verification_passed",
+                     "quality:agent_ran", "quality:domain_archive_complete"]
+            for kind in kinds:
+                record_advisory(state, "story", kind, kind, "2026-09-13 09:00:00")
+            before = Path(advisory_path(state)).read_bytes()
+            current = pending_advisories(state, "story")
+            self.assertEqual(kinds[4:], [item["kind"] for item in current])
+            self.assertEqual(before, Path(advisory_path(state)).read_bytes(),
+                             "读取提示不改写旧任务数据")
 
     def test_render_is_empty_without_notices(self):
         self.assertEqual("", render_advisories(()))

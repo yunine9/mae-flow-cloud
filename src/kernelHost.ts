@@ -100,7 +100,12 @@ export class KernelHost {
     this.requirementCaptured = true;
     const current = await this.spawnCli("current", ["current"]);
     this.requireSuccess("current", current);
-    return [started.stdout, prompted.stdout, current.stdout]
+    return [started.stdout, prompted.stdout, current.stdout,
+      "文档自查：按现有模板写清范围、行为、验收条件和真实未决事项，对照用户原话修正实质遗漏。"
+      + "文件名、章节和占位词检查不代表内容质量；local-spec validate 仅作按需结构诊断，"
+      + "不要为格式差异重复补材料、重跑检视或索要确认。"
+      + "缺少完成需求必需的信息或材料时如实说明并补齐；编译、UT、推送和流水线结果仍以真实执行为准。",
+    ]
       .map((text) => text.trim())
       .filter(Boolean)
       .join("\n");

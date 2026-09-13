@@ -1,5 +1,12 @@
 """Kernel authority: coordinate work, report quality, preserve human control."""
 
+# Document shape belongs to step guidance and human review, not automatic
+# evaluation. Keep legacy flow declarations readable and explicit diagnostics usable.
+PROMPT_ONLY_EVIDENCE = frozenset({
+    "glob", "content_free", "tasks_checked", "spec_field", "yaml_field",
+    "spec_validate", "local_spec_valid",
+})
+
 # These checks describe quality/convention, not permission or external facts.
 # Evaluators still return their real result; only their veto is retired.
 ADVISORY_EVIDENCE = frozenset({

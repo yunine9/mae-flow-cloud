@@ -14,12 +14,6 @@ class StopDecision:
 
 
 @dataclass(frozen=True)
-class TemplateDecision:
-    accepted: bool
-    missing: tuple = ()
-
-
-@dataclass(frozen=True)
 class PretoolDecision:
     action: str
     value: str = ""
@@ -31,27 +25,6 @@ _AGENT_KINDS = (
     ("compile-agent", "COMPILE"),
     ("codecheck-fix-agent", "CODECHECK"),
     ("ut-generator-agent", "UT"),
-)
-
-_TEMPLATE_TARGETS = (
-    (r"docs/story/STORY-.*\.md$", "STORY-TEMPLATE.md", "STORY"),
-    (
-        r"(^|/)\.mae-flow-work/(?:[^/]+/)+story\.md$",
-        "STORY-TEMPLATE.md",
-        "STORY",
-    ),
-    (
-        r"(^|/)\.mae-flow-work/(?:[^/]+/)+implementation\.md$",
-        "IMPLEMENTATION-TEMPLATE.md",
-        "IMPLEMENTATION",
-    ),
-    (r"docs/chain/CHAIN-.*\.md$", "CHAIN-TEMPLATE.md", "CHAIN"),
-    (
-        r"(^|/)\.mae-flow-work/(?:\S+/)*grill-prep[^/]*\.md$",
-        "GRILL-PREP-TEMPLATE.md",
-        "GRILL-PREP",
-    ),
-    (r"(^|/)\.mae-flow-work/(?:\S+/)*review\.md$", "REVIEW-TEMPLATE.md", "REVIEW"),
 )
 
 _FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit")
@@ -201,39 +174,6 @@ def standalone_pretool_decision(
     return PretoolDecision("allow")
 
 
-def template_target(path):
-    normalized = str(path or "").replace("\\", "/")
-    return next(
-        (
-            (template, label)
-            for pattern, template, label in _TEMPLATE_TARGETS
-            if re.search(pattern, normalized, re.I)
-        ),
-        None,
-    )
-
-
-def template_path(
-        repository_root, template_name, plugin_root=None,
-        exists=os.path.exists):
-    """Resolve the materialized consumer template before source-tree fallback.
-
-    The materialized copy lives in the *user project* and is the exact document
-    handed to the writing Agent; the source tree fallback lives in the
-    *plugin*. Validating against the plugin copy while the Agent was given the
-    project copy makes a mid-flow plugin upgrade reject correct documents.
-    """
-    candidates = (
-        os.path.join(
-            repository_root, ".mae-flow-work", "plugin-resources",
-            "assets", template_name),
-        os.path.join(
-            plugin_root if plugin_root else repository_root,
-            "skills", "mae-flow", "assets", template_name),
-    )
-    return next((path for path in candidates if exists(path)), candidates[0])
-
-
 def _moonlight_safe_point(step, moonlight):
     unresolved = [
         issue for issue in (moonlight.get("issues") or [])
@@ -275,32 +215,3 @@ def stop_decision(state, stop_hook_active, guard):
             reason="retry-limit",
         )
     return StopDecision(False, blocks=blocks, revision=revision)
-
-
-def _headings(text):
-    return [
-        re.sub(r"\s+", " ", heading.strip())
-        for heading in re.findall(r"^#{1,3}\s+(.+)$", text, re.M)
-    ]
-
-
-def _heading_matches(template, actual):
-    if "{" not in template:
-        return template in actual
-    pattern = (
-        "^"
-        + re.sub(r"\\\{[^}]*\\\}", ".+", re.escape(template))
-        + "$"
-    )
-    return any(re.match(pattern, heading) for heading in actual)
-
-
-def template_decision(template, document):
-    """Validate required headings while allowing instantiated placeholders."""
-    actual = _headings(document)
-    missing = tuple(
-        heading
-        for heading in _headings(template)
-        if not _heading_matches(heading, actual)
-    )
-    return TemplateDecision(not missing, missing)

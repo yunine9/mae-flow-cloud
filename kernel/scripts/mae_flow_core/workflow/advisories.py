@@ -13,6 +13,12 @@ enough.
 """
 
 from mae_flow_core.state_store import safe_read_json, update_json
+from .authority import PROMPT_ONLY_EVIDENCE
+
+
+_RETIRED_FORM_NOTICES = {"template"} | {
+    "quality:" + kind for kind in PROMPT_ONLY_EVIDENCE
+}
 
 
 _LIMIT = 40
@@ -68,6 +74,7 @@ def pending_advisories(state_path, step, since=""):
     return tuple(
         dict(item) for item in notices
         if isinstance(item, dict)
+        and str(item.get("kind", "")) not in _RETIRED_FORM_NOTICES
         and item.get("step") == str(step or "")
         and str(item.get("at", "")) >= str(since or "")
     )
