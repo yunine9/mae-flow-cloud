@@ -118,6 +118,27 @@
 }
 
 /* shadcn 组件的 CSS 变量桥:只收与存量令牌零碰撞的名字。 */
+/* b0cfe8d 合并 tokens.css 时误吞的 :root 桥(#233 回归):@theme inline 的
+   --color-* 映射与组件里的任意值(如 shadow 里的 var(--primary))都要落到
+   这些名字上;没有它们,bg-primary/text-primary-foreground 全部算成
+   invalid → unset,决定卡提交钮就成了透明裸字(2026-09-11 用户截图)。 */
+:root {
+  --background: var(--main-bg);
+  --foreground: var(--text-strong);
+  --card: var(--surface);
+  --card-foreground: var(--text-strong);
+  --popover: var(--overlay);
+  --popover-foreground: var(--text-strong);
+  --primary: var(--ink);
+  --primary-foreground: var(--ink-fg);
+  --secondary: var(--surface-3);
+  --secondary-foreground: var(--text-strong);
+  --accent-foreground: var(--text-strong);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff; /* 危险底上的白字,令牌表无对应 */
+  --input: var(--line);
+  --ring: var(--focus);
+}
 
 @layer base {
   /* 全局归一补丁(原 preflight-compat.css,#233 并入):

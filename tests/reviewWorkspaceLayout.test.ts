@@ -73,10 +73,12 @@ test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () =>
 
 test("快速提问题常驻右下角且使用横向小按钮", () => {
   // #233 收官:原 .wish-quick-trigger 皮肤类换装为 WishQuickCreate 工具类,
-  // 布局契约(fixed 右下 18px、胶囊、横排小按钮)钉在工具类串上。
+  // 布局契约(fixed 右下、胶囊、横排小按钮)钉在工具类串上。
+  // 锚点随 2656b4e(#225 收尾)从 18px 让到 24px(right-6/bottom-6):
+  // 浮标贴缘压卡裁字,窄屏再收一号避让底部栏。
   const fab = readFileSync(join(process.cwd(), "web/src/WishQuickCreate.tsx"), "utf8");
-  assert.match(fab, /wish-quick-fab fixed right-\[18px\] bottom-\[18px\] z-\[650\] inline-flex/);
-  assert.match(fab, /rounded-full border-0 bg-primary px-3\.5 text-primary-foreground shadow-lg max-\[760px\]:bottom-\[76px\] max-\[760px\]:right-3/);
+  assert.match(fab, /wish-quick-fab fixed right-6 bottom-6 z-\[650\] inline-flex/);
+  assert.match(fab, /rounded-full border-0 bg-primary px-3\.5 text-primary-foreground shadow-lg max-\[760px\]:bottom-\[76px\] max-\[760px\]:right-4/);
   assert.match(fab, /<strong className="text-xs">提问题<\/strong>/);
 });
 
