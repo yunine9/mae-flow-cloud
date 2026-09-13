@@ -118,51 +118,14 @@
   font: inherit; font-size: var(--fs-12); font-weight: 600; cursor: pointer;
   box-shadow: var(--shadow-md);
 }
-.task-workspace-v2 .conv-more,
-.task-workspace-v2 .conv-empty,
-.task-workspace-v2 .conv-problem {
-  margin: 0; padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--muted); font-size: var(--fs-12); text-align: center;
-}
-.task-workspace-v2 .conv-more { border: 1px dashed var(--line-strong); background: transparent; font: inherit; font-size: var(--fs-12); cursor: pointer; }
-.task-workspace-v2 .conv-more:hover { color: var(--text-strong); border-color: var(--text-strong); }
-.task-workspace-v2 .conv-empty { padding: 24px 12px; line-height: 1.6; }
-.task-workspace-v2 .conv-problem { color: var(--attention); background: var(--attention-soft); text-align: left; }
-.task-workspace-v2 .conv-date,
-.task-workspace-v2 .conv-divider {
-  display: flex; align-items: center; gap: 10px;
-  color: var(--faint); font-size: 11px;
-  margin: 4px 0 -4px;
-}
-.task-workspace-v2 .conv-date::before, .task-workspace-v2 .conv-date::after,
-.task-workspace-v2 .conv-divider::before, .task-workspace-v2 .conv-divider::after {
-  content: ""; flex: 1; height: 1px; background: var(--line);
-}
+/* conv-more/empty/problem、conv-date/divider、conv-msg/body/who/tag、
+   conv-text(除折叠族)、conv-earlier/act/lead/answer/notes、conv-quote/
+   thread-link/receipts/external、conv-card 常规皮、conv-tail/tools、
+   conv-sync/conv-digest 已随 #232 换装退役:任务侧会话流改用
+   ConversationStream.tsx 本页 CONV 词典(问题侧 #231 同款做法)。 */
 
-/* 一条消息:头像 + 正文(#220 头像换 Avatar/AvatarFallback 原语,底色
-   随角色迁为组件上的令牌工具类,此处只留版式)。 */
-.task-workspace-v2 .conv-msg {
-  display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px;
-  scroll-margin-top: 12px;
-}
-.task-workspace-v2 .conv-body { min-width: 0; display: grid; gap: 6px; }
-.task-workspace-v2 .conv-who {
-  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
-  color: var(--muted); font-size: var(--fs-12);
-}
-.task-workspace-v2 .conv-who b { color: var(--text-strong); font-weight: 600; }
-.task-workspace-v2 .conv-who time { color: var(--faint); }
-.task-workspace-v2 .conv-tag {
-  display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
-  border-radius: 5px; font-size: 11px; font-weight: 500; font-style: normal;
-  background: var(--surface-3); color: var(--muted);
-}
-.task-workspace-v2 .conv-tag.ok { background: var(--success-soft); color: var(--success); }
-.task-workspace-v2 .conv-tag.att { background: var(--attention-soft); color: var(--attention); }
-.task-workspace-v2 .conv-tag.ink { background: var(--ink-soft); color: var(--ink); }
-.task-workspace-v2 .conv-tag.src { background: var(--active-soft); color: var(--active); }
-
+/* 长话折叠族(conv-text/conv-expand)两域共用:ClampedText.tsx 仍挂这套类,
+   任务侧与问题侧的量高折叠同一份皮,不随词典化退役。 */
 .task-workspace-v2 .conv-text { color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); overflow-wrap: anywhere; }
 .task-workspace-v2 .conv-text .md > :first-child { margin-top: 0; }
 .task-workspace-v2 .conv-text .md > :last-child { margin-bottom: 0; }
@@ -173,97 +136,16 @@
 .task-workspace-v2 .conv-expand:hover { text-decoration: underline; }
 .task-workspace-v2 .conv-text pre { max-height: 180px; overflow: auto; font-size: var(--fs-12); }
 .task-workspace-v2 .conv-text table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--fs-13); }
-.task-workspace-v2 .conv-earlier { border-left: 2px solid var(--line); padding-left: 10px; }
-.task-workspace-v2 .conv-earlier.narration > summary { color: var(--faint); }
-.task-workspace-v2 .conv-earlier > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
-.task-workspace-v2 .conv-earlier .conv-text { margin-top: 8px; color: var(--muted); font-size: var(--fs-13); }
-.task-workspace-v2 .conv-act {
-  display: block; width: 100%; padding: 2px 0; margin: 0;
-  border: 0; background: transparent; text-align: left;
-  color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.task-workspace-v2 .conv-act > span { color: var(--faint); margin-right: 6px; }
-.task-workspace-v2 .conv-act:hover { color: var(--ink); }
-.task-workspace-v2 .conv-lead { margin: 0; color: var(--text); font-size: var(--fs-13); }
-.task-workspace-v2 .conv-answer { margin: 0; color: var(--text); font-size: var(--fs-14); line-height: var(--lh-body); white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-workspace-v2 .conv-notes { margin: 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.6; white-space: pre-wrap; }
-.task-workspace-v2 .conv-question-echo { margin: 0; color: var(--muted); font-size: var(--fs-13); }
-.task-workspace-v2 .conv-refs { display: flex; flex-wrap: wrap; gap: 6px; }
-.task-workspace-v2 .conv-refs > span { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; font-weight: 600; }
-.task-workspace-v2 .conv-cli {
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--surface-2); color: var(--text);
-  font: 12px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
-}
 
-/* 引用一条批注:文件:行 + 意见原文;点了回到材料原位 */
-.task-workspace-v2 .conv-quote {
-  display: grid; gap: 2px; width: 100%; margin: 0; padding: 4px 10px;
-  border: 0; border-left: 3px solid var(--line-strong); border-radius: 0;
-  background: transparent; text-align: left; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: var(--fs-13); line-height: 1.5;
-}
-.task-workspace-v2 .conv-quote:hover { border-left-color: var(--ink); color: var(--text); }
-.task-workspace-v2 .conv-quote code { font: 500 11px/1.4 var(--font-mono); color: var(--faint); }
-.task-workspace-v2 .conv-quote span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.task-workspace-v2 .conv-thread-link {
-  justify-self: start; padding: 0; border: 0; background: transparent;
-  color: var(--ink); font: inherit; font-size: var(--fs-12); cursor: pointer;
-}
-.task-workspace-v2 .conv-thread-link:hover { text-decoration: underline; }
-
-/* 回执清单 */
-.task-workspace-v2 .conv-receipts { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.task-workspace-v2 .conv-receipts > li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; }
-.task-workspace-v2 .conv-receipts > li > i {
-  width: 16px; height: 16px; margin-top: 3px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 10px; font-style: normal; color: #fff; background: var(--faint);
-}
-.task-workspace-v2 .conv-receipts > li.outcome-fixed > i { background: var(--success); }
-.task-workspace-v2 .conv-receipts > li.outcome-not_fixed > i { background: var(--danger); }
-.task-workspace-v2 .conv-receipts > li.needs_clarification > i { background: var(--attention); }
-.task-workspace-v2 .conv-receipts > li > div { min-width: 0; display: grid; gap: 2px; }
-.task-workspace-v2 .conv-receipt-title {
-  justify-self: start; padding: 0; border: 0; background: transparent; text-align: left;
-  color: var(--text); font: inherit; font-size: var(--fs-13); line-height: 1.5; cursor: pointer;
-}
-.task-workspace-v2 .conv-receipt-title:hover { color: var(--ink); }
-.task-workspace-v2 .conv-receipts small { color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
-.task-workspace-v2 .conv-receipts small b { font-weight: 600; color: var(--text); }
-.task-workspace-v2 .conv-receipts small code { font: 11px var(--font-mono); }
-
-/* 外部意见 */
-.task-workspace-v2 .conv-external { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.task-workspace-v2 .conv-external > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding-left: 10px; border-left: 3px solid var(--line-strong); font-size: var(--fs-13); color: var(--text); }
-.task-workspace-v2 .conv-external code { font: 500 11px/1.4 var(--font-mono); color: var(--faint); }
-.task-workspace-v2 .conv-external small { flex-basis: 100%; color: var(--muted); font-size: var(--fs-12); }
-
-/* 卡:历史卡是只读摘要;当前卡是 WaitingCard 本体 */
+/* 当前决定卡:WaitingCard 塞进气泡——去掉卡自己的大外框内边距,让它像一条消息。
+   卡内区块的 flex order 与 ws-decision 同一套(标题 → Agent 的话 → 选项 → 提醒 → 附带批注 → 依据),
+   提交区经 portal 挂到输入框,不在卡里。conv-card current 这个类名是停靠钩子
+   (会话流的卡座容器,conversationStream 契约钉住),底盒由它继续承担;
+   历史卡的常规皮已随 #232 词典化退役。 */
 .task-workspace-v2 .conv-card {
   border: 1px solid var(--line-strong); border-radius: var(--radius-lg);
   background: var(--surface); overflow: hidden;
 }
-.task-workspace-v2 .conv-card.resolved, .task-workspace-v2 .conv-card.superseded { border-color: var(--line); }
-.task-workspace-v2 .conv-card-head { padding: 10px 14px 8px; border-bottom: 1px solid var(--line); }
-.task-workspace-v2 .conv-kicker { display: block; color: var(--attention); font-size: var(--fs-12); font-weight: 500; }
-.task-workspace-v2 .conv-card.resolved .conv-kicker, .task-workspace-v2 .conv-card.superseded .conv-kicker { color: var(--faint); }
-.task-workspace-v2 .conv-card-head h4 { margin: 2px 0 0; color: var(--text-strong); font-size: var(--fs-14); font-weight: 600; line-height: 1.4; }
-.task-workspace-v2 .conv-question { padding: 8px 14px 4px; }
-.task-workspace-v2 .conv-question > p { margin: 0 0 6px; color: var(--text); font-size: var(--fs-13); }
-.task-workspace-v2 .conv-options { margin: 0 0 6px; padding: 0; list-style: none; display: grid; gap: 6px; }
-.task-workspace-v2 .conv-options > li {
-  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  color: var(--muted); font-size: var(--fs-13);
-}
-.task-workspace-v2 .conv-options > li.chosen { border-color: var(--ink); background: var(--ink-soft); color: var(--ink); font-weight: 600; }
-.task-workspace-v2 .conv-options > li.chosen::after { content: " ✓"; }
-.task-workspace-v2 .conv-card-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-12); }
-.task-workspace-v2 .conv-card-foot > button { padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-12); cursor: pointer; }
-
-/* 当前决定卡:WaitingCard 塞进气泡——去掉卡自己的大外框内边距,让它像一条消息。
-   卡内区块的 flex order 与 ws-decision 同一套(标题 → Agent 的话 → 选项 → 提醒 → 附带批注 → 依据),
-   提交区经 portal 挂到输入框,不在卡里。 */
 .task-workspace-v2 .conv-card.current { border-color: var(--line-strong); }
 .task-workspace-v2 .conv-card.current .decision-card { display: flex; flex-direction: column; border: 0; border-radius: 0; background: transparent; box-shadow: none; margin: 0; padding: 0; }
 .task-workspace-v2 .conv-card.current .decision-head { order: 0; padding: 12px 14px 4px; }
@@ -344,17 +226,8 @@
 }
 .task-workspace-v2 .conv-card.current .ws-attached-feedback { margin: 0; }
 
-/* 收口块(失败/验证中/等合入/子任务)与只读说明 */
-.task-workspace-v2 .conv-tail { display: grid; gap: 10px; }
-.task-workspace-v2 .conv-tail .read-only-notice { margin: 0; }
-.task-workspace-v2 .conv-tools { border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); padding: 6px 10px; }
-.task-workspace-v2 .conv-tools > summary { color: var(--muted); font-size: var(--fs-12); cursor: pointer; }
-.task-workspace-v2 .conv-tool { display: grid; grid-template-columns: 8px auto auto; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--fs-12); color: var(--muted); }
-.task-workspace-v2 .conv-tool > i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
-.task-workspace-v2 .conv-tool.passed > i { background: var(--success); }
-.task-workspace-v2 .conv-tool.failed > i { background: var(--danger); }
-.task-workspace-v2 .conv-tool > b { color: var(--text); font-weight: 600; }
-.task-workspace-v2 .conv-tool > pre { grid-column: 1 / -1; margin: 0; padding: 6px 8px; max-height: 96px; overflow: auto; border-radius: var(--radius-sm); background: var(--surface-2); font: 11px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 收口块(失败/验证中/等合入/子任务)与只读说明、开发助手工具步
+   (conv-tail/conv-tools/conv-tool)已随 #232 词典化退役。 */
 
 /* ── 输入框:整个右栏只有这一个 ────────────────────────────────────── */
 .task-workspace-v2 .ws-composer {
@@ -454,13 +327,6 @@
   .task-workspace-v2 .ws-stream-new { display: none; }
 }
 
-/* 跨仓上下游通知:正文 + 一行说明它会怎么被处理 */
-.task-workspace-v2 .conv-sync { display: grid; gap: 4px; }
-.task-workspace-v2 .conv-sync p { margin: 0; color: var(--text); font-size: var(--fs-13); line-height: var(--lh-body); white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-workspace-v2 .conv-sync small { color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
-
-/* 意见类条目的一行摘要:一句话 + 打开检视意见 */
-.task-workspace-v2 .conv-digest { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; color: var(--text); font-size: var(--fs-13); line-height: 1.55; }
-.task-workspace-v2 .conv-digest small { color: var(--attention); font-size: var(--fs-12); }
-.task-workspace-v2 .conv-digest .conv-act { margin-left: auto; }
+/* 跨仓上下游通知(conv-sync)与意见类条目的一行摘要(conv-digest)
+   已随 #232 词典化退役。 */
 }

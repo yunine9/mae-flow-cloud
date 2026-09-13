@@ -130,7 +130,9 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.match(html, /结论:只改一处,请确认。/, "交接语摊开");
   assert.match(html, /编辑 …\/src\/a\.ts · 运行 npm test · 共 12 步 · 1 步失败/);
   assert.match(html, /最终检视：确认这版代码可直接推送/);
-  assert.match(html, /class="chosen">需要调整代码/);
+  // #232 改锚:选项高亮换本页 CONV 词典,选中项由勾标伪元素承担(类值
+  // 经 renderToStaticMarkup 转义,只认到文本为止)。
+  assert.match(html, /✓[^"]*">需要调整代码/);
   assert.match(html, /林知远/, "决定人按显示名");
   assert.match(html, /第 9 行别暴露枚举/);
   // 非线程视图:意见类条目一行摘要 + 打开检视意见,不摊开正文(抽屉里有)
@@ -158,8 +160,11 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
 
 test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各占一行", () => {
   const html = render({ statusText: "执行中", actor: "由你负责" });
-  assert.match(html, /<header class="ws-collaboration-head"><strong>与 Agent 协作<\/strong><div class="ws-stream-filters"/,
+  // #210 起筛选交给 base-ui Tabs 原语:栏头里是 Tabs 包装层 + TabsList
+  // (皮肤类 ws-stream-filters 仍挂在签条上)。
+  assert.match(html, /<header class="ws-collaboration-head"><strong>与 Agent 协作<\/strong><div[^>]*data-slot="tabs"/,
     "筛选进栏头,不再单独一行");
+  assert.match(html, /role="tablist"[^>]*class="[^"]*ws-stream-filters/);
   assert.match(html, /<small>执行中 · 由你负责 · 写完后会举卡请你检视<\/small>/,
     "状态、责任、下一步并成锚条的一行小字");
   assert.doesNotMatch(html, /ws-focus-status/);
@@ -180,7 +185,8 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   assert.match(html, /跳到卡片/);
   assert.match(html, /conv-card current"><div class="probe-card">决定卡本体/);
   const confirm = render({ awaitingYou: 3 });
-  assert.match(confirm, /3 条意见等你逐条确认/);
+  // 口径演进后的现文案:「需要我的」锚条只说"待你处理"(阅读筛选,不是权限)。
+  assert.match(confirm, /3 条意见待你处理/);
   assert.match(confirm, /打开检视意见/);
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
   // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。

@@ -102,9 +102,7 @@
 .workspace-studio .requirement-source .md-h2 { font-size: 18px; margin-top: 28px; }
 .workspace-studio .ws-document-tabs .ws-tab.on { box-shadow: var(--shadow-sm); }
 .workspace-studio .is-embedded .change-files { background: var(--surface-2); }
-.workspace-studio .is-embedded .git-change-summary { margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
 .workspace-studio .is-embedded .git-change-browser { border: 0; border-radius: 0; }
-.workspace-studio .is-embedded .change-file-detail > header { background: var(--surface); border-color: var(--line); }
 .workspace-studio .ws-review-canvas { background: var(--surface-2); box-shadow: inset 4px 0 12px #28234b03; }
 .workspace-studio.task-workspace-v2 .annot-list .annot-item,
 .workspace-studio.task-workspace-v2 .workspace-review-notes .annot-item:has(.annot-response) { box-shadow: var(--shadow-sm); }

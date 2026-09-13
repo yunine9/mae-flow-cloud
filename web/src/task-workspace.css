@@ -50,7 +50,6 @@
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch .material-search-toggle,
 .task-workspace-v2 .ws-source-switch .ws-review-launch,
-.task-workspace-v2 .focus-review,
 .task-workspace-v2 .delivery-locate {
   height: var(--control-h);
   padding: 0 12px;
@@ -74,7 +73,6 @@
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle:hover,
 .task-workspace-v2 .ws-source-switch .material-search-toggle:hover,
 .task-workspace-v2 .ws-source-switch .ws-review-launch:hover,
-.task-workspace-v2 .focus-review:hover:not(:disabled),
 .task-workspace-v2 .delivery-locate:hover:not(:disabled) {
   color: var(--text-strong);
   border-color: var(--text-strong);
@@ -124,10 +122,6 @@
 .task-workspace-v2 .event-filters button.active { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
 .task-workspace-v2 .event-filters button span { color: inherit; background: color-mix(in srgb, currentColor 14%, transparent); font-size: var(--fs-12); }
 .task-workspace-v2 .event-filters button.active span { background: color-mix(in srgb, var(--ink-fg) 22%, transparent); }
-/* GitDiff 的"专注审阅"是次级 32,不是灰底胶囊;隐藏文件的小叉是图标钮。 */
-.task-workspace-v2 .focus-review { height: var(--control-h); border-radius: var(--radius-sm); background: var(--surface); }
-.task-workspace-v2 .change-hide { width: 28px; height: 28px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; }
-.task-workspace-v2 .change-hide:hover { border-color: var(--line-strong); background: var(--surface); }
 
 /* ── 任务头:返回 · 单号 · 标题 · 状态 · 控制 ───────────────────────── */
 
