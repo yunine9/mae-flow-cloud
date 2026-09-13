@@ -118,17 +118,34 @@ export function WarmupBadge({ task, onOpen }: { task: TaskSummary; onOpen: () =>
   </Tooltip>;
 }
 
+/** 面板壳的状态皮(#232 换装:原 .warmup-panel is-* 色板直译):
+ * 圆点随状态变色,运行态呼吸;失败整卡描红线、摘要字同色。 */
+const WARMUP_DOT = {
+  running: "bg-(--accent) animate-pulse motion-reduce:animate-none",
+  passed: "bg-success",
+  failed: "bg-danger",
+  infrastructure_failure: "bg-muted-foreground",
+  unknown: "bg-muted-foreground",
+  reclaimed: "bg-muted-foreground",
+} as const;
+
 export function WarmupPanel({ task }: { task: TaskSummary }) {
   const receipt = task.baseline_build;
   if (!receipt) return <Empty role="status" className="py-6"><EmptyDescription>尚未收到开工前编译记录，暂时无法确认是否就绪。收到检查结果后，顶部状态会自动更新。</EmptyDescription></Empty>;
   const running = receipt.status === "running";
+  const failed = receipt.status === "failed";
   return (
-    <section className={`warmup-panel is-${receipt.status}`}
+    /* #232 换装:面板壳原 .warmup-panel is-* 皮退役,直译工具类;
+       浮窗机构(warmup-overlay/warmup-dialog,拖拽缩放)一行不动。 */
+    <section
+      className={cn("flex flex-col gap-[7px] rounded-[10px] border bg-surface px-3.5 py-2.5 text-[13px]",
+        failed && "border-destructive")}
       aria-label="环境预热编译">
-      <header>
-        <i aria-hidden />
-        <strong>开工前编译</strong>
-        <span>
+      <header className="flex items-center gap-2 text-muted-foreground">
+        <i aria-hidden className={cn("size-2 flex-none rounded-full",
+          WARMUP_DOT[receipt.status] ?? WARMUP_DOT.unknown)} />
+        <strong className="text-[13.5px] text-text-strong">开工前编译</strong>
+        <span className={failed ? "text-danger" : undefined}>
           {receipt.status === "running"
             ? `正在编译基线 ${receipt.sha.slice(0, 12)},为增量编译焐热缓存`
             : receipt.status === "passed"
@@ -138,13 +155,13 @@ export function WarmupPanel({ task }: { task: TaskSummary }) {
                 : "预热未完成(基础设施问题),不代表开工前编译失败"}
         </span>
       </header>
-      {task.workspace_reclaimed_at && <p className="warmup-detail">任务现场已回收，以下是回收前的检查记录，不代表当前现场仍可使用。</p>}
+      {task.workspace_reclaimed_at && <p className="m-0 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">任务现场已回收，以下是回收前的检查记录，不代表当前现场仍可使用。</p>}
       {receipt.detail && receipt.status !== "passed" && !running && (
-        <p className="warmup-detail">{receipt.detail}</p>
+        <p className="m-0 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{receipt.detail}</p>
       )}
       {receipt.build_command && receipt.status === "passed" && (
-        <p className="warmup-command">
-          验证过的构建入口:<code>{receipt.build_command}</code>
+        <p className="m-0 text-sm text-muted-foreground">
+          验证过的构建入口:<code className="text-text-strong [overflow-wrap:anywhere]">{receipt.build_command}</code>
         </p>
       )}
       {running && (

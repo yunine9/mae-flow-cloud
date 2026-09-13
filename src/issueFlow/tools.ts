@@ -25,12 +25,19 @@
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import {
   FIXED_STAGE_LABELS,
   fixedAdvance,
   fixedComplete,
+  fixedStageIndex,
   fixedStages,
   issueRepoWorkspaces,
   normalizeIssueRepos,
@@ -38,6 +45,7 @@ import {
   recordTransition,
   ENV_SCOPE_LABELS,
   type FixedStage,
+  type IssueGateKind,
   type IssueGateScope,
   type IssueSessionState,
 } from "./state.ts";
@@ -52,7 +60,8 @@ import {
   getPipelineStatus,
   type PipelineRun,
 } from "../pipelineClient.ts";
-import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
+import { readBusinessModule, listBusinessModules, type BusinessModule } from "../businessModuleLibrary.ts";
+import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
@@ -68,6 +77,7 @@ import {
   dirtyWorktree,
   pushChangeSummary,
   pushFromIssueWorkspace,
+  remoteBranchState,
   remoteBranchTip,
   IssuePushStaleRemoteError,
   type GitCredential,
@@ -132,6 +142,9 @@ export interface IssueToolContext {
   /** mr_green 即时收口的用户通知(complete_stage 验绿当场全绿/空清单
    * 时调;监看器滞后收口的通知在 service 侧,不经这里)。 */
   notifyMrGreen?(): void;
+  /** 单卡互斥②(ADR-0024):有未决的 Agent 问题卡时 raise_gate 拒举。
+   * 服务侧接 humanGate.pending();缺席按无卡(裸构造兼容缺省)。 */
+  pendingAgentCard?: () => boolean;
   log?: (message: string) => void;
 }
 
@@ -442,6 +455,125 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
+  // ---- 移除仓(用户指派,#240;阶段注册表把它补进每个阶段,全程可调) ----
+  // 删除语义 = 用户裁定该仓与本问题无关。门禁立场与单号门禁同款:
+  // 提示词管不住的侥幸在工具层过不去;网络不可判定=保守拒(宁误拦
+  // 不误放);MR 不单独查——远端分支不存在时 MR 自然不可合。
+
+  tools.push(defineTool({
+    name: "remove_repo",
+    label: "Remove Repository",
+    description:
+      "把一个仓从本会话移除(仅限用户指派时调用):移除=确认该仓与本"
+      + "问题无关,若已有与该仓相关的分析思路或结论,应先重新审视、必要"
+      + "时修订后再移除。平台机械门禁:①业务模块的绑定仓不可移除;"
+      + "②远端同名修复分支(master_<工号>_<单号>)还在时不可移除,"
+      + "要请用户先在代码平台删除远端分支;③远端状态查不到(网络/凭据)"
+      + "时保守拒绝,稍后重试。通过后宿主物理删除工作区仓目录,并把该仓"
+      + "从会话关联仓清单摘除(首位仓被删时兼容首位字段自动接替新首位),"
+      + "删除事实入转移账。repo 必填,必须是会话登记过的仓。",
+    parameters: Type.Object({
+      repo: Type.String({
+        description: "要移除的代码仓地址(会话登记过的);删除必须显式指仓",
+      }),
+    }),
+    async execute(_toolCallId: string, params: any) {
+      gateStage("remove_repo");
+      const wanted = String(params.repo ?? "").trim();
+      if (!wanted) fail("repo 不能为空:删除必须显式指仓(给要移除的代码仓地址)");
+      // 目录只认登记映射(issueRepoWorkspaces),不吃任何用户路径输入:
+      // URL 不在清单=拒;映射值锚死 <工作区>/repo/<仓名> 平铺名,仓名
+      // 取地址末段去 .git 且不含路径分隔符,逃逸形态在公共调用面上
+      // 构造不出来。下方另有解析路径双保险。
+      const target = locateRepo(wanted);
+      // 门禁①:模块绑定仓不可移除——模块带出的仓是登记/绑定侧的既定
+      // 关系,AI 单方面移除等于改登记。查不到模块(已删除/元数据损坏)
+      // 按无绑定仓处理,不挡移除。
+      if (state.module_id) {
+        let bound: BusinessModule | undefined;
+        try {
+          bound = readBusinessModule(ctx.dataRoot, state.module_id);
+        } catch {
+          bound = undefined;
+        }
+        const isBound = bound?.repositories.some((repo) =>
+          repositoryIdentity(repo) === repositoryIdentity(target.url));
+        if (isBound) {
+          fail(`「${target.url}」是业务模块「${bound!.name}」的绑定仓,`
+            + "模块绑定仓不可移除——如该仓确与本问题无关,"
+            + "请用户调整模块绑定后再试");
+        }
+      }
+      // 门禁②/③(现场现查,不信缓存):远端不可判定=保守拒;同名
+      // 修复分支在=拒并指路(先删远端分支)。与单号门禁同一哲学:
+      // 宁误拦不误放。无单(manual)会话没有修复分支可言——探测会拿
+      // 拼出来的假分支名空转,直接跳过这道门。
+      if (state.ticket) {
+        const branch = expectedBranch(state);
+        const probe = await remoteBranchState({
+          dataDir: ctx.dataRoot,
+          repoUrl: target.url,
+          branch,
+          credential: ctx.gitCredential?.(),
+        });
+        if (!probe.reachable) {
+          fail(`远端状态查不到(${target.url}),无法安全判定删除条件——`
+            + "请稍后重试;持续失败时请检查网络或 Git 令牌配置,"
+            + "不要跳过门禁强行移除");
+        }
+        if (probe.tip) {
+          fail(`远端同名修复分支 ${branch} 还在(${target.url} @ `
+            + `${probe.tip.slice(0, 12)}),不可移除——请用户先在代码平台`
+            + "删除远端分支,再移除该仓");
+        }
+      }
+      // 双保险:映射目录解析后必须严格落在会话工作区内(映射已锚死,
+      // 这里防的是将来映射改动把逃逸面带进来)。
+      const resolvedDir = resolve(target.dir);
+      const resolvedRoot = resolve(ctx.workspace);
+      if (resolvedDir === resolvedRoot
+          || !resolvedDir.startsWith(resolvedRoot + sep)) {
+        fail(`工作区目录异常(${target.dir}),拒绝删除`);
+      }
+      // 执行:物理删除(不存在也容错——登记在册但从未拉取的仓照样
+      // 可移除,清的是清单不是目录)。
+      rmSync(resolvedDir, { recursive: true, force: true });
+      try {
+        // repo/ 平铺根空了就顺手收走;清理失败不回滚移除语义。
+        const parent = dirname(resolvedDir);
+        if (existsSync(parent) && readdirSync(parent).length === 0) {
+          rmdirSync(parent);
+        }
+      } catch { /* 空目录清理是尽力而为 */ }
+      // 清单摘除 + 首位接替:repo_url 是 repo_urls[0] 的兼容别名
+      // (dual-write),首位被删时接替新首位;清单空则两个字段一起退场。
+      const remaining = (state.repo_urls ?? []).filter((url) =>
+        url !== target.url);
+      if (remaining.length) {
+        state.repo_urls = remaining;
+        if ((state.repo_url ?? "") === target.url) {
+          state.repo_url = remaining[0];
+        }
+      } else {
+        delete state.repo_urls;
+        delete state.repo_url;
+      }
+      recordTransition(state, {
+        source: "platform",
+        note: `代码仓已移除(用户指派:该仓与本问题无关): ${target.url}`
+          + `(工作区 ${target.dir});剩余 ${remaining.length} 个登记仓`
+          + `${remaining.length ? `:${remaining.join(", ")}` : "(清单已空)"}`,
+      });
+      ctx.persist();
+      return ok(`已移除代码仓 ${target.url}:工作区目录已删除,`
+        + "已从会话关联仓清单摘除。\n"
+        + (remaining.length
+          ? `剩余 ${remaining.length} 个登记仓:\n`
+            + remaining.map((url) => `- ${url}`).join("\n")
+          : "会话已没有登记仓(需要时可用 pull_repo 重新登记)。"));
+    },
+  }));
+
   // ---- 运维:换库部署(2026-09-02 封存,ADR-0013:换库验证阶段下线,
   // 无阶段开放本工具,调用一律被阶段门禁拒绝;执行体与闸举升代码原地
   // 保留——重启换库时在注册表加回阶段行即可,见 ADR-0013) ----
@@ -505,6 +637,121 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       return ok(result.summary
         + "\n当前介入档位不举验证卡:请自行核对以上部署输出,"
         + "并在分析报告中记录验证情况与结果。");
+    },
+  }));
+
+  // ---- 举卡工具(ADR-0024):举卡发起权归 AI,平台只做前置事实校验 ----
+
+  /** 卡面问题模板(卡面文案留在代码,ADR-0016 分工;选项出自注册表
+   * GATE_OPTIONS,AI 不可注入——决策码是作答协议,不是模型的填空题)。
+   * 监看器代举路径在切换票(#246/#247)落地后应收敛引用这里,防两处漂移。 */
+  const RAISE_GATE_QUESTIONS: Record<
+    "env_verify" | "pipeline_unfixable" | "pipeline_evidence", string> = {
+    env_verify:
+      "全部 MR 流水线已跑绿。请到目标环境验证修复效果:通过则可归档"
+      + "收口;发现问题请选「验证发现问题」并描述现象(补充说明支持"
+      + "粘贴截图)。未反馈也可直接归档或取消。",
+    pipeline_unfixable:
+      "流水线红灯需要人工在交付平台处理或豁免(改代码解决不了)——"
+      + "请在交付平台处理/豁免后,在本卡作答「已在平台处理/豁免,"
+      + "重新监看」,平台会重新监看同一提交。",
+    pipeline_evidence:
+      "流水线红灯缺少可定位的报错原文——请把平台上失败项的报错原文"
+      + "(带文件/行号/堆栈)粘贴进本卡作答,原文将作为修复证据回灌"
+      + "下一修复回合。",
+  };
+
+  tools.push(defineTool({
+    name: "raise_gate",
+    label: "Raise Human Gate",
+    description:
+      "向用户举平台人工卡(三种,按 kind 区分)。什么时候该举由你判断,"
+      + "但平台只认事实:前置条件不满足会被拒,拒回文案里写了下一步"
+      + "该做什么。卡面问题与选项由平台模板决定,你只能带事实性补充"
+      + "(supplement),不能自创选项或决策码。落卡即返回——举完就结束"
+      + "回合等待用户作答,不要自行继续。",
+    parameters: Type.Object({
+      kind: Type.Union([
+        Type.Literal("env_verify"),
+        Type.Literal("pipeline_unfixable"),
+        Type.Literal("pipeline_evidence"),
+      ], { description:
+        "env_verify=请用户到目标环境验证修复效果(前置:全部 MR 跑绿"
+        + "且「提交 MR·跑绿」阶段已收口);pipeline_unfixable=红灯需"
+        + "人工在交付平台处理/豁免(前置:该仓红灯事实在案);"
+        + "pipeline_evidence=请用户回灌失败报错原文(前置同上)" }),
+      repo: Type.Optional(Type.String({
+        description: "pipeline 两卡必填:红灯所属仓(会话仓清单内的地址)" })),
+      supplement: Type.Optional(Type.String({
+        description: "事实性补充,随卡展示给用户:失败摘要、现场观察、"
+          + "已尝试的动作;只写事实与证据,不写内部操作过程",
+        maxLength: 2000 })),
+    }, { additionalProperties: false }),
+    async execute(_toolCallId: string, params: any) {
+      // 单卡互斥(ADR-0024):任何卡在场都不许再举——两卡并存是
+      // issue-53 撞车类 bug 的土壤(作答分派闸优先,Agent 卡成死卡)。
+      if (ctx.state.gate) {
+        fail("已有一张平台闸在等用户作答——先等闸裁决,裁决后会开新"
+          + "回合;届时若仍需要用户拍板,再判断是否举卡。不要叠加举卡。");
+      }
+      if (ctx.pendingAgentCard?.()) {
+        fail("已有一张问题卡在等用户作答——先等作答结果再继续,"
+          + "不要叠加举卡。");
+      }
+      const kind = String(params?.kind ?? "") as IssueGateKind;
+      if (kind !== "env_verify" && kind !== "pipeline_unfixable"
+        && kind !== "pipeline_evidence") {
+        fail("不支持的卡种:" + (kind || "(缺席)") + "。只允许 "
+          + "env_verify(环境验证)/ pipeline_unfixable(红灯人工处理)/ "
+          + "pipeline_evidence(报错原文回灌)。");
+      }
+      if (kind === "env_verify") {
+        // 前置事实①:全部 MR 跑绿(查平台监看账,不凭 AI 口供)。
+        const mrs = ctx.state.mrs ?? [];
+        const allGreen = mrs.length > 0 && mrs.every((mr) =>
+          ctx.state.pipelines?.[mr.repo]?.status === "success");
+        if (!allGreen) {
+          fail("流水线还没有全部跑绿,现在请用户验证为时过早——先把"
+            + "未绿的仓修复后同分支重推(push_branch、create_mr),"
+            + "等平台的全绿通知后再举这张卡。");
+        }
+        // 前置事实②:mr_green 已收口(申报是出口的一半,收口即申报
+        // 已过验绿门;未收口举卡会跳过申报半边)。
+        const index = ctx.state.scenario
+          ? fixedStageIndex(ctx.state.scenario, "mr_green") : -1;
+        if (index < 0
+          || (ctx.state.stage_states?.[index] ?? "pending") !== "done") {
+          fail("「提交 MR·跑绿」阶段还没收口(申报是出口的一半)——"
+            + "先调 complete_stage 申报 MR 清单,平台验绿收口后再举"
+            + "这张卡。");
+        }
+        raiseGate(ctx.state, "env_verify",
+          RAISE_GATE_QUESTIONS.env_verify, undefined, params.supplement);
+        ctx.persist();
+        return ok("已举出环境验证卡,请结束本回合等待用户作答"
+          + "——不要自行继续。");
+      }
+      // pipeline 两卡:红灯事实必须在平台账上在案(仓+提交定位),
+      // resume_watch 裁决重看同一提交靠它。
+      const repo = String(params?.repo ?? "").trim();
+      if (!repo) {
+        fail("举流水线人工卡必须带 repo(红灯所属仓,会话仓清单内"
+          + "的地址)。");
+      }
+      const watch = ctx.state.pipelines?.[repo];
+      if (!watch || watch.status !== "failed") {
+        fail(`「${repo}」没有在案的红灯事实——人工卡要凭平台的失败`
+          + "记录举,不要凭印象。先确认该仓流水线确实红灯(平台通知,"
+          + "或重推后查状态),再举卡。");
+      }
+      raiseGate(ctx.state, kind, RAISE_GATE_QUESTIONS[kind], undefined,
+        params.supplement, undefined, undefined, { repo, sha: watch.sha });
+      ctx.persist();
+      return ok(kind === "pipeline_unfixable"
+        ? "已举出流水线人工处理卡,请结束本回合等待用户在平台处理/"
+          + "豁免后作答——不要自行继续。"
+        : "已举出报错回灌卡,请结束本回合等待用户粘贴失败原文作答"
+          + "——不要自行继续。");
     },
   }));
 

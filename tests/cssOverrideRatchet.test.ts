@@ -16,7 +16,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = new URL("../web/src/", import.meta.url).pathname;
+// #233 收官:web/src 只剩 tailwind.css 一个手写样式文件(19 个 legacy 文件退役)。
 const files = readdirSync(dir).filter((name) => name.endsWith(".css"));
+assert.deepEqual(files, ["tailwind.css"], "web/src 只允许 tailwind.css 一个样式文件");
 const css = Object.fromEntries(files.map((name) => [name, readFileSync(join(dir, name), "utf-8")]));
 
 // 2026-09-06 晚拧到当前实测值(删死 CSS 后):要升必须来改这里并说清为什么。
@@ -123,23 +125,24 @@ test("CSS 叠层:固定五层顺序，存量保持 legacy，Preflight 兼容只�
   const declarations = Object.entries(css).flatMap(([name, text]) =>
     (text.replace(/\/\*[\s\S]*?\*\//g, "").match(/^@layer [^{;]+;$/gm) ?? [])
       .map(declaration => ({ name, declaration })));
-  assert.deepEqual(declarations, [{ name: "tokens.css",
+  assert.deepEqual(declarations, [{ name: "tailwind.css",
     declaration: "@layer base, legacy, fixes, theme, utilities;" }],
-    "tokens.css 必须唯一声明 base < legacy < fixes < theme < utilities");
+    "tailwind.css 必须唯一声明 base < legacy < fixes < theme < utilities");
   for (const [name, text] of Object.entries(css)) {
     const body = text.replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^@layer [^{;]+;$/m, "").trim();
     // 2026-09-09 豁免(issue #148):tailwind.css 是 Tailwind v4 新世界入口,
     // 层序经 @import layer() 注记在构建期落位(legacy < fixes < theme < utilities,
     // dist 已验),结构上不属于 legacy 存量,不包 legacy 层;未登记层的禁令对它照常生效。
-    const containerLayer = name === "preflight-compat.css" ? "base" : "legacy";
+    const containerLayer = "legacy";
     if (name !== "tailwind.css") {
       assert.ok(body.startsWith(`@layer ${containerLayer} {`),
         `${name} 的样式必须整体包在 @layer ${containerLayer} { … } 里`);
       assert.ok(body.endsWith("}"), `${name} 的 ${containerLayer} 层没有闭合`);
     }
     const layers = [...body.matchAll(/@layer\s+([a-zA-Z-]+)\s*\{/g)].map((match) => match[1]);
-    const allowed = name === "preflight-compat.css" ? ["base"] : ["legacy", "fixes"];
+    // tailwind.css 是唯一入口:base(preflight+归一)/legacy(存量皮)/fixes 都是登记层
+    const allowed = name === "tailwind.css" ? ["base", "legacy", "fixes"] : ["legacy", "fixes"];
     assert.deepEqual([...new Set(layers)].filter((layer) => !allowed.includes(layer)), [],
       `${name} 用了未登记的层;要新开层先过一遍截图裁判再来改这里`);
   }
@@ -150,9 +153,8 @@ test("Preflight 导入 base 且兼容补丁随后加载，主题和工具类使�
     .map(match => [match[1], match[2]]);
   assert.deepEqual(imports, [["preflight.css", "base"], ["theme.css", "theme"], ["utilities.css", "utilities"]]);
   const main = readFileSync(join(dir, "main.tsx"), "utf8");
-  const positions = ["tokens.css", "tailwind.css", "preflight-compat.css"]
-    .map(name => main.indexOf(`import "./${name}";`));
-  assert.ok(positions.every(position => position >= 0)
-    && positions[0] < positions[1] && positions[1] < positions[2],
-  "先注册层序，再加载 Preflight，最后加载同层兼容补丁");
+  assert.ok(main.indexOf('import "./tailwind.css";') >= 0,
+    "main.tsx 必须加载 tailwind.css(唯一样式入口)");
+  assert.doesNotMatch(main, /import "\.\/(?!tailwind\.css")[a-z-]+\.css";/,
+    "main.tsx 不得再加载任何 legacy CSS 文件(只剩 tailwind.css)");
 });

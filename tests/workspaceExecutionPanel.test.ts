@@ -138,7 +138,8 @@ test("补充给主任务置灰时明确解释原因，而不是只留一个灰�
 test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
   assert.match(workspace,
     /const deletable = canOperate && \["completed", "failed", "canceled"\]/);
-  assert.match(workspace, />删除任务<\/button>/);
+  // #227 换装:删除入口换 shadcn Button,锚点随组件改钉。
+  assert.match(workspace, />删除任务<\/Button>/);
   assert.match(workspace, /工作区和记录将永久删除/);
   assert.match(workspace, /确认删除/);
   assert.match(historyBoard,
@@ -147,8 +148,9 @@ test("责任人能在终态任务上看到删除入口，并必须二次确认",
 });
 
 test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接", () => {
+  // #227 换装:展开区容器改工具类皮,切片起点随容器改钉。
   const utilities = taskCard.slice(
-    taskCard.indexOf('<div className="task-utilities">'),
+    taskCard.indexOf('<div className="grid min-w-0 gap-2">'),
     taskCard.indexOf("</article>"),
   );
   assert.match(utilities, /<ExecutionPanel task=\{task\} \/>/);

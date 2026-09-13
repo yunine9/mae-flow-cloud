@@ -44,12 +44,14 @@ async function run() {
   const frame = document.querySelector("iframe")!;
   if (!frame.srcdoc.includes("新版订单模块") || frame.srcdoc.includes("旧版订单模块")) throw Error("迟到的旧图覆盖新图");
   if (frame.getAttribute("sandbox") !== "allow-scripts allow-downloads") throw Error("iframe 隔离丢失");
-  if (document.querySelectorAll(".story-view-entry").length !== 1) throw Error("缺图视角仍生成了空页签");
+  if (document.querySelectorAll('[aria-label="已有架构图"] [role="tab"]').length !== 1) throw Error("缺图视角仍生成了空页签");
   if (document.body.textContent!.includes("沿用现有部署")) throw Error("无图的物理覆盖说明挤进了架构页");
   mode = "render-error"; refresh();
-  await until(() => !!document.querySelector(".story-architecture-failure"), "渲染失败没有反馈入口");
+  const failureDetails = () => [...document.querySelectorAll("details")]
+    .find((d) => d.querySelector("summary")?.textContent === "查看失败详情");
+  await until(() => !!failureDetails(), "渲染失败没有反馈入口");
   if (document.querySelector("iframe")) throw Error("渲染失败仍展示旧图");
-  const details = document.querySelector<HTMLDetailsElement>(".story-architecture-failure details")!;
+  const details = failureDetails()!;
   if (details.open || !details.textContent!.includes("label overlaps module")) throw Error("失败详情未保留或默认展开挤占页面");
   [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "打开 Story 提意见")!.click();
   if (!opened) throw Error("失败状态无法回到 Story 提意见");
@@ -66,8 +68,9 @@ async function run() {
   document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.click();
   await until(() => updates === 1, "刷新按钮没有发起架构图生成");
   await until(() => !!document.querySelector<HTMLButtonElement>('button[aria-label="更新架构图"]')!.disabled, "生成期间未禁用重复提交");
-  await until(() => !!document.querySelector(".story-architecture-progress")?.textContent?.includes("正在校验渲染 2/3：订单模块"), "真实阶段没有显示");
-  if (!document.querySelector(".story-architecture-progress")?.textContent?.includes("已用时 1 分")) throw Error("没有展示服务端开始时间对应的耗时");
+  const progress = () => document.querySelector('p[aria-live="polite"]');
+  await until(() => !!progress()?.textContent?.includes("正在校验渲染 2/3：订单模块"), "真实阶段没有显示");
+  if (!progress()?.textContent?.includes("已用时 1 分")) throw Error("没有展示服务端开始时间对应的耗时");
   return { onlyArchify: true, missingTabsHidden: true, raceProtected: true, staleRemoved: true, failureReadable: true, emptyReadable: true, opened };
 }
 run().then((result) => document.getElementById("result")!.textContent = JSON.stringify(result))

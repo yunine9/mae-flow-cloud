@@ -3,26 +3,25 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 
-const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 const taskCard = readFileSync(
   join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
 const studio = readFileSync(
-  join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const stream = readFileSync(
   join(process.cwd(), "web/src/ConversationStream.tsx"), "utf8");
 
 test("决策背景展开后由外层真实占位，不能与后续问题重叠", () => {
-  const legacyWorkspaceRule = css.indexOf(".ws-decision .waiting-context {");
-  const layoutOverride = css.lastIndexOf(".ws-decision .waiting-context {");
-  assert.ok(legacyWorkspaceRule >= 0, "应覆盖工作台原有的决策背景规则");
-  assert.ok(layoutOverride > legacyWorkspaceRule,
-    "解除高度上限的规则必须位于旧工作台规则之后，才能赢得层叠");
-
-  const overrideBody = css.slice(layoutOverride, layoutOverride + 120);
-  assert.match(overrideBody, /max-height:\s*none/);
-  assert.match(overrideBody, /overflow:\s*visible/);
+  // #227(去 legacy 二期)ws-decision 死家族随旧工作台退役:style.css 里的
+  // 旧工作台规则与后来的"解除高度上限"覆盖对一并删除;.waiting-context 的
+  // 展开占位改由展开态本身承担(钳制只挂在折叠态 .clamped 上)。
+  assert.doesNotMatch(css, /\.ws-decision [^{]*\{/,
+    "ws-decision 家族规则已退役,不许悄悄回来");
+  const clamped = css.indexOf(".waiting-context-body.clamped");
+  assert.ok(clamped >= 0,
+    "高度钳制只允许挂在折叠态上;展开态不许再有 max-height 覆盖对");
 });
 
 test("长检视内容在检视画布内自己滚动，不把整页撑高", () => {
@@ -42,7 +41,9 @@ test("交付材料提供统一全屏入口且 Escape 先退出全屏", () => {
   assert.match(workspace, /退出全屏/);
   assert.match(workspace,
     /if \(materialsFullscreen\) setMaterialsFullscreen\(false\)/);
-  assert.match(css, /\.workspace-overlay\.materials-fullscreen \.ws-decision/);
+  // #227:materials-fullscreen 压制规则里的 .ws-decision 死片段随家族
+  // 删除,规则本体(藏任务头/控制行)仍在 style.css 承担全屏布局。
+  assert.match(css, /\.workspace-overlay\.materials-fullscreen > \.ws-head/);
   assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\)/);
 });
 
@@ -157,7 +158,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.doesNotMatch(foot, /批注作者/, "作者与时间已在说话人行,页脚不重复");
 
   const annotate = readFileSync(
-    join(process.cwd(), "web/src/annotate.css"), "utf8");
+    join(process.cwd(), "web/src/tailwind.css"), "utf8");
   // 宽抽屉的两列网格:锚点已并进意见块,不再单独占一行、不再点名区域。
   assert.match(annotate,
     /grid-template-areas:\s*"head head"\s*"note response"\s*"foot foot"/s);
@@ -167,7 +168,7 @@ test("意见卡是三层对话:头一行位置+状态药丸,意见块与回复�
   assert.match(annotate, /\.annot-speaker > i \{[^}]*border-radius: 50%/);
   assert.match(annotate, /\.annot-item \.annot-response \{ border-left-color: var\(--success\)/);
   assert.match(annotate, /\.annot-item \.annot-response\.outcome-needs_clarification \{ border-left-color: var\(--danger\)/);
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.doesNotMatch(studio, /\.annot-item-head \{[^}]*flex-direction: column/);
 });
 
@@ -194,7 +195,8 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.match(workspace, /const chainReview = !!waiting && isChainReviewWaiting\(task\);/,
     "判据只有一份");
   const attachmentStart = workspace.indexOf("attachment={requirementAnalysisConfirmation ? undefined :");
-  const attachmentEnd = workspace.indexOf('className="ws-attached-feedback"', attachmentStart);
+  // #227 换装:附带批注条改工具类皮,切片终点改钉其文案标记。
+  const attachmentEnd = workspace.indexOf("本次决定将附带你的", attachmentStart);
   assert.ok(attachmentStart > 0 && attachmentEnd > attachmentStart);
   assert.doesNotMatch(workspace.slice(attachmentStart, attachmentEnd), /RequirementTeamPicker/,
     "讨论参与人不进确认卡");
@@ -208,11 +210,18 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   assert.doesNotMatch(picker, /duplicateTicketOf|单号与「.*」重复/,
     "同仓单元已由平台串行，同一 AR 不应在分工卡上报重复");
 
-  assert.match(css, /\.ws-decision \{ padding-bottom: 84px; \}/,
-    "右栏底部让开提问题浮钮");
+  // #227:ws-decision 死家族退役,原"右栏底部让开提问题浮钮"的 84px 死白
+  // 一并删除——浮钮现在在工作台打开期间整体收起(studio 规则),画布自己
+  // 滚,不再需要躲避留白。
+  // #233 收官:浮钮收起规则迁非分层附录(宿主类随换装改为 wish-quick-fab)。
+  assert.match(css, /body:has\(\.workspace-studio\) \.wish-quick-fab \{\s*display: none;/,
+    "提问题浮钮在工作台打开期间收起,右栏不再留死白躲避");
   assert.match(css, /\.options\.compact \.custom-entry \{ grid-column: 1 \/ -1;/,
     "逃生口选项降成通栏一行");
-  assert.match(css, /\.ws-decision \.repository-assignee-list > label \{[^}]*grid-template-areas: "name name" "who ticket" "state state"/s);
+  // #233 收官:只读分工行已随 RepositoryAssigneePicker 化退役;确认卡上
+  // 执行人/单号两列表单的布局契约钉在 Picker 的工具类上。
+  assert.match(picker, /mt-3 grid grid-cols-2 gap-3 max-\[600px\]:grid-cols-1/,
+    "分工表单保持 负责人/单号 两列栅格");
 });
 
 test("检视画布标题栏按自己的高度占位,副标题不被裁", () => {
@@ -237,9 +246,10 @@ test("工作台打开期间收起提问题浮钮,检视画布自己滚动", () =
 });
 
 test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
-  // (#210)手搓 role=tablist 换 base-ui Tabs 原语,.review-filter 皮肤类
-  // 挂在 TabsList 上,筛选语义原样。
-  assert.match(workspace, /className="review-filter h-auto w-full"/);
+  // (#210)手搓 role=tablist 换 base-ui Tabs 原语;#227 换装后筛选条的
+  // .review-filter 皮肤类退役,胶囊档位改由 TabsList/TabsTrigger 工具类
+  // 承担,筛选语义与档位词表原样。
+  assert.match(workspace, /aria-label="按处理归属筛选"/);
   assert.match(workspace, /\["mine", "等我确认"\]/);
   assert.match(workspace, /\["agent", "待处理／核验"\]/);
   assert.match(workspace, /\["closed", "已完成"\]/);
@@ -256,8 +266,9 @@ test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作�
   assert.doesNotMatch(panel, /function annotationCategory/,
     "分档不许回到页面里");
   assert.match(panel, /const visibleItems = filter === "all" \? orderedItems/);
-  assert.match(css, /\.review-filter\s*\{/);
-  assert.match(css, /\.feedback-convert\s*\{/);
+  // #227:.review-filter/.feedback-convert 皮肤类已随换装退役。
+  assert.doesNotMatch(css, /\.review-filter\s*\{/);
+  assert.doesNotMatch(css, /\.feedback-convert\s*\{/);
 });
 
 test("材料上的已有批注可以反向打开并定位到检视卡", () => {
@@ -315,10 +326,13 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
     "工作台批注已由批注卡片承载,不重复列");
   assert.match(readFileSync(join(process.cwd(), "web/src/feedbackPresentation.ts"), "utf8"), /已回复，等检视人确认/);
   assert.match(workspace, /检视人 \$\{item\.author\}/);
-  assert.match(workspace, /className="feedback-body"/);
-  assert.match(css, /\.feedback-list\s*\{/);
-  assert.match(css, /\.feedback-body\s*\{[^}]*white-space:\s*pre-wrap/,
+  // #227 换装:.feedback-list/.feedback-body 皮肤类退役,正文原样换行的
+  // 契约由工具类(whitespace-pre-wrap)直接钉在意见正文上。
+  assert.match(workspace,
+    /className="m-0 whitespace-pre-wrap \[overflow-wrap:anywhere\] text-text">\{item\.summary\}/,
     "意见正文原样换行,不再单行省略");
+  assert.doesNotMatch(css, /\.feedback-list\s*\{/);
+  assert.doesNotMatch(css, /\.feedback-body\s*\{/);
   assert.doesNotMatch(css, /\.feedback-groups\s*\{/,
     "横向卡片墙已删,不许悄悄回来");
 });
@@ -331,7 +345,7 @@ test("检视意见弹层里的批注面板默认展开", () => {
   assert.doesNotMatch(panel, /useState\(drafts\.length > 0/);
   // Agent 对批注的回应也是多行正文,换行要保住(用户实锤"只显示一行")。
   const annotateCss = readFileSync(
-    join(process.cwd(), "web/src/annotate.css"), "utf8");
+    join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(annotateCss,
     /\.annot-response p \{[^}]*white-space:\s*pre-wrap/);
 });
@@ -365,7 +379,8 @@ test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意
   assert.match(service, /store\.respond\(receipt\.annotation_id, \{/);
   const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf8");
   assert.match(server, /parts\[2\] === "requirement-revisions"/);
-  assert.match(workspace, /className="requirement-revision-bar"/);
+  // #227 换装:修订对比条改工具类皮,锚点钉内容与状态语义本身。
+  assert.match(workspace, /Agent 已修改 \{revisions\.length\} 轮/);
   assert.match(workspace, /<RequirementDiff text=\{revisionDiff\.text\} \/>/,
     "需求对比直接摊开,不套代码检视的并排画布");
   assert.match(css, /\.requirement-diff-row\.del \.requirement-diff-text \{ text-decoration: line-through/);
@@ -374,13 +389,15 @@ test("需求确认阶段每轮 Agent 修改都能看对比,逐条回执落到意
 test("列表收起卡保留只有节点的阶段轨道——去词签不去进度条", () => {
   // 7f8ebb1 把收起卡的轨道整条隐藏,用户实测"当前进度"下面空了一截,
   // 以为进度条丢了。契约:收起时只藏词签与 Token 遥测,轨道本身必须留着。
-  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  // #227 换装后契约由条件工具类直接钉在 TSX 上(原 .task-card:not(.expanded)
+  // 规则随卡片壳家族退役)。
+  const card = readFileSync(new URL("../web/src/TaskCard.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(css,
     /\.task-card:not\(\.expanded\) \.task-summary \.task-phase-track,?\s*[^{]*\{ display: none; \}/);
-  assert.match(css,
-    /\.task-card:not\(\.expanded\) \.task-summary \.task-phase > span \{ display: none; \}/);
-  assert.match(css,
-    /\.task-card:not\(\.expanded\) \.task-summary \.token-usage \{ display: none; \}/);
+  assert.match(card,
+    /!expanded && "\[\&_\.task-phase>span\]\:hidden \[\&_\.token-usage\]\:hidden"/,
+    "收起时只藏阶段词签与 Token 遥测,轨道(圆点)仍在");
+  assert.doesNotMatch(card + css, /task-phase-track[^{]*\{ display: none/);
 });
 
 test("开发协作:默认标签跟可用性走,占位文案与原因框一致,延后插话有回执", () => {
@@ -409,7 +426,8 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
 test("需求修订失败原因上页面;开发助手接管前列明边界", () => {
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /task\.requirement_revision\?\.state === "failed" && \(/);
-  assert.match(workspace, /className="requirement-revision-error" role="alert"/);
+  // #227 换装:失败原因卡改工具类皮;alert 语义与文案原样钉住。
+  assert.match(workspace, /role="alert">[^]*?上一轮修改没有生效/);
   const box = readFileSync(new URL("../web/src/Composer.tsx", import.meta.url), "utf8");
   assert.match(box, /className="assistant-bounds"/);
   assert.match(box, /Git 只读/);
@@ -417,7 +435,7 @@ test("需求修订失败原因上页面;开发助手接管前列明边界", () =
 });
 
 test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML 可原地全屏", () => {
-  const css = readFileSync(new URL("../web/src/style.css", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../web/src/tailwind.css", import.meta.url), "utf8");
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.requirement-source,\n\.workspace-overlay\.materials-fullscreen \.ws-doc > \.requirement-graph,[\s\S]{0,400}?width: min\(1600px, 100%\);/);
   const workspace = readFileSync(new URL("../web/src/TaskWorkspace.tsx", import.meta.url), "utf8");
@@ -462,7 +480,7 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
   assert.match(workspace, /event\.code !== "KeyR"/, "快捷键按 code 认,Mac 上 ⌥R 的 key 是 ®");
   assert.match(workspace, /isEditableTarget\(event\.target\)\) return;/, "输入框里不抢快捷键");
   assert.match(workspace, /setReviewPanelOpen\(\(open\) => !open\)/);
-  const studioCss = readFileSync(new URL("../web/src/workspace-studio.css", import.meta.url), "utf8");
+  const studioCss = readFileSync(new URL("../web/src/tailwind.css", import.meta.url), "utf8");
   assert.match(studioCss,
     /\.ws-material-stage \{ display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; \}/,
     "材料舞台是一行 flex:画布开着时材料内容自己收窄,不靠 padding 让位");
@@ -487,7 +505,9 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   assert.match(panel, /check\.state !== "hit" && routeOf\(item\) !== "memory"/,
     "记忆是快照,不参与重锚定提示");
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
-  assert.match(footprint, /className="knowledge-memories"/);
+  // #226 去 legacy:"这单记下的"记忆卡随 knowledge-memories 类退役改为
+  // 工具类卡壳;契约锚转向 aria-labelledby(仍是同一块记忆区)。
+  assert.match(footprint, /aria-labelledby="knowledge-memories-title"/);
   assert.match(footprint, /这单记下的/);
   assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
   assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");

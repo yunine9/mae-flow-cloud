@@ -31,8 +31,8 @@ test("Skill 清单深链同时对拍正文与整包后才展示全文", () => {
     /const verified = focus && document\?\.digest === focus\.digest\s*&& document\.package_digest === focus\.packageDigest/,
     "「已对拍」的判定必须两个指纹都相等");
   assert.match(panelSource,
-    /\{document && documentReady\s*\n\s*\? <pre className="ka-doc">\{document\.content\}<\/pre>/,
+    /\{document && documentReady\s*\n\s*\? <DocBlock>\{document\.content\}<\/DocBlock>/,
     "未完成双指纹核对时不能先渲染正文");
   // 对拍没过时页面得说"已停止展开",不能永远转圈假装还在读。
-  assert.match(panelSource, /blocked\s*\n?\s*\? <p className="ka-hint">已停止展开/);
+  assert.match(panelSource, /blocked\s*\n?\s*\? <p className="text-sm\/relaxed text-muted-foreground">已停止展开/);
 });

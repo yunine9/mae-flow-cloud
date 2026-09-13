@@ -53,24 +53,38 @@ import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
+import { IssueMetaPane } from "./MetaPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Empty, EmptyDescription } from "@/components/Empty";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { IssueStatusBadge } from "../StatusBadge";
+import { cn } from "cn";
 
-/** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
- * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
- * (原悬在页签条上方的大卡区,2026-09-07 走查拍板:信息尽可能收进
- * 页签圈,上方不占纵向空间)。页签条复用任务侧 ws-pane-head >
- * ws-source-switch 同构,一签一色走 --workspace-tab-color。 */
+/** 左栏七个一级标签(#123 拍平 + 用户走查反馈;#239 起「元信息」居
+ * 首位:登记信息与关联仓的只读陈列,编辑器留给 #241):对话现场仍是
+ * 默认入口(默认选中不变,只是不再占首位),中间四签是原"材料"面板
+ * 的二级页签升格,逐仓交付收编为末签(原悬在页签条上方的大卡区,
+ * 2026-09-07 走查拍板:信息尽可能收进页签圈,上方不占纵向空间)。
+ * 页签条复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
+ * --workspace-tab-color(#231 换装:原按 nth-child 发色的 issue-workspace
+ * 规则随家族退役,色值直译成各签自带的变量工具类,字面量在此便于
+ * Tailwind 拾取)。 */
 const ISSUE_MAIN_TABS = [
-  { key: "events", label: "对话现场" },
-  { key: "dts", label: "DTS单据" },
-  { key: "doc", label: "过程文档" },
-  { key: "changes", label: "工作区变更" },
-  { key: "logs", label: "拉取日志" },
-  { key: "repos", label: "逐仓交付" },
+  { key: "meta", label: "元信息", tone: "[--workspace-tab-color:#2f8a5f]" },
+  { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
+  { key: "dts", label: "DTS单据", tone: "[--workspace-tab-color:#d28a31]" },
+  { key: "doc", label: "过程文档", tone: "[--workspace-tab-color:#20a28f]" },
+  { key: "changes", label: "工作区变更", tone: "[--workspace-tab-color:#3b83d5]" },
+  { key: "logs", label: "拉取日志", tone: "[--workspace-tab-color:#8059d6]" },
+  { key: "repos", label: "逐仓交付", tone: "[--workspace-tab-color:#7c5cd6]" },
 ] as const;
 type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
+
+/** 轮次徽标(#231 换装,原 .issue-round-badge 琥珀 pill 直译):列表卡
+ * 计划线与工作台头部进度共用。 */
+const ROUND_BADGE = "rounded-full border border-attention/40 bg-attention/10 px-2 py-0.5 text-xs font-bold text-attention";
 
 export function IssueSessionView({
   detail,
@@ -277,11 +291,17 @@ export function IssueSessionView({
 
   // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
-  // 右 ws-side 协作)。主题走问题域变量(见 style.css 的 .issue-workspace
-  // 覆写):同构不同色。左栏已按 #123 拍平成五个一级标签,右栏是 #124
-  // 的协作对话框(会话流+输入区);旧 NEXT ACTION 侧栏已按 #127 拆除。
+  // 右 ws-side 协作)。#231 换装:原 .issue-workspace 家族(问题域主题
+  // 变量 + 拉伸契约)整族退役——主题变量直译成根上的工具类,拉伸契约
+  // 直译到各分区(左栏 section 与 ws-evidence),同构不再依赖跨页皮肤。
+  // 左栏已按 #123 拍平成六个一级标签,右栏是 #124 的协作对话框(会话
+  // 流+输入区);旧 NEXT ACTION 侧栏已按 #127 拆除。
   return <section
-    className="workspace-overlay issue-workspace task-workspace-v2 workspace-studio"
+    className={cn(
+      "workspace-overlay task-workspace-v2 workspace-studio px-4",
+      // 问题域主题:studio 组件在问题工作台内一律取问题域变量,同构不同色。
+      "[--studio-accent:var(--accent)] [--studio-tint:var(--accent-soft)] [--workspace-tab-color:var(--accent)]",
+    )}
     role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
     <header className="ws-head">
       <button type="button" className="ws-back" onClick={onBack}
@@ -289,27 +309,28 @@ export function IssueSessionView({
       <div className="ws-identity">
         <strong>{detail.title}</strong>
         <div className="ws-identity-line">
-          {/* 查看模式标识(非归属人围观):徽标样式沿用状态徽标的
-              身份徽标语言,文本即 aria 信息(读屏直读 span 文本)。 */}
-          {!canOperate && <span className="issue-view-mode" role="status"
+          {/* 查看模式标识(非归属人围观):徽标走 Badge warning 软皮
+              (中性琥珀,只提示不告警),文本即 aria 信息(读屏直读)。 */}
+          {!canOperate && <Badge variant="warning" role="status"
             title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
             查看模式:归属人 {detail.account} 的会话
-          </span>}
-          <span className={`issue-status status-${detail.status}`}>
+          </Badge>}
+          <IssueStatusBadge status={detail.status}>
             {ISSUE_STATUS_TEXT[detail.status]}
-          </span>
+          </IssueStatusBadge>
           {/* 人工接管徽标(2026-09-07 走查拍板):横幅态独立于六态——
-              在场即「AI 已暂停、人工作业中」,排在状态徽标之后。 */}
+              在场即「AI 已暂停、人工作业中」,排在状态徽标之后;紫金
+              横幅语义收进 Badge merge 软皮。 */}
           {detail.takeover
-            && <span className="issue-status status-takingover">人工接管中</span>}
-          <span className="issue-stage">
+            && <Badge variant="merge">人工接管中</Badge>}
+          <span className="text-xs text-muted-foreground">
             {issueStageText(detail)}
             {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}
             {detail.stage_note ? ` · ${detail.stage_note}` : ""}
           </span>
           {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
               现场;密码本体只在 vault)。 */}
-          {detail.environment && <span className="issue-stage"
+          {detail.environment && <span className="text-xs text-muted-foreground"
             title={detail.environment.environment_source_ip
               ? "来自环境管理台账的选定时点快照(密码在平台加密保管,不上屏)"
               : "登记元信息里的网管环境(密码在平台加密保管,不上屏)"}>
@@ -317,16 +338,18 @@ export function IssueSessionView({
             {` ${detail.environment.hosts.join("、")}`}
             {` · 端口 ${detail.environment.port}`}
           </span>}
+          {/* 单号是同事间要抄的关键对象:select-text 强制放开拖选
+              (原 .issue-ticket 的 user-select 规则随家族退役)。 */}
           {detail.ticket
-            ? <span className="issue-ticket">{detail.ticket}</span>
-            : <span className="issue-ticket empty">无单场景</span>}
+            ? <span className="select-text rounded-full bg-primary/10 px-[7px] py-px font-mono text-xs font-bold text-primary">{detail.ticket}</span>
+            : <span className="select-text rounded-full border border-dashed px-[7px] py-px font-mono text-xs font-bold text-faint">无单场景</span>}
         </div>
       </div>
       <div className="ws-progress">
         <IssueWorkspaceProgress issue={detail} />
       </div>
       <div className="ws-head-controls">
-        <button type="button" className="issue-export" disabled={busy}
+        <Button type="button" variant="outline" size="sm" disabled={busy}
           title="导出现场记录(Markdown:人粗读 + AI 精读复盘)"
           onClick={() => {
             // 同源 GET 自带 cookie,download 属性强制落盘;文件名本地拼,
@@ -338,34 +361,42 @@ export function IssueSessionView({
             document.body.appendChild(anchor);
             anchor.click();
             anchor.remove();
-          }}>导出现场记录</button>
+          }}>导出现场记录</Button>
         {/* 归档/终止(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
             确认语义、按状态禁用与 failed 例外(失败没有结论可归档,只能
             终止清理)原样保留;都是写操作,查看模式整组不渲染。 */}
         {canOperate && <>
-          <button type="button" disabled={busy
+          <Button type="button" variant="outline" size="sm" disabled={busy
             || ["archived", "canceled", "failed"].includes(detail.status)}
             title={detail.status === "failed"
               ? "失败的会话没有结论可归档——用「终止会话」清理" : undefined}
-            onClick={archive}>归档收口</button>
-          <button type="button" className="danger" disabled={busy
+            onClick={archive}>归档收口</Button>
+          <Button type="button" variant="destructive" size="sm" disabled={busy
             || ["archived", "canceled"].includes(detail.status)}
-            onClick={cancelSession}>终止会话</button>
+            onClick={cancelSession}>终止会话</Button>
         </>}
       </div>
     </header>
 
-    <div className="ws-body">
-      <section className="ws-evidence" aria-label="会话工作区">
+    <div className="ws-body max-[1100px]:grid-cols-[minmax(0,1fr)]">
+      {/* ws-evidence 是滚动主区(#231 换装:共享 studio 皮肤类保留,
+          原 issue-workspace 家族的拉伸/留白直译成工具类,工具类层压过
+          皮肤基线);窄屏单列时协作区回到内容之上(与旧断点同语义)。 */}
+      <section aria-label="会话工作区" className={cn(
+        "ws-evidence",
+        "flex min-w-0 flex-col gap-3.5 overflow-y-auto px-[22px] pb-7",
+      )}>
         {/* 错误横幅:认证类报错带一键跳转(查看模式不渲染)。 */}
-        {detail.error && <div className="issue-session-error" role="alert">
+        {detail.error && <div role="alert"
+          className="flex flex-wrap items-baseline gap-3 rounded-lg bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
           <span>{detail.error}</span>
           {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
               镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。
               跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
           {canOperate && onNavigateProfile
             && detail.error.includes(GIT_AUTH_ERROR_TAG)
-            && <button type="button" className="issue-error-action"
+            && <button type="button"
+              className="font-bold underline underline-offset-2"
               onClick={onNavigateProfile}>去个人设置配置令牌</button>}
         </div>}
         {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
@@ -376,8 +407,21 @@ export function IssueSessionView({
         {/* 左栏内容(#123 拍平 + #127 走查反馈):六个一级标签直排——
             对话现场(默认入口)放首位,逐仓交付收编为末签。页签条是
             任务侧左栏同款 ws-pane-head > ws-source-switch(role=tablist),
-            页签一签一色走问题域变量 --workspace-tab-color。 */}
-        <section className="issue-main-pane" aria-label="会话内容">
+            页签一签一色走各签自带的 --workspace-tab-color(#231 换装)。
+            #231 换装:左栏拉伸契约(issueWorkspaceLayout)原住在
+            issue-workspace 家族,现直译成本节的工具类——面板吃满
+            ws-evidence 余量、现场面板体/流壳/流三层吃满、跟随横幅
+            浮层胶囊、窄屏恢复 62vh 流帽。 */}
+        <section aria-label="会话内容" className={cn(
+          "flex min-h-80 min-w-0 flex-1 flex-col gap-2.5",
+          "min-[1101px]:max-h-[calc(100dvh-150px)]",
+          "[&_.event-panel-body]:relative [&_.event-panel-body]:flex [&_.event-panel-body]:min-h-0 [&_.event-panel-body]:flex-1 [&_.event-panel-body]:flex-col",
+          "[&_.event-panel-body>.event-stream]:min-h-0 [&_.event-panel-body>.event-stream]:flex-1 [&_.event-panel-body>.event-stream]:max-h-none",
+          "max-[1100px]:[&_.event-panel-body>.event-stream]:max-h-[62vh]",
+          "[&_.event-workspace]:min-h-0 [&_.event-workspace]:flex-1",
+          "[&_.event-workspace>.event-stream]:h-full [&_.event-workspace>.event-stream]:max-h-none",
+          "[&_.event-follow]:absolute [&_.event-follow]:inset-x-3 [&_.event-follow]:bottom-3 [&_.event-follow]:z-30 [&_.event-follow]:rounded-full [&_.event-follow]:border [&_.event-follow]:border-line [&_.event-follow]:bg-surface [&_.event-follow]:shadow-(--shadow-md)",
+        )}>
           {/* (#210)Tabs root 以 display:contents 作透明壳:同时罩住
               ws-pane-head(页签条)与面板,DOM 盒子不变。 */}
           <Tabs value={tab} className="contents"
@@ -387,21 +431,25 @@ export function IssueSessionView({
                 ISSUE_MAIN_TABS.find((item) => item.key === tab)?.label
               }</strong></div>
               {/* 手搓 role=tablist 换 base-ui Tabs 原语:键盘箭头、
-                  roving tabindex 归原语;五签一色 --workspace-tab-color 与
-                  脉冲点等旧皮肤类原样挂在 TabsList/TabsTrigger 上。 */}
+                  roving tabindex 归原语;激活态边/底/字走各签自带的
+                  --workspace-tab-color(#231 换装:发色由 nth-child
+                  规则改为 ISSUE_MAIN_TABS 自带变量工具类)。 */}
               <TabsList variant="line" aria-label="会话工作区内容"
                 className="ws-source-switch h-auto justify-start">
-                {ISSUE_MAIN_TABS.map(({ key, label }) => (
+                {ISSUE_MAIN_TABS.map(({ key, label, tone }) => (
                   <TabsTrigger key={key} value={key}
-                    className={`h-auto flex-none data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}
+                    className={`h-auto flex-none ${tone} data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}
                     disabled={key === "dts" && !detail.ticket}
                     title={key === "dts" && !detail.ticket
                       ? "无单场景:还没有关联的 DTS 单据" : undefined}>
                     <span>{label}</span>
                     {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
-                        入口要找得到(原材料页签的同一引导,随升格迁来)。 */}
+                        入口要找得到(原材料页签的同一引导,随升格迁来);
+                        #231 换装:原 issue-workspace 的圆点定尺/染色列
+                        直译成点上的工具类,动画仍由共享 .ws-tab-dot 承担。 */}
                     {key === "doc" && detail.has_analysis
-                      && <i className="ws-tab-dot" aria-hidden />}
+                      && <i aria-hidden
+                        className="ws-tab-dot size-[7px] min-w-0 rounded-full bg-(--workspace-tab-color) p-0" />}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -417,14 +465,22 @@ export function IssueSessionView({
             {tab === "repos" && <TabsContent value="repos" className="contents">
               <IssueWorkspaceRepos detail={detail} />
             </TabsContent>}
-            {tab !== "events" && tab !== "repos" && <TabsContent value={tab} className="contents">
+            {tab === "meta" && <TabsContent value="meta" className="contents">
+              <IssueMetaPane detail={detail} />
+            </TabsContent>}
+            {tab !== "events" && tab !== "repos" && tab !== "meta"
+              && <TabsContent value={tab} className="contents">
               <IssueMaterialsPane detail={detail} busy={busy} view={tab}
                 onNotifyAI={notifyAI} canOperate={canOperate} />
             </TabsContent>}
           </Tabs>
         </section>
       </section>
-      <section className="ws-side" aria-label="与 Agent 协作">
+      {/* 右栏协作(#231 换装):皮肤类(ws-side,conversation.css 共享)
+          保留,原 issue-workspace 的 min-width 与窄屏单列(协作区回到
+          内容之上、限高 46vh)直译成工具类。 */}
+      <section aria-label="与 Agent 协作"
+        className="ws-side min-w-0 max-[1100px]:order-first max-[1100px]:max-h-[46vh]">
         {/* #125 右栏协作对话框:协作头 + 会话流(聚合接口
             GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
             由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
@@ -529,25 +585,37 @@ function IssueWorkspaceRepos({ detail }: { detail: IssueDetail }) {
  * 角色与徽标的口径都出自 perRepo.ts(有推送记录=已交付;流水线只认
  * pipelines 该仓的 status),前端不推断、不硬造状态。
  * 转正而来的会话(#31):按 inherited_accounts 只读引用旧会话账,标注
- * 「转正前」并入各仓卡;本会话自己的账照常陈列,两本账不混。 */
+ * 「转正前」并入各仓卡;本会话自己的账照常陈列,两本账不混。
+ * #231 换装:原 .issue-repo-* 家族整族退役,直译成令牌工具类。 */
+const REPO_ROLE_TONE = {
+  delivered: "rounded-full bg-success-soft px-2 py-px text-xs font-bold text-success",
+  undelivered: "rounded-full border border-dashed px-2 py-px text-xs font-bold text-faint",
+} as const;
+const REPO_BADGE_TONE = {
+  success: "bg-success-soft text-success",
+  failed: "bg-danger-soft text-danger",
+  running: "bg-active-soft text-active",
+} as const;
+
 function IssueRepoDelivery({ detail }: { detail: IssueDetail }) {
   const inherited = useInheritedLedger(detail.inherited_accounts);
   const rows = useMemo(
     () => repoDeliveryRows(detail, inherited), [detail, inherited]);
   if (rows.length === 0) return null;
-  return <section className="issue-repo-delivery" aria-label="逐仓交付">
-    <div className="issue-repo-delivery-head">
-      <strong>逐仓交付</strong>
-      <span>一仓一 MR:每个变更仓各自建分支、各自提 MR、各看流水线</span>
+  return <section aria-label="逐仓交付"
+    className="grid gap-2 rounded-xl border border-border bg-surface px-3.5 py-2.5">
+    <div className="flex flex-wrap items-baseline gap-2.5">
+      <strong className="text-sm font-bold">逐仓交付</strong>
+      <span className="text-xs text-faint">一仓一 MR:每个变更仓各自建分支、各自提 MR、各看流水线</span>
       {/* 旧账取到时如实说明来源;取不到(已清理)时退回"账在原会话"
           的现状文案——引用静默缺省,不报错。 */}
-      {detail.converted_from && <span className="issue-repo-converted">
+      {detail.converted_from && <span className="text-xs text-muted-foreground">
         转正自 {detail.converted_from}——{inherited
           ? "标注「转正前」的交付事实继承自原会话"
           : "原会话的逐仓交付账留在原会话"}
       </span>}
     </div>
-    <div className="issue-repo-cards">
+    <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
       {rows.map((row) => <RepoDeliveryCard key={row.repo} row={row} />)}
     </div>
   </section>;
@@ -562,31 +630,36 @@ function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
   const oldMrLabel = row.inherited?.mr
     ? `${row.inherited.mr.iid ? `!${row.inherited.mr.iid} ` : ""}${row.inherited.mr.branch}`
     : "";
-  return <article className="issue-repo-card">
-    <header>
-      <strong className="issue-repo-name" title={row.repo}>{row.name}</strong>
-      <span className={`issue-repo-role ${role.tone}`} title={role.title}>
+  return <article className="grid content-start gap-1.5 rounded-lg border border-border bg-(--surface-muted) px-3 py-2.5 text-sm">
+    <header className="flex flex-wrap items-center gap-2">
+      <strong title={row.repo} className="font-mono text-sm font-bold [overflow-wrap:anywhere]">{row.name}</strong>
+      <span className={REPO_ROLE_TONE[role.tone as keyof typeof REPO_ROLE_TONE]
+        ?? REPO_ROLE_TONE.undelivered} title={role.title}>
         {role.tag}</span>
-      {badge && <span className={`issue-repo-badge ${badge.tone}`}>
-        <i aria-hidden />{badge.label}</span>}
+      {badge && <span className={cn(
+        "ml-auto inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-bold whitespace-nowrap",
+        REPO_BADGE_TONE[badge.tone as keyof typeof REPO_BADGE_TONE])}>
+        <i aria-hidden className={cn("size-[5px] rounded-full bg-current",
+          badge.tone === "running"
+            && "motion-safe:animate-pulse motion-reduce:animate-none")}/>{badge.label}</span>}
     </header>
-    <div className="issue-repo-facts">
+    <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-muted-foreground [overflow-wrap:anywhere]">
       {row.mr && (row.mr.url
         ? <a href={row.mr.url} target="_blank" rel="noreferrer"
-            title={row.mr.title}>MR {mrLabel}</a>
+            className="text-primary" title={row.mr.title}>MR {mrLabel}</a>
         : <span title={row.mr.title}>MR {mrLabel}</span>)}
       {row.push && <span>
         已推送 {row.push.branch}@{row.push.sha.slice(0, 10)}</span>}
-      {!row.mr && !row.push && <span className="empty">
+      {!row.mr && !row.push && <span className="text-faint">
         该仓还没有推送与 MR 记录</span>}
     </div>
     {/* 转正前账(只读引用,旧会话数据):与本会话事实分区陈列,
         弱化样式 + 「转正前」前缀,不冒充本会话的交付。 */}
-    {row.inherited && <div className="issue-repo-inherited">
-      <em>转正前</em>
+    {row.inherited && <div className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-t border-dashed pt-1 text-faint [overflow-wrap:anywhere]">
+      <em className="rounded-full border border-dashed px-1.5 not-italic text-muted-foreground">转正前</em>
       {row.inherited.mr && (row.inherited.mr.url
         ? <a href={row.inherited.mr.url} target="_blank" rel="noreferrer"
-            title={row.inherited.mr.title}>MR {oldMrLabel}</a>
+            className="text-primary" title={row.inherited.mr.title}>MR {oldMrLabel}</a>
         : <span title={row.inherited.mr.title}>MR {oldMrLabel}</span>)}
       {row.inherited.push && <span>
         已推送 {row.inherited.push.branch}@{row.inherited.push.sha.slice(0, 10)}</span>}
@@ -597,7 +670,7 @@ function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
     {/* last_error 不只跟 failed 走:轮询预算耗尽时 status 仍是 running、
         但监看已停——两个字段都如实示人,不替服务端下结论。 */}
     {(row.pipeline?.last_error || (row.pipeline?.failedChecks.length ?? 0) > 0)
-      && <div className="issue-repo-pipeline-error">
+      && <div className="grid gap-0.5 text-danger [overflow-wrap:anywhere]">
         {row.pipeline?.last_error && <span>{row.pipeline.last_error}</span>}
         {(row.pipeline?.failedChecks.length ?? 0) > 0
           && <span>失败项:{row.pipeline!.failedChecks.join("、")}</span>}
@@ -608,7 +681,25 @@ function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
 /** 固定流程的阶段管道(计划线):视觉对齐需求工作台的 task-phase-track
  * ——节点在上、词签在下、细连线串成一条管;走过的亮,当前阶段节点
  * 放大呼吸。stage_states 决定形态(pending 空心/in_progress 亮/done 实
- * /redo 警示/inherited 弱化+标"继承");轮次>1 加轮次徽标。 */
+ * /redo 警示/inherited 弱化+标"继承");轮次>1 加轮次徽标。
+ * #231 换装:原 .issue-fixed-* 家族(#230 保留给本票)整族退役,直译成
+ * 令牌工具类;当前节点的呼吸走共享 animate-pulse(#216 同款降级)。 */
+const FIXED_STEP = "relative flex min-w-0 flex-col items-center gap-[5px] text-center text-xs leading-[1.2] not-last:before:absolute not-last:before:top-[3.5px] not-last:before:left-1/2 not-last:before:z-[1] not-last:before:h-[1.5px] not-last:before:w-full";
+const FIXED_STEP_TONE: Record<IssueStageState, string> = {
+  pending: "text-faint before:bg-line-strong",
+  done: "text-text-strong before:bg-success",
+  in_progress: "font-bold text-primary before:bg-line-strong",
+  inherited: "text-muted-foreground before:bg-muted-foreground/55",
+  redo: "text-attention before:bg-line-strong",
+};
+const FIXED_DOT_TONE: Record<IssueStageState, string> = {
+  pending: "border-line-strong bg-surface",
+  done: "border-success bg-success",
+  in_progress: "mt-[-1.5px] size-[11px] border-2 border-surface bg-primary shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_22%,transparent)] motion-safe:animate-pulse motion-reduce:animate-none",
+  inherited: "border-muted-foreground bg-transparent",
+  redo: "border-attention bg-attention",
+};
+
 export function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
   const stages = fixedStageList(issue.scenario);
   const states = issue.stage_states ?? [];
@@ -619,23 +710,28 @@ export function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
     inherited: "已继承",
     redo: "待重做",
   };
-  return <nav className="issue-fixed-progress" aria-label="固定流程阶段">
+  return <nav aria-label="固定流程阶段"
+    className="grid gap-1.5 rounded-xl border border-border bg-surface px-4 pt-3 pb-2.5">
     {(issue.round ?? 1) > 1
-      && <div className="issue-fixed-head">
-        <span className="issue-round-badge">第 {issue.round} 轮</span>
+      && <div className="flex min-h-[1em] items-center gap-2">
+        <span className={ROUND_BADGE}>第 {issue.round} 轮</span>
       </div>}
-    <span className="issue-fixed-track">
+    <span className="grid [grid-template-columns:repeat(auto-fit,minmax(64px,1fr))]">
       {stages.map((stage, index) => {
         const state = states[index] ?? "pending";
         const current = state === "in_progress";
         const label = issueStageText({ scenario: issue.scenario, stage });
         return <span key={stage}
-          className={`issue-fixed-step state-${state}${current ? " current" : ""}`}
+          className={cn(FIXED_STEP, FIXED_STEP_TONE[state])}
           title={`${label} · ${labels[state]}${current ? "(当前)" : ""}`}>
-          <i aria-hidden />
-          <span className="issue-fixed-name">{label}</span>
-          {state === "inherited" && <em className="issue-fixed-tag">继承</em>}
-          {state === "redo" && <em className="issue-fixed-tag">重做</em>}
+          <i aria-hidden className={cn(
+            "relative z-[2] size-2 rounded-full border-[1.5px]",
+            FIXED_DOT_TONE[state])} />
+          <span className="max-w-full truncate">{label}</span>
+          {(state === "inherited" || state === "redo")
+            && <em className="rounded-[5px] bg-current/12 px-[5px] py-0.5 text-xs not-italic leading-none">
+              {state === "inherited" ? "继承" : "重做"}
+            </em>}
         </span>;
       })}
     </span>
@@ -664,7 +760,7 @@ function IssueWorkspaceProgress({ issue }: { issue: IssueSummary }) {
         {done ? stages.length : currentIndex + 1}/{stages.length}
       </em>
       {(issue.round ?? 1) > 1
-        && <em className="issue-round-badge">第 {issue.round} 轮</em>}
+        && <em className={ROUND_BADGE}>第 {issue.round} 轮</em>}
     </span>
     <span className="task-phase-track">
       {stages.map((stage, index) => {

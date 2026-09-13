@@ -39,8 +39,10 @@ const apiPrefixes = [
 function isBrowserNavigation(url = "", accept = ""): boolean {
   if (!accept.includes("text/html")) return false;
   const path = url.split("?")[0]!.replace(/\/$/, "");
-  // /issues/:id(单段)与 /environments(页签深链)是仅有的两个重叠面。
-  return path === "/environments" || /^\/issues\/[^/]+$/.test(path);
+      // /issues(登记页)、/issues/:id(会话工作台)与 /environments 是
+      // 仅有的三个重叠面。
+      return path === "/environments" || path === "/issues"
+        || /^\/issues\/[^/]+$/.test(path);
 }
 
 function proxy(): Record<string, ProxyOptions> {

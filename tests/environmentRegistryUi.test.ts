@@ -16,6 +16,9 @@ import test from "node:test";
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
 const page = readFileSync(resolve("web/src/EnvironmentRegistry.tsx"), "utf-8");
+// 列头筛选壳 2026-09-13 抽成共用件(DTS 列表筛选表头化时两页共用),
+// 壳自身的锚点随组件走;选项清单(FilterOptions)仍只有台账在用。
+const headerFilter = readFileSync(resolve("web/src/HeaderFilter.tsx"), "utf-8");
 // 新增/编辑弹层 2026-09-10 抽成共用件(台账页签与环境快选的「找不到就
 // 新建」共用),表单侧锚点随组件走。
 const editor = readFileSync(resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
@@ -32,7 +35,9 @@ test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admi
     assert.ok(source.includes('label="环境管理"'), `${branch} 入口文案缺失`);
   }
   // 台账是全局团队资源:admin 在「管理视角」组(与团队资产并列),
-  // 排在 admin 专属的「系统管理」分组之前;开发在「团队信息」组。
+  // 排在 admin 专属的「系统管理」组之前;开发在「团队信息」组。
+  // (锚随 2026-09-11 侧栏迁 shadcn Sidebar 更新:app-shell 的 admin-tools
+  //  壳类退场,系统管理组现在以组标签「系统管理」锚定。)
   assert.ok(adminNav.indexOf("环境管理") > adminNav.indexOf("管理视角")
     && adminNav.indexOf("环境管理") < adminNav.indexOf("系统管理"),
     "admin 侧环境管理应在管理视角组、系统管理之前");
@@ -170,8 +175,9 @@ test("环境管理:列头排序(升/降/取消三态)与列头漏斗过滤(2026-
   assert.match(page, /failed: 0,/);
   // 过滤住列头漏斗里(壳自带 tw-root:弹层 portal 到 body):主 IP 文本
   // 包含、形态/标签/状态 单选清单;工具栏不再有筛选下拉。
-  assert.match(page, /function HeaderFilter/);
-  assert.match(page, /aria-label=\{`筛选 \$\{label\}`\}/);
+  // 壳本体 2026-09-13 抽到 HeaderFilter.tsx 两页共用,壳锚点随组件走。
+  assert.match(headerFilter, /function HeaderFilter/);
+  assert.match(headerFilter, /aria-label=\{`筛选 \$\{label\}`\}/);
   assert.match(page, /function FilterOptions/);
   assert.match(page, /<HeaderFilter label="主 IP" active=\{!!ipFilter\.trim\(\)\}/);
   assert.match(page, /<HeaderFilter label="形态" active=\{!!formFilter\}/);
@@ -189,9 +195,9 @@ test("环境管理:列头排序(升/降/取消三态)与列头漏斗过滤(2026-
   assert.match(page, /updaterFilter && entry\.updated_by !== updaterFilter/);
   assert.match(page, /value: account, label: nameOf\(account\),/);
   // 激活的漏斗有 accent 小底块(哪列在筛一眼可辨);每个漏斗都能就地
-  // 「清除此列筛选」。
-  assert.match(page, /rounded-sm bg-accent px-0\.5 text-ink/);
-  assert.match(page, /清除此列筛选/);
+  // 「清除此列筛选」。(激活底块与清除项都在共用壳上)
+  assert.match(headerFilter, /rounded-sm bg-accent px-0\.5 text-ink/);
+  assert.match(headerFilter, /清除此列筛选/);
   // 过滤后空态换成整块空态卡(表不再渲染):列宽不随有无内容跳变。
   assert.match(page, /data-testid="environment-registry-filtered-empty"/);
   assert.doesNotMatch(page, /colSpan=\{8\}/);

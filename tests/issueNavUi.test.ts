@@ -18,7 +18,7 @@ const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
-const legacyCss = readFileSync(resolve("web/src/style.css"), "utf-8");
+const legacyCss = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
 /** 侧边栏导航区(视图切换)整段,角色分支再切片。 */
 function navSlices(): { nav: string; admin: string; developer: string } {
@@ -41,11 +41,15 @@ test("Beta 全摘:标签文字、悬停/读屏提示、导航按钮 beta 分支�
   assert.ok(developer.includes('view="issues"'), "开发侧栏缺问题处理入口");
 });
 
-test("父行=展开/收起开关:Sidebar 承载,箭头旋转指示,点击不跳页", () => {
+test("父行=展开/收起开关:本地 open 态承载,箭头旋转指示,点击不跳页", () => {
+  // #233 收官前改锚:折叠不再借 radix Collapsible,由 IssueNavGroup 本地
+  // open 状态承担(shadcn SidebarMenuButton + aria-expanded),语义不变。
+  assert.match(app, /const \[open, setOpen\] = useState\(current === view\)/,
+    "父行开关是本地展开态");
+  assert.match(app, /aria-expanded=\{open\}/, "展开态进 aria");
   assert.match(app, /ChevronDown/, "展开指示箭头(lucide)");
   assert.match(app, /<SidebarMenuButton[^>]*aria-label="问题处理"/,
     "父行是可读屏的 Sidebar 按钮");
-  assert.match(app, /aria-expanded=\{open\}/, "展开状态对读屏可见");
   assert.match(app, /\{open && <SidebarMenuSub>/, "子页签只在展开时显示");
   assert.match(app, /rotate-180/, "展开态箭头旋转 180°");
   // 父行沿用存量 nav-item 家族(视觉零跳变),但不再走 onSelect 跳页。
@@ -78,8 +82,9 @@ test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见�
   assert.ok(group.indexOf('{ tab: "sessions"') < group.indexOf('{ tab: "register"')
     && group.indexOf('{ tab: "register"') < group.indexOf('{ tab: "dts"'),
     "子页签顺序应为 问题会话 → 问题登记 → DTS 列表");
-  // 子页签复用 shadcn Sidebar 组件，样式与导航根同源。
-  assert.match(group, /SidebarMenuSubButton/, "子页签应复用 Sidebar 子菜单组件");
+  // 子页签行走 shadcn SidebarMenuSubButton 轨道(原 tw-root scoped 归一随
+  // preflight 全局化退役,见 tailwind.css base 层)。
+  assert.match(group, /SidebarMenuSubButton/, "子页签是 shadcn Sidebar 子按钮");
 });
 
 test("子页签状态:默认落问题会话,选择经父层驱动右侧页面", () => {
@@ -133,12 +138,12 @@ test("DTS 列表子页签全宽:页面平铺屏幕,标题条同步对齐,其余�
   // 一起放开 max-width——标题条不随内容全宽就会悬在书页宽上错位。
   assert.match(app, /const dtsWide = view === "issues" && activeIssueChild === "dts";/,
     "全宽判据只认 DTS 子页签");
-  assert.match(app, /workspace-header\$\{dtsWide \? " is-wide" : ""\}/,
+  // #228 换装:is-wide 修饰类退役,全宽改由条件工具类直译(max-w 二选一),
+  // 不再有 legacy css 全宽规则可钉。
+  assert.match(app, /dtsWide \? "max-w-none" : "max-w-\(--page-width\)"/,
     "标题条随全宽切换(左边缘与内容对齐)");
-  assert.match(app, /workspace-main\$\{dtsWide \? " is-wide" : ""\}/,
+  assert.match(app, /main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n?\s*dtsWide \? "max-w-none" : "max-w-\(--page-width\)"/,
     "主区随 DTS 子页签切换");
-  assert.match(legacyCss, /\.workspace-header\.is-wide, \.workspace-main\.is-wide \{ max-width: none; \}/,
-    "css 层要有全宽规则(旧轨道层叠优先级高于工具类层)");
   // 页头随子页签换文案:整域静态说明对子页签无信息量。
   assert.match(app, /issueChildHeaders/,
     "问题处理域页头文案按子页签取");

@@ -26,6 +26,7 @@ import {
   type VisionProbeResult,
 } from "./api";
 import { confirmDialog } from "./ConfirmDialog";
+import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,9 +37,7 @@ import {
 
 type Message = { kind: "success" | "error"; text: string } | null;
 
-/** ui-field(ui.css)退役后的字段排布(#219):grid + 6px 间距,与
- * .user-create-form label 的存量规则同值;span 的灰字样式仍由该存量规则
- * 供给,label 自身只管排布,不回退容器配方。 */
+/** 字段排布:grid + 6px 间距;label/span 的灰字样式由使用处的工具类给。 */
 const fieldWrapClass = "grid gap-1.5";
 
 /** 部署自检/连通性结论徽标(#216 收编为 Badge;原 .check-summary 色板):
@@ -52,15 +51,24 @@ function useMessage(): [Message, (next: Message) => void] {
 
 function Feedback({ message }: { message: Message }) {
   if (!message) return null;
-  return <div className={`form-message ${message.kind}`} role="status">
+  return <div role="status" className={cn("col-span-full text-[13.5px]",
+    message.kind === "success"
+      ? "rounded-lg bg-success/10 px-[11px] py-[9px] text-success"
+      : "rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger")}>
     {message.text}</div>;
 }
 
 /** 自检/连通性测试共用的结论网格:状态色 + 明细 + 建议一句话。 */
 function CheckItems({ result }: { result: SystemCheckResult }) {
-  return <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
-    <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
-    <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
+  return <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 min-[901px]:grid-cols-3">{result.items.map((item) => <article
+    className="grid min-w-0 grid-cols-[24px_minmax(0,1fr)] gap-[9px] rounded-[10px] border border-line bg-surface-2 p-3" key={item.key}>
+    <span aria-hidden className={cn("grid size-[22px] place-items-center rounded-full text-[13px] font-extrabold",
+      item.status === "ok" ? "bg-success/10 text-success"
+        : item.status === "error" ? "bg-danger/10 text-danger" : "bg-attention/10 text-attention")}>
+      {item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
+    <div className="grid min-w-0 gap-[3px]"><strong className="text-[13px] text-text-strong">{item.label}</strong>
+      <p className="m-0 text-[13px] leading-[1.45] text-muted-foreground">{item.detail}</p>
+      {item.suggestion && <small className="truncate whitespace-nowrap text-[13px] leading-[1.4] text-danger">{item.suggestion}</small>}</div>
   </article>)}</div>;
 }
 
@@ -90,19 +98,19 @@ function SystemCheckCard({ onResult }: {
   useEffect(() => { void run(); }, []);
   const summary = result?.overall === "ok" ? "全部正常"
     : result?.overall === "error" ? "存在不可用项" : "可运行，但有待完善项";
-  return <section id="settings-check" className="system-check-card"
+  return <section id="settings-check" className="rounded-[14px] border border-line bg-surface p-[22px] shadow-xs"
     aria-labelledby="system-check-title">
-    <div className="system-check-head">
-      <div><span className="section-kicker">DEPLOYMENT CHECK</span><h2 id="system-check-title">部署自检</h2><p>只读检查当前服务，不发送消息、不创建任务。</p></div>
-      <div className="system-check-actions">
+    <div className="flex items-start justify-between gap-[18px]">
+      <div><h2 id="system-check-title" className="mt-1.5 mb-1 text-[21px] text-text-strong">部署自检</h2><p className="m-0 text-[13px] text-muted-foreground">只读检查当前服务，不发送消息、不创建任务。</p></div>
+      <div className="flex items-center gap-2.5">
         {result && <Badge variant={CHECK_VARIANT[result.overall]}>
           <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />{summary}
         </Badge>}
         <Button type="button" variant="outline" disabled={busy} onClick={() => void run()}>{busy ? "检查中…" : "重新检查"}</Button>
       </div>
     </div>
-    {error && <div className="form-message error">{error}</div>}
-    {!result && !error && <div className="settings-loading">正在检查服务…</div>}
+    {error && <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{error}</div>}
+    {!result && !error && <div className="text-sm text-muted-foreground">正在检查服务…</div>}
     {result && <CheckItems result={result} />}
   </section>;
 }
@@ -113,10 +121,10 @@ function KnobField({ label, note, defaultText, value, onChange }: {
   value: string; onChange: (next: string) => void;
 }) {
   return <label className={fieldWrapClass}>
-    <span className="setting-label-row"><span>{label}</span><em>默认 {defaultText}</em></span>
+    <span className="flex items-center justify-between gap-2.5"><span>{label}</span><em className="rounded-full bg-primary/10 px-[7px] py-0.5 text-[13px] font-bold not-italic text-primary">默认 {defaultText}</em></span>
     <Input inputMode="numeric" value={value} placeholder={`使用默认值：${defaultText}`}
       onChange={(event) => onChange(event.target.value)} />
-    <small className="knob-note">留空即使用默认值 · {note}</small>
+    <small className="text-[13px] leading-normal text-muted-foreground">留空即使用默认值 · {note}</small>
   </label>;
 }
 
@@ -166,14 +174,13 @@ function RuntimeCard({ view, onSaved }: {
     } finally { setBusy(false); }
   }
 
-  return <div id="settings-runtime" className="user-create-card settings-card">
-    <div className="user-create-copy">
-      <span className="section-kicker">RUNTIME</span>
-      <h2>运行参数</h2>
-      <p>这里调整全团队需求任务的默认运行节奏。每项都明确显示当前服务默认值；
+  return <div id="settings-runtime" className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">运行参数</h2>
+      <p className="m-0 text-sm leading-[1.7]">这里调整全团队需求任务的默认运行节奏。每项都明确显示当前服务默认值；
         留空即可恢复默认，无需了解部署命令。</p>
     </div>
-    <form className="user-create-form settings-form runtime-settings-form" onSubmit={submit}>
+    <form className="grid content-start gap-[15px] p-[26px] sm:grid-cols-2" onSubmit={submit}>
       <KnobField label="并发任务数" defaultText={`${defaults.max_concurrent} 个`}
         note="生效于下一次调度决策"
         value={concurrent} onChange={setConcurrent} />
@@ -211,7 +218,7 @@ function RuntimeCard({ view, onSaved }: {
           ? "永不回收" : `${defaults.workspace_retention_days} 天`}
         note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
         value={retention} onChange={setRetention} />
-      <Button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</Button>
+      <Button type="submit" disabled={busy} className="col-span-full sm:col-span-1">{busy ? "正在保存…" : "保存运行参数"}</Button>
       <Feedback message={message} />
     </form>
   </div>;
@@ -244,29 +251,28 @@ function ExecutionPolicyCard({ view, onSaved }: {
   }
 
   return <div id="settings-policy"
-    className="user-create-card settings-card execution-policy-card">
-    <div className="user-create-copy">
-      <span className="section-kicker">WORKFLOW POLICY</span>
-      <h2>团队执行约定</h2>
-      <p>把团队长期采用的关注点与协作习惯叠加在平台默认方案上。每个新任务都会固定当时版本，并在“执行方案”里说明来源。</p>
+    className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">团队执行约定</h2>
+      <p className="m-0 text-sm leading-[1.7]">把团队长期采用的关注点与协作习惯叠加在平台默认方案上。每个新任务都会固定当时版本，并在“执行方案”里说明来源。</p>
     </div>
-    <form className="user-create-form settings-form execution-policy-form"
+    <form className="grid content-start gap-[15px] p-[26px]"
       onSubmit={submit}>
-      <label className={fieldWrapClass}>
-        <span>新任务默认补充</span>
+      <label className={cn(fieldWrapClass, "relative")}>
+        <span className="text-[13px] font-medium text-muted-foreground">新任务默认补充</span>
         <Textarea rows={7} maxLength={2000} className="min-h-[138px]" value={instructions}
           placeholder="例如：涉及存量接口时先核对兼容性；不确定的外部行为明确说明，不要猜；公共契约变更必须点名影响方。"
           onChange={(event) => setInstructions(event.target.value)} />
-        <small className="knob-note">
+        <small className="text-[13px] leading-normal text-muted-foreground">
           只调整关注点、先后顺序和协作方式；不能覆盖阶段、真实证据、人工决定或 Git/交付权限。留空表示不设置团队补充。
         </small>
-        <em className="settings-char-count">{instructions.length}/2000</em>
+        <em className="absolute bottom-0 right-0.5 font-mono text-xs font-medium not-italic text-faint">{instructions.length}/2000</em>
       </label>
       <label className={fieldWrapClass}>
-        <span>屏蔽仓库 Skill 与指令文件</span>
+        <span className="text-[13px] font-medium text-muted-foreground">屏蔽仓库 Skill 与指令文件</span>
         <Textarea rows={4} value={blocks} placeholder={".cac\nAGENTS.md\n.agents/skills/conflicting-skill"}
           onChange={event => setBlocks(event.target.value)} />
-        <small className="knob-note">每行一个文件名或相对路径，目录包含全部子项；不支持通配符。统一作用于需求流和问题流，不删除仓库文件。留空表示不屏蔽。</small>
+        <small className="text-[13px] leading-normal text-muted-foreground">每行一个文件名或相对路径，目录包含全部子项；不支持通配符。统一作用于需求流和问题流，不删除仓库文件。留空表示不屏蔽。</small>
       </label>
       {/* 团队各阶段勾选增强已随 v1 退役(2026-08-29):想定制阶段
           结构请到「团队资产 → 工作流」建团队工作流资产。 */}
@@ -352,31 +358,30 @@ function BuildCacheCard({ view, onSaved }: {
   const effectiveMax = (status?.policy.max_bytes ??
     ((runtime.build_cache_max_gb ?? defaults.build_cache_max_gb) * 1024 ** 3));
   return <div id="settings-cache"
-    className="user-create-card settings-card build-cache-card">
-    <div className="user-create-copy">
-      <span className="section-kicker">BUILD CACHE</span>
-      <h2>构建缓存</h2>
+    className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">构建缓存</h2>
       <p>同一代码仓的后续任务会复用 Maven、npm、ccache 等缓存。任务删除不立即
         误删共享缓存；长期不用或超过容量上限时自动回收。</p>
-      {loading && <span className="settings-state"><i aria-hidden />正在统计缓存…</span>}
-      {!loading && status && !status.configured && <span className="settings-state missing">
-        <i aria-hidden />当前部署未启用统一构建缓存</span>}
-      {!loading && status?.configured && <div className="build-cache-summary">
-        <strong>{bytes(status.total_bytes)}</strong>
-        <span>{status.caches} 个仓库分区 · {status.active} 个正在使用</span>
-        <small>{effectiveRetention > 0 ? `${effectiveRetention} 天未用自动清理` : "不按时间清理"}
+      {loading && <span className="mt-3.5 inline-flex w-fit items-center gap-1.5 rounded-full border border-attention/25 bg-attention/10 px-[9px] py-[5px] text-[13px] font-bold text-attention"><i aria-hidden className="size-1.5 rounded-full bg-current" />正在统计缓存…</span>}
+      {!loading && status && !status.configured && <span className="mt-3.5 inline-flex w-fit items-center gap-1.5 rounded-full border border-attention/25 bg-attention/10 px-[9px] py-[5px] text-[13px] font-bold text-attention">
+        <i aria-hidden className="size-1.5 rounded-full bg-current" />当前部署未启用统一构建缓存</span>}
+      {!loading && status?.configured && <div className="mt-[18px] grid gap-1">
+        <strong className="text-[25px] leading-[1.1] text-text-strong">{bytes(status.total_bytes)}</strong>
+        <span className="text-[13.5px] text-muted-foreground">{status.caches} 个仓库分区 · {status.active} 个正在使用</span>
+        <small className="text-[12.5px] leading-[1.5] text-faint">{effectiveRetention > 0 ? `${effectiveRetention} 天未用自动清理` : "不按时间清理"}
           {` · ${effectiveMax > 0 ? `总量上限 ${bytes(effectiveMax)}` : "不设容量上限"}`}</small>
       </div>}
-      {status && status.entries.length > 0 && <details className="build-cache-details">
-        <summary>查看缓存明细</summary>
-        <div>{status.entries.map((entry) => <div className="build-cache-entry" key={entry.key}>
-          <span><strong>{entry.repository_hint || entry.key}</strong>
-            <small>最后使用 {new Date(entry.last_used_at).toLocaleString()}</small></span>
-          <em>{entry.active ? "使用中" : bytes(entry.size_bytes)}</em>
+      {status && status.entries.length > 0 && <details className="mt-4 text-[13px] text-muted-foreground">
+        <summary className="w-fit cursor-pointer font-bold">查看缓存明细</summary>
+        <div className="mt-2 max-h-[220px] overflow-auto border-t border-line/60">{status.entries.map((entry) => <div className="flex items-center justify-between gap-3 border-b border-line/50 py-[9px]" key={entry.key}>
+          <span className="grid min-w-0 gap-0.5"><strong className="truncate text-[12.5px] text-text">{entry.repository_hint || entry.key}</strong>
+            <small className="text-xs text-faint">最后使用 {new Date(entry.last_used_at).toLocaleString()}</small></span>
+          <em className="shrink-0 text-xs font-bold not-italic text-primary">{entry.active ? "使用中" : bytes(entry.size_bytes)}</em>
         </div>)}</div>
       </details>}
     </div>
-    <form className="user-create-form settings-form build-cache-form" onSubmit={save}>
+    <form className="grid content-start gap-[15px] p-[26px] sm:grid-cols-2" onSubmit={save}>
       <KnobField label="未使用保留期（天）"
         defaultText={`${defaults.build_cache_retention_days} 天`}
         note="从最后一次挂载使用起计算；0 表示不按时间自动清理"
@@ -385,14 +390,14 @@ function BuildCacheCard({ view, onSaved }: {
         defaultText={`${defaults.build_cache_max_gb} GB`}
         note="超出后优先清最久未用的缓存；0 表示不限制"
         value={maxGb} onChange={setMaxGb} />
-      <div className="build-cache-actions span-2">
+      <div className="col-span-full flex flex-wrap gap-2.5">
         <Button type="submit" disabled={saving || reclaiming}>
           {saving ? "正在保存…" : "保存缓存策略"}</Button>
         <Button type="button" variant="outline" disabled={loading || reclaiming || !status?.caches}
           onClick={() => void clearUnused()}>
           {reclaiming ? "正在清理…" : "清理未使用缓存"}</Button>
       </div>
-      <small className="knob-note span-2">手动清理也会保护运行中、等待继续执行的任务；
+      <small className="col-span-full text-[13px] leading-normal text-muted-foreground">手动清理也会保护运行中、等待继续执行的任务；
         只删除可重新生成的构建缓存，不删除代码、任务记录或交付证据。</small>
       <Feedback message={message} />
     </form>
@@ -452,36 +457,38 @@ function ModelsCard({ view, onSaved }: {
     } finally { setTesting(false); }
   }
 
-  return <div id="settings-models" className="user-create-card settings-card">
-    <div className="user-create-copy">
-      <span className="section-kicker">MODEL GATEWAY</span>
-      <h2>模型网关</h2>
-      <p>团队需求任务统一使用这一套模型。只需填写网关地址、API Key 和模型名称；
+  return <div id="settings-models" className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">模型网关</h2>
+      <p className="m-0 text-sm leading-[1.7]">团队需求任务统一使用这一套模型。只需填写网关地址、API Key 和模型名称；
         API Key 保存后不会回显明文。</p>
-      <span className={`settings-state ${models.configured || defaults.configured ? "ok" : "missing"}`}>
-        <i aria-hidden />{models.configured
+      <span className={cn("mt-3.5 inline-flex w-fit items-center gap-1.5 rounded-full border px-[9px] py-[5px] text-[13px] font-bold",
+        models.configured || defaults.configured
+          ? "border-success/25 bg-success/10 text-success"
+          : "border-attention/25 bg-attention/10 text-attention")}>
+        <i aria-hidden className="size-1.5 rounded-full bg-current" />{models.configured
           ? `已配置${models.key_hint ? ` · Key ${models.key_hint}` : ""}`
           : defaults.configured
             ? `使用服务默认配置${defaults.model ? ` · ${defaults.model}` : ""}`
             : "尚未配置"}
       </span>
     </div>
-    <form className="user-create-form settings-form" onSubmit={submit}>
-      <label className={`span-2 ${fieldWrapClass}`}>
-        <span>模型网关地址</span>
+    <form className="grid content-start gap-[15px] p-[26px]" onSubmit={submit}>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">模型网关地址</span>
         <Input value={url} type="url" required spellCheck={false}
           placeholder={apiFormat === "anthropic-messages"
             ? "例如：https://model-gateway.internal/api/anthropic"
             : "例如：https://model-gateway.internal/v1"}
           onChange={(event) => setUrl(event.target.value)} />
-        <small className="knob-note">
+        <small className="text-[13px] leading-normal text-muted-foreground">
           {apiFormat === "anthropic-messages"
             ? "Anthropic Messages 兼容接口(请求发往 地址/v1/messages)。"
             : "OpenAI Chat 兼容接口(请求发往 地址/chat/completions)。"}
         </small>
       </label>
-      <label className={`span-2 ${fieldWrapClass}`}>
-        <span>API Key</span>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">API Key</span>
         <Input value={apiKey} type="password" autoComplete="new-password"
           required={!models.configured}
           placeholder={models.configured
@@ -492,13 +499,13 @@ function ModelsCard({ view, onSaved }: {
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
       <label className={fieldWrapClass}>
-        <span>模型名称</span>
+        <span className="text-[13px] font-medium text-muted-foreground">模型名称</span>
         <Input value={model} required spellCheck={false}
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
       </label>
       <label className={fieldWrapClass}>
-        <span>接口格式</span>
+        <span className="text-[13px] font-medium text-muted-foreground">接口格式</span>
         <Select value={apiFormat}
           items={[{ value: "openai-completions", label: "OpenAI Chat" }, { value: "anthropic-messages", label: "Anthropic" }]}
           onValueChange={(value) => setApiFormat(value ?? "openai-completions")}>
@@ -510,19 +517,19 @@ function ModelsCard({ view, onSaved }: {
             </SelectGroup>
           </SelectContent>
         </Select>
-        <small className="knob-note">按网关实际提供的接口协议选择</small>
+        <small className="text-[13px] leading-normal text-muted-foreground">按网关实际提供的接口协议选择</small>
       </label>
-      <div className="settings-form-actions">
+      <div className="col-span-full flex items-center gap-2.5">
         <Button type="submit" disabled={busy || testing}>
           {busy ? "正在保存…" : "保存模型配置"}</Button>
         <Button type="button" variant="outline" disabled={busy || testing} onClick={() => void runCheck()}>
           {testing ? "测试中…" : "测试连通"}</Button>
       </div>
-      <small className="knob-note">测试使用当前表单值向网关发送一条极小请求（密钥留空时沿用已保存的）。</small>
+      <small className="text-[13px] leading-normal text-muted-foreground">测试使用当前表单值向网关发送一条极小请求（密钥留空时沿用已保存的）。</small>
       <Feedback message={message} />
-      {checkError && <div className="form-message error">{checkError}</div>}
+      {checkError && <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{checkError}</div>}
       {testing && !checkResult && !checkError
-        && <div className="settings-loading">正在连通网关并等待模型回复…</div>}
+        && <div className="text-sm text-muted-foreground">正在连通网关并等待模型回复…</div>}
       {checkResult && <>
         <Badge variant={CHECK_VARIANT[checkResult.overall]}>
           <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
@@ -583,29 +590,29 @@ function VisionModelsCard({ view, onSaved }: {
   }
 
   return <div id="settings-vision"
-    className="user-create-card settings-card vision-settings-card">
-    <div className="user-create-copy">
-      <span className="section-kicker">IMAGE UNDERSTANDING</span>
-      <h2>图片识别</h2>
-      <p>主 Agent 需要看截图、图表或照片时，才会调用独立的 InspectImage
+    className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">图片识别</h2>
+      <p className="m-0 text-sm leading-[1.7]">主 Agent 需要看截图、图表或照片时，才会调用独立的 InspectImage
         工具。主会话模型不会被替换，图片原文也不会写入任务记录。</p>
-      <span className={`settings-state ${configured ? "ok" : "missing"}`}>
-        <i aria-hidden />{vision.configured
+      <span className={cn("mt-3.5 inline-flex w-fit items-center gap-1.5 rounded-full border px-[9px] py-[5px] text-[13px] font-bold",
+        configured ? "border-success/25 bg-success/10 text-success" : "border-attention/25 bg-attention/10 text-attention")}>
+        <i aria-hidden className="size-1.5 rounded-full bg-current" />{vision.configured
           ? `已配置${vision.key_hint ? ` · Key ${vision.key_hint}` : ""}`
           : defaults.configured
             ? `使用服务默认配置${defaults.model ? ` · ${defaults.model}` : ""}`
             : "尚未配置"}
       </span>
     </div>
-    <form className="user-create-form settings-form" onSubmit={submit}>
-      <label className={`span-2 ${fieldWrapClass}`}>
-        <span>图片识别网关地址</span>
+    <form className="grid content-start gap-[15px] p-[26px]" onSubmit={submit}>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">图片识别网关地址</span>
         <Input value={url} type="url" required spellCheck={false}
           placeholder="例如：https://qwen-vl.internal/v1"
           onChange={(event) => setUrl(event.target.value)} />
       </label>
       <label className={fieldWrapClass}>
-        <span>接口协议</span>
+        <span className="text-[13px] font-medium text-muted-foreground">接口协议</span>
         <Select value={api}
           items={[{ value: "openai-completions", label: "OpenAI Chat Completions" }, { value: "openai-responses", label: "OpenAI Responses" }, { value: "anthropic-messages", label: "Anthropic Messages" }]}
           onValueChange={(value) => setApi(value ?? "openai-completions")}>
@@ -620,13 +627,13 @@ function VisionModelsCard({ view, onSaved }: {
         </Select>
       </label>
       <label className={fieldWrapClass}>
-        <span>模型名称</span>
+        <span className="text-[13px] font-medium text-muted-foreground">模型名称</span>
         <Input value={model} required spellCheck={false}
           placeholder="例如：qwen2.5-vl-72b-instruct"
           onChange={(event) => setModel(event.target.value)} />
       </label>
-      <label className={`span-2 ${fieldWrapClass}`}>
-        <span>API Key</span>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">API Key</span>
         <Input value={apiKey} type="password" autoComplete="new-password"
           required={!configured}
           placeholder={vision.configured
@@ -636,7 +643,7 @@ function VisionModelsCard({ view, onSaved }: {
               : "请输入图片识别网关 API Key"}
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
-      <div className="vision-settings-actions span-2">
+      <div className="col-span-full flex flex-wrap gap-2.5">
         <Button type="submit" disabled={saving || testing}>
           {saving ? "正在保存…" : "保存图片识别配置"}</Button>
         <Button type="button" variant="outline"
@@ -644,17 +651,20 @@ function VisionModelsCard({ view, onSaved }: {
           onClick={() => void test()}>
           {testing ? "正在识别测试图…" : dirty ? "请先保存再测试" : "测试识图能力"}</Button>
       </div>
-      {!configured && <small className="vision-test-note span-2">
+      {!configured && <small className="col-span-full -mt-[7px] text-[13px] text-faint">
         保存配置后即可进行真实测试。</small>}
       <Feedback message={message} />
-      {probe && <div className={`vision-probe-result ${probe.status}`} role="status">
+      {probe && <div role="status" className={cn("col-span-full grid gap-1 rounded-[9px] border px-[13px] py-[11px] text-[13.5px]",
+        probe.status === "ready" ? "border-success/30 bg-success/10 text-success"
+          : probe.status === "failed" ? "border-danger/30 bg-danger/10 text-danger"
+            : "border-line bg-surface-2 text-muted-foreground")}>
         <strong>{probe.status === "ready" ? "识图能力已就绪" : "识图测试未通过"}</strong>
-        <span>{probe.status === "ready"
+        <span className="[overflow-wrap:anywhere] leading-[1.55]">{probe.status === "ready"
           ? `${probe.provider}/${probe.model} · ${probe.latency_ms} ms`
           : probe.error ?? "未知错误"}</span>
-        {probe.response && <details>
-          <summary>查看模型观察</summary>
-          <small>{probe.response}</small>
+        {probe.response && <details className="mt-0.5">
+          <summary className="w-fit cursor-pointer font-bold">查看模型观察</summary>
+          <small className="mt-[7px] block whitespace-pre-wrap">{probe.response}</small>
         </details>}
       </div>}
     </form>
@@ -683,34 +693,38 @@ function SettingsOverview({ view, check, checkError }: {
     : check?.overall === "ok" ? "全部正常"
     : check?.overall === "error" ? "存在不可用项"
       : check?.overall === "warning" ? "有待完善项" : "正在检查";
-  return <section className="settings-overview" aria-labelledby="settings-overview-title">
-    <header>
-      <div><span className="section-kicker">SERVICE SETTINGS</span>
-        <h2 id="settings-overview-title">服务设置总览</h2></div>
-      <p>先看真实状态，再进入对应区域修改；密钥不会在总览或表单中回显。</p>
+  return <section className="rounded-[14px] border border-line bg-surface p-[22px] shadow-xs" aria-labelledby="settings-overview-title">
+    <header className="mb-3.5 flex items-end justify-between gap-5 max-[900px]:flex-col max-[900px]:items-start max-[900px]:gap-2">
+      <div>
+        <h2 id="settings-overview-title" className="mt-1 text-[22px] text-text-strong">服务设置总览</h2></div>
+      <p className="m-0 text-[13px] text-muted-foreground">先看真实状态，再进入对应区域修改；密钥不会在总览或表单中回显。</p>
     </header>
-    <div className="settings-overview-grid">
-      <button type="button" onClick={() => go("settings-models")}>
-        <span>01</span><strong>模型与图片识别</strong>
-        <small>主模型 {mainModel ?? "未配置"} · 图片识别 {visionModel ?? "未配置"}</small>
-        <em>进入配置与测试能力</em>
+    <div className="grid grid-cols-1 gap-2.5 min-[621px]:grid-cols-2 min-[901px]:grid-cols-4">
+      <button type="button" onClick={() => go("settings-models")}
+        className="grid min-h-[125px] min-w-0 cursor-pointer content-start gap-1.5 rounded-[11px] border border-line bg-surface-2 p-3.5 text-left text-text hover:border-primary focus-visible:border-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-primary/15">
+        <span className="font-mono text-xs font-bold text-primary">01</span><strong className="text-[15px] text-text-strong">模型与图片识别</strong>
+        <small className="text-xs leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">主模型 {mainModel ?? "未配置"} · 图片识别 {visionModel ?? "未配置"}</small>
+        <em className="mt-auto text-xs font-bold not-italic text-primary">进入配置与测试能力</em>
       </button>
-      <button type="button" onClick={() => go("settings-check")}>
-        <span>02</span><strong>真实部署自检</strong>
-        <small>{checkLabel}{check ? ` · ${check.items.length} 项检查` : ""}</small>
-        <em>查看真实检查结果</em>
+      <button type="button" onClick={() => go("settings-check")}
+        className="grid min-h-[125px] min-w-0 cursor-pointer content-start gap-1.5 rounded-[11px] border border-line bg-surface-2 p-3.5 text-left text-text hover:border-primary focus-visible:border-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-primary/15">
+        <span className="font-mono text-xs font-bold text-primary">02</span><strong className="text-[15px] text-text-strong">真实部署自检</strong>
+        <small className="text-xs leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">{checkLabel}{check ? ` · ${check.items.length} 项检查` : ""}</small>
+        <em className="mt-auto text-xs font-bold not-italic text-primary">查看真实检查结果</em>
       </button>
-      <button type="button" onClick={() => go("settings-policy")}>
-        <span>03</span><strong>团队统一约定</strong>
-        <small>{view.execution_policy.team_instructions?.trim()
+      <button type="button" onClick={() => go("settings-policy")}
+        className="grid min-h-[125px] min-w-0 cursor-pointer content-start gap-1.5 rounded-[11px] border border-line bg-surface-2 p-3.5 text-left text-text hover:border-primary focus-visible:border-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-primary/15">
+        <span className="font-mono text-xs font-bold text-primary">03</span><strong className="text-[15px] text-text-strong">团队统一约定</strong>
+        <small className="text-xs leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">{view.execution_policy.team_instructions?.trim()
           ? "已设置团队约定" : "使用平台默认约定"}{` · ${view.execution_policy.blocked_repository_resources?.length ?? 0} 条资源屏蔽规则`}</small>
-        <em>进入团队约定</em>
+        <em className="mt-auto text-xs font-bold not-italic text-primary">进入团队约定</em>
       </button>
-      <button type="button" onClick={() => go("settings-runtime")}>
-        <span>04</span><strong>现场与构建缓存</strong>
-        <small>任务现场 {workspaceDays === 0 ? "永不回收" : `${workspaceDays} 天`}
+      <button type="button" onClick={() => go("settings-runtime")}
+        className="grid min-h-[125px] min-w-0 cursor-pointer content-start gap-1.5 rounded-[11px] border border-line bg-surface-2 p-3.5 text-left text-text hover:border-primary focus-visible:border-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-primary/15">
+        <span className="font-mono text-xs font-bold text-primary">04</span><strong className="text-[15px] text-text-strong">现场与构建缓存</strong>
+        <small className="text-xs leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">任务现场 {workspaceDays === 0 ? "永不回收" : `${workspaceDays} 天`}
           {` · 缓存 ${cacheDays === 0 ? "不按时间清理" : `${cacheDays} 天`} / ${cacheGb === 0 ? "不限容量" : `${cacheGb} GB`}`}</small>
-        <em>进入保留与缓存策略</em>
+        <em className="mt-auto text-xs font-bold not-italic text-primary">进入保留与缓存策略</em>
       </button>
     </div>
   </section>;
@@ -727,14 +741,14 @@ export function SettingsBoard() {
       setError(String((cause as Error).message ?? cause)));
   }, []);
 
-  if (error) return <section className="user-admin">
-    <div className="form-message error">{error}</div></section>;
-  if (!view) return <section className="user-admin">
-    <div className="settings-loading">正在读取设置…</div></section>;
+  if (error) return <section className="grid gap-6">
+    <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{error}</div></section>;
+  if (!view) return <section className="grid gap-6">
+    <div className="text-sm text-muted-foreground">正在读取设置…</div></section>;
 
   // 两张设置卡共享同一份视图:任一保存返回完整 view,整页跟着刷新,
   // 掩码提示(末4位)因此始终是服务端刚确认过的事实。
-  return <section className="user-admin settings-board">
+  return <section className="grid gap-6">
     <SettingsOverview view={view} check={check} checkError={checkError} />
     <SystemCheckCard onResult={(result, nextError = "") => {
       setCheck(result);

@@ -936,8 +936,14 @@ export class CloudSession {
     return decision;
   }
 
-  /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。 */
-  async resumeWithDecision(record: WaitingRecord): Promise<Outcome> {
+  /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。
+   *  parkedReplay 是宿主欠着的停靠通知(#244 投递必达):拼在决定回执
+   *  之后随行送达——工具结果是模型此刻必读的文本,通知搭这条车不会被
+   *  漏看;决定账(human_decision 事件)保持纯决定,不混平台通知。 */
+  async resumeWithDecision(
+    record: WaitingRecord,
+    parkedReplay?: string,
+  ): Promise<Outcome> {
     const waiting = this.waitingRecord;
     if (!waiting) throw new Error("没有等待中的人工节点,无决定可回注");
     const resolver = this.decisionResolvers.get(waiting.call_id);
@@ -948,6 +954,8 @@ export class CloudSession {
       decision: record.decision,
       notes: record.notes,
     });
+    const answerText = renderAgentDecision(record)
+      + (parkedReplay ? `\n\n${parkedReplay}` : "");
     if (this.hostRaised.has(waiting.call_id)) {
       this.hostRaised.delete(waiting.call_id);
     } else {
@@ -959,7 +967,7 @@ export class CloudSession {
         name: "AskUserQuestion",
         input: waiting.question,
         is_error: false,
-        result: renderAgentDecision(record),
+        result: answerText,
         answers: answersOf(record, waiting),
       });
       // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
@@ -969,7 +977,7 @@ export class CloudSession {
     this.decisionResolvers.delete(waiting.call_id);
     this.waitingRecord = undefined;
     this.waitingSignal = deferred<Outcome>();
-    resolver(renderAgentDecision(record));
+    resolver(answerText);
     return Promise.race([this.pendingTurn!, this.waitingSignal.promise]);
   }
 

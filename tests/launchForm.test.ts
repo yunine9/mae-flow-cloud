@@ -1050,16 +1050,15 @@ test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话
 
 test("发起页会防抖探测仓库并阻止坏地址，退出图标的对比色来自主题令牌", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
-  const tokens = readFileSync(join(process.cwd(), "web/src/tokens.css"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
+  const tokens = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
   assert.match(source, /probeRepositories\(repositoriesToProbe/);
   assert.match(source, /repositoryProbeBlocked/);
   assert.match(source, /正在检查仓库地址/);
-  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色:退出图标的颜色
-  // 来自令牌,浅/深两套令牌各自定义 --faint,对比度在令牌层保证。
-  assert.match(style, /\.logout-button \{[\s\S]*?color: var\(--faint\)/);
-  assert.match(style, /\.density-switch \{[\s\S]*?color: var\(--faint\)/);
-  assert.doesNotMatch(style, /data-theme="light"\] \.logout-button/);
+  // 2026-09-05 起主题不再靠 data-theme 补丁覆盖硬编码色;#228 侧栏换装后
+  // 退出钮走 shadcn ghost 皮,对比色经 tailwind 桥取 tokens(--faint/
+  // --text-strong),legacy 的 .logout-button/.density-switch 规则已拆除。
+  assert.doesNotMatch(style, /\.logout-button|\.density-switch/);
   assert.match(tokens, /:root \{[\s\S]*?--faint: #[0-9a-f]{6}/);
   assert.match(tokens, /:root\[data-theme="dark"\] \{[\s\S]*?--faint: #[0-9a-f]{6}/);
 });
@@ -1074,7 +1073,7 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
 
 test("分析主任务先选讨论参与人，拆分后再逐单元填写执行人和 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
   const api = readFileSync(join(process.cwd(), "web/src/api.ts"), "utf-8");
@@ -1107,10 +1106,13 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
   // 执行人与 AR 都属于最终交付单元；执行人始终可选，免单号的分析
   // 主任务在同一确认区补齐 AR。
-  assert.match(picker, /<div className="repository-assignee-editable">/);
+  // #233 收官:皮肤类换装为工具类,负责人栏保持 grid 小标签 + UserPicker。
+  assert.match(picker, /<div className="grid min-w-0 gap-\[3px\]">\s*<small className="text-xs text-muted-foreground">负责人<\/small>/);
   assert.match(picker, /ariaLabel=\{\`\$\{rowLabel\}的执行人\`\}/);
   assert.doesNotMatch(picker, /repository-assignee-readonly/);
-  assert.match(picker, /<Input type="text"[^>]*value=\{ticket\}/);
+  // #214 输入簇换装后,单号编辑框是 shadcn Input(属性逐一保真)。
+  assert.match(picker,
+    /<Input type="text" className="min-h-\[34px\] font-mono text-xs font-semibold" value=\{ticket\}/);
   assert.doesNotMatch(picker, /repository-ticket-readonly|isUnitRow\(repository\) \|\| !ticket\.trim\(\)/,
     "已有单号与输入首字符都不能把编辑框变回只读");
   assert.match(picker, /chooseAssignee/);
@@ -1123,9 +1125,11 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
 
 test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  // #214/#229 换装后:Textarea 组件渲染;材料包预览壳走工具类(原
+  // .requirement-bundle-preview 家族退役),max-h 限高即"内部滚动"契约。
   assert.match(source, /\{!requirementBundle && <Textarea/);
   assert.doesNotMatch(source, /readOnly=\{Boolean\(requirementBundle\)\}/);
-  assert.match(source, /requirementBundle && <div className="requirement-bundle-preview">/);
+  assert.match(source, /requirementBundle && <div className="mt-2\.5 max-h-\[520px\]/);
 });
 
 test("下单草稿在关闭、刷新和 ZIP 材料场景都不会丢失", () => {
@@ -1138,7 +1142,9 @@ test("下单草稿在关闭、刷新和 ZIP 材料场景都不会丢失", () => 
   assert.match(source, /window\.addEventListener\("pagehide", flushDraft\)/,
     "刷新和关闭标签页必须同步落盘");
   assert.match(source, /也覆盖父页面切栏目、快捷入口把发起弹层直接卸载/);
-  assert.match(source, /className="launch-close" onClick=\{\(\) => \{[\s\S]*?persistDraft\(\);[\s\S]*?onClose\(\);/,
+  // #229 换装:退出钮走 shadcn Button outline 皮,onClick 同步落盘不变。
+  assert.match(source,
+    /variant="outline" size="sm" onClick=\{\(\) => \{[\s\S]*?persistDraft\(\);[\s\S]*?onClose\(\);/,
     "主动退出不能等防抖计时器碰运气");
   assert.doesNotMatch(source,
     /if \(requirementBundle\) \{[\s\S]{0,180}localStorage\.removeItem/,

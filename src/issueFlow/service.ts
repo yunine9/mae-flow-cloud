@@ -88,6 +88,7 @@ import {
   isTerminal,
   issueRepoWorkspaces,
   loadState,
+  MAX_ISSUE_REPOS,
   normalizeIssueRepos,
   raiseGate,
   recordTransition,
@@ -142,7 +143,11 @@ import {
   validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
-import { readBusinessModule } from "../businessModuleLibrary.ts";
+import {
+  readBusinessModule,
+  type BusinessModule,
+} from "../businessModuleLibrary.ts";
+import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { type ModelsSettings } from "../settings.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import { createContainerBashOperations } from "./containerBash.ts";
@@ -1644,6 +1649,151 @@ export class IssueFlowService {
     return summarize(state);
   }
 
+  /** 会话仓清单的用户调整口(#241,POST /issues/:id/repos):端点只做
+   * 校验+留痕+投递通知,不改 repo_urls——清单是 Agent 执行的产出
+   * (新增=pull_repo 幂等入列,移除=#240 remove_repo 摘除),平台不代执。
+   * 门禁分层:这里只核静态事实(HTTPS 格式/在册与否/模块绑定;查法与
+   * remove_repo 门禁①同款),远端分支检查在工具执行时现查。校验全过才
+   * 留痕,任何打回零副作用。投递通道与 attachEnvironment 同一咽喉:
+   * startPlatformTurn(忙=steer 送达,等人/终态=park 便签随续聊带上,
+   * 空闲=开续聊回合)。 */
+  requestRepoChanges(id: string, input: {
+    add?: string[];
+    remove?: string[];
+  }): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    // 终态守卫(与 reply 同款):archived/canceled/failed 不可续聊,投递
+    // 只会写成永不送达的死信——如实打回。页面侧编辑器本就被终态闸隐藏,
+    // 这里防的是直接调 API 的路径。
+    if (state.status === "archived" || state.status === "canceled"
+      || state.status === "failed") {
+      throw new IssueControlError(
+        "该问题单已结束(终态),不能再调整仓清单");
+    }
+    if (state.status === "queued") {
+      throw new IssueControlError(
+        "首轮研究还在排队启动,请稍候再调整仓清单");
+    }
+    const clean = (values?: string[]): string[] =>
+      (values ?? [])
+        .map((item) => String(item).trim())
+        .filter((item) => item.length > 0);
+    const adds = clean(input.add);
+    const removes = clean(input.remove);
+    if (!adds.length && !removes.length) {
+      throw new IssueControlError(
+        "没有要调整的仓:新增与移除至少填一边"
+          + "(新增给代码仓地址,移除从当前清单里选)");
+    }
+    // 新增链①:https 限定(浏览器用户手输口径)。validateRepoUrl 还放行
+    // file:// 与本地路径——那是 Agent 工具(pull_repo)的口径,页面入口
+    // 在它之前先行限定,免得本地路径从页面溜进会话清单。
+    for (const url of adds) {
+      if (!/^https:\/\//i.test(url)) {
+        throw new IssueControlError(
+          `「${url}」不是 https:// 代码仓地址:页面指派只收 HTTPS 仓库地址`);
+      }
+    }
+    // 新增链②:协议校验兜底 → ③组内去重(归一比对:同批里 `…/a.git`
+    // 与 `…/a` 是同一仓,精确串比较会漏判;顺序即语义,不重排)。
+    const freshAdds: string[] = [];
+    for (const url of adds) {
+      const validated = validateRepoUrl(url);
+      if (!freshAdds.some((item) =>
+        repositoryIdentity(item) === repositoryIdentity(validated))) {
+        freshAdds.push(validated);
+      }
+    }
+    const current = state.repo_urls ?? [];
+    // 归一尺与模块绑定门禁(#240)同一把:尾斜杠/.git/大小写差不另立仓。
+    const inCurrent = (url: string): string | undefined =>
+      current.find((item) =>
+        repositoryIdentity(item) === repositoryIdentity(url));
+    // 新增链④:不得与当前清单重复(重复新增=误操作,如实打回)。
+    for (const url of freshAdds) {
+      const hit = inCurrent(url);
+      if (hit) {
+        throw new IssueControlError(
+          `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
+      }
+    }
+    // 新增链⑤:合并计数 ≤ 上限。不给移除抵扣:清单由 Agent 执行变化,
+    // 先拉后删的时序下抵扣不成立,静态可保证的上限只有 current+fresh
+    // (remove_repo 只减不增,任何执行顺序都不会越过这道闸)。
+    if (current.length + freshAdds.length > MAX_ISSUE_REPOS) {
+      throw new IssueControlError(
+        `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓`
+          + `(当前 ${current.length} 个,本次新增 ${freshAdds.length} 个`
+          + `将到 ${current.length + freshAdds.length} 个);`
+          + "请精简清单或分多次调整");
+    }
+    // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
+    const removed: string[] = [];
+    for (const url of removes) {
+      const hit = inCurrent(url);
+      if (!hit) {
+        throw new IssueControlError(
+          `「${url}」不在当前会话仓清单里,无从移除(当前清单:`
+            + `${current.length ? current.join(", ") : "空"})`);
+      }
+      if (!removed.includes(hit)) removed.push(hit);
+    }
+    // 移除链②:非模块绑定仓(readBusinessModule 查法与 remove_repo
+    // 门禁①同款:模块查不到/已删除按无绑定处理,不挡移除)。
+    if (state.module_id && removed.length) {
+      let bound: BusinessModule | undefined;
+      try {
+        bound = readBusinessModule(this.options.dataDir, state.module_id);
+      } catch {
+        bound = undefined;
+      }
+      for (const url of removed) {
+        const isBound = bound?.repositories.some((repo) =>
+          repositoryIdentity(repo) === repositoryIdentity(url));
+        if (isBound) {
+          throw new IssueControlError(
+            `「${url}」是业务模块「${bound!.name}」的绑定仓,`
+              + "模块绑定仓不可移除——如该仓确与本问题无关,"
+              + "请先在「团队资产 → 业务模块」调整模块绑定");
+        }
+      }
+    }
+    // 校验全过才留痕(转移账 + 事件账双记),清单一字不动——repo_urls
+    // 由 Agent 经 pull_repo/remove_repo 执行后变化,这里是"用户的裁定",
+    // 不是清单本身。
+    const summary = [
+      ...(freshAdds.length ? [`新增 ${freshAdds.join("、")}`] : []),
+      ...(removed.length ? [`移除 ${removed.join("、")}`] : []),
+    ].join(";");
+    recordTransition(state, {
+      source: "platform",
+      note: `用户调整会话仓清单(${summary})——清单随 Agent 执行 `
+        + "pull_repo/remove_repo 变化,端点不直改",
+    });
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "user_message", {
+      text: `调整会话代码仓(${summary})`,
+      via: "repos",
+    });
+    this.log(`[issue-flow] ${id} 用户调整仓清单(${summary})`);
+    // 通知按 diff 拼段:空方向不出空段(锚点/文件缺失在首次取用处
+    // fail-loud,文案是协议)。
+    // 段文先 trim:md 锚点段以 header 后的空行打头,park 便签只取首行
+    // ——不 trim 就把空行当首行,落成一张空便签。
+    const sections: string[] = [];
+    if (freshAdds.length) {
+      sections.push(promptCopy("notices", "repos.changed.add",
+        { repos: freshAdds.join("、") }).trim());
+    }
+    if (removed.length) {
+      sections.push(promptCopy("notices", "repos.changed.remove",
+        { repos: removed.join("、") }).trim());
+    }
+    this.startPlatformTurn(live, sections.join("\n\n"));
+    return summarize(state);
+  }
+
   // ---- 会话驱动 ----
 
   /** 回合启动单点(收窄票 #7):新回合的共有不变量只有这一份——
@@ -1713,13 +1863,17 @@ export class IssueFlowService {
     opts?: { boundary?: boolean },
   ): Promise<Outcome> {
     await this.ensureContainer(live);
+    // 欠账便签随行(#244 投递必达):任何续聊形态的回合都把停靠通知
+    // 捎给模型——落到便签的通知不能停在显示摘要里没人看见。
+    const replay = this.parkedReplay(this.takeParkedNotices(live));
+    const full = replay ? `${message}\n\n${replay}` : message;
     if (live.driver) {
       // 回合前压缩(票 01/02)的唯一安全位:话递进在场会话之前。
       await this.maybeCompactContinuation(live, opts?.boundary === true);
-      return live.driver.continueWith(message);
+      return live.driver.continueWith(full);
     }
     const driver = await this.openDriver(live);
-    return driver.startResume(issueResumePrompt(live.state, message,
+    return driver.startResume(issueResumePrompt(live.state, full,
       this.environmentCredentials(live),
       { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
   }
@@ -3028,6 +3182,8 @@ export class IssueFlowService {
       // 动作:阶段已 done,这里举环境验证闸(与监看器滞后收口的
       // closeMrGreen 同款);监看器滞后收口走 settlePipeline。
       notifyMrGreen: () => this.awaitEnvVerify(live),
+      // 单卡互斥②(ADR-0024):有未决 Agent 卡时 raise_gate 拒举。
+      pendingAgentCard: () => live.humanGate.pending().length > 0,
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -3088,6 +3244,13 @@ export class IssueFlowService {
       }),
       humanGate: live.humanGate,
       allowHumanQuestions: true,
+      // 单卡互斥①(ADR-0024):平台闸在场时 AskUserQuestion 先问宿主,
+      // 宿主拦下(纠偏文字作工具错误回给模型,不建卡不通知)——闸优先
+      // 是作答分派的既有语义,两卡并存是 issue-53 撞车类 bug 的土壤。
+      beforeHumanQuestion: () => live.state.gate
+        ? "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
+          + "新回合,届时若仍需要向用户提问,再举问题卡。"
+        : undefined,
       // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
       // 并行评审/grilling 派子查证)原生可用。安全边界:
       // - 业务工具(complete_stage/push_branch 等)只在主会话——
@@ -3173,15 +3336,18 @@ export class IssueFlowService {
     }
     this.beginTurn(live, async () => {
       await this.ensureContainer(live);
+      // 欠账便签随行(#244 投递必达):作答回合是停靠通知的投递时机。
+      const replay = this.parkedReplay(this.takeParkedNotices(live));
       if (live.driver) {
-        return live.driver.resumeWithDecision(record);
+        return live.driver.resumeWithDecision(record, replay || undefined);
       }
       // 进程重启后的作答:重开 会话,决定先补登记(审计),再以
       // 续聊提示词把答案交给重建的上下文。
       const driver = await this.openDriver(live);
       driver.injectDecision(record);
-      return driver.startResume(issueResumePrompt(live.state,
-        `用户对问题卡的答复:\n${renderDecision(record)}`,
+      const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
+        + (replay ? `\n\n${replay}` : "");
+      return driver.startResume(issueResumePrompt(live.state, decisionText,
         this.environmentCredentials(live),
         { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
     });
@@ -5655,10 +5821,36 @@ export class IssueFlowService {
     this.continueTurn(live, message);
   }
 
-  /** 平台通知的落便签口:不抢回合,首行进 stage_note,续聊提示词带上。 */
+  /** 平台通知的落便签口:不抢回合——首行进 stage_note(显示摘要),
+   *  全文进欠账队列(#244 投递必达):stage_note 装不下也丢不了,续跑
+   *  (答卡原地续跑/重启重建作答)时经 takeParkedNotices 注入模型
+   *  上下文。同文重复投递只记一次(监看重放/重复通知不去重会双份注入)。 */
   private parkPlatformNotice(live: LiveIssue, message: string): void {
+    const full = message.slice(0, 2000);
+    const queue = live.state.parked_notices ?? (live.state.parked_notices = []);
+    if (!queue.includes(full)) {
+      queue.push(full);
+      // 队列有界:超限丢最旧的——通知是事实陈述,最新一条覆盖旧语义。
+      while (queue.length > 8) queue.shift();
+    }
     live.state.stage_note = message.split("\n")[0].slice(0, 120);
     saveState(live.root, live.state);
+  }
+
+  /** 取走全部欠账便签(取走即清账并落盘);无欠账返回空数组。 */
+  private takeParkedNotices(live: LiveIssue): string[] {
+    const queue = live.state.parked_notices;
+    if (!queue?.length) return [];
+    live.state.parked_notices = undefined;
+    saveState(live.root, live.state);
+    return queue;
+  }
+
+  /** 欠账便签的注入词:拼在决定回执/续聊词之后随行送达模型(#244)。 */
+  private parkedReplay(notices: string[]): string {
+    if (!notices.length) return "";
+    return promptCopy("notices", "parked.replay",
+      { items: notices.join("\n\n") });
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----

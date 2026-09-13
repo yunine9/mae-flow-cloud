@@ -10,6 +10,7 @@ import {
 import { OverlayDialog } from "./WarmupPanel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "cn";
@@ -243,66 +244,68 @@ export function PrepushBadge({
               active={prepushActive(prepush.state, runtime)} />
             {canOperate && prepush.state !== "passed" && (
               /* 统一操作栏(2026-08-28 用户点名重designed:三个叠放的
-                 虚线盒子太丑)。语义分色的胶囊按钮 + 一条内联确认条:
+                 虚线盒子太丑)。语义分档按钮 + 一条内联确认条:
                  停止/跳过要确认(拍板即产生外部动作),重跑直点(兼
-                 活性探针,真在跑时服务端拒绝并明说"正在进行")。 */
-              <div className="prepush-actions">
-                <span className="prepush-actions-label">人工操作</span>
+                 活性探针,真在跑时服务端拒绝并明说"正在进行")。
+                 #232 换装:胶囊手搓皮退役,按钮归 shadcn Button
+                 (停止=destructive、跳过/取消=outline、重跑=default),
+                 排布直译工具类。 */
+              <div className="mt-3 flex flex-col gap-2 border-t border-line pt-2.5 text-sm">
+                <span className="text-xs font-bold text-muted-foreground">人工操作</span>
                 {actionError && (
-                  <p className="prepush-actions-error">{actionError}</p>
+                  <p className="m-0 text-danger">{actionError}</p>
                 )}
                 {confirming === "stop" ? (
-                  <div className="prepush-actions-confirm">
-                    <span>中止本轮编译,直接推送当前 HEAD 交流水线裁决;
+                  <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-line-strong bg-surface-soft px-3 py-2.5 leading-relaxed text-text">
+                    <span className="flex-[1_1_260px]">中止本轮编译,直接推送当前 HEAD 交流水线裁决;
                       若编译不过会消耗一条流水线进入修复环。已推进的
                       修复提交保留。</span>
-                    <button type="button" className="prepush-action-btn is-danger"
+                    <Button type="button" variant="destructive" size="sm"
                       disabled={busy === "stop"}
                       onClick={() => perform("stop", stopBuildFix)}>
                       {busy === "stop" ? "停止中…" : "确认停止并直推"}
-                    </button>
-                    <button type="button" className="prepush-action-btn"
+                    </Button>
+                    <Button type="button" variant="outline" size="sm"
                       disabled={busy === "stop"}
-                      onClick={() => setConfirming("")}>取消</button>
+                      onClick={() => setConfirming("")}>取消</Button>
                   </div>
                 ) : confirming === "skip" ? (
-                  <div className="prepush-actions-confirm">
-                    <span>跳过本地编译直接推送,编译与单元测试交由权威流水线
+                  <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-line-strong bg-surface-soft px-3 py-2.5 leading-relaxed text-text">
+                    <span className="flex-[1_1_260px]">跳过本地编译直接推送,编译与单元测试交由权威流水线
                       裁决。跳过只绑当前 HEAD,新提交后自动失效。</span>
-                    <button type="button" className="prepush-action-btn is-warn"
+                    <Button type="button" variant="outline" size="sm"
                       disabled={busy === "skip"}
                       onClick={() => perform("skip", skipBuildFix)}>
                       {busy === "skip" ? "提交中…" : "确认跳过"}
-                    </button>
-                    <button type="button" className="prepush-action-btn"
+                    </Button>
+                    <Button type="button" variant="outline" size="sm"
                       disabled={busy === "skip"}
-                      onClick={() => setConfirming("")}>取消</button>
+                      onClick={() => setConfirming("")}>取消</Button>
                   </div>
                 ) : (
-                  <div className="prepush-actions-row">
+                  <div className="flex flex-wrap items-center gap-2">
                     {prepushActive(prepush.state, runtime) && (
-                      <button type="button"
-                        className="prepush-action-btn is-danger"
+                      <Button type="button" variant="destructive" size="sm"
                         disabled={Boolean(busy)}
                         onClick={() => setConfirming("stop")}
                         title="中止本轮编译并直推流水线裁决">
                         ⏹ 停止并直推流水线
-                      </button>
+                      </Button>
                     )}
                     {skippable && (
-                      <button type="button" className="prepush-action-btn is-warn"
+                      <Button type="button" variant="outline" size="sm"
                         disabled={Boolean(busy)}
                         onClick={() => setConfirming("skip")}
                         title="跳过本地编译,由权威流水线裁决(绑当前 HEAD)">
                         ⤼ 跳过,直推流水线
-                      </button>
+                      </Button>
                     )}
-                    <button type="button" className="prepush-action-btn"
+                    <Button type="button" size="sm"
                       disabled={Boolean(busy)}
                       onClick={() => perform("retry", retryBuildFix)}
                       title="失败停机或重启后卡住时用;正在编译时服务端会拒绝并说明,这句拒绝即是活性答案">
                       {busy === "retry" ? "提交中…" : "↻ 重跑编译"}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -334,7 +337,9 @@ export function PrepushStatus({
 
   /* #216:外层收编为 Badge,tone 色板交给 variant(原 .prepush-status
      .tone-* CSS 删除);phase-* 类保留——通过勾/环境叉的点形变仍由
-     style.css 的结构规则承担。工作台态沿用原底部分隔发丝线。 */
+     style.css 的结构规则承担。#232:copy/facts 的排布直译成工具类
+     (原 .prepush-copy/.prepush-facts/.prepush-workspace 删除);
+     工作台态沿用原底部分隔发丝线。 */
   const lineTone = {
     active: "border-b-active/20",
     repair: "border-b-attention/20",
@@ -361,15 +366,21 @@ export function PrepushStatus({
       <span className="prepush-marker" aria-hidden>
         {view.busy ? <Spinner aria-hidden className="size-3" /> : <i />}
       </span>
-      <span className="prepush-copy">
-        <strong>{title}</strong>
-        {placement === "workspace" && <small>{detail}</small>}
-      </span>
-      <span className="prepush-facts">
-        {prepush.round !== undefined && (
-          <span>第 {prepush.round} 轮</span>
+      <span className={cn("flex items-baseline gap-[7px] text-left",
+        placement === "workspace" && "min-w-0 flex-1 flex-col items-start gap-0.5")}>
+        <strong className={cn("min-w-0 text-text-strong",
+          placement === "workspace" ? "text-[14.5px]" : "text-[13.5px]")}>{title}</strong>
+        {placement === "workspace" && (
+          <small className="min-w-0 truncate text-sm leading-snug text-muted-foreground max-[560px]:whitespace-normal">{detail}</small>
         )}
-        {prepush.sha && <code title="本次验证绑定的代码版本号(Git 提交)">
+      </span>
+      <span className="ml-auto inline-flex flex-none items-center gap-1.5 whitespace-nowrap text-sm">
+        {prepush.round !== undefined && (
+          <span className="rounded-full bg-current/10 px-1.5 py-0.5">第 {prepush.round} 轮</span>
+        )}
+        {prepush.sha && <code className={cn("font-mono text-xs font-bold tracking-[.02em] text-muted-foreground",
+          placement === "workspace" && "max-[560px]:hidden")}
+          title="本次验证绑定的代码版本号(Git 提交)">
           SHA {shortSha(prepush.sha)}</code>}
       </span>
     </Badge>

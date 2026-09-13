@@ -913,12 +913,13 @@ export function createTaskServer(
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
       // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
       if (parts[0] === "issues") {
-        // GET /issues/:id 既是详情 API 也是会话工作台的深链地址(小鲁班
-        // 通知点开即达)。与 /tasks/:id 的旧通知兼容同一判别式:浏览器
-        // 导航(Accept 要 text/html)让给前端 SPA,程序 fetch(默认
-        // Accept: */*)照旧拿 JSON,API 契约零变化。
+        // GET /issues 与 /issues/:id 既是 API 也是问题工作台的深链地址
+        // (裸 /issues=登记页,带 id=会话工作台;小鲁班通知点开即达)。
+        // 与 /tasks/:id 的旧通知兼容同一判别式:浏览器导航(Accept 要
+        // text/html)让给前端 SPA,程序 fetch(默认 Accept: */*)照旧拿
+        // JSON,API 契约零变化。
         const issuePage = request.method === "GET"
-          && parts.length === 2
+          && parts.length <= 2
           && String(request.headers.accept ?? "").includes("text/html");
         if (!issuePage) {
           const handled = await handleIssueRoutes(request, response, parts, {
@@ -1932,9 +1933,9 @@ export function createTaskServer(
           && (url.pathname === "/" || parts[0] !== "tasks")) {
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
         const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
-        // 问题会话工作台深链(小鲁班通知的落点):上一段已把带 text/html
-        // 的 GET /issues/:id 让出,这里只管把它接住交给 React。
-        const issuesRoute = parts[0] === "issues" && parts.length === 2;
+        // 问题工作台深链(小鲁班通知的落点):上一段已把带 text/html 的
+        // GET /issues 与 /issues/:id 让出,这里只管把它们接住交给 React。
+        const issuesRoute = parts[0] === "issues";
         // 环境管理页签深链(#149):API 判别式放行的 text/html GET 在这里接住交给 React。
         const environmentsRoute = parts[0] === "environments" && parts.length === 1;
         const appRoute = workspaceRoute || helpRoute || issuesRoute || environmentsRoute;

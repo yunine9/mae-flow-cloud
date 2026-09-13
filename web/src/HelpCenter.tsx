@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { XIcon } from "lucide-react";
+import { cn } from "cn";
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
@@ -528,7 +529,7 @@ const QUICK_LINKS = [
 ];
 
 function SearchIcon() {
-  return <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>;
+  return <svg viewBox="0 0 20 20" aria-hidden className="size-5 text-primary"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>;
 }
 
 function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
@@ -542,18 +543,26 @@ function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
 
   if (failed) return null;
   return <>
-    <figure className="help-shot">
-      <button type="button" className="help-shot-frame"
+    <figure className="help-shot m-0 px-6 pb-7">
+      <button type="button" className="help-shot-frame group relative w-full cursor-zoom-in overflow-hidden rounded-[13px]
+        border border-line-strong bg-surface-3 p-0 text-left text-text shadow-md outline-offset-[3px]
+        focus-visible:outline-3 focus-visible:outline-primary/60"
         onClick={() => setExpanded(true)} aria-label={`放大查看：${shot.alt}`}>
-        <img src={shot.src} alt={shot.alt} loading="lazy" onError={hideOnError} />
-        <span className="help-shot-zoom" aria-hidden>放大查看</span>
+        <img src={shot.src} alt={shot.alt} loading="lazy" onError={hideOnError}
+          className="block h-auto w-full" />
+        <span className="help-shot-zoom pointer-events-none absolute bottom-3 right-3 translate-y-0.5 rounded-full
+          border border-primary-foreground/35 bg-primary/75 px-2.5 py-1.5 text-xs font-bold text-primary-foreground opacity-80
+          shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100
+          group-focus-visible:translate-y-0 group-focus-visible:opacity-100" aria-hidden>放大查看</span>
       </button>
-      <figcaption><span aria-hidden>↳</span>{shot.caption}</figcaption>
+      <figcaption className="mx-2 mt-3 flex items-start gap-1.5 text-xs leading-[1.55] text-muted-foreground">
+        <span aria-hidden className="font-extrabold text-primary">↳</span>{shot.caption}
+      </figcaption>
     </figure>
 
     <Dialog open={expanded} onOpenChange={(next) => { if (!next) setExpanded(false); }}>
       <DialogContent showCloseButton={false}
-        className="tw-root w-full max-w-[min(1440px,100%)] gap-0 overflow-hidden p-0 sm:max-w-[min(1440px,100%)]">
+        className="w-full max-w-[min(1440px,100%)] gap-0 overflow-hidden p-0 sm:max-w-[min(1440px,100%)]">
         <DialogHeader className="flex-row items-start justify-between gap-4 border-b bg-muted/40 px-4 py-2">
           <div className="flex min-w-0 flex-col gap-0.5">
             <DialogTitle>图片预览</DialogTitle>
@@ -564,8 +573,10 @@ function ArticleScreenshot({ shot }: { shot: HelpScreenshot }) {
             <XIcon />
           </DialogClose>
         </DialogHeader>
-        <div className="help-lightbox-image h-[min(70vh,640px)]">
-          <img src={shot.src} alt={shot.alt} onError={hideOnError} />
+        <div className="help-lightbox-image grid h-[min(70vh,640px)] min-h-0 min-w-0 place-items-center
+          overflow-hidden bg-surface-3 p-3 sm:p-4.5">
+          <img src={shot.src} alt={shot.alt} onError={hideOnError}
+            className="block h-full max-h-full w-full max-w-full min-h-0 min-w-0 object-contain object-center" />
         </div>
         <p className="m-0 border-t bg-muted/40 px-4 py-2.5 text-xs leading-relaxed break-words text-muted-foreground">
           {shot.caption}
@@ -612,58 +623,86 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
     document.querySelector(".workspace")?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  return <section className="help-center" aria-label="Mae-Flow 使用帮助">
-    <div className="help-hero">
-      <div>
-        <span className="section-kicker">FAQ &amp; PRODUCT GUIDE</span>
-        <h2>从“我现在要做什么”开始</h2>
-        <p>功能说明、真实界面和异常处理都在这里。搜索动作、状态或你看到的提示。</p>
+  return <section className="grid content-start gap-5.5" aria-label="Mae-Flow 使用帮助">
+    <div className="relative grid min-h-[158px] grid-cols-[minmax(0,1fr)_minmax(340px,480px)] items-center
+      gap-9 overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-surface
+      via-surface to-surface-3 px-8 py-7 shadow-sm max-[980px]:grid-cols-1 max-[980px]:gap-4.5">
+      <span aria-hidden className="pointer-events-none absolute -top-[52px] right-7 z-0 select-none
+        text-[210px] font-extrabold leading-none text-primary/5">?</span>
+      <div className="relative z-1">
+        <span className="text-xs font-extrabold text-primary">FAQ &amp; PRODUCT GUIDE</span>
+        <h2 className="mt-2 mb-1.5 text-[clamp(24px,2.3vw,34px)] font-bold leading-[1.18] tracking-[-0.035em] text-text-strong">
+          从“我现在要做什么”开始</h2>
+        <p className="m-0 text-[15px] text-muted-foreground">功能说明、真实界面和异常处理都在这里。搜索动作、状态或你看到的提示。</p>
       </div>
-      <label className="help-search">
+      <label className="relative z-1 grid h-[54px] grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2.5
+        rounded-[14px] border border-line-strong bg-surface px-3.5 shadow-md
+        transition focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/10">
         <SearchIcon />
         <span className="sr-only">搜索使用帮助</span>
         <Input className="h-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder="例如：暂停、/mfc、自动匹配、工作流…" />
-        {query && <button type="button" onClick={() => setQuery("")}
-          aria-label="清空搜索">×</button>}
+        {query && <button type="button" onClick={() => setQuery("")} aria-label="清空搜索"
+          className="grid size-7 cursor-pointer place-items-center rounded-lg bg-surface-3 p-0 border-0 text-muted-foreground hover:text-text-strong">×</button>}
       </label>
     </div>
 
-    {!query && <div className="help-quick" aria-label="常用帮助">
+    {!query && <div className="grid gap-3 max-[980px]:grid-cols-1 sm:grid-cols-3" aria-label="常用帮助">
       {quickLinks.map((item, index) => <button type="button" key={item.id}
-        onClick={() => select(item.id)}>
-        <span>{String(index + 1).padStart(2, "0")}</span>
-        <strong>{item.title}</strong><small>{item.detail}</small>
+        onClick={() => select(item.id)}
+        className="grid min-w-0 cursor-pointer grid-cols-[34px_minmax(0,1fr)] items-center gap-x-2.5 rounded-[14px]
+          border border-line bg-surface px-4.5 py-4 text-left transition hover:-translate-y-0.5
+          hover:border-primary/40 hover:shadow-sm">
+        <span className="col-start-1 row-span-2 grid size-[34px] place-items-center rounded-[10px] bg-surface-3
+          text-xs font-extrabold text-primary">{String(index + 1).padStart(2, "0")}</span>
+        <strong className="text-sm font-bold text-text-strong">{item.title}</strong>
+        <small className="-mt-0.5 text-xs font-medium text-muted-foreground">{item.detail}</small>
       </button>)}
     </div>}
 
-    <div className="help-layout">
-      <aside className="help-index" aria-label="帮助目录">
+    <div className="grid grid-cols-1 items-start gap-5.5 min-[980px]:grid-cols-[200px_minmax(0,1fr)]
+      min-[1220px]:grid-cols-[220px_minmax(0,1fr)_178px]">
+      <aside className="sticky top-5 max-h-[calc(100vh-40px)] overflow-y-auto pr-2 [scrollbar-width:thin]
+        max-[980px]:static max-[980px]:max-h-none max-[980px]:p-0" aria-label="帮助目录">
         {query ? <>
-          <div className="help-index-heading"><span>搜索结果</span><b>{articles.length}</b></div>
-          {articles.length === 0 && <div className="help-no-result">
-            <strong>没有直接匹配</strong>
-            <p>试试更短的词，或到许愿墙描述你遇到的场景。</p>
+          <div className="flex min-h-7 items-center justify-between px-2 text-xs font-extrabold text-faint">
+            <span>搜索结果</span>
+            <b className="min-w-5 rounded-full bg-surface-3 px-1.5 py-px text-center text-xs leading-[18px] text-muted-foreground">{articles.length}</b>
+          </div>
+          {articles.length === 0 && <div className="my-2 rounded-xl border border-dashed border-line-strong bg-surface-2 p-3.5 text-muted-foreground">
+            <strong className="text-[13px] text-text">没有直接匹配</strong>
+            <p className="mt-1 text-xs leading-[1.55]">试试更短的词，或到许愿墙描述你遇到的场景。</p>
           </div>}
           {articles.map((item) => <button type="button" key={item.id}
-            onClick={() => select(item.id)} className={item.id === article.id ? "active" : ""}>
-            <strong>{item.title}</strong><small>{item.summary}</small>
+            onClick={() => select(item.id)}
+            className={cn("my-0.5 grid w-full cursor-pointer gap-[3px] rounded-[10px] border px-2.5 py-2.5 text-left",
+              "text-muted-foreground hover:bg-surface-2 hover:text-text",
+              item.id === article.id && "border-primary/15 bg-surface-3 text-primary")}>
+            <strong className="text-[13px] leading-[1.35]">{item.title}</strong>
+            <small className="line-clamp-2 text-xs font-medium leading-[1.45] text-muted-foreground">{item.summary}</small>
           </button>)}
         </> : GROUPS.map((group) => {
           const items = articles.filter((item) => item.group === group);
           if (items.length === 0) return null;
-          return <div className="help-index-group" key={group}>
-            <div className="help-index-heading"><span>{group}</span><b>{items.length}</b></div>
+          return <div className="[&+&]:mt-4.5 max-[980px]:grid max-[980px]:grid-cols-2 max-[980px]:gap-[3px]" key={group}>
+            <div className="flex min-h-7 items-center justify-between px-2 text-xs font-extrabold text-faint
+              max-[980px]:col-span-2">
+              <span>{group}</span>
+              <b className="min-w-5 rounded-full bg-surface-3 px-1.5 py-px text-center text-xs leading-[18px] text-muted-foreground">{items.length}</b>
+            </div>
             {items.map((item) => <button type="button" key={item.id}
-              onClick={() => select(item.id)} className={item.id === article.id ? "active" : ""}>
-              <strong>{item.title}</strong>
+              onClick={() => select(item.id)}
+              className={cn("my-0.5 grid w-full cursor-pointer gap-[3px] rounded-[10px] border px-2.5 py-2.5 text-left",
+                "text-muted-foreground hover:bg-surface-2 hover:text-text",
+                item.id === article.id && "border-primary/15 bg-surface-3 text-primary")}>
+              <strong className="text-[13px] leading-[1.35]">{item.title}</strong>
             </button>)}
           </div>;
         })}
       </aside>
 
-      <article className="help-article">
-        <header className="help-article-head">
+      <article className="min-w-0 overflow-hidden rounded-[18px] border border-line bg-surface shadow-xs">
+        <header className="px-[38px] pt-[34px] pb-[25px] max-[980px]:px-5">
           {/* #220 面包屑换 Breadcrumb 原语:nav>ol 语义归位,原 .help-breadcrumb
               色彩字阶迁为令牌工具类;「／」分隔符随 BreadcrumbSeparator 保留。 */}
           <Breadcrumb>
@@ -673,40 +712,57 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
               <BreadcrumbItem>{article.audience}</BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
-          <h2>{article.title}</h2>
-          <p>{article.summary}</p>
-          <div className="help-meta"><span>{article.minutes} 分钟读完</span><span>{article.steps.length} 个关键步骤</span></div>
+          <h2 className="mt-2.5 mb-2 text-[clamp(26px,2.5vw,36px)] font-bold leading-[1.2] tracking-[-0.04em] text-text-strong">{article.title}</h2>
+          <p className="m-0 text-[15px] text-muted-foreground">{article.summary}</p>
+          <div className="mt-4.5 flex flex-wrap gap-2">
+            <span className="rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs font-semibold text-muted-foreground">{article.minutes} 分钟读完</span>
+            <span className="rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs font-semibold text-muted-foreground">{article.steps.length} 个关键步骤</span>
+          </div>
         </header>
 
         {article.screenshots?.map((shot) => <ArticleScreenshot key={shot.src} shot={shot} />)}
 
-        <section className="help-steps" aria-labelledby="help-steps-title">
-          <div className="help-section-title"><span>照着做</span><h3 id="help-steps-title">关键步骤</h3></div>
-          <ol>{article.steps.map((step, index) => <li key={step.title}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <div><strong>{step.title}</strong><p>{step.detail}</p></div>
+        <section className="mx-[38px] border-y border-line py-7 max-[980px]:mx-5" aria-labelledby="help-steps-title">
+          <div><span className="text-xs font-extrabold text-primary">照着做</span>
+            <h3 id="help-steps-title" className="mt-1 mb-4 text-lg tracking-[-0.02em] text-text-strong">关键步骤</h3></div>
+          <ol className="m-0 grid list-none gap-3.5 p-0">{article.steps.map((step, index) => <li key={step.title}
+            className="grid grid-cols-[34px_minmax(0,1fr)] gap-[11px]">
+            <span className="grid size-8 place-items-center rounded-[10px] border border-primary/20 bg-surface-3
+              text-xs font-extrabold text-primary">{String(index + 1).padStart(2, "0")}</span>
+            <div className="pt-px"><strong className="block text-[13px] text-text-strong">{step.title}</strong>
+              <p className="mt-0.5 text-xs leading-[1.55] text-muted-foreground">{step.detail}</p></div>
           </li>)}</ol>
         </section>
 
-        <div className="help-rich-text"><Markdown text={article.body} /></div>
+        <div className="px-[38px] pt-7 pb-9 max-[980px]:px-5"><Markdown text={article.body} /></div>
 
-        {relatedArticles.length > 0 && <footer className="help-related">
-          <span>接着看</span>
-          <div>{relatedArticles.map((related) => {
+        {relatedArticles.length > 0 && <footer className="border-t border-line bg-surface-2 px-[38px] pt-6 pb-[34px] max-[980px]:px-5">
+          <span className="text-xs font-extrabold text-faint">接着看</span>
+          <div className="mt-2.5 grid gap-2">{relatedArticles.map((related) => {
             return <button type="button" key={related.id}
-              onClick={() => select(related.id)}>
-              <strong>{related.title}</strong><small>{related.summary}</small><i aria-hidden>→</i>
+              onClick={() => select(related.id)}
+              className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded-[11px]
+                border border-line bg-surface px-3.5 py-3 text-left hover:border-primary/40">
+              <strong className="text-[13px] text-text">{related.title}</strong>
+              <small className="truncate text-xs font-medium text-muted-foreground">{related.summary}</small>
+              <i aria-hidden className="col-start-2 row-span-2 self-center not-italic text-primary">→</i>
             </button>;
           })}</div>
         </footer>}
       </article>
 
-      <aside className="help-toc" aria-label="本页重点">
-        <span>本页重点</span>
-        <ol>{article.steps.map((step, index) => <li key={step.title}>
-          <i>{index + 1}</i><span>{step.title}</span>
+      <aside className="sticky top-5 hidden text-muted-foreground min-[1220px]:block" aria-label="本页重点">
+        <span className="mb-2.5 block text-xs font-extrabold text-faint">本页重点</span>
+        <ol className="m-0 grid list-none gap-2.5 p-0">{article.steps.map((step, index) => <li key={step.title}
+          className="grid grid-cols-[22px_minmax(0,1fr)] items-start gap-[7px]">
+          <i className="grid size-5 place-items-center rounded-md bg-surface-3 text-xs font-extrabold
+            not-italic text-primary">{index + 1}</i>
+          <span className="pt-px text-xs font-semibold leading-[1.5]">{step.title}</span>
         </li>)}</ol>
-        <div className="help-principle"><strong>还是处理不了？</strong><p>到许愿墙提交场景、任务链接和脱敏截图。平台会明确标记是否接纳与何时闭环。</p></div>
+        <div className="mt-5 rounded-[11px] border border-line bg-surface-2 p-3.5">
+          <strong className="text-xs text-text">还是处理不了？</strong>
+          <p className="mt-1 text-xs leading-[1.6]">到许愿墙提交场景、任务链接和脱敏截图。平台会明确标记是否接纳与何时闭环。</p>
+        </div>
       </aside>
     </div>
   </section>;

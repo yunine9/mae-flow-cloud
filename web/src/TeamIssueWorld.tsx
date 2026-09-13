@@ -14,6 +14,7 @@
  * 超过 STALE_AFTER_MS 无进展;正在推进=排队+AI 处理中;等你答复含挂起。
  * 概览格筛选(阶段/状态)与之叠加生效。
  */
+import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
@@ -62,6 +63,18 @@ const CONCLUSION_TILES = [
   { kind: "non_issue", label: "非问题", tone: "neutral" },
   { kind: "canceled", label: "已取消", tone: "danger" },
 ] as const;
+
+/** 概览格按钮配方(原 .delivery-breakdown-cells button 家族)。 */
+const CELL_BASE = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-line bg-surface px-[11px] py-1.5 text-left text-text transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:cursor-default disabled:opacity-55";
+const CELL_SELECTED = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-primary/60 bg-primary/10 px-[11px] py-1.5 text-left text-primary transition-colors";
+/** 指标瓦片语调(原 .history-metric.{tone})。 */
+const METRIC_TONE = {
+  neutral: "text-muted-foreground",
+  active: "text-active",
+  attention: "text-attention",
+  success: "text-success",
+  danger: "text-danger",
+} as const;
 
 export function TeamIssueWorld({ issues, onOpenIssue }: {
   issues: IssueSummary[];
@@ -116,7 +129,7 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
 
   const stageCell = (key: string, count: number) => (
     <button type="button" key={key}
-      className={cell === `p:${key}` ? "selected" : ""}
+      className={cell === `p:${key}` ? CELL_SELECTED : CELL_BASE}
       disabled={count === 0} aria-pressed={cell === `p:${key}`}
       aria-controls="team-issue-queue" onClick={() => selectCell(`p:${key}`)}>
       <span>{issueStageText({ stage: key as FixedIssueStage })}</span>
@@ -125,7 +138,7 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
   );
   const statusCell = (key: string, count: number) => (
     <button type="button" key={key}
-      className={cell === `s:${key}` ? "selected" : ""}
+      className={cell === `s:${key}` ? CELL_SELECTED : CELL_BASE}
       disabled={count === 0} aria-pressed={cell === `s:${key}`}
       aria-controls="team-issue-queue" onClick={() => selectCell(`s:${key}`)}>
       <span>{ISSUE_STATUS_TEXT[key as IssueStatus]}</span>
@@ -134,53 +147,53 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
   );
 
   return <>
-    <section className="team-delivery-overview" aria-label="问题处理概览">
-      <header className="team-delivery-overview-head">
-        <div className="team-delivery-overview-copy">
-          <h2>问题处理概览</h2>
-          <p>点击阶段或状态可筛选下方现场；已取消会话仅保留在成果档案。</p>
+    <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
+      <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
+        <div className="grid min-w-0 gap-[3px]">
+          <h2 className="m-0 text-lg text-text-strong">问题处理概览</h2>
+          <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
-        <div className="team-delivery-summary"
+        <div className="flex flex-none items-center gap-[18px]"
           aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
-          <span className="summary-total" title="不含已取消会话"><strong>{stats.total}</strong><small>问题总数</small></span>
-          <i aria-hidden />
-          <span className="summary-active"><strong>{stats.active}</strong><small>处理中</small></span>
-          <i aria-hidden />
-          <span className="summary-active"><strong className={stats.waiting ? "text-attention" : undefined}>{stats.waiting}</strong><small>待答复</small></span>
-          <i aria-hidden />
-          <span className="summary-total"><strong className={stats.failed ? "text-danger" : undefined}>{stats.failed}</strong><small>需介入</small></span>
-          <i aria-hidden />
-          <span className="summary-complete"><strong>{stats.closed}</strong><small>已闭环</small></span>
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className={cn("text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active", stats.waiting && "text-attention")}>{stats.waiting}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">待答复</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className={cn("text-[25px] leading-none tracking-[-0.035em] tabular-nums text-text-strong", stats.failed && "text-danger")}>{stats.failed}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">需介入</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.closed}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已闭环</small></span>
         </div>
       </header>
-      <div className="team-delivery-breakdown">
-        <section aria-labelledby="issue-delivery-stage-title">
-          <div className="delivery-breakdown-title"><strong id="issue-delivery-stage-title">阶段</strong>
-            <small>当前所处流程</small></div>
-          <div className="delivery-breakdown-cells">
+      <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
+        <section aria-labelledby="issue-delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+          <div className="grid gap-0.5"><strong id="issue-delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
+            <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
             {stats.stages.map((entry) => stageCell(entry.key, entry.count))}
           </div>
         </section>
-        <section aria-labelledby="issue-delivery-status-title">
-          <div className="delivery-breakdown-title"><strong id="issue-delivery-status-title">任务状态</strong>
-            <small>当前运行情况</small></div>
-          <div className="delivery-breakdown-cells status-cells">
+        <section aria-labelledby="issue-delivery-status-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+          <div className="grid gap-0.5"><strong id="issue-delivery-status-title" className="text-[13.5px] text-text-strong">任务状态</strong>
+            <small className="text-[13px] text-muted-foreground">当前运行情况</small></div>
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
             {stats.statuses.map((entry) => statusCell(entry.key, entry.count))}
           </div>
         </section>
       </div>
     </section>
 
-    <section className="task-section" id="team-issue-queue" ref={queueRef}
+    <section className="mt-1" id="team-issue-queue" ref={queueRef}
       aria-labelledby="team-issue-queue-title">
-      <div className="section-head"><div>
-        <h2 id="team-issue-queue-title">当前现场</h2></div>
-        <span className={`section-count${anyFilter ? " active-filter" : ""}`}>
+      <div className="mb-3 flex items-baseline justify-between gap-4"><div>
+        <h2 id="team-issue-queue-title" className="text-lg font-bold text-text-strong">当前现场</h2></div>
+        <span className="text-[13px] font-medium tabular-nums text-muted-foreground">
           {anyFilter ? "已筛选 · " : ""}{visible.length} / {active.length} 项
         </span>
       </div>
-      <div className="task-filters" aria-label="筛选问题现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
+      <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选问题现场">
+        <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
         <Select value={scope}
           items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
           onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
@@ -207,7 +220,8 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
             </SelectGroup>
           </SelectContent>
         </Select>
-        {anyFilter && <button type="button" className="filter-reset"
+        {anyFilter && <button type="button"
+          className="h-[34px] cursor-pointer rounded-[7px] border-0 bg-primary/10 px-[11px] text-[13px] font-bold text-primary"
           onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}
       </div>
@@ -215,7 +229,7 @@ export function TeamIssueWorld({ issues, onOpenIssue }: {
         <EmptyTitle>{anyFilter ? "没有匹配的问题会话" : "还没有处理中的问题会话"}</EmptyTitle>
         <EmptyDescription>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</EmptyDescription>
       </Empty>}
-      <div className="task-list">{visible.map((issue) => (
+      <div className="grid gap-2">{visible.map((issue) => (
         <TeamIssueCard key={issue.id} issue={issue}
           onOpen={() => onOpenIssue(issue.id)} />
       ))}</div>
@@ -240,12 +254,12 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
       ? closed.filter((issue) => issue.status === "canceled").length
       : closed.filter((issue) => issue.conclusion?.kind === kind).length;
 
-  return <section className="history-board" aria-label="成果档案·问题闭环">
-    <div className="history-intro">
+  return <section className="grid gap-4" aria-label="成果档案·问题闭环">
+    <div className="flex items-center justify-between gap-6 rounded-xl border border-line
+      bg-surface px-6 py-[22px] shadow-xs">
       <div>
-        <span className="section-kicker">ISSUE ARCHIVE</span>
-        <h2>成果档案·问题闭环</h2>
-        <p>这里保存已闭环与已取消的问题会话；处理中的回到「当前现场」查看。</p>
+        <h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环</h2>
+        <p className="mt-[7px] text-sm text-muted-foreground">这里保存已闭环与已取消的问题会话；处理中的回到「当前现场」查看。</p>
       </div>
     </div>
     {closed.length === 0
@@ -255,15 +269,17 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
           <EmptyDescription>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</EmptyDescription>
         </Empty>
       : <>
-        <div className="history-metrics" aria-label="问题闭环结论统计">
+        <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-4" aria-label="问题闭环结论统计">
           {CONCLUSION_TILES.map((tile) => (
-            <div className={`history-metric ${tile.tone}`} key={tile.kind || "all"}>
-              <span><i aria-hidden />{tile.label}</span>
-              <strong>{conclusionCount(tile.kind)}</strong>
+            <div key={tile.kind || "all"}
+              className={`flex min-h-[94px] flex-col justify-between rounded-lg border border-line bg-surface px-[15px] py-3.5 shadow-xs ${METRIC_TONE[tile.tone]}`}>
+              <span className="flex items-center gap-[7px] text-[13px] font-semibold">
+                <i aria-hidden className="size-2 rounded-full bg-current" />{tile.label}</span>
+              <strong className="text-[27px] leading-none tabular-nums text-text-strong">{conclusionCount(tile.kind)}</strong>
             </div>
           ))}
         </div>
-        <div className="task-list">{closed.map((issue) => (
+        <div className="grid gap-2">{closed.map((issue) => (
           <TeamIssueCard key={issue.id} issue={issue}
             onOpen={() => onOpenIssue(issue.id)} />
         ))}</div>

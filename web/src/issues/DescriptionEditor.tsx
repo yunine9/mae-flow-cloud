@@ -21,6 +21,7 @@ import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
 import { replaceAll } from "@milkdown/kit/utils";
 import { issueImageUrl } from "../api";
 import { displayUrlToRef, refToDisplayUrl } from "./issueImageRef";
+import { cn } from "cn";
 
 export function DescriptionEditor({
   value,
@@ -124,7 +125,20 @@ export function DescriptionEditor({
     editor?.action(replaceAll(refToDisplayUrl(value, issueImageUrl)));
   }, [value]);
 
-  return <div className="issue-desc-editor">
+  // #231 换装:.issue-desc-editor 家族(style.css)退役,壳/占位/灯箱与
+  // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用
+  // [&_*] 任意变体直译配方——与 #230 润色预览的 [&_img]:max-h-[200px]
+  // 同一做法。
+  return <div className={cn(
+    "relative [&_.ProseMirror]:min-h-24 [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
+    "[&_p]:mb-2 [&_:last-child]:mb-0 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-2 [&_h1]:mt-2.5 [&_h2]:mt-2.5 [&_h3]:mt-2.5 [&_h1]:leading-snug [&_h2]:leading-snug [&_h3]:leading-snug",
+    "[&_ul]:mb-2 [&_ol]:mb-2 [&_ul]:pl-6 [&_ol]:pl-6 [&_ul]:list-disc [&_ol]:list-decimal",
+    "[&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:h-auto [&_img]:w-auto [&_img]:cursor-zoom-in [&_img]:rounded-md [&_img]:border [&_img]:border-line",
+    "[&_blockquote]:mb-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-line [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
+    "[&_code]:rounded-sm [&_code]:bg-surface-3 [&_code]:font-mono [&_code]:text-[.88em]",
+    "[&_pre]:mb-2 [&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-line [&_pre]:bg-surface-2 [&_pre]:p-2.5 [&_pre]:text-[.86em] [&_pre]:leading-[1.6] [&_pre_code]:bg-transparent [&_pre_code]:p-0",
+    "[&_table]:mb-2 [&_table]:border-collapse [&_th]:border [&_td]:border [&_th]:border-line [&_td]:border-line [&_th]:px-2 [&_td]:px-2 [&_th]:py-1 [&_td]:py-1 [&_th]:text-left [&_td]:text-left",
+    "[&_a]:text-primary")}>
     <div ref={rootRef}
       onClick={(event) => {
         const target = event.target as HTMLElement;
@@ -134,11 +148,11 @@ export function DescriptionEditor({
       }}>
     </div>
     {empty && placeholderText
-      && <span className="issue-desc-editor-placeholder" aria-hidden="true">
+      && <span className="pointer-events-none absolute left-[11px] top-[9px] text-sm text-faint" aria-hidden="true">
         {placeholderText}
       </span>}
-    {zoom && <div className="issue-image-lightbox fixed inset-0" role="dialog"
-      aria-label="截图原图"
+    {zoom && <div role="dialog" aria-label="截图原图" aria-modal="true"
+      className="fixed inset-0 z-[80] flex cursor-zoom-out items-center justify-center bg-black/70 [&_img]:max-h-[92vh] [&_img]:max-w-[min(1200px,94vw)] [&_img]:rounded-lg [&_img]:bg-surface"
       onClick={() => setZoom(null)}>
       <img src={zoom} alt="截图原图" />
     </div>}

@@ -37,7 +37,6 @@ import {
 } from "./api";
 import { shortPath } from "./paths";
 import { relativeTime } from "./time";
-import "./annotate.css";
 
 const ANCHOR_TEXT: Record<AnchorCheck["state"], string> = {
   hit: "定位正常",

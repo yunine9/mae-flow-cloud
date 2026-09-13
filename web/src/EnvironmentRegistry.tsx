@@ -10,7 +10,7 @@
  * 占位,留空 = 不变;root 密码留空 = 继承后台密码,已单独配置的条目可一键
  * 清除回落继承。台账全员可读写,写操作 updated_by 由服务端记。
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   deleteEnvironment,
   listEnvironments,
@@ -18,9 +18,19 @@ import {
   type EnvironmentForm,
   type EnvironmentView,
 } from "./api";
-import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Filter } from "lucide-react";
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ChevronsUpDown,
+  Loader2,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import { PersonName, usePersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
+import { HeaderFilter } from "./HeaderFilter";
 import { formatLocalDateTime, relativeTime } from "./time";
 import {
   ENVIRONMENT_FORM_TEXT,
@@ -29,11 +39,6 @@ import {
 } from "./EnvironmentEditorDialog";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -63,18 +68,18 @@ function probeToneClass(state: EnvironmentView["probe"]["state"]): string {
   return "text-muted-foreground";
 }
 
-/** 状态列单元格(#151):三态徽标,异常条目附原因二分,探过的条目附
- * 最近探活时间(相对时间,悬浮看绝对时刻)。 */
+/** 状态列单元格(#151):三态徽标分层小字——pill 说结论,下面一行小字说
+ * 何时探的;失败原因(不可达/认证失败)与「异常」pill 语义重复,不再整行
+ * 堆叠,收进单元格悬浮提示(2026-09-13 走查:三行堆叠曾被读成重复文案,
+ * danger-soft pill 在行左侧孤悬像丢了的指示点——归位即消除)。 */
 function ProbeStateCell({ probe }: { probe: EnvironmentView["probe"] }) {
-  return <div className="flex flex-col items-start gap-0.5">
+  return <div className="flex flex-col items-start gap-1"
+    title={probe.state === "failed" && probe.reason
+      ? `连接异常:${PROBE_REASON_TEXT[probe.reason] ?? probe.reason}`
+      : undefined}>
     <Badge variant="outline" className={probeToneClass(probe.state)}>
       {PROBE_TEXT[probe.state] ?? "未验证"}
     </Badge>
-    {probe.state === "failed" && probe.reason && (
-      <span className="text-xs text-danger">
-        {PROBE_REASON_TEXT[probe.reason] ?? probe.reason}
-      </span>
-    )}
     {probe.at && <span className="text-xs text-muted-foreground"
       title={`探活于 ${formatLocalDateTime(probe.at)}`}>
       {relativeTime(probe.at)}探活
@@ -120,45 +125,7 @@ function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
     : <ArrowDown aria-hidden className="size-3" />;
 }
 
-/** 列头筛选钮 + 弹层壳:漏斗着色 = 该列筛选激活;children 拿 close(),
- * 选项类选完即关,文本输入类忽略。弹层 portal 到 body,必须自带
- * .tw-root 归一(同 EnvironmentPicker 的教训)。 */
-function HeaderFilter({ label, active, onClear, children }: {
-  label: string;
-  active: boolean;
-  /** 本列的清除动作:给了才在弹层底部出「清除此列筛选」。 */
-  onClear?: () => void;
-  children: (close: () => void) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger
-      render={
-        /* 激活的漏斗给 accent 小底块:哪列在筛,一眼可辨。 */
-        <button type="button" aria-label={`筛选 ${label}`}
-          title={active ? `筛选 ${label}(生效中,点开可清除)` : `筛选 ${label}`}
-          aria-pressed={active}
-          className={active
-            ? "rounded-sm bg-accent px-0.5 text-ink"
-            : "text-muted-foreground hover:text-foreground"}>
-          <Filter aria-hidden className="size-3.5" />
-        </button>
-      } />
-    <PopoverContent align="start" className="tw-root w-40 p-1">
-      {children(() => setOpen(false))}
-      {active && onClear && <div className="border-t border-line pt-1 mt-1">
-        <button type="button"
-          className="w-full rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-          onClick={() => {
-            onClear();
-            setOpen(false);
-          }}>清除此列筛选</button>
-      </div>}
-    </PopoverContent>
-  </Popover>;
-}
-
-/** 列头筛选的单选选项清单:选中行打勾。 */
+/** 列头筛选的单选选项清单:选中行打勾。(壳在 HeaderFilter,两页共用) */
 function FilterOptions({ value, options, onPick }: {
   value: string;
   options: Array<{ value: string; label: string }>;
@@ -345,11 +312,12 @@ export function EnvironmentRegistry() {
             <p className="text-sm text-muted-foreground">没有符合当前筛选条件的环境。</p>
             <Button variant="outline" size="sm" onClick={clearFilters}>清除筛选</Button>
           </div>
-          : <div className="overflow-x-auto rounded-lg border border-line">
+          : <div className="overflow-hidden rounded-xl border border-line bg-card shadow-xs">
           <Table aria-label="环境台账列表">
             <TableHeader>
-              <TableRow>
-                <TableHead aria-sort={ariaSortOf("ip")}>
+              <TableRow className="border-line hover:bg-transparent">
+                <TableHead aria-sort={ariaSortOf("ip")}
+                  className="h-11 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <button type="button"
                       className="inline-flex items-center gap-1 hover:text-foreground"
@@ -365,7 +333,8 @@ export function EnvironmentRegistry() {
                     </HeaderFilter>
                   </span>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("form")}>
+                <TableHead aria-sort={ariaSortOf("form")}
+                  className="h-11 w-24 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <button type="button"
                       className="inline-flex items-center gap-1 hover:text-foreground"
@@ -381,14 +350,16 @@ export function EnvironmentRegistry() {
                     </HeaderFilter>
                   </span>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("port")}>
+                <TableHead aria-sort={ariaSortOf("port")}
+                  className="h-11 w-20 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <button type="button"
                     className="inline-flex items-center gap-1 hover:text-foreground"
                     onClick={() => toggleSort("port")}>
                     端口<SortMark active={sort?.key === "port"} dir={sort?.dir} />
                   </button>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("tags")}>
+                <TableHead aria-sort={ariaSortOf("tags")}
+                  className="h-11 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <button type="button"
                       className="inline-flex items-center gap-1 hover:text-foreground"
@@ -403,7 +374,8 @@ export function EnvironmentRegistry() {
                     </HeaderFilter>
                   </span>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("state")}>
+                <TableHead aria-sort={ariaSortOf("state")}
+                  className="h-11 w-32 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <button type="button"
                       className="inline-flex items-center gap-1 hover:text-foreground"
@@ -423,7 +395,8 @@ export function EnvironmentRegistry() {
                     </HeaderFilter>
                   </span>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("updated_by")}>
+                <TableHead aria-sort={ariaSortOf("updated_by")}
+                  className="h-11 w-32 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <button type="button"
                       className="inline-flex items-center gap-1 hover:text-foreground"
@@ -441,23 +414,25 @@ export function EnvironmentRegistry() {
                     </HeaderFilter>
                   </span>
                 </TableHead>
-                <TableHead aria-sort={ariaSortOf("updated_at")}>
+                <TableHead aria-sort={ariaSortOf("updated_at")}
+                  className="h-11 w-44 bg-muted/50 px-4 text-xs font-semibold text-muted-foreground">
                   <button type="button"
                     className="inline-flex items-center gap-1 hover:text-foreground"
                     onClick={() => toggleSort("updated_at")}>
                     更新时间<SortMark active={sort?.key === "updated_at"} dir={sort?.dir} />
                   </button>
                 </TableHead>
-                <TableHead className="text-right">操作</TableHead>
+                <TableHead className="h-11 w-48 bg-muted/50 px-4 text-right text-xs font-semibold text-muted-foreground">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visible.map((entry) => <TableRow key={entry.id}
-                data-environment-id={entry.id}>
-                <TableCell className="font-medium">{entry.ip}</TableCell>
-                <TableCell>{ENVIRONMENT_FORM_TEXT[entry.form] ?? entry.form}</TableCell>
-                <TableCell>{entry.port}</TableCell>
-                <TableCell>
+                data-environment-id={entry.id}
+                className="border-line hover:bg-muted/30">
+                <TableCell className="px-4 py-3 font-medium">{entry.ip}</TableCell>
+                <TableCell className="px-4 py-3">{ENVIRONMENT_FORM_TEXT[entry.form] ?? entry.form}</TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">{entry.port}</TableCell>
+                <TableCell className="px-4 py-3">
                   {entry.tags.length
                     ? <div className="flex flex-wrap gap-1">
                       {entry.tags.map((tag) => <Badge
@@ -474,23 +449,32 @@ export function EnvironmentRegistry() {
                     </div>
                     : <span className="text-muted-foreground">—</span>}
                 </TableCell>
-                <TableCell>
+                <TableCell className="px-4 py-3">
                   <ProbeStateCell probe={entry.probe} />
                 </TableCell>
-                <TableCell><PersonName account={entry.updated_by} /></TableCell>
-                <TableCell>{formatLocalDateTime(entry.updated_at)}</TableCell>
-                <TableCell className="text-right">
+                <TableCell className="px-4 py-3"><PersonName account={entry.updated_by} /></TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">{formatLocalDateTime(entry.updated_at)}</TableCell>
+                <TableCell className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
-                    <Button variant="ghost" size="xs"
+                    <Button variant="ghost" size="sm"
                       disabled={probingId === entry.id}
                       onClick={() => void probeRow(entry)}>
+                      {probingId === entry.id
+                        ? <Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+                        : <Activity data-icon="inline-start" aria-hidden />}
                       {probingId === entry.id ? "探活中…" : "探活"}
                     </Button>
-                    <Button variant="ghost" size="xs"
-                      onClick={() => setEditor({ existing: entry })}>编辑</Button>
-                    <Button variant="ghost" size="xs"
+                    <Button variant="ghost" size="icon-sm" title={`编辑 ${entry.ip}`}
+                      aria-label={`编辑 ${entry.ip}`}
+                      onClick={() => setEditor({ existing: entry })}>
+                      <Pencil aria-hidden />
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" title={`删除 ${entry.ip}`}
+                      aria-label={`删除 ${entry.ip}`}
                       className="text-destructive hover:text-destructive"
-                      onClick={() => void removeEnvironment(entry)}>删除</Button>
+                      onClick={() => void removeEnvironment(entry)}>
+                      <Trash2 aria-hidden />
+                    </Button>
                   </div>
                 </TableCell>
               </TableRow>)}

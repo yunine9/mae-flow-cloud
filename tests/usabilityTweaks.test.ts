@@ -8,18 +8,18 @@ import test from "node:test";
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 const annotatable = read("web/src/Annotatable.tsx");
 const annotationPanel = read("web/src/AnnotationPanel.tsx");
-const annotateCss = read("web/src/annotate.css");
+const annotateCss = read("web/src/tailwind.css");
 const app = read("web/src/App.tsx");
 const taskCard = read("web/src/TaskCard.tsx");
-const css = read("web/src/style.css");
+const css = read("web/src/tailwind.css");
 const taskTime = read("web/src/taskTime.ts");
 const taskHierarchy = read("web/src/taskHierarchy.ts");
 
 test("批注编辑框默认更高,且能竖向拖到大半屏", () => {
-  assert.match(annotatable,
-    /<Textarea\s+autoFocus[\s\S]*?className="min-h-16 max-h-\[70vh\] resize-y/);
-  assert.match(annotationPanel,
-    /<Textarea className="min-h-\[132px\] max-h-\[70vh\] resize-y[^\"]*" value=\{editingNote\} autoFocus rows=\{5\}/);
+  // #233 收官:手写 textarea 换 shadcn Textarea 原语,高度契约钉在工具类。
+  assert.match(annotatable, /<Textarea\s+autoFocus\s+rows=\{2\}/);
+  assert.match(annotatable, /min-h-16 max-h-\[70vh\] resize-y/);
+  assert.match(annotationPanel, /<Textarea className="min-h-\[132px\] max-h-\[70vh\] resize-y bg-surface" value=\{editingNote\} autoFocus rows=\{5\}/);
   assert.match(annotateCss,
     /\.annot-editor textarea \{[^}]*min-height:\s*108px[^}]*max-height:\s*70vh[^}]*resize:\s*vertical/s);
   assert.match(annotateCss,
@@ -31,10 +31,11 @@ test("任务列表默认最新在上,开关可切回待核对在前并记在本�
   assert.match(app, /localStorage\.getItem\("mae-flow-task-order"\) === "attention"\s*\? "attention" : "newest"/);
   assert.match(app, /const visibleMyWork = taskOrder === "newest"\s*\? \[\.\.\.scopedMyWork\]\.sort\(byNewest\) : scopedMyWork/);
   assert.match(app, /tasks=\{visibleMyDelivered\}/, "等待合入分组也跟着同一个开关");
-  assert.match(app, /className="task-order-toggle"/);
+  // #228 换装:排序开关工具类化(胶囊描边钮),锚改钉 aria-pressed 语义,
+  // 不再钉 legacy 类名与其 css 规则。
+  assert.match(app, /aria-pressed=\{taskOrder === "newest"\}/);
   assert.match(app, /最新在上/);
   assert.match(app, /待核对在前/);
-  assert.match(css, /\.task-order-toggle\s*\{/);
   assert.match(taskHierarchy, /export function orderHierarchyBy/,
     "时间只排序任务组，主任务与子任务必须随后恢复成树形顺序");
   assert.match(app, /orderHierarchyBy\(visible,[\s\S]*item\.task\?\.parent_task_id/,

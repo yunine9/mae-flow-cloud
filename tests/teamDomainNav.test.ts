@@ -60,7 +60,8 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // 适配器随拆分成死代码,teamOps 里一并移除(口径唯一,不留双入口)。
   assert.doesNotMatch(teamOps, /issueToTeamTask/);
   // 问题会话的团队全景有且只有一个家:「团队问题」页签页。
-  assert.match(app, /view === "teamIssues" && <section className="team-tasks-workspace">/);
+  // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
+  assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
   assert.match(app, /<TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
 });
 

@@ -17,7 +17,6 @@ import {
   anchorOf, annotationsAtRow, contextOfRow, quoteOfSelection,
   type MaterialAnnotation, type RowNode, type SelectionQuote,
 } from "./annotateTargets";
-import "./annotate.css";
 
 interface Draft {
   file: string;

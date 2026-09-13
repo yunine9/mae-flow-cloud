@@ -3,13 +3,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
 const workspace = readFileSync(
   join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 const userPicker = readFileSync(
   join(process.cwd(), "web/src/UserPicker.tsx"), "utf8");
 const reviewPane = readFileSync(
   join(process.cwd(), "web/src/ResizableReviewPane.tsx"), "utf8");
+const materialsPane = readFileSync(
+  join(process.cwd(), "web/src/issues/MaterialsPane.tsx"), "utf8");
 
 test("内容页签与阅读检视工具是独立区域，检视仍随时可开关", () => {
   // #207 页签迁 base-ui Tabs 后 role=tablist 归原语,.ws-source-switch
@@ -26,7 +28,7 @@ test("内容页签与阅读检视工具是独立区域，检视仍随时可开�
 });
 
 test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   // 检视画布已抽成 ResizableReviewPane(可拖宽),类名与滚动语义随组件走。
   assert.match(workspace, /<ResizableReviewPane open=\{reviewPanelOpen\}>/);
   assert.match(reviewPane, /className="ws-review-canvas"/);
@@ -36,7 +38,7 @@ test("长批注在工作区侧栏滚动，材料持续挂载可见", () => {
 });
 
 test("嵌入工作台的文件树和代码变更各自独立滚动", () => {
-  const studio = readFileSync(join(process.cwd(), "web/src/workspace-studio.css"), "utf8");
+  const studio = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(studio,
     /\.workspace-studio\.task-workspace-v2 \.ws-doc\.is-diff\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/s);
   assert.match(studio,
@@ -62,34 +64,38 @@ test("Markdown 全屏使用宽画布，PlantUML 保留独立滚动视口", () =>
   assert.match(css, /\.plantuml-viewport\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css,
     /\.workspace-overlay\.materials-fullscreen \.puml-diagram,[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
-  assert.match(css,
-    /\.issue-thread\.issue-doc\.is-fullscreen \.issue-doc-body\s*\{[^}]*max-width:\s*1760px/s);
+  // #230 改锚:问题流过程文档的全屏壳迁工具类,宽画布上限由
+  // MaterialsPane 的 is-fullscreen 分支直译(max-w-[1760px]),
+  // 不再走 style.css 的 .is-fullscreen 后代选择器。
+  assert.match(materialsPane,
+    /fullscreen && "mx-auto min-h-0 w-full max-w-\[1760px\] flex-1 overflow-auto/);
 });
 
 test("快速提问题常驻右下角且使用横向小按钮", () => {
-  const trigger = css.indexOf(".wish-quick-trigger {");
-  assert.ok(trigger >= 0);
-  const rule = css.slice(trigger, trigger + 700);
-  assert.match(rule, /right:\s*18px;/);
-  assert.match(rule, /bottom:\s*18px;/);
-  assert.match(rule, /top:\s*auto;/);
-  assert.match(rule, /display:\s*inline-flex;/);
-  assert.match(rule, /border-radius:\s*999px;/);
-  assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
+  // #233 收官:原 .wish-quick-trigger 皮肤类换装为 WishQuickCreate 工具类,
+  // 布局契约(fixed 右下、胶囊、横排小按钮)钉在工具类串上。
+  // 锚点随 2656b4e(#225 收尾)从 18px 让到 24px(right-6/bottom-6):
+  // 浮标贴缘压卡裁字,窄屏再收一号避让底部栏。
+  const fab = readFileSync(join(process.cwd(), "web/src/WishQuickCreate.tsx"), "utf8");
+  assert.match(fab, /wish-quick-fab fixed right-6 bottom-6 z-\[650\] inline-flex/);
+  assert.match(fab, /rounded-full border-0 bg-primary px-3\.5 text-primary-foreground shadow-lg max-\[760px\]:bottom-\[76px\] max-\[760px\]:right-4/);
+  assert.match(fab, /<strong className="text-xs">提问题<\/strong>/);
 });
 
 test("邀请他人检视在任务头独立可见，不依赖打开批注面板", () => {
   const controls = workspace.slice(workspace.indexOf('className="ws-head-controls"'),
     workspace.indexOf('{task.feedback_error &&'));
-  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <button/,
+  // #227 换装:邀请入口换 shadcn Button,锚点从裸 <button> 与皮肤类改钉
+  // 组件与文案;可见性条件仍钉在头部权限上。
+  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <Button/,
     "邀请入口只对有权限者可见,且已取消任务不再提供");
-  assert.match(controls, /workspace-review-invite-button/);
+  assert.match(controls, /邀请他人检视/);
   assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
   assert.match(controls, /setReviewInviteOpen\(true\)/);
   assert.doesNotMatch(controls, /reviewPanelOpen/);
   const panel = workspace.slice(workspace.indexOf('<ResizableReviewPane open={reviewPanelOpen}>'),
     workspace.indexOf('<div className="ws-material-content"'));
-  assert.doesNotMatch(panel, /workspace-review-invite-button/);
+  assert.doesNotMatch(panel, /邀请他人检视/);
   // #207 邀请弹层迁 shadcn Dialog(portal 到 body,role=dialog/Esc/焦点
   // 归原语):锚点从手搓 workspace-invite-dialog 改钉现 Dialog DOM,
   // 入口条件仍钉在头部权限上。
@@ -118,16 +124,15 @@ test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对�
   assert.match(workspace, /className="workspace-review-notes"/);
   assert.match(workspace, /className="workspace-review-opinions"/);
   assert.match(css, /\.workspace-review-notes\s*\{[^}]*width:\s*min\(1220px, 100%\)/s);
-  const annotate = readFileSync(join(process.cwd(), "web/src/annotate.css"), "utf8");
+  const annotate = readFileSync(join(process.cwd(), "web/src/tailwind.css"), "utf8");
   assert.match(annotate,
     /\.workspace-review-notes \.annot-item:has\(\.annot-response\)[^{]*\{[^}]*grid-template-columns:/s);
 });
 
 test("交付失败长文本在右侧行动栏内换行，不横向冲出工作台", () => {
-  assert.match(workspace, /className="ws-verify-focus-waiting"/);
-  assert.match(css,
-    /\.ws-verify-focus\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*calc\(100% - 28px\)/s);
-  assert.match(css,
-    /\.ws-verify-focus p\s*\{[^}]*max-width:\s*100%[^}]*overflow-wrap:\s*anywhere[^}]*word-break:\s*break-word/s,
+  // #227 换装:.ws-verify-focus/.ws-verify-focus-waiting 皮肤类退役,断行
+  // 契约改由工具类直接钉在元素上。
+  assert.match(workspace, /交付验证进行中/);
+  assert.match(workspace, /<p className="min-w-0 max-w-full \[overflow-wrap:anywhere\] break-words text-sm text-text">/,
     "远端 Hook 正则、commit SHA 和英文错误都必须在卡片内断行");
 });

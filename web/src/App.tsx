@@ -15,7 +15,9 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
+import { cn } from "cn";
 import { Spinner } from "@/components/Spinner";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Input } from "@/components/ui/input";
@@ -236,6 +238,10 @@ function initialView(user: AuthUser): View {
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
   if (readEnvironmentRoute()) return "environments";
+  // 问题登记深链(裸 /issues):服务端/vite 判别式已把浏览器导航让给
+  // SPA,这里把地址对上页签——落点与侧栏「问题处理」一致(子页签沿用
+  // 持久化选择);会话工作台深链 /issues/:id 走下面的 readIssueRoute。
+  if (/^\/issues\/?$/.test(location.pathname)) return "issues";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -273,6 +279,18 @@ const ISSUE_INTERVENTION_TIERS = [
   { key: "3", title: "全程把控", isDefault: false,
     detail: "对齐、结论、环境、推送过目全保留" },
 ] as const;
+
+// 介入档位卡(#228 工具类化):选中=accent 描边+soft 底,左 icon 盒反色;
+// 两张设置卡(需求交付/问题处理)共用同一套配方。
+const approvalCard = "grid min-h-[74px] grid-cols-[28px_minmax(0,1fr)] items-center gap-2.5 rounded-[11px] border p-3 text-left transition-colors disabled:cursor-wait disabled:opacity-65";
+const approvalCardIcon = "grid size-7 place-items-center rounded-[8px] border text-sm not-italic [&_svg]:size-[15px]";
+// 我的任务摘要分段筛选 chip(#228 工具类化):胶囊描边钮,选中=描边+底色;
+// 计数色随语气(attention/danger),其余中性。
+const pulseChip = "inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-transparent px-2.5 text-sm font-medium text-(--muted) transition-colors hover:border-(--line) hover:bg-(--surface-2) hover:text-(--text-strong)";
+const pulseChipSelected = "border-(--line) bg-(--surface) text-(--accent) shadow-sm";
+const pulseChipCount = "text-sm font-semibold leading-none tabular-nums text-(--text-strong)";
+// 账号表行内操作钮(#228 工具类化):描边小钮,危险态(删除)另着色。
+const userActionButton = "rounded-[8px] border border-(--line) bg-(--surface) px-2.5 py-[7px] text-sm text-(--muted) transition-colors hover:border-(--line-strong) hover:text-(--text-strong) disabled:cursor-not-allowed disabled:opacity-45";
 
 function InterventionSetting({
   session,
@@ -342,29 +360,34 @@ function InterventionSetting({
       setNote(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
   }
-  return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
-    <header className="approval-setting-head">
-      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><h2 id="approval-setting-title">人工介入程度 · 需求交付</h2></div>
-      <span className="approval-setting-state">当前：{current.title}</span>
+  return <section className="rounded-[12px] border border-(--line) bg-[radial-gradient(circle_at_100%_0,color-mix(in_srgb,var(--accent)_10%,transparent),transparent_42%),var(--surface)] p-[22px] shadow-sm max-[480px]:p-[17px]" aria-labelledby="approval-setting-title">
+    <header className="grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 max-[480px]:grid-cols-[38px_minmax(0,1fr)]">
+      <span className="grid size-[42px] place-items-center rounded-xl border border-(--accent)/20 bg-(--accent-soft) text-(--accent) [&_svg]:size-5 max-[480px]:size-[38px]" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
+      <div><h2 id="approval-setting-title" className="m-0 text-[19px] tracking-[-0.025em] text-(--text-strong)">人工介入程度 · 需求交付</h2></div>
+      <span className="rounded-full border border-(--accent)/20 bg-(--accent-soft) px-[9px] py-[5px] text-sm font-bold text-(--accent) max-[480px]:col-start-2 max-[480px]:justify-self-start">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定，需求交付的任务全程生效（问题处理在下方单独设定）。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡；"推送"指每次 push 前先给你看变更清单（确认一次放行一次）。无论选哪档，MR 人工合入、流水线绑 SHA 等门禁始终生效；人工检视意见引发的修改一定回到意见作者复检。</p>
-    <div className="approval-options" role="group" aria-label="人工介入程度 · 需求交付">
+    <p className="my-3.5 text-sm text-(--muted)">一处设定，需求交付的任务全程生效（问题处理在下方单独设定）。"过程"指分析报告确认、无单结论确认、网管环境补配这些等你拍板的卡；"推送"指每次 push 前先给你看变更清单（确认一次放行一次）。无论选哪档，MR 人工合入、流水线绑 SHA 等门禁始终生效；人工检视意见引发的修改一定回到意见作者复检。</p>
+    <div className="grid grid-cols-2 gap-[9px] max-[760px]:grid-cols-1" role="group" aria-label="人工介入程度 · 需求交付">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
-        className={current.key === preset.key ? "on" : ""} disabled={busy}
+        className={cn(approvalCard, current.key === preset.key
+          ? "border-(--accent)/40 bg-(--accent-soft) text-(--text)"
+          : "border-(--line) bg-(--surface-soft) text-(--muted) hover:border-(--accent)/35")}
+        disabled={busy}
         onClick={() => void select(preset)}>
-        <i aria-hidden>{preset.moonlight
+        <i aria-hidden className={cn(approvalCardIcon, current.key === preset.key
+          ? "border-(--accent) bg-(--accent) text-(--accent-fg)"
+          : "border-(--line) bg-(--surface) text-(--faint)")}>{preset.moonlight
           ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
           : "✓"}</i>
-        <span>
-          <strong>{preset.title}
-            {preset.isDefault && <i className="approval-option-default">默认</i>}
+        <span className="grid min-w-0 gap-[3px]">
+          <strong className="text-[13.5px] text-(--text-strong)">{preset.title}
+            {preset.isDefault && <i className="ml-1.5 rounded-full bg-(--accent-soft) px-1.5 py-px align-[1px] text-xs font-medium not-italic text-(--accent)">默认</i>}
           </strong>
-          <small>{preset.detail}</small>
+          <small className="text-sm leading-[1.45] text-(--muted)">{preset.detail}</small>
         </span>
       </button>)}
     </div>
-    {note && <p className="approval-setting-note" role="status">{note}</p>}
+    {note && <p className="mt-[11px] text-sm text-(--success)" role="status">{note}</p>}
   </section>;
 }
 
@@ -398,30 +421,35 @@ function IssueInterventionSetting({
       setNote(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
   }
-  return <section className="approval-setting" aria-labelledby="issue-intervention-title">
-    <header className="approval-setting-head">
-      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><h2 id="issue-intervention-title">人工介入程度 · 问题处理</h2></div>
-      <span className="approval-setting-state">当前：{current.title}</span>
+  return <section className="rounded-[12px] border border-(--line) bg-[radial-gradient(circle_at_100%_0,color-mix(in_srgb,var(--accent)_10%,transparent),transparent_42%),var(--surface)] p-[22px] shadow-sm max-[480px]:p-[17px]" aria-labelledby="issue-intervention-title">
+    <header className="grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 max-[480px]:grid-cols-[38px_minmax(0,1fr)]">
+      <span className="grid size-[42px] place-items-center rounded-xl border border-(--accent)/20 bg-(--accent-soft) text-(--accent) [&_svg]:size-5 max-[480px]:size-[38px]" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
+      <div><h2 id="issue-intervention-title" className="m-0 text-[19px] tracking-[-0.025em] text-(--text-strong)">人工介入程度 · 问题处理</h2></div>
+      <span className="rounded-full border border-(--accent)/20 bg-(--accent-soft) px-[9px] py-[5px] text-sm font-bold text-(--accent) max-[480px]:col-start-2 max-[480px]:justify-self-start">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。</p>
-    <div className="approval-options" role="group" aria-label="人工介入程度 · 问题处理">
+    <p className="my-3.5 text-sm text-(--muted)">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。</p>
+    <div className="grid grid-cols-2 gap-[9px] max-[760px]:grid-cols-1" role="group" aria-label="人工介入程度 · 问题处理">
       {ISSUE_INTERVENTION_TIERS.map((item) => <button type="button" key={item.key}
-        className={current.key === item.key ? "on" : ""} disabled={busy}
+        className={cn(approvalCard, current.key === item.key
+          ? "border-(--accent)/40 bg-(--accent-soft) text-(--text)"
+          : "border-(--line) bg-(--surface-soft) text-(--muted) hover:border-(--accent)/35")}
+        disabled={busy}
         onClick={() => void select(item)}>
-        <i aria-hidden>{item.key === "3"
+        <i aria-hidden className={cn(approvalCardIcon, current.key === item.key
+          ? "border-(--accent) bg-(--accent) text-(--accent-fg)"
+          : "border-(--line) bg-(--surface) text-(--faint)")}>{item.key === "3"
           ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
           : item.key === "1" ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 1 1 7.5 4.5a6.5 6.5 0 0 0 8 8Zm-6 .5 3.5 3.5L18 8" /></svg>
           : "✓"}</i>
-        <span>
-          <strong>{item.title}
-            {item.isDefault && <i className="approval-option-default">默认</i>}
+        <span className="grid min-w-0 gap-[3px]">
+          <strong className="text-[13.5px] text-(--text-strong)">{item.title}
+            {item.isDefault && <i className="ml-1.5 rounded-full bg-(--accent-soft) px-1.5 py-px align-[1px] text-xs font-medium not-italic text-(--accent)">默认</i>}
           </strong>
-          <small>{item.detail}</small>
+          <small className="text-sm leading-[1.45] text-(--muted)">{item.detail}</small>
         </span>
       </button>)}
     </div>
-    {note && <p className="approval-setting-note" role="status">{note}</p>}
+    {note && <p className="mt-[11px] text-sm text-(--success)" role="status">{note}</p>}
   </section>;
 }
 
@@ -431,16 +459,17 @@ function ThemeSwitch({ theme, onChange }: {
 }) {
   const light = theme === "light";
   // 手搓 track 换 Switch 原语:role=switch/aria-checked 交原语,
-  // 受控状态(theme)与持久化逻辑原样;label 行包裹保持整行可点。
-  return <label className="theme-switch"
+  // 受控状态(theme)与持久化逻辑原样;label 行工具类化(#228),
+  // 窄屏态直译旧 760px 媒体查询(收文案留图标+开关)。
+  return <label className="grid h-8 w-full grid-cols-[16px_minmax(0,1fr)_26px] items-center gap-[9px] rounded-[6px] px-2 text-left text-(--muted) transition-colors hover:bg-(--surface-3) hover:text-(--text-strong) max-[760px]:h-auto max-[760px]:w-auto max-[760px]:min-h-[36px] max-[760px]:rounded-[9px] max-[760px]:px-1.5 max-[760px]:py-[3px]"
     title={light ? "切换到深夜主题" : "切换到云昼主题"}>
-    <span className="theme-switch-icon" aria-hidden>
+    <span className="grid size-4 place-items-center [&_svg]:size-[15px] max-[760px]:size-7" aria-hidden>
       {light
         ? <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2" /><path d="M10 2.2v1.5M10 16.3v1.5M2.2 10h1.5M16.3 10h1.5M4.5 4.5l1 1M14.5 14.5l1 1M4.5 15.5l1-1M14.5 5.5l1-1" /></svg>
         : <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}
     </span>
-    <span className="theme-switch-copy"><strong>{light ? "云昼主题" : "深夜主题"}</strong><small>{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
-    <Switch size="sm" className="theme-switch-track" checked={light}
+    <span className="flex min-w-0 items-baseline gap-1.5 max-[760px]:hidden"><strong className="text-sm font-medium">{light ? "云昼主题" : "深夜主题"}</strong><small className="hidden">{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
+    <Switch size="sm" checked={light}
       onCheckedChange={(checked) => onChange(checked ? "light" : "dark")}
       aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"} />
   </label>;
@@ -451,10 +480,10 @@ function DensitySwitch({ density, onChange }: {
   onChange: (density: Density) => void;
 }) {
   const compact = density === "compact";
-  // 同 ThemeSwitch:开关态交 Switch 原语,受控状态原样。
-  return <label className="density-switch"
+  // 同 ThemeSwitch:开关态交 Switch 原语,受控状态原样;行壳工具类化(#228)。
+  return <label className="inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[6px] px-[5px] text-(--faint) transition-colors hover:bg-(--surface-3) hover:text-(--text-strong) max-[760px]:hidden"
     title={compact ? "切换到舒适密度" : "切换到紧凑密度"}>
-    <span className="density-switch-icon" aria-hidden>
+    <span className="grid size-[15px] place-items-center [&_svg]:size-[15px]" aria-hidden>
       <svg viewBox="0 0 20 20"><path d={compact ? "M4 5.5h12M4 10h12M4 14.5h12" : "M4 4.5h12M4 10h12M4 15.5h12"} /></svg>
     </span>
     <Switch size="sm" checked={compact}
@@ -476,18 +505,27 @@ function TaskSyncIndicator({
     : state.last_success_at
       ? `最近同步：${formatLocalDateTime(state.last_success_at, { seconds: true })}`
       : copy.detail;
+  // 同步状态(#228 工具类化):成功安静(绿点+灰字),失败变红可点重试;
+  // loading 点沿用 1.25s 呼吸节奏(animate-pulse 直译 taskSyncPulse)。
+  const shell = cn("inline-flex h-8 shrink-0 items-center gap-[7px] rounded-[6px] border px-2 text-left text-base",
+    state.kind === "error"
+      ? "cursor-pointer border-(--danger)/30 bg-(--danger-soft) text-(--danger)"
+      : "border-transparent");
   const body = <>
-    <i aria-hidden />
-    <span><strong>{copy.title}</strong><small>{copy.detail}</small></span>
-    {copy.retry && <svg viewBox="0 0 18 18" aria-hidden>
+    <i aria-hidden className={cn("size-1.5 shrink-0 rounded-full",
+      state.kind === "error" ? "bg-(--danger)"
+        : state.kind === "loading" ? "animate-pulse bg-(--active)"
+          : "bg-(--success)")} />
+    <span className="flex items-baseline gap-1.5"><strong className={cn("text-xs font-medium", state.kind === "error" ? "text-(--danger)" : "text-(--faint)")}>{copy.title}</strong><small className={state.kind === "error" ? "inline text-xs whitespace-nowrap text-(--danger)" : "hidden"}>{copy.detail}</small></span>
+    {copy.retry && <svg viewBox="0 0 18 18" aria-hidden className="size-3.5">
       <path d="M14.5 6.5A5.75 5.75 0 1 0 15 11M14.5 3v3.5H11" />
     </svg>}
   </>;
   return copy.retry ? (
-    <button type="button" className="task-sync error" title={title}
+    <button type="button" className={shell} title={title}
       onClick={() => void onRetry()}>{body}</button>
   ) : (
-    <span className={`task-sync ${state.kind}`} title={title}>{body}</span>
+    <span className={shell} title={title}>{body}</span>
   );
 }
 
@@ -502,7 +540,7 @@ export function PersonalSettingsPage({
   onSessionPatch: (patch: Partial<AuthUser>) => void;
   onTasksChanged: () => Promise<void>;
 }) {
-  return <div className="personal-settings-page">
+  return <div className="grid gap-6">
     <InterventionSetting session={session} onChanged={async (patch) => {
       onSessionPatch(patch);
       await onTasksChanged();
@@ -511,17 +549,24 @@ export function PersonalSettingsPage({
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
-    <section className="personal-connections" aria-labelledby="personal-connections-title">
-      <div className="personal-connections-head">
-        <div><h2 id="personal-connections-title">个人接入</h2></div>
-        <p>配置一次，后续任务自动使用你的代码身份和消息通知。</p>
+    <section aria-labelledby="personal-connections-title">
+      <div className="mb-[11px] flex items-end justify-between gap-[18px] px-0.5 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-[5px]">
+        <div><h2 id="personal-connections-title" className="mt-[5px] text-[19px] leading-[1.2] tracking-[-0.025em] text-(--text-strong)">个人接入</h2></div>
+        <p className="m-0 text-sm text-(--muted)">配置一次，后续任务自动使用你的代码身份和消息通知。</p>
       </div>
-      <div className="credential-grid">
+      <div className="grid grid-cols-2 items-start gap-[11px] max-[760px]:grid-cols-1">
         <GitTokenCard session={session} onChanged={onSessionPatch} />
         <LubanTokenCard session={session} onChanged={onSessionPatch} />
       </div>
     </section>
   </div>;
+}
+
+/** 品牌首字方块(#228 工具类化,侧栏/登录/加载屏三处共用):墨底反白。 */
+function BrandMark({ className }: { className?: string }) {
+  return <span aria-hidden className={cn("grid size-[26px] shrink-0 place-items-center rounded-[8px] bg-(--ink) text-(--ink-fg) shadow-[var(--shadow-primary)] [&_svg]:size-3.5 [&_svg]:[stroke-width:2.4]", className)}>
+    <svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg>
+  </span>;
 }
 
 function NavIcon({ name }: { name: View }) {
@@ -731,6 +776,10 @@ export function App() {
       if (issueId) {
         setView("issues");
         setIssueChildTab("sessions");
+      } else if (/^\/issues\/?$/.test(location.pathname)) {
+        // 后退/前进到裸 /issues(问题登记入站深链):同款对表,落问题
+        // 处理页签本身(子页签沿用持久化,与 initialView 同一口径)。
+        setView("issues");
       }
       if (!next.taskId) {
         setArtifactTaskId("");
@@ -1122,9 +1171,11 @@ export function App() {
     }
   };
   /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
-   *  (toState 记录归位后所在视图)。关工作台与切页签守门共用这一份。 */
+   *  (toState 记录归位后所在视图)。裸 /issues(问题登记入站深链)离开
+   * 问题处理时同样归位——该地址只是别名,不与视图脱钩滞留地址栏。
+   * 关工作台与切页签守门共用这一份。 */
   const normalizeIssueRoute = (target: View) => {
-    if (!readIssueRoute()) return;
+    if (!readIssueRoute() && !/^\/issues\/?$/.test(location.pathname)) return;
     history.replaceState(appHistoryState(target,
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
     setIssueRouteId("");
@@ -1275,7 +1326,7 @@ export function App() {
         本站件,导航按钮换 nova 菜单语言。 */}
     <Sidebar collapsible="none" className="sticky top-0 h-svh">
       <SidebarHeader>
-        <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong></span></div>
+        <div className="mb-6 flex h-8 items-center gap-[9px] px-2"><BrandMark /><span className="flex min-w-0 items-baseline gap-2 leading-none max-[620px]:hidden"><strong className="text-[15px] font-semibold tracking-[-0.025em] text-(--text-strong)">Mae-Flow</strong></span></div>
       </SidebarHeader>
       <SidebarContent aria-label="视图切换" className="sidebar-reset">
         {session.role === "admin" ? <>
@@ -1312,7 +1363,7 @@ export function App() {
             <SidebarGroupLabel>个人工作台</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
+                <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} />
                 <IssueNavGroup view="issues" current={view}
                   childTab={activeIssueChild} onSelectChild={selectIssueChild}
                   onSelect={selectView} />
@@ -1343,16 +1394,52 @@ export function App() {
           </SidebarMenu>
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
-        <div className="sidebar-foot session-foot"><Avatar size="sm" aria-hidden className="after:hidden"><AvatarFallback className="bg-(--surface-3) text-xs font-semibold text-(--text-strong)">{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
-        {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
+        <div className="flex items-center gap-2 border-t border-(--line) pl-1 pr-0 pt-3.5 text-sm text-(--muted) max-[760px]:hidden"><Avatar size="sm" aria-hidden className="after:hidden"><AvatarFallback className="bg-(--surface-3) text-xs font-semibold text-(--text-strong)">{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="flex min-w-0 flex-1 flex-col leading-[1.25]"><strong className="truncate text-sm font-medium text-(--text-strong)">{session.display_name ?? session.username}</strong><small className="mt-px text-xs text-(--faint)">{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><Button type="button" variant="ghost" size="icon-sm" className="text-(--faint) hover:bg-(--surface-3) hover:text-(--text-strong) [&_svg]:size-[15px]" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></Button></div>
+        {buildHash && <div className="select-text pb-1 pt-0.5 text-center font-mono text-xs text-(--faint) max-[760px]:hidden" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
       </SidebarFooter>
     </Sidebar>
     <SidebarInset>
-    <div className="workspace">
-      <header className={`workspace-header${dtsWide ? " is-wide" : ""}`}><div><h1>{viewHeader.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p></div><div className="workspace-header-actions">{(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : view === "teamIssues" ? " 项问题等你答复" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+    {/* 工作台壳(#228 工具类化):书页宽由 max-w 条件直译,DTS 全宽时
+        与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
+    <div className="min-h-screen min-w-0 bg-(--canvas)">
+      <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
+        dtsWide ? "max-w-none" : "max-w-(--page-width)",
+        "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
+        <div>
+          <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
+          <p className={cn("m-0 text-sm text-(--muted)", view === "mine" && "flex flex-wrap items-center gap-2")}>{view === "mine" && <span className="font-mono text-sm font-medium leading-[1.4] text-(--muted) after:ml-2 after:content-['·'] after:text-(--faint)"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p>
+        </div>
+        <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
+          {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
+          {relevantWaiting > 0 && view !== "users" && view !== "settings" && (
+            <div className="flex h-8 items-center gap-2 whitespace-nowrap rounded-[8px] border border-(--attention)/10 bg-(--attention-soft) pl-[9px] pr-2.5 text-sm font-medium text-(--attention)">
+              <span className="size-[7px] rounded-full bg-(--attention)" aria-hidden />
+              <span><strong className="font-semibold tabular-nums">{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : view === "teamIssues" ? " 项问题等你答复" : " 项工作等待决策"}</span>
+            </div>
+          )}
+          {view === "mine" && session.role !== "admin" && (
+            <div className="grid justify-items-end gap-1 max-[760px]:justify-items-center">
+              <button type="button" title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}
+                className="inline-flex h-9 shrink-0 items-center justify-center gap-[7px] rounded-[8px] border border-[color-mix(in_srgb,var(--ink)_90%,black)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--ink)_90%,white),var(--ink))] px-3.5 pl-3 text-base font-medium text-(--ink-fg) shadow-[var(--shadow-primary)] transition-colors hover:bg-(--ink-hover) disabled:cursor-not-allowed disabled:border-(--surface-3) disabled:bg-(--surface-3) disabled:text-(--faint) disabled:shadow-none [&_svg]:size-[15px] [&_svg]:stroke-2">
+                <svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span>
+              </button>
+              {launchEntry.helper && (launchEntry.action ? (
+                <button type="button" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}
+                  className="inline-flex items-center gap-[3px] p-0 text-xs font-medium text-(--muted) hover:text-(--text-strong) hover:underline [&_svg]:size-3">
+                  {launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
+                </button>
+              ) : (
+                <span className="inline-flex cursor-default items-center gap-[3px] p-0 text-xs font-medium text-(--faint)" title={launchEntry.title}>{launchEntry.helper}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      </header>
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
-      <main className={`workspace-main${dtsWide ? " is-wide" : ""}`}>
-        {view === "team" && <section className="team-tasks-workspace">
+      <main className={cn("mx-auto w-full px-10 pb-[72px]",
+        dtsWide ? "max-w-none" : "max-w-(--page-width)",
+        "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]")}>
+        {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
             {/* (#210)两块手绘面板换 TabsPanel(keepMounted 默认 false,
@@ -1378,7 +1465,7 @@ export function App() {
 
         {/* 团队问题(2026-09-10 拆分拍板):问题会话的团队全景;页签骨架
             与团队需求同构(2026-09-11 排版对齐),操作台仍在「问题处理」。 */}
-        {view === "teamIssues" && <section className="team-tasks-workspace">
+        {view === "teamIssues" && <section className="min-w-0">
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
             {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
@@ -1450,25 +1537,26 @@ export function App() {
           onDraftConsumed={() => setWishDraft(undefined)} />}
 
         {view === "mine" && <>
-          {missingTaskNotice && <div className="missing-task-notice" role="alert">
+          {missingTaskNotice && <div className="mb-4 flex items-center justify-between gap-3 rounded-r-[6px] border-l-2 border-l-(--attention) bg-(--attention-soft) px-3 py-2.5 text-sm text-(--text-strong)" role="alert">
             <span>任务 {missingTaskNotice} 不存在或已被删除,已返回「我的需求」。
               链接可能已过期。</span>
-            <button type="button" onClick={() => setMissingTaskNotice("")}>知道了</button>
+            <button type="button" className="h-7 shrink-0 rounded-[6px] border border-(--line-strong) bg-(--surface) px-2.5 text-xs text-(--text) transition-colors hover:border-(--text-strong)" onClick={() => setMissingTaskNotice("")}>知道了</button>
           </div>}
           <PersonalActionInbox
             items={personalActionItems}
             hasOwnTasks={myTasks.length > 0}
             onOpen={openArtifacts}
           />
-          <section className="personal-pulse" aria-label="我的任务摘要">
-            <button type="button" className={`personal-stat personal-action${mineScope === "all" ? " selected" : ""}`} aria-pressed={mineScope === "all"} onClick={() => setMineScope("all")}><span>全部</span><strong>{myTasks.length}</strong></button>
+          {/* 任务摘要分段筛选(#228 工具类化):零值段不渲染,选中段描边。 */}
+          <section className="mb-2.5 flex flex-wrap gap-1" aria-label="我的任务摘要">
+            <button type="button" className={cn(pulseChip, mineScope === "all" && pulseChipSelected)} aria-pressed={mineScope === "all"} onClick={() => setMineScope("all")}><span>全部</span><strong className={pulseChipCount}>{myTasks.length}</strong></button>
             {([
-              ["waiting", "待我核对", myWaiting.length, "attention"],
-              ["intervention", "需要介入 / 已暂停", myIntervention.length, "danger"],
-              ["active", "自动推进中", myActive.length, "active"],
-              ["delivered", "待合入 / 完成", myDelivered.length, "success"],
+              ["waiting", "待我核对", myWaiting.length, "text-(--attention)"],
+              ["intervention", "需要介入 / 已暂停", myIntervention.length, "text-(--danger)"],
+              ["active", "自动推进中", myActive.length, ""],
+              ["delivered", "待合入 / 完成", myDelivered.length, ""],
             ] as Array<[MineScope, string, number, string]>).filter(([, , count]) => count > 0).map(([scope, label, count, tone]) => (
-              <button type="button" key={scope} className={`personal-stat personal-action ${tone}${mineScope === scope ? " selected" : ""}`} aria-pressed={mineScope === scope} onClick={() => setMineScope((current) => current === scope ? "all" : scope)}><span>{label}</span><strong>{count}</strong></button>
+              <button type="button" key={scope} className={cn(pulseChip, mineScope === scope && pulseChipSelected)} aria-pressed={mineScope === scope} onClick={() => setMineScope((current) => current === scope ? "all" : scope)}><span>{label}</span><strong className={cn(pulseChipCount, tone)}>{count}</strong></button>
             ))}
           </section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
@@ -1476,14 +1564,14 @@ export function App() {
             tasks={tasks}
             onOpen={openArtifacts}
           />}
-          <section className="task-section current-work-section" aria-labelledby="current-work-title">
-            <div className="section-head"><div><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="task-order-toggle" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden>⇅</i></button></div></div>
-            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard compact relatedTasks={tasks} key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
+          <section className="mt-0 mb-8" aria-labelledby="current-work-title">
+            <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="text-[13px] font-medium tabular-nums text-attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">{myIntervention.length} 项需介入</span>}<span className="text-[13px] font-medium tabular-nums text-muted-foreground">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span><button type="button" className="inline-flex h-7 items-center gap-[5px] rounded-full border border-(--line) px-2.5 text-xs font-medium text-(--muted) shadow-[var(--shadow-control)] transition-colors hover:border-(--line-strong) hover:text-(--text-strong)" title={taskOrder === "newest" ? "当前按创建时间，最新在上；点击改为待核对的排最前" : "当前待核对的排最前；点击改为按创建时间，最新在上"} aria-pressed={taskOrder === "newest"} onClick={() => setTaskOrder((current) => current === "newest" ? "attention" : "newest")}>{taskOrder === "newest" ? "最新在上" : "待核对在前"}<i aria-hidden className="not-italic text-(--faint)">⇅</i></button></div></div>
+            {visibleMyWork.length === 0 && <div className="flex items-center gap-2.5 border-b border-(--line) px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p className="mt-px text-sm text-(--muted)">{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
+            <div className="grid gap-2">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard compact relatedTasks={tasks} key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate={canOperate(task)} canDecide={canCollaborate(task)} decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={visibleMyDelivered} allTasks={tasks} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} childTab={activeIssueChild} onChildTabChange={selectIssueChild} /></Suspense>}
+        {view === "issues" && <Suspense fallback={<div className="p-10 text-(--muted)">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onOpenIssue={openIssueSession} onCloseIssue={closeIssueSession} onNavigateProfile={session.role !== "admin" ? () => { leaveIssueRoute("profile"); setView("profile"); } : undefined} childTab={activeIssueChild} onChildTabChange={selectIssueChild} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -1598,33 +1686,42 @@ function PersonalActionInbox({
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, 3);
-  return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
-    <div className="personal-action-head">
+  // 行动清单(#228 工具类化,含 surface-finish 终态:抬升面板+渐变头,
+  // 行内 small 摘要右置;首行=墨色渐变主钮+accent 编号盒)。
+  const primaryButton = "rounded-[8px] border border-[color-mix(in_srgb,var(--ink)_90%,black)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--ink)_90%,white),var(--ink))] text-(--ink-fg) shadow-[var(--shadow-primary)] hover:bg-(--ink-hover)";
+  const outlineButton = "border-(--line) bg-(--surface) text-(--text-strong) shadow-[var(--shadow-control)] hover:border-(--text-strong)";
+  const rankBox = "grid size-[26px] place-items-center rounded-[8px] border font-mono text-[11px] leading-none tabular-nums";
+  return <section className="mb-[26px] mt-0 overflow-hidden rounded-[12px] border border-(--line) bg-(--surface) shadow-[var(--shadow-panel)]" aria-labelledby="personal-action-title">
+    <div className="flex items-baseline justify-between gap-4 border-b border-(--line) bg-linear-[110deg,var(--surface),var(--surface-2)] px-5 py-4">
       <div>
-        <h2 id="personal-action-title">我现在最应该做什么</h2></div>
-      <span>{items.length ? `${items.length} 项待处理` : "当前已清空"}</span>
+        <h2 id="personal-action-title" className="m-0 text-[15px] font-[650] tracking-[-0.01em] text-(--text-strong)">我现在最应该做什么</h2></div>
+      <span className="text-sm tabular-nums text-(--muted)">{items.length ? `${items.length} 项待处理` : "当前已清空"}</span>
     </div>
-    {shown.length ? <div className="personal-action-list">{shown.map((item, index) => (
-      <article key={item.key} className={index === 0 ? "primary" : ""}>
-        <span className="personal-action-rank">{String(index + 1).padStart(2, "0")}</span>
-        <div><small>{item.kicker}</small><strong>{item.title}</strong><p>{item.detail}</p></div>
+    {shown.length ? <div className="grid">{shown.map((item, index) => (
+      <article key={item.key} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3.5 border-b border-(--line) px-5 py-[13px]">
+        <span aria-hidden className={cn(rankBox, index === 0
+          ? "border-(--accent)/20 bg-(--accent-soft) text-(--accent)"
+          : "border-(--line) bg-(--surface-2) text-(--faint)")}>{String(index + 1).padStart(2, "0")}</span>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-0.5"><small className="col-start-2 row-start-1 inline-flex items-center gap-1.5 self-center text-[11px] font-medium text-(--attention) before:inline-block before:size-1.5 before:rounded-full before:bg-current">{item.kicker}</small><strong className="col-start-1 row-start-1 truncate text-sm text-(--text-strong)">{item.title}</strong><p className="col-span-full m-0 truncate text-xs text-(--muted)">{item.detail}</p></div>
         {item.href ? (
-          <a className="personal-action-button" href={item.href}
+          <a className={cn("inline-flex h-8 min-w-0 items-center justify-center rounded-[6px] border px-3 text-sm font-medium transition-colors", index === 0 ? primaryButton : outlineButton)}
+            href={item.href}
             target="_blank" rel="noreferrer">{item.action} ↗</a>
         ) : (
           <button type="button" disabled={!item.task}
+            className={cn("inline-flex h-8 min-w-0 items-center justify-center rounded-[6px] border px-3 text-sm font-medium transition-colors", index === 0 ? primaryButton : outlineButton)}
             onClick={() => item.task && onOpen(item.task)}>{item.action}</button>
         )}
       </article>
-    ))}</div> : <div className="personal-action-clear">
-      <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>
+    ))}</div> : <div className="flex items-center gap-2.5 p-5 text-(--muted)">
+      <span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">当前没有需要你处理的事项</strong>
         {/* 零任务的新用户看到"Agent 正在推进"会以为后台有活在跑,
             白等半天(2026-08-30 审计)。 */}
-        <p>{hasOwnTasks
+        <p className="mt-px text-sm">{hasOwnTasks
           ? "Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。"
           : "你还没有任务——点右上角「发起新任务」开始;需要人工处理的事项会优先出现在这里。"}</p></div>
     </div>}
-    {items.length > 3 && <button type="button" className="personal-action-more"
+    {items.length > 3 && <button type="button" className="w-full bg-(--surface-2) px-5 py-2.5 text-left text-xs text-(--muted) transition-colors hover:text-(--text-strong)"
       onClick={() => setExpanded((current) => !current)}>
       {expanded ? "收起" : `还有 ${items.length - 3} 项 →`}</button>}
   </section>;
@@ -1639,21 +1736,22 @@ function CommitterInbox({
   tasks: TaskSummary[];
   onOpen: (task: TaskSummary) => void;
 }) {
-  return <section className="review-inbox committer-inbox" aria-labelledby="committer-inbox-title">
-    <div className="section-head">
+  return <section className="rounded-[14px] border border-(--accent)/25 bg-[color-mix(in_srgb,var(--accent-soft)_18%,var(--surface))] p-5" aria-labelledby="committer-inbox-title">
+    <div className="mb-3 flex items-baseline justify-between gap-4">
       <div><h2 id="committer-inbox-title">待我检视</h2></div>
-      <span className="section-count attention">{reviews.length} 项</span>
+      <span className="text-[13px] font-medium tabular-nums text-attention">{reviews.length} 项</span>
     </div>
     {reviews.length === 0
-      ? <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>当前没有待检视任务</strong><p>责任人主动邀请后会出现在这里。</p></div></div>
-      : <div className="committer-inbox-list">{reviews.map((review) => {
+      ? <div className="flex items-center gap-2.5 px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">当前没有待检视任务</strong><p className="mt-px text-sm text-(--muted)">责任人主动邀请后会出现在这里。</p></div></div>
+      : <div className="mt-3 grid gap-[7px]">{reviews.map((review) => {
           const task = tasks.find((item) => item.id === review.task_id);
           return <button type="button" key={review.id} disabled={!task}
+            className="grid w-full min-w-0 grid-cols-[34px_minmax(0,1fr)_auto_16px] items-center gap-[11px] rounded-[10px] border border-(--line) bg-(--surface) p-3 text-left transition-colors hover:border-(--accent) disabled:cursor-not-allowed disabled:opacity-55"
             onClick={() => task && onOpen(task)}>
-            <span className="committer-inbox-mark" aria-hidden>审</span>
-            <span className="committer-inbox-copy"><strong>{review.task_title}</strong><small><PersonName account={review.requester} /> 邀请 · {formatLocalDateTime(review.created_at)}</small></span>
-            <span className={`delivery-state${review.delivered ? " ok" : " warning"}`}>{review.delivered ? "通知已送达" : "通知未送达"}</span>
-            <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
+            <span className="grid size-[34px] place-items-center rounded-[9px] bg-(--accent-soft) text-base font-extrabold text-(--accent)" aria-hidden>审</span>
+            <span className="grid min-w-0 gap-1"><strong className="truncate text-base text-(--text-strong)">{review.task_title}</strong><small className="text-sm text-(--muted)"><PersonName account={review.requester} /> 邀请 · {formatLocalDateTime(review.created_at)}</small></span>
+            <span className={cn("text-sm", review.delivered ? "text-(--success)" : "text-(--danger)")}>{review.delivered ? "通知已送达" : "通知未送达"}</span>
+            <svg viewBox="0 0 16 16" aria-hidden className="size-[15px] fill-none stroke-(--faint) stroke-[1.5]"><path d="m6 3 5 5-5 5" /></svg>
           </button>;
         })}</div>}
   </section>;
@@ -1713,12 +1811,12 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
   </SidebarMenuItem>;
 }
 
-function NavButton({ view, current, onSelect, label, badge = 0, personal = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean }) {
+function NavButton({ view, current, onSelect, label, badge = 0 }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number }) {
   return <SidebarMenuItem>
     <SidebarMenuButton isActive={current === view} aria-label={label} title={label}
       onClick={() => onSelect(view)}>
       <NavIcon name={view} /><span>{label}</span>{badge > 0
-        && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}
+        && <span className="ml-auto inline-grid h-[18px] min-w-[18px] place-items-center rounded-full bg-(--attention-soft) px-[5px] text-xs font-semibold leading-none tabular-nums text-(--attention)">{badge}</span>}
     </SidebarMenuButton>
   </SidebarMenuItem>;
 }
@@ -1732,12 +1830,12 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
     catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败，请重试"); }
     finally { setBusy(false); }
   }
-  return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="login-brand"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span><strong>Mae-Flow</strong></span></div><div className="login-heading"><h1 id="login-title">登录 Mae-Flow</h1><p>管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="login-form" onSubmit={submit}><label><span>账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label><span>密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="login-error" role="alert">{error}</div>}<button type="submit" disabled={busy}>{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="login-note">账号由团队管理员在控制台内创建。</p></section></main>;
+  return <main className="grid min-h-screen grid-cols-[minmax(0,380px)] content-center justify-center bg-(--canvas) px-6 py-10 max-[760px]:grid-cols-[minmax(0,500px)] max-[760px]:p-[18px] max-[480px]:grid-cols-1 max-[480px]:p-0"><section className="flex min-h-0 flex-col rounded-xl border border-(--line) bg-(--surface) px-9 pb-7 pt-9 shadow-md max-[760px]:min-h-[calc(100vh-36px)] max-[760px]:rounded-[18px] max-[760px]:p-[38px] max-[480px]:min-h-screen max-[480px]:rounded-none max-[480px]:px-[22px] max-[480px]:py-[30px]" aria-labelledby="login-title"><div className="mb-9 flex items-center gap-2.5 max-[760px]:mb-[52px]"><BrandMark /><span className="flex items-baseline gap-2 leading-none"><strong className="text-[15px] text-(--text-strong)">Mae-Flow</strong></span></div><div><h1 id="login-title" className="mb-1.5 text-2xl leading-[1.25] tracking-[-0.02em] text-(--text-strong) max-[480px]:text-[30px]">登录 Mae-Flow</h1><p className="m-0 max-w-[40ch] text-base text-(--muted)">管理员掌握团队全局，开发成员直达自己的任务与待核对事项。</p></div><form className="mt-7 grid gap-4" onSubmit={submit}><label className="grid gap-1.5"><span className="text-sm font-medium text-(--muted)">账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required /></label><label className="grid gap-1.5"><span className="text-sm font-medium text-(--muted)">密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>{error && <div className="rounded-[6px] bg-(--danger-soft) px-2.5 py-2 text-sm text-(--danger)" role="alert">{error}</div>}<button type="submit" disabled={busy} className="inline-flex h-10 items-center justify-center gap-2 rounded-[6px] border border-(--ink) bg-(--ink) px-4 text-base font-medium text-(--ink-fg) transition-colors hover:border-(--ink-hover) hover:bg-(--ink-hover) disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-4">{busy ? "正在登录…" : "登录"}<svg viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4" /></svg></button></form><p className="mb-0 mt-5 text-xs text-(--faint)">账号由团队管理员在控制台内创建。</p></section></main>;
 }
 
 function LoadingScreen() {
   {/* #218:整屏结构与文案保留,加载动效统一走 Spinner(原先内部无动画)。 */}
-  return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><Spinner aria-hidden className="size-4 shrink-0" /><span>正在进入工作台…</span></main>;
+  return <main className="flex min-h-screen items-center justify-center gap-2.5 bg-(--canvas) text-base text-(--muted)"><BrandMark /><Spinner aria-hidden className="size-4 shrink-0" /><span>正在进入工作台…</span></main>;
 }
 
 function UsersBoard({ me }: { me: string }) {
@@ -1807,18 +1905,18 @@ function UsersBoard({ me }: { me: string }) {
       setError(reason instanceof Error ? reason.message : "账号删除失败");
     }
   }
-  return <section className="user-admin">
-    <div className="user-create-card">
-      <div className="user-create-copy">
+  return <section className="grid gap-6">
+    <div className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+      <div className="bg-surface-2 p-7 text-muted-foreground">
         
         <h2>添加团队成员</h2>
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
-      <form className="user-create-form" onSubmit={submit}>
-        <label><span>登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
-        <label><span>姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
-        <label><span>初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
-        <label><span>账号角色</span><Select value={role}
+      <form className="grid content-start items-end gap-[15px] p-[26px] sm:grid-cols-2" onSubmit={submit}>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">登录账号</span><Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">姓名</span><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">初始密码</span><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
+        <label className="grid gap-1.5"><span className="text-[13px] font-medium text-muted-foreground">账号角色</span><Select value={role}
           items={[{ value: "developer", label: "开发成员" }, { value: "admin", label: "管理员" }]}
           onValueChange={(value) => setRole((value ?? "developer") as UserRole)}>
           <SelectTrigger className="w-full" aria-label="账号角色"><SelectValue /></SelectTrigger>
@@ -1830,19 +1928,20 @@ function UsersBoard({ me }: { me: string }) {
           </SelectContent>
         </Select></label>
         <button type="submit" disabled={busy}>{busy ? "正在创建…" : "创建账号"}</button>
-        {message && <div className="form-message success">{message}</div>}
-        {error && <div className="form-message error">{error}</div>}
+        {message && <div className="rounded-lg bg-success/10 px-[11px] py-[9px] text-[13.5px] text-success">{message}</div>}
+        {error && <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{error}</div>}
       </form>
     </div>
-    <section className="user-list-card" aria-labelledby="user-list-title">
-      <div className="section-head">
-        <div><h2 id="user-list-title">现有账号</h2><p className="section-note">Committer 只在开发主动邀请检视时收到通知。</p></div>
-        <span className="section-count">{users.length} 人</span>
+    <section className="rounded-[12px] border border-(--line) bg-(--surface) p-6 shadow-xs" aria-labelledby="user-list-title">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知。</p></div>
+        <span className="text-[13px] font-medium tabular-nums text-muted-foreground">{users.length} 人</span>
       </div>
       {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
           列结构(成员/角色/默认入口/Committer/操作)与行内操作、角色徽标
           原样;行外重置/改名表单落成 colSpan 扩展行。 */}
-      <div className="user-table">
+      {/* #220 表体是 Table 原语;#228 外框工具类化(legacy .user-table 退役)。 */}
+      <div className="overflow-hidden rounded-[10px] border border-(--line)">
         <Table>
           <TableHeader>
             <TableRow className="border-(--line)">
@@ -1857,50 +1956,50 @@ function UsersBoard({ me }: { me: string }) {
             {users.map((user) => <Fragment key={user.username}>
               <TableRow className="h-[58px] border-(--line)">
                 <TableCell className="px-4 py-3">
-                  <span className="user-cell">
+                  <span className="flex items-center gap-2.5">
                     <Avatar aria-hidden className="after:hidden">
                       <AvatarFallback className="size-[30px] rounded-[8px] bg-(--accent-soft) text-[13px] font-bold text-(--accent)">{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</AvatarFallback>
                     </Avatar>
-                    <strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong>
+                    <strong className="grid gap-0.5 text-[14.5px] text-(--text-strong)">{user.display_name ?? user.username}<small className="text-xs font-medium text-(--faint)">{user.display_name ? user.username : "未填写姓名"}</small></strong>
                   </span>
                 </TableCell>
                 <TableCell className="px-4 py-3"><Badge variant={user.role === "admin" ? "merge" : "info"}>{user.role === "admin" ? "管理员" : "开发成员"}</Badge></TableCell>
-                <TableCell className="user-entry px-4 py-3">{user.role === "admin" ? "团队需求" : "我的需求"}</TableCell>
+                <TableCell className="px-4 py-3 text-[13.5px] text-(--muted)">{user.role === "admin" ? "团队需求" : "我的需求"}</TableCell>
                 {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
                     交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
-                <TableCell className="px-4 py-3"><label className={`committer-toggle${user.committer ? " on" : ""}`}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
-                <TableCell className="px-4 py-3"><span className="user-actions">
-                  <button type="button" className="user-action" onClick={() => {
+                <TableCell className="px-4 py-3"><label className={cn("inline-flex min-w-[92px] items-center justify-center gap-[7px] rounded-[8px] border px-[9px] py-[7px] text-sm transition-colors", user.committer ? "border-(--success)/30 bg-(--success-soft) text-(--success)" : "border-(--line) bg-(--surface) text-(--muted)")}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
+                <TableCell className="px-4 py-3"><span className="inline-flex gap-2">
+                  <button type="button" className={userActionButton} onClick={() => {
                     setResetFor(resetFor === user.username ? "" : user.username);
                     setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
                   }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
-                  <button type="button" className="user-action" onClick={() => {
+                  <button type="button" className={userActionButton} onClick={() => {
                     setNameFor(nameFor === user.username ? "" : user.username);
                     setNameDraft(user.display_name ?? ""); setResetFor("");
                     setDeleteArm(""); setMessage(""); setError("");
                   }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
                   {user.username === me
-                    ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
-                    : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
+                    ? <button type="button" className={userActionButton} disabled title="不能删除自己——请让另一位管理员操作">删除</button>
+                    : <button type="button" className={cn(userActionButton, deleteArm === user.username ? "border-(--danger) bg-(--danger) text-white" : "border-(--danger)/30 text-(--danger)")} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
                 </span></TableCell>
               </TableRow>
               {resetFor === user.username && <TableRow className="border-(--line)">
                 <TableCell colSpan={5} className="px-4 pb-3">
-                  <form className="user-reset-row" onSubmit={submitReset}>
+                  <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={submitReset}>
                     <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
                       onChange={(event) => setResetPassword(event.target.value)} />
-                    <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
-                    <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
+                    <button type="submit" disabled={busy || resetPassword.length < 10} className="rounded-[8px] bg-(--accent) px-3 py-2 text-sm text-(--accent-fg) transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "重置中…" : "确认重置"}</button>
+                    <small className="text-sm text-(--muted)">不需要旧密码;重置后该账号的登录会话全部下线。</small>
                   </form>
                 </TableCell>
               </TableRow>}
               {nameFor === user.username && <TableRow className="border-(--line)">
                 <TableCell colSpan={5} className="px-4 pb-3">
-                  <form className="user-reset-row" onSubmit={saveDisplayName}>
+                  <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={saveDisplayName}>
                     <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
                       maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
-                    <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
-                    <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
+                    <button type="submit" disabled={busy} className="rounded-[8px] bg-(--accent) px-3 py-2 text-sm text-(--accent-fg) transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "保存中…" : "保存姓名"}</button>
+                    <small className="text-sm text-(--muted)">登录、权限与历史记录仍使用工号 {user.username}。</small>
                   </form>
                 </TableCell>
               </TableRow>}
@@ -2032,10 +2131,10 @@ function TeamDashboard({
       selectedStatus={taskStatus} onSelectPhase={selectPhase}
       onSelectStatus={selectTaskStatus} />
 
-    <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
-      <div className="task-filters" aria-label="筛选当前现场">
-        <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
+    <section id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
+      <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={cn("text-[13px] font-medium tabular-nums", phase || taskStatus ? "text-primary" : "text-muted-foreground")}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
+      <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选当前现场">
+        <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" className="border-0 bg-transparent" /></label>
         <Select value={scope}
           items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞任务" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等待决策" }]}
           onValueChange={(value) => setScope((value ?? "all") as TeamScope)}>
@@ -2063,10 +2162,10 @@ function TeamDashboard({
             </SelectGroup>
           </SelectContent>
         </Select>
-        {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
+        {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="h-[34px] cursor-pointer rounded-[7px] border-0 bg-primary/10 px-[11px] text-[13px] font-bold text-primary" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{orderHierarchyBy(visible,
+      <div className="grid gap-2">{orderHierarchyBy(visible,
         (item) => item.teamTask.id,
         (item) => item.task?.parent_task_id,
       ).map((item) => <TaskCard compact relatedTasks={tasks} key={item.teamTask.id} task={item.task!} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />)}</div>
@@ -2095,10 +2194,10 @@ function TaskGroup({
   empty?: string;
   tone?: string;
 }) {
-  return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
-    <div className="section-head"><div><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
-    {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>{empty ?? "当前没有任务"}</strong></div></div>}
-    <div className="task-list">{orderTaskHierarchy(tasks).map((task) => <TaskCard compact relatedTasks={allTasks} key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
+  return <section>
+    <div className="mb-3 flex items-baseline justify-between gap-4"><div><h2>{title}</h2></div><span className={cn("text-[13px] font-medium tabular-nums text-muted-foreground", tone === "attention" && "text-attention", tone === "danger" && "text-danger", tone === "active" && "text-active")}>{tasks.length} 项</span></div>
+    {tasks.length === 0 && <div className="flex items-center gap-2.5 border-b border-(--line) px-1 py-3.5"><span aria-hidden className="text-base font-semibold text-(--success)">✓</span><div><strong className="text-base font-medium text-(--text)">{empty ?? "当前没有任务"}</strong></div></div>}
+    <div className="grid gap-2">{orderTaskHierarchy(tasks).map((task) => <TaskCard compact relatedTasks={allTasks} key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
       const related = allTasks.find((item) => item.id === taskId);
       if (related) onOpenArtifacts(related);
     }} />)}</div>
@@ -2107,6 +2206,10 @@ function TaskGroup({
 
 /** 总览只保留一层规模摘要；阶段与状态作为轻量筛选项呈现。
  * 规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
+/** 概览格按钮配方(原 .delivery-breakdown-cells button 家族,与问题侧同款)。 */
+const CELL_BASE = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-line bg-surface px-[11px] py-1.5 text-left text-text transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:cursor-default disabled:opacity-55";
+const CELL_SELECTED = "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg border border-primary/60 bg-primary/10 px-[11px] py-1.5 text-left text-primary transition-colors";
+
 function TeamDeliveryOverview({
   stats,
   selectedPhase,
@@ -2120,51 +2223,51 @@ function TeamDeliveryOverview({
   onSelectPhase: (phase: string) => void;
   onSelectStatus: (status: string) => void;
 }) {
-  return <section className="team-delivery-overview" aria-label="团队需求统计">
-    <header className="team-delivery-overview-head">
-      <div className="team-delivery-overview-copy">
+  return <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="团队需求统计">
+    <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
+      <div className="grid min-w-0 gap-[3px]">
         
-        <h2>交付概览</h2>
-        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
+        <h2 className="m-0 text-lg text-text-strong">交付概览</h2>
+        <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
       </div>
-      <div className="team-delivery-summary"
+      <div className="flex flex-none items-center gap-[18px]"
         aria-label={`需求总数 ${stats.requirements} 项（仅主任务），全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
-        <span className="summary-total" title="主任务数量，不含子任务和已取消任务"><strong>{stats.requirements}</strong><small>需求总数</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5" title="主任务数量，不含子任务和已取消任务"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-text-strong">{stats.requirements}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">需求总数</small></span>
         <i aria-hidden />
-        <span className="summary-total"><strong>{stats.total}</strong><small>全部任务</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-text-strong">{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">全部任务</small></span>
         <i aria-hidden />
-        <span className="summary-active"><strong>{stats.delivering}</strong><small>交付中</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.delivering}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">交付中</small></span>
         <i aria-hidden />
-        <span className="summary-complete"><strong>{stats.delivered}</strong><small>已交付</small></span>
+        <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.delivered}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已交付</small></span>
       </div>
     </header>
-    <div className="team-delivery-breakdown">
-      <section aria-labelledby="delivery-stage-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">阶段</strong>
-          <small>当前所处流程</small></div>
-        <div className="delivery-breakdown-cells">
+    <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
+      <section aria-labelledby="delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid gap-0.5"><strong id="delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
+          <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
           {stats.stages.map((entry) => <button type="button" key={entry.key}
-            className={selectedPhase === entry.key ? "selected" : ""}
+            className={selectedPhase === entry.key ? CELL_SELECTED : CELL_BASE}
             disabled={entry.count === 0} aria-pressed={selectedPhase === entry.key}
             aria-controls="team-queue" onClick={() => onSelectPhase(entry.key)}>
             <span>{entry.key}</span><strong>{entry.count}</strong>
           </button>)}
-          {!stats.stages.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+          {!stats.stages.length && <div className="col-span-full text-[13px] text-faint">暂无交付中任务</div>}
         </div>
       </section>
-      <section aria-labelledby="delivery-status-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-status-title">任务状态</strong>
-          <small>当前运行情况</small></div>
-        <div className="delivery-breakdown-cells status-cells">
+      <section aria-labelledby="delivery-status-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid gap-0.5"><strong id="delivery-status-title" className="text-[13.5px] text-text-strong">任务状态</strong>
+          <small className="text-[13px] text-muted-foreground">当前运行情况</small></div>
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
           {stats.statuses.map((entry) => <button type="button" key={entry.key}
-            className={selectedStatus === entry.key ? "selected" : ""}
+            className={selectedStatus === entry.key ? CELL_SELECTED : CELL_BASE}
             disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
             <span>{entry.label}</span>
             <strong>{entry.count}</strong>
           </button>)}
-          {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
+          {!stats.statuses.length && <div className="col-span-full text-[13px] text-faint">暂无交付中任务</div>}
         </div>
       </section>
     </div>

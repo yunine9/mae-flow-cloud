@@ -4,9 +4,9 @@ import {
   type CollaborationAssignee,
 } from "./api";
 import { UserPicker } from "./UserPicker";
+import { cn } from "cn";
 import { chainStages } from "./RequirementGraph";
 import { Input } from "@/components/ui/input";
-import "./module-assignment.css";
 
 export interface RepositoryAssigneeSelection {
   assignments: Record<string, string>;
@@ -143,14 +143,16 @@ export function RepositoryAssigneePicker({
   }
 
   const stages = chainStages({ repositories, dependencies });
-  return <section className="repository-assignees module-assignment" aria-label="任务分工">
-    <header>
-      <div><strong>任务分工</strong></div>
-      {onOpenStory && <button type="button" onClick={onOpenStory}>查看完整方案</button>}
+  // 皮(#233 收官):原 module-assignment.css/repository-assignees 皮换装工具类,
+  // 该段 CSS 已退役(决策确认态的上下文覆盖随 #233 核对为零消费者)。
+  return <section className="m-0 overflow-hidden rounded-[11px] border border-primary/25 bg-surface" aria-label="任务分工">
+    <header className="flex items-end justify-between gap-3 border-b border-line bg-surface-2 px-[13px] py-3">
+      <div className="grid gap-0.5"><strong className="text-[15px] text-text-strong">任务分工</strong></div>
+      {onOpenStory && <button type="button" className="cursor-pointer border-0 bg-none p-0 text-xs text-primary hover:underline" onClick={onOpenStory}>查看完整方案</button>}
     </header>
-    <div className="module-assignment-stages">
-      {stages.map((stage, stageIndex) => <section key={stageIndex} className="module-assignment-stage">
-        <h4>{assignmentStageLabel(stage, stageIndex)}</h4>
+    <div className="grid gap-4 p-3.5">
+      {stages.map((stage, stageIndex) => <section key={stageIndex} className="grid min-w-0 gap-2.5">
+        <h4 className="m-0 text-[13px] text-primary">{assignmentStageLabel(stage, stageIndex)}</h4>
       {stage.map((repository) => {
         const selected = selection.assignments[repository.id] ?? "";
         const person = peopleByName.get(selected);
@@ -163,22 +165,23 @@ export function RepositoryAssigneePicker({
         // 不截出半句话冒充摘要，也不在决策卡再次展开整段实现说明。
         const brief = repository.responsibility?.split(/\r?\n/).find((line) => line.trim())
           ?.replace(/^\s*[-*]\s*(?:做什么[：:]\s*)?/, "").trim();
-        return <article key={repository.id} className="module-assignment-unit">
-          <header><div className="module-assignment-title"><strong>{repository.scope?.name ?? repository.name}</strong>
+        return <article key={repository.id} className="min-w-0 rounded-[9px] border border-line bg-surface-soft p-3.5">
+          <header className="grid gap-1.5"><div className="flex items-start justify-between gap-2.5"><strong className="text-[15px] leading-[1.6] text-text-strong">{repository.scope?.name ?? repository.name}</strong>
             {onOpenModule && <button type="button" aria-label={`查看${repository.scope?.name ?? repository.name}详情`}
+              className="flex-none cursor-pointer border-0 bg-none p-0 text-xs text-primary hover:underline"
               onClick={() => onOpenModule(repository.id)}>查看详情 ↗</button>}
-          </div><small>仓库：{repository.name}</small></header>
-          {brief && brief.length <= 160 && <p className="module-assignment-brief">{brief}</p>}
-          {prerequisites.length > 0 && <div className="module-assignment-dependency">
+          </div><small className="text-xs text-muted-foreground [overflow-wrap:anywhere]">仓库：{repository.name}</small></header>
+          {brief && brief.length <= 160 && <p className="my-2 text-[13px] leading-[1.6] text-text">{brief}</p>}
+          {prerequisites.length > 0 && <div className="my-2.5 border-l-2 border-l-primary pl-2.5 text-xs leading-[1.7] text-muted-foreground">
             {prerequisites.map((edge) => {
               const prerequisite = repositories.find((item) => item.id === edge.to);
-              return <p key={edge.to}>等待「{prerequisite?.scope?.name ?? prerequisite?.name ?? edge.to}」
+              return <p key={edge.to} className="my-[3px] text-text">等待「{prerequisite?.scope?.name ?? prerequisite?.name ?? edge.to}」
                 完成</p>;
             })}
           </div>}
-          <div className="module-assignment-fields">
-          <div className="repository-assignee-editable">
-            <small>负责人</small>
+          <div className="mt-3 grid grid-cols-2 gap-3 max-[600px]:grid-cols-1">
+          <div className="grid min-w-0 gap-[3px]">
+            <small className="text-xs text-muted-foreground">负责人</small>
             <UserPicker value={selected}
               ariaLabel={`${rowLabel}的执行人`}
               emptyLabel="请选择执行人"
@@ -196,8 +199,8 @@ export function RepositoryAssigneePicker({
                   };
                 })} />
           </div>
-          <label className="repository-ticket-editable">
-            <small>任务单号</small>
+          <label className="grid min-w-0 gap-[3px]">
+            <small className="text-xs text-muted-foreground">任务单号</small>
             <Input type="text" className="min-h-[34px] font-mono text-xs font-semibold" value={ticket}
               aria-label={`${rowLabel}的 AR 单号`}
               aria-invalid={Boolean(ticketProblem)}
@@ -205,19 +208,23 @@ export function RepositoryAssigneePicker({
               onChange={(event) => chooseTicket(repository.id, event.target.value)} />
           </label>
           </div>
-          <em className={person?.ready && !ticketProblem ? "ready" : "missing"}>
+          <em className={cn("mt-2 block text-xs not-italic",
+            person?.ready && !ticketProblem ? "text-success" : "text-attention")}>
             {ticketProblem || (person?.ready ? "可委派"
               : person ? `未就绪：${person.missing.join("、")}` : "待选择")}
           </em>
         </article>;
       })}</section>)}
     </div>
-    {selection.error && <p className="repository-assignee-error">
+    {selection.error && <p className="mx-3 mb-2 rounded-[7px] bg-danger/10 px-2.5 py-2 text-xs text-danger">
       {selection.error}
     </p>}
-    <footer>
-      <p>负责人和单号的修改会自动保存。</p>
-      <small className={`repository-assignee-save ${saveState}`}>
+    <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-3 py-2.5">
+      <p className="m-0 text-xs leading-[1.45] text-muted-foreground">负责人和单号的修改会自动保存。</p>
+      <small className={cn("flex-none text-xs",
+        saveState === "saved" && "text-success",
+        saveState === "error" && "text-danger",
+        (saveState === "saving" || saveState === "idle") && "text-muted-foreground")}>
         {saveState === "saving" ? "正在保存…"
           : saveState === "saved" ? "已自动保存"
           : saveState === "error" ? "保存失败，请继续编辑后重试" : ""}

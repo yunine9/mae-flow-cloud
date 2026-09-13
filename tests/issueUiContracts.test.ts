@@ -51,21 +51,33 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   assert.match(registration, /重试加载/);
   assert.doesNotMatch(registration,
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
-  // 环境侧(2026-09-10 走查裁定「只选不手填」):登记页不再手填 IP,
-  // 未选台账条目就在提交时给指路文案；页面账号/密码已随
-  // 「流程不登录网管页面」契约退役。
+  // 环境侧(2026-09-10 走查裁定「只选不手填」;#230 改锚):页面凭据
+  // 整体废弃,登记页不再有页面账号/页面密码采集面,未选台账条目就在
+  // 提交时给指路文案。
   assert.match(registration, /请从环境管理选择网管环境/);
-  assert.match(registration, /environment_id: pickedEnv\.id/);
-  assert.doesNotMatch(registration,
-    /const \[envPage(?:Account|Password)|page_(?:account|password):/);
+  assert.doesNotMatch(registration, /页面账号 <i|页面密码 <i|envPageAccount/);
   assert.match(registration, /团队资产 → 业务模块/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
   // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
   assert.doesNotMatch(registration, /将拉取的代码仓/);
   assert.match(registration, /issue-module-wrap/);
   assert.match(registration, /已带出 \{selectedModule\.repositories\.length\} 个代码仓,悬停查看/);
-  assert.match(registration, /issue-module-tip" role="tooltip"/);
-  assert.match(css, /\.issue-module-wrap:hover \.issue-module-tip,[\s\S]*focus-within/);
+  assert.match(registration, /issue-module-tip[^>]*role="tooltip"/);
+  // #230 改锚:悬浮卡的悬停/键盘聚焦弹出由 group 变体直译(旧
+  // .issue-module-wrap:hover/:focus-within 规则随家族退役)。
+  assert.match(registration,
+    /issue-module-tip[^"]*group-hover\/mod:grid group-focus-within\/mod:grid/);
+});
+
+test("登记表单窄屏单列,旧口令菜单不得回流(#230 改锚)", () => {
+  // 页面凭据(口令选择器)随「只选不手填」整体废弃:键盘纪律归
+  // base-ui Select/Popover 原语,页面不再自带键盘表;旧 .issue-password-menu
+  // 与 680px 静态规则随 #230 迁移退役,窄屏单列由 max-[680px] 变体直译。
+  assert.doesNotMatch(registration, /issue-password-menu/);
+  assert.doesNotMatch(css, /^\s*\.issue-password-menu/m);
+  assert.match(registration,
+    /className="grid grid-cols-2 gap-3 max-\[680px\]:grid-cols-1"/);
+  assert.match(registration, /max-\[680px\]:grid-cols-1/);
 });
 
 test("环境选择器可用键盘操作，清单在自身视口滚动", () => {
@@ -90,12 +102,18 @@ test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", (
   assert.match(registration, /aria-label=\{`\$\{isExpanded \? "收起" : "展开"\}/);
   // 触控目标:展开按钮 36px 见方(size-9),不再依赖旧 css 的 44px 规则。
   assert.match(registration, /size-9 items-center justify-center/);
-  // 版本过滤改 shadcn Popover(2026-09-11 对齐环境管理台账):浮层碰撞
-  // 归 Base UI,旧 680px static 规则随 legacy 菜单退役;44px 触控目标
-  // 由选项行 min-h-11 保留在组件上,不再依赖页面 css。
-  assert.match(registration, /<PopoverContent align="start" className="w-72 p-1">/);
+  // 版本过滤住「版本」列表头漏斗(2026-09-13 表头化,壳两页共用):浮层
+  // 碰撞归 Base UI;44px 触控目标由选项行 min-h-11 保留在组件上,不再
+  // 依赖页面 css。旧工具栏「版本过滤」按钮随表头化退役。
+  assert.match(registration, /<HeaderFilter label="版本" contentClassName="w-72"/);
+  assert.match(registration, /<HeaderFilter label="单号" active=\{!!ticketFilter\.trim\(\)\}/);
+  assert.match(registration, /<HeaderFilter label="标题" active=\{!!titleFilter\.trim\(\)\}/);
+  assert.match(registration, /aria-label="按单号过滤"/);
+  assert.match(registration, /aria-label="按标题过滤"/);
   assert.match(registration, /min-h-11 cursor-pointer items-center gap-2\.5/);
+  assert.match(registration, /title=\{ticket\.version\}/);
   assert.doesNotMatch(registration, /issue-dts-version-menu|issue-dts-version-trigger/);
+  assert.doesNotMatch(registration, /"版本过滤"/, "工具栏版本过滤按钮应已退役(筛选住列头)");
 });
 
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
@@ -124,7 +142,11 @@ test("问题决策卡的给定选项和自定义答复都能再次点击取消",
 });
 
 test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", () => {
-  assert.match(registration, /不会出现在页面或事件流[\s\S]*明文进入当前 AI 上下文/);
+  // #230 改锚:页面凭据废弃(2026-09-10)后,登记页不再有密码明文的
+  // 采集面——隐私承诺由「台账已存密码、页面无需填写」的快照说明承载,
+  // 契约全文在 docs/issue-flow.md(由下方 issueFlow 断言钉住)。
+  assert.doesNotMatch(registration, /page_password|页面密码/);
+  assert.match(registration, /的已存密码[\s\S]{0,80}无需在此填写/);
   // 闸卡(2026-09-10 只选不手填)不再有密码输入面:以"台账快照、凭据
   // 无需在此填写"的说明替代;密码的唯一输入处是共用新建/编辑弹框。
   assert.match(decisions, /密码以选定时为准[\s\S]*密码无需在此填写/);
@@ -132,9 +154,11 @@ test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", (
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
   // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
-  // 结论开按钮;入口本身仍必须在面板上明确存在。
+  // 结论开按钮;入口本身仍必须在面板上明确存在。(#230 改锚:旁路已
+  // 统一成两段式「管理员代办」流程,代删口并入同一入口。)
   assert.match(annotations, /closureOf\(item\)\.can_override_drop/);
-  assert.match(annotations, /closureOf\(item\)\.can_override_verify/);
+  assert.match(annotations, /closure\.can_override_verify/);
+  assert.match(annotations, /管理员代办/);
   assert.match(annotations, /管理员代确认/);
   assert.match(annotations, /完整内容见“执行现场”/);
 });
@@ -165,8 +189,10 @@ test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼�
   // 闸卡:推送过目卡的 context(服务端生成的变更摘要)要走既有
   // 决策背景块渲染,标签按内容如实叫「变更摘要」。
   assert.match(decisions, /gate_kind === "push_confirm"\s*\?\s*"变更摘要"/);
-  assert.match(decisions, /issue-decision-context/);
-  assert.match(decisions, /issue-recommended-badge/);
+  // #231 改锚:决策背景壳换 DecisionContext 工具类组件(家族 CSS 退役)。
+  assert.match(decisions, /<DecisionContext label=\{contextLabel\}/);
+  assert.match(decisions,
+    /suggested && <Badge variant="warning" className="ml-1\.5 align-middle">AI 推荐<\/Badge>/);
   // 档案:issue-flow.md 的闸种清单要带上这道闸。
   assert.match(issueFlowDoc, /push_confirm|推送前过目/);
 });
@@ -299,10 +325,13 @@ test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog"
 });
 
 test("过程文档可原位全屏，退出后保留当前页签", () => {
-  assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen"/);
+  assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen fixed/);
   assert.match(materials, /fullscreen \? "退出全屏" : "全屏查看"/);
   assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
-  assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
+  // #230 改锚:全屏壳换工具类——定底盘(固定定位/层高/滚动)由
+  // is-fullscreen 分支的变体直译,旧 .is-fullscreen 规则随家族退役。
+  assert.match(materials,
+    /is-fullscreen fixed inset-\[14px\] z-\[720\] flex flex-col/);
 });
 
 test("环境形态字段:唯一落点是共用新建弹框,登记与闸卡只选不手填(AI 不试错)", () => {
@@ -385,10 +414,12 @@ test("问题会话查看模式:标识上屏可读,判定按登录用户与会话
     /const canOperate = !viewerUsername \|\| viewerUsername === detail\.account;/);
   // 标识:文案用词表词「查看模式」、归属人名上屏,只在非归属人分支
   // 渲染;role 保证读屏能听到这条状态。
+  // #231 改锚:查看模式徽标换 Badge warning 软皮(琥珀只提示不告警),
+  // 原 .issue-view-mode 手搓皮随家族退役。
   assert.match(sessionView,
-    /\{!canOperate && <span className="issue-view-mode" role="status"/);
+    /\{!canOperate && <Badge variant="warning" role="status"/);
   assert.match(sessionView, /查看模式:归属人 \{detail\.account\} 的会话/);
-  assert.match(css, /\.issue-view-mode \{/);
+  assert.doesNotMatch(css, /\.issue-view-mode/);
 });
 
 test("问题会话查看模式:操作控件逐处收进归属分支,信息面不收", () => {
@@ -401,8 +432,10 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 工作台头部:「无单场景」是状态说明不是控件,查看模式照常示人。
   // #98 单路径化后一切会话都是固定流程,自由分支的绑单输入已整体删除,
   // 不得再以任何形式回流。
+  // #231 改锚:单号徽标换工具类胶囊(绑单/无单两态),user-select 由
+  // span 上的 select-text 承担。
   assert.match(sessionView,
-    /\? <span className="issue-ticket">\{detail\.ticket\}<\/span>\s*: <span className="issue-ticket empty">无单场景<\/span>/);
+    /\? <span className="select-text rounded-full bg-primary\/10 px-\[7px\] py-px font-mono text-xs font-bold text-primary">\{detail\.ticket\}<\/span>\s*: <span className="select-text rounded-full border border-dashed px-\[7px\] py-px font-mono text-xs font-bold text-faint">无单场景<\/span>/);
   assert.doesNotMatch(sessionView, /className="issue-bind"/);
   assert.doesNotMatch(sessionView, /bindIssueTicket/);
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
@@ -415,8 +448,11 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 信息面不收:现场直播(SSE)不带任何归属条件。耗时卡点已随走查
   // 反馈移出工作台(2026-09-07),又随列表卡展开态退役整个删除
   // (2026-09-11);逐仓交付收编为「逐仓交付」页签。
-  // (#123 拍平后对话现场是标签之首,直挂默认分支。)
-  assert.match(sessionView, /<IssueEventsPane id=\{detail\.id\} active \/>/);
+  // (#123 拍平后对话现场是标签之首,直挂默认分支。)#210 起面板映射进
+  // TabsContent(#231 改锚:断言钉到现 DOM——events 签的 contents 面板
+  // 内,直播不带任何归属条件)。
+  assert.match(sessionView,
+    /\{tab === "events" && <TabsContent value="events" className="contents">[\s\S]*?<IssueEventsPane id=\{detail\.id\} active \/>/);
   assert.match(sessionView, /<IssueWorkspaceRepos detail=\{detail\} \/>/);
   assert.doesNotMatch(sessionView,
     /<IssueCostPanel id=\{detail\.id\} \/>/,
@@ -445,9 +481,11 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
   // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
-  assert.match(materials, /\{canOperate && <div className="issue-materials-editor">/);
   assert.match(materials,
-    /\{canOperate && node\.archive && <button type="button" className="issue-log-extract"/);
+    /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
+  // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
+  assert.match(materials,
+    /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
   assert.match(materials,
     /canOperate\s*\?\s*\[\{ key: REVIEW_TAB/);
   assert.match(materials,
@@ -501,9 +539,10 @@ test("帮助中心单一流程化(#98):设置页契约无探索方式卡片", ()
   // 任何角落不得再出现"两种探索方式"与自由探索表述;个人设置文章的
   // 步骤与截图说明不再描述探索方式卡片(区域编号已顺号修正)。
   assert.doesNotMatch(helpCenter, /自由探索|探索方式|两种探索/);
-  // 旅程线与模式徽标样式随分支一并退场(查看模式徽标 issue-view-mode 保留)。
+  // 旅程线与模式徽标样式随分支一并退场;查看模式徽标的手搓皮也随
+  // #231 换装退役(Badge warning 承接)。
   assert.doesNotMatch(css, /\.issue-journey|\.issue-jnode|\.issue-mode[ .:{]/);
-  assert.match(css, /\.issue-view-mode \{/);
+  assert.doesNotMatch(css, /\.issue-view-mode/);
 });
 
 test("团队看板问题卡片入口行为不变:点击即进,不含归属判断", () => {
@@ -550,10 +589,14 @@ test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发
 });
 
 test("单号处处可选中复制:DTS 表格单号独立成格,user-select 强制放开", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 单号是绑单/推送分支名的关键操作对象,复制是高频动作;button(会话
   // 卡片)内的拖选被浏览器默认禁掉,CSS 强制放开。
+  // #231 改锚:.issue-ticket 摘出(会话头部单号徽标换 select-text 工具类)。
   assert.match(css,
-    /\.task-ticket,\s*\.issue-dts-ticket,\s*\.issue-ticket\s*\{[^}]*user-select:\s*text/);
+    /\.task-ticket,\s*\.issue-dts-ticket\s*\{[^}]*user-select:\s*text/);
+  assert.match(sessionView, /select-text rounded-full bg-primary\/10 px-\[7px\]/);
   // shadcn 表格化后:勾选 Checkbox 在首格,单号在第二个 TableCell——
   // 单号独立成格,拖选复制不会误勾选。
   const rowTemplate = registration.slice(
@@ -603,15 +646,15 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
 test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 六标签一次成表,顺序即规格:对话现场(默认入口)在首位,中间四签
-  // 是原"材料"面板二级页签的升格,逐仓交付收编为末签——一签一名,
-  // 不得改名换序。
+  // 六标签一次成表(#239 起「元信息」居首,共七签),顺序即规格:元信息
+  // (只读陈列)在首位,对话现场仍是默认入口,逐仓交付收编为末签——
+  // 一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
-    ["events:对话现场", "dts:DTS单据", "doc:过程文档",
+    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:过程文档",
       "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
@@ -633,6 +676,8 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
 });
 
 test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
   // 只按会话层下发的 view 直渲内容,四个子视图与过程文档子页签原样。
   assert.doesNotMatch(materials, /ws-pane-head/);
@@ -646,17 +691,13 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   // (#210)doc 子页签换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类随家族退役,
   // 改用 shadcn 默认页签皮,页签语义(键盘箭头/roving)归原语。
   assert.match(materials, /<TabsList aria-label="过程文档页签"/);
-  // 页签一签一色:#123 追加块按页签序发 --workspace-tab-color(五签
-  // 五色),激活态样式走该变量;问题域默认值已在 .issue-workspace 定义。
-  assert.match(css, /\/\* #123 左栏标签/);
-  const block = css.slice(css.indexOf("/* #123 左栏标签"));
+  // 页签一签一色(#231 改锚):发色原住 issue-workspace 的 nth-child
+  // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
+  // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
   assert.ok(
-    block.includes(
-      ".issue-workspace.task-workspace-v2 .issue-main-pane .ws-source-switch button.on {"),
-    "激活页签的边/底/字必须走 --workspace-tab-color");
-  assert.ok(
-    (block.match(/--workspace-tab-color:/g) ?? []).length >= 5,
-    "五个页签各需一枚 --workspace-tab-color");
+    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 6,
+    "六个页签各需一枚 --workspace-tab-color");
+  assert.doesNotMatch(css, /\.issue-workspace/);
 });
 
 // ---- 右栏协作对话框(#124):ws-side 从 IssueRail 占位换成「与 Agent
@@ -673,7 +714,8 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   // ws-side 协作头:流组件自带「与 Agent 协作」栏头(ws-collaboration-head,
   // 与任务侧同一结构类),挂在会话视图的 ws-side(aria 同名)里。
   assert.match(sessionView,
-    /<section className="ws-side" aria-label="与 Agent 协作">/);
+    // #231 改锚:皮肤类保留,min-width 与窄屏单列直译成工具类。
+    /<section aria-label="与 Agent 协作"\s*\n\s*className="ws-side min-w-0 max-\[1100px\]:order-first max-\[1100px\]:max-h-\[46vh\]">/);
   assert.match(stream, /<header className="ws-collaboration-head">/);
   assert.match(stream, /<strong>与 Agent 协作<\/strong>/);
   assert.match(sessionView, /<IssueConversationStream/);
@@ -714,9 +756,13 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   const facts = readFileSync(
     resolve("web/src/issues/IssueWaitingFacts.tsx"), "utf-8");
   assert.match(facts, /export function IssueWaitingFacts/);
-  // 样式落点:#124 右栏协作的追加块在 style.css 末尾问题工作台区块内;
-  // 流上方临时容器(issue-conv-now)的死规则已随 #125 卡座拆除清零。
-  assert.match(css, /#124 右栏协作/);
+  // 样式落点(#231 改锚):#124 追加块随 issue-workspace 家族退役,
+  // 右栏皮肤走 conversation.css 的共享 ws-* 皮;流上方临时容器
+  // (issue-conv-now)的死规则已随 #125 卡座拆除清零。
+  const conversationCss = readFileSync(
+    resolve("web/src/conversation.css"), "utf-8");
+  assert.match(conversationCss,
+    /\.task-workspace-v2 \.ws-stream-shell > \.ws-collaboration-head/);
   assert.doesNotMatch(css, /issue-conv-now/);
 });
 
@@ -747,14 +793,15 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
   assert.ok(headControls.includes("终止会话"));
   assert.match(sessionView, /title: "归档会话"/);
   assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
-  // 头部危险档:终止钮保留红色危险 affordance(问题域 #127 追加块)。
-  assert.match(css,
-    /\.issue-workspace\.task-workspace-v2 \.ws-head-controls > button\.danger \{/);
+  // 头部危险档(#231 改锚):终止钮换 Button destructive 软皮,红色
+  // 危险 affordance 保留(手搓 .danger 皮随 issue-workspace 家族退役)。
+  assert.ok(headControls.includes('variant="destructive"'), "终止会话必须走 destructive 档");
   // 状态信息不丢:六态说明由头部状态徽标(ISSUE_STATUS_TEXT 全表)+
   // 阶段行承载,不依赖已拆的侧栏状态卡。
+  // #231 改锚:状态徽标换 IssueStatusBadge(#216 词典)、阶段行换工具类。
   assert.match(sessionView,
-    /<span className=\{`issue-status status-\$\{detail\.status\}`\}>\s*\n\s*\{ISSUE_STATUS_TEXT\[detail\.status\]\}\s*\n\s*<\/span>/);
-  assert.match(sessionView, /<span className="issue-stage">\s*\n\s*\{issueStageText\(detail\)\}/);
+    /<IssueStatusBadge status=\{detail\.status\}>\s*\n\s*\{ISSUE_STATUS_TEXT\[detail\.status\]\}\s*\n\s*<\/IssueStatusBadge>/);
+  assert.match(sessionView, /<span className="text-xs text-muted-foreground">\s*\n\s*\{issueStageText\(detail\)\}/);
   assert.match(stream, /kind: "blocked", title: "会话已结束"/,
     "终局说明由输入区承载(终局无侧栏卡后不断档)");
 });
@@ -772,10 +819,9 @@ test("挂起转正入流(#127):转正卡在协作流区顶部,两段式与查看
   // 挂载点:协作流区顶部——「与 Agent 协作」头之下、可滚流区之上
   // (不进流,不会被贴底跟随滚出视野)。
   assert.match(stream,
-    /<header className="ws-collaboration-head">[\s\S]*?\{suspendedCard && <div className="issue-conv-suspended">\{suspendedCard\}<\/div>\}[\s\S]*?<div className="ws-stream"/);
-  // 样式落点:#127 追加块给槽位留白(ws-anchor 同节奏)。
-  assert.match(css,
-    /\.issue-workspace\.task-workspace-v2 \.ws-stream-shell > \.issue-conv-suspended \{/);
+    /<header className="ws-collaboration-head">[\s\S]*?\{suspendedCard && <div className="mx-3\.5 mb-1\.5 shrink-0">\{suspendedCard\}<\/div>\}[\s\S]*?<div className="ws-stream"/);
+  // 样式落点(#231 改锚):#127 槽位留白随 issue-workspace 家族退役,
+  // 直译成槽位工具类(mx-3.5 mb-1.5,ws-anchor 同节奏)。
   // 两段式搬运不改语义:输单号 → 校验过目(单据详情回显)→ 确认转正;
   // 校验/确认都走同一个 onAssociate(ticket, confirm) 口。
   assert.match(associate, /export function IssueAssociateCard/);
@@ -809,8 +855,9 @@ test("卡座(#125):当前卡钉在流末尾 Agent 气泡内,按 waiting_id 去�
   assert.match(stream, /const pinnedCard = Boolean\(waiting && currentCard\);/);
   assert.match(stream,
     /\{rows\}[\s\S]*\{pinnedCard && message\(\{[\s\S]*key: `card-\$\{waitingId/);
+  // #231 改锚:卡座气泡换本页 CONV 词典(conv-* 皮留给任务侧)。
   assert.match(stream,
-    /children: <div className="conv-card current">\{currentCard\}<\/div>/);
+    /children: <div className=\{cn\(CONV\.card, "border-line-strong"\)\}>\{currentCard\}<\/div>/);
   // 去重键:流内同 waiting_id 的投影副本摘除防双卡;其余 waiting 投影
   // (历史卡)不再整类过滤,照常只读回放——旧的整类过滤形状必须消失。
   assert.match(stream,
@@ -840,7 +887,7 @@ test("卡座(#125):dock portal 接线——提交区挂输入区 dock,表单状�
   // 按钮整块进 dock(挂载器包住 dock-foot);未选环境不得提交、拒绝
   // wire 复用 /environment(decline:true + note)。
   assert.match(decisions,
-    /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?issue-decision-dock-foot[\s\S]*?<\/IssueDecisionFooterMount>/);
+    /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?<DecisionDockFoot docked=\{Boolean\(footerTarget\)\}>[\s\S]*?<\/IssueDecisionFooterMount>/);
   assert.match(decisions, /busy \|\| !picked/, "未选环境不得提交");
   assert.match(decisions, /decline: true,/);
   // 输入区侧:dock 容器(与任务侧同一 ws-reply-dock 形状,aria 同名)
@@ -852,15 +899,12 @@ test("卡座(#125):dock portal 接线——提交区挂输入区 dock,表单状�
   // (dockRef setState → footerTarget → 卡 → portal)。
   assert.match(sessionView, /dockRef=\{setDecisionFooterTarget\}/);
   assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
-  // 样式落点:#125 追加块在 style.css 末尾问题工作台区块内,dock 内
-  // 的提交区铺陈(附言在上、按钮在下)与原位兜底各有形状。
-  assert.match(css, /#125 卡座与 dock/);
-  const block = css.slice(css.indexOf("#125 卡座与 dock"));
-  assert.ok(block.includes(
-    ".issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot {"),
-    "dock 内提交区的铺陈规则必须在 #125 追加块内");
-  assert.ok(block.includes(".issue-decision-dock-foot {"),
-    "原位(未接线)提交区的兜底形状必须在 #125 追加块内");
+  // 样式落点(#231 改锚):#125 追加块随 issue-workspace 家族退役,
+  // dock/原位双上下文的铺陈由 DecisionDockFoot 按 docked 条件收放
+  // (原位=卡内留白,dock=收平让输入区自带留白)。
+  assert.match(decisions, /function DecisionDockFoot/);
+  assert.match(decisions, /!docked && \(className \?\? "px-3\.5 pb-3\.5 pt-3"\)/);
+  assert.doesNotMatch(css, /issue-decision-dock-foot/);
 });
 
 test("卡座(#125):无卡时输入区恢复普通输入,查看模式只读不出 dock", () => {
@@ -897,10 +941,11 @@ test("卡座(#126):三类卡的提交区进 dock——footerTarget 透传链与�
     /<PipelineGateCard waiting=\{waiting\} busy=\{busy\}\s*\n\s*footerTarget=\{footerTarget\} onAnswer=\{onAnswer\} \/>/);
   assert.match(decisions,
     /<GenericDecisionCard waiting=\{waiting\} busy=\{busy\}\s*\n\s*footerTarget=\{footerTarget\} onAnswer=\{onAnswer\} \/>/);
-  // 换壳标记:四类卡(env+三类)接上 dock 才收卡内铺陈,同一写法。
+  // 换壳标记(#231 改锚):四类卡(env+三类)共用 DecisionShell,
+  // docked=Boolean(footerTarget) 同一写法。
   assert.equal(
-    (decisions.match(/className=\{`issue-decision\$\{footerTarget \? " foot-docked" : ""\}`\}/g) ?? []).length,
-    4, "四类卡必须用同一 foot-docked 条件标记");
+    (decisions.match(/<DecisionShell docked=\{Boolean\(footerTarget\)\}/g) ?? []).length,
+    4, "四类卡必须用同一 docked 条件标记");
   const skillForm = decisions.slice(decisions.indexOf("function SkillSelectForm"));
   const pipelineCard = decisions.slice(decisions.indexOf("function PipelineGateCard"));
   const genericCard = decisions.slice(decisions.indexOf("function GenericDecisionCard"));
@@ -908,29 +953,33 @@ test("卡座(#126):三类卡的提交区进 dock——footerTarget 透传链与�
   for (const [name, body] of [["skill", skillForm], ["pipeline", pipelineCard],
     ["generic", genericCard]] as const) {
     assert.match(body,
-      /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?issue-decision-dock-foot[\s\S]*?<\/IssueDecisionFooterMount>/,
+      /<IssueDecisionFooterMount target=\{footerTarget\}>[\s\S]*?<DecisionDockFoot docked=\{Boolean\(footerTarget\)\}>[\s\S]*?<\/IssueDecisionFooterMount>/,
       `${name} 卡的提交区必须包进挂载器`);
   }
   // skill 圈选卡:勾选清单留在卡上,提交语义零变化——至少勾一项才可点
   // 确认;「都不用」提交空选(两条路同口)。
   assert.match(skillForm, /disabled=\{!picked\.size \|\| busy\}/);
   assert.match(skillForm, /确认勾选\(\$\{picked\.size\}\)/);
-  assert.match(skillForm, /skill-skip" disabled=\{busy\}/);
+  // #231 改锚:「都不用」换 outline 次档钮(手搓 skill-skip 皮退役)。
+  assert.match(skillForm, /variant="outline" size="sm"[\s\S]{0,120}都不用,AI 按取用次序自主/);
   assert.match(skillForm, /onClick=\{\(\) => void submit\(\[\]\)\}/);
   // 流水线卡:证据卡的主字段(报错原文)留在卡上、空文本不可提交;
   // 码与文案仍按服务端 options 镜像(缺省字面量兜底);不可修卡的补充
   // 说明是附言,随提交钮进 dock。
-  assert.match(pipelineCard, /\{evidence && <div className="issue-decision-env">/);
+  // #231 改锚:证据卡主字段的 env 段换工具类(原 issue-decision-env 皮退役)。
+  assert.match(pipelineCard, /\{evidence && <div className=\{cn\("grid gap-2\.5 px-3\.5 pt-3",/);
   assert.match(pipelineCard, /const ready = evidence \? !!text\.trim\(\) : true;/);
   assert.match(pipelineCard, /evidence \? "supply" : "resume"/);
   assert.match(pipelineCard, /报错原文粘贴到这里/);
-  assert.match(pipelineCard, /\{!evidence && <div className="issue-decision-env">/);
+  assert.match(pipelineCard, /\{!evidence && <div className="grid gap-2\.5">/);
   // 通用决策卡:推荐徽标与逐题作答留在卡上,ready 口径零变化(逐题全
   // 答完才可提交);附言(补充说明)与提交答复钮进 dock。
   assert.match(genericCard,
     /const ready = areIssueQuestionsComplete\(questions, picked, custom\)/);
-  assert.match(genericCard, /issue-recommended-badge/);
-  assert.match(genericCard, /issue-decision-notes-toggle/);
+  assert.match(genericCard,
+    /suggested && <Badge variant="warning" className="ml-1\.5 align-middle">AI 推荐<\/Badge>/);
+  // #231 改锚:附言开关换 ghost 文字钮(手搓 toggle 皮退役)。
+  assert.match(genericCard, /variant="ghost" size="sm"[\s\S]{0,160}\+ 补充说明\(可选\)/);
   assert.match(genericCard, /提交答复/);
 });
 
@@ -944,8 +993,9 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
   assert.match(stream, /const pinnedCard = Boolean\(waiting && currentCard\);/);
   assert.match(stream,
     /view\.items\.filter\(\(item\) =>\s*\n\s*!\(item\.kind === "card" && item\.waiting_id === waitingId\)\)/);
+  // #231 改锚:卡座气泡换本页 CONV 词典(conv-* 皮留给任务侧)。
   assert.match(stream,
-    /children: <div className="conv-card current">\{currentCard\}<\/div>/);
+    /children: <div className=\{cn\(CONV\.card, "border-line-strong"\)\}>\{currentCard\}<\/div>/);
   // 流内卡的回放按 status 给词签(waiting=等待决定/superseded=已作废/
   // 其余=已决定),答案逐题对齐:decision 按题序换行拼接,本题行等于
   // 选项原文即出勾,不等于任何选项=自定义答复回填题面(2026-09-08:
@@ -964,17 +1014,11 @@ test("卡座(#126):三类卡换壳不碰会话流——历史卡只读回放与 
   assert.match(sessionView, /footerTarget=\{decisionFooterTarget\}/);
   assert.match(sessionView, /dockRef=\{setDecisionFooterTarget\}/);
   assert.match(stream, /dock=\{waiting && canOperate\}/);
-  // 样式落点:#126 追加块顺延在 #125 之后,dock 内附言/表单段的铺陈
-  // 与 foot-docked 收尾留白各有规则。
-  assert.ok(css.indexOf("#126 三类卡 dock 铺陈") > css.indexOf("#125 卡座与 dock"),
-    "#126 块必须在 #125 之后追加");
-  const block = css.slice(css.indexOf("#126 三类卡 dock 铺陈"));
-  assert.ok(block.includes(
-    ".issue-workspace.task-workspace-v2 .ws-reply-dock .issue-decision-dock-foot .issue-decision-env {"),
-  "dock 内 env 段(不可修卡附言)的铺陈规则必须在 #126 块内");
-  assert.ok(block.includes(
-    ".issue-decision.foot-docked > .issue-decision-context:last-child,"),
-  "foot-docked 卡的收尾留白规则必须在 #126 块内");
+  // 样式落点(#231 改锚):#126 追加块随 issue-workspace 家族退役,
+  // dock 内附言段收平由 DecisionDockFoot 统一铺陈;foot-docked 卡的
+  // 收尾留白直译成 context/note 上的条件 mb-3.5 工具类。
+  assert.match(decisions, /footerTarget && "mb-3\.5"/);
+  assert.doesNotMatch(css, /foot-docked/);
 });
 
 // ---- 人工接管(2026-09-07 走查拍板):接管=打断 AI;期间人工记录;
@@ -988,10 +1032,10 @@ test("人工接管:徽标/下传 takeover/三回调接线/composer 记录+交还
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
   const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
   // 头部徽标:detail.takeover 在场即挂「人工接管中」,排在状态徽标之后
-  // (横幅态独立于六态,复用 issue-status 徽标语言换紫金色)。
+  // (横幅态独立于六态;#231 改锚:紫金横幅收进 Badge merge 软皮)。
   assert.match(sessionView,
-    /\{detail\.takeover\s*\n\s*&& <span className="issue-status status-takingover">人工接管中<\/span>\}/);
-  assert.match(css, /\.issue-status\.status-takingover \{/);
+    /\{detail\.takeover\s*\n\s*&& <Badge variant="merge">人工接管中<\/Badge>\}/);
+  assert.doesNotMatch(css, /status-takingover/);
   // 下传与三回调接线:takeover 布尔 + 接管/记录/交还各走各的通道——
   // 接管/交还经 perform(成功带新详情回来,徽标与输入区模式随之翻转),
   // 记录不走 perform(免吞错,失败原样抛回输入区报错)。
@@ -1018,18 +1062,12 @@ test("人工接管:徽标/下传 takeover/三回调接线/composer 记录+交还
   assert.match(stream, /placeholder="记录你的人工操作,交还时 AI 会看到这些记录"/);
   assert.match(stream, /记录到现场/);
   assert.match(stream, /交还给 AI 继续/);
-  // CSS 落点:追加块在既有 #126 块之后(只追加,不改既有行),徽标与
-  // 双钮样式都收在块内。
-  assert.ok(css.indexOf("---- 人工接管(2026-09-07 走查拍板)")
-    > css.indexOf("#126 三类卡 dock 铺陈"),
-  "人工接管块必须追加在 #126 块之后");
-  const takeoverBlock =
-    css.slice(css.indexOf("---- 人工接管(2026-09-07 走查拍板)"));
-  assert.ok(takeoverBlock.includes(".issue-status.status-takingover {"),
-    "接管徽标规则必须在人工接管追加块内");
-  assert.ok(
-    takeoverBlock.includes(".issue-takeover-actions > .issue-takeover-resume {"),
-    "交还主档按钮规则必须在人工接管追加块内");
+  // 样式落点(#231 改锚):手搓 takeover 皮(徽标/双钮)随 issue-workspace
+  // 家族退役——「记录到现场」次档描边钮、「交还给 AI 继续」主档实心钮,
+  // 语义与排序原样。
+  assert.match(stream, /variant="outline" size="sm"[\s\S]{0,200}记录到现场/);
+  assert.match(stream, /title="把当前输入作交还说明[\s\S]{0,200}交还给 AI 继续/);
+  assert.doesNotMatch(css, /issue-takeover/);
 });
 
 // ---- 协作流对齐任务侧会话流(2026-09-08 走查拍板四点):长文量高折叠
@@ -1055,7 +1093,8 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
   // 工具步骤:conv-act 按钮(任务侧同款)点开切「对话现场」;只读计数
   // 行(issue-conv-steps)连同样式已删。
   assert.match(stream,
-    /<button type="button" className="conv-act" onClick=\{onOpenEvents\}/);
+    // #231 改锚:工具步骤按钮换本页 CONV 词典(conv-* 皮留给任务侧)。
+    /<button type="button" className=\{CONV\.act\} onClick=\{onOpenEvents\}/);
   assert.match(sessionView, /onOpenEvents=\{\(\) => setTab\("events"\)\}/);
   assert.doesNotMatch(stream, /issue-conv-steps/);
   assert.doesNotMatch(readFileSync(resolve("web/src/style.css"), "utf-8"),
@@ -1072,7 +1111,8 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
   // 检视提交:conv-lead 批次卡导语(任务侧 annotations_sent 同款视觉),
   // 不再是无导语的裸正文。
   assert.match(stream,
-    /<p className="conv-lead">提交了 \{item\.count\} 条检视意见给 Agent<\/p>/);
+    // #231 改锚:批次导语换 CONV.lead 词典条目。
+    /<p className=\{CONV\.lead\}>提交了 \{item\.count\} 条检视意见给 Agent<\/p>/);
 });
 
 test("现场页签对齐(2026-09-08):长内容/结构化内容右侧查看,不再就地展开", () => {
@@ -1120,11 +1160,11 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   assert.match(decisionCard, /确认拒绝,继续分析/);
   assert.match(decisionCard, /decline: true,/);
   // #146 触碰即迁:表单区块根挂 .tw-root 走工具类;提交区容器
-  // (issue-decision-dock-foot)是四类卡共用的卡座/dock 双上下文皮肤,
+  // (DecisionDockFoot,#231 起工具类化)是四类卡共用的卡座/dock 双上下文铺陈,
   // 按 #146 例外保留 legacy(迁移块内有注释说明)。
   assert.match(decisionCard,
     /tw-root grid gap-\[10px\] px-\[15px\] pt-\[13px\]/);
-  assert.match(decisionCard, /issue-decision-dock-foot/);
+  assert.match(decisionCard, /<DecisionDockFoot docked=\{Boolean\(footerTarget\)\}/);
   // 共用选择器:可搜索下拉(listbox/option + 搜索框,方向键+回车),
   // 「找不到就新建」弹共用表单,保存回传新条目自动选中(onPick)。
   assert.match(picker, /listEnvironments/);
@@ -1146,7 +1186,7 @@ test("环境闸卡台账快选(#150;只选不手填):可搜索下拉+新建弹�
   assert.match(apiTypes, /environment_id\?: string/);
 });
 
-test("登记页从环境管理选(#150;只选不手填):常驻快选/只提交 environment_id", () => {
+test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 environment_id/页面凭据已废弃(#230 改锚)", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   // 常驻快选(可搜索下拉,自带「找不到就新建」弹框):不再有展开/收起
@@ -1155,13 +1195,13 @@ test("登记页从环境管理选(#150;只选不手填):常驻快选/只提交 e
     /<EnvironmentPicker\s*\n\s*selectedId=\{pickedEnv\?\.id \?\? null\} onPick=\{pickEnv\} \/>/);
   assert.doesNotMatch(registration, /收起环境列表/);
   assert.doesNotMatch(registration, /清除,改用手动填写/);
-  // 选中给台账快照说明(已存后台密码),提交只带 environment_id。
-  // 流程不登录网管页面，所以页面账号/密码不再采集。
+  // 选中给台账快照说明(已存后台密码),提交只带 environment_id;
+  // 页面账号/页面密码整体废弃(2026-09-10),登记页不得回流采集面。
   assert.match(registration, /将使用「环境管理」里/);
   assert.match(registration, /environment_id: pickedEnv\.id/);
+  assert.doesNotMatch(registration, /page_password:|页面账号 <i|页面密码 <i/);
   // 未选环境提交被拦,文案指路下拉里的「新增环境」。
   assert.match(registration, /请从环境管理选择网管环境/);
-  assert.doesNotMatch(registration, /page_password|envPagePassword|envPageAccount/);
 });
 
 test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役(2026-09-11)", () => {
@@ -1224,4 +1264,100 @@ test("DTS 单号在两个列表里都是门户超链接", () => {
   assert.match(issueBoard,
     /href=\{dtsTicketUrl\(issue\.ticket\)\}[\s\S]{0,120}onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
   assert.match(issueBoard, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
+});
+
+// ---- 元信息首签(#239 只读版):登记信息 + 关联仓清单,编辑器在 #241 ----
+
+test("元信息页签居首(#239):登记四项只读、绑定标、终态只读、回收标注", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  // 页签首位:meta 占 ISSUE_MAIN_TABS 第 0 位(label「元信息」,一签一色
+  // 照旧自带 --workspace-tab-color 变量工具类);默认选中仍是对话现场。
+  const table = sessionView.match(
+    /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
+  const tabs = [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
+    .map(([, key, label]) => `${key}:${label}`);
+  assert.equal(tabs[0], "meta:元信息", "元信息必须在页签条首位");
+  assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
+  // 面板映射:meta 有自己的 TabsContent 分支,材料兜底分支不再吃 meta 值。
+  assert.match(sessionView,
+    /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} \/>/);
+  assert.match(sessionView,
+    /tab !== "events" && tab !== "repos" && tab !== "meta"/);
+  // 登记信息区(只读)四项:标题/问题描述全文/业务模块/网管环境。
+  assert.match(metaPane, /aria-label="登记信息"/);
+  for (const label of ["标题", "问题描述", "业务模块", "网管环境"]) {
+    assert.ok(metaPane.includes(`>{label}</span>`), `登记信息缺「${label}」行`);
+  }
+  // 网管环境给名称+IP+端口+形态,形态中文与编辑弹框同源(import
+  // ENVIRONMENT_FORM_TEXT,不重抄);空值如实降级(「(未填)」),凭据类
+  // 字段零出现(含注释也不带字面量,防止将来顺手渲染)。
+  assert.match(metaPane, /import \{ ENVIRONMENT_FORM_TEXT \} from "\.\.\/EnvironmentEditorDialog"/);
+  assert.match(metaPane, /ENVIRONMENT_FORM_TEXT\[envType\]/);
+  assert.match(metaPane, /\(未填\)/);
+  assert.doesNotMatch(metaPane, /credential_ref|password/i,
+    "元信息面板不得出现凭据类字段");
+  // 关联仓清单区:仓名(repoName)+完整 URL;模块绑定仓带「模块绑定」
+  // 标识,绑定集合组件内经 getBusinessModules 按 module_id 解析;绑定
+  // 比对与后端门禁同一把归一尺(repoIdentity),不原样字符串比对。
+  assert.match(metaPane, /aria-label="关联仓清单"/);
+  assert.match(metaPane, /repoName\(url\)/);
+  assert.match(metaPane, />模块绑定<\/Badge>/);
+  assert.match(metaPane, /getBusinessModules\(\)/);
+  assert.match(metaPane,
+    /repoIdentity\(item\) === repoIdentity\(url\)/);
+  // 回收标注:repo_reclaimed_at 在场即如实标注「现场已回收」,不冒充在场。
+  assert.match(metaPane,
+    /detail\.repo_reclaimed_at && <div className="utility-note"/);
+  assert.match(metaPane, /现场已回收/);
+  // 终态只读:#241 编辑区挂载点受终态闸门控制,终态会话(与协作流
+  // ended 同口径的 archived/canceled/failed)永远不渲染编辑入口;
+  // 非终态时挂载点内是关联仓编辑器(#241,形状见下一 test)。
+  assert.match(metaPane,
+    /const isTerminal =\s*\n\s*\(TERMINAL_STATUSES as readonly string\[\]\)\.includes\(detail\.status\);/);
+  assert.match(metaPane,
+    /\{!isTerminal && <section aria-label="调整关联仓"/);
+});
+
+// ---- 关联仓清单编辑器(#241):缓冲 diff 门禁 + 端点契约,不乐观更新 ----
+
+test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https 即时校验、不乐观更新", () => {
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // 端点契约(与后端钉死):POST /issues/:id/repos,body { add, remove }
+  // (至少一边非空由服务端校验);成功 = HTTP 2xx 会话概要(与 reply 类
+  // 端点同款),失败经 issueFetch 抛服务端人话中文 message。
+  assert.match(apiSource, /export function requestIssueRepoChanges\(/);
+  assert.match(apiSource,
+    /issueFetch\(`\/issues\/\$\{encodeURIComponent\(id\)\}\/repos`/);
+  assert.match(apiSource, /input: \{ add: string\[\]; remove: string\[\] \}/);
+  // 删除按钮规则:移除/撤销移除按钮挂在 `!isTerminal && !bound` 一道门
+  // 后——模块绑定仓是团队资产,行内连按钮都不渲染(不是置灰)。
+  assert.match(metaPane,
+    /\{!isTerminal && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
+  assert.equal(
+    (metaPane.match(/variant="destructive" size="xs"/g) ?? []).length, 1,
+    "移除按钮唯一(非绑定仓清单行),不给绑定仓另配删除口");
+  // 移除入缓冲,不就地改清单:按钮只把 url 挪进 pendingRepoRemove。
+  assert.match(metaPane,
+    /setPendingRepoRemove\(\s*\n\s*\[\.\.\.pendingRepoRemove, url\]\)/);
+  // 确定门禁:缓冲 diff 为空禁用(缓冲非空才可点),提交中同样禁用。
+  assert.match(metaPane,
+    /const repoDiffEmpty =\s*\n\s*pendingRepoAdd\.length === 0 && pendingRepoRemove\.length === 0;/);
+  assert.match(metaPane, /disabled=\{repoDiffEmpty \|\| repoSubmitting\}/);
+  // https 即时校验(与后端同款口径前置,别等服务端打回):https:// 前缀
+  // /不与现清单重复/合并计数 ≤ 8;错误就地小字(role=alert)。
+  assert.match(metaPane, /startsWith\("https:\/\/"\)/);
+  assert.match(metaPane, /该仓已在关联仓清单里,不重复添加/);
+  assert.match(metaPane, /const MAX_ISSUE_REPOS = 8;/);
+  // 不乐观更新(项目原则:UI 只做状态显示):清单数据源仍是 detail,
+  // MetaPane 无任何改写 detail 的回调/状态;提交成功只清缓冲 + 如实状态
+  // 提示(「已通知 Agent 处理」),绝不写「删除成功」。
+  assert.match(metaPane, /const repos = detail\.repo_urls\?\.length/);
+  assert.doesNotMatch(metaPane, /onChanged|setDetail\(/);
+  assert.match(metaPane, /已通知 Agent 处理,清单将在 Agent 执行后更新/);
+  assert.doesNotMatch(metaPane, /删除成功|移除成功/);
 });

@@ -25,8 +25,18 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "cn";
 
 type BusinessAssetFocus = Extract<KnowledgeAssetFocus, { kind: "business" }>;
+
+/* 库内裸按钮的统一工具类配方(原 .business-module-library button 家族)。 */
+const BTN = "inline-flex min-h-[31px] cursor-pointer items-center rounded-[7px] border border-line bg-surface px-2.5 text-[13px] font-bold text-muted-foreground hover:border-line-strong hover:text-text disabled:cursor-default disabled:opacity-55";
+const BTN_PRIMARY = "inline-flex min-h-[31px] cursor-pointer items-center rounded-[7px] border border-primary bg-primary px-2.5 text-[13px] font-bold text-primary-foreground hover:bg-primary/90 disabled:cursor-default disabled:opacity-55";
+const BTN_DANGER = "inline-flex min-h-[31px] cursor-pointer items-center rounded-[7px] border border-danger/35 bg-surface px-2.5 text-[13px] font-bold text-danger hover:bg-danger/10 disabled:cursor-default disabled:opacity-55";
+const LABEL = "grid min-w-0 gap-[5px]";
+const LABEL_SPAN = "text-[13px] font-bold text-muted-foreground";
+const FORM_GRID = "grid gap-2.5 max-[700px]:grid-cols-1 sm:grid-cols-2";
+const FORM_ACTIONS = "flex items-center justify-end gap-2";
 
 async function sha256(content: string): Promise<string> {
   const value = await globalThis.crypto.subtle.digest(
@@ -54,7 +64,7 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
   const [status, setStatus] = useState(module.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  return <form className="business-module-editor" onSubmit={async (event) => {
+  return <form className="mx-4 my-3 grid content-start gap-[11px] rounded-[10px] border border-line bg-surface-2 p-3.5" onSubmit={async (event) => {
     event.preventDefault();
     setBusy(true); setError("");
     try {
@@ -68,10 +78,10 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
       setError(reason instanceof Error ? reason.message : "模块保存失败");
     } finally { setBusy(false); }
   }}>
-    <div className="business-module-form-grid">
-      <label><span>模块名称</span><Input value={name}
+    <div className={FORM_GRID}>
+      <label className={LABEL}><span className={LABEL_SPAN}>模块名称</span><Input value={name}
         onChange={(event) => setName(event.target.value)} required /></label>
-      <label><span>责任人</span>
+      <label className={LABEL}><span className={LABEL_SPAN}>责任人</span>
         {admin ? <Select value={owner} name="module-owner" required
           items={users.map((user) => ({ value: user.username, label: user.username }))}
           onValueChange={(value) => setOwner(value ?? "")}>
@@ -85,15 +95,15 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
         </Select> : <Input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
-    <label><span>业务语义说明</span><Textarea rows={2} value={description}
+    <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea rows={2} value={description}
       onChange={(event) => setDescription(event.target.value)} required /></label>
-    <label><span>维护者账号</span><Input value={maintainers}
+    <label className={LABEL}><span className={LABEL_SPAN}>维护者账号</span><Input value={maintainers}
       onChange={(event) => setMaintainers(event.target.value)}
       placeholder="多个账号用逗号分隔" /></label>
-    <label><span>关联仓库</span><Textarea rows={3} value={repositories}
+    <label className={LABEL}><span className={LABEL_SPAN}>关联仓库</span><Textarea rows={3} value={repositories}
       onChange={(event) => setRepositories(event.target.value)}
       placeholder="每行一个仓库地址，用于下单时推荐，不会自动勾选" /></label>
-    {admin && <label><span>模块状态</span><Select value={status}
+    {admin && <label className={LABEL}><span className={LABEL_SPAN}>模块状态</span><Select value={status}
       items={[{ value: "active", label: "启用（可供新任务选择）" }, { value: "archived", label: "归档（历史任务保留）" }]}
       onValueChange={(value) => setStatus((value ?? "active") as "active" | "archived")}>
       <SelectTrigger className="w-full" aria-label="模块状态"><SelectValue /></SelectTrigger>
@@ -105,9 +115,9 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
       </SelectContent>
     </Select></label>}
     {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
-    <div className="business-module-form-actions">
-      <button type="button" onClick={onCancel}>取消</button>
-      <button type="submit" className="primary" disabled={busy}>
+    <div className={FORM_ACTIONS}>
+      <button type="button" className={BTN} onClick={onCancel}>取消</button>
+      <button type="submit" className={BTN_PRIMARY} disabled={busy}>
         {busy ? "保存中…" : "保存模块"}</button>
     </div>
   </form>;
@@ -129,7 +139,7 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   const [content, setContent] = useState(initialContent ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  return <form className="business-asset-editor" onSubmit={async (event) => {
+  return <form className="mx-4 my-3 grid content-start gap-[11px] rounded-[10px] border border-line bg-surface-2 p-3.5" onSubmit={async (event) => {
     event.preventDefault();
     setBusy(true); setError("");
     try {
@@ -140,19 +150,19 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
       setError(reason instanceof Error ? reason.message : "知识发布失败");
     } finally { setBusy(false); }
   }}>
-    <div className="business-module-form-grid">
-      <label><span>资产 ID</span><Input value={id} disabled={!!asset}
+    <div className={FORM_GRID}>
+      <label className={LABEL}><span className={LABEL_SPAN}>资产 ID</span><Input value={id} disabled={!!asset}
         onChange={(event) => setId(event.target.value)}
         placeholder="例如 release-checklist" required /></label>
-      <label><span>标题</span><Input value={title}
+      <label className={LABEL}><span className={LABEL_SPAN}>标题</span><Input value={title}
         onChange={(event) => setTitle(event.target.value)} required /></label>
     </div>
-    <label><span>一句话摘要</span><Textarea rows={2} value={summary}
+    <label className={LABEL}><span className={LABEL_SPAN}>一句话摘要</span><Textarea rows={2} value={summary}
       onChange={(event) => setSummary(event.target.value)} required /></label>
-    <label><span>什么时候应该读</span><Textarea rows={2} value={whenToUse}
+    <label className={LABEL}><span className={LABEL_SPAN}>什么时候应该读</span><Textarea rows={2} value={whenToUse}
       onChange={(event) => setWhenToUse(event.target.value)} required /></label>
-    <div className="business-module-form-grid">
-      <label><span>知识形态</span><Select value={form}
+    <div className={FORM_GRID}>
+      <label className={LABEL}><span className={LABEL_SPAN}>知识形态</span><Select value={form}
         items={[{ value: "document", label: "文档" }, { value: "skill", label: "Skill" }, { value: "rule", label: "规则" }, { value: "example", label: "示例" }]}
         onValueChange={(value) => setForm((value ?? form) as typeof form)}>
         <SelectTrigger className="w-full" aria-label="知识形态"><SelectValue /></SelectTrigger>
@@ -165,13 +175,17 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
           </SelectGroup>
         </SelectContent>
       </Select></label>
-      <div className="business-asset-language-field">
-        <span>适用代码仓（可选）</span>
-        <small>不选表示适用于该模块关联的全部仓库。</small>
-        {module.repositories.length ? <div className="skill-module-picker">
+      <div className="grid gap-1.5">
+        <span className="text-[13px] font-bold text-muted-foreground">适用代码仓（可选）</span>
+        <small className="text-[13px] text-faint">不选表示适用于该模块关联的全部仓库。</small>
+        {module.repositories.length ? <div className="flex flex-wrap gap-1.5">
           {module.repositories.map((repository) => <button type="button"
             key={repository} title={repository}
             aria-pressed={repositories.includes(repository)}
+            className={cn("inline-flex cursor-pointer items-baseline gap-[5px] rounded-[7px] border px-[9px] py-[5px] text-[13px]",
+              repositories.includes(repository)
+                ? "border-primary bg-primary/10 font-bold text-primary"
+                : "border-line bg-surface text-muted-foreground hover:border-line-strong")}
             onClick={() => setRepositories((current) =>
               current.includes(repository)
                 ? current.filter((item) => item !== repository)
@@ -181,14 +195,14 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
         </div> : <small>模块尚未关联仓库，当前知识默认对模块内全部任务适用。</small>}
       </div>
     </div>
-    <label><span>知识正文（Markdown）</span><Textarea className="business-asset-content"
+    <label className={LABEL}><span className={LABEL_SPAN}>知识正文（Markdown）</span><Textarea className="font-mono"
       rows={12} value={content}
       onChange={(event) => setContent(event.target.value)} required /></label>
-    <p className="business-module-form-note">发布会产生新版本；已经发起的任务继续使用自己的固定快照。</p>
+    <p className="-mt-0.5 text-[13px] text-faint">发布会产生新版本；已经发起的任务继续使用自己的固定快照。</p>
     {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
-    <div className="business-module-form-actions">
-      <button type="button" onClick={onCancel}>取消</button>
-      <button type="submit" className="primary" disabled={busy}>
+    <div className={FORM_ACTIONS}>
+      <button type="button" className={BTN} onClick={onCancel}>取消</button>
+      <button type="submit" className={BTN_PRIMARY} disabled={busy}>
         {busy ? "发布中…" : asset ? `发布 v${asset.version + 1}` : "发布知识"}
       </button>
     </div>
@@ -302,22 +316,22 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
     )?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [document, initialAsset]);
 
-  return <section className="business-module-library" aria-labelledby="business-module-library-title">
-    <header className="business-module-library-head">
-      <div><span className="section-kicker">TEAM ASSETS / MODULES</span>
-        <h3 id="business-module-library-title">业务模块</h3>
-        <p>每个模块是一个业务抽屉：说明业务边界、关联代码仓，并管理团队沉淀的模块知识。</p>
+  return <section className="m-0 overflow-hidden rounded-[18px] border border-line bg-surface shadow-sm" aria-labelledby="business-module-library-title">
+    <header className="flex items-center justify-between gap-[18px] border-b border-line bg-gradient-to-br from-surface-2 to-surface px-6 py-[21px]">
+      <div className="min-w-0">
+        <h3 id="business-module-library-title" className="mt-[5px] mb-1 text-[21px] tracking-[-0.025em] text-text-strong">业务模块</h3>
+        <p className="m-0 text-sm leading-[1.55] text-muted-foreground">每个模块是一个业务抽屉：说明业务边界、关联代码仓，并管理团队沉淀的模块知识。</p>
       </div>
-      <div><span>{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
-        {admin && <button type="button" className="primary"
+      <div className="flex flex-none items-center gap-2"><span className="text-[13px] text-faint">{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
+        {admin && <button type="button" className={BTN_PRIMARY}
           onClick={() => setCreateOpen((open) => !open)}>
           {createOpen ? "取消新建" : "新建业务模块"}</button>}
-        <button type="button" onClick={() => void refresh()} disabled={loading}>
+        <button type="button" className={BTN} onClick={() => void refresh()} disabled={loading}>
           {loading ? "读取中…" : "刷新"}</button>
       </div>
     </header>
 
-    {createOpen && <form className="business-module-create" onSubmit={async (event) => {
+    {createOpen && <form className="mx-4 my-3 grid content-start gap-[11px] rounded-[10px] border border-line bg-surface-2 p-3.5" onSubmit={async (event) => {
       event.preventDefault(); setCreateBusy(true); setError("");
       try {
         const module = await createBusinessModule({
@@ -336,11 +350,11 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
         setError(reason instanceof Error ? reason.message : "模块创建失败");
       } finally { setCreateBusy(false); }
     }}>
-      <div className="business-module-form-grid">
-        <label><span>模块 ID</span><Input value={create.id}
+      <div className={FORM_GRID}>
+        <label className={LABEL}><span className={LABEL_SPAN}>模块 ID</span><Input value={create.id}
           onChange={(event) => setCreate({ ...create, id: event.target.value })}
           placeholder="例如 payment-core" required /></label>
-        <label><span>责任人</span><Select value={create.owner} name="module-create-owner" required
+        <label className={LABEL}><span className={LABEL_SPAN}>责任人</span><Select value={create.owner} name="module-create-owner" required
           items={[{ value: "", label: "选择现有账号" },
             ...users.map((user) => ({ value: user.username, label: user.username }))]}
           onValueChange={(value) => setCreate({ ...create, owner: value ?? "" })}>
@@ -354,21 +368,21 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
           </SelectContent>
         </Select></label>
       </div>
-      <label><span>模块名称</span><Input value={create.name}
+      <label className={LABEL}><span className={LABEL_SPAN}>模块名称</span><Input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}
         placeholder="例如 支付核心" required /></label>
-      <label><span>业务语义说明</span><Textarea rows={2} value={create.description}
+      <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea rows={2} value={create.description}
         onChange={(event) => setCreate({ ...create, description: event.target.value })}
         placeholder="说清领域概念、核心规则、流程和边界" required /></label>
-      <div className="business-module-form-grid">
-        <label><span>维护者账号（可选）</span><Input value={create.maintainers}
+      <div className={FORM_GRID}>
+        <label className={LABEL}><span className={LABEL_SPAN}>维护者账号（可选）</span><Input value={create.maintainers}
           onChange={(event) => setCreate({ ...create, maintainers: event.target.value })}
           placeholder="多个账号用逗号分隔" /></label>
-        <label><span>关联仓库（可选）</span><Textarea rows={2} value={create.repositories}
+        <label className={LABEL}><span className={LABEL_SPAN}>关联仓库（可选）</span><Textarea rows={2} value={create.repositories}
           onChange={(event) => setCreate({ ...create, repositories: event.target.value })}
           placeholder="每行一个仓库地址" /></label>
       </div>
-      <div className="business-module-form-actions">
+      <div className={FORM_ACTIONS}>
         <span>创建后由责任人持续管理，只有管理员能转移责任人。</span>
         <button type="submit" className="primary" disabled={createBusy || !create.owner}>
           {createBusy ? "创建中…" : "创建并指定责任人"}</button>
@@ -383,36 +397,36 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
       <EmptyDescription>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</EmptyDescription>
     </Empty>}
 
-    <div className="business-module-list">
+    <div className="grid">
       {(catalog?.modules ?? []).map((module) => {
         const open = expanded === module.id;
         const allLiveAssets = module.assets.filter((asset) =>
           asset.status === "published");
         const liveAssets = allLiveAssets;
-        return <article key={module.id} className={`business-module-card status-${module.status}`}>
-          <button type="button" className="business-module-card-head"
+        return <article key={module.id} className={cn("border-t border-line first:border-t-0", module.status === "archived" && "opacity-70")}>
+          <button type="button" className="grid w-full cursor-pointer grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-[11px] border-0 bg-transparent px-4 py-3 text-left hover:bg-surface-2"
             aria-expanded={open} onClick={() => setExpanded(open ? "" : module.id)}>
-            <span className="business-module-monogram">{module.name.slice(0, 1)}</span>
-            <span><span><strong>{module.name}</strong><code>{module.id}</code>
-              {module.status === "archived" && <em>已归档</em>}</span>
-              <small>{module.description}</small>
-              <span className="business-module-card-meta">Owner <PersonName account={module.owner} /> · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
+            <span className="grid size-9 place-items-center rounded-[10px] bg-primary/10 text-[15px] font-extrabold text-primary">{module.name.slice(0, 1)}</span>
+            <span className="grid min-w-0 gap-1"><span className="flex flex-wrap items-baseline gap-[7px]"><strong className="text-sm text-text-strong">{module.name}</strong><code className="text-xs text-faint">{module.id}</code>
+              {module.status === "archived" && <em className="rounded bg-attention/10 px-[5px] py-px text-[13px] not-italic text-attention">已归档</em>}</span>
+              <small className="truncate text-[13px] text-muted-foreground">{module.description}</small>
+              <span className="text-[13px] text-faint">Owner <PersonName account={module.owner} /> · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
             </span>
-            <i aria-hidden>{open ? "收起" : "展开"}</i>
+            <i aria-hidden className="text-[13px] not-italic text-primary">{open ? "收起" : "展开"}</i>
           </button>
-          {open && <div className="business-module-card-body">
-            <div className="business-module-scope">
-              <strong>关联范围</strong>
-              <div>{module.repositories.length ? module.repositories.map((repo) =>
-                <code key={repo}>{repo}</code>) : <span>未关联仓库，不参与下单推荐</span>}</div>
-              {!!module.maintainers.length && <small>维护者：{module.maintainers.join("、")}</small>}
+          {open && <div className="grid gap-2.5 px-4 pb-4 pl-[63px]">
+            <div className="grid gap-[7px] rounded-lg bg-surface-2 p-[11px]">
+              <strong className="text-[13px] text-text-strong">关联范围</strong>
+              <div className="flex flex-wrap gap-[5px]">{module.repositories.length ? module.repositories.map((repo) =>
+                <code key={repo} className="max-w-full truncate rounded bg-surface px-1.5 py-[3px] text-xs text-muted-foreground">{repo}</code>) : <span className="text-[13px] text-faint">未关联仓库，不参与下单推荐</span>}</div>
+              {!!module.maintainers.length && <small className="text-[13px] text-faint">维护者：{module.maintainers.join("、")}</small>}
             </div>
-            {module.can_manage && <div className="business-module-managebar">
-              <button type="button" onClick={() => {
+            {module.can_manage && <div className="flex justify-end gap-[7px]">
+              <button type="button" className={BTN} onClick={() => {
                 setEditingModule(editingModule === module.id ? "" : module.id);
                 setEditingAsset(undefined);
               }}>{editingModule === module.id ? "取消编辑" : "编辑模块"}</button>
-              <button type="button" className="primary" disabled={module.status !== "active"}
+              <button type="button" className={BTN_PRIMARY} disabled={module.status !== "active"}
                 onClick={() => {
                   setEditingAsset({ moduleId: module.id });
                   setEditingModule(""); setDocument(undefined);
@@ -425,33 +439,34 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
               asset={editingAsset.asset} initialContent={editingAsset.content}
               onCancel={() => setEditingAsset(undefined)}
               onSaved={(updated) => { replace(updated); setEditingAsset(undefined); }} />}
-            <div className="business-asset-list">
-              <div className="business-asset-list-head"><strong>已发布知识</strong>
-                <small>点击名称查看正文；任务只会获得选中模块当时的固定版本。</small></div>
+            <div className="overflow-hidden rounded-[9px] border border-line">
+              <div className="flex items-baseline justify-between gap-3 bg-surface-2 px-[11px] py-2"><strong className="text-[13px] text-text-strong">已发布知识</strong>
+                <small className="text-[13px] text-faint">点击名称查看正文；任务只会获得选中模块当时的固定版本。</small></div>
               {liveAssets.map((asset) => <div
                 id={knowledgeAssetElementId("business", module.id, asset.id)}
-                className={`business-asset-row${initialAsset?.moduleId === module.id
-                  && initialAsset.assetId === asset.id ? " focused" : ""}`}
+                className={cn("flex items-center gap-3 border-t border-line px-[11px] py-2.5",
+                  initialAsset?.moduleId === module.id && initialAsset.assetId === asset.id
+                    && "scroll-mt-6 border-primary/60 ring-2 ring-primary/10")}
                 key={asset.id}>
-                <button type="button" className="business-asset-title"
+                <button type="button" className="group grid min-w-0 flex-1 cursor-pointer gap-[3px] border-0 bg-transparent p-0 text-left"
                   disabled={documentLoading === `${module.id}/${asset.id}`}
                   onClick={() => void openAsset(module, asset)}>
-                  <span><strong>{asset.title}</strong><code>v{asset.version}</code></span>
-                  <small>{asset.summary}</small>
-                  <em>何时读：{asset.when_to_use}</em>
-                  <span className="skill-classification-tags">
-                    <em className="kind-business">业务知识</em>
-                    <em className="kind-form">{{ document: "文档", skill: "Skill",
+                  <span className="flex items-baseline gap-[7px]"><strong className="text-[13.5px] text-text-strong group-hover:underline group-hover:underline-offset-[3px]">{asset.title}</strong><code className="text-xs text-primary">v{asset.version}</code></span>
+                  <small className="truncate text-[13px] text-muted-foreground">{asset.summary}</small>
+                  <em className="text-[13px] not-italic text-faint">何时读：{asset.when_to_use}</em>
+                  <span className="mt-[3px] flex flex-wrap items-center gap-1">
+                    <em className="rounded-full border border-success/40 bg-success/10 px-1.5 py-px text-xs font-bold not-italic leading-[1.5] text-success">业务知识</em>
+                    <em className="rounded-full border border-line-strong bg-surface-2 px-1.5 py-px text-xs font-bold not-italic leading-[1.5] text-muted-foreground">{{ document: "文档", skill: "Skill",
                       rule: "规则", example: "示例" }[asset.form]}</em>
                     {asset.repositories.map((repository) => <em
-                      className="skill-repository-tag" key={repository}>
+                      className="max-w-[180px] truncate rounded-full border border-primary/30 bg-primary/10 px-1.5 py-px text-xs font-semibold not-italic leading-[1.5] text-primary" key={repository}>
                       {repository.replace(/\/+$/, "").split("/").at(-1)
                         ?.replace(/\.git$/i, "") || repository}</em>)}
                   </span>
                 </button>
-                {module.can_manage && <div>
-                  <button type="button" onClick={() => void openAsset(module, asset, true)}>更新</button>
-                  <button type="button" className="danger" onClick={async () => {
+                {module.can_manage && <div className="flex flex-none gap-1.5">
+                  <button type="button" className={BTN} onClick={() => void openAsset(module, asset, true)}>更新</button>
+                  <button type="button" className={BTN_DANGER} onClick={async () => {
                     if (!await confirmDialog({
                       title: "归档知识",
                       message: `将归档知识「${asset.title}」。历史任务不受影响。`,
@@ -468,12 +483,13 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
             {document?.moduleId === module.id && <div
               id={`${knowledgeAssetElementId("business", document.moduleId,
                 document.assetId)}-document`}
-              className="business-asset-document"
+              className="overflow-hidden rounded-[9px] border border-line bg-surface-2 [scroll-margin-top:24px]"
               aria-label={`${document.title} 全文`}>
-              <header><strong>{document.title} · 全文 · v{document.version}
+              <header className="flex items-center justify-between gap-3 border-b border-line px-[11px] py-2"><strong className="text-[13px] text-text-strong">{document.title} · 全文 · v{document.version}
                 {` · 指纹 ${document.digest.slice(0, 8)} 已对拍`}</strong><button type="button"
+                className="cursor-pointer border-0 bg-transparent text-[13px] text-muted-foreground"
                 onClick={() => setDocument(undefined)}>关闭正文</button></header>
-              <pre>{document.content}</pre>
+              <pre className="m-0 max-h-[460px] overflow-auto p-[13px] font-mono text-xs leading-[1.65] whitespace-pre-wrap text-text [overflow-wrap:anywhere]">{document.content}</pre>
             </div>}
           </div>}
         </article>;

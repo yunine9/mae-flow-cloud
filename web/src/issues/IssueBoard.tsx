@@ -214,14 +214,21 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     />;
   }
 
-  return <div className="issue-board">
-    {error && <div className="issue-error" role="alert">
+  return <div className="grid gap-[18px]">
+    {/* #231 换装:看板壳(.issue-board/.issue-error 等 issue-board 家族)
+        退役,直译成令牌工具类。 */}
+    {error && <div role="alert"
+      className="flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-danger/35 bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
       <span>{error}</span>
-      {onNavigateProfile && /未配置/.test(error)
-        && <button type="button" onClick={onNavigateProfile}>
-          去个人设置配置
-        </button>}
-      <button type="button" onClick={() => setError("")}>知道了</button>
+      <span className="flex items-center gap-3">
+        {onNavigateProfile && /未配置/.test(error)
+          && <button type="button" className="cursor-pointer underline underline-offset-2"
+            onClick={onNavigateProfile}>
+            去个人设置配置
+          </button>}
+        <button type="button" className="cursor-pointer underline underline-offset-2"
+          onClick={() => setError("")}>知道了</button>
+      </span>
     </div>}
     {/* 发起入口仅开发者:管理员不发起问题会话(服务端对 admin POST 直接
         403),管理视角的这块板只读——列表全员可见,会话点开落查看模式。
@@ -239,17 +246,18 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       onError={setError}
       onNavigateProfile={onNavigateProfile}
     />}
-    <section className="issue-section" aria-labelledby="issue-mine-title"
-      hidden={childTab !== "sessions"}>
-      <div className="section-head">
+    <section aria-labelledby="issue-mine-title"
+      hidden={childTab !== "sessions"}
+      className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-3">
+      <div className="mb-3 flex items-baseline justify-between gap-4 max-[680px]:flex-col max-[680px]:items-stretch">
         <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。 */}
           <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
-        <span className="current-work-counts">
-          <label className="issue-list-filter">
-            <span>状态</span>
+        <span className="flex flex-wrap items-center justify-end gap-3">
+          <label className="inline-flex items-center gap-1.5">
+            <span className="text-[13px] font-bold text-muted-foreground">状态</span>
             <Select value={statusFilter}
               items={[{ value: "active", label: `进行中(${issues.length - (statusCounts.get("archived") ?? 0)
                 - (statusCounts.get("canceled") ?? 0)})` },
@@ -276,13 +284,13 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               </SelectContent>
             </Select>
           </label>
-          {waitingCount > 0 && <span className="section-count attention">
+          {waitingCount > 0 && <span className="text-[13px] font-medium tabular-nums text-attention">
             {waitingCount} 项待答复</span>}
-          {interventionCount > 0 && <span className="section-count danger">
+          {interventionCount > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">
             {interventionCount} 项需介入</span>}
-          <span className="section-count">共 {visibleIssues.length} 个</span>
+          <span className="text-[13px] font-medium tabular-nums text-muted-foreground">共 {visibleIssues.length} 个</span>
           {statusFilter === "active" && issues.length > visibleIssues.length
-            && <span className="section-count"
+            && <span className="text-[13px] font-medium tabular-nums text-muted-foreground"
               title="已归档/已取消默认收起,把状态切到对应标签或「全部」可查看">
               已收起 {issues.length - visibleIssues.length} 个</span>}
         </span>
@@ -291,7 +299,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           时在列表位置给出明确指示,不再无声停在列表;失败后停转让位给
           顶部错误横幅,再点同一张卡即可重试。 */}
       {openId && detail?.id !== openId && !detailFailed
-        && <div className="issue-open-loading" role="status">
+        && <div role="status"
+          className="flex items-center gap-2 pb-0.5 pl-0.5 pt-2.5 text-sm text-muted-foreground">
           <Spinner aria-hidden className="size-3 shrink-0" />
           <span>正在打开问题工作台…</span>
         </div>}
@@ -312,7 +321,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
                 ? "已归档与已取消默认收起;要翻历史,把上方状态切到对应标签或「全部」。"
                 : "可以切回「全部」继续查看,会话没有丢。"}</EmptyDescription>
             </Empty>
-          : <div className="task-list">
+          : <div className="grid gap-2">
             {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
               issue={issue}
@@ -431,7 +440,7 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
         className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
         {stopping ? "终止中…" : "终止"}</Button>}
-      {stopError && <span className="form-message error">{stopError}</span>}
+      {stopError && <span className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}
       {issue.mrs?.map((mr) => {

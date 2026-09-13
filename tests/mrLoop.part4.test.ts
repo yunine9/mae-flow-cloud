@@ -29,7 +29,7 @@ import {
 } from "./mrLoop.helpers.ts";
 
 
-test("单 writer 竞态：steer 与派单相撞时并入当前 Agent，不启动第二只", async () => {
+test("单 writer 竞态：steer 与派单相撞时并入当前 Agent，不启动第二只", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "success");

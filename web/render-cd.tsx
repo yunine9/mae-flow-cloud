@@ -24,8 +24,7 @@ const read = (name: string) =>
   readFileSync(new URL(`./src/${name}`, import.meta.url), "utf8");
 const body = renderToStaticMarkup(<PlantUml source={source} />);
 writeFileSync(outPath, `<!doctype html><meta charset="utf-8"><style>
-${read("style.css")}
-${read("annotate.css")}
+${read("tailwind.css")}
 body{background:var(--surface);margin:0;padding:16px}
 </style>${body}`);
 
