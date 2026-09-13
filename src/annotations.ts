@@ -151,6 +151,8 @@ export interface Annotation {
   /** 人点过几次"仍需调整"(0/缺省 = 没退回过)。只用于人话与提示——
    * 作者补充说明重提不算返工,不能把它说成"上一轮改坏了"。 */
   returned?: number;
+  /** 从既有 reopen 事件投影，避免恢复时把重新处理误排到意见创建时。 */
+  reopened?: { at: string; by?: string };
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
   anchor_was?: string;
   /** Agent 问过什么(needs_clarification 的回执),作者改字重提时留档:
@@ -234,7 +236,8 @@ export interface AnchorCheck {
 }
 
 export class AnnotationStore {
-  constructor(readonly path: string, private readonly ownerControlled = false) {}
+  constructor(readonly path: string, private readonly ownerControlled = false,
+    private readonly onChanged?: () => void) {}
 
   /** 回放得到当前状态。中段坏行跳过不炸整页(旁路 fail-open,大声
  *  记账);断写尾巴由读口自愈——崩溃半行不再吞掉下一次追加的账。 */
@@ -383,9 +386,11 @@ export class AnnotationStore {
         if (!found) continue;
         found.resolution = undefined;
         found.withdrawal_requested = undefined;
+        // 新一轮或系统确认未完成的交接，均恢复责任人的编辑/删除能力。
+        found.agent_assigned = undefined;
         if (operation.op === "reopen") {
+          found.reopened = { at: operation.at, by: operation.by ?? found.author };
           // 重新处理开启新一轮；上一轮的送达事实留在事件历史，不能锁住新草稿。
-          found.agent_assigned = undefined;
           found.agent_context = undefined;
           if (operation.owner_controlled) found.needs_owner_closure = true;
         }
@@ -557,6 +562,18 @@ export class AnnotationStore {
     this.append({ op: "delivery_reset", id, at: new Date().toISOString(), reason });
   }
 
+  /** 异步交接失败：只释放仍停在原版草稿的预登记，不回滚已排队/已送达记录。 */
+  resetUnsentAssignments(snapshot: readonly Annotation[]): void {
+    const current = new Map(this.list().map(item => [item.id, item]));
+    for (const before of snapshot) {
+      const item = current.get(before.id);
+      if (item?.status === "draft" && item.agent_assigned
+          && (item.rework ?? 0) === (before.rework ?? 0) && item.note === before.note) {
+        this.append({ op: "delivery_reset", id: item.id, at: new Date().toISOString(), reason: "意见交接未完成，已恢复待处理" });
+      }
+    }
+  }
+
   /** 记录 Agent 的逐条回应。只接受已经提交且仍是当前 revision 的意见；
    * 作者是否认可由 verify/reopen 决定，绝不在这里自动闭环。 */
   respond(
@@ -623,7 +640,8 @@ export class AnnotationStore {
   ): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if (found.status === "sent" && found.sent_via !== "owner_pending") throw new AnnotationError("意见已交给 Agent，请等待答复后处理");
+    if ((found.status === "draft" && found.agent_assigned)
+        || (found.status === "sent" && found.sent_via !== "owner_pending")) throw new AnnotationError("意见已交给 Agent，请等待答复后处理");
     if (found.status !== "draft" && found.status !== "sent") {
       throw new AnnotationError("这条意见当前不能答复");
     }
@@ -743,7 +761,7 @@ export class AnnotationStore {
     }
     this.append({
       op: "reopen", id, at: new Date().toISOString(),
-      ...(ownerOverride ? { by, owner_controlled: true } : {}),
+      by, ...(ownerOverride ? { owner_controlled: true } : {}),
       line: update?.line, anchor: update?.anchor?.trim() || undefined,
       note: update?.note?.trim() || undefined,
     });
@@ -753,6 +771,7 @@ export class AnnotationStore {
 
   private append(operation: Operation): void {
     appendFileSync(this.path, JSON.stringify(operation) + "\n", "utf-8");
+    if (operation.op !== "respond") this.onChanged?.();
   }
 }
 

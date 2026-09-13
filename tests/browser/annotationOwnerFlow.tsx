@@ -14,7 +14,6 @@ window.fetch = async (input, init) => {
   else if (url.endsWith("/reply")) { item.owner_reply = { author: "owner", text: body.text, replied_at: new Date().toISOString() }; item.status = "sent"; item.sent_via = "owner_pending"; }
   else if (url.endsWith("/resolve")) { item.status = "verified"; item.resolution = { ...body, by: "owner", at: new Date().toISOString() }; }
   else if (url.endsWith("/reopen")) { item.status = "draft"; item.resolution = undefined; item.owner_reply = undefined; item.sent_via = undefined; item.rework = (item.rework || 0) + 1; }
-  else if (url.endsWith("/send")) { if (body.context !== "保留接口兼容性") throw Error("补充说明没有随原意见发送"); item.agent_context = { text: body.context, by: "owner", at: new Date().toISOString(), revision: item.rework ?? 0 }; item.status = "sent"; item.sent_via = "interrupt"; item.agent_assigned = true; }
   return new Response(JSON.stringify({ sent: ["one"] }));
 };
 function App() {
@@ -29,7 +28,8 @@ const pause = () => new Promise((resolve) => setTimeout(resolve, 30));
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((element) => element.textContent === label);
 async function run() {
   await pause();
-  if (!button("删除") || !button("交给 Agent") || !button("自行答复") || button("确认闭环")) throw Error("待处理按钮不正确");
+  if (!button("删除") || !button("修改 / 补充") || !button("自行答复")
+      || button("交给 Agent") || button("确认闭环")) throw Error("待处理按钮不正确");
   button("自行答复")!.click(); await pause();
   const input = document.querySelector("textarea")!;
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "超时保持原数据，允许稍后重试");
@@ -39,16 +39,14 @@ async function run() {
   button("确认闭环")!.click(); await pause();
   if (!button("重新处理")) throw Error("闭环后不能变卦");
   button("重新处理")!.click(); await pause();
-  if (!button("交给 Agent") || button("确认闭环")) throw Error("重新处理未回到待处理");
+  if (!button("自行答复") || !button("删除") || button("确认闭环")) throw Error("重新处理未回到待处理");
   viewer = "reviewer"; refresh(); await pause();
   if (button("删除") || button("自行答复") || button("交给 Agent")) throw Error("非责任人出现操作入口");
   viewer = "owner"; refresh(); await pause();
-  button("交给 Agent")!.click(); await pause();
-  if (!button("发送给 Agent")) throw Error("未显示补充说明入口");
-  const context = document.querySelector<HTMLTextAreaElement>("textarea")!;
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(context, "保留接口兼容性");
-  context.dispatchEvent(new Event("input", { bubbles: true })); await pause();
-  button("发送给 Agent")!.click(); await pause();
+  // 转交由当前决定卡统一完成；面板读取送达后的状态，不再提供第二个
+  // “交给 Agent”入口。这里模拟决定卡已经把意见交给 Agent。
+  rows = [{ ...rows[0], route: "agent", status: "sent", sent_via: "interrupt",
+    agent_assigned: true, owner_reply: undefined }]; refresh(); await pause();
   if (button("删除") || button("确认闭环")) throw Error("Agent 处理中仍可删除或闭环");
   rows = [{ ...rows[0], id: "two", status: "draft", agent_assigned: false, sent_via: undefined }]; refresh(); await pause();
   button("删除")!.click(); await pause();

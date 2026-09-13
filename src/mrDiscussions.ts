@@ -54,7 +54,8 @@ export async function fetchMrDiscussions(input: {
     if (!input.platformUrl || !mr) throw new Error("平台地址或 MR 标识缺失");
     const params = new URLSearchParams({ repo: input.repo, mr: String(mr) });
     const response = await fetch(`${input.platformUrl}/mr/discussions?${params}`, {
-      headers: input.headers, signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
+      // 内网 CLI 预算为 15 秒，宿主须留出适配器返回结果的时间。
+      headers: input.headers, signal: AbortSignal.timeout(input.timeoutMs ?? 20_000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const body = await response.json() as { discussions?: unknown[] };

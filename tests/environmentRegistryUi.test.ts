@@ -24,7 +24,8 @@ const headerFilter = readFileSync(resolve("web/src/HeaderFilter.tsx"), "utf-8");
 const editor = readFileSync(resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 
 test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admin 专属系统管理)", () => {
-  const nav = app.slice(app.indexOf('aria-label="视图切换"'), app.indexOf("</nav>"));
+  const nav = app.slice(app.indexOf('<SidebarContent aria-label="视图切换"'),
+    app.indexOf("</SidebarContent>"));
   const adminNav = nav.slice(
     nav.indexOf('session.role === "admin" ? <>'), nav.indexOf("</> : <>"));
   const devNav = nav.slice(nav.indexOf("</> : <>"));

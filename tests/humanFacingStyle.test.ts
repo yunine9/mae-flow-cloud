@@ -23,7 +23,7 @@ test("口径常量说全四件事,且不是命令式校验", () => {
 test("只挂在 driver 自己的会话上,且只有主会话与开发助手打开", () => {
   const driver = readFileSync(new URL("../src/sessionDriver.ts", import.meta.url), "utf8");
   assert.match(driver,
-    /this\.options\.humanFacing && config\.sessionId === this\.sessionId \? \{\s*appendSystemPromptOverride: \(base: string\[\]\) => \[\.\.\.base, HUMAN_FACING_STYLE\]/);
+    /this\.options\.humanFacing && config\.sessionId === this\.sessionId[\s\S]*?\? \[HUMAN_FACING_STYLE\] : \[\][\s\S]*?appendSystemPromptOverride: \(base: string\[\]\) => \[[\s\S]*?\.\.\.base, \.\.\.appendedSystemPrompt/);
   const service = readFileSync(new URL("../src/taskService.ts", import.meta.url), "utf8");
   assert.equal((service.match(/humanFacing: true,/g) ?? []).length, 2,
     "主会话 + 开发助手,专项会话(编译/预热/抽取/需求检视)不挂");

@@ -161,6 +161,11 @@ test("同 SHA 已有宿主推送收据时不补跑 Build-Fix，恢复交给流�
     repo.git("commit", "--quiet", "-m", "next revision");
     const next = await (service as any).prePushRevision(internal);
     assert.notEqual(next.sha, revision.sha, "新 SHA 不能复用旧推送收据");
+    let checked = 0;
+    (service as any).performPrePush = async () => { checked++; return false; };
+    assert.equal(await (service as any).preparePush(
+      internal, "work", "master", internal.controlEpoch ?? 0), false);
+    assert.equal(checked, 1, "恢复交付时新 HEAD 仍须进入真正的 Build-Fix");
   } finally {
     await model.stop();
   }

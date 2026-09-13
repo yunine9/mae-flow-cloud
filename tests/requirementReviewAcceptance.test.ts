@@ -67,7 +67,7 @@ test("需求意见可连带修改三个未圈选表格，保留全部 diff 与�
 });
 
 for (const action of ["reopen", "edit", "resolve"] as const) {
-  test(`真实需求修订完成时保留期间的人工 ${action}，旧回执不造成整轮失败`, async () => {
+  test(`需求修订中禁止抢先 ${action}，收到回执后责任人可继续处理`, async () => {
     let service: TaskService;
     let taskId = "", annotationId = "";
     const model = new ScriptedModelServer([
@@ -76,10 +76,11 @@ for (const action of ["reopen", "edit", "resolve"] as const) {
       { text: "已补充返回值约定，请核对修改。" },
     ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
       if (index !== 2) return;
-      if (action === "reopen") await service.reopenAnnotation(taskId, annotationId, "owner", 0);
-      else if (action === "edit") service.editAnnotation(taskId, annotationId, "请再补充返回值的具体示例", "owner");
-      else service.verifyAnnotation(taskId, annotationId, "owner", false,
-        { revision: 0, outcome: "deferred", reason: "已确认后续版本补充该约定" });
+      // 写出 receipts.json 还不等于宿主已接收回执；不能在此窗口改掉正在处理的版本。
+      if (action === "reopen") await assert.rejects(service.reopenAnnotation(taskId, annotationId, "owner", 0), /尚在处理/);
+      else if (action === "edit") assert.throws(() => service.editAnnotation(taskId, annotationId, "请再补充返回值的具体示例", "owner"), /已交给 Agent/);
+      else assert.throws(() => service.verifyAnnotation(taskId, annotationId, "owner", false,
+        { revision: 0, outcome: "deferred", reason: "已确认后续版本补充该约定" }), /取得处理依据/);
     } });
     await model.start();
     try {
@@ -94,10 +95,17 @@ for (const action of ["reopen", "edit", "resolve"] as const) {
       model.script[1].tool!.input.content = JSON.stringify([{ annotation_id: item.id, revision: 0,
         outcome: "fixed", summary: "已补充返回值必须包含错误码和明确说明的约定", evidence: ["requirement.md:2"] }]);
       await service.sendAnnotations(taskId, [item.id], "owner");
+      assert.equal(service.listAnnotations(taskId).items[0].response?.outcome, "fixed");
+      if (action === "resolve") service.verifyAnnotation(taskId, annotationId, "owner", false,
+        { revision: 0, outcome: "deferred", reason: "已确认后续版本补充该约定" });
+      else {
+        await service.reopenAnnotation(taskId, annotationId, "owner", 0);
+        if (action === "edit") service.editAnnotation(taskId, annotationId, "请再补充返回值的具体示例", "owner");
+      }
       const saved = service.listAnnotations(taskId).items[0];
       assert.equal(saved.status, action === "resolve" ? "verified" : "draft");
-      assert.equal(saved.response, undefined);
-      assert.equal(saved.rework ?? 0, action === "resolve" ? 0 : 1);
+      assert.equal(saved.response?.outcome, action === "resolve" ? "fixed" : undefined);
+      assert.equal(saved.rework ?? 0, action === "resolve" ? 0 : action === "edit" ? 2 : 1);
       assert.equal(service.get(taskId)!.requirement_revision, undefined);
       assert.match(service.get(taskId)!.requirement, /错误码和明确说明/);
       if (action === "resolve") assert.equal(saved.resolution?.outcome, "deferred");

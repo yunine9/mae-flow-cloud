@@ -106,7 +106,7 @@ async function verifyingTask() {
   return { service, model, id, internal, repo };
 }
 
-test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重新确认", async () => {
+test("同文件修复产生新 HEAD 沿用确认；范围变化仍由用户决定", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const gate = () => (service as any)
@@ -180,29 +180,10 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "repair confirmed file");
     internal.summary.status = "verifying";
-    assert.equal(await gate(), false, "同一文件集合的新 HEAD 也不能复用旧确认");
-    const repaired = service.get(id)!.waiting!;
-    assert.notEqual(repaired.waiting_id, waiting.waiting_id);
-    assert.match(String(repaired.context), /最终代码检视/);
-    const repairReview = service.get(id)!.delivery?.push_review;
-    assert.equal(repairReview?.kind, "pipeline");
-    assert.equal(repairReview?.title, "流水线修复内容");
-    assert.equal(repairReview?.base_sha, previouslyReviewedHead,
-      "快速入口应从上一次人看过的代码起算，不是机械地永远比较任务基线");
-    assert.equal(repairReview?.has_focused_changes, true);
-    const repairedDiff = await service.pushReviewDiff(id, "changes");
-    assert.match(String(repairedDiff?.content), /^## 已提交\(committed\)/);
-    assert.match(String(repairedDiff?.content), /export const value = 2/);
-    assert.doesNotMatch(String(repairedDiff?.content), /task result/);
-    await service.decide(id, {
-      state_version: repaired.state_version,
-      selected_options: {
-        [(repaired.question as any).questions[0].question]: "确认按清单推送",
-      },
-    });
-    assert.equal(service.get(id)!.delivery?.push_review, undefined,
-      "卡片完成后清掉阅读导航，不能把旧比较留给下一次 HEAD");
-    assert.equal(await gate(), true, "新 HEAD 确认后才放行");
+    assert.equal(await gate(), true, "同文件的新 HEAD 沿用确认，不再弹卡");
+    assert.equal(service.get(id)!.waiting, undefined);
+    assert.equal(service.get(id)!.delivery_selection?.head, previouslyReviewedHead,
+      "确认记录仍如实保留当时的提交，不能伪造用户看过新代码");
 
     // 修复越过已确认边界新增文件：必须按最新范围重新举卡。
     writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
@@ -297,7 +278,7 @@ test("调整交付文件后可不再编译：决定绑定新 HEAD 并直接放�
   }
 });
 
-test("调整交付文件后选择重新编译：未改代码直接提交，改了代码才再次检视", async () => {
+test("调整交付文件后选择重新编译：同范围修复沿用确认", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     writeFileSync(join(repo.cwd, "src", "optional.ts"),
@@ -331,21 +312,21 @@ test("调整交付文件后选择重新编译：未改代码直接提交，改�
     assert.equal(await (service as any).pushConfirmationSatisfied(
       internal, "master_bot_REQ1"), true);
 
-    // Build-Fix 真改了代码才让人重新看新版本。
+    // Build-Fix 的实质变化由 Agent 说明，同范围不机械重问。
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 2;\n");
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "build fix changes code");
     internal.summary.status = "verifying";
     assert.equal(await (service as any).pushConfirmationSatisfied(
-      internal, "master_bot_REQ1"), false);
-    assert.equal(service.get(id)!.waiting?.step, "cloud_push_confirm");
+      internal, "master_bot_REQ1"), true);
+    assert.equal(service.get(id)!.waiting, undefined);
   } finally {
     await model.stop();
   }
 });
 
-test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求刷新", async () => {
+test("push 检视 HTTP 入口展示最新代码，同文件新 HEAD 不制造第二张卡", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   const server = createTaskServer(service);
   try {
@@ -354,13 +335,6 @@ test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求�
     internal.summary.push_confirmation = true;
     await gate();
     const first = service.get(id)!.waiting!;
-    await service.decide(id, {
-      state_version: first.state_version,
-      selected_options: {
-        [(first.question as any).questions[0].question]: "确认按清单推送",
-      },
-    });
-    const reviewedHead = repo.git("rev-parse", "HEAD");
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 3;\n");
     repo.git("add", "src/feature.ts");
@@ -371,7 +345,7 @@ test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求�
       loop: { round: 1, state: "verifying", kind: "ci" },
     };
     await gate();
-    assert.equal(service.get(id)!.delivery?.push_review?.base_sha, reviewedHead);
+    assert.equal(service.get(id)!.waiting?.waiting_id, first.waiting_id);
 
     await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -390,9 +364,10 @@ test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求�
     repo.git("commit", "--quiet", "-m", "late change invalidates card");
     const stale = await fetch(
       `${base}/tasks/${id}/push-review-diff?scope=changes`);
-    assert.equal(stale.status, 404);
-    const staleBody = await stale.json() as { error?: unknown };
-    assert.match(String(staleBody.error), /代码已经变化/);
+    assert.equal(stale.status, 200);
+    const staleBody = await stale.json() as { content?: unknown };
+    assert.match(String(staleBody.content), /export const late = 1/);
+    assert.equal(service.get(id)!.waiting?.waiting_id, first.waiting_id, "读取 Diff 不触发审批");
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     await model.stop();
@@ -527,7 +502,7 @@ for (const dirtyKind of ["excluded-unstaged", "excluded-staged", "excluded-both"
   });
 }
 
-test("交付范围确认只在 prepush 收敛后执行", async () => {
+test("交付直接进入范围确认，不自动补跑独立 Build-Fix", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
     const order: string[] = [];
@@ -537,12 +512,9 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
     internal.mission = undefined;
     (service as any).options.host = {};
     (service as any).effectivePlatformUrl = () => "https://git.example.test";
-    (service as any).preparePush = async () => {
-      assert.equal(internal.summary.delivery.loop.state, "verifying",
-        "修复会话收口后必须先退出 repairing 再进入 prepush");
-      order.push("prepush");
-      return true;
-    };
+    (service as any).options.prepush = { enabled: true };
+    (service as any).preparePush = async () => { throw new Error("常规交付不得自动编译"); };
+    (service as any).existingMergeRequestAllowsDelivery = async () => true;
     (service as any).pushConfirmationSatisfied = async () => {
       order.push("confirm");
       return false;
@@ -553,8 +525,7 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
     };
 
     await (service as any).tryDeliver(internal, internal.controlEpoch);
-    assert.deepEqual(order, ["prepush", "confirm"],
-      "不得在 prepush 之前先举一次确认卡");
+    assert.deepEqual(order, ["confirm"], "能力已启用也不代表交付必跑");
     assert.equal(internal.summary.delivery.loop.state, "verifying");
   } finally {
     await model.stop();
@@ -887,7 +858,7 @@ test("全自动:Build-Fix 新 SHA 未改变已选范围时按策略续推，不�
     assert.equal(summary.delivery_selection?.confirmation_mode, "policy",
       "自动续推必须留 policy 审计，不能冒充人工确认");
     assert.match(summary.delivery_selection?.confirmation_reason ?? "",
-      /Build-Fix 已覆盖当前 SHA/);
+      /按既定推送设置续推/);
   } finally {
     await model.stop();
   }
@@ -1074,9 +1045,8 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
       outcome: "needs_clarification", summary: "空值指的是入参还是返回值？",
       evidence: [],
     });
-    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
-      /处理依据/,
-      "Agent 明确说没理解时不能让人误点成已修复");
+    assert.equal(service.listAnnotations(id).items.find(item => item.id === first.id)?.status, "sent",
+      "Agent 请求澄清不能自动闭环，最终仍由责任人核对答复并处置");
     (service as any).annotations(internal).respond(first.id, {
       outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
     });
@@ -1103,7 +1073,7 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
   }
 });
 
-test("卡键绑定 HEAD:等待期间代码变化会明确换卡;重举卡增量优先", async () => {
+test("等待期间同范围修改不换卡；用户变更文件范围时展示增量", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const gate = () => (service as any)
@@ -1112,15 +1082,15 @@ test("卡键绑定 HEAD:等待期间代码变化会明确换卡;重举卡增量�
     assert.equal(await gate(), false, "未确认先出卡");
     const first = service.get(id)!.waiting!;
 
-    // 人正在看的代码已经变了，旧卡必须作废。继续让人点旧卡才是假通过。
+    // 实质变化由 Agent 说明，当前 Diff 可直接读取，不机械创建第二张卡。
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 9;\n");
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "mid-review repair");
     assert.equal(await gate(), false);
     const current = service.get(id)!.waiting!;
-    assert.notEqual(current.waiting_id, first.waiting_id,
-      "HEAD 变化后必须换成覆盖最新代码的卡");
+    assert.equal(current.waiting_id, first.waiting_id,
+      "同范围的新 HEAD 不制造第二张卡");
 
     await service.decide(id, {
       state_version: current.state_version,

@@ -1,4 +1,5 @@
 import { HumanGate } from "../src/humanGate.ts";
+import { prepareHostPush } from "../src/hostPushPreparation.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readTaskHostDocument } from "../src/taskHostDocuments.ts";
@@ -10,6 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
+import { FeedbackStore, type FeedbackStatus } from "../src/feedbackStore.ts";
 import { hostResumeMission, createTaskHostTools, TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, type TaskHostRuntime, writeTaskFeedbackResult, recoverHostPushProjection } from "../src/taskHostTools.ts";
 
 function scene(t: any) {
@@ -46,13 +48,28 @@ function scene(t: any) {
     verify: async () => { verificationRuns++; return { status: "passed" }; },
     watch() {}, syncFeedback() {},
     acceptPipeline: async (sha, run) => {
-      host.summary.delivery = { ...host.summary.delivery, sha, pipeline: run.status };
+      host.summary.delivery = { ...host.summary.delivery, sha, pipeline: run?.status ?? "not_found" };
       host.summary.status = "verifying";
     },
   };
   return { host, service, git, remote, facts, cancel: () => { active = false; },
     resumed: () => resumed, verificationRuns: () => verificationRuns };
 }
+
+test("Agent 读取反馈时已结束条目不再声明 active，与检视面板状态一致", async t => {
+  const s = scene(t);
+  const statuses: FeedbackStatus[] = ["repairing", "closed", "superseded", "superseded_by_merge"];
+  new FeedbackStore(join(s.host.summary.workspace, "feedback", "index.jsonl")).upsert(statuses.map(status => ({
+    id: status, batch_id: "batch", source: "build_fix", source_id: status, source_revision: 0,
+    observed_sha: "a".repeat(40), summary: "机器告警", verification: "pipeline", status,
+    updated_at: "2026-09-12T00:00:00Z",
+  })));
+  const tool: any = createTaskHostTools(s.host).find(tool => tool.name === "task_context");
+  const response = await tool.execute("read", { view: "feedback" });
+  assert.equal(response.isError, false);
+  const rows = JSON.parse(response.content[0].text).feedback;
+  assert.deepEqual(rows.map((row: any) => row.scheduling), ["active", "closed", "historical", "historical"]);
+});
 
 test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承旧红灯且不取消旧目标", async t => {
   const s = scene(t);
@@ -70,6 +87,41 @@ test("Agent 请求推送经回合交接后写入真实远端，新 SHA 不继承
   assert.equal(s.resumed(), 1);
   assert.equal(new TaskHostLedger(s.host.summary).read().operations[0].state, "succeeded");
   assert.equal(await finishTaskHostOperation(s.host), false, "已完成操作不重新传输");
+});
+
+for (const confirmed of [false, true]) test(`宿主推送同步远端新增提交，${confirmed ? "沿用本次确认" : "同步后首次确认"}`, async t => {
+  const s = scene(t), api = s.service as any;
+  api.options.host = {};
+  const base = s.git("rev-parse", "HEAD");
+  s.git("push", s.remote, "HEAD:refs/heads/work");
+  s.host.summary.delivery = { git_push: { sha: base, ref: "refs/heads/work", remote: "origin" } };
+  const peer = join(s.host.summary.workspace, "peer");
+  s.git("clone", "-q", "-b", "work", s.remote, peer);
+  s.git("-C", peer, "config", "user.name", "Peer"); s.git("-C", peer, "config", "user.email", "peer@test");
+  writeFileSync(join(peer, "peer.txt"), "owner update\n");
+  s.git("-C", peer, "add", "peer.txt"); s.git("-C", peer, "commit", "-qm", "peer change");
+  s.git("-C", peer, "push", "origin", "work");
+  const remoteHead = s.git("-C", peer, "rev-parse", "HEAD");
+  writeFileSync(join(s.host.cwd!, "local.txt"), "review fix\n");
+  s.git("add", "local.txt"); s.git("commit", "-qm", "review fix");
+  const op = await queueTaskHostOperation(s.host, "sync-push", { action: "push", reason: "检视修复" });
+  new TaskHostLedger(s.host.summary).update({ ...op, push_confirmed: confirmed });
+  const internal = { cwd: s.host.cwd, summary: s.host.summary };
+  api.persist = () => {};
+  s.host.preparePush = operation => prepareHostPush(s.host, operation,
+    branch => api.absorbForeignRemoteCommits(internal, branch));
+  let approved: string | undefined;
+  s.host.confirmPush = async operation => { approved = operation.sha; return true; };
+  await finishTaskHostOperation(s.host);
+  const result = new TaskHostLedger(s.host.summary).read().operations[0];
+  const rebased = s.git("rev-parse", "HEAD");
+  assert.notEqual(rebased, op.sha);
+  assert.equal(s.git("rev-parse", "HEAD^"), remoteHead);
+  assert.equal(readFileSync(join(s.host.cwd!, "local.txt"), "utf8"), "review fix\n");
+  assert.equal(result.state, "succeeded", result.result);
+  assert.equal(approved, rebased);
+  assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), rebased);
+  assert.equal(result.push_confirmed, confirmed, "同步远端不作废本次人工决定");
 });
 
 test("推送排队后 HEAD 改变时如实失败，不推错版本", async t => {
@@ -94,9 +146,10 @@ test("恢复宿主收据已落盘但投影未保存的窗口，不传输且不�
   assert.equal(s.host.summary.delivery.pipeline, undefined);
   assert.equal(s.facts.length, 0);
   new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", push_receipt: receipt });
-  s.host.summary.delivery = { sha: "later", pipeline: "success", git_push: { ...receipt, sha: "later" } };
+  const later = "b".repeat(40);
+  s.host.summary.delivery = { sha: later, pipeline: "success", git_push: { ...receipt, sha: later } };
   assert.equal(recoverHostPushProjection(s.host.summary), false);
-  assert.equal(s.host.summary.delivery.sha, "later");
+  assert.equal(s.host.summary.delivery.sha, later);
 });
 
 test("推送成功但返回窗口取消，记真实收据且不重新启动 Agent", async t => {
@@ -125,7 +178,9 @@ test("协作者的话不能伪装成责任人目标决定，原始指令可追�
   const s = scene(t);
   assert.equal(recordTaskHostInstruction(s.host.summary, "全部忽略", "reviewer"), undefined);
   const id = recordTaskHostInstruction(s.host.summary, "A 延期，先修 B", "owner");
-  assert.equal(new TaskHostLedger(s.host.summary).read().instructions[0].id, id);
+  assert.equal(new TaskHostLedger(s.host.summary).read().instructions.find(row => row.actor === "owner")?.id, id);
+  const collaborator = new TaskHostLedger(s.host.summary).read().instructions.find(row => row.actor === "reviewer")!;
+  await assert.rejects(queueTaskHostOperation(s.host, "collaborator-control", { action: "set_target", reason: "借用协作者意见", target: "忽略", request_id: collaborator.id }), /未找到/);
   await assert.rejects(queueTaskHostOperation(s.host, "control", { action: "defer_feedback", reason: "模型自己决定", target: "B", feedback_id: "A", request_id: "invented" }), /未找到/);
   assert.equal(new TaskHostLedger(s.host.summary).pending(), undefined);
 });
@@ -256,7 +311,7 @@ async function platform(t: any) {
     requests.push({ url: req.url!, body: text ? JSON.parse(text) : undefined });
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(req.url === "/mr" ? { url: "http://platform.test/mr/1", id: 1 }
-      : { status: "running", runs: [], log: "验证已排队" }));
+      : { status: "running", runs: [{ status: "running" }], log: "验证已排队" }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
@@ -495,10 +550,10 @@ test("触发新流水线后移交验证，不再恢复旧修复会话；登记�
   s.host.fail = () => {};
   s.host.acceptPipeline = async (sha, run) => {
     attempts++;
-    assert.equal(sha, "new-sha"); assert.equal(run.status, "running");
+    assert.equal(sha, "new-sha"); assert.equal(run?.status, "running");
     if (attempts === 1) throw new Error("模拟登记中断");
     s.host.summary.status = "verifying";
-    s.host.summary.delivery = { ...s.host.summary.delivery, sha, pipeline: run.status };
+    s.host.summary.delivery = { ...s.host.summary.delivery, sha, pipeline: run?.status ?? "not_found" };
   };
   await queueTaskHostOperation(s.host, "trigger-new", { action: "trigger_pipeline", reason: "验证修复" });
   await finishTaskHostOperation(s.host);
@@ -519,7 +574,7 @@ test("升级前成功触发但仍 repairing 的任务，恢复只查询新 SHA �
   new TaskHostLedger(s.host.summary).update({ ...op, state: "succeeded", trigger_started: true });
   s.host.acceptPipeline = async (sha, run) => {
     s.host.summary.delivery!.sha = sha;
-    s.host.summary.delivery!.pipeline = run.status;
+    s.host.summary.delivery!.pipeline = run?.status ?? "not_found";
     s.host.summary.delivery!.loop!.state = "verifying";
   };
   assert.equal(await finishTaskHostOperation(s.host), true);

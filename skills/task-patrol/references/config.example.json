@@ -1,0 +1,10 @@
+{
+  "ssh_host": "mae-prod-readonly",
+  "remote_data_dir": "/REPLACE_WITH_ACTUAL_DATA_DIR",
+  "output_dir": "~/.mae-patrol/prod",
+  "max_tasks": 30,
+  "parallel_agents": 8,
+  "agent_timeout_seconds": 1200,
+  "agent_command": ["/REPLACE_WITH_ABSOLUTE_PI_PATH", "-p", "--mode", "json", "--no-session", "--tools", "read,grep,find,ls,bash"],
+  "deployment": {"environment": "prod", "revision": "unknown", "note": "核实实际部署版本后填写，不从本地 main 推断"}
+}

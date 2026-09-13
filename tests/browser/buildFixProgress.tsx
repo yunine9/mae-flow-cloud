@@ -55,6 +55,9 @@ async function run() {
   check(text().includes("mvn compile") && text().includes("历史记录"), "reopened completed journey has no history");
   check(sources.at(-1)!.closed, "history stream did not close on end");
   root.render(<ExecutionPanel task={task} defaultOpen />); await pause(200);
+  const all = [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.startsWith("全部"));
+  check(all, "merged log filter missing");
+  all!.click(); await pause(50);
   check(document.querySelectorAll(".event-record").length === 3, "merged log lost colliding event IDs");
   check(text().includes("Build-Fix · 第 2 轮"), "merged log missing origin/round");
   const records = document.querySelectorAll(".event-record");
@@ -64,7 +67,9 @@ async function run() {
   check(document.querySelector(".event-detail")?.textContent?.includes("mvn test"), "build log detail missing");
   check(document.querySelectorAll(".event-record.selected").length === 1, "same-ID details selected multiple sessions");
   root.render(<PrepushBadge task={task} canOperate={false} />); await pause(100);
-  (document.querySelector("button.warmup-badge") as HTMLButtonElement).click(); await pause(200);
+  const badge = [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Build-Fix · 通过"));
+  check(badge, "completed Build-Fix trigger missing");
+  badge!.click(); await pause(200);
   check(document.body.textContent?.includes("mvn compile") && document.body.textContent?.includes("历史记录"), "completed Build-Fix dialog did not replay");
   journey("screenshot"); await pause(200);
   check(document.documentElement.scrollWidth <= window.innerWidth, "page overflow");

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { TaskService } from "../src/taskService.ts";
+import { createPrePushVerification, beginPrePushAttempt } from "../src/prePushVerification.ts";
 import { HumanGate } from "../src/humanGate.ts";
 import { explicitlyRequestsReviewFeedback, pendingReviewAnnotation, isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
 import { stepChoiceEffects } from "../src/kernelChoices.ts";
@@ -151,7 +152,7 @@ test("旧卡仍可查看 diff，但暂不确认不消费旧清单、不推送、
 });
 
 for (const mr of [false, true]) test(`意见排队与决定送达完整链路（已有 MR=${mr}），责任人附言不丢`, async () => {
-  const f = fixture(mr);
+  const f = fixture(mr, { purpose: "clarification", questions: [{ question: raw.questions[0].question, options: [effects[0].answers[0], REVIEW_ADJUST] }] });
   const first = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "补边界测试" });
   const second = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "补异常处理" });
   const sent = await f.service.sendAnnotations("task-19", [first.id], "owner", true, false, "保留接口兼容性");
@@ -173,8 +174,8 @@ for (const mr of [false, true]) test(`意见排队与决定送达完整链路（
   assert.match((recovered as any).tasks.get("task-19").pendingResume.notes, /保留接口兼容性/);
 });
 
-test("逐条加入两条意见期间决定保持待答，最后一次决定携带各自附言且不重复", async () => {
-  const f = fixture(true);
+test("澄清期间补充两条意见，答复时携带各自附言且不重复", async () => {
+  const f = fixture(true, { purpose: "clarification", questions: [{ question: raw.questions[0].question, options: [effects[0].answers[0], REVIEW_ADJUST] }] });
   const ids: string[] = [];
   for (const [note, context] of [["第一条边界测试", "保留接口"], ["第二条异常处理", "覆盖失败分支"]]) {
     const item = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note });
@@ -260,4 +261,48 @@ test("真实会话举卡与回注：模型自由文案变成流程选项，用�
     assert.equal(hookAnswers.some(value => JSON.stringify(value).includes(effects[0].answers[0])), true);
     assert.match(JSON.stringify(model.requests), /按当前确认范围执行/);
   } finally { session.dispose(); await model.stop(); }
+});
+
+for (const paused of [false, true]) test(`统一提交修改意见消费当前 Spec 检视卡${paused ? "（暂停后恢复）" : ""}`, async t => {
+  const f = fixture(false, specRaw, "open");
+  t.after(() => f.service.shutdown());
+  const note = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "spec",
+    file: "spec.md", line: 1, anchor: "行为", note: "补充失败分支", kind: "doc" });
+  const card = f.service.get("task-19")!.waiting!;
+  if (paused) {
+    f.task.summary.status = "paused";
+    f.task.summary.control = { paused_from: "waiting_for_human" };
+    f.task.summary.delivery = { prepush: beginPrePushAttempt(createPrePushVerification(
+      { sha: f.head, workspace_fingerprint: "clean" }, new Date().toISOString()), new Date().toISOString(), "paused-attempt") };
+  }
+  await f.service.sendAnnotations("task-19", [note.id], "owner");
+  if (paused) {
+    assert.equal(f.task.summary.status, "paused", "提交意见不得擅自恢复任务");
+    assert.equal(f.api.annotations(f.task).list()[0].sent_via, "queued_decision");
+    f.service.resume("task-19", "owner");
+    for (let i = 0; i < 100 && f.gate.get(card.waiting_id)?.status !== "resolved"; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  const resolved = f.gate.get(card.waiting_id)!;
+  if (paused) {
+    assert.equal(f.task.summary.delivery.prepush.active_attempt, undefined);
+    assert.equal(f.task.summary.delivery.prepush.state, "environment_error", "旧验证中断必须如实记录，不能再次恢复抢占新意见");
+  }
+  assert.equal(resolved.status, "resolved");
+  assert.match(resolved.decision ?? "", /Spec.*调整/);
+  assert.match(resolved.notes ?? "", /补充失败分支/);
+  assert.equal(f.api.annotations(f.task).list()[0].status, "sent");
+});
+
+test("统一提交不回答 Agent 的澄清问题，只排队附带意见", async t => {
+  const f = fixture(false, { purpose: "clarification", questions: [{ question: "失败时重试几次？",
+    options: ["一次", "三次"] }] }, "open");
+  t.after(() => f.service.shutdown());
+  const note = f.service.addAnnotation("task-19", { author: "owner", artifact: "spec",
+    file: "spec.md", line: 1, anchor: "失败", note: "增加日志", kind: "doc" });
+  const card = f.service.get("task-19")!.waiting!;
+  await f.service.sendAnnotations("task-19", [note.id], "owner");
+  assert.equal(f.gate.get(card.waiting_id)!.status, "waiting");
+  assert.equal(f.api.annotations(f.task).list()[0].sent_via, "queued_decision");
 });

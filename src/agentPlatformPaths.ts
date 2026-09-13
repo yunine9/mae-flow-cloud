@@ -23,6 +23,17 @@ export const AGENT_PLATFORM_ROOTS = [
 export const AGENT_PLATFORM_LOCAL_EXCLUDES = AGENT_PLATFORM_ROOTS
   .map((root) => `/${root}/`);
 
+/** Mae-Flow runtime sidecars live beside the repository but are never source
+ * inputs. Keep the wildcard: hooks add files such as `.agent-writes`,
+ * `.usermsg` and build milestones after the clone has already been prepared. */
+export const FLOW_RUNTIME_LOCAL_EXCLUDES = [
+  ".mae-flow.json",
+  ".mae-flow.json.*",
+  ".mae-flow-history.jsonl",
+  ".mae-flow-need-reload",
+  ".mae-flow-work/",
+] as const;
+
 export const AGENT_PLATFORM_PATHSPECS = AGENT_PLATFORM_ROOTS
   .flatMap((root) => [`:(exclude)${root}`, `:(exclude)${root}/**`]);
 

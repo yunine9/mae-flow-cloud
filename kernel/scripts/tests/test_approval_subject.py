@@ -1,290 +1,50 @@
-import hashlib
+"""场景回归：内容、SHA、清单和会话变化均不制造新的人工确认。"""
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
-from types import SimpleNamespace
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parents[1]
 
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-SCRIPTS = os.path.join(ROOT, "scripts")
-if SCRIPTS not in sys.path:
-    sys.path.insert(0, SCRIPTS)
-
-from mae_flow_core.cli_commands.approval_subject import (  # noqa: E402
-    build_subject, subject_matches)
-
-
-class ApprovalSubjectTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = self.temp.name
-        subprocess.run(["git", "init", "-q", self.root], check=True)
-        subprocess.run(["git", "-C", self.root, "config", "user.email",
-                        "test@example.com"], check=True)
-        subprocess.run(["git", "-C", self.root, "config", "user.name",
-                        "Test"], check=True)
-        with open(os.path.join(self.root, "a.txt"), "w", encoding="utf-8") as out:
-            out.write("base\n")
-        subprocess.run(["git", "-C", self.root, "add", "a.txt"], check=True)
-        subprocess.run(["git", "-C", self.root, "commit", "-qm", "base"],
-                       check=True)
-        self.head = subprocess.check_output(
-            ["git", "-C", self.root, "rev-parse", "HEAD"], text=True).strip()
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def test_worktree_subject_binds_tracked_and_untracked_content(self):
-        state = {"implementation_base_head": self.head}
-        step = {"approval_subject": {"kind": "worktree"}}
-        first = build_subject(self.root, state, "build_review", step)
-        with open(os.path.join(self.root, "a.txt"), "w", encoding="utf-8") as out:
-            out.write("changed\n")
-        second = build_subject(self.root, state, "build_review", step)
-        self.assertNotEqual(first["sha256"], second["sha256"])
-        with open(os.path.join(self.root, "new.txt"), "w", encoding="utf-8") as out:
-            out.write("new\n")
-        third = build_subject(self.root, state, "build_review", step)
-        self.assertNotEqual(second["sha256"], third["sha256"])
-
-    def test_legacy_moving_head_approval_keeps_receipt_when_bytes_are_unchanged(self):
-        state = {"delivery_manifest": {"files": ["a.txt"]}}
-        step = {"approval_subject": {"kind": "worktree"}}
-        with open(os.path.join(self.root, "a.txt"), "w") as stream:
-            stream.write("reviewed change\n")
-        with mock.patch("mae_flow_core.cli_commands.approval_subject._review_base", return_value="HEAD"):
-            legacy = build_subject(self.root, state, "delivery_review", step)
-        state["approval_subject"] = legacy
-        subprocess.run(["git", "-C", self.root, "add", "a.txt"], check=True)
-        subprocess.run(["git", "-C", self.root, "commit", "-qm", "commit reviewed bytes"], check=True)
-        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
-        self.assertEqual(legacy, state["approval_subject"])
-        with open(os.path.join(self.root, "a.txt"), "w") as stream:
-            stream.write("new unreviewed change\n")
-        self.assertFalse(subject_matches(self.root, state, "delivery_review", step)[0])
-
-    def test_artifact_subject_invalidates_when_document_changes(self):
-        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
-        os.makedirs(folder)
-        path = os.path.join(folder, "spec.md")
-        with open(path, "w", encoding="utf-8") as out:
-            out.write("v1\n")
-        state = {"config": {"单号": "REQ-1"}}
-        step = {"approval_subject": {
-            "kind": "artifacts", "artifacts": ["spec"]}}
-        state["approval_subject"] = build_subject(
-            self.root, state, "open", step)
-        first_id = state["approval_subject"]["id"]
-        self.assertEqual((True, ""), subject_matches(
-            self.root, state, "open", step))
-        with open(path, "w", encoding="utf-8") as out:
-            out.write("v2\n")
-        ok, reason = subject_matches(self.root, state, "open", step)
-        self.assertFalse(ok)
-        self.assertIn("旧决定已自动失效", reason)
-        self.assertEqual(first_id, state["approval_subject"]["supersedes"])
-
-    def test_artifact_mtime_noise_does_not_invalidate_review(self):
-        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
-        os.makedirs(folder)
-        path = os.path.join(folder, "spec.md")
-        with open(path, "w", encoding="utf-8") as out:
-            out.write("stable content\n")
-        state = {"config": {"单号": "REQ-1"}}
-        step = {"approval_subject": {
-            "kind": "artifacts", "artifacts": ["spec"]}}
-        first = build_subject(self.root, state, "open", step)
-        stat = os.stat(path)
-        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
-        second = build_subject(self.root, state, "open", step)
-        self.assertEqual(first["sha256"], second["sha256"])
-
-    def test_flow_runtime_noise_does_not_invalidate_worktree_review(self):
-        state = {"implementation_base_head": self.head}
-        step = {"approval_subject": {"kind": "worktree"}}
-        first = build_subject(self.root, state, "build_review", step)
-        os.makedirs(os.path.join(self.root, ".mae-flow-work", "REQ-1"))
-        for relative, content in (
-                (".mae-flow.json", '{"updated_at":"first"}\n'),
-                (".mae-flow.json.usermsg", '{"at":"first"}\n'),
-                (".mae-flow-order.json", "{}\n"),
-                (".mae-flow-work/REQ-1/panel.html", "runtime\n")):
-            with open(os.path.join(self.root, relative), "w",
-                      encoding="utf-8") as out:
-                out.write(content)
-        second = build_subject(self.root, state, "build_review", step)
-        self.assertEqual(first["sha256"], second["sha256"])
-        with open(os.path.join(self.root, ".mae-flow.json"), "w",
-                  encoding="utf-8") as out:
-            out.write('{"updated_at":"second"}\n')
-        third = build_subject(self.root, state, "build_review", step)
-        self.assertEqual(first["sha256"], third["sha256"])
-
-    def test_first_bind_passes_without_forcing_a_second_confirmation(self):
-        """2026-08-26 单次确认修复:缺卡时补绑当前内容后放行,不再打回
-        重问——共识由 ack 验真按"印章 sha == 此刻内容 sha"裁决;
-        run8b/run9 双跑里 spec/story 必现的背靠背双确认由此消除。"""
-        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
-        os.makedirs(folder)
-        with open(os.path.join(folder, "spec.md"), "w",
-                  encoding="utf-8") as out:
-            out.write("v1\n")
-        state = {"config": {"单号": "REQ-1"}}
-        step = {"approval_subject": {
-            "kind": "artifacts", "artifacts": ["spec"]}}
-        ok, reason = subject_matches(self.root, state, "open", step)
-        self.assertEqual((True, ""), (ok, reason))
-        bound = state.get("approval_subject") or {}
-        self.assertEqual("open", bound.get("step"))
-        self.assertEqual(
-            build_subject(self.root, state, "open", step)["sha256"],
-            bound.get("sha256"),
-            "补绑的卡必须与此刻内容同指纹,ack 印章过滤才有对账对象")
-        # 放行只发生一次绑定;内容随后变化仍走"作废重展示"老路径。
-        with open(os.path.join(folder, "spec.md"), "w",
-                  encoding="utf-8") as out:
-            out.write("v2\n")
-        ok, reason = subject_matches(self.root, state, "open", step)
-        self.assertFalse(ok)
-        self.assertIn("旧决定已自动失效", reason)
-
-    def test_manifest_scope_ignores_noise_outside_delivery_set(self):
-        """2026-08-29 用户拍板:有交付清单时人批的是清单那组文件,
-        清单外的残留产物、新 commit(head 演进)都不作废批复——
-        "确认绑文件集合"与"产物留工作区别删"两条口径在此对齐。"""
-        state = {"implementation_base_head": self.head,
-                 "delivery_manifest": {"files": ["a.txt"],
-                                       "confirmed": True}}
-        step = {"approval_subject": {"kind": "worktree"}}
-        first = build_subject(self.root, state, "delivery_review", step)
-        self.assertEqual("delivery_manifest", first.get("scope"))
-        # 清单外的残留构建产物出现/变化:批复保持有效。
-        with open(os.path.join(self.root, "build.o"), "w",
-                  encoding="utf-8") as out:
-            out.write("artifact v1\n")
-        second = build_subject(self.root, state, "delivery_review", step)
-        self.assertEqual(first["sha256"], second["sha256"])
-        # 清单外文件提交产生新 HEAD:不绑每个中间 SHA,批复保持有效。
-        with open(os.path.join(self.root, "other.txt"), "w",
-                  encoding="utf-8") as out:
-            out.write("unrelated\n")
-        subprocess.run(["git", "-C", self.root, "add", "other.txt"],
-                       check=True)
-        subprocess.run(["git", "-C", self.root, "commit", "-qm", "noise"],
-                       check=True)
-        third = build_subject(self.root, state, "delivery_review", step)
-        self.assertEqual(first["sha256"], third["sha256"])
-        # 清单内文件内容变化:旧决定不背书新代码,必须作废。
-        with open(os.path.join(self.root, "a.txt"), "w",
-                  encoding="utf-8") as out:
-            out.write("changed\n")
-        fourth = build_subject(self.root, state, "delivery_review", step)
-        self.assertNotEqual(first["sha256"], fourth["sha256"])
-
-    def test_manifest_scope_binds_the_file_set_itself(self):
-        state = {"implementation_base_head": self.head,
-                 "delivery_manifest": {"files": ["a.txt"],
-                                       "confirmed": True}}
-        step = {"approval_subject": {"kind": "worktree"}}
-        first = build_subject(self.root, state, "delivery_review", step)
-        # 清单增删文件=换了审批对象,必须是新卡。
-        state["delivery_manifest"]["files"] = ["a.txt", "b.txt"]
-        second = build_subject(self.root, state, "delivery_review", step)
-        self.assertNotEqual(first["sha256"], second["sha256"])
-
-    def test_artifact_order_keeps_existing_answer_binding(self):
-        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
-        os.makedirs(folder)
-        for name in ("spec", "story"):
-            with open(os.path.join(folder, name + ".md"), "w") as out:
-                out.write(name + " content\n")
-        state = {"config": {"单号": "REQ-1"}}
-        step = {"approval_subject": {"kind": "artifacts", "artifacts": ["spec", "story"]}}
-        original = build_subject(self.root, state, "story", step)
-        # An existing card may have persisted these pairs in a different order.
-        original["paths"].reverse()
-        original["fingerprints"].reverse()
-        unsigned = {key: value for key, value in original.items() if key not in ("id", "sha256")}
-        original["sha256"] = hashlib.sha256(json.dumps(unsigned, ensure_ascii=False,
-            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        original["id"] = original["sha256"][:16]
-        self.assertNotEqual(original["sha256"], build_subject(self.root, state, "story", step)["sha256"])
-        state["approval_subject"] = original
-        step["approval_subject"]["artifacts"].reverse()
-        self.assertEqual((True, ""), subject_matches(self.root, state, "story", step))
-        self.assertEqual(original, state["approval_subject"])
-        with open(os.path.join(folder, "spec.md"), "w") as out:
-            out.write("different requirement\n")
-        self.assertFalse(subject_matches(self.root, state, "story", step)[0])
-
-    def test_rebound_diff_base_keeps_review_of_same_selected_bytes(self):
-        state = {"implementation_base_head": self.head, "delivery_manifest": {"files": ["a.txt"]}}
-        step = {"approval_subject": {"kind": "worktree"}}
-        with open(os.path.join(self.root, "a.txt"), "w") as out:
-            out.write("reviewed bytes\n")
-        original = build_subject(self.root, state, "delivery_review", step)
-        state["approval_subject"] = original
-        subprocess.run(["git", "-C", self.root, "add", "a.txt"], check=True)
-        subprocess.run(["git", "-C", self.root, "commit", "-qm", "same reviewed bytes"], check=True)
-        state["implementation_base_head"] = subprocess.check_output(
-            ["git", "-C", self.root, "rev-parse", "HEAD"], text=True).strip()
-        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
-        self.assertEqual(original, state["approval_subject"])
-
-    def test_registering_same_reviewed_files_as_manifest_keeps_approval(self):
-        state = {"implementation_base_head": self.head}
-        step = {"approval_subject": {"kind": "worktree"}}
-        with open(os.path.join(self.root, "a.txt"), "w") as out:
-            out.write("reviewed change\n")
-        original = build_subject(self.root, state, "delivery_review", step)
-        state["approval_subject"] = original
-        state["delivery_manifest"] = {"files": ["a.txt"]}
-        self.assertEqual((True, ""), subject_matches(self.root, state, "delivery_review", step))
-        self.assertEqual(original, state["approval_subject"], "保留原回答绑定，清单登记不等于内容变化")
-        for change in ("content", "paths"):
-            with self.subTest(change=change):
-                state["approval_subject"] = original
-                with open(os.path.join(self.root, "a.txt"), "w") as out:
-                    out.write("unreviewed change\n" if change == "content" else "reviewed change\n")
-                state["delivery_manifest"] = {"files": ["a.txt", "new.txt"] if change == "paths" else ["a.txt"]}
-                self.assertFalse(subject_matches(self.root, state, "delivery_review", step)[0])
-
-    def test_stale_subject_is_rotated_without_agent_rework(self):
-        state = {"implementation_base_head": self.head}
-        step = {"approval_subject": {"kind": "worktree"}}
-        state["approval_subject"] = build_subject(
-            self.root, state, "build_review", step)
-        old_id = state["approval_subject"]["id"]
-        with open(os.path.join(self.root, "a.txt"), "w",
-                  encoding="utf-8") as out:
-            out.write("changed\n")
-        ok, reason = subject_matches(
-            self.root, state, "build_review", step)
-        self.assertFalse(ok)
-        self.assertIn("新审批对象已登记", reason)
-        self.assertNotEqual(old_id, state["approval_subject"]["id"])
-        self.assertEqual(old_id, state["approval_subject"]["supersedes"])
-
-    def test_done_records_explicit_host_review_request_before_rejecting(self):
-        from mae_flow_core.cli_commands import done_status
-        state = {"current": "delivery_review", "implementation_base_head": self.head}
-        step = {"approval_subject": {"kind": "worktree"}}
-        state["approval_subject"] = build_subject(self.root, state, "delivery_review", step)
-        with open(os.path.join(self.root, "a.txt"), "w") as out:
-            out.write("changed after decision\n")
-        with mock.patch.object(done_status, "api") as api, mock.patch.object(done_status.os, "getcwd", return_value=self.root):
-            api._moonlight.return_value = False
-            api.die.side_effect = SystemExit(2)
-            with self.assertRaises(SystemExit):
-                done_status._done_validate_choice_and_ack(step, state, SimpleNamespace(choice="", ack=""), "delivery_review")
-            self.assertEqual({"step": "delivery_review", "subject_id": state["approval_subject"]["id"]}, state["approval_request"])
-            api.save_state.assert_called_once_with(state)
-            self.assertEqual("delivery_review", state["current"])
+class ApprovalPolicyTests(unittest.TestCase):
+    def test_actual_answer_survives_content_commit_and_legacy_snapshot(self):
+        for scene in ('stale-content', 'commit', 'manifest', 'legacy-request', 'no-snapshot'):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                def git(*args):
+                    return subprocess.check_output(['git', '-C', folder, *args], stderr=subprocess.PIPE, text=True).strip()
+                git('init', '-q', '-b', 'main')
+                git('config', 'user.name', 'test'); git('config', 'user.email', 'test@example.test')
+                (root/'a.txt').write_text('initial\n')
+                git('add', 'a.txt'); git('commit', '-qm', 'initial')
+                state = {'current': 'delivery_review', 'revision': 1,
+                         'config': {'分支名': 'main', '基线分支': 'main', '单号': 'REQ5'},
+                         'choices': {}, 'history': [], 'implementation_base_head': git('rev-parse', 'HEAD'),
+                         'approval_subject': {'step': 'delivery_review', 'sha256': 'a'*64, 'id': 'a'*16}}
+                (root/'a.txt').write_text('final change\n')
+                if scene == 'commit':
+                    git('add', 'a.txt'); git('commit', '-qm', 'final change')
+                if scene == 'manifest': state['delivery_manifest'] = {'files': ['a.txt']}
+                if scene == 'legacy-request': state['approval_request'] = {'step': 'delivery_review', 'subject_id': 'a'*16}
+                if scene == 'no-snapshot': state.pop('approval_subject')
+                (root/'.mae-flow.json').write_text(json.dumps(state))
+                (root/'.mae-flow.json.usermsg').write_text(json.dumps([{
+                    'id': 'actual-answer', 'step': 'delivery_review', 'at': '2099-01-01 00:00:00',
+                    'text': json.dumps({'answers': {'交付是否确认': '交付增量无需调整，确认推送'}}, ensure_ascii=False),
+                    'approval_subject_sha256': 'b'*64, 'approval_subject_id': 'b'*16}]))
+                for command in ('current', 'done'):
+                    result = subprocess.run([sys.executable, str(SCRIPTS/'mae-flow.py'), command], cwd=root,
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                after = json.loads((root/'.mae-flow.json').read_text())
+                self.assertEqual('push', after['current'])
+                self.assertNotIn('approval_request', after)
+                self.assertNotIn('approval_subject', after)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

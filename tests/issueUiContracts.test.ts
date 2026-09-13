@@ -7,6 +7,8 @@ const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const editor = readFileSync(
   resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
+const environmentPicker = readFileSync(
+  resolve("web/src/EnvironmentPicker.tsx"), "utf-8");
 const decisions = readFileSync(
   resolve("web/src/issues/IssueDecisionCard.tsx"), "utf-8");
 const annotations = readFileSync(
@@ -78,6 +80,19 @@ test("登记表单窄屏单列,旧口令菜单不得回流(#230 改锚)", () => 
   assert.match(registration, /max-\[680px\]:grid-cols-1/);
 });
 
+test("环境选择器可用键盘操作，清单在自身视口滚动", () => {
+  // 方向键/Home/End/Enter 由 Command(cmdk) 统一接管，Esc 由 Popover
+  // 收口；业务组件不重复实现一套容易漂移的 roving focus。
+  assert.match(environmentPicker, /<Popover open=\{open\} onOpenChange=\{toggleOpen\}>/);
+  assert.match(environmentPicker, /<Command shouldFilter=\{false\}/);
+  assert.match(environmentPicker, /<CommandInput[\s\S]*?<CommandList className="max-h-60"/);
+  assert.match(environmentPicker, /<CommandItem[\s\S]*?onSelect=\{\(\) => pick\(entry\)\}/);
+  assert.match(readFileSync(resolve("web/src/components/ui/command.tsx"), "utf-8"),
+    /CommandPrimitive\.List[\s\S]*overflow-y-auto/,
+    "环境清单应在 CommandList 自己的视口滚动");
+  assert.match(environmentPicker, /PopoverContent align="start"/);
+});
+
 test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", () => {
   // shadcn 表格化(2026-09-11)后:勾选 Checkbox 独占首格,展开按钮
   // 独占尾格——两个命中目标互不嵌套;旧勾选 label 行退役。
@@ -135,7 +150,7 @@ test("隐私说明如实覆盖 AI 上下文，管理员旁路有明确入口", (
   // 闸卡(2026-09-10 只选不手填)不再有密码输入面:以"台账快照、凭据
   // 无需在此填写"的说明替代;密码的唯一输入处是共用新建/编辑弹框。
   assert.match(decisions, /密码以选定时为准[\s\S]*密码无需在此填写/);
-  assert.match(editor, /密码加密保存在服务端[\s\S]*不用重复填写/);
+  assert.match(editor, /密码加密保存在服务端[\s\S]*明文提供给当前 AI 会话/);
   assert.match(issueFlow, /网管环境口令的契约[\s\S]*AI 上下文[\s\S]*事件流/);
   assert.doesNotMatch(issueFlow, /网管环境密码[\s\S]{0,120}不进模型上下文/);
   // 管理员旁路的开关由服务端下发(feedbackPolicy 唯一判定处),页面按
@@ -154,7 +169,7 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
   assert.doesNotMatch(environmentVault, /不(?:进|进入).*Agent 上下文/);
   assert.match(issueService,
     /environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文/);
-  assert.match(issueService, /不出现在会话列表、状态摘要或事件流/);
+  assert.match(issueService, /issue\.json\/公开 API\/事件只有引用/);
   assert.doesNotMatch(issueService, /提示词永远只有引用|无消费方,为页面自动化/);
 });
 

@@ -1,3 +1,4 @@
+import { feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 /**
  * 会话流:右栏只回答"谁对谁说了什么、现在轮到谁"。
  *
@@ -147,11 +148,6 @@ const SOURCE_LABEL: Record<FeedbackSource, string> = {
   conflict: "合并冲突",
   scope: "越界改动",
   push_confirmation: "推送确认",
-};
-
-const FEEDBACK_STATUS_LABEL: Record<string, string> = {
-  open: "待处理", repairing: "处理中", addressed: "已处理",
-  awaiting_verification: "等验证", closed: "已闭环", needs_human: "需要人判断", deferred: "已暂缓，未解决",
 };
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -833,13 +829,12 @@ export function ConversationStream({
         });
       case "external": {
         if (!thread) {
-          const open = item.items.filter((entry) => entry.status !== "closed").length;
           return message({
             key: item.id, who: "external", name: item.author ?? SOURCE_LABEL[item.source] ?? item.source,
             ts: item.ts,
             tag: <em className={cn(CONV.tag, CONV.tagTone.src)}>{SOURCE_LABEL[item.source] ?? item.source}</em>,
             children: digest(
-              `提了 ${item.items.length} 条意见${open ? `，${open} 条还没闭环` : "，已全部闭环"}`,
+              `提了 ${item.items.length} 条意见，${feedbackSummary(item.items)}`,
               []),
           });
         }
@@ -854,7 +849,7 @@ export function ConversationStream({
                 <span>{entry.summary}</span>
                 <em className={cn(CONV.tag, entry.status === "closed" ? CONV.tagTone.ok
                   : entry.status === "needs_human" ? CONV.tagTone.att : CONV.tagTone.neutral)}>
-                  {FEEDBACK_STATUS_LABEL[entry.status] ?? entry.status}
+                  {feedbackStatusLabel({ source: item.source, status: entry.status })}
                 </em>
                 {entry.resolution && <small className={CONV.externalNote}>{entry.resolution}</small>}
               </li>

@@ -22,7 +22,6 @@ from mae_flow_core.workflow.execution_plan import (
     render_agent_execution_plan,
     render_workflow_supplements,
 )
-from mae_flow_core.cli_commands.approval_subject import build_subject
 from mae_flow_core.cli_commands.user_intervention import render_user_intervention
 
 def perms_line(step):
@@ -221,17 +220,10 @@ def print_current(flow, st):
         execution_plan_text = ""
         execution_plan_warning = (
             "⚠ 平台默认执行方案暂不可用，当前阶段仍按内核指令推进：%s" % exc)
-    if step.get("approval_subject") and not api._moonlight(st):
-        try:
-            subject = build_subject(os.getcwd(), st, sid, step)
-        except (OSError, RuntimeError) as exc:
-            subject = None
-            print("❌ 无法生成内容绑定审批卡: " + str(exc))
-        if subject and subject != st.get("approval_subject"):
-            subject["presented_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            st["approval_subject"] = subject
-            api.save_state(st)
     print(f"═══ 当前步骤: {sid} — {step['title']} ═══")
+    if step.get("user_ack") or step.get("confirmation_answers"):
+        print("人工确认沿用本步已记录的真实回答；实质变化由 Agent 说明，按既有授权继续，"
+              "只有超出授权或需业务裁定才提问。不因内容指纹、提交或会话恢复重复索要确认。")
     if workflow_profile_warning:
         print(workflow_profile_warning)
     if execution_plan_warning:
@@ -390,10 +382,10 @@ def print_current(flow, st):
     print("──── 完成后执行 ────")
     if sid == "config_confirm" and not api._moonlight(st):
         review = st.get("config_review") or {}
-        if review.get("sha256"):
+        if isinstance(review.get("config"), dict):
             api._print_config_review(review, step, st)
             print("把上述确认单逐项复制进你的回复正文(用户看不见工具输出),"
-                  "再只问一次最终确认；不要再拼接前面的单项回答。")
+                  "已有完整配置确认就沿用；尚未确认时只问一次，不拼接单项回答。")
             print('python3 "%s" done' % os.path.abspath(sys.argv[0]))
         else:
             sets = " --set ".join(

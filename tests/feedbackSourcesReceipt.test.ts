@@ -11,15 +11,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { FeedbackStore } from "../src/feedbackStore.ts";
 import { AnnotationStore } from "../src/annotations.ts";
 import { KERNEL_UNAVAILABLE, openKernelFeedback } from "../src/kernelDelivery.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import { withLiveReviewReceipts } from "../src/liveReviewReceipts.ts";
+import { createServer } from "node:http";
+import { REVIEW_MISSION_END } from "../src/reviewHandoff.ts";
+import { TaskHostLedger, queueTaskHostOperation, finishTaskHostOperation } from "../src/taskHostTools.ts";
 
 const KERNEL_ROOT = join(process.cwd(), "kernel");
 const GIT_ENV = {
@@ -27,6 +31,91 @@ const GIT_ENV = {
   GIT_AUTHOR_NAME: "sources", GIT_AUTHOR_EMAIL: "s@example.com",
   GIT_COMMITTER_NAME: "sources", GIT_COMMITTER_EMAIL: "s@example.com",
 };
+
+test("完整 MR 修复经真实推送和内核登记后由宿主投递，不再唤醒 Agent；重启不重复推送/回复", async () => {
+  const s = await watchingService("review-handoff"), api = s.service as any;
+  const git = (...args: string[]) => execFileSync("git", ["-C", s.cwd, ...args], { encoding: "utf8", env: GIT_ENV }).trim();
+  let replies = 0, resumes = 0, watches = 0, pipelineStatus = "running";
+  const server = createServer((req, res) => {
+    if (req.url?.includes("/reply")) { replies++; req.resume(); res.end("{}"); }
+    else if (req.url?.startsWith("/pipeline/status")) res.end(JSON.stringify({ runs: [{
+      sha: s.internal.summary.delivery.git_push.sha, status: pipelineStatus, run_id: "new-run" }] }));
+    else { res.statusCode = 404; res.end(); }
+  });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  try {
+    const remote = join(s.workspace, "remote.git");
+    git("init", "--bare", "-q", remote); git("checkout", "-qb", "feature");
+    s.internal.summary.repo_url = remote;
+    s.internal.summary.status = "running";
+    s.internal.summary.delivery = { mr_url: "https://code/mr/1", mr_id: 1,
+      loop: { kind: "review", review_source: "platform", review_ids: "d1:r1", state: "repairing" } };
+    s.internal.mission = `MR 上有 1 条检视意见待处理\n${REVIEW_MISSION_END}`;
+    s.open("handoff", [{ id: "mr:d1", source: "mr_discussion", source_id: "d1", source_revision: 1,
+      kind: "code_review", summary: "补齐实现", verification: "reviewer" }]);
+    writeFileSync(join(s.cwd, "main.ts"), "export const ready = false;\n");
+    git("add", "main.ts"); git("commit", "-qm", "fix review");
+    const flow = readState(s.cwd); flow.current = "external_verify";
+    writeFileSync(join(s.cwd, ".mae-flow.json"), JSON.stringify(flow)); // 模拟 Agent 已完成本轮编码步骤。
+    writeFileSync(join(s.workspace, "review_replies.md"), "[d1]\n已补齐实现并核对调用方。\n");
+    api.options.delivery = { platformUrl: `http://127.0.0.1:${(server.address() as any).port}`, pollIntervalMs: 100_000 };
+    api.ensureMergeWatch = () => { watches++; };
+    api.enqueueRepair = () => { resumes++; };
+    const host = api.taskHostRuntime(s.internal);
+    host.allowPush = async () => true;
+    host.confirmPush = async () => true;
+    await queueTaskHostOperation(host, "review-push", { action: "push", reason: "完成检视修复" });
+    await finishTaskHostOperation(host);
+    const ledger = new TaskHostLedger(s.internal.summary), op = ledger.read().operations[0];
+    assert.equal(op.state, "succeeded", op.result);
+    assert.equal(op.review_handoff, true);
+    assert.equal(resumes, 0);
+    assert.equal(replies, 1);
+    assert.ok(watches > 0);
+    assert.equal(s.internal.summary.status, "verifying");
+    assert.equal(s.internal.summary.delivery.pipeline, "running");
+    assert.equal(s.internal.summary.delivery.pipeline_background, false);
+    assert.equal(s.internal.mission, undefined);
+    assert.equal(git("--git-dir", remote, "rev-parse", "feature"), op.sha);
+    const batch = readState(s.cwd).delivery_loop.batches.find((b: any) => b.batch_id === "handoff");
+    assert.ok(batch.result_digest, "清空草稿前已登记真实内核结果");
+    assert.equal(batch.status, "awaiting_verification", "仍由检视人验收");
+    assert.equal(readFileSync(join(s.workspace, "review_replies.md"), "utf8"), "");
+    ledger.update({ ...op, state: "running" }); // 崩溃在交接已落盘、操作尚未标成功的窗口。
+    pipelineStatus = "success";
+    const recovering = api.taskHostRuntime(s.internal);
+    recovering.push = async () => { throw new Error("不应重复传输"); };
+    await finishTaskHostOperation(recovering);
+    assert.equal(ledger.read().operations[0].state, "succeeded");
+    assert.equal(resumes, 0); assert.equal(replies, 1);
+    assert.equal(s.internal.summary.status, "await_merge", s.internal.summary.detail);
+    assert.equal(readState(s.cwd).current, "delivery_watch", "绿灯须经真实内核核销后才等待合入");
+  } finally { server.closeAllConnections(); server.close(); await s.stop(); }
+});
+
+test("跨 CI 轮次从投递历史识别已答讨论；新版本仍派单，其他 MR 的回复不算", async () => {
+  const s = await watchingService("review-history"), api = s.service as any;
+  try {
+    s.internal.summary.status = "await_merge";
+    s.internal.summary.repo_url = "repo";
+    s.internal.summary.delivery = { mr_id: 1, mr_url: "https://code/mr/1", loop: { kind: "ci", state: "verifying" } };
+    const outbox = api.deliveryOutbox(s.internal);
+    for (const [id, mr] of [["done", 1], ["other", 2]] as const) {
+      const entry = outbox.enqueueReviewReply({ discussion_id: id, source_revision: 1, body: "已处理",
+        repo: "repo", mr, resolve: false, expected_sha: "a".repeat(40) });
+      outbox.markDelivered(entry.id);
+    }
+    const dispatched: string[] = [];
+    api.enqueueRepair = (_task: unknown, mission: string) => dispatched.push(mission);
+    const dispatch = (id: string, revision: number) => api.dispatchReviewRepair(s.internal, 3, s.internal.controlEpoch,
+      { kind: "available", items: [{ id, revision, body: "补充要求" }] });
+    assert.equal(await dispatch("done", 1), "waiting"); assert.equal(dispatched.length, 0);
+    assert.equal(await dispatch("done", 2), "dispatched");
+    assert.equal(dispatched.length, 1);
+    assert.equal(await dispatch("other", 1), "dispatched");
+    assert.equal(dispatched.length, 2);
+  } finally { await s.stop(); }
+});
 
 async function until(probe: () => boolean, what: string, ms = 20_000) {
   const deadline = Date.now() + ms;
@@ -316,4 +405,122 @@ test("流水线摘要误拼进 ID 必须拒收；模板保留原 ID，准确回�
     assert.equal(check(), undefined);
     assert.ok(readState(cwd).delivery_loop.batches[0].result_digest);
   } finally { await stop(); }
+});
+
+test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改结果必须拒绝", async () => {
+  const { service, internal, workspace, cwd, open, stop } =
+    await watchingService("published-result-replay");
+  const statePath = join(cwd, ".mae-flow.json");
+  try {
+    const api = service as any;
+    const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args],
+      { encoding: "utf8", env: GIT_ENV }).trim();
+    const store = new AnnotationStore(join(workspace, "annotations.jsonl"));
+    const note = store.add({ author: "owner", artifact: "main.ts", file: "main.ts",
+      line: 1, anchor: "ready", note: "补齐逻辑", kind: "code" });
+    store.markSent([note.id], "interrupt");
+    open("published-result-replay", [{ id: `ws:${note.id}`, source: "workspace",
+      source_id: note.id, source_revision: 0, kind: "code", summary: note.note,
+      verification: "author" }]);
+    writeFileSync(join(cwd, "main.ts"), "export const ready = false;\n");
+    git("add", "main.ts"); git("commit", "-qm", "fix A");
+    const resultHead = git("rev-parse", "HEAD");
+    store.respond(note.id, { outcome: "fixed", summary: "已修复", evidence: ["main.ts:1"] });
+    // 统计真实内核进程，不用耗时阈值，也不替代收据判定。
+    const trace = join(workspace, "kernel-calls.jsonl");
+    const wrapper = join(workspace, "count-python");
+    writeFileSync(trace, "");
+    writeFileSync(wrapper, ["#!/usr/bin/env python3", "import json, os, sys",
+      `with open(${JSON.stringify(trace)}, "a") as f:`,
+      '    f.write(json.dumps(sys.argv[1:]) + "\\n")',
+      'os.execvp("python3", ["python3", *sys.argv[1:]])', ""].join("\n"));
+    chmodSync(wrapper, 0o755);
+    api.options.host.python = wrapper;
+    const attestations = (): string[][] => readFileSync(trace, "utf8").trim()
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((args: string[]) => args.includes("attest"));
+    assert.equal(readState(cwd).delivery_loop.published, undefined);
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined,
+      "首次结果登记无需推送收据，必须发生在交付之前");
+    assert.ok(attestations().some((args) => args.includes("--active-batch")),
+      "首次登记前仍核验活动批次");
+    assert.ok(attestations().some((args) => args.includes("--lifecycle")),
+      "登记写入新状态后仍重新核验完整生命周期");
+    const originalBatch = readState(cwd).delivery_loop.batches[0];
+    assert.equal(originalBatch.result_head, resultHead);
+
+    // 模拟宿主整理交付产生新提交；登记发布事实不会重写 Agent 的处理版本。
+    writeFileSync(join(cwd, "extra.txt"), "delivery adjustment\n");
+    git("add", "extra.txt"); git("commit", "-qm", "fix B");
+    const publishedHead = git("rev-parse", "HEAD");
+    assert.notEqual(resultHead, publishedHead);
+    api.recordPublishedPush(internal,
+      { sha: publishedHead, ref: "refs/heads/feature", remote: "origin" });
+    const published = readState(cwd);
+    assert.equal(published.delivery_loop.published.sha, publishedHead);
+    for (let replay = 0; replay < 2; replay++) {
+      const before = attestations().length;
+      assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+      assert.equal(attestations().length - before, 1,
+        "每次重放重新核验一次，展示复用本次已核验快照");
+      assert.equal(new FeedbackStore(join(workspace, "feedback", "index.jsonl"))
+        .list().find((item) => item.source_id === note.id)?.status, "awaiting_verification",
+        "处理回执不能冒充用户验收通过");
+      assert.deepEqual(readState(cwd).delivery_loop.batches[0], originalBatch,
+        "重放只补投影，不重写结果或冒充最终质量闭环");
+    }
+
+    const beforeSync = attestations().length;
+    api.syncFeedbackStoreFromKernel(internal);
+    assert.equal(attestations().length - beforeSync, 1, "独立展示同步仍重新核验");
+
+    // 在核验与投影之间换掉磁盘状态：只能展示刚核验的快照，下一次必须拒绝伪造。
+    const sync = api.syncFeedbackStoreFromKernel;
+    const altered = structuredClone(published);
+    altered.delivery_loop.batches[0].results[0].summary = "伪造处理结论";
+    api.syncFeedbackStoreFromKernel = function(task: unknown, projectionOnly: boolean, state: unknown) {
+      writeFileSync(statePath, JSON.stringify(altered));
+      return sync.call(this, task, projectionOnly, state);
+    };
+    try {
+      assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+      assert.ok(!readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8")
+        .includes("伪造处理结论"), "不能投影未经核验的新磁盘状态");
+      assert.match(api.recordActiveFeedbackResult(internal), /缺少 Cloud 宿主权威收据/);
+    } finally {
+      api.syncFeedbackStoreFromKernel = sync;
+      writeFileSync(statePath, JSON.stringify(published));
+    }
+
+    const brokenPython = join(workspace, "unavailable-python");
+    writeFileSync(brokenPython, "#!/bin/sh\necho invalid-response\n");
+    chmodSync(brokenPython, 0o755);
+    api.options.host.python = brokenPython;
+    const beforeFailure = readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8");
+    try {
+      assert.match(api.recordActiveFeedbackResult(internal), new RegExp(KERNEL_UNAVAILABLE),
+        "先前成功不能掩盖当前内核故障，保留自动恢复分类");
+      assert.equal(readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8"), beforeFailure);
+    } finally {
+      api.options.host.python = wrapper;
+    }
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined, "内核恢复后可直接重试成功");
+
+    for (const field of ["result_head", "result_digest", "summary"]) {
+      const altered = JSON.parse(JSON.stringify(published));
+      const batch = altered.delivery_loop.batches[0];
+      if (field === "summary") batch.results[0].summary = "伪造处理结论";
+      else batch[field] = field === "result_head" ? publishedHead : "forged";
+      writeFileSync(statePath, JSON.stringify(altered));
+      try {
+        assert.match(api.recordActiveFeedbackResult(internal), /缺少 Cloud 宿主权威收据/,
+          `${field} 被篡改时不能因认可发布收据而放行`);
+      } finally {
+        writeFileSync(statePath, JSON.stringify(published));
+      }
+    }
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+  } finally {
+    await stop();
+  }
 });

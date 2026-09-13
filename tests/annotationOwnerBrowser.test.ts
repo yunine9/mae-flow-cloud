@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("批注真实浏览器：责任人答复、闭环、重开、交给 Agent 与删除", {
+test("批注真实浏览器：责任人答复、闭环、重开、统一转交状态与删除", {
   skip: !existsSync(chrome) && "需要 Chrome，设置 MFC_TEST_CHROME 后运行",
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-archify-browser-"));

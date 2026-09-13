@@ -1,3 +1,5 @@
+import { renderAgentDecision } from "./ownerDecisionContext.ts";
+import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
 /**
  * 进程内会话驱动(详设 §7 pi_session 的 TS 形态)。
  *
@@ -17,7 +19,6 @@ import {
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
-  SessionManager,
   createEditToolDefinition,
   createWriteToolDefinition,
   type BashOperations,
@@ -36,7 +37,7 @@ import {
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
-import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
+import { HumanGate, type WaitingRecord } from "./humanGate.ts";
 import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
 import { MAE_BUILD_SKILLS, maeBuildRoot } from "./maeBuildSupport.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
@@ -56,6 +57,10 @@ import {
   createVisionToolState,
   type VisionCapabilityConfig,
 } from "./visionCapability.ts";
+import {
+  resourceBlocked,
+  resourceBlockNotice,
+} from "./repositoryResourcePolicy.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -130,7 +135,10 @@ export function looksLikeRateLimited(detail: string): boolean {
  *  收尾窗口里再 prompt,pi 原文就是这一句。识别它不是为了吞——是让
  *  调用方区分"会话坏了"和"递早了一拍",后者让一拍重投即可。 */
 export function looksLikeBusyCollision(detail: string): boolean {
-  return /already processing/i.test(detail);
+  // 只认 Pi 拒收 prompt 的完整特征。普通工具报错里也可能出现
+  // “already processing”，把它误判成可重投会吞掉真正的失败。
+  return /Agent is already processing\.\s*Specify streamingBehavior\b/i
+    .test(detail);
 }
 
 /** 忙撞重投前让出的节拍:pi 收尾是微任务+流关闭级别的活,250ms 足够
@@ -320,8 +328,6 @@ export interface CloudSessionOptions {
   humanizeQuestionText?: (text: string) => string;
   /** 正式检视的选项取自流程契约，不新增提问门禁。 */
   prepareHumanQuestion?: (input: Record<string, unknown>) => Record<string, unknown>;
-  /** 内核已经登记的重确认请求复用 AskUserQuestion，不等模型读文字猜动作。 */
-  pendingHumanQuestion?: () => { callId: string; input: Record<string, unknown> } | undefined;
   /** 直接面对人的会话(主会话、开发助手)挂"对人说话的口径":宿主提示,
    * 不做校验(用户 2026-09-05 拍板:不必强校验,提示词提示下让他说人话)。
    * 专项会话(编译/预热/抽取/需求检视)不面对人,不挂。 */
@@ -337,6 +343,8 @@ export interface CloudSessionOptions {
   streamBashOutput?: boolean;
   /** 同一任务事件账里的会话身份；缺省 main，旁路助手使用独立身份。 */
   sessionId?: string;
+  /** 继续同一执行会话时打开明确绑定的原生记录；新任务/独立专项仍建立新会话。 */
+  resumeSession?: boolean;
   currentStep?: () => string;
   /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
@@ -373,6 +381,9 @@ export interface CloudSessionOptions {
   /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
    * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
   repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
+  /** 管理员屏蔽的仓库行为资源。每次组装主/子会话时现读，确保设置修改
+   * 对恢复中的任务也生效；只影响仓内 Skill/AGENTS，不屏蔽平台 Skill。 */
+  repositoryResourceBlocks?: () => readonly string[];
   /** 多仓契约文件(spec #131 / issue #132,2026-09-03):问题流会话的
    * 代码仓平铺在 <workspace>/repo/<仓名>/ 下,而会话 cwd 是 workspace——
    * SDK 的祖先目录发现从 cwd 往上走,永远望不到仓根的 AGENTS.md。
@@ -480,6 +491,7 @@ export class CloudSession {
    * 一句旁白(cross-glm53-20260906c 实锤,连派两次各白等 5 分钟)。 */
   private modelErrors = new Map<string, string>();
   private childCount = 0;
+  private checkpoint?: SessionCheckpoint;
   private childSessions = new Map<string, any>();
   private pendingKernel = new Set<Promise<void>>();
   private kernelFailures: string[] = [];
@@ -540,17 +552,26 @@ export class CloudSession {
   // ---- 生命周期 ----
 
   async start(userMessage: string): Promise<Outcome> {
+    if (this.checkpoint?.restored) return this.startResume(userMessage);
     this.emit("session_started", this.sessionId, { resume: false });
     return this.turnWithRepairs(userMessage);
   }
 
-  /** 服务重启后的重建会话:pi 侧上下文不可恢复(inMemory),
-   * 流程真相在内核状态文件与事件日志里——重建会话从内核 current
-   * 续跑,这正是"裁决源在工作区"的红利。 */
+  /** 恢复原生上下文并补齐中断回执；流程与授权仍以宿主最新事实为准。 */
   async startResume(userMessage: string): Promise<Outcome> {
     await this.reconcileInterruptedWork();
-    this.emit("session_started", this.sessionId, { resume: true });
-    return this.turnWithRepairs(userMessage);
+    if (this.checkpoint?.restored) {
+      restorePendingToolResults(this.checkpoint.manager, this.options.eventLog.replay(), this.sessionId);
+      this.session.agent.state.messages = this.checkpoint.manager.buildSessionContext().messages;
+    }
+    this.emit("session_started", this.sessionId, { resume: true,
+      context_restored: Boolean(this.checkpoint?.restored),
+      restored_messages: this.checkpoint?.messageCount ?? 0,
+      recovery_reason: this.checkpoint?.reason });
+    const continuity = this.checkpoint?.restored
+      ? "原 Pi 会话上下文已恢复（含已返回的工具结果及压缩记录）。从实际未完成处继续，已完成的阅读、分析和子 Agent 报告可复用。"
+      : this.checkpoint?.reason ?? "原 Pi 会话不可用，请依据工作区已有材料和执行记录恢复，勿假定需要从头重做。";
+    return this.turnWithRepairs(`${continuity}\n以宿主本轮下发的最新用户决定、插话和批注为准；与历史上下文冲突时同步修订文档、测试和实现。旧执行目标不能推翻用户的新决定。current 只用于核对流程事实，不代表要重做整个步骤。未知结果先核实再重试。\n\n${userMessage}`);
   }
 
   /** Close the lifecycle gap left by a process crash.
@@ -561,6 +582,10 @@ export class CloudSession {
    * lets the new session consult the kernel current step and retry normally. */
   private async reconcileInterruptedWork(): Promise<void> {
     const events = this.options.eventLog.replay();
+    const nativeResults = new Map<string, any>();
+    if (this.checkpoint?.restored) for (const message of this.checkpoint.manager.buildSessionContext().messages as any[]) {
+      if (message.role === "toolResult") nativeResults.set(message.toolCallId, message);
+    }
     for (const event of events) {
       if (event.kind !== "agent_spawned") continue;
       const payload = event.payload as Record<string, any>;
@@ -589,9 +614,11 @@ export class CloudSession {
         const name = String(payload.name ?? "");
         if (!callId || name === "AskUserQuestion"
             || finishedTools.has(`${event.sessionId}:${callId}`)) continue;
+        const native = event.sessionId === this.sessionId ? nativeResults.get(callId) : undefined;
         const interrupted = this.emit("tool_finished", event.sessionId, {
-          call_id: callId, name, input: payload.input ?? {}, is_error: true,
-          result: "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记",
+          call_id: callId, name, input: payload.input ?? {}, is_error: native ? Boolean(native.isError) : true,
+          result: native ? native.content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n")
+            : "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记；先核实实际结果再决定是否重试",
         });
         this.trackKernelHook(this.options.hostHooks?.postTool?.(interrupted));
       }
@@ -634,7 +661,7 @@ export class CloudSession {
       name: "AskUserQuestion",
       input: record.question,
       is_error: false,
-      result: renderDecision(record),
+      result: renderAgentDecision(record),
       answers: answersOf(record, record),
     });
     this.trackKernelHook(this.options.hostHooks?.postTool?.(finished));
@@ -895,7 +922,7 @@ export class CloudSession {
    * 与 AskUserQuestion 完全同款。区别在回注时:不给内核补回执(内核没见过
    * 这次提问),也不替 pi 补回声(pi 自己会给这个工具发 tool_finished)。 */
   awaitHostDecision(record: WaitingRecord): Promise<string> {
-    if (record.status === "resolved") return Promise.resolve(renderDecision(record));
+    if (record.status === "resolved") return Promise.resolve(renderAgentDecision(record));
     if (record.status === "superseded") {
       return Promise.resolve("这张卡已因用户接管代码现场而失效,按最新现场继续。");
     }
@@ -927,7 +954,7 @@ export class CloudSession {
       decision: record.decision,
       notes: record.notes,
     });
-    const answerText = renderDecision(record)
+    const answerText = renderAgentDecision(record)
       + (parkedReplay ? `\n\n${parkedReplay}` : "");
     if (this.hostRaised.has(waiting.call_id)) {
       this.hostRaised.delete(waiting.call_id);
@@ -1007,6 +1034,13 @@ export class CloudSession {
     extraTools?: unknown[];
   }) {
     const { workspace, agentDir, provider, model } = this.options;
+    const blockedRepositoryResources = [
+      ...(this.options.repositoryResourceBlocks?.() ?? []),
+    ];
+    const repositoryResourceBlocked = (path: string) => resourceBlocked(
+      relative(workspace, path).split(sep).join("/"),
+      blockedRepositoryResources,
+    );
     // Skill=写法指南(团队那两个 UT skill 只负责"单测怎么写"),云端照用:
     // Pi 只把 name/description/location 组成轻量可用 Skill 索引；模型判断
     // 相关后再用 Read 读取 SKILL.md 正文。它不承担 UT 运行，也不构成
@@ -1036,6 +1070,7 @@ export class CloudSession {
     }
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
+        if (repositoryResourceBlocked(path)) return false;
         if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
         try {
           return statSync(path).isFile();
@@ -1112,7 +1147,9 @@ export class CloudSession {
       this.options.knowledgeTrace?.record(
         "available", config.sessionId, resource);
     }
-    for (const item of this.options.repositorySkillResources ?? []) {
+    const repositorySkillResources = (this.options.repositorySkillResources ?? [])
+      .filter((item) => !repositoryResourceBlocked(item.actual_path));
+    for (const item of repositorySkillResources) {
       this.options.knowledgeTrace?.register(item.actual_path, {
         id: item.id,
         kind: item.kind,
@@ -1144,7 +1181,8 @@ export class CloudSession {
     }
     // 仓契约注入同款一行事(2026-09-03):提示词里多了什么必须能在
     // 日志里对账,只记 repo/ 下的相对路径,不贴正文。
-    const repoContextFiles = this.options.repoContextFiles ?? [];
+    const repoContextFiles = (this.options.repoContextFiles ?? [])
+      .filter((file) => !repositoryResourceBlocked(file.path));
     if (repoContextFiles.length) {
       this.options.log?.(`任务 ${this.options.taskId} 注入仓契约: ${
         repoContextFiles.map((file) => {
@@ -1154,6 +1192,11 @@ export class CloudSession {
             : basename(file.path);
         }).join(", ")}`);
     }
+    const appendedSystemPrompt = [
+      ...resourceBlockNotice(blockedRepositoryResources),
+      ...(this.options.humanFacing && config.sessionId === this.sessionId
+        ? [HUMAN_FACING_STYLE] : []),
+    ];
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
@@ -1169,16 +1212,19 @@ export class CloudSession {
       // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
-          ...current.agentsFiles,
+          ...current.agentsFiles.filter((file) =>
+            !repositoryResourceBlocked(file.path)),
           ...(knowledgeIndex.path && knowledgeIndex.content
             ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
             : []),
-          ...(this.options.repoContextFiles ?? []),
+          ...repoContextFiles,
         ],
       }),
       // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
-      ...(this.options.humanFacing && config.sessionId === this.sessionId ? {
-        appendSystemPromptOverride: (base: string[]) => [...base, HUMAN_FACING_STYLE],
+      ...(appendedSystemPrompt.length ? {
+        appendSystemPromptOverride: (base: string[]) => [
+          ...base, ...appendedSystemPrompt,
+        ],
       } : {}),
       extensionFactories: [
         {
@@ -1192,16 +1238,6 @@ export class CloudSession {
                   name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
                   input: event.input ?? {},
                 });
-                if (this.options.pendingHumanQuestion && config.sessionId === this.sessionId && this.options.allowHumanQuestions !== false
-                    && (TOOL_NAME_MAP[event.toolName] ?? event.toolName) === "Bash") {
-                  const failure = await this.flushKernel();
-                  if (failure) throw new Error(failure);
-                  const question = this.options.pendingHumanQuestion?.();
-                  if (question) {
-                    const answer = await this.askUser(question.callId, question.input);
-                    return { content: [...event.content, ...(note ? [{ type: "text", text: note }] : []), ...answer.content] };
-                  }
-                }
                 if (note) return { content: [...event.content, { type: "text", text: note }] };
               } catch (error) {
                 this.kernelFailures.push(String(error));
@@ -1325,6 +1361,11 @@ export class CloudSession {
           onTokenUsage: this.options.onTokenUsage,
         })]
       : [];
+    const checkpoint = openSessionCheckpoint({ taskId: this.options.taskId,
+      sessionId: config.sessionId, transcriptPath: this.options.transcript.mainPath,
+      agentDir, cwd: workspace, resume: config.sessionId === this.sessionId && this.options.resumeSession === true,
+      log: this.options.log });
+    if (config.sessionId === this.sessionId) this.checkpoint = checkpoint;
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -1339,7 +1380,7 @@ export class CloudSession {
         ...ownedFileTools,
         ...isolatedTools,
       ] as any,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: checkpoint.manager,
     });
     // 被动保底:接近上下文上限时 pi 自动压缩(主动压缩另有节奏,
     // 见 compactAnchored/TaskService.maybeCompact)。
@@ -1666,7 +1707,7 @@ export class CloudSession {
         name: "AskUserQuestion",
         input: params ?? {},
         is_error: false,
-        result: renderDecision(record),
+        result: renderAgentDecision(record),
         answers: answersOf(record, record),
       });
       driver.trackKernelHook(driver.options.hostHooks?.postTool?.(finished));
@@ -1674,13 +1715,13 @@ export class CloudSession {
       driver.options.log?.(
         `任务 ${driver.options.taskId} 重放已完成待办 ${record.waiting_id},不重复举卡`);
       return {
-        content: [{ type: "text", text: renderDecision(record) }],
+        content: [{ type: "text", text: renderAgentDecision(record) }],
         details: {},
       };
     }
     if (record.status === "superseded") {
-      const text = "这张旧问题已因用户接管代码现场而失效。请重新读取 mae-flow current；"
-        + "如果当前步骤仍需要确认，请基于最新现场重新提问。";
+      const text = `这张旧问题已失效：${record.notes || "现场已更新"}。请读取 mae-flow current 和已记录的用户回答，`
+        + "按当前要求继续；不要重复询问已获回答的问题。";
       const finished = driver.emit("tool_finished", driver.sessionId, {
         call_id: callId,
         name: "AskUserQuestion",

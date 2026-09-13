@@ -378,8 +378,8 @@ class HookProtocolTests(unittest.TestCase):
                 hook_budget.clear()
         self.assertEqual([], calls, "预算耗尽时不应再启动子进程")
 
-    def test_template_check_accepts_the_host_path_field(self):
-        """宿主用 path 而非 file_path 时，模板结构校验不能被静默跳过。"""
+    def test_document_write_is_recorded_without_template_feedback(self):
+        """不同路径字段仍登记写入；逐次编辑不再触发模板补材料提示。"""
         from mae_flow_core.adapters.hook_active_events import (
             ActiveHookEventAdapter,
         )
@@ -396,23 +396,25 @@ class HookProtocolTests(unittest.TestCase):
             os.makedirs(os.path.dirname(document))
             with open(document, "w", encoding="utf-8") as stream:
                 stream.write("# 别的标题\n")
+            writes = []
             adapter = ActiveHookEventAdapter(
                 state=os.path.join(project, ".mae-flow.json"),
                 maeflow_path=os.path.join(ROOT, "scripts", "mae-flow.py"),
                 repository_root=project,
                 maeflow=lambda *args: 0,
                 runtime_adapter=SimpleNamespace(
-                    _record_agent_write=lambda path: None),
+                    _record_agent_write=writes.append),
                 task_card_ports=lambda: None,
                 log=lambda message: None,
             )
-            response = adapter.posttool({
-                "tool_name": "Write",
-                "tool_input": {"path": document},
-            })
-
-        self.assertEqual(0, response.exit_code)
-        self.assertIn("必需章节", response.stderr)
+            for tool, field in (("Write", "path"), ("Edit", "file_path")):
+                response = adapter.posttool({
+                    "tool_name": tool, "tool_input": {field: document},
+                })
+                self.assertEqual(0, response.exit_code)
+                self.assertEqual("", response.stderr)
+            self.assertEqual([document, document], writes)
+            self.assertFalse(os.path.exists(os.path.join(project, ".mae-flow.json.advisories")))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import copy
 import contextlib
 import io
+import json
 import os
 import sys
 import unittest
@@ -16,6 +17,27 @@ from mae_flow_core.cli_commands.delivery_support import render_delivery_feedback
 
 
 class PublishedFeedbackTests(unittest.TestCase):
+    def test_same_push_after_merged_close_is_a_read_only_idempotent_replay(self):
+        sha = "b" * 40
+        value = {"current": "end", "history": [], "delivery_loop": {
+            "schema": delivery.STATE_SCHEMA,
+            "published": {"sha": sha, "receipt": {
+                "sha": sha, "ref": "refs/heads/task", "remote": "origin"}},
+            "active_batch_id": "", "batches": [],
+            "close_events": [{"reason": "merged", "sha": sha}],
+        }}
+        payload = {"receipt": {
+            "sha": sha, "ref": "refs/heads/task", "remote": "origin"}}
+        output = io.StringIO()
+        with mock.patch.object(delivery, "_capability"), \
+                mock.patch.object(host_receipts, "has_host_receipt", return_value=True), \
+                mock.patch.object(host_receipts, "trusted_feedback_loop", return_value=False), \
+                mock.patch.object(host_receipts, "save_with_host_proof") as save, \
+                contextlib.redirect_stdout(output):
+            record_publication(value, payload, {})
+        self.assertTrue(json.loads(output.getvalue())["idempotent"])
+        save.assert_not_called()
+
     def test_mixed_batch_receipt_requires_human_but_not_retired_ci(self):
         old, fresh = "a" * 40, "b" * 40
         active = {"batch_id": "mixed", "base_sha": fresh, "status": "repairing", "items": [

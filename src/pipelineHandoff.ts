@@ -1,3 +1,4 @@
+import { remainingCiMission } from "./ciMission.ts";
 import { parsePipelineChecks } from "./pipelineContract.ts";
 import type { PipelineRun, PipelineStatus } from "./pipelineClient.ts";
 import type { TaskSummary } from "./taskService.ts";
@@ -14,18 +15,23 @@ export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<No
   const previous = summary.delivery;
   summary.delivery = { ...previous, git_push: receipt, sha: receipt.sha,
     ...(previous?.sha !== receipt.sha ? {
-      pipeline: undefined, checks: undefined, attested: undefined,
+      pipeline: undefined, pipeline_background: undefined, checks: undefined, attested: undefined,
       evidence_gap: undefined, verify_deadline: undefined, waiting_on: undefined,
     } : {}) };
 }
 
 /** A request for a new SHA must not adopt an old run returned by the adapter. */
-export function confirmedPipelineRun(sha: string, result: PipelineRun | PipelineStatus): PipelineRun {
+export function observedPipelineRun(sha: string, result: PipelineRun | PipelineStatus): PipelineRun | undefined {
   const runs = "runs" in result ? result.runs : [result];
-  const matching = runs.filter(run => run.is_valid !== false && (!run.sha || run.sha === sha));
-  const run = matching.filter(run => run.sha === sha).at(-1) ?? matching.at(-1);
+  // 同 SHA 的最近一次运行优先；后一次仍在跑或被判无效时，不能回退拿旧绿灯。
+  const run = runs.filter(run => !run.sha || run.sha === sha).at(-1);
+  return run && run.is_valid !== false ? { ...run, sha } : undefined;
+}
+
+export function confirmedPipelineRun(sha: string, result: PipelineRun | PipelineStatus): PipelineRun {
+  const run = observedPipelineRun(sha, result);
   if (!run) throw new Error(`尚未查到提交 ${sha} 的有效流水线记录，旧 SHA 结果不能用于本次验证`);
-  return { ...run, sha };
+  return run;
 }
 
 /** Scheduling projection only: keep the old failure/receipt intact for audit. */
@@ -40,19 +46,21 @@ export function historicalPipelineFeedback(summary: TaskSummary, item: {
 }
 
 /** Project remote facts before handing control to the shared pipeline watcher. */
-export function projectPipelineRun(task: { summary: TaskSummary; mission?: string }, sha: string, response: PipelineRun): PipelineRun {
-  const run = confirmedPipelineRun(sha, response);
+export function projectPipelineRun(task: { summary: TaskSummary; mission?: string }, sha: string, response: PipelineRun | undefined, background = false): PipelineRun | undefined {
+  const run = response ? confirmedPipelineRun(sha, response) : undefined;
   if (task.summary.delivery?.git_push?.sha !== sha) throw new Error("流水线提交与当前已推送提交不一致");
-  task.summary.delivery = { ...task.summary.delivery, sha, pipeline: run.status,
-    checks: run.checks, stalled: undefined, waiting_on: undefined, evidence_gap: undefined };
+  task.summary.delivery = { ...task.summary.delivery, sha, pipeline: run?.status ?? "not_found", pipeline_background: background,
+    checks: run?.checks, ...(background ? {} : { stalled: undefined, waiting_on: undefined, evidence_gap: undefined }) };
+  if (background) return run; // 提前验证只记远端事实，不接管当前目标或编码状态。
   const loop = task.summary.delivery.loop;
   if (loop?.kind === "ci") {
     loop.state = "verifying";
     // last_sha/failure 保留本轮的原始失败快照，不伪造已修好或已通过。
-    task.mission = undefined;
+    task.mission = remainingCiMission(task.mission, task.summary) || undefined;
   }
   task.summary.status = "verifying";
-  task.summary.detail = `正在验证提交 ${sha.slice(0, 8)}，旧提交的告警保留为历史记录`;
+  task.summary.detail = run ? `正在验证提交 ${sha.slice(0, 8)}，旧提交的告警保留为历史记录`
+    : `已推送 ${sha.slice(0, 8)}，尚未发现该提交的流水线，正在继续查询`;
   return run;
 }
 

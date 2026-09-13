@@ -24,6 +24,8 @@ export type FeedbackStatus =
   | "addressed"
   | "awaiting_verification"
   | "closed"
+  | "superseded"
+  | "superseded_by_merge"
   | "needs_human"
   | "deferred";
 
@@ -61,6 +63,7 @@ const SOURCES = new Set<FeedbackSource>([
 const STATUSES = new Set<FeedbackStatus>([
   "open", "repairing", "addressed", "awaiting_verification", "closed",
   "needs_human", "deferred",
+  "superseded", "superseded_by_merge",
 ]);
 
 function requiredText(value: unknown, name: string): string {

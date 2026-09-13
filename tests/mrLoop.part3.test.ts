@@ -30,7 +30,8 @@ import {
 test("检视意见沿用原交付事实:feedback-open 接续且不换单", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  platform.statusQueue.push("failed", "failed", "success"); // 检视交付的新 SHA 仍红，才派 CI 修复
+  // 检视回复不改代码；沿用首版红灯进入 CI 修复，新提交跑第二条绿灯。
+  platform.statusQueue.push("failed", "success");
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "李四", body: "这里的空指针要判一下",

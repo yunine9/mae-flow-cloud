@@ -247,7 +247,7 @@ test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", asy
   }
 });
 
-test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会话", async () => {
+test("失败页重跑续推保留旧验证失败，只续交付、不重跑 Build-Fix 或普通编码", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {
     const head = repo.git("rev-parse", "HEAD");
@@ -272,10 +272,14 @@ test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会
         workspace_review_annotation_ids: ["an-await-author"],
       },
     };
-    (service as any).resumePrePushVerification = async () => {};
+    let deliveries = 0;
+    (service as any).resumePrePushVerification = async () => { throw new Error("不应重复编译"); };
+    (service as any).tryDeliver = async () => { deliveries++; };
 
     const summary = service.retry(id, "owner");
     assert.equal(summary.status, "verifying");
+    assert.equal(deliveries, 1);
+    assert.equal(internal.summary.delivery.prepush.state, "environment_error");
     assert.notEqual(internal.resume, true,
       "不得重新入普通 Agent 队列唤醒已结束的内核流程");
     assert.equal(internal.summary.delivery.stalled, undefined);
@@ -411,9 +415,11 @@ test("停止并直推:排队中的轮出队收口,随即绑 HEAD 跳过续跑", 
     assert.ok(["queued", "running", "completed"].includes(summary.status),
       `跳过后任务应回队续跑而不是躺平,实际 ${summary.status}`);
     (service as any).activePrePushBuilds = 0;
-    // 续跑会话收口,别让后台泵在测试退出后裸奔。
-    await until(() => service.get(id)?.status === "completed"
-      ? true : undefined, "停止并直推后的续跑收口");
+    // 此夹具没有远端平台，停止 Build-Fix 不能冒充交付完成。
+    await until(() => service.get(id)?.status === "verifying"
+      && !internal.driver ? true : undefined, "停止并直推后等待权威验证");
+    assert.match(service.get(id)!.detail ?? "", /MR.*流水线服务未就绪/);
+    await service.shutdown();
   } finally {
     await model.stop();
   }

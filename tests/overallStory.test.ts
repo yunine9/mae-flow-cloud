@@ -385,13 +385,14 @@ test("TaskService 转交整体 Story：completed 可提交，普通原文仍禁�
     coordinator.generate(task.id, "owner"); await coordinator.settled(task.id);
     const note = service.addAnnotation(task.id, { author: "reviewer", artifact: OVERALL_STORY_ARTIFACT,
       file: OVERALL_STORY_ARTIFACT, line: 2, anchor: "说明", note: "改设计", kind: "doc" });
-    assert.deepEqual((await service.sendAnnotations(task.id, [note.id], "reviewer")).sent, [note.id]);
+    await assert.rejects(service.sendAnnotations(task.id, [note.id], "reviewer"), /责任人/);
+    assert.deepEqual((await service.sendAnnotations(task.id, [note.id], "owner")).sent, [note.id]);
     await coordinator.settled(task.id);
     assert.deepEqual((await service.sendAnnotations(task.id, [note.id], "owner", true)).sent, [note.id]);
     const ordinary = service.addAnnotation(task.id, { author: "reviewer", artifact: "__task_requirement__",
       file: "需求原文", line: 1, anchor: "需求", note: "修改原文", kind: "doc" });
-    await assert.rejects(service.sendAnnotations(task.id, [ordinary.id], "reviewer"), /已经结束/);
-    await assert.rejects(service.sendAnnotations(task.id, [note.id], "stranger"), /不是你写的/);
+    await assert.rejects(service.sendAnnotations(task.id, [ordinary.id], "owner"), /已经结束/);
+    await assert.rejects(service.sendAnnotations(task.id, [note.id], "stranger"), /责任人/);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 

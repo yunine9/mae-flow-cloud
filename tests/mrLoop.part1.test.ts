@@ -63,9 +63,9 @@ test("MR 讨论接口失败时明确显示自动重试，不能误报门禁全�
 test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI 接棒;合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  // 检视交付本身也会产生新 SHA；CI 接棒必须基于这版真实失败，
-  // 不能让测试依赖“新提交已绿仍拿首版红灯派修复”的旧错误。
-  platform.statusQueue.push("failed", "failed", "success");
+  // 解释型检视只发布回复，不改业务代码，因此不应靠流程 sidecar 制造
+  // 一个假 SHA。首版红灯由 CI 修复产生新提交后，第二条流水线应转绿。
+  platform.statusQueue.push("failed", "success");
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "张三", body: "这里要判空,别让缺失变量把模板炸了",

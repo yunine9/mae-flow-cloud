@@ -35,9 +35,10 @@ for (const action of ["edit-draft", "drop-draft", "reopen", "edit-sent", "resolv
 }
 
 for (const action of ["edit", "delete"]) {
-  test(`发送请求未返回时${action}草稿，API 不把新版或已删除意见报成已送达`, async () => {
+  test(`发送请求未返回时${action}已交接意见，API 保留正在送出的原版`, async t => {
     const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "annotation-send-race-")),
       provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+    t.after(() => service.shutdown());
     const task = service.create("说明返回值", { account: "owner" });
     const state = (service as any).tasks.get(task.id);
     state.summary.status = "running";
@@ -47,15 +48,15 @@ for (const action of ["edit", "delete"]) {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     service.interrupt = async () => { await held; return service.get(task.id)!; };
-    const sending = service.sendAnnotations(task.id, [item.id], "reviewer");
+    const sending = service.sendAnnotations(task.id, [item.id], "owner");
     try {
-      if (action === "edit") service.editAnnotation(task.id, item.id, "新要求：补充返回值示例", "reviewer");
-      else service.dropAnnotation(task.id, item.id, "reviewer");
+      if (action === "edit") assert.throws(() => service.editAnnotation(task.id, item.id, "新要求：补充返回值示例", "owner"), /已交给 Agent/);
+      else assert.throws(() => service.dropAnnotation(task.id, item.id, "owner"), /已交给 Agent/);
     } finally { release(); }
     const result = await sending;
-    assert.deepEqual(result.sent, []);
-    assert.match(result.receipt!, /意见已更新或已闭环/);
-    assert.equal(store.list()[0].status, action === "edit" ? "draft" : "dropped");
-    assert.equal(store.history().filter((op) => op.op === "sent").length, 0);
+    assert.deepEqual(result.sent, [item.id]);
+    assert.equal(store.list()[0].note, item.note);
+    assert.equal(store.list()[0].status, "sent");
+    assert.equal(store.history().filter((op) => op.op === "sent").length, 1);
   });
 }

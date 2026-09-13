@@ -187,6 +187,8 @@ test("Cloud 托管启动:普通需求也机械 init，再把 current 交给模�
   });
   const guidance = await host.bootstrapManaged("把首页按钮改成蓝色");
   assert.match(guidance, /CURRENT: 先确认配置/);
+  assert.match(guidance, /文档自查：按现有模板写清范围、行为、验收条件和真实未决事项/);
+  assert.match(guidance, /local-spec validate 仅作按需结构诊断/);
   assert.equal(JSON.parse(readFileSync(
     join(workspace, ".mae-flow.json"), "utf-8")).current, "config_confirm");
   assert.deepEqual(readFileSync(join(root, "managed.log"), "utf-8")
@@ -196,6 +198,12 @@ test("Cloud 托管启动:普通需求也机械 init，再把 current 交给模�
     "hook:userprompt",
     "cli:current",
   ], "模型启动前必须先有状态，需求原话随后进入 ACTIVE 台账");
+
+  const resumed = await host.bootstrapManaged("继续当前需求");
+  assert.match(resumed, /不要为格式差异重复补材料、重跑检视或索要确认/);
+  assert.equal(readFileSync(join(root, "managed.log"), "utf-8")
+    .split("\n").filter(line => line === "cli:init").length, 1,
+  "恢复仍注入文档自查指引，但不重新初始化流程");
 
   rmSync(join(workspace, ".mae-flow.json"));
   const verdict = await host.preTool({

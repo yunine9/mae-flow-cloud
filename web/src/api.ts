@@ -1,3 +1,5 @@
+import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
+export type { EarlyStartPreview } from "../../src/dependencySchedulingTypes";
 /**
  * 任务 API 的类型化镜像。前端不推断状态(主 spec §5.1):
  * 这里的类型就是 taskService.TaskSummary 的形状,文案与判断
@@ -835,7 +837,8 @@ export interface PushReviewPresentation {
 export type FeedbackSource = "workspace" | "build_fix" | "pipeline"
   | "mr_discussion" | "conflict" | "scope" | "push_confirmation";
 export type FeedbackStatus = "open" | "repairing" | "addressed"
-  | "awaiting_verification" | "closed" | "needs_human" | "deferred";
+  | "awaiting_verification" | "closed" | "needs_human" | "deferred"
+  | "superseded" | "superseded_by_merge";
 export interface FeedbackRecord {
   id: string;
   batch_id: string;
@@ -993,6 +996,7 @@ export interface TaskSummary {
     id: string; title?: string; ticket?: string; status: TaskStatus;
   };
   blocked_by?: string[];
+  dependency_adjustments?: DependencyAdjustment[];
   /** 本任务作为交付单元的负责文件面;缺席=整仓无边界。 */
   delivery_scope?: { name: string; paths: string[] };
   /** 先分析拆分:由 Agent 在开发中提议(propose_split)置上,或原位重跑沿用。 */
@@ -1044,6 +1048,8 @@ export interface TaskSummary {
     mr_state?: string;
     merged_sha?: string;
     pipeline?: string;
+    /** 当前 SHA 的验证是否只是编码期间的旁路观察，重启时据此续接。 */
+    pipeline_background?: boolean;
     skipped?: string;
     /** Cloud 原生 Build-Fix；缺席表示服务端尚未开始或不支持该能力。 */
     prepush?: PrepushVerification;
@@ -4897,6 +4903,21 @@ export async function probeEnvironment(id: string): Promise<EnvironmentView> {
 
 export async function syncTaskSkills(taskId: string): Promise<{ added: string[]; warnings: string[]; receipt: string }> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/skills/sync`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function previewTaskEarlyStart(taskId: string, input: EarlyStartInput = {}): Promise<EarlyStartPreview> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/early-start/preview`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+export async function startTaskEarly(taskId: string, input: EarlyStartInput): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/early-start`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

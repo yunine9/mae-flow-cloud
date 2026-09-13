@@ -30,7 +30,7 @@ for (const restart of [false, true]) test(`真实内核：宿主推送后${resta
   await finishTaskHostOperation(host);
   assert.equal(state.summary.delivery.git_push.sha, operation.sha);
   assert.equal(state.summary.delivery.sha, operation.sha);
-  assert.equal(state.summary.delivery.pipeline, undefined);
+  assert.equal(state.summary.delivery.pipeline, "待查询", "push 收据不能冒充流水线正在运行");
   await triggerPipeline({ platformUrl: platform.baseUrl, repo: platform.barePath, sha: operation.sha! });
   const runs = platform.pipelines.length;
   state.mission = undefined; state.summary.status = "verifying";

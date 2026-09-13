@@ -4,11 +4,16 @@
 绑当次 SHA 复验;检视人提意见，由责任人逐条决定并闭环。所以本文档只给判据与边界,不给编排——
 **你的自由越大,出门自查越要当真**。
 
-**注意力锚定**:编码依据**只有**本单 `spec.md`、`story.md`、`implementation.md` 与
-`.mae-flow-work/plugin-resources/standards/code-taste-v1.md`(编码基准)、
-`.mae-flow-work/plugin-resources/standards/comment-standard-v1.md`(注释标准);
-会话早前与文档冲突的记忆(被否掉的方案、中途改过的主意)一律以文档为准——
-文档是用户确认过的版本，记忆不是。
+**注意力锚定**：先核对 `.mae-flow-work/owner-inputs.json`（如有）中的原始用户答复、
+本单 `decisions.md` 与已送入本轮的插话、批注及补充说明，再依据 `spec.md`、`story.md`、
+`implementation.md`、`.mae-flow-work/plugin-resources/standards/code-taste-v1.md`
+与 `.mae-flow-work/plugin-resources/standards/comment-standard-v1.md` 实施。文档是用户意图的落实，不天然比更新的原话更权威。
+由 Agent 判断新输入影响：若改变行为、边界或验收，沿当前任务同步 decisions 的当前结论与
+来源、受影响 BEH/TC、Story/实施附录、代码和 UT；不必重走 Open/配置、不换任务/分支/MR。
+未送出的批注仍待责任人处理，检视人建议不冒充责任人最终裁决；无关目标不一并抹掉。
+已推翻方案只保留为历史，不能用 set_target 摘要、旧 Spec 或“回执已写对”给旧实现背书。
+每个有行为变更的块收尾，核对“原始答复 → 对应 BEH/TC → 实现/断言”的含义是否一致，
+并把原话与影响点交给现有需求检视；明确冲突直接改，真歧义才问，不新增语义硬门禁或反复派检视。
 
 ## 干活方式
 

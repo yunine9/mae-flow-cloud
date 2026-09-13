@@ -1,7 +1,7 @@
 /**
  * 任务级恢复(§11):进程可死,任务不能死。
  *
- * pi 会话是 inMemory 的,恢复靠的是盘上事实:task.json(概要)、
+ * Pi 原生会话保存上下文，流程恢复仍依据盘上事实:task.json(概要)、
  * waiting.json(待办)、events.jsonl(事件连续性)、transcript.jsonl
  * (工具行按 call_id join)。剧本:服务 A 把任务带到等待人工,
  * "崩溃"(丢弃服务 A);服务 B 在同一数据目录上 recover(),
@@ -287,6 +287,11 @@ test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", 
   assert.ok(events.some((event) =>
     event.kind === "session_started" && event.payload?.resume === true),
     "重建会话以 resume:true 留痕");
+  assert.ok(events.some((event) => event.kind === "session_started"
+    && event.payload?.context_restored === true), "真正恢复主任务的 Pi 上下文");
+  const restoredRequest = JSON.stringify(modelB.requests[0]);
+  assert.match(restoredRequest, /方案确认吗/);
+  assert.match(restoredRequest, /恢复测试/, "最新人工答复和补充说明进入原会话");
   assert.ok(events.some((event) => event.kind === "human_decision"),
     "人工决定进事件日志");
   await modelB.stop();

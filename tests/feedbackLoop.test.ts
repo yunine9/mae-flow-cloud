@@ -85,21 +85,21 @@ test("反馈索引中间或完整坏账必须点名失败，不能静默隐藏�
   })]), FeedbackStoreCorruptionError);
 });
 
-test("重启对账保留旧撤回记录，fixed 仍等待责任人逐条处置", () => {
+test("重启对账保留四条已 drop 的意见，fixed 仍等待责任人逐条处置", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-feedback-annotation-reconcile-"));
   const workspace = join(root, "task-1");
   mkdirSync(workspace, { recursive: true });
   const annotations = new AnnotationStore(join(workspace, "annotations.jsonl"));
-  const dropped = annotations.add({
-    author: "alice", artifact: "changes.diff", file: "src/a.ts", line: 1,
+  const dropped = [1, 2, 3, 4].map(line => annotations.add({
+    author: "alice", artifact: "changes.diff", file: "src/a.ts", line,
     anchor: "old", note: "这条撤回", kind: "code",
-  });
+  }));
   const fixed = annotations.add({
     author: "bob", artifact: "changes.diff", file: "src/b.ts", line: 2,
     anchor: "before", note: "请修复", kind: "code",
   });
-  annotations.markSent([dropped.id, fixed.id], "review_repair", "owner");
-  annotations.drop(dropped.id, "alice");
+  annotations.markSent([...dropped.map(row => row.id), fixed.id], "review_repair", "owner");
+  dropped.forEach(row => annotations.drop(row.id, "alice"));
   annotations.respond(fixed.id, {
     outcome: "fixed", summary: "已经修改", evidence: ["src/b.ts"],
   });
@@ -107,10 +107,10 @@ test("重启对账保留旧撤回记录，fixed 仍等待责任人逐条处置",
   // 模拟进程死在“批注状态已落盘、反馈索引尚未核销”的窗口。
   const store = new FeedbackStore(join(workspace, "feedback", "index.jsonl"));
   store.upsert([
-    record({
-      id: `workspace:${dropped.id}:r0@abc`, batch_id: "fb-review",
-      source: "workspace", source_id: dropped.id, status: "repairing",
-    }),
+    ...dropped.map(row => record({
+      id: `workspace:${row.id}:r0@abc`, batch_id: "fb-review",
+      source: "workspace", source_id: row.id, status: "repairing",
+    })),
     record({
       id: `workspace:${fixed.id}:r0@abc`, batch_id: "fb-review",
       source: "workspace", source_id: fixed.id, status: "repairing",
@@ -127,13 +127,16 @@ test("重启对账保留旧撤回记录，fixed 仍等待责任人逐条处置",
       state: "verifying", kind: "review", round: 0, max: 20,
       workspace_review_pending: true,
       workspace_review_recheck_required: true,
-      workspace_review_annotation_ids: [dropped.id, fixed.id],
+      workspace_review_annotation_ids: [...dropped.map(row => row.id), fixed.id],
     } },
   } } as any;
 
   (service as any).reconcileWorkspaceFeedbackAuthority(task);
   const byId = new Map(store.list().map((item) => [item.source_id, item]));
-  assert.equal(byId.get(dropped.id)?.status, "closed");
+  for (const row of dropped) {
+    assert.equal(byId.get(row.id)?.status, "closed");
+    assert.match(byId.get(row.id)?.resolution ?? "", /撤回/);
+  }
   assert.equal(byId.get(fixed.id)?.status, "awaiting_verification");
   assert.match(byId.get(fixed.id)?.resolution ?? "", /等待.*责任人逐条处置/);
   assert.equal(task.summary.delivery.loop.workspace_review_recheck_required, true,
@@ -388,5 +391,7 @@ test("前端状态统计覆盖待处理、修复、核验、闭环与人工停�
     closed: 1,
     needs_human: 1,
     deferred: 0,
+    superseded: 0,
+    superseded_by_merge: 0,
   });
 });

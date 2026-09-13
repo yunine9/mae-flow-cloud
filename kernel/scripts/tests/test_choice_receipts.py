@@ -264,6 +264,29 @@ class ConfigCardPolarityTests(unittest.TestCase):
                             refused.stdout + refused.stderr)
         self.assertEqual("config_confirm", self._current(project))
 
+    def test_full_confirmation_survives_regenerated_config_and_changed_requirement(self):
+        project = self._project()
+        self._answer(project, {
+            "上述完整配置是否正确?": "确认以上全部配置", "交付方式?": "完整开发"})
+        state_path = os.path.join(project, ".mae-flow.json")
+        with open(state_path, encoding="utf-8") as stream:
+            before = json.load(stream)
+        pending = before["config_review"]["config"]
+        with open(os.path.join(project, pending["需求文档"]), "a", encoding="utf-8") as stream:
+            stream.write("\n补充需求说明\n")
+        args = [sys.executable, MAE, "config-review"]
+        for key, value in pending.items():
+            args.extend(["--set", key + "=" + str(value)])
+        rerender = subprocess.run(args, cwd=project, text=True, capture_output=True, timeout=30)
+        self.assertEqual(0, rerender.returncode, rerender.stdout + rerender.stderr)
+        with open(state_path, encoding="utf-8") as stream:
+            after = json.load(stream)
+        self.assertEqual(before["config_review"]["id"], after["config_review"]["id"])
+        self.assertNotIn("sha256", after["config_review"])
+        advanced = self._done(project)
+        self.assertEqual(0, advanced.returncode, advanced.stdout + advanced.stderr)
+        self.assertEqual("workflow_select", self._current(project))
+
 
 if __name__ == "__main__":
     unittest.main()

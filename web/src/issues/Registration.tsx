@@ -422,7 +422,8 @@ function ManualRegister({
         </div>
         {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
           将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
-          (以选定时为准),无需在此填写。
+          (以选定时为准),无需在此填写。密码不会出现在页面或事件流，
+          但会在执行问题处理时明文进入当前 AI 上下文。
         </small>}
 
       </div>

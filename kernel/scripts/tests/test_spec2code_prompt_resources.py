@@ -133,8 +133,10 @@ class Spec2CodePromptResourceTests(unittest.TestCase):
         纯内部指令,用户无感;/compact 类有感提示经业界调研后永久不做。"""
         build = read("flow/steps/build.md")
         self.assertIn("注意力锚定", build)
-        self.assertIn("一律以文档为准", build)
-        self.assertIn("文档是用户确认过的版本，记忆不是", build)
+        self.assertIn("不天然比更新的原话更权威", build)
+        self.assertIn("decisions.md", build)
+        self.assertIn("owner-inputs.json", build)
+        self.assertIn("不新增语义硬门禁", build)
         self.assertNotIn("/compact", build)
 
     def test_fresh_context_mode_is_dispatched_by_current(self):

@@ -323,28 +323,21 @@ test("假平台 E2E：同一 MR 经工作台意见与流水线反馈两轮后合
     await closeWorkspaceReview(service, id, [note]);
     await until(() => service.get(id)!.delivery?.loop?.kind === "ci",
       "工作台修改触发的红灯进入流水线反馈");
-    await until(() => service.get(id)!.waiting?.step === "cloud_push_confirm",
-      "流水线修复的新 HEAD 等责任人快速复检");
-    const pipelineReview = service.get(id)!.waiting!;
-    const pipelineQuestion = (pipelineReview.question as any)
-      .questions[0].question;
-    await service.decide(id, {
-      waiting_id: pipelineReview.waiting_id,
-      state_version: pipelineReview.state_version,
-      selected_options: { [pipelineQuestion]: "确认按清单推送" },
-    });
+    // 同一交付范围已获确认，CI 修复换 SHA 不应再弹第二次推送确认。
     await until(() => Boolean(service.get(id)!.status === "await_merge"
       && service.get(id)!.feedback?.some((item) =>
         item.source === "pipeline" && item.status === "closed")),
-    "两类反馈均完成核验");
+    "人工意见已闭环，旧流水线反馈随新推送归档");
 
     const beforeMerge = service.get(id)!;
+    assert.equal(beforeMerge.waiting, undefined, "沿用已确认的交付范围，不重复询问");
     assert.equal(beforeMerge.delivery?.mr_url, originalMr, "全程只更新原 MR");
     assert.equal(platform.mergeRequests.length, 1, "不能为返工创建第二张 MR");
     assert.deepEqual(new Set(beforeMerge.feedback?.map((item) => item.source)),
       new Set(["workspace", "pipeline"]));
     assert.ok(beforeMerge.feedback?.every((item) => item.status === "closed"),
-      "合入前每条来源反馈都必须闭环");
+      "新 SHA 已取得权威绿灯，旧流水线反馈方可核销；人工意见仍须责任人真实闭环");
+    assert.equal(beforeMerge.delivery?.pipeline, "success", "当前提交仍须取得自己的验证结果");
 
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "MR 合入后终态");

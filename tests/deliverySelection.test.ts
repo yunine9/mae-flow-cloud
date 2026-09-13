@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -101,7 +101,7 @@ async function waitingService(repo: ReturnType<typeof repository>) {
   return { service, model, id, internal };
 }
 
-test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送的源码", async () => {
+test("普通内核检视卡不消费交付勾选；真正 push 前再生成当前清单", async () => {
   const repo = repository();
   const { service, model, id, internal } = await waitingService(repo);
   try {
@@ -113,31 +113,26 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
       selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
       delivery_paths: ["src/feature.ts"],
     });
-    assert.equal(service.get(id)?.delivery_selection?.status, "confirmed");
-    assert.deepEqual(service.get(id)?.delivery_selection?.paths,
-      ["src/feature.ts"]);
-    assert.deepEqual(service.get(id)?.delivery_selection?.excluded_paths,
-      ["target/classes/Feature.class"]);
+    assert.equal(service.get(id)?.delivery_selection, undefined,
+      "阅读普通检视卡不能提前授权或整理 push 清单");
 
     writeFileSync(join(repo.cwd, "src", "extra.ts"), "export const extra = 1;\n");
     repo.git("add", "src/extra.ts");
     repo.git("commit", "--quiet", "-m", "late unreviewed file");
-    assert.equal(await (service as any).deliverySelectionAllowsPush(
-      internal, "master_bot_REQ1"), false);
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1", true), false);
     assert.equal(service.get(id)?.status, "waiting_for_human",
       "确认后现场变化应回到最新检视卡，不能掉进 failed 死胡同");
     assert.equal(service.get(id)?.waiting?.step, "cloud_push_confirm");
     assert.match(service.get(id)?.detail ?? "", /等待确认最终交付范围/);
     assert.match(String(service.get(id)?.waiting?.context ?? ""),
-      /新增 src\/extra\.ts/);
+      /- src\/extra\.ts/);
   } finally {
     await model.stop();
   }
 });
 
-test("非 push 检视调整清单:宿主机械整理并等待重新编译", async () => {
-  // 普通内核检视卡没有“直接提交”的明确选择，仍按兼容默认重新编译。
-  // 且剔除≠销毁——退出提交,内容原样保留。
+test("非 push 检视卡夹带 delivery_paths 也不能机械改写现场", async () => {
   const repo = repository({ commitArtifact: true });
   const { service, model, id, internal } = await waitingService(repo);
   try {
@@ -153,56 +148,19 @@ test("非 push 检视调整清单:宿主机械整理并等待重新编译", asyn
       selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
       delivery_paths: ["src/feature.ts"],
     });
-    const selection = service.get(id)?.delivery_selection;
-    assert.equal(selection?.status, "requested",
-      "机械整理后的新 HEAD 还没经过 Build-Fix 与最终复检");
-    assert.deepEqual(selection?.paths, ["src/feature.ts"]);
-
-    // 宿主补了整理提交:未勾选的退出 commit,清单绑定新 HEAD。
     const after = repo.git("rev-parse", "HEAD");
-    assert.notEqual(after, before, "整理必须落成新提交,不许改写历史");
-    assert.equal(selection?.head, after);
-    assert.match(repo.git("log", "-1", "--format=%s"),
-      /按最终人工检视整理交付清单/);
-    assert.equal(
-      repo.git("ls-files", "--", "target/classes/Feature.class"), "",
-      "被剔除的新增产物必须退出索引");
-    assert.equal(repo.git("show", "HEAD:README.md"), "baseline",
-      "交付的 README 必须是基线内容");
-
-    // 剔除≠销毁:两个被剔除文件的内容都还在工作区。
-    assert.ok(existsSync(join(repo.cwd, "target/classes/Feature.class")),
-      "新增产物退出索引后文件仍在现场");
-    assert.equal(
-      readFileSync(join(repo.cwd, "README.md"), "utf-8"),
-      "baseline\nagent 补的注记\n",
-      "被剔除的改动保留为未暂存内容,不许物理回退");
-
-    // 已确认剔除的路径不算脏账,后续 prepush 轮不被它们绊倒。
-    const dirty = await (service as any).prePushDirtyPaths(internal);
-    assert.ok(!dirty.includes("README.md")
-      && !dirty.includes("target/classes/Feature.class"),
-      `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
-    const excludedNames = ["本地 说明.md", 'local "quote".md', "local -> notes.md", "local\nnotes.md"];
-    for (const name of excludedNames) writeFileSync(join(repo.cwd, name), "keep locally\n");
-    internal.summary.delivery_selection.excluded_paths.push(...excludedNames);
-    const activeName = '实际 "修改".md';
-    writeFileSync(join(repo.cwd, activeName), "real pending edit\n");
-    const exactDirty = await (service as any).prePushDirtyPaths(internal);
-    for (const name of excludedNames) assert.ok(!exactDirty.includes(name), name);
-    assert.ok(exactDirty.includes(activeName), "Git 原始路径不能被引号转义或截断");
-
-    // 新 HEAD 明确回到 preparing，下一次交付统一重新编译。
-    const prepush = service.get(id)?.delivery?.prepush;
-    assert.equal(prepush?.state, "preparing");
-    assert.equal(prepush?.sha, after);
-    assert.match(prepush?.message ?? "", /重新编译/);
+    assert.equal(service.get(id)?.delivery_selection, undefined);
+    assert.equal(after, before, "普通检视决定不能悄悄新增整理提交");
+    assert.notEqual(repo.git("ls-files", "--", "target/classes/Feature.class"), "",
+      "普通检视卡不能把已提交文件移出交付树");
+    assert.equal(readFileSync(join(repo.cwd, "README.md"), "utf-8"),
+      "baseline\nagent 补的注记\n", "现场内容必须原样保留");
   } finally {
     await model.stop();
   }
 });
 
-test("选“需要调整”仍走返工:清单以 requested 进入 Agent 上下文", async () => {
+test("普通检视选“需要调整”只回注返工，不夹带 push 清单契约", async () => {
   const repo = repository({ commitArtifact: true });
   const { service, model, id } = await waitingService(repo);
   try {
@@ -212,13 +170,12 @@ test("选“需要调整”仍走返工:清单以 requested 进入 Agent 上下�
       selected_options: { "这轮代码通过吗？": "需要调整代码（按清单返工）" },
       delivery_paths: ["src/feature.ts"],
     });
-    assert.equal(service.get(id)?.delivery_selection?.status, "requested");
+    assert.equal(service.get(id)?.delivery_selection, undefined);
     await until(() => model.requests.length >= 2 ? true : undefined,
       "交付清单进入 Agent 上下文");
     const requests = model.requests.map((request) => JSON.stringify(request)).join("\n");
-    assert.match(requests, /mae-flow-delivery-selection\/1/);
-    assert.match(requests, /只交付以下 1 个文件/);
-    assert.match(requests, /src\/feature\.ts/);
+    assert.doesNotMatch(requests, /mae-flow-delivery-selection\/1|只交付以下 1 个文件/);
+    assert.match(requests, /需要调整代码/);
   } finally {
     await model.stop();
   }
@@ -231,14 +188,15 @@ test("有外来提交时机械重组不越过它:人推的代码不会被 reset 
   const repo = repository();
   const { service, model, id, internal } = await waitingService(repo);
   try {
-    const waiting = service.get(id)!.waiting!;
-    await service.decide(id, {
-      state_version: waiting.state_version,
-      selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
-      delivery_paths: ["src/feature.ts"],
-    });
-    assert.equal(service.get(id)?.delivery_selection?.status, "confirmed");
     const pushed = repo.git("rev-parse", "HEAD");
+    const baseline = repo.git("rev-parse", "HEAD^");
+    internal.summary.delivery_selection = {
+      paths: ["src/feature.ts"],
+      observed_paths: ["src/feature.ts", "target/classes/Feature.class"],
+      excluded_paths: ["target/classes/Feature.class"],
+      status: "confirmed", waiting_id: "push-review", head: pushed, baseline,
+      updated_at: new Date().toISOString(),
+    };
 
     // 人直接往分支上推的提交,已由宿主接续进本地历史。
     writeFileSync(join(repo.cwd, "hotfix.txt"), "human hotfix\n");

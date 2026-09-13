@@ -127,7 +127,7 @@ test("修复会话结束后以当前 prepush 为焦点，不再同时声称仍�
   };
   const result = projectTaskFocus(task);
   assert.equal(result.headline, "C++ 编译到 24%");
-  assert.equal(result.next_action, "两项通过后才会推送代码");
+  assert.equal(result.next_action, "记录本次验证结果后继续当前工作");
 });
 
 test("prepush 领域态与进程活性分开：无 owner 时不再谎报正在编译", () => {
@@ -259,4 +259,14 @@ test("从未起跑的 failed 单指向重新下单,不指无效重跑(MFC-025)",
     progress: { current_phase: "写代码", step: "自由实现" },
   });
   assert.match(started.next_action, /重跑/);
+});
+
+test("按需验证历史失败不遮盖已继续交付或完成的当前事实", () => {
+  for (const status of ["verifying", "await_merge", "completed", "canceled"] as const) {
+    const current = projectTaskFocus({ status });
+    const withHistory = projectTaskFocus({ status,
+      delivery: { prepush: { state: "environment_error", message: "历史编译环境故障" } },
+    });
+    assert.deepEqual(withHistory, current);
+  }
 });

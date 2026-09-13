@@ -19,18 +19,21 @@ def record_publication(state, payload, proof_nonce):
     from mae_flow_core.quality.external_repair import clear_feedback_authorization
 
     _capability(state)
-    if has_host_receipt(state) and not trusted_feedback_loop(state, (
-            "feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile")):
-        _die("推送交接前的反馈生命周期缺少宿主收据")
     receipt = payload.get("receipt") or {}
     sha = str(receipt.get("sha") or "")
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", sha) or not receipt.get("ref") or not receipt.get("remote"):
         _die("推送交接缺少真实 SHA、远端与引用收据")
     loop = _loop(state)
     if (loop.get("published") or {}).get("sha") == sha:
-        save_with_host_proof(state, proof_nonce)
+        # 恢复会在读取 task.json 的 push 收据后幂等补登记。若内核已经
+        # 用同一 SHA 完成 merged close，生命周期的最新可信事实是 close；
+        # 不能先用旧 push 去要求一条“非终态反馈链”收据，更不能为了
+        # 一次无状态变化的重放覆盖最终 close 投影。
         print(json.dumps({"schema": STATE_SCHEMA, "current": state.get("current"), "idempotent": True}))
         return
+    if has_host_receipt(state) and not trusted_feedback_loop(state, (
+            "feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile")):
+        _die("推送交接前的反馈生命周期缺少宿主收据")
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     loop["published"] = {"sha": sha, "receipt": receipt, "at": now}
     active_id = loop.get("active_batch_id")

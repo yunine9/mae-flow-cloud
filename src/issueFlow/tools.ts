@@ -119,8 +119,8 @@ export interface IssueToolContext {
    * 从资产库定格并落台账;不分介入档,缺席/失败静默。返回是否定格到
    * 了资产。 */
   freezeBusinessKnowledge?: () => boolean;
-  /** 业务知识地图(ADR-0012):analyze 简报的注入段(台账资产+仓内
-   * docs/ 现扫);两源皆空为空串。 */
+  /** 业务知识地图(ADR-0012/0021):analyze 简报只注入定格的
+   * 团队资产台账；无资产时为空串。 */
   businessKnowledgeBrief?: () => string;
   /** 环境预热(2026-09-04):complete_stage 推进进 analyze 时调用。
    * service 侧现读现判开关与幂等,缺席=不预热。 */
@@ -1349,7 +1349,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail("交付平台未配置(部署需 --platform 接适配层),无法验绿 MR 流水线");
       }
       // 逐 MR 查最新推送 SHA 的流水线(验绿事实源,不新增按 MR id 查)。
-      const runs: Array<{ repo: string; sha: string; run: PipelineRun }> = [];
+      const runs: Array<{ repo: string; sha: string; run: PipelineRun | { status: "not_found" } }> = [];
       const staleRepos: string[] = [];
       for (const record of ledger) {
         const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
@@ -1385,7 +1385,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         runs.push({
           repo: record.repo,
           sha,
-          run: stale ? { status: "running" } : latest ?? { status: status.status },
+          run: stale ? { status: "not_found" } : latest ?? { status: "not_found" },
         });
       }
       const failed = runs.filter((item) => item.run.status === "failed");
@@ -1463,7 +1463,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fixedAdvance(ctx.state, to, note);
         // analyze 入口(ADR-0012/0014):先定格业务知识资产(不分介入
         // 档,缺席静默;重走时台账已在,重复定格被台账判据挡住),再
-        // 渲染地图(台账资产+仓内 docs/ 现扫,两源皆空为空),最后
+        // 渲染定格资产地图(空台账则静默缺席),最后
         // 扫描仓内业务 skill 留痕(ADR-0014:圈选闸已封存,只记账
         // 不举卡,AI 按编排技能的索引纪律自主发现)。
         const enteredAnalyze = to === "analyze";

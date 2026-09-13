@@ -64,7 +64,6 @@ import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 
 import { createServer, type Server } from "node:http";
 import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
-import { isInvitedReviewParticipant } from "./reviewParticipation.ts";
 import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
 import { readCurrentStoryArchitecture } from "./overallStoryStore.ts";
@@ -368,6 +367,7 @@ export function createTaskServer(
     log?: (message: string) => void;
     /** 部署版本号(服务启动时间):页面侧边栏显示,部署后确认代码生效。 */
     buildHash?: string;
+    startup?: Pick<import("./startupRecovery.ts").StartupRecovery, "state">;
   } = {},
 ): Server {
   // TaskService 也可由测试、pilot 或嵌入式调用方直接构造。只要 HTTP
@@ -400,6 +400,15 @@ export function createTaskServer(
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
+      if (options.startup && request.method === "GET" && url.pathname === "/health") {
+        return json(response, options.startup.state === "ready" ? 200 : 503,
+          { status: options.startup.state });
+      }
+      if (options.startup && options.startup.state !== "ready") {
+        response.setHeader("Retry-After", "3");
+        return json(response, 503, { error: options.startup.state === "failed"
+          ? "服务恢复失败，请管理员检查启动日志" : "服务正在恢复任务，请稍后重试" });
+      }
       const sessionToken = cookieValue(
         request.headers.cookie,
         "mae_flow_session",
@@ -2685,6 +2694,23 @@ export function createTaskServer(
             return json(response, 202, service.overallStories.generate(id, actor));
           }
         }
+        if (request.method === "POST" && parts[2] === "early-start"
+            && (parts.length === 3 || (parts.length === 4 && parts[3] === "preview"))) {
+          const body = await readBody(request);
+          if (body.release_ids !== undefined && (!Array.isArray(body.release_ids)
+              || body.release_ids.some((value: unknown) => typeof value !== "string"))) {
+            return json(response, 400, { error: "前置任务清单格式不正确" });
+          }
+          if ([body.ticket, body.revision].some(value => value !== undefined && typeof value !== "string")) {
+            return json(response, 400, { error: "单号和预览版本必须为文本" });
+          }
+          const input = { release_ids: body.release_ids as string[] | undefined,
+            ticket: body.ticket === undefined ? undefined : String(body.ticket),
+            revision: body.revision === undefined ? undefined : String(body.revision) };
+          const actor = viewer?.username ?? "本地用户";
+          return json(response, 200, parts[3] === "preview"
+            ? service.previewEarlyStart(id, actor, input) : service.startTaskEarly(id, actor, input));
+        }
         if (parts[2] === "annotations") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2720,16 +2746,10 @@ export function createTaskServer(
               images: Array.isArray(body.images) ? body.images : undefined,
             }));
           }
-          // 受邀者可提交本人意见，不复用只在分析期生效的决定卡权限。
+          // 记下后的意见统一由当前责任人处理；受邀检视人保留阅读与批注入口。
           if (request.method === "POST" && parts[3] === "send") {
-            const assignedReviewer = !!viewer && service.listTaskReviews(id)
-              .some((review) => review.status === "pending"
-                && review.committer === viewer.username);
-            if (!canOperate(viewer, target.luban_account, !!options.auth)
-                && !isInvitedReviewParticipant(target, viewer?.username)
-                && !assignedReviewer) {
-              return json(response, 403, { error: "只有任务责任人或受邀协作者可以送批注" });
-            }
+            if (author !== (target.luban_account ?? "本地用户"))
+              return json(response, 403, { error: "只有当前任务责任人可以转交检视意见" });
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
             return json(response, 200,
@@ -2760,15 +2780,14 @@ export function createTaskServer(
               id, annotationId, author, String(body.text ?? ""),
               viewer?.role === "admin"));
           }
-          // 批注归作者本人管理，与任务责任人 / Committer 身份无关。
+          // 作者负责提出意见，记下后的修改与删除统一由当前责任人操作。
           if (request.method === "PATCH" && parts.length === 4) {
             const body = await readBody(request);
             return json(response, 200,
               service.editAnnotation(id, decodeURIComponent(parts[3]),
                 String(body.note ?? ""), author));
           }
-          // 只能删自己写的:多人环境里替别人删等于替他改主意。
-          // 已提交的表达只能申请撤回，是否闭环仍由责任人逐条决定。
+          // 已交接意见不能删除；新一轮重新处理后可删除，历史仍留账。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
               service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
@@ -2870,7 +2889,12 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) return json(response, 403, { error: "只能操作分配给自己的任务" });
           const body = await readBody(request);
-          return json(response, 200, await service.refreshRemoteDelivery(id, viewer?.username, typeof body.mr_id === "string" ? body.mr_id : undefined));
+          return json(response, 200, await service.refreshRemoteDelivery(
+            id,
+            viewer?.username,
+            typeof body.mr_id === "string" ? body.mr_id : undefined,
+            { administrator: !options.auth || viewer?.role === "admin" },
+          ));
         }
         // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
         if (request.method === "POST"

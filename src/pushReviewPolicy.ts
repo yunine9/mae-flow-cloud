@@ -1,11 +1,5 @@
-/**
- * push 前最终检视的纯领域规则。
- *
- * 它不认识 TaskService、Git 或页面，只判断一张授权收据是否精确覆盖
- * 此刻准备推送的 HEAD 与文件集合。第一次 push、流水线修复后的第二次
- * push、检视返工后的第三次 push 都用同一把尺：HEAD 变了就重新检视；
- * 完全相同的 HEAD 重试则幂等复用，不重复打扰人。
- */
+/** 推送确认保留用户选定的文件范围。内容和 SHA 变化由 Agent 说明，
+ * 不自动作废决定；明确打回或范围调整仍创建新的待办。 */
 
 import { createHash } from "node:crypto";
 import { TaskControlError } from "./errors.ts";
@@ -32,19 +26,15 @@ export function pushReviewReceiptCovers(
   snapshot: PushReviewSnapshot,
 ): boolean {
   return receipt?.status === "confirmed"
-    && receipt.head === snapshot.head
     && sameOrderedValues(receipt.paths, snapshot.paths);
 }
 
-/** 卡身份绑定最终 HEAD。cycleToken 只用来区分同一 HEAD 上明确打回后
- * 的下一轮复检，避免 HumanGate 复活上一张已经 resolved 的卡。 */
+/** 同一文件范围复用待办；cycleToken 区分用户明确打回后的下一轮。 */
 export function pushReviewCallId(
   snapshot: PushReviewSnapshot,
   cycleToken?: string,
 ): string {
   const digest = createHash("sha256")
-    .update(snapshot.head)
-    .update("\0")
     .update(snapshot.paths.join("\0"))
     .update(cycleToken ? `\0cycle:${cycleToken}` : "")
     .digest("hex");
@@ -117,11 +107,10 @@ export function pushReviewPolicyFor(input: {
 }
 
 /** 已有交付清单、又到了推送点:精确收据放行;"全自动"只在同一文件集合
- * 内且有 Build-Fix 收据时代为确认;没收据如实停下;其余重新出卡。 */
+ * 内按责任人既有设置续推；编译结果不代替授权，也不构成额外门禁。 */
 export type SelectionPushDecision =
   | { kind: "allow" }
   | { kind: "auto_confirm"; reason: string }
-  | { kind: "stall"; reason: string }
   | { kind: "recard"; reason: string };
 
 export function selectionPushDecision(input: {
@@ -131,35 +120,21 @@ export function selectionPushDecision(input: {
   expected: string[];
   current: string[];
   head: string;
-  prepushEnabled: boolean;
-  prepushSha: string | undefined;
-  prepushState: string | undefined;
   /** 惰性取:精确收据放行时原来根本不算策略(不读批注)。 */
   policy: () => PushReviewPolicy;
 }): SelectionPushDecision {
   const sameScope = samePaths(input.current, input.expected);
   if (input.selectionStatus === "confirmed"
-      && input.selectionHead === input.head && sameScope) {
+      && sameScope) {
     return { kind: "allow" };
   }
   // "全自动"关闭的是常规最终过目,不是交付白名单。Build-Fix 在同一文件
   // 集合内修出新 SHA 时可以按既定范围自动续推;新增/移除文件是范围冲突,
   // 必须强制出卡,月光也不能代答。
   const policy = input.policy();
-  const verified = !input.prepushEnabled
-    || Boolean(input.prepushSha === input.head
-      && ["passed", "user_skipped"].includes(input.prepushState ?? ""));
   if (!policy.ordinaryReviewEnabled && !policy.recheckRequired
-      && !policy.hasHumanFeedback && sameScope && verified) {
-    return { kind: "auto_confirm",
-      reason: input.prepushState === "user_skipped"
-        ? "用户已跳过 Build-Fix；当前 SHA 未改变已选交付文件范围"
-        : "Build-Fix 已覆盖当前 SHA；未改变已选交付文件范围" };
-  }
-  if (!verified) {
-    return { kind: "stall",
-      reason: `当前 HEAD ${input.head.slice(0, 12)} 尚无有效 Build-Fix 收据，`
-        + "不能自动确认交付范围" };
+      && !policy.hasHumanFeedback && sameScope) {
+    return { kind: "auto_confirm", reason: "按既定推送设置续推；当前 SHA 未改变已选交付文件范围" };
   }
   if (!sameScope) {
     const unexpected = input.current.filter((path) => !input.expected.includes(path));
@@ -172,16 +147,13 @@ export function selectionPushDecision(input: {
     ].filter(Boolean).join("；") || "提交文件集合已经变化" };
   }
   if (input.selectionStatus !== "confirmed") {
-    return { kind: "recard", reason: "交付文件清单已整理完成，等待确认最新 Build-Fix 结果" };
+    return { kind: "recard", reason: "交付文件清单已整理完成，等待确认当前改动" };
   }
-  return { kind: "recard",
-    reason: `交付清单确认绑定的是 ${(input.selectionHead ?? "").slice(0, 12)}，`
-      + `当前待推送提交是 ${input.head.slice(0, 12)}` };
+  return { kind: "allow" };
 }
 
 export function recardDetail(reason: string): string {
-  return `最终确认后现场又发生变化：${reason}。旧确认已自动作废，`
-    + "正在按最新 HEAD 重新生成检视卡；不用重跑任务。";
+  return `需要核对交付范围：${reason}。正在展示当前文件清单；不用重跑任务。`;
 }
 
 /** 重复确认时把文件范围变化说成人话:只补了一个 .gitignore 时人看一行就能

@@ -22,9 +22,6 @@ from mae_flow_core.application.hooks.event_policies import (  # noqa: E402
     agent_kind,
     standalone_pretool_decision,
     stop_decision,
-    template_decision,
-    template_path,
-    template_target,
 )
 from mae_flow_core.application.hooks.events import (  # noqa: E402
     HookEventPorts,
@@ -159,13 +156,6 @@ class HookEventTests(unittest.TestCase):
         ):
             with self.subTest(state=state):
                 self.assertTrue(stop_decision(state, False, {}).allow)
-
-    def test_template_policy_supports_instantiated_placeholders(self):
-        template = "# STORY-{单号}\n## 验收标准\n## 风险\n"
-        document = "# STORY-123\n## 验收标准\n"
-        decision = template_decision(template, document)
-        self.assertFalse(decision.accepted)
-        self.assertEqual(("风险",), decision.missing)
 
     def test_quality_agent_classification_is_application_policy(self):
         cases = (
@@ -304,72 +294,8 @@ class HookEventTests(unittest.TestCase):
         self.assertEqual("block-bash", command.action)
         self.assertEqual("allow", source.action)
 
-    def test_template_target_selection_is_application_policy(self):
-        self.assertEqual(
-            ("STORY-TEMPLATE.md", "STORY"),
-            template_target("docs/story/STORY-123.md"),
-        )
-        self.assertEqual(
-            ("STORY-TEMPLATE.md", "STORY"),
-            template_target(".mae-flow-work/REQ-123/story.md"),
-        )
-        self.assertEqual(
-            ("IMPLEMENTATION-TEMPLATE.md", "IMPLEMENTATION"),
-            template_target(".mae-flow-work/REQ-123/implementation.md"),
-        )
-        self.assertEqual(
-            ("GRILL-PREP-TEMPLATE.md", "GRILL-PREP"),
-            template_target(
-                ".mae-flow-work/standalone/x/grill-prep.md"),
-        )
-        self.assertIsNone(template_target("src/main.py"))
-
-    def test_template_path_prefers_materialized_project_resource(self):
-        local = os.path.join(
-            "/repo", ".mae-flow-work", "plugin-resources",
-            "assets", "STORY-TEMPLATE.md")
-        source = os.path.join(
-            "/repo", "skills", "mae-flow", "assets",
-            "STORY-TEMPLATE.md")
-        self.assertEqual(
-            local,
-            template_path(
-                "/repo", "STORY-TEMPLATE.md",
-                exists=lambda path: path in {local, source}),
-        )
-        self.assertEqual(
-            source,
-            template_path(
-                "/repo", "STORY-TEMPLATE.md",
-                exists=lambda path: path == source),
-        )
-
-    def test_template_path_keeps_project_and_plugin_roots_separate(self):
-        """物化模板在用户项目里，源码兜底在插件里；两者不能共用一个根。"""
-        local = os.path.join(
-            "/repo", ".mae-flow-work", "plugin-resources",
-            "assets", "STORY-TEMPLATE.md")
-        plugin = os.path.join(
-            "/plugin", "skills", "mae-flow", "assets", "STORY-TEMPLATE.md")
-        self.assertEqual(
-            local,
-            template_path(
-                "/repo", "STORY-TEMPLATE.md", "/plugin",
-                exists=lambda path: path in {local, plugin}),
-        )
-        self.assertEqual(
-            plugin,
-            template_path(
-                "/repo", "STORY-TEMPLATE.md", "/plugin",
-                exists=lambda path: path == plugin),
-        )
-
-    def test_hook_validates_the_template_handed_to_the_agent(self):
-        """Agent 拿到的是项目物化模板，Hook 必须按同一份校验。
-
-        插件在途升级后内置模板会新增章节；若 Hook 仍按插件那份校验，
-        Agent 按物化模板写出的正确文档会被 PostToolUse 反复打回。
-        """
+    def test_template_upgrade_does_not_restart_document_review(self):
+        """插件与任务模板不同也不触发新的模板诊断或重新检视。"""
         with tempfile.TemporaryDirectory() as project:
             with tempfile.TemporaryDirectory() as plugin:
                 materialized = os.path.join(
@@ -405,6 +331,7 @@ class HookEventTests(unittest.TestCase):
                     "tool_input": {"file_path": document},
                 })
         self.assertEqual(0, response.exit_code, response.stderr)
+        self.assertEqual("", response.stderr)
 
 
 class MetaBoundTranscriptTests(unittest.TestCase):

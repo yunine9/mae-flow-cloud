@@ -191,7 +191,7 @@ test("业务模块目录不返回正文；下单只交 ID，服务端固定当�
   /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
 });
 
-test("同(单号,归属人)在途重复下单直接拒绝并指路;终态旧单不拦", () => {
+test("同仓并行不按责任人豁免 AR 冲突；失败后重来仍沿用单号", () => {
   // 撞单的真实代价:两单派生同名分支,第二单非快进推送失败烧完预算,
   // 同分支对的 MR 还会被幂等复用互相污染(2026-08-30 审计,"跑挂了
   // 直接重下"是最常见操作)。
@@ -209,10 +209,10 @@ test("同(单号,归属人)在途重复下单直接拒绝并指路;终态旧单�
     && error.message.includes(first.id)
     && error.message.includes("同名分支"),
   "在途重复下单必须拒绝并点名旧单");
-  // 别人的同单号不拦(分支名含工号,不会相撞)。
-  assert.ok(service.create("同单号别人下", {
+  // 换责任人也不能让同仓并行任务复用 AR。
+  assert.throws(() => service.create("同单号别人下", {
     ticket: "REQ-9", account: "bob",
-  }).id);
+  }), /同仓并行/);
   // 旧单进入终态后重下是合法的重来。
   (service as any).tasks.get(first.id).summary.status = "failed";
   assert.ok(service.create("重来一单", {

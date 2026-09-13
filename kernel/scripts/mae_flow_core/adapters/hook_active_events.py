@@ -7,23 +7,17 @@ import tempfile
 import time
 
 from mae_flow_core import atomic_write_json
-from mae_flow_core.workflow.advisories import record_advisory
-from mae_flow_core.workflow.authority import advisory_message
 from mae_flow_core.application.hooks.event_policies import (
     active_pretool_decision,
     agent_kind,
     standalone_pretool_decision,
     stop_decision,
-    template_decision,
-    template_path,
-    template_target,
 )
 from mae_flow_core.application.hooks.models import HookResponse
 from mae_flow_core.adapters.hook_failures import hook_failure
 from mae_flow_core.file_io import (
     load_json,
     read_lines,
-    read_text,
     write_text,
 )
 from mae_flow_core.adapters.hook_agent_lifecycle import HookAgentLifecycle
@@ -308,33 +302,6 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
     def subagentstop(self, payload):
         return self.agent_lifecycle.complete(payload)
 
-    def _template_response(self, path):
-        target = template_target(path)
-        if not target:
-            return HookResponse()
-        template_name, label = target
-        resolved_template = template_path(
-            self.repository_root, template_name, self.plugin_root)
-        if not os.path.exists(resolved_template):
-            self.log(label + " 模板缺失: " + resolved_template)
-            return HookResponse()
-        try:
-            decision = template_decision(
-                read_text(resolved_template), read_text(path))
-        except Exception:
-            return HookResponse()
-        if decision.accepted:
-            return HookResponse()
-        message = advisory_message("%s 模板建议章节缺失: %s"
-                                   % (label, " | ".join(decision.missing)))
-        try:
-            state = self.runtime._contract_state()
-            record_advisory(self.state, state.get("current", ""), "template", message,
-                            time.strftime("%Y-%m-%d %H:%M:%S"))
-        except Exception as exc:
-            self.log("模板提示记录失败: " + str(exc))
-        return HookResponse(stderr=message + "\n")
-
     def _panel_sync(self, written_path="", command=""):
         panel_sync.on_tool_event(
             self.state, self.repository_root, written_path, command)
@@ -345,8 +312,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
         self._panel_sync()          # 脉冲:轻量事实实时化
         if tool in ("Task", "Agent"):
             return self.agent_lifecycle.posttool(payload)
-        # 宿主可能用 file_path 也可能用 path;两者必须走同一条解析,否则写入台账
-        # 记下了而模板结构校验被静默跳过。
+        # 两种宿主路径字段都登记真实写入；文档章节由 Agent 按模板自查。
         written_path = (
             tool_input.get("file_path", "")
             or tool_input.get("path", "")
@@ -367,7 +333,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
             self.runtime._maybe_utrun(payload)
             self._panel_sync(command=command)   # 提交落地即刷新
             return HookResponse()
-        return self._template_response(written_path.replace("\\", "/"))
+        return HookResponse()
 
     def stop(self, payload):
         try:

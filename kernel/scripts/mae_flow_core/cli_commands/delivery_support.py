@@ -1,5 +1,6 @@
 """Small presentation and Git helpers for Cloud delivery commands."""
 import json
+import os
 import re
 
 from .wiring import api
@@ -45,7 +46,17 @@ def render_delivery_feedback(state):
         lines.append("已推送版本：%s。旧 SHA 流水线告警不在当前修复清单，等待本版本验证；推送不表示通过。" % published["sha"])
     target = (loop.get("target") or {}).get("target")
     if target:
-        lines.append("当前优先目标：%s。未暂缓的其他反馈仍保留。" % target)
+        reference = str((loop.get("target") or {}).get("request_id") or "")
+        newer = False
+        try:
+            with open(os.path.join(os.getcwd(), ".mae-flow-work", "owner-inputs.json"), encoding="utf-8") as stream:
+                inputs = json.load(stream).get("instructions", [])
+            index = next((i for i, item in enumerate(inputs) if item.get("id") == reference), -1)
+            newer = bool(inputs) and index < len(inputs) - 1
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass  # 阅读副本不能成为新的流程门禁。
+        label = "先前执行目标（已有后续用户输入，需判断是否仍适用）" if newer else "执行目标摘要（不是最终需求决定）"
+        lines.append("%s：%s；依据原始指令 %s。新用户答复优先，由 Agent 同步受影响文档和实现；未暂缓的其他反馈仍保留。" % (label, target, reference))
     deferred = deferred_feedback(state)
     if deferred:
         lines.append("已由责任人暂缓自动修复：%s。保留原问题，不要求为这些条目补处理回执。"

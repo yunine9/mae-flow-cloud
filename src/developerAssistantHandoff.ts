@@ -42,7 +42,6 @@ export interface DeveloperAssistantCoreCheckpoint {
   step: string;
   title?: string;
   revision?: number;
-  approval_subject_id?: string;
 }
 
 export interface DeveloperAssistantAvailability {
@@ -159,14 +158,10 @@ function coreCheckpoint(
   title?: string,
 ): DeveloperAssistantCoreCheckpoint {
   const revision = Number(state.revision);
-  const approval = state.approval_subject;
-  const approvalId = approval && typeof approval === "object"
-    ? String((approval as Record<string, unknown>).id ?? "").trim() : "";
   return {
     step,
     ...(title ? { title } : {}),
     ...(Number.isFinite(revision) ? { revision } : {}),
-    ...(approvalId ? { approval_subject_id: approvalId } : {}),
   };
 }
 

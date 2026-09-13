@@ -363,6 +363,55 @@ class DeliveryCommandTests(TempProject):
         self.assertEqual(["closed", "closed"],
                          [item["status"] for item in value["delivery_loop"]["batches"]])
 
+    def test_pass_closes_pipeline_feedback_retired_by_the_same_push(self):
+        value = self.live_state("external_verify")
+        old_sha = "b" * 40
+        value["delivery_loop"] = {
+            "schema": delivery.STATE_SCHEMA,
+            "delivery_round": 1,
+            "active_batch_id": "",
+            "close_events": [],
+            "published": {"sha": self.head},
+            "batches": [{
+                "batch_id": "fb-ci", "status": "superseded",
+                "base_sha": old_sha, "superseded_by_push": self.head,
+                "items": [{
+                    "id": "pipeline:%s:COMPILE" % old_sha,
+                    "source": "pipeline",
+                    "source_id": "%s:COMPILE" % old_sha,
+                    "verification": "pipeline",
+                }],
+            }],
+        }
+
+        self.assertFalse(delivery.complete_verified_feedback(value, self.head))
+        retired = value["delivery_loop"]["batches"][0]
+        self.assertEqual("closed", retired["status"])
+        self.assertEqual(self.head, retired["verified_sha"])
+        self.assertEqual(self.head, retired["superseded_by_pipeline"])
+
+    def test_pass_does_not_close_human_feedback_retired_by_push(self):
+        value = self.live_state("external_verify")
+        value["delivery_loop"] = {
+            "schema": delivery.STATE_SCHEMA,
+            "delivery_round": 1,
+            "active_batch_id": "",
+            "close_events": [],
+            "published": {"sha": self.head},
+            "batches": [{
+                "batch_id": "fb-human", "status": "superseded",
+                "base_sha": "b" * 40, "superseded_by_push": self.head,
+                "items": [{
+                    "id": "workspace:an-1", "source": "workspace",
+                    "source_id": "an-1", "verification": "owner",
+                }],
+            }],
+        }
+
+        self.assertFalse(delivery.complete_verified_feedback(value, self.head))
+        self.assertEqual(
+            "superseded", value["delivery_loop"]["batches"][0]["status"])
+
     def test_merged_close_is_the_only_terminal_transition_and_is_idempotent(self):
         value = self.live_state()
         args = SimpleNamespace(
@@ -599,7 +648,7 @@ class DeliveryHostProofTests(TempProject):
             ]}],
         }
         rendered = render_delivery_feedback(value)
-        self.assertIn("当前优先目标：先处理 B", rendered)
+        self.assertIn("执行目标摘要（不是最终需求决定）：先处理 B", rendered)
         self.assertIn("已由责任人暂缓自动修复：A", rendered)
         self.assertNotIn("不应再次派修的旧问题", rendered)
         self.assertIn('"id": "B"', rendered)

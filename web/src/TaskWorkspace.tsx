@@ -1,3 +1,5 @@
+import { TaskEarlyStart } from "./TaskEarlyStart";
+import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
 import { RefreshMrButton } from "./RefreshMrButton";
@@ -98,7 +100,6 @@ import {
   type DeveloperAssistantView,
   type FeedbackRecord,
   type FeedbackSource,
-  type FeedbackStatus,
   type ReviewRequest,
   type TaskSummary,
 } from "./api";
@@ -396,30 +397,6 @@ const FEEDBACK_SOURCE_LABEL: Record<FeedbackSource, string> = {
   push_confirmation: "推送前复检",
 };
 
-const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
-  open: "待处理",
-  repairing: "处理中",
-  addressed: "已处理",
-  awaiting_verification: "待核验",
-  closed: "已完成",
-  needs_human: "需要你决定",
-  deferred: "已暂缓，未解决",
-};
-
-/** 状态文案按来源说人话:同一个 awaiting_verification,对 CodeHub 意见
- * 是"Agent 已回复、等检视人在 MR 里确认",对工作台批注是"等批注作者
- * 确认"。状态本身仍来自任务 API,这里只挑措辞,不推断。 */
-function feedbackStatusLabel(item: FeedbackRecord): string {
-  if (item.source === "mr_discussion") {
-    if (item.status === "awaiting_verification") return "已回复，等检视人确认";
-    if (item.status === "closed") return "检视人已确认";
-  }
-  if (item.source === "workspace" && item.status === "awaiting_verification") {
-    return "等责任人逐条处置";
-  }
-  return FEEDBACK_STATUS_LABEL[item.status];
-}
-
 function groupFeedback(feedback: FeedbackRecord[]) {
   const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
   for (const item of feedback) {
@@ -430,7 +407,7 @@ function groupFeedback(feedback: FeedbackRecord[]) {
 
 /** 意见状态徽标词表(#227 换装:原 .feedback-state.{status} 色板收编为
  * Badge variant;needs_human/awaiting 压在人或检视人手里=warning)。 */
-const FEEDBACK_BADGE: Record<FeedbackStatus, ComponentProps<typeof Badge>["variant"]> = {
+const FEEDBACK_BADGE: Record<FeedbackRecord["status"], ComponentProps<typeof Badge>["variant"]> = {
   open: "warning",
   repairing: "info",
   addressed: "success",
@@ -438,6 +415,9 @@ const FEEDBACK_BADGE: Record<FeedbackStatus, ComponentProps<typeof Badge>["varia
   closed: "neutral",
   needs_human: "warning",
   deferred: "neutral",
+  /* origin/main 新增的两个结束态(feedbackPresentation 同族按 closed 处理) */
+  superseded: "neutral",
+  superseded_by_merge: "neutral",
 };
 
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
@@ -454,7 +434,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
    * 返回错误文案;成功返回 undefined。 */
   onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
 }) {
-  const active = items.filter((item) => item.status !== "closed").length;
+
   const [converting, setConverting] = useState("");
   const [notices, setNotices] = useState<Record<string, string>>({});
   async function convert(item: FeedbackRecord) {
@@ -479,7 +459,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
       </div>
       <div className="flex items-center gap-1.5 text-xs">
         <i className="rounded-full bg-surface-3 px-2 py-0.5 not-italic text-muted-foreground">{items.length} 条</i>
-        {active > 0 && <em className="rounded-full bg-attention-soft px-2 py-0.5 not-italic text-attention">{active} 进行中</em>}
+        <em className="rounded-full bg-surface-3 px-2 py-0.5 not-italic text-muted-foreground">{feedbackSummary(items)}</em>
         {mrUrl && <a href={mrUrl} target="_blank" rel="noreferrer"
           className="text-ink underline underline-offset-2 hover:text-ink-hover">打开 MR</a>}
       </div>
@@ -503,7 +483,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             {item.author && ` · 检视人 ${item.author}`}
             {` · ${relativeTime(item.updated_at) || item.updated_at}`}
           </small>
-          {onConvert && item.status !== "closed" && !notices[item.id] && (
+          {onConvert && !feedbackEnded(item) && !notices[item.id] && (
             <Button type="button" variant="outline" size="xs"
               disabled={converting === item.id}
               title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
@@ -523,7 +503,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
 
 /** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
-  const active = feedback.filter((item) => item.status !== "closed").length;
+  const active = feedback.some(item => !feedbackEnded(item));
   return <section className="grid gap-2.5" aria-label="持续检视反馈明细">
     <header className="flex items-center justify-between gap-3">
       <span className="flex items-baseline gap-2">
@@ -531,7 +511,7 @@ export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
         <small className="text-xs text-muted-foreground">同一个任务、分支和 MR</small>
       </span>
       <Badge variant={active ? "warning" : "success"}>
-        {active ? `${active} 条进行中` : "全部已闭环"}
+        {active ? `${active} 条进行中` : feedbackSummary(feedback)}
       </Badge>
     </header>
     {groupFeedback(feedback).map(([source, items]) => (
@@ -1578,9 +1558,6 @@ export function TaskWorkspace({
     setReviewFocus({ ids, request: reviewFocusRequest.current });
     setReviewPanelOpen(true);
   };
-  const feedbackCategory = (item: FeedbackRecord): Exclude<ReviewFilter, "all"> =>
-    item.status === "closed" ? "closed"
-      : ["needs_human", "deferred"].includes(item.status) ? "mine" : "agent";
   // 归档也照服务端结论:页面不再按 status/sent_via 自己分档。
   const closureOf = (id: string) => closures.find((one) => one.id === id);
   const noteCategory = (item: Annotation): Exclude<ReviewFilter, "all"> =>
@@ -1847,7 +1824,7 @@ export function TaskWorkspace({
           {([
             ["all", "全部"],
             ["mine", "等我确认"],
-            ["agent", "Agent 处理中"],
+            ["agent", "待处理／核验"],
             ["closed", "已完成"],
           ] as const).map(([key, label]) => (
             <TabsTrigger key={key} value={key}
@@ -2555,6 +2532,7 @@ export function TaskWorkspace({
                   ? `（${task.notify.last_error.match(/HTTP\s+\d{3}/)![0]}）` : ""}；待办仍然有效，请在本页处理。</AlertDescription>
               </Alert>
             )}
+            <TaskEarlyStart task={task} onChanged={onChanged} onOpenTask={onOpenTask} />
             {task.status === "queued" && Boolean(task.blocked_by?.length) && (
               <div className="mt-5 grid gap-1.5 rounded-lg border border-line bg-surface p-3 text-sm">
                 <strong className="font-semibold text-text-strong">等待前置任务完成后自动开始</strong>

@@ -142,7 +142,7 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.doesNotMatch(html, /按字数还是按任务\?/, "回执正文不在流里重复");
   assert.doesNotMatch(html, /class="conv-receipts"/, "逐条回执列表只在线程视图");
   assert.match(html, /CodeHub 检视/);
-  assert.match(html, /提了 1 条意见，1 条还没闭环/);
+  assert.match(html, /提了 1 条意见，1 条待闭环/);
   assert.doesNotMatch(html, /移动端入口别竖排/, "外部意见正文也只在抽屉");
   assert.ok((html.match(/打开检视意见/g) ?? []).length >= 3);
   assert.doesNotMatch(html, /看这条的处理记录/, "非线程视图不再逐条给入口");
@@ -175,7 +175,7 @@ test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各
   assert.match(attention, /<strong>等你决定<\/strong><small>等你 [^<]* · 由你负责<\/small>/);
 });
 
-test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲在流末尾", () => {
+test("锚条:等你决定 / N 条意见待你处理;当前卡由父级传入渲在流末尾", () => {
   const waitingTask = { ...task, status: "waiting_for_human",
     waiting: { waiting_id: "w2", state_version: 1, created_at: T3,
       question: { questions: [{ question: "确认?" }] } } } as unknown as TaskSummary;
@@ -187,6 +187,7 @@ test("锚条:等你决定 / N 条意见等你确认;当前卡由父级传入渲�
   const confirm = render({ awaitingYou: 3 });
   // 口径演进后的现文案:「需要我的」锚条只说"待你处理"(阅读筛选,不是权限)。
   assert.match(confirm, /3 条意见待你处理/);
+  assert.match(confirm, /转交 Agent 或核对答复后闭环/);
   assert.match(confirm, /打开检视意见/);
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
   // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。

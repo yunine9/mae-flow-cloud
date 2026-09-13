@@ -4,6 +4,8 @@ node_modules/
 .tasks/
 .local/
 .pilot/
+.pi/
+.agents/
 .ui-fixtures/
 web/dist/
 web/*.tsbuildinfo
@@ -28,3 +30,6 @@ repo/
 # 变更导出包
 changes-*.zip
 changes-*/
+
+# 本机部署脚本不进入代码仓
+/scripts/deploy.sh

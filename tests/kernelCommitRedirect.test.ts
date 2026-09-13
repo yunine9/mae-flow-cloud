@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { KernelHost } from "../src/kernelHost.ts";
 
-test("真实内核与安全 Git 视图：修复提交重定向不丢暂存文件，夹带仍拦截", async () => {
+test("真实内核与安全 Git 视图：修复提交重定向不丢暂存文件，既有用户改动不硬拦截", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-commit-redirect-"));
   const kernelRoot = resolve("kernel");
   const git = (...args: string[]) => execFileSync("git", args, {
@@ -64,9 +64,11 @@ test("真实内核与安全 Git 视图：修复提交重定向不丢暂存文件
       assert.equal(result, undefined, JSON.stringify(result));
     }
     git("add", "--", "user.txt");
-    const blocked = await pre('git commit -m "[REQ123][fix]repair" 2>&1');
-    assert.equal(blocked?.action, "deny");
-    assert.match(blocked?.reason ?? "", /user\.txt/);
+    const allowed = await pre('git commit -m "[REQ123][fix]repair" 2>&1');
+    assert.equal(allowed, undefined,
+      "减权后不以工作区必须干净为理由阻断 Agent");
+    assert.match(git("diff", "--cached", "--name-only"), /user\.txt/,
+      "内核预处理不得丢掉原有暂存内容");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

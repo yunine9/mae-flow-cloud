@@ -76,7 +76,7 @@ class RoleTaskDocumentTests(unittest.TestCase):
         spec = build("code-review", stage="spec")
         standards = build("code-review", stage="standards")
         self.assertIn("需求符合性", spec)
-        self.assertIn("引用 Spec 或 Story 里的原句", spec)
+        self.assertIn("引用原始用户答复或有效决定", spec)
         self.assertNotIn("命名是否继承邻居", spec)
         self.assertIn("工程质量", standards)
         self.assertIn("命名是否继承邻居", standards)

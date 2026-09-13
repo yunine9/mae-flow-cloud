@@ -1,8 +1,12 @@
 # 内网 MR 流水线配置修复
 
 本目录以现场提供的六端点 adapter.json 为基础，修正配置并收编所有本次
-新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的六端点
-补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
+新增的部署实现。生产参考配置为 `adapter.codehub.json`；可合并的 MR/流水线
+端点补丁为 `mr-pipeline.patch.json`。token 不入库，监听端口与凭据设置沿用现场。
+
+`adapter.codehub.json` 的绝对路径是生产示例，不能直接复制给测试环境。
+新装和升级均通过下文的生成器应用补丁，传入当前环境的仓库根目录；
+所有仓内脚本（包括 `mr_discover`）都会替换成该目录，已有生产路径也会纠正。
 
 ## 内网 Agent 本次只负责部署和验收
 
@@ -43,6 +47,15 @@
   merge_status 或门禁布尔 state 推断。已合入/已关闭无需再查询门禁。
 - 详情 SHA 通过 adapter 的 mr_sha 抽取回传，供已有的合入版本核验使用。
   缺失/无效生命周期、SHA、iid 或查询失败均报错，不伪装 opened。
+- mr_discussions 使用 `codehub-cli mr review list` 查询未解决检视意见，
+  按 2026-09-12 内网实测反馈，从根数组读取 discussion；`revision` 取
+  `notes.0.id`，`severity` 取顶层同名字段，文件、行号、作者分别取
+  `notes.0.file_path`、`notes.0.line`、`notes.0.author.username`；正文及
+  更新时间仍取 `notes[0]`。命令保留内网所需 `-k`，超时为 15 秒。
+  需求宿主查询预算同步调整为 20 秒，避免 CLI 尚在预算内就被外层提前中断。
+  此前配置及测试误用了 `position.new_path/new_line` 和 `author.name`，已纠正；
+  本地回归使用上述反馈结构，未在本机连接内网重跑 CLI。
+  配置进入生产和测试 adapter 后，持续检视不再因端点缺席反复收到 404。
 - gate 整体预算 8 秒，adapter 超时 9 秒，与宿主 10 秒查询预算对齐。
 
 `mr-gates.py` 不是重跑脚本：它仅组合两个已有查询的字段。配置、查询桥、
@@ -53,44 +66,21 @@
 必须先把**同一个提交的代码、deploy 目录全部同步**到内网；只换 JSON
 会缺少 mr-gates.py 或 mr_sha 支持。下面命令在测试仓库根目录执行，按实际
 位置替换配置路径。本节只操作测试环境；生产升级在测试验收后另行执行。
+部署脚本由环境侧维护，不进入代码仓。部署时按下面的命令生成、备份并安装配置候选。
 
 生成候选文件（保留现场端口、token_file、其他端点及已有候选链）：
 
 ```bash
-python3 - /etc/mae-flow-cloud-test/adapter.json \
-  /etc/mae-flow-cloud-test/adapter.candidate.json "$PWD" <<'PY'
-import json, os, sys
-from pathlib import Path
-source, destination, root = map(Path, sys.argv[1:])
-config = json.loads(source.read_text())
-patch = json.loads((root / 'deploy/adapter-config/mr-pipeline.patch.json').read_text())
-for key, spec in patch.items():
-    spec['command'] = [part.replace('@REPO_DIR@', str(root.resolve())) for part in spec['command']]
-    if key in ('pipeline_status', 'pipeline_artifacts', 'mr_gates', 'mr_discover'):
-        assert Path(spec['command'][1]).is_file(), spec['command'][1]
-    existing = config.get(key, {})
-    if key in ('pipeline_status', 'pipeline_artifacts'):
-        if 'timeout_s' in existing:
-            spec['timeout_s'] = existing['timeout_s']
-        candidates = existing.get('candidates')
-        if candidates:
-            name = Path(spec['command'][1]).name
-            matches = [i for i, c in enumerate(candidates) if any(name in str(p) for p in c.get('command', []))]
-            position = matches[0] if matches else min(1, len(candidates))
-            retained = [c for i, c in enumerate(candidates) if i not in matches]
-            retained.insert(position, spec)
-            patch[key] = dict(existing, candidates=retained)
-config.update(patch)
-fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w') as output:
-    json.dump(config, output, ensure_ascii=False, indent=2)
-    output.write('\n')
-print('候选已生成:', destination)
-PY
+python3 deploy/adapter-tools/merge-adapter-config.py \
+  /etc/mae-flow-cloud-test/adapter.json \
+  /etc/mae-flow-cloud-test/adapter.candidate.json "$PWD"
 ```
 
-候选独占创建，不会覆盖已有文件。该补丁依据本次贴出的 MR 创建参数；若
-现场有额外参数而候选会丢失，回传差异，不要自行改源码或猜映射。
+候选独占创建，不会覆盖已有文件；生成器会一次合入全部 MR/流水线端点，
+并在落盘前检查 `mr_discover`、`mr_discussions`、`mr_gates` 等必备端点和
+仓内脚本。配置不完整时部署会当场失败并点名缺项，不再等任务运行后以 404
+暴露。该补丁依据本次贴出的 MR 创建参数；若现场有额外参数而候选会丢失，
+回传差异，不要自行改源码或猜映射。
 检查候选后安装并重启对应服务：
 
 ```bash
@@ -120,3 +110,17 @@ CODEHUB_TOKEN 支持）、原有 MCP 客户端及 token 配置。查询桥 API �
 `https://codehub-y.huawei.com/api/v4`，可用 MFC_CODEHUB_API 覆盖；CLI host
 可用 MFC_CODEHUB_CLI_HOST 覆盖。REST 使用系统 TLS 校验并绕过代理，
 与原 pipeline-status.sh 一致。密钥及现场刷新程序不写进配置样例。
+
+
+### 提前推送与流水线观察
+
+`pipeline_trigger.observe_only: true` 用于 CodeHub 由 push/MR 自动触发的部署。
+此时 `/pipeline/trigger` 复用已有的状态查询链，不执行额外 rerun，原样返回
+实际运行记录；空结果表示尚未发现流水线，不再固定返回 `running`。
+需要真正执行触发命令的其他适配层继续使用原配置，不设置此字段。
+部署时同步本目录配置补丁并重启 adapter；仅升级 serve 也会在状态轮询返回
+空记录后纠正旧版 `running` 显示。
+
+Cloud 在编码阶段允许提前推送、创建 MR 和验证。提前验证只记录提交状态，
+同时续接当前目标；只有内核交接或纯 CI 修复目标已完成后才由验证接管。
+重启会恢复现有代码现场和监听，不清空推送收据；暂停和待答复保持原状态。

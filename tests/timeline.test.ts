@@ -225,7 +225,7 @@ test("会话中断如实呈现;成功收口不刷屏", () => {
   const broken = find(entries, "会话中断");
   assert.equal(broken?.tone, "danger");
   assert.match(String(broken?.detail), /429/);
-  assert.equal(find(entries, "重建会话续跑")?.tone, "info");
+  assert.equal(find(entries, "依据现场重建会话")?.tone, "info");
   // 正常收口不产生条目:时间线是人话摘要,不是事件转储。
   assert.equal(entries.filter((e) => e.title === "会话中断").length, 1);
 });

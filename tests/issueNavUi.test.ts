@@ -22,7 +22,8 @@ const legacyCss = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
 /** 侧边栏导航区(视图切换)整段,角色分支再切片。 */
 function navSlices(): { nav: string; admin: string; developer: string } {
-  const nav = app.slice(app.indexOf('aria-label="视图切换"'), app.indexOf("</nav>"));
+  const nav = app.slice(app.indexOf('<SidebarContent aria-label="视图切换"'),
+    app.indexOf("</SidebarContent>"));
   const admin = nav.slice(
     nav.indexOf('session.role === "admin" ? <>'), nav.indexOf("</> : <>"));
   const developer = nav.slice(nav.indexOf("</> : <>"));
@@ -47,6 +48,9 @@ test("父行=展开/收起开关:本地 open 态承载,箭头旋转指示,点击
     "父行开关是本地展开态");
   assert.match(app, /aria-expanded=\{open\}/, "展开态进 aria");
   assert.match(app, /ChevronDown/, "展开指示箭头(lucide)");
+  assert.match(app, /<SidebarMenuButton[^>]*aria-label="问题处理"/,
+    "父行是可读屏的 Sidebar 按钮");
+  assert.match(app, /\{open && <SidebarMenuSub>/, "子页签只在展开时显示");
   assert.match(app, /rotate-180/, "展开态箭头旋转 180°");
   // 父行沿用存量 nav-item 家族(视觉零跳变),但不再走 onSelect 跳页。
   const { nav } = navSlices();

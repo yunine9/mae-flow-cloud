@@ -166,25 +166,25 @@
     },
     {
       "id": "platform.delivery",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "title": "受控交付与出口验证",
-      "summary": "以精确交付清单、推送前真实验证、绑定 SHA 的权威流水线和人工检视完成交付。",
+      "summary": "编码过程中可自由编译和运行 UT；以精确交付清单、绑定 SHA 的权威流水线和人工检视完成交付。独立 Build-Fix 按需使用，基线预热保留。",
       "phase": "检视与验证",
       "steps": ["delivery_review", "push", "external_verify", "delivery_watch", "feedback_triage", "moonlight_review"],
       "activities": [
         {"id": "exact-delivery-scope", "title": "确认精确交付范围", "description": "只提交本单真实增量，不夹带过程文件和平台注入目录。", "required": true},
-        {"id": "real-prepush-verification", "title": "推送前真实验证", "description": "在构建环境执行编译、UT 和必要修复，结果必须可追溯。", "required": true},
+        {"id": "real-prepush-verification", "title": "按需独立验证", "description": "Agent 在编码过程中按改动影响自由编译和运行 UT，记录命令、范围、版本与结果；需要时主动请求独立 Build-Fix，不在交付前强制补跑。基线预热不代表改动已验证。", "required": false},
         {"id": "sha-bound-pipeline", "title": "绑定 SHA 的流水线核销", "description": "编译、UT、CodeCheck 和远端提交必须属于同一交付版本。", "required": true},
         {"id": "human-review-and-merge", "title": "等待人工检视与合入", "description": "平台不冒充检视人，也不自动替用户合入。", "required": true},
         {"id": "delivery-diff-narrative", "title": "交付差异说明", "description": "对本次新增、排除和修复回程中的范围变化给出一份简短可追溯说明。", "required": false}
       ],
       "resources": [
         {"id": "quality-guidance", "kind": "guidance", "name": "质量出口口径", "ref": "guidance/quality.md", "usage": "on_demand"},
-        {"id": "prepush-agent", "kind": "platform", "name": "推送前验证 Agent", "usage": "required", "locked": true},
+        {"id": "prepush-agent", "kind": "platform", "name": "按需 Build-Fix Agent", "usage": "on_demand"},
         {"id": "host-git-push", "kind": "platform", "name": "Git 宿主推送", "usage": "required", "locked": true},
         {"id": "pipeline-and-mr", "kind": "platform", "name": "权威流水线与 MR", "usage": "required", "locked": true}
       ],
-      "outputs": ["精确交付清单", "推送前验证收据", "远端 SHA", "流水线与 MR 状态"]
+      "outputs": ["精确交付清单", "实际验证结果（独立 Build-Fix 按需）", "远端 SHA", "流水线与 MR 状态"]
     },
     {
       "id": "platform.merged",

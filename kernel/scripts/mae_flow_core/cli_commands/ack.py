@@ -123,11 +123,6 @@ def _current_ack_messages(st, extra_steps=()):
             # 一卡合一预答通道:配置确认卡合并收集的选择(交付方式/质询/STORY),
             # 供随后的选择步直接消费,免逐步重复提问;仍是本单内真实捕获的用户答案。
             out.append(item)
-    subject = (st or {}).get("approval_subject") or {}
-    if subject.get("step") == sid and subject.get("sha256"):
-        out = [item for item in out
-               if item.get("approval_subject_sha256") == subject.get("sha256")
-               and item.get("approval_subject_id") == subject.get("id")]
     return out
 
 
@@ -245,7 +240,7 @@ def _implicit_ack_verified(step, st):
                 _ack_failure(st, success=True)
                 return True, ""
             if not is_refusal(candidate):
-                # A fresh, subject-bound direct reply need not copy a button.
+                # A current-step direct reply need not copy a button.
                 if expected and not (re.sub(r"\s+", "", item.get("text", "")) == candidate
                                      and _is_positive_confirmation(candidate)):
                     continue
@@ -254,45 +249,19 @@ def _implicit_ack_verified(step, st):
     wanted = " / ".join(step.get("confirmation_answers", []))
     actual = " / ".join(dict.fromkeys(value for item in rows for value in
         _trusted_answer_values(item.get("text", ""))))
-    stale = _stale_subject_answers(st) if not rows else []
-    why = (_out_of_scope_ack_reason(st) if not rows and not stale else "") or (
+    why = (_out_of_scope_ack_reason(st) if not rows else "") or (
         ("用户在确认卡上选择了修改/打回(%s)。按用户意见修订后重新用 "
          "AskUserQuestion 出卡确认;不能直接 done,也不要原样重复提问。"
          % (actual or "无")) if refused_card else
         ("已捕获当前步骤答案「%s」，但未匹配标准确认按钮「%s」。"
          "不要猜 --choice 或重复询问；按 current 输出原样展示标准按钮。"
          % (actual or "无", wanted or "肯定")) if rows else
-        ("用户确认过一次,但确认之后审批内容(%s)发生了变化,旧确认自动"
-         "失效——这不是没回答,是内容变了。展示变化后的当前内容并重新"
-         "取得一次决定即可;不需要重新解释,更不要重做已完成的工作。"
-         "若变化来自你在确认后的修改,以后先定稿再询问,避免二次打扰。"
-         % _subject_display_paths(st)) if stale else
         ("尚未捕获到本步骤的%s选择。正常情况下直接使用 AskUserQuestion 让用户点选即可，"
          "done 会自动读取结果；只有宿主确实没有回传按钮结果时，才让用户发送一次标准选项。"
          % (("「" + wanted + "」") if wanted else "肯定")))
     count = _ack_failure(st, why)
     return False, why + _ack_retry_guidance(count)
 
-
-def _subject_display_paths(st):
-    paths = ((st or {}).get("approval_subject") or {}).get("paths") or []
-    return "、".join(paths) if paths else "检视内容"
-
-
-def _stale_subject_answers(st):
-    """有印章但对不上当前内容的答案:用户确认之后审批产物又变了。
-    没有这个判别,印章过滤后的空账本会报"尚未捕获到选择",把"内容变了
-    该重看"误诊成"没回答过"(2026-08-26 定位 story 二次确认问题时补)。"""
-    subject = (st or {}).get("approval_subject") or {}
-    if not subject.get("sha256"):
-        return []
-    sid = st.get("current", "")
-    entered = api._step_entered_at(st)
-    return [item for item in _all_ack_messages()
-            if item.get("at", "") >= entered
-            and (not item.get("step") or item.get("step") == sid)
-            and item.get("approval_subject_sha256")
-            and item.get("approval_subject_sha256") != subject.get("sha256")]
 
 def _choice_verified(step, st, choice, ack_cursor=None):
     """Bind --choice to the concrete answer returned by Claude Code/CodeAgent."""
@@ -408,28 +377,9 @@ def _ack_verified(st, ack, exact=True):
     count = _ack_failure(st, why)
     return False, why + _ack_retry_guidance(count)
 
-def _requirement_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def _config_sha256(config, requirement_sha=""):
-    payload = json.dumps(
-        {"config": config or {}, "requirement_sha256": requirement_sha},
-        ensure_ascii=False, sort_keys=True,
-        separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-def _config_ack_verified(st, ack, config_sha, review_id):
-    """Verify one final confirmation bound to the exact reviewed config."""
-    current_rows = _current_ack_messages(st)
-    messages = [
-        item for item in current_rows
-        if item.get("config_review_sha256") == config_sha
-        and item.get("config_review_id") == review_id
-    ]
+def _config_ack_verified(st, ack):
+    """Verify the user's full-config decision without content fingerprint expiry."""
+    messages = _current_ack_messages(st)
     normalized_ack = re.sub(r"\s+", "", ack or "")
     reviewed = reviewed_config(st)
     matched = False
@@ -468,9 +418,6 @@ def _config_ack_verified(st, ack, config_sha, review_id):
         count = _ack_failure(st, why)
         return False, why + _ack_retry_guidance(count)
 
-    # 单项判定只对"绑定本轮确认单的收据"有意义;没有收据时走下面的
-    # "没捕获到绑定回复"分支——收据绑定(review_id/sha)本身就是配置确认的编号,
-    # 与 allow 绑拦截编号是同一形状。
     if normalized_ack and messages and normalized_ack not in whole_card_answers(
             messages, reviewed, _trusted_answer_candidates):
         why = (
@@ -479,11 +426,11 @@ def _config_ack_verified(st, ack, config_sha, review_id):
             "那一项。做法:用 AskUserQuestion 展示 config-review 输出后,"
             "只问一次“是否确认以上全部配置”,选项照旧简短。"
         )
-    elif not messages and not current_rows and _out_of_scope_ack_reason(st):
+    elif not messages and _out_of_scope_ack_reason(st):
         why = _out_of_scope_ack_reason(st)
     elif not messages:
         why = (
-            "没有捕获到与当前配置确认单绑定的用户回复。AskUserQuestion 的应答可能未被宿主回传；"
+            "没有捕获到当前步骤的完整配置确认。AskUserQuestion 的应答可能未被宿主回传；"
             "无需退出或重新初始化，让用户发送一条普通消息“%s”即可恢复。"
             % CONFIG_CONFIRM_ACK
         )

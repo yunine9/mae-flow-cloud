@@ -174,7 +174,7 @@ test(
       assert.ok(forged, "缺伪造状态的调用");
       const verdict = results.get(forged.id);
       assert.equal(verdict?.is_error, true);
-      assert.match(String(verdict?.content), /禁止经 Bash 直接访问/);
+      assert.match(String(verdict?.content), /禁止经 Bash (?:直接访问|改写\/删除)/);
 
       // 原仓不被污染。
       assert.ok(!existsSync(join(FIELDTEST, ".mae-flow.json")));
