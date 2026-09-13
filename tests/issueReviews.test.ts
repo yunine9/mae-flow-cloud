@@ -2,14 +2,16 @@
  * 检视账本的单元契约(ADR-0007,数据面在 src/issueFlow/reviews.ts):
  * - 记/移除:作者恒为归属人,软删留痕;空内容/空锚点打回;
  * - 意见号(#261,ADR-0025):落账时分配,自 1 单调递增、永不复用
- *   (软删也不回收)、跨批次连续;旧账无号不占号;
+ *   (软删也不回收)、跨批次连续;意见号是落账硬要求,无号即坏账
+ *   (系统未上线,不存在无号旧账,没有兼容分支);
  * - 锚点检测:gone = 已被改动的唯一判据,moved 只是漂移;读不到
- *   报告按 hit 放行(fail-open,检测绝不挡人);
+ *   报告按 hit 放行(fail-open,检测绝不挡人);只服务草稿
+ *   (ADR-0025「新版干净纸面」),sent 意见不再检测;
  * - 提交:草稿标记送出,被检视报告留版本快照(子目录,不混进过程
  *   文档清单);没有草稿返回空(服务层据此打回);
- * - 渲染:护栏原文沿用 annotations.ts 的契约,清单序号 = 意见号
- *   (「意见N」,不再批次内 1..N 重编号),修订版报告开头要有
- *   「检视意见回应」段的护栏要求,收尾指回 submit_analysis。
+ * - 渲染:护栏原文沿用 annotations.ts 的契约,清单按意见号升序编排、
+ *   序号 = 意见号(「意见N」,不再批次内 1..N 重编号),修订版报告
+ *   开头要有「检视意见回应」段的护栏要求,收尾指回 submit_analysis。
  */
 
 import { test } from "node:test";
@@ -91,6 +93,16 @@ test("锚点检测:没动=hit;重写原文消失=gone(已被改动的唯一判�
   const blind = mfcTemp("mfc-issue-reviews-blind-");
   addReview(blind, { author: "dev", line: 1, anchor: "随便", note: "n" });
   assert.equal(anchorChecks(blind)[0]?.state, "hit");
+
+  // 漂移检测只服务草稿(ADR-0025「新版干净纸面」):sent 意见锚在
+  // 自己批次的冻结版上,冻结文本永不漂移——不再对 live 出检测项。
+  const submitted = workspace();
+  addReview(submitted, {
+    author: "dev", line: 3, anchor: "根因:重试无上限", note: "n",
+  });
+  assert.equal(anchorChecks(submitted).length, 1);
+  submitReviews(submitted);
+  assert.deepEqual(anchorChecks(submitted), [], "sent 意见不再漂移检测");
 });
 
 test("提交检视:草稿标记送出;报告版本快照落在子目录、不混进过程文档清单;无草稿返回空", () => {
@@ -156,9 +168,11 @@ test("意见号分配(#261):自 1 单调递增;跨批次连续不重置;软删�
     false, "被软删的号不露面,但仍被占着");
 });
 
-test("意见号(#261):功能上线前的旧账无 seq,不占号、新号自 1 起;渲染续编兜底", () => {
+test("意见号(#261):无号即坏账——台账历史有无 seq 的 add,新增与渲染都炸出来,不留兼容垫片", () => {
   const root = workspace();
-  // 手写一条旧账 add(无 seq):旧账从没发过号,不该让新号从 2 起跳。
+  // 手写一条无 seq 的 add:系统未上线,台账不该出现这种记录,出现了
+  // 就是坏账——按 CLAUDE.md 红线不给「旧账不占号」式宽容分支,炸出
+  // 来修数据,而不是悄悄绕过。
   appendFileSync(join(root, "reviews.jsonl"), JSON.stringify({
     op: "add",
     record: {
@@ -169,17 +183,35 @@ test("意见号(#261):功能上线前的旧账无 seq,不占号、新号自 1 �
       kind: "doc", status: "draft",
     },
   }) + "\n");
-  const added = addReview(root, {
+  assert.throws(() => addReview(root, {
     author: "dev", line: 5, anchor: "方案:直接重试", note: "先说清重试策略",
-  });
-  assert.equal(added.seq, 1, "旧账不占号,新号自 1 起");
+  }), /无意见号/, "落账口对无号历史 add 不再特殊照顾");
 
-  // 渲染兜底:旧账(无号)排在台账号(1)之后续编,不与新号冲突。
+  // 渲染同样不收无号意见:意见必须带号,不给续编兜底。
   const legacy = reviewStore(root).list().find((item) => !item.seq)!;
-  const text = renderReviewNotes([added, legacy], "登录超时", 1);
-  assert.match(text, new RegExp(`意见1\\. \\[${added.id}\\] 历史第 5 行`));
-  assert.match(text, new RegExp(`意见2\\. \\[${legacy.id}\\] 历史第 3 行`),
-    "无号旧账按台账号续编兜底,不与台账号冲突");
+  assert.throws(() => renderReviewNotes([legacy], "登录超时", 1),
+    /意见必须带号/, "无号意见不渲染,不给「意见N」以外的假号");
+});
+
+test("意见清单跨批次按意见号升序(#261,ADR-0025):乱序输入也按号递增,不按行号/传入序", () => {
+  const root = workspace();
+  // 第一批:意见1 在第 10 行;送出后第二批接续编号,意见2 在第 3 行
+  // (行号比意见1 小——行号序会把意见2 排到意见1 前,ADR-0025 的
+  // 「清单按意见号编排」不容许这种倒挂)。
+  const batchOne = addReview(root, {
+    author: "dev", line: 10, anchor: "锚10", note: "n10",
+  });
+  submitReviews(root);
+  const batchTwo = addReview(root, {
+    author: "dev", line: 3, anchor: "锚3", note: "n3",
+  });
+  assert.equal(batchTwo.seq, batchOne.seq! + 1, "跨批次连续,号接续");
+  // 故意按号倒序传入:输出必须按意见号升序,行号序与传入序都不认。
+  const text = renderReviewNotes([batchTwo, batchOne], "登录超时", 2);
+  const atOne = text.indexOf(`意见${batchOne.seq}. [${batchOne.id}]`);
+  const atTwo = text.indexOf(`意见${batchTwo.seq}. [${batchTwo.id}]`);
+  assert.ok(atOne >= 0 && atTwo > atOne,
+    `意见${batchOne.seq} 必须排在意见${batchTwo.seq} 之前(跨批次不倒挂)`);
 });
 
 test("意见清单按意见号编排(#261):序号=意见号而非批次内重编号;回应段护栏原文在", () => {

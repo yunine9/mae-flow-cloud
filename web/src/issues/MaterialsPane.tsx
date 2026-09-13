@@ -17,7 +17,8 @@ import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTarge
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
  * 修改编辑器、压缩包解压、检视(行尾圈注与正文下方的草稿/提交区);
- * 文件/diff/日志/文档的只读浏览完整保留。
+ * 文件/diff/日志/文档的只读浏览完整保留,已提交的检视意见清单照看
+ * (纯读,#259 story 23)。
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -202,8 +203,9 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate
  * 纸面(已提交意见不再标记在 live 上,行尾只剩草稿),冻结版只读、
  * 该批提交意见的锚点标记画在它的冻结版上。
  * 检视(ADR-0007):报告按行悬停圈注意见(交互与需求流批注同一套),
- * 草稿攒在正文下方、一次提交触发整体回退重跑——都是写操作,查看
- * 模式(canOperate=false)下整块不渲染,文档照读。 */
+ * 草稿攒在正文下方、一次提交触发整体回退重跑。写口(行尾圈注、草稿
+ * 编辑、提交)只在归属操作权(canOperate)下渲染;已提交意见清单是
+ * 纯读面,登录只读访问者也可见(spec #259 story 23),文档照读。 */
 function IssueAnalysisReport({ detail, canOperate }: {
   detail: IssueDetail;
   canOperate: boolean;
@@ -442,7 +444,10 @@ function IssueAnalysisReport({ detail, canOperate }: {
     {!loading && !note && content && <div className={cn("flex flex-col gap-3",
       fullscreen && "mx-auto min-h-0 w-full max-w-[1760px] flex-1 overflow-auto px-[clamp(20px,3vw,48px)] pb-20 pt-[22px] [&_.mermaid-figure]:overflow-x-hidden [&_.mermaid-diagram]:w-full [&_.mermaid-diagram]:min-w-0 [&_.mermaid-diagram]:max-w-full [&_.puml-diagram]:w-full [&_.puml-diagram]:min-w-0 [&_.puml-diagram]:max-w-full")}>
       {/* 版本页签条(#262):多版才渲染,缺省选中最新版;只有初版时
-          不出条,正文即全部。样式与材料域的逐仓切换同款药丸。 */}
+          不出条,正文即全部。手搓 button 药丸沿用本文件既有先例
+          (「工作区变更」的逐仓切换药丸,见下方 diffRepos):版本是
+          平铺的筛选态,没有面板体要挂,不走 Tabs 原语——同 #123 的
+          拍平口径,页签容器语义会凭空多出一层壳。 */}
       {versions.length > 1 && <div className="flex flex-wrap gap-1.5"
           role="group" aria-label="分析报告版本">
         {versions.map((entry) => (
@@ -491,12 +496,15 @@ function IssueAnalysisReport({ detail, canOperate }: {
               </Annotatable>
             : <Markdown showLineNumbers text={content} />}
         </article>
-        {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):草稿清单与
-            提交按钮不再藏在页签后;写口整体挂 canOperate。只随最新版
-            出现——冻结版是历史纸面,不收新意见(#262)。 */}
-        {canOperate && <IssueReviewPanel detail={detail} reviews={reviews}
+        {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):不再整块挂
+            canOperate——已提交意见清单是纯读面,登录只读访问者也可见
+            (spec #259 story 23,服务端本就登录可读);草稿/提交写口
+            在面板内收闸。只随最新版出现——冻结版是历史纸面,不收新
+            意见(#262)。 */}
+        <IssueReviewPanel detail={detail} reviews={reviews}
           checks={checks} reviewEnabled={reviewEnabled}
-          onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
+          canOperate={canOperate}
+          onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
       </> : <article className="issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]">
         {frozenNote && <div className="utility-note mb-2" role="alert">{frozenNote}</div>}
         {frozen ? <>
@@ -515,6 +523,8 @@ function IssueAnalysisReport({ detail, canOperate }: {
 
 /** 锚点检测徽标(ADR-0007 Q13):gone = 已被改动(唯一判据),原文
  * 还在 = 黄灯提醒"这条可能还没被吸收"。人工改动引发的失配同理可见。
+ * 只服务草稿(ADR-0025「新版干净纸面」):sent 意见锚在自己批次的
+ * 冻结版上,冻结文本永不漂移,不再出检测、不再带徽标。
  * (#230 换 Badge 皮:gone 保留主动作紫提请注意,其余中性灰。) */
 function IssueReviewBadge({ check }: { check?: IssueReviewCheck }) {
   if (!check) return null;
@@ -542,14 +552,16 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
 }) {
   return <li className={REVIEW_ITEM}>
     <div className="flex items-baseline gap-2">
-      {/* 「意见N」是唯一对外标识(#261):台账 an- id 不出面;旧账没有
-          号时如实降级,不给假号。 */}
+      {/* 「意见N」是唯一对外标识(#261):台账 an- id 不出面;意见号是
+          落账硬要求(ADR-0025),不存在无号意见,不给降级也不给假号。 */}
       <span className="shrink-0 text-[13px] font-bold text-text-strong">
-        {item.seq === undefined ? "意见" : `意见${item.seq}`}
+        意见{item.seq}
       </span>
       <Button type="button" variant="link" size="xs" className="h-auto px-0"
         onClick={() => onLocate(item)}>查看原文</Button>
-      {item.status === "sent" && <IssueReviewBadge check={check} />}
+      {/* 漂移徽标只服务草稿(ADR-0025「新版干净纸面」):sent 意见锚在
+          自己批次的冻结版上,冻结文本永不漂移,徽标无意义。 */}
+      {item.status === "draft" && check && <IssueReviewBadge check={check} />}
       <time className="text-xs text-faint">{formatLocalDateTime(item.created_at, { seconds: true })}</time>
       {onRemove && <Button type="button" variant="ghost" size="xs" className="ml-auto"
         onClick={onRemove}>移除</Button>}
@@ -560,13 +572,17 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
 }
 
 /** 检视区(#260 内联,原「检视」页签):草稿攒批、一次提交触发整体
- * 回退(轻量确认列明后果);已提交的意见带锚点徽标,服务于下一轮
- * 对照。常驻分析报告正文下方,不再是独立页签。 */
-function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, onLocate }: {
+ * 回退(轻量确认列明后果)。常驻分析报告正文下方,不再是独立页签。
+ * 可见性分两层(spec #259 story 23):已提交意见清单是纯读面,登录
+ * 访问者都可看;草稿编辑/移除/提交是写口,整段收在 canOperate——
+ * 服务端本就登录可读、写仅归属人,这里只管把写控件放对位置。 */
+function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, onReload, onLocate }: {
   detail: IssueDetail;
   reviews: IssueReview[];
   checks: IssueReviewCheck[];
   reviewEnabled: boolean;
+  /** 归属操作权(查看模式=false):已提交清单照看,草稿写口不渲染。 */
+  canOperate: boolean;
   onReload: () => void;
   onLocate: (item: IssueReview) => void;
 }) {
@@ -616,13 +632,13 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
     {detail.review_active && <div className="utility-note">
       上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
     </div>}
-    {drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
+    {canOperate && drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
       <EmptyTitle>还没有检视意见</EmptyTitle>
       <EmptyDescription>把鼠标停在上方报告要提意见的那一行,点行尾的 ✎ 记一条;
       攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
     </Empty>}
     {note && <div className="utility-note">{note}</div>}
-    {drafts.length > 0 && <section>
+    {canOperate && drafts.length > 0 && <section>
       <h4 className={NOTE_HEAD}>待提交({drafts.length})</h4>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {drafts.map((item) => <IssueReviewItem key={item.id} item={item}
@@ -642,6 +658,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
         </Button>
       </div>
     </section>}
+    {/* 已提交清单(spec #259 story 23):纯读,登录只读访问者也可见。 */}
     {sent.length > 0 && <section>
       <h4 className={NOTE_HEAD}>已提交({sent.length})</h4>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">

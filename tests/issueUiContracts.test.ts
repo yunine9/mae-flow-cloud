@@ -488,22 +488,43 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
   assert.match(materials,
     /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
-  // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方,
-  // 整块挂 canOperate;行尾圈注写口仍在,且同样收闸(reviewEnabled+
+  // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方。
+  // (#259 story 23 修正:已提交意见清单是纯读面,登录只读访问者也可见
+  // ——面板不再整块挂 canOperate;服务端本就登录可读,这是纯前端展示
+  // 面放宽,写边界不变。)行尾圈注写口仍在,同样收闸(reviewEnabled+
   // canOperate 才给 Annotatable)。
   assert.match(materials,
-    /\{canOperate && <IssueReviewPanel detail=\{detail\} reviews=\{reviews\}/);
+    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\}[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(materials,
     /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+});
+
+// ---- 检视区可见性分两层(#259 story 23,ADR-0025):已提交清单纯读、
+// ---- 登录访问者都可看;草稿编辑/移除/提交写口仍收在 canOperate。
+
+test("检视区草稿写口收闸、已提交清单对只读访问者可见(#259 story 23)", () => {
+  const reviewPanel = materials.slice(
+    materials.indexOf("function IssueReviewPanel"),
+    materials.indexOf("export function IssueMaterialsPane"));
+  // 写口(草稿清单/空态指引)必须挂在 canOperate 分支下。
+  assert.match(reviewPanel, /canOperate && drafts\.length === 0 && sent\.length === 0 && <Empty/,
+    "空态里的圈注指引是写口导引,只读访问者不看");
+  assert.match(reviewPanel, /canOperate && drafts\.length > 0 && <section>/,
+    "草稿编辑与提交按钮仍收在 canOperate");
+  // 已提交清单不挂任何归属条件:纯读,spec #259 story 23 的验收面。
+  assert.match(reviewPanel, /sent\.length > 0 && <section>/,
+    "已提交意见清单对登录只读访问者可见");
+  assert.doesNotMatch(reviewPanel, /canOperate && sent\.length > 0/);
 });
 
 // ---- 意见号(#261,ADR-0025):检视区以「意见N」为主键标识,台账
 // ---- an- id 不出面;行号与原文照旧。
 
 test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id 不出面", () => {
-  // 行卡首格 = 意见号:seq 过线即「意见N」;旧账无号如实降级,不给假号。
-  assert.match(materials,
-    /item\.seq === undefined \? "意见" : `意见\$\{item\.seq\}`/);
+  // 行卡首格 = 意见号:意见号是落账硬要求(ADR-0025),恒显「意见N」
+  // ——无号降级显示已拆,系统未上线不存在无号意见。
+  assert.match(materials, /意见\{item\.seq\}/);
+  assert.doesNotMatch(materials, /item\.seq === undefined \? "意见"/);
   // 行号/原文照旧:查看原文与锚定原文的既有呈现不动。
   assert.match(materials, />查看原文<\/Button>/);
   assert.match(materials, /针对 \{item\.anchor\}/);
@@ -513,6 +534,22 @@ test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id �
     materials.indexOf("function IssueReviewItem"),
     materials.indexOf("function IssueReviewPanel"));
   assert.doesNotMatch(reviewCard, /item\.id/);
+});
+
+// ---- 新版干净纸面(ADR-0025):漂移检测与徽标只服务草稿;sent 意见
+// ---- 锚在自己批次的冻结版上,冻结文本永不漂移,不再带漂移徽标。
+
+test("锚点徽标只服务草稿(ADR-0025):sent 意见卡不再渲染漂移徽标", () => {
+  // 服务端:anchorChecks 只扫草稿(reviews.ts,不碰 sent)。
+  const reviewLedger = readFileSync(
+    resolve("src/issueFlow/reviews.ts"), "utf-8");
+  assert.match(reviewLedger, /reanchor\(drafts/);
+  assert.doesNotMatch(reviewLedger, /reanchor\(reviews/);
+  // 前端:徽标挂 draft 态;sent 态徽标渲染不得回流。
+  assert.match(materials,
+    /item\.status === "draft" && check && <IssueReviewBadge/);
+  assert.doesNotMatch(materials,
+    /item\.status === "sent" && <IssueReviewBadge/);
 });
 
 // ---- 问题会话单路径化(#98):前端不再感知"模式"概念,任意会话一律
