@@ -18024,7 +18024,9 @@ export class TaskService {
           observeMrDiscussions(task.summary.workspace, view.sourceSha ?? task.summary.delivery?.sha, discussions.items);
           this.refreshOwnerInputs(task);
         }
-        if (!await this.flushReviewReplyOutbox(task)) {
+        // 回复走已有单飞投递，平台慢响应不能拖住下一拍合入观察。
+        this.bypass(task, "检视回复投递", this.flushReviewReplyOutbox(task));
+        if (this.reviewReplyOutboxStalled(task)) {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
@@ -19320,6 +19322,7 @@ export class TaskService {
     task: TaskState,
     error: unknown,
   ): false {
+    if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return false;
     const detail = "检视回复投递账不可读，已停止自动回复；"
       + "请管理员修复任务现场中的 delivery-outbox.jsonl 后重试。"
       + `原因：${String(error).slice(0, 500)}`;
@@ -19359,20 +19362,22 @@ export class TaskService {
     const outbox = this.deliveryOutbox(task);
     let pending: DeliveryOutboxItem[];
     try {
-      pending = outbox.pendingReviewReplies();
+      // 沿用持久化尝试次数轮转，慢回复不能每轮耗尽预算、饿死后续回复。
+      pending = outbox.pendingReviewReplies().sort((a, b) => a.attempts - b.attempts);
     } catch (error) {
       return this.markReviewReplyOutboxUnreadable(task, error);
     }
     const budget = AbortSignal.timeout(10_000);
     for (const item of pending) {
-      if (budget.aborted || this.shuttingDown) break;
+      if (budget.aborted || this.shuttingDown || task.mergeSettlement
+          || ["completed", "canceled"].includes(task.summary.status)
+          || task.summary.delivery?.git_push?.sha !== pushedSha) break;
       if (item.payload.expected_sha !== pushedSha) {
         const reason = `拒绝投递：回复绑定 ${item.payload.expected_sha.slice(0, 12)}`
           + `，当前远端推送收据是 ${pushedSha.slice(0, 12)}`;
         try {
           if (item.last_error !== reason) {
-            // 这不是一次远端 attempt；只落失败原因，保持 pending，等对应
-            // SHA 的真实 push 收据恢复后再投，绝不能借另一版代码发“已修”。
+            // 保持 pending 等对应 push 收据，不能借另一版代码发“已修”。
             outbox.markFailed(item.id, reason);
           }
         } catch (error) {
@@ -19416,8 +19421,7 @@ export class TaskService {
         }));
       } catch (error) {
         try { outbox.markFailed(item.id, String(error)); } catch (ledgerError) {
-          // 多进程或旧恢复链可能已经把同一动作落成 delivered。此时本轮
-          // 的失败落账冲突不是账损坏；重新读权威 append-only 状态即可。
+          // 其他恢复链可能已投递成功；先读账区分落账冲突与真正损坏。
           try {
             const current = outbox.list().find((one) => one.id === item.id);
             if (current?.state === "delivered") continue;
@@ -19431,6 +19435,8 @@ export class TaskService {
             item.payload.discussion_id}): ${String(error)}`);
       }
     }
+    // 迟到响应仍如实记入投递账，但不能覆盖合入/取消终态。
+    if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return true;
     let delivered: string[];
     try {
       delivered = outbox.list().filter((item) =>
@@ -19442,10 +19448,7 @@ export class TaskService {
     }
     const loop = task.summary.delivery?.loop;
     if (loop?.kind === "review" && delivered.length) {
-      // replied_ids 描述“当前仍未解决的讨论里哪些已回复”，不是无限历史。
-      // 检视人解决一条后，旧 outbox 的 delivered 事实仍保留审计，但不能
-      // 把已离场 id 重新塞回当前集合，否则 d-b 与 d-a,d-b 永远不相等，
-      // 下一拍会误判“处理过仍没答完”而停环。
+      // 只投影当前讨论的已发送事实，保留历史账但不复活已离场讨论。
       const current = new Set(loop.review_ids?.split(",").filter(Boolean) ?? []);
       const existing = (loop.replied_ids?.split(",").filter(Boolean) ?? [])
         .filter((id) => current.has(id));
