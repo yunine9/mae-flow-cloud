@@ -458,7 +458,7 @@ test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续�
     assert.equal(service.get(created.id).waiting ?? undefined, undefined,
       "卡已被 resolve,不再等用户");
     // 入账与真人页面作答同形:决策码还原成选项原文(decision),
-    // 机器代答留痕在 notes——过程问答与现场导出都投影它。
+    // 机器代答留痕在 notes——现场导出投影它。
     const records = waitingRecords(dataDir, created.id);
     assert.equal(records.length, 1);
     const [record] = records;

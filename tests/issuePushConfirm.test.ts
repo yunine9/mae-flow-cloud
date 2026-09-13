@@ -224,8 +224,8 @@ test("三档把控(过目):首推被拒举卡(带变更摘要),确认→令牌�
     const thread = service.messages(created.id);
     assert.ok(thread.some((message) => message.role === "decision"
       && message.text.includes("暂不推送")), "决策应入账");
-    // 意见(notes)随 human_decision 事件入账(过程问答投影与现场导出
-    // 都渲染它);messages() 的时间线投影只带决策文本,不含补充说明。
+    // 意见(notes)随 human_decision 事件入账(现场导出
+    // 渲染它);messages() 的时间线投影只带决策文本,不含补充说明。
     const decisionEvents = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8")
       .split("\n").filter(Boolean)

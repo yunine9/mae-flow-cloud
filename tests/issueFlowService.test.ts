@@ -262,7 +262,7 @@ test("问题时间线归纳(纯函数):waiting_user 未决段以 now 封口;坏�
   assert.equal(odd.span.ms, 0);
 });
 
-test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问答投影 fail-open", () => {
+test("视图旁路路由:过程文档缺失是 200 {unavailable};事件账本残行不拖垮视图", () => {
   const dataDir = mfcTemp("mfc-issue-view-");
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
@@ -276,7 +276,8 @@ test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问
     transitions: [{ at: "2026-08-26T08:30:00Z", source: "agent",
       note: "只是备注,不是阶段切换" }],
   }));
-  // 半行 JSON(写入方还在写)必须被跳过,不能让视图接口 5xx。
+  // 半行 JSON(写入方还在写)必须被跳过,不能让视图接口 5xx(时间线
+  // 等投影同账本,顺带守这条)。
   writeFileSync(join(dataDir, "issues", "issue-1", "events.jsonl"),
     '{"kind":"user_mess\n'
     + JSON.stringify({ kind: "user_message", ts: "2026-08-26T08:00:00Z",
@@ -297,12 +298,7 @@ test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问
         "问题号存在但文档缺失=200 {unavailable},不是 404");
       assert.equal(missing.body.unavailable, "文档不存在");
 
-      const dialogue = await issueGet(["issues", "issue-1", "dialogue"], service);
-      assert.equal(dialogue.status, 200);
-      assert.equal(dialogue.body.turns.length, 1,
-        "残行跳过,有效的 user_message 照投影");
-      assert.equal(dialogue.body.turns[0].kind, "user");
-      assert.equal(dialogue.body.turns[0].text, "开场");
+      // (#260 起 /issues/:id/dialogue 已随「过程问答」页签退役,路由删除。)
 
       const timeline = await issueGet(
         ["issues", "issue-1", "timeline"], service);

@@ -8,16 +8,15 @@ import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTarge
  * diff 用任务侧同一把 GitDiff 渲染。合并视图直接渲染聚合 diff(服务端
  * 自带「===== 仓库 =====」分段标记,GitDiff 按元信息行呈现);逐仓视图
  * 走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析分段标记。
- * #123 拍平:面板壳(头部页签条)上收为会话层的五个一级标签
+ * #123 拍平:面板壳(头部页签条)上收为会话层的一级标签
  * (SessionView 直排),本组件改为免壳直渲——只按会话层下发的
- * view 渲染对应内容,四类内容与整包下载原样;过程文档
- * 子视图(IssueProcessDocs,原结论文档升级:多页签 = 分析报告 + 过程
- * 问答 + 检视 + Agent 落的其他 .md,#210 起页签换 shadcn Tabs 皮)保留
- * 自己的子页签。
+ * view 渲染对应内容,四类内容与整包下载原样;分析报告子视图
+ * (#260 页签收敛,原 IssueProcessDocs 多页签 = 分析报告 + 过程问答 +
+ * 检视 + Agent 落的其他 .md)只剩报告本身,检视内联进正文下方。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
- * 修改编辑器、压缩包解压、检视(圈注意见/提交/移除的页签与圈注写口);
+ * 修改编辑器、压缩包解压、检视(行尾圈注与正文下方的草稿/提交区);
  * 文件/diff/日志/文档的只读浏览完整保留。
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -28,7 +27,6 @@ import {
   getDtsTicketDetail,
   getIssueDocument,
   getIssueDocuments,
-  getIssueDialogue,
   getIssueFileDiff,
   getIssueMaterialLog,
   getIssueMaterials,
@@ -38,7 +36,6 @@ import {
   sendIssueReviews,
   type DtsTicketDetail,
   type IssueDetail,
-  type IssueDialogueTurn,
   type IssueDocMeta,
   type IssueLogEntry,
   type IssueMaterials,
@@ -55,26 +52,19 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 
 /** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
- * 只用它认页签)。 */
+ * 只认这一份报告)。 */
 const ANALYSIS_DOC = "issue-analysis.md";
-/** 过程问答的页签键(不是文件名,.md 文件撞不到它)。 */
-const DIALOGUE_TAB = "dialogue";
-/** 检视面板的页签键(同上;ADR-0007)。 */
-const REVIEW_TAB = "review";
 
-/** #230 去 legacy:材料/检视域的皮肤类换工具类。树行/气泡/检视卡是
+/** #230 去 legacy:材料/检视域的皮肤类换工具类。树行/检视卡是
  * 本域共用版式,先落成词典;颜色全部经语义令牌或 var() 简写取 tokens,
  * 不再按家族复制配方。 */
 const LOG_ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border bg-surface px-2.5 py-1.5 text-left font-mono text-[13px] text-text-strong transition-colors";
-const DIALOGUE_TURN = "flex flex-col gap-[3px] max-w-[86%]";
-const DIALOGUE_BUBBLE = "rounded-[10px] border px-3 py-2 text-[13px] leading-[1.65] text-text-strong whitespace-pre-wrap [overflow-wrap:anywhere]";
 const REVIEW_ITEM = "rounded-[10px] border border-line bg-surface px-3 py-2 text-[13px] leading-[1.6]";
 const NOTE_HEAD = "m-0 text-[13px] font-bold text-muted-foreground";
 
@@ -199,90 +189,24 @@ function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate
   </>;
 }
 
-/** 过程问答(对话气泡):复盘阅读面(ADR-0008 口径)——问答卡、用户
- * 决策(卡答与闸答,闸答带合成的问句)、用户主动输入、检视意见按
- * 时间序陈列;agent 的过程性发言不进。现场页签仍是原始事件直播,
- * 两不替代。 */
-function IssueDialogue({ turns, truncated }: {
-  turns: IssueDialogueTurn[];
-  truncated: boolean;
-}) {
-  if (turns.length === 0) {
-    return <Empty className="border py-4.5">
-      <EmptyTitle>还没有问答</EmptyTitle>
-      <EmptyDescription>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</EmptyDescription>
-    </Empty>;
-  }
-  return <div className="flex flex-col gap-2.5 px-0.5">
-    {truncated && <div className="utility-note">回合较多,只显示最近的 500 条。</div>}
-    {turns.map((turn, index) => <IssueDialogueTurnView key={index} turn={turn} />)}
-  </div>;
-}
-
-function IssueDialogueTurnView({ turn }: { turn: IssueDialogueTurn }) {
-  const time = turn.ts
-    ? formatLocalDateTime(turn.ts, { seconds: true }) : "";
-  // 用户与决策靠右,问答卡与检视意见靠左(原 .issue-dialogue-turn 对齐规则)。
-  const align = turn.kind === "user" || turn.kind === "decision"
-    ? "self-end items-end" : "self-start items-start";
-  // 气泡底色按轮次角色:用户=accent 软底无框,决策=虚线框,卡与检视=软灰底。
-  const bubble = turn.kind === "user"
-    ? "border-transparent bg-(--accent-soft)"
-    : turn.kind === "decision"
-      ? "border-line border-dashed"
-      : "border-line bg-(--surface-soft)";
-  return <div className={`${DIALOGUE_TURN} ${align}`}>
-    <span className="flex items-baseline gap-1.5 text-[13px] text-faint">
-      <b className="font-semibold text-muted-foreground">
-        {turn.kind === "card" ? "Agent 问答卡"
-          : turn.kind === "decision" ? "用户决策"
-          : turn.kind === "review" ? `检视意见(${turn.count ?? 0} 条)`
-          : `用户${turn.via === "interrupt" ? "(插话)" : ""}`}
-      </b>
-      <time>{time}</time>
-    </span>
-    <div className={`${DIALOGUE_BUBBLE} ${bubble}`}>
-      {turn.kind === "review"
-        ? <pre className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] [font:inherit]">{turn.text}</pre>
-        : turn.kind === "user"
-          ? turn.text
-          : <>
-            {/* 平台闸的问句快照(闸答完即从状态里消失,只能随事件走);
-                Agent 卡的问在前一张问答卡里,不重复。 */}
-            {(turn.questions ?? []).map((question, index) => <div
-              key={index} className="group/q">
-              <p className="m-0 mb-1 font-semibold">{question.question}</p>
-              {question.options.length > 0 && <ul className="m-0 mb-2 list-disc pl-[18px] text-muted-foreground group-last/q:mb-0">
-                {question.options.map((option, index) => <li key={index}>{option}</li>)}
-              </ul>}
-            </div>)}
-            {turn.kind === "decision" && (turn.decision || "(无文字答复)")}
-            {turn.kind === "decision" && turn.notes
-              && <span className="mt-1 block text-muted-foreground">补充:{turn.notes}</span>}
-          </>}
-    </div>
-  </div>;
-}
-
-/** 过程文档子视图:多页签(分析报告固定首页 + 过程问答 + 检视 +
- * Agent 落的其他 .md)。激活页签才取内容;状态一动(updated_at 变化)
- * 自动重读,让 AI 续写的内容能贴着节奏刷新。
- * 检视(ADR-0007):分析报告按块悬停圈注意见(交互与需求流批注同一套),
- * 「检视」页签攒草稿、一次提交触发整体回退重跑——都是写操作,查看
- * 模式(canOperate=false)下整条页签与圈注写口都不渲染,文档照读。 */
-function IssueProcessDocs({ detail, canOperate }: {
+/** 分析报告视图(#260 页签收敛,ADR-0025):「分析报告」页签下只留
+ * 报告本身——过程问答/检视/动态 md 子页签退役,检视的圈注写口保留在
+ * 行尾,草稿与提交链路内联到正文下方。状态一动(updated_at 变化)
+ * 自动重读,让 AI 续写的内容能贴着节奏刷新;其他 .md 不再单页呈现,
+ * 仍可整包下载。
+ * 检视(ADR-0007):报告按行悬停圈注意见(交互与需求流批注同一套),
+ * 草稿攒在正文下方、一次提交触发整体回退重跑——都是写操作,查看
+ * 模式(canOperate=false)下整块不渲染,文档照读。 */
+function IssueAnalysisReport({ detail, canOperate }: {
   detail: IssueDetail;
   canOperate: boolean;
 }) {
   const id = detail.id;
   const [docs, setDocs] = useState<IssueDocMeta[]>([]);
-  const [active, setActive] = useState(ANALYSIS_DOC);
   const [content, setContent] = useState("");
   const [truncated, setTruncated] = useState(false);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
-  const [turns, setTurns] = useState<IssueDialogueTurn[]>([]);
-  const [turnsTruncated, setTurnsTruncated] = useState(false);
   // 检视账本(轻量):随会话动态重读——锚点检测按当前报告现算,
   // AI 一改报告,徽标就贴着 updated_at 的节奏刷新。
   const [reviews, setReviews] = useState<IssueReview[]>([]);
@@ -290,9 +214,9 @@ function IssueProcessDocs({ detail, canOperate }: {
   const [locationExcerpt, setLocationExcerpt] = useState<IssueReview>();
   const [locationMessage, setLocationMessage] = useState("");
   const [checks, setChecks] = useState<IssueReviewCheck[]>([]);
-  // 已加载基准 = 会话动态 + 激活页签:两者任一变化就重取;只在响应到手
-  // 后记账,半路失败下次仍会重试。
-  const refreshKey = `${detail.updated_at}|${active}`;
+  // 已加载基准 = 会话动态:状态一动就重取;只在响应到手后记账,半路
+  // 失败下次仍会重试。
+  const refreshKey = detail.updated_at;
   const [loadedKey, setLoadedKey] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -329,27 +253,14 @@ function IssueProcessDocs({ detail, canOperate }: {
   async function loadActive() {
     setLoading(true);
     try {
-      if (active === DIALOGUE_TAB) {
-        const result = await getIssueDialogue(id);
-        setTurns(result.turns ?? []);
-        setTurnsTruncated(result.truncated === true);
-        setNote("");
-      } else if (active === REVIEW_TAB) {
-        // 检视面板的数据由 loadReviews 随会话动态取,这里只清残留空态。
-        setNote("");
+      const result = await getIssueDocument(id, ANALYSIS_DOC);
+      if (result.unavailable) {
+        setNote("AI 研究中会把结论写入 issue-analysis.md,生成后这里直接可读。");
         setContent("");
       } else {
-        const result = await getIssueDocument(id, active);
-        if (result.unavailable) {
-          setNote(active === ANALYSIS_DOC
-            ? "AI 研究中会把结论写入 issue-analysis.md,生成后这里直接可读。"
-            : result.unavailable);
-          setContent("");
-        } else {
-          setNote("");
-          setContent(result.content ?? "");
-          setTruncated(result.truncated === true);
-        }
+        setNote("");
+        setContent(result.content ?? "");
+        setTruncated(result.truncated === true);
       }
       setLoadedKey(refreshKey);
     } catch (reason) {
@@ -397,10 +308,10 @@ function IssueProcessDocs({ detail, canOperate }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
-  /** 检视面板 → 分析报告的锚点定位:切页签、等渲染、滚动 + 闪烁。 */
+  /** 检视意见 → 报告正文的锚点定位:等渲染、滚动 + 闪烁(报告就在
+      本视图,不再需要切页签)。 */
   async function locate(item: IssueReview) {
     const request = ++locationRequest.current;
-    setActive(ANALYSIS_DOC);
     setLocationExcerpt(item);
     setLocationMessage("正在核对当前位置…");
     let fresh;
@@ -436,29 +347,14 @@ function IssueProcessDocs({ detail, canOperate }: {
   const reviewEnabled = !["archived", "canceled", "failed"].includes(detail.status)
     && !detail.stage_states?.some((state) => state === "inherited")
     && detail.review_active !== true;
-  const draftCount = reviews.filter((item) => item.status === "draft").length;
 
-  const analysisMeta = docs.find((doc) => doc.name === ANALYSIS_DOC);
-  const tabs = [
-    { key: ANALYSIS_DOC, label: "分析报告",
-      hint: analysisMeta ? sizeText(analysisMeta.bytes) : "未生成" },
-    { key: DIALOGUE_TAB, label: "过程问答",
-      hint: turns.length ? `${turns.length} 回合` : "" },
-    ...(canOperate
-      ? [{ key: REVIEW_TAB, label: "检视",
-        hint: draftCount ? `${draftCount} 条待提交` : "" }]
-      : []),
-    ...docs.filter((doc) => doc.name !== ANALYSIS_DOC)
-      .map((doc) => ({ key: doc.name, label: doc.label, hint: sizeText(doc.bytes) })),
-  ];
-
-  // #230:过程文档壳换工具类。常态=面板内自滚的网格(problem 域灰底);
-  // 全屏=固定定底盘的纵向 flex,正文/问答/检视三区接管余量自滚——
+  // #230:报告壳换工具类。常态=面板内自滚的网格(problem 域灰底);
+  // 全屏=固定定底盘的纵向 flex,正文+内联检视区接管余量自滚——
   // 旧 .issue-thread/.is-fullscreen 后代选择器按分支直译成分支上的变体。
   return <div
     className={`issue-doc${fullscreen ? " is-fullscreen fixed inset-[14px] z-[720] flex flex-col overflow-hidden rounded-[14px] border border-line bg-surface p-[18px_22px] text-foreground shadow-[0_24px_90px_rgba(0,0,0,0.45)] max-[760px]:inset-1 max-[760px]:rounded-[9px] max-[760px]:p-3" : " grid content-start gap-3 overflow-y-auto rounded-xl border border-line bg-surface-muted p-3.5"}`}>
     <div className="flex min-h-[30px] items-center justify-end gap-3">
-      <span className="mr-auto text-xs text-faint">{fullscreen ? "全屏阅读过程文档" : ""}</span>
+      <span className="mr-auto text-xs text-faint">{fullscreen ? "全屏阅读分析报告" : ""}</span>
       <Button type="button" size="sm"
         disabled={!docs.length || downloading}
         title={docs.length
@@ -475,79 +371,47 @@ function IssueProcessDocs({ detail, canOperate }: {
     {downloadError && <div className="utility-note" role="alert">
       打包下载失败：{downloadError}
     </div>}
-    {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类
-        随家族退役,这里改用 shadcn 默认页签皮;下方三类内容分支映射为
-        TabsPanel(keepMounted 默认 false,卸载语义与原条件渲染一致;
-        文档分支是「按当前签取值」的动态面板,与原实现同位不重挂)。 */}
-    <Tabs value={active} className="contents"
-      onValueChange={(value) => setActive(value)}>
-      {tabs.length > 1 && <TabsList aria-label="过程文档页签"
-          className="h-auto max-w-full flex-wrap">
-        {tabs.map((tab) => (
-          <TabsTrigger key={tab.key} value={tab.key} className="h-auto flex-none">
-            <span>{tab.label}</span>{tab.hint && <i className="not-italic text-[0.7rem] font-normal text-muted-foreground">{tab.hint}</i>}
-          </TabsTrigger>
-        ))}
-      </TabsList>}
-      {loading && <p className="m-0 text-[13px] text-faint">正在读取…</p>}
-      {!loading && note && <Empty className="border py-4.5">
-        <EmptyTitle>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</EmptyTitle>
-        <EmptyDescription>{note}</EmptyDescription>
-      </Empty>}
-      {!loading && !note && active === DIALOGUE_TAB
-        && <TabsContent value={DIALOGUE_TAB} className="contents">
-          <div className={cn(fullscreen && "flex min-h-0 flex-1 flex-col overflow-auto")}>
-            <IssueDialogue turns={turns} truncated={turnsTruncated} />
-          </div>
-        </TabsContent>}
-      {!loading && !note && active === REVIEW_TAB
-        && <TabsContent value={REVIEW_TAB} className="contents">
-          <div className={cn(fullscreen && "flex min-h-0 flex-1 flex-col overflow-auto")}>
-            <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
-              reviewEnabled={reviewEnabled}
-              onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
-          </div>
-        </TabsContent>}
-      {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
-        && content && <TabsContent value={active} className="contents">
-        {canOperate && draftCount > 0 && <div className="utility-note" role="status">
-          已记下 {draftCount} 条意见，尚未提交。
-          <Button type="button" variant="link" size="xs" className="h-auto px-0.5"
-            onClick={() => setActive(REVIEW_TAB)}>
-            查看并提交意见
-          </Button>
-        </div>}
-        <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
-          <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
-          <Button type="button" variant="outline" size="xs"
-            onClick={() => void loadActive()}>刷新</Button>
-        </div>
-        {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setActive(ANALYSIS_DOC); setLocationExcerpt(undefined); }} /></>}
-        <article className={cn("issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]",
-          fullscreen && "mx-auto min-h-0 w-full max-w-[1760px] flex-1 overflow-auto px-[clamp(20px,3vw,48px)] pb-20 pt-[22px] [&_.mermaid-figure]:overflow-x-hidden [&_.mermaid-diagram]:w-full [&_.mermaid-diagram]:min-w-0 [&_.mermaid-diagram]:max-w-full [&_.puml-diagram]:w-full [&_.puml-diagram]:min-w-0 [&_.puml-diagram]:max-w-full")}>
-          {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
-              不给行尾 ✎。 */}
-          {active === ANALYSIS_DOC && reviewEnabled && canOperate
-            ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
-                fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
-                onAdded={() => void loadReviews()}
-                addDraft={async (input) => {
-                  try {
-                    await addIssueReview(id, input);
-                    void loadReviews();
-                    return {};
-                  } catch (reason) {
-                    return {
-                      error: String(reason instanceof Error ? reason.message : reason),
-                    };
-                  }
-                }}>
-                <Markdown showLineNumbers text={content} />
-              </Annotatable>
-            : <Markdown showLineNumbers text={content} />}
-        </article>
-      </TabsContent>}
-    </Tabs>
+    {loading && <p className="m-0 text-[13px] text-faint">正在读取…</p>}
+    {!loading && note && <Empty className="border py-4.5">
+      <EmptyTitle>还没有分析报告</EmptyTitle>
+      <EmptyDescription>{note}</EmptyDescription>
+    </Empty>}
+    {!loading && !note && content && <div className={cn("flex flex-col gap-3",
+      fullscreen && "mx-auto min-h-0 w-full max-w-[1760px] flex-1 overflow-auto px-[clamp(20px,3vw,48px)] pb-20 pt-[22px] [&_.mermaid-figure]:overflow-x-hidden [&_.mermaid-diagram]:w-full [&_.mermaid-diagram]:min-w-0 [&_.mermaid-diagram]:max-w-full [&_.puml-diagram]:w-full [&_.puml-diagram]:min-w-0 [&_.puml-diagram]:max-w-full")}>
+      <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
+        <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
+        <Button type="button" variant="outline" size="xs"
+          onClick={() => void loadActive()}>刷新</Button>
+      </div>
+      {locationExcerpt && <><p role="status">{locationMessage}</p><AnnotationExcerpt item={locationExcerpt} onOpen={() => { locationRequest.current++; setLocationExcerpt(undefined); }} /></>}
+      <article className="issue-doc-body text-[13px] leading-[1.75] text-text-strong [overflow-wrap:anywhere]">
+        {/* 圈注意见是写口(addIssueReview):查看模式落回纯 Markdown,
+            不给行尾 ✎。 */}
+        {reviewEnabled && canOperate
+          ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
+              fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
+              onAdded={() => void loadReviews()}
+              addDraft={async (input) => {
+                try {
+                  await addIssueReview(id, input);
+                  void loadReviews();
+                  return {};
+                } catch (reason) {
+                  return {
+                    error: String(reason instanceof Error ? reason.message : reason),
+                  };
+                }
+              }}>
+              <Markdown showLineNumbers text={content} />
+            </Annotatable>
+          : <Markdown showLineNumbers text={content} />}
+      </article>
+      {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):草稿清单与
+          提交按钮不再藏在页签后;写口整体挂 canOperate。 */}
+      {canOperate && <IssueReviewPanel detail={detail} reviews={reviews}
+        checks={checks} reviewEnabled={reviewEnabled}
+        onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />}
+    </div>}
   </div>;
 }
 
@@ -592,8 +456,9 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
   </li>;
 }
 
-/** 检视面板:草稿攒批、一次提交触发整体回退(轻量确认列明后果);
- * 已提交的意见带锚点徽标,服务于下一轮对照。 */
+/** 检视区(#260 内联,原「检视」页签):草稿攒批、一次提交触发整体
+ * 回退(轻量确认列明后果);已提交的意见带锚点徽标,服务于下一轮
+ * 对照。常驻分析报告正文下方,不再是独立页签。 */
 function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, onLocate }: {
   detail: IssueDetail;
   reviews: IssueReview[];
@@ -650,7 +515,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
     </div>}
     {drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
       <EmptyTitle>还没有检视意见</EmptyTitle>
-      <EmptyDescription>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
+      <EmptyDescription>把鼠标停在上方报告要提意见的那一行,点行尾的 ✎ 记一条;
       攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
     </Empty>}
     {note && <div className="utility-note">{note}</div>}
@@ -688,8 +553,8 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
  * 变更 / 拉取日志四个子视图原样保留;面板壳(头部页签条)已上收为
  * 会话层的五个一级标签——本组件只按 view 直渲对应内容,不再自带
  * 头部页签条。
- * 数据全部旁路:任何一块失败给空态。view 由会话层五标签下发(右栏
- * "分析报告已产出"跳「过程文档」即 tab="doc")。
+ * 数据全部旁路:任何一块失败给空态。view 由会话层标签下发(右栏
+ * "分析报告已产出"跳「分析报告」即 tab="doc")。
  * 查看模式(canOperate=false):快速修改编辑器与解压写口不渲染,
  * diff/日志/单据/文档的只读浏览完整保留。 */
 export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate }: {
@@ -977,9 +842,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
       </> : <div className="utility-note">正在读取单据详情…</div>}
     </div>}
     {view === "doc" && <>
-      {/* 过程文档(分析报告 + 过程问答 + 检视 + 动态文档)按 updated_at
-          缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-      <IssueProcessDocs detail={detail} canOperate={canOperate} />
+      {/* 分析报告(#260 收敛:单报告直渲,检视内联)按 updated_at
+          缓存:报告可能被 AI 续写,状态一动就该重读。 */}
+      <IssueAnalysisReport detail={detail} canOperate={canOperate} />
     </>}
     {view === "logs" && <div className="ws-doc">
       {data && data.logs.entries.length === 0 && <div className="utility-note">

@@ -1137,11 +1137,11 @@ export class IssueFlowService {
   }
 
   /** 协作流(ADR-0018):事件账本投影成任务侧 ConversationItem 同形状
-   * 的条目数组,右栏「与 Agent 协作」对话框消费。与过程问答(documents
-   * 的 projectDialogue)是同一条现场记录的两个投影——这里是流回放,
-   * 问答是复盘阅读;在场未作答的平台闸从状态投影为 waiting 卡,Agent
-   * 卡(AskUserQuestion)以 waiting.json 记录为账源(真 waiting_id/真
-   * 状态,事件出卡会让等待中的卡多出误标已决的影子、重放还会成倍繁殖)。
+   * 的条目数组,右栏「与 Agent 协作」对话框消费。同一条现场记录的
+   * 投影(原复盘问答投影已随 #260 页签退役)——这里是流回放;在场
+   * 未作答的平台闸从状态投影为 waiting 卡,Agent 卡(AskUserQuestion)
+   * 以 waiting.json 记录为账源(真 waiting_id/真状态,事件出卡会让等待
+   * 中的卡多出误标已决的影子、重放还会成倍繁殖)。
    * 只读:坏行跳过、缺账本给空,绝不抛错拖垮页面。 */
   conversation(id: string): IssueConversationView {
     const live = this.require(id);

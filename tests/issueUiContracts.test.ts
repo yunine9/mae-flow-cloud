@@ -15,7 +15,6 @@ const annotations = readFileSync(
   resolve("web/src/AnnotationPanel.tsx"), "utf-8");
 const launch = readFileSync(
   resolve("web/src/LaunchWorkspace.tsx"), "utf-8");
-const css = readFileSync(resolve("web/src/style.css"), "utf-8");
 const issueFlow = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
 const environmentVault = readFileSync(resolve("src/issueEnvironment.ts"), "utf-8");
 const issueService = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
@@ -26,6 +25,9 @@ const issueBoard = readFileSync(
   resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
+// #233 改锚:手写样式收敛为唯一 tailwind.css,原 web/src/style.css 已退役
+// (存量:本文件曾仍指向旧路径,整文件在模块载入即 ENOENT 全红)。
+const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
 test("混合问题卡必须逐题完整作答", () => {
   // 手动输入选项:选了它后要求填了自定义文本才算答完(不再强制选给定选项)。
@@ -324,7 +326,7 @@ test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog"
   }
 });
 
-test("过程文档可原位全屏，退出后保留当前页签", () => {
+test("分析报告可原位全屏(#260 起子页签退役,报告即本页签全部内容)", () => {
   assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen fixed/);
   assert.match(materials, /fullscreen \? "退出全屏" : "全屏查看"/);
   assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
@@ -480,16 +482,19 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
-  // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
+  // 检视(行尾圈注写口与正文下方的检视区:记意见/提交/移除)全部收闸。
   assert.match(materials,
     /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
   // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
   assert.match(materials,
     /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
+  // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方,
+  // 整块挂 canOperate;行尾圈注写口仍在,且同样收闸(reviewEnabled+
+  // canOperate 才给 Annotatable)。
   assert.match(materials,
-    /canOperate\s*\?\s*\[\{ key: REVIEW_TAB/);
+    /\{canOperate && <IssueReviewPanel detail=\{detail\} reviews=\{reviews\}/);
   assert.match(materials,
-    /active === ANALYSIS_DOC && reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+    /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
 });
 
 // ---- 问题会话单路径化(#98):前端不再感知"模式"概念,任意会话一律
@@ -654,7 +659,7 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
-    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:过程文档",
+    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:分析报告",
       "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
@@ -666,8 +671,9 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
   // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
   assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
   assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
-  // 分析报告在库的脉冲点随升格迁到「过程文档」页签(入口要找得到;
-  // 旧右栏"分析报告已产出"CTA 已随 #127 侧栏拆除一并退场)。
+  // 分析报告在库的脉冲点挂「分析报告」页签(报告是主交付物,入口要
+  // 找得到;#260 起页签即报告本身,旧右栏"分析报告已产出"CTA 已随
+  // #127 侧栏拆除一并退场)。
   assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
   // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
   assert.doesNotMatch(sessionView, /IssuePaneTabs/);
@@ -679,7 +685,8 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
-  // 只按会话层下发的 view 直渲内容,四个子视图与过程文档子页签原样。
+  // 只按会话层下发的 view 直渲内容,四个子视图原样(#260 起分析报告
+  // 视图不再有二级页签,见下方收敛断言)。
   assert.doesNotMatch(materials, /ws-pane-head/);
   assert.doesNotMatch(materials, /ws-source-switch/);
   // 词边界防误伤:SessionView 一词里就藏着 "onView" 子串。
@@ -688,9 +695,14 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   assert.match(materials, /\{view === "doc" && /);
   assert.match(materials, /\{view === "changes" && /);
   assert.match(materials, /\{view === "logs" && /);
-  // (#210)doc 子页签换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类随家族退役,
-  // 改用 shadcn 默认页签皮,页签语义(键盘箭头/roving)归原语。
-  assert.match(materials, /<TabsList aria-label="过程文档页签"/);
+  // (#260 页签收敛)过程文档子页签整体退役:doc 视图只剩分析报告正文
+  // 直渲(过程问答/检视/动态 md 页签全删,报告按 ANALYSIS_DOC 常量直取),
+  // 面板内不再有二级页签条。
+  assert.doesNotMatch(materials, /<TabsList/);
+  assert.match(materials, /const ANALYSIS_DOC = "issue-analysis\.md";/);
+  assert.match(materials, /function IssueAnalysisReport\(/);
+  assert.doesNotMatch(materials,
+    /function (IssueDialogue|IssueProcessDocs)|const (REVIEW_TAB|DIALOGUE_TAB)/);
   // 页签一签一色(#231 改锚):发色原住 issue-workspace 的 nth-child
   // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
   // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
@@ -756,11 +768,11 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   const facts = readFileSync(
     resolve("web/src/issues/IssueWaitingFacts.tsx"), "utf-8");
   assert.match(facts, /export function IssueWaitingFacts/);
-  // 样式落点(#231 改锚):#124 追加块随 issue-workspace 家族退役,
-  // 右栏皮肤走 conversation.css 的共享 ws-* 皮;流上方临时容器
+  // 样式落点(#231 改锚;#233 再改锚:conversation.css 并入唯一
+  // tailwind.css):右栏皮肤走共享 ws-* 皮;流上方临时容器
   // (issue-conv-now)的死规则已随 #125 卡座拆除清零。
   const conversationCss = readFileSync(
-    resolve("web/src/conversation.css"), "utf-8");
+    resolve("web/src/tailwind.css"), "utf-8");
   assert.match(conversationCss,
     /\.task-workspace-v2 \.ws-stream-shell > \.ws-collaboration-head/);
   assert.doesNotMatch(css, /issue-conv-now/);
@@ -1097,7 +1109,7 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
     /<button type="button" className=\{CONV\.act\} onClick=\{onOpenEvents\}/);
   assert.match(sessionView, /onOpenEvents=\{\(\) => setTab\("events"\)\}/);
   assert.doesNotMatch(stream, /issue-conv-steps/);
-  assert.doesNotMatch(readFileSync(resolve("web/src/style.css"), "utf-8"),
+  assert.doesNotMatch(readFileSync(resolve("web/src/tailwind.css"), "utf-8"),
     /\.issue-conv-steps \{/);
   // 流内筛选:栏头「全部/需要我的」(任务侧同款 ws-stream-filters),
   // 「需要我的」口径=还开着的卡;钉在流末的当前卡不受筛选影响。
@@ -1230,10 +1242,10 @@ test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役
   assert.match(issueBoard, /startVisiblePolling\(refreshList, 5000, document\)/);
   assert.match(issueBoard, /if \(!openId\) return;/);
   // 状态轨走令牌工具类;suspended 旧内联色收编为令牌 --suspended
-  // (tokens.css 定义)。卡片轨道与状态胶囊不得再写裸色值(工作台
-  // 页签等处的同名存量字面量另有专项,不在本契约)。
+  // (#233 改锚:令牌定义并入 tailwind.css)。卡片轨道与状态胶囊不得
+  // 再写裸色值(工作台页签等处的同名存量字面量另有专项,不在本契约)。
   assert.match(issueBoard, /suspended: "bg-suspended"/);
-  const tokens = readFileSync(resolve("web/src/tokens.css"), "utf-8");
+  const tokens = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
   assert.match(tokens, /--suspended: #3b83d5/);
   assert.doesNotMatch(css, /status-suspended \.task-status-rail/);
   assert.doesNotMatch(css, /\.pill\.suspended \{ color: #3b83d5/);

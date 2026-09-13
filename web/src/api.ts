@@ -4393,25 +4393,6 @@ export interface IssueDocMeta {
   modified_at: string;
 }
 
-export interface IssueDialogueQuestion {
-  question: string;
-  options: string[];
-}
-
-/** 过程问答的一回合(ADR-0008 口径):问答卡、用户决策、用户主动
- * 输入、检视意见;agent 的过程性发言不进投影。 */
-export interface IssueDialogueTurn {
-  kind: "user" | "card" | "decision" | "review";
-  ts?: string;
-  text?: string;
-  via?: string;
-  questions?: IssueDialogueQuestion[];
-  decision?: string;
-  notes?: string;
-  /** 检视回合专有:意见条数(正文 text 是提交的意见清单)。 */
-  count?: number;
-}
-
 /** 过程文档清单(分析报告固定首位 + Agent 落的其他 .md)。 */
 export function getIssueDocuments(id: string): Promise<{
   documents: IssueDocMeta[];
@@ -4434,15 +4415,7 @@ export async function getIssueDocument(
   };
 }
 
-/** 过程问答:事件账本投影的对话。 */
-export function getIssueDialogue(id: string): Promise<{
-  turns: IssueDialogueTurn[];
-  truncated?: boolean;
-}> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/dialogue`);
-}
-
-// ---- 检视(材料页签的检视子视图;ADR-0007,服务端 reviews.ts) ----
+// ---- 检视(分析报告正文下方的检视区;ADR-0007,服务端 reviews.ts) ----
 
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
