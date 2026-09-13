@@ -136,7 +136,13 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     // A 的遗留提交(遗留只作为 origin/<branch> 旁挂在远端跟踪上)。
     const repoB = join(dataDir, "issues", second.id, "repo", "origin");
     assert.ok(existsSync(join(repoB, ".git")), "B 是全新克隆");
-    assert.ok(existsSync(join(repoA, ".git")), "取消不清 A 的现场");
+    // 取消即回收(磁盘治理票 01):canceled 单的 repo/ 当场后台回收
+    // (setImmediate,不阻塞取消响应),落 repo_reclaimed_at 标记——
+    // 过程记录全保留,只有源码克隆清掉(源码可随时重拉)。
+    await until(() => !existsSync(join(repoA, ".git")),
+      "取消后 A 的 repo/ 现场被回收");
+    assert.ok(service.get(first.id).repo_reclaimed_at,
+      "回收要落 repo_reclaimed_at 标记");
     assert.equal(git(repoB, "branch", "--show-current"), BRANCH,
       "B 的修复分支仍按 master_工号_单号 切好");
     assert.equal(git(repoB, "rev-parse", "HEAD"), git(repoB, "rev-parse", "master"),
