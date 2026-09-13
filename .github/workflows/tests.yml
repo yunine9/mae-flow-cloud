@@ -1,0 +1,85 @@
+# 测试分层 CI(2026-09-13 立):本地迭代只守 npm run gate(秒级),
+# 全量测试放这里跑——迭代敏捷,不被低质量覆盖阻塞。
+#
+# 两个 job:
+# - gate(阻塞):typecheck + web 构建 + 秒级契约,红即挡;
+# - full-suite(仅报告,continue-on-error):全量 npm test,产出汇总与
+#   完整日志。存量 ~45 条已知红(协作检视线断言过时,归因见
+#   docs/test-suite-efficiency-2026-09-11.md)清零后,把本 job 的
+#   continue-on-error 摘掉即可翻成阻塞。
+#
+# 容器真件与 PG 用例在 CI 缺镜像/缺库环境自动跳过(与本地无 docker
+# 同款分层);内核是仓内收编 kernel/,无需额外 checkout。
+
+name: tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate(阻塞)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - name: 安装依赖(根)
+        run: npm ci
+      - name: 安装依赖(web)
+        run: npm ci
+        working-directory: web
+      - name: gate(typecheck + web 构建 + 秒级契约)
+        run: npm run -s gate
+
+  full-suite:
+    name: 全量(报告)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - name: 安装依赖(根)
+        run: npm ci
+      - name: 安装依赖(web)
+        run: npm ci
+        working-directory: web
+      - name: 全量测试
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          MFC_TEST_CONCURRENCY=4 npm test 2>&1 | tee test-log.txt
+      - name: 汇总到 job summary
+        if: always()
+        run: |
+          {
+            echo "## 全量测试报告(非阻塞)"
+            grep -E "^ℹ (tests|pass|fail|skipped|duration_ms)" test-log.txt \
+              || echo "(无汇总输出——测试在收集阶段就失败了,看日志工件)"
+            echo
+            echo "失败用例:"
+            grep -E "^✖" test-log.txt | grep -v "failing tests" \
+              | sort -u | head -60 || echo "(无)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 上传完整日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ github.run_id }}
+          path: test-log.txt
+          retention-days: 7
