@@ -4078,6 +4078,23 @@ export function replyIssue(id: string, text: string): Promise<IssueSummary> {
   });
 }
 
+/** 关联仓清单变更(#241):把人对清单的增删裁定一次性通知给 Agent 执行。
+ * body { add, remove } 至少一边非空(服务端校验,失败 4xx + 人话中文,
+ * 经 issueFetch 抛 Error);add 必须 https:// 前缀、不与现清单重复、合并
+ * 计数 ≤ 8,remove 不得是模块绑定仓——这些口径 MetaPane 先行同款即时
+ * 校验,别等服务端打回。成功 = HTTP 2xx(回会话概要,与 reply 类端点
+ * 同款);清单本身不随本调用乐观更新,随既有事件流(SSE)自刷。 */
+export function requestIssueRepoChanges(
+  id: string,
+  input: { add: string[]; remove: string[] },
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/repos`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 /** 问题卡作答:decision 是人话文本(显示/自由作答);平台闸另带决策码
  * code(裁决按它分派,文案不是匹配键);Agent 卡带逐题作答 answers
  * (键=题号,值=决策码或自由文本)。 */

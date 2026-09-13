@@ -87,12 +87,18 @@ test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", (
   assert.match(registration, /aria-label=\{`\$\{isExpanded \? "收起" : "展开"\}/);
   // 触控目标:展开按钮 36px 见方(size-9),不再依赖旧 css 的 44px 规则。
   assert.match(registration, /size-9 items-center justify-center/);
-  // 版本过滤改 shadcn Popover(2026-09-11 对齐环境管理台账):浮层碰撞
-  // 归 Base UI,旧 680px static 规则随 legacy 菜单退役;44px 触控目标
-  // 由选项行 min-h-11 保留在组件上,不再依赖页面 css。
-  assert.match(registration, /<PopoverContent align="start" className="w-72 p-1">/);
+  // 版本过滤住「版本」列表头漏斗(2026-09-13 表头化,壳两页共用):浮层
+  // 碰撞归 Base UI;44px 触控目标由选项行 min-h-11 保留在组件上,不再
+  // 依赖页面 css。旧工具栏「版本过滤」按钮随表头化退役。
+  assert.match(registration, /<HeaderFilter label="版本" contentClassName="w-72"/);
+  assert.match(registration, /<HeaderFilter label="单号" active=\{!!ticketFilter\.trim\(\)\}/);
+  assert.match(registration, /<HeaderFilter label="标题" active=\{!!titleFilter\.trim\(\)\}/);
+  assert.match(registration, /aria-label="按单号过滤"/);
+  assert.match(registration, /aria-label="按标题过滤"/);
   assert.match(registration, /min-h-11 cursor-pointer items-center gap-2\.5/);
+  assert.match(registration, /title=\{ticket\.version\}/);
   assert.doesNotMatch(registration, /issue-dts-version-menu|issue-dts-version-trigger/);
+  assert.doesNotMatch(registration, /"版本过滤"/, "工具栏版本过滤按钮应已退役(筛选住列头)");
 });
 
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
@@ -1292,8 +1298,51 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
     /detail\.repo_reclaimed_at && <div className="utility-note"/);
   assert.match(metaPane, /现场已回收/);
   // 终态只读:#241 编辑区挂载点受终态闸门控制,终态会话(与协作流
-  // ended 同口径的 archived/canceled/failed)永远不渲染编辑入口。
+  // ended 同口径的 archived/canceled/failed)永远不渲染编辑入口;
+  // 非终态时挂载点内是关联仓编辑器(#241,形状见下一 test)。
   assert.match(metaPane,
     /const isTerminal =\s*\n\s*\(TERMINAL_STATUSES as readonly string\[\]\)\.includes\(detail\.status\);/);
-  assert.match(metaPane, /\{!isTerminal && null\}/);
+  assert.match(metaPane,
+    /\{!isTerminal && <section aria-label="调整关联仓"/);
+});
+
+// ---- 关联仓清单编辑器(#241):缓冲 diff 门禁 + 端点契约,不乐观更新 ----
+
+test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https 即时校验、不乐观更新", () => {
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // 端点契约(与后端钉死):POST /issues/:id/repos,body { add, remove }
+  // (至少一边非空由服务端校验);成功 = HTTP 2xx 会话概要(与 reply 类
+  // 端点同款),失败经 issueFetch 抛服务端人话中文 message。
+  assert.match(apiSource, /export function requestIssueRepoChanges\(/);
+  assert.match(apiSource,
+    /issueFetch\(`\/issues\/\$\{encodeURIComponent\(id\)\}\/repos`/);
+  assert.match(apiSource, /input: \{ add: string\[\]; remove: string\[\] \}/);
+  // 删除按钮规则:移除/撤销移除按钮挂在 `!isTerminal && !bound` 一道门
+  // 后——模块绑定仓是团队资产,行内连按钮都不渲染(不是置灰)。
+  assert.match(metaPane,
+    /\{!isTerminal && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
+  assert.equal(
+    (metaPane.match(/variant="destructive" size="xs"/g) ?? []).length, 1,
+    "移除按钮唯一(非绑定仓清单行),不给绑定仓另配删除口");
+  // 移除入缓冲,不就地改清单:按钮只把 url 挪进 pendingRepoRemove。
+  assert.match(metaPane,
+    /setPendingRepoRemove\(\s*\n\s*\[\.\.\.pendingRepoRemove, url\]\)/);
+  // 确定门禁:缓冲 diff 为空禁用(缓冲非空才可点),提交中同样禁用。
+  assert.match(metaPane,
+    /const repoDiffEmpty =\s*\n\s*pendingRepoAdd\.length === 0 && pendingRepoRemove\.length === 0;/);
+  assert.match(metaPane, /disabled=\{repoDiffEmpty \|\| repoSubmitting\}/);
+  // https 即时校验(与后端同款口径前置,别等服务端打回):https:// 前缀
+  // /不与现清单重复/合并计数 ≤ 8;错误就地小字(role=alert)。
+  assert.match(metaPane, /startsWith\("https:\/\/"\)/);
+  assert.match(metaPane, /该仓已在关联仓清单里,不重复添加/);
+  assert.match(metaPane, /const MAX_ISSUE_REPOS = 8;/);
+  // 不乐观更新(项目原则:UI 只做状态显示):清单数据源仍是 detail,
+  // MetaPane 无任何改写 detail 的回调/状态;提交成功只清缓冲 + 如实状态
+  // 提示(「已通知 Agent 处理」),绝不写「删除成功」。
+  assert.match(metaPane, /const repos = detail\.repo_urls\?\.length/);
+  assert.doesNotMatch(metaPane, /onChanged|setDetail\(/);
+  assert.match(metaPane, /已通知 Agent 处理,清单将在 Agent 执行后更新/);
+  assert.doesNotMatch(metaPane, /删除成功|移除成功/);
 });

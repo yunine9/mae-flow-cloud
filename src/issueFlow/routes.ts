@@ -40,6 +40,9 @@
  *   GET  /issues/:id/events           → SSE:事件流尾随
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
+ *   POST /issues/:id/repos            → 调整会话仓清单(#241;只校验+
+ *                                      留痕+投递通知,清单由 Agent 经
+ *                                      pull_repo/remove_repo 执行后变化)
  *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的
  *                                      作答口;decline:true=拒绝,票 93;
  *                                      environment_id=台账快照,#150)
@@ -845,6 +848,28 @@ export async function handleIssueRoutes(
         ...(selection ? { selection } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
       }));
+    }
+
+    // 会话仓清单调整(#241,元信息页签的仓编辑器):设计裁定=端点不直
+    // 改仓清单——只校验+留痕+投递通知,清单由 Agent 经 pull_repo(新增,
+    // 幂等入列)/remove_repo(移除,#240,远端分支现查)执行后变化。写闸
+    // 照 reply 同款:仅归属人,管理员不写。全空 diff 在这里 400 人话打回;
+    // 域校验(https/在册/模块绑定/上限)在服务层走 IssueControlError,
+    // 由尾部单点映射出码。
+    if (method === "POST" && parts[2] === "repos" && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能调整会话的代码仓清单" });
+      }
+      const body = await readBody(request);
+      const add = Array.isArray(body.add) ? body.add.map(String) : [];
+      const remove = Array.isArray(body.remove) ? body.remove.map(String) : [];
+      if (!add.some((item) => item.trim())
+          && !remove.some((item) => item.trim())) {
+        return done(400, {
+          error: "新增与移除都为空:至少指派一个要新增或要移除的代码仓",
+        });
+      }
+      return done(200, issueFlow.requestRepoChanges(id, { add, remove }));
     }
 
     // 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/

@@ -68,7 +68,7 @@ function render(overrides: Partial<IssueDetail> = {}): string {
     React.createElement(IssueMetaPane, { detail: detail(overrides) }));
 }
 
-test("登记信息四项只读陈列,凭据引用与写口零出现", () => {
+test("登记信息四项只读陈列,凭据引用零出现", () => {
   const html = render();
   assert.match(html, /登记信息/);
   assert.match(html, /网管侧告警未消除/);
@@ -80,7 +80,8 @@ test("登记信息四项只读陈列,凭据引用与写口零出现", () => {
   assert.match(html, /容器化/, "env_type=k8s 出中文形态(虚拟化/容器化口径)");
   assert.ok(!html.includes("vault-ref-do-not-render"),
     "服务端 vault 引用不上屏");
-  assert.ok(!/<button|<input|<textarea/i.test(html), "本票零写口");
+  // 本区(登记信息)只读陈列;写口只存在于文末 #241 编辑器
+  // (形状见下方「编辑骨架」test 与 issueUiContracts 源码契约)。
 });
 
 test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与空态如实", () => {
@@ -111,5 +112,25 @@ test("空值如实降级,终态会话(canceled/archived)照常陈列且零编辑
     assert.match(html, /关联仓清单/);
     assert.ok(!/<button|<input|<textarea/i.test(html),
       `${status} 会话不渲染任何编辑入口`);
+  }
+});
+
+test("#241 编辑骨架:非终态在场且关态可辨,终态零编辑入口", () => {
+  const html = render();
+  // 编辑骨架(新增输入 + 添加/确定按钮)只在非终态渲染。SSR 关态缓冲
+  // 为空,「确定」必须带 disabled——「缓冲非空才可点确认」的门禁直接
+  // 钉在静态标记里(交互态行为由 issueUiContracts 源码契约钉)。
+  assert.match(html, /调整关联仓/);
+  assert.match(html, /<input[^>]*aria-label="新增代码仓地址"/);
+  assert.match(html, /添加到清单/);
+  const confirmButton =
+    html.match(/<button[^>]*>[\s\S]{0,200}?确定[\s\S]{0,80}?<\/button>/)?.[0]
+      ?? "";
+  assert.ok(confirmButton, "确定按钮在场");
+  assert.match(confirmButton, /\bdisabled\b/, "缓冲为空时确定禁用(关态门禁)");
+  // 终态会话(含 failed,与会话域终局口径一致)连编辑骨架都不出。
+  for (const status of ["canceled", "archived", "failed"] as const) {
+    assert.ok(!/<button|<input|<textarea/i.test(render({ status })),
+      `${status} 会话零编辑入口`);
   }
 });

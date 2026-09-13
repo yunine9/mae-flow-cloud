@@ -16,13 +16,26 @@
  * repo_reclaimed_at 在场(磁盘治理:终态单的 repo/ 被清扫器回收)时,
  * 清单区如实标注「现场已回收」,不冒充在场。
  *
- * 本票零写口(整个面板就是只读陈列,项目原则:UI 只做状态显示);
- * #241 的登记信息编辑器将来挂文末的编辑区挂载点——挂载点受终态闸门
- * 控制,终态会话(archived/canceled,failed 按会话域既有终局口径一并
- * 算)永远不渲染任何编辑入口。
+ * #241 编辑区(文末挂载点,受终态闸门控制):关联仓清单的增删编辑器。
+ * 项目原则——不涉及安全风险时一切交给 Agent,UI 只做状态显示:人的裁定
+ * 先进本地缓冲(增/删两组),「确定」时一次 POST 交给 Agent 执行,清单
+ * **不乐观更新**,数据源始终是 detail;成功只清缓冲并如实提示「已通知
+ * Agent 处理,清单将在 Agent 执行后更新」,清单随既有事件流(SSE)自刷。
+ * 移除是人裁定该仓与问题无关的严肃操作,按钮只把意图移入缓冲,成功
+ * 提示只说「已通知」,绝口不提清单已改;模块绑定仓是团队资产,行内连
+ * 移除按钮都不渲染(不是置灰)。
+ * 新增输入行带与后端同款口径的即时校验(https:// 前缀/不重复/合并计数
+ * ≤ 上限),错误就地小字,别等服务端打回。终态会话(archived/canceled,
+ * failed 按会话域既有终局口径一并算)永远不渲染任何编辑入口。
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { getBusinessModules, type IssueDetail } from "../api";
+import {
+  getBusinessModules,
+  requestIssueRepoChanges,
+  type IssueDetail,
+} from "../api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
@@ -50,6 +63,10 @@ function repoIdentity(value: string): string {
  * 零写口,这道闸是给 #241 编辑器预立的结构位。 */
 const TERMINAL_STATUSES = ["archived", "canceled", "failed"] as const;
 
+/** 一个问题会话的合并仓上限(与后端 state.ts 的 MAX_ISSUE_REPOS 同一口
+ * 径):新增输入的即时校验先行同款,别等服务端打回。 */
+const MAX_ISSUE_REPOS = 8;
+
 export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
   // 模块绑定仓集合(团队资产目录按 module_id 解析)。undefined = 还没
   // 取到/取不到/没登记模块——绑定标一律不出,仓清单不依赖它。
@@ -72,6 +89,22 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
     return () => { alive = false; };
   }, [detail.module_id]);
 
+  // ---- #241 编辑缓冲:增/删两组,「确定」时一次提交。清单数据源始终
+  // 是 detail(不乐观更新);缓冲属于当前会话的裁定,换会话即弃。 ----
+  const [pendingRepoAdd, setPendingRepoAdd] = useState<string[]>([]);
+  const [pendingRepoRemove, setPendingRepoRemove] = useState<string[]>([]);
+  const [repoInput, setRepoInput] = useState("");
+  const [repoSubmitting, setRepoSubmitting] = useState(false);
+  const [repoNotice, setRepoNotice] = useState<string>();
+  const [repoSubmitError, setRepoSubmitError] = useState<string>();
+  useEffect(() => {
+    setPendingRepoAdd([]);
+    setPendingRepoRemove([]);
+    setRepoInput("");
+    setRepoNotice(undefined);
+    setRepoSubmitError(undefined);
+  }, [detail.id]);
+
   // 全部关联仓:repo_urls 为骨架(彼此平等),repo_url 是单仓旧形状的
   // 兼容位(与逐仓交付 repoDeliveryRows 同一条取数口径)。
   const repos = detail.repo_urls?.length
@@ -79,6 +112,67 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
     : detail.repo_url ? [detail.repo_url] : [];
   const isTerminal =
     (TERMINAL_STATUSES as readonly string[]).includes(detail.status);
+
+  // 缓冲 diff 门禁:增删皆空 = 无可提交(「确定」禁用)。
+  const repoDiffEmpty =
+    pendingRepoAdd.length === 0 && pendingRepoRemove.length === 0;
+
+  /** 新增输入的就地即时校验(与后端同款口径,别等服务端打回):
+   * https:// 前缀、不与现清单/待新增重复、合并计数 ≤ 上限。
+   * 空输入 = 还没写,不算错。 */
+  function repoInputIssue(value: string): string | undefined {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (!trimmed.toLowerCase().startsWith("https://")) {
+      return "只接受 https:// 开头的代码仓地址";
+    }
+    const identity = repoIdentity(trimmed);
+    if (repos.some((url) => repoIdentity(url) === identity)
+      || pendingRepoAdd.some((url) => repoIdentity(url) === identity)) {
+      return "该仓已在关联仓清单里,不重复添加";
+    }
+    // 上限口径与后端一致:移除不抵扣(current + 新增 ≤ 上限)——
+    // 先拉后删的执行时序下抵扣不成立,后端按不抵扣校验,前端同尺
+    // 预判,否则前端放行、后端 409。
+    const projected = repos.length + pendingRepoAdd.length + 1;
+    if (projected > MAX_ISSUE_REPOS) {
+      return `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓`
+        + `(现有 ${repos.length} 个,再新增将达 ${projected} 个),`
+        + "请分多次提交";
+    }
+    return undefined;
+  }
+  const repoAddIssue = repoInputIssue(repoInput);
+
+  function queueRepoAdd() {
+    const value = repoInput.trim();
+    if (!value || repoInputIssue(value)) return;
+    setPendingRepoAdd([...pendingRepoAdd, value]);
+    setRepoInput("");
+  }
+
+  /** 提交:把缓冲 diff 一次性通知给 Agent。成功只清缓冲 + 状态提示
+   * (清单不乐观更新,随既有事件流自刷);失败就地示错,缓冲保留可重试。
+   * 执行者是 Agent,不是这个按钮——提示只说已通知,不说清单已改。 */
+  async function submitRepoChanges() {
+    if (repoDiffEmpty || repoSubmitting) return;
+    setRepoSubmitting(true);
+    setRepoSubmitError(undefined);
+    try {
+      await requestIssueRepoChanges(detail.id, {
+        add: pendingRepoAdd,
+        remove: pendingRepoRemove,
+      });
+      setPendingRepoAdd([]);
+      setPendingRepoRemove([]);
+      setRepoNotice("已通知 Agent 处理,清单将在 Agent 执行后更新");
+    } catch (reason) {
+      setRepoSubmitError(
+        String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setRepoSubmitting(false);
+    }
+  }
 
   return <div className="grid min-h-0 flex-1 content-start gap-3.5 overflow-y-auto">
     {/* 登记信息区(只读):发起时登记的四项事实。 */}
@@ -125,8 +219,10 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
             {repos.map((url) => {
               const bound = (boundRepos ?? [])
                 .some((item) => repoIdentity(item) === repoIdentity(url));
+              const queued = pendingRepoRemove.includes(url);
               return <li key={url}
-                className="grid content-start gap-0.5 rounded-lg border border-line bg-(--surface-muted) px-3 py-2 text-sm">
+                className={"grid content-start gap-0.5 rounded-lg border border-line bg-(--surface-muted) px-3 py-2 text-sm"
+                  + (queued ? " opacity-60" : "")}>
                 <div className="flex flex-wrap items-center gap-2">
                   <strong title={url}
                     className="font-mono text-[13px] font-semibold text-text-strong [overflow-wrap:anywhere]">
@@ -134,6 +230,22 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
                   </strong>
                   {bound && <Badge variant="neutral"
                     title="该仓在业务模块的绑定仓清单里(团队资产目录)">模块绑定</Badge>}
+                  {queued && <Badge variant="warning"
+                    title="已入本次移除缓冲,点「确定」后才交给 Agent">将移除</Badge>}
+                  {/* #241:移除 = 人裁定该仓与问题无关的严肃操作——按钮
+                      只把意图移入缓冲,不就地改清单;模块绑定仓是团队资产,
+                      连按钮都不渲染(不是置灰)。 */}
+                  {!isTerminal && !bound && (queued
+                    ? <Button variant="outline" size="xs" className="ml-auto"
+                      onClick={() => setPendingRepoRemove(
+                        pendingRepoRemove.filter((item) => item !== url))}>
+                      撤销移除
+                    </Button>
+                    : <Button variant="destructive" size="xs" className="ml-auto"
+                      onClick={() => setPendingRepoRemove(
+                        [...pendingRepoRemove, url])}>
+                      移除
+                    </Button>)}
                 </div>
                 <span className="select-text font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
                   {url}
@@ -142,10 +254,64 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
             })}
           </ul>}
     </section>
-    {/* #241 编辑区挂载点:登记信息的编辑器将来挂这里。终态闸门先立好
-        ——终态会话(canceled/archived 等)整页只读,编辑器来了也进不了
-        终态会话;本票挂载点为空,零写口。 */}
-    {!isTerminal && null}
+    {/* #241 编辑区:增删裁定先入本地缓冲,「确定」一次提交给 Agent 执行。
+        清单不乐观更新(数据源仍是 detail),提交成功只清缓冲并如实告知,
+        清单随既有事件流自刷;终态会话整段不渲染(上面的终态闸)。 */}
+    {!isTerminal && <section aria-label="调整关联仓"
+      className="grid content-start gap-2.5 rounded-xl border border-border bg-surface px-3.5 py-3">
+      <div className="flex flex-wrap items-baseline gap-2.5">
+        <strong className="text-sm font-bold">调整关联仓</strong>
+        <span className="text-xs text-faint">
+          增删会交给 Agent 执行,确定后清单自动更新
+        </span>
+      </div>
+      {/* 新增输入行:即时校验(前缀/重复/合并上限),错误就地小字。 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={repoInput}
+          placeholder="https://git.example.com/team/repo.git"
+          aria-label="新增代码仓地址"
+          className="min-w-60 flex-1 font-mono text-[13px]"
+          onChange={(event) => setRepoInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") queueRepoAdd();
+          }}
+        />
+        <Button variant="outline" size="sm"
+          disabled={!repoInput.trim() || !!repoAddIssue}
+          onClick={queueRepoAdd}>添加到清单</Button>
+      </div>
+      {repoAddIssue && <p className="text-xs text-danger" role="alert">
+        {repoAddIssue}
+      </p>}
+      {pendingRepoAdd.length > 0 && <ul
+        className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0">
+        {pendingRepoAdd.map((url) => <li key={url}
+          className="flex items-center gap-1 rounded-lg border border-line bg-(--surface-muted) px-2 py-0.5 text-xs">
+          <span className="font-mono [overflow-wrap:anywhere]">
+            {repoName(url)}
+          </span>
+          <Button variant="ghost" size="xs"
+            aria-label={`撤回新增 ${repoName(url)}`}
+            onClick={() => setPendingRepoAdd(
+              pendingRepoAdd.filter((item) => item !== url))}>撤销</Button>
+        </li>)}
+      </ul>}
+      {/* 缓冲摘要 + 确定门禁:diff 为空(无可提交)或提交中一律禁用。 */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="text-xs text-muted-foreground">
+          {repoDiffEmpty
+            ? "还没有待提交的增删"
+            : `将新增 ${pendingRepoAdd.length} 个、移除 ${pendingRepoRemove.length} 个`}
+        </span>
+        <Button size="sm" disabled={repoDiffEmpty || repoSubmitting}
+          onClick={submitRepoChanges}>确定</Button>
+      </div>
+      {repoNotice && <p className="utility-note" role="status">{repoNotice}</p>}
+      {repoSubmitError && <p className="text-xs text-danger" role="alert">
+        {repoSubmitError}
+      </p>}
+    </section>}
   </div>;
 }
 

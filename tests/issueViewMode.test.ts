@@ -339,6 +339,12 @@ const WRITE_ROUTES: Array<{
     denied: "只有归属人能作答",
   },
   {
+    what: "调整仓清单", method: "POST",
+    parts: ["issues", LIVE, "repos"],
+    payload: { add: ["https://example.com/x.git"], remove: [] },
+    denied: "只有归属人能调整会话的代码仓清单",
+  },
+  {
     what: "网管环境配置", method: "POST",
     parts: ["issues", LIVE, "environment"],
     payload: { hosts: ["10.0.0.8"], backend_password: "pw" },
