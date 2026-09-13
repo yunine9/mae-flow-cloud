@@ -13190,7 +13190,8 @@ export class TaskService {
     }
   }
 
-  private syncFeedbackStoreFromKernel(task: TaskState, projectionOnly = false): void {
+  /** verifiedState 仅复用同一同步调用内已通过完整生命周期核验的快照，不接受活动批次核验代替。 */
+  private syncFeedbackStoreFromKernel(task: TaskState, projectionOnly = false, verifiedState?: Record<string, any>): void {
     // Legacy/local-plugin tasks never opted into the Cloud delivery-loop
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
     // shared pipeline path must preserve their original terminal semantics.
@@ -13198,7 +13199,7 @@ export class TaskService {
     if (projectionOnly && (task.summary.status === "canceled"
       || !existsSync(join(task.cwd, ".mae-flow.json")))) return;
     try {
-      const state = JSON.parse(readFileSync(
+      const state = verifiedState ?? JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
@@ -13208,7 +13209,7 @@ export class TaskService {
       // 完整收据后补齐索引；不能把合入时遗漏的“处理中”永久封存。
       if (projectionOnly && task.summary.status === "completed"
           && (state.current !== "end" || !state.delivery_loop?.close_events?.length)) return;
-      if (!trustedKernelHostLifecycle({
+      if (!verifiedState && !trustedKernelHostLifecycle({
         host: this.options.host,
         cwd: task.cwd,
         actions: ["feedback-open", "feedback-result", "pipeline-record", "close",
@@ -18373,10 +18374,9 @@ export class TaskService {
         return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
       }
       if (batch.result_digest) {
-        // 内核可能已成功落 result，但进程死在 Cloud 索引 resolve 之前。
-        // 幂等重试必须先从内核补齐投影，不能因 result_digest 早退而永久
-        // 留下一批 repairing/open 的假现场。
-        this.syncFeedbackStoreFromKernel(task);
+        // 上面已核验同一快照的完整生命周期，允许来源比投影还严格（不含 close）。
+        // 同步补齐可能因崩溃遗漏的索引，不再读盘核验；首次登记后的新状态仍重新核验。
+        this.syncFeedbackStoreFromKernel(task, false, state);
         return undefined;
       }
     } catch (error) {

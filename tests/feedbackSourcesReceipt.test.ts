@@ -11,11 +11,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { FeedbackStore } from "../src/feedbackStore.ts";
 import { AnnotationStore } from "../src/annotations.ts";
 import { KERNEL_UNAVAILABLE, openKernelFeedback } from "../src/kernelDelivery.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
@@ -425,9 +426,26 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
     git("add", "main.ts"); git("commit", "-qm", "fix A");
     const resultHead = git("rev-parse", "HEAD");
     store.respond(note.id, { outcome: "fixed", summary: "已修复", evidence: ["main.ts:1"] });
+    // 统计真实内核进程，不用耗时阈值，也不替代收据判定。
+    const trace = join(workspace, "kernel-calls.jsonl");
+    const wrapper = join(workspace, "count-python");
+    writeFileSync(trace, "");
+    writeFileSync(wrapper, ["#!/usr/bin/env python3", "import json, os, sys",
+      `with open(${JSON.stringify(trace)}, "a") as f:`,
+      '    f.write(json.dumps(sys.argv[1:]) + "\\n")',
+      'os.execvp("python3", ["python3", *sys.argv[1:]])', ""].join("\n"));
+    chmodSync(wrapper, 0o755);
+    api.options.host.python = wrapper;
+    const attestations = (): string[][] => readFileSync(trace, "utf8").trim()
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((args: string[]) => args.includes("attest"));
     assert.equal(readState(cwd).delivery_loop.published, undefined);
     assert.equal(api.recordActiveFeedbackResult(internal), undefined,
       "首次结果登记无需推送收据，必须发生在交付之前");
+    assert.ok(attestations().some((args) => args.includes("--active-batch")),
+      "首次登记前仍核验活动批次");
+    assert.ok(attestations().some((args) => args.includes("--lifecycle")),
+      "登记写入新状态后仍重新核验完整生命周期");
     const originalBatch = readState(cwd).delivery_loop.batches[0];
     assert.equal(originalBatch.result_head, resultHead);
 
@@ -441,10 +459,52 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
     const published = readState(cwd);
     assert.equal(published.delivery_loop.published.sha, publishedHead);
     for (let replay = 0; replay < 2; replay++) {
+      const before = attestations().length;
       assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+      assert.equal(attestations().length - before, 1,
+        "每次重放重新核验一次，展示复用本次已核验快照");
+      assert.equal(new FeedbackStore(join(workspace, "feedback", "index.jsonl"))
+        .list().find((item) => item.source_id === note.id)?.status, "awaiting_verification",
+        "处理回执不能冒充用户验收通过");
       assert.deepEqual(readState(cwd).delivery_loop.batches[0], originalBatch,
         "重放只补投影，不重写结果或冒充最终质量闭环");
     }
+
+    const beforeSync = attestations().length;
+    api.syncFeedbackStoreFromKernel(internal);
+    assert.equal(attestations().length - beforeSync, 1, "独立展示同步仍重新核验");
+
+    // 在核验与投影之间换掉磁盘状态：只能展示刚核验的快照，下一次必须拒绝伪造。
+    const sync = api.syncFeedbackStoreFromKernel;
+    const altered = structuredClone(published);
+    altered.delivery_loop.batches[0].results[0].summary = "伪造处理结论";
+    api.syncFeedbackStoreFromKernel = function(task: unknown, projectionOnly: boolean, state: unknown) {
+      writeFileSync(statePath, JSON.stringify(altered));
+      return sync.call(this, task, projectionOnly, state);
+    };
+    try {
+      assert.equal(api.recordActiveFeedbackResult(internal), undefined);
+      assert.ok(!readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8")
+        .includes("伪造处理结论"), "不能投影未经核验的新磁盘状态");
+      assert.match(api.recordActiveFeedbackResult(internal), /缺少 Cloud 宿主权威收据/);
+    } finally {
+      api.syncFeedbackStoreFromKernel = sync;
+      writeFileSync(statePath, JSON.stringify(published));
+    }
+
+    const brokenPython = join(workspace, "unavailable-python");
+    writeFileSync(brokenPython, "#!/bin/sh\necho invalid-response\n");
+    chmodSync(brokenPython, 0o755);
+    api.options.host.python = brokenPython;
+    const beforeFailure = readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8");
+    try {
+      assert.match(api.recordActiveFeedbackResult(internal), new RegExp(KERNEL_UNAVAILABLE),
+        "先前成功不能掩盖当前内核故障，保留自动恢复分类");
+      assert.equal(readFileSync(join(workspace, "feedback", "index.jsonl"), "utf8"), beforeFailure);
+    } finally {
+      api.options.host.python = wrapper;
+    }
+    assert.equal(api.recordActiveFeedbackResult(internal), undefined, "内核恢复后可直接重试成功");
 
     for (const field of ["result_head", "result_digest", "summary"]) {
       const altered = JSON.parse(JSON.stringify(published));
