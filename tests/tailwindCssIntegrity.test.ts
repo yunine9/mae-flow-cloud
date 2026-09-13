@@ -28,6 +28,14 @@ const SMOKE_SELECTORS = [
   ".md-architecture-reference", // Markdown 架构引用卡
 ];
 
+/** shadcn 变量桥冒烟:@theme 的 --color-* 映射指向这些 :root 定义,
+ * 丢一个对应一组工具类整体失效(#233 第二处事故:全站主按钮透明裸字)。 */
+const SMOKE_VARIABLES = [
+  "--primary:", "--primary-foreground:", "--background:", "--foreground:",
+  "--card:", "--popover:", "--secondary:", "--destructive:",
+  "--input:", "--ring:",
+];
+
 type BlockKind = "media" | "layer" | "other-at" | "plain";
 
 /** 扫描全文件:每个字符下标 → 是否处于任一 @media 块内 + 括号深度。 */
@@ -90,5 +98,12 @@ test("tailwind.css:已知活选择器必须至少一次活在非 @media 作用�
       positions.some((index) => !inMedia[index]),
       `${selector} 只出现在 @media 作用域里(基础皮被媒体查询吞掉?)——历史事故形态,见本文件头注释`,
     );
+  }
+});
+
+test("tailwind.css:shadcn 变量桥冒烟——@theme 依赖的 :root 定义一个不能少", () => {
+  for (const variable of SMOKE_VARIABLES) {
+    assert.ok(css.includes(variable),
+      `变量桥缺 ${variable}——@theme 的 --color-* 映射会悬空,对应工具类整组失效\n(历史事故:#233 归并丢 15 个 :root 定义,全站主按钮透明裸字)`);
   }
 });
