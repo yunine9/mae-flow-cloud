@@ -68,6 +68,12 @@ issueLubanApproval/prepushContainerIntegration 四个 60s+ 文件,并发
 
 ## 五、后续提效建议(按收益排序)
 
+0. **全量上 CI,本地不跑(2026-09-13 已落地)**:`.github/workflows/
+   tests.yml`——gate 阻塞 job(typecheck+web 构建+秒级契约,首跑
+   1m12s 绿)+ 全量非阻塞报告 job(4 核 runner 26 分钟,job summary
+   出汇总、日志上传工件)。本地迭代只守秒级 gate,敏捷优先;存量红
+   清零后摘 full-suite 的 continue-on-error 翻成阻塞。
+
 1. **修失败用例顺带省超时税**:50 个失败里大量是 15~96s 等待超时烧满才红
    (prepush 网络重试一条就 96s)。按第一节归因更新断言后,这部分墙钟
    直接消失——修正确性和提速是同一件事。
