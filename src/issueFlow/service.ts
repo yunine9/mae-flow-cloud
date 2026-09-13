@@ -3180,6 +3180,8 @@ export class IssueFlowService {
       // 动作:阶段已 done,这里举环境验证闸(与监看器滞后收口的
       // closeMrGreen 同款);监看器滞后收口走 settlePipeline。
       notifyMrGreen: () => this.awaitEnvVerify(live),
+      // 单卡互斥②(ADR-0024):有未决 Agent 卡时 raise_gate 拒举。
+      pendingAgentCard: () => live.humanGate.pending().length > 0,
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -3237,6 +3239,13 @@ export class IssueFlowService {
       }),
       humanGate: live.humanGate,
       allowHumanQuestions: true,
+      // 单卡互斥①(ADR-0024):平台闸在场时 AskUserQuestion 先问宿主,
+      // 宿主拦下(纠偏文字作工具错误回给模型,不建卡不通知)——闸优先
+      // 是作答分派的既有语义,两卡并存是 issue-53 撞车类 bug 的土壤。
+      beforeHumanQuestion: () => live.state.gate
+        ? "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
+          + "新回合,届时若仍需要向用户提问,再举问题卡。"
+        : undefined,
       // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
       // 并行评审/grilling 派子查证)原生可用。安全边界:
       // - 业务工具(complete_stage/push_branch 等)只在主会话——
