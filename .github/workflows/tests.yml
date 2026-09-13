@@ -77,16 +77,14 @@ jobs:
         run: |
           SHARDS=3
           IDX=${{ matrix.shard }}
-          files=()
           for f in tests/*.test.ts; do
             case "$f" in
               *prepushRecovery*|*hostPushRecovery*) continue ;;
             esac
             h=$(basename "$f" | cksum | cut -d' ' -f1)
-            (( h % SHARDS == IDX )) && files+=("$f")
-          done
-          echo "count=${#files[@]}" >> "$GITHUB_OUTPUT"
-          echo "${files[@]}" > shard-files.txt
+            (( h % SHARDS == IDX )) && printf '%s\n' "$f"
+          done > shard-files.txt
+          echo "count=$(wc -l < shard-files.txt)" >> "$GITHUB_OUTPUT"
       - name: 全量测试(本分片)
         id: tests
         continue-on-error: true
@@ -101,12 +99,15 @@ jobs:
         run: |
           {
             echo "## 全量测试报告——分片 ${{ matrix.shard }}(${{ steps.files.outputs.count }} 文件,非阻塞)"
-            grep -E "^ℹ (tests|pass|fail|skipped|duration_ms)" test-log.txt \
-              || echo "(无汇总输出——测试在收集阶段就失败了,看日志工件)"
-            echo
-            echo "失败用例:"
-            grep -E "^✖" test-log.txt | grep -v "failing tests" \
-              | sort -u | head -40 || echo "(无)"
+            if grep -qE "^ℹ tests " test-log.txt; then
+              grep -E "^ℹ (tests|pass|fail|skipped|duration_ms)" test-log.txt
+              echo
+              echo "失败用例:"
+              grep -E "^✖" test-log.txt | grep -v "failing tests" \
+                | sort -u | head -40 || echo "(无)"
+            else
+              echo ":x: **分片没有真正跑起来**(基础设施失败被 continue-on-error 吞掉)——看日志工件排查"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: 上传完整日志
         if: always()
