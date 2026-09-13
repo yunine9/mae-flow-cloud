@@ -26,6 +26,17 @@ export const statusLabels = {
   archived: "已归档",
 } as const;
 
+/** 状态→Badge 语义 variant(#252 P0 四色):手搓 em.status-* 药丸退役,
+ * 换 shadcn Badge soft 底——草稿灰(neutral)、待审核橙(warning)、
+ * 已发布绿(success)、已归档弱底(suspended);配方见
+ * components/ui/badge.tsx,颜色经 tailwind.css @theme 桥指向状态令牌。 */
+export const statusBadgeVariants = {
+  draft: "neutral",
+  pending_review: "warning",
+  published: "success",
+  archived: "suspended",
+} as const;
+
 export const registryLabels: Record<WorkflowAssetRef["registry"], string> = {
   business_knowledge: "业务知识",
   engineering_knowledge: "工程知识",

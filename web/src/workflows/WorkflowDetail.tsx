@@ -1,10 +1,11 @@
 import { PersonName } from "../People";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/Empty";
+import { Badge } from "@/components/ui/badge";
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList,
 } from "@/components/ui/breadcrumb";
 import type { WorkflowAssetDetail } from "../api";
-import { statusLabels } from "./model";
+import { statusBadgeVariants, statusLabels } from "./model";
 
 export function WorkflowDetail({
   detail,
@@ -48,14 +49,14 @@ export function WorkflowDetail({
             <BreadcrumbItem>
               <BreadcrumbLink render={<button type="button" className="wf-breadcrumb-back" onClick={onBack} />}>
                 <svg viewBox="0 0 20 20" aria-hidden><path d="m12 5-5 5 5 5" /></svg>
-                <span>工作流资产</span>
+                <span>工作流</span>
               </BreadcrumbLink>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
         <span><small>{asset.scope === "team" ? "团队工作流" : "个人工作流"}</small>
           <h2 id="wf-detail-title">{asset.name}</h2><p>{asset.description || "暂无说明"}</p></span></div>
-      <em className={`status-${asset.status}`}>{statusLabels[asset.status]}</em>
+      <Badge variant={statusBadgeVariants[asset.status]}>{statusLabels[asset.status]}</Badge>
     </header>
     <div className="wf-detail-summary">
       <div><small>当前草稿</small><strong>r{draft.revision}</strong><span>{shortDigest(draft.digest)}</span></div>

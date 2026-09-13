@@ -35,6 +35,7 @@
     "tests/issueFlowContract.test.ts",
     "tests/rootErrorBoundary.test.ts",
     "tests/uiDialogSmoke.test.ts",
+    "tests/workflowLibraryUi.test.ts",
     "scripts/settings-preview.ts"
   ]
 }
