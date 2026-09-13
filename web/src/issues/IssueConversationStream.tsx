@@ -59,6 +59,8 @@ import { Alert } from "@/components/Alert";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { cn } from "cn";
 
 /** 发言人头像底色(#220 从 .conv-avatar CSS 迁为令牌工具类,口径与
  * 任务侧 ConversationStream 的 CONV_AVATAR_TONE 一致;问题域只有三角色)。 */
@@ -67,6 +69,63 @@ const CONV_AVATAR_TONE = {
   you: "bg-(--text-strong)",
   person: "bg-(--muted)",
 } as const;
+
+/** 本页气泡词典(#231 换装):协作流气泡原白拿任务侧 conversation.css 的
+ * conv-* 皮(选择器挂在两域共有的 task-workspace-v2 根上),问题域改
+ * 本页令牌工具类直译——同尺寸同色板,明暗自适应;conv-* CSS 为尚未
+ * 迁移的任务侧 ConversationStream 保留,问题域不再搭车。 */
+const CONV = {
+  msg: "grid grid-cols-[24px_minmax(0,1fr)] gap-2.5 [scroll-margin-top:12px]",
+  body: "grid min-w-0 content-start gap-1.5",
+  who: "flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground",
+  whoName: "font-semibold text-text-strong",
+  whoTime: "text-faint",
+  tag: "inline-flex h-[18px] items-center rounded-[5px] px-1.5 text-xs font-medium not-italic",
+  tagTone: {
+    neutral: "bg-surface-3 text-muted-foreground",
+    ok: "bg-success-soft text-success",
+    att: "bg-attention-soft text-attention",
+    ink: "bg-(--ink-soft) text-ink",
+  } as const,
+  text: "text-base text-text [overflow-wrap:anywhere]",
+  answer: "m-0 whitespace-pre-wrap text-base text-text [overflow-wrap:anywhere]",
+  notes: "m-0 whitespace-pre-wrap text-sm text-muted-foreground",
+  lead: "m-0 text-sm text-text",
+  earlier: "border-l-2 border-line pl-2.5",
+  earlierSummary: "cursor-pointer text-xs text-muted-foreground",
+  earlierSummaryFaint: "cursor-pointer text-xs text-faint",
+  earlierText: "mt-2 text-sm text-muted-foreground [overflow-wrap:anywhere]",
+  act: "block w-full cursor-pointer truncate text-left text-xs text-muted-foreground hover:text-ink",
+  actArrow: "mr-1.5 text-faint",
+  date: "-mb-1 mt-1 flex items-center gap-2.5 text-xs text-faint before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line",
+  more: "cursor-pointer rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-2 text-xs text-muted-foreground hover:border-text-strong hover:text-text-strong",
+  problem: "rounded-md bg-attention-soft px-2.5 py-2 text-left text-xs text-attention",
+  empty: "px-3 py-6 text-center text-xs text-muted-foreground",
+  card: "overflow-hidden rounded-lg border bg-surface",
+  cardHead: "border-b border-line px-3.5 pb-2 pt-2.5",
+  cardTitle: "mt-0.5 text-base font-semibold leading-snug text-text-strong",
+  question: "px-3.5 pb-1 pt-2",
+  questionText: "m-0 mb-1.5 text-sm text-text",
+  options: "m-0 mb-1.5 grid list-none gap-1.5 p-0",
+  option: "rounded-md border border-line px-2.5 py-1.5 text-sm text-muted-foreground",
+  optionChosen:
+    "border-ink bg-(--ink-soft) font-semibold text-ink after:ml-1 after:content-['✓']",
+  answerLine: "m-0 text-base text-text [overflow-wrap:anywhere]",
+  receipts: "m-0 grid list-none gap-2 p-0",
+  receipt: "grid grid-cols-[18px_minmax(0,1fr)] items-start gap-2",
+  receiptIcon: "mt-[3px] grid size-4 place-items-center rounded-full text-[10px] not-italic text-white",
+  receiptBody: "grid min-w-0 gap-0.5",
+  receiptName: "font-semibold text-text",
+  receiptNote: "text-xs text-muted-foreground",
+} as const;
+
+/** 流内卡的状态皮:等待中的当前卡描强线,历史卡(已决定/作废)收灰。 */
+const convCardClass = (waiting: boolean) =>
+  cn(CONV.card, waiting ? "border-line-strong" : "border-line");
+
+/** 卡头词签:等待卡用琥珀,历史卡收灰。 */
+const convKickerClass = (muted: boolean) =>
+  muted ? "block text-xs font-medium text-faint" : "block text-xs font-medium text-attention";
 
 /** 一屏先渲最近这些条;更早的按需展开(与任务侧同款节奏)。 */
 const INITIAL_LIMIT = 50;
@@ -261,16 +320,18 @@ export function IssueConversationStream({
     const avatar = options.who === "agent" ? "A"
       : options.who === "you" ? "你" : initial(options.name);
     return (
-      <article className={`conv-msg ${options.who}`} key={options.key}
+      <article className={CONV.msg} key={options.key}
         id={`conv-${options.key}`}>
         <Avatar size="sm" aria-hidden className="after:hidden">
-          <AvatarFallback className={`rounded-[7px] text-[11px] font-bold text-white ${CONV_AVATAR_TONE[options.who]}`}>{avatar}</AvatarFallback>
+          <AvatarFallback className={cn(
+            "rounded-[7px] text-xs font-bold text-white",
+            CONV_AVATAR_TONE[options.who])}>{avatar}</AvatarFallback>
         </Avatar>
-        <div className="conv-body">
-          <div className="conv-who">
-            <b>{options.name}</b>
+        <div className={CONV.body}>
+          <div className={CONV.who}>
+            <b className={CONV.whoName}>{options.name}</b>
             {options.tag}
-            <time dateTime={options.ts}
+            <time className={CONV.whoTime} dateTime={options.ts}
               title={formatLocalDateTime(options.ts, { seconds: true, year: true })}>
               {formatLocalClock(options.ts)}
             </time>
@@ -285,7 +346,7 @@ export function IssueConversationStream({
     switch (item.kind) {
       case "session":
         return (
-          <div className="conv-divider" key={item.id} id={`conv-${item.id}`}>
+          <div className={CONV.date} key={item.id} id={`conv-${item.id}`}>
             {item.phase === "started"
               ? (item.resume ? "会话从断点恢复" : "会话开始")
               : `会话结束${item.detail ? ` · ${item.detail}` : ""}`}
@@ -305,23 +366,23 @@ export function IssueConversationStream({
         const last = spoken.at(-1);
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
-          tag: item.open ? <em className="conv-tag ink">正在进行</em> : undefined,
+          tag: item.open ? <em className={cn(CONV.tag, CONV.tagTone.ink)}>正在进行</em> : undefined,
           children: <>
             {folded.length > 0 && (
-              <details className="conv-earlier narration">
-                <summary>{folded.length} 段过程说明</summary>
+              <details className={CONV.earlier}>
+                <summary className={CONV.earlierSummaryFaint}>{folded.length} 段过程说明</summary>
                 {folded.map((text, index) => (
-                  <div className="conv-text" key={index}>
+                  <div className={CONV.earlierText} key={index}>
                     <Markdown text={text.text} />
                   </div>
                 ))}
               </details>
             )}
             {earlier.length > 0 && (
-              <details className="conv-earlier">
-                <summary>此前 {earlier.length} 段</summary>
+              <details className={CONV.earlier}>
+                <summary className={CONV.earlierSummary}>此前 {earlier.length} 段</summary>
                 {earlier.map((text, index) => (
-                  <div className="conv-text" key={index}>
+                  <div className={CONV.earlierText} key={index}>
                     <Markdown text={text.text} />
                   </div>
                 ))}
@@ -329,9 +390,9 @@ export function IssueConversationStream({
             )}
             {last && <ClampedText text={last.text} />}
             {(item.steps.calls > 0 || item.steps.agents > 0) && (
-              <button type="button" className="conv-act" onClick={onOpenEvents}
+              <button type="button" className={CONV.act} onClick={onOpenEvents}
                 title="到「对话现场」看每一步">
-                <span aria-hidden>▸</span>{stepsLine(item.steps)}
+                <span aria-hidden className={CONV.actArrow}>▸</span>{stepsLine(item.steps)}
               </button>
             )}
           </>,
@@ -346,34 +407,36 @@ export function IssueConversationStream({
         const answerLines = decision ? decision.decision.split("\n") : [];
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
-          tag: <em className={`conv-tag ${item.status === "waiting" ? "att" : "neutral"}`}>
+          tag: <em className={cn(CONV.tag,
+            item.status === "waiting" ? CONV.tagTone.att : CONV.tagTone.neutral)}>
             {item.status === "waiting" ? "等待决定"
               : item.status === "superseded" ? "已作废" : "已决定"}
           </em>,
-          children: <div className={`conv-card ${item.status}`}>
-            <div className="conv-card-head">
-              <span className="conv-kicker">
+          children: <div className={convCardClass(item.status === "waiting")}>
+            <div className={CONV.cardHead}>
+              <span className={convKickerClass(item.status !== "waiting")}>
                 {item.purpose === "clarification" ? "追问" : "请你决定"}
               </span>
-              <h4>{conversationCardTitle(item)}</h4>
+              <h4 className={CONV.cardTitle}>{conversationCardTitle(item)}</h4>
             </div>
             {item.questions.map((question, index) => {
               const line = answerLines[index] ?? "";
               const custom = line !== "" && !question.options.includes(line);
               return (
-                <div className="conv-question" key={index}>
-                  {item.questions.length > 1 && <p>{question.question}</p>}
+                <div className={CONV.question} key={index}>
+                  {item.questions.length > 1 && <p className={CONV.questionText}>{question.question}</p>}
                   {question.options.length > 0 && (
-                    <ul className="conv-options">
+                    <ul className={CONV.options}>
                       {question.options.map((option) => (
                         <li key={option}
-                          className={option === line ? "chosen" : ""}>{option}</li>
+                          className={option === line
+                            ? cn(CONV.option, CONV.optionChosen) : CONV.option}>{option}</li>
                       ))}
                     </ul>
                   )}
                   {/* 有给定选项时,不匹配的答案行是自定义答复,带前缀
                       回填;开放题的答案行就是回答本身,直出不加 prefix。 */}
-                  {custom && <p className="conv-answer">
+                  {custom && <p className={CONV.answerLine}>
                     {question.options.length > 0 ? `自定义答复:${line}` : line}
                   </p>}
                 </div>
@@ -387,22 +450,23 @@ export function IssueConversationStream({
         return message({
           key: item.id, who: who === viewerUsername ? "you" : "person",
           name: who === viewerUsername ? "你" : (who || "归属人"), ts: item.ts,
-          tag: <em className="conv-tag neutral">
+          tag: <em className={cn(CONV.tag, CONV.tagTone.neutral)}>
             {item.purpose === "clarification" ? "答复了追问" : "作了决定"}
           </em>,
           children: <>
-            <p className="conv-answer">{item.decision}</p>
-            {item.notes && <p className="conv-notes">{item.notes}</p>}
+            <p className={CONV.answer}>{item.decision}</p>
+            {item.notes && <p className={CONV.notes}>{item.notes}</p>}
           </>,
         });
       }
       case "steer":
         return message({
           key: item.id, who: "you", name: nameOf(owner), ts: item.ts,
-          tag: <em className={`conv-tag ${item.delivered ? "ok" : "att"}`}>
+          tag: <em className={cn(CONV.tag,
+            item.delivered ? CONV.tagTone.ok : CONV.tagTone.att)}>
             {item.delivered ? "已读取" : "待读取"}
           </em>,
-          children: <p className="conv-answer">{item.text}</p>,
+          children: <p className={CONV.answer}>{item.text}</p>,
         });
       case "review":
         // 检视提交 = 整体打回重跑分析(ADR-0007):count 条修订意见随事件
@@ -410,25 +474,28 @@ export function IssueConversationStream({
         return message({
           key: item.id, who: isViewer ? "person" : "you",
           name: isViewer ? (owner || "归属人") : "你", ts: item.ts,
-          tag: <em className="conv-tag neutral">整体打回</em>,
+          tag: <em className={cn(CONV.tag, CONV.tagTone.neutral)}>整体打回</em>,
           children: <>
-            <p className="conv-lead">提交了 {item.count} 条检视意见给 Agent</p>
-            <p className="conv-answer">{item.text}</p>
+            <p className={CONV.lead}>提交了 {item.count} 条检视意见给 Agent</p>
+            <p className={CONV.answer}>{item.text}</p>
           </>,
         });
       case "receipts":
         // 平台工具回执(拉仓/推分支/建 MR/申报…)聚成一组留痕,不刷屏。
         return message({
           key: item.id, who: "agent", name: "Agent", ts: item.ts,
-          tag: <em className="conv-tag neutral">平台回执 · {item.items.length} 项</em>,
-          children: <ul className="conv-receipts">
+          tag: <em className={cn(CONV.tag, CONV.tagTone.neutral)}>平台回执 · {item.items.length} 项</em>,
+          children: <ul className={CONV.receipts}>
             {item.items.map((entry, index) => (
-              <li key={index}
-                className={entry.outcome === "success" ? "outcome-fixed" : "outcome-not_fixed"}>
-                <i aria-hidden>{entry.outcome === "success" ? "✓" : "✕"}</i>
-                <div>
-                  <b>{entry.name}</b>
-                  {entry.summary && <small>{entry.summary}</small>}
+              <li key={index} className={CONV.receipt}>
+                <i aria-hidden
+                  className={cn(CONV.receiptIcon,
+                    entry.outcome === "success" ? "bg-success" : "bg-danger")}>
+                  {entry.outcome === "success" ? "✓" : "✕"}
+                </i>
+                <div className={CONV.receiptBody}>
+                  <b className={CONV.receiptName}>{entry.name}</b>
+                  {entry.summary && <small className={CONV.receiptNote}>{entry.summary}</small>}
                 </div>
               </li>
             ))}
@@ -444,7 +511,7 @@ export function IssueConversationStream({
   for (const item of shown) {
     const date = formatLocalDate(item.ts);
     if (date && date !== lastDate) {
-      rows.push(<div className="conv-date" key={`date-${date}-${item.id}`}>{date}</div>);
+      rows.push(<div className={CONV.date} key={`date-${date}-${item.id}`}>{date}</div>);
       lastDate = date;
     }
     rows.push(render(item));
@@ -474,8 +541,9 @@ export function IssueConversationStream({
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
       {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进
-          可滚流区,不会被贴底跟随滚出视野。 */}
-      {suspendedCard && <div className="issue-conv-suspended">{suspendedCard}</div>}
+          可滚流区,不会被贴底跟随滚出视野;原 .issue-conv-suspended 槽位
+          留白随 issue-workspace 家族退役,直译成槽位工具类。 */}
+      {suspendedCard && <div className="mx-3.5 mb-1.5 shrink-0">{suspendedCard}</div>}
       <div className="ws-stream" role="log" aria-live="polite" aria-relevant="additions"
         ref={box}
         onScroll={(event) => {
@@ -483,14 +551,14 @@ export function IssueConversationStream({
           if (pinned.current) setHasNew(false);
         }}>
         {hidden > 0 && (
-          <button type="button" className="conv-more"
+          <button type="button" className={CONV.more}
             onClick={() => setLimit((value) => value + INITIAL_LIMIT)}>
             显示更早的 {hidden} 条
           </button>
         )}
-        {view.unavailable && <div className="conv-problem" role="status">{view.unavailable}</div>}
+        {view.unavailable && <div className={CONV.problem} role="status">{view.unavailable}</div>}
         {!view.loaded && !view.unavailable && (
-          <div className="conv-empty">正在读取协作记录…</div>
+          <div className={CONV.empty}>正在读取协作记录…</div>
         )}
         {view.loaded && !shown.length && !currentCard && (
           <Empty className="py-6" role="status">
@@ -504,8 +572,8 @@ export function IssueConversationStream({
         {pinnedCard && message({
           key: `card-${waitingId ?? "current"}`, who: "agent", name: "Agent",
           ts: projectedCurrent?.ts ?? waitingTs ?? new Date().toISOString(),
-          tag: <em className="conv-tag att">{nowTag}</em>,
-          children: <div className="conv-card current">{currentCard}</div>,
+          tag: <em className={cn(CONV.tag, CONV.tagTone.att)}>{nowTag}</em>,
+          children: <div className={cn(CONV.card, "border-line-strong")}>{currentCard}</div>,
         })}
       </div>
       {hasNew && (
@@ -661,7 +729,9 @@ function IssueCollaborationComposer({
         setSending(false);
       }
     }
-    return <section className="ws-composer takeover" aria-label="人工驾驶记录与交还">
+    return <section
+      className="ws-composer takeover [border-top-color:color-mix(in_srgb,var(--merge)_40%,var(--line))]"
+      aria-label="人工驾驶记录与交还">
       <div className="ws-composer-ctx">
         <span className={`ws-composer-mode ${busy ? "quiet" : "active"}`}>
           人工驾驶中——AI 已暂停
@@ -695,18 +765,20 @@ function IssueCollaborationComposer({
             {sent && !text ? "已记录到现场" : "⌘/Ctrl + Enter 记录"}
           </span>
         </div>
-        <div className="issue-takeover-actions">
-          <button type="button" className="issue-takeover-note"
+        {/* #231 换装:接管双钮原 .issue-takeover-actions 手搓皮退役——
+            「记录到现场」次档描边钮、「交还给 AI 继续」主档实心钮。 */}
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm"
             disabled={sending || busy || !text.trim()}
             onClick={() => void recordNote()}>
             {sending ? "处理中…" : "记录到现场"}
-          </button>
-          <button type="button" className="issue-takeover-resume"
+          </Button>
+          <Button type="button" size="sm"
             disabled={sending || busy}
             title="把当前输入作交还说明,连同接管期记录一并交给 AI"
             onClick={() => void handBack()}>
             交还给 AI 继续
-          </button>
+          </Button>
         </div>
       </div>
       {error && <Alert variant="destructive" role="alert" className="mb-3">{error}</Alert>}
@@ -759,11 +831,12 @@ function IssueCollaborationComposer({
       </span>
       {/* 人工接管入口(2026-09-07 走查拍板):运行/空闲都可发起——打断
           AI、现场交由人工;接管后输入区换人工驾驶模式(记录/交还)。 */}
-      {!busy && <button type="button" className="issue-takeover-start"
+      {!busy && <Button type="button" variant="outline" size="sm"
+        className="ml-auto rounded-full"
         title="打断 AI,现场交由人工操作;交还时 AI 会带着人工记录继续"
         onClick={() => void onTakeover().catch(() => undefined)}>
         接管现场
-      </button>}
+      </Button>}
     </div>
     <Textarea className="min-h-13 resize-y bg-surface" value={text} rows={3}
       ref={textRef}

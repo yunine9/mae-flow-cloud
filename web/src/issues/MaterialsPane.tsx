@@ -859,9 +859,9 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   const activeDiff = diffRepo ? repoDiff ?? "" : allDiff;
 
   // 免壳直渲(#123):没有面板壳,失败备注顶格示人,其余按 view 出内容。
-  // issue-materials 保留为与工作台面板的拉伸契约钩子(issueWorkspaceLayout),
-  // 自身配方已换工具类(#230)。
-  return <div className="issue-materials grid content-start gap-3.5">
+  // 拉伸契约原住在 issue-workspace 家族(#231 退役),flex/自滚配方落为
+  // 本根节点的工具类——四个材料页签根节点同构拉伸并自滚,长文档不撑破面板。
+  return <div className="issue-materials grid content-start gap-3.5 min-h-0 flex-1 overflow-y-auto">
     {note && <div className="utility-note">{note}</div>}
       {view === "changes" && detail.repo_reclaimed_at && <>
         {/* 磁盘治理:终态单的代码现场已被清扫器回收(取消/归档后无

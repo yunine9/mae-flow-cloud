@@ -57,7 +57,7 @@ export function IssueAssociateCard({ busy, onAssociate }: {
     </div>
     {checked && <div className="issue-associate-detail">
       <div className="issue-associate-ticket">
-        <span className="issue-ticket">{checked.ticket}</span>
+        <span className="select-text rounded-full bg-primary/10 px-[7px] py-px font-mono text-xs font-bold text-primary">{checked.ticket}</span>
         <span>{checked.title || "(无标题)"}</span>
       </div>
       <p className="issue-associate-content">{checked.content.split("\n").slice(0, 6)

@@ -371,16 +371,18 @@ test("登记页接线锚点:润色按钮、确认弹窗、图片预览", () => {
   // 不往 description 里写尺寸标记。
   const editor = readFileSync(
     resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
-  assert.match(editor, /issue-image-lightbox/);
+  // #231 改锚:编辑器壳/灯箱迁工具类(旧 .issue-desc-editor 家族随
+  // 簇二退役),图片限高与灯箱行为断言改钉组件源码。
+  assert.match(editor, /z-\[80\] flex cursor-zoom-out items-center justify-center bg-black\/70/);
   assert.match(editor, /setZoom\(target\.getAttribute\("src"\)\)/);
   const css = readFileSync(resolve("web/src/style.css"), "utf-8");
-  assert.match(css,
-    /\.issue-desc-editor \.ProseMirror img \{[^}]*max-height: 200px/,
-    "编辑器图片限高 200px");
+  assert.match(editor,
+    /\[&_img\]:max-h-\[200px\]/,
+    "编辑器图片限高 200px(ProseMirror 生成节点用任意变体直译)");
   // #230 改锚:润色预览壳迁工具类,图片限高由 [&_img]:max-h-[200px]
   // 直译(旧 .issue-polish-preview img 规则随家族退役)。
   assert.match(registration, /\[&_img\]:max-h-\[200px\]/, "润色预览图片限高 200px");
-  assert.match(css, /\.issue-image-lightbox \{/);
+  assert.doesNotMatch(css, /\.issue-image-lightbox/);
   assert.doesNotMatch(css, /issue-polish-btn/, "手搓按钮皮不许回潮");
 });
 

@@ -56,6 +56,12 @@ import { insertMarkdownAtCursor, useIssueImagePaste } from "./useIssueImagePaste
  * 草稿、提交失败提示)仍归卡组件自己——portal 只搬 DOM 不搬状态。
  * #126 其余三类卡(通用决策/skill 圈选/流水线两闸)已照此换壳:四类卡
  * 的提交区走同一个挂载器,字段/校验/提交语义零变化。
+ *
+ * 皮肤(#231 换装):原 .issue-decision* 手搓皮(琥珀洗头/计数 pill/
+ * 全局 .question/.option/.radio 搭车)退役,整卡改 shadcn 默认皮——
+ * 白卡圆角细边 + 令牌工具类,推荐标注/已选态用 attention/ink 令牌
+ * 直译;共享的 .question/.option/.radio CSS 为任务侧 TaskCard 保留,
+ * 问题域不再搭车。
  */
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -65,6 +71,9 @@ import type { EnvironmentView } from "../api";
 import { toggleDecisionChoice } from "../decisionSelection";
 import { Markdown } from "../markdown";
 import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "cn";
 
 /** 提交区的 dock 挂载器(#125,任务侧 TaskCard 的 DecisionFooterMount
  * 同款):target 在场时把提交区 portal 进输入区 dock,缺席时原位渲染。
@@ -75,6 +84,72 @@ function IssueDecisionFooterMount({ target, children }: {
 }) {
   return target ? createPortal(children, target) : children;
 }
+
+/** 四类卡共用外壳:白卡圆角细边。接上 dock(docked=#125 foot-docked)
+ * 后提交区搬进输入区,卡体不投影——住进气泡,外阴影会与气泡描边叠加
+ * 发糊(原 .conv-card.current .issue-decision 收敛规则直译)。 */
+function DecisionShell({ docked, label, children }: {
+  docked: boolean;
+  label: string;
+  children: ReactNode;
+}) {
+  return <section aria-label={label}
+    className={cn("overflow-hidden rounded-lg border border-border bg-card text-card-foreground",
+      docked && "shadow-none")}>
+    {children}
+  </section>;
+}
+
+/** 卡头:词签(attention 语义)+ 计数软徽标。 */
+function DecisionHead({ kicker, count }: { kicker: string; count: string }) {
+  return <header className="flex items-baseline justify-between gap-3 border-b border-border/70 px-3.5 py-2.5">
+    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-attention">
+      <i aria-hidden className="size-[7px] rounded-full bg-current" />{kicker}
+    </span>
+    <Badge variant="warning" className="shrink-0 font-bold">{count}</Badge>
+  </header>;
+}
+
+/** 决策背景:agent 的一段话,markdown 直读,超高内滚(同 waiting-context 口径)。 */
+function DecisionContext({ label, className, children }: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return <div className={cn(
+    "mx-3.5 mt-3 max-h-60 overflow-y-auto rounded-lg border border-border bg-muted/40 p-3 text-sm leading-[1.65]",
+    className)}>
+    <div className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</div>
+    {children}
+  </div>;
+}
+
+/** 表单字段壳(原 .issue-field 直译):label 词签 + 控件,窄列自适应。 */
+function DecisionField({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="grid min-w-0 gap-1.5 text-sm text-muted-foreground">
+    <span>{label}</span>
+    {children}
+  </label>;
+}
+
+/** 说明行:卡上的状态/提示句;[role=alert] 走 attention 警示色。 */
+const DECISION_NOTE = "mx-3.5 mt-3 text-sm text-muted-foreground";
+
+/** 提交区容器(#125 卡座/dock 双上下文):原位(未接线)是卡内一节,
+ * 自带卡内留白;挂进输入区 dock 后是输入区自己的铺陈,dock 容器
+ * (ws-reply-dock)自带留白,这里收平。env 卡根节点已自带侧留白,
+ * 传 className 只补垫底。 */
+function DecisionDockFoot({ docked, className, children }: {
+  docked: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return <div className={cn("grid gap-2.5",
+    !docked && (className ?? "px-3.5 pb-3.5 pt-3"))}>{children}</div>;
+}
+
+/** 提交/拒绝按钮排:主档满宽,次档(拒绝/都不用)同排等宽。 */
+const DECISION_SUBMIT_ROW = "flex gap-2";
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
   logs: "拉取日志",
@@ -114,44 +189,30 @@ export function IssueDecisionCard({ waiting, busy, footerTarget, onAnswer, onEnv
   onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   if (waiting.gate_kind === "env_needed") {
-    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白
-    // (样式见 style.css 末尾 #125 追加块)。
-    return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
-      aria-label="配置网管环境">
-      <header className="issue-decision-head">
-        <span className="decision-kicker">配置网管环境</span>
-        <span className="issue-decision-count">
-          {ENV_SCOPE_TEXT[waiting.gate_scope ?? ""] ?? "拉日志/换库"}需要
-        </span>
-      </header>
-      {waiting.context && <div className="issue-decision-context">
-        <div className="context-label">决策背景</div>
+    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白。
+    return <DecisionShell docked={Boolean(footerTarget)} label="配置网管环境">
+      <DecisionHead kicker="配置网管环境"
+        count={`${ENV_SCOPE_TEXT[waiting.gate_scope ?? ""] ?? "拉日志/换库"}需要`} />
+      {waiting.context && <DecisionContext label="决策背景">
         <Markdown text={waiting.context} />
-      </div>}
+      </DecisionContext>}
       <EnvNeededForm busy={busy} scope={waiting.gate_scope}
         footerTarget={footerTarget} onSubmit={onEnvironment} />
-    </section>;
+    </DecisionShell>;
   }
   if (waiting.gate_kind === "skill_select") {
-    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白
-    // (样式见 style.css 末尾 #125/#126 追加块)。
-    return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
-      aria-label="圈选必读知识">
-      <header className="issue-decision-head">
-        <span className="decision-kicker">圈选必读知识</span>
-        <span className="issue-decision-count">
-          {(waiting.gate_skills ?? []).length} 个可选
-        </span>
-      </header>
-      {waiting.context && <div className="issue-decision-context">
-        <div className="context-label">决策背景</div>
+    // foot-docked:提交区已(将)搬进输入区 dock,卡体底部补回垫底留白。
+    return <DecisionShell docked={Boolean(footerTarget)} label="圈选必读知识">
+      <DecisionHead kicker="圈选必读知识"
+        count={`${(waiting.gate_skills ?? []).length} 个可选`} />
+      {waiting.context && <DecisionContext label="决策背景">
         <Markdown text={waiting.context} />
-      </div>}
+      </DecisionContext>}
       <SkillSelectForm busy={busy} skills={waiting.gate_skills ?? []}
         footerTarget={footerTarget}
         onSubmit={(selection, decision) =>
           onAnswer(decision, undefined, undefined, undefined, selection)} />
-    </section>;
+    </DecisionShell>;
   }
   if (waiting.gate_kind === "pipeline_unfixable"
       || waiting.gate_kind === "pipeline_evidence") {
@@ -170,14 +231,10 @@ export function IssueDecisionCard({ waiting, busy, footerTarget, onAnswer, onEnv
  * - 拒绝(票 93)两段式:第一段展开理由框,第二段才真正提交——
  *   硬拒绝(同 scope 工具不再举卡)值得一步确认;理由选填。
  * 密码经 POST 进服务端 vault(AES-GCM 加密文件),前端不存草稿;之后会
- * 进入本问题会话的 AI 上下文,让拉日志工具能够消费,但不出现在会话
- * 列表、状态摘要或事件流。
- * 样式(#146 触碰即迁):本表单区块全 Tailwind 工具类(根挂 .tw-root,
- * 颜色/字号/圆角走令牌桥);提交区容器(issue-decision-dock-foot/
- * issue-decision-submit)是四类卡共用的卡座/dock 双上下文皮肤,样式随
- * 挂载位置分叉(卡内 vs 输入区 dock),工具类表达不了上下文选择器,
- * 按 #146 例外保留 legacy。dock 在 .tw-root 子树之外(portal 目标),
- * legacy 皮肤不受 scoped 归一剥蚀;卡内新块一律工具类。
+ * 进入本问题会话的 AI 上下文供拉日志工具消费,但不出现在会话列表、状态摘要或事件流。
+ * 样式(#215 迁过不重做):表单区块(快选+快照说明)保持 Tailwind 工具
+ * 类;#231 起提交区容器也交 DecisionDockFoot 工具类铺陈(dock 在
+ * portal 目标子树,卡片内新块一律工具类)。
  * 卡座分工(#125):快选与快照说明留在卡上;拒绝理由与提交/拒绝按钮
  * 经 IssueDecisionFooterMount 挂进输入区 dock——草稿与失败提示的状态
  * 仍归本组件,portal 只搬 DOM。 */
@@ -242,7 +299,7 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
       管理里的改动不影响本次处理;密码无需在此填写。
     </p>}
     <IssueDecisionFooterMount target={footerTarget}>
-      <div className="issue-decision-dock-foot">
+      <DecisionDockFoot docked={Boolean(footerTarget)} className="pb-3.5">
         {declineOpen && <label className="grid gap-1.5 text-sm text-muted-foreground">
           <span>确定不需要?留一句理由帮 AI 调整方向(可选)</span>
           <Textarea rows={2} autoFocus
@@ -250,18 +307,19 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
             value={declineNote}
             onChange={(event) => setDeclineNote(event.target.value)} />
         </label>}
-        {error && <p className="issue-decision-note" role="alert">{error}</p>}
-        <div className="issue-decision-submit">
-          <button type="button" disabled={busy || !picked} onClick={() => void submit()}>
+        {error && <p className="text-sm text-attention" role="alert">{error}</p>}
+        <div className={DECISION_SUBMIT_ROW}>
+          <Button type="button" size="sm" className="flex-1"
+            disabled={busy || !picked} onClick={() => void submit()}>
             {busy ? "提交中…" : "使用所选环境,继续"}
-          </button>
-          <button type="button" className="issue-decline" disabled={busy}
-            onClick={() => void decline()}>
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="flex-1"
+            disabled={busy} onClick={() => void decline()}>
             {declineOpen ? "确认拒绝,继续分析"
               : ENV_DECLINE_TEXT[scope ?? "logs"] ?? ENV_DECLINE_TEXT.logs}
-          </button>
+          </Button>
         </div>
-      </div>
+      </DecisionDockFoot>
     </IssueDecisionFooterMount>
   </div>;
 }
@@ -270,6 +328,20 @@ function EnvNeededForm({ busy, scope, footerTarget, onSubmit }: {
  * 后该问题不再要求选其他选项——用户可能对所有给定选项都不满意,
  * 需要自行手写答案。提交时手写文本作为该题答案(与开放题同通道)。 */
 const MANUAL_CODE = "__manual_input__";
+
+/** 选项行皮(原全局 .option/.radio 搭车退役,本卡自带):整行可点的
+ * 单选/多选卡,圆点表选中;推荐(ADR-0004 只标注不预选)未选时琥珀
+ * 描边,已选态永远压过推荐描边——拍板后卡片只呈现"已选"。 */
+const OPTION_BASE = "flex w-full items-start gap-2.5 rounded-md border px-3 py-2.5 text-left text-base transition-colors";
+const optionStateClass = (chosen: boolean, suggested: boolean) => chosen
+  ? "border-ink bg-accent shadow-[inset_2px_0_0_var(--ink)]"
+  : suggested
+    ? "border-attention/55 shadow-[0_0_0_1px_color-mix(in_srgb,var(--attention)_14%,transparent)] hover:bg-accent/60"
+    : "border-border hover:bg-accent/60";
+const OPTION_DOT = "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border-[1.5px]";
+const OPTION_BODY = "min-w-0 flex-1 select-text";
+const OPTION_TITLE = "block text-base font-medium leading-normal text-text-strong [overflow-wrap:anywhere]";
+const OPTION_HINT = "block text-sm leading-normal text-muted-foreground [overflow-wrap:anywhere]";
 
 /** skill 圈选表单(ADR-0011):按仓分组的多选清单,path 是提交身份
  * (仓段天然区分同名 skill)。「确认勾选」至少勾一项才可点;「都不用」
@@ -314,21 +386,27 @@ function SkillSelectForm({ busy, skills, footerTarget, onSubmit }: {
     setError(ok ? "" : "提交未成功,请稍后重试");
   }
 
-  return <div className="issue-decision-env">
-    {groups.map((group) => <fieldset className="question" key={group.repo}>
-      <legend><span className="question-text">{group.repo}</span></legend>
-      <div className="options cards">
+  return <div className={cn("grid gap-2.5 px-3.5 pt-3",
+    footerTarget && "pb-3.5")}>
+    {groups.map((group) => <fieldset className="m-0 min-w-0 border-b border-border py-3 last:border-b-0" key={group.repo}>
+      <legend className="mb-2 p-0">
+        <span className="text-base font-semibold text-text-strong">{group.repo}</span>
+      </legend>
+      <div className="grid gap-1.5">
         {group.items.map((skill) => {
           const chosen = picked.has(skill.path);
           return <button type="button" key={skill.path} role="checkbox"
             aria-checked={chosen}
-            className={`option${chosen ? " picked" : ""}`}
+            className={cn(OPTION_BASE, optionStateClass(chosen, false))}
             onClick={() => toggle(skill.path)}>
-            <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
-            <span className="option-body"><span className="option-title">
+            <span aria-hidden
+              className={cn(OPTION_DOT, chosen ? "border-ink" : "border-line-strong")}>
+              {chosen && <span className="size-2.5 rounded-full bg-ink" />}
+            </span>
+            <span className={OPTION_BODY}><span className={OPTION_TITLE}>
               {skill.name}
             </span>
-            {skill.description && <span className="option-hint">
+            {skill.description && <span className={OPTION_HINT}>
               {skill.description}
             </span>}
             </span>
@@ -337,19 +415,20 @@ function SkillSelectForm({ busy, skills, footerTarget, onSubmit }: {
       </div>
     </fieldset>)}
     <IssueDecisionFooterMount target={footerTarget}>
-      <div className="issue-decision-dock-foot">
-        {error && <p className="issue-decision-note" role="alert">{error}</p>}
-        <div className="issue-decision-submit">
-          <button type="button" disabled={!picked.size || busy}
+      <DecisionDockFoot docked={Boolean(footerTarget)}>
+        {error && <p className="text-sm text-attention" role="alert">{error}</p>}
+        <div className={DECISION_SUBMIT_ROW}>
+          <Button type="button" size="sm" className="flex-1"
+            disabled={!picked.size || busy}
             onClick={() => void submit([...picked])}>
             {busy ? "提交中…" : `确认勾选(${picked.size})`}
-          </button>
-          <button type="button" className="skill-skip" disabled={busy}
-            onClick={() => void submit([])}>
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="flex-1"
+            disabled={busy} onClick={() => void submit([])}>
             都不用,AI 按取用次序自主
-          </button>
+          </Button>
         </div>
-      </div>
+      </DecisionDockFoot>
     </IssueDecisionFooterMount>
   </div>;
 }
@@ -399,39 +478,34 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
     setError(ok ? "" : "提交未成功,请稍后重试");
   }
 
-  return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
-    aria-label={evidence ? "贴回流水线报错原文" : "流水线红灯人工处理"}>
-    <header className="issue-decision-head">
-      <span className="decision-kicker">
-        {evidence ? "流水线红灯·贴回报错原文" : "流水线红灯·需要人工处理"}
-      </span>
-      <span className="issue-decision-count">
-        {evidence ? "粘贴原文后继续修复" : "交付平台处理/豁免"}
-      </span>
-    </header>
-    {waiting.gate_pipeline && <p className="issue-decision-note">
+  return <DecisionShell docked={Boolean(footerTarget)}
+    label={evidence ? "贴回流水线报错原文" : "流水线红灯人工处理"}>
+    <DecisionHead
+      kicker={evidence ? "流水线红灯·贴回报错原文" : "流水线红灯·需要人工处理"}
+      count={evidence ? "粘贴原文后继续修复" : "交付平台处理/豁免"} />
+    {waiting.gate_pipeline && <p className={DECISION_NOTE}>
       仓 {waiting.gate_pipeline.repo} · 提交 {waiting.gate_pipeline.sha.slice(0, 12)}
     </p>}
-    {waiting.context && <div className="issue-decision-context">
-      <div className="context-label">{evidence ? "缺口详情" : "失败详情"}</div>
+    {waiting.context && <DecisionContext
+      label={evidence ? "缺口详情" : "失败详情"}
+      className={cn(!evidence && footerTarget && "mb-3.5")}>
       <Markdown text={waiting.context} />
-    </div>}
-    {evidence && <div className="issue-decision-env">
-      <label className="issue-field wide">
-        <span>报错原文(带文件/行号/堆栈)</span>
+    </DecisionContext>}
+    {evidence && <div className={cn("grid gap-2.5 px-3.5 pt-3",
+      footerTarget && "pb-3.5")}>
+      <DecisionField label="报错原文(带文件/行号/堆栈)">
         <Textarea className="min-h-48 resize-y" rows={8}
           placeholder="把交付平台上失败项的报错原文粘贴到这里——它会作为人工证据注入下一修复回合…"
           value={text}
           onChange={(event) => setText(event.target.value)} />
-      </label>
+      </DecisionField>
     </div>}
     <IssueDecisionFooterMount target={footerTarget}>
-      <div className="issue-decision-dock-foot">
+      <DecisionDockFoot docked={Boolean(footerTarget)}>
         {/* 不可修卡的补充说明是附言(票 03),随提交钮进 dock;证据卡的
             主字段(报错原文)已在卡上,dock 里只剩错误提示与提交钮。 */}
-        {!evidence && <div className="issue-decision-env">
-          <label className="issue-field wide">
-            <span>补充说明(可选):在平台做了什么处理</span>
+        {!evidence && <div className="grid gap-2.5">
+          <DecisionField label="补充说明(可选):在平台做了什么处理">
             <Textarea className="min-h-17 resize-y" rows={3}
               ref={notesRef}
               onPaste={(event) => notesPaste.onPaste(event, (markdown) => {
@@ -445,17 +519,18 @@ function PipelineGateCard({ waiting, busy, footerTarget, onAnswer }: {
               placeholder="如:已豁免规则 R1 / 已处理 SuperChecker 告警…"
               value={notes}
               onChange={(event) => setNotes(event.target.value)} />
-          </label>
+          </DecisionField>
         </div>}
-        {error && <p className="issue-decision-note" role="alert">{error}</p>}
-        <div className="issue-decision-submit">
-          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+        {error && <p className="text-sm text-attention" role="alert">{error}</p>}
+        <div className={DECISION_SUBMIT_ROW}>
+          <Button type="button" size="sm" className="flex-1"
+            disabled={!ready || busy} onClick={() => void submit()}>
             {busy ? "提交中…" : actionLabel}
-          </button>
+          </Button>
         </div>
-      </div>
+      </DecisionDockFoot>
     </IssueDecisionFooterMount>
-  </section>;
+  </DecisionShell>;
 }
 
 
@@ -566,32 +641,29 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
     }
   }
 
-  return <section className={`issue-decision${footerTarget ? " foot-docked" : ""}`}
-    aria-label="等你答复">
-    <header className="issue-decision-head">
-      <span className="decision-kicker">等你答复</span>
-      <span className="issue-decision-count">{questions.length} 个问题</span>
-    </header>
+  return <DecisionShell docked={Boolean(footerTarget)} label="等你答复">
+    <DecisionHead kicker="等你答复" count={`${questions.length} 个问题`} />
 
-    {waiting.context && <div className="issue-decision-context">
-      <div className="context-label">{contextLabel}</div>
+    {waiting.context && <DecisionContext label={contextLabel}
+      className={cn(questions.length === 0 && footerTarget && "mb-3.5")}>
       <Markdown text={waiting.context} />
-    </div>}
+    </DecisionContext>}
 
     {questions.some((item) => item.options.length > 0) && (
-      <p className="issue-decision-note" role="status" aria-live="polite">
+      <p className={DECISION_NOTE} role="status" aria-live="polite">
         {busy ? "正在提交答复…" : Object.values(picked).some(Boolean)
           ? <><strong>已选择，尚未提交。</strong>可补充说明，再点击下方「提交答复」。</>
           : "选中选项不会立即发送；请在下方提交答复。"}
       </p>
     )}
-    {questions.map((item, index) => <fieldset className="question" key={index}>
-      <legend>
-        <span className="question-number">{String(index + 1).padStart(2, "0")}</span>
-        <span className="question-text">{item.question || "需要你确认"}</span>
+    {questions.map((item, index) => <fieldset
+      className="m-0 min-w-0 border-b border-border px-3.5 py-3 last:border-b-0" key={index}>
+      <legend className="mb-2.5 flex w-full items-start gap-2.5 p-0">
+        <span className="mt-0.5 shrink-0 font-mono text-xs tabular-nums text-faint">{String(index + 1).padStart(2, "0")}</span>
+        <span className="whitespace-pre-wrap text-base font-semibold leading-[1.55] text-text-strong [overflow-wrap:anywhere]">{item.question || "需要你确认"}</span>
       </legend>
       {item.options.length > 0
-        ? <div className="options cards" role="radiogroup"
+        ? <div className="grid gap-1.5" role="radiogroup"
             aria-label={`问题 ${index + 1}：${item.question || "需要你确认"}`}>
             {item.options.map((option, optionIndex) => {
               const chosen = picked[index] === option.code;
@@ -605,17 +677,20 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
                 }}
                 aria-checked={chosen}
                 tabIndex={chosen || (!picked[index] && optionIndex === 0) ? 0 : -1}
-                className={`option${chosen ? " picked" : ""}${suggested ? " issue-recommended" : ""}`}
+                className={cn(OPTION_BASE, optionStateClass(chosen, suggested))}
                 title={chosen ? "再次点击取消选择" : undefined}
                 onKeyDown={(event) => {
                   if (moveRadio(index, optionIndex, event.key)) event.preventDefault();
                 }}
                 onClick={() => setPicked((current) =>
                   toggleDecisionChoice(current, index, option.code))}>
-                <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
-                <span className="option-body"><span className="option-title">
+                <span aria-hidden
+                  className={cn(OPTION_DOT, chosen ? "border-ink" : "border-line-strong")}>
+                  {chosen && <span className="size-2.5 rounded-full bg-ink" />}
+                </span>
+                <span className={OPTION_BODY}><span className={OPTION_TITLE}>
                   {option.label}
-                  {suggested && <span className="issue-recommended-badge">AI 推荐</span>}
+                  {suggested && <Badge variant="warning" className="ml-1.5 align-middle">AI 推荐</Badge>}
                 </span></span>
               </button>;
             })}
@@ -632,17 +707,20 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
                 }}
                 aria-checked={manualChosen}
                 tabIndex={manualChosen ? 0 : -1}
-                className={`option manual${manualChosen ? " picked" : ""}`}
+                className={cn(OPTION_BASE, optionStateClass(manualChosen, false))}
                 title={manualChosen ? "再次点击取消自定义答复" : undefined}
                 onKeyDown={(event) => {
                   if (moveRadio(index, manualIndex, event.key)) event.preventDefault();
                 }}
                 onClick={() => setPicked((current) =>
                   toggleDecisionChoice(current, index, MANUAL_CODE))}>
-                <span className={`radio${manualChosen ? " on" : ""}`} aria-hidden />
-                <span className="option-body"><span className="option-title">
+                <span aria-hidden
+                  className={cn(OPTION_DOT, manualChosen ? "border-ink" : "border-line-strong")}>
+                  {manualChosen && <span className="size-2.5 rounded-full bg-ink" />}
+                </span>
+                <span className={OPTION_BODY}><span className={cn(OPTION_TITLE, "text-muted-foreground")}>
                   自定义答复
-                </span><span className="option-hint">
+                </span><span className={OPTION_HINT}>
                   以上选项都不合适时使用
                 </span></span>
               </button>;
@@ -660,7 +738,8 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
             onChange={(event) => setCustom({ ...custom, [index]: event.target.value })} />}
     </fieldset>)}
 
-    {questions.length === 0 && <p className="issue-decision-note">
+    {questions.length === 0 && <p className={cn(DECISION_NOTE,
+      footerTarget && "mb-3.5")}>
       这张问题卡没有列出选项——在下方补充说明里写下你的答复。
     </p>}
 
@@ -668,24 +747,26 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
         dock;题面/选项/推荐徽标留在卡上——作答状态(picked/custom/
         notes 草稿)仍归本组件,portal 只搬 DOM。 */}
     <IssueDecisionFooterMount target={footerTarget}>
-      <div className="issue-decision-dock-foot">
+      <DecisionDockFoot docked={Boolean(footerTarget)}>
         {notesOpen
-          ? <div className="custom-answer issue-decision-notes">
+          ? <div className="grid gap-1.5">
               <Textarea
                 placeholder="补充说明(可选):原因、约束、现场信息…"
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)} />
-              <span>这段说明会随答复一起交给 AI,不会改变上面所选的分支。</span>
+              <span className="text-xs text-muted-foreground">这段说明会随答复一起交给 AI,不会改变上面所选的分支。</span>
             </div>
-          : <button type="button" className="issue-decision-notes-toggle"
-              onClick={() => setNotesOpen(true)}>+ 补充说明(可选)</button>}
+          : <Button type="button" variant="ghost" size="sm"
+              className="h-auto w-fit px-0 text-sm text-muted-foreground hover:text-foreground"
+              onClick={() => setNotesOpen(true)}>+ 补充说明(可选)</Button>}
 
-        <div className="issue-decision-submit">
-          <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+        <div className={DECISION_SUBMIT_ROW}>
+          <Button type="button" size="sm" className="flex-1"
+            disabled={!ready || busy} onClick={() => void submit()}>
             {busy ? "提交中…" : "提交答复"}
-          </button>
+          </Button>
         </div>
-      </div>
+      </DecisionDockFoot>
     </IssueDecisionFooterMount>
-  </section>;
+  </DecisionShell>;
 }
