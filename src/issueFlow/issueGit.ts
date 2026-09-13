@@ -540,15 +540,29 @@ export async function pushFromIssueWorkspace(options: {
   }
 }
 
-/** 远端同名分支的当前 tip(强制覆盖过目卡的"覆盖对象身份"):取不到
- * (网络/权限)返回 undefined——卡照样举,只是不带远端指向,与
- * pushChangeSummary 同一哲学:摘要不可得不拦闸。 */
-export async function remoteBranchTip(options: {
+/** 远端探针的可区分形态(#240 删除门禁):reachable=false = 网络/凭据
+ * 问题,远端状态不可判定;reachable=true 且 tip 缺席 = 远端确认没有
+ * 同名分支。remoteBranchTip 把这两种都折叠成 undefined——过目卡场景
+ * 容忍(卡照样举,闸的作用是"停下等人",与 pushChangeSummary 同一
+ * 哲学);删除门禁不容忍(宁误拦不误放),必须分得清这两种事实。 */
+export interface RemoteBranchState {
+  /** ls-remote 成功 = 远端可达;此刻 tip 字段有意义(缺席=分支不存在)。 */
+  reachable: boolean;
+  /** 同名分支的 tip;分支不存在时缺席(仅在 reachable 时可读)。 */
+  tip?: string;
+}
+
+/** 宿主现查远端同名分支(凭据沙箱 ls-remote):三种事实各自可判——
+ * 分支存在返回 { reachable: true, tip },确认不存在返回
+ * { reachable: true },ls-remote 失败(网络/权限)返回
+ * { reachable: false }。调用方按门禁口径分叉,不许把"查不到"当
+ * "不存在"放行。 */
+export async function remoteBranchState(options: {
   dataDir: string;
   repoUrl: string;
   branch: string;
   credential?: GitCredential;
-}): Promise<string | undefined> {
+}): Promise<RemoteBranchState> {
   const remoteUrl = validateRepoUrl(options.repoUrl);
   const sandbox = prepareSandbox(options.dataDir, options.credential);
   try {
@@ -556,11 +570,27 @@ export async function remoteBranchTip(options: {
       ...sandbox.args, "ls-remote", "--heads", remoteUrl,
       `refs/heads/${options.branch}`,
     ], { env: sandbox.env, timeoutMs: 60_000 });
-    const tip = probed.code === 0 ? probed.stdout.trim().split(/\s+/)[0] : "";
-    return /^[0-9a-f]{40}$/i.test(tip) ? tip : undefined;
+    if (probed.code !== 0) return { reachable: false };
+    const tip = probed.stdout.trim().split(/\s+/)[0];
+    return /^[0-9a-f]{40}$/i.test(tip)
+      ? { reachable: true, tip }
+      : { reachable: true };
   } finally {
     sandbox.cleanup();
   }
+}
+
+/** 远端同名分支的当前 tip(强制覆盖过目卡的"覆盖对象身份"):取不到
+ * (网络/权限/分支不存在)返回 undefined——卡照样举,只是不带远端
+ * 指向。可区分形态见 remoteBranchState(删除门禁用),本函数保持
+ * 既有调用方(raisePushReviewGate)的 undefined 容忍语义不变。 */
+export async function remoteBranchTip(options: {
+  dataDir: string;
+  repoUrl: string;
+  branch: string;
+  credential?: GitCredential;
+}): Promise<string | undefined> {
+  return (await remoteBranchState(options)).tip;
 }
 
 /** 推送过目闸的变更摘要(ADR-0009:服务端举闸时生成,不靠 Agent 自报

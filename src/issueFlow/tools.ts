@@ -25,8 +25,14 @@
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import {
   FIXED_STAGE_LABELS,
   fixedAdvance,
@@ -52,7 +58,8 @@ import {
   getPipelineStatus,
   type PipelineRun,
 } from "../pipelineClient.ts";
-import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
+import { readBusinessModule, listBusinessModules, type BusinessModule } from "../businessModuleLibrary.ts";
+import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
@@ -68,6 +75,7 @@ import {
   dirtyWorktree,
   pushChangeSummary,
   pushFromIssueWorkspace,
+  remoteBranchState,
   remoteBranchTip,
   IssuePushStaleRemoteError,
   type GitCredential,
@@ -439,6 +447,125 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           })
           : ""}`
         + `${baselineNote}${guide}`);
+    },
+  }));
+
+  // ---- 移除仓(用户指派,#240;阶段注册表把它补进每个阶段,全程可调) ----
+  // 删除语义 = 用户裁定该仓与本问题无关。门禁立场与单号门禁同款:
+  // 提示词管不住的侥幸在工具层过不去;网络不可判定=保守拒(宁误拦
+  // 不误放);MR 不单独查——远端分支不存在时 MR 自然不可合。
+
+  tools.push(defineTool({
+    name: "remove_repo",
+    label: "Remove Repository",
+    description:
+      "把一个仓从本会话移除(仅限用户指派时调用):移除=确认该仓与本"
+      + "问题无关,若已有与该仓相关的分析思路或结论,应先重新审视、必要"
+      + "时修订后再移除。平台机械门禁:①业务模块的绑定仓不可移除;"
+      + "②远端同名修复分支(master_<工号>_<单号>)还在时不可移除,"
+      + "要请用户先在代码平台删除远端分支;③远端状态查不到(网络/凭据)"
+      + "时保守拒绝,稍后重试。通过后宿主物理删除工作区仓目录,并把该仓"
+      + "从会话关联仓清单摘除(首位仓被删时兼容首位字段自动接替新首位),"
+      + "删除事实入转移账。repo 必填,必须是会话登记过的仓。",
+    parameters: Type.Object({
+      repo: Type.String({
+        description: "要移除的代码仓地址(会话登记过的);删除必须显式指仓",
+      }),
+    }),
+    async execute(_toolCallId: string, params: any) {
+      gateStage("remove_repo");
+      const wanted = String(params.repo ?? "").trim();
+      if (!wanted) fail("repo 不能为空:删除必须显式指仓(给要移除的代码仓地址)");
+      // 目录只认登记映射(issueRepoWorkspaces),不吃任何用户路径输入:
+      // URL 不在清单=拒;映射值锚死 <工作区>/repo/<仓名> 平铺名,仓名
+      // 取地址末段去 .git 且不含路径分隔符,逃逸形态在公共调用面上
+      // 构造不出来。下方另有解析路径双保险。
+      const target = locateRepo(wanted);
+      // 门禁①:模块绑定仓不可移除——模块带出的仓是登记/绑定侧的既定
+      // 关系,AI 单方面移除等于改登记。查不到模块(已删除/元数据损坏)
+      // 按无绑定仓处理,不挡移除。
+      if (state.module_id) {
+        let bound: BusinessModule | undefined;
+        try {
+          bound = readBusinessModule(ctx.dataRoot, state.module_id);
+        } catch {
+          bound = undefined;
+        }
+        const isBound = bound?.repositories.some((repo) =>
+          repositoryIdentity(repo) === repositoryIdentity(target.url));
+        if (isBound) {
+          fail(`「${target.url}」是业务模块「${bound!.name}」的绑定仓,`
+            + "模块绑定仓不可移除——如该仓确与本问题无关,"
+            + "请用户调整模块绑定后再试");
+        }
+      }
+      // 门禁②/③(现场现查,不信缓存):远端不可判定=保守拒;同名
+      // 修复分支在=拒并指路(先删远端分支)。与单号门禁同一哲学:
+      // 宁误拦不误放。无单(manual)会话没有修复分支可言——探测会拿
+      // 拼出来的假分支名空转,直接跳过这道门。
+      if (state.ticket) {
+        const branch = expectedBranch(state);
+        const probe = await remoteBranchState({
+          dataDir: ctx.dataRoot,
+          repoUrl: target.url,
+          branch,
+          credential: ctx.gitCredential?.(),
+        });
+        if (!probe.reachable) {
+          fail(`远端状态查不到(${target.url}),无法安全判定删除条件——`
+            + "请稍后重试;持续失败时请检查网络或 Git 令牌配置,"
+            + "不要跳过门禁强行移除");
+        }
+        if (probe.tip) {
+          fail(`远端同名修复分支 ${branch} 还在(${target.url} @ `
+            + `${probe.tip.slice(0, 12)}),不可移除——请用户先在代码平台`
+            + "删除远端分支,再移除该仓");
+        }
+      }
+      // 双保险:映射目录解析后必须严格落在会话工作区内(映射已锚死,
+      // 这里防的是将来映射改动把逃逸面带进来)。
+      const resolvedDir = resolve(target.dir);
+      const resolvedRoot = resolve(ctx.workspace);
+      if (resolvedDir === resolvedRoot
+          || !resolvedDir.startsWith(resolvedRoot + sep)) {
+        fail(`工作区目录异常(${target.dir}),拒绝删除`);
+      }
+      // 执行:物理删除(不存在也容错——登记在册但从未拉取的仓照样
+      // 可移除,清的是清单不是目录)。
+      rmSync(resolvedDir, { recursive: true, force: true });
+      try {
+        // repo/ 平铺根空了就顺手收走;清理失败不回滚移除语义。
+        const parent = dirname(resolvedDir);
+        if (existsSync(parent) && readdirSync(parent).length === 0) {
+          rmdirSync(parent);
+        }
+      } catch { /* 空目录清理是尽力而为 */ }
+      // 清单摘除 + 首位接替:repo_url 是 repo_urls[0] 的兼容别名
+      // (dual-write),首位被删时接替新首位;清单空则两个字段一起退场。
+      const remaining = (state.repo_urls ?? []).filter((url) =>
+        url !== target.url);
+      if (remaining.length) {
+        state.repo_urls = remaining;
+        if ((state.repo_url ?? "") === target.url) {
+          state.repo_url = remaining[0];
+        }
+      } else {
+        delete state.repo_urls;
+        delete state.repo_url;
+      }
+      recordTransition(state, {
+        source: "platform",
+        note: `代码仓已移除(用户指派:该仓与本问题无关): ${target.url}`
+          + `(工作区 ${target.dir});剩余 ${remaining.length} 个登记仓`
+          + `${remaining.length ? `:${remaining.join(", ")}` : "(清单已空)"}`,
+      });
+      ctx.persist();
+      return ok(`已移除代码仓 ${target.url}:工作区目录已删除,`
+        + "已从会话关联仓清单摘除。\n"
+        + (remaining.length
+          ? `剩余 ${remaining.length} 个登记仓:\n`
+            + remaining.map((url) => `- ${url}`).join("\n")
+          : "会话已没有登记仓(需要时可用 pull_repo 重新登记)。"));
     },
   }));
 

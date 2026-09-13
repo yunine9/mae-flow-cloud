@@ -154,6 +154,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     { name: "lookup_modules" },
     { name: "bind_module" },
     { name: "pull_repo", note: "补仓" },
+    { name: "remove_repo", note: "用户指派移除无关仓" },
     { name: "submit_analysis" },
   ],
   gate: { kind: "analysis_confirm", confirmTo: "fix" },
@@ -167,6 +168,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
+      { name: "remove_repo", note: "用户指派移除无关仓" },
       { name: "bind_module" },
       { name: "push_branch" },
       { name: "report_ut", note: "记录 UT 结果" },
@@ -206,10 +208,12 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
 };
 
-// 调查、测试取证和阶段性交付是通用能力；阶段只组织出口，不禁止工具。
-// 无单仍不交付代码；仓、分支、真实推送和用户已选择的过目策略仍由工具核对。
+// 调查、测试取证和阶段性交付是通用能力;移除仓(#240)跟随用户指派,
+// 全程可调(门禁在工具层:模块绑定仓/远端分支在/不可判定三类机械拒)。
+// 阶段只组织出口,不禁止工具。无单仍不交付代码;仓、分支、真实推送
+// 和用户已选择的过目策略仍由工具核对。
 for (const spec of Object.values(FIXED_STAGE_SPECS)) {
-  for (const name of ["lookup_modules", "pull_repo", "report_ut", "push_branch", "create_mr"]) {
+  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut", "push_branch", "create_mr"]) {
     if (!spec.tools.some(tool => tool.name === name)) spec.tools = [...spec.tools, { name }];
   }
 }
