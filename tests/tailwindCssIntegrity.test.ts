@@ -1,19 +1,22 @@
 /**
  * tailwind.css 结构完整性棘轮(2026-09-13 视觉修复事故后立):
  * #233 归并时丢过一个收括号,@media (prefers-reduced-motion) 把
- * 3,270 行存量皮吞进「仅在减弱动效时生效」的分支——构建零报错、
- * 普通用户整站裸奔,靠截图审计才炸出来。本测试钉两条不变量:
+ * 3,270 行存量皮(task-workspace-v2/conversation/task-overview 等)
+ * 吞进「仅在减弱动效时生效」的分支——构建零报错、普通用户整站裸奔,
+ * 靠真机截图审计才炸出来。本测试钉两条不变量:
  * 1. 全文件花括号配平,且扫描深度永不为负(吞段必现负深度或残留);
- * 2. 一组「已知活」选择器必须出现在顶层(depth=0)——被 media/layer
- *    吞掉时它们的深度必 >0。选择器随重构演进要同票维护(锚点纪律)。
+ * 2. 一组「已知活」选择器必须至少出现一次在**非 @media 作用域**——
+ *    @layer legacy 包裹是合法的(utilities 恒压 legacy 是分层本意),
+ *    被任何 @media 独占才是事故形态。选择器随重构演进同票维护(锚点纪律)。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { dirname } from "node:path";
 
-const cssPath = join(import.meta.dirname, "..", "web", "src", "tailwind.css");
+const cssPath = join(dirname(import.meta.url.replace("file://", "")), "..", "web", "src", "tailwind.css");
 const css = readFileSync(cssPath, "utf8")
   .replace(/\/\*[\s\S]*?\*\//g, ""); // 先剥注释,防注释里的花括号干扰
 
@@ -24,6 +27,42 @@ const SMOKE_SELECTORS = [
   ".module-location-retry", // 架构图引用卡重试钮(#233 事故点位)
   ".md-architecture-reference", // Markdown 架构引用卡
 ];
+
+/** 扫描全文件,返回每个下标处「是否处于任一 @media 块内」与括号深度。 */
+function scan(): { inMedia: boolean[]; depths: number[] } {
+  const inMedia: boolean[] = [];
+  const depths: number[] = [];
+  const stack: string[] = []; // 每层开块的 at-rule 类型:"media"|"layer"|"other"|plain
+  let depth = 0;
+  let buffer = "";
+  for (let i = 0; i < css.length; i += 1) {
+    const ch = css[i];
+    if (ch === "{") {
+      const kind = /@media\s*[({]/.test(buffer) || /@media$/.test(buffer.trim())
+        ? "media"
+        : /@layer/.test(buffer) ? "layer"
+        : /@(supports|container|keyframes)/.test(buffer) ? "other-at"
+        : "plain";
+      stack.push(kind);
+      inMedia[i] = stack.includes("media");
+      depths[i] = stack.length;
+      buffer = "";
+      continue;
+    }
+    if (ch === "}") {
+      stack.pop();
+      inMedia[i] = stack.includes("media");
+      depths[i] = stack.length;
+      buffer = "";
+      continue;
+    }
+    buffer += ch;
+    if (buffer.length > 200) buffer = buffer.slice(-100); // 只需尾巴识别 at-rule
+    inMedia[i] = stack.includes("media");
+    depths[i] = stack.length;
+  }
+  return { inMedia, depths };
+}
 
 test("tailwind.css:花括号全文件配平且深度不为负", () => {
   let depth = 0;
@@ -40,19 +79,26 @@ test("tailwind.css:花括号全文件配平且深度不为负", () => {
   assert.equal(depth, 0, `tailwind.css 花括号不配平,缺 ${depth} 个 }(扫到文件尾)`);
 });
 
-test("tailwind.css:已知活选择器必须在顶层(depth=0),不许被媒体查询/层吞掉", () => {
-  const depthAt = (index: number): number => {
-    let depth = 0;
-    for (let i = 0; i < index; i += 1) {
-      if (css[i] === "{") depth += 1;
-      if (css[i] === "}") depth -= 1;
-    }
-    return depth;
-  };
+test("tailwind.css:已知活选择器必须至少一次活在非 @media 作用域", () => {
+  const { inMedia, depths } = scan();
   for (const selector of SMOKE_SELECTORS) {
-    const index = css.indexOf(selector);
-    assert.ok(index >= 0, `活选择器 ${selector} 不在 tailwind.css 里了——若为有意删除,同票更新本测试的 SMOKE_SELECTORS`);
-    assert.equal(depthAt(index), 0,
-      `${selector} 出现在 depth>0 的作用域里(被 @media/@layer 吞掉?)——历史事故形态,见 tailwind.css 头部注释`);
+    const positions: number[] = [];
+    let from = 0;
+    for (;;) {
+      const index = css.indexOf(selector, from);
+      if (index < 0) break;
+      positions.push(index);
+      from = index + 1;
+    }
+    assert.ok(positions.length > 0,
+      `活选择器 ${selector} 不在 tailwind.css 里了——若为有意删除,同票更新本测试的 SMOKE_SELECTORS`);
+    assert.ok(
+      positions.some((index) => !inMedia[index]),
+      `${selector} 只出现在 @media 作用域里(基础皮被媒体查询吞掉?)——历史事故形态,见本文件头注释`,
+    );
+    assert.ok(
+      positions.some((index) => depths[index] > 0),
+      `${selector} 完全没有样式规则命中(只剩裸引用)?`,
+    );
   }
 });
