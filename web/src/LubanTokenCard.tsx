@@ -78,13 +78,15 @@ export function LubanTokenCard({
         <dt className="text-[13px] font-bold tracking-[0.04em] text-faint">小鲁班 Token</dt>
         <dd className="m-0 truncate text-[13px] text-text">{hint ? <code className="text-[13px] text-primary">{hint}</code> : "未设置"}</dd></div>
     </dl>
-    <div className="mt-[7px] flex items-center justify-between gap-2.5 rounded-lg border border-merge/15 bg-merge/[0.055] px-2.5 py-2 text-[13px] text-muted-foreground">
-      <span className="font-bold text-merge">如何获取</span>
-      <p className="m-0">向小鲁班发送：<code className="font-mono text-xs font-semibold text-text-strong">“获取发送token”</code></p>
+    {/* 提示行:标签与说明允许各自换行收窄(p min-w-0 + 行 flex-wrap),
+        窄卡/窄屏下文字完整可读,不再贴右缘裁字。 */}
+    <div className="mt-[7px] flex min-w-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-[3px] rounded-lg border border-merge/15 bg-merge/[0.055] px-2.5 py-2 text-[13px] text-muted-foreground">
+      <span className="shrink-0 font-bold text-merge">如何获取</span>
+      <p className="m-0 min-w-0 max-w-full">向小鲁班发送：<code className="font-mono text-xs font-semibold text-text-strong">“获取发送token”</code></p>
     </div>
-    <div className="mt-[7px] flex items-center justify-between gap-2.5 rounded-lg border border-merge/15 bg-merge/[0.055] px-2.5 py-2 text-[13px] text-muted-foreground">
-      <span className="font-bold text-merge">手机回复</span>
-      <p className="m-0">先输入 <code className="font-mono text-xs font-semibold text-text-strong">/mfc</code> 激活 Mae-Flow 插件，再按通知提示回复。</p>
+    <div className="mt-[7px] flex min-w-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-[3px] rounded-lg border border-merge/15 bg-merge/[0.055] px-2.5 py-2 text-[13px] text-muted-foreground">
+      <span className="shrink-0 font-bold text-merge">手机回复</span>
+      <p className="m-0 min-w-0 max-w-full">先输入 <code className="font-mono text-xs font-semibold text-text-strong">/mfc</code> 激活 Mae-Flow 插件，再按通知提示回复。</p>
     </div>
 
     <div className="mt-auto grid gap-2 pt-[15px]">

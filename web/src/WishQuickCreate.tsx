@@ -36,7 +36,10 @@ export function QuickWishButton({ onOpenWall, inline = false }: { onOpenWall: ()
     <button type="button"
       className={inline
         ? "inline-flex shrink-0 cursor-pointer items-center gap-[5px] rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-text hover:bg-surface-2 hover:border-primary"
-        : "wish-quick-fab fixed right-[18px] bottom-[18px] z-[650] inline-flex min-h-[42px] cursor-pointer items-center gap-[7px] rounded-full border-0 bg-primary px-3.5 text-primary-foreground shadow-lg max-[760px]:bottom-[76px] max-[760px]:right-3"}
+        // 浮标定位:24px 安全边距(原 18px 贴视口右/下缘,压卡裁字感强);
+        // ≤760px 窄屏锚位抬高避让底部栏、边距 16px,并把浮标收小一号,
+        // 680 窄幅下少遮正文(卡片单列铺满,重叠不可避免,只求最小遮挡)。
+        : "wish-quick-fab fixed right-6 bottom-6 z-[650] inline-flex min-h-[42px] cursor-pointer items-center gap-[7px] rounded-full border-0 bg-primary px-3.5 text-primary-foreground shadow-lg max-[760px]:bottom-[76px] max-[760px]:right-4 max-[760px]:min-h-[36px] max-[760px]:gap-[5px] max-[760px]:px-3"}
       aria-label="快速提问题" title="快速提问题"
       onClick={() => { setOpen(true); setMessage(""); }}>
       <span aria-hidden className="text-base">✦</span><strong className="text-xs">提问题</strong>

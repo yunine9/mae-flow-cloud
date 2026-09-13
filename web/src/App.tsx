@@ -238,6 +238,10 @@ function initialView(user: AuthUser): View {
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
   if (readEnvironmentRoute()) return "environments";
+  // 问题登记深链(裸 /issues):服务端/vite 判别式已把浏览器导航让给
+  // SPA,这里把地址对上页签——落点与侧栏「问题处理」一致(子页签沿用
+  // 持久化选择);会话工作台深链 /issues/:id 走下面的 readIssueRoute。
+  if (/^\/issues\/?$/.test(location.pathname)) return "issues";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -772,6 +776,10 @@ export function App() {
       if (issueId) {
         setView("issues");
         setIssueChildTab("sessions");
+      } else if (/^\/issues\/?$/.test(location.pathname)) {
+        // 后退/前进到裸 /issues(问题登记入站深链):同款对表,落问题
+        // 处理页签本身(子页签沿用持久化,与 initialView 同一口径)。
+        setView("issues");
       }
       if (!next.taskId) {
         setArtifactTaskId("");
@@ -1163,9 +1171,11 @@ export function App() {
     }
   };
   /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
-   *  (toState 记录归位后所在视图)。关工作台与切页签守门共用这一份。 */
+   *  (toState 记录归位后所在视图)。裸 /issues(问题登记入站深链)离开
+   * 问题处理时同样归位——该地址只是别名,不与视图脱钩滞留地址栏。
+   * 关工作台与切页签守门共用这一份。 */
   const normalizeIssueRoute = (target: View) => {
-    if (!readIssueRoute()) return;
+    if (!readIssueRoute() && !/^\/issues\/?$/.test(location.pathname)) return;
     history.replaceState(appHistoryState(target,
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
     setIssueRouteId("");
