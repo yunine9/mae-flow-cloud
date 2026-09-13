@@ -1863,13 +1863,17 @@ export class IssueFlowService {
     opts?: { boundary?: boolean },
   ): Promise<Outcome> {
     await this.ensureContainer(live);
+    // 欠账便签随行(#244 投递必达):任何续聊形态的回合都把停靠通知
+    // 捎给模型——落到便签的通知不能停在显示摘要里没人看见。
+    const replay = this.parkedReplay(this.takeParkedNotices(live));
+    const full = replay ? `${message}\n\n${replay}` : message;
     if (live.driver) {
       // 回合前压缩(票 01/02)的唯一安全位:话递进在场会话之前。
       await this.maybeCompactContinuation(live, opts?.boundary === true);
-      return live.driver.continueWith(message);
+      return live.driver.continueWith(full);
     }
     const driver = await this.openDriver(live);
-    return driver.startResume(issueResumePrompt(live.state, message,
+    return driver.startResume(issueResumePrompt(live.state, full,
       this.environmentCredentials(live),
       { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
   }
@@ -3318,15 +3322,18 @@ export class IssueFlowService {
     }
     this.beginTurn(live, async () => {
       await this.ensureContainer(live);
+      // 欠账便签随行(#244 投递必达):作答回合是停靠通知的投递时机。
+      const replay = this.parkedReplay(this.takeParkedNotices(live));
       if (live.driver) {
-        return live.driver.resumeWithDecision(record);
+        return live.driver.resumeWithDecision(record, replay || undefined);
       }
       // 进程重启后的作答:重开 会话,决定先补登记(审计),再以
       // 续聊提示词把答案交给重建的上下文。
       const driver = await this.openDriver(live);
       driver.injectDecision(record);
-      return driver.startResume(issueResumePrompt(live.state,
-        `用户对问题卡的答复:\n${renderDecision(record)}`,
+      const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
+        + (replay ? `\n\n${replay}` : "");
+      return driver.startResume(issueResumePrompt(live.state, decisionText,
         this.environmentCredentials(live),
         { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
     });
@@ -5800,10 +5807,36 @@ export class IssueFlowService {
     this.continueTurn(live, message);
   }
 
-  /** 平台通知的落便签口:不抢回合,首行进 stage_note,续聊提示词带上。 */
+  /** 平台通知的落便签口:不抢回合——首行进 stage_note(显示摘要),
+   *  全文进欠账队列(#244 投递必达):stage_note 装不下也丢不了,续跑
+   *  (答卡原地续跑/重启重建作答)时经 takeParkedNotices 注入模型
+   *  上下文。同文重复投递只记一次(监看重放/重复通知不去重会双份注入)。 */
   private parkPlatformNotice(live: LiveIssue, message: string): void {
+    const full = message.slice(0, 2000);
+    const queue = live.state.parked_notices ?? (live.state.parked_notices = []);
+    if (!queue.includes(full)) {
+      queue.push(full);
+      // 队列有界:超限丢最旧的——通知是事实陈述,最新一条覆盖旧语义。
+      while (queue.length > 8) queue.shift();
+    }
     live.state.stage_note = message.split("\n")[0].slice(0, 120);
     saveState(live.root, live.state);
+  }
+
+  /** 取走全部欠账便签(取走即清账并落盘);无欠账返回空数组。 */
+  private takeParkedNotices(live: LiveIssue): string[] {
+    const queue = live.state.parked_notices;
+    if (!queue?.length) return [];
+    live.state.parked_notices = undefined;
+    saveState(live.root, live.state);
+    return queue;
+  }
+
+  /** 欠账便签的注入词:拼在决定回执/续聊词之后随行送达模型(#244)。 */
+  private parkedReplay(notices: string[]): string {
+    if (!notices.length) return "";
+    return promptCopy("notices", "parked.replay",
+      { items: notices.join("\n\n") });
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----

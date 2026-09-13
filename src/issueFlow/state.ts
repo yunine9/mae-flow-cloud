@@ -409,6 +409,12 @@ export interface IssueSessionState {
   stage: FixedStage;
   stage_note: string;
   stage_at: string;
+  /** 停靠通知的欠账队列(#244,投递必达):等人时落下的平台通知全文,
+   * 续跑(答卡原地续跑/重启重建作答)时随注入词送达模型,送达即清账。
+   * stage_note 只是首行 120 字的显示摘要,不是投递账——机制账在这里。
+   * 不上 wire(与 mr_gate 同罪同罚:服务端投影多出前端镜像没有的字段
+   * 会让契约对账当场红)。 */
+  parked_notices?: string[];
   /** 阶段转移审计日志(Agent 声明 + 平台机械事实)。只增不改。 */
   transitions?: StageTransition[];
   conclusion?: IssueConclusion;
@@ -557,6 +563,7 @@ export function summarize(state: IssueSessionState): IssueSummary {
     env_declined: _envDeclined,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
+    parked_notices: _parkedNotices,
     ...rest } = state;
   return {
     ...rest,
