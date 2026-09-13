@@ -53,6 +53,7 @@ import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
+import { IssueMetaPane } from "./MetaPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Empty, EmptyDescription } from "@/components/Empty";
@@ -61,14 +62,17 @@ import { Button } from "@/components/ui/button";
 import { IssueStatusBadge } from "../StatusBadge";
 import { cn } from "cn";
 
-/** 左栏六个一级标签(#123 拍平 + 用户走查反馈):对话现场是默认入口
- * 放首位,中间四签是原"材料"面板的二级页签升格,逐仓交付收编为末签
- * (原悬在页签条上方的大卡区,2026-09-07 走查拍板:信息尽可能收进
- * 页签圈,上方不占纵向空间)。页签条复用任务侧 ws-pane-head >
- * ws-source-switch 同构,一签一色走 --workspace-tab-color(#231 换装:
- * 原按 nth-child 发色的 issue-workspace 规则随家族退役,色值直译成
- * 各签自带的变量工具类,字面量在此便于 Tailwind 拾取)。 */
+/** 左栏七个一级标签(#123 拍平 + 用户走查反馈;#239 起「元信息」居
+ * 首位:登记信息与关联仓的只读陈列,编辑器留给 #241):对话现场仍是
+ * 默认入口(默认选中不变,只是不再占首位),中间四签是原"材料"面板
+ * 的二级页签升格,逐仓交付收编为末签(原悬在页签条上方的大卡区,
+ * 2026-09-07 走查拍板:信息尽可能收进页签圈,上方不占纵向空间)。
+ * 页签条复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
+ * --workspace-tab-color(#231 换装:原按 nth-child 发色的 issue-workspace
+ * 规则随家族退役,色值直译成各签自带的变量工具类,字面量在此便于
+ * Tailwind 拾取)。 */
 const ISSUE_MAIN_TABS = [
+  { key: "meta", label: "元信息", tone: "[--workspace-tab-color:#2f8a5f]" },
   { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
   { key: "dts", label: "DTS单据", tone: "[--workspace-tab-color:#d28a31]" },
   { key: "doc", label: "过程文档", tone: "[--workspace-tab-color:#20a28f]" },
@@ -461,7 +465,11 @@ export function IssueSessionView({
             {tab === "repos" && <TabsContent value="repos" className="contents">
               <IssueWorkspaceRepos detail={detail} />
             </TabsContent>}
-            {tab !== "events" && tab !== "repos" && <TabsContent value={tab} className="contents">
+            {tab === "meta" && <TabsContent value="meta" className="contents">
+              <IssueMetaPane detail={detail} />
+            </TabsContent>}
+            {tab !== "events" && tab !== "repos" && tab !== "meta"
+              && <TabsContent value={tab} className="contents">
               <IssueMaterialsPane detail={detail} busy={busy} view={tab}
                 onNotifyAI={notifyAI} canOperate={canOperate} />
             </TabsContent>}

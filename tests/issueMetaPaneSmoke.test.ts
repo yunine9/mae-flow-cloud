@@ -1,0 +1,115 @@
+/**
+ * 「元信息」首签(#239)的根侧 node 冒烟:经 Vite 的 SSR loader 装载
+ * MetaPane(前端模块带 @/ 别名与 Badge→@base-ui 的间接引用,与
+ * workspaceUiLogic 同款装法;根侧不裸引 @base-ui/lucide),再
+ * renderToStaticMarkup 验关态静态渲染的事实。本仓刻意不为前端测试
+ * 引入 jsdom:绑定标走 getBusinessModules 的 effect,SSR 不跑
+ * effects——冒烟里绑定标按降级缺席,恰好就是这个降级路径的真实形态
+ * (目录读不到/未取到时清单照列、标识不出);绑定标识的源码契约由
+ * issueUiContracts 钉住。开态交互留给浏览器人工过目,别当它测过。
+ */
+
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import React from "../web/node_modules/react/index.js";
+import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
+import { createServer } from "../web/node_modules/vite/dist/node/index.js";
+import type { IssueDetail } from "../web/src/api.ts";
+
+const vite = await createServer({
+  root: "web",
+  server: { middlewareMode: true },
+  appType: "custom",
+  logLevel: "silent",
+});
+// 只按用到的形状标类型,不把组件源码拉进根类型程序(根 tsconfig 没有
+// DOM lib,conversationStream 同款边界)。
+const metaPaneModule = await vite.ssrLoadModule("/src/issues/MetaPane.tsx") as {
+  IssueMetaPane: (props: { detail: IssueDetail }) => unknown;
+};
+const IssueMetaPane = metaPaneModule.IssueMetaPane as unknown as
+  React.FunctionComponent<{ detail: IssueDetail }>;
+after(() => vite.close());
+
+function detail(overrides: Partial<IssueDetail> = {}): IssueDetail {
+  return {
+    id: "issue-1",
+    account: "zhou",
+    created_at: "2026-09-10T02:00:00.000Z",
+    updated_at: "2026-09-10T03:00:00.000Z",
+    title: "网管侧告警未消除",
+    description: "告警从周一持续至今,重启未恢复。",
+    source: "manual",
+    status: "running",
+    stage: "analyze",
+    stage_note: "",
+    stage_at: "2026-09-10T02:00:00.000Z",
+    has_environment: true,
+    has_analysis: false,
+    module: "传送网模块",
+    module_id: "mod-1",
+    environment: {
+      credential_ref: "vault-ref-do-not-render",
+      name: "省网网管",
+      hosts: ["10.10.0.8"],
+      port: 8443,
+      env_type: "k8s",
+    },
+    repo_urls: [
+      "https://git.example.test/team/alpha.git",
+      "https://git.example.test/team/beta.git",
+    ],
+    ...overrides,
+  } as IssueDetail;
+}
+
+function render(overrides: Partial<IssueDetail> = {}): string {
+  return renderToStaticMarkup(
+    React.createElement(IssueMetaPane, { detail: detail(overrides) }));
+}
+
+test("登记信息四项只读陈列,凭据引用与写口零出现", () => {
+  const html = render();
+  assert.match(html, /登记信息/);
+  assert.match(html, /网管侧告警未消除/);
+  assert.match(html, /告警从周一持续至今,重启未恢复。/);
+  assert.match(html, /传送网模块/);
+  assert.match(html, /省网网管/);
+  assert.match(html, /10\.10\.0\.8/);
+  assert.match(html, /端口 8443/);
+  assert.match(html, /容器化/, "env_type=k8s 出中文形态(虚拟化/容器化口径)");
+  assert.ok(!html.includes("vault-ref-do-not-render"),
+    "服务端 vault 引用不上屏");
+  assert.ok(!/<button|<input|<textarea/i.test(html), "本票零写口");
+});
+
+test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与空态如实", () => {
+  const html = render();
+  assert.match(html, /关联仓清单/);
+  assert.match(html, /alpha/);
+  assert.match(html, /https:\/\/git\.example\.test\/team\/alpha\.git/);
+  assert.match(html, /beta/);
+  // effects 在 SSR 不跑,boundRepos 停在初始 undefined——绑定标按降级
+  // 缺席,仓清单照列(与目录读不到的降级形态一致)。
+  assert.ok(!html.includes("模块绑定"), "SSR 关态绑定标应缺席(降级路径)");
+  const reclaimed = render({ repo_reclaimed_at: "2026-09-11T00:00:00.000Z" });
+  assert.match(reclaimed, /现场已回收/);
+  const empty = render({ repo_urls: undefined, repo_url: undefined });
+  assert.match(empty, /会话没有登记代码仓/);
+});
+
+test("空值如实降级,终态会话(canceled/archived)照常陈列且零编辑入口", () => {
+  const unfilled = render({
+    environment: undefined,
+    module: undefined,
+    description: "",
+  });
+  assert.match(unfilled, /\(未填\)/);
+  for (const status of ["canceled", "archived"] as const) {
+    const html = render({ status });
+    assert.match(html, /网管侧告警未消除/, "终态会话信息面照常可读");
+    assert.match(html, /关联仓清单/);
+    assert.ok(!/<button|<input|<textarea/i.test(html),
+      `${status} 会话不渲染任何编辑入口`);
+  }
+});

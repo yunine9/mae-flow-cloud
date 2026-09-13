@@ -625,15 +625,15 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
 test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 六标签一次成表,顺序即规格:对话现场(默认入口)在首位,中间四签
-  // 是原"材料"面板二级页签的升格,逐仓交付收编为末签——一签一名,
-  // 不得改名换序。
+  // 六标签一次成表(#239 起「元信息」居首,共七签),顺序即规格:元信息
+  // (只读陈列)在首位,对话现场仍是默认入口,逐仓交付收编为末签——
+  // 一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
-    ["events:对话现场", "dts:DTS单据", "doc:过程文档",
+    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:过程文档",
       "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
@@ -1243,4 +1243,57 @@ test("DTS 单号在两个列表里都是门户超链接", () => {
   assert.match(issueBoard,
     /href=\{dtsTicketUrl\(issue\.ticket\)\}[\s\S]{0,120}onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
   assert.match(issueBoard, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
+});
+
+// ---- 元信息首签(#239 只读版):登记信息 + 关联仓清单,编辑器在 #241 ----
+
+test("元信息页签居首(#239):登记四项只读、绑定标、终态只读、回收标注", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  // 页签首位:meta 占 ISSUE_MAIN_TABS 第 0 位(label「元信息」,一签一色
+  // 照旧自带 --workspace-tab-color 变量工具类);默认选中仍是对话现场。
+  const table = sessionView.match(
+    /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
+  const tabs = [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
+    .map(([, key, label]) => `${key}:${label}`);
+  assert.equal(tabs[0], "meta:元信息", "元信息必须在页签条首位");
+  assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
+  // 面板映射:meta 有自己的 TabsContent 分支,材料兜底分支不再吃 meta 值。
+  assert.match(sessionView,
+    /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} \/>/);
+  assert.match(sessionView,
+    /tab !== "events" && tab !== "repos" && tab !== "meta"/);
+  // 登记信息区(只读)四项:标题/问题描述全文/业务模块/网管环境。
+  assert.match(metaPane, /aria-label="登记信息"/);
+  for (const label of ["标题", "问题描述", "业务模块", "网管环境"]) {
+    assert.ok(metaPane.includes(`>{label}</span>`), `登记信息缺「${label}」行`);
+  }
+  // 网管环境给名称+IP+端口+形态,形态中文与编辑弹框同源(import
+  // ENVIRONMENT_FORM_TEXT,不重抄);空值如实降级(「(未填)」),凭据类
+  // 字段零出现(含注释也不带字面量,防止将来顺手渲染)。
+  assert.match(metaPane, /import \{ ENVIRONMENT_FORM_TEXT \} from "\.\.\/EnvironmentEditorDialog"/);
+  assert.match(metaPane, /ENVIRONMENT_FORM_TEXT\[envType\]/);
+  assert.match(metaPane, /\(未填\)/);
+  assert.doesNotMatch(metaPane, /credential_ref|password/i,
+    "元信息面板不得出现凭据类字段");
+  // 关联仓清单区:仓名(repoName)+完整 URL;模块绑定仓带「模块绑定」
+  // 标识,绑定集合组件内经 getBusinessModules 按 module_id 解析;绑定
+  // 比对与后端门禁同一把归一尺(repoIdentity),不原样字符串比对。
+  assert.match(metaPane, /aria-label="关联仓清单"/);
+  assert.match(metaPane, /repoName\(url\)/);
+  assert.match(metaPane, />模块绑定<\/Badge>/);
+  assert.match(metaPane, /getBusinessModules\(\)/);
+  assert.match(metaPane,
+    /repoIdentity\(item\) === repoIdentity\(url\)/);
+  // 回收标注:repo_reclaimed_at 在场即如实标注「现场已回收」,不冒充在场。
+  assert.match(metaPane,
+    /detail\.repo_reclaimed_at && <div className="utility-note"/);
+  assert.match(metaPane, /现场已回收/);
+  // 终态只读:#241 编辑区挂载点受终态闸门控制,终态会话(与协作流
+  // ended 同口径的 archived/canceled/failed)永远不渲染编辑入口。
+  assert.match(metaPane,
+    /const isTerminal =\s*\n\s*\(TERMINAL_STATUSES as readonly string\[\]\)\.includes\(detail\.status\);/);
+  assert.match(metaPane, /\{!isTerminal && null\}/);
 });
