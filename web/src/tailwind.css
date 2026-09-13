@@ -3779,6 +3779,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
     animation: none;
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 9%, transparent), var(--shadow-xs);
   }
+}
+/* #233 合并事故:上面的 media 原本丢了收括号,从这里起 task-workspace/
+   conversation/task-overview(团队需求队列)等整段存量皮被吞进
+   prefers-reduced-motion——不用减弱动效的普通用户整段失效,队列裸文本
+   即此。补回收括号,并把这段存量皮放回 legacy 层(收括号锚在其后
+   annot-images 规则块的孤立 `}`)。 */
+@layer legacy {
 
 /* ===== task-workspace.css ===== */
 /*

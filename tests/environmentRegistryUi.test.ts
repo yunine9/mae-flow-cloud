@@ -34,9 +34,11 @@ test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admi
     assert.ok(source.includes('label="环境管理"'), `${branch} 入口文案缺失`);
   }
   // 台账是全局团队资源:admin 在「管理视角」组(与团队资产并列),
-  // 排在 admin 专属的「系统管理」(admin-tools)之前;开发在「团队信息」组。
+  // 排在 admin 专属的「系统管理」组之前;开发在「团队信息」组。
+  // (锚随 2026-09-11 侧栏迁 shadcn Sidebar 更新:app-shell 的 admin-tools
+  //  壳类退场,系统管理组现在以组标签「系统管理」锚定。)
   assert.ok(adminNav.indexOf("环境管理") > adminNav.indexOf("管理视角")
-    && adminNav.indexOf("环境管理") < adminNav.indexOf("admin-tools"),
+    && adminNav.indexOf("环境管理") < adminNav.indexOf("系统管理"),
     "admin 侧环境管理应在管理视角组、系统管理之前");
   assert.ok(devNav.indexOf("环境管理") > devNav.indexOf("团队信息"),
     "开发侧环境管理应归团队信息组");
