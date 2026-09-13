@@ -107,9 +107,10 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 重新申报", mrs: [origin] } } },
     { text: "已修复再推,等待流水线。" },
-    // 第 4 回合(流水线全绿+已申报,平台放行):部署 → 平台举验证卡。
-    { tool: { name: "build_deploy", input: { include_lib: false } } },
-    { text: "部署完成,等待用户在环境验证。" },
+    // 第 4 回合(#246 绿灯切换):流水线全绿+已申报,监看器收口只投递
+    // 全绿事实开回合——AI 经 raise_gate 举验证卡(平台不再代举)。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户在环境验证。" },
     // 第 5 回合(用户验证发现问题,回退问题分析):二轮分析 → 重新举闸。
     { tool: { name: "bash", input: { command:
       "printf '\\n## 第二轮\\n\\n根因修正:回收策略缺竞态保护。\\n' >> issue-analysis.md" } } },
@@ -124,9 +125,9 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
     { text: "二轮修复已提交,等待流水线。" },
-    // 第 7 回合(二轮流水线绿):再部署举闸。
-    { tool: { name: "build_deploy", input: { include_lib: false } } },
-    { text: "二轮部署完成,等待验证。" },
+    // 第 7 回合(二轮流水线绿,#246):监看器收口投递全绿事实——AI 举卡。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -1016,8 +1017,11 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
+  // 全绿投递回合(#246 绿灯切换):监看器绿了收口只投递全绿事实开
+  // 回合——AI 经 raise_gate 举验证卡,平台不再代举。
   const script: Scene[] = [
-    { text: "收到,准备部署。" },
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户在环境验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -2005,11 +2009,19 @@ test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报�
   // 没有场景阶段的存量现场,停机合法性无从机械判定,不催。
   assert.equal(
     shouldNudgeFixed(fixedState({ scenario: undefined })), false);
-  // 当前阶段已收口(如 MR 跑绿收口待归档,ADR-0013):不催。
+  // 当前阶段已收口(如 MR 跑绿收口待归档,ADR-0013):卡已举,不催。
   assert.equal(shouldNudgeFixed(fixedState({
     stage: "mr_green",
     stage_states: FIXED_TICKET_STAGES.map(() => "done"),
+    gate: { id: "gate-x", kind: "env_verify", state_version: 1,
+      created_at: now,
+      question: { questions: [{ question: "验证?", options: [] }] } },
   })), false);
+  // 出口卡未清(#246,ADR-0024):mr_green 收口了但验证卡没举——催。
+  assert.equal(shouldNudgeFixed(fixedState({
+    stage: "mr_green",
+    stage_states: FIXED_TICKET_STAGES.map(() => "done"),
+  })), true);
   // MR 已建、流水线在途:停等流水线是出口的一部分,不催。
   const mrGreenStates = FIXED_TICKET_STAGES.map((stage, index) =>
     index < FIXED_TICKET_STAGES.indexOf("mr_green") ? "done" : "in_progress");

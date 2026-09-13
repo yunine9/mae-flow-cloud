@@ -643,6 +643,13 @@ export function shouldNudgeFixed(state: IssueSessionState): boolean {
   if (state.takeover) return false;
   if (!state.scenario) return false;
   const index = fixedStageIndex(state.scenario, state.stage as FixedStage);
+  // 出口卡未清(#246,ADR-0024):mr_green 已收口、验证卡未举——收口
+  // 只是 mr_green 出口的一半(申报),另一半是把验证卡交到用户手上;
+  // 卡没举(闸不在场)就停机 = 欠着出口,催。
+  if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done"
+    && state.stage === "mr_green" && !state.gate) {
+    return true;
+  }
   if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {
     return false;
   }

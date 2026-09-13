@@ -706,17 +706,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "pipeline_evidence(报错原文回灌)。");
       }
       if (kind === "env_verify") {
-        // 前置事实①:全部 MR 跑绿(查平台监看账,不凭 AI 口供)。
-        const mrs = ctx.state.mrs ?? [];
-        const allGreen = mrs.length > 0 && mrs.every((mr) =>
-          ctx.state.pipelines?.[mr.repo]?.status === "success");
-        if (!allGreen) {
-          fail("流水线还没有全部跑绿,现在请用户验证为时过早——先把"
-            + "未绿的仓修复后同分支重推(push_branch、create_mr),"
-            + "等平台的全绿通知后再举这张卡。");
-        }
-        // 前置事实②:mr_green 已收口(申报是出口的一半,收口即申报
-        // 已过验绿门;未收口举卡会跳过申报半边)。
+        // 前置事实:mr_green 已收口。收口只能由验绿全绿放行产生
+        // (complete_stage 当场核验或监看器滞后收口,空清单同款),
+        // 所以「已收口」本身就蕴含「全绿」——不再查监看账的 status:
+        // 那份账由监看器异步刷新,当场收口的窗口期它还停在 running,
+        // 查它会把刚收口的合法举卡误拒掉。
         const index = ctx.state.scenario
           ? fixedStageIndex(ctx.state.scenario, "mr_green") : -1;
         if (index < 0
@@ -1339,7 +1333,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接收口。
       if (!ledger.length) {
         fixedComplete(ctx.state, `无 MR 交付(空清单=空台账):${note}`);
-        ctx.state.stage_note = "流程已完成——确认后可归档";
+        ctx.state.stage_note = "流程已完成(无 MR 交付)——待环境验证:通过可归档,发现问题回退重新分析";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.empty_ok"));
@@ -1402,7 +1396,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         delete state.mr_gate;
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = "全部 MR 流水线已跑绿——确认合入后可归档收口";
+        ctx.state.stage_note = "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析";
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.all_green", {

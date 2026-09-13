@@ -864,7 +864,11 @@ test("环境验证闸·通过:作答后落待归档,归档结论按合入事实"
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
+  ], "scripted-v1", { linear: true });
   await model.start();
   seedGreenWatch(dataDir, origin, headSha(origin));
   const service = new IssueFlowService({
@@ -902,8 +906,10 @@ test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 red
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 回退回合+两次催办都吃文本幕(线性钳到末幕)。
+  // 全绿投递回合举卡(#246)+回退回合与两次催办吃文本幕(线性钳到末幕)。
   const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
     { text: "收到,先与用户对齐问题理解。" },
     { text: "(催办一)继续对齐中。" },
     { text: "(催办二)仍在推进。" },
@@ -939,7 +945,8 @@ test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 red
       ["done", "done", "in_progress", "redo", "redo"],
       "分析重开,修复与交付标 redo");
     assert.equal(settled.gate, undefined, "验证闸已随作答清面");
-    const rollbackTurn = JSON.stringify(model.requests[0]);
+    // 回退回合是全绿投递举卡之后的第三个请求(#246:投递+举卡在前)。
+    const rollbackTurn = JSON.stringify(model.requests[2]);
     assert.match(rollbackTurn, /环境验证发现问题/, "回退事实要带给 AI");
     assert.match(rollbackTurn, /订单导出仍然超时/, "用户描述要带给 AI");
     assert.match(rollbackTurn, /对齐/, "回退指令要求先对齐再重写");
@@ -956,7 +963,11 @@ test("环境验证闸·不锁死:未作答也可直接归档(闸随终态清面)
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
+  ], "scripted-v1", { linear: true });
   await model.start();
   seedGreenWatch(dataDir, origin, headSha(origin));
   const service = new IssueFlowService({
@@ -988,7 +999,11 @@ test("环境验证闸·月光不代答:一档全自动下验证卡仍只等真�
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
+  ], "scripted-v1", { linear: true });
   await model.start();
   seedGreenWatch(dataDir, origin, headSha(origin));
   const service = new IssueFlowService({

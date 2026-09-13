@@ -290,6 +290,10 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "MR 已创建并申报,等流水线跑绿后平台收口。" },
+    // 全绿投递回合(#246 绿灯切换):监看器收口只投递全绿事实开回合
+    // ——AI 经 raise_gate 举验证卡,平台不再代举。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户在环境验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -447,21 +451,30 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
   }
 });
 
-test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的已结算记录", async () => {
-  // 用户实锤(2026-09-11):一轮全绿通知后答「验证发现问题」返工,二轮
-  // 再全绿却无通知——notifyOutcome 幂等键=(taskId,status),同名状态命中
-  // 一轮已 settled 的记录被 deliverTracked 静默跳过。修复:键带轮次,
-  // 二轮状态为「待环境验证(第 2 轮)」,重放保护只属于同一事件。
+test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,二轮新卡是新事件", async () => {
+  // #246/ADR-0024 绿灯切换:旧「待环境验证(第 N 轮)」outcome 通道已删
+  // ——每轮全绿收口后平台只投递事实,AI 经 raise_gate 举验证卡,用户
+  // 通知改由等待卡通道(notifyWaitingCard)承担:同卡按 waiting_id
+  // 幂等只发一次,二轮的新卡是新事件,不撞一轮的已投递记录。
   const dataDir = mfcTemp("mfc-issue-green-renotify-");
   const origin = bareOrigin(dataDir);
   const platform = new GreenPlatform();
   await platform.start();
   const luban = new FakeLubanServer();
   await luban.start();
+  // 通知器实例提出来:waiting_id 幂等账(notifier.list)要对它核对。
+  const greenNotifier = new Notifier({
+    endpoint: luban.endpoint, backoffMs: [0],
+  });
   const commit = (message: string) =>
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const report = (summary: string) =>
     `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 证据链\\n日志:演示。\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
+  const raiseVerifyCard: Scene[] = [
+    // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举卡。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
+  ];
   const script: Scene[] = [
     // 一轮:拉单→拉仓→分析→确认→修复→推→MR→申报(全绿由平台假件结算)。
     { tool: { name: "dts_get_ticket", input: {} } },
@@ -478,6 +491,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "一轮 MR 已申报,等跑绿收口。" },
+    ...raiseVerifyCard,
     // 二轮:验证发现问题回退→重写报告→确认→修复→推→MR→再申报。
     { tool: { name: "bash", input: { command: report("连接池回收缺竞态保护") } } },
     { tool: { name: "submit_analysis", input: { summary: "二轮:回收竞态保护" } } },
@@ -488,6 +502,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
     { text: "二轮 MR 已申报,等跑绿再收口。" },
+    ...raiseVerifyCard,
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -501,9 +516,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-    notifier: new Notifier({
-      endpoint: luban.endpoint, backoffMs: [0],
-    }),
+    notifier: greenNotifier,
   });
   try {
     const created = service.create({
@@ -529,14 +542,14 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
       return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
         ? issue : undefined;
     }, "一轮全绿举环境验证闸");
-    // 每轮全绿小鲁班收两条:outcome 收口通知 + 等待卡。outcome 的摘要
-    // 尾巴是「在卡上作答」,以此与卡消息区分;通知是异步旁路,断言前
-    // 等它落袋。
-    const outcomes = () => luban.messages.filter((message) =>
-      (message.text as string).includes("在卡上作答"));
-    await until(() => outcomes().length >= 1 ? true : undefined, "一轮收口通知落袋");
-    assert.equal(outcomes().length, 1, "一轮恰一条收口通知");
-    assert.doesNotMatch(outcomes()[0]!.text as string, /第 \d+ 轮/);
+    // 用户通知走等待卡通道(#246:旧 outcome 通道已删):AI 举卡即通知,
+    // 卡面问题随通知到达,人不用开网页就知道要去环境验证。通知是异步
+    // 旁路,断言前等它落袋。
+    const verifyCards = () => luban.messages.filter((message) =>
+      JSON.stringify(message).includes("请到目标环境验证修复效果"));
+    await until(() => verifyCards().length >= 1 ? true : undefined,
+      "一轮验证卡通知落袋");
+    assert.equal(verifyCards().length, 1, "一轮恰一条验证卡通知");
     // 验证发现问题 → 回退分析(轮次+1)。
     service.answer(created.id, {
       state_version: firstGate.gate!.state_version, code: "fail",
@@ -557,11 +570,17 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
       return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
         ? issue : undefined;
     }, "二轮全绿再举环境验证闸");
-    // 回归点:二轮必须再收到一条收口通知,状态带轮次(不再撞一轮
-    // 已结算记录被静默吞掉)。
-    await until(() => outcomes().length >= 2 ? true : undefined, "二轮收口通知落袋");
-    assert.equal(outcomes().length, 2, "二轮必须再发一条收口通知");
-    assert.match(outcomes()[1]!.text as string, /第 2 轮:全部 MR 流水线已跑绿/);
+    // 回归点:二轮的新卡是新事件——再发一条等待卡通知;同卡只发一次
+    // 的幂等不变(notifier 按 waiting_id 记账,每张验证卡恰一条记录,
+    // 二轮的 waiting_id 随新卡新生,不撞一轮的已投递记录)。
+    await until(() => verifyCards().length >= 2 ? true : undefined,
+      "二轮验证卡通知落袋");
+    assert.equal(verifyCards().length, 2, "二轮新卡必须再发一条等待卡通知");
+    const verifyRecords = greenNotifier.list().filter((record) =>
+      JSON.stringify(record).includes("请到目标环境验证修复效果"));
+    assert.equal(verifyRecords.length, 2, "每张验证卡恰一条通知记录(同卡只发一次)");
+    assert.notEqual(verifyRecords[0]!.waiting_id, verifyRecords[1]!.waiting_id,
+      "二轮新卡是新事件(waiting_id 随卡新生)");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

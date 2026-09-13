@@ -74,8 +74,10 @@ async function greenFixture() {
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
-    { text: "MR 已申报,等待流水线验绿。" },
-    { text: "收到,继续处理。" },
+    // 当场验绿收口(#246 绿灯切换):complete_stage 回执自带举卡指引
+    // ——AI 同回合经 raise_gate 举出验证卡(平台不再代举)。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户在环境验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();

@@ -181,6 +181,15 @@ function chainScenes(origin: string, steps: Array<string[] | Scene>): Scene[] {
         ? { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: step } } }
         : step),
     { text: "MR 已建,本回合到此。" },
+    // 绿灯切换(#246)后的举卡幕,两组各司其职:
+    // - 当场收口(complete_stage 即全绿):紧接着的第一组 raise_gate
+    //   直接放行,闸落、收口等待;
+    // - 受理等绿(申报时在跑):第一组 raise_gate 被拒(未全绿,前置
+    //   校验按新契约打回),等监看器全绿后的投递回合消费第二组。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待验证。" },
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待验证。" },
   ];
 }
 
@@ -427,7 +436,7 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     assert.equal(chain.saved().mr_gate, undefined);
     // 回执与台账:验绿通过 + 收口话术进现场。
     assert.match(chain.okReceipts(), /MR 核验通过/);
-    assert.match(chain.okReceipts(), /流程到此完成/);
+    assert.match(chain.okReceipts(), /阶段已收口/);
     assert.match(chain.trail(), /MR 核验通过/, "核验裁决要进台账");
     // 收口要点名用户:小鲁班通知"全部跑绿,待归档"(ADR-0013)。
     // (等待闸卡也发通知,按内容取收口那条。)
@@ -638,6 +647,10 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     { tool: { name: "complete_stage", input: { note: "无需 UT" } } },
     { tool: { name: "complete_stage", input: { note: "无 MR 交付", mrs: [] } } },
     { text: "收口完成。" },
+    // 绿灯切换(#246):收口回执指路举卡,若本回合没举,欠卡催办续跑
+    // 会消费这一组把验证卡补上。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -683,7 +696,7 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
         && event.payload?.name === "complete_stage" && !event.payload.is_error)
       .map((event) => String(event.payload.result)).join("\n");
     assert.match(receipts, /没有改动、无需 MR/);
-    assert.match(receipts, /流程到此完成/);
+    assert.match(receipts, /阶段已收口/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

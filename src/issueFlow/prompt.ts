@@ -359,6 +359,14 @@ export function fixedNudgeNotice(
 ): string {
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
+  // 欠环境验证卡(mr_green 已收口、卡未举)用专用催办词:要的不是
+  // "继续推进阶段",而是"把验证卡交出去"(#246,ADR-0024)。
+  if (current === "mr_green" && !state.gate) {
+    return promptCopy("notices", "nudge.env_verify_owed", {
+      attempt, budget,
+      remain: budget - attempt + 1,
+    });
+  }
   return promptCopy("notices", "nudge.body", {
     attempt,
     budget,
