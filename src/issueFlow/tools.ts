@@ -699,8 +699,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "不要叠加举卡。");
       }
       const kind = String(params?.kind ?? "") as IssueGateKind;
-      if (kind !== "env_verify" && kind !== "pipeline_unfixable"
-        && kind !== "pipeline_evidence") {
+      // 白名单即模板键集:加卡种只改一处(模板表),校验自动跟上。
+      if (!(kind in RAISE_GATE_QUESTIONS)) {
         fail("不支持的卡种:" + (kind || "(缺席)") + "。只允许 "
           + "env_verify(环境验证)/ pipeline_unfixable(红灯人工处理)/ "
           + "pipeline_evidence(报错原文回灌)。");

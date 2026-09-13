@@ -1865,17 +1865,18 @@ export class IssueFlowService {
     await this.ensureContainer(live);
     // 欠账便签随行(#244 投递必达):任何续聊形态的回合都把停靠通知
     // 捎给模型——落到便签的通知不能停在显示摘要里没人看见。
-    const replay = this.parkedReplay(this.takeParkedNotices(live));
-    const full = replay ? `${message}\n\n${replay}` : message;
-    if (live.driver) {
-      // 回合前压缩(票 01/02)的唯一安全位:话递进在场会话之前。
-      await this.maybeCompactContinuation(live, opts?.boundary === true);
-      return live.driver.continueWith(full);
-    }
-    const driver = await this.openDriver(live);
-    return driver.startResume(issueResumePrompt(live.state, full,
-      this.environmentCredentials(live),
-      { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+    return this.withParkedNotices(live, async (replay) => {
+      const full = replay ? `${message}\n\n${replay}` : message;
+      if (live.driver) {
+        // 回合前压缩(票 01/02)的唯一安全位:话递进在场会话之前。
+        await this.maybeCompactContinuation(live, opts?.boundary === true);
+        return live.driver.continueWith(full);
+      }
+      const driver = await this.openDriver(live);
+      return driver.startResume(issueResumePrompt(live.state, full,
+        this.environmentCredentials(live),
+        { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+    });
   }
 
   /** 续聊回合的事件账水位:events.jsonl 是宿主与模型侧共用的幂等
@@ -3337,19 +3338,20 @@ export class IssueFlowService {
     this.beginTurn(live, async () => {
       await this.ensureContainer(live);
       // 欠账便签随行(#244 投递必达):作答回合是停靠通知的投递时机。
-      const replay = this.parkedReplay(this.takeParkedNotices(live));
-      if (live.driver) {
-        return live.driver.resumeWithDecision(record, replay || undefined);
-      }
-      // 进程重启后的作答:重开 会话,决定先补登记(审计),再以
-      // 续聊提示词把答案交给重建的上下文。
-      const driver = await this.openDriver(live);
-      driver.injectDecision(record);
-      const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
-        + (replay ? `\n\n${replay}` : "");
-      return driver.startResume(issueResumePrompt(live.state, decisionText,
-        this.environmentCredentials(live),
-        { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+      return this.withParkedNotices(live, async (replay) => {
+        if (live.driver) {
+          return live.driver.resumeWithDecision(record, replay || undefined);
+        }
+        // 进程重启后的作答:重开 会话,决定先补登记(审计),再以
+        // 续聊提示词把答案交给重建的上下文。
+        const driver = await this.openDriver(live);
+        driver.injectDecision(record);
+        const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
+          + (replay ? `\n\n${replay}` : "");
+        return driver.startResume(issueResumePrompt(live.state, decisionText,
+          this.environmentCredentials(live),
+          { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+      });
     });
     return summarize(live.state);
   }
@@ -5851,6 +5853,29 @@ export class IssueFlowService {
     if (!notices.length) return "";
     return promptCopy("notices", "parked.replay",
       { items: notices.join("\n\n") });
+  }
+
+  /** 欠账便签的取用护栏(#244 投递必达):取走即清是常态,但回合体
+   *  在交接前炸掉(容器/会话开启失败等基础设施异常)时原样退回——
+   *  通知不能因为一次抖动就静默蒸发。模型侧失败不炸回合体(在
+   *  driver 内部收口成 outcome),由既有 settle/催办机器接手。 */
+  private async withParkedNotices<T>(
+    live: LiveIssue,
+    fn: (replay: string) => Promise<T>,
+  ): Promise<T> {
+    const notices = this.takeParkedNotices(live);
+    try {
+      return await fn(this.parkedReplay(notices));
+    } catch (error) {
+      if (notices.length) {
+        const queue =
+          live.state.parked_notices ?? (live.state.parked_notices = []);
+        queue.unshift(...notices);
+        while (queue.length > 8) queue.shift();
+        saveState(live.root, live.state);
+      }
+      throw error;
+    }
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
