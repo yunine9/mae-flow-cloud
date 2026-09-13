@@ -5,12 +5,13 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  inspectKernelPosition,
   inspectKernelCompletion,
   inspectKernelDeliveryReady,
   inspectKernelTaskCompletion,
 } from "../src/terminalAttestation.ts";
 import { TaskService } from "../src/taskService.ts";
-import { createKernelHostProof } from "../src/kernelDelivery.ts";
+import { KERNEL_UNAVAILABLE, createKernelHostProof } from "../src/kernelDelivery.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 function fixture(current: string, external = false): {
@@ -322,3 +323,40 @@ test("恢复会对账伪 completed，并从内核 current 重新排队", () => {
   assert.equal(restored.completed_at, undefined);
   assert.match(restored.detail ?? "", /伪终态.*build/);
 });
+
+test("执行位置读取无需内核进程，位置不是交付通过证明", () => {
+  const { cwd, kernelRoot } = fixture("delivery_watch", true);
+  const position = inspectKernelPosition(cwd, kernelRoot);
+  assert.equal(position.kind, "delivery_watch");
+  assert.equal("complete" in position, false, "位置接口不能被当作通过核验的结果");
+  assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot, true,
+    { workspace: cwd, taskId: "untrusted", python: "/missing-python" }).complete, false,
+    "真正就绪判定仍不能越过收据核验");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({ current: "end" }));
+  assert.equal(inspectKernelPosition(cwd, kernelRoot).kind, "terminal");
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot, true,
+    { workspace: cwd, taskId: "untrusted", python: "/missing-python" }).complete, false,
+    "自称 end 也不能证明可信完成");
+  writeFileSync(join(cwd, ".mae-flow.json"), "broken");
+  assert.equal(inspectKernelPosition(cwd, kernelRoot).kind, "invalid");
+  assert.equal(inspectKernelPosition(undefined, kernelRoot).kind, "invalid");
+});
+
+for (const failure of [undefined, `${KERNEL_UNAVAILABLE}：测试故障`]) {
+  test(`收口${failure ? "遇内核故障" : "成功"}不查询无用批次，故障直接进入原有恢复`, async () => {
+    const { root, cwd, kernelRoot } = fixture("external_verify", true);
+    const service: any = serviceFor(root, kernelRoot);
+    const task = taskState(root, cwd);
+    task.summary.delivery = { loop: { kind: "ci", review_source: "platform" } };
+    task.driver = { takeUndeliveredSteers: () => [], finalReply: () => "已完成",
+      dispose: () => {}, continueWith: () => { assert.fail("不能因基础设施故障叫 Agent 补回执"); } };
+    service.recordActiveFeedbackResult = () => failure;
+    service.activeKernelFeedback = () => { assert.fail("不需要补交就不应再次启动核验"); };
+    let recovery: string | undefined;
+    service.holdWithRecovery = (_task: unknown, reason: string) => { recovery = reason; };
+    await service.settleTurn(task,
+      Promise.resolve({ status: "turn_finished", reason: "end_turn" }), 0);
+    if (failure) assert.equal(recovery, failure, "保留原有故障恢复分类");
+    assert.notEqual(task.summary.status, "completed", "不能把省略无用查询当成任务完成");
+  });
+}

@@ -64,6 +64,30 @@ function declaredTerminal(kernelRoot: string | undefined, current: string): bool
   return current === "end";
 }
 
+/** 只识别执行位置，不查询 Git 或收据；此结果不能证明交付就绪/完成。 */
+export function inspectKernelPosition(
+  cwd: string | undefined, kernelRoot: string | undefined,
+): { kind: KernelAttestationKind; reason: string } {
+  if (!cwd) return { kind: "invalid", reason: "任务没有内核工作区，不能证明流程已结束" };
+  const path = join(cwd, ".mae-flow.json");
+  if (!existsSync(path)) return { kind: "invalid", reason: "内核状态文件不存在，流程尚未初始化" };
+  const state = readJson(path);
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    return { kind: "invalid", reason: "内核状态文件不可解析，不能推断终态" };
+  }
+  const current = typeof state.current === "string" ? state.current : "";
+  return {
+    kind: kernelPositionKind(current, declaredTerminal(kernelRoot, current)),
+    reason: current ? `内核当前步骤是 ${current}，尚未到 delivery_watch`
+      : "内核 current 缺失，不能推断交付就绪态",
+  };
+}
+
+function kernelPositionKind(current: string, terminal: boolean): KernelAttestationKind {
+  return terminal ? "terminal" : current === "delivery_watch" ? "delivery_watch"
+    : current === "external_verify" ? "external_verify" : current ? "active" : "invalid";
+}
+
 function requiredDimensions(state: any, pipelineByDefault: boolean): string[] {
   const contract = state?.execution_contract;
   if (contract && typeof contract === "object") {
@@ -183,13 +207,7 @@ function inspectKernelState(
       && checks?.[dimension]?.status === "passed"
       && checks?.[dimension]?.sha === attestedSha)
   );
-  const kind: KernelAttestationKind = terminal
-    ? "terminal"
-    : current === "delivery_watch"
-      ? "delivery_watch"
-    : current === "external_verify"
-      ? "external_verify"
-      : current ? "active" : "invalid";
+  const kind = kernelPositionKind(current, terminal);
   const closeReached = !continuousReview || expected !== "terminal"
     || Boolean(closeSha && lifecycleTrusted);
   const lifecycleReached = expected === "terminal"

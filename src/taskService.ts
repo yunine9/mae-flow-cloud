@@ -327,7 +327,7 @@ import {
   type PipelineEvidenceAssessment,
 } from "./pipelineEvidence.ts";
 import {
-  inspectKernelDeliveryReady,
+  inspectKernelPosition, inspectKernelDeliveryReady,
   inspectKernelTaskCompletion,
   type KernelCompletionAttestation,
 } from "./terminalAttestation.ts";
@@ -21156,14 +21156,13 @@ export class TaskService {
             `已答复过的确认项不要重复提问。${reviewCardInstruction}`), epoch);
           break;
         }
-        const beforeDelivery = this.deliveryReadyAttestation(task);
+        const beforeDelivery = this.options.host && !this.isRequirementAnalysis(task)
+          ? inspectKernelPosition(task.cwd, this.options.host.kernelRoot) : undefined;
         if (beforeDelivery
             && beforeDelivery.kind !== "terminal"
             && beforeDelivery.kind !== "delivery_watch"
             && beforeDelivery.kind !== "external_verify") {
-          // end_turn 是模型会话事实，不是内核流程事实。催办用尽、driver
-          // 消失或状态损坏时宁可显式失败，也不能 tryDeliver 后把 running
-          // 兜成 completed。failed 可由人工重跑从 current 原地恢复。
+          // 执行位置异常先停下；模型结束发言不能代替内核流程完成。
           task.lastReply = task.driver?.finalReply();
           const earlyDriver = task.driver;
           if (task.driver === earlyDriver) task.driver = undefined;
@@ -21220,11 +21219,12 @@ export class TaskService {
         // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
         task.lastReply = task.driver?.finalReply();
         const feedbackResultFailure = this.recordActiveFeedbackResult(task);
-        const activeFeedback = this.activeKernelFeedback(task);
+        const activeFeedback = feedbackResultFailure && task.driver && workspaceLoop
+          && workspaceLoop.review_source !== "workspace"
+          && ["evidence_missing", "evidence_invalid"].includes(
+            classifyDeliveryFailure(feedbackResultFailure, "receipt").stall_class)
+          ? this.activeKernelFeedback(task) : undefined;
         if (feedbackResultFailure && task.driver && activeFeedback && workspaceLoop
-            && ["evidence_missing", "evidence_invalid"].includes(
-              classifyDeliveryFailure(feedbackResultFailure, "receipt").stall_class)
-            && workspaceLoop.review_source !== "workspace"
             && workspaceLoop.feedback_receipt_retry_for !== activeFeedback.batchId) {
           workspaceLoop.feedback_receipt_retry_for = activeFeedback.batchId;
           workspaceLoop.diagnosis = feedbackResultFailure;
