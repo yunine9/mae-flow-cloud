@@ -2,10 +2,11 @@ import { PersonName } from "../People";
 import { useMemo, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
+import { Badge } from "@/components/ui/badge";
 import type { WorkflowAssetSummary } from "../api";
-import { statusLabels } from "./model";
+import { statusBadgeVariants, statusLabels } from "./model";
 
 export function WorkflowLibrary({
   workflows,
@@ -62,12 +63,17 @@ export function WorkflowLibrary({
           <TabsTrigger value="archived" className="h-auto flex-none">已归档 <b>{archivedCount}</b></TabsTrigger>
         </TabsList>
       </Tabs>
-      <label className="wf-library-search">
-        <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="4.5" />
-          <path d="m12 12 4 4" /></svg>
-        <Input className="w-56" value={query} onChange={(event) => setQuery(event.target.value)}
+      {/* (#252)InputGroup 是边框与图标槽的唯一来源,Input 撑满轨道——
+          外层勿再套自带边框的搜索容器。 */}
+      <InputGroup>
+        <InputGroupInput value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索名称、说明或 Owner" aria-label="搜索工作流" />
-      </label>
+        <InputGroupAddon>
+          <svg viewBox="0 0 20 20" aria-hidden fill="none" stroke="currentColor"
+            strokeWidth={1.5}><circle cx="8.5" cy="8.5" r="4.5" />
+            <path d="m12 12 4 4" /></svg>
+        </InputGroupAddon>
+      </InputGroup>
       {onRefresh && <button type="button" className="wf-refresh" disabled={loading}
         onClick={onRefresh} title="刷新工作流" aria-label="刷新工作流">
         <svg viewBox="0 0 20 20" aria-hidden><path d="M15.5 7A6 6 0 1 0 16 12M15.5 3.5V7H12" /></svg>
@@ -76,7 +82,7 @@ export function WorkflowLibrary({
     {notice && <div className="wf-state-banner success" role="status">
       <strong>操作完成</strong><span>{notice}</span></div>}
     {error && <div className="wf-state-banner error" role="alert">
-      <strong>工作流资产读取失败</strong><span>{error}</span>
+      <strong>工作流读取失败</strong><span>{error}</span>
       {onRefresh && <button type="button" onClick={onRefresh}>重试</button>}
     </div>}
     {warnings.map((warning, index) => <div className="wf-state-banner warning"
@@ -91,7 +97,7 @@ export function WorkflowLibrary({
           <span className="wf-workflow-mark" aria-hidden>{workflow.name.trim().slice(0, 1) || "流"}</span>
           <span className="wf-workflow-copy">
             <span className="wf-workflow-title"><strong>{workflow.name}</strong>
-              <em className={`status-${workflow.status}`}>{statusLabels[workflow.status]}</em></span>
+              <Badge variant={statusBadgeVariants[workflow.status]}>{statusLabels[workflow.status]}</Badge></span>
             <p>{workflow.description || "暂无说明，打开后可查看精确编排。"}</p>
             {/* 列表直接回答"适用于哪"(审计 P2-14),不逼人点详情 */}
             <span className="wf-workflow-scope">{applicabilityText(workflow)}</span>

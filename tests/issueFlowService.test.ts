@@ -262,7 +262,7 @@ test("问题时间线归纳(纯函数):waiting_user 未决段以 now 封口;坏�
   assert.equal(odd.span.ms, 0);
 });
 
-test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问答投影 fail-open", () => {
+test("视图旁路路由:过程文档缺失是 200 {unavailable};事件账本残行不拖垮视图", () => {
   const dataDir = mfcTemp("mfc-issue-view-");
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
@@ -276,7 +276,8 @@ test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问
     transitions: [{ at: "2026-08-26T08:30:00Z", source: "agent",
       note: "只是备注,不是阶段切换" }],
   }));
-  // 半行 JSON(写入方还在写)必须被跳过,不能让视图接口 5xx。
+  // 半行 JSON(写入方还在写)必须被跳过,不能让视图接口 5xx(时间线
+  // 等投影同账本,顺带守这条)。
   writeFileSync(join(dataDir, "issues", "issue-1", "events.jsonl"),
     '{"kind":"user_mess\n'
     + JSON.stringify({ kind: "user_message", ts: "2026-08-26T08:00:00Z",
@@ -297,12 +298,7 @@ test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问
         "问题号存在但文档缺失=200 {unavailable},不是 404");
       assert.equal(missing.body.unavailable, "文档不存在");
 
-      const dialogue = await issueGet(["issues", "issue-1", "dialogue"], service);
-      assert.equal(dialogue.status, 200);
-      assert.equal(dialogue.body.turns.length, 1,
-        "残行跳过,有效的 user_message 照投影");
-      assert.equal(dialogue.body.turns[0].kind, "user");
-      assert.equal(dialogue.body.turns[0].text, "开场");
+      // (#260 起 /issues/:id/dialogue 已随「过程问答」页签退役,路由删除。)
 
       const timeline = await issueGet(
         ["issues", "issue-1", "timeline"], service);
@@ -348,11 +344,17 @@ async function until<T>(
   probe: () => T | undefined,
   what: string,
   timeoutMs = 30_000,
+  dump?: () => string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let nextDump = Date.now() + 10_000;
   for (;;) {
     const value = probe();
     if (value !== undefined) return value;
+    if (dump && Date.now() >= nextDump) {
+      nextDump = Date.now() + 10_000;
+      console.error(`[diag ${what}] ${dump()}`);
+    }
     if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -386,6 +388,8 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 测的是提问卡→人工作答→归档闭环:钉三档把控,卡等人不代答。
+    interventionTier: () => "3",
   });
   // 种子会话没有创建回执:沿用 created.id 形状串起后续断言。
   const created = { id: "issue-1" };
@@ -394,7 +398,12 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" ? issue : undefined;
-    }, "根因确认问题卡");
+    }, "根因确认问题卡", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ reqs: model.requests.length, served: model.served.join('+'), status: i.status, stage: i.stage,
+        gate: i.gate?.kind, waiting: i.waiting ?? null,
+        note: i.stage_note?.slice(0, 60), error: i.error });
+    });
     assert.equal(waiting.stage, "analyze");
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
     assert.ok(waiting.has_analysis, "分析报告应已产出");

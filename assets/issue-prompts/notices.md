@@ -2,6 +2,10 @@
 平台主动通知文案(ADR-0016):闸门裁决后的交接词、流水线结果通知、
 催办词、环境通知。锚点命名 <域>.<名>[.<变体>],锚点是代码协议。
 {{var}} 由代码注入:{{supplement}}/{{note}} 这类可为空(代码传空串)。
+同步护栏:「请立即调 raise_gate(kind=env_verify)…结束本回合等待
+用户作答」这句举卡指引散在 green.deliver / nudge.env_verify_owed 与
+receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
+锚点是给不同场景的独立协议口,刻意不合并。
 -->
 
 ## nudge.body
@@ -90,6 +94,14 @@
 
 平台通知: 用户要求移除本会话的代码仓({{repos}})。用户主动移除=确认该仓与本问题无关,此前与之相悖的分析思路或结论应重新审视。请先重新审视与该仓相关的思路或结论、必要时修订,再调 remove_repo 逐个移除;若被平台门禁拦下(模块绑定仓/远端修复分支未清),如实向用户报告,不要强行绕过。
 
+## green.deliver
+
+平台通知: 全部 MR 流水线已跑绿({{repos}})——「提交 MR·跑绿」阶段已收口。请立即调 raise_gate 工具(kind=env_verify)把环境验证卡交给用户,然后结束本回合等待用户作答,不要自行继续,也不要做其他动作。
+
+## nudge.env_verify_owed
+
+平台催办(第 {{attempt}}/{{budget}} 次): 「提交 MR·跑绿」阶段已收口、全部流水线已跑绿,但环境验证卡还没有交给用户——请立即调 raise_gate 工具(kind=env_verify)举卡,然后结束回合等待用户作答。再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
+
 ## mr_review
 
 平台通知: CodeHub MR 收到 {{count}} 条检视意见,请逐条处理:
@@ -104,6 +116,15 @@
 
 平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch 再 create_mr。
 
-## pipeline.red.header
+## red.deliver.header
 
-平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 次红灯,仍在「提交 MR·跑绿」阶段)。
+平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 轮红灯)。失败事实如下,怎么处置由你判断——平台不再替你分诊。
+
+## red.deliver.guidance
+
+处置三选一,按证据判断:
+- 报错可定位:直接修复,修完同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看;
+- 报错原文有缺口、无法定位:不要猜改,调 raise_gate(kind=pipeline_evidence, repo={{repo}}),把缺口维度与原因写进 supplement,请用户把平台上的报错原文粘贴进卡作答;
+- 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
+举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
+

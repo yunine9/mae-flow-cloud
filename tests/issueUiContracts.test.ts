@@ -5,6 +5,8 @@ import test from "node:test";
 
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const notice = readFileSync(
+  resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
 const editor = readFileSync(
   resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 const environmentPicker = readFileSync(
@@ -15,7 +17,6 @@ const annotations = readFileSync(
   resolve("web/src/AnnotationPanel.tsx"), "utf-8");
 const launch = readFileSync(
   resolve("web/src/LaunchWorkspace.tsx"), "utf-8");
-const css = readFileSync(resolve("web/src/style.css"), "utf-8");
 const issueFlow = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
 const environmentVault = readFileSync(resolve("src/issueEnvironment.ts"), "utf-8");
 const issueService = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
@@ -26,6 +27,9 @@ const issueBoard = readFileSync(
   resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
+// #233 改锚:手写样式收敛为唯一 tailwind.css,原 web/src/style.css 已退役
+// (存量:本文件曾仍指向旧路径,整文件在模块载入即 ENOENT 全红)。
+const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
 test("混合问题卡必须逐题完整作答", () => {
   // 手动输入选项:选了它后要求填了自定义文本才算答完(不再强制选给定选项)。
@@ -47,7 +51,7 @@ test("知识全文链接只接管普通点击，保留浏览器修饰键行为",
 
 test("手工登记区分目录失败与空目录，并提供重试和真实必填口径", () => {
   assert.match(registration, /setModuleLoadError\(cause instanceof Error/);
-  assert.match(registration, /业务模块加载失败：\{moduleLoadError\}/);
+  assert.match(registration, /业务模块加载失败:\{moduleLoadError\}/);
   assert.match(registration, /重试加载/);
   assert.doesNotMatch(registration,
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
@@ -114,6 +118,49 @@ test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", (
   assert.match(registration, /title=\{ticket\.version\}/);
   assert.doesNotMatch(registration, /issue-dts-version-menu|issue-dts-version-trigger/);
   assert.doesNotMatch(registration, /"版本过滤"/, "工具栏版本过滤按钮应已退役(筛选住列头)");
+});
+
+test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026-09-14)", () => {
+  // 判定唯一口径 liveIssueFor:「已发起」= 同单号 + 名下会话非终态。
+  // 终态三元组在登记页只许住在这一处——发起查重、状态列、勾选禁用、
+  // 默认过滤全走它,结构性保证"列上标已发起 ⇔ 此刻发起会被拦"。
+  assert.match(registration,
+    /function liveIssueFor\(issues: IssueSummary\[\], ticketNo: string\)/);
+  assert.match(registration,
+    /!\["archived", "canceled", "failed"\]\.includes\(item\.status\)/);
+  assert.equal(
+    (registration.match(/"archived", "canceled", "failed"/g) ?? []).length, 1,
+    "终态三元组只许住在 liveIssueFor 一处(第二处即同尺漂移)");
+  assert.match(registration, /const clash = liveIssueFor\(issues, ticketNo\)/,
+    "发起前查重必须走同一口径函数");
+  // 列头漏斗:默认只勾「未发起」;两项全勾(或漏斗清空)才是全显,
+  // 计数条随发起过滤生效亮出 N/M。
+  assert.match(registration,
+    /<HeaderFilter label="发起状态" active=\{launchFilterActive\}/);
+  assert.match(registration,
+    /const \[showUnlaunched, setShowUnlaunched\] = useState\(true\)/);
+  assert.match(registration,
+    /const \[showLaunched, setShowLaunched\] = useState\(false\)/);
+  assert.match(registration, /已发起\(进行中\)/);
+  assert.match(registration,
+    /selectedVersions\.length > 0 \|\| launchFilterActive/);
+  // 已发起的行:勾选禁用(悬停说明),徽标可点跳进该会话;全选只
+  // 作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  assert.match(registration, /disabled=\{!!liveIssue\}/);
+  assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
+  assert.match(registration, /const selectableTickets = display/);
+  assert.match(registration,
+    /setShowUnlaunched\(true\);\s*\n\s*setShowLaunched\(false\);/);
+  // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
+  // button 不许回流(徽标走 ui/button 包装层,#256 收编纪律)。
+  assert.match(registration, /function isLiveIssue\(/);
+  assert.match(registration, /const liveIssueByTicket = useMemo/);
+  assert.doesNotMatch(registration, /hover:opacity-75/);
+  assert.match(registration,
+    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},点击打开`\}/);
+  // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
+  assert.match(issueBoard,
+    /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);
 });
 
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
@@ -324,7 +371,7 @@ test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog"
   }
 });
 
-test("过程文档可原位全屏，退出后保留当前页签", () => {
+test("分析报告可原位全屏(#260 起子页签退役,报告即本页签全部内容)", () => {
   assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen fixed/);
   assert.match(materials, /fullscreen \? "退出全屏" : "全屏查看"/);
   assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
@@ -480,16 +527,74 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
-  // 检视页签与圈注写口(记意见/提交/移除)全部收闸。
+  // 检视(行尾圈注写口与正文下方的检视区:记意见/提交/移除)全部收闸。
   assert.match(materials,
     /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
   // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
   assert.match(materials,
     /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
+  // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方。
+  // (#259 story 23 修正:已提交意见清单是纯读面,登录只读访问者也可见
+  // ——面板不再整块挂 canOperate;服务端本就登录可读,这是纯前端展示
+  // 面放宽,写边界不变。)行尾圈注写口仍在,同样收闸(reviewEnabled+
+  // canOperate 才给 Annotatable)。
   assert.match(materials,
-    /canOperate\s*\?\s*\[\{ key: REVIEW_TAB/);
+    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\}[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(materials,
-    /active === ANALYSIS_DOC && reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+    /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
+});
+
+// ---- 检视区可见性分两层(#259 story 23,ADR-0025):已提交清单纯读、
+// ---- 登录访问者都可看;草稿编辑/移除/提交写口仍收在 canOperate。
+
+test("检视区草稿写口收闸、已提交清单对只读访问者可见(#259 story 23)", () => {
+  const reviewPanel = materials.slice(
+    materials.indexOf("function IssueReviewPanel"),
+    materials.indexOf("export function IssueMaterialsPane"));
+  // 写口(草稿清单/空态指引)必须挂在 canOperate 分支下。
+  assert.match(reviewPanel, /canOperate && drafts\.length === 0 && sent\.length === 0 && <Empty/,
+    "空态里的圈注指引是写口导引,只读访问者不看");
+  assert.match(reviewPanel, /canOperate && drafts\.length > 0 && <section>/,
+    "草稿编辑与提交按钮仍收在 canOperate");
+  // 已提交清单不挂任何归属条件:纯读,spec #259 story 23 的验收面。
+  assert.match(reviewPanel, /sent\.length > 0 && <section>/,
+    "已提交意见清单对登录只读访问者可见");
+  assert.doesNotMatch(reviewPanel, /canOperate && sent\.length > 0/);
+});
+
+// ---- 意见号(#261,ADR-0025):检视区以「意见N」为主键标识,台账
+// ---- an- id 不出面;行号与原文照旧。
+
+test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id 不出面", () => {
+  // 行卡首格 = 意见号:意见号是落账硬要求(ADR-0025),恒显「意见N」
+  // ——无号降级显示已拆,系统未上线不存在无号意见。
+  assert.match(materials, /意见\{item\.seq\}/);
+  assert.doesNotMatch(materials, /item\.seq === undefined \? "意见"/);
+  // 行号/原文照旧:查看原文与锚定原文的既有呈现不动。
+  assert.match(materials, />查看原文<\/Button>/);
+  assert.match(materials, /针对 \{item\.anchor\}/);
+  // 台账 id 不再作为 UI 标识:意见卡本体不渲染 item.id(an- id 只准
+  // 留在 React key/勾稽里,不上屏)。
+  const reviewCard = materials.slice(
+    materials.indexOf("function IssueReviewItem"),
+    materials.indexOf("function IssueReviewPanel"));
+  assert.doesNotMatch(reviewCard, /item\.id/);
+});
+
+// ---- 新版干净纸面(ADR-0025):漂移检测与徽标只服务草稿;sent 意见
+// ---- 锚在自己批次的冻结版上,冻结文本永不漂移,不再带漂移徽标。
+
+test("锚点徽标只服务草稿(ADR-0025):sent 意见卡不再渲染漂移徽标", () => {
+  // 服务端:anchorChecks 只扫草稿(reviews.ts,不碰 sent)。
+  const reviewLedger = readFileSync(
+    resolve("src/issueFlow/reviews.ts"), "utf-8");
+  assert.match(reviewLedger, /reanchor\(drafts/);
+  assert.doesNotMatch(reviewLedger, /reanchor\(reviews/);
+  // 前端:徽标挂 draft 态;sent 态徽标渲染不得回流。
+  assert.match(materials,
+    /item\.status === "draft" && check && <IssueReviewBadge/);
+  assert.doesNotMatch(materials,
+    /item\.status === "sent" && <IssueReviewBadge/);
 });
 
 // ---- 问题会话单路径化(#98):前端不再感知"模式"概念,任意会话一律
@@ -654,7 +759,7 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
-    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:过程文档",
+    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:分析报告",
       "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
@@ -666,8 +771,9 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
   // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
   assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
   assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
-  // 分析报告在库的脉冲点随升格迁到「过程文档」页签(入口要找得到;
-  // 旧右栏"分析报告已产出"CTA 已随 #127 侧栏拆除一并退场)。
+  // 分析报告在库的脉冲点挂「分析报告」页签(报告是主交付物,入口要
+  // 找得到;#260 起页签即报告本身,旧右栏"分析报告已产出"CTA 已随
+  // #127 侧栏拆除一并退场)。
   assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
   // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
   assert.doesNotMatch(sessionView, /IssuePaneTabs/);
@@ -679,7 +785,8 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
-  // 只按会话层下发的 view 直渲内容,四个子视图与过程文档子页签原样。
+  // 只按会话层下发的 view 直渲内容,四个子视图原样(#260 起分析报告
+  // 视图不再有二级页签,见下方收敛断言)。
   assert.doesNotMatch(materials, /ws-pane-head/);
   assert.doesNotMatch(materials, /ws-source-switch/);
   // 词边界防误伤:SessionView 一词里就藏着 "onView" 子串。
@@ -688,9 +795,14 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   assert.match(materials, /\{view === "doc" && /);
   assert.match(materials, /\{view === "changes" && /);
   assert.match(materials, /\{view === "logs" && /);
-  // (#210)doc 子页签换 base-ui Tabs 原语;旧 .ws-tabs 皮肤类随家族退役,
-  // 改用 shadcn 默认页签皮,页签语义(键盘箭头/roving)归原语。
-  assert.match(materials, /<TabsList aria-label="过程文档页签"/);
+  // (#260 页签收敛)过程文档子页签整体退役:doc 视图只剩分析报告正文
+  // 直渲(过程问答/检视/动态 md 页签全删,报告按 ANALYSIS_DOC 常量直取),
+  // 面板内不再有二级页签条。
+  assert.doesNotMatch(materials, /<TabsList/);
+  assert.match(materials, /const ANALYSIS_DOC = "issue-analysis\.md";/);
+  assert.match(materials, /function IssueAnalysisReport\(/);
+  assert.doesNotMatch(materials,
+    /function (IssueDialogue|IssueProcessDocs)|const (REVIEW_TAB|DIALOGUE_TAB)/);
   // 页签一签一色(#231 改锚):发色原住 issue-workspace 的 nth-child
   // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
   // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
@@ -756,11 +868,11 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
   const facts = readFileSync(
     resolve("web/src/issues/IssueWaitingFacts.tsx"), "utf-8");
   assert.match(facts, /export function IssueWaitingFacts/);
-  // 样式落点(#231 改锚):#124 追加块随 issue-workspace 家族退役,
-  // 右栏皮肤走 conversation.css 的共享 ws-* 皮;流上方临时容器
+  // 样式落点(#231 改锚;#233 再改锚:conversation.css 并入唯一
+  // tailwind.css):右栏皮肤走共享 ws-* 皮;流上方临时容器
   // (issue-conv-now)的死规则已随 #125 卡座拆除清零。
   const conversationCss = readFileSync(
-    resolve("web/src/conversation.css"), "utf-8");
+    resolve("web/src/tailwind.css"), "utf-8");
   assert.match(conversationCss,
     /\.task-workspace-v2 \.ws-stream-shell > \.ws-collaboration-head/);
   assert.doesNotMatch(css, /issue-conv-now/);
@@ -1097,7 +1209,7 @@ test("协作流对齐(2026-09-08):量高折叠共用/步骤查看过程/流内�
     /<button type="button" className=\{CONV\.act\} onClick=\{onOpenEvents\}/);
   assert.match(sessionView, /onOpenEvents=\{\(\) => setTab\("events"\)\}/);
   assert.doesNotMatch(stream, /issue-conv-steps/);
-  assert.doesNotMatch(readFileSync(resolve("web/src/style.css"), "utf-8"),
+  assert.doesNotMatch(readFileSync(resolve("web/src/tailwind.css"), "utf-8"),
     /\.issue-conv-steps \{/);
   // 流内筛选:栏头「全部/需要我的」(任务侧同款 ws-stream-filters),
   // 「需要我的」口径=还开着的卡;钉在流末的当前卡不受筛选影响。
@@ -1230,10 +1342,10 @@ test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役
   assert.match(issueBoard, /startVisiblePolling\(refreshList, 5000, document\)/);
   assert.match(issueBoard, /if \(!openId\) return;/);
   // 状态轨走令牌工具类;suspended 旧内联色收编为令牌 --suspended
-  // (tokens.css 定义)。卡片轨道与状态胶囊不得再写裸色值(工作台
-  // 页签等处的同名存量字面量另有专项,不在本契约)。
+  // (#233 改锚:令牌定义并入 tailwind.css)。卡片轨道与状态胶囊不得
+  // 再写裸色值(工作台页签等处的同名存量字面量另有专项,不在本契约)。
   assert.match(issueBoard, /suspended: "bg-suspended"/);
-  const tokens = readFileSync(resolve("web/src/tokens.css"), "utf-8");
+  const tokens = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
   assert.match(tokens, /--suspended: #3b83d5/);
   assert.doesNotMatch(css, /status-suspended \.task-status-rail/);
   assert.doesNotMatch(css, /\.pill\.suspended \{ color: #3b83d5/);
@@ -1360,4 +1472,110 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   assert.doesNotMatch(metaPane, /onChanged|setDetail\(/);
   assert.match(metaPane, /已通知 Agent 处理,清单将在 Agent 执行后更新/);
   assert.doesNotMatch(metaPane, /删除成功|移除成功/);
+});
+
+// ---- #256 扫尾:焦点行断供回场、裸钮收编 ----
+
+test("列表卡焦点行:task-focus 家族 utilities 直译(#256),版式与状态点回场", () => {
+  // 旧 .task-focus 网格(7px 点轨/阶段强字/结论省略)随 style.css 退役后,
+  // IssueBoard 的类名引用成了断供(清扫确凿丢失 #1)——按二期口径在
+  // markup 直译 utilities,不经 tailwind.css;vestigial 类名一并退役。
+  // 阶段变体(human_action/blocked/external/done/inactive)是任务域词表,
+  // 从未命中问题域 stage,不搬。
+  assert.doesNotMatch(issueBoard, /task-focus/);
+  assert.match(issueBoard,
+    /grid-cols-\[7px_max-content_minmax\(0,1fr\)\] items-center gap-\[7px\]/);
+  assert.match(issueBoard, /<i aria-hidden className="size-1\.5 rounded-full bg-active" \/>/);
+  assert.match(issueBoard,
+    /<strong className="text-sm font-bold text-text-strong">\{stageLine\}<\/strong>/);
+  assert.match(issueBoard, /<span className="truncate">结论 · /);
+});
+
+test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动", () => {
+  // 看板错误横幅的两枚文字动作(跳设置/关提示)换 link 皮;换装后看板
+  // 裸钮只剩整卡进工作台的 task-summary(契约另锚,机构保留)。
+  assert.match(issueBoard, /variant="link"/);
+  assert.equal((issueBoard.match(/variant="link"/g) ?? []).length, 2,
+    "横幅两枚文字动作各一枚 link,不多收");
+  assert.doesNotMatch(issueBoard,
+    /className="cursor-pointer underline underline-offset-2"/);
+  // 会话页认证报错的补救入口同款 link 皮(修归属人凭据,查看模式不渲染)。
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  assert.match(sessionView,
+    /<Button type="button" variant="link"[\s\S]{0,220}去个人设置配置令牌\s*<\/Button>/);
+  // 关联卡两枚动作钮收编 shadcn:校验钮此前真裸奔(无任何样式落点,
+  // 浏览器默认皮直出);转正主钮的 issue-rail-primary 类退役。
+  const associate = readFileSync(
+    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
+  assert.match(associate, /import \{ Button \} from "@\/components\/ui\/button";/);
+  assert.match(associate,
+    /<Button type="button" variant="outline"[\s\S]{0,220}\{pending \? "校验中…" : "校验单号"\}\s*<\/Button>/);
+  assert.match(associate,
+    /<Button type="button" className="w-full"[\s\S]{0,220}确认转正\(继承分析报告,进入问题修改\)\s*<\/Button>/);
+  assert.doesNotMatch(associate, /issue-rail-primary/);
+});
+
+test("登记域词汇与标点体例:动词归「发起」,引号归「」,标点半角(2026-09-14 设计审查)", () => {
+  // 发起一次问题处理,域内只有一个动词「发起」(「下单」是需求域旧词,
+  // 不回流);登记页提交钮「发起分析」与 DTS 页「发起处理」同构。
+  assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
+  assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
+  assert.match(registration, /"发起中…" : "发起分析"/);
+  // 状态串引号用直角引号(隐藏远程单提示 + 无可拉取空态两处),不用
+  // 英文直引号。
+  assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
+  assert.doesNotMatch(registration, /"\{DTS_ACTIONABLE_STATUS\}"/);
+  // 资源屏蔽提示:说明与动作分离,说明句不带间隔号挂动作(动作是
+  // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
+  assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
+  assert.doesNotMatch(notice, / · /);
+});
+
+test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设计审查 04)", () => {
+  // 组件布局中性(登记页/发起页网格各自落位),登记侧包 col-span-full
+  // 落位,首行不再右半空格;inline style 硬编码字号随提示条退役。
+  assert.match(registration,
+    /<div className="col-span-full">\s*<RepositoryResourceNotice/);
+  assert.doesNotMatch(notice, /style=\{\{/);
+  assert.match(notice,
+    /rounded-\[10px\] border border-line bg-surface-muted px-3\.5 py-2\.5 text-\[13px\]/);
+  assert.match(notice, /border-current text-inherit"\s*onClick=\{\(\) => setOpen\(true\)\}\s*>\s*查看详情/);
+});
+
+test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长链断行(2026-09-14 设计审查 02)", () => {
+  // 徽标是静态胶囊,悬停底色辨不出可点:内层文字挂与单号链接同款的
+  // hover 下划线,键盘聚焦同款(focus-visible);下划线挂行内文字盒,
+  // 不依赖穿透 inline-flex。焦点环由 Button 基类 focus-visible:ring
+  // 自带(域内所有钮共享),此处锚结构钩子防 group/live 脱落。
+  assert.match(registration,
+    /variant="ghost" size="xs"\s+className="group\/live"/);
+  assert.match(registration,
+    /group-hover\/live:underline group-focus-visible\/live:underline/);
+  // 上传进行态挂 role=status,与其余进行态一致。
+  assert.match(registration,
+    /role="status">截图上传中…<\/span>/);
+  // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
+  // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
+  assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);
+  // 详情「问题链接」长 URL 断行,不撑破详情网格。
+  assert.match(registration, /<dd className="min-w-0">/);
+  assert.match(registration,
+    /text-primary underline underline-offset-2 break-all/);
+});
+
+test("DTS 勾选浮动发起条:勾选浮现粘底,发起与顶部同轨(2026-09-14 设计审查 03)", () => {
+  // 勾选数 > 0 才浮现,粘性吸底;计数、清空、发起同条。
+  assert.match(registration,
+    /selected\.length > 0 && <div className="sticky bottom-3 z-20/);
+  assert.match(registration, /已选 <b>\{selected\.length\}<\/b> 张/);
+  assert.match(registration, /onClick=\{\(\) => setSelected\(\[\]\)\}\s*>\s*清空选择/);
+  // 浮动条发起钮与顶部按钮同一套:同一 launch、同一 busy,文案与说明
+  // 一处定义(launchTitle/launchLabel)两处消费——审查改锚:不再钉
+  // 逐字双份的文案形状。
+  assert.match(registration, /const launchTitle = selected\.length > 1/);
+  assert.equal((registration.match(/title=\{launchTitle\}/g) ?? []).length, 2,
+    "顶部与浮动条各一枚发起钮 title");
+  assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 2,
+    "顶部与浮动条各一枚发起钮文案");
 });

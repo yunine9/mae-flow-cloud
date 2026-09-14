@@ -41,6 +41,8 @@ import type {
   DtsTicketDetail,
   IssueDetail,
   IssueGateCard,
+  IssueReview,
+  IssueReviewCheck,
   IssueSummary,
   IssueWaitingCard,
 } from "../web/src/api.ts";
@@ -179,11 +181,17 @@ async function until<T>(
   probe: () => T | undefined,
   what: string,
   timeoutMs = 60_000,
+  dump?: () => string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let nextDump = Date.now() + 10_000;
   for (;;) {
     const value = probe();
     if (value !== undefined) return value;
+    if (dump && Date.now() >= nextDump) {
+      nextDump = Date.now() + 10_000;
+      console.error(`[diag ${what}] ${dump()}`);
+    }
     if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -290,6 +298,10 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "MR 已创建并申报,等流水线跑绿后平台收口。" },
+    // 全绿投递回合(#246 绿灯切换):监看器收口只投递全绿事实开回合
+    // ——AI 经 raise_gate 举验证卡,平台不再代举。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户在环境验证。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -447,21 +459,30 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
   }
 });
 
-test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的已结算记录", async () => {
-  // 用户实锤(2026-09-11):一轮全绿通知后答「验证发现问题」返工,二轮
-  // 再全绿却无通知——notifyOutcome 幂等键=(taskId,status),同名状态命中
-  // 一轮已 settled 的记录被 deliverTracked 静默跳过。修复:键带轮次,
-  // 二轮状态为「待环境验证(第 2 轮)」,重放保护只属于同一事件。
+test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,二轮新卡是新事件", async () => {
+  // #246/ADR-0024 绿灯切换:旧「待环境验证(第 N 轮)」outcome 通道已删
+  // ——每轮全绿收口后平台只投递事实,AI 经 raise_gate 举验证卡,用户
+  // 通知改由等待卡通道(notifyWaitingCard)承担:同卡按 waiting_id
+  // 幂等只发一次,二轮的新卡是新事件,不撞一轮的已投递记录。
   const dataDir = mfcTemp("mfc-issue-green-renotify-");
   const origin = bareOrigin(dataDir);
   const platform = new GreenPlatform();
   await platform.start();
   const luban = new FakeLubanServer();
   await luban.start();
+  // 通知器实例提出来:waiting_id 幂等账(notifier.list)要对它核对。
+  const greenNotifier = new Notifier({
+    endpoint: luban.endpoint, backoffMs: [0],
+  });
   const commit = (message: string) =>
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const report = (summary: string) =>
     `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 证据链\\n日志:演示。\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
+  const raiseVerifyCard: Scene[] = [
+    // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举卡。
+    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+    { text: "已举卡等待用户验证。" },
+  ];
   const script: Scene[] = [
     // 一轮:拉单→拉仓→分析→确认→修复→推→MR→申报(全绿由平台假件结算)。
     { tool: { name: "dts_get_ticket", input: {} } },
@@ -478,6 +499,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "一轮 MR 已申报,等跑绿收口。" },
+    ...raiseVerifyCard,
     // 二轮:验证发现问题回退→重写报告→确认→修复→推→MR→再申报。
     { tool: { name: "bash", input: { command: report("连接池回收缺竞态保护") } } },
     { tool: { name: "submit_analysis", input: { summary: "二轮:回收竞态保护" } } },
@@ -488,6 +510,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
     { text: "二轮 MR 已申报,等跑绿再收口。" },
+    ...raiseVerifyCard,
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -501,9 +524,7 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
     opsTools: fakeOps,
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-    notifier: new Notifier({
-      endpoint: luban.endpoint, backoffMs: [0],
-    }),
+    notifier: greenNotifier,
   });
   try {
     const created = service.create({
@@ -529,14 +550,14 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
       return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
         ? issue : undefined;
     }, "一轮全绿举环境验证闸");
-    // 每轮全绿小鲁班收两条:outcome 收口通知 + 等待卡。outcome 的摘要
-    // 尾巴是「在卡上作答」,以此与卡消息区分;通知是异步旁路,断言前
-    // 等它落袋。
-    const outcomes = () => luban.messages.filter((message) =>
-      (message.text as string).includes("在卡上作答"));
-    await until(() => outcomes().length >= 1 ? true : undefined, "一轮收口通知落袋");
-    assert.equal(outcomes().length, 1, "一轮恰一条收口通知");
-    assert.doesNotMatch(outcomes()[0]!.text as string, /第 \d+ 轮/);
+    // 用户通知走等待卡通道(#246:旧 outcome 通道已删):AI 举卡即通知,
+    // 卡面问题随通知到达,人不用开网页就知道要去环境验证。通知是异步
+    // 旁路,断言前等它落袋。
+    const verifyCards = () => luban.messages.filter((message) =>
+      JSON.stringify(message).includes("请到目标环境验证修复效果"));
+    await until(() => verifyCards().length >= 1 ? true : undefined,
+      "一轮验证卡通知落袋");
+    assert.equal(verifyCards().length, 1, "一轮恰一条验证卡通知");
     // 验证发现问题 → 回退分析(轮次+1)。
     service.answer(created.id, {
       state_version: firstGate.gate!.state_version, code: "fail",
@@ -557,11 +578,17 @@ test("返工轮全绿再通知:小鲁班幂等键带轮次,二轮不撞一轮的
       return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
         ? issue : undefined;
     }, "二轮全绿再举环境验证闸");
-    // 回归点:二轮必须再收到一条收口通知,状态带轮次(不再撞一轮
-    // 已结算记录被静默吞掉)。
-    await until(() => outcomes().length >= 2 ? true : undefined, "二轮收口通知落袋");
-    assert.equal(outcomes().length, 2, "二轮必须再发一条收口通知");
-    assert.match(outcomes()[1]!.text as string, /第 2 轮:全部 MR 流水线已跑绿/);
+    // 回归点:二轮的新卡是新事件——再发一条等待卡通知;同卡只发一次
+    // 的幂等不变(notifier 按 waiting_id 记账,每张验证卡恰一条记录,
+    // 二轮的 waiting_id 随新卡新生,不撞一轮的已投递记录)。
+    await until(() => verifyCards().length >= 2 ? true : undefined,
+      "二轮验证卡通知落袋");
+    assert.equal(verifyCards().length, 2, "二轮新卡必须再发一条等待卡通知");
+    const verifyRecords = greenNotifier.list().filter((record) =>
+      JSON.stringify(record).includes("请到目标环境验证修复效果"));
+    assert.equal(verifyRecords.length, 2, "每张验证卡恰一条通知记录(同卡只发一次)");
+    assert.notEqual(verifyRecords[0]!.waiting_id, verifyRecords[1]!.waiting_id,
+      "二轮新卡是新事件(waiting_id 随卡新生)");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -643,7 +670,8 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
 
 test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定位字段)", async () => {
   /** 红灯假件:状态查询首轮即终态 failed(带不可修工具的 checks 明细),
-   * 产物端点回空清单——走最短路径触达分诊停机路的举闸。 */
+   *  产物端点回空清单——红灯结算只投事实,举卡由 AI 在投递回合里经
+   *  raise_gate 完成(#247),走最短路径触达这张卡的 wire 投影。 */
   class RedPlatform {
     private server: ReturnType<typeof createServer> | undefined;
     baseUrl = "";
@@ -694,7 +722,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   const platform = new RedPlatform();
   await platform.start();
   // 「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,监看器重挂
-  // 表直奔红灯结算的不可修分诊举闸(与 issueFlowFixed 的夹具同款)。
+  // 表直奔红灯结算的事实投递回合(与 issueFlowFixed 的夹具同款)。
   const repo = origin;
   const sha = "c".repeat(40);
   const root = join(dataDir, "issues", "issue-1");
@@ -724,7 +752,15 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       },
     },
   }));
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  // 剧本(#247):投递回合里 AI 判断红灯全部来自平台侧工具告警,经
+  // raise_gate 举不可修卡——平台不再代举,红灯事实在案是唯一前置。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: {
+      kind: "pipeline_unfixable", repo: origin,
+      supplement: "红灯全部来自 SuperChecker 平台侧告警(规则 R1),"
+        + "改代码解决不了" } } },
+    { text: "已举卡等待人工处理。" },
+  ], "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
@@ -732,7 +768,6 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    unfixableTools: ["SuperChecker"],
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
@@ -741,7 +776,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_unfixable"
         ? issue : undefined;
-    }, "不可修闸举卡");
+    }, "AI 举出不可修闸卡");
     const detail = await issueGet(["issues", "issue-1"], service);
     assert.equal(detail.status, 200);
 
@@ -750,13 +785,16 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       kind: "pipeline_unfixable",
       state_version: gated.gate!.state_version,
       question: { questions: [{
-        question: "流水线红灯(CodeCheck)全部来自不可自动修复的工具告警"
-          + "(SuperChecker)——请在交付平台处理/豁免后作答,平台会重新监看同一提交",
+        // 卡面问题=注册表模板(#247):AI 只能带事实性补充(context),
+        // 不能自创问题或选项。
+        question: "流水线红灯需要人工在交付平台处理或豁免(改代码解决不了)"
+          + "——请在交付平台处理/豁免后,在本卡作答「已在平台处理/豁免,"
+          + "重新监看」,平台会重新监看同一提交。",
         options: [{ code: "resume", label: "已在平台处理/豁免,重新监看" }],
         // 人工事实卡不派推荐:宿主核验不了平台侧是否真的处理过。
         recommended: undefined,
       }] },
-      context: "失败摘要/逐维度明细/镜像产物位置/处置指引(人话全文)",
+      context: "AI 的 supplement(事实说明:失败摘要/现场观察)",
       scope: undefined,
       skills: undefined,
       // 票 03 新形状:闸归属的仓与提交(作答续跑按它重置监看账)。
@@ -774,7 +812,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   }
 });
 
-test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", async () => {
   const dataDir = mfcTemp("mfc-issue-contract3-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
@@ -788,6 +826,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 契约快照的是"等人"的问题卡形状:钉三档把控,卡不被档位代答。
+    interventionTier: () => "3",
   });
   try {
     // 无单登记门禁(#17):要模块+环境;夹具仓不参与本测试的断言,
@@ -808,7 +848,12 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
-    }, "Agent 问题卡");
+    }, "Agent 问题卡", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ reqs: model.requests.length, served: model.served.join('+'), status: i.status, stage: i.stage,
+        gate: i.gate?.kind, waiting: i.waiting ?? null,
+        note: i.stage_note?.slice(0, 60), error: i.error });
+    });
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
@@ -1014,6 +1059,72 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
     const receipt = JSON.stringify(created.body);
     assert.ok(!receipt.includes("page-pw"), "页面密码本体不过线");
     assert.ok(!receipt.includes("backend-pw"), "后台密码本体不过线");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+// ---- 检视意见 wire(#261):GET /issues/:id/reviews 投出的 Annotation
+// ---- 与 web/src/api.ts 的 IssueReview 逐键对账;意见号(seq)过线。
+
+test("契约快照:检视意见投影(意见号 seq 过线;reviews+checks 全形状)", async () => {
+  const dataDir = mfcTemp("mfc-issue-contract6-");
+  createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "收单与清结算",
+    owner: "dev", repositories: ["/tmp/fixture.git"],
+  }, "tester");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const created = await issuePost(["issues"], {
+      account: "dev", title: "下单超时", module_id: "pay-core",
+      environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
+    }, service);
+    assert.equal(created.status, 201);
+    const id = created.body.id as string;
+
+    const added = await issuePost(["issues", id, "reviews"], {
+      line: 3, anchor: "根因:重试无上限", note: "加重试上限",
+      quote: "根因:重试无上限。", line_end: 4,
+    }, service);
+    assert.equal(added.status, 200);
+    assert.equal(added.body.seq, 1, "意见号在落账口分配并过线(#261)");
+
+    // 期望侧按 web/src/api.ts 的 IssueReview 手写;undefined 键 = 可选。
+    const sample: IssueReview = {
+      quote: "根因:重试无上限。",
+      line_end: 4,
+      id: "an-x",
+      seq: 1,
+      author: "dev",
+      created_at: "2026-09-13T00:00:00.000Z",
+      artifact: "issue-analysis.md",
+      file: "issue-analysis.md",
+      line: 3,
+      anchor: "根因:重试无上限",
+      context_before: undefined,
+      context_after: undefined,
+      note: "加重试上限",
+      kind: "doc",
+      status: "draft",
+      sent_at: undefined,
+      sent_via: undefined,
+      edited_at: undefined,
+    };
+    // 报告还没生成:锚点检测按 fail-open 全 hit(位置未验证)。
+    const checkSample: IssueReviewCheck = {
+      location_verified: false,
+      id: "an-x",
+      state: "hit",
+      line: 3,
+      now: undefined,
+    };
+    const list = await issueGet(["issues", id, "reviews"], service);
+    assert.equal(list.status, 200);
+    assert.equal(list.body.review_active, false);
+    assertWireShape({ reviews: [sample], checks: [checkSample], review_active: false },
+      list.body, "GET /issues/:id/reviews");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

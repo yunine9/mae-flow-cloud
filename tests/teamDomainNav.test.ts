@@ -86,8 +86,12 @@ test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)
 });
 
 test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {
-  // 概览:team-delivery-overview 同一套类名;阶段/状态两组格。
-  assert.match(issueWorld, /className="team-delivery-overview"/);
+  // 概览:与需求侧同一套外观配方(#233 去 legacy 化后 skin 类退役,
+  // 同款契约由 b0cfe8d 引入的 CELL_BASE 工具类配方承担,与 App.tsx
+  // TeamDeliveryOverview 的 CELL_BASE 同文本,teamDashboardLayout 同锚)。
+  assert.match(issueWorld, /aria-label="问题处理概览"/);
+  assert.match(issueWorld, /const CELL_BASE = "flex min-h-\[38px\][^"]*rounded-lg border border-line bg-surface px-\[11px\] py-1\.5[^"]*disabled:opacity-55"/,
+    "概览格与需求侧共用 38px 紧凑筛选格配方(disabled 随 count 置灰)");
   assert.match(issueWorld, /id="issue-delivery-stage-title"/);
   assert.match(issueWorld, /id="issue-delivery-status-title"/);
   // 概览数据走新口径函数(与需求侧 teamDeliveryBreakdown 同构)。
@@ -109,11 +113,16 @@ test("团队问题页:概览+现场在当前面板,队列空态与需求侧同�
 });
 
 test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", () => {
-  // 骨架四件套与需求侧成果档案同款。
-  assert.match(issueWorld, /className="history-board"/);
-  assert.match(issueWorld, /className="history-intro"/);
-  assert.match(issueWorld, /<h2>成果档案·问题闭环<\/h2>/);
-  assert.match(issueWorld, /className="history-metrics"/);
+  // 骨架四件套与需求侧成果档案同款(#233 后 history-* 皮肤类退役,
+  // 同款契约由与 HistoryBoard 逐字相同的工具类配方承担,见 b0cfe8d)。
+  assert.match(issueWorld, /aria-label="成果档案·问题闭环"/);
+  assert.match(issueWorld,
+    /flex items-center justify-between gap-6 rounded-xl border border-line\s*\n\s*bg-surface px-6 py-\[22px\] shadow-xs/,
+    "档案头卡与 HistoryBoard 同配方");
+  assert.match(issueWorld, /<h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环<\/h2>/);
+  assert.match(issueWorld, /grid grid-cols-2 gap-2\.5 min-\[1081px\]:grid-cols-4/);
+  assert.match(issueWorld, /flex min-h-\[94px\] flex-col justify-between rounded-lg border border-line bg-surface px-\[15px\] py-3\.5 shadow-xs/,
+    "结论指标瓦片与 HistoryBoard 指标瓦片同配方");
   assert.match(issueWorld, /<EmptyTitle>还没有闭环的问题会话<\/EmptyTitle>/);
   assert.match(issueWorld, /conclusion\?\.kind === kind/);
   // 档案列表仍用会话卡(内容差异),不再与现场平铺在同一页。
@@ -183,7 +192,8 @@ test("问题侧概览口径:空集合也出全集格子(0 展示但不虚报)", 
 
 test("档案措辞:需求侧「交付档案」统一改为「成果档案」,两域并列", () => {
   assert.match(app, /<strong[^>]*>成果档案<\/strong>/);
-  assert.match(historyBoard, /<h2>成果档案<\/h2>/);
+  // #233 去 legacy 化(b0cfe8d)后 h2 带 Tailwind 类,锚随迁放宽标签属性。
+  assert.match(historyBoard, /<h2[^>]*>成果档案<\/h2>/);
   for (const [name, source] of [["App", app],
     ["HistoryBoard", historyBoard], ["HelpCenter", helpCenter]] as const) {
     assert.doesNotMatch(source, /交付档案/,

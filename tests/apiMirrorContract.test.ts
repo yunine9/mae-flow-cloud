@@ -99,3 +99,45 @@ test("任务摘要:服务端 TaskSummary 的每个字段都在 api.ts 镜像里"
   const stale = [...NOT_MIRRORED].filter((field) => !server.has(field));
   assert.deepEqual(stale, [], `豁免表里有服务端已经不存在的字段: ${stale.join(", ")}`);
 });
+
+// ---- 检视意见(#261):问题域的检视 wire 是 GET /issues/:id/reviews 投出的
+// ---- Annotation(src/annotations.ts,需求流共用的全量形状),镜像在
+// ---- web/src/api.ts 的 IssueReview。Annotation 每个字段都必须在镜像里,
+// ---- 或在下表写明"问题域 wire 为什么不出它"。
+
+/** 服务端 Annotation 有、IssueReview 刻意不镜像的字段(全是需求流闭环/
+ * 协作检视的形状,问题域不存在这些通道;问题域闭环靠修订版报告的
+ * 「检视意见回应」段与分析确认卡的整体把关,ADR-0007/ADR-0025)。 */
+const REVIEW_NOT_MIRRORED = new Set<string>([
+  "route",              // 需求流的路由(owner_reply/decision/memory);问题域恒 agent
+  "assignee",           // 责任人指派;问题会话没有协作检视
+  "images",             // 附图是需求流批注写口;问题域圈注不收图(routes 不收该参)
+  "sent_by",            // 问题域提交 markSent 不带 by,投影恒缺席
+  "agent_assigned",     // 需求流交接锁
+  "agent_context",      // 责任人转交补充说明
+  "response",           // Agent 逐条回执;问题域不落逐条回执
+  "owner_reply",        // 责任人原话记账
+  "verified_at",        // 逐条确认是需求流闭环;问题域整卡确认
+  "verified_by",
+  "resolution",         // 逐条处置(fixed/not_adopted/…)
+  "needs_owner_closure",// 责任人闭环标记
+  "withdrawal_requested",
+  "rework",             // 正文版本计数;问题域意见改字走软删重记
+  "returned",           // 退回次数
+  "reopened",           // reopen 投影
+  "anchor_was",         // 返工历史锚点
+  "clarifications",     // Agent 追问留档
+]);
+
+test("检视意见:Annotation 的每个字段都在 IssueReview 镜像里或有豁免", () => {
+  const server = interfaceFields("src/annotations.ts", "Annotation");
+  const mirror = interfaceFields("web/src/api.ts", "IssueReview");
+  const missing = [...server].filter((field) => !mirror.has(field)
+    && !REVIEW_NOT_MIRRORED.has(field)
+    // 父字段已豁免的,子字段一并豁免
+    && ![...REVIEW_NOT_MIRRORED].some((allowed) => field.startsWith(`${allowed}.`)));
+  assert.deepEqual(missing, [],
+    `检视 wire 有而前端镜像没有的字段(补进 IssueReview,或写明理由加进 REVIEW_NOT_MIRRORED): ${missing.join(", ")}`);
+  const stale = [...REVIEW_NOT_MIRRORED].filter((field) => !server.has(field));
+  assert.deepEqual(stale, [], `豁免表里有服务端已经不存在的字段: ${stale.join(", ")}`);
+});

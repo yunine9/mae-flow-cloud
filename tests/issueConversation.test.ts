@@ -1,7 +1,7 @@
 /**
  * 问题域协作流投影(ADR-0018:问题工作台复用任务工作台,协作流吃
  * 同形状成员)的契约测试:事件账本 → 会话流条目,纯函数接缝,不碰
- * HTTP。先例:projectDialogue 的事件投影测试(issueDocuments)。
+ * HTTP。
  */
 
 import { test } from "node:test";

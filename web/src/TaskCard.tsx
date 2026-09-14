@@ -341,14 +341,14 @@ export function TaskCard({
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 pb-3 text-xs">
         {onOpenArtifacts && !chainReview && (
-          <button type="button"
-            className="inline-flex cursor-pointer items-center gap-1 text-muted-foreground underline-offset-2 hover:text-text-strong hover:underline"
+          <Button type="button" variant="link" size="sm"
+            className="h-auto gap-1 self-center px-0 text-muted-foreground underline-offset-2 hover:text-text-strong"
             onClick={onOpenArtifacts}>
             <span>{chainReview ? "检视方案与依赖图" : "进入任务工作台"}</span>
             <svg viewBox="0 0 16 16" aria-hidden className="size-3.5">
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>
-          </button>
+          </Button>
         )}
         {task.delivery?.mr_url && (
           <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
@@ -1049,10 +1049,11 @@ export function WaitingCard({
               <Markdown text={contextText} />
             </div>
             {collapsible && (
-              <button type="button" className="context-toggle"
+              <Button type="button" variant="outline" size="xs"
+                className="mt-1.5 w-fit self-start text-ink hover:bg-accent-soft"
                 onClick={() => setContextOpen((value) => !value)}>
                 {contextOpen ? "收起背景" : `展开全部背景（共 ${contextLines} 行）`}
-              </button>
+              </Button>
             )}
           </div>
         );
@@ -1257,9 +1258,11 @@ export function WaitingCard({
         </div>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">
           {!notesOpen ? (
-            <button type="button" onClick={() => setNotesOpen(true)}>
+            <Button type="button" variant="link" size="sm"
+              className="h-auto justify-start px-0 text-left text-muted-foreground hover:text-text-strong"
+              onClick={() => setNotesOpen(true)}>
               {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
-            </button>
+            </Button>
           ) : (
             <label>
               <span>{isReviewDecision
@@ -1292,18 +1295,18 @@ export function WaitingCard({
         {conflict && <Alert variant="destructive" role="alert"
           className={`mb-3${showDeliveryCompileActions ? " basis-full" : ""}`}>{conflict}</Alert>}
         {showDeliveryCompileActions ? (
-          <div className="decision-submit-choices" aria-label="清单调整后的提交方式">
-            <button type="button" className="submit-decision secondary"
+          <div className="decision-submit-choices flex-wrap" aria-label="清单调整后的提交方式">
+            <Button type="button" variant="outline" className="flex-1"
               disabled={!ready} onClick={() => submit("rerun")}>
               {submitting ? "正在提交…" : "重新编译后提交"}
-            </button>
-            <button type="button" className="submit-decision"
+            </Button>
+            <Button type="button" className="flex-1"
               disabled={!ready} onClick={() => submit("skip")}>
               {submitting ? "正在提交…" : "不再编译，直接提交"}
               <svg viewBox="0 0 20 20" aria-hidden>
                 <path d="m4 10 3.2 3.2L16 5.5" />
               </svg>
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex justify-end">
@@ -1367,17 +1370,17 @@ export function WaitingCard({
               {pushReview.has_focused_changes && (
                 activeDeliveryScope === "changes"
                   ? <span className="current" role="status">正在看这次改的</span>
-                  : <button type="button" className="primary"
+                  : <Button type="button" size="sm"
                       onClick={() => onLocateDelivery("changes")}>
                       看这次改的
-                    </button>
+                    </Button>
               )}
               {activeDeliveryScope === "full"
                 ? <span className="current" role="status">正在看全部改动</span>
-                : <button type="button"
+                : <Button type="button" variant="outline" size="sm"
                     onClick={() => onLocateDelivery("full")}>
                     看全部改动
-                  </button>}
+                  </Button>}
             </div>
           )}
         </section>
@@ -1410,8 +1413,9 @@ export function WaitingCard({
             </div>
           )}
           {onLocateDelivery && (
-            <button type="button" className="delivery-locate"
-              onClick={() => onLocateDelivery("full")}>去代码改动里选文件</button>
+            <Button type="button" variant="outline" size="sm"
+              className="mx-5 mb-3.5 mt-0 w-fit self-start"
+              onClick={() => onLocateDelivery("full")}>去代码改动里选文件</Button>
           )}
         </section>
       )}

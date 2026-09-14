@@ -25,7 +25,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight, Columns3, Filter, RotateCw, Sparkles } from "lucide-react";
+import { ChevronRight, Columns3, RotateCw, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -46,6 +46,7 @@ import {
   type IssueSummary,
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
+import { HeaderFilter } from "../HeaderFilter";
 import { Markdown } from "../markdown";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { prepareDtsHtml } from "./dtsHtml";
@@ -100,21 +101,39 @@ function repoLabel(url: string): string {
   return last.replace(/\.git$/i, "") || url;
 }
 
+/** 名下进行中会话按单查重的唯一口径(「已发起」词条,CONTEXT.md):
+ * 同单号且会话未到终态(归档/取消/失败)。发起前查重与列表的发起
+ * 状态列/勾选禁用/默认过滤全走这一处——列上说"已发起"当且仅当此刻
+ * 点发起会被拦;只有终态旧会话的单不算,可再次发起(与服务端 create
+ * 守卫同尺)。终态三元组只住 isLiveIssue 一处。 */
+function isLiveIssue(item: IssueSummary): boolean {
+  return !["archived", "canceled", "failed"].includes(item.status);
+}
+
+function liveIssueFor(issues: IssueSummary[], ticketNo: string):
+  IssueSummary | undefined {
+  return issues.find((item) => item.ticket === ticketNo && isLiveIssue(item));
+}
+
 export function IssueRegistration({
   viewer,
   issues,
   onCreated,
   onError,
   onNavigateProfile,
+  onOpenIssue,
   panel,
   visible = true,
 }: {
   viewer: AuthUser;
-  /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦)。 */
+  /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦);
+   * 2026-09-14 起也是发起状态列/默认过滤的判定数据(liveIssueFor)。 */
   issues: IssueSummary[];
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
+  /** 点「进行中」徽标跳进该单名下的进行中会话(IssueBoard 的 openIssue)。 */
+  onOpenIssue?: (issueId: string) => void;
   /** 面板受控态(必传):当前面板由导航子页签决定——「问题登记/DTS列表」
    * 两个子页签各接管一个面板,内部不再自持页签按钮。 */
   panel: "dts" | "manual";
@@ -133,7 +152,7 @@ export function IssueRegistration({
     </div>
     <div hidden={panel !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
-        onCreated={onCreated} onError={onError} />
+        onCreated={onCreated} onError={onError} onOpenIssue={onOpenIssue} />
     </div>
   </section>;
 }
@@ -324,7 +343,11 @@ function ManualRegister({
   }
 
   return <form className="grid grid-cols-2 gap-3 max-[680px]:grid-cols-1" onSubmit={submit}>
-    <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
+    {/* 资源屏蔽提示跨全列(2026-09-14 设计审查 04):组件保持布局中性,
+        落位由本域网格决定——不再首行右半空格。 */}
+    <div className="col-span-full">
+      <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
+    </div>
     <div className={GROUP}>
       <span className="text-[13px] font-bold leading-tight text-primary">问题信息</span>
       <div className={GROUP_BODY}>
@@ -342,7 +365,7 @@ function ManualRegister({
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground">截图上传中…</span>}
+            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground" role="status">截图上传中…</span>}
             {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
             <Button type="button" variant="ghost" size="xs"
               disabled={!description.trim() || polishing}
@@ -398,7 +421,7 @@ function ManualRegister({
             </>}
           </span>
           {moduleLoadError && <small className="col-span-full flex items-center justify-between gap-2.5 rounded-lg border border-destructive/35 px-2.5 py-2 text-destructive max-[680px]:flex-col max-[680px]:items-stretch" role="alert">
-            <span>业务模块加载失败：{moduleLoadError}</span>
+            <span>业务模块加载失败:{moduleLoadError}</span>
             <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
               onClick={() => setModuleLoadAttempt((value) => value + 1)}>
               重试加载
@@ -422,7 +445,7 @@ function ManualRegister({
         </div>
         {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
           将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
-          (以选定时为准),无需在此填写。密码不会出现在页面或事件流，
+          (以选定时为准),无需在此填写。密码不会出现在页面或事件流,
           但会在执行问题处理时明文进入当前 AI 上下文。
         </small>}
 
@@ -432,7 +455,7 @@ function ManualRegister({
       onNavigateProfile={onNavigateProfile} />
     <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
       <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
-        {busy ? "分析中…" : "开始分析"}
+        {busy ? "发起中…" : "发起分析"}
       </Button>
     </div>
     {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
@@ -478,14 +501,17 @@ function DtsRegister({
   active,
   onCreated,
   onError,
+  onOpenIssue,
 }: {
   viewer: AuthUser;
-  /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦)。 */
+  /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦);
+   * 发起状态列/默认过滤同尺共用(liveIssueFor)。 */
   issues: IssueSummary[];
   /** 页签是否激活:首次激活自动拉取一次名下问题单,之后手动刷新。 */
   active: boolean;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
+  onOpenIssue?: (issueId: string) => void;
 }) {
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
@@ -516,11 +542,31 @@ function DtsRegister({
       && module.repositories.length > 0),
   [modules]);
 
-  // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
+  // 模糊搜索:单号/标题/版本,大小写不敏感;列头过滤叠加其上。
   const [query, setQuery] = useState("");
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
-  // 版本过滤弹层的展开态(shadcn Popover 受控;点外/Esc 关闭归它管)。
-  const [versionOpen, setVersionOpen] = useState(false);
+  // 列头包含式过滤(2026-09-13 表头化,单号/标题两枚漏斗;与工具栏
+  // 搜索 AND 叠加,只作用于名下列表——远程补查单豁免)。版本过滤的
+  // 入口同批迁进「版本」列表头漏斗,行为等价迁移。
+  const [ticketFilter, setTicketFilter] = useState("");
+  const [titleFilter, setTitleFilter] = useState("");
+  // 发起过滤(2026-09-14 拍板):「发起状态」列表头漏斗,默认只看未
+  // 发起的单——已发起(名下有进行中会话)的行默认滤掉且勾选禁用。
+  // 两项全勾 = 全显 = 无过滤;打开/刷新回默认态,漏斗清空是全显。
+  const [showUnlaunched, setShowUnlaunched] = useState(true);
+  const [showLaunched, setShowLaunched] = useState(false);
+  const launchFilterActive = !showUnlaunched || !showLaunched;
+  // 名下进行中会话按单索引:发起过滤、全选可勾行、逐行徽标/禁用同吃
+  // 一份,免得各自全表扫;口径仍是 isLiveIssue 一处。
+  const liveIssueByTicket = useMemo(() => {
+    const map = new Map<string, IssueSummary>();
+    issues.forEach((item) => {
+      if (item.ticket && isLiveIssue(item) && !map.has(item.ticket)) {
+        map.set(item.ticket, item);
+      }
+    });
+    return map;
+  }, [issues]);
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -563,15 +609,27 @@ function DtsRegister({
       : [versions[0]]);
   }, [versions]);
 
+  // 列头过滤谓词(单号/标题):包含匹配,大小写不敏感;与工具栏搜索
+  // AND 叠加。只作用于名下列表,远程补查单不经这道筛。
+  const columnFiltered = useMemo(() => {
+    if (!fuzzyMatches) return undefined;
+    const byTicket = ticketFilter.trim().toLowerCase();
+    const byTitle = titleFilter.trim().toLowerCase();
+    if (!byTicket && !byTitle) return fuzzyMatches;
+    return fuzzyMatches.filter((t) =>
+      (!byTicket || t.ticket.toLowerCase().includes(byTicket))
+      && (!byTitle || t.title.toLowerCase().includes(byTitle)));
+  }, [fuzzyMatches, ticketFilter, titleFilter]);
+
   const versionFiltered = useMemo(() => {
-    const list = fuzzyMatches;
+    const list = columnFiltered;
     if (!list) return undefined;
     if (selectedVersions.length === 0) return list;
     // 命中口径与汇总同尺:单据版本剥掉 B 段后落在勾选的组里即命中
     // (组内所有 B 版构建号一并带出)。
     return list.filter((t) => t.version
       && selectedVersions.includes(dtsVersionGroup(t.version)));
-  }, [fuzzyMatches, selectedVersions]);
+  }, [columnFiltered, selectedVersions]);
 
   // 远程查单:本地搜索为空且输入像 DTS 单号(字母开头+数字,长 >=5,
   // 支持逗号分隔多个)时,自动远程查详情并作为结果入列。防抖 500ms +
@@ -623,33 +681,41 @@ function DtsRegister({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, tickets, fuzzyEmpty]);
 
-  // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重);清空搜索框时
-  // 远程结果随 effect 复位消失,恢复展示名下全部问题单。远程命中的单
-  // 也只展示可发起状态;被状态挡下的汇总一条提示,不让用户以为单号不存在。
+  // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重),再过发起
+  // 过滤(名下与远程补查单同尺适用)。清空搜索框时远程结果随 effect
+  // 复位消失,恢复展示名下全部问题单。远程命中的单也只展示可发起状态;
+  // 被状态挡下的汇总一条提示,不让用户以为单号不存在。
   const remoteTickets = remote.tickets;
   const hiddenRemote = remoteTickets.filter((t) => !isActionableDts(t));
   const display = useMemo(() => {
     const list = versionFiltered ?? [];
     const extra = remoteTickets.filter((r) =>
       isActionableDts(r) && !list.some((item) => item.ticket === r.ticket));
-    return [...list, ...extra];
-  }, [versionFiltered, remoteTickets]);
+    const merged = [...list, ...extra];
+    if (!launchFilterActive) return merged;
+    return merged.filter((t) => liveIssueByTicket.has(t.ticket)
+      ? showLaunched : showUnlaunched);
+  }, [versionFiltered, remoteTickets, launchFilterActive, showUnlaunched,
+    showLaunched, liveIssueByTicket]);
 
-  // 全选表头(三态):只作用于当前展示列表(搜索+版本过滤后)——全中时
-  // 点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在展示
-  // 列表里,保持原样,发起时照常带上。
-  const displayedTickets = display.map((t) => t.ticket);
+  // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
+  // 过滤划范围,发起过滤里已发起的行勾选禁用,不在全选之列。可勾行全
+  // 中时点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在
+  // 展示列表里,保持原样,发起时照常带上。
+  const selectableTickets = display
+    .filter((t) => !liveIssueByTicket.has(t.ticket))
+    .map((t) => t.ticket);
   const displayedSelectedCount =
-    displayedTickets.filter((no) => selected.includes(no)).length;
-  const allDisplayedSelected = displayedTickets.length > 0
-    && displayedSelectedCount === displayedTickets.length;
+    selectableTickets.filter((no) => selected.includes(no)).length;
+  const allDisplayedSelected = selectableTickets.length > 0
+    && displayedSelectedCount === selectableTickets.length;
   function toggleSelectAll() {
     if (allDisplayedSelected) {
-      const shown = new Set(displayedTickets);
+      const shown = new Set(selectableTickets);
       setSelected((current) => current.filter((no) => !shown.has(no)));
     } else {
       setSelected((current) =>
-        [...new Set([...current, ...displayedTickets])]);
+        [...new Set([...current, ...selectableTickets])]);
     }
   }
 
@@ -664,7 +730,10 @@ function DtsRegister({
     setQuery("");
     setSelected([]);
     setSelectedVersions([]);
-    setVersionOpen(false);
+    setTicketFilter("");
+    setTitleFilter("");
+    setShowUnlaunched(true);
+    setShowLaunched(false);
     setExpandedTicket(null);
     try {
       const result = await listDtsTickets();
@@ -762,8 +831,9 @@ function DtsRegister({
     let first: IssueSummary | undefined;
     try {
       for (const ticketNo of selected) {
-        const clash = issues.find((item) => item.ticket === ticketNo
-          && !["archived", "canceled", "failed"].includes(item.status));
+        // 查重与发起状态列同尺(liveIssueFor 一处口径):列上没标
+        // 「进行中」的单,走到这里也不会被这条拦下。
+        const clash = liveIssueFor(issues, ticketNo);
         if (clash) {
           failures.push(`${ticketNo} → 已有进行中的问题会话(${clash.id})`);
           continue;
@@ -801,51 +871,33 @@ function DtsRegister({
     }
   }
 
+  /** 发起钮文案与说明一处定义,顶部工具栏与浮动发起条两处消费(设计
+   * 审查 04 复审:同一动作的措辞不再逐字双份,改一处两处生效)。 */
+  const launchTitle = selected.length > 1
+    ? `将逐张发起 ${selected.length} 个独立工作流` : undefined;
+  const launchLabel = busy ? "发起中…"
+    : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理";
+
   return <div className="tw-root flex flex-col gap-3 text-base text-foreground">
     {dtsMock && <p className="rounded-md border border-attention/40 bg-attention-soft px-3 py-2 text-sm text-ink" role="note">
-      DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
+      DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-    {/* 工具栏与环境管理台账同款范式:搜索+筛选居左,刷新/主操作居右。 */}
+    {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
+        (2026-09-13 表头化,与环境管理台账同范式,旧「版本过滤」
+        按钮随迁移退役)。 */}
     <div className="flex flex-wrap items-center gap-2">
       <Input type="search" className="h-9 w-full sm:w-80" value={query}
         aria-label="搜索问题单"
         placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
         onChange={(e) => setQuery(e.target.value)} />
-      {versions.length > 0 && <Popover open={versionOpen} onOpenChange={setVersionOpen}>
-        <PopoverTrigger render={<Button type="button" variant="outline" size="sm"
-          aria-pressed={selectedVersions.length > 0}
-          title={selectedVersions.length
-            ? `按 ${selectedVersions.length} 个版本组过滤(组内全部 B 版都命中)`
-            : "按版本组过滤问题单"}>
-          <Filter aria-hidden className="size-3.5" />
-          {selectedVersions.length ? `版本(已选 ${selectedVersions.length})` : "版本过滤"}
-        </Button>} />
-        <PopoverContent align="start" className="w-72 p-1">
-          {versions.map((version) => <label key={version}
-            className="flex min-h-11 cursor-pointer items-center gap-2.5
-              rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-            <Checkbox checked={selectedVersions.includes(version)}
-              onCheckedChange={(checked) => setSelectedVersions((prev) => checked
-                ? [...prev, version]
-                : prev.filter((item) => item !== version))} />
-            <span className="font-mono text-xs">{version}</span>
-          </label>)}
-          {selectedVersions.length > 0 && <div className="mt-1 border-t border-line pt-1">
-            <button type="button"
-              className="w-full rounded-md px-2 py-1.5 text-left text-sm
-                text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => setSelectedVersions([])}>清除全部筛选</button>
-          </div>}
-        </PopoverContent>
-      </Popover>}
       {/* 列显示/隐藏(shadcn 惯用法):表格原语本身不带列开关,这里按
           Data Table 的列选择器形态用 Popover+Checkbox 承载,暂只有
           「所属模块」一列可选,后续加列在这里长。localStorage 按用户
           记忆(键沿用旧开关的,老用户偏好不丢)。 */}
       <Popover>
         <PopoverTrigger render={<Button type="button" variant="ghost" size="sm"
-          aria-label="列设置" aria-pressed={moduleCol}
+          aria-label="列设置"
           title="显示或隐藏「所属模块」列">
           <Columns3 aria-hidden className="size-3.5" />列
         </Button>} />
@@ -864,7 +916,8 @@ function DtsRegister({
       </Popover>
       {remote.loading
         ? <span className="text-xs text-muted-foreground" role="status">远程查单中…</span>
-        : (query || selectedVersions.length > 0) && <span
+        : (query || ticketFilter.trim() || titleFilter.trim()
+          || selectedVersions.length > 0 || launchFilterActive) && <span
             className="text-xs text-muted-foreground">
           {display.length} / {actionable?.length ?? 0} 条
         </span>}
@@ -876,9 +929,8 @@ function DtsRegister({
         {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}
       </Button>
       <Button size="sm" disabled={!selected.length || busy}
-        title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
-        onClick={launch}>
-        {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
+        title={launchTitle} onClick={launch}>
+        {launchLabel}
       </Button>
     </div>
     {tickets === undefined && loading && <p className="text-sm text-muted-foreground">
@@ -887,7 +939,7 @@ function DtsRegister({
     {hiddenRemote.length > 0 && <p className="rounded-md border border-line
       bg-muted/40 px-3 py-2 text-xs text-muted-foreground" role="note">
       {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
-      "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
+      「{DTS_ACTIONABLE_STATUS}」,不在可拉取范围。
     </p>}
     {tickets && tickets.length > 0 && <>
       {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
@@ -899,31 +951,119 @@ function DtsRegister({
           : <div className="flex flex-col items-center gap-2 rounded-lg border
               border-dashed border-line px-6 py-10 text-center">
             <p className="text-sm text-muted-foreground">没有匹配的问题单。</p>
+            {/* 清空 = 全显(发起过滤两项全勾),与版本过滤现行行为一致
+                ——回到默认态(只看未发起)只发生在打开/刷新。 */}
             <Button variant="outline" size="sm"
-              onClick={() => { setQuery(""); setSelectedVersions([]); }}>
-              清空搜索与版本过滤</Button>
+              onClick={() => {
+                setQuery("");
+                setTicketFilter("");
+                setTitleFilter("");
+                setSelectedVersions([]);
+                setShowUnlaunched(true);
+                setShowLaunched(true);
+              }}>
+              清空搜索与筛选</Button>
           </div>)
         : <div className="overflow-x-auto rounded-lg border border-line">
+          {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
+              旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
+              在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
           <Table aria-label="名下问题单">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-28">
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
-                      checked={displayedTickets.length > 0
+                      checked={selectableTickets.length > 0
                         && allDisplayedSelected}
                       indeterminate={!allDisplayedSelected
                         && displayedSelectedCount > 0}
                       onCheckedChange={() => toggleSelectAll()} />
                     <span className="whitespace-nowrap text-xs font-normal
                       text-muted-foreground">
-                      已选 {displayedSelectedCount} / {displayedTickets.length} 张
+                      已选 {displayedSelectedCount} / {selectableTickets.length} 张
                     </span>
                   </div>
                 </TableHead>
-                <TableHead>单号</TableHead>
-                <TableHead className="w-full">标题</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center gap-1">
+                    单号
+                    <HeaderFilter label="单号" active={!!ticketFilter.trim()}
+                      onClear={() => setTicketFilter("")}>
+                      {() => <Input autoFocus
+                        className="h-8 w-full rounded-md px-2 text-sm"
+                        placeholder="包含单号片段…" aria-label="按单号过滤"
+                        value={ticketFilter}
+                        onChange={(event) => setTicketFilter(event.target.value)} />}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
+                <TableHead className="w-full">
+                  <span className="inline-flex items-center gap-1">
+                    标题
+                    <HeaderFilter label="标题" active={!!titleFilter.trim()}
+                      onClear={() => setTitleFilter("")}>
+                      {() => <Input autoFocus
+                        className="h-8 w-full rounded-md px-2 text-sm"
+                        placeholder="包含标题片段…" aria-label="按标题过滤"
+                        value={titleFilter}
+                        onChange={(event) => setTitleFilter(event.target.value)} />}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
+                {/* 版本列(2026-09-13 表头化):展示含 B 版构建号的完整
+                    版本(截断后悬停可见全串),过滤只认版本组——漏斗
+                    弹层沿旧「版本过滤」的分组清单(勾组带全组 B 版),
+                    44px 触控目标由选项行 min-h-11 保留。 */}
+                <TableHead className="w-64">
+                  <span className="inline-flex items-center gap-1">
+                    版本
+                    {versions.length > 0 && <HeaderFilter label="版本" contentClassName="w-72"
+                      active={selectedVersions.length > 0}
+                      onClear={() => setSelectedVersions([])}>
+                      {() => <div className="flex flex-col">
+                        {versions.map((version) => <label key={version}
+                          className="flex min-h-11 cursor-pointer items-center gap-2.5
+                            rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={selectedVersions.includes(version)}
+                            onCheckedChange={(checked) => setSelectedVersions((prev) => checked
+                              ? [...prev, version]
+                              : prev.filter((item) => item !== version))} />
+                          <span className="font-mono text-xs">{version}</span>
+                        </label>)}
+                      </div>}
+                    </HeaderFilter>}
+                  </span>
+                </TableHead>
                 <TableHead>状态</TableHead>
+                {/* 发起状态列(2026-09-14):本平台有没有发起过——判定
+                    与发起拦截同尺(liveIssueFor 一处口径),漏斗默认只
+                    看未发起;徽标可点,跳进该单名下的进行中会话。 */}
+                <TableHead className="w-24">
+                  <span className="inline-flex items-center gap-1">
+                    发起状态
+                    <HeaderFilter label="发起状态" active={launchFilterActive}
+                      onClear={() => {
+                        setShowUnlaunched(true);
+                        setShowLaunched(true);
+                      }}>
+                      {() => <div className="flex flex-col">
+                        <label className="flex min-h-11 cursor-pointer items-center gap-2.5
+                          rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={showUnlaunched}
+                            onCheckedChange={(checked) => setShowUnlaunched(checked)} />
+                          未发起
+                        </label>
+                        <label className="flex min-h-11 cursor-pointer items-center gap-2.5
+                          rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={showLaunched}
+                            onCheckedChange={(checked) => setShowLaunched(checked)} />
+                          已发起(进行中)
+                        </label>
+                      </div>}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
                 {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
                 <TableHead className="w-12" />
               </TableRow>
@@ -936,13 +1076,20 @@ function DtsRegister({
                 const detail = detailCache[ticket.ticket];
                 const detailId =
                   `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-                const colCount = moduleCol ? 6 : 5;
+                // 发起状态判定(与拦截同尺,走按单索引):有进行中会话
+                // 即已发起——勾选禁用、徽标跳转、默认过滤都认它。
+                const liveIssue = liveIssueByTicket.get(ticket.ticket);
+                const liveTip = liveIssue
+                  ? `已发起:会话 ${liveIssue.id} 进行中` : "";
+                const colCount = moduleCol ? 8 : 7;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
                       ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
+                        disabled={!!liveIssue}
+                        title={liveIssue ? `${liveTip},不可重复发起` : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
                           checked
@@ -972,9 +1119,35 @@ function DtsRegister({
                         {ticket.title || "(无标题)"}
                       </span>
                     </TableCell>
+                    <TableCell className="max-w-0">
+                      <span className="block truncate font-mono text-xs"
+                        title={ticket.version}>
+                        {ticket.version || "—"}
+                      </span>
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {ticket.status
                         && <Badge variant="secondary">{ticket.status}</Badge>}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {liveIssue
+                        ? <Button type="button" variant="ghost" size="xs"
+                            className="group/live"
+                            title={`${liveTip},点击打开`}
+                            aria-label={`打开 ${ticket.ticket} 的进行中会话`}
+                            onClick={() => onOpenIssue?.(liveIssue.id)}>
+                          <Badge>
+                            {/* 徽标本体是静态胶囊(2026-09-14 设计审查:
+                                悬停底色辨不出可点),内层文字挂链接级
+                                下划线语言,与单号链接同款;下划线挂文字
+                                所在的行内盒,穿透 inline-flex 不失效。
+                                不加 offset:Badge overflow-hidden 且
+                                h-5 贴边,默认位置最稳。 */}
+                            <span className="group-hover/live:underline group-focus-visible/live:underline">进行中</span>
+                          </Badge>
+                        </Button>
+                        : <span className="text-muted-foreground"
+                            aria-label="未发起">—</span>}
                     </TableCell>
                     {moduleCol && <TableCell>
                       <Select
@@ -1040,8 +1213,8 @@ function DtsRegister({
                           <dd className="font-mono text-xs">
                             {detail?.version || ticket.version || "—"}</dd>
                           <dt className="text-muted-foreground">问题链接</dt>
-                          <dd>{(detail?.url || ticket.url)
-                            ? <a className="text-primary underline underline-offset-2"
+                          <dd className="min-w-0">{(detail?.url || ticket.url)
+                            ? <a className="text-primary underline underline-offset-2 break-all"
                                 href={detail?.url || ticket.url}
                                 target="_blank" rel="noreferrer">
                               {detail?.url || ticket.url}
@@ -1066,6 +1239,27 @@ function DtsRegister({
             </TableBody>
           </Table>
         </div>}
+      {/* 浮动发起条(2026-09-14 设计审查 03):勾选在行里,发起在顶部
+          ——长列表勾到深处,发起与清空都要滚回顶上。勾选数大于 0 时
+          粘底浮现,与顶部按钮同一套发起逻辑与 busy 态;清空只清当次
+          勾选。粘性定位自带零动画,reduced-motion 天然满足。 */}
+      {selected.length > 0 && <div className="sticky bottom-3 z-20 flex flex-wrap
+        items-center justify-between gap-2.5 rounded-[10px] border border-line
+        bg-surface px-3.5 py-2.5 shadow-(--shadow-md)
+        max-[680px]:flex-col max-[680px]:items-stretch">
+        <span className="text-sm text-text-strong">已选 <b>{selected.length}</b> 张</span>
+        <div className="flex items-center gap-2.5 max-[680px]:w-full
+          max-[680px]:flex-col max-[680px]:items-stretch">
+          <Button variant="outline" size="sm" className="max-[680px]:w-full"
+            onClick={() => setSelected([])}>
+            清空选择
+          </Button>
+          <Button size="sm" className="max-[680px]:w-full" disabled={busy}
+            title={launchTitle} onClick={launch}>
+            {launchLabel}
+          </Button>
+        </div>
+      </div>}
     </>}
     {tickets && tickets.length === 0 && <div className="flex flex-col items-center
       gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">
@@ -1078,7 +1272,7 @@ function DtsRegister({
       && <div className="flex flex-col items-center gap-2 rounded-lg border
         border-dashed border-line px-6 py-10 text-center">
         <p className="text-sm text-muted-foreground">
-          名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——只有该状态可发起,
+          名下问题单里没有「{DTS_ACTIONABLE_STATUS}」状态的——只有该状态可发起,
           其他状态不可拉取。
         </p>
       </div>}

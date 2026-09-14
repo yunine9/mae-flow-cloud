@@ -256,8 +256,14 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
     const { internal } = liveTask(svc);
     const ids = (svc as any).memoryCandidates(internal).map((row: any) => row.id);
     assert.deepEqual(ids, [alive.id], "归档的不推");
-    await new Promise((tick) => setTimeout(tick, 300));
-    assert.ok(logs.some((line) => line.includes("沉底后索引重建完成")), logs.join("\n"));
+    // 重建是旁路(sweepMemoryArchive 只 fire-and-forget),日志要到旁路
+    // 子进程拉起+握手+应答之后才落;全量并发跑时冷拉起可远超 300ms,
+    // 固定小睡是赌时序。改为带截止的轮询等日志,契约本身不变。
+    const rebuildDone = () => logs.some((line) => line.includes("沉底后索引重建完成"));
+    for (let waited = 0; !rebuildDone() && waited < 15_000; waited += 50) {
+      await new Promise((tick) => setTimeout(tick, 50));
+    }
+    assert.ok(rebuildDone(), logs.join("\n"));
     assert.equal(svc.memoryInsights().repos[0].archived, 2);
   } finally {
     await svc.shutdown();

@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -458,7 +458,7 @@ test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续�
     assert.equal(service.get(created.id).waiting ?? undefined, undefined,
       "卡已被 resolve,不再等用户");
     // 入账与真人页面作答同形:决策码还原成选项原文(decision),
-    // 机器代答留痕在 notes——过程问答与现场导出都投影它。
+    // 机器代答留痕在 notes——现场导出投影它。
     const records = waitingRecords(dataDir, created.id);
     assert.equal(records.length, 1);
     const [record] = records;
@@ -644,11 +644,12 @@ test("自动档:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
   }
 });
 
-test("三档把控:盘上有平台闸等真人,Agent 卡闸优先同样等真人", async () => {
+test("三档把控:平台闸在场,Agent 问题卡被单卡互斥拒落,只有闸等真人", async () => {
   const dataDir = mfcTemp("mfc-issue-tier-gate-");
   // 同一回合先举 env_needed 闸(拉日志缺网管环境,request_env 如实失败),
-  // 再举 Agent 卡:收口时闸与卡同时在盘。三档把控 env 闸照举,Agent 卡
-  // 又因闸在场轮不到自动——两者都必须原地等真人。
+  // 再调 AskUserQuestion:ADR-0024 单卡互斥——闸在场时问题卡被宿主拦下
+  // (纠偏文字作工具错误回给模型,不建卡不通知),模型收嘴结束回合,
+  // 收口时只有闸等真人。两卡并存自 ADR-0024 起协议上不可能。
   const script: Scene[] = [
     { tool: { name: "request_env", input: {} } },
     { tool: { name: "AskUserQuestion", input: {
@@ -658,6 +659,7 @@ test("三档把控:盘上有平台闸等真人,Agent 卡闸优先同样等真人
         recommended: "先看连接池",
       }],
     } } },
+    { text: "闸已在等用户作答,本回合到此。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -679,15 +681,14 @@ test("三档把控:盘上有平台闸等真人,Agent 卡闸优先同样等真人
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.gate?.kind === "env_needed"
         ? issue : undefined;
-    }, "同回合举闸又举卡后收口等真人");
-    // 通知与人话口径:闸在场时只 notifyWaitingCard 闸卡,无任何代答
-    // (env 闸三档照举、Agent 卡闸优先不代)——现读现判。
+    }, "闸拒落问题卡后收口等真人");
+    // 通知与人话口径:只有闸卡等真人(env 闸三档照举);Agent 卡没建、
+    // 自然无人代答——现读现判。
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(service.get(created.id).gate?.kind, "env_needed",
       "env 闸原地等人(三档把控照举)");
-    const [record] = waitingRecords(dataDir, created.id);
-    assert.equal(record.status, "waiting", "Agent 卡未被代答(闸优先)");
-    assert.equal(record.decision, "");
+    assert.ok(!existsSync(join(dataDir, "issues", created.id, "waiting.json")),
+      "Agent 问题卡未落盘(单卡互斥,闸优先)");
     assert.doesNotMatch(
       eventsFile(dataDir, created.id), /介入档位免审批自动作答/,
       "Agent 卡没有落代答留痕");

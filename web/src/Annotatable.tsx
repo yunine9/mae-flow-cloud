@@ -121,6 +121,31 @@ export function Annotatable({
   const [selected, setSelected] = useState<SelectedBlock>();
   const draftRef = useRef<Draft | undefined>(undefined);
   draftRef.current = draft;
+  // 批注编辑框(#253):800 窄屏时材料卡视口比编辑框矮,底部(取消/记下)
+  // 会落在卡可视边外。挂载后在卡内滚到可见;≤600px 时编辑框换 fixed 弹层
+  // 定位、不随卡滚,跳过。挂载帧的编辑框比 settle 后矮(字体/行高就位还
+  // 会长高),单次滚动会欠修正、按钮仍被卡缘裁住:高度稳定前每次变化都
+  // 复滚一次,scrollIntoView(nearest) 对已可见的元素是空操作,不会抖。
+  const editorBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const editor = editorBox.current;
+    if (!editor || !draft) return;
+    if (getComputedStyle(editor).position === "fixed") return;
+    let raf = 0;
+    const roll = () => editor.scrollIntoView({ block: "nearest" });
+    roll();
+    raf = requestAnimationFrame(roll);
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(roll);
+    });
+    ro.observe(editor);
+    return () => { ro.disconnect(); cancelAnimationFrame(raf); };
+  }, [draft]);
+  // 行号区起拖的圈选接管(#253):diff 的行号与正负号是 user-select:none,
+  // 原生手势从那里起拖得到空选区、永远唤不出批注。这里把死区起点的拖选
+  // 接过来:锚点钉在本行第一段可选文字上,落点用光标定位逐段更新选区。
+  const rowDrag = useRef<{ anchor: Range; root: HTMLElement } | undefined>(undefined);
 
   // 保留选区只为显示显式操作；选择、复制文字不打开编辑框也不抢焦点。
   useEffect(() => {
@@ -213,6 +238,92 @@ export function Annotatable({
     setHovered((current) => current === row ? current : row ?? undefined);
   }
 
+  /** 按下点在 [data-l] 行内的不可选区(行号、记号)里吗? */
+  function pressInDeadZone(target: HTMLElement, row: HTMLElement): boolean {
+    let el: HTMLElement | null = target;
+    while (el && row.contains(el)) {
+      if (getComputedStyle(el).userSelect === "none") return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  /** 本行第一段可选文字的起点(锚点钉在这里,行号自身不进选区)。 */
+  function startCaretOf(row: HTMLElement): Range | undefined {
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      let el: HTMLElement | null = node.parentElement;
+      let blocked = false;
+      while (el && el !== row.parentElement) {
+        if (getComputedStyle(el).userSelect === "none") { blocked = true; break; }
+        el = el.parentElement;
+      }
+      if (!blocked && node.length > 0) {
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.collapse(true);
+        return range;
+      }
+    }
+    return undefined;
+  }
+
+  /** 视口坐标处的光标位置;落点跑出材料区(比如拖到检视抽屉上)就返回
+   * undefined,选区停在最后已知位置,不串进别的面板。 */
+  function caretAt(x: number, y: number, root: HTMLElement): Range | undefined {
+    const doc = document as Document & {
+      caretRangeFromPoint?(x: number, y: number): Range | null;
+      caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null;
+    };
+    let range: Range | undefined;
+    if (doc.caretRangeFromPoint) {
+      range = doc.caretRangeFromPoint(x, y) ?? undefined;
+    } else {
+      const pos = doc.caretPositionFromPoint?.(x, y);
+      if (pos) {
+        range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+        range.collapse(true);
+      }
+    }
+    return range && root.contains(range.startContainer) ? range : undefined;
+  }
+
+  function onRowPress(event: React.MouseEvent) {
+    if (!enabled || draftRef.current || event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest) return;
+    const row = target.closest<HTMLElement>("[data-l]");
+    if (!row || !host.current) return;
+    if (!pressInDeadZone(target, row)) return;
+    const anchor = startCaretOf(row);
+    if (!anchor) return;
+    event.preventDefault();
+    rowDrag.current = { anchor, root: host.current };
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(anchor.cloneRange());
+    const move = (mouse: MouseEvent) => {
+      const drag = rowDrag.current;
+      if (!drag) return;
+      const caret = caretAt(mouse.clientX, mouse.clientY, drag.root);
+      if (!caret) return;
+      const range = document.createRange();
+      range.setStart(drag.anchor.startContainer, drag.anchor.startOffset);
+      range.setEnd(caret.startContainer, caret.startOffset);
+      const current = window.getSelection();
+      current?.removeAllRanges();
+      current?.addRange(range);
+    };
+    const up = () => {
+      rowDrag.current = undefined;
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
   const hoveredAnnotations = hovered ? annotationsAtRow(items, {
     artifact,
     file: hovered.closest<HTMLElement>("[data-file]")?.dataset.file
@@ -265,6 +376,7 @@ export function Annotatable({
       className={`annotatable${enabled ? "" : " is-readonly"}`}
       ref={host}
       onMouseMove={track}
+      onMouseDown={onRowPress}
       onMouseLeave={() => setHovered(undefined)}
       onKeyDown={(event) => {
         if (event.key === "Escape") setSelected(undefined);
@@ -339,6 +451,7 @@ export function Annotatable({
       {draft && (
         <div
           className="annot-editor"
+          ref={editorBox}
           style={editorPosition(draft.host, host.current)}
           onClick={(event) => event.stopPropagation()}
         >

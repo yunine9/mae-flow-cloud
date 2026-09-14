@@ -419,11 +419,13 @@ export function ConversationStream({
       };
     }
     if (awaitingYou > 0) {
+      // #255 去重:不再自带「打开检视意见」。紧随其后的流内意见摘要行
+      // 每行已有带批注 id 的定向入口,材料栏还有常驻「检视意见」launcher;
+      // 锚条上再放一颗通用入口是三重重复(2026-09-14 审计 P1-2)。
       return {
         tone: "attention" as const,
         text: `${awaitingYou} 条意见待你处理`,
         detail: "查看逐条状态，转交 Agent 或核对答复后闭环",
-        action: { label: "打开检视意见", onClick: () => onOpenReview([]) },
       };
     }
     if (waiting) {

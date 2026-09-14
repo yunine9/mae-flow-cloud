@@ -6,6 +6,8 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -332,7 +334,12 @@ test("缓存重建后旧 marker 失效:签名绑定 inode(MFC-013)", () => {
   assert.equal(run().cacheTrees, 0, "同一 inode 第二轮命中 marker 跳过");
   // 模拟回收重建:同路径、新 inode。旧 marker 不得再放行跳过——
   // 曾经签名只有 uid:gid,重建后 root 误以为属主已就位。
-  rmSync(cache, { recursive: true, force: true });
-  mkdirSync(cache, { recursive: true });
+  // 不赌"删了重建必换 inode":ext4/overlay 就近分配常复用同号(CI
+  // 实测复现),直接把 marker 篡改回陈旧签名,对契约等价且确定。
+  const marker = join(markerRoot, readdirSync(markerRoot)[0]);
+  const stale = readFileSync(marker, "utf-8")
+    .replace(/^(\d+:\d+ \d+):(\d+)$/m, "$1:$2-stale");
+  writeFileSync(marker, stale);
   assert.equal(run().cacheTrees, 1, "重建后 inode 变化,必须重新核对");
+  assert.equal(run().cacheTrees, 0, "重新核对落账后恢复跳过");
 });

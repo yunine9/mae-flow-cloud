@@ -75,7 +75,7 @@ const ISSUE_MAIN_TABS = [
   { key: "meta", label: "元信息", tone: "[--workspace-tab-color:#2f8a5f]" },
   { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
   { key: "dts", label: "DTS单据", tone: "[--workspace-tab-color:#d28a31]" },
-  { key: "doc", label: "过程文档", tone: "[--workspace-tab-color:#20a28f]" },
+  { key: "doc", label: "分析报告", tone: "[--workspace-tab-color:#20a28f]" },
   { key: "changes", label: "工作区变更", tone: "[--workspace-tab-color:#3b83d5]" },
   { key: "logs", label: "拉取日志", tone: "[--workspace-tab-color:#8059d6]" },
   { key: "repos", label: "逐仓交付", tone: "[--workspace-tab-color:#7c5cd6]" },
@@ -395,9 +395,9 @@ export function IssueSessionView({
               跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
           {canOperate && onNavigateProfile
             && detail.error.includes(GIT_AUTH_ERROR_TAG)
-            && <button type="button"
-              className="font-bold underline underline-offset-2"
-              onClick={onNavigateProfile}>去个人设置配置令牌</button>}
+            && <Button type="button" variant="link"
+              className="h-auto px-0 font-bold text-danger underline underline-offset-2 hover:text-danger"
+              onClick={onNavigateProfile}>去个人设置配置令牌</Button>}
         </div>}
         {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
             不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}
@@ -443,10 +443,11 @@ export function IssueSessionView({
                     title={key === "dts" && !detail.ticket
                       ? "无单场景:还没有关联的 DTS 单据" : undefined}>
                     <span>{label}</span>
-                    {/* 分析报告在库:过程文档页签挂脉冲点——报告是主交付物,
-                        入口要找得到(原材料页签的同一引导,随升格迁来);
-                        #231 换装:原 issue-workspace 的圆点定尺/染色列
-                        直译成点上的工具类,动画仍由共享 .ws-tab-dot 承担。 */}
+                    {/* 分析报告在库:「分析报告」页签挂脉冲点——报告是主
+                        交付物,入口要找得到(原材料页签的同一引导,随升格
+                        迁来);#231 换装:原 issue-workspace 的圆点定尺/
+                        染色列直译成点上的工具类,动画仍由共享 .ws-tab-dot
+                        承担。 */}
                     {key === "doc" && detail.has_analysis
                       && <i aria-hidden
                         className="ws-tab-dot size-[7px] min-w-0 rounded-full bg-(--workspace-tab-color) p-0" />}

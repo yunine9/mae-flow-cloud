@@ -204,7 +204,7 @@ test("查看模式:非归属开发者与管理员读他人会话的概要/时间
     assert.equal(events.status, 200);
     assert.deepEqual(events.body.events, []);
 
-    // 过程文档、过程问答、检视面板。
+    // 过程文档(分析报告)、检视面板(#260 起过程问答读接口随页签退役)。
     const documents = await callIssueRoute(
       "GET", ["issues", LIVE, "documents"], { service, viewer: PEER });
     assert.equal(documents.status, 200);
@@ -214,10 +214,6 @@ test("查看模式:非归属开发者与管理员读他人会话的概要/时间
       { service, viewer: PEER, query: "?name=issue-analysis.md" });
     assert.equal(missingDoc.status, 200);
     assert.equal(missingDoc.body.unavailable, "文档不存在");
-    const dialogue = await callIssueRoute(
-      "GET", ["issues", LIVE, "dialogue"], { service, viewer: PEER });
-    assert.equal(dialogue.status, 200);
-    assert.deepEqual(dialogue.body.turns, []);
     const reviews = await callIssueRoute(
       "GET", ["issues", LIVE, "reviews"], { service, viewer: PEER });
     assert.equal(reviews.status, 200);

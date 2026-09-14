@@ -62,6 +62,8 @@ function sceneBlocks(scene: Scene, index: number): Block[] {
 
 export class ScriptedModelServer {
   readonly requests: Array<Record<string, unknown>> = [];
+  /** 每次请求实际服务的场景下标(诊断用:剧本游标被顶走的轨迹)。 */
+  readonly served: number[] = [];
   private server?: Server;
   /** 还要吐几次网关错误(failWith 设置,吐完自动回到正常剧本)。 */
   private failuresLeft = 0;
@@ -127,6 +129,7 @@ export class ScriptedModelServer {
             }));
           return;
         }
+        let sceneIndex = 0;
         const index = Math.min(
           this.options.linear
             ? this.requests.length - 1
@@ -149,6 +152,8 @@ export class ScriptedModelServer {
             }));
           return;
         }
+        sceneIndex = index;
+        this.served.push(index);
         const scene = this.script[index];
         const blocks = sceneBlocks(scene, index);
         const stopReason = scene.tool ? "tool_use" : "end_turn";

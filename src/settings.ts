@@ -48,6 +48,9 @@ export interface RuntimeKnobs {
    *  0=关闭。 */
   issue_build_products_cooldown_hours?: number;
   repair_rounds?: number;
+  /** 环境验证卡守闸阈值(分钟,#248):mr_green 收口后超过该值仍无
+   * 验证卡,守闸器向小鲁班报警(纯报警不举卡)。缺省 120;0=关闭。 */
+  env_verify_watchdog_minutes?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
   /** 现场保留期(天):终态任务过期后回收克隆等重货,台账原样留下。
@@ -194,6 +197,10 @@ export class RuntimeSettings {
           ? undefined : this.runtime().issue_build_products_cooldown_hours),
       repair_rounds: knob(patch.repair_rounds, "修复轮预算")
         ?? (("repair_rounds" in patch) ? undefined : this.runtime().repair_rounds),
+      env_verify_watchdog_minutes:
+        knob(patch.env_verify_watchdog_minutes, "环境验证卡守闸阈值")
+        ?? (("env_verify_watchdog_minutes" in patch)
+          ? undefined : this.runtime().env_verify_watchdog_minutes),
       poll_interval_s: knob(patch.poll_interval_s, "轮询间隔", 1)
         ?? (("poll_interval_s" in patch) ? undefined : this.runtime().poll_interval_s),
       poll_timeout_s: knob(patch.poll_timeout_s, "轮询预算", 1)

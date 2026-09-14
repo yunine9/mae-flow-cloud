@@ -273,11 +273,12 @@ function DiagnosticsLink({ taskId }: { taskId: string }) {
 
   return (
     <span className="diagnostics-action">
-      <button type="button" className="diagnostics-link"
+      <Button type="button" variant="outline" size="sm"
+        className="w-fit gap-1.5 border-dashed bg-transparent text-muted-foreground"
         disabled={state === "loading"} onClick={downloadDiagnostics}
         title="把任务状态、内核现场、Git/容器事实、会话事件与服务日志汇成一个文件">
         {state === "loading" ? "正在生成诊断包…" : "导出诊断包"}
-      </button>
+      </Button>
       {state === "done" && <small role="status">已开始下载</small>}
       {state === "error" && <small role="alert">生成失败，请重试</small>}
     </span>
@@ -311,15 +312,16 @@ function MergeWaitLine({ task, canOperate }: {
   }
   return (
     <div className="grid gap-1 text-sm">
-      <button type="button" aria-expanded={open}
-        className="flex w-fit cursor-pointer items-center gap-2 text-left text-text-strong hover:underline"
+      <Button type="button" variant="link"
+        className="h-auto w-fit gap-2 px-0 text-left text-text-strong"
+        aria-expanded={open}
         onClick={() => setOpen((value) => !value)}>
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-merge" />
         等待合入
         <svg viewBox="0 0 16 16" aria-hidden
           className={cn("size-3.5 text-faint transition-transform", open && "rotate-180")}>
           <path d="m5 6.5 3 3 3-3" /></svg>
-      </button>
+      </Button>
       {open && (
         <p className="m-0 text-xs leading-relaxed text-muted-foreground">{task.delivery?.waiting_on
           || "流水线与门禁已通过，请前往 MR 完成检视与合入。"}{mrLink}
@@ -1894,11 +1896,12 @@ export function TaskWorkspace({
       style={sideWidth ? { ["--ws-side-w" as string]: `${sideWidth}px` } as CSSProperties : undefined}
     >
       <header className="ws-head" ref={headRef}>
-        <button type="button" className="ws-back" aria-label="返回列表"
-          onClick={onClose} autoFocus>
-          <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
+        <Button type="button" variant="outline" size="sm"
+          className="gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
+          aria-label="返回列表" onClick={onClose} autoFocus>
+          <svg viewBox="0 0 20 20" aria-hidden className="size-3.5"><path d="m12.5 5-5 5 5 5" /></svg>
           <span>返回列表</span>
-        </button>
+        </Button>
         <div className="ws-identity">
           {task.ticket && <Badge variant="outline" className="font-mono tracking-wide">{task.ticket}</Badge>}
           <strong id="task-workspace-title" title={task.title ?? task.requirement}
@@ -1915,22 +1918,22 @@ export function TaskWorkspace({
               textClassName="max-[640px]:hidden">
               {statusText(task)}
             </TaskStatusBadge>
-            <button type="button"
-              className="inline-flex cursor-pointer items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-text-strong"
+            <Button type="button" variant="link" size="sm"
+              className="h-auto gap-0.5 px-0 text-xs text-muted-foreground hover:text-text-strong"
               aria-haspopup="dialog"
-              onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></button>
+              onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></Button>
             <WaitBadge task={task} personal={canOperate} className="max-[900px]:hidden" />
             {canOperate && !task.requirement_graph && !["completed", "canceled"].includes(task.status)
               && <RefreshMrButton key={task.id} taskId={task.id} onChanged={onChanged} />}
             <PrepushBadge task={task} canOperate={canOperate}
               onChanged={onChanged} />
           </div>
-          {task.parent_task_id && <button type="button"
-            className="inline-flex h-[26px] w-fit cursor-pointer items-center gap-1.5 rounded-full border border-line px-2 text-xs text-muted-foreground transition-colors hover:border-line-strong hover:text-text-strong"
+          {task.parent_task_id && <Button type="button" variant="outline" size="sm"
+            className="h-[26px] w-fit gap-1.5 rounded-full border-line px-2 text-xs text-muted-foreground hover:bg-background hover:text-text-strong"
             onClick={() => onOpenTask?.(task.parent_task_id!)}>
             <span>返回主任务</span>
             <strong className="max-w-[200px] truncate font-medium">{task.parent_task?.title ?? "跨仓大任务"}</strong>
-          </button>}
+          </Button>}
         </div>
         <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
           + `${health?.needs_attention ? " attention" : ""}`
@@ -2345,7 +2348,8 @@ export function TaskWorkspace({
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
-              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>
@@ -2353,11 +2357,11 @@ export function TaskWorkspace({
                 <div aria-label="代码检视范围"
                   className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-surface px-5 py-3">
                   {pushReview.has_focused_changes ? <>
-                    <button type="button"
-                      className={cn("inline-flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-left transition-colors",
+                    <Button type="button" variant="outline"
+                      className={cn("h-8 min-w-0 gap-1.5 rounded-full px-3 text-left",
                         diffScope === "changes"
-                          ? "border-ink bg-ink text-ink-fg"
-                          : "border-line-strong bg-surface text-text hover:border-text-strong")}
+                          ? "border-ink bg-ink text-ink-fg hover:bg-ink hover:text-ink-fg"
+                          : "border-line-strong bg-surface text-text hover:border-text-strong hover:bg-surface")}
                       onClick={() => {
                         if (diffScope === "changes") return;
                         setContent("");
@@ -2366,12 +2370,12 @@ export function TaskWorkspace({
                       }}>
                       <strong className="text-[13px] font-medium">这次改的</strong>
                       <span className={cn("text-xs", diffScope === "changes" ? "opacity-75" : "text-muted-foreground")}>{pushReview.title}</span>
-                    </button>
-                    <button type="button"
-                      className={cn("inline-flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-left transition-colors",
+                    </Button>
+                    <Button type="button" variant="outline"
+                      className={cn("h-8 min-w-0 gap-1.5 rounded-full px-3 text-left",
                         diffScope === "full"
-                          ? "border-ink bg-ink text-ink-fg"
-                          : "border-line-strong bg-surface text-text hover:border-text-strong")}
+                          ? "border-ink bg-ink text-ink-fg hover:bg-ink hover:text-ink-fg"
+                          : "border-line-strong bg-surface text-text hover:border-text-strong hover:bg-surface")}
                       onClick={() => {
                         if (diffScope === "full") return;
                         setContent("");
@@ -2380,7 +2384,7 @@ export function TaskWorkspace({
                       }}>
                       <strong className="text-[13px] font-medium">全部改动</strong>
                       <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前待推送代码</span>
-                    </button>
+                    </Button>
                   </> : (
                     // 只有一个范围时不是"可切换":按钮外观点了没反应,
                     // 用户会当成坏了(MFC-035)。老实渲染成状态标签。
@@ -2407,12 +2411,12 @@ export function TaskWorkspace({
                     ? "这版代码已失效，暂不能确认推送"
                     : "代码检视暂不可用，暂不能确认推送"}</strong>
                   <span>{pushDiffState.message}</span>
-                  <button type="button" onClick={() => {
+                  <Button type="button" variant="outline" size="xs" className="mt-1.5 w-fit" onClick={() => {
                     setContent("");
                     setPushDiffState({ kind: "checking" });
                     setLivePulse((tick) => tick + 1);
                     onChanged();
-                  }}>刷新任务并重新读取</button>
+                  }}>刷新任务并重新读取</Button>
                 </div>
               )}
               {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
@@ -2519,7 +2523,7 @@ export function TaskWorkspace({
             {task.baseline_build?.status === "failed" && <Alert variant="destructive" role="status" className="mb-3">
               <AlertTitle>开工前编译失败</AlertTitle>
               <AlertDescription>开工前编译未通过，查看环境或上游问题。</AlertDescription>
-              <AlertAction><button type="button" onClick={() => setWarmupOpen(true)}>查看编译失败原因</button></AlertAction>
+              <AlertAction><Button type="button" variant="outline" size="xs" onClick={() => setWarmupOpen(true)}>查看编译失败原因</Button></AlertAction>
             </Alert>}
             {task.delivery?.skipped && <Alert variant="destructive" role="alert" className="mb-3">
               <AlertTitle>交付已阻止</AlertTitle>
@@ -2692,10 +2696,10 @@ export function TaskWorkspace({
                 <UserPicker ariaLabel="选择 Committer" value={reviewer}
                   emptyLabel="请选择 Committer"
                   options={committers} onChange={setReviewer} />
-                <button type="button" disabled={!reviewer || reviewBusy}
+                <Button type="button" size="sm" disabled={!reviewer || reviewBusy}
                   onClick={() => void inviteReview()}>
                   {reviewBusy ? "发送中…" : "发送邀请"}
-                </button>
+                </Button>
               </div>
             ) : <Empty className="p-2.5">
               <EmptyDescription>管理员尚未配置 Committer 名单</EmptyDescription>

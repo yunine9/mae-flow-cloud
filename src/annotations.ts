@@ -113,6 +113,12 @@ export interface Annotation {
   /** 划选跨行时的末行;单行圈注没有。 */
   line_end?: number;
   note: string;
+  /** 意见号(#261,ADR-0025,可选):问题域检视意见在单个问题控制台内
+   * 的展示编号,自 1 单调递增、永不复用(软删也不回收)、跨批次连续,
+   * 展示与 AI 引用统一用它。分配口径在调用方(问题域 reviews.ts),这里
+   * 只透传落账;需求流不传号——缺席即无号,形状语义不变。台账另持有
+   * an- 前缀 id(上面),它是对内连接键,不对外展示。 */
+  seq?: number;
   /** 批注附图(给 Agent 看的截图/设计稿):工作区相对路径,Agent 用
    * inspect_image 读。图先经 /annotation-assets 落盘,这里只记引用。 */
   images?: Array<{ path: string; label?: string }>;
@@ -180,6 +186,8 @@ export interface AnnotationInput {
   context_after?: string;
   note: string;
   kind: AnnotationKind;
+  /** 意见号透传(见 Annotation.seq):分配在调用方,store 只落账。 */
+  seq?: number;
   route?: AnnotationRoute;
   assignee?: string;
   quote?: string;
@@ -484,6 +492,10 @@ export class AnnotationStore {
         ? quote.slice(0, ANNOTATION_QUOTE_MAX) + "…" : quote } : {}),
       ...(lineEnd > line ? { line_end: lineEnd } : {}),
       note,
+      // 意见号只透传不分配:谁发号(问题域 reviews.ts 的单调口径)与
+      // 存储解耦,需求流不传号就保持旧形状。
+      ...(input.seq !== undefined && Number.isFinite(input.seq)
+        ? { seq: Math.max(1, Math.trunc(input.seq)) } : {}),
       ...(images.length ? { images } : {}),
       kind: input.kind === "code" ? "code" : "doc",
       ...(input.route && input.route !== "agent" ? { route: input.route } : {}),

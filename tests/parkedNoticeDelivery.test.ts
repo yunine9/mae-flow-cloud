@@ -115,7 +115,7 @@ test("等人便签全文进欠账队列;答卡原地续跑注入模型上下文,
     const parked = readStateFile(dataDir, "issue-1");
     assert.match(parked.stage_note ?? "", /代码仓/, "显示摘要(首行)照旧");
     assert.equal(parked.parked_notices?.length, 1, "全文欠账队列在场");
-    assert.match(parked.parked_notices![0], /beta\.git/, "队列存全文不截断");
+    assert.match(parked.parked_notices![0], /beta\.git/, "队列存通知全文(非 120 字摘要)");
 
     // 答卡 → 原地续跑:便签注入模型上下文(决定回执随行)。
     service.answer("issue-1", {

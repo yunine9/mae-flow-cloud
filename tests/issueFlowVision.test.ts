@@ -25,11 +25,17 @@ async function until<T>(
   probe: () => T | undefined,
   what: string,
   timeoutMs = 30_000,
+  dump?: () => string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let nextDump = Date.now() + 10_000;
   for (;;) {
     const value = probe();
     if (value !== undefined) return value;
+    if (dump && Date.now() >= nextDump) {
+      nextDump = Date.now() + 10_000;
+      console.error(`[diag ${what}] ${dump()}`);
+    }
     if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -92,7 +98,11 @@ test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路�
     const waiting = await until(() => {
       const issue = service.get(created.id);
       return issue.status === "waiting_user" ? issue : undefined;
-    }, "首轮问题卡");
+    }, "首轮问题卡", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ reqs: main.requests.length, served: main.served.join('+'), status: i.status, stage: i.stage,
+        gate: i.gate?.kind, note: i.stage_note?.slice(0, 60), error: i.error });
+    });
     const workspace = join(dataDir, "issues", created.id);
     writeFileSync(join(workspace, "screen.png"), visionProbePng());
     service.answer(created.id, {
@@ -138,7 +148,7 @@ test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路�
   }
 });
 
-test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合照常收口", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合照常收口", async () => {
   const dataDir = mfcTemp("mfc-issue-vision-fail-");
   const { main, vision, modelsJson } = await startModels([
     ASK_SCENE,
@@ -151,6 +161,8 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
     vision: { provider: "vision", model: "vision-v1" },
+    // 卡要留给人工作答(手动 answer 驱动识图/熔断):钉三档把控。
+    interventionTier: () => "3",
   });
   try {
     const created = service.create({ account: "dev", title: "识图连败",
@@ -158,7 +170,11 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
     const waiting = await until(() => {
       const issue = service.get(created.id);
       return issue.status === "waiting_user" ? issue : undefined;
-    }, "首轮问题卡");
+    }, "首轮问题卡", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ reqs: main.requests.length, served: main.served.join('+'), status: i.status, stage: i.stage,
+        gate: i.gate?.kind, note: i.stage_note?.slice(0, 60), error: i.error });
+    });
     writeFileSync(join(dataDir, "issues", created.id, "screen.png"),
       visionProbePng());
     service.answer(created.id, {
@@ -167,7 +183,11 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
     const idle = await until(() => {
       const issue = service.get(created.id);
       return issue.status === "idle" ? issue : undefined;
-    }, "熔断回合收口");
+    }, "熔断回合收口", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ reqs: main.requests.length, served: main.served.join('+'), status: i.status, stage: i.stage,
+        note: i.stage_note?.slice(0, 60), error: i.error });
+    });
 
     // 前两次失败打到端点,第三次被熔断拦下(不再发请求),回合不炸。
     assert.equal(vision.requests.length, 2);

@@ -222,12 +222,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       <span>{error}</span>
       <span className="flex items-center gap-3">
         {onNavigateProfile && /未配置/.test(error)
-          && <button type="button" className="cursor-pointer underline underline-offset-2"
+          && <Button type="button" variant="link"
+            className="h-auto px-0 font-normal text-danger underline underline-offset-2 hover:text-danger"
             onClick={onNavigateProfile}>
             去个人设置配置
-          </button>}
-        <button type="button" className="cursor-pointer underline underline-offset-2"
-          onClick={() => setError("")}>知道了</button>
+          </Button>}
+        <Button type="button" variant="link"
+          className="h-auto px-0 font-normal text-danger underline underline-offset-2 hover:text-danger"
+          onClick={() => setError("")}>知道了</Button>
       </span>
     </div>}
     {/* 发起入口仅开发者:管理员不发起问题会话(服务端对 admin POST 直接
@@ -243,6 +245,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         refreshList();
         openIssue(created.id);
       }}
+      onOpenIssue={openIssue}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
     />}
@@ -424,10 +427,15 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
           <span>处理人 · {issue.account}</span>
           <span>{issue.source === "dts" ? "DTS 单" : "自研问题"}</span>
         </span>
-        <span className={`task-focus task-focus-${issue.stage}`}>
-          <i aria-hidden />
-          <strong className="font-semibold">{stageLine}</strong>
-          {issue.conclusion && <span>结论 · {issueConclusionText(issue)}</span>}
+        {/* 焦点行:旧焦点行 CSS 家族随 style.css 退役后此处断供(#256
+            清扫确凿丢失),版式按二期口径在 markup 直译 utilities——三列
+            网格:6px 状态点(--active)/阶段强字/结论省略。旧阶段变体
+            (human_action/blocked 等)是任务域词表,从未命中问题域 stage,
+            不搬;旧类名一并退役。 */}
+        <span className="mt-2 grid min-w-0 grid-cols-[7px_max-content_minmax(0,1fr)] items-center gap-[7px] text-sm text-muted-foreground">
+          <i aria-hidden className="size-1.5 rounded-full bg-active" />
+          <strong className="text-sm font-bold text-text-strong">{stageLine}</strong>
+          {issue.conclusion && <span className="truncate">结论 · {issueConclusionText(issue)}</span>}
         </span>
         <IssueFixedProgress issue={issue} />
       </span>

@@ -126,7 +126,7 @@ test("「填写补充说明」类选项:空补充打回并指引;带说明的补
 
 
 
-test("多来源合并:需求任务与问题卡同册,回复各归各家", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("多来源合并:需求任务与问题卡同册,回复各归各家", async () => {
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: {
       questions: [{

@@ -28,7 +28,7 @@ import {
 } from "./prepushContainerIntegration.helpers.ts";
 
 
-test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重跑", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重跑", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(),
     mkdtempSync(join(tmpdir(), "mfc-prepush-resume-platform-")));

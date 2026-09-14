@@ -1491,7 +1491,7 @@ export function App() {
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
               onClick={() => selectTeamAssetTab("workflows")}>
-              <strong>工作流方案</strong><small>给每个阶段配好 Agent 能用的能力，存成方案反复用</small>
+              <strong>工作流</strong><small>给每个阶段配好 Agent 能用的能力，存成方案反复用</small>
             </button>
             <button type="button" className={teamAssetTab === "insights" ? "active" : ""}
               aria-pressed={teamAssetTab === "insights"}

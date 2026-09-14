@@ -233,6 +233,17 @@ test("生成等价性对账:同一注册表生成的简报与门禁,工具清单
     "枚举域应覆盖全部登记工具");
   for (const scenario of ["ticket", "no_ticket"] as const) {
     for (const stage of STAGE_ROUTES[scenario]) {
+      // mr_green 欠环境验证卡走专用催办(#246,ADR-0024):卡未举时不催
+      // "继续推进阶段",催"把验证卡交出去"——阶段名以「已收口」口径
+      // 出现,没有可用工具行,不进简报对账。
+      if (stage === "mr_green") {
+        const owed = fixedNudgeNotice(state(scenario, stage), 1, 2);
+        assert.match(owed,
+          new RegExp(`「${fixedStageLabel(scenario, stage)}」阶段已收口`),
+          `${scenario}/${stage} 欠卡催办要带场景正确的阶段名`);
+        assert.match(owed, /raise_gate/, "欠卡催办应指路 AI 自举验证卡");
+        continue;
+      }
       // 引导层:走催办词的真实渲染路径("可用工具"行,开场词/交接词同源)。
       const notice = fixedNudgeNotice(state(scenario, stage), 1, 2);
       assert.match(notice,

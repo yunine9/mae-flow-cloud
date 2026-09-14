@@ -374,7 +374,7 @@ test("真在跑拒绝(活性探针);passed/无现场/状态不符都拒", async 
   }
 });
 
-test("停止并直推:排队中的轮出队收口,随即绑 HEAD 跳过续跑", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("停止并直推:排队中的轮出队收口,随即绑 HEAD 跳过续跑", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {
     const head = repo.git("rev-parse", "HEAD");

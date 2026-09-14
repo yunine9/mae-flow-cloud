@@ -142,6 +142,8 @@ function RuntimeCard({ view, onSaved }: {
   const [productsCooldown, setProductsCooldown] = useState(
     text(runtime.issue_build_products_cooldown_hours));
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
+  const [watchdog, setWatchdog] = useState(
+    text(runtime.env_verify_watchdog_minutes));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
   const [retention, setRetention] = useState(
@@ -164,6 +166,7 @@ function RuntimeCard({ view, onSaved }: {
         issue_repo_reclaim: repoReclaim.trim(),
         issue_build_products_cooldown_hours: productsCooldown.trim(),
         repair_rounds: repair.trim(),
+        env_verify_watchdog_minutes: watchdog.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
         workspace_retention_days: retention.trim(),
@@ -205,6 +208,10 @@ function RuntimeCard({ view, onSaved }: {
         defaultText={defaults.repair_rounds === null ? "不限轮" : `${defaults.repair_rounds} 轮`}
         note="0 表示关闭自动修复；生效于下一次流水线失败"
         value={repair} onChange={setRepair} />
+      <KnobField label="验证卡守闸阈值（分钟）"
+        defaultText={`${defaults.env_verify_watchdog_minutes} 分钟`}
+        note="MR 全绿收口后超过该时长仍没有环境验证卡,平台主动提醒归属人(防静默漏卡,不举卡);0 表示关闭"
+        value={watchdog} onChange={setWatchdog} />
       <KnobField label="流水线检查间隔（秒）" defaultText={`${defaults.poll_interval_s} 秒`}
         note="生效于下一轮检查"
         value={interval} onChange={setInterval_} />
@@ -275,7 +282,7 @@ function ExecutionPolicyCard({ view, onSaved }: {
         <small className="text-[13px] leading-normal text-muted-foreground">每行一个文件名或相对路径，目录包含全部子项；不支持通配符。统一作用于需求流和问题流，不删除仓库文件。留空表示不屏蔽。</small>
       </label>
       {/* 团队各阶段勾选增强已随 v1 退役(2026-08-29):想定制阶段
-          结构请到「团队资产 → 工作流」建团队工作流资产。 */}
+          结构请到「团队资产 → 工作流」建团队工作流。 */}
       <Button type="submit" disabled={busy}>
         {busy ? "正在保存…" : "保存设置"}
       </Button>

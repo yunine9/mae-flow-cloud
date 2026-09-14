@@ -3271,6 +3271,8 @@ export interface SettingsView {
     /** 问题单构建产物冷却期(小时);0=关。 */
     issue_build_products_cooldown_hours?: number;
     repair_rounds?: number;
+    /** 守闸器阈值(分钟,#248);0=关闭。 */
+    env_verify_watchdog_minutes?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
     workspace_retention_days?: number;
@@ -3311,6 +3313,7 @@ export interface SettingsView {
       issue_repo_reclaim: number;
       issue_build_products_cooldown_hours: number;
       repair_rounds: number | null;
+      env_verify_watchdog_minutes: number;
       poll_interval_s: number;
       poll_timeout_s: number;
       workspace_retention_days: number;
@@ -3806,8 +3809,8 @@ export interface IssueSummary {
     reds?: number;
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
-    /** 证据重试窗(票 82)与同提交刹车的可观察字段(2026-09-10 勘定:
-     *  补镜像而非剥投影,整条流水线记录按 wire 可见)。 */
+    /** 证据重试窗字段已随红灯分诊退场(#247,ADR-0024):新写入不再
+     *  产生,保留类型只为存量磁盘旧账的只读兼容。 */
     evidence_retry_deadline?: string;
     evidence_retry_attempts?: number;
     evidence_failure_log?: string;
@@ -4394,25 +4397,6 @@ export interface IssueDocMeta {
   modified_at: string;
 }
 
-export interface IssueDialogueQuestion {
-  question: string;
-  options: string[];
-}
-
-/** 过程问答的一回合(ADR-0008 口径):问答卡、用户决策、用户主动
- * 输入、检视意见;agent 的过程性发言不进投影。 */
-export interface IssueDialogueTurn {
-  kind: "user" | "card" | "decision" | "review";
-  ts?: string;
-  text?: string;
-  via?: string;
-  questions?: IssueDialogueQuestion[];
-  decision?: string;
-  notes?: string;
-  /** 检视回合专有:意见条数(正文 text 是提交的意见清单)。 */
-  count?: number;
-}
-
 /** 过程文档清单(分析报告固定首位 + Agent 落的其他 .md)。 */
 export function getIssueDocuments(id: string): Promise<{
   documents: IssueDocMeta[];
@@ -4435,15 +4419,46 @@ export async function getIssueDocument(
   };
 }
 
-/** 过程问答:事件账本投影的对话。 */
-export function getIssueDialogue(id: string): Promise<{
-  turns: IssueDialogueTurn[];
-  truncated?: boolean;
-}> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/dialogue`);
+// ---- 分析报告版本(#262,ADR-0025:平台冻结快照,版本页签初版/修订N) ----
+
+/** 服务端 analysisVersions.ts 的 wire 镜像:第 j 份快照 = 第 j 批检视
+ * 提交时冻结的报告,live 恒为最新版;相邻同文去重后按时间序命名
+ * (初版/修订1/修订2…)。review_ids = 该批提交的意见 id,画冻结版的
+ * 锚点标记用;最新版的干净纸面只有草稿标记,故恒为空。 */
+export interface IssueAnalysisVersion {
+  index: number;
+  name: string;
+  bytes: number;
+  modified_at: string;
+  latest: boolean;
+  review_ids: string[];
+  snapshot?: string;
 }
 
-// ---- 检视(材料页签的检视子视图;ADR-0007,服务端 reviews.ts) ----
+/** 分析报告版本清单(没有检视过的会话只有 live 一版)。 */
+export function getIssueAnalysisVersions(id: string): Promise<{
+  versions: IssueAnalysisVersion[];
+}> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/analysis-versions`);
+}
+
+/** 读一个版本的内容(?name=版本名,如 初版/修订1)。缺失为 200
+ * {unavailable},404 只在问题号未知时出现。 */
+export async function getIssueAnalysisVersion(
+  id: string,
+  name: string,
+): Promise<{ name?: string; content?: string; truncated?: boolean; unavailable?: string }> {
+  const body = await issueFetch(
+    `/issues/${encodeURIComponent(id)}/analysis-versions/read?name=${encodeURIComponent(name)}`);
+  return {
+    name: body.name ? String(body.name) : undefined,
+    content: body.content ? String(body.content) : undefined,
+    truncated: body.truncated === true ? true : undefined,
+    unavailable: body.unavailable ? String(body.unavailable) : undefined,
+  };
+}
+
+// ---- 检视(分析报告正文下方的检视区;ADR-0007,服务端 reviews.ts) ----
 
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
@@ -4451,6 +4466,9 @@ export interface IssueReview {
   quote?: string;
   line_end?: number;
   id: string;
+  /** 意见号(#261,ADR-0025):会话内单调分配、永不复用、跨批次连续,
+   * 检视区以「意见N」为主键标识;功能上线前的旧账可能缺席。 */
+  seq?: number;
   author: string;
   created_at: string;
   artifact: string;

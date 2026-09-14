@@ -35,9 +35,10 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
       className={`tw-root gap-0 data-[side=right]:sm:max-w-2xl`}>
       <SheetHeader className="flex flex-row items-start justify-between gap-4 border-b border-line p-5">
         <div className="min-w-0">
-          {(kind === "usage" || kind === "workflow") && <button type="button"
-            className="mb-2 block text-xs text-ink hover:underline"
-            onClick={() => onInspect("details")}>← 返回任务详情</button>}
+          {(kind === "usage" || kind === "workflow") && <Button type="button"
+            variant="link" size="sm"
+            className="mb-2 h-auto w-fit px-0 text-xs text-ink"
+            onClick={() => onInspect("details")}>← 返回任务详情</Button>}
           <small className="block font-mono text-xs text-muted-foreground">{task.ticket || task.id}</small>
           <SheetTitle className="mt-1 text-lg">{titles[kind]}</SheetTitle>
         </div>
@@ -68,7 +69,8 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
               {task.workspace_reclaimed_at && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>现场回收</dt><dd className="m-0 text-sm leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.workspace_reclaimed_at, { year: true })}
                 <p className="mt-1 text-xs text-muted-foreground">过程记录、交付账本、流水线证据与批注仍保留，代码差异不再可看。</p></dd></div>}
             </dl>
-            <button type="button" className="mt-4 cursor-pointer border-0 bg-none p-0 text-sm text-ink hover:underline focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-primary" onClick={onOpenProcess}>查看工作过程 →</button>
+            <Button type="button" variant="link" size="sm"
+              className="mt-4 h-auto w-fit px-0 text-sm text-ink" onClick={onOpenProcess}>查看工作过程 →</Button>
           </section>
           <nav className="border-t border-line" aria-label="任务执行信息">
             <button type="button"

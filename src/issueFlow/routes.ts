@@ -30,7 +30,12 @@
  *   GET  /issues/:id/documents/read   → 读一份过程文档(?name=;缺失为
  *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/documents/archive → 全部过程文档打包下载(ZIP)
- *   GET  /issues/:id/dialogue         → 过程问答(事件账本投影的对话)
+ *   GET  /issues/:id/analysis-versions → 分析报告版本清单(#262:检视
+ *                                      提交时冻结的快照 + live 最新版,
+ *                                      去重后命名初版/修订N)
+ *   GET  /issues/:id/analysis-versions/read → 读一版内容(?name=版本名;
+ *                                      白名单只认推导出的版本,缺失为
+ *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/reviews          → 检视面板(意见+锚点检测+回合标记)
  *   POST /issues/:id/reviews          → 记一条检视草稿(悬停圈注)
  *   POST /issues/:id/reviews/send     → 提交检视(整体回退到问题分析)
@@ -85,9 +90,12 @@ import {
   bundleSessionDocuments,
   IssueDocumentsArchiveTooLargeError,
   listSessionDocuments,
-  projectDialogue,
   readSessionDocument,
 } from "./documents.ts";
+import {
+  listAnalysisVersions,
+  readAnalysisVersion,
+} from "./analysisVersions.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { isTerminal, type IssueEnvType } from "./state.ts";
 import {
@@ -737,20 +745,34 @@ export async function handleIssueRoutes(
       return true;
     }
 
-    // 过程问答(只读):事件账本投影成对话,复盘阅读面(现场页签仍
-    // 是原始事件直播)。
-    if (method === "GET" && parts[2] === "dialogue" && parts.length === 3) {
+    // 分析报告版本(#262,ADR-0025):平台在检视提交时冻结的快照推导出
+    // 「初版/修订N」,live 恒为最新版。读:登录即可(查看模式,与
+    // documents/reviews 同语义);版本是记账行为,没有写面。缺失同样以
+    // 200 {unavailable} 出码——"还没有这一版"不是"没有这个接口"。
+    if (method === "GET" && parts[2] === "analysis-versions"
+        && parts.length === 3) {
       const session = issueFlow.session(id);
-      const dialogue = projectDialogue(session.root);
+      return done(200, { versions: listAnalysisVersions(session.root) });
+    }
+    if (method === "GET" && parts[2] === "analysis-versions"
+        && parts[3] === "read" && parts.length === 4) {
+      const session = issueFlow.session(id);
+      const name = String(
+        new URL(request.url ?? "", "http://x").searchParams.get("name") ?? "");
+      const read = readAnalysisVersion(session.root, name);
+      if (!read) return done(200, { unavailable: "版本不存在" });
       return done(200, {
-        turns: dialogue.turns,
-        ...(dialogue.truncated ? { truncated: true } : {}),
+        name: read.meta.name,
+        content: read.content,
+        ...(read.truncated ? { truncated: true } : {}),
       });
     }
 
     // 协作流(只读,ADR-0018):事件账本投影成任务侧会话流同形状条目,
     // 右栏「与 Agent 协作」对话框消费;在场闸由服务侧从状态投影为
-    // waiting 卡。查看模式语义与 dialogue 一致:登录即可读。
+    // waiting 卡。查看模式语义与 documents/reviews 一致:登录即可读。
+    // (#260 删 GET /issues/:id/dialogue:复盘问答投影随「过程问答」
+    // 页签退役,现场直播与协作流继续由 conversation 承担。)
     if (method === "GET" && parts[2] === "conversation" && parts.length === 3) {
       return done(200, issueFlow.conversation(id));
     }
