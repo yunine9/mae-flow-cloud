@@ -257,5 +257,53 @@
     "mr_sha": {
       "json": "sha"
     }
+  },
+  "discussion_reply": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "review",
+      "reply",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "{mr}",
+      "{id}",
+      "--body",
+      "{body}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--no-cache",
+      "-k"
+    ],
+    "timeout_s": 15,
+    "note_id": {
+      "json": "id"
+    },
+    "idempotency_no_cli_key": true
+  },
+  "discussion_resolve": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "review",
+      "resolve",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "{mr}",
+      "{id}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--no-cache",
+      "-k"
+    ],
+    "timeout_s": 15
   }
 }
