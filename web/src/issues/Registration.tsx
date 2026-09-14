@@ -343,7 +343,11 @@ function ManualRegister({
   }
 
   return <form className="grid grid-cols-2 gap-3 max-[680px]:grid-cols-1" onSubmit={submit}>
-    <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
+    {/* 资源屏蔽提示跨全列(2026-09-14 设计审查 04):组件保持布局中性,
+        落位由本域网格决定——不再首行右半空格。 */}
+    <div className="col-span-full">
+      <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
+    </div>
     <div className={GROUP}>
       <span className="text-[13px] font-bold leading-tight text-primary">问题信息</span>
       <div className={GROUP_BODY}>

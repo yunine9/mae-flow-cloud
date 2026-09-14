@@ -52,9 +52,17 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
   if (policyError) return <small role="status">暂未读到平台资源屏蔽配置,不影响发起。</small>;
   if (!rules.length) return null;
   return <>
-    <Button type="button" variant="ghost" style={{ fontSize: 13, justifyContent: "flex-start", maxWidth: "100%", whiteSpace: "normal" }} onClick={() => setOpen(true)}>
-      本任务将按平台 {rules.length} 条规则屏蔽仓库 Skill/指令文件,点开查看详情
-    </Button>
+    {/* 提示条(2026-09-14 设计审查 04):原 ghost 文字钮带 inline style
+        硬编码字号,在登记表单两列网格里独占左半格,右侧空半格像孤儿;
+        改一行细提示条(与凭据门禁条同款语义:左说明右动作),样式走
+        工具类轨道,跨全列由调用侧网格落位。 */}
+    <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-line bg-surface-muted px-3.5 py-2.5 text-[13px] leading-normal text-muted-foreground">
+      <span>本任务将按平台 {rules.length} 条规则屏蔽仓库 Skill/指令文件</span>
+      <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
+        onClick={() => setOpen(true)}>
+        查看详情
+      </Button>
+    </div>
     <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
       <DialogContent className="tw-root sm:max-w-3xl">
         <DialogHeader>
@@ -78,7 +86,7 @@ export function RepositoryResourceNotice({ repositories, baseline }: { repositor
               <summary>{file.path}</summary>
               <small>命中规则:{file.rules.join("、")}</small>
               {file.note && <p>{file.note}</p>}
-              {file.content !== undefined && <pre style={{ color: "inherit", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 360, overflow: "auto" }}>{file.content || "(空文件)"}</pre>}
+              {file.content !== undefined && <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.6] text-inherit">{file.content || "(空文件)"}</pre>}
             </details>)}
             {repo.blocked_resources?.truncated && <p>命中较多,仅展示前 30 个文件。</p>}
           </>}

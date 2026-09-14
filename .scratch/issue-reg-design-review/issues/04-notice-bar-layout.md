@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 微文案与中文标点体例清一
 
-**Status:** ready-for-agent
+**Status:** done(本票即提交)
 
-- [ ] 登记页首屏不再出现右侧空半格;提示条跨全列,动作(查看详情)仍在
-- [ ] 该组件无 inline style 字号,走登记域工具类轨道
-- [ ] 窄屏 680px 不溢出;弹层行为不变
-- [ ] web typecheck + 点名测试绿
+- [x] 登记页首屏不再出现右侧空半格;组件保持布局中性,登记侧包 col-span-full 落位,动作「查看详情」独立成 outline 钮
+- [x] 该组件 inline style 全部退役(含弹窗被屏蔽内容预览 pre),走工具类轨道;契约钉 style 清零
+- [x] 窄屏不溢出(flex-wrap 提示条 + 纵排);弹层行为不变。备注:LaunchWorkspace 侧同组件塞在双栏网格首格、有规则时与后续 section 同格叠放,属该页既有怪相,另票处理
+- [x] web typecheck + issueUiContracts 56 绿 + launchForm 31 绿

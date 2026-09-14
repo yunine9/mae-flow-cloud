@@ -5,6 +5,8 @@ import test from "node:test";
 
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const notice = readFileSync(
+  resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
 const editor = readFileSync(
   resolve("web/src/EnvironmentEditorDialog.tsx"), "utf-8");
 const environmentPicker = readFileSync(
@@ -1517,8 +1519,6 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
 test("登记域词汇与标点体例:动词归「发起」,引号归「」,标点半角(2026-09-14 设计审查)", () => {
   // 发起一次问题处理,域内只有一个动词「发起」(「下单」是需求域旧词,
   // 不回流);登记页提交钮「发起分析」与 DTS 页「发起处理」同构。
-  const notice = readFileSync(
-    resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
   assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
   assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
   assert.match(registration, /"发起中…" : "发起分析"/);
@@ -1526,8 +1526,21 @@ test("登记域词汇与标点体例:动词归「发起」,引号归「」,标�
   // 英文直引号。
   assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
   assert.doesNotMatch(registration, /"\{DTS_ACTIONABLE_STATUS\}"/);
-  // 资源屏蔽提示句内直述,不再用间隔号挂动作。
-  assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件,点开查看详情/);
+  // 资源屏蔽提示:说明与动作分离,说明句不带间隔号挂动作(动作是
+  // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
+  assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
+  assert.doesNotMatch(notice, / · /);
+});
+
+test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设计审查 04)", () => {
+  // 组件布局中性(登记页/发起页网格各自落位),登记侧包 col-span-full
+  // 落位,首行不再右半空格;inline style 硬编码字号随提示条退役。
+  assert.match(registration,
+    /<div className="col-span-full">\s*<RepositoryResourceNotice/);
+  assert.doesNotMatch(notice, /style=\{\{/);
+  assert.match(notice,
+    /rounded-\[10px\] border border-line bg-surface-muted px-3\.5 py-2\.5 text-\[13px\]/);
+  assert.match(notice, /border-current text-inherit"\s*onClick=\{\(\) => setOpen\(true\)\}\s*>\s*查看详情/);
 });
 
 test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长链断行(2026-09-14 设计审查 02)", () => {
