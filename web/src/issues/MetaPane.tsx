@@ -36,6 +36,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   getBusinessModules,
+  getIssueMaterials,
   requestIssueRepoChanges,
   type IssueDetail,
 } from "../api";
@@ -93,6 +94,55 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
       });
     return () => { alive = false; };
   }, [detail.module_id]);
+
+  // ---- 日志下载(#267,ADR-0026):日志的人读面只有下载一途(在线
+  // 树/查看器/解压已随「拉取日志」页签退役)。「拉取过没拉取过」没有
+  // 独立状态位,判定信号就是材料清单里有没有日志文件;清单随 updated_at
+  // 的既有节奏重取,失败按无日志降级(按钮缺席即可,不给会话页添堵)。 ----
+  const [logFileCount, setLogFileCount] = useState(0);
+  const [downloadingLogs, setDownloadingLogs] = useState(false);
+  const [logDownloadNote, setLogDownloadNote] = useState("");
+  useEffect(() => {
+    let alive = true;
+    getIssueMaterials(detail.id)
+      .then((materials) => {
+        if (alive) setLogFileCount(materials.logs.entries
+          .filter((entry) => entry.type === "file").length);
+      })
+      .catch(() => {
+        if (alive) setLogFileCount(0);
+      });
+    return () => { alive = false; };
+  }, [detail.id, detail.updated_at]);
+
+  /** 整包下载拉取日志(zip;与过程文档打包下载同一套浏览器取流法)。
+   * 服务端空/缺给 404 人话——按钮本就不渲染,这里防的是竞态空包。 */
+  async function downloadLogs() {
+    if (downloadingLogs) return;
+    setDownloadingLogs(true);
+    setLogDownloadNote("");
+    try {
+      const response = await fetch(
+        `/issues/${encodeURIComponent(detail.id)}/materials/logs/archive`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: unknown };
+        throw new Error(String(body.error ?? `下载失败(${response.status})`));
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${detail.id}-拉取日志-`
+        + `${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    } catch (reason) {
+      setLogDownloadNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setDownloadingLogs(false);
+    }
+  }
 
   // ---- #241 编辑缓冲:增/删两组,「确定」时一次提交。清单数据源始终
   // 是 detail(不乐观更新);缓冲属于当前会话的裁定,换会话即弃。 ----
@@ -193,18 +243,36 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
     </>}
     <MetaField label="业务模块">{detail.module || UNFILLED}</MetaField>
     <MetaField label="网管环境">
-      {detail.environment
-        ? <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-            <span>{detail.environment.name}</span>
-            <span className="font-mono text-[13px]">
-              {detail.environment.hosts.join("、") || UNFILLED}
+      <span className="grid content-start gap-1.5">
+        {detail.environment
+          ? <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <span>{detail.environment.name}</span>
+              <span className="font-mono text-[13px]">
+                {detail.environment.hosts.join("、") || UNFILLED}
+              </span>
+              <span>端口 {detail.environment.port}</span>
+              <span>{envTypeText(detail.environment.env_type)}</span>
             </span>
-            <span>端口 {detail.environment.port}</span>
-            <span>{envTypeText(detail.environment.env_type)}</span>
-          </span>
         : <span className="text-muted-foreground">
             尚未配置——运行中 AI 举卡询问网管环境,回填后在此显示。
           </span>}
+        {/* 日志的人读出口(#267):拉取过(logs 清单有文件)才显示,
+            终态会话照常可下(与导出现场记录同口径);下载是纯读,
+            查看模式不收闸。 */}
+        {logFileCount > 0 && <span className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="xs"
+            disabled={downloadingLogs}
+            onClick={() => void downloadLogs()}>
+            {downloadingLogs ? "打包中…" : "下载日志"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            共 {logFileCount} 个日志文件,整包下载
+          </span>
+        </span>}
+        {logDownloadNote && <span className="text-xs text-danger" role="alert">
+          {logDownloadNote}
+        </span>}
+      </span>
     </MetaField>
     {/* 关联仓清单区(只读):全部登记仓,仓名 + 完整 URL;模块绑定仓
         带标识;现场已回收时如实标注(回收时刻一并示人)。 */}

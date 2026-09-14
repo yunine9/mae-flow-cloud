@@ -300,12 +300,6 @@ const WRITE_ROUTES: Array<{
     denied: "只能修改自己会话的工作区",
   },
   {
-    what: "解压日志", method: "POST",
-    parts: ["issues", LIVE, "materials", "log-extract"],
-    payload: { path: "logs/bundle.zip" },
-    denied: "只能解压自己会话的日志",
-  },
-  {
     what: "记检视意见", method: "POST",
     parts: ["issues", LIVE, "reviews"],
     payload: { line: 3, anchor: "原文", note: "这里要改" },

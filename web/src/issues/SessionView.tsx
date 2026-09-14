@@ -62,22 +62,21 @@ import { Button } from "@/components/ui/button";
 import { IssueStatusBadge } from "../StatusBadge";
 import { cn } from "cn";
 
-/** 左栏七个一级标签(#123 拍平 + 用户走查反馈;#239 起「元信息」居
- * 首位:登记信息与关联仓的只读陈列,编辑器留给 #241):对话现场仍是
- * 默认入口(默认选中不变,只是不再占首位),中间四签是原"材料"面板
- * 的二级页签升格,逐仓交付收编为末签(原悬在页签条上方的大卡区,
- * 2026-09-07 走查拍板:信息尽可能收进页签圈,上方不占纵向空间)。
- * 页签条复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
- * --workspace-tab-color(#231 换装:原按 nth-child 发色的 issue-workspace
- * 规则随家族退役,色值直译成各签自带的变量工具类,字面量在此便于
- * Tailwind 拾取)。 */
+/** 左栏六个一级标签(#123 拍平 + 用户走查反馈;#239 起「元信息」居
+ * 首位,#267 起「拉取日志」退役——人读面收敛为元信息页签的下载钮,
+ * ADR-0026):对话现场仍是默认入口(默认选中不变,只是不再占首位),
+ * 中间三签是原"材料"面板的二级页签升格,逐仓交付收编为末签(原悬在
+ * 页签条上方的大卡区,2026-09-07 走查拍板:信息尽可能收进页签圈,
+ * 上方不占纵向空间)。页签条复用任务侧 ws-pane-head > ws-source-switch
+ * 同构,一签一色走 --workspace-tab-color(#231 换装:原按 nth-child
+ * 发色的 issue-workspace 规则随家族退役,色值直译成各签自带的变量
+ * 工具类,字面量在此便于 Tailwind 拾取)。 */
 const ISSUE_MAIN_TABS = [
   { key: "meta", label: "元信息", tone: "[--workspace-tab-color:#2f8a5f]" },
   { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
   { key: "dts", label: "DTS单据", tone: "[--workspace-tab-color:#d28a31]" },
   { key: "doc", label: "分析报告", tone: "[--workspace-tab-color:#20a28f]" },
   { key: "changes", label: "工作区变更", tone: "[--workspace-tab-color:#3b83d5]" },
-  { key: "logs", label: "拉取日志", tone: "[--workspace-tab-color:#8059d6]" },
   { key: "repos", label: "逐仓交付", tone: "[--workspace-tab-color:#7c5cd6]" },
 ] as const;
 type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
@@ -456,8 +455,8 @@ export function IssueSessionView({
               </TabsList>
             </div>
             {/* 面板映射(#210):原条件渲染改 TabsPanel(keepMounted 默认
-                false,卸载语义与原实现一致);doc/dts/changes/logs 共用的
-                兜底分支用「值跟随当前签」的单面板承接,切签时元素位置稳定,
+                false,卸载语义与原实现一致);doc/dts/changes 共用的兜底
+                分支用「值跟随当前签」的单面板承接,切签时元素位置稳定,
                 IssueMaterialsPane 内部状态不被重挂载清掉。 */}
             {tab === "events" && <TabsContent value="events" className="contents">
               <IssueWarmupLive id={detail.id} warmup={detail.warmup} />

@@ -1,8 +1,9 @@
 import { AnnotationExcerpt } from "../AnnotationExcerpt";
 import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTargets";
 /**
- * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更含快速修改 /
- * 拉取日志)。
+ * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更含快速修改;
+ * 拉取日志视图已随 #267 退役,ADR-0026——日志的人读面收敛为元信息
+ * 页签网管环境区的「下载日志」整包 zip,AI 读日志不经页面)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * diff 用任务侧同一把 GitDiff 渲染。合并视图直接渲染聚合 diff(服务端
@@ -10,19 +11,18 @@ import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTarge
  * 走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析分段标记。
  * #123 拍平:面板壳(头部页签条)上收为会话层的一级标签
  * (SessionView 直排),本组件改为免壳直渲——只按会话层下发的
- * view 渲染对应内容,四类内容与整包下载原样;分析报告子视图
+ * view 渲染对应内容,三类内容与整包下载原样;分析报告子视图
  * (#260 页签收敛,原 IssueProcessDocs 多页签 = 分析报告 + 过程问答 +
  * 检视 + Agent 落的其他 .md)只剩报告本身,检视内联进正文下方。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
- * 修改编辑器、压缩包解压、检视(行尾圈注与正文下方的草稿/提交区);
- * 文件/diff/日志/文档的只读浏览完整保留,已提交的检视意见清单照看
- * (纯读,#259 story 23)。
+ * 修改编辑器、检视(行尾圈注与正文下方的草稿/提交区);文件/diff/
+ * 文档的只读浏览完整保留,已提交的检视意见清单照看(纯读,#259
+ * story 23)。
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  extractIssueLog,
   addIssueReview,
   dropIssueReview,
   getDtsTicketDetail,
@@ -31,7 +31,6 @@ import {
   getIssueDocument,
   getIssueDocuments,
   getIssueFileDiff,
-  getIssueMaterialLog,
   getIssueMaterials,
   getIssueReviews,
   getIssueWorkspaceFile,
@@ -41,7 +40,6 @@ import {
   type IssueAnalysisVersion,
   type IssueDetail,
   type IssueDocMeta,
-  type IssueLogEntry,
   type IssueMaterials,
   type IssueReview,
   type IssueReviewCheck,
@@ -65,133 +63,11 @@ import {
  * 只认这一份报告)。 */
 const ANALYSIS_DOC = "issue-analysis.md";
 
-/** #230 去 legacy:材料/检视域的皮肤类换工具类。树行/检视卡是
- * 本域共用版式,先落成词典;颜色全部经语义令牌或 var() 简写取 tokens,
- * 不再按家族复制配方。 */
-const LOG_ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border bg-surface px-2.5 py-1.5 text-left font-mono text-[13px] text-text-strong transition-colors";
+/** #230 去 legacy:材料/检视域的皮肤类换工具类。检视卡是共用版式,
+ * 先落成词典;颜色全部经语义令牌或 var() 简写取 tokens,不再按家族
+ * 复制配方。 */
 const REVIEW_ITEM = "rounded-[10px] border border-line bg-surface px-3 py-2 text-[13px] leading-[1.6]";
 const NOTE_HEAD = "m-0 text-[13px] font-bold text-muted-foreground";
-
-function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// ---- 拉取日志树(#47):扁平清单按路径组树,目录展开/收起,压缩包行带解压 ----
-
-interface LogTreeNode {
-  name: string;
-  /** local-logs 相对路径(/ 分隔,与服务端清单同键)。 */
-  path: string;
-  type: "file" | "dir";
-  size: number;
-  archive: boolean;
-  children: LogTreeNode[];
-}
-
-/** 扁平清单 → 目录树:服务端新→旧序就是兄弟序,组树不重排,保住
- * "新东西在上"的直觉;文件先于其目录条目出现时按需补目录节点。 */
-function buildLogTree(entries: IssueLogEntry[]): LogTreeNode[] {
-  const roots: LogTreeNode[] = [];
-  const dirs = new Map<string, LogTreeNode>();
-  const childrenOf = (dirPath: string): LogTreeNode[] => {
-    if (!dirPath) return roots;
-    const hit = dirs.get(dirPath);
-    if (hit) return hit.children;
-    const segments = dirPath.split("/");
-    const node: LogTreeNode = {
-      name: segments.at(-1) ?? dirPath,
-      path: dirPath,
-      type: "dir",
-      size: 0,
-      archive: false,
-      children: [],
-    };
-    childrenOf(segments.slice(0, -1).join("/")).push(node);
-    dirs.set(dirPath, node);
-    return node.children;
-  };
-  for (const entry of entries) {
-    const segments = entry.path.split("/");
-    if (entry.type === "dir") {
-      childrenOf(entry.path);
-      continue;
-    }
-    childrenOf(segments.slice(0, -1).join("/")).push({
-      name: segments.at(-1) ?? entry.path,
-      path: entry.path,
-      type: "file",
-      size: entry.size,
-      archive: entry.archive,
-      children: [],
-    });
-  }
-  return roots;
-}
-
-/** 把一条路径连同全部祖先目录加进展开集(解压后要一眼看到新目录)。 */
-function expandWithAncestors(prev: ReadonlySet<string>, path: string): Set<string> {
-  const next = new Set(prev);
-  const segments = path.split("/");
-  for (let i = 1; i <= segments.length; i++) {
-    next.add(segments.slice(0, i).join("/"));
-  }
-  return next;
-}
-
-/** 树行渲染:目录行点击收/展,文件行点击进查看器,压缩包行多一枚解压
- * 按钮(解压是写操作,查看模式下不渲染)。缩进按深度手排(树是自绘的,
- * 不引第三方依赖)。 */
-function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, canOperate, onToggle, onOpen, onExtract }: {
-  nodes: LogTreeNode[];
-  depth: number;
-  expanded: ReadonlySet<string>;
-  activeLog?: string;
-  extracting: string;
-  /** 归属操作权(查看模式=false):解压按钮不渲染,看日志不受影响。 */
-  canOperate: boolean;
-  onToggle: (path: string) => void;
-  onOpen: (path: string) => void;
-  onExtract: (path: string) => void;
-}) {
-  return <>
-    {nodes.map((node) => node.type === "dir"
-      ? <Fragment key={node.path}>
-          <button type="button" role="listitem"
-            className={`${LOG_ROW} cursor-pointer font-semibold hover:border-primary`}
-            style={{ paddingLeft: 10 + depth * 18 }}
-            aria-expanded={expanded.has(node.path)}
-            onClick={() => onToggle(node.path)}>
-            <span className="truncate">{expanded.has(node.path) ? "▾" : "▸"} {node.name}/</span>
-          </button>
-          {expanded.has(node.path) && <LogTreeRows
-            nodes={node.children} depth={depth + 1} expanded={expanded}
-            activeLog={activeLog} extracting={extracting}
-            canOperate={canOperate}
-            onToggle={onToggle} onOpen={onOpen} onExtract={onExtract} />}
-        </Fragment>
-      : <div key={node.path} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5"
-          style={{ paddingLeft: 10 + depth * 18 }}>
-          <button type="button" role="listitem"
-            className={cn(LOG_ROW, "cursor-pointer",
-              activeLog === node.path
-                ? "border-primary shadow-[inset_0_0_0_1px_var(--accent)]"
-                : "border-line hover:border-primary")}
-            onClick={() => onOpen(node.path)}>
-            <span className="truncate">{node.name}</span>
-            <span className="justify-self-end text-right">{sizeText(node.size)}</span>
-          </button>
-          {canOperate && node.archive && <Button type="button" variant="outline" size="sm"
-            disabled={extracting !== ""}
-            title={`解压到同目录 ${node.name
-              .replace(/\.(tar\.gz|tar\.bz2|tgz|tar|zip)$/i, "")}-extracted/`}
-            onClick={() => onExtract(node.path)}>
-            {extracting === node.path ? "解压中…" : "解压"}
-          </Button>}
-        </div>)}
-  </>;
-}
 
 /** 分析报告视图(#260 页签收敛,ADR-0025):「分析报告」页签下只留
  * 报告本身——过程问答/检视/动态 md 子页签退役,检视的圈注写口保留在
@@ -670,17 +546,17 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
 }
 
 /** 会话材料内容(免壳直渲,#123 拍平):DTS 单据 / 过程文档 / 工作区
- * 变更 / 拉取日志四个子视图原样保留;面板壳(头部页签条)已上收为
- * 会话层的五个一级标签——本组件只按 view 直渲对应内容,不再自带
- * 头部页签条。
+ * 变更三个子视图(拉取日志视图已随 #267 退役,ADR-0026);面板壳
+ * (头部页签条)已上收为会话层的一级标签——本组件只按 view 直渲
+ * 对应内容,不再自带头部页签条。
  * 数据全部旁路:任何一块失败给空态。view 由会话层标签下发(右栏
  * "分析报告已产出"跳「分析报告」即 tab="doc")。
- * 查看模式(canOperate=false):快速修改编辑器与解压写口不渲染,
- * diff/日志/单据/文档的只读浏览完整保留。 */
+ * 查看模式(canOperate=false):快速修改编辑器写口不渲染,diff/单据/
+ * 文档的只读浏览完整保留。 */
 export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate }: {
   detail: IssueDetail;
   busy: boolean;
-  view: "dts" | "doc" | "changes" | "logs";
+  view: "dts" | "doc" | "changes";
   onNotifyAI: (text: string) => Promise<boolean>;
   /** 归属操作权(查看模式=false):材料内容只留只读浏览。 */
   canOperate: boolean;
@@ -697,31 +573,17 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   const [content, setContent] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
-  const [logView, setLogView] = useState<{ path: string; content: string }>();
-  // 拉取日志树(#47):展开的目录集合 + 解压中的包路径(busy 态)。
-  // 缺省展开第一层只补一次(首次清单到手时),此后尊重用户的收/展动作,
-  // 刷新不强行重开用户收起的目录。
-  const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
-  const [extracting, setExtracting] = useState("");
-  const defaultExpandedDone = useRef(false);
 
   async function load() {
     try {
       // 聚合 diff 一次拿全(合并视图用);逐仓切片由下面的 effect 按
       // 选仓独立取,两份数据互不依赖。现场已回收(磁盘治理)时 diff
-      // 以 repo 为源必失败——只跳它,拉取日志等其余数据源照常加载。
+      // 以 repo 为源必失败——只跳它,清单其余数据源照常加载。
       const materials = await getIssueMaterials(detail.id);
       setData(materials);
       if (!detail.repo_reclaimed_at) {
         const diff = await getIssueFileDiff(detail.id);
         setAllDiff(diff.diff);
-      }
-      // 缺省展开第一层(顶层目录):只在首次清单到手时补,之后不动。
-      if (!defaultExpandedDone.current) {
-        defaultExpandedDone.current = true;
-        setExpandedDirs(new Set(materials.logs.entries
-          .filter((entry) => entry.type === "dir" && !entry.path.includes("/"))
-          .map((entry) => entry.path)));
       }
       // 手选的仓刷新后仍在变更清单里才保留;仓的改动清零了就回合并视图。
       setDiffRepo((current) => current
@@ -787,35 +649,6 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
     }
   }
 
-  async function openLog(path: string) {
-    try {
-      const log = await getIssueMaterialLog(detail.id, path);
-      setLogView({ path, content: log.content });
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    }
-  }
-
-  /** 解压压缩包(#47):成功后刷新清单并展开新目录(连同祖先),让人
-   * 一步看到包里内容;重复解压服务端幂等,文案如实说"复用"。 */
-  async function extractArchive(path: string) {
-    if (extracting) return;
-    setExtracting(path);
-    setNote("");
-    try {
-      const result = await extractIssueLog(detail.id, path);
-      await load();
-      setExpandedDirs((prev) => expandWithAncestors(prev, result.path));
-      setNote(result.reused
-        ? `${result.path} 已经解压过,直接复用,没有重解。`
-        : `解压完成:${result.path}`);
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      setExtracting("");
-    }
-  }
-
   useEffect(() => {
     if (view === "dts" && data?.ticket && !dtsDetail) {
       getDtsTicketDetail(data.ticket)
@@ -828,8 +661,6 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   }, [view, data?.ticket]);
 
   const changes = data?.changes ?? [];
-  const logTree = useMemo(
-    () => buildLogTree(data?.logs.entries ?? []), [data]);
 
   // 可切的仓 = 变更清单路径首段(服务端 listMaterials 给每条变更加
   // <仓名>/ 前缀)。前端不猜仓清单;逐仓 diff 本体由 ?repo= 按需取。
@@ -845,7 +676,7 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
 
   // 免壳直渲(#123):没有面板壳,失败备注顶格示人,其余按 view 出内容。
   // 拉伸契约原住在 issue-workspace 家族(#231 退役),flex/自滚配方落为
-  // 本根节点的工具类——四个材料页签根节点同构拉伸并自滚,长文档不撑破面板。
+  // 本根节点的工具类——三个材料页签根节点同构拉伸并自滚,长文档不撑破面板。
   return <div className="issue-materials grid content-start gap-3.5 min-h-0 flex-1 overflow-y-auto">
     {note && <div className="utility-note">{note}</div>}
       {view === "changes" && detail.repo_reclaimed_at && <>
@@ -853,8 +684,8 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
             消费方)——如实说明,不给一个必然失败的文件视图。 */}
         <div className="utility-note">
           代码现场已回收（磁盘纪律：取消/归档的问题单不再保留 repo 克隆，
-          源码可随时重新拉取）。分析报告、过程对话与拉取日志不受影响，
-          在各自页签查看。
+          源码可随时重新拉取）。分析报告与过程对话不受影响，在各自页签
+          查看；拉取的日志可在「元信息」页签整包下载。
         </div>
       </>}
       {view === "changes" && !detail.repo_reclaimed_at && <>
@@ -966,33 +797,5 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
           缓存:报告可能被 AI 续写,状态一动就该重读。 */}
       <IssueAnalysisReport detail={detail} canOperate={canOperate} />
     </>}
-    {view === "logs" && <div className="ws-doc">
-      {data && data.logs.entries.length === 0 && <div className="utility-note">
-        本会话还没有拉取过日志。
-      </div>}
-      {data?.logs.truncated && <div className="utility-note">
-        日志条目超过上限(2000),清单已截断,可能不完整。
-      </div>}
-      <div className="grid gap-1" role="list">
-        <LogTreeRows nodes={logTree} depth={0} expanded={expandedDirs}
-          activeLog={logView?.path} extracting={extracting}
-          canOperate={canOperate}
-          onToggle={(path) => setExpandedDirs((prev) => {
-            const next = new Set(prev);
-            if (next.has(path)) next.delete(path); else next.add(path);
-            return next;
-          })}
-          onOpen={(path) => void openLog(path)}
-          onExtract={(path) => void extractArchive(path)} />
-      </div>
-      {logView && <>
-        <div className="flex items-center justify-between gap-2.5 text-xs text-faint">
-          <span>{logView.path}</span>
-          <Button type="button" variant="outline" size="xs"
-            onClick={() => void openLog(logView.path)}>刷新</Button>
-        </div>
-        <pre className="m-0 max-h-80 overflow-auto whitespace-pre break-all rounded-lg border border-line bg-surface px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">{logView.content}</pre>
-      </>}
-    </div>}
   </div>;
 }

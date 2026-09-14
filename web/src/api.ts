@@ -4317,24 +4317,6 @@ export function saveIssueWorkspaceFile(
   });
 }
 
-export function getIssueMaterialLog(
-  id: string, path: string,
-): Promise<{ content: string; truncated: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(path)}`);
-}
-
-/** 解压压缩包日志(#47):服务端解到同目录 <去扩展名>-extracted/,
- * 目录已在时幂等返回(reused=true,不重解)。 */
-export function extractIssueLog(
-  id: string, path: string,
-): Promise<{ ok: true; path: string; reused: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log-extract`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
-}
-
 export function getIssueRawEvents(
   id: string, limit = 200,
 ): Promise<{ events: IssueRawEvent[] }> {

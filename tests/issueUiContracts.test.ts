@@ -526,13 +526,12 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes("终止会话"), "头部控件区缺终止");
   assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
-  // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、压缩包解压、
+  // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、
   // 检视(行尾圈注写口与正文下方的检视区:记意见/提交/移除)全部收闸。
   assert.match(materials,
     /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
-  // #230 改锚:解压写口换 shadcn Button(收闸位置不变,仍在归属分支)。
-  assert.match(materials,
-    /\{canOperate && node\.archive && <Button type="button" variant="outline" size="sm"/);
+  // #267 改锚:压缩包解压写口随拉取日志页签整体退役(ADR-0026)——
+  // 日志不再是人在线翻阅的面,归属写口不复存在,下载是纯读。
   // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方。
   // (#259 story 23 修正:已提交意见清单是纯读面,登录只读访问者也可见
   // ——面板不再整块挂 canOperate;服务端本就登录可读,这是纯前端展示
@@ -751,16 +750,16 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
 test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 六标签一次成表(#239 起「元信息」居首,共七签),顺序即规格:元信息
-  // (只读陈列)在首位,对话现场仍是默认入口,逐仓交付收编为末签——
-  // 一签一名,不得改名换序。
+  // 六标签一次成表(#239 起「元信息」居首,#267 起「拉取日志」退役,
+  // ADR-0026),顺序即规格:元信息(只读陈列)在首位,对话现场仍是
+  // 默认入口,逐仓交付收编为末签——一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
     ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:分析报告",
-      "changes:工作区变更", "logs:拉取日志", "repos:逐仓交付"]);
+      "changes:工作区变更", "repos:逐仓交付"]);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
   // (#210)手搓 role=tablist 换原语:键盘箭头、roving tabindex 归原语。
@@ -794,7 +793,10 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   assert.match(materials, /\{view === "dts" && /);
   assert.match(materials, /\{view === "doc" && /);
   assert.match(materials, /\{view === "changes" && /);
-  assert.match(materials, /\{view === "logs" && /);
+  // 拉取日志视图(#267,ADR-0026)随页签退役:日志树/在线查看器/解压
+  // 的分支与组件引用清零,日志的人读出口是元信息页签的「下载日志」。
+  assert.doesNotMatch(materials, /view === "logs"/);
+  assert.doesNotMatch(materials, /LogTreeRows|buildLogTree|extractIssueLog|getIssueMaterialLog/);
   // (#260 页签收敛)过程文档子页签整体退役:doc 视图只剩分析报告正文
   // 直渲(过程问答/检视/动态 md 页签全删,报告按 ANALYSIS_DOC 常量直取),
   // 面板内不再有二级页签条。
@@ -1416,6 +1418,12 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
   assert.match(metaPane, /ENVIRONMENT_FORM_TEXT\[envType\]/);
   assert.match(metaPane, /尚未配置/);
   assert.match(metaPane, /\(未填\)/);
+  // 日志的人读出口(#267,ADR-0026):「下载日志」挂在网管环境区,
+  // 判定信号 = 材料清单里的日志文件数(无独立状态位),整包 zip;
+  // 下载是纯读,查看模式不收闸。
+  assert.match(metaPane, /materials\.logs\.entries/);
+  assert.match(metaPane, /materials\/logs\/archive/);
+  assert.match(metaPane, /"下载日志"/);
   assert.doesNotMatch(metaPane, /credential_ref|password/i,
     "元信息面板不得出现凭据类字段");
   // 关联仓清单区:仓名(repoName)+完整 URL;模块绑定仓带「模块绑定」
