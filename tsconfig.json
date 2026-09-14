@@ -36,6 +36,7 @@
     "tests/rootErrorBoundary.test.ts",
     "tests/uiDialogSmoke.test.ts",
     "tests/workflowLibraryUi.test.ts",
+    "tests/composerGitDiffUi.test.ts",
     "scripts/settings-preview.ts"
   ]
 }

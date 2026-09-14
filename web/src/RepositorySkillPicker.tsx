@@ -12,11 +12,18 @@ import {
 } from "./api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/Alert";
 import { Empty, EmptyDescription } from "@/components/Empty";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 
 /** 与服务端 TaskService 的硬上限保持一致。页面先挡住，避免多仓全选后
  * 到“提交决定”才收到 400、让人回头猜该删哪些。 */
 const MAX_SELECTED_SKILLS = 20;
+
+/** launch 态卡片壳(#254):原 launch-form-section 的规则已随 #229 换装
+ * 删除、类名却还在拼,卡片壳整块丢失。壳直译成 utilities,与
+ * LaunchWorkspace 的 SECTION 词典同口径,launch-form-section 类退役。 */
+const LAUNCH_SECTION =
+  "min-w-0 rounded-lg border border-line px-[18px] pt-[17px] pb-[18px] bg-[color-mix(in_srgb,var(--surface-soft)_72%,var(--surface))]";
 
 export interface RepositorySkillSelection {
   /** false = 从未成功读取，本次提交不得覆盖任务原有选择。 */
@@ -218,7 +225,7 @@ export function RepositorySkillPicker({
   const hasRepository = normalizedRepositories.length > 0;
 
   return (
-    <section className={`${presentation === "launch" ? "launch-form-section " : ""}repository-skills-section repository-skills-${presentation}`}
+    <section className={`${presentation === "launch" ? `${LAUNCH_SECTION} ` : ""}repository-skills-section repository-skills-${presentation}`}
       aria-labelledby={`repository-skills-title-${presentation}`}>
       <div className="repository-skills-head">
         <i aria-hidden>＋</i>
@@ -244,14 +251,14 @@ export function RepositorySkillPicker({
               Skill {selectedIds.size}/{MAX_SELECTED_SKILLS}
             </small>
           )}
-          <button type="button" onClick={() => void scanSkills()}
+          <Button type="button" onClick={() => void scanSkills()}
             disabled={selection.scanning || !hasRepository}>
             {selection.scanning
               ? "正在读取…"
               : catalog || scanError
                 ? "重新读取"
                 : "读取 Skill"}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -312,16 +319,18 @@ export function RepositorySkillPicker({
                   {selectableIds.length > 0 && (
                     <div className="repository-skill-actions">
                       <small>{selectedCount}/{selectableIds.length}</small>
-                      <button type="button"
+                      <Button type="button" variant="outline" size="xs"
+                        className="border-line bg-surface text-(--accent) hover:border-(--accent) hover:bg-(--accent-soft) hover:text-(--accent) disabled:bg-transparent disabled:text-faint"
                         disabled={allSelected || (atLimit && selectedCount < selectableIds.length)}
                         onClick={() => setRepositorySkills(selectableIds, true)}>
                         全选本仓
-                      </button>
-                      <button type="button"
+                      </Button>
+                      <Button type="button" variant="outline" size="xs"
+                        className="border-line bg-surface text-(--accent) hover:border-(--accent) hover:bg-(--accent-soft) hover:text-(--accent) disabled:bg-transparent disabled:text-faint"
                         disabled={selectedCount === 0}
                         onClick={() => setRepositorySkills(selectableIds, false)}>
                         清空
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </header>

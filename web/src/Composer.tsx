@@ -31,6 +31,7 @@ import {
 import { startVisiblePolling } from "./visiblePolling";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert } from "@/components/Alert";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -354,10 +355,11 @@ export function Composer({
     <section className={`ws-composer${decisionDock && !takeoverActive ? " is-deciding" : ""}`} aria-label="回复与提交">
       {decisionDock && !takeoverActive && <div className="decision-tools-toggle">
         <span>回复上方决定</span>
-        {!steerOnly && <button type="button" aria-expanded={decisionToolsOpen}
+        {!steerOnly && <Button type="button" variant="link" size="sm"
+          className="h-auto px-0 text-xs" aria-expanded={decisionToolsOpen}
           onClick={() => { setDecisionToolsOpen(!decisionToolsOpen); modePicked.current = true; setMode("assistant"); }}>
           {decisionToolsOpen ? "收起接手操作" : "需要接手排查？"}
-        </button>}
+        </Button>}
       </div>}
       <div className="ws-composer-ctx" hidden={compactDecision}>
         {!steerOnly && (
@@ -399,11 +401,12 @@ export function Composer({
                 ? "发出第一条指令后 Agent 会停下，改由你操作" : assistant.availability.reason}
             </span>
             {canReturn && takeoverActive && (
-              <button type="button" className="ws-composer-return"
+              <Button type="button" variant="outline" size="xs"
+                className="ml-auto border-line-strong bg-surface text-text-strong"
                 disabled={assistantRequestBusy}
                 onClick={() => void resumeMainTask()}>
                 交回给 Agent
-              </button>
+              </Button>
             )}
           </>
         ) : showSync ? (
@@ -454,11 +457,11 @@ export function Composer({
                 {syncFeedback || "同一需求全部子任务都会记录；排队/暂停任务继续时读取，已结束任务不重启。"}
               </span>
             </div>
-            <button type="button" className="steer-send"
+            <Button type="button" size="lg"
               disabled={syncBusy || !syncText.trim()}
               onClick={() => void sendSync()}>
               {syncBusy ? "发送中…" : "通知所有子任务"}
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -490,29 +493,32 @@ export function Composer({
             }} />
           <div className="ws-composer-row">
             <div className="ws-composer-left">
-              {canSteerKnowledge && <button type="button" className="steer-ref-add"
+              {canSteerKnowledge && <Button type="button" variant="outline" size="xs"
+                className="rounded-full border-dashed bg-transparent font-normal text-muted-foreground hover:border-primary hover:bg-transparent hover:text-primary dark:hover:bg-transparent aria-expanded:border-primary aria-expanded:bg-transparent aria-expanded:text-primary"
                 aria-expanded={refPickerOpen}
-                onClick={toggleRefPicker}>@ 引用知识</button>}
+                onClick={toggleRefPicker}>@ 引用知识</Button>}
               {refs.map((item) => (
                 <span key={item.key} className="steer-ref-chip">
                   {item.label}
-                  <button type="button" aria-label={`移除 ${item.label}`}
+                  <Button type="button" variant="ghost" size="icon-xs"
+                    className="size-4 rounded-[4px] text-[13px] leading-none text-muted-foreground hover:bg-transparent hover:text-primary dark:hover:bg-transparent"
+                    aria-label={`移除 ${item.label}`}
                     onClick={() => setRefs((current) =>
                       current.filter((ref) => ref.key !== item.key))}>
-                    ×</button>
+                    ×</Button>
                 </span>
               ))}
               <span className="steer-hint">
                 {sent && !steerText ? "已捎过去,读取状态在上面的流里更新" : "⌘/Ctrl + Enter 发送"}
               </span>
             </div>
-            <button type="button" className="steer-send"
+            <Button type="button" size="lg"
               disabled={steerBusy
                 || (!steerText.trim() && !refs.length)
                 || (refs.length ? !canSteerKnowledge : !canSteer)}
               onClick={() => void sendSteer()}>
               {steerBusy ? "发送中…" : "发送"}
-            </button>
+            </Button>
           </div>
           {refPickerOpen && <div className="steer-ref-picker"
             aria-label="选择要引用的知识">
@@ -538,20 +544,23 @@ export function Composer({
                   <strong>团队 Skill</strong>
                   {skills.slice(0, 12).map((skill) => {
                     const directory = skill.path.split("/")[0];
-                    return <button type="button" key={skill.path}
+                    return <Button type="button" variant="ghost" key={skill.path}
+                      className="grid h-auto w-full gap-px px-2 py-[5px] text-left font-normal text-primary"
                       onClick={() => addRef({
                         kind: "skill", directory,
                         key: `skill:${directory}`,
                         label: skill.name })}>
                       <span>{skill.name}</span>
                       <small>{skill.description}</small>
-                    </button>;
+                    </Button>;
                   })}
                 </div>}
                 {assets.length > 0 && <div className="steer-ref-group">
                   <strong>业务知识</strong>
                   {assets.slice(0, 12).map(({ module, asset }) => (
-                    <button type="button" key={`${module.id}:${asset.id}`}
+                    <Button type="button" variant="ghost"
+                      key={`${module.id}:${asset.id}`}
+                      className="grid h-auto w-full gap-px px-2 py-[5px] text-left font-normal text-primary"
                       onClick={() => addRef({
                         kind: "business",
                         module_id: module.id, asset_id: asset.id,
@@ -559,7 +568,7 @@ export function Composer({
                         label: `${module.name}/${asset.title}@v${asset.version}` })}>
                       <span>{module.name} / {asset.title}@v{asset.version}</span>
                       <small>{asset.summary}</small>
-                    </button>
+                    </Button>
                   ))}
                 </div>}
               </>;
@@ -655,20 +664,21 @@ export function Composer({
             </div>
             <div className="assistant-buttons">
               {["acquiring", "working", "running"].includes(assistant.state) && (
-                <button type="button" className="assistant-return"
+                <Button type="button" variant="outline" size="lg"
+                  className="border-line-strong bg-surface text-text hover:bg-(--surface-soft)"
                   disabled={assistantRequestBusy}
                   onClick={() => void stopAssistant()}>
                   停止当前动作
-                </button>
+                </Button>
               )}
-              <button type="button" className="steer-send"
+              <Button type="button" size="lg"
                 disabled={assistantRequestBusy || !assistantAvailable
                   || assistant.state === "returning" || !assistantText.trim()}
                 onClick={() => void sendAssistant()}>
                 {assistantRequestBusy ? "发送中…"
                   : ["working", "running", "acquiring"].includes(assistant.state)
                     ? "追加指令" : takeoverActive ? "执行" : "接手并执行"}
-              </button>
+              </Button>
             </div>
           </div>
         </>

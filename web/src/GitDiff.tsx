@@ -32,10 +32,14 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
 /** #232 换装:周边控件词典(汇总条/交付条/文件树/详情头),原 style.css
- * 的 git-diff 周边家族直译成令牌工具类,明暗自适应;diff 本体(着色行/
- * 行号列/词级高亮/折叠钮/两道分栏把手)渲染机构不动,皮仍由 style.css
- * 承担。is-embedded(workspace-studio 嵌入态)与 is-focused(专注检视)
- * 两档的摆位差由组件态直译成条件类,不再靠皮肤级联。 */
+ * 的 git-diff 周边家族直译成令牌工具类,明暗自适应;#254 起周边裸 button
+ * 收编 shadcn Button(词典串即 className,hover/aria-expanded/dark 与
+ * active 位移都对基座做了钉死,行渲染机构不动)。diff 本体(着色行/
+ * 行号列/词级高亮/diff-fold 折叠条/两道分栏把手)渲染机构不动,皮仍由
+ * style.css 承担(diff-fold 的 embedded/studio 主题也被
+ * reviewWorkspaceLayout 的 CSS 锚定,记录不动)。is-embedded(
+ * workspace-studio 嵌入态)与 is-focused(专注检视)两档的摆位差由组件
+ * 态直译成条件类,不再靠皮肤级联。 */
 const GIT = {
   branchChip: "max-w-[220px] truncate rounded-[5px] border border-[color-mix(in_srgb,var(--accent)_24%,var(--line))] bg-(--accent-soft) px-1.5 py-0.5 font-mono text-xs font-bold text-(--accent)",
   metaDot: "not-italic text-faint",
@@ -51,7 +55,7 @@ const GIT = {
   treeCaption: "flex h-7 items-center justify-between px-[7px] text-sm font-bold text-muted-foreground",
   treeCaptionCount: "not-italic",
   treeCaptionMeta: "flex items-center gap-[7px]",
-  treeCaptionBtn: "inline-flex h-6 cursor-pointer items-center gap-1 rounded-[5px] border border-transparent bg-transparent px-[7px] text-sm font-bold text-muted-foreground hover:border-(--accent) hover:bg-(--accent-soft) hover:text-(--accent)",
+  treeCaptionBtn: "inline-flex h-6 cursor-pointer items-center gap-1 rounded-[5px] border border-transparent bg-transparent px-[7px] text-sm font-bold text-muted-foreground hover:border-(--accent) hover:bg-(--accent-soft) hover:text-(--accent) dark:hover:bg-(--accent-soft)",
   treeCaptionBtnSvg: "size-3 fill-none stroke-current stroke-[1.4]",
   tree: "min-w-0",
   treeRow: "group/row relative flex min-w-0 items-center gap-1 rounded-[7px] border border-transparent pl-[calc(5px+var(--tree-depth,0)*12px)] pr-1 hover:bg-surface",
@@ -59,13 +63,13 @@ const GIT = {
   treeRowOverview: "min-h-[46px]",
   treeRowOn: "border-line bg-surface shadow-(--shadow-xs)",
   treeRowUntracked: "bg-[color-mix(in_srgb,var(--attention)_4%,transparent)]",
-  dirMain: "grid h-10 min-w-0 flex-1 cursor-pointer grid-cols-[13px_17px_minmax(0,1fr)_auto] items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm text-inherit",
+  dirMain: "grid h-10 min-w-0 flex-1 cursor-pointer grid-cols-[13px_17px_minmax(0,1fr)_auto] items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm text-inherit hover:bg-transparent hover:text-inherit dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-inherit dark:aria-expanded:bg-transparent",
   dirChevron: "size-3 fill-none stroke-faint stroke-[1.5] transition-transform duration-100",
   dirChevronOpen: "rotate-90",
   dirGlyph: "rotate-[-3deg] text-[13px] text-attention",
   dirName: "truncate font-mono text-[12.5px] font-semibold text-text-strong",
   dirCount: "text-sm not-italic text-muted-foreground",
-  fileMain: "grid min-h-10 min-w-0 flex-1 cursor-pointer grid-cols-[24px_minmax(0,1fr)] items-center gap-[7px] border-0 bg-transparent p-0 text-left text-sm text-inherit",
+  fileMain: "grid min-h-10 min-w-0 flex-1 cursor-pointer grid-cols-[24px_minmax(0,1fr)] items-center gap-[7px] border-0 bg-transparent p-0 text-left text-sm text-inherit hover:bg-transparent hover:text-inherit dark:hover:bg-transparent",
   fileKind: "grid size-[22px] place-items-center rounded-[5px] text-xs font-bold",
   fileName: "flex min-w-0 flex-col gap-0.5",
   fileNameStrong: "truncate font-mono text-sm font-semibold text-text-strong",
@@ -74,11 +78,11 @@ const GIT = {
   fileStats: "inline-flex flex-none gap-1 whitespace-nowrap font-mono text-sm font-semibold not-italic text-muted-foreground",
   fileStatsAdd: "not-italic text-success",
   fileStatsDel: "no-underline text-danger",
-  deliveryCheck: "grid size-5 flex-none cursor-pointer place-items-center rounded-[5px] border border-line-strong bg-transparent p-0 text-transparent hover:border-(--accent)",
-  deliveryCheckOn: "border-(--accent) bg-(--accent) text-(--accent-fg)",
-  deliveryCheckPartial: "border-(--accent) bg-(--accent-soft) text-transparent after:h-0.5 after:w-2 after:rounded-sm after:bg-(--accent) after:content-['']",
+  deliveryCheck: "grid size-5 flex-none cursor-pointer place-items-center rounded-[5px] border border-line-strong bg-transparent p-0 text-transparent hover:border-(--accent) hover:bg-transparent hover:text-transparent dark:hover:bg-transparent",
+  deliveryCheckOn: "border-(--accent) bg-(--accent) text-(--accent-fg) hover:bg-(--accent) hover:text-(--accent-fg)",
+  deliveryCheckPartial: "border-(--accent) bg-(--accent-soft) text-transparent after:h-0.5 after:w-2 after:rounded-sm after:bg-(--accent) after:content-[''] hover:bg-(--accent-soft) hover:text-transparent",
   deliveryCheckSvg: "size-[13px] fill-none stroke-current stroke-2",
-  hideBtn: "absolute right-1 top-1/2 z-[1] grid size-[28px] -translate-y-1/2 cursor-pointer place-items-center rounded-[6px] border border-transparent bg-transparent p-0 text-muted-foreground opacity-0 hover:border-line-strong hover:bg-danger-soft hover:text-danger focus-visible:opacity-100 group-hover/row:opacity-100",
+  hideBtn: "absolute right-1 top-1/2 z-[1] grid size-[28px] -translate-y-1/2 cursor-pointer place-items-center rounded-[6px] border border-transparent bg-transparent p-0 text-muted-foreground opacity-0 hover:border-line-strong hover:bg-danger-soft hover:text-danger focus-visible:opacity-100 group-hover/row:opacity-100 dark:hover:bg-danger-soft hover:text-danger active:-translate-y-1/2!",
   hideBtnSvg: "size-[15px] fill-none stroke-current stroke-[1.35]",
   groupSecond: "mt-2.5",
   groupHead: "mb-1 mt-0.5 flex items-center justify-between gap-2 rounded-[7px] px-2 py-[5px] text-sm",
@@ -86,14 +90,14 @@ const GIT = {
   groupHeadLocal: "bg-surface-muted text-muted-foreground",
   groupHeadStrong: "font-bold tracking-[.02em]",
   groupHeadCount: "rounded-full px-2 py-px text-sm font-bold not-italic",
-  groupLocalBtn: "w-full cursor-pointer border-0 bg-transparent p-0 text-left font-[inherit] hover:text-text-strong",
+  groupLocalBtn: "w-full cursor-pointer border-0 bg-transparent p-0 text-left font-[inherit] hover:text-text-strong h-auto hover:bg-transparent dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-text-strong dark:aria-expanded:bg-transparent",
   groupLocalToggle: "w-3 flex-none text-base leading-none",
   treeEmpty: "px-2.5 py-[22px] text-center text-sm text-muted-foreground",
   treeUntracked: "mt-2",
   treeLazy: "ml-6 mr-2 mb-[5px] mt-[3px] flex items-center justify-between gap-2 rounded-md bg-surface-muted px-2.5 py-2 text-sm text-muted-foreground",
   treeLazyError: "text-danger",
-  treeActionBtn: "cursor-pointer rounded-md border border-line bg-surface px-2.5 py-[5px] text-sm text-(--accent) hover:border-(--accent)",
-  loadMore: "mb-1.5 ml-4 mt-1 w-[calc(100%-24px)] cursor-pointer rounded-md border border-line bg-surface px-2.5 py-[5px] text-sm text-(--accent) hover:border-(--accent) disabled:cursor-wait disabled:opacity-60",
+  treeActionBtn: "cursor-pointer rounded-md border border-line bg-surface px-2.5 py-[5px] text-sm text-(--accent) hover:border-(--accent) h-auto hover:bg-surface hover:text-(--accent) dark:hover:bg-surface",
+  loadMore: "mb-1.5 ml-4 mt-1 w-[calc(100%-24px)] cursor-pointer rounded-md border border-line bg-surface px-2.5 py-[5px] text-sm text-(--accent) hover:border-(--accent) disabled:cursor-wait disabled:opacity-60 h-auto hover:bg-surface hover:text-(--accent) dark:hover:bg-surface disabled:pointer-events-auto",
   untrackedNote: "flex min-h-[240px] flex-col items-center justify-center gap-[5px] text-sm text-muted-foreground",
   untrackedNoteTitle: "text-[15px] text-text-strong",
   detailHead: "flex min-h-[55px] items-center justify-between gap-3 border-b px-3.5 py-2.5",
@@ -107,7 +111,7 @@ const GIT = {
   detailHeadStats: "flex gap-[7px] font-mono text-sm",
   detailActions: "flex min-w-max flex-none flex-row items-center gap-2.5",
   fontZoom: "inline-grid h-[29px] grid-cols-[31px_46px_31px] overflow-hidden rounded-md border bg-surface-soft",
-  fontZoomBtn: "min-w-0 cursor-pointer border-0 bg-transparent p-0 text-sm font-bold text-text hover:bg-(--accent-soft) hover:text-(--accent) disabled:cursor-not-allowed disabled:opacity-40",
+  fontZoomBtn: "min-w-0 cursor-pointer border-0 bg-transparent p-0 text-sm font-bold text-text hover:bg-(--accent-soft) hover:text-(--accent) disabled:cursor-not-allowed disabled:opacity-40 h-auto dark:hover:bg-(--accent-soft) disabled:pointer-events-auto",
   fontZoomReset: "border-l border-line font-mono font-medium text-muted-foreground",
   summary: "mb-2.5 flex items-center justify-between gap-4 rounded-[10px] border bg-surface px-[15px] py-[13px]",
   summaryEmbedded: "m-0 flex-none rounded-none border-0 border-b px-[18px] py-3",
@@ -794,16 +798,16 @@ export function GitDiff({
         file.key === active?.key && GIT.treeRowOn)}
         key={file.key} style={{ "--tree-depth": depth } as CSSProperties}>
         {selectable && (
-          <button type="button" className={cn(GIT.deliveryCheck,
+          <Button type="button" className={cn(GIT.deliveryCheck,
             included && GIT.deliveryCheckOn)}
             aria-pressed={included}
             aria-label={`${included ? "改为仅留本地" : "纳入交付"} ${file.path}`}
             title={included ? "改为仅留本地，不推送" : "纳入本次交付"}
             onClick={() => toggleDelivery([file.path])}>
             <svg viewBox="0 0 16 16" aria-hidden className={GIT.deliveryCheckSvg}><path d="m3.5 8 3 3 6-6" /></svg>
-          </button>
+          </Button>
         )}
-        <button type="button" className={GIT.fileMain} title={file.path}
+        <Button type="button" className={GIT.fileMain} title={file.path}
           onClick={() => {
             setSelected(file.key);
             if (overview) setFocused(true);
@@ -828,11 +832,11 @@ export function GitDiff({
                 <i className={GIT.fileStats}><em className={GIT.fileStatsAdd}>+{file.additions}</em>
                   <del className={GIT.fileStatsDel}>−{file.deletions}</del></i>
               )}</small></span>
-        </button>
-        <button type="button" className={GIT.hideBtn} title="从当前视图隐藏；不改变交付清单"
+        </Button>
+        <Button type="button" className={GIT.hideBtn} title="从当前视图隐藏；不改变交付清单"
           aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
           <svg viewBox="0 0 18 18" aria-hidden className={GIT.hideBtnSvg}><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
-        </button>
+        </Button>
       </div>
     );
   }
@@ -854,7 +858,7 @@ export function GitDiff({
         <div className={cn(GIT.treeRow, overview ? GIT.treeRowOverview : GIT.treeRowCompact,
           GIT.treeRowUntracked)}
           style={{ "--tree-depth": depth } as CSSProperties}>
-          <button type="button" className={GIT.dirMain}
+          <Button type="button" className={GIT.dirMain}
             title={`${directory.path}（未跟踪目录，展开时按需读取）`}
             aria-expanded={open}
             onClick={() => toggleUntrackedDirectory(directory.path)}>
@@ -862,14 +866,14 @@ export function GitDiff({
               className={cn(GIT.dirChevron, open && GIT.dirChevronOpen)}><path d="m6 3 5 5-5 5" /></svg>
             <span aria-hidden className={GIT.dirGlyph}>▰</span><strong className={GIT.dirName}>{label}</strong>
             <i className={GIT.dirCount}>{count === undefined ? "按需" : count}</i>
-          </button>
-          <button type="button" className={GIT.hideBtn}
+          </Button>
+          <Button type="button" className={GIT.hideBtn}
             title="隐藏整个未跟踪目录；不改变 Git 或交付清单"
             aria-label={`隐藏目录 ${directory.path}`}
             onClick={() => setHiddenDirectories((current) =>
               new Set([...current, directory.path]))}>
             <svg viewBox="0 0 18 18" aria-hidden className={GIT.hideBtnSvg}><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
-          </button>
+          </Button>
         </div>
         {open && <div className="change-tree-children">
           {state?.loading && !state.entries?.length && (
@@ -878,8 +882,8 @@ export function GitDiff({
           {state?.error && (
             <div className={cn(GIT.treeLazy, GIT.treeLazyError)}>
               <span>{state.error}</span>
-              <button type="button" className={GIT.treeActionBtn} onClick={() =>
-                void loadUntrackedDirectory(directory.path)}>重试</button>
+              <Button type="button" className={GIT.treeActionBtn} onClick={() =>
+                void loadUntrackedDirectory(directory.path)}>重试</Button>
             </div>
           )}
           {state?.entries?.map((entry) => entry.kind === "directory"
@@ -896,13 +900,13 @@ export function GitDiff({
                   deletions: 0,
                 }, depth + 1, overview))}
           {state?.nextOffset !== undefined && (
-            <button type="button" className={GIT.loadMore}
+            <Button type="button" className={GIT.loadMore}
               disabled={state.loading}
               onClick={() => void loadUntrackedDirectory(
                 directory.path, true)}>
               {state.loading ? "正在加载…" : `继续加载（已显示 ${
                 state.entries?.length ?? 0} / ${state.totalEntries ?? 0} 项）`}
-            </button>
+            </Button>
           )}
           {!state?.loading && !state?.error && state?.entries?.length === 0 && (
             <div className={GIT.treeLazy}>目录当前没有可展示的未跟踪文件</div>
@@ -943,7 +947,7 @@ export function GitDiff({
         <div className={cn(GIT.treeRow, overview ? GIT.treeRowOverview : GIT.treeRowCompact)}
           style={{ "--tree-depth": depth } as CSSProperties}>
           {selectable && (
-            <button type="button"
+            <Button type="button"
               className={cn(GIT.deliveryCheck,
                 included === paths.length && GIT.deliveryCheckOn,
                 included > 0 && included < paths.length && GIT.deliveryCheckPartial)}
@@ -953,9 +957,9 @@ export function GitDiff({
                 ? "整个目录改为仅留本地，不推送" : "整个目录纳入本次交付"}
               onClick={() => toggleDelivery(paths)}>
               <svg viewBox="0 0 16 16" aria-hidden className={GIT.deliveryCheckSvg}><path d="m3.5 8 3 3 6-6" /></svg>
-            </button>
+            </Button>
           )}
-          <button type="button" className={GIT.dirMain}
+          <Button type="button" className={GIT.dirMain}
             title={directory.path}
             aria-expanded={!collapsed}
             onClick={() => setCollapsedDirectories((current) => {
@@ -967,13 +971,13 @@ export function GitDiff({
             <svg viewBox="0 0 16 16" aria-hidden
               className={cn(GIT.dirChevron, !collapsed && GIT.dirChevronOpen)}><path d="m6 3 5 5-5 5" /></svg>
             <span aria-hidden className={GIT.dirGlyph}>▰</span><strong className={GIT.dirName}>{compacted.label}</strong><i className={GIT.dirCount}>{directory.count}</i>
-          </button>
-          <button type="button" className={GIT.hideBtn}
+          </Button>
+          <Button type="button" className={GIT.hideBtn}
             title="隐藏整个目录；不改变交付清单"
             aria-label={`隐藏目录 ${directory.path}`}
             onClick={() => hideFiles(paths)}>
             <svg viewBox="0 0 18 18" aria-hidden className={GIT.hideBtnSvg}><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
-          </button>
+          </Button>
         </div>
         {!collapsed && (
           <div className="change-tree-children">
@@ -1013,7 +1017,7 @@ export function GitDiff({
               {renderTreeNodes(pushTree, overview)}
             </div>
             <div className={GIT.groupSecond}>
-              <button type="button" className={cn(GIT.groupHead, GIT.groupHeadLocal,
+              <Button type="button" className={cn(GIT.groupHead, GIT.groupHeadLocal,
                 GIT.groupLocalBtn)}
                 aria-expanded={localGroupOpen}
                 onClick={() => setLocalGroupOpen((open) => !open)}>
@@ -1021,7 +1025,7 @@ export function GitDiff({
                 <strong className={cn(GIT.groupHeadStrong, "mr-auto")}>工作区其他改动 · 默认仅留本地</strong>
                 <i className={cn(GIT.groupHeadCount,
                   "bg-[color-mix(in_srgb,var(--muted)_14%,transparent)] text-muted-foreground")}>{localFiles.length + visibleDirectoryRoots.length}</i>
-              </button>
+              </Button>
               {localGroupOpen && renderTreeNodes(localTree, overview)}
               {localGroupOpen && renderUntrackedDirectories(overview)}
             </div>
@@ -1136,7 +1140,7 @@ export function GitDiff({
             <i className={GIT.treeCaptionCount}>{treeFiles.length}{visibleDirectoryRoots.length
               ? ` + ${visibleDirectoryRoots.length}目录` : ""}</i>
             {allDirectories.length > 0 && (
-              <button type="button" className={GIT.treeCaptionBtn}
+              <Button type="button" className={GIT.treeCaptionBtn}
                 aria-label={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
                 title={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
                 onClick={() => setCollapsedDirectories(hasCollapsedDirectories
@@ -1147,7 +1151,7 @@ export function GitDiff({
                     : <><path d="m4 7 4-4 4 4" /><path d="m4 13 4-4 4 4" /></>}
                 </svg>
                 {hasCollapsedDirectories ? "全部展开" : "全部折叠"}
-              </button>
+              </Button>
             )}
           </div></div>
           {renderTree(false)}
@@ -1191,23 +1195,23 @@ export function GitDiff({
                 <small className={GIT.detailHeadStats}><b className={GIT.totalPlus}>+{active.additions}</b>
                   <i className={cn("not-italic", GIT.totalMinus)}>−{active.deletions}</i></small>)}
               <div className={GIT.fontZoom} aria-label="Git 字号">
-                <button type="button" aria-label="缩小 Git 字号"
+                <Button type="button" aria-label="缩小 Git 字号"
                   className={GIT.fontZoomBtn}
                   disabled={diffFontSize <= MIN_DIFF_FONT_SIZE}
                   onClick={() => setDiffFontSize(clampDiffFontSize(diffFontSize - 1))}>
                   A−
-                </button>
-                <button type="button" className={cn(GIT.fontZoomBtn, GIT.fontZoomReset)}
+                </Button>
+                <Button type="button" className={cn(GIT.fontZoomBtn, GIT.fontZoomReset)}
                   title="恢复默认 Git 字号"
                   onClick={() => setDiffFontSize(DEFAULT_DIFF_FONT_SIZE)}>
                   {Math.round((diffFontSize / DEFAULT_DIFF_FONT_SIZE) * 100)}%
-                </button>
-                <button type="button" aria-label="放大 Git 字号"
+                </Button>
+                <Button type="button" aria-label="放大 Git 字号"
                   className={GIT.fontZoomBtn}
                   disabled={diffFontSize >= MAX_DIFF_FONT_SIZE}
                   onClick={() => setDiffFontSize(clampDiffFontSize(diffFontSize + 1))}>
                   A+
-                </button>
+                </Button>
               </div>
               {canFold && (
                 <Button type="button" variant="outline" size="sm" onClick={() => {
