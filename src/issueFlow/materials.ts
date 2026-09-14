@@ -9,8 +9,8 @@
  * 边界纪律(与 readAnalysisFile 同款,双保险):
  * - 一切相对路径先 join 再 resolve,解析结果必须仍落在会话工作区内,
  *   越界一律拒绝——path 来自浏览器查询串,不可信。
- * - "快速修改"只放开 repo/ 内的已有文件:.git 与会话元数据
- *   (issue.json/events.jsonl/…)是宿主账本,永不可写。
+ * - 本模块对工作区只读(人工修改写口已随 ADR-0028 退役):.git 与
+ *   会话元数据(issue.json/events.jsonl/…)是宿主账本,永不可写。
  * - git 只读视图走 safeGit(仓库 clone 时 repo_url 来自用户输入,git
  *   配置里可能埋 external diff/credential helper,不能裸跑 git)。
  * - 全部旁路 fail-open:材料生成失败返回空态,不拖垮会话。
@@ -18,7 +18,6 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   lstatSync,
@@ -27,9 +26,7 @@ import {
   readdirSync,
   readSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
-import { readAppendOnlyJsonl } from "../jsonlTailRepair.ts";
 import { join, resolve, sep, basename, dirname } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
 import { createZipArchive } from "../zipArchive.ts";
@@ -42,14 +39,7 @@ export interface WorkspaceChange {
   deletions?: number;
 }
 
-export interface ManualEditRecord {
-  ts: string;
-  path: string;
-  size: number;
-}
-
 const READ_CAP_BYTES = 512 * 1024;
-const WRITE_CAP_BYTES = 2 * 1024 * 1024;
 const TAIL_BYTES = 512 * 1024;
 
 /** 相对路径 → 工作区内绝对路径;越界/绝对路径/含 .. 一律 undefined。 */
@@ -208,7 +198,7 @@ function originOf(
 
 /** 单仓"本会话变更"全集:基线 → 当前工作区(含已提交与未提交),
  * 未跟踪新文件补全文 diff;分组标题沿用需求侧交付检视的口径。changed
- * 是路径全集,变更清单(快速修改下拉)与 diff 视图同出一把尺。 */
+ * 是路径全集,变更清单与 diff 视图同出一把尺。 */
 function collectRepoDiff(
   repoDir: string,
   baselineBranch?: string,
@@ -391,56 +381,12 @@ export function readWorkspaceFile(
   return { content: readFileSync(abs, "utf-8"), truncated: false };
 }
 
-/** 快速修改唯一写口:仅 repo/ 内已有文件,.git 不可碰。 */
-export function writeWorkspaceFile(
-  repoDir: string,
-  rel: string,
-  content: string,
-): { ok: true; size: number } {
-  const abs = insideRoot(repoDir, rel);
-  if (!abs) throw new Error("路径越界");
-  const repoBoundary = resolve(repoDir) + sep;
-  if (!abs.startsWith(repoBoundary)) {
-    throw new Error("快速修改只开放代码仓内文件");
-  }
-  if (abs.startsWith(resolve(join(repoDir, ".git")))) {
-    throw new Error(".git 内部不可读写");
-  }
-  if (!existsSync(abs)) throw new Error("只允许修改已有文件,新建文件请交给 AI");
-  if (statSync(abs).isDirectory()) throw new Error("目标是目录");
-  if (Buffer.byteLength(content, "utf-8") > WRITE_CAP_BYTES) {
-    throw new Error("文件超过 2MB,请拆分后修改");
-  }
-  writeFileSync(abs, content, "utf-8");
-  return { ok: true, size: Buffer.byteLength(content, "utf-8") };
-}
-
-/** 人工修改台账(会话私有文件,与需求侧语义事件账完全无关)。 */
-export function recordManualEdit(root: string, rel: string, size: number): void {
-  const row: ManualEditRecord = {
-    ts: new Date().toISOString(),
-    path: rel,
-    size,
-  };
-  appendFileSync(join(root, "manual-edits.jsonl"),
-    JSON.stringify(row) + "\n", "utf-8");
-}
-
-export function listManualEdits(root: string): ManualEditRecord[] {
-  const path = join(root, "manual-edits.jsonl");
-  if (!existsSync(path)) return [];
-  // 断写尾巴读口自愈(票 #160):过去整链单 try,一行断写让审计台账
-  // 从此读成 []——人工修改记录无声蒸发。
-  return readAppendOnlyJsonl<ManualEditRecord>(path,
-    { middleCorrupt: "skip" }).slice(-100);
-}
-
-// ---- 拉取日志(#47):递归清单 + 任意深度读 + 压缩包解压 ----
+// ---- 拉取日志(#47 数据面存留部分;ADR-0026 后人读面收敛为整包
+// 下载,读/解压已随页签退役)----
 //
 // fetch-logs 抓的是"完整目录结构"(tools.ts 的工具描述就这么许诺的),
-// 旧清单却是不递归的 readdirSync 平铺:子目录点了就"日志不存在",
-// 压缩包没有任何解压手段。这里把数据面补齐:清单递归成扁平条目
-// (前端组树)、读取按相对路径严格限位、压缩包用系统 tar/unzip 解开。
+// 旧清单却是不递归的 readdirSync 平铺:子目录点了就"日志不存在"。
+// 数据面把清单补齐成递归扁平条目,页面按它判定「拉取过没拉取过」。
 
 /** 日志条目(local-logs 相对路径,/ 分隔)。type=dir 的条目 size 恒 0,
  * 前端组树用;archive 按扩展名认(.zip/.tar/.tar.gz/.tgz/.tar.bz2)。 */
@@ -638,35 +584,7 @@ export function listMaterials(state: IssueSessionState, root: string) {
     mrs: state.mrs ?? [],
     changes,
     logs: listLogs(root),
-    manual_edits: listManualEdits(root),
   };
-}
-
-/** 会话内读工作区文件(先按仓名路由,再进单仓读)。 */
-export function readSessionWorkspaceFile(
-  state: IssueSessionState,
-  root: string,
-  rel: string,
-): { content: string; truncated: boolean } {
-  const routed = routeMaterialPath(state, root, rel);
-  if (!routed) throw new Error("会话还没有已克隆的代码仓");
-  return readWorkspaceFile(routed.repo.dir, routed.rel);
-}
-
-/** 快速修改(会话级):路由到仓 → 写文件 → 入人工台账,写与账不分家。
- * 控制台留痕归路由层(它知道会话号与日志口径),台账(manual-edits
- * .jsonl)在这里——这是账本,不是日志。 */
-export function saveSessionWorkspaceFile(
-  state: IssueSessionState,
-  root: string,
-  rel: string,
-  content: string,
-): { ok: true; size: number } {
-  const routed = routeMaterialPath(state, root, rel);
-  if (!routed) throw new Error("会话还没有已克隆的代码仓");
-  const result = writeWorkspaceFile(routed.repo.dir, routed.rel, content);
-  recordManualEdit(root, rel, result.size);
-  return result;
 }
 
 /** 单文件 diff(会话级,基线口径)。 */

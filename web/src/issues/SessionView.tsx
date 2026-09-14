@@ -215,10 +215,6 @@ export function IssueSessionView({
     addIssueTakeoverNote(detail.id, text).then(() => undefined);
   const resumeTakeover = (note?: string) =>
     perform(() => resumeIssueTakeover(detail.id, note));
-  /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
-   * 不另开会话干预口。等待人工决策时不可用(先把卡答了)。 */
-  const notifyAI = (text: string) => detail.status === "running"
-    ? sendSteer(text) : sendReply(text);
   /** 挂起会话关联单号转正:两段式(校验过目 → 确认),转正后跳新会话。
    * 不走 perform:需要把 API 结果(单据详情/新会话)交回关联卡。 */
   async function associate(ticket: string, confirm: boolean):
@@ -458,8 +454,8 @@ export function IssueSessionView({
             </TabsContent>}
             {tab !== "events" && tab !== "meta"
               && <TabsContent value={tab} className="contents">
-              <IssueMaterialsPane detail={detail} busy={busy} view={tab}
-                onNotifyAI={notifyAI} canOperate={canOperate} />
+              <IssueMaterialsPane detail={detail} view={tab}
+                canOperate={canOperate} />
             </TabsContent>}
           </Tabs>
         </section>

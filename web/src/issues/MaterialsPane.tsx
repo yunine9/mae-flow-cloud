@@ -1,7 +1,7 @@
 import { AnnotationExcerpt } from "../AnnotationExcerpt";
 import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTargets";
 /**
- * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更含快速修改;
+ * 材料域:会话材料内容(DTS 单据 / 过程文档 / 工作区变更;
  * 拉取日志视图已随 #267 退役,ADR-0026——日志的人读面收敛为元信息
  * 页签网管环境区的「下载日志」整包 zip,AI 读日志不经页面)。
  *
@@ -14,12 +14,12 @@ import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTarge
  * view 渲染对应内容,三类内容与整包下载原样;分析报告子视图
  * (#260 页签收敛,原 IssueProcessDocs 多页签 = 分析报告 + 过程问答 +
  * 检视 + Agent 落的其他 .md)只剩报告本身,检视内联进正文下方。
- * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
- * 人工台账,"请 AI 复核"走现有插话/续聊通道。
- * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——快速
- * 修改编辑器、检视(行尾圈注与正文下方的草稿/提交区);文件/diff/
- * 文档的只读浏览完整保留,已提交的检视意见清单照看(纯读,#259
- * story 23)。
+ * 人工修改整链(快速修改编辑器/请 AI 复核/人工修改记录)已随
+ * ADR-0028 退役——问题流回归纯 Agent 主理,代码层面的意见经右栏
+ * 插话/续聊直接告知 AI。
+ * 查看模式(canOperate=false,非归属人围观):写口全部不渲染——检视
+ * (行尾圈注与正文下方的草稿/提交区);diff/文档的只读浏览完整保留,
+ * 已提交的检视意见清单照看(纯读,#259 story 23)。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -33,8 +33,6 @@ import {
   getIssueFileDiff,
   getIssueMaterials,
   getIssueReviews,
-  getIssueWorkspaceFile,
-  saveIssueWorkspaceFile,
   sendIssueReviews,
   type DtsTicketDetail,
   type IssueAnalysisVersion,
@@ -54,10 +52,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 
 /** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
  * 只认这一份报告)。 */
@@ -551,13 +545,11 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
  * 对应内容,不再自带头部页签条。
  * 数据全部旁路:任何一块失败给空态。view 由会话层标签下发(右栏
  * "分析报告已产出"跳「分析报告」即 tab="doc")。
- * 查看模式(canOperate=false):快速修改编辑器写口不渲染,diff/单据/
- * 文档的只读浏览完整保留。 */
-export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate }: {
+ * 查看模式(canOperate=false):检视写口不渲染,diff/单据/文档的
+ * 只读浏览完整保留(人工修改写口已随 ADR-0028 整体退役)。 */
+export function IssueMaterialsPane({ detail, view, canOperate }: {
   detail: IssueDetail;
-  busy: boolean;
   view: "dts" | "doc" | "changes";
-  onNotifyAI: (text: string) => Promise<boolean>;
   /** 归属操作权(查看模式=false):材料内容只留只读浏览。 */
   canOperate: boolean;
 }) {
@@ -568,10 +560,6 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
   // 的分段标记;"" = 合并视图(缺省,用聚合 diff)。undefined = 读取中。
   const [repoDiff, setRepoDiff] = useState<string>();
   const [diffRepo, setDiffRepo] = useState("");
-  // 快速修改:选中文件 → 编辑器;undefined 表示未选中。
-  const [activeFile, setActiveFile] = useState<string>();
-  const [content, setContent] = useState<string>();
-  const [saving, setSaving] = useState(false);
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
 
   async function load() {
@@ -624,31 +612,6 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diffRepo, detail.updated_at]);
 
-  async function editFile(path: string) {
-    setActiveFile(path);
-    setContent(undefined);
-    try {
-      const file = await getIssueWorkspaceFile(detail.id, path);
-      setContent(file.content);
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    }
-  }
-
-  async function save() {
-    if (!activeFile || content === undefined || saving) return;
-    setSaving(true);
-    try {
-      await saveIssueWorkspaceFile(detail.id, activeFile, content);
-      setNote(`已保存 ${activeFile}。改动建议让 AI 复核一次。`);
-      await load();
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   useEffect(() => {
     if (view === "dts" && data?.ticket && !dtsDetail) {
       getDtsTicketDetail(data.ticket)
@@ -689,10 +652,6 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
         </div>
       </>}
       {view === "changes" && !detail.repo_reclaimed_at && <>
-        {/* 编辑时机提醒只跟编辑器走:查看模式没有编辑器,也就不需要。 */}
-        {canOperate && detail.status === "running" && <div className="utility-note">
-          AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
-        </div>}
         {diffRepos.length > 1 && <div className="mb-2 flex flex-wrap gap-1.5" role="group"
             aria-label="按仓查看工作区变更">
           <button type="button"
@@ -721,60 +680,7 @@ export function IssueMaterialsPane({ detail, busy, view, onNotifyAI, canOperate 
                   : "工作区当前没有改动。"}
               </div>}
         </div>
-        {/* 快速修改(问题流唯一的人工写口):查看模式整块不渲染——
-            选文件/保存/请 AI 复核都是写路径。人工修改记录(账)照常示人。 */}
-        {canOperate && <div className="issue-materials-editor mt-1 grid gap-2">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <strong className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold text-text-strong">快速修改</strong>
-            <Select value={activeFile ?? ""}
-              items={[{ value: "", label: "选择要修改的文件…" },
-                ...changes.map((change) => ({ value: change.path, label: change.path }))]}
-              onValueChange={(value) => {
-                const path = value ?? "";
-                if (path) void editFile(path);
-              }}>
-              <SelectTrigger className="min-w-44 max-w-72" aria-label="选择要修改的文件">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="">选择要修改的文件…</SelectItem>
-                  {changes.map((change) => <SelectItem key={change.path}
-                    value={change.path}>{change.path}</SelectItem>)}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Button type="button" size="sm" disabled={saving
-              || !activeFile || content === undefined} onClick={save}>
-              {saving ? "保存中…" : "保存修改"}
-            </Button>
-            <Button type="button" variant="outline" size="sm"
-              disabled={busy || saving || !activeFile}
-              title="把这次人工改动告知 AI,请它复核后继续"
-              onClick={() => activeFile && onNotifyAI(
-                `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
-              请 AI 复核
-            </Button>
-          </div>
-          {activeFile && (content !== undefined
-            ? <Textarea className="min-h-[260px] max-h-[480px] resize-y bg-surface font-mono text-[13px]" value={content} spellCheck={false}
-                onChange={(event) => setContent(event.target.value)} />
-            : <p className="m-0 mt-1 text-[13px] text-faint">读取中…</p>)}
-        </div>}
-      <section className="grid gap-2 rounded-[10px] border border-line bg-surface-muted px-3.5 py-3">
-        <h4 className={NOTE_HEAD}>人工修改记录({data?.manual_edits.length ?? 0})</h4>
-        {data?.manual_edits.length === 0 && <Empty className="py-2 text-left">
-          还没有人工改动——从上方选择文件编辑保存后会记在这里。
-        </Empty>}
-        <ul className="m-0 grid list-none gap-1 p-0">
-          {data?.manual_edits.slice().reverse().map((edit, index) => <li
-            key={`${edit.ts}-${index}`} className="grid grid-cols-[auto_1fr] items-baseline gap-2.5 text-xs text-faint">
-            <span>{new Date(edit.ts).toLocaleTimeString()}</span>
-            <span className="truncate font-mono text-muted-foreground">{edit.path}</span>
-          </li>)}
-        </ul>
-      </section>
-    </>}
+      </>}
     {view === "dts" && <div className="ws-doc">
       {dtsDetail ? <>
         <p className="m-0 flex flex-wrap items-baseline gap-3">

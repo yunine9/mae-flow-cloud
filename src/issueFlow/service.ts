@@ -1139,8 +1139,8 @@ export class IssueFlowService {
   /** 会话现场定位(收窄票 #7):材料/事件旁路改由路由直连各自模块后,
    * 这里是路由拿到"哪个会话、现场在哪"的唯一入口。未知会话抛
    * IssueNotFoundError——与原先各透传方法里的 require 同一 404 语义。
-   * state 是活引用:材料旁路只读;快速修改写的是仓内文件与人工台账,
-   * 不动台账本身。 */
+   * state 是活引用:材料旁路只读(人工修改写口已随 ADR-0028 退役),
+   * 路由不写会话状态。 */
   session(id: string): { state: IssueSessionState; root: string } {
     const live = this.require(id);
     return { state: live.state, root: live.root };

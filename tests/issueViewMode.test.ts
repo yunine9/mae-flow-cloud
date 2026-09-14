@@ -294,12 +294,6 @@ const WRITE_ROUTES: Array<{
   denied: string;
 }> = [
   {
-    what: "材料快速修改", method: "PUT",
-    parts: ["issues", LIVE, "materials", "file"],
-    payload: { path: "repo/a.md", content: "x" },
-    denied: "只能修改自己会话的工作区",
-  },
-  {
     what: "请求拉取日志", method: "POST",
     parts: ["issues", LIVE, "logs", "fetch"],
     payload: {},

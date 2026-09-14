@@ -4276,19 +4276,12 @@ export interface IssueLogListing {
   truncated: boolean;
 }
 
-export interface IssueManualEdit {
-  ts: string;
-  path: string;
-  size: number;
-}
-
 export interface IssueMaterials {
   ticket?: string;
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
   mrs: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
   changes: IssueWorkspaceChange[];
   logs: IssueLogListing;
-  manual_edits: IssueManualEdit[];
 }
 
 export interface IssueRawEvent {
@@ -4311,22 +4304,6 @@ export function getIssueFileDiff(
   if (repo) params.set("repo", repo);
   const query = params.toString();
   return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query ? `?${query}` : ""}`);
-}
-
-export function getIssueWorkspaceFile(
-  id: string, path: string,
-): Promise<{ content: string; truncated: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file?path=${encodeURIComponent(path)}`);
-}
-
-export function saveIssueWorkspaceFile(
-  id: string, path: string, content: string,
-): Promise<{ ok: true; size: number }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path, content }),
-  });
 }
 
 export function getIssueRawEvents(

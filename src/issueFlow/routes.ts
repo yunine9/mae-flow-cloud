@@ -17,8 +17,6 @@
  *   GET  /issues/:id/materials/diff   → 单文件 diff(?path=,对 HEAD)
  *                                      / 单仓切片(?repo=,无标记)
  *                                      / 聚合(缺省,带仓库分段标记)
- *   GET  /issues/:id/materials/file   → 读工作区文件(?path=)
- *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
  *   GET  /issues/:id/materials/logs/archive → 拉取日志整包下载(ZIP;
  *                                      空/缺 404;读,无终态闸)
  *   POST /issues/:id/logs/fetch     → 主动拉取日志意图递交(仅归属者;
@@ -79,9 +77,7 @@ import {
   bundleSessionLogs,
   IssueLogsArchiveTooLargeError,
   listMaterials,
-  readSessionWorkspaceFile,
   recentEvents,
-  saveSessionWorkspaceFile,
   sessionWorkspaceDiffAll,
   sessionWorkspaceFileDiff,
   sessionWorkspaceRepoDiff,
@@ -118,8 +114,7 @@ export interface IssueRouteOptions {
   viewer?: IssueViewer;
   /** 会话鉴权是否启用(测试直连形态没有 auth)。 */
   authEnabled: boolean;
-  /** 人工修改的台账日志(口径与问题服务一致:快速修改动了谁的现场,
-   * 控制台要有痕迹;账本本体在 materials 的 manual-edits.jsonl)。 */
+  /** 服务端运行日志(口径与问题服务一致:路由层的动作留痕)。 */
   log?: (message: string) => void;
 }
 
@@ -599,34 +594,12 @@ export async function handleIssueRoutes(
 
     // ---- 会话材料(交付材料页签):路由直连 materials.ts,服务不再
     // 转手(收窄票 #7);issueFlow.session 只负责"哪个会话、现场在哪"。
-    // 读:登录即可(查看模式);写(快速修改):仅会话归属者。路径防穿越在
-    // materials 层双保险,这里只做归属与参数兜底。fail-open 语义:读类
-    // 故障以 400 带人话返回,页面给空态,不拖垮会话。
+    // 读:登录即可(查看模式);人工修改写口已随 ADR-0028 整链退役,
+    // 本组路由只读。路径防穿越在 materials 层双保险。fail-open 语义:
+    // 读类故障以 400 带人话返回,页面给空态,不拖垮会话。
     if (parts[2] === "materials" && parts.length === 3) {
       const session = issueFlow.session(id);
       return done(200, listMaterials(session.state, session.root));
-    }
-    if (method === "PUT" && parts[2] === "materials"
-        && parts[3] === "file" && parts.length === 4) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只能修改自己会话的工作区" });
-      }
-      const body = await readBody(request);
-      const rel = String(body.path ?? "");
-      // 会话定位在 try 外(#9):未知会话是 404 域错误族,不该被下面
-      // "写失败回 400"的本地兜底吞掉。
-      const session = issueFlow.session(id);
-      try {
-        const result = saveSessionWorkspaceFile(
-          session.state, session.root, rel, String(body.content ?? ""));
-        routeOptions.log?.(
-          `[issue-flow] ${id} 人工修改 ${rel}(${result.size}B)`);
-        return done(200, result);
-      } catch (reason) {
-        return done(400, {
-          error: String(reason instanceof Error ? reason.message : reason),
-        });
-      }
     }
     if (parts[2] === "materials" && parts.length === 4 && method === "GET") {
       const query = new URL(request.url ?? "/", "http://x").searchParams;
@@ -647,10 +620,6 @@ export async function handleIssueRoutes(
                 ? sessionWorkspaceFileDiff(session.state, session.root, path)
                 : sessionWorkspaceDiffAll(session.state, session.root),
           });
-        }
-        if (parts[3] === "file") {
-          return done(200, readSessionWorkspaceFile(
-            session.state, session.root, String(query.get("path") ?? "")));
         }
         if (parts[3] === "events") {
           const raw = Number(query.get("limit") ?? 200);

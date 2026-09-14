@@ -525,10 +525,12 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes("终止会话"), "头部控件区缺终止");
   assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
-  // 材料页签:快速修改编辑器整块(选文件/保存/请 AI 复核)、
-  // 检视(行尾圈注写口与正文下方的检视区:记意见/提交/移除)全部收闸。
-  assert.match(materials,
-    /\{canOperate && <div className="issue-materials-editor mt-1 grid gap-2">/);
+  // 材料页签:人工修改整链(快速修改编辑器、请 AI 复核、人工修改记录)
+  // 已整体退役(ADR-0028)——问题流的人工写口清零,代码层面意见走右栏
+  // 插话/续聊;检视(行尾圈注写口与正文下方的检视区)照旧收闸。
+  // (钉活代码标识符:头注释里的退役说明不算违例。)
+  assert.doesNotMatch(materials,
+    /issue-materials-editor|saveIssueWorkspaceFile|getIssueWorkspaceFile|manual_edits|SelectGroup/);
   // #267 改锚:压缩包解压写口随拉取日志页签整体退役(ADR-0026)——
   // 日志不再是人在线翻阅的面,归属写口不复存在,下载是纯读。
   // #260 改锚:检视不再是独立页签,草稿清单+提交链路常驻报告正文下方。
