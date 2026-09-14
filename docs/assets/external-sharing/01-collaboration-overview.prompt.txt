@@ -1,0 +1,13 @@
+Use case: infographic-diagram.
+Create one polished, exceptionally simple Chinese editorial system collaboration overview for the engineering article "从个人提效到组织提效". This is a conceptual responsibility diagram of the existing Mae-Flow Cloud system, NOT deployment topology or a product screenshot. Landscape 16:9, crisp white background, generous whitespace, dark charcoal Chinese sans-serif typography, thin light gray borders, muted blue accent. Flat technical diagram, no gradients, shadows, illustrations, robots, badges, marketing claims or decorative icons.
+Exact title: "Mae-Flow Cloud"
+Exact subtitle: "需求交付中的协作分工"
+Three equal cards in a horizontal row:
+Left heading "人"; body on three separate lines "明确目标" "方案检视" "交付决定"
+Center heading "Agent"; body "需求分析" "编码与验证" "反馈修复"
+Right heading "平台"; body "任务编排" "上下文与决策记录" "MR 与 CI 状态核验"
+Between left and center draw one clean bidirectional arrow labeled "要求与反馈"; between center and right another bidirectional arrow labeled "执行与结果". Keep sufficient whitespace for these arrow labels without overlapping cards.
+Below these three cards one long light-blue band spanning width, heading "团队资产", subtext "Skill · Workflow · 业务知识 · Task Memory".
+Two small clean arrows between band and row, one labeled "按需复用" pointing upward and one "经验沉淀" pointing downward. This is conceptual: do not imply automatic promotion of all task outputs to formal assets.
+Small bottom caption exact text "方法可复用 · 协作可接续 · 结果可核验".
+All Chinese characters must be correct and legible. No other text. Visually restrained, suitable for a professional engineering blog, prioritize clarity and clean alignment over artistic styling.
