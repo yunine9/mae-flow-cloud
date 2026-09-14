@@ -123,13 +123,24 @@ export function Annotatable({
   draftRef.current = draft;
   // 批注编辑框(#253):800 窄屏时材料卡视口比编辑框矮,底部(取消/记下)
   // 会落在卡可视边外。挂载后在卡内滚到可见;≤600px 时编辑框换 fixed 弹层
-  // 定位、不随卡滚,跳过。
+  // 定位、不随卡滚,跳过。挂载帧的编辑框比 settle 后矮(字体/行高就位还
+  // 会长高),单次滚动会欠修正、按钮仍被卡缘裁住:高度稳定前每次变化都
+  // 复滚一次,scrollIntoView(nearest) 对已可见的元素是空操作,不会抖。
   const editorBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const editor = editorBox.current;
     if (!editor || !draft) return;
     if (getComputedStyle(editor).position === "fixed") return;
-    editor.scrollIntoView({ block: "nearest" });
+    let raf = 0;
+    const roll = () => editor.scrollIntoView({ block: "nearest" });
+    roll();
+    raf = requestAnimationFrame(roll);
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(roll);
+    });
+    ro.observe(editor);
+    return () => { ro.disconnect(); cancelAnimationFrame(raf); };
   }, [draft]);
   // 行号区起拖的圈选接管(#253):diff 的行号与正负号是 user-select:none,
   // 原生手势从那里起拖得到空选区、永远唤不出批注。这里把死区起点的拖选

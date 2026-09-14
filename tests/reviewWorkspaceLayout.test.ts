@@ -129,6 +129,67 @@ test("检视意见使用整幅宽画布，人的意见与 Agent 回应横向对�
     /\.workspace-review-notes \.annot-item:has\(\.annot-response\)[^{]*\{[^}]*grid-template-columns:/s);
 });
 
+test("chain 架构图贴边豁免(#253):flush 态去 padding 交出滚动,滚动归 ws-doc", () => {
+  // 旧皮 .ws-doc.is-chain > .story-architecture{padding:0;overflow:visible}
+  // 在 #233 换装时流失——StoryArchitecture 硬编码 p-5 overflow-auto 后,
+  // chain 视图多了 20px 内边距 + ws-doc 内嵌套第二层滚动。这里钉组件侧
+  // 条件类直译:chain 挂载点传 flush,flush 态去 padding、裁内部滚动。
+  const storyArch = readFileSync(
+    join(process.cwd(), "web/src/StoryArchitecture.tsx"), "utf8");
+  assert.match(workspace, /<StoryArchitecture [^>]*flush/);
+  assert.match(storyArch, /flush\s*\?\s*"flex-1 min-w-0 min-h-0 overflow-visible p-0"/);
+  // 非 flush(独立挂载)仍保留自滚动与留白。
+  assert.match(storyArch, /"flex-1 min-w-0 min-h-0 overflow-auto p-5 max-\[600px\]:p-3"/);
+});
+
+test("检视抽屉挤窄时双栏 diff 保住最小可读宽度(#253):canvas 回 760px 下限,横向滚动兜底", () => {
+  // 嵌入态曾把 canvas 压到 min-width:100%,抽屉一开左栏只剩 ~110px,
+  // 代码逐字符硬换行。撤掉该覆盖,基础 .diff-review-canvas 的 760px
+  // 下限重新生效,.diff-review(overflow:auto)出横向滚动。
+  assert.doesNotMatch(css,
+    /\.workspace-studio \.is-embedded \.diff-review-canvas[^{]*\{[^}]*min-width:\s*100%/s,
+    "嵌入态 canvas 不得再被压到 100%:抽屉挤窄时左栏会逐字符换行");
+  assert.match(css, /\.workspace-studio \.is-embedded \.diff-fold\s*\{[^}]*min-width:\s*100%/s);
+  assert.match(css, /\.diff-review-canvas\s*\{[^}]*min-width:\s*760px/s);
+});
+
+test("diff 分隔线拖拽手柄静默,悬停/聚焦才现身(#253 残影修复)", () => {
+  // 常驻的深色 5x36 手柄胶囊悬在两栏分隔线上,看着像渲染残影
+  // (#251 P2-2 审计点位)。分隔细线保留,手柄只在悬停/键盘聚焦时显形。
+  assert.match(css, /\.diff-column-resizer span\s*\{[^}]*opacity:\s*0/s);
+  assert.match(css,
+    /\.diff-column-resizer:hover span,[^{]*\{[^}]*opacity:\s*1/s,
+    "悬停/聚焦必须把手柄亮回来,否则拖拽能力不可发现");
+});
+
+test("批注层接管行号区起拖的圈选,窄屏编辑框自动滚入材料卡(#253)", () => {
+  const annotatable = readFileSync(
+    join(process.cwd(), "web/src/Annotatable.tsx"), "utf8");
+  // 行号/正负号是 user-select:none,原生手势从那里起拖得到空选区;
+  // 批注层接管这类死区起点的拖选,手工维护选区到落点光标。
+  assert.match(annotatable, /userSelect/);
+  assert.match(annotatable, /caretRangeFromPoint|caretPositionFromPoint/);
+  // 800 窄屏:编辑框底部(取消/记下)落在材料卡视口外,挂载后滚到可见。
+  assert.match(annotatable, /scrollIntoView/);
+});
+
+test("检视抽屉筛选 chips 窄幅折行完整展示,不撑破面板格轨(#253)", () => {
+  // workspace-review-notes 是网格容器,TabsList 作为网格项 min-width:auto
+  // 以内容宽(374px)托底:chips 被画布裁字、意见卡连带超宽。钉四条:
+  // 轨道 minmax(0,1fr)(auto 轨会被最宽意见的 min-content 撑出画布)+
+  // 网格项 min-width 归零 + chips 折行完整展示 + 横向滚动兜底。
+  assert.match(css,
+    /\.workspace-review-notes\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+  assert.match(css,
+    /\.workspace-review-notes > \*\s*\{[^}]*min-width:\s*0/s);
+  assert.match(css,
+    /\.workspace-review-notes \[data-slot="tabs-list"\]\s*\{[^}]*min-width:\s*0[^}]*flex-wrap:\s*wrap[^}]*overflow-x:\s*auto/s);
+  // 意见列不能靠 auto 外边距 shrink-to-fit(margin auto 关掉 stretch 后
+  // fit-content 会被 max-content 撑出轨道):宽度显式 min(1100px,100%)。
+  assert.match(css,
+    /\.ws-review-canvas \.workspace-review-opinions\s*\{[^}]*width:\s*min\(1100px, 100%\)/s);
+});
+
 test("交付失败长文本在右侧行动栏内换行，不横向冲出工作台", () => {
   // #227 换装:.ws-verify-focus/.ws-verify-focus-waiting 皮肤类退役,断行
   // 契约改由工具类直接钉在元素上。
