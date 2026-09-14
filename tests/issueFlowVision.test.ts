@@ -138,7 +138,7 @@ test("配 vision 的问题会话:工具清单含 inspect_image,识图走旁路�
   }
 });
 
-test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合照常收口", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合照常收口", async () => {
   const dataDir = mfcTemp("mfc-issue-vision-fail-");
   const { main, vision, modelsJson } = await startModels([
     ASK_SCENE,

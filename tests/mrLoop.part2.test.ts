@@ -60,12 +60,24 @@ REPLY` } } },
     const id = service.create("交付 REQ9:回复故障恢复").id;
     const replies = (discussionId: string) =>
       platform.discussions.find((item) => item.id === discussionId)?.replies ?? [];
+    // 等待谓词必须盯到账面落定:平台记下回复与宿主把 delivered 写回
+    // outbox 是两拍(响应回到客户端才 markDelivered),负载下事件循环
+    // 一卡,80ms 轮询会踩进中间态——只等平台回复就读账,delivered
+    // 计数会少一笔,误报"成功项重发/落账缺失"。这里三件事都到位
+    // (两条回复各一条 + 两笔 delivered 全落账)才算续投完成,慢而
+    // 不错;账本还没建时按 0 笔等,不当作异常。
+    const outboxPath = () =>
+      join(service.get(id)!.workspace, "delivery-outbox.jsonl");
+    const deliveredCount = () => (existsSync(outboxPath())
+      ? readFileSync(outboxPath(), "utf-8")
+        .match(/"op":"delivered"/g)?.length ?? 0
+      : 0);
     await until(() => replies("d-ok").length === 1
-      && replies("d-retry").length === 1, "失败回复由 outbox 自动续投");
+      && replies("d-retry").length === 1
+      && deliveredCount() === 2, "失败回复由 outbox 自动续投");
     assert.equal(replies("d-ok").length, 1,
       "同批成功项不能随失败项一起重发");
-    const outbox = readFileSync(join(
-      service.get(id)!.workspace, "delivery-outbox.jsonl"), "utf-8");
+    const outbox = readFileSync(outboxPath(), "utf-8");
     assert.match(outbox, /"op":"failed"/);
     assert.equal((outbox.match(/"op":"delivered"/g) ?? []).length, 2);
 

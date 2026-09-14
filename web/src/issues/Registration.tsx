@@ -25,7 +25,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight, Columns3, Filter, RotateCw, Sparkles } from "lucide-react";
+import { ChevronRight, Columns3, RotateCw, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -46,6 +46,7 @@ import {
   type IssueSummary,
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
+import { HeaderFilter } from "../HeaderFilter";
 import { Markdown } from "../markdown";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { prepareDtsHtml } from "./dtsHtml";
@@ -516,11 +517,14 @@ function DtsRegister({
       && module.repositories.length > 0),
   [modules]);
 
-  // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
+  // 模糊搜索:单号/标题/版本,大小写不敏感;列头过滤叠加其上。
   const [query, setQuery] = useState("");
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
-  // 版本过滤弹层的展开态(shadcn Popover 受控;点外/Esc 关闭归它管)。
-  const [versionOpen, setVersionOpen] = useState(false);
+  // 列头包含式过滤(2026-09-13 表头化,单号/标题两枚漏斗;与工具栏
+  // 搜索 AND 叠加,只作用于名下列表——远程补查单豁免)。版本过滤的
+  // 入口同批迁进「版本」列表头漏斗,行为等价迁移。
+  const [ticketFilter, setTicketFilter] = useState("");
+  const [titleFilter, setTitleFilter] = useState("");
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -563,15 +567,27 @@ function DtsRegister({
       : [versions[0]]);
   }, [versions]);
 
+  // 列头过滤谓词(单号/标题):包含匹配,大小写不敏感;与工具栏搜索
+  // AND 叠加。只作用于名下列表,远程补查单不经这道筛。
+  const columnFiltered = useMemo(() => {
+    if (!fuzzyMatches) return undefined;
+    const byTicket = ticketFilter.trim().toLowerCase();
+    const byTitle = titleFilter.trim().toLowerCase();
+    if (!byTicket && !byTitle) return fuzzyMatches;
+    return fuzzyMatches.filter((t) =>
+      (!byTicket || t.ticket.toLowerCase().includes(byTicket))
+      && (!byTitle || t.title.toLowerCase().includes(byTitle)));
+  }, [fuzzyMatches, ticketFilter, titleFilter]);
+
   const versionFiltered = useMemo(() => {
-    const list = fuzzyMatches;
+    const list = columnFiltered;
     if (!list) return undefined;
     if (selectedVersions.length === 0) return list;
     // 命中口径与汇总同尺:单据版本剥掉 B 段后落在勾选的组里即命中
     // (组内所有 B 版构建号一并带出)。
     return list.filter((t) => t.version
       && selectedVersions.includes(dtsVersionGroup(t.version)));
-  }, [fuzzyMatches, selectedVersions]);
+  }, [columnFiltered, selectedVersions]);
 
   // 远程查单:本地搜索为空且输入像 DTS 单号(字母开头+数字,长 >=5,
   // 支持逗号分隔多个)时,自动远程查详情并作为结果入列。防抖 500ms +
@@ -664,7 +680,8 @@ function DtsRegister({
     setQuery("");
     setSelected([]);
     setSelectedVersions([]);
-    setVersionOpen(false);
+    setTicketFilter("");
+    setTitleFilter("");
     setExpandedTicket(null);
     try {
       const result = await listDtsTickets();
@@ -806,39 +823,14 @@ function DtsRegister({
       DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-    {/* 工具栏与环境管理台账同款范式:搜索+筛选居左,刷新/主操作居右。 */}
+    {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
+        (2026-09-13 表头化,与环境管理台账同范式,旧「版本过滤」
+        按钮随迁移退役)。 */}
     <div className="flex flex-wrap items-center gap-2">
       <Input type="search" className="h-9 w-full sm:w-80" value={query}
         aria-label="搜索问题单"
         placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
         onChange={(e) => setQuery(e.target.value)} />
-      {versions.length > 0 && <Popover open={versionOpen} onOpenChange={setVersionOpen}>
-        <PopoverTrigger render={<Button type="button" variant="outline" size="sm"
-          aria-pressed={selectedVersions.length > 0}
-          title={selectedVersions.length
-            ? `按 ${selectedVersions.length} 个版本组过滤(组内全部 B 版都命中)`
-            : "按版本组过滤问题单"}>
-          <Filter aria-hidden className="size-3.5" />
-          {selectedVersions.length ? `版本(已选 ${selectedVersions.length})` : "版本过滤"}
-        </Button>} />
-        <PopoverContent align="start" className="w-72 p-1">
-          {versions.map((version) => <label key={version}
-            className="flex min-h-11 cursor-pointer items-center gap-2.5
-              rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-            <Checkbox checked={selectedVersions.includes(version)}
-              onCheckedChange={(checked) => setSelectedVersions((prev) => checked
-                ? [...prev, version]
-                : prev.filter((item) => item !== version))} />
-            <span className="font-mono text-xs">{version}</span>
-          </label>)}
-          {selectedVersions.length > 0 && <div className="mt-1 border-t border-line pt-1">
-            <button type="button"
-              className="w-full rounded-md px-2 py-1.5 text-left text-sm
-                text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => setSelectedVersions([])}>清除全部筛选</button>
-          </div>}
-        </PopoverContent>
-      </Popover>}
       {/* 列显示/隐藏(shadcn 惯用法):表格原语本身不带列开关,这里按
           Data Table 的列选择器形态用 Popover+Checkbox 承载,暂只有
           「所属模块」一列可选,后续加列在这里长。localStorage 按用户
@@ -864,7 +856,8 @@ function DtsRegister({
       </Popover>
       {remote.loading
         ? <span className="text-xs text-muted-foreground" role="status">远程查单中…</span>
-        : (query || selectedVersions.length > 0) && <span
+        : (query || ticketFilter.trim() || titleFilter.trim()
+          || selectedVersions.length > 0) && <span
             className="text-xs text-muted-foreground">
           {display.length} / {actionable?.length ?? 0} 条
         </span>}
@@ -900,8 +893,13 @@ function DtsRegister({
               border-dashed border-line px-6 py-10 text-center">
             <p className="text-sm text-muted-foreground">没有匹配的问题单。</p>
             <Button variant="outline" size="sm"
-              onClick={() => { setQuery(""); setSelectedVersions([]); }}>
-              清空搜索与版本过滤</Button>
+              onClick={() => {
+                setQuery("");
+                setTicketFilter("");
+                setTitleFilter("");
+                setSelectedVersions([]);
+              }}>
+              清空搜索与筛选</Button>
           </div>)
         : <div className="overflow-x-auto rounded-lg border border-line">
           <Table aria-label="名下问题单">
@@ -921,8 +919,56 @@ function DtsRegister({
                     </span>
                   </div>
                 </TableHead>
-                <TableHead>单号</TableHead>
-                <TableHead className="w-full">标题</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center gap-1">
+                    单号
+                    <HeaderFilter label="单号" active={!!ticketFilter.trim()}
+                      onClear={() => setTicketFilter("")}>
+                      {() => <Input autoFocus
+                        className="h-8 w-full rounded-md px-2 text-sm"
+                        placeholder="包含单号片段…" aria-label="按单号过滤"
+                        value={ticketFilter}
+                        onChange={(event) => setTicketFilter(event.target.value)} />}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
+                <TableHead className="w-full">
+                  <span className="inline-flex items-center gap-1">
+                    标题
+                    <HeaderFilter label="标题" active={!!titleFilter.trim()}
+                      onClear={() => setTitleFilter("")}>
+                      {() => <Input autoFocus
+                        className="h-8 w-full rounded-md px-2 text-sm"
+                        placeholder="包含标题片段…" aria-label="按标题过滤"
+                        value={titleFilter}
+                        onChange={(event) => setTitleFilter(event.target.value)} />}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
+                {/* 版本列(2026-09-13 表头化):展示含 B 版构建号的完整
+                    版本(截断后悬停可见全串),过滤只认版本组——漏斗
+                    弹层沿旧「版本过滤」的分组清单(勾组带全组 B 版),
+                    44px 触控目标由选项行 min-h-11 保留。 */}
+                <TableHead className="w-64">
+                  <span className="inline-flex items-center gap-1">
+                    版本
+                    {versions.length > 0 && <HeaderFilter label="版本" contentClassName="w-72"
+                      active={selectedVersions.length > 0}
+                      onClear={() => setSelectedVersions([])}>
+                      {() => <div className="flex flex-col">
+                        {versions.map((version) => <label key={version}
+                          className="flex min-h-11 cursor-pointer items-center gap-2.5
+                            rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={selectedVersions.includes(version)}
+                            onCheckedChange={(checked) => setSelectedVersions((prev) => checked
+                              ? [...prev, version]
+                              : prev.filter((item) => item !== version))} />
+                          <span className="font-mono text-xs">{version}</span>
+                        </label>)}
+                      </div>}
+                    </HeaderFilter>}
+                  </span>
+                </TableHead>
                 <TableHead>状态</TableHead>
                 {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
                 <TableHead className="w-12" />
@@ -936,7 +982,7 @@ function DtsRegister({
                 const detail = detailCache[ticket.ticket];
                 const detailId =
                   `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-                const colCount = moduleCol ? 6 : 5;
+                const colCount = moduleCol ? 7 : 6;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
@@ -970,6 +1016,12 @@ function DtsRegister({
                       <span className="block truncate"
                         title={ticket.title || undefined}>
                         {ticket.title || "(无标题)"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="max-w-0">
+                      <span className="block truncate font-mono text-xs"
+                        title={ticket.version}>
+                        {ticket.version || "—"}
                       </span>
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
