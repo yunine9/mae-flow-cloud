@@ -1,11 +1,16 @@
 /**
- * 元信息域(#239 只读版):问题会话工作台首签「元信息」。
+ * 元信息域(#239 只读版;#266 场景化平铺):问题会话工作台首签「元信息」。
  *
- * 上半区只读陈列登记元信息四项——标题、问题描述全文、业务模块名、
- * 网管环境(名称 + IP + 端口 + 形态;形态中文沿用环境域口径
- * 「虚拟化/容器化」,见 EnvironmentEditorDialog 的页面文案)。凭据类
- * 字段绝不出现:凭据只以服务端 vault 引用的形式存在于 wire 上,本
- * 面板连引用都不渲染。空值如实说「(未填)」,不编占位内容。
+ * 上半区只读平铺元信息字段,无「登记信息」壳(ADR-0026):标题、
+ * 问题描述全文仅无单会话渲染——有单会话(detail.ticket 在场)看
+ * 「DTS单据」页签,那是唯一权威出处,DTS 发起时描述只是单据标题的
+ * 抄本,陈列它等于同一信息两处且其中一处是错的;业务模块名、网管
+ * 环境(名称 + IP + 端口 + 形态;形态中文沿用环境域口径「虚拟化/
+ * 容器化」,见 EnvironmentEditorDialog 的页面文案)两场景都显,环境
+ * 未配置如实示「尚未配置」加引导(运行中 AI 举卡回填),不设第二
+ * 编辑入口。凭据类字段绝不出现:凭据只以服务端 vault 引用的形式存
+ * 在于 wire 上,本面板连引用都不渲染。空值如实说「(未填)」,不编
+ * 占位内容。
  *
  * 下半区陈列会话全部关联仓(仓名 + 完整 URL,一仓一行);模块绑定仓
  * (团队资产目录里该 module_id 的 repositories)带「模块绑定」标识。
@@ -175,30 +180,32 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
   }
 
   return <div className="grid min-h-0 flex-1 content-start gap-3.5 overflow-y-auto">
-    {/* 登记信息区(只读):发起时登记的四项事实。 */}
-    <section aria-label="登记信息"
-      className="grid content-start gap-2.5 rounded-xl border border-border bg-surface px-3.5 py-3">
-      <strong className="text-sm font-bold">登记信息</strong>
+    {/* 元信息字段(只读平铺,ADR-0026):无壳直列。标题/问题描述挂
+        detail.ticket 门——与头部单号徽标、「DTS单据」页签禁用同一条
+        判定词,有单即隐藏,场景只有一种来源不搞两套口径。 */}
+    {!detail.ticket && <>
       <MetaField label="标题">{detail.title}</MetaField>
       <MetaField label="问题描述">
         <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
           {detail.description || UNFILLED}
         </span>
       </MetaField>
-      <MetaField label="业务模块">{detail.module || UNFILLED}</MetaField>
-      <MetaField label="网管环境">
-        {detail.environment
-          ? <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              <span>{detail.environment.name}</span>
-              <span className="font-mono text-[13px]">
-                {detail.environment.hosts.join("、") || UNFILLED}
-              </span>
-              <span>端口 {detail.environment.port}</span>
-              <span>{envTypeText(detail.environment.env_type)}</span>
+    </>}
+    <MetaField label="业务模块">{detail.module || UNFILLED}</MetaField>
+    <MetaField label="网管环境">
+      {detail.environment
+        ? <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <span>{detail.environment.name}</span>
+            <span className="font-mono text-[13px]">
+              {detail.environment.hosts.join("、") || UNFILLED}
             </span>
-          : UNFILLED}
-      </MetaField>
-    </section>
+            <span>端口 {detail.environment.port}</span>
+            <span>{envTypeText(detail.environment.env_type)}</span>
+          </span>
+        : <span className="text-muted-foreground">
+            尚未配置——运行中 AI 举卡询问网管环境,回填后在此显示。
+          </span>}
+    </MetaField>
     {/* 关联仓清单区(只读):全部登记仓,仓名 + 完整 URL;模块绑定仓
         带标识;现场已回收时如实标注(回收时刻一并示人)。 */}
     <section aria-label="关联仓清单"

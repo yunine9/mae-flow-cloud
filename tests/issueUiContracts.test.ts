@@ -1398,16 +1398,23 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
     /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} \/>/);
   assert.match(sessionView,
     /tab !== "events" && tab !== "repos" && tab !== "meta"/);
-  // 登记信息区(只读)四项:标题/问题描述全文/业务模块/网管环境。
-  assert.match(metaPane, /aria-label="登记信息"/);
+  // 元信息字段(只读平铺,ADR-0026):「登记信息」壳已退役,四类字段
+  // 直接平铺;标题/问题描述挂 detail.ticket 门——有单会话不渲染(单据
+  // 页签是唯一权威出处,DTS 发起时描述只是单据标题的抄本),业务模块/
+  // 网管环境两场景都显。
+  assert.doesNotMatch(metaPane, /aria-label="登记信息"/);
+  assert.match(metaPane,
+    /\{!detail\.ticket && <>\s*\n\s*<MetaField label="标题">/);
   for (const label of ["标题", "问题描述", "业务模块", "网管环境"]) {
-    assert.ok(metaPane.includes(`>{label}</span>`), `登记信息缺「${label}」行`);
+    assert.ok(metaPane.includes(`>{label}</span>`), `元信息缺「${label}」行`);
   }
   // 网管环境给名称+IP+端口+形态,形态中文与编辑弹框同源(import
-  // ENVIRONMENT_FORM_TEXT,不重抄);空值如实降级(「(未填)」),凭据类
-  // 字段零出现(含注释也不带字面量,防止将来顺手渲染)。
+  // ENVIRONMENT_FORM_TEXT,不重抄);未配置如实示「尚未配置」加引导
+  // (等 AI 举卡回填),不设第二编辑入口;空值如实降级(「(未填)」),
+  // 凭据类字段零出现(含注释也不带字面量,防止将来顺手渲染)。
   assert.match(metaPane, /import \{ ENVIRONMENT_FORM_TEXT \} from "\.\.\/EnvironmentEditorDialog"/);
   assert.match(metaPane, /ENVIRONMENT_FORM_TEXT\[envType\]/);
+  assert.match(metaPane, /尚未配置/);
   assert.match(metaPane, /\(未填\)/);
   assert.doesNotMatch(metaPane, /credential_ref|password/i,
     "元信息面板不得出现凭据类字段");

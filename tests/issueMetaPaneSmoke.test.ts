@@ -68,9 +68,9 @@ function render(overrides: Partial<IssueDetail> = {}): string {
     React.createElement(IssueMetaPane, { detail: detail(overrides) }));
 }
 
-test("登记信息四项只读陈列,凭据引用零出现", () => {
+test("无单会话元信息平铺陈列(无登记信息壳),凭据引用零出现", () => {
   const html = render();
-  assert.match(html, /登记信息/);
+  assert.ok(!html.includes("登记信息"), "「登记信息」壳已随 ADR-0026 退役");
   assert.match(html, /网管侧告警未消除/);
   assert.match(html, /告警从周一持续至今,重启未恢复。/);
   assert.match(html, /传送网模块/);
@@ -80,8 +80,18 @@ test("登记信息四项只读陈列,凭据引用零出现", () => {
   assert.match(html, /容器化/, "env_type=k8s 出中文形态(虚拟化/容器化口径)");
   assert.ok(!html.includes("vault-ref-do-not-render"),
     "服务端 vault 引用不上屏");
-  // 本区(登记信息)只读陈列;写口只存在于文末 #241 编辑器
+  // 字段区只读陈列;写口只存在于文末 #241 编辑器
   // (形状见下方「编辑骨架」test 与 issueUiContracts 源码契约)。
+});
+
+test("有单会话不渲染标题/问题描述(单据页签唯一出处),模块/环境照常", () => {
+  const html = render({ source: "dts", ticket: "DTS2026090100001" });
+  assert.ok(!html.includes("网管侧告警未消除"),
+    "标题不得在 DTS 会话元信息出现(发起时它只是单据标题的抄本)");
+  assert.ok(!html.includes("告警从周一持续至今"),
+    "描述不得在 DTS 会话元信息出现");
+  assert.match(html, /传送网模块/, "业务模块两场景都显");
+  assert.match(html, /省网网管/, "网管环境两场景都显");
 });
 
 test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与空态如实", () => {
@@ -106,6 +116,7 @@ test("空值如实降级,终态会话(canceled/archived)照常陈列且零编辑
     description: "",
   });
   assert.match(unfilled, /\(未填\)/);
+  assert.match(unfilled, /尚未配置/, "环境未配置出空态引导(等 AI 举卡回填)");
   for (const status of ["canceled", "archived"] as const) {
     const html = render({ status });
     assert.match(html, /网管侧告警未消除/, "终态会话信息面照常可读");
