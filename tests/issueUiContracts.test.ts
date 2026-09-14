@@ -1546,8 +1546,10 @@ test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设�
 test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长链断行(2026-09-14 设计审查 02)", () => {
   // 徽标是静态胶囊,悬停底色辨不出可点:内层文字挂与单号链接同款的
   // hover 下划线,键盘聚焦同款(focus-visible);下划线挂行内文字盒,
-  // 不依赖穿透 inline-flex。
-  assert.match(registration, /className="group\/live"/);
+  // 不依赖穿透 inline-flex。焦点环由 Button 基类 focus-visible:ring
+  // 自带(域内所有钮共享),此处锚结构钩子防 group/live 脱落。
+  assert.match(registration,
+    /variant="ghost" size="xs"\s+className="group\/live"/);
   assert.match(registration,
     /group-hover\/live:underline group-focus-visible\/live:underline/);
   // 上传进行态挂 role=status,与其余进行态一致。
@@ -1568,8 +1570,12 @@ test("DTS 勾选浮动发起条:勾选浮现粘底,发起与顶部同轨(2026-09
     /selected\.length > 0 && <div className="sticky bottom-3 z-20/);
   assert.match(registration, /已选 <b>\{selected\.length\}<\/b> 张/);
   assert.match(registration, /onClick=\{\(\) => setSelected\(\[\]\)\}\s*>\s*清空选择/);
-  // 浮动条发起钮与顶部按钮同一套:同一 launch、busy 禁用、多张文案
-  // 逐张说明——不许长出第二套发起口径。
-  assert.equal((registration.match(/将逐张发起 \$\{selected\.length\} 个独立工作流/g) ?? []).length, 2,
-    "顶部与浮动条各一枚同文案 title");
+  // 浮动条发起钮与顶部按钮同一套:同一 launch、同一 busy,文案与说明
+  // 一处定义(launchTitle/launchLabel)两处消费——审查改锚:不再钉
+  // 逐字双份的文案形状。
+  assert.match(registration, /const launchTitle = selected\.length > 1/);
+  assert.equal((registration.match(/title=\{launchTitle\}/g) ?? []).length, 2,
+    "顶部与浮动条各一枚发起钮 title");
+  assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 2,
+    "顶部与浮动条各一枚发起钮文案");
 });

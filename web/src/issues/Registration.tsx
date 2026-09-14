@@ -871,6 +871,13 @@ function DtsRegister({
     }
   }
 
+  /** 发起钮文案与说明一处定义,顶部工具栏与浮动发起条两处消费(设计
+   * 审查 04 复审:同一动作的措辞不再逐字双份,改一处两处生效)。 */
+  const launchTitle = selected.length > 1
+    ? `将逐张发起 ${selected.length} 个独立工作流` : undefined;
+  const launchLabel = busy ? "发起中…"
+    : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理";
+
   return <div className="tw-root flex flex-col gap-3 text-base text-foreground">
     {dtsMock && <p className="rounded-md border border-attention/40 bg-attention-soft px-3 py-2 text-sm text-ink" role="note">
       DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
@@ -922,9 +929,8 @@ function DtsRegister({
         {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}
       </Button>
       <Button size="sm" disabled={!selected.length || busy}
-        title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
-        onClick={launch}>
-        {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
+        title={launchTitle} onClick={launch}>
+        {launchLabel}
       </Button>
     </div>
     {tickets === undefined && loading && <p className="text-sm text-muted-foreground">
@@ -1134,8 +1140,10 @@ function DtsRegister({
                             {/* 徽标本体是静态胶囊(2026-09-14 设计审查:
                                 悬停底色辨不出可点),内层文字挂链接级
                                 下划线语言,与单号链接同款;下划线挂文字
-                                所在的行内盒,穿透 inline-flex 不失效。 */}
-                            <span className="underline-offset-2 group-hover/live:underline group-focus-visible/live:underline">进行中</span>
+                                所在的行内盒,穿透 inline-flex 不失效。
+                                不加 offset:Badge overflow-hidden 且
+                                h-5 贴边,默认位置最稳。 */}
+                            <span className="group-hover/live:underline group-focus-visible/live:underline">进行中</span>
                           </Badge>
                         </Button>
                         : <span className="text-muted-foreground"
@@ -1247,9 +1255,8 @@ function DtsRegister({
             清空选择
           </Button>
           <Button size="sm" className="max-[680px]:w-full" disabled={busy}
-            title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
-            onClick={launch}>
-            {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
+            title={launchTitle} onClick={launch}>
+            {launchLabel}
           </Button>
         </div>
       </div>}

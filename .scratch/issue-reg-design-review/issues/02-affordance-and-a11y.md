@@ -6,7 +6,7 @@
 
 **Status:** done(本票即提交)
 
-- [x] 「进行中」徽标静态外观即可辨可点:悬停下划线、键盘焦点环可见,读屏仍读出「打开 X 的进行中会话」
+- [x] 「进行中」徽标静态外观即可辨可点:悬停下划线、键盘焦点环可见,读屏仍读出「打开 X 的进行中会话」。复审注:焦点环由 Button 基类 focus-visible:ring 自带,不另落;下划线不挂 offset(Badge overflow-hidden 且 h-5 贴边,默认位置最稳);契约锚 variant/size/group/live 结构钩子
 - [x] 「截图上传中…」挂 role="status";列设置触发钮无 aria-pressed、开合语义由原语表达
 - [x] 详情长 URL 断行(dd min-w-0 + 链接 break-all),详情网格不被撑破
 - [x] 契约测试钉住四处决议;web typecheck + issueUiContracts 54 绿
