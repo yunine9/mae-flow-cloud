@@ -37,8 +37,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type MemorySource = "annotation" | "prepush_fix" | "user_note" | "agent_note";
 export type MemoryJudge = "human" | "pipeline" | "agent";
-/** one_off 只进全文检索;local/general 才进推送与目录摘要(§5)。 */
-export type MemoryScope = "one_off" | "local" | "general";
+/** one_off 只检索；local/general 为仓内经验，platform 明确跨仓。 */
+export type MemoryScope = "one_off" | "local" | "general" | "platform";
 
 export const MEMORY_DIR = "corpus";
 export const MEMORY_ARCHIVE_DIR = "_archive";
@@ -225,6 +225,7 @@ export class MemoryStore {
     if (!trigger) throw new MemoryError("记忆缺少「什么情况下」");
     const conclusion = String(input.conclusion ?? "").trim();
     if (!conclusion && !options.withdrawn) throw new MemoryError("记忆缺少结论");
+    if (!["one_off", "local", "general", "platform"].includes(input.scope)) throw new MemoryError("未知记忆范围");
     if (!String(input.repo ?? "").trim()) throw new MemoryError("记忆缺少仓库");
     if (!String(input.task ?? "").trim()) throw new MemoryError("记忆缺少任务号");
     const body = [trigger, input.quote ?? "", input.problem ?? "", conclusion]
@@ -237,7 +238,7 @@ export class MemoryStore {
     const at = new Date().toISOString();
     const id = `c-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
     const repo = repoSlug(input.repo) === input.repo ? input.repo : repoSlug(input.repo);
-    const file = join(repo, at.slice(0, 7), `${id}.md`);
+    const file = join(input.scope === "platform" ? "_platform" : repo, at.slice(0, 7), `${id}.md`);
     const record: MemoryRecord = {
       ...input,
       repo,
@@ -254,7 +255,7 @@ export class MemoryStore {
     if (!contained(this.root, absolute)) {
       throw new MemoryError("记忆路径越出语料目录");
     }
-    mkdirSync(join(this.root, repo, at.slice(0, 7)), { recursive: true });
+    mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, renderMemoryMarkdown(record), "utf-8");
     // 索引行先于 md 不行(读到索引找不到文件),md 先于索引可以(多一个
     // 没人引用的文件,重建索引时照样收进去)。
@@ -311,7 +312,7 @@ export class MemoryStore {
       ...found,
       ...(draft.state === "model" && trigger
         ? { trigger: trigger.slice(0, MEMORY_TRIGGER_LIMIT) } : {}),
-      ...(draft.state === "model" && draft.scope ? { scope: draft.scope } : {}),
+      ...(draft.state === "model" && draft.scope && found.scope !== "platform" ? { scope: draft.scope } : {}),
       draft: draft.state,
       revision: (found.revision ?? 1) + 1,
     };
@@ -505,4 +506,10 @@ export interface MemoryInsights {
   sidecar: "ready" | "unavailable" | "absent";
   repos: MemoryRepoInsight[];
   memories: MemoryInsightRow[];
+}
+
+/** 来源仓库保留用于追溯；只有明确的平台范围可跨仓使用。 */
+export function memoryAccessible(row: MemoryRecord, repo: string): boolean {
+  return !row.withdrawn && !row.superseded_by && !row.archived
+    && (row.repo === repo || row.scope === "platform");
 }

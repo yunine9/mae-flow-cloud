@@ -22,7 +22,7 @@ import { Empty, EmptyDescription } from "@/components/Empty";
 const SOURCE = {
   agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
 } as const;
-const SCOPE = { one_off: "一次性", local: "局部", general: "通用" } as const;
+const SCOPE = { one_off: "一次性", local: "局部", general: "仓内通用", platform: "平台通用" } as const;
 
 function day(value?: string): string {
   if (!value) return "";

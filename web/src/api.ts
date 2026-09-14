@@ -2827,7 +2827,7 @@ export interface MemoryRecord {
   id: string;
   source: "annotation" | "prepush_fix" | "user_note" | "agent_note";
   judged_by: "human" | "pipeline" | "agent";
-  scope: "one_off" | "local" | "general";
+  scope: "one_off" | "local" | "general" | "platform";
   repo: string;
   paths: string[];
   line?: number;

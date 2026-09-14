@@ -120,6 +120,9 @@ class Sidecar:
         prefix = self.corpus / repo if repo else self.corpus
         # 一条记忆切成两三块,按块取 top_k 再按记忆归并,所以多取几块。
         rows = await self.ms.search(query, top_k=limit * 3, source_prefix=prefix)
+        platform = self.corpus / "_platform"
+        if repo and platform.exists() and platform != prefix:
+            rows += await self.ms.search(query, top_k=limit * 3, source_prefix=platform)
         path_prefix = str(req.get("path_prefix", "")).strip()
         merged: dict[str, dict] = {}
         for row in rows:
@@ -128,7 +131,9 @@ class Sidecar:
             if not memory_id:
                 continue
             front = read_front(Path(source))
-            if path_prefix and not any(
+            if repo and front.get("repo") != repo and front.get("scope") != "platform":
+                continue
+            if path_prefix and front.get("scope") != "platform" and not any(
                 str(p).startswith(path_prefix) for p in front.get("paths", [])
             ):
                 continue

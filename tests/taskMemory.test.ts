@@ -246,8 +246,8 @@ test("开局推送:同仓、未撤回、非本单的记忆按人判优先挑最�
     const internal = (svc as any).tasks.get(id);
     internal.summary.repo_url = "git@example.com:demo/notify-service.git";
     const briefing = String(await (svc as any).memoryBriefing(internal));
-    assert.match(briefing, /^本仓的任务记忆/);
-    assert.match(briefing, /是线索不是规则/);
+    assert.match(briefing, /^当前工作相关记忆/);
+    assert.match(briefing, /Agent 记录不代表人工决定/);
     const lines = briefing.split("\n").slice(1);
     assert.equal(lines.length, 2, "撤回的、别仓的、一次性的都不推");
     assert.match(lines[0], /^- \[人确认 · \d{4}-\d{2}-\d{2} · src\/Filter.java:88\] 改 Filter.java 时:黑名单判断/);

@@ -259,3 +259,29 @@ Skill 和团队文档进 memsearch 做索引在技术上没有障碍,能补「�
 - 记忆只增不删;老化靠衰减、失锚、覆盖、沉底。
 - 语料只给 Agent 消费;人看的只有任务面板与效能页的只读视图。
 - 不给 Agent 写记忆的工具;人的显式记忆走圈选。
+
+### 平台范围与当前工作召回（2026-09-14）
+
+`scope: platform` 表示跨仓库适用，存于 `corpus/_platform/`，`repo/task/author`
+仍保留原始来源。`local/general` 继续只适用于来源仓库；旧 general 不自动升级，
+以免把某仓约定广播全平台。Agent 可通过 `corpus_write` 显式选择 platform，
+但来源始终是 agent_note，不因此变成人工决定。平台范围必须来自明确适用条件，
+不能仅凭“平台记忆”等正文措辞推断权威。已有条目须核实范围后重新记录，不能只改
+md 的 scope 而不更新索引与存储位置。
+
+侧车分别查询当前仓和平台目录，再合并结果；Cloud 对结果按当前正本核对范围、
+撤回、替代和归档状态，展开采用相同条件。跨仓平台记忆不受来源仓相对路径失锚限制。
+开局（含反馈修复重启）与阶段切换按当前使命、最新用户补充及失败证据检索，原始需求
+仅作补充。开局结果与使命一起注入，并记录查询和条目 ID；不增加等待审批或执行器门禁。
+索引不可用沿用现有有界降级；Agent 仍可主动 search/expand 深挖。
+
+提示词保留来源和范围，不把历史经验与明确人为约定一概降格为无约束线索；同时明确
+Agent 记录不等于人工决定，当前用户要求优先。每次至多推送 8 条，结论保留原文，
+附带 ID 供展开。使用足迹证明查询/选取，不等于证明模型已经遵守。
+
+参考 memsearch 官方集成方式：
+[SDK 示例](https://github.com/zilliztech/memsearch/blob/main/docs/getting-started.md)
+采用 recall → think → remember；
+[DSH 插件](https://github.com/zilliztech/memsearch/blob/main/plugins/dsh/README.md)
+在第一步按当前问题有界检索并注入，也保留按需深挖。这里复用现有 Cloud 交接点，
+不引入第二套记忆服务，不把召回结果作为自动授权或质量证明。

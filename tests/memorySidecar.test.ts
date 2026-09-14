@@ -135,7 +135,7 @@ test("三个推送时刻:开局并进使命、进入新阶段插话、首次改�
     internal.summary.repo_url = "git@example.com:demo/notify-service.git";
     // 开局:语义命中的排前面(假件按子串命中"过滤顺序"那条)
     const briefing = String(await (svc as any).memoryBriefing(internal));
-    assert.match(briefing, /^本仓的任务记忆/);
+    assert.match(briefing, /^当前工作相关记忆/);
     assert.deepEqual(internal.memoryBriefingIds, [ids[0], ids[1]]);
 
     // 会话假件:只记 steer

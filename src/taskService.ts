@@ -87,6 +87,7 @@ import {
 import {
   MemoryError,
   MemoryStore,
+  memoryAccessible,
   repoSlug,
   type MemoryInput,
   type MemoryRecord,
@@ -109,7 +110,7 @@ import {
   renderDirectoryDigestFallback,
 } from "./memoryDraft.ts";
 import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
-import { createMemoryTools, renderMemoryHits } from "./memoryTools.ts";
+import { createMemoryTools, renderMemoryHits, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
@@ -5453,15 +5454,12 @@ export class TaskService {
     };
   }
 
-  /** 开局推送的记忆:同仓、未撤回未覆盖,人判的排前、新的排前,最多 8 条。
-   * 措辞是线索不是命令——"有人在这里要求过",判断仍在 Agent 和门禁。
-   * 旁路:索引读不动就不推,绝不挡启动。 */
+  /** 按当前工作推送仓库及平台记忆；旁路失败不阻断任务。 */
   private async memoryBriefing(task: TaskState): Promise<string | undefined> {
     try {
       const candidates = this.memoryCandidates(task);
-      // sidecar 在场就按需求语义再捞一把:换说法的老坑靠索引键捞不到。
       const hits = await this.memorySearch(task, {
-        query: task.summary.requirement.slice(0, 300), limit: 8,
+        query: memoryContextQuery(task), limit: 8,
       });
       const byId = new Map(candidates.map((row) => [row.id, row] as const));
       const semantic = (hits ?? []).map((hit) => byId.get(hit.id))
@@ -5471,16 +5469,16 @@ export class TaskService {
       const rows = [...semantic, ...rest].slice(0, 8);
       if (!rows.length) return undefined;
       task.memoryBriefingIds = rows.map((row) => row.id);
-      this.logMemoryUsage(task, { moment: "launch", ids: task.memoryBriefingIds });
+      this.logMemoryUsage(task, { moment: "launch", query: memoryContextQuery(task), ids: task.memoryBriefingIds });
       const lines = rows.map((row) => {
         const who = row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线";
-        const where = row.paths[0]
+        const where = row.scope === "platform" ? "平台通用" : row.paths[0]
           ? `${row.paths[0]}${row.line ? `:${row.line}` : ""}` : "本仓";
         return `- [${who} · ${row.at.slice(0, 10)} · ${where}] ${row.trigger}:`
-          + `${row.conclusion.replace(/\s+/g, " ").slice(0, 200)}`;
+          + `${row.conclusion.replace(/\s+/g, " ")}（${row.id}）`;
       });
-      return `本仓的任务记忆(含闭环经验和主动记录;是线索不是规则,`
-        + `改到对应位置时先看一眼,与现状冲突以现状和内核指令为准):\n`
+      return `当前工作相关记忆（含平台通用与仓库经验；保留来源和适用范围，`
+        + `历史经验结合现状判断；明确人为约定按范围遵守，Agent 记录不代表人工决定；当前用户要求优先）：\n`
         + lines.join("\n");
     } catch (error) {
       this.options.log?.(
@@ -5493,8 +5491,7 @@ export class TaskService {
     return repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
   }
 
-  /** 可推送的记忆:同仓、未撤回未覆盖未归档、非一次性、非本单;带路径的还要
-   * 路径在现场里还存在(失锚的不推,只留全文检索——§6)。返回已按权重排序。 */
+  /** 平台与本仓有效记忆；仅仓库记忆检查路径是否仍存在。 */
   private memoryCandidates(task: TaskState): MemoryRecord[] {
     const repo = this.memoryRepo(task);
     const store = this.memories();
@@ -5502,9 +5499,9 @@ export class TaskService {
     // 失锚只在真现场(有 .git)里记台账:假 cwd 会把好记忆记成失锚,半年后误沉底。
     const realCheckout = !!task.cwd && existsSync(join(task.cwd, ".git"));
     const rows = store.list().filter((row) => {
-      if (row.repo !== repo || row.withdrawn || row.superseded_by || row.archived
-          || row.scope === "one_off" || row.task === task.summary.id) return false;
-      if (task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
+      if (!memoryAccessible(row, repo)
+          || row.scope === "one_off" || (row.task === task.summary.id && row.scope !== "platform")) return false;
+      if (row.scope !== "platform" && task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
         if (realCheckout && !stats.get(row.id)?.unanchored_since) {
           store.ledger.append({ kind: "unanchored", id: row.id,
             task: task.summary.id, note: row.paths[0] });
@@ -5530,7 +5527,9 @@ export class TaskService {
     input: { query: string; pathPrefix?: string; limit?: number },
   ): Promise<MemorySearchHit[] | undefined> {
     if (!this.memorySidecar) return undefined;
-    return this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
+    const hits = await this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
+    if (!hits) return undefined;
+    return resolveMemoryHits(hits, id => this.memories().find(id), this.memoryRepo(task));
   }
 
   /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
@@ -5721,8 +5720,10 @@ export class TaskService {
     return createMemoryTools({
       repo: this.memoryRepo(task),
       search: (input) => this.memorySearch(task, input),
-      expand: async (id) => this.memories().find(id)?.repo === this.memoryRepo(task)
-        ? this.memories().read(id) : undefined,
+      expand: async (id) => {
+        const row = this.memories().find(id);
+        return row && memoryAccessible(row, this.memoryRepo(task)) ? this.memories().read(id) : undefined;
+      },
       write: (input, callId) => this.recordMemory(task, { ...input,
         source: "agent_note", judged_by: "agent", repo: this.memoryRepo(task),
         task: task.summary.id, evidence: `agent:${callId}`, author: "Agent" }),
@@ -5792,7 +5793,7 @@ export class TaskService {
       const candidates = this.memoryCandidates(task);
       if (!candidates.length) return;
       const hits = await this.memorySearch(task, {
-        query: `${phase}:${task.summary.requirement.slice(0, 200)}`, limit: 5,
+        query: `${phase}:${memoryContextQuery(task)}`, limit: 5,
       });
       const byId = new Map(candidates.map((row) => [row.id, row] as const));
       let rows = (hits ?? []).map((hit) => byId.get(hit.id))
@@ -5803,9 +5804,9 @@ export class TaskService {
       if (!rows.length) return;
       const driver = task.driver;
       if (!driver) return;
-      const text = `【任务记忆】进入「${phase}」。本仓有 ${rows.length} 条相关记忆,先看一眼:\n`
+      const text = `【任务记忆】进入「${phase}」。有 ${rows.length} 条仓库或平台相关记忆,先看一眼:\n`
         + renderMemoryHits(rows.map((row) => ({
-          id: row.id, score: 0, judged_by: row.judged_by, at: row.at,
+          id: row.id, score: 0, scope: row.scope, judged_by: row.judged_by, at: row.at,
           paths: row.paths, line: row.line,
           snippet: `${row.trigger}:${row.conclusion}`,
         })));
@@ -14334,10 +14335,8 @@ export class TaskService {
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
       }
-      // 记忆开局推送(docs/knowledge-memory-design.md §8-1):Agent 不会自己
-      // 想起来查,宿主替它查。第一期按仓从索引挑,不经 sidecar。
+      // 每次交接按当前使命重新检索，结果随使命一起投递。
       const briefing = await this.memoryBriefing(task);
-      if (briefing) prompt = `${prompt}\n\n${briefing}`;
       if (task.pendingMainSteers?.length) {
         promptSteerCount = task.pendingMainSteers.length;
         prompt = `${prompt}\n\n主任务启动前或暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
@@ -14347,6 +14346,7 @@ export class TaskService {
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
       // 清账在 settle 收口处,会话真做完了才算消费掉。
       if (task.mission) prompt = `${prompt}\n\n${task.mission}`;
+      if (briefing) prompt = `${prompt}\n\n${briefing}`;
       prompt = [prompt, dependencyScheduleContext(task.summary)].filter(Boolean).join("\n\n");
       prompt += `\n\n${taskHostGoal(this.taskHostRuntime(task, epoch))}`;
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),

@@ -468,3 +468,43 @@ test("Agent 无 sidecar 也能写记忆并展开；归属和来源由宿主固�
   const denied = await expand.execute("expand-2", { memory_id: records[0].id });
   assert.match(denied.content[0].text, /取不到/);
 });
+
+test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general 不扩大范围", async () => {
+  const { svc } = fakeService();
+  const api = svc as any;
+  try {
+    const { internal } = liveTask(svc);
+    const store = api.memories() as MemoryStore;
+    const platform = store.record({ ...base, source: "agent_note", judged_by: "agent",
+      scope: "platform", repo: "other-repo", paths: ["absent/in/this/repo"],
+      trigger: "多仓共用工具链报错时", conclusion: "核对平台工具链约定" });
+    const local = store.record({ ...base, scope: "general", repo: "other-repo" });
+    const retired = store.record({ ...base, scope: "platform", source: "user_note", author: "owner" });
+    store.withdraw(retired.id, "owner");
+    assert.ok(platform.file.startsWith("_platform/"));
+    assert.equal(platform.repo, "other-repo", "保留原始来源仓库");
+    assert.ok(api.memoryCandidates(internal).some((row: any) => row.id === platform.id));
+    assert.ok(!api.memoryCandidates(internal).some((row: any) => row.id === local.id));
+    const queries: string[] = [];
+    api.memorySidecar = { search: async (input: any) => {
+      queries.push(input.query);
+      return [platform, local, retired].map(row => ({ id: row.id, score: 1, snippet: "过期索引内容" }));
+    }, stop() {} };
+    internal.mission = "当前处理平台工具链证书失效";
+    internal.pendingMainSteers = ["责任人补充：使用新版工具链"];
+    const briefing = await api.memoryBriefing(internal);
+    assert.match(queries[0], /证书失效/);
+    assert.match(queries[0], /新版工具链/);
+    assert.match(briefing, /Agent 记录.*平台通用/);
+    assert.match(briefing, /核对平台工具链约定/);
+    assert.deepEqual(internal.memoryBriefingIds, [platform.id]);
+    const hits = await api.memorySearch(internal, { query: "工具链" });
+    assert.deepEqual(hits.map((hit: any) => hit.id), [platform.id]);
+    const expand = api.memoryTools(internal).find((tool: any) => tool.name === "corpus_expand");
+    assert.match((await expand.execute("expand-platform", { memory_id: platform.id })).content[0].text,
+      /核对平台工具链约定/);
+    assert.match((await expand.execute("expand-retired", { memory_id: retired.id })).content[0].text, /取不到/);
+    const usage = svc.listTaskMemoryUsage(internal.summary.id);
+    assert.ok(usage.some(row => row.moment === "launch" && String(row.query).includes("证书失效")));
+  } finally { await svc.shutdown(); }
+});
