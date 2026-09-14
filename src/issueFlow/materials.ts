@@ -562,7 +562,7 @@ export function bundleSessionLogs(
     totalBytes += content.length;
     if (totalBytes > LOG_ARCHIVE_MAX_BYTES) {
       throw new IssueLogsArchiveTooLargeError(
-        "拉取日志合计超过 256 MiB,请先清理 local-logs 再打包");
+        "拉取日志合计超过 256 MiB 上限,无法整包打包");
     }
     entries.push({ name: entry.path, content, modifiedAt: info.mtime });
   }

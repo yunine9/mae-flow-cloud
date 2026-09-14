@@ -110,10 +110,12 @@ test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与�
   assert.match(empty, /会话没有登记代码仓/);
 });
 
-test("主动拉取按钮(#268):无日志非终态归属可见,终态/查看模式缺席", () => {
+test("主动拉取/下载按钮(#267/#268):关态两钮全无(三态计数防闪现),终态/查看模式缺席拉取钮", () => {
   const html = render();
-  assert.match(html, /拉取日志/, "无日志非终态会话出「拉取日志」钮");
-  assert.match(html, /还没有拉取过日志/, "空态说明在场(按钮不凭空出现)");
+  // SSR 不跑 effects,logFileCount 停在"读取中"三态——拉取/下载两钮
+  // 都不出:有日志的会话进页签不许闪现拉取钮再切换。
+  assert.ok(!html.includes("下载日志"), "关态(清单未到)不出下载钮");
+  assert.ok(!html.includes("拉取日志"), "关态不出拉取钮");
   const peer = render({}, false);
   assert.ok(!peer.includes("拉取日志"), "查看模式不出拉取写口(意图递交是写)");
   for (const status of ["canceled", "archived", "failed"] as const) {

@@ -104,16 +104,20 @@ export function IssueMetaPane({ detail, canOperate }: {
   // ---- 日志下载(#267,ADR-0026):日志的人读面只有下载一途(在线
   // 树/查看器/解压已随「拉取日志」页签退役)。「拉取过没拉取过」没有
   // 独立状态位,判定信号就是材料清单里有没有日志文件;清单随 updated_at
-  // 的既有节奏重取,失败按无日志降级(按钮缺席即可,不给会话页添堵)。 ----
-  const [logFileCount, setLogFileCount] = useState(0);
+  // 的既有节奏重取,失败按无日志降级。计数用三态:undefined = 还没读到
+  // ——拉取/下载两钮都不出,避免有日志的会话进页签时拉取钮闪现。 ----
+  const [logFileCount, setLogFileCount] = useState<number>();
+  const [logsTruncated, setLogsTruncated] = useState(false);
   const [downloadingLogs, setDownloadingLogs] = useState(false);
   const [logDownloadNote, setLogDownloadNote] = useState("");
   useEffect(() => {
     let alive = true;
     getIssueMaterials(detail.id)
       .then((materials) => {
-        if (alive) setLogFileCount(materials.logs.entries
+        if (!alive) return;
+        setLogFileCount(materials.logs.entries
           .filter((entry) => entry.type === "file").length);
+        setLogsTruncated(materials.logs.truncated === true);
       })
       .catch(() => {
         if (alive) setLogFileCount(0);
@@ -288,17 +292,21 @@ export function IssueMetaPane({ detail, canOperate }: {
           </span>}
         {/* 日志的人读出口(#267):拉取过(logs 清单有文件)才显示,
             终态会话照常可下(与导出现场记录同口径);下载是纯读,
-            查看模式不收闸。 */}
-        {logFileCount > 0 && <span className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="xs"
-            disabled={downloadingLogs}
-            onClick={() => void downloadLogs()}>
-            {downloadingLogs ? "打包中…" : "下载日志"}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            共 {logFileCount} 个日志文件,整包下载
-          </span>
-        </span>}
+            查看模式不收闸。清单撞条数帽时如实披露(打包以清单为界)。 */}
+        {logFileCount !== undefined && logFileCount > 0
+          && <span className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="xs"
+              disabled={downloadingLogs}
+              onClick={() => void downloadLogs()}>
+              {downloadingLogs ? "打包中…" : "下载日志"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              共 {logFileCount} 个日志文件,整包下载
+            </span>
+            {logsTruncated && <span className="text-xs text-attention">
+              日志条目超过上限(2000),包内可能不完整
+            </span>}
+          </span>}
         {/* 主动拉取(#268):无日志的非终态会话才出钮(与下载互补,
             有日志后由下载替代);环境未配置也显示——点击后 AI 按技能
             举环境闸要环境,一条链走完;写口只归归属人。 */}

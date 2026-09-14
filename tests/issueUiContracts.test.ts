@@ -1425,6 +1425,8 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
   assert.match(metaPane, /materials\.logs\.entries/);
   assert.match(metaPane, /materials\/logs\/archive/);
   assert.match(metaPane, /"下载日志"/);
+  // 清单撞条数帽必须如实披露(打包以清单为界,旧日志页签同款诚实原则)。
+  assert.match(metaPane, /可能不完整/);
   assert.doesNotMatch(metaPane, /credential_ref|password/i,
     "元信息面板不得出现凭据类字段");
   // 关联仓清单区:仓名(repoName)+完整 URL;模块绑定仓带「模块绑定」

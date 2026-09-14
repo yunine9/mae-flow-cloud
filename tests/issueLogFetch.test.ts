@@ -130,6 +130,15 @@ test("终态守卫:archived/canceled/failed 拒绝拉取意图(死信防线),打
   }
 });
 
+test("queued 守卫同构于 requestRepoChanges(终态守卫有测,queued 不单测):queued 在泵下是瞬态,服务侧造稳定夹具不可行——先例 issueRepoChange 同样只测终态,queued 分支由同构骨架保证", () => {
+  const source = readFileSync(
+    new URL("../src/issueFlow/service.ts", import.meta.url), "utf-8");
+  const body = source.slice(
+    source.indexOf("requestLogFetch(id: string)"),
+    source.indexOf("// ---- 会话驱动 ----"));
+  assert.match(body, /status === "queued"/, "queued 守卫必须在场");
+});
+
 test("空闲投递=开回合直送:通知进模型上下文,不欠账不落便签", async () => {
   const dataDir = mfcTemp("mfc-issue-logfetch-idle-");
   const id = seedIssue(dataDir);
