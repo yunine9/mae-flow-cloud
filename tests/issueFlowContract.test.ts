@@ -181,11 +181,17 @@ async function until<T>(
   probe: () => T | undefined,
   what: string,
   timeoutMs = 60_000,
+  dump?: () => string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let nextDump = Date.now() + 10_000;
   for (;;) {
     const value = probe();
     if (value !== undefined) return value;
+    if (dump && Date.now() >= nextDump) {
+      nextDump = Date.now() + 10_000;
+      console.error(`[diag ${what}] ${dump()}`);
+    }
     if (Date.now() >= deadline) throw new Error(`等待超时:${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -840,7 +846,12 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
-    }, "Agent 问题卡");
+    }, "Agent 问题卡", undefined, () => {
+      const i = service.get(created.id);
+      return JSON.stringify({ status: i.status, stage: i.stage,
+        gate: i.gate?.kind, waiting: i.waiting ?? null,
+        note: i.stage_note?.slice(0, 60), error: i.error });
+    });
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
