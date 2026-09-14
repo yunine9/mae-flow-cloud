@@ -118,6 +118,41 @@ test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", (
   assert.doesNotMatch(registration, /"版本过滤"/, "工具栏版本过滤按钮应已退役(筛选住列头)");
 });
 
+test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026-09-14)", () => {
+  // 判定唯一口径 liveIssueFor:「已发起」= 同单号 + 名下会话非终态。
+  // 终态三元组在登记页只许住在这一处——发起查重、状态列、勾选禁用、
+  // 默认过滤全走它,结构性保证"列上标已发起 ⇔ 此刻发起会被拦"。
+  assert.match(registration,
+    /function liveIssueFor\(issues: IssueSummary\[\], ticketNo: string\)/);
+  assert.match(registration,
+    /!\["archived", "canceled", "failed"\]\.includes\(item\.status\)/);
+  assert.equal(
+    (registration.match(/"archived", "canceled", "failed"/g) ?? []).length, 1,
+    "终态三元组只许住在 liveIssueFor 一处(第二处即同尺漂移)");
+  assert.match(registration, /const clash = liveIssueFor\(issues, ticketNo\)/,
+    "发起前查重必须走同一口径函数");
+  // 列头漏斗:默认只勾「未发起」;两项全勾(或漏斗清空)才是全显,
+  // 计数条随发起过滤生效亮出 N/M。
+  assert.match(registration,
+    /<HeaderFilter label="发起状态" active=\{launchFilterActive\}/);
+  assert.match(registration, /const \[showFresh, setShowFresh\] = useState\(true\)/);
+  assert.match(registration,
+    /const \[showLaunched, setShowLaunched\] = useState\(false\)/);
+  assert.match(registration, /已发起\(进行中\)/);
+  assert.match(registration,
+    /selectedVersions\.length > 0 \|\| launchFilterActive/);
+  // 已发起的行:勾选禁用(悬停说明),徽标可点跳进该会话;全选只
+  // 作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  assert.match(registration, /disabled=\{!!liveIssue\}/);
+  assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
+  assert.match(registration, /const selectableTickets = display/);
+  assert.match(registration,
+    /setShowFresh\(true\);\s*\n\s*setShowLaunched\(false\);/);
+  // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
+  assert.match(issueBoard,
+    /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);
+});
+
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
   assert.match(decisions, /role="radiogroup"/);
   assert.match(decisions, /role="radio"[\s\S]*aria-checked=\{chosen\}/);

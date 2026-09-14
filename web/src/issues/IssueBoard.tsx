@@ -245,6 +245,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         refreshList();
         openIssue(created.id);
       }}
+      onOpenIssue={openIssue}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
     />}

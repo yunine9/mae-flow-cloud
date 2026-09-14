@@ -101,21 +101,36 @@ function repoLabel(url: string): string {
   return last.replace(/\.git$/i, "") || url;
 }
 
+/** 名下进行中会话按单查重的唯一口径(「已发起」词条,CONTEXT.md):
+ * 同单号且会话未到终态(归档/取消/失败)。发起前查重与列表的发起
+ * 状态列/勾选禁用/默认过滤全走这一处——列上说"已发起"当且仅当此刻
+ * 点发起会被拦;只有终态旧会话的单不算,可再次发起(与服务端 create
+ * 守卫同尺)。 */
+function liveIssueFor(issues: IssueSummary[], ticketNo: string):
+  IssueSummary | undefined {
+  return issues.find((item) => item.ticket === ticketNo
+    && !["archived", "canceled", "failed"].includes(item.status));
+}
+
 export function IssueRegistration({
   viewer,
   issues,
   onCreated,
   onError,
   onNavigateProfile,
+  onOpenIssue,
   panel,
   visible = true,
 }: {
   viewer: AuthUser;
-  /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦)。 */
+  /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦);
+   * 2026-09-14 起也是发起状态列/默认过滤的判定数据(liveIssueFor)。 */
   issues: IssueSummary[];
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
+  /** 点「进行中」徽标跳进该单名下的进行中会话(IssueBoard 的 openIssue)。 */
+  onOpenIssue?: (issueId: string) => void;
   /** 面板受控态(必传):当前面板由导航子页签决定——「问题登记/DTS列表」
    * 两个子页签各接管一个面板,内部不再自持页签按钮。 */
   panel: "dts" | "manual";
@@ -134,7 +149,7 @@ export function IssueRegistration({
     </div>
     <div hidden={panel !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
-        onCreated={onCreated} onError={onError} />
+        onCreated={onCreated} onError={onError} onOpenIssue={onOpenIssue} />
     </div>
   </section>;
 }
@@ -479,14 +494,17 @@ function DtsRegister({
   active,
   onCreated,
   onError,
+  onOpenIssue,
 }: {
   viewer: AuthUser;
-  /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦)。 */
+  /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦);
+   * 发起状态列/默认过滤同尺共用(liveIssueFor)。 */
   issues: IssueSummary[];
   /** 页签是否激活:首次激活自动拉取一次名下问题单,之后手动刷新。 */
   active: boolean;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
+  onOpenIssue?: (issueId: string) => void;
 }) {
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
@@ -525,6 +543,12 @@ function DtsRegister({
   // 入口同批迁进「版本」列表头漏斗,行为等价迁移。
   const [ticketFilter, setTicketFilter] = useState("");
   const [titleFilter, setTitleFilter] = useState("");
+  // 发起过滤(2026-09-14 拍板):「发起状态」列表头漏斗,默认只看未
+  // 发起的单——已发起(名下有进行中会话)的行默认滤掉且勾选禁用。
+  // 两项全勾 = 全显 = 无过滤;打开/刷新回默认态,漏斗清空是全显。
+  const [showFresh, setShowFresh] = useState(true);
+  const [showLaunched, setShowLaunched] = useState(false);
+  const launchFilterActive = !showFresh || !showLaunched;
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -639,33 +663,41 @@ function DtsRegister({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, tickets, fuzzyEmpty]);
 
-  // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重);清空搜索框时
-  // 远程结果随 effect 复位消失,恢复展示名下全部问题单。远程命中的单
-  // 也只展示可发起状态;被状态挡下的汇总一条提示,不让用户以为单号不存在。
+  // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重),再过发起
+  // 过滤(名下与远程补查单同尺适用)。清空搜索框时远程结果随 effect
+  // 复位消失,恢复展示名下全部问题单。远程命中的单也只展示可发起状态;
+  // 被状态挡下的汇总一条提示,不让用户以为单号不存在。
   const remoteTickets = remote.tickets;
   const hiddenRemote = remoteTickets.filter((t) => !isActionableDts(t));
   const display = useMemo(() => {
     const list = versionFiltered ?? [];
     const extra = remoteTickets.filter((r) =>
       isActionableDts(r) && !list.some((item) => item.ticket === r.ticket));
-    return [...list, ...extra];
-  }, [versionFiltered, remoteTickets]);
+    const merged = [...list, ...extra];
+    if (!launchFilterActive) return merged;
+    return merged.filter((t) => liveIssueFor(issues, t.ticket)
+      ? showLaunched : showFresh);
+  }, [versionFiltered, remoteTickets, launchFilterActive, showFresh,
+    showLaunched, issues]);
 
-  // 全选表头(三态):只作用于当前展示列表(搜索+版本过滤后)——全中时
-  // 点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在展示
-  // 列表里,保持原样,发起时照常带上。
-  const displayedTickets = display.map((t) => t.ticket);
+  // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
+  // 过滤划范围,发起过滤里已发起的行勾选禁用,不在全选之列。可勾行全
+  // 中时点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在
+  // 展示列表里,保持原样,发起时照常带上。
+  const selectableTickets = display
+    .filter((t) => !liveIssueFor(issues, t.ticket))
+    .map((t) => t.ticket);
   const displayedSelectedCount =
-    displayedTickets.filter((no) => selected.includes(no)).length;
-  const allDisplayedSelected = displayedTickets.length > 0
-    && displayedSelectedCount === displayedTickets.length;
+    selectableTickets.filter((no) => selected.includes(no)).length;
+  const allDisplayedSelected = selectableTickets.length > 0
+    && displayedSelectedCount === selectableTickets.length;
   function toggleSelectAll() {
     if (allDisplayedSelected) {
-      const shown = new Set(displayedTickets);
+      const shown = new Set(selectableTickets);
       setSelected((current) => current.filter((no) => !shown.has(no)));
     } else {
       setSelected((current) =>
-        [...new Set([...current, ...displayedTickets])]);
+        [...new Set([...current, ...selectableTickets])]);
     }
   }
 
@@ -682,6 +714,8 @@ function DtsRegister({
     setSelectedVersions([]);
     setTicketFilter("");
     setTitleFilter("");
+    setShowFresh(true);
+    setShowLaunched(false);
     setExpandedTicket(null);
     try {
       const result = await listDtsTickets();
@@ -779,8 +813,9 @@ function DtsRegister({
     let first: IssueSummary | undefined;
     try {
       for (const ticketNo of selected) {
-        const clash = issues.find((item) => item.ticket === ticketNo
-          && !["archived", "canceled", "failed"].includes(item.status));
+        // 查重与发起状态列同尺(liveIssueFor 一处口径):列上没标
+        // 「进行中」的单,走到这里也不会被这条拦下。
+        const clash = liveIssueFor(issues, ticketNo);
         if (clash) {
           failures.push(`${ticketNo} → 已有进行中的问题会话(${clash.id})`);
           continue;
@@ -857,7 +892,7 @@ function DtsRegister({
       {remote.loading
         ? <span className="text-xs text-muted-foreground" role="status">远程查单中…</span>
         : (query || ticketFilter.trim() || titleFilter.trim()
-          || selectedVersions.length > 0) && <span
+          || selectedVersions.length > 0 || launchFilterActive) && <span
             className="text-xs text-muted-foreground">
           {display.length} / {actionable?.length ?? 0} 条
         </span>}
@@ -892,30 +927,37 @@ function DtsRegister({
           : <div className="flex flex-col items-center gap-2 rounded-lg border
               border-dashed border-line px-6 py-10 text-center">
             <p className="text-sm text-muted-foreground">没有匹配的问题单。</p>
+            {/* 清空 = 全显(发起过滤两项全勾),与版本过滤现行行为一致
+                ——回到默认态(只看未发起)只发生在打开/刷新。 */}
             <Button variant="outline" size="sm"
               onClick={() => {
                 setQuery("");
                 setTicketFilter("");
                 setTitleFilter("");
                 setSelectedVersions([]);
+                setShowFresh(true);
+                setShowLaunched(true);
               }}>
               清空搜索与筛选</Button>
           </div>)
         : <div className="overflow-x-auto rounded-lg border border-line">
+          {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
+              旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
+              在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
           <Table aria-label="名下问题单">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-28">
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
-                      checked={displayedTickets.length > 0
+                      checked={selectableTickets.length > 0
                         && allDisplayedSelected}
                       indeterminate={!allDisplayedSelected
                         && displayedSelectedCount > 0}
                       onCheckedChange={() => toggleSelectAll()} />
                     <span className="whitespace-nowrap text-xs font-normal
                       text-muted-foreground">
-                      已选 {displayedSelectedCount} / {displayedTickets.length} 张
+                      已选 {displayedSelectedCount} / {selectableTickets.length} 张
                     </span>
                   </div>
                 </TableHead>
@@ -970,6 +1012,34 @@ function DtsRegister({
                   </span>
                 </TableHead>
                 <TableHead>状态</TableHead>
+                {/* 发起状态列(2026-09-14):本平台有没有发起过——判定
+                    与发起拦截同尺(liveIssueFor 一处口径),漏斗默认只
+                    看未发起;徽标可点,跳进该单名下的进行中会话。 */}
+                <TableHead className="w-24">
+                  <span className="inline-flex items-center gap-1">
+                    发起状态
+                    <HeaderFilter label="发起状态" active={launchFilterActive}
+                      onClear={() => {
+                        setShowFresh(true);
+                        setShowLaunched(true);
+                      }}>
+                      {() => <div className="flex flex-col">
+                        <label className="flex min-h-11 cursor-pointer items-center gap-2.5
+                          rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={showFresh}
+                            onCheckedChange={(checked) => setShowFresh(checked)} />
+                          未发起
+                        </label>
+                        <label className="flex min-h-11 cursor-pointer items-center gap-2.5
+                          rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                          <Checkbox checked={showLaunched}
+                            onCheckedChange={(checked) => setShowLaunched(checked)} />
+                          已发起(进行中)
+                        </label>
+                      </div>}
+                    </HeaderFilter>
+                  </span>
+                </TableHead>
                 {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
                 <TableHead className="w-12" />
               </TableRow>
@@ -982,13 +1052,20 @@ function DtsRegister({
                 const detail = detailCache[ticket.ticket];
                 const detailId =
                   `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-                const colCount = moduleCol ? 7 : 6;
+                // 发起状态判定(与拦截同尺):有进行中会话即已发起——
+                // 勾选禁用、徽标跳转、默认过滤都认它。
+                const liveIssue = liveIssueFor(issues, ticket.ticket);
+                const colCount = moduleCol ? 8 : 7;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
                       ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
+                        disabled={!!liveIssue}
+                        title={liveIssue
+                          ? `已发起:会话 ${liveIssue.id} 进行中,不可重复发起`
+                          : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
                           checked
@@ -1027,6 +1104,19 @@ function DtsRegister({
                     <TableCell className="whitespace-nowrap">
                       {ticket.status
                         && <Badge variant="secondary">{ticket.status}</Badge>}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {liveIssue
+                        ? <button type="button"
+                            title={`已发起:会话 ${liveIssue.id} 进行中,点击打开`}
+                            aria-label={`打开 ${ticket.ticket} 的进行中会话`}
+                            onClick={() => onOpenIssue?.(liveIssue.id)}
+                            className="inline-flex items-center rounded-sm
+                              transition-opacity hover:opacity-75">
+                          <Badge>进行中</Badge>
+                        </button>
+                        : <span className="text-muted-foreground"
+                            aria-label="未发起">—</span>}
                     </TableCell>
                     {moduleCol && <TableCell>
                       <Select
