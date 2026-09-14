@@ -624,6 +624,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // (票 03)。一/二档(ADR-0019)不举这张卡:AI 自行核对部署输出
       // 并在报告里记录验证情况,流水线验绿仍是交付终点。
       if ((ctx.interventionTier?.() ?? "2") === "3") {
+        // 卡面与 raise_gate 的 env_verify 模板是两处刻意的异文
+        // (触发语境:部署完 vs 全绿收口),见 RAISE_GATE_QUESTIONS 头注。
         raiseGate(
           ctx.state,
           "env_verify",
@@ -648,6 +650,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
    * 监看器代举路径在切换票(#246/#247)落地后应收敛引用这里,防两处漂移。 */
   const RAISE_GATE_QUESTIONS: Record<
     "env_verify" | "pipeline_unfixable" | "pipeline_evidence", string> = {
+    // env_verify 的另一处卡面:build_deploy 三档部署完举的同款卡
+    // (触发语境不同=部署完而非全绿,问题文案各异、选项同出注册表)
+    // ——两处都在本文件,改措辞时对着看。
     env_verify:
       "全部 MR 流水线已跑绿。请到目标环境验证修复效果:通过则可归档"
       + "收口;发现问题请选「验证发现问题」并描述现象(补充说明支持"
