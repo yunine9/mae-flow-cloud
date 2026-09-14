@@ -50,6 +50,38 @@ test("AR 描述按单号保存：换 HEAD 不重问，换 AR 不复用；重启�
   assert.equal(savedMrDescription(gate, "task-1", "REQ456"), undefined);
 });
 
+test("MR 描述卡被接管作废后另举新卡，旧卡保留审计且新答复可恢复交付", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "mfc-ar-desc-reissue-")), "waiting.json");
+  const gate = new HumanGate(path);
+  const stale = askMrDescription(gate, "task-15", "REQ20260627016573");
+  gate.supersede(stale.waiting_id, {
+    stateVersion: stale.state_version,
+    notes: "用户使用开发助手接管，原现场失效",
+  });
+
+  const renewed = askMrDescription(gate, "task-15", "REQ20260627016573");
+  assert.notEqual(renewed.waiting_id, stale.waiting_id);
+  assert.match(renewed.call_id, /-r2$/);
+  assert.equal(renewed.status, "waiting");
+  assert.equal(gate.get(stale.waiting_id)?.status, "superseded", "旧卡不能被复活或覆盖");
+  assert.equal(
+    askMrDescription(gate, "task-15", "REQ20260627016573").waiting_id,
+    renewed.waiting_id,
+    "同一次恢复重试仍应幂等复用新卡",
+  );
+
+  gate.resolve(renewed.waiting_id, {
+    stateVersion: renewed.state_version,
+    decision: "跨制式自侦测编排实现",
+    decidedBy: "owner",
+  });
+  assert.equal(
+    savedMrDescription(new HumanGate(path), "task-15", "REQ20260627016573"),
+    "跨制式自侦测编排实现",
+  );
+  assert.equal(gate.all().filter((record) => record.step === MR_DESCRIPTION_STEP).length, 2);
+});
+
 test("首次 MR 创建前人工填写开放题：空值/非责任人不通过，准确标题随单号送到平台", async t => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-ar-platform-")));
