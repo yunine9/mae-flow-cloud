@@ -44,6 +44,10 @@ AI 实际修改并选择交付的关联仓。判定权归 AI(它对哪些仓调�
 **拉仓**:
 AI 调用平台工具把一个代码仓加入会话并克隆。克隆在宿主侧带凭据执行,AI 只见结果事实(目录、分支、基线命中与否)。
 
+**拉取日志**:
+把网管侧日志落到会话现场(local-logs)的动作,执行者始终是 Agent(经 issue-ops 技能,按环境形态走对应引擎);页面「拉取日志」按钮只是把拉取意图递给 Agent(Agent 主理第二例,ADR-0026),平台不代拉。人读日志只有下载一途(整包 zip);在线日志树/查看器/解压已随该 ADR 退役——AI 读日志不经页面,它自己拉自己读。
+_Avoid_: 平台代拉、页面直接拉取(违反 Agent 主理);把页面拉取当 AI 读日志的前提(AI 的日志链路在容器与 local-logs,页签橱窗已拆)
+
 **环境预热**:
 拉仓收口进 analyze 时后台点火的专职编译会话(需求侧 warmupAgent 的问题流移植,2026-09-04):同一任务容器里编译基线、焐热分仓缓存、沉淀构建入口到 `.mae-flow-work/build-notes.md`。fail-open 旁路:失败落 infrastructure_failure 收据(`issue.json` 的 `warmup` 字段,不上 wire),主流程照走;与需求侧同条件启用(host + isolateImage),测试形态缺席即关。修复 Agent 开改前先读 build-notes。
 
