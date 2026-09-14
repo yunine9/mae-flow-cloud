@@ -361,7 +361,7 @@ function ManualRegister({
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground">截图上传中…</span>}
+            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground" role="status">截图上传中…</span>}
             {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
             <Button type="button" variant="ghost" size="xs"
               disabled={!description.trim() || polishing}
@@ -886,7 +886,7 @@ function DtsRegister({
           记忆(键沿用旧开关的,老用户偏好不丢)。 */}
       <Popover>
         <PopoverTrigger render={<Button type="button" variant="ghost" size="sm"
-          aria-label="列设置" aria-pressed={moduleCol}
+          aria-label="列设置"
           title="显示或隐藏「所属模块」列">
           <Columns3 aria-hidden className="size-3.5" />列
         </Button>} />
@@ -1122,10 +1122,17 @@ function DtsRegister({
                     <TableCell className="whitespace-nowrap">
                       {liveIssue
                         ? <Button type="button" variant="ghost" size="xs"
+                            className="group/live"
                             title={`${liveTip},点击打开`}
                             aria-label={`打开 ${ticket.ticket} 的进行中会话`}
                             onClick={() => onOpenIssue?.(liveIssue.id)}>
-                          <Badge>进行中</Badge>
+                          <Badge>
+                            {/* 徽标本体是静态胶囊(2026-09-14 设计审查:
+                                悬停底色辨不出可点),内层文字挂链接级
+                                下划线语言,与单号链接同款;下划线挂文字
+                                所在的行内盒,穿透 inline-flex 不失效。 */}
+                            <span className="underline-offset-2 group-hover/live:underline group-focus-visible/live:underline">进行中</span>
+                          </Badge>
                         </Button>
                         : <span className="text-muted-foreground"
                             aria-label="未发起">—</span>}
@@ -1194,8 +1201,8 @@ function DtsRegister({
                           <dd className="font-mono text-xs">
                             {detail?.version || ticket.version || "—"}</dd>
                           <dt className="text-muted-foreground">问题链接</dt>
-                          <dd>{(detail?.url || ticket.url)
-                            ? <a className="text-primary underline underline-offset-2"
+                          <dd className="min-w-0">{(detail?.url || ticket.url)
+                            ? <a className="text-primary underline underline-offset-2 break-all"
                                 href={detail?.url || ticket.url}
                                 target="_blank" rel="noreferrer">
                               {detail?.url || ticket.url}

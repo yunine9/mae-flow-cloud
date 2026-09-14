@@ -1529,3 +1529,22 @@ test("登记域词汇与标点体例:动词归「发起」,引号归「」,标�
   // 资源屏蔽提示句内直述,不再用间隔号挂动作。
   assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件,点开查看详情/);
 });
+
+test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长链断行(2026-09-14 设计审查 02)", () => {
+  // 徽标是静态胶囊,悬停底色辨不出可点:内层文字挂与单号链接同款的
+  // hover 下划线,键盘聚焦同款(focus-visible);下划线挂行内文字盒,
+  // 不依赖穿透 inline-flex。
+  assert.match(registration, /className="group\/live"/);
+  assert.match(registration,
+    /group-hover\/live:underline group-focus-visible\/live:underline/);
+  // 上传进行态挂 role=status,与其余进行态一致。
+  assert.match(registration,
+    /role="status">截图上传中…<\/span>/);
+  // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
+  // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
+  assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);
+  // 详情「问题链接」长 URL 断行,不撑破详情网格。
+  assert.match(registration, /<dd className="min-w-0">/);
+  assert.match(registration,
+    /text-primary underline underline-offset-2 break-all/);
+});
