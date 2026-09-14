@@ -30,7 +30,6 @@ const fastPoll = {
   models: () => ({}),
   runtime: () => ({
     poll_interval_s: 1, poll_timeout_s: 120,
-    evidence_retry_minutes: 0,
   }),
 };
 
@@ -286,7 +285,7 @@ test("关自动修(repair_rounds=0):检视意见标待人工,不注入模型", a
       models: () => ({}),
       runtime: () => ({
         poll_interval_s: 1, poll_timeout_s: 120,
-        evidence_retry_minutes: 0, repair_rounds: 0,
+        repair_rounds: 0,
       }),
     },
     dts: new MockDtsGateway(),

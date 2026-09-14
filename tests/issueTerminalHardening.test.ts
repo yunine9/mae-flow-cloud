@@ -25,7 +25,6 @@ const fastPoll = {
   models: () => ({}),
   runtime: () => ({
     poll_interval_s: 1, poll_timeout_s: 300,
-    evidence_retry_minutes: 0,
   }),
 };
 

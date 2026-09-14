@@ -38,6 +38,7 @@ import {
   fixedAdvance,
   fixedComplete,
   fixedStageIndex,
+  MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
   issueRepoWorkspaces,
   normalizeIssueRepos,
@@ -1396,7 +1397,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         delete state.mr_gate;
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析";
+        ctx.state.stage_note = MR_GREEN_ENV_VERIFY_NOTE;
         ctx.persist();
         ctx.notifyMrGreen?.();
         return ok(promptCopy("receipts", "mrgate.all_green", {

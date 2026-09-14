@@ -100,15 +100,12 @@ export async function until<T>(
   }
 }
 
-/** 快速轮询的运行参数(流水线监看测试用:1s 一轮,预算 2 分钟)。
- *  evidence_retry_minutes 随重试窗机制一并退场(#247):字段留在运行
- *  参数里只是存量兼容,红灯路径不再读它。 */
+/** 快速轮询的运行参数(流水线监看测试用:1s 一轮,预算 2 分钟)。 */
 
 export const fastPoll = {
   models: () => ({}),
   runtime: () => ({
     poll_interval_s: 1, poll_timeout_s: 120,
-    evidence_retry_minutes: 0,
   }),
 };
 

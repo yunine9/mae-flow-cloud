@@ -136,6 +136,7 @@ import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
   ISSUE_REPO_RECLAIM_DEFAULT,
+  ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT,
 } from "./issueFlow/service.ts";
 import { EnvironmentRegistry } from "./environmentRegistry.ts";
 import { handleEnvironmentRoutes } from "./environmentRegistryRoutes.ts";
@@ -790,6 +791,9 @@ export function createTaskServer(
                 issue_repo_reclaim: ISSUE_REPO_RECLAIM_DEFAULT,
                 issue_build_products_cooldown_hours:
                   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
+                // 守闸器阈值缺省(#248):与 service 旋钮同源,两处不漂移。
+                env_verify_watchdog_minutes:
+                  ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,

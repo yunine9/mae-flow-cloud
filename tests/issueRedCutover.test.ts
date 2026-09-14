@@ -72,7 +72,6 @@ function options(input: {
       models: () => ({}),
       runtime: () => ({
         poll_interval_s: 1, poll_timeout_s: 120,
-        evidence_retry_minutes: 0,
         ...(input.repairRounds !== undefined
           ? { repair_rounds: input.repairRounds } : {}),
       }),
@@ -237,6 +236,58 @@ test("不可修:AI 举人工处理卡;resume 作答重置监看账重看同一�
       "预算账归零(重看是新一轮)");
     assert.equal(rearmed.pipelines?.[origin]?.last_repair_sha, undefined,
       "刹车账清掉(重看仍红不误判同提交刹车)");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("停靠场景:红灯到达时 AI 卡挂着——失败事实随答卡续跑送达", async () => {
+  const dataDir = mfcTemp("mfc-redcutover-parked-");
+  const origin = bareOrigin(dataDir);
+  seedMrGreenWatch(dataDir, origin);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "BUILD FAILURE: 模块 notify-service 编译失败",
+  };
+  await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: { questions: [
+      { question: "修复前需要确认什么?" },
+    ] } } },
+    { text: "收到红灯事实,开始修复。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService(
+    options({ dataDir, model, platformUrl: platform.baseUrl, luban }));
+  try {
+    // AI 卡先停;红灯随后到达:投递走便签,不抢答。
+    service.reply("issue-1", "继续推进");
+    await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
+    }, "AI 问题卡先停");
+    await until(() => {
+      const state = readStateFile(dataDir);
+      return state.parked_notices?.length ? state : undefined;
+    }, "红灯事实落便签");
+    // 答卡 → 原地续跑:失败事实随决定回执注入(#244 通道)。
+    const waiting = service.get("issue-1").waiting!;
+    service.answer("issue-1", { state_version: waiting.state_version,
+      decision: "先修编译,别的以后说" });
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "续跑回合收口");
+    const seen = JSON.stringify(model.requests);
+    assert.match(seen, /流水线未通过/, "红灯事实经停靠注入送达模型");
+    assert.match(seen, /逐维度明细|平台未返回逐维度明细/, "材料段随行");
+    assert.equal(readStateFile(dataDir).gate, undefined, "平台不代举");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

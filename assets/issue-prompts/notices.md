@@ -2,6 +2,10 @@
 平台主动通知文案(ADR-0016):闸门裁决后的交接词、流水线结果通知、
 催办词、环境通知。锚点命名 <域>.<名>[.<变体>],锚点是代码协议。
 {{var}} 由代码注入:{{supplement}}/{{note}} 这类可为空(代码传空串)。
+同步护栏:「请立即调 raise_gate(kind=env_verify)…结束本回合等待
+用户作答」这句举卡指引散在 green.deliver / nudge.env_verify_owed 与
+receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
+锚点是给不同场景的独立协议口,刻意不合并。
 -->
 
 ## nudge.body
@@ -124,6 +128,3 @@
 - 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
 举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
 
-## pipeline.red.header
-
-平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 次红灯,仍在「提交 MR·跑绿」阶段)。

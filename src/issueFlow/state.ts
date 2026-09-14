@@ -632,26 +632,30 @@ export function isTerminal(status: IssueStatus): boolean {
 }
 
 /** 催办谓词:回合正常收口时,流程还没走到"可以停"的程度吗?
- * 四种情况算"可以停",不催:
+ * 算"可以停"的情况:
  * - 会话没有场景阶段(转正前的存量现场,停机合法性无从机械判定,不催);
- * - 当前阶段已收口(stage_states 里本阶段 done——如环境验证通过待归档);
+ * - 当前阶段已收口(stage_states 里本阶段 done)——唯一例外是 mr_green
+ *   欠环境验证卡(#246,ADR-0024):收口只是出口的一半,卡没交到用户
+ *   手上(无闸)就停机 = 欠出口,催;验证已通过(卡已答,停机说明换成
+ *   「待归档」口径)不欠,不催;
  * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
  * - MR 验绿门已受理申报(mr_green 阶段 complete_stage 申报后等绿,
  *   同"停等流水线"的合法停机;推进/回退即清,不会滞留)。
  * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
+/** mr_green 收口后的统一停机说明(两条收口路共写,#246):显示摘要
+ *  一字不差——前端与文档按它识别「待环境验证」态。 */
+export const MR_GREEN_ENV_VERIFY_NOTE =
+  "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析";
+
 export function shouldNudgeFixed(state: IssueSessionState): boolean {
   if (state.takeover) return false;
   if (!state.scenario) return false;
   const index = fixedStageIndex(state.scenario, state.stage as FixedStage);
-  // 出口卡未清(#246,ADR-0024):mr_green 已收口、验证卡未举——收口
-  // 只是 mr_green 出口的一半(申报),另一半是把验证卡交到用户手上;
-  // 卡没举(闸不在场)就停机 = 欠着出口,催。
-  if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done"
-    && state.stage === "mr_green" && !state.gate) {
-    return true;
-  }
+  // 已收口的阶段停机合法——唯一例外是 mr_green 的出口卡未清(#246,
+  // ADR-0024):收口只是出口的一半(申报),另一半是把验证卡交到用户
+  // 手上;卡没举(闸不在场)就停机 = 欠着出口,催。
   if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {
-    return false;
+    return state.stage === "mr_green" && !state.gate;
   }
   const pipelines = Object.values(state.pipelines ?? {});
   if ((state.mrs?.length ?? 0) > 0

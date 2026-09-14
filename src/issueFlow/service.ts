@@ -80,6 +80,7 @@ import {
   fixedComplete,
   fixedRollback,
   fixedStageIndex,
+  MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
   initStageStates,
   isTerminal,
@@ -697,6 +698,9 @@ function treeStats(dir: string): { bytes: number; newestMtime: number } {
 
 /** 终态现场回收开关的部署缺省(server.ts 缺省快照同用,勿两处漂移)。 */
 export const ISSUE_REPO_RECLAIM_DEFAULT = 1;
+/** 守闸器阈值缺省(分钟,#248):两小时——留足「用户验证要时间」的量,
+ *  又不至于漏卡隔夜才被发现;server defaults 与旋钮两处同源。 */
+export const ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT = 120;
 /** 构建产物冷却期的部署缺省(小时)。 */
 export const ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT = 48;
 
@@ -836,8 +840,6 @@ export class IssueFlowService {
   private turnSeq = 0;
   private recoveryStarted = false;
   private shuttingDown = false;
-  /** 证据重试窗的在途定时器(键=会话 id+仓地址,票 82):一仓一表,
-   *  重排前清旧,关停统一清——unref 不阻进程,但不留重复轮。 */
   /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
   readonly dataDir: string;
 
@@ -5233,8 +5235,8 @@ export class IssueFlowService {
       + "(分诊交 AI)");
   }
 
-  /** 失败产物的平台侧镜像(结算与重试窗重评共用):晚到自愈靠它重拉
-   *  ——每轮重评都从平台重新取一次产物,再落会话工作区 pipeline/。 */
+  /** 失败产物的平台侧镜像(红灯结算取证):全文落会话工作区
+   *  pipeline/,AI 用 Bash 读原文判断与修复,不啃截断摘要。 */
   private mirrorPipelineArtifactsFor(
     live: LiveIssue,
     repo: string,
@@ -5251,8 +5253,8 @@ export class IssueFlowService {
     }).catch(() => [] as string[]);
   }
 
-  /** 派修账与重试窗字段的清理(绿了清账):刹车账随红灯环作废,重试
-   *  窗字段同理——下一轮红灯从干净账起算。 */
+  /** 派修账的清理(绿了清账):刹车账随红灯环作废——下一轮红灯
+   *  从干净账起算。 */
   private clearRepairLedger(watch: NonNullable<
     IssueSessionState["pipelines"]>[string]): void {
     delete watch.last_repair_sha;
@@ -5273,7 +5275,7 @@ export class IssueFlowService {
     // 事实交给 AI,由它经 raise_gate 落卡(前置校验会复核全绿+收口)。
     // 欠卡由催办机器打回(shouldNudgeFixed 的出口卡未清判据),
     // 长期缺席由守闸器喊人(#248)。
-    live.state.stage_note = "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析";
+    live.state.stage_note = MR_GREEN_ENV_VERIFY_NOTE;
     saveState(live.root, live.state);
     this.startPlatformTurn(live, promptCopy("notices", "green.deliver", {
       repos: (live.state.mrs ?? []).map((mr) => mr.repo).join(", "),
@@ -5331,16 +5333,16 @@ export class IssueFlowService {
     const knobs = this.options.settings?.runtime?.() ?? {};
     const raw = knobs.env_verify_watchdog_minutes;
     const minutes = typeof raw === "number" && Number.isFinite(raw) && raw >= 0
-      ? raw : 120;
+      ? raw : ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT;
     const thresholdMs = minutes * 60_000;
     return { thresholdMs, tickMs: Math.max(500, Math.floor(thresholdMs / 5)) };
   }
 
-  /** 守闸器点火(服务启动即挂):周期扫描全live会话。unref 不阻进程
-   *  关停;关停时显式清。 */
+  /** 守闸器点火(服务启动即挂):周期扫描全 live 会话。表恒挂、阈值
+   *  每拍现读——启动时关(0)后来经管理页开到非 0,下一拍即生效,不用
+   *  重启;unref 不阻进程关停,关停时显式清。 */
   private armEnvVerifyWatchdog(): void {
-    const { tickMs, thresholdMs } = this.envVerifyWatchdogKnobs();
-    if (thresholdMs <= 0) return;
+    const { tickMs } = this.envVerifyWatchdogKnobs();
     // 首扫立即执行一次:重启后等一个节拍才首扫没有意义,阈值本身已经
     // 是"留足时间"的口径。
     this.sweepEnvVerifyWatchdog();
@@ -5357,6 +5359,7 @@ export class IssueFlowService {
    *  不开回合;通知 fail-open,投递失败只记日志。幂等靠 outcome 通道
    *  按 (taskId,status) 去重——status 带轮次,返工新一轮是新事件。 */
   private sweepEnvVerifyWatchdog(): void {
+    // 阈值每拍现读(评审修正):0=关即刻生效,改大改小不用重启。
     const { thresholdMs } = this.envVerifyWatchdogKnobs();
     if (thresholdMs <= 0) return;
     for (const live of this.live.values()) {
@@ -5367,6 +5370,11 @@ export class IssueFlowService {
       if (index < 0 || (state.stage_states?.[index] ?? "pending") !== "done") {
         continue;
       }
+      // 只认「收口待验证」的现场(评审修正):停机说明精确等于收口
+      // 常量才可能欠卡。pass 裁决会把说明换成「待归档」口径——若不
+      // 区分,已验证的单子会被误报漏卡,诱使用户发「继续」经收口重开
+      // 推进返工。返工重开会把阶段标回 in_progress,也到不了这里。
+      if (state.stage_note !== MR_GREEN_ENV_VERIFY_NOTE) continue;
       const closedAt = Date.parse(state.stage_at);
       if (!Number.isFinite(closedAt)
         || Date.now() - closedAt < thresholdMs) continue;

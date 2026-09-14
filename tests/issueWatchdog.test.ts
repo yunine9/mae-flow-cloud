@@ -17,7 +17,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import type { IssueFlowOptions } from "../src/issueFlow/service.ts";
-import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { MR_GREEN_ENV_VERIFY_NOTE,
+  type IssueSessionState } from "../src/issueFlow/state.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -33,7 +34,8 @@ function seedClosed(dataDir: string, id: string, stageAtMs: number,
     ticket: "DTS2026091300248",
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "done"],
-    status: "idle", stage: "mr_green", stage_note: "MR 已全绿——待环境验证",
+    status: "idle", stage: "mr_green",
+    stage_note: MR_GREEN_ENV_VERIFY_NOTE,
     stage_at: new Date(stageAtMs).toISOString(),
     ...overrides,
   }));
@@ -108,7 +110,7 @@ test("守闸触发:收口超阈值仍无验证卡——喊人一次,会话状态
     const state = readState(dataDir, "issue-1");
     assert.equal(state.status, "idle");
     assert.equal(state.gate, undefined);
-    assert.equal(state.stage_note, "MR 已全绿——待环境验证");
+    assert.equal(state.stage_note, MR_GREEN_ENV_VERIFY_NOTE);
     // 幂等:再等三个节拍,同轮只喊一次。
     await new Promise((resolve) => setTimeout(resolve, 1_600));
     assert.equal(luban.messages.length, 1, "同轮不重复轰炸");
@@ -149,6 +151,51 @@ test("守闸不误伤:闸在场/阶段未收口/等待中/接管中/未到阈值
   }
 });
 
+test("守闸不误伤②:验证已通过待归档的会话不喊——照发会诱返工", async () => {
+  const dataDir = mfcTemp("mfc-watchdog-passed-");
+  // pass 裁决后的现场:idle + mr_green done + 无闸,但停机说明已换成
+  // 「待归档」口径——守闸判据按收口说明常量精确区分,不把已验证的
+  // 单子误报成漏卡(照发会诱使用户发「继续」推进返工)。
+  seedClosed(dataDir, "issue-passed", Date.now() - 10 * 60_000, {
+    stage_note: "环境验证通过——确认 MR 合入后可归档收口",
+  });
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const service = new IssueFlowService(
+    options({ dataDir, endpoint: luban.endpoint, watchdogMinutes: 0.001 }));
+  try {
+    await quiesce(1_800, () => luban.messages.length > 0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await luban.stop();
+  }
+});
+
+test("守闸阈值热改:启动时关(0),后来开到非 0——下一拍生效不用重启", async () => {
+  const dataDir = mfcTemp("mfc-watchdog-hotknob-");
+  seedClosed(dataDir, "issue-1", Date.now() - 10 * 60_000);
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 旋钮经可变闭包供给:模拟管理页改 settings 后的现读现判。
+  let knobMinutes = 0;
+  const service = new IssueFlowService(options({
+    dataDir,
+    endpoint: luban.endpoint,
+    get watchdogMinutes() { return knobMinutes; },
+  }));
+  try {
+    // 启动时关:三个节拍安静。
+    await quiesce(1_800, () => luban.messages.length > 0);
+    // 热改开到 60ms 阈值:下一拍(500ms)内触发。
+    knobMinutes = 0.001;
+    await until(() => luban.messages.length ? luban.messages : undefined,
+      "热改后守闸触发");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await luban.stop();
+  }
+});
+
 test("守闸 fail-open:通知投递失败只留痕——不炸服务、不动会话", async () => {
   const dataDir = mfcTemp("mfc-watchdog-failopen-");
   seedClosed(dataDir, "issue-1", Date.now() - 10 * 60_000);
@@ -168,7 +215,7 @@ test("守闸 fail-open:通知投递失败只留痕——不炸服务、不动会
     const state = readState(dataDir, "issue-1");
     assert.equal(state.status, "idle", "会话状态一字不动");
     assert.equal(state.gate, undefined, "不举卡");
-    assert.equal(state.stage_note, "MR 已全绿——待环境验证", "不落便签");
+    assert.equal(state.stage_note, MR_GREEN_ENV_VERIFY_NOTE, "不落便签");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

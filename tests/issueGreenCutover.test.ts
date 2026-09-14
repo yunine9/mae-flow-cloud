@@ -35,7 +35,6 @@ const slowPoll = {
   models: () => ({}),
   runtime: () => ({
     poll_interval_s: 3, poll_timeout_s: 120,
-    evidence_retry_minutes: 0,
   }),
 };
 
@@ -75,7 +74,7 @@ function baseOptions(dataDir: string, model: ScriptedModelServer,
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
     settings: { models: () => ({}), runtime: () => ({
-      poll_interval_s: 1, poll_timeout_s: 120, evidence_retry_minutes: 0,
+      poll_interval_s: 1, poll_timeout_s: 120,
     }) },
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,

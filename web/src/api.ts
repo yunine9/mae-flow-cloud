@@ -3270,6 +3270,8 @@ export interface SettingsView {
     /** 问题单构建产物冷却期(小时);0=关。 */
     issue_build_products_cooldown_hours?: number;
     repair_rounds?: number;
+    /** 守闸器阈值(分钟,#248);0=关闭。 */
+    env_verify_watchdog_minutes?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
     workspace_retention_days?: number;
@@ -3310,6 +3312,7 @@ export interface SettingsView {
       issue_repo_reclaim: number;
       issue_build_products_cooldown_hours: number;
       repair_rounds: number | null;
+      env_verify_watchdog_minutes: number;
       poll_interval_s: number;
       poll_timeout_s: number;
       workspace_retention_days: number;
@@ -3805,8 +3808,8 @@ export interface IssueSummary {
     reds?: number;
     /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
     checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
-    /** 证据重试窗(票 82)与同提交刹车的可观察字段(2026-09-10 勘定:
-     *  补镜像而非剥投影,整条流水线记录按 wire 可见)。 */
+    /** 证据重试窗字段已随红灯分诊退场(#247,ADR-0024):新写入不再
+     *  产生,保留类型只为存量磁盘旧账的只读兼容。 */
     evidence_retry_deadline?: string;
     evidence_retry_attempts?: number;
     evidence_failure_log?: string;
