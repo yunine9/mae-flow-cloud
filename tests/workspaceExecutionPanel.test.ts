@@ -135,6 +135,20 @@ test("补充给主任务置灰时明确解释原因，而不是只留一个灰�
   assert.match(composer, /: steerDisabledReason\?\.detail\}/);
 });
 
+test("责任人可从验证、等待合入和失败现场继续 Agent，协作者仍受权限约束", () => {
+  assert.match(workspace,
+    /isOwner=\{viewerUsername === \(task\.luban_account \?\? "本地用户"\)\}/,
+    "Composer 必须拿到精确责任人身份，不能把管理员或协作者当责任人");
+  assert.match(composer,
+    /const resumesMainTask = isOwner\s*&& \["verifying", "await_merge", "failed"\]\.includes\(task\.status\)/);
+  assert.match(composer,
+    /const canSteer = \(task\.status === "running" \|\| resumesMainTask\)/,
+    "前端可用范围须与服务端 ownerMayResume 对齐");
+  assert.match(composer, /发送后恢复当前任务，Agent 按新要求继续修改；仍使用原分支和 MR/);
+  assert.match(composer, /setMode\(!canSteer && assistant\.availability\.available/,
+    "可直接恢复主 Agent 时不能默认切到开发助手");
+});
+
 test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
   assert.match(workspace,
     /const deletable = canOperate && \["completed", "failed", "canceled"\]/);

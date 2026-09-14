@@ -410,7 +410,7 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
     /useState<CollaborationMode>\(\s*steerOnly \|\| task\.status === "running" \? "steer" : "assistant"/,
     "默认档不许按状态硬猜");
   assert.match(box,
-    /task\.status !== "running" && assistant\.availability\.available\s*\? "assistant" : "steer"/);
+    /!canSteer && assistant\.availability\.available\s*\? "assistant" : "steer"/);
   assert.match(box, /modePicked\.current = true/, "人点过档位后不再替他换");
   assert.doesNotMatch(box, /: "主任务暂停时，请切到“开发助手”直接处理代码现场"\}/);
   assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);

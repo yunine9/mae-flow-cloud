@@ -2653,6 +2653,7 @@ export function TaskWorkspace({
           />
           {chainReview && decides ? null : canCollaborate || decides ? (
             <Composer task={task}
+              isOwner={viewerUsername === (task.luban_account ?? "本地用户")}
               crossRepository={Boolean(task.parent_task_id)}
               steerOnly={task.requirement_graph?.stage === "analysis"}
               decisionDock={Boolean(waiting) && decides}
