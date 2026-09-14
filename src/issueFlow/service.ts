@@ -2472,6 +2472,33 @@ export class IssueFlowService {
     });
   }
 
+  /** 档位代答的公共尾:卡落地时回合还没收口(turning 未释放),此刻
+   * answer() 必拒(状态尚未定格 waiting_user);setTimeout(0) 在慢环境
+   * 下抢不过收口路径(CI 实锤:代答被拒→旁路弃答→回合不按"落卡即
+   * 收口"停住,剧本被烧穿)。轮询等回合收口再落,预算内不成则
+   * fail-open 卡留待人——宁等人,不硬答。 */
+  private deferAutoAnswer(issueId: string, run: () => void): void {
+    setTimeout(() => {
+      const attempt = (left: number): void => {
+        if (this.turning.has(issueId)) {
+          if (left <= 0) {
+            this.log(`[issue-flow] ${issueId} 档位自动作答放弃(回合未按期收口,卡留待人)`);
+            return;
+          }
+          setTimeout(() => attempt(left - 1), 25);
+          return;
+        }
+        try {
+          run();
+        } catch (error) {
+          this.log(`[issue-flow] ${issueId} 档位自动作答失败(旁路,卡留待人): `
+            + String(error instanceof Error ? error.message : error));
+        }
+      };
+      attempt(80);
+    }, 0);
+  }
+
   private maybeAutoAnswerGate(live: LiveIssue): void {
     const { state } = live;
     const gate = state.gate;
@@ -2511,27 +2538,22 @@ export class IssueFlowService {
     const version = gate.state_version;
     const kind = gate.kind;
     this.log(`[issue-flow] ${issueId} 介入档位免审批:闸 ${kind} 自动作答(${code})`);
-    setTimeout(() => {
-      try {
-        this.answer(issueId, {
-          state_version: version,
-          code,
-          decision: `介入档位免审批自动确认(${gateOptionLabel(kind, code)})`,
-        });
-        void this.options.notifier?.notifyOutcome({
-          taskId: issueId,
-          account: state.account,
-          // 独立状态词(体检 B-H4):summary.status 在两路代答里都是
-          // running,共用幂等键会把第二次代答的通知吞掉。
-          status: "已代答",
-          summary: `介入档位免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
-          link: this.issueLink(issueId),
-        }).catch(() => undefined);
-      } catch (error) {
-        this.log(`[issue-flow] ${issueId} 档位自动作答失败(旁路,卡留待人): `
-          + String(error instanceof Error ? error.message : error));
-      }
-    }, 0);
+    this.deferAutoAnswer(issueId, () => {
+      this.answer(issueId, {
+        state_version: version,
+        code,
+        decision: `介入档位免审批自动确认(${gateOptionLabel(kind, code)})`,
+      });
+      void this.options.notifier?.notifyOutcome({
+        taskId: issueId,
+        account: state.account,
+        // 独立状态词(体检 B-H4):summary.status 在两路代答里都是
+        // running,共用幂等键会把第二次代答的通知吞掉。
+        status: "已代答",
+        summary: `介入档位免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
+        link: this.issueLink(issueId),
+      }).catch(() => undefined);
+    });
   }
 
   /** 介入档位免审批的 Agent 卡代答(ADR-0006 口径从平台闸扩至问答卡,
@@ -2581,26 +2603,21 @@ export class IssueFlowService {
     const trace = `介入档位免审批自动作答(推荐项:${recommended.join("、")})`;
     this.log(`[issue-flow] ${issueId} 介入档位免审批:问题卡 ${record.waiting_id}`
       + ` 按推荐项自动作答(${recommended.join("、")})`);
-    setTimeout(() => {
-      try {
-        this.answer(issueId, {
-          state_version: version,
-          answers,
-          notes: trace,
-        });
-        void this.options.notifier?.notifyOutcome({
-          taskId: issueId,
-          account: state.account,
-          status: "已代答",
-          summary: `介入档位免审批:问题卡已按推荐项自动作答`
-            + `(${recommended.join("、")})`,
-          link: this.issueLink(issueId),
-        }).catch(() => undefined);
-      } catch (error) {
-        this.log(`[issue-flow] ${issueId} 档位自动作答失败(旁路,卡留待人): `
-          + String(error instanceof Error ? error.message : error));
-      }
-    }, 0);
+    this.deferAutoAnswer(issueId, () => {
+      this.answer(issueId, {
+        state_version: version,
+        answers,
+        notes: trace,
+      });
+      void this.options.notifier?.notifyOutcome({
+        taskId: issueId,
+        account: state.account,
+        status: "已代答",
+        summary: `介入档位免审批:问题卡已按推荐项自动作答`
+          + `(${recommended.join("、")})`,
+        link: this.issueLink(issueId),
+      }).catch(() => undefined);
+    });
   }
 
   private releaseDriver(live: LiveIssue): void {

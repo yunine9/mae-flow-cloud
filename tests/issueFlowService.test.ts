@@ -388,6 +388,8 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 测的是提问卡→人工作答→归档闭环:钉三档把控,卡等人不代答。
+    interventionTier: () => "3",
   });
   // 种子会话没有创建回执:沿用 created.id 形状串起后续断言。
   const created = { id: "issue-1" };
@@ -398,7 +400,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       return issue.status === "waiting_user" ? issue : undefined;
     }, "根因确认问题卡", undefined, () => {
       const i = service.get(created.id);
-      return JSON.stringify({ status: i.status, stage: i.stage,
+      return JSON.stringify({ reqs: model.requests.length, served: model.served.join('+'), status: i.status, stage: i.stage,
         gate: i.gate?.kind, waiting: i.waiting ?? null,
         note: i.stage_note?.slice(0, 60), error: i.error });
     });

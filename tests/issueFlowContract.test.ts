@@ -826,6 +826,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 契约快照的是"等人"的问题卡形状:钉三档把控,卡不被档位代答。
+    interventionTier: () => "3",
   });
   try {
     // 无单登记门禁(#17):要模块+环境;夹具仓不参与本测试的断言,
@@ -848,7 +850,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
     }, "Agent 问题卡", undefined, () => {
       const i = service.get(created.id);
-      return JSON.stringify({ status: i.status, stage: i.stage,
+      return JSON.stringify({ reqs: model.requests.length, served: model.served.join('+'), status: i.status, stage: i.stage,
         gate: i.gate?.kind, waiting: i.waiting ?? null,
         note: i.stage_note?.slice(0, 60), error: i.error });
     });
