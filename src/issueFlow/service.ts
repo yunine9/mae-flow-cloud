@@ -528,10 +528,11 @@ export interface IssueFlowOptions {
       issue_compact_every_events?: number;
       /** 红灯修复轮预算(与需求侧同一旋钮,缺省 20;0=关掉自动修复)。 */
       repair_rounds?: number;
-      /** 证据重试窗(票 82,分钟):红灯证据全缺/盲输入先定时重拉
-       *  镜像重评,到点仍缺才举 pipeline_evidence 卡。缺省 15;0=关闭
-       *  (回到立即举卡的现状);允许小数(亚分钟窗口,测试用)。 */
-      evidence_retry_minutes?: number;
+      /** 环境验证卡守闸阈值(#248,分钟):mr_green 收口后超过该值
+       *  仍无 env_verify 卡(且会话空闲、无闸在等),守闸器向小鲁班
+       *  报警——纯报警不举卡,静默漏卡唯一的声器。缺省 120;0=关闭;
+       *  允许小数(亚分钟窗口,测试用)。 */
+      env_verify_watchdog_minutes?: number;
       /** 终态现场回收(磁盘治理票 01):canceled/archived 单的 repo/ 子树
        *  由清扫器回收。缺省 1=开;0=关(行为与现状全等,现场保留)。 */
       issue_repo_reclaim?: number;
@@ -872,6 +873,7 @@ export class IssueFlowService {
     if (this.recoveryStarted) return;
     this.recoveryStarted = true;
     this.recover();
+    this.armEnvVerifyWatchdog();
   }
 
   private recover(): void {
@@ -5304,6 +5306,74 @@ export class IssueFlowService {
       ? `${state.title}(单号 ${state.ticket})` : state.title;
   }
 
+  // ---- 守闸器(#248,ADR-0024):应举的卡长时间缺席,纯报警 ----
+
+  private watchdogTimer?: ReturnType<typeof setInterval>;
+
+  /** 守闸阈值旋钮(现读现判):分钟值,缺省 120;0=关闭;负值/非数
+   *  按缺省。节拍=阈值的 1/5,下限 500ms 防热转。 */
+  private envVerifyWatchdogKnobs(): { thresholdMs: number; tickMs: number } {
+    const knobs = this.options.settings?.runtime?.() ?? {};
+    const raw = knobs.env_verify_watchdog_minutes;
+    const minutes = typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+      ? raw : 120;
+    const thresholdMs = minutes * 60_000;
+    return { thresholdMs, tickMs: Math.max(500, Math.floor(thresholdMs / 5)) };
+  }
+
+  /** 守闸器点火(服务启动即挂):周期扫描全live会话。unref 不阻进程
+   *  关停;关停时显式清。 */
+  private armEnvVerifyWatchdog(): void {
+    const { tickMs, thresholdMs } = this.envVerifyWatchdogKnobs();
+    if (thresholdMs <= 0) return;
+    // 首扫立即执行一次:重启后等一个节拍才首扫没有意义,阈值本身已经
+    // 是"留足时间"的口径。
+    this.sweepEnvVerifyWatchdog();
+    const timer = setInterval(() => this.sweepEnvVerifyWatchdog(), tickMs);
+    timer.unref?.();
+    this.watchdogTimer = timer;
+  }
+
+  /** 一拍守闸扫描(#248,ADR-0024):机械判据=「mr_green 已收口+
+   *  会话空闲+无任何闸在等+收口已超阈值」——正是"平台认为没事可做,
+   *  但验证卡没交出去"的静默态。waiting_user(有人被等)/running
+   *  (回合在飞,卡可能正在举)/接管中/终态一律不喊:守闸器防的是
+   *  静默漏卡,不打扰已知的等待。纯报警:不改会话状态、不举卡、
+   *  不开回合;通知 fail-open,投递失败只记日志。幂等靠 outcome 通道
+   *  按 (taskId,status) 去重——status 带轮次,返工新一轮是新事件。 */
+  private sweepEnvVerifyWatchdog(): void {
+    const { thresholdMs } = this.envVerifyWatchdogKnobs();
+    if (thresholdMs <= 0) return;
+    for (const live of this.live.values()) {
+      const { state } = live;
+      if (state.status !== "idle" || state.gate || state.takeover) continue;
+      if (!state.scenario || state.stage !== "mr_green") continue;
+      const index = fixedStageIndex(state.scenario, "mr_green");
+      if (index < 0 || (state.stage_states?.[index] ?? "pending") !== "done") {
+        continue;
+      }
+      const closedAt = Date.parse(state.stage_at);
+      if (!Number.isFinite(closedAt)
+        || Date.now() - closedAt < thresholdMs) continue;
+      const round = state.round ?? 1;
+      this.log(`[issue-flow] ${live.id} 环境验证卡缺席超时`
+        + `(收口 ${state.stage_at},第 ${round} 轮),守闸器报警`);
+      void this.options.notifier?.notifyOutcome({
+        taskId: live.id,
+        account: state.account,
+        status: round > 1
+          ? `环境验证卡超时未举(第 ${round} 轮)` : "环境验证卡超时未举",
+        summary: `${this.issueSubject(live)}:MR 已全绿收口`
+          + `(${new Date(closedAt).toISOString()}),但超过阈值仍没有`
+          + "环境验证卡——可能漏举。请到问题单查看:必要时发「继续」"
+          + "让 Agent 补举验证卡,或确认后直接归档/取消",
+        link: this.issueLink(live.id),
+      }).catch((error) =>
+        this.log(`[issue-flow] ${live.id} 守闸报警投递失败(旁路,`
+          + `会话状态一字不动): ${String(error)}`));
+    }
+  }
+
   /** 放弃点 → 小鲁班(票 81,需求侧 notifyRepairStopped 同语义):
    * 预算烧完/轮询超时这类"机器放弃、需要人接手"的时刻必须主动喊人,
    * 不能等人自己刷网页。两条纪律:
@@ -5644,6 +5714,10 @@ export class IssueFlowService {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    if (this.watchdogTimer !== undefined) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = undefined;
+    }
     // 证据重试窗的在途定时器一并清(票 82):unref 本不阻进程,但显式
     // 清掉才不会有关停后仍触发的重评(测试 --force-exit 也干净)。
     for (const timer of this.evidenceRetryTimers.values()) {
