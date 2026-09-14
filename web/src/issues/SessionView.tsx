@@ -395,9 +395,9 @@ export function IssueSessionView({
               跳转修的是归属人的凭据,查看模式不渲染这条补救入口。 */}
           {canOperate && onNavigateProfile
             && detail.error.includes(GIT_AUTH_ERROR_TAG)
-            && <button type="button"
-              className="font-bold underline underline-offset-2"
-              onClick={onNavigateProfile}>去个人设置配置令牌</button>}
+            && <Button type="button" variant="link"
+              className="h-auto px-0 font-bold text-danger underline underline-offset-2 hover:text-danger"
+              onClick={onNavigateProfile}>去个人设置配置令牌</Button>}
         </div>}
         {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
             不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}

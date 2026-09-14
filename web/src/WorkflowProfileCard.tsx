@@ -18,7 +18,7 @@ export function WorkflowProfileCard({ profile, warning }: {
   const digest = profile.source.digest ?? profile.revision;
   const unavailable = profile.asset_manifest.filter((item) =>
     item.state !== "available").length;
-  return <section className="workflow-profile-card" aria-label="本任务固定工作流方案">
+  return <section className="workflow-profile-card" aria-label="本任务固定工作流">
     <header>
       <span aria-hidden>WF</span>
       <div><small>本任务固定方案</small><strong>{sourceName}</strong>

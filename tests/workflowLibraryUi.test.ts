@@ -124,4 +124,12 @@ test("P2 叫法统一:同一对象不再身兼「工作流方案/工作流资产
     join(here, "..", "web/src/workflows/WorkflowLibrary.tsx"), "utf-8");
   assert.match(library, /团队资产 \/ 工作流/, "面包屑锚点保持「团队资产 / 工作流」");
   assert.doesNotMatch(library, /工作流资产/, "错误横幅等文案不再叫「工作流资产」");
+  // #256 收尾划转(#252 验收):帮助中心文案与固定工作流卡的
+  // aria-label 同题同判,余量清零。
+  const help = readFileSync(join(here, "..", "web/src/HelpCenter.tsx"), "utf-8");
+  assert.doesNotMatch(help, /工作流方案/, "帮助中心文案统一叫「工作流」");
+  assert.doesNotMatch(help, /工作流资产/, "帮助中心截图说明同图同称,不回旧名");
+  const profileCard = readFileSync(
+    join(here, "..", "web/src/WorkflowProfileCard.tsx"), "utf-8");
+  assert.doesNotMatch(profileCard, /工作流方案/, "固定工作流卡 aria-label 统一叫「工作流」");
 });

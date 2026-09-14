@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { type DtsTicketDetail } from "../api";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 export function IssueAssociateCard({ busy, onAssociate }: {
   busy: boolean;
@@ -51,9 +52,12 @@ export function IssueAssociateCard({ busy, onAssociate }: {
       <Input className="min-w-0 flex-1" value={ticket} placeholder="DTS 单号,如 DTS2026082001317"
         onChange={(event) => { setTicket(event.target.value); setChecked(undefined); }}
         onKeyDown={(event) => { if (event.key === "Enter") void check(); }} />
-      <button type="button" disabled={!ticket.trim() || pending} onClick={() => void check()}>
+      {/* 校验钮(#256 收编):此前无任何样式落点,浏览器默认皮直出;
+          outline 皮与 Input(h-8)同排同高。 */}
+      <Button type="button" variant="outline"
+        disabled={!ticket.trim() || pending} onClick={() => void check()}>
         {pending ? "校验中…" : "校验单号"}
-      </button>
+      </Button>
     </div>
     {checked && <div className="issue-associate-detail">
       <div className="issue-associate-ticket">
@@ -62,10 +66,12 @@ export function IssueAssociateCard({ busy, onAssociate }: {
       </div>
       <p className="issue-associate-content">{checked.content.split("\n").slice(0, 6)
         .join("\n")}</p>
-      <button type="button" className="issue-rail-primary" disabled={pending}
+      {/* 转正主钮(#256 收编):旧承名主色实底类退役,换 shadcn 默认皮;
+          通栏保持原占位。 */}
+      <Button type="button" className="w-full" disabled={pending}
         onClick={() => void confirm()}>
         确认转正(继承分析报告,进入问题修改)
-      </button>
+      </Button>
       <small>转正不可逆:本会话将归档,新会话以该单号继续。</small>
     </div>}
   </div>;

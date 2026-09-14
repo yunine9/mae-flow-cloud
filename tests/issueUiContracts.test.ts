@@ -1428,3 +1428,45 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   assert.match(metaPane, /已通知 Agent 处理,清单将在 Agent 执行后更新/);
   assert.doesNotMatch(metaPane, /删除成功|移除成功/);
 });
+
+// ---- #256 扫尾:焦点行断供回场、裸钮收编 ----
+
+test("列表卡焦点行:task-focus 家族 utilities 直译(#256),版式与状态点回场", () => {
+  // 旧 .task-focus 网格(7px 点轨/阶段强字/结论省略)随 style.css 退役后,
+  // IssueBoard 的类名引用成了断供(清扫确凿丢失 #1)——按二期口径在
+  // markup 直译 utilities,不经 tailwind.css;vestigial 类名一并退役。
+  // 阶段变体(human_action/blocked/external/done/inactive)是任务域词表,
+  // 从未命中问题域 stage,不搬。
+  assert.doesNotMatch(issueBoard, /task-focus/);
+  assert.match(issueBoard,
+    /grid-cols-\[7px_max-content_minmax\(0,1fr\)\] items-center gap-\[7px\]/);
+  assert.match(issueBoard, /<i aria-hidden className="size-1\.5 rounded-full bg-active" \/>/);
+  assert.match(issueBoard,
+    /<strong className="text-sm font-bold text-text-strong">\{stageLine\}<\/strong>/);
+  assert.match(issueBoard, /<span className="truncate">结论 · /);
+});
+
+test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动", () => {
+  // 看板错误横幅的两枚文字动作(跳设置/关提示)换 link 皮;换装后看板
+  // 裸钮只剩整卡进工作台的 task-summary(契约另锚,机构保留)。
+  assert.match(issueBoard, /variant="link"/);
+  assert.equal((issueBoard.match(/variant="link"/g) ?? []).length, 2,
+    "横幅两枚文字动作各一枚 link,不多收");
+  assert.doesNotMatch(issueBoard,
+    /className="cursor-pointer underline underline-offset-2"/);
+  // 会话页认证报错的补救入口同款 link 皮(修归属人凭据,查看模式不渲染)。
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  assert.match(sessionView,
+    /<Button type="button" variant="link"[\s\S]{0,220}去个人设置配置令牌\s*<\/Button>/);
+  // 关联卡两枚动作钮收编 shadcn:校验钮此前真裸奔(无任何样式落点,
+  // 浏览器默认皮直出);转正主钮的 issue-rail-primary 类退役。
+  const associate = readFileSync(
+    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
+  assert.match(associate, /import \{ Button \} from "@\/components\/ui\/button";/);
+  assert.match(associate,
+    /<Button type="button" variant="outline"[\s\S]{0,220}\{pending \? "校验中…" : "校验单号"\}\s*<\/Button>/);
+  assert.match(associate,
+    /<Button type="button" className="w-full"[\s\S]{0,220}确认转正\(继承分析报告,进入问题修改\)\s*<\/Button>/);
+  assert.doesNotMatch(associate, /issue-rail-primary/);
+});
