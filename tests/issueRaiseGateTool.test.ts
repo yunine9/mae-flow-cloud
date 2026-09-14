@@ -166,16 +166,21 @@ function raiseState(overrides: Partial<IssueSessionState> = {},
   };
 }
 
-test("env_verify 前置:未全绿拒绝(文案带下一步),绿了但未收口也拒绝", async () => {
-  // 未全绿:流水线还在跑——拒绝文案指路「修复重推+等全绿通知」。
-  const running = raiseState({}, {
+test("env_verify 前置:mr_green 未收口一律拒绝(文案指路申报),收口即放行依据", async () => {
+  // 未收口:流水线还在跑、申报没过验绿门——拒绝文案指路 complete_stage。
+  // (前置只查收口不查监看账 status:那份账异步刷新,当场收口窗口期
+  // 它还停在 running,查它会把刚收口的合法举卡误拒。)
+  const running = raiseState({
+    stage_states: ["done", "done", "done", "done", "in_progress"],
+    mr_gate: { mrs: [ALPHA], at: new Date().toISOString() },
+  }, {
     [ALPHA]: { sha: SHA, status: "running", watching: true,
       started_at: "", deadline: "", round: 1 },
   });
   await assert.rejects(
     directRaiseTool({ state: running }).execute("a",
       { kind: "env_verify" }),
-    /全绿.*重推|重推.*全绿/s, "未全绿要拒且文案指路");
+    /收口|申报/, "未收口要拒且文案指路申报");
   assert.equal(running.gate, undefined, "拒绝不落闸");
 
   // 绿了但 mr_green 没收口(申报是出口的一半)——拒绝文案指路 complete_stage。

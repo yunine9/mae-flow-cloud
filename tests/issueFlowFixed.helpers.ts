@@ -101,9 +101,8 @@ export async function until<T>(
 }
 
 /** 快速轮询的运行参数(流水线监看测试用:1s 一轮,预算 2 分钟)。
- *  evidence_retry_minutes: 0 = 关闭证据重试窗(票 82)——既有红灯系列
- *  (全缺/盲输入举卡)钉的就是"0=关,立即举卡"的现状行为;重试窗的
- *  正窗用例各自带 settings 覆盖(见下方 retryWindow 等构造)。 */
+ *  evidence_retry_minutes 随重试窗机制一并退场(#247):字段留在运行
+ *  参数里只是存量兼容,红灯路径不再读它。 */
 
 export const fastPoll = {
   models: () => ({}),
@@ -112,19 +111,6 @@ export const fastPoll = {
     evidence_retry_minutes: 0,
   }),
 };
-
-/** 证据重试窗的正窗运行参数(票 82 测试用):窗口为分钟小数(亚分钟
- *  窗口是旋钮的正当形态),节拍=窗口的 1/5,测试不等真实的 15 分钟。 */
-
-export function retryWindow(minutes: number) {
-  return {
-    models: () => ({}),
-    runtime: () => ({
-      poll_interval_s: 1, poll_timeout_s: 120,
-      evidence_retry_minutes: minutes,
-    }),
-  };
-}
 
 
 export const fakeOps = {
@@ -391,81 +377,6 @@ export async function assertRepairDispatched(input: {
     await service.shutdown().catch(() => undefined);
     await model.stop();
     await platform.stop();
-  }
-}
-
-
-export async function assertCardAfterWindow(input: {
-  what: string;
-  firstFailure: { log?: string; checks?: unknown };
-  artifacts?: Array<{ name: string; text: string }>;
-  facePatterns: RegExp[];
-  faceAntiPatterns?: RegExp[];
-}): Promise<void> {
-  const dataDir = mfcTemp("mfc-issue-retry-card-");
-  const origin = bareOrigin(dataDir);
-  const platform = new LoopPlatform("failed");
-  platform.firstFailure = input.firstFailure;
-  if (input.artifacts) platform.firstFailureArtifacts = input.artifacts;
-  await platform.start();
-  seedMrGreenWatch(dataDir, origin);
-  const luban = new FakeLubanServer();
-  await luban.start();
-  // 空剧本当金丝雀:重试窗停机路不许开任何平台回合。
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
-  await model.start();
-  // 窗口 0.05 分钟=3 秒,节拍 600ms 一评。
-  const service = new IssueFlowService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    settings: retryWindow(0.05),
-    dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
-    linkBase: "http://work.test",
-  });
-  try {
-    const windowed = await until(() => {
-      const issue = service.get("issue-1");
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.pipelines?.[origin]?.evidence_retry_deadline
-        ? issue : undefined;
-    }, `${input.what}:先进重试窗(不立即举卡)`);
-    assert.equal(windowed.gate, undefined, `${input.what}:窗内不举卡`);
-    const gated = await until(() => {
-      const issue = service.get("issue-1");
-      return issue.status === "waiting_user"
-        && issue.gate?.kind === "pipeline_evidence" ? issue : undefined;
-    }, `${input.what}:到点举卡`);
-    assert.ok((windowed.pipelines?.[origin]?.evidence_retry_attempts ?? 0) >= 0);
-    const watch = gated.pipelines?.[origin];
-    assert.equal(watch?.watching, false, "监看停表");
-    assert.equal(watch?.reds, undefined, "到点举卡仍不耗预算");
-    assert.equal(watch?.evidence_retry_deadline, undefined,
-      "举卡即清重试窗字段");
-    assert.match(watch?.last_error ?? "", /重评 .* 次/,
-      "留痕带上已试次数");
-    const face = `${gated.gate!.question.questions[0].question}`
-      + `\n${gated.gate!.context ?? ""}`;
-    for (const pattern of input.facePatterns) assert.match(face, pattern);
-    for (const pattern of input.faceAntiPatterns ?? []) {
-      assert.doesNotMatch(face, pattern);
-    }
-    assert.equal(model.requests.length, 0, "全程零平台回合");
-    // 通知只此一次:举卡走等待卡通道,等一拍确认不重发。
-    await until(() => luban.messages.length ? luban.messages : undefined,
-      `${input.what}:等待卡通知`);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    assert.equal(luban.messages.length, 1,
-      `${input.what}:整个重试窗生命周期只通知一次`);
-    assert.match(JSON.stringify(luban.messages), /粘贴/,
-      "通知指引人贴报错原文");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    await platform.stop();
-    await luban.stop();
   }
 }
 

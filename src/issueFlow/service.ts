@@ -65,10 +65,7 @@ import {
   taskContainerInstance,
   type TaskContainerLimits,
 } from "../containerRuntime.ts";
-import {
-  isBlindPipelineInput,
-  mirrorPipelineArtifacts,
-} from "../pipelineMirror.ts";
+import { mirrorPipelineArtifacts } from "../pipelineMirror.ts";
 import { repairBudget } from "./pipelineRepair.ts";
 import { collectRepoContextFiles } from "./repoContextFiles.ts";
 import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
@@ -217,17 +214,14 @@ import {
   type PipelineRun,
 } from "../pipelineClient.ts";
 import {
-  onlyUnfixableToolFailures,
   PIPELINE_DIMENSIONS,
   summarizeFailedChecks,
   type PipelineCheck,
   type PipelineDimension,
 } from "../pipelineContract.ts";
 import {
-  assessPipelineRepairEvidence,
   PIPELINE_DIMENSION_TEXT,
   type PipelineArtifactText,
-  type PipelineEvidenceAssessment,
 } from "../pipelineEvidence.ts";
 import { syncIssueImagesToWorkspace } from "./issueImages.ts";
 import {
@@ -783,39 +777,9 @@ export function discoverBusinessSkillDirs(
   return found.sort();
 }
 
-/** 不可修分诊命中时,给通知文案列人话工具名(失败项里落在名单内的
- *  工具,保原大小写)。与 onlyUnfixableToolFailures 同源的收集口径:
- *  check.tool + details[].tool,名单内的才列。 */
-function unfixableToolNames(
-  checks: PipelineCheck[] | undefined,
-  unfixableTools: string[] | undefined,
-): string[] {
-  const list = new Set((unfixableTools ?? []).map((tool) =>
-    tool.trim().toLowerCase()).filter(Boolean));
-  const names = new Set<string>();
-  for (const check of checks ?? []) {
-    if (check.status !== "failed") continue;
-    for (const tool of [check.tool ?? "",
-      ...(check.details ?? []).map((defect) => defect.tool ?? "")]) {
-      const key = tool.trim().toLowerCase();
-      if (key && list.has(key)) names.add(tool.trim());
-    }
-  }
-  return [...names];
-}
-
 /** 维度的人话名(展示用):COMPILE→编译/构建。 */
 function dimensionLabels(dimensions: PipelineDimension[]): string {
   return dimensions.map((item) => PIPELINE_DIMENSION_TEXT[item]).join("、");
-}
-
-/** 缺口维度的人话原因(assess 已给每个缺口维度兜了底,这里只取用)。 */
-function evidenceGapReasons(assessment: PipelineEvidenceAssessment): string[] {
-  return assessment.missingDimensions.flatMap((dimension) => {
-    const reasons = assessment.reasons[dimension] ?? [];
-    return reasons.length ? reasons
-      : [`${PIPELINE_DIMENSION_TEXT[dimension]}:未拿到具体报错`];
-  });
 }
 
 /** 上轮报错对比段(票 82)的唯一来源:派修回合与人工回灌回合两路共用,
@@ -974,24 +938,24 @@ export class IssueFlowService {
       }
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
+      let staleRetryLedger = false;
       for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
         if (watch.watching) {
           this.log(`[issue-flow] ${state.id} 恢复流水线监看(${repo})`
             + ` @ ${watch.sha.slice(0, 12)}`);
           void this.watchPipeline(live, repo, watch.sha);
-        } else if (watch.evidence_retry_deadline && !state.gate) {
-          // 证据重试窗续算(票 82):截止时间落盘原样——不重置、不白等,
-          // 恢复后从剩余时间继续定时重评;到点仍缺才举卡。已举卡(闸在
-          // 场)不续算;其余守卫(取消/终态/等作答/换提交)在重评入口。
-          this.log(`[issue-flow] ${state.id} 恢复证据重试窗(${repo})`
-            + ` @ ${watch.sha.slice(0, 12)},截止 ${watch.evidence_retry_deadline}`);
-          this.scheduleEvidenceRetry(live, repo, watch.sha, {
-            status: "failed",
-            ...(watch.evidence_failure_log
-              ? { log: watch.evidence_failure_log } : {}),
-          });
+        }
+        // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
+        // 成了死账,顺手清掉(红灯的下一步=失败事实投递给 AI,不再
+        // 有"定时重评"的恢复义务)。
+        if (watch.evidence_retry_deadline) {
+          delete watch.evidence_retry_deadline;
+          delete watch.evidence_retry_attempts;
+          delete watch.evidence_failure_log;
+          staleRetryLedger = true;
         }
       }
+      if (staleRetryLedger) saveState(root, state);
       // 重启清扫(H6):等人会话里够格代答的闸重判一次(免审批档位
       // 不因重启漏答);非等人的会话不该还有挂着的人问卡——崩溃前没
       // 走完的定格作废留痕,别留一张永远答不了的卡占列表。
@@ -3639,9 +3603,13 @@ export class IssueFlowService {
       watch.deadline = new Date(now + budgetMs).toISOString();
       delete watch.checks;
       delete watch.last_error;
-      // 证据重试窗字段一并清(票 82):人在平台处理后的重看是新一轮
-      // 取证,旧窗作废;守卫(闸在场)也已随作答清场。
-      this.clearEvidenceRetry(watch);
+      // 红灯环账一并清(#247):人在平台处理后的重看是新一轮——刹车账
+      // (last_repair_sha)不清会把"重看仍红"误判成同提交刹车,预算账
+      // (reds)不清会把举卡轮次越积越多;都归零,重看仍红按新红灯
+      // 重新投递、重新计数。
+      delete watch.last_repair_sha;
+      delete watch.last_failure_summary;
+      watch.reds = 0;
       state.status = "idle";
       state.stage_note = `已按人工答复重新监看流水线(${target.repo})`
         + `@ ${target.sha.slice(0, 12)},等结果`;
@@ -3668,26 +3636,21 @@ export class IssueFlowService {
       }
       const evidence = rawDecision || notes;
       const max = repairBudget(this.options.settings);
-      const reds = (watch.reds ?? 0) + 1;
-      watch.reds = reds;
+      // 预算不再在此记(#247):投递回合(AI 判断证据缺口、举卡的那一
+      // 回合)已经是本轮修复回合,reds 在投递时已 +1;人贴原文后的
+      // 回灌回合是同一轮的延续,不重复计数、也不设预算闸——人亲自
+      // 供给的证据,没有"空转"可防。
+      const reds = watch.reds ?? 0;
       const dims = failedDimensionLabels(watch.checks);
-      // 回灌路也是派修(票 82):同拍写入刹车账——人工回灌的原文就是
-      // "上轮报错",AI 修完没出新提交再红灯时刹车要认账;重试窗字段
-      // (若有)清掉,证据已由人供给,循环使命完成。
+      // 刹车账照写(票 82 口径):人工回灌的原文就是"上轮报错",AI 修
+      // 完没出新提交再红灯时刹车要认账。
       const previousSha = watch.last_repair_sha;
       const previousSummary = watch.last_failure_summary;
       watch.last_repair_sha = target.sha;
       watch.last_failure_summary =
         `人工回灌的报错原文(节选): ${evidence.slice(0, 500)}`;
-      this.clearEvidenceRetry(watch);
       this.log(`[issue-flow] ${live.id} 证据回灌闸已答(${target.repo}),`
-        + `第 ${reds}/${max} 轮修复预算`);
-      if (reds > max) {
-        state.stage_note = `流水线连续 ${reds} 次红灯,修复轮预算(${max} 轮)`
-          + "已耗尽——人工回灌的报错原文已入账,请人工处理后再继续";
-        saveState(live.root, state);
-        return summarize(state);
-      }
+        + `第 ${reds}/${max} 轮修复(延续,不重复计数)`);
       saveState(live.root, state);
       this.continueTurn(live, [
         promptCopy("notices", "gate.evidence.header",
@@ -5142,403 +5105,27 @@ export class IssueFlowService {
       status: "repairing",
       updated_at: new Date().toISOString(),
     }]);
-    // ---- 红灯分诊(需求流 dispatchCiRepair 同款判定次序): ----
-    // 先判"改代码有没有用",再评"证据够不够修";两条停机路都不消耗
-    // 修复轮预算——reds 只在实际派出修复回合时 +1,与需求侧"未派
-    // Agent 未消耗修复轮次"同一口径。
+    // ---- 红灯切换(#247,ADR-0024):分诊判断交 AI,平台停代举 ----
+    // 平台不再评估"可不可修/证据够不够",不再代举 pipeline_unfixable /
+    // pipeline_evidence:失败事实(摘要/逐维度明细/产物镜像)三态投递
+    // 给 AI,三路处置由它现场判断——能修直接修(同分支重推再建 MR)、
+    // 证据缺口举报错回灌卡、不可修告警举人工处理卡,后两路经 raise_gate
+    // (平台复核红灯在案)。平台保留机械三样:同提交刹车(防空转循环)、
+    // 修复轮预算(投递回合=修复回合,派了才 +1,耗尽诚实停机)、留痕
+    // (反馈账与转移账)。证据重试窗随分诊编排一并退场:产物镜像仍在
+    // 红灯当下做一次,AI 凭现场事实判断,平台不再定时重评。
     const checks = run.checks ?? watch.checks;
-    // ① 不可修工具分诊(--unfixable-tools 名单,2026-09-01 接入问题流):
-    // 失败项全部是名单内工具的 CODECHECK 告警=修复 Agent 改代码解决
-    // 不了(要人在交付平台处理/豁免),派回合就是白烧一轮。名单缺席
-    // 时判定恒 false——不分诊,行为照旧。票 03 起,停机升级为平台闸:
-    // 卡面给失败摘要/逐维度明细/产物位置/处置指引,人处理完在卡上
-    // 作答,平台重置监看账重看同一 SHA(见 resolveGate 的 resume_watch)。
-    if (onlyUnfixableToolFailures(checks, this.options.unfixableTools)) {
-      const tools = unfixableToolNames(checks, this.options.unfixableTools);
-      const sha12 = sha.slice(0, 12);
-      const note = `流水线红灯全部来自不可自动修复的工具(${tools.join("、")})`
-        + "——已发卡等人工:在交付平台处理/豁免后于卡上作答继续";
-      watch.last_error = note;
-      state.stage_note = note;
-      const raised = this.raisePipelineGate(live, repo, sha,
-        "pipeline_unfixable",
-        `流水线红灯(${failedDimensionLabels(checks)})全部来自不可自动修复的`
-          + `工具告警(${tools.join("、")})——请在交付平台处理/豁免后作答,`
-          + "平台会重新监看同一提交",
-        [
-          "**失败摘要**",
-          "",
-          describePipelineRun(run),
-          "",
-          "**逐维度明细**(含工具)",
-          "",
-          ...summarizeFailedChecks(checks),
-          "",
-          "**镜像产物**",
-          "",
-          artifacts.length
-            ? `失败产物全文已镜像到会话工作区 pipeline/ 目录(${artifacts.join("、")})。`
-            : "平台未返回本次失败产物,可到交付平台的 MR/流水线页面查看详情。",
-          "",
-          "**处置指引**",
-          "",
-          "1. 这类工具告警改代码解决不了,请到交付平台(MR/流水线页面)"
-            + "处理或豁免上述告警;",
-          "2. 处理完成后回到本卡选「已在平台处理/豁免,重新监看」——平台会"
-            + `重置监看账,重新监看同一提交(${sha12});平台侧已处理则这次就绿,`
-            + "告警仍在则再次举卡。",
-        ].join("\n"));
-      if (!raised) saveState(live.root, state);
-      this.log(`[issue-flow] ${live.id} 流水线红灯不可修(${repo},工具 `
-        + `${tools.join("、")})@ ${sha12},${raised ? "举卡等人" : "已有闸,留痕停机"}`);
-      return;
-    }
-    // ② 证据评估:逐维度三路取证(失败摘要/checks 结构化明细/镜像
-    // 产物文本),回合指令按结果分级——缺口维度明示"不许猜改"。
-    const assessment = assessPipelineRepairEvidence({
-      checks,
-      artifacts: this.pipelineArtifactTexts(live),
-      failureSummary: run.log,
-    });
-    // ③ 全缺证据:有失败维度但一条可定位的报错都没拿到——派修只会
-    // 猜改,不开回合。票 82 起先进证据重试窗(定时重拉镜像重评,产物
-    // 晚到在窗内自愈),到点仍缺才举 pipeline_evidence 平台闸(票 03):
-    // 卡面列缺口维度与原因,请人把报错原文粘贴进卡上的自由文本作答;
-    // 作答即证据回灌(注入下一修复回合,该轮才消耗修复轮预算,见
-    // resolveGate 的 human_evidence),人发的普通消息不再是回灌通道。
-    if (assessment.failedDimensions.length
-        && assessment.availableDimensions.length === 0) {
-      this.handleMissingEvidence({ live, repo, sha, run, artifacts,
-        assessment, blind: false });
-      return;
-    }
-    // ③′ 盲输入闸(票 81):平台没给 checks(failedDimensions 为空,
-    // 上面的全缺分支够不着)、失败摘要抠掉链接后没有诊断内容、镜像产物
-    // 又是零——公共判据 isBlindPipelineInput 三条件同时成立才拦(触发
-    // 面收窄:产物在场/摘要真实内容/checks 结构化明细一律放行)。此时
-    // 修复会话手里没有任何可信失败证据,派修只会猜改:并入"证据全缺"
-    // 同一条 pipeline_evidence 举卡路(票 82 起同样先过证据重试窗),
-    // 请人把报错原文粘贴进卡上作答。与全缺同纪律:不派回合、不耗预算
-    // (reds 只在真派回合时 +1)。
-    if (assessment.failedDimensions.length === 0
-        && isBlindPipelineInput(run.log ?? "", artifacts.length > 0)) {
-      this.handleMissingEvidence({ live, repo, sha, run, artifacts,
-        assessment, blind: true });
-      return;
-    }
-    // ④ 派修(票 82 抽出):同提交刹车 → 修复轮预算 → 分级回合指令。
-    this.dispatchPipelineRepair(live, repo, sha, run, artifacts, assessment);
-  }
-
-  /** 失败产物的平台侧镜像(结算与重试窗重评共用):晚到自愈靠它重拉
-   *  ——每轮重评都从平台重新取一次产物,再落会话工作区 pipeline/。 */
-  private mirrorPipelineArtifactsFor(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-  ): Promise<string[]> {
-    if (!this.options.platformUrl) return Promise.resolve([]);
-    const mrUrl = live.state.mrs?.find((item) => item.repo === repo)?.url;
-    return mirrorPipelineArtifacts({
-      platformUrl: this.options.platformUrl,
-      sha, repo, mrUrl,
-      dir: join(live.root, "pipeline"),
-      headers: this.platformHeaders(live.state.account),
-      log: (message) => this.log(`[issue-flow] ${live.id} ${message}`),
-    }).catch(() => [] as string[]);
-  }
-
-  // ---- 证据重试窗(票 82):全缺/盲输入先重试取证,防"再等两分钟 ----
-  // ---- 就自愈"的假卡。三不红线:不耗 reds、不重复通知、不白等。 ----
-
-  /** 证据重试窗旋钮(现读现判,管理页运行时参数):缺省 15 分钟;
-   *  0=关闭(回到立即举卡的现状);负值/非数按缺省。允许小数——
-   *  亚分钟窗口是测试验证时序的正当形态,不取整。 */
-  private evidenceRetryKnobs(): { windowMs: number; tickMs: number } {
-    const knobs = this.options.settings?.runtime?.() ?? {};
-    const raw = knobs.evidence_retry_minutes;
-    const minutes = typeof raw === "number" && Number.isFinite(raw) && raw >= 0
-      ? raw : 15;
-    const windowMs = minutes * 60_000;
-    // 重评节拍=窗口的 1/5(缺省窗即 3 分钟一轮,与需求流
-    // scheduleRepairEvidenceRetry 的 3 分钟同量级),下限 500ms 防热转。
-    return { windowMs, tickMs: Math.max(500, Math.floor(windowMs / 5)) };
-  }
-
-  private clearEvidenceRetry(watch: NonNullable<
-    IssueSessionState["pipelines"]>[string]): void {
-    delete watch.evidence_retry_deadline;
-    delete watch.evidence_retry_attempts;
-    delete watch.evidence_failure_log;
-  }
-
-  /** 派修账与重试窗字段的清理(绿了清账):刹车账随红灯环作废,重试
-   *  窗字段同理——下一轮红灯从干净账起算。 */
-  private clearRepairLedger(watch: NonNullable<
-    IssueSessionState["pipelines"]>[string]): void {
-    delete watch.last_repair_sha;
-    delete watch.last_failure_summary;
-    this.clearEvidenceRetry(watch);
-  }
-
-  /** 证据全缺/盲输入的共同处置路(票 82 重试窗):旋钮开着先不举卡——
-   *  记下取证截止时间落盘、排定时器重拉镜像重评(产物晚到自愈),
-   *  到点仍缺才举 pipeline_evidence 卡(T1a 文案不变,通知只此一次);
-   *  旋钮 0=关立即举卡(现状)。重试全程不耗 reds、不发停机通知。 */
-  private handleMissingEvidence(input: {
-    live: LiveIssue;
-    repo: string;
-    sha: string;
-    run: PipelineRun;
-    artifacts: string[];
-    assessment: PipelineEvidenceAssessment;
-    blind: boolean;
-  }): void {
-    const { live, repo, sha, run, artifacts, assessment, blind } = input;
-    const { state } = live;
-    const watch = state.pipelines?.[repo];
-    if (!watch) return;
-    const { windowMs } = this.evidenceRetryKnobs();
-    if (state.gate) {
-      // 已有闸在场(重复结算撞上已举卡):不重复进窗、不重复举卡。
-      this.log(`[issue-flow] ${live.id} 证据暂缺但已有闸在场(${repo}),`
-        + `留痕停机 @ ${sha.slice(0, 12)}`);
-      return;
-    }
-    if (windowMs > 0) {
-      const parsed = watch.evidence_retry_deadline
-        ? Date.parse(watch.evidence_retry_deadline) : NaN;
-      if (!Number.isFinite(parsed)) {
-        // 首次进窗:记截止时间+失败摘要落盘,排定时器,不举卡不通知。
-        const dims = dimensionLabels(assessment.missingDimensions);
-        watch.evidence_retry_deadline =
-          new Date(Date.now() + windowMs).toISOString();
-        watch.evidence_retry_attempts = 0;
-        watch.evidence_failure_log = (run.log ?? "").slice(0, 2000);
-        const note = blind
-          ? "流水线红灯但平台失败摘要只有链接(无 checks 明细)且无镜像产物"
-            + "——证据重试窗进行中,平台定时重拉产物重评;到点仍缺才举卡"
-            + "请人贴报错原文"
-          : `流水线红灯(维度: ${dims})但暂无可定位的具体报错——证据重试窗`
-            + "进行中,平台定时重拉产物重评;到点仍缺才举卡请人贴报错原文";
-        watch.last_error = note;
-        state.stage_note = `${note}(截止 ${watch.evidence_retry_deadline});`
-          + "重试不消耗修复轮预算";
-        saveState(live.root, state);
-        this.log(`[issue-flow] ${live.id} 流水线红灯证据暂缺(${repo},`
-          + `${blind ? "盲输入" : "维度 " + dims})进重试窗 @ ${sha.slice(0, 12)}`
-          + `,截止 ${watch.evidence_retry_deadline}`);
-        this.scheduleEvidenceRetry(live, repo, sha, run);
-        return;
-      }
-      // 窗内再结算(如恢复重放):只把表重新挂上,不重置截止时间。
-      if (Date.now() < parsed) {
-        this.scheduleEvidenceRetry(live, repo, sha, run);
-        return;
-      }
-      // 到点仍缺:清窗再举卡(T1a 文案),留痕带上已试次数。
-      this.expireEvidenceRetryWindow(live, repo, sha, artifacts,
-        assessment, blind);
-      return;
-    }
-    // 旋钮 0=关:立即举卡(票 82 之前的现状行为)。
-    this.raiseEvidenceCard(live, repo, sha, artifacts, assessment, blind);
-  }
-
-  /** 重试窗到点仍缺的统一收口(结算进窗与窗内重评两条路共用,不许各
-   *  写一份):清窗→留痕带已试次数→举卡一次——整个窗生命周期里人只在
-   *  这一刻被通知。 */
-  private expireEvidenceRetryWindow(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    artifacts: string[],
-    assessment: PipelineEvidenceAssessment,
-    blind: boolean,
-  ): void {
-    const { state } = live;
-    const watch = state.pipelines?.[repo];
-    if (!watch) return;
-    const attempts = watch.evidence_retry_attempts ?? 0;
-    this.clearEvidenceRetry(watch);
-    const note = `证据重试窗(重评 ${attempts} 次)到点仍无可定位报错——`
-      + "已发卡请人把报错原文粘贴进会话,作答后带着证据继续修复";
-    watch.last_error = note;
-    state.stage_note = note;
-    saveState(live.root, state);
-    this.raiseEvidenceCard(live, repo, sha, artifacts, assessment, blind);
-  }
-
-  /** pipeline_evidence 举卡(票 03/81 的卡面文案,逐字保持):盲输入与
-   *  普通全缺只差"原因节+题面",其余节共用一套;等待通知走
-   *  notifyWaitingCard——整个重试窗生命周期里人只在这一刻被通知一次。 */
-  private raiseEvidenceCard(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    artifacts: string[],
-    assessment: PipelineEvidenceAssessment,
-    blind: boolean,
-  ): void {
-    const { state } = live;
-    const dims = dimensionLabels(assessment.missingDimensions);
-    const reasons = evidenceGapReasons(assessment).join(";").slice(0, 600);
-    const title = blind
-      ? "流水线红灯,但平台摘要只有链接且无产物——请把平台上失败项的"
-        + "报错原文粘贴进本卡作答,平台会带着证据继续修复"
-      : `流水线红灯(维度: ${dims}),但没有可定位的具体报错——请把平台上`
-        + "失败项的报错原文粘贴进本卡作答,平台会带着证据继续修复";
-    const reasonSection = blind
-      ? [
-          "**盲输入原因**",
-          "",
-          "平台摘要只有链接且无产物:平台没有给出 checks 结构化明细,"
-            + "失败摘要抠掉链接后没有可定位的报错,失败产物也没有镜像"
-            + "下来——修复会话手里没有任何可信失败证据,派修只会猜改。",
-        ]
-      : [
-          "**缺口维度与原因**",
-          "",
-          ...evidenceGapReasons(assessment).map((reason) => `- ${reason}`),
-        ];
-    const raised = this.raisePipelineGate(live, repo, sha,
-      "pipeline_evidence", title,
-      [
-        ...reasonSection,
-        "",
-        "**镜像产物**",
-        "",
-        artifacts.length
-          ? `失败产物全文已镜像到会话工作区 pipeline/ 目录(${artifacts.join("、")}),但其中没有可定位的报错原文。`
-          : "平台未返回本次失败产物,可到交付平台的 MR/流水线页面查看详情。",
-        "",
-        "**怎么办**",
-        "",
-        "把平台上失败项的报错原文(带文件/行号/堆栈)直接粘贴进本卡的"
-          + `输入框提交${blind ? "" : `(缺口原因: ${reasons})`}。平台会把`
-          + "原文作为人工证据注入下一修复回合(该轮会消耗修复轮预算),"
-          + "AI 按原文定位修复后同分支再推,流水线重新监看。空答复无法"
-          + "作为修复证据。",
-      ].join("\n"));
-    if (!raised) saveState(live.root, state);
-    this.log(`[issue-flow] ${live.id} 流水线红灯${blind ? "盲输入" : "证据全缺"}`
-      + `(${repo}${blind ? "" : `,维度 ${dims}`})@ ${sha.slice(0, 12)},`
-      + `${raised ? "举卡请人贴原文" : "已有闸,留痕停机"}`);
-  }
-
-  /** 重试窗的一拍:清旧表→按剩余时间排下一评。delay=min(节拍,距截止
-   *  剩余)——到点那一拍准时落,不重置截止;unref 不阻进程关停。 */
-  private scheduleEvidenceRetry(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    run: PipelineRun,
-  ): void {
-    const key = `${live.id}:${repo}`;
-    const prior = this.evidenceRetryTimers.get(key);
-    if (prior) clearTimeout(prior);
-    const watch = live.state.pipelines?.[repo];
-    // 守卫与 evaluateEvidenceRetry 同一套(含 waiting_user):条件不再
-    // 成立就顺手清账落盘,不留悬空的窗等下一拍自愈。
-    if (!watch || watch.sha !== sha || !watch.evidence_retry_deadline
-        || live.state.gate || live.state.status === "waiting_user"
-        || isTerminal(live.state.status)) {
-      if (watch?.sha === sha) {
-        this.clearEvidenceRetry(watch);
-        saveState(live.root, live.state);
-      }
-      return;
-    }
-    const remaining =
-      Date.parse(watch.evidence_retry_deadline) - Date.now();
-    const { tickMs } = this.evidenceRetryKnobs();
-    const timer = setTimeout(() => {
-      this.evidenceRetryTimers.delete(key);
-      void this.evaluateEvidenceRetry(live, repo, sha, run);
-    }, Math.max(0, Math.min(tickMs, remaining)));
-    timer.unref?.();
-    this.evidenceRetryTimers.set(key, timer);
-  }
-
-  /** 重试窗重评:重拉镜像(产物晚到自愈)→重跑证据评估。证据出现→
-   *  走正常派修路径(含既有分级文案);到点仍缺→举卡一次。每轮重评
-   *  前查会话状态(票 82 红线):取消/终态/已举卡/等作答/换提交即收手。 */
-  private async evaluateEvidenceRetry(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    run: PipelineRun,
-  ): Promise<void> {
-    const { state } = live;
-    const watch = state.pipelines?.[repo];
-    if (!watch || watch.sha !== sha || !watch.evidence_retry_deadline
-        || state.gate || state.status === "waiting_user"
-        || isTerminal(state.status)) {
-      if (watch?.sha === sha) {
-        // 收手即清账落盘:取消/举卡/等作答后盘上不留悬空的窗。
-        this.clearEvidenceRetry(watch);
-        saveState(live.root, state);
-      }
-      return;
-    }
-    // 重评即重拉+重读盘+重跑 assess(镜像委托每次都从平台重新取)。
-    const artifacts = await this.mirrorPipelineArtifactsFor(live, repo, sha);
-    const assessment = assessPipelineRepairEvidence({
-      checks: run.checks ?? watch.checks,
-      artifacts: this.pipelineArtifactTexts(live),
-      failureSummary: run.log ?? watch.evidence_failure_log,
-    });
-    const missing = (assessment.failedDimensions.length > 0
-      && assessment.availableDimensions.length === 0)
-      || (assessment.failedDimensions.length === 0
-        && isBlindPipelineInput(run.log ?? watch.evidence_failure_log ?? "",
-          artifacts.length > 0));
-    if (!missing) {
-      // 证据出现:清窗,走正常派修路径(刹车/预算/分级文案都在里面)。
-      this.log(`[issue-flow] ${live.id} 证据重试窗内取到证据(${repo})`
-        + ` @ ${sha.slice(0, 12)},自动派修(人无感)`);
-      this.clearEvidenceRetry(watch);
-      saveState(live.root, state);
-      this.dispatchPipelineRepair(live, repo, sha, run, artifacts, assessment);
-      return;
-    }
-    watch.evidence_retry_attempts = (watch.evidence_retry_attempts ?? 0) + 1;
-    const remaining = Date.parse(watch.evidence_retry_deadline) - Date.now();
-    if (remaining <= 0) {
-      // 到点仍缺:统一收口(清窗+举卡一次,通知只此一次),留痕带已试次数。
-      this.expireEvidenceRetryWindow(live, repo, sha, artifacts, assessment,
-        assessment.failedDimensions.length === 0);
-      return;
-    }
-    saveState(live.root, state);
-    this.scheduleEvidenceRetry(live, repo, sha, run);
-  }
-
-  /** 派修路(票 82 从结算抽出):同提交刹车 → 修复轮预算 → 分级回合
-   *  指令。进入前证据评估已通过(全缺/盲输入走了重试窗路)。 */
-  private dispatchPipelineRepair(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    run: PipelineRun,
-    artifacts: string[],
-    assessment: PipelineEvidenceAssessment,
-  ): void {
-    const { state } = live;
-    const watch = state.pipelines?.[repo];
-    if (!watch) return;
     const max = repairBudget(this.options.settings);
-    // 同提交刹车(票 82,需求流 last_sha===sha→halted 同语义):红灯
-    // 还是上次派修的同一提交=修了没出新提交,再派只会原地打转——停机
-    // 不派:reds 不变(不耗预算),会话最后一次发言(AI 的诊断)写进
-    // 留痕与通知,"把 AI 的诊断交给我"。
+    // ① 同提交刹车(需求流 last_sha===sha→halted 同语义):红灯还是
+    // 上次投递派修的同一提交=修了没出新提交,再投递同一份事实只会
+    // 原地打转——停机不投:reds 不变(不耗预算),会话最后一次发言
+    // (AI 的诊断)写进留痕与通知,"把 AI 的诊断交给我"。人的
+    // resume_watch 重看豁免刹车(作答时清刹车账):人声明平台侧已
+    // 处理,重看仍红按新红灯重新投递。
     if (watch.last_repair_sha && watch.last_repair_sha === sha) {
       const diagnosis = (state.last_reply ?? "").trim();
       const note = `流水线红灯仍是上次派修的同一提交(${sha.slice(0, 12)})`
         + "——修复没有产出新提交,已停机不再派修,请人工处理";
-      // 刹车停机同时清重试窗字段(窗内重评若撞上刹车情形,同样收手):
-      // last_repair_sha 留着——人回复后 AI 再重推同一提交仍要再刹。
-      this.clearEvidenceRetry(watch);
       watch.last_error = note;
       state.stage_note = diagnosis
         ? `${note};AI 最后诊断: ${diagnosis.slice(0, 300)}`
@@ -5566,12 +5153,11 @@ export class IssueFlowService {
           + "请人工查看 MR/流水线,处理后发消息继续");
       return;
     }
-    // 修复轮预算(与需求侧同一管理页旋钮 repair_rounds,缺省 20):
-    // 走到这里都是"可修"的红灯(不可修/证据全缺已在上面停表),派
-    // 修复回合前才记一轮,绿了清零;超限停止自动回灌修复——留痕(上面的
-    // 反馈账)照记,但不再开回合让 AI 空转,请人工处理后发消息继续
-    // (与需求侧"红灯即留痕请人工"同一诚实语义)。预算 0 时第一次
-    // 可修红灯也在此停机。
+    // ② 修复轮预算(与需求侧同一管理页旋钮 repair_rounds,缺省 20):
+    // 投递回合就是修复回合——AI 在里面或修或举卡,派了才记一轮,绿了
+    // 清零;超限停止自动投递,请人工处理后发消息继续。预算 0=完全
+    // 人工(第一次红灯也停机)——举卡也是判断,判断发生在投递回合
+    // 里,没有"不派回合先举卡"的旁路。
     const reds = (watch.reds ?? 0) + 1;
     watch.reds = reds;
     if (reds > max) {
@@ -5582,9 +5168,9 @@ export class IssueFlowService {
       saveState(live.root, state);
       this.log(`[issue-flow] ${live.id} 流水线修复轮预算耗尽(${repo},`
         + `${reds}/${max}) @ ${sha.slice(0, 12)}`);
-      // 放弃点通知(票 81,需求侧 notifyRepairStopped 同语义):预算烧完
-      // 就是"机器放弃、该人接手"的时刻,主动喊人。同因(同仓同提交)
-      // 再停机凭 outcome 通道幂等不重发。
+      // 放弃点通知(需求侧 notifyRepairStopped 同语义):预算烧完就是
+      // "机器放弃、该人接手"的时刻,主动喊人。同因(同仓同提交)再
+      // 停机凭 outcome 通道幂等不重发。
       this.notifyPipelineStopped(live,
         `pipeline_repair_exhausted:${repo}:${sha}`,
         `${this.issueSubject(live)}:流水线连续 ${reds} 次红灯,修复轮预算`
@@ -5592,56 +5178,68 @@ export class IssueFlowService {
           + "处理后发消息继续");
       return;
     }
-    // 派修即记账(票 82):本轮提交与红灯摘要落账——下一轮"换新提交"
-    // 红灯时作为上轮报错拼进回合提示词(先写账再开回合,进程死在两行
-    // 之间也只是多记一轮,不会把账记到没派过的提交头上)。
+    // ③ 派修记账:本轮提交与红灯摘要落账——下一轮"换新提交"红灯时
+    // 作为上轮报错拼进投递词(先写账再投递,进程死在两行之间也只是
+    // 多记一轮,不会把账记到没派过的提交头上)。
     const previousSha = watch.last_repair_sha;
     const previousSummary = watch.last_failure_summary;
     watch.last_repair_sha = sha;
-    watch.last_failure_summary =
-      pipelineFailureDigest(run, run.checks ?? watch.checks);
-    // ④ 分级回合指令:全部维度有证据=照常派修并点名维度;部分缺=
-    // 缺口维度点名"不许猜改"并同时请人补原文;checks 缺席(没有任何
-    // 失败维度信息)=按原盲修复路径派修,不加分级段(文案已有
-    // "平台未返回产物"分支兜底)。
-    let graded = "";
-    if (assessment.failedDimensions.length
-        && assessment.missingDimensions.length === 0) {
-      graded = `本次红灯维度(${dimensionLabels(assessment.failedDimensions)})`
-        + "都有可定位的具体报错,按证据照常修复。\n";
-    } else if (assessment.missingDimensions.length) {
-      graded = `有证据的维度(${dimensionLabels(assessment.availableDimensions)})`
-        + `照常修复;缺口维度(${dimensionLabels(assessment.missingDimensions)})`
-        + "平台没有给出可定位的报错原文,不许猜改。\n"
-        + `缺口原因: ${evidenceGapReasons(assessment).join(";")}。\n`
-        + "同时请人工把平台上对应失败项的报错原文(带文件/行号/堆栈)"
-        + "直接粘贴到会话,下一轮修复会作为证据使用。\n";
-    }
-    // 维度归类错配的兜底(见 pipelineEvidence 跨维度兜底):明示按内容
-    // 采信了哪份日志,修复侧以日志原文为准定位,别被维度标签带偏。
-    const mismatch = assessment.fallbackSources.length
-      ? `证据备注: 平台维度归类与日志内容不一致,已按内容采信——`
-        + `${assessment.fallbackSources.join(";")}。以日志原文为准定位。\n`
-      : "";
-    // 上轮报错对比段(票 82,需求流 previousFailure 同语义):机制是
-    // 代码(账在上面),纪律是提示词(唯一来源 previousFailureLines)。
-    const previousLines = previousFailureLines(previousSha, previousSummary);
-    const previousFailure = previousLines.length
-      ? previousLines.join("\n") + "\n" : "";
+    watch.last_failure_summary = pipelineFailureDigest(run, checks);
     saveState(live.root, state);
-    this.startPlatformTurn(live,
-      promptCopy("notices", "pipeline.red.header", { repo, reds, max })
-        + "\n"
-        + `${describePipelineRun(run)}\n`
-        + (artifacts.length
-          ? `失败产物全文已镜像到会话工作区 pipeline/ 目录`
-            + `(${artifacts.join("、")}),先用 Bash 读全文定位,再修。\n`
-          : "平台未返回本次失败产物,请按上方摘要与各维度链接定位。\n")
-        + graded
-        + mismatch
-        + previousFailure
-        + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),"
-        + "平台会重新监看。");
+    // ④ 失败事实投递(三态:运行中 steer/等人落便签/空闲开回合)。
+    // 逐维度明细与镜像产物都给全——判断交 AI,材料也交全。
+    this.startPlatformTurn(live, [
+      promptCopy("notices", "red.deliver.header", { repo, reds, max }),
+      "",
+      "**失败摘要**",
+      "",
+      describePipelineRun(run),
+      "",
+      "**逐维度明细**(含工具)",
+      "",
+      ...(checks?.length ? summarizeFailedChecks(checks)
+        : ["(平台未返回逐维度明细)"]),
+      "",
+      "**镜像产物**",
+      "",
+      artifacts.length
+        ? `失败产物全文已镜像到会话工作区 pipeline/ 目录(${artifacts.join("、")}),先用 Bash 读全文再判断。`
+        : "平台未返回本次失败产物,可按上方摘要与各维度链接判断,"
+          + "或到交付平台的 MR/流水线页面查看。",
+      ...(previousFailureLines(previousSha, previousSummary)
+        .flatMap((line, index) => index === 0 ? ["", line] : [line])),
+      "",
+      promptCopy("notices", "red.deliver.guidance", { repo }),
+    ].join("\n"));
+    this.log(`[issue-flow] ${live.id} 流水线红灯(${repo})`
+      + `@ ${sha.slice(0, 12)},第 ${reds}/${max} 轮:失败事实已投递`
+      + "(分诊交 AI)");
+  }
+
+  /** 失败产物的平台侧镜像(结算与重试窗重评共用):晚到自愈靠它重拉
+   *  ——每轮重评都从平台重新取一次产物,再落会话工作区 pipeline/。 */
+  private mirrorPipelineArtifactsFor(
+    live: LiveIssue,
+    repo: string,
+    sha: string,
+  ): Promise<string[]> {
+    if (!this.options.platformUrl) return Promise.resolve([]);
+    const mrUrl = live.state.mrs?.find((item) => item.repo === repo)?.url;
+    return mirrorPipelineArtifacts({
+      platformUrl: this.options.platformUrl,
+      sha, repo, mrUrl,
+      dir: join(live.root, "pipeline"),
+      headers: this.platformHeaders(live.state.account),
+      log: (message) => this.log(`[issue-flow] ${live.id} ${message}`),
+    }).catch(() => [] as string[]);
+  }
+
+  /** 派修账与重试窗字段的清理(绿了清账):刹车账随红灯环作废,重试
+   *  窗字段同理——下一轮红灯从干净账起算。 */
+  private clearRepairLedger(watch: NonNullable<
+    IssueSessionState["pipelines"]>[string]): void {
+    delete watch.last_repair_sha;
+    delete watch.last_failure_summary;
   }
 
   /** mr_green 收口(2026-09-02 拍板,ADR-0013:流程终点=流水线全绿,

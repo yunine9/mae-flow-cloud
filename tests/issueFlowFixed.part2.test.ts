@@ -1,47 +1,20 @@
 /**
- * issue 流固定流程长轴 part 2/2(共 17 用例,约 62s)。
+ * issue 流固定流程长轴 part 2/2(共 13 用例)。
  * 共享夹具在 tests/issueFlowFixed.helpers.ts(拆分背景见其头注);
- * 断言与测试行为零变化。
+ * 证据重试窗系列已随红灯切换(#247)整体退场删除——机制退场后
+ * 只保留「存量盘 retry 字段被 recover 清扫」的迁移钉。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
-import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
-import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
-import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
-import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
-import { JEST_LOG, issue28Artifacts } from "./pipelineSamples.ts";
-import {
-  FIXED_TICKET_STAGES,
-  loadState,
-  shouldNudgeFixed,
-  type IssuePipelineWatch,
-  type IssueSessionState,
-} from "../src/issueFlow/state.ts";
-import {
-  fixedNudgeNotice,
-  issueFixedOpeningPrompt,
-  issueRegistrationMeta,
-  issueResumePrompt,
-} from "../src/issueFlow/prompt.ts";
-import {
-  getPipelineStatus,
-  triggerPipeline,
-} from "../src/pipelineClient.ts";
+import { loadState } from "../src/issueFlow/state.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 import {
@@ -52,293 +25,52 @@ import {
   NO_TICKET_ENV,
   until,
   fastPoll,
-  retryWindow,
-  fakeOps,
-  TICKET,
   BRANCH,
   LoopPlatform,
-  fixedState,
-  metaState,
-  META_CREDENTIALS,
   seedMrGreenWatch,
-  rearmMrGreenWatch,
-  assertRepairDispatched,
-  assertCardAfterWindow,
   TRUNCATED_TOOL_BASH,
   seedGreenWatch,
   headSha,
 } from "./issueFlowFixed.helpers.ts";
 
-test("证据重试窗:产物晚到自愈——先零产物进窗不举卡,窗口内补出自动派修", async () => {
-  const dataDir = mfcTemp("mfc-issue-retry-heal-");
+test("重试窗退场迁移:存量盘 evidence_retry_* 死账字段重启被 recover 清扫", async () => {
+  const dataDir = mfcTemp("mfc-issue-retry-sweep-");
   const origin = bareOrigin(dataDir);
-  const platform = new LoopPlatform("failed");
-  platform.firstFailure = {
-    log: "流水线运行失败",
-    checks: [{ dimension: "UT", status: "failed", tool: "build2.0" }],
-  };
-  // 晚到剧本:红灯结算时平台还没有产物(零镜像),进重试窗;
-  // 窗口内产物补出(UT 失败原文),下一拍重评应读到并自动派修。
-  platform.firstFailureArtifacts = [];
-  await platform.start();
-  seedMrGreenWatch(dataDir, origin);
-  const model = new ScriptedModelServer([
-    { text: "收到,按 UT 原文修。" },
-  ], "scripted-v1", { linear: true });
-  await model.start();
-  // 窗口 0.1 分钟=6 秒,节拍 1.2 秒一评:测试不等真实的 15 分钟。
-  const service = new IssueFlowService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    settings: retryWindow(0.1),
-    dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-  });
-  try {
-    // 进窗:不举卡、不开回合、不耗预算;截止时间落盘。
-    const windowed = await until(() => {
-      const issue = service.get("issue-1");
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      const watch = issue.pipelines?.[origin];
-      return watch?.evidence_retry_deadline && !watch.watching
-        ? issue : undefined;
-    }, "证据重试窗落盘");
-    assert.equal(windowed.gate, undefined, "窗内不举卡(防假卡)");
-    assert.equal(model.requests.length, 0, "窗内不开修复回合");
-    assert.equal(windowed.pipelines?.[origin]?.reds, undefined,
-      "重试不消耗修复轮预算");
-    assert.equal(windowed.pipelines?.[origin]?.evidence_retry_attempts, 0);
-    assert.ok(windowed.pipelines?.[origin]?.evidence_failure_log,
-      "失败摘要落盘(重启续算的重评输入)");
-    // 产物补出:下一拍重评拉到证据 → 走正常派修路径(既有分级文案)。
-    platform.firstFailureArtifacts = [{
-      name: "build_log_ut-1.txt",
-      text: JEST_LOG,
-    }];
-    const requestText = await until(() =>
-      model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "产物补出后自动派修");
-    assert.match(requestText, /本次红灯维度\(UT\/覆盖率\)/,
-      "证据出现走既有分级文案");
-    assert.match(requestText, /失败产物全文已镜像/);
-    assert.equal(service.get("issue-1").gate, undefined,
-      "自愈路全程不举卡");
-    const settled = await until(() => {
-      const issue = service.get("issue-1");
-      return issue.status === "idle" ? issue : undefined;
-    }, "修复回合收口");
-    const watch = settled.pipelines?.[origin];
-    assert.equal(watch?.reds, 1, "派了回合才 reds+1");
-    assert.equal(watch?.evidence_retry_deadline, undefined,
-      "证据出现即清重试窗字段");
-    assert.equal(watch?.last_repair_sha, "c".repeat(40),
-      "派修写入刹车账(上次派修提交)");
-    assert.match(watch?.last_failure_summary ?? "", /UT\/覆盖率/,
-      "派修写入本轮红灯摘要");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    await platform.stop();
-  }
-});
-
-/** "到点仍缺举卡"的双场景对照组(普通全缺 vs 盲输入):卡面必须区分
- *  两种情形,通知只发一次,全程零回合、零预算消耗。 */
-
-test("证据重试窗:到点仍缺举卡——通知一次,卡面区分普通全缺与盲输入", async () => {
-  // 场景一(普通全缺):checks 有失败维度但零明细,卡面点名缺口维度。
-  await assertCardAfterWindow({
-    what: "普通全缺",
-    firstFailure: {
-      log: "流水线运行失败",
-      checks: [{ dimension: "COMPILE", status: "failed" }],
-    },
-    facePatterns: [/缺口维度与原因/, /编译\/构建/, /粘贴/],
-    faceAntiPatterns: [/盲输入原因/],
-  });
-  // 场景二(盲输入):checks 缺席+链接式摘要+零产物,卡面点明盲因。
-  await assertCardAfterWindow({
-    what: "盲输入",
-    firstFailure: {
-      log: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
-        + "https://loop.test/pipeline/1",
-    },
-    artifacts: [],
-    facePatterns: [/盲输入原因/, /摘要只有链接且无产物/, /粘贴/],
-    faceAntiPatterns: [/缺口维度/],
-  });
-});
-
-
-test("证据重试窗:会话取消后循环收手——到点不举卡、不通知,字段清账", async () => {
-  const dataDir = mfcTemp("mfc-issue-retry-cancel-");
-  const origin = bareOrigin(dataDir);
-  const platform = new LoopPlatform("failed");
-  platform.firstFailure = {
-    log: "流水线运行失败",
-    checks: [{ dimension: "COMPILE", status: "failed" }],
-  };
-  platform.firstFailureArtifacts = [];
-  await platform.start();
-  seedMrGreenWatch(dataDir, origin);
-  const luban = new FakeLubanServer();
-  await luban.start();
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
-  await model.start();
-  const service = new IssueFlowService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    settings: retryWindow(0.05),
-    dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
-    linkBase: "http://work.test",
-  });
-  try {
-    await until(() => {
-      const issue = service.get("issue-1");
-      return issue.pipelines?.[origin]?.evidence_retry_deadline
-        ? issue : undefined;
-    }, "进窗");
-    // 窗中途取消会话:终态。下一拍重评必须收手(清字段、不举卡)。
-    await service.control("issue-1", { action: "cancel" });
-    const settled = await until(() => {
-      const issue = service.get("issue-1");
-      return issue.pipelines?.[origin]?.evidence_retry_deadline === undefined
-        ? issue : undefined;
-    }, "取消后重试循环收手清账");
-    assert.equal(settled.status, "canceled");
-    // 熬过原截止时间:不得再举卡,也不得有任何通知。
-    const deadline = new Date(Date.now() + 4_000).getTime();
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    assert.equal(service.get("issue-1").gate, undefined,
-      "取消后到点不举卡");
-    assert.equal(luban.messages.length, 0, "取消后无任何通知");
-    assert.equal(model.requests.length, 0, "取消后无平台回合");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    await platform.stop();
-    await luban.stop();
-  }
-});
-
-
-test("证据重试窗重启续算:窗口中途重启不重置 deadline,到点仍缺才举卡", async () => {
-  const dataDir = mfcTemp("mfc-issue-retry-restart-");
-  const origin = bareOrigin(dataDir);
-  const platform = new LoopPlatform("failed");
-  platform.firstFailure = {
-    log: "流水线运行失败",
-    checks: [{ dimension: "COMPILE", status: "failed" }],
-  };
-  platform.firstFailureArtifacts = [];
-  await platform.start();
-  seedMrGreenWatch(dataDir, origin);
-  const luban = new FakeLubanServer();
-  await luban.start();
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
-  await model.start();
-  const statePath = join(dataDir, "issues", "issue-1", "issue.json");
-  const buildService = () => new IssueFlowService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    settings: retryWindow(0.1),
-    dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
-    linkBase: "http://work.test",
-  });
-  const service = buildService();
-  try {
-    await until(() => {
-      const issue = service.get("issue-1");
-      return issue.pipelines?.[origin]?.evidence_retry_deadline
-        ? issue : undefined;
-    }, "第一世进窗");
-    const onDisk = JSON.parse(readFileSync(statePath, "utf-8")) as {
-      pipelines: Record<string, { evidence_retry_deadline?: string }>;
-    };
-    const deadlineBefore = onDisk.pipelines[origin].evidence_retry_deadline!;
-    // 窗口中途"重启":关停第一世,1.5 秒(不足 6 秒窗)后重建服务。
-    await service.shutdown().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    const revived = buildService();
-    try {
-      const onDiskAfter = JSON.parse(readFileSync(statePath, "utf-8")) as {
-        pipelines: Record<string, { evidence_retry_deadline?: string }>;
-      };
-      assert.equal(onDiskAfter.pipelines[origin].evidence_retry_deadline,
-        deadlineBefore, "重启不重置截止时间(不白等也不白送)");
-      // 到点(原 deadline)行为正确:举卡一次,通知一条,零回合。
-      const gated = await until(() => {
-        const issue = revived.get("issue-1");
-        return issue.status === "waiting_user"
-          && issue.gate?.kind === "pipeline_evidence" ? issue : undefined;
-      }, "续算到点举卡");
-      assert.equal(gated.pipelines?.[origin]?.reds, undefined,
-        "续算全程不耗预算");
-      assert.equal(model.requests.length, 0, "续算不开平台回合");
-      await until(() => luban.messages.length ? luban.messages : undefined,
-        "续算到点通知");
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      assert.equal(luban.messages.length, 1, "跨重启仍只通知一次");
-    } finally {
-      await revived.shutdown().catch(() => undefined);
-    }
-  } finally {
-    await model.stop();
-    await platform.stop();
-    await luban.stop();
-  }
-});
-
-
-test("重试窗守卫:已举卡的会话重启后不续算重试窗", async () => {
-  const dataDir = mfcTemp("mfc-issue-retry-guard-");
-  const origin = bareOrigin(dataDir);
-  // 盘上直接种"窗到点已举卡"的现场:重试窗字段已清是对的吗——不是,
-  // 这里钉的是另一条守卫:闸在场时恢复路径不得把窗重新挂上再举一次。
+  // 证据重试窗已随红灯切换(#247)整体退场:存量盘上可能还留着旧机制
+  // 落的 retry 字段(窗停机后升级/重启的现场)。recover() 顺手清账——
+  // 不清的话它们就是永远没人读的死账,还会在 wire 上误导前端。
   seedMrGreenWatch(dataDir, origin, { watching: false });
   const statePath = join(dataDir, "issues", "issue-1", "issue.json");
   const seed = JSON.parse(readFileSync(statePath, "utf-8")) as {
     pipelines: Record<string, Record<string, unknown>>;
-    gate?: Record<string, unknown>;
   };
   seed.pipelines[origin].evidence_retry_deadline =
     new Date(Date.now() - 60_000).toISOString();
   seed.pipelines[origin].evidence_retry_attempts = 2;
-  seed.gate = {
-    id: "gate-seeded", kind: "pipeline_evidence", state_version: 0,
-    question: { questions: [{ question: "请贴报错原文",
-      options: [{ code: "supply", label: "已粘贴报错原文,继续修复" }] }] },
-    pipeline: { repo: origin, sha: "c".repeat(40) },
-    created_at: new Date().toISOString(),
-  };
+  seed.pipelines[origin].evidence_failure_log = "BUILD FAILURE(旧账)";
   writeFileSync(statePath, JSON.stringify(seed));
-  // 无 platformUrl:恢复路径的续算分支与定时器照走(守卫与平台无关)。
+  // 无 platformUrl:清扫在 recover,与平台无关。
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: { scripted: {} },
-    settings: retryWindow(0.05),
+    settings: fastPoll,
     dts: new MockDtsGateway(),
   });
   try {
-    // 熬过期窗的定时器节拍:守卫必须让一切保持原样。
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await until(() => {
+      const after = JSON.parse(readFileSync(statePath, "utf-8")) as {
+        pipelines: Record<string, Record<string, unknown>>;
+      };
+      return "evidence_retry_deadline" in after.pipelines[origin]
+        ? undefined : after;
+    }, "重启清扫 retry 死账字段");
     const after = JSON.parse(readFileSync(statePath, "utf-8")) as {
       pipelines: Record<string, Record<string, unknown>>;
-      gate?: Record<string, unknown>;
     };
-    assert.equal(after.gate?.kind, "pipeline_evidence", "已举的卡不动");
-    assert.equal(after.pipelines[origin].evidence_retry_deadline,
-      seed.pipelines[origin].evidence_retry_deadline,
-      "闸在场:恢复路径不续算重试窗(字段原样)");
+    assert.equal("evidence_retry_attempts" in after.pipelines[origin], false,
+      "重试次数字段一并清扫");
+    assert.equal("evidence_failure_log" in after.pipelines[origin], false,
+      "窗内失败摘要字段一并清扫");
   } finally {
     await service.shutdown().catch(() => undefined);
   }
@@ -421,10 +153,10 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
     await until(() => luban.messages.length ? luban.messages : undefined,
       "刹车停机通知");
     await new Promise((resolve) => setTimeout(resolve, 1_000));
-    // 线性剧本按场景计请求(3 场景=3 请求):判"没有第二轮派修"要看
-    // 请求里有没有第二轮红灯的平台通知词。
-    assert.doesNotMatch(JSON.stringify(model.requests), /第 2\/20 次红灯/,
-      "刹车后不再派修复回合");
+    // 线性剧本按场景计请求(3 场景=3 请求):判"没有第二轮投递"要看
+    // 请求里有没有第二轮红灯的投递词(#247:轮次词=「第 N/20 轮红灯」)。
+    assert.doesNotMatch(JSON.stringify(model.requests), /第 2\/20 轮红灯/,
+      "刹车后不再投递第二轮修复回合");
     assert.equal(luban.messages.length, 1, "同因只发一条");
     const text = JSON.stringify(luban.messages);
     assert.match(text, /红灯分诊夹具/, "问题标题入文案");
@@ -478,9 +210,9 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
   try {
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "换新提交照常派修");
-    assert.match(requestText, /第 2\/20 次红灯/, "reds 跨 SHA 累计,照常派");
-    assert.match(requestText, /本次红灯维度\(编译\/构建\)/);
+    "换新提交照常投递派修");
+    assert.match(requestText, /第 2\/20 轮红灯/, "reds 跨 SHA 累计,照常投递");
+    assert.match(requestText, /逐维度明细/);
     assert.match(requestText,
       new RegExp(`上一轮\\(提交 ${"d".repeat(12)}\\)红灯的报错摘要`),
       "上轮报错段随回合下发");

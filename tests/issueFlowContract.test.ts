@@ -664,7 +664,8 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
 
 test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定位字段)", async () => {
   /** 红灯假件:状态查询首轮即终态 failed(带不可修工具的 checks 明细),
-   * 产物端点回空清单——走最短路径触达分诊停机路的举闸。 */
+   *  产物端点回空清单——红灯结算只投事实,举卡由 AI 在投递回合里经
+   *  raise_gate 完成(#247),走最短路径触达这张卡的 wire 投影。 */
   class RedPlatform {
     private server: ReturnType<typeof createServer> | undefined;
     baseUrl = "";
@@ -715,7 +716,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   const platform = new RedPlatform();
   await platform.start();
   // 「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,监看器重挂
-  // 表直奔红灯结算的不可修分诊举闸(与 issueFlowFixed 的夹具同款)。
+  // 表直奔红灯结算的事实投递回合(与 issueFlowFixed 的夹具同款)。
   const repo = origin;
   const sha = "c".repeat(40);
   const root = join(dataDir, "issues", "issue-1");
@@ -745,7 +746,15 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       },
     },
   }));
-  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  // 剧本(#247):投递回合里 AI 判断红灯全部来自平台侧工具告警,经
+  // raise_gate 举不可修卡——平台不再代举,红灯事实在案是唯一前置。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: {
+      kind: "pipeline_unfixable", repo: origin,
+      supplement: "红灯全部来自 SuperChecker 平台侧告警(规则 R1),"
+        + "改代码解决不了" } } },
+    { text: "已举卡等待人工处理。" },
+  ], "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
@@ -753,7 +762,6 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
     settings: fastPoll,
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
-    unfixableTools: ["SuperChecker"],
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
   });
   try {
@@ -762,7 +770,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_unfixable"
         ? issue : undefined;
-    }, "不可修闸举卡");
+    }, "AI 举出不可修闸卡");
     const detail = await issueGet(["issues", "issue-1"], service);
     assert.equal(detail.status, 200);
 
@@ -771,13 +779,16 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       kind: "pipeline_unfixable",
       state_version: gated.gate!.state_version,
       question: { questions: [{
-        question: "流水线红灯(CodeCheck)全部来自不可自动修复的工具告警"
-          + "(SuperChecker)——请在交付平台处理/豁免后作答,平台会重新监看同一提交",
+        // 卡面问题=注册表模板(#247):AI 只能带事实性补充(context),
+        // 不能自创问题或选项。
+        question: "流水线红灯需要人工在交付平台处理或豁免(改代码解决不了)"
+          + "——请在交付平台处理/豁免后,在本卡作答「已在平台处理/豁免,"
+          + "重新监看」,平台会重新监看同一提交。",
         options: [{ code: "resume", label: "已在平台处理/豁免,重新监看" }],
         // 人工事实卡不派推荐:宿主核验不了平台侧是否真的处理过。
         recommended: undefined,
       }] },
-      context: "失败摘要/逐维度明细/镜像产物位置/处置指引(人话全文)",
+      context: "AI 的 supplement(事实说明:失败摘要/现场观察)",
       scope: undefined,
       skills: undefined,
       // 票 03 新形状:闸归属的仓与提交(作答续跑按它重置监看账)。
@@ -795,7 +806,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   }
 });
 
-test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", { skip: "CI 隔离(2026-09-13,宁缺毋滥):已知红且烧满超时税,归因见 docs/test-suite-efficiency-2026-09-11.md 第一节——修复断言后删除本标记恢复" }, async () => {
+test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", async () => {
   const dataDir = mfcTemp("mfc-issue-contract3-");
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{

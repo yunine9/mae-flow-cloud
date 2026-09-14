@@ -112,6 +112,18 @@
 
 平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch 再 create_mr。
 
+## red.deliver.header
+
+平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 轮红灯)。失败事实如下,怎么处置由你判断——平台不再替你分诊。
+
+## red.deliver.guidance
+
+处置三选一,按证据判断:
+- 报错可定位:直接修复,修完同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看;
+- 报错原文有缺口、无法定位:不要猜改,调 raise_gate(kind=pipeline_evidence, repo={{repo}}),把缺口维度与原因写进 supplement,请用户把平台上的报错原文粘贴进卡作答;
+- 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
+举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
+
 ## pipeline.red.header
 
 平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 次红灯,仍在「提交 MR·跑绿」阶段)。
