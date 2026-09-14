@@ -15,7 +15,7 @@
  * 操作控件不渲染(不是点了报错),顶部一条
  * 「查看模式」标识。归属人打开自己的会话零行为变化。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
   ISSUE_STATUS_TEXT,

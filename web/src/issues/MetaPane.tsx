@@ -50,11 +50,11 @@ import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
 import {
+  mrDisplayLabel,
   repoDeliveryRows,
   repoPipelineBadge,
   repoRole,
   repoName,
-  type RepoDeliveryRow,
   type RepoLedgerInput,
 } from "./perRepo";
 import { ENVIRONMENT_FORM_TEXT } from "../EnvironmentEditorDialog";
@@ -339,8 +339,9 @@ export function IssueMetaPane({ detail, canOperate }: {
 
   return <div className="grid min-h-0 flex-1 content-start gap-3.5 overflow-y-auto">
     {/* 元信息字段(只读平铺,ADR-0026):无壳直列。标题/问题描述挂
-        detail.ticket 门——与头部单号徽标、「DTS单据」页签禁用同一条
-        判定词,有单即隐藏,场景只有一种来源不搞两套口径。 */}
+        detail.ticket 门——与头部单号徽标同一条判定词(DTS 单据签已随
+        ADR-0027 无单整体隐藏),有单即隐藏,场景只有一种来源不搞两套
+        口径。 */}
     {!detail.ticket && <>
       <MetaField label="标题">{detail.title}</MetaField>
       <MetaField label="问题描述">
@@ -411,6 +412,14 @@ export function IssueMetaPane({ detail, canOperate }: {
     <section aria-label="关联仓清单"
       className="grid content-start gap-2 rounded-xl border border-border bg-surface px-3.5 py-3">
       <strong className="text-sm font-bold">关联仓清单</strong>
+      {/* 转正会话的来源说明随迁(原逐仓交付卡组头):旧账取到时说明
+          继承关系,取不到(原会话已清理)时退回「账在原会话」的现状
+          文案——引用静默缺省,不报错。 */}
+      {detail.converted_from && <div className="text-xs text-muted-foreground">
+        转正自 {detail.converted_from}——{inherited
+          ? "标注「转正前」的交付事实继承自原会话"
+          : "原会话的逐仓交付账留在原会话"}
+      </div>}
       {detail.repo_reclaimed_at && <div className="utility-note" role="status">
         现场已回收({formatLocalDateTime(detail.repo_reclaimed_at)}):
         取消/归档的问题单不再保留 repo 克隆(磁盘纪律),源码可随时重新拉取。
@@ -423,16 +432,16 @@ export function IssueMetaPane({ detail, canOperate }: {
             {rows.map((row) => {
               const bound = (boundRepos ?? [])
                 .some((item) => repoIdentity(item) === repoIdentity(row.repo));
-              const registered = repos.includes(row.repo);
-              const queued = pendingRepoRemove.includes(row.repo);
+              // 在册判定与绑定标同一把归一尺(不裸串比对:账键的尾斜杠/
+              // .git 写法漂移会把登记仓误判成账外仓)。
+              const registered = repos
+                .some((item) => repoIdentity(item) === repoIdentity(row.repo));
+              const queued = pendingRepoRemove.some((item) =>
+                repoIdentity(item) === repoIdentity(row.repo));
               const badge = repoPipelineBadge(row);
               const role = repoRole(row);
-              const mrLabel = row.mr
-                ? `${row.mr.iid ? `!${row.mr.iid} ` : ""}${row.mr.branch}`
-                : "";
-              const oldMrLabel = row.inherited?.mr
-                ? `${row.inherited.mr.iid ? `!${row.inherited.mr.iid} ` : ""}${row.inherited.mr.branch}`
-                : "";
+              const mrLabel = mrDisplayLabel(row.mr);
+              const oldMrLabel = mrDisplayLabel(row.inherited?.mr);
               return <li key={row.repo}
                 className={"grid content-start gap-0.5 rounded-lg border border-line bg-(--surface-muted) px-3 py-2 text-sm"
                   + (queued ? " opacity-60" : "")}>
@@ -460,7 +469,8 @@ export function IssueMetaPane({ detail, canOperate }: {
                   {!isTerminal && registered && !bound && (queued
                     ? <Button variant="outline" size="xs" className="ml-auto"
                       onClick={() => setPendingRepoRemove(
-                        pendingRepoRemove.filter((item) => item !== row.repo))}>
+                        pendingRepoRemove.filter((item) =>
+                          repoIdentity(item) !== repoIdentity(row.repo)))}>
                       撤销移除
                     </Button>
                     : <Button variant="destructive" size="xs" className="ml-auto"
