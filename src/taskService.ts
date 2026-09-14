@@ -342,8 +342,7 @@ import {
   recordKernelPublishedPush,
   reconcileKernelDeliverySelection,
   refreshKernelPanel,
-  trustedKernelHostActiveBatch,
-  trustedKernelHostLifecycle,
+  trustedKernelHostFeedback,
   type KernelFeedbackBatch,
 } from "./kernelDelivery.ts";
 import { kernelPhases, type KernelPhaseVocabulary } from "./kernelPhases.ts";
@@ -13169,10 +13168,10 @@ export class TaskService {
       const batch = (state?.delivery_loop?.batches ?? []).find(
         (item: any) => String(item?.batch_id ?? "") === batchId);
       if (!batchId || !batch || !Array.isArray(batch.items)) return undefined;
-      if (!this.options.host || !trustedKernelHostLifecycle({
+      if (!this.options.host || !trustedKernelHostFeedback({
         host: this.options.host,
         cwd: task.cwd,
-        actions: ["feedback-open", "pipeline-record", "selection-reconcile"],
+        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"],
         state,
       })) return undefined;
       return {
@@ -13190,7 +13189,7 @@ export class TaskService {
     }
   }
 
-  /** verifiedState 仅复用同一同步调用内已通过完整生命周期核验的快照，不接受活动批次核验代替。 */
+  /** verifiedState 仅复用同一同步调用内已核验反馈事实的快照，不接受仅活动批次的核验代替。 */
   private syncFeedbackStoreFromKernel(task: TaskState, projectionOnly = false, verifiedState?: Record<string, any>): void {
     // Legacy/local-plugin tasks never opted into the Cloud delivery-loop
     // contract.  They have no host receipts or FeedbackStore to rebuild; the
@@ -13206,17 +13205,17 @@ export class TaskService {
       if (projectionOnly && !batches.length) return;
       // 历史手动完成但内核仍在反馈阶段的任务不启动收据核验，避免重启
       // 为无效终态反复等待 Python。真正已有 close 事件的任务仍须核验
-      // 完整收据后补齐索引；不能把合入时遗漏的“处理中”永久封存。
+      // 反馈事实后补齐索引；不能把合入时遗漏的“处理中”永久封存。
       if (projectionOnly && task.summary.status === "completed"
           && (state.current !== "end" || !state.delivery_loop?.close_events?.length)) return;
-      if (!verifiedState && !trustedKernelHostLifecycle({
+      if (!verifiedState && !trustedKernelHostFeedback({
         host: this.options.host,
         cwd: task.cwd,
         actions: ["feedback-open", "feedback-result", "pipeline-record", "close",
-          "selection-reconcile"],
+          "selection-reconcile", "intervention-reconcile"],
         state,
       })) {
-        throw new Error("内核持续检视生命周期缺少完整的 Cloud 宿主权威收据");
+        throw new Error("内核反馈事实缺少 Cloud 宿主权威收据");
       }
       const indexPath = join(
         task.summary.workspace, "feedback", "index.jsonl");
@@ -18361,22 +18360,14 @@ export class TaskService {
     // 内核暂时不可用 ≠ 收据缺失:前者返回以 KERNEL_UNAVAILABLE 开头的
     // 原因,调用方据此挂起自愈、不叫 Agent 补回执也不停摆。
     try {
-      if (!(batch.result_digest ? trustedKernelHostLifecycle({
-        host,
-        cwd: task.cwd,
-        // published 由 feedback-open 签署；它可更新生命周期而不改本批结果。
-        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile"],
-        state,
-      }) : trustedKernelHostActiveBatch({
-        host,
-        cwd: task.cwd,
-        actions: ["feedback-open", "pipeline-record", "selection-reconcile"],
-        state,
-      }))) {
+      if (!trustedKernelHostFeedback({
+        host, cwd: task.cwd, state,
+        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"],
+      })) {
         return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
       }
       if (batch.result_digest) {
-        // 上面已核验同一快照的完整生命周期，允许来源比投影还严格（不含 close）。
+        // 上面已核验同一快照的全部反馈事实（含历史结果和调度决定）。
         // 同步补齐可能因崩溃遗漏的索引，不再读盘核验；首次登记后的新状态仍重新核验。
         this.syncFeedbackStoreFromKernel(task, false, state);
         return undefined;

@@ -262,7 +262,7 @@ test("核验输出格式错误不能变成否定裁决", () => {
   assert.throws(() => trustedKernelHostLifecycle({ host: { ...HOST, python: script }, cwd, actions: ["pipeline-record"] }), KernelUnavailableError);
 });
 
-test("task-20: build 收据允许 external_verify 开批，其他字段篡改仍拒绝", () => {
+test("task-20: 反馈开批只依赖反馈事实，不依赖步骤或其他投影", () => {
   const { cwd, workspace, taskId, head } = watchingTask("step-predecessor");
   const path = join(cwd, ".mae-flow.json");
   const initial = readState(cwd);
@@ -273,15 +273,15 @@ test("task-20: build 收据允许 external_verify 开批，其他字段篡改仍
     waitingId: "selection-in-build", head, paths: ["main.ts"], excludedPaths: [] });
   const signed = readState(cwd);
   assert.equal(signed.current, "build");
-  const moved = { ...signed, current: "external_verify" };
+  const moved = { ...signed, current: "external_verify",
+    user_intervention: { updated: true },
+    quality: { external_verification: { verdict: "PASS", sha: "unverified" } } };
   const batch = { schema: "mae-flow-feedback-batch/1" as const, batch_id: "task-20-regression",
     task_id: taskId, base_sha: head, opened_at: new Date().toISOString(),
     items: [{ id: "review-one", source: "mr_discussion" as const, source_id: "one",
       source_revision: 0, kind: "code_review", summary: "补齐分支", verification: "reviewer" }] };
   for (const tampered of [
     { ...moved, delivery_loop: {} },
-    { ...moved, user_intervention: { forged: true } },
-    { ...moved, quality: { external_verification: { verdict: "PASS", sha: "forged" } } },
   ]) {
     writeFileSync(path, JSON.stringify(tampered));
     assert.throws(() => openKernelFeedback({ host: HOST, cwd, workspace, batch }),
@@ -296,7 +296,10 @@ test("task-20: build 收据允许 external_verify 开批，其他字段篡改仍
   assert.equal(opened.delivery_loop.active_batch_id, batch.batch_id);
   assert.equal(opened.current, "feedback_triage");
   assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd,
-    actions: ["feedback-open"], state: opened }), true, "开批仍生成完整的新宿主收据");
+    actions: ["feedback-open"], state: opened }), true, "开批仍生成可恢复的新宿主收据");
+  assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd,
+    actions: ["pipeline-record"], state: opened }), false,
+    "开批收据不能替未核实的流水线结果背书");
   openKernelFeedback({ host: HOST, cwd, workspace, batch });
   assert.equal(readState(cwd).delivery_loop.batches.length, 1, "重复开批仍幂等");
   const result = { host: HOST, cwd, workspace, taskId, batchId: batch.batch_id,

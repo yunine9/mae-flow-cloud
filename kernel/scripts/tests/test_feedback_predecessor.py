@@ -25,22 +25,28 @@ class FeedbackPredecessorTests(unittest.TestCase):
     def test_step_movement_allows_predecessor_but_not_completion_attestation(self):
         self.state["current"] = "external_verify"
         before = copy.deepcopy(self.state)
-        self.assertTrue(receipts.trusted_lifecycle_predecessor(self.state, ["selection-reconcile"]))
+        self.assertTrue(receipts.trusted_feedback_loop(self.state, ["selection-reconcile"]))
         self.assertFalse(receipts.trusted_current_lifecycle(self.state, ["selection-reconcile"]))
         self.assertEqual(before, self.state)
         self.assertEqual("build", self.record["projection"]["current"])
 
-    def test_other_projection_changes_and_bad_signatures_stay_rejected(self):
-        for field, value in (("delivery_loop", {}), ("user_intervention", {"forged": True}),
-                             ("quality", {"external_verification": {"verdict": "PASS"}})):
+    def test_unrelated_facts_do_not_block_feedback_or_become_pipeline_proof(self):
+        self.state.update(current="external_verify", user_intervention={"updated": True},
+                          quality={"external_verification": {"verdict": "PASS"}})
+        self.assertTrue(receipts.trusted_feedback_loop(self.state, ["selection-reconcile"]))
+        self.assertFalse(receipts.trusted_pipeline_projection(self.state, {"verdict": "PASS"}))
+        self.assertFalse(receipts.trusted_current_lifecycle(self.state, ["selection-reconcile"]))
+
+    def test_feedback_changes_and_bad_signatures_stay_rejected(self):
+        for field, value in (("delivery_loop", {}),):
             with self.subTest(field=field):
                 changed = dict(self.state, current="external_verify", **{field: value})
-                self.assertFalse(receipts.trusted_lifecycle_predecessor(changed, ["selection-reconcile"]))
-        self.assertFalse(receipts.trusted_lifecycle_predecessor(self.state, ["pipeline-record"]))
+                self.assertFalse(receipts.trusted_feedback_loop(changed, ["selection-reconcile"]))
+        self.assertFalse(receipts.trusted_feedback_loop(self.state, ["pipeline-record"]))
         with mock.patch.object(receipts, "_verify_rsa_sha256", return_value=False):
-            self.assertFalse(receipts.trusted_lifecycle_predecessor(self.state, ["selection-reconcile"]))
+            self.assertFalse(receipts.trusted_feedback_loop(self.state, ["selection-reconcile"]))
         self.record["projection"]["current"] = "external_verify"
-        self.assertFalse(receipts.trusted_lifecycle_predecessor(self.state, ["selection-reconcile"]))
+        self.assertFalse(receipts.trusted_feedback_loop(self.state, ["selection-reconcile"]))
 
 
 if __name__ == "__main__":
