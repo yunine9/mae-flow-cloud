@@ -51,6 +51,11 @@ test("润色文案:三锚点在册,system 段含图片引用保留与待补充�
   assert.match(system, /【待补充】/, "缺失信息标注令牌");
   assert.match(system, /不得发明[^。]*attachment:\/\//,
     "对 attachment:// 等其他图片协议的禁止性条款在文(#184 拍板)");
+  // 骨架保持条款(2026-09-14 晚,弱输入实锤:次级加粗块被合并成概述句、
+  // 小节标题退化为行内冒号行、素材行措辞搬进成品)。
+  assert.match(system, /骨架是成品的固定结构/, "骨架逐级保留条款");
+  assert.match(system, /元话述/, "禁止对输入状态写散文");
+  assert.match(system, /行文不是模板/, "素材行文不得搬进成品");
   // 与现实的冲突点已按拍板适配:无 tmpName 目录、无 Read 工具(识图走
   // 图片观察注入),提示词在 md 不在代码字符串。
   const source = readFileSync(
