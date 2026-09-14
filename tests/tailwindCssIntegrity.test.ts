@@ -107,3 +107,45 @@ test("tailwind.css:shadcn 变量桥冒烟——@theme 依赖的 :root 定义一�
       `变量桥缺 ${variable}——@theme 的 --color-* 映射会悬空,对应工具类整组失效\n(历史事故:#233 归并丢 15 个 :root 定义,全站主按钮透明裸字)`);
   }
 });
+
+/** #257 收口终态锚(各实现票划转清单):
+ *  - RETIRED:六票期间确认退役的孤儿皮/死规则,再引入即红;
+ *  - BASE:preflight 配套基座——#233 归并时规则体被整块吞掉只剩注释,
+ *    #257 按 c72ee7e(base)/74e352a(fixes)原文成对恢复,再丢即红。 */
+const RETIRED_FRAGMENTS = [
+  "issue-rail-primary", // #256 转正确认钮收编 ui/Button 后的孤儿皮
+  "annot-route-picker", // 批注去向选择器,markup 已死(#251 P2)
+  "knowledge-spin", // 孤儿 @keyframes,无消费者(#251 P2)
+  "workspaceReveal", // 孤儿 @keyframes,无消费者(#251 P2)
+  "--help-ink", // 变量定义已失,消费行是死规则(#251 P2)
+];
+
+const BASE_LAYER_ANCHORS = [
+  "display: inline-block", // svg/img 行内补丁(preflight 拍块会折行行内图标)
+  "list-style: disc", // 无类/渲染器列表标记(.md-list 裸奔即红)
+  "list-style: decimal", // 有序列表序号
+  ".sidebar-reset", // 侧栏 scoped 归一(fixes 层;与 ul disc 成对在位)
+];
+
+test("tailwind.css:#257 终态——退役孤儿绝迹,preflight 基座在位", () => {
+  for (const fragment of RETIRED_FRAGMENTS) {
+    assert.ok(!css.includes(fragment),
+      `退役孤儿 ${fragment} 又出现在 tailwind.css 里——若是误回归请删除;若确要复用,先开票撤销 #257 的退役裁决再动本锚`);
+  }
+  for (const anchor of BASE_LAYER_ANCHORS) {
+    assert.ok(css.includes(anchor),
+      `preflight 基座锚 ${anchor} 不在 tailwind.css 里了——base/fixes 规则体是 #233 归并事故的丢失物、#257 成对恢复,再丢即同形态回归`);
+  }
+});
+
+/** 终态行数棘轮:#257 收口后的真实行数钉死为天花板,后续只许更少。
+ *  >2,500 的目标经证据化 recalibration 判定不可达(余量属于 Out-of-scope
+ *  的生成 DOM 皮肤与领域件皮,逐段普查见 #257 收口账),本棘轮防回涨。 */
+const TAILWIND_FINAL_LINES = 7615;
+const cssRaw = readFileSync(cssPath, "utf8");
+
+test("tailwind.css:终态行数棘轮——只许更少不许回涨", () => {
+  const lines = cssRaw.split("\n").length;
+  assert.ok(lines <= TAILWIND_FINAL_LINES,
+    `tailwind.css ${lines} 行,超过 #257 终态天花板 ${TAILWIND_FINAL_LINES} 行——新增皮肤请优先收编进 shadcn/工具类;确需余量请同票上调本锚并留痕`);
+});

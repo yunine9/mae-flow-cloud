@@ -8,7 +8,9 @@
  *   渲染器在所有页面都输出 tone 类)
  * ⑦非分层附录:必须压过 utilities 的例外态(问题卡呼吸光效、
  *   wish-quick-fab 全屏工作台隐身)。
- * 层序纪律沿用 #148/#222:覆盖写进 fixes 或本尾附录,不再堆长选择器。 */
+ * 层序纪律沿用 #148/#222:覆盖写进 fixes 或本尾附录,不再堆长选择器。
+ * .tw-root 裁决(#257):全局 preflight 后其 scoped 归一语义已由 base 层
+ * 等值承担,不恢复定义;类名留作「新轨道」标记(锁定区与测试锚仍引用)。 */
 @layer base, legacy, fixes, theme, utilities;
 @import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/theme.css" layer(theme);
@@ -143,13 +145,56 @@
 @layer base {
   /* 全局归一补丁(原 preflight-compat.css,#233 并入):
      行内图标与列表标记是存量渲染器的真实依赖;无类列表补回 UA 缩进。
-     有类的列表由各自类决定(list-none 工具类随时可覆盖)。 */
+     有类的列表由各自类决定(list-none 工具类随时可覆盖)。
+     (#257 收口:归并时规则体被整块吞掉只剩注释,按 c72ee7e 原文恢复;
+     与 fixes 层 .sidebar-reset 成对在位,单恢复 base 会令侧栏露圆点。) */
+  /* 行内图标:preflight 把 svg/img 拍成 block,存量大量行内 svg
+     (header-unlock、logout、launch 等)会在文字流里折行。 */
+  svg,
+  img {
+    display: inline-block;
+    vertical-align: middle;
+  }
+
+  /* 列表标记:存量渲染器(.md-list/.annot-list/.journey-events/
+     .overall-story-sources)依赖浏览器圆点/序号,preflight 全抹了。
+     无类列表补回 UA 的标记与缩进;有类的(含 sidebar 菜单)由各自
+     类/工具类决定。 */
+  ul {
+    list-style: disc;
+  }
+  ol {
+    list-style: decimal;
+  }
+  ul:not([class]),
+  ol:not([class]) {
+    margin-block: 1em;
+    padding-inline-start: 40px;
+  }
 }
 
 @layer fixes {
   /* .sidebar-reset:侧栏专用归一(shadcn Sidebar 族假设无列表标记,而
      base 层的 ul disc 补丁会漏进来;只挂 SidebarContent 与页脚菜单,
-     不整树挂——本层压过 legacy,整树挂会吃掉 brand 区/会话脚的类设边距) */
+     不整树挂——本层压过 legacy,整树挂会吃掉 brand 区/会话脚的类设边距)
+     (#257 收口:规则体按 74e352a 原文恢复,与 base 层 ul disc 成对。) */
+  .sidebar-reset,
+  .sidebar-reset * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid var(--border);
+  }
+  .sidebar-reset ul,
+  .sidebar-reset ol,
+  .sidebar-reset menu {
+    list-style: none;
+  }
+  .sidebar-reset button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+  }
 }
 
 @layer legacy {
@@ -470,9 +515,6 @@ svg {
 .section-count.attention { color: var(--attention); background: transparent; border: 0; }
 .current-work-counts { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .current-work-counts .section-count.danger { color: var(--danger); border: 0; background: transparent; }
-/* A run's artifacts belong to the task, so they get a dedicated full workspace. */
-@keyframes workspaceReveal { from { opacity: 0; transform: translateY(8px); } }
-
 /* Quick-start composer(#229 去 legacy:.composer/.launch-* 容器与区块
    配方退役,排版移入 LaunchWorkspace.tsx 工具类) */
 
@@ -1083,14 +1125,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   line-height: 1.5; white-space: pre-line;
   max-height: 140px; overflow-y: auto;
 }
-/* 转正确认钮(rail 拆除后的幸存者,类名承旧):主色实底 */
-.issue-rail-primary {
-  min-height: 34px; padding: 0 16px; border: 0; border-radius: 9px;
-  background: var(--accent); color: var(--accent-fg); font-size: var(--font-size-assist);
-  font-weight: 700; cursor: pointer;
-}
-.issue-rail-primary:disabled { opacity: .55; cursor: not-allowed; }
-
 /* 呼吸脉冲(rail 拆除后的幸存者,名字承旧):「有分析报告」圆点在用 */
 @keyframes issueRailPulse {
   0%, 100% { opacity: .35; transform: scale(.85); }
@@ -3267,10 +3301,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 @media (max-width: 520px) {
 }
 
-/* 飞轮面板头部(#226 后只剩任务记忆总览 MemoryBoard 在用;知识效能页已工具类化)。 */
-@keyframes knowledge-spin { to { transform: rotate(360deg); } }
-
-
 @media (max-width: 1080px) {
   /* 窄屏没有并排的余地:退回单栏,但详情仍是独立块,不塞回列表行里。 */
 }
@@ -4959,7 +4989,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .workspace-studio .annot-editor { min-width: 0; max-width: 100%; border-color: var(--studio-accent); background: var(--surface); border-radius: 9px; }
 .workspace-studio .annot-editor-actions { flex-wrap: wrap; }
 .workspace-studio .annot-editor-actions > span { flex: 1 1 100%; font-size: var(--fs-12); }
-.workspace-studio .annot-route-picker { flex-wrap: wrap; }
 .workspace-studio.materials-fullscreen .ws-body { grid-template-columns: minmax(0,1fr); }
 .workspace-studio.materials-fullscreen .ws-side { display: none; }
 /* Keep the current action reachable even with long review histories. */
@@ -5358,7 +5387,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .help-rich-text .md { color: var(--text); font-size: 14px; line-height: 1.8; }
 .help-rich-text .md-heading {
   margin: 30px 0 8px;
-  color: var(--help-ink);
   font-size: 19px;
   line-height: 1.35;
   letter-spacing: -.02em;
@@ -5823,18 +5851,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
   outline: none;
   border-color: var(--accent);
 }
-
-/* 四个去向一排。原来是 repeat(3) 的网格,加了"记为记忆"第四个就被挤到
-   下一行(用户实锤);改成按内容流式排,放不下才折。 */
-
-
-.annot-route-picker button.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  font-weight: 650;
-}
-
 
 @media (max-width: 560px) {
   .annot-editor-actions > span {
@@ -7290,7 +7306,7 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 }
 
 /* ===== workflows/workflow.css ===== */
-/* 工作流资产与专业编排器：仅面向桌面控制台，故意保持三栏而不压成移动端卡片。 */
+/* 工作流与专业编排器：仅面向桌面控制台，故意保持三栏而不压成移动端卡片。 */
 .wf-library,.wf-detail,.wf-editor{color:var(--text);font-family:var(--font-ui);min-width:980px}
 .wf-library button,.wf-detail button,.wf-editor button,.wf-scheme-selector button,
 .wf-editor input,.wf-editor select,.wf-editor textarea,.wf-scheme-selector select{

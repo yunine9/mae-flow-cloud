@@ -636,7 +636,7 @@ export function LaunchWorkspace({
     };
   }, [expectedKnowledgePreviewKey, options, knowledgePreviewRefresh]);
 
-  // 工作流资产是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
+  // 团队工作流是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
   // 正常下单，不能把团队资产读失败升级成新门禁。
   useEffect(() => {
     let alive = true;
@@ -650,7 +650,7 @@ export function LaunchWorkspace({
     }).catch(() => {
       if (!alive) return;
       setWorkflowAssetsLoaded(true);
-      setWorkflowSelectionNotice("工作流资产目录暂不可用，本次继续采用 Mae-Flow 标准方案。");
+      setWorkflowSelectionNotice("工作流目录暂不可用，本次继续采用 Mae-Flow 标准方案。");
     });
     return () => { alive = false; };
   }, []);
