@@ -376,7 +376,7 @@ test("写闸全量:非归属开发者与管理员调每条写路由都 403 且�
   const { service } = makeFixture();
   try {
     assert.ok(WRITE_ROUTES.length >= 12,
-      "写路由盘点不能缩水——当前 /issues/:id 下有 12 条写路由");
+      "写路由盘点不能缩水——当前 /issues/:id 下写路由只增不减(≥12)");
     for (const viewer of [PEER, ADMIN]) {
       const who = viewer.role === "admin" ? "管理员" : "非归属开发者";
       for (const route of WRITE_ROUTES) {
