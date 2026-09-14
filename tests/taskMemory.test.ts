@@ -224,48 +224,6 @@ test("Build-Fix:失败过又修好才记,改动文件来自两次 HEAD 的真实
   }
 });
 
-test("开局推送:同仓、未撤回、非本单的记忆按人判优先挑最多 8 条,措辞是线索不是规则", async () => {
-  const { service: svc, dataDir } = service();
-  try {
-    const store = new MemoryStore(dataDir);
-    const base = { repo: "notify-service", paths: ["src/Filter.java"], line: 88,
-      task: "task-old", evidence: "e", trigger: "改 Filter.java 时" } satisfies Partial<MemoryInput>;
-    const pipeline = store.record({ ...base, source: "prepush_fix", judged_by: "pipeline",
-      scope: "local", conclusion: "枚举要同步改 registry.xml" });
-    const human = store.record({ ...base, source: "annotation", judged_by: "human",
-      scope: "local", conclusion: "黑名单判断必须在渠道开关之前" });
-    const gone = store.record({ ...base, source: "user_note", judged_by: "human",
-      scope: "general", author: "alice", conclusion: "这条会被撤回" });
-    store.withdraw(gone.id, "alice");
-    store.record({ ...base, repo: "other-repo", source: "annotation", judged_by: "human",
-      scope: "local", conclusion: "别的仓的,不该出现" });
-    store.record({ ...base, source: "annotation", judged_by: "human",
-      scope: "one_off", conclusion: "一次性的,只进全文检索" });
-
-    const id = svc.create("给手机号打码").id;
-    const internal = (svc as any).tasks.get(id);
-    internal.summary.repo_url = "git@example.com:demo/notify-service.git";
-    const briefing = String(await (svc as any).memoryBriefing(internal));
-    assert.match(briefing, /^当前工作相关记忆/);
-    assert.match(briefing, /Agent 记录不代表人工决定/);
-    const lines = briefing.split("\n").slice(1);
-    assert.equal(lines.length, 2, "撤回的、别仓的、一次性的都不推");
-    assert.match(lines[0], /^- \[人确认 · \d{4}-\d{2}-\d{2} · src\/Filter.java:88\] 改 Filter.java 时:黑名单判断/);
-    assert.match(lines[1], /^- \[流水线/);
-    assert.deepEqual(internal.memoryBriefingIds, [human.id, pipeline.id]);
-    // 本单自己记的不回推给自己
-    internal.summary.id === id;
-    const own = svc.addAnnotation(id, {
-      author: "alice", artifact: "本任务变更", file: "src/Filter.java", line: 1,
-      anchor: "x", note: "本单刚记的", kind: "code", route: "memory",
-    });
-    assert.ok(own.id);
-    assert.equal(String(await (svc as any).memoryBriefing(internal)).split("\n").length, 3);
-  } finally {
-    await svc.shutdown();
-  }
-});
-
 test("只圈不写的记忆:结论就是圈的那段原文", () => {
   const { service: svc } = service();
   try {

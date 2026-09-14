@@ -2893,7 +2893,8 @@ export interface MemoryUsageRow {
   /** 首改目录时推的是目录摘要而不是逐条。 */
   digest?: boolean;
   ts: string;
-  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context";
+  status?: "ready" | "unavailable";
   ids: string[];
   query?: string;
   phase?: string;

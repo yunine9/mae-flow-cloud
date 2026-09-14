@@ -302,12 +302,12 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             text-left">
             <MemoryMark tone={row.moment === "search" || row.moment === "expand"
               ? "plain" : "default"}>
-              {row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
+              {row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
                 : row.moment === "edit" ? "改" : row.moment === "search" ? "查" : "展"}
             </MemoryMark>
             <span className="grid min-w-0 gap-0.5">
               <strong className="flex flex-wrap items-center gap-1.5
-                text-[13.5px] text-foreground">{row.moment === "launch" ? "开局推送"
+                text-[13.5px] text-foreground">{row.moment === "context" ? (row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
                 : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
                   : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时${row.digest ? "推送目录摘要" : "提醒"}`
                     : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`

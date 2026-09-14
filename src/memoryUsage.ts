@@ -4,7 +4,8 @@ import { join } from "node:path";
 import type { MemoryStore } from "./taskMemory.ts";
 
 export interface MemoryUsageEvent {
-  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context";
+  status?: "ready" | "unavailable";
   ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
 }
 export function recordMemoryUsage(context: {

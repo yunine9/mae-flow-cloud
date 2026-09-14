@@ -527,17 +527,12 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
 
 test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
-  // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
-  // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
-  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\), \.\.\.createTaskHostTools\(this\.taskHostRuntime\(task, epoch\)\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
-    "主会话同时挂检索工具、拆分提议与首改目录提醒");
-  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
-    "开发助手只挂记忆工具");
-  assert.match(service, /this\.maybePushPhaseMemories\(task, progress\.current_phase\)/,
-    "阶段切换推送挂在进度读取处");
-  assert.match(service, /via: "memory_push"/, "推送不算人的插话");
+  assert.equal((service.match(/memoryContext: \(\) => this\.taskMemoryContext\(task\)/g) ?? []).length, 2,
+    "主会话与开发助手通过独立工厂接入每轮记忆");
+  assert.doesNotMatch(service, /maybePushPhaseMemories|onMemoryFileIntent|memoryBriefing/,
+    "旧阶段、目录、开局推送路径已收掉");
   const driver = readFileSync(join(process.cwd(), "src/sessionDriver.ts"), "utf-8");
-  assert.match(driver, /onFileMutationIntent\?: \(path: string, tool: string\) => void/);
+  assert.match(driver, /pi.on\("context"/);
   const tools = readFileSync(join(process.cwd(), "src/memoryTools.ts"), "utf-8");
   assert.match(tools, /name: "corpus_search"/);
   assert.doesNotMatch(tools, /repo: Type\./, "repo 由宿主固定,Agent 传不了");

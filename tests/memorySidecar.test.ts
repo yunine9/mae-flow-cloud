@@ -122,67 +122,6 @@ test("工具:corpus_search 结果封顶带 id/判定者/位置;expand 形状校�
   assert.equal(renderMemoryHits([]), "没有命中的记忆。");
 });
 
-test("三个推送时刻:开局并进使命、进入新阶段插话、首次改目录插话;足迹落账", async () => {
-  const { dataDir, ids } = corpusWith(2);
-  const svc = new TaskService({
-    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
-    memory: { python: process.execPath, script: STUB,
-      milvusPath: join(dataDir, "memsearch", "milvus.db") },
-  });
-  try {
-    const id = svc.create("改一下过滤顺序").id;
-    const internal = (svc as any).tasks.get(id);
-    internal.summary.repo_url = "git@example.com:demo/notify-service.git";
-    // 开局:语义命中的排前面(假件按子串命中"过滤顺序"那条)
-    const briefing = String(await (svc as any).memoryBriefing(internal));
-    assert.match(briefing, /^当前工作相关记忆/);
-    assert.deepEqual(internal.memoryBriefingIds, [ids[0], ids[1]]);
-
-    // 会话假件:只记 steer
-    const steered: Array<{ text: string; extra: any }> = [];
-    internal.driver = {
-      steer: async (text: string, extra: any) => { steered.push({ text, extra }); },
-      abort: async () => {}, dispose: () => {}, pendingSteers: () => [],
-    };
-    internal.summary.status = "running";
-    // 失锚过滤靠现场里文件在不在:把记忆指向的两个文件真造出来。
-    internal.cwd = mkdtempSync(join(tmpdir(), "mfc-sidecar-cwd-"));
-    mkdirSync(join(internal.cwd, "src", "filter"), { recursive: true });
-    writeFileSync(join(internal.cwd, "src", "filter", "FilterEngine.java"), "class A {}\n");
-    writeFileSync(join(internal.cwd, "pom.xml"), "<project/>\n");
-
-    // 阶段:第一次看到不推(开局覆盖),换阶段才推,同阶段不重复
-    (svc as any).maybePushPhaseMemories(internal, "定规格");
-    (svc as any).maybePushPhaseMemories(internal, "写代码");
-    (svc as any).maybePushPhaseMemories(internal, "写代码");
-    await new Promise((tick) => setTimeout(tick, 300));
-    assert.equal(steered.length, 1, "换到写代码只推一次");
-    assert.match(steered[0].text, /【任务记忆】进入「写代码」/);
-    assert.equal(steered[0].extra.via, "memory_push", "推送不算人的插话");
-
-    // 首改目录:同目录只提醒一次;没有记忆的目录不提醒
-    (svc as any).onMemoryFileIntent(internal, "src/filter/FilterEngine.java");
-    (svc as any).onMemoryFileIntent(internal, "src/filter/Other.java");
-    (svc as any).onMemoryFileIntent(internal, "docs/nothing.md");
-    await new Promise((tick) => setTimeout(tick, 50));
-    assert.equal(steered.length, 2);
-    assert.match(steered[1].text, /你正要改 src\/filter 目录,这里有 1 条历史记忆/);
-    assert.match(steered[1].text, new RegExp(ids[0]));
-
-    const usage = svc.listTaskMemoryUsage(id);
-    assert.deepEqual(usage.map((row) => row.moment), ["launch", "phase", "edit"]);
-    assert.ok(existsSync(join(internal.summary.workspace, "memory-usage.jsonl")));
-    // 失锚:路径在现场不存在的不推
-    const none = (svc as any).memoryCandidates({ ...internal,
-      cwd: mkdtempSync(join(tmpdir(), "mfc-sidecar-empty-")),
-      summary: { ...internal.summary, id: "other" } });
-    assert.equal(none.length, 0, "现场里没有这些文件,失锚的不推");
-    internal.driver = undefined;
-  } finally {
-    await svc.shutdown();
-  }
-});
-
 test("真 memsearch sidecar:health/ingest/search/expand 一遍(venv 缺席则显式 skip)", async (t) => {
   if (!existsSync(REAL_PYTHON)) {
     t.skip(`找不到 memsearch venv 的 python(${REAL_PYTHON});设 MFC_MEMSEARCH_PYTHON 后重跑`);

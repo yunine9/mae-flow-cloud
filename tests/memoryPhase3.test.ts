@@ -175,10 +175,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     const a = store.record({ ...base, conclusion: "A:黑名单在开关前" });
     const b = store.record({ ...base, evidence: "e2", conclusion: "B:另一条同文件的" });
     const { id, internal, steered } = liveTask(svc);
-    (svc as any).maybePushPhaseMemories(internal, "定规格");
-    (svc as any).maybePushPhaseMemories(internal, "写代码");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(steered.length, 1);
+    (svc as any).logMemoryUsage(internal, { moment: "context", ids: [a.id, b.id], query: "当前代码" });
     const stats = store.ledger.stats();
     assert.equal(stats.get(a.id)?.pushes, 1);
     assert.equal(stats.get(b.id)?.pushes, 1);
@@ -222,7 +219,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     const timeline = buildTimeline(internal.summary.workspace, internal.cwd);
     const memoryEntries = timeline.filter((entry) => entry.kind === "memory");
     assert.equal(memoryEntries.length, 1);
-    assert.match(memoryEntries[0].title, /进入「写代码」推送 2 条记忆/);
+    assert.match(memoryEntries[0].title, /本轮提供 2 条相关记忆/);
   } finally {
     await svc.shutdown();
   }
@@ -262,73 +259,6 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
     await new Promise((tick) => setTimeout(tick, 300));
     assert.ok(logs.some((line) => line.includes("沉底后索引重建完成")), logs.join("\n"));
     assert.equal(svc.memoryInsights().repos[0].archived, 2);
-  } finally {
-    await svc.shutdown();
-  }
-});
-
-test("目录摘要层:同目录超 15 条推摘要不推明细;按成员缓存;模型摘要要引用真实 id", async () => {
-  let drafts = 0;
-  const { svc, dataDir } = fakeService({
-    memoryDrafter: async (prompt: { user: string }) => {
-      drafts += 1;
-      const id = prompt.user.match(/c-[a-z0-9]+-[a-f0-9]+/)![0];
-      return `- 有人多次要求黑名单判断在渠道开关之前(${id})\n- 加渠道要同步 registry.xml(${id})`;
-    },
-  });
-  try {
-    const store = new MemoryStore(dataDir);
-    for (let index = 0; index < 16; index += 1) {
-      store.record({ ...base, evidence: `e${index}`, conclusion: `结论 ${index}` });
-    }
-    const first = liveTask(svc);
-    (svc as any).onMemoryFileIntent(first.internal, "src/filter/FilterEngine.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(first.steered.length, 1);
-    assert.match(first.steered[0].text, /攒了 16 条历史记忆,先看摘要/);
-    assert.match(first.steered[0].text, /有人多次要求黑名单判断/);
-    assert.match(first.steered[0].text, /path_prefix=src\/filter/);
-    assert.equal(first.steered[0].extra.memory_ids.length, 16);
-    assert.equal(drafts, 1);
-    const usage = svc.listTaskMemoryUsage(first.id);
-    assert.equal(usage[0].digest, true);
-    const cache = join(store.root, "_digests", "notify-service");
-    assert.ok(existsSync(cache));
-
-    // 另一单、同目录、成员没变:直接用缓存,不再叫模型
-    const second = liveTask(svc, "第二单");
-    (svc as any).onMemoryFileIntent(second.internal, "src/filter/Other.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(second.steered.length, 1);
-    assert.equal(drafts, 1, "成员集合没变就复用缓存");
-
-    // 成员变了(多一条)→ 重做
-    store.record({ ...base, evidence: "e-new", conclusion: "新的一条" });
-    const third = liveTask(svc, "第三单");
-    (svc as any).onMemoryFileIntent(third.internal, "src/filter/Third.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(drafts, 2);
-
-    // 时间线里是"推送目录摘要"
-    const timeline = buildTimeline(first.internal.summary.workspace, first.internal.cwd);
-    assert.match(timeline.find((entry) => entry.kind === "memory")!.title, /推送目录摘要\(16 条\)/);
-  } finally {
-    await svc.shutdown();
-  }
-});
-
-test("目录摘要:没有模型时用确定性兜底,也缓存", async () => {
-  const { svc, dataDir } = fakeService();
-  try {
-    const store = new MemoryStore(dataDir);
-    for (let index = 0; index < 17; index += 1) {
-      store.record({ ...base, evidence: `e${index}`, conclusion: `结论 ${index}` });
-    }
-    const { internal, steered } = liveTask(svc);
-    (svc as any).onMemoryFileIntent(internal, "src/filter/FilterEngine.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(steered.length, 1);
-    assert.match(steered[0].text, /另有 12 条,用 corpus_search/);
   } finally {
     await svc.shutdown();
   }
@@ -486,18 +416,18 @@ test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general
     assert.ok(api.memoryCandidates(internal).some((row: any) => row.id === platform.id));
     assert.ok(!api.memoryCandidates(internal).some((row: any) => row.id === local.id));
     const queries: string[] = [];
-    api.memorySidecar = { search: async (input: any) => {
+    api.memorySidecar = { available: true, search: async (input: any) => {
       queries.push(input.query);
       return [platform, local, retired].map(row => ({ id: row.id, score: 1, snippet: "过期索引内容" }));
     }, stop() {} };
     internal.mission = "当前处理平台工具链证书失效";
     internal.pendingMainSteers = ["责任人补充：使用新版工具链"];
-    const briefing = await api.memoryBriefing(internal);
+    const messages = await api.taskMemoryContext(internal)([{role: "user", content: "继续当前工作"}]);
+    const briefing = messages.at(-1).content;
     assert.match(queries[0], /证书失效/);
     assert.match(queries[0], /新版工具链/);
-    assert.match(briefing, /Agent 记录.*平台通用/);
+    assert.match(briefing, /平台通用.*Agent 记录/);
     assert.match(briefing, /核对平台工具链约定/);
-    assert.deepEqual(internal.memoryBriefingIds, [platform.id]);
     const hits = await api.memorySearch(internal, { query: "工具链" });
     assert.deepEqual(hits.map((hit: any) => hit.id), [platform.id]);
     const expand = api.memoryTools(internal).find((tool: any) => tool.name === "corpus_expand");
@@ -505,6 +435,21 @@ test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general
       /核对平台工具链约定/);
     assert.match((await expand.execute("expand-retired", { memory_id: retired.id })).content[0].text, /取不到/);
     const usage = svc.listTaskMemoryUsage(internal.summary.id);
-    assert.ok(usage.some(row => row.moment === "launch" && String(row.query).includes("证书失效")));
+    assert.ok(usage.some(row => row.moment === "context" && String(row.query).includes("证书失效")));
+  } finally { await svc.shutdown(); }
+});
+
+test("模型前台遇到侧车未就绪时不启动或等待冷启动", async () => {
+  const { svc } = fakeService();
+  const api = svc as any;
+  try {
+    const { internal } = liveTask(svc);
+    let calls = 0;
+    api.memorySidecar = { available: false, start: async () => { calls++; return false; },
+      search: async () => { calls++; return []; }, stop() {} };
+    const messages = [{role: "user", content: "开始工作"}];
+    assert.deepEqual(await api.taskMemoryContext(internal)(messages), messages);
+    assert.equal(calls, 0);
+    assert.equal(svc.listTaskMemoryUsage(internal.summary.id).at(-1)?.status, "unavailable");
   } finally { await svc.shutdown(); }
 });
