@@ -417,7 +417,7 @@ function ManualRegister({
             </>}
           </span>
           {moduleLoadError && <small className="col-span-full flex items-center justify-between gap-2.5 rounded-lg border border-destructive/35 px-2.5 py-2 text-destructive max-[680px]:flex-col max-[680px]:items-stretch" role="alert">
-            <span>业务模块加载失败：{moduleLoadError}</span>
+            <span>业务模块加载失败:{moduleLoadError}</span>
             <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
               onClick={() => setModuleLoadAttempt((value) => value + 1)}>
               重试加载
@@ -441,7 +441,7 @@ function ManualRegister({
         </div>
         {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
           将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
-          (以选定时为准),无需在此填写。密码不会出现在页面或事件流，
+          (以选定时为准),无需在此填写。密码不会出现在页面或事件流,
           但会在执行问题处理时明文进入当前 AI 上下文。
         </small>}
 
@@ -451,7 +451,7 @@ function ManualRegister({
       onNavigateProfile={onNavigateProfile} />
     <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
       <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
-        {busy ? "分析中…" : "开始分析"}
+        {busy ? "发起中…" : "发起分析"}
       </Button>
     </div>
     {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
@@ -869,7 +869,7 @@ function DtsRegister({
 
   return <div className="tw-root flex flex-col gap-3 text-base text-foreground">
     {dtsMock && <p className="rounded-md border border-attention/40 bg-attention-soft px-3 py-2 text-sm text-ink" role="note">
-      DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
+      DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
     {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
@@ -929,7 +929,7 @@ function DtsRegister({
     {hiddenRemote.length > 0 && <p className="rounded-md border border-line
       bg-muted/40 px-3 py-2 text-xs text-muted-foreground" role="note">
       {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
-      "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
+      「{DTS_ACTIONABLE_STATUS}」,不在可拉取范围。
     </p>}
     {tickets && tickets.length > 0 && <>
       {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
@@ -1232,7 +1232,7 @@ function DtsRegister({
       && <div className="flex flex-col items-center gap-2 rounded-lg border
         border-dashed border-line px-6 py-10 text-center">
         <p className="text-sm text-muted-foreground">
-          名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——只有该状态可发起,
+          名下问题单里没有「{DTS_ACTIONABLE_STATUS}」状态的——只有该状态可发起,
           其他状态不可拉取。
         </p>
       </div>}

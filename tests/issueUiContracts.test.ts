@@ -49,7 +49,7 @@ test("知识全文链接只接管普通点击，保留浏览器修饰键行为",
 
 test("手工登记区分目录失败与空目录，并提供重试和真实必填口径", () => {
   assert.match(registration, /setModuleLoadError\(cause instanceof Error/);
-  assert.match(registration, /业务模块加载失败：\{moduleLoadError\}/);
+  assert.match(registration, /业务模块加载失败:\{moduleLoadError\}/);
   assert.match(registration, /重试加载/);
   assert.doesNotMatch(registration,
     /\.catch\(\(\) => \{ if \(alive\) setModules\(\[\]\); \}\)/);
@@ -1512,4 +1512,20 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
   assert.match(associate,
     /<Button type="button" className="w-full"[\s\S]{0,220}确认转正\(继承分析报告,进入问题修改\)\s*<\/Button>/);
   assert.doesNotMatch(associate, /issue-rail-primary/);
+});
+
+test("登记域词汇与标点体例:动词归「发起」,引号归「」,标点半角(2026-09-14 设计审查)", () => {
+  // 发起一次问题处理,域内只有一个动词「发起」(「下单」是需求域旧词,
+  // 不回流);登记页提交钮「发起分析」与 DTS 页「发起处理」同构。
+  const notice = readFileSync(
+    resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
+  assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
+  assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
+  assert.match(registration, /"发起中…" : "发起分析"/);
+  // 状态串引号用直角引号(隐藏远程单提示 + 无可拉取空态两处),不用
+  // 英文直引号。
+  assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
+  assert.doesNotMatch(registration, /"\{DTS_ACTIONABLE_STATUS\}"/);
+  // 资源屏蔽提示句内直述,不再用间隔号挂动作。
+  assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件,点开查看详情/);
 });
