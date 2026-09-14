@@ -7,13 +7,15 @@
  * 抄本,陈列它等于同一信息两处且其中一处是错的;业务模块名、网管
  * 环境(名称 + IP + 端口 + 形态;形态中文沿用环境域口径「虚拟化/
  * 容器化」,见 EnvironmentEditorDialog 的页面文案)两场景都显,环境
- * 未配置如实示「尚未配置」加引导(运行中 AI 举卡回填),不设第二
- * 编辑入口。凭据类字段绝不出现:凭据只以服务端 vault 引用的形式存
- * 在于 wire 上,本面板连引用都不渲染。空值如实说「(未填)」,不编
- * 占位内容。
+ * 未配置如实示「尚未配置——AI按需配置」(ADR-0026 翻案:拉取钮仅在
+ * 环境配置后出现,空态文案不再兼职引导),不设第二编辑入口。凭据类
+ * 字段绝不出现:凭据只以服务端 vault 引用的形式存在于 wire 上,本
+ * 面板连引用都不渲染。空值如实说「(未填)」,不编占位内容。
  *
- * 下半区陈列会话全部关联仓(仓名 + 完整 URL,一仓一行);模块绑定仓
- * (团队资产目录里该 module_id 的 repositories)带「模块绑定」标识。
+ * 下半区陈列会话全部关联仓(ADR-0027 融合交付事实:角色徽标、流水线
+ * 徽标、推送/MR 记录、转正前账都在仓行上,逐仓交付页签已退役);
+ * 模块绑定仓(团队资产目录里该 module_id 的 repositories)带
+ * 「模块绑定」标识。
  * 绑定集合在本组件内经 getBusinessModules 异步解析:目录加载失败/
  * 未登记 module_id/模块不在册一律降级为不出标识,仓清单照列——绑定
  * 标是加分信息,不是清单的前提。
@@ -33,9 +35,10 @@
  * ≤ 上限),错误就地小字,别等服务端打回。终态会话(archived/canceled,
  * failed 按会话域既有终局口径一并算)永远不渲染任何编辑入口。
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   getBusinessModules,
+  getIssue,
   getIssueMaterials,
   requestIssueLogFetch,
   requestIssueRepoChanges,
@@ -46,7 +49,14 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { formatLocalDateTime } from "../time";
-import { repoName } from "./perRepo";
+import {
+  repoDeliveryRows,
+  repoPipelineBadge,
+  repoRole,
+  repoName,
+  type RepoDeliveryRow,
+  type RepoLedgerInput,
+} from "./perRepo";
 import { ENVIRONMENT_FORM_TEXT } from "../EnvironmentEditorDialog";
 
 /** 空值口径:登记面没填的字段如实示人,不编内容。 */
@@ -73,6 +83,65 @@ const TERMINAL_STATUSES = ["archived", "canceled", "failed"] as const;
 /** 一个问题会话的合并仓上限(与后端 state.ts 的 MAX_ISSUE_REPOS 同一口
  * 径):新增输入的即时校验先行同款,别等服务端打回。 */
 const MAX_ISSUE_REPOS = 8;
+
+// ---- 交付事实的呈现(ADR-0027):逐仓交付页签退役,角色/流水线徽标
+// 与推送/MR 记录融合进关联仓行——三个纯函数(perRepo)与色板原住
+// SessionView 的逐仓卡,随融合整体迁来,口径不变:有推送记录=变更仓,
+// 无推送记录=未交付(只说"没有交付事实",不替 AI 硬造理由);流水线
+// 徽标只认 pipelines 里该仓的 status,记录缺席就不出徽标。 ----
+const REPO_ROLE_TONE = {
+  delivered: "rounded-full bg-success-soft px-2 py-px text-xs font-bold text-success",
+  undelivered: "rounded-full border border-dashed px-2 py-px text-xs font-bold text-faint",
+} as const;
+const REPO_BADGE_TONE = {
+  success: "bg-success-soft text-success",
+  failed: "bg-danger-soft text-danger",
+  running: "bg-active-soft text-active",
+} as const;
+
+/** 转正前账的只读引用缓存(模块级,跨会话视图重挂载不重复请求):
+ * converted 会话按 inherited_accounts 经既有详情接口读旧会话账。
+ * 值:账对象=取到;null=取过但失败(旧会话被物理清理等)——失败一次
+ * 就不再重试,仓行静默退回现状,不报错、不空转。 */
+const inheritedLedgerCache = new Map<string, RepoLedgerInput | null>();
+
+/** 拉转正前账(按 inherited_accounts 只读引用旧会话详情):返回
+ * undefined = 无引用 / 还没取到 / 已判缺失,仓行一律按现状渲染。 */
+function useInheritedLedger(
+  ref: { issue: string } | undefined,
+): RepoLedgerInput | undefined {
+  const [ledger, setLedger] = useState<RepoLedgerInput | undefined>();
+  const issueId = ref?.issue;
+  useEffect(() => {
+    if (!issueId) return;
+    const cached = inheritedLedgerCache.get(issueId);
+    // 缓存命中(null 含在内)不再发请求:详情 10s 轮询会反复走到这里。
+    if (cached !== undefined) {
+      setLedger(cached ?? undefined);
+      return;
+    }
+    let alive = true;
+    void getIssue(issueId).then((old) => {
+      const account: RepoLedgerInput = {
+        repo_urls: old.repo_urls,
+        repo_url: old.repo_url,
+        pushes: old.pushes,
+        mrs: old.mrs,
+        pipelines: old.pipelines,
+      };
+      inheritedLedgerCache.set(issueId, account);
+      if (alive) setLedger(account);
+    }).catch(() => {
+      // 旧会话读不到(被清理/越权):静默缺省,失败一次不再重试。
+      inheritedLedgerCache.set(issueId, null);
+      if (alive) setLedger(undefined);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [issueId]);
+  return ledger;
+}
 
 export function IssueMetaPane({ detail, canOperate }: {
   detail: IssueDetail;
@@ -195,10 +264,15 @@ export function IssueMetaPane({ detail, canOperate }: {
   }, [detail.id]);
 
   // 全部关联仓:repo_urls 为骨架(彼此平等),repo_url 是单仓旧形状的
-  // 兼容位(与逐仓交付 repoDeliveryRows 同一条取数口径)。
+  // 兼容位——移除裁定的在册判定尺(账外仓只陈列,不可移除)。
   const repos = detail.repo_urls?.length
     ? detail.repo_urls
     : detail.repo_url ? [detail.repo_url] : [];
+  // 交付事实行(ADR-0027):repoDeliveryRows 以登记仓为骨架,账里出现
+  // 登记清单之外的仓追加在尾不丢账;转正前账只读引用,两本账不混。
+  const inherited = useInheritedLedger(detail.inherited_accounts);
+  const rows = useMemo(
+    () => repoDeliveryRows(detail, inherited), [detail, inherited]);
   const isTerminal =
     (TERMINAL_STATUSES as readonly string[]).includes(detail.status);
 
@@ -287,9 +361,7 @@ export function IssueMetaPane({ detail, canOperate }: {
               <span>端口 {detail.environment.port}</span>
               <span>{envTypeText(detail.environment.env_type)}</span>
             </span>
-        : <span className="text-muted-foreground">
-            尚未配置——运行中 AI 举卡询问网管环境,回填后在此显示。
-          </span>}
+        : <span className="text-muted-foreground">尚未配置——AI按需配置</span>}
         {/* 日志的人读出口(#267):拉取过(logs 清单有文件)才显示,
             终态会话照常可下(与导出现场记录同口径);下载是纯读,
             查看模式不收闸。清单撞条数帽时如实披露(打包以清单为界)。 */}
@@ -307,10 +379,12 @@ export function IssueMetaPane({ detail, canOperate }: {
               日志条目超过上限(2000),包内可能不完整
             </span>}
           </span>}
-        {/* 主动拉取(#268):无日志的非终态会话才出钮(与下载互补,
-            有日志后由下载替代);环境未配置也显示——点击后 AI 按技能
-            举环境闸要环境,一条链走完;写口只归归属人。 */}
-        {!isTerminal && canOperate && logFileCount === 0
+        {/* 主动拉取(#268,ADR-0026 翻案):无日志、环境已配置的非终态
+            会话才出钮(与下载互补,有日志后由下载替代)。环境未配置不
+            渲染——早期会话常在等卡作答,此时递交意图只落一张等卡答完
+            才被看到的便签(issue-10 实锤),空态文案负责说清因果;
+            写口只归归属人。 */}
+        {!isTerminal && canOperate && logFileCount === 0 && detail.environment
           && <span className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="xs"
               disabled={requestingFetch}
@@ -329,57 +403,108 @@ export function IssueMetaPane({ detail, canOperate }: {
         </span>}
       </span>
     </MetaField>
-    {/* 关联仓清单区(只读):全部登记仓,仓名 + 完整 URL;模块绑定仓
-        带标识;现场已回收时如实标注(回收时刻一并示人)。 */}
+    {/* 关联仓清单(ADR-0027 融合交付事实):头行 = 仓名 + 角色
+        (变更仓/未交付)+ 流水线徽标 + 模块绑定标/移除缓冲,次行 URL,
+        第三行交付事实(MR/推送,有才渲染不占位);转正前账弱化分区
+        陈列,失败项红字如实示人。移除裁定只对登记仓开放,账外仓只陈列;
+        现场已回收时如实标注(回收时刻一并示人)。 */}
     <section aria-label="关联仓清单"
       className="grid content-start gap-2 rounded-xl border border-border bg-surface px-3.5 py-3">
-      <div className="flex flex-wrap items-baseline gap-2.5">
-        <strong className="text-sm font-bold">关联仓清单</strong>
-        <span className="text-xs text-faint">发起时登记的全部代码仓,一仓一行</span>
-      </div>
+      <strong className="text-sm font-bold">关联仓清单</strong>
       {detail.repo_reclaimed_at && <div className="utility-note" role="status">
         现场已回收({formatLocalDateTime(detail.repo_reclaimed_at)}):
         取消/归档的问题单不再保留 repo 克隆(磁盘纪律),源码可随时重新拉取。
       </div>}
-      {repos.length === 0
+      {rows.length === 0
         ? <Empty className="border py-4.5">
             <EmptyDescription>会话没有登记代码仓——发起时登记的业务模块决定关联仓。</EmptyDescription>
           </Empty>
         : <ul className="m-0 grid list-none content-start gap-2 p-0">
-            {repos.map((url) => {
+            {rows.map((row) => {
               const bound = (boundRepos ?? [])
-                .some((item) => repoIdentity(item) === repoIdentity(url));
-              const queued = pendingRepoRemove.includes(url);
-              return <li key={url}
+                .some((item) => repoIdentity(item) === repoIdentity(row.repo));
+              const registered = repos.includes(row.repo);
+              const queued = pendingRepoRemove.includes(row.repo);
+              const badge = repoPipelineBadge(row);
+              const role = repoRole(row);
+              const mrLabel = row.mr
+                ? `${row.mr.iid ? `!${row.mr.iid} ` : ""}${row.mr.branch}`
+                : "";
+              const oldMrLabel = row.inherited?.mr
+                ? `${row.inherited.mr.iid ? `!${row.inherited.mr.iid} ` : ""}${row.inherited.mr.branch}`
+                : "";
+              return <li key={row.repo}
                 className={"grid content-start gap-0.5 rounded-lg border border-line bg-(--surface-muted) px-3 py-2 text-sm"
                   + (queued ? " opacity-60" : "")}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <strong title={url}
+                  <strong title={row.repo}
                     className="font-mono text-[13px] font-semibold text-text-strong [overflow-wrap:anywhere]">
-                    {repoName(url)}
+                    {row.name}
                   </strong>
+                  <span className={REPO_ROLE_TONE[role.tone]} title={role.title}>
+                    {role.tag}</span>
+                  {badge && <span
+                    className={"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-bold whitespace-nowrap "
+                      + REPO_BADGE_TONE[badge.tone]}>
+                    <i aria-hidden className={"size-[5px] rounded-full bg-current"
+                      + (badge.tone === "running"
+                        ? " motion-safe:animate-pulse motion-reduce:animate-none" : "")}/>
+                    {badge.label}</span>}
                   {bound && <Badge variant="neutral"
                     title="该仓在业务模块的绑定仓清单里(团队资产目录)">模块绑定</Badge>}
                   {queued && <Badge variant="warning"
                     title="已入本次移除缓冲,点「确定」后才交给 Agent">将移除</Badge>}
                   {/* #241:移除 = 人裁定该仓与问题无关的严肃操作——按钮
-                      只把意图移入缓冲,不就地改清单;模块绑定仓是团队资产,
-                      连按钮都不渲染(不是置灰)。 */}
-                  {!isTerminal && !bound && (queued
+                      只把意图移入缓冲,不就地改清单;模块绑定仓是团队资产、
+                      账外仓不在登记清单,两者连按钮都不渲染(不是置灰)。 */}
+                  {!isTerminal && registered && !bound && (queued
                     ? <Button variant="outline" size="xs" className="ml-auto"
                       onClick={() => setPendingRepoRemove(
-                        pendingRepoRemove.filter((item) => item !== url))}>
+                        pendingRepoRemove.filter((item) => item !== row.repo))}>
                       撤销移除
                     </Button>
                     : <Button variant="destructive" size="xs" className="ml-auto"
                       onClick={() => setPendingRepoRemove(
-                        [...pendingRepoRemove, url])}>
+                        [...pendingRepoRemove, row.repo])}>
                       移除
                     </Button>)}
                 </div>
                 <span className="select-text font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                  {url}
+                  {row.repo}
                 </span>
+                {(row.mr || row.push) && <div
+                  className="flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  {row.mr && (row.mr.url
+                    ? <a href={row.mr.url} target="_blank" rel="noreferrer"
+                        className="text-primary" title={row.mr.title}>MR {mrLabel}</a>
+                    : <span title={row.mr.title}>MR {mrLabel}</span>)}
+                  {row.push && <span>
+                    已推送 {row.push.branch}@{row.push.sha.slice(0, 10)}</span>}
+                </div>}
+                {/* 转正前账(只读引用,旧会话数据):与本会话事实分区
+                    陈列,弱化样式 + 「转正前」前缀,不冒充本会话的交付。 */}
+                {row.inherited && <div
+                  className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-t border-dashed pt-1 text-faint [overflow-wrap:anywhere]">
+                  <em className="rounded-full border border-dashed px-1.5 not-italic text-muted-foreground">转正前</em>
+                  {row.inherited.mr && (row.inherited.mr.url
+                    ? <a href={row.inherited.mr.url} target="_blank" rel="noreferrer"
+                        className="text-primary" title={row.inherited.mr.title}>MR {oldMrLabel}</a>
+                    : <span title={row.inherited.mr.title}>MR {oldMrLabel}</span>)}
+                  {row.inherited.push && <span>
+                    已推送 {row.inherited.push.branch}@{row.inherited.push.sha.slice(0, 10)}</span>}
+                  {row.inherited.pipeline && <span>
+                    {row.inherited.pipeline.label}{row.inherited.pipeline.failedChecks.length
+                      ? `(失败项:${row.inherited.pipeline.failedChecks.join("、")})` : ""}</span>}
+                </div>}
+                {/* last_error 不只跟 failed 走:轮询预算耗尽时 status 仍是
+                    running、但监看已停——两个字段都如实示人,不替服务端
+                    下结论。 */}
+                {(row.pipeline?.last_error || (row.pipeline?.failedChecks.length ?? 0) > 0)
+                  && <div className="grid gap-0.5 text-danger [overflow-wrap:anywhere]">
+                    {row.pipeline?.last_error && <span>{row.pipeline.last_error}</span>}
+                    {(row.pipeline?.failedChecks.length ?? 0) > 0
+                      && <span>失败项:{row.pipeline!.failedChecks.join("、")}</span>}
+                  </div>}
               </li>;
             })}
           </ul>}

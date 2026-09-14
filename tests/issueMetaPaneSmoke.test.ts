@@ -110,6 +110,25 @@ test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与�
   assert.match(empty, /会话没有登记代码仓/);
 });
 
+test("关联仓行融入交付事实(ADR-0027):角色标同步计算,无事实不占位", () => {
+  const html = render();
+  assert.match(html, /未交付/, "无推送记录的仓标未交付(repoDeliveryRows 纯函数,SSR 同步可断言)");
+  assert.ok(!html.includes("逐仓交付"), "逐仓交付页签语义不再出现");
+  assert.ok(!html.includes("还没有推送与 MR 记录"),
+    "无交付事实不渲染占位行(第三行有才渲染)");
+  // 有推送记录的仓标「变更仓」并陈列推送事实(branch@sha 前 10 位)。
+  const delivered = render({
+    pushes: [{
+      repo: "https://git.example.test/team/alpha.git",
+      branch: "master_zhou_DTS1", sha: "abc1234567",
+      at: "2026-09-14T00:00:00.000Z",
+    }],
+  });
+  assert.match(delivered, /变更仓/);
+  assert.match(delivered, /已推送 master_zhou_DTS1@/);
+  assert.match(delivered, /abc1234567/);
+});
+
 test("主动拉取/下载按钮(#267/#268):关态两钮全无(三态计数防闪现),终态/查看模式缺席拉取钮", () => {
   const html = render();
   // SSR 不跑 effects,logFileCount 停在"读取中"三态——拉取/下载两钮
@@ -131,7 +150,8 @@ test("空值如实降级,终态会话(canceled/archived)照常陈列且零编辑
     description: "",
   });
   assert.match(unfilled, /\(未填\)/);
-  assert.match(unfilled, /尚未配置/, "环境未配置出空态引导(等 AI 举卡回填)");
+  assert.match(unfilled, /尚未配置——AI按需配置/,
+    "环境空态从简(ADR-0026 翻案:拉取钮由环境门把守,文案不再兼职引导)");
   for (const status of ["canceled", "archived"] as const) {
     const html = render({ status });
     assert.match(html, /网管侧告警未消除/, "终态会话信息面照常可读");

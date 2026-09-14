@@ -494,13 +494,12 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.match(sessionView, /<IssueMaterialsPane[\s\S]*?canOperate=\{canOperate\}/);
   // 信息面不收:现场直播(SSE)不带任何归属条件。耗时卡点已随走查
   // 反馈移出工作台(2026-09-07),又随列表卡展开态退役整个删除
-  // (2026-09-11);逐仓交付收编为「逐仓交付」页签。
-  // (#123 拍平后对话现场是标签之首,直挂默认分支。)#210 起面板映射进
-  // TabsContent(#231 改锚:断言钉到现 DOM——events 签的 contents 面板
-  // 内,直播不带任何归属条件)。
+  // (2026-09-11);逐仓交付页签已随 ADR-0027 退役,交付事实融入
+  // 元信息关联仓行。
   assert.match(sessionView,
     /\{tab === "events" && <TabsContent value="events" className="contents">[\s\S]*?<IssueEventsPane id=\{detail\.id\} active \/>/);
-  assert.match(sessionView, /<IssueWorkspaceRepos detail=\{detail\} \/>/);
+  assert.doesNotMatch(sessionView, /IssueWorkspaceRepos/,
+    "逐仓交付页签与组件已退役(ADR-0027,融合进元信息关联仓行)");
   assert.doesNotMatch(sessionView,
     /<IssueCostPanel id=\{detail\.id\} \/>/,
     "耗时卡点不再占工作台纵向空间(面板已整个退役)");
@@ -747,19 +746,22 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
 // ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签)
 // ---- 材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
 
-test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清零", () => {
+test("左栏五标签:顺序固定、元信息默认、DTS 无单隐藏,旧顶层页签引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 六标签一次成表(#239 起「元信息」居首,#267 起「拉取日志」退役,
-  // ADR-0026),顺序即规格:元信息(只读陈列)在首位,对话现场仍是
-  // 默认入口,逐仓交付收编为末签——一签一名,不得改名换序。
+  // 五标签一次成表(ADR-0027:逐仓交付退役融合进元信息,对话现场降
+  // 末位),顺序即规格:元信息(会话名片,兼默认签)在首位,DTS 单据
+  // 第二,对话现场降末位——一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
-    ["meta:元信息", "events:对话现场", "dts:DTS单据", "doc:分析报告",
-      "changes:工作区变更", "repos:逐仓交付"]);
+    ["meta:元信息", "dts:DTS单据", "doc:分析报告",
+      "changes:工作区变更", "events:对话现场"]);
+  // DTS 签条件渲染:无单场景整个隐藏(从禁用+tooltip 升级,屏蔽即诚实)。
+  assert.match(sessionView,
+    /filter\(\(\{ key \}\) => key !== "dts" \|\| detail\.ticket\)/);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
   // (#210)手搓 role=tablist 换原语:键盘箭头、roving tabindex 归原语。
@@ -767,9 +769,10 @@ test("左栏六标签:顺序固定、对话现场默认,旧顶层页签引用清
     /className="ws-pane-head" aria-label="问题工作台视图">[\s\S]*?className="ws-source-switch h-auto justify-start"/);
   assert.match(sessionView,
     /<TabsTrigger key=\{key\} value=\{key\}[\s\S]*?tab === key \? " on" : ""/);
-  // 默认口与重置:对话现场是初始页签;换会话丢弃手选,回到默认入口。
-  assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
-  assert.match(sessionView, /setTab\("events"\);\s*\n\s*\}, \[detail\.id\]\);/);
+  // 默认口与重置:元信息是会话名片(右栏协作流常驻直播兜住「看现场」
+  // 的刚需);换会话丢弃手选,回到默认入口。
+  assert.match(sessionView, /useState<IssueMainTab>\("meta"\)/);
+  assert.match(sessionView, /setTab\("meta"\);\s*\n\s*\}, \[detail\.id\]\);/);
   // 分析报告在库的脉冲点挂「分析报告」页签(报告是主交付物,入口要
   // 找得到;#260 起页签即报告本身,旧右栏"分析报告已产出"CTA 已随
   // #127 侧栏拆除一并退场)。
@@ -809,8 +812,8 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
   // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
   assert.ok(
-    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 6,
-    "六个页签各需一枚 --workspace-tab-color");
+    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 5,
+    "五个页签各需一枚 --workspace-tab-color");
   assert.doesNotMatch(css, /\.issue-workspace/);
 });
 
@@ -1388,19 +1391,20 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
   const metaPane = readFileSync(
     resolve("web/src/issues/MetaPane.tsx"), "utf-8");
   // 页签首位:meta 占 ISSUE_MAIN_TABS 第 0 位(label「元信息」,一签一色
-  // 照旧自带 --workspace-tab-color 变量工具类);默认选中仍是对话现场。
+  // 照旧自带 --workspace-tab-color 变量工具类);默认选中是元信息
+  // (ADR-0027:对话现场降末位,右栏直播兜住看现场的刚需)。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   const tabs = [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
     .map(([, key, label]) => `${key}:${label}`);
   assert.equal(tabs[0], "meta:元信息", "元信息必须在页签条首位");
-  assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
+  assert.match(sessionView, /useState<IssueMainTab>\("meta"\)/);
   // 面板映射:meta 有自己的 TabsContent 分支(canOperate 随行——拉取
   // 日志的意图递交是写口,查看模式不渲染),材料兜底分支不再吃 meta 值。
   assert.match(sessionView,
     /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} canOperate=\{canOperate\} \/>/);
   assert.match(sessionView,
-    /tab !== "events" && tab !== "repos" && tab !== "meta"/);
+    /tab !== "events" && tab !== "meta"/);
   // 元信息字段(只读平铺,ADR-0026):「登记信息」壳已退役,四类字段
   // 直接平铺;标题/问题描述挂 detail.ticket 门——有单会话不渲染(单据
   // 页签是唯一权威出处,DTS 发起时描述只是单据标题的抄本),业务模块/
@@ -1429,15 +1433,14 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
   assert.match(metaPane, /可能不完整/);
   assert.doesNotMatch(metaPane, /credential_ref|password/i,
     "元信息面板不得出现凭据类字段");
-  // 关联仓清单区:仓名(repoName)+完整 URL;模块绑定仓带「模块绑定」
+  // 关联仓清单区(ADR-0027 融合交付事实):模块绑定仓带「模块绑定」
   // 标识,绑定集合组件内经 getBusinessModules 按 module_id 解析;绑定
   // 比对与后端门禁同一把归一尺(repoIdentity),不原样字符串比对。
   assert.match(metaPane, /aria-label="关联仓清单"/);
-  assert.match(metaPane, /repoName\(url\)/);
   assert.match(metaPane, />模块绑定<\/Badge>/);
   assert.match(metaPane, /getBusinessModules\(\)/);
   assert.match(metaPane,
-    /repoIdentity\(item\) === repoIdentity\(url\)/);
+    /repoIdentity\(item\) === repoIdentity\(row\.repo\)/);
   // 回收标注:repo_reclaimed_at 在场即如实标注「现场已回收」,不冒充在场。
   assert.match(metaPane,
     /detail\.repo_reclaimed_at && <div className="utility-note"/);
@@ -1485,6 +1488,37 @@ test("拉取日志意图递交(#268):按钮只递意图,端点守卫+留痕+投�
   assert.match(metaPane, /已通知 Agent 拉取/);
 });
 
+// ---- 工作台页签收敛(ADR-0027):逐仓交付融合进元信息,拉取钮环境门 ----
+
+test("交付事实融入关联仓行(ADR-0027):perRepo 纯函数原样复用,零新数据源", () => {
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  // 呈现派生复用 perRepo 的三个纯函数(有推送记录=变更仓;流水线徽标
+  // 只认 pipelines 该仓 status);数据全部来自会话详情,零新数据源。
+  assert.match(metaPane, /repoDeliveryRows\(/);
+  assert.match(metaPane, /repoPipelineBadge\(/);
+  assert.match(metaPane, /repoRole\(/);
+  // 转正前账只读引用随迁(inherited_accounts → 旧会话账)。
+  assert.match(metaPane, /useInheritedLedger\(/);
+  // 逐仓交付的组件族在 SessionView 整体退役(融合,不留死代码)。
+  assert.doesNotMatch(sessionView,
+    /RepoDeliveryCard|IssueRepoDelivery|IssueWorkspaceRepos|useInheritedLedger/);
+  // 区块名保持「关联仓清单」,副标题退役(从简)。
+  assert.match(metaPane, /关联仓清单/);
+  assert.doesNotMatch(metaPane, /发起时登记的全部代码仓/);
+});
+
+test("拉取钮环境门(ADR-0026 翻案):环境未配置不渲染,空态文案从简", () => {
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  // 拉取意图递交的前置是环境在场——早期会话常在等卡作答,此时点击
+  // 只落一张等卡答完才被看到的便签(issue-10 实锤),按钮近似白点。
+  assert.match(metaPane, /logFileCount === 0 && detail\.environment/);
+  assert.match(metaPane, /尚未配置——AI按需配置/);
+});
+
 // ---- 关联仓清单编辑器(#241):缓冲 diff 门禁 + 端点契约,不乐观更新 ----
 
 test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https 即时校验、不乐观更新", () => {
@@ -1498,16 +1532,18 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   assert.match(apiSource,
     /issueFetch\(`\/issues\/\$\{encodeURIComponent\(id\)\}\/repos`/);
   assert.match(apiSource, /input: \{ add: string\[\]; remove: string\[\] \}/);
-  // 删除按钮规则:移除/撤销移除按钮挂在 `!isTerminal && !bound` 一道门
-  // 后——模块绑定仓是团队资产,行内连按钮都不渲染(不是置灰)。
+  // 删除按钮规则:移除/撤销移除按钮挂在 `!isTerminal && registered && !bound`
+  // 一道门后——模块绑定仓是团队资产、账外仓不在登记清单,行内连按钮都
+  // 不渲染(不是置灰)。
   assert.match(metaPane,
-    /\{!isTerminal && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
+    /\{!isTerminal && registered && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
   assert.equal(
     (metaPane.match(/variant="destructive" size="xs"/g) ?? []).length, 1,
     "移除按钮唯一(非绑定仓清单行),不给绑定仓另配删除口");
-  // 移除入缓冲,不就地改清单:按钮只把 url 挪进 pendingRepoRemove。
+  // 移除入缓冲,不就地改清单:按钮只把仓地址(ADR-0027 起为交付行的
+  // row.repo)挪进 pendingRepoRemove。
   assert.match(metaPane,
-    /setPendingRepoRemove\(\s*\n\s*\[\.\.\.pendingRepoRemove, url\]\)/);
+    /setPendingRepoRemove\(\s*\n\s*\[\.\.\.pendingRepoRemove, row\.repo\]\)/);
   // 确定门禁:缓冲 diff 为空禁用(缓冲非空才可点),提交中同样禁用。
   assert.match(metaPane,
     /const repoDiffEmpty =\s*\n\s*pendingRepoAdd\.length === 0 && pendingRepoRemove\.length === 0;/);
