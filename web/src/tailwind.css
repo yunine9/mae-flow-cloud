@@ -510,18 +510,6 @@ svg {
   justify-content: start;
   gap: 8px;
 }
-.workspace-review-invite-action > button {
-  min-height: 36px;
-  padding: 0 13px;
-  color: white;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  font-size: var(--font-size-assist);
-  font-weight: 700;
-  cursor: pointer;
-}
-.workspace-review-invite-action > button:disabled { opacity: .5; cursor: not-allowed; }
 .workspace-review-invite-history {
   padding-top: 9px;
   display: grid;
@@ -955,33 +943,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .requirement-team-members { grid-template-columns: 1fr; }
   .requirement-team-picker > header, .requirement-team-picker > footer { align-items: stretch; flex-direction: column; }
 }
-.submit-decision{
-  height: var(--control-h-lg);
-  padding: 0 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-sm);
-  color: var(--ink-fg);
-  background: var(--ink);
-  font-size: var(--fs-14);
-  font-weight: 500;
-  cursor: pointer;
-  box-shadow: none;
-  transition: background var(--ease), border-color var(--ease), opacity var(--ease);
-}
-.submit-decision:hover:not(:disabled){
-  background: var(--ink-hover);
-  border-color: var(--ink-hover);
-}
-.submit-decision:disabled{
-  opacity: .45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-.submit-decision svg{ width: 17px; height: 17px; }
+/* #255:submit-decision 皮退役(#227 已把提交钮换 shadcn Button,#255 清掉
+   最后一处类挂载,基础皮与散布覆盖一并离职)。 */
 /* #229:配置未配齐的警示盒(launch-blockers 与 blocker- 两族、composer-error)
    随发起页换装收编 <Alert variant="warning"> + Badge/工具类;
    滚动与贴底排版移入 LaunchWorkspace.tsx 工具类。 */
@@ -1535,17 +1498,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--muted); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);
   background: transparent; font-size: var(--fs-13); font-weight: 500;
 }
-.push-review-actions button {
-  min-height: var(--control-h); padding: 0 12px; color: var(--text-strong);
-  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface);
-  font: inherit; font-size: var(--fs-13); font-weight: 500; cursor: pointer;
-  transition: border-color var(--ease), background var(--ease);
-}
-.push-review-actions button:hover { border-color: var(--text-strong); }
-.push-review-actions button.primary {
-  color: var(--ink-fg); border-color: var(--ink); background: var(--ink);
-}
-.push-review-actions button.primary:hover { background: var(--ink-hover); border-color: var(--ink-hover); }
+/* #255:范围切换钮换 shadcn Button(default/outline sm),button 皮离职。 */
 .waiting-context {
   margin: 0;
   padding: 14px 20px;
@@ -1619,12 +1572,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--text-strong); font-size: var(--fs-15); font-variant-numeric: tabular-nums;
 }
 .delivery-scope-card.changed > header > div:first-child > strong { color: var(--attention); }
-.delivery-scope-card > .delivery-locate{
-  min-height: var(--control-h-sm); padding: 0 10px; color: var(--text-strong);
-  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface);
-  font: inherit; font-size: var(--fs-13); font-weight: 500; cursor: pointer;
-}
-.delivery-scope-card > .delivery-locate:hover{ border-color: var(--text-strong); }
 .delivery-scope-card > p {
   margin: 0; padding: 4px 20px 14px; color: var(--muted); font-size: var(--fs-13); line-height: 1.55;
 }
@@ -1652,22 +1599,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .delivery-scope-card.changed .delivery-scope-result { color: var(--attention); }
 .delivery-scope-result > span { color: var(--muted); }
-.delivery-scope-card > .delivery-locate { margin: 0 20px 14px; }
-.delivery-decision-guidance .delivery-locate {
-  margin-top: 6px;
-  justify-self: start;
-  height: var(--control-h-sm);
-  padding: 0 10px;
-  color: var(--text-strong);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  font: inherit;
-  font-size: var(--fs-13);
-  font-weight: 500;
-  cursor: pointer;
-}
-.delivery-decision-guidance .delivery-locate:hover { border-color: var(--text-strong); }
+/* #255:delivery-locate 换 shadcn Button(outline sm),皮与边距收进工具类。 */
 .delivery-decision-guidance.changed { color: var(--text); background: var(--surface-2); border-left-color: var(--attention); }
 .question {
   min-width: 0;
@@ -1786,15 +1718,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-top: 1px solid var(--line);
 }
 .decision-notes { flex: 1; min-width: 0; }
-.decision-notes > button {
-  padding: 4px 0;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--fs-13);
-  cursor: pointer;
-}
-.decision-notes > button:hover { color: var(--text-strong); text-decoration: underline; }
+/* #255:notes 展开钮换 shadcn Button(link),文字皮离职。 */
 .decision-notes label {
   display: grid;
   grid-template-columns: auto minmax(120px, 1fr);
@@ -1814,7 +1738,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-size: var(--fs-13);
 }
 .decision-notes input:focus { border-color: var(--text-strong); }
-.submit-decision { flex: none; }
 .decision-submit-choices {
   width: 100%;
   display: flex;
@@ -1823,18 +1746,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .decision-footer.has-submit-choices { flex-wrap: wrap; }
 .decision-footer.has-submit-choices .decision-notes { flex-basis: 100%; }
-.decision-submit-choices .submit-decision { flex: 1; }
-.submit-decision.secondary {
-  color: var(--text-strong);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  box-shadow: none;
-}
-.submit-decision.secondary:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: var(--surface-2);
-  border-color: var(--text-strong);
-}
 .event-live-state {
   padding: 8px 12px; display: flex; align-items: center; gap: 7px;
   color: var(--success); background: var(--surface-soft); font-size: var(--font-size-assist);
@@ -2324,7 +2235,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   .options.compact { grid-template-columns: 1fr; }
   .decision-footer { align-items: stretch; flex-direction: column; }
   .decision-notes label { grid-template-columns: 1fr; gap: 4px; }
-  .submit-decision { width: 100%; }
   .decision-submit-choices { width: 100%; flex-direction: column; }
   .history-intro { padding: 18px; align-items: flex-start; }
   .history-intro p { max-width: 360px; }
@@ -3689,18 +3599,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
-.context-toggle {
-  margin-top: 6px;
-  padding: 4px 10px;
-  color: var(--accent);
-  background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  border-radius: 7px;
-  font-size: var(--font-size-assist);
-  font-weight: 600;
-  cursor: pointer;
-}
-.context-toggle:hover { background: var(--accent-soft); }
 
 /* 全工作台阶段审查轮(2026-08-29):右栏按阶段给重点。 */
 /* 问题定位一键采集入口:低调链接,出事区域(失败/停摆)旁边就近取。 */
@@ -3875,8 +3773,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .task-workspace-v2 .ws-head-controls > button,
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle,
 .task-workspace-v2 .ws-source-switch .material-search-toggle,
-.task-workspace-v2 .ws-source-switch .ws-review-launch,
-.task-workspace-v2 .delivery-locate {
+.task-workspace-v2 .ws-source-switch .ws-review-launch {
   height: var(--control-h);
   padding: 0 12px;
   display: inline-flex;
@@ -3898,16 +3795,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .task-workspace-v2 .ws-head-controls > button:hover:not(:disabled),
 .task-workspace-v2 .ws-source-switch .materials-fullscreen-toggle:hover,
 .task-workspace-v2 .ws-source-switch .material-search-toggle:hover,
-.task-workspace-v2 .ws-source-switch .ws-review-launch:hover,
-.task-workspace-v2 .delivery-locate:hover:not(:disabled) {
+.task-workspace-v2 .ws-source-switch .ws-review-launch:hover {
   color: var(--text-strong);
   border-color: var(--text-strong);
   background: var(--surface);
 }
 .task-workspace-v2 .ws-head-controls > button:disabled { opacity: .5; cursor: default; }
 
-/* 小号次级(28):卡片内的动作。 */
-.task-workspace-v2 .delivery-locate { height: var(--control-h-sm); padding: 0 10px; font-size: var(--fs-12); border-radius: var(--radius-sm); }
 /* 文本按钮:无边无底,悬停变深。 */
 .task-workspace-v2 .steer-ref-add {
   height: var(--control-h-sm);
@@ -3923,9 +3817,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .task-workspace-v2 .steer-ref-add:hover { color: var(--text-strong); background: var(--surface-2); }
 /* 主按钮统一 36 高、6px 圆角、14px 字。 */
-.task-workspace-v2 .steer-send,
-.task-workspace-v2 .submit-decision,
-.task-workspace-v2 .workspace-review-invite-action > button {
+.task-workspace-v2 .steer-send {
   height: var(--control-h-lg);
   min-height: var(--control-h-lg);
   padding: 0 16px;
@@ -4500,18 +4392,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 
 .task-workspace-v2 .workspace-invite-content { padding: 16px 18px 18px; display: grid; gap: 12px; }
 .task-workspace-v2 .workspace-review-invite-action { display: flex; gap: 8px; }
-.task-workspace-v2 .workspace-review-invite-action > button {
-  height: var(--control-h-lg);
-  padding: 0 14px;
-  flex: none;
-  color: var(--ink-fg);
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-sm);
-  background: var(--ink);
-  font-size: var(--fs-13);
-  font-weight: 500;
-}
-.task-workspace-v2 .workspace-review-invite-action > button:disabled { opacity: .5; }
+/* #255:发送邀请钮换 shadcn Button,主色配方归一,子元素皮离职。 */
 .task-workspace-v2 .committer-result{ color: var(--muted); font-size: var(--fs-13); }
 .task-workspace-v2 .workspace-review-invite-history { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
 .task-workspace-v2 .workspace-review-invite-history > span { display: flex; align-items: center; gap: 8px; font-size: var(--fs-13); }
@@ -4797,16 +4678,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .workspace-studio.task-workspace-v2 .conv-card.current .push-review-commits > span { font-size: var(--fs-12); }
 /* 阅读范围切换:两个 26px 小药丸,当前那个是实底而不是虚线框(虚线像禁用按钮) */
 .workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions { gap: 6px; }
-.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current,
-.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button {
+.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current {
   min-height: 26px; padding: 0 10px; border-radius: 999px; font-size: var(--fs-12); font-weight: 500; line-height: 1;
 }
 .workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current {
   border: 1px solid transparent; background: var(--surface-3); color: var(--text-strong);
 }
 .workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions .current::before { content: "✓"; margin-right: 4px; color: var(--success); font-weight: 700; }
-.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button { border-color: var(--line); background: transparent; color: var(--text); }
-.workspace-studio.task-workspace-v2 .conv-card.current .push-review-actions button.primary { color: var(--ink-fg); border-color: var(--ink); background: var(--ink); }
+/* #255:范围钮换 shadcn Button,药丸 button 覆盖离职(状态签 .current 保留)。 */
 /* 交付范围:标签 + 数字一行,说明一行,按钮一个,缩进与卡片一致 */
 .workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header { padding: 0; }
 .workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > header > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
@@ -4815,10 +4694,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > p,
 .workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-result { padding: 0; font-size: var(--fs-12); line-height: 1.55; }
 .workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-result > strong { font-weight: 500; }
-.workspace-studio.task-workspace-v2 .conv-card.current .delivery-scope-card > .delivery-locate {
-  margin: 0; justify-self: start; height: 26px; min-height: 0; padding: 0 10px; border-radius: 999px;
-  border-color: var(--line); background: transparent; font-size: var(--fs-12); font-weight: 500;
-}
 .task-workspace-v2 .conv-card.current .ws-attached-feedback { margin: 0; }
 
 /* 收口块(失败/验证中/等合入/子任务)与只读说明、开发助手工具步
@@ -4891,11 +4766,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock { padding: 8px 12px 10px; }
 .task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock .decision-unified-reply textarea { height: 44px; min-height: 44px; padding: 9px 10px; line-height: 1.6; font-size: var(--fs-14); }
 .task-workspace-v2.workspace-studio .ws-composer .ws-reply-dock .decision-unified-reply > span { margin-bottom: 4px; }
-.task-workspace-v2 .ws-composer .ws-reply-dock .decision-notes > button { padding: 0; font-size: var(--fs-13); }
-.task-workspace-v2 .ws-composer .ws-reply-dock .submit-decision {
-  width: 100%; min-height: var(--control-h-lg); height: auto; padding: 9px 16px;
-  justify-content: center; font-size: var(--fs-14); line-height: 1.3; white-space: normal;
-}
 .task-workspace-v2 .ws-composer .ws-reply-dock .decision-dock-notice { margin: 0; color: var(--muted); font-size: var(--fs-12); line-height: 1.5; }
 .task-workspace-v2 .ws-composer .ws-reply-dock .decision-dock-notice[role="status"] { color: var(--attention); }
 
@@ -4998,7 +4868,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .workspace-studio .decision-unified-reply > span { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; font-size: var(--fs-13); }
 .workspace-studio .decision-unified-reply small { color: var(--muted); font-size: var(--fs-12); }
 .workspace-studio .decision-unified-reply textarea { width: 100%; min-height: 82px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--surface); color: var(--text); font: inherit; }
-.workspace-studio.task-workspace-v2 .submit-decision { min-height: 36px; font-size: var(--fs-13); padding: 10px 12px; }
 .workspace-studio .decision-evidence { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: var(--fs-12); }
 .workspace-studio .decision-evidence > summary { cursor: pointer; color: var(--muted); }
 .workspace-studio.task-workspace-v2 .decision-evidence .push-review-overview,
@@ -5174,7 +5043,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 @media (max-width:900px) {
   .workspace-studio .ws-reply-dock { position: sticky; bottom: 0; z-index: 5; }
 }
-.workspace-studio .ws-reply-dock .submit-decision { width: 100%; align-self: stretch; }
 /* canvas 不在嵌入态压回 min-width:100%:检视抽屉一开材料区变窄,双栏
    diff 会被挤到左栏逐字符硬换行(#251 P1-3)。交给基础规则的 760px 下限,
    .diff-review 自带的横向滚动兜底重新生效;fold 按钮仍随容器宽度。 */
@@ -5330,11 +5198,8 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 }
 .task-overview-row { display: grid; grid-template-columns: minmax(0,1fr) 140px; align-items: center; }
 .task-overview-relation { min-width: 0; display: flex; align-items: center; padding-right: 12px; color: var(--muted); font-size: 11px; }
-.task-overview-relation > span, .task-overview-relation button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.task-overview-relation button { border: 0; background: transparent; color: var(--accent); font: inherit; padding: 7px 0; cursor: pointer; text-align: left; }
-.task-overview-relation button:hover { text-decoration: underline; }
-.task-overview-relation button:disabled { color: var(--muted); cursor: default; }
-.task-overview-relation button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.task-overview-relation > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* #255:↳主任务小钮换 shadcn Button(link xs),文字皮离职。 */
 @media (max-width:1000px) { .task-overview-row { grid-template-columns: minmax(0,1fr) 112px; } }
 @media (max-width:600px) {
  .task-overview-row { grid-template-columns: minmax(0,1fr) 76px; }
@@ -5698,11 +5563,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .workspace-studio.task-workspace-v2 .ws-head-controls > button,
 .workspace-studio .ws-task-details-trigger { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-control); border-radius: 7px; }
 .workspace-studio.task-workspace-v2 .ws-head-controls > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-2); }
-.workspace-studio.task-workspace-v2 :is(.submit-decision, .ws-head-controls > button.primary):not(:disabled) {
-  color: var(--ink-fg); background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 90%, white), var(--ink));
-  border-color: var(--ink); border-radius: 8px; box-shadow: var(--shadow-primary);
-}
-.workspace-studio.task-workspace-v2 :is(.submit-decision, .ws-head-controls > button.primary):hover:not(:disabled) { background: var(--ink-hover); }
 .workspace-studio.task-workspace-v2 .decision-card { border-color: var(--line); border-radius: 10px; box-shadow: var(--shadow-sm); padding: 18px; }
 .workspace-studio.task-workspace-v2 .decision-head h3 { font-size: 16px; font-weight: 650; line-height: 1.65; letter-spacing: -.015em; }
 .workspace-studio.task-workspace-v2 .waiting-context .md { color: var(--muted); line-height: 1.8; }
@@ -7109,7 +6969,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .is-module-confirmation .module-assignment > header { justify-content: flex-end; padding: 6px 12px; background: none; border-bottom: 0; }
 .is-module-confirmation .module-assignment > header > div { display: none; }
 .is-module-confirmation .decision-footer { display: grid; }
-.is-module-confirmation .decision-footer > .submit-decision { justify-self: end; }
 .module-assignment-unit > em.ready { color: var(--success); }
 }
 /* 会话卡旧样式用 flex order 重排，必须在宿主层恢复阅读顺序；仅改 DOM
@@ -7131,7 +6990,6 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .is-module-confirmation .decision-unified-reply > span { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; margin: 0; }
 .is-module-confirmation .decision-unified-reply small { font-size: 12px; color: var(--muted); }
 .is-module-confirmation .decision-unified-reply textarea { width: 100%; max-width: none; min-height: 76px; box-sizing: border-box; padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.6; border: 1px solid var(--line); border-radius: 8px; resize: vertical; background: var(--surface); color: var(--text); }
-.is-module-confirmation .decision-footer > .submit-decision { justify-self: end; width: auto; margin: 0; min-height: 40px; padding: 9px 16px; font-size: 13px; border-radius: 8px; }
 .annotation-location-notice > .module-location-retry {
   width: auto; height: auto; padding: 6px 10px;
   color: var(--accent); font-size: 13px; white-space: nowrap;
@@ -7163,12 +7021,10 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 .is-deciding .ws-reply-dock .decision-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .is-deciding .decision-unified-reply { min-width: 0; margin: 0; }
 .is-deciding .ws-reply-dock .decision-unified-reply textarea { width: 100%; height: 44px; min-height: 44px; box-sizing: border-box; }
-.is-deciding .ws-reply-dock .submit-decision { width: auto; min-height: 44px; align-self: end; margin: 0; padding: 9px 14px; }
 .is-deciding .decision-dock-notice, .is-deciding .decision-footer > [data-slot="alert"], .is-deciding .decision-submit-choices { grid-column: 1 / -1; }
 .is-deciding .decision-unified-reply > span { font-size: 12px; }
 @media (max-width: 600px) {
   .is-deciding .ws-reply-dock .decision-footer { grid-template-columns: minmax(0, 1fr); }
-  .is-deciding .ws-reply-dock .submit-decision { justify-self: end; }
 }
 
 /* ===== steer.css ===== */

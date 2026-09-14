@@ -188,7 +188,12 @@ test("锚条:等你决定 / N 条意见待你处理;当前卡由父级传入渲�
   // 口径演进后的现文案:「需要我的」锚条只说"待你处理"(阅读筛选,不是权限)。
   assert.match(confirm, /3 条意见待你处理/);
   assert.match(confirm, /转交 Agent 或核对答复后闭环/);
-  assert.match(confirm, /打开检视意见/);
+  // #255 去重:锚条不再自带「打开检视意见」——它和紧随其后的流内意见
+  // 摘要行(每行已有带批注 id 的定向入口)加上材料栏常驻的「检视意见」
+  // launcher 三重入口重复,摘掉锚条上的通用一颗。锚条退为纯状态行。
+  const anchorBlock = /<div class="ws-anchor attention"[^]*?<\/div>/.exec(confirm)?.[0] ?? "";
+  assert.ok(anchorBlock, "待你处理态锚条必须在场");
+  assert.doesNotMatch(anchorBlock, /<button/, "锚条不得再带「打开检视意见」入口(流内行已有定向入口)");
   // 线程视图里当前卡照样钉在末尾:它的提交区经 portal 挂在输入框里,卡一不渲
   // 输入框就空了(用户点「看处理记录」后实锤"说给 Agent 栏没了")。
   const threaded = render({ task: waitingTask, decides: true, thread: "a-1",

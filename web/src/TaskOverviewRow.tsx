@@ -1,5 +1,6 @@
 import { PersonName } from "./People";
 import { formatLocalDateTime, relativeTime } from "./time";
+import { Button } from "@/components/ui/button";
 
 /** Overview navigation only: task details and actions live in the workspace. */
 export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
@@ -29,11 +30,13 @@ export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
       <span className="task-overview-arrow" aria-hidden>›</span>
     </button>
     <span className="task-overview-relation">
-      {parentId ? <button type="button" disabled={!onOpenParent} onClick={onOpenParent}
+      {parentId ? <Button type="button" variant="link" size="xs"
+        disabled={!onOpenParent} onClick={onOpenParent}
+        className="h-auto min-w-0 max-w-full overflow-hidden px-0 text-left text-ink"
         aria-label={`返回主任务：${parentTitle || parentId}`}
         title={`主任务：${parentTitle || parentId}（${parentLabel || parentId}）${!onOpenParent ? "；当前无可打开的主任务" : ""}`}>
-        <span aria-hidden>↳ </span>{parentLabel || parentId}
-      </button> : childCount > 0 ? <span title={`主任务，共 ${childCount} 个子任务；进入工作台查看全部`}>
+        <span aria-hidden>↳ </span><span className="truncate">{parentLabel || parentId}</span>
+      </Button> : childCount > 0 ? <span title={`主任务，共 ${childCount} 个子任务；进入工作台查看全部`}>
         主任务 · {childCount}<span className="task-overview-children-word"> 子任务</span>
       </span> : null}
       {parentId && childCount > 0 && <small title={`${childCount} 个下级任务`}> · {childCount} 子</small>}
