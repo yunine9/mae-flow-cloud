@@ -23,8 +23,11 @@ def record_publication(state, payload, proof_nonce):
     sha = str(receipt.get("sha") or "")
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", sha) or not receipt.get("ref") or not receipt.get("remote"):
         _die("推送交接缺少真实 SHA、远端与引用收据")
-    loop = _loop(state)
-    if (loop.get("published") or {}).get("sha") == sha:
+    # 幂等检查只读,不调 _loop():_loop() 会把 delivery_loop 从 None 初始化成
+    # 完整结构,改了 delivery_loop_digest;之后 trusted_feedback_loop 用新 digest
+    # 跟收据里封的旧 digest(对应 None)对不上,首次推送的任务永远 die。
+    # historical_pipeline_item(本文件第 8 行)也用 state.get(...) or {} 读,一致。
+    if ((state.get("delivery_loop") or {}).get("published") or {}).get("sha") == sha:
         # 恢复会在读取 task.json 的 push 收据后幂等补登记。若内核已经
         # 用同一 SHA 完成 merged close，生命周期的最新可信事实是 close；
         # 不能先用旧 push 去要求一条“非终态反馈链”收据，更不能为了
@@ -34,6 +37,10 @@ def record_publication(state, payload, proof_nonce):
     if has_host_receipt(state) and not trusted_feedback_loop(state, (
             "feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile")):
         _die("推送交接前的反馈生命周期缺少宿主收据")
+    # trusted_feedback_loop 通过后才初始化 delivery_loop:检查收据归属时
+    # 必须用签收据时的原始 state(delivery_loop 可能还是 None),
+    # 通过后再用 _loop() 建结构写 published。
+    loop = _loop(state)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     loop["published"] = {"sha": sha, "receipt": receipt, "at": now}
     active_id = loop.get("active_batch_id")

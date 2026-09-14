@@ -61,13 +61,22 @@ def _text(value, name, limit=4000, required=True):
     return result
 
 def _loop(state):
-    loop = state.setdefault("delivery_loop", {
-        "schema": STATE_SCHEMA,
-        "delivery_round": 0,
-        "active_batch_id": "",
-        "batches": [],
-        "close_events": [],
-    })
+    # delivery_loop 可能是 None(老任务、首次推送前还没开过反馈批次)。
+    # setdefault 只在 key 不存在时写默认值,key 存在但值是 None 时不覆盖——
+    # 不处理 None 的话,后续 loop.get("schema") 直接 AttributeError,整条
+    # delivery 链死。None 跟"不存在"语义一致,都表示还没初始化。
+    loop = state.get("delivery_loop")
+    if loop is None:
+        loop = {
+            "schema": STATE_SCHEMA,
+            "delivery_round": 0,
+            "active_batch_id": "",
+            "batches": [],
+            "close_events": [],
+        }
+        state["delivery_loop"] = loop
+    elif not isinstance(loop, dict):
+        _die("delivery_loop 状态损坏")
     if loop.get("schema") != STATE_SCHEMA:
         _die("delivery_loop 状态版本不受支持")
     loop.setdefault("delivery_round", 0)
