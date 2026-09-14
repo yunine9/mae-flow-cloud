@@ -1548,3 +1548,15 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
   assert.match(registration,
     /text-primary underline underline-offset-2 break-all/);
 });
+
+test("DTS 勾选浮动发起条:勾选浮现粘底,发起与顶部同轨(2026-09-14 设计审查 03)", () => {
+  // 勾选数 > 0 才浮现,粘性吸底;计数、清空、发起同条。
+  assert.match(registration,
+    /selected\.length > 0 && <div className="sticky bottom-3 z-20/);
+  assert.match(registration, /已选 <b>\{selected\.length\}<\/b> 张/);
+  assert.match(registration, /onClick=\{\(\) => setSelected\(\[\]\)\}\s*>\s*清空选择/);
+  // 浮动条发起钮与顶部按钮同一套:同一 launch、busy 禁用、多张文案
+  // 逐张说明——不许长出第二套发起口径。
+  assert.equal((registration.match(/将逐张发起 \$\{selected\.length\} 个独立工作流/g) ?? []).length, 2,
+    "顶部与浮动条各一枚同文案 title");
+});

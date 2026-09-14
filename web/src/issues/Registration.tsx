@@ -1227,6 +1227,28 @@ function DtsRegister({
             </TableBody>
           </Table>
         </div>}
+      {/* 浮动发起条(2026-09-14 设计审查 03):勾选在行里,发起在顶部
+          ——长列表勾到深处,发起与清空都要滚回顶上。勾选数大于 0 时
+          粘底浮现,与顶部按钮同一套发起逻辑与 busy 态;清空只清当次
+          勾选。粘性定位自带零动画,reduced-motion 天然满足。 */}
+      {selected.length > 0 && <div className="sticky bottom-3 z-20 flex flex-wrap
+        items-center justify-between gap-2.5 rounded-[10px] border border-line
+        bg-surface px-3.5 py-2.5 shadow-(--shadow-md)
+        max-[680px]:flex-col max-[680px]:items-stretch">
+        <span className="text-sm text-text-strong">已选 <b>{selected.length}</b> 张</span>
+        <div className="flex items-center gap-2.5 max-[680px]:w-full
+          max-[680px]:flex-col max-[680px]:items-stretch">
+          <Button variant="outline" size="sm" className="max-[680px]:w-full"
+            onClick={() => setSelected([])}>
+            清空选择
+          </Button>
+          <Button size="sm" className="max-[680px]:w-full" disabled={busy}
+            title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
+            onClick={launch}>
+            {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
+          </Button>
+        </div>
+      </div>}
     </>}
     {tickets && tickets.length === 0 && <div className="flex flex-col items-center
       gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">
