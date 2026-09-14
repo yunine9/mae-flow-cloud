@@ -17,7 +17,7 @@ from .host_capability import (
     host_managed_continuous_review, verify_host_proof)
 from .host_receipts import (
     attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
-    save_with_host_proof, trusted_active_batch, trusted_current_lifecycle,
+    save_with_host_proof, trusted_active_batch, trusted_lifecycle_predecessor,
     trusted_pipeline_projection)
 from .selection_reconcile import reconcile_selection
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
@@ -204,7 +204,7 @@ def _open(flow, state, args):
             "feedback-open", "feedback-result", "pipeline-record",
             "selection-reconcile"))
             if active_id
-            else trusted_current_lifecycle(state, (
+            else trusted_lifecycle_predecessor(state, (
                 "pipeline-record", "feedback-open", "feedback-result",
                 "intervention-reconcile", "selection-reconcile")))
         # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
@@ -415,7 +415,7 @@ def _result(flow, state, args):
         # A successfully closed batch has no active writer. Its signed final
         # lifecycle is the predecessor for replay, not a missing active batch.
         checker = (trusted_active_batch if (state.get("delivery_loop") or {}).get("active_batch_id")
-                   else trusted_current_lifecycle)
+                   else trusted_lifecycle_predecessor)
         if not checker(state, ("feedback-open", "pipeline-record", "feedback-result", "selection-reconcile")):
             _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)

@@ -340,6 +340,27 @@ def trusted_current_lifecycle(state, actions):
         for action in actions)
 
 
+def trusted_lifecycle_predecessor(state, actions):
+    """Host feedback may follow workflow movement; all other sealed facts stay exact.
+
+    This is not a ready/terminal attestation. Validate the historical receipt
+    unchanged, allowing only its workflow position to differ from live state.
+    """
+    for authority, record in _scan_receipts(state):
+        stored = record.get("projection")
+        if not isinstance(stored, dict):
+            continue
+        action = stored.get("action")
+        if action not in actions:
+            continue
+        projection = host_projection(state, action, {})
+        if projection is not None:
+            projection["current"] = stored.get("current")
+            if _valid_stored_receipt(authority, record, action, projection):
+                return True
+    return False
+
+
 def trusted_pipeline_projection(state, projection):
     """Verify the exact pipeline fact inside an authentic pipeline receipt.
 

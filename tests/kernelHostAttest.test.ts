@@ -20,6 +20,7 @@ import {
   KernelUnavailableError,
   openKernelFeedback,
   reconcileKernelDeliverySelection,
+  recordKernelFeedbackResult,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
 } from "../src/kernelDelivery.ts";
@@ -259,4 +260,55 @@ test("核验输出格式错误不能变成否定裁决", () => {
   writeFileSync(script, `#!/bin/sh\ncat >/dev/null\necho '{"schema":"mae-flow-host-attest/1","lifecycle":"false"}'\n`);
   chmodSync(script, 0o755);
   assert.throws(() => trustedKernelHostLifecycle({ host: { ...HOST, python: script }, cwd, actions: ["pipeline-record"] }), KernelUnavailableError);
+});
+
+test("task-20: build 收据允许 external_verify 开批，其他字段篡改仍拒绝", () => {
+  const { cwd, workspace, taskId, head } = watchingTask("step-predecessor");
+  const path = join(cwd, ".mae-flow.json");
+  const initial = readState(cwd);
+  initial.current = "build";
+  delete initial.delivery_loop;
+  writeFileSync(path, JSON.stringify(initial));
+  reconcileKernelDeliverySelection({ host: HOST, cwd, workspace, taskId,
+    waitingId: "selection-in-build", head, paths: ["main.ts"], excludedPaths: [] });
+  const signed = readState(cwd);
+  assert.equal(signed.current, "build");
+  const moved = { ...signed, current: "external_verify" };
+  const batch = { schema: "mae-flow-feedback-batch/1" as const, batch_id: "task-20-regression",
+    task_id: taskId, base_sha: head, opened_at: new Date().toISOString(),
+    items: [{ id: "review-one", source: "mr_discussion" as const, source_id: "one",
+      source_revision: 0, kind: "code_review", summary: "补齐分支", verification: "reviewer" }] };
+  for (const tampered of [
+    { ...moved, delivery_loop: {} },
+    { ...moved, user_intervention: { forged: true } },
+    { ...moved, quality: { external_verification: { verdict: "PASS", sha: "forged" } } },
+  ]) {
+    writeFileSync(path, JSON.stringify(tampered));
+    assert.throws(() => openKernelFeedback({ host: HOST, cwd, workspace, batch }),
+      /打开反馈前的持续检视生命周期没有宿主收据/);
+  }
+  writeFileSync(path, JSON.stringify(moved));
+  assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd,
+    actions: ["selection-reconcile"], state: moved }), false,
+    "步骤变化仍不能冒充完整就绪/终态证明");
+  openKernelFeedback({ host: HOST, cwd, workspace, batch });
+  const opened = readState(cwd);
+  assert.equal(opened.delivery_loop.active_batch_id, batch.batch_id);
+  assert.equal(opened.current, "feedback_triage");
+  assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd,
+    actions: ["feedback-open"], state: opened }), true, "开批仍生成完整的新宿主收据");
+  openKernelFeedback({ host: HOST, cwd, workspace, batch });
+  assert.equal(readState(cwd).delivery_loop.batches.length, 1, "重复开批仍幂等");
+  const result = { host: HOST, cwd, workspace, taskId, batchId: batch.batch_id,
+    changed: false, results: [{ id: "review-one", status: "explained" as const,
+      summary: "已有分支覆盖，无需改代码" }] };
+  recordKernelFeedbackResult(result);
+  const closed = readState(cwd);
+  assert.equal(closed.delivery_loop.active_batch_id, "");
+  const originalBatch = structuredClone(closed.delivery_loop.batches[0]);
+  closed.current = "external_verify";
+  writeFileSync(path, JSON.stringify(closed));
+  recordKernelFeedbackResult(result);
+  assert.deepEqual(readState(cwd).delivery_loop.batches[0], originalBatch,
+    "无活动批次时的结果重放也允许正常步骤变化，不重写结果");
 });
