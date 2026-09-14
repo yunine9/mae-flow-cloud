@@ -135,7 +135,8 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   // 计数条随发起过滤生效亮出 N/M。
   assert.match(registration,
     /<HeaderFilter label="发起状态" active=\{launchFilterActive\}/);
-  assert.match(registration, /const \[showFresh, setShowFresh\] = useState\(true\)/);
+  assert.match(registration,
+    /const \[showUnlaunched, setShowUnlaunched\] = useState\(true\)/);
   assert.match(registration,
     /const \[showLaunched, setShowLaunched\] = useState\(false\)/);
   assert.match(registration, /已发起\(进行中\)/);
@@ -147,7 +148,14 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
   assert.match(registration, /const selectableTickets = display/);
   assert.match(registration,
-    /setShowFresh\(true\);\s*\n\s*setShowLaunched\(false\);/);
+    /setShowUnlaunched\(true\);\s*\n\s*setShowLaunched\(false\);/);
+  // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
+  // button 不许回流(徽标走 ui/button 包装层,#256 收编纪律)。
+  assert.match(registration, /function isLiveIssue\(/);
+  assert.match(registration, /const liveIssueByTicket = useMemo/);
+  assert.doesNotMatch(registration, /hover:opacity-75/);
+  assert.match(registration,
+    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},点击打开`\}/);
   // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
   assert.match(issueBoard,
     /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);

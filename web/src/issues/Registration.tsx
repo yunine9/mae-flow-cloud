@@ -105,11 +105,14 @@ function repoLabel(url: string): string {
  * 同单号且会话未到终态(归档/取消/失败)。发起前查重与列表的发起
  * 状态列/勾选禁用/默认过滤全走这一处——列上说"已发起"当且仅当此刻
  * 点发起会被拦;只有终态旧会话的单不算,可再次发起(与服务端 create
- * 守卫同尺)。 */
+ * 守卫同尺)。终态三元组只住 isLiveIssue 一处。 */
+function isLiveIssue(item: IssueSummary): boolean {
+  return !["archived", "canceled", "failed"].includes(item.status);
+}
+
 function liveIssueFor(issues: IssueSummary[], ticketNo: string):
   IssueSummary | undefined {
-  return issues.find((item) => item.ticket === ticketNo
-    && !["archived", "canceled", "failed"].includes(item.status));
+  return issues.find((item) => item.ticket === ticketNo && isLiveIssue(item));
 }
 
 export function IssueRegistration({
@@ -546,9 +549,20 @@ function DtsRegister({
   // 发起过滤(2026-09-14 拍板):「发起状态」列表头漏斗,默认只看未
   // 发起的单——已发起(名下有进行中会话)的行默认滤掉且勾选禁用。
   // 两项全勾 = 全显 = 无过滤;打开/刷新回默认态,漏斗清空是全显。
-  const [showFresh, setShowFresh] = useState(true);
+  const [showUnlaunched, setShowUnlaunched] = useState(true);
   const [showLaunched, setShowLaunched] = useState(false);
-  const launchFilterActive = !showFresh || !showLaunched;
+  const launchFilterActive = !showUnlaunched || !showLaunched;
+  // 名下进行中会话按单索引:发起过滤、全选可勾行、逐行徽标/禁用同吃
+  // 一份,免得各自全表扫;口径仍是 isLiveIssue 一处。
+  const liveIssueByTicket = useMemo(() => {
+    const map = new Map<string, IssueSummary>();
+    issues.forEach((item) => {
+      if (item.ticket && isLiveIssue(item) && !map.has(item.ticket)) {
+        map.set(item.ticket, item);
+      }
+    });
+    return map;
+  }, [issues]);
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -675,17 +689,17 @@ function DtsRegister({
       isActionableDts(r) && !list.some((item) => item.ticket === r.ticket));
     const merged = [...list, ...extra];
     if (!launchFilterActive) return merged;
-    return merged.filter((t) => liveIssueFor(issues, t.ticket)
-      ? showLaunched : showFresh);
-  }, [versionFiltered, remoteTickets, launchFilterActive, showFresh,
-    showLaunched, issues]);
+    return merged.filter((t) => liveIssueByTicket.has(t.ticket)
+      ? showLaunched : showUnlaunched);
+  }, [versionFiltered, remoteTickets, launchFilterActive, showUnlaunched,
+    showLaunched, liveIssueByTicket]);
 
   // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
   // 过滤划范围,发起过滤里已发起的行勾选禁用,不在全选之列。可勾行全
   // 中时点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在
   // 展示列表里,保持原样,发起时照常带上。
   const selectableTickets = display
-    .filter((t) => !liveIssueFor(issues, t.ticket))
+    .filter((t) => !liveIssueByTicket.has(t.ticket))
     .map((t) => t.ticket);
   const displayedSelectedCount =
     selectableTickets.filter((no) => selected.includes(no)).length;
@@ -714,7 +728,7 @@ function DtsRegister({
     setSelectedVersions([]);
     setTicketFilter("");
     setTitleFilter("");
-    setShowFresh(true);
+    setShowUnlaunched(true);
     setShowLaunched(false);
     setExpandedTicket(null);
     try {
@@ -935,7 +949,7 @@ function DtsRegister({
                 setTicketFilter("");
                 setTitleFilter("");
                 setSelectedVersions([]);
-                setShowFresh(true);
+                setShowUnlaunched(true);
                 setShowLaunched(true);
               }}>
               清空搜索与筛选</Button>
@@ -1020,14 +1034,14 @@ function DtsRegister({
                     发起状态
                     <HeaderFilter label="发起状态" active={launchFilterActive}
                       onClear={() => {
-                        setShowFresh(true);
+                        setShowUnlaunched(true);
                         setShowLaunched(true);
                       }}>
                       {() => <div className="flex flex-col">
                         <label className="flex min-h-11 cursor-pointer items-center gap-2.5
                           rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-                          <Checkbox checked={showFresh}
-                            onCheckedChange={(checked) => setShowFresh(checked)} />
+                          <Checkbox checked={showUnlaunched}
+                            onCheckedChange={(checked) => setShowUnlaunched(checked)} />
                           未发起
                         </label>
                         <label className="flex min-h-11 cursor-pointer items-center gap-2.5
@@ -1052,9 +1066,11 @@ function DtsRegister({
                 const detail = detailCache[ticket.ticket];
                 const detailId =
                   `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-                // 发起状态判定(与拦截同尺):有进行中会话即已发起——
-                // 勾选禁用、徽标跳转、默认过滤都认它。
-                const liveIssue = liveIssueFor(issues, ticket.ticket);
+                // 发起状态判定(与拦截同尺,走按单索引):有进行中会话
+                // 即已发起——勾选禁用、徽标跳转、默认过滤都认它。
+                const liveIssue = liveIssueByTicket.get(ticket.ticket);
+                const liveTip = liveIssue
+                  ? `已发起:会话 ${liveIssue.id} 进行中` : "";
                 const colCount = moduleCol ? 8 : 7;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
@@ -1063,9 +1079,7 @@ function DtsRegister({
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
                         disabled={!!liveIssue}
-                        title={liveIssue
-                          ? `已发起:会话 ${liveIssue.id} 进行中,不可重复发起`
-                          : undefined}
+                        title={liveIssue ? `${liveTip},不可重复发起` : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
                           checked
@@ -1107,14 +1121,12 @@ function DtsRegister({
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {liveIssue
-                        ? <button type="button"
-                            title={`已发起:会话 ${liveIssue.id} 进行中,点击打开`}
+                        ? <Button type="button" variant="ghost" size="xs"
+                            title={`${liveTip},点击打开`}
                             aria-label={`打开 ${ticket.ticket} 的进行中会话`}
-                            onClick={() => onOpenIssue?.(liveIssue.id)}
-                            className="inline-flex items-center rounded-sm
-                              transition-opacity hover:opacity-75">
+                            onClick={() => onOpenIssue?.(liveIssue.id)}>
                           <Badge>进行中</Badge>
-                        </button>
+                        </Button>
                         : <span className="text-muted-foreground"
                             aria-label="未发起">—</span>}
                     </TableCell>
