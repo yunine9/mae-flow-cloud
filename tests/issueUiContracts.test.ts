@@ -1395,9 +1395,10 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
     .map(([, key, label]) => `${key}:${label}`);
   assert.equal(tabs[0], "meta:元信息", "元信息必须在页签条首位");
   assert.match(sessionView, /useState<IssueMainTab>\("events"\)/);
-  // 面板映射:meta 有自己的 TabsContent 分支,材料兜底分支不再吃 meta 值。
+  // 面板映射:meta 有自己的 TabsContent 分支(canOperate 随行——拉取
+  // 日志的意图递交是写口,查看模式不渲染),材料兜底分支不再吃 meta 值。
   assert.match(sessionView,
-    /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} \/>/);
+    /\{tab === "meta" && <TabsContent value="meta" className="contents">\s*\n\s*<IssueMetaPane detail=\{detail\} canOperate=\{canOperate\} \/>/);
   assert.match(sessionView,
     /tab !== "events" && tab !== "repos" && tab !== "meta"/);
   // 元信息字段(只读平铺,ADR-0026):「登记信息」壳已退役,四类字段
@@ -1446,6 +1447,40 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
     /const isTerminal =\s*\n\s*\(TERMINAL_STATUSES as readonly string\[\]\)\.includes\(detail\.status\);/);
   assert.match(metaPane,
     /\{!isTerminal && <section aria-label="调整关联仓"/);
+});
+
+// ---- 主动拉取日志(#268,ADR-0026):按钮=意图递交,Agent 主理第二例 ----
+
+test("拉取日志意图递交(#268):按钮只递意图,端点守卫+留痕+投递,平台不代拉", () => {
+  const metaPane = readFileSync(
+    resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const routesSource = readFileSync(resolve("src/issueFlow/routes.ts"), "utf-8");
+  const serviceSource = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
+  const notices = readFileSync(resolve("assets/issue-prompts/notices.md"), "utf-8");
+  // 端点契约:POST /issues/:id/logs/fetch,写闸仅归属人(管理员不写,
+  // 与调整关联仓同款)。
+  assert.match(apiSource, /export function requestIssueLogFetch\(/);
+  assert.match(apiSource,
+    /issueFetch\(`\/issues\/\$\{encodeURIComponent\(id\)\}\/logs\/fetch`/);
+  assert.match(routesSource,
+    /parts\[2\] === "logs"\s*\n\s*&& parts\[3\] === "fetch"/);
+  assert.match(routesSource, /只能请求拉取自己会话的日志/);
+  // 服务面:终态/queued 守卫 + 留痕 + startPlatformTurn 同一咽喉
+  // (忙=steer/等人=便签/空闲=开回合)。
+  assert.match(serviceSource, /requestLogFetch\(id: string\)/);
+  assert.match(serviceSource, /promptCopy\("notices", "logs\.fetch"\)/);
+  // 通知词是协议:执行者指引(issue-ops 技能 + 缺环境举卡)与重复拉取
+  // 护栏(已拉取过先向用户确认)必须在场——护栏在文案不在门禁。
+  assert.match(notices, /## logs\.fetch/);
+  assert.match(notices, /issue-ops/);
+  assert.match(notices, /已拉取过/);
+  // 页面:无日志的非终态会话才出钮(有日志后由「下载日志」替代),
+  // 写口收 canOperate(意图递交是写);点击后就地「已通知 Agent」管理
+  // 时延预期(排队+SSH 拉取分钟级,清单靠 updated_at 轮询自刷)。
+  assert.match(metaPane, /!isTerminal && canOperate && logFileCount === 0/);
+  assert.match(metaPane, /requestIssueLogFetch\(detail\.id\)/);
+  assert.match(metaPane, /已通知 Agent 拉取/);
 });
 
 // ---- 关联仓清单编辑器(#241):缓冲 diff 门禁 + 端点契约,不乐观更新 ----

@@ -4104,6 +4104,18 @@ export function requestIssueRepoChanges(
   });
 }
 
+/** 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮只递交意图——
+ * 端点守卫+留痕+投递通知词,拉取由 Agent 按技能 issue-ops 执行(缺
+ * 环境走既有环境闸),平台不代拉。成功 = HTTP 2xx 会话概要;日志清单
+ * 不随本调用更新,随既有 updated_at 轮询自刷。 */
+export function requestIssueLogFetch(id: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/logs/fetch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
 /** 问题卡作答:decision 是人话文本(显示/自由作答);平台闸另带决策码
  * code(裁决按它分派,文案不是匹配键);Agent 卡带逐题作答 answers
  * (键=题号,值=决策码或自由文本)。 */

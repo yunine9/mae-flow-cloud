@@ -21,6 +21,8 @@
  *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
  *   GET  /issues/:id/materials/logs/archive → 拉取日志整包下载(ZIP;
  *                                      空/缺 404;读,无终态闸)
+ *   POST /issues/:id/logs/fetch     → 主动拉取日志意图递交(仅归属者;
+ *                                      守卫+留痕+投递通知,平台不代拉)
  *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/documents        → 过程文档清单(分析报告+Agent 落
@@ -896,6 +898,18 @@ export async function handleIssueRoutes(
         });
       }
       return done(200, issueFlow.requestRepoChanges(id, { add, remove }));
+    }
+
+    // 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮不执行任何
+    // 事——端点只守卫+留痕+投递通知词(终态/queued 由服务层打回),
+    // 拉取由 Agent 按技能 issue-ops 执行(缺环境走既有环境闸)。写闸
+    // 仅归属人,与调整关联仓同款。
+    if (method === "POST" && parts[2] === "logs"
+        && parts[3] === "fetch" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只能请求拉取自己会话的日志" });
+      }
+      return done(200, issueFlow.requestLogFetch(id));
     }
 
     // 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/

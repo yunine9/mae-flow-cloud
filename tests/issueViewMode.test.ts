@@ -300,6 +300,12 @@ const WRITE_ROUTES: Array<{
     denied: "只能修改自己会话的工作区",
   },
   {
+    what: "请求拉取日志", method: "POST",
+    parts: ["issues", LIVE, "logs", "fetch"],
+    payload: {},
+    denied: "只能请求拉取自己会话的日志",
+  },
+  {
     what: "记检视意见", method: "POST",
     parts: ["issues", LIVE, "reviews"],
     payload: { line: 3, anchor: "原文", note: "这里要改" },
@@ -473,7 +479,8 @@ test("源码契约:/issues/:id 下每条写路由分支都自带 own() 归属闸
     assert.ok(branch.body.includes("own("),
       `写路由分支缺归属闸(${branch.head})——/issues/:id 下每条写路由`
         + "必须自带 own() 闸,不能靠(已不存在的)整体闸兜底");
-    assert.match(branch.body, /只有归属人|只能修改自己会话|只能解压自己会话/,
+    assert.match(branch.body,
+      /只有归属人|只能修改自己会话|只能解压自己会话|只能请求拉取自己会话/,
       `写路由 403 文案要指明动作与归属限制(${branch.head})`);
   }
 

@@ -466,7 +466,7 @@ export function IssueSessionView({
               <IssueWorkspaceRepos detail={detail} />
             </TabsContent>}
             {tab === "meta" && <TabsContent value="meta" className="contents">
-              <IssueMetaPane detail={detail} />
+              <IssueMetaPane detail={detail} canOperate={canOperate} />
             </TabsContent>}
             {tab !== "events" && tab !== "repos" && tab !== "meta"
               && <TabsContent value={tab} className="contents">

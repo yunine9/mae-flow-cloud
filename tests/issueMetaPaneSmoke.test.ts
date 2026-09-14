@@ -28,7 +28,7 @@ const metaPaneModule = await vite.ssrLoadModule("/src/issues/MetaPane.tsx") as {
   IssueMetaPane: (props: { detail: IssueDetail }) => unknown;
 };
 const IssueMetaPane = metaPaneModule.IssueMetaPane as unknown as
-  React.FunctionComponent<{ detail: IssueDetail }>;
+  React.FunctionComponent<{ detail: IssueDetail; canOperate: boolean }>;
 after(() => vite.close());
 
 function detail(overrides: Partial<IssueDetail> = {}): IssueDetail {
@@ -63,9 +63,10 @@ function detail(overrides: Partial<IssueDetail> = {}): IssueDetail {
   } as IssueDetail;
 }
 
-function render(overrides: Partial<IssueDetail> = {}): string {
+function render(overrides: Partial<IssueDetail> = {}, canOperate = true): string {
   return renderToStaticMarkup(
-    React.createElement(IssueMetaPane, { detail: detail(overrides) }));
+    React.createElement(IssueMetaPane,
+      { detail: detail(overrides), canOperate }));
 }
 
 test("无单会话元信息平铺陈列(无登记信息壳),凭据引用零出现", () => {
@@ -107,6 +108,18 @@ test("关联仓清单:仓名+完整 URL;SSR 降级无绑定标;回收标注与�
   assert.match(reclaimed, /现场已回收/);
   const empty = render({ repo_urls: undefined, repo_url: undefined });
   assert.match(empty, /会话没有登记代码仓/);
+});
+
+test("主动拉取按钮(#268):无日志非终态归属可见,终态/查看模式缺席", () => {
+  const html = render();
+  assert.match(html, /拉取日志/, "无日志非终态会话出「拉取日志」钮");
+  assert.match(html, /还没有拉取过日志/, "空态说明在场(按钮不凭空出现)");
+  const peer = render({}, false);
+  assert.ok(!peer.includes("拉取日志"), "查看模式不出拉取写口(意图递交是写)");
+  for (const status of ["canceled", "archived", "failed"] as const) {
+    assert.ok(!render({ status }).includes("拉取日志"),
+      `${status} 终态不出拉取钮(终态投递只会写成死信)`);
+  }
 });
 
 test("空值如实降级,终态会话(canceled/archived)照常陈列且零编辑入口", () => {

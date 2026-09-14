@@ -1747,6 +1747,44 @@ export class IssueFlowService {
     return summarize(state);
   }
 
+  /** 主动拉取日志的意图递交口(#268,POST /issues/:id/logs/fetch;
+   * Agent 主理第二例,ADR-0026):按钮不执行任何事,端点只守卫+留痕+
+   * 经平台回合通道投递通知词——拉取由 Agent 按技能 issue-ops 执行,
+   * 缺环境走既有环境闸(request_env 举卡→回填→自动续拉),平台不代拉。
+   * 无重复拉取门禁:排队语义下连点只是重复意图,通知词一句"已拉取过
+   * 先向用户确认"兜住;无独立"已拉取"状态位,页面判定用材料清单。
+   * 投递通道与 requestRepoChanges 同一咽喉:startPlatformTurn(忙=
+   * steer 送达,等人/终态=park 便签随续聊带上,空闲=开续聊回合)。 */
+  requestLogFetch(id: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    // 终态守卫(与调整仓清单同款):终态不可续聊,投递只会写成永不
+    // 送达的死信。页面侧按钮本就被终态闸隐藏,这里防的是直调 API。
+    if (state.status === "archived" || state.status === "canceled"
+      || state.status === "failed") {
+      throw new IssueControlError(
+        "该问题单已结束(终态),不能再请求拉取日志");
+    }
+    if (state.status === "queued") {
+      throw new IssueControlError(
+        "首轮研究还在排队启动,请稍候再请求拉取日志");
+    }
+    recordTransition(state, {
+      source: "platform",
+      note: "用户请求拉取网管日志——拉取由 Agent 按技能 issue-ops 执行,"
+        + "端点不代拉",
+    });
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "user_message", {
+      text: "请求拉取网管日志",
+      via: "logs",
+    });
+    this.log(`[issue-flow] ${id} 用户请求拉取日志`);
+    // 段文先 trim:park 便签只取首行,不 trim 就把锚点段的空行当首行。
+    this.startPlatformTurn(live, promptCopy("notices", "logs.fetch").trim());
+    return summarize(state);
+  }
+
   // ---- 会话驱动 ----
 
   /** 回合启动单点(收窄票 #7):新回合的共有不变量只有这一份——

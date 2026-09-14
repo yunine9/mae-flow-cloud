@@ -37,6 +37,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   getBusinessModules,
   getIssueMaterials,
+  requestIssueLogFetch,
   requestIssueRepoChanges,
   type IssueDetail,
 } from "../api";
@@ -73,7 +74,12 @@ const TERMINAL_STATUSES = ["archived", "canceled", "failed"] as const;
  * 径):新增输入的即时校验先行同款,别等服务端打回。 */
 const MAX_ISSUE_REPOS = 8;
 
-export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
+export function IssueMetaPane({ detail, canOperate }: {
+  detail: IssueDetail;
+  /** 归属操作权(查看模式=false):触发 AI 拉日志是写口(意图递交),
+   * 只归归属人;下载是纯读,不收闸。 */
+  canOperate: boolean;
+}) {
   // 模块绑定仓集合(团队资产目录按 module_id 解析)。undefined = 还没
   // 取到/取不到/没登记模块——绑定标一律不出,仓清单不依赖它。
   const [boundRepos, setBoundRepos] = useState<readonly string[]>();
@@ -141,6 +147,30 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
       setLogDownloadNote(String(reason instanceof Error ? reason.message : reason));
     } finally {
       setDownloadingLogs(false);
+    }
+  }
+
+  // ---- 主动拉取(#268,ADR-0026):按钮不执行任何事,只把拉取意图
+  // 递给 Agent(Agent 主理第二例,与「调整关联仓」同一递交通道)——
+  // AI 按技能 issue-ops 拉取,缺环境自然举环境闸。无日志的非终态会话
+  // 才出钮(有日志后被「下载日志」替代);AI 运行中不禁用——运行中
+  // 点击经插话队列在当前步骤结束后送达,是正当语义。 ----
+  const [requestingFetch, setRequestingFetch] = useState(false);
+  const [fetchNotice, setFetchNotice] = useState("");
+  async function requestLogFetchIntent() {
+    if (requestingFetch) return;
+    setRequestingFetch(true);
+    setFetchNotice("");
+    try {
+      await requestIssueLogFetch(detail.id);
+      setFetchNotice(
+        "已通知 Agent 拉取,完成后日志清单自动更新;"
+        + "排队与 SSH 拉取可能需要几分钟");
+    } catch (reason) {
+      setFetchNotice(
+        String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setRequestingFetch(false);
     }
   }
 
@@ -268,6 +298,23 @@ export function IssueMetaPane({ detail }: { detail: IssueDetail }) {
           <span className="text-xs text-muted-foreground">
             共 {logFileCount} 个日志文件,整包下载
           </span>
+        </span>}
+        {/* 主动拉取(#268):无日志的非终态会话才出钮(与下载互补,
+            有日志后由下载替代);环境未配置也显示——点击后 AI 按技能
+            举环境闸要环境,一条链走完;写口只归归属人。 */}
+        {!isTerminal && canOperate && logFileCount === 0
+          && <span className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="xs"
+              disabled={requestingFetch}
+              onClick={() => void requestLogFetchIntent()}>
+              {requestingFetch ? "已递交…" : "拉取日志"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              还没有拉取过日志,可请 AI 去网管侧拉取
+            </span>
+          </span>}
+        {fetchNotice && <span className="utility-note" role="status">
+          {fetchNotice}
         </span>}
         {logDownloadNote && <span className="text-xs text-danger" role="alert">
           {logDownloadNote}
