@@ -8829,11 +8829,15 @@ export class TaskService {
           this.bypass(task, "验证恢复对账",
             this.tryDeliver(task, task.controlEpoch));
         }
-        // 旧版本可能把一个已经 resolved 的 WaitingRecord 再次写成
-        // waiting_for_human(重建会话重放同 call_id 时发生)。这是矛盾
-        // 状态:人已经答过,页面却还在催人。恢复时以 waiting.json 的
-        // resolved 事实为准,自动续跑并把原决定带回重建会话。
-        if (summary.status === "waiting_for_human"
+        // task.json 仍在等人而权威账已 resolved/superseded：前者带决定
+        // 续跑，后者仅恢复宿主 MR 描述卡；普通 Agent 旧卡不得复活。
+        if (summary.status === "waiting_for_human" &&
+            authoritativeWaiting?.status === "superseded"
+            && authoritativeWaiting.step === MR_DESCRIPTION_STEP) {
+          // 保留旧卡审计，回到原交付入口按同一 AR 单另举新卡。
+          this.continueAfterMrDescription(task, "原 MR 描述卡已失效，正在重新发起填写");
+          requeued += 1;
+        } else if (summary.status === "waiting_for_human"
             && authoritativeWaiting?.status === "resolved") {
           // task.json 只是页面投影副本，真正的决定在 waiting.json。
           // 旧代码检查 summary.waiting.status，恰好检查了崩溃前的 stale
@@ -11141,6 +11145,17 @@ export class TaskService {
     }));
   }
 
+  private continueAfterMrDescription(task: TaskState, detail: string): void {
+    task.summary.waiting = undefined;
+    task.summary.status = "verifying";
+    task.summary.detail = detail;
+    this.persist(task);
+    const pendingHost = new TaskHostLedger(task.summary).pending();
+    this.bypass(task, "MR 描述卡后继续交付", pendingHost?.input.action === "create_mr"
+      ? finishTaskHostOperation(this.taskHostRuntime(task))
+      : this.tryDeliver(task, task.controlEpoch));
+  }
+
   private async resumeResolvedDecision(
     task: TaskState,
     waiting: WaitingRecord,
@@ -11149,13 +11164,7 @@ export class TaskService {
     // markSent 的窗口。恢复动作首先对账，不能只让 Agent 收到正文却在
     // 页面继续显示“待提交”。失败会由 helper 记日志并保持流程可继续。
     if (waiting.step === MR_DESCRIPTION_STEP) {
-      task.summary.waiting = undefined;
-      task.summary.status = "verifying";
-      task.summary.detail = "AR 描述已保存，继续创建 MR";
-      this.persist(task);
-      const pendingHost = new TaskHostLedger(task.summary).pending();
-      this.bypass(task, "填写 AR 描述后继续交付", pendingHost?.input.action === "create_mr"
-        ? finishTaskHostOperation(this.taskHostRuntime(task)) : this.tryDeliver(task, task.controlEpoch));
+      this.continueAfterMrDescription(task, "AR 描述已保存，继续创建 MR");
       return;
     }
     if (waiting.step === HOST_PUSH_CONFIRM_STEP) {

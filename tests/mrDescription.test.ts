@@ -140,3 +140,48 @@ test("答复已落盘但继续交付前进程退出：恢复不再举卡、不�
   assert.equal(revived.get(id)!.status, "verifying");
   assert.equal(revived.get(id)!.waiting, undefined);
 });
+
+test("MR 描述卡已作废且服务重启：恢复原交付并重新举出可回答卡", async t => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-ar-superseded-recover-"));
+  const options = {
+    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  };
+  const service = new TaskService(options);
+  const id = service.create("MR 描述卡恢复", {
+    ticket: "REQ20260627016573", account: "owner",
+  }).id;
+  const task = (service as any).tasks.get(id);
+  const stale = askMrDescription(task.humanGate, id, task.summary.ticket);
+  task.summary.waiting = stale;
+  task.summary.status = "waiting_for_human";
+  (service as any).persist(task);
+  task.humanGate.supersede(stale.waiting_id, {
+    stateVersion: stale.state_version,
+    notes: "用户使用开发助手接管，原现场失效",
+  });
+  await service.shutdown();
+
+  const revived = new TaskService(options);
+  t.after(() => revived.shutdown());
+  let resumes = 0;
+  (revived as any).tryDeliver = async (restored: any) => {
+    resumes += 1;
+    assert.equal(restored.summary.status, "verifying");
+    assert.equal(restored.summary.waiting, undefined, "恢复前先清掉失效的页面投影");
+    restored.summary.waiting = askMrDescription(
+      restored.humanGate, id, restored.summary.ticket);
+    restored.summary.status = "waiting_for_human";
+    (revived as any).persist(restored);
+  };
+
+  const result = revived.recover();
+  assert.equal(result.requeued, 1);
+  await until(() => resumes === 1, "恢复 MR 描述交付");
+  const renewed = revived.get(id)!.waiting!;
+  assert.match(renewed.call_id, /-r2$/);
+  assert.equal(renewed.status, "waiting");
+  assert.equal(
+    (revived as any).tasks.get(id).humanGate.get(stale.waiting_id)?.status,
+    "superseded",
+  );
+});
