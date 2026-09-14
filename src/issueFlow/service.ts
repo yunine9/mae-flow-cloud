@@ -87,7 +87,6 @@ import {
   loadState,
   MAX_ISSUE_REPOS,
   normalizeIssueRepos,
-  raiseGate,
   recordTransition,
   saveState,
   shouldNudgeFixed,
@@ -543,9 +542,9 @@ export interface IssueFlowOptions {
     };
   };
   /** 不可自动修复工具名单(--unfixable-tools,与需求交付同一面旗):
-   *  流水线红灯的失败项全部是这些工具的 CODECHECK 告警时,修复回合
-   *  改代码解决不了(要人在交付平台处理/豁免)——不派回合,停表请人。
-   *  缺席=不分诊,红灯照旧派修,行为与现状一致。 */
+   *  需求交付的分诊输入。问题流已停代举分诊(#247,ADR-0024)——
+   *  红灯事实投递给 AI 自行判断,本字段对问题流不再生效,保留给
+   *  同一面旗的需求侧消费者(executionRuntime 装配共用)。 */
   unfixableTools?: string[];
   /** 发布检视回复时代点"已解决"(--resolve-discussions,与需求交付
    *  同一面旗):默认关——resolve 归检视人,代点是越权;平台/团队
@@ -839,7 +838,6 @@ export class IssueFlowService {
   private shuttingDown = false;
   /** 证据重试窗的在途定时器(键=会话 id+仓地址,票 82):一仓一表,
    *  重排前清旧,关停统一清——unref 不阻进程,但不留重复轮。 */
-  private readonly evidenceRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
   readonly dataDir: string;
 
@@ -5399,39 +5397,6 @@ export class IssueFlowService {
         + String(error)));
   }
 
-  /** 红灯停机升级为平台闸(票 03):把"stage_note 停机请人"升级成可
-   *  作答的结构化卡(与 analysis_confirm/env_verify 同一闸管道:码表
-   *  出自 stageRegistry,作答走 resolveGate,等待通知走 notifyWaitingCard
-   *  ——小鲁班的通知由它顺带承担,不再单发停机通知)。waiting_user 的
-   *  定格与 raiseGate 纪律一致:回合还在收尾(turning 在握)时只落闸,
-   *  由 settle 在回合终点凭 state.gate 定格并通知;监看器后台结算(常态)
-   *  则当场定格 waiting_user 并通知。盘上已有别的闸时不覆盖(先到的卡
-   *  优先),返回 false 由调用方退回纯留痕停机。 */
-  private raisePipelineGate(
-    live: LiveIssue,
-    repo: string,
-    sha: string,
-    kind: "pipeline_unfixable" | "pipeline_evidence",
-    question: string,
-    context: string,
-  ): boolean {
-    const { state } = live;
-    if (state.gate) return false;
-    // 终态复核(体检 C-H1):取消/归档后不再把状态定格回 waiting_user
-    // ——那等于把人的取消决定掀翻,还能借 answer 把会话复活成 running。
-    if (isTerminal(state.status)) return false;
-    raiseGate(state, kind, question, undefined, context, undefined, undefined,
-      { repo, sha });
-    // waiting_user 的定格与 raiseGate 纪律一致:回合还在收尾(turning
-    // 在握)时只落闸——settle 在回合终点凭 state.gate 定格;监看器后台
-    // 结算(常态)则当场定格 waiting_user 并通知。落闸即落盘(与工具层
-    // 举闸后的 persist 同一纪律,进程不在两件事之间丢闸)。
-    if (!this.turning.has(live.id)) state.status = "waiting_user";
-    saveState(live.root, state);
-    if (state.status === "waiting_user") this.notifyWaitingCard(live);
-    return true;
-  }
-
   /** 平台身份头(与 pipelineClient 的 pipelineHeaders 完全同形):
    *  产物端点与状态端点同一鉴权形态,凭据止步宿主。 */
   private platformHeaders(account: string): Record<string, string> {
@@ -5718,12 +5683,6 @@ export class IssueFlowService {
       clearInterval(this.watchdogTimer);
       this.watchdogTimer = undefined;
     }
-    // 证据重试窗的在途定时器一并清(票 82):unref 本不阻进程,但显式
-    // 清掉才不会有关停后仍触发的重评(测试 --force-exit 也干净)。
-    for (const timer of this.evidenceRetryTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.evidenceRetryTimers.clear();
     const work = [...this.live.values()].map(async (live) => {
       live.controlEpoch += 1;
       const stopped = await Promise.allSettled([live.driver?.abort(), this.stopContainer(live)]);
