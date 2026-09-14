@@ -149,6 +149,14 @@ test("责任人可从验证、等待合入和失败现场继续 Agent，协作�
     "可直接恢复主 Agent 时不能默认切到开发助手");
 });
 
+test("右栏长输入只在输入框内部滚动，不得挤没上方会话流", () => {
+  const boundedInputs = composer.match(
+    /className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface/g,
+  ) ?? [];
+  assert.equal(boundedInputs.length, 3,
+    "插话、跨仓同步和开发助手输入框都必须有最大高度与内部滚动");
+});
+
 test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
   assert.match(workspace,
     /const deletable = canOperate && \["completed", "failed", "canceled"\]/);

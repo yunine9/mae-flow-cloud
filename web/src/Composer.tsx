@@ -465,7 +465,7 @@ export function Composer({
 
       {showSync && (
         <>
-          <Textarea id={`sync-${task.id}`} className="min-h-13 resize-y bg-surface"
+          <Textarea id={`sync-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={syncText} disabled={syncBusy} rows={3}
             placeholder="说清楚:哪个接口或约定变了,影响什么,哪里还需要谁确认…"
             onChange={(event) => { setSyncText(event.target.value); if (syncFeedback) setSyncFeedback(""); }}
@@ -492,7 +492,7 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <Textarea id={`steer-${task.id}`} className="min-h-13 resize-y bg-surface"
+          <Textarea id={`steer-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}
@@ -655,7 +655,7 @@ export function Composer({
             </div>
           )}
 
-          <Textarea id={`assistant-${task.id}`} className="min-h-13 resize-y bg-surface font-mono text-sm"
+          <Textarea id={`assistant-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface font-mono text-sm"
             value={assistantText}
             disabled={assistantRequestBusy || !assistantAvailable
               || assistant.state === "returning"}
