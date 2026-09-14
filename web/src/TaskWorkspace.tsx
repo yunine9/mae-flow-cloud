@@ -2345,7 +2345,8 @@ export function TaskWorkspace({
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
-              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>

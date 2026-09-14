@@ -20,7 +20,7 @@ async function read<T>(path: string, signal: AbortSignal): Promise<T> {
 }
 
 /** Story 与平台图源由服务端绑定版本；这里只保存选择状态，不显示过期图。 */
-export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView, canUpdate = false }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void; canUpdate?: boolean }) {
+export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView, canUpdate = false, flush = false }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void; canUpdate?: boolean; /** 任务工作台 chain 视图挂载:去 padding、交出滚动(贴边豁免,滚动归 ws-doc)。 */ flush?: boolean }) {
   const [projection, setProjection] = useState<Projection>();
   const [selected, setSelected] = useState("");
   const [activeView, setActiveView] = useState("logical");
@@ -142,9 +142,15 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
   }, [key, base, diagram, projection]);
   const current = rendered?.key === key ? rendered : undefined;
   // 皮(#233 收官):原 story-architecture.css 换装为工具类(按钮/错误盒配方见 btn/errbox)。
+  // flush 是 chain 视图的贴边豁免:旧规则 .ws-doc.is-chain > .story-architecture
+  // {padding:0;overflow:visible} 的直译——ws-doc 是唯一滚动层,本层不再
+  // 自带 20px 留白和内嵌滚动,避免嵌套双滚动(#253)。
+  const shell = flush
+    ? "flex-1 min-w-0 min-h-0 overflow-visible p-0"
+    : "flex-1 min-w-0 min-h-0 overflow-auto p-5 max-[600px]:p-3";
   const btn = "cursor-pointer rounded-[7px] border border-line bg-surface px-3 py-[7px] transition-colors hover:border-primary hover:text-primary";
   const errbox = "w-full rounded-lg border border-attention/30 bg-attention/5 p-2.5 text-left [&_summary]:cursor-pointer [&_summary]:text-xs [&_summary]:text-attention [&_summary]:[overflow-wrap:anywhere] [&_pre]:mt-2.5 [&_pre]:max-h-60 [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:font-mono [&_pre]:text-xs [&_pre]:leading-[1.65] [&_pre]:text-text";
-  return <section className="flex-1 min-w-0 min-h-0 overflow-auto p-5 max-[600px]:p-3" aria-label="Story 架构图">
+  return <section className={shell} aria-label="Story 架构图">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div><strong className="text-[18px]">架构图</strong><p className="text-xs leading-[1.7] text-muted-foreground">这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
       <div className="flex flex-wrap gap-2">
