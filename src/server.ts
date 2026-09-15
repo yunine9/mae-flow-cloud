@@ -3024,6 +3024,10 @@ export function createTaskServer(
           });
           return response.end(bundle.content);
         }
+        if (request.method === "GET" && parts.length === 3 && parts[2] === "diff-review") {
+          const review = await service.diffReview(id);
+          return json(response, 200, { review: review ?? null });
+        }
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "push-review-diff") {
           const scope = url.searchParams.get("scope") === "full"
@@ -3031,7 +3035,7 @@ export function createTaskServer(
           const comparison = await service.pushReviewDiff(id, scope);
           if (!comparison) {
             return json(response, 404, {
-              error: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
+              error: "当前代码差异暂不可读，请刷新重试",
             });
           }
           return json(response, 200, comparison);

@@ -298,3 +298,12 @@ test("需求确认复用标准决定卡，并收成一个明确的通过按钮",
   assert.doesNotMatch(workspace, /编辑需求原文|保存修改/,
     "人工只提检视意见，不与 Agent 同时编辑需求正本");
 });
+
+
+test("增量浏览独立于审批卡，完整浏览保留按文件加载", () => {
+  assert.match(workspace, /readDiffReview\(task.id\)/);
+  assert.match(workspace, /const pushReview = approvalReview \?\? \(browsingReview/);
+  assert.match(workspace, /manifest=\{!scopedDiff/);
+  assert.match(workspace, /task.status === "waiting_for_human"[^]*needsDeliverySelection\(task.waiting\)/,
+    "只读浏览不会开放交付勾选");
+});

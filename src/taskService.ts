@@ -4696,38 +4696,31 @@ export class TaskService {
     return resolveArtifactRoot(task.summary.workspace, cwd);
   }
 
-  /** 检视卡展示当前代码；浏览器不能提交任意 Git ref。
-   * SHA 用于定位内容，变更不会让阅读入口失效或自动要求新确认。 */
+  /** 代码浏览独立于审批：只读计算比较基点，不创建待办或写入授权。 */
+  async diffReview(id: string): Promise<PushReviewPresentation | undefined> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!task.cwd) return undefined;
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) return undefined;
+    return this.buildPushReviewPresentation(task, snapshot,
+      Boolean(task.summary.delivery?.loop?.workspace_review_recheck_required));
+  }
+
+  /** Git ref 由服务端从任务历史选取；没有审批卡也能只读比较。 */
   async pushReviewDiff(
     id: string,
     scope: "changes" | "full",
   ): Promise<{ content: string; branch?: string; truncated?: boolean } | undefined> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const waiting = task.summary.waiting;
-    const review = task.summary.delivery?.push_review;
-    const diffReview = waiting && (
-      waiting.step === CLOUD_PUSH_CONFIRM_STEP
-      || waiting.recommended_view === "diff"
-      || stepReviewSurface(
-        this.options.host?.kernelRoot,
-        this.reviewContractStep(task, waiting),
-      ) === "diff"
-    );
-    if (!task.cwd || !diffReview) {
-      return undefined;
-    }
-    if (review) {
-      const snapshot = await deliveryChangeSnapshot(task.cwd);
-      if (!snapshot) return undefined;
-      if (scope === "changes") {
-        return compareDeliveryRevisions(
-          task.cwd, review.base_sha, snapshot.head);
+    if (!task.cwd) return undefined;
+    if (scope === "changes") {
+      const review = await this.diffReview(id);
+      if (review?.has_focused_changes) {
+        return compareDeliveryRevisions(task.cwd, review.base_sha, review.head_sha);
       }
     }
-    // 持续检视轮不一定有 Cloud push_review 导航卡，但它仍然是内核明确
-    // 推荐的代码检视面。此时“这次修改”没有一份可伪造的宿主基点，两个
-    // scope 都诚实退回任务基线到当前工作区的完整 Diff。
     const root = this.artifactRoot(id);
     return root ? readArtifactAsync(root, DIFF_NAME) : undefined;
   }

@@ -3550,8 +3550,16 @@ export async function listArtifactChangeDirectory(
   return await response.json() as ArtifactChangeDirectoryPage;
 }
 
+/** 只读浏览导航，不依赖待审批卡。 */
+export async function readDiffReview(taskId: string): Promise<PushReviewPresentation | undefined> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/diff-review`);
+  if (!response.ok) throw new Error(`读取代码比较范围失败：HTTP ${response.status}`);
+  const body = await parseJson<{ review?: PushReviewPresentation | null }>(response);
+  return body.review ?? undefined;
+}
+
 /** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。
- * Git revision 都由服务端从当前卡片取，页面不传 ref。 */
+ * Git revision 由服务端从任务历史选取，页面不传 ref，也不要求有审批卡。 */
 export async function readPushReviewDiff(
   taskId: string,
   scope: "changes" | "full",

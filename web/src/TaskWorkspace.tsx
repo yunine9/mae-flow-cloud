@@ -84,6 +84,8 @@ import {
   readArtifact,
   readArtifactFileDiff,
   readPushReviewDiff,
+  readDiffReview,
+  type PushReviewPresentation,
   readRequirementRevision,
   repairStopped,
   requestCommitterReview,
@@ -595,13 +597,12 @@ export function TaskWorkspace({
   const recommendedMaterialView = task.waiting?.recommended_view
     ?? (task.parent_task_id ? "doc"
       : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
-  // push_review 是一份绑定 HEAD 的阅读导航，不是 cloud_push_confirm
-  // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
-  // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
-  // 成 0。审批权仍由 waiting + delivery_selection 单独判断。
-  const pushReview = (needsDeliverySelection(task.waiting)
+  // 审批导航与只读浏览分开：没有待办也可从任务历史计算增量范围。
+  const approvalReview = (needsDeliverySelection(task.waiting)
       || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
+  const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
+  const pushReview = approvalReview ?? (browsingReview?.taskId === task.id ? browsingReview.review : undefined);
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
@@ -672,6 +673,7 @@ export function TaskWorkspace({
   );
   const [diffScope, setDiffScope] = useState<"changes" | "full">(
     pushReview?.has_focused_changes ? "changes" : "full");
+  const scopedDiff = Boolean(pushReview && (approvalReview || diffScope === "changes"));
   const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
@@ -900,6 +902,17 @@ export function TaskWorkspace({
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
     setDiffReviewRequest(0);
   }, [task.id]);
+
+  useEffect(() => {
+    if (materialView !== "diff" || approvalReview) return;
+    let alive = true;
+    void readDiffReview(task.id).then(review => {
+      if (!alive) return;
+      setBrowsingReview(previous => previous?.taskId === task.id
+        && JSON.stringify(previous.review) === JSON.stringify(review) ? previous : { taskId: task.id, review });
+    }).catch(() => { /* 元数据暂不可用时保留阅读，不改变任务状态。 */ });
+    return () => { alive = false; };
+  }, [task.id, materialView, livePulse, materialReload, approvalReview]);
 
   useEffect(() => {
     if (!pushReview) {
@@ -1206,7 +1219,7 @@ export function TaskWorkspace({
     if (!active) return;
     let alive = true;
     setMaterialReadError("");
-    const pushDiffActive = Boolean(pushReview
+    const pushDiffActive = Boolean(scopedDiff
       && items?.find((item) => item.name === active)?.kind === "diff");
     const lazyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
@@ -1278,7 +1291,7 @@ export function TaskWorkspace({
       setDiffFileLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse, materialReload, diffScope, pushReview?.head_sha,
+  }, [task.id, active, livePulse, materialReload, diffScope, scopedDiff, pushReview?.head_sha,
     task.waiting?.waiting_id,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
@@ -2383,7 +2396,7 @@ export function TaskWorkspace({
                         setDiffScope("full");
                       }}>
                       <strong className="text-[13px] font-medium">全部改动</strong>
-                      <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前待推送代码</span>
+                      <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前代码</span>
                     </Button>
                   </> : (
                     // 只有一个范围时不是"可切换":按钮外观点了没反应,
@@ -2391,12 +2404,12 @@ export function TaskWorkspace({
                     <div role="note"
                       className="inline-flex h-8 min-w-0 cursor-default items-center gap-1.5 rounded-full border border-ink bg-ink px-3 text-ink-fg">
                       <strong className="text-[13px] font-medium">全部改动</strong>
-                      <span className="text-xs opacity-75">从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
+                      <span className="text-xs opacity-75">从任务起点到当前代码;本轮没有可单看的增量修改</span>
                     </div>
                   )}
                   <p className="m-0 min-w-[240px] flex-1 text-[13px] text-muted-foreground">{diffScope === "changes"
-                    ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
-                    : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
+                    ? "这里只看这次处理产生的变化；浏览代码不会发起推送或要求再次确认。"
+                    : approvalReview ? "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。" : "这里查看任务的全部改动，包括尚未提交的工作区修改。"}</p>
                 </div>
               )}
               {unavailable && <div className="utility-note">{unavailable}</div>}
@@ -2407,7 +2420,7 @@ export function TaskWorkspace({
               {materialView === "diff" && pushReview
                 && pushDiffState.kind === "error" && (
                 <div className="utility-note" role="alert">
-                  <strong>{pushDiffState.expired
+                  <strong>{!approvalReview ? "代码差异暂不可用，请刷新重试" : pushDiffState.expired
                     ? "这版代码已失效，暂不能确认推送"
                     : "代码检视暂不可用，暂不能确认推送"}</strong>
                   <span>{pushDiffState.message}</span>
@@ -2438,14 +2451,14 @@ export function TaskWorkspace({
                   ? <GitDiff text={content} branch={branch} embeddedBrowser
                       annotationLocation={pendingLocation?.view === "diff"
                         ? { file: pendingLocation.item.file, request: pendingLocation.request } : undefined}
-                      manifest={!pushReview ? activeMeta?.change_files : undefined}
-                      untrackedDirectories={!pushReview
+                      manifest={!scopedDiff ? activeMeta?.change_files : undefined}
+                      untrackedDirectories={!scopedDiff
                         ? activeMeta?.untracked_directories : undefined}
-                      onDirectoryLoad={!pushReview
+                      onDirectoryLoad={!scopedDiff
                         ? (path, offset) => listArtifactChangeDirectory(
                             task.id, path, offset)
                         : undefined}
-                      onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
+                      onFileSelect={!scopedDiff ? setSelectedDiffPath : undefined}
                       activeFileLoading={diffFileLoading}
                       activeFileError={diffFileError}
                       hideKey={task.id}
