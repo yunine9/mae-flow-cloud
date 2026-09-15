@@ -148,6 +148,7 @@ import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { type ModelsSettings } from "../settings.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import { createContainerBashOperations } from "./containerBash.ts";
+import { applyDebugIssueSkillPatch } from "./debugIssue.ts";
 import {
   issueWarmupMission,
   type IssueWarmupOutcome,
@@ -568,6 +569,10 @@ export interface IssueFlowOptions {
   dts?: DtsGateway;
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
+  /** 调试形态(--debug-issue):会话技能物化后把 issue-ops 的抓日志
+   * wrapper 换成假引擎(罐头复制,不连网管)。旗标缺席时整个字段
+   * 不在,会话行为与现状逐字节一致。 */
+  debugIssue?: { opsMockBinDir: string };
   vault?: IssueEnvironmentVault;
   /** 环境台账(ADR-0020/#150 快照语义):登记与 env_needed 闸从台账
    * 选环境时解密取值。缺省按 dataDir 自建(与 vault 同一数据目录的
@@ -3132,6 +3137,11 @@ export class IssueFlowService {
       mode: 0o600,
     });
     const skillPaths = materializeIssueSkills(live.root);
+    // 调试形态(--debug-issue):物化后把 issue-ops 的抓日志 wrapper
+    // 换成假引擎。只在旗标在场时发生;正式形态无此调用。
+    if (this.options.debugIssue) {
+      applyDebugIssueSkillPatch(live.root, this.options.debugIssue.opsMockBinDir);
+    }
     this.log(`[issue-flow] ${live.id} 装载技能: ${
       skillPaths.map((path) => path.split("/").at(-2)).join(", ")}`);
     const service = this;

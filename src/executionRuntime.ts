@@ -45,6 +45,7 @@ import {
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
+import { setupDebugIssue } from "./issueFlow/debugIssue.ts";
 import { IssueFlowLubanApproval } from "./issueFlow/lubanApproval.ts";
 import {
   McpGateway,
@@ -335,18 +336,20 @@ async function main(): Promise<void> {
 
   // 本地账号是控制台身份源。生产首次启动必须从环境变量注入管理员
   // 密码；演示模式给固定演示密码并醒目标注，避免把随机密码藏在日志里。
+  // 调试形态(--debug-issue)同演示待遇:本机仿真不该被启动密码卡住。
+  const debugIssue = has("--debug-issue");
   const auth = new LocalAuth(join(dataDir, "auth.json"));
   if (!auth.hasUsers()) {
     const adminUser = process.env.MAE_FLOW_ADMIN_USER ?? "admin";
     const adminPassword = process.env.MAE_FLOW_ADMIN_PASSWORD
-      ?? (demoMode ? "mae-flow-demo" : "");
+      ?? (demoMode || debugIssue ? "mae-flow-demo" : "");
     if (!adminPassword) {
       throw new Error(
         "首次启动需设置 MAE_FLOW_ADMIN_PASSWORD(至少 10 个字符)",
       );
     }
     auth.bootstrapAdmin(adminUser, adminPassword);
-    if (demoMode) {
+    if (demoMode || debugIssue) {
       // 管理员不发起任务(用户拍板:管理平台与干活是两个角色),
       // 演示必须再给一个开发者账号——只有 admin 的演示是发不了单的。
       auth.createUser("dev", "mae-flow-demo", "developer");
@@ -356,6 +359,24 @@ async function main(): Promise<void> {
       console.log(`[serve] 已创建管理员账号: ${adminUser}`
         + "(管理员不发起任务,请为成员建开发者账号)");
     }
+  }
+
+  // 调试形态(--debug-issue):问题流全链本机仿真——bare 镜像远端、
+  // 进程内交付平台假件(FakeGitPlatform,恒绿)、调试专属 DTS 单、
+  // 罐头日志与假抓日志引擎、示例业务模块与假网管环境、dev 账号署名。
+  // 幂等播种,已存在不覆盖;旗标缺席时以下全程不执行,正式形态
+  // 零改动(ADR-0028)。
+  const debugSetup = debugIssue
+    ? await setupDebugIssue({
+        dataDir, auth,
+        log: (message) => console.log(`  [debug-issue] ${message}`),
+      })
+    : undefined;
+  if (debugSetup) {
+    console.log(`[serve] 调试形态(--debug-issue)就绪: 交付平台(进程内恒绿) `
+      + `${debugSetup.platformUrl};bare 镜像 ${
+        debugSetup.mirrors.map((item) => item.name).join("、") || "(无)"}`
+      + `;调试单 ${debugSetup.dtsTicketFile}(改完列表页点刷新即生效)`);
   }
 
   // 内核自动发现:链的语义与顺序见 kernelDiscovery.ts(serve/pilot/
@@ -758,7 +779,7 @@ async function main(): Promise<void> {
   // 全流程。
   const DEFAULT_DTS_MCP_URL =
     "http://mcpgateway.his.huawei.com/mcp/6a0ac03dc1218e60a80b2a59";
-  const dtsMock = has("--dts-mock");
+  const dtsMock = has("--dts-mock") || debugIssue;
   const explicitDtsMcpUrl = flag("--dts-mcp-url");
   const mcpTokenFile = flag("--mcp-token-file")
     ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
@@ -782,8 +803,8 @@ async function main(): Promise<void> {
       + "「问题处理」页拉单会当场报缺配置,需求流程不受影响");
   };
   if (dtsMock && explicitDtsMcpUrl) {
-    issueGatewayFault("--dts-mock 与 --dts-mcp-url 互斥:"
-      + "前者是过渡期假单据,后者是真网关,别同时配");
+    issueGatewayFault("--dts-mock/--debug-issue 与 --dts-mcp-url 互斥:"
+      + "前者是假单据,后者是真网关,别同时配");
   }
   // token 不在启动时读定值——只校验文件在场且非空,之后每次请求经闭包
   // 重读文件。token 在网关侧轮换后服务不用重启;运行时文件被删/不可读
@@ -814,10 +835,12 @@ async function main(): Promise<void> {
   if (dtsDisabledReason) {
     // 已经如实记过账,这里只是不接线;issueDtsGateway 会落到占位网关。
   } else if (dtsMock) {
-    issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
-    console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
-      + "连不上真实 DTS;单据来自 assets/mock/dts-tickets.json,改完点刷新即生效,"
-      + "页签有 DEV 标识)");
+    issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`),
+      debugSetup?.dtsTicketFile);
+    console.log(`[serve] 问题流 DTS 网关: DEV·模拟(${debugIssue
+      ? "--debug-issue 调试专属单据 " + debugSetup?.dtsTicketFile
+      : "--dts-mock,单据来自 assets/mock/dts-tickets.json"}`
+      + ",改完点刷新即生效,页签有 DEV 标识)");
   } else if (dtsMcpUrl && mcpTokenProvider) {
     mcpGateway = new McpGateway({
       url: dtsMcpUrl, tokenProvider: mcpTokenProvider,
@@ -882,6 +905,12 @@ async function main(): Promise<void> {
     dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
     ...(platformUrl ? { platformUrl } : {}),
+    // 调试形态(--debug-issue)的进程内交付平台假件;显式 --platform 优先。
+    ...(debugSetup && !platformUrl
+      ? { platformUrl: debugSetup.platformUrl } : {}),
+    // 调试形态(--debug-issue):会话技能物化后换装假抓日志引擎。
+    ...(debugSetup
+      ? { debugIssue: { opsMockBinDir: debugSetup.opsMockBinDir } } : {}),
     // 不可修工具名单(--unfixable-tools,需求交付同一面旗同一语义):
     // 问题流红灯分诊用——失败项全部落在名单内时不派修复回合,停表
     // 请人在交付平台处理/豁免。缺席=不分诊,行为照旧。
