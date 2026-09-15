@@ -180,6 +180,8 @@
       "{token}",
       "--format",
       "json",
+      "--limit",
+      "100",
       "-k"
     ],
     "fields": {
@@ -208,7 +210,7 @@
         "json": "severity"
       }
     },
-    "timeout_s": 15,
+    "timeout_s": 30,
     "items": {
       "json": ""
     }
