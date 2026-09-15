@@ -175,8 +175,12 @@ test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含
     assert.match(template, new RegExp(`^## ${section}`, "m"),
       `模板必须含「${section}」章节——工具门票与技能模板要同源`);
   }
-  assert.match(body, /^## 知识边界/m,
-    "必须有知识边界节——外部 skill 只供领域知识,不定流程/格式/节奏");
+  // 知识边界纪律(#258 精简后从独立章节并入定位方法):外部 skill 只供
+  // 领域知识,流程/报告格式/停机节奏归平台契约与编排层——钉语义不钉
+  // 标题,章节形式随技能文档口径走。
+  assert.match(body, /外部 skill/, "知识边界纪律缺主体:外部 skill 的定位声明必须在");
+  assert.match(body, /流程、报告格式、停机节奏/,
+    "知识边界纪律缺边界:流程/报告格式/停机节奏不由外部 skill 约定");
   assert.match(body, /report-template\.md/,
     "SKILL.md 必须指向独立模板文件(不再内嵌复述)");
   // 归一拍板(2026-09-11):一个技能提示词+一份模板,guard 分身与独立
