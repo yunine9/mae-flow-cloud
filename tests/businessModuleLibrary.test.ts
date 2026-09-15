@@ -18,7 +18,7 @@ import {
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 
-test("业务模块由管理员指定 Owner；知识正文按版本发布且归档不删除历史", () => {
+test("业务模块全员维护；知识正文按版本发布且归档不删除历史", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-"));
   const created = createBusinessModule(dataDir, {
     id: "payment-core",
@@ -30,12 +30,13 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
   }, "admin-a");
   assert.equal(created.owner, "owner-a");
   assert.deepEqual(created.maintainers, ["maintainer-a"]);
-  assert.throws(() => updateBusinessModule(dataDir, created.id, {
+  assert.equal(updateBusinessModule(dataDir, created.id, {
     owner: "owner-b",
-  }, "owner-a"), /只有管理员可以转移/);
-  assert.throws(() => updateBusinessModule(dataDir, created.id, {
+  }, "member-a").owner, "owner-b");
+  assert.equal(updateBusinessModule(dataDir, created.id, {
     status: "archived",
-  }, "owner-a"), /只有管理员可以归档/);
+  }, "member-a").status, "archived");
+  updateBusinessModule(dataDir, created.id, { status: "active" }, "member-b");
 
   const v1 = publishBusinessKnowledgeAsset(dataDir, created.id, {
     id: "release-checklist",
@@ -81,7 +82,7 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
   assert.match(readBusinessKnowledgeAsset(
     dataDir, created.id, "release-checklist", 1).content, /第一版/,
   "归档只停止新任务选用，历史版本仍可追溯");
-  assert.equal(listBusinessModules(dataDir).operations.length, 4);
+  assert.equal(listBusinessModules(dataDir).operations.length, 7);
   writeFileSync(join(dataDir, "business-modules", created.id, "assets",
     "release-checklist", "v1.md"), "# 被篡改的历史正文\n");
   assert.throws(() => readBusinessKnowledgeAsset(
@@ -131,7 +132,7 @@ test("业务模块保存与更新强制至少绑定一个代码仓", () => {
     "清空仓的更新被拦后存量绑定原样保留");
 });
 
-test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发者只读", async () => {
+test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可访问", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-business-module-route-"));
   const auth = new LocalAuth(join(root, "auth.json"));
   auth.bootstrapAdmin("boss", "administrator-pass");
@@ -157,12 +158,13 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
     const boss = await login("boss", "administrator-pass");
     const owner = await login("owner", "developer-pass-1");
     const viewer = await login("viewer", "developer-pass-3");
-    const deniedCreate = await fetch(`${base}/business-modules`, {
+    const memberCreate = await fetch(`${base}/business-modules`, {
       method: "POST", headers: { cookie: owner },
-      body: JSON.stringify({ id: "pay", name: "支付", description: "支付域",
-        owner: "owner" }),
+      body: JSON.stringify({ id: "member-pay", name: "支付", description: "支付域",
+        repositories: ["https://code.example/pay.git"] }),
     });
-    assert.equal(deniedCreate.status, 403);
+    assert.equal(memberCreate.status, 201);
+    assert.equal((await memberCreate.json() as { owner: string }).owner, "owner");
     const created = await fetch(`${base}/business-modules`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ id: "pay", name: "支付", description: "支付域",
@@ -171,12 +173,12 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
     assert.equal(created.status, 201);
     assert.equal((await created.json() as { owner: string }).owner, "owner");
 
-    const deniedAsset = await fetch(`${base}/business-modules/pay/assets/rules`, {
+    const memberAsset = await fetch(`${base}/business-modules/pay/assets/member-rules`, {
       method: "PUT", headers: { cookie: viewer }, body: JSON.stringify({
         title: "规则", summary: "摘要", when_to_use: "改支付时", content: "正文",
       }),
     });
-    assert.equal(deniedAsset.status, 403);
+    assert.equal(memberAsset.status, 200);
     const published = await fetch(`${base}/business-modules/pay/assets/rules`, {
       method: "PUT", headers: { cookie: owner }, body: JSON.stringify({
         title: "规则", summary: "摘要", when_to_use: "改支付时",
@@ -185,9 +187,9 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
     });
     assert.equal(published.status, 200);
     const publishedView = await published.json() as {
-      assets: Array<{ form: string; repositories: string[] }> };
-    assert.equal(publishedView.assets[0].form, "rule");
-    assert.deepEqual(publishedView.assets[0].repositories,
+      assets: Array<{ id: string; form: string; repositories: string[] }> };
+    assert.equal(publishedView.assets.find(a => a.id === "rules")!.form, "rule");
+    assert.deepEqual(publishedView.assets.find(a => a.id === "rules")!.repositories,
       ["https://code.example/pay.git"]);
     const readable = await fetch(`${base}/business-modules/pay/assets/rules`,
       { headers: { cookie: viewer } });
@@ -218,12 +220,20 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
       method: "PUT", headers: { cookie: owner },
       body: JSON.stringify({ owner: "next-owner" }),
     });
-    assert.equal(ownerTransfer.status, 400, "Owner 不能自行转移责任人");
+    assert.equal(ownerTransfer.status, 200, "普通成员同样可以维护模块元数据");
     const adminTransfer = await fetch(`${base}/business-modules/pay`, {
       method: "PUT", headers: { cookie: boss },
       body: JSON.stringify({ owner: "next-owner" }),
     });
     assert.equal(adminTransfer.status, 200);
+    const memberArchive = await fetch(`${base}/business-modules/pay`, {
+      method: "PUT", headers: { cookie: viewer }, body: JSON.stringify({ status: "archived" }),
+    });
+    assert.equal(memberArchive.status, 200);
+    const archivedView = await memberArchive.json() as { status: string; updated_by: string; can_manage: boolean };
+    assert.equal(archivedView.status, "archived");
+    assert.equal(archivedView.updated_by, "viewer");
+    assert.equal(archivedView.can_manage, true);
     assert.equal((await adminTransfer.json() as { owner: string }).owner,
       "next-owner");
   } finally {

@@ -209,6 +209,8 @@ export function EnvironmentRegistry() {
       : { key, dir: 1 });
   }
 
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [ipFilter, activeTag, formFilter, stateFilter, updaterFilter, sort]);
   const visible = useMemo(() => {
     const needle = ipFilter.trim().toLowerCase();
     const filtered = environments.filter((entry) => {
@@ -275,6 +277,8 @@ export function EnvironmentRegistry() {
     }
   }
 
+  const pages = Math.max(1, Math.ceil(visible.length / 10));
+  const currentPage = Math.min(page, pages);
   return <section
     className="tw-root flex flex-col gap-4 text-base text-foreground"
     aria-label="环境管理台账"
@@ -426,7 +430,7 @@ export function EnvironmentRegistry() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visible.map((entry) => <TableRow key={entry.id}
+              {visible.slice((currentPage - 1) * 10, currentPage * 10).map((entry) => <TableRow key={entry.id}
                 data-environment-id={entry.id}
                 className="border-line hover:bg-muted/30">
                 <TableCell className="px-4 py-3 font-medium">{entry.ip}</TableCell>
@@ -480,6 +484,14 @@ export function EnvironmentRegistry() {
               </TableRow>)}
             </TableBody>
           </Table>
+          <div className="flex items-center justify-between border-t border-line p-4 text-sm">
+            <span>共 {visible.length} 项 · 每页 10 项</span>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</Button>
+              <span>{currentPage} / {pages}</span>
+              <Button variant="outline" size="sm" disabled={currentPage >= pages} onClick={() => setPage(currentPage + 1)}>下一页</Button>
+            </div>
+          </div>
         </div>}
 
     {editor && <EnvironmentEditorDialog

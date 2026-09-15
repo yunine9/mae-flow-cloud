@@ -1,3 +1,4 @@
+import { listProductVersions } from "../configurationCenter.ts";
 /**
  * 问题流 HTTP 路由(/issues/*)。
  *
@@ -372,16 +373,24 @@ export async function handleIssueRoutes(
       // sFeatureNoName/sModuleNoName 与模块库做匹配;唯一高置信命中时
       // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
       let autoModuleId: string | undefined;
-      if (source === "dts" && ticket && !body.module_id && routeOptions.dts) {
+      let productVersion = String(body.product_version ?? "").trim();
+      let dtsVersion: string | undefined;
+      if (source === "dts" && ticket && routeOptions.dts
+          && (!body.module_id || !productVersion)) {
         try {
           const detail = await routeOptions.dts.detail(ticket);
-          autoModuleId = matchDtsToModule(
+          dtsVersion = detail.version;
+          if (!body.module_id) autoModuleId = matchDtsToModule(
             detail.featureName, detail.moduleName,
             routeOptions.issueFlow?.dataDir ?? "",
           );
         } catch {
           // 匹配失败不阻断发起,留给 Agent 处理。
         }
+      }
+      if (!productVersion && dtsVersion) {
+        productVersion = listProductVersions(issueFlow.dataDir)
+          .find(row => row.version === dtsVersion)?.version ?? "";
       }
       // 环境段(#150,ADR-0020 快照语义):environment_id 在场即从台账
       // 快照——前端永远没有密码,值由服务端解密取用;与手填字段互斥,
@@ -427,6 +436,7 @@ export async function handleIssueRoutes(
         ...(Array.isArray(body.repo_urls)
           ? { repoUrls: body.repo_urls.map(String) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
+        ...(productVersion ? { productVersion } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
         // 人工显式选的模块(DTS 预绑/登记页)带锁;服务端 matchDtsToModule
         // 的自动匹配是机器猜测,不带锁(其命中只在人工未选时生效)。

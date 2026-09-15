@@ -1,3 +1,4 @@
+import { ProductVersionPicker } from "./ProductVersionPicker";
 import { RepositoryResourceNotice } from "./RepositoryResourceNotice";
 import { PersonName } from "./People";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +66,7 @@ type LaunchDraft = {
   collaborators?: string[];
   ticket: string;
   baseline: string;
+  productVersion?: string;
   lane: string;
   repairRounds: string;
   taskInstructions?: string;
@@ -360,6 +362,7 @@ export function LaunchWorkspace({
   // 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
   // 不让模型开工后再逐项来问(用户 2026-08-19 拍板,基线默认 master)。
   const [ticket, setTicket] = useState(validDraft?.ticket ?? "");
+  const [productVersion, setProductVersion] = useState(validDraft?.productVersion ?? "");
   const [baseline, setBaseline] = useState(
     validDraft?.baseline ?? savedPreferences?.baseline ?? "");
   // 交付方式下单就定(用户拍板:不让 agent 再问一遍);选项与默认值
@@ -670,6 +673,7 @@ export function LaunchWorkspace({
     collaborators,
     ticket,
     baseline,
+    productVersion,
     lane,
     repairRounds,
     taskInstructions,
@@ -698,7 +702,7 @@ export function LaunchWorkspace({
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
     collaborators, ticket,
-    baseline, lane, repairRounds, taskInstructions,
+    baseline, productVersion, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
     requirementBundleDraftName,
@@ -884,6 +888,7 @@ export function LaunchWorkspace({
             ? repositoryTickets.find((_, index) => repos[index]?.trim())
             : ticket) ?? "").trim() || undefined,
           baseline: baseline.trim() || undefined,
+          productVersion,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
           // 精确工作流与自由补充不叠加，避免用户选了一个方案，Agent
@@ -1263,13 +1268,9 @@ export function LaunchWorkspace({
                         </label>
                       )}
                       {options.baseline.enabled && (
-                        <label className="block">
-                          <span className={FIELD_LABEL}>基线分支（必填）</span>
-                          <Input type="text" value={baseline}
-                            onChange={(event) => changeBaseline(event.target.value)}
-                            placeholder={options.baseline.default} spellCheck={false}
-                            required />
-                        </label>
+                        <ProductVersionPicker value={productVersion} baseline={baseline}
+                          onLegacyBranch={changeBaseline}
+                          onChange={(version, branch) => { setProductVersion(version); changeBaseline(branch); }} />
                       )}
                     </div>
                   )}

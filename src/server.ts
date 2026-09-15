@@ -1,3 +1,4 @@
+import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
@@ -8,8 +9,8 @@ import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
  *   GET  /memory-insights                               → 任务记忆总览(只读,可见不可管)
  *   GET  /memory-insights/:mid                          → 一条记忆的原文(归档的也能读)
  *   GET  /business-modules                              → 业务模块、Owner 与知识目录
- *   POST /business-modules                              → 管理员创建并指定 Owner
- *   PUT  /business-modules/:id                          → 管理模块(转移 Owner 仅管理员)
+ *   POST /business-modules                              → 团队成员创建模块
+ *   PUT  /business-modules/:id                          → 团队成员维护模块与仓库映射
  *   GET/PUT/DELETE /business-modules/:id/assets/:asset  → 查看/发布/归档模块知识
  *   GET  /skills                                        → Skill 货架 + 操作留痕
  *   GET  /skills/:dir/versions                          → 归档版本痕(可回退点)
@@ -1057,6 +1058,7 @@ export function createTaskServer(
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
+        || parts[0] === "product-versions"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates"
         || parts[0] === "workflow-assets"
@@ -1222,7 +1224,7 @@ export function createTaskServer(
                 !canManageBusinessModule(module, viewer?.username, admin));
               if (unauthorized.length) {
                 return json(response, 403,
-                  { error: `只有全部关联模块的 Owner、维护者或管理员可以发布这项业务知识；无权限模块：${unauthorized.map((module) => module.name).join("、")}` });
+                  { error: `请登录后发布业务知识；无权限模块：${unauthorized.map((module) => module.name).join("、")}` });
               }
               const assetId = String(body.asset_id ?? candidate.id);
               const publicationScopes = modules.map((module) => ({
@@ -1397,9 +1399,30 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知许愿墙接口" });
       }
-      // 业务模块是一等知识范围：管理员建模块/转移 Owner，Owner 与维护
-      // 者管理本模块资产；团队成员可读目录与正文。它不从任务 docs 或
-      // 仓库目录自动推断。
+      // 配置中心与环境台账一样，由所有已登录成员维护。
+      if (parts[0] === "product-versions") {
+        try {
+          const dataDir = service.options.dataDir;
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200, { versions: listProductVersions(dataDir) });
+          }
+          if ((request.method === "POST" && parts.length === 1)
+              || (request.method === "PUT" && parts.length === 2)) {
+            const body = await readBody(request);
+            return json(response, request.method === "POST" ? 201 : 200,
+              saveProductVersion(dataDir, { version: body.version, branch: body.branch,
+                id: parts.length === 2 ? decodeURIComponent(parts[1]) : undefined }));
+          }
+          if (request.method === "DELETE" && parts.length === 2) {
+            deleteProductVersion(dataDir, decodeURIComponent(parts[1]));
+            return json(response, 200, { ok: true });
+          }
+          return json(response, 405, { error: "不支持的配置操作" });
+        } catch (error) { return json(response, 400, { error: humanError(error) }); }
+      }
+
+      // 业务模块是配置中心的统一目录；全员维护映射及团队资产中的知识。
+      // 旧 Owner 字段仅保留历史元数据，不承担权限判定。
       if (parts[0] === "business-modules") {
         const dataDir = service.options.dataDir;
         const operator = viewer?.username ?? "本地部署";
@@ -1429,12 +1452,8 @@ export function createTaskServer(
             });
           }
           if (request.method === "POST" && parts.length === 1) {
-            if (!admin) {
-              return json(response, 403,
-                { error: "只有管理员可以创建业务模块" });
-            }
             const body = await readBody(request);
-            const owner = String(body.owner ?? "");
+            const owner = String(body.owner ?? viewer?.username ?? "local");
             const maintainers = Array.isArray(body.maintainers)
               ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
@@ -1458,14 +1477,9 @@ export function createTaskServer(
             if (!canManageBusinessModule(
                 current, viewer?.username, admin)) {
               return json(response, 403,
-                { error: "只有模块 Owner、维护者或管理员可以修改模块" });
+                { error: "请登录后修改模块" });
             }
             const body = await readBody(request);
-            if (body.status !== undefined
-                && String(body.status) !== current.status && !admin) {
-              return json(response, 403,
-                { error: "只有管理员可以归档或重新启用业务模块" });
-            }
             const owner = body.owner === undefined
               ? current.owner : String(body.owner);
             const maintainers = body.maintainers === undefined
@@ -1485,7 +1499,7 @@ export function createTaskServer(
                     ? body.repositories.map(String) : [],
                 status: body.status === undefined
                   ? undefined : String(body.status) as "active" | "archived",
-              }, operator, admin)));
+              }, operator)));
           }
           if (request.method === "GET" && parts.length === 4
               && parts[2] === "assets") {
@@ -1506,7 +1520,7 @@ export function createTaskServer(
             if (!canManageBusinessModule(
                 current, viewer?.username, admin)) {
               return json(response, 403,
-                { error: "只有模块 Owner、维护者或管理员可以发布知识" });
+                { error: "请登录后发布知识" });
             }
             const body = await readBody(request);
             return json(response, 200, view(publishBusinessKnowledgeAsset(
@@ -1530,7 +1544,7 @@ export function createTaskServer(
             if (!canManageBusinessModule(
                 current, viewer?.username, admin)) {
               return json(response, 403,
-                { error: "只有模块 Owner、维护者或管理员可以归档知识" });
+                { error: "请登录后归档知识" });
             }
             return json(response, 200, view(archiveBusinessKnowledgeAsset(
               dataDir, current.id, decodeURIComponent(parts[3]), operator)));
@@ -1942,7 +1956,8 @@ export function createTaskServer(
         const issuesRoute = parts[0] === "issues";
         // 环境管理页签深链(#149):API 判别式放行的 text/html GET 在这里接住交给 React。
         const environmentsRoute = parts[0] === "environments" && parts.length === 1;
-        const appRoute = workspaceRoute || helpRoute || issuesRoute || environmentsRoute;
+        const appRoute = workspaceRoute || helpRoute || issuesRoute || environmentsRoute
+          || (parts[0] === "configuration" && parts.length === 1);
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
@@ -2061,8 +2076,7 @@ export function createTaskServer(
           : undefined;
         const collaborators = Array.isArray(body.collaborators)
           ? body.collaborators.map(String) : undefined;
-        const baseline = body.baseline === undefined
-          ? undefined : String(body.baseline);
+        const baseline = body.baseline === undefined ? undefined : String(body.baseline);
         const model = body.model
           ? {
               provider: String((body.model as { provider?: unknown })
@@ -2240,7 +2254,7 @@ export function createTaskServer(
               requirementAssets: requirementBundle?.assets,
               lane, ticket, repositoryTickets, repositoryAssignees,
               collaborators,
-              baseline, model,
+              baseline, productVersion: body.product_version === undefined ? undefined : String(body.product_version), model,
               repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,

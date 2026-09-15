@@ -1,3 +1,4 @@
+import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { applyEarlyStart, previewEarlyStart, refreshDependencyQueue, concurrentTicketConflict, scheduledGraphDependencies, runnableQueueIndex, dependencyScheduleContext, type DependencyAdjustment, type EarlyStartInput } from "./dependencyScheduling.ts";
@@ -1075,6 +1076,7 @@ export interface TaskSummary {
   ticket?: string;
   /** 基线分支,默认 master(同一次拍板)。 */
   baseline?: string;
+  product_version?: string;
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
@@ -7250,6 +7252,7 @@ export class TaskService {
       collaboratorsTrusted?: boolean;
       /** 基线分支,默认 master(同一次拍板)。 */
       baseline?: string;
+      productVersion?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
       /** 任务级低优先级执行补充；详细需求仍放 requirement。编译进
@@ -7377,7 +7380,7 @@ export class TaskService {
     if (legacyTicket && /\s/.test(legacyTicket)) {
       throw new Error("单号不能含空白字符");
     }
-    const baseline = (options.baseline ?? "").trim()
+    const baseline = (resolveProductBranch(this.options.dataDir, options.productVersion, options.baseline) ?? "").trim()
       || (this.options.host ? "master" : undefined);
     if (baseline && /\s/.test(baseline)) {
       throw new Error("基线分支不能含空白字符");
@@ -7917,6 +7920,7 @@ export class TaskService {
       lane: requestedLane ?? laneChoices[0],
       ticket,
       baseline,
+      product_version: options.productVersion,
       model_choice: options.model,
       repair_rounds: options.repairRounds,
       repository_supplement_resolved: options.repositorySupplementResolved,
@@ -7970,7 +7974,8 @@ export class TaskService {
         })),
         lane: requestedLane ?? null,
         ticket: legacyTicket ?? null,
-        baseline: options.baseline?.trim() || null,
+        baseline: baseline ?? null,
+        product_version: options.productVersion ?? null,
         model: options.model ?? null,
         repair_rounds: {
           provided: options.repairRounds !== undefined,

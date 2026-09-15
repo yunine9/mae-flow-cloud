@@ -275,12 +275,12 @@ export function listBusinessModules(dataDir: string): BusinessModuleCatalog {
 }
 
 export function canManageBusinessModule(
-  module: BusinessModule,
+  _module: BusinessModule,
   username: string | undefined,
   admin = false,
 ): boolean {
-  return admin || !!username
-    && (module.owner === username || module.maintainers.includes(username));
+  // 保留 Owner 元数据兼容历史记录；它不再是团队配置/知识的权限边界。
+  return admin || !!username;
 }
 
 export function createBusinessModule(
@@ -334,23 +334,14 @@ export function updateBusinessModule(
     status?: BusinessModuleStatus;
   },
   operator: string,
-  allowOwnerChange = false,
-  allowStatusChange = allowOwnerChange,
 ): BusinessModule {
   const current = readBusinessModule(dataDir, id);
-  if (patch.owner !== undefined && patch.owner.trim() !== current.owner
-      && !allowOwnerChange) {
-    throw new BusinessModuleError("只有管理员可以转移模块 Owner");
-  }
   const owner = patch.owner === undefined ? current.owner
     : required(patch.owner, "Owner", 48);
   if (!USERNAME.test(owner)) throw new BusinessModuleError("Owner 账号格式不合法");
   const status = patch.status ?? current.status;
   if (!["active", "archived"].includes(status)) {
     throw new BusinessModuleError("模块状态只能是 active 或 archived");
-  }
-  if (status !== current.status && !allowStatusChange) {
-    throw new BusinessModuleError("只有管理员可以归档或重新启用业务模块");
   }
   const now = new Date().toISOString();
   const updated: BusinessModule = {

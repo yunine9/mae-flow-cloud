@@ -961,6 +961,7 @@ export interface TaskSummary {
   feedback_error?: string;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
+  product_version?: string;
   /** 新任务复用时沿用的交付方式与修复预算。 */
   lane?: string;
   repair_rounds?: number;
@@ -1548,8 +1549,8 @@ export async function createBusinessModule(input: {
   id: string;
   name: string;
   description: string;
-  owner: string;
-  maintainers: string[];
+  owner?: string;
+  maintainers?: string[];
   repositories: string[];
 }): Promise<BusinessModule> {
   const response = await fetch("/business-modules", {
@@ -2266,6 +2267,7 @@ export async function createTask(
     lane?: string;
     ticket?: string;
     baseline?: string;
+    productVersion?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
     taskInstructions?: string;
@@ -2306,6 +2308,7 @@ export async function createTask(
       lane: extras?.lane?.trim() || undefined,
       ticket: extras?.ticket || undefined,
       baseline: extras?.baseline || undefined,
+      product_version: extras?.productVersion || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
       task_instructions: extras?.taskInstructions?.trim() || undefined,
@@ -3762,6 +3765,7 @@ export interface IssueSummary {
   module_id?: string;
   /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
   baseline?: string;
+  product_version?: string;
   /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
    * root_credential_ref 只在独立 root 密码显式存在时在场(ADR-0020:继承
    * 后台密码的会话不落独立凭据)。environment_source_ip 在场=本环境来自
@@ -4034,6 +4038,7 @@ export function createIssue(input: {
   /** 多仓登记(模块带仓是常态):全部关联仓彼此平等,哪些交付由 AI 裁决。 */
   repo_urls?: string[];
   baseline?: string;
+  product_version?: string;
   module?: string;
   /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。
    * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
@@ -4920,4 +4925,17 @@ export async function startTaskEarly(taskId: string, input: EarlyStartInput): Pr
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
+}
+
+export interface ProductVersion { id: string; version: string; branch: string }
+export function productVersionRequest(method?: "GET"): Promise<{ versions: ProductVersion[] }>;
+export function productVersionRequest(method: "POST" | "PUT", row: Partial<ProductVersion>): Promise<ProductVersion>;
+export function productVersionRequest(method: "DELETE", row: Partial<ProductVersion>): Promise<{ ok: true }>;
+export async function productVersionRequest(method = "GET", row?: Partial<ProductVersion>): Promise<unknown> {
+  const response = await fetch(`/product-versions${row?.id ? `/${encodeURIComponent(row.id)}` : ""}`, {
+    method, headers: { "content-type": "application/json" },
+    ...(method !== "GET" && method !== "DELETE" ? { body: JSON.stringify(row) } : {}),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }

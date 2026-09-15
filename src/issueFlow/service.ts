@@ -1,3 +1,4 @@
+import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "../auxiliarySessions.ts";
 import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
@@ -462,6 +463,7 @@ export interface IssueCreateInput {
    * 别名取首个,仓彼此平等。 */
   repoUrls?: string[];
   baseline?: string;
+  productVersion?: string;
   /** 业务模块自由文本标签(仅展示/报告引用,不承载判定)。 */
   module?: string;
   /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。 */
@@ -1208,6 +1210,7 @@ export class IssueFlowService {
   }
 
   create(input: IssueCreateInput): IssueSummary {
+    const baseline = resolveProductBranch(this.options.dataDir, input.productVersion, input.baseline);
     const account = input.account?.trim();
     if (!account) throw new IssueControlError("缺少归属账号(工号)");
     const title = input.title?.trim() ?? "";
@@ -1325,7 +1328,8 @@ export class IssueFlowService {
       ...(repoUrls.length
         ? { repo_url: repoUrls[0], repo_urls: repoUrls }
         : {}),
-      ...(input.baseline?.trim() ? { baseline: input.baseline.trim() } : {}),
+      ...(baseline?.trim() ? { baseline: baseline.trim() } : {}),
+      ...(input.productVersion ? { product_version: input.productVersion } : {}),
       ...(moduleName ? { module: moduleName } : {}),
       ...(moduleId ? { module_id: moduleId } : {}),
       ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),

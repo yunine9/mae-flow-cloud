@@ -48,7 +48,7 @@ import {
   putPersonalPushConfirmation,
   putIssueInterventionTier,
 } from "./api";
-import { EnvironmentRegistry } from "./EnvironmentRegistry";
+import { ConfigurationCenter } from "./ConfigurationCenter";
 import { byNewest, byUrgency } from "./taskTime";
 import { orderHierarchyBy, orderTaskHierarchy, keepFamiliesTogether } from "./taskHierarchy";
 import {
@@ -210,7 +210,7 @@ function readIssueRoute(): string {
 /** 环境管理深链(/environments):台账是全局团队资源,链接可以直接发给
  * 同事,登录后落到页签本身(台账没有单条详情页,整页即深链落点)。 */
 function readEnvironmentRoute(): boolean {
-  return /^\/environments\/?$/.test(location.pathname);
+  return /^\/(?:environments|configuration)\/?$/.test(location.pathname);
 }
 
 export type WorkspaceTargetResolution =
@@ -1209,11 +1209,11 @@ export function App() {
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
       : "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
-    knowledge: { title: "团队资产", description: "管理团队通用知识、业务模块和工作流；代码仓内容始终由 Git 管理。" },
+    knowledge: { title: "团队资产", description: "管理团队通用知识、模块知识和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
-    environments: { title: "环境管理", description: "团队共用的网管环境台账：录入一次，登记与会话随时快选；密码加密保存、永不回显。" },
+    environments: { title: "配置中心", description: "统一维护环境与基础映射，供需求、问题单和团队资产直接使用。" },
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   // 问题处理域页头随子页签换文案(spec #171 评审拍板):整域的静态说明
@@ -1281,8 +1281,8 @@ export function App() {
     } else if (next === "environments") {
       // 台账深链:进页签就换地址(可复制、可后退),后退回上一视图;
       // 已在 /environments(刷新/直连)不重复压栈。
-      if (location.pathname !== "/environments") {
-        history.pushState(appHistoryState("environments"), "", "/environments");
+      if (location.pathname !== "/configuration") {
+        history.pushState(appHistoryState("environments"), "", "/configuration");
       }
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
       history.pushState(appHistoryState(next,
@@ -1345,7 +1345,7 @@ export function App() {
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
                 {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
                     管理),与团队资产同进「管理视角」组。 */}
-                <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
+                <NavButton view="environments" current={view} onSelect={selectView} label="配置中心" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -1381,7 +1381,7 @@ export function App() {
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
                     同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}
-                <NavButton view="environments" current={view} onSelect={selectView} label="环境管理" />
+                <NavButton view="environments" current={view} onSelect={selectView} label="配置中心" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -1486,7 +1486,7 @@ export function App() {
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
               onClick={() => selectTeamAssetTab("modules")}>
-              <strong>业务模块</strong><small>按业务模块整理说明和知识，Agent 干活时会参考</small>
+              <strong>模块知识</strong><small>按配置中心的模块上传和维护知识</small>
             </button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
@@ -1526,7 +1526,6 @@ export function App() {
               if (target) openArtifacts(target);
             }}
           /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
-            admin={session.role === "admin"}
             initialAsset={knowledgeFocus?.kind === "business"
               ? knowledgeFocus : undefined} />
             : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
@@ -1580,7 +1579,7 @@ export function App() {
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
-        {view === "environments" && <EnvironmentRegistry />}
+        {view === "environments" && <ConfigurationCenter />}
         {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
           <HelpCenter viewer={session}
             initialArticleId={helpArticleId}

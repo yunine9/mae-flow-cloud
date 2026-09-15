@@ -1,14 +1,9 @@
-import { PersonName } from "./People";
 import { useEffect, useRef, useState } from "react";
 import {
   archiveBusinessKnowledgeAsset,
-  createBusinessModule,
   getBusinessKnowledgeAsset,
   getBusinessModules,
-  listUsers,
   publishBusinessKnowledgeAsset,
-  updateBusinessModule,
-  type AuthUser,
   type BusinessKnowledgeAsset,
   type BusinessModule,
   type BusinessModuleCatalog,
@@ -43,84 +38,6 @@ async function sha256(content: string): Promise<string> {
     "SHA-256", new TextEncoder().encode(content));
   return [...new Uint8Array(value)]
     .map((item) => item.toString(16).padStart(2, "0")).join("");
-}
-
-function lines(value: string): string[] {
-  return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
-}
-
-function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
-  module: BusinessModule;
-  admin: boolean;
-  users: AuthUser[];
-  onSaved: (module: BusinessModule) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(module.name);
-  const [description, setDescription] = useState(module.description);
-  const [owner, setOwner] = useState(module.owner);
-  const [maintainers, setMaintainers] = useState(module.maintainers.join(", "));
-  const [repositories, setRepositories] = useState(module.repositories.join("\n"));
-  const [status, setStatus] = useState(module.status);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  return <form className="mx-4 my-3 grid content-start gap-[11px] rounded-[10px] border border-line bg-surface-2 p-3.5" onSubmit={async (event) => {
-    event.preventDefault();
-    setBusy(true); setError("");
-    try {
-      onSaved(await updateBusinessModule(module.id, {
-        name, description, owner,
-        maintainers: lines(maintainers),
-        repositories: lines(repositories),
-        ...(admin ? { status } : {}),
-      }));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "模块保存失败");
-    } finally { setBusy(false); }
-  }}>
-    <div className={FORM_GRID}>
-      <label className={LABEL}><span className={LABEL_SPAN}>模块名称</span><Input value={name}
-        onChange={(event) => setName(event.target.value)} required /></label>
-      <label className={LABEL}><span className={LABEL_SPAN}>责任人</span>
-        {admin ? <Select value={owner} name="module-owner" required
-          items={users.map((user) => ({ value: user.username, label: user.username }))}
-          onValueChange={(value) => setOwner(value ?? "")}>
-          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {users.map((user) => <SelectItem key={user.username}
-                value={user.username}>{user.username}</SelectItem>)}
-            </SelectGroup>
-          </SelectContent>
-        </Select> : <Input value={owner} disabled title="只有管理员可以转移责任人" />}
-      </label>
-    </div>
-    <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea className="min-h-24" rows={2} value={description}
-      onChange={(event) => setDescription(event.target.value)} required /></label>
-    <label className={LABEL}><span className={LABEL_SPAN}>维护者账号</span><Input value={maintainers}
-      onChange={(event) => setMaintainers(event.target.value)}
-      placeholder="多个账号用逗号分隔" /></label>
-    <label className={LABEL}><span className={LABEL_SPAN}>关联仓库</span><Textarea rows={3} value={repositories}
-      onChange={(event) => setRepositories(event.target.value)}
-      placeholder="每行一个仓库地址，用于下单时推荐，不会自动勾选" /></label>
-    {admin && <label className={LABEL}><span className={LABEL_SPAN}>模块状态</span><Select value={status}
-      items={[{ value: "active", label: "启用（可供新任务选择）" }, { value: "archived", label: "归档（历史任务保留）" }]}
-      onValueChange={(value) => setStatus((value ?? "active") as "active" | "archived")}>
-      <SelectTrigger className="w-full" aria-label="模块状态"><SelectValue /></SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          <SelectItem value="active">启用（可供新任务选择）</SelectItem>
-          <SelectItem value="archived">归档（历史任务保留）</SelectItem>
-        </SelectGroup>
-      </SelectContent>
-    </Select></label>}
-    {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
-    <div className={FORM_ACTIONS}>
-      <button type="button" className={BTN} onClick={onCancel}>取消</button>
-      <button type="submit" className={BTN_PRIMARY} disabled={busy}>
-        {busy ? "保存中…" : "保存模块"}</button>
-    </div>
-  </form>;
 }
 
 function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
@@ -209,28 +126,19 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   </form>;
 }
 
-export function BusinessModuleLibrary({ admin, initialAsset }: {
-  admin: boolean;
+export function BusinessModuleLibrary({ initialAsset }: {
   initialAsset?: BusinessAssetFocus;
 }) {
   const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
-  const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
   const [expanded, setExpanded] = useState(initialAsset?.moduleId ?? "");
-  const [editingModule, setEditingModule] = useState("");
   const [editingAsset, setEditingAsset] = useState<{
     moduleId: string; asset?: BusinessKnowledgeAsset; content?: string }>();
   const [document, setDocument] = useState<{
     moduleId: string; assetId: string; title: string; content: string;
     version: number; digest: string }>();
   const [documentLoading, setDocumentLoading] = useState("");
-  const [create, setCreate] = useState({
-    id: "", name: "", description: "", owner: "",
-    maintainers: "", repositories: "",
-  });
-  const [createBusy, setCreateBusy] = useState(false);
   const documentRequest = useRef(0);
 
   const refresh = async () => {
@@ -241,16 +149,7 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
     } finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); }, []);
-  useEffect(() => {
-    if (!admin) return;
-    void listUsers().then((result) => {
-      setUsers(result);
-      setCreate((current) => ({
-        ...current, owner: current.owner || result.find((user) =>
-          user.role === "developer")?.username || result[0]?.username || "",
-      }));
-    }).catch(() => setUsers([]));
-  }, [admin]);
+
 
   const replace = (updated: BusinessModule) => setCatalog((current) =>
     current ? { ...current, modules: current.modules.map((module) =>
@@ -319,82 +218,22 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
   return <section className="m-0 overflow-hidden rounded-[18px] border border-line bg-surface shadow-sm" aria-labelledby="business-module-library-title">
     <header className="flex items-center justify-between gap-[18px] border-b border-line bg-gradient-to-br from-surface-2 to-surface px-6 py-[21px]">
       <div className="min-w-0">
-        <h3 id="business-module-library-title" className="mt-[5px] mb-1 text-[21px] tracking-[-0.025em] text-text-strong">业务模块</h3>
-        <p className="m-0 text-sm leading-[1.55] text-muted-foreground">每个模块是一个业务抽屉：说明业务边界、关联代码仓，并管理团队沉淀的模块知识。</p>
+        <h3 id="business-module-library-title" className="mt-[5px] mb-1 text-[21px] tracking-[-0.025em] text-text-strong">模块知识</h3>
+        <p className="m-0 text-sm leading-[1.55] text-muted-foreground">在这里上传与维护模块知识；模块及代码仓映射统一从配置中心读取。</p>
       </div>
       <div className="flex flex-none items-center gap-2"><span className="text-[13px] text-faint">{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
-        {admin && <button type="button" className={BTN_PRIMARY}
-          onClick={() => setCreateOpen((open) => !open)}>
-          {createOpen ? "取消新建" : "新建业务模块"}</button>}
+        <a className={BTN} href="/configuration?tab=modules">维护模块映射</a>
         <button type="button" className={BTN} onClick={() => void refresh()} disabled={loading}>
           {loading ? "读取中…" : "刷新"}</button>
       </div>
     </header>
-
-    {createOpen && <form className="mx-4 my-3 grid content-start gap-[11px] rounded-[10px] border border-line bg-surface-2 p-3.5" onSubmit={async (event) => {
-      event.preventDefault(); setCreateBusy(true); setError("");
-      try {
-        const module = await createBusinessModule({
-          id: create.id, name: create.name, description: create.description,
-          owner: create.owner, maintainers: lines(create.maintainers),
-          repositories: lines(create.repositories),
-        });
-        setCatalog((current) => current ? {
-          ...current, modules: [...current.modules, module]
-            .sort((left, right) => left.name.localeCompare(right.name)),
-        } : current);
-        setExpanded(module.id); setCreateOpen(false);
-        setCreate({ id: "", name: "", description: "",
-          owner: create.owner, maintainers: "", repositories: "" });
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "模块创建失败");
-      } finally { setCreateBusy(false); }
-    }}>
-      <div className={FORM_GRID}>
-        <label className={LABEL}><span className={LABEL_SPAN}>模块 ID</span><Input value={create.id}
-          onChange={(event) => setCreate({ ...create, id: event.target.value })}
-          placeholder="例如 payment-core" required /></label>
-        <label className={LABEL}><span className={LABEL_SPAN}>责任人</span><Select value={create.owner} name="module-create-owner" required
-          items={[{ value: "", label: "选择现有账号" },
-            ...users.map((user) => ({ value: user.username, label: user.username }))]}
-          onValueChange={(value) => setCreate({ ...create, owner: value ?? "" })}>
-          <SelectTrigger className="w-full" aria-label="责任人"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="" disabled>选择现有账号</SelectItem>
-              {users.map((user) => <SelectItem key={user.username}
-                value={user.username}>{user.username}</SelectItem>)}
-            </SelectGroup>
-          </SelectContent>
-        </Select></label>
-      </div>
-      <label className={LABEL}><span className={LABEL_SPAN}>模块名称</span><Input value={create.name}
-        onChange={(event) => setCreate({ ...create, name: event.target.value })}
-        placeholder="例如 支付核心" required /></label>
-      <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea className="min-h-24" rows={2} value={create.description}
-        onChange={(event) => setCreate({ ...create, description: event.target.value })}
-        placeholder="说清领域概念、核心规则、流程和边界" required /></label>
-      <div className={FORM_GRID}>
-        <label className={LABEL}><span className={LABEL_SPAN}>维护者账号（可选）</span><Input value={create.maintainers}
-          onChange={(event) => setCreate({ ...create, maintainers: event.target.value })}
-          placeholder="多个账号用逗号分隔" /></label>
-        <label className={LABEL}><span className={LABEL_SPAN}>关联仓库（可选）</span><Textarea rows={2} value={create.repositories}
-          onChange={(event) => setCreate({ ...create, repositories: event.target.value })}
-          placeholder="每行一个仓库地址" /></label>
-      </div>
-      <div className={FORM_ACTIONS}>
-        <span>创建后由责任人持续管理，只有管理员能转移责任人。</span>
-        <button type="submit" className="primary" disabled={createBusy || !create.owner}>
-          {createBusy ? "创建中…" : "创建并指定责任人"}</button>
-      </div>
-    </form>}
 
     {error && <Alert variant="destructive" role="alert" className="mx-4 my-2.5">{error}</Alert>}
     {!!catalog?.warnings.length && <Alert variant="warning" className="mx-4 my-2.5">
       {catalog.warnings.join("；")}</Alert>}
     {!loading && !catalog?.modules.length && <Empty className="mx-3.5 my-3.5 border p-5.5">
       <EmptyTitle>还没有业务模块</EmptyTitle>
-      <EmptyDescription>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</EmptyDescription>
+      <EmptyDescription>先到配置中心创建模块，再在这里上传知识。所有成员均可维护。</EmptyDescription>
     </Empty>}
 
     <div className="grid">
@@ -410,7 +249,7 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
             <span className="grid min-w-0 gap-1"><span className="flex flex-wrap items-baseline gap-[7px]"><strong className="text-sm text-text-strong">{module.name}</strong><code className="text-xs text-faint">{module.id}</code>
               {module.status === "archived" && <em className="rounded bg-attention/10 px-[5px] py-px text-[13px] not-italic text-attention">已归档</em>}</span>
               <small className="truncate text-[13px] text-muted-foreground">{module.description}</small>
-              <span className="text-[13px] text-faint">Owner <PersonName account={module.owner} /> · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
+              <span className="text-[13px] text-faint">{allLiveAssets.length} 项知识 · revision {module.revision}</span>
             </span>
             <i aria-hidden className="text-[13px] not-italic text-primary">{open ? "收起" : "展开"}</i>
           </button>
@@ -422,19 +261,12 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
               {!!module.maintainers.length && <small className="text-[13px] text-faint">维护者：{module.maintainers.join("、")}</small>}
             </div>
             {module.can_manage && <div className="flex justify-end gap-[7px]">
-              <button type="button" className={BTN} onClick={() => {
-                setEditingModule(editingModule === module.id ? "" : module.id);
-                setEditingAsset(undefined);
-              }}>{editingModule === module.id ? "取消编辑" : "编辑模块"}</button>
               <button type="button" className={BTN_PRIMARY} disabled={module.status !== "active"}
                 onClick={() => {
                   setEditingAsset({ moduleId: module.id });
-                  setEditingModule(""); setDocument(undefined);
+                  setDocument(undefined);
                 }}>发布知识</button>
             </div>}
-            {editingModule === module.id && <ModuleEditor module={module}
-              admin={admin} users={users} onCancel={() => setEditingModule("")}
-              onSaved={(updated) => { replace(updated); setEditingModule(""); }} />}
             {editingAsset?.moduleId === module.id && <AssetEditor module={module}
               asset={editingAsset.asset} initialContent={editingAsset.content}
               onCancel={() => setEditingAsset(undefined)}
@@ -478,7 +310,7 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
                 </div>}
               </div>)}
               {!liveAssets.length && <Empty className="border-t rounded-none py-4.5">
-                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</Empty>}
+                还没有已发布知识。团队成员可以从一项明确、可复用的知识开始。</Empty>}
             </div>
             {document?.moduleId === module.id && <div
               id={`${knowledgeAssetElementId("business", document.moduleId,

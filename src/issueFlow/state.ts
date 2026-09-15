@@ -360,6 +360,7 @@ export interface IssueSessionState {
    * 平铺在 repo/<仓名>/,由 Agent 调 pull_repo 逐个拉取。 */
   repo_urls?: string[];
   baseline?: string;
+  product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
    * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。 */
   module_id?: string;

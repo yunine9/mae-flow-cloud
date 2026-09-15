@@ -219,7 +219,7 @@ test("绑定校验:已归档模块打回,不能绑到单号上", () => {
     owner: "dev", repositories: [origin],
   }, "tester");
   updateBusinessModule(dataDir, "old-mod", { status: "archived" },
-    "tester", false, true);
+    "tester");
   assert.throws(
     () => setDtsModuleBinding(dataDir, "DTS1", "old-mod", "a"),
     /已归档/);
