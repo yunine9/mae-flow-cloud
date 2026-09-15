@@ -129,11 +129,12 @@ export function DescriptionEditor({
   // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用
   // [&_*] 任意变体直译配方——与 #230 润色预览的 [&_img]:max-h-[200px]
   // 同一做法。
-  // 空态默认高度是表单的体感(2026-09-15 走查):描述是登记表单里预期
-  // 最长的字段,空态给 min-h-40(约 6 行),与标题等单行字段拉开层次;
-  // 输入后随内容自然长高,不封顶。
+  // 空态默认高度照 AI 润色模板估算(2026-09-15 拍板):assets/issue-prompts/
+  // polish-template.md 的标准提单渲染出来约 17 行文本 + 块间距 ≈ 500px,
+  // 空态直接给到这个高度——粘贴润色稿后框高基本不变,视觉稳定;更长的
+  // 内容长到 70vh 封顶,超出部分框内滚动,不再把整张表无限撑高。
   return <div className={cn(
-    "relative [&_.ProseMirror]:min-h-40 [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
+    "relative [&_.ProseMirror]:min-h-[500px] [&_.ProseMirror]:max-h-[70vh] [&_.ProseMirror]:overflow-y-auto [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
     "[&_p]:mb-2 [&_:last-child]:mb-0 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-2 [&_h1]:mt-2.5 [&_h2]:mt-2.5 [&_h3]:mt-2.5 [&_h1]:leading-snug [&_h2]:leading-snug [&_h3]:leading-snug",
     "[&_ul]:mb-2 [&_ol]:mb-2 [&_ul]:pl-6 [&_ol]:pl-6 [&_ul]:list-disc [&_ol]:list-decimal",
     "[&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:h-auto [&_img]:w-auto [&_img]:cursor-zoom-in [&_img]:rounded-md [&_img]:border [&_img]:border-line",
