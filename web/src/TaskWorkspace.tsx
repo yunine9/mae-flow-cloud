@@ -1910,7 +1910,7 @@ export function TaskWorkspace({
     >
       <header className="ws-head" ref={headRef}>
         <Button type="button" variant="outline" size="sm"
-          className="gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
+          className="ws-back-button gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
           aria-label="返回列表" onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden className="size-3.5"><path d="m12.5 5-5 5 5 5" /></svg>
           <span>返回列表</span>
@@ -1931,8 +1931,8 @@ export function TaskWorkspace({
               textClassName="max-[640px]:hidden">
               {statusText(task)}
             </TaskStatusBadge>
-            <Button type="button" variant="link" size="sm"
-              className="h-auto gap-0.5 px-0 text-xs text-muted-foreground hover:text-text-strong"
+            <Button type="button" variant="outline" size="sm"
+              className="gap-1"
               aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></Button>
             <WaitBadge task={task} personal={canOperate} className="max-[900px]:hidden" />
@@ -2082,7 +2082,7 @@ export function TaskWorkspace({
                     else if (value === "execution") selectWorkspaceView("execution");
                   }}>
                 <TabsList variant="line" aria-label="工作区内容"
-                    className="ws-source-switch h-auto">
+                    className="ws-source-switch h-auto justify-start">
                   {task.parent_task_id ? <>
                     {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
                         spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字

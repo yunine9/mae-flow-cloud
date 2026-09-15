@@ -307,3 +307,22 @@ test("增量浏览独立于审批卡，完整浏览保留按文件加载", () =>
   assert.match(workspace, /task.status === "waiting_for_human"[^]*needsDeliverySelection\(task.waiting\)/,
     "只读浏览不会开放交付勾选");
 });
+
+
+test("任务详情及子页使用居中弹窗，跳转入口保留按钮外观", () => {
+  const inspector = readFileSync(resolve("web/src/TaskInspector.tsx"), "utf8");
+  assert.match(inspector, /<DialogContent/);
+  assert.doesNotMatch(inspector, /SheetContent|variant="link"/);
+  assert.match(inspector, /max-h-\[calc\(100dvh-2rem\)\]/);
+  assert.match(inspector, /overflow-y-auto/);
+  assert.match(inspector, /render=\{<a href=\{task.delivery.mr_url\}/);
+});
+
+test("带文字返回按钮占独立网格，窄窗口材料工具允许换行", () => {
+  const css = readFileSync(resolve("web/src/tailwind.css"), "utf8");
+  assert.match(workspace, /className="ws-back-button /);
+  assert.match(css, /:is\(\.ws-back, \.ws-back-button\) \{ grid-area: back/);
+  assert.doesNotMatch(css, /grid-template-columns: (?:30|36)px minmax/);
+  assert.match(css, /\.ws-material-toolbar \{[^}]*flex-wrap: wrap/);
+  assert.match(workspace, /ws-source-switch h-auto justify-start/);
+});

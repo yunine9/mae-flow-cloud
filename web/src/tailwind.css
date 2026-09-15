@@ -103,9 +103,9 @@
   --color-sidebar-border: var(--line);
   --color-sidebar-ring: var(--ring);
   /* 字阶(--text-* 是 Tailwind 字号命名空间,与存量颜色 --text 无冲突) */
-  --text-xs: var(--fs-12);
-  --text-sm: var(--fs-13);
-  --text-base: var(--fs-14);
+  --text-xs: var(--fs-13);
+  --text-sm: var(--fs-14);
+  --text-base: var(--fs-15);
   --text-lg: var(--fs-17);
   --text-xl: var(--fs-20);
   --text-2xl: var(--fs-24);
@@ -325,7 +325,7 @@
   --purple-soft: var(--merge-soft);
   --font-sans: var(--font-ui);
   --mono: var(--font-mono);
-  --font-size-body: var(--fs-14);
+  --font-size-body: var(--fs-15);
   --font-size-assist: var(--fs-13);
   --font-size-dense: var(--fs-12);
   --bg: var(--main-bg);
@@ -339,8 +339,7 @@
 }
 
 :root[data-density="compact"] {
-  --fs-14: 13px;
-  --fs-15: 14px;
+  /* 紧凑仅压缩间距，正文与控件不再降字号。 */
   --lh-body: 1.5;
   --lh-read: 1.65;
   --control-h-sm: 24px;
@@ -455,7 +454,7 @@ body {
   background: var(--canvas);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: var(--fs-14);
+  font-size: var(--fs-15);
   font-weight: 400;
   line-height: var(--lh-body);
   letter-spacing: 0;
@@ -3883,7 +3882,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.task-workspace-v2 .ws-back { grid-area: back; }
+.task-workspace-v2 :is(.ws-back, .ws-back-button) { grid-area: back; justify-self: start; }
 .task-workspace-v2 .ws-identity { grid-area: identity; }
 .task-workspace-v2 .ws-head > .ws-progress { grid-area: progress; }
 .task-workspace-v2 .ws-head-controls { grid-area: controls; }
@@ -4830,7 +4829,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .workspace-studio.task-workspace-v2 { background: var(--canvas); }
 .workspace-studio.task-workspace-v2 .ws-head {
   min-height: 92px; height: auto; padding: 16px 22px;
-  grid-template-columns: 36px minmax(200px,1fr) minmax(260px,auto) auto;
+  grid-template-columns: max-content minmax(200px,1fr) minmax(260px,auto) auto;
   background: var(--surface); border-bottom: 1px solid var(--line);
   box-shadow: inset 0 4px var(--studio-chrome);
 }
@@ -5012,8 +5011,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 
 @media (max-width: 1200px) {
   .workspace-studio { --ws-side-w: clamp(340px, 36vw, 420px); --ws-document-tree-w: 156px; }
-  .workspace-studio.task-workspace-v2 .ws-head { grid-template-columns: 30px minmax(180px,1fr) auto; }
-  .workspace-studio.task-workspace-v2 .ws-progress { grid-column: 2 / -1; max-width: none; width: 100%; }
+  .workspace-studio.task-workspace-v2 .ws-head { grid-template-columns: max-content minmax(0,1fr) auto; grid-template-areas: "back identity controls" "progress progress progress"; }
+  .workspace-studio.task-workspace-v2 .ws-progress { grid-column: 1 / -1; max-width: none; width: 100%; }
   .workspace-studio.task-workspace-v2 .ws-source-switch { gap: 4px; }
   .workspace-studio .is-embedded .git-change-browser { grid-template-columns: 150px 4px minmax(0,1fr); }
 }
@@ -5554,15 +5553,15 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
 }
 .workspace-studio .ws-collaboration-head strong { color: var(--text-strong); font-weight: 600; }
 .workspace-studio.task-workspace-v2 .ws-pane-head { padding: 10px 12px; min-height: 56px; }
-.workspace-studio .ws-material-toolbar { display: flex; flex-direction: row; align-items: center; gap: 14px; width: 100%; min-width: 0; }
+.workspace-studio .ws-material-toolbar { display: flex; flex-wrap: wrap; flex-direction: row; align-items: center; gap: 14px; width: 100%; min-width: 0; }
 .workspace-studio.task-workspace-v2 .ws-source-switch {
-  display: flex; flex: 0 1 auto; flex-wrap: nowrap; width: auto; min-width: 0; gap: 2px; padding: 3px;
+  display: flex; flex: 0 1 auto; flex-wrap: nowrap; width: auto; max-width: 100%; min-width: 0; gap: 2px; padding: 3px;
   border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); overflow-x: auto; scrollbar-width: thin;
 }
 .workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"] {
   position: relative; flex: none; height: 30px; margin: 0; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); box-shadow: none;
-  font-size: 12px; font-weight: 500; line-height: 1.4; white-space: nowrap;
+  font-size: var(--fs-14); font-weight: 500; line-height: 1.4; white-space: nowrap;
 }
 .workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"]::before,
 .workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"]::after { display: none; }
@@ -5575,7 +5574,7 @@ body:has(.workspace-studio) .wish-quick-trigger { display: none; }
   background: color-mix(in srgb, var(--muted) 8%, transparent); color: var(--muted); font: 500 10px/1 var(--font-ui); font-variant-numeric: tabular-nums;
 }
 .workspace-studio.task-workspace-v2 .ws-source-switch > button[role="tab"].on i { color: var(--accent); background: var(--accent-soft); }
-.workspace-studio .ws-material-tools { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; padding-left: 12px; border-left: 1px solid var(--line); }
+.workspace-studio .ws-material-tools { display: flex; flex: none; flex-wrap: wrap; max-width: 100%; align-items: center; gap: 6px; margin-left: auto; padding-left: 12px; border-left: 1px solid var(--line); }
 .workspace-studio.task-workspace-v2 .ws-material-tools > button {
   display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 10px;
   border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); box-shadow: var(--shadow-control);
