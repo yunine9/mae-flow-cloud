@@ -1654,18 +1654,15 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
     /text-primary underline underline-offset-2 break-all/);
 });
 
-test("DTS 勾选浮动发起条:勾选浮现粘底,发起与顶部同轨(2026-09-14 设计审查 03)", () => {
-  // 勾选数 > 0 才浮现,粘性吸底;计数、清空、发起同条。
-  assert.match(registration,
-    /selected\.length > 0 && <div className="sticky bottom-3 z-20/);
-  assert.match(registration, /已选 <b>\{selected\.length\}<\/b> 张/);
-  assert.match(registration, /onClick=\{\(\) => setSelected\(\[\]\)\}\s*>\s*清空选择/);
-  // 浮动条发起钮与顶部按钮同一套:同一 launch、同一 busy,文案与说明
-  // 一处定义(launchTitle/launchLabel)两处消费——审查改锚:不再钉
-  // 逐字双份的文案形状。
+test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026-09-15)", () => {
+  // 浮动发起条(设计审查 03)与顶部钮双入口被判冗余退役:发起只留
+  // 顶部一枚,未勾选时置灰但常驻——可发现性靠它常在,不靠浮现。
+  assert.doesNotMatch(registration, /sticky bottom-3/);
+  assert.doesNotMatch(registration, /清空选择/);
+  // 文案与说明一处定义、单点消费:发起钮全页仅一枚,锚计数防双入口回潮。
   assert.match(registration, /const launchTitle = selected\.length > 1/);
-  assert.equal((registration.match(/title=\{launchTitle\}/g) ?? []).length, 2,
-    "顶部与浮动条各一枚发起钮 title");
-  assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 2,
-    "顶部与浮动条各一枚发起钮文案");
+  assert.equal((registration.match(/title=\{launchTitle\}/g) ?? []).length, 1,
+    "发起钮仅顶部一枚");
+  assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 1,
+    "发起钮文案仅顶部一处");
 });
