@@ -245,7 +245,6 @@ function ManualRegister({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [imageUploading, setImageUploading] = useState(false);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -339,7 +338,6 @@ function ManualRegister({
   // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
   // ticketImages 同款架构红线)。
   async function uploadIssueFile(file: File): Promise<string> {
-    setImageUploading(true);
     try {
       const result = await uploadIssueImage(file);
       return result.path;
@@ -348,8 +346,6 @@ function ManualRegister({
         String(reason instanceof Error ? reason.message : reason)}`;
       onError(message);
       throw reason;
-    } finally {
-      setImageUploading(false);
     }
   }
 
@@ -483,8 +479,9 @@ function ManualRegister({
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+          {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
+              页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground" role="status">截图上传中…</span>}
             {/* 一键复制:AI 润色稿替换进来或手写完,想带走(贴工单/飞书)
                 都不用手选全选;空描述不可点。 */}
             <CopyDescriptionButton markdown={description}

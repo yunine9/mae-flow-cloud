@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 /**
  * 登记描述所见即所得编辑器(#184 票2):milkdown(ProseMirror 内核)
  * 的命令式封装——单面渲染,输入即所见,截图粘贴/拖拽后原地显示缩略。
@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
  * (#184 拍板:不写编辑器插件,红色只出现在自有渲染面)。
  */
 import { Editor, editorViewCtx, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
+import { Loader2 } from "lucide-react";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
@@ -56,6 +57,18 @@ export function DescriptionEditor({
   const [empty, setEmpty] = useState(!value.trim());
   // 灯箱(#184 拍板方案1):编辑区内图片限高成缩略,点击看原图。
   const [zoom, setZoom] = useState<string | null>(null);
+  // 上传进行态:粘贴到缩略图原地出现之间有网络往返,无反馈会让人以为
+  // 没粘上(2026-09-15 用户实测)。挂编辑器容器右上角浮层,比页脚静
+  // 文案更显眼;上传插件通路与右键复制兜底共用计数,并发不互踩。
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const trackUpload = useCallback(async (file: File): Promise<string> => {
+    setPendingUploads((count) => count + 1);
+    try {
+      return await uploadRef.current(file);
+    } finally {
+      setPendingUploads((count) => Math.max(0, count - 1));
+    }
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -77,7 +90,7 @@ export function DescriptionEditor({
             const nodes = [];
             for (const file of Array.from(files)) {
               try {
-                const ref = await uploadRef.current(file);
+                const ref = await trackUpload(file);
                 const node = schema.nodes.image?.createAndFill?.({
                   src: issueImageUrl(ref), alt: "截图",
                 });
@@ -154,7 +167,7 @@ export function DescriptionEditor({
             return undefined;
           }
           // 上传失败由上传钩子自行上报,这里不代发第二遍。
-          return uploadRef.current(file);
+          return trackUpload(file);
         })
         .then((ref) => {
           if (!ref) return;
@@ -201,6 +214,10 @@ export function DescriptionEditor({
         }
       }}>
     </div>
+    {pendingUploads > 0 && <span role="status"
+      className="absolute right-2 top-2 z-10 flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden />截图上传中…
+    </span>}
     {empty && placeholderText
       && <span className="pointer-events-none absolute left-[11px] top-[9px] text-sm text-faint" aria-hidden="true">
         {placeholderText}
