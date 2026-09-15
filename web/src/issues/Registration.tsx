@@ -25,7 +25,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ChevronRight, Columns3, RotateCw, Sparkles } from "lucide-react";
+import { Check, ChevronRight, Columns3, Copy, RotateCw, Sparkles } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -49,6 +49,7 @@ import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { Markdown } from "../markdown";
 import { DescriptionEditor } from "./DescriptionEditor";
+import { copyIssueDescription } from "./copyIssueDescription";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
@@ -101,6 +102,42 @@ function repoLabel(url: string): string {
   return last.replace(/\.git$/i, "") || url;
 }
 
+/** 描述一键复制(登记侧出站口):写剪贴板双格式(纯文本 markdown 原文
+ * + 渲染 HTML,截图内联 data URL)——富文本框直贴得排版与截图,纯文本
+ * 框得原文。状态自持:成功/失败各 2 秒回落,失败可直接重试。 */
+function CopyDescriptionButton({ markdown, disabled, variant, size, className }: {
+  markdown: string;
+  disabled?: boolean;
+  variant: "ghost" | "outline";
+  size: "xs" | "sm";
+  className?: string;
+}) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  useEffect(() => {
+    if (state !== "done" && state !== "error") return;
+    const timer = setTimeout(() => setState("idle"), 2000);
+    return () => clearTimeout(timer);
+  }, [state]);
+  async function copy() {
+    setState("busy");
+    try {
+      await copyIssueDescription(markdown);
+      setState("done");
+    } catch {
+      setState("error");
+    }
+  }
+  return <Button type="button" variant={variant} size={size}
+    className={className}
+    disabled={disabled || state === "busy"}
+    title="复制描述:贴进飞书/Word 等富文本框保留排版与截图,贴进纯文本框是 Markdown 原文"
+    onClick={() => void copy()}>
+    {state === "done" ? <Check aria-hidden /> : <Copy aria-hidden />}
+    {state === "busy" ? "复制中…" : state === "done" ? "已复制"
+      : state === "error" ? "复制失败" : "复制"}
+  </Button>;
+}
+
 /** 名下进行中会话按单查重的唯一口径(「已发起」词条,CONTEXT.md):
  * 同单号且会话未到终态(归档/取消/失败)。发起前查重与列表的发起
  * 状态列/勾选禁用/默认过滤全走这一处——列上说"已发起"当且仅当此刻
@@ -148,7 +185,8 @@ export function IssueRegistration({
     hidden={!visible}>
     <div hidden={panel !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
-        onNavigateProfile={onNavigateProfile} />
+        onNavigateProfile={onNavigateProfile}
+        active={visible && panel === "manual"} />
     </div>
     <div hidden={panel !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
@@ -157,20 +195,56 @@ export function IssueRegistration({
   </section>;
 }
 
+/** 润色稿驻留(ADR-0029):挂起稿(已生成、未确认/未放弃)按用户名存
+ * sessionStorage——顶层页签切换会卸载整个看板,驻留在组件外才挺得过;
+ * 生命周期=浏览器页签,关了即清,刷新白送存活(请求进行中刷新救不了,
+ * 页面卸载杀请求)。失败回执不驻留:失败即逝,回来重按一次。 */
+function polishKey(username: string): string {
+  return `mae-flow:issue:polish:${username}`;
+}
+
+function readStoredPolish(username: string): IssuePolishResult | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(polishKey(username)) ?? "null");
+  } catch { return null; }
+}
+
+function storePolish(username: string, result: IssuePolishResult): void {
+  try {
+    sessionStorage.setItem(polishKey(username), JSON.stringify(result));
+  } catch { /* 驻留是旁路,存不进就算了 */ }
+}
+
+function clearStoredPolish(username: string): void {
+  try { sessionStorage.removeItem(polishKey(username)); } catch { /* 同上 */ }
+}
+
+/** 在飞润色登记(ADR-0029):切走再切回是重挂——新实例的 polishing 从
+ * false 起步,旧闭包的 setState 是空操作。把在飞请求记在组件外,重挂时
+ * 恢复「润色中」并把迟到的结果接给当前实例;被新请求顶替的旧结果不再
+ * 落账(最新胜出)。 */
+const inflightPolish = new Map<string, {
+  request: Promise<IssuePolishResult>;
+  superseded: boolean;
+}>();
+
 function ManualRegister({
   viewer,
   onCreated,
   onError,
   onNavigateProfile,
+  active,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
+  /** 润色确认弹窗的渲染门(ADR-0029):整域可见且落在 manual 面板。
+   * 人不在登记页时挂起稿只驻留不弹,切回瞬间弹回。 */
+  active: boolean;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [imageUploading, setImageUploading] = useState(false);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -186,10 +260,15 @@ function ManualRegister({
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
   const [busy, setBusy] = useState(false);
   // AI 润色(#184):润色请求进行态 + 确认弹窗的润色稿(服务端不落库,
-  // 放弃即丢弃)。建议标题在弹窗内可改,替换时随描述一起写回。
+  // 放弃即丢弃;挂起稿驻留 sessionStorage,ADR-0029)。建议标题在弹窗内
+  // 可改,替换时随描述一起写回。
   const [polishing, setPolishing] = useState(false);
-  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(null);
-  const [adoptTitle, setAdoptTitle] = useState("");
+  // 懒初始化从驻留读回(ADR-0029):顶层页签切换卸载看板后回来,弹窗
+  // 随面板可见即刻弹回。
+  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(
+    () => readStoredPolish(viewer.username));
+  const [adoptTitle, setAdoptTitle] = useState(
+    () => readStoredPolish(viewer.username)?.title ?? "");
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
@@ -234,12 +313,31 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
 
+  // 重挂接续(ADR-0029):上一实例的在飞润色由这里接回——恢复「润色中」
+  // 灰化,结果到达时落驻留并回填当前实例,弹窗随渲染门弹出。失败即逝
+  // (ADR-0029 边界):只恢复按钮,不补报错。
+  useEffect(() => {
+    const entry = inflightPolish.get(viewer.username);
+    if (!entry || entry.superseded) return;
+    setPolishing(true);
+    let alive = true;
+    entry.request
+      .then((result) => {
+        if (!alive || entry.superseded) return;
+        storePolish(viewer.username, result);
+        setAdoptTitle(result.title);
+        setPolishResult(result);
+      })
+      .catch(() => { /* 失败即逝 */ })
+      .finally(() => { if (alive) setPolishing(false); });
+    return () => { alive = false; };
+  }, [viewer.username]);
+
   // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
   // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
   // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
   // ticketImages 同款架构红线)。
   async function uploadIssueFile(file: File): Promise<string> {
-    setImageUploading(true);
     try {
       const result = await uploadIssueImage(file);
       return result.path;
@@ -248,8 +346,6 @@ function ManualRegister({
         String(reason instanceof Error ? reason.message : reason)}`;
       onError(message);
       throw reason;
-    } finally {
-      setImageUploading(false);
     }
   }
 
@@ -279,25 +375,53 @@ function ManualRegister({
   }
 
   /** AI 润色(#184):把随意的 标题+描述 整理成标准提单格式。识图观察由
-   * 服务端组装(截图内容补充进润色稿);结果只进确认弹窗——替换前
-   * 原稿一动不动。 */
+   * 服务端组装(截图内容补充进润色稿);结果进确认弹窗并落驻留
+   * (ADR-0029)——替换前原稿一动不动。 */
   async function polish() {
     if (polishing || !description.trim()) return;
+    // 非托管图片引用当场指路(2026-09-15 实测):staging 之外的图——修复
+    // 上线前粘贴的旧草稿、拖拽进来的外部图——识图拿不到、预览也解析
+    // 不了,模型只会交回全占位模板加破图;拦在调用前把出路说清。
+    const unmanagedImage =
+      /!\[[^\]]*\]\((?!issue-images\/)[^)\s]+\)/.exec(description);
+    if (unmanagedImage) {
+      onError("描述里有非平台托管的图片引用,润色与识图都读不到它:把这张图删掉,重新用截图粘贴(或右键复制图像)后再点润色");
+      return;
+    }
     setPolishing(true);
+    const prior = inflightPolish.get(viewer.username);
+    if (prior) prior.superseded = true;
+    const request = polishIssueDescription({
+      title: title.trim(),
+      description,
+      ...(selectedModule ? { module: selectedModule.name } : {}),
+      ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
+    });
+    const entry = { request, superseded: false };
+    inflightPolish.set(viewer.username, entry);
     try {
-      const result = await polishIssueDescription({
-        title: title.trim(),
-        description,
-        ...(selectedModule ? { module: selectedModule.name } : {}),
-        ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
-      });
-      setAdoptTitle(result.title);
-      setPolishResult(result);
+      const result = await request;
+      if (!entry.superseded) {
+        // 先落驻留再回填(ADR-0029):人已切到顶层页签时组件已卸载,
+        // setState 是空操作,驻留必须自己落地,回来才读得回。
+        storePolish(viewer.username, result);
+        setAdoptTitle(result.title);
+        setPolishResult(result);
+      }
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
     } finally {
+      if (inflightPolish.get(viewer.username) === entry) {
+        inflightPolish.delete(viewer.username);
+      }
       setPolishing(false);
     }
+  }
+
+  /** 弃稿:关弹窗(Esc/遮罩)与「放弃」同路,驻留同步清(ADR-0029)。 */
+  function discardPolish() {
+    clearStoredPolish(viewer.username);
+    setPolishResult(null);
   }
 
   /** 弹窗里「替换」:标题(可改)与描述一起写回;「放弃」只关弹窗。 */
@@ -305,7 +429,7 @@ function ManualRegister({
     if (!polishResult) return;
     if (adoptTitle.trim()) setTitle(adoptTitle.trim());
     setDescription(polishResult.description);
-    setPolishResult(null);
+    discardPolish();
   }
 
   async function submit(event: React.FormEvent) {
@@ -364,8 +488,13 @@ function ManualRegister({
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
             placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+          {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
+              页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {imageUploading && <span className="mr-auto px-2 py-1 text-xs text-muted-foreground" role="status">截图上传中…</span>}
+            {/* 一键复制:AI 润色稿替换进来或手写完,想带走(贴工单/飞书)
+                都不用手选全选;空描述不可点。 */}
+            <CopyDescriptionButton markdown={description}
+              disabled={!description.trim()} variant="ghost" size="xs" />
             {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
             <Button type="button" variant="ghost" size="xs"
               disabled={!description.trim() || polishing}
@@ -459,16 +588,20 @@ function ManualRegister({
       </Button>
     </div>
     {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
-        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。
+        「待补充」提示页面没采集到的信息,不编造(两侧渲染面均原生
+        markdown,2026-09-15 拍板)。
+        渲染门跟面板可见性走(ADR-0029):portal 到 body 的弹窗拦不住
+        父级 hidden,人不在登记页时不 gate 会跨页签跳出来;切回即弹。
+        换面板/切页签收起弹窗不清稿,弃稿只认显式动作。
         (Dialog 本体是原语,不动;#230 只把弹窗周边的皮肤类换工具类。) */}
-    {polishResult && <Dialog open onOpenChange={(open) => {
-      if (!open) setPolishResult(null);
+    {active && polishResult && <Dialog open onOpenChange={(open) => {
+      if (!open) discardPolish();
     }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>AI 润色预览</DialogTitle>
           <DialogDescription>
-            核对润色稿后选择替换或放弃;红色「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
+            核对润色稿后选择替换或放弃;「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
           </DialogDescription>
         </DialogHeader>
         {polishResult.vision_note && <p className="issue-polish-note m-0 rounded-lg border border-attention/35 bg-[color-mix(in_srgb,var(--attention)_9%,var(--surface-muted))] px-2.5 py-2 text-xs text-attention" role="alert">
@@ -484,8 +617,12 @@ function ManualRegister({
             resolveImage={(path) => issueImageUrl(path)} />
         </div>
         <DialogFooter>
+          {/* 复制与「放弃/替换」不在一条决策线上:可能只是要把润色稿带去
+              别处提单,不落本仓——mr-auto 与决策钮拉开成两组。 */}
+          <CopyDescriptionButton markdown={polishResult.description}
+            variant="outline" size="sm" className="sm:mr-auto" />
           <Button type="button" variant="outline" size="sm"
-            onClick={() => setPolishResult(null)}>放弃</Button>
+            onClick={discardPolish}>放弃</Button>
           <Button type="button" size="sm" onClick={adoptPolish}>
             替换原稿
           </Button>
@@ -871,8 +1008,9 @@ function DtsRegister({
     }
   }
 
-  /** 发起钮文案与说明一处定义,顶部工具栏与浮动发起条两处消费(设计
-   * 审查 04 复审:同一动作的措辞不再逐字双份,改一处两处生效)。 */
+  /** 发起钮文案与说明一处定义,顶部工具栏单点消费。浮动发起条(2026-09-14
+   * 设计审查 03)与顶部钮双入口被判冗余,2026-09-15 退役:发起只留顶部
+   * 一枚,未勾选时置灰但常驻——可发现性靠它常在,不靠浮现。 */
   const launchTitle = selected.length > 1
     ? `将逐张发起 ${selected.length} 个独立工作流` : undefined;
   const launchLabel = busy ? "发起中…"
@@ -1239,27 +1377,6 @@ function DtsRegister({
             </TableBody>
           </Table>
         </div>}
-      {/* 浮动发起条(2026-09-14 设计审查 03):勾选在行里,发起在顶部
-          ——长列表勾到深处,发起与清空都要滚回顶上。勾选数大于 0 时
-          粘底浮现,与顶部按钮同一套发起逻辑与 busy 态;清空只清当次
-          勾选。粘性定位自带零动画,reduced-motion 天然满足。 */}
-      {selected.length > 0 && <div className="sticky bottom-3 z-20 flex flex-wrap
-        items-center justify-between gap-2.5 rounded-[10px] border border-line
-        bg-surface px-3.5 py-2.5 shadow-(--shadow-md)
-        max-[680px]:flex-col max-[680px]:items-stretch">
-        <span className="text-sm text-text-strong">已选 <b>{selected.length}</b> 张</span>
-        <div className="flex items-center gap-2.5 max-[680px]:w-full
-          max-[680px]:flex-col max-[680px]:items-stretch">
-          <Button variant="outline" size="sm" className="max-[680px]:w-full"
-            onClick={() => setSelected([])}>
-            清空选择
-          </Button>
-          <Button size="sm" className="max-[680px]:w-full" disabled={busy}
-            title={launchTitle} onClick={launch}>
-            {launchLabel}
-          </Button>
-        </div>
-      </div>}
     </>}
     {tickets && tickets.length === 0 && <div className="flex flex-col items-center
       gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">

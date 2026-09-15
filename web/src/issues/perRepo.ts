@@ -200,6 +200,16 @@ export interface RepoRoleTag {
   title: string;
 }
 
+/** MR 行的陈列标签:「!123 branch」(无 iid 只给 branch);mr 缺席给
+ * 空串,调用方以 mr 在场与否决定整行渲染——陈列派生住在本模块,
+ * 组件只渲染结果(文件头宪法)。 */
+export function mrDisplayLabel(
+  mr: { branch: string; iid?: string } | undefined,
+): string {
+  if (!mr) return "";
+  return `${mr.iid ? `!${mr.iid} ` : ""}${mr.branch}`;
+}
+
 /** 仓角色词(界面词汇纪律:变更仓/未交付,不用废除的主仓/参考仓)。 */
 export function repoRole(row: RepoDeliveryRow): RepoRoleTag {
   return row.delivered

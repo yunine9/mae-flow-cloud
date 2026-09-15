@@ -17,12 +17,10 @@
  *   GET  /issues/:id/materials/diff   → 单文件 diff(?path=,对 HEAD)
  *                                      / 单仓切片(?repo=,无标记)
  *                                      / 聚合(缺省,带仓库分段标记)
- *   GET  /issues/:id/materials/file   → 读工作区文件(?path=)
- *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
- *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,任意深度
- *                                      相对路径,超长读尾)
- *   POST /issues/:id/materials/log-extract → 解压压缩包日志(body
- *                                      {path};仅归属者;幂等)
+ *   GET  /issues/:id/materials/logs/archive → 拉取日志整包下载(ZIP;
+ *                                      空/缺 404;读,无终态闸)
+ *   POST /issues/:id/logs/fetch     → 主动拉取日志意图递交(仅归属者;
+ *                                      守卫+留痕+投递通知,平台不代拉)
  *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/documents        → 过程文档清单(分析报告+Agent 落
@@ -76,12 +74,10 @@ import {
   setDtsModuleBinding,
 } from "../dtsModuleBindings.ts";
 import {
-  extractLog,
+  bundleSessionLogs,
+  IssueLogsArchiveTooLargeError,
   listMaterials,
-  readSessionWorkspaceFile,
   recentEvents,
-  readLog,
-  saveSessionWorkspaceFile,
   sessionWorkspaceDiffAll,
   sessionWorkspaceFileDiff,
   sessionWorkspaceRepoDiff,
@@ -118,8 +114,7 @@ export interface IssueRouteOptions {
   viewer?: IssueViewer;
   /** 会话鉴权是否启用(测试直连形态没有 auth)。 */
   authEnabled: boolean;
-  /** 人工修改的台账日志(口径与问题服务一致:快速修改动了谁的现场,
-   * 控制台要有痕迹;账本本体在 materials 的 manual-edits.jsonl)。 */
+  /** 服务端运行日志(口径与问题服务一致:路由层的动作留痕)。 */
   log?: (message: string) => void;
 }
 
@@ -599,34 +594,12 @@ export async function handleIssueRoutes(
 
     // ---- 会话材料(交付材料页签):路由直连 materials.ts,服务不再
     // 转手(收窄票 #7);issueFlow.session 只负责"哪个会话、现场在哪"。
-    // 读:登录即可(查看模式);写(快速修改):仅会话归属者。路径防穿越在
-    // materials 层双保险,这里只做归属与参数兜底。fail-open 语义:读类
-    // 故障以 400 带人话返回,页面给空态,不拖垮会话。
+    // 读:登录即可(查看模式);人工修改写口已随 ADR-0028 整链退役,
+    // 本组路由只读。路径防穿越在 materials 层双保险。fail-open 语义:
+    // 读类故障以 400 带人话返回,页面给空态,不拖垮会话。
     if (parts[2] === "materials" && parts.length === 3) {
       const session = issueFlow.session(id);
       return done(200, listMaterials(session.state, session.root));
-    }
-    if (method === "PUT" && parts[2] === "materials"
-        && parts[3] === "file" && parts.length === 4) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只能修改自己会话的工作区" });
-      }
-      const body = await readBody(request);
-      const rel = String(body.path ?? "");
-      // 会话定位在 try 外(#9):未知会话是 404 域错误族,不该被下面
-      // "写失败回 400"的本地兜底吞掉。
-      const session = issueFlow.session(id);
-      try {
-        const result = saveSessionWorkspaceFile(
-          session.state, session.root, rel, String(body.content ?? ""));
-        routeOptions.log?.(
-          `[issue-flow] ${id} 人工修改 ${rel}(${result.size}B)`);
-        return done(200, result);
-      } catch (reason) {
-        return done(400, {
-          error: String(reason instanceof Error ? reason.message : reason),
-        });
-      }
     }
     if (parts[2] === "materials" && parts.length === 4 && method === "GET") {
       const query = new URL(request.url ?? "/", "http://x").searchParams;
@@ -648,14 +621,6 @@ export async function handleIssueRoutes(
                 : sessionWorkspaceDiffAll(session.state, session.root),
           });
         }
-        if (parts[3] === "file") {
-          return done(200, readSessionWorkspaceFile(
-            session.state, session.root, String(query.get("path") ?? "")));
-        }
-        if (parts[3] === "log") {
-          return done(200, readLog(
-            session.root, String(query.get("name") ?? "")));
-        }
         if (parts[3] === "events") {
           const raw = Number(query.get("limit") ?? 200);
           const limit = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 200;
@@ -667,28 +632,38 @@ export async function handleIssueRoutes(
         });
       }
     }
-    // 解压压缩包日志(#47):写操作,仅归属者(与快速修改同一口子)。
-    // 数据面在 materials.extractLog(预检 + 系统命令解压 + 属主交接),
-    // 失败 400 带人话——解压是写,错误必须让人知道发生了什么。
-    if (method === "POST" && parts[2] === "materials"
-        && parts[3] === "log-extract" && parts.length === 4) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只能解压自己会话的日志" });
-      }
-      const body = await readBody(request);
-      // 会话定位在 try 外(#9):未知会话按 404 出码,不被写失败兜底吞掉。
+    // 拉取日志整包下载(ADR-0026):日志的人读面收敛为 zip,在线树/
+    // 查看器/解压随页签退役。读操作(查看模式可下),无终态闸——与
+    // 导出现场记录/文档打包同口径;空/缺 404(按钮本就不渲染,防
+    // API 直调拿到空包),超限 413 带人话。
+    if (method === "GET" && parts[2] === "materials"
+        && parts[3] === "logs" && parts[4] === "archive"
+        && parts.length === 5) {
       const session = issueFlow.session(id);
+      let archive;
       try {
-        return done(200, await extractLog(
-          session.root, String(body.path ?? ""),
-          issueFlow.logOwnershipInputs()));
+        archive = bundleSessionLogs(session.root);
       } catch (reason) {
-        return done(400, {
-          error: String(reason instanceof Error ? reason.message : reason),
-        });
+        if (reason instanceof IssueLogsArchiveTooLargeError) {
+          return done(413, { error: reason.message });
+        }
+        throw reason;
       }
+      if (!archive) return done(404, { error: "还没有拉取过日志" });
+      const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+      const safeId = id.replace(/[^A-Za-z0-9._-]/g, "_");
+      const filename = `${id}-拉取日志-${day}.zip`;
+      const filenameAscii = `${safeId}-fetched-logs-${day}.zip`;
+      response.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": String(archive.data.length),
+        "content-disposition": `attachment; filename="${filenameAscii}"`
+          + `; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        "cache-control": "no-store",
+      });
+      response.end(archive.data);
+      return true;
     }
-
     // 耗时与卡点(只读):消息账 + 转移账归纳成"时间去哪了、卡在谁身上"。
     // 归纳是纯函数(sessionView.ts),路由只负责门禁与投影——口径同
     // 需求侧 /tasks/:id/timeline:能看会话就能看它经历了什么。
@@ -892,6 +867,18 @@ export async function handleIssueRoutes(
         });
       }
       return done(200, issueFlow.requestRepoChanges(id, { add, remove }));
+    }
+
+    // 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮不执行任何
+    // 事——端点只守卫+留痕+投递通知词(终态/queued 由服务层打回),
+    // 拉取由 Agent 按技能 issue-ops 执行(缺环境走既有环境闸)。写闸
+    // 仅归属人,与调整关联仓同款。
+    if (method === "POST" && parts[2] === "logs"
+        && parts[3] === "fetch" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只能请求拉取自己会话的日志" });
+      }
+      return done(200, issueFlow.requestLogFetch(id));
     }
 
     // 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/

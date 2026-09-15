@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 /**
  * 登记描述所见即所得编辑器(#184 票2):milkdown(ProseMirror 内核)
  * 的命令式封装——单面渲染,输入即所见,截图粘贴/拖拽后原地显示缩略。
@@ -9,18 +9,20 @@ import { useEffect, useRef, useState } from "react";
  * 收敛:进入编辑器前 ref→URL,序列化出场时 URL→ref,description 管线
  * (AI 上下文/登记提交/staging 提取)永远只见相对引用。
  *
- * 待补充令牌(**【待补充】**)就是普通加粗,不做任何编辑器特殊化
- * (#184 拍板:不写编辑器插件,红色只出现在自有渲染面)。
+ * 待补充令牌(**【待补充】**)就是普通加粗,两侧渲染面都不做特殊化
+ * (2026-09-15 拍板:原生 markdown 效果一致,预览侧染红退役)。
  */
-import { Editor, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
+import { Editor, editorViewCtx, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
+import { Loader2 } from "lucide-react";
+import { replaceAll } from "@milkdown/kit/utils";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
-import { replaceAll } from "@milkdown/kit/utils";
 import { issueImageUrl } from "../api";
 import { displayUrlToRef, refToDisplayUrl } from "./issueImageRef";
+import { FALLBACK_HINT, htmlIsImageOnly, readClipboardImageFile } from "./useIssueImagePaste";
 import { cn } from "cn";
 
 export function DescriptionEditor({
@@ -55,6 +57,18 @@ export function DescriptionEditor({
   const [empty, setEmpty] = useState(!value.trim());
   // 灯箱(#184 拍板方案1):编辑区内图片限高成缩略,点击看原图。
   const [zoom, setZoom] = useState<string | null>(null);
+  // 上传进行态:粘贴到缩略图原地出现之间有网络往返,无反馈会让人以为
+  // 没粘上(2026-09-15 用户实测)。挂编辑器容器右上角浮层,比页脚静
+  // 文案更显眼;上传插件通路与右键复制兜底共用计数,并发不互踩。
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const trackUpload = useCallback(async (file: File): Promise<string> => {
+    setPendingUploads((count) => count + 1);
+    try {
+      return await uploadRef.current(file);
+    } finally {
+      setPendingUploads((count) => Math.max(0, count - 1));
+    }
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -76,7 +90,7 @@ export function DescriptionEditor({
             const nodes = [];
             for (const file of Array.from(files)) {
               try {
-                const ref = await uploadRef.current(file);
+                const ref = await trackUpload(file);
                 const node = schema.nodes.image?.createAndFill?.({
                   src: issueImageUrl(ref), alt: "截图",
                 });
@@ -125,12 +139,65 @@ export function DescriptionEditor({
     editor?.action(replaceAll(refToDisplayUrl(value, issueImageUrl)));
   }, [value]);
 
+  // 网页右键「复制图像」粘贴兜底(milkdown 版,与 useIssueImagePaste 同款
+  // 判定):Chromium 只把 <img src> 引用放 text/html、不给位图字节——
+  // 不拦的话 ProseMirror 按 HTML 直插图节点,原 src(data:/https:)原样
+  // 进 description:staging 上传被绕开(登记提交、润色识图都拿不到图),
+  // 润色侧 images.length===0 静默跳过识图,稿子只剩模板(#184 实测)。
+  // 命中纯图粘贴即拦默认,异步 Clipboard API 取回位图走同一条上传钩子,
+  // 插入的仍是 issue-images/ 相对引用;带位图文件的粘贴归 upload 插件。
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const intercept = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      if (!data) return;
+      for (const item of Array.from(data.items)) {
+        if (item.type.startsWith("image/") && item.getAsFile()) return;
+      }
+      const html = data.getData("text/html") ?? "";
+      if (!htmlIsImageOnly(html)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      readClipboardImageFile()
+        .catch(() => null)
+        .then((file) => {
+          if (!file) {
+            errorRef.current?.(FALLBACK_HINT);
+            return undefined;
+          }
+          // 上传失败由上传钩子自行上报,这里不代发第二遍。
+          return trackUpload(file);
+        })
+        .then((ref) => {
+          if (!ref) return;
+          editorRef.current?.action((ctx) => {
+            const view = ctx.get(editorViewCtx);
+            const node = view.state.schema.nodes.image?.createAndFill?.({
+              src: issueImageUrl(ref), alt: "截图",
+            });
+            if (node) {
+              view.dispatch(
+                view.state.tr.replaceSelectionWith(node).scrollIntoView());
+            }
+          });
+        });
+    };
+    // 捕获段拦截:抢在 ProseMirror 的原生 paste 处理之前拿住事件。
+    root.addEventListener("paste", intercept, true);
+    return () => root.removeEventListener("paste", intercept, true);
+  }, []);
+
   // #231 换装:.issue-desc-editor 家族(style.css)退役,壳/占位/灯箱与
   // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用
   // [&_*] 任意变体直译配方——与 #230 润色预览的 [&_img]:max-h-[200px]
   // 同一做法。
+  // 空态默认高度照 AI 润色模板估算(2026-09-15 拍板):assets/issue-prompts/
+  // polish-template.md 的标准提单渲染出来约 17 行文本 + 块间距 ≈ 500px,
+  // 空态直接给到这个高度——粘贴润色稿后框高基本不变,视觉稳定;更长的
+  // 内容长到 70vh 封顶,超出部分框内滚动,不再把整张表无限撑高。
   return <div className={cn(
-    "relative [&_.ProseMirror]:min-h-24 [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
+    "relative [&_.ProseMirror]:min-h-[500px] [&_.ProseMirror]:max-h-[70vh] [&_.ProseMirror]:overflow-y-auto [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
     "[&_p]:mb-2 [&_:last-child]:mb-0 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-2 [&_h1]:mt-2.5 [&_h2]:mt-2.5 [&_h3]:mt-2.5 [&_h1]:leading-snug [&_h2]:leading-snug [&_h3]:leading-snug",
     "[&_ul]:mb-2 [&_ol]:mb-2 [&_ul]:pl-6 [&_ol]:pl-6 [&_ul]:list-disc [&_ol]:list-decimal",
     "[&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:h-auto [&_img]:w-auto [&_img]:cursor-zoom-in [&_img]:rounded-md [&_img]:border [&_img]:border-line",
@@ -147,6 +214,10 @@ export function DescriptionEditor({
         }
       }}>
     </div>
+    {pendingUploads > 0 && <span role="status"
+      className="absolute right-2 top-2 z-10 flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden />截图上传中…
+    </span>}
     {empty && placeholderText
       && <span className="pointer-events-none absolute left-[11px] top-[9px] text-sm text-faint" aria-hidden="true">
         {placeholderText}

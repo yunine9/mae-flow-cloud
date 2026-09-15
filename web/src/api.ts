@@ -4115,6 +4115,18 @@ export function requestIssueRepoChanges(
   });
 }
 
+/** 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮只递交意图——
+ * 端点守卫+留痕+投递通知词,拉取由 Agent 按技能 issue-ops 执行(缺
+ * 环境走既有环境闸),平台不代拉。成功 = HTTP 2xx 会话概要;日志清单
+ * 不随本调用更新,随既有 updated_at 轮询自刷。 */
+export function requestIssueLogFetch(id: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/logs/fetch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
 /** 问题卡作答:decision 是人话文本(显示/自由作答);平台闸另带决策码
  * code(裁决按它分派,文案不是匹配键);Agent 卡带逐题作答 answers
  * (键=题号,值=决策码或自由文本)。 */
@@ -4275,19 +4287,12 @@ export interface IssueLogListing {
   truncated: boolean;
 }
 
-export interface IssueManualEdit {
-  ts: string;
-  path: string;
-  size: number;
-}
-
 export interface IssueMaterials {
   ticket?: string;
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
   mrs: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
   changes: IssueWorkspaceChange[];
   logs: IssueLogListing;
-  manual_edits: IssueManualEdit[];
 }
 
 export interface IssueRawEvent {
@@ -4310,40 +4315,6 @@ export function getIssueFileDiff(
   if (repo) params.set("repo", repo);
   const query = params.toString();
   return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query ? `?${query}` : ""}`);
-}
-
-export function getIssueWorkspaceFile(
-  id: string, path: string,
-): Promise<{ content: string; truncated: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file?path=${encodeURIComponent(path)}`);
-}
-
-export function saveIssueWorkspaceFile(
-  id: string, path: string, content: string,
-): Promise<{ ok: true; size: number }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path, content }),
-  });
-}
-
-export function getIssueMaterialLog(
-  id: string, path: string,
-): Promise<{ content: string; truncated: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(path)}`);
-}
-
-/** 解压压缩包日志(#47):服务端解到同目录 <去扩展名>-extracted/,
- * 目录已在时幂等返回(reused=true,不重解)。 */
-export function extractIssueLog(
-  id: string, path: string,
-): Promise<{ ok: true; path: string; reused: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log-extract`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
 }
 
 export function getIssueRawEvents(

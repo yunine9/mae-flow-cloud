@@ -15,7 +15,7 @@
  * 操作控件不渲染(不是点了报错),顶部一条
  * 「查看模式」标识。归属人打开自己的会话零行为变化。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
   ISSUE_STATUS_TEXT,
@@ -39,13 +39,6 @@ import {
   type IssueSummary,
 } from "../api";
 import { confirmDialog } from "../ConfirmDialog";
-import {
-  repoDeliveryRows,
-  repoPipelineBadge,
-  repoRole,
-  type RepoDeliveryRow,
-  type RepoLedgerInput,
-} from "./perRepo";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
 import { IssueWarmupLive } from "./IssueWarmupLive";
 import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
@@ -56,29 +49,24 @@ import { IssueEventsPane } from "./EventsPane";
 import { IssueMetaPane } from "./MetaPane";
 import { FeedbackPanel } from "../TaskWorkspace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Empty, EmptyDescription } from "@/components/Empty";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IssueStatusBadge } from "../StatusBadge";
 import { cn } from "cn";
 
-/** 左栏七个一级标签(#123 拍平 + 用户走查反馈;#239 起「元信息」居
- * 首位:登记信息与关联仓的只读陈列,编辑器留给 #241):对话现场仍是
- * 默认入口(默认选中不变,只是不再占首位),中间四签是原"材料"面板
- * 的二级页签升格,逐仓交付收编为末签(原悬在页签条上方的大卡区,
- * 2026-09-07 走查拍板:信息尽可能收进页签圈,上方不占纵向空间)。
- * 页签条复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
- * --workspace-tab-color(#231 换装:原按 nth-child 发色的 issue-workspace
- * 规则随家族退役,色值直译成各签自带的变量工具类,字面量在此便于
- * Tailwind 拾取)。 */
+/** 左栏五个一级标签(ADR-0027 五签定局:逐仓交付退役融合进元信息的
+ * 关联仓行;对话现场降末位、默认签改元信息——右栏协作流常驻直播兜住
+ * 「看现场」的刚需,右栏工具步骤的「对话现场」跳转按钮是完整事件流
+ * 的唯一入口;DTS 单据签无单整体隐藏,#239 起「元信息」居首)。页签条
+ * 复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
+ * --workspace-tab-color(#231 换装:色值直译成各签自带的变量工具类,
+ * 字面量在此便于 Tailwind 拾取)。 */
 const ISSUE_MAIN_TABS = [
   { key: "meta", label: "元信息", tone: "[--workspace-tab-color:#2f8a5f]" },
-  { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
   { key: "dts", label: "DTS单据", tone: "[--workspace-tab-color:#d28a31]" },
   { key: "doc", label: "分析报告", tone: "[--workspace-tab-color:#20a28f]" },
   { key: "changes", label: "工作区变更", tone: "[--workspace-tab-color:#3b83d5]" },
-  { key: "logs", label: "拉取日志", tone: "[--workspace-tab-color:#8059d6]" },
-  { key: "repos", label: "逐仓交付", tone: "[--workspace-tab-color:#7c5cd6]" },
+  { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
 ] as const;
 type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
 
@@ -115,14 +103,15 @@ export function IssueSessionView({
   // 原位渲染或干脆不出(查看模式事实卡无提交区)。
   const [decisionFooterTarget, setDecisionFooterTarget] =
     useState<HTMLDivElement | null>(null);
-  // 左栏页签(#123 五选一):默认"对话现场"(AI 干活的直播面),用户
-  // 手选优先;换会话重置。发言不靠页签——右栏输入区常驻(运行中=插话/
-  // 空闲=续聊),对话现场只管看。
-  const [tab, setTab] = useState<IssueMainTab>("events");
+  // 左栏页签(ADR-0027 五签):默认「元信息」(会话名片,首屏回答
+  // "这是什么会话、到哪一步了"),用户手选优先;换会话重置。看 AI 干活
+  // 有两条常驻路:右栏协作流的直播,和「对话现场」末签(右栏工具步骤
+  // 的跳转按钮直达)。
+  const [tab, setTab] = useState<IssueMainTab>("meta");
 
   useEffect(() => {
-    // 换一个会话就丢弃手选页签,回到默认入口(对话现场)。
-    setTab("events");
+    // 换一个会话就丢弃手选页签,回到默认入口(元信息)。
+    setTab("meta");
   }, [detail.id]);
 
   useEffect(() => {
@@ -226,10 +215,6 @@ export function IssueSessionView({
     addIssueTakeoverNote(detail.id, text).then(() => undefined);
   const resumeTakeover = (note?: string) =>
     perform(() => resumeIssueTakeover(detail.id, note));
-  /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
-   * 不另开会话干预口。等待人工决策时不可用(先把卡答了)。 */
-  const notifyAI = (text: string) => detail.status === "running"
-    ? sendSteer(text) : sendReply(text);
   /** 挂起会话关联单号转正:两段式(校验过目 → 确认),转正后跳新会话。
    * 不走 perform:需要把 API 结果(单据详情/新会话)交回关联卡。 */
   async function associate(ticket: string, confirm: boolean):
@@ -436,12 +421,13 @@ export function IssueSessionView({
                   规则改为 ISSUE_MAIN_TABS 自带变量工具类)。 */}
               <TabsList variant="line" aria-label="会话工作区内容"
                 className="ws-source-switch h-auto justify-start">
-                {ISSUE_MAIN_TABS.map(({ key, label, tone }) => (
+                {/* DTS 单据签无单整体隐藏(ADR-0027:屏蔽即诚实,原
+                    禁用+tooltip 的死钮退役);其余各签恒在。 */}
+                {ISSUE_MAIN_TABS
+                  .filter(({ key }) => key !== "dts" || detail.ticket)
+                  .map(({ key, label, tone }) => (
                   <TabsTrigger key={key} value={key}
-                    className={`h-auto flex-none ${tone} data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}
-                    disabled={key === "dts" && !detail.ticket}
-                    title={key === "dts" && !detail.ticket
-                      ? "无单场景:还没有关联的 DTS 单据" : undefined}>
+                    className={`h-auto flex-none ${tone} data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}>
                     <span>{label}</span>
                     {/* 分析报告在库:「分析报告」页签挂脉冲点——报告是主
                         交付物,入口要找得到(原材料页签的同一引导,随升格
@@ -456,23 +442,20 @@ export function IssueSessionView({
               </TabsList>
             </div>
             {/* 面板映射(#210):原条件渲染改 TabsPanel(keepMounted 默认
-                false,卸载语义与原实现一致);doc/dts/changes/logs 共用的
-                兜底分支用「值跟随当前签」的单面板承接,切签时元素位置稳定,
+                false,卸载语义与原实现一致);doc/dts/changes 共用的兜底
+                分支用「值跟随当前签」的单面板承接,切签时元素位置稳定,
                 IssueMaterialsPane 内部状态不被重挂载清掉。 */}
             {tab === "events" && <TabsContent value="events" className="contents">
               <IssueWarmupLive id={detail.id} warmup={detail.warmup} />
               <IssueEventsPane id={detail.id} active />
             </TabsContent>}
-            {tab === "repos" && <TabsContent value="repos" className="contents">
-              <IssueWorkspaceRepos detail={detail} />
-            </TabsContent>}
             {tab === "meta" && <TabsContent value="meta" className="contents">
-              <IssueMetaPane detail={detail} />
+              <IssueMetaPane detail={detail} canOperate={canOperate} />
             </TabsContent>}
-            {tab !== "events" && tab !== "repos" && tab !== "meta"
+            {tab !== "events" && tab !== "meta"
               && <TabsContent value={tab} className="contents">
-              <IssueMaterialsPane detail={detail} busy={busy} view={tab}
-                onNotifyAI={notifyAI} canOperate={canOperate} />
+              <IssueMaterialsPane detail={detail} view={tab}
+                canOperate={canOperate} />
             </TabsContent>}
           </Tabs>
         </section>
@@ -522,161 +505,6 @@ export function IssueSessionView({
       </section>
     </div>
   </section>;
-}
-
-/** 转正前账的只读引用缓存(模块级,跨会话视图重挂载不重复请求):
- * converted 会话按 inherited_accounts 经既有详情接口读旧会话账(#31)。
- * 归档会话本就可只读(list/get 不拦终态,归属校验同账号放行),不另设
- * 端点。值:账对象=取到;null=取过但失败(旧会话被物理清理等)——
- * 失败一次就不再重试,仓卡静默退回现状,不报错、不空转。 */
-const inheritedLedgerCache = new Map<string, RepoLedgerInput | null>();
-
-/** 拉转正前账(按 inherited_accounts 只读引用旧会话详情):返回
- * undefined = 无引用 / 还没取到 / 已判缺失,仓卡一律按现状渲染。 */
-function useInheritedLedger(
-  ref: { issue: string } | undefined,
-): RepoLedgerInput | undefined {
-  const [ledger, setLedger] = useState<RepoLedgerInput | undefined>();
-  const issueId = ref?.issue;
-  useEffect(() => {
-    if (!issueId) return;
-    const cached = inheritedLedgerCache.get(issueId);
-    // 缓存命中(null 含在内)不再发请求:详情 10s 轮询会反复走到这里。
-    if (cached !== undefined) {
-      setLedger(cached ?? undefined);
-      return;
-    }
-    let alive = true;
-    void getIssue(issueId).then((old) => {
-      const account: RepoLedgerInput = {
-        repo_urls: old.repo_urls,
-        repo_url: old.repo_url,
-        pushes: old.pushes,
-        mrs: old.mrs,
-        pipelines: old.pipelines,
-      };
-      inheritedLedgerCache.set(issueId, account);
-      if (alive) setLedger(account);
-    }).catch(() => {
-      // 旧会话读不到(被清理/越权):静默缺省,失败一次不再重试。
-      inheritedLedgerCache.set(issueId, null);
-      if (alive) setLedger(undefined);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [issueId]);
-  return ledger;
-}
-
-/** 「逐仓交付」页签内容:有登记仓时渲染逐仓交付卡组,无仓给一句空态
- * (发起时登记的模块决定关联仓,这里不是登记入口)。 */
-function IssueWorkspaceRepos({ detail }: { detail: IssueDetail }) {
-  if (!(detail.repo_urls?.length ?? 0) && !detail.repo_url) {
-    return <Empty className="border">
-      <EmptyDescription>会话没有登记代码仓——发起时登记的业务模块决定关联仓;
-      逐仓交付与流水线状态会在这里展示。</EmptyDescription>
-    </Empty>;
-  }
-  return <IssueRepoDelivery detail={detail} />;
-}
-
-/** 逐仓交付区(一仓一 MR):每个关联仓一张卡——仓名/角色(变更仓·
- * 未交付)/MR 链接与分支/流水线状态徽标(绿/红含失败项/运行中)。
- * 角色与徽标的口径都出自 perRepo.ts(有推送记录=已交付;流水线只认
- * pipelines 该仓的 status),前端不推断、不硬造状态。
- * 转正而来的会话(#31):按 inherited_accounts 只读引用旧会话账,标注
- * 「转正前」并入各仓卡;本会话自己的账照常陈列,两本账不混。
- * #231 换装:原 .issue-repo-* 家族整族退役,直译成令牌工具类。 */
-const REPO_ROLE_TONE = {
-  delivered: "rounded-full bg-success-soft px-2 py-px text-xs font-bold text-success",
-  undelivered: "rounded-full border border-dashed px-2 py-px text-xs font-bold text-faint",
-} as const;
-const REPO_BADGE_TONE = {
-  success: "bg-success-soft text-success",
-  failed: "bg-danger-soft text-danger",
-  running: "bg-active-soft text-active",
-} as const;
-
-function IssueRepoDelivery({ detail }: { detail: IssueDetail }) {
-  const inherited = useInheritedLedger(detail.inherited_accounts);
-  const rows = useMemo(
-    () => repoDeliveryRows(detail, inherited), [detail, inherited]);
-  if (rows.length === 0) return null;
-  return <section aria-label="逐仓交付"
-    className="grid gap-2 rounded-xl border border-border bg-surface px-3.5 py-2.5">
-    <div className="flex flex-wrap items-baseline gap-2.5">
-      <strong className="text-sm font-bold">逐仓交付</strong>
-      <span className="text-xs text-faint">一仓一 MR:每个变更仓各自建分支、各自提 MR、各看流水线</span>
-      {/* 旧账取到时如实说明来源;取不到(已清理)时退回"账在原会话"
-          的现状文案——引用静默缺省,不报错。 */}
-      {detail.converted_from && <span className="text-xs text-muted-foreground">
-        转正自 {detail.converted_from}——{inherited
-          ? "标注「转正前」的交付事实继承自原会话"
-          : "原会话的逐仓交付账留在原会话"}
-      </span>}
-    </div>
-    <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
-      {rows.map((row) => <RepoDeliveryCard key={row.repo} row={row} />)}
-    </div>
-  </section>;
-}
-
-function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
-  const badge = repoPipelineBadge(row);
-  const role = repoRole(row);
-  const mrLabel = row.mr
-    ? `${row.mr.iid ? `!${row.mr.iid} ` : ""}${row.mr.branch}`
-    : "";
-  const oldMrLabel = row.inherited?.mr
-    ? `${row.inherited.mr.iid ? `!${row.inherited.mr.iid} ` : ""}${row.inherited.mr.branch}`
-    : "";
-  return <article className="grid content-start gap-1.5 rounded-lg border border-border bg-(--surface-muted) px-3 py-2.5 text-sm">
-    <header className="flex flex-wrap items-center gap-2">
-      <strong title={row.repo} className="font-mono text-sm font-bold [overflow-wrap:anywhere]">{row.name}</strong>
-      <span className={REPO_ROLE_TONE[role.tone as keyof typeof REPO_ROLE_TONE]
-        ?? REPO_ROLE_TONE.undelivered} title={role.title}>
-        {role.tag}</span>
-      {badge && <span className={cn(
-        "ml-auto inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-bold whitespace-nowrap",
-        REPO_BADGE_TONE[badge.tone as keyof typeof REPO_BADGE_TONE])}>
-        <i aria-hidden className={cn("size-[5px] rounded-full bg-current",
-          badge.tone === "running"
-            && "motion-safe:animate-pulse motion-reduce:animate-none")}/>{badge.label}</span>}
-    </header>
-    <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-muted-foreground [overflow-wrap:anywhere]">
-      {row.mr && (row.mr.url
-        ? <a href={row.mr.url} target="_blank" rel="noreferrer"
-            className="text-primary" title={row.mr.title}>MR {mrLabel}</a>
-        : <span title={row.mr.title}>MR {mrLabel}</span>)}
-      {row.push && <span>
-        已推送 {row.push.branch}@{row.push.sha.slice(0, 10)}</span>}
-      {!row.mr && !row.push && <span className="text-faint">
-        该仓还没有推送与 MR 记录</span>}
-    </div>
-    {/* 转正前账(只读引用,旧会话数据):与本会话事实分区陈列,
-        弱化样式 + 「转正前」前缀,不冒充本会话的交付。 */}
-    {row.inherited && <div className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-t border-dashed pt-1 text-faint [overflow-wrap:anywhere]">
-      <em className="rounded-full border border-dashed px-1.5 not-italic text-muted-foreground">转正前</em>
-      {row.inherited.mr && (row.inherited.mr.url
-        ? <a href={row.inherited.mr.url} target="_blank" rel="noreferrer"
-            className="text-primary" title={row.inherited.mr.title}>MR {oldMrLabel}</a>
-        : <span title={row.inherited.mr.title}>MR {oldMrLabel}</span>)}
-      {row.inherited.push && <span>
-        已推送 {row.inherited.push.branch}@{row.inherited.push.sha.slice(0, 10)}</span>}
-      {row.inherited.pipeline && <span>
-        {row.inherited.pipeline.label}{row.inherited.pipeline.failedChecks.length
-          ? `(失败项:${row.inherited.pipeline.failedChecks.join("、")})` : ""}</span>}
-    </div>}
-    {/* last_error 不只跟 failed 走:轮询预算耗尽时 status 仍是 running、
-        但监看已停——两个字段都如实示人,不替服务端下结论。 */}
-    {(row.pipeline?.last_error || (row.pipeline?.failedChecks.length ?? 0) > 0)
-      && <div className="grid gap-0.5 text-danger [overflow-wrap:anywhere]">
-        {row.pipeline?.last_error && <span>{row.pipeline.last_error}</span>}
-        {(row.pipeline?.failedChecks.length ?? 0) > 0
-          && <span>失败项:{row.pipeline!.failedChecks.join("、")}</span>}
-      </div>}
-  </article>;
 }
 
 /** 固定流程的阶段管道(计划线):视觉对齐需求工作台的 task-phase-track

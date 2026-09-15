@@ -95,7 +95,7 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
         </Select> : <Input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
-    <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea rows={2} value={description}
+    <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea className="min-h-24" rows={2} value={description}
       onChange={(event) => setDescription(event.target.value)} required /></label>
     <label className={LABEL}><span className={LABEL_SPAN}>维护者账号</span><Input value={maintainers}
       onChange={(event) => setMaintainers(event.target.value)}
@@ -371,7 +371,7 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
       <label className={LABEL}><span className={LABEL_SPAN}>模块名称</span><Input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}
         placeholder="例如 支付核心" required /></label>
-      <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea rows={2} value={create.description}
+      <label className={LABEL}><span className={LABEL_SPAN}>业务语义说明</span><Textarea className="min-h-24" rows={2} value={create.description}
         onChange={(event) => setCreate({ ...create, description: event.target.value })}
         placeholder="说清领域概念、核心规则、流程和边界" required /></label>
       <div className={FORM_GRID}>
