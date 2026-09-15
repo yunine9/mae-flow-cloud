@@ -602,7 +602,7 @@ export function TaskWorkspace({
       || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
   const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
-  const pushReview = approvalReview ?? (browsingReview?.taskId === task.id ? browsingReview.review : undefined);
+  const pushReview = (browsingReview?.taskId === task.id ? browsingReview.review : undefined) ?? approvalReview;
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
@@ -904,7 +904,7 @@ export function TaskWorkspace({
   }, [task.id]);
 
   useEffect(() => {
-    if (materialView !== "diff" || approvalReview) return;
+    if (materialView !== "diff") return;
     let alive = true;
     void readDiffReview(task.id).then(review => {
       if (!alive) return;
@@ -1227,7 +1227,7 @@ export function TaskWorkspace({
     // 同一份材料后台更新时保留正文、选区和滚动位置；切文件才显示加载态。
     // 原来每 5 秒把差异正文换成“正在读取”，连未变化的文件也会闪一下。
     const readKey = JSON.stringify([task.id, active, pushDiffActive
-      ? [diffScope, pushReview?.head_sha, task.waiting?.waiting_id]
+      ? [diffScope, pushReview?.base_sha, pushReview?.head_sha, task.waiting?.waiting_id]
       : lazyWorkspaceDiff ? requestedDiffPath : activeUntrackedDirectoryKey]);
     const opening = loadedMaterialKey.current !== readKey;
     // 差异内部换文件只替换正文，保留文件树、分栏宽度及检视选择。
@@ -1291,7 +1291,7 @@ export function TaskWorkspace({
       setDiffFileLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse, materialReload, diffScope, scopedDiff, pushReview?.head_sha,
+  }, [task.id, active, livePulse, materialReload, diffScope, scopedDiff, pushReview?.base_sha, pushReview?.head_sha,
     task.waiting?.waiting_id,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);

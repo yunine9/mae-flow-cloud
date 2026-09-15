@@ -1122,6 +1122,8 @@ export interface TaskSummary {
      * 均由该权威流水线覆盖时，总体 success 可聚合核销；若逐项明确
      * failed / pending，内核仍以更精确事实裁决 RED / INCOMPLETE。 */
     checks?: PipelineCheck[];
+    /** 最近一次推送的起点，仅用于代码增量展示，不参与审批或收据核验。 */
+    last_push_base_sha?: string;
     /** Cloud 在 Agent 会话释放后完成的推送收据；内核要求它与流水线
      * SHA、工作区 HEAD 三者一致，避免模型接触个人 Token。 */
     git_push?: {
@@ -15950,31 +15952,30 @@ export class TaskService {
       title: string; description: string;
     }>;
 
-    // 基点优先级:最近一次人真正看过的 HEAD > 上次通过确认的 HEAD >
-    // 上次推送。selection.head 返工多轮不更新,单靠它复检卡会退化成
-    // 只有"完整交付"(MFC-035)。
-    const preferred = [
-      delivery?.last_reviewed_head,
-      selection?.head,
-      delivery?.git_push?.sha,
-    ].filter((sha): sha is string => Boolean(sha)
-        && sha !== snapshot.head && sha !== snapshot.baseline);
+    // 浏览按推送轮次取范围，不能把审批时的旧 HEAD 当作每轮起点。
+    // 历史任务从已有宿主推送记录恢复；记录缺失时不冒充“最新增量”。
+    const pushed = delivery?.git_push;
+    let historicalPushes: string[] = [];
+    try {
+      historicalPushes = new TaskHostLedger(task.summary).read().operations
+        .slice().reverse().flatMap(op => op.push_receipt ? [op.push_receipt.sha] : []);
+    } catch { /* 浏览不因历史台账不可读而阻塞，全量仍可用。 */ }
+    const latestPush = pushed?.sha ?? historicalPushes[0];
+    const preferred = latestPush
+      ? latestPush !== snapshot.head ? [latestPush]
+        : [delivery?.last_push_base_sha,
+          historicalPushes.find(sha => sha !== latestPush)]
+      : [delivery?.last_reviewed_head, selection?.head];
     let focused: DeliveryRevisionComparison | undefined;
     for (const base of [...new Set(preferred)]) {
+      if (!base || base === snapshot.head) continue;
       focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
       if (focused) break;
     }
-    // 目标分支已被合入时，a746→merge-head 这类普通提交差异只包含
-    // 目标分支自己的文件，会把“其他任务文档”伪装成本轮修复。此时改看
-    // target→HEAD 的 MR 净贡献；正常任务仍优先展示自上次检视以来变化。
-    const targetAdvanced = contribution.base_sha !== snapshot.baseline;
-    const comparison = targetAdvanced
-      ? await compareDeliveryRevisions(
-        task.cwd!, contribution.base_sha, snapshot.head)
-      : focused ?? await compareDeliveryRevisions(
-        task.cwd!, snapshot.baseline!, snapshot.head);
-    const base = targetAdvanced
-      ? contribution.base_sha : focused?.from ?? snapshot.baseline!;
+    // 目标分支推进只影响全量 MR 净贡献，不能覆盖已确定的本轮范围。
+    const comparison = focused ?? await compareDeliveryRevisions(
+      task.cwd!, contribution.base_sha, snapshot.head);
+    const base = focused?.from ?? contribution.base_sha;
     const prepush = delivery?.prepush;
     const verification = prepush?.sha !== snapshot.head ? undefined : prepush?.state === "passed"
       ? "Build-Fix 已通过"
@@ -15990,7 +15991,7 @@ export class TaskService {
       base_sha: base,
       baseline_sha: snapshot.baseline!,
       head_sha: snapshot.head,
-      has_focused_changes: base !== snapshot.baseline,
+      has_focused_changes: Boolean(focused) && base !== snapshot.baseline,
       file_count: comparison?.paths.length ?? contribution.paths.length,
       additions: comparison?.additions ?? 0,
       deletions: comparison?.deletions ?? 0,
@@ -16854,6 +16855,7 @@ export class TaskService {
         // 一丢,下一轮的重组锚就会退回更老的 SHA,把人推的提交抹掉。
         ...(task.summary.delivery?.foreign_commits
           ? { foreign_commits: task.summary.delivery.foreign_commits } : {}),
+        last_push_base_sha: task.summary.delivery?.last_push_base_sha,
         git_push: pushReceipt,
         mr_url: mr.url,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,

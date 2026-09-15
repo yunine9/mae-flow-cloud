@@ -302,7 +302,7 @@ test("需求确认复用标准决定卡，并收成一个明确的通过按钮",
 
 test("增量浏览独立于审批卡，完整浏览保留按文件加载", () => {
   assert.match(workspace, /readDiffReview\(task.id\)/);
-  assert.match(workspace, /const pushReview = approvalReview \?\? \(browsingReview/);
+  assert.match(workspace, /const pushReview = \(browsingReview.*\?\? approvalReview/);
   assert.match(workspace, /manifest=\{!scopedDiff/);
   assert.match(workspace, /task.status === "waiting_for_human"[^]*needsDeliverySelection\(task.waiting\)/,
     "只读浏览不会开放交付勾选");
