@@ -233,8 +233,6 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
       || (boundBranch && boundBranch !== branch)) throw new Error("只能发布当前任务已绑定的工作分支");
     const snapshot = await deliveryChangeSnapshot(host.cwd!);
     if (!snapshot) throw new Error("无法确定本次提交 SHA");
-    const excluded = new Set(host.summary.delivery_selection?.excluded_paths ?? []);
-    if (snapshot.committed_paths.some(path => excluded.has(path))) throw new Error("提交包含此前排除的文件；若责任人要求恢复，请引用原始指令调用 restore_delivery_paths，再推送");
     operation.sha = snapshot.head;
     operation.branch = branch;
     operation.target_branch = baseline;
@@ -446,6 +444,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     operation.result = safeMessage(host, error);
   }
   ledger.update(operation);
+  // 范围整理已明确停下时保留诊断，不再派 Agent 重试同一次推送。
+  if (operation.input.action === "push" && operation.state === "failed"
+      && host.summary.status === "failed") return true;
   // A canceled/taken-over task retains receipts but must never resume itself.
   try { host.assertActive(); } catch { return true; }
   try { host.resume(`[宿主操作 ${operation.id} ${operation.state}]\n${operation.result}\n按当前目标继续；失败不代表旧问题已通过。`, target, operation); }

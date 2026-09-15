@@ -13523,7 +13523,11 @@ export class TaskService {
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
       preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
-        operation, branch => this.absorbForeignRemoteCommits(task, branch)),
+        operation, branch => this.absorbForeignRemoteCommits(task, branch), async () => {
+          if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") {
+            throw new TaskControlError(task.summary.detail ?? "无法整理已确认的交付范围");
+          }
+        }),
       finishReviewAfterPush: operation => handoffReview({
         eligible: () => canHandoffReview(task.mission, task.summary, operation.review_handoff)
           && !task.pendingMainSteers?.length && !!this.effectivePlatformUrl(),
@@ -15867,8 +15871,8 @@ export class TaskService {
   /** 当前 MR 真正新增的文件面。任务定格基线仍用于历史完整性与“从任务
    * 起点”复盘；但目标分支在开发期间前进、随后被合入 HEAD 时，目标
    * 分支已有文件不属于本任务的 MR 贡献，不能混进最终交付清单。
-   * 只有能证明 origin/<target> 已是 HEAD 祖先才采用它，否则继续使用
-   * 定格基线快照，任何读失败都保持 fail-closed。 */
+   * 以目标分支与 HEAD 的共同祖先计算 MR 差异；目标继续前进也不会
+   * 退回任务起点，把已合入的上游修改重新算进任务贡献。 */
   private async deliveryContribution(
     task: TaskState,
     snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
@@ -15880,7 +15884,8 @@ export class TaskService {
     try {
       const state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
-      const target = String(state?.config?.["基线分支"] ?? "").trim();
+      const target = String(task.summary.delivery?.target_branch
+        ?? task.summary.baseline ?? state?.config?.["基线分支"] ?? "").trim();
       if (!target) throw new Error("目标分支缺失");
       const valid = await runSafeWorktreeGitAsync(
         task.cwd, ["check-ref-format", "--branch", target],
@@ -15892,20 +15897,31 @@ export class TaskService {
         { timeoutMs: 30_000 });
       const baseSha = String(resolved.stdout ?? "").trim();
       if (resolved.status !== 0 || !baseSha) throw new Error("目标 ref 不存在");
-      const included = await runSafeWorktreeGitAsync(
-        task.cwd, ["merge-base", "--is-ancestor", targetRef, "HEAD"],
+      const common = await runSafeWorktreeGitAsync(
+        task.cwd, ["merge-base", "--all", baseSha, snapshot.head],
         { timeoutMs: 30_000 });
-      if (included.status !== 0) throw new Error("目标 ref 尚未合入 HEAD");
+      const bases = String(common.stdout ?? "").trim().split(/\s+/).filter(Boolean);
+      if (common.status !== 0 || bases.length !== 1) throw new Error("无法确定唯一的 MR 比较起点");
+      const comparisonBase = bases[0]!;
       const contribution = await runSafeWorktreeGitAsync(
-        task.cwd, ["diff", "--name-only", targetRef, "HEAD", "--"],
+        task.cwd, ["diff", "--name-only", comparisonBase, snapshot.head, "--"],
         { timeoutMs: 30_000 });
       if (contribution.status !== 0) throw new Error("贡献差异读取失败");
       return {
         paths: normalizedDeliveryPaths(
           String(contribution.stdout ?? "").split("\n")),
-        base_sha: baseSha,
+        base_sha: comparisonBase,
       };
-    } catch {
+    } catch (error) {
+      // 老任务/本地仓没有远端目标引用时，仅在线性历史中沿用任务起点。
+      // 已合入其他分支却无法确定 MR 基点时，不能把全量历史误判为违规。
+      const merges = await runSafeWorktreeGitAsync(task.cwd,
+        ["rev-list", "--merges", `${snapshot.baseline}..${snapshot.head}`],
+        { timeoutMs: 30_000 });
+      if (merges.status !== 0 || String(merges.stdout ?? "").trim()
+          || !(error instanceof Error) || error.message !== "目标 ref 不存在") {
+        throw new TaskControlError(`无法确定交付差异范围：${String(error)}。请核对目标分支引用；未修改交付授权或代码。`);
+      }
       return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
         base_sha: snapshot.baseline! };
     }
@@ -16327,11 +16343,18 @@ export class TaskService {
     task: TaskState,
   ): Promise<"unchanged" | "changed" | "blocked"> {
     const selection = task.summary.delivery_selection;
-    if (selection?.status !== "confirmed" || !task.cwd) return "unchanged";
+    if (!selection || !task.cwd) return "unchanged";
     const cwd = task.cwd;
     const snapshot = await deliveryChangeSnapshot(cwd);
     if (!snapshot?.baseline) return "unchanged";
-    const contribution = await this.deliveryContribution(task, snapshot);
+    let contribution: { paths: string[]; base_sha: string };
+    try { contribution = await this.deliveryContribution(task, snapshot); }
+    catch (error) {
+      task.summary.status = "failed";
+      task.summary.detail = String(error);
+      this.persist(task);
+      return "blocked";
+    }
     const current = contribution.paths;
     const expected = normalizedDeliveryPaths(selection.paths);
     const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
@@ -16434,24 +16457,35 @@ export class TaskService {
     // 一个“删除提交”，才能保证远端不可达。已确认范围之外若出现真正的
     // 新业务文件保留在 targetPaths；后面由 review 授权继承或首次确认卡
     // 决定。这里始终只移除用户已排除项与平台目录。
-    const stagePaths = [...new Set([
-      ...targetPaths,
-      ...expected,
-    ].filter((path) => !isAgentPlatformPath(path)
-      && !rejected.has(path)))].sort((left, right) => left.localeCompare(right));
+    // MR 外的上游修改也必须保留。以远端安全锚重组时，把已合入的
+    // 目标分支作为父提交保留下来，不能只暂存本任务 paths 而丢掉上游树。
+    const preserveTarget = !await isAncestorSha(contribution.base_sha, anchor);
+    const carried = (await run(["diff", "--name-only", "--no-renames", anchor, head, "--"],
+      "读取本轮完整树差异")).split("\n").filter(Boolean);
+    const stagePaths = [...new Set([...carried, ...expected])]
+      .filter(path => !isAgentPlatformPath(path) && !rejected.has(path))
+      .sort((left, right) => left.localeCompare(right));
+    const upstreamRejected = preserveTarget
+      ? (await run(["diff", "--name-only", "--no-renames", anchor, contribution.base_sha, "--"],
+        "读取上游排除路径")).split("\n").filter(path => rejected.has(path)) : [];
     try {
       await run(["reset", "--mixed", anchor], "回到最近干净提交");
       if (stagePaths.length) {
         await run(["add", "-A", "--", ...stagePaths], "重组已确认文件");
       }
+      if (upstreamRejected.length) {
+        await run(["restore", "--source", contribution.base_sha, "--staged", "--", ...upstreamRejected],
+          "保留上游已有的排除路径内容");
+      }
       const hasStaged = await runSafeWorktreeGitAsync(cwd,
         ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-      if (hasStaged.status !== 0) {
-        await run([
-          "commit", "-m",
+      if (hasStaged.status !== 0 || preserveTarget) {
+        const tree = await run(["write-tree"], "生成整理后的文件树");
+        const commit = await run(["commit-tree", tree, "-p", anchor,
+          ...(preserveTarget ? ["-p", contribution.base_sha] : []), "-m",
           cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
-            "按已确认推送范围收口流水线修复"),
-        ], "提交整理后的修复");
+            "按已确认推送范围收口流水线修复")], "提交整理后的修复");
+        await run(["reset", "--mixed", commit], "接续整理后的提交");
       }
     } catch (error) {
       // reset --mixed 不会破坏工作区内容；尽力把分支引用与索引恢复到

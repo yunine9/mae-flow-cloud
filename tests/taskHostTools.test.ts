@@ -109,7 +109,9 @@ for (const confirmed of [false, true]) test(`宿主推送同步远端新增提�
   const internal = { cwd: s.host.cwd, summary: s.host.summary };
   api.persist = () => {};
   s.host.preparePush = operation => prepareHostPush(s.host, operation,
-    branch => api.absorbForeignRemoteCommits(internal, branch));
+    branch => api.absorbForeignRemoteCommits(internal, branch), async () => {
+      assert.notEqual(await api.reconcileConfirmedDeliveryBoundary(internal), "blocked");
+    });
   let approved: string | undefined;
   s.host.confirmPush = async operation => { approved = operation.sha; return true; };
   await finishTaskHostOperation(s.host);
@@ -516,7 +518,6 @@ function excludedFilesScene(t: any) {
 
 test("误取消文件可按用户新指令恢复：真实内核和 Cloud 同步，其他排除项保留并可推送", async t => {
   const s = excludedFilesScene(t);
-  await assert.rejects(queueTaskHostOperation(s.host, "before-restore", { action: "push", reason: "推送恢复测试" }), /restore_delivery_paths/);
   await queueTaskHostOperation(s.host, "restore-tests", { action: "restore_delivery_paths", reason: "按用户要求恢复误取消的测试",
     request_id: s.requestId, paths: ["test-a.ts", "test-b.ts"] });
   await finishTaskHostOperation(s.host);
@@ -530,6 +531,83 @@ test("误取消文件可按用户新指令恢复：真实内核和 Cloud 同步�
   await finishTaskHostOperation(s.host);
   assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), push.sha);
 });
+
+// 同时覆盖入队、同步后的范围处理、确认、真实远端传输和同 SHA 恢复。
+for (const mode of ["upstream-only", "already-merged", "reintroduced", "target-advanced", "unknown-base"] as const) {
+  test(`推送统一范围处理：${mode}`, async t => {
+    const s = scene(t), api = s.service as any;
+    const internal = { cwd: s.host.cwd, summary: s.host.summary, controlEpoch: 0 };
+    api.persist = () => {};
+    const approved = s.git("rev-parse", "HEAD");
+    s.git("push", s.remote, "HEAD:refs/heads/work");
+    s.host.summary.delivery = { git_push: { sha: approved, ref: "refs/heads/work", remote: "origin" } };
+    s.host.summary.delivery_selection = {
+      paths: ["main.txt"], excluded_paths: ["app_define.json", "rejected.txt"],
+      observed_paths: ["main.txt", "app_define.json", "rejected.txt"],
+      head: approved, status: mode === "reintroduced" ? "requested" : "confirmed",
+      waiting_id: "selection", updated_at: new Date().toISOString(),
+    };
+    s.git("checkout", "main");
+    writeFileSync(join(s.host.cwd!, "app_define.json"), "upstream configuration\n");
+    writeFileSync(join(s.host.cwd!, "upstream.txt"), "upstream feature\n");
+    s.git("add", "app_define.json", "upstream.txt"); s.git("commit", "-qm", "upstream work");
+    const upstream = s.git("rev-parse", "HEAD");
+    s.git("update-ref", "refs/remotes/origin/main", upstream);
+    s.git("checkout", "work");
+    if (mode === "already-merged") s.git("merge", "--no-edit", "main");
+    // 请求入队时可以尚未同步，不能在这里按旧基线否决。
+    const op = await queueTaskHostOperation(s.host, "latest-push", { action: "push", reason: "交付本轮" });
+    api.absorbForeignRemoteCommits = async () => {
+      if (mode === "already-merged") return "ok";
+      s.git("merge", "--no-edit", "main");
+      if (mode === "reintroduced" || mode === "target-advanced") {
+        writeFileSync(join(s.host.cwd!, "rejected.txt"), "must stay local\n");
+        writeFileSync(join(s.host.cwd!, "main.txt"), "latest repair\n");
+        s.git("add", "rejected.txt", "main.txt"); s.git("commit", "-qm", "repair reintroduced exclusion");
+      }
+      if (mode === "target-advanced") {
+        const tree = s.git("rev-parse", `${upstream}^{tree}`);
+        const next = s.git("commit-tree", tree, "-p", upstream, "-m", "target advanced again");
+        s.git("update-ref", "refs/remotes/origin/main", next);
+      }
+      if (mode === "unknown-base") s.git("update-ref", "-d", "refs/remotes/origin/main");
+      return "absorbed";
+    };
+    // 使用生产装配，避免测试里另造一条“看似相同”的检查链。
+    s.host.preparePush = api.taskHostRuntime(internal).preparePush;
+    let confirmations = 0;
+    s.host.confirmPush = async operation => {
+      confirmations++;
+      assert.equal(operation.sha, s.git("rev-parse", "HEAD"));
+      return true;
+    };
+    const selection = structuredClone(s.host.summary.delivery_selection);
+    await finishTaskHostOperation(s.host);
+    const done = new TaskHostLedger(s.host.summary).read().operations[0];
+    assert.deepEqual(s.host.summary.delivery_selection, selection, "不能靠修改用户授权解锁");
+    if (mode === "unknown-base") {
+      assert.equal(done.state, "failed");
+      assert.equal(confirmations, 0);
+      assert.equal(s.resumed(), 0, "现场不明不派 Agent 循环重推");
+      assert.equal(s.git("--git-dir", s.remote, "rev-parse", "work"), approved);
+      assert.match(done.result!, /无法确定交付差异范围/);
+      return;
+    }
+    assert.equal(done.state, "succeeded", done.result);
+    assert.equal(confirmations, 1);
+    assert.equal(s.git("--git-dir", s.remote, "show", "work:app_define.json"), "upstream configuration");
+    assert.equal(s.git("--git-dir", s.remote, "show", "work:upstream.txt"), "upstream feature");
+    s.git("merge-base", "--is-ancestor", upstream, done.push_receipt!.sha);
+    assert.equal(s.git("--git-dir", s.remote, "ls-tree", "work", "rejected.txt"), "");
+    if (mode === "reintroduced" || mode === "target-advanced") {
+      assert.equal(s.git("--git-dir", s.remote, "show", "work:main.txt"), "latest repair");
+      assert.equal(readFileSync(join(s.host.cwd!, "rejected.txt"), "utf8"), "must stay local\n");
+    }
+    await finishTaskHostOperation(s.host);
+    assert.equal(confirmations, 1, "已完成操作恢复不重复确认或传输");
+    assert.equal(op.id, done.id);
+  });
+}
 
 test("恢复交付文件不能伪造用户授权，内核失败不先放宽 Cloud 清单", async t => {
   const s = excludedFilesScene(t);
