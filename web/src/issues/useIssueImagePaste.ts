@@ -34,8 +34,9 @@ export function insertMarkdownAtCursor(
 }
 
 /** 网页「复制图像」的 text/html 只有一个 <img> 且无正文文字时视为纯图
- * 粘贴;带文字的富文本混排不算,避免把普通复制误拦成图片上传。 */
-function htmlIsImageOnly(html: string): boolean {
+ * 粘贴;带文字的富文本混排不算,避免把普通复制误拦成图片上传。
+ * 登记页 milkdown 编辑器(DescriptionEditor)复用同一判定。 */
+export function htmlIsImageOnly(html: string): boolean {
   if (!/<img[\s>]/i.test(html)) return false;
   const body = new DOMParser().parseFromString(html, "text/html").body;
   return body.querySelector("img") !== null && (body.textContent ?? "").trim() === "";
@@ -43,7 +44,7 @@ function htmlIsImageOnly(html: string): boolean {
 
 /** 异步 Clipboard API 兜底:浏览器在系统剪贴板里其实放了位图,只是 paste
  * 事件不交给网页;clipboard.read 拿得到。无该 API 或被拒则回 null。 */
-async function readClipboardImageFile(): Promise<File | null> {
+export async function readClipboardImageFile(): Promise<File | null> {
   if (!navigator.clipboard?.read) return null;
   const items = await navigator.clipboard.read();
   for (const item of items) {
@@ -55,7 +56,8 @@ async function readClipboardImageFile(): Promise<File | null> {
   return null;
 }
 
-const FALLBACK_HINT =
+/** 读不到字节时的统一指路(登记编辑器与会话粘贴钩子共用)。 */
+export const FALLBACK_HINT =
   "读不到网页复制图片的原图字节:剪贴板读取被拒或当前环境不支持(需 https/localhost),可改用截图后粘贴";
 
 /** 截图粘贴钩子:onPaste 挂到 textarea;命中图片即上传并把 markdown

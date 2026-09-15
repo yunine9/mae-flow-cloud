@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
  * 待补充令牌(**【待补充】**)就是普通加粗,不做任何编辑器特殊化
  * (#184 拍板:不写编辑器插件,红色只出现在自有渲染面)。
  */
-import { Editor, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
+import { Editor, editorViewCtx, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
@@ -21,6 +21,7 @@ import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
 import { replaceAll } from "@milkdown/kit/utils";
 import { issueImageUrl } from "../api";
 import { displayUrlToRef, refToDisplayUrl } from "./issueImageRef";
+import { FALLBACK_HINT, htmlIsImageOnly, readClipboardImageFile } from "./useIssueImagePaste";
 import { cn } from "cn";
 
 export function DescriptionEditor({
@@ -124,6 +125,55 @@ export function DescriptionEditor({
     const editor = editorRef.current;
     editor?.action(replaceAll(refToDisplayUrl(value, issueImageUrl)));
   }, [value]);
+
+  // 网页右键「复制图像」粘贴兜底(milkdown 版,与 useIssueImagePaste 同款
+  // 判定):Chromium 只把 <img src> 引用放 text/html、不给位图字节——
+  // 不拦的话 ProseMirror 按 HTML 直插图节点,原 src(data:/https:)原样
+  // 进 description:staging 上传被绕开(登记提交、润色识图都拿不到图),
+  // 润色侧 images.length===0 静默跳过识图,稿子只剩模板(#184 实测)。
+  // 命中纯图粘贴即拦默认,异步 Clipboard API 取回位图走同一条上传钩子,
+  // 插入的仍是 issue-images/ 相对引用;带位图文件的粘贴归 upload 插件。
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const intercept = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      if (!data) return;
+      for (const item of Array.from(data.items)) {
+        if (item.type.startsWith("image/") && item.getAsFile()) return;
+      }
+      const html = data.getData("text/html") ?? "";
+      if (!htmlIsImageOnly(html)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      readClipboardImageFile()
+        .catch(() => null)
+        .then((file) => {
+          if (!file) {
+            errorRef.current?.(FALLBACK_HINT);
+            return undefined;
+          }
+          // 上传失败由上传钩子自行上报,这里不代发第二遍。
+          return uploadRef.current(file);
+        })
+        .then((ref) => {
+          if (!ref) return;
+          editorRef.current?.action((ctx) => {
+            const view = ctx.get(editorViewCtx);
+            const node = view.state.schema.nodes.image?.createAndFill?.({
+              src: issueImageUrl(ref), alt: "截图",
+            });
+            if (node) {
+              view.dispatch(
+                view.state.tr.replaceSelectionWith(node).scrollIntoView());
+            }
+          });
+        });
+    };
+    // 捕获段拦截:抢在 ProseMirror 的原生 paste 处理之前拿住事件。
+    root.addEventListener("paste", intercept, true);
+    return () => root.removeEventListener("paste", intercept, true);
+  }, []);
 
   // #231 换装:.issue-desc-editor 家族(style.css)退役,壳/占位/灯箱与
   // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用
