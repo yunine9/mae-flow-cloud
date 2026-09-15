@@ -407,9 +407,11 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
         <span className="task-overline">
           {/* 单号直达 DTS 门户:React 走 DOM API 建树,a 嵌在 button 里
               可用(HTML 解析禁令只管字符串建档);stopPropagation 拦住
-              冒泡,点单号不会顺带打开工作台。 */}
+              冒泡,点单号不会顺带打开工作台。链接皮(主色+悬停下划线)
+              与登记页 DTS 列表同款——纯文字外观看不出能点。 */}
           {issue.ticket
-            ? <a className="task-ticket" href={dtsTicketUrl(issue.ticket)}
+            ? <a className="task-ticket text-primary underline-offset-2
+                hover:underline" href={dtsTicketUrl(issue.ticket)}
                 target="_blank" rel="noreferrer"
                 title={`在 DTS 门户打开 ${issue.ticket}`}
                 onClick={(event) => event.stopPropagation()}>

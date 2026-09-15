@@ -294,16 +294,10 @@ const WRITE_ROUTES: Array<{
   denied: string;
 }> = [
   {
-    what: "材料快速修改", method: "PUT",
-    parts: ["issues", LIVE, "materials", "file"],
-    payload: { path: "repo/a.md", content: "x" },
-    denied: "只能修改自己会话的工作区",
-  },
-  {
-    what: "解压日志", method: "POST",
-    parts: ["issues", LIVE, "materials", "log-extract"],
-    payload: { path: "logs/bundle.zip" },
-    denied: "只能解压自己会话的日志",
+    what: "请求拉取日志", method: "POST",
+    parts: ["issues", LIVE, "logs", "fetch"],
+    payload: {},
+    denied: "只能请求拉取自己会话的日志",
   },
   {
     what: "记检视意见", method: "POST",
@@ -382,7 +376,7 @@ test("写闸全量:非归属开发者与管理员调每条写路由都 403 且�
   const { service } = makeFixture();
   try {
     assert.ok(WRITE_ROUTES.length >= 12,
-      "写路由盘点不能缩水——当前 /issues/:id 下有 12 条写路由");
+      "写路由盘点不能缩水——当前 /issues/:id 下写路由只增不减(≥12)");
     for (const viewer of [PEER, ADMIN]) {
       const who = viewer.role === "admin" ? "管理员" : "非归属开发者";
       for (const route of WRITE_ROUTES) {
@@ -479,7 +473,8 @@ test("源码契约:/issues/:id 下每条写路由分支都自带 own() 归属闸
     assert.ok(branch.body.includes("own("),
       `写路由分支缺归属闸(${branch.head})——/issues/:id 下每条写路由`
         + "必须自带 own() 闸,不能靠(已不存在的)整体闸兜底");
-    assert.match(branch.body, /只有归属人|只能修改自己会话|只能解压自己会话/,
+    assert.match(branch.body,
+      /只有归属人|只能修改自己会话|只能解压自己会话|只能请求拉取自己会话/,
       `写路由 403 文案要指明动作与归属限制(${branch.head})`);
   }
 

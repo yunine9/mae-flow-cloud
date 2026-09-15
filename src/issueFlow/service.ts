@@ -148,6 +148,7 @@ import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { type ModelsSettings } from "../settings.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import { createContainerBashOperations } from "./containerBash.ts";
+import { applyDebugIssueSkillPatch } from "./debugIssue.ts";
 import {
   issueWarmupMission,
   type IssueWarmupOutcome,
@@ -568,6 +569,10 @@ export interface IssueFlowOptions {
   dts?: DtsGateway;
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
+  /** 调试形态(--debug-issue):会话技能物化后把 issue-ops 的抓日志
+   * wrapper 换成假引擎(罐头复制,不连网管)。旗标缺席时整个字段
+   * 不在,会话行为与现状逐字节一致。 */
+  debugIssue?: { opsMockBinDir: string };
   vault?: IssueEnvironmentVault;
   /** 环境台账(ADR-0020/#150 快照语义):登记与 env_needed 闸从台账
    * 选环境时解密取值。缺省按 dataDir 自建(与 vault 同一数据目录的
@@ -1139,24 +1144,11 @@ export class IssueFlowService {
   /** 会话现场定位(收窄票 #7):材料/事件旁路改由路由直连各自模块后,
    * 这里是路由拿到"哪个会话、现场在哪"的唯一入口。未知会话抛
    * IssueNotFoundError——与原先各透传方法里的 require 同一 404 语义。
-   * state 是活引用:材料旁路只读;快速修改写的是仓内文件与人工台账,
-   * 不动台账本身。 */
+   * state 是活引用:材料旁路只读(人工修改写口已随 ADR-0028 退役),
+   * 路由不写会话状态。 */
   session(id: string): { state: IssueSessionState; root: string } {
     const live = this.require(id);
     return { state: live.state, root: live.root };
-  }
-
-  /** 解压日志档案的属主交接参数(#47):isolation.user 与运行时形态只有
-   * 服务知道,而材料路由直连 materials.ts 不经服务转手——写口(解压)
-   * 需要交接容器属主时从这里取,与拉仓收口同一来源。 */
-  logOwnershipInputs(): {
-    user?: string;
-    runtime?: ContainerOwnershipRuntime;
-  } {
-    return {
-      user: this.options.isolation?.user,
-      runtime: this.options.ownershipRuntime,
-    };
   }
 
   // ---- 视图旁路:耗时与卡点(只读,fail-open);过程文档数据面在 documents.ts ----
@@ -1757,6 +1749,44 @@ export class IssueFlowService {
         { repos: removed.join("、") }).trim());
     }
     this.startPlatformTurn(live, sections.join("\n\n"));
+    return summarize(state);
+  }
+
+  /** 主动拉取日志的意图递交口(#268,POST /issues/:id/logs/fetch;
+   * Agent 主理第二例,ADR-0026):按钮不执行任何事,端点只守卫+留痕+
+   * 经平台回合通道投递通知词——拉取由 Agent 按技能 issue-ops 执行,
+   * 缺环境走既有环境闸(request_env 举卡→回填→自动续拉),平台不代拉。
+   * 无重复拉取门禁:排队语义下连点只是重复意图,通知词一句"已拉取过
+   * 先向用户确认"兜住;无独立"已拉取"状态位,页面判定用材料清单。
+   * 投递通道与 requestRepoChanges 同一咽喉:startPlatformTurn(忙=
+   * steer 送达,等人/终态=park 便签随续聊带上,空闲=开续聊回合)。 */
+  requestLogFetch(id: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    // 终态守卫(与调整仓清单同款):终态不可续聊,投递只会写成永不
+    // 送达的死信。页面侧按钮本就被终态闸隐藏,这里防的是直调 API。
+    if (state.status === "archived" || state.status === "canceled"
+      || state.status === "failed") {
+      throw new IssueControlError(
+        "该问题单已结束(终态),不能再请求拉取日志");
+    }
+    if (state.status === "queued") {
+      throw new IssueControlError(
+        "首轮研究还在排队启动,请稍候再请求拉取日志");
+    }
+    recordTransition(state, {
+      source: "platform",
+      note: "用户请求拉取网管日志——拉取由 Agent 按技能 issue-ops 执行,"
+        + "端点不代拉",
+    });
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "user_message", {
+      text: "请求拉取网管日志",
+      via: "logs",
+    });
+    this.log(`[issue-flow] ${id} 用户请求拉取日志`);
+    // 段文先 trim:park 便签只取首行,不 trim 就把锚点段的空行当首行。
+    this.startPlatformTurn(live, promptCopy("notices", "logs.fetch").trim());
     return summarize(state);
   }
 
@@ -3107,6 +3137,11 @@ export class IssueFlowService {
       mode: 0o600,
     });
     const skillPaths = materializeIssueSkills(live.root);
+    // 调试形态(--debug-issue):物化后把 issue-ops 的抓日志 wrapper
+    // 换成假引擎。只在旗标在场时发生;正式形态无此调用。
+    if (this.options.debugIssue) {
+      applyDebugIssueSkillPatch(live.root, this.options.debugIssue.opsMockBinDir);
+    }
     this.log(`[issue-flow] ${live.id} 装载技能: ${
       skillPaths.map((path) => path.split("/").at(-2)).join(", ")}`);
     const service = this;
