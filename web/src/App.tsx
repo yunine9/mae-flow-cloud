@@ -1273,7 +1273,7 @@ export function App() {
   };
   const selectView = (next: View) => {
     if (next !== "knowledge" && new URLSearchParams(location.search).has("experience")) {
-      const url = new URL(location.href); url.searchParams.delete("experience"); url.searchParams.delete("source_task");
+      const url = new URL(location.href); url.searchParams.delete("experience"); url.searchParams.delete("source_task"); url.searchParams.delete("memory_id");
       history.replaceState(history.state, "", url);
     }
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
@@ -1318,7 +1318,7 @@ export function App() {
   const selectTeamAssetTab = (next: TeamAssetTab) => {
     const url = new URL(location.href);
     if (next === "memories") url.searchParams.set("experience", "1");
-    else { url.searchParams.delete("experience"); url.searchParams.delete("source_task"); }
+    else { url.searchParams.delete("experience"); url.searchParams.delete("source_task"); url.searchParams.delete("memory_id"); }
     history.replaceState(history.state, "", url);
     setTeamAssetTab(next);
     if (!knowledgeFocus) {

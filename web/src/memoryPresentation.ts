@@ -19,3 +19,9 @@ export function memoryPreparation(row: {
   if (row.drafting) return { label: "整理中 · 待确认", title: "模型正在整理候选，采纳后才能复用；不影响任务继续。" };
   return { label: "待确认", title: row.draft === "failed" ? "整理失败，原记录保留；可人工修订后采纳。" : "尚无明确采纳记录。查看依据、结论及适用范围后再决定，不默认复用。" };
 }
+
+/** 对话回执直达具体候选；地址只用于导航，不改变审查权限。 */
+export function memoryReviewFocus(search: string): string | undefined {
+  const id = new URLSearchParams(search).get("memory_id");
+  return id && /^c-[a-z0-9]+-[a-f0-9]+$/.test(id) ? id : undefined;
+}

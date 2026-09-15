@@ -1,7 +1,7 @@
 /** 经验沉淀的唯一审查入口：候选留档、人工采纳与使用足迹集中展示。 */
 import { useEffect, useMemo, useState } from "react";
 import { getMemoryInsights, readMemoryInsight, type MemoryInsights, type MemoryRecord } from "./api";
-import { memoryPreparation, memorySearchPresentation } from "./memoryPresentation";
+import { memoryPreparation, memorySearchPresentation, memoryReviewFocus } from "./memoryPresentation";
 import { MemoryReviewEditor } from "./MemoryReviewEditor";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -10,6 +10,7 @@ const scopes = { local: "本仓相关位置", general: "本仓通用", platform:
 export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => void }) {
   const [insights, setInsights] = useState<MemoryInsights>();
   const [error, setError] = useState("");
+  const [focusError, setFocusError] = useState("");
   const [tab, setTab] = useState("pending");
   const [query, setQuery] = useState("");
   const [sourceTask, setSourceTask] = useState(() => new URLSearchParams(location.search).get("source_task") ?? "");
@@ -25,6 +26,27 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     void refresh(); const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 15_000);
     return () => { alive = false; window.clearInterval(timer); };
   }, []);
+  useEffect(() => {
+    const id = memoryReviewFocus(location.search);
+    if (!id) return;
+    let alive = true;
+    setOpening(true);
+    void readMemoryInsight(id).then(value => {
+      if (!alive) return;
+      if (!value) throw new Error("这条经验已不可用，请在列表中查看其他记录");
+      setSelected(value);
+      setTab(value.record.archived || value.record.withdrawn || value.record.superseded_by ? "all"
+        : value.record.review?.status === "accepted" ? "accepted"
+        : value.record.review?.status === "rejected" ? "rejected" : value.record.can_review ? "pending" : "all");
+    }).catch(reason => { if (alive) setFocusError(String(reason)); })
+      .finally(() => { if (alive) setOpening(false); });
+    return () => { alive = false; };
+  }, []);
+  function clearFocus() {
+    const url = new URL(location.href); url.searchParams.delete("memory_id");
+    history.replaceState(history.state, "", url);
+    setSelected(undefined); setDirty(false); setFocusError("");
+  }
   const rows = useMemo(() => (insights?.memories ?? []).filter(row => (tab === "all" || (!row.withdrawn && !row.superseded_by && !row.archived))
     && (!sourceTask || row.task === sourceTask)
     && (tab === "all" || (row.review?.status ?? "pending") === tab)
@@ -32,11 +54,12 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     && (!query.trim() || `${row.trigger} ${row.conclusion} ${row.repo}`.includes(query.trim()))), [insights, sourceTask, tab, query]);
   const pending = (insights?.memories ?? []).filter(row => row.can_review && !row.withdrawn && !row.superseded_by && !row.archived && (row.review?.status ?? "pending") === "pending").length;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 10) - 1));
-  function dismiss() { if (!dirty || window.confirm("尚未采纳的编辑将被放弃，继续吗？")) { setSelected(undefined); setDirty(false); } }
+  function dismiss() { if (!dirty || window.confirm("尚未采纳的编辑将被放弃，继续吗？")) { clearFocus(); } }
   async function open(id: string) {
     if (opening) return;
     setOpening(true); setError("");
-    try { const value = await readMemoryInsight(id); if (!value) throw new Error("记录已不可用，请刷新"); setSelected(value); setDirty(false); }
+    try { const value = await readMemoryInsight(id); if (!value) throw new Error("记录已不可用，请刷新"); setSelected(value); setDirty(false); setFocusError("");
+      const url = new URL(location.href); url.searchParams.set("memory_id", id); history.replaceState(history.state, "", url); }
     catch (reason) { setError(String(reason)); } finally { setOpening(false); }
   }
   return <section className="grid gap-4 rounded-xl border border-border bg-surface p-5" aria-label="经验沉淀">
@@ -46,7 +69,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
       {selected ? <Button variant="outline" onClick={dismiss}>返回候选列表</Button>
         : <Button variant="outline" onClick={() => void load().catch(reason => setError(String(reason)))}>刷新</Button>}
     </header>
-    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {(error || focusError) && <p role="alert" className="text-sm text-destructive">{focusError || error}</p>}
     {selected ? <>
       <div className="flex items-center justify-between rounded-md bg-muted p-3 text-sm"><span>{selected.record.trigger} · {memoryPreparation(selected.record).label}</span>
         <Button variant="outline" size="sm" onClick={() => { if (onOpenTask) onOpenTask(selected.record.task); else location.assign(`/work/${encodeURIComponent(selected.record.task)}`); }}>查看来源任务 {selected.record.task}</Button></div>
@@ -60,7 +83,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
         </Button>)}
       </aside>
       <MemoryReviewEditor key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
-        onDirty={setDirty} onDismiss={dismiss} onChanged={async () => { await load(); setSelected(undefined); }} />
+        onDirty={setDirty} onDismiss={dismiss} onChanged={async () => { clearFocus(); await load().catch(reason => setError(String(reason))); }} />
       </div>
       <details className="text-sm"><summary className="cursor-pointer">完整留档与来源标识</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3">{selected.content}</pre></details>
     </> : <>

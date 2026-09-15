@@ -326,11 +326,11 @@ export function Composer({
       : task.status === "verifying"
         ? "发送后停止当前验证并恢复 Agent，按新要求继续处理。"
         : "发送后从当前现场恢复 Agent，继续处理你的新要求。",
-    placeholder: "说明需要继续修改或排查什么",
+    placeholder: "说明需要继续处理什么，也可以说“帮我沉淀这条经验”",
   } : {
     title: "捎一句给正在跑的 Agent",
     detail: "现在就能交办；当前工具结束后读取，结合正在做的工作处理",
-    placeholder: "例如:掩码保留后四位,不要处理区号",
+    placeholder: "补充开发要求，也可以说“帮我沉淀这条经验”",
   };
   const steerDisabledReason = canSteer ? undefined
     : takeoverActive ? {

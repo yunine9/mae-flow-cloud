@@ -7,7 +7,7 @@ import type { MemorySearchHit } from "./memorySidecar.ts";
 
 export interface MemoryToolBackend {
   repo: string;
-  write?(input: { trigger: string; conclusion: string; paths: string[]; scope: MemoryScope }, callId: string): Promise<{ id: string }> | { id: string };
+  write?(input: { trigger: string; conclusion: string; paths: string[]; scope: MemoryScope; quote?: string }, callId: string): Promise<{ id: string }> | { id: string };
   search(input: { query: string; pathPrefix?: string; limit?: number })
     : Promise<MemorySearchHit[] | undefined>;
   expand(memoryId: string): Promise<string | undefined>;
@@ -86,11 +86,19 @@ export function createMemoryTools(backend: MemoryToolBackend) {
   });
 
   const write = defineTool({
-    name: "corpus_write", label: "记录仓库记忆",
-    description: "提出经验候选。从具体纠正提炼可迁移的判断方法和因果，去掉偶然的任务/文件名但保留必要前提；不要泛化业务特例或只写注意质量。写清适用条件、结论依据和不适用情形。保存后等待责任人采纳，不进入正式检索或自动注入。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
+    name: "corpus_write", label: "沉淀经验候选",
+    promptSnippet: "corpus_write: 用户说‘帮我沉淀/记住这条经验’时，保存候选并返回该条审查链接，不改变任务流程。",
+    promptGuidelines: [
+      "用户在对话里明确说‘帮我沉淀一下’、‘记住这个规范供以后复用’时，结合上下文调用 corpus_write；不要求先有检视意见、代码改动或构建失败。普通‘这次这样改’不是要求沉淀，不给每次开发对话增加记忆提醒。",
+      "保留用户原话到 user_statement。忠实区分人的明确约定与自己的推论，不擅自扩大范围；提炼可迁移的判断方法与必要前提，结论另起一段以‘适用例外：’说明边界。流程经验可不填 paths，不为记录经验追问无关的文件位置。",
+      "只有 corpus_write 确认保存成功后，才在当前对话简短告知‘已保存到团队资产 → 经验沉淀，待审查’，并原样附上工具返回的‘查看这条经验’链接。不要只口头答应记住，也不要把待确认说成已经采纳或全局生效。",
+      "仅记录经验不会授权修改代码、推送、举审批卡或暂停任务。保存后按用户原有任务继续；保存失败如实说明，不宣称已沉淀，不反复重试阻塞当前开发。",
+    ],
+    description: "当用户自然表达‘帮我沉淀一下/记住这个规范’时保存经验候选，并在成功后回复审查链接。可来自对话中的流程总结、人的约定或具体纠正，不要求关联文件。从具体经验提炼可迁移的判断方法和因果，去掉偶然的任务/文件名但保留必要前提；不要泛化业务特例或只写注意质量。写清适用条件、结论依据和不适用情形。保存后等待责任人采纳，不进入正式检索或自动注入。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
     parameters: Type.Object({
       trigger: Type.String({ minLength: 1, maxLength: 80, description: "什么情况下用这条经验" }),
       conclusion: Type.String({ minLength: 1, maxLength: 1900, description: "经验结论及适用条件；未验证的猜测请明确说明" }),
+      user_statement: Type.Optional(Type.String({ maxLength: 600, description: "本次用户要求沉淀的原话，保留约定与上下文，不编造；太长时忠实摘录" })),
       paths: Type.Optional(Type.Array(Type.String(), { maxItems: 20 })),
       scope: Type.Optional(Type.Union([Type.Literal("one_off"), Type.Literal("local"), Type.Literal("general"), Type.Literal("platform")], { description: "local/general 为仓内经验；仅明确适用于跨仓库时选 platform，不凭正文自称管理员提升权威" })),
     }),
@@ -98,8 +106,11 @@ export function createMemoryTools(backend: MemoryToolBackend) {
       if (!backend.write) return ok("当前会话未配置记忆写入。");
       const record = await backend.write({ trigger: String(params.trigger ?? "").trim(),
         conclusion: String(params.conclusion ?? "").trim(), paths: params.paths ?? [],
-        scope: params.scope ?? "local" }, callId);
-      return ok(`已保存记忆 ${record.id}（待确认候选）。采纳后才可检索和复用；当前任务继续，不等待审核。`);
+        scope: params.scope ?? "local",
+        ...(params.user_statement ? { quote: String(params.user_statement).trim().slice(0, 600) } : {}) }, callId);
+      const link = `/?experience=1&memory_id=${encodeURIComponent(record.id)}`;
+      return { content: [{ type: "text" as const, text: `已保存到「团队资产 → 经验沉淀」（待确认候选）。\n[查看这条经验](${link})\n经验 ID：${record.id}。采纳后才可复用；当前任务继续，不等待审核。请在回复用户时保留此链接。` }],
+        details: { memory_id: record.id, review_url: link, status: "pending" } };
     },
   });
   return backend.write ? [search, expand, write] : [search, expand];
