@@ -1,3 +1,4 @@
+import { IssueExternalReviewPanel } from "./IssueExternalReviewPanel";
 /**
  * 会话域:会话工作台全屏视图(头部 / 阶段线 / 逐仓交付 / 耗时卡点 / 双栏)。
  *
@@ -386,8 +387,9 @@ export function IssueSessionView({
         </div>}
         {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
             不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}
-        {Boolean(detail.feedback?.length)
-          && <FeedbackPanel feedback={detail.feedback!} />}
+        <IssueExternalReviewPanel id={detail.id} canOperate={canOperate} />
+        {Boolean(detail.feedback?.some(item => item.source !== "mr_discussion"))
+          && <FeedbackPanel feedback={detail.feedback!.filter(item => item.source !== "mr_discussion")} />}
 
         {/* 左栏内容(#123 拍平 + #127 走查反馈):六个一级标签直排——
             对话现场(默认入口)放首位,逐仓交付收编为末签。页签条是

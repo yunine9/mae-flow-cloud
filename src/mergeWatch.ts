@@ -24,17 +24,12 @@ export interface GateView {
 
 export type RepairKind = "review" | "conflict" | "ci";
 
-/** 九项门禁里只有三类 agent 能修(名字来自内网既有框架文档,见
- * docs/mr-loop-adaptation.md §4)。三项可修按优先级排:数字小=先修,
- * 同时多项失败只派最高优先级那一路——冲突不解 CI 白跑,检视优先于
- * 代码问题。其余六项(审批/投票/WIP/e2e/自定义/评估)只能等人:
- * 系统保持监控、通知归属人,不派 agent 不扣重试。认不出的名字一律
- * 按等人处理并把名字留痕——瞎修比不修危险。 */
+/** 冲突与客观 CI 失败可自动修复。MR 检视意见交责任人判断，
+ * 不能因出现新报告就自动改代码；其余审批门禁继续等真实平台结果。 */
 export const REPAIRABLE_GATES: Record<
   string,
   { kind: RepairKind; priority: number }
 > = {
-  resolve_discussion_passed: { kind: "review", priority: 10 },
   conflict_passed: { kind: "conflict", priority: 15 },
   ci_state_passed: { kind: "ci", priority: 20 },
   // 代码质量门禁(内网 2026-08-18 首次拿到真实门禁集才发现有这一项)。
@@ -50,6 +45,7 @@ export const REPAIRABLE_GATES: Record<
  * 界面上"等 approval_reviewers_required_passed"没人看得懂,而这些
  * 名字来自内网真实 MR(2026-08-18 selftest 实测的 19 项)。 */
 export const HUMAN_GATE_TEXT: Record<string, string> = {
+  resolve_discussion_passed: "等责任人处理 MR 检视意见",
   approvers_passed: "等审批",
   vote_passed: "等投票",
   work_in_progress_passed: "等摘除 WIP 标记",

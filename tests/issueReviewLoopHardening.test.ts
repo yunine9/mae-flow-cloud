@@ -22,6 +22,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
+import { reviewStore } from "../src/issueFlow/reviews.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
@@ -133,37 +134,22 @@ async function reviewFixture(options: {
   };
 }
 
-test("重启续挂:检视监听复活,落盘的待注入标志把 open 意见重新交给 AI", async () => {
-  const scene = await reviewFixture({
-    seed: { id: "R1", body: "这里的连接池没有超时回收,存在泄漏风险" },
-  });
+test("重启继续同步外部批注，旧待注入标志不再自动派修", async () => {
+  const scene = await reviewFixture({ seed: { id: "R1", body: "这里的连接池没有超时回收,存在泄漏风险" } });
   try {
-    // 意见落账 → 注入 #1 到达模型;AI 只回一句,记录保持 open。
-    await until(() => Boolean(scene.recordOf("R1")), "R1 落反馈账");
-    await until(() =>
-      JSON.stringify(scene.model.requests).includes("连接池没有超时回收"),
-    "注入 #1 到达模型");
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    assert.equal(scene.recordOf("R1")!.status, "open", "AI 未回复,记录留 open");
-
-    // 重启:监看全部死亡(进程内模拟=shutdown+新实例)。
+    await until(() => reviewStore(scene.issueDir).list().some(item => item.external_review), "外部意见同步为批注");
+    const note = reviewStore(scene.issueDir).list().find(item => item.external_review)!;
+    assert.equal(note.agent_assigned, undefined);
     await scene.service.shutdown();
-    // 待注入标志落盘(等价于崩溃窗口里"已落账未注入"的持久状态)。
-    writeFileSync(join(scene.issueDir, "mr-review-notify.json"),
-      JSON.stringify({ at: new Date().toISOString() }) + "\n");
+    writeFileSync(join(scene.issueDir, "mr-review-notify.json"), JSON.stringify({ at: new Date().toISOString() }));
     const restarted = new IssueFlowService(scene.serviceOptions);
-    // 恢复的监看读到标志 → 注入 #2 再达模型(监看复活的可观察证明)。
-    const hits = () =>
-      JSON.stringify(scene.model.requests)
-        .split("连接池没有超时回收").length - 1;
-    await until(() => hits() >= 2, "重启后注入 #2 再达模型");
-    const after = (restarted.get(scene.id).feedback ?? [])
-      .find((item) => item.source_id === "R1");
-    assert.equal(after!.status, "open", "未回复的意见重启后仍是 open");
-    await restarted.shutdown();
-  } finally {
-    await scene.stop();
-  }
+    try {
+      scene.platform.seedDiscussion({ id: "R2", body: "重启后的新报告", file: "a.cpp", line: 1, author: "数字人" });
+      await until(() => reviewStore(scene.issueDir).list().some(item => item.external_review?.discussion_id === "R2"), "重启后发现新报告");
+      assert.equal(reviewStore(scene.issueDir).list().filter(item => item.external_review?.discussion_id === "R1").length, 1);
+      assert.doesNotMatch(JSON.stringify(scene.model.requests), /连接池没有超时回收|重启后的新报告/);
+    } finally { await restarted.shutdown(); }
+  } finally { await scene.stop(); }
 });
 
 test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自愈投递", async () => {
@@ -231,29 +217,20 @@ test("归因分家:AI resolve 的讨论记『Agent 回复并解决』,检视人�
   }
 });
 
-test("追问:同讨论版本号变化且未了结=新触发,追问正文进注入清单", async () => {
-  const scene = await reviewFixture({
-    seed: { id: "Q1", body: "这里建议加监控埋点" },
-  });
+test("追问作为新待判断批注，原意见本地闭环后不复活，也不自动注入", async () => {
+  const scene = await reviewFixture({ seed: { id: "Q1", body: "这里建议加监控埋点" } });
   try {
-    await until(() => Boolean(scene.recordOf("Q1")), "Q1 落反馈账");
-    await until(() =>
-      JSON.stringify(scene.model.requests).includes("监控埋点"),
-    "首轮注入到达模型");
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    // 检视人在同一线程追问:讨论 id 不变,revision 变,正文更新。
-    const q1 = scene.platform.discussions.find((item) => item.id === "Q1")!;
+    const store = reviewStore(scene.issueDir);
+    await until(() => store.list().some(item => item.external_review), "首条同步");
+    const first = store.list().find(item => item.external_review)!;
+    store.drop(first.id, "owner", true);
+    const q1 = scene.platform.discussions.find(item => item.id === "Q1")!;
     q1.revision = (q1.revision ?? 0) + 1;
     q1.body = "追问:埋点名字要带前缀";
-    await until(() =>
-      (scene.recordOf("Q1")?.source_revision ?? 0) > 0,
-    "追问刷新账上的版本号");
-    await until(() =>
-      JSON.stringify(scene.model.requests).includes("追问:埋点名字要带前缀"),
-    "追问进入注入清单(再次通知 AI)");
-  } finally {
-    await scene.stop();
-  }
+    await until(() => store.list().filter(item => item.external_review).length === 2, "追问作为新待判断批注");
+    assert.equal(store.list().find(item => item.id === first.id)!.status, "dropped");
+    assert.doesNotMatch(JSON.stringify(scene.model.requests), /追问:埋点名字要带前缀/);
+  } finally { await scene.stop(); }
 });
 
 test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常投递", async () => {

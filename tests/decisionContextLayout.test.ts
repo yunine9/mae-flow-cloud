@@ -245,7 +245,7 @@ test("工作台打开期间收起提问题浮钮,检视画布自己滚动", () =
   assert.doesNotMatch(css + studio, /padding: 12px 12px 84px/, "躲避浮钮的死白不许回来");
 });
 
-test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
+test("检视意见顶部有处理归属筛选条,MR 意见自动同步为批注", () => {
   // (#210)手搓 role=tablist 换 base-ui Tabs 原语;#227 换装后筛选条的
   // .review-filter 皮肤类退役,胶囊档位改由 TabsList/TabsTrigger 工具类
   // 承担,筛选语义与档位词表原样。
@@ -254,9 +254,7 @@ test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作�
   assert.match(workspace, /\["agent", "待处理／核验"\]/);
   assert.match(workspace, /\["closed", "已完成"\]/);
   assert.match(workspace, /filter=\{inline \? "all" : reviewFilter\}/, "批注面板吃同一个筛选档");
-  assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
-    "转批注沿用批注创建权限");
-  assert.match(workspace, /【转自 \$\{origin\}】/);
+  assert.doesNotMatch(workspace, /onConvert=|convertFeedbackToAnnotation/, "已自动同步，不再要求手动转批注");
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
   // 分档口径只有一处:服务端 feedbackPolicy 下发 bucket,面板照分。
@@ -312,25 +310,23 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   assert.doesNotMatch(workspace, /feedbackDigest/,
     "入口不应再堆一行解释性文案");
   assert.match(workspace, /function FeedbackList/);
-  assert.match(workspace, /title="来自 CodeHub 的检视意见"/);
-  assert.match(workspace, /item\.source === "mr_discussion"\)/);
-  assert.match(workspace, /mrUrl=\{task\.delivery\?\.mr_url\}/,
-    "CodeHub 意见列表要给回到 MR 的入口");
+  assert.doesNotMatch(workspace, /title="来自 CodeHub 的检视意见"/, "同一意见不重复展成长列表");
   assert.match(workspace, /title="来自流水线与机器门禁的告警"/);
   // 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与机器门禁
   // (用户实锤:第一节只叫"批注"时读不出它就是 Cloud 平台上的检视意见)。
   const panelSource = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  assert.match(panelSource, /<strong>来自 Cloud 工作台的检视意见<\/strong>/);
+  assert.match(panelSource, /<strong>检视批注<\/strong>/);
   assert.match(workspace, /item\.source !== "mr_discussion" && item\.source !== "workspace"/,
     "工作台批注已由批注卡片承载,不重复列");
   assert.match(readFileSync(join(process.cwd(), "web/src/feedbackPresentation.ts"), "utf8"), /已回复，等检视人确认/);
   assert.match(workspace, /检视人 \$\{item\.author\}/);
-  // #227 换装:.feedback-list/.feedback-body 皮肤类退役,正文原样换行的
-  // 契约由工具类(whitespace-pre-wrap)直接钉在意见正文上。
-  assert.match(workspace,
-    /className="m-0 whitespace-pre-wrap \[overflow-wrap:anywhere\] text-text">\{item\.summary\}/,
-    "意见正文原样换行,不再单行省略");
+  assert.match(workspace, /<ReviewBody text=\{item.summary\}/, "机器报告也复用长正文折叠");
+  assert.match(panelSource, /<ReviewBody text=/, "MR 与工作台原文使用统一正文组件");
+  const body = readFileSync(join(process.cwd(), "web/src/ReviewBody.tsx"), "utf8");
+  assert.match(body, /<details/);
+  assert.match(body, /max-h-\[480px\].*overflow-auto/);
+  assert.match(body, />\{text\}<\/div>/, "展开保留完整原文，不只存摘要");
   assert.doesNotMatch(css, /\.feedback-list\s*\{/);
   assert.doesNotMatch(css, /\.feedback-body\s*\{/);
   assert.doesNotMatch(css, /\.feedback-groups\s*\{/,

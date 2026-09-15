@@ -1,3 +1,4 @@
+import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
@@ -112,9 +113,9 @@ import { createSplitProposalTool, type SplitProposalInput } from "./splitProposa
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
-import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, deferredSourceVersions, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
+import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
 import { prepareHostPush } from "./hostPushPreparation.ts";
-import { canHandoffReview, handoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
+import { canHandoffReview, handoffReview } from "./reviewHandoff.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -5137,6 +5138,7 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     this.reconcileResolvedDecisionAnnotations(task);
+    if (task.summary.delivery?.mr_url) importStoredExternalReviews(this.annotations(task), task.summary.workspace, task.summary.delivery.mr_url, task.summary.luban_account ?? "本地用户");
     const items = this.annotations(task).visible();
     const checks = reanchor(items, (artifact) =>
       this.annotationArtifactContent(task, artifact));
@@ -5162,6 +5164,7 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     this.reconcileResolvedDecisionAnnotations(task);
+    if (task.summary.delivery?.mr_url) importStoredExternalReviews(this.annotations(task), task.summary.workspace, task.summary.delivery.mr_url, task.summary.luban_account ?? "本地用户");
     const items = this.annotations(task).visible();
     const contents = new Map<string, string | undefined>();
     await Promise.all([...new Set(items.map((item) => item.artifact))]
@@ -5960,7 +5963,7 @@ export class TaskService {
     // 答复通知提出人继续补充意见；闭环仍由任务责任人逐条决定。
     // “责任人决策”下一棒在 Agent，不在这里制造一条对提出人无动作的通知；
     // Agent 真正处理完以后仍走既有的复检通知。
-    if (replied.route === "owner_reply" && replied.author !== by) {
+    if (replied.route === "owner_reply" && replied.author !== by && !replied.external_review) {
       const notifier = this.options.notifier;
       if (notifier) {
         const title = String(task.summary.title ?? task.summary.requirement
@@ -6002,6 +6005,13 @@ export class TaskService {
     return dropped;
   }
 
+  supplementAnnotation(id: string, annotationId: string, context: string, by: string): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    this.assertAnnotationOwner(task, by);
+    return this.annotations(task).saveAgentContext(annotationId, by, context);
+  }
+
   editAnnotation(
     id: string,
     annotationId: string,
@@ -6016,6 +6026,7 @@ export class TaskService {
     if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
     if (item?.status === "verified") throw new TaskControlError("已闭环意见保留历史；如有新意见请另行提出");
     if (item?.agent_assigned || (item?.status === "sent" && item.sent_via !== "owner_pending")) throw new TaskControlError("已交给 Agent 的意见请等待答复后重新处理，再修改或补充");
+    if (item.external_review) throw new TaskControlError("外部检视原文保留，请使用补充修改要求");
     return store.edit(annotationId, note, by, true);
   }
 
@@ -17182,12 +17193,6 @@ export class TaskService {
     // 不占路(报告 D3:平台不代人 resolve,红着只是没人点)——落到
     // 下一优先级继续,别让等人把 CI 修复堵死。
     for (const candidate of sorted.repairs) {
-      if (candidate.kind === "review") {
-        const outcome = await this.dispatchReviewRepair(task, max, epoch);
-        if (!this.current(task, epoch)) return;
-        if (outcome === "waiting" || outcome === "skip") continue;
-        return; // dispatched/halted 都已各自收口
-      }
       if (candidate.kind === "conflict") {
         if (await this.dispatchConflictRepair(task, sha, max, epoch)) return;
         continue;
@@ -17921,6 +17926,10 @@ export class TaskService {
         if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (discussions?.kind === "available") {
           observeMrDiscussions(task.summary.workspace, view.sourceSha ?? task.summary.delivery?.sha, discussions.items);
+          importExternalReviews(this.annotations(task), { scope: task.summary.delivery?.mr_url ?? mrKey, mrUrl: task.summary.delivery?.mr_url, owner: task.summary.luban_account ?? "本地用户", items: discussions.items });
+          this.bypass(task, "MR 新意见通知", notifyExternalReviews({ store: this.annotations(task), workspace: task.summary.workspace,
+            scope: task.summary.delivery?.mr_url ?? mrKey, owner: task.summary.luban_account ?? "", taskId: task.summary.id,
+            link: personalTaskLink(this.notificationLinkBase(), task.summary.luban_account ?? "", task.summary.id), notifier: this.options.notifier }));
           this.refreshOwnerInputs(task);
         }
         // 回复走已有单飞投递，平台慢响应不能拖住下一拍合入观察。
@@ -17953,10 +17962,8 @@ export class TaskService {
           task.summary.detail = REOPENED_MR_WRITE.detail;
           this.persist(task);
         }
-        // 明细优先于可能滞后的门禁摘要；未解决讨论绝不被绿灯核销。
-        const gates = discussions?.kind === "available" && discussions.items.length
-          ? [...view.gates.filter(g => g.name !== "resolve_discussion_passed"),
-            { name: "resolve_discussion_passed", passed: false }] : view.gates;
+        // 门禁按平台事实分类；原始意见只同步批注，不合成自动修复门禁。
+        const gates = view.gates;
         const sorted = classifyGates(gates);
         if (discussions?.kind === "unavailable") sorted.waiting.push(`MR 检视意见查询失败，正在重试：${discussions.reason}`);
         if (discussions?.kind === "available" && !discussions.items.length && gates.some((gate) =>
@@ -17982,25 +17989,6 @@ export class TaskService {
           } else {
             const sha = task.summary.delivery?.sha ?? "";
             for (const candidate of sorted.repairs) {
-              if (candidate.kind === "review") {
-                const outcome =
-                  await this.dispatchReviewRepair(task, max, task.controlEpoch, discussions);
-                if (this.shuttingDown
-                    || ["completed", "canceled"].includes(task.summary.status)) return;
-                if (outcome === "waiting") {
-                  sorted.waiting.push("等检视人确认已回复的意见");
-                  continue;
-                }
-                if (outcome === "retrying") {
-                  sorted.waiting.push("检视意见明细暂不可用，正在自动重试");
-                  continue;
-                }
-                if (outcome === "skip") continue;
-                // dispatched/halted 都已各自收口，但 MR 生命周期监听不能
-                // 跟着 writer 退场；平台仍可能在此刻完成合入。
-                await new Promise((tick) => setTimeout(tick, interval).unref());
-                continue watch;
-              }
               if (candidate.kind === "conflict") {
                 if (await this.dispatchConflictRepair(
                   task, sha, max, task.controlEpoch)) {
@@ -18025,7 +18013,8 @@ export class TaskService {
           // 等人的事要告诉人(幂等键=门禁集合,同一批等待只提醒一次;
           // 换了一批等待项才再响)。
           const account = task.summary.luban_account;
-          if (write.notice && this.options.notifier && account) {
+          if (write.notice && this.options.notifier && account
+              && sorted.waiting.some(item => item !== "等责任人处理 MR 检视意见")) {
             this.bypass(task, "等待通知",
               this.options.notifier.notifyOutcome({
               taskId: task.summary.id,
@@ -18459,182 +18448,6 @@ export class TaskService {
         ...(item.line !== undefined ? { line: item.line } : {}),
         ...(item.author ? { author: String(item.author).slice(0, 120) } : {}),
       })));
-  }
-
-  /** 检视修复派单(批3):拉未解决讨论→落盘 reviews/→专职会话逐条
-   * 处理并写 ../review_replies.md→收口后宿主发布回复(默认不代
-   * resolve,报告 D3)。不扣 CI 重试且清零(流程性问题不许耗掉代码
-   * 修复额度)。同一批讨论 id 分两种结局:回复都发布过了=等检视人
-   * 确认(waiting,调用方落到下一优先级继续);一条都没答复=会话
-   * 没干活,真刹车(halted)。 */
-  private async dispatchReviewRepair(
-    task: TaskState,
-    max: number | undefined,
-    epoch: number,
-    snapshot?: DiscussionFetch,
-  ): Promise<"dispatched" | "waiting" | "halted" | "retrying" | "skip"> {
-    if (!this.current(task, epoch)) return "skip";
-    const delivery = task.summary.delivery!;
-    const loop = delivery.loop
-      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    const fetched = snapshot ?? await this.fetchDiscussions(task);
-    if (!this.current(task, epoch)) return "skip";
-    if (fetched.kind === "unavailable") {
-      this.options.log?.(
-        `任务 ${task.summary.id} 检视门禁未过且讨论明细暂不可用：${fetched.reason}`);
-      return "retrying";
-    }
-    const deferred = deferredSourceVersions(this.taskHostRuntime(task), "mr_discussion");
-    const discussions = fetched.items.filter(item => !deferred.has(`${item.id}:r${discussionRevision(item)}`));
-    if (!discussions.length) {
-      // 门禁说未解决但明细拉不到:可能是刚解决的竞态,别硬派——
-      // 让调用方落到下一优先级,下一轮监控再看这路。
-      this.options.log?.(
-        `任务 ${task.summary.id} 检视门禁未过但拉不到未解决讨论,等下一轮`);
-      return "skip";
-    }
-    const identities = new Map(discussions.map((item) =>
-      [discussionKey(item), item] as const));
-    const ids = [...identities.keys()].sort().join(",");
-    // 答复台账跨批次继承。"未解决集合"随检视人点掉/新增而变,但已经
-    // 答复过的讨论不因此变回未答复——原来换批清账重派,会对同一条讨论
-    // 重复回复(2026-08-30 探针实锤:两条意见解决一条,另一条被复读),
-    // 检视人视角就是机器人刷屏,还白烧一只修复会话。
-    // 投递账跨 CI/检视轮次保留，不能因 loop.kind 临时变成 ci 而丢失已答事实。
-    const replied = new Set([
-      ...(loop.review_source === "platform" ? loop.replied_ids?.split(",").filter(Boolean) ?? [] : []),
-      ...this.deliveryOutbox(task).list().filter(item => item.kind === "review_reply" && item.state === "delivered"
-        && item.payload.repo === (task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "")
-        && String(item.payload.mr) === String(delivery.mr_id))
-        .map(item => discussionKeyFromParts(item.payload.discussion_id, item.payload.source_revision)),
-    ]);
-    const pending = [...identities]
-      .filter(([identity]) => !replied.has(identity));
-    if (!pending.length) {
-      if (loop.review_source === "platform" && (loop.review_ids !== ids || loop.replied_ids !== ids)) {
-        loop.review_ids = ids; loop.replied_ids = ids; this.persist(task);
-      }
-      return "waiting";
-    }
-    const pushedSha = task.summary.delivery?.git_push?.sha;
-    const queuedReplyIds = new Set(this.deliveryOutbox(task)
-      // 旧提交的 pending 回复不能让新提交永久停在“正在重试”。它仍
-      // 留在 outbox 审计并由 flush fail-closed，但只有当前远端 push
-      // 收据对应的动作才可代表本轮已经排队。
-      .pendingReviewReplies(pushedSha)
-      .map((item) => discussionKeyFromParts(
-        item.payload.discussion_id, item.payload.source_revision)));
-    if (pending.length
-        && pending.every(([identity]) => queuedReplyIds.has(identity))) {
-      // Agent 已逐条答完，当前只是在重试外部投递。把它当“没干活”再派
-      // Agent 会重复改代码/刷回复；保持监控即可。
-      return "waiting";
-    }
-    if (loop.kind === "review" && loop.review_ids === ids) {
-      if (loop.replied_ids === ids) {
-        // 这批意见的回复都发布过了,门禁红只是检视人还没点"已解决"
-        // ——那是等人,不是修不动。不派单不停环,调用方把它记进
-        // waiting_on 继续盯。
-        return "waiting";
-      }
-      loop.state = "halted";
-      const diagnosis = (task.lastReply ?? "").trim();
-      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
-      // 点名没答复的是哪几条:不点名,人只能去 MR 上逐条对台账。
-      const unanswered = pending.map(([, item]) => item.id);
-      task.summary.detail =
-        `同一批检视意见处理过一轮仍未答复完(未答复: ${
-          unanswered.slice(0, 8).join(", ")}${
-          unanswered.length > 8 ? ` 等 ${unanswered.length} 条` : ""
-        }),请人工查看 MR 讨论`;
-      this.persist(task);
-      this.notifyRepairStopped(task);
-      return "halted";
-    }
-    // 先开内核反馈批次，再写 Cloud 的 repairing/queue 投影。命令失败时
-    // 当前 watch 状态和唯一 writer 都不变，不会出现“Cloud 已派单、内核
-    // 还在等待态”的半套生命周期。
-    try {
-      this.openFeedbackBatch(task, "mr_discussion", pending.map(([, item]) => ({
-        id: `mr:${item.id}`,
-        source: "mr_discussion",
-        source_id: item.id,
-        source_revision: discussionRevision(item),
-        kind: "code_review",
-        summary: String(item.body ?? "MR 检视意见").slice(0, 1000),
-        material: resolve(task.summary.workspace, "reviews", "discussions.json"),
-        verification: "reviewer",
-        ...(item.file ? { file: item.file } : {}),
-        ...(item.line !== undefined ? { line: item.line } : {}),
-        ...(item.author ? { author: String(item.author).slice(0, 120) } : {}),
-      })));
-    } catch (error) {
-      this.markVerificationStalled(task,
-        `检视意见已保留，但内核未能打开持续检视批次，尚未启动 Agent：${String(error)}`,
-        stallClassForError(error, "contract"));
-      return "halted";
-    }
-    loop.kind = "review";
-    loop.review_source = "platform";
-    loop.round = 0; // 检视触发清零 CI 重试(内网框架的实证语义)
-    loop.review_ids = ids;
-    // 换批只继承仍在场的答复记录,不清零(见上);离场的 id 出账,
-    // 免得台账无限膨胀。
-    loop.replied_ids = [...replied]
-      .filter((one) => identities.has(one))
-      .sort().join(",") || undefined;
-    loop.state = "repairing";
-    // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
-    const reviewsDir = join(task.summary.workspace, "reviews");
-    try {
-      // 保留目录本身及附件/其他回执，避免运行中 bind mount 指向被删的旧目录。
-      mkdirSync(reviewsDir, { recursive: true });
-      writeFileSync(join(reviewsDir, "discussions.json"),
-        JSON.stringify(discussions, null, 2));
-    } catch {
-      /* 落盘失败不拦路:使命里的摘要仍然够用 */
-    }
-    const lines = pending.map(([, item]) =>
-      `  [${item.id}] ${item.file ?? "(整体意见)"}`
-      + `${item.line !== undefined ? `:${item.line}` : ""}`
-      + `${item.severity ? ` (${item.severity})` : ""}`
-      + `${item.author ? ` ${item.author}` : ""}:`
-      + ` ${String(item.body ?? "").slice(0, 300)}`);
-    this.enqueueRepair(task,
-      [
-        `MR 上有 ${pending.length} 条检视意见待处理,`
-        + `按当前责任人要求逐条处理；较新的要求可调整目标或逐条暂缓:`,
-        ...lines,
-        ...(discussions.length > pending.length ? [
-          `- 另有 ${discussions.length - pending.length} 条此前已答复、`
-          + `在等检视人确认,**不要**再答复它们。`,
-        ] : []),
-        `- Cloud 宿主已把本批意见登记到当前任务的持续检视流程；`
-        + `**不要 init、不要 exit/goto/skip**。先执行 current，按当前`
-        + `feedback_triage/build 指引处理，始终沿用当前现场。`,
-        `- 原始数据在 ${resolve(task.summary.workspace, "reviews", "discussions.json")}(仓库外),需要完整`
-        + `上下文时自己读。`,
-        `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
-        + `不许含糊带过;与需求有冲突或无法确定时说明依据，由责任人裁定。`,
-        `- 已明确且已授权的要求直接改，不再询问是否开工或重复确认方案。先完成无争议的意见，只对需要业务裁定的未决点集中提问；已经裁定的事项直接沿用。`,
-        `- 定位围绕意见涉及的文件、调用方和测试，只跑相关必要验证；通过后没有新变更就不重复验证，不反复全仓探索、重读回复或改无关文档。`,
-        `- 把逐条回复写到绝对路径 ${JSON.stringify(resolve(task.summary.workspace, "review_replies.md"))}(仓库外,不会进提交),`
-        + `格式严格如下,每条以方括号 id 单独一行开头:`,
-        `  [${pending[0][1].id}]`,
-        `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
-        `- 改动在 build 步收口前如实 commit(按 current 的指引),`
-        + `已有授权内可用 task_control push 阶段性推送，不必等所有意见处理完；`
-        + `工具排队后结束本轮，宿主执行并返回结果；不要读取或索要 Git 令牌。`,
-        `- 宿主推送会先同步远端新增提交；pull_repo 用于拉取关联仓，不能用于更新当前 MR 分支。全部意见完成并留下回复后，宿主负责投递和等待检视人，不再让你反复补同一份回复。`,
-        `- 全部是解释、没有代码改动也是正常结局:照样按 current 走完,`
-        + `在对应步骤如实说明本轮无代码改动,不要为了凑步骤改代码。`,
-        `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
-        + `决定,默认留给检视人点),回复写给检视人看,说人话,`
-        + `别写流程黑话。`,
-        REVIEW_MISSION_END,
-      ].join("\n"),
-      `检视意见 ${pending.length} 条,专职会话处理中`);
-    return "dispatched";
   }
 
   /** 工作台本地检视修复：用户点“提交并继续修改”本身就是逐条修复授权，

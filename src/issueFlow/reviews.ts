@@ -1,3 +1,5 @@
+import { pendingReviewAnnotation } from "../annotationPending.ts";
+import { renderAnnotations } from "../annotations.ts";
 /**
  * 检视账本(问题域,ADR-0007):用户对分析报告(issue-analysis.md)的
  * 检视意见。
@@ -105,9 +107,10 @@ export function anchorChecks(root: string): AnchorCheck[] {
 }
 
 /** 提交检视:草稿清单 + 送出标记 + 被检视报告的版本快照。 */
-export function submitReviews(root: string): Annotation[] {
+export function submitReviews(root: string, ids?: string[]): Annotation[] {
   const store = reviewStore(root);
-  const drafts = store.drafts();
+  const drafts = store.list().filter(item => pendingReviewAnnotation(item)
+    && (ids ? ids.includes(item.id) : !item.external_review));
   if (!drafts.length) return [];
   if (existsSync(join(root, ANALYSIS_DOC_NAME))) {
     // 版本快照(ADR-0007 Q10):agent 修订会整份重写报告,快照让意见
@@ -124,6 +127,7 @@ export function submitReviews(root: string): Annotation[] {
       // 快照失败不挡检视。
     }
   }
+  for (const item of drafts) if (item.external_review) store.assignToAgent(item.id, item.assignee ?? item.author);
   store.markSent(drafts.map((item) => item.id), "issue_review");
   // 送出态从台账重放取(不手拼字段):账本是唯一真相。
   const sentIds = new Set(drafts.map((item) => item.id));
@@ -144,6 +148,8 @@ export function renderReviewNotes(
   round: number,
   incremental = false,
 ): string {
+  if (items.some(item => item.external_review)) return renderAnnotations(items, title)
+    + "\n这些是责任人明确选择的修改意见。按责任人补充要求处理，只回应本批；未选的外部报告不构成修复任务。本地处理不自动代表远端 resolve。";
   // 清单按意见号编排(ADR-0025):orderAnnotations 是行号序,跨批次会
   // 把意见5 排在意见3 前——这里只认意见号升序。意见必须带号(#261,
   // 落账硬要求):无号即坏账,炸出来,不给续编兜底。

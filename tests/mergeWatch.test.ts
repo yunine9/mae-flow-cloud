@@ -12,19 +12,18 @@ import {
 
 const gate = (name: string, passed = false, detail?: string) => ({ name, passed, detail });
 
-test("门禁分类:三类可修按优先级排、全部返回;其余等人并翻成人话;认不出=等人留名", () => {
+test("门禁分类:客观失败按优先级排、全部返回;其余等人并翻成人话;认不出=等人留名", () => {
   const sorted = classifyGates([
     gate("ci_state_passed"), gate("approvers_passed"), gate("conflict_passed"),
     gate("resolve_discussion_passed"), gate("codequality_passed"),
     gate("vote_passed", true), gate("mystery_gate_passed"),
   ]);
   assert.deepEqual(sorted.repairs.map((item) => [item.kind, item.gate.name, item.priority]), [
-    ["review", "resolve_discussion_passed", 10],
     ["conflict", "conflict_passed", 15],
     ["ci", "ci_state_passed", 20],
     ["ci", "codequality_passed", 25],
   ], "冲突不解 CI 白跑,检视优先于代码问题;质量门禁与 CI 同一路排其后");
-  assert.deepEqual(sorted.waiting, ["等审批", "等 mystery_gate_passed"],
+  assert.deepEqual(sorted.waiting, ["等审批", "等责任人处理 MR 检视意见", "等 mystery_gate_passed"],
     "过了的不算;认不出的名字按等人处理并留痕——瞎修比不修危险");
   assert.deepEqual(classifyGates([]), { repairs: [], waiting: [] });
 });

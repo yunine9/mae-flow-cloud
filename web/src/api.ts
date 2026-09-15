@@ -2696,6 +2696,7 @@ export async function uploadAnnotationAsset(
 }
 
 export interface Annotation {
+  external_review?: { scope: string; discussion_id: string; content_key: string; mr_url?: string };
   id: string;
   author: string;
   created_at: string;
@@ -2954,6 +2955,13 @@ export async function dropAnnotation(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function supplementAnnotation(taskId: string, annotationId: string, context: string): Promise<{ error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ context }),
+  });
+  return response.ok ? {} : await errorBody(response);
 }
 
 export async function editAnnotation(
@@ -4449,6 +4457,11 @@ export async function getIssueAnalysisVersion(
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
 export interface IssueReview {
+  external_review?: Annotation["external_review"];
+  agent_context?: Annotation["agent_context"];
+  agent_assigned?: boolean;
+  owner_reply?: Annotation["owner_reply"];
+  resolution?: Annotation["resolution"];
   quote?: string;
   line_end?: number;
   id: string;
@@ -4512,9 +4525,15 @@ export function dropIssueReview(id: string, reviewId: string): Promise<IssueRevi
 }
 
 /** 提交检视:整体回退到问题分析(有后果,页面层先轻量确认)。 */
-export function sendIssueReviews(id: string): Promise<IssueSummary> {
+export function updateIssueReview(id: string, reviewId: string, body: { context?: string; reply?: string; resolve?: boolean }): Promise<IssueReview> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/${encodeURIComponent(reviewId)}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+export function sendIssueReviews(id: string, ids?: string[]): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/send`, {
-    method: "POST",
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }),
   });
 }
 

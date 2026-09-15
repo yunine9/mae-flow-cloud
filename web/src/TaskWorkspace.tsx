@@ -1,3 +1,4 @@
+import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
 import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
@@ -69,7 +70,6 @@ import {
 } from "@/components/ui/dialog";
 import { XIcon } from "lucide-react";
 import {
-  addAnnotation,
   completeReview,
   controlTask,
   getConversation,
@@ -427,33 +427,14 @@ const FEEDBACK_BADGE: Record<FeedbackRecord["status"], ComponentProps<typeof Bad
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
  * 和批注卡片同一套版式,放进「检视意见」里不违和。
  * #227 换装:feedback-* 皮肤类退役,改 shadcn Badge/Button + 工具类。 */
-export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
+export function FeedbackList({ kicker, title, hint, items, mrUrl }: {
   kicker: string;
   title: string;
   hint?: string;
   items: FeedbackRecord[];
   /** CodeHub 意见给一个回到 MR 的入口;讨论级链接平台不给,只到 MR。 */
   mrUrl?: string;
-  /** 把一条外部意见转成工作台批注草稿(走现有批注链路补充给 Agent)。
-   * 返回错误文案;成功返回 undefined。 */
-  onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
 }) {
-
-  const [converting, setConverting] = useState("");
-  const [notices, setNotices] = useState<Record<string, string>>({});
-  async function convert(item: FeedbackRecord) {
-    if (!onConvert || converting) return;
-    setConverting(item.id);
-    try {
-      const error = await onConvert(item);
-      setNotices((current) => ({
-        ...current,
-        [item.id]: error ?? "已生成工作台批注草稿，在上方「来自 Cloud 工作台的检视意见」里补充后提交。",
-      }));
-    } finally {
-      setConverting("");
-    }
-  }
   return <section className="grid gap-2 rounded-xl border border-line bg-surface p-3" aria-label={title}>
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div className="grid min-w-0 gap-0.5">
@@ -476,7 +457,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             : <code className="font-mono text-xs text-faint">未指向具体文件</code>}
           <Badge variant={FEEDBACK_BADGE[item.status]}>{feedbackStatusLabel(item)}</Badge>
         </div>
-        <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-text">{item.summary}</p>
+        <ReviewBody text={item.summary} />
         {item.resolution && <div className="grid gap-1 border-l-2 border-l-line-strong pl-2.5">
           <strong className="text-xs text-text-strong">{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
           <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground">{item.resolution}</p>
@@ -487,19 +468,9 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             {item.author && ` · 检视人 ${item.author}`}
             {` · ${relativeTime(item.updated_at) || item.updated_at}`}
           </small>
-          {onConvert && !feedbackEnded(item) && !notices[item.id] && (
-            <Button type="button" variant="outline" size="xs"
-              disabled={converting === item.id}
-              title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
-              onClick={() => void convert(item)}>
-              {converting === item.id ? "生成中…" : "转成工作台批注"}
-            </Button>
-          )}
+
         </div>
-        {notices[item.id] && <p role="status"
-          className="m-0 rounded-md bg-accent-soft px-2.5 py-1.5 text-xs leading-relaxed text-ink">
-          {notices[item.id]}
-        </p>}
+
       </li>)}
     </ol>
   </section>;
@@ -507,7 +478,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
 
 /** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
-  const active = feedback.some(item => !feedbackEnded(item));
+  const active = feedback.filter(item => !feedbackEnded(item)).length;
   return <section className="grid gap-2.5" aria-label="持续检视反馈明细">
     <header className="flex items-center justify-between gap-3">
       <span className="flex items-baseline gap-2">
@@ -1549,11 +1520,9 @@ export function TaskWorkspace({
     : [];
   // 检视意见里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
   // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
-  const codehubFeedback = (task.feedback ?? [])
-    .filter((item) => item.source === "mr_discussion");
   const machineFeedback = (task.feedback ?? [])
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
-  const reviewRecordCount = notes.length + codehubFeedback.length
+  const reviewRecordCount = notes.length
     + machineFeedback.length;
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
@@ -1579,38 +1548,11 @@ export function TaskWorkspace({
     closureOf(item.id)?.bucket ?? "agent";
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
   for (const item of notes) reviewCounts[noteCategory(item)] += 1;
-  for (const item of [...codehubFeedback, ...machineFeedback]) {
+  for (const item of machineFeedback) {
     reviewCounts[feedbackCategory(item)] += 1;
   }
-  const filteredCodehub = reviewFilter === "all" ? codehubFeedback
-    : codehubFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
   const filteredMachine = reviewFilter === "all" ? machineFeedback
     : machineFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
-  /** CodeHub 意见转成工作台批注草稿:锚点用意见编号(平台不给原文快照),
-   * 定位靠文件行号;正文带上出处,人可以再补一句自己的话。 */
-  async function convertFeedbackToAnnotation(
-    item: FeedbackRecord,
-  ): Promise<string | undefined> {
-    const materials = items ?? [];
-    const diffArtifact = materials.find((artifact) => artifact.kind === "diff")?.name;
-    const artifact = materials.find((artifact) => artifact.name === item.file)?.name
-      ?? diffArtifact ?? item.file ?? materials[0]?.name;
-    if (!artifact) return "当前任务还没有可批注的材料，暂时转不成批注。";
-    const origin = `CodeHub 检视意见 #${item.source_id}${
-      item.author ? `（${item.author}）` : ""}`;
-    const result = await addAnnotation(task.id, {
-      artifact,
-      file: item.file ?? artifact,
-      line: item.line ?? 0,
-      anchor: origin,
-      note: `【转自 ${origin}】\n${item.summary}`,
-      kind: "code",
-    });
-    if (result.error) return `转成批注失败：${result.error}`;
-    setNotesPulse((tick) => tick + 1);
-    onChanged();
-    return undefined;
-  }
   useEffect(() => {
     if (reviewPanelOpen) {
       const feedback = workspaceRoot.current?.querySelector<HTMLElement>("#ws-review-canvas");
@@ -1883,14 +1825,6 @@ export function TaskWorkspace({
             在原文、产出文档或代码上圈选，即可原位写下反馈。
           </div>
         )}
-        {filteredCodehub.length > 0 && <FeedbackList
-          kicker="CODEHUB REVIEW"
-          title="来自 CodeHub 的检视意见"
-          hint="MR 检视人在 CodeHub 留下的讨论。Agent 逐条修改或说明后把回复发回 MR，由检视人在 MR 里确认闭环。"
-          items={filteredCodehub}
-          mrUrl={task.delivery?.mr_url}
-          onConvert={canContributeReview && canCreateAnnotation
-            ? convertFeedbackToAnnotation : undefined} />}
         {filteredMachine.length > 0 && <FeedbackList
           kicker="AUTOMATED GATES"
           title="来自流水线与机器门禁的告警"

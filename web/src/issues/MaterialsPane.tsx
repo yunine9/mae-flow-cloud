@@ -276,7 +276,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
   // 纯只读(Annotatable enabled=false 只剩标记层,无任何写口)。
   const viewingLatest = !versions.some(
     (entry) => entry.name === activeName && !entry.latest);
-  const drafts = reviews.filter((item) => item.status === "draft");
+  const drafts = reviews.filter((item) => !item.external_review && item.status === "draft");
   const frozenReviews = viewingLatest ? [] : reviews.filter((item) =>
     versions.find((entry) => entry.name === activeName)?.review_ids
       .includes(item.id) ?? false);
@@ -369,7 +369,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
             (spec #259 story 23,服务端本就登录可读);草稿/提交写口
             在面板内收闸。只随最新版出现——冻结版是历史纸面,不收新
             意见(#262)。 */}
-        <IssueReviewPanel detail={detail} reviews={reviews}
+        <IssueReviewPanel detail={detail} reviews={reviews.filter(item => !item.external_review)}
           checks={checks} reviewEnabled={reviewEnabled}
           canOperate={canOperate}
           onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
@@ -457,7 +457,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const id = detail.id;
-  const drafts = reviews.filter((item) => item.status === "draft");
+  const drafts = reviews.filter((item) => !item.external_review && item.status === "draft");
   const sent = reviews.filter((item) => item.status === "sent");
   const checkOf = (reviewId: string) =>
     checks.find((check) => check.id === reviewId);

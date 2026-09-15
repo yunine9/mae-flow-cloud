@@ -539,7 +539,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 面放宽,写边界不变。)行尾圈注写口仍在,同样收闸(reviewEnabled+
   // canOperate 才给 Annotatable)。
   assert.match(materials,
-    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\}[\s\S]*?canOperate=\{canOperate\}/);
+    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\.filter\(item => !item\.external_review\)\}[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(materials,
     /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
 });

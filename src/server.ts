@@ -2801,6 +2801,8 @@ export function createTaskServer(
           // 作者负责提出意见，记下后的修改与删除统一由当前责任人操作。
           if (request.method === "PATCH" && parts.length === 4) {
             const body = await readBody(request);
+            if (typeof body.context === "string") return json(response, 200,
+              service.supplementAnnotation(id, decodeURIComponent(parts[3]), body.context, author));
             return json(response, 200,
               service.editAnnotation(id, decodeURIComponent(parts[3]),
                 String(body.note ?? ""), author));

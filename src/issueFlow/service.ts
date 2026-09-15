@@ -1,3 +1,4 @@
+import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
 import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
@@ -733,10 +734,6 @@ const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
 const MR_REPLY_DRAFT_FILE = "mr-review-replies.json";
 const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
 
-/** 待注入标志的落盘件(检视闭环 ②-Q1):进程重启不丢——已落账未注入
- *  的意见重启后仍要交给 AI;注入完成后删除。 */
-const MR_REVIEW_NOTIFY_FILE = "mr-review-notify.json";
-
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
  * 描述只是展示,真相始终在文件本体,Agent 圈选后要读的也是本体。 */
@@ -937,14 +934,11 @@ export class IssueFlowService {
       // 检视监看续挂(②-Q1):原点火链(MR 建成→流水线监看)重启后
       // 不再触发——流水线已结算(watching=false)的会话,意见发现、
       // 注入与回复投递会全部停摆,凡 mr_green 且有 MR 一律续挂;
-      // 待注入标志(mr-review-notify.json)落盘件在场则一并恢复。
-      if (state.stage === "mr_green" && state.mrs?.length
-          && !isTerminal(state.status)) {
+      // 外部意见只同步为待判断批注，不恢复旧版自动派修通知。
+      if (state.mrs?.length && !isTerminal(state.status)) {
         this.watchMergeStates(live);
         this.watchMrDiscussions(live);
-        if (existsSync(join(root, MR_REVIEW_NOTIFY_FILE))) {
-          this.reviewNotifyPending.add(state.id);
-        }
+
       }
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
       // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
@@ -4067,20 +4061,38 @@ export class IssueFlowService {
   /** 移除一条意见(账本软删,jsonl 留痕)。 */
   dropReview(id: string, reviewId: string): Annotation {
     const live = this.require(id);
-    this.requireReviewable(live);
-    return dropReview(live.root, reviewId, live.state.account);
+    const item = reviewStore(live.root).list().find(note => note.id === reviewId);
+    if (!item?.external_review) this.requireReviewable(live);
+    else if (isTerminal(live.state.status) || item.agent_assigned) throw new IssueControlError("意见已交办或会话已结束");
+    return reviewStore(live.root).drop(reviewId, live.state.account, true);
+  }
+
+  updateExternalReview(id: string, reviewId: string, input: { context?: string; reply?: string; resolve?: boolean }): Annotation {
+    const live = this.require(id);
+    if (isTerminal(live.state.status)) throw new IssueControlError("会话已结束");
+    const store = reviewStore(live.root);
+    const note = store.list().find(item => item.id === reviewId);
+    if (!note?.external_review) throw new IssueControlError("MR 批注不存在");
+    if (input.context !== undefined) return store.saveAgentContext(reviewId, live.state.account, input.context);
+    if (input.reply !== undefined) return store.replyAsOwner(reviewId, live.state.account, input.reply, true);
+    if (input.resolve) return store.resolveAsOwner(reviewId, live.state.account, { revision: note.rework ?? 0, outcome: "not_adopted", reason: "责任人在工作台自行闭环" });
+    throw new IssueControlError("请选择补充、答复或本地闭环");
   }
 
   /** 人工批注按提交时快照交办，不因意见到达回退整个流程。 */
-  submitReviews(id: string): IssueSummary {
+  submitReviews(id: string, ids?: string[]): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    this.requireReviewable(live);
+    const candidates = reviewStore(live.root).list().filter(item =>
+      (ids ? ids.includes(item.id) : !item.external_review) && item.status === "draft" && !item.owner_reply && !item.resolution);
+    if (ids && (new Set(ids).size !== candidates.length)) throw new IssueControlError("部分意见已交办或闭环，请刷新");
+    if (candidates.some(item => !item.external_review)) this.requireReviewable(live);
+    else if (isTerminal(state.status)) throw new IssueControlError("会话已结束");
     if (state.takeover) throw new IssueControlError("现场由你接管中；请交还 Agent 后提交修改意见");
-    if (!reviewStore(live.root).drafts().length) {
+    if (!candidates.length) {
       throw new IssueControlError("没有待提交的检视意见");
     }
-    const sent = submitReviewLedger(live.root);
+    const sent = submitReviewLedger(live.root, ids);
     const notes = renderReviewNotes(sent, state.title, state.round ?? 1, true);
     const message = [concurrentWorkPrompt(), notes].join("\n\n");
     // 分析阶段仍由责任人确认修订结论；它不再禁止继续追加意见。
@@ -4655,19 +4667,10 @@ export class IssueFlowService {
     };
   }
 
-  /** MR 检视意见监看(票 01:发现与落账;票 02:注入与闭环;票 03:
-   * 回复发布,2026-09-08 立项):mr_green 期内随流水线监看的节奏逐仓
-   * 拉 CodeHub 检视讨论,新意见落问题域反馈账并注入 AI 修复;检视人
-   * 在 CodeHub 解决讨论后,对应意见闭环标注。
-   * - 单例:每会话至多一个循环,重复点火(申报/重推/重新监看)只记一次;
-   * - fail-open:适配层未配置/拉取失败等下一轮,绝不拖垮流水线主监看;
-   * - 生命周期:stage 留在 mr_green 且会话未终态;关停/终态/取消即止。
-   *   发现半场在验绿收口即停(收口后新意见不追);回复投递的下半场
-   *   继续跑到投完或会话终态。 */
+  /** MR 创建后持续同步外部意见为待判断批注；终态停止。
+   * 新增通知按五分钟汇总，不因轮询、验绿或新提交自动派修。
+   * 旧回复仍由现有 outbox 完成投递。 */
   private readonly reviewWatchers = new Set<string>();
-  /** 待注入的检视意见(会话忙时挂起,闲时补发):存会话 id,内容现查
-   *  反馈账里该会话的全部 open 意见——每次点火都带全量,不靠增量拼。 */
-  private readonly reviewNotifyPending = new Set<string>();
 
   private watchMrDiscussions(live: LiveIssue): void {
     if (!this.options.platformUrl || this.reviewWatchers.has(live.id)) return;
@@ -4689,17 +4692,16 @@ export class IssueFlowService {
     let unavailableReason: string | undefined;
     for (;;) {
       if (this.shuttingDown || isTerminal(live.state.status)
-          || live.state.stage !== "mr_green"
           || !live.state.mrs?.length) {
         // 退出清算(H4):监看循环退出后没人再替信箱里的 pending 条目
         // 跑投递——统一置 failed 落 last_error 留痕,不让"待投递"悄悄
         // 烂在箱里装作还在路上。
         this.expirePendingReplies(live,
-          "检视监看已退出(终态/关停/离开 mr_green),未投递的回复作废");
+          "检视监看已退出(终态/关停/无 MR),未投递的回复作废");
         return;
       }
-      // 发现半场只在验绿收口前跑;回复投递收口后继续跑到投完。
-      if (!this.mrGreenClosed(live.state)) {
+      // 验绿后仍发现新增意见，由责任人决定是否批量交办。
+      {
         for (const mr of live.state.mrs) {
           const fetched = await fetchMrDiscussions({
             platformUrl: this.options.platformUrl!,
@@ -4718,47 +4720,20 @@ export class IssueFlowService {
             }
             continue;
           }
-          const fresh = this.absorbMrDiscussions(live, mr.repo, fetched.items);
-          if (!fresh.length) continue;
-          // 修复预算=0(关自动修):意见标待人工,不注入。
-          if (repairBudget(this.options.settings) === 0) {
-            const store = this.feedbackStore(live);
-            for (const item of fresh) {
-              store.resolve(`mr-discussion:${mr.repo}:${item.id}`,
-                "needs_human",
-                "自动修复已关闭(repair_rounds=0),请人工处理");
-            }
-            this.log(`[issue-flow] ${live.id} 检视意见 ${fresh.length} 条`
-              + `标待人工(自动修已关)`);
-          } else {
-            this.armReviewNotify(live);
-          }
+          this.absorbMrDiscussions(live, mr.repo, fetched.items);
+          const scope = `${mr.repo}:${mr.iid ?? mr.url}`;
+          importExternalReviews(reviewStore(live.root), { scope, mrUrl: mr.url, owner: live.state.account, items: fetched.items });
+          void notifyExternalReviews({ store: reviewStore(live.root), workspace: live.root, scope,
+            owner: live.state.account, taskId: live.id, link: this.issueLink(live.id), notifier: this.options.notifier })
+            .catch(error => this.log(`[issue-flow] MR 新意见通知失败: ${String(error)}`));
         }
       }
-      this.notifyMrReviewPending(live);
       this.stageMrReviewReplies(live);
       await this.flushMrReviewReplies(live);
       await new Promise<void>((done) => {
         const timer = setTimeout(done, pollMs);
         timer.unref?.();
       });
-    }
-  }
-
-  /** 待注入标志(内存 Set + 落盘标记,检视闭环 ②-Q1):重启恢复靠
-   *  MR_REVIEW_NOTIFY_FILE;注入完成后两处一起清。终态会话不落标志
-   *  (体检 C-H5:不留孤儿标记文件)。 */
-  private armReviewNotify(live: LiveIssue): void {
-    if (isTerminal(live.state.status)) return;
-    this.reviewNotifyPending.add(live.id);
-    try {
-      writeFileSync(join(live.root, MR_REVIEW_NOTIFY_FILE),
-        JSON.stringify({ at: new Date().toISOString() }) + "\n");
-    } catch (error) {
-      // 落盘失败不挡本次注入(内存标志还在);极端下重启丢一次提醒,
-      // 下一条新意见/追问会重新点火。
-      this.log(`[issue-flow] ${live.id} 待注入标志落盘失败(继续用内存标志): `
-        + String(error instanceof Error ? error.message : error));
     }
   }
 
@@ -4851,30 +4826,6 @@ export class IssueFlowService {
     return [...fresh, ...followedUp];
   }
 
-  /** 注入点火:会话空闲才开平台回合(忙时等下一拍——startPlatformTurn
-   *  的挂便签会把清单压缩成一句,不如等闲了把全量清单当面交给 AI);
-   *  内容恒为当前全部 open 意见,不靠增量拼。 */
-  private notifyMrReviewPending(live: LiveIssue): void {
-    if (!this.reviewNotifyPending.has(live.id)) return;
-    if (this.turning.has(live.id) || live.state.status !== "idle") return;
-    this.reviewNotifyPending.delete(live.id);
-    rmSync(join(live.root, MR_REVIEW_NOTIFY_FILE), { force: true });
-    const open = this.feedbackStore(live).list()
-      .filter((record) => record.source === "mr_discussion"
-        && record.status === "open");
-    if (!open.length) return;
-    const list = open.map((record) => {
-      const where = record.file
-        ? `${record.file}${record.line !== undefined ? `:${record.line}` : ""}`
-        : "(无位置)";
-      return `- ${where} ${record.summary}(意见 id: ${record.source_id})`;
-    }).join("\n");
-    this.startPlatformTurn(live, promptCopy("notices", "mr_review", {
-      count: open.length,
-      list,
-    }));
-  }
-
   /** 检视回复草稿(AI 按注入清单写的工作区文件)→ 出站信箱。每条绑定
    *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。回合进行中
    *  不装箱:AI 常在修完同一回合里"写草稿→再推送",回合中装箱会把
@@ -4938,8 +4889,8 @@ export class IssueFlowService {
 
   /** 出站信箱投递:SHA 不匹配说明回复绑定的那版代码已不是当前版本
    *  (②-Q2)——直接标失败("请针对当前代码重写"),不能永远 pending
-   *  (旧实现不计重试、还挡新草稿,永久卡死);失败不挡新草稿,并重挂
-   *  注入让 AI 重写。投递带 Idempotency-Key,重放不产生第二条 CodeHub
+   *  (旧实现不计重试、还挡新草稿,永久卡死);失败不挡责任人交办后的新草稿。
+   * 投递带 Idempotency-Key,重放不产生第二条 CodeHub
    *  回复;HTTP 重试超限标 failed 交人工(不再注入,防平台持续故障下
    *  无限循环)。投递成功→意见转 addressed(Agent 已回复,待检视人
    *  核验,②-Q3:处理≠验收)。 */
@@ -4972,7 +4923,7 @@ export class IssueFlowService {
           && row.source_id === item.discussion_id);
         if (record && (record.status === "open"
           || record.status === "addressed")) {
-          this.armReviewNotify(live);
+          this.log(`[issue-flow] 远端回复版本已变化，保留本地记录供责任人处理`);
         }
         continue;
       }

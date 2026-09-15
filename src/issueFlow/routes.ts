@@ -787,7 +787,17 @@ export async function handleIssueRoutes(
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能提交检视" });
       }
-      return done(200, issueFlow.submitReviews(id));
+      const body = await readBody(request);
+      return done(200, issueFlow.submitReviews(id, Array.isArray(body.ids) ? body.ids.map(String) : undefined));
+    }
+    if (method === "PATCH" && parts[2] === "reviews" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) return done(403, { error: "只有归属人能处理意见" });
+      const body = await readBody(request);
+      return done(200, issueFlow.updateExternalReview(id, decodeURIComponent(parts[3]), {
+        ...(typeof body.context === "string" ? { context: body.context } : {}),
+        ...(typeof body.reply === "string" ? { reply: body.reply } : {}),
+        ...(body.resolve === true ? { resolve: true } : {}),
+      }));
     }
     if (method === "DELETE" && parts[2] === "reviews" && parts.length === 4) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
