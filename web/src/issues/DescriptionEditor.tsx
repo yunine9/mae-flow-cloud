@@ -9,21 +9,48 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * 收敛:进入编辑器前 ref→URL,序列化出场时 URL→ref,description 管线
  * (AI 上下文/登记提交/staging 提取)永远只见相对引用。
  *
- * 待补充令牌(**【待补充】**)就是普通加粗,不做任何编辑器特殊化
- * (#184 拍板:不写编辑器插件,红色只出现在自有渲染面)。
+ * 待补充令牌(**【待补充】**)视觉与预览侧一致染红(2026-09-15 拍板,
+ * 推翻 #184「编辑器内不做特殊化」旧约):ProseMirror 装饰只改渲染不改
+ * 文档,序列化出的 markdown 仍是普通加粗。
  */
 import { Editor, editorViewCtx, rootCtx, defaultValueCtx } from "@milkdown/kit/core";
 import { Loader2 } from "lucide-react";
+import { $prose, replaceAll } from "@milkdown/kit/utils";
+import { Plugin, PluginKey, type EditorState } from "@milkdown/prose/state";
+import { Decoration, DecorationSet } from "@milkdown/prose/view";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
-import { replaceAll } from "@milkdown/kit/utils";
 import { issueImageUrl } from "../api";
 import { displayUrlToRef, refToDisplayUrl } from "./issueImageRef";
 import { FALLBACK_HINT, htmlIsImageOnly, readClipboardImageFile } from "./useIssueImagePaste";
 import { cn } from "cn";
+
+/** 待补充令牌染红:与自渲染面(markdown.tsx 的 md-pending)同类同色
+ * ——tailwind 的 .md-pending 一条规则直接命中装饰 span,配色同源。
+ * 按文本匹配挂内联装饰,文档本身不动。 */
+const pendingMarkDecoration = $prose(() => new Plugin({
+  key: new PluginKey("mae-flow-pending-mark"),
+  props: {
+    decorations(state: EditorState) {
+      const decorations: Decoration[] = [];
+      const pattern = /【待补充[^】]*】/g;
+      state.doc.descendants((node, pos) => {
+        if (!node.isText || !node.text) return;
+        pattern.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(node.text)) !== null) {
+          decorations.push(Decoration.inline(
+            pos + match.index, pos + match.index + match[0].length,
+            { class: "md-pending" }));
+        }
+      });
+      return DecorationSet.create(state.doc, decorations);
+    },
+  },
+}));
 
 export function DescriptionEditor({
   value,
@@ -108,7 +135,8 @@ export function DescriptionEditor({
       .use(gfm)
       .use(history)
       .use(listener)
-      .use(upload);
+      .use(upload)
+      .use(pendingMarkDecoration);
     void editor.create()
       .then(() => {
         if (disposed) {

@@ -379,6 +379,15 @@ function ManualRegister({
    * (ADR-0029)——替换前原稿一动不动。 */
   async function polish() {
     if (polishing || !description.trim()) return;
+    // 非托管图片引用当场指路(2026-09-15 实测):staging 之外的图——修复
+    // 上线前粘贴的旧草稿、拖拽进来的外部图——识图拿不到、预览也解析
+    // 不了,模型只会交回全占位模板加破图;拦在调用前把出路说清。
+    const unmanagedImage =
+      /!\[[^\]]*\]\((?!issue-images\/)[^)\s]+\)/.exec(description);
+    if (unmanagedImage) {
+      onError("描述里有非平台托管的图片引用,润色与识图都读不到它:把这张图删掉,重新用截图粘贴(或右键复制图像)后再点润色");
+      return;
+    }
     setPolishing(true);
     const prior = inflightPolish.get(viewer.username);
     if (prior) prior.superseded = true;
