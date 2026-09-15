@@ -329,7 +329,7 @@ export function Composer({
     placeholder: "说明需要继续修改或排查什么",
   } : {
     title: "捎一句给正在跑的 Agent",
-    detail: "不打断当前命令,模型读到后继续按流程推进",
+    detail: "现在就能交办；当前工具结束后读取，结合正在做的工作处理",
     placeholder: "例如:掩码保留后四位,不要处理区号",
   };
   const steerDisabledReason = canSteer ? undefined

@@ -70,7 +70,7 @@ test("单 writer 竞态：steer 与派单相撞时并入当前 Agent，不启动
       .map((message: any) => JSON.stringify(message.content ?? ""))
       .join("\n");
     assert.match(seen, /空值返回改成明确错误/);
-    assert.match(seen, /优先级高于正在进行的流水线修复/);
+    assert.match(seen, /结合正在进行的修复处理/);
   } finally {
     await model.stop();
     await platform.stop();

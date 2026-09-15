@@ -82,7 +82,7 @@ export type IssueConversationItem =
       annotation_ids: string[];
       questions?: IssueConversationQuestion[] }
   | { kind: "steer"; id: string; ts: string; text: string; delivered: boolean }
-  | { kind: "review"; id: string; ts: string; count: number; text: string }
+  | { kind: "review"; id: string; ts: string; count: number; text: string; receipt?: string; delivery_mode?: "incremental" }
   | { kind: "receipts"; id: string; ts: string;
       items: Array<{ name: string; outcome: "success" | "error"; summary: string }> };
 
@@ -107,6 +107,8 @@ export interface IssueConversationView {
 }
 
 export interface IssueConversationOptions {
+  /** 活会话尚未消费的消息，不把 steer 入队冒充已读取。 */
+  pendingSteers?: string[];
   /** 当前在场未作答的平台闸(从会话状态来,不在账本里):投影为流末尾
    * 的 waiting 卡。闸在场即等待,不需要运行位。 */
   waitingCard?: {
@@ -267,7 +269,8 @@ export function issueConversation(
       case "user_message":
         closeTurn();
         items.push({ kind: "steer", id, ts,
-          text: String(payload.text ?? ""), delivered: true });
+          text: String(payload.display ?? payload.text ?? ""),
+          delivered: !(options.pendingSteers ?? []).includes(String(payload.text ?? "")) });
         break;
       case "human_decision":
         closeTurn();
@@ -286,6 +289,7 @@ export function issueConversation(
       case "review_submitted":
         items.push({ kind: "review", id, ts,
           count: Number(payload.count ?? 0),
+          ...(payload.mode === "incremental" ? { delivery_mode: "incremental" as const, receipt: String(payload.receipt ?? "") } : {}),
           text: String(payload.text ?? "") });
         break;
       case "turn_finished":

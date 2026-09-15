@@ -37,7 +37,7 @@ import { listProductVersions } from "../configurationCenter.ts";
  *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/reviews          → 检视面板(意见+锚点检测+回合标记)
  *   POST /issues/:id/reviews          → 记一条检视草稿(悬停圈注)
- *   POST /issues/:id/reviews/send     → 提交检视(整体回退到问题分析)
+ *   POST /issues/:id/reviews/send     → 提交修改意见(结合当前工作处理)
  *   DELETE /issues/:id/reviews/:rid   → 移除一条意见(软删留痕)
  *   GET  /issues/:id/export           → 现场记录导出(单文件 Markdown:
  *                                      事件流逐字 + 台账,复盘用)

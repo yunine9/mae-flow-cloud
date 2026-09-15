@@ -60,7 +60,7 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   // 提交时给指路文案。
   assert.match(registration, /请从环境管理选择网管环境/);
   assert.doesNotMatch(registration, /页面账号 <i|页面密码 <i|envPageAccount/);
-  assert.match(registration, /团队资产 → 业务模块/);
+  assert.match(registration, /配置中心 → 模块与代码仓/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
   // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
   assert.doesNotMatch(registration, /将拉取的代码仓/);
@@ -317,11 +317,11 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
     ["MaterialsPane", materialsPane]] as const) {
     assert.doesNotMatch(source, /window\.confirm\(/,
       `${name} 不得再用浏览器原生确认框`);
-    assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
+    if (name === "SessionView") assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
   }
   assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
   assert.match(sessionView, /title: "归档会话"/);
-  assert.match(materialsPane, /title: `提交 \$\{drafts\.length\} 条检视意见并重跑分析`/);
+  assert.doesNotMatch(materialsPane, /条检视意见并重跑分析|disabled=\{busy \|\| !reviewEnabled \|\| detail.status === "running"\}/);
   // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
   // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
   assert.match(app,
@@ -1643,8 +1643,9 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
   assert.match(registration,
     /group-hover\/live:underline group-focus-visible\/live:underline/);
   // 上传进行态挂 role=status,与其余进行态一致。
-  assert.match(registration,
-    /role="status">截图上传中…<\/span>/);
+  const descriptionEditor = readFileSync(resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+  assert.match(registration, /<DescriptionEditor/);
+  assert.match(descriptionEditor, /role="status"[^>]*>[\s\S]*?截图上传中…/);
   // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
   // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
   assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);

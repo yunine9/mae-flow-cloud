@@ -4753,7 +4753,7 @@ export type IssueConversationItem =
       delivered: boolean;
     }
   | {
-      kind: "review"; id: string; ts: string;
+      kind: "review"; id: string; ts: string; receipt?: string; delivery_mode?: "incremental";
       count: number; text: string;
     }
   | {

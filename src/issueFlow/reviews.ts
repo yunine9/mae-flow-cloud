@@ -142,6 +142,7 @@ export function renderReviewNotes(
   items: Annotation[],
   title: string,
   round: number,
+  incremental = false,
 ): string {
   // 清单按意见号编排(ADR-0025):orderAnnotations 是行号序,跨批次会
   // 把意见5 排在意见3 前——这里只认意见号升序。意见必须带号(#261,
@@ -182,6 +183,8 @@ export function renderReviewNotes(
     lines.push(`   要求:${item.note}`);
   }
   lines.push("");
-  lines.push("修订完成后重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
+  lines.push(incremental
+    ? "结合当前工作处理本批意见。只在确实需要重新提交分析结论时使用 submit_analysis；报告措辞或局部修改不要求重跑整个流程。逐条说明处理结果和必要的验证。"
+    : "修订完成后重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
   return lines.join("\n");
 }

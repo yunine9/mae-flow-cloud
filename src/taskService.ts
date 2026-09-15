@@ -1,3 +1,4 @@
+import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
@@ -6168,6 +6169,7 @@ export class TaskService {
     }
     const text = [
       ownerDecisionContext,
+      concurrentWorkPrompt(),
       renderAnnotations(picked, this.ticketOf(task)),
       requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`),
     ].filter(Boolean).join("\n\n");
@@ -6356,13 +6358,8 @@ export class TaskService {
 
     if (task.summary.status === "running") {
       // status 会在 launch 入口先切 running，driver 稍后才就绪。这个短窗
-      // 不能误判成“没有会话”再开第二只 Agent；先等就绪，仍没就绪就
-      // 持久化到 pendingMainSteers，由 launch 在 start 后补送。
-      const deadline = Date.now() + 10_000;
-      while (task.summary.status === "running" && !task.driver
-          && Date.now() < deadline) {
-        await new Promise((tick) => setTimeout(tick, 25));
-      }
+      // 不能误判成“没有会话”再开第二只 Agent；直接持久化到
+      // pendingMainSteers，由 launch 在 start 后补送，不让提交请求空等。
       if (task.summary.status === "running" && task.driver) {
         await task.driver.steer(delivered);
       } else if (task.summary.status === "running") {
@@ -6410,7 +6407,7 @@ export class TaskService {
   private mergeRequestReviewPrompt(task: TaskState, text: string, annotations: Annotation[]): string {
     return [
       "[MR 本地检视 · 用户已明确提交]",
-      "这批意见是当前 MR 的修改要求，优先级高于正在进行的流水线修复；不要另起分支或 MR。",
+      "这批意见是责任人明确交办的当前 MR 修改要求，结合正在进行的修复处理；不要另起交付分支或 MR。",
       text,
       "逐条核对并处理：要求明确就直接修改，不要再问一次‘是否接纳’；只有语义确实不清、不同理解会造成不同代码结果时才举卡，并把歧义说具体。",
       this.reviewReceiptInstructionsFor(task, annotations),
@@ -11757,11 +11754,12 @@ export class TaskService {
     const requestId = source === "user" ? recordTaskHostInstruction(task.summary, combined, actor) : undefined;
     this.refreshOwnerInputs(task);
     const instructionRef = requestId ? `[责任人指令编号 ${requestId}]\n` : "";
-    const delivered = actor
+    const delivered = (actor
       ? (actor === task.summary.luban_account
           ? `${instructionRef}[责任人 ${actor} 插话] ${combined}`
           : `[协作者 ${actor} 插话] ${combined}`)
-      : `${instructionRef}${combined}`;
+      : `${instructionRef}${combined}`) + (combined.includes("[处理新交办与当前工作]")
+        ? "" : `\n\n${concurrentWorkPrompt()}`);
     // 「捎过去的话」只摆附言和引用名:送达用的正文里整份知识都注进去了,
     // 原样列出来是几万字的墙(用户 2026-09-02 拍板"只显示引用名")。
     const receipt = {

@@ -1,3 +1,4 @@
+import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "../auxiliarySessions.ts";
@@ -1122,6 +1123,7 @@ export class IssueFlowService {
     const gate = live.state.gate;
     const firstQuestion = gate?.question.questions[0];
     return issueConversation(events, {
+      pendingSteers: [...(live.driver?.pendingSteers() ?? []), ...(live.state.parked_notices ?? [])],
       ...(gate
         ? { waitingCard: {
           waiting_id: gate.id,
@@ -1974,9 +1976,11 @@ export class IssueFlowService {
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
-        return driver.start(issueFixedOpeningPrompt(live.state,
-          this.environmentCredentials(live),
-          { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+        return this.withParkedNotices(live, replay => driver.start([
+          issueFixedOpeningPrompt(live.state, this.environmentCredentials(live),
+            { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }),
+          replay,
+        ].filter(Boolean).join("\n\n")));
       });
     }
   }
@@ -2153,14 +2157,15 @@ export class IssueFlowService {
         // 撞在回合间隙的插话可能没送进模型——收口前补发一次。
         const driver = live.driver;
         const late = driver?.takeUndeliveredSteers() ?? [];
-        if (driver && late.length) {
+        if (driver && (late.length || state.parked_notices?.length)) {
           this.log(`[issue-flow] ${live.id} 补发未送达插话 ${late.length} 条`);
           live.state.status = "running";
           saveState(live.root, live.state);
           // 现场引用收进闭包:settle 到延续体之间没有空档,driver 不可能
           // 易主;若真被停(取消/关停),abort 会让它如实失败交 epoch 守卫。
           this.beginContinuationTurn(live, () =>
-            driver.continueWith(late.join("\n\n")));
+            this.withParkedNotices(live, replay =>
+              driver.continueWith([...late, replay].filter(Boolean).join("\n\n"))));
           return;
         }
         // 催办续跑(2026-08-28 拍板 A):模型提前收嘴不等于阶段完成,
@@ -3522,6 +3527,7 @@ export class IssueFlowService {
         throw new IssueControlError(
           "阶段注册表缺少分析确认闸的推进目标(阶段配置错误)");
       }
+      delete state.review_active;
       fixedAdvance(state, target,
         `用户确认分析报告,进入${stageName(target)}`);
       saveState(live.root, state);
@@ -3897,8 +3903,8 @@ export class IssueFlowService {
     if (live.state.status !== "running" || !live.driver) {
       throw new IssueControlError("会话不在运行中,补充无处送达");
     }
-    void live.driver.steer(content).catch((error) =>
-      this.log(`[issue-flow] ${id} 插话失败: ${String(error)}`));
+    void live.driver.steer(`${content}\n\n${concurrentWorkPrompt()}`, { display: content }).catch(() =>
+      this.parkPlatformNotice(live, `${content}\n\n${concurrentWorkPrompt()}`));
     return summarize(live.state);
   }
 
@@ -4000,7 +4006,7 @@ export class IssueFlowService {
     return summarize(state);
   }
 
-  // ---- 检视(ADR-0007:人工意见触发整体回退,闭环靠分析确认卡) ----
+  // ---- 人工检视：批量交办，结合当前工作处理 ----
 
   /** 检视的会话级门槛(记账与提交共用):固定流程、未终态、分析段
    * 不是转正继承——转正继承的分析报告是上一会话已确认的结论,
@@ -4065,74 +4071,35 @@ export class IssueFlowService {
     return dropReview(live.root, reviewId, live.state.account);
   }
 
-  /** 提交检视 = 整体回退的人工触发源(ADR-0007):作废挂起的 Agent
-   * 问题卡(supersede:撤下待办、留审计原因),清掉平台闸(fixedRollback
-   * 自会清),意见标记送出、报告留版本快照,整体回退到「问题分析」
-   * (round+1、其后阶段标 redo、申报账作废、分支与 MR 延用),意见清单
-   * 注入新一轮分析。落账 review_submitted 事件——过程问答里"这轮
-   * 为什么重跑"靠它。 */
+  /** 人工批注按提交时快照交办，不因意见到达回退整个流程。 */
   submitReviews(id: string): IssueSummary {
     const live = this.require(id);
     const { state } = live;
     this.requireReviewable(live);
-    if (state.review_active) {
-      throw new IssueControlError(
-        "上一轮检视的修订还没有重新提交分析报告,不能叠加检视");
-    }
-    if (this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,等当前回合结束后再提交检视");
-    }
-    if (state.status !== "waiting_user" && state.status !== "idle") {
-      throw new IssueControlError(
-        `当前状态 ${state.status} 不能提交检视(意见可以先记成草稿,`
-          + "等 AI 停下来或等你作答时再提交)");
-    }
+    if (state.takeover) throw new IssueControlError("现场由你接管中；请交还 Agent 后提交修改意见");
     if (!reviewStore(live.root).drafts().length) {
       throw new IssueControlError("没有待提交的检视意见");
     }
-    // 挂起的 Agent 问题卡先作废(有账的撤下,不是替用户作答);冲突
-    // 说明卡刚被答过/状态已变,如实打回。
-    let supersededCard = false;
-    const waiting = live.humanGate.pending()[0];
-    if (waiting) {
-      try {
-        live.humanGate.supersede(waiting.waiting_id, {
-          stateVersion: waiting.state_version,
-          notes: "用户提交检视意见,本卡作废,工作流回退问题分析",
-        });
-        supersededCard = true;
-      } catch {
-        throw new IssueControlError("问题卡状态已变化,请刷新后重试");
-      }
-    }
     const sent = submitReviewLedger(live.root);
-    fixedRollback(state,
-      `用户检视分析报告,提交 ${sent.length} 条修订意见`);
-    state.review_active = true;
+    const notes = renderReviewNotes(sent, state.title, state.round ?? 1, true);
+    const message = [concurrentWorkPrompt(), notes].join("\n\n");
+    // 分析阶段仍由责任人确认修订结论；它不再禁止继续追加意见。
+    if (fixedStageIndex(state.scenario!, state.stage as FixedStage)
+        <= fixedStageIndex(state.scenario!, "analyze")) state.review_active = true;
+    const waiting = state.status === "waiting_user";
+    const receipt = state.status === "queued"
+      ? `已接收 ${sent.length} 条修改意见；随任务启动一起送达，不用重复提交。`
+      : waiting
+      ? `已接收 ${sent.length} 条修改意见；当前问题答复后一起送达，不用重复提交。`
+      : `已接收 ${sent.length} 条修改意见；Agent 会在当前工具结束后读取并结合处理。`;
+    state.stage_note = receipt;
     saveState(live.root, state);
-    const notes = renderReviewNotes(sent, state.title, state.round ?? 1);
-    // 检视意见落账为用户回合(ADR-0008 口径里的"检视意见"),清单
-    // 原文随事件走:它同时是给下一轮分析的注入词,复盘与重跑看同一份。
     this.appendSessionEvent(live, "review_submitted", {
-      count: sent.length,
-      text: notes,
+      count: sent.length, text: notes, receipt, mode: "incremental",
     });
-    this.log(`[issue-flow] ${id} 检视提交 ${sent.length} 条意见,`
-      + `回退问题分析(第 ${state.round} 轮)`);
-    // 挂 Agent 卡的现场,提问的 await 已被 supersede 悬死:释放后由
-    // 续聊路径重建上下文(issueResumePrompt 把意见清单带给重建现场);
-    // 闸等待/闲置现场 driver 无悬挂,续聊直递现有上下文。
-    if (supersededCard) this.releaseDriver(live);
-    this.continueTurn(live, fixedAdvanceNotice(state, [
-      `用户检视了分析报告,提出 ${sent.length} 条修订意见,`
-        + `已回退到「问题分析」阶段(第 ${state.round} 轮)。`,
-      "",
-      notes,
-      "",
-      ...(state.pushes?.length
-        ? ["注: 前几轮的修复已提交在分支上,不要推倒重来。"]
-        : []),
-    ].join("\n")));
+    this.startPlatformTurn(live, message);
+    state.stage_note = receipt;
+    saveState(live.root, state);
     return summarize(state);
   }
 
@@ -5481,14 +5448,14 @@ export class IssueFlowService {
     // 话递进正在跑的回合;收口前没送达的由 settle 的补发分支接力;
     // 现场不在(排队窗口)或等人/终态才落便签等续聊带上。
     if (this.turning.has(live.id) && live.driver
-        && !isTerminal(state.status) && state.status !== "waiting_user") {
+        && !isTerminal(state.status) && state.status !== "waiting_user" && !state.takeover) {
       // steer 只入队不抛错;旁路 fail-open,递不进去就退回挂便签。
       void live.driver.steer(message)
         .catch(() => this.parkPlatformNotice(live, message));
       return;
     }
     if (isTerminal(state.status) || this.turning.has(live.id)
-        || state.status === "waiting_user") {
+        || state.status === "waiting_user" || state.status === "queued" || !!state.takeover) {
       this.parkPlatformNotice(live, message);
       return;
     }
@@ -5500,12 +5467,11 @@ export class IssueFlowService {
    *  (答卡原地续跑/重启重建作答)时经 takeParkedNotices 注入模型
    *  上下文。同文重复投递只记一次(监看重放/重复通知不去重会双份注入)。 */
   private parkPlatformNotice(live: LiveIssue, message: string): void {
-    const full = message.slice(0, 2000);
+    const full = message;
     const queue = live.state.parked_notices ?? (live.state.parked_notices = []);
     if (!queue.includes(full)) {
       queue.push(full);
-      // 队列有界:超限丢最旧的——通知是事实陈述,最新一条覆盖旧语义。
-      while (queue.length > 8) queue.shift();
+      // 补充要求和批注不能按长度截断，也不能用新消息覆盖尚未送达的旧要求。
     }
     live.state.stage_note = message.split("\n")[0].slice(0, 120);
     saveState(live.root, live.state);
@@ -5543,7 +5509,6 @@ export class IssueFlowService {
         const queue =
           live.state.parked_notices ?? (live.state.parked_notices = []);
         queue.unshift(...notices);
-        while (queue.length > 8) queue.shift();
         saveState(live.root, live.state);
       }
       throw error;

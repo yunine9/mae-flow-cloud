@@ -146,5 +146,7 @@ export function annotationSubmissionReceipt(items: Annotation[], sent: string[],
       : "意见已排队，尚未送达；等待当前问题答复后一起送达。";
   }
   return sent.length < requested
-    ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。" : undefined;
+    ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。"
+    : status === "running" ? `已接收 ${sent.length} 条修改意见；当前工具结束后读取并结合处理，无需等整轮结束。读取状态见工作过程，完成情况以逐条回执为准。`
+    : status === "queued" ? `已接收 ${sent.length} 条修改意见，已并入待启动的工作；启动后一起处理，无需重复提交。` : undefined;
 }

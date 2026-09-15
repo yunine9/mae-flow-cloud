@@ -617,7 +617,7 @@ export function ConversationStream({
           tag: <em className={cn(CONV.tag, item.delivered ? CONV.tagTone.ok : CONV.tagTone.att)}>
             {item.delivered ? "已读取"
               : item.deferred === "decision" ? "随下一次决定送达"
-              : item.deferred === "mission" ? "任务启动时送达" : "待读取"}
+              : item.deferred === "mission" ? "任务启动时送达" : "已接收 · 待读取"}
           </em>,
           children: <>
             <p className={CONV.answer}>{item.text}</p>

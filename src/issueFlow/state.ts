@@ -377,8 +377,8 @@ export interface IssueSessionState {
   stage_states?: StageState[];
   /** 验证回退轮次(fixed 用;回退问题分析时 +1,分支/MR 延用)。 */
   round?: number;
-  /** 检视回合进行中(ADR-0007):检视意见已提交、整体回退到分析重跑,
-   * 期间不可再叠加检视;submit_analysis 重新举确认卡时清除。 */
+  /** 检视回合进行中(ADR-0007):分析阶段已有人工修改要求,
+   * 新增意见仍可交办；submit_analysis 或责任人确认结论时清除。 */
   review_active?: boolean;
   /** skill 圈选台账(ADR-0011):analyze 入口圈选的必读集合。字段在场
    * =已作答(skills 空=明确跳过,AI 自主);重走不重举的判据。 */
