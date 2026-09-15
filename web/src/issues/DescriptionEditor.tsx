@@ -133,7 +133,7 @@ export function DescriptionEditor({
   // 最长的字段,空态给 min-h-40(约 6 行),与标题等单行字段拉开层次;
   // 输入后随内容自然长高,不封顶。
   return <div className={cn(
-    "relative [&_.ProseMirror]:min-h-40[&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
+    "relative [&_.ProseMirror]:min-h-40 [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
     "[&_p]:mb-2 [&_:last-child]:mb-0 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-2 [&_h1]:mt-2.5 [&_h2]:mt-2.5 [&_h3]:mt-2.5 [&_h1]:leading-snug [&_h2]:leading-snug [&_h3]:leading-snug",
     "[&_ul]:mb-2 [&_ol]:mb-2 [&_ul]:pl-6 [&_ol]:pl-6 [&_ul]:list-disc [&_ol]:list-decimal",
     "[&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:h-auto [&_img]:w-auto [&_img]:cursor-zoom-in [&_img]:rounded-md [&_img]:border [&_img]:border-line",
