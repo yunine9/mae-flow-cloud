@@ -234,6 +234,7 @@ export function resolveWorkspaceTarget(
 }
 
 function initialView(user: AuthUser): View {
+  if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
@@ -716,7 +717,7 @@ export function App() {
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
-    readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
+    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
   const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
     readKnowledgeAssetFocus,
   );
@@ -794,6 +795,9 @@ export function App() {
     const syncKnowledgeRoute = (event: PopStateEvent) => {
       const focus = readKnowledgeAssetFocus();
       setKnowledgeFocus(focus);
+      if (new URLSearchParams(location.search).get("experience") === "1") {
+        setView("knowledge"); setTeamAssetTab("memories"); return;
+      }
       if (!focus) {
         const restoredView = viewFromHistoryState(event.state);
         const restoredTab = teamAssetTabFromHistoryState(event.state);
@@ -1268,6 +1272,10 @@ export function App() {
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
   };
   const selectView = (next: View) => {
+    if (next !== "knowledge" && new URLSearchParams(location.search).has("experience")) {
+      const url = new URL(location.href); url.searchParams.delete("experience"); url.searchParams.delete("source_task");
+      history.replaceState(history.state, "", url);
+    }
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
     if (next === "help") {
@@ -1308,6 +1316,10 @@ export function App() {
     setView(next);
   };
   const selectTeamAssetTab = (next: TeamAssetTab) => {
+    const url = new URL(location.href);
+    if (next === "memories") url.searchParams.set("experience", "1");
+    else { url.searchParams.delete("experience"); url.searchParams.delete("source_task"); }
+    history.replaceState(history.state, "", url);
     setTeamAssetTab(next);
     if (!knowledgeFocus) {
       if (location.pathname === "/") {
@@ -1317,7 +1329,7 @@ export function App() {
       return;
     }
     setKnowledgeFocus(undefined);
-    history.pushState(appHistoryState("knowledge", next), "", "/");
+    history.pushState(appHistoryState("knowledge", next), "", next === "memories" ? "/?experience=1" : "/");
   };
   return <PeopleProvider key={session.username} known={[...teamUsers, session]}><SidebarProvider
     style={{ "--sidebar-width": "228px" } as React.CSSProperties}>
@@ -1403,7 +1415,7 @@ export function App() {
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
     <div className="min-h-screen min-w-0 bg-(--canvas)">
       <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
-        dtsWide ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || (view === "knowledge" && teamAssetTab === "memories")) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
@@ -1437,7 +1449,7 @@ export function App() {
       </header>
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
-        dtsWide ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || (view === "knowledge" && teamAssetTab === "memories")) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
@@ -1501,7 +1513,7 @@ export function App() {
             <button type="button" className={teamAssetTab === "memories" ? "active" : ""}
               aria-pressed={teamAssetTab === "memories"}
               onClick={() => selectTeamAssetTab("memories")}>
-              <strong>任务记忆</strong><small>平台记住的闭环：谁被推过、谁真被用、谁沉底了</small>
+              <strong>经验沉淀</strong><small>集中确认经验候选，采纳后跨任务复用</small>
             </button>
           </nav>
           {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
@@ -1524,6 +1536,7 @@ export function App() {
             onOpenTask={(taskId) => {
               const target = tasks.find((task) => task.id === taskId);
               if (target) openArtifacts(target);
+              else location.assign(`/work/${encodeURIComponent(taskId)}`);
             }}
           /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
             initialAsset={knowledgeFocus?.kind === "business"

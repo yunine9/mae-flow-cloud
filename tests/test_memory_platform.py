@@ -12,7 +12,7 @@ spec.loader.exec_module(module)
 class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_platform_and_repo_are_searched_separately_and_filtered(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             records = []
             for folder, ident, repo, scope in [
                 ("a", "c-a-111", "a", "general"),
@@ -21,7 +21,7 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             ]:
                 path = root / folder / (ident + ".md")
                 path.parent.mkdir(exist_ok=True)
-                path.write_text(f'---\nrepo: {repo}\nscope: {scope}\npaths: ["src/x"]\n---\nFact')
+                path.write_text(f'---\nrepo: {repo}\nscope: {scope}\nreview_status: accepted\npaths: ["src/x"]\n---\nFact')
                 records.append({"source": str(path), "score": 1, "content": ident})
             calls = []
 
@@ -39,6 +39,34 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls, [str(root / "a"), str(root / "_platform")])
             result = await sidecar.search({"query": "current evidence", "repo": "a", "path_prefix": "different"})
             self.assertEqual([hit["id"] for hit in result["hits"]], ["c-c-333"])
+
+    async def test_unaccepted_legacy_and_revoked_hits_do_not_escape_or_get_reindexed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            records = []
+            for suffix, status in [("111", "pending"), ("222", "accepted"), ("333", "rejected"), ("444", "")]:
+                path = root / f"c-a-{suffix}.md"
+                path.write_text(f"---\nrepo: a\nreview_status: {status}\n---\nAdvice")
+                records.append({"source": str(path), "score": 1, "content": "stale"})
+            indexed = []
+
+            class Index:
+                async def search(self, query, top_k, source_prefix):
+                    return records
+
+                async def index_file(self, path):
+                    indexed.append(path.name)
+                    return 1
+
+            sidecar = module.Sidecar.__new__(module.Sidecar)
+            sidecar.corpus = root
+            sidecar.ms = Index()
+            self.assertEqual([h["id"] for h in (await sidecar.search({"query": "retry"}))["hits"]], ["c-a-222"])
+            self.assertEqual((await sidecar.reindex({}))["chunks"], 1)
+            self.assertEqual(indexed, ["c-a-222.md"])
+            self.assertEqual((await sidecar.ingest({"path": str(root / "c-a-111.md")}))["chunks"], 0)
+            with self.assertRaises(ValueError):
+                await sidecar.expand({"memory_id": "c-a-333"})
 
 
 if __name__ == "__main__":

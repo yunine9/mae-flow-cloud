@@ -63,7 +63,7 @@ def read_front(path: Path) -> dict:
         key, _, value = line.partition(":")
         key = key.strip()
         value = value.strip()
-        if key in ("repo", "judged_by", "source", "scope", "at", "task", "phase"):
+        if key in ("repo", "judged_by", "source", "scope", "at", "task", "phase", "review_status"):
             front[key] = json.loads(value) if value.startswith('"') else value
         elif key == "paths":
             try:
@@ -104,11 +104,17 @@ class Sidecar:
             raise ValueError("只索引语料目录里的文件")
         if not path.is_file():
             raise ValueError(f"文件不存在: {path}")
+        if read_front(path).get("review_status") != "accepted":
+            return {"ok": True, "chunks": 0}
         count = await self.ms.index_file(path)
         return {"ok": True, "chunks": count}
 
     async def reindex(self, _req: dict) -> dict:
-        count = await self.ms.index(force=True)
+        # 候选留档不参与向量索引。旧索引命中仍由搜索和 Cloud 正本过滤。
+        count = 0
+        for path in self.corpus.rglob("*.md"):
+            if "_archive" not in path.relative_to(self.corpus).parts and read_front(path).get("review_status") == "accepted":
+                count += await self.ms.index_file(path)
         return {"ok": True, "chunks": count}
 
     async def search(self, req: dict) -> dict:
@@ -131,6 +137,8 @@ class Sidecar:
             if not memory_id:
                 continue
             front = read_front(Path(source))
+            if front.get("review_status") != "accepted":
+                continue
             if repo and front.get("repo") != repo and front.get("scope") != "platform":
                 continue
             if path_prefix and front.get("scope") != "platform" and not any(
@@ -159,7 +167,7 @@ class Sidecar:
         if not MEMORY_ID.match(memory_id + ".md"):
             raise ValueError("memory_id 形状不对")
         for path in self.corpus.rglob(f"{memory_id}.md"):
-            if path.is_file():
+            if path.is_file() and "_archive" not in path.relative_to(self.corpus).parts and read_front(path).get("review_status") == "accepted":
                 # 键名别叫 id:应答的 id 是请求配对号,撞了宿主就对不上号。
                 return {"ok": True, "memory_id": memory_id,
                         "content": path.read_text(encoding="utf-8", errors="replace")}

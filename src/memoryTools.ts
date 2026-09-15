@@ -87,7 +87,7 @@ export function createMemoryTools(backend: MemoryToolBackend) {
 
   const write = defineTool({
     name: "corpus_write", label: "记录仓库记忆",
-    description: "保存仓库或平台可复用的经验、构建方法或约定。直接入库，标记为 Agent 记录，不代表人工确认或验证通过。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
+    description: "提出经验候选。从具体纠正提炼可迁移的判断方法和因果，去掉偶然的任务/文件名但保留必要前提；不要泛化业务特例或只写注意质量。写清适用条件、结论依据和不适用情形。保存后等待责任人采纳，不进入正式检索或自动注入。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
     parameters: Type.Object({
       trigger: Type.String({ minLength: 1, maxLength: 80, description: "什么情况下用这条经验" }),
       conclusion: Type.String({ minLength: 1, maxLength: 1900, description: "经验结论及适用条件；未验证的猜测请明确说明" }),
@@ -99,7 +99,7 @@ export function createMemoryTools(backend: MemoryToolBackend) {
       const record = await backend.write({ trigger: String(params.trigger ?? "").trim(),
         conclusion: String(params.conclusion ?? "").trim(), paths: params.paths ?? [],
         scope: params.scope ?? "local" }, callId);
-      return ok(`已保存记忆 ${record.id}（Agent 记录）。可用 corpus_expand 读取；语义索引异步更新。`);
+      return ok(`已保存记忆 ${record.id}（待确认候选）。采纳后才可检索和复用；当前任务继续，不等待审核。`);
     },
   });
   return backend.write ? [search, expand, write] : [search, expand];

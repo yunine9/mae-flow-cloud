@@ -139,7 +139,7 @@ test("真 memsearch sidecar:health/ingest/search/expand 一遍(venv 缺席则显
     assert.equal(await sidecar.start(), true, "真 sidecar 起不来");
     assert.equal(await sidecar.health(), true);
     for (const id of ids) {
-      const row = store.find(id)!;
+      const row = store.review(id, "owner", { decision: "accepted", revision: store.find(id)!.revision ?? 1 });
       assert.equal(await sidecar.ingest(join(store.root, row.file)), true);
     }
     const hits = await sidecar.search({ query: "被关掉的渠道为什么还跑黑名单", repo: "notify-service" });

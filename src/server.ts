@@ -1095,14 +1095,15 @@ export function createTaskServer(
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
       }
-      // 任务记忆总览:只读。没有编辑、没有删除——可见不可管(§9)。
+      // 经验沉淀统一读侧；采纳权限与具体来源任务一致。
       if (request.method === "GET" && url.pathname === "/memory-insights") {
-        return json(response, 200, service.memoryInsights());
+        const insights = service.memoryInsights();
+        return json(response, 200, { ...insights, memories: insights.memories.map(row => ({ ...row, can_review: canOperate(viewer, service.get(row.task)?.luban_account, !!options.auth) && !!service.get(row.task) })) });
       }
       if (request.method === "GET" && url.pathname.startsWith("/memory-insights/")) {
         const found = service.readMemoryInsight(
           decodeURIComponent(url.pathname.slice("/memory-insights/".length)));
-        return found ? json(response, 200, found)
+        return found ? json(response, 200, { ...found, record: { ...found.record, can_review: !!service.get(found.record.task) && canOperate(viewer, service.get(found.record.task)?.luban_account, !!options.auth) } })
           : json(response, 404, { error: "这条记忆不存在" });
       }
       // 发起页权威知识预匹配：只回元数据与固定身份，不分配 task id、
@@ -2673,7 +2674,8 @@ export function createTaskServer(
         if (parts[2] === "memories") {
           if (!service.get(id)) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET" && parts.length === 3) {
-            return json(response, 200, service.listTaskMemories(id));
+            return json(response, 200, service.listTaskMemories(id).map(row => ({ ...row,
+              can_review: canOperate(viewer, service.get(id)?.luban_account, !!options.auth) })));
           }
           // 这单用到的:宿主三次推送 + Agent 自己查/展开的足迹。
           if (request.method === "GET" && parts.length === 4 && parts[3] === "usage") {
@@ -2683,6 +2685,11 @@ export function createTaskServer(
             const found = service.readTaskMemory(id, decodeURIComponent(parts[3]));
             return found ? json(response, 200, found)
               : json(response, 404, { error: "这条记忆不存在" });
+          }
+          if (request.method === "POST" && parts.length === 5 && parts[4] === "review") {
+            if (!canOperate(viewer, service.get(id)?.luban_account, !!options.auth)) return json(response, 403, { error: "只有任务责任人可以采纳经验" });
+            const body = await readBody(request);
+            return json(response, 200, service.reviewTaskMemory(id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户", body, !options.auth || viewer?.role === "admin"));
           }
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "withdraw") {

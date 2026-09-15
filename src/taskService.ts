@@ -5480,7 +5480,7 @@ export class TaskService {
     const rows = store.list().filter((row) => {
       if (!memoryAccessible(row, repo)
           || row.scope === "one_off" || (row.task === task.summary.id && row.scope !== "platform")) return false;
-      if (row.scope !== "platform" && task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
+      if (row.scope === "local" && task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
         if (realCheckout && !stats.get(row.id)?.unanchored_since) {
           store.ledger.append({ kind: "unanchored", id: row.id,
             task: task.summary.id, note: row.paths[0] });
@@ -5724,7 +5724,7 @@ export class TaskService {
   private recordMemory(task: TaskState, input: MemoryInput): MemoryRecord {
     const record = this.memories().record(input);
     // 索引是旁路:失败只记日志,正本已在 md 里,删索引重建也不丢。
-    void this.memorySidecar?.ingest(join(this.memories().root, record.file));
+    // 候选留档，采纳后才写入语义索引。
     this.queueMemoryDraft(task, record);
     task.summary.memories_recorded = (task.summary.memories_recorded ?? 0) + 1;
     this.persist(task);
@@ -5749,6 +5749,18 @@ export class TaskService {
     if (!record || record.task !== id) return undefined;
     const content = this.memories().read(memoryId);
     return content === undefined ? undefined : { record, content };
+  }
+
+  reviewTaskMemory(id: string, memoryId: string, by: string, input: import("./taskMemory.ts").MemoryReviewInput, privileged = false): MemoryRecord {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!privileged && by !== (task.summary.luban_account ?? "本地用户")) throw new TaskControlError("只有任务责任人可以采纳或撤销这条经验");
+    if (this.memories().find(memoryId)?.task !== id) throw new NotFoundError("记忆不属于本任务");
+    try {
+      const record = this.memories().review(memoryId, by, input);
+      if (record.review?.status === "accepted") void this.memorySidecar?.ingest(join(this.memories().root, record.file)).catch(error => this.options.log?.(`经验索引更新失败，采纳记录已保存: ${String(error)}`));
+      return record;
+    } catch (error) { throw error instanceof MemoryError ? new TaskControlError(error.message) : error; }
   }
 
   withdrawTaskMemory(id: string, memoryId: string, by: string): MemoryRecord {
@@ -5791,7 +5803,7 @@ export class TaskService {
     const drafter = this.memoryDrafter(task);
     if (!drafter) return;
     const job = (async () => {
-      let draft: { trigger: string; scope: MemoryRecord["scope"] } | undefined;
+      let draft: { trigger: string; scope: MemoryRecord["scope"]; conclusion?: string } | undefined;
       try {
         draft = parseMemoryDraft(await withBudget(
           drafter(buildMemoryDraftPrompt(record)), MEMORY_DRAFT_BUDGET_MS + 2_000));
@@ -5801,7 +5813,7 @@ export class TaskService {
       const state: MemoryDraftState = draft ? "model" : "failed";
       try {
         const next = this.memories().finalizeDraft(record.id, { ...draft, state });
-        void this.memorySidecar?.ingest(join(this.memories().root, next.file));
+        // 整理不等于采纳；候选不进入索引。
         this.options.log?.(`记忆 ${record.id} 起草收尾:${state === "model"
           ? `${next.scope} / ${next.trigger}` : "模型没给出可用草稿,保留模板"}`);
       } catch (error) {
@@ -5884,7 +5896,7 @@ export class TaskService {
       bucket.total += 1;
       if (row.withdrawn) bucket.withdrawn += 1;
       else if (row.archived) bucket.archived += 1;
-      else if (!row.superseded_by) {
+      else if (!row.superseded_by && row.review?.status === "accepted") {
         bucket.active += 1;
         if (row.scope === "one_off") bucket.one_off += 1;
       }
@@ -5893,7 +5905,7 @@ export class TaskService {
       bucket.reworks += own.reworks;
       repos.set(row.repo, bucket);
       return {
-        id: row.id, repo: row.repo, trigger: row.trigger,
+        id: row.id, repo: row.repo, trigger: row.trigger, review: row.review,
         conclusion: row.conclusion.replace(/\s+/g, " ").slice(0, 240),
         source: row.source, judged_by: row.judged_by, scope: row.scope,
         draft: row.draft ?? "template", drafting: this.memoryDraftJobs.has(row.id), at: row.at, task: row.task,

@@ -162,7 +162,9 @@ test("服务起草:闭环记忆入库后异步补一版;user_note 不过起草;�
     const other = liveTask(svc, "另一单");
     const ids = (svc as any).memoryCandidates(other.internal).map((row: any) => row.id);
     assert.ok(!ids.includes(drafted.id), "一次性只进全文检索");
-    assert.ok(ids.includes(kept.id));
+    assert.ok(!ids.includes(kept.id), "失败模板也需人工采纳");
+    svc.reviewTaskMemory(id, kept.id, "本地用户", { decision: "accepted", revision: kept.revision ?? 1 });
+    assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === kept.id));
   } finally {
     await svc.shutdown();
   }
@@ -174,6 +176,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     const store = new MemoryStore(dataDir);
     const a = store.record({ ...base, conclusion: "A:黑名单在开关前" });
     const b = store.record({ ...base, evidence: "e2", conclusion: "B:另一条同文件的" });
+    for (const row of [a, b]) store.review(row.id, "owner", { decision: "accepted", revision: row.revision ?? 1 });
     const { id, internal, steered } = liveTask(svc);
     (svc as any).logMemoryUsage(internal, { moment: "context", ids: [a.id, b.id], query: "当前代码" });
     const stats = store.ledger.stats();
@@ -201,6 +204,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
 
     // 没推过的第三条现在排最前(返工把前两条压下去了)
     const c = store.record({ ...base, evidence: "e3", conclusion: "C:没推过的" });
+    store.review(c.id, "owner", { decision: "accepted", revision: 1 });
     const ranked = (svc as any).memoryCandidates(internal).map((row: any) => row.id);
     assert.equal(ranked[0], c.id);
 
@@ -238,6 +242,7 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
     const idle = store.record({ ...base, conclusion: "一年没人用" });
     const lost = store.record({ ...base, evidence: "e2", conclusion: "失锚半年" });
     const alive = store.record({ ...base, evidence: "e3", conclusion: "最近推过" });
+    for (const row of [idle, lost, alive]) store.review(row.id, "owner", { decision: "accepted", revision: 1 });
     const now = Date.now() + 400 * DAY;
     store.ledger.append({ kind: "unanchored", id: lost.id,
       at: new Date(Date.now() - 200 * DAY).toISOString() });
@@ -270,16 +275,12 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
   }
 });
 
-test("可见不可管:效能页记忆页签没有任何改动入口", () => {
-  // 只看 JSX,不看文件头注释——注释里正是在说"这里没有编辑没有删除"。
-  const board = readFileSync(resolve(process.cwd(), "web/src/MemoryBoard.tsx"), "utf-8")
-    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  for (const word of ["撤回</button>", "删除", "编辑", "审核", "method: \"POST\""]) {
-    assert.ok(!board.includes(word), `记忆总览不该有「${word}」`);
-  }
-  assert.ok(board.includes("getMemoryInsights") && board.includes("readMemoryInsight"));
-  const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf-8");
-  assert.ok(app.includes('"memories"') && app.includes("<MemoryBoard"), "团队资产多一个只读页签");
+test("经验审查集中于团队资产，任务页只提供导航，不散落审批入口", () => {
+  const board = readFileSync(resolve(process.cwd(), "web/src/MemoryBoard.tsx"), "utf8");
+  assert.match(board, /MemoryReviewEditor/);
+  const footprint = readFileSync(resolve(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf8");
+  assert.match(footprint, /experience=1/);
+  assert.doesNotMatch(footprint, /MemoryReviewEditor|reviewTaskMemory/);
 });
 
 test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并重建索引后搜不到(venv 缺席则 skip)", async (t) => {
@@ -305,6 +306,9 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
     assert.equal(await sidecar.ingest(join(store.root, other.file)), true);
     const next = store.finalizeDraft(record.id, {
       trigger: "调整过滤器里判断先后顺序时", scope: "general", state: "model" });
+    store.review(next.id, "owner", { decision: "accepted", revision: next.revision ?? 1 });
+    store.review(other.id, "owner", { decision: "accepted", revision: other.revision ?? 1 });
+    assert.equal(await sidecar.ingest(join(store.root, other.file)), true);
     assert.equal(await sidecar.ingest(join(store.root, next.file)), true);
     const hits = await sidecar.search({ query: "过滤器判断先后顺序", repo: "notify-service" });
     assert.equal(hits?.[0]?.id, record.id, "按起草后的新说法能搜到");
@@ -320,7 +324,7 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
   }
 });
 
-test("没配专用模型或模型角色不存在时，模板已可用但不声称正在整理", async () => {
+test("没配专用模型或模型角色不存在时，模板待采纳但不声称正在整理", async () => {
   for (const options of [{}, { memoryDraftModel: { provider: "missing", model: "missing" } }]) {
     const { svc } = fakeService(options);
     try {
@@ -334,6 +338,8 @@ test("没配专用模型或模型角色不存在时，模板已可用但不声�
       assert.equal(svc.listTaskMemories(id)[0].drafting, false);
       assert.ok(svc.readTaskMemory(id, record.id)?.content.includes(base.conclusion));
       const other = liveTask(svc, "另一单");
+      assert.ok(!(svc as any).memoryCandidates(other.internal).some((row: any) => row.id === record.id));
+      svc.reviewTaskMemory(id, record.id, "本地用户", { decision: "accepted", revision: record.revision ?? 1 });
       assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === record.id));
     } finally { await svc.shutdown(); }
   }
@@ -398,6 +404,8 @@ test("Agent 无 sidecar 也能写记忆并展开；归属和来源由宿主固�
   assert.equal(records[0].evidence, "agent:call-memory-1");
   assert.equal(records[0].drafting, false);
   const expand = tools.find(tool => tool.name === "corpus_expand");
+  assert.match((await expand.execute("pending", { memory_id: records[0].id })).content[0].text, /取不到/);
+  svc.reviewTaskMemory(id, records[0].id, "本地用户", { decision: "accepted", revision: records[0].revision ?? 1 });
   const result = await expand.execute("expand-1", { memory_id: records[0].id });
   assert.match(result.content[0].text, /先加载仓库环境脚本/);
   internal.summary.repo_url = "git@example.com:demo/other.git";
@@ -416,6 +424,7 @@ test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general
       trigger: "多仓共用工具链报错时", conclusion: "核对平台工具链约定" });
     const local = store.record({ ...base, scope: "general", repo: "other-repo" });
     const retired = store.record({ ...base, scope: "platform", source: "user_note", author: "owner" });
+    for (const row of [platform, local, retired]) store.review(row.id, "owner", { decision: "accepted", revision: 1 });
     store.withdraw(retired.id, "owner");
     assert.ok(platform.file.startsWith("_platform/"));
     assert.equal(platform.repo, "other-repo", "保留原始来源仓库");

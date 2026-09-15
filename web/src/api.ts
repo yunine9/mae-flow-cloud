@@ -2830,6 +2830,11 @@ export async function addAnnotation(
 
 /** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
 export interface MemoryRecord {
+  can_review?: boolean;
+  basis?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] };
+  review?: { status: "pending" | "accepted" | "rejected"; by?: string; at?: string;
+    original?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] } };
+
   id: string;
   source: "annotation" | "prepush_fix" | "user_note" | "agent_note";
   judged_by: "human" | "pipeline" | "agent";
@@ -2865,6 +2870,8 @@ export interface MemoryRepoInsight {
   one_off: number; pushes: number; hits: number; reworks: number;
 }
 export interface MemoryInsightRow {
+  can_review?: boolean;
+  review?: MemoryRecord["review"];
   id: string; repo: string; trigger: string; conclusion: string;
   source: MemoryRecord["source"]; judged_by: MemoryRecord["judged_by"];
   scope: MemoryRecord["scope"]; draft: "template" | "model" | "failed";
@@ -2910,6 +2917,15 @@ export interface MemoryUsageRow {
 export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRow[]> {
   const response = await fetch(`/tasks/${taskId}/memories/usage`);
   if (!response.ok) return [];
+  return parseJson(response);
+}
+
+export async function reviewTaskMemory(taskId: string, record: MemoryRecord,
+  input: { decision: "accepted" | "rejected"; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/memories/${encodeURIComponent(record.id)}/review`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, revision: record.revision ?? 1 }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
 
