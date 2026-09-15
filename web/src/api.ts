@@ -1044,6 +1044,8 @@ export interface TaskSummary {
     last_error?: string;
   };
   delivery?: {
+    /** 最近一次推送的起点，仅用于代码增量展示。 */
+    last_push_base_sha?: string;
     mr_url?: string;
     mr_state?: string;
     merged_sha?: string;
