@@ -125,6 +125,22 @@ export function neutralizeTemplateMarks(value: string): string {
   return value.replace(/\{\{/g, "{\u200b{");
 }
 
+/** 模型对截图引用的转写归一(2026-09-15 用户实测:预览破图、回填反而
+ * 正常——模型在 alt 之外还会加尖括号/空白/可选标题甚至改写成 HTML img,
+ * milkdown 的 CommonMark 解析都认,登记页迷你渲染器只认标准形态)。
+ * 凡路径仍是托管引用(issue-images/<16hex>.<ext>)的一律机械归一成
+ * ![alt](issue-images/...)——预览、回填与登记提交读到的同一形态;
+ * 非托管引用不动(前端润色前拦截指路管它)。 */
+export function normalizeManagedImages(output: string): string {
+  return output
+    .replace(
+      /<img[^>]*src=["']?(issue-images\/[0-9a-f]{16}\.[a-z]+)["']?[^>]*>/gi,
+      (_match, path: string) => `![](${path})`)
+    .replace(
+      /!\[([^\]]*)\]\(\s*<?\s*(issue-images\/[0-9a-f]{16}\.[a-z]+)\s*>?\s*(?:"[^"]*"\s*)?\)/gi,
+      (_match, alt: string, path: string) => `![${alt}](${path})`);
+}
+
 /** 润色输出解析(首行「标题：…」契约,见 polish.md system 段)。整体
  * 被代码块包裹时先剥壳(模型偶发违令);解析不出标题行则标题缺席,
  * 调用方保留原标题——描述永不因解析失败而丢。 */
@@ -271,7 +287,7 @@ export async function polishIssueDescription(
     const parsed = splitPolishTitle(text);
     return {
       title: parsed.title ?? input.title,
-      description: parsed.description,
+      description: normalizeManagedImages(parsed.description),
       vision_used: visionUsed,
       ...(visionNote ? { vision_note: visionNote } : {}),
     };

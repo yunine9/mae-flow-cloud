@@ -3,7 +3,7 @@
  * 保留 + 待补充令牌条款)、纯函数解析(标题行契约/占位符中和/staging
  * 取图 fail-open)、真路由契约(注入假件运行时,不真调网关——识图观察
  * 进上下文、fail-open 明示、错误族 409/502 映射)、前端接线(润色按钮
- * /确认弹窗/渲染器染红行为)。文案锚点模式同 helpCenter,真路由过线
+ * /确认弹窗/渲染器行为)。文案锚点模式同 helpCenter,真路由过线
  * 协议同 issueFlowContract 的 issuePost。
  */
 import { test } from "node:test";
@@ -23,12 +23,13 @@ import { stageIssueImage } from "../src/issueFlow/issueImages.ts";
 import {
   collectStagedImages,
   neutralizeTemplateMarks,
+  normalizeManagedImages,
   polishIssueDescription,
   splitPolishTitle,
   type PolishRuntimeHandle,
 } from "../src/issueFlow/polish.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
-import { Markdown, hasPendingMark } from "../web/src/markdown.tsx";
+import { Markdown } from "../web/src/markdown.tsx";
 import {
   displayUrlToRef,
   refToDisplayUrl,
@@ -428,14 +429,44 @@ test("真路由契约:识图熔断后第三次请求不再调识图,回执仍明
   }
 });
 
-test("待补充令牌染红:加粗含令牌才带 md-pending,普通加粗不带", () => {
-  assert.ok(hasPendingMark("**【待补充】**".slice(2, -2)));
+test("待补充令牌两侧原生:预览不染红,加粗内嵌图递归渲染", () => {
   const html = renderToStaticMarkup(
     React.createElement(Markdown, {
       text: "**【待补充：版本】** 与 **普通加粗**",
     }));
-  assert.match(html, /<b class="md-pending">/, "含令牌的加粗染红");
+  assert.doesNotMatch(html, /md-pending/,
+    "染红退役(2026-09-15 拍板):两侧都是原生加粗");
   assert.match(html, /<b>普通加粗<\/b>/, "普通加粗不受牵连");
+  const withImage = renderToStaticMarkup(
+    React.createElement(Markdown, {
+      text: "**实拍 ![截图](issue-images/abcd1234ef567890.png)**",
+      resolveImage: () => "/issues/issue-image?path=x",
+    }));
+  assert.match(withImage, /<b>实拍 <img /,
+    "加粗内嵌图递归渲染,不再退化成纯文本");
+});
+
+test("托管图片引用归一:模型转写的尖括号/空白/标题/HTML img 回标准形态", () => {
+  const ref = "issue-images/abcd1234ef567890.png";
+  assert.equal(
+    normalizeManagedImages(`![go to promotion](${ref})`),
+    `![go to promotion](${ref})`, "标准形态原样通过");
+  assert.equal(
+    normalizeManagedImages(`![go to promotion]( <${ref}> )`),
+    `![go to promotion](${ref})`, "尖括号与空白归一");
+  assert.equal(
+    normalizeManagedImages(`![go to promotion](${ref} "现场截图")`),
+    `![go to promotion](${ref})`, "可选标题剥除");
+  assert.equal(
+    normalizeManagedImages(`![go to promotion](<${ref.toUpperCase()}>)`),
+    `![go to promotion](${ref.toUpperCase()})`,
+    "大小写容差(服务端 parseIssueImagePath 同款不敏感)");
+  assert.equal(
+    normalizeManagedImages(`<img src="${ref}" alt="go to promotion">`),
+    `![](${ref})`, "HTML img 换回 markdown");
+  assert.equal(
+    normalizeManagedImages("![外链](https://example.com/a.png)"),
+    "![外链](https://example.com/a.png)", "非托管引用不动(前端拦截指路管)");
 });
 
 
@@ -483,7 +514,7 @@ test("登记页接线锚点:描述框是 milkdown 编辑器,粘贴上传走原�
   assert.match(editor, /displayUrlToRef\(markdown\)/, "出场即映射回相对引用");
   assert.match(editor, /replaceAll\(refToDisplayUrl\(value, issueImageUrl\)\)/,
     "外部值变更(润色替换回填)整体重排");
-  assert.match(editor, /【待补充】/, "令牌约定留痕:编辑器内不做特殊化");
+  assert.match(editor, /【待补充】/, "令牌约定留痕:两侧渲染面都不特殊化");
   const refModule = readFileSync(
     resolve("web/src/issues/issueImageRef.ts"), "utf-8");
   assert.match(refModule, /issue-images\\\/\[0-9a-f\]\{16\}/,

@@ -2128,8 +2128,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   line-height: 1.6;
 }
 .md-block-code .md-code { padding: 0; background: transparent; font-size: inherit; }
-/* 待补充令牌(#184):润色稿的缺失信息标注,自有渲染面染红显眼。 */
-.md-pending { color: var(--danger); }
 .md-table {
   width: 100%;
   margin: .9em 0;

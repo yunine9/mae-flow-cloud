@@ -588,7 +588,8 @@ function ManualRegister({
       </Button>
     </div>
     {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
-        红色「待补充」(md-pending)提示页面没采集到的信息,不编造。
+        「待补充」提示页面没采集到的信息,不编造(两侧渲染面均原生
+        markdown,2026-09-15 拍板)。
         渲染门跟面板可见性走(ADR-0029):portal 到 body 的弹窗拦不住
         父级 hidden,人不在登记页时不 gate 会跨页签跳出来;切回即弹。
         换面板/切页签收起弹窗不清稿,弃稿只认显式动作。
@@ -600,7 +601,7 @@ function ManualRegister({
         <DialogHeader>
           <DialogTitle>AI 润色预览</DialogTitle>
           <DialogDescription>
-            核对润色稿后选择替换或放弃;红色「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
+            核对润色稿后选择替换或放弃;「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
           </DialogDescription>
         </DialogHeader>
         {polishResult.vision_note && <p className="issue-polish-note m-0 rounded-lg border border-attention/35 bg-[color-mix(in_srgb,var(--attention)_9%,var(--surface-muted))] px-2.5 py-2 text-xs text-attention" role="alert">
