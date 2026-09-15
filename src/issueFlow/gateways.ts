@@ -632,10 +632,15 @@ function loadMockTickets(source: string = MOCK_DTS_SOURCE): MockTicket[] {
 export class MockDtsGateway implements DtsGateway {
   readonly mock = true;
 
-  constructor(private readonly log?: (message: string) => void) {}
+  /** 数据源可注入(调试形态 --debug-issue 指到 dataDir 下的专属文件);
+   * 缺省仍是 assets/mock/dts-tickets.json,既有调用方零感知。 */
+  constructor(
+    private readonly log?: (message: string) => void,
+    private readonly source: string = MOCK_DTS_SOURCE,
+  ) {}
 
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
-    const tickets = loadMockTickets();
+    const tickets = loadMockTickets(this.source);
     this.log?.(`[dts-mock] listByOwner(${account}) → ${tickets.length} 张`);
     // 稳定可预期:按账号哈希错开起点,人人在列表里都能看见单。
     const offset = [...account].reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
@@ -644,7 +649,7 @@ export class MockDtsGateway implements DtsGateway {
   }
 
   async detail(ticket: string): Promise<DtsTicketDetail> {
-    const known = loadMockTickets().find((item) => item.ticket === ticket);
+    const known = loadMockTickets(this.source).find((item) => item.ticket === ticket);
     if (known) {
       this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
       if (known.content) {
@@ -670,7 +675,7 @@ export class MockDtsGateway implements DtsGateway {
     }
     this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
     throw new McpGatewayError(
-      `DTS 查无此单: ${ticket}(mock 数据集见 ${MOCK_DTS_SOURCE})`);
+      `DTS 查无此单: ${ticket}(mock 数据集见 ${this.source})`);
   }
 
   /** mock 的内嵌图按约定路径回取罐头 PNG(与真实网关的 proxyFile 同
