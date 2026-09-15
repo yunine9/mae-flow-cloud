@@ -219,6 +219,15 @@ function clearStoredPolish(username: string): void {
   try { sessionStorage.removeItem(polishKey(username)); } catch { /* 同上 */ }
 }
 
+/** 在飞润色登记(ADR-0029):切走再切回是重挂——新实例的 polishing 从
+ * false 起步,旧闭包的 setState 是空操作。把在飞请求记在组件外,重挂时
+ * 恢复「润色中」并把迟到的结果接给当前实例;被新请求顶替的旧结果不再
+ * 落账(最新胜出)。 */
+const inflightPolish = new Map<string, {
+  request: Promise<IssuePolishResult>;
+  superseded: boolean;
+}>();
+
 function ManualRegister({
   viewer,
   onCreated,
@@ -305,6 +314,26 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
 
+  // 重挂接续(ADR-0029):上一实例的在飞润色由这里接回——恢复「润色中」
+  // 灰化,结果到达时落驻留并回填当前实例,弹窗随渲染门弹出。失败即逝
+  // (ADR-0029 边界):只恢复按钮,不补报错。
+  useEffect(() => {
+    const entry = inflightPolish.get(viewer.username);
+    if (!entry || entry.superseded) return;
+    setPolishing(true);
+    let alive = true;
+    entry.request
+      .then((result) => {
+        if (!alive || entry.superseded) return;
+        storePolish(viewer.username, result);
+        setAdoptTitle(result.title);
+        setPolishResult(result);
+      })
+      .catch(() => { /* 失败即逝 */ })
+      .finally(() => { if (alive) setPolishing(false); });
+    return () => { alive = false; };
+  }, [viewer.username]);
+
   // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
   // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
   // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
@@ -355,21 +384,31 @@ function ManualRegister({
   async function polish() {
     if (polishing || !description.trim()) return;
     setPolishing(true);
+    const prior = inflightPolish.get(viewer.username);
+    if (prior) prior.superseded = true;
+    const request = polishIssueDescription({
+      title: title.trim(),
+      description,
+      ...(selectedModule ? { module: selectedModule.name } : {}),
+      ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
+    });
+    const entry = { request, superseded: false };
+    inflightPolish.set(viewer.username, entry);
     try {
-      const result = await polishIssueDescription({
-        title: title.trim(),
-        description,
-        ...(selectedModule ? { module: selectedModule.name } : {}),
-        ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
-      });
-      // 先落驻留再回填(ADR-0029):人已切到顶层页签时组件已卸载,
-      // setState 是空操作,驻留必须自己落地,回来才读得回。
-      storePolish(viewer.username, result);
-      setAdoptTitle(result.title);
-      setPolishResult(result);
+      const result = await request;
+      if (!entry.superseded) {
+        // 先落驻留再回填(ADR-0029):人已切到顶层页签时组件已卸载,
+        // setState 是空操作,驻留必须自己落地,回来才读得回。
+        storePolish(viewer.username, result);
+        setAdoptTitle(result.title);
+        setPolishResult(result);
+      }
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
     } finally {
+      if (inflightPolish.get(viewer.username) === entry) {
+        inflightPolish.delete(viewer.username);
+      }
       setPolishing(false);
     }
   }
