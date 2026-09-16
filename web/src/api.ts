@@ -350,8 +350,14 @@ export async function listPeople(): Promise<PersonIdentity[]> {
   return parseJson(response);
 }
 
-export async function listCollaborationAssignees(): Promise<CollaborationAssignee[]> {
-  const response = await fetch("/auth/collaboration-assignees");
+export async function listCollaborationAssignees(
+  /** "issue":问题登记指派的固定映射(ADR-0031)——只认 Git 令牌+邮箱,
+   * 不问小鲁班令牌;映射在服务端,客户端只点名场景。 */
+  flow?: "issue",
+): Promise<CollaborationAssignee[]> {
+  const response = await fetch(flow
+    ? `/auth/collaboration-assignees?flow=${flow}`
+    : "/auth/collaboration-assignees");
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
