@@ -6,7 +6,7 @@ import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { applyEarlyStart, previewEarlyStart, refreshDependencyQueue, concurrentTicketConflict, scheduledGraphDependencies, runnableQueueIndex, dependencyScheduleContext, type DependencyAdjustment, type EarlyStartInput } from "./dependencyScheduling.ts";
 import { resumePrePushVerification } from "./prepushRecovery.ts";
 import { fetchMrDiscussions, observeMrDiscussions, discussionRevision, discussionKey, type DiscussionItem, type DiscussionFetch } from "./mrDiscussions.ts";
-import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
+import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, mergedIncludesLocalHead, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
@@ -107,7 +107,7 @@ import {
   buildMemoryDraftPrompt,
   parseMemoryDraft,
 } from "./memoryDraft.ts";
-import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
+import { MemorySidecar, DEFAULT_MEMORY_BUDGETS, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
 import { KnowledgeSearch } from "./knowledgeSearch.ts";
 import { createKnowledgeTool } from "./knowledgeTools.ts";
@@ -5445,6 +5445,7 @@ export class TaskService {
 
   private taskMemoryContext(task: TaskState): (messages: any[]) => Promise<any[]> {
     return createMemoryContext({
+      budgetMs: (this.memorySidecar?.searchBudgetMs ?? DEFAULT_MEMORY_BUDGETS.searchMs) + 500,
       context: () => memoryContextQuery(task),
       search: async query => {
         // 侧车在服务启动时预热；模型前台不等待最长 60 秒的冷启动。
@@ -17754,7 +17755,14 @@ export class TaskService {
   private remoteDeliveryHost(task: TaskState, epoch: number): RemoteReconcileHost {
     return { summary: task.summary, cwd: task.cwd, repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "", platformUrl: this.effectivePlatformUrl(), headers: this.platformIdentity(task),
       current: () => this.current(task, epoch), persist: () => this.persist(task),
-      gates: async () => { let reason = "MR 状态查询失败"; const view = await this.fetchGates(task, true, error => { reason = error; }); if (!view) throw new Error(reason); return view; }, published: receipt => this.recordPublishedPush(task, receipt),
+      gates: async mr => { let reason = "MR 状态查询失败";
+        const view = mr ? await fetchMrGates({ platformUrl: this.effectivePlatformUrl(),
+          repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "", headers: this.platformIdentity(task),
+          delivery: { mr_id: mr.id, mr_url: mr.url, source_branch: mr.source_branch, target_branch: mr.target_branch },
+          requireExisting: true, onFailure: error => { reason = error; } })
+          : await this.fetchGates(task, true, error => { reason = error; });
+        if (!view) throw new Error(reason); return view;
+      }, published: receipt => this.recordPublishedPush(task, receipt),
       settle: (state, sha) => this.settleMergeState(task, state, sha), watch: () => this.ensureMergeWatch(task),
       retirePushQuestion: merged => {
         const waiting = task.summary.waiting;
@@ -17827,8 +17835,7 @@ export class TaskService {
       task.summary.detail = "MR 已合入，正在停止本地修复并登记完成";
       this.persist(task);
       // 合入是最终抢占事件：先让任何在途 writer 失去写状态权并停止，
-      // 再由可信宿主 close。工作区若仍有未推送变化，内核 close 会把
-      // 路径如实记账，绝不冒充这些内容已交付。
+      // 再核对本地提交是否已包含于合入版本，避免把未交付代码标成完成。
       task.controlEpoch += 1;
       const driver = task.driver;
       const container = task.container;
@@ -17855,6 +17862,24 @@ export class TaskService {
         this.markVerificationStalled(task,
           `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
         return;
+      }
+      // writer 已停止，再检查最终 HEAD；检查期间只取对象，不改工作树或分支。
+      if (task.cwd) {
+        const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
+        let included = false;
+        try {
+          included = await mergedIncludesLocalHead({ cwd: task.cwd,
+            repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+            sha: observed, sandbox, run: runGitProcess });
+        } catch (error) {
+          this.options.log?.(`任务 ${task.summary.id} 合入版本核对失败: ${String(error)}`);
+        } finally { this.cleanupHostGitCredential(sandbox); }
+        if (this.shuttingDown || ["canceled"].includes(task.summary.status)) return;
+        if (!included) {
+          this.markVerificationStalled(task,
+            "平台报告的合入版本未确认包含当前本地提交，保留工作区与待推送代码，不登记任务完成；请核对 MR 归属及未交付改动", "evidence_missing");
+          return;
+        }
       }
       if (this.continuousReviewTask(task)) {
         if (!observed) {

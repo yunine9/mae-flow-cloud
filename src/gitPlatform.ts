@@ -262,7 +262,8 @@ export class FakeGitPlatform {
             reply(200, this.mergeGates(
               url.searchParams.get("source_branch") ?? "",
               url.searchParams.get("target_branch") ?? "",
-              url.searchParams.get("repo") ?? undefined));
+              url.searchParams.get("repo") ?? undefined,
+              url.searchParams.get("mr") ?? undefined));
           } else if (request.method === "GET"
               && url.pathname === "/mr/discussions") {
             if (this.discussionListFailures > 0) {
@@ -332,7 +333,7 @@ export class FakeGitPlatform {
 
   /** 门禁九项的假件版:三项可修按真实状态算,等人类由测试拨。
    * 语义与真件对齐:名字用 CodeHub 原始拼写,passed 是布尔。 */
-  private mergeGates(source: string, target: string, requestedRepo?: string): {
+  private mergeGates(source: string, target: string, requestedRepo?: string, requestedMr?: string): {
     mr_state: string;
     sha: string;
     gates: Array<{ name: string; passed: boolean; detail?: string }>;
@@ -341,7 +342,8 @@ export class FakeGitPlatform {
     const mr = this.mergeRequests.find(
       (item) => item.source_branch === source
         && item.target_branch === target
-        && (item.repo ?? this.barePath) === repo);
+        && (item.repo ?? this.barePath) === repo
+        && (!requestedMr || String(item.id) === requestedMr || item.url === requestedMr));
     if (!mr) throw new Error(`MR(${source}->${target}) 不存在`);
     const unresolved = this.discussions.filter((item) => !item.resolved);
     const lastRun = this.pipelines.findLast((run) => run.sha === mr.sha
@@ -429,7 +431,7 @@ export class FakeGitPlatform {
     const mr = this.mergeRequests.find((item) => item.id === id);
     if (!mr) return undefined;
     const gates = this.mergeGates(
-      mr.source_branch, mr.target_branch, mr.repo).gates;
+      mr.source_branch, mr.target_branch, mr.repo, String(mr.id)).gates;
     const blocked = gates.filter((gate) => !gate.passed);
     const esc = (value: string) => value.replace(/[&<>"]/g, (ch) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!));
@@ -471,7 +473,7 @@ export class FakeGitPlatform {
     }
     const repo = this.repositoryPath(mr.repo);
     const blocked = this.mergeGates(
-      mr.source_branch, mr.target_branch, repo)
+      mr.source_branch, mr.target_branch, repo, String(mr.id))
       .gates.filter((gate) => !gate.passed);
     if (blocked.length) {
       return { ok: false,

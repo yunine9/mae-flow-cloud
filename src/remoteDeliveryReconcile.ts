@@ -15,7 +15,7 @@ export interface RemoteReconcileHost {
   summary: TaskSummary; cwd?: string; repo: string; platformUrl?: string; headers: Record<string, string>;
   current(): boolean; persist(): void;
   observe(branch: string): Promise<{ head: string; sha?: string; url: string }>;
-  gates(): Promise<GateView | undefined>;
+  gates(mr?: RemoteMr): Promise<GateView | undefined>;
   published(receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void;
   settle(state: "merged" | "closed", sha?: string): Promise<void>;
   retirePushQuestion(merged?: boolean): void; watch(): void;
@@ -77,9 +77,23 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
       const body = await response.json() as { mrs?: RemoteMr[] };
       if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
       if (!Array.isArray(body.mrs)) throw new Error("MR 查找响应不完整");
-      const candidates = body.mrs.filter(mr => mr.source_branch === source && mr.target_branch === target
+      const matching = body.mrs.filter(mr => mr.source_branch === source && mr.target_branch === target
         && /^(https?):\/\//.test(mr.url) && mr.id !== undefined);
-      if (candidates.length !== body.mrs.length) throw new Error("MR 查找返回了不匹配的分支或标识");
+      if (matching.length !== body.mrs.length) throw new Error("MR 查找返回了不匹配的分支或标识");
+      // 分支名可被串行兄弟任务复用。先核对候选，不能先写入再查生命周期。
+      const candidates: RemoteMr[] = [];
+      const published = summary.delivery?.git_push?.sha;
+      for (const mr of matching) {
+        const view = await host.gates(mr);
+        if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
+        if (!view) throw new Error("候选 MR 状态核验失败");
+        if (view.mrState === "opened") candidates.push(mr);
+        else if (published && view.sourceSha === published && source && host.cwd) {
+          const observed = await host.observe(source);
+          if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
+          if (observed.head === published) candidates.push(mr);
+        }
+      }
       const chosen = selected ? candidates.find(mr => String(mr.id) === selected) : candidates.length === 1 ? candidates[0] : undefined;
       if (selected && !chosen) throw new Error("所选 MR 已不匹配当前任务，请重新查询");
       if (!chosen && candidates.length > 1) return { message: "找到多个同分支 MR，请选择本任务对应的 MR", candidates, proceed: false };
@@ -95,6 +109,8 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
     if (!view) throw new Error("MR 状态核验失败，请检查平台连接及凭据后重试");
     if (view.mrState !== "opened") {
       await host.settle(view.mrState, view.sourceSha);
+      if (view.mrState === "merged" && summary.status !== "completed")
+        return done(summary.detail ?? "合入事实尚未确认属于当前交付，未完成任务", false);
       if (view.mrState === "merged") host.retirePushQuestion(true);
       host.watch();
       return done(view.mrState === "merged" ? "MR 已合入，已接续任务收口" : "MR 已关闭，任务尚未完成", false);
@@ -146,5 +162,28 @@ export async function observePublishedBranch(input: {
     let publicUrl = url;
     try { const parsed = new URL(url); parsed.username = ""; parsed.password = ""; publicUrl = parsed.toString(); } catch { /* 本地路径 */ }
     return { head, sha: matching[0]?.[0], url: publicUrl };
+  } finally { view.cleanup(); }
+}
+
+/** 合入事实必须覆盖当前本地提交；允许外部追加提交，不要求 SHA 相等。
+ * 缺少对象时从配置的仓库取证，绝不 checkout、合并或改写用户分支。 */
+export async function mergedIncludesLocalHead(input: {
+  cwd: string; repo: string; sha?: string;
+  sandbox: { dir: string; args: string[]; env: NodeJS.ProcessEnv };
+  run(args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs: number }): Promise<{ status: number | null; stdout?: string; stderr?: string }>;
+}): Promise<boolean> {
+  if (!input.sha || !/^[a-f0-9]{40,64}$/i.test(input.sha)) return false;
+  const view = createSafeGitView(input.cwd);
+  try {
+    const run = (args: string[]) => input.run([...input.sandbox.args, ...args], {
+      cwd: input.cwd, env: view.environment(input.sandbox.env), timeoutMs: 15_000,
+    });
+    if ((await run(["cat-file", "-e", `${input.sha}^{commit}`])).status !== 0) {
+      if (!input.repo || (/^[a-z][a-z\d+.-]*:/i.test(input.repo)
+        && !/^(?:https?|file):\/\//i.test(input.repo) && !/^[a-z]:[\\/]/i.test(input.repo))) return false;
+      const url = /^(?:https?|file):\/\//i.test(input.repo) ? input.repo : resolve(input.repo);
+      if ((await run(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", url, input.sha])).status !== 0) return false;
+    }
+    return (await run(["merge-base", "--is-ancestor", "HEAD", input.sha])).status === 0;
   } finally { view.cleanup(); }
 }

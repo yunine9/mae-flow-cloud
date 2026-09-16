@@ -160,7 +160,7 @@ test("单 writer 竞态：反馈批次排队后重启只恢复一轮且不重复
   }
 });
 
-test("单 writer 竞态：修复 Agent 运行中 MR 合入会先停写再可信收口", async () => {
+test("单 writer 竞态：修复 Agent 运行中旧 MR 合入会停写，但不能完成未推送的新提交", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("success", "failed");
@@ -195,16 +195,13 @@ test("单 writer 竞态：修复 Agent 运行中 MR 合入会先停写再可信�
       "事故注入必须先形成尚未 push 的干净本地提交");
 
     platform.settleMr("master_bot_REQ9", "merged");
-    await until(() => service.get(id)!.status === "completed",
-      "合入事件抢占 writer 并完成 close");
+    await until(() => Boolean(service.get(id)!.delivery?.stalled),
+      "旧合入不能完成未推送的新提交");
     const kernelState = JSON.parse(readFileSync(
       join(repo, ".mae-flow.json"), "utf-8"));
-    assert.equal(kernelState.current, "end", "必须由可信 close 进入真正终态");
-    const closeEvent = kernelState.delivery_loop.close_events.at(-1);
-    assert.equal(closeEvent.sha, verified, "终态绑定平台实际合入的远端 SHA");
-    assert.equal(closeEvent.unpushed_local_commits.length, 1,
-      "本地未推送提交必须留痕，不能冒充已经进入 MR");
-    assert.match(service.get(id)!.detail ?? "", /未推送提交/);
+    assert.notEqual(service.get(id)!.status, "completed");
+    assert.notEqual(kernelState.current, "end");
+    assert.match(service.get(id)!.detail ?? "", /未确认包含当前本地提交/);
     assert.equal(platform.mergeRequests.length, 1);
     assert.match(readFileSync(join(repo, "a.txt"), "utf-8"), /local-only/,
       "未推送提交现场要保留给人核对");

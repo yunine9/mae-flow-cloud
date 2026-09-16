@@ -40,7 +40,7 @@ export interface MemorySidecarBudgets {
 }
 
 export const DEFAULT_MEMORY_BUDGETS: MemorySidecarBudgets = {
-  healthMs: 500, ingestMs: 5_000, searchMs: 1_500, expandMs: 1_000, bootMs: 60_000,
+  healthMs: 500, ingestMs: 5_000, searchMs: 3_000, expandMs: 1_000, bootMs: 60_000,
 };
 
 export interface MemorySearchHit {
@@ -81,6 +81,8 @@ export class MemorySidecar {
   constructor(private readonly options: MemorySidecarOptions) {
     this.budgets = { ...DEFAULT_MEMORY_BUDGETS, ...(options.budgets ?? {}) };
   }
+
+  get searchBudgetMs(): number { return this.budgets.searchMs; }
 
   get available(): boolean {
     return this.ready && !!this.child && !this.stopped;

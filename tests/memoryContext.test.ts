@@ -88,3 +88,12 @@ test("成功空结果复用，刷新可召回新记忆；独立会话各自发�
   assert.match((await second([user])).at(-1).content, /新记忆/);
   assert.equal(count, 3);
 });
+
+test("默认召回预算覆盖正常的秒级语义检索，不提前丢弃有效结果", async () => {
+  const usage: string[] = [];
+  const hook = createMemoryContext({ context: () => "C++ 编译", search: async () => {
+    await new Promise(resolve => setTimeout(resolve, 1600)); return ["ut-rule"];
+  }, resolve: ids => ids.map(id => ({ id, text: "首次编译执行 UT" })), onUse: event => usage.push(event.status) });
+  assert.match((await hook([user])).at(-1).content, /首次编译执行 UT/);
+  assert.deepEqual(usage, ["ready"]);
+});

@@ -1,3 +1,5 @@
+import { DEFAULT_MEMORY_BUDGETS } from "./memorySidecar.ts";
+
 /** 每轮临时上下文：不写会话历史、不改工具结果、不把检索失败变成任务失败。 */
 export const MEMORY_CONTEXT_TYPE = "mae-memory-context";
 export interface MemoryContextEntry { id: string; text: string }
@@ -54,7 +56,7 @@ export function createMemoryContext(options: MemoryContextOptions): (messages: a
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([pending, new Promise<void>(resolve => {
-            timer = setTimeout(resolve, options.budgetMs ?? 200);
+            timer = setTimeout(resolve, options.budgetMs ?? DEFAULT_MEMORY_BUDGETS.searchMs + 500);
           })]);
         } finally { if (timer) clearTimeout(timer); }
       }
