@@ -14,8 +14,8 @@ export function memoryPreparation(row: {
   source: string; draft?: "template" | "model" | "failed"; drafting?: boolean;
   review?: { status: "pending" | "accepted" | "rejected" };
 }): { label: string; title: string } {
-  if (row.review?.status === "accepted") return { label: "已采纳", title: "已由责任人确认内容与范围，可用于检索和复用。" };
-  if (row.review?.status === "rejected") return { label: "不采纳", title: "保留来源记录，不用于检索或自动注入。" };
+  if (row.review?.status === "accepted") return { label: "已采纳", title: "已由团队成员确认内容与范围，可用于检索和复用。" };
+  if (row.review?.status === "rejected") return { label: "已停用", title: "保留来源记录，不用于检索或自动注入。" };
   if (row.drafting) return { label: "整理中 · 待确认", title: "模型正在整理候选，采纳后才能复用；不影响任务继续。" };
   return { label: "待确认", title: row.draft === "failed" ? "整理失败，原记录保留；可人工修订后采纳。" : "尚无明确采纳记录。查看依据、结论及适用范围后再决定，不默认复用。" };
 }

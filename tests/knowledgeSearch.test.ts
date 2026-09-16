@@ -97,6 +97,16 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     assert.ok(!version.hits.some(h => h.id === ids.old));
     const callback = await service.search(context, "回调还没结束对象就释放了怎么办");
     assert.equal(callback.hits[0]?.id, row.id, JSON.stringify(callback));
+    const updated = store.review(row.id, "teammate", { decision: "accepted", revision: store.find(row.id)!.revision!,
+      module: "alarm", product_versions: ["2.7B"], conclusion: "先核对回调生命周期。弱引用需判空；共享所有权场景保留强引用。" });
+    const revised = await service.search(context, "回调还没结束对象就释放了怎么办");
+    assert.ok(revised.hits.some(hit => hit.id === row.id));
+    assert.match(JSON.stringify(service.read(context, row.id)), /共享所有权/);
+    assert.equal(service.read({ ...context, productVersion: "2.6B" }, row.id), undefined);
+    store.review(row.id, "teammate", { decision: "rejected", revision: updated.revision! });
+    assert.ok(!(await service.search(context, "回调还没结束对象就释放了怎么办")).hits.some(hit => hit.id === row.id));
+    assert.equal(service.read(context, row.id), undefined);
+
     assert.deepEqual((await service.search(context, "办公室盆栽多久浇一次水")).hits, []);
     archiveBusinessKnowledgeAsset(dir, "alarm", "dedup", "owner");
     assert.ok(!(await service.search(context, "告警重复事件如何去重")).hits.some(h => h.id === "module:alarm:dedup"));

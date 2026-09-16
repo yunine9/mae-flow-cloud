@@ -67,7 +67,8 @@ test("下一任务实际上下文只收到采纳后的结论及例外；缓存�
     task.summary.luban_account = "alice";
     const originalStatus = task.summary.status;
     const row = store.record({ ...base, task: owner });
-    assert.throws(() => service.reviewTaskMemory(owner, row.id, "bob", { decision: "accepted", revision: 1 }), /责任人/);
+    const teammate = service.reviewTaskMemory(owner, row.id, "bob", { decision: "pending", revision: 1 });
+    assert.equal(teammate.review?.by, "bob");
     const next = service.create("处理支付超时").id;
     const consumer = api.tasks.get(next);
     consumer.summary.repo_url = "git@example.com:team/payments.git";
@@ -79,7 +80,7 @@ test("下一任务实际上下文只收到采纳后的结论及例外；缓存�
     const expand = tools.find((tool: any) => tool.name === "knowledge");
     assert.deepEqual(await api.memorySearch(consumer, { query: "超时" }), []);
     assert.match((await expand.execute("before", { action: "read", id: row.id })).content[0].text, /取不到/);
-    const accepted = service.reviewTaskMemory(owner, row.id, "alice", { decision: "accepted", revision: 1,
+    const accepted = service.reviewTaskMemory(owner, row.id, "alice", { decision: "accepted", revision: teammate.revision!,
       scope: "platform", trigger: "有副作用的接口超时时", conclusion: "先核对幂等保障。\n\n适用例外：纯读取请求。" });
     assert.equal(task.summary.status, originalStatus, "采纳不推进或暂停任务");
     const hook = api.taskMemoryContext(consumer);
@@ -113,7 +114,7 @@ test("模型提炼提示词要求可迁移因果及反例，不把闭环当通�
   } finally { rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test("HTTP 审查权限与展示一致：非责任人拒绝，责任人和管理员可处理已完成任务", async () => {
+test("HTTP 审查权限与展示一致：团队成员均可维护已完成任务的经验", async () => {
   const { LocalAuth } = await import("../src/auth.ts");
   const { createTaskServer } = await import("../src/server.ts");
   const { store, dataDir } = setup();
@@ -136,10 +137,10 @@ test("HTTP 审查权限与展示一致：非责任人拒绝，责任人和管理
       assert.equal(response.status, 200);
       const headers = { cookie: response.headers.get("set-cookie")!.split(";")[0] };
       const found = await (await fetch(`${url}/memory-insights/${row.id}`, { headers })).json() as any;
-      assert.equal(found.record.can_review, actor !== "bob");
+      assert.equal(found.record.can_review, true);
       const result = await fetch(`${url}/tasks/${id}/memories/${row.id}/review`, { method: "POST", headers,
         body: JSON.stringify({ decision: actor === "admin" ? "rejected" : "accepted", revision: found.record.revision ?? 1 }) });
-      assert.equal(result.status, actor === "bob" ? 403 : 200, await result.text());
+      assert.equal(result.status, 200, await result.text());
       assert.equal(internal.summary.status, "completed");
     }
     assert.equal(store.find(row.id)?.review?.by, "admin");

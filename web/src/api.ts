@@ -2831,6 +2831,13 @@ export async function addAnnotation(
 /** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
 export interface MemoryRecord {
   can_review?: boolean;
+  source_repo?: string;
+  module?: string;
+  product_versions?: string[];
+  merged_into?: string;
+  maintenance_note?: string;
+  edited_by?: string;
+  edited_at?: string;
   basis?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] };
   review?: { status: "pending" | "accepted" | "rejected"; by?: string; at?: string;
     original?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] } };
@@ -2870,6 +2877,9 @@ export interface MemoryRepoInsight {
   one_off: number; pushes: number; hits: number; reworks: number;
 }
 export interface MemoryInsightRow {
+  module?: string;
+  product_versions?: string[];
+  merged_into?: string;
   can_review?: boolean;
   review?: MemoryRecord["review"];
   id: string; repo: string; trigger: string; conclusion: string;
@@ -2921,8 +2931,8 @@ export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRo
 }
 
 export async function reviewTaskMemory(taskId: string, record: MemoryRecord,
-  input: { decision: "accepted" | "rejected"; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
-  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/memories/${encodeURIComponent(record.id)}/review`, {
+  input: { decision: "pending" | "accepted" | "rejected"; module?: string; product_versions?: string[]; repo?: string; merged_into?: string; note?: string; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(record.id)}/review`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, revision: record.revision ?? 1 }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -4973,4 +4983,15 @@ export async function productVersionRequest(method = "GET", row?: Partial<Produc
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
+}
+
+export async function createMemoryDraft(trigger: string, conclusion: string): Promise<MemoryRecord> {
+  const response = await fetch("/memory-insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ trigger, conclusion }) });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+export async function memoryHistory(id: string): Promise<MemoryRecord[]> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(id)}/history`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
 }

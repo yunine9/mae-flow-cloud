@@ -212,7 +212,7 @@ test("工程知识管理页与任务选择都拒绝正文和发布指纹不一�
   }), [], "损坏记录不能进入任务快照");
 });
 
-test("知识飞轮 HTTP 闭环：任务沉淀待审、管理员发布、后续任务固定版本", async () => {
+test("知识飞轮 HTTP 闭环：任务沉淀待审、成员发布、后续任务固定版本", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-knowledge-flywheel-"));
   const auth = new LocalAuth(join(root, "auth.json"));
   auth.bootstrapAdmin("boss", "administrator-pass");
@@ -254,7 +254,7 @@ test("知识飞轮 HTTP 闭环：任务沉淀待审、管理员发布、后续�
 
     const published = await fetch(
       `${base}/knowledge-candidates/${candidate.id}/publish`, {
-        method: "POST", headers: { cookie: boss }, body: JSON.stringify({}),
+        method: "POST", headers: { cookie: dev }, body: JSON.stringify({}),
       });
     assert.equal(published.status, 200);
     assert.equal((await published.json() as { status: string }).status, "published");
@@ -274,7 +274,7 @@ test("知识飞轮 HTTP 闭环：任务沉淀待审、管理员发布、后续�
   }
 });
 
-test("跨模块业务知识需治理全部模块，审核一次发布到每个归属模块", async () => {
+test("跨模块业务知识由成员共同维护，一次发布到每个归属模块", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-multi-module-knowledge-"));
   const dataDir = join(root, "data");
   const auth = new LocalAuth(join(root, "auth.json"));
@@ -317,17 +317,9 @@ test("跨模块业务知识需治理全部模块，审核一次发布到每个�
       `${base}/knowledge-candidates/${candidate.id}/publish`, {
         method: "POST", headers: { cookie: owner }, body: JSON.stringify({}),
       });
-    assert.equal(denied.status, 403,
-      "只管理部分归属模块的人不能代表其他模块发布");
-    assert.equal(readBusinessModule(dataDir, "orders").assets.length, 0,
-      "权限预检失败时任何模块都不能被部分写入");
+    assert.equal(denied.status, 200, "登录成员可维护跨模块知识");
+    assert.equal(readBusinessModule(dataDir, "orders").assets.length, 1);
 
-    const boss = await login("boss", "administrator-pass");
-    const published = await fetch(
-      `${base}/knowledge-candidates/${candidate.id}/publish`, {
-        method: "POST", headers: { cookie: boss }, body: JSON.stringify({}),
-      });
-    assert.equal(published.status, 200);
     assert.equal(readBusinessModule(dataDir, "orders").assets[0].id,
       candidate.id);
     assert.equal(readBusinessModule(dataDir, "payments").assets[0].id,

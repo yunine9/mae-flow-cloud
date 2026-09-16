@@ -129,10 +129,10 @@ export function memoryContextQuery(task: {
 
 /** 索引只给候选；范围、撤回和正文以当前正本为准。 */
 export function resolveMemoryHits(hits: MemorySearchHit[], read: (id: string) => MemoryRecord | undefined,
-  repo: string): MemorySearchHit[] {
+  repo: string, modules: string[] = [], productVersion?: string): MemorySearchHit[] {
   return hits.flatMap(hit => {
     const row = read(hit.id);
-    return row && memoryAccessible(row, repo) ? [{ ...hit, scope: row.scope,
+    return row && memoryAccessible(row, repo, modules, productVersion) ? [{ ...hit, scope: row.scope,
       judged_by: row.judged_by, at: row.at, paths: row.paths,
       snippet: `${row.trigger}: ${row.conclusion}` }] : [];
   });

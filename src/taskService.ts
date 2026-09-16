@@ -5459,8 +5459,8 @@ export class TaskService {
         return ids.flatMap(id => {
           const row = rows.get(id);
           const who = row?.judged_by === "human" ? "人确认" : row?.judged_by === "agent" ? "Agent 记录" : "流水线";
-          return row && memoryAccessible(row, this.memoryRepo(task)) ? [{ id,
-            text: `[${row.scope === "platform" ? "平台通用" : "本仓"} · ${who} · ${row.at.slice(0, 10)}] ${row.trigger}: ${row.conclusion}`,
+          return row && memoryAccessible(row, this.memoryRepo(task), this.memoryModules(task), task.summary.product_version) ? [{ id,
+            text: `[${row.scope === "platform" ? "平台通用" : "本仓"} · ${who} · ${row.at.slice(0, 10)}] ${row.trigger}: ${row.conclusion}${row.product_versions?.length ? `（适用版本：${row.product_versions.join("、")}）` : ""}`,
           }] : [];
         });
       },
@@ -5472,6 +5472,13 @@ export class TaskService {
     return repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
   }
 
+  private memoryModules(task: TaskState): string[] {
+    const repos = new Set([task.summary.repo_url, ...(task.summary.repositories ?? [])].filter(Boolean).map(r => repositoryIdentity(r!)));
+    const selected = new Set((task.summary.business_modules ?? []).map(m => m.id));
+    return listBusinessModules(this.options.dataDir).modules.filter(m => m.status === "active"
+      && (selected.has(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r))))).map(m => m.id);
+  }
+
   /** 平台与本仓有效记忆；仅仓库记忆检查路径是否仍存在。 */
   private memoryCandidates(task: TaskState): MemoryRecord[] {
     const repo = this.memoryRepo(task);
@@ -5480,7 +5487,7 @@ export class TaskService {
     // 失锚只在真现场(有 .git)里记台账:假 cwd 会把好记忆记成失锚,半年后误沉底。
     const realCheckout = !!task.cwd && existsSync(join(task.cwd, ".git"));
     const rows = store.list().filter((row) => {
-      if (!memoryAccessible(row, repo)
+      if (!memoryAccessible(row, repo, this.memoryModules(task), task.summary.product_version)
           || row.scope === "one_off" || (row.task === task.summary.id && row.scope !== "platform")) return false;
       if (row.scope === "local" && task.cwd && row.paths[0] && !existsSync(join(task.cwd, row.paths[0]))) {
         if (realCheckout && !stats.get(row.id)?.unanchored_since) {
@@ -5509,12 +5516,12 @@ export class TaskService {
   ): Promise<MemorySearchHit[] | undefined> {
     if (!this.memorySidecar) return undefined;
     const store = this.memories(), repo = this.memoryRepo(task);
-    const sources = store.list().filter(row => memoryAccessible(row, repo)
+    const sources = store.list().filter(row => memoryAccessible(row, repo, this.memoryModules(task), task.summary.product_version)
       && (!input.pathPrefix || row.scope === "platform" || row.paths.some(path => path.startsWith(input.pathPrefix!))))
       .map(row => ({ id: row.id, path: join(store.root, row.file) }));
     const hits = await this.memorySidecar.search({ ...input, repo, sources });
     if (!hits) return undefined;
-    return resolveMemoryHits(hits, id => this.memories().find(id), this.memoryRepo(task));
+    return resolveMemoryHits(hits, id => this.memories().find(id), this.memoryRepo(task), this.memoryModules(task), task.summary.product_version);
   }
 
   /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
@@ -5709,7 +5716,7 @@ export class TaskService {
       search: (input) => this.memorySearch(task, input),
       expand: async (id) => {
         const row = this.memories().find(id);
-        return row && memoryAccessible(row, this.memoryRepo(task)) ? this.memories().read(id) : undefined;
+        return row && memoryAccessible(row, this.memoryRepo(task), this.memoryModules(task), task.summary.product_version) ? this.memories().read(id) : undefined;
       },
       write: (input, callId) => this.recordMemory(task, { ...input,
         source: "agent_note", judged_by: "agent", repo: this.memoryRepo(task),
@@ -5775,7 +5782,6 @@ export class TaskService {
   reviewTaskMemory(id: string, memoryId: string, by: string, input: import("./taskMemory.ts").MemoryReviewInput, privileged = false): MemoryRecord {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    if (!privileged && by !== (task.summary.luban_account ?? "本地用户")) throw new TaskControlError("只有任务责任人可以采纳或撤销这条经验");
     if (this.memories().find(memoryId)?.task !== id) throw new NotFoundError("记忆不属于本任务");
     try {
       const record = this.memories().review(memoryId, by, input);
@@ -5927,6 +5933,7 @@ export class TaskService {
       repos.set(row.repo, bucket);
       return {
         id: row.id, repo: row.repo, trigger: row.trigger, review: row.review,
+        module: row.module, product_versions: row.product_versions, edited_by: row.edited_by, edited_at: row.edited_at, merged_into: row.merged_into, maintenance_note: row.maintenance_note,
         conclusion: row.conclusion.replace(/\s+/g, " ").slice(0, 240),
         source: row.source, judged_by: row.judged_by, scope: row.scope,
         draft: row.draft ?? "template", drafting: this.memoryDraftJobs.has(row.id), at: row.at, task: row.task,

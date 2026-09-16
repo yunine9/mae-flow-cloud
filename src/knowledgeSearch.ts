@@ -9,7 +9,7 @@ import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModul
 import { listKnowledgeCandidateCatalog } from "./knowledgeCandidates.ts";
 import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
-import { MemoryStore, memoryAccessible } from "./taskMemory.ts";
+import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
 
 export interface KnowledgeContext {
@@ -101,13 +101,13 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   }
   const store = new MemoryStore(dataDir);
   for (const row of store.list()) {
-    if (!memoryAccessible(row, context.repo)) continue;
+    if (![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
     const content = store.read(row.id);
     if (!content) continue;
     assets.push({ id: row.id, title: row.trigger, kind: "experience",
-      scope: row.scope === "platform" ? "平台通用经验" : `代码仓：${row.repo}`,
+      scope: row.module ? `业务模块：${row.module}` : row.scope === "platform" ? "平台通用经验" : `代码仓：${row.repo}`,
       summary: row.conclusion, whenToUse: row.trigger, content,
-      revision: String(row.revision ?? 1), productVersions: knowledgeProductVersions(content),
+      revision: String(row.revision ?? 1), productVersions: row.product_versions ?? knowledgeProductVersions(content),
       path: join(store.root, row.file) });
   }
   // Explicit product scope narrows the current task; missing metadata remains

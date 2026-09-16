@@ -293,7 +293,7 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
       && /版本号不合法/.test(error.message));
 });
 
-test("路由权限:登录才可读,写只归管理员;留痕带操作人", async () => {
+test("路由权限:登录成员共同维护;留痕带操作人", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-skill-route-"));
   const dataDir = join(dir, "data");
   const auth = new LocalAuth(join(dir, "auth.json"));
@@ -326,7 +326,7 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
     const denied = await fetch(`${base}/skills/route-demo`, {
       method: "PUT", headers: { cookie: dev }, body: payload,
     });
-    assert.equal(denied.status, 403, "开发者不能上架");
+    assert.equal(denied.status, 200, "团队成员可以维护知识 Skill");
     const accepted = await fetch(`${base}/skills/route-demo`, {
       method: "PUT", headers: { cookie: boss }, body: payload,
     });
@@ -360,7 +360,7 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
         business_module_ids: [], repositories: [],
         technologies: ["java", "js"] }),
     });
-    assert.equal(retagged.status, 200);
+    assert.equal(retagged.status, 200, await retagged.text());
     const retaggedShelf = await (await fetch(`${base}/skills`,
       { headers: { cookie: dev } })).json() as {
         skills: Array<{ technologies: string[] }> };
@@ -409,8 +409,8 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
       { headers: { cookie: dev } })).json() as {
         versions: Array<{ version_id: string }>;
       };
-    assert.equal(versions.versions.length, 2,
-      "改分类与下线都形成可回退版本");
+    assert.equal(versions.versions.length, 3,
+      "成员更新、改分类与下线都形成独立可回退版本");
     const rollback = await fetch(`${base}/skills/route-demo/rollback`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ version: versions.versions[0].version_id }),
