@@ -8,7 +8,7 @@
  * 的 sent/issue_review 操作计。
  */
 
-import type { IssueStatus } from "./state.ts";
+import type { IssueConclusionKind, IssueStatus } from "./state.ts";
 
 /** 单个会话的判定事实(结构化账,判什么列什么,不携带过程细节)。 */
 export interface IssueOnceRateFacts {
@@ -16,8 +16,8 @@ export interface IssueOnceRateFacts {
   /** 单号:空=无单流程,不参与统计。 */
   ticket?: string;
   status: IssueStatus;
-  /** 结论 kind:完成交付=delivered(全部 MR 合入的归档,ADR-0031)。 */
-  conclusion_kind?: string;
+  /** 结论 kind:完成交付=delivered(全部 MR 合入的归档,ADR-0034)。 */
+  conclusion_kind?: IssueConclusionKind;
   /** 环境验证卡答「验证发现问题」的次数。 */
   verify_fail_count: number;
   /** 分析报告版本数(初版=1;缺 0 按 ≤1 宽容,坏账不虚构失败)。 */

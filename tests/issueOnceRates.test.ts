@@ -154,6 +154,12 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
     status: "archived",
     conclusion: { kind: "non_issue", summary: "误报",
       at: "2026-09-01T10:00:00Z" } });
+  // 存量未合入的手动归档(ADR-0022:建了 MR 未全合=fixed)不是完成交付。
+  seedSession(dataDir, { id: "issue-g", ticket: "DTS202609000006",
+    status: "archived",
+    conclusion: { kind: "fixed", summary: "已推送未合入",
+      at: "2026-09-01T10:00:00Z" } });
+  seedReport(dataDir, "issue-g", 1);
   seedSession(dataDir, { id: "issue-f", status: "archived", ...delivered });
 
   const service = new IssueFlowService({
@@ -176,7 +182,7 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
     );
     assert.equal(status, 200);
     assert.equal(body.total, 3,
-      "分母=a/b/c;取消 d、误报 e、无单 f 都不是完成交付");
+      "分母=a/b/c;取消 d、误报 e、无单 f、未合入手动归档 g 都不是完成交付");
     assert.deepEqual(body.localization, { passed: 1, rate: 33.3 },
       "只有一版报告的 issue-a 一次定位");
     assert.deepEqual(body.repair, { passed: 2, rate: 66.7 },
