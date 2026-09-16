@@ -4079,6 +4079,20 @@ export async function uploadIssueImage(
   });
 }
 
+/** 外部图片代理转存(#276):粘贴的外部 <img src="https://..."> 图
+ * 前端拿不到字节(跨域带不上对方站的 Cookie),交后端下载落 staging,
+ * 返回 issue-images/<hash>.<ext> 引用。data: URL 不走这里(字节已在
+ * src 里,前端本地转 Blob 走 uploadIssueImage)。 */
+export async function proxyIssueImage(
+  url: string,
+): Promise<{ path: string; bytes: number }> {
+  return issueFetch("/issues/proxy-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+}
+
 /** 已上传截图的预览 URL(从 staging 回显二进制)。path 是 uploadIssueImage
  * 返回的相对路径引用(issue-images/<hash>.<ext>)。 */
 export function issueImageUrl(path: string): string {

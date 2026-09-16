@@ -20,9 +20,11 @@ import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
-import { issueImageUrl } from "../api";
+import { DOMParser as ProseMirrorDOMParser } from "@milkdown/kit/prose/model";
+import { issueImageUrl, proxyIssueImage } from "../api";
 import { displayUrlToRef, refToDisplayUrl } from "./issueImageRef";
-import { FALLBACK_HINT, htmlIsImageOnly, readClipboardImageFile } from "./useIssueImagePaste";
+import { pasteImageFile, classifyExternalImageSrc, isHostedImageSrc,
+  transferFailHint } from "./useIssueImagePaste";
 import { cn } from "cn";
 
 export function DescriptionEditor({
@@ -59,16 +61,21 @@ export function DescriptionEditor({
   const [zoom, setZoom] = useState<string | null>(null);
   // 上传进行态:粘贴到缩略图原地出现之间有网络往返,无反馈会让人以为
   // 没粘上(2026-09-15 用户实测)。挂编辑器容器右上角浮层,比页脚静
-  // 文案更显眼;上传插件通路与右键复制兜底共用计数,并发不互踩。
+  // 文案更显眼;上传插件通路与外链图转存(data: 本地上传、http(s)
+  // 后端代理)共用同一计数,并发不互踩。
   const [pendingUploads, setPendingUploads] = useState(0);
-  const trackUpload = useCallback(async (file: File): Promise<string> => {
-    setPendingUploads((count) => count + 1);
-    try {
-      return await uploadRef.current(file);
-    } finally {
-      setPendingUploads((count) => Math.max(0, count - 1));
-    }
-  }, []);
+  const trackPending = useCallback(
+    async <T,>(run: () => Promise<T>): Promise<T> => {
+      setPendingUploads((count) => count + 1);
+      try {
+        return await run();
+      } finally {
+        setPendingUploads((count) => Math.max(0, count - 1));
+      }
+    }, []);
+  const trackUpload = useCallback(
+    (file: File) => trackPending(() => uploadRef.current(file)),
+    [trackPending]);
 
   useEffect(() => {
     let disposed = false;
@@ -139,54 +146,86 @@ export function DescriptionEditor({
     editor?.action(replaceAll(refToDisplayUrl(value, issueImageUrl)));
   }, [value]);
 
-  // 网页右键「复制图像」粘贴兜底(milkdown 版,与 useIssueImagePaste 同款
-  // 判定):Chromium 只把 <img src> 引用放 text/html、不给位图字节——
-  // 不拦的话 ProseMirror 按 HTML 直插图节点,原 src(data:/https:)原样
-  // 进 description:staging 上传被绕开,登记提交时拿不到图,引用还是
-  // 死链(#184 实测)。命中纯图粘贴即拦默认,异步 Clipboard API 取回
-  // 位图走同一条上传钩子,插入的仍是 issue-images/ 相对引用;带位图
-  // 文件的粘贴归 upload 插件。
+  // 外部图片粘贴转存(#276,与 useIssueImagePaste 同款判定):剪贴板
+  // 无 image/* 文件、只有 text/html 时按 <img src> 协议分三路——
+  // data: 的字节就在 src 里,客户端转 Blob 走同一条上传钩子(生产是
+  // HTTP,异步 Clipboard API 兜底在非安全上下文不可用的死路已删);
+  // http(s):// 外链前端拿不到字节(跨域带不上对方站的 Cookie),交
+  // 后端 proxy-image 下载落 staging;file:/// 后端也访问不到用户本机,
+  // 丢弃保文字计入失败。已托管的(issue-images/ 相对引用、本站预览
+  // URL)不拦;混排的文字随改写后的 HTML 一并插入,不再因带字放行外链。
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const intercept = (event: ClipboardEvent) => {
       const data = event.clipboardData;
       if (!data) return;
+      // 剪贴板带位图文件(截图软件/能拉到字节的网页图)归 upload 插件。
       for (const item of Array.from(data.items)) {
         if (item.type.startsWith("image/") && item.getAsFile()) return;
       }
       const html = data.getData("text/html") ?? "";
-      if (!htmlIsImageOnly(html)) return;
+      if (!html) return;
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const pending = Array.from(doc.querySelectorAll("img"))
+        .map((img) => ({ img, src: img.getAttribute("src") ?? "" }))
+        .filter(({ src }) => !isHostedImageSrc(src));
+      if (!pending.length) return;
+      // 拦截必须在同步阶段:先按住默认粘贴,再异步逐张转存。
       event.preventDefault();
       event.stopPropagation();
-      readClipboardImageFile()
-        .catch(() => null)
-        .then((file) => {
-          if (!file) {
-            errorRef.current?.(FALLBACK_HINT);
-            return undefined;
-          }
-          // 上传失败由上传钩子自行上报,这里不代发第二遍。
-          return trackUpload(file);
-        })
-        .then((ref) => {
-          if (!ref) return;
-          editorRef.current?.action((ctx) => {
-            const view = ctx.get(editorViewCtx);
-            const node = view.state.schema.nodes.image?.createAndFill?.({
-              src: issueImageUrl(ref), alt: "截图",
-            });
-            if (node) {
-              view.dispatch(
-                view.state.tr.replaceSelectionWith(node).scrollIntoView());
+      void (async () => {
+        let failed = 0;
+        for (const { img, src } of pending) {
+          const kind = classifyExternalImageSrc(src);
+          if (kind === "data") {
+            // 字节已在 src 里,本地转 Blob 即可。取字节失败(如 data
+            // URL 畸形)计入失败提示;上传失败由上传钩子自行上报,这里
+            // 只丢该图(不代发第二遍)。
+            let blob: Blob;
+            try {
+              blob = await (await fetch(src)).blob();
+            } catch {
+              img.remove();
+              failed += 1;
+              continue;
             }
-          });
+            try {
+              const ref = await trackUpload(pasteImageFile(blob));
+              img.setAttribute("src", issueImageUrl(ref));
+            } catch {
+              img.remove();
+            }
+          } else if (kind === "external") {
+            // 外链前端拿不到字节,后端代理下载;失败丢图计入失败提示。
+            try {
+              const result = await trackPending(() => proxyIssueImage(src));
+              img.setAttribute("src", issueImageUrl(result.path));
+            } catch {
+              img.remove();
+              failed += 1;
+            }
+          } else {
+            img.remove();
+            failed += 1;
+          }
+        }
+        editorRef.current?.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const container = document.createElement("div");
+          container.innerHTML = doc.body.innerHTML;
+          const slice = ProseMirrorDOMParser.fromSchema(view.state.schema)
+            .parseSlice(container);
+          view.dispatch(
+            view.state.tr.replaceSelection(slice).scrollIntoView());
         });
+        if (failed > 0) errorRef.current?.(transferFailHint(failed));
+      })();
     };
     // 捕获段拦截:抢在 ProseMirror 的原生 paste 处理之前拿住事件。
     root.addEventListener("paste", intercept, true);
     return () => root.removeEventListener("paste", intercept, true);
-  }, []);
+  }, [trackPending, trackUpload]);
 
   // #231 换装:.issue-desc-editor 家族(style.css)退役,壳/占位/灯箱与
   // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用

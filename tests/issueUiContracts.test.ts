@@ -7,6 +7,10 @@ const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
 const descriptionEditor = readFileSync(
   resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+const imagePaste = readFileSync(
+  resolve("web/src/issues/useIssueImagePaste.ts"), "utf-8");
+const issueRoutes = readFileSync(
+  resolve("src/issueFlow/routes.ts"), "utf-8");
 const notice = readFileSync(
   resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
 const editor = readFileSync(
@@ -1695,6 +1699,30 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
   assert.match(registration, /<dd className="min-w-0">/);
   assert.match(registration,
     /text-primary underline underline-offset-2 break-all/);
+});
+
+test("外部图片粘贴按 src 协议三路转存,Clipboard 死路不回潮(#276)", () => {
+  // 生产是 HTTP(非安全上下文),异步 Clipboard API 不可用——拦截
+  // 成功等于吞掉整段粘贴的死路已删;data: 字节就在 src 里,本地转
+  // Blob 即可,不再舍近求远。登记编辑器与会话粘贴钩子同款红线。
+  for (const source of [descriptionEditor, imagePaste]) {
+    assert.doesNotMatch(source, /navigator\.clipboard/);
+    assert.doesNotMatch(source,
+      /htmlIsImageOnly|readClipboardImageFile|FALLBACK_HINT/);
+    assert.match(source, /proxyIssueImage/);
+    assert.match(source, /classifyExternalImageSrc|isHostedImageSrc/);
+  }
+  // 三路协议分类只住 useIssueImagePaste 一处,防两份实现漂移。
+  assert.match(imagePaste, /\^data:image\\\//);
+  assert.match(imagePaste, /\^https\?:\\\/\\\//);
+  // 路由层协议白名单兜一道:file:/// 前端拦了,后端再拒一次。
+  assert.match(issueRoutes, /proxy-image/);
+  assert.match(issueRoutes, /\^https\?:\\\/\\\//);
+  // 非图片 content-type 拒收(需认证上游典型回 HTML 登录页),不落垃圾。
+  assert.match(issueRoutes, /startsWith\("image\/"\)/);
+  // 外链转存(data: 直传与 http(s) 代理)也计入上传进行态浮层。
+  assert.match(descriptionEditor, /trackPending/);
+  assert.match(descriptionEditor, /trackUpload\(pasteImageFile\(blob\)\)/);
 });
 
 test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026-09-15)", () => {
