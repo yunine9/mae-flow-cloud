@@ -62,7 +62,8 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // 问题会话的团队全景有且只有一个家:「团队问题」页签页。
   // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
   assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
-  assert.match(app, /<TeamIssueWorld issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
+  // passRate 是 #274 一次通过率统计块的取数(服务端聚合,组件只渲染)。
+  assert.match(app, /<TeamIssueWorld issues=\{teamIssues\} passRate=\{issuePassRate\}\n                onOpenIssue=\{openIssueSession\} \/>/);
 });
 
 test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)", () => {

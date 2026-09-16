@@ -22,8 +22,8 @@ function inline(
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
-        // 加粗内递归走同一 inline:润色稿常见「加粗内嵌截图」,退化成
-        // 纯文本会把图吞掉。
+        // 加粗内递归走同一 inline:结构化描述常见「加粗内嵌截图」,退化
+        // 成纯文本会把图吞掉。
         return <b key={index}>{inline(piece.slice(2, -2), resolveImage)}</b>;
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {

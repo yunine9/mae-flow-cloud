@@ -216,6 +216,27 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     assert.doesNotMatch(candidateText,
       /alice@example\.com|alice-codehub-secret|alice-luban-secret|cret/,
       "委派候选接口只能暴露就绪状态，不能带邮箱或任何令牌提示");
+
+    // 问题登记的指派候选(ADR-0031):flow=issue 固定只认 Git 令牌+
+    // 邮箱,与本部署形态的 launch 需求脱钩(此测试服务无 host,launch
+    // 口径人人 ready;issue 口径照实标 carol 未就绪)。管理员不在候选。
+    const issueCandidates = await fetch(
+      `${base}/auth/collaboration-assignees?flow=issue`, {
+      headers: { cookie: bob.cookie },
+    });
+    assert.equal(issueCandidates.status, 200);
+    const issueRows = JSON.parse(await issueCandidates.text()) as Array<{
+      username: string; ready: boolean; missing: string[];
+    }>;
+    assert.equal(issueRows.some((row) => row.username === "admin"), false,
+      "管理员不能被指派为问题责任人(管理员不写问题会话)");
+    assert.deepEqual(issueRows.find((row) => row.username === "alice"), {
+      username: "alice", ready: true, missing: [],
+    });
+    assert.deepEqual(issueRows.find((row) => row.username === "carol"), {
+      username: "carol", ready: false,
+      missing: ["CodeHub Token", "提交邮箱"],
+    }, "问题指派只认 Git 凭据:没配齐就如实标未就绪并点名缺项");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

@@ -734,11 +734,18 @@ export function createTaskServer(
             options.auth?.listUsers().filter((user) => user.committer) ?? []);
         }
         // 跨仓分工候选：所有登录者都可读，但只给“是否就绪+缺项”，
-        // 不给 token hint、邮箱或管理员账号。服务形态决定哪些配置必需。
+        // 不给 token hint、邮箱或管理员账号。服务形态决定哪些配置必需;
+        // ?flow=issue 是问题登记指派的固定映射(ADR-0031):只认 Git
+        // 令牌+署名邮箱,不问小鲁班令牌——问题通知是旁路,不因缺通知
+        // 令牌挡指派。映射钉死在服务端,客户端只点名场景,不递需求。
         if (request.method === "GET" && parts[1] === "collaboration-assignees") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const issueNeeds = new URL(request.url ?? "", "http://x")
+            .searchParams.get("flow") === "issue";
           return json(response, 200, options.auth?.collaborationAssignees(
-            service.launchOptions().needs) ?? []);
+            issueNeeds
+              ? { git_token: true, luban_token: false }
+              : service.launchOptions().needs) ?? []);
         }
         return json(response, 404, { error: "未知身份接口" });
       }

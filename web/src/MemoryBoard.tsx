@@ -6,6 +6,7 @@ import { MemoryReviewEditor } from "./MemoryReviewEditor";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { Input } from "./components/ui/input";
+import { confirmDialog } from "./ConfirmDialog";
 
 const scopes = { local: "本仓相关位置", general: "本仓通用", platform: "跨仓通用", one_off: "仅检索参考" };
 export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => void }) {
@@ -61,7 +62,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     && (!query.trim() || `${row.trigger} ${row.conclusion} ${row.repo}`.includes(query.trim()))), [insights, sourceTask, tab, query, scopeFilter]);
   const pending = (insights?.memories ?? []).filter(row => row.can_review && !row.withdrawn && !row.superseded_by && !row.archived && (row.review?.status ?? "pending") === "pending").length;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 10) - 1));
-  function dismiss() { if (!dirty || window.confirm("尚未保存的编辑将被放弃，继续吗？")) { clearFocus(); } }
+  async function dismiss() { if (dirty && !await confirmDialog({ title: "尚未保存的编辑将被放弃，继续吗？", danger: true })) return; clearFocus(); }
   async function open(id: string) {
     if (opening) return;
     setOpening(true); setError("");
@@ -86,7 +87,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     {(error || focusError) && <p role="alert" className="text-sm text-destructive">{focusError || error}</p>}
       <div className="flex items-center gap-2" aria-label="经验状态">
         {[["pending", `待确认 ${pending}`], ["accepted", "已采纳"], ["rejected", "已停用"], ["all", "全部记录"]].map(([value, label]) =>
-          <Button key={value} variant={tab === value ? "default" : "outline"} size="sm" onClick={() => { if (dirty && !window.confirm("放弃尚未保存的修改？")) return; clearFocus(); setTab(value); setPage(0); }}>{label}</Button>)}
+          <Button key={value} variant={tab === value ? "default" : "outline"} size="sm" onClick={async () => { if (dirty && !await confirmDialog({ title: "放弃尚未保存的修改？", danger: true })) return; clearFocus(); setTab(value); setPage(0); }}>{label}</Button>)}
       </div>
       <div className="flex items-center gap-3"><Input className="max-w-lg" aria-label="搜索经验" placeholder="搜索经验、代码仓" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
         <select aria-label="筛选复用范围" className="rounded-md border bg-surface p-2 text-sm" value={scopeFilter} onChange={e => { setScopeFilter(e.target.value); setPage(0); }}><option value="all">全部范围</option><option value="platform">平台通用</option><option value="module">业务模块</option><option value="repo">代码仓</option></select>
@@ -100,7 +101,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
         <h3 className="p-2 font-semibold">{tab === "pending" ? `待确认 · ${pending}` : "经验列表"}</h3>
         {rows.map(row => <Button key={row.id} variant={row.id === selected.record.id ? "secondary" : "ghost"}
           className="h-auto min-h-16 justify-start whitespace-normal p-3 text-left" disabled={opening}
-          onClick={() => { if (row.id !== selected.record.id && (!dirty || window.confirm("切换候选将放弃尚未保存的编辑，继续吗？"))) void open(row.id); }}>
+          onClick={async () => { if (row.id !== selected.record.id && (!dirty || await confirmDialog({ title: "切换候选将放弃尚未保存的编辑，继续吗？", danger: true }))) void open(row.id); }}>
           <span><span className="line-clamp-2">{row.trigger}</span><span className="mt-1 block text-sm font-normal text-muted-foreground">{row.task} · {row.repo}</span></span>
         </Button>)}
       </aside>

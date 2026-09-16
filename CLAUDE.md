@@ -80,7 +80,8 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
 ## 常用命令
 
 ```bash
-npm test                 # 全量(需 docker/PG 的用例没有环境会显式 skip)
+npm test                 # 快层默认(排除 delivery/mrLoop 等重仿真族;并发缺省 8,实测 20 路反慢且抖)
+npm run test:full        # 全量(分钟级,重仿真族在此;平时交 CI 三分片,本地跑须闲时)
 npm run typecheck        # 零构建≠不查类型(tsx 不看类型,写错字段名会静默)
 npm run gate             # 推送闸门:typecheck+web 构建+秒级契约测试(hooksPath=.githooks 则 push 前自动跑)
 npm run fix-ratio -- 7   # 每周复测 fix 提交占比与重灾区文件;每周真模型演练清单见 docs/weekly-drill.md
@@ -93,7 +94,7 @@ npm run pilot -- --resume <label>        # 断点续跑(quota 和进度都是钱
 harness/preflight.sh     # 上线自查;--isolate-image/--models/--adapter 加项
 harness/restart-drill.sh # 真 kill -9 重启演练
 npx tsx harness/concurrency-drill.ts --image <镜像>   # 真模型+真容器并发实战
-MFC_REAL_BUILD_IMAGE=<镜像> npm test   # 解开 6 条真 Docker 用例(0 skip)
+MFC_REAL_BUILD_IMAGE=<镜像> npm run test:full   # 解开 6 条真 Docker 用例(0 skip)
 python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
 ```
 

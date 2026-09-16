@@ -349,11 +349,20 @@ export async function handleIssueRoutes(
 
   try {
     if (method === "GET" && parts.length === 1) {
-      // ?scope=all:团队看板视角看所有人的问题会话(详情读同样开放——
-      // 查看模式,写仍仅归属人);缺省只看本人——"我的问题" tab 的
-      // 既有行为不变。
-      const scopeAll = new URL(request.url ?? "", "http://x")
-        .searchParams.get("scope") === "all";
+      // ?scope=all:团队看板视角看所有人的问题会话;缺省只看本人——
+      // 「我负责的」(归属=我)的既有行为不变。?scope=reported(ADR-0031):
+      // 「我登记的」按登记人过滤——测试登记给开发责任人的会话在这里
+      // 跟踪;自登记(归属=登记人)两个范围都出现。读没有闸:查看模式
+      // (spec: issue-session-view-mode)对登录用户全开放,两个范围都是
+      // 它的投影。
+      const scope = new URL(request.url ?? "", "http://x")
+        .searchParams.get("scope");
+      if (scope === "reported") {
+        return done(200, {
+          issues: issueFlow.listReported(String(viewer?.username ?? "")),
+        });
+      }
+      const scopeAll = scope === "all";
       const mine = issueFlow.list(
         viewer && viewer.role !== "admin" && !scopeAll
           ? viewer.username : undefined);
@@ -368,6 +377,16 @@ export async function handleIssueRoutes(
       }
       const body = await readBody(request);
       const source = body.source === "dts" ? "dts" as const : "manual" as const;
+      // 登记页指派(ADR-0031):手工登记必填责任人——登记完成即移交,
+      // 没有责任人就没有人接;DTS 页签发起不带(自助流程原样,归属=
+      // 发起人)。登录用户恒以登录态为登记人,客户端改写不收。
+      const assignee = body.assignee ? String(body.assignee) : undefined;
+      if (source === "manual" && !assignee) {
+        return done(409, {
+          error: "手工登记必须指名责任人:登记完成后由责任人推进,"
+            + "请回登记页选择责任人后再登记",
+        });
+      }
       const ticket = body.ticket ? String(body.ticket) : undefined;
       // DTS 来源自动匹配业务模块:前端未显式选模块时,用 DTS 单据的
       // sFeatureNoName/sModuleNoName 与模块库做匹配;唯一高置信命中时
@@ -426,7 +445,11 @@ export async function handleIssueRoutes(
         }
       }
       const created = issueFlow.create({
-        account: String(body.account ?? viewer?.username ?? ""),
+        // 归属=责任人(ADR-0031);登录在场时登记人恒取登录态,
+        // body.account 只留给无登录态的测试世界。
+        account: String(viewer?.username ?? body.account ?? ""),
+        ...(assignee ? { assignee } : {}),
+        ...(viewer?.username ? { reporter: viewer.username } : {}),
         title: String(body.title ?? ""),
         description: body.description === undefined
           ? undefined : String(body.description),
@@ -446,26 +469,6 @@ export async function handleIssueRoutes(
         ...(environmentInput ? { environment: environmentInput } : {}),
       });
       return done(201, created);
-    }
-
-    // 登记描述 AI 润色(#184):一次性(非会话)主模型组装,细节在
-    // polish.ts。角色边界同 POST /issues(管理员不发起问题会话);
-    // 服务端不落库,润色稿只存在于前端确认流——替换前原稿不动。
-    if (method === "POST" && parts[1] === "polish-description"
-        && parts.length === 2) {
-      if (viewer?.role === "admin") {
-        return done(403, { error: "管理员不发起问题会话" });
-      }
-      // 空描述的 409 人话单点在 polish.ts(IssueControlError),这里不重复。
-      const body = await readBody(request);
-      const outcome = await issueFlow.polishDescription({
-        title: String(body.title ?? ""),
-        description: String(body.description ?? ""),
-        ...(body.module !== undefined ? { module: String(body.module) } : {}),
-        ...(body.environment !== undefined
-          ? { environmentName: String(body.environment) } : {}),
-      });
-      return done(200, outcome);
     }
 
     if (method === "GET" && parts[1] === "dts" && parts.length === 2) {
@@ -589,6 +592,81 @@ export async function handleIssueRoutes(
         response.end(image.data);
         return true;
       }
+    }
+
+    // 外部图片代理转存(POST /issues/proxy-image,#276):粘贴的外部
+    // <img src="https://..."> 图前端拿不到字节(跨域带不上对方站的
+    // Cookie),由后端下载落 staging,返回 issue-images/<hash>.<ext>
+    // 引用——前端用它替换原 src。data: URL 的字节就在 src 里,前端本地
+    // 转 Blob 走既有上传,不进这里;file:/// 在前端拦截,路由层仍以
+    // 协议白名单兜一道。管理员不发起问题会话,同 POST /issues 的角色
+    // 边界。
+    if (method === "POST" && parts[1] === "proxy-image" && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不发起问题会话" });
+      }
+      const dataDir = routeOptions.issueFlow?.dataDir ?? "";
+      if (!dataDir) return done(500, { error: "数据目录未配置" });
+      const body = await readBody(request);
+      const url = String(body.url ?? "").trim();
+      if (!url) return done(400, { error: "缺少 url 参数" });
+      if (!/^https?:\/\//i.test(url)) {
+        return done(400, { error: "仅支持 http/https 图片 URL" });
+      }
+      try {
+        const upstream = await fetch(url, {
+          signal: AbortSignal.timeout(15_000),
+          redirect: "follow",
+        });
+        if (!upstream.ok) {
+          return done(502, { error: `下载失败: HTTP ${upstream.status}` });
+        }
+        // 非图片 content-type 拒收(需认证的上游典型回 HTML 登录页):
+        // 落一张渲染不出的图不如当场失败,前端按失败丢图保文字。
+        const contentType = upstream.headers.get("content-type") ?? "";
+        if (!contentType.startsWith("image/")) {
+          return done(415, {
+            error: `URL 返回的不是图片(${contentType || "无 content-type"})`,
+          });
+        }
+        // 边读边限量:上游大小未知,不能整包 arrayBuffer 进内存。
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const reader = upstream.body?.getReader();
+        if (reader) {
+          for (;;) {
+            const { done: streamed, value } = await reader.read();
+            if (streamed) break;
+            size += value.byteLength;
+            if (size > ISSUE_IMAGE_MAX_BYTES) {
+              void reader.cancel();
+              return done(413, {
+                error: `图片超过 ${
+                  Math.round(ISSUE_IMAGE_MAX_BYTES / 1024 / 1024)}MB 上限`,
+              });
+            }
+            chunks.push(Buffer.from(value));
+          }
+        }
+        const result = stageIssueImage({
+          data: Buffer.concat(chunks),
+          contentType,
+          dataDir,
+        });
+        return done(201, { path: result.path, bytes: result.bytes });
+      } catch (error) {
+        return done(502, {
+          error: `代理下载失败: ${
+            String(error instanceof Error ? error.message : error)}`,
+        });
+      }
+    }
+
+    // 一次通过率(团队问题页签统计块):全平台有单终态会话的聚合,
+    // 口径见 CONTEXT「一次通过率」词条;读开放与列表同权(查看模式)。
+    // 字面路由必须住在 :id 捕获之前,不然 "stats" 会被当会话 id。
+    if (method === "GET" && parts[1] === "stats" && parts.length === 2) {
+      return done(200, issueFlow.passRate());
     }
 
     const id = parts[1];

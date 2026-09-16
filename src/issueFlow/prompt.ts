@@ -141,11 +141,15 @@ export interface IssueEnvCredentials {
 }
 
 /** 登记元信息:手工登记时人填的输入全量(标题/现象/模块/带出仓/
- * 网管环境)。module/environment 只在会话真带这些信息时出现——
- * DTS 页签发起的会话环境闸还没补配,键整段缺席,不造空壳。 */
+ * 网管环境/登记人)。module/environment 只在会话真带这些信息时出现——
+ * DTS 页签发起的会话环境闸还没补配,键整段缺席,不造空壳。reporter
+ * 只在登记人≠责任人(登记指派,ADR-0031)时出现——AI 该知道现象
+ * 描述出自谁之手,自登记两号同一不必赘述。 */
 export interface IssueRegistrationMeta {
   title: string;
   description: string;
+  /** 登记人(ADR-0031):通常是测试,问题由其登记提交;缺席=自登记。 */
+  reporter?: string;
   module?: { id: string; name: string; locked?: boolean };
   repos: string[];
   environment?: {
@@ -171,6 +175,9 @@ export function issueRegistrationMeta(
   return {
     title: state.title,
     description: state.description,
+    ...(state.reporter && state.reporter !== state.account
+      ? { reporter: state.reporter }
+      : {}),
     ...(state.module_id
       ? { module: {
         id: state.module_id,
@@ -319,6 +326,10 @@ export function issueFixedOpeningPrompt(
     moduleLine(meta),
     `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
     `- 工号: ${state.account}`,
+    ...(meta.reporter
+      ? [`- 登记人: ${meta.reporter}(问题由登记人登记并指派,现象描述出自其视角,` +
+          "你推进过程中作答与决策的对象是责任人)"]
+      : []),
     repoLines(state)
       || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     ...(scenario === "ticket" && state.ticket
@@ -389,6 +400,9 @@ export function issueResumePrompt(
   return [
     promptCopy("opening", "resume.header"),
     `- 标题: ${meta.title}`,
+    ...(meta.reporter
+      ? [`- 登记人: ${meta.reporter}(问题由其登记提交)`]
+      : []),
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
     moduleLine(meta),
     ...environmentLines(meta),

@@ -350,8 +350,14 @@ export async function listPeople(): Promise<PersonIdentity[]> {
   return parseJson(response);
 }
 
-export async function listCollaborationAssignees(): Promise<CollaborationAssignee[]> {
-  const response = await fetch("/auth/collaboration-assignees");
+export async function listCollaborationAssignees(
+  /** "issue":问题登记指派的固定映射(ADR-0031)——只认 Git 令牌+邮箱,
+   * 不问小鲁班令牌;映射在服务端,客户端只点名场景。 */
+  flow?: "issue",
+): Promise<CollaborationAssignee[]> {
+  const response = await fetch(flow
+    ? `/auth/collaboration-assignees?flow=${flow}`
+    : "/auth/collaboration-assignees");
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
@@ -3784,7 +3790,11 @@ export interface IssueGateCard {
 
 export interface IssueSummary {
   id: string;
+  /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
   account: string;
+  /** 登记人(ADR-0031,通常是测试):登记完成即撒手只读跟踪;缺席=
+   * 指派机制前的老会话(服务端读盘即补齐=归属)。 */
+  reporter?: string;
   created_at: string;
   updated_at: string;
   title: string;
@@ -4028,14 +4038,32 @@ async function issueFetch(
   return parseJson(response);
 }
 
-export function listIssues(): Promise<IssueSummary[]> {
-  return issueFetch("/issues").then((body) => body.issues ?? []);
+export function listIssues(
+  /** "reported":「我登记的」(ADR-0031)——按登记人过滤,测试登记
+   * 给他人的会话在这里跟踪;缺省按归属过滤(「我负责的」)。 */
+  scope?: "reported",
+): Promise<IssueSummary[]> {
+  return issueFetch(scope ? "/issues?scope=reported" : "/issues")
+    .then((body) => body.issues ?? []);
 }
 
 /** 团队看板视角:拉所有人的问题会话(?scope=all)。列表只读,
- * 详情仍按归属校验——只看标题/状态/处理人/阶段,不碰决策与材料。 */
+ * 详情仍按归属校验——只看标题/状态/责任人/阶段,不碰决策与材料。 */
 export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
+}
+
+/** 一次通过率(口径:CONTEXT「一次通过率」词条)。服务端全台账聚合,
+ * rate 为 null 表示分母为 0(还没有有单终态会话),前端显示 —。 */
+export interface IssuePassRate {
+  passed: number;
+  total: number;
+  rate: number | null;
+  per_session: { id: string; reviews: number; first_pass: boolean }[];
+}
+
+export function getIssuePassRate(): Promise<IssuePassRate> {
+  return issueFetch("/issues/stats");
 }
 
 export function getIssue(id: string): Promise<IssueDetail> {
@@ -4078,6 +4106,9 @@ export function createIssue(input: {
    * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
   module_id?: string;
   environment?: IssueRegistrationEnvironment;
+  /** 责任人(ADR-0031):登记完成后问题的归属与推进人;登记人=当前
+   * 登录用户由服务端取,客户端不传。 */
+  assignee?: string;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {
     method: "POST",
@@ -4098,35 +4129,24 @@ export async function uploadIssueImage(
   });
 }
 
+/** 外部图片代理转存(#276):粘贴的外部 <img src="https://..."> 图
+ * 前端拿不到字节(跨域带不上对方站的 Cookie),交后端下载落 staging,
+ * 返回 issue-images/<hash>.<ext> 引用。data: URL 不走这里(字节已在
+ * src 里,前端本地转 Blob 走 uploadIssueImage)。 */
+export async function proxyIssueImage(
+  url: string,
+): Promise<{ path: string; bytes: number }> {
+  return issueFetch("/issues/proxy-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+}
+
 /** 已上传截图的预览 URL(从 staging 回显二进制)。path 是 uploadIssueImage
  * 返回的相对路径引用(issue-images/<hash>.<ext>)。 */
 export function issueImageUrl(path: string): string {
   return `/issues/issue-image?path=${encodeURIComponent(path)}`;
-}
-
-/** 登记描述 AI 润色(#184)的回执:润色稿只存在于前端确认流,服务端
- * 不落库。vision_used=false 时 vision_note 说明原因(未配置/识图失败),
- * 前端明示「未参考截图」。 */
-export interface IssuePolishResult {
-  title: string;
-  description: string;
-  vision_used: boolean;
-  vision_note?: string;
-}
-
-/** 描述润色:一次性(非会话)调用——识图观察(有图时)+ 主模型生成
- * 标题与结构化描述。替换与否由用户在确认弹窗里决定。 */
-export function polishIssueDescription(input: {
-  title: string;
-  description: string;
-  module?: string;
-  environment?: string;
-}): Promise<IssuePolishResult> {
-  return issueFetch("/issues/polish-description", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(input),
-  });
 }
 
 export function replyIssue(id: string, text: string): Promise<IssueSummary> {

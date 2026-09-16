@@ -487,6 +487,16 @@ export class LocalAuth {
     };
   }
 
+  /** 账号角色查询(问题登记指派校验用,ADR-0031):账号不存在或已
+   * 停用返回 undefined。只回角色,不回任何个人数据——与 listUsers
+   * 的管理员专享边界不同,这只是"这个工号存不存在、是不是管理员"
+   * 的单点事实。 */
+  roleOf(username: string): UserRole | undefined {
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return undefined;
+    return stored.role;
+  }
+
   createSession(user: AuthUser): string {
     const token = randomBytes(32).toString("base64url");
     this.sessions.set(sessionKey(token), {

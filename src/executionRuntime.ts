@@ -150,6 +150,24 @@ function has(name: string): boolean {
     || CONFIG[name.replace(/^--/, "")] === true;
 }
 
+/** 位置参数拒绝(2026-09-16 实连坑三次):本服务只认 --flag 形态,
+ * `serve.ts <dataDir> <port>` 这类位置写法会被整体静默忽略——服务照常
+ * 起来,却跑在默认数据目录与缺省模式上,人还以为带上了自己的数据,
+ * 排障极难察觉。启动即炸并指出正确用法(与"文案错配宁可启动就炸"
+ * 同一纪律)。已知边界:布尔旗标后紧跟的裸词会被当成它的值放过,但
+ * 首位裸词(最常见形态)必炸。 */
+(() => {
+  const extra = process.argv.slice(2);
+  const offenders = extra.filter((arg, index) => {
+    if (arg.startsWith("--")) return false;
+    return !(extra[index - 1]?.startsWith("--") ?? false);
+  });
+  if (offenders.length) {
+    console.error(`[serve] 不认识的位置参数: ${offenders.join(" ")}——本服务只认 --flag 形态(如 --data <目录> --port 8787);位置参数会被静默忽略,拒绝带错配置启动。`);
+    process.exit(2);
+  }
+})();
+
 /** 内核解释器选择:MAE_FLOW_PYTHON 显式指定 > 启动时真跑一次探测。
  * Windows 的 python3 常是应用商店的执行别名桩——`--version` 有回显、
  * 真执行却无输出直接失败(2026-08-25 本机实测 rc=49),内核 dispatch
@@ -894,6 +912,9 @@ async function main(): Promise<void> {
     // 只停在分析报告,一档全自动;缺省二档。
     interventionTier: (account) => auth.issueInterventionTier(account),
     gitCredential: (account) => auth.gitCredential(account),
+    // 登记指派校验(ADR-0031):责任人是存在的普通开发账号才放行——
+    // 管理员不写问题会话,指派即造死会话。
+    userRole: (username) => auth.roleOf(username),
     opsToolsDir: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
       ? goToolsDir

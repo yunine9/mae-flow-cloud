@@ -12,10 +12,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -26,30 +22,33 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Check, ChevronRight, Columns3, Copy, RotateCw, Sparkles } from "lucide-react";
+import { Check, ChevronRight, Columns3, Copy, RotateCw } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
   getDtsModuleBindings,
   getDtsTicketDetail,
-  issueImageUrl,
+  listCollaborationAssignees,
   listDtsTickets,
-  polishIssueDescription,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
   type BusinessModule,
+  type CollaborationAssignee,
   type DtsModuleBindingEntry,
   type DtsTicketBrief,
   type DtsTicketDetail,
   type EnvironmentView,
-  type IssuePolishResult,
   type IssueSummary,
 } from "../api";
+import { userLabel, UserPicker, type UserOption } from "../UserPicker";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
-import { Markdown } from "../markdown";
 import { DescriptionEditor } from "./DescriptionEditor";
+import {
+  ISSUE_DESCRIPTION_TEMPLATE, isUntouchedTemplate,
+} from "./descriptionTemplate";
+import { resolveAssignee } from "./assigneeDefault";
 import { copyIssueDescription } from "./copyIssueDescription";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
@@ -70,25 +69,36 @@ const FIELD = "grid gap-[5px] text-[13px] text-muted-foreground max-[680px]:col-
 const GROUP = "col-span-full grid gap-3 rounded-[10px] border border-line bg-surface p-3.5 max-[680px]:px-2.5 max-[680px]:py-3";
 const GROUP_BODY = "grid grid-cols-2 gap-3 max-[680px]:grid-cols-1";
 
-/** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
- * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
- * 平台归属。服务端 create 里机械拦(needRepo 判定同源),这里只把
- * 拦截面提前到表单:按钮禁用 + 指路个人设置,配完回来即解锁。
- * (#230:琥珀警示壳换工具类,动作钮换 shadcn Button。) */
-function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
+/** 发起前置门禁条(ADR-0031 起查**责任人**的凭据):这单会碰远端仓,
+ *  克隆与推送都用责任人的身份——责任人没配齐就拦在表单上,服务端
+ *  create 里机械拦(判定同源)。分两种说法:责任人=自己(自登记)
+ *  指路个人设置,自己配完即解锁;责任人=他人(登记指派)点名责任人,
+ *  登记人改选已配齐的责任人或让责任人先配好。 */
+function CredentialGate({ viewer, needRepo, assignee, readyKnown, ready,
+  missing, onNavigateProfile }: {
   viewer: AuthUser;
   needRepo: boolean;
+  /** 当前生效的责任人(空=未指派,不出这个门)。 */
+  assignee: string;
+  /** 就绪状态是否已知:候选没加载完/拉取失败/所选人不在候选里,都是
+   * 未知——未知不出这个门(不谎报"未配齐"),服务端门禁兜底。 */
+  readyKnown: boolean;
+  /** 责任人凭据是否配齐(仅在已知时有意义)。 */
+  ready: boolean;
+  missing: string[];
   onNavigateProfile?: () => void;
 }) {
-  if (!needRepo) return null;
-  const missing: string[] = [];
-  if (!viewer.git_token_hint) missing.push("Git 令牌");
-  else if (!viewer.git_email) missing.push("个人邮箱");
-  if (!missing.length) return null;
+  if (!needRepo || !assignee || !readyKnown || ready) return null;
+  const self = assignee === viewer.username;
+  // 走到这 ready=false ⟺ missing 非空(flow=issue 口径),detail 必有内容。
+  const missingText = missing.join(" 与 ");
   return <div className="col-span-full mb-2.5 flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
-    <span>发起前先配置<b className="text-attention">{missing.join(" 与 ")}</b>(个人设置 → 个人接入):
-      拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
-    {onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
+    {self
+      ? <span>发起前先配置<b className="text-attention">{missingText}</b>(个人设置 → 个人接入):
+          拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
+      : <span>责任人 <b className="text-attention">{assignee}</b>(缺 {missingText})的 Git 凭据未配齐——拉取代码仓与推送提交都用责任人的身份:
+          改选已配齐的责任人,或让责任人配好后再登记。</span>}
+    {self && onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
       去个人设置配置
     </Button>}
   </div>;
@@ -186,8 +196,7 @@ export function IssueRegistration({
     hidden={!visible}>
     <div hidden={panel !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
-        onNavigateProfile={onNavigateProfile}
-        active={visible && panel === "manual"} />
+        onNavigateProfile={onNavigateProfile} />
     </div>
     <div hidden={panel !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
@@ -196,56 +205,21 @@ export function IssueRegistration({
   </section>;
 }
 
-/** 润色稿驻留(ADR-0029):挂起稿(已生成、未确认/未放弃)按用户名存
- * sessionStorage——顶层页签切换会卸载整个看板,驻留在组件外才挺得过;
- * 生命周期=浏览器页签,关了即清,刷新白送存活(请求进行中刷新救不了,
- * 页面卸载杀请求)。失败回执不驻留:失败即逝,回来重按一次。 */
-function polishKey(username: string): string {
-  return `mae-flow:issue:polish:${username}`;
-}
-
-function readStoredPolish(username: string): IssuePolishResult | null {
-  try {
-    return JSON.parse(sessionStorage.getItem(polishKey(username)) ?? "null");
-  } catch { return null; }
-}
-
-function storePolish(username: string, result: IssuePolishResult): void {
-  try {
-    sessionStorage.setItem(polishKey(username), JSON.stringify(result));
-  } catch { /* 驻留是旁路,存不进就算了 */ }
-}
-
-function clearStoredPolish(username: string): void {
-  try { sessionStorage.removeItem(polishKey(username)); } catch { /* 同上 */ }
-}
-
-/** 在飞润色登记(ADR-0029):切走再切回是重挂——新实例的 polishing 从
- * false 起步,旧闭包的 setState 是空操作。把在飞请求记在组件外,重挂时
- * 恢复「润色中」并把迟到的结果接给当前实例;被新请求顶替的旧结果不再
- * 落账(最新胜出)。 */
-const inflightPolish = new Map<string, {
-  request: Promise<IssuePolishResult>;
-  superseded: boolean;
-}>();
-
 function ManualRegister({
   viewer,
   onCreated,
   onError,
   onNavigateProfile,
-  active,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
-  /** 润色确认弹窗的渲染门(ADR-0029):整域可见且落在 manual 面板。
-   * 人不在登记页时挂起稿只驻留不弹,切回瞬间弹回。 */
-  active: boolean;
 }) {
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  // 描述预填标准提单模板(#273):打开即照着填,格式合规靠阻力最小
+  // 路径(ADR-0030);不想用模板整段删掉自由书写,必填校验照旧。
+  const [description, setDescription] = useState(ISSUE_DESCRIPTION_TEMPLATE);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [productVersion, setProductVersion] = useState("");
@@ -260,28 +234,80 @@ function ManualRegister({
   // 从环境管理选(#150,ADR-0020):选中即定,提交只带 environment_id——
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
+  // 责任人(ADR-0031):登记完成即移交——displayed 值由 resolveAssignee
+  // 裁决:未选模块置空,选了模块且未手选自动填模块责任人(换模块跟随),
+  // 手选即冻结。候选=全部普通用户(flow=issue 口径,管理员天然不在),
+  // 模块责任人与维护者置顶带标记;登记人自己不用配 Git 凭据。
+  const [assigneeManual, setAssigneeManual] = useState("");
+  const [candidates, setCandidates] = useState<CollaborationAssignee[] | undefined>();
   const [busy, setBusy] = useState(false);
-  // AI 润色(#184):润色请求进行态 + 确认弹窗的润色稿(服务端不落库,
-  // 放弃即丢弃;挂起稿驻留 sessionStorage,ADR-0029)。建议标题在弹窗内
-  // 可改,替换时随描述一起写回。
-  const [polishing, setPolishing] = useState(false);
-  // 懒初始化从驻留读回(ADR-0029):顶层页签切换卸载看板后回来,弹窗
-  // 随面板可见即刻弹回。
-  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(
-    () => readStoredPolish(viewer.username));
-  const [adoptTitle, setAdoptTitle] = useState(
-    () => readStoredPolish(viewer.username)?.title ?? "");
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
   const moduleCatalog = useMemo(() => (modules ?? []).filter((module) =>
     module.status === "active" && module.repositories.length > 0), [modules]);
   const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
+  // 指派候选(flow=issue 固定口径:只认 Git 令牌+邮箱,不问小鲁班
+  // 令牌)。拉取失败置空表——必填校验拦住提交,服务端门禁兜底。
+  useEffect(() => {
+    let alive = true;
+    listCollaborationAssignees("issue")
+      .then((rows) => { if (alive) setCandidates(rows); })
+      .catch(() => { if (alive) setCandidates([]); });
+    return () => { alive = false; };
+  }, []);
+  const candidateRows = candidates ?? [];
+  const candidateByUsername = useMemo(
+    () => new Map(candidateRows.map((row) => [row.username, row])),
+    [candidateRows]);
+  const selectedOwner = selectedModule?.owner;
+  const assignee = resolveAssignee({
+    manualPick: assigneeManual,
+    moduleOwner: selectedOwner,
+    ownerAssignable: Boolean(selectedOwner
+      && candidateByUsername.has(selectedOwner)),
+  });
+  // 模块责任人与维护者置顶带标记:模块相关的人一眼可见(不在候选的
+  // 管理员/停用账号跳过——候选接口本就不给)。
+  const assigneeOptions = useMemo<UserOption[]>(() => {
+    const pinned: UserOption[] = [];
+    const picked = new Set<string>();
+    for (const name of [selectedOwner, ...(selectedModule?.maintainers ?? [])]) {
+      if (!name || picked.has(name)) continue;
+      const row = candidateByUsername.get(name);
+      if (!row) continue;
+      picked.add(name);
+      pinned.push({
+        username: row.username,
+        ...(row.display_name ? { display_name: row.display_name } : {}),
+        detail: (name === selectedOwner ? "模块责任人" : "模块维护者")
+          + (row.ready ? "" : "(未配 Git 凭据)"),
+      });
+    }
+    return [...pinned, ...candidateRows
+      .filter((row) => !picked.has(row.username))
+      .map((row) => ({
+        username: row.username,
+        ...(row.display_name ? { display_name: row.display_name } : {}),
+        ...(row.ready ? {} : { detail: "未配 Git 凭据" }),
+      }))];
+  }, [candidateRows, candidateByUsername, selectedOwner, selectedModule]);
+  // 就绪三态:候选在册才谈配没配齐——候选没加载完/拉取失败/所选人
+  // 不在册(管理员、目录失败)都是未知,门与提交拦截不出场,服务端
+  // 门禁兜底,不谎报「未配齐」。
+  const assigneeReadyKnown = Boolean(assignee && candidateByUsername.has(assignee));
+  const assigneeReady = candidateByUsername.get(assignee)?.ready === true;
+  /** 候选在册则「姓名(工号)」,不在册只显工号。 */
+  const candidateLabel = (username: string): string => {
+    const row = candidateByUsername.get(username);
+    return userLabel({ username,
+      ...(row?.display_name ? { display_name: row.display_name } : {}) });
+  };
   useEffect(() => {
     let alive = true;
     setModules(undefined);
     setModuleLoadError("");
-    // 加载失败和空目录是两种事实:前者给重试,后者指路团队资产。两种
+    // 加载失败和空目录是两种事实:前者给重试,后者指路配置中心。两种
     // 情况都不回退手填仓(spec #15:仓的唯一权威是模块绑定)。
     getBusinessModules()
       .then((catalog) => { if (alive) setModules(catalog.modules); })
@@ -299,7 +325,9 @@ function ManualRegister({
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
       if (saved) {
         setTitle(saved.title ?? "");
-        setDescription(saved.description ?? "");
+        // 清空过的草稿(存的是空串)回读时不回灌空串——描述框只以
+        // 模板或用户内容呈现,不出现空框(#273)。
+        setDescription(saved.description || ISSUE_DESCRIPTION_TEMPLATE);
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
@@ -314,26 +342,6 @@ function ManualRegister({
     }, 400);
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
-
-  // 重挂接续(ADR-0029):上一实例的在飞润色由这里接回——恢复「润色中」
-  // 灰化,结果到达时落驻留并回填当前实例,弹窗随渲染门弹出。失败即逝
-  // (ADR-0029 边界):只恢复按钮,不补报错。
-  useEffect(() => {
-    const entry = inflightPolish.get(viewer.username);
-    if (!entry || entry.superseded) return;
-    setPolishing(true);
-    let alive = true;
-    entry.request
-      .then((result) => {
-        if (!alive || entry.superseded) return;
-        storePolish(viewer.username, result);
-        setAdoptTitle(result.title);
-        setPolishResult(result);
-      })
-      .catch(() => { /* 失败即逝 */ })
-      .finally(() => { if (alive) setPolishing(false); });
-    return () => { alive = false; };
-  }, [viewer.username]);
 
   // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
   // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
@@ -351,13 +359,14 @@ function ManualRegister({
     }
   }
 
-  // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
-  // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
-  // 不拦。服务端 create 里机械拦(判定同源),这里把拦截面提前到表单。
+  // 个人凭据前置门禁(ADR-0031 起查责任人):模块带出的仓一般是
+  // https 远端,克隆与推送都用责任人的身份——按模块绑定判断 needRepo;
+  // 全本地仓(file:// 演示库)不拦。服务端 create 里机械拦(判定同源),
+  // 这里把拦截面提前到表单。
   const touchRemoteRepo = (selectedModule?.repositories ?? [])
     .some((url) => /^https?:\/\//i.test(url));
-  const credentialBlocked = touchRemoteRepo
-    && (!viewer.git_token_hint || !viewer.git_email);
+  const credentialBlocked = Boolean(assignee) && touchRemoteRepo
+    && assigneeReadyKnown && !assigneeReady;
 
   // 发起按钮的灰化口径(spec 验收):目录为空/未选模块/凭据缺失/提交中。
   // 字段缺内容不灰按钮——提交时逐项给友好指路文案,让人知道卡在哪。
@@ -376,64 +385,6 @@ function ManualRegister({
     setPickedEnv(null);
   }
 
-  /** AI 润色(#184):把随意的 标题+描述 整理成标准提单格式。识图观察由
-   * 服务端组装(截图内容补充进润色稿);结果进确认弹窗并落驻留
-   * (ADR-0029)——替换前原稿一动不动。 */
-  async function polish() {
-    if (polishing || !description.trim()) return;
-    // 非托管图片引用当场指路(2026-09-15 实测):staging 之外的图——修复
-    // 上线前粘贴的旧草稿、拖拽进来的外部图——识图拿不到、预览也解析
-    // 不了,模型只会交回全占位模板加破图;拦在调用前把出路说清。
-    const unmanagedImage =
-      /!\[[^\]]*\]\((?!issue-images\/)[^)\s]+\)/.exec(description);
-    if (unmanagedImage) {
-      onError("描述里有非平台托管的图片引用,润色与识图都读不到它:把这张图删掉,重新用截图粘贴(或右键复制图像)后再点润色");
-      return;
-    }
-    setPolishing(true);
-    const prior = inflightPolish.get(viewer.username);
-    if (prior) prior.superseded = true;
-    const request = polishIssueDescription({
-      title: title.trim(),
-      description,
-      ...(selectedModule ? { module: selectedModule.name } : {}),
-      ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
-    });
-    const entry = { request, superseded: false };
-    inflightPolish.set(viewer.username, entry);
-    try {
-      const result = await request;
-      if (!entry.superseded) {
-        // 先落驻留再回填(ADR-0029):人已切到顶层页签时组件已卸载,
-        // setState 是空操作,驻留必须自己落地,回来才读得回。
-        storePolish(viewer.username, result);
-        setAdoptTitle(result.title);
-        setPolishResult(result);
-      }
-    } catch (reason) {
-      onError(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      if (inflightPolish.get(viewer.username) === entry) {
-        inflightPolish.delete(viewer.username);
-      }
-      setPolishing(false);
-    }
-  }
-
-  /** 弃稿:关弹窗(Esc/遮罩)与「放弃」同路,驻留同步清(ADR-0029)。 */
-  function discardPolish() {
-    clearStoredPolish(viewer.username);
-    setPolishResult(null);
-  }
-
-  /** 弹窗里「替换」:标题(可改)与描述一起写回;「放弃」只关弹窗。 */
-  function adoptPolish() {
-    if (!polishResult) return;
-    if (adoptTitle.trim()) setTitle(adoptTitle.trim());
-    setDescription(polishResult.description);
-    discardPolish();
-  }
-
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (busy || submitDisabled) return;
@@ -445,8 +396,24 @@ function ManualRegister({
       onError("问题描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
+    // 模板原样拦截(#273):预填后描述永不为空,空模板会绕过必填校验、
+    // 登记后白跑一轮首轮会话;字段缺内容不灰按钮的口径同样适用——提交
+    // 时给指路文案,不靠灰化猜。
+    if (isUntouchedTemplate(description)) {
+      onError("描述还是模板原样——把触发条件、操作步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
+      return;
+    }
     if (!pickedEnv) {
       onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
+      return;
+    }
+    if (!assignee) {
+      onError("请选择责任人——登记完成后由责任人推进;选了业务模块会自动带上模块责任人");
+      return;
+    }
+    if (touchRemoteRepo && assigneeReadyKnown && !assigneeReady) {
+      onError(`责任人 ${candidateLabel(assignee)}` +
+        " 的 Git 凭据未配齐——改选已配齐的责任人,或让责任人配好后再登记");
       return;
     }
     setBusy(true);
@@ -458,8 +425,13 @@ function ManualRegister({
         product_version: productVersion || undefined,
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
         environment: { environment_id: pickedEnv.id },
+        // 责任人(ADR-0031):登记完成即移交,归属与推进人。
+        assignee,
       });
-      setTitle(""); setDescription(""); setModuleId("");
+      // 重置回模板而非空串(#273):下一条登记仍从标准格式起步,两套
+      // 空态不并存。
+      setTitle(""); setDescription(ISSUE_DESCRIPTION_TEMPLATE); setModuleId("");
+      setAssigneeManual("");
       clearPickedEnv();
       onCreated(created);
     } catch (reason) {
@@ -484,28 +456,20 @@ function ManualRegister({
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
-            的动作转给区内第一个可激活元素(= 润色按钮),造成"改个描述
-            就自动润色"(2026-09-11 用户实测)。 */}
+            的动作转给区内第一个可激活元素,行为不可控(2026-09-11
+            用户实测)。 */}
         <div className={cn(FIELD, "col-span-full")}>
           <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
-            placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+            placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />
           {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
               页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {/* 一键复制:AI 润色稿替换进来或手写完,想带走(贴工单/飞书)
-                都不用手选全选;空描述不可点。 */}
+            {/* 一键复制:描述写完想带走(贴工单/飞书)都不用手选全选;
+                空描述不可点。 */}
             <CopyDescriptionButton markdown={description}
               disabled={!description.trim()} variant="ghost" size="xs" />
-            {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
-            <Button type="button" variant="ghost" size="xs"
-              disabled={!description.trim() || polishing}
-              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
-              onClick={() => void polish()}>
-              <Sparkles aria-hidden />
-              {polishing ? "润色中…" : "AI 润色"}
-            </Button>
           </div>
         </div>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
@@ -562,9 +526,23 @@ function ManualRegister({
             </Button>
           </small>}
           {catalogEmpty && <small className="col-span-full" role="alert">
-            模块目录为空——先到「配置中心 → 模块与代码仓」登记并绑定代码仓,再回来发起。
+            模块目录为空——先到「配置中心 → 模块与代码仓」登记并绑定代码仓,再回来登记。
           </small>}
         </label>
+        {/* 责任人(ADR-0031):登记完成即移交——模块责任人+维护者置顶
+            带标记,选模块自动带上,手选即冻结。不用 label 包裹:label
+            的激活转发会把点开选人框的动作转给区内首个可激活元素
+            (同描述字段的走查结论)。 */}
+        <div className={cn(FIELD, "col-span-full")}>
+          <span>责任人 <i className="font-bold not-italic text-danger">*</i></span>
+          <UserPicker value={assignee} options={assigneeOptions}
+            onChange={setAssigneeManual} ariaLabel="责任人"
+            emptyLabel="选择责任人——登记完成后由其推进" />
+          {selectedModule?.owner && <small className="text-xs leading-normal text-faint">
+            模块「{selectedModule.name}」的责任人是 {candidateLabel(selectedModule.owner)},
+            未手选时自动带上
+          </small>}
+        </div>
       </div>
     </div>
     <div className={GROUP}>
@@ -586,54 +564,14 @@ function ManualRegister({
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
+      assignee={assignee} readyKnown={assigneeReadyKnown} ready={assigneeReady}
+      missing={assignee ? candidateByUsername.get(assignee)?.missing ?? [] : []}
       onNavigateProfile={onNavigateProfile} />
     <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
       <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
-        {busy ? "发起中…" : "发起分析"}
+        {busy ? "登记中…" : "登记问题"}
       </Button>
     </div>
-    {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
-        「待补充」提示页面没采集到的信息,不编造(两侧渲染面均原生
-        markdown,2026-09-15 拍板)。
-        渲染门跟面板可见性走(ADR-0029):portal 到 body 的弹窗拦不住
-        父级 hidden,人不在登记页时不 gate 会跨页签跳出来;切回即弹。
-        换面板/切页签收起弹窗不清稿,弃稿只认显式动作。
-        (Dialog 本体是原语,不动;#230 只把弹窗周边的皮肤类换工具类。) */}
-    {active && polishResult && <Dialog open onOpenChange={(open) => {
-      if (!open) discardPolish();
-    }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>AI 润色预览</DialogTitle>
-          <DialogDescription>
-            核对润色稿后选择替换或放弃;「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
-          </DialogDescription>
-        </DialogHeader>
-        {polishResult.vision_note && <p className="issue-polish-note m-0 rounded-lg border border-attention/35 bg-[color-mix(in_srgb,var(--attention)_9%,var(--surface-muted))] px-2.5 py-2 text-xs text-attention" role="alert">
-          {polishResult.vision_note}
-        </p>}
-        <label className={FIELD}>
-          <span>建议标题</span>
-          <Input value={adoptTitle}
-            onChange={(event) => setAdoptTitle(event.target.value)} />
-        </label>
-        <div className="issue-polish-preview max-h-[46vh] overflow-auto rounded-lg border border-line bg-surface-muted px-3 py-2.5 text-[13px] leading-[1.65] text-text-strong [&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:rounded-md" aria-label="润色后描述预览">
-          <Markdown text={polishResult.description}
-            resolveImage={(path) => issueImageUrl(path)} />
-        </div>
-        <DialogFooter>
-          {/* 复制与「放弃/替换」不在一条决策线上:可能只是要把润色稿带去
-              别处提单,不落本仓——mr-auto 与决策钮拉开成两组。 */}
-          <CopyDescriptionButton markdown={polishResult.description}
-            variant="outline" size="sm" className="sm:mr-auto" />
-          <Button type="button" variant="outline" size="sm"
-            onClick={discardPolish}>放弃</Button>
-          <Button type="button" size="sm" onClick={adoptPolish}>
-            替换原稿
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>}
   </form>;
 }
 
@@ -1315,7 +1253,7 @@ function DtsRegister({
                         <SelectTrigger
                           className="h-8 w-full text-xs"
                           aria-label={`${ticket.ticket} 所属业务模块`}
-                          title="人工预绑这张单所属的业务模块;发起分析时直接带出,AI 不再识别">
+                          title="人工预绑这张单所属的业务模块;发起处理时直接带出,AI 不再识别">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="tw-root">

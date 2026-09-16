@@ -5,6 +5,12 @@ import test from "node:test";
 
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const descriptionEditor = readFileSync(
+  resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
+const imagePaste = readFileSync(
+  resolve("web/src/issues/useIssueImagePaste.ts"), "utf-8");
+const issueRoutes = readFileSync(
+  resolve("src/issueFlow/routes.ts"), "utf-8");
 const notice = readFileSync(
   resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
 const editor = readFileSync(
@@ -681,11 +687,14 @@ test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发
     appSource.indexOf('session.role === "admin" ? <>'),
     appSource.indexOf("</> : <>"));
   assert.ok(adminNav.includes('view="issues"'), "admin 侧栏缺问题处理入口");
-  // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题分「我的/全部」。
+  // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题分「全部/两范围」
+  // (ADR-0031:我负责的=归属,我登记的=登记人,替换旧"我的问题")。
   assert.match(issueBoard,
     /viewer\.role !== "admin" && <IssueRegistration/);
   assert.match(issueBoard,
-    /viewer\.role === "admin" \? "全部问题" : "我的问题"/);
+    /viewer\.role === "admin" \? "全部问题"/);
+  assert.match(issueBoard,
+    /listScope === "reported" \? "我登记的" : "我负责的"/);
   // 会话工作台的查看模式边界不变:写口仍按归属人判定(admin 旁观不写)。
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
@@ -1606,12 +1615,14 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
   assert.doesNotMatch(associate, /issue-rail-primary/);
 });
 
-test("登记域词汇与标点体例:动词归「发起」,引号归「」,标点半角(2026-09-14 设计审查)", () => {
-  // 发起一次问题处理,域内只有一个动词「发起」(「下单」是需求域旧词,
-  // 不回流);登记页提交钮「发起分析」与 DTS 页「发起处理」同构。
+test("登记域词汇与标点体例:引号归「」,标点半角(2026-09-14 设计审查;提交钮随 ADR-0031 收口为「登记问题」)", () => {
+  // 「下单」是需求域旧词,不回流。登记页提交钮 ADR-0031 起是
+  // 「登记问题」——登记=把问题移交给责任人,不再是替自己「发起分析」;
+  // DTS 页「发起处理」自助流程原样(与「发起」家族的旧同构就此分家)。
   assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
   assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
-  assert.match(registration, /"发起中…" : "发起分析"/);
+  assert.match(registration, /"登记中…" : "登记问题"/);
+  assert.doesNotMatch(registration, /发起分析/);
   // 状态串引号用直角引号(隐藏远程单提示 + 无可拉取空态两处),不用
   // 英文直引号。
   assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
@@ -1620,6 +1631,40 @@ test("登记域词汇与标点体例:动词归「发起」,引号归「」,标�
   // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
   assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
   assert.doesNotMatch(notice, / · /);
+});
+
+test("会话列表两范围(ADR-0031):我负责的/我登记的切换与记忆,卡片并列两端", () => {
+  // 范围进请求(reported 走 ?scope=reported,缺省按归属)、选择记忆、
+  // 管理员不设切换;卡片恒显责任人,登记人≠责任人时并列——两个范围
+  // 都能一眼看到问题的两端。
+  assert.match(issueBoard, /ISSUE_SCOPE_STORAGE_KEY = "mae-flow:issue-list-scope"/);
+  assert.match(issueBoard, /listIssues\(listScope === "reported" \? "reported" : undefined\)/);
+  assert.match(issueBoard, /aria-pressed=\{listScope === "reported"\}/);
+  assert.doesNotMatch(issueBoard, /"我的问题"/);
+  assert.match(issueBoard, /责任人 · \{issue\.account\}/);
+  assert.match(issueBoard, /登记人 · \{issue\.reporter\}/);
+  assert.match(issueBoard, /还没有登记过问题/);
+});
+
+test("登记页责任人指派接线(ADR-0031):选人框进表单、缺省纯函数唯一裁决、凭据门查责任人", () => {
+  // 选人搜索框进登记表单(复用 UserPicker,不手搓);缺省/冻结规则
+  // 不在组件里散写——唯一裁决在 resolveAssignee 纯函数。
+  assert.match(registration, /import \{ userLabel, UserPicker, type UserOption \} from "\.\.\/UserPicker";/);
+  assert.match(registration, /import \{ resolveAssignee \} from "\.\/assigneeDefault";/);
+  assert.match(registration, /resolveAssignee\(\{\s*manualPick: assigneeManual,/);
+  assert.match(registration,
+    /<UserPicker value=\{assignee\} options=\{assigneeOptions\}\s*onChange=\{setAssigneeManual\} ariaLabel="责任人"/);
+  // 候选走 flow=issue 固定口径(只认 Git 凭据,不问小鲁班令牌);
+  // 模块责任人+维护者置顶带标记。
+  assert.match(registration, /listCollaborationAssignees\("issue"\)/);
+  assert.match(registration, /"模块责任人"/);
+  assert.match(registration, /"模块维护者"/);
+  // 凭据门查的是责任人不是登记人:提交拦截文案点名责任人。
+  assert.match(registration, /credentialBlocked = Boolean\(assignee\)/);
+  assert.match(registration, /的 Git 凭据未配齐——改选已配齐的责任人/);
+  // 登记请求带责任人;成功后重置回缺省(手选清空,下一条重新跟模块)。
+  assert.match(registration, /assignee,\s*\}\);/);
+  assert.match(registration, /setAssigneeManual\(""\)/);
 });
 
 test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设计审查 04)", () => {
@@ -1642,10 +1687,11 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
     /variant="ghost" size="xs"\s+className="group\/live"/);
   assert.match(registration,
     /group-hover\/live:underline group-focus-visible\/live:underline/);
-  // 上传进行态挂 role=status,与其余进行态一致。
-  const descriptionEditor = readFileSync(resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
-  assert.match(registration, /<DescriptionEditor/);
-  assert.match(descriptionEditor, /role="status"[^>]*>[\s\S]*?截图上传中…/);
+  // 上传进行态挂 role=status,与其余进行态一致;指示住编辑器内右上角
+  // (DescriptionEditor 自持),登记页脚不再重复一份。
+  assert.match(descriptionEditor,
+    /<span role="status"\s+className="absolute right-2 top-2[^"]*">/);
+  assert.match(descriptionEditor, /截图上传中…/);
   // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
   // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
   assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);
@@ -1653,6 +1699,30 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
   assert.match(registration, /<dd className="min-w-0">/);
   assert.match(registration,
     /text-primary underline underline-offset-2 break-all/);
+});
+
+test("外部图片粘贴按 src 协议三路转存,Clipboard 死路不回潮(#276)", () => {
+  // 生产是 HTTP(非安全上下文),异步 Clipboard API 不可用——拦截
+  // 成功等于吞掉整段粘贴的死路已删;data: 字节就在 src 里,本地转
+  // Blob 即可,不再舍近求远。登记编辑器与会话粘贴钩子同款红线。
+  for (const source of [descriptionEditor, imagePaste]) {
+    assert.doesNotMatch(source, /navigator\.clipboard/);
+    assert.doesNotMatch(source,
+      /htmlIsImageOnly|readClipboardImageFile|FALLBACK_HINT/);
+    assert.match(source, /proxyIssueImage/);
+    assert.match(source, /classifyExternalImageSrc|isHostedImageSrc/);
+  }
+  // 三路协议分类只住 useIssueImagePaste 一处,防两份实现漂移。
+  assert.match(imagePaste, /\^data:image\\\//);
+  assert.match(imagePaste, /\^https\?:\\\/\\\//);
+  // 路由层协议白名单兜一道:file:/// 前端拦了,后端再拒一次。
+  assert.match(issueRoutes, /proxy-image/);
+  assert.match(issueRoutes, /\^https\?:\\\/\\\//);
+  // 非图片 content-type 拒收(需认证上游典型回 HTML 登录页),不落垃圾。
+  assert.match(issueRoutes, /startsWith\("image\/"\)/);
+  // 外链转存(data: 直传与 http(s) 代理)也计入上传进行态浮层。
+  assert.match(descriptionEditor, /trackPending/);
+  assert.match(descriptionEditor, /trackUpload\(pasteImageFile\(blob\)\)/);
 });
 
 test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026-09-15)", () => {
@@ -1666,4 +1736,21 @@ test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026
     "发起钮仅顶部一枚");
   assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 1,
     "发起钮文案仅顶部一处");
+});
+
+test("描述预填模板:打开即模板,原样拦截,提交后回模板(#273,ADR-0030)", () => {
+  // 润色退役后格式合规靠预填:模板住独立常量模块,登记页三处消费——
+  // 初始态预填、提交原样拦截、提交成功重置回模板(不再重置空串)。
+  assert.match(registration, /from "\.\/descriptionTemplate"/);
+  assert.match(registration, /useState\(ISSUE_DESCRIPTION_TEMPLATE\)/);
+  assert.match(registration, /isUntouchedTemplate\(description\)/);
+  assert.match(registration, /描述还是模板原样/);
+  assert.match(registration, /setDescription\(ISSUE_DESCRIPTION_TEMPLATE\)/);
+  // 空串重置不回流:描述框只以模板或用户内容呈现。
+  assert.doesNotMatch(registration, /setDescription\(""\)/);
+});
+
+test("AI 润色退役反钉(#272,ADR-0030):入口与通路不回潮", () => {
+  assert.doesNotMatch(registration, /润色|polish/i);
+  assert.doesNotMatch(issueFlow, /AI 润色|polish-description/);
 });
