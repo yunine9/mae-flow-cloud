@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { EnvironmentRegistry } from "./EnvironmentRegistry";
 import { getBusinessModules, createBusinessModule, updateBusinessModule,
-  productVersionRequest, type BusinessModule, type ProductVersion } from "./api";
+  productVersionRequest, knowledgeRepoRequest,
+  type BusinessModule, type ProductVersion, type KnowledgeRepoConfig } from "./api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,16 +12,64 @@ import { confirmDialog } from "./ConfirmDialog";
 const PAGE_SIZE = 10;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const shortRepo = (repo: string) => repo.split(/[/:]/).filter(Boolean).pop()?.replace(/\.git$/, "") || repo;
-export function ConfigurationCenter() {
-  const [tab, setTab] = useState(() => { const tab = new URLSearchParams(location.search).get("tab"); return tab === "modules" || tab === "versions" ? tab : "environments"; });
+export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
+  const [tab, setTab] = useState(() => { const tab = new URLSearchParams(location.search).get("tab"); return tab === "modules" || tab === "versions" || (admin && tab === "knowledge") ? tab : "environments"; });
+  const tabs: Array<[string, string]> = [["environments", "环境管理"], ["versions", "版本与分支"], ["modules", "模块与代码仓"],
+    // 知识仓(#286):全局强制的运营决策,仅管理员可见可维护(ADR-0033)。
+    ...(admin ? [["knowledge", "知识仓"] as [string, string]] : [])];
   return <section className="tw-root grid gap-5 text-base">
     <nav aria-label="配置分类" className="flex gap-2 border-b border-line pb-3">
-      {[["environments", "环境管理"], ["versions", "版本与分支"], ["modules", "模块与代码仓"]].map(([id, label]) =>
+      {tabs.map(([id, label]) =>
         <Button key={id} variant={tab === id ? "default" : "ghost"}
           aria-pressed={tab === id} onClick={() => { setTab(id); history.replaceState(history.state, "", `/configuration?tab=${id}`); }}>{label}</Button>)}
     </nav>
-    {tab === "environments" ? <EnvironmentRegistry /> : <MappingList key={tab} kind={tab} />}
+    {tab === "environments" ? <EnvironmentRegistry /> : tab === "knowledge" ? <KnowledgeRepoPane /> : <MappingList key={tab} kind={tab} />}
   </section>;
+}
+
+/** 知识仓页签(仅管理员):单仓单值,存/清两态;提示词按会话开工时的
+ * 配置快照装载,改配置只影响之后的会话(与环境台账快照同哲学)。 */
+function KnowledgeRepoPane() {
+  const [config, setConfig] = useState<KnowledgeRepoConfig | undefined>();
+  const [url, setUrl] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function refresh() {
+    setLoading(true); setError("");
+    try { setConfig((await knowledgeRepoRequest()).config ?? undefined); }
+    catch (e) { setError(message(e)); } finally { setLoading(false); }
+  }
+  useEffect(() => { void refresh(); }, []);
+  async function save() {
+    setBusy(true); setError(""); setNotice("");
+    try { setConfig((await knowledgeRepoRequest("PUT", { url: url.trim() })).config); setUrl(""); setNotice("已保存;之后的会话开工时装载。"); }
+    catch (e) { setError(message(e)); } finally { setBusy(false); }
+  }
+  async function clear() {
+    if (!await confirmDialog({ title: "清除知识仓配置？", message: "进行中的会话不受影响;之后的会话不再装载知识仓。", confirmLabel: "清除" })) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await knowledgeRepoRequest("DELETE"); setConfig(undefined); setNotice("已清除。"); }
+    catch (e) { setError(message(e)); } finally { setBusy(false); }
+  }
+  return <div className="rounded-xl border border-line bg-surface p-5 shadow-sm">
+    <p className="mb-4 text-sm text-muted-foreground">团队领域知识统一治理的代码仓:问题会话开工时由平台克隆为只读参考件,AI 定位与改码时按业务模块名检索这里的知识。仅管理员可维护;克隆失败不影响定位。</p>
+    {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
+    {notice && <p className="mb-3 text-sm text-muted-foreground">{notice}</p>}
+    {loading ? <p className="p-10 text-center text-muted-foreground">正在读取配置…</p> : config
+      ? <div className="grid gap-3">
+        <p className="text-sm text-muted-foreground">当前知识仓:</p>
+        <code className="break-all rounded-md bg-surface-2 px-3 py-2 text-sm">{config.url}</code>
+        <div><Button variant="outline" disabled={busy} onClick={() => void clear()}>清除配置</Button></div>
+      </div>
+      : <form className="grid max-w-xl gap-3" onSubmit={e => { e.preventDefault(); void save(); }}>
+        <p className="text-sm text-muted-foreground">尚未配置知识仓。</p>
+        <label className="grid gap-2">代码仓地址(HTTPS 或本地路径)<Input required value={url}
+          placeholder="https://codehub.example.com/team/domain-knowledge.git" onChange={e => setUrl(e.target.value)} /></label>
+        <div><Button type="submit" disabled={busy || !url.trim()}>{busy ? "保存中…" : "保存"}</Button></div>
+      </form>}
+  </div>;
 }
 function MappingList({ kind }: { kind: string }) {
   const modulesMode = kind === "modules";

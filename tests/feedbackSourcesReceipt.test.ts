@@ -19,6 +19,7 @@ import { TaskService } from "../src/taskService.ts";
 import { FeedbackStore } from "../src/feedbackStore.ts";
 import { AnnotationStore } from "../src/annotations.ts";
 import { KERNEL_UNAVAILABLE, openKernelFeedback } from "../src/kernelDelivery.ts";
+import { importExternalReviews } from "../src/externalReviewInbox.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import { withLiveReviewReceipts } from "../src/liveReviewReceipts.ts";
 import { createServer } from "node:http";
@@ -93,7 +94,7 @@ test("完整 MR 修复经真实推送和内核登记后由宿主投递，不再�
   } finally { server.closeAllConnections(); server.close(); await s.stop(); }
 });
 
-test("跨 CI 轮次从投递历史识别已答讨论；新版本仍派单，其他 MR 的回复不算", async () => {
+test("跨 CI 轮次已答讨论不重复入账；新正文按新意见交办，其他 MR 的回复不算", async () => {
   const s = await watchingService("review-history"), api = s.service as any;
   try {
     s.internal.summary.status = "await_merge";
@@ -105,15 +106,38 @@ test("跨 CI 轮次从投递历史识别已答讨论；新版本仍派单，其�
         repo: "repo", mr, resolve: false, expected_sha: "a".repeat(40) });
       outbox.markDelivered(entry.id);
     }
-    const dispatched: string[] = [];
-    api.enqueueRepair = (_task: unknown, mission: string) => dispatched.push(mission);
-    const dispatch = (id: string, revision: number) => api.dispatchReviewRepair(s.internal, 3, s.internal.controlEpoch,
-      { kind: "available", items: [{ id, revision, body: "补充要求" }] });
-    assert.equal(await dispatch("done", 1), "waiting"); assert.equal(dispatched.length, 0);
-    assert.equal(await dispatch("done", 2), "dispatched");
-    assert.equal(dispatched.length, 1);
-    assert.equal(await dispatch("other", 1), "dispatched");
-    assert.equal(dispatched.length, 2);
+    // 投递台账跨 CI/检视轮次保留：已答事实的权威记录仍在账上，按仓+MR 各归各位。
+    const delivered = outbox.list().filter((item: any) =>
+      item.kind === "review_reply" && item.state === "delivered");
+    assert.equal(delivered.length, 2);
+    assert.ok(delivered.some((item: any) =>
+      item.payload.discussion_id === "done" && String(item.payload.mr) === "1"));
+    assert.ok(delivered.some((item: any) =>
+      item.payload.discussion_id === "other" && String(item.payload.mr) === "2"));
+
+    // 外部意见一律先入待判断批注等责任人交办（cbe741e 拍板，不再自动派修）；
+    // 合入监听每轮重新拉取讨论，走的是同一条 importExternalReviews 同步。
+    const store = api.annotations(s.internal);
+    const scope = "https://code/mr/1";
+    const observe = (items: Array<{ id: string; body: string }>) => importExternalReviews(store,
+      { scope, mrUrl: scope, owner: "本地用户", items });
+    const [note] = observe([{ id: "done", body: "补充要求" }]);
+    assert.equal(note.route, "owner_reply");
+    assert.equal(note.agent_assigned, undefined, "入账只落待判断批注，不自动派修");
+
+    // 责任人已答复后，同一讨论在等检视人点“已解决”期间反复轮询不复活。
+    store.replyAsOwner(note.id, "本地用户", "已在 MR 回复中说明", true);
+    assert.equal(observe([{ id: "done", body: "补充要求" }]).length, 0);
+
+    // 同一讨论出现新正文 = 新的待判断批注，等责任人重新判断。
+    const followUps = observe([{ id: "done", body: "补充要求（检视人追问）" }]);
+    assert.equal(followUps.length, 1);
+
+    // 其他 MR 的台账回复不算：mr2 上已答复不抑制 mr1 同名讨论入账。
+    assert.equal(observe([{ id: "other", body: "另一条意见" }]).length, 1);
+    assert.equal(delivered.length, outbox.list().filter((item: any) =>
+      item.kind === "review_reply" && item.state === "delivered").length,
+      "重新观察不改动投递台账");
   } finally { await s.stop(); }
 });
 

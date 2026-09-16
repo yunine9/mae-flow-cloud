@@ -314,7 +314,11 @@ test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈",
   assert.equal((service as any).activeKernelFeedback(task), undefined,
     "手写 active_batch_id/status 不能派出 writer");
   (service as any).syncFeedbackStoreFromKernel(task);
-  assert.match(task.summary.delivery.stalled ?? "", /缺少完整.*宿主权威收据/,
+  // 停摆原因必须点名「缺宿主权威收据」这一事实(b27f80c 把核验从完整
+  // 生命周期收窄到反馈事实,文案随之从「…缺少完整的 Cloud 宿主权威收据」
+  // 改为「内核反馈事实缺少 Cloud 宿主权威收据」);手写批次生命周期仍不能
+  // 关闭或推进反馈索引——篡改态进不了投影,只能以缺收据停摆。
+  assert.match(task.summary.delivery.stalled ?? "", /缺少 Cloud 宿主权威收据/,
     "手写批次生命周期不能关闭或推进反馈索引");
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(signedResultState));
   (service as any).syncFeedbackStoreFromKernel(task);

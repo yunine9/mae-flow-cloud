@@ -62,9 +62,9 @@ test("服务设置总览汇总真实配置，并可进入四类完整管理表�
 
 test("问题 FAQ 使用当前登记入口和真实口令边界", () => {
   assert.match(source, /手工登记（无单）/);
-  assert.match(source, /团队资产 → 业务模块/);
+  assert.match(source, /配置中心 → 模块与代码仓/);
   assert.match(source, /DTS 列表（已有单）/);
-  assert.match(source, /从环境管理选择环境 IP/);
+  assert.match(source, /从配置中心的环境管理选择环境 IP/);
   assert.match(source, /AI 上下文/);
   assert.match(source, /不会出现在会话列表、状态摘要或事件流中/);
   assert.match(source, /个人复用或生产口令/);

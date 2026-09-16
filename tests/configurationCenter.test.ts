@@ -86,7 +86,9 @@ test("版本 API：匿名拒绝，普通成员可增改删，服务端控制 ID 
     assert.equal(listProductVersions(dir)[0].version, "2.6B");
     assert.equal((await call("PUT", "/missing", { version: "x", branch: "main" })).status, 400);
     const issueCall = (body: unknown) => fetch(`${base}/issues`, { method: "POST", headers: { cookie }, body: JSON.stringify(body) });
-    const invalid = await issueCall({ title: "失效版本", ticket: "DTS20260099", product_version: "不存在" });
+    // 手工登记必填责任人(3fac67b,ADR-0031):缺责任人先吃 409 指派闸,
+    // 到不了版本校验;夹具带上登记页恒有的 assignee 再验失效版本 400。
+    const invalid = await issueCall({ title: "失效版本", ticket: "DTS20260099", product_version: "不存在", assignee: "dev" });
     assert.equal(invalid.status, 400, "失效配置应提示用户刷新，不作为服务故障 500");
     const auto = await issueCall({ title: "DTS 自动关联", source: "dts", ticket: (await dts.listByOwner("dev"))[0].ticket });
     assert.equal(auto.status, 201);

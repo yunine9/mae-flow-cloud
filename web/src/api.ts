@@ -5000,6 +5000,20 @@ export async function productVersionRequest(method = "GET", row?: Partial<Produc
   return response.json();
 }
 
+/** 知识仓配置(#286):管理员专属,单仓单值;缺席 config 为 null。 */
+export interface KnowledgeRepoConfig { url: string }
+export function knowledgeRepoRequest(method?: "GET"): Promise<{ config: KnowledgeRepoConfig | null }>;
+export function knowledgeRepoRequest(method: "PUT", row: { url: string }): Promise<{ config: KnowledgeRepoConfig }>;
+export function knowledgeRepoRequest(method: "DELETE"): Promise<{ ok: true }>;
+export async function knowledgeRepoRequest(method = "GET", row?: { url: string }): Promise<unknown> {
+  const response = await fetch("/knowledge-repo", {
+    method, headers: { "content-type": "application/json" },
+    ...(method === "PUT" ? { body: JSON.stringify(row) } : {}),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function createMemoryDraft(trigger: string, conclusion: string): Promise<MemoryRecord> {
   const response = await fetch("/memory-insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ trigger, conclusion }) });
   if (!response.ok) throw new Error(await errorText(response));

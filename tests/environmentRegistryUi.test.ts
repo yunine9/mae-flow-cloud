@@ -54,7 +54,11 @@ test("环境管理:/environments 深链与视图接线(进可直达、后退真�
     "进页签应 pushState 换地址(可复制、可后退)");
   assert.match(app, /const syncEnvironmentRoute = \(event: PopStateEvent\) =>/,
     "浏览器前进/后退要真的切页(popstate 同步)");
-  assert.match(app, /\{view === "environments" && <ConfigurationCenter \/>\}/,
+  // 挂载点随 9445f52(#286/ADR-0033)传入 admin 角色态:配置中心新增的
+  // 「知识仓」页签仅管理员可见,挂载处负责转交登录角色。钉的本义不变:
+  // environments 视图下主区真的渲染配置中心。
+  assert.match(app,
+    /\{view === "environments" && <ConfigurationCenter admin=\{session\.role === "admin"\} \/>\}/,
     "主区缺少环境管理视图渲染");
   assert.match(app, /import \{ ConfigurationCenter \} from "\.\/ConfigurationCenter";/);
 });

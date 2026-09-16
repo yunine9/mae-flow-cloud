@@ -159,7 +159,7 @@ for (const action of ["cancel", "replace"] as const) {
 }
 
 for (const status of ['running', 'paused', 'await_merge']) {
-  test(`${status} 持续收集远端意见，门禁绿灯也不能掩盖未解决讨论`, async t => {
+  test(`${status} 持续收集远端意见，合入以平台结果收口(意见只入批注,不自动派修)`, async t => {
     const { service, task, remote } = await fixture(t);
     const { FeedbackStore } = await import('../src/feedbackStore.ts');
     task.summary.status = status;
@@ -168,18 +168,12 @@ for (const status of ['running', 'paused', 'await_merge']) {
       gates: [{ name: 'resolve_discussion_passed', passed: true }] });
     (service as any).fetchDiscussions = async () => ({ kind: 'available', items: [
       { id: 'd1', body: '补齐实现' }, { id: 'd2', body: '实现下载接口' }] });
-    let dispatched = 0;
-    (service as any).dispatchReviewRepair = async (_task: unknown, _max: unknown, _epoch: unknown, snapshot: any) => {
-      assert.equal(snapshot.items.length, 2);
-      dispatched++;
-      task.summary.status = 'running';
-      return 'dispatched';
-    };
     (service as any).ensureMergeWatch(task);
     const store = new FeedbackStore(join(task.summary.workspace, 'feedback', 'index.jsonl'));
     await until(() => store.list().length === 2);
     assert.ok(store.list().every(r => r.status === 'open'));
-    assert.equal(dispatched, status === 'await_merge' ? 1 : 0);
+    // 2026-09-16 确认制(ADR-0032):意见不再触发自动派修,责任人交办才有
+    // 修复回合;未解决讨论也不伪造合入——合入与否只认平台结果。
     remote.state = 'merged';
     await until(() => task.summary.status === 'completed');
   });
@@ -199,19 +193,19 @@ test('监听一拍抛异常后仍继续，下一拍外部合入能正常收口',
   await until(() => task.summary.status === 'completed');
 });
 
-test('自动修复关闭仍同步新讨论；不派 Agent，也不停止合入监听', async t => {
+test('新讨论只同步入账;不派 Agent,合入监听不停止(ADR-0032 确认制)', async t => {
   const { service, task, remote } = await fixture(t);
   const { FeedbackStore } = await import('../src/feedbackStore.ts');
   task.summary.status = 'await_merge';
   task.summary.delivery.sha = 'human-merged-sha';
-  (service as any).repairBudget = () => 0;
   (service as any).fetchGates = async () => ({ mrState: remote.state, sourceSha: 'human-merged-sha', gates: [] });
   (service as any).fetchDiscussions = async () => ({ kind: 'available', items: [{ id: 'disabled', body: '补实现' }] });
-  (service as any).dispatchReviewRepair = () => { assert.fail('关闭自动修复时不能派单'); };
   (service as any).ensureMergeWatch(task);
   await until(() => new FeedbackStore(join(task.summary.workspace, 'feedback', 'index.jsonl')).list().length === 1);
   assert.equal(task.summary.status, 'await_merge');
-  assert.match(task.summary.delivery.waiting_on, /自动/);
+  // 意见到达不再有任何自动派修分支:没有"自动修复已关闭"的等待文案,
+  // 也没有预算闸——处置权完全在责任人的批注面板。
+  assert.equal(task.summary.delivery.waiting_on ?? '', '');
   remote.state = 'merged';
   await until(() => task.summary.status === 'completed');
 });

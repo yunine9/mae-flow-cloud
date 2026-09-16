@@ -50,12 +50,17 @@
 - mr_discussions 使用 `codehub-cli mr review list` 查询未解决检视意见，
   按 2026-09-12 内网实测反馈，从根数组读取 discussion；`revision` 取
   `notes.0.id`，`severity` 取顶层同名字段，文件、行号、作者分别取
-  `notes.0.file_path`、`notes.0.line`、`notes.0.author.username`；正文及
-  更新时间仍取 `notes[0]`。命令保留内网所需 `-k`，超时为 15 秒。
-  需求宿主查询预算同步调整为 20 秒，避免 CLI 尚在预算内就被外层提前中断。
-  此前配置及测试误用了 `position.new_path/new_line` 和 `author.name`，已纠正；
+  `notes.0.diff_file`、`notes.0.position.new_line`、`notes.0.author.username`
+  （按 2026-09-14 内网复测纠正，090b25c）；正文及更新时间仍取 `notes[0]`。
+  命令保留内网所需 `-k`，并带 `--limit 100` 拉全量检视意见（ab5b1da），
+  超时随之调整为 30 秒；宿主查询预算同步调整为 40 秒，
+  避免 CLI 尚在预算内就被外层提前中断。
   本地回归使用上述反馈结构，未在本机连接内网重跑 CLI。
   配置进入生产和测试 adapter 后，持续检视不再因端点缺席反复收到 404。
+- discussion_reply/discussion_resolve 使用 `codehub-cli mr review
+  reply/resolve` 命令模板（3127f7c）。codehub-cli 不支持幂等键参数，
+  模板带 `idempotency_no_cli_key` 降级为靠 outbox delivered 标记防重放，
+  并以 `--no-cache` 避免缓存层假成功；升级安装经 merge 生成器一并带出。
 - gate 整体预算 8 秒，adapter 超时 9 秒，与宿主 10 秒查询预算对齐。
 
 `mr-gates.py` 不是重跑脚本：它仅组合两个已有查询的字段。配置、查询桥、

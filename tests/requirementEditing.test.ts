@@ -11,6 +11,11 @@ import { EventLog } from "../src/semanticEvents.ts";
 const CONFIRM_STEP = "cloud_requirement_analysis_confirm";
 const CONFIRM_OPTION = "需求已确认，进入需求分析";
 
+// 经验起草旁路(afaba44)现在复用任务主模型,会向同一个剧本模型多发一次
+// 独立请求,把 linear 剧本的下一幕吃掉;测试注入假件让旁路不碰剧本。
+const memoryDrafter = async () =>
+  JSON.stringify({ trigger: "闭环意见", scope: "one_off", conclusion: "测试候选，待人工确认。" });
+
 function confirmationQuestion(task: ReturnType<TaskService["get"]>): string {
   const questions = task?.waiting?.question?.questions as
     | Array<{ question: string }> | undefined;
@@ -41,7 +46,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
     const service = new TaskService({
       dataDir: mkdtempSync(join(tmpdir(), "mfc-requirement-queue-")),
       provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
-      maxConcurrent: 0,
+      memoryDrafter, maxConcurrent: 0,
     });
     const task = service.create("第一段旧口径\n\n第二段旧口径", {
       account: "owner", collaborators: ["reviewer"], requirementAnalysis: true,
@@ -129,7 +134,7 @@ test("修改需求时新意见立即入队，串行落实全部意见后仍需�
 test("新下单先在工作台确认需求，不会提前进入执行队列", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-confirm-"));
   const service = new TaskService({
-    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    dataDir, provider: "test", model: "test", modelsJson: {}, memoryDrafter, maxConcurrent: 0,
   });
   const created = service.create("# 用户需求\n先共同核对", {
     account: "owner",
@@ -186,7 +191,7 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-review-"));
     const service = new TaskService({
       dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), maxConcurrent: 0,
+      modelsJson: model.modelsJson(), memoryDrafter, maxConcurrent: 0,
     });
     const created = service.create("# 用户需求\n原始口径", {
       account: "owner", collaborators: ["reviewer"],
@@ -310,7 +315,7 @@ test("多人检视意见由 Agent 修改同一份需求，全部闭环后才能�
 test("服务重启会恢复被中断的需求修改，不留下永久 running", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-recover-"));
   const first = new TaskService({
-    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    dataDir, provider: "test", model: "test", modelsJson: {}, memoryDrafter, maxConcurrent: 0,
   });
   const created = first.create("待修改需求", {
     account: "owner", requirementAnalysisConfirmation: true,
@@ -335,7 +340,7 @@ test("服务重启会恢复被中断的需求修改，不留下永久 running", 
   (first as any).persist(internal);
 
   const recovered = new TaskService({
-    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    dataDir, provider: "test", model: "test", modelsJson: {}, memoryDrafter, maxConcurrent: 0,
   });
   assert.equal(recovered.recover().restored, 1);
   const task = recovered.get(created.id)!;
@@ -367,7 +372,7 @@ test("长需求由 Agent 原位编辑，不再要求模型往回复里搬运全�
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-requirement-long-"));
     const service = new TaskService({
       dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), maxConcurrent: 0,
+      modelsJson: model.modelsJson(), memoryDrafter, maxConcurrent: 0,
     });
     const tail = `正文保持不变-${"长内容".repeat(45_000)}-LONG-DOCUMENT-TAIL`;
     const created = service.create(`验收口径：旧\n\n${tail}`, {
@@ -417,7 +422,7 @@ test("需求修改 Agent 不能用 Write 整篇覆盖原文", async () => {
     const service = new TaskService({
       dataDir: mkdtempSync(join(tmpdir(), "mfc-requirement-write-guard-")),
       provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), maxConcurrent: 0,
+      modelsJson: model.modelsJson(), memoryDrafter, maxConcurrent: 0,
     });
     const created = service.create("旧口径\n\n必须保留", {
       account: "owner", requirementAnalysisConfirmation: true,
