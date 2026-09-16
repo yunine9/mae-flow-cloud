@@ -32,7 +32,7 @@ test("导航按域拆两条:团队需求(view=team)+团队问题(view=teamIssues
   assert.match(app,
     /view="team" current=\{view\} onSelect=\{selectView\} label="团队需求" badge=\{waitingCount\}/);
   assert.match(app,
-    /view="teamIssues" current=\{view\} onSelect=\{selectView\} label="团队问题" badge=\{issueWaitingCount\}/);
+    /view="teamIssues" current=\{view\} onSelect=\{selectView\} label="团队DTS" badge=\{issueWaitingCount\}/);
   assert.match(app,
     /issueWaitingCount = teamIssues\.filter\(\(issue\) =>\n    issue\.status === "waiting_user" \|\| issue\.status === "idle"\)\.length/);
   // 「团队任务」作为页面名退役(源码不再出现;历史提交里留着)。
